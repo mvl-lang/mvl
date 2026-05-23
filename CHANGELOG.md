@@ -4,6 +4,12 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.141.1] - 2026-05-23
+
+### Fixed
+
+- **examples/actor_webserver accept-error handling** (#952): Distinguish transient `tcp_accept` errors (`ConnectionReset`, `Timeout`) from fatal listener-level errors. Transient errors log a warning and tail-recurse; fatal errors propagate to `main` for lifecycle handling. Replaced `while true` with tail recursion (idiomatic for MVL's expression-based syntax and `partial fn` semantics). Fixed empty `{}` map literals (parsed as `Unit`, not `Map`) by supplying `reason` fields in all `log_warn` calls. Enum variants in match patterns now fully qualified (`NetError::ConnectionReset`).
+
 ## [0.141.0] - 2026-05-23
 
 ### Added
