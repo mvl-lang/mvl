@@ -8,22 +8,22 @@
 
 /// Print a value followed by a newline.
 pub fn println(value: String) -> Unit ! Console {
-    stdout_write(stdout(), value.concat("\n"))
+    let _: Result[Unit, IoError] = write(stdout(), value.concat("\n"));
 }
 
 /// Print a value without a trailing newline.
 pub fn print(value: String) -> Unit ! Console {
-    stdout_write(stdout(), value)
+    let _: Result[Unit, IoError] = write(stdout(), value);
 }
 
 /// Print a value to stderr followed by a newline.
 pub fn eprintln(value: String) -> Unit ! Console {
-    stderr_write(stderr(), value.concat("\n"))
+    let _: Result[Unit, IoError] = write(stderr(), value.concat("\n"));
 }
 
 /// Print a value to stderr without a trailing newline.
 pub fn eprint(value: String) -> Unit ! Console {
-    stderr_write(stderr(), value)
+    let _: Result[Unit, IoError] = write(stderr(), value);
 }
 
 /// Format a value as a string.

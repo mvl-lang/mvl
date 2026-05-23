@@ -107,6 +107,33 @@ impl LlvmResult {
 
 // ── C-ABI exports ─────────────────────────────────────────────────────────────
 
+/// Heap-allocated Fd value returned by `_mvl_io_stdout/stderr/stdin`.
+///
+/// At the LLVM IR level `Fd` is represented as an opaque pointer to this struct.
+/// The `inner` field holds the raw Unix file descriptor number.
+#[repr(C)]
+pub struct MvlFd {
+    pub inner: i64,
+}
+
+/// `stdout() → Fd` — returns a heap-allocated `MvlFd { inner: 1 }`.
+#[no_mangle]
+pub extern "C" fn _mvl_io_stdout() -> *const MvlFd {
+    Box::into_raw(Box::new(MvlFd { inner: 1 }))
+}
+
+/// `stderr() → Fd` — returns a heap-allocated `MvlFd { inner: 2 }`.
+#[no_mangle]
+pub extern "C" fn _mvl_io_stderr() -> *const MvlFd {
+    Box::into_raw(Box::new(MvlFd { inner: 2 }))
+}
+
+/// `stdin() → Fd` — returns a heap-allocated `MvlFd { inner: 0 }`.
+#[no_mangle]
+pub extern "C" fn _mvl_io_stdin() -> *const MvlFd {
+    Box::into_raw(Box::new(MvlFd { inner: 0 }))
+}
+
 /// `path(s: String) → Path` — identity at the LLVM level (both are `*mut MvlString`).
 ///
 /// # Safety
@@ -117,13 +144,35 @@ pub unsafe extern "C" fn _mvl_io_path(s: *const MvlString) -> *const MvlString {
     s
 }
 
-/// `write(p: Path, content: Tainted[String]) → Result[Unit, String]`
+/// `write(fd: Fd, content: String) → Result[Unit, IoError]`
+///
+/// Writes `content` to the raw Unix file descriptor `fd.inner`.
+///
+/// # Safety
+/// `fd` must be a valid `*const MvlFd`; `content` must be a valid `*const MvlString`.
+#[no_mangle]
+#[allow(unsafe_code)]
+pub unsafe extern "C" fn _mvl_io_write(fd: *const MvlFd, content: *const MvlString) -> LlvmResult {
+    use std::io::Write as _;
+    use std::os::unix::io::FromRawFd;
+    let fd_num = (*fd).inner as i32;
+    let c = read_mvl_string(content);
+    let mut f = std::fs::File::from_raw_fd(fd_num);
+    let result = f.write_all(c.as_bytes());
+    std::mem::forget(f);
+    match result {
+        Ok(()) => LlvmResult::ok_unit(),
+        Err(e) => LlvmResult::err(&e),
+    }
+}
+
+/// `write_file(p: Path, content: String) → Result[Unit, IoError]`
 ///
 /// # Safety
 /// Both pointers must be valid `MvlString*` for the duration of the call.
 #[no_mangle]
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn _mvl_io_write(
+pub unsafe extern "C" fn _mvl_io_write_file(
     path: *const MvlString,
     content: *const MvlString,
 ) -> LlvmResult {
@@ -331,22 +380,10 @@ pub unsafe extern "C" fn _mvl_io_chmod(path: *const MvlString, mode: i64) -> Llv
 
 // ── Standard output / error ───────────────────────────────────────────────────
 
-/// `stdout() → Stdout` — return a unit struct (null ptr sentinel at LLVM level).
-///
-/// At the LLVM IR level `Stdout` is represented as an opaque pointer; we return
-/// a null pointer since the actual I/O uses libc directly in `_mvl_io_stdout_write`.
-#[no_mangle]
-pub extern "C" fn _mvl_io_stdout() -> *const c_void {
-    std::ptr::null()
-}
+// _mvl_io_stdout_write / _mvl_io_stderr_write kept for any lingering object-file
+// references; the LLVM backend now routes println/print through _mvl_io_write.
 
-/// `stderr() → Stderr` — return a unit struct (null ptr sentinel at LLVM level).
-#[no_mangle]
-pub extern "C" fn _mvl_io_stderr() -> *const c_void {
-    std::ptr::null()
-}
-
-/// `stdout_write(s: Stdout, line: String) → Unit`
+/// `stdout_write(s: Stdout, line: String) → Unit` — legacy shim kept for ABI stability.
 ///
 /// # Safety
 /// `line` must be a valid `MvlString*` for the duration of the call.
@@ -360,7 +397,7 @@ pub unsafe extern "C" fn _mvl_io_stdout_write(_s: *const c_void, line: *const Mv
     let _ = out.flush();
 }
 
-/// `stderr_write(s: Stderr, line: String) → Unit`
+/// `stderr_write(s: Stderr, line: String) → Unit` — legacy shim kept for ABI stability.
 ///
 /// # Safety
 /// `line` must be a valid `MvlString*` for the duration of the call.
@@ -400,8 +437,8 @@ mod tests {
         unsafe {
             let path_ms = make_str(&path_str);
             let content_ms = make_str("hello llvm io");
-            let wr = _mvl_io_write(path_ms, content_ms);
-            assert_eq!(wr.tag, 0, "write should succeed");
+            let wr = _mvl_io_write_file(path_ms, content_ms);
+            assert_eq!(wr.tag, 0, "write_file should succeed");
             let rd = _mvl_io_read_to_string(path_ms);
             assert_eq!(rd.tag, 0, "read_to_string should succeed");
             let read_back = read_mvl_string(rd.payload as *const MvlString);
@@ -421,7 +458,7 @@ mod tests {
             let path_ms = make_str(&path_str);
             let c1 = make_str("hello");
             let c2 = make_str(" world");
-            let _ = _mvl_io_write(path_ms, c1);
+            let _ = _mvl_io_write_file(path_ms, c1);
             let ar = _mvl_io_append(path_ms, c2);
             assert_eq!(ar.tag, 0, "append should succeed");
             let rd = _mvl_io_read_to_string(path_ms);

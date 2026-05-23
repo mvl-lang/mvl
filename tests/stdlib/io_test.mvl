@@ -3,28 +3,25 @@
 // Verifies runtime behavior of io stdlib functions.
 // Run with:  mvl test tests/stdlib/
 //
-// Runtime coverage (real implementations since #417):
+// Runtime coverage (real implementations since #417, unified Fd API since #976):
 //   path           — construct a Path from a String (pure)
 //   join           — append a segment to a Path (pure)
 //   to_string      — convert a Path back to String (pure)
-//   write          — write string to file (truncates if exists)
+//   write_file     — write string to file path (truncates if exists)
+//   write          — write string to open Fd
 //   append         — append string to existing file
 //   read_to_string — read entire file contents as Tainted[String]
+//   read_line      — read one line from Fd
+//   open/close     — open file → Fd, close Fd
 //   create_dir_all — create directory and all parents
 //   remove         — remove file or empty directory
-//
-// Not yet implemented in runtime:
-//   read_file, path_exists, is_file, is_dir, open, close,
-//   buf_reader, buf_writer, read_line, write_line,
-//   read_dir, metadata, chmod, create_symlink, read_link,
-//   stdin, stdin_read_line, stdin_read_to_string
 
 use std.io.{
-    File, Path, DirEntry, Metadata, IoError,
+    Fd, Path, DirEntry, Metadata, IoError,
     path, join, to_string,
     path_exists, is_file, is_dir,
     open, close,
-    write, append, read_to_string, read_file,
+    write, write_file, append, read_to_string, read_file, read_line,
     create_dir_all, remove,
     read_dir, metadata, chmod,
 }
@@ -137,17 +134,17 @@ test fn io_join_dotfile_exact_len() -> Unit {
     assert_eq(to_string(joined).len(), 18);
 }
 
-// ── write (real filesystem) ───────────────────────────────────────────────
+// ── write_file (real filesystem) ─────────────────────────────────────────
 
 test fn io_write_ok() -> Unit ! FileWrite + FileDelete {
     let p: Path = path("/tmp/mvl_io_stdlib_write_417.txt");
-    let result: Result[Unit, IoError] = write(p, "hello stdlib");
+    let result: Result[Unit, IoError] = write_file(p, "hello stdlib");
     assert_eq(result.is_ok(), true);
     let _: Result[Unit, IoError] = remove(p);
 }
 
 test fn io_write_bad_dir_is_err() -> Unit ! FileWrite {
-    let result: Result[Unit, IoError] = write(path("/nonexistent_dir_mvl_417/file.txt"), "data");
+    let result: Result[Unit, IoError] = write_file(path("/nonexistent_dir_mvl_417/file.txt"), "data");
     assert_eq(result.is_err(), true);
 }
 
@@ -155,7 +152,7 @@ test fn io_write_bad_dir_is_err() -> Unit ! FileWrite {
 
 test fn io_append_ok() -> Unit ! FileWrite + FileDelete {
     let p: Path = path("/tmp/mvl_io_stdlib_append_417.txt");
-    let _: Result[Unit, IoError] = write(p, "hello");
+    let _: Result[Unit, IoError] = write_file(p, "hello");
     let result: Result[Unit, IoError] = append(p, " world");
     assert_eq(result.is_ok(), true);
     let _: Result[Unit, IoError] = remove(p);
@@ -170,7 +167,7 @@ test fn io_append_bad_dir_is_err() -> Unit ! FileWrite {
 
 test fn io_write_then_read_ok() -> Unit ! FileRead + FileWrite + FileDelete {
     let p: Path = path("/tmp/mvl_io_stdlib_read_417.txt");
-    let _: Result[Unit, IoError] = write(p, "read me");
+    let _: Result[Unit, IoError] = write_file(p, "read me");
     let result: Result[Tainted[String], IoError] = read_to_string(p);
     assert_eq(result.is_ok(), true);
     let _: Result[Unit, IoError] = remove(p);
@@ -219,7 +216,7 @@ test fn io_create_dir_all_idempotent() -> Unit ! FileWrite + FileDelete {
 
 test fn io_remove_file_ok() -> Unit ! FileWrite + FileDelete {
     let p: Path = path("/tmp/mvl_io_stdlib_rm_417.txt");
-    let _: Result[Unit, IoError] = write(p, "delete me");
+    let _: Result[Unit, IoError] = write_file(p,"delete me");
     let result: Result[Unit, IoError] = remove(p);
     assert_eq(result.is_ok(), true);
 }
@@ -299,14 +296,14 @@ test fn io_exists_false_for_nonexistent() -> Unit ! FileRead {
 
 test fn io_exists_true_after_write() -> Unit ! FileRead + FileWrite + FileDelete {
     let p: Path = path("/tmp/mvl_io_exists_test_417.txt");
-    let _: Result[Unit, IoError] = write(p, "x");
+    let _: Result[Unit, IoError] = write_file(p,"x");
     assert_eq(path_exists(p), true);
     let _: Result[Unit, IoError] = remove(p);
 }
 
 test fn io_is_file_true_for_regular_file() -> Unit ! FileRead + FileWrite + FileDelete {
     let p: Path = path("/tmp/mvl_io_isfile_417.txt");
-    let _: Result[Unit, IoError] = write(p, "x");
+    let _: Result[Unit, IoError] = write_file(p,"x");
     assert_eq(is_file(p), true);
     assert_eq(is_dir(p), false);
     let _: Result[Unit, IoError] = remove(p);
@@ -332,7 +329,7 @@ test fn io_is_dir_false_for_nonexistent() -> Unit ! FileRead {
 
 test fn io_read_file_ok_after_write() -> Unit ! FileRead + FileWrite + FileDelete {
     let p: Path = path("/tmp/mvl_io_readfile_417.txt");
-    let _: Result[Unit, IoError] = write(p, "read_file content");
+    let _: Result[Unit, IoError] = write_file(p,"read_file content");
     let result: Result[Tainted[String], IoError] = read_file("/tmp/mvl_io_readfile_417.txt");
     assert_eq(result.is_ok(), true);
     let _: Result[Unit, IoError] = remove(p);
@@ -342,8 +339,8 @@ test fn io_read_file_ok_after_write() -> Unit ! FileRead + FileWrite + FileDelet
 
 test fn io_open_ok_on_existing_file() -> Unit ! FileRead + FileWrite + FileDelete {
     let p: Path = path("/tmp/mvl_io_open_417.txt");
-    let _: Result[Unit, IoError] = write(p, "open me");
-    let result: Result[File, IoError] = open(p);
+    let _: Result[Unit, IoError] = write_file(p,"open me");
+    let result: Result[Fd, IoError] = open(p);
     assert_eq(result.is_ok(), true);
     let _: Result[Unit, IoError] = remove(p);
 }
@@ -351,13 +348,13 @@ test fn io_open_ok_on_existing_file() -> Unit ! FileRead + FileWrite + FileDelet
 test fn io_open_creates_new_file() -> Unit ! FileRead + FileWrite + FileDelete {
     // open with create=true — file need not exist beforehand
     let p: Path = path("/tmp/mvl_io_open_new_417.txt");
-    let result: Result[File, IoError] = open(p);
+    let result: Result[Fd, IoError] = open(p);
     assert_eq(result.is_ok(), true);
     let _: Result[Unit, IoError] = remove(p);
 }
 
 test fn io_open_bad_dir_is_err() -> Unit ! FileRead {
-    let result: Result[File, IoError] = open(path("/nonexistent_dir_mvl_417/file.txt"));
+    let result: Result[Fd, IoError] = open(path("/nonexistent_dir_mvl_417/file.txt"));
     assert_eq(result.is_err(), true);
 }
 
@@ -379,7 +376,7 @@ test fn io_read_dir_err_on_nonexistent() -> Unit ! FileRead {
 test fn io_read_dir_err_on_file() -> Unit ! FileRead + FileWrite + FileDelete {
     // read_dir on a file (not a dir) must fail
     let p: Path = path("/tmp/mvl_io_readdir_file_417.txt");
-    let _: Result[Unit, IoError] = write(p, "not a dir");
+    let _: Result[Unit, IoError] = write_file(p,"not a dir");
     let result: Result[List[DirEntry], IoError] = read_dir(p);
     assert_eq(result.is_err(), true);
     let _: Result[Unit, IoError] = remove(p);
@@ -389,7 +386,7 @@ test fn io_read_dir_err_on_file() -> Unit ! FileRead + FileWrite + FileDelete {
 
 test fn io_metadata_ok_for_existing_file() -> Unit ! FileRead + FileWrite + FileDelete {
     let p: Path = path("/tmp/mvl_io_meta_417.txt");
-    let _: Result[Unit, IoError] = write(p, "metadata test");
+    let _: Result[Unit, IoError] = write_file(p,"metadata test");
     let result: Result[Metadata, IoError] = metadata(p);
     assert_eq(result.is_ok(), true);
     let _: Result[Unit, IoError] = remove(p);
@@ -397,7 +394,7 @@ test fn io_metadata_ok_for_existing_file() -> Unit ! FileRead + FileWrite + File
 
 test fn io_metadata_is_file_field() -> Unit ! FileRead + FileWrite + FileDelete {
     let p: Path = path("/tmp/mvl_io_meta_isfile_417.txt");
-    let _: Result[Unit, IoError] = write(p, "x");
+    let _: Result[Unit, IoError] = write_file(p,"x");
     let result: Result[Metadata, IoError] = metadata(p);
     assert_eq(result.is_ok(), true);
     let _: Result[Unit, IoError] = remove(p);
@@ -420,7 +417,7 @@ test fn io_metadata_err_for_nonexistent() -> Unit ! FileRead {
 
 test fn io_chmod_ok_on_file() -> Unit ! FileRead + FileWrite + FileDelete {
     let p: Path = path("/tmp/mvl_io_chmod_417.txt");
-    let _: Result[Unit, IoError] = write(p, "chmod me");
+    let _: Result[Unit, IoError] = write_file(p,"chmod me");
     let result: Result[Unit, IoError] = chmod(p, 420);
     assert_eq(result.is_ok(), true);
     let _: Result[Unit, IoError] = remove(p);
@@ -435,23 +432,22 @@ test fn io_chmod_err_on_nonexistent() -> Unit ! FileWrite {
 
 test fn io_close_open_file() -> Unit ! FileRead + FileWrite + FileDelete {
     let p: Path = path("/tmp/mvl_io_close_417.txt");
-    let _: Result[Unit, IoError] = write(p, "close me");
+    let _: Result[Unit, IoError] = write_file(p,"close me");
     match open(p) {
-        Ok(f) => { close(f); }
+        Ok(fd) => { close(fd); }
         Err(_) => { assert_eq(true, false); }
     }
     let _: Result[Unit, IoError] = remove(p);
 }
 
-// ── buf_reader / read_line ────────────────────────────────────────────────
+// ── open / read_line ──────────────────────────────────────────────────────
 
-test fn io_read_line_ok() -> Unit ! FileRead + FileWrite + FileDelete {
+test fn io_read_line_ok() -> Unit ! Console + FileRead + FileWrite + FileDelete {
     let p: Path = path("/tmp/mvl_io_readline_417.txt");
-    let _: Result[Unit, IoError] = write(p, "hello\nworld\n");
+    let _: Result[Unit, IoError] = write_file(p,"hello\nworld\n");
     match open(p) {
-        Ok(f) => {
-            let r: BufReader = buf_reader(f);
-            let result: Result[Tainted[String], IoError] = read_line(r);
+        Ok(fd) => {
+            let result: Result[Tainted[String], IoError] = read_line(fd);
             assert_eq(result.is_ok(), true);
         }
         Err(_) => { assert_eq(true, false); }
@@ -459,14 +455,13 @@ test fn io_read_line_ok() -> Unit ! FileRead + FileWrite + FileDelete {
     let _: Result[Unit, IoError] = remove(p);
 }
 
-test fn io_read_line_eof_is_ok() -> Unit ! FileRead + FileWrite + FileDelete {
+test fn io_read_line_eof_is_ok() -> Unit ! Console + FileRead + FileWrite + FileDelete {
     // Empty file — read_line at EOF returns Ok("").
     let p: Path = path("/tmp/mvl_io_readline_eof_417.txt");
-    let _: Result[Unit, IoError] = write(p, "");
+    let _: Result[Unit, IoError] = write_file(p,"");
     match open(p) {
-        Ok(f) => {
-            let r: BufReader = buf_reader(f);
-            let result: Result[Tainted[String], IoError] = read_line(r);
+        Ok(fd) => {
+            let result: Result[Tainted[String], IoError] = read_line(fd);
             assert_eq(result.is_ok(), true);
         }
         Err(_) => { assert_eq(true, false); }
@@ -474,14 +469,13 @@ test fn io_read_line_eof_is_ok() -> Unit ! FileRead + FileWrite + FileDelete {
     let _: Result[Unit, IoError] = remove(p);
 }
 
-// ── buf_writer / write_line ───────────────────────────────────────────────
+// ── open / write ──────────────────────────────────────────────────────────
 
-test fn io_write_line_ok() -> Unit ! FileRead + FileWrite + FileDelete {
+test fn io_write_line_ok() -> Unit ! Console + FileRead + FileWrite + FileDelete {
     let p: Path = path("/tmp/mvl_io_writeline_417.txt");
     match open(p) {
-        Ok(f) => {
-            let w: BufWriter = buf_writer(f);
-            let result: Result[Unit, IoError] = write_line(w, "hello writeline");
+        Ok(fd) => {
+            let result: Result[Unit, IoError] = write(fd, "hello writeline\n");
             assert_eq(result.is_ok(), true);
         }
         Err(_) => { assert_eq(true, false); }
@@ -494,7 +488,7 @@ test fn io_write_line_ok() -> Unit ! FileRead + FileWrite + FileDelete {
 test fn io_create_symlink_ok() -> Unit ! FileRead + FileWrite + FileDelete {
     let target: Path = path("/tmp/mvl_io_symtarget_417.txt");
     let link: Path = path("/tmp/mvl_io_symlink_417.txt");
-    let _: Result[Unit, IoError] = write(target, "symlink target");
+    let _: Result[Unit, IoError] = write_file(target,"symlink target");
     let result: Result[Unit, IoError] = create_symlink(target, link);
     assert_eq(result.is_ok(), true);
     let _: Result[Unit, IoError] = remove(link);
@@ -504,7 +498,7 @@ test fn io_create_symlink_ok() -> Unit ! FileRead + FileWrite + FileDelete {
 test fn io_create_symlink_err_on_existing_link() -> Unit ! FileRead + FileWrite + FileDelete {
     let target: Path = path("/tmp/mvl_io_symtarget2_417.txt");
     let link: Path = path("/tmp/mvl_io_symlink2_417.txt");
-    let _: Result[Unit, IoError] = write(target, "x");
+    let _: Result[Unit, IoError] = write_file(target,"x");
     let _: Result[Unit, IoError] = create_symlink(target, link);
     // Creating the same symlink again must fail (already exists).
     let result: Result[Unit, IoError] = create_symlink(target, link);
@@ -516,7 +510,7 @@ test fn io_create_symlink_err_on_existing_link() -> Unit ! FileRead + FileWrite 
 test fn io_read_link_ok() -> Unit ! FileRead + FileWrite + FileDelete {
     let target: Path = path("/tmp/mvl_io_readlink_target_417.txt");
     let link: Path = path("/tmp/mvl_io_readlink_link_417.txt");
-    let _: Result[Unit, IoError] = write(target, "readlink target");
+    let _: Result[Unit, IoError] = write_file(target,"readlink target");
     let _: Result[Unit, IoError] = create_symlink(target, link);
     let result: Result[Tainted[String], IoError] = read_link(link);
     assert_eq(result.is_ok(), true);
@@ -530,9 +524,8 @@ test fn io_read_link_err_on_nonexistent() -> Unit ! FileRead {
 }
 
 // ── stdin ─────────────────────────────────────────────────────────────────
-// stdin_read_line and stdin_read_to_string are not tested here: they would
-// block waiting for input in an automated test runner. Both are implemented
-// by mvl_runtime::stdlib::io via std::io::stdin().lock().read_line / read_to_string.
+// read_line(stdin()) and read(stdin(), n) are not tested here: they would
+// block waiting for input in an automated test runner.
 
 // ── IoError variant matching ──────────────────────────────────────────────
 
@@ -545,7 +538,7 @@ test fn io_read_to_string_not_found_returns_not_found() -> Unit ! FileRead {
 }
 
 test fn io_write_bad_dir_returns_not_found_or_other() -> Unit ! FileWrite {
-    match write(path("/nonexistent_dir_mvl_782/file.txt"), "x") {
+    match write_file(path("/nonexistent_dir_mvl_782/file.txt"), "x") {
         Ok(_) => assert(false),
         Err(IoError::NotFound) => assert(true),
         Err(IoError::Other(_)) => assert(true),

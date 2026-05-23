@@ -26,29 +26,29 @@ impl Path {
     }
 }
 
-/// An open file handle — mirrors the `File` struct declared in `std/io.mvl`.
+/// A file descriptor — stdout (1), stderr (2), stdin (0), or any open file.
 ///
-/// Returned by [`open`]. Pass to [`buf_reader`] or [`buf_writer`] for
-/// buffered I/O. Dropped automatically when it goes out of scope (Rust Drop).
-pub struct File {
-    inner: std::fs::File,
+/// Mirrors the `Fd` struct declared in `std/io.mvl`.
+/// Obtain standard streams via the pure MVL functions `stdout()/stderr()/stdin()`.
+/// Obtain file descriptors via [`open`]. Close with [`close`].
+pub struct Fd {
+    /// The raw Unix file descriptor number (0 = stdin, 1 = stdout, 2 = stderr, ≥3 = open file).
+    pub inner: i64,
 }
 
-/// A buffered reader wrapping a [`File`] handle.
-///
-/// Single-use in Phase 2 (move semantics). Pass to [`read_line`] to read one
-/// line; after the call the reader is consumed. Phase 3 will add loop-friendly
-/// iteration via borrow inference.
-pub struct BufReader {
-    inner: std::io::BufReader<std::fs::File>,
+/// Returns the standard input file descriptor.
+pub fn stdin() -> Fd {
+    Fd { inner: 0 }
 }
 
-/// A buffered writer wrapping a [`File`] handle.
-///
-/// Single-use in Phase 2 (move semantics). Pass to [`write_line`] to write one
-/// line; after the call the writer is consumed and the buffer is flushed.
-pub struct BufWriter {
-    inner: std::io::BufWriter<std::fs::File>,
+/// Returns the standard output file descriptor.
+pub fn stdout() -> Fd {
+    Fd { inner: 1 }
+}
+
+/// Returns the standard error file descriptor.
+pub fn stderr() -> Fd {
+    Fd { inner: 2 }
 }
 
 /// A single directory entry — mirrors `DirEntry` in `std/io.mvl`.
@@ -79,27 +79,6 @@ pub struct Metadata {
     pub is_symlink: bool,
     /// Unix permission bits (e.g. 0o644). Zero on non-Unix platforms.
     pub permissions: i64,
-}
-
-/// Standard input handle — mirrors `Stdin` in `std/io.mvl`.
-///
-/// Obtained via [`stdin`]. Single-use in Phase 2 (move semantics).
-pub struct Stdin {
-    inner: std::io::Stdin,
-}
-
-/// Standard output handle — mirrors `Stdout` in `std/io.mvl`.
-///
-/// Obtained via [`stdout`]. Pass to [`stdout_write`] to write to stdout.
-pub struct Stdout {
-    inner: std::io::Stdout,
-}
-
-/// Standard error handle — mirrors `Stderr` in `std/io.mvl`.
-///
-/// Obtained via [`stderr`]. Pass to [`stderr_write`] to write to stderr.
-pub struct Stderr {
-    inner: std::io::Stderr,
 }
 
 // ── Path construction (pure) ───────────────────────────────────────────────
@@ -151,26 +130,94 @@ pub fn is_dir(p: Path) -> bool {
         .unwrap_or(false)
 }
 
-// ── File handle functions ──────────────────────────────────────────────────
+// ── File descriptor functions ──────────────────────────────────────────────
 
 /// Open a file for reading and writing, creating it if it does not exist.
 ///
-/// Returns a [`File`] handle on success, or an `IoError` on failure.
-pub fn open(p: Path) -> Result<File, IoError> {
+/// Returns an [`Fd`] on success, or an `IoError` on failure.
+/// The returned fd is a raw Unix file descriptor integer stored in `Fd.inner`.
+pub fn open(p: Path) -> Result<Fd, IoError> {
+    use std::os::unix::io::IntoRawFd as _;
     std::fs::OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
         .open(&p.inner)
-        .map(|f| File { inner: f })
+        .map(|f| Fd {
+            inner: f.into_raw_fd() as i64,
+        })
         .map_err(|e| sanitize_io_error(&e))
 }
 
-/// Close a file handle and release the file descriptor.
+/// Close a file descriptor and release it.
 ///
-/// Takes [`File`] by value; the file descriptor is released when `f` is dropped.
-pub fn close(_f: File) -> () {
-    // Drop is called on `_f` here, which closes the underlying std::fs::File.
+/// Takes [`Fd`] by value to prevent use-after-close.
+/// Only closes fds that were opened via [`open`] (fd > 2); stdin/stdout/stderr are never closed.
+#[allow(unsafe_code)]
+pub fn close(fd: Fd) -> () {
+    if fd.inner > 2 {
+        // Reconstruct the File and let it drop, which closes the underlying fd.
+        // SAFETY: fd.inner was obtained from IntoRawFd via open(), so it is valid and owned.
+        let _ = unsafe {
+            <std::fs::File as std::os::unix::io::FromRawFd>::from_raw_fd(fd.inner as i32)
+        };
+    }
+}
+
+/// Write a string to a file descriptor (stdout, stderr, or any open file).
+///
+/// Returns `Ok(())` on success, `Err(IoError)` on failure.
+#[allow(unsafe_code)]
+pub fn write(fd: Fd, msg: String) -> Result<(), IoError> {
+    use std::io::Write as _;
+    // SAFETY: fd.inner is either a well-known fd (0-2) or was returned by open().
+    let mut f =
+        unsafe { <std::fs::File as std::os::unix::io::FromRawFd>::from_raw_fd(fd.inner as i32) };
+    let result = f
+        .write_all(msg.as_bytes())
+        .map_err(|e| sanitize_io_error(&e));
+    // Prevent Rust from closing the fd when `f` is dropped — the fd is still owned by MVL.
+    std::mem::forget(f);
+    result
+}
+
+/// Read up to `max_bytes` bytes from a file descriptor.
+///
+/// Returns `Ok(Tainted<String>)` on success, `Ok(Tainted(""))` at EOF.
+#[allow(unsafe_code)]
+pub fn read(fd: Fd, max_bytes: i64) -> Result<Tainted<String>, IoError> {
+    use std::io::Read as _;
+    // SAFETY: fd.inner is either a well-known fd (0-2) or was returned by open().
+    let mut f =
+        unsafe { <std::fs::File as std::os::unix::io::FromRawFd>::from_raw_fd(fd.inner as i32) };
+    let mut buf = vec![0u8; max_bytes.max(0) as usize];
+    let result = f
+        .read(&mut buf)
+        .map(|n| Tainted(String::from_utf8_lossy(&buf[..n]).into_owned()))
+        .map_err(|e| sanitize_io_error(&e));
+    std::mem::forget(f);
+    result
+}
+
+/// Read one line (up to and including `\n`) from a file descriptor.
+///
+/// Returns `Ok(Tainted<String>)` on success, `Ok(Tainted(""))` at EOF.
+#[allow(unsafe_code)]
+pub fn read_line(fd: Fd) -> Result<Tainted<String>, IoError> {
+    use std::io::{BufRead as _, BufReader};
+    // SAFETY: fd.inner is either a well-known fd (0-2) or was returned by open().
+    let f =
+        unsafe { <std::fs::File as std::os::unix::io::FromRawFd>::from_raw_fd(fd.inner as i32) };
+    let mut reader = BufReader::new(f);
+    let mut line = String::new();
+    let result = reader
+        .read_line(&mut line)
+        .map(|_| Tainted(line))
+        .map_err(|e| sanitize_io_error(&e));
+    // Prevent Rust from closing the fd when the BufReader (and inner File) is dropped.
+    let inner = reader.into_inner();
+    std::mem::forget(inner);
+    result
 }
 
 // ── File I/O ───────────────────────────────────────────────────────────────
@@ -199,62 +246,21 @@ pub fn read_file(p: String) -> Result<Tainted<String>, IoError> {
     _read_file(p).map(Tainted)
 }
 
-/// Write a string to a file, truncating it if it already exists.
-pub fn write(p: Path, content: Tainted<String>) -> Result<(), IoError> {
-    std::fs::write(&p.inner, content.0.as_bytes()).map_err(|e| sanitize_io_error(&e))
+/// Write a string to a file path, truncating it if it already exists.
+///
+/// For writing to an open file descriptor, use [`write`] instead.
+pub fn write_file(p: Path, content: String) -> Result<(), IoError> {
+    std::fs::write(&p.inner, content.as_bytes()).map_err(|e| sanitize_io_error(&e))
 }
 
 /// Append a string to a file, creating it if it does not exist.
-pub fn append(p: Path, content: Tainted<String>) -> Result<(), IoError> {
+pub fn append(p: Path, content: String) -> Result<(), IoError> {
     use std::io::Write as _;
     std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(&p.inner)
-        .and_then(|mut f| f.write_all(content.0.as_bytes()))
-        .map_err(|e| sanitize_io_error(&e))
-}
-
-/// Wrap a [`File`] handle in a [`BufReader`] for line-oriented reading.
-pub fn buf_reader(f: File) -> BufReader {
-    BufReader {
-        inner: std::io::BufReader::new(f.inner),
-    }
-}
-
-/// Wrap a [`File`] handle in a [`BufWriter`] for line-oriented writing.
-pub fn buf_writer(f: File) -> BufWriter {
-    BufWriter {
-        inner: std::io::BufWriter::new(f.inner),
-    }
-}
-
-/// Read the next line from a [`BufReader`] (up to and including `\n`).
-///
-/// Returns `Ok(Tainted<String>)` on success.
-/// Returns `Ok(Tainted(""))` at end-of-file.
-/// Returns `Err(IoError)` on I/O failure.
-///
-/// Single-use in Phase 2 — the reader is consumed after this call.
-pub fn read_line(r: BufReader) -> Result<Tainted<String>, IoError> {
-    use std::io::BufRead as _;
-    let mut inner = r.inner;
-    let mut line = String::new();
-    match inner.read_line(&mut line) {
-        Ok(_) => Ok(Tainted(line)),
-        Err(e) => Err(sanitize_io_error(&e)),
-    }
-}
-
-/// Write a line (followed by `\n`) to a [`BufWriter`].
-///
-/// Flushes the buffer before returning.
-/// Single-use in Phase 2 — the writer is consumed after this call.
-pub fn write_line(w: BufWriter, line: String) -> Result<(), IoError> {
-    use std::io::Write as _;
-    let mut inner = w.inner;
-    writeln!(inner, "{}", line)
-        .and_then(|_| inner.flush())
+        .and_then(|mut f| f.write_all(content.as_bytes()))
         .map_err(|e| sanitize_io_error(&e))
 }
 
@@ -359,71 +365,6 @@ pub fn read_link(p: Path) -> Result<Tainted<String>, IoError> {
     std::fs::read_link(&p.inner)
         .map(|pb| Tainted(pb.to_string_lossy().into_owned()))
         .map_err(|e| sanitize_io_error(&e))
-}
-
-// ── Standard input (! Console) ─────────────────────────────────────────────
-
-/// Return the standard input handle.
-///
-/// Single-use in Phase 2 — pass to [`stdin_read_line`] or [`stdin_read_to_string`].
-pub fn stdin() -> Stdin {
-    Stdin {
-        inner: std::io::stdin(),
-    }
-}
-
-/// Read one line from stdin (up to and including `\n`).
-///
-/// Returns `Ok(Tainted<String>)` on success.
-/// Returns `Ok(Tainted(""))` at end-of-file.
-pub fn stdin_read_line(s: Stdin) -> Result<Tainted<String>, IoError> {
-    use std::io::BufRead as _;
-    let mut line = String::new();
-    match s.inner.lock().read_line(&mut line) {
-        Ok(_) => Ok(Tainted(line)),
-        Err(e) => Err(sanitize_io_error(&e)),
-    }
-}
-
-/// Read all of stdin into a string.
-///
-/// Returns `Ok(Tainted<String>)` on success.
-pub fn stdin_read_to_string(s: Stdin) -> Result<Tainted<String>, IoError> {
-    use std::io::Read as _;
-    let mut buf = String::new();
-    s.inner
-        .lock()
-        .read_to_string(&mut buf)
-        .map(|_| Tainted(buf))
-        .map_err(|e| sanitize_io_error(&e))
-}
-
-// ── Standard output / error (! Console) ───────────────────────────────────
-
-/// Return the standard output handle.
-pub fn stdout() -> Stdout {
-    Stdout {
-        inner: std::io::stdout(),
-    }
-}
-
-/// Return the standard error handle.
-pub fn stderr() -> Stderr {
-    Stderr {
-        inner: std::io::stderr(),
-    }
-}
-
-/// Write a string to stdout without a trailing newline.
-pub fn stdout_write(s: Stdout, line: String) {
-    use std::io::Write as _;
-    let _ = s.inner.lock().write_all(line.as_bytes());
-}
-
-/// Write a string to stderr without a trailing newline.
-pub fn stderr_write(s: Stderr, line: String) {
-    use std::io::Write as _;
-    let _ = s.inner.lock().write_all(line.as_bytes());
 }
 
 // ── Error type ────────────────────────────────────────────────────────────
@@ -546,24 +487,24 @@ mod tests {
         std::fs::remove_file(&path_str).ok();
     }
 
-    // ── write / append / read roundtrip ───────────────────────────────────
+    // ── write_file / append / read roundtrip ──────────────────────────────
 
     #[test]
-    fn write_creates_file_with_content() {
-        let path_str = tmp("mvl_test_write.txt");
+    fn write_file_creates_file_with_content() {
+        let path_str = tmp("mvl_test_write_file.txt");
         let p = path(path_str.clone());
-        write(p.clone(), Tainted("hello".to_string())).unwrap();
+        write_file(p.clone(), "hello".to_string()).unwrap();
         let got = std::fs::read_to_string(&path_str).unwrap();
         assert_eq!(got, "hello");
         std::fs::remove_file(&path_str).ok();
     }
 
     #[test]
-    fn write_truncates_existing_file() {
-        let path_str = tmp("mvl_test_write_trunc.txt");
+    fn write_file_truncates_existing_file() {
+        let path_str = tmp("mvl_test_write_file_trunc.txt");
         std::fs::write(&path_str, "old content with more bytes").unwrap();
         let p = path(path_str.clone());
-        write(p, Tainted("new".to_string())).unwrap();
+        write_file(p, "new".to_string()).unwrap();
         let got = std::fs::read_to_string(&path_str).unwrap();
         assert_eq!(got, "new");
         std::fs::remove_file(&path_str).ok();
@@ -574,44 +515,41 @@ mod tests {
         let path_str = tmp("mvl_test_append.txt");
         std::fs::write(&path_str, "line1\n").unwrap();
         let p = path(path_str.clone());
-        append(p, Tainted("line2\n".to_string())).unwrap();
+        append(p, "line2\n".to_string()).unwrap();
         let got = std::fs::read_to_string(&path_str).unwrap();
         assert_eq!(got, "line1\nline2\n");
         std::fs::remove_file(&path_str).ok();
     }
 
     #[test]
-    fn write_read_roundtrip() {
+    fn write_file_read_roundtrip() {
         let path_str = tmp("mvl_test_roundtrip.txt");
         let p = path(path_str.clone());
-        write(p.clone(), Tainted("roundtrip content".to_string())).unwrap();
+        write_file(p.clone(), "roundtrip content".to_string()).unwrap();
         let result = read_to_string(p);
         assert!(result.is_ok());
         assert_eq!(result.unwrap().0, "roundtrip content");
         std::fs::remove_file(&path_str).ok();
     }
 
-    // ── open / close / buf_reader / read_line ─────────────────────────────
+    // ── open / close / fd write / read_line ───────────────────────────────
 
     #[test]
-    fn open_missing_file_returns_err() {
-        let p = path("/tmp/mvl_no_such_file_to_open_xyz".to_string());
-        // open() creates the file if it doesn't exist, so use a dir path to force error
+    fn open_missing_dir_returns_err() {
         let p_dir = path("/tmp/mvl_no_such_dir_xyz/file.txt".to_string());
         assert!(open(p_dir).is_err());
-        // Clean up if open() created the file
-        std::fs::remove_file("/tmp/mvl_no_such_file_to_open_xyz").ok();
-        let _ = p;
     }
 
     #[test]
-    fn buf_reader_read_line_returns_content() {
-        let path_str = tmp("mvl_test_buf_reader.txt");
-        std::fs::write(&path_str, "first line\nsecond line\n").unwrap();
-        let p = path(path_str.clone());
-        let f = open(p).unwrap();
-        let r = buf_reader(f);
-        let line = read_line(r).unwrap();
+    fn fd_write_and_read_line_roundtrip() {
+        let path_str = tmp("mvl_test_fd_write.txt");
+        std::fs::write(&path_str, "").unwrap();
+        let fd = open(path(path_str.clone())).unwrap();
+        write(Fd { inner: fd.inner }, "first line\n".to_string()).unwrap();
+        close(fd);
+        // Re-open for reading
+        let fd2 = open(path(path_str.clone())).unwrap();
+        let line = read_line(fd2).unwrap();
         assert_eq!(line.0, "first line\n");
         std::fs::remove_file(&path_str).ok();
     }
@@ -620,27 +558,9 @@ mod tests {
     fn read_line_eof_returns_empty_string() {
         let path_str = tmp("mvl_test_read_line_eof.txt");
         std::fs::write(&path_str, "").unwrap();
-        let p = path(path_str.clone());
-        let f = open(p).unwrap();
-        let r = buf_reader(f);
-        let line = read_line(r).unwrap();
+        let fd = open(path(path_str.clone())).unwrap();
+        let line = read_line(fd).unwrap();
         assert_eq!(line.0, "", "EOF should return empty string");
-        std::fs::remove_file(&path_str).ok();
-    }
-
-    // ── write_line ─────────────────────────────────────────────────────────
-
-    #[test]
-    fn write_line_creates_file_with_newline() {
-        let path_str = tmp("mvl_test_write_line.txt");
-        // Remove if exists from prior run
-        std::fs::remove_file(&path_str).ok();
-        let p = path(path_str.clone());
-        let f = open(p).unwrap();
-        let w = buf_writer(f);
-        write_line(w, "header".to_string()).unwrap();
-        let got = std::fs::read_to_string(&path_str).unwrap();
-        assert_eq!(got, "header\n");
         std::fs::remove_file(&path_str).ok();
     }
 
