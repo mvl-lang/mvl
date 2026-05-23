@@ -262,7 +262,9 @@ fn transpile_to_lib(files: &[PathBuf]) -> (String, bool) {
         let module_name = s.replace('-', "_");
         let out = transpiler::transpile(
             &prog,
-            transpiler::TranspileConfig::new(&module_name).with_prelude(stdlib_prelude.clone()),
+            transpiler::TranspileConfig::new(&module_name)
+                .with_prelude(stdlib_prelude.clone())
+                .for_test_crate(), // stub extern "rust" symbols so the fuzz crate links
         )
         .output;
         if out.has_extern_rust || transpiler::has_std_imports(&prog) {
