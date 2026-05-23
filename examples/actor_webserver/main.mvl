@@ -8,9 +8,10 @@
 // See: config.mvl and .openspec/patterns/001-config.md
 //
 // Routes:
-//   GET /health  → 200 ok
-//   GET /users   → 200 [{name: Alice}, {name: Bob}]
-//   *            → 404 Not Found
+//   GET /health          → 200 "ok"
+//   GET /users           → 200 [{name: Alice}, {name: Bob}]
+//   GET /users/{id}      → 200 {name: Alice, id: <id>}
+//   *                    → 404 Not Found  (405 if path matches but wrong method)
 //
 // Usage:
 //   make run                              (reads config.toml, defaults to 127.0.0.1:8080)
@@ -18,8 +19,9 @@
 //   ../../target/debug/mvl run main.mvl -- --port 9090  (CLI override)
 
 use config::{ServerConfig, ConfigLoadError, load_config}
-use pkg.http.{Status, Request, Response, HttpError,
-              parse_request, serialize_response, ok, not_found, error_response}
+use pkg.http.{Status, Method, Request, Response, HttpError, Router, MatchedRoute,
+              parse_request, serialize_response, ok, not_found, error_response,
+              new_router, route, dispatch, method_name}
 use std.net.{TcpListener, TcpStream, tcp_listen, tcp_accept, tcp_read_request, tcp_write,
              tcp_close_listener, tcp_close_stream, net_error_msg, NetError}
 use std.log.{Logger, default_logger, log_level_name, log_format_name}
@@ -35,28 +37,35 @@ use std.env.{exit}
 
 fn validate_port_range(p: Int where p > 0 && p < 65536) -> Int { p }
 
-// ── Routing ─────────────────────────────────────────────────────────────────
+// ── Route handlers ────────────────────────────────────────────────────────
 
-fn route(req: val Request) -> Result[Response, HttpError] {
-    if req.path.starts_with("/health") {
-        Ok(ok("ok"))
-    } else if req.path.starts_with("/users") {
-        Ok(ok("[{name: Alice}, {name: Bob}]"))
-    } else {
-        Err(HttpError { status: Status::Http404NotFound, detail: req.path })
-    }
+fn handle_health(req: val Request, params: val Map[String, String]) -> Response {
+    ok("ok")
+}
+
+fn handle_users(req: val Request, params: val Map[String, String]) -> Response {
+    ok("[{name: Alice}, {name: Bob}]")
+}
+
+fn handle_user(req: val Request, params: val Map[String, String]) -> Response {
+    let id: String = match params.get("id") {
+        Some(v) => v,
+        None    => "unknown",
+    };
+    ok("{name: Alice, id: ".concat(id).concat("}"))
 }
 
 // ── Actor-per-request ─────────────────────────────────────────────────────
 //
 // Each RequestHandler owns exactly one TcpStream (iso — no aliasing).
-// It reads the request, routes it, writes the response, closes the stream,
-// and then terminates.  No state persists between requests.
+// It reads the request, dispatches via the Router, calls the matched handler,
+// writes the response, closes the stream, and then terminates.
 
 actor RequestHandler {
     logger: Logger,
+    router: Router,
 
-    // Behavior: read one HTTP request, route it, reply, close.
+    // Behavior: read one HTTP request, dispatch it, reply, close.
     //
     //   iso stream — ownership of the socket transferred from the accept loop.
     //                Compiler guarantees no other actor or thread touches it.
@@ -67,10 +76,15 @@ actor RequestHandler {
                 let resp: Response = match parse_request(raw) {
                     Err(e) => error_response(e),
                     Ok(req) => {
-                        self.logger.debug("request", {"path": req.path});
-                        match route(req) {
-                            Ok(r)  => r,
-                            Err(e) => error_response(e),
+                        self.logger.debug("request", {"method": method_name(req.method), "path": req.path});
+                        match dispatch(self.router, req) {
+                            Err(e)  => error_response(e),
+                            Ok(matched) => match matched.name {
+                                "health" => handle_health(req, matched.params),
+                                "users"  => handle_users(req, matched.params),
+                                "user"   => handle_user(req, matched.params),
+                                _        => error_response(HttpError { status: Status::Http404NotFound, detail: matched.name }),
+                            },
                         }
                     },
                 };
@@ -88,21 +102,21 @@ actor RequestHandler {
 
 // ── Accept loop ───────────────────────────────────────────────────────────
 
-partial fn serve(listener: TcpListener, logger: val Logger) -> Result[Unit, NetError] ! Log + Net {
+partial fn serve(listener: TcpListener, logger: val Logger, router: val Router) -> Result[Unit, NetError] ! Log + Net {
     match tcp_accept(listener) {
         Err(NetError::ConnectionReset) => {
             logger.warn("client dropped before accept", {"reason": "connection reset"});
-            serve(listener, logger)
+            serve(listener, logger, router)
         },
         Err(NetError::Timeout) => {
             logger.warn("accept timed out", {"reason": "timeout"});
-            serve(listener, logger)
+            serve(listener, logger, router)
         },
         Err(e)     => Err(e),
         Ok(stream) => {
-            let h: RequestHandler = actor RequestHandler { logger: logger };
+            let h: RequestHandler = actor RequestHandler { logger: logger, router: router };
             h.handle(consume(stream));
-            serve(listener, logger)
+            serve(listener, logger, router)
         },
     }
 }
@@ -126,9 +140,15 @@ partial fn main() -> Unit ! Console + Env + FileRead + Log + Net {
         "log_level":  log_level_name(cfg.log_level),
         "log_format": log_format_name(cfg.log_format),
     });
+
+    let router: Router = route(route(route(new_router(),
+        Method::Get, "/health",      "health"),
+        Method::Get, "/users",       "users"),
+        Method::Get, "/users/{id}",  "user");
+
     match tcp_listen(cfg.host, cfg.port) {
         Err(e)       => logger.error("listen failed", {"error": net_error_msg(e)}),
-        Ok(listener) => match serve(listener, logger) {
+        Ok(listener) => match serve(listener, logger, router) {
             Err(e) => logger.error("accept failed", {"error": net_error_msg(e)}),
             Ok(_)  => {},
         },
