@@ -4,6 +4,12 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.147.0] - 2026-05-23
+
+### Added
+
+- **pkg.http Phase 3: HttpServer + ConnectionHandler actors** (#800): `HttpServer` owns the `TcpListener` and spawns a `ConnectionHandler` per accepted connection. `ConnectionHandler` reads one HTTP request, dispatches via `Router`, writes the response, and closes the stream — no shared mutable state. `Dispatcher = fn(Request, MatchedRoute) -> Response` is the public type alias for custom handler tables. `serve()` is a convenience wrapper for one-call server setup. 6 new routing tests; `examples/http_server.mvl` demonstrates the full API.
+
 ## [0.146.1] - 2026-05-23
 
 ### Fixed
