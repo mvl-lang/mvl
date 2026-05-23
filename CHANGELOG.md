@@ -4,6 +4,12 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.143.1] - 2026-05-23
+
+### Fixed
+
+- **Parser: decreases clause accepts method calls, fixes silent loop body drop** (#968): Extended `decreases` measure syntax from restricted `RefExpr` to full `Expr`, allowing method calls like `result.len()` in termination measures. Fixed critical parser bug where `decreases` parse failures were silently swallowed, causing the entire loop body to be discarded with no diagnostic (token stream misalignment). Now propagates hard parse errors and converts valid expressions to `RefExpr` for static termination checks; unconvertible expressions (method calls) fall back to `RuntimeCheck` with loop body preserved. Added tests for method-call and arithmetic-expression decreases clauses.
+
 ## [0.143.0] - 2026-05-23
 
 ### Added
