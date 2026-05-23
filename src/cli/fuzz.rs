@@ -2,6 +2,7 @@
 // Copyright 2026 Schuberg Philis
 
 use mvl::mvl::backends::rust as transpiler;
+use mvl::mvl::checker;
 use mvl::mvl::loader;
 use mvl::mvl::parser::ast::{Block, Decl, ElseBranch, Expr, ExternDecl, MatchBody, Stmt, TypeExpr};
 use std::fs;
@@ -17,6 +18,8 @@ struct FuzzParam {
 /// A fuzz target derived from a single function signature.
 struct FuzzTarget {
     fn_name: String,
+    /// Source file this function lives in (used to build a minimal fuzz workspace).
+    source_file: PathBuf,
     /// All parameters; Tainted ones receive fuzz input, others get zero-value defaults.
     params: Vec<FuzzParam>,
 }
@@ -69,7 +72,14 @@ pub fn run(
     );
 
     let tmp_dir = std::env::temp_dir().join(format!("mvl_fuzz_{}", process::id()));
-    build_fuzz_workspace(&files, fuzz_target, &tmp_dir, corpus);
+    // Only compile the file that contains the target function — avoids pulling in
+    // unrelated files whose generated code may have compile issues under nightly/ASAN.
+    build_fuzz_workspace(
+        std::slice::from_ref(&fuzz_target.source_file),
+        fuzz_target,
+        &tmp_dir,
+        corpus,
+    );
 
     run_cargo_fuzz(fuzz_target, &tmp_dir, time_secs, corpus);
 }
@@ -239,6 +249,7 @@ fn collect_fuzz_targets(files: &[PathBuf], path: &str) -> Vec<FuzzTarget> {
                 if has_tainted {
                     targets.push(FuzzTarget {
                         fn_name: fd.name.clone(),
+                        source_file: file.clone(),
                         params: all_params,
                     });
                 }
@@ -291,17 +302,25 @@ fn build_fuzz_workspace(
         });
     }
 
-    // Transpile all source files into a single lib.rs.
-    let (lib_rs, need_runtime) = transpile_to_lib(files);
-    fs::write(src_dir.join("lib.rs"), &lib_rs).unwrap_or_else(|e| {
+    // Transpile using transpile_project so each file becomes its own Rust module;
+    // this avoids duplicate prelude definitions that arise from flat concatenation.
+    let project_out = transpile_project(files);
+    fs::write(src_dir.join("lib.rs"), &project_out.lib_rs).unwrap_or_else(|e| {
         eprintln!("Cannot write lib.rs: {e}");
         process::exit(1);
     });
+    for (mod_name, mod_src) in &project_out.module_files {
+        fs::write(src_dir.join(format!("{mod_name}.rs")), mod_src).unwrap_or_else(|e| {
+            eprintln!("Cannot write {mod_name}.rs: {e}");
+            process::exit(1);
+        });
+    }
 
     // Root Cargo.toml (lib crate).
     let runtime_src = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("runtime")
         .join("rust");
+    let need_runtime = project_out.need_runtime;
     let runtime_dep = if need_runtime && runtime_src.exists() {
         format!("mvl_runtime = {{ path = \"{}\" }}\n", runtime_src.display())
     } else {
@@ -367,41 +386,68 @@ fn build_fuzz_workspace(
     println!("Fuzz workspace: {}", tmp_dir.display());
 }
 
-fn transpile_to_lib(files: &[PathBuf]) -> (String, bool) {
-    let mut stdlib_prelude = loader::load_implicit_prelude();
-    let all_progs: Vec<_> = files
-        .iter()
-        .map(|f| super::parse_or_exit(&f.display().to_string()).0)
-        .collect();
-    let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    stdlib_prelude.extend(loader::load_pkg_modules(&all_progs, &project_root));
-    stdlib_prelude.extend(loader::load_mvl_native_stdlib_extras(&all_progs));
+struct FuzzLibOutput {
+    /// Content for src/lib.rs (entry module + pub mod declarations).
+    lib_rs: String,
+    /// (name, content) pairs for src/{name}.rs sibling modules.
+    module_files: Vec<(String, String)>,
+    need_runtime: bool,
+}
 
-    let mut need_runtime = transpiler::prelude_requires_runtime(&stdlib_prelude);
-    let mut lib_rs = String::from(
-        "#![allow(dead_code, unused_variables, unused_imports, unused_parens, unused_unsafe, non_snake_case)]\n\n",
+fn transpile_project(files: &[PathBuf]) -> FuzzLibOutput {
+    let all_progs: Vec<(String, mvl::mvl::parser::ast::Program)> = files
+        .iter()
+        .map(|f| {
+            let file_str = f.display().to_string();
+            let stem = loader::stem(&file_str).replace('-', "_");
+            (stem, super::parse_or_exit(&file_str).0)
+        })
+        .collect();
+
+    let mut stdlib_prelude = loader::load_implicit_prelude();
+    let progs_only: Vec<_> = all_progs.iter().map(|(_, p)| p.clone()).collect();
+    let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    stdlib_prelude.extend(loader::load_pkg_modules(&progs_only, &project_root));
+    stdlib_prelude.extend(loader::load_mvl_native_stdlib_extras(&progs_only));
+
+    // Treat the first file as entry and the rest as siblings — transpile_project
+    // handles the prelude correctly: entry gets full emission, siblings share it.
+    let (entry_name, entry_prog) = &all_progs[0];
+    let siblings: Vec<(String, mvl::mvl::parser::ast::Program)> = all_progs[1..].to_vec();
+
+    // Collect expression types from ALL programs (prelude + user) so the emitter
+    // can distinguish list vs string concat etc. — same pattern as `mvl build`.
+    let mut all_expr_types = checker::collect_prelude_expr_types(&stdlib_prelude);
+    let check_result = checker::check_with_prelude(&stdlib_prelude, entry_prog);
+    all_expr_types.extend(check_result.expr_types);
+
+    let out = transpiler::transpile_project_with_options(
+        entry_name,
+        entry_prog,
+        &siblings,
+        &stdlib_prelude,
+        all_expr_types,
+        mvl::mvl::backends::AssertMode::Assume, // don't panic on refinement violations in fuzz
+        true, // extern_stubs: extern "rust" → todo!() so the harness links without bridges
     );
 
-    for file in files {
-        let file_str = file.display().to_string();
-        let (prog, _src) = super::parse_or_exit(&file_str);
-        let s = loader::stem(&file_str);
-        let module_name = s.replace('-', "_");
-        let out = transpiler::transpile(
-            &prog,
-            transpiler::TranspileConfig::new(&module_name)
-                .with_prelude(stdlib_prelude.clone())
-                .for_test_crate(), // stub extern "rust" symbols so the fuzz crate links
-        )
-        .output;
-        if out.has_extern_rust || transpiler::has_std_imports(&prog) {
-            need_runtime = true;
-        }
-        lib_rs.push_str(&out.lib_rs);
-        lib_rs.push('\n');
+    // The entry `main_rs` may be a binary stub when the first file has `fn main`.
+    // We need a lib crate, so wrap everything under pub mod if needed, or use the
+    // library output directly. transpile_project gives us the right module structure.
+    let need_runtime = out.use_mvl_runtime;
+
+    // Re-export all public items from sibling modules so the harness can use
+    // `use mvl_fuzz_lib::*;` and resolve any function regardless of which file it's in.
+    let mut lib_rs = out.main_rs.clone();
+    for (mod_name, _) in &out.module_files {
+        lib_rs.push_str(&format!("pub use {mod_name}::*;\n"));
     }
 
-    (lib_rs, need_runtime)
+    FuzzLibOutput {
+        lib_rs,
+        module_files: out.module_files,
+        need_runtime,
+    }
 }
 
 // ── Harness generation ───────────────────────────────────────────────────────
