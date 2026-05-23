@@ -1,0 +1,270 @@
+// actor_trading/main.mvl — Verified trading engine with Phase 8 actors.
+//
+// Architecture:
+//
+//   OrderGateway  ──val order──►  OrderBook  ──tag matcher──►  Matcher
+//                                                                  │
+//                                                            iso fill
+//                                                                  │
+//                                                                  ▼
+//                                                           RiskChecker  ──► Console
+//
+// Demonstrates:
+//   1. Req 10 refinement types — Price and Quantity carry `where` predicates
+//      enforced at the call sites of new_bid/new_ask; the compiler rejects
+//      negative prices and zero quantities before any message is sent.
+//   2. val capability — Orders are immutable domain objects; val is the right
+//      capability for data that does not need exclusive ownership.
+//   3. iso capability — Fill is a single-use receipt produced by Matcher and
+//      consumed once by RiskChecker; iso enforces that exactly.
+//   4. tag capability — RiskChecker and Matcher hold tag references to each other;
+//      they can send messages but cannot read each other's internal state.
+//   5. concurrently { } — structured scope drains all actor mailboxes before
+//      returning; no threads leak past main().
+//
+// Usage:
+//   mvl run examples/actor_trading/main.mvl
+//   make run   (from examples/actor_trading/)
+
+use types::{Order, Fill, Side, OrderStatus}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// RISK CHECKER
+//
+// Final gatekeeper: receives a Fill, validates the price invariant against
+// the original orders, and prints the execution report.
+// ═══════════════════════════════════════════════════════════════════════════
+
+actor RiskChecker {
+
+    accepted: Int
+    rejected: Int
+
+    // Behavior: validate and report a fill.
+    //
+    //   iso fill      — ownership of the Fill transferred from Matcher;
+    //                   RiskChecker is the unique consumer of this receipt
+    //   val bid_price — immutable bid limit, needed to check no-worse-than-limit
+    //   val ask_price — immutable ask limit
+    pub fn check(iso fill: Fill, val bid_price: Int, val ask_price: Int) ! Console {
+        // Property 1: no execution worse than limit
+        //   bid fills at price <= bid.price  AND  ask fills at price >= ask.price
+        let price_ok: Bool = fill.price <= bid_price && fill.price >= ask_price;
+        if price_ok {
+            self.accepted = self.accepted + 1
+            println(
+                "  FILL accepted  bid=".concat(fill.bid_order.to_string())
+                    .concat(" ask=").concat(fill.ask_order.to_string())
+                    .concat(" price=").concat(fill.price.to_string())
+                    .concat(" qty=").concat(fill.quantity.to_string())
+            )
+        } else {
+            self.rejected = self.rejected + 1
+            println(
+                "  FILL rejected  price=".concat(fill.price.to_string())
+                    .concat(" violates bid_limit=").concat(bid_price.to_string())
+                    .concat(" ask_limit=").concat(ask_price.to_string())
+            )
+        }
+    }
+
+    // Behavior: print summary when all fills have been processed.
+    pub fn summary() ! Console {
+        println(
+            "RiskChecker: ".concat(self.accepted.to_string())
+                .concat(" accepted, ").concat(self.rejected.to_string()).concat(" rejected")
+        )
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MATCHER
+//
+// Receives a bid/ask pair, computes execution price (ask price = passive
+// side's limit — satisfies both sides), and forwards the Fill to
+// RiskChecker for validation.
+// ═══════════════════════════════════════════════════════════════════════════
+
+actor Matcher {
+
+    risk: RiskChecker   // tag — can send messages, cannot read state
+
+    // Behavior: match a bid against an ask and produce a Fill.
+    //
+    //   val bid, val ask — immutable orders; both sides are read-only here,
+    //                      Matcher only needs to inspect price and quantity
+    //
+    // Execution price: ask.price (passive side sets the price —
+    // standard price-time priority).
+    // This satisfies:  ask.price <= exec_price <= bid.price
+    pub fn match_orders(val bid: Order, val ask: Order) ! Console {
+        // Quantity conservation: fill at most what both sides can provide.
+        let exec_qty: Int = if bid.quantity < ask.quantity { bid.quantity } else { ask.quantity };
+        let exec_price: Int = ask.price;
+        let fill: Fill = Fill {
+            bid_order: bid.id,
+            ask_order: ask.id,
+            price:     exec_price,
+            quantity:  exec_qty,
+        };
+        println(
+            "Matcher: executing bid ".concat(bid.id.to_string())
+                .concat(" vs ask ").concat(ask.id.to_string())
+                .concat(" @ ").concat(exec_price.to_string())
+                .concat(" x ").concat(exec_qty.to_string())
+        )
+        // Forward fill with original limits so RiskChecker can verify the price invariant.
+        // iso: ownership of `fill` transfers here — Matcher no longer holds it.
+        self.risk.check(consume(fill), bid.price, ask.price)
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ORDER BOOK
+//
+// Holds the resting bid and ask queues.  On each incoming order it checks
+// for a crossing (best ask <= best bid) and, if found, forwards both sides
+// to the Matcher for execution.
+//
+// Simplification: single-level book (one bid slot, one ask slot) so the
+// example stays readable.  A production book would use priority queues.
+// ═══════════════════════════════════════════════════════════════════════════
+
+actor OrderBook {
+
+    matcher:  Matcher           // tag — can dispatch to matcher
+    best_bid: Option[Order]     // resting bid (or None)
+    best_ask: Option[Order]     // resting ask (or None)
+
+    // Behavior: accept a new order and attempt a match if a crossing exists.
+    //
+    //   val order — immutable Order; OrderBook reads price/side and may store it
+    pub fn submit(val order: Order) ! Console {
+        match order.side {
+            Side::Bid => {
+                println("OrderBook: bid ".concat(order.id.to_string())
+                    .concat(" price=").concat(order.price.to_string())
+                    .concat(" qty=").concat(order.quantity.to_string()));
+                match self.best_ask {
+                    None => {
+                        self.best_bid = Some(order)
+                    },
+                    Some(ask) => {
+                        if order.price >= ask.price {
+                            // Crossing: execute immediately; clear resting ask.
+                            self.best_ask = None
+                            self.matcher.match_orders(order, ask)
+                        } else {
+                            self.best_bid = Some(order)
+                        }
+                    },
+                }
+            },
+            Side::Ask => {
+                println("OrderBook: ask ".concat(order.id.to_string())
+                    .concat(" price=").concat(order.price.to_string())
+                    .concat(" qty=").concat(order.quantity.to_string()));
+                match self.best_bid {
+                    None => {
+                        self.best_ask = Some(order)
+                    },
+                    Some(bid) => {
+                        if bid.price >= order.price {
+                            // Crossing: execute immediately; clear resting bid.
+                            self.best_bid = None
+                            self.matcher.match_orders(bid, order)
+                        } else {
+                            self.best_ask = Some(order)
+                        }
+                    },
+                }
+            },
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ORDER GATEWAY
+//
+// Entry point for new orders.  This is where Req 10 enforcement happens:
+// `price: Price` and `quantity: Quantity` carry `where` predicates that the
+// compiler must prove satisfied at every call site.  A call like
+//   gw.new_bid(-50, 0)
+// is a compile error — the compiler rejects it before any message is sent.
+// ═══════════════════════════════════════════════════════════════════════════
+
+actor OrderGateway {
+
+    book:    OrderBook  // tag — dispatch target
+    next_id: Int        // sequential order ID counter
+
+    // Behavior: create and submit a new bid.
+    //
+    // Req 10 enforcement: the `where` predicates are checked statically by the
+    // solver at every call site.  A call like gw.new_bid(-50, 0) is a compile
+    // error — the compiler proves `-50 > 0` false before any message is sent.
+    pub fn new_bid(val price: Int where price > 0, val quantity: Int where quantity > 0) ! Console {
+        let order: Order = Order {
+            id:       self.next_id,
+            side:     Side::Bid,
+            price:    price,
+            quantity: quantity,
+            status:   OrderStatus::Open,
+        };
+        self.next_id = self.next_id + 1
+        self.book.submit(order)
+    }
+
+    // Behavior: create and submit a new ask.
+    pub fn new_ask(val price: Int where price > 0, val quantity: Int where quantity > 0) ! Console {
+        let order: Order = Order {
+            id:       self.next_id,
+            side:     Side::Ask,
+            price:    price,
+            quantity: quantity,
+            status:   OrderStatus::Open,
+        };
+        self.next_id = self.next_id + 1
+        self.book.submit(order)
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ENTRY POINT
+// ═══════════════════════════════════════════════════════════════════════════
+
+fn main() -> Unit ! Console {
+    println("=== Verified Trading Engine ===")
+    println("")
+    concurrently {
+        let risk:    RiskChecker  = actor RiskChecker  { accepted: 0, rejected: 0 };
+        let matcher: Matcher      = actor Matcher      { risk: risk };
+        let book:    OrderBook    = actor OrderBook    { matcher: matcher, best_bid: None, best_ask: None };
+        let gw:      OrderGateway = actor OrderGateway { book: book, next_id: 0 };
+
+        // Scenario 1: ask rests, bid crosses it.
+        // Ask #0: sell 10 lots @ 100  → rests (no bid)
+        // Bid #1: buy  10 lots @ 102  → crosses → executes @ 100 (ask price)
+        println("--- scenario 1: resting ask crossed by aggressive bid ---")
+        gw.new_ask(100, 10)
+        gw.new_bid(102, 10)
+
+        // Scenario 2: bid rests, ask crosses it.
+        // Bid #2: buy  5 lots @ 99  → rests (no ask)
+        // Ask #3: sell 5 lots @ 97  → crosses → executes @ 97 (ask price)
+        println("")
+        println("--- scenario 2: resting bid crossed by aggressive ask ---")
+        gw.new_bid(99, 5)
+        gw.new_ask(97, 5)
+
+        // Scenario 3: no cross — orders rest.
+        println("")
+        println("--- scenario 3: no cross (bid below ask) ---")
+        gw.new_bid(95, 3)
+        gw.new_ask(98, 3)
+
+        risk.summary()
+    }
+    println("")
+    println("Done.")
+}
