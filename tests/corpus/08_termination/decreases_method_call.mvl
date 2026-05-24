@@ -1,0 +1,24 @@
+// Corpus: decreases with method-call measure (Req 8, #968 fix)
+// Demonstrates that a `decreases` clause whose measure is a method call
+// (e.g. `rest.len()`) is accepted and proved — not silently dropped.
+//
+// Prior to #968 the clause was dropped silently, meaning a while loop
+// inside a total function would not have been permitted. This file proves
+// the fix: `rest.len()` strictly decreases each iteration because
+// `rest.skip(1)` returns a list one element shorter.
+
+fn count_list_elements(items: List[Int]) -> Int {
+    let acc: ref Int = 0;
+    let rest: ref List[Int] = items;
+    while rest.len() > 0 decreases rest.len() {
+        acc = acc + 1;
+        rest = rest.skip(1);
+    }
+    acc
+}
+
+fn main() -> Unit ! Console {
+    let xs: List[Int] = [1, 2, 3, 4, 5];
+    let n: Int = count_list_elements(xs);
+    println(n.to_string());
+}

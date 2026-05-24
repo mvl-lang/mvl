@@ -100,6 +100,9 @@ pub enum CheckError {
     ResultIgnored {
         span: Span,
     },
+    OptionIgnored {
+        span: Span,
+    },
     PropagateNotResult {
         ty: String,
         span: Span,
@@ -525,6 +528,7 @@ impl CheckError {
             CheckError::OptionDirectAccess { .. } => 4,
             // Req 5: Error Visibility
             CheckError::ResultIgnored { .. }
+            | CheckError::OptionIgnored { .. }
             | CheckError::PropagateNotResult { .. }
             | CheckError::PropagateIncompatibleError { .. } => 5,
             // Req 6: Ownership (immutability / linearity)
@@ -606,6 +610,7 @@ impl CheckError {
             | CheckError::NonExhaustiveMatch { span, .. }
             | CheckError::OptionDirectAccess { span }
             | CheckError::ResultIgnored { span }
+            | CheckError::OptionIgnored { span }
             | CheckError::PropagateNotResult { span, .. }
             | CheckError::AssignToImmutable { span, .. }
             | CheckError::MutateImmutableField { span, .. }
@@ -712,6 +717,10 @@ impl CheckError {
             }
             CheckError::ResultIgnored { .. } => {
                 "`Result` value must be used — handle with `match` or propagate with `?`"
+                    .to_string()
+            }
+            CheckError::OptionIgnored { .. } => {
+                "`Option` value must be used — handle with `match`, `if let`, or `unwrap_or`"
                     .to_string()
             }
             CheckError::PropagateNotResult { ty, .. } => {

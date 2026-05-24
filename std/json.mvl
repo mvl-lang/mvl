@@ -494,7 +494,7 @@ fn empty_object() -> Map[String, Value] {
     // {} parses as an empty block in MVL, not an empty map literal.
     // Workaround: create a one-entry sentinel map then remove the key via method call.
     let m: ref Map[String, Value] = {"__mvl_json_init__": Value::Null};
-    m.remove("__mvl_json_init__");
+    let _: Option[Value] = m.remove("__mvl_json_init__");
     m
 }
 
