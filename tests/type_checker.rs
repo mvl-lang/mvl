@@ -3371,6 +3371,224 @@ fn call_chain_error_names_callee_and_observable() {
     }
 }
 
+// ── #1007: Effect-based IFC — missing edge case coverage ─────────────────────
+
+/// Gap 1a: Transitive chain where the intermediate function b is NOT effectful.
+///
+/// When `a` calls `b` and `b` calls `println`, but only `println` declares
+/// `! Console` (b has no effects), then `b` is seeded as a reachability entry
+/// pointing at `println`, and `a` is propagated from `b`.  The violation for
+/// `entry` calling `a` under a Secret PC should be a
+/// `CrossFunctionImplicitFlowViolation` naming callee="a" and
+/// observable_fn="println" (the terminal effectful function, since `b` itself
+/// is NOT effectful and therefore not registered as an observable).
+///
+/// - GIVEN chain: a → b → println, where only println has `! Console`
+/// - WHEN `if secret { a() }`
+/// - THEN `CrossFunctionImplicitFlowViolation` with callee="a", observable_fn="println"
+#[test]
+fn transitive_chain_non_effectful_intermediate_reports_terminal_observable() {
+    let errors = errors_for(
+        r#"fn println(msg: String) -> Unit ! Console { }
+           fn b(msg: String) -> Unit { println(msg) }
+           fn a(msg: String) -> Unit { b(msg) }
+           fn entry(flag: Secret[Bool]) -> Unit { if flag { a("x"); } }"#,
+    );
+    let violation = errors.iter().find(|e| {
+        matches!(e, CheckError::CrossFunctionImplicitFlowViolation { callee, .. }
+            if callee == "a")
+    });
+    assert!(
+        violation.is_some(),
+        "transitive a→b→println (b non-effectful) under Secret PC should emit CrossFunctionImplicitFlowViolation, got: {errors:?}"
+    );
+    if let Some(CheckError::CrossFunctionImplicitFlowViolation { observable_fn, .. }) = violation {
+        assert_eq!(
+            observable_fn, "println",
+            "when intermediate b is non-effectful, observable_fn should be the terminal println, got: {observable_fn}"
+        );
+    }
+}
+
+/// Gap 1b: Three-hop chain where the directly-called function is effectful.
+///
+/// When `a` (effectful) calls `b` (effectful) which calls `println` (effectful),
+/// the nearest observable callee of `a` is `b` (the first effectful fn it calls).
+/// Calling `a` under a high PC must report observable_fn="b", not "println".
+///
+/// - GIVEN chain: a(! Console) → b(! Console) → println(! Console)
+/// - WHEN `if secret { a() }`
+/// - THEN `CrossFunctionImplicitFlowViolation` with callee="a", observable_fn="b"
+#[test]
+fn transitive_chain_effectful_intermediate_reports_nearest_observable() {
+    let errors = errors_for(
+        r#"fn println(msg: String) -> Unit ! Console { }
+           fn b(msg: String) -> Unit ! Console { println(msg) }
+           fn a(msg: String) -> Unit ! Console { b(msg) }
+           fn entry(flag: Secret[Bool]) -> Unit ! Console { if flag { a("x"); } }"#,
+    );
+    let violation = errors.iter().find(|e| {
+        matches!(e, CheckError::CrossFunctionImplicitFlowViolation { callee, .. }
+            if callee == "a")
+    });
+    assert!(
+        violation.is_some(),
+        "transitive a→b→println (all effectful) under Secret PC should emit CrossFunctionImplicitFlowViolation, got: {errors:?}"
+    );
+    if let Some(CheckError::CrossFunctionImplicitFlowViolation { observable_fn, .. }) = violation {
+        assert_eq!(
+            observable_fn, "b",
+            "when intermediate b is effectful, observable_fn should be b (nearest effectful callee), got: {observable_fn}"
+        );
+    }
+}
+
+/// Gap 2: Observable functions declared in the prelude (stdlib) are detected.
+///
+/// `check_implicit_flows` receives `all_programs` which includes the prelude.
+/// The prelude-declared `println ! Console` MUST be found by `collect_effectful_names`
+/// and trigger a violation when called under a high PC.
+///
+/// This test calls `check_src` (which loads SINK_PRELUDE as a separate prelude program)
+/// to exercise the cross-program observable collection path.
+///
+/// - GIVEN: println declared in prelude with `! Console`
+/// - WHEN: user module calls println inside `if secret { ... }`
+/// - THEN: `ImplicitFlowViolation` is emitted (prelude fn is detected as observable)
+#[test]
+fn prelude_effectful_fn_is_detected_as_observable() {
+    // println is declared only in SINK_PRELUDE (separate prelude program), not inlined here.
+    let errors = errors_for(
+        r#"fn f(flag: Secret[Bool]) -> Unit ! Console { if flag { println("leaked"); } }"#,
+    );
+    assert!(
+        errors.iter().any(
+            |e| matches!(e, CheckError::ImplicitFlowViolation { pc_label, observable_fn, .. }
+                if pc_label == "Secret" && observable_fn == "println")
+        ),
+        "prelude-declared println under Secret PC should emit ImplicitFlowViolation, got: {errors:?}"
+    );
+}
+
+/// Gap 3a: `println` called with a `Secret[String]` argument must produce `TypeMismatch`.
+///
+/// Direct-flow enforcement (Req 11 Phase 1): the type checker catches
+/// `Secret[String]` passed where bare `String` is required.
+/// `LoggingLabelViolation` was removed; `TypeMismatch` is now the mechanism.
+///
+/// - GIVEN `fn f(s: Secret[String]) -> Unit`
+/// - WHEN `println(s)` where println takes bare `String`
+/// - THEN `TypeMismatch` is emitted
+#[test]
+fn println_with_secret_arg_produces_type_mismatch() {
+    let errors = errors_for(r#"fn f(s: Secret[String]) -> Unit ! Console { println(s); }"#);
+    assert!(
+        errors.iter().any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "println(Secret[String]) must produce TypeMismatch (direct-flow enforcement), got: {errors:?}"
+    );
+}
+
+/// Gap 3b: `println` called with a `Tainted[String]` argument must produce `TypeMismatch`.
+///
+/// - GIVEN `fn f(s: Tainted[String]) -> Unit`
+/// - WHEN `println(s)` where println takes bare `String`
+/// - THEN `TypeMismatch` is emitted
+#[test]
+fn println_with_tainted_arg_produces_type_mismatch() {
+    let errors = errors_for(r#"fn f(s: Tainted[String]) -> Unit ! Console { println(s); }"#);
+    assert!(
+        errors.iter().any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "println(Tainted[String]) must produce TypeMismatch (direct-flow enforcement), got: {errors:?}"
+    );
+}
+
+/// Gap 3c: `print` called with a `Secret[String]` argument must produce `TypeMismatch`.
+///
+/// - GIVEN `fn g(s: Secret[String]) -> Unit`
+/// - WHEN `print(s)` where print takes bare `String`
+/// - THEN `TypeMismatch` is emitted
+#[test]
+fn print_with_secret_arg_produces_type_mismatch() {
+    let errors = errors_for(r#"fn g(s: Secret[String]) -> Unit ! Console { print(s); }"#);
+    assert!(
+        errors.iter().any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "print(Secret[String]) must produce TypeMismatch (direct-flow enforcement), got: {errors:?}"
+    );
+}
+
+/// Gap 3d: `println` with a bare `String` argument is accepted (no false positive).
+///
+/// The replacement of `LoggingLabelViolation` with `TypeMismatch` must not
+/// cause false positives: a bare string argument to println must be accepted.
+///
+/// - GIVEN `fn f(msg: String) -> Unit`
+/// - WHEN `println(msg)`
+/// - THEN no error
+#[test]
+fn println_with_bare_string_arg_accepted() {
+    let errors = errors_for(r#"fn f(msg: String) -> Unit ! Console { println(msg); }"#);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "println(String) must not produce TypeMismatch, got: {errors:?}"
+    );
+}
+
+/// Gap 5: When a function calls two different effectful functions, the violation
+/// still fires and names an observable function (whichever is seeded first).
+///
+/// The BFS seed uses `or_insert_with` (first-wins).  This test verifies that
+/// a function calling two observable targets is still flagged under high PC.
+///
+/// - GIVEN `fn multi() { println("a"); eprintln("b") }` (two effectful callees)
+/// - WHEN `if secret { multi() }`
+/// - THEN `CrossFunctionImplicitFlowViolation` is emitted
+#[test]
+fn fn_calling_two_effectful_fns_is_flagged_under_high_pc() {
+    let errors = errors_for(
+        r#"fn multi() -> Unit ! Console { println("a"); eprintln("b"); }
+           fn entry(flag: Secret[Bool]) -> Unit ! Console { if flag { multi(); } }"#,
+    );
+    assert!(
+        errors.iter().any(
+            |e| matches!(e, CheckError::CrossFunctionImplicitFlowViolation { callee, .. }
+                if callee == "multi")
+        ),
+        "fn calling two effectful fns under Secret PC should emit CrossFunctionImplicitFlowViolation, got: {errors:?}"
+    );
+}
+
+/// Implicit flow inside `impl Trait for Type` method bodies is detected.
+///
+/// `check_implicit_flows` walks `Decl::Impl` method bodies — calling
+/// `println` under a Secret PC inside an impl method is flagged.
+///
+/// Note: bare `self` in impl blocks is a parser limitation — use `self: Type`.
+///
+/// - GIVEN `impl Audit for Ctx { fn run(self: Ctx, flag: Secret[Bool]) ! Console { if flag { println(...) } } }`
+/// - THEN `ImplicitFlowViolation` is emitted
+#[test]
+fn implicit_flow_in_trait_impl_method_body_detected() {
+    let errors = errors_for(
+        r#"type Ctx = struct { dummy: Int }
+           trait Audit { fn run(self, flag: Secret[Bool]) -> Unit ! Console; }
+           impl Audit for Ctx {
+               fn run(self: Ctx, flag: Secret[Bool]) -> Unit ! Console {
+                   if flag { println("leak"); }
+               }
+           }"#,
+    );
+    let implicit: Vec<_> = errors
+        .iter()
+        .filter(|e| matches!(e, CheckError::ImplicitFlowViolation { .. }))
+        .collect();
+    assert!(
+        !implicit.is_empty(),
+        "impl-block method implicit flows should be detected — got: {implicit:?}"
+    );
+}
+
 // ── #136: Refinement type solver — Req 10 (Phase 3) ──────────────────────────
 
 /// Literal zero violates `b != 0` refinement — should report RefinementViolated.

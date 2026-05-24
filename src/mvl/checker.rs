@@ -164,7 +164,12 @@ pub fn check_with_two_preludes_mode(
         .chain(std::iter::once(prog))
         .collect();
 
-    ifc::check_implicit_flows(prog, &all_prog_refs, &mut checker.errors);
+    ifc::check_implicit_flows(
+        prog,
+        &all_prog_refs,
+        Some(&checker.env.fns),
+        &mut checker.errors,
+    );
     let refinement_counts = refinements::check_refinements(
         prelude_a,
         prelude_b,
