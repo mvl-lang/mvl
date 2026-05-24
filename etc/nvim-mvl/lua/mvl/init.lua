@@ -3,13 +3,18 @@
 
 local M = {}
 
----Register the MVL parser with nvim-treesitter.
+---Register the MVL parser with nvim-treesitter and optionally start the LSP.
 ---Called automatically by plugin/mvl.lua on startup.
 ---
 ---Works with:
 ---  - nvim-treesitter master branch (get_parser_configs API)
 ---  - nvim-treesitter main branch  (plain-table parsers module)
-function M.setup()
+---
+---@param opts? table  Optional config:
+---   lsp (boolean|table) — enable LSP diagnostics via tools/lsp_server.py
+---     true              — use defaults (python3, auto-discover script)
+---     { python, script } — explicit paths
+function M.setup(opts)
   -- Resolve grammar path relative to this file
   local runtime_files = vim.api.nvim_get_runtime_file("lua/mvl/init.lua", false)
   local grammar_path = runtime_files[1]
@@ -45,6 +50,17 @@ function M.setup()
 
   -- Associate .mvl files with the parser
   vim.filetype.add({ extension = { mvl = "mvl" } })
+
+  -- Optional LSP: start the language server on every MVL buffer open
+  if opts and opts.lsp then
+    local lsp_opts = type(opts.lsp) == "table" and opts.lsp or {}
+    vim.api.nvim_create_autocmd("FileType", {
+      pattern = "mvl",
+      callback = function()
+        require("mvl.lsp").start(lsp_opts)
+      end,
+    })
+  end
 end
 
 return M

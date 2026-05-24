@@ -1,8 +1,8 @@
 {
   "name": "vscode-mvl",
   "displayName": "MVL",
-  "description": "MVL (Minimum Verification Language) — syntax highlighting, bracket matching, and language configuration",
-  "version": "0.0.1",
+  "description": "MVL (Minimum Verification Language) — syntax highlighting, syntax diagnostics via tree-sitter LSP",
+  "version": "0.1.0",
   "publisher": "LAB271",
   "license": "MIT",
   "repository": {
@@ -15,6 +15,13 @@
   "categories": [
     "Programming Languages"
   ],
+  "main": "./extension.js",
+  "activationEvents": [
+    "onLanguage:mvl"
+  ],
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
   "contributes": {
     "languages": [
       {
@@ -30,6 +37,32 @@
         "scopeName": "source.mvl",
         "path": "./syntaxes/mvl.tmLanguage.json"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "MVL",
+      "properties": {
+        "mvl.lspEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable the MVL language server (tree-sitter syntax diagnostics)."
+        },
+        "mvl.lspServerScript": {
+          "type": "string",
+          "default": "",
+          "description": "Path to lsp_server.py. Defaults to tools/lsp_server.py in the workspace root."
+        },
+        "mvl.pythonPath": {
+          "type": "string",
+          "default": "python3",
+          "description": "Python interpreter used to launch the LSP server."
+        },
+        "mvl.lspMode": {
+          "type": "string",
+          "enum": ["treesitter"],
+          "default": "treesitter",
+          "description": "LSP mode. 'treesitter' = syntax errors only (Phase 1). Full type/effect checking requires Phase 2 (see issue #1003)."
+        }
+      }
+    }
   }
 }

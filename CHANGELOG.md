@@ -4,6 +4,12 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.148.0] - 2026-05-24
+
+### Added
+
+- **tooling: Phase 1 LSP server** (`tools/lsp_server.py`) — tree-sitter-based language server providing real-time syntax diagnostics for `.mvl` files in any LSP-capable editor. No compiler binary required; uses the `tree-sitter-mvl` Python binding bundled in `etc/tree-sitter-mvl/`. Includes VS Code client (`etc/vscode-mvl/extension.js`) and Neovim helper (`etc/nvim-mvl/lua/mvl/lsp.lua`). Install with `cd tools && make install`. Full type/effect diagnostics tracked in #1003 (Phase 2).
+
 ## [0.147.2] - 2026-05-24
 
 ### Fixed
