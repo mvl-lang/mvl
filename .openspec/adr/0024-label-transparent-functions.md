@@ -1,6 +1,6 @@
 # ADR-0024: Label-Transparent Functions
 
-**Status:** Accepted
+**Status:** Superseded by ADR-0036
 **Date:** 2026-05-09
 **Issues:** #179
 

@@ -1114,7 +1114,7 @@ impl<'ctx> LlvmBackend<'ctx> {
 
         // #508: Register return type for crypto_random_bytes so local_mvl_types tracks
         // it as Secret[List[Int]] when used in let-bindings — enables the codegen-level
-        // assert that guards public-sink emitters against Secret leaks.
+        // assert that guards observable function emitters against Secret leaks.
         {
             use crate::mvl::parser::lexer::Span;
             let s = Span::default();

@@ -849,7 +849,6 @@ mod tests {
             FnInfo {
                 params: vec![Ty::String],
                 ret: Ty::Unit,
-                is_sink: true,
                 ..Default::default()
             },
         );

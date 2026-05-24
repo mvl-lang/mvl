@@ -10,7 +10,7 @@
 // Output per file:
 //   fns:N  types:M  uses:P  consts:Q  externs:R  impls:S  errors:E
 //   followed by one line per fn declaration:
-//     [pub] [total|partial] [transparent] fn name(params) -> RetType ! Effects
+//     [pub] [total|partial] fn name(params) -> RetType ! Effects
 //
 // Usage (from repo root):
 //   mvl run compiler/main.mvl
@@ -76,14 +76,13 @@ total fn format_effects(effects: List[Effect]) -> String {
 total fn format_fn_sig(f: FnDecl) -> String {
     let vis: String    = if f.visible   { "pub " } else { "" };
     let tot: String    = if f.totality != "" { format("{} ", [f.totality]) } else { "" };
-    let tran: String   = if f.is_transp { "transparent " } else { "" };
     let test_s: String = if f.is_test   { "test " } else { "" };
     let params: String = format_params(f.params);
     let ret: String    = if f.ret_type.name != "" {
         format(" -> {}", [format_type_expr(f.ret_type)])
     } else { "" };
     let effs: String   = format_effects(f.effects);
-    format("  {}{}{}{}fn {}({}){}{}", [vis, tran, tot, test_s, f.name, params, ret, effs])
+    format("  {}{}{}fn {}({}){}{}", [vis, tot, test_s, f.name, params, ret, effs])
 }
 
 total fn format_path(segs: List[String]) -> String {
@@ -100,7 +99,7 @@ total fn format_imports(imports: List[String]) -> String {
 
 // ── IFC bridge ────────────────────────────────────────────────────────────────
 
-transparent partial fn lex_and_parse(src: String) -> Program {
+partial fn lex_and_parse(src: String) -> Program {
     let tokens: List[Token] = lex(src);
     parse(tokens)
 }
@@ -189,14 +188,13 @@ total fn make_effect(name: String) -> Effect {
     Effect { name: name, param: "", span: zero_span() }
 }
 
-total fn make_fn(visible: Bool, is_transp: Bool, totality: String, is_test: Bool,
+total fn make_fn(visible: Bool, totality: String, is_test: Bool,
                  name: String, params: List[Param], ret_name: String,
                  effects: List[Effect]) -> FnDecl {
     FnDecl {
         visible:     visible,
         is_test:     is_test,
         is_builtin:  false,
-        is_transp:   is_transp,
         totality:    totality,
         name:        name,
         type_params: [],
@@ -254,31 +252,25 @@ test fn format_effects_two() -> Unit {
 // ── format_fn_sig tests ────────────────────────────────────────────────────────
 
 test fn format_fn_sig_bare() -> Unit {
-    let f: FnDecl = make_fn(false, false, "", false, "foo", [], "Unit", []);
+    let f: FnDecl = make_fn(false, "", false, "foo", [], "Unit", []);
     assert_eq(format_fn_sig(f), "  fn foo() -> Unit")
 }
 
 test fn format_fn_sig_pub_total() -> Unit {
     let params: List[Param] = [make_param("x", "Int"), make_param("y", "Int")];
-    let f: FnDecl = make_fn(true, false, "total", false, "add", params, "Int", []);
+    let f: FnDecl = make_fn(true, "total", false, "add", params, "Int", []);
     assert_eq(format_fn_sig(f), "  pub total fn add(x: Int, y: Int) -> Int")
 }
 
 test fn format_fn_sig_partial_with_effects() -> Unit {
-    let f: FnDecl = make_fn(false, false, "partial", false, "log",
+    let f: FnDecl = make_fn(false, "partial", false, "log",
                             [make_param("msg", "String")], "Unit",
                             [make_effect("Console")]);
     assert_eq(format_fn_sig(f), "  partial fn log(msg: String) -> Unit ! Console")
 }
 
-test fn format_fn_sig_transparent() -> Unit {
-    let f: FnDecl = make_fn(false, true, "partial", false, "bridge",
-                            [make_param("s", "String")], "String", []);
-    assert_eq(format_fn_sig(f), "  transparent partial fn bridge(s: String) -> String")
-}
-
 test fn format_fn_sig_test_fn() -> Unit {
-    let f: FnDecl = make_fn(false, false, "", true, "my_test", [], "Unit", []);
+    let f: FnDecl = make_fn(false, "", true, "my_test", [], "Unit", []);
     assert_eq(format_fn_sig(f), "  test fn my_test() -> Unit")
 }
 

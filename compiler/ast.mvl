@@ -160,7 +160,6 @@ pub type FnDecl = struct {
     visible:     Bool,
     is_test:     Bool,
     is_builtin:  Bool,
-    is_transp:   Bool,
     totality:    String,
     name:        String,
     type_params: List[GenericParam],

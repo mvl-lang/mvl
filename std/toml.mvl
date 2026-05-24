@@ -41,7 +41,7 @@ type TKPos  = enum { TKP(String, Int), TKPErr(String) }
 // ── encode ────────────────────────────────────────────────────────────────────
 
 /// Serialises a TomlValue to a TOML string.
-pub transparent partial fn toml_encode(v: TomlValue) -> String {
+pub partial fn toml_encode(v: TomlValue) -> String {
     match v {
         TomlValue::TBool(b)     => if b { "true" } else { "false" },
         TomlValue::TInt(n)      => n.to_string(),
@@ -124,7 +124,7 @@ partial fn toml_encode_table(tbl: Map[String, TomlValue]) -> String {
 
 /// Parses a TOML string into a TomlValue (always TTable at the top level).
 /// Returns Err if the input is not valid TOML.
-pub transparent partial fn toml_decode(s: String) -> Result[TomlValue, TomlError] {
+pub partial fn toml_decode(s: String) -> Result[TomlValue, TomlError] {
     let chars: List[String] = s.chars();
     match toml_parse_document(chars) {
         TVPos::TVPErr(e) => Err(TomlError::ParseError(e)),

@@ -340,33 +340,26 @@ pub enum CheckError {
         found: String,
         span: Span,
     },
-    /// `println`/`print` called with a `Secret` or `Tainted` argument.
-    ///
-    /// Logging functions MUST accept only `Public<T>` per 003-information-flow/Req 6.
-    LoggingLabelViolation {
-        label: String,
-        span: Span,
-    },
-    /// A `println`/`print` call appears inside a branch controlled by a
+    /// An effectful (observable) function call appears inside a branch controlled by a
     /// `Secret` or `Tainted` condition, creating an implicit information flow.
     ///
-    /// Even if the arguments are `Public`, whether the print fires reveals the
+    /// Even if the arguments are bare, whether the call fires reveals the
     /// secret condition value — a classic implicit (or covert-channel) flow.
-    /// Per 003-information-flow: the PC label MUST NOT exceed the label of any
-    /// output sink. (Req 11, Phase 3)
+    /// Per 003-information-flow: the PC label MUST NOT reach any observable function.
+    /// (Req 11, #1007)
     ImplicitFlowViolation {
         /// The label of the controlling condition (e.g. "Secret" or "Tainted").
         pc_label: String,
-        /// The name of the public sink (`println` or `print`).
-        sink: String,
+        /// The name of the observable (effectful) function.
+        observable_fn: String,
         span: Span,
     },
     /// A function is called inside a branch controlled by a labeled condition, and that
-    /// function transitively reaches a public sink — cross-function implicit flow.
+    /// function transitively reaches an observable (effectful) function — cross-function implicit flow.
     ///
     /// Example: `if secret { log_access("x") }` where `log_access` calls `println`.
     /// Whether `log_access` fires reveals the secret condition value.
-    /// (Req 11, Phase 3 cross-function)
+    /// (Req 11, #1007 cross-function)
     CrossFunctionImplicitFlowViolation {
         /// The label of the controlling condition.
         pc_label: String,
@@ -374,8 +367,8 @@ pub enum CheckError {
         caller: String,
         /// The function called under high PC.
         callee: String,
-        /// The public sink reachable from `callee` (directly or transitively).
-        sink: String,
+        /// The observable (effectful) function reachable from `callee` (directly or transitively).
+        observable_fn: String,
         span: Span,
     },
     /// `extern` block declares an unsupported ABI.
@@ -476,26 +469,6 @@ pub enum CheckError {
         span: Span,
     },
 
-    // ── Label-transparent function validation (ADR-0024) ─────────────────
-    /// `transparent fn` declared with no parameters — label join over empty
-    /// arg list is always `None`, so `transparent` has no effect (Req 11).
-    TransparentFnNoParams {
-        name: String,
-        span: Span,
-    },
-    /// `transparent fn` declares a labeled return type, which would produce
-    /// a nested `Labeled(L, Labeled(L, T))` — invalid IR (Req 11).
-    TransparentFnLabeledReturn {
-        name: String,
-        span: Span,
-    },
-    /// `transparent fn` combined with a generic function — the label_transparent
-    /// branch in calls.rs runs before the is_generic branch, producing a labeled
-    /// type-param instead of `Unknown` (Req 11).
-    TransparentFnGeneric {
-        name: String,
-        span: Span,
-    },
     /// Interprocedural IFC violation (#831): inferred arg label cannot flow to
     /// the required parameter label through a chain of unannotated functions.
     ///
@@ -598,12 +571,8 @@ impl CheckError {
             | CheckError::UnknownRelabel { .. }
             | CheckError::InvalidDeclassify { .. }
             | CheckError::InvalidSanitize { .. }
-            | CheckError::LoggingLabelViolation { .. }
             | CheckError::ImplicitFlowViolation { .. }
             | CheckError::CrossFunctionImplicitFlowViolation { .. }
-            | CheckError::TransparentFnNoParams { .. }
-            | CheckError::TransparentFnLabeledReturn { .. }
-            | CheckError::TransparentFnGeneric { .. }
             | CheckError::InterprocFlowViolation { .. } => 11,
             // Req 1: Type Safety (declaration-level — malformed extern ABI is a type/decl error,
             // not an IFC violation; grouping it under Req 11 would pollute IFC metrics).
@@ -666,7 +635,6 @@ impl CheckError {
             | CheckError::UnknownRelabel { span, .. }
             | CheckError::InvalidDeclassify { span, .. }
             | CheckError::InvalidSanitize { span, .. }
-            | CheckError::LoggingLabelViolation { span, .. }
             | CheckError::ImplicitFlowViolation { span, .. }
             | CheckError::CrossFunctionImplicitFlowViolation { span, .. }
             | CheckError::UnsupportedExternAbi { span, .. }
@@ -674,9 +642,6 @@ impl CheckError {
             | CheckError::NotIterator { span, .. }
             | CheckError::ForLoopInPartialFn { span }
             | CheckError::MissingConstraint { span, .. }
-            | CheckError::TransparentFnNoParams { span, .. }
-            | CheckError::TransparentFnLabeledReturn { span, .. }
-            | CheckError::TransparentFnGeneric { span, .. }
             | CheckError::PreconditionViolated { span, .. }
             | CheckError::PostconditionViolated { span, .. }
             | CheckError::InvariantViolated { span, .. }
@@ -859,14 +824,11 @@ impl CheckError {
             CheckError::InvalidSanitize { found, .. } => format!(
                 "`sanitize()` is removed — use `relabel trust({found}, \"TAG\")` instead"
             ),
-            CheckError::LoggingLabelViolation { label, .. } => format!(
-                "logging functions accept only bare types but argument has label `{label}` — apply relabel before logging"
+            CheckError::ImplicitFlowViolation { pc_label, observable_fn, .. } => format!(
+                "implicit information flow: `{observable_fn}` call inside a branch controlled by a `{pc_label}` condition leaks information via control flow — move the call outside the branch or relabel the condition"
             ),
-            CheckError::ImplicitFlowViolation { pc_label, sink, .. } => format!(
-                "implicit information flow: `{sink}` call inside a branch controlled by a `{pc_label}` condition leaks information via control flow — move the call outside the branch or relabel the condition"
-            ),
-            CheckError::CrossFunctionImplicitFlowViolation { pc_label, caller, callee, sink, .. } => format!(
-                "cross-function implicit flow: `{callee}` called in `{caller}` inside a branch controlled by a `{pc_label}` condition reaches public sink `{sink}` — move the call outside the branch or guard `{sink}` inside `{callee}` against unlabeled callers"
+            CheckError::CrossFunctionImplicitFlowViolation { pc_label, caller, callee, observable_fn, .. } => format!(
+                "cross-function implicit flow: `{callee}` called in `{caller}` inside a branch controlled by a `{pc_label}` condition reaches observable function `{observable_fn}` — move the call outside the branch or relabel the condition"
             ),
             CheckError::UnsupportedExternAbi { abi, .. } => format!(
                 "unsupported extern ABI `\"{abi}\"` — only \"rust\" and \"c\" are allowed"
@@ -883,15 +845,6 @@ impl CheckError {
                 ..
             } => format!(
                 "type parameter `{type_param}` does not implement `{required_bound}` — add `where {type_param}: {required_bound}` to the function signature"
-            ),
-            CheckError::TransparentFnNoParams { name, .. } => format!(
-                "`transparent fn {name}` has no parameters — label propagation requires at least one argument; remove `transparent` or add a parameter"
-            ),
-            CheckError::TransparentFnLabeledReturn { name, .. } => format!(
-                "`transparent fn {name}` declares a labeled return type, which would produce a nested label at call sites — remove the label from the return type or remove `transparent`"
-            ),
-            CheckError::TransparentFnGeneric { name, .. } => format!(
-                "`transparent fn {name}` is also generic — `transparent` cannot be combined with generic type parameters; use label-polymorphic generics instead (see ADR-0024)"
             ),
             CheckError::PreconditionViolated { fn_name, pred, counterexample, .. } => {
                 let cx = counterexample.as_deref().map(|c| format!(" (counterexample: {c})")).unwrap_or_default();

@@ -540,7 +540,6 @@ partial fn parse_fn_decl(
     visible: Bool,
     is_test: Bool,
     is_builtin: Bool,
-    is_transp: Bool,
     totality: String,
 ) -> FnDeclR {
     let sp: Span = ps_current(ps).span;
@@ -606,7 +605,7 @@ partial fn parse_fn_decl(
     FnDeclR {
         value: FnDecl {
             visible: visible, is_test: is_test, is_builtin: is_builtin,
-            is_transp: is_transp, totality: totality, name: name_r.value,
+            totality: totality, name: name_r.value,
             type_params: gp_r.value, params: params_r.value, ret_type: ret_type,
             effects: eff_r.value, constraints: con_r.value, has_body: has_body,
             span: sp,
@@ -852,26 +851,24 @@ partial fn parse_impl_decl(ps: ParserState) -> ImplR {
     let curr: ref ParserState = ps_advance(ps); // consume 'impl'
     let first_ty_r: TypeExprR = parse_type_expr(curr);
     curr = first_ty_r.ps;
+    let first_ty: TypeExpr = first_ty_r.value;
 
     // Optional: 'for' introduces trait impl — first_ty is the trait, next type is the receiver.
-    // Decompose first_ty_r.value into parts before conditional branching to avoid move errors.
-    let fty_name: String = first_ty_r.value.name;
-    let fty_args: List[TypeExpr] = first_ty_r.value.args;
-    let fty_span: Span = first_ty_r.value.span;
+    let for_tok: Token = ps_current(curr);
 
     let trait_name: ref String = "";
     let trait_args: ref List[TypeExpr] = [];
-    let for_tok: Token = ps_current(curr);
     let impl_ty: TypeExpr = if for_tok.lexeme == "for" {
         // first_ty was the trait
-        trait_name = fty_name;
-        trait_args = fty_args;
+        trait_name = consume(first_ty.name);
+        trait_args = consume(first_ty.args);
         curr = ps_advance(curr); // consume 'for'
         let recv_r: TypeExprR = parse_type_expr(curr);
         curr = recv_r.ps;
         recv_r.value
     } else {
-        TypeExpr { name: fty_name, args: fty_args, span: fty_span }
+        // In else branch, first_ty is moved as-is (not decomposed)
+        first_ty
     };
 
     curr = ps_expect_punct(curr, "{");
@@ -880,25 +877,25 @@ partial fn parse_impl_decl(ps: ParserState) -> ImplR {
         let tok: Token = ps_current(curr);
         match tok.kind {
             TokenKind::KwFn => {
-                let fr: FnDeclR = parse_fn_decl(curr, false, false, false, false, "");
+                let fr: FnDeclR = parse_fn_decl(curr, false, false, false, "");
                 methods.push(fr.value);
                 curr = fr.ps
             }
             TokenKind::KwPub => {
                 curr = ps_advance(curr);
-                let fr: FnDeclR = parse_fn_decl(curr, true, false, false, false, "");
+                let fr: FnDeclR = parse_fn_decl(curr, true, false, false, "");
                 methods.push(fr.value);
                 curr = fr.ps
             }
             TokenKind::KwTotal => {
                 curr = ps_advance(curr);
-                let fr: FnDeclR = parse_fn_decl(curr, false, false, false, false, "total");
+                let fr: FnDeclR = parse_fn_decl(curr, false, false, false, "total");
                 methods.push(fr.value);
                 curr = fr.ps
             }
             TokenKind::KwPartial => {
                 curr = ps_advance(curr);
-                let fr: FnDeclR = parse_fn_decl(curr, false, false, false, false, "partial");
+                let fr: FnDeclR = parse_fn_decl(curr, false, false, false, "partial");
                 methods.push(fr.value);
                 curr = fr.ps
             }
@@ -922,7 +919,6 @@ type ModFlags = struct {
     visible:    Bool,
     is_test:    Bool,
     is_builtin: Bool,
-    is_transp:  Bool,
     ps:         ParserState,
 }
 
@@ -931,18 +927,16 @@ partial fn collect_mod_flags(ps: ParserState) -> ModFlags {
     let visible: ref Bool    = false;
     let is_test: ref Bool    = false;
     let is_builtin: ref Bool = false;
-    let is_transp: ref Bool  = false;
     let done: ref Bool = false;
     while !done {
         match ps_current(curr).kind {
             TokenKind::KwPub         => { visible    = true; curr = ps_advance(curr) }
             TokenKind::KwTest        => { is_test    = true; curr = ps_advance(curr) }
             TokenKind::KwBuiltin     => { is_builtin = true; curr = ps_advance(curr) }
-            TokenKind::KwTransparent => { is_transp  = true; curr = ps_advance(curr) }
             _ => { done = true }
         }
     }
-    ModFlags { visible: visible, is_test: is_test, is_builtin: is_builtin, is_transp: is_transp, ps: curr }
+    ModFlags { visible: visible, is_test: is_test, is_builtin: is_builtin, ps: curr }
 }
 
 // ── Top-level program parser ───────────────────────────────────────────────────
@@ -989,7 +983,7 @@ partial fn parse_program(ps: ParserState) -> Program {
                 curr = tr.ps
             }
             TokenKind::KwFn => {
-                let fr: FnDeclR = parse_fn_decl(curr, false, false, false, false, "");
+                let fr: FnDeclR = parse_fn_decl(curr, false, false, false, "");
                 fns.push(fr.value);
                 curr = fr.ps
             }
@@ -998,7 +992,7 @@ partial fn parse_program(ps: ParserState) -> Program {
                 let t2: Token = ps_current(curr);
                 match t2.kind {
                     TokenKind::KwFn => {
-                        let fr: FnDeclR = parse_fn_decl(curr, true, false, false, false, "");
+                        let fr: FnDeclR = parse_fn_decl(curr, true, false, false, "");
                         fns.push(fr.value);
                         curr = fr.ps
                     }
@@ -1021,7 +1015,7 @@ partial fn parse_program(ps: ParserState) -> Program {
                         curr = ps_advance(curr);
                         let mf: ModFlags = collect_mod_flags(curr);
                         curr = mf.ps;
-                        let fr: FnDeclR = parse_fn_decl(curr, true, mf.is_test, mf.is_builtin, mf.is_transp, "total");
+                        let fr: FnDeclR = parse_fn_decl(curr, true, mf.is_test, mf.is_builtin, "total");
                         fns.push(fr.value);
                         curr = fr.ps
                     }
@@ -1029,15 +1023,7 @@ partial fn parse_program(ps: ParserState) -> Program {
                         curr = ps_advance(curr);
                         let mf: ModFlags = collect_mod_flags(curr);
                         curr = mf.ps;
-                        let fr: FnDeclR = parse_fn_decl(curr, true, mf.is_test, mf.is_builtin, mf.is_transp, "partial");
-                        fns.push(fr.value);
-                        curr = fr.ps
-                    }
-                    TokenKind::KwTransparent => {
-                        curr = ps_advance(curr);
-                        let mf: ModFlags = collect_mod_flags(curr);
-                        curr = mf.ps;
-                        let fr: FnDeclR = parse_fn_decl(curr, true, mf.is_test, mf.is_builtin, true, "");
+                        let fr: FnDeclR = parse_fn_decl(curr, true, mf.is_test, mf.is_builtin, "partial");
                         fns.push(fr.value);
                         curr = fr.ps
                     }
@@ -1048,7 +1034,7 @@ partial fn parse_program(ps: ParserState) -> Program {
                 curr = ps_advance(curr);
                 let mf: ModFlags = collect_mod_flags(curr);
                 curr = mf.ps;
-                let fr: FnDeclR = parse_fn_decl(curr, mf.visible, mf.is_test, mf.is_builtin, mf.is_transp, "total");
+                let fr: FnDeclR = parse_fn_decl(curr, mf.visible, mf.is_test, mf.is_builtin, "total");
                 fns.push(fr.value);
                 curr = fr.ps
             }
@@ -1056,7 +1042,7 @@ partial fn parse_program(ps: ParserState) -> Program {
                 curr = ps_advance(curr);
                 let mf: ModFlags = collect_mod_flags(curr);
                 curr = mf.ps;
-                let fr: FnDeclR = parse_fn_decl(curr, mf.visible, mf.is_test, mf.is_builtin, mf.is_transp, "partial");
+                let fr: FnDeclR = parse_fn_decl(curr, mf.visible, mf.is_test, mf.is_builtin, "partial");
                 fns.push(fr.value);
                 curr = fr.ps
             }
@@ -1069,19 +1055,19 @@ partial fn parse_program(ps: ParserState) -> Program {
                 if is_partial || is_total { curr = ps_advance(curr) } else { () }
                 let mf: ModFlags = collect_mod_flags(curr);
                 curr = mf.ps;
-                let fr: FnDeclR = parse_fn_decl(curr, mf.visible, mf.is_test, mf.is_builtin, true, tot);
+                let fr: FnDeclR = parse_fn_decl(curr, mf.visible, mf.is_test, mf.is_builtin, tot);
                 fns.push(fr.value);
                 curr = fr.ps
             }
             TokenKind::KwTest => {
                 curr = ps_advance(curr);
-                let fr: FnDeclR = parse_fn_decl(curr, false, true, false, false, "");
+                let fr: FnDeclR = parse_fn_decl(curr, false, true, false, "");
                 fns.push(fr.value);
                 curr = fr.ps
             }
             TokenKind::KwBuiltin => {
                 curr = ps_advance(curr);
-                let fr: FnDeclR = parse_fn_decl(curr, false, false, true, false, "");
+                let fr: FnDeclR = parse_fn_decl(curr, false, false, true, "");
                 fns.push(fr.value);
                 curr = fr.ps
             }

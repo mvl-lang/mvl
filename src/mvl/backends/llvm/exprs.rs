@@ -230,8 +230,6 @@ impl<'ctx> LlvmBackend<'ctx> {
             visible: false,
             is_test: false,
             is_builtin: false,
-            is_label_transparent: false,
-            is_sink: false,
             totality: None,
             receiver_type: None,
             name: lambda_name.clone(),
@@ -1968,7 +1966,7 @@ impl<'ctx> LlvmBackend<'ctx> {
     /// Returns true if `expr` names a local variable labeled `Secret[_]`.
     ///
     /// Used in asserts to catch codegen bugs that would route a Secret
-    /// value to a public sink (print, println, log_*) without a `declassify` node.
+    /// value to an observable function (print, println, log_*) without a `relabel` node.
     /// The MVL static checker enforces this before codegen runs; this is
     /// defense-in-depth against future codegen regressions.
     fn is_secret_labeled(&self, expr: &Expr) -> bool {
@@ -2314,12 +2312,12 @@ impl<'ctx> LlvmBackend<'ctx> {
                         }
                         StdlibSig::VoidStringMapArg(sym) if args.len() == 2 => {
                             let sym = sym.clone();
-                            // #508: IFC invariant — static checker guarantees no Secret arg
-                            // reaches log sinks (log_debug/info/warn/error) without declassify.
+                            // #1007: IFC invariant — static checker guarantees no Secret arg
+                            // reaches observable fns (log_debug/info/warn/error) without relabel.
                             assert!(
                                 !self.is_secret_labeled(&args[0])
                                     && !self.is_secret_labeled(&args[1]),
-                                "codegen bug: Secret-labeled value routed to log sink without declassify"
+                                "codegen bug: Secret-labeled value routed to observable fn without relabel"
                             );
                             let msg = self.emit_expr(&args[0])?;
                             let fields = self.emit_expr(&args[1])?;

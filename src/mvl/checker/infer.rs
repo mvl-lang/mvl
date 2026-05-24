@@ -205,25 +205,6 @@ impl TypeChecker {
                         self.check_send_capability(first_arg, *span);
                     }
                 }
-                // 003-information-flow/Req 6: public I/O sinks must reject labeled args (#956).
-                // Driven by the declarative `is_sink` flag on methods in the method table.
-                if let Ty::Named(type_name, _) = recv_ty.unlabeled() {
-                    let method_is_sink = self
-                        .method_table
-                        .get(type_name.as_str())
-                        .and_then(|m| m.get(method.as_str()))
-                        .is_some_and(|mi| mi.is_sink);
-                    if method_is_sink {
-                        for (arg, arg_ty) in args.iter().zip(arg_tys.iter()) {
-                            if let Some(label) = ifc::label_of(arg_ty) {
-                                self.emit(CheckError::LoggingLabelViolation {
-                                    label: label.to_string(),
-                                    span: arg.span(),
-                                });
-                            }
-                        }
-                    }
-                }
                 // Stdlib method resolution (#43): dispatch on receiver type.
                 // IFC labels propagate through method results via the receiver label.
                 self.infer_method_call(&recv_ty, method, &arg_tys, *span)

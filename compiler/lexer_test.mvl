@@ -34,7 +34,6 @@ total fn kind_name(k: TokenKind) -> String {
         TokenKind::KwUse         => "KwUse",
         TokenKind::KwTest        => "KwTest",
         TokenKind::KwImpl        => "KwImpl",
-        TokenKind::KwTransparent => "KwTransparent",
         TokenKind::KwIn          => "KwIn",
         TokenKind::KwWhere       => "KwWhere",
         TokenKind::KwStruct      => "KwStruct",
@@ -160,8 +159,7 @@ test fn keyword_true_false() -> Unit {
     assert_eq(kind_name(get_tok("false", 0).kind), "KwFalse")
 }
 
-test fn keyword_transparent_test_impl() -> Unit {
-    assert_eq(kind_name(get_tok("transparent", 0).kind), "KwTransparent");
+test fn keyword_test_impl() -> Unit {
     assert_eq(kind_name(get_tok("test",        0).kind), "KwTest");
     assert_eq(kind_name(get_tok("impl",        0).kind), "KwImpl")
 }

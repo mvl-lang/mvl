@@ -4,9 +4,9 @@
 // The emitted error MUST name the direct callee (write_audit_log) and the public
 // sink it reaches (println). This corpus is used to verify error message quality.
 
-// Declare println/print as sinks so IFC checker works without stdlib prelude.
-pub sink fn println(msg: String) -> Unit ! Console { }
-pub sink fn print(msg: String) -> Unit ! Console { }
+// Declare println/print with effects so IFC checker works without stdlib prelude.
+pub fn println(msg: String) -> Unit ! Console { }
+pub fn print(msg: String) -> Unit ! Console { }
 
 fn write_audit_log() -> Unit ! Console {
     println("audit: event recorded")

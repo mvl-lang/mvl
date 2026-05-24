@@ -127,47 +127,13 @@ fn ref_expr_to_expr(re: &RefExpr) -> Expr {
 impl Parser {
     // ── Function declarations ─────────────────────────────────────────────
 
-    /// Parse `[test] [transparent] [total|partial|builtin] fn Name …`.
-    /// Pre-condition: current token is `test`, `transparent`, `total`, `partial`, `builtin`, or `fn`.
+    /// Parse `[test] [total|partial|builtin] fn Name …`.
+    /// Pre-condition: current token is `test`, `total`, `partial`, `builtin`, or `fn`.
     pub fn parse_fn_decl(&mut self) -> Result<FnDecl, ()> {
         let start = self.peek_span();
 
         // Optional `test` marker
         let is_test = if *self.peek_kind() == TokenKind::Test {
-            self.advance();
-            true
-        } else {
-            false
-        };
-
-        // Optional `sink` marker (#956): IFC sink — rejects labeled arguments.
-        // May be combined with `transparent`, totality, or `builtin`, but not with `test`.
-        let is_sink = if *self.peek_kind() == TokenKind::Sink {
-            if is_test {
-                let err = ParseError {
-                    message: "`sink` cannot be combined with `test`".into(),
-                    span: self.peek_span(),
-                };
-                self.push_recover(err);
-                return Err(());
-            }
-            self.advance();
-            true
-        } else {
-            false
-        };
-
-        // Optional `transparent` marker (ADR-0024): label-propagating function.
-        // May be combined with any totality or `builtin`, but not with `test`.
-        let is_label_transparent = if *self.peek_kind() == TokenKind::Transparent {
-            if is_test {
-                let err = ParseError {
-                    message: "`transparent` cannot be combined with `test`".into(),
-                    span: self.peek_span(),
-                };
-                self.push_recover(err);
-                return Err(());
-            }
             self.advance();
             true
         } else {
@@ -374,8 +340,6 @@ impl Parser {
             visible: false, // set by parse_decl when `pub` prefix is present
             is_test,
             is_builtin,
-            is_label_transparent,
-            is_sink,
             totality,
             receiver_type,
             name,
@@ -638,9 +602,7 @@ impl Parser {
             | TokenKind::Total
             | TokenKind::Partial
             | TokenKind::Test
-            | TokenKind::Builtin
-            | TokenKind::Transparent
-            | TokenKind::Sink => {
+            | TokenKind::Builtin => {
                 let mut d = self.parse_fn_decl()?;
                 d.visible = visible;
                 if d.is_test && d.visible {
@@ -1666,83 +1628,6 @@ fn main() -> String { greet(String::new()) }"#;
         // THEN: is_builtin=false
         let d = fn_decl("fn greet(name: String) -> String { }");
         assert!(!d.is_builtin);
-    }
-
-    // ── ADR-0024: transparent keyword ─────────────────────────────────────
-
-    #[test]
-    fn parse_transparent_fn() {
-        // GIVEN: transparent fn wrap(s: String) -> String { }
-        // THEN: FnDecl with is_label_transparent=true, is_test=false, is_builtin=false
-        let d = fn_decl("transparent fn wrap(s: String) -> String { }");
-        assert!(d.is_label_transparent);
-        assert!(!d.is_test);
-        assert!(!d.is_builtin);
-        assert_eq!(d.name, "wrap");
-    }
-
-    #[test]
-    fn parse_transparent_partial_fn() {
-        // ADR-0024: transparent may be combined with partial
-        let d = fn_decl("transparent partial fn search(s: String) -> String { }");
-        assert!(d.is_label_transparent);
-        assert_eq!(d.totality, Some(Totality::Partial));
-    }
-
-    #[test]
-    fn parse_transparent_total_fn() {
-        // ADR-0024: transparent may be combined with total
-        let d = fn_decl("transparent total fn wrap(s: String) -> String { }");
-        assert!(d.is_label_transparent);
-        assert_eq!(d.totality, Some(Totality::Total));
-    }
-
-    #[test]
-    fn parse_transparent_builtin_fn() {
-        // ADR-0024: transparent may be combined with builtin
-        let d = fn_decl("transparent builtin fn len(s: String) -> Int");
-        assert!(d.is_label_transparent);
-        assert!(d.is_builtin);
-    }
-
-    #[test]
-    fn parse_pub_transparent_partial_fn() {
-        // ADR-0024: pub transparent partial fn — the primary stdlib use case
-        let src = "pub transparent partial fn decode(s: String) -> String { s }";
-        let (mut p, _) = Parser::new(src);
-        let prog = p.parse_program();
-        assert!(p.errors.is_empty(), "parse errors: {:?}", p.errors);
-        if let Decl::Fn(fd) = &prog.declarations[0] {
-            assert!(fd.visible);
-            assert!(fd.is_label_transparent);
-            assert_eq!(fd.totality, Some(Totality::Partial));
-            assert_eq!(fd.name, "decode");
-        } else {
-            panic!("expected FnDecl");
-        }
-    }
-
-    #[test]
-    fn transparent_and_test_combined_is_rejected() {
-        // ADR-0024: transparent MUST NOT be combined with test
-        let src = "test transparent fn bad() -> Unit { }";
-        let (mut p, _) = Parser::new(src);
-        p.parse_program();
-        assert!(
-            !p.errors.is_empty(),
-            "expected parse error for test transparent combination"
-        );
-        assert!(
-            p.errors[0].message.contains("transparent"),
-            "expected transparent error message, got: {}",
-            p.errors[0].message
-        );
-    }
-
-    #[test]
-    fn normal_fn_is_not_label_transparent() {
-        let d = fn_decl("fn f(s: String) -> String { }");
-        assert!(!d.is_label_transparent);
     }
 
     // ── Contract clause tests (#688) ───────────────────────────────────────

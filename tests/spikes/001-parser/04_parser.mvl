@@ -17,7 +17,7 @@
 //
 //   ParseMode tracks expectation:
 //     Scan     — looking for a declaration keyword
-//     NeedFn   — saw total/partial/transparent/test, expecting 'fn'
+//     NeedFn   — saw total/partial/test, expecting 'fn'
 //     NeedName — saw fn/type/use, expecting the identifier name
 //
 // IFC notes (same bridge pattern as experiment 03):
@@ -66,7 +66,7 @@ fn is_whitespace(c: String) -> Bool {
 }
 
 fn is_keyword(s: String) -> Bool {
-    let kws: String = " fn let mut match if else for while type total partial return extern use pub in true false builtin transparent move consume label relabel const where struct enum impl test requires ensures invariant Tainted Secret iso val ref tag ";
+    let kws: String = " fn let mut match if else for while type total partial return extern use pub in true false builtin move consume label relabel const where struct enum impl test requires ensures invariant Tainted Secret iso val ref tag ";
     kws.contains(format(" {} ", s))
 }
 
@@ -202,7 +202,7 @@ pub type Item = struct {
 
 type ParseMode = enum {
     Scan,     // scanning for top-level declarations
-    NeedFn,   // saw total/partial/transparent/test, expecting 'fn' next
+    NeedFn,   // saw total/partial/test, expecting 'fn' next
     NeedName, // saw fn/type/use, expecting identifier name
 }
 
@@ -224,7 +224,7 @@ fn parse_scan(acc: ParseAcc, tok: Token) -> ParseAcc {
                 ParseAcc { items: acc.items, mode: ParseMode::NeedName, item_kind: ItemKind::TypeDecl, item_line: tok.line }
             } else if tok.lexeme == "use" {
                 ParseAcc { items: acc.items, mode: ParseMode::NeedName, item_kind: ItemKind::UseDecl, item_line: tok.line }
-            } else if tok.lexeme == "total" || tok.lexeme == "partial" || tok.lexeme == "transparent" {
+            } else if tok.lexeme == "total" || tok.lexeme == "partial" {
                 ParseAcc { items: acc.items, mode: ParseMode::NeedFn, item_kind: ItemKind::FnDecl, item_line: tok.line }
             } else if tok.lexeme == "test" {
                 ParseAcc { items: acc.items, mode: ParseMode::NeedFn, item_kind: ItemKind::TestFn, item_line: tok.line }
@@ -320,14 +320,14 @@ fn dir_from_arg(v: Tainted[String]) -> Path {
     join(path("."), clean_dir)
 }
 
-// Bridge: called with String (from sanitize); transparent propagates
+// Bridge: called with String (from sanitize); propagates
 // the label so the result is List[Item]] at the call site.
-transparent partial fn call_parse_file(src: String) -> List[Item] {
+partial fn call_parse_file(src: String) -> List[Item] {
     parse_file(src)
 }
 
 // Bridge: called with List[Item]]; propagates label → Counts.
-transparent partial fn call_count_items(items: List[Item]) -> Counts {
+partial fn call_count_items(items: List[Item]) -> Counts {
     count_items(items)
 }
 

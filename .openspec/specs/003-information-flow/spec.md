@@ -7,11 +7,11 @@ date: 2026-05-23
 
 # 003 — Information Flow Control
 
-The MVL information flow control system covers Requirement 11 (IFC). Security labels track data provenance through the type system. The compiler prevents secret leakage, injection attacks, and tainted data reaching trusted sinks.
+The MVL information flow control system covers Requirement 11 (IFC). Security labels track data provenance through the type system. The compiler prevents secret leakage, injection attacks, and tainted data reaching observable functions.
 
 ## Philosophy
 
-Values are either bare (unlabeled, implicitly public) or carry an explicit security label. Labels are opaque category identifiers — there is no hierarchy or lattice. A `Tainted[String]` and a bare `String` are distinct types; assignment between them requires an explicit `relabel` transition. The compiler enforces label compatibility at every call site — the LLM cannot generate code that passes tainted input to trusted sinks without a visible, auditable relabeling step. This converts OWASP Top 10 categories A01, A03, A05, A07, A08, and A10 from discipline-based prevention to compile-time errors.
+Values are either bare (unlabeled, implicitly public) or carry an explicit security label. Labels are opaque category identifiers — there is no hierarchy or lattice. A `Tainted[String]` and a bare `String` are distinct types; assignment between them requires an explicit `relabel` transition. The compiler enforces label compatibility at every call site — the LLM cannot generate code that passes tainted input to functions expecting bare types without a visible, auditable relabeling step. This converts OWASP Top 10 categories A01, A03, A05, A07, A08, and A10 from discipline-based prevention to compile-time errors.
 
 **Origin:** Denning's lattice model (1976) — inspiration. Perl's taint mode (1989) — runtime taint tracking. Jif (Myers, 1999) — compile-time IFC. MVL departs from the lattice model (#894): labels are user-defined categories with no implicit ordering. Transitions between labels (including removing a label) require explicit `relabel` calls, making every trust-boundary crossing auditable by grep.
 
@@ -52,7 +52,7 @@ This is Design Principle 7 ("Security labels on all data"). Labels are types, no
 
 ### Requirement 2: External Input is Tainted [MUST] *(Deferred — Phase 2)*
 
-> **Status:** Partially addressed. Auto-tainting of external sources is not yet implemented (tracked in #28, requires runtime/stdlib integration). Label propagation through stdlib transform functions (e.g. `json.decode`) is addressed by ADR-0024 (`transparent` keyword): `decode(tainted_str)` now returns `Tainted[Result[Value, String]]` rather than silently dropping the label.
+> **Status:** Partially addressed. Auto-tainting of external sources is not yet implemented (tracked in #28, requires runtime/stdlib integration). Label propagation through all functions is unconditional (#1007, ADR-0036): `decode(tainted_str)` returns `Tainted[Result[Value, JsonError]]` without any special keyword.
 
 Data from external sources MUST be automatically labeled `Tainted`. This includes:
 - HTTP request bodies, headers, query parameters
@@ -150,11 +150,11 @@ Logging functions MUST accept only `Public[T]` arguments. Logging a `Secret` or 
 
 ### Requirement 7: IFC Applies to String Formatting and Transform Functions [MUST]
 
-The `format()` function MUST be IFC-aware. The result label MUST be the join (highest) of all argument labels. Functions declared `transparent` (ADR-0024) MUST propagate argument labels to their return type using the same join semantics. This closes the silent label-drop hole at stdlib boundaries (e.g. `json.decode`, `json.encode`).
+The `format()` function MUST be IFC-aware. The result label MUST be the join (highest) of all argument labels. All functions propagate argument labels to their return type unconditionally using the same join semantics (#1007, ADR-0036). This closes the silent label-drop hole at stdlib boundaries (e.g. `json.decode`, `json.encode`).
 
-**Implementation:** `src/mvl/checker/ifc.rs`, `src/mvl/checker/calls.rs`, `src/mvl/parser/lexer.rs` (`transparent` keyword), ADR-0024
+**Implementation:** `src/mvl/checker/ifc.rs`, `src/mvl/checker/calls.rs`
 
-**Tests:** `tests/type_checker.rs::arithmetic_label_join_propagates`, `tests/type_checker.rs::arithmetic_label_join_downgrade_rejected`, `tests/type_checker.rs::format_propagates_secret_label`, `tests/type_checker.rs::transparent_fn_propagates_label`, `tests/type_checker.rs::decode_propagates_tainted_label`
+**Tests:** `tests/type_checker.rs::arithmetic_label_join_propagates`, `tests/type_checker.rs::arithmetic_label_join_downgrade_rejected`, `tests/type_checker.rs::format_propagates_secret_label`, `tests/type_checker.rs::fn_propagates_label`, `tests/type_checker.rs::decode_propagates_tainted_label`
 
 #### Scenario: Tainted argument taints the result
 
@@ -168,13 +168,13 @@ The `format()` function MUST be IFC-aware. The result label MUST be the join (hi
 
 ### Requirement 11: Implicit Flows Are Rejected [MUST]
 
-The compiler MUST detect implicit information flows via control flow (Program Counter label analysis). A `println` or `print` call — whether invoked directly or through a chain of user-defined helper functions — that appears inside a branch controlled by a `Secret` or `Tainted` condition MUST be a compile error, even if the printed arguments are `Public`.
+The compiler MUST detect implicit information flows via control flow (Program Counter label analysis). Any effectful function call — whether invoked directly or through a chain of user-defined helper functions — that appears inside a branch controlled by a `Secret` or `Tainted` condition MUST be a compile error, even if the call arguments are bare. Observable functions are those with declared effects (`! Console`, `! Log`, `! FileWrite`, etc.) — the effect system replaces the previous `sink` keyword (#1007).
 
-> **Rationale:** Whether a print fires reveals the value of the controlling condition. This is a covert channel — information leaks through control flow rather than data flow. The check is interprocedural: wrapping `println` in a helper does not bypass the rule.
+> **Rationale:** Whether an effectful call fires reveals the value of the controlling condition. This is a covert channel — information leaks through control flow rather than data flow. The check is interprocedural: wrapping `println` in a helper does not bypass the rule.
 
-**Implementation:** `src/mvl/checker/ifc.rs` (`check_implicit_flows`, `build_sink_reachability`), `src/mvl/checker.rs`
+**Implementation:** `src/mvl/checker/ifc.rs` (`check_implicit_flows`, `build_effect_reachability`), `src/mvl/checker.rs`
 
-**Tests:** `tests/type_checker.rs::implicit_flow_secret_if_condition_rejected`, `tests/type_checker.rs::implicit_flow_tainted_if_condition_rejected`, `tests/type_checker.rs::implicit_flow_public_condition_accepted`, `tests/type_checker.rs::implicit_flow_print_sink_rejected`, `tests/type_checker.rs::implicit_flow_else_branch_rejected`, `tests/type_checker.rs::implicit_flow_label_propagated_through_let`, `tests/type_checker.rs::implicit_flow_while_secret_condition_rejected`, `tests/type_checker.rs::cross_function_implicit_corpus_has_violations`, `tests/type_checker.rs::interprocedural_taint_corpus_has_violations`, `tests/type_checker.rs::return_label_inference_corpus_has_no_req11_violations`, `tests/type_checker.rs::interprocedural_clean_corpus_has_no_req11_violations`, `tests/type_checker.rs::call_chain_error_names_callee_and_sink`, `src/mvl/checker/passes.rs::req11_proven_for_labeled_types_with_no_violations`
+**Tests:** `tests/type_checker.rs::implicit_flow_secret_if_condition_rejected`, `tests/type_checker.rs::implicit_flow_tainted_if_condition_rejected`, `tests/type_checker.rs::implicit_flow_public_condition_accepted`, `tests/type_checker.rs::implicit_flow_print_sink_rejected`, `tests/type_checker.rs::implicit_flow_else_branch_rejected`, `tests/type_checker.rs::implicit_flow_label_propagated_through_let`, `tests/type_checker.rs::implicit_flow_while_secret_condition_rejected`, `tests/type_checker.rs::cross_function_implicit_corpus_has_violations`, `tests/type_checker.rs::interprocedural_taint_corpus_has_violations`, `tests/type_checker.rs::return_label_inference_corpus_has_no_req11_violations`, `tests/type_checker.rs::interprocedural_clean_corpus_has_no_req11_violations`, `tests/type_checker.rs::call_chain_error_names_callee_and_observable`, `src/mvl/checker/passes.rs::req11_proven_for_labeled_types_with_no_violations`
 
 **Corpus:** `tests/corpus/06_ifc/implicit_flow.mvl`, `tests/corpus/06_ifc/cross_function_implicit.mvl`, `tests/corpus/06_ifc/interprocedural_taint.mvl`, `tests/corpus/06_ifc/return_label_inference.mvl`, `tests/corpus/06_ifc/interprocedural_clean.mvl`, `tests/corpus/06_ifc/call_chain_error_message.mvl`
 
@@ -182,7 +182,7 @@ The compiler MUST detect implicit information flows via control flow (Program Co
 
 - GIVEN `fn f(flag: Secret[Bool]) -> Unit`
 - WHEN `if flag { println("access granted") }`
-- THEN the compiler MUST reject: implicit flow from `Secret` condition to `println` sink
+- THEN the compiler MUST reject: implicit flow from `Secret` condition to effectful `println`
 
 #### Scenario: Public condition is safe
 
@@ -202,20 +202,20 @@ The compiler MUST detect implicit information flows via control flow (Program Co
 - AND `fn check(flag: Secret[Bool]) -> Unit { if flag { log_access() } }`
 - THEN the compiler MUST reject: `log_access` transitively reaches `println`; calling it under a `Secret` branch leaks `flag`'s value
 
-#### Scenario: Transitive sink reachability through two hops
+#### Scenario: Transitive effect reachability through two hops
 
 - GIVEN `fn inner() { println("x") }`, `fn middle() { inner() }`, `fn outer(t: Tainted[Bool]) { if t { middle() } }`
-- THEN the compiler MUST reject: `middle` is in the transitive sink-reach set (via `inner`)
+- THEN the compiler MUST reject: `middle` is in the transitive effect-reach set (via `inner`)
 
 #### Scenario: Pure computation helper under high-PC is safe
 
-- GIVEN `fn hash(s: Secret[String]) -> Int { s.len() }` (no I/O)
+- GIVEN `fn hash(s: Secret[String]) -> Int { s.len() }` (no effects)
 - AND `fn process(flag: Secret[Bool], s: Secret[String]) -> Int { if flag { hash(s) } else { 0 } }`
-- THEN the compiler MUST accept: `hash` does not reach any public sink
+- THEN the compiler MUST accept: `hash` does not reach any observable function
 
-#### Scenario: Sink-reaching function called unconditionally is safe
+#### Scenario: Effect-reaching function called unconditionally is safe
 
-- GIVEN `fn announce(msg: String) -> Unit { println(msg) }` (reaches a public sink)
+- GIVEN `fn announce(msg: String) -> Unit { println(msg) }` (reaches an observable function)
 - AND `fn send_status() -> Unit { announce("ok") }` (unconditional — no high-PC branch)
 - THEN the compiler MUST accept: the program counter label is `None` at the call site
 

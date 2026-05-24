@@ -88,10 +88,6 @@ impl TypeChecker {
             effects: fd.effects.clone(),
             totality: fd.totality.clone(),
             type_params,
-            is_sink: fd.is_sink,
-            // ADR-0024: all functions are label-transparent by default (universal propagation).
-            // The `transparent` keyword in MVL source is accepted but now a no-op.
-            ..Default::default()
         };
         if let Some(recv_ty) = &fd.receiver_type {
             // Validate receiver type is declared (#875 review).
@@ -140,7 +136,6 @@ impl TypeChecker {
                     effects: f.effects.clone(),
                     totality: None,
                     type_params: vec![], // extern fns may or may not terminate
-                    ..Default::default()
                 },
             );
         }
@@ -259,7 +254,6 @@ impl TypeChecker {
                     effects: method.effects.clone(),
                     totality: None,
                     type_params: vec![],
-                    ..Default::default()
                 },
             );
         }
@@ -365,29 +359,6 @@ impl TypeChecker {
         // Their signatures are registered (in collect_declarations) and trusted.
         if fd.is_builtin {
             return;
-        }
-
-        // ADR-0024: validate transparent function constraints.
-        if fd.is_label_transparent {
-            if fd.params.is_empty() {
-                self.emit(CheckError::TransparentFnNoParams {
-                    name: fd.name.clone(),
-                    span: fd.span,
-                });
-            }
-            if !fd.type_params.is_empty() {
-                self.emit(CheckError::TransparentFnGeneric {
-                    name: fd.name.clone(),
-                    span: fd.span,
-                });
-            }
-            let ret_ty = resolve(&fd.return_type);
-            if matches!(ret_ty, crate::mvl::checker::types::Ty::Labeled(..)) {
-                self.emit(CheckError::TransparentFnLabeledReturn {
-                    name: fd.name.clone(),
-                    span: fd.span,
-                });
-            }
         }
 
         let ret_ty = resolve(&fd.return_type);

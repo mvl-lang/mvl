@@ -119,7 +119,7 @@ fn empty_config_map() -> Map[String, ConfigValue] {
 ///
 /// `Value::Number` is stored as `Int` when it has no fractional part,
 /// otherwise as `Float`. All other variants map 1-to-1.
-pub transparent partial fn from_json(v: Value) -> ConfigValue {
+pub partial fn from_json(v: Value) -> ConfigValue {
     match v {
         Value::Null      => ConfigValue::Null,
         Value::Bool(b)   => ConfigValue::Bool(b),
@@ -177,7 +177,7 @@ partial fn from_json_map(obj: Map[String, Value]) -> Map[String, ConfigValue] {
 ///
 /// TOML integers become `Int`, TOML floats become `Float`, TOML datetime
 /// strings become `String`. All other variants map 1-to-1.
-pub transparent partial fn from_toml(v: TomlValue) -> ConfigValue {
+pub partial fn from_toml(v: TomlValue) -> ConfigValue {
     match v {
         TomlValue::TStr(s)      => ConfigValue::String(s),
         TomlValue::TInt(n)      => ConfigValue::Int(n),
@@ -237,7 +237,7 @@ partial fn from_toml_map(tbl: Map[String, TomlValue]) -> Map[String, ConfigValue
 ///     Map { "db": Map { "pool": Int(20) } }
 ///   )
 ///   // → Map { "port": Int(8080), "db": Map { "pool": Int(20) } }
-pub transparent partial fn merge(base: ConfigValue, overlay: ConfigValue) -> ConfigValue {
+pub partial fn merge(base: ConfigValue, overlay: ConfigValue) -> ConfigValue {
     match base {
         ConfigValue::Map(b) => {
             match overlay {
@@ -288,7 +288,7 @@ partial fn merge_maps(
 /// Example:
 ///   get_path(cfg, "database.pool_size")  // → Some(Int(10))
 ///   get_path(cfg, "missing")             // → None
-pub transparent partial fn get_path(cfg: ConfigValue, key_path: String) -> Option[ConfigValue] {
+pub partial fn get_path(cfg: ConfigValue, key_path: String) -> Option[ConfigValue] {
     let parts: List[String] = key_path.split(".");
     get_path_parts(cfg, parts, 0)
 }

@@ -9,10 +9,10 @@
 //!   Labels are opaque types declared via `label Name`. No hierarchy, no lattice.
 //!   `relabel` transitions are the only bridge between labeled and bare types.
 //!
-//! # Implicit flow analysis (Phase 3)
+//! # Implicit flow analysis (#1007)
 //!
 //! Beyond direct-flow enforcement (Req 1, 3, 4, 6, 7 — done in the type checker),
-//! Phase 3 detects *implicit* flows: information leaked through control flow rather
+//! this pass detects *implicit* flows: information leaked through control flow rather
 //! than data flow.  The canonical example:
 //!
 //! ```mvl
@@ -21,12 +21,16 @@
 //!
 //! Even though the `println` argument is a literal string (bare), whether the
 //! print fires at all reveals whether `secret_flag` was truthy.  This is an
-//! implicit flow from the labeled condition to the public output sink.
+//! implicit flow from the labeled condition to an observable (effectful) function.
 //!
 //! The analysis tracks the **Program Counter (PC) label**: the label of any
 //! condition controlling the current execution point.
-//! A public sink (`println`, `print`) inside a branch whose PC is labeled
+//! Any effectful function call inside a branch whose PC is labeled
 //! is flagged as `ImplicitFlowViolation`.
+//!
+//! Observable functions are determined by the **effect system**: any function
+//! with declared effects (`! Console`, `! Log`, `! FileWrite`, etc.) is observable.
+//! This replaces the previous `sink` keyword approach (#1007).
 
 use std::collections::{HashMap, HashSet};
 
@@ -84,19 +88,18 @@ pub fn join_opt(a: Option<String>, b: Option<String>) -> Option<String> {
     }
 }
 
-// ── Implicit flow analysis (Phase 3) ─────────────────────────────────────────
+// ── Implicit flow analysis (#1007) ────────────────────────────────────────────
 
 /// Walk every function in `prog` and emit [`CheckError::ImplicitFlowViolation`]
-/// for any public sink (`println` / `print`) that appears inside a branch
-/// controlled by a `Secret` or `Tainted` condition.
+/// for any effectful (observable) function call inside a branch controlled by a
+/// `Secret` or `Tainted` condition.
 ///
 /// **Precondition:** `TypeChecker::check_program` MUST have run first so that
 /// direct-flow violations (Req 11 Phase 1) are already captured.
 ///
-/// **Phase 3 scope:** This pass handles the main implicit-flow pattern —
-/// a branching condition that carries a high security label, with a public
-/// output sink inside the body.  Cross-function direct flows are handled by
-/// the interprocedural analysis in `ifc_propagation` (#831).
+/// Observable functions are those with declared effects (`! Console`, `! Log`, etc.).
+/// This replaces the previous `sink` keyword approach — the effect system provides
+/// the same information without a dedicated keyword.
 /// Recursively bind every identifier in `pat` to `label` in `env`.
 /// Handles nested patterns like `(Some(a), b)` by walking the full tree.
 pub(crate) fn bind_pattern_labels(pat: &Pattern, label: &str, env: &mut HashMap<String, String>) {
@@ -126,13 +129,65 @@ pub(crate) fn bind_pattern_labels(pat: &Pattern, label: &str, env: &mut HashMap<
     }
 }
 
-/// Build a map from user-defined function name → name of public sink reachable from it.
+/// Collect function names that have declared effects (observable functions).
 ///
-/// Seeds from functions that directly call a declared sink, then propagates
-/// transitively via a fixed-point BFS so that `a→b→println` marks both `b` and `a`.
-fn build_sink_reachability(
+/// Any function with `! Effect` in its signature is observable — calling it under
+/// a high-PC branch leaks information through control flow (#1007).
+///
+/// Seeds from both AST program declarations and builtin functions registered in the
+/// TypeEnv (e.g. `write` with `! Console`), so Rust-level builtins without `.mvl`
+/// source are also detected.
+fn collect_effectful_names(
     programs: &[&Program],
-    sink_names: &HashSet<String>,
+    builtin_fns: Option<&HashMap<String, super::context::FnInfo>>,
+) -> HashSet<String> {
+    let mut names = HashSet::new();
+    // Seed from builtins registered in TypeEnv.
+    if let Some(fns) = builtin_fns {
+        for (name, info) in fns {
+            if !info.effects.is_empty() {
+                names.insert(name.clone());
+            }
+        }
+    }
+    for prog in programs {
+        for decl in &prog.declarations {
+            match decl {
+                Decl::Fn(fd) if !fd.effects.is_empty() => {
+                    if let Some(recv_ty) = &fd.receiver_type {
+                        names.insert(format!("{}::{}", recv_ty, fd.name));
+                    } else {
+                        names.insert(fd.name.clone());
+                    }
+                }
+                Decl::Impl(id) => {
+                    for m in &id.methods {
+                        if !m.effects.is_empty() {
+                            names.insert(format!("{}::{}", id.type_name, m.name));
+                        }
+                    }
+                }
+                Decl::Actor(ad) => {
+                    for m in &ad.methods {
+                        if !m.effects.is_empty() {
+                            names.insert(format!("{}::{}", ad.name, m.name));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    names
+}
+
+/// Build a map from user-defined function name → name of observable (effectful) fn reachable from it.
+///
+/// Seeds from functions that directly call an effectful function, then propagates
+/// transitively via a fixed-point BFS so that `a→b→println` marks both `b` and `a`.
+fn build_effect_reachability(
+    programs: &[&Program],
+    effectful_names: &HashSet<String>,
 ) -> HashMap<String, String> {
     // Step 1: collect per-function callee sets.
     let mut callee_map: HashMap<String, HashSet<String>> = HashMap::new();
@@ -159,15 +214,19 @@ fn build_sink_reachability(
             }
         }
     }
-    // Step 2: seed — functions that directly call a sink.
+    // Step 2: seed — functions that directly call an effectful function.
+    // Sort callees for deterministic selection when multiple effectful callees exist.
     let mut reach: HashMap<String, String> = HashMap::new();
     for (fn_name, callees) in &callee_map {
-        for callee in callees {
-            if sink_names.contains(callee.as_str()) {
-                reach
-                    .entry(fn_name.clone())
-                    .or_insert_with(|| callee.clone());
-            }
+        let mut sorted: Vec<&String> = callees
+            .iter()
+            .filter(|c| effectful_names.contains(c.as_str()))
+            .collect();
+        sorted.sort();
+        if let Some(first) = sorted.first() {
+            reach
+                .entry(fn_name.clone())
+                .or_insert_with(|| (*first).clone());
         }
     }
     // Step 3: fixed-point propagation.
@@ -178,8 +237,8 @@ fn build_sink_reachability(
                 continue;
             }
             for callee in callees {
-                if let Some(sink) = reach.get(callee.as_str()).cloned() {
-                    reach.insert(fn_name.clone(), sink);
+                if let Some(observable) = reach.get(callee.as_str()).cloned() {
+                    reach.insert(fn_name.clone(), observable);
                     changed = true;
                     break;
                 }
@@ -195,29 +254,55 @@ fn build_sink_reachability(
 pub fn check_implicit_flows(
     prog: &Program,
     all_programs: &[&Program],
+    builtin_fns: Option<&HashMap<String, super::context::FnInfo>>,
     errors: &mut Vec<CheckError>,
 ) {
-    let sink_names = collect_sink_names(all_programs);
-    let mut sink_reach = build_sink_reachability(all_programs, &sink_names);
-    // Merge direct sinks into the reachability map so check_expr_flows can use
-    // a single lookup: sink_reach.get(name) covers both direct sinks and
-    // functions that transitively call sinks.
-    for name in &sink_names {
-        sink_reach
+    let effectful_names = collect_effectful_names(all_programs, builtin_fns);
+    let mut effect_reach = build_effect_reachability(all_programs, &effectful_names);
+    // Merge direct effectful functions into the reachability map so check_expr_flows
+    // can use a single lookup: effect_reach.get(name) covers both direct observable
+    // functions and functions that transitively call observable ones.
+    for name in &effectful_names {
+        effect_reach
             .entry(name.clone())
             .or_insert_with(|| name.clone());
     }
     for decl in &prog.declarations {
-        if let Decl::Fn(fd) = decl {
-            // Build initial label env from parameter type annotations.
-            let mut env: HashMap<String, String> = HashMap::new();
-            for param in &fd.params {
-                if let Some(label) = label_of_type_expr(&param.ty) {
-                    env.insert(param.name.clone(), label);
+        match decl {
+            Decl::Fn(fd) => {
+                let mut env: HashMap<String, String> = HashMap::new();
+                for param in &fd.params {
+                    if let Some(label) = label_of_type_expr(&param.ty) {
+                        env.insert(param.name.clone(), label);
+                    }
+                }
+                check_block_flows(&fd.body, None, &mut env, &fd.name, &effect_reach, errors);
+            }
+            Decl::Impl(id) => {
+                for m in &id.methods {
+                    let mut env: HashMap<String, String> = HashMap::new();
+                    for param in &m.params {
+                        if let Some(label) = label_of_type_expr(&param.ty) {
+                            env.insert(param.name.clone(), label);
+                        }
+                    }
+                    let fn_name = format!("{}::{}", id.type_name, m.name);
+                    check_block_flows(&m.body, None, &mut env, &fn_name, &effect_reach, errors);
                 }
             }
-            // Walk the function body with pc_label = None (unlabeled).
-            check_block_flows(&fd.body, None, &mut env, &fd.name, &sink_reach, errors);
+            Decl::Actor(ad) => {
+                for m in &ad.methods {
+                    let mut env: HashMap<String, String> = HashMap::new();
+                    for param in &m.params {
+                        if let Some(label) = label_of_type_expr(&param.ty) {
+                            env.insert(param.name.clone(), label);
+                        }
+                    }
+                    let fn_name = format!("{}::{}", ad.name, m.name);
+                    check_block_flows(&m.body, None, &mut env, &fn_name, &effect_reach, errors);
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -344,7 +429,7 @@ fn collect_calls_in_expr(expr: &Expr, names: &mut std::collections::HashSet<Stri
             ..
         } => {
             // Insert both bare method name and qualified `Receiver::method` so
-            // build_sink_reachability can seed from any sink method call (#956).
+            // build_effect_reachability can seed from any sink method call (#956).
             names.insert(method.clone());
             if let Expr::Ident(recv_name, _) = receiver.as_ref() {
                 names.insert(format!("{recv_name}::{method}"));
@@ -495,11 +580,11 @@ fn check_block_flows(
     pc: Option<String>,
     env: &mut HashMap<String, String>,
     caller_fn: &str,
-    sink_reach: &HashMap<String, String>,
+    effect_reach: &HashMap<String, String>,
     errors: &mut Vec<CheckError>,
 ) {
     for stmt in &block.stmts {
-        check_stmt_flows(stmt, pc.clone(), env, caller_fn, sink_reach, errors);
+        check_stmt_flows(stmt, pc.clone(), env, caller_fn, effect_reach, errors);
     }
 }
 
@@ -508,7 +593,7 @@ fn check_stmt_flows(
     pc: Option<String>,
     env: &mut HashMap<String, String>,
     caller_fn: &str,
-    sink_reach: &HashMap<String, String>,
+    effect_reach: &HashMap<String, String>,
     errors: &mut Vec<CheckError>,
 ) {
     match stmt {
@@ -516,7 +601,7 @@ fn check_stmt_flows(
             pattern, ty, init, ..
         } => {
             // Walk the RHS under the current PC label.
-            check_expr_flows(init, pc, env, caller_fn, sink_reach, errors);
+            check_expr_flows(init, pc, env, caller_fn, effect_reach, errors);
             // Extend the label env; use recursive helper so nested patterns
             // like `(Some(a), b)` are fully bound.
             let label = label_of_type_expr(ty).or_else(|| infer_label(init, env));
@@ -525,34 +610,34 @@ fn check_stmt_flows(
             }
         }
         Stmt::Assign { value, .. } => {
-            check_expr_flows(value, pc, env, caller_fn, sink_reach, errors);
+            check_expr_flows(value, pc, env, caller_fn, effect_reach, errors);
         }
         Stmt::Return { value: Some(e), .. } => {
-            check_expr_flows(e, pc, env, caller_fn, sink_reach, errors);
+            check_expr_flows(e, pc, env, caller_fn, effect_reach, errors);
         }
         Stmt::Return { value: None, .. } => {}
         Stmt::Expr { expr, .. } => {
-            check_expr_flows(expr, pc, env, caller_fn, sink_reach, errors);
+            check_expr_flows(expr, pc, env, caller_fn, effect_reach, errors);
         }
         Stmt::If {
             cond, then, else_, ..
         } => {
             let cond_label = infer_label(cond, env);
             let body_pc = join_opt(pc.clone(), cond_label);
-            check_expr_flows(cond, pc.clone(), env, caller_fn, sink_reach, errors);
+            check_expr_flows(cond, pc.clone(), env, caller_fn, effect_reach, errors);
             let mut then_env = env.clone();
             check_block_flows(
                 then,
                 body_pc.clone(),
                 &mut then_env,
                 caller_fn,
-                sink_reach,
+                effect_reach,
                 errors,
             );
             match else_ {
                 Some(ElseBranch::Block(blk)) => {
                     let mut else_env = env.clone();
-                    check_block_flows(blk, body_pc, &mut else_env, caller_fn, sink_reach, errors);
+                    check_block_flows(blk, body_pc, &mut else_env, caller_fn, effect_reach, errors);
                 }
                 Some(ElseBranch::If(nested)) => {
                     let mut else_env = env.clone();
@@ -561,7 +646,7 @@ fn check_stmt_flows(
                         body_pc,
                         &mut else_env,
                         caller_fn,
-                        sink_reach,
+                        effect_reach,
                         errors,
                     );
                 }
@@ -573,7 +658,7 @@ fn check_stmt_flows(
         } => {
             let scr_label = infer_label(scrutinee, env);
             let body_pc = join_opt(pc.clone(), scr_label);
-            check_expr_flows(scrutinee, pc, env, caller_fn, sink_reach, errors);
+            check_expr_flows(scrutinee, pc, env, caller_fn, effect_reach, errors);
             for arm in arms {
                 let mut arm_env = env.clone();
                 match &arm.body {
@@ -582,7 +667,7 @@ fn check_stmt_flows(
                         body_pc.clone(),
                         &mut arm_env,
                         caller_fn,
-                        sink_reach,
+                        effect_reach,
                         errors,
                     ),
                     MatchBody::Block(blk) => check_block_flows(
@@ -590,7 +675,7 @@ fn check_stmt_flows(
                         body_pc.clone(),
                         &mut arm_env,
                         caller_fn,
-                        sink_reach,
+                        effect_reach,
                         errors,
                     ),
                 }
@@ -599,9 +684,16 @@ fn check_stmt_flows(
         Stmt::While { cond, body, .. } => {
             let cond_label = infer_label(cond, env);
             let body_pc = join_opt(pc.clone(), cond_label);
-            check_expr_flows(cond, pc, env, caller_fn, sink_reach, errors);
+            check_expr_flows(cond, pc, env, caller_fn, effect_reach, errors);
             let mut body_env = env.clone();
-            check_block_flows(body, body_pc, &mut body_env, caller_fn, sink_reach, errors);
+            check_block_flows(
+                body,
+                body_pc,
+                &mut body_env,
+                caller_fn,
+                effect_reach,
+                errors,
+            );
         }
         // Fix #858: bind the for-loop pattern variable to the iterator label so
         // that uses inside the body see the correct security label.
@@ -613,42 +705,21 @@ fn check_stmt_flows(
         } => {
             let iter_label = infer_label(iter, env);
             let body_pc = join_opt(pc.clone(), iter_label.clone());
-            check_expr_flows(iter, pc, env, caller_fn, sink_reach, errors);
+            check_expr_flows(iter, pc, env, caller_fn, effect_reach, errors);
             let mut body_env = env.clone();
             if let Some(l) = iter_label {
                 bind_pattern_labels(pattern, &l, &mut body_env);
             }
-            check_block_flows(body, body_pc, &mut body_env, caller_fn, sink_reach, errors);
+            check_block_flows(
+                body,
+                body_pc,
+                &mut body_env,
+                caller_fn,
+                effect_reach,
+                errors,
+            );
         }
     }
-}
-
-/// Build a set of public-sink names from programs by scanning for `is_sink` FnDecl (#956).
-/// Returns qualified names for methods (e.g. "Logger::debug") and bare names for functions.
-fn collect_sink_names(programs: &[&Program]) -> HashSet<String> {
-    let mut sinks = HashSet::new();
-    for prog in programs {
-        for decl in &prog.declarations {
-            match decl {
-                Decl::Fn(fd) if fd.is_sink => {
-                    if let Some(recv_ty) = &fd.receiver_type {
-                        sinks.insert(format!("{}::{}", recv_ty, fd.name));
-                    } else {
-                        sinks.insert(fd.name.clone());
-                    }
-                }
-                Decl::Impl(id) => {
-                    for m in &id.methods {
-                        if m.is_sink {
-                            sinks.insert(format!("{}::{}", id.type_name, m.name));
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    sinks
 }
 
 fn check_expr_flows(
@@ -656,7 +727,7 @@ fn check_expr_flows(
     pc: Option<String>,
     env: &mut HashMap<String, String>,
     caller_fn: &str,
-    sink_reach: &HashMap<String, String>,
+    effect_reach: &HashMap<String, String>,
     errors: &mut Vec<CheckError>,
 ) {
     match expr {
@@ -664,28 +735,28 @@ fn check_expr_flows(
             name, args, span, ..
         } => {
             if is_high_opt(&pc) {
-                if let Some(sink) = sink_reach.get(name.as_str()) {
-                    if sink == name {
-                        // Direct public sink under high PC — implicit flow.
+                if let Some(observable) = effect_reach.get(name.as_str()) {
+                    if observable == name {
+                        // Direct observable (effectful) fn under high PC — implicit flow.
                         errors.push(CheckError::ImplicitFlowViolation {
                             pc_label: pc.as_deref().unwrap_or("labeled").to_string(),
-                            sink: name.clone(),
+                            observable_fn: name.clone(),
                             span: *span,
                         });
                     } else {
-                        // Callee transitively reaches a public sink — cross-function implicit flow.
+                        // Callee transitively reaches an observable fn — cross-function implicit flow.
                         errors.push(CheckError::CrossFunctionImplicitFlowViolation {
                             pc_label: pc.as_deref().unwrap_or("labeled").to_string(),
                             caller: caller_fn.to_string(),
                             callee: name.clone(),
-                            sink: sink.clone(),
+                            observable_fn: observable.clone(),
                             span: *span,
                         });
                     }
                 }
             }
             for arg in args {
-                check_expr_flows(arg, pc.clone(), env, caller_fn, sink_reach, errors);
+                check_expr_flows(arg, pc.clone(), env, caller_fn, effect_reach, errors);
             }
         }
         Expr::If {
@@ -693,19 +764,19 @@ fn check_expr_flows(
         } => {
             let cond_label = infer_label(cond, env);
             let body_pc = join_opt(pc.clone(), cond_label);
-            check_expr_flows(cond, pc, env, caller_fn, sink_reach, errors);
+            check_expr_flows(cond, pc, env, caller_fn, effect_reach, errors);
             let mut then_env = env.clone();
             check_block_flows(
                 then,
                 body_pc.clone(),
                 &mut then_env,
                 caller_fn,
-                sink_reach,
+                effect_reach,
                 errors,
             );
             if let Some(e) = else_ {
                 let mut else_env = env.clone();
-                check_expr_flows(e, body_pc, &mut else_env, caller_fn, sink_reach, errors);
+                check_expr_flows(e, body_pc, &mut else_env, caller_fn, effect_reach, errors);
             }
         }
         Expr::Match {
@@ -713,7 +784,7 @@ fn check_expr_flows(
         } => {
             let scr_label = infer_label(scrutinee, env);
             let body_pc = join_opt(pc.clone(), scr_label);
-            check_expr_flows(scrutinee, pc, env, caller_fn, sink_reach, errors);
+            check_expr_flows(scrutinee, pc, env, caller_fn, effect_reach, errors);
             for arm in arms {
                 let mut arm_env = env.clone();
                 match &arm.body {
@@ -722,7 +793,7 @@ fn check_expr_flows(
                         body_pc.clone(),
                         &mut arm_env,
                         caller_fn,
-                        sink_reach,
+                        effect_reach,
                         errors,
                     ),
                     MatchBody::Block(blk) => check_block_flows(
@@ -730,15 +801,15 @@ fn check_expr_flows(
                         body_pc.clone(),
                         &mut arm_env,
                         caller_fn,
-                        sink_reach,
+                        effect_reach,
                         errors,
                     ),
                 }
             }
         }
         Expr::Binary { left, right, .. } => {
-            check_expr_flows(left, pc.clone(), env, caller_fn, sink_reach, errors);
-            check_expr_flows(right, pc, env, caller_fn, sink_reach, errors);
+            check_expr_flows(left, pc.clone(), env, caller_fn, effect_reach, errors);
+            check_expr_flows(right, pc, env, caller_fn, effect_reach, errors);
         }
         Expr::Unary { expr, .. }
         | Expr::Relabel { expr, .. }
@@ -746,7 +817,7 @@ fn check_expr_flows(
         | Expr::Propagate { expr, .. }
         | Expr::FieldAccess { expr, .. }
         | Expr::Borrow { expr, .. } => {
-            check_expr_flows(expr, pc, env, caller_fn, sink_reach, errors);
+            check_expr_flows(expr, pc, env, caller_fn, effect_reach, errors);
         }
         Expr::MethodCall {
             receiver,
@@ -755,29 +826,28 @@ fn check_expr_flows(
             span,
             ..
         } => {
-            // Method calls: check for implicit flow using qualified name in sink_reach (#956).
+            // Method calls: check for implicit flow using qualified name in effect_reach (#1007).
             if is_high_opt(&pc) {
-                // Build candidate qualified names matching collect_calls_in_expr / collect_sink_names.
-                // Try both the variable name and any Type::method keys in sink_reach.
+                // Build candidate qualified names matching collect_calls_in_expr / collect_effectful_names.
                 let mut qualified_names: Vec<String> = vec![method.clone()];
                 if let Expr::Ident(recv_name, _) = receiver.as_ref() {
                     qualified_names.push(format!("{recv_name}::{method}"));
                 }
                 // Also match Type::method keys where the method name matches,
-                // since the receiver is a variable name but sinks are registered
+                // since the receiver is a variable name but observable fns are registered
                 // by type name (e.g. "Logger::info" vs "logger.info()").
                 let method_suffix = format!("::{method}");
-                for key in sink_reach.keys() {
+                for key in effect_reach.keys() {
                     if key.ends_with(&method_suffix) && !qualified_names.contains(key) {
                         qualified_names.push(key.clone());
                     }
                 }
                 for qn in &qualified_names {
-                    if let Some(sink) = sink_reach.get(qn.as_str()) {
-                        if sink == qn {
+                    if let Some(observable) = effect_reach.get(qn.as_str()) {
+                        if observable == qn {
                             errors.push(CheckError::ImplicitFlowViolation {
                                 pc_label: pc.as_deref().unwrap_or("labeled").to_string(),
-                                sink: qn.clone(),
+                                observable_fn: qn.clone(),
                                 span: *span,
                             });
                         } else {
@@ -785,7 +855,7 @@ fn check_expr_flows(
                                 pc_label: pc.as_deref().unwrap_or("labeled").to_string(),
                                 caller: caller_fn.to_string(),
                                 callee: qn.clone(),
-                                sink: sink.clone(),
+                                observable_fn: observable.clone(),
                                 span: *span,
                             });
                         }
@@ -793,51 +863,51 @@ fn check_expr_flows(
                     }
                 }
             }
-            check_expr_flows(receiver, pc.clone(), env, caller_fn, sink_reach, errors);
+            check_expr_flows(receiver, pc.clone(), env, caller_fn, effect_reach, errors);
             for arg in args {
-                check_expr_flows(arg, pc.clone(), env, caller_fn, sink_reach, errors);
+                check_expr_flows(arg, pc.clone(), env, caller_fn, effect_reach, errors);
             }
         }
         Expr::Block(blk) => {
             let mut blk_env = env.clone();
-            check_block_flows(blk, pc, &mut blk_env, caller_fn, sink_reach, errors);
+            check_block_flows(blk, pc, &mut blk_env, caller_fn, effect_reach, errors);
         }
         Expr::Lambda { body, .. } => {
             // Lambdas capture the outer env but reset pc (they are called later).
-            check_expr_flows(body, None, env, caller_fn, sink_reach, errors);
+            check_expr_flows(body, None, env, caller_fn, effect_reach, errors);
         }
         Expr::Construct { fields, .. } => {
             for (_, v) in fields {
-                check_expr_flows(v, pc.clone(), env, caller_fn, sink_reach, errors);
+                check_expr_flows(v, pc.clone(), env, caller_fn, effect_reach, errors);
             }
         }
         Expr::List { elems, .. } | Expr::Set { elems, .. } => {
             for e in elems {
-                check_expr_flows(e, pc.clone(), env, caller_fn, sink_reach, errors);
+                check_expr_flows(e, pc.clone(), env, caller_fn, effect_reach, errors);
             }
         }
         Expr::Map { pairs, .. } => {
             for (k, v) in pairs {
-                check_expr_flows(k, pc.clone(), env, caller_fn, sink_reach, errors);
-                check_expr_flows(v, pc.clone(), env, caller_fn, sink_reach, errors);
+                check_expr_flows(k, pc.clone(), env, caller_fn, effect_reach, errors);
+                check_expr_flows(v, pc.clone(), env, caller_fn, effect_reach, errors);
             }
         }
         Expr::Spawn { fields, .. } => {
             for (_, v) in fields {
-                check_expr_flows(v, pc.clone(), env, caller_fn, sink_reach, errors);
+                check_expr_flows(v, pc.clone(), env, caller_fn, effect_reach, errors);
             }
         }
         Expr::Select { arms, .. } => {
             for arm in arms {
-                check_expr_flows(&arm.expr, pc.clone(), env, caller_fn, sink_reach, errors);
+                check_expr_flows(&arm.expr, pc.clone(), env, caller_fn, effect_reach, errors);
                 for stmt in &arm.body.stmts {
-                    check_stmt_flows(stmt, pc.clone(), env, caller_fn, sink_reach, errors);
+                    check_stmt_flows(stmt, pc.clone(), env, caller_fn, effect_reach, errors);
                 }
             }
         }
         Expr::Concurrently { body, .. } => {
             for stmt in &body.stmts {
-                check_stmt_flows(stmt, pc.clone(), env, caller_fn, sink_reach, errors);
+                check_stmt_flows(stmt, pc.clone(), env, caller_fn, effect_reach, errors);
             }
         }
         // Leaves — no sub-expressions to walk.
@@ -986,7 +1056,7 @@ mod tests {
         let prog = parse(src);
         let prog_ref = &prog;
         let mut errors = Vec::new();
-        check_implicit_flows(&prog, &[prog_ref], &mut errors);
+        check_implicit_flows(&prog, &[prog_ref], None, &mut errors);
         errors
             .into_iter()
             .filter(|e| matches!(e, CheckError::CrossFunctionImplicitFlowViolation { .. }))
@@ -1001,7 +1071,7 @@ mod tests {
         // fn check_auth(flag: Secret[Bool]) { if flag { log_access("x") } }
         let violations = cross_fn_violations(
             "label Secret \
-             sink fn println(msg: String) -> Unit ! Console { } \
+             fn println(msg: String) -> Unit ! Console { } \
              fn log_access(msg: String) -> Unit ! Console { println(msg) } \
              fn check_auth(flag: Secret[Bool]) -> Unit ! Console { if flag { log_access(\"x\") } }",
         );
@@ -1012,23 +1082,24 @@ mod tests {
         if let Some(CheckError::CrossFunctionImplicitFlowViolation {
             pc_label,
             callee,
-            sink,
+            observable_fn,
             ..
         }) = violations.first()
         {
             assert_eq!(pc_label, "Secret");
             assert_eq!(callee, "log_access");
-            assert_eq!(sink, "println");
+            assert_eq!(observable_fn, "println");
         }
     }
 
     #[test]
     fn transitive_chain_a_calls_b_calls_println() {
-        // fn a() calls b(), b() calls println
-        // if secret { a() } → cross-function implicit flow
+        // fn a() calls b(), b() calls println — all three have effects.
+        // if secret { a() } → cross-function implicit flow.
+        // a's nearest observable callee is b (which itself has `! Console`).
         let violations = cross_fn_violations(
             "label Secret \
-             sink fn println(msg: String) -> Unit ! Console { } \
+             fn println(msg: String) -> Unit ! Console { } \
              fn b(msg: String) -> Unit ! Console { println(msg) } \
              fn a(msg: String) -> Unit ! Console { b(msg) } \
              fn entry(flag: Secret[Bool]) -> Unit ! Console { if flag { a(\"x\") } }",
@@ -1037,11 +1108,15 @@ mod tests {
             !violations.is_empty(),
             "transitive a→b→println under high PC should produce cross-function implicit flow"
         );
-        if let Some(CheckError::CrossFunctionImplicitFlowViolation { callee, sink, .. }) =
-            violations.first()
+        if let Some(CheckError::CrossFunctionImplicitFlowViolation {
+            callee,
+            observable_fn,
+            ..
+        }) = violations.first()
         {
             assert_eq!(callee, "a");
-            assert_eq!(sink, "println");
+            // b is itself effectful (`! Console`), so it's the nearest observable callee of a.
+            assert_eq!(observable_fn, "b");
         }
     }
 
@@ -1049,7 +1124,7 @@ mod tests {
     fn no_false_positive_for_unlabeled_branch() {
         // if flag { log_access("x") } where flag is bare Bool — no violation
         let violations = cross_fn_violations(
-            "sink fn println(msg: String) -> Unit ! Console { } \
+            "fn println(msg: String) -> Unit ! Console { } \
              fn log_access(msg: String) -> Unit ! Console { println(msg) } \
              fn entry(flag: Bool) -> Unit ! Console { if flag { log_access(\"x\") } }",
         );
@@ -1060,18 +1135,18 @@ mod tests {
     }
 
     #[test]
-    fn no_false_positive_for_fn_not_reaching_sink() {
-        // fn helper() -> Unit { 42 }  — no public sink
+    fn no_false_positive_for_fn_not_reaching_observable() {
+        // fn helper() -> Unit { }  — no effects, not observable
         // if secret { helper() } → no cross-function implicit flow
         let violations = cross_fn_violations(
             "label Secret \
-             sink fn println(msg: String) -> Unit ! Console { } \
+             fn println(msg: String) -> Unit ! Console { } \
              fn helper() -> Unit { } \
              fn entry(flag: Secret[Bool]) -> Unit { if flag { helper() } }",
         );
         assert!(
             violations.is_empty(),
-            "fn not reaching a public sink should not produce cross-function implicit flow: {violations:?}"
+            "fn not reaching an observable function should not produce cross-function implicit flow: {violations:?}"
         );
     }
 
@@ -1079,7 +1154,7 @@ mod tests {
     fn cross_fn_violation_has_req_11() {
         let violations = cross_fn_violations(
             "label Secret \
-             sink fn println(msg: String) -> Unit ! Console { } \
+             fn println(msg: String) -> Unit ! Console { } \
              fn log(msg: String) -> Unit ! Console { println(msg) } \
              fn entry(flag: Secret[Bool]) -> Unit ! Console { if flag { log(\"x\") } }",
         );
@@ -1110,6 +1185,151 @@ mod tests {
         assert_eq!(
             join_opt(Some("Tainted".to_string()), Some("Secret".to_string())),
             Some("Tainted".to_string())
+        );
+    }
+
+    // ── build_effect_reachability unit tests ──────────────────────────────────
+
+    /// Non-effectful intermediate in a chain: seed from direct caller of effectful fn.
+    ///
+    /// Chain: `a` calls `b` (non-effectful), `b` calls `println` (effectful).
+    /// Seeding: `b` → "println".
+    /// Propagation: `a` → "println" (inherited from `b`).
+    ///
+    /// When `entry` calls `a` under high PC, the violation should name
+    /// observable_fn="println" because `b` is not in `effectful_names`.
+    #[test]
+    fn reachability_non_effectful_intermediate_propagates_terminal() {
+        let src = "fn println(msg: String) -> Unit ! Console { } \
+                   fn b(msg: String) -> Unit { println(msg) } \
+                   fn a(msg: String) -> Unit { b(msg) } \
+                   fn entry(flag: Secret[Bool]) -> Unit { if flag { a(\"x\") } }";
+        let prog = parse(src);
+        let effectful = collect_effectful_names(&[&prog], None);
+        let reach = build_effect_reachability(&[&prog], &effectful);
+        // b directly calls effectful println → seeded as "println"
+        assert_eq!(
+            reach.get("b").map(String::as_str),
+            Some("println"),
+            "b should reach println"
+        );
+        // a calls b (non-effectful) → propagated to "println" (not "b")
+        assert_eq!(
+            reach.get("a").map(String::as_str),
+            Some("println"),
+            "a should reach println via b"
+        );
+    }
+
+    /// Effectful intermediate in a chain: seed from nearest effectful callee.
+    ///
+    /// Chain: `a` calls `b` (effectful), `b` calls `println` (effectful).
+    /// Seeding: `b` → "println", `a` → "b" (first effectful callee of a).
+    ///
+    /// `a` is directly seeded from `b` (which is in `effectful_names`), so
+    /// observable_fn for `a` is "b", not "println".
+    #[test]
+    fn reachability_effectful_intermediate_stored_as_nearest_observable() {
+        let src = "fn println(msg: String) -> Unit ! Console { } \
+                   fn b(msg: String) -> Unit ! Console { println(msg) } \
+                   fn a(msg: String) -> Unit ! Console { b(msg) }";
+        let prog = parse(src);
+        let effectful = collect_effectful_names(&[&prog], None);
+        let reach = build_effect_reachability(&[&prog], &effectful);
+        // b directly calls effectful println → seeded as "println"
+        assert_eq!(
+            reach.get("b").map(String::as_str),
+            Some("println"),
+            "b should reach println"
+        );
+        // a directly calls effectful b → seeded as "b" (not "println")
+        assert_eq!(
+            reach.get("a").map(String::as_str),
+            Some("b"),
+            "a should reach b (nearest effectful callee)"
+        );
+    }
+
+    /// Function with no path to any effectful fn must NOT appear in reach map.
+    #[test]
+    fn reachability_pure_fn_absent_from_map() {
+        let src = "fn println(msg: String) -> Unit ! Console { } \
+                   fn pure_helper() -> Unit { }";
+        let prog = parse(src);
+        let effectful = collect_effectful_names(&[&prog], None);
+        let reach = build_effect_reachability(&[&prog], &effectful);
+        assert!(
+            !reach.contains_key("pure_helper"),
+            "pure_helper has no path to an effectful fn — must not appear in reachability map"
+        );
+    }
+
+    /// collect_effectful_names picks up functions from multiple programs (prelude scenario).
+    #[test]
+    fn collect_effectful_names_spans_multiple_programs() {
+        let prelude_src = "fn println(msg: String) -> Unit ! Console { }";
+        let user_src = "fn greet() -> Unit { println(\"hi\") }";
+        let prelude = parse(prelude_src);
+        let user = parse(user_src);
+        let effectful = collect_effectful_names(&[&prelude, &user], None);
+        assert!(
+            effectful.contains("println"),
+            "println from prelude must be in effectful_names"
+        );
+        assert!(
+            !effectful.contains("greet"),
+            "greet has no effects — must not be in effectful_names"
+        );
+    }
+
+    /// Direct implicit flow (not cross-function) via `ImplicitFlowViolation`.
+    ///
+    /// When a function directly calls an effectful fn under a high PC, it should
+    /// emit `ImplicitFlowViolation`, not `CrossFunctionImplicitFlowViolation`.
+    #[test]
+    fn direct_effectful_call_under_high_pc_emits_implicit_flow_violation() {
+        let src = "label Secret \
+                   fn println(msg: String) -> Unit ! Console { } \
+                   fn f(flag: Secret[Bool]) -> Unit ! Console { if flag { println(\"x\") } }";
+        let prog = parse(src);
+        let mut errors = Vec::new();
+        check_implicit_flows(&prog, &[&prog], None, &mut errors);
+        assert!(
+            errors.iter().any(
+                |e| matches!(e, CheckError::ImplicitFlowViolation { observable_fn, .. }
+                if observable_fn == "println")
+            ),
+            "direct println call under high PC should emit ImplicitFlowViolation, got: {errors:?}"
+        );
+        // Must NOT emit CrossFunctionImplicitFlowViolation for the direct call.
+        assert!(
+            !errors.iter().any(|e| matches!(e, CheckError::CrossFunctionImplicitFlowViolation { callee, .. }
+                if callee == "println")),
+            "direct effectful fn call should not emit CrossFunctionImplicitFlowViolation with callee=println"
+        );
+    }
+
+    /// Implicit flow inside an `impl` method body is detected.
+    ///
+    /// Note: bare `self` in impl blocks requires `self: Type` syntax (parser limitation).
+    #[test]
+    fn impl_method_body_implicit_flow_detected() {
+        let src = "label Secret
+fn println(msg: String) -> Unit ! Console { }
+type Ctx = struct { dummy: Int }
+trait Foo { fn bar(self, flag: Secret[Bool]) -> Unit ! Console; }
+impl Foo for Ctx {
+    fn bar(self: Ctx, flag: Secret[Bool]) -> Unit ! Console {
+        if flag { println(\"leak\"); }
+    }
+}";
+        let prog = parse(src);
+        let mut errors = Vec::new();
+        check_implicit_flows(&prog, &[&prog], None, &mut errors);
+        assert!(
+            errors.iter().any(|e| matches!(e, CheckError::ImplicitFlowViolation { observable_fn, .. }
+                if observable_fn == "println")),
+            "impl method body: println under Secret PC should emit ImplicitFlowViolation, got: {errors:?}"
         );
     }
 }
