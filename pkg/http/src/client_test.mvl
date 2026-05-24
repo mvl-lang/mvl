@@ -212,7 +212,7 @@ fn build_request(method: val Method, host: String, port: Int, path: String, head
 
 // ── Status reconstruction (mirrored) ─────────────────────────────────────────
 
-fn status_from_code(code: Int) -> Result[Status, HttpClientError] {
+fn client_client_status_from_code(code: Int) -> Result[Status, HttpClientError] {
     if      code == 200 { Ok(Status::Http200Ok) }
     else if code == 201 { Ok(Status::Http201Created) }
     else if code == 202 { Ok(Status::Http202Accepted) }
@@ -260,7 +260,7 @@ fn parse_response_str(raw: String) -> Result[ClientResponse, HttpClientError] {
     let parts: List[String] = status_line.split(" ");
     let code_str: String = require_resp(parts.get(1), "malformed status line")?;
     let code: Int = parse_status_code(code_str)?;
-    let status: Status = status_from_code(code)?;
+    let status: Status = client_client_status_from_code(code)?;
     let n: Int = lines.len();
     let blank_idx: ref Int = n;
     let found_blank: ref Bool = false;
@@ -465,28 +465,28 @@ test fn build_request_with_query_in_path() -> Unit {
 // ── Status reconstruction tests ──────────────────────────────────────────────
 
 test fn status_from_200() -> Unit {
-    match status_from_code(200) {
+    match client_status_from_code(200) {
         Ok(s) => assert_eq(status_code(s), 200),
         Err(_) => assert(false),
     }
 }
 
 test fn status_from_404() -> Unit {
-    match status_from_code(404) {
+    match client_status_from_code(404) {
         Ok(s) => assert_eq(s, Status::Http404NotFound),
         Err(_) => assert(false),
     }
 }
 
 test fn status_from_301() -> Unit {
-    match status_from_code(301) {
+    match client_status_from_code(301) {
         Ok(s) => assert_eq(s, Status::Http301MovedPermanently),
         Err(_) => assert(false),
     }
 }
 
 test fn status_from_unknown_code_is_error() -> Unit {
-    match status_from_code(999) {
+    match client_status_from_code(999) {
         Ok(_) => assert(false),
         Err(HttpClientError::InvalidResponse(_)) => assert(true),
         Err(_) => assert(false),

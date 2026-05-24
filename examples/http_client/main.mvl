@@ -1,0 +1,133 @@
+// http_client/main.mvl — HTTP client loopback example.
+//
+// Demonstrates pkg.http.client by starting a local HTTP server on a
+// random port and making client requests against it.
+//
+// Exercises:
+//   1. http_get — simple GET, path parameter, 404 error
+//   2. http_post — POST with body and custom headers
+//   3. IFC boundary — response body is Tainted[String], must `relabel trust`
+//   4. Structured concurrency — OneShot actor handles requests, client runs
+//      in the main thread, concurrently { } drains all mailboxes before returning
+//
+// Expected output:
+//   GET /hello → 200 hello
+//   GET /users/42 → 200 get_user
+//   GET /missing → 404 /missing
+//   POST /echo → 200 echo
+//
+// Usage:
+//   make run   (from examples/http_client/)
+//   mvl run examples/http_client/main.mvl
+
+use pkg.http.{Status, Method, Router, Response, HttpError,
+              new_router, route, dispatch, parse_request, serialize_response,
+              ok, error_response, status_code, http_error}
+use pkg.http.client.{ClientResponse, HttpClientError,
+                      http_get, http_post, client_error_msg}
+use std.net.{TcpListener, TcpStream, NetError,
+             tcp_listen, tcp_listener_port, tcp_accept, tcp_read_request,
+             tcp_write, tcp_close_listener, tcp_close_stream}
+use std.time.{seconds}
+use std.ifc.{trust}
+
+// ── OneShot server actor ─────────────────────────────────────────────────────
+//
+// Handles one TCP connection per handle() call: accept → read → dispatch →
+// respond → close.  Enqueue N handle() calls for N expected client requests.
+
+actor OneShot {
+    listener: TcpListener,
+    router: Router
+
+    pub fn handle() ! Net {
+        match tcp_accept(self.listener) {
+            Err(_) => {},
+            Ok(stream) => {
+                let resp: Response = match tcp_read_request(stream) {
+                    Err(_)  => error_response(http_error(Status::Http500InternalServerError, "read error")),
+                    Ok(raw) => match parse_request(raw) {
+                        Err(e)  => error_response(e),
+                        Ok(req) => match dispatch(self.router, req) {
+                            Err(e)      => error_response(e),
+                            Ok(matched) => ok(matched.name),
+                        },
+                    },
+                };
+                match tcp_write(stream, serialize_response(resp)) {
+                    Ok(_)  => tcp_close_stream(stream),
+                    Err(_) => tcp_close_stream(stream),
+                }
+            },
+        }
+    }
+
+    pub fn shutdown() {
+        tcp_close_listener(self.listener)
+    }
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+fn make_url(port: Int, path: String) -> String {
+    "http://127.0.0.1:".concat(port.to_string()).concat(path)
+}
+
+fn format_status(s: val Status) -> String {
+    status_code(s).to_string()
+}
+
+// ── Entry point ──────────────────────────────────────────────────────────────
+
+partial fn main() -> Unit ! Console + Net {
+    // Router: three routes for testing
+    let r: Router = route(route(route(new_router(),
+        Method::Get,  "/hello",       "hello"),
+        Method::Get,  "/users/{id}",  "get_user"),
+        Method::Post, "/echo",        "echo");
+
+    // Bind on port 0 — OS picks a free port
+    let listener: TcpListener = match tcp_listen("127.0.0.1", 0) {
+        Ok(l)  => l,
+        Err(_) => { println("listen error"); return },
+    };
+    let port: Int = match tcp_listener_port(listener) {
+        Ok(p)  => p,
+        Err(_) => { println("port error"); return },
+    };
+
+    concurrently {
+        // Server: enqueue one handle() per expected request, then shutdown
+        let server: OneShot = actor OneShot { listener: listener, router: r };
+        server.handle();
+        server.handle();
+        server.handle();
+        server.handle();
+        server.shutdown();
+
+        // Client: make requests against the local server
+        // 1. GET /hello → 200 hello
+        match http_get(make_url(port, "/hello"), seconds(5)) {
+            Ok(resp) => println("GET /hello → ".concat(format_status(resp.status)).concat(" ").concat(relabel trust(resp.body, "EXAMPLE"))),
+            Err(e)   => println("GET /hello → error: ".concat(client_error_msg(e))),
+        }
+
+        // 2. GET /users/42 → 200 get_user
+        match http_get(make_url(port, "/users/42"), seconds(5)) {
+            Ok(resp) => println("GET /users/42 → ".concat(format_status(resp.status)).concat(" ").concat(relabel trust(resp.body, "EXAMPLE"))),
+            Err(e)   => println("GET /users/42 → error: ".concat(client_error_msg(e))),
+        }
+
+        // 3. GET /missing → 404 /missing
+        match http_get(make_url(port, "/missing"), seconds(5)) {
+            Ok(resp) => println("GET /missing → ".concat(format_status(resp.status)).concat(" ").concat(relabel trust(resp.body, "EXAMPLE"))),
+            Err(e)   => println("GET /missing → error: ".concat(client_error_msg(e))),
+        }
+
+        // 4. POST /echo → 200 echo
+        match http_post(make_url(port, "/echo"), {"Content-Type": "text/plain"}, "hello world", seconds(5)) {
+            Ok(resp) => println("POST /echo → ".concat(format_status(resp.status)).concat(" ").concat(relabel trust(resp.body, "EXAMPLE"))),
+            Err(e)   => println("POST /echo → error: ".concat(client_error_msg(e))),
+        }
+    }
+}
