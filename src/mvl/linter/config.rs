@@ -110,6 +110,9 @@ pub struct LintConfig {
     /// Error on `while / .get(i) / match / None => ()` iteration anti-pattern.
     /// Always use `for x in list { }` instead (rule `for-iter-antipattern`, #705).
     pub for_iter_antipattern: bool,
+    /// Warn on `while VAR < END { ...; VAR = VAR + N }` counter loops that can be
+    /// rewritten as `for VAR in range(START, END)` (provably total, #1004).
+    pub while_to_for_range: bool,
 
     // ── Phase 3: LLM corpus quality rules ────────────────────────────────
     /// Flag block comments `/* */`; only `//` line comments are allowed.
@@ -157,6 +160,7 @@ impl Default for LintConfig {
             missing_annotations: false,
             require_explicit_totality: true,
             for_iter_antipattern: true,
+            while_to_for_range: true,
             consistent_comment_style: false,
             require_doc_comments: true,
             doc_comment_examples: false,
@@ -288,6 +292,7 @@ fn load_from(path: &Path) -> Option<LintConfig> {
             "missing_annotations" => cfg.missing_annotations = parse_bool(val),
             "require_explicit_totality" => cfg.require_explicit_totality = parse_bool(val),
             "for_iter_antipattern" => cfg.for_iter_antipattern = parse_bool(val),
+            "while_to_for_range" => cfg.while_to_for_range = parse_bool(val),
             "consistent_comment_style" => cfg.consistent_comment_style = parse_bool(val),
             "require_doc_comments" => cfg.require_doc_comments = parse_bool(val),
             "doc_comment_examples" => cfg.doc_comment_examples = parse_bool(val),
