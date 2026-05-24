@@ -134,20 +134,6 @@ pub partial fn toml_decode(s: String) -> Result[TomlValue, TomlError] {
 
 // ── Parser helpers ────────────────────────────────────────────────────────────
 
-fn toml_is_digit(c: String) -> Bool {
-    c == "0" || c == "1" || c == "2" || c == "3" || c == "4" ||
-    c == "5" || c == "6" || c == "7" || c == "8" || c == "9"
-}
-
-fn toml_digit_of(c: String) -> Int {
-    if      c == "0" { 0 } else if c == "1" { 1 }
-    else if c == "2" { 2 } else if c == "3" { 3 }
-    else if c == "4" { 4 } else if c == "5" { 5 }
-    else if c == "6" { 6 } else if c == "7" { 7 }
-    else if c == "8" { 8 } else if c == "9" { 9 }
-    else { 0 }
-}
-
 fn toml_char_at(chars: List[String], pos: Int) -> String {
     match chars.get(pos) {
         Some(c) => c,
@@ -163,24 +149,8 @@ fn toml_is_newline(c: String) -> Bool {
     c == "\n" || c == "\r"
 }
 
-fn toml_is_alpha_lower(c: String) -> Bool {
-    c == "a" || c == "b" || c == "c" || c == "d" || c == "e" || c == "f" ||
-    c == "g" || c == "h" || c == "i" || c == "j" || c == "k" || c == "l" ||
-    c == "m" || c == "n" || c == "o" || c == "p" || c == "q" || c == "r" ||
-    c == "s" || c == "t" || c == "u" || c == "v" || c == "w" || c == "x" ||
-    c == "y" || c == "z"
-}
-
-fn toml_is_alpha_upper(c: String) -> Bool {
-    c == "A" || c == "B" || c == "C" || c == "D" || c == "E" || c == "F" ||
-    c == "G" || c == "H" || c == "I" || c == "J" || c == "K" || c == "L" ||
-    c == "M" || c == "N" || c == "O" || c == "P" || c == "Q" || c == "R" ||
-    c == "S" || c == "T" || c == "U" || c == "V" || c == "W" || c == "X" ||
-    c == "Y" || c == "Z"
-}
-
 fn toml_is_bare_key_char(c: String) -> Bool {
-    toml_is_alpha_lower(c) || toml_is_alpha_upper(c) || toml_is_digit(c) || c == "-" || c == "_"
+    c.is_alpha_lower() || c.is_alpha_upper() || c.is_digit() || c == "-" || c == "_"
 }
 
 // Skip inline whitespace (space and tab, not newlines).
@@ -347,8 +317,8 @@ partial fn toml_parse_number(chars: List[String], pos: Int) -> TNPos {
     let go: ref Bool = true;
     while go && cur < len {
         let c: String = toml_char_at(chars, cur);
-        if toml_is_digit(c) {
-            int_val   = int_val * 10 + toml_digit_of(c);
+        if c.is_digit() {
+            int_val   = int_val * 10 + c.digit_value();
             has_digit = true;
             cur       = cur + 1
         } else {
@@ -364,8 +334,8 @@ partial fn toml_parse_number(chars: List[String], pos: Int) -> TNPos {
         let fgo: ref Bool = true;
         while fgo && cur < len {
             let fc: String = toml_char_at(chars, cur);
-            if toml_is_digit(fc) {
-                frac  = frac + toml_digit_of(fc).to_float() / denom;
+            if fc.is_digit() {
+                frac  = frac + fc.digit_value().to_float() / denom;
                 denom = denom * 10.0;
                 cur   = cur + 1
             } else {
@@ -422,7 +392,7 @@ partial fn toml_parse_value(chars: List[String], pos: Int) -> TVPos {
             } else {
                 TVPos::TVPErr("unexpected value starting with: ".concat(c))
             }
-        } else if c == "-" || toml_is_digit(c) {
+        } else if c == "-" || c.is_digit() {
             match toml_parse_number(chars, cur) {
                 TNPos::TNPErr(e)   => TVPos::TVPErr(e),
                 TNPos::TNIP(n, np) => TVPos::TVP(TomlValue::TInt(n), np),
