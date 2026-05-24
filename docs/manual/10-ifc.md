@@ -1,89 +1,82 @@
 # 10. Information Flow Control
 
-Security labels track data provenance through the type system ([Req 11](../requirements.md#req-11)). The compiler prevents secret leakage, injection attacks, and tainted data reaching trusted sinks.
+Security labels track data provenance through the type system ([Req 11](../requirements.md#req-11)). The compiler prevents secret leakage, injection attacks, and tainted data reaching observable functions.
 
-## 10.1 The Security Lattice
+## 10.1 User-Defined Labels
 
-```
-Secret          (highest — keys, passwords, tokens)
-   ↑
-Tainted         (external — user input, network, files)
-   ↑
-Clean           (sanitized — validated through explicit check)
-   ↑
-Public          (lowest — safe for any channel)
+Labels are opaque types declared with `label`:
+
+```mvl
+label Secret
+label Tainted
 ```
 
-Data flows **up** freely. Flowing **down** requires explicit declassification.
+Labels wrap types: `Secret[String]` ≠ `String`. The type system rejects direct mismatches.
 
 ## 10.2 Labels on Types
 
 ```mvl
 let api_key: Secret[String] = load_key();
 let user_input: Tainted[String] = read_line();
-let safe_name: Clean[String] = sanitize(user_input);
-let message: Public[String] = "hello";
+let message: String = "hello";
 ```
 
-`Secret[String]` and `Public[String]` are different types. You cannot pass one where the other is expected (unless flowing up).
+`Secret[String]` and `String` are different types. You cannot pass one where the other is expected.
 
-## 10.3 Automatic Labeling
+## 10.3 Label Propagation
 
-Data from external sources is automatically `Tainted`:
-
-| Source | Label |
-|--------|-------|
-| stdin | `Tainted` |
-| HTTP request body/headers | `Tainted` |
-| File contents | `Tainted` |
-| Network responses | `Tainted` |
-| Environment variables | `Tainted` |
-| Database query results | `Tainted` |
-| Process stdout | `Tainted` |
-
-## 10.4 Declassification
-
-### sanitize — Tainted → Clean
+All functions propagate labels unconditionally. Calling a function with a labeled argument yields a labeled result:
 
 ```mvl
-fn sanitize_email(input: Tainted[String]) -> Result[Clean[Email], ValidationError] {
-    let trimmed = input.trim();
-    if is_valid_email(trimmed) {
-        Ok(sanitize(Email.parse(trimmed)))
-    } else {
-        Err(ValidationError.new("invalid email"))
-    }
+fn trim(s: String) -> String { ... }
+
+let input: Tainted[String] = read_line();
+let trimmed: Tainted[String] = trim(input);  // label propagates automatically
+```
+
+## 10.4 The `relabel` Keyword
+
+`relabel` is the **only** IFC keyword beyond `label`. It is the sole mechanism for crossing label boundaries:
+
+```mvl
+// Remove a label (trust boundary)
+fn handle(input: Tainted[String]) -> String {
+    relabel trust(input, "XSS-001")
+}
+
+// Add a label (classify)
+fn protect(data: String) -> Secret[String] {
+    relabel classify(data, "PII-001")
 }
 ```
 
-`sanitize()` is an explicit, auditable operation. It appears in assurance reports and is greppable.
-
-### declassify — Secret → Public
-
-```mvl
-fn log_key_fingerprint(key: Secret[ApiKey]) -> () ! Log {
-    let fingerprint = key.sha256_prefix(8);
-    log.info("Key fingerprint: " + declassify(fingerprint));
-}
-```
-
-`declassify()` is the nuclear option — it intentionally exposes secret data. Every call is tracked.
+Every `relabel` call includes an audit tag. `grep "relabel"` finds every trust boundary crossing.
 
 ## 10.5 Compile-Time Enforcement
 
 ```mvl
-fn log_message(msg: Public[String]) -> () ! Log { ... }
+fn log_message(msg: String) -> Unit ! Log { ... }
 
-let secret: Secret[String] = "password123";
+let secret: Secret[String] = load_key();
 log_message(secret);
-// COMPILE ERROR: cannot pass Secret[String] where Public[String] expected
-
-let tainted: Tainted[String] = read_line();
-sql_query("SELECT * WHERE name = " + tainted);
-// COMPILE ERROR: cannot concatenate Clean[String] with Tainted[String]
+// COMPILE ERROR: cannot pass Secret[String] where String expected
 ```
 
-## 10.6 OWASP Coverage
+## 10.6 Implicit Flow Detection
+
+The effect system detects information leaks through control flow:
+
+```mvl
+fn check(flag: Secret[Bool]) -> Unit ! Console {
+    if flag {
+        println("branch taken")  // COMPILE ERROR: implicit flow
+    }
+}
+```
+
+Any effectful function call (`! Console`, `! Log`, etc.) inside a branch controlled by a labeled condition is an implicit flow violation. The effect system provides observability information — no dedicated `sink` keyword needed.
+
+## 10.7 OWASP Coverage
 
 | OWASP Category | How MVL prevents it |
 |----------------|-------------------|

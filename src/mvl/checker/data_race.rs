@@ -599,8 +599,6 @@ mod tests {
             visible: false,
             is_test: false,
             is_builtin: false,
-            is_label_transparent: false,
-            is_sink: false,
             totality: None,
             receiver_type: None,
             name: name.into(),

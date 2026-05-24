@@ -74,7 +74,7 @@ fn is_whitespace(c: String) -> Bool {
 // Avoids 40+ match arms while remaining O(n) per call (spike-acceptable).
 
 fn is_keyword(s: String) -> Bool {
-    let kws: String = " fn let mut match if else for while type total partial return extern use pub in true false builtin transparent move consume label relabel const where struct enum impl test requires ensures invariant Tainted Secret iso val ref tag ";
+    let kws: String = " fn let mut match if else for while type total partial return extern use pub in true false builtin move consume label relabel const where struct enum impl test requires ensures invariant Tainted Secret iso val ref tag ";
     kws.contains(format(" {} ", s))
 }
 
@@ -215,10 +215,10 @@ fn dir_from_arg(v: Tainted[String]) -> Path {
     join(path("."), clean_dir)
 }
 
-// Label bridge: transparent accepts String from IFC boundary; body is
+// Label bridge: accepts String from IFC boundary; body is
 // type-checked with src: String so lex_counts(src) is valid.  Returns
 // Counts; callers use field access which strips the label back to Int.
-transparent partial fn call_lex_counts(src: String) -> Counts {
+partial fn call_lex_counts(src: String) -> Counts {
     lex_counts(src)
 }
 

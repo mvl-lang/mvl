@@ -106,7 +106,7 @@ fn is_whitespace(c: String) -> Bool {
 }
 
 fn is_keyword(s: String) -> Bool {
-    let kws: String = " fn let mut match if else for while type total partial return extern use pub in true false builtin transparent move consume label relabel const where struct enum impl test requires ensures invariant Tainted Secret iso val ref tag ";
+    let kws: String = " fn let mut match if else for while type total partial return extern use pub in true false builtin move consume label relabel const where struct enum impl test requires ensures invariant Tainted Secret iso val ref tag ";
     kws.contains(format(" {} ", s))
 }
 
@@ -334,7 +334,7 @@ total fn append_tok(cur: String, tok: String) -> String {
 }
 
 total fn is_fn_prefix(lexeme: String) -> Bool {
-    lexeme == "total" || lexeme == "partial" || lexeme == "transparent" || lexeme == "builtin"
+    lexeme == "total" || lexeme == "partial" || lexeme == "builtin"
 }
 
 // True when this token ends a function signature (body opens or decl ends).
@@ -812,11 +812,11 @@ fn dir_from_arg(v: Tainted[String]) -> Path {
     join(path("."), clean_dir)
 }
 
-transparent partial fn call_parse(src: String) -> List[SigItem] {
+partial fn call_parse(src: String) -> List[SigItem] {
     parse_tokens(lex(src))
 }
 
-transparent partial fn call_format(items: List[SigItem]) -> SigOutput {
+partial fn call_format(items: List[SigItem]) -> SigOutput {
     format_all(items)
 }
 

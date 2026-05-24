@@ -23,7 +23,7 @@
 //     type/use                    → NeedName
 //   ParseMode::NeedFn:
 //     fn                          → NeedName (keep accumulated mods)
-//     partial, transparent        → add to mods, stay NeedFn
+//     partial,        → add to mods, stay NeedFn
 //   ParseMode::NeedName:
 //     ident                       → commit item with mods, reset, → Scan
 //
@@ -64,7 +64,7 @@ fn is_whitespace(c: String) -> Bool {
 }
 
 fn is_keyword(s: String) -> Bool {
-    let kws: String = " fn let mut match if else for while type total partial return extern use pub in true false builtin transparent move consume label relabel const where struct enum impl test requires ensures invariant Tainted Secret iso val ref tag ";
+    let kws: String = " fn let mut match if else for while type total partial return extern use pub in true false builtin move consume label relabel const where struct enum impl test requires ensures invariant Tainted Secret iso val ref tag ";
     kws.contains(format(" {} ", s))
 }
 
@@ -196,7 +196,7 @@ pub type Item = struct {
     name: String,
     line: Int,
     vis:  Bool,           // true if `pub` preceded the declaration
-    mods: List[String],   // e.g. ["transparent", "partial"] for transparent partial fn
+    mods: List[String],   // e.g. ["transparent", "partial"] for partial fn
 }
 
 // ── Parser state ──────────────────────────────────────────────────────────────
@@ -374,11 +374,11 @@ fn dir_from_arg(v: Tainted[String]) -> Path {
     join(path("."), clean_dir)
 }
 
-transparent partial fn call_parse_file(src: String) -> List[Item] {
+partial fn call_parse_file(src: String) -> List[Item] {
     parse_file(src)
 }
 
-transparent partial fn call_count_items(items: List[Item]) -> Counts {
+partial fn call_count_items(items: List[Item]) -> Counts {
     count_items(items)
 }
 

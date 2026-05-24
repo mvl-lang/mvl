@@ -242,8 +242,6 @@ module.exports = grammar({
 
     fn_decl: ($) =>
       seq(
-        optional("transparent"),
-        optional("sink"),
         optional(choice($.totality, "builtin")),
         optional($.security_modifier),
         optional("test"),

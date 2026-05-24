@@ -43,7 +43,7 @@ field_list     = field_decl { "," field_decl } ;
 alias_type     = type_expr ;
 
 (* === Function declarations === *)
-fn_decl        = [ "transparent" ] ( [ totality ] | "builtin" ) [ security ] "fn" IDENT [ type_params ]
+fn_decl        = [ totality ] [ "builtin" ] [ security ] "fn" IDENT [ type_params ]
                  "(" [ param_list ] ")" "->" return_type
                  [ "!" effect_list ] [ "where" constraints ]
                  { fn_contract }
@@ -55,8 +55,6 @@ contract_clause = ( "requires" | "ensures" ) ref_expr ;    (* Phase 5, #628 — 
 ghost_let_stmt  = "ghost" "let" pattern ":" type_expr "=" ref_expr ";" ; (* Phase 4, #627 — tree-sitter form *)
 totality       = "total" | "partial" ;
 (* builtin fn: runtime-provided implementation; body is forbidden *)
-(* transparent fn: label-transparent — checker joins arg labels and applies to return type (ADR-0024) *)
-(* sink fn: IFC sink — tainted data flowing into this function produces a violation (#956) *)
 security       = "public" | "tainted" | "secret" ;
 param_list     = param { "," param } ;
 param          = [ capability ] IDENT ":" type_expr [ "where" refinement ] ;
@@ -233,7 +231,6 @@ DOC_COMMENT    = "///" { ANY_CHAR } NEWLINE ;    (* doc comment — convention, 
 (* Boolean:         true  false                                                  *)
 (* Refinements:     where  self  old  requires  ensures  invariant  with        *)
 (*                  decreases  forall  exists                                    *)
-(* Fn modifiers:    transparent  sink                                             *)
 (* Pattern:         Some  None  Ok  Err                                          *)
 
 (* === Lexical === *)

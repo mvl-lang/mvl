@@ -91,12 +91,6 @@ pub enum TokenKind {
     /// `builtin` — marks a function as having a runtime-provided implementation.
     /// `builtin fn` declarations have no body; the compiler trusts the runtime.
     Builtin,
-    /// `transparent` — marks a function as label-transparent (ADR-0024):
-    /// the checker joins argument security labels and applies them to the return type.
-    Transparent,
-    /// `sink` — marks a function as a public IFC sink (#956):
-    /// the checker rejects any argument carrying an IFC label (Secret/Tainted/user-defined).
-    Sink,
     /// `requires` — function contract precondition.
     Requires,
     /// `ensures` — function contract postcondition.
@@ -217,8 +211,6 @@ impl fmt::Display for TokenKind {
             TokenKind::Select => write!(f, "select"),
             TokenKind::Concurrently => write!(f, "concurrently"),
             TokenKind::Builtin => write!(f, "builtin"),
-            TokenKind::Transparent => write!(f, "transparent"),
-            TokenKind::Sink => write!(f, "sink"),
             TokenKind::Requires => write!(f, "requires"),
             TokenKind::Ensures => write!(f, "ensures"),
             TokenKind::Invariant => write!(f, "invariant"),
@@ -953,8 +945,6 @@ fn keyword_or_ident(s: String) -> TokenKind {
         // expression context.  `TokenKind::Spawn` is reserved in the enum for
         // possible future use but never produced by the lexer (Phase 8, #63).
         "builtin" => TokenKind::Builtin,
-        "transparent" => TokenKind::Transparent,
-        "sink" => TokenKind::Sink,
         "requires" => TokenKind::Requires,
         "ensures" => TokenKind::Ensures,
         "invariant" => TokenKind::Invariant,

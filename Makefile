@@ -129,7 +129,8 @@ test-requirements: ## Run requirement verdict tests — one Proven + one Failed 
 test-error-messages: ## Run error message tests — assert exact diagnostic output for each CheckError variant
 	cargo test --test error_messages
 
-test-corpus: ## Validate corpus examples parse and type-check
+test-corpus: build ## Validate corpus examples parse and type-check
+	@cargo run --quiet -- init --stdlib 2>/dev/null || true
 	@pass=0; fail=0; \
 	OK="\033[32m✓\033[0m"; FAIL="\033[31m✗\033[0m"; \
 	while IFS= read -r f; do \

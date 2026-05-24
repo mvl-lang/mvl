@@ -37,17 +37,13 @@
 //! is skipped for them in the checker; IFC label checking is applied per-argument instead.
 //! See also: ADR-0002 (language contraction — no variadic user functions), ADR-0003 (compilation).
 //!
-//! # IFC label propagation (ADR-0024)
+//! # IFC label propagation (#1007)
 //!
-//! All functions are **label-transparent by default**: security labels from arguments are
+//! All functions propagate security labels unconditionally: security labels from arguments are
 //! joined (lattice least-upper-bound) and applied to the return type.  This ensures that
 //! data derived from a `Secret[T]` argument is itself `Secret[T]` throughout the program.
 //!
-//! Labels are erased ONLY by `declassify()` (Secret → Public) and `sanitize()` (Tainted → Clean),
-//! which are dedicated AST nodes, not regular function calls.
-//!
-//! The `transparent` keyword in MVL source is accepted for explicitness but is now a no-op
-//! (all functions are transparent).  A future `opaque` keyword would opt out of propagation.
+//! Labels are erased ONLY by `relabel` expressions (the sole IFC keyword beyond `label`).
 //!
 //! # Spec links
 //!
@@ -186,12 +182,6 @@ pub struct FnInfo {
     /// Ordered type parameter names declared on this function (e.g. `["T"]` in `fn f[T](...)`).
     /// Non-empty iff the function is generic. Order preserved for type-arg substitution (#989).
     pub type_params: Vec<String>,
-    /// Whether this function propagates security labels from arguments to return type (ADR-0024).
-    /// When true, the checker joins all argument labels and applies them to the declared return type.
-    pub label_transparent: bool,
-    /// Whether this function is a public IFC sink (#956).
-    /// The checker rejects any argument carrying a security label at call sites.
-    pub is_sink: bool,
 }
 
 impl Default for FnInfo {
@@ -202,11 +192,6 @@ impl Default for FnInfo {
             effects: vec![],
             totality: None,
             type_params: vec![],
-            // ADR-0024: all functions propagate security labels by default.
-            // Labels flow upward through all computations; only declassify()
-            // and sanitize() (AST-level nodes) erase labels explicitly.
-            label_transparent: true,
-            is_sink: false,
         }
     }
 }
@@ -325,9 +310,8 @@ impl TypeEnv {
         // stdout()/stderr() are `pub builtin fn` in std/io.mvl that return Fd; registered
         // here so std/core.mvl can call them without `use std.io`.
         //
-        // IFC NOTE (003-information-flow Req 6):
-        // write(fd, msg) is a public sink — rejects Secret/Tainted/Clean msg arguments
-        // (enforced via LoggingLabelViolation in calls.rs).
+        // IFC NOTE (#1007): write(fd, msg) has `! Console` effect — type system
+        // rejects labeled msg arguments; implicit flow check uses effect reachability.
         let console_eff = vec![Effect::new("Console", Span::new(0, 0, 0, 0))];
         let io_error_ty = Ty::Named("IoError".into(), vec![]);
         let fd_ty = Ty::Named("Fd".into(), vec![]);
@@ -353,7 +337,6 @@ impl TypeEnv {
                 params: vec![fd_ty.clone(), Ty::String],
                 ret: Ty::Result(Box::new(Ty::Unit), Box::new(io_error_ty)),
                 effects: console_eff,
-                is_sink: true,
                 ..Default::default()
             },
         );
@@ -387,7 +370,6 @@ impl TypeEnv {
                 params: vec![Ty::Unknown, Ty::Unknown],
                 ret: Ty::Unit,
                 type_params: vec!["T".to_string()],
-                is_sink: true,
                 ..Default::default()
             },
         );
@@ -397,7 +379,6 @@ impl TypeEnv {
                 params: vec![Ty::Unknown, Ty::Unknown],
                 ret: Ty::Unit,
                 type_params: vec!["T".to_string()],
-                is_sink: true,
                 ..Default::default()
             },
         );
@@ -436,13 +417,12 @@ impl TypeEnv {
             },
         );
         // format — string interpolation (#901): format(template, values) -> String
-        // label_transparent: joins argument labels so `format("{}", [secret])` returns Secret[String]
+        // #1007: labels propagate unconditionally — format("{}", [secret]) returns Secret[String]
         self.fns.insert(
             "format".into(),
             FnInfo {
                 params: vec![Ty::String, Ty::List(Box::new(Ty::String))],
                 ret: Ty::String,
-                label_transparent: true,
                 ..Default::default()
             },
         );
@@ -608,18 +588,17 @@ impl TypeEnv {
             },
         );
         // encode(v: Value) -> String — pure
-        // label_transparent: taint from the Value propagates to the encoded String (ADR-0024)
+        // #1007: taint from the Value propagates to the encoded String
         self.fns.insert(
             "encode".into(),
             FnInfo {
                 params: vec![Ty::Named("Value".into(), vec![])],
                 ret: Ty::String,
-                label_transparent: true,
                 ..Default::default()
             },
         );
         // decode(s: String) -> Result<Value, String> — pure
-        // label_transparent: taint from input string propagates to decoded Value (ADR-0024)
+        // #1007: taint from input string propagates to decoded Value
         self.fns.insert(
             "decode".into(),
             FnInfo {
@@ -628,7 +607,6 @@ impl TypeEnv {
                     Box::new(Ty::Named("Value".into(), vec![])),
                     Box::new(Ty::String),
                 ),
-                label_transparent: true,
                 ..Default::default()
             },
         );

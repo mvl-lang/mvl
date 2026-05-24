@@ -7,37 +7,37 @@
 //! Effects: varies by function (println -> Console, read_file -> FileRead, ...).
 
 /// Print a value followed by a newline.
-pub sink fn println(value: String) -> Unit ! Console {
+pub fn println(value: String) -> Unit ! Console {
     let _: Result[Unit, IoError] = write(stdout(), value.concat("\n"));
 }
 
 /// Print a value without a trailing newline.
-pub sink fn print(value: String) -> Unit ! Console {
+pub fn print(value: String) -> Unit ! Console {
     let _: Result[Unit, IoError] = write(stdout(), value);
 }
 
 /// Print a value to stderr followed by a newline.
-pub sink fn eprintln(value: String) -> Unit ! Console {
+pub fn eprintln(value: String) -> Unit ! Console {
     let _: Result[Unit, IoError] = write(stderr(), value.concat("\n"));
 }
 
 /// Print a value to stderr without a trailing newline.
-pub sink fn eprint(value: String) -> Unit ! Console {
+pub fn eprint(value: String) -> Unit ! Console {
     let _: Result[Unit, IoError] = write(stderr(), value);
 }
 
 /// Format a string with positional `{}` placeholders, filled from the values list.
-/// `transparent` ensures security labels propagate: format("{}", [secret]) -> Secret[String].
-pub transparent builtin fn format(template: String, values: List[String]) -> String
+/// Security labels propagate unconditionally: format("{}", [secret]) -> Secret[String].
+pub builtin fn format(template: String, values: List[String]) -> String
 
 /// Assert a condition; panic if false.
 pub builtin fn assert(condition: Bool) -> Unit
 
 /// Assert two values are equal; panic if not.
-pub sink builtin fn assert_eq[T](left: T, right: T) -> Unit
+pub builtin fn assert_eq[T](left: T, right: T) -> Unit
 
 /// Assert two values are not equal; panic if they are.
-pub sink builtin fn assert_ne[T](left: T, right: T) -> Unit
+pub builtin fn assert_ne[T](left: T, right: T) -> Unit
 
 /// Unconditionally terminate with a message.
 /// Returns the Never (bottom) type — compatible with any expected type.

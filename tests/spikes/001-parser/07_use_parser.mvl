@@ -62,7 +62,7 @@ fn is_whitespace(c: String) -> Bool {
 }
 
 fn is_keyword(s: String) -> Bool {
-    let kws: String = " fn let mut match if else for while type total partial return extern use pub in true false builtin transparent move consume label relabel const where struct enum impl test requires ensures invariant Tainted Secret iso val ref tag ";
+    let kws: String = " fn let mut match if else for while type total partial return extern use pub in true false builtin move consume label relabel const where struct enum impl test requires ensures invariant Tainted Secret iso val ref tag ";
     kws.contains(format(" {} ", s))
 }
 
@@ -346,12 +346,12 @@ fn dir_from_arg(v: Tainted[String]) -> Path {
     join(path("."), clean_dir)
 }
 
-transparent partial fn call_parse_uses(src: String) -> List[UseItem] {
+partial fn call_parse_uses(src: String) -> List[UseItem] {
     parse_file_uses(src)
 }
 
 // Bridge: List[UseItem]] → UseOutput; field access on result strips label.
-transparent partial fn call_format_uses(uses: List[UseItem]) -> UseOutput {
+partial fn call_format_uses(uses: List[UseItem]) -> UseOutput {
     format_all_uses(uses)
 }
 

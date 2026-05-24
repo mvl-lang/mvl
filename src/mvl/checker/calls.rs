@@ -20,19 +20,6 @@ impl TypeChecker {
         let arg_tys: Vec<Ty> = args.iter().map(|a| self.infer_expr(a)).collect();
 
         if let Some(fn_info) = self.env.lookup_fn(name).cloned() {
-            // 003-information-flow/Req 6: public I/O sinks MUST accept only bare types (#956).
-            // Any labeled argument (Tainted, Secret, or user-defined) must be relabeled
-            // before passing to a sink.  Driven by the declarative `sink` modifier.
-            if fn_info.is_sink {
-                for (arg, arg_ty) in args.iter().zip(arg_tys.iter()) {
-                    if let Some(label) = ifc::label_of(arg_ty) {
-                        self.emit(CheckError::LoggingLabelViolation {
-                            label: label.to_string(),
-                            span: arg.span(),
-                        });
-                    }
-                }
-            }
             let is_generic = !fn_info.type_params.is_empty();
             // #989: Always check arity, even for generic functions.
             if fn_info.params.len() != arg_tys.len() {
@@ -48,16 +35,15 @@ impl TypeChecker {
             if !is_generic {
                 for (i, (expected, found)) in fn_info.params.iter().zip(arg_tys.iter()).enumerate()
                 {
-                    // ADR-0024: for label-transparent functions, strip the security label
-                    // from the argument before type-checking ONLY when the parameter is
-                    // bare (unlabeled). If the parameter is labeled, the argument must
-                    // match the label exactly — no label stripping (#894).
-                    let found_check =
-                        if fn_info.label_transparent && ifc::label_of(expected).is_none() {
-                            ifc::strip_label(found)
-                        } else {
-                            found
-                        };
+                    // #1007: all functions propagate labels unconditionally.
+                    // Strip the security label from the argument before type-checking
+                    // ONLY when the parameter is bare (unlabeled). If the parameter is
+                    // labeled, the argument must match the label exactly (#894).
+                    let found_check = if ifc::label_of(expected).is_none() {
+                        ifc::strip_label(found)
+                    } else {
+                        found
+                    };
                     if !types_compatible(expected, found_check) {
                         self.emit(CheckError::TypeMismatch {
                             expected: expected.display(),
@@ -109,12 +95,10 @@ impl TypeChecker {
             // L5-08: for generic functions the declared return type is a type-parameter
             // name (e.g. `T`), not a concrete type.  Return Unknown so the call site
             // unifies freely with any annotation or context type.
-            // This check must come BEFORE label_transparent to avoid applying label
-            // propagation to an unresolved type variable.
             if is_generic {
                 return Ty::Unknown;
             }
-            // ADR-0024: all functions are label-transparent by default (universal propagation).
+            // #1007: all functions propagate labels unconditionally.
             //
             // Propagate only the EXCESS label from each argument — the label that exceeds
             // the function's declared parameter type.  This ensures:
@@ -125,35 +109,30 @@ impl TypeChecker {
             // For variadic builtins (params=[]) all argument labels are propagated directly.
             // The excess is then joined with the return type's own label, and applied to the
             // stripped (unlabeled) return type.
-            if fn_info.label_transparent {
-                // In the user-defined label model (#894), label-transparent functions
-                // propagate labels from bare-typed arguments to the return type.
-                // Excess = arg has a label and param is bare (no label declared).
-                let arg_label = if fn_info.params.is_empty() {
-                    // No declared params: propagate all arg labels.
-                    arg_tys.iter().fold(None, |acc, ty| {
-                        ifc::join_opt(acc, ifc::label_of(ty).map(|s| s.to_string()))
+            let arg_label = if fn_info.params.is_empty() {
+                // No declared params: propagate all arg labels.
+                arg_tys.iter().fold(None, |acc, ty| {
+                    ifc::join_opt(acc, ifc::label_of(ty).map(|s| s.to_string()))
+                })
+            } else {
+                // Non-variadic: propagate label from args where param is bare.
+                fn_info
+                    .params
+                    .iter()
+                    .zip(arg_tys.iter())
+                    .fold(None, |acc, (param_ty, arg_ty)| {
+                        // Only propagate if param has no label (bare parameter).
+                        if ifc::label_of(param_ty).is_none() {
+                            let excess = ifc::label_of(arg_ty).map(|s| s.to_string());
+                            ifc::join_opt(acc, excess)
+                        } else {
+                            acc
+                        }
                     })
-                } else {
-                    // Non-variadic: propagate label from args where param is bare.
-                    fn_info.params.iter().zip(arg_tys.iter()).fold(
-                        None,
-                        |acc, (param_ty, arg_ty)| {
-                            // Only propagate if param has no label (bare parameter).
-                            if ifc::label_of(param_ty).is_none() {
-                                let excess = ifc::label_of(arg_ty).map(|s| s.to_string());
-                                ifc::join_opt(acc, excess)
-                            } else {
-                                acc
-                            }
-                        },
-                    )
-                };
-                let ret_label = ifc::label_of(&fn_info.ret).map(|s| s.to_string());
-                let combined = ifc::join_opt(arg_label, ret_label);
-                return ifc::apply_label(combined, ifc::strip_label(&fn_info.ret).clone());
-            }
-            fn_info.ret.clone()
+            };
+            let ret_label = ifc::label_of(&fn_info.ret).map(|s| s.to_string());
+            let combined = ifc::join_opt(arg_label, ret_label);
+            ifc::apply_label(combined, ifc::strip_label(&fn_info.ret).clone())
         } else {
             // ── Built-in enum constructors ────────────────────────────────
             // These are not in the function table but are valid expressions.
@@ -290,17 +269,6 @@ impl TypeChecker {
             if let Some((type_name, method_name)) = name.split_once("::") {
                 if let Some(methods) = self.method_table.get(type_name) {
                     if let Some(fn_info) = methods.get(method_name).cloned() {
-                        // #956: sink check for static method calls (e.g. Logger::debug(secret)).
-                        if fn_info.is_sink {
-                            for (arg, arg_ty) in args.iter().zip(arg_tys.iter()) {
-                                if let Some(label) = ifc::label_of(arg_ty) {
-                                    self.emit(CheckError::LoggingLabelViolation {
-                                        label: label.to_string(),
-                                        span: arg.span(),
-                                    });
-                                }
-                            }
-                        }
                         let is_generic = !fn_info.type_params.is_empty();
                         if is_generic {
                             return Ty::Unknown;

@@ -71,7 +71,7 @@ Full pillar/phase mapping and per-phase acceptance criteria: [spec 012](.openspe
 4. **Total by default.** Functions must terminate. `partial` opts out.
 5. **Immutable by default.** `mut` opts in.
 6. **Effects in signatures.** Pure is the default.
-7. **Security labels on all data.** `Public`, `Tainted`, `Secret`.
+7. **Security labels on all data.** `Tainted`, `Secret`, user-defined.
 8. **Actors, not threads.** No shared mutable state, no locks, no deadlocks.
 9. **Ownership, not GC.** Deterministic deallocation for real-time.
 10. **Refinement types inline.** `x: Int where x > 0` is a first-class type.

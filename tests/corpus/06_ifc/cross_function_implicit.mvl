@@ -6,9 +6,9 @@
 // via control flow, even though println's argument is a literal Public string.
 
 // Helper that wraps println — transitively reaches a public sink.
-// Declare println/print as sinks so IFC checker works without stdlib prelude.
-pub sink fn println(msg: String) -> Unit ! Console { }
-pub sink fn print(msg: String) -> Unit ! Console { }
+// Declare println/print with effects so IFC checker works without stdlib prelude.
+pub fn println(msg: String) -> Unit ! Console { }
+pub fn print(msg: String) -> Unit ! Console { }
 
 fn log_access_granted() -> Unit ! Console {
     println("access granted")
