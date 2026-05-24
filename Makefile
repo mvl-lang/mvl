@@ -393,6 +393,8 @@ mutants-actors: ## Run cargo-mutants on actor checker and codegen (long-running;
 
 # === Clean ===
 
-clean: ## Clean build artifacts
+clean: ## Clean build artifacts (target/, fuzz corpus/artifacts, benchmark reports, site)
 	cargo clean
 	rm -rf build/ site/
+	rm -rf fuzz/corpus/ fuzz/artifacts/
+	rm -rf mutants.out/
