@@ -4,7 +4,7 @@
 # val/tag capabilities, concurrently { } structured concurrency.
 #
 # Run from this directory or from the repo root.
-.PHONY: help guard-mvl lint check test-solver test assurance run clean
+.PHONY: help guard-mvl lint check test-solver test assurance smoke run clean
 
 .DEFAULT_GOAL := help
 
@@ -53,6 +53,9 @@ test: guard-mvl ## (WIP) actor body features pending — check skipped until #58
 
 assurance: guard-mvl ## Assurance report for main.mvl
 	$(MVL) assurance $(DIR)main.mvl
+
+smoke: guard-mvl ## Smoke-test: build binary (proves compilation without a terminal)
+	$(MVL) build $(DIR)main.mvl
 
 run: guard-mvl ## Run the ping-pong exchange
 	$(MVL) run $(DIR)main.mvl

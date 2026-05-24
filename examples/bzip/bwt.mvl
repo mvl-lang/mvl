@@ -31,8 +31,8 @@ pub total fn bwt_encode(input: val List[Int]) -> BwtResult {
     let last: ref List[Int] = [];
     let primary: ref Int = 0;
     for idx in range(0, n) {
-        let rot: List[Int] = sorted.get(idx).unwrap();
-        last.push(rot.get(n - 1).unwrap());
+        let rot: List[Int] = sorted.get(idx).unwrap_or([]);
+        last.push(rot.get(n - 1).unwrap_or(0));
         if rot == original {
             primary = idx
         }
@@ -62,8 +62,8 @@ pub total fn bwt_decode(block: BwtResult) -> List[Int] {
     let result: ref List[Int] = [];
     let pos: ref Int = owned.primary;
     for _step in range(0, n) {
-        result.push(first.get(pos).unwrap());
-        pos = fl.get(pos).unwrap()
+        result.push(first.get(pos).unwrap_or(0));
+        pos = fl.get(pos).unwrap_or(0)
     }
     result
 }
@@ -72,7 +72,7 @@ pub total fn bwt_decode(block: BwtResult) -> List[Int] {
 fn invert_perm(perm: List[Int], n: Int) -> List[Int] {
     let inv: ref List[Int] = range(0, n).map(zero_int);
     for i in range(0, n) {
-        let j: Int = perm.get(i).unwrap();
+        let j: Int = perm.get(i).unwrap_or(0);
         inv = int_list_set(inv, j, i)
     }
     inv
@@ -87,9 +87,9 @@ fn build_t(last: val List[Int], first: val List[Int], n: Int) -> List[Int] {
     let first_occ: List[Int] = build_first_occ(first, n);
     let t: ref List[Int] = range(0, n).map(zero_int);
     for i in range(0, n) {
-        let sym: Int = last.get(i).unwrap();
-        let rank: Int = seen.get(sym).unwrap();
-        let f_pos: Int = first_occ.get(sym).unwrap() + rank;
+        let sym: Int = last.get(i).unwrap_or(0);
+        let rank: Int = seen.get(sym).unwrap_or(0);
+        let f_pos: Int = first_occ.get(sym).unwrap_or(0) + rank;
         t = int_list_set(t, i, f_pos);
         seen = int_list_set(seen, sym, rank + 1)
     }
@@ -100,8 +100,8 @@ fn build_t(last: val List[Int], first: val List[Int], n: Int) -> List[Int] {
 fn build_first_occ(first: val List[Int], n: Int) -> List[Int] {
     let occ: ref List[Int] = range(0, 256).map(|_x: Int| -> Int { n }); // n = "not present"
     for i in range(0, n) {
-        let sym: Int = first.get(i).unwrap();
-        if occ.get(sym).unwrap() == n {
+        let sym: Int = first.get(i).unwrap_or(0);
+        if occ.get(sym).unwrap_or(0) == n {
             occ = int_list_set(occ, sym, i)
         }
     }

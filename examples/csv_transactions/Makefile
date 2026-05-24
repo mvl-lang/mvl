@@ -2,7 +2,7 @@
 #
 # Demonstrates std.csv: pure parser, Tainted[String] cells, decode trust boundary.
 # Run from this directory or from the repo root.
-.PHONY: help guard-mvl check test-solver test assurance run clean
+.PHONY: help guard-mvl check test-solver test assurance smoke run clean
 
 .DEFAULT_GOAL := help
 
@@ -45,6 +45,9 @@ assurance: guard-mvl ## Full assurance: check + unit tests + assurance report
 	cd $(REPO_ROOT) && $(abspath $(MVL)) check $(DIR)main.mvl
 	cd $(REPO_ROOT) && $(abspath $(MVL)) test $(DIR)
 	cd $(REPO_ROOT) && $(abspath $(MVL)) assurance $(DIR) --verbose
+
+smoke: guard-mvl ## Smoke-test: build binary (proves compilation without a terminal)
+	$(MVL) build $(DIR)main.mvl
 
 run: guard-mvl ## Run the example with the bundled sample CSV
 	cd $(REPO_ROOT) && $(abspath $(MVL)) run $(DIR)main.mvl -- --input $(DIR)sample.csv

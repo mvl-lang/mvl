@@ -101,7 +101,7 @@ fn read_bits_loop(r: BitReader, remaining: Int, acc: Int, shift: Int) -> ReadRes
     } else if r.pos >= r.bytes.len() {
         ReadResult { rval: acc, reader: r }
     } else {
-        let byte_v: Int = r.bytes.get(r.pos).unwrap();
+        let byte_v: Int = r.bytes.get(r.pos).unwrap_or(0);
         // Extract the bit at bit_pos, accumulate into result
         let bit: Int = (byte_v >> r.bit_pos) & 1;
         let new_acc: Int = acc | (bit << shift);

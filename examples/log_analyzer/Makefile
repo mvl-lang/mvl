@@ -1,6 +1,6 @@
 # log_analyzer example — MVL Phase 4 demonstration
 # Run from this directory: make build, make test, etc.
-.PHONY: help guard-mvl build check lint test-solver test test-llvm assurance mcdc mutate fuzz generate run run-llvm all clean
+.PHONY: help guard-mvl build check lint test-solver test test-llvm assurance mcdc mutate fuzz generate smoke run run-llvm all clean
 
 .DEFAULT_GOAL := help
 
@@ -71,6 +71,9 @@ all: check test assurance mcdc ## Run full quality pipeline: check + test + assu
 
 generate: ## Generate sample log data (logs.jsonl, 200 entries)
 	python3 $(DIR)log_generator.py -o logs.jsonl
+
+smoke: guard-mvl ## Smoke-test: build binary (proves compilation without a terminal)
+	$(MVL) build $(DIR)main.mvl
 
 run: guard-mvl logs.jsonl ## Analyze logs.jsonl (requires: make generate)
 	$(MVL) run $(DIR)main.mvl -- --file logs.jsonl

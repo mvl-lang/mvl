@@ -1,5 +1,5 @@
 # examples/sqlite_basic — SQLite basic example Makefile
-.PHONY: help guard-mvl run check test-solver test assurance clean
+.PHONY: help guard-mvl smoke run check test-solver test assurance clean
 
 .DEFAULT_GOAL := help
 
@@ -42,6 +42,9 @@ assurance: guard-mvl ## Full assurance: check + unit tests + assurance report
 	cd $(REPO_ROOT) && $(abspath $(MVL)) check $(DIR)
 	cd $(REPO_ROOT) && $(abspath $(MVL)) test $(DIR)
 	cd $(REPO_ROOT) && $(abspath $(MVL)) assurance $(DIR) --verbose
+
+smoke: guard-mvl ## Smoke-test: build binary (proves compilation without a terminal)
+	cd $(REPO_ROOT) && $(abspath $(MVL)) build $(DIR)main.mvl
 
 run: guard-mvl ## Run the example (runs from repo root so pkg.* resolution finds .mvl/pkg/sqlite)
 	cd $(REPO_ROOT) && $(abspath $(MVL)) run $(DIR)main.mvl

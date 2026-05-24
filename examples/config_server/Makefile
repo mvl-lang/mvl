@@ -8,7 +8,7 @@
 #   LLVM                 — pure tests only (handler_test.mvl); extern stubs return defaults
 #
 # Run from this directory or from the repo root.
-.PHONY: help guard-mvl build check lint test-solver test test-llvm assurance mcdc mutate fuzz run all clean
+.PHONY: help guard-mvl build check lint test-solver test test-llvm assurance mcdc mutate fuzz smoke run all clean
 
 .DEFAULT_GOAL := help
 
@@ -79,6 +79,9 @@ fuzz: guard-mvl ## Show fuzz target analysis (all functions call extern bridges;
 	$(MVL) fuzz $(DIR) --list
 
 all: check test assurance mcdc ## Run full quality pipeline: check + test + assurance + mcdc
+
+smoke: guard-mvl ## Smoke-test: build binary (proves compilation without a terminal)
+	$(MVL) build $(DIR)main.mvl
 
 run: guard-mvl ## Execute the demo scenario (loads sample_config.json, 3 simulated requests)
 	$(MVL) run $(DIR)main.mvl
