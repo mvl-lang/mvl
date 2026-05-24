@@ -1,6 +1,6 @@
 # snake_game — terminal Snake game demonstrating pkg.tui, effects, and game loop.
 # Run from this directory or from the repo root.
-.PHONY: help guard-mvl build check test-solver test assurance run clean
+.PHONY: help guard-mvl build check test-solver test assurance smoke run clean
 
 .DEFAULT_GOAL := help
 
@@ -52,6 +52,9 @@ test: guard-mvl ## Run game logic tests (no terminal required)
 
 assurance: guard-mvl ## Run MVL assurance report for the pure game logic
 	$(MVL) assurance $(DIR)game.mvl
+
+smoke: guard-mvl ## Smoke-test: build binary (proves compilation without a terminal)
+	$(MVL) build $(DIR)main.mvl
 
 run: guard-mvl ## Run the snake game (requires an interactive terminal)
 	$(MVL) run $(DIR)main.mvl

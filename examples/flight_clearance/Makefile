@@ -1,6 +1,6 @@
 # flight_clearance example — MC/DC coverage demonstration
 # Run from this directory or from the repo root.
-.PHONY: help guard-mvl check lint test-solver test test-llvm assurance mcdc mutate run run-llvm all clean
+.PHONY: help guard-mvl check lint test-solver test test-llvm assurance mcdc mutate smoke run run-llvm all clean
 
 .DEFAULT_GOAL := help
 
@@ -62,6 +62,9 @@ assurance: guard-mvl ## Assurance report: spec coverage, MC/DC, mutation score (
 	$(MVL) assurance $(DIR) --verbose
 
 all: check test assurance mcdc ## Run full quality pipeline: check + test + assurance + mcdc
+
+smoke: guard-mvl ## Smoke-test: build binary (proves compilation without a terminal)
+	$(MVL) build $(DIR)main.mvl
 
 run: guard-mvl ## Execute the demo scenarios
 	$(MVL) run $(DIR)main.mvl

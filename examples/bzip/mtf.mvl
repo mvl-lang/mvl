@@ -15,7 +15,7 @@ pub fn mtf_encode(data: val List[Int]) -> List[Int] {
     let alphabet: ref List[Int] = range(0, 256);
     let out: ref List[Int] = [];
     for i in range(0, data.len()) {
-        let sym: Int = data.get(i).unwrap();
+        let sym: Int = data.get(i).unwrap_or(0);
         let pos: Int = find_in_alphabet(val alphabet, sym);
         out.push(pos);
         alphabet = move_to_front(alphabet, sym, pos)
@@ -28,8 +28,8 @@ pub fn mtf_decode(encoded: val List[Int]) -> List[Int] {
     let alphabet: ref List[Int] = range(0, 256);
     let out: ref List[Int] = [];
     for i in range(0, encoded.len()) {
-        let pos: Int = encoded.get(i).unwrap();
-        let sym: Int = alphabet.get(pos).unwrap();
+        let pos: Int = encoded.get(i).unwrap_or(0);
+        let sym: Int = alphabet.get(pos).unwrap_or(0);
         out.push(sym);
         alphabet = move_to_front(alphabet, sym, pos)
     }
@@ -42,7 +42,7 @@ pub fn mtf_decode(encoded: val List[Int]) -> List[Int] {
 fn find_in_alphabet(alphabet: val List[Int], sym: Int) -> Int {
     let found: ref Int = 0;
     for i in range(0, alphabet.len()) {
-        if alphabet.get(i).unwrap() == sym {
+        if alphabet.get(i).unwrap_or(0) == sym {
             found = i
         }
     }
@@ -65,15 +65,15 @@ fn move_to_front(alphabet: List[Int], sym: Int, pos: Int) -> List[Int] {
 test fn mtf_single_byte() -> Unit {
     let data: List[Int] = [65];
     let encoded: List[Int] = mtf_encode(val data);
-    assert_eq(encoded.get(0).unwrap(), 65)
+    assert_eq(encoded.get(0).unwrap_or(0), 65)
 }
 
 test fn mtf_repeated_byte_gives_zeros() -> Unit {
     let data: List[Int] = [65, 65, 65];
     let encoded: List[Int] = mtf_encode(val data);
-    assert_eq(encoded.get(0).unwrap(), 65);
-    assert_eq(encoded.get(1).unwrap(), 0);
-    assert_eq(encoded.get(2).unwrap(), 0)
+    assert_eq(encoded.get(0).unwrap_or(0), 65);
+    assert_eq(encoded.get(1).unwrap_or(0), 0);
+    assert_eq(encoded.get(2).unwrap_or(0), 0)
 }
 
 test fn mtf_roundtrip() -> Unit {

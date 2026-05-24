@@ -3,7 +3,7 @@
 # recursive ADTs (HuffmanTree), pure core + effect boundary.
 #
 # Run from this directory: make check, make test, make run
-.PHONY: help guard-mvl build check lint test-solver test test-llvm assurance mcdc mutate run run-llvm all clean
+.PHONY: help guard-mvl build check lint test-solver test test-llvm assurance mcdc mutate smoke run run-llvm all clean
 
 .DEFAULT_GOAL := help
 
@@ -70,6 +70,9 @@ mutate: guard-mvl ## Run mutation testing
 	$(MVL) mutate $(DIR)
 
 all: check test assurance mcdc ## Run full quality pipeline: check + test + assurance + mcdc
+
+smoke: guard-mvl ## Smoke-test: build binary (proves compilation without a terminal)
+	$(MVL) build $(DIR)main.mvl
 
 run: guard-mvl ## Run the demo (compress a hardcoded byte sequence, print result)
 	$(MVL) run $(DIR)main.mvl

@@ -2,7 +2,7 @@
 # Run from this directory or via `make test-examples` from the repo root.
 .ONESHELL:
 SHELL := /bin/bash
-.PHONY: help check lint test-solver test assurance run clean
+.PHONY: help check lint test-solver test assurance smoke run clean
 
 MVL := ../../target/debug/mvl
 DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))

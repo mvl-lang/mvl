@@ -40,7 +40,7 @@ fn rle_enc_step(st: RleEncState, data: val List[Int], idx: Int) -> RleEncState {
         // This position was already consumed as part of a previous run.
         st
     } else {
-        let b: Int = data.get(idx).unwrap();
+        let b: Int = data.get(idx).unwrap_or(0);
         let run: Int = count_run(data, idx, b);
         if run >= 4 {
             rle_emit_run(st.out, b, run, idx)
@@ -75,7 +75,7 @@ fn count_run(data: val List[Int], start: Int, b: Int) -> Int {
     let cap: Int = if n - start < 259 { n - start } else { 259 };
     let count: ref Int = 0;
     for j in range(0, cap) {
-        if count == j && data.get(start + j).unwrap() == b {
+        if count == j && data.get(start + j).unwrap_or(0) == b {
             count = count + 1
         }
     }
@@ -103,17 +103,17 @@ fn rle_dec_step(st: RleDecState, data: val List[Int], idx: Int, n: Int) -> RleDe
     if idx < st.skip {
         st
     } else if idx + 4 < n {
-        let b0: Int = data.get(idx).unwrap();
-        let b1: Int = data.get(idx + 1).unwrap();
-        let b2: Int = data.get(idx + 2).unwrap();
-        let b3: Int = data.get(idx + 3).unwrap();
+        let b0: Int = data.get(idx).unwrap_or(0);
+        let b1: Int = data.get(idx + 1).unwrap_or(0);
+        let b2: Int = data.get(idx + 2).unwrap_or(0);
+        let b3: Int = data.get(idx + 3).unwrap_or(0);
         if b0 == b1 && b1 == b2 && b2 == b3 {
-            rle_expand_run(st.out, b0, data.get(idx + 4).unwrap(), idx)
+            rle_expand_run(st.out, b0, data.get(idx + 4).unwrap_or(0), idx)
         } else {
             rle_dec_byte(st.out, b0, st.skip)
         }
     } else {
-        rle_dec_byte(st.out, data.get(idx).unwrap(), st.skip)
+        rle_dec_byte(st.out, data.get(idx).unwrap_or(0), st.skip)
     }
 }
 
