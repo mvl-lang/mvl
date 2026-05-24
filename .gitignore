@@ -33,3 +33,4 @@ librust_out.rlib
 fuzz/corpus/
 fuzz/artifacts/
 fuzz/Cargo.lock
+tools/.venv
