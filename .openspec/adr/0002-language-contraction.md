@@ -28,6 +28,8 @@ The MVL drops every feature that exists for writability over readability. One wa
 | Mutable by default | Haskell (1990), Rust (2015) | Immutable default, `mut` opts in |
 | Global state | E language (1997), Pony (2015), Koka (2014) | All state passed explicitly |
 | `while` in total functions | Idris 2 (2021), Lean 4 (2021) | `for` with bounded iterators; `while` only in `partial` fns |
+| `break` | — | Extract loop body into function with early `return`. `break` undermines `decreases` termination proofs — the checker can't prove the bound is reached if `break` exits early. |
+| `continue` | — | `if` condition inverted: `if cond { skip }` → `if !cond { process }`. `continue` is a goto in disguise — non-local control flow inside a loop body. |
 
 ## What survives
 
