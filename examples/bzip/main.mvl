@@ -51,7 +51,7 @@ type CompressError = enum {
 // Compress a block of bytes using the bzip2 algorithm pipeline.
 // All stages are pure: no file I/O, no console, no randomness.
 // Input is borrowed throughout — a 900KB block is never cloned.
-pub fn compress_bytes(input: val List[Int]) -> Result[List[Int], CompressError] {
+pub partial fn compress_bytes(input: val List[Int]) -> Result[List[Int], CompressError] {
     if input.is_empty() {
         Err(CompressError::EmptyInput)
     } else {
@@ -71,7 +71,7 @@ pub fn compress_bytes(input: val List[Int]) -> Result[List[Int], CompressError] 
 }
 
 // Huffman-encode a sequence of MTF symbols using precomputed code table.
-fn huffman_encode_stream(
+partial fn huffman_encode_stream(
     symbols: val List[Int],
     codes:   val List[List[Int]],
 ) -> Result[List[Int], CompressError] {
@@ -91,7 +91,7 @@ partial fn encode_symbols(
     if i >= symbols.len() {
         Ok(w)
     } else {
-        let sym: Int = symbols.get(i).unwrap();
+        let sym: Int = symbols.get(i).unwrap_or(0);
         match encode_symbol(val codes, sym) {
             None       => Err(CompressError::SymbolNotInTree),
             Some(bits) => encode_symbols(symbols, codes, write_code(w, bits), i + 1),
@@ -101,7 +101,7 @@ partial fn encode_symbols(
 
 // Decompress bytes produced by compress_bytes.
 // Takes compressed data by value — it is consumed by the bit reader.
-pub fn decompress_bytes(
+pub partial fn decompress_bytes(
     input:    List[Int],   // by value — consumed by the bit reader
     primary:  Int,
     freqs:    val List[Int],
@@ -128,14 +128,14 @@ pub fn decompress_bytes(
 fn freqs_total(freqs: val List[Int]) -> Int {
     let acc: ref Int = 0;
     for i in range(0, freqs.len()) {
-        acc = acc + freqs.get(i).unwrap()
+        acc = acc + freqs.get(i).unwrap_or(0)
     }
     acc
 }
 
 // Huffman decode: walk the tree for each symbol until total_symbols are decoded.
 // Takes packed by value — List[Int] is stored directly in the BitReader.
-fn huffman_decode_stream(
+partial fn huffman_decode_stream(
     packed:     List[Int],
     tree:       HuffmanTree,
     n_symbols:  Int,
@@ -185,7 +185,7 @@ partial fn decode_one_symbol(node: HuffmanTree, r: BitReader) -> DecodeOneResult
 
 // ── Entry point (only function with effects) ──────────────────────────────────
 
-fn main() -> Unit ! Console {
+partial fn main() -> Unit ! Console {
     // Demo: compress a short sequence and report the result.
     // A real implementation would read/write files via bridge.rs.
     let input: List[Int] = [

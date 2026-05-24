@@ -31,6 +31,7 @@ check: guard-mvl ## Type-check self-contained source modules
 	$(MVL) check $(DIR)mtf.mvl
 	$(MVL) check $(DIR)huffman.mvl
 	$(MVL) check $(DIR)bitstream.mvl
+	$(MVL) check $(DIR)main.mvl
 
 lint: guard-mvl ## Lint all source files
 	$(MVL) lint $(DIR)
@@ -38,7 +39,7 @@ lint: guard-mvl ## Lint all source files
 test-solver: guard-mvl ## Show per-file solver statistics for all source files
 	@pass=0; fail=0; \
 	OK="\033[32m✓\033[0m"; FAIL="\033[31m✗\033[0m"; \
-	for f in $(DIR)rle.mvl $(DIR)bwt.mvl $(DIR)mtf.mvl $(DIR)huffman.mvl $(DIR)bitstream.mvl; do \
+	for f in $(DIR)rle.mvl $(DIR)bwt.mvl $(DIR)mtf.mvl $(DIR)huffman.mvl $(DIR)bitstream.mvl $(DIR)main.mvl; do \
 		name=$$(basename "$$f"); \
 		out=$$($(MVL) check "$$f" 2>&1); rc=$$?; \
 		if [ $$rc -eq 0 ]; then \
