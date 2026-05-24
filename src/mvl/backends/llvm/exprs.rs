@@ -1988,7 +1988,18 @@ impl<'ctx> LlvmBackend<'ctx> {
         args: &[Expr],
     ) -> Option<BasicValueEnum<'ctx>> {
         match name {
-            // format is now a regular 2-arg function (#901), compiled via its MVL body.
+            // format(template, values) → mvl_format(ptr, ptr) (#901)
+            "format" if args.len() == 2 => {
+                let tmpl = self.emit_expr(&args[0])?;
+                let vals = self.emit_expr(&args[1])?;
+                let fmt_fn = self.get_mvl_format();
+                let call = self
+                    .builder
+                    .build_call(fmt_fn, &[tmpl.into(), vals.into()], "formatted")
+                    .unwrap();
+                use inkwell::values::AnyValue;
+                BasicValueEnum::try_from(call.as_any_value_enum()).ok()
+            }
             // assert(condition) — trap if condition is false.
             "assert" if args.len() == 1 => {
                 let cond = match self.emit_expr(&args[0])? {

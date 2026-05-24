@@ -21,6 +21,65 @@ use crate::memory::{
     MvlMapSlot, MvlString,
 };
 
+// ── format (#901) ───────────────────────────────────────────────────────────
+
+/// `mvl_format(template, values)` — positional `{}` interpolation.
+///
+/// `template` is an `MvlString*` containing `{}` placeholders.
+/// `values` is an `MvlArray*` of `MvlString*` pointers (elem_size = 8).
+/// Returns a new `MvlString*` with placeholders replaced by values in order.
+///
+/// # Safety
+/// Both pointers must be valid. `values` must contain `*mut MvlString` elements.
+#[no_mangle]
+pub unsafe extern "C" fn mvl_format(
+    template: *const MvlString,
+    values: *const MvlArray,
+) -> *mut MvlString {
+    let tmpl_len = if template.is_null() {
+        0
+    } else {
+        (*template).len as usize
+    };
+    let tmpl_ptr = if template.is_null() || tmpl_len == 0 {
+        b"".as_ptr()
+    } else {
+        (*template).ptr as *const u8
+    };
+    let tmpl = std::slice::from_raw_parts(tmpl_ptr, tmpl_len);
+
+    let val_count = if values.is_null() {
+        0
+    } else {
+        (*values).len as usize
+    };
+
+    let mut result = Vec::with_capacity(tmpl_len);
+    let mut val_idx: usize = 0;
+    let mut i = 0;
+    while i < tmpl_len {
+        if tmpl[i] == b'{' && i + 1 < tmpl_len && tmpl[i + 1] == b'}' {
+            // Replace {} with next value
+            if val_idx < val_count {
+                let elem_ptr = mvl_array_get(values, val_idx) as *const *mut MvlString;
+                let s = *elem_ptr;
+                if !s.is_null() {
+                    let s_len = (*s).len as usize;
+                    let s_ptr = (*s).ptr as *const u8;
+                    result.extend_from_slice(std::slice::from_raw_parts(s_ptr, s_len));
+                }
+                val_idx += 1;
+            }
+            i += 2;
+        } else {
+            result.push(tmpl[i]);
+            i += 1;
+        }
+    }
+
+    mvl_string_new(result.as_ptr(), result.len())
+}
+
 // ── String helper (shared by string primitives) ────────────────────────────────
 
 /// Borrow the bytes of a `MvlString` as a Rust `str`.  Returns `""` for null/empty.

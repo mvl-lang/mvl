@@ -37,6 +37,19 @@ pub(crate) enum HeapKind {
 impl<'ctx> LlvmBackend<'ctx> {
     // ── String runtime declarations ───────────────────────────────────────────
 
+    /// `mvl_format(ptr, ptr) -> ptr` — format template with values list (#901)
+    pub(crate) fn get_mvl_format(&self) -> FunctionValue<'ctx> {
+        self.get_or_declare_fn(
+            "mvl_format",
+            &[
+                self.context.ptr_type(AddressSpace::default()).into(),
+                self.context.ptr_type(AddressSpace::default()).into(),
+            ],
+            Some(self.context.ptr_type(AddressSpace::default()).into()),
+            false,
+        )
+    }
+
     /// `mvl_string_new(ptr, i64) -> ptr`
     pub(crate) fn get_mvl_string_new(&self) -> FunctionValue<'ctx> {
         self.get_or_declare_fn(
