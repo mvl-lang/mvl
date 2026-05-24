@@ -1,0 +1,654 @@
+// pkg.http.client tests — unit tests for HTTP client URL parsing, request building,
+// response parsing, and error handling.
+//
+// All pure functions are tested standalone (no effects).
+// Assurance note: 0 extern blocks.
+
+// ── Type re-declarations (workaround: #96) ────────────────────────────────
+
+type Status = enum {
+    Http200Ok,
+    Http201Created,
+    Http202Accepted,
+    Http204NoContent,
+    Http301MovedPermanently,
+    Http302Found,
+    Http304NotModified,
+    Http400BadRequest,
+    Http401Unauthorized,
+    Http403Forbidden,
+    Http404NotFound,
+    Http405MethodNotAllowed,
+    Http409Conflict,
+    Http410Gone,
+    Http422UnprocessableEntity,
+    Http429TooManyRequests,
+    Http500InternalServerError,
+    Http501NotImplemented,
+    Http502BadGateway,
+    Http503ServiceUnavailable,
+    Http504GatewayTimeout,
+}
+
+type Method = enum { Get, Post, Put, Delete, Patch, Head, Options }
+
+type ClientResponse = struct {
+    status:  Status,
+    headers: Map[String, String],
+    body:    Tainted[String],
+}
+
+type HttpClientError = enum {
+    InvalidUrl(String),
+    ConnectionFailed(String),
+    Timeout,
+    TooManyRedirects,
+    InvalidResponse(String),
+}
+
+type ParsedUrl = struct {
+    host: String,
+    port: Int,
+    path: String,
+}
+
+// ── Mirrored helpers ─────────────────────────────────────────────────────────
+
+fn empty_headers() -> Map[String, String] {
+    let m: ref Map[String, String] = {"__init__": ""};
+    m.remove("__init__");
+    m
+}
+
+fn status_code(s: val Status) -> Int {
+    match s {
+        Status::Http200Ok                  => 200,
+        Status::Http201Created             => 201,
+        Status::Http202Accepted            => 202,
+        Status::Http204NoContent           => 204,
+        Status::Http301MovedPermanently    => 301,
+        Status::Http302Found              => 302,
+        Status::Http304NotModified         => 304,
+        Status::Http400BadRequest          => 400,
+        Status::Http401Unauthorized        => 401,
+        Status::Http403Forbidden           => 403,
+        Status::Http404NotFound            => 404,
+        Status::Http405MethodNotAllowed    => 405,
+        Status::Http409Conflict            => 409,
+        Status::Http410Gone               => 410,
+        Status::Http422UnprocessableEntity => 422,
+        Status::Http429TooManyRequests     => 429,
+        Status::Http500InternalServerError => 500,
+        Status::Http501NotImplemented      => 501,
+        Status::Http502BadGateway          => 502,
+        Status::Http503ServiceUnavailable  => 503,
+        Status::Http504GatewayTimeout      => 504,
+    }
+}
+
+fn method_name(m: val Method) -> String {
+    match m {
+        Method::Get     => "GET",
+        Method::Post    => "POST",
+        Method::Put     => "PUT",
+        Method::Delete  => "DELETE",
+        Method::Patch   => "PATCH",
+        Method::Head    => "HEAD",
+        Method::Options => "OPTIONS",
+    }
+}
+
+fn require_resp(opt: Option[String], msg: String) -> Result[String, HttpClientError] {
+    match opt {
+        Some(v) => Ok(v),
+        None    => Err(HttpClientError::InvalidResponse(msg)),
+    }
+}
+
+fn parse_status_code(s: String) -> Result[Int, HttpClientError] {
+    match s.parse_int() {
+        Ok(c)  => Ok(c),
+        Err(_) => Err(HttpClientError::InvalidResponse("non-numeric status code")),
+    }
+}
+
+fn client_error_msg(e: val HttpClientError) -> String {
+    match e {
+        HttpClientError::InvalidUrl(msg)       => "invalid URL: ".concat(msg),
+        HttpClientError::ConnectionFailed(msg)  => "connection failed: ".concat(msg),
+        HttpClientError::Timeout                => "timeout",
+        HttpClientError::TooManyRedirects       => "too many redirects",
+        HttpClientError::InvalidResponse(msg)   => "invalid response: ".concat(msg),
+    }
+}
+
+// ── URL parsing (mirrored) ───────────────────────────────────────────────────
+
+fn parse_url(url: String) -> Result[ParsedUrl, HttpClientError] {
+    if !url.starts_with("http://") {
+        Err(HttpClientError::InvalidUrl("only http:// supported"))
+    } else {
+        let url_len: Int = url.len();
+        let rest: String = url.substring(7, url_len);
+        let rest_len: Int = rest.len();
+        let slash_pos: Option[Int] = rest.find("/");
+        let host_port: String = match slash_pos {
+            Some(i) => rest.substring(0, i),
+            None    => rest.substring(0, rest_len),
+        };
+        let path: String = match slash_pos {
+            Some(i) => rest.substring(i, rest_len),
+            None    => "/",
+        };
+        if host_port.len() == 0 {
+            Err(HttpClientError::InvalidUrl("empty host"))
+        } else {
+            let hp_len: Int = host_port.len();
+            match host_port.find(":") {
+                Some(i) => {
+                    let host: String = host_port.substring(0, i);
+                    let port_str: String = host_port.substring(i + 1, hp_len);
+                    if host.len() == 0 {
+                        Err(HttpClientError::InvalidUrl("empty host"))
+                    } else {
+                        match port_str.parse_int() {
+                            Ok(port) => Ok(ParsedUrl { host: host, port: port, path: path }),
+                            Err(_)   => Err(HttpClientError::InvalidUrl("invalid port")),
+                        }
+                    }
+                },
+                None => Ok(ParsedUrl { host: host_port, port: 80, path: path }),
+            }
+        }
+    }
+}
+
+fn resolve_redirect(original_url: String, location: String) -> String {
+    if location.starts_with("http://") {
+        location
+    } else if location.starts_with("/") {
+        match parse_url(original_url) {
+            Err(_) => location,
+            Ok(p)  => {
+                let port_suffix: String = if p.port != 80 {
+                    ":".concat(p.port.to_string())
+                } else {
+                    ""
+                };
+                "http://".concat(p.host).concat(port_suffix).concat(location)
+            },
+        }
+    } else {
+        location
+    }
+}
+
+// ── Request building (mirrored) ──────────────────────────────────────────────
+
+fn build_request(method: val Method, host: String, port: Int, path: String, headers: Map[String, String], body: String) -> String {
+    let request_line: String = method_name(method)
+        .concat(" ")
+        .concat(path)
+        .concat(" HTTP/1.1\r\n");
+    let host_val: String = if port != 80 {
+        host.concat(":").concat(port.to_string())
+    } else {
+        host
+    };
+    let result: ref String = request_line
+        .concat("Host: ").concat(host_val).concat("\r\n")
+        .concat("Connection: close\r\n");
+    for k in headers.keys() {
+        match headers.get(k) {
+            Some(v) => { result = result.concat(k).concat(": ").concat(v).concat("\r\n") },
+            None    => {},
+        }
+    }
+    if body.len() > 0 {
+        result = result.concat("Content-Length: ").concat(body.len().to_string()).concat("\r\n")
+    } else {}
+    result.concat("\r\n").concat(body)
+}
+
+// ── Status reconstruction (mirrored) ─────────────────────────────────────────
+
+fn client_client_status_from_code(code: Int) -> Result[Status, HttpClientError] {
+    if      code == 200 { Ok(Status::Http200Ok) }
+    else if code == 201 { Ok(Status::Http201Created) }
+    else if code == 202 { Ok(Status::Http202Accepted) }
+    else if code == 204 { Ok(Status::Http204NoContent) }
+    else if code == 301 { Ok(Status::Http301MovedPermanently) }
+    else if code == 302 { Ok(Status::Http302Found) }
+    else if code == 304 { Ok(Status::Http304NotModified) }
+    else if code == 400 { Ok(Status::Http400BadRequest) }
+    else if code == 401 { Ok(Status::Http401Unauthorized) }
+    else if code == 403 { Ok(Status::Http403Forbidden) }
+    else if code == 404 { Ok(Status::Http404NotFound) }
+    else if code == 405 { Ok(Status::Http405MethodNotAllowed) }
+    else if code == 409 { Ok(Status::Http409Conflict) }
+    else if code == 410 { Ok(Status::Http410Gone) }
+    else if code == 422 { Ok(Status::Http422UnprocessableEntity) }
+    else if code == 429 { Ok(Status::Http429TooManyRequests) }
+    else if code == 500 { Ok(Status::Http500InternalServerError) }
+    else if code == 501 { Ok(Status::Http501NotImplemented) }
+    else if code == 502 { Ok(Status::Http502BadGateway) }
+    else if code == 503 { Ok(Status::Http503ServiceUnavailable) }
+    else if code == 504 { Ok(Status::Http504GatewayTimeout) }
+    else { Err(HttpClientError::InvalidResponse("unknown status code")) }
+}
+
+// ── Response parsing (mirrored) ──────────────────────────────────────────────
+
+fn parse_client_headers(lines: List[String]) -> Map[String, String] {
+    let m: ref Map[String, String] = empty_headers();
+    for line in lines {
+        match line.find(":") {
+            None    => {},
+            Some(i) => {
+                let k: String = line.substring(0, i).trim().to_lower();
+                let v: String = line.substring(i + 1, line.len()).trim();
+                if k.len() > 0 { m.insert(k, v) } else {}
+            },
+        }
+    }
+    m
+}
+
+fn parse_response_str(raw: String) -> Result[ClientResponse, HttpClientError] {
+    let lines: List[String] = raw.split("\r\n");
+    let status_line: String = require_resp(lines.get(0), "empty response")?;
+    let parts: List[String] = status_line.split(" ");
+    let code_str: String = require_resp(parts.get(1), "malformed status line")?;
+    let code: Int = parse_status_code(code_str)?;
+    let status: Status = client_client_status_from_code(code)?;
+    let n: Int = lines.len();
+    let blank_idx: ref Int = n;
+    let found_blank: ref Bool = false;
+    let idx: ref Int = 1;
+    for line in lines.slice(1, n) {
+        if !found_blank && line.len() == 0 {
+            blank_idx = idx;
+            found_blank = true
+        } else {}
+        idx = idx + 1
+    }
+    let header_lines: List[String] = if found_blank && blank_idx > 1 {
+        lines.slice(1, blank_idx)
+    } else {
+        []
+    };
+    let headers: Map[String, String] = parse_client_headers(header_lines);
+    let body_str: String = if found_blank && blank_idx + 1 < n {
+        let body_lines: List[String] = lines.slice(blank_idx + 1, n);
+        let acc: ref String = "";
+        let body_first: ref Bool = true;
+        for bl in body_lines {
+            if body_first {
+                acc = bl.concat("");
+                body_first = false
+            } else {
+                acc = acc.concat("\r\n").concat(bl)
+            }
+        }
+        acc
+    } else {
+        ""
+    };
+    let body: Tainted[String] = relabel taint(body_str, "HTTP-CLIENT-BODY");
+    Ok(ClientResponse { status: status, headers: headers, body: body })
+}
+
+fn is_redirect(s: val Status) -> Bool {
+    let code: Int = status_code(s);
+    code == 301 || code == 302
+}
+
+// ── URL parsing tests ────────────────────────────────────────────────────────
+
+test fn parse_url_simple_host() -> Unit {
+    match parse_url("http://example.com/path") {
+        Err(_)  => assert(false),
+        Ok(url) => {
+            assert_eq(url.host, "example.com");
+            assert_eq(url.port, 80);
+            assert_eq(url.path, "/path")
+        },
+    }
+}
+
+test fn parse_url_with_port() -> Unit {
+    match parse_url("http://localhost:8080/api") {
+        Err(_)  => assert(false),
+        Ok(url) => {
+            assert_eq(url.host, "localhost");
+            assert_eq(url.port, 8080);
+            assert_eq(url.path, "/api")
+        },
+    }
+}
+
+test fn parse_url_no_path_defaults_to_slash() -> Unit {
+    match parse_url("http://example.com") {
+        Err(_)  => assert(false),
+        Ok(url) => {
+            assert_eq(url.host, "example.com");
+            assert_eq(url.path, "/")
+        },
+    }
+}
+
+test fn parse_url_with_query_string() -> Unit {
+    match parse_url("http://example.com/search?q=hello&page=1") {
+        Err(_)  => assert(false),
+        Ok(url) => {
+            assert_eq(url.host, "example.com");
+            assert_eq(url.path, "/search?q=hello&page=1")
+        },
+    }
+}
+
+test fn parse_url_rejects_https() -> Unit {
+    match parse_url("https://example.com") {
+        Ok(_)  => assert(false),
+        Err(HttpClientError::InvalidUrl(_)) => assert(true),
+        Err(_) => assert(false),
+    }
+}
+
+test fn parse_url_rejects_empty_host() -> Unit {
+    match parse_url("http:///path") {
+        Ok(_)  => assert(false),
+        Err(HttpClientError::InvalidUrl(_)) => assert(true),
+        Err(_) => assert(false),
+    }
+}
+
+test fn parse_url_rejects_invalid_port() -> Unit {
+    match parse_url("http://example.com:abc/path") {
+        Ok(_)  => assert(false),
+        Err(HttpClientError::InvalidUrl(_)) => assert(true),
+        Err(_) => assert(false),
+    }
+}
+
+test fn parse_url_rejects_no_scheme() -> Unit {
+    match parse_url("example.com/path") {
+        Ok(_)  => assert(false),
+        Err(HttpClientError::InvalidUrl(_)) => assert(true),
+        Err(_) => assert(false),
+    }
+}
+
+test fn parse_url_root_path() -> Unit {
+    match parse_url("http://api.example.com/") {
+        Err(_)  => assert(false),
+        Ok(url) => {
+            assert_eq(url.host, "api.example.com");
+            assert_eq(url.path, "/")
+        },
+    }
+}
+
+test fn parse_url_deep_path() -> Unit {
+    match parse_url("http://api.example.com/v1/users/42/posts") {
+        Err(_)  => assert(false),
+        Ok(url) => assert_eq(url.path, "/v1/users/42/posts"),
+    }
+}
+
+// ── Redirect resolution tests ────────────────────────────────────────────────
+
+test fn resolve_absolute_redirect() -> Unit {
+    let result: String = resolve_redirect("http://a.com/old", "http://b.com/new");
+    assert_eq(result, "http://b.com/new")
+}
+
+test fn resolve_relative_path_redirect() -> Unit {
+    let result: String = resolve_redirect("http://example.com/old", "/new-path");
+    assert_eq(result, "http://example.com/new-path")
+}
+
+test fn resolve_relative_path_redirect_with_port() -> Unit {
+    let result: String = resolve_redirect("http://example.com:9090/old", "/new-path");
+    assert_eq(result, "http://example.com:9090/new-path")
+}
+
+test fn resolve_opaque_redirect_passthrough() -> Unit {
+    let result: String = resolve_redirect("http://example.com/old", "relative/path");
+    assert_eq(result, "relative/path")
+}
+
+// ── Request building tests ───────────────────────────────────────────────────
+
+test fn build_get_request_basic() -> Unit {
+    let req: String = build_request(Method::Get, "example.com", 80, "/health", empty_headers(), "");
+    assert_eq(req.starts_with("GET /health HTTP/1.1\r\n"), true);
+    assert_eq(req.contains("Host: example.com\r\n"), true);
+    assert_eq(req.contains("Connection: close\r\n"), true)
+}
+
+test fn build_get_request_non_default_port() -> Unit {
+    let req: String = build_request(Method::Get, "localhost", 8080, "/api", empty_headers(), "");
+    assert_eq(req.contains("Host: localhost:8080\r\n"), true)
+}
+
+test fn build_post_request_with_body() -> Unit {
+    let hdrs: Map[String, String] = {"Content-Type": "application/json"};
+    let req: String = build_request(Method::Post, "api.example.com", 80, "/users", hdrs, "{\"name\":\"alice\"}");
+    assert_eq(req.starts_with("POST /users HTTP/1.1\r\n"), true);
+    assert_eq(req.contains("Content-Length: 16\r\n"), true);
+    assert_eq(req.ends_with("\r\n{\"name\":\"alice\"}"), true)
+}
+
+test fn build_get_request_no_content_length() -> Unit {
+    let req: String = build_request(Method::Get, "example.com", 80, "/", empty_headers(), "");
+    assert_eq(req.contains("Content-Length"), false)
+}
+
+test fn build_delete_request() -> Unit {
+    let req: String = build_request(Method::Delete, "example.com", 80, "/users/42", empty_headers(), "");
+    assert_eq(req.starts_with("DELETE /users/42 HTTP/1.1\r\n"), true)
+}
+
+test fn build_put_request() -> Unit {
+    let hdrs: Map[String, String] = {"Content-Type": "text/plain"};
+    let req: String = build_request(Method::Put, "example.com", 80, "/data", hdrs, "hello");
+    assert_eq(req.starts_with("PUT /data HTTP/1.1\r\n"), true);
+    assert_eq(req.contains("Content-Length: 5\r\n"), true)
+}
+
+test fn build_request_with_query_in_path() -> Unit {
+    let req: String = build_request(Method::Get, "example.com", 80, "/search?q=hello", empty_headers(), "");
+    assert_eq(req.starts_with("GET /search?q=hello HTTP/1.1\r\n"), true)
+}
+
+// ── Status reconstruction tests ──────────────────────────────────────────────
+
+test fn status_from_200() -> Unit {
+    match client_status_from_code(200) {
+        Ok(s) => assert_eq(status_code(s), 200),
+        Err(_) => assert(false),
+    }
+}
+
+test fn status_from_404() -> Unit {
+    match client_status_from_code(404) {
+        Ok(s) => assert_eq(s, Status::Http404NotFound),
+        Err(_) => assert(false),
+    }
+}
+
+test fn status_from_301() -> Unit {
+    match client_status_from_code(301) {
+        Ok(s) => assert_eq(s, Status::Http301MovedPermanently),
+        Err(_) => assert(false),
+    }
+}
+
+test fn status_from_unknown_code_is_error() -> Unit {
+    match client_status_from_code(999) {
+        Ok(_) => assert(false),
+        Err(HttpClientError::InvalidResponse(_)) => assert(true),
+        Err(_) => assert(false),
+    }
+}
+
+// ── Response parsing tests ───────────────────────────────────────────────────
+
+test fn parse_simple_200_response() -> Unit {
+    match parse_response_str("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\nhello") {
+        Err(_)  => assert(false),
+        Ok(resp) => {
+            assert_eq(resp.status, Status::Http200Ok);
+            assert_eq(relabel trust(resp.body, "TEST"), "hello")
+        },
+    }
+}
+
+test fn parse_response_headers_lowercased() -> Unit {
+    match parse_response_str("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nX-Custom: foo\r\n\r\nbody") {
+        Err(_)  => assert(false),
+        Ok(resp) => {
+            assert_eq(resp.headers.contains_key("content-type"), true);
+            assert_eq(resp.headers.contains_key("x-custom"), true)
+        },
+    }
+}
+
+test fn parse_response_empty_body() -> Unit {
+    match parse_response_str("HTTP/1.1 204 No Content\r\n\r\n") {
+        Err(_)  => assert(false),
+        Ok(resp) => {
+            assert_eq(resp.status, Status::Http204NoContent);
+            assert_eq(relabel trust(resp.body, "TEST"), "")
+        },
+    }
+}
+
+test fn parse_response_multiline_body() -> Unit {
+    match parse_response_str("HTTP/1.1 200 OK\r\n\r\nline1\r\nline2") {
+        Err(_)  => assert(false),
+        Ok(resp) => assert_eq(relabel trust(resp.body, "TEST"), "line1\r\nline2"),
+    }
+}
+
+test fn parse_response_404() -> Unit {
+    match parse_response_str("HTTP/1.1 404 Not Found\r\n\r\n") {
+        Err(_)  => assert(false),
+        Ok(resp) => assert_eq(resp.status, Status::Http404NotFound),
+    }
+}
+
+test fn parse_response_302_redirect() -> Unit {
+    match parse_response_str("HTTP/1.1 302 Found\r\nLocation: http://example.com/new\r\n\r\n") {
+        Err(_)  => assert(false),
+        Ok(resp) => {
+            assert_eq(is_redirect(resp.status), true);
+            match resp.headers.get("location") {
+                None    => assert(false),
+                Some(v) => assert_eq(v, "http://example.com/new"),
+            }
+        },
+    }
+}
+
+test fn parse_response_empty_is_error() -> Unit {
+    match parse_response_str("") {
+        Ok(_)  => assert(false),
+        Err(HttpClientError::InvalidResponse(_)) => assert(true),
+        Err(_) => assert(false),
+    }
+}
+
+test fn parse_response_malformed_status_is_error() -> Unit {
+    match parse_response_str("GARBAGE") {
+        Ok(_)  => assert(false),
+        Err(HttpClientError::InvalidResponse(_)) => assert(true),
+        Err(_) => assert(false),
+    }
+}
+
+test fn parse_response_non_numeric_code_is_error() -> Unit {
+    match parse_response_str("HTTP/1.1 abc OK\r\n\r\n") {
+        Ok(_)  => assert(false),
+        Err(HttpClientError::InvalidResponse(_)) => assert(true),
+        Err(_) => assert(false),
+    }
+}
+
+test fn parse_response_body_is_tainted() -> Unit {
+    match parse_response_str("HTTP/1.1 200 OK\r\n\r\nsecret data") {
+        Err(_)  => assert(false),
+        Ok(resp) => {
+            // Body is Tainted[String] — must relabel to access
+            let trusted: String = relabel trust(resp.body, "TEST-VALIDATE");
+            assert_eq(trusted, "secret data")
+        },
+    }
+}
+
+// ── Redirect detection tests ─────────────────────────────────────────────────
+
+test fn redirect_301_detected() -> Unit {
+    assert_eq(is_redirect(Status::Http301MovedPermanently), true)
+}
+
+test fn redirect_302_detected() -> Unit {
+    assert_eq(is_redirect(Status::Http302Found), true)
+}
+
+test fn redirect_200_not_detected() -> Unit {
+    assert_eq(is_redirect(Status::Http200Ok), false)
+}
+
+test fn redirect_404_not_detected() -> Unit {
+    assert_eq(is_redirect(Status::Http404NotFound), false)
+}
+
+// ── Error message tests ──────────────────────────────────────────────────────
+
+test fn error_msg_invalid_url() -> Unit {
+    assert_eq(client_error_msg(HttpClientError::InvalidUrl("bad")), "invalid URL: bad")
+}
+
+test fn error_msg_timeout() -> Unit {
+    assert_eq(client_error_msg(HttpClientError::Timeout), "timeout")
+}
+
+test fn error_msg_too_many_redirects() -> Unit {
+    assert_eq(client_error_msg(HttpClientError::TooManyRedirects), "too many redirects")
+}
+
+test fn error_msg_connection_failed() -> Unit {
+    assert_eq(client_error_msg(HttpClientError::ConnectionFailed("refused")), "connection failed: refused")
+}
+
+test fn error_msg_invalid_response() -> Unit {
+    assert_eq(client_error_msg(HttpClientError::InvalidResponse("empty")), "invalid response: empty")
+}
+
+// ── Header parsing tests ─────────────────────────────────────────────────────
+
+test fn parse_response_header_value_with_colon() -> Unit {
+    match parse_response_str("HTTP/1.1 200 OK\r\nLocation: http://example.com:8080/path\r\n\r\n") {
+        Err(_) => assert(false),
+        Ok(resp) => match resp.headers.get("location") {
+            None    => assert(false),
+            Some(v) => assert_eq(v, "http://example.com:8080/path"),
+        },
+    }
+}
+
+test fn parse_response_no_headers() -> Unit {
+    match parse_response_str("HTTP/1.1 200 OK\r\n\r\nbody") {
+        Err(_)  => assert(false),
+        Ok(resp) => assert_eq(resp.headers.is_empty(), true),
+    }
+}
+
+test fn parse_response_multiple_headers() -> Unit {
+    match parse_response_str("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 5\r\n\r\nhello") {
+        Err(_)  => assert(false),
+        Ok(resp) => assert_eq(resp.headers.len(), 2),
+    }
+}
