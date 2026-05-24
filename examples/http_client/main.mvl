@@ -11,10 +11,14 @@
 //      in the main thread, concurrently { } drains all mailboxes before returning
 //
 // Expected output:
-//   GET /hello → 200 hello
-//   GET /users/42 → 200 get_user
-//   GET /missing → 404 /missing
-//   POST /echo → 200 echo
+//   HTTP client loopback test (server on 127.0.0.1:<port>)
+//
+//   1. GET /hello            → 200  body="hello"
+//   2. GET /users/42         → 200  body="get_user"
+//   3. GET /missing          → 404  body="/missing"
+//   4. POST /echo            → 200  body="echo"
+//
+//   4/4 passed
 //
 // Usage:
 //   make run   (from examples/http_client/)
@@ -105,29 +109,52 @@ partial fn main() -> Unit ! Console + Net {
         server.handle();
         server.shutdown();
 
-        // Client: make requests against the local server
-        // 1. GET /hello → 200 hello
+        println("HTTP client loopback test (server on 127.0.0.1:".concat(port.to_string()).concat(")"));
+        println("");
+
+        let passed: ref Int = 0;
+
+        // 1. Simple GET — matched route returns its name as the body
         match http_get(make_url(port, "/hello"), seconds(5)) {
-            Ok(resp) => println("GET /hello → ".concat(format_status(resp.status)).concat(" ").concat(relabel trust(resp.body, "EXAMPLE"))),
-            Err(e)   => println("GET /hello → error: ".concat(client_error_msg(e))),
+            Ok(resp) => {
+                let body: String = relabel trust(resp.body, "EXAMPLE");
+                println("1. GET /hello            → ".concat(format_status(resp.status)).concat("  body=\"").concat(body).concat("\""));
+                passed = passed + 1
+            },
+            Err(e) => println("1. GET /hello            → FAIL  ".concat(client_error_msg(e))),
         }
 
-        // 2. GET /users/42 → 200 get_user
+        // 2. GET with path parameter — {id} extracted by router
         match http_get(make_url(port, "/users/42"), seconds(5)) {
-            Ok(resp) => println("GET /users/42 → ".concat(format_status(resp.status)).concat(" ").concat(relabel trust(resp.body, "EXAMPLE"))),
-            Err(e)   => println("GET /users/42 → error: ".concat(client_error_msg(e))),
+            Ok(resp) => {
+                let body: String = relabel trust(resp.body, "EXAMPLE");
+                println("2. GET /users/42         → ".concat(format_status(resp.status)).concat("  body=\"").concat(body).concat("\""));
+                passed = passed + 1
+            },
+            Err(e) => println("2. GET /users/42         → FAIL  ".concat(client_error_msg(e))),
         }
 
-        // 3. GET /missing → 404 /missing
+        // 3. Unknown path — server returns 404 with path as detail
         match http_get(make_url(port, "/missing"), seconds(5)) {
-            Ok(resp) => println("GET /missing → ".concat(format_status(resp.status)).concat(" ").concat(relabel trust(resp.body, "EXAMPLE"))),
-            Err(e)   => println("GET /missing → error: ".concat(client_error_msg(e))),
+            Ok(resp) => {
+                let body: String = relabel trust(resp.body, "EXAMPLE");
+                println("3. GET /missing          → ".concat(format_status(resp.status)).concat("  body=\"").concat(body).concat("\""));
+                passed = passed + 1
+            },
+            Err(e) => println("3. GET /missing          → FAIL  ".concat(client_error_msg(e))),
         }
 
-        // 4. POST /echo → 200 echo
+        // 4. POST with body and custom headers
         match http_post(make_url(port, "/echo"), {"Content-Type": "text/plain"}, "hello world", seconds(5)) {
-            Ok(resp) => println("POST /echo → ".concat(format_status(resp.status)).concat(" ").concat(relabel trust(resp.body, "EXAMPLE"))),
-            Err(e)   => println("POST /echo → error: ".concat(client_error_msg(e))),
+            Ok(resp) => {
+                let body: String = relabel trust(resp.body, "EXAMPLE");
+                println("4. POST /echo            → ".concat(format_status(resp.status)).concat("  body=\"").concat(body).concat("\""));
+                passed = passed + 1
+            },
+            Err(e) => println("4. POST /echo            → FAIL  ".concat(client_error_msg(e))),
         }
+
+        println("");
+        println(passed.to_string().concat("/4 passed"))
     }
 }
