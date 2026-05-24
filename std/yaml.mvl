@@ -57,19 +57,6 @@ fn yaml_char_at(chars: List[String], pos: Int) -> String {
     }
 }
 
-fn yaml_is_digit(c: String) -> Bool {
-    c == "0" || c == "1" || c == "2" || c == "3" || c == "4" ||
-    c == "5" || c == "6" || c == "7" || c == "8" || c == "9"
-}
-
-fn yaml_digit_of(c: String) -> Int {
-    if      c == "0" { 0 } else if c == "1" { 1 }
-    else if c == "2" { 2 } else if c == "3" { 3 }
-    else if c == "4" { 4 } else if c == "5" { 5 }
-    else if c == "6" { 6 } else if c == "7" { 7 }
-    else if c == "8" { 8 } else if c == "9" { 9 }
-    else { 0 }
-}
 
 // Count leading spaces (indentation level).
 partial fn yaml_get_indent(line: String) -> Int {
@@ -437,8 +424,8 @@ partial fn yaml_parse_number(chars: List[String], pos: Int) -> YNR {
     let go: ref Bool = true;
     while go && cur < len {
         let c: String = yaml_char_at(chars, cur);
-        if yaml_is_digit(c) {
-            int_val   = int_val * 10 + yaml_digit_of(c);
+        if c.is_digit() {
+            int_val   = int_val * 10 + c.digit_value();
             has_digit = true;
             cur       = cur + 1
         } else { go = false }
@@ -452,8 +439,8 @@ partial fn yaml_parse_number(chars: List[String], pos: Int) -> YNR {
         let fgo: ref Bool = true;
         while fgo && cur < len {
             let fc: String = yaml_char_at(chars, cur);
-            if yaml_is_digit(fc) {
-                frac  = frac + yaml_digit_of(fc).to_float() / denom;
+            if fc.is_digit() {
+                frac  = frac + fc.digit_value().to_float() / denom;
                 denom = denom * 10.0;
                 cur   = cur + 1
             } else { fgo = false }
@@ -500,7 +487,7 @@ partial fn yaml_parse_scalar(s: String) -> YamlValue {
                 YSR::YSROK(sv, _) => YamlValue::Str(sv),
                 YSR::YSRErr(_)    => YamlValue::Str(s),
             }
-        } else if c0 == "-" || yaml_is_digit(c0) {
+        } else if c0 == "-" || c0.is_digit() {
             match yaml_parse_number(chars, 0) {
                 YNR::YNRInt(n, _) => YamlValue::Int(n),
                 YNR::YNRFloat(f, _) => YamlValue::Float(f),

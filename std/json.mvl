@@ -221,26 +221,11 @@ partial fn parse_value(chars: List[String], pos: Int) -> ValuePos {
                 else if c == "t"  { parse_true(chars, cur)        }
                 else if c == "f"  { parse_false(chars, cur)       }
                 else if c == "n"  { parse_null(chars, cur)        }
-                else if c == "-" || is_digit(c) { parse_number_val(chars, cur) }
+                else if c == "-" || c.is_digit() { parse_number_val(chars, cur) }
                 else { ValuePos::VPErr("unexpected character: ".concat(c)) }
             }
         }
     }
-}
-
-fn is_digit(c: String) -> Bool {
-    c == "0" || c == "1" || c == "2" || c == "3" || c == "4" ||
-    c == "5" || c == "6" || c == "7" || c == "8" || c == "9"
-}
-
-// Real MVL logic — not a stub; used by the number parser above.
-fn digit_of(c: String) -> Int {
-    if      c == "0" { 0 } else if c == "1" { 1 }
-    else if c == "2" { 2 } else if c == "3" { 3 }
-    else if c == "4" { 4 } else if c == "5" { 5 }
-    else if c == "6" { 6 } else if c == "7" { 7 }
-    else if c == "8" { 8 } else if c == "9" { 9 }
-    else { 0 }
 }
 
 fn char_at(chars: List[String], pos: Int) -> String {
@@ -362,8 +347,8 @@ partial fn parse_number(chars: List[String], pos: Int) -> FloatPos {
         match chars.get(cur) {
             None    => { go = false },
             Some(c) => {
-                if is_digit(c) {
-                    int_val   = int_val * 10 + digit_of(c);
+                if c.is_digit() {
+                    int_val   = int_val * 10 + c.digit_value();
                     has_digit = true;
                     cur       = cur + 1
                 } else {
@@ -386,8 +371,8 @@ partial fn parse_number(chars: List[String], pos: Int) -> FloatPos {
                     match chars.get(cur) {
                         None     => { fgo = false },
                         Some(fc) => {
-                            if is_digit(fc) {
-                                frac  = frac + digit_of(fc).to_float() / denom;
+                            if fc.is_digit() {
+                                frac  = frac + fc.digit_value().to_float() / denom;
                                 denom = denom * 10.0;
                                 cur   = cur + 1
                             } else {
@@ -421,8 +406,8 @@ partial fn parse_number(chars: List[String], pos: Int) -> FloatPos {
                     match chars.get(cur) {
                         None     => { ego = false },
                         Some(ec) => {
-                            if is_digit(ec) {
-                                exp_int = exp_int * 10 + digit_of(ec);
+                            if ec.is_digit() {
+                                exp_int = exp_int * 10 + ec.digit_value();
                                 cur     = cur + 1
                             } else {
                                 ego = false

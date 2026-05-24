@@ -184,11 +184,13 @@ impl TypeChecker {
             "find" | "rfind" => Ty::Option(Box::new(Ty::Int)),
             // Predicates
             "contains" | "starts_with" | "ends_with" | "is_empty" => Ty::Bool,
+            // Character classification (std/strings.mvl, ord-based)
+            "is_digit" | "is_alpha_lower" | "is_alpha_upper" => Ty::Bool,
             // Indexing: char_at(i) -> String, byte_at(i) -> Byte
             "char_at" => Ty::String,
             "byte_at" => Ty::Byte,
             // Numeric
-            "len" => Ty::Int,
+            "len" | "digit_value" | "ord" => Ty::Int,
             // Parsing
             "parse_int" => Ty::Result(Box::new(Ty::Int), Box::new(Ty::String)),
             "parse_float" => Ty::Result(Box::new(Ty::Float), Box::new(Ty::String)),
