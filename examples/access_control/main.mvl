@@ -1,21 +1,20 @@
 // main.mvl — Access control demo entry point.
 //
 // Demonstrates Phase 4 security requirements as compile-time guarantees:
-//   1. extern "rust" trust boundary — demo fixture data (get_demo_hash) lives in Rust.
-//   2. IFC labels: Secret[String] password hash consumed at auth boundary;
+//   1. Req 11 (IFC): Secret[String] password hash consumed at auth boundary;
 //      String usernames are safe for structured log output.
-//   3. Req 3 (Totality): check_permission from rbac module — exhaustive match.
-//   4. Effect declarations: ! Log on audit functions; ! CryptoRandom on authenticate().
-//   5. Req 5 (Errors): all failure modes are named in AppError, AuthError.
-//   6. Multi-module: use imports connect this file to model, auth, rbac, audit modules.
-//   7. Phase 4: log_access emits structured audit records (grant → INFO, deny → WARN).
-//   8. Phase 4: std.log replaces raw println for all operational output.
+//   2. Req 3 (Totality): check_permission from rbac module — exhaustive match.
+//   3. Req 7 (Effects): ! Log on audit functions.
+//   4. Req 5 (Errors): all failure modes are named in AppError, AuthError.
+//   5. Multi-module: use imports connect this file to model, auth, rbac, audit modules.
+//   6. Phase 4: log_access emits structured audit records (grant → INFO, deny → WARN).
+//   7. Phase 4: std.log replaces raw println for all operational output.
 //
 // Usage:
 //   mvl run examples/access_control/main.mvl
 //   make run   (from examples/access_control/)
 //
-// Assurance note: 1 extern block (1 trust-boundary function).
+// Assurance note: 0 extern blocks — all trust boundary lives in auth.mvl.
 
 use auth::authenticate;
 use rbac::check_permission;
@@ -30,11 +29,17 @@ use model::AppError;
 use std.log.{Logger, default_logger}
 use std.ifc.{taint}
 
-// ── Trust boundary: demo fixture data lives in Rust ───────────────────────
+// ── Demo fixture data (pure MVL, formerly extern) ─────────────────────────
 
-extern "rust" {
-    // Demo fixture: returns hardcoded hash for known usernames.
-    fn get_demo_hash(username: String) -> Option[Secret[String]];
+// Returns the demo password hash for a known username.
+// The hash is Secret[String] — it cannot be printed or logged from MVL code.
+// In production, this would be a database query.
+total fn get_demo_hash(username: String where len(self) > 0) -> Option[Secret[String]] {
+    match username {
+        "alice" => Some(relabel classify("hunter2", "DEMO-HASH")),
+        "bob"   => Some(relabel classify("passw0rd", "DEMO-HASH")),
+        _       => None,
+    }
 }
 
 // ── Audit helper ──────────────────────────────────────────────────────────
@@ -42,7 +47,7 @@ extern "rust" {
 // Check and audit a single RBAC decision.
 // Calls check_permission (pure) then log_access (! Log) to emit a structured
 // audit record.
-fn check_and_audit(
+total fn check_and_audit(
     logger: val Logger,
     username: String,
     role: Role,
@@ -56,7 +61,7 @@ fn check_and_audit(
 // ── Demo scenarios ────────────────────────────────────────────────────────
 
 // RBAC demo: each call produces a structured audit record (INFO or WARN).
-fn demo_rbac(logger: val Logger) -> Unit ! Log {
+total fn demo_rbac(logger: val Logger) -> Unit ! Log {
     let u1: Unit = check_and_audit(logger, "admin_demo", Role::Admin,     Resource::AdminPanel,  Action::Read);
     let u2: Unit = check_and_audit(logger, "mod_demo",   Role::Moderator, Resource::AdminPanel,  Action::Write);
     let u3: Unit = check_and_audit(logger, "user_demo",  Role::User,      Resource::Post,        Action::Delete);
@@ -66,8 +71,7 @@ fn demo_rbac(logger: val Logger) -> Unit ! Log {
 
 // Auth demo: alice's hash is Secret[String] — cannot be printed or leaked.
 // It flows directly into hash_verify at the extern boundary inside auth module.
-// Phase 4: std.log replaces raw println; ! CryptoRandom propagated from authenticate().
-fn demo_auth(logger: val Logger) -> Unit ! Log + CryptoRandom {
+total fn demo_auth(logger: val Logger) -> Unit ! Log {
     let hash_opt: Option[Secret[String]] = get_demo_hash("alice");
     match hash_opt {
         None => logger.warn("auth attempt: user not found", {"user": "alice"}),
@@ -81,14 +85,8 @@ fn demo_auth(logger: val Logger) -> Unit ! Log + CryptoRandom {
     }
 }
 
-fn main() -> Unit ! Log + CryptoRandom {
+total fn main() -> Unit ! Log {
     let logger: Logger = default_logger();
     let rbac_done: Unit = demo_rbac(logger);
     demo_auth(logger)
 }
-
-// ── Internal unit tests ───────────────────────────────────────────────────
-// TODO(#96): inline tests that call cross-module functions (check_permission,
-// log_access, authenticate) cannot run until the module resolver propagates
-// sibling-module types into the test crate. These are covered exhaustively by
-// rbac_test.mvl and auth_test.mvl in the meantime.

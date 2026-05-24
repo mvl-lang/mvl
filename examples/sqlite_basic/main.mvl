@@ -2,6 +2,10 @@
 //
 // Creates an in-memory SQLite database, inserts rows, and queries them back.
 // Demonstrates typed Value parameters, error matching, and row iteration.
+// Also demonstrates IFC labels: external input is marked Tainted[String]
+// and must be relabeled before passing to the sqlite API (which requires
+// bare String parameters — Tainted[String] is a compile-time type error).
+//
 // Declared `partial fn main` because query_by_min_age and query_scalar are
 // partial (they may panic on unexpected result shapes).  Iteration over
 // query results uses `while` (the `partial fn` loop form).
@@ -102,6 +106,20 @@ partial fn main() -> Unit ! DB + FileRead + FileWrite + Console {
     };
     assert_eq(count, 3);
     println("Total users: ".concat(count.to_string()));
+
+    // ── IFC: tainted input must be relabeled before use ─────────────────────
+    //
+    // Simulates user input arriving as Tainted[String].  Passing tainted_name
+    // directly to execute() would be a compile-time type error because execute()
+    // requires bare String.  The relabel trust() call is the explicit chokepoint
+    // where the developer asserts the input has been validated.
+    let tainted_name: Tainted[String] = relabel taint("Dave", "CLI-INPUT");
+    let safe_name: String = relabel trust(tainted_name, "SQL-PARAM-001");
+    match execute(db, "INSERT INTO users (id, name, age) VALUES (?, ?, ?)",
+            [Value::Int(4), Value::Text(safe_name), Value::Int(28)]) {
+        Err(_) => println("insert failed"),
+        Ok(_)  => println("Inserted tainted-then-sanitized user: Dave"),
+    }
 
     close(db)
 }

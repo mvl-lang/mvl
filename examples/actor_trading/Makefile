@@ -14,14 +14,8 @@ DIR  := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 help: ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-12s\033[0m %s\n", $$1, $$2}'
 
-guard-mvl: ## Validate MVL binary is present
-	@$(MVL) --version > /dev/null 2>&1 || { \
-		echo ""; \
-		echo "  ERROR: MVL compiler not found at: $(MVL)"; \
-		echo "  Run 'make build' from the repo root first."; \
-		echo ""; \
-		exit 1; \
-	}
+guard-mvl: ## Ensure MVL binary is built and up-to-date
+	@cargo build --manifest-path $(DIR)../../Cargo.toml --quiet
 
 guard-z3: ## Validate z3 Python package is available
 	@python3 -c "import z3" 2>/dev/null || { \
@@ -48,8 +42,8 @@ test-solver: check ## Show per-file solver statistics (alias for check)
 test-llvm: guard-mvl ## Run tests via LLVM backend
 	$(MVL) test $(DIR) --backend=llvm
 
-assurance: guard-mvl ## Assurance report for main.mvl
-	$(MVL) assurance $(DIR)main.mvl
+assurance: guard-mvl ## Assurance report (verbose)
+	$(MVL) assurance $(DIR) --verbose
 
 verify: guard-z3 ## Prove invariants for ALL inputs using Z3
 	python3 $(DIR)verify.py

@@ -13,8 +13,8 @@ REPO_ROOT := $(abspath $(DIR)../..)
 help: ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-12s\033[0m %s\n", $$1, $$2}'
 
-guard-mvl:
-	@$(MVL) --version > /dev/null 2>&1 || { echo "Run 'make build' from repo root first."; exit 1; }
+guard-mvl: ## Ensure MVL binary is built and up-to-date
+	@cargo build --manifest-path $(DIR)../../Cargo.toml --quiet
 
 check: guard-mvl ## Type-check main.mvl (note: uses Tainted[String] from read_file — IFC is exercised)
 	cd $(REPO_ROOT) && $(abspath $(MVL)) check $(DIR)main.mvl
