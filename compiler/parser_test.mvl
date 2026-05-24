@@ -42,7 +42,6 @@ test fn bare_fn_no_params() -> Unit {
             assert_eq(f.name,       "foo");
             assert_eq(f.visible,    false);
             assert_eq(f.totality,   "");
-            assert_eq(f.is_transp,  false);
             assert_eq(f.has_body,   true);
             assert_eq(f.params.len(), 0)
         }
@@ -82,13 +81,12 @@ test fn partial_fn_has_totality() -> Unit {
     }
 }
 
-test fn transparent_partial_fn() -> Unit {
-    let p: Program = lp("transparent partial fn bridge(s: String) -> String { s }");
+test fn partial_fn_signature() -> Unit {
+    let p: Program = lp("partial fn bridge(s: String) -> String { s }");
     assert_eq(p.fns.len(), 1);
     match p.fns.get(0) {
         None    => assert_eq(true, false),
         Some(f) => {
-            assert_eq(f.is_transp, true);
             assert_eq(f.totality,  "partial")
         }
     }
