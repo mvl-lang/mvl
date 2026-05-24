@@ -25,7 +25,7 @@ type RleEncState = struct {
 
 // Encode a byte block, collapsing runs of 4+ identical bytes.
 // Input borrowed — large blocks must not be cloned at every call site.
-pub fn rle_encode(data: val List[Int]) -> List[Int] {
+pub total fn rle_encode(data: val List[Int]) -> List[Int] {
     let n: Int = data.len();
     let st: ref RleEncState = RleEncState { out: [], skip: 0 };
     for idx in range(0, n) {
@@ -90,7 +90,7 @@ type RleDecState = struct {
 }
 
 // Decode: expand RLE-encoded runs back to original bytes.
-pub fn rle_decode(data: val List[Int]) -> List[Int] {
+pub total fn rle_decode(data: val List[Int]) -> List[Int] {
     let n: Int = data.len();
     let st: ref RleDecState = RleDecState { out: [], skip: 0 };
     for idx in range(0, n) {

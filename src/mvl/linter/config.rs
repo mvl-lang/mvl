@@ -104,8 +104,8 @@ pub struct LintConfig {
     /// Warn on functions that have calls but no declared effects (opt-in; default off).
     /// Enable with `missing_annotations = true` in `.mvllintrc`.
     pub missing_annotations: bool,
-    /// Warn on non-test functions with no explicit `total` or `partial` keyword (opt-in; default off).
-    /// Enable with `require_explicit_totality = true` in `.mvllintrc`.
+    /// Warn on unannotated `pub fn` with no explicit `total` or `partial` keyword (on by default).
+    /// Disable with `require_explicit_totality = false` in `.mvllintrc`.
     pub require_explicit_totality: bool,
     /// Error on `while / .get(i) / match / None => ()` iteration anti-pattern.
     /// Always use `for x in list { }` instead (rule `for-iter-antipattern`, #705).
@@ -155,7 +155,7 @@ impl Default for LintConfig {
             redundant_effects: true,
             redundant_ifc_labels: true,
             missing_annotations: false,
-            require_explicit_totality: false,
+            require_explicit_totality: true,
             for_iter_antipattern: true,
             consistent_comment_style: false,
             require_doc_comments: true,

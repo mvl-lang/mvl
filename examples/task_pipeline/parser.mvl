@@ -63,7 +63,7 @@ fn parse_amount(s: String) -> Result[Float, ParseError] {
 ///
 /// Expected format: name,age,amount[,category]
 /// An empty or absent category field becomes None (Req 4).
-pub fn parse_record(line: String) -> Result[Record, ParseError] {
+pub total fn parse_record(line: String) -> Result[Record, ParseError] {
     let parts: List[String] = line.split(",");
     if parts.len() < 3 {
         Err(ParseError::MissingField)
@@ -163,7 +163,7 @@ fn parse_csv_impl(content: String) -> Result[List[Record], ParseError] {
 /// `content` is passed to `sanitize` (free-function) → disqualified from
 /// borrow inference → `content: Tainted<String>` (owned) in generated Rust.
 /// This prevents the cross-module `&String` mismatch when called from main.rs.
-pub fn parse_csv(content: Tainted[String]) -> Result[List[Record], ParseError] {
+pub total fn parse_csv(content: Tainted[String]) -> Result[List[Record], ParseError] {
     let clean: String = relabel trust(content, "VALIDATED");
     parse_csv_impl(clean)
 }

@@ -37,7 +37,7 @@ extern "rust" {
 //
 /// Verify credentials and return a session token on success.
 /// Uses CryptoRandom for token generation; the stored hash stays Secret throughout.
-pub fn authenticate(
+pub total fn authenticate(
     raw_username: Tainted[String],
     raw_password: Tainted[String],
     stored_hash: Secret[String],

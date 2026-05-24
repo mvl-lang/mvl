@@ -40,7 +40,7 @@ pub type Game = struct {
 
 // ── Constructor ───────────────────────────────────────────────────────────────
 
-pub fn new_game(board: Board, start: Pos, food: Pos) -> Game {
+pub total fn new_game(board: Board, start: Pos, food: Pos) -> Game {
     Game {
         snake:     [start],
         direction: Direction::Right,
@@ -155,6 +155,6 @@ pub total fn apply_update(game: Game, input: Option[Direction], next_food: Pos) 
     update(game, input, next_food)
 }
 
-pub fn apply_new_game(board: Board, start: Pos, food: Pos) -> Game {
+pub total fn apply_new_game(board: Board, start: Pos, food: Pos) -> Game {
     new_game(board, start, food)
 }

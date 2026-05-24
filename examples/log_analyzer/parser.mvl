@@ -84,7 +84,7 @@ pub total fn parse_line(raw: Tainted[String]) -> Result[LogEntry, ParseError] {
 }
 
 /// Serialise a `Report` to a JSON string for output.
-pub fn report_to_json(report: Report) -> String {
+pub total fn report_to_json(report: Report) -> String {
     serde_json_to_json_string(report)
 }
 
@@ -92,7 +92,7 @@ pub fn report_to_json(report: Report) -> String {
 
 /// Build an aggregated `Report` from a list of parsed log entries.
 /// Each entry increments the appropriate counter by level.
-pub fn build_report(entries: List[LogEntry]) -> Report {
+pub total fn build_report(entries: List[LogEntry]) -> Report {
     entries.fold(
         Report { count: 0, errors: 0, warnings: 0, infos: 0 },
         |acc: Report, entry: LogEntry| match entry.level {
@@ -117,7 +117,7 @@ pub fn build_report(entries: List[LogEntry]) -> Report {
 }
 
 /// Summarize a log entry as a human-readable string for map → display pipeline.
-pub fn entry_summary(entry: LogEntry) -> String {
+pub total fn entry_summary(entry: LogEntry) -> String {
     match entry.level {
         Severity::Error => "ERROR",
         Severity::Warn  => "WARN",
@@ -128,7 +128,7 @@ pub fn entry_summary(entry: LogEntry) -> String {
 
 /// Predicate: true iff the entry is an error-level log entry.
 /// Used as a named filter argument: `entries.filter(is_error_level)`.
-pub fn is_error_level(entry: LogEntry) -> Bool {
+pub total fn is_error_level(entry: LogEntry) -> Bool {
     match entry.level {
         Severity::Error => true,
         _               => false,

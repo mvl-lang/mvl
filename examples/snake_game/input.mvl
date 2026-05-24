@@ -12,7 +12,7 @@ use game::Direction;
 
 // Convert a raw key string from tui_read_key_timeout to a movement direction.
 // Returns None for non-arrow keys (snake holds its current direction this tick).
-pub fn key_to_direction(key: String) -> Option[Direction] {
+pub total fn key_to_direction(key: String) -> Option[Direction] {
     match key {
         "Up"    => Some(Direction::Up),
         "Down"  => Some(Direction::Down),

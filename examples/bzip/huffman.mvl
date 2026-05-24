@@ -21,7 +21,7 @@ pub type HuffmanTree = enum {
 }
 
 // Extract the weight from any tree node — exhaustive match demonstrates R3.
-pub fn tree_weight(t: val HuffmanTree) -> Int {
+pub total fn tree_weight(t: val HuffmanTree) -> Int {
     match t {
         HuffmanTree::Leaf(_, w)    => w + 0,
         HuffmanTree::Node(w, _, _) => w + 0,
@@ -39,7 +39,7 @@ pub type BuildResult = struct {
 
 // Count symbol frequencies from a symbol stream.
 // Returns a List[Int] of length 256; index i = frequency of symbol i.
-pub fn count_freqs(data: val List[Int]) -> List[Int] {
+pub total fn count_freqs(data: val List[Int]) -> List[Int] {
     let freqs: ref List[Int] = range(0, 256).map(zero_int);
     for i in range(0, data.len()) {
         let sym: Int = data.get(i).unwrap_or(0);
@@ -88,7 +88,7 @@ type BuildState = struct {
 
 // Build a Huffman tree from a frequency table.
 // Returns None only if all frequencies are zero (empty data).
-pub fn build_tree(freqs: val List[Int]) -> Option[BuildResult] {
+pub total fn build_tree(freqs: val List[Int]) -> Option[BuildResult] {
     let init: InitState = build_init(freqs);
     if init.queue.is_empty() {
         None
@@ -237,7 +237,7 @@ fn remove_at_ll(list: List[List[Int]], idx: Int) -> List[List[Int]] {
 
 // Encode a symbol: look up its precomputed code in the codes table.
 // Returns None if sym is absent from the tree (code is empty list).
-pub fn encode_symbol(codes: val List[List[Int]], sym: Int) -> Option[List[Int]] {
+pub total fn encode_symbol(codes: val List[List[Int]], sym: Int) -> Option[List[Int]] {
     let code: List[Int] = codes.get(sym).unwrap_or([]);
     if code.len() > 0 {
         Some(code)
@@ -250,7 +250,7 @@ pub fn encode_symbol(codes: val List[List[Int]], sym: Int) -> Option[List[Int]] 
 
 // Find which symbol has the given bit sequence as its code.
 // Returns -1 if no match (should not occur for valid compressed streams).
-pub fn find_code(codes: val List[List[Int]], bits: List[Int]) -> Int {
+pub total fn find_code(codes: val List[List[Int]], bits: List[Int]) -> Int {
     let found: ref Int = -1;
     for sym in range(0, 256) {
         found = try_match(codes, val bits, sym, found)

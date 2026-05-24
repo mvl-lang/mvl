@@ -30,12 +30,12 @@ pub type ReadResult = struct {
 }
 
 // Create a fresh, empty BitWriter.
-pub fn new_writer() -> BitWriter {
+pub total fn new_writer() -> BitWriter {
     BitWriter { bytes: [], current: 0, bit_pos: 0 }
 }
 
 // Flush any remaining bits and return the packed byte sequence.
-pub fn flush_writer(w: BitWriter) -> List[Int] {
+pub total fn flush_writer(w: BitWriter) -> List[Int] {
     // Bind to local to signal ownership transfer (prevents auto-borrow inference).
     let owned: BitWriter = w;
     if owned.bit_pos == 0 {
@@ -50,7 +50,7 @@ pub fn flush_writer(w: BitWriter) -> List[Int] {
 
 // Write the low n_bits of value into the stream.
 // R10: n_bits must be 1–24 to prevent shift overflow.
-pub fn write_bits(w: BitWriter, value: Int, n_bits: Int where self >= 1 && self <= 24) -> BitWriter {
+pub total fn write_bits(w: BitWriter, value: Int, n_bits: Int where self >= 1 && self <= 24) -> BitWriter {
     write_bits_loop(w, value, n_bits)
 }
 
@@ -85,13 +85,13 @@ fn write_bits_loop(w: BitWriter, value: Int, remaining: Int) -> BitWriter {
 }
 
 // Create a BitReader over a packed byte array.
-pub fn new_reader(bytes: List[Int]) -> BitReader {
+pub total fn new_reader(bytes: List[Int]) -> BitReader {
     BitReader { bytes: bytes, pos: 0, bit_pos: 0 }
 }
 
 // Read n_bits from the stream; returns value + advanced reader.
 // R10: n_bits must be 1–24 to prevent shift overflow.
-pub fn read_bits(r: BitReader, n_bits: Int where self >= 1 && self <= 24) -> ReadResult {
+pub total fn read_bits(r: BitReader, n_bits: Int where self >= 1 && self <= 24) -> ReadResult {
     read_bits_loop(r, n_bits, 0, 0)
 }
 
@@ -128,7 +128,7 @@ fn read_bits_loop(r: BitReader, remaining: Int, acc: Int, shift: Int) -> ReadRes
 // These standalone functions showcase the native bit operators directly.
 
 // Pack a Huffman code (list of 0/1 bits) into a BitWriter.
-pub fn write_code(w: BitWriter, bits: List[Int]) -> BitWriter {
+pub total fn write_code(w: BitWriter, bits: List[Int]) -> BitWriter {
     let writer: ref BitWriter = w;
     for bit in bits {
         writer = write_bits(writer, bit, 1)
@@ -138,7 +138,7 @@ pub fn write_code(w: BitWriter, bits: List[Int]) -> BitWriter {
 
 // Compute a CRC32-style table entry.
 // Demonstrates: val  (mask), ^ (XOR), >> (shift right), ~ (bitwise NOT).
-pub fn crc32_step(crc: Int, byte_in: Int) -> Int {
+pub total fn crc32_step(crc: Int, byte_in: Int) -> Int {
     let combined: Int = crc ^ byte_in;
     let masked: Int = combined & 0xFF;
     crc32_byte(crc >> 8, masked)
@@ -168,7 +168,7 @@ fn crc32_bit_step(st: Crc32ByteState, poly: Int) -> Crc32ByteState {
 
 // Extract a bit field: bits [lo, lo+len) of v.
 // Demonstrates: << (align mask), & (apply mask), >> (shift result down).
-pub fn bit_field(v: Int, lo: Int, len: Int where self >= 1 && self <= 24) -> Int {
+pub total fn bit_field(v: Int, lo: Int, len: Int where self >= 1 && self <= 24) -> Int {
     let mask: Int = (1 << len) - 1;
     (v >> lo) & mask
 }

@@ -10,7 +10,7 @@
 
 // Encode: replace each byte with its current position in the alphabet,
 // then move it to the front. Input borrowed — large BWT output must not clone.
-pub fn mtf_encode(data: val List[Int]) -> List[Int] {
+pub total fn mtf_encode(data: val List[Int]) -> List[Int] {
     // Alphabet: all 256 byte values in initial order [0, 1, 2, ..., 255]
     let alphabet: ref List[Int] = range(0, 256);
     let out: ref List[Int] = [];
@@ -24,7 +24,7 @@ pub fn mtf_encode(data: val List[Int]) -> List[Int] {
 }
 
 // Decode: reconstruct original bytes from MTF-encoded indices.
-pub fn mtf_decode(encoded: val List[Int]) -> List[Int] {
+pub total fn mtf_decode(encoded: val List[Int]) -> List[Int] {
     let alphabet: ref List[Int] = range(0, 256);
     let out: ref List[Int] = [];
     for i in range(0, encoded.len()) {

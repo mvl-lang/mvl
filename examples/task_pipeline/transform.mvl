@@ -19,7 +19,7 @@ use model::Summary;
 /// Keep only records whose amount is at or above `min_amount`.
 ///
 /// Pure predicate — no side effects, safe to call on any subset.
-pub fn filter_by_amount(records: List[Record], min_amount: Float) -> List[Record] {
+pub total fn filter_by_amount(records: List[Record], min_amount: Float) -> List[Record] {
     records.filter(|r: Record| r.amount >= min_amount)
 }
 
@@ -27,7 +27,7 @@ pub fn filter_by_amount(records: List[Record], min_amount: Float) -> List[Record
 ///
 /// Records with no category (None) are excluded. Exhaustive match on
 /// Option enforces handling of the missing-field case (Req 3, Req 4).
-pub fn filter_by_category(records: List[Record], cat: String) -> List[Record] {
+pub total fn filter_by_category(records: List[Record], cat: String) -> List[Record] {
     records.filter(|r: Record| {
         match r.category {
             Some(c) => c == cat,
@@ -42,7 +42,7 @@ pub fn filter_by_category(records: List[Record], cat: String) -> List[Record] {
 ///
 /// Uses fold — the canonical pure reduction (Req 7).
 /// An empty list yields count=0, total_amount=0.0.
-pub fn summarize(records: List[Record]) -> Summary {
+pub total fn summarize(records: List[Record]) -> Summary {
     records.fold(
         Summary { count: 0, total_amount: 0.0 },
         |acc: Summary, r: Record| Summary {
@@ -59,7 +59,7 @@ pub fn summarize(records: List[Record]) -> Summary {
 ///
 /// Returns a new list — the original is unchanged (pure function, Req 7).
 /// Demonstrates fold + conditional struct construction.
-pub fn enrich_high_value(records: List[Record], threshold: Float) -> List[Record] {
+pub total fn enrich_high_value(records: List[Record], threshold: Float) -> List[Record] {
     records.fold(
         [],
         |acc: List[Record], r: Record| {
@@ -99,7 +99,7 @@ fn option_str_or(opt: Option[String], default: String) -> String {
 ///
 /// Used by main.mvl to produce output without mixing formatting into
 /// business logic. Demonstrates map over records for display (Req 7).
-pub fn record_line(r: Record) -> String {
+pub total fn record_line(r: Record) -> String {
     let cat_str: String = option_str_or(r.category, "(none)");
     r.name.concat("  age=").concat(r.age.to_string())
            .concat("  amount=").concat(r.amount.to_string())
@@ -224,18 +224,18 @@ test fn record_line_without_category() -> Unit {
 // These thin wrappers don't access fields, so they get value params, allowing
 // main.mvl to call them without borrow-at-call-site issues.
 
-pub fn compute_summary(records: List[Record]) -> Summary {
+pub total fn compute_summary(records: List[Record]) -> Summary {
     summarize(records)
 }
 
-pub fn format_record(r: Record) -> String {
+pub total fn format_record(r: Record) -> String {
     record_line(r)
 }
 
-pub fn apply_filter_by_amount(records: List[Record], min_amount: Float) -> List[Record] {
+pub total fn apply_filter_by_amount(records: List[Record], min_amount: Float) -> List[Record] {
     filter_by_amount(records, min_amount)
 }
 
-pub fn apply_enrich_high_value(records: List[Record], threshold: Float) -> List[Record] {
+pub total fn apply_enrich_high_value(records: List[Record], threshold: Float) -> List[Record] {
     enrich_high_value(records, threshold)
 }
