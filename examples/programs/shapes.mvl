@@ -49,7 +49,7 @@ fn shape_name(s: Shape) -> String {
 }
 
 fn main() -> Unit ! Console {
-    println(format("circle has {} sides and is {}", sides(Shape::Circle), surface_name(surface(Shape::Circle))));
-    println(format("rectangle has {} sides and is {}", sides(Shape::Rectangle), surface_name(surface(Shape::Rectangle))));
-    println(format("triangle has {} sides and is {}", sides(Shape::Triangle), surface_name(surface(Shape::Triangle))));
+    println(format("circle has {} sides and is {}", [sides(Shape::Circle).to_string(), surface_name(surface(Shape::Circle))]));
+    println(format("rectangle has {} sides and is {}", [sides(Shape::Rectangle).to_string(), surface_name(surface(Shape::Rectangle))]));
+    println(format("triangle has {} sides and is {}", [sides(Shape::Triangle).to_string(), surface_name(surface(Shape::Triangle))]));
 }

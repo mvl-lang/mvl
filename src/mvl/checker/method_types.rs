@@ -161,6 +161,14 @@ impl TypeChecker {
         }
     }
 
+    /// Return type for methods on `Bool`.
+    pub(super) fn bool_method_ty(method: &str) -> Ty {
+        match method {
+            "to_string" => Ty::String,
+            _ => Ty::Unknown,
+        }
+    }
+
     /// Return type for methods on `String`.
     pub(super) fn string_method_ty(method: &str, arg_tys: &[Ty]) -> Ty {
         match method {
@@ -176,6 +184,9 @@ impl TypeChecker {
             "find" | "rfind" => Ty::Option(Box::new(Ty::Int)),
             // Predicates
             "contains" | "starts_with" | "ends_with" | "is_empty" => Ty::Bool,
+            // Indexing: char_at(i) -> String, byte_at(i) -> Byte
+            "char_at" => Ty::String,
+            "byte_at" => Ty::Byte,
             // Numeric
             "len" => Ty::Int,
             // Parsing
@@ -241,6 +252,8 @@ impl TypeChecker {
             "get" => Ty::Option(Box::new(elem_ty.clone())),
             // Mutations
             "push" | "extend" | "append" => Ty::Unit,
+            // List → List transformations
+            "concat" | "reverse" => Ty::List(Box::new(elem_ty.clone())),
             // Flat-map
             "flat_map" => {
                 let u_ty = if let Some(Ty::Fn(_, ret, ..)) = arg_tys.first() {

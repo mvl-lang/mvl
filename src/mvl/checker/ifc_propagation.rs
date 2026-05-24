@@ -843,9 +843,9 @@ mod tests {
                 ..Default::default()
             },
         );
-        // Simulate: fn sink(q: Clean[String]) -> Unit
+        // Simulate: fn log_it(q: Clean[String]) -> Unit
         env.fns.insert(
-            "sink".into(),
+            "log_it".into(),
             FnInfo {
                 params: vec![Ty::String],
                 ret: Ty::Unit,
@@ -932,9 +932,9 @@ mod tests {
     #[test]
     fn no_violations_on_clean_flow() {
         // fn wrapper() -> String { source() }
-        // fn caller() -> Unit { sink(wrapper()) }  — Tainted → Clean[String]: violation!
+        // fn caller() -> Unit { log_it(wrapper()) }  — Tainted → Clean[String]: violation!
         // But here we test the CLEAN case: calling with a non-tainted value
-        let prog = parse("fn caller() -> Unit { sink(\"safe\") }");
+        let prog = parse("fn caller() -> Unit { log_it(\"safe\") }");
         let env = env_with_taint_source();
         let inferred = propagate(&[&prog], &env);
         let violations = detect_violations(&prog, &env, &inferred);
@@ -945,11 +945,11 @@ mod tests {
     }
 
     #[test]
-    fn violation_detected_tainted_to_clean_sink() {
+    fn violation_detected_tainted_to_clean_log_it() {
         // fn wrapper() -> String { source() }   ← inferred Tainted
-        // fn caller() -> Unit { sink(wrapper()) }  ← Tainted → Clean param
+        // fn caller() -> Unit { log_it(wrapper()) }  ← Tainted → Clean param
         let prog =
-            parse("fn wrapper() -> String { source() } fn caller() -> Unit { sink(wrapper()) }");
+            parse("fn wrapper() -> String { source() } fn caller() -> Unit { log_it(wrapper()) }");
         let env = env_with_taint_source();
         let inferred = propagate(&[&prog], &env);
         let violations = detect_violations(&prog, &env, &inferred);
@@ -966,7 +966,7 @@ mod tests {
     #[test]
     fn violation_chain_extracted() {
         let prog =
-            parse("fn wrapper() -> String { source() } fn caller() -> Unit { sink(wrapper()) }");
+            parse("fn wrapper() -> String { source() } fn caller() -> Unit { log_it(wrapper()) }");
         let env = env_with_taint_source();
         let inferred = propagate(&[&prog], &env);
         let violations = detect_violations(&prog, &env, &inferred);
@@ -985,11 +985,11 @@ mod tests {
         // Canonical SQL-injection scenario from #831:
         // fn get_input() -> String { read_line() }      ← Tainted via registry
         // fn build_query() -> String { get_input() }    ← inferred Tainted
-        // fn caller() -> Unit { sink(build_query()) }   ← Tainted → Clean: violation
+        // fn caller() -> Unit { log_it(build_query()) }   ← Tainted → Clean: violation
         let prog = parse(
             "fn get_input() -> String { read_line() } \
              fn build_query() -> String { get_input() } \
-             fn caller() -> Unit { sink(build_query()) }",
+             fn caller() -> Unit { log_it(build_query()) }",
         );
         let env = env_with_taint_source();
         let inferred = propagate(&[&prog], &env);
@@ -1001,7 +1001,7 @@ mod tests {
             "three-hop taint chain must produce a violation"
         );
         if let Some(CheckError::InterprocFlowViolation { callee, chain, .. }) = violations.first() {
-            assert_eq!(callee, "sink");
+            assert_eq!(callee, "log_it");
             assert!(
                 chain.contains(&"build_query".to_string()),
                 "chain should trace through build_query, got {chain:?}"
@@ -1043,7 +1043,7 @@ mod tests {
     #[test]
     fn violation_error_fields_are_correct() {
         let prog =
-            parse("fn wrapper() -> String { source() } fn caller() -> Unit { sink(wrapper()) }");
+            parse("fn wrapper() -> String { source() } fn caller() -> Unit { log_it(wrapper()) }");
         let env = env_with_taint_source();
         let inferred = propagate(&[&prog], &env);
         let violations = detect_violations(&prog, &env, &inferred);
@@ -1057,7 +1057,7 @@ mod tests {
                 caller,
                 ..
             } => {
-                assert_eq!(callee, "sink");
+                assert_eq!(callee, "log_it");
                 assert_eq!(*param_idx, 0);
                 assert_eq!(required_label, "bare"); // sink takes bare String (#894: no Clean label)
                 assert_eq!(inferred_label, "Tainted");
@@ -1093,16 +1093,16 @@ mod tests {
 
     #[test]
     fn let_binding_taint_tracked_to_violation() {
-        // let x: String = read_line(); sink(x)  — taint flows through a let-binding
+        // let x: String = read_line(); log_it(x)  — taint flows through a let-binding
         // MVL requires explicit type annotations on let; the inferred table is consulted
         // for read_line's label and the binding is tracked in env for subsequent stmts.
-        let prog = parse("fn caller() -> Unit { let x: String = read_line(); sink(x) }");
+        let prog = parse("fn caller() -> Unit { let x: String = read_line(); log_it(x) }");
         let env = env_with_taint_source();
         let inferred = propagate(&[&prog], &env);
         let violations = detect_violations(&prog, &env, &inferred);
         assert!(
             !violations.is_empty(),
-            "taint through let binding should produce a violation (let x: String = read_line(); sink(x))"
+            "taint through let binding should produce a violation (let x: String = read_line(); log_it(x))"
         );
     }
 
@@ -1111,12 +1111,12 @@ mod tests {
     // #849: label-polymorphic wrapper — relabel trust() strips the Tainted label;
     // the result is bare and satisfies a bare-requiring sink → no violation.
     #[test]
-    fn relabel_trust_strips_label_no_violation_at_bare_sink() {
+    fn relabel_trust_strips_label_no_violation_at_bare_log_it() {
         // GIVEN: caller passes source() through relabel trust() before sink.
         // relabel trust(source(), "VALIDATED-01") → bare String (Expr::Relabel → None).
         // sink requires bare String → arg_label (None) == required (None) → no violation.
         let prog =
-            parse(r#"fn caller() -> Unit { sink(relabel trust(source(), "VALIDATED-01")) }"#);
+            parse(r#"fn caller() -> Unit { log_it(relabel trust(source(), "VALIDATED-01")) }"#);
         let env = env_with_taint_source();
         let inferred = propagate(&[&prog], &env);
         let violations = detect_violations(&prog, &env, &inferred);
@@ -1134,7 +1134,7 @@ mod tests {
         // infer_label_extended must pick up the taint → violation at sink.
         let prog = parse(
             "fn wrapper(x: String) -> String { x } \
-             fn caller() -> Unit { sink(wrapper(source())) }",
+             fn caller() -> Unit { log_it(wrapper(source())) }",
         );
         let env = env_with_taint_source();
         let inferred = propagate(&[&prog], &env);
@@ -1150,13 +1150,13 @@ mod tests {
     fn tuple_destructure_taint_tracked() {
         // let (a, b): (String, String) = pair_source();  — Pattern::Tuple arm
         // pair_source is registered as Tainted; both a and b must get Tainted in
-        // env so that sink(a) produces a violation.
+        // env so that log_it(a) produces a violation.
         use crate::mvl::checker::context::FnInfo;
         use crate::mvl::checker::types::Ty;
         let prog = parse(
             "fn caller() -> Unit { \
                  let (a, b): (String, String) = pair_source(); \
-                 sink(a) \
+                 log_it(a) \
              }",
         );
         let mut env = env_with_taint_source();
@@ -1171,21 +1171,21 @@ mod tests {
         let violations = detect_violations(&prog, &env, &inferred);
         assert!(
             !violations.is_empty(),
-            "taint through Pattern::Tuple let binding (a, b) must propagate to sink(a)"
+            "taint through Pattern::Tuple let binding (a, b) must propagate to log_it(a)"
         );
     }
 
     // #851: lambda parameter label is propagated into the lambda body.
     #[test]
     fn lambda_param_label_visible_in_body() {
-        // let f: String = |x: Tainted[String]| sink(x);
+        // let f: String = |x: Tainted[String]| log_it(x);
         // The lambda param x gets label Tainted in the lambda-local env.
         // collect_violations_in_expr recurses into the lambda body with that env
-        // and detects the Tainted→Clean violation on sink(x).
+        // and detects the Tainted→Clean violation on log_it(x).
         // Without fix #851, x is absent from env inside the lambda body → no violation.
         let prog = parse(
             "fn caller() -> Unit { \
-                 let f: String = |x: Tainted[String]| sink(x); \
+                 let f: String = |x: Tainted[String]| log_it(x); \
              }",
         );
         let env = env_with_taint_source();
@@ -1201,15 +1201,15 @@ mod tests {
     fn lambda_captures_outer_tainted_variable() {
         // fn caller() -> Unit {
         //   let t: String = source();
-        //   let f: String = || sink(t);
+        //   let f: String = || log_it(t);
         //   f()
         // }
         // t is tainted in the outer env; the lambda body is analysed with a clone of
-        // that env (fix #851), so t is visible as Tainted and sink(t) produces a violation.
+        // that env (fix #851), so t is visible as Tainted and log_it(t) produces a violation.
         let prog = parse(
             "fn caller() -> Unit { \
                  let t: String = source(); \
-                 let f: String = || sink(t); \
+                 let f: String = || log_it(t); \
                  f() \
              }",
         );
@@ -1218,20 +1218,20 @@ mod tests {
         let violations = detect_violations(&prog, &env, &inferred);
         assert!(
             !violations.is_empty(),
-            "lambda capturing outer tainted variable t must produce violation on sink(t)"
+            "lambda capturing outer tainted variable t must produce violation on log_it(t)"
         );
     }
 
     // #858 gap 1: for-loop iterator taint propagates to loop variable.
     #[test]
     fn for_loop_tainted_iterator_propagates_to_body() {
-        // for x in source_iter() { sink(x) }
-        // source_iter() is Tainted; x must receive that label so sink(x) is a violation.
+        // for x in source_iter() { log_it(x) }
+        // source_iter() is Tainted; x must receive that label so log_it(x) is a violation.
         use crate::mvl::checker::context::FnInfo;
         use crate::mvl::checker::types::Ty;
         let prog = parse(
             "fn caller() -> Unit { \
-                 for x in source_iter() { sink(x) } \
+                 for x in source_iter() { log_it(x) } \
              }",
         );
         let mut env = env_with_taint_source();
@@ -1246,14 +1246,14 @@ mod tests {
         let violations = detect_violations(&prog, &env, &inferred);
         assert!(
             !violations.is_empty(),
-            "tainted iterator must propagate label to loop variable x → sink(x) is a violation"
+            "tainted iterator must propagate label to loop variable x → log_it(x) is a violation"
         );
     }
 
     // #858 gap 2: nested destructuring `(Some(a), b)` preserves taint.
     #[test]
     fn nested_destructuring_taint_tracked() {
-        // let (Some(a), b) = pair_source(); sink(a) must be a violation.
+        // let (Some(a), b) = pair_source(); log_it(a) must be a violation.
         // The outer Tuple contains a Some pattern; the old code only handled
         // immediate Ident sub-patterns and would silently drop the taint for `a`.
         use crate::mvl::checker::context::FnInfo;
@@ -1261,7 +1261,7 @@ mod tests {
         let prog = parse(
             "fn caller() -> Unit { \
                  let (Some(a), b): (Option[String], String) = pair_source(); \
-                 sink(a) \
+                 log_it(a) \
              }",
         );
         let mut env = env_with_taint_source();
@@ -1276,7 +1276,7 @@ mod tests {
         let violations = detect_violations(&prog, &env, &inferred);
         assert!(
             !violations.is_empty(),
-            "nested Pattern::Some inside Tuple must propagate taint to `a` → sink(a) is a violation"
+            "nested Pattern::Some inside Tuple must propagate taint to `a` → log_it(a) is a violation"
         );
     }
 
@@ -1290,7 +1290,7 @@ mod tests {
         let prog = parse(
             "fn caller() -> Unit { \
                  let f: Tainted[String] = || -> Tainted[String] { \"safe\" }; \
-                 sink(f()) \
+                 log_it(f()) \
              }",
         );
         let env = env_with_taint_source();
@@ -1300,8 +1300,8 @@ mod tests {
             violations
                 .iter()
                 .any(|e| matches!(e, CheckError::InterprocFlowViolation { callee, .. }
-                    if callee == "sink")),
-            "lambda with ret_type Tainted[String] must make f() tainted → sink(f()) is a violation, got: {violations:?}"
+                    if callee == "log_it")),
+            "lambda with ret_type Tainted[String] must make f() tainted → log_it(f()) is a violation, got: {violations:?}"
         );
     }
 }

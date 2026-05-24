@@ -44,3 +44,26 @@ pub use crate::stdlib::primitives::{
 // checker registers these as tier-1 builtins.
 
 pub use crate::stdlib::crypto::{crypto_random_bytes, sha256, sha512};
+
+// ── Core builtins ────────────────────────────────────────────────────────
+
+/// `format(template, values)` — positional `{}` interpolation (#901).
+///
+/// Named `mvl_format` to avoid collision with Rust's `format!` macro.
+/// The MVL transpiler emits calls to this function for `format(...)` in MVL source.
+pub fn mvl_format(template: String, values: Vec<String>) -> String {
+    let mut result = String::new();
+    let mut val_iter = values.iter();
+    let mut chars = template.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '{' && chars.peek() == Some(&'}') {
+            chars.next(); // consume '}'
+            if let Some(v) = val_iter.next() {
+                result.push_str(v);
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    result
+}

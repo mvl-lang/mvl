@@ -6,7 +6,12 @@
 
 type IOError = struct { msg: String }
 type NetError = struct { msg: String }
+type DBError = struct { msg: String }
+type Rows = struct { data: String }
+type Response = struct { body: String }
 type Error = enum { Io(IOError), Net(NetError) }
+
+effect DB
 
 impl From[IOError] for Error {
     fn from(e: IOError) -> Self { Error::Io(e) }
@@ -29,25 +34,25 @@ total fn square(x: Int) -> Int {
     multiply(x, x)
 }
 
-// Effectful leaf functions (abstract bodies using only parameters)
+// Effectful leaf functions
 fn emit_console(msg: String) -> Unit ! Console {
-    msg.print()
+    println(msg)
 }
 
 fn read_path(path: Path) -> Result[String, IOError] ! FileRead {
-    path.read()
+    Ok("data")
 }
 
 fn write_path(path: Path, content: String) -> Result[Unit, IOError] ! FileWrite {
-    path.write(content)
+    Ok(())
 }
 
 fn query(sql: String) -> Result[Rows, DBError] ! DB {
-    sql.execute()
+    Ok(Rows { data: sql })
 }
 
 fn fetch(url: String) -> Result[Response, NetError] ! Net {
-    url.get()
+    Ok(Response { body: url })
 }
 
 // Effectful callers that correctly declare their effects

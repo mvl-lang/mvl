@@ -10,5 +10,5 @@ extern "rust" {
 
 fn main() -> Unit ! Random + Console {
     let n: Int = roll_dice();
-    println(format("rolled: {}", n));
+    println(format("rolled: {}", [n.to_string()]));
 }

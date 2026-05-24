@@ -15,7 +15,7 @@
 
 fn demo_option(x: Option[Int]) -> String {
     match x {
-        Some(v) => format("got {}", v),
+        Some(v) => format("got {}", [v.to_string()]),
         None    => "nothing",
     }
 }
@@ -34,7 +34,7 @@ fn demo_primitives() -> Unit ! Console {
     let b: Int = 7;
     let nm: Int = a.min(b);
     let mx: Int = a.max(b);
-    println(format("Int: abs={} min={} max={}", na, nm, mx));
+    println(format("Int: abs={} min={} max={}", [na.to_string(), nm.to_string(), mx.to_string()]));
 
     // ── Float ────────────────────────────────────────────────────────────────
     let f: Float = 3.7;
@@ -42,16 +42,16 @@ fn demo_primitives() -> Unit ! Console {
     let ff: Float = f.floor();
     let g: Float = 4.0;
     let fs: Float = g.sqrt();
-    println(format("Float: ceil={} floor={} sqrt={}", fc, ff, fs));
+    println(format("Float: ceil={} floor={} sqrt={}", [fc.to_string(), ff.to_string(), fs.to_string()]));
 
     // ── Bool ─────────────────────────────────────────────────────────────────
     let b1: Bool = true;
     let b2: Bool = false;
-    println(format("Bool: and={} or={} not={}", b1 && b2, b1 || b2, !b1));
+    println(format("Bool: and={} or={} not={}", [(b1 && b2).to_string(), (b1 || b2).to_string(), (!b1).to_string()]));
 
     // ── String ───────────────────────────────────────────────────────────────
     let s: String = "hello";
-    println(format("String: len={}", s.len()));
+    println(format("String: len={}", [s.len().to_string()]));
 }
 
 fn main() -> Unit ! Console {
@@ -60,24 +60,24 @@ fn main() -> Unit ! Console {
     // ── List[T] ──────────────────────────────────────────────────────────────
     let xs: List[Int] = [1, 2, 3, 4, 5];
     let xfirst: Int = match xs.first() { Some(v) => v, None => 0 };
-    println(format("List: len={} first={}", xs.len(), xfirst));
+    println(format("List: len={} first={}", [xs.len().to_string(), xfirst.to_string()]));
 
     // ── Map[K,V] ─────────────────────────────────────────────────────────────
     let m: Map[String, Int] = {"alice": 95, "bob": 87};
-    println(format("Map: len={}", m.len()));
+    println(format("Map: len={}", [m.len().to_string()]));
 
     // ── Set[T] ───────────────────────────────────────────────────────────────
     let ss: Set[Int] = {1, 2, 3};
     let has_two: Bool = ss.contains(2);
-    println(format("Set: has_two={} len={}", has_two, ss.len()));
+    println(format("Set: has_two={} len={}", [has_two.to_string(), ss.len().to_string()]));
 
     // ── Option[T] ────────────────────────────────────────────────────────────
     let opt: Option[Int] = Some(42);
-    println(format("Option: {}", demo_option(opt)));
+    println(format("Option: {}", [demo_option(opt)]));
 
     // ── Result[T,E] ──────────────────────────────────────────────────────────
     match safe_value(42) {
-        Ok(v)  => println(format("Result: value={}", v)),
+        Ok(v)  => println(format("Result: value={}", [v.to_string()])),
         Err(_) => println("Result: error"),
     }
 }

@@ -18,17 +18,17 @@ impl From[NetError] for Error {
 
 // Leaf: reads from FileRead
 fn read_config(path: Path) -> Result[String, IOError] ! FileRead {
-    path.read()
+    Ok("config")
 }
 
 // Leaf: writes
 fn write_output(path: Path, data: String) -> Result[Unit, IOError] ! FileWrite {
-    path.write(data)
+    Ok(())
 }
 
 // Leaf: net
 fn fetch_data(url: String) -> Result[String, NetError] ! Net {
-    url.get()
+    Ok(url)
 }
 
 // Caller declares FileRead (correct propagation)
@@ -40,7 +40,7 @@ fn load_app_config(path: Path) -> Result[String, Error] ! FileRead {
 // Transitive caller also declares FileRead + Console
 fn bootstrap(path: Path) -> Result[Unit, Error] ! FileRead + Console {
     let cfg: String = load_app_config(path)?;
-    cfg.print();
+    println(cfg);
     Ok(())
 }
 

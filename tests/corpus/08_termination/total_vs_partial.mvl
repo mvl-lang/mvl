@@ -40,16 +40,15 @@ total fn sum_and_product(items: List[Int]) -> Int {
 // Total with effects but still bounded
 total fn count_with_effect(items: List[String]) -> Unit ! Console {
     for msg in items {
-        msg.print()
+        println(msg)
     }
 }
 
 // Partial: allowed to use while loop
 partial fn drain_until_empty(queue: List[Int], limit: Int) -> Int {
     let acc: ref Int = 0;
-    while queue.not_empty(limit) {
-        let task: Int = queue.pop();
-        acc = add(acc, task)
+    while limit > 0 {
+        acc = add(acc, limit)
     }
     acc
 }
@@ -57,7 +56,7 @@ partial fn drain_until_empty(queue: List[Int], limit: Int) -> Int {
 // Partial with multiple effects
 partial fn run_forever(flag: Bool) -> Never ! Console {
     while flag {
-        flag.print()
+        println("running")
     }
 }
 

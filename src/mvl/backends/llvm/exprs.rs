@@ -3821,7 +3821,14 @@ impl<'ctx> LlvmBackend<'ctx> {
 
             // ── to_string ────────────────────────────────────────────────────
             "to_string" => match recv_val {
-                BasicValueEnum::IntValue(v) => Some(self.emit_int_to_string(v)),
+                BasicValueEnum::IntValue(v) => {
+                    // Bool is i1; Int/Byte/UByte/UInt are wider — dispatch accordingly.
+                    if v.get_type().get_bit_width() == 1 {
+                        Some(self.emit_bool_to_string(v))
+                    } else {
+                        Some(self.emit_int_to_string(v))
+                    }
+                }
                 BasicValueEnum::FloatValue(v) => Some(self.emit_float_to_string(v)),
                 BasicValueEnum::PointerValue(p) => Some(p.into()),
                 _ => None,

@@ -15,5 +15,5 @@ type Wrapper = struct {
 fn main() -> Unit ! Console {
     let w: Wrapper = Wrapper { inner: Box::new(42) };
     let v: Int = *w.inner;
-    println(format("value: {}", v));
+    println(format("value: {}", [v.to_string()]));
 }
