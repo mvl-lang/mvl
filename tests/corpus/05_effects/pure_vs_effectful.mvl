@@ -11,6 +11,10 @@ type Rows = struct { data: String }
 type Response = struct { body: String }
 type Error = enum { Io(IOError), Net(NetError) }
 
+effect Console
+effect FileRead
+effect FileWrite
+effect Net
 effect DB
 
 impl From[IOError] for Error {

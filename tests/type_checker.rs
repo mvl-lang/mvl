@@ -18,10 +18,24 @@ use mvl::mvl::checker::errors::CheckError;
 use mvl::mvl::checker::{check, check_with_prelude, check_with_two_preludes, CheckResult};
 use mvl::mvl::parser::Parser;
 
+/// Sink stubs so IFC tests work without the full stdlib prelude.
+/// After PR #993 moved sinks from hardcoded lists to declarative `pub sink fn`,
+/// standalone tests must declare their own sinks.
+const SINK_PRELUDE: &str = r#"
+pub sink fn println(msg: String) -> Unit ! Console { }
+pub sink fn print(msg: String) -> Unit ! Console { }
+pub sink fn eprintln(msg: String) -> Unit ! Console { }
+pub sink fn eprint(msg: String) -> Unit ! Console { }
+pub sink fn write_file(p: String, content: String) -> Unit ! FileWrite { }
+pub sink fn append(p: String, content: String) -> Unit ! FileWrite { }
+"#;
+
 fn check_src(src: &str) -> CheckResult {
+    let (mut sp, _) = Parser::new(SINK_PRELUDE);
+    let sink_prog = sp.parse_program();
     let (mut p, _) = Parser::new(src);
     let prog = p.parse_program();
-    check(&prog)
+    check_with_prelude(&[sink_prog], &prog)
 }
 
 fn errors_for(src: &str) -> Vec<CheckError> {
@@ -2152,8 +2166,8 @@ fn secret_to_unlabeled_param_rejected() {
     // THEN: TypeMismatch — unlabeled context is treated as Public, downward flow rejected
     let errors = errors_for(
         r#"
-        fn sink(s: String) -> String { s }
-        fn caller(k: Secret[String]) -> String { sink(k) }
+        fn accept(s: String) -> String { s }
+        fn caller(k: Secret[String]) -> String { accept(k) }
     "#,
     );
     assert!(
@@ -2172,8 +2186,8 @@ fn secret_option_to_unlabeled_option_rejected() {
     // suppresses .into() for Option/Result to avoid E0283 ambiguity.
     let errors = errors_for(
         r#"
-        fn sink(opt: Option[Int]) -> Int { opt.unwrap_or(0) }
-        fn caller(k: Secret[Option[Int]]) -> Int { sink(k) }
+        fn accept(opt: Option[Int]) -> Int { opt.unwrap_or(0) }
+        fn caller(k: Secret[Option[Int]]) -> Int { accept(k) }
     "#,
     );
     assert!(
@@ -2190,8 +2204,8 @@ fn secret_result_to_unlabeled_result_rejected() {
     // THEN: TypeMismatch — same label enforcement as Secret[Option[T]] (regression for #714)
     let errors = errors_for(
         r#"
-        fn sink(r: Result[Int, String]) -> Int { r.unwrap_or(0) }
-        fn caller(k: Secret[Result[Int, String]]) -> Int { sink(k) }
+        fn accept(r: Result[Int, String]) -> Int { r.unwrap_or(0) }
+        fn caller(k: Secret[Result[Int, String]]) -> Int { accept(k) }
     "#,
     );
     assert!(
@@ -3841,10 +3855,10 @@ fn sha512_accepts_plain_string() {
 /// by type name + method name, not by struct fields.
 const LOGGER_STUB: &str = r#"
 type Logger = struct { dummy: Int }
-fn Logger::debug(self, msg: String, fields: Map[String, String]) -> Unit ! Log { }
-fn Logger::info(self, msg: String, fields: Map[String, String]) -> Unit ! Log { }
-fn Logger::warn(self, msg: String, fields: Map[String, String]) -> Unit ! Log { }
-fn Logger::error(self, msg: String, fields: Map[String, String]) -> Unit ! Log { }
+sink fn Logger::debug(self, msg: String, fields: Map[String, String]) -> Unit ! Log { }
+sink fn Logger::info(self, msg: String, fields: Map[String, String]) -> Unit ! Log { }
+sink fn Logger::warn(self, msg: String, fields: Map[String, String]) -> Unit ! Log { }
+sink fn Logger::error(self, msg: String, fields: Map[String, String]) -> Unit ! Log { }
 "#;
 
 #[test]
@@ -4163,18 +4177,18 @@ fn logger_method_implicit_flow_secret_branch_rejected() {
 
 // ── ADR-0024: label-transparent functions (003-information-flow) ──────────────
 
-/// `format()` with a Secret argument returns Secret[String] (label-transparent).
+/// After 2-arg format migration (#901), `format("...", [s])` where `s: Secret[String]`
+/// creates `List[Secret[String]]` which doesn't match `List[String]`. The caller must
+/// declassify before formatting — this is now a type error, not transparent propagation.
 #[test]
 fn format_propagates_secret_label() {
-    // GIVEN: format called with a Secret[String] argument
-    // THEN: return type is Secret[String] — no TypeMismatch when stored as Secret[String]
     let errors =
-        errors_for(r#"fn f(s: Secret[String]) -> Secret[String] { format("value={}", s) }"#);
+        errors_for(r#"fn f(s: Secret[String]) -> Secret[String] { format("value={}", [s]) }"#);
     assert!(
-        !errors
+        errors
             .iter()
             .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
-        "format with Secret arg should yield Secret[String], got: {errors:?}"
+        "format with Secret[String] in list should produce TypeMismatch, got: {errors:?}"
     );
 }
 
@@ -4183,7 +4197,8 @@ fn format_propagates_secret_label() {
 fn format_propagates_tainted_label_rejected_as_public() {
     // GIVEN: format called with a Tainted[String] — result is Tainted[String]
     // THEN: TypeMismatch when trying to assign to Public[String]
-    let errors = errors_for(r#"fn f(s: Tainted[String]) -> Public[String] { format("v={}", s) }"#);
+    let errors =
+        errors_for(r#"fn f(s: Tainted[String]) -> Public[String] { format("v={}", [s]) }"#);
     assert!(
         errors.iter().any(|e| matches!(e, CheckError::TypeMismatch { .. })),
         "format with Tainted arg should be Tainted[String], cannot flow to Public[String], got: {errors:?}"
