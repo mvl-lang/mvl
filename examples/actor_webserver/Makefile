@@ -6,7 +6,7 @@
 #
 # Package resolution: .mvl/pkg/http symlinks to ../../pkg/http so that
 # mvl commands run from this directory can find the package.
-.PHONY: help guard-mvl lint check test-solver test test-llvm assurance run clean
+.PHONY: help guard-mvl lint check test-solver test test-llvm assurance smoke run clean
 
 .DEFAULT_GOAL := help
 
@@ -64,6 +64,9 @@ test-llvm: guard-mvl .mvl/pkg/http ## Run smoke tests via LLVM backend
 
 assurance: guard-mvl .mvl/pkg/http ## Assurance report for main.mvl
 	$(MVL) assurance $(DIR)main.mvl
+
+smoke: guard-mvl ## Smoke-test: build binary (proves compilation without a terminal)
+	$(MVL) build $(DIR)main.mvl
 
 run: guard-mvl .mvl/pkg/http ## Start the HTTP server (Ctrl-C to stop)
 	$(MVL) run $(DIR)main.mvl

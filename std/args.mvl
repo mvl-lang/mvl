@@ -11,8 +11,8 @@
 //!
 //! Import:
 //!   use std.args.{parse_args, required, optional, flag, positional, opt_positional,
-//!                 get_str, get_str_opt, get_int, get_float, get_float_opt, get_flag,
-//!                 ArgType, FieldSpec, ArgValue}
+//!                 version, get_str, get_str_opt, get_int, get_float, get_float_opt,
+//!                 get_flag, ArgType, FieldSpec, ArgValue}
 //!
 //! Effects: Console + Env (all parse_args callers).
 
@@ -33,6 +33,7 @@ pub type FieldSpec = enum {
     Flag          { name: String },
     Positional    { name: String, ty: ArgType },
     OptPositional { name: String, ty: ArgType },
+    Version       { version: String },
 }
 
 /// A parsed argument value.  Callers pattern-match on the variant.
@@ -73,6 +74,12 @@ pub fn positional(name: String, ty: ArgType) -> FieldSpec {
 /// Optional positional (leading bare token).  Absent → key missing from map.
 pub fn opt_positional(name: String, ty: ArgType) -> FieldSpec {
     FieldSpec::OptPositional { name: name, ty: ty }
+}
+
+/// Prime the parser with a version string for `-v` / `--version`.
+/// Default when omitted: `"0.0.0"`.
+pub fn version(v: String) -> FieldSpec {
+    FieldSpec::Version { version: v }
 }
 
 // ── Result accessors ─────────────────────────────────────────────────────────
@@ -135,24 +142,59 @@ fn type_label(ty: ArgType) -> String {
     }
 }
 
+/// Strip the directory prefix from a path, returning just the file name.
+fn extract_basename(path: String) -> String {
+    let len: Int = path.len();
+    let last_slash: ref Int = -1;
+    for i in range(0, len) {
+        if path.substring(i, i + 1) == "/" {
+            last_slash = i
+        }
+    }
+    if last_slash == -1 {
+        path
+    } else {
+        path.substring(last_slash + 1, len)
+    }
+}
+
+/// Extract the version string from a schema (first `Version` entry wins).
+/// Returns `"0.0.0"` when no `Version` entry is present.
+fn schema_extract_version(schema: List[FieldSpec]) -> String {
+    let ver: ref String = "0.0.0";
+    for f in schema {
+        match f {
+            FieldSpec::Version { version: v } => { ver = v },
+            _ => {},
+        }
+    }
+    ver
+}
+
+/// Return true if any non-`Version` field in the schema has the given name.
+fn schema_has_name(schema: List[FieldSpec], name: String) -> Bool {
+    let found: ref Bool = false;
+    for f in schema {
+        match f {
+            FieldSpec::Required      { name: n, ty: t } => { if n == name { found = true } },
+            FieldSpec::Optional      { name: n, ty: t } => { if n == name { found = true } },
+            FieldSpec::Flag          { name: n }        => { if n == name { found = true } },
+            FieldSpec::Positional    { name: n, ty: t } => { if n == name { found = true } },
+            FieldSpec::OptPositional { name: n, ty: t } => { if n == name { found = true } },
+            _ => {},
+        }
+    }
+    found
+}
+
 /// Build a set of declared flag names for schema-aware tokenization.
 fn build_flag_set(schema: List[FieldSpec]) -> Map[String, Bool] {
     let flags: ref Map[String, Bool] = Map::new();
-    let len: Int = schema.len();
-    let i: ref Int = 0;
-    while i < len {
-        match schema.get(i) {
-            Some(f) => {
-                match f {
-                    FieldSpec::Flag { name: n } => {
-                        flags.insert(n, true)
-                    },
-                    _ => {},
-                }
-            },
-            None => {},
+    for f in schema {
+        match f {
+            FieldSpec::Flag { name: n } => { flags.insert(n, true) },
+            _ => {},
         }
-        i = i + 1
     }
     flags
 }
@@ -161,39 +203,34 @@ fn build_flag_set(schema: List[FieldSpec]) -> Map[String, Bool] {
 fn build_usage(schema: List[FieldSpec]) -> String {
     let synopsis: ref String = "Usage: <program>";
     let details: ref String = "\nArguments:\n";
-    let len: Int = schema.len();
-    let i: ref Int = 0;
-    while i < len {
-        match schema.get(i) {
-            Some(f) => {
-                match f {
-                    FieldSpec::Required { name: n, ty: t } => {
-                        synopsis = synopsis.concat(" --").concat(n).concat(" <").concat(type_label(t)).concat(">");
-                        details  = details.concat("  --").concat(n).concat(" <").concat(type_label(t)).concat(">  required\n");
-                    },
-                    FieldSpec::Optional { name: n, ty: t } => {
-                        synopsis = synopsis.concat(" [--").concat(n).concat(" <").concat(type_label(t)).concat(">]");
-                        details  = details.concat("  [--").concat(n).concat(" <").concat(type_label(t)).concat(">]  optional\n");
-                    },
-                    FieldSpec::Flag { name: n } => {
-                        synopsis = synopsis.concat(" [--").concat(n).concat("]");
-                        details  = details.concat("  [--").concat(n).concat("]  flag\n");
-                    },
-                    FieldSpec::Positional { name: n, ty: t } => {
-                        synopsis = synopsis.concat(" <").concat(n).concat(">");
-                        details  = details.concat("  <").concat(n).concat(">  ").concat(type_label(t)).concat(" (required)\n");
-                    },
-                    FieldSpec::OptPositional { name: n, ty: t } => {
-                        synopsis = synopsis.concat(" [<").concat(n).concat(">]");
-                        details  = details.concat("  [<").concat(n).concat(">]  ").concat(type_label(t)).concat(" (optional)\n");
-                    },
-                }
+    for f in schema {
+        match f {
+            FieldSpec::Required { name: n, ty: t } => {
+                synopsis = synopsis.concat(" --").concat(n).concat(" <").concat(type_label(t)).concat(">");
+                details  = details.concat("  --").concat(n).concat(" <").concat(type_label(t)).concat(">  required\n");
             },
-            None => {},
+            FieldSpec::Optional { name: n, ty: t } => {
+                synopsis = synopsis.concat(" [--").concat(n).concat(" <").concat(type_label(t)).concat(">]");
+                details  = details.concat("  [--").concat(n).concat(" <").concat(type_label(t)).concat(">]  optional\n");
+            },
+            FieldSpec::Flag { name: n } => {
+                synopsis = synopsis.concat(" [--").concat(n).concat("]");
+                details  = details.concat("  [--").concat(n).concat("]  flag\n");
+            },
+            FieldSpec::Positional { name: n, ty: t } => {
+                synopsis = synopsis.concat(" <").concat(n).concat(">");
+                details  = details.concat("  <").concat(n).concat(">  ").concat(type_label(t)).concat(" (required)\n");
+            },
+            FieldSpec::OptPositional { name: n, ty: t } => {
+                synopsis = synopsis.concat(" [<").concat(n).concat(">]");
+                details  = details.concat("  [<").concat(n).concat(">]  ").concat(type_label(t)).concat(" (optional)\n");
+            },
+            _ => {},
         }
-        i = i + 1
     }
-    synopsis.concat("\n").concat(details).concat("  -h, --help  Show this message and exit\n")
+    synopsis.concat("\n").concat(details)
+           .concat("  -h, --help     Show this message and exit\n")
+           .concat("  -v, --version  Show version and exit\n")
 }
 
 /// Coerce a raw string token to the declared `ArgType`.
@@ -233,16 +270,44 @@ fn coerce_arg(name: String, raw: String, ty: ArgType) -> ArgValue ! Console + En
 ///
 /// `-h` / `--help` prints the usage string to stdout and exits with code 0.
 ///
+/// `-v` / `--version` prints `<program> <version>` to stdout and exits with
+/// code 0.  Prime the version via `version("x.y.z")` in the schema; default
+/// is `"0.0.0"`.  User-defined fields named `"v"` or `"version"` take
+/// precedence over the built-in flags.
+///
 /// Positional fields are consumed left-to-right in schema-declaration order
 /// from the leading non-flag argv tokens.
 pub fn parse_args(schema: List[FieldSpec]) -> Map[String, ArgValue] ! Console + Env {
     let argv: List[Tainted[String]] = args();
     let argc: Int = argv.len();
 
+    // ── Resolve program name from argv[0] ─────────────────────────────────────
+    let prog: ref String = "program";
+    match argv.get(0) {
+        Some(t) => { prog = extract_basename(relabel trust(t, "ARGS-INPUT")) },
+        None => {},
+    }
+
+    // ── Pre-scan for -v / --version ───────────────────────────────────────────
+    let ver: String = schema_extract_version(schema);
+    let has_v_field: Bool = schema_has_name(schema, "v");
+    let has_version_field: Bool = schema_has_name(schema, "version");
+    for vi in range(1, argc) {
+        match argv.get(vi) {
+            Some(t) => {
+                let s: String = relabel trust(t, "ARGS-INPUT");
+                if (s == "-v" && !has_v_field) || (s == "--version" && !has_version_field) {
+                    println(prog.concat(" ").concat(ver));
+                    exit(0)
+                }
+            },
+            None => {},
+        }
+    }
+
     // ── Pre-scan for -h / --help ──────────────────────────────────────────────
-    let h: ref Int = 1;
-    while h < argc {
-        match argv.get(h) {
+    for hi in range(1, argc) {
+        match argv.get(hi) {
             Some(t) => {
                 let s: String = relabel trust(t, "ARGS-INPUT");
                 if s == "-h" || s == "--help" {
@@ -252,7 +317,6 @@ pub fn parse_args(schema: List[FieldSpec]) -> Map[String, ArgValue] ! Console + 
             },
             None => {},
         }
-        h = h + 1
     }
 
     let usage: String = build_usage(schema);
@@ -372,6 +436,7 @@ pub fn parse_args(schema: List[FieldSpec]) -> Map[String, ArgValue] ! Console + 
                             None => {},
                         }
                     },
+                    _ => {},
                 }
             },
             None => {},

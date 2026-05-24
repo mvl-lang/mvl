@@ -167,6 +167,22 @@ assert_stderr_contains \
     "$MVL" run "$TASK_MAIN" -- --input "$SAMPLE_CSV" --threshold abc
 
 echo ""
+echo "parse_args e2e — --version / -v (default 0.0.0)"
+echo "─────────────────────────────────────────────────────────────"
+
+assert_stdout_contains \
+    "--version  exits 0 with version string" "0.0.0" \
+    "$LOG_BIN" --version
+
+assert_stdout_contains \
+    "-v  exits 0 with version string" "0.0.0" \
+    "$LOG_BIN" -v
+
+assert_stdout_contains \
+    "--help output includes -v, --version line" "-v, --version" \
+    "$LOG_BIN" --help
+
+echo ""
 if [ $fail -eq 0 ]; then
     printf "  \033[32m✓  %d passed, 0 failed\033[0m\n\n" "$pass"
 else

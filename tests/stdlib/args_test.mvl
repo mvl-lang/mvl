@@ -7,8 +7,8 @@
 // the actual process argv.  End-to-end tests verify the full parse path.
 
 use std.args.{parse_args, required, optional, flag, positional, opt_positional,
-               get_str, get_str_opt, get_int, get_float, get_float_opt, get_flag,
-               ArgType, ArgValue, FieldSpec}
+               version, get_str, get_str_opt, get_int, get_float, get_float_opt,
+               get_flag, ArgType, ArgValue, FieldSpec}
 
 // ── ArgType constructors ──────────────────────────────────────────────────
 
@@ -164,4 +164,24 @@ test fn args_get_flag_returns_true_when_set() -> Unit {
 test fn args_get_flag_returns_false_when_absent() -> Unit {
     let m: Map[String, ArgValue] = {"v": ArgValue::Bool(true)};
     assert_eq(get_flag(m, "missing"), false)
+}
+
+// ── version() constructor ─────────────────────────────────────────────────
+
+test fn args_version_builds_correct_variant() -> Unit {
+    let f: FieldSpec = version("1.2.3");
+    let ok: Bool = match f {
+        FieldSpec::Version { version: v } => v == "1.2.3",
+        _ => false,
+    };
+    assert_eq(ok, true)
+}
+
+test fn args_version_is_distinct_from_other_variants() -> Unit {
+    let fv: FieldSpec = version("1.0.0");
+    let ff: FieldSpec = flag("version");
+    let is_version: Bool = match fv { FieldSpec::Version { version: v } => true, _ => false };
+    let is_flag: Bool    = match ff { FieldSpec::Flag    { name: n }    => true, _ => false };
+    assert_eq(is_version, true);
+    assert_eq(is_flag, true)
 }

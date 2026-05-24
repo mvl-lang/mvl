@@ -48,9 +48,7 @@ partial fn load_toml_layer(path: String, base: ConfigValue) -> ConfigValue ! Fil
         Err(_) => base,
         Ok(raw) => {
             // IFC: config files are operator-controlled — untaint explicitly.
-            // After PR #882 removed From<Tainted<T>> for T, we must call .into_inner()
-            // to extract the underlying String for passing to .concat().
-            let s: String = raw.into_inner().concat("");
+            let s: String = relabel trust(raw, "CONFIG-FILE");
             match toml_decode(s) {
                 Err(_)   => base,
                 Ok(toml) => merge(base, from_toml(toml)),

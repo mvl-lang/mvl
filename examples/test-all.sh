@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Run `make test` (or `make test-llvm` with --llvm) for every example subdirectory.
-# With --full: also runs `make check` and `make run` for each example.
+# With --full: also runs `make check`, `make test-solver`, and `make smoke` for each example.
 # The MVL compiler is NOT recompiled here — it must be pre-built by the caller
 # (root `make test-examples` depends on `build build-llvm-runtime`).
 set -uo pipefail
@@ -23,7 +23,7 @@ for arg in "$@"; do
             echo ""
             echo "Options:"
             echo "  --llvm    Use LLVM backend (runs \`make test-llvm\` instead of \`make test\`)"
-            echo "  --full    Also run \`make check\`, \`make test-solver\`, and \`make run\` per example"
+            echo "  --full    Also run \`make check\`, \`make test-solver\`, and \`make smoke\` per example"
             echo "  -h, --help  Show this help and exit"
             echo ""
             echo "The MVL compiler must be pre-built (\`make build\` from repo root)."
@@ -67,7 +67,7 @@ for dir in "$SCRIPT_DIR"/*/; do
         printf "  %-20s" "$name"
         example_ok=1
         failed_targets=""
-        for target in check test-solver "$TEST_TARGET" run; do
+        for target in check test-solver "$TEST_TARGET" smoke; do
             if out=$(run_target "$dir" "$target" 2>&1); then
                 printf "  \033[32m%-10s✓\033[0m" "$target"
             else

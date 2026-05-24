@@ -4,6 +4,22 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.149.0] - 2026-05-24
+
+### Added
+
+- **stdlib: args::parse_args() --version/-v flag support** (#996): Extended `FieldSpec` enum with `Version(String)` variant to enable schema-driven version priming. `parse_args()` pre-scans arguments for `--version` or `-v` flags before processing other options, and exits with version string if found. Defaults to "0.0.0" if not specified. Includes unit tests in `tests/stdlib/args_test.mvl` and integration tests in `tests/integration/compile_and_run/args.sh`.
+- **testing: example smoke tests + CI integration** (#997): Added `smoke` target to all 14 example Makefiles (build binary without terminal/network/specific arguments). Created `examples/test-all.sh --full` infrastructure to validate all examples compile successfully. Integrated into CI with new `examples` job that runs on stdlib/examples changes, proving compilation integrity without full runtime execution. All 14 examples now pass smoke tests: access_control, actor_pingpong, actor_trading, actor_webserver, bzip, config_server, csv_transactions, flight_clearance, log_analyzer, medical_triage, programs, snake_game, sqlite_basic, task_pipeline.
+
+### Fixed
+
+- **examples/bzip: eliminated all .unwrap() calls** — Migrated from non-existent `.unwrap()` method to `.unwrap_or(default)` across all modules: rle.mvl (8 calls), bwt.mvl (9 calls), mtf.mvl (8 calls), huffman.mvl (15+ calls mixed types), bitstream.mvl (1 call), main.mvl (2 calls). Defaults selected per type: `0` for Option[Int], `[]` for Option[List[Int]], `HuffmanTree::Leaf(0, 0)` for HuffmanTree variants.
+- **examples/bzip/main.mvl: fixed totality violations** — Marked `huffman_encode_stream`, `huffman_decode_stream`, `compress_bytes`, `decompress_bytes`, and `main()` as `partial fn` due to recursive call chains. Added `main.mvl` to bzip Makefile `check` and `test-solver` targets. Effect annotations: `compress_bytes` and `decompress_bytes` marked `pub partial fn`; `main()` retains `partial fn main() -> Unit ! Console`.
+- **examples/sqlite_basic: fixed smoke target path resolution** — Changed smoke target to run from REPO_ROOT to ensure SQLite context is available: `cd $(REPO_ROOT) && $(abspath $(MVL)) build $(DIR)main.mvl`.
+- **examples/actor_webserver: config.mvl relabel migration** (#882) — Replaced `.into_inner().concat("")` with `relabel trust(raw, "CONFIG-FILE")` for PR #882 compatibility (IFC label normalization).
+- **examples/task_pipeline: added Env effect** — Added `+ Env` effect to `run()` and `main()` signatures since `parse_args()` requires `! Env` effect.
+- **examples/actor_trading: added test-solver target** — Added `test-solver: check ## Show per-file solver statistics (alias for check)` for consistency with other examples.
+
 ## [0.148.0] - 2026-05-24
 
 ### Added
