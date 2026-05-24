@@ -26,8 +26,8 @@ pub sink fn println(msg: String) -> Unit ! Console { }
 pub sink fn print(msg: String) -> Unit ! Console { }
 pub sink fn eprintln(msg: String) -> Unit ! Console { }
 pub sink fn eprint(msg: String) -> Unit ! Console { }
-pub sink fn write_file(p: String, content: String) -> Unit ! FileWrite { }
-pub sink fn append(p: String, content: String) -> Unit ! FileWrite { }
+pub sink fn write_file(p: Path, content: String) -> Result[Unit, IoError] ! FileWrite { Ok(()) }
+pub sink fn append(p: Path, content: String) -> Result[Unit, IoError] ! FileWrite { Ok(()) }
 "#;
 
 fn check_src(src: &str) -> CheckResult {
@@ -4158,6 +4158,7 @@ fn log_debug_rejects_tainted_value_in_fields_map() {
 /// Even though the argument to `logger.info` is a literal, the presence of the
 /// log record reveals whether `flag` was truthy — an implicit flow via the log sink.
 ///
+/// Regression for #973: `Expr::MethodCall` was not checked against PUBLIC_SINKS.
 /// Regression for #973: `Expr::MethodCall` was not checked against PUBLIC_SINKS.
 #[test]
 fn logger_method_implicit_flow_secret_branch_rejected() {
