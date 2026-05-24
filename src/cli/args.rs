@@ -17,7 +17,8 @@ pub fn print_usage() {
   mvl check <file|dir> --error-limit=N — stop after N errors (default 10; 0 = show all)
   mvl check <file|dir> --format=json  — emit errors as machine-readable JSON
   mvl check <file|dir> --refinement-solver=layered|z3-only|fast-only — solver strategy (default: layered)
-  mvl check <file|dir> --refinement-stats — print per-layer refinement proof counts"
+  mvl check <file|dir> --refinement-stats — print per-layer refinement proof counts
+  mvl check --stdin                   — read MVL source from stdin and type-check it"
     );
     eprintln!("  mvl build <file|dir>               — transpile to Rust and run cargo build");
     eprintln!("  mvl run   [--] <file.mvl>          — transpile, build, and execute");
@@ -61,6 +62,14 @@ pub fn print_usage() {
         "  mvl mcdc   <file|dir> --json        — machine-readable JSON output for CI integration"
     );
     eprintln!("  mvl mcdc   <file|dir> --json -q     — JSON summary only (no per-clause detail)");
+    eprintln!("  mvl fmt   <file|dir>               — format MVL source files in place");
+    eprintln!(
+        "  mvl fmt   <file|dir> --check       — exit 1 if any file is not formatted (CI gate)"
+    );
+    eprintln!("  mvl fmt   <file|dir> --stdout      — write formatted output to stdout, do not modify file");
+    eprintln!(
+        "  mvl fmt   --stdin                  — read from stdin, write formatted output to stdout"
+    );
     eprintln!("  mvl lint  <file|dir>               — check style rules");
     eprintln!("  mvl lint  <file|dir> --show-config — show active linter configuration");
     eprintln!("  mvl assurance <file|dir>           — emit assurance report");

@@ -6,6 +6,7 @@ pub mod assurance;
 pub mod build;
 pub mod check;
 pub mod complexity;
+pub mod fmt;
 pub mod fuzz;
 pub mod lint;
 #[cfg(feature = "llvm")]
@@ -53,24 +54,26 @@ pub(super) fn dispatch(args: &[String]) {
             args::print_usage();
         }
         "check" => {
-            let path = args::require_path_arg(args, "check");
+            let stdin = args.iter().any(|a| a == "--stdin");
             let req_filter = args::parse_req_filter_or_exit(args);
             let error_limit = args::parse_error_limit(args);
             let stdlib_profile = args::parse_stdlib_profile(args);
             let format_json = args.iter().any(|a| a == "--format=json");
             let verbose = args.iter().any(|a| a == "--verbose" || a == "-v");
-            check::run(
-                &path,
-                req_filter,
-                check::CheckOptions {
-                    error_limit,
-                    stdlib_profile,
-                    format_json,
-                    verbose,
-                    solver_mode: args::parse_solver_mode_or_exit(args),
-                    refinement_stats: args.iter().any(|a| a == "--refinement-stats"),
-                },
-            );
+            let check_opts = check::CheckOptions {
+                error_limit,
+                stdlib_profile,
+                format_json,
+                verbose,
+                solver_mode: args::parse_solver_mode_or_exit(args),
+                refinement_stats: args.iter().any(|a| a == "--refinement-stats"),
+            };
+            if stdin {
+                check::run_stdin(req_filter, check_opts);
+            } else {
+                let path = args::require_path_arg(args, "check");
+                check::run(&path, req_filter, check_opts);
+            }
         }
         "build" => {
             let path = args::require_path_arg(args, "build");
@@ -183,6 +186,31 @@ pub(super) fn dispatch(args: &[String]) {
             let path = args::require_path_arg(args, "complexity");
             let format_json = args.iter().any(|a| a == "--format=json");
             complexity::run(&path, format_json);
+        }
+        "fmt" => {
+            let stdin = args.iter().any(|a| a == "--stdin");
+            let check = args.iter().any(|a| a == "--check");
+            let stdout = args.iter().any(|a| a == "--stdout");
+            if stdin {
+                fmt::run(
+                    "",
+                    fmt::FmtOptions {
+                        check,
+                        stdin: true,
+                        stdout: false,
+                    },
+                );
+            } else {
+                let path = args::require_path_arg(args, "fmt");
+                fmt::run(
+                    &path,
+                    fmt::FmtOptions {
+                        check,
+                        stdin: false,
+                        stdout,
+                    },
+                );
+            }
         }
         "lint" => {
             let path = args::require_path_arg(args, "lint");

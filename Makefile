@@ -2,7 +2,7 @@
 .ONESHELL:
 SHELL := /bin/bash
 
-.PHONY: help version build build-memory build-llvm-runtime build-release test test-unit test-integration test-requirements test-error-messages test-corpus test-solver test-stdlib check-compiler assure-compiler test-mvl test-bdd test-backend-rust test-backend-llvm test-cross-backend test-tree-sitter test-grammar-coverage test-examples coverage validate-keywords lint mvl-lint format format-check assurance assurance-gate check-adr docs docs-serve tree-sitter-build install install-nvim setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
+.PHONY: help version build build-memory build-llvm-runtime build-release test test-unit test-integration test-requirements test-error-messages test-corpus test-solver test-stdlib check-compiler assure-compiler test-mvl test-bdd test-backend-rust test-backend-llvm test-cross-backend test-tree-sitter test-grammar-coverage test-examples coverage validate-keywords lint mvl-lint format format-check format-mvl format-mvl-check assurance assurance-gate check-adr docs docs-serve tree-sitter-build install install-nvim setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
 
 .DEFAULT_GOAL := help
 
@@ -262,6 +262,14 @@ format: ## Format code
 
 format-check: ## Check formatting without changing files
 	cargo fmt -- --check
+
+format-mvl: build ## Format all .mvl files in tests/ and std/ in place
+	cargo run --quiet -- fmt tests/
+	cargo run --quiet -- fmt std/
+
+format-mvl-check: build ## Check that all .mvl files are formatted (CI gate)
+	cargo run --quiet -- fmt tests/ --check
+	cargo run --quiet -- fmt std/ --check
 
 # === Assurance ===
 

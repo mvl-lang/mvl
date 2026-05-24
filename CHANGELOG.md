@@ -4,6 +4,17 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.150.0] - 2026-05-24
+
+### Added
+
+- **cli: mvl fmt — source code formatter** (#1008): New `mvl fmt <file|dir>` command with full comment preservation via two-pass printing (extract comments from source, re-inject during AST emission). Supports `--check` (exit 1 if any file needs formatting), `--stdout` (print to stdout instead of modifying files), and `--stdin` (read from stdin, write to stdout). Directory mode recursively processes all `.mvl` files. Comment preservation includes both `//` line comments and comment-only lines; blank lines separate declarations. Idempotent: `fmt(fmt(src)) == fmt(src)`. Verifies zero type errors lost: roundtrip tests confirm `check(fmt(src))` has identical error counts and per-requirement verdicts as `check(src)`.
+- **cli: mvl check --stdin** (#1008): Extended `mvl check` to support `--stdin` for reading MVL source from standard input. Useful for pipe-friendly workflows (e.g., `mvl fmt | mvl check`). Supports all checker options: `--error-limit`, `--format=json`, `--verbose`, `--req N`, `--refinement-solver`, `--refinement-stats`. Cross-module imports cannot be resolved without file system context; documented limitation.
+
+### Testing
+
+- **roundtrip tests** (`tests/fmt_roundtrip.rs`): 16 integration tests verifying formatter semantic preservation across 5 corpus categories (basics, types, ownership, effects, termination, contracts). Each test verifies `check(fmt(src)) == check(src)` (identical error counts and per-requirement verdicts) and idempotency (`fmt(fmt(src)) == fmt(src)`).
+
 ## [0.149.0] - 2026-05-24
 
 ### Added
