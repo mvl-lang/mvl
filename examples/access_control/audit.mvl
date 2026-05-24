@@ -65,7 +65,7 @@ fn log_level_for_decision(decision: Permission) -> String {
 // Grant decisions are logged at INFO; deny decisions at WARN.
 // username is a plain String — callers are responsible for passing clean values.
 /// Log an access decision to the structured audit trail with IFC-safe fields.
-pub fn log_access(
+pub total fn log_access(
     logger: val Logger,
     username: String,
     resource: Resource,

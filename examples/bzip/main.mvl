@@ -51,7 +51,7 @@ type CompressError = enum {
 // Compress a block of bytes using the bzip2 algorithm pipeline.
 // All stages are pure: no file I/O, no console, no randomness.
 // Input is borrowed throughout — a 900KB block is never cloned.
-pub fn compress_bytes(input: val List[Int]) -> Result[List[Int], CompressError] {
+pub total fn compress_bytes(input: val List[Int]) -> Result[List[Int], CompressError] {
     if input.is_empty() {
         Err(CompressError::EmptyInput)
     } else {
@@ -101,7 +101,7 @@ partial fn encode_symbols(
 
 // Decompress bytes produced by compress_bytes.
 // Takes compressed data by value — it is consumed by the bit reader.
-pub fn decompress_bytes(
+pub total fn decompress_bytes(
     input:    List[Int],   // by value — consumed by the bit reader
     primary:  Int,
     freqs:    val List[Int],

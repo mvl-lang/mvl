@@ -17,7 +17,7 @@ pub type BwtResult = struct {
 // Encode: sort all cyclic rotations, extract the last column.
 // The last column is what bzip2 stores; it can be decoded losslessly
 // given the primary index.
-pub fn bwt_encode(input: val List[Int]) -> BwtResult {
+pub total fn bwt_encode(input: val List[Int]) -> BwtResult {
     let n: Int = input.len();
     // Build all cyclic rotations (each is a new List[Int])
     let rotations: ref List[List[Int]] = [];
@@ -50,7 +50,7 @@ fn make_rotation(input: val List[Int], n: Int, i: Int) -> List[Int] {
 
 // Decode: reconstruct original block from last column + primary index.
 // Takes BwtResult by value (consumed after decode — caller doesn't need it again).
-pub fn bwt_decode(block: BwtResult) -> List[Int] {
+pub total fn bwt_decode(block: BwtResult) -> List[Int] {
     // Bind to local to signal ownership transfer (prevents auto-borrow inference).
     let owned: BwtResult = block;
     let n: Int = owned.data.len();

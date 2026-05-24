@@ -618,30 +618,232 @@ pub fn missing_annotations(prog: &Program, cfg: &LintConfig, out: &mut Vec<LintD
     }
 }
 
-/// Warn on non-test, non-extern functions that have no explicit `total` or
-/// `partial` keyword (implicit total, shown as `total*` in assurance reports).
+/// Warn on unannotated `pub fn` — every public function must explicitly declare
+/// `total` or `partial` to make the termination contract visible.
 ///
-/// Opt-in: enable with `require_explicit_totality = true` in `.mvllintrc`.
+/// Rule id: `missing-totality`
+///
+/// On by default (`require_explicit_totality = true`).  The rule checks only
+/// `pub fn` declarations; private helpers, test functions, and built-in
+/// functions are excluded.  The diagnostic includes a suggestion based on
+/// body analysis: `partial` when the body contains a `while` loop without a
+/// `decreases` variant or a direct recursive self-call; `total` otherwise.
 pub fn missing_totality(prog: &Program, cfg: &LintConfig, out: &mut Vec<LintDiag>) {
     if !cfg.require_explicit_totality {
         return;
     }
     for decl in &prog.declarations {
         if let Decl::Fn(f) = decl {
-            if f.is_test || f.is_builtin || f.totality.is_some() {
+            if !f.visible || f.is_test || f.is_builtin || f.totality.is_some() {
                 continue;
             }
+            let suggestion =
+                if block_has_while_no_decreases(&f.body) || block_calls_fn(&f.body, &f.name) {
+                    "partial"
+                } else {
+                    "total"
+                };
             out.push(LintDiag::warning(
                 "missing-totality",
                 format!(
-                    "function `{}` has no explicit `total` or `partial` keyword \
-                     — add one to document the termination contract",
-                    f.name,
+                    "pub fn `{}` has no explicit `total` or `partial` keyword \
+                     — add `{}` to document the termination contract",
+                    f.name, suggestion,
                 ),
                 f.span.line,
                 f.span.col,
             ));
         }
+    }
+}
+
+/// Return `true` if `block` (or any nested block/expression) contains a
+/// `while` loop that has no `decreases` variant.
+fn block_has_while_no_decreases(block: &Block) -> bool {
+    block.stmts.iter().any(stmt_has_while_no_decreases)
+}
+
+fn stmt_has_while_no_decreases(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::While {
+            decreases, body, ..
+        } => decreases.is_none() || block_has_while_no_decreases(body),
+        Stmt::Let { init, .. } => expr_has_while_no_decreases(init),
+        Stmt::Assign { value, .. } => expr_has_while_no_decreases(value),
+        Stmt::Return { value: Some(e), .. } => expr_has_while_no_decreases(e),
+        Stmt::Return { value: None, .. } => false,
+        Stmt::Expr { expr, .. } => expr_has_while_no_decreases(expr),
+        Stmt::If {
+            cond, then, else_, ..
+        } => {
+            expr_has_while_no_decreases(cond)
+                || block_has_while_no_decreases(then)
+                || else_
+                    .as_ref()
+                    .map(|e| match e {
+                        ElseBranch::Block(b) => block_has_while_no_decreases(b),
+                        ElseBranch::If(s) => stmt_has_while_no_decreases(s),
+                    })
+                    .unwrap_or(false)
+        }
+        Stmt::Match {
+            scrutinee, arms, ..
+        } => {
+            expr_has_while_no_decreases(scrutinee)
+                || arms.iter().any(|arm| match &arm.body {
+                    MatchBody::Expr(e) => expr_has_while_no_decreases(e),
+                    MatchBody::Block(b) => block_has_while_no_decreases(b),
+                })
+        }
+        Stmt::For { iter, body, .. } => {
+            expr_has_while_no_decreases(iter) || block_has_while_no_decreases(body)
+        }
+    }
+}
+
+fn expr_has_while_no_decreases(expr: &Expr) -> bool {
+    match expr {
+        Expr::Block(b) => block_has_while_no_decreases(b),
+        Expr::If {
+            cond, then, else_, ..
+        } => {
+            expr_has_while_no_decreases(cond)
+                || block_has_while_no_decreases(then)
+                || else_
+                    .as_ref()
+                    .map(|e| expr_has_while_no_decreases(e))
+                    .unwrap_or(false)
+        }
+        Expr::Match {
+            scrutinee, arms, ..
+        } => {
+            expr_has_while_no_decreases(scrutinee)
+                || arms.iter().any(|arm| match &arm.body {
+                    MatchBody::Expr(e) => expr_has_while_no_decreases(e),
+                    MatchBody::Block(b) => block_has_while_no_decreases(b),
+                })
+        }
+        Expr::Lambda { body, .. } => expr_has_while_no_decreases(body),
+        Expr::Binary { left, right, .. } => {
+            expr_has_while_no_decreases(left) || expr_has_while_no_decreases(right)
+        }
+        Expr::Unary { expr: e, .. }
+        | Expr::FieldAccess { expr: e, .. }
+        | Expr::Propagate { expr: e, .. }
+        | Expr::Consume { expr: e, .. }
+        | Expr::Relabel { expr: e, .. }
+        | Expr::Borrow { expr: e, .. } => expr_has_while_no_decreases(e),
+        Expr::FnCall { args, .. } => args.iter().any(expr_has_while_no_decreases),
+        Expr::MethodCall { receiver, args, .. } => {
+            expr_has_while_no_decreases(receiver) || args.iter().any(expr_has_while_no_decreases)
+        }
+        Expr::Construct { fields, .. } => {
+            fields.iter().any(|(_, e)| expr_has_while_no_decreases(e))
+        }
+        Expr::Spawn { fields, .. } => fields.iter().any(|(_, e)| expr_has_while_no_decreases(e)),
+        Expr::Select { arms, .. } => arms
+            .iter()
+            .any(|a| expr_has_while_no_decreases(&a.expr) || block_has_while_no_decreases(&a.body)),
+        Expr::Concurrently { body, .. } => block_has_while_no_decreases(body),
+        Expr::List { elems, .. } | Expr::Set { elems, .. } => {
+            elems.iter().any(expr_has_while_no_decreases)
+        }
+        Expr::Map { pairs, .. } => pairs
+            .iter()
+            .any(|(k, v)| expr_has_while_no_decreases(k) || expr_has_while_no_decreases(v)),
+        Expr::Literal(..) | Expr::Ident(..) | Expr::Quantifier(..) => false,
+    }
+}
+
+/// Return `true` if `block` (or any nested block/expression) contains a
+/// direct call to the function named `name` (used for recursion detection).
+fn block_calls_fn(block: &Block, name: &str) -> bool {
+    block.stmts.iter().any(|s| stmt_calls_fn(s, name))
+}
+
+fn stmt_calls_fn(stmt: &Stmt, name: &str) -> bool {
+    match stmt {
+        Stmt::Let { init, .. } => expr_calls_fn(init, name),
+        Stmt::Assign { value, .. } => expr_calls_fn(value, name),
+        Stmt::Return { value: Some(e), .. } => expr_calls_fn(e, name),
+        Stmt::Return { value: None, .. } => false,
+        Stmt::Expr { expr, .. } => expr_calls_fn(expr, name),
+        Stmt::If {
+            cond, then, else_, ..
+        } => {
+            expr_calls_fn(cond, name)
+                || block_calls_fn(then, name)
+                || else_
+                    .as_ref()
+                    .map(|e| match e {
+                        ElseBranch::Block(b) => block_calls_fn(b, name),
+                        ElseBranch::If(s) => stmt_calls_fn(s, name),
+                    })
+                    .unwrap_or(false)
+        }
+        Stmt::Match {
+            scrutinee, arms, ..
+        } => {
+            expr_calls_fn(scrutinee, name)
+                || arms.iter().any(|arm| match &arm.body {
+                    MatchBody::Expr(e) => expr_calls_fn(e, name),
+                    MatchBody::Block(b) => block_calls_fn(b, name),
+                })
+        }
+        Stmt::For { iter, body, .. } => expr_calls_fn(iter, name) || block_calls_fn(body, name),
+        Stmt::While { cond, body, .. } => expr_calls_fn(cond, name) || block_calls_fn(body, name),
+    }
+}
+
+fn expr_calls_fn(expr: &Expr, name: &str) -> bool {
+    match expr {
+        Expr::FnCall { name: n, args, .. } => {
+            n == name || args.iter().any(|a| expr_calls_fn(a, name))
+        }
+        Expr::MethodCall { receiver, args, .. } => {
+            expr_calls_fn(receiver, name) || args.iter().any(|a| expr_calls_fn(a, name))
+        }
+        Expr::Binary { left, right, .. } => expr_calls_fn(left, name) || expr_calls_fn(right, name),
+        Expr::Unary { expr: e, .. }
+        | Expr::FieldAccess { expr: e, .. }
+        | Expr::Propagate { expr: e, .. }
+        | Expr::Consume { expr: e, .. }
+        | Expr::Relabel { expr: e, .. }
+        | Expr::Borrow { expr: e, .. } => expr_calls_fn(e, name),
+        Expr::Block(b) => block_calls_fn(b, name),
+        Expr::If {
+            cond, then, else_, ..
+        } => {
+            expr_calls_fn(cond, name)
+                || block_calls_fn(then, name)
+                || else_
+                    .as_ref()
+                    .map(|e| expr_calls_fn(e, name))
+                    .unwrap_or(false)
+        }
+        Expr::Match {
+            scrutinee, arms, ..
+        } => {
+            expr_calls_fn(scrutinee, name)
+                || arms.iter().any(|arm| match &arm.body {
+                    MatchBody::Expr(e) => expr_calls_fn(e, name),
+                    MatchBody::Block(b) => block_calls_fn(b, name),
+                })
+        }
+        Expr::Lambda { body, .. } => expr_calls_fn(body, name),
+        Expr::Construct { fields, .. } => fields.iter().any(|(_, e)| expr_calls_fn(e, name)),
+        Expr::Spawn { fields, .. } => fields.iter().any(|(_, e)| expr_calls_fn(e, name)),
+        Expr::Select { arms, .. } => arms
+            .iter()
+            .any(|a| expr_calls_fn(&a.expr, name) || block_calls_fn(&a.body, name)),
+        Expr::Concurrently { body, .. } => block_calls_fn(body, name),
+        Expr::List { elems, .. } | Expr::Set { elems, .. } => {
+            elems.iter().any(|e| expr_calls_fn(e, name))
+        }
+        Expr::Map { pairs, .. } => pairs
+            .iter()
+            .any(|(k, v)| expr_calls_fn(k, name) || expr_calls_fn(v, name)),
+        Expr::Literal(..) | Expr::Ident(..) | Expr::Quantifier(..) => false,
     }
 }
 
@@ -2745,6 +2947,123 @@ mod tests {
         assert!(
             diags.iter().all(|d| d.rule != "missing-annotation"),
             "test fn must be excluded; got: {diags:?}"
+        );
+    }
+
+    // -- missing_totality --
+
+    #[test]
+    fn missing_totality_fires_on_unannotated_pub_fn() {
+        // unannotated pub fn must warn with default config (rule is ON by default)
+        let src = "pub fn add(x: Int, y: Int) -> Int { x + y }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        missing_totality(&prog, &cfg(), &mut diags);
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.rule == "missing-totality" && d.message.contains("add")),
+            "expected missing-totality for `add`; got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn missing_totality_silent_on_private_fn() {
+        // private fn must not warn even when unannotated
+        let src = "fn helper(x: Int) -> Int { x + 1 }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        missing_totality(&prog, &cfg(), &mut diags);
+        assert!(
+            diags.iter().all(|d| d.rule != "missing-totality"),
+            "private fn must not trigger missing-totality; got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn missing_totality_silent_when_annotated() {
+        // explicit `total` suppresses the warning
+        let src = "pub total fn add(x: Int, y: Int) -> Int { x + y }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        missing_totality(&prog, &cfg(), &mut diags);
+        assert!(
+            diags.iter().all(|d| d.rule != "missing-totality"),
+            "annotated pub fn must not warn; got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn missing_totality_suggests_total_for_simple_fn() {
+        // no while, no recursion → suggest `total`
+        let src = "pub fn double(x: Int) -> Int { x * 2 }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        missing_totality(&prog, &cfg(), &mut diags);
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.rule == "missing-totality" && d.message.contains("`total`")),
+            "should suggest `total` for simple fn; got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn missing_totality_suggests_partial_for_while_no_decreases() {
+        // while without decreases → suggest `partial`
+        let src = concat!(
+            "pub fn count(n: Int) -> Int {\n",
+            "    let i: ref Int = 0;\n",
+            "    while i < n {\n",
+            "        i = i + 1\n",
+            "    }\n",
+            "    i\n",
+            "}\n",
+        );
+        let prog = parse(src);
+        let mut diags = vec![];
+        missing_totality(&prog, &cfg(), &mut diags);
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.rule == "missing-totality" && d.message.contains("`partial`")),
+            "should suggest `partial` for while without decreases; got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn missing_totality_suggests_partial_for_recursive_fn() {
+        // direct recursion → suggest `partial`
+        let src = concat!(
+            "pub fn factorial(n: Int) -> Int {\n",
+            "    if n <= 1 { 1 } else { n * factorial(n - 1) }\n",
+            "}\n",
+        );
+        let prog = parse(src);
+        let mut diags = vec![];
+        missing_totality(&prog, &cfg(), &mut diags);
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.rule == "missing-totality" && d.message.contains("`partial`")),
+            "should suggest `partial` for recursive fn; got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn missing_totality_off_when_disabled() {
+        // rule can be opted out via config
+        let cfg_off = LintConfig {
+            require_explicit_totality: false,
+            ..LintConfig::default()
+        };
+        let src = "pub fn add(x: Int, y: Int) -> Int { x + y }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        missing_totality(&prog, &cfg_off, &mut diags);
+        assert!(
+            diags.iter().all(|d| d.rule != "missing-totality"),
+            "rule must be silent when disabled; got: {diags:?}"
         );
     }
 }

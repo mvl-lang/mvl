@@ -53,23 +53,23 @@ extern "rust" {
 
 // Initialise the auth store with the api_key loaded from config.
 // This is called once at server startup; the Secret[String] is consumed here.
-pub fn setup_auth(api_key: Secret[String]) -> Unit {
+pub total fn setup_auth(api_key: Secret[String]) -> Unit {
     init_auth_store(api_key)
 }
 
 // Read a config value (non-secret keys only).
 // Returns Err(NotFound) if the key does not exist.
-pub fn read_config(key: String) -> Result[String, HandlerError] {
+pub total fn read_config(key: String) -> Result[String, HandlerError] {
     store_get(key)
 }
 
 // Write a validated config value (non-secret keys only).
-pub fn write_config(key: String, value: String) -> Result[String, HandlerError] {
+pub total fn write_config(key: String, value: String) -> Result[String, HandlerError] {
     store_put(key, value)
 }
 
 // Reset a config key to its default value.
-pub fn reset_config(key: String) -> Result[String, HandlerError] {
+pub total fn reset_config(key: String) -> Result[String, HandlerError] {
     store_reset(key)
 }
 

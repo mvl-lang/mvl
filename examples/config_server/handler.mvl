@@ -73,7 +73,7 @@ extern "rust" {
 // Route an authenticated request to the appropriate handler.
 // Every request is authenticated first; only verified requests proceed to routing.
 // Pure: no effect annotations — all I/O effects are confined to main.mvl.
-pub fn dispatch(req: Request) -> Result[Response, HandlerError] {
+pub total fn dispatch(req: Request) -> Result[Response, HandlerError] {
     let auth: Result[Unit, HandlerError] = verify_request_auth(req.api_key_header);
     if let Err(e) = auth {
         Err(e)
