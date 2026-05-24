@@ -1012,3 +1012,126 @@ test fn dispatch_empty_router_is_404() -> Unit {
         },
     }
 }
+
+// ── Static file serving — pure helper tests ───────────────────────────────────
+//
+// `mime_type` is pub; `file_extension` and `has_traversal` are private in
+// http.mvl, so we mirror them here for unit testing (same pattern as the
+// routing helpers above).
+
+fn file_extension(p: String) -> String {
+    let p_len: Int = p.len();
+    let ext: ref String = "";
+    let i: ref Int = 0;
+    for c in p.chars() {
+        if c == "." { ext = p.substring(i + 1, p_len) } else {}
+        i = i + 1
+    }
+    ext
+}
+
+fn has_traversal(p: String) -> Bool {
+    let segs: List[String] = p.split("/");
+    let found: ref Bool = false;
+    for s in segs {
+        if s == ".." { found = true } else {}
+    }
+    found
+}
+
+fn mime_type(ext: String) -> String {
+    if      ext == "html"  { "text/html; charset=utf-8" }
+    else if ext == "css"   { "text/css" }
+    else if ext == "js"    { "application/javascript" }
+    else if ext == "json"  { "application/json" }
+    else if ext == "png"   { "image/png" }
+    else if ext == "svg"   { "image/svg+xml" }
+    else if ext == "ico"   { "image/x-icon" }
+    else if ext == "txt"   { "text/plain" }
+    else if ext == "woff2" { "font/woff2" }
+    else if ext == "woff"  { "font/woff" }
+    else                   { "application/octet-stream" }
+}
+
+// ── file_extension tests ──────────────────────────────────────────────────────
+
+test fn ext_html() -> Unit { assert_eq(file_extension("index.html"), "html") }
+test fn ext_css()  -> Unit { assert_eq(file_extension("style.css"),  "css")  }
+test fn ext_js()   -> Unit { assert_eq(file_extension("app.js"),     "js")   }
+test fn ext_json() -> Unit { assert_eq(file_extension("data.json"),  "json") }
+test fn ext_png()  -> Unit { assert_eq(file_extension("logo.png"),   "png")  }
+test fn ext_svg()  -> Unit { assert_eq(file_extension("icon.svg"),   "svg")  }
+
+test fn ext_double_dot_last_wins() -> Unit {
+    assert_eq(file_extension("archive.tar.gz"), "gz")
+}
+
+test fn ext_no_dot_is_empty() -> Unit {
+    assert_eq(file_extension("README"), "")
+}
+
+test fn ext_empty_string() -> Unit {
+    assert_eq(file_extension(""), "")
+}
+
+test fn ext_path_with_dir() -> Unit {
+    assert_eq(file_extension("swagger-ui/index.html"), "html")
+}
+
+// ── has_traversal tests ───────────────────────────────────────────────────────
+
+test fn traversal_double_dot_middle() -> Unit {
+    assert_eq(has_traversal("/../etc/passwd"), true)
+}
+
+test fn traversal_double_dot_start() -> Unit {
+    assert_eq(has_traversal("../secret"), true)
+}
+
+test fn traversal_double_dot_end() -> Unit {
+    assert_eq(has_traversal("/foo/.."), true)
+}
+
+test fn traversal_bare_double_dot() -> Unit {
+    assert_eq(has_traversal(".."), true)
+}
+
+test fn traversal_multiple_double_dots() -> Unit {
+    assert_eq(has_traversal("/a/../../etc"), true)
+}
+
+test fn traversal_clean_path() -> Unit {
+    assert_eq(has_traversal("/index.html"), false)
+}
+
+test fn traversal_empty_path() -> Unit {
+    assert_eq(has_traversal(""), false)
+}
+
+test fn traversal_slash_only() -> Unit {
+    assert_eq(has_traversal("/"), false)
+}
+
+test fn traversal_dotfile_not_traversal() -> Unit {
+    // ".hidden" is a dotfile, not a traversal
+    assert_eq(has_traversal("/.hidden"), false)
+}
+
+test fn traversal_single_dot_not_traversal() -> Unit {
+    assert_eq(has_traversal("/./foo"), false)
+}
+
+// ── mime_type tests ───────────────────────────────────────────────────────────
+
+test fn mime_html()  -> Unit { assert_eq(mime_type("html"),  "text/html; charset=utf-8") }
+test fn mime_css()   -> Unit { assert_eq(mime_type("css"),   "text/css") }
+test fn mime_js()    -> Unit { assert_eq(mime_type("js"),    "application/javascript") }
+test fn mime_json()  -> Unit { assert_eq(mime_type("json"),  "application/json") }
+test fn mime_png()   -> Unit { assert_eq(mime_type("png"),   "image/png") }
+test fn mime_svg()   -> Unit { assert_eq(mime_type("svg"),   "image/svg+xml") }
+test fn mime_ico()   -> Unit { assert_eq(mime_type("ico"),   "image/x-icon") }
+test fn mime_txt()   -> Unit { assert_eq(mime_type("txt"),   "text/plain") }
+test fn mime_woff2() -> Unit { assert_eq(mime_type("woff2"), "font/woff2") }
+test fn mime_woff()  -> Unit { assert_eq(mime_type("woff"),  "font/woff") }
+test fn mime_unknown() -> Unit { assert_eq(mime_type("xyz"), "application/octet-stream") }
+test fn mime_empty()   -> Unit { assert_eq(mime_type(""),    "application/octet-stream") }

@@ -15,6 +15,7 @@
 // See #783, #800.
 
 use std.ifc.{Tainted}
+use std.io.{read_file, IoError}
 use std.net.{TcpListener, TcpStream, NetError,
              tcp_listen, tcp_accept, tcp_read_request, tcp_write,
              tcp_close_listener, tcp_close_stream, net_error_msg}
@@ -768,6 +769,122 @@ partial fn accept_loop(listener: TcpListener, r: Router, dispatcher: Dispatcher)
                 Err(_) => { tcp_close_stream(stream); accept_loop(listener, r, dispatcher) },
             }
         },
+    }
+}
+
+// ── Static file serving ───────────────────────────────────────────────────────
+//
+// Serves files from a directory on disk.  See #999.
+//
+// Usage in a Dispatcher:
+//   if req.path.starts_with("/docs") {
+//       serve_dir("/docs", "./swagger-ui", req)
+//   } else { ... }
+//
+// Security: path traversal (`../`) is rejected with 403.  The request path
+// is plain `String` after `parse_request` detaints it for routing; however
+// its value still originates from the user, so we check every segment.
+
+/// Extract the file extension from a path string (portion after the last `.`).
+///
+/// Returns "" if the filename has no extension.
+/// Pure — iterates chars; updates result on each `.`, so the last `.` wins.
+fn file_extension(p: String) -> String {
+    let p_len: Int = p.len();
+    let ext: ref String = "";
+    let i: ref Int = 0;
+    for c in p.chars() {
+        if c == "." { ext = p.substring(i + 1, p_len) } else {}
+        i = i + 1
+    }
+    ext
+}
+
+/// Return true if the path contains a `..` path-traversal segment.
+///
+/// Splits on `/` and checks each segment.  Catches `/../`, `/..`, `../`
+/// and bare `..`.
+fn has_traversal(p: String) -> Bool {
+    let segs: List[String] = p.split("/");
+    let found: ref Bool = false;
+    for s in segs {
+        if s == ".." { found = true } else {}
+    }
+    found
+}
+
+/// MIME type for a file extension.
+///
+/// Covers HTML, CSS, JS, JSON, images, fonts, and plain text — sufficient
+/// for serving swagger-ui and common static assets.  Unknown extensions
+/// fall back to `application/octet-stream`.
+pub fn mime_type(ext: String) -> String {
+    if      ext == "html"  { "text/html; charset=utf-8" }
+    else if ext == "css"   { "text/css" }
+    else if ext == "js"    { "application/javascript" }
+    else if ext == "json"  { "application/json" }
+    else if ext == "png"   { "image/png" }
+    else if ext == "svg"   { "image/svg+xml" }
+    else if ext == "ico"   { "image/x-icon" }
+    else if ext == "txt"   { "text/plain" }
+    else if ext == "woff2" { "font/woff2" }
+    else if ext == "woff"  { "font/woff" }
+    else                   { "application/octet-stream" }
+}
+
+/// Serve a file from `dir_path` for requests under `prefix`.
+///
+/// `prefix` is the URL path prefix (e.g. `"/docs"`).
+/// `dir_path` is the filesystem root (e.g. `"./swagger-ui"`).
+///
+/// Behaviour:
+/// - Path not under `prefix` → 404
+/// - Path contains `..` segment → 403 (path traversal blocked)
+/// - Relative path empty or ends with `/` → serve `index.html`
+/// - File missing → 404
+/// - File readable → 200 with Content-Type from `mime_type`
+///
+/// IFC: file contents are detainted with audit tag `"HTTP-STATIC-FILE"`.
+/// This is safe because `has_traversal` confirms the path stays within
+/// `dir_path` before the read is issued.
+pub fn serve_dir(prefix: String, dir_path: String, req: Request) -> Response ! FileRead {
+    if !req.path.starts_with(prefix) {
+        respond(Status::Http404NotFound, "")
+    } else {
+        let prefix_len: Int = prefix.len();
+        let path_len: Int = req.path.len();
+        let rel: String = req.path.substring(prefix_len, path_len);
+        if has_traversal(rel) {
+            respond(Status::Http403Forbidden, "forbidden")
+        } else {
+            // Empty or trailing-slash → serve index.html
+            let with_index: String = if rel.len() == 0 || rel.ends_with("/") {
+                rel.concat("index.html")
+            } else {
+                rel
+            };
+            // Strip leading slash before joining with dir_path
+            let rel_clean: String = if with_index.starts_with("/") {
+                with_index.substring(1, with_index.len())
+            } else {
+                with_index
+            };
+            let file_path: String = dir_path.concat("/").concat(rel_clean);
+            match read_file(file_path) {
+                Err(IoError::NotFound)         => respond(Status::Http404NotFound, ""),
+                Err(IoError::PermissionDenied) => respond(Status::Http403Forbidden, "forbidden"),
+                Err(_)                         => respond(Status::Http500InternalServerError, "read error"),
+                Ok(raw) => {
+                    let content: String = relabel trust(raw, "HTTP-STATIC-FILE");
+                    let ct: String = mime_type(file_extension(rel_clean));
+                    Response {
+                        status:  Status::Http200Ok,
+                        headers: {"Content-Type": ct},
+                        body:    content,
+                    }
+                },
+            }
+        }
     }
 }
 
