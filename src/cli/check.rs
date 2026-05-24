@@ -9,6 +9,7 @@ use mvl::mvl::parser::ast::Program;
 use mvl::mvl::parser::Parser;
 use mvl::mvl::resolver;
 use mvl::mvl::stdlib;
+use std::io::Read;
 use std::path::Path;
 use std::process;
 
@@ -377,6 +378,190 @@ pub fn run(path: &str, req_filter: Option<u8>, opts: CheckOptions) {
         println!("  \"warnings\": [],");
         println!("  \"summary\": {{ \"errors\": {error_count}, \"warnings\": 0 }}");
         println!("}}");
+    }
+
+    if had_errors {
+        process::exit(1);
+    }
+}
+
+/// Parse and type-check MVL source read from stdin.
+///
+/// Sibling-module imports are not resolved (no file system access), so
+/// cross-module references that require siblings will produce resolver errors.
+/// Use `mvl check <file>` for full project checking.
+pub fn run_stdin(req_filter: Option<u8>, opts: CheckOptions) {
+    let CheckOptions {
+        error_limit,
+        format_json,
+        verbose,
+        solver_mode,
+        refinement_stats,
+        // stdin mode always uses "trusted" stdlib — no proven-stdlib gate.
+        stdlib_profile: _,
+    } = opts;
+
+    let mut src = String::new();
+    std::io::stdin()
+        .read_to_string(&mut src)
+        .unwrap_or_else(|e| {
+            eprintln!("error reading stdin: {e}");
+            process::exit(1);
+        });
+
+    let filename = "<stdin>";
+
+    let (mut parser, lex_errors) = Parser::new(&src);
+    if !lex_errors.is_empty() {
+        for e in &lex_errors {
+            eprintln!(
+                "{}:{}:{}: error: {}",
+                filename, e.span.line, e.span.col, e.message
+            );
+        }
+        process::exit(1);
+    }
+    let prog = parser.parse_program();
+    if !parser.errors().is_empty() {
+        for e in parser.errors() {
+            eprintln!(
+                "{}:{}:{}: error: {}",
+                filename, e.span.line, e.span.col, e.message
+            );
+        }
+        process::exit(1);
+    }
+
+    // Load implicit prelude + any stdlib modules the program imports.
+    let stdlib_dir = stdlib::ensure_stdlib();
+    let mut stdlib_prelude = loader::load_implicit_prelude();
+    stdlib_prelude.extend(loader::load_stdlib_prelude(
+        std::iter::once(&prog),
+        &stdlib_dir,
+    ));
+
+    // No sibling user modules — resolve against an empty set.
+    let resolve_result = resolver::resolve_project(
+        vec![(filename.to_string(), prog.clone())],
+        Some(&stdlib_dir),
+    );
+    let mut had_errors = !resolve_result.is_ok();
+    for err in &resolve_result.errors {
+        eprintln!("error[resolver]: {err}");
+    }
+
+    let registry = PassRegistry::default_registry();
+    let result = checker::check_with_two_preludes_mode(&stdlib_prelude, &[], &prog, solver_mode);
+
+    if refinement_stats {
+        let rc = &result.refinement_counts;
+        let total = rc.proven + rc.runtime_checked + rc.failed;
+        eprintln!("refinement stats (solver: {}):", solver_mode.as_str());
+        eprintln!("  proven:        {}", rc.proven);
+        eprintln!("  runtime-check: {}", rc.runtime_checked);
+        eprintln!("  failed:        {}", rc.failed);
+        eprintln!("  total:         {total}");
+    }
+
+    if let Some(req) = req_filter {
+        let verdict = registry.run_req(req, &prog, &result);
+        let name = registry.pass_name(req).unwrap_or("unknown");
+        if let Some(loc) = verdict.location() {
+            println!(
+                "{filename}:{loc}: Req {req} ({name}) — {} — {}",
+                verdict.label(),
+                verdict.detail()
+            );
+        } else {
+            println!(
+                "{filename}: Req {req} ({name}) — {} — {}",
+                verdict.label(),
+                verdict.detail()
+            );
+        }
+        if verdict.is_failed() {
+            had_errors = true;
+        }
+    } else if format_json {
+        let errors = &result.errors;
+        let display_count = if error_limit == 0 {
+            errors.len()
+        } else {
+            error_limit.min(errors.len())
+        };
+        let items: Vec<String> = errors.iter().take(display_count).map(|err| {
+            let span = err.span();
+            let req = err.requirement_number();
+            format!(
+                "    {{\n      \"code\": \"E{req:04}\",\n      \"requirement\": {req},\n      \"message\": \"{msg}\",\n      \"location\": {{ \"file\": \"{filename}\", \"line\": {line}, \"column\": {col} }}\n    }}",
+                msg = super::json_escape(&err.message()),
+                line = span.line,
+                col = span.col,
+            )
+        }).collect();
+        let error_count = items.len();
+        if !result.is_ok() {
+            had_errors = true;
+        }
+        println!("{{");
+        println!("  \"errors\": [");
+        for (i, item) in items.iter().enumerate() {
+            let comma = if i + 1 < error_count { "," } else { "" };
+            println!("{item}{comma}");
+        }
+        println!("  ],");
+        println!("  \"warnings\": [],");
+        println!("  \"summary\": {{ \"errors\": {error_count}, \"warnings\": 0 }}");
+        println!("}}");
+    } else {
+        let verdicts = registry.run_all(&prog, &result);
+        let proven = (1u8..=11)
+            .filter(|&i| verdicts[i as usize].is_proven())
+            .count();
+        if result.is_ok() {
+            println!("{filename}: OK  ({proven}/11 requirements proven)");
+        } else {
+            had_errors = true;
+            let errors = &result.errors;
+            let display_count = if error_limit == 0 {
+                errors.len()
+            } else {
+                error_limit.min(errors.len())
+            };
+            for err in errors.iter().take(display_count) {
+                eprintln!(
+                    "{}:{}:{}: error[req{}]: {}",
+                    filename,
+                    err.span().line,
+                    err.span().col,
+                    err.requirement_number(),
+                    err.message()
+                );
+            }
+            if error_limit > 0 && errors.len() > error_limit {
+                eprintln!(
+                    "... and {} more errors (use --error-limit=0 to show all)",
+                    errors.len() - error_limit
+                );
+            }
+            let failed = (1u8..=11)
+                .filter(|&i| verdicts[i as usize].is_failed())
+                .count();
+            eprintln!("{filename}: FAIL  ({proven}/11 proven, {failed} failed)");
+        }
+        if verbose {
+            for req in 1u8..=11 {
+                let name = registry.pass_name(req).unwrap_or("unknown");
+                let v = &verdicts[req as usize];
+                eprintln!(
+                    "  {} Req {:2} ({}): {}",
+                    v.status_char(),
+                    req,
+                    name,
+                    v.detail()
+                );
+            }
+        }
     }
 
     if had_errors {

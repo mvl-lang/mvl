@@ -17,7 +17,8 @@ pub fn print_usage() {
   mvl check <file|dir> --error-limit=N — stop after N errors (default 10; 0 = show all)
   mvl check <file|dir> --format=json  — emit errors as machine-readable JSON
   mvl check <file|dir> --refinement-solver=layered|z3-only|fast-only — solver strategy (default: layered)
-  mvl check <file|dir> --refinement-stats — print per-layer refinement proof counts"
+  mvl check <file|dir> --refinement-stats — print per-layer refinement proof counts
+  mvl check --stdin                   — read MVL source from stdin and type-check it"
     );
     eprintln!("  mvl build <file|dir>               — transpile to Rust and run cargo build");
     eprintln!("  mvl run   [--] <file.mvl>          — transpile, build, and execute");
