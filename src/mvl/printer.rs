@@ -234,12 +234,6 @@ impl<'src> Printer<'src> {
         if d.is_builtin {
             s.push_str("builtin ");
         }
-        if d.is_label_transparent {
-            s.push_str("transparent ");
-        }
-        if d.is_sink {
-            s.push_str("sink ");
-        }
         if d.is_test {
             s.push_str("test ");
         }
