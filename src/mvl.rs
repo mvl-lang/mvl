@@ -9,6 +9,7 @@ pub mod packages;
 pub mod parser;
 pub mod passes;
 pub mod pipeline;
+pub mod printer;
 pub mod resolver;
 pub mod stdlib;
 pub mod toolchain;

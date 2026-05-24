@@ -61,6 +61,14 @@ pub fn print_usage() {
         "  mvl mcdc   <file|dir> --json        — machine-readable JSON output for CI integration"
     );
     eprintln!("  mvl mcdc   <file|dir> --json -q     — JSON summary only (no per-clause detail)");
+    eprintln!("  mvl fmt   <file|dir>               — format MVL source files in place");
+    eprintln!(
+        "  mvl fmt   <file|dir> --check       — exit 1 if any file is not formatted (CI gate)"
+    );
+    eprintln!("  mvl fmt   <file|dir> --stdout      — write formatted output to stdout, do not modify file");
+    eprintln!(
+        "  mvl fmt   --stdin                  — read from stdin, write formatted output to stdout"
+    );
     eprintln!("  mvl lint  <file|dir>               — check style rules");
     eprintln!("  mvl lint  <file|dir> --show-config — show active linter configuration");
     eprintln!("  mvl assurance <file|dir>           — emit assurance report");
