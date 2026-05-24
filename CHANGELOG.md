@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.153.0] - 2026-05-25
+
+### Added
+- Requirement verdict tests — 15 new test cases covering contracts, decreases, relabel, and implicit flows
+- `OptionIgnored` error check (Requirement 5) — enforce handling of Option return values
+- Corpus tests for method-call predicates in requires clauses and decreases measures
+
+### Fixed
+- #968 regression test — verify `decreases` on method-call measures
+- #983 regression test — verify `requires` predicates with method calls
+- Requirement 5 gap — unhandled Option values now caught at compile time
+
 All notable changes to the MVL language and compiler will be documented in this file.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).

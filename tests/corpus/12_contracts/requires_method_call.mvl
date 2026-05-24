@@ -1,0 +1,30 @@
+// Corpus: requires clause with method-call predicate (Req 10, #983 fix)
+// Demonstrates that preconditions involving method calls (e.g. `xs.len() > 0`)
+// are verified at call sites — not silently dropped.
+//
+// Prior to #983 such predicates were dropped silently. This file proves
+// the fix: calling with literal non-empty lists satisfies `requires xs.len() > 0`.
+
+// Uses a standard where-refinement so RefinementsPass sees fn_total > 0.
+fn scale(factor: Int where factor > 0, xs: List[Int]) -> Int
+    requires xs.len() > 0
+{
+    match xs.get(0) {
+        Some(v) => v * factor,
+        None => 0,
+    }
+}
+
+fn sum_head(xs: List[Int])-> Int
+    requires xs.len() > 0
+{
+    match xs.get(0) {
+        Some(v) => v,
+        None => 0,
+    }
+}
+
+fn main() -> Unit ! Console {
+    let _: Int = scale(2, [1, 2, 3]);
+    let _: Int = sum_head([10, 20]);
+}

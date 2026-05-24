@@ -437,7 +437,7 @@ fn toml_empty_table() -> Map[String, TomlValue] {
     // {} parses as an empty block in MVL, not an empty map literal.
     // Workaround: create a sentinel entry then remove it.
     let m: ref Map[String, TomlValue] = {"__mvl_toml_init__": TomlValue::TBool(false)};
-    m.remove("__mvl_toml_init__");
+    let _: Option[TomlValue] = m.remove("__mvl_toml_init__");
     m
 }
 

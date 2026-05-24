@@ -548,11 +548,13 @@ impl TypeChecker {
                 self.check_block(body, None);
             }
 
-            // #14: Reject bare Result expressions (ResultIgnored)
+            // #14: Reject bare Result/Option expressions (ResultIgnored, OptionIgnored)
             Stmt::Expr { expr, .. } => {
                 let ty = self.infer_expr(expr);
                 if ty.is_result() {
                     self.emit(CheckError::ResultIgnored { span: expr.span() });
+                } else if ty.is_option() {
+                    self.emit(CheckError::OptionIgnored { span: expr.span() });
                 }
             }
         }

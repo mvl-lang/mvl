@@ -1,0 +1,23 @@
+// corpus:expect-fail
+// expect-requirement: 5
+// Scenario: Option returned by a function is discarded silently.
+// Triggers: CheckError::OptionIgnored (req5)
+
+fn find_first_positive(xs: List[Int]) -> Option[Int] {
+    for v in xs {
+        if v > 0 {
+            return Some(v);
+        }
+    }
+    None
+}
+
+fn process(xs: List[Int]) -> Unit ! Console {
+    // BUG: find_first_positive returns Option[Int] but the value is dropped.
+    find_first_positive(xs);
+    println("processed");
+}
+
+fn main() -> Unit ! Console {
+    process([1, 2, 3]);
+}
