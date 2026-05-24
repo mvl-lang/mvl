@@ -30,11 +30,11 @@ lint: guard-mvl .mvl/pkg/http ## Lint main.mvl
 check: guard-mvl .mvl/pkg/http ## Type-check main.mvl
 	$(MVL) check $(DIR)main.mvl
 
-test: guard-mvl .mvl/pkg/http ## Run unit tests
-	$(MVL) test $(DIR)
+test: guard-mvl .mvl/pkg/http ## Run unit tests (example files only, not symlinked pkg)
+	$(MVL) test $(DIR)main_test.mvl
 
-test-llvm: guard-mvl .mvl/pkg/http ## Run tests via LLVM backend
-	$(MVL) test $(DIR) --backend=llvm
+test-llvm: guard-mvl .mvl/pkg/http ## Run tests via LLVM backend (example files only, not symlinked pkg)
+	$(MVL) test $(DIR)main_test.mvl --backend=llvm
 
 smoke: guard-mvl .mvl/pkg/http ## Smoke-test: build binary (proves compilation)
 	$(MVL) build $(DIR)main.mvl
