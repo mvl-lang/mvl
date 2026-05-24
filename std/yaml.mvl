@@ -46,7 +46,7 @@ pub type YamlValue = enum {
 
 type YLR  = enum { YLROK(YamlValue, Int), YLRErr(String) }
 type YSR  = enum { YSROK(String, Int),    YSRErr(String) }
-type YNR  = enum { YNROK_I(Int, Int), YNROK_F(Float, Int), YNRErr(String) }
+type YNR  = enum { YNRInt(Int, Int), YNRFloat(Float, Int), YNRErr(String) }
 
 // ── Low-level helpers ─────────────────────────────────────────────────────────
 
@@ -423,7 +423,7 @@ partial fn yaml_parse_sq(chars: List[String], pos: Int) -> YSR {
 
 // ── Parser: number ────────────────────────────────────────────────────────────
 
-// Returns YNROK_I for integers, YNROK_F for floats, YNRErr on failure.
+// Returns YNRInt for integers, YNRFloat for floats, YNRErr on failure.
 // Fails (YNRErr) if there are trailing non-numeric characters — callers fall
 // back to treating the token as a bare string.
 partial fn yaml_parse_number(chars: List[String], pos: Int) -> YNR {
@@ -461,12 +461,12 @@ partial fn yaml_parse_number(chars: List[String], pos: Int) -> YNR {
         if cur < len { return YNR::YNRErr("trailing chars after float") } else {}
         let result: ref Float = int_val.to_float() + frac;
         if negative { result = 0.0 - result } else {}
-        YNR::YNROK_F(result, cur)
+        YNR::YNRFloat(result, cur)
     } else {
         if cur < len { return YNR::YNRErr("trailing chars after int") } else {}
         let result: ref Int = int_val;
         if negative { result = 0 - result } else {}
-        YNR::YNROK_I(result, cur)
+        YNR::YNRInt(result, cur)
     }
 }
 
@@ -502,8 +502,8 @@ partial fn yaml_parse_scalar(s: String) -> YamlValue {
             }
         } else if c0 == "-" || yaml_is_digit(c0) {
             match yaml_parse_number(chars, 0) {
-                YNR::YNROK_I(n, _) => YamlValue::Int(n),
-                YNR::YNROK_F(f, _) => YamlValue::Float(f),
+                YNR::YNRInt(n, _) => YamlValue::Int(n),
+                YNR::YNRFloat(f, _) => YamlValue::Float(f),
                 YNR::YNRErr(_)     => YamlValue::Str(s),
             }
         } else {
