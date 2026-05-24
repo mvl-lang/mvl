@@ -75,6 +75,7 @@ Full pillar/phase mapping and per-phase acceptance criteria: [spec 012](.openspe
 8. **Actors, not threads.** No shared mutable state, no locks, no deadlocks.
 9. **Ownership, not GC.** Deterministic deallocation for real-time.
 10. **Refinement types inline.** `x: Int where x > 0` is a first-class type.
+11. **Honest over silent.** The compiler must either verify it or reject it. Never silently drop (#983), silently accept (#985), or silently defer (#990).
 
 ## What the MVL Drops
 
