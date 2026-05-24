@@ -2,7 +2,7 @@
 .ONESHELL:
 SHELL := /bin/bash
 
-.PHONY: help version build build-memory build-llvm-runtime build-release test test-unit test-integration test-requirements test-error-messages test-corpus test-solver test-stdlib check-compiler assure-compiler test-mvl test-bdd test-backend-rust test-backend-llvm test-cross-backend test-tree-sitter test-grammar-coverage test-examples coverage validate-keywords lint mvl-lint format format-check format-mvl format-mvl-check assurance assurance-gate check-adr docs docs-serve tree-sitter-build install install-nvim setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
+.PHONY: help version build build-memory build-llvm-runtime build-release test test-unit test-integration test-requirements test-error-messages test-fmt-roundtrip test-corpus test-solver test-stdlib check-compiler assure-compiler test-mvl test-bdd test-backend-rust test-backend-llvm test-cross-backend test-tree-sitter test-grammar-coverage test-examples coverage validate-keywords lint mvl-lint format format-check format-mvl format-mvl-check assurance assurance-gate check-adr docs docs-serve tree-sitter-build install install-nvim setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
 
 .DEFAULT_GOAL := help
 
@@ -94,6 +94,7 @@ test: build build-llvm-runtime ## Run all test suites and print a one-line PASS/
 	run_suite "Type checker"      test-type-checker; \
 	run_suite "Requirements"      test-requirements; \
 	run_suite "Error messages"    test-error-messages; \
+	run_suite "Fmt roundtrip"     test-fmt-roundtrip; \
 	run_suite "Corpus"            test-corpus; \
 	run_suite "Solver"            test-solver; \
 	run_suite "Stdlib"            test-stdlib; \
@@ -128,6 +129,9 @@ test-requirements: ## Run requirement verdict tests — one Proven + one Failed 
 
 test-error-messages: ## Run error message tests — assert exact diagnostic output for each CheckError variant
 	cargo test --test error_messages
+
+test-fmt-roundtrip: ## Run fmt roundtrip tests — verify check(fmt(src)) == check(src) and idempotency
+	cargo test --test fmt_roundtrip
 
 test-corpus: build ## Validate corpus examples parse and type-check
 	@cargo run --quiet -- init --stdlib 2>/dev/null || true
