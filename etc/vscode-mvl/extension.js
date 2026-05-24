@@ -1,14 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Schuberg Philis
 //
-// MVL VS Code extension — LSP client bootstrap (Phase 1: diagnostics).
+// MVL VS Code extension — LSP client bootstrap (Phase 1: tree-sitter syntax diagnostics).
 //
 // Setup:
 //   cd etc/vscode-mvl && npm install
+//   pip install pygls tree-sitter
+//   pip install ./etc/tree-sitter-mvl   # or let the server build from parser.c
 //
-// The extension launches tools/lsp_server.py (Python) as the language server.
-// Override the script path via the `mvl.lspServerScript` setting or by setting
-// the MVL_LSP_SERVER environment variable.
+// The extension launches tools/lsp_server.py as the language server.
+// For full type/effect diagnostics see Phase 2 (issue #1003).
+// Override the script path via `mvl.lspServerScript` or MVL_LSP_SERVER env var.
 
 "use strict";
 
