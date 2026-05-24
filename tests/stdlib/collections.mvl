@@ -75,7 +75,7 @@ fn string_chars() -> List[String] {
 }
 
 fn format_greeting() -> String {
-    format("Hello, {}!", "world")
+    format("Hello, {}!", ["world"])
 }
 
 // ── List operations ────────────────────────────────────────────────────────

@@ -30,12 +30,12 @@ fn describe_error(e: MathError) -> String {
 
 fn main() -> Unit ! Console {
     let a: Int = double(21);
-    println(format("double(21) = {}", a));
+    println(format("double(21) = {}", [a.to_string()]));
 
     let b: Int = safe_add(10, 32);
-    println(format("safe_add(10, 32) = {}", b));
+    println(format("safe_add(10, 32) = {}", [b.to_string()]));
 
     let err: MathError = MathError::DivisionByZero;
     let msg: String = describe_error(err);
-    println(format("MathError: {}", msg));
+    println(format("MathError: {}", [msg]));
 }

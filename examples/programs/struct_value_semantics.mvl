@@ -13,7 +13,7 @@ type Point = struct {
 }
 
 total fn show(p: Point) -> String {
-    format("{}, {}", p.x, p.y)
+    format("{}, {}", [p.x.to_string(), p.y.to_string()])
 }
 
 total fn add(a: Point, b: Point) -> Point {

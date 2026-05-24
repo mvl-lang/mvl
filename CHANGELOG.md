@@ -4,6 +4,12 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.147.2] - 2026-05-24
+
+### Fixed
+
+- **compiler: resolve post-#993 regressions** — Fixed 12 regressions introduced by PR #993 (format 2-arg migration, declarative sink keyword, UnknownMethod enforcement). `sink` keyword collision silently broke 11 IFC propagation tests (parser dropped unparseable functions). `format(...)` collided with Rust's `format!` macro — added `mvl_format` runtime function for both Rust and LLVM backends. Missing method table entries (`char_at`, `byte_at`, `concat`, `reverse`, `Bool.to_string()`) caused stdlib and corpus failures. Unary `!` operator lacked parens in transpiled Rust, breaking `(!b).to_string()` chains. Migrated all remaining old-style variadic `format` calls across 23 files. `write(path(...))` → `write_file(path(...))` in `std/kv/file.mvl` after Fd unification (#982). Added LLVM `emit_bool_to_string` with `select` on `"true"`/`"false"` globals for backend parity. Result: all 13 test suites pass except LLVM/cross-backend (now also fixed).
+
 ## [0.147.1] - 2026-05-23
 
 ### Fixed

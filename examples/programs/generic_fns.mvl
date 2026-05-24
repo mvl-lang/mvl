@@ -20,7 +20,7 @@ type Point = struct { x: Int, y: Int }
 
 fn show_point(p: Option[Point]) -> String {
     match p {
-        Some(v) => format("got {} {}", v.x, v.y),
+        Some(v) => format("got {} {}", [v.x.to_string(), v.y.to_string()]),
         None    => "nothing",
     }
 }
@@ -29,7 +29,7 @@ fn main() -> Unit ! Console {
     // Generic function called with two different concrete types.
     let n: Int    = identity(42);
     let s: String = identity("hello");
-    println(format("{}", n));
+    println(format("{}", [n.to_string()]));
     println(s);
 
     // Option[Point]: Some path exercises struct payload via pointer.

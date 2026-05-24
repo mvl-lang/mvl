@@ -13,7 +13,7 @@ fn main() -> Unit ! Console {
     let diff: Set[Int] = a.difference(b);
     let uni: Set[Int] = a.union(b);
 
-    println(format("{}", inter.len()));
-    println(format("{}", diff.len()));
-    println(format("{}", uni.len()));
+    println(format("{}", [inter.len().to_string()]));
+    println(format("{}", [diff.len().to_string()]));
+    println(format("{}", [uni.len().to_string()]));
 }

@@ -91,6 +91,7 @@ test: build build-llvm-runtime ## Run all test suites and print a one-line PASS/
 	}; \
 	echo ""; \
 	run_suite "Unit tests"        test-unit; \
+	run_suite "Type checker"      test-type-checker; \
 	run_suite "Requirements"      test-requirements; \
 	run_suite "Error messages"    test-error-messages; \
 	run_suite "Corpus"            test-corpus; \
@@ -103,6 +104,7 @@ test: build build-llvm-runtime ## Run all test suites and print a one-line PASS/
 	run_suite "Examples"          test-examples; \
 	run_suite "Tree-sitter"       test-tree-sitter; \
 	run_suite "Grammar coverage"  test-grammar-coverage; \
+	run_suite "MVL compiler"      test-mvl; \
 	echo ""; \
 	if [ $$fail -eq 0 ]; then \
 		printf "  \033[32m✓  All $$((pass)) suites passed\033[0m\n\n"; \
@@ -113,6 +115,9 @@ test: build build-llvm-runtime ## Run all test suites and print a one-line PASS/
 
 test-unit: ## Run unit tests only
 	cargo test --lib
+
+test-type-checker: ## Run type checker integration tests (IFC, effects, labels, format)
+	cargo test --test type_checker
 
 test-integration: ## Dev convenience: run all integration test binaries at once (may overlap with named targets in make test)
 	cargo test --tests
@@ -307,7 +312,7 @@ tree-sitter-build: ## Build tree-sitter grammar for Zed/Neovim
 test-tree-sitter: tree-sitter-build ## Run tree-sitter corpus tests (grammar derived from docs/grammar.ebnf)
 	cd etc/tree-sitter-mvl && npm test
 
-test-grammar-coverage: ## Cross-validate docs/grammar.ebnf against tree-sitter grammar.js
+test-grammar-coverage: validate-keywords ## Cross-validate docs/grammar.ebnf against tree-sitter grammar.js
 	@python3 tools/check_grammar_coverage.py
 
 install-nvim: ## Install nvim-mvl plugin + compile tree-sitter parser

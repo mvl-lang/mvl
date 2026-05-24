@@ -758,9 +758,19 @@ fn check_expr_flows(
             // Method calls: check for implicit flow using qualified name in sink_reach (#956).
             if is_high_opt(&pc) {
                 // Build candidate qualified names matching collect_calls_in_expr / collect_sink_names.
+                // Try both the variable name and any Type::method keys in sink_reach.
                 let mut qualified_names: Vec<String> = vec![method.clone()];
                 if let Expr::Ident(recv_name, _) = receiver.as_ref() {
                     qualified_names.push(format!("{recv_name}::{method}"));
+                }
+                // Also match Type::method keys where the method name matches,
+                // since the receiver is a variable name but sinks are registered
+                // by type name (e.g. "Logger::info" vs "logger.info()").
+                let method_suffix = format!("::{method}");
+                for key in sink_reach.keys() {
+                    if key.ends_with(&method_suffix) && !qualified_names.contains(key) {
+                        qualified_names.push(key.clone());
+                    }
                 }
                 for qn in &qualified_names {
                     if let Some(sink) = sink_reach.get(qn.as_str()) {

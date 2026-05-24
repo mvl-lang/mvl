@@ -432,7 +432,7 @@ pub fn kv_delete(store: FileKv, key: String) -> FileKv {
 /// Rewrites the entire file. Suitable for config-scale data.
 pub partial fn kv_save(store: FileKv) -> Result[Unit, IoError] ! FileWrite {
     let content: String = kv_serialize(store.data);
-    write(path(store.path), content)
+    write_file(path(store.path), content)
 }
 
 /// Return all keys in the store (unordered).

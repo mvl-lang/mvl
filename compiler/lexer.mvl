@@ -81,6 +81,7 @@ total fn keyword_kind(s: String) -> TokenKind {
         "impl"        => TokenKind::KwImpl,
         "builtin"     => TokenKind::KwBuiltin,
         "transparent" => TokenKind::KwTransparent,
+        "sink"        => TokenKind::KwSink,
         "requires"    => TokenKind::KwRequires,
         "ensures"     => TokenKind::KwEnsures,
         "invariant"   => TokenKind::KwInvariant,

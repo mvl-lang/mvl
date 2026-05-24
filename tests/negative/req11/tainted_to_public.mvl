@@ -5,6 +5,9 @@
 //           a classic implicit (control-flow) information leak.
 // Triggers: CheckError::ImplicitFlowViolation (req11)
 
+// Declare println as a sink so the IFC checker recognizes it without stdlib prelude.
+pub sink fn println(msg: String) -> Unit ! Console { }
+
 fn validate_input(ok: Tainted[Bool]) -> Unit ! Console {
     // VIOLATION: println fires inside a Tainted-controlled branch.
     // Even though the printed string is a literal, the fact that it prints

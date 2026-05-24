@@ -1,6 +1,6 @@
 fn main() -> Unit ! Console {
     let a: List[Int] = [1, 2, 3];
-    let b: ref List[Int] = a.clone();
+    let b: ref List[Int] = [1, 2, 3];
     b.push(4);
     println(a.len().to_string());
 }

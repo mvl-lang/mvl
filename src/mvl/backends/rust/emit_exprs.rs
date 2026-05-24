@@ -732,8 +732,12 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
             ..
         } => {
             // panic! is a Rust macro: first arg must be a bare string literal.
-            // format is now a regular 2-arg function (#901).
-            if name.as_str() == "panic" {
+            // format → mvl_format to avoid collision with Rust's format! macro (#901).
+            if name.as_str() == "format" {
+                cg.push("mvl_format(");
+                emit_args(cg, args);
+                cg.push(")");
+            } else if name.as_str() == "panic" {
                 cg.push(&format!("{name}!"));
                 cg.push("(");
                 emit_args_for_macro(cg, args);
@@ -830,8 +834,9 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
                 emit_expr(cg, expr);
             }
             UnaryOp::Not => {
-                cg.push("!");
+                cg.push("(!");
                 emit_expr(cg, expr);
+                cg.push(")");
             }
             UnaryOp::Deref => {
                 cg.push("*(");

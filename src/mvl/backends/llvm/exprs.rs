@@ -1988,7 +1988,18 @@ impl<'ctx> LlvmBackend<'ctx> {
         args: &[Expr],
     ) -> Option<BasicValueEnum<'ctx>> {
         match name {
-            // format is now a regular 2-arg function (#901), compiled via its MVL body.
+            // format(template, values) → mvl_format(ptr, ptr) (#901)
+            "format" if args.len() == 2 => {
+                let tmpl = self.emit_expr(&args[0])?;
+                let vals = self.emit_expr(&args[1])?;
+                let fmt_fn = self.get_mvl_format();
+                let call = self
+                    .builder
+                    .build_call(fmt_fn, &[tmpl.into(), vals.into()], "formatted")
+                    .unwrap();
+                use inkwell::values::AnyValue;
+                BasicValueEnum::try_from(call.as_any_value_enum()).ok()
+            }
             // assert(condition) — trap if condition is false.
             "assert" if args.len() == 1 => {
                 let cond = match self.emit_expr(&args[0])? {
@@ -3821,7 +3832,14 @@ impl<'ctx> LlvmBackend<'ctx> {
 
             // ── to_string ────────────────────────────────────────────────────
             "to_string" => match recv_val {
-                BasicValueEnum::IntValue(v) => Some(self.emit_int_to_string(v)),
+                BasicValueEnum::IntValue(v) => {
+                    // Bool is i1; Int/Byte/UByte/UInt are wider — dispatch accordingly.
+                    if v.get_type().get_bit_width() == 1 {
+                        Some(self.emit_bool_to_string(v))
+                    } else {
+                        Some(self.emit_int_to_string(v))
+                    }
+                }
                 BasicValueEnum::FloatValue(v) => Some(self.emit_float_to_string(v)),
                 BasicValueEnum::PointerValue(p) => Some(p.into()),
                 _ => None,

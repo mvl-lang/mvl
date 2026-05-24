@@ -102,6 +102,50 @@ impl<'ctx> LlvmBackend<'ctx> {
         })
     }
 
+    /// Emit `Bool.to_string()` → heap `MvlString*` ("true" or "false").
+    pub(crate) fn emit_bool_to_string(
+        &mut self,
+        v: inkwell::values::IntValue<'ctx>,
+    ) -> BasicValueEnum<'ctx> {
+        let true_str = self
+            .builder
+            .build_global_string_ptr("true", "bool_true")
+            .unwrap();
+        let false_str = self
+            .builder
+            .build_global_string_ptr("false", "bool_false")
+            .unwrap();
+        let ptr = self
+            .builder
+            .build_select(
+                v,
+                true_str.as_pointer_value(),
+                false_str.as_pointer_value(),
+                "bool_str_ptr",
+            )
+            .unwrap()
+            .into_pointer_value();
+        let true_len = self.context.i64_type().const_int(4, false);
+        let false_len = self.context.i64_type().const_int(5, false);
+        let len = self
+            .builder
+            .build_select(v, true_len, false_len, "bool_str_len")
+            .unwrap()
+            .into_int_value();
+        let mvl_string_new = self.get_mvl_string_new();
+        let call = self
+            .builder
+            .build_call(mvl_string_new, &[ptr.into(), len.into()], "bool_str")
+            .unwrap();
+        use inkwell::values::AnyValue;
+        BasicValueEnum::try_from(call.as_any_value_enum()).unwrap_or_else(|_| {
+            self.context
+                .ptr_type(inkwell::AddressSpace::default())
+                .const_null()
+                .into()
+        })
+    }
+
     /// Emit `Int.to_string()` → heap `MvlString*`.
     pub(crate) fn emit_int_to_string(
         &mut self,

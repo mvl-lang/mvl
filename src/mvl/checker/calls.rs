@@ -363,6 +363,7 @@ impl TypeChecker {
         let base = recv_ty.unlabeled();
         let result = match base {
             Ty::Int => Self::int_method_ty(method),
+            Ty::Bool => Self::bool_method_ty(method),
             Ty::Byte => Self::byte_method_ty(method),
             Ty::UByte => Self::ubyte_method_ty(method),
             Ty::UInt => Self::uint_method_ty(method),

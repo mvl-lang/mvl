@@ -37,7 +37,7 @@ total fn calculate_share(
     let share: Float = safe_divide(total_amount, divisor);
 
     // OK: share is Public
-    println(format("Calculated share: {}", share));
+    println(format("Calculated share: {}", [share.to_string()]));
 
     // COMPILE ERROR if uncommented: Secret cannot flow to Console
     // console.log("Account: {}", account);
@@ -49,7 +49,7 @@ fn main() -> Unit ! Console {
     match to_nonzero(4.0) {
         Ok(d) => {
             match to_nonzero(100.0) {
-                Ok(n) => println(format("100 / 4 = {}", safe_divide(n, d))),
+                Ok(n) => println(format("100 / 4 = {}", [safe_divide(n, d).to_string()])),
                 Err(DivError::DivisionByZero) => println("Error: DivisionByZero"),
             }
         },

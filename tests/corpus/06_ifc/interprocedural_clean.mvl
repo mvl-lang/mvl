@@ -6,6 +6,10 @@
 // Calling such a function unconditionally (PC = None) is always safe, because
 // no high-security condition controls whether the call fires.
 
+// Declare println/print as sinks so IFC checker works without stdlib prelude.
+pub sink fn println(msg: String) -> Unit ! Console { }
+pub sink fn print(msg: String) -> Unit ! Console { }
+
 fn announce_result(msg: String) -> Unit ! Console {
     // Directly reaches a public sink.
     println(msg)

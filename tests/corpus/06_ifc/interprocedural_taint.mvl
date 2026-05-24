@@ -4,6 +4,10 @@
 // Sink reachability propagates transitively via BFS: if A→B→println then calling A
 // inside a Tainted-controlled branch is a cross-function implicit flow violation.
 
+// Declare println/print as sinks so IFC checker works without stdlib prelude.
+pub sink fn println(msg: String) -> Unit ! Console { }
+pub sink fn print(msg: String) -> Unit ! Console { }
+
 fn emit_log_line() -> Unit ! Console {
     println("tainted path taken")
 }

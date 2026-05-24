@@ -9,8 +9,8 @@ fn main() -> Unit ! Console {
     let x: Int = 42;
     let y: Int = 100;
     let msg: String = "hello";
-    println(format("{} {}", msg, x));       // String + Int
-    println(format("{}", x));               // non-string Int via format
-    println(format("{} {}", x, y));         // two Int args
-    println(format("{} {} {}", x, y, msg)); // three args (Int, Int, Str)
+    println(format("{} {}", [msg, x.to_string()]));       // String + Int
+    println(format("{}", [x.to_string()]));               // non-string Int via format
+    println(format("{} {}", [x.to_string(), y.to_string()]));         // two Int args
+    println(format("{} {} {}", [x.to_string(), y.to_string(), msg])); // three args (Int, Int, Str)
 }
