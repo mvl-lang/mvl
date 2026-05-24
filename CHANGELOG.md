@@ -4,6 +4,12 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.151.0] - 2026-05-24
+
+### Added
+
+- **linter: while-to-for-range lint rule** (#1004): New linter rule detecting `while VAR < END { ...; VAR = VAR + N }` counter patterns and suggesting conversion to `for VAR in range(START, END)`. Rule id: `while-to-for-range`, severity: warning, default: on. Heuristic matches when all three hold: while loop with no `decreases` clause, condition is `VAR < END`, and last statement in body is `VAR = VAR + N`. Loops with explicit `decreases` clause are silently skipped. Complements existing `for-iter-antipattern` rule (#705) which catches list iteration patterns.
+
 ## [0.150.0] - 2026-05-24
 
 ### Added
