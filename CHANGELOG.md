@@ -4,6 +4,12 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.152.0] - 2026-05-24
+
+### Added
+
+- **std/json: JSONL encode/decode** (#998): Adds `jsonl_encode(values: List[Value]) -> String` and `jsonl_decode(s: String) -> Result[List[Value], JsonError]` as pure-MVL functions with no effects. `jsonl_encode` serialises one JSON value per line with a trailing newline; `jsonl_decode` splits on `\n`, skips blank lines, and fails-fast on the first malformed line. 13 new tests covering encode, decode, blank-line skipping, error propagation, and roundtrip verification.
+
 ## [0.151.0] - 2026-05-24
 
 ### Added
