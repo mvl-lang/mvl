@@ -307,7 +307,7 @@ tree-sitter-build: ## Build tree-sitter grammar for Zed/Neovim
 test-tree-sitter: tree-sitter-build ## Run tree-sitter corpus tests (grammar derived from docs/grammar.ebnf)
 	cd etc/tree-sitter-mvl && npm test
 
-test-grammar-coverage: ## Cross-validate docs/grammar.ebnf against tree-sitter grammar.js
+test-grammar-coverage: validate-keywords ## Cross-validate docs/grammar.ebnf against tree-sitter grammar.js
 	@python3 tools/check_grammar_coverage.py
 
 install-nvim: ## Install nvim-mvl plugin + compile tree-sitter parser

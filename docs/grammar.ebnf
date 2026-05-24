@@ -56,6 +56,7 @@ ghost_let_stmt  = "ghost" "let" pattern ":" type_expr "=" ref_expr ";" ; (* Phas
 totality       = "total" | "partial" ;
 (* builtin fn: runtime-provided implementation; body is forbidden *)
 (* transparent fn: label-transparent — checker joins arg labels and applies to return type (ADR-0024) *)
+(* sink fn: IFC sink — tainted data flowing into this function produces a violation (#956) *)
 security       = "public" | "tainted" | "secret" ;
 param_list     = param { "," param } ;
 param          = [ capability ] IDENT ":" type_expr [ "where" refinement ] ;
@@ -232,7 +233,7 @@ DOC_COMMENT    = "///" { ANY_CHAR } NEWLINE ;    (* doc comment — convention, 
 (* Boolean:         true  false                                                  *)
 (* Refinements:     where  self  old  requires  ensures  invariant  with        *)
 (*                  decreases  forall  exists                                    *)
-(* Transparency:    transparent                                                  *)
+(* Fn modifiers:    transparent  sink                                             *)
 (* Pattern:         Some  None  Ok  Err                                          *)
 
 (* === Lexical === *)
