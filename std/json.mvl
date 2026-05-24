@@ -39,6 +39,50 @@ type ObjPos   = enum { ObjP(Map[String, Value], Int), ObjPErr(String) }
 type KVPos      = enum { KVP(String, Value, Int), KVPErr(String) }
 type ObjectStep = enum { OSep(Map[String, Value], Int, String), OStepErr(String) }
 
+// ── JSONL (JSON Lines) ────────────────────────────────────────────────────────
+
+/// Encode a list of JSON Values as a JSONL string.
+///
+/// Each value is serialised on its own line.  An empty list produces `""`.
+/// A non-empty list has a trailing newline, making the result directly
+/// suitable for writing to a file or pipe.
+///
+/// Pure — no effects.
+pub partial fn jsonl_encode(values: List[Value]) -> String {
+    let out: ref String = "";
+    let i: ref Int = 0;
+    while i < values.len() {
+        let v: Value = values.get(i).unwrap_or(Value::Null);
+        out = out.concat(encode(v).concat("\n"));
+        i = i + 1
+    }
+    out
+}
+
+/// Decode a JSONL string into a list of JSON Values.
+///
+/// Lines are split on `\n`; blank lines and the trailing newline produced by
+/// `jsonl_encode` are silently skipped.  Returns `Err(ParseError(msg))` on
+/// the first malformed line.
+///
+/// Pure — no effects.
+pub partial fn jsonl_decode(s: String) -> Result[List[Value], JsonError] {
+    let lines: List[String] = s.split("\n").filter(|line: String| line.len() > 0);
+    let results: ref List[Value] = [];
+    let i: ref Int = 0;
+    let go: ref Bool = true;
+    let err: ref String = "";
+    let had_err: ref Bool = false;
+    while go && i < lines.len() {
+        let line: String = lines.get(i).unwrap_or("");
+        match decode(line) {
+            Ok(v)                         => { results = results.concat([v]); i = i + 1 },
+            Err(JsonError::ParseError(e)) => { had_err = true; err = consume(e); go = false },
+        }
+    }
+    if had_err { Err(JsonError::ParseError(err)) } else { Ok(results) }
+}
+
 // ── encode ────────────────────────────────────────────────────────────────────
 
 /// Serialises a Value to a JSON string.

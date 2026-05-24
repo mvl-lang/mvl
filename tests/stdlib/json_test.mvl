@@ -3,7 +3,7 @@
 // Verifies the native-MVL JSON implementation: encode produces well-formed
 // JSON strings; decode round-trips them back; error cases return Err.
 
-use std.json.{Value, JsonError, encode, decode}
+use std.json.{Value, JsonError, encode, decode, jsonl_encode, jsonl_decode}
 
 // ── encode: primitives ────────────────────────────────────────────────────────
 
@@ -238,5 +238,106 @@ test fn decode_invalid_returns_parse_error() -> Unit {
     match decode("hello") {
         Ok(_) => assert(false),
         Err(JsonError::ParseError(_)) => assert(true),
+    }
+}
+
+// ── JSONL encode ──────────────────────────────────────────────────────────────
+
+test fn jsonl_encode_empty() -> Unit {
+    assert_eq(jsonl_encode([]), "")
+}
+
+test fn jsonl_encode_single_null() -> Unit {
+    assert_eq(jsonl_encode([Value::Null]), "null\n")
+}
+
+test fn jsonl_encode_single_number() -> Unit {
+    assert_eq(jsonl_encode([Value::Number(42.0)]), "42\n")
+}
+
+test fn jsonl_encode_multiple() -> Unit {
+    let values: List[Value] = [Value::Number(1.0), Value::Bool(true), Value::Null];
+    assert_eq(jsonl_encode(values), "1\ntrue\nnull\n")
+}
+
+test fn jsonl_encode_strings() -> Unit {
+    let values: List[Value] = [Value::String("hello"), Value::String("world")];
+    assert_eq(jsonl_encode(values), "\"hello\"\n\"world\"\n")
+}
+
+// ── JSONL decode ──────────────────────────────────────────────────────────────
+
+test fn jsonl_decode_empty_string() -> Unit {
+    match jsonl_decode("") {
+        Ok(vs) => assert_eq(vs.len(), 0),
+        Err(_) => assert(false),
+    }
+}
+
+test fn jsonl_decode_single_line() -> Unit {
+    match jsonl_decode("42\n") {
+        Ok(vs) => assert_eq(vs.len(), 1),
+        Err(_) => assert(false),
+    }
+}
+
+test fn jsonl_decode_multiple_lines() -> Unit {
+    match jsonl_decode("1\ntrue\nnull\n") {
+        Ok(vs) => assert_eq(vs.len(), 3),
+        Err(_) => assert(false),
+    }
+}
+
+test fn jsonl_decode_skips_blank_lines() -> Unit {
+    match jsonl_decode("\n42\n\ntrue\n\n") {
+        Ok(vs) => assert_eq(vs.len(), 2),
+        Err(_) => assert(false),
+    }
+}
+
+test fn jsonl_decode_error_on_bad_line() -> Unit {
+    match jsonl_decode("42\nnot json\ntrue\n") {
+        Ok(_)  => assert(false),
+        Err(_) => assert(true),
+    }
+}
+
+test fn jsonl_decode_error_is_parse_error() -> Unit {
+    match jsonl_decode("bad") {
+        Ok(_)                         => assert(false),
+        Err(JsonError::ParseError(_)) => assert(true),
+    }
+}
+
+// ── JSONL roundtrip ───────────────────────────────────────────────────────────
+
+test fn jsonl_roundtrip_numbers() -> Unit {
+    let values: List[Value] = [Value::Number(1.0), Value::Number(2.5), Value::Number(3.0)];
+    match jsonl_decode(jsonl_encode(values)) {
+        Ok(decoded) => assert_eq(decoded.len(), 3),
+        Err(_)      => assert(false),
+    }
+}
+
+test fn jsonl_roundtrip_mixed() -> Unit {
+    let values: List[Value] = [Value::Null, Value::Bool(true), Value::String("hi")];
+    let encoded: String = jsonl_encode(values);
+    match jsonl_decode(encoded) {
+        Ok(decoded) => assert_eq(decoded.len(), values.len()),
+        Err(_)      => assert(false),
+    }
+}
+
+test fn jsonl_roundtrip_preserves_values() -> Unit {
+    let values: List[Value] = [Value::Number(42.0), Value::Bool(false)];
+    let encoded: String = jsonl_encode(values);
+    match jsonl_decode(encoded) {
+        Ok(decoded) => {
+            match decoded.get(0) {
+                Some(Value::Number(n)) => assert_eq(n, 42.0),
+                _                     => assert(false),
+            }
+        }
+        Err(_) => assert(false),
     }
 }
