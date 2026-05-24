@@ -1,0 +1,527 @@
+// tests/stdlib/yaml_test.mvl — std.yaml encode/decode correctness (#1001)
+//
+// Verifies the native-MVL YAML implementation: yaml_encode produces well-formed
+// YAML strings; yaml_decode round-trips them back; error cases return Err.
+
+use std.yaml.{YamlValue, YamlError, yaml_encode, yaml_decode}
+
+// ── encode: primitives ────────────────────────────────────────────────────────
+
+test fn encode_null() -> Unit {
+    assert_eq(yaml_encode(YamlValue::Null), "null")
+}
+
+test fn encode_true() -> Unit {
+    assert_eq(yaml_encode(YamlValue::Bool(true)), "true")
+}
+
+test fn encode_false() -> Unit {
+    assert_eq(yaml_encode(YamlValue::Bool(false)), "false")
+}
+
+test fn encode_int() -> Unit {
+    assert_eq(yaml_encode(YamlValue::Int(42)), "42")
+}
+
+test fn encode_negative_int() -> Unit {
+    assert_eq(yaml_encode(YamlValue::Int(-7)), "-7")
+}
+
+test fn encode_zero() -> Unit {
+    assert_eq(yaml_encode(YamlValue::Int(0)), "0")
+}
+
+test fn encode_float() -> Unit {
+    assert_eq(yaml_encode(YamlValue::Float(3.14)), "3.14")
+}
+
+test fn encode_string_plain() -> Unit {
+    assert_eq(yaml_encode(YamlValue::Str("hello")), "\"hello\"")
+}
+
+test fn encode_string_with_quote() -> Unit {
+    assert_eq(yaml_encode(YamlValue::Str("say \"hi\"")), "\"say \\\"hi\\\"\"")
+}
+
+test fn encode_string_with_backslash() -> Unit {
+    assert_eq(yaml_encode(YamlValue::Str("a\\b")), "\"a\\\\b\"")
+}
+
+test fn encode_string_with_newline() -> Unit {
+    assert_eq(yaml_encode(YamlValue::Str("a\nb")), "\"a\\nb\"")
+}
+
+test fn encode_empty_string() -> Unit {
+    assert_eq(yaml_encode(YamlValue::Str("")), "\"\"")
+}
+
+// ── encode: sequences ─────────────────────────────────────────────────────────
+
+test fn encode_empty_seq() -> Unit {
+    assert_eq(yaml_encode(YamlValue::Seq([])), "[]")
+}
+
+test fn encode_seq_of_ints() -> Unit {
+    let items: List[YamlValue] = [YamlValue::Int(1), YamlValue::Int(2), YamlValue::Int(3)];
+    assert_eq(yaml_encode(YamlValue::Seq(items)), "- 1\n- 2\n- 3\n")
+}
+
+test fn encode_seq_of_strings() -> Unit {
+    let items: List[YamlValue] = [YamlValue::Str("a"), YamlValue::Str("b")];
+    assert_eq(yaml_encode(YamlValue::Seq(items)), "- \"a\"\n- \"b\"\n")
+}
+
+test fn encode_seq_with_null() -> Unit {
+    let items: List[YamlValue] = [YamlValue::Null, YamlValue::Int(1)];
+    assert_eq(yaml_encode(YamlValue::Seq(items)), "- null\n- 1\n")
+}
+
+// ── encode: maps ──────────────────────────────────────────────────────────────
+
+test fn encode_empty_map() -> Unit {
+    let m: ref Map[String, YamlValue] = {"__yaml_init__": YamlValue::Null};
+    m.remove("__yaml_init__");
+    assert_eq(yaml_encode(YamlValue::Map(m)), "{}")
+}
+
+test fn encode_map_int_value() -> Unit {
+    let m: Map[String, YamlValue] = {"age": YamlValue::Int(30)};
+    assert_eq(yaml_encode(YamlValue::Map(m)), "age: 30\n")
+}
+
+test fn encode_map_bool_value() -> Unit {
+    let m: Map[String, YamlValue] = {"active": YamlValue::Bool(true)};
+    assert_eq(yaml_encode(YamlValue::Map(m)), "active: true\n")
+}
+
+test fn encode_map_null_value() -> Unit {
+    let m: Map[String, YamlValue] = {"x": YamlValue::Null};
+    assert_eq(yaml_encode(YamlValue::Map(m)), "x: null\n")
+}
+
+test fn encode_map_with_empty_seq() -> Unit {
+    let m: Map[String, YamlValue] = {"items": YamlValue::Seq([])};
+    assert_eq(yaml_encode(YamlValue::Map(m)), "items: []\n")
+}
+
+test fn encode_nested_seq_in_map() -> Unit {
+    let inner: List[YamlValue] = [YamlValue::Str("x"), YamlValue::Str("y")];
+    let m: Map[String, YamlValue] = {"tags": YamlValue::Seq(inner)};
+    assert_eq(yaml_encode(YamlValue::Map(m)), "tags:\n  - \"x\"\n  - \"y\"\n")
+}
+
+// ── decode: scalars ───────────────────────────────────────────────────────────
+
+test fn decode_null_keyword() -> Unit {
+    match yaml_decode("null") {
+        Ok(YamlValue::Null) => assert(true),
+        _                   => assert(false),
+    }
+}
+
+test fn decode_tilde_null() -> Unit {
+    match yaml_decode("~") {
+        Ok(YamlValue::Null) => assert(true),
+        _                   => assert(false),
+    }
+}
+
+test fn decode_true() -> Unit {
+    match yaml_decode("true") {
+        Ok(YamlValue::Bool(b)) => assert_eq(b, true),
+        _                      => assert(false),
+    }
+}
+
+test fn decode_false() -> Unit {
+    match yaml_decode("false") {
+        Ok(YamlValue::Bool(b)) => assert_eq(b, false),
+        _                      => assert(false),
+    }
+}
+
+test fn decode_int() -> Unit {
+    match yaml_decode("42") {
+        Ok(YamlValue::Int(n)) => assert_eq(n, 42),
+        _                     => assert(false),
+    }
+}
+
+test fn decode_negative_int() -> Unit {
+    match yaml_decode("-7") {
+        Ok(YamlValue::Int(n)) => assert_eq(n, -7),
+        _                     => assert(false),
+    }
+}
+
+test fn decode_float() -> Unit {
+    match yaml_decode("3.14") {
+        Ok(YamlValue::Float(f)) => assert_eq(f, 3.14),
+        _                       => assert(false),
+    }
+}
+
+test fn decode_double_quoted_string() -> Unit {
+    match yaml_decode("\"hello\"") {
+        Ok(YamlValue::Str(s)) => assert_eq(s, "hello"),
+        _                     => assert(false),
+    }
+}
+
+test fn decode_double_quoted_escape() -> Unit {
+    match yaml_decode("\"a\\nb\"") {
+        Ok(YamlValue::Str(s)) => assert_eq(s, "a\nb"),
+        _                     => assert(false),
+    }
+}
+
+test fn decode_single_quoted_string() -> Unit {
+    match yaml_decode("'world'") {
+        Ok(YamlValue::Str(s)) => assert_eq(s, "world"),
+        _                     => assert(false),
+    }
+}
+
+test fn decode_bare_string() -> Unit {
+    match yaml_decode("hello world") {
+        Ok(YamlValue::Str(s)) => assert_eq(s, "hello world"),
+        _                     => assert(false),
+    }
+}
+
+// ── decode: comments and blank lines ─────────────────────────────────────────
+
+test fn decode_skips_comment_lines() -> Unit {
+    let yaml: String = "# a comment\n42";
+    match yaml_decode(yaml) {
+        Ok(YamlValue::Int(n)) => assert_eq(n, 42),
+        _                     => assert(false),
+    }
+}
+
+test fn decode_skips_blank_lines() -> Unit {
+    let yaml: String = "\n\n42";
+    match yaml_decode(yaml) {
+        Ok(YamlValue::Int(n)) => assert_eq(n, 42),
+        _                     => assert(false),
+    }
+}
+
+// ── decode: document separator ───────────────────────────────────────────────
+
+test fn decode_document_separator() -> Unit {
+    let yaml: String = "---\n42";
+    match yaml_decode(yaml) {
+        Ok(YamlValue::Int(n)) => assert_eq(n, 42),
+        _                     => assert(false),
+    }
+}
+
+// ── decode: sequences ─────────────────────────────────────────────────────────
+
+test fn decode_seq_length() -> Unit {
+    let yaml: String = "- 1\n- 2\n- 3";
+    match yaml_decode(yaml) {
+        Ok(YamlValue::Seq(items)) => assert_eq(items.len(), 3),
+        _                         => assert(false),
+    }
+}
+
+test fn decode_seq_first_item() -> Unit {
+    let yaml: String = "- 1\n- 2\n- 3";
+    match yaml_decode(yaml) {
+        Ok(YamlValue::Seq(items)) => match items.get(0) {
+            Some(YamlValue::Int(n)) => assert_eq(n, 1),
+            _                       => assert(false),
+        },
+        _ => assert(false),
+    }
+}
+
+test fn decode_seq_last_item() -> Unit {
+    let yaml: String = "- 1\n- 2\n- 3";
+    match yaml_decode(yaml) {
+        Ok(YamlValue::Seq(items)) => match items.get(2) {
+            Some(YamlValue::Int(n)) => assert_eq(n, 3),
+            _                       => assert(false),
+        },
+        _ => assert(false),
+    }
+}
+
+test fn decode_seq_string_first() -> Unit {
+    let yaml: String = "- \"foo\"\n- \"bar\"";
+    match yaml_decode(yaml) {
+        Ok(YamlValue::Seq(items)) => match items.get(0) {
+            Some(YamlValue::Str(s)) => assert_eq(s, "foo"),
+            _                       => assert(false),
+        },
+        _ => assert(false),
+    }
+}
+
+test fn decode_seq_string_second() -> Unit {
+    let yaml: String = "- \"foo\"\n- \"bar\"";
+    match yaml_decode(yaml) {
+        Ok(YamlValue::Seq(items)) => match items.get(1) {
+            Some(YamlValue::Str(s)) => assert_eq(s, "bar"),
+            _                       => assert(false),
+        },
+        _ => assert(false),
+    }
+}
+
+test fn decode_seq_mixed_count() -> Unit {
+    let yaml: String = "- null\n- true\n- 1\n- 2.5\n- \"x\"";
+    match yaml_decode(yaml) {
+        Ok(YamlValue::Seq(items)) => assert_eq(items.len(), 5),
+        _                         => assert(false),
+    }
+}
+
+// ── decode: mappings ──────────────────────────────────────────────────────────
+
+test fn decode_map_string_value() -> Unit {
+    match yaml_decode("name: Alice") {
+        Ok(YamlValue::Map(m)) => match m.get("name") {
+            Some(YamlValue::Str(s)) => assert_eq(s, "Alice"),
+            _                       => assert(false),
+        },
+        _ => assert(false),
+    }
+}
+
+test fn decode_map_int_value() -> Unit {
+    match yaml_decode("age: 30") {
+        Ok(YamlValue::Map(m)) => match m.get("age") {
+            Some(YamlValue::Int(n)) => assert_eq(n, 30),
+            _                       => assert(false),
+        },
+        _ => assert(false),
+    }
+}
+
+test fn decode_map_bool_value() -> Unit {
+    match yaml_decode("active: true") {
+        Ok(YamlValue::Map(m)) => match m.get("active") {
+            Some(YamlValue::Bool(b)) => assert_eq(b, true),
+            _                        => assert(false),
+        },
+        _ => assert(false),
+    }
+}
+
+test fn decode_map_null_value() -> Unit {
+    match yaml_decode("x:") {
+        Ok(YamlValue::Map(m)) => match m.get("x") {
+            Some(YamlValue::Null) => assert(true),
+            _                     => assert(false),
+        },
+        _ => assert(false),
+    }
+}
+
+test fn decode_map_key_count() -> Unit {
+    let yaml: String = "name: Bob\nage: 25";
+    match yaml_decode(yaml) {
+        Ok(YamlValue::Map(m)) => assert_eq(m.keys().len(), 2),
+        _                     => assert(false),
+    }
+}
+
+test fn decode_map_second_key() -> Unit {
+    let yaml: String = "name: Bob\nage: 25";
+    match yaml_decode(yaml) {
+        Ok(YamlValue::Map(m)) => match m.get("age") {
+            Some(YamlValue::Int(n)) => assert_eq(n, 25),
+            _                       => assert(false),
+        },
+        _ => assert(false),
+    }
+}
+
+// ── decode: nested structures ─────────────────────────────────────────────────
+
+test fn decode_nested_seq_count() -> Unit {
+    let yaml: String = "tags:\n  - admin\n  - user";
+    match yaml_decode(yaml) {
+        Ok(YamlValue::Map(m)) => match m.get("tags") {
+            Some(YamlValue::Seq(items)) => assert_eq(items.len(), 2),
+            _                           => assert(false),
+        },
+        _ => assert(false),
+    }
+}
+
+test fn decode_nested_seq_first_item() -> Unit {
+    let yaml: String = "tags:\n  - admin\n  - user";
+    match yaml_decode(yaml) {
+        Ok(YamlValue::Map(m)) => match m.get("tags") {
+            Some(YamlValue::Seq(items)) => match items.get(0) {
+                Some(YamlValue::Str(s)) => assert_eq(s, "admin"),
+                _                       => assert(false),
+            },
+            _ => assert(false),
+        },
+        _ => assert(false),
+    }
+}
+
+test fn decode_nested_map_value() -> Unit {
+    let yaml: String = "address:\n  city: Springfield\n  zip: \"12345\"";
+    match yaml_decode(yaml) {
+        Ok(YamlValue::Map(m)) => match m.get("address") {
+            Some(YamlValue::Map(addr)) => match addr.get("city") {
+                Some(YamlValue::Str(s)) => assert_eq(s, "Springfield"),
+                _                       => assert(false),
+            },
+            _ => assert(false),
+        },
+        _ => assert(false),
+    }
+}
+
+test fn decode_inline_map_in_seq_count() -> Unit {
+    // "- key: value" inline mapping in sequence
+    let yaml: String = "- name: Alice\n  age: 30\n- name: Bob\n  age: 25";
+    match yaml_decode(yaml) {
+        Ok(YamlValue::Seq(items)) => assert_eq(items.len(), 2),
+        _                         => assert(false),
+    }
+}
+
+test fn decode_inline_map_in_seq_first_key() -> Unit {
+    let yaml: String = "- name: Alice\n  age: 30\n- name: Bob\n  age: 25";
+    match yaml_decode(yaml) {
+        Ok(YamlValue::Seq(items)) => match items.get(0) {
+            Some(YamlValue::Map(m)) => match m.get("name") {
+                Some(YamlValue::Str(s)) => assert_eq(s, "Alice"),
+                _                       => assert(false),
+            },
+            _ => assert(false),
+        },
+        _ => assert(false),
+    }
+}
+
+// ── round-trip ────────────────────────────────────────────────────────────────
+
+test fn roundtrip_null() -> Unit {
+    match yaml_decode(yaml_encode(YamlValue::Null)) {
+        Ok(YamlValue::Null) => assert(true),
+        _                   => assert(false),
+    }
+}
+
+test fn roundtrip_bool_true() -> Unit {
+    match yaml_decode(yaml_encode(YamlValue::Bool(true))) {
+        Ok(YamlValue::Bool(b)) => assert_eq(b, true),
+        _                      => assert(false),
+    }
+}
+
+test fn roundtrip_bool_false() -> Unit {
+    match yaml_decode(yaml_encode(YamlValue::Bool(false))) {
+        Ok(YamlValue::Bool(b)) => assert_eq(b, false),
+        _                      => assert(false),
+    }
+}
+
+test fn roundtrip_int() -> Unit {
+    match yaml_decode(yaml_encode(YamlValue::Int(99))) {
+        Ok(YamlValue::Int(n)) => assert_eq(n, 99),
+        _                     => assert(false),
+    }
+}
+
+test fn roundtrip_negative_int() -> Unit {
+    match yaml_decode(yaml_encode(YamlValue::Int(-3))) {
+        Ok(YamlValue::Int(n)) => assert_eq(n, -3),
+        _                     => assert(false),
+    }
+}
+
+test fn roundtrip_string() -> Unit {
+    match yaml_decode(yaml_encode(YamlValue::Str("hello world"))) {
+        Ok(YamlValue::Str(s)) => assert_eq(s, "hello world"),
+        _                     => assert(false),
+    }
+}
+
+test fn roundtrip_string_with_colon() -> Unit {
+    match yaml_decode(yaml_encode(YamlValue::Str("key: value"))) {
+        Ok(YamlValue::Str(s)) => assert_eq(s, "key: value"),
+        _                     => assert(false),
+    }
+}
+
+test fn roundtrip_seq_length() -> Unit {
+    let items: List[YamlValue] = [YamlValue::Int(10), YamlValue::Int(20)];
+    let encoded: String = yaml_encode(YamlValue::Seq(items));
+    match yaml_decode(encoded) {
+        Ok(YamlValue::Seq(decoded)) => assert_eq(decoded.len(), 2),
+        _                           => assert(false),
+    }
+}
+
+test fn roundtrip_seq_first() -> Unit {
+    let items: List[YamlValue] = [YamlValue::Int(10), YamlValue::Int(20)];
+    let encoded: String = yaml_encode(YamlValue::Seq(items));
+    match yaml_decode(encoded) {
+        Ok(YamlValue::Seq(decoded)) => match decoded.get(0) {
+            Some(YamlValue::Int(n)) => assert_eq(n, 10),
+            _                       => assert(false),
+        },
+        _ => assert(false),
+    }
+}
+
+test fn roundtrip_map_int() -> Unit {
+    let m: Map[String, YamlValue] = {"x": YamlValue::Int(1)};
+    let encoded: String = yaml_encode(YamlValue::Map(m));
+    match yaml_decode(encoded) {
+        Ok(YamlValue::Map(dm)) => match dm.get("x") {
+            Some(YamlValue::Int(n)) => assert_eq(n, 1),
+            _                       => assert(false),
+        },
+        _ => assert(false),
+    }
+}
+
+test fn roundtrip_map_bool() -> Unit {
+    let m: Map[String, YamlValue] = {"y": YamlValue::Bool(false)};
+    let encoded: String = yaml_encode(YamlValue::Map(m));
+    match yaml_decode(encoded) {
+        Ok(YamlValue::Map(dm)) => match dm.get("y") {
+            Some(YamlValue::Bool(b)) => assert_eq(b, false),
+            _                        => assert(false),
+        },
+        _ => assert(false),
+    }
+}
+
+test fn roundtrip_nested_seq_count() -> Unit {
+    let inner: List[YamlValue] = [YamlValue::Str("a"), YamlValue::Str("b")];
+    let m: Map[String, YamlValue] = {"items": YamlValue::Seq(inner), "count": YamlValue::Int(2)};
+    let encoded: String = yaml_encode(YamlValue::Map(m));
+    match yaml_decode(encoded) {
+        Ok(YamlValue::Map(dm)) => match dm.get("count") {
+            Some(YamlValue::Int(n)) => assert_eq(n, 2),
+            _                       => assert(false),
+        },
+        _ => assert(false),
+    }
+}
+
+test fn roundtrip_nested_seq_items() -> Unit {
+    let inner: List[YamlValue] = [YamlValue::Str("a"), YamlValue::Str("b")];
+    let m: Map[String, YamlValue] = {"items": YamlValue::Seq(inner)};
+    let encoded: String = yaml_encode(YamlValue::Map(m));
+    match yaml_decode(encoded) {
+        Ok(YamlValue::Map(dm)) => match dm.get("items") {
+            Some(YamlValue::Seq(items)) => assert_eq(items.len(), 2),
+            _                           => assert(false),
+        },
+        _ => assert(false),
+    }
+}
