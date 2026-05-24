@@ -1,0 +1,143 @@
+// examples/crud_api/db.mvl — SQLite CRUD operations for the User entity.
+//
+// Opens/initialises a file-backed SQLite database.
+// All query functions take `val SqliteDb` — the caller keeps ownership and
+// passes it to each request in the synchronous accept loop.
+//
+// Effects: ! DB (+ FileRead + FileWrite for open).
+
+use models::{User, CreateUserRequest, UpdateUserRequest}
+use pkg.sqlite.{SqliteDb, SqliteError, open, execute, query, query_scalar, close}
+use std.db.{Value}
+
+// ── Open / init ───────────────────────────────────────────────────────────────
+
+/// Open (or create) the SQLite database at `path`.
+pub partial fn db_open(path: String) -> Result[SqliteDb, String] ! DB + FileRead + FileWrite {
+    match open(path) {
+        Err(SqliteError::Other(msg)) => Err("db open failed: ".concat(msg)),
+        Err(_)                       => Err("db open failed"),
+        Ok(db)                       => Ok(db),
+    }
+}
+
+/// Create the users table if it does not exist.
+pub fn db_init(db: val SqliteDb) -> Result[Unit, String] ! DB {
+    match execute(db,
+        "CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, email TEXT NOT NULL)",
+        []) {
+        Err(SqliteError::InvalidSql(msg)) => Err("schema init failed: ".concat(msg)),
+        Err(_)                            => Err("schema init failed"),
+        Ok(_)                             => Ok(()),
+    }
+}
+
+// ── Row decoder ───────────────────────────────────────────────────────────────
+
+fn row_to_user(row: Map[String, Value]) -> Option[User] {
+    match row.get("id") {
+        Some(Value::Int(id)) => {
+            match row.get("name") {
+                Some(Value::Text(name)) => {
+                    match row.get("email") {
+                        Some(Value::Text(email)) => Some(User { id: id, name: name, email: email }),
+                        _                        => None,
+                    }
+                },
+                _ => None,
+            }
+        },
+        _ => None,
+    }
+}
+
+// ── CRUD ──────────────────────────────────────────────────────────────────────
+
+/// List all users ordered by id.
+pub partial fn db_list_users(db: val SqliteDb) -> Result[List[User], String] ! DB {
+    match query(db, "SELECT id, name, email FROM users ORDER BY id", []) {
+        Err(_)   => Err("list query failed"),
+        Ok(rows) => {
+            let users: ref List[User] = [];
+            let i: ref Int = 0;
+            let n: Int = rows.len();
+            while i < n {
+                match rows.get(i) {
+                    None      => {},
+                    Some(row) => match row_to_user(row) {
+                        None    => {},
+                        Some(u) => users.push(u),
+                    },
+                }
+                i = i + 1
+            }
+            Ok(users)
+        },
+    }
+}
+
+/// Get a single user by id.  Returns None if not found.
+pub partial fn db_get_user(db: val SqliteDb, id: Int) -> Result[Option[User], String] ! DB {
+    match query(db, "SELECT id, name, email FROM users WHERE id = ?", [Value::Int(id)]) {
+        Err(_)   => Err("get query failed"),
+        Ok(rows) => match rows.get(0) {
+            None      => Ok(None),
+            Some(row) => Ok(row_to_user(row)),
+        },
+    }
+}
+
+/// Insert a new user.  Returns the new row's id.
+/// Returns Err if the email already exists (UNIQUE constraint).
+pub partial fn db_create_user(db: val SqliteDb, req: val CreateUserRequest) -> Result[Int, String] ! DB {
+    match execute(db,
+        "INSERT INTO users (name, email) VALUES (?, ?)",
+        [Value::Text(req.name), Value::Text(req.email)]) {
+        Err(SqliteError::ConstraintViolation(_)) => Err("email already exists"),
+        Err(_)                                   => Err("insert failed"),
+        Ok(_)                                    => {
+            match query_scalar(db, "SELECT last_insert_rowid()", []) {
+                Err(_)              => Err("failed to read inserted id"),
+                Ok(Value::Int(n))   => Ok(n),
+                Ok(Value::Float(f)) => Ok(f.to_int()),
+                Ok(_)               => Err("unexpected id type"),
+            }
+        },
+    }
+}
+
+/// Update name and email for an existing user.
+/// Returns true if a row was updated, false if the id did not exist.
+pub partial fn db_update_user(db: val SqliteDb, id: Int, req: val UpdateUserRequest) -> Result[Bool, String] ! DB {
+    match execute(db,
+        "UPDATE users SET name = ?, email = ? WHERE id = ?",
+        [Value::Text(req.name), Value::Text(req.email), Value::Int(id)]) {
+        Err(_) => Err("update failed"),
+        Ok(_)  => {
+            match query_scalar(db, "SELECT changes()", []) {
+                Err(_)              => Err("changes() failed"),
+                Ok(Value::Int(n))   => Ok(n > 0),
+                Ok(Value::Float(f)) => Ok(f.to_int() > 0),
+                Ok(_)               => Err("unexpected changes() type"),
+            }
+        },
+    }
+}
+
+/// Delete a user by id.
+/// Returns true if a row was deleted, false if the id did not exist.
+pub partial fn db_delete_user(db: val SqliteDb, id: Int) -> Result[Bool, String] ! DB {
+    match execute(db,
+        "DELETE FROM users WHERE id = ?",
+        [Value::Int(id)]) {
+        Err(_) => Err("delete failed"),
+        Ok(_)  => {
+            match query_scalar(db, "SELECT changes()", []) {
+                Err(_)              => Err("changes() failed"),
+                Ok(Value::Int(n))   => Ok(n > 0),
+                Ok(Value::Float(f)) => Ok(f.to_int() > 0),
+                Ok(_)               => Err("unexpected changes() type"),
+            }
+        },
+    }
+}

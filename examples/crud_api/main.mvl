@@ -1,0 +1,125 @@
+// examples/crud_api — full CRUD REST API over SQLite using pkg.http REST helpers.
+//
+// Routes:
+//   GET    /users         → list all users (JSON array)
+//   POST   /users         → create user (JSON body: {name, email})
+//   GET    /users/{id}    → get user by id
+//   PUT    /users/{id}    → update user (JSON body: {name, email})
+//   DELETE /users/{id}    → delete user
+//
+// Architecture: synchronous accept loop.  One request at a time; the SQLite
+// handle is passed through the loop by value (no shared mutable state).
+//
+// Run:
+//   cargo run -- run examples/crud_api/main.mvl
+//
+// Test:
+//   curl -s http://127.0.0.1:8080/users | jq .
+//   curl -s -X POST http://127.0.0.1:8080/users \
+//        -H 'Content-Type: application/json' \
+//        -d '{"name":"Alice","email":"alice@example.com"}' | jq .
+//   curl -s http://127.0.0.1:8080/users/1 | jq .
+//   curl -s -X PUT http://127.0.0.1:8080/users/1 \
+//        -H 'Content-Type: application/json' \
+//        -d '{"name":"Alice B","email":"aliceb@example.com"}' | jq .
+//   curl -s -X DELETE http://127.0.0.1:8080/users/1
+//
+// See #1000.
+
+use models::{User, CreateUserRequest, UpdateUserRequest}
+use db::{db_open, db_init}
+use handlers::{list_users_handler, get_user_handler, create_user_handler,
+               update_user_handler, delete_user_handler}
+use pkg.http.{Method, Request, Response, HttpError, Router, MatchedRoute,
+              parse_request, serialize_response, error_response,
+              new_router, route, dispatch,
+              json_error, http_internal_error}
+use pkg.sqlite.{SqliteDb, close}
+use std.net.{TcpListener, TcpStream, NetError,
+             tcp_listen, tcp_accept, tcp_read_request, tcp_write,
+             tcp_close_listener, tcp_close_stream, net_error_msg}
+use std.io.{println}
+
+// ── Router ────────────────────────────────────────────────────────────────────
+
+fn setup_router() -> Router {
+    route(route(route(route(route(new_router(),
+        Method::Get,    "/users",        "list_users"),
+        Method::Post,   "/users",        "create_user"),
+        Method::Get,    "/users/{id}",   "get_user"),
+        Method::Put,    "/users/{id}",   "update_user"),
+        Method::Delete, "/users/{id}",   "delete_user")
+}
+
+// ── Per-request dispatch ──────────────────────────────────────────────────────
+
+partial fn handle_request(db: val SqliteDb, req: Request, matched: val MatchedRoute) -> Response ! DB {
+    match matched.name {
+        "list_users"  => list_users_handler(db, req, matched),
+        "get_user"    => get_user_handler(db, req, matched),
+        "create_user" => create_user_handler(db, req, matched),
+        "update_user" => update_user_handler(db, req, matched),
+        "delete_user" => delete_user_handler(db, req, matched),
+        _             => json_error(http_internal_error("unknown route")),
+    }
+}
+
+// ── Synchronous accept loop ───────────────────────────────────────────────────
+//
+// One connection at a time.  Sufficient for a demo; a production version would
+// use actor-per-request (see examples/actor_webserver/).
+
+partial fn request_loop(db: val SqliteDb, listener: TcpListener, router: val Router) -> Unit ! DB + Net + Console {
+    match tcp_accept(listener) {
+        Err(NetError::ConnectionReset) => request_loop(db, listener, router),
+        Err(NetError::Timeout)         => request_loop(db, listener, router),
+        Err(_)                         => {
+            println("accept error — shutting down");
+            tcp_close_listener(listener)
+        },
+        Ok(stream) => {
+            let resp: Response = match tcp_read_request(stream) {
+                Err(_)  => json_error(http_internal_error("read error")),
+                Ok(raw) => match parse_request(raw) {
+                    Err(e)      => error_response(e),
+                    Ok(req)     => match dispatch(router, req) {
+                        Err(e)      => error_response(e),
+                        Ok(matched) => handle_request(db, req, matched),
+                    },
+                },
+            };
+            match tcp_write(stream, serialize_response(resp)) {
+                Ok(_)  => { tcp_close_stream(stream); request_loop(db, listener, router) },
+                Err(_) => { tcp_close_stream(stream); request_loop(db, listener, router) },
+            }
+        },
+    }
+}
+
+// ── Entry point ───────────────────────────────────────────────────────────────
+
+partial fn main() -> Unit ! DB + FileRead + FileWrite + Net + Console {
+    let db: SqliteDb = match db_open("crud_api.db") {
+        Err(msg) => { println("db open failed: ".concat(msg)); return },
+        Ok(db)   => db,
+    };
+
+    match db_init(db) {
+        Err(msg) => { println("db init failed: ".concat(msg)); return },
+        Ok(_)    => {},
+    }
+
+    let router: Router = setup_router();
+
+    println("crud_api listening on 127.0.0.1:8080");
+    println("  GET    /users");
+    println("  POST   /users");
+    println("  GET    /users/{id}");
+    println("  PUT    /users/{id}");
+    println("  DELETE /users/{id}");
+
+    match tcp_listen("127.0.0.1", 8080) {
+        Err(e) => println("listen failed: ".concat(net_error_msg(e))),
+        Ok(listener) => request_loop(db, listener, router),
+    }
+}
