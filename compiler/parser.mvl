@@ -225,7 +225,7 @@ total fn ps_expect_punct(ps: ParserState, p: String) -> ParserState {
         ps_advance(ps)
     } else {
         let tok: Token = ps_current(ps);
-        ps_add_error(ps, format("expected '{}', got '{}'", p, tok.lexeme))
+        ps_add_error(ps, format("expected '{}', got '{}'", [p, tok.lexeme]))
     }
 }
 
@@ -306,7 +306,7 @@ partial fn parse_type_expr_depth(ps: ParserState, max_depth: Int) -> TypeExprR
         } else {
             let next_lex: String = next.lexeme;
             curr = ps_advance(curr);
-            format("{} {}", tok_lex, next_lex)
+            format("{} {}", [tok_lex, next_lex])
         }
     } else {
         tok_lex
@@ -778,7 +778,7 @@ partial fn parse_const_decl(ps: ParserState, visible: Bool) -> ConstDeclR {
             vdone = true
         } else {
             let vt: Token = ps_current(curr);
-            value_str = if value_str == "" { vt.lexeme } else { format("{} {}", value_str, vt.lexeme) };
+            value_str = if value_str == "" { vt.lexeme } else { format("{} {}", [value_str, vt.lexeme]) };
             curr = ps_advance(curr)
         }
     }

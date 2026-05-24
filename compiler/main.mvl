@@ -40,25 +40,25 @@ use std.env.{args}
 
 total fn format_type_expr(ty: TypeExpr) -> String {
     if ty.args.len() == 0 {
-        format("{}", ty.name)
+        format("{}", [ty.name])
     } else {
         let args_str: String = ty.args.fold("", |acc: String, a: TypeExpr|
-            if acc == "" { format("{}", a.name) } else { format("{}, {}", acc, a.name) }
+            if acc == "" { format("{}", [a.name]) } else { format("{}, {}", [acc, a.name]) }
         );
-        format("{}[{}]", ty.name, args_str)
+        format("{}[{}]", [ty.name, args_str])
     }
 }
 
 total fn format_param(p: Param) -> String {
     let ty_str: String = format_type_expr(p.ty);
-    let cap_pfx: String = if p.capability != "" { format("{} ", p.capability) } else { "" };
+    let cap_pfx: String = if p.capability != "" { format("{} ", [p.capability]) } else { "" };
     let mut_pfx: String = if p.mutable { "mut " } else { "" };
-    format("{}{}{}: {}", cap_pfx, mut_pfx, p.name, ty_str)
+    format("{}{}{}: {}", [cap_pfx, mut_pfx, p.name, ty_str])
 }
 
 total fn format_params(params: List[Param]) -> String {
     params.fold("", |acc: String, p: Param|
-        if acc == "" { format_param(p) } else { format("{}, {}", acc, format_param(p)) }
+        if acc == "" { format_param(p) } else { format("{}, {}", [acc, format_param(p)]) }
     )
 }
 
@@ -67,34 +67,34 @@ total fn format_effects(effects: List[Effect]) -> String {
         ""
     } else {
         let eff_str: String = effects.fold("", |acc: String, e: Effect|
-            if acc == "" { e.name } else { format("{}, {}", acc, e.name) }
+            if acc == "" { e.name } else { format("{}, {}", [acc, e.name]) }
         );
-        format(" ! {}", eff_str)
+        format(" ! {}", [eff_str])
     }
 }
 
 total fn format_fn_sig(f: FnDecl) -> String {
     let vis: String    = if f.visible   { "pub " } else { "" };
-    let tot: String    = if f.totality != "" { format("{} ", f.totality) } else { "" };
+    let tot: String    = if f.totality != "" { format("{} ", [f.totality]) } else { "" };
     let tran: String   = if f.is_transp { "transparent " } else { "" };
     let test_s: String = if f.is_test   { "test " } else { "" };
     let params: String = format_params(f.params);
     let ret: String    = if f.ret_type.name != "" {
-        format(" -> {}", format_type_expr(f.ret_type))
+        format(" -> {}", [format_type_expr(f.ret_type)])
     } else { "" };
     let effs: String   = format_effects(f.effects);
-    format("  {}{}{}{}fn {}({}){}{}", vis, tran, tot, test_s, f.name, params, ret, effs)
+    format("  {}{}{}{}fn {}({}){}{}", [vis, tran, tot, test_s, f.name, params, ret, effs])
 }
 
 total fn format_path(segs: List[String]) -> String {
     segs.fold("", |acc: String, s: String|
-        if acc == "" { s } else { format("{}.{}", acc, s) }
+        if acc == "" { s } else { format("{}.{}", [acc, s]) }
     )
 }
 
 total fn format_imports(imports: List[String]) -> String {
     imports.fold("", |acc: String, s: String|
-        if acc == "" { s } else { format("{}, {}", acc, s) }
+        if acc == "" { s } else { format("{}, {}", [acc, s]) }
     )
 }
 
@@ -119,11 +119,11 @@ partial fn process_file(name: String, raw: Tainted[String]) -> Program ! Console
     let src: String  = relabel trust(raw, "VALIDATED");
     let prog: Program = lex_and_parse(src);
 
-    println(format("── {} ──", name));
+    println(format("── {} ──", [name]));
     println(format("  fns:{} types:{} uses:{} consts:{} externs:{} impls:{} errors:{}",
-        prog.fns.len(), prog.types.len(), prog.uses.len(),
-        prog.consts.len(), prog.externs.len(), prog.impls.len(),
-        prog.errors.len()));
+        [prog.fns.len().to_string(), prog.types.len().to_string(), prog.uses.len().to_string(),
+        prog.consts.len().to_string(), prog.externs.len().to_string(), prog.impls.len().to_string(),
+        prog.errors.len().to_string()]));
 
     let i_fns: ref Int = 0;
     while i_fns < prog.fns.len() {
@@ -143,7 +143,7 @@ partial fn process_file(name: String, raw: Tainted[String]) -> Program ! Console
             };
             let vis_s: String = if t.visible { "pub " } else { "" };
             println(format("  {}type {} = {} ({} fields/{} variants)",
-                vis_s, t.name, kind_str, t.fields.len(), t.variants.len()))
+                [vis_s, t.name, kind_str, t.fields.len().to_string(), t.variants.len().to_string()]))
         }
         i_types = i_types + 1
     }
@@ -152,7 +152,7 @@ partial fn process_file(name: String, raw: Tainted[String]) -> Program ! Console
     while i_uses < prog.uses.len() {
         if let Some(u) = prog.uses.get(i_uses) {
             println(format("  use {}.{{{}}}",
-                format_path(u.path), format_imports(u.imports)))
+                [format_path(u.path), format_imports(u.imports)]))
         }
         i_uses = i_uses + 1
     }
@@ -160,7 +160,7 @@ partial fn process_file(name: String, raw: Tainted[String]) -> Program ! Console
     let i_errs: ref Int = 0;
     while i_errs < prog.errors.len() {
         if let Some(e) = prog.errors.get(i_errs) {
-            println(format("  ERROR L{}: {}", e.span.line, e.message))
+            println(format("  ERROR L{}: {}", [e.span.line.to_string(), e.message]))
         }
         i_errs = i_errs + 1
     }
@@ -344,7 +344,7 @@ partial fn main() -> Unit ! FileRead + Console + Env {
 
             println("");
             println(format("totals: {} files  {} fns  {} types  {} uses  {} errors",
-                file_count, fn_total, type_total, use_total, err_total))
+                [file_count.to_string(), fn_total.to_string(), type_total.to_string(), use_total.to_string(), err_total.to_string()]))
         }
     }
 }
