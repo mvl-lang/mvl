@@ -4,6 +4,12 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.154.0] - 2026-05-24
+
+### Added
+
+- **std/yaml: pure MVL YAML encode/decode** (#1001): Adds `yaml_encode(YamlValue) -> String` and `yaml_decode(input: String) -> Result[YamlValue, YamlError]` as pure-MVL block-style YAML parser/serialiser with no effects. Supports YAML 1.2 core schema subset: `key: value` mappings, `- item` sequences, 2-space indentation, scalars (null/bool/int/float/string), quoted strings (`"double"` with escapes and `'single'`), `# comments`, `---` document separator, and inline `- key: val` mapping-in-sequence. YamlValue enum: Null, Bool(Bool), Int(Int), Float(Float), Str(String), Seq(List[YamlValue]), Map(Map[String, YamlValue]). Intentionally excludes anchors/aliases, tags, flow style, multiline blocks, directives (cover <5% of real-world YAML; add 80% of parser complexity). 53 tests covering encode/decode of all types, nested structures, round-trips, comments, document separator, inline map-in-seq.
+
 ## [0.153.0] - 2026-05-24
 
 ### Added
