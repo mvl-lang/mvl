@@ -199,7 +199,7 @@ fn build_request(method: val Method, host: String, port: Int, path: String, head
 
 // ── Status reconstruction ─────────────────────────────────────────────────────
 
-fn status_from_code(code: Int) -> Result[Status, HttpClientError] {
+fn client_status_from_code(code: Int) -> Result[Status, HttpClientError] {
     if      code == 200 { Ok(Status::Http200Ok) }
     else if code == 201 { Ok(Status::Http201Created) }
     else if code == 202 { Ok(Status::Http202Accepted) }
@@ -246,14 +246,14 @@ fn parse_client_headers(lines: List[String]) -> Map[String, String] {
 /// IFC trust boundary: the raw Tainted input is detainted for protocol parsing
 /// with audit tag `HTTP-CLIENT-RESPONSE`.  The body is re-tainted with
 /// `HTTP-CLIENT-BODY` — it remains untrusted.
-fn parse_response(raw: Tainted[String]) -> Result[ClientResponse, HttpClientError] {
+fn parse_client_response(raw: Tainted[String]) -> Result[ClientResponse, HttpClientError] {
     let s: String = relabel trust(raw, "HTTP-CLIENT-RESPONSE");
     let lines: List[String] = s.split("\r\n");
     let status_line: String = require_resp(lines.get(0), "empty response")?;
     let parts: List[String] = status_line.split(" ");
     let code_str: String = require_resp(parts.get(1), "malformed status line")?;
     let code: Int = parse_status_code(code_str)?;
-    let status: Status = status_from_code(code)?;
+    let status: Status = client_status_from_code(code)?;
     // Find blank line separating headers from body
     let n: Int = lines.len();
     let blank_idx: ref Int = n;
@@ -336,7 +336,7 @@ partial fn do_request(
     };
     let raw: Tainted[String] = read_result?;
     tcp_close_stream(stream);
-    let resp: ClientResponse = parse_response(raw)?;
+    let resp: ClientResponse = parse_client_response(raw)?;
     if is_redirect(resp.status) && redirects_left > 0 {
         match resp.headers.get("location") {
             Some(loc) => {
