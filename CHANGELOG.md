@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.156.2] - 2026-05-25
+
+### Fixed
+- CI: skip refinement solver benchmarks on PRs (no baseline to compare against); restrict to push-to-main only
+- CI: drop Z3 from example smoke test builds; examples don't exercise the Z3 solver layer
+- CI: add benchmark regression tracking via `benchmark-data` branch using `github-action-benchmark`
+
 ## [0.156.1] - 2026-05-25
 
 ### Fixed
