@@ -88,6 +88,14 @@ pub partial fn db_get_user(val db: SqliteDb, id: Int) -> Result[Option[User], St
     }
 }
 
+/// Delete all rows from the users table (used before re-seeding).
+pub total fn db_clear_users(val db: SqliteDb) -> Result[Unit, String] ! DB {
+    match execute(db, "DELETE FROM users", []) {
+        Err(_) => Err("clear failed"),
+        Ok(_)  => Ok(()),
+    }
+}
+
 /// Insert a new user.  Returns the new row's id.
 /// Returns Err if the email already exists (UNIQUE constraint).
 pub partial fn db_create_user(val db: SqliteDb, val req: CreateUserRequest) -> Result[Int, String] ! DB {

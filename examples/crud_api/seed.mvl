@@ -6,7 +6,7 @@
 // Effects: ! DB + FileRead + Log
 
 use models::{CreateUserRequest}
-use db::{db_create_user}
+use db::{db_clear_users, db_create_user}
 use std.csv.{CsvError, CsvWithHeaders, parse_with_headers}
 use std.io.{read_file}
 use std.log.{Logger}
@@ -42,6 +42,10 @@ pub partial fn db_seed_from_csv(val db: SqliteDb, logger: val Logger, path: Stri
                 Err(CsvError::ParseError(line, msg)) => Err("CSV parse error at line ".concat(line.to_string()).concat(": ").concat(msg)),
                 Err(_) => Err("CSV parse error"),
                 Ok(csv) => {
+                    match db_clear_users(db) {
+                        Err(msg) => { logger.warn("clear failed before seed", {"reason": msg}) },
+                        Ok(_)    => {},
+                    }
                     let count: ref Int = 0;
                     let i: ref Int = 0;
                     let n: Int = csv.rows.len();
