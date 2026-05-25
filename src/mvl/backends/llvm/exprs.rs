@@ -9,7 +9,7 @@
 
 use inkwell::{
     types::{BasicType, BasicTypeEnum},
-    values::{BasicValue, BasicValueEnum},
+    values::{AnyValue, BasicValue, BasicValueEnum},
     AddressSpace, FloatPredicate, IntPredicate,
 };
 
@@ -1409,19 +1409,27 @@ impl<'ctx> LlvmBackend<'ctx> {
             .unwrap();
         self.builder.build_store(disc_ptr, disc_val).unwrap();
 
-        // Store payload via pointer: alloca the value, store it, save ptr at field 1.
+        // Store payload via pointer: heap-allocate the value, store it, save ptr at field 1.
+        // Heap allocation (mvl_box_new) is required because stack alloca pointers become
+        // dangling when the constructing function returns (#980).
         let payload_slot = self
             .builder
             .build_struct_gep(result_ty, alloca, 1, "res_payload_slot")
             .unwrap();
         if let Some(arg) = args.first() {
             if let Some(val) = self.emit_expr(arg) {
-                let val_alloca = self
+                let size = self.llvm_type_byte_size(val.get_type()) as u64;
+                let size_val = self.context.i64_type().const_int(size, false);
+                let box_fn = self.get_mvl_box_new();
+                let call = self
                     .builder
-                    .build_alloca(val.get_type(), "payload_tmp")
+                    .build_call(box_fn, &[size_val.into()], "payload_heap")
                     .unwrap();
-                self.builder.build_store(val_alloca, val).unwrap();
-                self.builder.build_store(payload_slot, val_alloca).unwrap();
+                let heap_ptr = BasicValueEnum::try_from(call.as_any_value_enum())
+                    .unwrap_or_else(|_| ptr_ty.const_null().into())
+                    .into_pointer_value();
+                self.builder.build_store(heap_ptr, val).unwrap();
+                self.builder.build_store(payload_slot, heap_ptr).unwrap();
             }
         } else {
             // No payload (e.g. unit Err) — store null.
@@ -4096,16 +4104,23 @@ impl<'ctx> LlvmBackend<'ctx> {
         self.builder
             .build_store(disc_ptr, self.context.i8_type().const_int(0, false))
             .unwrap();
-        let val_alloca = self
+        // Heap-allocate the payload so the pointer survives function returns (#980).
+        let size = self.llvm_type_byte_size(val.get_type()) as u64;
+        let size_val = self.context.i64_type().const_int(size, false);
+        let box_fn = self.get_mvl_box_new();
+        let call = self
             .builder
-            .build_alloca(val.get_type(), "some_payload_tmp")
+            .build_call(box_fn, &[size_val.into()], "some_heap")
             .unwrap();
-        self.builder.build_store(val_alloca, val).unwrap();
+        let heap_ptr = BasicValueEnum::try_from(call.as_any_value_enum())
+            .unwrap_or_else(|_| ptr_ty.const_null().into())
+            .into_pointer_value();
+        self.builder.build_store(heap_ptr, val).unwrap();
         let payload_slot = self
             .builder
             .build_struct_gep(result_ty, alloca, 1, "some_payload")
             .unwrap();
-        self.builder.build_store(payload_slot, val_alloca).unwrap();
+        self.builder.build_store(payload_slot, heap_ptr).unwrap();
         Some(
             self.builder
                 .build_load(result_ty, alloca, "some_val")
