@@ -127,16 +127,20 @@ pub fn emit_fn_decl(cg: &mut RustEmitter, fd: &FnDecl) {
         );
         if !is_builtin_type {
             // Type-attached method (#868): emit inside `impl ReceiverType { … }`.
-            // The `self` parameter (index 0) is replaced with `&self` in Rust.
+            // Instance methods have `self` as param[0]; static methods (constructors)
+            // do not — detect and emit accordingly.
+            let has_self = fd.params.first().is_some_and(|p| p.name == "self");
+            let (param_start, self_prefix) = if has_self { (1usize, "&self") } else { (0, "") };
             let rest_params = emit_params(
-                fd.params.get(1..).unwrap_or(&[]),
-                borrows.get(1..).unwrap_or(&[]),
+                fd.params.get(param_start..).unwrap_or(&[]),
+                borrows.get(param_start..).unwrap_or(&[]),
                 &mutated_params,
             );
-            let params_str = if rest_params.is_empty() {
-                "&self".to_string()
-            } else {
-                format!("&self, {rest_params}")
+            let params_str = match (self_prefix.is_empty(), rest_params.is_empty()) {
+                (true, true) => String::new(),
+                (true, false) => rest_params,
+                (false, true) => self_prefix.to_string(),
+                (false, false) => format!("{self_prefix}, {rest_params}"),
             };
             cg.line(&format!("impl {recv_ty} {{"));
             cg.push_indent();
