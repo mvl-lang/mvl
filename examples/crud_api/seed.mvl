@@ -1,0 +1,65 @@
+// examples/crud_api/seed.mvl — CSV seed loader for the users table.
+//
+// Reads a CSV file (name,email), trusts cells at the IFC boundary,
+// and inserts each row into the database.
+//
+// Effects: ! DB + FileRead + Console
+
+use models::{CreateUserRequest}
+use db::{db_create_user}
+use std.csv.{CsvError, CsvWithHeaders, parse_with_headers}
+use std.io.{read_file, println}
+use pkg.sqlite.{SqliteDb}
+
+// ── Decode one CSV row ──────────────────────────────────────────────────────
+
+partial fn decode_row(row: List[String]) -> Result[CreateUserRequest, String] {
+    if row.len() != 2 {
+        Err("expected 2 columns (name,email), got ".concat(row.len().to_string()))
+    } else {
+        match row.get(0) {
+            None => Err("missing name"),
+            Some(name) => match row.get(1) {
+                None => Err("missing email"),
+                Some(email) => Ok(CreateUserRequest { name: name, email: email }),
+            },
+        }
+    }
+}
+
+// ── Seed from CSV ───────────────────────────────────────────────────────────
+
+/// Read a CSV file and insert each row as a new user.
+/// The first row must be a header (name,email) and is skipped.
+/// Returns the number of rows successfully inserted.
+pub partial fn db_seed_from_csv(val db: SqliteDb, path: String) -> Result[Int, String] ! DB + FileRead + Console {
+    match read_file(path) {
+        Err(_) => Err("failed to read seed file"),
+        Ok(raw) => {
+            let content: String = relabel trust(raw, "SEED-CSV");
+            match parse_with_headers(content) {
+                Err(CsvError::ParseError(line, msg)) => Err("CSV parse error at line ".concat(line.to_string()).concat(": ").concat(msg)),
+                Err(_) => Err("CSV parse error"),
+                Ok(csv) => {
+                    let count: ref Int = 0;
+                    let i: ref Int = 0;
+                    let n: Int = csv.rows.len();
+                    while i < n {
+                        match csv.rows.get(i) {
+                            None => {},
+                            Some(row) => match decode_row(row) {
+                                Err(msg) => { println("  skip row ".concat((i + 1).to_string()).concat(": ").concat(msg)) },
+                                Ok(req)  => match db_create_user(db, req) {
+                                    Err(msg) => { println("  skip row ".concat((i + 1).to_string()).concat(": ").concat(msg)) },
+                                    Ok(_)    => { count = count + 1 },
+                                },
+                            },
+                        }
+                        i = i + 1
+                    }
+                    Ok(count)
+                },
+            }
+        },
+    }
+}

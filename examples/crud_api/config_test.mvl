@@ -1,0 +1,160 @@
+// examples/crud_api/config_test.mvl — unit tests for pure config logic.
+//
+// Tests defaults, TOML merging, and struct extraction without I/O effects.
+//
+// Note: types are redeclared here as a workaround for cross-file type
+// resolution not yet being wired into the per-file checker (issue #96).
+
+use std.config.{ConfigValue, ConfigError, merge, get_path, as_int, as_string,
+                from_toml}
+use std.toml.{toml_decode}
+
+// ── Type re-declarations (workaround: #96) ────────────────────────────────────
+
+type CrudApiConfig = struct {
+    host:    String,
+    port:    Int,
+    db_path: String,
+    seed:    String,
+}
+
+// ── Local helpers (workaround: #96) ──────────────────────────────────────────
+
+fn defaults() -> ConfigValue {
+    ConfigValue::Map({
+        "host":    ConfigValue::String("127.0.0.1"),
+        "port":    ConfigValue::Int(8080),
+        "db_path": ConfigValue::String("/tmp/crud_api.db"),
+        "seed":    ConfigValue::String(""),
+    })
+}
+
+fn extract(cfg: ConfigValue) -> Result[CrudApiConfig, ConfigError] {
+    Ok(CrudApiConfig {
+        host:    as_string(get_path(cfg, "host").unwrap_or(ConfigValue::String("127.0.0.1")))?,
+        port:    as_int(get_path(cfg, "port").unwrap_or(ConfigValue::Int(8080)))?,
+        db_path: as_string(get_path(cfg, "db_path").unwrap_or(ConfigValue::String("/tmp/crud_api.db")))?,
+        seed:    as_string(get_path(cfg, "seed").unwrap_or(ConfigValue::String("")))?,
+    })
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+// 1. Defaults produce the expected host.
+test fn defaults_host_is_localhost() -> Unit {
+    let cfg: ConfigValue = defaults();
+    match get_path(cfg, "host") {
+        Some(v) => assert_eq(as_string(v), Ok("127.0.0.1")),
+        None    => assert_eq(true, false),
+    }
+}
+
+// 2. Defaults produce port 8080.
+test fn defaults_port_is_8080() -> Unit {
+    let cfg: ConfigValue = defaults();
+    match get_path(cfg, "port") {
+        Some(v) => assert_eq(as_int(v), Ok(8080)),
+        None    => assert_eq(true, false),
+    }
+}
+
+// 3. Defaults produce db_path "/tmp/crud_api.db".
+test fn defaults_db_path_is_tmp_crud_api_db() -> Unit {
+    let cfg: ConfigValue = defaults();
+    match get_path(cfg, "db_path") {
+        Some(v) => assert_eq(as_string(v), Ok("/tmp/crud_api.db")),
+        None    => assert_eq(true, false),
+    }
+}
+
+// 4. Merging an overlay overrides the port.
+test fn overlay_overrides_port() -> Unit {
+    let base: ConfigValue = defaults();
+    let overlay: ConfigValue = ConfigValue::Map({"port": ConfigValue::Int(9090)});
+    let merged: ConfigValue = merge(base, overlay);
+    match get_path(merged, "port") {
+        Some(v) => assert_eq(as_int(v), Ok(9090)),
+        None    => assert_eq(true, false),
+    }
+}
+
+// 5. Merging an overlay does not clobber unrelated keys.
+test fn overlay_preserves_other_keys() -> Unit {
+    let base: ConfigValue = defaults();
+    let overlay: ConfigValue = ConfigValue::Map({"port": ConfigValue::Int(9090)});
+    let merged: ConfigValue = merge(base, overlay);
+    match get_path(merged, "host") {
+        Some(v) => assert_eq(as_string(v), Ok("127.0.0.1")),
+        None    => assert_eq(true, false),
+    }
+}
+
+// 6. extract() produces a typed CrudApiConfig from defaults.
+test fn extract_defaults_succeeds() -> Unit {
+    let result: Result[CrudApiConfig, ConfigError] = extract(defaults());
+    match result {
+        Ok(cfg) => {
+            assert_eq(cfg.host, "127.0.0.1");
+            assert_eq(cfg.port, 8080);
+            assert_eq(cfg.db_path, "/tmp/crud_api.db");
+            assert_eq(cfg.seed, "")
+        },
+        Err(_) => assert_eq(true, false),
+    }
+}
+
+// 7. TOML round-trip: decode a TOML string, convert to ConfigValue, merge.
+test fn toml_layer_overrides_port() -> Unit {
+    let base: ConfigValue = defaults();
+    let toml_str: String = "port = 7777\n";
+    let merged: ConfigValue = match toml_decode(toml_str) {
+        Ok(tv)  => merge(base, from_toml(tv)),
+        Err(_)  => base,
+    };
+    match get_path(merged, "port") {
+        Some(v) => assert_eq(as_int(v), Ok(7777)),
+        None    => assert_eq(true, false),
+    }
+}
+
+// 8. TOML layer: host override propagates through extract.
+test fn toml_layer_host_propagates() -> Unit {
+    let base: ConfigValue = defaults();
+    let toml_str: String = "host = \"0.0.0.0\"\n";
+    let merged: ConfigValue = match toml_decode(toml_str) {
+        Ok(tv)  => merge(base, from_toml(tv)),
+        Err(_)  => base,
+    };
+    let result: Result[CrudApiConfig, ConfigError] = extract(merged);
+    match result {
+        Ok(cfg) => assert_eq(cfg.host, "0.0.0.0"),
+        Err(_)  => assert_eq(true, false),
+    }
+}
+
+// 9. TOML layer: db_path override propagates through extract.
+test fn toml_layer_db_path_propagates() -> Unit {
+    let base: ConfigValue = defaults();
+    let toml_str: String = "db_path = \"/var/data/app.db\"\n";
+    let merged: ConfigValue = match toml_decode(toml_str) {
+        Ok(tv)  => merge(base, from_toml(tv)),
+        Err(_)  => base,
+    };
+    let result: Result[CrudApiConfig, ConfigError] = extract(merged);
+    match result {
+        Ok(cfg) => assert_eq(cfg.db_path, "/var/data/app.db"),
+        Err(_)  => assert_eq(true, false),
+    }
+}
+
+// 10. Later overlay wins when same key merged twice.
+test fn last_overlay_wins() -> Unit {
+    let base: ConfigValue = defaults();
+    let first: ConfigValue  = ConfigValue::Map({"port": ConfigValue::Int(7000)});
+    let second: ConfigValue = ConfigValue::Map({"port": ConfigValue::Int(8888)});
+    let merged: ConfigValue = merge(merge(base, first), second);
+    match get_path(merged, "port") {
+        Some(v) => assert_eq(as_int(v), Ok(8888)),
+        None    => assert_eq(true, false),
+    }
+}
