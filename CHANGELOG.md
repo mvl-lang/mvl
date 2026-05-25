@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.156.3] - 2026-05-25
+
+### Fixed
+- `examples/zmq_hello`: client now calls `SHUT_WR` after send so `tcp_read` on the server sees EOF
+- `examples/zmq_hello`: add Makefile with server startup, polling, client execution, and teardown
+
 ## [0.156.2] - 2026-05-25
 
 ### Fixed
