@@ -138,6 +138,29 @@ pub builtin fn tcp_read(stream: TcpStream) -> Result[Tainted[String], NetError] 
 /// Caps at 8 KiB; returns `Tainted[String]` (network input, untrusted).
 pub builtin fn tcp_read_request(stream: TcpStream) -> Result[Tainted[String], NetError] ! Net
 
+/// Read exactly `n` bytes from `stream`.
+///
+/// Returns `Tainted[String]` because the content originates from an untrusted
+/// remote peer.  Unlike `tcp_read`, this does NOT wait for EOF — it returns
+/// as soon as `n` bytes have been read.  Returns `Err` if the peer closes
+/// before `n` bytes are available.
+///
+/// Essential for protocols with length-prefixed framing (e.g. ZMTP 3.x)
+/// where the connection remains open across multiple message exchanges.
+builtin fn _tcp_read_exact(stream: TcpStream, n: Int) -> Result[String, NetError] ! Net
+
+/// Read exactly `n` bytes from `stream`.
+///
+/// Returns `Tainted[String]` — network data is always untrusted.
+/// Unlike `tcp_read`, returns after exactly `n` bytes (not EOF).
+pub builtin fn tcp_read_exact(stream: TcpStream, n: Int) -> Result[Tainted[String], NetError] ! Net
+
+/// Shut down the write half of `stream`, signaling EOF to the peer.
+///
+/// The read half remains open so the peer can still send data back.
+/// Use this to signal "I'm done sending" without closing the connection.
+pub builtin fn tcp_shutdown_write(stream: TcpStream) -> Result[Unit, NetError] ! Net
+
 /// Write `data` to `stream`.
 ///
 /// Blocks until all bytes are written or an error occurs.

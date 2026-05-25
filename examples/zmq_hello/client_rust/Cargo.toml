@@ -1,0 +1,10 @@
+[workspace]
+
+[package]
+name = "zmq_hello_client"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+zeromq = "0.4"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

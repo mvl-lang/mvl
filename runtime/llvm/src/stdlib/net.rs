@@ -160,12 +160,79 @@ pub unsafe extern "C" fn _mvl_net_tcp_read(stream_ptr: *mut c_void) -> LlvmResul
     let mut buf = Vec::new();
     match stream.read_to_end(&mut buf) {
         Ok(_) => {
-            let s = String::from_utf8_lossy(&buf);
+            let s: String = buf.iter().map(|&b| b as char).collect();
             LlvmResult {
                 tag: 0,
                 payload: new_mvl_str(&s),
             }
         }
+        Err(e) => LlvmResult {
+            tag: 1,
+            payload: net_error_enum(&e),
+        },
+    }
+}
+
+/// `tcp_read_exact(stream: TcpStream, n: Int) → Result[Tainted[String], NetError]`
+///
+/// Reads exactly `n` bytes from the stream.  Returns an error if the peer
+/// closes before `n` bytes are available.
+///
+/// # Safety
+/// `stream_ptr` must be a valid `*mut std::net::TcpStream`.
+#[no_mangle]
+#[allow(unsafe_code)]
+pub unsafe extern "C" fn _mvl_net_tcp_read_exact(stream_ptr: *mut c_void, n: i64) -> LlvmResult {
+    if n < 0 {
+        return LlvmResult {
+            tag: 1,
+            payload: net_error_other("negative read size"),
+        };
+    }
+    let stream = &mut *(stream_ptr as *mut std::net::TcpStream);
+    let n = n as usize;
+    let mut buf = vec![0u8; n];
+    let mut filled = 0;
+    while filled < n {
+        match stream.read(&mut buf[filled..]) {
+            Ok(0) => {
+                let msg = format!("unexpected EOF after {} of {} bytes", filled, n);
+                return LlvmResult {
+                    tag: 1,
+                    payload: net_error_other(&msg),
+                };
+            }
+            Ok(k) => filled += k,
+            Err(e) => {
+                return LlvmResult {
+                    tag: 1,
+                    payload: net_error_enum(&e),
+                }
+            }
+        }
+    }
+    let s: String = buf.iter().map(|&b| b as char).collect();
+    LlvmResult {
+        tag: 0,
+        payload: new_mvl_str(&s),
+    }
+}
+
+/// `tcp_shutdown_write(stream: TcpStream) → Result[Unit, NetError]`
+///
+/// Shuts down the write half of the stream, signaling EOF to the peer.
+///
+/// # Safety
+/// `stream_ptr` must be a valid `*mut std::net::TcpStream`.
+#[no_mangle]
+#[allow(unsafe_code)]
+pub unsafe extern "C" fn _mvl_net_tcp_shutdown_write(stream_ptr: *mut c_void) -> LlvmResult {
+    let stream = &*(stream_ptr as *mut std::net::TcpStream);
+    match stream.shutdown(std::net::Shutdown::Write) {
+        Ok(()) => LlvmResult {
+            tag: 0,
+            payload: std::ptr::null_mut(),
+        },
         Err(e) => LlvmResult {
             tag: 1,
             payload: net_error_enum(&e),
@@ -188,7 +255,8 @@ pub unsafe extern "C" fn _mvl_net_tcp_write(
 ) -> LlvmResult {
     let stream = &mut *(stream_ptr as *mut std::net::TcpStream);
     let s = read_mvl_string(data);
-    match stream.write_all(s.as_bytes()) {
+    let bytes: Vec<u8> = s.chars().map(|c| c as u32 as u8).collect();
+    match stream.write_all(&bytes) {
         Ok(()) => LlvmResult {
             tag: 0,
             payload: std::ptr::null_mut(),

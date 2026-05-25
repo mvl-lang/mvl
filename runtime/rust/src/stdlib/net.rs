@@ -132,13 +132,16 @@ pub fn tcp_accept(listener: TcpListener) -> Result<TcpStream, NetError> {
 /// Raw private builtin: read all bytes from `stream`, return bare `String` (#894 Pattern 002).
 ///
 /// Module-private in MVL (`builtin fn _tcp_read`) — callers use `tcp_read`.
+/// Uses Latin-1 encoding: each byte maps to the Unicode codepoint with the
+/// same value (0–255).  This preserves binary data for protocols like ZMTP
+/// while being identical to UTF-8 for ASCII text.
 pub(crate) fn _tcp_read(stream: TcpStream) -> Result<String, NetError> {
     let arc = lookup_stream(stream.0)?;
     let mut buf = Vec::new();
     (&*arc)
         .read_to_end(&mut buf)
         .map_err(|e| sanitize_net_error(&e))?;
-    Ok(String::from_utf8_lossy(&buf).into_owned())
+    Ok(buf.iter().map(|&b| b as char).collect())
 }
 
 /// Read all available bytes from `stream` (blocks until peer closes write half).
@@ -153,6 +156,7 @@ pub fn tcp_read(stream: TcpStream) -> Result<Tainted<String>, NetError> {
 /// Raw private builtin: read one HTTP request, return bare `String` (#894 Pattern 002).
 ///
 /// Module-private in MVL — callers use `tcp_read_request`.
+/// Uses Latin-1 encoding for consistency with `_tcp_read`.
 pub fn _tcp_read_request(stream: TcpStream) -> Result<String, NetError> {
     let arc = lookup_stream(stream.0)?;
     let mut buf = Vec::new();
@@ -172,7 +176,7 @@ pub fn _tcp_read_request(stream: TcpStream) -> Result<String, NetError> {
             Err(e) => return Err(sanitize_net_error(&e)),
         }
     }
-    Ok(String::from_utf8_lossy(&buf).into_owned())
+    Ok(buf.iter().map(|&b| b as char).collect())
 }
 
 /// Read one HTTP request from `stream` — returns after the blank-line terminator.
@@ -184,13 +188,66 @@ pub fn tcp_read_request(stream: TcpStream) -> Result<Tainted<String>, NetError> 
     _tcp_read_request(stream).map(Tainted)
 }
 
+/// Raw private builtin: read exactly `n` bytes, return bare `String` (Pattern 002).
+/// Module-private in MVL — callers use `tcp_read_exact`.
+/// Uses Latin-1 encoding for consistency with `_tcp_read`.
+pub fn _tcp_read_exact(stream: TcpStream, n: i64) -> Result<String, NetError> {
+    if n < 0 {
+        return Err(NetError::Other("negative read size".to_string()));
+    }
+    let arc = lookup_stream(stream.0)?;
+    let n = n as usize;
+    let mut buf = vec![0u8; n];
+    let mut filled = 0;
+    while filled < n {
+        match (&*arc).read(&mut buf[filled..]) {
+            Ok(0) => {
+                return Err(NetError::Other(format!(
+                    "unexpected EOF after {} of {} bytes",
+                    filled, n
+                )));
+            }
+            Ok(k) => filled += k,
+            Err(e) => return Err(sanitize_net_error(&e)),
+        }
+    }
+    Ok(buf.iter().map(|&b| b as char).collect())
+}
+
+/// Read exactly `n` bytes from `stream`.
+///
+/// Returns `Tainted[String]` — network data is always untrusted.
+/// Unlike `tcp_read`, this does NOT wait for EOF — it returns as soon as `n`
+/// bytes have been read.  Returns `Err` if the peer closes before `n` bytes
+/// are available.
+pub fn tcp_read_exact(stream: TcpStream, n: i64) -> Result<Tainted<String>, NetError> {
+    _tcp_read_exact(stream, n).map(Tainted)
+}
+
+/// Shut down the write half of `stream`, signaling EOF to the peer.
+///
+/// The read half remains open — the peer can still send data.
+/// This is the standard way to signal "I'm done writing" without closing
+/// the entire connection.
+pub fn tcp_shutdown_write(stream: TcpStream) -> Result<(), NetError> {
+    let arc = lookup_stream(stream.0)?;
+    arc.shutdown(std::net::Shutdown::Write)
+        .map_err(|e| sanitize_net_error(&e))
+}
+
 /// Write `data` to `stream`.
+///
+/// Uses Latin-1 decoding: each character's Unicode codepoint (0–255) is sent
+/// as one byte on the wire.  This is the inverse of `_tcp_read` / `_tcp_read_exact`,
+/// which use Latin-1 encoding.  For ASCII strings, identical to the previous
+/// `as_bytes()` behavior.
 ///
 /// Uses `Write for &TcpStream` — no exclusive lock held.
 pub fn tcp_write(stream: TcpStream, data: String) -> Result<(), NetError> {
     let arc = lookup_stream(stream.0)?;
+    let bytes: Vec<u8> = data.chars().map(|c| c as u32 as u8).collect();
     (&*arc)
-        .write_all(data.as_bytes())
+        .write_all(&bytes)
         .map_err(|e| sanitize_net_error(&e))
 }
 

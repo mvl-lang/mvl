@@ -1284,6 +1284,14 @@ impl<'ctx> LlvmBackend<'ctx> {
             self.fn_return_types
                 .entry("tcp_read".into())
                 .or_insert_with(|| mk_result(string_ty.clone()));
+            // tcp_read_exact(stream, n) → Result[Tainted[String], String]
+            self.fn_return_types
+                .entry("tcp_read_exact".into())
+                .or_insert_with(|| mk_result(string_ty.clone()));
+            // _tcp_read_exact(stream, n) → Result[String, String]
+            self.fn_return_types
+                .entry("_tcp_read_exact".into())
+                .or_insert_with(|| mk_result(string_ty.clone()));
             // tcp_listener_port(listener) → Result[Int, String]
             self.fn_return_types
                 .entry("tcp_listener_port".into())
