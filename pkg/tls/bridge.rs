@@ -98,8 +98,8 @@ pub extern "Rust" fn tls_connect(host: String, port: i64) -> i64 {
     // Parse server name for SNI
     let server_name = match ServerName::try_from(host.clone()) {
         Ok(sn) => sn,
-        Err(e) => {
-            store_err(-1, 1, format!("invalid hostname '{}': {}", host, e));
+        Err(_) => {
+            store_err(-1, 1, "invalid hostname".to_string());
             return -1;
         }
     };
@@ -108,8 +108,8 @@ pub extern "Rust" fn tls_connect(host: String, port: i64) -> i64 {
     let addr = format!("{}:{}", host, port);
     let tcp = match TcpStream::connect(&addr) {
         Ok(s) => s,
-        Err(e) => {
-            store_err(-1, 4, format!("TCP connect to {}: {}", addr, e));
+        Err(_) => {
+            store_err(-1, 4, "TCP connect failed".to_string());
             return -1;
         }
     };
@@ -182,18 +182,32 @@ pub extern "Rust" fn tls_read(handle: i64) -> String {
         store_err(handle, 5, "invalid TLS handle".to_string());
         return String::new();
     };
+    // Read with 1 MiB safety cap (same as tls_read_response).
+    // Prefer tls_read_response for HTTP; this blocks until connection close.
     let mut buf = Vec::new();
-    match stream.read_to_end(&mut buf) {
-        Ok(_) => {
-            clear_err(handle);
-            String::from_utf8_lossy(&buf).into_owned()
-        }
-        Err(e) => {
-            let (errno, msg) = classify_error(&e, false);
-            store_err(handle, errno, msg);
-            String::new()
+    let mut chunk = [0u8; 8192];
+    loop {
+        match stream.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => {
+                buf.extend_from_slice(&chunk[..n]);
+                if buf.len() >= 1_048_576 {
+                    store_err(handle, 5, "read truncated at 1 MiB limit".to_string());
+                    return String::new();
+                }
+            }
+            Err(e) => {
+                if !buf.is_empty() {
+                    break;
+                }
+                let (errno, msg) = classify_error(&e, false);
+                store_err(handle, errno, msg);
+                return String::new();
+            }
         }
     }
+    clear_err(handle);
+    String::from_utf8_lossy(&buf).into_owned()
 }
 
 #[no_mangle]
@@ -241,11 +255,17 @@ pub extern "Rust" fn tls_write(handle: i64, data: String) -> i64 {
         return -1;
     };
     match stream.write_all(data.as_bytes()) {
-        Ok(()) => {
-            let _ = stream.flush();
-            clear_err(handle);
-            data.len() as i64
-        }
+        Ok(()) => match stream.flush() {
+            Ok(()) => {
+                clear_err(handle);
+                data.len() as i64
+            }
+            Err(e) => {
+                let (errno, msg) = classify_error(&e, false);
+                store_err(handle, errno, msg);
+                -1
+            }
+        },
         Err(e) => {
             let (errno, msg) = classify_error(&e, false);
             store_err(handle, errno, msg);

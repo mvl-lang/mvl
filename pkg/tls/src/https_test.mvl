@@ -34,6 +34,14 @@ fn https_error_msg(e: HttpsError) -> String {
     }
 }
 
+fn validate_port(port: Int) -> Result[Int, HttpsError] {
+    if port < 1 || port > 65535 {
+        Err(HttpsError::InvalidUrl("port out of range (1-65535)"))
+    } else {
+        Ok(port)
+    }
+}
+
 fn parse_https_url(url: String) -> Result[ParsedHttpsUrl, HttpsError] {
     if !url.starts_with("https://") {
         Err(HttpsError::InvalidUrl("only https:// supported"))
@@ -62,8 +70,11 @@ fn parse_https_url(url: String) -> Result[ParsedHttpsUrl, HttpsError] {
                         Err(HttpsError::InvalidUrl("empty host"))
                     } else {
                         match port_str.parse_int() {
-                            Ok(port) => Ok(ParsedHttpsUrl { host: host, port: port, path: path }),
-                            Err(_)   => Err(HttpsError::InvalidUrl("invalid port")),
+                            Ok(raw_port) => {
+                                let port: Int = validate_port(raw_port)?;
+                                Ok(ParsedHttpsUrl { host: host, port: port, path: path })
+                            },
+                            Err(_) => Err(HttpsError::InvalidUrl("invalid port")),
                         }
                     }
                 },
@@ -174,6 +185,41 @@ fn parse_https_response(raw: String) -> Result[HttpsResponse, HttpsError] {
     };
     let body: Tainted[String] = relabel taint(body_str, "HTTPS-RESPONSE-BODY");
     Ok(HttpsResponse { status_code: code, headers: headers, body: body })
+}
+
+// ── Mirrored validation helpers (from https.mvl) ────────────────────────────
+
+fn contains_crlf(s: String) -> Bool {
+    s.contains("\r") || s.contains("\n")
+}
+
+fn validate_no_crlf(s: String, context: String) -> Result[Unit, HttpsError] {
+    if contains_crlf(s) {
+        Err(HttpsError::InvalidUrl(context.concat(" contains CR/LF")))
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_https_headers(headers: Map[String, String]) -> Result[Unit, HttpsError] {
+    let valid: ref Bool = true;
+    for k in headers.keys() {
+        if valid && contains_crlf(k) {
+            valid = false
+        } else {
+            match headers.get(k) {
+                Some(v) => if valid && contains_crlf(v) {
+                    valid = false
+                } else {},
+                None => {},
+            }
+        }
+    }
+    if valid {
+        Ok(())
+    } else {
+        Err(HttpsError::InvalidUrl("header contains CR/LF"))
+    }
 }
 
 // ── URL parsing tests ───────────────────────────────────────────────────────
@@ -351,4 +397,104 @@ test fn error_msg_connection_failed() -> Unit {
 
 test fn error_msg_invalid_response() -> Unit {
     assert_eq(https_error_msg(HttpsError::InvalidResponse("empty")), "invalid response: empty")
+}
+
+// ── CRLF injection validation tests ─────────────────────────────────────────
+
+test fn validate_headers_rejects_crlf_in_key() -> Unit {
+    let hdrs: Map[String, String] = {"X-Evil\r\nFoo": "val"};
+    match validate_https_headers(hdrs) {
+        Ok(_) => assert(false),
+        Err(HttpsError::InvalidUrl(_)) => assert(true),
+        Err(_) => assert(false),
+    }
+}
+
+test fn validate_headers_rejects_crlf_in_value() -> Unit {
+    let hdrs: Map[String, String] = {"X-Header": "val\r\nInjected: x"};
+    match validate_https_headers(hdrs) {
+        Ok(_) => assert(false),
+        Err(HttpsError::InvalidUrl(_)) => assert(true),
+        Err(_) => assert(false),
+    }
+}
+
+test fn validate_headers_rejects_cr_alone_in_key() -> Unit {
+    let hdrs: Map[String, String] = {"Key\rFoo": "val"};
+    match validate_https_headers(hdrs) {
+        Ok(_) => assert(false),
+        Err(HttpsError::InvalidUrl(_)) => assert(true),
+        Err(_) => assert(false),
+    }
+}
+
+test fn validate_headers_rejects_lf_alone_in_value() -> Unit {
+    let hdrs: Map[String, String] = {"Key": "val\nfoo"};
+    match validate_https_headers(hdrs) {
+        Ok(_) => assert(false),
+        Err(HttpsError::InvalidUrl(_)) => assert(true),
+        Err(_) => assert(false),
+    }
+}
+
+test fn validate_headers_accepts_clean_headers() -> Unit {
+    let hdrs: Map[String, String] = {"Content-Type": "application/json", "Accept": "*/*"};
+    match validate_https_headers(hdrs) {
+        Ok(_) => assert(true),
+        Err(_) => assert(false),
+    }
+}
+
+test fn validate_no_crlf_rejects_method_with_crlf() -> Unit {
+    match validate_no_crlf("GET\r\nHost: evil.com", "method") {
+        Ok(_) => assert(false),
+        Err(HttpsError::InvalidUrl(msg)) => assert_eq(msg, "method contains CR/LF"),
+        Err(_) => assert(false),
+    }
+}
+
+test fn validate_no_crlf_accepts_clean_string() -> Unit {
+    match validate_no_crlf("GET", "method") {
+        Ok(_) => assert(true),
+        Err(_) => assert(false),
+    }
+}
+
+// ── Port range validation tests ─────────────────────────────────────────────
+
+test fn parse_url_rejects_port_zero() -> Unit {
+    match parse_https_url("https://example.com:0/path") {
+        Ok(_) => assert(false),
+        Err(HttpsError::InvalidUrl(msg)) => assert_eq(msg, "port out of range (1-65535)"),
+        Err(_) => assert(false),
+    }
+}
+
+test fn parse_url_rejects_port_out_of_range() -> Unit {
+    match parse_https_url("https://example.com:99999/path") {
+        Ok(_) => assert(false),
+        Err(HttpsError::InvalidUrl(msg)) => assert_eq(msg, "port out of range (1-65535)"),
+        Err(_) => assert(false),
+    }
+}
+
+test fn parse_url_accepts_port_443() -> Unit {
+    match parse_https_url("https://example.com:443/path") {
+        Err(_) => assert(false),
+        Ok(url) => assert_eq(url.port, 443),
+    }
+}
+
+test fn parse_url_accepts_port_1() -> Unit {
+    match parse_https_url("https://example.com:1/path") {
+        Err(_) => assert(false),
+        Ok(url) => assert_eq(url.port, 1),
+    }
+}
+
+test fn parse_url_accepts_port_65535() -> Unit {
+    match parse_https_url("https://example.com:65535/path") {
+        Err(_) => assert(false),
+        Ok(url) => assert_eq(url.port, 65535),
+    }
 }

@@ -78,6 +78,9 @@ pub partial fn tls_client_connect(host: String, port: Int) -> Result[TlsStream, 
 
 /// Read all bytes from the TLS stream (blocks until peer closes connection).
 ///
+/// WARNING: Capped at 1 MiB. For HTTP responses, prefer `tls_client_read_response`.
+/// This function is intended for non-HTTP protocols delimited by connection close.
+///
 /// Returns Tainted[String] — network data is untrusted.
 pub partial fn tls_client_read(stream: TlsStream) -> Result[Tainted[String], TlsError] ! Net {
     let data: String = tls_read(stream._handle);

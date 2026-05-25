@@ -114,6 +114,14 @@ type ParsedHttpsUrl = struct {
     path: String,
 }
 
+fn validate_port(port: Int) -> Result[Int, HttpsError] {
+    if port < 1 || port > 65535 {
+        Err(HttpsError::InvalidUrl("port out of range (1-65535)"))
+    } else {
+        Ok(port)
+    }
+}
+
 fn parse_https_url(url: String) -> Result[ParsedHttpsUrl, HttpsError] {
     if !url.starts_with("https://") {
         Err(HttpsError::InvalidUrl("only https:// supported"))
@@ -142,8 +150,11 @@ fn parse_https_url(url: String) -> Result[ParsedHttpsUrl, HttpsError] {
                         Err(HttpsError::InvalidUrl("empty host"))
                     } else {
                         match port_str.parse_int() {
-                            Ok(port) => Ok(ParsedHttpsUrl { host: host, port: port, path: path }),
-                            Err(_)   => Err(HttpsError::InvalidUrl("invalid port")),
+                            Ok(raw_port) => {
+                                let port: Int = validate_port(raw_port)?;
+                                Ok(ParsedHttpsUrl { host: host, port: port, path: path })
+                            },
+                            Err(_) => Err(HttpsError::InvalidUrl("invalid port")),
                         }
                     }
                 },

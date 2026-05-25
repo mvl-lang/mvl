@@ -135,8 +135,8 @@ pub unsafe extern "C" fn tls_connect(host: *const MvlString, port: i64) -> i64 {
 
     let server_name = match ServerName::try_from(host_str.clone()) {
         Ok(sn) => sn,
-        Err(e) => {
-            store_err(-1, 1, format!("invalid hostname '{}': {}", host_str, e));
+        Err(_) => {
+            store_err(-1, 1, "invalid hostname".to_string());
             return -1;
         }
     };
@@ -144,8 +144,8 @@ pub unsafe extern "C" fn tls_connect(host: *const MvlString, port: i64) -> i64 {
     let addr = format!("{}:{}", host_str, port);
     let tcp = match TcpStream::connect(&addr) {
         Ok(s) => s,
-        Err(e) => {
-            store_err(-1, 4, format!("TCP connect to {}: {}", addr, e));
+        Err(_) => {
+            store_err(-1, 4, "TCP connect failed".to_string());
             return -1;
         }
     };
@@ -213,19 +213,33 @@ pub unsafe extern "C" fn tls_read(handle: i64) -> *mut MvlString {
         store_err(handle, 5, "invalid TLS handle".to_string());
         return new_mvl_str("");
     };
+    // Read with 1 MiB safety cap (same as tls_read_response).
+    // Prefer tls_read_response for HTTP; this blocks until connection close.
     let mut buf = Vec::new();
-    match stream.read_to_end(&mut buf) {
-        Ok(_) => {
-            clear_err(handle);
-            let s = String::from_utf8_lossy(&buf);
-            new_mvl_str(&s)
-        }
-        Err(e) => {
-            let (errno, msg) = classify_error(&e, false);
-            store_err(handle, errno, msg);
-            new_mvl_str("")
+    let mut chunk = [0u8; 8192];
+    loop {
+        match stream.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => {
+                buf.extend_from_slice(&chunk[..n]);
+                if buf.len() >= 1_048_576 {
+                    store_err(handle, 5, "read truncated at 1 MiB limit".to_string());
+                    return new_mvl_str("");
+                }
+            }
+            Err(e) => {
+                if !buf.is_empty() {
+                    break;
+                }
+                let (errno, msg) = classify_error(&e, false);
+                store_err(handle, errno, msg);
+                return new_mvl_str("");
+            }
         }
     }
+    clear_err(handle);
+    let s = String::from_utf8_lossy(&buf);
+    new_mvl_str(&s)
 }
 
 #[no_mangle]
@@ -272,11 +286,17 @@ pub unsafe extern "C" fn tls_write(handle: i64, data: *const MvlString) -> i64 {
         return -1;
     };
     match stream.write_all(data_str.as_bytes()) {
-        Ok(()) => {
-            let _ = stream.flush();
-            clear_err(handle);
-            data_str.len() as i64
-        }
+        Ok(()) => match stream.flush() {
+            Ok(()) => {
+                clear_err(handle);
+                data_str.len() as i64
+            }
+            Err(e) => {
+                let (errno, msg) = classify_error(&e, false);
+                store_err(handle, errno, msg);
+                -1
+            }
+        },
         Err(e) => {
             let (errno, msg) = classify_error(&e, false);
             store_err(handle, errno, msg);
