@@ -396,7 +396,9 @@ pub fn read_link(p: Path) -> Result<Tainted<String>, IoError> {
 ///
 /// Linear type: must be consumed via [`delete_temp`] or [`persist`].
 pub struct TempFile {
+    /// Open file descriptor for reading and writing.
     pub fd: Fd,
+    /// Filesystem path of the temporary file.
     pub path: Path,
 }
 
@@ -404,6 +406,7 @@ pub struct TempFile {
 ///
 /// Linear type: must be consumed via [`delete_temp_dir`].
 pub struct TempDir {
+    /// Filesystem path of the temporary directory.
     pub path: Path,
 }
 
