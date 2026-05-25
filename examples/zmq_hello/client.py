@@ -18,6 +18,9 @@ def send_msg(sock: socket.socket, msg: str) -> None:
     sock.sendall(struct.pack(">I", len(data)) + data)
 
 
+MAX_MSG = 64 * 1024 * 1024  # 64 MB — matches pkg.zmq decode_frame limit
+
+
 def recv_msg(sock: socket.socket) -> str:
     header = b""
     while len(header) < 4:
@@ -26,6 +29,8 @@ def recv_msg(sock: socket.socket) -> str:
             raise ConnectionError("server closed connection before sending length header")
         header += chunk
     length = struct.unpack(">I", header)[0]
+    if length > MAX_MSG:
+        raise ValueError(f"message too large: {length} bytes (max {MAX_MSG})")
     body = b""
     while len(body) < length:
         chunk = sock.recv(length - len(body))

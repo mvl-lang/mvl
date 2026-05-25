@@ -12,24 +12,49 @@
 //
 // Effects: ! Net (all functions).
 //
-// IFC: handler receives plain String (trusted with ZMQ-REP-DISPATCH audit tag).
-//      Callers must validate handler input before using it in security-sensitive contexts.
+// IFC: handler receives Tainted[String] — callers must relabel with a
+//      context-specific audit tag before use in security-sensitive operations.
+//      This is consistent with sub_serve and puller_serve.
 //
 // See #1032.
 
 use std.ifc.{Tainted}
 use std.net.{TcpListener, TcpStream, NetError,
-             tcp_listen, tcp_connect, tcp_accept, tcp_read, tcp_write,
+             tcp_connect, tcp_accept, tcp_read, tcp_write,
              tcp_close_listener, tcp_close_stream}
-use pkg.zmq.{ZmqError, ZmqAddr, encode_frame, decode_frame, parse_zmq_addr, map_net_err}
+use pkg.zmq.{ZmqError, encode_frame, decode_frame, map_net_err,
+             zmq_bind, is_transient_accept_error}
 
 // ── Server-side ───────────────────────────────────────────────────────────────
 
+/// Write a framed request on `stream`, read the framed reply, and close.
+///
+/// Module-private — used by `req_request`.
+fn req_exchange(stream: TcpStream, msg: String) -> Result[Tainted[String], ZmqError] ! Net {
+    let framed: String = encode_frame(msg);
+    match tcp_write(stream, framed) {
+        Err(e) => { tcp_close_stream(stream); Err(map_net_err(e)) },
+        Ok(_)  => {
+            match tcp_read(stream) {
+                Err(e)  => { tcp_close_stream(stream); Err(map_net_err(e)) },
+                Ok(raw) => {
+                    tcp_close_stream(stream);
+                    decode_frame(raw)
+                },
+            }
+        },
+    }
+}
+
 /// Handle one REQ/REP exchange on an accepted TCP stream.
 ///
-/// Reads a framed request, decodes it, calls `handler`, sends the framed reply,
-/// closes the stream.  Module-private — used by `rep_accept_loop`.
-fn handle_one(stream: TcpStream, handler: fn(String) -> String) -> Result[Unit, ZmqError] ! Net {
+/// Reads a framed request, decodes it, calls `handler` with the raw
+/// `Tainted[String]` body, sends the framed reply, closes the stream.
+/// Module-private — used by `rep_accept_loop`.
+fn handle_one(
+    stream: TcpStream,
+    handler: fn(Tainted[String]) -> String,
+) -> Result[Unit, ZmqError] ! Net {
     match tcp_read(stream) {
         Err(e)  => {
             tcp_close_stream(stream);
@@ -42,8 +67,7 @@ fn handle_one(stream: TcpStream, handler: fn(String) -> String) -> Result[Unit, 
                     Err(e)
                 },
                 Ok(msg) => {
-                    let plain: String = relabel trust(msg, "ZMQ-REP-DISPATCH");
-                    let reply_body: String = handler(plain);
+                    let reply_body: String = handler(msg);
                     let framed: String = encode_frame(reply_body);
                     match tcp_write(stream, framed) {
                         Ok(_)  => { tcp_close_stream(stream); Ok(()) },
@@ -62,12 +86,17 @@ fn handle_one(stream: TcpStream, handler: fn(String) -> String) -> Result[Unit, 
 /// Module-private — called from `rep_serve`.
 partial fn rep_accept_loop(
     listener: TcpListener,
-    handler: fn(String) -> String,
+    handler: fn(Tainted[String]) -> String,
 ) -> Result[Unit, ZmqError] ! Net {
     match tcp_accept(listener) {
-        Err(NetError::ConnectionReset) => rep_accept_loop(listener, handler),
-        Err(NetError::Timeout)         => rep_accept_loop(listener, handler),
-        Err(_)                         => { tcp_close_listener(listener); Ok(()) },
+        Err(e) => {
+            if is_transient_accept_error(e) {
+                rep_accept_loop(listener, handler)
+            } else {
+                tcp_close_listener(listener);
+                Ok(())
+            }
+        },
         Ok(stream) => {
             let _: Result[Unit, ZmqError] = handle_one(stream, handler);
             rep_accept_loop(listener, handler)
@@ -78,17 +107,16 @@ partial fn rep_accept_loop(
 /// Start a REP server at `addr`, handling requests with `handler` forever.
 ///
 /// `addr` formats: `"tcp://*:5555"`, `"tcp://0.0.0.0:5555"`, `"localhost:5555"`.
-/// `handler` receives the decoded request as a plain `String` (trusted with
-/// audit tag `ZMQ-REP-DISPATCH`) and returns the reply body.
+/// `handler` receives the decoded request as `Tainted[String]` and must relabel
+/// it with a context-specific audit tag before security-sensitive use.
 ///
 /// Runs until a fatal accept error.  Returns `Ok` on clean shutdown.
 pub partial fn rep_serve(
     addr: String,
-    handler: fn(String) -> String,
+    handler: fn(Tainted[String]) -> String,
 ) -> Result[Unit, ZmqError] ! Net {
-    let parsed: ZmqAddr = parse_zmq_addr(addr)?;
-    match tcp_listen(parsed.host, parsed.port) {
-        Err(e)       => Err(map_net_err(e)),
+    match zmq_bind(addr) {
+        Err(e)       => Err(e),
         Ok(listener) => rep_accept_loop(listener, handler),
     }
 }
@@ -106,20 +134,6 @@ pub fn req_request(
 ) -> Result[Tainted[String], ZmqError] ! Net {
     match tcp_connect(host, port) {
         Err(e)     => Err(map_net_err(e)),
-        Ok(stream) => {
-            let framed: String = encode_frame(msg);
-            match tcp_write(stream, framed) {
-                Err(e) => { tcp_close_stream(stream); Err(map_net_err(e)) },
-                Ok(_)  => {
-                    match tcp_read(stream) {
-                        Err(e)  => { tcp_close_stream(stream); Err(map_net_err(e)) },
-                        Ok(raw) => {
-                            tcp_close_stream(stream);
-                            decode_frame(raw)
-                        },
-                    }
-                },
-            }
-        },
+        Ok(stream) => req_exchange(stream, msg),
     }
 }

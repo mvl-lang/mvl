@@ -9,8 +9,9 @@
 use pkg.zmq.{zmq_error_msg}
 use pkg.zmq.reqrep.{rep_serve}
 
-fn handle(req: String) -> String {
-    "echo: ".concat(req)
+fn handle(req: Tainted[String]) -> String {
+    let plain: String = relabel trust(req, "ZMQ-REQ-HANDLER");
+    "echo: ".concat(plain)
 }
 
 partial fn main() -> Unit ! Console + Net {

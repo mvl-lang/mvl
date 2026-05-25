@@ -16,9 +16,10 @@
 
 use std.ifc.{Tainted}
 use std.net.{TcpListener, TcpStream, NetError,
-             tcp_listen, tcp_connect, tcp_accept, tcp_read, tcp_write,
+             tcp_accept, tcp_read,
              tcp_close_listener, tcp_close_stream}
-use pkg.zmq.{ZmqError, ZmqAddr, encode_frame, decode_frame, parse_zmq_addr, map_net_err}
+use pkg.zmq.{ZmqError, encode_frame, decode_frame, map_net_err,
+             zmq_bind, send_one, is_transient_accept_error}
 
 // ── Pusher actor ──────────────────────────────────────────────────────────────
 
@@ -40,27 +41,17 @@ pub actor Pusher {
     ///
     /// Connects to the selected worker, writes a framed message, closes.
     /// Network errors are silently ignored (fire-and-forget actor behavior).
+    /// The round-robin counter wraps modulo the worker count to prevent overflow.
     pub fn push(val msg: String) -> Unit ! Net {
         let n: Int = self.workers.len();
         if n > 0 {
             let idx: Int = self.next % n;
-            self.next = self.next + 1;
+            self.next = (self.next + 1) % n;
             match self.workers.get(idx) {
                 None       => {},
                 Some(addr) => {
-                    match parse_zmq_addr(addr) {
-                        Err(_) => {},
-                        Ok(hp) => {
-                            match tcp_connect(hp.host, hp.port) {
-                                Err(_)     => {},
-                                Ok(stream) => {
-                                    let framed: String = encode_frame(msg);
-                                    let _: Result[Unit, NetError] = tcp_write(stream, framed);
-                                    tcp_close_stream(stream)
-                                },
-                            }
-                        },
-                    }
+                    let framed: String = encode_frame(msg);
+                    let _: Result[Unit, ZmqError] = send_one(addr, framed);
                 },
             }
         }
@@ -96,9 +87,8 @@ pub partial fn puller_serve(
     addr: String,
     handler: fn(Tainted[String]) -> Unit,
 ) -> Result[Unit, ZmqError] ! Net {
-    let parsed: ZmqAddr = parse_zmq_addr(addr)?;
-    match tcp_listen(parsed.host, parsed.port) {
-        Err(e)       => Err(map_net_err(e)),
+    match zmq_bind(addr) {
+        Err(e)       => Err(e),
         Ok(listener) => puller_accept_loop(listener, handler),
     }
 }
@@ -108,9 +98,14 @@ partial fn puller_accept_loop(
     handler: fn(Tainted[String]) -> Unit,
 ) -> Result[Unit, ZmqError] ! Net {
     match tcp_accept(listener) {
-        Err(NetError::ConnectionReset) => puller_accept_loop(listener, handler),
-        Err(NetError::Timeout)         => puller_accept_loop(listener, handler),
-        Err(_)                         => { tcp_close_listener(listener); Ok(()) },
+        Err(e) => {
+            if is_transient_accept_error(e) {
+                puller_accept_loop(listener, handler)
+            } else {
+                tcp_close_listener(listener);
+                Ok(())
+            }
+        },
         Ok(stream) => {
             match tcp_read(stream) {
                 Err(_)  => {

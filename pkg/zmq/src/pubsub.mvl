@@ -7,7 +7,7 @@
 //   This works with the connection-per-message model of std.net tcp_read.
 //
 // Wire format: single framed payload "topic\nmessage".
-//   Subscriber filters by topic prefix match.
+//   Subscriber filters by topic prefix match on the topic component only.
 //
 // Import:
 //   use pkg.zmq.pubsub.{Publisher, sub_recv, sub_serve}
@@ -20,9 +20,10 @@
 
 use std.ifc.{Tainted}
 use std.net.{TcpListener, TcpStream, NetError,
-             tcp_listen, tcp_connect, tcp_accept, tcp_read, tcp_write,
+             tcp_accept, tcp_read,
              tcp_close_listener, tcp_close_stream}
-use pkg.zmq.{ZmqError, ZmqAddr, encode_frame, decode_frame, parse_zmq_addr, map_net_err}
+use pkg.zmq.{ZmqError, encode_frame, decode_frame, map_net_err,
+             zmq_bind, send_one, is_transient_accept_error}
 
 // ── Publisher actor ───────────────────────────────────────────────────────────
 
@@ -48,21 +49,29 @@ pub actor Publisher {
     pub fn publish(val topic: String, val msg: String) -> Unit ! Net {
         let payload: String = encode_frame(topic.concat("\n").concat(msg));
         for addr in self.subscribers {
-            match parse_zmq_addr(addr) {
-                Err(_)  => {},
-                Ok(hp)  => match tcp_connect(hp.host, hp.port) {
-                    Err(_)     => {},
-                    Ok(stream) => {
-                        let _: Result[Unit, NetError] = tcp_write(stream, payload);
-                        tcp_close_stream(stream)
-                    },
-                },
-            }
+            let _: Result[Unit, ZmqError] = send_one(addr, payload);
         }
     }
 }
 
 // ── Subscriber-side ───────────────────────────────────────────────────────────
+
+/// Returns true if the topic component of `plain` starts with `filter`.
+///
+/// `plain` is the full decoded payload "topic\nmessage".  The filter is applied
+/// to the topic prefix only — the body is never matched against the filter.
+/// An empty `filter` matches all messages.
+fn topic_passes_filter(plain: String, filter: String) -> Bool {
+    if filter.len() == 0 {
+        true
+    } else {
+        let topic: String = match plain.find("\n") {
+            None    => plain.substring(0, plain.len()),
+            Some(i) => plain.substring(0, i),
+        };
+        topic.starts_with(filter)
+    }
+}
 
 /// Accept one incoming PUB message on `listener`.
 ///
@@ -89,7 +98,7 @@ pub partial fn sub_recv(
                         Err(e)  => Err(e),
                         Ok(msg) => {
                             let plain: String = relabel trust(msg, "ZMQ-SUB-FILTER");
-                            if filter.len() == 0 || plain.starts_with(filter) {
+                            if topic_passes_filter(plain, filter) {
                                 Ok(relabel taint(plain, "ZMQ-RECV"))
                             } else {
                                 sub_recv(listener, filter)
@@ -111,9 +120,8 @@ pub partial fn sub_serve(
     filter: String,
     handler: fn(Tainted[String]) -> Unit,
 ) -> Result[Unit, ZmqError] ! Net {
-    let parsed: ZmqAddr = parse_zmq_addr(addr)?;
-    match tcp_listen(parsed.host, parsed.port) {
-        Err(e)       => Err(map_net_err(e)),
+    match zmq_bind(addr) {
+        Err(e)       => Err(e),
         Ok(listener) => sub_accept_loop(listener, filter, handler),
     }
 }
@@ -123,11 +131,37 @@ partial fn sub_accept_loop(
     filter: String,
     handler: fn(Tainted[String]) -> Unit,
 ) -> Result[Unit, ZmqError] ! Net {
-    match sub_recv(listener, filter) {
-        Err(_)  => { tcp_close_listener(listener); Ok(()) },
-        Ok(msg) => {
-            handler(msg);
-            sub_accept_loop(listener, filter, handler)
+    match tcp_accept(listener) {
+        Err(e) => {
+            if is_transient_accept_error(e) {
+                sub_accept_loop(listener, filter, handler)
+            } else {
+                tcp_close_listener(listener);
+                Ok(())
+            }
+        },
+        Ok(stream) => {
+            match tcp_read(stream) {
+                Err(_)  => {
+                    tcp_close_stream(stream);
+                    sub_accept_loop(listener, filter, handler)
+                },
+                Ok(raw) => {
+                    tcp_close_stream(stream);
+                    match decode_frame(raw) {
+                        Err(_)  => sub_accept_loop(listener, filter, handler),
+                        Ok(msg) => {
+                            let plain: String = relabel trust(msg, "ZMQ-SUB-FILTER");
+                            if topic_passes_filter(plain, filter) {
+                                handler(relabel taint(plain, "ZMQ-RECV"));
+                                sub_accept_loop(listener, filter, handler)
+                            } else {
+                                sub_accept_loop(listener, filter, handler)
+                            }
+                        },
+                    }
+                },
+            }
         },
     }
 }
