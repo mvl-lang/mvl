@@ -77,44 +77,48 @@ partial fn handle_request(db: val SqliteDb, logger: val Logger, req: Request, ma
 //
 // One connection at a time.  Sufficient for a demo; a production version would
 // use actor-per-request (see examples/actor_webserver/).
+//
+// TcpListener is Copy so the while loop can pass it to tcp_accept each
+// iteration without consuming it.  Fatal accept errors close the listener
+// and return early; transient errors (reset, timeout) just continue.
 
-partial fn request_loop(db: val SqliteDb, listener: TcpListener, logger: val Logger, router: val Router) -> Unit ! DB + Log + Net {
-    match tcp_accept(listener) {
-        Err(NetError::ConnectionReset) => {
-            logger.warn("client dropped before accept", {"reason": "connection reset"});
-            request_loop(db, listener, logger, router)
-        },
-        Err(NetError::Timeout) => {
-            logger.warn("accept timed out", {"reason": "timeout"});
-            request_loop(db, listener, logger, router)
-        },
-        Err(e) => {
-            logger.error("accept failed — shutting down", {"error": net_error_msg(e)});
-            tcp_close_listener(listener)
-        },
-        Ok(stream) => {
-            let resp: Response = match tcp_read_request(stream) {
-                Err(e)  => {
-                    logger.warn("read error", {"error": net_error_msg(e)});
-                    json_error(http_internal_error("read error"))
-                },
-                Ok(raw) => match parse_request(raw) {
-                    Err(e)      => error_response(e),
-                    Ok(req)     => match dispatch(router, req) {
-                        Err(e)      => error_response(e),
-                        Ok(matched) => handle_request(db, logger, req, matched),
+partial fn serve(db: val SqliteDb, listener: TcpListener, logger: val Logger, router: val Router) -> Unit ! DB + Log + Net {
+    while true {
+        match tcp_accept(listener) {
+            Err(NetError::ConnectionReset) => {
+                logger.warn("client dropped before accept", {"reason": "connection reset"})
+            },
+            Err(NetError::Timeout) => {
+                logger.warn("accept timed out", {"reason": "timeout"})
+            },
+            Err(e) => {
+                logger.error("accept failed — shutting down", {"error": net_error_msg(e)});
+                tcp_close_listener(listener);
+                return
+            },
+            Ok(stream) => {
+                let resp: Response = match tcp_read_request(stream) {
+                    Err(e)  => {
+                        logger.warn("read error", {"error": net_error_msg(e)});
+                        json_error(http_internal_error("read error"))
                     },
-                },
-            };
-            match tcp_write(stream, serialize_response(resp)) {
-                Ok(_)  => { tcp_close_stream(stream); request_loop(db, listener, logger, router) },
-                Err(e) => {
-                    logger.error("write error", {"error": net_error_msg(e)});
-                    tcp_close_stream(stream);
-                    request_loop(db, listener, logger, router)
-                },
-            }
-        },
+                    Ok(raw) => match parse_request(raw) {
+                        Err(e)      => error_response(e),
+                        Ok(req)     => match dispatch(router, req) {
+                            Err(e)      => error_response(e),
+                            Ok(matched) => handle_request(db, logger, req, matched),
+                        },
+                    },
+                };
+                match tcp_write(stream, serialize_response(resp)) {
+                    Ok(_)  => tcp_close_stream(stream),
+                    Err(e) => {
+                        logger.error("write error", {"error": net_error_msg(e)});
+                        tcp_close_stream(stream)
+                    },
+                }
+            },
+        }
     }
 }
 
@@ -195,6 +199,6 @@ partial fn main() -> Unit ! DB + Env + FileRead + FileWrite + FileDelete + Log +
 
     match tcp_listen(cfg.host, cfg.port) {
         Err(e) => logger.error("listen failed", {"error": net_error_msg(e)}),
-        Ok(listener) => request_loop(db, listener, logger, router),
+        Ok(listener) => serve(db, listener, logger, router),
     }
 }
