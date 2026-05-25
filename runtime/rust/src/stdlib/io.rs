@@ -459,6 +459,18 @@ pub fn temp_dir() -> Result<TempDir, IoError> {
         .map_err(|e| sanitize_io_error(&e))
 }
 
+/// Return the filesystem path of a temporary file as Tainted<String>.
+/// The path originates from the OS temp directory — treated as external data.
+/// Takes an immutable borrow — reading a path never mutates the file.
+pub fn temp_path(tf: &TempFile) -> Tainted<String> {
+    Tainted(tf.path.inner.clone())
+}
+
+/// Return the filesystem path of a temporary directory as Tainted<String>.
+pub fn temp_dir_path(td: &TempDir) -> Tainted<String> {
+    Tainted(td.path.inner.clone())
+}
+
 /// Write data to an open temporary file.
 #[allow(unsafe_code)]
 pub fn temp_write(tf: &TempFile, data: String) -> Result<(), IoError> {

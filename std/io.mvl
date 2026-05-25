@@ -268,18 +268,23 @@ pub builtin fn temp_file_in(dir: Path) -> Result[TempFile, IoError] ! FileWrite
 pub builtin fn temp_dir() -> Result[TempDir, IoError] ! FileWrite
 
 /// Write data to an open temporary file.
-pub builtin fn temp_write(tf: ref TempFile, data: String) -> Result[Unit, IoError] ! FileWrite
+/// Takes val (immutable borrow) — the TempFile struct itself is not mutated;
+/// only the underlying OS file descriptor is written to.
+pub builtin fn temp_write(tf: val TempFile, data: String) -> Result[Unit, IoError] ! FileWrite
 
 /// Read the full contents of a temporary file.
-///
 /// Returns Tainted[String] — file contents are external data (IFC Req 11).
-pub builtin fn temp_read(tf: ref TempFile) -> Result[Tainted[String], IoError] ! FileRead
+/// Takes val (immutable borrow) — does not mutate the TempFile struct.
+pub builtin fn temp_read(tf: val TempFile) -> Result[Tainted[String], IoError] ! FileRead
 
-/// Return the filesystem path of a temporary file (pure — no I/O).
-pub fn temp_path(tf: ref TempFile) -> Path { tf.path }
+/// Return the filesystem path of a temporary file.
+/// Returns Tainted[String] — the path originates from the OS temp directory
+/// (external data). Callers must relabel to use it as a plain String.
+pub builtin fn temp_path(tf: val TempFile) -> Tainted[String]
 
-/// Return the filesystem path of a temporary directory (pure — no I/O).
-pub fn temp_dir_path(td: ref TempDir) -> Path { td.path }
+/// Return the filesystem path of a temporary directory.
+/// Returns Tainted[String] — same rationale as temp_path.
+pub builtin fn temp_dir_path(td: val TempDir) -> Tainted[String]
 
 /// Delete a temporary file and release all resources.
 ///
