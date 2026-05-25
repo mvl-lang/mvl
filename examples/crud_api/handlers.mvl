@@ -76,8 +76,13 @@ pub partial fn create_user_handler(val db: SqliteDb, val req: Request, val match
                     Ok(email)  => {
                         let create_req: CreateUserRequest = CreateUserRequest { name: name, email: email };
                         match db_create_user(db, create_req) {
-                            Err("email already exists") => json_error(http_bad_request("email already exists")),
-                            Err(msg)   => json_error(http_internal_error("internal server error")),
+                            Err(msg) => {
+                                if msg == "email already exists" {
+                                    json_error(http_bad_request(msg))
+                                } else {
+                                    json_error(http_internal_error("internal server error"))
+                                }
+                            },
                             Ok(new_id) => match db_get_user(db, new_id) {
                                 Err(_)         => json_error(http_internal_error("internal server error")),
                                 Ok(None)       => json_error(http_internal_error("internal server error")),

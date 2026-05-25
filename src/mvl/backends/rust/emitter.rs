@@ -505,6 +505,59 @@ impl RustEmitter {
         self.capability_params_map =
             build_capability_params_map_with_siblings(prog, &prelude_fns, sibling_progs);
 
+        // Also register explicit borrow annotations from builtin/native stdlib
+        // functions (e.g. temp_write takes `ref TempFile`).  These are excluded
+        // from prelude_fns (no body to emit), but their parameter annotations
+        // still guide call-site emission.
+        for pp in prelude_progs {
+            for decl in &pp.declarations {
+                if let Decl::Fn(fd) = decl {
+                    if !self.capability_params_map.contains_key(&fd.name) {
+                        let flags =
+                            crate::mvl::backends::rust::capability_params::explicit_borrow_flags_pub(&fd.params);
+                        if flags.iter().any(|b| b.is_some()) {
+                            self.capability_params_map.insert(fd.name.clone(), flags);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Rust-backed stdlib modules (io, net, …) are excluded from prelude_progs,
+        // so their function parameter annotations (e.g. `ref TempFile` on temp_write)
+        // are missing from the map above.  Load those .mvl files and scan them.
+        {
+            use crate::mvl::backends::rust::RUST_BACKED_STDLIB;
+            use crate::mvl::parser::Parser;
+            use crate::mvl::stdlib;
+            let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+            for decl in &prog.declarations {
+                if let Decl::Use(ud) = decl {
+                    if ud.path.first().map(|s| s == "std").unwrap_or(false) && ud.path.len() >= 2 {
+                        let m = ud.path[1].as_str();
+                        if RUST_BACKED_STDLIB.contains(&m) && seen.insert(m.to_string()) {
+                            let filename = format!("{m}.mvl");
+                            if let Some(content) = stdlib::stdlib_content(&filename) {
+                                let (mut p, _) = Parser::new(content);
+                                let loaded = p.parse_program();
+                                for d in &loaded.declarations {
+                                    if let Decl::Fn(fd) = d {
+                                        if !self.capability_params_map.contains_key(&fd.name) {
+                                            let flags = crate::mvl::backends::rust::capability_params::explicit_borrow_flags_pub(&fd.params);
+                                            if flags.iter().any(|b| b.is_some()) {
+                                                self.capability_params_map
+                                                    .insert(fd.name.clone(), flags);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // #959: collect (struct_name, field_name) pairs where the field is fn-typed.
         self.fn_typed_struct_fields = collect_fn_typed_struct_fields(prog, prelude_progs);
 

@@ -158,6 +158,15 @@ fn explicit_borrow_flags(params: &[Param]) -> Vec<Option<bool>> {
         .collect()
 }
 
+/// Public wrapper for [`explicit_borrow_flags`] — used by the emitter to
+/// register borrow annotations from builtin/native stdlib functions.
+pub fn explicit_borrow_flags_pub(params: &[Param]) -> Vec<Option<bool>> {
+    params
+        .iter()
+        .map(|p| explicit_ref_mutability(&p.ty))
+        .collect()
+}
+
 /// Returns `true` if `ty` is a Rust `Copy` type — borrowing it provides no
 /// performance benefit over passing by value.
 ///
