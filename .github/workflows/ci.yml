@@ -223,33 +223,35 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
 
-      - name: Install LLVM 22 and Z3
+      - name: Install LLVM 22
         run: |
           wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
           echo "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-22 main" \
             | sudo tee /etc/apt/sources.list.d/llvm-22.list
           sudo apt-get update -qq
-          sudo apt-get install -y llvm-22-dev libclang-22-dev libpolly-22-dev libz3-dev
+          sudo apt-get install -y llvm-22-dev libclang-22-dev libpolly-22-dev
           echo "LLVM_SYS_221_PREFIX=$(llvm-config-22 --prefix)" >> "$GITHUB_ENV"
-          echo "Z3_SYS_Z3_HEADER=/usr/include/z3.h" >> "$GITHUB_ENV"
 
       - name: Build MVL compiler and runtime
-        run: cargo build && cargo build -p mvl_runtime_c
+        run: |
+          cargo build --no-default-features --features llvm
+          cargo build -p mvl_runtime_c
 
       - name: Run example smoke tests
         run: bash examples/test-all.sh --full
 
   # ── Refinement solver benchmarks ────────────────────────────────────────────
   #
-  # Runs when Rust sources change. Uses a small sample count so CI completes
-  # in ~2 minutes; results are uploaded as an artifact for regression tracking.
-  # Use `--output-format bencher` to produce machine-readable output that can
-  # be diffed across runs to detect performance regressions.
+  # Runs on push to main only (not PRs). Benchmarks have no baseline to diff
+  # against during a PR, so they add ~5 min of wall time with no signal.
+  # Results are uploaded as artifacts for post-merge regression tracking.
   benchmark:
     name: Refinement solver benchmarks
     needs: [changes]
-    if: needs.changes.outputs.rust == 'true'
+    if: needs.changes.outputs.rust == 'true' && github.event_name == 'push'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
 
@@ -276,9 +278,17 @@ jobs:
           cargo bench --bench refinement_solver \
             -- --output-format bencher 2>&1 | tee bench-results.txt
 
-      - name: Upload benchmark results
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+      - name: Store and compare benchmark results
+        uses: benchmark-action/github-action-benchmark@d48d326b4ca9ba73ca0cd0d59f108f9e02a381c8  # v1.20.4
         with:
-          name: refinement-bench-results
-          path: bench-results.txt
-          retention-days: 90
+          tool: cargo
+          output-file-path: bench-results.txt
+          gh-pages-branch: benchmark-data
+          benchmark-data-dir-path: data
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: true
+          # Alert (comment on commit) if any benchmark regresses more than 30%.
+          # Does not fail the job — regressions are noise until reproduced.
+          alert-threshold: '130%'
+          comment-on-alert: true
+          fail-on-alert: false
