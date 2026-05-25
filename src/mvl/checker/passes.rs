@@ -374,7 +374,6 @@ pub fn count_memory_safety_sites(prog: &Program) -> MemorySafetyCounts {
                     count_block(&arm.body, c);
                 }
             }
-            Expr::Concurrently { body, .. } => count_block(body, c),
             // Leaf expressions — no sub-expressions to traverse.
             Expr::Literal(..) | Expr::Ident(..) | Expr::Quantifier(..) => {}
         }
