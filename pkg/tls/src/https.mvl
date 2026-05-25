@@ -1,0 +1,285 @@
+// pkg.tls.https — HTTPS convenience layer
+//
+// Thin wrapper that performs HTTP-over-TLS in a single call:
+//   tls_connect -> write HTTP request -> read HTTP response -> tls_close
+//
+// This module lives in pkg.tls (not pkg.http) to avoid circular
+// dependencies. The HTTP client (pkg.http) remains HTTP-only and
+// works without pkg.tls installed (graceful fallback per #1017).
+//
+// Import:
+//   use pkg.tls.https.{https_get, https_post, https_request,
+//                       HttpsResponse, HttpsError, https_error_msg}
+//
+// Effects: Net (all functions perform network I/O).
+//
+// IFC: Response body is Tainted[String] -- untrusted network data.
+//
+// See #1017.
+
+use std.ifc.{Tainted, taint, trust}
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+/// Minimal HTTPS response: status code + headers + body.
+pub type HttpsResponse = struct {
+    status_code: Int,
+    headers: Map[String, String],
+    body: Tainted[String],
+}
+
+/// HTTPS error variants.
+pub type HttpsError = enum {
+    InvalidUrl(String),
+    ConnectionFailed(String),
+    InvalidResponse(String),
+}
+
+// ── Error formatting ──────────────────────────────────────────────────────────
+
+pub fn https_error_msg(e: HttpsError) -> String {
+    match e {
+        HttpsError::InvalidUrl(msg)       => "invalid URL: ".concat(msg),
+        HttpsError::ConnectionFailed(msg)  => "HTTPS connection failed: ".concat(msg),
+        HttpsError::InvalidResponse(msg)   => "invalid response: ".concat(msg),
+    }
+}
+
+// ── Internal helpers ────────────────────────────────────────────────────────
+
+fn map_connect_error(e: TlsError) -> HttpsError {
+    HttpsError::ConnectionFailed(tls_error_msg(e))
+}
+
+fn map_write_error(e: TlsError) -> HttpsError {
+    HttpsError::ConnectionFailed(tls_error_msg(e))
+}
+
+fn map_read_error(e: TlsError) -> HttpsError {
+    HttpsError::ConnectionFailed(tls_error_msg(e))
+}
+
+// ── URL parsing (HTTPS only) ────────────────────────────────────────────────
+
+type ParsedHttpsUrl = struct {
+    host: String,
+    port: Int,
+    path: String,
+}
+
+fn parse_https_url(url: String) -> Result[ParsedHttpsUrl, HttpsError] {
+    if !url.starts_with("https://") {
+        Err(HttpsError::InvalidUrl("only https:// supported"))
+    } else {
+        let url_len: Int = url.len();
+        let rest: String = url.substring(8, url_len);
+        let rest_len: Int = rest.len();
+        let slash_pos: Option[Int] = rest.find("/");
+        let host_port: String = match slash_pos {
+            Some(i) => rest.substring(0, i),
+            None    => rest.substring(0, rest_len),
+        };
+        let path: String = match slash_pos {
+            Some(i) => rest.substring(i, rest_len),
+            None    => "/",
+        };
+        if host_port.len() == 0 {
+            Err(HttpsError::InvalidUrl("empty host"))
+        } else {
+            let hp_len: Int = host_port.len();
+            match host_port.find(":") {
+                Some(i) => {
+                    let host: String = host_port.substring(0, i);
+                    let port_str: String = host_port.substring(i + 1, hp_len);
+                    if host.len() == 0 {
+                        Err(HttpsError::InvalidUrl("empty host"))
+                    } else {
+                        match port_str.parse_int() {
+                            Ok(port) => Ok(ParsedHttpsUrl { host: host, port: port, path: path }),
+                            Err(_)   => Err(HttpsError::InvalidUrl("invalid port")),
+                        }
+                    }
+                },
+                None => Ok(ParsedHttpsUrl { host: host_port, port: 443, path: path }),
+            }
+        }
+    }
+}
+
+// ── Request building ────────────────────────────────────────────────────────
+
+fn build_https_request(method: String, host: String, port: Int, path: String, headers: Map[String, String], body: String) -> String {
+    let request_line: String = method
+        .concat(" ")
+        .concat(path)
+        .concat(" HTTP/1.1\r\n");
+    let host_val: String = if port != 443 {
+        host.concat(":").concat(port.to_string())
+    } else {
+        host
+    };
+    let result: ref String = request_line
+        .concat("Host: ").concat(host_val).concat("\r\n")
+        .concat("Connection: close\r\n");
+    for k in headers.keys() {
+        match headers.get(k) {
+            Some(v) => { result = result.concat(k).concat(": ").concat(v).concat("\r\n") },
+            None    => {},
+        }
+    }
+    if body.len() > 0 {
+        result = result.concat("Content-Length: ").concat(body.len().to_string()).concat("\r\n")
+    } else {}
+    result.concat("\r\n").concat(body)
+}
+
+// ── Response parsing ────────────────────────────────────────────────────────
+
+fn empty_https_headers() -> Map[String, String] {
+    let m: ref Map[String, String] = {"__init__": ""};
+    let _: Option[String] = m.remove("__init__");
+    m
+}
+
+fn require_https_resp(opt: Option[String], msg: String) -> Result[String, HttpsError] {
+    match opt {
+        Some(v) => Ok(v),
+        None    => Err(HttpsError::InvalidResponse(msg)),
+    }
+}
+
+fn parse_https_status_code(s: String) -> Result[Int, HttpsError] {
+    match s.parse_int() {
+        Ok(c)  => Ok(c),
+        Err(_) => Err(HttpsError::InvalidResponse("non-numeric status code")),
+    }
+}
+
+fn parse_https_headers(lines: List[String]) -> Map[String, String] {
+    let m: ref Map[String, String] = empty_https_headers();
+    for line in lines {
+        match line.find(":") {
+            None    => {},
+            Some(i) => {
+                let k: String = line.substring(0, i).trim().to_lower();
+                let v: String = line.substring(i + 1, line.len()).trim();
+                if k.len() > 0 { m.insert(k, v) } else {}
+            },
+        }
+    }
+    m
+}
+
+fn parse_https_response(raw: String) -> Result[HttpsResponse, HttpsError] {
+    let lines: List[String] = raw.split("\r\n");
+    let status_line: String = require_https_resp(lines.get(0), "empty response")?;
+    let parts: List[String] = status_line.split(" ");
+    let code_str: String = require_https_resp(parts.get(1), "malformed status line")?;
+    let code: Int = parse_https_status_code(code_str)?;
+    let n: Int = lines.len();
+    let blank_idx: ref Int = n;
+    let found_blank: ref Bool = false;
+    let idx: ref Int = 1;
+    for line in lines.slice(1, n) {
+        if !found_blank && line.len() == 0 {
+            blank_idx = idx;
+            found_blank = true
+        } else {}
+        idx = idx + 1
+    }
+    let header_lines: List[String] = if found_blank && blank_idx > 1 {
+        lines.slice(1, blank_idx)
+    } else {
+        []
+    };
+    let headers: Map[String, String] = parse_https_headers(header_lines);
+    let body_str: String = if found_blank && blank_idx + 1 < n {
+        let body_lines: List[String] = lines.slice(blank_idx + 1, n);
+        let acc: ref String = "";
+        let body_first: ref Bool = true;
+        for bl in body_lines {
+            if body_first {
+                acc = bl.concat("");
+                body_first = false
+            } else {
+                acc = acc.concat("\r\n").concat(bl)
+            }
+        }
+        acc
+    } else {
+        ""
+    };
+    let body: Tainted[String] = relabel taint(body_str, "HTTPS-RESPONSE-BODY");
+    Ok(HttpsResponse { status_code: code, headers: headers, body: body })
+}
+
+// ── Public API ──────────────────────────────────────────────────────────────
+
+/// Send an HTTPS request. Full control over method, headers, and body.
+///
+/// Performs: DNS -> TCP connect -> TLS handshake -> send request -> read response.
+/// Returns the parsed response with Tainted body.
+pub partial fn https_request(
+    method: String,
+    url: String,
+    headers: Map[String, String],
+    body: String,
+) -> Result[HttpsResponse, HttpsError] ! Net {
+    let parsed: ParsedHttpsUrl = parse_https_url(url)?;
+    let host: String = parsed.host;
+    let port: Int = parsed.port;
+    let path: String = parsed.path;
+    let request_str: String = build_https_request(method, host.concat(""), port, path, headers, body);
+    let connect_result: Result[TlsStream, HttpsError] = match tls_client_connect(host, port) {
+        Ok(s)  => Ok(s),
+        Err(e) => Err(map_connect_error(e)),
+    };
+    let stream: TlsStream = connect_result?;
+    let write_result: Result[Unit, HttpsError] = match tls_client_write(stream, request_str) {
+        Ok(_)  => Ok(()),
+        Err(e) => Err(map_write_error(e)),
+    };
+    let _w: Unit = write_result?;
+    let read_result: Result[Tainted[String], HttpsError] = match tls_client_read(stream) {
+        Ok(data) => Ok(data),
+        Err(e)   => Err(map_read_error(e)),
+    };
+    let raw_tainted: Tainted[String] = read_result?;
+    tls_client_close(stream);
+    let raw: String = relabel trust(raw_tainted, "HTTPS-RAW-RESPONSE");
+    parse_https_response(raw)
+}
+
+/// HTTPS GET request with no body.
+pub partial fn https_get(
+    url: String,
+    headers: Map[String, String],
+) -> Result[HttpsResponse, HttpsError] ! Net {
+    https_request("GET", url, headers, "")
+}
+
+/// HTTPS POST request with body.
+pub partial fn https_post(
+    url: String,
+    headers: Map[String, String],
+    body: String,
+) -> Result[HttpsResponse, HttpsError] ! Net {
+    https_request("POST", url, headers, body)
+}
+
+/// HTTPS PUT request with body.
+pub partial fn https_put(
+    url: String,
+    headers: Map[String, String],
+    body: String,
+) -> Result[HttpsResponse, HttpsError] ! Net {
+    https_request("PUT", url, headers, body)
+}
+
+/// HTTPS DELETE request with no body.
+pub partial fn https_delete(
+    url: String,
+    headers: Map[String, String],
+) -> Result[HttpsResponse, HttpsError] ! Net {
+    https_request("DELETE", url, headers, "")
+}

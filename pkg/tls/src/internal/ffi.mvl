@@ -1,0 +1,44 @@
+// pkg.tls — internal FFI boundary
+//
+// TLS primitives implemented in bridge.rs (Rust backend) and
+// llvm.rs (LLVM backend, wired via #811).
+//
+// Design: only primitive types (Int, String) cross this boundary.
+// The public MVL layer in tls.mvl builds TlsStream / TlsError
+// from these primitives — no complex types at the FFI edge.
+//
+// Handle conventions:
+//   tls handle    positive Int (>0) from tls_connect; -1 on failure.
+//
+// Error convention:
+//   tls_errmsg(handle)   last error message for a valid handle.
+//   tls_errmsg(-1)       error from the last failed tls_connect.
+//   tls_errno(handle)    error code: 0=HandshakeFailed 1=CertificateInvalid
+//                        2=ConnectionClosed 3=IoError 4=Other; -1 if no error.
+//
+// The TLS layer manages its own TCP+TLS connections internally —
+// no cross-runtime handle sharing with std.net.
+//
+// See #1017, #811.
+
+extern "rust" {
+    // ── Connection ──────────────────────────────────────────────────────────
+    // Connect TCP + TLS in one call. Returns handle (>0) or -1 on failure.
+    total fn tls_connect(host: String, port: Int) -> Int
+    total fn tls_close(handle: Int) -> Unit
+    total fn tls_errmsg(handle: Int) -> String
+    total fn tls_errno(handle: Int) -> Int
+
+    // ── I/O ─────────────────────────────────────────────────────────────────
+    // Read all bytes until the peer closes the connection.
+    // Returns "" on error (check tls_errno after empty return).
+    total fn tls_read(handle: Int) -> String
+
+    // Read one HTTP response: headers + body (Content-Length or close-delimited).
+    // Suitable for HTTP/1.1 responses where Connection: close is sent.
+    // Returns "" on error.
+    total fn tls_read_response(handle: Int) -> String
+
+    // Write data to the TLS stream. Returns bytes written (>=0) or -1 on error.
+    total fn tls_write(handle: Int, data: String) -> Int
+}
