@@ -552,7 +552,7 @@ fn no_test_fns_no_cfg_test_block() {
 fn format_call_emits_format_macro() {
     let src = r#"fn greeting(name: String) -> String { format("{} world", name) }"#;
     let rust = transpile_src(src);
-    assert_contains(&rust, "format!(");
+    assert_contains(&rust, "mvl_format(");
     assert_contains(&rust, "\"{} world\"");
 }
 
@@ -590,7 +590,7 @@ impl Display for Point {
         "fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {",
     );
     assert_contains(&rust, "write!(f, \"{}\",");
-    assert_contains(&rust, "format!(");
+    assert_contains(&rust, "mvl_format(");
 }
 
 /// Hex literals lex and transpile to their integer value.
@@ -647,17 +647,17 @@ impl From[IoError] for AppError {
     assert_contains(&rust, "AppError::Io(e.into())");
 }
 
-/// `impl From[A] for B` with no `from` method emits a todo!().
+/// `impl From[A] for B` with no `from` method is now blocked by the checker (#990).
+/// The transpiler hits unreachable code since it assumes the checker already rejected this.
 #[test]
+#[should_panic(expected = "impl From missing `from`")]
 fn impl_from_without_method_emits_todo() {
     let src = r#"
 type ParseError = struct { msg: String }
 type MyError = enum { Parse(ParseError) }
 impl From[ParseError] for MyError {}
 "#;
-    let rust = transpile_src(src);
-    assert_contains(&rust, "impl std::convert::From<ParseError> for MyError {");
-    assert_contains(&rust, "todo!(\"From::from not implemented\")");
+    let _ = transpile_src(src);
 }
 
 // ── #58/#66: Map/Set literals and multiline/raw strings ───────────────────────
@@ -909,16 +909,16 @@ impl Iterator[Int] for Counter {
     assert_contains(&rust, "fn next(&mut self) -> Option<i64> {");
 }
 
-/// `impl Iterator[T] for X` with no `next` method emits a todo!().
+/// `impl Iterator[T] for X` with no `next` method is now blocked by the checker (#990).
+/// The transpiler hits unreachable code since it assumes the checker already rejected this.
 #[test]
+#[should_panic(expected = "impl Iterator missing `next`")]
 fn iterator_impl_without_next_emits_todo() {
     let src = r#"
 type Counter = struct { current: Int }
 impl Iterator[Int] for Counter {}
 "#;
-    let rust = transpile_src(src);
-    assert_contains(&rust, "impl std::iter::Iterator for Counter {");
-    assert_contains(&rust, "todo!(\"Iterator::next not implemented\")");
+    let _ = transpile_src(src);
 }
 
 // ── #844: std.args — schema-driven CLI parsing ────────────────────────────
@@ -2521,7 +2521,7 @@ fn corpus_ghost_old_contracts_transpiles() {
 
 /// Phase 4 / #672: old() in ensures emits assert! referencing the return binding.
 #[test]
-fn old_in_ensures_emits_debug_assert() {
+fn old_in_ensures_emits_result_binding() {
     let src = r#"
         fn inc(n: Int) -> Int
           ensures result >= old(n)
@@ -2530,7 +2530,8 @@ fn old_in_ensures_emits_debug_assert() {
         }
     "#;
     let rust = transpile_src(src);
-    assert_contains(&rust, "assert!");
+    // ensures clause is verified statically — no runtime assert emitted.
+    // The result binding is still present for the return value.
     assert_contains(&rust, "_result");
 }
 

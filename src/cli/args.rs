@@ -35,7 +35,8 @@ pub fn print_usage() {
   mvl build|run|check|test <file|dir> --stdlib=proven  — proven profile: verifies stdlib before user code (ADR-0023)
   mvl build|run <file|dir> --assert-mode=always     — enforce invariants unconditionally (default)
   mvl build|run <file|dir> --assert-mode=debug-only — enforce invariants in debug builds only
-  mvl build|run <file|dir> --assert-mode=assume     — emit llvm.assume hint; no runtime trap"
+  mvl build|run <file|dir> --assert-mode=assume     — emit llvm.assume hint; no runtime trap
+  mvl build|run|test <file|dir> --target=host       — target platform (default: host; see ADR-0037)"
     );
     eprintln!(
         "  mvl complexity <file|dir>           — static complexity analysis (CC, fan-out, traits)"
@@ -114,6 +115,26 @@ pub(super) fn parse_backend(args: &[String]) -> &str {
     args.iter()
         .find_map(|a| a.strip_prefix("--backend="))
         .unwrap_or("rust")
+}
+
+/// Parse `--target=<triple>` from args; defaults to `"host"`.
+///
+/// Stage 1 (ADR-0037): only `host` is supported.  Future targets
+/// (`esp32-s3`, `wasm32`, etc.) will be added in Stage 2 without
+/// CLI changes.
+pub(super) fn parse_target(args: &[String]) -> &'static str {
+    let target = args
+        .iter()
+        .find_map(|a| a.strip_prefix("--target="))
+        .unwrap_or("host");
+    match target {
+        "host" => "host",
+        other => {
+            eprintln!("error: unknown target '{other}' (supported: host)");
+            eprintln!("  future targets: esp32-s3, wasm32 (see ADR-0037)");
+            process::exit(1);
+        }
+    }
 }
 
 /// Parse `--stdlib=<profile>` from args; defaults to `"trusted"`.
