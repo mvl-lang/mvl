@@ -19,8 +19,7 @@
 //      consumed once by RiskChecker; iso enforces that exactly.
 //   4. tag capability — RiskChecker and Matcher hold tag references to each other;
 //      they can send messages but cannot read each other's internal state.
-//   5. concurrently { } — structured scope drains all actor mailboxes before
-//      returning; no threads leak past main().
+//   5. implicit lifecycle — fn main() drains all actor mailboxes on exit (#1048).
 //
 // Usage:
 //   mvl run examples/actor_trading/main.mvl
@@ -278,42 +277,36 @@ fn main() -> Unit ! Console {
     // Bid #1: buy  10 lots @ 102  → crosses → executes @ 100 (ask price)
     println("")
     println("--- scenario 1: resting ask crossed by aggressive bid ---")
-    concurrently {
-        let risk:    RiskChecker  = actor RiskChecker  { accepted: 0, rejected: 0 };
-        let matcher: Matcher      = actor Matcher      { risk: risk };
-        let book:    OrderBook    = actor OrderBook    { matcher: matcher, best_bid: None, best_ask: None };
-        let gw:      OrderGateway = actor OrderGateway { book: book, next_id: 0 };
-        gw.new_ask(100, 10)
-        gw.new_bid(102, 10)
-    }
+    let risk1:    RiskChecker  = actor RiskChecker  { accepted: 0, rejected: 0 };
+    let matcher1: Matcher      = actor Matcher      { risk: risk1 };
+    let book1:    OrderBook    = actor OrderBook    { matcher: matcher1, best_bid: None, best_ask: None };
+    let gw1:      OrderGateway = actor OrderGateway { book: book1, next_id: 0 };
+    gw1.new_ask(100, 10)
+    gw1.new_bid(102, 10)
 
     // Scenario 2: bid rests, ask crosses it.
     // Bid #0: buy  5 lots @ 99  → rests (no ask)
     // Ask #1: sell 5 lots @ 97  → crosses → executes @ 97 (ask price)
     println("")
     println("--- scenario 2: resting bid crossed by aggressive ask ---")
-    concurrently {
-        let risk:    RiskChecker  = actor RiskChecker  { accepted: 0, rejected: 0 };
-        let matcher: Matcher      = actor Matcher      { risk: risk };
-        let book:    OrderBook    = actor OrderBook    { matcher: matcher, best_bid: None, best_ask: None };
-        let gw:      OrderGateway = actor OrderGateway { book: book, next_id: 0 };
-        gw.new_bid(99, 5)
-        gw.new_ask(97, 5)
-    }
+    let risk2:    RiskChecker  = actor RiskChecker  { accepted: 0, rejected: 0 };
+    let matcher2: Matcher      = actor Matcher      { risk: risk2 };
+    let book2:    OrderBook    = actor OrderBook    { matcher: matcher2, best_bid: None, best_ask: None };
+    let gw2:      OrderGateway = actor OrderGateway { book: book2, next_id: 0 };
+    gw2.new_bid(99, 5)
+    gw2.new_ask(97, 5)
 
     // Scenario 3: no cross — orders rest.
     // Bid #0: buy  3 lots @ 95  → rests
     // Ask #1: sell 3 lots @ 98  → rests (95 < 98, no crossing)
     println("")
     println("--- scenario 3: no cross (bid below ask) ---")
-    concurrently {
-        let risk:    RiskChecker  = actor RiskChecker  { accepted: 0, rejected: 0 };
-        let matcher: Matcher      = actor Matcher      { risk: risk };
-        let book:    OrderBook    = actor OrderBook    { matcher: matcher, best_bid: None, best_ask: None };
-        let gw:      OrderGateway = actor OrderGateway { book: book, next_id: 0 };
-        gw.new_bid(95, 3)
-        gw.new_ask(98, 3)
-    }
+    let risk3:    RiskChecker  = actor RiskChecker  { accepted: 0, rejected: 0 };
+    let matcher3: Matcher      = actor Matcher      { risk: risk3 };
+    let book3:    OrderBook    = actor OrderBook    { matcher: matcher3, best_bid: None, best_ask: None };
+    let gw3:      OrderGateway = actor OrderGateway { book: book3, next_id: 0 };
+    gw3.new_bid(95, 3)
+    gw3.new_ask(98, 3)
 
     println("")
     println("Done.")

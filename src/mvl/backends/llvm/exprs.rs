@@ -87,10 +87,6 @@ impl<'ctx> LlvmBackend<'ctx> {
                 actor_type, fields, ..
             } => self.emit_actor_spawn(actor_type, fields),
 
-            // Phase 8 (#743): concurrently { body } — sequential fallback.
-            // Full structured-concurrency scoping is deferred.
-            Expr::Concurrently { body, .. } => self.emit_block(body),
-
             // Phase 8 (#743): select { arm => { body } … } — first-arm-wins stub.
             // Full scheduler deferred until bidirectional channel receive is available.
             Expr::Select { arms, .. } => {
@@ -697,9 +693,6 @@ impl<'ctx> LlvmBackend<'ctx> {
                     self.walk_expr_for_captures(&arm.expr, exclude, seen, captures);
                     self.walk_block_for_captures(&arm.body, exclude, seen, captures);
                 }
-            }
-            Expr::Concurrently { body, .. } => {
-                self.walk_block_for_captures(body, exclude, seen, captures);
             }
             Expr::Literal(_, _) => {}
             // Quantifier predicates are only valid in contract positions — never emitted.

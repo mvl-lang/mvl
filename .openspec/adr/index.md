@@ -35,3 +35,6 @@
 | [0032](0032-stdlib-structured-error-enums.md) | Stdlib structured error enums — domain-specific Result[T, XxxError] replacing Result[T, String] | Accepted |
 | [0033](0033-rust-2018-sibling-file-module-style.md) | Rust 2018 sibling-file module style — `foo.mvl` preferred over `foo/mod.mvl` | Accepted |
 | [0034](0034-monomorphization-pass.md) | Monomorphization as an explicit pre-analysis pass — `MonoProgram` between TypeCheck and analysis | Accepted |
+| [0035](0035-effect-system-upgrade.md) | Effect system upgrade — named user effects, subsumption, composite IO | Accepted |
+| [0036](0036-ifc-simplification-drop-transparent-sink.md) | IFC simplification — drop transparent/sink labels, unify around Tainted/Secret | Accepted |
+| [0037](0037-main-as-actor.md) | Main-as-actor — drop `concurrently` keyword, implicit actor lifecycle | Accepted |

@@ -942,12 +942,7 @@ impl<'src> Printer<'src> {
                 format!("actor {} {{ {} }}", actor_type, fields_s)
             }
             Expr::Select { arms, .. } => self.fmt_select(arms, indent),
-            Expr::Concurrently { body, .. } => {
-                format!(
-                    "concurrently {}",
-                    self.fmt_block_multi(body, indent).trim_start()
-                )
-            }
+
             Expr::Quantifier(ref_expr, _) => self.fmt_ref_expr(ref_expr),
         }
     }

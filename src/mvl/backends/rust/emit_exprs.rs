@@ -1190,24 +1190,6 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
             cg.push("_self_ref: None");
             cg.push("})");
         }
-        // Phase 8 (#743): concurrently { body } — structured concurrency scope.
-        // Actor handles created in the inner block are dropped when it exits,
-        // closing all sender channels.  _mvl_join_actors() then waits for every
-        // actor thread to drain its mailbox and terminate before returning.
-        Expr::Concurrently { body, .. } => {
-            cg.push("{");
-            cg.nl();
-            cg.push_indent();
-            cg.line("{");
-            cg.push_indent();
-            emit_block_stmts(cg, &body.stmts);
-            cg.pop_indent();
-            cg.line("}");
-            cg.line("_mvl_join_actors();");
-            cg.pop_indent();
-            cg.indent();
-            cg.push("}");
-        }
         // Phase 8 (#743): select { arm => { body } … } — first-ready-wins stub.
         // Emits the first arm's handler body; full scheduler (try_recv polling)
         // is deferred until bidirectional channel receive is implemented.

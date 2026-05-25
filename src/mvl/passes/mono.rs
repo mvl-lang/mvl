@@ -690,7 +690,6 @@ impl CallCollector {
                     self.block(&arm.body);
                 }
             }
-            Expr::Concurrently { body, .. } => self.block(body),
             Expr::Quantifier(..) => {}
         }
     }

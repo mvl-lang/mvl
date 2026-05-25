@@ -138,6 +138,14 @@ pub struct RustEmitter {
     /// Used to distinguish `(obj.field)(args)` (fn-pointer call) from
     /// `obj.method(args)` (regular method call) in Rust output (#959).
     pub fn_typed_struct_fields: std::collections::HashSet<(String, String)>,
+    /// True when the program contains at least one actor declaration.
+    /// Set before top-level declarations are emitted; used to inject
+    /// `_mvl_join_actors()` at the end of `fn main()` (#1048).
+    pub has_actors: bool,
+    /// When true, `emit_fn_body` appends `_mvl_join_actors()` as the
+    /// implicit return expression after the last function statement.
+    /// Set by `emit_fn_decl` for `fn main()` when `has_actors` is true.
+    pub inject_actor_join: bool,
 }
 
 impl RustEmitter {
@@ -670,6 +678,7 @@ impl RustEmitter {
             .iter()
             .any(|d| matches!(d, Decl::Actor(_)))
         {
+            self.has_actors = true;
             emit_actor_runtime_preamble(self);
             self.blank();
         }
