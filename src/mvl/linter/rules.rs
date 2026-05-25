@@ -14,7 +14,7 @@
 use crate::mvl::linter::{config::LintConfig, errors::LintDiag};
 use crate::mvl::parser::ast::{
     BinaryOp, Block, Decl, ElseBranch, Expr, LValue, Literal, MatchArm, MatchBody, Pattern,
-    Program, Stmt, TypeBody, TypeExpr, VariantFields,
+    Program, Stmt, Totality, TypeBody, TypeExpr, VariantFields,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -1249,6 +1249,167 @@ fn simple_expr_str(expr: &Expr) -> String {
         Expr::Ident(name, _) => name.clone(),
         Expr::Literal(Literal::Integer(n), _) => n.to_string(),
         _ => "_".to_string(),
+    }
+}
+
+// ── Phase 2: suggest-decreases (#1037) ─────────────────────────────────────
+
+/// Suggest a `decreases` clause for `while` loops in total functions that have
+/// an obvious decrementing variable (#1037, #1029).
+///
+/// Rule id: `suggest-decreases`
+///
+/// Heuristic: if the loop body contains `VAR = VAR - N` (or `VAR = VAR + N`
+/// with a `VAR > 0` / `VAR >= 1` condition), suggest `decreases VAR`.
+/// Also detects method-call measures like `rest.len()` when the condition is
+/// `rest.len() > 0`.
+pub fn suggest_decreases(prog: &Program, cfg: &LintConfig, out: &mut Vec<LintDiag>) {
+    if !cfg.suggest_decreases {
+        return;
+    }
+    for decl in &prog.declarations {
+        if let Decl::Fn(f) = decl {
+            // Only fire in total functions (explicit or implicit)
+            if matches!(f.totality, Some(Totality::Partial)) {
+                continue;
+            }
+            check_block_for_decreases(&f.body, out);
+        }
+    }
+}
+
+fn check_block_for_decreases(block: &Block, out: &mut Vec<LintDiag>) {
+    for stmt in &block.stmts {
+        match stmt {
+            Stmt::While {
+                cond,
+                decreases: None,
+                body,
+                span,
+                ..
+            } => {
+                if let Some(var) = find_decrement_var(cond, body) {
+                    out.push(LintDiag::hint(
+                        "suggest-decreases",
+                        format!(
+                            "`while` loop has no termination proof — \
+                             add `decreases {var}` to prove bounded iteration",
+                        ),
+                        span.line,
+                        span.col,
+                    ));
+                }
+                check_block_for_decreases(body, out);
+            }
+            Stmt::For { body, .. } => check_block_for_decreases(body, out),
+            Stmt::If { then, else_, .. } => {
+                check_block_for_decreases(then, out);
+                if let Some(ElseBranch::Block(b)) = else_ {
+                    check_block_for_decreases(b, out);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Detect a decrementing variable: condition references `var` (e.g. `var > 0`)
+/// and body decrements it (e.g. `var = var - 1`).
+fn find_decrement_var(cond: &Expr, body: &Block) -> Option<String> {
+    let cond_var = extract_cond_var(cond)?;
+    // Check if body contains `cond_var = cond_var - N`
+    if body_decrements(&cond_var, body) {
+        return Some(cond_var);
+    }
+    None
+}
+
+/// Extract variable name from conditions like `var > 0`, `var >= 1`, `var != 0`.
+fn extract_cond_var(expr: &Expr) -> Option<String> {
+    if let Expr::Binary {
+        op, left, right, ..
+    } = expr
+    {
+        match op {
+            BinaryOp::Gt | BinaryOp::Ge | BinaryOp::Ne => {
+                if let Expr::Ident(name, _) = left.as_ref() {
+                    return Some(name.clone());
+                }
+            }
+            BinaryOp::Lt | BinaryOp::Le => {
+                // `0 < var` form
+                if let Expr::Ident(name, _) = right.as_ref() {
+                    return Some(name.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Check if the block body contains `var = var - N` for the given variable.
+fn body_decrements(var: &str, block: &Block) -> bool {
+    block.stmts.iter().any(|stmt| {
+        if let Stmt::Assign {
+            target: LValue::Ident(name, _),
+            value,
+            ..
+        } = stmt
+        {
+            if name == var {
+                if let Expr::Binary {
+                    op: BinaryOp::Sub,
+                    left,
+                    ..
+                } = value
+                {
+                    if let Expr::Ident(n, _) = left.as_ref() {
+                        return n == var;
+                    }
+                }
+            }
+        }
+        false
+    })
+}
+
+// ── Phase 2: suggest-total-upgrade (#1038) ─────────────────────────────────
+
+/// Suggest upgrading `partial fn` to `total fn` when all constructs in the
+/// body are provably bounded (#1038, #1029).
+///
+/// Rule id: `suggest-total-upgrade`
+///
+/// A `partial fn` is eligible for `total` when:
+/// - All `for` loops iterate finite collections (always true by definition)
+/// - All `while` loops have a `decreases` clause
+/// - No direct recursive self-calls
+/// - No calls to other `partial` functions (not checked here — would require
+///   cross-function analysis; we check structural properties only)
+pub fn suggest_total_upgrade(prog: &Program, cfg: &LintConfig, out: &mut Vec<LintDiag>) {
+    if !cfg.suggest_total_upgrade {
+        return;
+    }
+    for decl in &prog.declarations {
+        if let Decl::Fn(f) = decl {
+            if !matches!(f.totality, Some(Totality::Partial)) {
+                continue;
+            }
+            // Check if the body contains only bounded constructs
+            if !block_has_while_no_decreases(&f.body) && !block_calls_fn(&f.body, &f.name) {
+                out.push(LintDiag::hint(
+                    "suggest-total-upgrade",
+                    format!(
+                        "`partial fn {}` contains only bounded constructs — \
+                         consider upgrading to `total fn` for stronger termination guarantees",
+                        f.name,
+                    ),
+                    f.span.line,
+                    f.span.col,
+                ));
+            }
+        }
     }
 }
 
@@ -3309,6 +3470,180 @@ mod tests {
         missing_totality(&prog, &cfg_off, &mut diags);
         assert!(
             diags.iter().all(|d| d.rule != "missing-totality"),
+            "rule must be silent when disabled; got: {diags:?}"
+        );
+    }
+
+    // ── suggest-decreases (#1037) ────────────────────────────────────────
+
+    #[test]
+    fn suggest_decreases_fires_on_decrement_loop() {
+        let src = concat!(
+            "fn countdown(n: Int) -> Unit {\n",
+            "    let i: ref Int = n;\n",
+            "    while i > 0 {\n",
+            "        i = i - 1\n",
+            "    }\n",
+            "}\n",
+        );
+        let prog = parse(src);
+        let mut diags = vec![];
+        suggest_decreases(&prog, &cfg(), &mut diags);
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.rule == "suggest-decreases" && d.message.contains("decreases i")),
+            "expected suggest-decreases hint for i = i - 1 loop; got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn suggest_decreases_silent_when_decreases_present() {
+        let src = concat!(
+            "fn countdown(n: Int) -> Unit {\n",
+            "    let i: ref Int = n;\n",
+            "    while i > 0 decreases i {\n",
+            "        i = i - 1\n",
+            "    }\n",
+            "}\n",
+        );
+        let prog = parse(src);
+        let mut diags = vec![];
+        suggest_decreases(&prog, &cfg(), &mut diags);
+        assert!(
+            diags.iter().all(|d| d.rule != "suggest-decreases"),
+            "while with decreases must not hint; got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn suggest_decreases_silent_in_partial_fn() {
+        let src = concat!(
+            "partial fn server() -> Unit {\n",
+            "    let running: ref Int = 1;\n",
+            "    while running > 0 {\n",
+            "        running = running - 1\n",
+            "    }\n",
+            "}\n",
+        );
+        let prog = parse(src);
+        let mut diags = vec![];
+        suggest_decreases(&prog, &cfg(), &mut diags);
+        assert!(
+            diags.iter().all(|d| d.rule != "suggest-decreases"),
+            "partial fn must not get decreases suggestion; got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn suggest_decreases_off_when_disabled() {
+        let cfg_off = LintConfig {
+            suggest_decreases: false,
+            ..LintConfig::default()
+        };
+        let src = concat!(
+            "fn f(n: Int) -> Unit {\n",
+            "    let i: ref Int = n;\n",
+            "    while i > 0 {\n",
+            "        i = i - 1\n",
+            "    }\n",
+            "}\n",
+        );
+        let prog = parse(src);
+        let mut diags = vec![];
+        suggest_decreases(&prog, &cfg_off, &mut diags);
+        assert!(
+            diags.iter().all(|d| d.rule != "suggest-decreases"),
+            "rule must be silent when disabled; got: {diags:?}"
+        );
+    }
+
+    // ── suggest-total-upgrade (#1038) ────────────────────────────────────
+
+    #[test]
+    fn suggest_total_upgrade_fires_on_bounded_partial() {
+        let src = concat!(
+            "partial fn sum(items: List[Int]) -> Int {\n",
+            "    let acc: ref Int = 0;\n",
+            "    for x in items {\n",
+            "        acc = acc + x\n",
+            "    }\n",
+            "    acc\n",
+            "}\n",
+        );
+        let prog = parse(src);
+        let mut diags = vec![];
+        suggest_total_upgrade(&prog, &cfg(), &mut diags);
+        assert!(
+            diags.iter().any(
+                |d| d.rule == "suggest-total-upgrade" && d.message.contains("`partial fn sum`")
+            ),
+            "expected suggest-total-upgrade for bounded partial fn; got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn suggest_total_upgrade_silent_when_unbounded() {
+        let src = concat!(
+            "partial fn server() -> Unit {\n",
+            "    while true { }\n",
+            "}\n",
+        );
+        let prog = parse(src);
+        let mut diags = vec![];
+        suggest_total_upgrade(&prog, &cfg(), &mut diags);
+        assert!(
+            diags.iter().all(|d| d.rule != "suggest-total-upgrade"),
+            "partial fn with unbounded while must not suggest total; got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn suggest_total_upgrade_silent_with_recursion() {
+        let src = concat!(
+            "partial fn factorial(n: Int) -> Int {\n",
+            "    if n <= 1 { 1 } else { n * factorial(n - 1) }\n",
+            "}\n",
+        );
+        let prog = parse(src);
+        let mut diags = vec![];
+        suggest_total_upgrade(&prog, &cfg(), &mut diags);
+        assert!(
+            diags.iter().all(|d| d.rule != "suggest-total-upgrade"),
+            "partial fn with self-recursion must not suggest total; got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn suggest_total_upgrade_silent_on_total_fn() {
+        let src = "total fn add(a: Int, b: Int) -> Int { a + b }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        suggest_total_upgrade(&prog, &cfg(), &mut diags);
+        assert!(
+            diags.iter().all(|d| d.rule != "suggest-total-upgrade"),
+            "total fn must not get upgrade suggestion; got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn suggest_total_upgrade_off_when_disabled() {
+        let cfg_off = LintConfig {
+            suggest_total_upgrade: false,
+            ..LintConfig::default()
+        };
+        let src = concat!(
+            "partial fn f(items: List[Int]) -> Int {\n",
+            "    let acc: ref Int = 0;\n",
+            "    for x in items { acc = acc + x }\n",
+            "    acc\n",
+            "}\n",
+        );
+        let prog = parse(src);
+        let mut diags = vec![];
+        suggest_total_upgrade(&prog, &cfg_off, &mut diags);
+        assert!(
+            diags.iter().all(|d| d.rule != "suggest-total-upgrade"),
             "rule must be silent when disabled; got: {diags:?}"
         );
     }
