@@ -398,10 +398,11 @@ fn type_uses_opaque(ty: &crate::mvl::parser::ast::TypeExpr, opaque: &[&str]) -> 
 
 /// Load MVL source files from `pkg.*` packages referenced by `progs`.
 /// Checks local override first, then the global XDG cache.
-pub fn load_pkg_modules(progs: &[Program], project_root: &Path) -> Vec<Program> {
-    use std::collections::HashSet;
-
-    let mut loaded: HashSet<String> = HashSet::new();
+pub fn load_pkg_modules(
+    progs: &[Program],
+    project_root: &Path,
+    seen: &mut std::collections::HashSet<String>,
+) -> Vec<Program> {
     let mut result: Vec<Program> = Vec::new();
 
     for prog in progs {
@@ -409,7 +410,7 @@ pub fn load_pkg_modules(progs: &[Program], project_root: &Path) -> Vec<Program> 
             if let Decl::Use(ud) = decl {
                 if ud.path.first().map(|s| s == "pkg").unwrap_or(false) {
                     if let Some(pkg_name) = ud.path.get(1) {
-                        if !loaded.insert(pkg_name.clone()) {
+                        if !seen.insert(pkg_name.clone()) {
                             continue;
                         }
                         // Resolve package source directory.

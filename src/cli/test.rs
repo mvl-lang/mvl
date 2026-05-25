@@ -89,7 +89,11 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
             .map(|f| super::parse_or_exit(&f.display().to_string()).0)
             .collect();
         let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        stdlib_prelude_progs.extend(loader::load_pkg_modules(&all_test_progs, &project_root));
+        stdlib_prelude_progs.extend(loader::load_pkg_modules(
+            &all_test_progs,
+            &project_root,
+            &mut std::collections::HashSet::new(),
+        ));
 
         // For packages tested from their own src/ directory, also load sibling
         // .mvl files (non-test, including internal/) so types and extern
