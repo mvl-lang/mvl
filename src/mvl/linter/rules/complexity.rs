@@ -4,7 +4,8 @@
 //! Phase 4 complexity rules — regenerability metrics.
 
 use crate::mvl::linter::{config::LintConfig, errors::LintDiag};
-use crate::mvl::parser::ast::{BinaryOp, Block, Decl, ElseBranch, Expr, MatchBody, Program, Stmt};
+use crate::mvl::parser::ast::{Block, Decl, ElseBranch, Expr, MatchBody, Program, Stmt};
+use crate::mvl::passes::complexity::cyclomatic_complexity_block;
 use std::collections::{HashMap, HashSet};
 
 // ── Phase 4: Complexity rules ───────────────────────────────────────────────
@@ -58,143 +59,6 @@ pub fn complexity_cyclomatic(prog: &Program, cfg: &LintConfig, out: &mut Vec<Lin
             _ => {}
         }
     }
-}
-
-fn cyclomatic_complexity_block(block: &Block) -> usize {
-    let mut cc = 1usize;
-    for stmt in &block.stmts {
-        cc += cyclomatic_complexity_stmt(stmt);
-    }
-    cc
-}
-
-fn cyclomatic_complexity_stmt(stmt: &Stmt) -> usize {
-    match stmt {
-        Stmt::If {
-            cond, then, else_, ..
-        } => {
-            let mut cc = 1; // the if itself
-            cc += cyclomatic_complexity_expr(cond);
-            cc += cyclomatic_complexity_block_inner(then);
-            match else_ {
-                Some(ElseBranch::Block(b)) => cc += cyclomatic_complexity_block_inner(b),
-                Some(ElseBranch::If(inner)) => {
-                    cc += cyclomatic_complexity_stmt(inner);
-                }
-                None => {}
-            }
-            cc
-        }
-        Stmt::Match {
-            scrutinee, arms, ..
-        } => {
-            let mut cc = arms.len().saturating_sub(1); // each arm beyond first
-            cc += cyclomatic_complexity_expr(scrutinee);
-            for arm in arms {
-                match &arm.body {
-                    MatchBody::Block(b) => cc += cyclomatic_complexity_block_inner(b),
-                    MatchBody::Expr(e) => cc += cyclomatic_complexity_expr(e),
-                }
-            }
-            cc
-        }
-        Stmt::While { cond, body, .. } => {
-            let mut cc = 1;
-            cc += cyclomatic_complexity_expr(cond);
-            cc += cyclomatic_complexity_block_inner(body);
-            cc
-        }
-        Stmt::For { iter, body, .. } => {
-            let mut cc = 1;
-            cc += cyclomatic_complexity_expr(iter);
-            cc += cyclomatic_complexity_block_inner(body);
-            cc
-        }
-        Stmt::Let { init, .. } | Stmt::Assign { value: init, .. } => {
-            cyclomatic_complexity_expr(init)
-        }
-        Stmt::Return { value: Some(e), .. } | Stmt::Expr { expr: e, .. } => {
-            cyclomatic_complexity_expr(e)
-        }
-        Stmt::Return { value: None, .. } => 0,
-    }
-}
-
-/// Count decision-point contributions from expressions (without the base +1).
-fn cyclomatic_complexity_expr(expr: &Expr) -> usize {
-    match expr {
-        Expr::Binary {
-            op: BinaryOp::And | BinaryOp::Or,
-            left,
-            right,
-            ..
-        } => 1 + cyclomatic_complexity_expr(left) + cyclomatic_complexity_expr(right),
-        Expr::Binary { left, right, .. } => {
-            cyclomatic_complexity_expr(left) + cyclomatic_complexity_expr(right)
-        }
-        Expr::Unary { expr: e, .. } => cyclomatic_complexity_expr(e),
-        Expr::If {
-            cond, then, else_, ..
-        } => {
-            let mut cc = 1;
-            cc += cyclomatic_complexity_expr(cond);
-            cc += cyclomatic_complexity_block_inner(then);
-            if let Some(e) = else_ {
-                cc += cyclomatic_complexity_expr(e);
-            }
-            cc
-        }
-        Expr::Match {
-            scrutinee, arms, ..
-        } => {
-            let mut cc = arms.len().saturating_sub(1);
-            cc += cyclomatic_complexity_expr(scrutinee);
-            for arm in arms {
-                match &arm.body {
-                    MatchBody::Block(b) => cc += cyclomatic_complexity_block_inner(b),
-                    MatchBody::Expr(e) => cc += cyclomatic_complexity_expr(e),
-                }
-            }
-            cc
-        }
-        Expr::Block(b) => cyclomatic_complexity_block_inner(b),
-        Expr::FnCall { args, .. } => args.iter().map(cyclomatic_complexity_expr).sum(),
-        Expr::MethodCall { receiver, args, .. } => {
-            cyclomatic_complexity_expr(receiver)
-                + args.iter().map(cyclomatic_complexity_expr).sum::<usize>()
-        }
-        Expr::FieldAccess { expr: e, .. }
-        | Expr::Propagate { expr: e, .. }
-        | Expr::Consume { expr: e, .. }
-        | Expr::Relabel { expr: e, .. }
-        | Expr::Borrow { expr: e, .. } => cyclomatic_complexity_expr(e),
-        Expr::Construct { fields, .. } | Expr::Spawn { fields, .. } => fields
-            .iter()
-            .map(|(_, e)| cyclomatic_complexity_expr(e))
-            .sum(),
-        Expr::Select { arms, .. } => arms
-            .iter()
-            .map(|a| {
-                1 + cyclomatic_complexity_expr(&a.expr) + cyclomatic_complexity_block_inner(&a.body)
-            })
-            .sum(),
-        Expr::Concurrently { body, .. } => cyclomatic_complexity_block_inner(body),
-        Expr::Quantifier(..) => 0,
-        Expr::List { elems, .. } | Expr::Set { elems, .. } => {
-            elems.iter().map(cyclomatic_complexity_expr).sum()
-        }
-        Expr::Map { pairs, .. } => pairs
-            .iter()
-            .map(|(k, v)| cyclomatic_complexity_expr(k) + cyclomatic_complexity_expr(v))
-            .sum(),
-        Expr::Lambda { body, .. } => cyclomatic_complexity_expr(body),
-        Expr::Literal(..) | Expr::Ident(..) => 0,
-    }
-}
-
-/// Sum contributions of all statements in a block (without adding the base +1).
-fn cyclomatic_complexity_block_inner(block: &Block) -> usize {
-    block.stmts.iter().map(cyclomatic_complexity_stmt).sum()
 }
 
 /// Flag functions where `match` expressions are nested deeper than
