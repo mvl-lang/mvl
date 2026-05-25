@@ -1,7 +1,9 @@
 # examples/crud_api — full CRUD REST API over SQLite using pkg.http REST helpers.
 #
 # Uses both pkg.http (routing, REST helpers) and pkg.sqlite (database).
-# Commands run from REPO_ROOT so both packages resolve without symlinks.
+# Check/test/lint targets run from REPO_ROOT so packages resolve without symlinks.
+# The `run` target uses .mvl/pkg symlinks so the binary's CWD is this directory,
+# which lets config.toml and relative paths (seed_file, db_path) resolve correctly.
 #
 # Run:   make run        → start server on 127.0.0.1:8080
 # Test:  make check      → type-check all source files
@@ -63,8 +65,18 @@ assurance: guard-mvl ## Assurance report (all source files)
 smoke: guard-mvl ## Smoke-test: build binary (proves compilation without a terminal)
 	cd $(REPO_ROOT) && $(abspath $(MVL)) build $(DIR)main.mvl
 
-run: guard-mvl ## Start the CRUD API server on 127.0.0.1:8080 (Ctrl-C to stop)
-	cd $(REPO_ROOT) && $(abspath $(MVL)) run $(DIR)main.mvl
+# Package symlinks for `run` — let the binary's CWD be this directory so that
+# config.toml and relative paths in it (seed_file, db_path) resolve correctly.
+.mvl/pkg/http:
+	@mkdir -p $(DIR).mvl/pkg
+	@ln -sfn $(REPO_ROOT)/pkg/http $(DIR).mvl/pkg/http
+
+.mvl/pkg/sqlite:
+	@mkdir -p $(DIR).mvl/pkg
+	@ln -sfn $(REPO_ROOT)/pkg/sqlite $(DIR).mvl/pkg/sqlite
+
+run: guard-mvl .mvl/pkg/http .mvl/pkg/sqlite ## Start the CRUD API server on 127.0.0.1:8080 (Ctrl-C to stop)
+	$(abspath $(MVL)) run $(DIR)main.mvl
 
 clean: ## Remove build artifacts
-	rm -rf $(TMPDIR)mvl_build_crud_api
+	rm -rf $(TMPDIR)mvl_build_crud_api $(DIR).mvl
