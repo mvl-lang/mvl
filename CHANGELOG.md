@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.156.1] - 2026-05-25
+
+### Fixed
+- Transitive package loading: `mvl build` now follows multi-hop pkg dependencies (e.g. main → pkg.anthropic → pkg.tls) via a frontier loop.
+- Infinite loop in `load_pkg_modules` when a package's own sources import itself (e.g. `use pkg.http` inside pkg.http files).
+- Bridge symlink resolution: `find_pkg_bridge` no longer rejects symlinks that resolve outside `.mvl/pkg/`.
+- Static method emission: type-attached functions without `self` (e.g. `Claude::new(key)`) no longer emit `&self`.
+- Relabel unwrap codegen: `trust`/`release`/etc. now emit `.0.clone()` to avoid E0507 on shared references.
+- Match scrutinee for capability params (`val`/`ref` → `&T` in Rust) now clones to prevent reference binding errors.
+- Added `default_endpoint`, `load_endpoint`, `endpoint_connect`, `endpoint_listen` to Rust runtime net module.
+
 ## [0.156.0] - 2026-05-25
 
 ### Added
