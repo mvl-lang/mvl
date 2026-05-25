@@ -34,7 +34,7 @@ fn create_and_persist(dest: Path) -> Result[Unit, IoError] ! FileWrite + FileDel
 
 fn create_temp_dir() -> Result[Unit, IoError] ! FileWrite + FileDelete {
     let td: TempDir = temp_dir()?;
-    let _p: Path = temp_dir_path(td);
+    let _p: Tainted[String] = temp_dir_path(td);
     delete_temp_dir(consume(td))
 }
 
@@ -42,16 +42,16 @@ fn create_temp_dir() -> Result[Unit, IoError] ! FileWrite + FileDelete {
 
 fn create_in_dir(dir: Path) -> Result[Unit, IoError] ! FileWrite + FileDelete {
     let tf: TempFile = temp_file_in(dir)?;
-    let _p: Path = temp_path(tf);
+    let _p: Tainted[String] = temp_path(tf);
     delete_temp(consume(tf))
 }
 
 // ── Path access is pure (no effects) ────────────────────────────────────
 
-fn get_temp_path(tf: ref TempFile) -> Path {
+fn get_temp_path(tf: ref TempFile) -> Tainted[String] {
     temp_path(tf)
 }
 
-fn get_temp_dir_path(td: ref TempDir) -> Path {
+fn get_temp_dir_path(td: ref TempDir) -> Tainted[String] {
     temp_dir_path(td)
 }
