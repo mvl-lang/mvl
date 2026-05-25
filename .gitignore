@@ -33,3 +33,10 @@ librust_out.rlib
 fuzz/corpus/
 fuzz/artifacts/
 fuzz/Cargo.lock
+
+# Python bytecache
+**/__pycache__/
+
+# Runtime database artifacts (crud_api example)
+crud_api.db
+examples/crud_api/crud_api.db
