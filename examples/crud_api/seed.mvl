@@ -30,7 +30,7 @@ total fn decode_row(row: List[String]) -> Result[CreateUserRequest, String] {
 
 // ── Row insertion ───────────────────────────────────────────────────────────
 
-total fn insert_row(val db: SqliteDb, logger: val Logger, i: Int, row: List[String]) -> Bool ! DB + Log {
+partial fn insert_row(val db: SqliteDb, logger: val Logger, i: Int, row: List[String]) -> Bool ! DB + Log {
     match decode_row(row) {
         Err(msg) => { logger.warn("skip row", {"row": (i + 1).to_string(), "reason": msg}); false },
         Ok(req)  => match db_create_user(db, req) {
