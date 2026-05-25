@@ -41,20 +41,12 @@ pub fn http_internal_error(detail: String) -> HttpError {
 
 /// 200 OK with a JSON body.
 pub partial fn json_ok(v: Value) -> Response {
-    Response {
-        status:  Status::Http200Ok,
-        headers: {"Content-Type": "application/json"},
-        body:    encode(v),
-    }
+    json_ok_str(encode(v))
 }
 
 /// 201 Created with a JSON body.
 pub partial fn json_created(v: Value) -> Response {
-    Response {
-        status:  Status::Http201Created,
-        headers: {"Content-Type": "application/json"},
-        body:    encode(v),
-    }
+    json_created_str(encode(v))
 }
 
 /// 204 No Content — empty body, for successful DELETE / PUT.
@@ -162,6 +154,10 @@ pub fn json_created_str(body: String) -> Response {
 }
 
 /// Escape a string for embedding in a JSON string literal.
+///
+/// Note: ASCII control characters U+0000–U+001F (other than \n, \r, \t) are
+/// not escaped to \u00XX because MVL stdlib does not yet expose char_code().
+/// If input data may contain such characters, sanitize before calling.
 pub fn json_escape(s: String) -> String {
     let out: ref String = "";
     for c in s.chars() {

@@ -50,12 +50,12 @@ fn validate_port_range(p: Int where p > 0 && p < 65536) -> Int { p }
 // ── Router ────────────────────────────────────────────────────────────────────
 
 fn setup_router() -> Router {
-    route(route(route(route(route(new_router(),
-        Method::Get,    "/users",        "list_users"),
-        Method::Post,   "/users",        "create_user"),
-        Method::Get,    "/users/{id}",   "get_user"),
-        Method::Put,    "/users/{id}",   "update_user"),
-        Method::Delete, "/users/{id}",   "delete_user")
+    let r: Router = new_router();
+    let r: Router = route(r, Method::Get,    "/users",      "list_users");
+    let r: Router = route(r, Method::Post,   "/users",      "create_user");
+    let r: Router = route(r, Method::Get,    "/users/{id}", "get_user");
+    let r: Router = route(r, Method::Put,    "/users/{id}", "update_user");
+    route(r, Method::Delete, "/users/{id}", "delete_user")
 }
 
 // ── Per-request dispatch ──────────────────────────────────────────────────────

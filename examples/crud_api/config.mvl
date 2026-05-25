@@ -112,8 +112,8 @@ partial fn extract(cfg: ConfigValue) -> Result[CrudApiConfig, ConfigError] {
         port:       as_int(get_path(cfg, "port").unwrap_or(ConfigValue::Int(8080)))?,
         db_path:    as_string(get_path(cfg, "db_path").unwrap_or(ConfigValue::String("/tmp/crud_api.db")))?,
         seed_file:  as_string(get_path(cfg, "seed_file").unwrap_or(ConfigValue::String("")))?,
-        log_level:  parse_log_level(as_string(get_path(cfg, "log_level").unwrap_or(ConfigValue::String("info"))).unwrap_or("info")),
-        log_format: parse_log_format(as_string(get_path(cfg, "log_format").unwrap_or(ConfigValue::String("plain"))).unwrap_or("plain")),
+        log_level:  parse_log_level(as_string(get_path(cfg, "log_level").unwrap_or(ConfigValue::String("info")))?),
+        log_format: parse_log_format(as_string(get_path(cfg, "log_format").unwrap_or(ConfigValue::String("plain")))?),
     })
 }
 

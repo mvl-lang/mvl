@@ -44,7 +44,7 @@ fn users_to_json(users: List[User]) -> String {
 
 pub partial fn list_users_handler(val db: SqliteDb, val req: Request, val matched: MatchedRoute) -> Response ! DB {
     match db_list_users(db) {
-        Err(msg)  => json_error(http_internal_error(msg)),
+        Err(_)    => json_error(http_internal_error("internal server error")),
         Ok(users) => json_ok_str(users_to_json(users)),
     }
 }
@@ -55,7 +55,7 @@ pub partial fn get_user_handler(val db: SqliteDb, val req: Request, val matched:
     match param_int(matched, "id") {
         Err(e) => json_error(e),
         Ok(id) => match db_get_user(db, id) {
-            Err(msg)       => json_error(http_internal_error(msg)),
+            Err(_)         => json_error(http_internal_error("internal server error")),
             Ok(None)       => json_error(http_not_found("user not found")),
             Ok(Some(user)) => json_ok_str(user_to_json(user)),
         },
@@ -76,10 +76,11 @@ pub partial fn create_user_handler(val db: SqliteDb, val req: Request, val match
                     Ok(email)  => {
                         let create_req: CreateUserRequest = CreateUserRequest { name: name, email: email };
                         match db_create_user(db, create_req) {
-                            Err(msg)   => json_error(http_bad_request(msg)),
+                            Err("email already exists") => json_error(http_bad_request("email already exists")),
+                            Err(msg)   => json_error(http_internal_error("internal server error")),
                             Ok(new_id) => match db_get_user(db, new_id) {
-                                Err(msg)       => json_error(http_internal_error(msg)),
-                                Ok(None)       => json_error(http_internal_error("created user not found")),
+                                Err(_)         => json_error(http_internal_error("internal server error")),
+                                Ok(None)       => json_error(http_internal_error("internal server error")),
                                 Ok(Some(user)) => json_created_str(user_to_json(user)),
                             },
                         }
@@ -106,10 +107,10 @@ pub partial fn update_user_handler(val db: SqliteDb, val req: Request, val match
                         Ok(email) => {
                             let upd: UpdateUserRequest = UpdateUserRequest { name: name, email: email };
                             match db_update_user(db, id, upd) {
-                                Err(msg)  => json_error(http_internal_error(msg)),
+                                Err(_)    => json_error(http_internal_error("internal server error")),
                                 Ok(false) => json_error(http_not_found("user not found")),
                                 Ok(true)  => match db_get_user(db, id) {
-                                    Err(msg)       => json_error(http_internal_error(msg)),
+                                    Err(_)         => json_error(http_internal_error("internal server error")),
                                     Ok(None)       => json_error(http_not_found("user not found")),
                                     Ok(Some(user)) => json_ok_str(user_to_json(user)),
                                 },
@@ -128,7 +129,7 @@ pub partial fn delete_user_handler(val db: SqliteDb, val req: Request, val match
     match param_int(matched, "id") {
         Err(e) => json_error(e),
         Ok(id) => match db_delete_user(db, id) {
-            Err(msg)  => json_error(http_internal_error(msg)),
+            Err(_)    => json_error(http_internal_error("internal server error")),
             Ok(false) => json_error(http_not_found("user not found")),
             Ok(true)  => json_no_content(),
         },

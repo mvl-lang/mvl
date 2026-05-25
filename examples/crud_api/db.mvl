@@ -107,6 +107,16 @@ pub partial fn db_create_user(val db: SqliteDb, val req: CreateUserRequest) -> R
     }
 }
 
+/// Check whether the last statement affected any rows.
+partial fn had_changes(val db: SqliteDb) -> Result[Bool, String] ! DB {
+    match query_scalar(db, "SELECT changes()", []) {
+        Err(_)                => Err("changes() failed"),
+        Ok(DbValue::Int(n))   => Ok(n > 0),
+        Ok(DbValue::Float(f)) => Ok(f.to_int() > 0),
+        Ok(_)                 => Err("unexpected changes() type"),
+    }
+}
+
 /// Update name and email for an existing user.
 /// Returns true if a row was updated, false if the id did not exist.
 pub partial fn db_update_user(val db: SqliteDb, id: Int, val req: UpdateUserRequest) -> Result[Bool, String] ! DB {
@@ -114,14 +124,7 @@ pub partial fn db_update_user(val db: SqliteDb, id: Int, val req: UpdateUserRequ
         "UPDATE users SET name = ?, email = ? WHERE id = ?",
         [DbValue::Text(req.name), DbValue::Text(req.email), DbValue::Int(id)]) {
         Err(_) => Err("update failed"),
-        Ok(_)  => {
-            match query_scalar(db, "SELECT changes()", []) {
-                Err(_)              => Err("changes() failed"),
-                Ok(DbValue::Int(n))   => Ok(n > 0),
-                Ok(DbValue::Float(f)) => Ok(f.to_int() > 0),
-                Ok(_)               => Err("unexpected changes() type"),
-            }
-        },
+        Ok(_)  => had_changes(db),
     }
 }
 
@@ -132,14 +135,7 @@ pub partial fn db_delete_user(val db: SqliteDb, id: Int) -> Result[Bool, String]
         "DELETE FROM users WHERE id = ?",
         [DbValue::Int(id)]) {
         Err(_) => Err("delete failed"),
-        Ok(_)  => {
-            match query_scalar(db, "SELECT changes()", []) {
-                Err(_)              => Err("changes() failed"),
-                Ok(DbValue::Int(n))   => Ok(n > 0),
-                Ok(DbValue::Float(f)) => Ok(f.to_int() > 0),
-                Ok(_)               => Err("unexpected changes() type"),
-            }
-        },
+        Ok(_)  => had_changes(db),
     }
 }
 
@@ -161,9 +157,16 @@ pub partial fn db_export_csv(val db: SqliteDb, dest: Path) -> Result[Int, String
 }
 
 /// Write user rows to a temp file, then persist atomically.
-/// The TempFile is always consumed (delete on error, persist on success).
+/// The TempFile is always consumed via persist.  Write errors are tracked
+/// and propagated — persist still runs (linear type requires exactly one
+/// consume site), but Err is returned so the caller knows the export failed.
 partial fn export_rows_to_temp(tf: TempFile, users: List[User], dest: Path) -> Result[Int, String] ! FileWrite + FileDelete {
-    let _: Result[Unit, IoError] = temp_write(tf, "id,name,email\n");
+    let write_ok: ref Bool = true;
+    let hdr: Result[Unit, IoError] = temp_write(tf, "id,name,email\n");
+    match hdr {
+        Err(_) => { write_ok = false },
+        Ok(_)  => {},
+    }
     let i: ref Int = 0;
     let n: Int = users.len();
     while i < n {
@@ -171,13 +174,20 @@ partial fn export_rows_to_temp(tf: TempFile, users: List[User], dest: Path) -> R
             None     => {},
             Some(u)  => {
                 let line: String = u.id.to_string().concat(",").concat(u.name).concat(",").concat(u.email).concat("\n");
-                let _: Result[Unit, IoError] = temp_write(tf, line);
+                let wr: Result[Unit, IoError] = temp_write(tf, line);
+                match wr {
+                    Err(_) => { write_ok = false },
+                    Ok(_)  => {},
+                }
             },
         }
         i = i + 1
     }
     match persist(consume(tf), dest) {
         Err(_) => Err("persist failed"),
-        Ok(_)  => Ok(n),
+        Ok(_)  => match write_ok {
+            true  => Ok(n),
+            false => Err("write failed"),
+        },
     }
 }

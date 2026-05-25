@@ -273,8 +273,34 @@ pub fn count_memory_safety_sites(prog: &Program) -> MemorySafetyCounts {
                     }
                 }
             }
-            Stmt::While { body, .. } => count_block(body, c),
-            Stmt::For { body, .. } => count_block(body, c),
+            Stmt::While {
+                cond,
+                invariants,
+                decreases,
+                body,
+                ..
+            } => {
+                count_expr(cond, c);
+                for inv in invariants {
+                    count_expr(inv, c);
+                }
+                if let Some(dec) = decreases {
+                    count_expr(dec, c);
+                }
+                count_block(body, c);
+            }
+            Stmt::For {
+                iter,
+                invariants,
+                body,
+                ..
+            } => {
+                count_expr(iter, c);
+                for inv in invariants {
+                    count_expr(inv, c);
+                }
+                count_block(body, c);
+            }
         }
     }
 
@@ -342,7 +368,15 @@ pub fn count_memory_safety_sites(prog: &Program) -> MemorySafetyCounts {
             }
             Expr::FieldAccess { expr, .. } => count_expr(expr, c),
             Expr::Relabel { expr, .. } => count_expr(expr, c),
-            _ => {}
+            Expr::Select { arms, .. } => {
+                for arm in arms {
+                    count_expr(&arm.expr, c);
+                    count_block(&arm.body, c);
+                }
+            }
+            Expr::Concurrently { body, .. } => count_block(body, c),
+            // Leaf expressions — no sub-expressions to traverse.
+            Expr::Literal(..) | Expr::Ident(..) | Expr::Quantifier(..) => {}
         }
     }
 }

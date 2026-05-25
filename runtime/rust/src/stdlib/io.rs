@@ -414,7 +414,9 @@ static TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64
 fn make_temp_path(dir: &str, prefix: &str) -> String {
     let pid = std::process::id();
     let seq = TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    format!("{dir}/{prefix}_{pid}_{seq}")
+    let mut p = std::path::PathBuf::from(dir);
+    p.push(format!("{prefix}_{pid}_{seq}"));
+    p.to_string_lossy().into_owned()
 }
 
 /// Create a temporary file in the system temp directory.
