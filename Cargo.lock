@@ -738,7 +738,7 @@ dependencies = [
 
 [[package]]
 name = "mvl"
-version = "0.155.0"
+version = "0.156.0"
 dependencies = [
  "criterion",
  "inkwell",
