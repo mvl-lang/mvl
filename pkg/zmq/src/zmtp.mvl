@@ -360,6 +360,8 @@ pub partial fn zmtp_handshake_client(
 pub partial fn zmtp_recv_message(stream: TcpStream) -> Result[Tainted[String], ZmqError] ! Net {
     let frame: ReadFrame = read_frame_raw(stream)?;
     if frame.command {
+        // Handle PING heartbeat; skip other commands (SUBSCRIBE, READY, etc.)
+        let _: Result[Unit, ZmqError] = handle_command(stream, frame.body);
         zmtp_recv_message(stream)
     } else if frame.more {
         zmtp_recv_message(stream)
@@ -374,4 +376,106 @@ pub partial fn zmtp_recv_message(stream: TcpStream) -> Result[Tainted[String], Z
 pub fn zmtp_send_message(stream: TcpStream, body: String) -> Result[Unit, ZmqError] ! Net {
     write_frame_raw(stream, "", true, false)?;
     write_frame_raw(stream, body, false, false)
+}
+
+// ── Single-frame message API ────────────────────────────────────────────────
+//
+// PUSH/PULL and PUB/SUB use single-frame messages (no envelope delimiter).
+
+/// Send a single message frame without envelope delimiter.
+///
+/// Used by PUSH/PULL and PUB/SUB patterns where no routing envelope is needed.
+pub fn zmtp_send_body(stream: TcpStream, body: String) -> Result[Unit, ZmqError] ! Net {
+    write_frame_raw(stream, body, false, false)
+}
+
+// ── SUBSCRIBE command (PUB/SUB, ZMTP 3.1 RFC 37) ───────────────────────────
+//
+// After handshake, SUB sends SUBSCRIBE command frames to register topic filters.
+// ZMTP 3.1 command: [name_len=9]["SUBSCRIBE"][topic-prefix]
+// ZMTP 3.0 message: [0x01][topic-prefix]  (fallback for older peers)
+
+/// Send a ZMTP 3.1 SUBSCRIBE command for the given topic prefix.
+///
+/// Used by SUB clients after handshake. An empty topic subscribes to all messages.
+pub fn zmtp_send_subscribe(stream: TcpStream, topic: String) -> Result[Unit, ZmqError] ! Net {
+    let body: String = bval(9).concat("SUBSCRIBE").concat(topic);
+    write_frame_raw(stream, body, false, true)
+}
+
+/// Read frames until a SUBSCRIBE command is received, return the topic prefix.
+///
+/// Used by PUB servers after handshake to discover subscriber topics.
+/// Accepts both ZMTP 3.1 command ("SUBSCRIBE") and 3.0 message (0x01 prefix).
+pub partial fn zmtp_recv_subscribe(stream: TcpStream) -> Result[String, ZmqError] ! Net {
+    let frame: ReadFrame = read_frame_raw(stream)?;
+    if frame.command {
+        let body: String = frame.body;
+        if body.len() >= 10 {
+            let name_len: Int = body.byte_at(0).to_int();
+            if name_len == 9 {
+                let name: String = body.substring(1, 10);
+                if name == "SUBSCRIBE" {
+                    Ok(body.substring(10, body.len()))
+                } else {
+                    zmtp_recv_subscribe(stream)
+                }
+            } else {
+                zmtp_recv_subscribe(stream)
+            }
+        } else {
+            zmtp_recv_subscribe(stream)
+        }
+    } else {
+        // ZMTP 3.0 fallback: message frame with 0x01 prefix = subscribe
+        let body: String = frame.body;
+        if body.len() >= 1 {
+            if body.byte_at(0).to_int() == 1 {
+                Ok(body.substring(1, body.len()))
+            } else {
+                zmtp_recv_subscribe(stream)
+            }
+        } else {
+            zmtp_recv_subscribe(stream)
+        }
+    }
+}
+
+// ── PING/PONG heartbeat (ZMTP 3.1) ─────────────────────────────────────────
+//
+// PING command body: [name_len=4]["PING"][2-byte TTL big-endian][context bytes]
+// PONG response body: [name_len=4]["PONG"][context bytes]  (echo context, no TTL)
+
+/// Check if a command frame body is a PING.
+fn is_ping(body: String) -> Bool {
+    if body.len() >= 5 {
+        if body.byte_at(0).to_int() == 4 {
+            body.substring(1, 5) == "PING"
+        } else {
+            false
+        }
+    } else {
+        false
+    }
+}
+
+/// Extract the context from a PING command body (skip 1 name_len + 4 name + 2 TTL).
+fn ping_context(body: String) -> String {
+    let blen: Int = body.len();
+    if blen > 7 {
+        body.substring(7, blen)
+    } else {
+        ""
+    }
+}
+
+/// Handle an incoming command frame. Responds to PING with PONG; ignores others.
+fn handle_command(stream: TcpStream, body: String) -> Result[Unit, ZmqError] ! Net {
+    if is_ping(body) {
+        let ctx: String = ping_context(body);
+        let pong: String = bval(4).concat("PONG").concat(ctx);
+        write_frame_raw(stream, pong, false, true)
+    } else {
+        Ok(())
+    }
 }

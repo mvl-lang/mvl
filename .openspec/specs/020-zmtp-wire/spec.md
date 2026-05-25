@@ -1,7 +1,7 @@
 # Spec 020: ZMTP 3.x Wire Compatibility
 
 > pkg.zmq ZMTP 3.x wire protocol for interop with pyzmq, zmq.rs, cppzmq.
-> Issue: #1047
+> Issue: #1047, #1053, #1054, #1055
 
 ## Overview
 
@@ -9,15 +9,21 @@ The pkg.zmq package originally used simplified framing (4-byte length prefix,
 one-connection-per-message). This spec adds ZMTP 3.x wire compatibility so MVL
 services can interoperate with the ZeroMQ ecosystem (pyzmq, zmq.rs, cppzmq).
 
+Supported patterns: REQ/REP, PUSH/PULL, PUB/SUB.
+
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│  MVL Application (server_zmtp.mvl)                  │
+│  MVL Application                                    │
+│  (server_zmtp.mvl, server_pull.mvl, client_sub.mvl) │
 ├─────────────────────────────────────────────────────┤
 │  pkg.zmq.reqrep    rep_serve_zmtp / req_request_zmtp│
+│  pkg.zmq.pushpull  pull_serve_zmtp / push_connect   │
+│  pkg.zmq.pubsub    sub_connect_zmtp / pub_serve     │
 ├─────────────────────────────────────────────────────┤
 │  pkg.zmq.zmtp      greeting + NULL auth + framing   │
+│                     PING/PONG + SUBSCRIBE commands   │
 ├─────────────────────────────────────────────────────┤
 │  std.net            tcp_read_exact / tcp_write       │
 ├─────────────────────────────────────────────────────┤
@@ -180,6 +186,69 @@ Protocol parsing uses the `ZMTP-PARSE` audit tag.
 
 ---
 
+### Requirement 10: PUSH/PULL Pattern [MUST]
+
+ZMTP 3.x PUSH/PULL one-directional message pipeline. PULL binds and
+accepts PUSH connections. Messages are single frames (no envelope).
+
+**Implementation:** `pkg/zmq/src/pushpull.mvl::pull_serve_zmtp`, `push_connect_zmtp`
+
+#### Scenario: pyzmq PUSH to MVL PULL
+
+- GIVEN MVL ZMTP PULL server on port 5557
+- WHEN pyzmq PUSH client sends 3 messages
+- THEN PULL server receives all 3 messages
+
+**Tests:** `examples/zmq_hello/Makefile::test-pushpull`
+
+---
+
+### Requirement 11: PUB/SUB Pattern [MUST]
+
+ZMTP 3.x PUB/SUB fan-out broadcast. PUB binds and accepts SUB connections.
+After handshake, SUB sends SUBSCRIBE command (RFC 37, 9-byte name
+"SUBSCRIBE" + topic prefix). PUB sends matching messages as single frames.
+
+**Implementation:** `pkg/zmq/src/pubsub.mvl::sub_connect_zmtp`, `pub_serve_zmtp`
+
+#### Scenario: pyzmq PUB to MVL SUB
+
+- GIVEN pyzmq PUB server on port 5558 publishing 3 weather messages
+- WHEN MVL SUB client connects and subscribes to all topics
+- THEN SUB client receives all 3 messages
+
+**Tests:** `examples/zmq_hello/Makefile::test-pubsub`
+
+---
+
+### Requirement 12: PING/PONG Heartbeat [MUST]
+
+ZMTP 3.1 heartbeat support. When `zmtp_recv_message` encounters a PING
+command frame, it automatically responds with PONG (echoing the context
+bytes, omitting the 2-byte TTL) and continues receiving.
+
+PING format: [name_len=4]["PING"][2-byte TTL][context]
+PONG format: [name_len=4]["PONG"][context]
+
+**Implementation:** `pkg/zmq/src/zmtp.mvl::handle_command`, `is_ping`, `ping_context`
+
+#### Scenario: PING detected during message receive
+
+- GIVEN a ZMTP connection with heartbeat-enabled peer
+- WHEN peer sends PING command between message frames
+- THEN server responds with PONG and continues receiving messages
+
+---
+
+### Requirement 13: Single-Frame Message API [MUST]
+
+`zmtp_send_body` sends a single message frame without the REQ/REP envelope
+delimiter. Used by PUSH/PULL and PUB/SUB patterns.
+
+**Implementation:** `pkg/zmq/src/zmtp.mvl::zmtp_send_body`
+
+---
+
 ## File Inventory
 
 | File | Role |
@@ -189,9 +258,15 @@ Protocol parsing uses the `ZMTP-PARSE` audit tag.
 | `runtime/llvm/src/stdlib/net.rs` | LLVM backend: same C-ABI exports |
 | `runtime/rust/src/stdlib/primitives.rs` | Latin-1 `str_from_bytes`, `str_byte_at` |
 | `src/mvl/backends/llvm.rs` | LLVM codegen return type registration |
-| `pkg/zmq/src/zmtp.mvl` | ZMTP 3.x greeting, NULL auth, frame codec |
+| `pkg/zmq/src/zmtp.mvl` | ZMTP 3.x greeting, NULL auth, frame codec, PING/PONG, SUBSCRIBE |
 | `pkg/zmq/src/reqrep.mvl` | `rep_serve_zmtp`, `req_request_zmtp` |
+| `pkg/zmq/src/pushpull.mvl` | `pull_serve_zmtp`, `push_connect_zmtp` |
+| `pkg/zmq/src/pubsub.mvl` | `sub_connect_zmtp`, `pub_serve_zmtp` |
 | `examples/zmq_hello/server_zmtp.mvl` | ZMTP REP server example |
+| `examples/zmq_hello/server_pull.mvl` | ZMTP PULL server example |
+| `examples/zmq_hello/client_sub.mvl` | ZMTP SUB client example |
 | `examples/zmq_hello/client_zmq.py` | pyzmq REQ client |
+| `examples/zmq_hello/client_push.py` | pyzmq PUSH client |
+| `examples/zmq_hello/server_pub.py` | pyzmq PUB server |
 | `examples/zmq_hello/client_rust/` | Rust zeromq crate REQ client |
 | `examples/zmq_hello/Makefile` | Test orchestration for all modes |

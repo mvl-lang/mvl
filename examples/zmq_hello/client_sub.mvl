@@ -1,0 +1,51 @@
+// examples/zmq_hello/client_sub.mvl — ZMTP 3.x SUB client using pkg.zmq.
+//
+// Wire-compatible with pyzmq, cppzmq, zmq.rs, and any ZMTP 3.x PUB server.
+// Connects to tcp://127.0.0.1:5558, subscribes to all messages, prints them.
+//
+// Usage:
+//   python3 examples/zmq_hello/server_pub.py &
+//   cargo run -- run examples/zmq_hello/client_sub.mvl
+
+use std.net.{TcpStream, tcp_connect, tcp_close_stream}
+use pkg.zmq.{ZmqError, zmq_error_msg, map_net_err}
+use pkg.zmq.zmtp.{ZmtpSocketType, zmtp_handshake_client,
+                   zmtp_recv_message, zmtp_send_subscribe}
+
+partial fn recv_loop(stream: TcpStream) -> Unit ! Console + Net {
+    match zmtp_recv_message(stream) {
+        Err(_) => {
+            tcp_close_stream(stream);
+            println("subscriber: connection closed")
+        },
+        Ok(msg) => {
+            let body: String = relabel trust(msg, "SUB-DEMO");
+            println(" recv: ".concat(body));
+            recv_loop(stream)
+        },
+    }
+}
+
+partial fn main() -> Unit ! Console + Net {
+    println("ZMTP 3.x SUB client connecting to tcp://127.0.0.1:5558");
+    match tcp_connect("127.0.0.1", 5558) {
+        Err(e) => println("connect error"),
+        Ok(stream) => {
+            match zmtp_handshake_client(stream, ZmtpSocketType::Sub) {
+                Err(e) => {
+                    tcp_close_stream(stream);
+                    println("handshake error: ".concat(zmq_error_msg(e)))
+                },
+                Ok(_) => {
+                    match zmtp_send_subscribe(stream, "") {
+                        Err(e) => {
+                            tcp_close_stream(stream);
+                            println("subscribe error: ".concat(zmq_error_msg(e)))
+                        },
+                        Ok(_) => recv_loop(stream),
+                    }
+                },
+            }
+        },
+    }
+}
