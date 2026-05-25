@@ -503,13 +503,8 @@ impl TypeChecker {
                 pattern,
                 iter,
                 body,
-                span,
                 ..
             } => {
-                // Req 8: `for` loops are bounded (total) — reject in `partial` functions.
-                if matches!(self.current_fn_totality, Some(Totality::Partial)) {
-                    self.emit(CheckError::ForLoopInPartialFn { span: *span });
-                }
                 let iter_ty = self.infer_expr(iter);
                 let iter_span = iter.span();
                 let elem_ty = self.check_iterator_type(&iter_ty, iter_span);

@@ -4660,13 +4660,13 @@ fn custom_iterator_impl_accepted() {
     );
 }
 
-/// Spec 001 Req 11 / Scenario: For loop rejected inside partial function.
+/// Spec 001 Req 8 / Scenario: For loop allowed inside partial function (#1029).
 ///
 /// GIVEN `partial fn f(items: Array[Int, 3]) { for x in items { … } }`
 /// WHEN  the function is type-checked
-/// THEN  type checker MUST reject: `for` is not permitted in `partial` functions
+/// THEN  type checker MUST accept: `for` over a finite collection always terminates
 #[test]
-fn for_loop_rejected_in_partial_fn() {
+fn for_loop_allowed_in_partial_fn() {
     let src = r#"
         partial fn f(items: Array[Int, 3]) -> Unit {
             for x in items { }
@@ -4674,20 +4674,18 @@ fn for_loop_rejected_in_partial_fn() {
     "#;
     let errors = errors_for(src);
     assert!(
-        errors
-            .iter()
-            .any(|e| matches!(e, CheckError::ForLoopInPartialFn { .. })),
-        "`for` in partial fn must be rejected with ForLoopInPartialFn, got: {errors:?}"
+        errors.is_empty(),
+        "`for` in partial fn should be accepted (finite iteration), got: {errors:?}"
     );
 }
 
-/// Spec 001 Req 11 + Req 8 / Scenario: For loop over non-iterator inside partial function.
+/// Spec 001 Req 1 + Req 8 / Scenario: For loop over non-iterator inside partial function (#1029).
 ///
 /// GIVEN `partial fn f(n: Int) { for x in n { } }`
 /// WHEN  the function is type-checked
-/// THEN  type checker MUST emit BOTH ForLoopInPartialFn AND NotIterator
+/// THEN  type checker MUST emit NotIterator (Int is not iterable)
 #[test]
-fn for_loop_non_iterator_in_partial_fn_emits_both_errors() {
+fn for_loop_non_iterator_in_partial_fn_emits_not_iterator() {
     let src = r#"
         partial fn f(n: Int) -> Unit {
             for x in n { }
@@ -4697,14 +4695,8 @@ fn for_loop_non_iterator_in_partial_fn_emits_both_errors() {
     assert!(
         errors
             .iter()
-            .any(|e| matches!(e, CheckError::ForLoopInPartialFn { .. })),
-        "must emit ForLoopInPartialFn, got: {errors:?}"
-    );
-    assert!(
-        errors
-            .iter()
             .any(|e| matches!(e, CheckError::NotIterator { ty, .. } if ty == "Int")),
-        "must also emit NotIterator for Int, got: {errors:?}"
+        "must emit NotIterator for Int, got: {errors:?}"
     );
 }
 
