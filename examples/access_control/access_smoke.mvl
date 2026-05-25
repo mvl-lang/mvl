@@ -7,7 +7,7 @@ type Resource = enum { Article, UserProfile, AdminPanel, AuditLog }
 type Action = enum { Read, Write, Delete, Manage }
 type Permission = struct { role: Role, resource: Resource, action: Action }
 
-total fn allowed(p: Permission) -> Bool {
+fn allowed(p: Permission) -> Bool {
     match p.role {
         Role::Admin => true,
         Role::Moderator => match p.resource {
@@ -24,11 +24,11 @@ total fn allowed(p: Permission) -> Bool {
     }
 }
 
-total fn print_decision(ok: Bool) -> Unit ! Console {
+fn print_decision(ok: Bool) -> Unit ! Console {
     if ok { println("ALLOWED") } else { println("DENIED") }
 }
 
-total fn main() -> Unit ! Console {
+fn main() -> Unit ! Console {
     let p1: Permission = Permission { role: Role::Admin, resource: Resource::AdminPanel, action: Action::Manage };
     let p2: Permission = Permission { role: Role::Guest, resource: Resource::AdminPanel, action: Action::Write };
     print_decision(allowed(p1));

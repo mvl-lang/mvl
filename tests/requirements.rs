@@ -141,16 +141,6 @@ fn req05_error_visibility_failed() {
     );
 }
 
-/// Ignored Option → Failed.
-#[test]
-fn req05_option_ignored_failed() {
-    let v = run(include_str!("negative/req05/option_ignored.mvl"), 5);
-    assert!(
-        v.is_failed(),
-        "Req 5 must be Failed on option_ignored corpus, got: {v:?}"
-    );
-}
-
 // ── Req 6: Ownership ──────────────────────────────────────────────────────────
 
 /// No immutability violations → Proven.
@@ -217,29 +207,6 @@ fn req08_termination_failed() {
     assert!(
         v.is_failed(),
         "Req 8 must be Failed on while_in_total corpus, got: {v:?}"
-    );
-}
-
-/// While loop with `decreases i` in total function → Proven (#968: decreases enables bounded while).
-#[test]
-fn req08_decreases_proven() {
-    let v = run(include_str!("corpus/12_contracts/loop_verification.mvl"), 8);
-    assert!(
-        v.is_proven(),
-        "Req 8 must be Proven on loop_verification (decreases) corpus, got: {v:?}"
-    );
-}
-
-/// While loop with `decreases rest.len()` — method-call measure — → Proven (#968 fix).
-#[test]
-fn req08_decreases_method_call_proven() {
-    let v = run(
-        include_str!("corpus/08_termination/decreases_method_call.mvl"),
-        8,
-    );
-    assert!(
-        v.is_proven(),
-        "Req 8 must be Proven on decreases_method_call corpus, got: {v:?}"
     );
 }
 
@@ -310,52 +277,6 @@ fn req10_refinements_failed() {
     );
 }
 
-/// Function with `requires b != 0` called with literal 2 → Proven.
-#[test]
-fn req10_requires_proven() {
-    let v = run(include_str!("corpus/12_contracts/basic_contracts.mvl"), 10);
-    assert!(
-        v.is_proven(),
-        "Req 10 must be Proven on basic_contracts corpus, got: {v:?}"
-    );
-}
-
-/// Function with `requires b != 0` called with literal 0 → Failed (PreconditionViolated).
-#[test]
-fn req10_requires_failed() {
-    let v = run(include_str!("negative/req10/precondition_violated.mvl"), 10);
-    assert!(
-        v.is_failed(),
-        "Req 10 must be Failed on precondition_violated corpus, got: {v:?}"
-    );
-}
-
-/// Function with `ensures result >= 0` → Proven (loop_verification covers ensures via invariant).
-#[test]
-fn req10_ensures_proven() {
-    let v = run(
-        include_str!("corpus/12_contracts/loop_verification.mvl"),
-        10,
-    );
-    assert!(
-        v.is_proven(),
-        "Req 10 must be Proven on loop_verification (ensures/invariant) corpus, got: {v:?}"
-    );
-}
-
-/// Function with `requires items.len() > 0` — method-call predicate — → Proven (#983 fix).
-#[test]
-fn req10_requires_method_call_proven() {
-    let v = run(
-        include_str!("corpus/12_contracts/requires_method_call.mvl"),
-        10,
-    );
-    assert!(
-        v.is_proven(),
-        "Req 10 must be Proven on requires_method_call corpus, got: {v:?}"
-    );
-}
-
 // ── Req 11: Information Flow Control ─────────────────────────────────────────
 
 /// Security-labeled types, no violations → Proven.
@@ -375,68 +296,5 @@ fn req11_ifc_failed() {
     assert!(
         v.is_failed(),
         "Req 11 must be Failed on tainted_to_public corpus, got: {v:?}"
-    );
-}
-
-/// Label-to-bare TypeMismatch → Failed on Req 11, not Req 1 (#1027).
-#[test]
-fn req11_label_mismatch_failed() {
-    let v = run(include_str!("negative/req11/label_mismatch.mvl"), 11);
-    assert!(
-        v.is_failed(),
-        "Req 11 must be Failed on label_mismatch corpus (Secret passed to bare), got: {v:?}"
-    );
-}
-
-/// Label-to-bare mismatch must NOT fail Req 1 — it's an IFC error, not a type error (#1027).
-#[test]
-fn req01_not_failed_on_label_mismatch() {
-    let v = run(include_str!("negative/req11/label_mismatch.mvl"), 1);
-    assert!(
-        v.is_proven(),
-        "Req 1 must be Proven on label_mismatch corpus (label errors are Req 11), got: {v:?}"
-    );
-}
-
-/// `relabel trust()` and `relabel release()` in clean code → Proven.
-#[test]
-fn req11_relabel_trust_proven() {
-    let v = run(include_str!("corpus/06_ifc/labels.mvl"), 11);
-    assert!(
-        v.is_proven(),
-        "Req 11 must be Proven on labels corpus (relabel trust/release), got: {v:?}"
-    );
-}
-
-/// Label propagation through arithmetic (Secret[Int] + Secret[Int] → Secret[Int]) → Proven.
-#[test]
-fn req11_label_propagation_proven() {
-    let v = run(include_str!("corpus/06_ifc/propagation.mvl"), 11);
-    assert!(
-        v.is_proven(),
-        "Req 11 must be Proven on propagation corpus, got: {v:?}"
-    );
-}
-
-/// Secret/Tainted conditions control Console output → Failed (ImplicitFlowViolation).
-#[test]
-fn req11_implicit_flow_failed() {
-    let v = run(include_str!("corpus/06_ifc/implicit_flow.mvl"), 11);
-    assert!(
-        v.is_failed(),
-        "Req 11 must be Failed on implicit_flow corpus, got: {v:?}"
-    );
-}
-
-/// Secret branch calls helper that transitively reaches println → Failed (CrossFunctionImplicitFlowViolation).
-#[test]
-fn req11_cross_function_implicit_failed() {
-    let v = run(
-        include_str!("corpus/06_ifc/cross_function_implicit.mvl"),
-        11,
-    );
-    assert!(
-        v.is_failed(),
-        "Req 11 must be Failed on cross_function_implicit corpus, got: {v:?}"
     );
 }

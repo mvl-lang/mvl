@@ -45,7 +45,11 @@ impl TypeChecker {
                         found
                     };
                     if !types_compatible(expected, found_check) {
-                        self.emit_type_or_label_mismatch(expected, found, args[i].span());
+                        self.emit(CheckError::TypeMismatch {
+                            expected: expected.display(),
+                            found: found.display(),
+                            span: args[i].span(),
+                        });
                     }
                 }
             }
@@ -215,7 +219,11 @@ impl TypeChecker {
                     // Check each argument type against the declared parameter type.
                     for (i, (expected, found)) in param_tys.iter().zip(arg_tys.iter()).enumerate() {
                         if !types_compatible(expected, found) {
-                            self.emit_type_or_label_mismatch(expected, found, args[i].span());
+                            self.emit(CheckError::TypeMismatch {
+                                expected: expected.display(),
+                                found: found.display(),
+                                span: args[i].span(),
+                            });
                         }
                     }
                 }
@@ -357,7 +365,11 @@ impl TypeChecker {
                     // Per-argument type check (skip self at index 0).
                     for (expected, found) in method_info.params[1..].iter().zip(arg_tys.iter()) {
                         if !types_compatible(expected, found) {
-                            self.emit_type_or_label_mismatch(expected, found, span);
+                            self.emit(CheckError::TypeMismatch {
+                                expected: expected.display(),
+                                found: found.display(),
+                                span,
+                            });
                         }
                     }
                     // Effect propagation: caller must declare all effects of this method.

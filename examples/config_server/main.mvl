@@ -4,16 +4,15 @@
 //   1. Req 7  (Effects): sharp effect boundary — ! FileRead for config loading,
 //              ! Net for simulated request/response, ! Log for structured events,
 //              ! Console for demo output. Pure handlers (handler.mvl) carry no effects.
-//   2. Req 11 (IFC): api_key is Secret[String] loaded from env via get_secret()
-//              (Pattern 002). It flows directly to init_auth_store() and is consumed.
-//              Any attempt to log or print it is a compile-time type error.
+//   2. Req 11 (IFC): config.api_key is Secret[String] — it flows directly to
+//              init_auth_store() and is consumed. Any attempt to log or print it
+//              is a compile-time type error. Subsequent auth uses the Rust-side store.
 //   3. Req 10 (Refinements): Config.port is Port (Int where self > 0 && self <= 65535).
 //              load_config() returns Err(ConfigError::InvalidPort) if out of range.
 //   4. Req 5  (Errors): all failure paths return named error variants; no panics.
 //
 // Effect boundary summary:
 //   load_config()     ! FileRead    — reads and validates sample_config.json
-//   get_secret()      ! Env         — loads API key from environment (Pattern 002)
 //   init_auth_store() —             — consumes Secret[String]; no MVL effect needed
 //   server_recv()     ! Net         — simulates an incoming HTTP request
 //   server_send()     ! Net + Console — emits the response
@@ -27,7 +26,6 @@
 // Assurance note: 1 extern block (trust boundary: config loading + server simulation).
 
 use std.log.{Logger, default_logger}
-use std.env.{get_secret}
 
 // ── Type re-declarations (workaround: #96) ────────────────────────────────
 
@@ -39,6 +37,7 @@ type Config = struct {
     port: Port,
     timeout: Timeout,
     max_connections: MaxConns,
+    api_key: Secret[String],
     debug_mode: Bool,
 }
 
@@ -48,6 +47,7 @@ type ConfigError = enum {
     InvalidPort,
     InvalidTimeout,
     InvalidMaxConns,
+    MissingApiKey,
 }
 
 type Method = enum {
@@ -83,8 +83,8 @@ extern "rust" {
     // a Config. Returns Err if the file is missing or any value is out of range.
     fn load_config(path: String) -> Result[Config, ConfigError] ! FileRead;
 
-    // Consume the api_key (loaded from env via get_secret) and store it securely.
-    // After this call, the Secret[String] is moved — it cannot be accessed again.
+    // Consume the api_key and store it securely inside Rust state.
+    // After this call, config.api_key is moved — it cannot be accessed again.
     // IFC: attempting to log or print api_key before this call is a compile error.
     fn init_auth_store(api_key: Secret[String]) -> Unit;
 
@@ -151,26 +151,20 @@ fn handle_delete(path: String) -> Result[Response, HandlerError] {
 
 // ── Entry point ───────────────────────────────────────────────────────────
 
-fn main() -> Unit ! FileRead + Net + Console + Log + Env {
+fn main() -> Unit ! FileRead + Net + Console + Log {
     let logger: Logger = default_logger();
     let load_result: Result[Config, ConfigError] = load_config("sample_config.json");
     match load_result {
         Err(_) => logger.error("startup failed", {"reason": "config load error"}),
         Ok(config) => {
             logger.info("config loaded", {"status": "ok"});
-            // IFC: api_key loaded from env via get_secret() → Secret[String]
-            // (Pattern 002: raw OS builtins return bare types; labels applied in MVL).
-            // WOULD NOT COMPILE: logger.info("key", {"value": api_key})
-            // WOULD NOT COMPILE: println(api_key)
-            let api_key_opt: Option[Secret[String]] = get_secret("CONFIG_SERVER_API_KEY");
-            match api_key_opt {
-                None => logger.error("startup failed", {"reason": "CONFIG_SERVER_API_KEY not set"}),
-                Some(api_key) => {
-                    let _: Unit = init_auth_store(api_key);
-                    logger.info("auth store initialised", {"status": "ok"});
-                    run_demo(logger)
-                },
-            }
+            // IFC: config.api_key is Secret[String].
+            // WOULD NOT COMPILE: logger.info("key", {"value": config.api_key})
+            // WOULD NOT COMPILE: println(config.api_key)
+            // The only valid use: pass it to the extern trust boundary.
+            let _: Unit = init_auth_store(config.api_key);
+            logger.info("auth store initialised", {"status": "ok"});
+            run_demo(logger)
         }
     }
 }

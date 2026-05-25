@@ -9,7 +9,7 @@
 
 use inkwell::{
     types::{BasicType, BasicTypeEnum},
-    values::{AnyValue, BasicValue, BasicValueEnum},
+    values::{BasicValue, BasicValueEnum},
     AddressSpace, FloatPredicate, IntPredicate,
 };
 
@@ -1409,27 +1409,19 @@ impl<'ctx> LlvmBackend<'ctx> {
             .unwrap();
         self.builder.build_store(disc_ptr, disc_val).unwrap();
 
-        // Store payload via pointer: heap-allocate the value, store it, save ptr at field 1.
-        // Heap allocation (mvl_box_new) is required because stack alloca pointers become
-        // dangling when the constructing function returns (#980).
+        // Store payload via pointer: alloca the value, store it, save ptr at field 1.
         let payload_slot = self
             .builder
             .build_struct_gep(result_ty, alloca, 1, "res_payload_slot")
             .unwrap();
         if let Some(arg) = args.first() {
             if let Some(val) = self.emit_expr(arg) {
-                let size = self.llvm_type_byte_size(val.get_type()) as u64;
-                let size_val = self.context.i64_type().const_int(size, false);
-                let box_fn = self.get_mvl_box_new();
-                let call = self
+                let val_alloca = self
                     .builder
-                    .build_call(box_fn, &[size_val.into()], "payload_heap")
+                    .build_alloca(val.get_type(), "payload_tmp")
                     .unwrap();
-                let heap_ptr = BasicValueEnum::try_from(call.as_any_value_enum())
-                    .unwrap_or_else(|_| ptr_ty.const_null().into())
-                    .into_pointer_value();
-                self.builder.build_store(heap_ptr, val).unwrap();
-                self.builder.build_store(payload_slot, heap_ptr).unwrap();
+                self.builder.build_store(val_alloca, val).unwrap();
+                self.builder.build_store(payload_slot, val_alloca).unwrap();
             }
         } else {
             // No payload (e.g. unit Err) — store null.
@@ -2927,7 +2919,6 @@ impl<'ctx> LlvmBackend<'ctx> {
                         "to_lower" => self.get_mvl_str_to_lower(),
                         "to_upper" => self.get_mvl_str_to_upper(),
                         "chars" => self.get_mvl_string_chars(),
-                        // Outer match constrains method to the 4 names above.
                         _ => unreachable!(),
                     };
                     let call = self
@@ -2948,7 +2939,6 @@ impl<'ctx> LlvmBackend<'ctx> {
                         let f = match method {
                             "concat" => self.get_mvl_string_concat(),
                             "split" => self.get_mvl_str_split(),
-                            // Outer match constrains method to concat|split.
                             _ => unreachable!(),
                         };
                         let call = self
@@ -2977,7 +2967,6 @@ impl<'ctx> LlvmBackend<'ctx> {
                         let f = match method {
                             "starts_with" => self.get_mvl_str_starts_with(),
                             "ends_with" => self.get_mvl_str_ends_with(),
-                            // Outer match constrains method to starts_with|ends_with.
                             _ => unreachable!(),
                         };
                         let call = self
@@ -3033,7 +3022,6 @@ impl<'ctx> LlvmBackend<'ctx> {
                         let f = match method {
                             "substring" => self.get_mvl_str_substring(),
                             "slice" => self.get_mvl_list_slice(),
-                            // Outer match constrains method to substring|slice.
                             _ => unreachable!(),
                         };
                         let call = self
@@ -4108,23 +4096,16 @@ impl<'ctx> LlvmBackend<'ctx> {
         self.builder
             .build_store(disc_ptr, self.context.i8_type().const_int(0, false))
             .unwrap();
-        // Heap-allocate the payload so the pointer survives function returns (#980).
-        let size = self.llvm_type_byte_size(val.get_type()) as u64;
-        let size_val = self.context.i64_type().const_int(size, false);
-        let box_fn = self.get_mvl_box_new();
-        let call = self
+        let val_alloca = self
             .builder
-            .build_call(box_fn, &[size_val.into()], "some_heap")
+            .build_alloca(val.get_type(), "some_payload_tmp")
             .unwrap();
-        let heap_ptr = BasicValueEnum::try_from(call.as_any_value_enum())
-            .unwrap_or_else(|_| ptr_ty.const_null().into())
-            .into_pointer_value();
-        self.builder.build_store(heap_ptr, val).unwrap();
+        self.builder.build_store(val_alloca, val).unwrap();
         let payload_slot = self
             .builder
             .build_struct_gep(result_ty, alloca, 1, "some_payload")
             .unwrap();
-        self.builder.build_store(payload_slot, heap_ptr).unwrap();
+        self.builder.build_store(payload_slot, val_alloca).unwrap();
         Some(
             self.builder
                 .build_load(result_ty, alloca, "some_val")

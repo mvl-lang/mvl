@@ -2,7 +2,6 @@
 // Copyright 2026 Schuberg Philis
 
 use mvl::mvl::checker;
-use mvl::mvl::checker::ifc::{collect_ifc_stats, IfcStats};
 use mvl::mvl::checker::passes::{
     aggregate_verdicts, source_hash, PassRegistry, Verdict, VerdictCache,
 };
@@ -53,9 +52,6 @@ pub fn run(path: &str, json: bool, verbose: bool) {
     let mut total_enum_types: usize = 0;
     let mut total_effects_fns: usize = 0;
     let mut all_fn_details: Vec<FnDetail> = Vec::new();
-    // IFC statistics (#895).
-    let mut project_ifc = IfcStats::default();
-    let mut per_file_ifc: Vec<(String, IfcStats)> = Vec::new();
     // Verification pass infrastructure.
     let registry = PassRegistry::default_registry();
     let mut verdict_cache = VerdictCache::default();
@@ -156,13 +152,6 @@ pub fn run(path: &str, json: bool, verbose: bool) {
             all_fn_details.extend(stats.fn_details);
         }
 
-        // Collect IFC statistics (#895).
-        let file_ifc = collect_ifc_stats(prog);
-        project_ifc.merge(&file_ifc);
-        if verbose {
-            per_file_ifc.push((file_str.to_string(), file_ifc));
-        }
-
         // Run verification passes (with incremental cache).
         let hash = source_hash(src);
         let file_path = Path::new(file_str);
@@ -217,7 +206,6 @@ pub fn run(path: &str, json: bool, verbose: bool) {
             })
             .collect::<Vec<_>>()
             .join(",\n");
-        let ifc_json = build_ifc_json(&project_ifc);
         println!(
             r#"{{
   "files": {file_count},
@@ -244,7 +232,6 @@ pub fn run(path: &str, json: bool, verbose: bool) {
   "verdicts": {{
 {verdicts_json}
   }},
-  "ifc": {ifc_json},
   "proven": {proven_count},
   "check_errors": {check_errors}
 }}"#
@@ -381,12 +368,6 @@ pub fn run(path: &str, json: bool, verbose: bool) {
         }
         println!();
         println!("  ✓ proven  ✗ failed  ~ unchecked (SMT prover active; some call sites deferred to runtime)");
-
-        // IFC Security Boundary Report (#895).
-        if project_ifc.has_ifc() {
-            print_ifc_section(&project_ifc, verbose, &per_file_ifc);
-        }
-
         println!();
         println!("Type errors:         {check_errors}");
         if check_errors == 0 {
@@ -447,189 +428,6 @@ fn print_req_row(req: u8, name: &str, req_errors: &[usize; 12], proven: bool, de
         "–"
     };
     println!("  Req {:>2}  {:<20} {}  {}", req, name, status, detail);
-}
-
-// ── IFC section (#895) ───────────────────────────────────────────────────
-
-fn print_ifc_section(ifc: &IfcStats, verbose: bool, per_file: &[(String, IfcStats)]) {
-    println!();
-    println!("============================================================");
-    println!("IFC Security Boundary Report");
-    println!("============================================================");
-
-    // Labels.
-    let label_count = ifc.label_decls.len();
-    println!("Labels:              {label_count} declared");
-    if !ifc.label_decls.is_empty() {
-        let names = ifc.label_decls.join(", ");
-        println!("  Names:             {names}");
-    }
-
-    // Transitions.
-    println!();
-    let trans_count = ifc.relabel_decls.len();
-    println!("Transitions:         {trans_count} declared");
-    for (name, from, to) in &ifc.relabel_decls {
-        let from_str = from.as_deref().unwrap_or("_");
-        let to_str = to.as_deref().unwrap_or("_");
-        println!("  {name:<16} {from_str} -> {to_str}");
-    }
-
-    // Call sites.
-    println!();
-    let total_sites = ifc.relabel_sites.len();
-    println!("Call sites:          {total_sites} total");
-    let sites_by_trans = ifc.sites_by_transition();
-    let tags_by_trans = ifc.unique_tags_by_transition();
-    let mut trans_names: Vec<&String> = sites_by_trans.keys().collect();
-    trans_names.sort();
-    for name in &trans_names {
-        let count = sites_by_trans[*name];
-        let tags = tags_by_trans.get(*name).copied().unwrap_or(0);
-        println!("  {name:<16} {count:>3} sites, {tags:>3} unique tags");
-    }
-
-    // Audit tag inventory.
-    if !ifc.relabel_sites.is_empty() {
-        println!();
-        println!("Audit tag inventory:");
-        let mut sorted_sites = ifc.relabel_sites.clone();
-        sorted_sites.sort_by(|a, b| a.tag.cmp(&b.tag).then(a.line.cmp(&b.line)));
-        for site in &sorted_sites {
-            println!(
-                "  {:<16} line {:>4}    {}",
-                site.tag, site.line, site.transition_name,
-            );
-        }
-    }
-
-    // Labeled parameters.
-    println!();
-    let params_by_label = ifc.params_by_label();
-    let total_params: usize = params_by_label.values().sum();
-    let fn_count = {
-        let mut fns: std::collections::HashSet<&str> = std::collections::HashSet::new();
-        for lp in &ifc.labeled_params {
-            fns.insert(&lp.fn_name);
-        }
-        fns.len()
-    };
-    println!("Labeled parameters:  {total_params} across {fn_count} functions");
-    let mut labels: Vec<(&String, &usize)> = params_by_label.iter().collect();
-    labels.sort_by_key(|(name, _)| (*name).clone());
-    for (label, count) in &labels {
-        println!("  {:<16} {count:>3}", format!("{label}[T]:"));
-    }
-
-    // Verbose: per-file breakdown.
-    if verbose && !per_file.is_empty() {
-        let has_any = per_file.iter().any(|(_, s)| s.has_ifc());
-        if has_any {
-            println!();
-            println!("Per-file IFC breakdown:");
-            for (file, stats) in per_file {
-                if !stats.has_ifc() {
-                    continue;
-                }
-                let short = Path::new(file)
-                    .file_name()
-                    .map(|f| f.to_string_lossy().to_string())
-                    .unwrap_or_else(|| file.clone());
-                let sites = stats.relabel_sites.len();
-                let params = stats.labeled_params.len();
-                let labels = stats.label_decls.len();
-                let transitions = stats.relabel_decls.len();
-                println!(
-                    "  {short:<30} {labels} labels, {transitions} transitions, {sites} relabel sites, {params} labeled params"
-                );
-            }
-        }
-    }
-
-    println!("============================================================");
-}
-
-fn build_ifc_json(ifc: &IfcStats) -> String {
-    let labels_json: String = ifc
-        .label_decls
-        .iter()
-        .map(|l| format!("\"{}\"", super::json_escape(l)))
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    let transitions_json: String = ifc
-        .relabel_decls
-        .iter()
-        .map(|(name, from, to)| {
-            let from_str = from.as_deref().unwrap_or("_");
-            let to_str = to.as_deref().unwrap_or("_");
-            format!(
-                "{{ \"name\": \"{}\", \"from\": \"{}\", \"to\": \"{}\" }}",
-                super::json_escape(name),
-                super::json_escape(from_str),
-                super::json_escape(to_str)
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    let sites_by_trans = ifc.sites_by_transition();
-    let tags_by_trans = ifc.unique_tags_by_transition();
-    let mut trans_names: Vec<&String> = sites_by_trans.keys().collect();
-    trans_names.sort();
-    let call_sites_json: String = trans_names
-        .iter()
-        .map(|name| {
-            let count = sites_by_trans[*name];
-            let tags = tags_by_trans.get(*name).copied().unwrap_or(0);
-            format!(
-                "{{ \"transition\": \"{}\", \"sites\": {count}, \"unique_tags\": {tags} }}",
-                super::json_escape(name)
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    let params_by_label = ifc.params_by_label();
-    let mut labels_sorted: Vec<(&String, &usize)> = params_by_label.iter().collect();
-    labels_sorted.sort_by_key(|(name, _)| (*name).clone());
-    let params_json: String = labels_sorted
-        .iter()
-        .map(|(label, count)| {
-            format!(
-                "{{ \"label\": \"{}\", \"count\": {count} }}",
-                super::json_escape(label)
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    let audit_tags_json: String = {
-        let mut sorted = ifc.relabel_sites.clone();
-        sorted.sort_by(|a, b| a.tag.cmp(&b.tag).then(a.line.cmp(&b.line)));
-        sorted
-            .iter()
-            .map(|site| {
-                format!(
-                    "{{ \"tag\": \"{}\", \"line\": {}, \"transition\": \"{}\" }}",
-                    super::json_escape(&site.tag),
-                    site.line,
-                    super::json_escape(&site.transition_name)
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
-
-    format!(
-        r#"{{
-    "labels": [{labels_json}],
-    "transitions": [{transitions_json}],
-    "call_sites": [{call_sites_json}],
-    "labeled_parameters": [{params_json}],
-    "audit_tags": [{audit_tags_json}]
-  }}"#
-    )
 }
 
 // ── Assurance stats ───────────────────────────────────────────────────────
@@ -733,11 +531,16 @@ fn collect_stats_from_decls(decls: &[Decl], stats: &mut AssuranceStats, collect_
             }
             Decl::Extern(ed) => {
                 // Each signature inside an extern block is a trust-boundary function.
-                // Extern fns are NOT counted as total — they are unverified trust
-                // boundaries, so including them would inflate the verified percentage.
                 stats.extern_fn_count += ed.fns.len();
                 stats.fn_count += ed.fns.len();
                 for ef in &ed.fns {
+                    match ef.totality {
+                        Some(Totality::Total) => {
+                            stats.total_fn_count += 1;
+                            stats.explicit_total_fn_count += 1;
+                        }
+                        _ => stats.total_fn_count += 1, // implicitly total
+                    }
                     if collect_details {
                         stats.fn_details.push(FnDetail {
                             name: ef.name.clone(),
@@ -855,43 +658,5 @@ mod assurance_tests {
             .find(|d| d.name == "check_it")
             .unwrap();
         assert!(test.is_test);
-    }
-
-    // ── IFC assurance section tests (#895) ──────────────────────────────────
-
-    #[test]
-    fn ifc_stats_collected_in_assurance() {
-        let src =
-            r#"fn sanitize(input: Tainted[String]) -> String { relabel trust(input, "XSS-001") }"#;
-        let prog = parse_prog(src);
-        let ifc = collect_ifc_stats(&prog);
-        assert!(ifc.has_ifc());
-        assert_eq!(ifc.relabel_sites.len(), 1);
-        assert_eq!(ifc.labeled_params.len(), 1);
-        assert_eq!(ifc.labeled_params[0].label, "Tainted");
-    }
-
-    #[test]
-    fn ifc_json_output_valid() {
-        let src = r#"fn f(x: Tainted[String]) -> String { relabel trust(x, "V") }"#;
-        let prog = parse_prog(src);
-        let ifc = collect_ifc_stats(&prog);
-        let json = build_ifc_json(&ifc);
-        // Basic structural checks — not a full JSON parser.
-        assert!(json.contains("\"labels\""));
-        assert!(json.contains("\"transitions\""));
-        assert!(json.contains("\"call_sites\""));
-        assert!(json.contains("\"labeled_parameters\""));
-        assert!(json.contains("\"audit_tags\""));
-        assert!(json.contains("\"Tainted\""));
-        assert!(json.contains("trust"));
-    }
-
-    #[test]
-    fn ifc_no_section_for_non_ifc_program() {
-        let src = "fn add(a: Int, b: Int) -> Int { a + b }";
-        let prog = parse_prog(src);
-        let ifc = collect_ifc_stats(&prog);
-        assert!(!ifc.has_ifc());
     }
 }

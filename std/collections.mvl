@@ -36,7 +36,7 @@ pub fn Map[K, V]::put(self, key: K, value: V) -> Map[K, V] {
 /// Remove `key` and return the updated map (value semantics).
 /// If `key` is absent the map is returned unchanged.
 pub fn Map[K, V]::without(self, key: K) -> Map[K, V] {
-    let _: Option[V] = self.remove(key);
+    self.remove(key);
     self
 }
 

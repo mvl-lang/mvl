@@ -1,0 +1,266 @@
+// tests/stdlib/http_test.mvl — std.http Phase 1: parsing and serialization (#783)
+//
+// Verifies HTTP/1.1 request parsing and response serialization.
+// Router and server tests live in http_router_test.mvl (Phase 2, #799).
+
+use std.http.{Method, Request, Response, HttpError,
+              parse_request, serialize_response, status_reason, http_error_msg}
+
+// ── Method parsing ─────────────────────────────────────────────────────────
+
+test fn http_parse_get_method() -> Unit {
+    let raw: String = "GET /index.html HTTP/1.1\r\nHost: example.com\r\n\r\n";
+    match parse_request(raw) {
+        Err(e)  => assert_eq(http_error_msg(e), ""),
+        Ok(req) => match req.method {
+            Method::GET => assert(true),
+            _           => assert(false),
+        }
+    }
+}
+
+test fn http_parse_get_path() -> Unit {
+    let raw: String = "GET /index.html HTTP/1.1\r\nHost: example.com\r\n\r\n";
+    match parse_request(raw) {
+        Err(e)  => assert_eq(http_error_msg(e), ""),
+        Ok(req) => assert_eq(req.path, "/index.html"),
+    }
+}
+
+test fn http_parse_post_method() -> Unit {
+    let raw: String = "POST /users HTTP/1.1\r\nContent-Type: application/json\r\n\r\n{}";
+    match parse_request(raw) {
+        Err(e)  => assert_eq(http_error_msg(e), ""),
+        Ok(req) => match req.method {
+            Method::POST => assert(true),
+            _            => assert(false),
+        }
+    }
+}
+
+test fn http_parse_post_body() -> Unit {
+    let raw: String = "POST /users HTTP/1.1\r\nContent-Length: 13\r\n\r\n{\"name\":\"al\"}";
+    match parse_request(raw) {
+        Err(e)  => assert_eq(http_error_msg(e), ""),
+        Ok(req) => assert_eq(req.body, "{\"name\":\"al\"}"),
+    }
+}
+
+test fn http_parse_delete_method() -> Unit {
+    let raw: String = "DELETE /users/42 HTTP/1.1\r\nHost: example.com\r\n\r\n";
+    match parse_request(raw) {
+        Err(e)  => assert_eq(http_error_msg(e), ""),
+        Ok(req) => match req.method {
+            Method::DELETE => assert(true),
+            _              => assert(false),
+        }
+    }
+}
+
+test fn http_parse_put_method() -> Unit {
+    let raw: String = "PUT /items/7 HTTP/1.1\r\nHost: example.com\r\n\r\n";
+    match parse_request(raw) {
+        Err(e)  => assert_eq(http_error_msg(e), ""),
+        Ok(req) => match req.method {
+            Method::PUT => assert(true),
+            _           => assert(false),
+        }
+    }
+}
+
+test fn http_parse_patch_method() -> Unit {
+    let raw: String = "PATCH /config HTTP/1.1\r\nHost: example.com\r\n\r\n";
+    match parse_request(raw) {
+        Err(e)  => assert_eq(http_error_msg(e), ""),
+        Ok(req) => match req.method {
+            Method::PATCH => assert(true),
+            _             => assert(false),
+        }
+    }
+}
+
+test fn http_parse_head_method() -> Unit {
+    let raw: String = "HEAD /health HTTP/1.1\r\n\r\n";
+    match parse_request(raw) {
+        Err(e)  => assert_eq(http_error_msg(e), ""),
+        Ok(req) => match req.method {
+            Method::HEAD => assert(true),
+            _            => assert(false),
+        }
+    }
+}
+
+test fn http_parse_options_method() -> Unit {
+    let raw: String = "OPTIONS / HTTP/1.1\r\n\r\n";
+    match parse_request(raw) {
+        Err(e)  => assert_eq(http_error_msg(e), ""),
+        Ok(req) => match req.method {
+            Method::OPTIONS => assert(true),
+            _               => assert(false),
+        }
+    }
+}
+
+// ── Header parsing ─────────────────────────────────────────────────────────
+
+test fn http_parse_header_host() -> Unit {
+    let raw: String = "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n";
+    match parse_request(raw) {
+        Err(e)  => assert_eq(http_error_msg(e), ""),
+        Ok(req) => match req.headers.get("host") {
+            Some(v) => assert_eq(v, "localhost"),
+            None    => assert(false),
+        }
+    }
+}
+
+test fn http_parse_multiple_headers() -> Unit {
+    let raw: String = "GET / HTTP/1.1\r\nHost: localhost\r\nAccept: text/html\r\n\r\n";
+    match parse_request(raw) {
+        Err(e)  => assert_eq(http_error_msg(e), ""),
+        Ok(req) => match req.headers.get("accept") {
+            Some(v) => assert_eq(v, "text/html"),
+            None    => assert(false),
+        }
+    }
+}
+
+test fn http_headers_lowercased() -> Unit {
+    let raw: String = "GET / HTTP/1.1\r\nContent-Type: application/json\r\n\r\n";
+    match parse_request(raw) {
+        Err(e)  => assert_eq(http_error_msg(e), ""),
+        Ok(req) => match req.headers.get("content-type") {
+            Some(v) => assert_eq(v, "application/json"),
+            None    => assert(false),
+        }
+    }
+}
+
+test fn http_no_headers_empty_body() -> Unit {
+    let raw: String = "GET /ping HTTP/1.1\r\n\r\n";
+    match parse_request(raw) {
+        Err(e)  => assert_eq(http_error_msg(e), ""),
+        Ok(req) => assert_eq(req.body, ""),
+    }
+}
+
+// ── Error paths ────────────────────────────────────────────────────────────
+
+test fn http_unknown_method_returns_bad_request() -> Unit {
+    let raw: String = "BREW /coffee HTTP/1.1\r\n\r\n";
+    match parse_request(raw) {
+        Ok(_)  => assert(false),
+        Err(e) => match e {
+            HttpError::BadRequest { msg: _ } => assert(true),
+            HttpError::ParseError { msg: _ } => assert(true),
+            _                                => assert(false),
+        }
+    }
+}
+
+test fn http_empty_input_returns_parse_error() -> Unit {
+    match parse_request("") {
+        Ok(_)  => assert(false),
+        Err(e) => match e {
+            HttpError::ParseError { msg: _ } => assert(true),
+            _                                => assert(false),
+        }
+    }
+}
+
+test fn http_malformed_request_line_returns_error() -> Unit {
+    let raw: String = "NOTAVALIDREQUESTLINE\r\n\r\n";
+    match parse_request(raw) {
+        Ok(_)  => assert(false),
+        Err(e) => match e {
+            HttpError::ParseError { msg: _ } => assert(true),
+            HttpError::BadRequest { msg: _ } => assert(true),
+            _                                => assert(false),
+        }
+    }
+}
+
+// ── serialize_response ─────────────────────────────────────────────────────
+
+test fn http_serialize_200_status_line() -> Unit {
+    let headers: Map[String, String] = {"content-type": "text/plain"};
+    let resp: Response = Response { status: 200, headers: headers, body: "hello" };
+    let wire: String = serialize_response(resp);
+    assert_eq(str_starts_with(wire, "HTTP/1.1 200 OK\r\n"), true)
+}
+
+test fn http_serialize_200_contains_header() -> Unit {
+    let headers: Map[String, String] = {"content-type": "text/plain"};
+    let resp: Response = Response { status: 200, headers: headers, body: "hello" };
+    let wire: String = serialize_response(resp);
+    assert_eq(str_contains(wire, "content-type: text/plain\r\n"), true)
+}
+
+test fn http_serialize_200_body() -> Unit {
+    let headers: Map[String, String] = {"content-type": "text/plain"};
+    let resp: Response = Response { status: 200, headers: headers, body: "hello" };
+    let wire: String = serialize_response(resp);
+    assert_eq(str_ends_with(wire, "\r\nhello"), true)
+}
+
+test fn http_serialize_201_created() -> Unit {
+    let headers: Map[String, String] = {"location": "/users/1"};
+    let resp: Response = Response { status: 201, headers: headers, body: "" };
+    let wire: String = serialize_response(resp);
+    assert_eq(str_starts_with(wire, "HTTP/1.1 201 Created\r\n"), true)
+}
+
+test fn http_serialize_404() -> Unit {
+    let headers: Map[String, String] = {"__http_init__": ""};
+    let resp: Response = Response { status: 404, headers: headers, body: "not found" };
+    let wire: String = serialize_response(resp);
+    assert_eq(str_starts_with(wire, "HTTP/1.1 404 Not Found\r\n"), true)
+}
+
+test fn http_serialize_500() -> Unit {
+    let headers: Map[String, String] = {"__http_init__": ""};
+    let resp: Response = Response { status: 500, headers: headers, body: "oops" };
+    let wire: String = serialize_response(resp);
+    assert_eq(str_starts_with(wire, "HTTP/1.1 500 Internal Server Error\r\n"), true)
+}
+
+test fn http_serialize_204_no_body() -> Unit {
+    let headers: Map[String, String] = {"__http_init__": ""};
+    let resp: Response = Response { status: 204, headers: headers, body: "" };
+    let wire: String = serialize_response(resp);
+    assert_eq(str_starts_with(wire, "HTTP/1.1 204 No Content\r\n"), true)
+}
+
+// ── status_reason ─────────────────────────────────────────────────────────
+
+test fn http_status_reason_200() -> Unit {
+    assert_eq(status_reason(200), "OK")
+}
+
+test fn http_status_reason_404() -> Unit {
+    assert_eq(status_reason(404), "Not Found")
+}
+
+test fn http_status_reason_unknown() -> Unit {
+    assert_eq(status_reason(999), "Unknown")
+}
+
+// ── http_error_msg ────────────────────────────────────────────────────────
+
+test fn http_error_msg_not_found() -> Unit {
+    assert_eq(http_error_msg(HttpError::NotFound), "404 Not Found")
+}
+
+test fn http_error_msg_bad_request() -> Unit {
+    let e: HttpError = HttpError::BadRequest { msg: "missing header" };
+    assert_eq(http_error_msg(e), "400 Bad Request: missing header")
+}
+
+test fn http_error_msg_internal() -> Unit {
+    let e: HttpError = HttpError::InternalError { msg: "db down" };
+    assert_eq(http_error_msg(e), "500 Internal Server Error: db down")
+}
+
+test fn http_error_msg_method_not_allowed() -> Unit {
+    assert_eq(http_error_msg(HttpError::MethodNotAllowed), "405 Method Not Allowed")
+}

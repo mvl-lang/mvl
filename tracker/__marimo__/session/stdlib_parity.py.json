@@ -1,0 +1,113 @@
+{
+  "version": "1",
+  "metadata": {
+    "marimo_version": "0.23.4",
+    "script_metadata_hash": null
+  },
+  "cells": [
+    {
+      "id": "Hbol",
+      "code_hash": "514d8e559cafa6d709d6ea0f48606dda",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/plain": ""
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "MJUe",
+      "code_hash": "e92386ac8e632c29cb943e17fcef6d26",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/markdown": "<span class=\"markdown prose dark:prose-invert contents\"><h1 id=\"mvl-stdlib-parity-dashboard\">MVL Stdlib Parity Dashboard</h1>\n<span class=\"paragraph\">Comparing stdlib function coverage between the <strong>Rust transpiler</strong> and <strong>LLVM backend</strong>.</span>\n<span class=\"paragraph\">Target: both backends should support the same stdlib functions with identical behavior.</span></span>"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "vblA",
+      "code_hash": "bad271a1c144e018ec19dbdcc68ce22b",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/plain": ""
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "bkHC",
+      "code_hash": "7300d0e48cf93a2a7d2c10e8edd00034",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/html": "<marimo-ui-element object-id='bkHC-0' random-id='db6e432f-cf1b-c6cf-1b07-980731b28efc'><marimo-table data-initial-value='[]' data-label='null' data-data='&quot;[{&#92;&quot;function&#92;&quot;:&#92;&quot;/Users/iheitlager/wc/mvl_language/mvl_runtime/src/ifc.rs:208:pub fn to_float&#92;&quot;,&#92;&quot;rust&#92;&quot;:true,&#92;&quot;llvm&#92;&quot;:false,&#92;&quot;both&#92;&quot;:false,&#92;&quot;rust_only&#92;&quot;:true,&#92;&quot;llvm_only&#92;&quot;:false},{&#92;&quot;function&#92;&quot;:&#92;&quot;/Users/iheitlager/wc/mvl_language/mvl_runtime/src/ifc.rs:219:pub fn sanitize&#92;&quot;,&#92;&quot;rust&#92;&quot;:true,&#92;&quot;llvm&#92;&quot;:false,&#92;&quot;both&#92;&quot;:false,&#92;&quot;rust_only&#92;&quot;:true,&#92;&quot;llvm_only&#92;&quot;:false},{&#92;&quot;function&#92;&quot;:&#92;&quot;/Users/iheitlager/wc/mvl_language/mvl_runtime/src/ifc.rs:227:pub fn declassify&#92;&quot;,&#92;&quot;rust&#92;&quot;:true,&#92;&quot;llvm&#92;&quot;:false,&#92;&quot;both&#92;&quot;:false,&#92;&quot;rust_only&#92;&quot;:true,&#92;&quot;llvm_only&#92;&quot;:false},{&#92;&quot;function&#92;&quot;:&#92;&quot;/Users/iheitlager/wc/mvl_language/mvl_runtime/src/ifc.rs:70:pub fn new&#92;&quot;,&#92;&quot;rust&#92;&quot;:true,&#92;&quot;llvm&#92;&quot;:false,&#92;&quot;both&#92;&quot;:false,&#92;&quot;rust_only&#92;&quot;:true,&#92;&quot;llvm_only&#92;&quot;:false},{&#92;&quot;function&#92;&quot;:&#92;&quot;/Users/iheitlager/wc/mvl_language/mvl_runtime/src/ifc.rs:76:pub fn into_inner&#92;&quot;,&#92;&quot;rust&#92;&quot;:true,&#92;&quot;llvm&#92;&quot;:false,&#92;&quot;both&#92;&quot;:false,&#92;&quot;rust_only&#92;&quot;:true,&#92;&quot;llvm_only&#92;&quot;:false},{&#92;&quot;function&#92;&quot;:&#92;&quot;/Users/iheitlager/wc/mvl_language/mvl_runtime/src/ifc.rs:82:pub fn as_inner&#92;&quot;,&#92;&quot;rust&#92;&quot;:true,&#92;&quot;llvm&#92;&quot;:false,&#92;&quot;both&#92;&quot;:false,&#92;&quot;rust_only&#92;&quot;:true,&#92;&quot;llvm_only&#92;&quot;:false},{&#92;&quot;function&#92;&quot;:&#92;&quot;/Users/iheitlager/wc/mvl_language/mvl_runtime/src/prelude.rs:212:pub fn mvl_len&#92;&quot;,&#92;&quot;rust&#92;&quot;:true,&#92;&quot;llvm&#92;&quot;:false,&#92;&quot;both&#92;&quot;:false,&#92;&quot;rust_only&#92;&quot;:true,&#92;&quot;llvm_only&#92;&quot;:false},{&#92;&quot;function&#92;&quot;:&#92;&quot;/Users/iheitlager/wc/mvl_language/mvl_runtime/src/stdlib/args.rs:13:pub fn parse&#92;&quot;,&#92;&quot;rust&#92;&quot;:true,&#92;&quot;llvm&#92;&quot;:false,&#92;&quot;both&#92;&quot;:false,&#92;&quot;rust_only&#92;&quot;:true,&#92;&quot;llvm_only&#92;&quot;:false},{&#92;&quot;function&#92;&quot;:&#92;&quot;/Users/iheitlager/wc/mvl_language/mvl_runtime/src/stdlib/args.rs:42:pub fn parse&#92;&quot;,&#92;&quot;rust&#92;&quot;:true,&#92;&quot;llvm&#92;&quot;:false,&#92;&quot;both&#92;&quot;:false,&#92;&quot;rust_only&#92;&quot;:true,&#92;&quot;llvm_only&#92;&quot;:false},{&#92;&quot;function&#92;&quot;:&#92;&quot;/Users/iheitlager/wc/mvl_language/mvl_runtime/src/stdlib/args.rs:57:pub fn get_arg&#92;&quot;,&#92;&quot;rust&#92;&quot;:true,&#92;&quot;llvm&#92;&quot;:false,&#92;&quot;both&#92;&quot;:false,&#92;&quot;rust_only&#92;&quot;:true,&#92;&quot;llvm_only&#92;&quot;:false}]&quot;' data-total-rows='141' data-total-columns='6' data-max-columns='50' data-banner-text='&quot;&quot;' data-pagination='true' data-page-size='10' data-field-types='[[&quot;function&quot;,[&quot;string&quot;,&quot;str&quot;]],[&quot;rust&quot;,[&quot;boolean&quot;,&quot;bool&quot;]],[&quot;llvm&quot;,[&quot;boolean&quot;,&quot;bool&quot;]],[&quot;both&quot;,[&quot;boolean&quot;,&quot;bool&quot;]],[&quot;rust_only&quot;,[&quot;boolean&quot;,&quot;bool&quot;]],[&quot;llvm_only&quot;,[&quot;boolean&quot;,&quot;bool&quot;]]]' data-show-filters='true' data-show-download='true' data-show-column-summaries='true' data-show-data-types='true' data-show-page-size-selector='true' data-show-column-explorer='true' data-show-chart-builder='true' data-row-headers='[]' data-has-stable-row-id='false' data-lazy='false' data-preload='false'></marimo-table></marimo-ui-element>"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "lEQa",
+      "code_hash": "2c797f2720d8c5cf9d2865ee9e4225af",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/markdown": "<span class=\"markdown prose dark:prose-invert contents\"><h2 id=\"summary\">Summary</h2>\n<table>\n<thead>\n<tr>\n<th>Metric</th>\n<th>Count</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>Total functions</td>\n<td>141</td>\n</tr>\n<tr>\n<td>Both backends</td>\n<td>0</td>\n</tr>\n<tr>\n<td>Rust only</td>\n<td>116</td>\n</tr>\n<tr>\n<td>LLVM only</td>\n<td>25</td>\n</tr>\n<tr>\n<td><strong>Parity %</strong></td>\n<td><strong>0.0%</strong></td>\n</tr>\n</tbody>\n</table></span>"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "PKri",
+      "code_hash": "b7a6771783395f46e72d3f68596d2134",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "application/vnd.vegalite.v6+json": "{\n  \"$schema\": \"https://vega.github.io/schema/vega-lite/v6.4.1.json\",\n  \"config\": {\n    \"view\": {\n      \"continuousHeight\": 300,\n      \"continuousWidth\": 300\n    }\n  },\n  \"data\": {\n    \"name\": \"data-90bae9d6dae1c8f1be801806bcf10f1b\"\n  },\n  \"datasets\": {\n    \"data-90bae9d6dae1c8f1be801806bcf10f1b\": [\n      {\n        \"color\": \"#22c55e\",\n        \"count\": 0,\n        \"status\": \"Both\"\n      },\n      {\n        \"color\": \"#3b82f6\",\n        \"count\": 116,\n        \"status\": \"Rust only\"\n      },\n      {\n        \"color\": \"#f97316\",\n        \"count\": 25,\n        \"status\": \"LLVM only\"\n      }\n    ]\n  },\n  \"encoding\": {\n    \"color\": {\n      \"field\": \"status\",\n      \"scale\": {\n        \"domain\": [\n          \"Both\",\n          \"Rust only\",\n          \"LLVM only\"\n        ],\n        \"range\": [\n          \"#22c55e\",\n          \"#3b82f6\",\n          \"#f97316\"\n        ]\n      },\n      \"type\": \"nominal\"\n    },\n    \"x\": {\n      \"field\": \"status\",\n      \"title\": \"Backend Coverage\",\n      \"type\": \"nominal\"\n    },\n    \"y\": {\n      \"field\": \"count\",\n      \"title\": \"Function Count\",\n      \"type\": \"quantitative\"\n    }\n  },\n  \"height\": 300,\n  \"mark\": {\n    \"type\": \"bar\"\n  },\n  \"title\": \"Stdlib Function Coverage by Backend\",\n  \"usermeta\": {\n    \"embedOptions\": {}\n  },\n  \"width\": 400\n}"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "Xref",
+      "code_hash": "24af05a804e417731ce7efc12c7a9aea",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/markdown": "<span class=\"markdown prose dark:prose-invert contents\"><h2 id=\"gaps-to-close\">Gaps to Close</h2>\n<span class=\"paragraph\">Functions not yet implemented in both backends:</span></span>"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "SFPL",
+      "code_hash": "bbe42eaa7764c91d334cb43068f0cb9d",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/html": "<marimo-ui-element object-id='SFPL-0' random-id='85e6190c-023c-da52-0ee2-4f665a3ab561'><marimo-table data-initial-value='[]' data-label='null' data-data='&quot;[{&#92;&quot;function&#92;&quot;:&#92;&quot;/Users/iheitlager/wc/mvl_language/mvl_runtime/src/ifc.rs:208:pub fn to_float&#92;&quot;,&#92;&quot;rust&#92;&quot;:true,&#92;&quot;llvm&#92;&quot;:false},{&#92;&quot;function&#92;&quot;:&#92;&quot;/Users/iheitlager/wc/mvl_language/mvl_runtime/src/ifc.rs:219:pub fn sanitize&#92;&quot;,&#92;&quot;rust&#92;&quot;:true,&#92;&quot;llvm&#92;&quot;:false},{&#92;&quot;function&#92;&quot;:&#92;&quot;/Users/iheitlager/wc/mvl_language/mvl_runtime/src/ifc.rs:227:pub fn declassify&#92;&quot;,&#92;&quot;rust&#92;&quot;:true,&#92;&quot;llvm&#92;&quot;:false},{&#92;&quot;function&#92;&quot;:&#92;&quot;/Users/iheitlager/wc/mvl_language/mvl_runtime/src/ifc.rs:70:pub fn new&#92;&quot;,&#92;&quot;rust&#92;&quot;:true,&#92;&quot;llvm&#92;&quot;:false},{&#92;&quot;function&#92;&quot;:&#92;&quot;/Users/iheitlager/wc/mvl_language/mvl_runtime/src/ifc.rs:76:pub fn into_inner&#92;&quot;,&#92;&quot;rust&#92;&quot;:true,&#92;&quot;llvm&#92;&quot;:false},{&#92;&quot;function&#92;&quot;:&#92;&quot;/Users/iheitlager/wc/mvl_language/mvl_runtime/src/ifc.rs:82:pub fn as_inner&#92;&quot;,&#92;&quot;rust&#92;&quot;:true,&#92;&quot;llvm&#92;&quot;:false},{&#92;&quot;function&#92;&quot;:&#92;&quot;/Users/iheitlager/wc/mvl_language/mvl_runtime/src/prelude.rs:212:pub fn mvl_len&#92;&quot;,&#92;&quot;rust&#92;&quot;:true,&#92;&quot;llvm&#92;&quot;:false},{&#92;&quot;function&#92;&quot;:&#92;&quot;/Users/iheitlager/wc/mvl_language/mvl_runtime/src/stdlib/args.rs:13:pub fn parse&#92;&quot;,&#92;&quot;rust&#92;&quot;:true,&#92;&quot;llvm&#92;&quot;:false},{&#92;&quot;function&#92;&quot;:&#92;&quot;/Users/iheitlager/wc/mvl_language/mvl_runtime/src/stdlib/args.rs:42:pub fn parse&#92;&quot;,&#92;&quot;rust&#92;&quot;:true,&#92;&quot;llvm&#92;&quot;:false},{&#92;&quot;function&#92;&quot;:&#92;&quot;/Users/iheitlager/wc/mvl_language/mvl_runtime/src/stdlib/args.rs:57:pub fn get_arg&#92;&quot;,&#92;&quot;rust&#92;&quot;:true,&#92;&quot;llvm&#92;&quot;:false}]&quot;' data-total-rows='141' data-total-columns='3' data-max-columns='50' data-banner-text='&quot;&quot;' data-pagination='true' data-page-size='10' data-field-types='[[&quot;function&quot;,[&quot;string&quot;,&quot;str&quot;]],[&quot;rust&quot;,[&quot;boolean&quot;,&quot;bool&quot;]],[&quot;llvm&quot;,[&quot;boolean&quot;,&quot;bool&quot;]]]' data-show-filters='true' data-show-download='true' data-show-column-summaries='true' data-show-data-types='true' data-show-page-size-selector='true' data-show-column-explorer='true' data-show-chart-builder='true' data-row-headers='[]' data-has-stable-row-id='false' data-lazy='false' data-preload='false'></marimo-table></marimo-ui-element>"
+          }
+        }
+      ],
+      "console": []
+    }
+  ]
+}

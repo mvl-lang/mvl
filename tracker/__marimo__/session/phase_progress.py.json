@@ -1,0 +1,94 @@
+{
+  "version": "1",
+  "metadata": {
+    "marimo_version": "0.23.4",
+    "script_metadata_hash": null
+  },
+  "cells": [
+    {
+      "id": "Hbol",
+      "code_hash": "1ab754e1a901946ba3b0c710ed654452",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/plain": ""
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "MJUe",
+      "code_hash": "3e54353b5efe779b1bf88176e4af514f",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/markdown": "<span class=\"markdown prose dark:prose-invert contents\"><h1 id=\"mvl-phase-progress-dashboard\">MVL Phase Progress Dashboard</h1>\n<span class=\"paragraph\">Tracking progress through the <strong>Nine Phases</strong> roadmap (spec 012).</span>\n<span class=\"paragraph\">Data sourced from GitHub issue labels and milestone status.</span></span>"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "vblA",
+      "code_hash": "40006b1b735d3af5200900fca406666c",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/html": "<marimo-ui-element object-id='vblA-0' random-id='5d8f0b89-9ec6-7d21-cf8b-fd5e0941d8d1'><marimo-table data-initial-value='[]' data-label='null' data-data='&quot;[{&#92;&quot;phase&#92;&quot;:1,&#92;&quot;name&#92;&quot;:&#92;&quot;Foundation&#92;&quot;,&#92;&quot;status&#92;&quot;:&#92;&quot;complete&#92;&quot;,&#92;&quot;description&#92;&quot;:&#92;&quot;Parser, checker, Rust transpiler&#92;&quot;},{&#92;&quot;phase&#92;&quot;:2,&#92;&quot;name&#92;&quot;:&#92;&quot;LLVM Backend&#92;&quot;,&#92;&quot;status&#92;&quot;:&#92;&quot;complete&#92;&quot;,&#92;&quot;description&#92;&quot;:&#92;&quot;LLVM IR generation, mvl_memory&#92;&quot;},{&#92;&quot;phase&#92;&quot;:3,&#92;&quot;name&#92;&quot;:&#92;&quot;Self-Hosting&#92;&quot;,&#92;&quot;status&#92;&quot;:&#92;&quot;complete&#92;&quot;,&#92;&quot;description&#92;&quot;:&#92;&quot;Compiler compiles itself&#92;&quot;},{&#92;&quot;phase&#92;&quot;:4,&#92;&quot;name&#92;&quot;:&#92;&quot;Bootstrap&#92;&quot;,&#92;&quot;status&#92;&quot;:&#92;&quot;complete&#92;&quot;,&#92;&quot;description&#92;&quot;:&#92;&quot;Native MVL compiler&#92;&quot;},{&#92;&quot;phase&#92;&quot;:5,&#92;&quot;name&#92;&quot;:&#92;&quot;Backend Unification&#92;&quot;,&#92;&quot;status&#92;&quot;:&#92;&quot;complete&#92;&quot;,&#92;&quot;description&#92;&quot;:&#92;&quot;Cross-backend parity tests&#92;&quot;},{&#92;&quot;phase&#92;&quot;:6,&#92;&quot;name&#92;&quot;:&#92;&quot;Maturity&#92;&quot;,&#92;&quot;status&#92;&quot;:&#92;&quot;active&#92;&quot;,&#92;&quot;description&#92;&quot;:&#92;&quot;Stdlib complete, testing matures&#92;&quot;},{&#92;&quot;phase&#92;&quot;:7,&#92;&quot;name&#92;&quot;:&#92;&quot;Verification&#92;&quot;,&#92;&quot;status&#92;&quot;:&#92;&quot;planned&#92;&quot;,&#92;&quot;description&#92;&quot;:&#92;&quot;Stdlib profiles, proven mode&#92;&quot;},{&#92;&quot;phase&#92;&quot;:8,&#92;&quot;name&#92;&quot;:&#92;&quot;Certification&#92;&quot;,&#92;&quot;status&#92;&quot;:&#92;&quot;planned&#92;&quot;,&#92;&quot;description&#92;&quot;:&#92;&quot;Safety-critical certification&#92;&quot;},{&#92;&quot;phase&#92;&quot;:9,&#92;&quot;name&#92;&quot;:&#92;&quot;Production&#92;&quot;,&#92;&quot;status&#92;&quot;:&#92;&quot;planned&#92;&quot;,&#92;&quot;description&#92;&quot;:&#92;&quot;Production-ready release&#92;&quot;}]&quot;' data-total-rows='9' data-total-columns='4' data-max-columns='50' data-banner-text='&quot;&quot;' data-pagination='false' data-page-size='10' data-field-types='[[&quot;phase&quot;,[&quot;integer&quot;,&quot;i64&quot;]],[&quot;name&quot;,[&quot;string&quot;,&quot;str&quot;]],[&quot;status&quot;,[&quot;string&quot;,&quot;str&quot;]],[&quot;description&quot;,[&quot;string&quot;,&quot;str&quot;]]]' data-show-filters='true' data-show-download='true' data-show-column-summaries='false' data-show-data-types='true' data-show-page-size-selector='true' data-show-column-explorer='true' data-show-chart-builder='true' data-row-headers='[]' data-has-stable-row-id='false' data-lazy='false' data-preload='false'></marimo-table></marimo-ui-element>"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "bkHC",
+      "code_hash": "1e3b0d158560e6bb086ebcab0580e51d",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/html": "<marimo-ui-element object-id='bkHC-0' random-id='b45fd761-0631-2a6e-5d0c-42245c0d57f5'><marimo-table data-initial-value='[]' data-label='null' data-data='&quot;[{&#92;&quot;phase&#92;&quot;:5,&#92;&quot;label&#92;&quot;:&#92;&quot;phase-5&#92;&quot;,&#92;&quot;open_issues&#92;&quot;:0},{&#92;&quot;phase&#92;&quot;:6,&#92;&quot;label&#92;&quot;:&#92;&quot;phase-6&#92;&quot;,&#92;&quot;open_issues&#92;&quot;:13},{&#92;&quot;phase&#92;&quot;:7,&#92;&quot;label&#92;&quot;:&#92;&quot;phase-7&#92;&quot;,&#92;&quot;open_issues&#92;&quot;:21},{&#92;&quot;phase&#92;&quot;:8,&#92;&quot;label&#92;&quot;:&#92;&quot;phase-8&#92;&quot;,&#92;&quot;open_issues&#92;&quot;:9},{&#92;&quot;phase&#92;&quot;:9,&#92;&quot;label&#92;&quot;:&#92;&quot;phase-9&#92;&quot;,&#92;&quot;open_issues&#92;&quot;:0}]&quot;' data-total-rows='5' data-total-columns='3' data-max-columns='50' data-banner-text='&quot;&quot;' data-pagination='false' data-page-size='10' data-field-types='[[&quot;phase&quot;,[&quot;integer&quot;,&quot;i64&quot;]],[&quot;label&quot;,[&quot;string&quot;,&quot;str&quot;]],[&quot;open_issues&quot;,[&quot;integer&quot;,&quot;i64&quot;]]]' data-show-filters='true' data-show-download='true' data-show-column-summaries='false' data-show-data-types='true' data-show-page-size-selector='false' data-show-column-explorer='true' data-show-chart-builder='true' data-row-headers='[]' data-has-stable-row-id='false' data-lazy='false' data-preload='false'></marimo-table></marimo-ui-element>"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "lEQa",
+      "code_hash": "3f14b5f861c9bfd84a235e128cbb4af8",
+      "outputs": [
+        {
+          "type": "error",
+          "ename": "exception",
+          "evalue": "No module named 'pandas'",
+          "traceback": null
+        }
+      ],
+      "console": [
+        {
+          "type": "stream",
+          "name": "stderr",
+          "text": "<span class=\"codehilite\"><div class=\"highlight\"><pre><span></span><span class=\"gt\">Traceback (most recent call last):</span>\n  File <span class=\"nb\">&quot;/var/folders/lv/jzpz148d0hs357twhd64v1r00000gp/T/marimo_19904/__marimo__cell_lEQa_.py&quot;</span>, line <span class=\"m\">13</span>, in <span class=\"n\">&lt;module&gt;</span>\n<span class=\"w\">    </span><span class=\"n\">chart</span> <span class=\"o\">=</span> <span class=\"n\">alt</span><span class=\"o\">.</span><span class=\"n\">Chart</span><span class=\"p\">(</span><span class=\"n\">progress</span><span class=\"o\">.</span><span class=\"n\">to_pandas</span><span class=\"p\">())</span><span class=\"o\">.</span><span class=\"n\">mark_bar</span><span class=\"p\">()</span><span class=\"o\">.</span><span class=\"n\">encode</span><span class=\"p\">(</span>\n<span class=\"w\">                      </span><span class=\"pm\">~~~~~~~~~~~~~~~~~~^^</span>\n  File <span class=\"nb\">&quot;/Users/iheitlager/wc/mvl_language/tracker/.venv/lib/python3.14/site-packages/polars/dataframe/frame.py&quot;</span>, line <span class=\"m\">2617</span>, in <span class=\"n\">to_pandas</span>\n<span class=\"w\">    </span><span class=\"k\">return</span> <span class=\"bp\">self</span><span class=\"o\">.</span><span class=\"n\">_to_pandas_without_object_columns</span><span class=\"p\">(</span>\n<span class=\"w\">           </span><span class=\"pm\">~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^</span>\n<span class=\"w\">    </span>    <span class=\"bp\">self</span><span class=\"p\">,</span> <span class=\"n\">use_pyarrow_extension_array</span><span class=\"o\">=</span><span class=\"n\">use_pyarrow_extension_array</span><span class=\"p\">,</span> <span class=\"o\">**</span><span class=\"n\">kwargs</span>\n<span class=\"w\">        </span><span class=\"pm\">^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^</span>\n<span class=\"w\">    </span><span class=\"p\">)</span>\n<span class=\"w\">    </span><span class=\"pm\">^</span>\n  File <span class=\"nb\">&quot;/Users/iheitlager/wc/mvl_language/tracker/.venv/lib/python3.14/site-packages/polars/dataframe/frame.py&quot;</span>, line <span class=\"m\">2679</span>, in <span class=\"n\">_to_pandas_without_object_columns</span>\n<span class=\"w\">    </span><span class=\"k\">return</span> <span class=\"n\">tbl</span><span class=\"o\">.</span><span class=\"n\">to_pandas</span><span class=\"p\">(</span><span class=\"n\">date_as_object</span><span class=\"o\">=</span><span class=\"n\">date_as_object</span><span class=\"p\">,</span> <span class=\"o\">**</span><span class=\"n\">kwargs</span><span class=\"p\">)</span>\n<span class=\"w\">           </span><span class=\"pm\">~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^</span>\n  File <span class=\"nb\">&quot;pyarrow/array.pxi&quot;</span>, line <span class=\"m\">1071</span>, in <span class=\"n\">pyarrow.lib._PandasConvertible.to_pandas</span>\n  File <span class=\"nb\">&quot;pyarrow/table.pxi&quot;</span>, line <span class=\"m\">5146</span>, in <span class=\"n\">pyarrow.lib.Table._to_pandas</span>\n  File <span class=\"nb\">&quot;/Users/iheitlager/wc/mvl_language/tracker/.venv/lib/python3.14/site-packages/pyarrow/pandas_compat.py&quot;</span>, line <span class=\"m\">813</span>, in <span class=\"n\">table_to_dataframe</span>\n<span class=\"w\">    </span><span class=\"n\">index</span> <span class=\"o\">=</span> <span class=\"n\">_pandas_api</span><span class=\"o\">.</span><span class=\"n\">pd</span><span class=\"o\">.</span><span class=\"n\">RangeIndex</span><span class=\"p\">(</span><span class=\"n\">table</span><span class=\"o\">.</span><span class=\"n\">num_rows</span><span class=\"p\">)</span>\n<span class=\"w\">            </span><span class=\"pm\">^^^^^^^^^^^^^^</span>\n  File <span class=\"nb\">&quot;pyarrow/pandas-shim.pxi&quot;</span>, line <span class=\"m\">142</span>, in <span class=\"n\">pyarrow.lib._PandasAPIShim.pd.__get__</span>\n  File <span class=\"nb\">&quot;pyarrow/pandas-shim.pxi&quot;</span>, line <span class=\"m\">107</span>, in <span class=\"n\">pyarrow.lib._PandasAPIShim._check_import</span>\n<span class=\"w\">    </span><span class=\"k\">with</span> <span class=\"bp\">self</span><span class=\"o\">.</span><span class=\"n\">_lock</span><span class=\"p\">:</span>\n  File <span class=\"nb\">&quot;pyarrow/pandas-shim.pxi&quot;</span>, line <span class=\"m\">110</span>, in <span class=\"n\">pyarrow.lib._PandasAPIShim._check_import</span>\n<span class=\"w\">    </span><span class=\"bp\">self</span><span class=\"o\">.</span><span class=\"n\">_import_pandas</span><span class=\"p\">(</span><span class=\"n\">raise_</span><span class=\"p\">)</span>\n  File <span class=\"nb\">&quot;pyarrow/pandas-shim.pxi&quot;</span>, line <span class=\"m\">55</span>, in <span class=\"n\">pyarrow.lib._PandasAPIShim._import_pandas</span>\n<span class=\"w\">    </span><span class=\"k\">raise</span>\n  File <span class=\"nb\">&quot;pyarrow/pandas-shim.pxi&quot;</span>, line <span class=\"m\">50</span>, in <span class=\"n\">pyarrow.lib._PandasAPIShim._import_pandas</span>\n<span class=\"w\">    </span><span class=\"kn\">import</span><span class=\"w\"> </span><span class=\"nn\">pandas</span><span class=\"w\"> </span><span class=\"k\">as</span><span class=\"w\"> </span><span class=\"nn\">pd</span>\n<span class=\"gr\">ModuleNotFoundError</span>: <span class=\"n\">No module named &#39;pandas&#39;</span>\n</pre></div>\n</span>",
+          "mimetype": "application/vnd.marimo+traceback"
+        }
+      ]
+    },
+    {
+      "id": "PKri",
+      "code_hash": "26978251c43225b372aecda5964475cb",
+      "outputs": [
+        {
+          "type": "error",
+          "ename": "exception",
+          "evalue": "An ancestor raised an exception (ModuleNotFoundError): ",
+          "traceback": null
+        }
+      ],
+      "console": []
+    }
+  ]
+}

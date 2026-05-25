@@ -500,7 +500,11 @@ impl TypeChecker {
         let expected = resolve(&cd.ty);
         let found = self.infer_expr(&cd.value);
         if !types_compatible(&expected, &found) {
-            self.emit_type_or_label_mismatch(&expected, &found, cd.value.span());
+            self.emit(CheckError::TypeMismatch {
+                expected: expected.display(),
+                found: found.display(),
+                span: cd.value.span(),
+            });
         }
     }
 }

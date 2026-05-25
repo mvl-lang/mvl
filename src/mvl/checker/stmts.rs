@@ -35,7 +35,11 @@ impl TypeChecker {
             if !matches!(branch_ty.unlabeled(), Ty::Unit | Ty::Unknown) {
                 let promoted = ifc::apply_label(Some(lbl), branch_ty.unlabeled().clone());
                 if !matches!(promoted, Ty::Unknown) && !types_compatible(ret, &promoted) {
-                    self.emit_type_or_label_mismatch(ret, &promoted, span);
+                    self.emit(CheckError::TypeMismatch {
+                        expected: ret.display(),
+                        found: promoted.display(),
+                        span,
+                    });
                 }
             }
         }
@@ -96,7 +100,11 @@ impl TypeChecker {
                                 && !last_ty.is_result()
                                 && !types_compatible(&resolved_ret, &last_ty)
                             {
-                                self.emit_type_or_label_mismatch(ret, &last_ty, expr.span());
+                                self.emit(CheckError::TypeMismatch {
+                                    expected: ret.display(),
+                                    found: last_ty.display(),
+                                    span: expr.span(),
+                                });
                             }
                         }
 
@@ -130,7 +138,11 @@ impl TypeChecker {
                                 && !last_ty.is_result()
                                 && !types_compatible(&resolved_ret, &last_ty)
                             {
-                                self.emit_type_or_label_mismatch(ret, &last_ty, *span);
+                                self.emit(CheckError::TypeMismatch {
+                                    expected: ret.display(),
+                                    found: last_ty.display(),
+                                    span: *span,
+                                });
                             }
                         }
                         // Mirror the ResultIgnored check from Stmt::Expr: a tail match
@@ -163,7 +175,11 @@ impl TypeChecker {
                                 && !last_ty.is_result()
                                 && !types_compatible(&resolved_ret, &last_ty)
                             {
-                                self.emit_type_or_label_mismatch(ret, &last_ty, *span);
+                                self.emit(CheckError::TypeMismatch {
+                                    expected: ret.display(),
+                                    found: last_ty.display(),
+                                    span: *span,
+                                });
                             }
                         }
                         break;
@@ -226,7 +242,11 @@ impl TypeChecker {
                         && !matches!(else_ty, Ty::Unknown)
                         && !types_compatible(&result_ty, &else_ty)
                     {
-                        self.emit_type_or_label_mismatch(&result_ty, &else_ty, span);
+                        self.emit(CheckError::TypeMismatch {
+                            expected: result_ty.display(),
+                            found: else_ty.display(),
+                            span,
+                        });
                     }
                 }
                 ElseBranch::If(nested_if) => {
@@ -250,7 +270,11 @@ impl TypeChecker {
                             && !matches!(nested_ty, Ty::Unknown)
                             && !types_compatible(&result_ty, &nested_ty)
                         {
-                            self.emit_type_or_label_mismatch(&result_ty, &nested_ty, span);
+                            self.emit(CheckError::TypeMismatch {
+                                expected: result_ty.display(),
+                                found: nested_ty.display(),
+                                span,
+                            });
                         }
                     } else {
                         // Shouldn't happen by construction (ElseBranch::If always wraps
@@ -281,7 +305,11 @@ impl TypeChecker {
                 if is_ref_assignment {
                     self.check_capability_scope(pattern, init);
                 } else if !types_compatible(&ann_ty, &init_ty) {
-                    self.emit_type_or_label_mismatch(&ann_ty, &init_ty, init.span());
+                    self.emit(CheckError::TypeMismatch {
+                        expected: ann_ty.display(),
+                        found: init_ty.display(),
+                        span: init.span(),
+                    });
                 } else if ann_ty.is_linear() {
                     // Pony destructive-read rule: linear types require explicit consume().
                     // `let t: String = s` is forbidden; `let t: String = consume(s)` is required.
@@ -409,12 +437,14 @@ impl TypeChecker {
                     // Use `return_ty` if available; fall back to the function-level
                     // `current_return_ty` so that early `return` inside a for/while
                     // loop body is still checked against the function's return type.
-                    let effective_ret = return_ty
-                        .cloned()
-                        .or_else(|| self.current_return_ty.clone());
-                    if let Some(ref ret) = effective_ret {
+                    let effective_ret = return_ty.or(self.current_return_ty.as_ref());
+                    if let Some(ret) = effective_ret {
                         if !types_compatible(ret, &found) {
-                            self.emit_type_or_label_mismatch(ret, &found, *span);
+                            self.emit(CheckError::TypeMismatch {
+                                expected: ret.display(),
+                                found: found.display(),
+                                span: *span,
+                            });
                         }
                     }
                 }
@@ -473,8 +503,13 @@ impl TypeChecker {
                 pattern,
                 iter,
                 body,
+                span,
                 ..
             } => {
+                // Req 8: `for` loops are bounded (total) — reject in `partial` functions.
+                if matches!(self.current_fn_totality, Some(Totality::Partial)) {
+                    self.emit(CheckError::ForLoopInPartialFn { span: *span });
+                }
                 let iter_ty = self.infer_expr(iter);
                 let iter_span = iter.span();
                 let elem_ty = self.check_iterator_type(&iter_ty, iter_span);
@@ -513,13 +548,11 @@ impl TypeChecker {
                 self.check_block(body, None);
             }
 
-            // #14: Reject bare Result/Option expressions (ResultIgnored, OptionIgnored)
+            // #14: Reject bare Result expressions (ResultIgnored)
             Stmt::Expr { expr, .. } => {
                 let ty = self.infer_expr(expr);
                 if ty.is_result() {
                     self.emit(CheckError::ResultIgnored { span: expr.span() });
-                } else if ty.is_option() {
-                    self.emit(CheckError::OptionIgnored { span: expr.span() });
                 }
             }
         }
@@ -539,7 +572,11 @@ impl TypeChecker {
                     }
                     // #17: also verify the assigned value is type-compatible
                     if !types_compatible(&info.ty, val_ty) {
-                        self.emit_type_or_label_mismatch(&info.ty, val_ty, span);
+                        self.emit(CheckError::TypeMismatch {
+                            expected: info.ty.display(),
+                            found: val_ty.display(),
+                            span,
+                        });
                     }
                 } else {
                     self.emit(CheckError::UndefinedVariable {

@@ -40,19 +40,19 @@ use std.env.{exit}
 // (interval check), so the cost is zero at runtime but the property is
 // proven by the compiler rather than asserted.
 
-total fn validate_port_range(p: Int where p > 0 && p < 65536) -> Int { p }
+fn validate_port_range(p: Int where p > 0 && p < 65536) -> Int { p }
 
 // ── Route handlers ────────────────────────────────────────────────────────
 
-total fn handle_health(req: val Request, params: val Map[String, String]) -> Response {
+fn handle_health(req: val Request, params: val Map[String, String]) -> Response {
     ok("ok")
 }
 
-total fn handle_users(req: val Request, params: val Map[String, String]) -> Response {
+fn handle_users(req: val Request, params: val Map[String, String]) -> Response {
     ok("[{name: Alice}, {name: Bob}]")
 }
 
-total fn handle_user(req: val Request, params: val Map[String, String]) -> Response {
+fn handle_user(req: val Request, params: val Map[String, String]) -> Response {
     let id: String = match params.get("id") {
         Some(v) => v,
         None    => "unknown",

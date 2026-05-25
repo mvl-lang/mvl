@@ -8,28 +8,23 @@
 //      after verification, only a plain success/failure result remains.
 //      The taint does not propagate past the trust boundary.
 //   3. Req 5 (Errors): all failure modes are explicit in the return type.
-//   4. Req 10 (Refinements): username must be non-empty before token generation.
+//   4. Phase 4: authenticate() declares ! CryptoRandom — generate_token uses
+//      cryptographically secure randomness for token generation.
+//      Result.map replaces the manual Ok/Err match for idiomatic style.
 //
-// Assurance note: 1 extern block (1 irreducible trust-boundary function).
-//   hash_verify requires constant-time comparison — must stay in Rust.
+// Assurance note: 1 extern block (2 trust-boundary functions).
 
 use model::AuthError;
 
-// ── Trust boundary (irreducible — requires Rust for security) ────────────
+// ── Trust boundary ─────────────────────────────────────────────────────────
 
 extern "rust" {
     // hash_verify consumes Secret[String] — it cannot escape into output.
     // Tainted[String] password is validated here; result is plain Ok/Err.
-    // Constant-time string comparison cannot be expressed in MVL.
     fn hash_verify(input: Tainted[String], stored_hash: Secret[String]) -> Result[Unit, AuthError];
-}
-
-// ── Pure MVL functions (formerly extern) ─────────────────────────────────
-
-// generate_token: pure MVL — no longer requires extern "rust".
-// Produces a session token from a validated (clean) username.
-total fn generate_token(username: String) -> String {
-    "tok-".concat(username)
+    // generate_token takes a String (validated username only).
+    // Uses cryptographically secure randomness — requires ! CryptoRandom.
+    fn generate_token(username: String) -> String;
 }
 
 // ── Authentication logic ───────────────────────────────────────────────────
@@ -46,7 +41,7 @@ pub total fn authenticate(
     raw_username: Tainted[String],
     raw_password: Tainted[String],
     stored_hash: Secret[String],
-) -> Result[String, AuthError] {
+) -> Result[String, AuthError] ! CryptoRandom {
     hash_verify(raw_password, stored_hash)
         .map(|u: Unit| generate_token(relabel trust(raw_username, "VALIDATED")))
 }
@@ -86,7 +81,7 @@ test fn auth_error_invalid_token_variant() -> Unit {
 // Negative-path: Err(InvalidCredentials) flows correctly through the
 // authenticate() → caller boundary when hash_verify fails.
 // Simulates the Err path without calling extern functions.
-total fn auth_failure_result() -> Result[String, AuthError] {
+fn auth_failure_result() -> Result[String, AuthError] {
     Err(AuthError::InvalidCredentials)
 }
 

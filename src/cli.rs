@@ -78,13 +78,11 @@ pub(super) fn dispatch(args: &[String]) {
         "build" => {
             let path = args::require_path_arg(args, "build");
             let backend = args::parse_backend(args);
-            let _target = args::parse_target(args);
             let stdlib_profile = args::parse_stdlib_profile(args);
             let assert_mode = args::parse_assert_mode_or_exit(args);
             let verbose = args.iter().any(|a| a == "--verbose" || a == "-v");
             if verbose {
                 eprintln!("stdlib profile: {stdlib_profile}");
-                eprintln!("target: {_target}");
             }
             check::maybe_check_proven_stdlib_or_exit(stdlib_profile);
             if backend == "llvm" {
@@ -102,7 +100,6 @@ pub(super) fn dispatch(args: &[String]) {
         "run" => {
             let path = args::require_path_arg(args, "run");
             let backend = args::parse_backend(args);
-            let _target = args::parse_target(args);
             let stdlib_profile = args::parse_stdlib_profile(args);
             let assert_mode = args::parse_assert_mode_or_exit(args);
             check::maybe_check_proven_stdlib_or_exit(stdlib_profile);
@@ -132,7 +129,6 @@ pub(super) fn dispatch(args: &[String]) {
         "test" => {
             let path = args::require_path_arg(args, "test");
             let backend = args::parse_backend(args);
-            let _target = args::parse_target(args);
             let stdlib_profile = args::parse_stdlib_profile(args);
             check::maybe_check_proven_stdlib_or_exit(stdlib_profile);
             let quiet = args.iter().any(|a| a == "--quiet" || a == "-q");

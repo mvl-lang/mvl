@@ -1067,7 +1067,6 @@ pub(crate) fn expr_to_ref_expr_ext(expr: &Expr, fallback_span: Span) -> Option<R
                     BinaryOp::Mul => ArithOp::Mul,
                     BinaryOp::Div => ArithOp::Div,
                     BinaryOp::Rem => ArithOp::Rem,
-                    // Outer match arm constrains op to Add|Sub|Mul|Div|Rem.
                     _ => unreachable!(),
                 };
                 Some(RefExpr::ArithOp {
@@ -1092,7 +1091,6 @@ pub(crate) fn expr_to_ref_expr_ext(expr: &Expr, fallback_span: Span) -> Option<R
                     BinaryOp::Gt => CmpOp::Gt,
                     BinaryOp::Le => CmpOp::Le,
                     BinaryOp::Ge => CmpOp::Ge,
-                    // Outer match arm constrains op to Eq|Ne|Lt|Gt|Le|Ge.
                     _ => unreachable!(),
                 };
                 Some(RefExpr::Compare {
@@ -1108,7 +1106,6 @@ pub(crate) fn expr_to_ref_expr_ext(expr: &Expr, fallback_span: Span) -> Option<R
                 let lop = match op {
                     BinaryOp::And => LogicOp::And,
                     BinaryOp::Or => LogicOp::Or,
-                    // Outer match arm constrains op to And|Or.
                     _ => unreachable!(),
                 };
                 Some(RefExpr::LogicOp {

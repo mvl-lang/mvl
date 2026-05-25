@@ -260,7 +260,11 @@ impl TypeChecker {
                         && !matches!(promoted_else, Ty::Unknown)
                         && !types_compatible(&promoted_then, &promoted_else)
                     {
-                        self.emit_type_or_label_mismatch(&promoted_then, &promoted_else, *span);
+                        self.emit(CheckError::TypeMismatch {
+                            expected: promoted_then.display(),
+                            found: promoted_else.display(),
+                            span: *span,
+                        });
                     }
                     if matches!(promoted_then, Ty::Unknown) {
                         promoted_else
@@ -482,7 +486,11 @@ impl TypeChecker {
                     && !matches!(body_ty, Ty::Unknown)
                     && !types_compatible(&ret_ty, &body_ty)
                 {
-                    self.emit_type_or_label_mismatch(&ret_ty, &body_ty, body.span());
+                    self.emit(CheckError::TypeMismatch {
+                        expected: ret_ty.display(),
+                        found: body_ty.display(),
+                        span: body.span(),
+                    });
                 }
                 self.env.pop_scope();
                 self.lambda_scope_starts.pop();

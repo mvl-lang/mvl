@@ -20,7 +20,7 @@
 //!
 //! // Tag-capability handle — cheap to clone, safe to send across threads
 //! #[derive(Clone)]
-//! pub struct Foo { _sender: MvlSender<FooMsg> }
+//! pub struct Foo { _sender: std::sync::mpsc::SyncSender<FooMsg> }
 //!
 //! impl Foo {
 //!     pub fn behavior(&self, params) {
@@ -30,8 +30,8 @@
 //!
 //! // Start function — called by `actor Foo { field: val, ... }` expressions
 //! fn _start_foo(state: FooState) -> Foo {
-//!     let (tx, rx) = mvl_channel();
-//!     mvl_spawn(move || {
+//!     let (tx, rx) = std::sync::mpsc::sync_channel(256);
+//!     std::thread::spawn(move || {
 //!         let mut actor = state;
 //!         while let Ok(msg) = rx.recv() {
 //!             match msg {
@@ -44,12 +44,11 @@
 //! }
 //! ```
 //!
-//! Runtime primitives (`mvl_channel`, `mvl_spawn`, `mvl_send`, etc.) are
-//! provided by `mvl_runtime::actors` (ADR-0037) and imported via the prelude.
-//! Behaviors are fire-and-forget — `mvl_send` drops the message on a full
-//! queue rather than blocking the caller.  Queue capacity defaults to 256.
+//! Runtime: `std::sync::mpsc::sync_channel` + `std::thread::spawn` (no tokio).
+//! Behaviors are fire-and-forget — `try_send` drops the message on a full queue
+//! rather than blocking the caller.  Queue capacity defaults to 256.
 //!
-//! See Spec 015 (actors), ADR-0029, ADR-0037. Phase 8, #695.
+//! See Spec 015 (actors), ADR-0029. Phase 8, #695.
 
 use crate::mvl::backends::rust::emit_exprs::emit_block_stmts;
 use crate::mvl::backends::rust::emit_types::emit_type_expr;
@@ -92,13 +91,25 @@ pub fn actor_name_to_snake(s: &str) -> String {
     out
 }
 
-/// Emit actor runtime preamble — no-op since Phase 9 (ADR-0037).
+/// Emit the thread_local join-handle registry used by `concurrently {}`.
 ///
-/// Actor lifecycle functions (`mvl_register_actor`, `mvl_join_actors`, etc.)
-/// are now provided by `mvl_runtime::actors` and imported via the prelude.
-/// This function is retained as a no-op for call-site compatibility.
-pub fn emit_actor_runtime_preamble(_cg: &mut RustEmitter) {
-    // Intentionally empty — runtime functions come from mvl_runtime::actors.
+/// Called once per program that contains at least one actor.  Registers a
+/// `thread_local!` vec of `JoinHandle`s plus two helpers:
+/// - `_mvl_register_actor(h)` — called by each `_start_*` function
+/// - `_mvl_join_actors()`     — called at the end of every `concurrently {}` block
+pub fn emit_actor_runtime_preamble(cg: &mut RustEmitter) {
+    cg.line("thread_local! {");
+    cg.line(
+        "    static _MVL_ACTOR_HANDLES: std::cell::RefCell<Vec<std::thread::JoinHandle<()>>> =",
+    );
+    cg.line("        std::cell::RefCell::new(Vec::new());");
+    cg.line("}");
+    cg.line("fn _mvl_register_actor(h: std::thread::JoinHandle<()>) {");
+    cg.line("    _MVL_ACTOR_HANDLES.with(|v| v.borrow_mut().push(h));");
+    cg.line("}");
+    cg.line("fn _mvl_join_actors() {");
+    cg.line("    _MVL_ACTOR_HANDLES.with(|v| { for h in v.borrow_mut().drain(..) { let _ = h.join(); } });");
+    cg.line("}");
 }
 
 /// Emit the complete Rust runtime infrastructure for an MVL actor declaration.
@@ -238,7 +249,9 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &ActorDecl) {
     cg.line("#[derive(Clone)]");
     cg.line(&format!("{vis}struct {name} {{"));
     cg.push_indent();
-    cg.line(&format!("_sender: MvlSender<{msg_name}>,"));
+    cg.line(&format!(
+        "_sender: std::sync::mpsc::SyncSender<{msg_name}>,"
+    ));
     cg.pop_indent();
     cg.line("}");
     cg.blank();
@@ -266,7 +279,7 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &ActorDecl) {
             let fields: Vec<String> = m.params.iter().map(|p| p.name.clone()).collect();
             format!("{msg_name}::{variant} {{ {} }}", fields.join(", "))
         };
-        cg.line(&format!("mvl_send(&self._sender, {msg_expr});"));
+        cg.line(&format!("let _ = self._sender.try_send({msg_expr});"));
         cg.pop_indent();
         cg.line("}");
     }
@@ -282,11 +295,11 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &ActorDecl) {
         "fn {start_fn}(mut state: {state_name}) -> {name} {{"
     ));
     cg.push_indent();
-    cg.line("let (tx, rx) = mvl_channel();");
+    cg.line("let (tx, rx) = std::sync::mpsc::sync_channel(256);");
     cg.line(&format!(
         "state._self_ref = Some({name} {{ _sender: tx.clone() }});"
     ));
-    cg.line("let __handle = mvl_spawn(move || {");
+    cg.line("let __handle = std::thread::spawn(move || {");
     cg.push_indent();
     cg.line("let mut actor = state;");
     // Drop self-ref so the channel closes when all external handles are dropped.
@@ -316,7 +329,7 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &ActorDecl) {
     cg.line("}");
     cg.pop_indent();
     cg.line("});");
-    cg.line("mvl_register_actor(__handle);");
+    cg.line("_mvl_register_actor(__handle);");
     cg.line(&format!("{name} {{ _sender: tx }}"));
     cg.pop_indent();
     cg.line("}");

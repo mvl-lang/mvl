@@ -52,7 +52,7 @@ total fn permission_name(decision: Permission) -> String {
 // Allow → "info", Deny → "warn".
 // Used to verify routing in unit tests (log_access itself carries ! Log
 // and cannot be called from pure test functions).
-total fn log_level_for_decision(decision: Permission) -> String {
+fn log_level_for_decision(decision: Permission) -> String {
     match decision {
         Permission::Allow => "info",
         Permission::Deny  => "warn",

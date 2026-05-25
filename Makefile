@@ -270,13 +270,6 @@ validate-keywords: ## Cross-check keyword lists across EBNF, tree-sitter, compil
 
 lint: ## Lint Rust source with clippy
 	cargo clippy -- -D warnings
-	@# Track unreachable!/panic! count in compiler code (#991).
-	@# Baseline: 98 sites (2026-05-25). New additions must be justified.
-	@count=$$(grep -rn 'unreachable!\|panic!' src/mvl/ --include='*.rs' | grep -v '^\s*//' | grep -v '"panic"' | grep -v '"panic!"' | grep -v '\.panic' | wc -l | tr -d ' '); \
-	echo "unreachable!/panic! sites in compiler: $$count (baseline: 98)"; \
-	if [ "$$count" -gt 98 ]; then \
-		echo "WARNING: unreachable!/panic! count increased from 98 to $$count — audit new sites"; \
-	fi
 
 mvl-lint: build ## Run MVL linter on corpus and examples
 	@echo "Running MVL linter on corpus..."

@@ -19,23 +19,6 @@
 //! Missing any one of these causes: wrong type inference (#985), missing emission
 //! (runtime crash), or method not callable.  See issue #992 for the planned fix
 //! (method desugaring in the checker that eliminates the 4-way requirement).
-//!
-//! ## Desugaring plan (#992)
-//!
-//! The checker should rewrite `receiver.method(args)` → `Type_method(receiver, args)`
-//! after type inference succeeds, so backends only see `Expr::FnCall`.  This would:
-//!
-//! - Make `method_types.rs` the **single source of truth** for type inference
-//! - Eliminate ~39 Rust backend match arms and ~23 LLVM backend match arms
-//! - Reduce adding a method from 4 files → 2 (declaration + type table)
-//!
-//! Implementation phases:
-//!   Phase A: Add desugaring infrastructure in `infer.rs` (rewrite MethodCall → FnCall)
-//!   Phase B: Migrate stdlib methods (trim, split, concat, etc.) — these already
-//!            have runtime functions (`_mvl_str_trim`, etc.)
-//!   Phase C: Migrate compiler-intrinsic methods (abs, pow, clamp, etc.) — these need
-//!            the backends to handle `Int_abs` etc. as intrinsic function calls
-//!   Phase D: Remove dead method match arms from both backends
 
 use crate::mvl::checker::types::Ty;
 
@@ -201,13 +184,11 @@ impl TypeChecker {
             "find" | "rfind" => Ty::Option(Box::new(Ty::Int)),
             // Predicates
             "contains" | "starts_with" | "ends_with" | "is_empty" => Ty::Bool,
-            // Character classification (std/strings.mvl, ord-based)
-            "is_digit" | "is_alpha_lower" | "is_alpha_upper" => Ty::Bool,
             // Indexing: char_at(i) -> String, byte_at(i) -> Byte
             "char_at" => Ty::String,
             "byte_at" => Ty::Byte,
             // Numeric
-            "len" | "digit_value" | "ord" => Ty::Int,
+            "len" => Ty::Int,
             // Parsing
             "parse_int" => Ty::Result(Box::new(Ty::Int), Box::new(Ty::String)),
             "parse_float" => Ty::Result(Box::new(Ty::Float), Box::new(Ty::String)),

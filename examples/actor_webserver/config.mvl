@@ -31,7 +31,7 @@ pub type ConfigLoadError = enum {
 
 // ── Layer 1: compiled-in defaults ─────────────────────────────────────────────
 
-total fn defaults() -> ConfigValue {
+fn defaults() -> ConfigValue {
     ConfigValue::Map({
         "host":       ConfigValue::String("127.0.0.1"),
         "port":       ConfigValue::Int(8080),

@@ -58,28 +58,6 @@ All notable changes to the MVL language and compiler will be documented in this 
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.154.0] - 2026-05-24
-
-### Added
-
-- **std/yaml: pure MVL YAML encode/decode** (#1001): Adds `yaml_encode(YamlValue) -> String` and `yaml_decode(input: String) -> Result[YamlValue, YamlError]` as pure-MVL block-style YAML parser/serialiser with no effects. Supports YAML 1.2 core schema subset: `key: value` mappings, `- item` sequences, 2-space indentation, scalars (null/bool/int/float/string), quoted strings (`"double"` with escapes and `'single'`), `# comments`, `---` document separator, and inline `- key: val` mapping-in-sequence. YamlValue enum: Null, Bool(Bool), Int(Int), Float(Float), Str(String), Seq(List[YamlValue]), Map(Map[String, YamlValue]). Intentionally excludes anchors/aliases, tags, flow style, multiline blocks, directives (cover <5% of real-world YAML; add 80% of parser complexity). 53 tests covering encode/decode of all types, nested structures, round-trips, comments, document separator, inline map-in-seq.
-
-## [0.153.0] - 2026-05-24
-
-### Added
-
-- **assurance: IFC Security Boundary Report section** (#895): Extends `mvl assurance` to display a dedicated IFC Security Boundary Report section when IFC constructs (labeled parameters, relabel calls, label declarations) are present. Structured IFC data includes label declarations, relabel transitions with audit tags/line numbers, and labeled parameters. Available in both text and JSON output modes; per-file breakdown in `--verbose` mode. Includes 8 unit tests covering stats collection, merging, and JSON output.
-
-### Changed
-
-- **access_control: minimize Rust bridge** (#1002): Migrated `get_demo_hash` and `generate_token` from Rust bridge to pure MVL functions. `get_demo_hash` now uses `relabel classify(secret_val, "SECRET-DEMO")` for label creation; `generate_token` uses string concatenation. Removed dead `get_demo_role` function. Only `hash_verify` remains as an extern function (required for constant-time comparison). Access_control example now achieves **11/11 requirements proven** with only 1 extern function (5% trust boundary).
-- **examples: unified build pattern** — All 14 example Makefiles now use `guard-mvl` target to auto-build the compiler via `cargo build` instead of hardcoded compiler paths.
-- **examples: IFC demonstration enhancements** — access_control, actor_webserver: added explicit `total` annotations. sqlite_basic: added IFC demonstration module. Assurance targets now use `--verbose` and directory mode for richer output.
-
-### Fixed
-
-- **assurance: extern fn double-counting** — Extern functions are no longer counted as "implicitly total," fixing a bug where verified percentage could exceed 100%.
-
 ## [0.152.0] - 2026-05-24
 
 ### Added

@@ -15,8 +15,8 @@ use crate::mvl::backends::rust::emit_types::{emit_security_preamble, emit_type_e
 use crate::mvl::backends::rust::{collect_stdlib_modules, has_std_imports};
 use crate::mvl::checker::types::Ty;
 use crate::mvl::parser::ast::{
-    ActorDecl, BinaryOp, Decl, ExternDecl, FieldDecl, FnDecl, Param, Program, TypeDecl, TypeExpr,
-    Variant, VariantFields,
+    BinaryOp, Decl, ExternDecl, FieldDecl, FnDecl, Param, Program, TypeDecl, TypeExpr, Variant,
+    VariantFields,
 };
 use crate::mvl::parser::lexer::Span;
 use crate::mvl::passes::coverage::{BranchKind, CoverageMap};
@@ -373,16 +373,8 @@ impl RustEmitter {
                 _ => false,
             })
         });
-        let has_actors = prog
-            .declarations
-            .iter()
-            .any(|d| matches!(d, Decl::Actor(_)))
-            || prelude_progs
-                .iter()
-                .any(|p| p.declarations.iter().any(|d| matches!(d, Decl::Actor(_))));
         let has_runtime = force_runtime
             || prelude_has_extern
-            || has_actors
             || prog
                 .declarations
                 .iter()
@@ -521,42 +513,7 @@ impl RustEmitter {
             })
             .collect();
 
-        // Collect actor declarations from prelude programs (pkg-defined actors).
-        // User-defined actors in the main program are emitted inline, but
-        // pkg-defined actors must be inlined here so the Rust compiler can
-        // resolve the generated types (State, Mailbox, handle, start fn).
-        let user_actor_names: std::collections::HashSet<&str> = prog
-            .declarations
-            .iter()
-            .filter_map(|d| {
-                if let Decl::Actor(ad) = d {
-                    Some(ad.name.as_str())
-                } else {
-                    None
-                }
-            })
-            .collect();
-        let mut seen_prelude_actors: std::collections::HashSet<&str> =
-            std::collections::HashSet::new();
-        let prelude_actors: Vec<&ActorDecl> = prelude_progs
-            .iter()
-            .flat_map(|p| p.declarations.iter())
-            .filter_map(|d| {
-                if let Decl::Actor(ad) = d {
-                    Some(ad)
-                } else {
-                    None
-                }
-            })
-            .filter(|ad| !user_actor_names.contains(ad.name.as_str()))
-            .filter(|ad| seen_prelude_actors.insert(ad.name.as_str()))
-            .collect();
-
-        if !prelude_types.is_empty()
-            || !prelude_fns.is_empty()
-            || !prelude_externs.is_empty()
-            || !prelude_actors.is_empty()
-        {
+        if !prelude_types.is_empty() || !prelude_fns.is_empty() || !prelude_externs.is_empty() {
             self.line(
                 "// ── stdlib prelude (transpiled from MVL source) ──────────────────────────",
             );
@@ -602,16 +559,6 @@ impl RustEmitter {
                 emit_fn_decl(self, fd);
                 self.blank();
             }
-            // Emit pkg-defined actors so the Rust compiler can resolve the
-            // generated types (State, Mailbox, handle, start fn) at spawn sites.
-            if !prelude_actors.is_empty() {
-                emit_actor_runtime_preamble(self);
-                self.blank();
-                for ad in &prelude_actors {
-                    emit_actor_decl(self, ad);
-                    self.blank();
-                }
-            }
             self.coverage = saved_coverage;
             self.mutation = saved_mutation;
             self.mcdc = saved_mcdc;
@@ -655,10 +602,7 @@ impl RustEmitter {
         }
 
         // Emit actor runtime preamble (join-handle registry) once if program has actors.
-        // Skip if prelude actors already triggered it above.
-        if !prelude_actors.is_empty() {
-            // Already emitted in the prelude section.
-        } else if prog
+        if prog
             .declarations
             .iter()
             .any(|d| matches!(d, Decl::Actor(_)))

@@ -39,12 +39,6 @@ const STDLIB_UFCS_METHODS: &[&str] = &[
     "ends_with",
     "replace",
     // Note: `contains` and `is_empty` have hardcoded type-aware handlers above.
-    // Character classification (pure MVL, ord-based — std/strings.mvl)
-    "ord",
-    "is_digit",
-    "digit_value",
-    "is_alpha_lower",
-    "is_alpha_upper",
     // std/lists.mvl (pure MVL, have bodies)
     "take",
     "skip",
@@ -1200,7 +1194,7 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
             emit_block_stmts(cg, &body.stmts);
             cg.pop_indent();
             cg.line("}");
-            cg.line("mvl_join_actors();");
+            cg.line("_mvl_join_actors();");
             cg.pop_indent();
             cg.indent();
             cg.push("}");

@@ -178,37 +178,6 @@ pub fn json_escape(s: String) -> String {
     s5.replace("\0", "\\u0000")
 }
 
-// ── Character classification (ord-based, replaces per-parser helpers) ────────
-
-/// ASCII ordinal of the first character (e.g. `"A".ord() == 65`).
-/// Returns 0 for the empty string.
-pub fn String::ord(self) -> Int {
-    self.byte_at(0).to_int()
-}
-
-/// True when the character is an ASCII decimal digit (`0`–`9`).
-pub fn String::is_digit(self) -> Bool {
-    self.ord() >= 48 && self.ord() <= 57
-}
-
-/// Numeric value of an ASCII digit character (`"7".digit_value() == 7`).
-/// Returns 0 for non-digit characters.
-pub fn String::digit_value(self) -> Int {
-    self.ord() - 48
-}
-
-/// True when the character is a lower-case ASCII letter (`a`–`z`).
-pub fn String::is_alpha_lower(self) -> Bool {
-    self.ord() >= 97 && self.ord() <= 122
-}
-
-/// True when the character is an upper-case ASCII letter (`A`–`Z`).
-pub fn String::is_alpha_upper(self) -> Bool {
-    self.ord() >= 65 && self.ord() <= 90
-}
-
-// ── Right-pad ─────────────────────────────────────────────────────────────────
-
 /// Right-pad a string with `fill` until its length is at least `n` characters.
 ///
 /// Returns `s` unchanged if it is already `n` or more characters long.

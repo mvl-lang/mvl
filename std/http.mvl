@@ -1,0 +1,331 @@
+//! std.http — Phase 1: types, HTTP/1.1 request parsing, response serialization.
+//!
+//! Implements the type and parsing layer for a type-driven HTTP library.
+//! Routing and the actor-based server are Phase 2 (#799) and Phase 3 (#800).
+//!
+//! Import:
+//!   use std.http.{Method, Request, Response, HttpError,
+//!                 parse_request, serialize_response, status_reason,
+//!                 http_error_msg}
+//!
+//! Effects:
+//!   parse_request / serialize_response — pure (no effects).
+//!
+//! IFC:
+//!   Input data from `tcp_read` is Tainted[String].
+//!   `body` in Request is plain String but contains untrusted client data —
+//!   callers must sanitize before use in security-sensitive contexts.
+//!
+//! Spec: #783
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+/// HTTP request method.
+pub type Method = enum {
+    GET,
+    POST,
+    PUT,
+    DELETE,
+    PATCH,
+    HEAD,
+    OPTIONS,
+}
+
+/// A parsed HTTP/1.1 request.
+///
+/// `body` contains raw, untrusted client content — treat as tainted and
+/// sanitize before use in security-sensitive contexts (SQL, file paths, etc.).
+pub type Request = struct {
+    method: Method,
+    path: String,
+    headers: Map[String, String],
+    body: String,
+}
+
+/// An HTTP response ready for serialization.
+///
+/// `status` must be a valid HTTP status code (100–599).
+pub type Response = struct {
+    status: Int,
+    headers: Map[String, String],
+    body: String,
+}
+
+/// Errors that can occur during HTTP request parsing or handling.
+pub type HttpError = enum {
+    BadRequest { msg: String },
+    NotFound,
+    MethodNotAllowed,
+    Timeout,
+    ParseError { msg: String },
+    InternalError { msg: String },
+}
+
+// ── Internal types ────────────────────────────────────────────────────────────
+
+// Internal result of parsing the HTTP request line.
+type ParsedRequestLine = enum {
+    RequestLine { method: Method, path: String },
+    RequestLineErr { msg: String },
+}
+
+// Internal option for header parsing.
+type ParsedHeader = enum {
+    Header { name: String, value: String },
+    NoHeader,
+}
+
+// ── Internal helpers ──────────────────────────────────────────────────────────
+
+fn empty_str_map() -> Map[String, String] {
+    let m: ref Map[String, String] = {"__http_init__": ""};
+    m.remove("__http_init__");
+    m
+}
+
+fn parse_method_str(s: String) -> Result[Method, HttpError] {
+    if      s == "GET"     { Ok(Method::GET)     }
+    else if s == "POST"    { Ok(Method::POST)    }
+    else if s == "PUT"     { Ok(Method::PUT)     }
+    else if s == "DELETE"  { Ok(Method::DELETE)  }
+    else if s == "PATCH"   { Ok(Method::PATCH)   }
+    else if s == "HEAD"    { Ok(Method::HEAD)    }
+    else if s == "OPTIONS" { Ok(Method::OPTIONS) }
+    else {
+        Err(HttpError::BadRequest { msg: str_concat("unknown method: ", s) })
+    }
+}
+
+// Parse "METHOD /path HTTP/1.1" into ParsedRequestLine.
+// Uses nested matches to avoid early returns (which are unsupported inside
+// let-binding match arms).
+fn parse_request_line(line: String) -> ParsedRequestLine {
+    let parts: List[String] = str_split(line, " ");
+    if list_len(parts) < 2 {
+        ParsedRequestLine::RequestLineErr {
+            msg: str_concat("malformed request line: ", line)
+        }
+    } else {
+        match list_get(parts, 0) {
+            None => ParsedRequestLine::RequestLineErr { msg: "empty request line" },
+            Some(ms) => match list_get(parts, 1) {
+                None => ParsedRequestLine::RequestLineErr { msg: "missing path" },
+                Some(ps) => match parse_method_str(ms) {
+                    Err(HttpError::BadRequest { msg }) =>
+                        ParsedRequestLine::RequestLineErr { msg: msg },
+                    Err(_) =>
+                        ParsedRequestLine::RequestLineErr {
+                            msg: "method parse error"
+                        },
+                    Ok(m) =>
+                        ParsedRequestLine::RequestLine { method: m, path: ps },
+                }
+            }
+        }
+    }
+}
+
+// Parse "Name: Value" into ParsedHeader. Name is lowercased for
+// case-insensitive lookup.
+fn parse_header_line(line: String) -> ParsedHeader {
+    match str_find(line, ": ") {
+        None    => ParsedHeader::NoHeader,
+        Some(i) => {
+            let hname: String  = str_to_lower(str_substring(line, 0, i));
+            let hvalue: String = str_trim(str_substring(line, i + 2, str_len(line)));
+            ParsedHeader::Header { name: hname, value: hvalue }
+        }
+    }
+}
+
+// Join lines from index `start` with "\r\n".
+partial fn join_lines(lines: List[String], start: Int) -> String {
+    let n: Int = list_len(lines);
+    let out: ref String = "";
+    let i: ref Int = start;
+    while i < n {
+        match list_get(lines, i) {
+            None    => {},
+            Some(l) => {
+                if i > start {
+                    out = str_concat(out, "\r\n")
+                } else {}
+                out = str_concat(out, l)
+            }
+        }
+        i = i + 1
+    }
+    out
+}
+
+// ── Public API ────────────────────────────────────────────────────────────────
+
+/// Parse a raw HTTP/1.1 request (as received from `tcp_read`) into a Request.
+///
+/// Returns ParseError for malformed HTTP; BadRequest for unknown methods.
+/// The body field contains raw client content — sanitize before use.
+pub partial fn parse_request(data: String) -> Result[Request, HttpError] {
+    // Split on LF; strip trailing CR for CRLF compatibility.
+    let raw_lines: List[String] = str_split(data, "\n");
+    let n: Int = list_len(raw_lines);
+
+    if n == 0 {
+        return Err(HttpError::ParseError { msg: "empty request" })
+    } else {}
+
+    // Strip trailing \r from each line.
+    let lines: ref List[String] = [];
+    let li: ref Int = 0;
+    while li < n {
+        match list_get(raw_lines, li) {
+            None    => {},
+            Some(l) => {
+                let stripped: String = if str_ends_with(l, "\r") {
+                    str_substring(l, 0, str_len(l) - 1)
+                } else {
+                    l
+                };
+                lines = list_push(lines, stripped)
+            }
+        }
+        li = li + 1
+    }
+
+    let lines_count: Int = list_len(lines);
+    if lines_count == 0 {
+        return Err(HttpError::ParseError { msg: "empty request" })
+    } else {}
+
+    // Get first line — safe because lines_count > 0.
+    let first_line: String = match list_get(lines, 0) {
+        Some(l) => l,
+        None    => "",
+    };
+
+    // Parse request line. Use standalone match (not inside a let binding)
+    // to perform early return — early return inside let-binding arms is
+    // unsupported in the MVL transpiler.
+    let pl: ParsedRequestLine = parse_request_line(first_line);
+    match pl {
+        ParsedRequestLine::RequestLineErr { msg } =>
+            { return Err(HttpError::ParseError { msg: msg }) },
+        ParsedRequestLine::RequestLine { method: _, path: _ } => {},
+    }
+
+    // Extract method and path from the successfully-parsed line.
+    // The RequestLineErr arms are unreachable (checked above).
+    let parsed_method: Method = match pl {
+        ParsedRequestLine::RequestLine { method, path } => method,
+        ParsedRequestLine::RequestLineErr { msg }       => Method::GET,
+    };
+    let parsed_path: String = match pl {
+        ParsedRequestLine::RequestLine { method, path } => path,
+        ParsedRequestLine::RequestLineErr { msg }       => "",
+    };
+
+    // Parse headers until blank line.
+    let headers: ref Map[String, String] = empty_str_map();
+    let body_start: ref Int = lines_count;
+    let hi: ref Int = 1;
+    let header_done: ref Bool = false;
+    while hi < lines_count && header_done == false {
+        match list_get(lines, hi) {
+            None    => { header_done = true },
+            Some(l) => {
+                if str_len(l) == 0 {
+                    // Blank line — headers done, body follows.
+                    body_start = hi + 1;
+                    header_done = true
+                } else {
+                    match parse_header_line(l) {
+                        ParsedHeader::NoHeader              => {},
+                        ParsedHeader::Header { name, value } =>
+                            { headers.insert(name, value) }
+                    }
+                }
+            }
+        }
+        hi = hi + 1
+    }
+
+    let body: String = join_lines(lines, body_start);
+
+    Ok(Request {
+        method:  parsed_method,
+        path:    parsed_path,
+        headers: headers,
+        body:    body,
+    })
+}
+
+/// Return the canonical reason phrase for a status code.
+///
+/// Returns "Unknown" for codes not in the common set.
+pub fn status_reason(code: Int) -> String {
+    if      code == 100 { "Continue" }
+    else if code == 200 { "OK" }
+    else if code == 201 { "Created" }
+    else if code == 204 { "No Content" }
+    else if code == 301 { "Moved Permanently" }
+    else if code == 302 { "Found" }
+    else if code == 304 { "Not Modified" }
+    else if code == 400 { "Bad Request" }
+    else if code == 401 { "Unauthorized" }
+    else if code == 403 { "Forbidden" }
+    else if code == 404 { "Not Found" }
+    else if code == 405 { "Method Not Allowed" }
+    else if code == 408 { "Request Timeout" }
+    else if code == 409 { "Conflict" }
+    else if code == 422 { "Unprocessable Entity" }
+    else if code == 500 { "Internal Server Error" }
+    else if code == 502 { "Bad Gateway" }
+    else if code == 503 { "Service Unavailable" }
+    else                { "Unknown" }
+}
+
+/// Serialize a Response to a wire-format HTTP/1.1 response string.
+///
+/// Produces: `HTTP/1.1 {status} {reason}\r\n{headers}\r\n{body}`
+pub partial fn serialize_response(resp: Response) -> String {
+    let status_line: String = str_concat(
+        "HTTP/1.1 ",
+        str_concat(
+            resp.status.to_string(),
+            str_concat(" ", str_concat(status_reason(resp.status), "\r\n"))
+        )
+    );
+
+    // Serialize headers — avoid `val` (reserved keyword) as variable name.
+    let hkeys: List[String] = resp.headers.keys();
+    let hlen: Int = list_len(hkeys);
+    let header_str: ref String = "";
+    let ki: ref Int = 0;
+    while ki < hlen {
+        match list_get(hkeys, ki) {
+            None    => {},
+            Some(k) => {
+                let hval: String = match resp.headers.get(k) {
+                    Some(s) => s,
+                    None    => "",
+                };
+                header_str = str_concat(header_str,
+                    str_concat(k, str_concat(": ", str_concat(hval, "\r\n"))))
+            }
+        }
+        ki = ki + 1
+    }
+
+    str_concat(status_line, str_concat(header_str, str_concat("\r\n", resp.body)))
+}
+
+/// Format an HttpError as a human-readable string (useful for logging).
+pub fn http_error_msg(e: HttpError) -> String {
+    match e {
+        HttpError::BadRequest { msg }    => str_concat("400 Bad Request: ", msg),
+        HttpError::NotFound              => "404 Not Found",
+        HttpError::MethodNotAllowed      => "405 Method Not Allowed",
+        HttpError::Timeout               => "408 Request Timeout",
+        HttpError::ParseError { msg }    => str_concat("parse error: ", msg),
+        HttpError::InternalError { msg } => str_concat("500 Internal Server Error: ", msg),
+    }
+}

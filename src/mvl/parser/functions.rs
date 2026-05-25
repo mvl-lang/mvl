@@ -117,7 +117,6 @@ fn ref_expr_to_expr(re: &RefExpr) -> Expr {
             // that expr_to_ref_expr_ext won't match, triggering RuntimeCheck.
             let span = match re {
                 RefExpr::Forall { span, .. } | RefExpr::Exists { span, .. } => *span,
-                // Outer match arm constrains re to Forall|Exists.
                 _ => unreachable!(),
             };
             Expr::Ident("__quantifier_placeholder".to_string(), span)
@@ -846,7 +845,6 @@ impl Parser {
                 let tok = self.advance();
                 match tok.kind {
                     TokenKind::Str(s) => s,
-                    // peek_kind() returned Str, advance() yields the same token.
                     _ => unreachable!(),
                 }
             }

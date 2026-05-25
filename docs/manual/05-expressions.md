@@ -36,7 +36,6 @@ a + b                               // arithmetic
 a == b                              // comparison
 a && b                              // logical
 !a                                  // negation
-a & 0xFF                            // bitwise
 ```
 
 No operator overloading. `+` means numeric addition, always. Use named methods for domain operations.

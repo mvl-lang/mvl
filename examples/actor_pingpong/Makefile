@@ -14,8 +14,14 @@ DIR  := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 help: ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-12s\033[0m %s\n", $$1, $$2}'
 
-guard-mvl: ## Ensure MVL binary is built and up-to-date
-	@cargo build --manifest-path $(DIR)../../Cargo.toml --quiet
+guard-mvl: ## Validate MVL binary is present and working
+	@$(MVL) --version > /dev/null 2>&1 || { \
+		echo ""; \
+		echo "  ERROR: MVL compiler not found at: $(MVL)"; \
+		echo "  Run 'make build' from the repo root first."; \
+		echo ""; \
+		exit 1; \
+	}
 
 lint: guard-mvl ## Lint all source files
 	$(MVL) lint $(DIR)main.mvl
@@ -45,8 +51,8 @@ test-solver: guard-mvl ## Show per-file solver statistics
 test: guard-mvl ## (WIP) actor body features pending — check skipped until #580 complete
 	@echo "actor_pingpong: skipped — actor self/state/private-fn features not yet implemented (#580)"
 
-assurance: guard-mvl ## Assurance report (verbose)
-	$(MVL) assurance $(DIR) --verbose
+assurance: guard-mvl ## Assurance report for main.mvl
+	$(MVL) assurance $(DIR)main.mvl
 
 smoke: guard-mvl ## Smoke-test: build binary (proves compilation without a terminal)
 	$(MVL) build $(DIR)main.mvl
