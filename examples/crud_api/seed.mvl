@@ -14,7 +14,7 @@ use pkg.sqlite.{SqliteDb}
 
 // ── Decode one CSV row ──────────────────────────────────────────────────────
 
-partial fn decode_row(row: List[String]) -> Result[CreateUserRequest, String] {
+total fn decode_row(row: List[String]) -> Result[CreateUserRequest, String] {
     if row.len() != 2 {
         Err("expected 2 columns (name,email), got ".concat(row.len().to_string()))
     } else {
@@ -25,6 +25,18 @@ partial fn decode_row(row: List[String]) -> Result[CreateUserRequest, String] {
                 Some(email) => Ok(CreateUserRequest { name: name, email: email }),
             },
         }
+    }
+}
+
+// ── Row insertion ───────────────────────────────────────────────────────────
+
+total fn insert_row(val db: SqliteDb, logger: val Logger, i: Int, row: List[String]) -> Bool ! DB + Log {
+    match decode_row(row) {
+        Err(msg) => { logger.warn("skip row", {"row": (i + 1).to_string(), "reason": msg}); false },
+        Ok(req)  => match db_create_user(db, req) {
+            Err(msg) => { logger.warn("skip row", {"row": (i + 1).to_string(), "reason": msg}); false },
+            Ok(_)    => true,
+        },
     }
 }
 
@@ -51,14 +63,8 @@ pub partial fn db_seed_from_csv(val db: SqliteDb, logger: val Logger, path: Stri
                     let n: Int = csv.rows.len();
                     while i < n {
                         match csv.rows.get(i) {
-                            None => {},
-                            Some(row) => match decode_row(row) {
-                                Err(msg) => { logger.warn("skip row", {"row": (i + 1).to_string(), "reason": msg}) },
-                                Ok(req)  => match db_create_user(db, req) {
-                                    Err(msg) => { logger.warn("skip row", {"row": (i + 1).to_string(), "reason": msg}) },
-                                    Ok(_)    => { count = count + 1 },
-                                },
-                            },
+                            None      => {},
+                            Some(row) => if insert_row(db, logger, i, row) { count = count + 1 } else {},
                         }
                         i = i + 1
                     }

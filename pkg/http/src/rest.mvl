@@ -102,6 +102,17 @@ pub partial fn body_json(req: val Request) -> Result[Value, HttpError] {
 
 // ── JSON object helpers (Value lives here — see #96 for why not in examples/) ─
 
+/// Decode the request body as a JSON object map, or 400.
+///
+/// Convenience combinator: `body_json` + `json_get_object` in one call.
+/// Callers use `json_field_string` / `json_field_int` on the returned map.
+pub partial fn body_obj(req: val Request) -> Result[Map[String, Value], HttpError] {
+    match body_json(req) {
+        Err(e)   => Err(e),
+        Ok(body) => json_get_object(body),
+    }
+}
+
 /// Unwrap a JSON Value as an Object map, or 400.
 pub fn json_get_object(v: Value) -> Result[Map[String, Value], HttpError] {
     match v {

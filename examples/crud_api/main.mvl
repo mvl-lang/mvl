@@ -40,6 +40,13 @@ use std.net.{TcpListener, TcpStream, NetError,
              tcp_close_listener, tcp_close_stream, net_error_msg}
 use std.log.{Logger, default_logger, log_level_name, log_format_name}
 
+// ── Composite effect ──────────────────────────────────────────────────────────
+//
+// Bundles the six effects used by `main` into a single named alias so the
+// function signature stays below the complexity-effect-width limit (max 3).
+
+effect AppIO > DB + Env + FileRead + FileWrite + Log + Net
+
 // ── Pre-listen admission ────────────────────────────────────────────────────
 //
 // Req 10 (Refinements) — `where` predicates carry a static guarantee that
@@ -81,6 +88,29 @@ partial fn handle_request(db: val SqliteDb, logger: val Logger, req: Request, ma
 // iteration without consuming it.  Fatal accept errors close the listener
 // and return early; transient errors (reset, timeout) just continue.
 
+partial fn process_stream(db: val SqliteDb, logger: val Logger, router: val Router, stream: TcpStream) -> Unit ! DB + Log + Net {
+    let resp: Response = match tcp_read_request(stream) {
+        Err(e)  => {
+            logger.warn("read error", {"error": net_error_msg(e)});
+            json_error(http_internal_error("read error"))
+        },
+        Ok(raw) => match parse_request(raw) {
+            Err(e)      => error_response(e),
+            Ok(req)     => match dispatch(router, req) {
+                Err(e)      => error_response(e),
+                Ok(matched) => handle_request(db, logger, req, matched),
+            },
+        },
+    };
+    match tcp_write(stream, serialize_response(resp)) {
+        Ok(_)  => tcp_close_stream(stream),
+        Err(e) => {
+            logger.error("write error", {"error": net_error_msg(e)});
+            tcp_close_stream(stream)
+        },
+    }
+}
+
 partial fn serve(db: val SqliteDb, listener: TcpListener, logger: val Logger, router: val Router) -> Unit ! DB + Log + Net {
     while true {
         match tcp_accept(listener) {
@@ -95,35 +125,14 @@ partial fn serve(db: val SqliteDb, listener: TcpListener, logger: val Logger, ro
                 tcp_close_listener(listener);
                 return
             },
-            Ok(stream) => {
-                let resp: Response = match tcp_read_request(stream) {
-                    Err(e)  => {
-                        logger.warn("read error", {"error": net_error_msg(e)});
-                        json_error(http_internal_error("read error"))
-                    },
-                    Ok(raw) => match parse_request(raw) {
-                        Err(e)      => error_response(e),
-                        Ok(req)     => match dispatch(router, req) {
-                            Err(e)      => error_response(e),
-                            Ok(matched) => handle_request(db, logger, req, matched),
-                        },
-                    },
-                };
-                match tcp_write(stream, serialize_response(resp)) {
-                    Ok(_)  => tcp_close_stream(stream),
-                    Err(e) => {
-                        logger.error("write error", {"error": net_error_msg(e)});
-                        tcp_close_stream(stream)
-                    },
-                }
-            },
+            Ok(stream) => process_stream(db, logger, router, stream),
         }
     }
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
-partial fn main() -> Unit ! DB + Env + FileRead + FileWrite + Log + Net {
+partial fn main() -> Unit ! AppIO {
     // Req 10: prove the literal default port lies in the valid TCP range.
     // Discharged statically (Layer 1, interval) — no runtime branch emitted.
     let _default_port_ok: Int = validate_port_range(8080);

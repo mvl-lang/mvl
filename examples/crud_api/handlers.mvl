@@ -12,7 +12,7 @@ use models::{User, CreateUserRequest, UpdateUserRequest}
 use db::{db_list_users, db_get_user, db_create_user, db_update_user, db_delete_user}
 use pkg.http.{Request, Response, MatchedRoute,
               json_ok_str, json_created_str, json_no_content, json_error,
-              param_int, body_json, json_get_object, json_field_string,
+              param_int, body_obj, json_field_string,
               http_not_found, http_bad_request, http_internal_error,
               json_str}
 use pkg.sqlite.{SqliteDb}
@@ -42,7 +42,8 @@ fn users_to_json(users: List[User]) -> String {
 
 // ── GET /users ────────────────────────────────────────────────────────────────
 
-pub partial fn list_users_handler(val db: SqliteDb, val req: Request, val matched: MatchedRoute) -> Response ! DB {
+/// Return all users as a JSON array.
+pub total fn list_users_handler(val db: SqliteDb, val req: Request, val matched: MatchedRoute) -> Response ! DB {
     match db_list_users(db) {
         Err(_)    => json_error(http_internal_error("internal server error")),
         Ok(users) => json_ok_str(users_to_json(users)),
@@ -51,7 +52,8 @@ pub partial fn list_users_handler(val db: SqliteDb, val req: Request, val matche
 
 // ── GET /users/{id} ───────────────────────────────────────────────────────────
 
-pub partial fn get_user_handler(val db: SqliteDb, val req: Request, val matched: MatchedRoute) -> Response ! DB {
+/// Return a single user by id, or 404 if not found.
+pub total fn get_user_handler(val db: SqliteDb, val req: Request, val matched: MatchedRoute) -> Response ! DB {
     match param_int(matched, "id") {
         Err(e) => json_error(e),
         Ok(id) => match db_get_user(db, id) {
@@ -64,33 +66,35 @@ pub partial fn get_user_handler(val db: SqliteDb, val req: Request, val matched:
 
 // ── POST /users ───────────────────────────────────────────────────────────────
 
-pub partial fn create_user_handler(val db: SqliteDb, val req: Request, val matched: MatchedRoute) -> Response ! DB {
-    match body_json(req) {
-        Err(e)   => json_error(e),
-        Ok(body) => match json_get_object(body) {
-            Err(e)   => json_error(e),
-            Ok(obj)  => match json_field_string(obj, "name") {
-                Err(e)     => json_error(e),
-                Ok(name)   => match json_field_string(obj, "email") {
-                    Err(e)     => json_error(e),
-                    Ok(email)  => {
-                        let create_req: CreateUserRequest = CreateUserRequest { name: name, email: email };
-                        match db_create_user(db, create_req) {
-                            Err(msg) => {
-                                if msg == "email already exists" {
-                                    json_error(http_bad_request(msg))
-                                } else {
-                                    json_error(http_internal_error("internal server error"))
-                                }
-                            },
-                            Ok(new_id) => match db_get_user(db, new_id) {
-                                Err(_)         => json_error(http_internal_error("internal server error")),
-                                Ok(None)       => json_error(http_internal_error("internal server error")),
-                                Ok(Some(user)) => json_created_str(user_to_json(user)),
-                            },
-                        }
-                    },
-                },
+total fn parse_create_body(val req: Request) -> Result[CreateUserRequest, Response] {
+    match body_obj(req) {
+        Err(e)  => Err(json_error(e)),
+        Ok(obj) => match json_field_string(obj, "name") {
+            Err(e)   => Err(json_error(e)),
+            Ok(name) => match json_field_string(obj, "email") {
+                Err(e)    => Err(json_error(e)),
+                Ok(email) => Ok(CreateUserRequest { name: name, email: email }),
+            },
+        },
+    }
+}
+
+/// Create a new user from a JSON body `{name, email}`; returns 201 with the created user.
+pub total fn create_user_handler(val db: SqliteDb, val req: Request, val matched: MatchedRoute) -> Response ! DB {
+    match parse_create_body(req) {
+        Err(resp)      => resp,
+        Ok(create_req) => match db_create_user(db, create_req) {
+            Err(msg)   => {
+                if msg == "email already exists" {
+                    json_error(http_bad_request(msg))
+                } else {
+                    json_error(http_internal_error("internal server error"))
+                }
+            },
+            Ok(new_id) => match db_get_user(db, new_id) {
+                Err(_)         => json_error(http_internal_error("internal server error")),
+                Ok(None)       => json_error(http_internal_error("internal server error")),
+                Ok(Some(user)) => json_created_str(user_to_json(user)),
             },
         },
     }
@@ -98,39 +102,46 @@ pub partial fn create_user_handler(val db: SqliteDb, val req: Request, val match
 
 // ── PUT /users/{id} ───────────────────────────────────────────────────────────
 
-pub partial fn update_user_handler(val db: SqliteDb, val req: Request, val matched: MatchedRoute) -> Response ! DB {
-    match param_int(matched, "id") {
-        Err(e)  => json_error(e),
-        Ok(id)  => match body_json(req) {
-            Err(e)   => json_error(e),
-            Ok(body) => match json_get_object(body) {
-                Err(e)  => json_error(e),
-                Ok(obj) => match json_field_string(obj, "name") {
-                    Err(e)   => json_error(e),
-                    Ok(name) => match json_field_string(obj, "email") {
-                        Err(e)    => json_error(e),
-                        Ok(email) => {
-                            let upd: UpdateUserRequest = UpdateUserRequest { name: name, email: email };
-                            match db_update_user(db, id, upd) {
-                                Err(_)    => json_error(http_internal_error("internal server error")),
-                                Ok(false) => json_error(http_not_found("user not found")),
-                                Ok(true)  => match db_get_user(db, id) {
-                                    Err(_)         => json_error(http_internal_error("internal server error")),
-                                    Ok(None)       => json_error(http_not_found("user not found")),
-                                    Ok(Some(user)) => json_ok_str(user_to_json(user)),
-                                },
-                            }
-                        },
-                    },
-                },
+total fn parse_update_body(val req: Request) -> Result[UpdateUserRequest, Response] {
+    match body_obj(req) {
+        Err(e)  => Err(json_error(e)),
+        Ok(obj) => match json_field_string(obj, "name") {
+            Err(e)   => Err(json_error(e)),
+            Ok(name) => match json_field_string(obj, "email") {
+                Err(e)    => Err(json_error(e)),
+                Ok(email) => Ok(UpdateUserRequest { name: name, email: email }),
             },
+        },
+    }
+}
+
+total fn apply_update(val db: SqliteDb, id: Int, upd: UpdateUserRequest) -> Response ! DB {
+    match db_update_user(db, id, upd) {
+        Err(_)    => json_error(http_internal_error("internal server error")),
+        Ok(false) => json_error(http_not_found("user not found")),
+        Ok(true)  => match db_get_user(db, id) {
+            Err(_)         => json_error(http_internal_error("internal server error")),
+            Ok(None)       => json_error(http_not_found("user not found")),
+            Ok(Some(user)) => json_ok_str(user_to_json(user)),
+        },
+    }
+}
+
+/// Update name and email for a user by id; returns updated user or 404.
+pub total fn update_user_handler(val db: SqliteDb, val req: Request, val matched: MatchedRoute) -> Response ! DB {
+    match param_int(matched, "id") {
+        Err(e) => json_error(e),
+        Ok(id) => match parse_update_body(req) {
+            Err(resp) => resp,
+            Ok(upd)   => apply_update(db, id, upd),
         },
     }
 }
 
 // ── DELETE /users/{id} ───────────────────────────────────────────────────────
 
-pub partial fn delete_user_handler(val db: SqliteDb, val req: Request, val matched: MatchedRoute) -> Response ! DB {
+/// Delete a user by id; returns 204 on success or 404 if not found.
+pub total fn delete_user_handler(val db: SqliteDb, val req: Request, val matched: MatchedRoute) -> Response ! DB {
     match param_int(matched, "id") {
         Err(e) => json_error(e),
         Ok(id) => match db_delete_user(db, id) {
