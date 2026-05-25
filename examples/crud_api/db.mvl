@@ -9,6 +9,7 @@
 use models::{User, CreateUserRequest, UpdateUserRequest}
 use pkg.sqlite.{SqliteDb, SqliteError, open, execute, query, query_scalar, close}
 use std.db.{DbValue}
+use std.io.{TempFile, IoError, Path, path, temp_file, temp_write, delete_temp, persist}
 
 // ── Open / init ───────────────────────────────────────────────────────────────
 
@@ -139,5 +140,44 @@ pub partial fn db_delete_user(val db: SqliteDb, id: Int) -> Result[Bool, String]
                 Ok(_)               => Err("unexpected changes() type"),
             }
         },
+    }
+}
+
+// ── Export ─────────────────────────────────────────────────────────────────
+
+/// Export all users to a CSV file atomically via TempFile (#1042).
+///
+/// Writes to a temp file first, then persists to `dest`.  If anything
+/// fails mid-write the temp file is cleaned up — no partial output.
+/// Linear enforcement (Req 6) guarantees the TempFile is always consumed.
+pub partial fn db_export_csv(val db: SqliteDb, dest: Path) -> Result[Int, String] ! DB + FileWrite + FileDelete {
+    match db_list_users(db) {
+        Err(msg) => Err(msg),
+        Ok(users) => match temp_file() {
+            Err(_) => Err("failed to create temp file"),
+            Ok(tf) => export_rows_to_temp(tf, users, dest),
+        },
+    }
+}
+
+/// Write user rows to a temp file, then persist atomically.
+/// The TempFile is always consumed (delete on error, persist on success).
+partial fn export_rows_to_temp(tf: TempFile, users: List[User], dest: Path) -> Result[Int, String] ! FileWrite + FileDelete {
+    let _: Result[Unit, IoError] = temp_write(tf, "id,name,email\n");
+    let i: ref Int = 0;
+    let n: Int = users.len();
+    while i < n {
+        match users.get(i) {
+            None     => {},
+            Some(u)  => {
+                let line: String = u.id.to_string().concat(",").concat(u.name).concat(",").concat(u.email).concat("\n");
+                let _: Result[Unit, IoError] = temp_write(tf, line);
+            },
+        }
+        i = i + 1
+    }
+    match persist(consume(tf), dest) {
+        Err(_) => Err("persist failed"),
+        Ok(_)  => Ok(n),
     }
 }

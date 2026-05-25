@@ -390,6 +390,150 @@ pub fn read_link(p: Path) -> Result<Tainted<String>, IoError> {
         .map_err(|e| sanitize_io_error(&e))
 }
 
+// ── Temporary files and directories (#1042) ──────────────────────────────
+
+/// A temporary file — mirrors `TempFile` in `std/io.mvl`.
+///
+/// Linear type: must be consumed via [`delete_temp`] or [`persist`].
+pub struct TempFile {
+    pub fd: Fd,
+    pub path: Path,
+}
+
+/// A temporary directory — mirrors `TempDir` in `std/io.mvl`.
+///
+/// Linear type: must be consumed via [`delete_temp_dir`].
+pub struct TempDir {
+    pub path: Path,
+}
+
+/// Global counter for generating unique temp file names.
+static TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Generate a unique temp path with the given prefix directory.
+fn make_temp_path(dir: &str, prefix: &str) -> String {
+    let pid = std::process::id();
+    let seq = TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("{dir}/{prefix}_{pid}_{seq}")
+}
+
+/// Create a temporary file in the system temp directory.
+pub fn temp_file() -> Result<TempFile, IoError> {
+    let dir = std::env::temp_dir().to_string_lossy().into_owned();
+    temp_file_in(Path { inner: dir })
+}
+
+/// Create a temporary file in a specific directory.
+pub fn temp_file_in(dir: Path) -> Result<TempFile, IoError> {
+    let tmp_path = make_temp_path(&dir.inner, "mvl_tmp");
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(&tmp_path)
+        .map(|f| {
+            use std::os::unix::io::IntoRawFd as _;
+            TempFile {
+                fd: Fd {
+                    inner: f.into_raw_fd() as i64,
+                },
+                path: Path { inner: tmp_path },
+            }
+        })
+        .map_err(|e| sanitize_io_error(&e))
+}
+
+/// Create a temporary directory in the system temp directory.
+pub fn temp_dir() -> Result<TempDir, IoError> {
+    let parent = std::env::temp_dir().to_string_lossy().into_owned();
+    let tmp_path = make_temp_path(&parent, "mvl_tmpd");
+    std::fs::create_dir(&tmp_path)
+        .map(|()| TempDir {
+            path: Path { inner: tmp_path },
+        })
+        .map_err(|e| sanitize_io_error(&e))
+}
+
+/// Write data to an open temporary file.
+#[allow(unsafe_code)]
+pub fn temp_write(tf: &TempFile, data: String) -> Result<(), IoError> {
+    use std::io::Write as _;
+    if tf.fd.inner < 0 || tf.fd.inner > i32::MAX as i64 {
+        return Err(IoError::Other("fd out of range".into()));
+    }
+    let mut f =
+        unsafe { <std::fs::File as std::os::unix::io::FromRawFd>::from_raw_fd(tf.fd.inner as i32) };
+    let result = f
+        .write_all(data.as_bytes())
+        .map_err(|e| sanitize_io_error(&e));
+    std::mem::forget(f);
+    result
+}
+
+/// Read the full contents of a temporary file.
+#[allow(unsafe_code)]
+pub fn temp_read(tf: &TempFile) -> Result<Tainted<String>, IoError> {
+    use std::io::{Read as _, Seek as _, SeekFrom};
+    if tf.fd.inner < 0 || tf.fd.inner > i32::MAX as i64 {
+        return Err(IoError::Other("fd out of range".into()));
+    }
+    let mut f =
+        unsafe { <std::fs::File as std::os::unix::io::FromRawFd>::from_raw_fd(tf.fd.inner as i32) };
+    let result = f
+        .seek(SeekFrom::Start(0))
+        .map_err(|e| sanitize_io_error(&e));
+    if let Err(e) = result {
+        std::mem::forget(f);
+        return Err(e);
+    }
+    let mut buf = String::new();
+    let result = f
+        .read_to_string(&mut buf)
+        .map(|_| Tainted(buf))
+        .map_err(|e| sanitize_io_error(&e));
+    std::mem::forget(f);
+    result
+}
+
+/// Delete a temporary file — closes fd and removes from disk.
+#[allow(unsafe_code)]
+pub fn delete_temp(tf: TempFile) -> Result<(), IoError> {
+    // Close the fd first
+    if tf.fd.inner > 2 && tf.fd.inner <= i32::MAX as i64 {
+        let _ = unsafe {
+            <std::fs::File as std::os::unix::io::FromRawFd>::from_raw_fd(tf.fd.inner as i32)
+        };
+    }
+    std::fs::remove_file(&tf.path.inner).map_err(|e| sanitize_io_error(&e))
+}
+
+/// Delete a temporary directory (recursively).
+pub fn delete_temp_dir(td: TempDir) -> Result<(), IoError> {
+    std::fs::remove_dir_all(&td.path.inner).map_err(|e| sanitize_io_error(&e))
+}
+
+/// Move a temporary file to a permanent location.
+///
+/// Tries rename first (atomic on same filesystem), falls back to copy+delete.
+#[allow(unsafe_code)]
+pub fn persist(tf: TempFile, dest: Path) -> Result<(), IoError> {
+    // Close the fd first
+    if tf.fd.inner > 2 && tf.fd.inner <= i32::MAX as i64 {
+        let _ = unsafe {
+            <std::fs::File as std::os::unix::io::FromRawFd>::from_raw_fd(tf.fd.inner as i32)
+        };
+    }
+    // Try atomic rename
+    match std::fs::rename(&tf.path.inner, &dest.inner) {
+        Ok(()) => Ok(()),
+        Err(_) => {
+            // Cross-filesystem: copy then delete
+            std::fs::copy(&tf.path.inner, &dest.inner).map_err(|e| sanitize_io_error(&e))?;
+            std::fs::remove_file(&tf.path.inner).map_err(|e| sanitize_io_error(&e))
+        }
+    }
+}
+
 // ── Error type ────────────────────────────────────────────────────────────
 
 /// Mirrors the `IoError` enum declared in `std/io.mvl`.
@@ -739,5 +883,57 @@ mod tests {
         assert!(link_target.0.ends_with("mvl_test_symlink_target.txt"));
         std::fs::remove_file(&link_str).ok();
         std::fs::remove_file(&target_str).ok();
+    }
+
+    // ── TempFile / TempDir (#1042) ────────────────────────────────────────
+
+    #[test]
+    fn temp_file_creates_and_deletes() {
+        let tf = temp_file().unwrap();
+        assert!(std::path::Path::new(tf.path.as_str()).exists());
+        let path_copy = tf.path.inner.clone();
+        delete_temp(tf).unwrap();
+        assert!(!std::path::Path::new(&path_copy).exists());
+    }
+
+    #[test]
+    fn temp_file_write_read_roundtrip() {
+        let tf = temp_file().unwrap();
+        temp_write(&tf, "hello temp".to_string()).unwrap();
+        let data = temp_read(&tf).unwrap();
+        assert_eq!(data.0, "hello temp");
+        delete_temp(tf).unwrap();
+    }
+
+    #[test]
+    fn temp_file_in_creates_in_specified_dir() {
+        let dir_str = tmp("mvl_test_temp_in_dir");
+        std::fs::create_dir_all(&dir_str).unwrap();
+        let tf = temp_file_in(path(dir_str.clone())).unwrap();
+        assert!(tf.path.as_str().starts_with(&dir_str));
+        delete_temp(tf).unwrap();
+        std::fs::remove_dir_all(&dir_str).ok();
+    }
+
+    #[test]
+    fn temp_dir_creates_and_deletes() {
+        let td = temp_dir().unwrap();
+        assert!(std::path::Path::new(td.path.as_str()).is_dir());
+        let path_copy = td.path.inner.clone();
+        delete_temp_dir(td).unwrap();
+        assert!(!std::path::Path::new(&path_copy).exists());
+    }
+
+    #[test]
+    fn persist_moves_temp_to_permanent() {
+        let tf = temp_file().unwrap();
+        temp_write(&tf, "persist me".to_string()).unwrap();
+        let temp_path_str = tf.path.inner.clone();
+        let dest_str = tmp("mvl_test_persist_dest.txt");
+        persist(tf, path(dest_str.clone())).unwrap();
+        assert!(!std::path::Path::new(&temp_path_str).exists());
+        let content = std::fs::read_to_string(&dest_str).unwrap();
+        assert_eq!(content, "persist me");
+        std::fs::remove_file(&dest_str).ok();
     }
 }
