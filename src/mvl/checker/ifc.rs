@@ -35,7 +35,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::mvl::checker::errors::CheckError;
-use crate::mvl::checker::types::Ty;
+use crate::mvl::checker::types::{types_compatible, Ty};
 use crate::mvl::parser::ast::{
     Block, Decl, ElseBranch, Expr, MatchBody, Pattern, Program, Stmt, TypeExpr,
 };
@@ -64,6 +64,16 @@ pub fn strip_label(ty: &Ty) -> &Ty {
         Ty::Refined(inner, _) => strip_label(inner),
         _ => ty,
     }
+}
+
+/// True when a type mismatch is caused by IFC labels rather than structural
+/// type differences.  E.g. `Secret[String]` vs `String`, or `Tainted[Int]`
+/// vs `Secret[Int]`.  The inner types (after stripping labels) must be
+/// compatible for this to return true.
+pub fn is_label_mismatch(expected: &Ty, found: &Ty) -> bool {
+    let e_labeled = label_of(expected).is_some();
+    let f_labeled = label_of(found).is_some();
+    (e_labeled || f_labeled) && types_compatible(strip_label(expected), strip_label(found))
 }
 
 /// Wrap a type in a security label, or return it unchanged if label is None.

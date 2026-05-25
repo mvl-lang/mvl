@@ -330,6 +330,24 @@ impl TypeChecker {
         self.errors.push(err);
     }
 
+    /// Emit either `LabelMismatch` (Req 11) or `TypeMismatch` (Req 1) depending
+    /// on whether the mismatch is caused by IFC labels (#1027).
+    fn emit_type_or_label_mismatch(&mut self, expected: &Ty, found: &Ty, span: Span) {
+        if ifc::is_label_mismatch(expected, found) {
+            self.emit(CheckError::LabelMismatch {
+                expected: expected.display(),
+                found: found.display(),
+                span,
+            });
+        } else {
+            self.emit(CheckError::TypeMismatch {
+                expected: expected.display(),
+                found: found.display(),
+                span,
+            });
+        }
+    }
+
     // ── Effect subsetting (002-effect-system/Req 3, ADR-0035) ────────────
 
     /// Returns `true` when `declared` covers `required` for effect propagation.
