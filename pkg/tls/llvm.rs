@@ -29,6 +29,7 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
 
 use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
@@ -103,27 +104,27 @@ fn tls_config() -> Arc<ClientConfig> {
 
 // ── Error classification ─────────────────────────────────────────────────────
 
-fn classify_error(e: &dyn std::fmt::Display, _is_cert: bool) -> (i64, String) {
+fn classify_error(e: &dyn std::fmt::Display, is_cert: bool) -> (i64, String) {
     let msg = e.to_string();
-    if _is_cert || msg.contains("certificate") || msg.contains("CertificateRequired") {
-        (1, msg)
+    if is_cert || msg.contains("certificate") || msg.contains("CertificateRequired") {
+        (2, msg) // CertificateInvalid
     } else if msg.contains("handshake") || msg.contains("AlertReceived") {
-        (0, msg)
+        (1, msg) // HandshakeFailed
     } else if msg.contains("closed") || msg.contains("CloseNotify") || msg.contains("EOF") {
-        (2, msg)
+        (3, msg) // ConnectionClosed
     } else if msg.contains("io error") || msg.contains("Connection refused") {
-        (3, msg)
+        (4, msg) // IoError
     } else {
-        (4, msg)
+        (5, msg) // Other
     }
 }
 
 fn store_err(handle: i64, errno: i64, msg: String) {
-    errors().lock().unwrap().insert(handle, (errno, msg));
+    errors().lock().unwrap_or_else(|e| e.into_inner()).insert(handle, (errno, msg));
 }
 
 fn clear_err(handle: i64) {
-    errors().lock().unwrap().remove(&handle);
+    errors().lock().unwrap_or_else(|e| e.into_inner()).remove(&handle);
 }
 
 // ── C-ABI exports ────────────────────────────────────────────────────────────
@@ -135,7 +136,7 @@ pub unsafe extern "C" fn tls_connect(host: *const MvlString, port: i64) -> i64 {
     let server_name = match ServerName::try_from(host_str.clone()) {
         Ok(sn) => sn,
         Err(e) => {
-            store_err(-1, 0, format!("invalid hostname '{}': {}", host_str, e));
+            store_err(-1, 1, format!("invalid hostname '{}': {}", host_str, e));
             return -1;
         }
     };
@@ -144,10 +145,14 @@ pub unsafe extern "C" fn tls_connect(host: *const MvlString, port: i64) -> i64 {
     let tcp = match TcpStream::connect(&addr) {
         Ok(s) => s,
         Err(e) => {
-            store_err(-1, 3, format!("TCP connect to {}: {}", addr, e));
+            store_err(-1, 4, format!("TCP connect to {}: {}", addr, e));
             return -1;
         }
     };
+
+    // Set socket timeouts to prevent indefinite blocking
+    let _ = tcp.set_read_timeout(Some(Duration::from_secs(30)));
+    let _ = tcp.set_write_timeout(Some(Duration::from_secs(30)));
 
     let tls_conn = match ClientConnection::new(tls_config(), server_name) {
         Ok(c) => c,
@@ -166,25 +171,25 @@ pub unsafe extern "C" fn tls_connect(host: *const MvlString, port: i64) -> i64 {
     }
 
     let h = next_handle();
-    connections().lock().unwrap().insert(h, stream);
+    connections().lock().unwrap_or_else(|e| e.into_inner()).insert(h, stream);
     clear_err(h);
     h
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn tls_close(handle: i64) {
-    if let Some(mut conn) = connections().lock().unwrap().remove(&handle) {
+    if let Some(mut conn) = connections().lock().unwrap_or_else(|e| e.into_inner()).remove(&handle) {
         let _ = conn.conn.send_close_notify();
         let _ = conn.flush();
     }
-    errors().lock().unwrap().remove(&handle);
+    errors().lock().unwrap_or_else(|e| e.into_inner()).remove(&handle);
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn tls_errmsg(handle: i64) -> *mut MvlString {
     let msg = errors()
         .lock()
-        .unwrap()
+        .unwrap_or_else(|e| e.into_inner())
         .get(&handle)
         .map(|(_, m)| m.clone())
         .unwrap_or_default();
@@ -195,17 +200,17 @@ pub unsafe extern "C" fn tls_errmsg(handle: i64) -> *mut MvlString {
 pub unsafe extern "C" fn tls_errno(handle: i64) -> i64 {
     errors()
         .lock()
-        .unwrap()
+        .unwrap_or_else(|e| e.into_inner())
         .get(&handle)
         .map(|(c, _)| *c)
-        .unwrap_or(-1)
+        .unwrap_or(0)
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn tls_read(handle: i64) -> *mut MvlString {
-    let mut conns = connections().lock().unwrap();
+    let mut conns = connections().lock().unwrap_or_else(|e| e.into_inner());
     let Some(stream) = conns.get_mut(&handle) else {
-        store_err(handle, 4, "invalid TLS handle".to_string());
+        store_err(handle, 5, "invalid TLS handle".to_string());
         return new_mvl_str("");
     };
     let mut buf = Vec::new();
@@ -225,9 +230,9 @@ pub unsafe extern "C" fn tls_read(handle: i64) -> *mut MvlString {
 
 #[no_mangle]
 pub unsafe extern "C" fn tls_read_response(handle: i64) -> *mut MvlString {
-    let mut conns = connections().lock().unwrap();
+    let mut conns = connections().lock().unwrap_or_else(|e| e.into_inner());
     let Some(stream) = conns.get_mut(&handle) else {
-        store_err(handle, 4, "invalid TLS handle".to_string());
+        store_err(handle, 5, "invalid TLS handle".to_string());
         return new_mvl_str("");
     };
     let mut buf = Vec::new();
@@ -237,8 +242,10 @@ pub unsafe extern "C" fn tls_read_response(handle: i64) -> *mut MvlString {
             Ok(0) => break,
             Ok(_) => {
                 buf.push(one[0]);
+                // Safety cap at 1 MiB — signal error rather than silent truncation
                 if buf.len() >= 1_048_576 {
-                    break;
+                    store_err(handle, 5, "response truncated at 1 MiB limit".to_string());
+                    return new_mvl_str("");
                 }
             }
             Err(e) => {
@@ -259,9 +266,9 @@ pub unsafe extern "C" fn tls_read_response(handle: i64) -> *mut MvlString {
 #[no_mangle]
 pub unsafe extern "C" fn tls_write(handle: i64, data: *const MvlString) -> i64 {
     let data_str = unsafe { read_str(data) };
-    let mut conns = connections().lock().unwrap();
+    let mut conns = connections().lock().unwrap_or_else(|e| e.into_inner());
     let Some(stream) = conns.get_mut(&handle) else {
-        store_err(handle, 4, "invalid TLS handle".to_string());
+        store_err(handle, 5, "invalid TLS handle".to_string());
         return -1;
     };
     match stream.write_all(data_str.as_bytes()) {

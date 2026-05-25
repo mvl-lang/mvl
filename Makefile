@@ -210,7 +210,7 @@ check-pkg: build ## Type-check all packages (pkg/*)
 			if $(MAKE) -C "$$dir" check --no-print-directory >/dev/null 2>&1; then \
 				printf "  \033[32m✓\033[0m\n"; \
 			else \
-				printf "  \033[31m✗\033[0m\n"; \
+				printf "  \033[31m✗\033[0m  (run: make -C $$dir check)\n"; \
 				fail=$$((fail + 1)); \
 			fi; \
 		fi; \

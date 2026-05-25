@@ -37,7 +37,7 @@ pub type TlsStream = struct {
 /// Errors returned by TLS operations.
 ///
 /// Discriminant order is stable and matches bridge.rs / llvm.rs errno layout:
-///   0=HandshakeFailed  1=CertificateInvalid  2=ConnectionClosed  3=IoError  4=Other
+///   0=no error  1=HandshakeFailed  2=CertificateInvalid  3=ConnectionClosed  4=IoError  5=Other
 pub type TlsError = enum {
     HandshakeFailed(String),
     CertificateInvalid(String),
@@ -48,14 +48,14 @@ pub type TlsError = enum {
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
-total fn make_tls_error(handle: Int) -> TlsError {
+fn make_tls_error(handle: Int) -> TlsError {
     let code: Int = tls_errno(handle);
     let msg: String = tls_errmsg(handle);
     match code {
-        0 => TlsError::HandshakeFailed(msg),
-        1 => TlsError::CertificateInvalid(msg),
-        2 => TlsError::ConnectionClosed,
-        3 => TlsError::IoError(msg),
+        1 => TlsError::HandshakeFailed(msg),
+        2 => TlsError::CertificateInvalid(msg),
+        3 => TlsError::ConnectionClosed,
+        4 => TlsError::IoError(msg),
         _ => TlsError::Other(msg),
     }
 }
@@ -81,7 +81,7 @@ pub partial fn tls_client_connect(host: String, port: Int) -> Result[TlsStream, 
 /// Returns Tainted[String] — network data is untrusted.
 pub partial fn tls_client_read(stream: TlsStream) -> Result[Tainted[String], TlsError] ! Net {
     let data: String = tls_read(stream._handle);
-    if tls_errno(stream._handle) == -1 {
+    if tls_errno(stream._handle) == 0 {
         Ok(relabel taint(data, "TLS-READ"))
     } else {
         Err(make_tls_error(stream._handle))
@@ -94,7 +94,7 @@ pub partial fn tls_client_read(stream: TlsStream) -> Result[Tainted[String], Tls
 /// Suitable for HTTP/1.1 responses where Connection: close is sent.
 pub partial fn tls_client_read_response(stream: TlsStream) -> Result[Tainted[String], TlsError] ! Net {
     let data: String = tls_read_response(stream._handle);
-    if tls_errno(stream._handle) == -1 {
+    if tls_errno(stream._handle) == 0 {
         Ok(relabel taint(data, "TLS-READ-RESPONSE"))
     } else {
         Err(make_tls_error(stream._handle))

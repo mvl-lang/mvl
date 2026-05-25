@@ -14,6 +14,9 @@
 // Effects: Net (all functions perform network I/O).
 //
 // IFC: Response body is Tainted[String] -- untrusted network data.
+//      Response headers are plain String (NOT tainted) because the
+//      parser needs to inspect them. Callers MUST NOT use header
+//      values for security decisions without independent validation.
 //
 // See #1017.
 
@@ -22,6 +25,10 @@ use std.ifc.{Tainted, taint, trust}
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 /// Minimal HTTPS response: status code + headers + body.
+/// NOTE: headers are plain String, NOT Tainted — the raw response is
+/// untainted before parsing so headers can be inspected. Only the body
+/// carries the Tainted label. Do not use header values for security
+/// decisions without independent validation.
 pub type HttpsResponse = struct {
     status_code: Int,
     headers: Map[String, String],
@@ -57,6 +64,46 @@ fn map_write_error(e: TlsError) -> HttpsError {
 
 fn map_read_error(e: TlsError) -> HttpsError {
     HttpsError::ConnectionFailed(tls_error_msg(e))
+}
+
+fn close_and_fail(stream: TlsStream, e: HttpsError) -> Result[Tainted[String], HttpsError] {
+    tls_client_close(stream);
+    Err(e)
+}
+
+// ── Input validation ────────────────────────────────────────────────────────
+
+fn contains_crlf(s: String) -> Bool {
+    s.contains("\r") || s.contains("\n")
+}
+
+fn validate_no_crlf(s: String, context: String) -> Result[Unit, HttpsError] {
+    if contains_crlf(s) {
+        Err(HttpsError::InvalidUrl(context.concat(" contains CR/LF")))
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_https_headers(headers: Map[String, String]) -> Result[Unit, HttpsError] {
+    let valid: ref Bool = true;
+    for k in headers.keys() {
+        if valid && contains_crlf(k) {
+            valid = false
+        } else {
+            match headers.get(k) {
+                Some(v) => if valid && contains_crlf(v) {
+                    valid = false
+                } else {},
+                None => {},
+            }
+        }
+    }
+    if valid {
+        Ok(())
+    } else {
+        Err(HttpsError::InvalidUrl("header contains CR/LF"))
+    }
 }
 
 // ── URL parsing (HTTPS only) ────────────────────────────────────────────────
@@ -104,6 +151,12 @@ fn parse_https_url(url: String) -> Result[ParsedHttpsUrl, HttpsError] {
             }
         }
     }
+}
+
+fn validate_parsed_url(parsed: ParsedHttpsUrl) -> Result[ParsedHttpsUrl, HttpsError] {
+    let _: Unit = validate_no_crlf(parsed.path, "path")?;
+    let _: Unit = validate_no_crlf(parsed.host, "host")?;
+    Ok(parsed)
 }
 
 // ── Request building ────────────────────────────────────────────────────────
@@ -225,7 +278,9 @@ pub partial fn https_request(
     headers: Map[String, String],
     body: String,
 ) -> Result[HttpsResponse, HttpsError] ! Net {
-    let parsed: ParsedHttpsUrl = parse_https_url(url)?;
+    let _: Unit = validate_no_crlf(method, "method")?;
+    let _: Unit = validate_https_headers(headers)?;
+    let parsed: ParsedHttpsUrl = validate_parsed_url(parse_https_url(url)?)?;
     let host: String = parsed.host;
     let port: Int = parsed.port;
     let path: String = parsed.path;
@@ -239,15 +294,26 @@ pub partial fn https_request(
         Ok(_)  => Ok(()),
         Err(e) => Err(map_write_error(e)),
     };
-    let _w: Unit = write_result?;
-    let read_result: Result[Tainted[String], HttpsError] = match tls_client_read(stream) {
-        Ok(data) => Ok(data),
-        Err(e)   => Err(map_read_error(e)),
-    };
-    let raw_tainted: Tainted[String] = read_result?;
-    tls_client_close(stream);
-    let raw: String = relabel trust(raw_tainted, "HTTPS-RAW-RESPONSE");
-    parse_https_response(raw)
+    match write_result {
+        Err(e) => {
+            tls_client_close(stream);
+            Err(e)
+        },
+        Ok(_) => {
+            let read_result: Result[Tainted[String], HttpsError] = match tls_client_read(stream) {
+                Ok(data) => Ok(data),
+                Err(e)   => close_and_fail(stream, map_read_error(e)),
+            };
+            match read_result {
+                Err(e) => Err(e),
+                Ok(raw_tainted) => {
+                    tls_client_close(stream);
+                    let raw: String = relabel trust(raw_tainted, "HTTPS-RAW-RESPONSE");
+                    parse_https_response(raw)
+                },
+            }
+        },
+    }
 }
 
 /// HTTPS GET request with no body.

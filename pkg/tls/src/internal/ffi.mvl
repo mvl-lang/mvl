@@ -13,8 +13,9 @@
 // Error convention:
 //   tls_errmsg(handle)   last error message for a valid handle.
 //   tls_errmsg(-1)       error from the last failed tls_connect.
-//   tls_errno(handle)    error code: 0=HandshakeFailed 1=CertificateInvalid
-//                        2=ConnectionClosed 3=IoError 4=Other; -1 if no error.
+//   tls_errno(handle)    error code: 0=no error, 1=HandshakeFailed,
+//                        2=CertificateInvalid, 3=ConnectionClosed,
+//                        4=IoError, 5=Other.
 //
 // The TLS layer manages its own TCP+TLS connections internally —
 // no cross-runtime handle sharing with std.net.
@@ -24,7 +25,7 @@
 extern "rust" {
     // ── Connection ──────────────────────────────────────────────────────────
     // Connect TCP + TLS in one call. Returns handle (>0) or -1 on failure.
-    total fn tls_connect(host: String, port: Int) -> Int
+    fn tls_connect(host: String, port: Int) -> Int
     total fn tls_close(handle: Int) -> Unit
     total fn tls_errmsg(handle: Int) -> String
     total fn tls_errno(handle: Int) -> Int
@@ -32,13 +33,13 @@ extern "rust" {
     // ── I/O ─────────────────────────────────────────────────────────────────
     // Read all bytes until the peer closes the connection.
     // Returns "" on error (check tls_errno after empty return).
-    total fn tls_read(handle: Int) -> String
+    fn tls_read(handle: Int) -> String
 
     // Read one HTTP response: headers + body (Content-Length or close-delimited).
     // Suitable for HTTP/1.1 responses where Connection: close is sent.
     // Returns "" on error.
-    total fn tls_read_response(handle: Int) -> String
+    fn tls_read_response(handle: Int) -> String
 
     // Write data to the TLS stream. Returns bytes written (>=0) or -1 on error.
-    total fn tls_write(handle: Int, data: String) -> Int
+    fn tls_write(handle: Int, data: String) -> Int
 }
