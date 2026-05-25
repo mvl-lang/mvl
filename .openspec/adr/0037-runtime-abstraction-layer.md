@@ -128,6 +128,16 @@ The generated code calls `mvl_runtime::actors::*` functions instead of directly 
 - **No language changes.** Actor syntax, capability checking, and effect system are unaffected. This is purely compiler/runtime infrastructure.
 - **LLVM backend needs minimal changes.** It already emits C-ABI calls — only the library selection logic changes.
 
+## Relation to language definition
+
+This ADR defines the compiler infrastructure architecture for decoupling actor scheduling from the MVL language semantics. It does not affect:
+- Actor syntax (`actor Foo { ... }`)
+- Message passing semantics (fire-and-forget, capability checking)
+- Effect system or capability types
+- Spec 015 (Actor Model) requirements
+
+The three-axis model (backend × target × runtime) is purely internal to the compiler and is invisible to MVL users: actor programs compile to identical semantics regardless of which scheduler backs them, and users specify `--target` only to select the platform (not to change language behavior).
+
 ## References
 
 - ADR-0027: Multi-Backend Architecture
