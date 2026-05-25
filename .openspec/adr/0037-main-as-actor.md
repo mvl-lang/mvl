@@ -87,6 +87,47 @@ require sequential actor-then-continuation patterns should use the `actor Main {
 
 ---
 
+## Rejected Alternatives
+
+**Explicit `join()` call on actor references** — `w.join()` at the point where the program needs
+to wait. Rejected because it requires the programmer to track every actor reference and call join
+in the right order, creating a manual resource-management problem that the runtime can solve.
+
+**`async fn main()`** — adopt an async executor model (like Rust tokio). Rejected: MVL has
+an explicit actor model, not a generic async abstraction. Mixing would double the concurrency
+concepts and violate ADR-0004 (deliberately smallest language).
+
+**Keep `concurrently` as syntactic sugar** — desugar `concurrently { }` to block-scoped join.
+Rejected: syntactic sugar that doesn't compose (can't be called from helper functions without
+special semantics) is not sugar, it's a limitation. ADR-0002 says contract, not expand.
+
+---
+
+## Relation to language definition
+
+### Eleven Requirements (ADR-0001)
+
+| Requirement | Impact |
+|-------------|--------|
+| Req 3 (Actor isolation) | **Strengthens** — actor lifetime is always managed by the runtime; no manual scoping required |
+| Req 9 (Data race freedom) | **Consistent with** — actor mailbox discipline unchanged; join point moves but race freedom is unaffected |
+| Req 11 (Composability) | **Strengthens** — actors spawned anywhere in `fn main()` are drained; `concurrently {}` could not be composed inside helpers |
+
+All other requirements are not directly affected by this decision.
+
+### Design Principles (README)
+
+- **Principle 8 (Actors, not threads):** **Strengthens** — `fn main()` is implicitly an actor participant; no programmer-visible join primitive leaks the thread model
+- **Principle 1 (Explicit over implicit):** **Tension — explained below** — the join is now implicit. Trade-off is acceptable because explicit join required tracking every actor reference manually; the implicit join is documented in the language spec and visible in the emitted Rust (`_mvl_join_actors()`).
+- **Principle 6 (Effects in signatures):** **Consistent with** — actor lifecycle does not require a new effect; actors are already covered by the `Spawn`/`Send`/`Recv` effects from ADR-0035.
+
+### Specifications
+
+- **015-actors:** The actor lifecycle section should be updated to reflect that `fn main()` drains actor mailboxes implicitly via `_mvl_join_actors()`.
+- No other specs are directly affected.
+
+---
+
 ## References
 
 - ADR-0002: Language contraction
