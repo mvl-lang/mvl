@@ -1200,7 +1200,7 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
             emit_block_stmts(cg, &body.stmts);
             cg.pop_indent();
             cg.line("}");
-            cg.line("_mvl_join_actors();");
+            cg.line("mvl_join_actors();");
             cg.pop_indent();
             cg.indent();
             cg.push("}");

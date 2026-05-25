@@ -23,6 +23,7 @@
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod actors;
 pub mod capability;
 pub mod ifc;
 pub mod prelude;

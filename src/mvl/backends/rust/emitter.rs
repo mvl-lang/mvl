@@ -373,8 +373,13 @@ impl RustEmitter {
                 _ => false,
             })
         });
+        let has_actors = prog
+            .declarations
+            .iter()
+            .any(|d| matches!(d, Decl::Actor(_)));
         let has_runtime = force_runtime
             || prelude_has_extern
+            || has_actors
             || prog
                 .declarations
                 .iter()
