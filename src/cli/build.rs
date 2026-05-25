@@ -341,15 +341,19 @@ pub fn run(path: &str, run: bool, run_args: &[String], assert_mode: AssertMode) 
     }
 
     if run && out.has_main {
-        // Run the binary with the invocation CWD (where the user ran `mvl run`) so that
-        // relative file paths in the program (and in run_args like --file logs.jsonl)
-        // resolve against the caller's working directory, not the tmp build dir or
-        // the source file's parent directory.
+        // Run the binary from the source file's parent directory so that relative
+        // paths in config files (config.toml, seed_file = "users.csv", etc.) resolve
+        // against the project directory regardless of where `mvl run` was invoked.
+        // Package/bridge resolution uses project_root (invocation CWD) and happens
+        // earlier, so it is unaffected by this CWD change.
         let binary = tmp_dir.join("target").join("debug").join(&crate_name);
-        let invocation_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let source_dir = Path::new(&file_path)
+            .parent()
+            .and_then(|p| fs::canonicalize(p).ok())
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
         let run_status = process::Command::new(&binary)
             .args(run_args)
-            .current_dir(&invocation_dir)
+            .current_dir(&source_dir)
             .status()
             .unwrap_or_else(|e| {
                 eprintln!("error: failed to run {}: {e}", binary.display());
