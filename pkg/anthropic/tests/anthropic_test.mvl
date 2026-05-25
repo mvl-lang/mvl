@@ -1,0 +1,493 @@
+// pkg.anthropic tests — unit tests for the Anthropic Claude SDK.
+//
+// Tests cover pure functions: JSON serialization, model ID mapping,
+// response parsing, error formatting.  No network calls.
+//
+// Assurance note: 0 extern blocks.
+
+// ── Type re-declarations (workaround: #96) ────────────────────────────────
+
+type ModelId = enum {
+    Opus4,
+    Sonnet4,
+    Haiku4,
+}
+
+type Role = enum {
+    User,
+    Assistant,
+    System,
+}
+
+type Message = struct {
+    role:    Role,
+    content: String,
+}
+
+type Response = struct {
+    id:          Tainted[String],
+    content:     Tainted[String],
+    model:       Tainted[String],
+    usage:       Usage,
+    stop_reason: Tainted[String],
+}
+
+type Usage = struct {
+    input_tokens:  Int,
+    output_tokens: Int,
+}
+
+type HttpsError = enum {
+    InvalidUrl(String),
+    ConnectionFailed(String),
+    InvalidResponse(String),
+}
+
+type AnthropicError = enum {
+    HttpError(HttpsError),
+    JsonParseError(String),
+    ApiError(Int, String),
+    MissingField(String),
+}
+
+type Value = enum {
+    Null,
+    Bool(Bool),
+    Number(Float),
+    String(String),
+    Array(List[Value]),
+    Object(Map[String, Value]),
+}
+
+type JsonError = enum {
+    ParseError(String),
+}
+
+// ── Mirrored helpers ───────────────────────────────────────────────────────
+
+fn model_id_string(m: val ModelId) -> String {
+    match m {
+        ModelId::Opus4   => "claude-opus-4-20250514",
+        ModelId::Sonnet4 => "claude-sonnet-4-20250514",
+        ModelId::Haiku4  => "claude-haiku-4-20250514",
+    }
+}
+
+fn role_string(r: val Role) -> String {
+    match r {
+        Role::User      => "user",
+        Role::Assistant => "assistant",
+        Role::System    => "system",
+    }
+}
+
+fn encode_message(msg: Message) -> Value {
+    Value::Object({
+        "role":    Value::String(role_string(msg.role)),
+        "content": Value::String(msg.content),
+    })
+}
+
+partial fn encode_messages(msgs: List[Message]) -> Value {
+    let arr: ref List[Value] = [];
+    let i: ref Int = 0;
+    while i < msgs.len() {
+        match msgs.get(i) {
+            Some(m) => { arr = arr.concat([encode_message(m)]) },
+            None    => {},
+        }
+        i = i + 1
+    }
+    Value::Array(arr)
+}
+
+partial fn build_request_body(
+    model: ModelId,
+    messages: List[Message],
+    max_tokens: Int,
+) -> Value {
+    let system_msgs: ref List[Message] = [];
+    let non_system: ref List[Message] = [];
+    let i: ref Int = 0;
+    while i < messages.len() {
+        match messages.get(i) {
+            Some(m) => match m.role {
+                Role::System => { system_msgs = system_msgs.concat([m]) },
+                _            => { non_system = non_system.concat([m]) },
+            },
+            None => {},
+        }
+        i = i + 1
+    }
+    let body: ref Map[String, Value] = {
+        "model":      Value::String(model_id_string(model)),
+        "max_tokens": Value::Number(max_tokens.to_float()),
+        "messages":   encode_messages(non_system),
+    };
+    if system_msgs.len() > 0 {
+        match system_msgs.get(0) {
+            Some(sm) => body.insert("system", Value::String(sm.content)),
+            None     => {},
+        }
+    } else {}
+    Value::Object(body)
+}
+
+fn https_error_msg(e: val HttpsError) -> String {
+    match e {
+        HttpsError::InvalidUrl(msg)       => "invalid URL: ".concat(msg),
+        HttpsError::ConnectionFailed(msg) => "HTTPS connection failed: ".concat(msg),
+        HttpsError::InvalidResponse(msg)  => "invalid response: ".concat(msg),
+    }
+}
+
+fn anthropic_error_msg(e: val AnthropicError) -> String {
+    match e {
+        AnthropicError::HttpError(he)        => "https: ".concat(https_error_msg(he)),
+        AnthropicError::JsonParseError(msg)  => "json: ".concat(msg),
+        AnthropicError::ApiError(code, msg)  => "api error ".concat(code.to_string()).concat(": ").concat(msg),
+        AnthropicError::MissingField(f)      => "missing field: ".concat(f),
+    }
+}
+
+fn get_string_field(obj: Map[String, Value], key: String) -> Result[String, AnthropicError] {
+    match obj.get(key) {
+        Some(Value::String(s)) => Ok(s),
+        Some(_)                => Err(AnthropicError::MissingField(key.concat(" (not a string)"))),
+        None                   => Err(AnthropicError::MissingField(key)),
+    }
+}
+
+fn get_int_field(obj: Map[String, Value], key: String) -> Result[Int, AnthropicError] {
+    match obj.get(key) {
+        Some(Value::Number(n)) => Ok(n.to_int()),
+        Some(_)                => Err(AnthropicError::MissingField(key.concat(" (not a number)"))),
+        None                   => Err(AnthropicError::MissingField(key)),
+    }
+}
+
+partial fn extract_content_text(content_val: Value) -> Result[String, AnthropicError] {
+    match content_val {
+        Value::Array(items) => {
+            let text: ref String = "";
+            let i: ref Int = 0;
+            while i < items.len() {
+                match items.get(i) {
+                    Some(Value::Object(block)) => match block.get("text") {
+                        Some(Value::String(t)) => { text = text.concat(t) },
+                        _                      => {},
+                    },
+                    _ => {},
+                }
+                i = i + 1
+            }
+            Ok(text)
+        },
+        Value::String(s) => Ok(s),
+        _ => Err(AnthropicError::MissingField("content (unexpected type)")),
+    }
+}
+
+partial fn parse_response(v: Value) -> Result[Response, AnthropicError] {
+    match v {
+        Value::Object(obj) => {
+            let id: String = get_string_field(obj, "id")?;
+            let model: String = get_string_field(obj, "model")?;
+            let stop: String = get_string_field(obj, "stop_reason")?;
+            let content_val: Value = match obj.get("content") {
+                Some(cv) => cv,
+                None     => { return Err(AnthropicError::MissingField("content")) },
+            };
+            let content_text: String = extract_content_text(content_val)?;
+            let usage_obj: Map[String, Value] = match obj.get("usage") {
+                Some(Value::Object(u)) => u,
+                _                      => { return Err(AnthropicError::MissingField("usage")) },
+            };
+            let input_tokens: Int = get_int_field(usage_obj, "input_tokens")?;
+            let output_tokens: Int = get_int_field(usage_obj, "output_tokens")?;
+            Ok(Response {
+                id:          relabel taint(id, "ANTHROPIC-RESPONSE"),
+                content:     relabel taint(content_text, "ANTHROPIC-RESPONSE"),
+                model:       relabel taint(model, "ANTHROPIC-RESPONSE"),
+                usage:       Usage { input_tokens: input_tokens, output_tokens: output_tokens },
+                stop_reason: relabel taint(stop, "ANTHROPIC-RESPONSE"),
+            })
+        },
+        _ => Err(AnthropicError::JsonParseError("expected JSON object")),
+    }
+}
+
+// ── Tests ───────────────────────────────────────────────────────────────────
+
+// -- Model ID tests --
+
+test fn test_model_opus() -> Unit {
+    assert_eq(model_id_string(ModelId::Opus4), "claude-opus-4-20250514")
+}
+
+test fn test_model_sonnet() -> Unit {
+    assert_eq(model_id_string(ModelId::Sonnet4), "claude-sonnet-4-20250514")
+}
+
+test fn test_model_haiku() -> Unit {
+    assert_eq(model_id_string(ModelId::Haiku4), "claude-haiku-4-20250514")
+}
+
+// -- Role string tests --
+
+test fn test_role_user() -> Unit {
+    assert_eq(role_string(Role::User), "user")
+}
+
+test fn test_role_assistant() -> Unit {
+    assert_eq(role_string(Role::Assistant), "assistant")
+}
+
+test fn test_role_system() -> Unit {
+    assert_eq(role_string(Role::System), "system")
+}
+
+// -- Error formatting tests --
+
+test fn test_error_http() -> Unit {
+    let e: AnthropicError = AnthropicError::HttpError(HttpsError::ConnectionFailed("refused"));
+    assert_eq(anthropic_error_msg(e), "https: HTTPS connection failed: refused")
+}
+
+test fn test_error_json() -> Unit {
+    let e: AnthropicError = AnthropicError::JsonParseError("unexpected token");
+    assert_eq(anthropic_error_msg(e), "json: unexpected token")
+}
+
+test fn test_error_api() -> Unit {
+    let e: AnthropicError = AnthropicError::ApiError(429, "rate limited");
+    assert_eq(anthropic_error_msg(e), "api error 429: rate limited")
+}
+
+test fn test_error_missing_field() -> Unit {
+    let e: AnthropicError = AnthropicError::MissingField("content");
+    assert_eq(anthropic_error_msg(e), "missing field: content")
+}
+
+// -- Message encoding tests --
+
+test fn test_encode_user_message() -> Unit {
+    let msg: Message = Message { role: Role::User, content: "Hello" };
+    let v: Value = encode_message(msg);
+    match v {
+        Value::Object(obj) => {
+            match obj.get("role") {
+                Some(Value::String(r)) => assert_eq(r, "user"),
+                _ => assert(false),
+            }
+            match obj.get("content") {
+                Some(Value::String(c)) => assert_eq(c, "Hello"),
+                _ => assert(false),
+            }
+        },
+        _ => assert(false),
+    }
+}
+
+test fn test_encode_messages_count() -> Unit {
+    let msgs: List[Message] = [
+        Message { role: Role::User, content: "Hi" },
+        Message { role: Role::Assistant, content: "Hello!" },
+    ];
+    let v: Value = encode_messages(msgs);
+    match v {
+        Value::Array(arr) => assert_eq(arr.len(), 2),
+        _                 => assert(false),
+    }
+}
+
+// -- Request body tests --
+
+test fn test_request_body_model() -> Unit {
+    let msgs: List[Message] = [
+        Message { role: Role::User, content: "What is MVL?" },
+    ];
+    let body: Value = build_request_body(ModelId::Sonnet4, msgs, 1024);
+    match body {
+        Value::Object(obj) => match obj.get("model") {
+            Some(Value::String(m)) => assert_eq(m, "claude-sonnet-4-20250514"),
+            _ => assert(false),
+        },
+        _ => assert(false),
+    }
+}
+
+test fn test_request_body_max_tokens() -> Unit {
+    let msgs: List[Message] = [
+        Message { role: Role::User, content: "Hi" },
+    ];
+    let body: Value = build_request_body(ModelId::Haiku4, msgs, 512);
+    match body {
+        Value::Object(obj) => match obj.get("max_tokens") {
+            Some(Value::Number(n)) => assert_eq(n, 512.0),
+            _ => assert(false),
+        },
+        _ => assert(false),
+    }
+}
+
+test fn test_request_body_system_extracted() -> Unit {
+    let msgs: List[Message] = [
+        Message { role: Role::System, content: "You are helpful." },
+        Message { role: Role::User, content: "Hi" },
+    ];
+    let body: Value = build_request_body(ModelId::Haiku4, msgs, 512);
+    match body {
+        Value::Object(obj) => {
+            match obj.get("system") {
+                Some(Value::String(s)) => assert_eq(s, "You are helpful."),
+                _ => assert(false),
+            }
+            match obj.get("messages") {
+                Some(Value::Array(arr)) => assert_eq(arr.len(), 1),
+                _ => assert(false),
+            }
+        },
+        _ => assert(false),
+    }
+}
+
+// -- Response parsing tests --
+
+test fn test_parse_response_success() -> Unit {
+    let json: Value = Value::Object({
+        "id":          Value::String("msg_01XFDUDYJgAACzvnptvVoYEL"),
+        "type":        Value::String("message"),
+        "role":        Value::String("assistant"),
+        "model":       Value::String("claude-sonnet-4-20250514"),
+        "stop_reason": Value::String("end_turn"),
+        "content":     Value::Array([
+            Value::Object({
+                "type": Value::String("text"),
+                "text": Value::String("MVL is a language."),
+            }),
+        ]),
+        "usage": Value::Object({
+            "input_tokens":  Value::Number(12.0),
+            "output_tokens": Value::Number(42.0),
+        }),
+    });
+    match parse_response(json) {
+        Ok(resp) => {
+            let id: String = relabel trust(resp.id, "TEST");
+            assert_eq(id, "msg_01XFDUDYJgAACzvnptvVoYEL")
+            let content: String = relabel trust(resp.content, "TEST");
+            assert_eq(content, "MVL is a language.")
+            assert_eq(resp.usage.input_tokens, 12)
+            assert_eq(resp.usage.output_tokens, 42)
+        },
+        Err(_) => assert(false),
+    }
+}
+
+test fn test_parse_response_missing_id() -> Unit {
+    let json: Value = Value::Object({
+        "model":       Value::String("claude-sonnet-4-20250514"),
+        "stop_reason": Value::String("end_turn"),
+        "content":     Value::String("hello"),
+        "usage": Value::Object({
+            "input_tokens":  Value::Number(1.0),
+            "output_tokens": Value::Number(1.0),
+        }),
+    });
+    match parse_response(json) {
+        Ok(_)  => assert(false),
+        Err(e) => match e {
+            AnthropicError::MissingField(_) => assert(true),
+            _ => assert(false),
+        },
+    }
+}
+
+test fn test_parse_response_not_object() -> Unit {
+    let json: Value = Value::String("not an object");
+    match parse_response(json) {
+        Ok(_)  => assert(false),
+        Err(e) => match e {
+            AnthropicError::JsonParseError(_) => assert(true),
+            _ => assert(false),
+        },
+    }
+}
+
+// -- Content extraction tests --
+
+test fn test_extract_content_array() -> Unit {
+    let content: Value = Value::Array([
+        Value::Object({
+            "type": Value::String("text"),
+            "text": Value::String("Hello "),
+        }),
+        Value::Object({
+            "type": Value::String("text"),
+            "text": Value::String("world"),
+        }),
+    ]);
+    match extract_content_text(content) {
+        Ok(s)  => assert_eq(s, "Hello world"),
+        Err(_) => assert(false),
+    }
+}
+
+test fn test_extract_content_string() -> Unit {
+    let content: Value = Value::String("direct text");
+    match extract_content_text(content) {
+        Ok(s)  => assert_eq(s, "direct text"),
+        Err(_) => assert(false),
+    }
+}
+
+test fn test_extract_content_invalid() -> Unit {
+    let content: Value = Value::Number(42.0);
+    match extract_content_text(content) {
+        Ok(_)  => assert(false),
+        Err(_) => assert(true),
+    }
+}
+
+// -- JSON field extraction tests --
+
+test fn test_get_string_field_present() -> Unit {
+    let obj: Map[String, Value] = {"name": Value::String("Claude")};
+    match get_string_field(obj, "name") {
+        Ok(s)  => assert_eq(s, "Claude"),
+        Err(_) => assert(false),
+    }
+}
+
+test fn test_get_string_field_missing() -> Unit {
+    let obj: Map[String, Value] = {"name": Value::String("Claude")};
+    match get_string_field(obj, "missing") {
+        Ok(_)  => assert(false),
+        Err(_) => assert(true),
+    }
+}
+
+test fn test_get_string_field_wrong_type() -> Unit {
+    let obj: Map[String, Value] = {"count": Value::Number(42.0)};
+    match get_string_field(obj, "count") {
+        Ok(_)  => assert(false),
+        Err(_) => assert(true),
+    }
+}
+
+test fn test_get_int_field_present() -> Unit {
+    let obj: Map[String, Value] = {"tokens": Value::Number(100.0)};
+    match get_int_field(obj, "tokens") {
+        Ok(n)  => assert_eq(n, 100),
+        Err(_) => assert(false),
+    }
+}
+
+test fn test_get_int_field_missing() -> Unit {
+    let obj: Map[String, Value] = {"tokens": Value::Number(100.0)};
+    match get_int_field(obj, "other") {
+        Ok(_)  => assert(false),
+        Err(_) => assert(true),
+    }
+}

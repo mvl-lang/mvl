@@ -1,0 +1,105 @@
+// pkg.rest.client tests — unit tests for REST client error formatting
+// and JSON header construction.
+//
+// Pure functions only — no network calls.
+//
+// Assurance note: 0 extern blocks.
+
+// ── Type re-declarations (workaround: #96) ────────────────────────────────
+
+type HttpsError = enum {
+    InvalidUrl(String),
+    ConnectionFailed(String),
+    InvalidResponse(String),
+}
+
+type RestError = enum {
+    HttpError(HttpsError),
+    JsonParseError(String),
+    ApiError(Int, String),
+}
+
+type Value = enum {
+    Null,
+    Bool(Bool),
+    Number(Float),
+    String(String),
+    Array(List[Value]),
+    Object(Map[String, Value]),
+}
+
+// ── Mirrored helpers ───────────────────────────────────────────────────────
+
+fn https_error_msg(e: val HttpsError) -> String {
+    match e {
+        HttpsError::InvalidUrl(msg)       => "invalid URL: ".concat(msg),
+        HttpsError::ConnectionFailed(msg) => "HTTPS connection failed: ".concat(msg),
+        HttpsError::InvalidResponse(msg)  => "invalid response: ".concat(msg),
+    }
+}
+
+fn rest_error_msg(e: val RestError) -> String {
+    match e {
+        RestError::HttpError(he) => "https: ".concat(https_error_msg(he)),
+        RestError::JsonParseError(msg) => "json parse: ".concat(msg),
+        RestError::ApiError(code, msg) => "api error ".concat(code.to_string()).concat(": ").concat(msg),
+    }
+}
+
+fn json_headers() -> Map[String, String] {
+    let m: ref Map[String, String] = {"Content-Type": "application/json"};
+    m.insert("Accept", "application/json");
+    m
+}
+
+// ── Tests ───────────────────────────────────────────────────────────────────
+
+// -- Error formatting tests --
+
+test fn test_rest_error_http_timeout() -> Unit {
+    let e: RestError = RestError::HttpError(HttpsError::ConnectionFailed("timeout"));
+    assert_eq(rest_error_msg(e), "https: HTTPS connection failed: timeout")
+}
+
+test fn test_rest_error_http_connection() -> Unit {
+    let e: RestError = RestError::HttpError(HttpsError::ConnectionFailed("refused"));
+    assert_eq(rest_error_msg(e), "https: HTTPS connection failed: refused")
+}
+
+test fn test_rest_error_json_parse() -> Unit {
+    let e: RestError = RestError::JsonParseError("unexpected EOF");
+    assert_eq(rest_error_msg(e), "json parse: unexpected EOF")
+}
+
+test fn test_rest_error_api() -> Unit {
+    let e: RestError = RestError::ApiError(404, "not found");
+    assert_eq(rest_error_msg(e), "api error 404: not found")
+}
+
+test fn test_rest_error_api_500() -> Unit {
+    let e: RestError = RestError::ApiError(500, "internal server error");
+    assert_eq(rest_error_msg(e), "api error 500: internal server error")
+}
+
+// -- Header construction tests --
+
+test fn test_json_headers_content_type() -> Unit {
+    let hdrs: Map[String, String] = json_headers();
+    match hdrs.get("Content-Type") {
+        Some(v) => assert_eq(v, "application/json"),
+        None    => assert(false),
+    }
+}
+
+test fn test_json_headers_accept() -> Unit {
+    let hdrs: Map[String, String] = json_headers();
+    match hdrs.get("Accept") {
+        Some(v) => assert_eq(v, "application/json"),
+        None    => assert(false),
+    }
+}
+
+test fn test_json_headers_count() -> Unit {
+    let hdrs: Map[String, String] = json_headers();
+    assert_eq(hdrs.len(), 2)
+}
