@@ -13,7 +13,7 @@ use std.db.{DbValue}
 // ── Open / init ───────────────────────────────────────────────────────────────
 
 /// Open (or create) the SQLite database at `path`.
-pub total fn db_open(path: String) -> Result[SqliteDb, String] ! DB + FileRead + FileWrite {
+pub partial fn db_open(path: String) -> Result[SqliteDb, String] ! DB + FileRead + FileWrite {
     match open(path) {
         Err(SqliteError::Other(msg)) => Err("db open failed: ".concat(msg)),
         Err(_)                       => Err("db open failed"),
@@ -77,7 +77,7 @@ pub partial fn db_list_users(val db: SqliteDb) -> Result[List[User], String] ! D
 }
 
 /// Get a single user by id.  Returns None if not found.
-pub total fn db_get_user(val db: SqliteDb, id: Int) -> Result[Option[User], String] ! DB {
+pub partial fn db_get_user(val db: SqliteDb, id: Int) -> Result[Option[User], String] ! DB {
     match query(db, "SELECT id, name, email FROM users WHERE id = ?", [DbValue::Int(id)]) {
         Err(_)   => Err("get query failed"),
         Ok(rows) => match rows.get(0) {
@@ -97,7 +97,7 @@ pub total fn db_clear_users(val db: SqliteDb) -> Result[Unit, String] ! DB {
 
 /// Insert a new user.  Returns the new row's id.
 /// Returns Err if the email already exists (UNIQUE constraint).
-pub total fn db_create_user(val db: SqliteDb, val req: CreateUserRequest) -> Result[Int, String] ! DB {
+pub partial fn db_create_user(val db: SqliteDb, val req: CreateUserRequest) -> Result[Int, String] ! DB {
     match execute(db,
         "INSERT INTO users (name, email) VALUES (?, ?)",
         [DbValue::Text(req.name), DbValue::Text(req.email)]) {
@@ -115,7 +115,7 @@ pub total fn db_create_user(val db: SqliteDb, val req: CreateUserRequest) -> Res
 }
 
 /// Check whether the last statement affected any rows.
-total fn had_changes(val db: SqliteDb) -> Result[Bool, String] ! DB {
+partial fn had_changes(val db: SqliteDb) -> Result[Bool, String] ! DB {
     match query_scalar(db, "SELECT changes()", []) {
         Err(_)                => Err("changes() failed"),
         Ok(DbValue::Int(n))   => Ok(n > 0),
@@ -126,7 +126,7 @@ total fn had_changes(val db: SqliteDb) -> Result[Bool, String] ! DB {
 
 /// Update name and email for an existing user.
 /// Returns true if a row was updated, false if the id did not exist.
-pub total fn db_update_user(val db: SqliteDb, id: Int, val req: UpdateUserRequest) -> Result[Bool, String] ! DB {
+pub partial fn db_update_user(val db: SqliteDb, id: Int, val req: UpdateUserRequest) -> Result[Bool, String] ! DB {
     match execute(db,
         "UPDATE users SET name = ?, email = ? WHERE id = ?",
         [DbValue::Text(req.name), DbValue::Text(req.email), DbValue::Int(id)]) {
@@ -137,7 +137,7 @@ pub total fn db_update_user(val db: SqliteDb, id: Int, val req: UpdateUserReques
 
 /// Delete a user by id.
 /// Returns true if a row was deleted, false if the id did not exist.
-pub total fn db_delete_user(val db: SqliteDb, id: Int) -> Result[Bool, String] ! DB {
+pub partial fn db_delete_user(val db: SqliteDb, id: Int) -> Result[Bool, String] ! DB {
     match execute(db,
         "DELETE FROM users WHERE id = ?",
         [DbValue::Int(id)]) {

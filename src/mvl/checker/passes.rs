@@ -484,7 +484,7 @@ impl VerificationPass for RefinementsPass {
         let rc = &result.refinement_counts;
         let fn_total = rc.fn_total;
         let fully_verified = rc.fully_verified_fns;
-        let _total = rc.proven + rc.runtime_checked + rc.failed;
+        let total = rc.proven + rc.runtime_checked + rc.failed;
 
         if fn_total == 0 {
             Verdict::Unchecked {
@@ -492,14 +492,20 @@ impl VerificationPass for RefinementsPass {
             }
         } else if fully_verified == fn_total {
             Verdict::Proven {
-                evidence: "all refined call sites statically verified by 5-layer solver; \
-                     no runtime checks required"
-                    .to_string(),
+                evidence: format!(
+                    "{fully_verified}/{fn_total} function(s) fully verified; \
+                     {} proven, {} runtime-checked out of {total} refined call site(s)",
+                    rc.proven, rc.runtime_checked,
+                ),
             }
         } else {
             Verdict::Unchecked {
-                reason: "some refined call sites deferred to runtime checks by 5-layer solver"
-                    .to_string(),
+                reason: format!(
+                    "{fully_verified}/{fn_total} function(s) fully verified; \
+                     {} proven, {} runtime-checked out of {total} refined call site(s); \
+                     some call sites deferred to runtime checks",
+                    rc.proven, rc.runtime_checked,
+                ),
             }
         }
     }

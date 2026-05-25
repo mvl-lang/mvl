@@ -45,7 +45,7 @@ fn defaults() -> ConfigValue {
 
 // ── Layer 2: TOML file ────────────────────────────────────────────────────────
 
-total fn load_toml_layer(path: String, base: ConfigValue) -> ConfigValue ! FileRead {
+partial fn load_toml_layer(path: String, base: ConfigValue) -> ConfigValue ! FileRead {
     match read_file(path) {
         Err(_) => base,
         Ok(raw) => {
@@ -60,7 +60,7 @@ total fn load_toml_layer(path: String, base: ConfigValue) -> ConfigValue ! FileR
 
 // ── Layer 4: CLI args ─────────────────────────────────────────────────────────
 
-total fn merge_cli_args(cfg: ConfigValue) -> ConfigValue ! Console + Env {
+partial fn merge_cli_args(cfg: ConfigValue) -> ConfigValue ! Console + Env {
     let cli: Map[String, ArgValue] = parse_args([
         optional("host",       ArgType::Str),
         optional("port",       ArgType::Int),
@@ -106,7 +106,7 @@ total fn merge_cli_args(cfg: ConfigValue) -> ConfigValue ! Console + Env {
 
 // ── Extract typed struct ───────────────────────────────────────────────────────
 
-total fn extract(cfg: ConfigValue) -> Result[CrudApiConfig, ConfigError] {
+partial fn extract(cfg: ConfigValue) -> Result[CrudApiConfig, ConfigError] {
     Ok(CrudApiConfig {
         host:       as_string(get_path(cfg, "host").unwrap_or(ConfigValue::String("127.0.0.1")))?,
         port:       as_int(get_path(cfg, "port").unwrap_or(ConfigValue::Int(8080)))?,
@@ -124,7 +124,7 @@ total fn extract(cfg: ConfigValue) -> Result[CrudApiConfig, ConfigError] {
 ///
 /// Missing TOML file or unset env vars are silently skipped.
 /// Returns Err only when a present value has the wrong type.
-pub total fn load_config() -> Result[CrudApiConfig, ConfigLoadError] ! Env + FileRead + Console {
+pub partial fn load_config() -> Result[CrudApiConfig, ConfigLoadError] ! Env + FileRead + Console {
     let cfg: ConfigValue = defaults();
     let cfg: ConfigValue = load_toml_layer("config.toml", cfg);
     let cfg: ConfigValue = match with_env(cfg, "CRUD_API") {
