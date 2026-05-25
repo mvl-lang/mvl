@@ -43,9 +43,9 @@ never appear in the C-ABI dispatch table.
 
 | MVL | AST variant | Rust transpiler | LLVM (Int / Float) |
 |-----|------------|-----------------|---------------------|
-| `a + b` | `BinaryOp::Add` | `a + b` | `llvm.sadd.with.overflow.i64` (checked) / `fadd` |
-| `a - b` | `BinaryOp::Sub` | `a - b` | `llvm.ssub.with.overflow.i64` (checked) / `fsub` |
-| `a * b` | `BinaryOp::Mul` | `a * b` | `llvm.smul.with.overflow.i64` (checked) / `fmul` |
+| `a + b` | `BinaryOp::Add` | `checked_add().expect("overflow")` | `llvm.sadd.with.overflow.i64` (checked) / `fadd` |
+| `a - b` | `BinaryOp::Sub` | `checked_sub().expect("overflow")` | `llvm.ssub.with.overflow.i64` (checked) / `fsub` |
+| `a * b` | `BinaryOp::Mul` | `checked_mul().expect("overflow")` | `llvm.smul.with.overflow.i64` (checked) / `fmul` |
 | `a / b` | `BinaryOp::Div` | `a / b` | `sdiv` / `fdiv` |
 | `a % b` | `BinaryOp::Rem` | `a % b` | `srem` / `frem` |
 | `a == b` | `BinaryOp::Eq` | `a == b` | `icmp eq` / `fcmp oeq` |
@@ -54,8 +54,8 @@ never appear in the C-ABI dispatch table.
 | `a > b` | `BinaryOp::Gt` | `a > b` | `icmp sgt` / `fcmp ogt` |
 | `a <= b` | `BinaryOp::Le` | `a <= b` | `icmp sle` / `fcmp ole` |
 | `a >= b` | `BinaryOp::Ge` | `a >= b` | `icmp sge` / `fcmp oge` |
-| `a && b` | `BinaryOp::And` | `a && b` | `and i1` |
-| `a \|\| b` | `BinaryOp::Or` | `a \|\| b` | `or i1` |
+| `a && b` | `BinaryOp::And` | `a && b` | `br`-based short-circuit (no `and i1`) |
+| `a \|\| b` | `BinaryOp::Or` | `a \|\| b` | `br`-based short-circuit (no `or i1`) |
 | `a & b` | `BinaryOp::BitAnd` | `a & b` | `and i64` |
 | `a \| b` | `BinaryOp::BitOr` | `a \| b` | `or i64` |
 | `a ^ b` | `BinaryOp::BitXor` | `a ^ b` | `xor i64` |
