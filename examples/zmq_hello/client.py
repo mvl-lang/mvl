@@ -16,6 +16,7 @@ import sys
 def send_msg(sock: socket.socket, msg: str) -> None:
     data = msg.encode()
     sock.sendall(struct.pack(">I", len(data)) + data)
+    sock.shutdown(socket.SHUT_WR)  # signal EOF so MVL's tcp_read returns
 
 
 MAX_MSG = 64 * 1024 * 1024  # 64 MB — matches pkg.zmq decode_frame limit
