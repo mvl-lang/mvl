@@ -292,7 +292,7 @@ pub enum CheckError {
         span: Span,
     },
 
-    // ── Generics constraint enforcement (001-type-system/Req 9) ─────────
+    // ── Generics constraint enforcement (001-type-system/Req 1) ─────────
     /// Unconstrained type parameter used with an operator that requires a trait bound.
     MissingConstraint {
         type_param: String,
@@ -583,8 +583,8 @@ impl CheckError {
             CheckError::UnsupportedExternAbi { .. } => 1,
             // Req 1: Type Safety — Iterator trait constraint
             CheckError::NotIterator { .. } => 1,
-            // Req 9: Generics — constraint enforcement
-            CheckError::MissingConstraint { .. } => 9,
+            // Req 1: Type Safety — generic constraint enforcement (#1028)
+            CheckError::MissingConstraint { .. } => 1,
             // Req 1: Type Safety — trait impl completeness (#990)
             CheckError::MissingTraitMethod { .. } => 1,
         }
