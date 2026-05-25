@@ -1,0 +1,131 @@
+// pkg.rest.client — typed REST client: JSON in, JSON out.
+//
+// Wraps pkg.tls.https with automatic JSON serialization/deserialization.
+// Callers send `Value` (from std.json) and receive `Value` back.
+//
+// Import:
+//   use pkg.rest.client.{rest_post_json, rest_get_json, RestError, rest_error_msg}
+//
+// Effects: Net (all client functions).
+//
+// IFC boundary:
+//   - Response body arrives as Tainted[String] from HTTP layer
+//   - JSON parsing detaints with audit tag "REST-JSON-RESPONSE"
+//   - Returned Value is bare — caller re-taints fields as needed
+//
+// See #1000, #1016, #1020.
+
+use std.ifc.{Tainted, trust}
+use std.json.{Value, JsonError, encode, decode}
+use pkg.tls.https.{HttpsResponse, HttpsError, https_error_msg, https_post, https_request}
+
+// ── Error type ──────────────────────────────────────────────────────────────
+
+/// REST client error — combines HTTPS transport and JSON parse failures.
+pub type RestError = enum {
+    HttpError(HttpsError),
+    JsonParseError(String),
+    ApiError(Int, String),
+}
+
+/// Format a RestError as a human-readable string.
+pub fn rest_error_msg(e: val RestError) -> String {
+    match e {
+        RestError::HttpError(he) => "https: ".concat(https_error_msg(he)),
+        RestError::JsonParseError(msg) => "json parse: ".concat(msg),
+        RestError::ApiError(code, msg) => "api error ".concat(code.to_string()).concat(": ").concat(msg),
+    }
+}
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
+
+fn json_headers() -> Map[String, String] {
+    let m: ref Map[String, String] = {"Content-Type": "application/json"};
+    m.insert("Accept", "application/json");
+    m
+}
+
+fn map_http_err(e: HttpsError) -> RestError {
+    RestError::HttpError(e)
+}
+
+partial fn parse_json_body(resp: HttpsResponse) -> Result[Value, RestError] {
+    let body_str: String = relabel trust(resp.body, "REST-JSON-RESPONSE");
+    match decode(body_str) {
+        Ok(v)                         => Ok(v),
+        Err(JsonError::ParseError(e)) => Err(RestError::JsonParseError(e)),
+    }
+}
+
+fn is_success(code: Int) -> Bool {
+    code >= 200 && code < 300
+}
+
+/// Merge `extra` headers on top of `base`, overwriting on conflict.
+partial fn merge_headers(base: Map[String, String], extra: Map[String, String]) -> Map[String, String] {
+    let result: ref Map[String, String] = base;
+    let keys: List[String] = extra.keys();
+    let ki: ref Int = 0;
+    while ki < keys.len() {
+        match keys.get(ki) {
+            Some(k) => match extra.get(k) {
+                Some(v) => result.insert(k, v),
+                None    => {},
+            },
+            None => {},
+        }
+        ki = ki + 1
+    }
+    result
+}
+
+// ── Public API ──────────────────────────────────────────────────────────────
+
+/// POST a JSON body, receive a JSON response.
+///
+/// Serializes `body` as JSON, sets Content-Type and Accept headers,
+/// and parses the response body as JSON.
+/// `extra_headers` are merged on top of the default JSON headers.
+pub partial fn rest_post_json(
+    url: String,
+    extra_headers: Map[String, String],
+    body: Value,
+) -> Result[Value, RestError] ! Net {
+    let body_str: String = encode(body);
+    let hdrs: ref Map[String, String] = merge_headers(json_headers(), extra_headers);
+    let resp: HttpsResponse = match https_post(url, hdrs, body_str) {
+        Ok(r)  => r,
+        Err(e) => { return Err(map_http_err(e)) },
+    };
+    let code: Int = resp.status_code;
+    if is_success(code) {
+        parse_json_body(resp)
+    } else {
+        let err_body: String = relabel trust(resp.body, "REST-ERROR-DISPLAY");
+        let truncated: String = if err_body.len() > 512 { err_body.substring(0, 512) } else { err_body };
+        Err(RestError::ApiError(code, truncated))
+    }
+}
+
+/// GET a JSON response.
+///
+/// Sets Accept header and parses the response body as JSON.
+/// `extra_headers` are merged on top of the default JSON headers.
+pub partial fn rest_get_json(
+    url: String,
+    extra_headers: Map[String, String],
+) -> Result[Value, RestError] ! Net {
+    let hdrs: ref Map[String, String] = merge_headers({"Accept": "application/json"}, extra_headers);
+    let resp: HttpsResponse = match https_request("GET", url, hdrs, "") {
+        Ok(r)  => r,
+        Err(e) => { return Err(map_http_err(e)) },
+    };
+    let code: Int = resp.status_code;
+    if is_success(code) {
+        parse_json_body(resp)
+    } else {
+        let err_body: String = relabel trust(resp.body, "REST-ERROR-DISPLAY");
+        let truncated: String = if err_body.len() > 512 { err_body.substring(0, 512) } else { err_body };
+        Err(RestError::ApiError(code, truncated))
+    }
+}

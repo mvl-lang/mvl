@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.156.0] - 2026-05-25
+
+### Added
+- #1020 — `pkg/anthropic` — Typed Anthropic Messages API client SDK with full IFC: API key as `Secret[String]`, responses as `Tainted[String]`. Zero builtins, pure MVL implementation of request/response serialization and HTTPS calls via `pkg/tls`.
+- #1020 — `pkg/rest` — Typed REST client layer (JSON in/out) built on `pkg/tls.https` with `rest_post_json` / `rest_get_json` convenience functions.
+- `examples/anthropic_chat` — Runnable example demonstrating SDK usage with full IFC threat model.
+
+### Fixed
+- Security: Split premature declassification in `Claude::messages()` to use distinct audit tags for JSON parse path vs error display path.
+- Security: Error body truncation (512 byte cap) in `AnthropicError` and `RestError` to prevent unbounded allocation and verbatim display of hostile response bodies.
+- Correctness: Multiple `Role::System` messages now error (API supports one) instead of silently dropping all but first.
+- Build: Remove dead `pkg/http` symlink rule and Makefile dependency from `examples/anthropic_chat`.
+
+### Docs
+- Added `.gitignore` to `examples/anthropic_chat` to exclude `.mvl/` symlink directories.
+- Clarified `multi_turn()` example in `main.mvl` is illustrative, not called from `main()`.
+
+### Chore
+- Refactored `pkg/rest` header-merge logic into reusable `merge_headers()` helper (eliminates 10-line duplication).
+- Added 4 new unit tests to `pkg/anthropic` (missing usage field, wrong type, empty array, no messages).
+- Added 2 new unit tests to `pkg/rest` (InvalidUrl, InvalidResponse error variants).
+
 ## [0.155.0] - 2026-05-25
 
 ### Added
