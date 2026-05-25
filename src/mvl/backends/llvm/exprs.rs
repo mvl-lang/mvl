@@ -2927,6 +2927,7 @@ impl<'ctx> LlvmBackend<'ctx> {
                         "to_lower" => self.get_mvl_str_to_lower(),
                         "to_upper" => self.get_mvl_str_to_upper(),
                         "chars" => self.get_mvl_string_chars(),
+                        // Outer match constrains method to the 4 names above.
                         _ => unreachable!(),
                     };
                     let call = self
@@ -2947,6 +2948,7 @@ impl<'ctx> LlvmBackend<'ctx> {
                         let f = match method {
                             "concat" => self.get_mvl_string_concat(),
                             "split" => self.get_mvl_str_split(),
+                            // Outer match constrains method to concat|split.
                             _ => unreachable!(),
                         };
                         let call = self
@@ -2975,6 +2977,7 @@ impl<'ctx> LlvmBackend<'ctx> {
                         let f = match method {
                             "starts_with" => self.get_mvl_str_starts_with(),
                             "ends_with" => self.get_mvl_str_ends_with(),
+                            // Outer match constrains method to starts_with|ends_with.
                             _ => unreachable!(),
                         };
                         let call = self
@@ -3030,6 +3033,7 @@ impl<'ctx> LlvmBackend<'ctx> {
                         let f = match method {
                             "substring" => self.get_mvl_str_substring(),
                             "slice" => self.get_mvl_list_slice(),
+                            // Outer match constrains method to substring|slice.
                             _ => unreachable!(),
                         };
                         let call = self
