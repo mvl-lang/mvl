@@ -1,0 +1,139 @@
+// pkg.zmq.reqrep — REQ/REP messaging pattern.
+//
+// Synchronous request-response over TCP (one connection per exchange).
+//
+// Server: `rep_serve` accepts connections, decodes framed requests,
+//         calls the handler function, and sends framed replies.
+// Client: `req_request` connects to a server, sends a framed request,
+//         reads the framed reply, and returns it.
+//
+// Import:
+//   use pkg.zmq.reqrep.{rep_serve, req_request}
+//
+// Effects: ! Net (all functions).
+//
+// IFC: handler receives Tainted[String] — callers must relabel with a
+//      context-specific audit tag before use in security-sensitive operations.
+//      This is consistent with sub_serve and puller_serve.
+//
+// See #1032.
+
+use std.ifc.{Tainted}
+use std.net.{TcpListener, TcpStream, NetError,
+             tcp_connect, tcp_accept, tcp_read, tcp_write,
+             tcp_close_listener, tcp_close_stream}
+use pkg.zmq.{ZmqError, encode_frame, decode_frame, map_net_err,
+             zmq_bind, is_transient_accept_error}
+
+// ── Server-side ───────────────────────────────────────────────────────────────
+
+/// Write a framed request on `stream`, read the framed reply, and close.
+///
+/// Module-private — used by `req_request`.
+fn req_exchange(stream: TcpStream, msg: String) -> Result[Tainted[String], ZmqError] ! Net {
+    let framed: String = encode_frame(msg);
+    match tcp_write(stream, framed) {
+        Err(e) => { tcp_close_stream(stream); Err(map_net_err(e)) },
+        Ok(_)  => {
+            match tcp_read(stream) {
+                Err(e)  => { tcp_close_stream(stream); Err(map_net_err(e)) },
+                Ok(raw) => {
+                    tcp_close_stream(stream);
+                    decode_frame(raw)
+                },
+            }
+        },
+    }
+}
+
+/// Handle one REQ/REP exchange on an accepted TCP stream.
+///
+/// Reads a framed request, decodes it, calls `handler` with the raw
+/// `Tainted[String]` body, sends the framed reply, closes the stream.
+/// Module-private — used by `rep_accept_loop`.
+fn handle_one(
+    stream: TcpStream,
+    handler: fn(Tainted[String]) -> String,
+) -> Result[Unit, ZmqError] ! Net {
+    match tcp_read(stream) {
+        Err(e)  => {
+            tcp_close_stream(stream);
+            Err(map_net_err(e))
+        },
+        Ok(raw) => {
+            match decode_frame(raw) {
+                Err(e) => {
+                    tcp_close_stream(stream);
+                    Err(e)
+                },
+                Ok(msg) => {
+                    let reply_body: String = handler(msg);
+                    let framed: String = encode_frame(reply_body);
+                    match tcp_write(stream, framed) {
+                        Ok(_)  => { tcp_close_stream(stream); Ok(()) },
+                        Err(e) => { tcp_close_stream(stream); Err(map_net_err(e)) },
+                    }
+                },
+            }
+        },
+    }
+}
+
+/// Accept loop for the REP server.  Loops forever until a fatal accept error.
+///
+/// ConnectionReset and Timeout are transient — loop continues.
+/// Other accept errors close the listener and return Ok.
+/// Module-private — called from `rep_serve`.
+partial fn rep_accept_loop(
+    listener: TcpListener,
+    handler: fn(Tainted[String]) -> String,
+) -> Result[Unit, ZmqError] ! Net {
+    match tcp_accept(listener) {
+        Err(e) => {
+            if is_transient_accept_error(e) {
+                rep_accept_loop(listener, handler)
+            } else {
+                tcp_close_listener(listener);
+                Ok(())
+            }
+        },
+        Ok(stream) => {
+            let _: Result[Unit, ZmqError] = handle_one(stream, handler);
+            rep_accept_loop(listener, handler)
+        },
+    }
+}
+
+/// Start a REP server at `addr`, handling requests with `handler` forever.
+///
+/// `addr` formats: `"tcp://*:5555"`, `"tcp://0.0.0.0:5555"`, `"localhost:5555"`.
+/// `handler` receives the decoded request as `Tainted[String]` and must relabel
+/// it with a context-specific audit tag before security-sensitive use.
+///
+/// Runs until a fatal accept error.  Returns `Ok` on clean shutdown.
+pub partial fn rep_serve(
+    addr: String,
+    handler: fn(Tainted[String]) -> String,
+) -> Result[Unit, ZmqError] ! Net {
+    match zmq_bind(addr) {
+        Err(e)       => Err(e),
+        Ok(listener) => rep_accept_loop(listener, handler),
+    }
+}
+
+// ── Client-side ───────────────────────────────────────────────────────────────
+
+/// Send a REQ message to `host:port` and receive the REP reply.
+///
+/// Connects, sends a framed request, reads the framed reply, closes.
+/// Returns the reply body as `Tainted[String]` (audit tag `ZMQ-RECV`).
+pub fn req_request(
+    host: String,
+    port: Int,
+    msg: String,
+) -> Result[Tainted[String], ZmqError] ! Net {
+    match tcp_connect(host, port) {
+        Err(e)     => Err(map_net_err(e)),
+        Ok(stream) => req_exchange(stream, msg),
+    }
+}
