@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.154.1] - 2026-05-25
+
+### Fixed
+- #1027 — Label-to-bare `TypeMismatch` now emits `LabelMismatch` (Req 11/IFC) instead of polluting Req 1
+- #1028 — `MissingConstraint` mapped to Req 1 (Type Safety) instead of Req 9 (Data Race)
+- #1029 — Removed false-positive `ForLoopInPartialFn` — `for` loops are always bounded
+
+### Added
+- `suggest-decreases` lint rule — hints when a `while` loop has an obvious decrementing variable (#1037)
+- `suggest-total-upgrade` lint rule — hints when a `partial fn` could be `total fn` (#1038)
+
+### Changed
+- Split `linter/rules.rs` into 5 submodules: `style`, `ast_style`, `semantic`, `reading_quality`, `complexity`
+- Deduplicated cyclomatic complexity between linter and passes (#1040)
+
 ## [0.153.0] - 2026-05-25
 
 ### Added
