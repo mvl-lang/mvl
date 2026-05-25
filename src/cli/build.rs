@@ -106,16 +106,36 @@ pub fn run(path: &str, run: bool, run_args: &[String], assert_mode: AssertMode) 
     // (e.g. range(), trim()) are transpiled from source rather than relying
     // on hardcoded Rust mappings in the transpiler. Embedded at compile time.
     let mut stdlib_prelude_progs = loader::load_implicit_prelude();
-    // Extend with any pure-MVL stdlib modules imported by this program (e.g. json.mvl).
+
     let all_progs: Vec<_> = std::iter::once(&prog)
         .chain(sibling_modules.iter().map(|(_, p)| p))
         .cloned()
         .collect();
-    stdlib_prelude_progs.extend(loader::load_mvl_native_stdlib_extras(&all_progs));
 
-    // Load MVL source files from any `pkg.*` packages referenced by the program.
+    // Load pkg.* packages transitively: pkg.anthropic may import pkg.tls, etc.
+    // Each round scans the newly-added programs for further pkg.* imports until
+    // the frontier is empty (handles arbitrary dependency depth).
+    // `seen_pkgs` prevents infinite loops when a package's own sources contain
+    // `use pkg.<self>` imports — without it, the same package would be loaded
+    // every round (#1050).
     let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    stdlib_prelude_progs.extend(loader::load_pkg_modules(&all_progs, &project_root));
+    let mut pkg_progs: Vec<_> = Vec::new();
+    let mut seen_pkgs = std::collections::HashSet::<String>::new();
+    let mut frontier: Vec<_> = all_progs.clone();
+    loop {
+        let new_pkgs = loader::load_pkg_modules(&frontier, &project_root, &mut seen_pkgs);
+        if new_pkgs.is_empty() {
+            break;
+        }
+        frontier = new_pkgs.clone();
+        pkg_progs.extend(new_pkgs);
+    }
+
+    // Extend with any pure-MVL stdlib modules imported by this program OR by any
+    // loaded package (e.g. pkg.anthropic imports std.json → json.mvl must be in prelude).
+    let all_with_pkgs: Vec<_> = all_progs.iter().chain(pkg_progs.iter()).cloned().collect();
+    stdlib_prelude_progs.extend(loader::load_mvl_native_stdlib_extras(&all_with_pkgs));
+    stdlib_prelude_progs.extend(pkg_progs);
 
     // Collect expression types from ALL programs (prelude + user) for the
     // transpiler to emit type-specific Rust at method-call sites (#554).
@@ -186,8 +206,8 @@ pub fn run(path: &str, run: bool, run_args: &[String], assert_mode: AssertMode) 
 
     let mut bridge_from_pkg = false;
     if out.has_extern_rust && bridge_path.is_none() {
-        // No user bridge.rs — check if a pkg.* package provides one.
-        bridge_path = loader::find_pkg_bridge(&all_progs, &project_root);
+        // No user bridge.rs — check if a pkg.* package (including transitive deps) provides one.
+        bridge_path = loader::find_pkg_bridge(&all_with_pkgs, &project_root);
         bridge_from_pkg = bridge_path.is_some();
     }
 
@@ -196,7 +216,7 @@ pub fn run(path: &str, run: bool, run_args: &[String], assert_mode: AssertMode) 
     // Skip this when the bridge is a user-supplied sibling bridge.rs to avoid
     // injecting unexpected deps into unrelated builds.
     if bridge_from_pkg {
-        let native_dep_lines = loader::collect_pkg_native_dep_lines(&all_progs, &project_root);
+        let native_dep_lines = loader::collect_pkg_native_dep_lines(&all_with_pkgs, &project_root);
         if !native_dep_lines.is_empty() {
             let opts = transpiler::cargo::CargoOptions {
                 crate_name: &crate_name,

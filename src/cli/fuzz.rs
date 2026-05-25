@@ -407,7 +407,11 @@ fn transpile_project(files: &[PathBuf]) -> FuzzLibOutput {
     let mut stdlib_prelude = loader::load_implicit_prelude();
     let progs_only: Vec<_> = all_progs.iter().map(|(_, p)| p.clone()).collect();
     let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    stdlib_prelude.extend(loader::load_pkg_modules(&progs_only, &project_root));
+    stdlib_prelude.extend(loader::load_pkg_modules(
+        &progs_only,
+        &project_root,
+        &mut std::collections::HashSet::new(),
+    ));
     stdlib_prelude.extend(loader::load_mvl_native_stdlib_extras(&progs_only));
 
     // Treat the first file as entry and the rest as siblings — transpile_project

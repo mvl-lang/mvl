@@ -110,6 +110,7 @@ pub fn run(path: &str, json: bool, verbose: bool) {
     assurance_prelude.extend(loader::load_pkg_modules(
         &all_assurance_progs,
         &project_root,
+        &mut std::collections::HashSet::new(),
     ));
 
     // Count kernel builtins from the implicit stdlib prelude (strings.mvl, lists.mvl).

@@ -398,10 +398,11 @@ fn type_uses_opaque(ty: &crate::mvl::parser::ast::TypeExpr, opaque: &[&str]) -> 
 
 /// Load MVL source files from `pkg.*` packages referenced by `progs`.
 /// Checks local override first, then the global XDG cache.
-pub fn load_pkg_modules(progs: &[Program], project_root: &Path) -> Vec<Program> {
-    use std::collections::HashSet;
-
-    let mut loaded: HashSet<String> = HashSet::new();
+pub fn load_pkg_modules(
+    progs: &[Program],
+    project_root: &Path,
+    seen: &mut std::collections::HashSet<String>,
+) -> Vec<Program> {
     let mut result: Vec<Program> = Vec::new();
 
     for prog in progs {
@@ -409,7 +410,7 @@ pub fn load_pkg_modules(progs: &[Program], project_root: &Path) -> Vec<Program> 
             if let Decl::Use(ud) = decl {
                 if ud.path.first().map(|s| s == "pkg").unwrap_or(false) {
                     if let Some(pkg_name) = ud.path.get(1) {
-                        if !loaded.insert(pkg_name.clone()) {
+                        if !seen.insert(pkg_name.clone()) {
                             continue;
                         }
                         // Resolve package source directory.
@@ -458,37 +459,27 @@ pub fn load_pkg_modules(progs: &[Program], project_root: &Path) -> Vec<Program> 
 /// Returns the path to the first valid package bridge found, or `None`.
 ///
 /// Search order:
-///   1. `.mvl/pkg/<name>/bridge.rs` — installed / cached package (must stay under `.mvl/pkg/`)
+///   1. `.mvl/pkg/<name>/bridge.rs` — local override (may be a symlink to in-repo pkg/)
 ///   2. `pkg/<name>/bridge.rs`      — in-repo development package
 pub fn find_pkg_bridge(progs: &[Program], project_root: &Path) -> Option<PathBuf> {
-    let canon_pkg_root = fs::canonicalize(project_root.join(".mvl").join("pkg")).ok();
-
     for prog in progs {
         for decl in &prog.declarations {
             if let Decl::Use(ud) = decl {
                 if ud.path.first().map(|s| s == "pkg").unwrap_or(false) {
                     if let Some(pkg_name) = ud.path.get(1) {
-                        // 1. Local override / cached install under .mvl/pkg/<name>/
+                        // 1. Local override under .mvl/pkg/<name>/ — this may be a
+                        //    symlink to the in-repo pkg/<name>/ (common dev workflow).
+                        //    Accept the bridge if canonicalize succeeds (file exists).
                         let pkg_dir = packages::fetch::local_override_dir(project_root, pkg_name);
                         let bridge = pkg_dir.join("bridge.rs");
                         if let Ok(canon_bridge) = fs::canonicalize(&bridge) {
-                            if canon_pkg_root
-                                .as_ref()
-                                .map(|r| canon_bridge.starts_with(r))
-                                .unwrap_or(false)
-                            {
-                                return Some(canon_bridge);
-                            }
+                            return Some(canon_bridge);
                         }
 
                         // 2. In-repo development package at pkg/<name>/bridge.rs
                         let dev_bridge = project_root.join("pkg").join(pkg_name).join("bridge.rs");
                         if let Ok(canon_bridge) = fs::canonicalize(&dev_bridge) {
-                            let canon_pkg = fs::canonicalize(project_root.join("pkg"))
-                                .unwrap_or_else(|_| project_root.join("pkg"));
-                            if canon_bridge.starts_with(&canon_pkg) {
-                                return Some(canon_bridge);
-                            }
+                            return Some(canon_bridge);
                         }
                     }
                 }

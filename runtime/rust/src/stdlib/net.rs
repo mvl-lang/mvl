@@ -15,6 +15,7 @@ use std::io::{Read, Write};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
+use crate::capability::ApiEndpoint;
 use crate::ifc::Tainted;
 
 // ── Handle types ──────────────────────────────────────────────────────────────
@@ -238,4 +239,35 @@ pub fn net_error_msg(e: NetError) -> String {
         NetError::HostUnreachable => "host unreachable".to_string(),
         NetError::Other(msg) => msg,
     }
+}
+
+// ── ApiEndpoint capability helpers ───────────────────────────────────────────
+// Pure-MVL functions from std/net.mvl, mirrored here so that `use
+// mvl_runtime::stdlib::net::*` provides them without requiring hybrid
+// module loading.
+
+/// Wrap a compile-time default endpoint as `ApiEndpoint[String]`.
+pub fn default_endpoint(fallback: String) -> ApiEndpoint<String> {
+    ApiEndpoint(fallback)
+}
+
+/// Load an API endpoint from an environment variable.
+///
+/// Returns `Some(ApiEndpoint[String])` if the env var is set, `None` otherwise.
+pub fn load_endpoint(key: String) -> Option<ApiEndpoint<String>> {
+    std::env::var(&key).ok().map(ApiEndpoint)
+}
+
+/// Connect to an `ApiEndpoint` host on the given port.
+///
+/// Unwraps the capability label and delegates to `tcp_connect`.
+pub fn endpoint_connect(endpoint: ApiEndpoint<String>, port: i64) -> Result<TcpStream, NetError> {
+    tcp_connect(endpoint.0, port)
+}
+
+/// Listen on an `ApiEndpoint` host on the given port.
+///
+/// Unwraps the capability label and delegates to `tcp_listen`.
+pub fn endpoint_listen(endpoint: ApiEndpoint<String>, port: i64) -> Result<TcpListener, NetError> {
+    tcp_listen(endpoint.0, port)
 }
