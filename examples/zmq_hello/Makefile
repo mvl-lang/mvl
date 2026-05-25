@@ -13,6 +13,7 @@
 
 MVL       := ../../target/debug/mvl
 DIR       := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
+REPO_ROOT := $(abspath $(DIR)../..)
 PORT      := 5555
 TIMEOUT   := 10   # seconds to wait for server to bind
 
@@ -29,10 +30,15 @@ guard-mvl: ## Validate MVL binary is present
 		exit 1; \
 	}
 
-check: guard-mvl ## Type-check server.mvl
+# Ensure pkg.zmq symlink exists for local package resolution.
+.mvl/pkg/zmq:
+	@mkdir -p .mvl/pkg
+	@ln -sfn $(REPO_ROOT)/pkg/zmq .mvl/pkg/zmq
+
+check: guard-mvl .mvl/pkg/zmq ## Type-check server.mvl
 	$(MVL) check $(DIR)server.mvl
 
-test: guard-mvl ## Start server, run Python client, assert 3 echo replies, stop server
+test: guard-mvl .mvl/pkg/zmq ## Start server, run Python client, assert 3 echo replies, stop server
 	@echo ""
 	@echo "  zmq_hello: starting REP server on port $(PORT)..."
 	@SERVER_PID=""; \
@@ -71,8 +77,9 @@ test: guard-mvl ## Start server, run Python client, assert 3 echo replies, stop 
 	echo "  \033[32m✓  zmq_hello passed (3/3 replies)\033[0m"; \
 	echo ""
 
-run: guard-mvl ## Start the REP server interactively (Ctrl-C to stop)
+run: guard-mvl .mvl/pkg/zmq ## Start the REP server interactively (Ctrl-C to stop)
 	$(MVL) run $(DIR)server.mvl
 
-clean: ## Remove temporary log files
+clean: ## Remove temporary log files and .mvl symlinks
 	rm -f /tmp/zmq_hello_server.log
+	rm -rf .mvl
