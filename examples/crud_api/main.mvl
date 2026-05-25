@@ -35,7 +35,6 @@ use pkg.http.{Method, Request, Response, HttpError, Router, MatchedRoute,
               new_router, route, dispatch,
               json_error, http_internal_error, method_name}
 use pkg.sqlite.{SqliteDb, close}
-use std.io.{IoError, temp_file, temp_path, temp_write, delete_temp}
 use std.net.{TcpListener, TcpStream, NetError,
              tcp_listen, tcp_accept, tcp_read_request, tcp_write,
              tcp_close_listener, tcp_close_stream, net_error_msg}
@@ -122,32 +121,9 @@ partial fn serve(db: val SqliteDb, listener: TcpListener, logger: val Logger, ro
     }
 }
 
-// ── Startup manifest ──────────────────────────────────────────────────────────
-//
-// Write a one-line config manifest to a temp file, log its path, then delete it.
-// Extracted into a helper so the TempFile parameter is mutable by default —
-// the transpiler requires a named parameter (not a match-arm binding) to call
-// `ref TempFile` builtins like temp_path and temp_write.
-
-partial fn write_startup_manifest(tf: TempFile, logger: val Logger, host: String, port: Int, db_path: String) -> Unit ! FileWrite + FileDelete + Log {
-    let p: String = relabel trust(temp_path(tf), "TEMP-PATH");
-    logger.debug("startup temp file", {"path": p});
-    let manifest: String = "host=".concat(host)
-        .concat(" port=").concat(port.to_string())
-        .concat(" db=").concat(db_path).concat("\n");
-    match temp_write(tf, manifest) {
-        Err(_) => logger.warn("startup temp write failed", {"path": p}),
-        Ok(_)  => {},
-    }
-    match delete_temp(consume(tf)) {
-        Err(_) => logger.warn("startup temp delete failed", {"path": p}),
-        Ok(_)  => logger.debug("startup temp file deleted", {"path": p}),
-    }
-}
-
 // ── Entry point ───────────────────────────────────────────────────────────────
 
-partial fn main() -> Unit ! DB + Env + FileRead + FileWrite + FileDelete + Log + Net {
+partial fn main() -> Unit ! DB + Env + FileRead + FileWrite + Log + Net {
     // Req 10: prove the literal default port lies in the valid TCP range.
     // Discharged statically (Layer 1, interval) — no runtime branch emitted.
     let _default_port_ok: Int = validate_port_range(8080);
@@ -179,14 +155,6 @@ partial fn main() -> Unit ! DB + Env + FileRead + FileWrite + FileDelete + Log +
             Ok(n)    => logger.info("seed complete", {"rows": n.to_string()}),
         }
     } else {}
-
-    // Write a startup manifest to a temp file and log its path.
-    // Linear type ensures the TempFile is consumed (deleted) before we enter
-    // the infinite request_loop — the compiler rejects any path that leaks it.
-    match temp_file() {
-        Err(_) => logger.warn("startup temp file failed", {"reason": "io error"}),
-        Ok(tf) => write_startup_manifest(tf, logger, cfg.host, cfg.port, cfg.db_path),
-    }
 
     let router: Router = setup_router();
 

@@ -9,7 +9,6 @@
 use models::{User, CreateUserRequest, UpdateUserRequest}
 use pkg.sqlite.{SqliteDb, SqliteError, open, execute, query, query_scalar, close}
 use std.db.{DbValue}
-use std.io.{TempFile, IoError, Path, path, temp_file, temp_write, delete_temp, persist}
 
 // ── Open / init ───────────────────────────────────────────────────────────────
 
@@ -147,55 +146,3 @@ pub partial fn db_delete_user(val db: SqliteDb, id: Int) -> Result[Bool, String]
     }
 }
 
-// ── Export ─────────────────────────────────────────────────────────────────
-
-/// Export all users to a CSV file atomically via TempFile (#1042).
-///
-/// Writes to a temp file first, then persists to `dest`.  If anything
-/// fails mid-write the temp file is cleaned up — no partial output.
-/// Linear enforcement (Req 6) guarantees the TempFile is always consumed.
-pub partial fn db_export_csv(val db: SqliteDb, dest: Path) -> Result[Int, String] ! DB + FileWrite + FileDelete {
-    match db_list_users(db) {
-        Err(msg) => Err(msg),
-        Ok(users) => match temp_file() {
-            Err(_) => Err("failed to create temp file"),
-            Ok(tf) => export_rows_to_temp(tf, users, dest),
-        },
-    }
-}
-
-/// Write user rows to a temp file, then persist atomically.
-/// The TempFile is always consumed via persist.  Write errors are tracked
-/// and propagated — persist still runs (linear type requires exactly one
-/// consume site), but Err is returned so the caller knows the export failed.
-partial fn export_rows_to_temp(tf: TempFile, users: List[User], dest: Path) -> Result[Int, String] ! FileWrite + FileDelete {
-    let write_ok: ref Bool = true;
-    let hdr: Result[Unit, IoError] = temp_write(tf, "id,name,email\n");
-    match hdr {
-        Err(_) => { write_ok = false },
-        Ok(_)  => {},
-    }
-    let i: ref Int = 0;
-    let n: Int = users.len();
-    while i < n {
-        match users.get(i) {
-            None     => {},
-            Some(u)  => {
-                let line: String = u.id.to_string().concat(",").concat(u.name).concat(",").concat(u.email).concat("\n");
-                let wr: Result[Unit, IoError] = temp_write(tf, line);
-                match wr {
-                    Err(_) => { write_ok = false },
-                    Ok(_)  => {},
-                }
-            },
-        }
-        i = i + 1
-    }
-    match persist(consume(tf), dest) {
-        Err(_) => Err("persist failed"),
-        Ok(_)  => match write_ok {
-            true  => Ok(n),
-            false => Err("write failed"),
-        },
-    }
-}
