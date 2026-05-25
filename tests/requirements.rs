@@ -378,6 +378,26 @@ fn req11_ifc_failed() {
     );
 }
 
+/// Label-to-bare TypeMismatch → Failed on Req 11, not Req 1 (#1027).
+#[test]
+fn req11_label_mismatch_failed() {
+    let v = run(include_str!("negative/req11/label_mismatch.mvl"), 11);
+    assert!(
+        v.is_failed(),
+        "Req 11 must be Failed on label_mismatch corpus (Secret passed to bare), got: {v:?}"
+    );
+}
+
+/// Label-to-bare mismatch must NOT fail Req 1 — it's an IFC error, not a type error (#1027).
+#[test]
+fn req01_not_failed_on_label_mismatch() {
+    let v = run(include_str!("negative/req11/label_mismatch.mvl"), 1);
+    assert!(
+        v.is_proven(),
+        "Req 1 must be Proven on label_mismatch corpus (label errors are Req 11), got: {v:?}"
+    );
+}
+
 /// `relabel trust()` and `relabel release()` in clean code → Proven.
 #[test]
 fn req11_relabel_trust_proven() {

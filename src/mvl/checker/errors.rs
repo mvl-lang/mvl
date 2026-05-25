@@ -17,6 +17,14 @@ pub enum CheckError {
         found: String,
         span: Span,
     },
+    /// Type mismatch caused by IFC label differences (#1027).
+    /// E.g. `Secret[String]` passed where `String` expected, or vice versa.
+    /// Mapped to Req 11 (IFC), not Req 1 (Type Safety).
+    LabelMismatch {
+        expected: String,
+        found: String,
+        span: Span,
+    },
     UndefinedVariable {
         name: String,
         span: Span,
@@ -571,7 +579,8 @@ impl CheckError {
             | CheckError::InvalidSanitize { .. }
             | CheckError::ImplicitFlowViolation { .. }
             | CheckError::CrossFunctionImplicitFlowViolation { .. }
-            | CheckError::InterprocFlowViolation { .. } => 11,
+            | CheckError::InterprocFlowViolation { .. }
+            | CheckError::LabelMismatch { .. } => 11,
             // Req 1: Type Safety (declaration-level — malformed extern ABI is a type/decl error,
             // not an IFC violation; grouping it under Req 11 would pollute IFC metrics).
             CheckError::UnsupportedExternAbi { .. } => 1,
@@ -587,6 +596,7 @@ impl CheckError {
     pub fn span(&self) -> Span {
         match self {
             CheckError::TypeMismatch { span, .. }
+            | CheckError::LabelMismatch { span, .. }
             | CheckError::UndefinedVariable { span, .. }
             | CheckError::UndefinedType { span, .. }
             | CheckError::NonNumericArithmetic { span, .. }
@@ -663,6 +673,9 @@ impl CheckError {
             CheckError::TypeMismatch {
                 expected, found, ..
             } => format!("type mismatch: expected `{expected}`, found `{found}`"),
+            CheckError::LabelMismatch {
+                expected, found, ..
+            } => format!("IFC label mismatch: expected `{expected}`, found `{found}` — use `relabel` to convert between labeled and bare types"),
             CheckError::UndefinedVariable { name, .. } => format!("undefined variable `{name}`"),
             CheckError::UndefinedType { name, .. } => format!("undefined type `{name}`"),
             CheckError::NonNumericArithmetic { ty, .. } => {
