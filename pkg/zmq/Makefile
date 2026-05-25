@@ -1,5 +1,5 @@
 # pkg/zmq — ZeroMQ-style messaging patterns in pure MVL
-.PHONY: help guard-mvl check test prove assurance clean
+.PHONY: help guard-mvl check lint test prove assurance clean
 
 .DEFAULT_GOAL := help
 
@@ -21,6 +21,9 @@ guard-mvl: ## Validate MVL binary is present
 check: guard-mvl ## Type-check package source files
 	$(MVL) check $(DIR)src/
 
+lint: guard-mvl ## Lint source files (missing-totality, style warnings)
+	@$(MVL) lint $(DIR)src/
+
 test: guard-mvl ## Run unit tests
 	$(MVL) test $(DIR)src/
 
@@ -33,7 +36,7 @@ prove: guard-mvl ## Prove correctness: assurance report with prover verdicts
 		printf "  \033[31m✗  pkg.zmq: assurance FAIL\033[0m\n\n"; exit 1; \
 	fi
 
-assurance: check test prove ## Full pipeline: check + test + prove
+assurance: check lint test prove ## Full pipeline: check + lint + test + prove
 
 clean: ## Remove build artifacts
 	rm -rf $(TMPDIR)mvl_build_zmq
