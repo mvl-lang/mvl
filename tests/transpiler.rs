@@ -2568,29 +2568,23 @@ fn actor_decl_emits_runtime_infrastructure() {
     assert_contains(&rust, "fn get_count(&mut self)");
     // Actor handle
     assert_contains(&rust, "struct Counter {");
-    assert_contains(
-        &rust,
-        "_sender: std::sync::mpsc::SyncSender<CounterMailbox>,",
-    );
+    assert_contains(&rust, "_sender: MvlSender<CounterMailbox>,");
     // Handle impl: fire-and-forget wrappers for pub behaviors only
     assert_contains(&rust, "impl Counter {");
     assert_contains(&rust, "pub fn increment(&self, n: i64)");
     assert_contains(
         &rust,
-        "let _ = self._sender.try_send(CounterMailbox::Increment { n });",
+        "mvl_send(&self._sender, CounterMailbox::Increment { n });",
     );
     assert_contains(&rust, "pub fn reset(&self)");
-    assert_contains(
-        &rust,
-        "let _ = self._sender.try_send(CounterMailbox::Reset);",
-    );
+    assert_contains(&rust, "mvl_send(&self._sender, CounterMailbox::Reset);");
     // Start function: takes `mut state` so _self_ref can be injected.
     assert_contains(
         &rust,
         "fn _start_counter(mut state: CounterState) -> Counter {",
     );
-    assert_contains(&rust, "std::sync::mpsc::sync_channel(256)");
-    assert_contains(&rust, "std::thread::spawn");
+    assert_contains(&rust, "mvl_channel()");
+    assert_contains(&rust, "mvl_spawn(move || {");
     assert_contains(
         &rust,
         "CounterMailbox::Increment { n } => actor.increment(n),",
