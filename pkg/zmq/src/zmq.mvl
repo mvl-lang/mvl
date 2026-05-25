@@ -1,0 +1,129 @@
+// pkg.zmq — ZeroMQ-style messaging patterns in pure MVL.
+//
+// REQ/REP, PUB/SUB, PUSH/PULL over TCP actors.  No libzmq dependency.
+//
+// Wire protocol: 4-byte big-endian length prefix + message body (simplified ZMTP).
+// Connection model: one message per connection (connection-per-exchange).
+//   Each send opens a new TCP connection; receiver reads until EOF, then closes.
+//   This works with the current std.net tcp_read primitive.
+//
+// IFC: all received bytes are Tainted[String].  Use relabel to unwrap after validation.
+//
+// Import:
+//   use pkg.zmq.{ZmqError, ZmqAddr, zmq_error_msg,
+//                encode_frame, decode_frame, parse_zmq_addr, map_net_err}
+//
+// See #1032.
+
+use std.ifc.{Tainted}
+use std.net.{NetError, net_error_msg}
+
+// ── Error type ────────────────────────────────────────────────────────────────
+
+/// Errors returned by all pkg.zmq operations.
+pub type ZmqError = enum {
+    NetError(String),
+    FrameError(String),
+    InvalidAddr(String),
+}
+
+/// Format a ZmqError as a human-readable string.
+pub fn zmq_error_msg(e: val ZmqError) -> String {
+    match e {
+        ZmqError::NetError(msg)    => "net: ".concat(msg),
+        ZmqError::FrameError(msg)  => "frame: ".concat(msg),
+        ZmqError::InvalidAddr(msg) => "addr: ".concat(msg),
+    }
+}
+
+// ── Wire framing ──────────────────────────────────────────────────────────────
+//
+// Simplified ZMTP: [4 bytes big-endian u32 length][N bytes body]
+//
+// encode_frame / decode_frame are pure — no effects, no I/O.
+
+/// Encode a message as a 4-byte big-endian length-prefixed frame.
+///
+/// Pure function.  Write the result directly to a TcpStream via tcp_write.
+pub fn encode_frame(msg: String) -> String {
+    let n: Int = msg.len();
+    let b3: Byte = from_int(n.shift_right(24).bit_and(255));
+    let b2: Byte = from_int(n.shift_right(16).bit_and(255));
+    let b1: Byte = from_int(n.shift_right(8).bit_and(255));
+    let b0: Byte = from_int(n.bit_and(255));
+    String::from_bytes([b3, b2, b1, b0]).concat(msg)
+}
+
+/// Decode a length-prefixed frame from raw network input.
+///
+/// Returns the message body as `Tainted[String]` (audit tag `ZMQ-RECV`).
+/// Returns `Err(FrameError)` if the data is too short or the length field mismatches.
+///
+/// IFC trust boundary: the length header bytes are structural (not user data) and are
+/// detainted with `ZMQ-FRAME-HEADER`.  The body is re-tainted with `ZMQ-RECV`.
+pub fn decode_frame(raw: Tainted[String]) -> Result[Tainted[String], ZmqError] {
+    let s: String = relabel trust(raw, "ZMQ-FRAME-HEADER");
+    let slen: Int = s.len();
+    if slen < 4 {
+        Err(ZmqError::FrameError("frame too short"))
+    } else {
+        let b3: Int = s.byte_at(0).to_int();
+        let b2: Int = s.byte_at(1).to_int();
+        let b1: Int = s.byte_at(2).to_int();
+        let b0: Int = s.byte_at(3).to_int();
+        let expected_len: Int = b3.shift_left(24) + b2.shift_left(16) + b1.shift_left(8) + b0;
+        let body_len: Int = slen - 4;
+        if body_len != expected_len {
+            Err(ZmqError::FrameError("length mismatch"))
+        } else {
+            let body: String = s.substring(4, slen);
+            Ok(relabel taint(body, "ZMQ-RECV"))
+        }
+    }
+}
+
+// ── Address parsing ───────────────────────────────────────────────────────────
+
+/// Parsed TCP address.
+pub type ZmqAddr = struct {
+    host: String,
+    port: Int,
+}
+
+/// Parse a ZMQ-style address: "tcp://host:port", "tcp://*:port", or "host:port".
+///
+/// The wildcard `*` is mapped to `0.0.0.0` (bind on all interfaces).
+pub fn parse_zmq_addr(addr: String) -> Result[ZmqAddr, ZmqError] {
+    let stripped: String = if addr.starts_with("tcp://") {
+        addr.substring(6, addr.len())
+    } else {
+        addr
+    };
+    let s_len: Int = stripped.len();
+    let resolved: String = if stripped.starts_with("*") {
+        "0.0.0.0".concat(stripped.substring(1, s_len))
+    } else {
+        stripped
+    };
+    let res_len: Int = resolved.len();
+    match resolved.find(":") {
+        None    => Err(ZmqError::InvalidAddr("missing port separator")),
+        Some(i) => {
+            let host: String = resolved.substring(0, i);
+            let port_str: String = resolved.substring(i + 1, res_len);
+            if host.len() == 0 {
+                Err(ZmqError::InvalidAddr("empty host"))
+            } else {
+                match port_str.parse_int() {
+                    Err(_)   => Err(ZmqError::InvalidAddr("invalid port")),
+                    Ok(port) => Ok(ZmqAddr { host: host, port: port }),
+                }
+            }
+        },
+    }
+}
+
+/// Map a NetError to a ZmqError (for error propagation in network operations).
+pub fn map_net_err(e: NetError) -> ZmqError {
+    ZmqError::NetError(net_error_msg(e))
+}
