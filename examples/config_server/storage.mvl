@@ -51,7 +51,7 @@ extern "rust" {
 
 // ── Store access API ──────────────────────────────────────────────────────
 
-// Initialise the auth store with the api_key loaded from config.
+// Initialise the auth store with the api_key loaded from env via get_secret().
 // This is called once at server startup; the Secret[String] is consumed here.
 pub total fn setup_auth(api_key: Secret[String]) -> Unit {
     init_auth_store(api_key)
