@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.157.0] - 2026-05-25
+
+### Added
+- #1000 — `pkg/http/src/rest.mvl` — REST response builders, JSON helpers, Router/MatchedRoute types, and dispatch logic.
+- #999, #1000 — `examples/crud_api` — Full CRUD REST API over SQLite with layered config (defaults → TOML → env → CLI), CSV seeding, structured logging, and refinement types.
+- #1042 — `std/io` — TempFile and TempDir with linear type safety, temp_path/temp_dir_path builtins returning Tainted[String].
+- `tests/corpus/05_effects/temp_files.mvl` — Termination proof for TempFile cleanup loop.
+
+### Changed
+- `std/json.mvl` — Upgrade encode, json_escape, encode_array, encode_object to total fn with decreases annotations.
+- `pkg/http/src/rest.mvl` — Upgrade json_error to total fn.
+- `examples/crud_api/main.mvl` — Replace tail-recursive request_loop with while-true serve() loop.
+
+### Fixed
+- `std/http.mvl` — Fix shorthand struct patterns (`{msg}` → `{msg: msg}`) that caused silent parse failures and empty transpiled else branches; restructure parse_request to single-match to avoid use-after-move. Fixes 709 stdlib tests.
+- `pkg/http/src/http.mvl` — Add std.collections import for Map::new(); fix dispatch to use early return instead of ref Option (linear type); fix body string concat.
+- `src/cli/build.rs` — Set binary runtime CWD to source file's parent directory so config.toml resolves.
+- `src/mvl/checker/passes.rs` — Restore N/M coverage format in RefinementsPass verdicts.
+- `examples/crud_api` — Call db_clear_users before seeding to prevent duplicates on restart; fix total→partial fn for handler/db/config functions.
+
 ## [0.156.3] - 2026-05-25
 
 ### Fixed
