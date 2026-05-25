@@ -40,8 +40,16 @@ test-solver: guard-mvl .mvl/pkg/anthropic .mvl/pkg/tls ## Show per-file solver s
 
 test: check ## No unit tests; delegates to type-check
 
-smoke: guard-mvl .mvl/pkg/anthropic .mvl/pkg/tls ## Smoke-test: build binary (proves compilation without a terminal)
-	$(MVL) build $(DIR)main.mvl
+smoke: guard-mvl .mvl/pkg/anthropic .mvl/pkg/tls ## Smoke-test: build + run without API key, verify graceful error
+	@OK="\033[32m✓\033[0m"; FAIL="\033[31m✗\033[0m"; \
+	out=$$(env -u ANTHROPIC_API_KEY $(MVL) run $(DIR)main.mvl 2>&1); \
+	if echo "$$out" | grep -q "error: ANTHROPIC_API_KEY not set"; then \
+		printf "  $$OK  anthropic_chat: graceful no-key error\n"; \
+	else \
+		printf "  $$FAIL  anthropic_chat: unexpected output\n"; \
+		echo "$$out"; \
+		exit 1; \
+	fi
 
 clean: ## Remove build artifacts
-	rm -rf $(TMPDIR)mvl_build_anthropic_chat .mvl
+	rm -rf $(TMPDIR)mvl_build_*_main .mvl
