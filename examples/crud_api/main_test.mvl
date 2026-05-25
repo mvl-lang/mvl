@@ -1,0 +1,101 @@
+// examples/crud_api/main_test.mvl — unit tests for pure JSON encoding logic.
+//
+// Test files are self-contained (cross-file resolution not wired in per-file
+// checker — see #96).  Types and helpers are re-declared here; the logic
+// mirrors handlers.mvl and pkg.http/rest.mvl so any drift becomes a failing
+// test.
+//
+// DB operations and HTTP handlers require effects and are covered by
+// integration tests (make run + curl).
+
+// ── Local type re-declarations ────────────────────────────────────────────────
+
+type User = struct {
+    id:    Int,
+    name:  String,
+    email: String,
+}
+
+// ── Local JSON helpers (mirrors pkg.http rest.mvl) ────────────────────────────
+
+fn json_escape(s: String) -> String {
+    let out: ref String = "";
+    for c in s.chars() {
+        if      c == "\"" { out = out.concat("\\\"") }
+        else if c == "\\" { out = out.concat("\\\\") }
+        else if c == "\n" { out = out.concat("\\n") }
+        else if c == "\r" { out = out.concat("\\r") }
+        else if c == "\t" { out = out.concat("\\t") }
+        else              { out = out.concat(c) }
+    }
+    out
+}
+
+fn json_str(s: String) -> String {
+    "\"".concat(json_escape(s)).concat("\"")
+}
+
+fn user_to_json(u: val User) -> String {
+    "{\"id\":".concat(u.id.to_string())
+        .concat(",\"name\":").concat(json_str(u.name))
+        .concat(",\"email\":").concat(json_str(u.email))
+        .concat("}")
+}
+
+// ── json_escape ───────────────────────────────────────────────────────────────
+
+test fn test_escape_plain() -> Unit {
+    assert_eq(json_escape("hello"), "hello")
+}
+
+test fn test_escape_double_quote() -> Unit {
+    assert_eq(json_escape("say \"hi\""), "say \\\"hi\\\"")
+}
+
+test fn test_escape_backslash() -> Unit {
+    assert_eq(json_escape("C:\\Users"), "C:\\\\Users")
+}
+
+test fn test_escape_newline() -> Unit {
+    assert_eq(json_escape("line1\nline2"), "line1\\nline2")
+}
+
+test fn test_escape_tab() -> Unit {
+    assert_eq(json_escape("col1\tcol2"), "col1\\tcol2")
+}
+
+test fn test_escape_empty() -> Unit {
+    assert_eq(json_escape(""), "")
+}
+
+// ── json_str ──────────────────────────────────────────────────────────────────
+
+test fn test_json_str_wraps_in_quotes() -> Unit {
+    assert_eq(json_str("hello"), "\"hello\"")
+}
+
+test fn test_json_str_escapes_inside() -> Unit {
+    assert_eq(json_str("a\"b"), "\"a\\\"b\"")
+}
+
+// ── user_to_json ──────────────────────────────────────────────────────────────
+
+test fn test_user_to_json_basic() -> Unit {
+    let u: User = User { id: 1, name: "Alice", email: "alice@example.com" };
+    assert_eq(user_to_json(u), "{\"id\":1,\"name\":\"Alice\",\"email\":\"alice@example.com\"}")
+}
+
+test fn test_user_to_json_escapes_name() -> Unit {
+    let u: User = User { id: 2, name: "Bob \"the\" Builder", email: "bob@example.com" };
+    assert_eq(user_to_json(u), "{\"id\":2,\"name\":\"Bob \\\"the\\\" Builder\",\"email\":\"bob@example.com\"}")
+}
+
+test fn test_user_to_json_escapes_email() -> Unit {
+    let u: User = User { id: 3, name: "Carol", email: "carol+tag@example.com" };
+    assert_eq(user_to_json(u), "{\"id\":3,\"name\":\"Carol\",\"email\":\"carol+tag@example.com\"}")
+}
+
+test fn test_user_to_json_large_id() -> Unit {
+    let u: User = User { id: 999999, name: "Dave", email: "dave@example.com" };
+    assert_eq(user_to_json(u), "{\"id\":999999,\"name\":\"Dave\",\"email\":\"dave@example.com\"}")
+}

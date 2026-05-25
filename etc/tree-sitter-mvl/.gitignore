@@ -10,3 +10,8 @@ pyproject.toml
 setup.py
 .editorconfig
 .gitattributes
+*.a
+*.dylib
+*.so
+*.o
+*.pc

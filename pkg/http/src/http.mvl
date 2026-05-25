@@ -18,6 +18,7 @@ use std.ifc.{Tainted}
 use std.net.{TcpListener, TcpStream, NetError,
              tcp_listen, tcp_accept, tcp_read_request, tcp_write,
              tcp_close_listener, tcp_close_stream, net_error_msg}
+use std.collections.{}
 
 // ── Status ────────────────────────────────────────────────────────────────────
 
@@ -474,11 +475,11 @@ pub fn parse_request(raw: Tainted[String]) -> Result[Request, HttpError] {
         let acc: ref String = "";
         let body_first: ref Bool = true;
         for bl in body_lines {
-            if body_first {
-                acc = bl;
-                body_first = false
+            acc = if body_first {
+                body_first = false;
+                bl
             } else {
-                acc = acc.concat("\r\n").concat(bl)
+                acc.concat("\r\n").concat(bl)
             }
         }
         acc
@@ -631,33 +632,32 @@ fn match_path(pattern: String, path: String) -> Option[Map[String, String]] {
 /// Returns `Http405MethodNotAllowed` if the path matches but no route accepts
 /// the method; `Http404NotFound` if no route matches the path at all.
 pub fn dispatch(r: val Router, req: val Request) -> Result[MatchedRoute, HttpError] {
-    let path_matched: ref Bool = false;
-    let result: ref Option[MatchedRoute] = None;
+    // Try to find a matching route.
     for rt in r.routes {
         match match_path(rt.pattern, req.path) {
             None => {},
             Some(params) => {
-                path_matched = true;
-                match result {
-                    Some(_) => {},
-                    None    => {
-                        if rt.method == req.method {
-                            result = Some(MatchedRoute { name: rt.name, params: params })
-                        } else {}
-                    },
-                }
+                // Path matched; return early if method also matches.
+                if rt.method == req.method {
+                    return Ok(MatchedRoute { name: rt.name, params: params })
+                } else {}
             },
         }
     }
-    match result {
-        Some(m) => Ok(m),
-        None    => {
-            if path_matched {
-                Err(HttpError { status: Status::Http405MethodNotAllowed, detail: "method not allowed" })
-            } else {
-                Err(HttpError { status: Status::Http404NotFound, detail: req.path })
-            }
-        },
+    // No method match found — check if path matched any route.
+    let path_matched: ref Bool = false;
+    for rt in r.routes {
+        match match_path(rt.pattern, req.path) {
+            None => {},
+            Some(_) => {
+                path_matched = true
+            },
+        }
+    }
+    if path_matched {
+        Err(HttpError { status: Status::Http405MethodNotAllowed, detail: "method not allowed" })
+    } else {
+        Err(HttpError { status: Status::Http404NotFound, detail: req.path })
     }
 }
 

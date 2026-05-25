@@ -101,7 +101,7 @@ fn parse_method_str(s: String) -> Result[Method, HttpError] {
 // let-binding match arms).
 fn parse_request_line(line: String) -> ParsedRequestLine {
     let parts: List[String] = str_split(line, " ");
-    if list_len(parts) < 2 {
+    if parts.len() < 2 {
         ParsedRequestLine::RequestLineErr {
             msg: str_concat("malformed request line: ", line)
         }
@@ -111,7 +111,7 @@ fn parse_request_line(line: String) -> ParsedRequestLine {
             Some(ms) => match list_get(parts, 1) {
                 None => ParsedRequestLine::RequestLineErr { msg: "missing path" },
                 Some(ps) => match parse_method_str(ms) {
-                    Err(HttpError::BadRequest { msg }) =>
+                    Err(HttpError::BadRequest { msg: msg }) =>
                         ParsedRequestLine::RequestLineErr { msg: msg },
                     Err(_) =>
                         ParsedRequestLine::RequestLineErr {
@@ -202,26 +202,18 @@ pub partial fn parse_request(data: String) -> Result[Request, HttpError] {
         None    => "",
     };
 
-    // Parse request line. Use standalone match (not inside a let binding)
-    // to perform early return — early return inside let-binding arms is
-    // unsupported in the MVL transpiler.
+    // Parse request line and extract method+path in one match.
     let pl: ParsedRequestLine = parse_request_line(first_line);
+    let parsed_method: ref Method = Method::GET;
+    let parsed_path: ref String = "";
     match pl {
-        ParsedRequestLine::RequestLineErr { msg } =>
+        ParsedRequestLine::RequestLineErr { msg: msg } =>
             { return Err(HttpError::ParseError { msg: msg }) },
-        ParsedRequestLine::RequestLine { method: _, path: _ } => {},
+        ParsedRequestLine::RequestLine { method: m, path: p } => {
+            parsed_method = m;
+            parsed_path = p
+        },
     }
-
-    // Extract method and path from the successfully-parsed line.
-    // The RequestLineErr arms are unreachable (checked above).
-    let parsed_method: Method = match pl {
-        ParsedRequestLine::RequestLine { method, path } => method,
-        ParsedRequestLine::RequestLineErr { msg }       => Method::GET,
-    };
-    let parsed_path: String = match pl {
-        ParsedRequestLine::RequestLine { method, path } => path,
-        ParsedRequestLine::RequestLineErr { msg }       => "",
-    };
 
     // Parse headers until blank line.
     let headers: ref Map[String, String] = empty_str_map();
@@ -239,7 +231,7 @@ pub partial fn parse_request(data: String) -> Result[Request, HttpError] {
                 } else {
                     match parse_header_line(l) {
                         ParsedHeader::NoHeader              => {},
-                        ParsedHeader::Header { name, value } =>
+                        ParsedHeader::Header { name: name, value: value } =>
                             { headers.insert(name, value) }
                     }
                 }
@@ -321,11 +313,11 @@ pub partial fn serialize_response(resp: Response) -> String {
 /// Format an HttpError as a human-readable string (useful for logging).
 pub fn http_error_msg(e: HttpError) -> String {
     match e {
-        HttpError::BadRequest { msg }    => str_concat("400 Bad Request: ", msg),
+        HttpError::BadRequest { msg: msg }    => str_concat("400 Bad Request: ", msg),
         HttpError::NotFound              => "404 Not Found",
         HttpError::MethodNotAllowed      => "405 Method Not Allowed",
         HttpError::Timeout               => "408 Request Timeout",
-        HttpError::ParseError { msg }    => str_concat("parse error: ", msg),
-        HttpError::InternalError { msg } => str_concat("500 Internal Server Error: ", msg),
+        HttpError::ParseError { msg: msg }    => str_concat("parse error: ", msg),
+        HttpError::InternalError { msg: msg } => str_concat("500 Internal Server Error: ", msg),
     }
 }

@@ -7,63 +7,63 @@
 // End-to-end integration is covered by `make run` (builds and runs main.mvl).
 
 use pkg.sqlite.{SqliteError}
-use std.db.{Value}
+use std.db.{DbValue}
 
 // ── Value enum matching ───────────────────────────────────────────────────────
 
 test fn test_value_int_round_trips() -> Unit {
-    let v: Value = Value::Int(42);
+    let v: DbValue = DbValue::Int(42);
     match v {
-        Value::Int(n) => assert_eq(n, 42),
-        _ => panic("unreachable: expected Value::Int"),
+        DbValue::Int(n) => assert_eq(n, 42),
+        _ => panic("unreachable: expected DbValue::Int"),
     }
 }
 
 test fn test_value_text_round_trips() -> Unit {
-    let v: Value = Value::Text("Alice");
+    let v: DbValue = DbValue::Text("Alice");
     match v {
-        Value::Text(s) => assert_eq(s, "Alice"),
-        _ => panic("unreachable: expected Value::Text"),
+        DbValue::Text(s) => assert_eq(s, "Alice"),
+        _ => panic("unreachable: expected DbValue::Text"),
     }
 }
 
 test fn test_value_null_matches() -> Unit {
-    let v: Value = Value::Null;
+    let v: DbValue = DbValue::Null;
     match v {
-        Value::Null => assert_eq(1, 1),
-        _ => panic("unreachable: expected Value::Null"),
+        DbValue::Null => assert_eq(1, 1),
+        _ => panic("unreachable: expected DbValue::Null"),
     }
 }
 
 test fn test_value_bool_true() -> Unit {
-    let v: Value = Value::Bool(true);
+    let v: DbValue = DbValue::Bool(true);
     match v {
-        Value::Bool(b) => assert_eq(b, true),
-        _ => panic("unreachable: expected Value::Bool(true)"),
+        DbValue::Bool(b) => assert_eq(b, true),
+        _ => panic("unreachable: expected DbValue::Bool(true)"),
     }
 }
 
 test fn test_value_bool_false() -> Unit {
-    let v: Value = Value::Bool(false);
+    let v: DbValue = DbValue::Bool(false);
     match v {
-        Value::Bool(b) => assert_eq(b, false),
-        _ => panic("unreachable: expected Value::Bool(false)"),
+        DbValue::Bool(b) => assert_eq(b, false),
+        _ => panic("unreachable: expected DbValue::Bool(false)"),
     }
 }
 
 test fn test_value_float_round_trips() -> Unit {
-    let v: Value = Value::Float(3.14);
+    let v: DbValue = DbValue::Float(3.14);
     match v {
-        Value::Float(f) => assert_eq(f > 3.0, true),
-        _ => panic("unreachable: expected Value::Float"),
+        DbValue::Float(f) => assert_eq(f > 3.0, true),
+        _ => panic("unreachable: expected DbValue::Float"),
     }
 }
 
 test fn test_value_blob_round_trips() -> Unit {
-    let v: Value = Value::Blob([65, 66, 67]);
+    let v: DbValue = DbValue::Blob([65, 66, 67]);
     match v {
-        Value::Blob(b) => assert_eq(b.len(), 3),
-        _ => panic("unreachable: expected Value::Blob"),
+        DbValue::Blob(b) => assert_eq(b.len(), 3),
+        _ => panic("unreachable: expected DbValue::Blob"),
     }
 }
 

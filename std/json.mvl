@@ -86,7 +86,7 @@ pub partial fn jsonl_decode(s: String) -> Result[List[Value], JsonError] {
 // ── encode ────────────────────────────────────────────────────────────────────
 
 /// Serialises a Value to a JSON string.
-pub partial fn encode(v: Value) -> String {
+pub total fn encode(v: Value) -> String {
     match v {
         Value::Null      => "null",
         Value::Bool(b)   => if b { "true" } else { "false" },
@@ -101,12 +101,12 @@ fn encode_number(n: Float) -> String {
     n.to_string()
 }
 
-partial fn json_escape(s: String) -> String {
+total fn json_escape(s: String) -> String {
     let chars: List[String] = s.chars();
     let len: Int = chars.len();
     let out: ref String = "";
     let i: ref Int = 0;
-    while i < len {
+    while i < len decreases (len - i) {
         match chars.get(i) {
             None    => {},
             Some(c) => {
@@ -123,14 +123,14 @@ partial fn json_escape(s: String) -> String {
     out
 }
 
-partial fn encode_array(arr: List[Value]) -> String {
+total fn encode_array(arr: List[Value]) -> String {
     let len: Int = arr.len();
     if len == 0 {
         "[]"
     } else {
         let out: ref String = "[";
         let i: ref Int = 0;
-        while i < len {
+        while i < len decreases (len - i) {
             if i > 0 { out = out.concat(",") } else {}
             match arr.get(i) {
                 Some(v) => { out = out.concat(encode(v)) },
@@ -142,7 +142,7 @@ partial fn encode_array(arr: List[Value]) -> String {
     }
 }
 
-partial fn encode_object(obj: Map[String, Value]) -> String {
+total fn encode_object(obj: Map[String, Value]) -> String {
     let keys: List[String] = obj.keys();
     let len: Int = keys.len();
     if len == 0 {
@@ -150,7 +150,7 @@ partial fn encode_object(obj: Map[String, Value]) -> String {
     } else {
         let out: ref String = "{";
         let i: ref Int = 0;
-        while i < len {
+        while i < len decreases (len - i) {
             if i > 0 { out = out.concat(",") } else {}
             match keys.get(i) {
                 None    => {},

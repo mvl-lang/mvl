@@ -1,0 +1,139 @@
+// examples/crud_api/config.mvl — layered server configuration.
+//
+// Implements the Defaults → TOML → Env → CLI layered config pattern.
+// See: .openspec/patterns/001-config.md
+//
+// Import from main.mvl:
+//   use config::{CrudApiConfig, ConfigLoadError, load_config}
+
+use std.config.{ConfigValue, ConfigError, merge, with_env, get_path,
+                as_int, as_string, from_toml}
+use std.toml.{toml_decode}
+use std.io.{read_file}
+use std.args.{parse_args, optional, ArgType, ArgValue}
+use std.log.{LogLevel, LogFormat, parse_log_level, parse_log_format}
+
+// ── Types ──────────────────────────────────────────────────────────────────────
+
+/// Resolved CRUD API configuration.
+pub type CrudApiConfig = struct {
+    host:       String,
+    port:       Int,
+    db_path:    String,
+    seed_file:  String,
+    log_level:  LogLevel,
+    log_format: LogFormat,
+}
+
+/// Errors that can occur while loading configuration.
+pub type ConfigLoadError = enum {
+    Config(ConfigError),
+}
+
+// ── Layer 1: compiled-in defaults ─────────────────────────────────────────────
+
+fn defaults() -> ConfigValue {
+    ConfigValue::Map({
+        "host":       ConfigValue::String("127.0.0.1"),
+        "port":       ConfigValue::Int(8080),
+        "db_path":    ConfigValue::String("/tmp/crud_api.db"),
+        "seed_file":  ConfigValue::String(""),
+        "log_level":  ConfigValue::String("info"),
+        "log_format": ConfigValue::String("plain"),
+    })
+}
+
+// ── Layer 2: TOML file ────────────────────────────────────────────────────────
+
+partial fn load_toml_layer(path: String, base: ConfigValue) -> ConfigValue ! FileRead {
+    match read_file(path) {
+        Err(_) => base,
+        Ok(raw) => {
+            let s: String = relabel trust(raw, "CONFIG-FILE");
+            match toml_decode(s) {
+                Err(_)   => base,
+                Ok(toml) => merge(base, from_toml(toml)),
+            }
+        },
+    }
+}
+
+// ── Layer 4: CLI args ─────────────────────────────────────────────────────────
+
+partial fn merge_cli_args(cfg: ConfigValue) -> ConfigValue ! Console + Env {
+    let cli: Map[String, ArgValue] = parse_args([
+        optional("host",       ArgType::Str),
+        optional("port",       ArgType::Int),
+        optional("db-path",    ArgType::Str),
+        optional("seed-file",  ArgType::Str),
+        optional("log-level",  ArgType::Str),
+        optional("log-format", ArgType::Str),
+    ]);
+    // --host
+    let cfg: ConfigValue = match cli.get("host") {
+        Some(ArgValue::Str(v)) => merge(cfg, ConfigValue::Map({
+            "host": ConfigValue::String(v),
+        })),
+        _ => cfg,
+    };
+    // --port
+    let cfg: ConfigValue = match cli.get("port") {
+        Some(ArgValue::Int(n)) => merge(cfg, ConfigValue::Map({"port": ConfigValue::Int(n)})),
+        _ => cfg,
+    };
+    // --db-path
+    let cfg: ConfigValue = match cli.get("db-path") {
+        Some(ArgValue::Str(v)) => merge(cfg, ConfigValue::Map({"db_path": ConfigValue::String(v)})),
+        _ => cfg,
+    };
+    // --seed-file
+    let cfg: ConfigValue = match cli.get("seed-file") {
+        Some(ArgValue::Str(v)) => merge(cfg, ConfigValue::Map({"seed_file": ConfigValue::String(v)})),
+        _ => cfg,
+    };
+    // --log-level
+    let cfg: ConfigValue = match cli.get("log-level") {
+        Some(ArgValue::Str(v)) => merge(cfg, ConfigValue::Map({"log_level": ConfigValue::String(v)})),
+        _ => cfg,
+    };
+    // --log-format
+    let cfg: ConfigValue = match cli.get("log-format") {
+        Some(ArgValue::Str(v)) => merge(cfg, ConfigValue::Map({"log_format": ConfigValue::String(v)})),
+        _ => cfg,
+    };
+    cfg
+}
+
+// ── Extract typed struct ───────────────────────────────────────────────────────
+
+partial fn extract(cfg: ConfigValue) -> Result[CrudApiConfig, ConfigError] {
+    Ok(CrudApiConfig {
+        host:       as_string(get_path(cfg, "host").unwrap_or(ConfigValue::String("127.0.0.1")))?,
+        port:       as_int(get_path(cfg, "port").unwrap_or(ConfigValue::Int(8080)))?,
+        db_path:    as_string(get_path(cfg, "db_path").unwrap_or(ConfigValue::String("/tmp/crud_api.db")))?,
+        seed_file:  as_string(get_path(cfg, "seed_file").unwrap_or(ConfigValue::String("")))?,
+        log_level:  parse_log_level(as_string(get_path(cfg, "log_level").unwrap_or(ConfigValue::String("info")))?),
+        log_format: parse_log_format(as_string(get_path(cfg, "log_format").unwrap_or(ConfigValue::String("plain")))?),
+    })
+}
+
+// ── Public entry point ────────────────────────────────────────────────────────
+
+/// Load configuration from all layers in priority order:
+///   compiled defaults < config.toml < CRUD_API_* env vars < CLI args
+///
+/// Missing TOML file or unset env vars are silently skipped.
+/// Returns Err only when a present value has the wrong type.
+pub partial fn load_config() -> Result[CrudApiConfig, ConfigLoadError] ! Env + FileRead + Console {
+    let cfg: ConfigValue = defaults();
+    let cfg: ConfigValue = load_toml_layer("config.toml", cfg);
+    let cfg: ConfigValue = match with_env(cfg, "CRUD_API") {
+        Ok(c)  => c,
+        Err(_) => cfg,
+    };
+    let cfg: ConfigValue = merge_cli_args(cfg);
+    match extract(cfg) {
+        Ok(c)  => Ok(c),
+        Err(e) => Err(ConfigLoadError::Config(e)),
+    }
+}

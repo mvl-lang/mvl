@@ -228,6 +228,81 @@ pub builtin fn create_symlink(target: Path, link: Path) -> Result[Unit, IoError]
 /// to prevent path traversal via attacker-controlled symlink targets.
 pub builtin fn read_link(p: Path) -> Result[Tainted[String], IoError] ! FileRead
 
+// ── Temporary files and directories (#1042) ─────────────────────────────────
+//
+// Linear types — the compiler enforces that every TempFile / TempDir is
+// consumed via `delete_temp`, `delete_temp_dir`, or `persist`. Failure to
+// consume is a compile-time error (Req 6, Resource Linearity).
+//
+// All creation functions require ! FileWrite; deletion requires ! FileDelete.
+
+/// A temporary file on disk. Linear — must be consumed via `delete_temp`
+/// or `persist`. The inner `fd` is open for read/write.
+pub type TempFile = struct {
+    fd: Fd,
+    path: Path,
+}
+
+/// A temporary directory on disk. Linear — must be consumed via
+/// `delete_temp_dir`.
+pub type TempDir = struct {
+    path: Path,
+}
+
+/// Create a temporary file in the system temp directory ($TMPDIR or /tmp).
+///
+/// Returns an open TempFile with a unique name. Caller MUST consume it
+/// via `delete_temp` or `persist`.
+pub builtin fn temp_file() -> Result[TempFile, IoError] ! FileWrite
+
+/// Create a temporary file inside a specific directory.
+///
+/// Useful when the temp file must reside on the same filesystem as the
+/// final destination (for atomic `persist`).
+pub builtin fn temp_file_in(dir: Path) -> Result[TempFile, IoError] ! FileWrite
+
+/// Create a temporary directory in the system temp directory.
+///
+/// Returns a TempDir with a unique name. Caller MUST consume it via
+/// `delete_temp_dir`.
+pub builtin fn temp_dir() -> Result[TempDir, IoError] ! FileWrite
+
+/// Write data to an open temporary file.
+/// Takes val (immutable borrow) — the TempFile struct itself is not mutated;
+/// only the underlying OS file descriptor is written to.
+pub builtin fn temp_write(tf: val TempFile, data: String) -> Result[Unit, IoError] ! FileWrite
+
+/// Read the full contents of a temporary file.
+/// Returns Tainted[String] — file contents are external data (IFC Req 11).
+/// Takes val (immutable borrow) — does not mutate the TempFile struct.
+pub builtin fn temp_read(tf: val TempFile) -> Result[Tainted[String], IoError] ! FileRead
+
+/// Return the filesystem path of a temporary file.
+/// Returns Tainted[String] — the path originates from the OS temp directory
+/// (external data). Callers must relabel to use it as a plain String.
+pub builtin fn temp_path(tf: val TempFile) -> Tainted[String]
+
+/// Return the filesystem path of a temporary directory.
+/// Returns Tainted[String] — same rationale as temp_path.
+pub builtin fn temp_dir_path(td: val TempDir) -> Tainted[String]
+
+/// Delete a temporary file and release all resources.
+///
+/// Consumes the TempFile by value — prevents use-after-delete.
+pub builtin fn delete_temp(tf: TempFile) -> Result[Unit, IoError] ! FileDelete
+
+/// Delete a temporary directory (recursively) and release all resources.
+///
+/// Consumes the TempDir by value — prevents use-after-delete.
+pub builtin fn delete_temp_dir(td: TempDir) -> Result[Unit, IoError] ! FileDelete
+
+/// Move a temporary file to a permanent location, consuming the temp.
+///
+/// Atomic on the same filesystem (rename); falls back to copy+delete
+/// across filesystems. The TempFile is consumed — it no longer exists
+/// after this call.
+pub builtin fn persist(tf: TempFile, dest: Path) -> Result[Unit, IoError] ! FileWrite + FileDelete
+
 // ── Capability-aware file operations (#931) ─────────────────────────────────
 //
 // These wrappers accept `ConfigPath[String]` instead of raw `String`,

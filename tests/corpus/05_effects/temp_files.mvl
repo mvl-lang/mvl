@@ -1,0 +1,57 @@
+// Corpus: Temporary files with linear cleanup (Req 6, 7, 11 — #1042)
+//
+// TempFile and TempDir are linear types — the compiler enforces that every
+// instance is consumed via delete_temp, delete_temp_dir, or persist.
+// All operations are effect-tracked (FileWrite, FileRead, FileDelete).
+// Data read back is Tainted (IFC Req 11).
+
+use std.io.{
+    TempFile, TempDir, IoError, Path, path,
+    temp_file, temp_file_in, temp_dir,
+    temp_write, temp_read, temp_path, temp_dir_path,
+    delete_temp, delete_temp_dir, persist,
+}
+
+// ── Happy path: create, write, read, delete ─────────────────────────────
+
+fn create_write_delete() -> Result[Unit, IoError] ! FileWrite + FileRead + FileDelete {
+    let tf: TempFile = temp_file()?;
+    temp_write(tf, "hello temp")?;
+    let data: Tainted[String] = temp_read(tf)?;
+    let _clean: String = relabel trust(data, "TEMP-READ");
+    delete_temp(consume(tf))
+}
+
+// ── Persist: promote temp to permanent location ─────────────────────────
+
+fn create_and_persist(dest: Path) -> Result[Unit, IoError] ! FileWrite + FileDelete {
+    let tf: TempFile = temp_file()?;
+    temp_write(tf, "persisted content")?;
+    persist(consume(tf), dest)
+}
+
+// ── TempDir: create and cleanup ─────────────────────────────────────────
+
+fn create_temp_dir() -> Result[Unit, IoError] ! FileWrite + FileDelete {
+    let td: TempDir = temp_dir()?;
+    let _p: Tainted[String] = temp_dir_path(td);
+    delete_temp_dir(consume(td))
+}
+
+// ── temp_file_in: create in specific directory ──────────────────────────
+
+fn create_in_dir(dir: Path) -> Result[Unit, IoError] ! FileWrite + FileDelete {
+    let tf: TempFile = temp_file_in(dir)?;
+    let _p: Tainted[String] = temp_path(tf);
+    delete_temp(consume(tf))
+}
+
+// ── Path access is pure (no effects) ────────────────────────────────────
+
+fn get_temp_path(tf: ref TempFile) -> Tainted[String] {
+    temp_path(tf)
+}
+
+fn get_temp_dir_path(td: ref TempDir) -> Tainted[String] {
+    temp_dir_path(td)
+}

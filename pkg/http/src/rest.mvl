@@ -1,0 +1,188 @@
+// pkg.http — REST helpers (part of pkg.http, see #1000).
+//
+// JSON response builders, HttpError constructors, path param extractors,
+// and a request body decoder.  Lives in pkg.http so it shares the type
+// definitions without inter-package import issues (#96).
+//
+// Import:
+//   use pkg.http.{json_ok, json_created, json_error, json_no_content,
+//                  not_found, bad_request, unauthorized, internal_error,
+//                  param_int, param_string, body_json,
+//                  json_field_string, json_field_int}
+
+use std.json.{Value, encode, decode, JsonError}
+
+// ── HttpError constructors ────────────────────────────────────────────────────
+//
+// Named with `http_` prefix to avoid shadowing pkg.http's pure `not_found()`
+// response builder.
+
+/// 404 Not Found error.
+pub fn http_not_found(detail: String) -> HttpError {
+    HttpError { status: Status::Http404NotFound, detail: detail }
+}
+
+/// 400 Bad Request error.
+pub fn http_bad_request(detail: String) -> HttpError {
+    HttpError { status: Status::Http400BadRequest, detail: detail }
+}
+
+/// 401 Unauthorized error.
+pub fn http_unauthorized(detail: String) -> HttpError {
+    HttpError { status: Status::Http401Unauthorized, detail: detail }
+}
+
+/// 500 Internal Server Error.
+pub fn http_internal_error(detail: String) -> HttpError {
+    HttpError { status: Status::Http500InternalServerError, detail: detail }
+}
+
+// ── JSON response builders ────────────────────────────────────────────────────
+
+/// 200 OK with a JSON body.
+pub partial fn json_ok(v: Value) -> Response {
+    json_ok_str(encode(v))
+}
+
+/// 201 Created with a JSON body.
+pub partial fn json_created(v: Value) -> Response {
+    json_created_str(encode(v))
+}
+
+/// 204 No Content — empty body, for successful DELETE / PUT.
+pub fn json_no_content() -> Response {
+    respond(Status::Http204NoContent, "")
+}
+
+/// Error response: `{"error": "<detail>"}` with the HttpError's status code.
+pub total fn json_error(e: val HttpError) -> Response {
+    let body: Value = Value::Object({"error": Value::String(e.detail)});
+    Response {
+        status:  e.status,
+        headers: {"Content-Type": "application/json"},
+        body:    encode(body),
+    }
+}
+
+// ── Path parameter extractors ─────────────────────────────────────────────────
+
+/// Extract a path parameter as a String, or 400 if absent.
+pub fn param_string(matched: val MatchedRoute, name: String) -> Result[String, HttpError] {
+    match matched.params.get(name) {
+        None    => Err(http_bad_request("missing path param: ".concat(name))),
+        Some(v) => Ok(v),
+    }
+}
+
+/// Extract a path parameter as an Int, or 400 if absent / not a valid integer.
+pub fn param_int(matched: val MatchedRoute, name: String) -> Result[Int, HttpError] {
+    match param_string(matched, name) {
+        Err(e) => Err(e),
+        Ok(s)  => match s.parse_int() {
+            Err(_) => Err(http_bad_request("path param not an integer: ".concat(name))),
+            Ok(n)  => Ok(n),
+        },
+    }
+}
+
+// ── Request body decoder ──────────────────────────────────────────────────────
+
+/// Decode the request body as a JSON Value, or 400 if malformed.
+///
+/// IFC: body is Tainted[String] (HTTP-BODY).  Detainted here under
+/// "REST-JSON-DECODE" — structure is validated by the JSON parser;
+/// field values must be validated by the caller.
+pub partial fn body_json(req: val Request) -> Result[Value, HttpError] {
+    let raw: String = relabel trust(req.body, "REST-JSON-DECODE");
+    match decode(raw) {
+        Err(JsonError::ParseError(msg)) => Err(http_bad_request("invalid JSON: ".concat(msg))),
+        Ok(v)                           => Ok(v),
+    }
+}
+
+// ── JSON object helpers (Value lives here — see #96 for why not in examples/) ─
+
+/// Decode the request body as a JSON object map, or 400.
+///
+/// Convenience combinator: `body_json` + `json_get_object` in one call.
+/// Callers use `json_field_string` / `json_field_int` on the returned map.
+pub partial fn body_obj(req: val Request) -> Result[Map[String, Value], HttpError] {
+    match body_json(req) {
+        Err(e)   => Err(e),
+        Ok(body) => json_get_object(body),
+    }
+}
+
+/// Unwrap a JSON Value as an Object map, or 400.
+pub fn json_get_object(v: Value) -> Result[Map[String, Value], HttpError] {
+    match v {
+        Value::Object(obj) => Ok(obj),
+        _                  => Err(http_bad_request("expected JSON object")),
+    }
+}
+
+/// Extract a String field from a JSON object map, or 400.
+pub fn json_field_string(obj: Map[String, Value], key: String) -> Result[String, HttpError] {
+    match obj.get(key) {
+        None                   => Err(http_bad_request("missing field: ".concat(key))),
+        Some(Value::String(s)) => Ok(s),
+        Some(_)                => Err(http_bad_request("field must be a string: ".concat(key))),
+    }
+}
+
+/// Extract an Int field from a JSON object map, or 400.
+///
+/// JSON numbers are Float internally; converted to Int via `to_int()`.
+pub fn json_field_int(obj: Map[String, Value], key: String) -> Result[Int, HttpError] {
+    match obj.get(key) {
+        None                   => Err(http_bad_request("missing field: ".concat(key))),
+        Some(Value::Number(n)) => Ok(n.to_int()),
+        Some(_)                => Err(http_bad_request("field must be a number: ".concat(key))),
+    }
+}
+
+// ── Pre-encoded JSON response builders ───────────────────────────────────────
+//
+// For callers that build JSON strings manually (avoids requiring std.json.Value
+// in their compilation unit — see #96).
+
+/// 200 OK with a pre-encoded JSON string body.
+pub fn json_ok_str(body: String) -> Response {
+    Response {
+        status:  Status::Http200Ok,
+        headers: {"Content-Type": "application/json"},
+        body:    body,
+    }
+}
+
+/// 201 Created with a pre-encoded JSON string body.
+pub fn json_created_str(body: String) -> Response {
+    Response {
+        status:  Status::Http201Created,
+        headers: {"Content-Type": "application/json"},
+        body:    body,
+    }
+}
+
+/// Escape a string for embedding in a JSON string literal.
+///
+/// Note: ASCII control characters U+0000–U+001F (other than \n, \r, \t) are
+/// not escaped to \u00XX because MVL stdlib does not yet expose char_code().
+/// If input data may contain such characters, sanitize before calling.
+pub fn json_escape(s: String) -> String {
+    let out: ref String = "";
+    for c in s.chars() {
+        if      c == "\"" { out = out.concat("\\\"") }
+        else if c == "\\" { out = out.concat("\\\\") }
+        else if c == "\n" { out = out.concat("\\n") }
+        else if c == "\r" { out = out.concat("\\r") }
+        else if c == "\t" { out = out.concat("\\t") }
+        else              { out = out.concat(c) }
+    }
+    out
+}
+
+/// Wrap a string in JSON double-quotes with escaping.
+pub fn json_str(s: String) -> String {
+    "\"".concat(json_escape(s)).concat("\"")
+}

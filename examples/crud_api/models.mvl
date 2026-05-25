@@ -1,0 +1,23 @@
+// examples/crud_api/models.mvl — User domain types.
+//
+// JSON encoding/decoding is in handlers.mvl (using pkg.http REST helpers)
+// because std.json.Value constructors are not resolvable in examples/ (#96).
+
+/// A persisted user record with a unique id.
+pub type User = struct {
+    id:    Int where self > 0,
+    name:  String where len(self) > 0,
+    email: String where len(self) > 0,
+}
+
+/// Fields required to create a new user (id is assigned by the database).
+pub type CreateUserRequest = struct {
+    name:  String where len(self) > 0,
+    email: String where len(self) > 0,
+}
+
+/// Fields accepted when updating an existing user.
+pub type UpdateUserRequest = struct {
+    name:  String where len(self) > 0,
+    email: String where len(self) > 0,
+}

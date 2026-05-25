@@ -1471,9 +1471,14 @@ fn emit_expr_as_fn_arg(cg: &mut RustEmitter, expr: &Expr) {
         }
         // Value identifiers: `.into()` allows unlabeled (Public) values to coerce into
         // labeled parameters (e.g. `String` → `Clean<String>`).
-        Expr::Ident(_, span) => {
+        Expr::Ident(name, span) => {
             emit_expr(cg, expr);
             if !cg.last_uses.contains(span) {
+                cg.push(".clone().into()");
+            } else if cg.capability_param_names.contains(name.as_str()) {
+                // Last use of a `&T` (val-in-type-position) parameter: clone before
+                // into() to avoid the unsatisfied `&T: Into<T>` bound that arises
+                // when a sibling-module callee takes the value by owned `T`.
                 cg.push(".clone().into()");
             } else {
                 cg.push(".into()");

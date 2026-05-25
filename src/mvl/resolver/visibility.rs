@@ -122,6 +122,7 @@ mod tests {
             reexport: true,
             module_only: false,
             path: vec!["mod_a".to_string(), "Foo".to_string()],
+            items: vec![],
             span: Span::default(),
         };
         let prog = Program {
@@ -146,6 +147,7 @@ mod tests {
             reexport: true,
             module_only: false,
             path: vec!["mod_a".to_string(), "secret".to_string()],
+            items: vec![],
             span: Span::default(),
         };
         let prog = Program {

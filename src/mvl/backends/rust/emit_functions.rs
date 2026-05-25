@@ -57,7 +57,7 @@ pub fn emit_fn_decl(cg: &mut RustEmitter, fd: &FnDecl) {
         .cloned()
         .unwrap_or_default();
 
-    let mutated_params = collect_mutated_map_params(&fd.body);
+    let mutated_params = collect_mutated_map_params(&fd.body, &cg.capability_params_map);
 
     if fd.is_test {
         cg.line("#[test]");
@@ -476,46 +476,57 @@ fn is_concrete_type(name: &str) -> bool {
 /// `.insert(…)` or `.remove(…)` called on them).  Only these need `mut` in the
 /// Rust signature; read-only Map/Set params must not get `mut` to avoid Rust's
 /// "variable does not need to be mutable" warning.
-fn collect_mutated_map_params(body: &Block) -> std::collections::HashSet<String> {
+fn collect_mutated_map_params(
+    body: &Block,
+    cap_map: &std::collections::HashMap<String, Vec<Option<bool>>>,
+) -> std::collections::HashSet<String> {
     let mut out = std::collections::HashSet::new();
-    scan_stmts_for_mut_calls(&body.stmts, &mut out);
+    scan_stmts_for_mut_calls(&body.stmts, &mut out, cap_map);
     out
 }
 
-fn scan_stmts_for_mut_calls(stmts: &[Stmt], out: &mut std::collections::HashSet<String>) {
+fn scan_stmts_for_mut_calls(
+    stmts: &[Stmt],
+    out: &mut std::collections::HashSet<String>,
+    cap_map: &std::collections::HashMap<String, Vec<Option<bool>>>,
+) {
     for stmt in stmts {
         match stmt {
             Stmt::Expr { expr, .. }
             | Stmt::Return {
                 value: Some(expr), ..
             } => {
-                scan_expr_for_mut_calls(expr, out);
+                scan_expr_for_mut_calls(expr, out, cap_map);
             }
-            Stmt::Let { init, .. } => scan_expr_for_mut_calls(init, out),
-            Stmt::Assign { value, .. } => scan_expr_for_mut_calls(value, out),
+            Stmt::Let { init, .. } => scan_expr_for_mut_calls(init, out, cap_map),
+            Stmt::Assign { value, .. } => scan_expr_for_mut_calls(value, out, cap_map),
             Stmt::If {
                 cond, then, else_, ..
             } => {
-                scan_expr_for_mut_calls(cond, out);
-                scan_stmts_for_mut_calls(&then.stmts, out);
+                scan_expr_for_mut_calls(cond, out, cap_map);
+                scan_stmts_for_mut_calls(&then.stmts, out, cap_map);
                 if let Some(crate::mvl::parser::ast::ElseBranch::Block(b)) = else_ {
-                    scan_stmts_for_mut_calls(&b.stmts, out);
+                    scan_stmts_for_mut_calls(&b.stmts, out, cap_map);
                 }
             }
             Stmt::For { body, iter, .. } => {
-                scan_expr_for_mut_calls(iter, out);
-                scan_stmts_for_mut_calls(&body.stmts, out);
+                scan_expr_for_mut_calls(iter, out, cap_map);
+                scan_stmts_for_mut_calls(&body.stmts, out, cap_map);
             }
             Stmt::While { cond, body, .. } => {
-                scan_expr_for_mut_calls(cond, out);
-                scan_stmts_for_mut_calls(&body.stmts, out);
+                scan_expr_for_mut_calls(cond, out, cap_map);
+                scan_stmts_for_mut_calls(&body.stmts, out, cap_map);
             }
             _ => {}
         }
     }
 }
 
-fn scan_expr_for_mut_calls(expr: &Expr, out: &mut std::collections::HashSet<String>) {
+fn scan_expr_for_mut_calls(
+    expr: &Expr,
+    out: &mut std::collections::HashSet<String>,
+    cap_map: &std::collections::HashMap<String, Vec<Option<bool>>>,
+) {
     match expr {
         Expr::MethodCall {
             receiver,
@@ -529,14 +540,26 @@ fn scan_expr_for_mut_calls(expr: &Expr, out: &mut std::collections::HashSet<Stri
                     out.insert(name.clone());
                 }
             }
-            scan_expr_for_mut_calls(receiver, out);
+            scan_expr_for_mut_calls(receiver, out, cap_map);
             for a in args {
-                scan_expr_for_mut_calls(a, out);
+                scan_expr_for_mut_calls(a, out, cap_map);
             }
         }
-        Expr::FnCall { args, .. } => {
+        Expr::FnCall { name, args, .. } => {
+            // Detect params passed at &mut positions in callee signatures.
+            // e.g. temp_write(tf, data) where temp_write takes `ref TempFile`
+            // → tf needs `mut` in the caller's parameter list.
+            if let Some(borrows) = cap_map.get(name.as_str()) {
+                for (i, arg) in args.iter().enumerate() {
+                    if let Some(Some(true)) = borrows.get(i) {
+                        if let Expr::Ident(param_name, _) = arg {
+                            out.insert(param_name.clone());
+                        }
+                    }
+                }
+            }
             for a in args {
-                scan_expr_for_mut_calls(a, out);
+                scan_expr_for_mut_calls(a, out, cap_map);
             }
         }
         _ => {}
@@ -572,22 +595,20 @@ fn emit_params(
                 Some(Capability::Tag) => "/* tag */ ",
                 None => "",
             };
-            // Map/Set value parameters need `mut` in Rust only when the body
-            // actually calls mutating methods (insert/remove) on them.
-            let is_mutated_map_or_set = borrows.get(i).copied().flatten().is_none()
-                && matches!(
-                    &p.ty,
-                    TypeExpr::Base { name, .. } if name == "Map" || name == "Set"
-                )
-                && mutated_params.contains(&p.name);
+            // Owned params need `mut` when the body mutates them: either via
+            // Map/Set mutating methods (insert/remove/retain) or by passing
+            // them at a `&mut` position in a function call (detected by
+            // scan_expr_for_mut_calls via the capability_params_map).
+            let needs_mut_for_body =
+                borrows.get(i).copied().flatten().is_none() && mutated_params.contains(&p.name);
             // A param is mutable in Rust when it has a `ref` or `iso` capability,
-            // or when it is a Map/Set whose contents are mutated.
+            // or when the body requires mutability.
             let has_ref_cap = matches!(
                 p.capability,
                 Some(crate::mvl::parser::ast::Capability::Ref)
                     | Some(crate::mvl::parser::ast::Capability::Iso)
             );
-            let mut_prefix = if has_ref_cap || is_mutated_map_or_set {
+            let mut_prefix = if has_ref_cap || needs_mut_for_body {
                 "mut "
             } else {
                 ""
