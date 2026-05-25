@@ -967,7 +967,12 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
             // MC/DC IDs before the match-level decisions (mirrors analysis order).
             cg.push("match ");
             emit_expr(cg, scrutinee);
-            if scrutinee_needs_clone(scrutinee) {
+            // Clone when the scrutinee is a self.field access (can't move out of &self)
+            // or a capability param (val/ref → &T/&mut T in Rust). Without clone,
+            // match ergonomics yield reference bindings that fail E0507/E0277.
+            if scrutinee_needs_clone(scrutinee)
+                || matches!(scrutinee.as_ref(), Expr::Ident(name, _) if cg.capability_param_names.contains(name))
+            {
                 cg.push(".clone()");
             }
             // Allocate MC/DC arm-coverage decision after scrutinee.
@@ -1094,7 +1099,11 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
                 | "unaudit_target" => {
                     cg.push("(");
                     emit_expr(cg, expr);
-                    cg.push(").0");
+                    // .clone() is needed when the label wrapper is behind a shared
+                    // reference (e.g. `self.api_key` in `&self` methods, or match
+                    // bindings from `val` parameters). Always cloning is correct;
+                    // the Rust compiler elides trivial clones on owned values.
+                    cg.push(").0.clone()");
                 }
                 // Wrap: construct the label newtype around the value.
                 "classify" => {

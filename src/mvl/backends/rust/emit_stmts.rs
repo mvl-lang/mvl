@@ -172,9 +172,12 @@ pub fn emit_stmt(cg: &mut RustEmitter, stmt: &Stmt) {
             cg.indent();
             cg.push("match ");
             emit_expr(cg, scrutinee);
-            // Field access on self (e.g. `self.best_ask`) cannot be moved out of
-            // `&mut self`; clone so the field is unaffected by the match binding.
-            if scrutinee_needs_clone(scrutinee) {
+            // Clone when the scrutinee is a self.field access (can't move out of &self)
+            // or a capability param (val/ref → &T/&mut T in Rust). Without clone,
+            // match ergonomics yield reference bindings that fail E0507/E0277.
+            if scrutinee_needs_clone(scrutinee)
+                || matches!(scrutinee, Expr::Ident(name, _) if cg.capability_param_names.contains(name))
+            {
                 cg.push(".clone()");
             }
 
