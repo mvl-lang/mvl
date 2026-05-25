@@ -11,15 +11,18 @@ use std.config.{ConfigValue, ConfigError, merge, with_env, get_path,
 use std.toml.{toml_decode}
 use std.io.{read_file}
 use std.args.{parse_args, optional, ArgType, ArgValue}
+use std.log.{LogLevel, LogFormat, parse_log_level, parse_log_format}
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 /// Resolved CRUD API configuration.
 pub type CrudApiConfig = struct {
-    host:    String,
-    port:    Int,
-    db_path: String,
-    seed:    String,
+    host:       String,
+    port:       Int,
+    db_path:    String,
+    seed_file:  String,
+    log_level:  LogLevel,
+    log_format: LogFormat,
 }
 
 /// Errors that can occur while loading configuration.
@@ -31,10 +34,12 @@ pub type ConfigLoadError = enum {
 
 fn defaults() -> ConfigValue {
     ConfigValue::Map({
-        "host":    ConfigValue::String("127.0.0.1"),
-        "port":    ConfigValue::Int(8080),
-        "db_path": ConfigValue::String("/tmp/crud_api.db"),
-        "seed":    ConfigValue::String(""),
+        "host":       ConfigValue::String("127.0.0.1"),
+        "port":       ConfigValue::Int(8080),
+        "db_path":    ConfigValue::String("/tmp/crud_api.db"),
+        "seed_file":  ConfigValue::String(""),
+        "log_level":  ConfigValue::String("info"),
+        "log_format": ConfigValue::String("plain"),
     })
 }
 
@@ -57,10 +62,12 @@ partial fn load_toml_layer(path: String, base: ConfigValue) -> ConfigValue ! Fil
 
 partial fn merge_cli_args(cfg: ConfigValue) -> ConfigValue ! Console + Env {
     let cli: Map[String, ArgValue] = parse_args([
-        optional("host",    ArgType::Str),
-        optional("port",    ArgType::Int),
-        optional("db-path", ArgType::Str),
-        optional("seed",    ArgType::Str),
+        optional("host",       ArgType::Str),
+        optional("port",       ArgType::Int),
+        optional("db-path",    ArgType::Str),
+        optional("seed-file",  ArgType::Str),
+        optional("log-level",  ArgType::Str),
+        optional("log-format", ArgType::Str),
     ]);
     // --host
     let cfg: ConfigValue = match cli.get("host") {
@@ -79,9 +86,19 @@ partial fn merge_cli_args(cfg: ConfigValue) -> ConfigValue ! Console + Env {
         Some(ArgValue::Str(v)) => merge(cfg, ConfigValue::Map({"db_path": ConfigValue::String(v)})),
         _ => cfg,
     };
-    // --seed
-    let cfg: ConfigValue = match cli.get("seed") {
-        Some(ArgValue::Str(v)) => merge(cfg, ConfigValue::Map({"seed": ConfigValue::String(v)})),
+    // --seed-file
+    let cfg: ConfigValue = match cli.get("seed-file") {
+        Some(ArgValue::Str(v)) => merge(cfg, ConfigValue::Map({"seed_file": ConfigValue::String(v)})),
+        _ => cfg,
+    };
+    // --log-level
+    let cfg: ConfigValue = match cli.get("log-level") {
+        Some(ArgValue::Str(v)) => merge(cfg, ConfigValue::Map({"log_level": ConfigValue::String(v)})),
+        _ => cfg,
+    };
+    // --log-format
+    let cfg: ConfigValue = match cli.get("log-format") {
+        Some(ArgValue::Str(v)) => merge(cfg, ConfigValue::Map({"log_format": ConfigValue::String(v)})),
         _ => cfg,
     };
     cfg
@@ -91,10 +108,12 @@ partial fn merge_cli_args(cfg: ConfigValue) -> ConfigValue ! Console + Env {
 
 partial fn extract(cfg: ConfigValue) -> Result[CrudApiConfig, ConfigError] {
     Ok(CrudApiConfig {
-        host:    as_string(get_path(cfg, "host").unwrap_or(ConfigValue::String("127.0.0.1")))?,
-        port:    as_int(get_path(cfg, "port").unwrap_or(ConfigValue::Int(8080)))?,
-        db_path: as_string(get_path(cfg, "db_path").unwrap_or(ConfigValue::String("/tmp/crud_api.db")))?,
-        seed:    as_string(get_path(cfg, "seed").unwrap_or(ConfigValue::String("")))?,
+        host:       as_string(get_path(cfg, "host").unwrap_or(ConfigValue::String("127.0.0.1")))?,
+        port:       as_int(get_path(cfg, "port").unwrap_or(ConfigValue::Int(8080)))?,
+        db_path:    as_string(get_path(cfg, "db_path").unwrap_or(ConfigValue::String("/tmp/crud_api.db")))?,
+        seed_file:  as_string(get_path(cfg, "seed_file").unwrap_or(ConfigValue::String("")))?,
+        log_level:  parse_log_level(as_string(get_path(cfg, "log_level").unwrap_or(ConfigValue::String("info"))).unwrap_or("info")),
+        log_format: parse_log_format(as_string(get_path(cfg, "log_format").unwrap_or(ConfigValue::String("plain"))).unwrap_or("plain")),
     })
 }
 

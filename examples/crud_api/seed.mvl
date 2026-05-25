@@ -3,12 +3,13 @@
 // Reads a CSV file (name,email), trusts cells at the IFC boundary,
 // and inserts each row into the database.
 //
-// Effects: ! DB + FileRead + Console
+// Effects: ! DB + FileRead + Log
 
 use models::{CreateUserRequest}
 use db::{db_create_user}
 use std.csv.{CsvError, CsvWithHeaders, parse_with_headers}
-use std.io.{read_file, println}
+use std.io.{read_file}
+use std.log.{Logger}
 use pkg.sqlite.{SqliteDb}
 
 // ── Decode one CSV row ──────────────────────────────────────────────────────
@@ -32,7 +33,7 @@ partial fn decode_row(row: List[String]) -> Result[CreateUserRequest, String] {
 /// Read a CSV file and insert each row as a new user.
 /// The first row must be a header (name,email) and is skipped.
 /// Returns the number of rows successfully inserted.
-pub partial fn db_seed_from_csv(val db: SqliteDb, path: String) -> Result[Int, String] ! DB + FileRead + Console {
+pub partial fn db_seed_from_csv(val db: SqliteDb, logger: val Logger, path: String) -> Result[Int, String] ! DB + FileRead + Log {
     match read_file(path) {
         Err(_) => Err("failed to read seed file"),
         Ok(raw) => {
@@ -48,9 +49,9 @@ pub partial fn db_seed_from_csv(val db: SqliteDb, path: String) -> Result[Int, S
                         match csv.rows.get(i) {
                             None => {},
                             Some(row) => match decode_row(row) {
-                                Err(msg) => { println("  skip row ".concat((i + 1).to_string()).concat(": ").concat(msg)) },
+                                Err(msg) => { logger.warn("skip row", {"row": (i + 1).to_string(), "reason": msg}) },
                                 Ok(req)  => match db_create_user(db, req) {
-                                    Err(msg) => { println("  skip row ".concat((i + 1).to_string()).concat(": ").concat(msg)) },
+                                    Err(msg) => { logger.warn("skip row", {"row": (i + 1).to_string(), "reason": msg}) },
                                     Ok(_)    => { count = count + 1 },
                                 },
                             },
