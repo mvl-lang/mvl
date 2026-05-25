@@ -67,7 +67,7 @@ fn setup_router() -> Router {
 
 // ── Per-request dispatch ──────────────────────────────────────────────────────
 
-partial fn handle_request(db: val SqliteDb, logger: val Logger, req: Request, matched: MatchedRoute) -> Response ! DB + Log {
+total fn handle_request(db: val SqliteDb, logger: val Logger, req: Request, matched: MatchedRoute) -> Response ! DB + Log {
     logger.debug("dispatch", {"route": matched.name, "method": method_name(req.method), "path": req.path});
     match matched.name {
         "list_users"  => list_users_handler(db, req, matched),
@@ -88,7 +88,7 @@ partial fn handle_request(db: val SqliteDb, logger: val Logger, req: Request, ma
 // iteration without consuming it.  Fatal accept errors close the listener
 // and return early; transient errors (reset, timeout) just continue.
 
-partial fn process_stream(db: val SqliteDb, logger: val Logger, router: val Router, stream: TcpStream) -> Unit ! DB + Log + Net {
+total fn process_stream(db: val SqliteDb, logger: val Logger, router: val Router, stream: TcpStream) -> Unit ! DB + Log + Net {
     let resp: Response = match tcp_read_request(stream) {
         Err(e)  => {
             logger.warn("read error", {"error": net_error_msg(e)});

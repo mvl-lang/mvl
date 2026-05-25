@@ -55,7 +55,7 @@ pub fn json_no_content() -> Response {
 }
 
 /// Error response: `{"error": "<detail>"}` with the HttpError's status code.
-pub partial fn json_error(e: val HttpError) -> Response {
+pub total fn json_error(e: val HttpError) -> Response {
     let body: Value = Value::Object({"error": Value::String(e.detail)});
     Response {
         status:  e.status,
