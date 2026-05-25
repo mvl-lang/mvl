@@ -57,6 +57,7 @@ fn display_error(e: AnthropicError) -> Unit ! Console {
 /// Multi-turn conversation example.
 ///
 /// Shows how to build a conversation with system + user messages.
+/// Not called from main() — included as a standalone usage example.
 partial fn multi_turn(api_key: Secret[String]) -> Result[Response, AnthropicError] ! Net {
     let client: Claude = Claude::new(api_key);
     client.messages(

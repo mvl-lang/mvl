@@ -491,3 +491,64 @@ test fn test_get_int_field_missing() -> Unit {
         Err(_) => assert(true),
     }
 }
+
+// -- Additional parse_response paths --
+
+test fn test_parse_response_missing_usage() -> Unit {
+    let json: Value = Value::Object({
+        "id":          Value::String("msg_001"),
+        "model":       Value::String("claude-sonnet-4-20250514"),
+        "stop_reason": Value::String("end_turn"),
+        "content":     Value::String("hello"),
+    });
+    match parse_response(json) {
+        Ok(_)  => assert(false),
+        Err(e) => match e {
+            AnthropicError::MissingField(_) => assert(true),
+            _ => assert(false),
+        },
+    }
+}
+
+test fn test_parse_response_usage_wrong_type() -> Unit {
+    let json: Value = Value::Object({
+        "id":          Value::String("msg_001"),
+        "model":       Value::String("claude-sonnet-4-20250514"),
+        "stop_reason": Value::String("end_turn"),
+        "content":     Value::String("hello"),
+        "usage":       Value::String("not an object"),
+    });
+    match parse_response(json) {
+        Ok(_)  => assert(false),
+        Err(e) => match e {
+            AnthropicError::MissingField(_) => assert(true),
+            _ => assert(false),
+        },
+    }
+}
+
+test fn test_extract_content_empty_array() -> Unit {
+    let content: Value = Value::Array([]);
+    match extract_content_text(content) {
+        Ok(s)  => assert_eq(s, ""),
+        Err(_) => assert(false),
+    }
+}
+
+test fn test_request_body_no_messages() -> Unit {
+    let msgs: List[Message] = [];
+    let body: Value = build_request_body(ModelId::Sonnet4, msgs, 256);
+    match body {
+        Value::Object(obj) => {
+            match obj.get("messages") {
+                Some(Value::Array(arr)) => assert_eq(arr.len(), 0),
+                _ => assert(false),
+            }
+            match obj.get("system") {
+                None => assert(true),
+                _    => assert(false),
+            }
+        },
+        _ => assert(false),
+    }
+}

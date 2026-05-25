@@ -22,15 +22,11 @@ guard-mvl: ## Ensure MVL binary is built and up-to-date
 	@mkdir -p .mvl/pkg
 	@ln -sfn $(REPO_ROOT)/pkg/anthropic .mvl/pkg/anthropic
 
-.mvl/pkg/http:
-	@mkdir -p .mvl/pkg
-	@ln -sfn $(REPO_ROOT)/pkg/http .mvl/pkg/http
-
 .mvl/pkg/tls:
 	@mkdir -p .mvl/pkg
 	@ln -sfn $(REPO_ROOT)/pkg/tls .mvl/pkg/tls
 
-check: guard-mvl .mvl/pkg/anthropic .mvl/pkg/http .mvl/pkg/tls ## Type-check main.mvl
+check: guard-mvl .mvl/pkg/anthropic .mvl/pkg/tls ## Type-check main.mvl
 	$(MVL) check $(DIR)main.mvl
 
 test: check ## No unit tests; delegates to type-check

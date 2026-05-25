@@ -61,9 +61,14 @@ test fn test_rest_error_http_timeout() -> Unit {
     assert_eq(rest_error_msg(e), "https: HTTPS connection failed: timeout")
 }
 
-test fn test_rest_error_http_connection() -> Unit {
-    let e: RestError = RestError::HttpError(HttpsError::ConnectionFailed("refused"));
-    assert_eq(rest_error_msg(e), "https: HTTPS connection failed: refused")
+test fn test_rest_error_http_invalid_url() -> Unit {
+    let e: RestError = RestError::HttpError(HttpsError::InvalidUrl("not-a-url"));
+    assert_eq(rest_error_msg(e), "https: invalid URL: not-a-url")
+}
+
+test fn test_rest_error_http_invalid_response() -> Unit {
+    let e: RestError = RestError::HttpError(HttpsError::InvalidResponse("truncated"));
+    assert_eq(rest_error_msg(e), "https: invalid response: truncated")
 }
 
 test fn test_rest_error_json_parse() -> Unit {

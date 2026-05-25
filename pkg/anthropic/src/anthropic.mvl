@@ -284,6 +284,22 @@ pub partial fn Claude::messages(
     messages: List[Message],
     max_tokens: Int,
 ) -> Result[Response, AnthropicError] ! Net {
+    // Validate: the Anthropic API accepts at most one system message.
+    let sys_count: ref Int = 0;
+    let j: ref Int = 0;
+    while j < messages.len() {
+        match messages.get(j) {
+            Some(m) => match m.role {
+                Role::System => { sys_count = sys_count + 1 },
+                _            => {},
+            },
+            None => {},
+        }
+        j = j + 1
+    }
+    if sys_count > 1 {
+        return Err(AnthropicError::ApiError(400, "only one system message is supported"))
+    }
     let url: String = relabel unapi_endpoint(self.base_url, "ANTHROPIC-ENDPOINT")
         .concat("/v1/messages");
     let key: String = relabel release(self.api_key, "ANTHROPIC-AUTH");
@@ -300,13 +316,15 @@ pub partial fn Claude::messages(
         Err(e) => { return Err(AnthropicError::HttpError(e)) },
     };
     let code: Int = resp.status_code;
-    let raw_body: String = relabel trust(resp.body, "ANTHROPIC-RESPONSE-RAW");
     if code >= 200 && code < 300 {
-        match decode(raw_body) {
+        let json_body: String = relabel trust(resp.body, "ANTHROPIC-RESPONSE-PARSE");
+        match decode(json_body) {
             Ok(v)                         => parse_response(v),
             Err(JsonError::ParseError(e)) => Err(AnthropicError::JsonParseError(e)),
         }
     } else {
-        Err(AnthropicError::ApiError(code, raw_body))
+        let err_body: String = relabel trust(resp.body, "ANTHROPIC-ERROR-DISPLAY");
+        let truncated: String = if err_body.len() > 512 { err_body.substring(0, 512) } else { err_body };
+        Err(AnthropicError::ApiError(code, truncated))
     }
 }
