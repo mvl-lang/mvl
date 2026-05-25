@@ -17,6 +17,14 @@ pub enum CheckError {
         found: String,
         span: Span,
     },
+    /// Type mismatch caused by IFC label differences (#1027).
+    /// E.g. `Secret[String]` passed where `String` expected, or vice versa.
+    /// Mapped to Req 11 (IFC), not Req 1 (Type Safety).
+    LabelMismatch {
+        expected: String,
+        found: String,
+        span: Span,
+    },
     UndefinedVariable {
         name: String,
         span: Span,
@@ -287,12 +295,7 @@ pub enum CheckError {
         ty: String,
         span: Span,
     },
-    /// `for` loop used inside a `partial` function — only `while` is allowed there.
-    ForLoopInPartialFn {
-        span: Span,
-    },
-
-    // ── Generics constraint enforcement (001-type-system/Req 9) ─────────
+    // ── Generics constraint enforcement (001-type-system/Req 1) ─────────
     /// Unconstrained type parameter used with an operator that requires a trait bound.
     MissingConstraint {
         type_param: String,
@@ -546,7 +549,6 @@ impl CheckError {
             CheckError::UnboundedLoopInTotal { .. }
             | CheckError::PartialCallInTotal { .. }
             | CheckError::UnprovenRecursion { .. }
-            | CheckError::ForLoopInPartialFn { .. }
             | CheckError::DecreasesNotBounded { .. }
             | CheckError::DecreasesNotDecreasing { .. } => 8,
             // Req 9: Data Race Freedom
@@ -577,14 +579,15 @@ impl CheckError {
             | CheckError::InvalidSanitize { .. }
             | CheckError::ImplicitFlowViolation { .. }
             | CheckError::CrossFunctionImplicitFlowViolation { .. }
-            | CheckError::InterprocFlowViolation { .. } => 11,
+            | CheckError::InterprocFlowViolation { .. }
+            | CheckError::LabelMismatch { .. } => 11,
             // Req 1: Type Safety (declaration-level — malformed extern ABI is a type/decl error,
             // not an IFC violation; grouping it under Req 11 would pollute IFC metrics).
             CheckError::UnsupportedExternAbi { .. } => 1,
             // Req 1: Type Safety — Iterator trait constraint
             CheckError::NotIterator { .. } => 1,
-            // Req 9: Generics — constraint enforcement
-            CheckError::MissingConstraint { .. } => 9,
+            // Req 1: Type Safety — generic constraint enforcement (#1028)
+            CheckError::MissingConstraint { .. } => 1,
             // Req 1: Type Safety — trait impl completeness (#990)
             CheckError::MissingTraitMethod { .. } => 1,
         }
@@ -593,6 +596,7 @@ impl CheckError {
     pub fn span(&self) -> Span {
         match self {
             CheckError::TypeMismatch { span, .. }
+            | CheckError::LabelMismatch { span, .. }
             | CheckError::UndefinedVariable { span, .. }
             | CheckError::UndefinedType { span, .. }
             | CheckError::NonNumericArithmetic { span, .. }
@@ -645,7 +649,6 @@ impl CheckError {
             | CheckError::UnsupportedExternAbi { span, .. }
             | CheckError::PropagateIncompatibleError { span, .. }
             | CheckError::NotIterator { span, .. }
-            | CheckError::ForLoopInPartialFn { span }
             | CheckError::MissingConstraint { span, .. }
             | CheckError::PreconditionViolated { span, .. }
             | CheckError::PostconditionViolated { span, .. }
@@ -670,6 +673,9 @@ impl CheckError {
             CheckError::TypeMismatch {
                 expected, found, ..
             } => format!("type mismatch: expected `{expected}`, found `{found}`"),
+            CheckError::LabelMismatch {
+                expected, found, ..
+            } => format!("IFC label mismatch: expected `{expected}`, found `{found}` — use `relabel` to convert between labeled and bare types"),
             CheckError::UndefinedVariable { name, .. } => format!("undefined variable `{name}`"),
             CheckError::UndefinedType { name, .. } => format!("undefined type `{name}`"),
             CheckError::NonNumericArithmetic { ty, .. } => {
@@ -845,9 +851,6 @@ impl CheckError {
             CheckError::NotIterator { ty, .. } => format!(
                 "`{ty}` does not implement `Iterator` — only types with `impl Iterator<T>` can be used in `for...in`"
             ),
-            CheckError::ForLoopInPartialFn { .. } => {
-                "`for` is not permitted in `partial` functions; use `while` instead".to_string()
-            }
             CheckError::MissingConstraint {
                 type_param,
                 required_bound,

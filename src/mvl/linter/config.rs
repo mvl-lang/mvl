@@ -113,6 +113,12 @@ pub struct LintConfig {
     /// Warn on `while VAR < END { ...; VAR = VAR + N }` counter loops that can be
     /// rewritten as `for VAR in range(START, END)` (provably total, #1004).
     pub while_to_for_range: bool,
+    /// Hint on `while` loops without `decreases` in total functions that have
+    /// an obvious decrementing variable — suggest adding a `decreases` clause (#1037).
+    pub suggest_decreases: bool,
+    /// Hint on `partial fn` that contains only bounded constructs — suggest
+    /// upgrading to `total fn` (#1038).
+    pub suggest_total_upgrade: bool,
 
     // ── Phase 3: LLM corpus quality rules ────────────────────────────────
     /// Flag block comments `/* */`; only `//` line comments are allowed.
@@ -161,6 +167,8 @@ impl Default for LintConfig {
             require_explicit_totality: true,
             for_iter_antipattern: true,
             while_to_for_range: true,
+            suggest_decreases: true,
+            suggest_total_upgrade: true,
             consistent_comment_style: false,
             require_doc_comments: true,
             doc_comment_examples: false,
@@ -293,6 +301,8 @@ fn load_from(path: &Path) -> Option<LintConfig> {
             "require_explicit_totality" => cfg.require_explicit_totality = parse_bool(val),
             "for_iter_antipattern" => cfg.for_iter_antipattern = parse_bool(val),
             "while_to_for_range" => cfg.while_to_for_range = parse_bool(val),
+            "suggest_decreases" => cfg.suggest_decreases = parse_bool(val),
+            "suggest_total_upgrade" => cfg.suggest_total_upgrade = parse_bool(val),
             "consistent_comment_style" => cfg.consistent_comment_style = parse_bool(val),
             "require_doc_comments" => cfg.require_doc_comments = parse_bool(val),
             "doc_comment_examples" => cfg.doc_comment_examples = parse_bool(val),

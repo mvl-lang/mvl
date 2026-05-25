@@ -1658,7 +1658,7 @@ fn public_flows_to_secret_rejected() {
     assert!(
         errors
             .iter()
-            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+            .any(|e| matches!(e, CheckError::LabelMismatch { .. })),
         "bare String must not flow to Secret[String] without relabel, got: {errors:?}"
     );
 }
@@ -1694,13 +1694,13 @@ fn lattice_corpus_parses_and_checks() {
 #[test]
 fn secret_to_tainted_rejected() {
     // GIVEN: function returns Tainted[Int] but body is Secret[Int] (downward)
-    // THEN: TypeMismatch
+    // THEN: LabelMismatch
     let errors = errors_for(r#"fn downgrade(s: Secret[Int]) -> Tainted[Int] { s }"#);
     assert!(
         errors
             .iter()
-            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
-        "expected TypeMismatch for Secret→Tainted downgrade, got: {errors:?}"
+            .any(|e| matches!(e, CheckError::LabelMismatch { .. })),
+        "expected LabelMismatch for Secret→Tainted downgrade, got: {errors:?}"
     );
 }
 
@@ -1752,7 +1752,7 @@ fn arithmetic_label_join_downgrade_rejected() {
     assert!(
         errors
             .iter()
-            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+            .any(|e| matches!(e, CheckError::LabelMismatch { .. })),
         "Secret[Int] + Int result cannot flow to bare Int, got: {errors:?}"
     );
 }
@@ -1812,12 +1812,12 @@ fn capability_labels_corpus_parses_and_checks() {
 #[test]
 fn config_path_to_bare_string_return_rejected() {
     // GIVEN: a function returning bare String but body yields ConfigPath[String]
-    // THEN: TypeMismatch — ConfigPath[String] cannot implicitly flow to String
+    // THEN: LabelMismatch — ConfigPath[String] cannot implicitly flow to String
     let errors = errors_for(r#"fn use_path(p: ConfigPath[String]) -> String { p }"#);
     assert!(
         errors
             .iter()
-            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+            .any(|e| matches!(e, CheckError::LabelMismatch { .. })),
         "ConfigPath[String] return as String should be rejected, got: {errors:?}"
     );
 }
@@ -1825,12 +1825,12 @@ fn config_path_to_bare_string_return_rejected() {
 #[test]
 fn raw_string_to_config_path_rejected() {
     // GIVEN: a function returning ConfigPath[String] but body is bare String
-    // THEN: TypeMismatch — bare String needs relabel config_path to become ConfigPath
+    // THEN: LabelMismatch — bare String needs relabel config_path to become ConfigPath
     let errors = errors_for(r#"fn make_path(s: String) -> ConfigPath[String] { s }"#);
     assert!(
         errors
             .iter()
-            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+            .any(|e| matches!(e, CheckError::LabelMismatch { .. })),
         "bare String must not flow to ConfigPath[String] without relabel, got: {errors:?}"
     );
 }
@@ -1838,12 +1838,12 @@ fn raw_string_to_config_path_rejected() {
 #[test]
 fn db_url_rejects_tainted_string() {
     // GIVEN: a function expecting DbUrl[String] but receiving Tainted[String]
-    // THEN: TypeMismatch — Tainted[String] cannot flow to DbUrl[String]
+    // THEN: LabelMismatch — Tainted[String] cannot flow to DbUrl[String]
     let errors = errors_for(r#"fn connect(url: Tainted[String]) -> DbUrl[String] { url }"#);
     assert!(
         errors
             .iter()
-            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+            .any(|e| matches!(e, CheckError::LabelMismatch { .. })),
         "Tainted[String] must not flow to DbUrl[String] without relabel, got: {errors:?}"
     );
 }
@@ -1851,12 +1851,12 @@ fn db_url_rejects_tainted_string() {
 #[test]
 fn api_endpoint_rejects_raw_string() {
     // GIVEN: a function returning ApiEndpoint[String] but body is bare String
-    // THEN: TypeMismatch
+    // THEN: LabelMismatch
     let errors = errors_for(r#"fn make_endpoint(s: String) -> ApiEndpoint[String] { s }"#);
     assert!(
         errors
             .iter()
-            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+            .any(|e| matches!(e, CheckError::LabelMismatch { .. })),
         "bare String must not flow to ApiEndpoint[String] without relabel, got: {errors:?}"
     );
 }
@@ -1864,12 +1864,12 @@ fn api_endpoint_rejects_raw_string() {
 #[test]
 fn audit_target_rejects_raw_string() {
     // GIVEN: a function returning AuditTarget[String] but body is bare String
-    // THEN: TypeMismatch
+    // THEN: LabelMismatch
     let errors = errors_for(r#"fn make_target(s: String) -> AuditTarget[String] { s }"#);
     assert!(
         errors
             .iter()
-            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+            .any(|e| matches!(e, CheckError::LabelMismatch { .. })),
         "bare String must not flow to AuditTarget[String] without relabel, got: {errors:?}"
     );
 }
@@ -1895,7 +1895,7 @@ fn config_path_relabel_roundtrip() {
 #[test]
 fn capability_labels_are_distinct() {
     // GIVEN: ConfigPath[String] where DbUrl[String] is expected
-    // THEN: TypeMismatch — different capability labels are not interchangeable
+    // THEN: LabelMismatch — different capability labels are not interchangeable
     let src = r#"
         fn wrong_label(p: ConfigPath[String]) -> DbUrl[String] { p }
     "#;
@@ -1903,7 +1903,7 @@ fn capability_labels_are_distinct() {
     assert!(
         errors
             .iter()
-            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+            .any(|e| matches!(e, CheckError::LabelMismatch { .. })),
         "ConfigPath[String] must not flow to DbUrl[String], got: {errors:?}"
     );
 }
@@ -1914,7 +1914,7 @@ fn capability_labels_are_distinct() {
 fn config_path_call_site_rejects_raw_string() {
     // GIVEN: a function expecting ConfigPath[String]
     // WHEN: caller passes bare String at the call site
-    // THEN: TypeMismatch
+    // THEN: LabelMismatch
     let src = r#"
         fn needs_config(p: ConfigPath[String]) -> ConfigPath[String] { p }
         fn caller(s: String) -> ConfigPath[String] { needs_config(s) }
@@ -1923,7 +1923,7 @@ fn config_path_call_site_rejects_raw_string() {
     assert!(
         errors
             .iter()
-            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+            .any(|e| matches!(e, CheckError::LabelMismatch { .. })),
         "bare String at call site must not satisfy ConfigPath[String], got: {errors:?}"
     );
 }
@@ -1932,7 +1932,7 @@ fn config_path_call_site_rejects_raw_string() {
 fn db_url_call_site_rejects_raw_string() {
     // GIVEN: a function expecting DbUrl[String]
     // WHEN: caller passes bare String at the call site
-    // THEN: TypeMismatch
+    // THEN: LabelMismatch
     let src = r#"
         fn needs_db(u: DbUrl[String]) -> DbUrl[String] { u }
         fn caller(s: String) -> DbUrl[String] { needs_db(s) }
@@ -1941,7 +1941,7 @@ fn db_url_call_site_rejects_raw_string() {
     assert!(
         errors
             .iter()
-            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+            .any(|e| matches!(e, CheckError::LabelMismatch { .. })),
         "bare String at call site must not satisfy DbUrl[String], got: {errors:?}"
     );
 }
@@ -1950,7 +1950,7 @@ fn db_url_call_site_rejects_raw_string() {
 fn api_endpoint_call_site_rejects_raw_string() {
     // GIVEN: a function expecting ApiEndpoint[String]
     // WHEN: caller passes bare String at the call site
-    // THEN: TypeMismatch
+    // THEN: LabelMismatch
     let src = r#"
         fn needs_endpoint(e: ApiEndpoint[String]) -> ApiEndpoint[String] { e }
         fn caller(s: String) -> ApiEndpoint[String] { needs_endpoint(s) }
@@ -1959,7 +1959,7 @@ fn api_endpoint_call_site_rejects_raw_string() {
     assert!(
         errors
             .iter()
-            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+            .any(|e| matches!(e, CheckError::LabelMismatch { .. })),
         "bare String at call site must not satisfy ApiEndpoint[String], got: {errors:?}"
     );
 }
@@ -1968,7 +1968,7 @@ fn api_endpoint_call_site_rejects_raw_string() {
 fn audit_target_call_site_rejects_raw_string() {
     // GIVEN: a function expecting AuditTarget[String]
     // WHEN: caller passes bare String at the call site
-    // THEN: TypeMismatch
+    // THEN: LabelMismatch
     let src = r#"
         fn needs_target(t: AuditTarget[String]) -> AuditTarget[String] { t }
         fn caller(s: String) -> AuditTarget[String] { needs_target(s) }
@@ -1977,7 +1977,7 @@ fn audit_target_call_site_rejects_raw_string() {
     assert!(
         errors
             .iter()
-            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+            .any(|e| matches!(e, CheckError::LabelMismatch { .. })),
         "bare String at call site must not satisfy AuditTarget[String], got: {errors:?}"
     );
 }
@@ -2163,7 +2163,7 @@ fn relabel_classify_on_tainted_rejected() {
 #[test]
 fn secret_to_unlabeled_param_rejected() {
     // GIVEN: function with unlabeled String param called with Secret[String]
-    // THEN: TypeMismatch — unlabeled context is treated as Public, downward flow rejected
+    // THEN: LabelMismatch — unlabeled context is treated as Public, downward flow rejected
     let errors = errors_for(
         r#"
         fn accept(s: String) -> String { s }
@@ -2173,7 +2173,7 @@ fn secret_to_unlabeled_param_rejected() {
     assert!(
         errors
             .iter()
-            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+            .any(|e| matches!(e, CheckError::LabelMismatch { .. })),
         "Secret[String] must not flow silently to unlabeled String param, got: {errors:?}"
     );
 }
@@ -2181,7 +2181,7 @@ fn secret_to_unlabeled_param_rejected() {
 #[test]
 fn secret_option_to_unlabeled_option_rejected() {
     // GIVEN: fn foo(opt: Option[Int]) called with a Secret[Option[Int]] argument
-    // THEN: TypeMismatch — label wrapper is checked before unwrapping Option (types.rs:248)
+    // THEN: LabelMismatch — label wrapper is checked before unwrapping Option (types.rs:248)
     // Regression for #714: confirms checker prevents bypass even when codegen
     // suppresses .into() for Option/Result to avoid E0283 ambiguity.
     let errors = errors_for(
@@ -2193,7 +2193,7 @@ fn secret_option_to_unlabeled_option_rejected() {
     assert!(
         errors
             .iter()
-            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+            .any(|e| matches!(e, CheckError::LabelMismatch { .. })),
         "Secret[Option[Int]] must not flow silently to unlabeled Option[Int] param, got: {errors:?}"
     );
 }
@@ -2201,7 +2201,7 @@ fn secret_option_to_unlabeled_option_rejected() {
 #[test]
 fn secret_result_to_unlabeled_result_rejected() {
     // GIVEN: fn foo(r: Result[Int, String]) called with a Secret[Result[Int, String]] argument
-    // THEN: TypeMismatch — same label enforcement as Secret[Option[T]] (regression for #714)
+    // THEN: LabelMismatch — same label enforcement as Secret[Option[T]] (regression for #714)
     let errors = errors_for(
         r#"
         fn accept(r: Result[Int, String]) -> Int { r.unwrap_or(0) }
@@ -2211,7 +2211,7 @@ fn secret_result_to_unlabeled_result_rejected() {
     assert!(
         errors
             .iter()
-            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+            .any(|e| matches!(e, CheckError::LabelMismatch { .. })),
         "Secret[Result[Int,String]] must not flow to unlabeled Result param, got: {errors:?}"
     );
 }
@@ -2229,7 +2229,7 @@ fn unlabeled_to_secret_param_rejected() {
     assert!(
         errors
             .iter()
-            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+            .any(|e| matches!(e, CheckError::LabelMismatch { .. })),
         "bare String must not flow to Secret[String] param without relabel, got: {errors:?}"
     );
 }
@@ -2246,7 +2246,7 @@ fn if_with_labeled_bool_condition_promotes_result() {
     assert!(
         errors
             .iter()
-            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+            .any(|e| matches!(e, CheckError::LabelMismatch { .. })),
         "if Secret[Bool] must promote result to Secret[Int], rejecting Public[Int] return, got: {errors:?}"
     );
 }
@@ -2728,8 +2728,8 @@ fn println_rejects_secret_argument() {
     assert!(
         errors
             .iter()
-            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
-        "println with Secret arg should emit TypeMismatch, got: {errors:?}"
+            .any(|e| matches!(e, CheckError::LabelMismatch { .. })),
+        "println with Secret arg should emit LabelMismatch, got: {errors:?}"
     );
 }
 
@@ -2741,8 +2741,8 @@ fn println_rejects_tainted_argument() {
     assert!(
         errors
             .iter()
-            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
-        "println with Tainted arg should emit TypeMismatch, got: {errors:?}"
+            .any(|e| matches!(e, CheckError::LabelMismatch { .. })),
+        "println with Tainted arg should emit LabelMismatch, got: {errors:?}"
     );
 }
 
@@ -2769,8 +2769,8 @@ fn println_rejects_tainted_argument_in_logging() {
     assert!(
         errors
             .iter()
-            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
-        "println with Tainted arg should emit TypeMismatch, got: {errors:?}"
+            .any(|e| matches!(e, CheckError::LabelMismatch { .. })),
+        "println with Tainted arg should emit LabelMismatch, got: {errors:?}"
     );
 }
 
@@ -2781,8 +2781,8 @@ fn print_rejects_secret_argument() {
     assert!(
         errors
             .iter()
-            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
-        "print with Secret arg should emit TypeMismatch, got: {errors:?}"
+            .any(|e| matches!(e, CheckError::LabelMismatch { .. })),
+        "print with Secret arg should emit LabelMismatch, got: {errors:?}"
     );
 }
 
@@ -2793,8 +2793,8 @@ fn print_rejects_tainted_argument() {
     assert!(
         errors
             .iter()
-            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
-        "print with Tainted arg should emit TypeMismatch, got: {errors:?}"
+            .any(|e| matches!(e, CheckError::LabelMismatch { .. })),
+        "print with Tainted arg should emit LabelMismatch, got: {errors:?}"
     );
 }
 
@@ -3483,42 +3483,42 @@ fn prelude_effectful_fn_is_detected_as_observable() {
 fn println_with_secret_arg_produces_type_mismatch() {
     let errors = errors_for(r#"fn f(s: Secret[String]) -> Unit ! Console { println(s); }"#);
     assert!(
-        errors.iter().any(|e| matches!(e, CheckError::TypeMismatch { .. })),
-        "println(Secret[String]) must produce TypeMismatch (direct-flow enforcement), got: {errors:?}"
+        errors.iter().any(|e| matches!(e, CheckError::LabelMismatch { .. })),
+        "println(Secret[String]) must produce LabelMismatch (direct-flow enforcement), got: {errors:?}"
     );
 }
 
-/// Gap 3b: `println` called with a `Tainted[String]` argument must produce `TypeMismatch`.
+/// Gap 3b: `println` called with a `Tainted[String]` argument must produce `LabelMismatch`.
 ///
 /// - GIVEN `fn f(s: Tainted[String]) -> Unit`
 /// - WHEN `println(s)` where println takes bare `String`
-/// - THEN `TypeMismatch` is emitted
+/// - THEN `LabelMismatch` is emitted
 #[test]
 fn println_with_tainted_arg_produces_type_mismatch() {
     let errors = errors_for(r#"fn f(s: Tainted[String]) -> Unit ! Console { println(s); }"#);
     assert!(
-        errors.iter().any(|e| matches!(e, CheckError::TypeMismatch { .. })),
-        "println(Tainted[String]) must produce TypeMismatch (direct-flow enforcement), got: {errors:?}"
+        errors.iter().any(|e| matches!(e, CheckError::LabelMismatch { .. })),
+        "println(Tainted[String]) must produce LabelMismatch (direct-flow enforcement), got: {errors:?}"
     );
 }
 
-/// Gap 3c: `print` called with a `Secret[String]` argument must produce `TypeMismatch`.
+/// Gap 3c: `print` called with a `Secret[String]` argument must produce `LabelMismatch`.
 ///
 /// - GIVEN `fn g(s: Secret[String]) -> Unit`
 /// - WHEN `print(s)` where print takes bare `String`
-/// - THEN `TypeMismatch` is emitted
+/// - THEN `LabelMismatch` is emitted
 #[test]
 fn print_with_secret_arg_produces_type_mismatch() {
     let errors = errors_for(r#"fn g(s: Secret[String]) -> Unit ! Console { print(s); }"#);
     assert!(
-        errors.iter().any(|e| matches!(e, CheckError::TypeMismatch { .. })),
-        "print(Secret[String]) must produce TypeMismatch (direct-flow enforcement), got: {errors:?}"
+        errors.iter().any(|e| matches!(e, CheckError::LabelMismatch { .. })),
+        "print(Secret[String]) must produce LabelMismatch (direct-flow enforcement), got: {errors:?}"
     );
 }
 
 /// Gap 3d: `println` with a bare `String` argument is accepted (no false positive).
 ///
-/// The replacement of `LoggingLabelViolation` with `TypeMismatch` must not
+/// The replacement of `LoggingLabelViolation` with `LabelMismatch` must not
 /// cause false positives: a bare string argument to println must be accepted.
 ///
 /// - GIVEN `fn f(msg: String) -> Unit`
@@ -3989,7 +3989,7 @@ fn refinement_operators_lt_le_ge_eq() {
 #[test]
 fn sha256_rejects_secret_input() {
     // GIVEN: sha256 expects String (unlabeled); Secret cannot flow to unlabeled
-    // THEN: TypeMismatch — Secret[String] cannot be passed to sha256(String)
+    // THEN: LabelMismatch — Secret[String] cannot be passed to sha256(String)
     // This is the interim IFC protection until label polymorphism lands (#179).
     let errors = errors_for(
         r#"fn hash_secret(pwd: Secret[String]) -> String {
@@ -3999,8 +3999,8 @@ fn sha256_rejects_secret_input() {
     assert!(
         errors
             .iter()
-            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
-        "sha256(Secret[String]) must be a TypeMismatch, got: {errors:?}"
+            .any(|e| matches!(e, CheckError::LabelMismatch { .. })),
+        "sha256(Secret[String]) must be a LabelMismatch, got: {errors:?}"
     );
 }
 
@@ -4014,8 +4014,8 @@ fn sha512_rejects_secret_input() {
     assert!(
         errors
             .iter()
-            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
-        "sha512(Secret[String]) must be a TypeMismatch, got: {errors:?}"
+            .any(|e| matches!(e, CheckError::LabelMismatch { .. })),
+        "sha512(Secret[String]) must be a LabelMismatch, got: {errors:?}"
     );
 }
 
@@ -4215,8 +4215,8 @@ fn log_info_rejects_secret_argument() {
     assert!(
         errors
             .iter()
-            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
-        "Logger.info with Secret arg should emit TypeMismatch, got: {errors:?}"
+            .any(|e| matches!(e, CheckError::LabelMismatch { .. })),
+        "Logger.info with Secret arg should emit LabelMismatch, got: {errors:?}"
     );
 }
 
@@ -4230,8 +4230,8 @@ fn log_error_rejects_tainted_argument() {
     assert!(
         errors
             .iter()
-            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
-        "Logger.error with Tainted arg should emit TypeMismatch, got: {errors:?}"
+            .any(|e| matches!(e, CheckError::LabelMismatch { .. })),
+        "Logger.error with Tainted arg should emit LabelMismatch, got: {errors:?}"
     );
 }
 
@@ -4245,8 +4245,8 @@ fn log_warn_rejects_tainted_argument() {
     assert!(
         errors
             .iter()
-            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
-        "Logger.warn with Tainted arg should emit TypeMismatch, got: {errors:?}"
+            .any(|e| matches!(e, CheckError::LabelMismatch { .. })),
+        "Logger.warn with Tainted arg should emit LabelMismatch, got: {errors:?}"
     );
 }
 
@@ -4300,8 +4300,8 @@ fn log_debug_rejects_secret_argument() {
     assert!(
         errors
             .iter()
-            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
-        "Logger.debug with Secret arg should emit TypeMismatch, got: {errors:?}"
+            .any(|e| matches!(e, CheckError::LabelMismatch { .. })),
+        "Logger.debug with Secret arg should emit LabelMismatch, got: {errors:?}"
     );
 }
 
@@ -4334,8 +4334,8 @@ fn log_info_rejects_secret_value_in_fields_map() {
     assert!(
         errors
             .iter()
-            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
-        "Logger.info with Secret value in fields map should emit TypeMismatch, got: {errors:?}"
+            .any(|e| matches!(e, CheckError::LabelMismatch { .. })),
+        "Logger.info with Secret value in fields map should emit LabelMismatch, got: {errors:?}"
     );
 }
 
@@ -4348,8 +4348,8 @@ fn log_warn_rejects_tainted_value_in_fields_map() {
     assert!(
         errors
             .iter()
-            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
-        "Logger.warn with Tainted value in fields map should emit TypeMismatch, got: {errors:?}"
+            .any(|e| matches!(e, CheckError::LabelMismatch { .. })),
+        "Logger.warn with Tainted value in fields map should emit LabelMismatch, got: {errors:?}"
     );
 }
 
@@ -4362,8 +4362,8 @@ fn log_debug_rejects_tainted_value_in_fields_map() {
     assert!(
         errors
             .iter()
-            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
-        "Logger.debug with Tainted value in fields map should emit TypeMismatch, got: {errors:?}"
+            .any(|e| matches!(e, CheckError::LabelMismatch { .. })),
+        "Logger.debug with Tainted value in fields map should emit LabelMismatch, got: {errors:?}"
     );
 }
 
@@ -4523,7 +4523,7 @@ fn f(s: Tainted[String], n: String) -> String { combine(s, n) }
     assert!(
         errors
             .iter()
-            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+            .any(|e| matches!(e, CheckError::LabelMismatch { .. })),
         "Tainted[String] transparent result should not flow to bare String return, got: {errors:?}"
     );
 }
@@ -4660,13 +4660,13 @@ fn custom_iterator_impl_accepted() {
     );
 }
 
-/// Spec 001 Req 11 / Scenario: For loop rejected inside partial function.
+/// Spec 001 Req 8 / Scenario: For loop allowed inside partial function (#1029).
 ///
 /// GIVEN `partial fn f(items: Array[Int, 3]) { for x in items { … } }`
 /// WHEN  the function is type-checked
-/// THEN  type checker MUST reject: `for` is not permitted in `partial` functions
+/// THEN  type checker MUST accept: `for` over a finite collection always terminates
 #[test]
-fn for_loop_rejected_in_partial_fn() {
+fn for_loop_allowed_in_partial_fn() {
     let src = r#"
         partial fn f(items: Array[Int, 3]) -> Unit {
             for x in items { }
@@ -4674,20 +4674,18 @@ fn for_loop_rejected_in_partial_fn() {
     "#;
     let errors = errors_for(src);
     assert!(
-        errors
-            .iter()
-            .any(|e| matches!(e, CheckError::ForLoopInPartialFn { .. })),
-        "`for` in partial fn must be rejected with ForLoopInPartialFn, got: {errors:?}"
+        errors.is_empty(),
+        "`for` in partial fn should be accepted (finite iteration), got: {errors:?}"
     );
 }
 
-/// Spec 001 Req 11 + Req 8 / Scenario: For loop over non-iterator inside partial function.
+/// Spec 001 Req 1 + Req 8 / Scenario: For loop over non-iterator inside partial function (#1029).
 ///
 /// GIVEN `partial fn f(n: Int) { for x in n { } }`
 /// WHEN  the function is type-checked
-/// THEN  type checker MUST emit BOTH ForLoopInPartialFn AND NotIterator
+/// THEN  type checker MUST emit NotIterator (Int is not iterable)
 #[test]
-fn for_loop_non_iterator_in_partial_fn_emits_both_errors() {
+fn for_loop_non_iterator_in_partial_fn_emits_not_iterator() {
     let src = r#"
         partial fn f(n: Int) -> Unit {
             for x in n { }
@@ -4697,14 +4695,8 @@ fn for_loop_non_iterator_in_partial_fn_emits_both_errors() {
     assert!(
         errors
             .iter()
-            .any(|e| matches!(e, CheckError::ForLoopInPartialFn { .. })),
-        "must emit ForLoopInPartialFn, got: {errors:?}"
-    );
-    assert!(
-        errors
-            .iter()
             .any(|e| matches!(e, CheckError::NotIterator { ty, .. } if ty == "Int")),
-        "must also emit NotIterator for Int, got: {errors:?}"
+        "must emit NotIterator for Int, got: {errors:?}"
     );
 }
 
