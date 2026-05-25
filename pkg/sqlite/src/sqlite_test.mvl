@@ -12,7 +12,7 @@
 
 // ── Type re-declarations (workaround: #96) ────────────────────────────────
 
-type Value = enum {
+type DbValue = enum {
     Null,
     Bool(Bool),
     Int(Int),

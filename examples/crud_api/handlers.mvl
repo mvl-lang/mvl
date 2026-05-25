@@ -42,7 +42,7 @@ fn users_to_json(users: List[User]) -> String {
 
 // ── GET /users ────────────────────────────────────────────────────────────────
 
-pub partial fn list_users_handler(db: val SqliteDb, req: val Request, matched: val MatchedRoute) -> Response ! DB {
+pub partial fn list_users_handler(val db: SqliteDb, val req: Request, val matched: MatchedRoute) -> Response ! DB {
     match db_list_users(db) {
         Err(msg)  => json_error(http_internal_error(msg)),
         Ok(users) => json_ok_str(users_to_json(users)),
@@ -51,7 +51,7 @@ pub partial fn list_users_handler(db: val SqliteDb, req: val Request, matched: v
 
 // ── GET /users/{id} ───────────────────────────────────────────────────────────
 
-pub partial fn get_user_handler(db: val SqliteDb, req: val Request, matched: val MatchedRoute) -> Response ! DB {
+pub partial fn get_user_handler(val db: SqliteDb, val req: Request, val matched: MatchedRoute) -> Response ! DB {
     match param_int(matched, "id") {
         Err(e) => json_error(e),
         Ok(id) => match db_get_user(db, id) {
@@ -64,7 +64,7 @@ pub partial fn get_user_handler(db: val SqliteDb, req: val Request, matched: val
 
 // ── POST /users ───────────────────────────────────────────────────────────────
 
-pub partial fn create_user_handler(db: val SqliteDb, req: val Request, matched: val MatchedRoute) -> Response ! DB {
+pub partial fn create_user_handler(val db: SqliteDb, val req: Request, val matched: MatchedRoute) -> Response ! DB {
     match body_json(req) {
         Err(e)   => json_error(e),
         Ok(body) => match json_get_object(body) {
@@ -92,7 +92,7 @@ pub partial fn create_user_handler(db: val SqliteDb, req: val Request, matched: 
 
 // ── PUT /users/{id} ───────────────────────────────────────────────────────────
 
-pub partial fn update_user_handler(db: val SqliteDb, req: val Request, matched: val MatchedRoute) -> Response ! DB {
+pub partial fn update_user_handler(val db: SqliteDb, val req: Request, val matched: MatchedRoute) -> Response ! DB {
     match param_int(matched, "id") {
         Err(e)  => json_error(e),
         Ok(id)  => match body_json(req) {
@@ -124,7 +124,7 @@ pub partial fn update_user_handler(db: val SqliteDb, req: val Request, matched: 
 
 // ── DELETE /users/{id} ───────────────────────────────────────────────────────
 
-pub partial fn delete_user_handler(db: val SqliteDb, req: val Request, matched: val MatchedRoute) -> Response ! DB {
+pub partial fn delete_user_handler(val db: SqliteDb, val req: Request, val matched: MatchedRoute) -> Response ! DB {
     match param_int(matched, "id") {
         Err(e) => json_error(e),
         Ok(id) => match db_delete_user(db, id) {

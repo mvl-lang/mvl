@@ -8,7 +8,7 @@
 
 use models::{User, CreateUserRequest, UpdateUserRequest}
 use pkg.sqlite.{SqliteDb, SqliteError, open, execute, query, query_scalar, close}
-use std.db.{Value}
+use std.db.{DbValue}
 
 // ── Open / init ───────────────────────────────────────────────────────────────
 
@@ -22,7 +22,7 @@ pub partial fn db_open(path: String) -> Result[SqliteDb, String] ! DB + FileRead
 }
 
 /// Create the users table if it does not exist.
-pub fn db_init(db: val SqliteDb) -> Result[Unit, String] ! DB {
+pub fn db_init(val db: SqliteDb) -> Result[Unit, String] ! DB {
     match execute(db,
         "CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, email TEXT NOT NULL)",
         []) {
@@ -34,13 +34,13 @@ pub fn db_init(db: val SqliteDb) -> Result[Unit, String] ! DB {
 
 // ── Row decoder ───────────────────────────────────────────────────────────────
 
-fn row_to_user(row: Map[String, Value]) -> Option[User] {
+fn row_to_user(row: Map[String, DbValue]) -> Option[User] {
     match row.get("id") {
-        Some(Value::Int(id)) => {
+        Some(DbValue::Int(id)) => {
             match row.get("name") {
-                Some(Value::Text(name)) => {
+                Some(DbValue::Text(name)) => {
                     match row.get("email") {
-                        Some(Value::Text(email)) => Some(User { id: id, name: name, email: email }),
+                        Some(DbValue::Text(email)) => Some(User { id: id, name: name, email: email }),
                         _                        => None,
                     }
                 },
@@ -54,7 +54,7 @@ fn row_to_user(row: Map[String, Value]) -> Option[User] {
 // ── CRUD ──────────────────────────────────────────────────────────────────────
 
 /// List all users ordered by id.
-pub partial fn db_list_users(db: val SqliteDb) -> Result[List[User], String] ! DB {
+pub partial fn db_list_users(val db: SqliteDb) -> Result[List[User], String] ! DB {
     match query(db, "SELECT id, name, email FROM users ORDER BY id", []) {
         Err(_)   => Err("list query failed"),
         Ok(rows) => {
@@ -77,8 +77,8 @@ pub partial fn db_list_users(db: val SqliteDb) -> Result[List[User], String] ! D
 }
 
 /// Get a single user by id.  Returns None if not found.
-pub partial fn db_get_user(db: val SqliteDb, id: Int) -> Result[Option[User], String] ! DB {
-    match query(db, "SELECT id, name, email FROM users WHERE id = ?", [Value::Int(id)]) {
+pub partial fn db_get_user(val db: SqliteDb, id: Int) -> Result[Option[User], String] ! DB {
+    match query(db, "SELECT id, name, email FROM users WHERE id = ?", [DbValue::Int(id)]) {
         Err(_)   => Err("get query failed"),
         Ok(rows) => match rows.get(0) {
             None      => Ok(None),
@@ -89,17 +89,17 @@ pub partial fn db_get_user(db: val SqliteDb, id: Int) -> Result[Option[User], St
 
 /// Insert a new user.  Returns the new row's id.
 /// Returns Err if the email already exists (UNIQUE constraint).
-pub partial fn db_create_user(db: val SqliteDb, req: val CreateUserRequest) -> Result[Int, String] ! DB {
+pub partial fn db_create_user(val db: SqliteDb, val req: CreateUserRequest) -> Result[Int, String] ! DB {
     match execute(db,
         "INSERT INTO users (name, email) VALUES (?, ?)",
-        [Value::Text(req.name), Value::Text(req.email)]) {
+        [DbValue::Text(req.name), DbValue::Text(req.email)]) {
         Err(SqliteError::ConstraintViolation(_)) => Err("email already exists"),
         Err(_)                                   => Err("insert failed"),
         Ok(_)                                    => {
             match query_scalar(db, "SELECT last_insert_rowid()", []) {
                 Err(_)              => Err("failed to read inserted id"),
-                Ok(Value::Int(n))   => Ok(n),
-                Ok(Value::Float(f)) => Ok(f.to_int()),
+                Ok(DbValue::Int(n))   => Ok(n),
+                Ok(DbValue::Float(f)) => Ok(f.to_int()),
                 Ok(_)               => Err("unexpected id type"),
             }
         },
@@ -108,16 +108,16 @@ pub partial fn db_create_user(db: val SqliteDb, req: val CreateUserRequest) -> R
 
 /// Update name and email for an existing user.
 /// Returns true if a row was updated, false if the id did not exist.
-pub partial fn db_update_user(db: val SqliteDb, id: Int, req: val UpdateUserRequest) -> Result[Bool, String] ! DB {
+pub partial fn db_update_user(val db: SqliteDb, id: Int, val req: UpdateUserRequest) -> Result[Bool, String] ! DB {
     match execute(db,
         "UPDATE users SET name = ?, email = ? WHERE id = ?",
-        [Value::Text(req.name), Value::Text(req.email), Value::Int(id)]) {
+        [DbValue::Text(req.name), DbValue::Text(req.email), DbValue::Int(id)]) {
         Err(_) => Err("update failed"),
         Ok(_)  => {
             match query_scalar(db, "SELECT changes()", []) {
                 Err(_)              => Err("changes() failed"),
-                Ok(Value::Int(n))   => Ok(n > 0),
-                Ok(Value::Float(f)) => Ok(f.to_int() > 0),
+                Ok(DbValue::Int(n))   => Ok(n > 0),
+                Ok(DbValue::Float(f)) => Ok(f.to_int() > 0),
                 Ok(_)               => Err("unexpected changes() type"),
             }
         },
@@ -126,16 +126,16 @@ pub partial fn db_update_user(db: val SqliteDb, id: Int, req: val UpdateUserRequ
 
 /// Delete a user by id.
 /// Returns true if a row was deleted, false if the id did not exist.
-pub partial fn db_delete_user(db: val SqliteDb, id: Int) -> Result[Bool, String] ! DB {
+pub partial fn db_delete_user(val db: SqliteDb, id: Int) -> Result[Bool, String] ! DB {
     match execute(db,
         "DELETE FROM users WHERE id = ?",
-        [Value::Int(id)]) {
+        [DbValue::Int(id)]) {
         Err(_) => Err("delete failed"),
         Ok(_)  => {
             match query_scalar(db, "SELECT changes()", []) {
                 Err(_)              => Err("changes() failed"),
-                Ok(Value::Int(n))   => Ok(n > 0),
-                Ok(Value::Float(f)) => Ok(f.to_int() > 0),
+                Ok(DbValue::Int(n))   => Ok(n > 0),
+                Ok(DbValue::Float(f)) => Ok(f.to_int() > 0),
                 Ok(_)               => Err("unexpected changes() type"),
             }
         },

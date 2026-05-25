@@ -109,6 +109,9 @@ pub struct UseDecl {
     pub reexport: bool,
     /// Path segments, e.g. `["std", "io", "File"]`
     pub path: Vec<String>,
+    /// Items imported via brace group, e.g. `use models::{User, Req}` → `["User", "Req"]`.
+    /// Empty when the import has no brace group.
+    pub items: Vec<String>,
     /// True when the import has no brace group and `path.len() >= 2`.
     /// Signals a module-level import: `use std.json` creates the qualifier
     /// `json` so that `json.decode()` resolves as a qualified function call.

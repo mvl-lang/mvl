@@ -281,11 +281,17 @@ pub fn transpile_project_with_options(
         || prelude_requires_runtime(prelude_progs);
 
     let sibling_names: Vec<&str> = siblings.iter().map(|(n, _)| n.as_str()).collect();
+    let sibling_prog_refs: Vec<&Program> = siblings.iter().map(|(_, p)| p).collect();
     let mut cg = RustEmitter::new();
     cg.expr_types = expr_types;
     cg.assert_mode = assert_mode;
     cg.test_extern_stubs = extern_stubs;
-    cg.emit_program_with_mods(entry_prog, &sibling_names, prelude_progs);
+    cg.emit_program_with_mods(
+        entry_prog,
+        &sibling_names,
+        prelude_progs,
+        &sibling_prog_refs,
+    );
     let main_rs = cg.finish();
 
     // Sibling modules share the runtime prelude with the entry point so type
@@ -293,7 +299,15 @@ pub fn transpile_project_with_options(
     let entry_uses_runtime = use_runtime;
     let module_files: Vec<(String, String)> = siblings
         .iter()
-        .map(|(name, prog)| {
+        .enumerate()
+        .map(|(idx, (name, prog))| {
+            // Build sibling_progs for this module: entry + all OTHER siblings.
+            let mut other_progs: Vec<&Program> = vec![entry_prog];
+            for (j, (_, p)) in siblings.iter().enumerate() {
+                if j != idx {
+                    other_progs.push(p);
+                }
+            }
             let sibling_check = crate::mvl::checker::check_with_prelude(prelude_progs, prog);
             let mut cg = RustEmitter::new();
             // Include prelude expr_types so prelude functions emitted inside the
@@ -307,7 +321,7 @@ pub fn transpile_project_with_options(
             cg.assert_mode = assert_mode;
             cg.test_extern_stubs = extern_stubs;
             if entry_uses_runtime {
-                cg.emit_sibling_module(prog, prelude_progs);
+                cg.emit_sibling_module(prog, prelude_progs, &other_progs);
             } else {
                 cg.emit_program(prog);
             }
@@ -408,7 +422,7 @@ pub fn transpile(prog: &Program, config: TranspileConfig) -> TranspileResult {
     }
 
     if has_prelude {
-        cg.emit_program_with_mods(prog, &[], &config.prelude_progs);
+        cg.emit_program_with_mods(prog, &[], &config.prelude_progs, &[]);
     } else {
         cg.emit_program(prog);
     }

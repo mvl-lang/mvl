@@ -36,8 +36,8 @@
 use std::collections::HashMap;
 
 use crate::mvl::parser::ast::{
-    Block, Decl, ElseBranch, Expr, FnDecl, LValue, MatchBody, Param, Program, Stmt, TypeExpr,
-    UnaryOp,
+    Block, Capability, Decl, ElseBranch, Expr, FnDecl, LValue, MatchBody, Param, Program, Stmt,
+    TypeExpr, UnaryOp,
 };
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -51,6 +51,19 @@ use crate::mvl::parser::ast::{
 pub fn build_capability_params_map(
     prog: &Program,
     prelude_fns: &[&FnDecl],
+) -> HashMap<String, Vec<Option<bool>>> {
+    build_capability_params_map_with_siblings(prog, prelude_fns, &[])
+}
+
+/// Build capability-params map including sibling module functions.
+///
+/// Sibling functions are analysed with the same rules as user functions so
+/// that cross-module call sites emit `&x` instead of `x.clone().into()` for
+/// parameters declared `val T` (type-position borrow).
+pub fn build_capability_params_map_with_siblings(
+    prog: &Program,
+    prelude_fns: &[&FnDecl],
+    sibling_progs: &[&Program],
 ) -> HashMap<String, Vec<Option<bool>>> {
     let mut map = HashMap::new();
 
@@ -68,6 +81,18 @@ pub fn build_capability_params_map(
             let flags = capability_params_for_fn(fd);
             if flags.iter().any(|b| b.is_some()) {
                 map.insert(fd.name.clone(), flags);
+            }
+        }
+    }
+
+    // Sibling module functions — same analysis as user functions.
+    for sibling in sibling_progs {
+        for decl in &sibling.declarations {
+            if let Decl::Fn(fd) = decl {
+                let flags = capability_params_for_fn(fd);
+                if flags.iter().any(|b| b.is_some()) {
+                    map.insert(fd.name.clone(), flags);
+                }
             }
         }
     }
@@ -91,6 +116,13 @@ pub fn capability_params_for_fn(fd: &FnDecl) -> Vec<Option<bool>> {
             }
             // No benefit to borrowing Copy types (i64, bool, f64, u8, unit, …).
             if is_copy_type(&p.ty) {
+                return None;
+            }
+            // Capability-annotation `val` (on the param name, not the type) declares
+            // move-ownership semantics — suppress inferred borrow to keep the param owned.
+            // This ensures `val req: Request` stays `req: Request` even when the body
+            // only field-accesses `req` (which would otherwise trigger borrow inference).
+            if matches!(p.capability, Some(Capability::Val)) {
                 return None;
             }
             // Conservative read-only inference: emit as &T if the body never

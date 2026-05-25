@@ -10,7 +10,7 @@
 // Test: make test  (unit tests in main_test.mvl + this integration run)
 
 use pkg.sqlite.{SqliteDb, SqliteError, open, execute, query, query_scalar, query_by_min_age, close}
-use std.db.{Value}
+use std.db.{DbValue}
 use std.io.{println}
 
 partial fn main() -> Unit ! DB + FileRead + FileWrite + Console {
@@ -33,22 +33,22 @@ partial fn main() -> Unit ! DB + FileRead + FileWrite + Console {
     }
 
     match execute(db, "INSERT INTO users (id, name, age) VALUES (?, ?, ?)",
-            [Value::Int(1), Value::Text("Alice"), Value::Int(30)]) {
+            [DbValue::Int(1), DbValue::Text("Alice"), DbValue::Int(30)]) {
         Err(_) => println("insert failed"),
         Ok(_)  => (),
     }
     match execute(db, "INSERT INTO users (id, name, age) VALUES (?, ?, ?)",
-            [Value::Int(2), Value::Text("Bob"), Value::Int(25)]) {
+            [DbValue::Int(2), DbValue::Text("Bob"), DbValue::Int(25)]) {
         Err(_) => println("insert failed"),
         Ok(_)  => (),
     }
     match execute(db, "INSERT INTO users (id, name, age) VALUES (?, ?, ?)",
-            [Value::Int(3), Value::Text("Carol"), Value::Int(35)]) {
+            [DbValue::Int(3), DbValue::Text("Carol"), DbValue::Int(35)]) {
         Err(_) => println("insert failed"),
         Ok(_)  => (),
     }
 
-    let rows: List[Map[String, Value]] = match query_by_min_age(db, 26) {
+    let rows: List[Map[String, DbValue]] = match query_by_min_age(db, 26) {
         Err(SqliteError::NotFound)      => { println("no such table"); return }
         Err(SqliteError::InvalidSql(m)) => { println("bad query: ".concat(m)); return }
         Err(_)                          => { println("query failed"); return }
@@ -67,21 +67,21 @@ partial fn main() -> Unit ! DB + FileRead + FileWrite + Console {
                 let id: String = match row.get("id") {
                     None => "?",
                     Some(cell) => match cell {
-                        Value::Int(v) => v.to_string(),
+                        DbValue::Int(v) => v.to_string(),
                         _ => "?",
                     },
                 };
                 let name: String = match row.get("name") {
                     None => "?",
                     Some(cell) => match cell {
-                        Value::Text(v) => v,
+                        DbValue::Text(v) => v,
                         _ => "?",
                     },
                 };
                 let age: String = match row.get("age") {
                     None => "?",
                     Some(cell) => match cell {
-                        Value::Int(v) => v.to_string(),
+                        DbValue::Int(v) => v.to_string(),
                         _ => "?",
                     },
                 };
@@ -92,12 +92,12 @@ partial fn main() -> Unit ! DB + FileRead + FileWrite + Console {
     }
 
     // Scalar query: COUNT(*) returns the total number of users inserted.
-    let count_val: Value = match query_scalar(db, "SELECT COUNT(*) FROM users", []) {
+    let count_val: DbValue = match query_scalar(db, "SELECT COUNT(*) FROM users", []) {
         Err(_) => { println("count failed"); return }
         Ok(v)  => v,
     };
     let count: Int = match count_val {
-        Value::Int(n) => n,
+        DbValue::Int(n) => n,
         _             => -1,
     };
     assert_eq(count, 3);

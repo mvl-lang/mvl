@@ -659,18 +659,23 @@ impl Parser {
         path.push(first);
 
         let mut brace_group = false;
+        let mut items: Vec<String> = Vec::new();
         loop {
             // Accept both `.` and `::` as path separators.
             if !self.eat(&TokenKind::Dot) && !self.eat(&TokenKind::ColonColon) {
                 break;
             }
             // Brace import: `use std.io.{ A, B, C }` — consume items, store module path.
-            // The type-checker resolves stdlib items via hardcoded tables and ignores
-            // UseDecl contents, so the individual items are discarded here.
+            // The type-checker resolves stdlib items via hardcoded tables; individual items
+            // are stored in UseDecl::items so the Rust backend can suppress type stubs.
             if matches!(self.peek_kind(), TokenKind::LBrace) {
                 self.advance(); // consume `{`
                 while !matches!(self.peek_kind(), TokenKind::RBrace | TokenKind::Eof) {
-                    self.advance();
+                    if let Ok((name, _)) = self.expect_ident() {
+                        items.push(name);
+                    } else {
+                        self.advance(); // skip commas, etc.
+                    }
                 }
                 let rbrace = self.expect(&TokenKind::RBrace);
                 self.require(rbrace)?;
@@ -694,6 +699,7 @@ impl Parser {
             reexport,
             module_only: !brace_group && path.len() >= 2,
             path,
+            items,
             span,
         })
     }
