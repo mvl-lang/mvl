@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.155.0] - 2026-05-25
+
+### Added
+- #1017 — `pkg/tls` — TLS 1.3 client layer using rustls with full Rust/LLVM backend parity. Enables HTTPS for both client and server via `https_get/post/put/delete` convenience layer.
+- `make check-pkg` — Root Makefile target that type-checks all packages (pkg/*)
+
+### Fixed
+- Security: Port range validation (reject 0, negative, >65535) in HTTPS URL parsing
+- Security: Error message sanitization (strip hostname/OS details from TLS error reporting)
+- Correctness: Add 1 MiB size cap to `tls_read` (prevents OOM on attacker-controlled responses)
+- Correctness: Handle flush errors in `tls_write` instead of silent discard
+- Testing: Add 12 new HTTPS tests for CRLF injection validation and port bounds
+
 ## [0.154.2] - 2026-05-25
 
 ### Fixed
