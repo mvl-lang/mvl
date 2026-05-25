@@ -33,7 +33,7 @@ The lexer MUST tokenize MVL source into a stream of typed tokens. Each token MUS
 
 #### Scenario: Tokenize operators
 
-- GIVEN source text `+ - * / % == != < > <= >= && || ! ? . :: -> =`
+- GIVEN source text `+ - * / % == != < > <= >= && || ! ? . :: -> = & | ^ ~ << >>`
 - WHEN the lexer tokenizes it
 - THEN it MUST produce tokens for each operator
 
@@ -161,7 +161,7 @@ The parser MUST parse all MVL statement forms: let bindings (with mandatory type
 
 ### Requirement 6: Parse Expressions [MUST]
 
-The parser MUST parse all MVL expression forms: literals, identifiers, field access, function/method calls, binary operators (numeric only), if-expressions, match-expressions, `?` propagation, `move`, `consume`, `declassify`, and `sanitize`.
+The parser MUST parse all MVL expression forms: literals, identifiers, field access, function/method calls, binary operators (numeric, logical, and bitwise), if-expressions, match-expressions, `?` propagation, `move`, `consume`, `declassify`, and `sanitize`.
 
 **Implementation:** `src/mvl/parser/expressions.rs`
 

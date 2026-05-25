@@ -3,8 +3,8 @@
 // Demonstrates:
 //   1. Req 10 (Refinements): port, timeout, max_connections carry compile-time bounds.
 //   2. Req 1  (Types): Config struct with typed fields; ConfigError named failure catalogue.
-//   3. Req 11 (IFC): api_key field is Secret[String] — the type checker prevents it
-//      from appearing in any Response body, println() call, or Logger method call.
+//   3. Req 11 (IFC): api_key is loaded separately from env via get_secret() →
+//      Secret[String] (Pattern 002). Not stored in Config struct.
 //
 // No effects, no extern — pure type declarations.
 // Assurance note: 0 extern blocks.
@@ -20,17 +20,13 @@ pub type MaxConns = Int where self > 0 && self <= 10000
 
 // Application configuration.
 //
-// IFC invariant: api_key is Secret[String]. The compiler rejects any attempt to:
-//   - pass api_key to println() or Logger.info() / Logger.warn() / Logger.error()
-//   - assign api_key to a Response.body field (which requires String)
-//   - return api_key from a function with non-Secret return type
-//
-// api_key may only flow to extern "rust" trust boundary functions (see storage.mvl).
+// IFC invariant: credentials are NOT stored in the config struct. The api_key
+// is loaded separately via std.env.get_secret() → Secret[String], matching
+// Pattern 002 (raw OS builtins return bare types; labeled wrappers live in MVL).
 pub type Config = struct {
     port: Port,
     timeout: Timeout,
     max_connections: MaxConns,
-    api_key: Secret[String],
     debug_mode: Bool,
 }
 
@@ -41,5 +37,4 @@ pub type ConfigError = enum {
     InvalidPort,
     InvalidTimeout,
     InvalidMaxConns,
-    MissingApiKey,
 }

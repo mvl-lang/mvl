@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.154.2] - 2026-05-25
+
+### Fixed
+- #980 — LLVM backend now heap-allocates Option/Result payloads to prevent dangling pointer SIGSEGV
+- #987 — Rust codegen now inlines pkg-defined actors from prelude programs into standalone binaries
+- #991 — Audited all 98 unreachable!/panic! sites; added CI check to prevent new unvetted sites
+
+### Docs
+- #926 — Fixed stale operator precedence documentation and ADR-0022 intrinsic mapping examples
+
+### Chore
+- #913 — Updated config_server example to use `get_secret()` for API key management instead of hardcoded config
+- #992 — Documented 4-phase desugaring plan for eliminating 4-way method dispatch synchronization
+
 ## [0.154.1] - 2026-05-25
 
 ### Fixed

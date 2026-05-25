@@ -3,7 +3,7 @@
 //!
 //! This bridge provides:
 //!   1. **Config loader** — parses sample_config.json, validates refinements
-//!   2. **Auth store**    — stores api_key as Secret, constant-time verify
+//!   2. **Auth store**    — stores api_key (from env via get_secret) as Secret, constant-time verify
 //!   3. **Config store**  — in-memory HashMap for non-secret config values
 //!   4. **Server sim**    — pre-scripted demo request sequence (3 requests)
 //!
@@ -66,8 +66,6 @@ pub extern "Rust" fn load_config(path: String) -> Result<Config, ConfigError> {
         .ok_or(ConfigError::ParseError)?;
     let max_connections = extract_int_field(&content, "max_connections")
         .ok_or(ConfigError::ParseError)?;
-    let api_key = extract_str_field(&content, "api_key")
-        .ok_or(ConfigError::MissingApiKey)?;
     let debug_mode = extract_bool_field(&content, "debug_mode").unwrap_or(false);
 
     // Validate refinement constraints.
@@ -96,7 +94,6 @@ pub extern "Rust" fn load_config(path: String) -> Result<Config, ConfigError> {
         port: Port(port),
         timeout: Timeout(timeout),
         max_connections: MaxConns(max_connections),
-        api_key: Secret(api_key),
         debug_mode,
     })
 }
