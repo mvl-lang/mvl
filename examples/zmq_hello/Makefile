@@ -38,6 +38,25 @@ guard-mvl: ## Validate MVL binary is present
 check: guard-mvl .mvl/pkg/zmq ## Type-check server.mvl
 	$(MVL) check $(DIR)server.mvl
 
+test-solver: guard-mvl .mvl/pkg/zmq ## Show solver statistics
+	@pass=0; fail=0; \
+	OK="\033[32m✓\033[0m"; FAIL="\033[31m✗\033[0m"; \
+	for f in $(DIR)server.mvl; do \
+		name=$$(basename "$$f"); \
+		out=$$($(MVL) check "$$f" 2>&1); rc=$$?; \
+		if [ $$rc -eq 0 ]; then \
+			printf "  $$OK  %s\n" "$$name"; pass=$$((pass + 1)); \
+		else \
+			printf "  $$FAIL  %s\n" "$$name"; printf "%s\n" "$$out" | sed 's/^/         /'; fail=$$((fail + 1)); \
+		fi; \
+	done; \
+	echo ""; \
+	if [ $$fail -eq 0 ]; then \
+		printf "  \033[32m✓  $$pass passed, 0 failed\033[0m\n\n"; \
+	else \
+		printf "  \033[31m✗  $$pass passed, $$fail failed\033[0m\n\n"; exit 1; \
+	fi
+
 test: guard-mvl .mvl/pkg/zmq ## Start server, run Python client, assert 3 echo replies, stop server
 	@echo ""
 	@echo "  zmq_hello: starting REP server on port $(PORT)..."
@@ -76,6 +95,9 @@ test: guard-mvl .mvl/pkg/zmq ## Start server, run Python client, assert 3 echo r
 	echo "$$CLIENT_OUT" | sed 's/^/    /'; \
 	echo "  \033[32m✓  zmq_hello passed (3/3 replies)\033[0m"; \
 	echo ""
+
+smoke: guard-mvl .mvl/pkg/zmq ## Smoke-test: build binary (proves compilation without a terminal)
+	$(MVL) build $(DIR)server.mvl
 
 run: guard-mvl .mvl/pkg/zmq ## Start the REP server interactively (Ctrl-C to stop)
 	$(MVL) run $(DIR)server.mvl
