@@ -36,7 +36,16 @@ prove: guard-mvl ## Prove correctness: assurance report with prover verdicts
 		printf "  \033[31m✗  pkg.zmq: assurance FAIL\033[0m\n\n"; exit 1; \
 	fi
 
-assurance: check lint test prove ## Full pipeline: check + lint + test + prove
+coverage: guard-mvl ## Run tests with behavioral branch coverage report
+	@$(MVL) test $(DIR)src/ --coverage 2>&1; RC=$$?; \
+	echo ""; \
+	if [ $$RC -eq 0 ]; then \
+		printf "  \033[32m✓  pkg.zmq: coverage PASS\033[0m\n\n"; \
+	else \
+		printf "  \033[31m✗  pkg.zmq: coverage FAIL\033[0m\n\n"; exit 1; \
+	fi
+
+assurance: check lint test prove coverage ## Full pipeline: check + lint + test + prove + coverage
 
 clean: ## Remove build artifacts
 	rm -rf $(TMPDIR)mvl_build_zmq
