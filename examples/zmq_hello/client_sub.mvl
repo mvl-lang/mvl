@@ -13,16 +13,18 @@ use pkg.zmq.zmtp.{ZmtpSocketType, zmtp_handshake_client,
                    zmtp_recv_message, zmtp_send_subscribe}
 
 partial fn recv_loop(stream: TcpStream) -> Unit ! Console + Net {
-    match zmtp_recv_message(stream) {
-        Err(_) => {
-            tcp_close_stream(stream);
-            println("subscriber: connection closed")
-        },
-        Ok(msg) => {
-            let body: String = relabel trust(msg, "SUB-DEMO");
-            println(" recv: ".concat(body));
-            recv_loop(stream)
-        },
+    while true {
+        match zmtp_recv_message(stream) {
+            Err(_) => {
+                tcp_close_stream(stream);
+                println("subscriber: connection closed");
+                return
+            },
+            Ok(msg) => {
+                let body: String = relabel trust(msg, "SUB-DEMO");
+                println(" recv: ".concat(body));
+            },
+        }
     }
 }
 

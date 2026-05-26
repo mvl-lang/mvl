@@ -13,32 +13,36 @@ use pkg.zmq.{ZmqError, zmq_error_msg, parse_zmq_addr, is_transient_accept_error}
 use pkg.zmq.zmtp.{ZmtpSocketType, zmtp_handshake_server, zmtp_recv_message}
 
 partial fn recv_loop(stream: TcpStream) -> Unit ! Console + Net {
-    match zmtp_recv_message(stream) {
-        Err(_) => tcp_close_stream(stream),
-        Ok(msg) => {
-            let body: String = relabel trust(msg, "PULL-DEMO");
-            println(" recv: ".concat(body));
-            recv_loop(stream)
-        },
+    while true {
+        match zmtp_recv_message(stream) {
+            Err(_) => {
+                tcp_close_stream(stream);
+                return
+            },
+            Ok(msg) => {
+                let body: String = relabel trust(msg, "PULL-DEMO");
+                println(" recv: ".concat(body));
+            },
+        }
     }
 }
 
 partial fn accept_loop(listener: TcpListener) -> Unit ! Console + Net {
-    match tcp_accept(listener) {
-        Err(e) => {
-            if is_transient_accept_error(e) {
-                accept_loop(listener)
-            } else {
-                tcp_close_listener(listener)
-            }
-        },
-        Ok(stream) => {
-            let _: Unit = match zmtp_handshake_server(stream, ZmtpSocketType::Pull) {
-                Err(_) => tcp_close_stream(stream),
-                Ok(_) => recv_loop(stream),
-            };
-            accept_loop(listener)
-        },
+    while true {
+        match tcp_accept(listener) {
+            Err(e) => {
+                if !is_transient_accept_error(e) {
+                    tcp_close_listener(listener);
+                    return
+                }
+            },
+            Ok(stream) => {
+                let _: Unit = match zmtp_handshake_server(stream, ZmtpSocketType::Pull) {
+                    Err(_) => tcp_close_stream(stream),
+                    Ok(_) => recv_loop(stream),
+                };
+            },
+        }
     }
 }
 

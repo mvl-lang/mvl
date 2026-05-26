@@ -31,7 +31,7 @@ use pkg.zmq.zmtp.{ZmtpSocketType, zmtp_handshake_server, zmtp_handshake_client,
 /// Write a framed request on `stream`, read the framed reply, and close.
 ///
 /// Module-private — used by `req_request`.
-fn req_exchange(stream: TcpStream, msg: String) -> Result[Tainted[String], ZmqError] ! Net {
+total fn req_exchange(stream: TcpStream, msg: String) -> Result[Tainted[String], ZmqError] ! Net {
     let framed: String = encode_frame(msg);
     match tcp_write(stream, framed) {
         Err(e) => { tcp_close_stream(stream); Err(map_net_err(e)) },
@@ -52,7 +52,7 @@ fn req_exchange(stream: TcpStream, msg: String) -> Result[Tainted[String], ZmqEr
 /// Reads a framed request, decodes it, calls `handler` with the raw
 /// `Tainted[String]` body, sends the framed reply, closes the stream.
 /// Module-private — used by `rep_accept_loop`.
-fn handle_one(
+total fn handle_one(
     stream: TcpStream,
     handler: fn(Tainted[String]) -> String,
 ) -> Result[Unit, ZmqError] ! Net {
@@ -89,19 +89,18 @@ partial fn rep_accept_loop(
     listener: TcpListener,
     handler: fn(Tainted[String]) -> String,
 ) -> Result[Unit, ZmqError] ! Net {
-    match tcp_accept(listener) {
-        Err(e) => {
-            if is_transient_accept_error(e) {
-                rep_accept_loop(listener, handler)
-            } else {
-                tcp_close_listener(listener);
-                Ok(())
-            }
-        },
-        Ok(stream) => {
-            let _: Result[Unit, ZmqError] = handle_one(stream, handler);
-            rep_accept_loop(listener, handler)
-        },
+    while true {
+        match tcp_accept(listener) {
+            Err(e) => {
+                if !is_transient_accept_error(e) {
+                    tcp_close_listener(listener);
+                    return Ok(())
+                }
+            },
+            Ok(stream) => {
+                let _: Result[Unit, ZmqError] = handle_one(stream, handler);
+            },
+        }
     }
 }
 
@@ -128,7 +127,7 @@ pub partial fn rep_serve(
 ///
 /// Connects, sends a framed request, reads the framed reply, closes.
 /// Returns the reply body as `Tainted[String]` (audit tag `ZMQ-RECV`).
-pub fn req_request(
+pub total fn req_request(
     host: String,
     port: Int,
     msg: String,
@@ -153,21 +152,23 @@ partial fn zmtp_exchange_loop(
     stream: TcpStream,
     handler: fn(Tainted[String]) -> String,
 ) -> Result[Unit, ZmqError] ! Net {
-    match zmtp_recv_message(stream) {
-        Err(_) => {
-            tcp_close_stream(stream);
-            Ok(())
-        },
-        Ok(msg) => {
-            let reply_body: String = handler(msg);
-            match zmtp_send_message(stream, reply_body) {
-                Err(_) => {
-                    tcp_close_stream(stream);
-                    Ok(())
-                },
-                Ok(_) => zmtp_exchange_loop(stream, handler),
-            }
-        },
+    while true {
+        match zmtp_recv_message(stream) {
+            Err(_) => {
+                tcp_close_stream(stream);
+                return Ok(())
+            },
+            Ok(msg) => {
+                let reply_body: String = handler(msg);
+                match zmtp_send_message(stream, reply_body) {
+                    Err(_) => {
+                        tcp_close_stream(stream);
+                        return Ok(())
+                    },
+                    Ok(_) => {},
+                }
+            },
+        }
     }
 }
 
@@ -190,19 +191,18 @@ partial fn rep_zmtp_accept_loop(
     listener: TcpListener,
     handler: fn(Tainted[String]) -> String,
 ) -> Result[Unit, ZmqError] ! Net {
-    match tcp_accept(listener) {
-        Err(e) => {
-            if is_transient_accept_error(e) {
-                rep_zmtp_accept_loop(listener, handler)
-            } else {
-                tcp_close_listener(listener);
-                Ok(())
-            }
-        },
-        Ok(stream) => {
-            let _: Result[Unit, ZmqError] = handle_zmtp_connection(stream, handler);
-            rep_zmtp_accept_loop(listener, handler)
-        },
+    while true {
+        match tcp_accept(listener) {
+            Err(e) => {
+                if !is_transient_accept_error(e) {
+                    tcp_close_listener(listener);
+                    return Ok(())
+                }
+            },
+            Ok(stream) => {
+                let _: Result[Unit, ZmqError] = handle_zmtp_connection(stream, handler);
+            },
+        }
     }
 }
 

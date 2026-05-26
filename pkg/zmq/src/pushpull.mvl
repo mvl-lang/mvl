@@ -66,7 +66,7 @@ pub actor Pusher {
 ///
 /// Blocks until a pusher connects and sends a framed message.
 /// Returns the message body as `Tainted[String]` (audit tag `ZMQ-RECV`).
-pub fn puller_recv(listener: TcpListener) -> Result[Tainted[String], ZmqError] ! Net {
+pub total fn puller_recv(listener: TcpListener) -> Result[Tainted[String], ZmqError] ! Net {
     match tcp_accept(listener) {
         Err(e)     => Err(map_net_err(e)),
         Ok(stream) => {
@@ -99,33 +99,31 @@ partial fn puller_accept_loop(
     listener: TcpListener,
     handler: fn(Tainted[String]) -> Unit,
 ) -> Result[Unit, ZmqError] ! Net {
-    match tcp_accept(listener) {
-        Err(e) => {
-            if is_transient_accept_error(e) {
-                puller_accept_loop(listener, handler)
-            } else {
-                tcp_close_listener(listener);
-                Ok(())
-            }
-        },
-        Ok(stream) => {
-            match tcp_read(stream) {
-                Err(_)  => {
-                    tcp_close_stream(stream);
-                    puller_accept_loop(listener, handler)
-                },
-                Ok(raw) => {
-                    tcp_close_stream(stream);
-                    match decode_frame(raw) {
-                        Err(_)  => puller_accept_loop(listener, handler),
-                        Ok(msg) => {
-                            handler(msg);
-                            puller_accept_loop(listener, handler)
-                        },
-                    }
-                },
-            }
-        },
+    while true {
+        match tcp_accept(listener) {
+            Err(e) => {
+                if !is_transient_accept_error(e) {
+                    tcp_close_listener(listener);
+                    return Ok(())
+                }
+            },
+            Ok(stream) => {
+                match tcp_read(stream) {
+                    Err(_)  => {
+                        tcp_close_stream(stream);
+                    },
+                    Ok(raw) => {
+                        tcp_close_stream(stream);
+                        match decode_frame(raw) {
+                            Err(_)  => {},
+                            Ok(msg) => {
+                                handler(msg);
+                            },
+                        }
+                    },
+                }
+            },
+        }
     }
 }
 
@@ -141,15 +139,16 @@ partial fn pull_zmtp_recv_loop(
     stream: TcpStream,
     handler: fn(Tainted[String]) -> Unit,
 ) -> Result[Unit, ZmqError] ! Net {
-    match zmtp_recv_message(stream) {
-        Err(_) => {
-            tcp_close_stream(stream);
-            Ok(())
-        },
-        Ok(msg) => {
-            handler(msg);
-            pull_zmtp_recv_loop(stream, handler)
-        },
+    while true {
+        match zmtp_recv_message(stream) {
+            Err(_) => {
+                tcp_close_stream(stream);
+                return Ok(())
+            },
+            Ok(msg) => {
+                handler(msg);
+            },
+        }
     }
 }
 
@@ -172,19 +171,18 @@ partial fn pull_zmtp_accept_loop(
     listener: TcpListener,
     handler: fn(Tainted[String]) -> Unit,
 ) -> Result[Unit, ZmqError] ! Net {
-    match tcp_accept(listener) {
-        Err(e) => {
-            if is_transient_accept_error(e) {
-                pull_zmtp_accept_loop(listener, handler)
-            } else {
-                tcp_close_listener(listener);
-                Ok(())
-            }
-        },
-        Ok(stream) => {
-            let _: Result[Unit, ZmqError] = handle_pull_zmtp(stream, handler);
-            pull_zmtp_accept_loop(listener, handler)
-        },
+    while true {
+        match tcp_accept(listener) {
+            Err(e) => {
+                if !is_transient_accept_error(e) {
+                    tcp_close_listener(listener);
+                    return Ok(())
+                }
+            },
+            Ok(stream) => {
+                let _: Result[Unit, ZmqError] = handle_pull_zmtp(stream, handler);
+            },
+        }
     }
 }
 
