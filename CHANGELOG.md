@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.158.0] - 2026-05-26
+
+### Changed
+- #1048 — Remove `concurrently {}` keyword from the language (ADR-0037). `fn main()` is now
+  implicitly a one-shot actor: the Rust backend injects `_mvl_join_actors()` at process exit,
+  draining all spawned child actors before the program terminates. No explicit scoping keyword
+  is required. Corpus test updated; actor examples (actor_pingpong, actor_trading) migrated.
+- `examples/anthropic_chat/Makefile` — Improve `make smoke` to run the binary without an API
+  key and verify graceful error output; fix `guard-mvl` to validate binary presence rather than
+  rebuilding (matches all other example Makefiles and avoids CI z3-sys path issues).
+- `compiler/lexer.mvl`, `compiler/ast.mvl` — Remove `KwConcurrently` from self-hosted bootstrap
+  compiler to keep keyword consistency check passing.
+- ADR-0037 — Document the main-as-actor design decision.
+
 ## [0.157.0] - 2026-05-25
 
 ### Added
