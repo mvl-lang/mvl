@@ -453,6 +453,67 @@ fn topic_passes_filter(plain: String, filter: String) -> Bool {
     }
 }
 
+fn parse_ready_body(body: String) -> Result[ZmtpSocketType, ZmqError] {
+    let blen: Int = body.len();
+    if blen < 6 {
+        Err(ZmqError::FrameError("READY body too short"))
+    } else {
+        let name_len: Int = body.byte_at(0).to_int();
+        if name_len != 5 {
+            Err(ZmqError::FrameError("READY name length != 5"))
+        } else {
+            let name: String = body.substring(1, 6);
+            if name != "READY" {
+                Err(ZmqError::FrameError("expected READY command"))
+            } else {
+                parse_socket_type_property(body, 6)
+            }
+        }
+    }
+}
+
+fn parse_socket_type_property(body: String, offset: Int) -> Result[ZmtpSocketType, ZmqError] {
+    let blen: Int = body.len();
+    if offset >= blen {
+        Err(ZmqError::FrameError("no Socket-Type in READY"))
+    } else {
+        let key_len: Int = body.byte_at(offset).to_int();
+        let key_start: Int = offset + 1;
+        let key_end: Int = key_start + key_len;
+        if key_end + 4 > blen {
+            Err(ZmqError::FrameError("truncated READY property"))
+        } else {
+            let key: String = body.substring(key_start, key_end);
+            let vl_b1: Int = body.byte_at(key_end).to_int();
+            let vl_b2: Int = body.byte_at(key_end + 1).to_int();
+            let vl_b3: Int = body.byte_at(key_end + 2).to_int();
+            let vl_b4: Int = body.byte_at(key_end + 3).to_int();
+            let vl: Int = vl_b1.shift_left(24) + vl_b2.shift_left(16)
+                + vl_b3.shift_left(8) + vl_b4;
+            let vs: Int = key_end + 4;
+            let ve: Int = vs + vl;
+            if ve > blen {
+                Err(ZmqError::FrameError("truncated READY property value"))
+            } else {
+                let prop_val: String = body.substring(vs, ve);
+                if key == "Socket-Type" {
+                    parse_socket_type(prop_val)
+                } else {
+                    parse_socket_type_property(body, ve)
+                }
+            }
+        }
+    }
+}
+
+fn zmq_error_msg(e: val ZmqError) -> String {
+    match e {
+        ZmqError::NetError(msg)    => "net: ".concat(msg),
+        ZmqError::FrameError(msg)  => "frame: ".concat(msg),
+        ZmqError::InvalidAddr(msg) => "addr: ".concat(msg),
+    }
+}
+
 fn is_transient_accept_error(e: val NetError) -> Bool {
     match e {
         NetError::ConnectionReset => true,
@@ -638,6 +699,178 @@ test fn transient_timeout() -> Unit {
 
 test fn not_transient_other() -> Unit {
     assert_eq(is_transient_accept_error(NetError::ConnectionRefused), false)
+}
+
+// ── parse_ready_body roundtrip tests ─────────────────────────────────────────
+
+test fn ready_roundtrip_req() -> Unit {
+    match parse_ready_body(make_ready_body(ZmtpSocketType::Req)) {
+        Err(_) => assert_eq(true, false),
+        Ok(st) => assert_eq(socket_type_name(st), "REQ"),
+    }
+}
+
+test fn ready_roundtrip_rep() -> Unit {
+    match parse_ready_body(make_ready_body(ZmtpSocketType::Rep)) {
+        Err(_) => assert_eq(true, false),
+        Ok(st) => assert_eq(socket_type_name(st), "REP"),
+    }
+}
+
+test fn ready_roundtrip_pub() -> Unit {
+    match parse_ready_body(make_ready_body(ZmtpSocketType::Pub)) {
+        Err(_) => assert_eq(true, false),
+        Ok(st) => assert_eq(socket_type_name(st), "PUB"),
+    }
+}
+
+test fn ready_roundtrip_sub() -> Unit {
+    match parse_ready_body(make_ready_body(ZmtpSocketType::Sub)) {
+        Err(_) => assert_eq(true, false),
+        Ok(st) => assert_eq(socket_type_name(st), "SUB"),
+    }
+}
+
+test fn ready_roundtrip_push() -> Unit {
+    match parse_ready_body(make_ready_body(ZmtpSocketType::Push)) {
+        Err(_) => assert_eq(true, false),
+        Ok(st) => assert_eq(socket_type_name(st), "PUSH"),
+    }
+}
+
+test fn ready_roundtrip_pull() -> Unit {
+    match parse_ready_body(make_ready_body(ZmtpSocketType::Pull)) {
+        Err(_) => assert_eq(true, false),
+        Ok(st) => assert_eq(socket_type_name(st), "PULL"),
+    }
+}
+
+// ── parse_ready_body error tests ────────────────────────────────────────────
+
+test fn ready_body_too_short() -> Unit {
+    match parse_ready_body("short") {
+        Ok(_)  => assert_eq(true, false),
+        Err(e) => match e {
+            ZmqError::FrameError(_) => assert_eq(true, true),
+            _                       => assert_eq(true, false),
+        },
+    }
+}
+
+test fn ready_body_empty() -> Unit {
+    match parse_ready_body("") {
+        Ok(_)  => assert_eq(true, false),
+        Err(e) => match e {
+            ZmqError::FrameError(_) => assert_eq(true, true),
+            _                       => assert_eq(true, false),
+        },
+    }
+}
+
+test fn ready_body_bad_name_length() -> Unit {
+    // name_len=3 instead of 5, followed by "REA" + padding
+    let body: String = bval(3).concat("READY_extra_padding");
+    match parse_ready_body(body) {
+        Ok(_)  => assert_eq(true, false),
+        Err(e) => match e {
+            ZmqError::FrameError(_) => assert_eq(true, true),
+            _                       => assert_eq(true, false),
+        },
+    }
+}
+
+test fn ready_body_wrong_name() -> Unit {
+    // name_len=5 but name="HELLO" instead of "READY"
+    let body: String = bval(5).concat("HELLO").concat(bval(11)).concat("Socket-Type")
+        .concat(bval(0)).concat(bval(0)).concat(bval(0)).concat(bval(3)).concat("REQ");
+    match parse_ready_body(body) {
+        Ok(_)  => assert_eq(true, false),
+        Err(e) => match e {
+            ZmqError::FrameError(_) => assert_eq(true, true),
+            _                       => assert_eq(true, false),
+        },
+    }
+}
+
+// ── parse_socket_type_property error tests ──────────────────────────────────
+
+test fn socket_type_property_no_property() -> Unit {
+    // Valid READY header but offset at end of body — no properties
+    let body: String = bval(5).concat("READY");
+    match parse_socket_type_property(body, 6) {
+        Ok(_)  => assert_eq(true, false),
+        Err(e) => match e {
+            ZmqError::FrameError(_) => assert_eq(true, true),
+            _                       => assert_eq(true, false),
+        },
+    }
+}
+
+test fn socket_type_property_truncated_header() -> Unit {
+    // Key length says 20 but body ends before key_end + 4
+    let body: String = bval(5).concat("READY").concat(bval(20)).concat("short");
+    match parse_socket_type_property(body, 6) {
+        Ok(_)  => assert_eq(true, false),
+        Err(e) => match e {
+            ZmqError::FrameError(_) => assert_eq(true, true),
+            _                       => assert_eq(true, false),
+        },
+    }
+}
+
+test fn socket_type_property_truncated_value() -> Unit {
+    // Valid key header but value length exceeds body
+    let body: String = bval(5).concat("READY")
+        .concat(bval(11)).concat("Socket-Type")
+        .concat(bval(0)).concat(bval(0)).concat(bval(0)).concat(bval(99));
+    match parse_socket_type_property(body, 6) {
+        Ok(_)  => assert_eq(true, false),
+        Err(e) => match e {
+            ZmqError::FrameError(_) => assert_eq(true, true),
+            _                       => assert_eq(true, false),
+        },
+    }
+}
+
+test fn socket_type_property_skips_unknown_key() -> Unit {
+    // First property: "Identity" = "test", then Socket-Type = "REP"
+    let body: String = bval(5).concat("READY")
+        .concat(bval(8)).concat("Identity")
+        .concat(bval(0)).concat(bval(0)).concat(bval(0)).concat(bval(4)).concat("test")
+        .concat(bval(11)).concat("Socket-Type")
+        .concat(bval(0)).concat(bval(0)).concat(bval(0)).concat(bval(3)).concat("REP");
+    match parse_ready_body(body) {
+        Err(_) => assert_eq(true, false),
+        Ok(st) => assert_eq(socket_type_name(st), "REP"),
+    }
+}
+
+test fn socket_type_property_unknown_type_value() -> Unit {
+    // Socket-Type = "DEALER" — valid property but unknown socket type
+    let body: String = bval(5).concat("READY")
+        .concat(bval(11)).concat("Socket-Type")
+        .concat(bval(0)).concat(bval(0)).concat(bval(0)).concat(bval(6)).concat("DEALER");
+    match parse_ready_body(body) {
+        Ok(_)  => assert_eq(true, false),
+        Err(e) => match e {
+            ZmqError::FrameError(_) => assert_eq(true, true),
+            _                       => assert_eq(true, false),
+        },
+    }
+}
+
+// ── zmq_error_msg tests ─────────────────────────────────────────────────────
+
+test fn error_msg_net() -> Unit {
+    assert_eq(zmq_error_msg(ZmqError::NetError("timeout")), "net: timeout")
+}
+
+test fn error_msg_frame() -> Unit {
+    assert_eq(zmq_error_msg(ZmqError::FrameError("too short")), "frame: too short")
+}
+
+test fn error_msg_addr() -> Unit {
+    assert_eq(zmq_error_msg(ZmqError::InvalidAddr("bad port")), "addr: bad port")
 }
 
 // ── Property-based tests ────────────────────────────────────────────────────
