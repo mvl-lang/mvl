@@ -45,7 +45,7 @@ coverage: guard-mvl ## Run tests with behavioral branch coverage report
 		printf "  \033[31m✗  pkg.zmq: coverage FAIL\033[0m\n\n"; exit 1; \
 	fi
 
-assurance: check lint test prove coverage ## Full pipeline: check + lint + test + prove + coverage
+assurance: check lint prove coverage ## Full pipeline: check + lint + prove + coverage (coverage runs tests)
 
 clean: ## Remove build artifacts
 	rm -rf $(TMPDIR)mvl_build_zmq
