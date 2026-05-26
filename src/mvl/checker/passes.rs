@@ -785,13 +785,26 @@ pub fn aggregate_verdicts(per_file: &[[Verdict; 12]]) -> [Verdict; 12] {
             }
         }
 
-        // First unchecked reason
+        // Best unchecked reason: prefer informative messages (with actual data)
+        // over vacuous ones like "no refined types used in this file".
+        let mut best_unchecked: Option<&str> = None;
         for v in &verdicts_for_req {
             if let Verdict::Unchecked { reason } = v {
-                return Verdict::Unchecked {
-                    reason: reason.clone(),
-                };
+                match best_unchecked {
+                    None => best_unchecked = Some(reason),
+                    Some(prev)
+                        if reason.contains("function(s)") && !prev.contains("function(s)") =>
+                    {
+                        best_unchecked = Some(reason);
+                    }
+                    _ => {}
+                }
             }
+        }
+        if let Some(reason) = best_unchecked {
+            return Verdict::Unchecked {
+                reason: reason.to_string(),
+            };
         }
 
         // Remaining case: all non-Proven verdicts are Timeout

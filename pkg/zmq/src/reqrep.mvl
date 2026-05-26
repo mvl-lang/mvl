@@ -129,7 +129,7 @@ pub partial fn rep_serve(
 /// Returns the reply body as `Tainted[String]` (audit tag `ZMQ-RECV`).
 pub total fn req_request(
     host: String,
-    port: Int,
+    port: Int where self >= 0 && self <= 65535,
     msg: String,
 ) -> Result[Tainted[String], ZmqError] ! Net {
     match tcp_connect(host, port) {
@@ -228,7 +228,7 @@ pub partial fn rep_serve_zmtp(
 /// Opens a connection, performs handshake, sends one request, reads one reply.
 pub partial fn req_request_zmtp(
     host: String,
-    port: Int,
+    port: Int where self >= 0 && self <= 65535,
     msg: String,
 ) -> Result[Tainted[String], ZmqError] ! Net {
     match tcp_connect(host, port) {

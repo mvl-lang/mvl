@@ -227,7 +227,7 @@ partial fn sub_zmtp_recv_loop(
 /// `handler` receives each published message as `Tainted[String]`.
 pub partial fn sub_connect_zmtp(
     host: String,
-    port: Int,
+    port: Int where self >= 0 && self <= 65535,
     topic: String,
     handler: fn(Tainted[String]) -> Unit,
 ) -> Result[Unit, ZmqError] ! Net {

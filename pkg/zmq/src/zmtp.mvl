@@ -66,7 +66,7 @@ total fn parse_socket_type(name: String) -> Result[ZmtpSocketType, ZmqError] {
 // ── Byte helpers ─────────────────────────────────────────────────────────────
 
 /// Create a single-byte string from an integer value (0–255).
-total fn bval(n: Int) -> String {
+total fn bval(n: Int where self >= 0 && self <= 255) -> String {
     String::from_bytes([from_int(n.bit_and(255))])
 }
 

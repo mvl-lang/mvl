@@ -208,7 +208,7 @@ pub partial fn pull_serve_zmtp(
 /// Wire-compatible with any ZMTP 3.x PULL server.
 pub partial fn push_connect_zmtp(
     host: String,
-    port: Int,
+    port: Int where self >= 0 && self <= 65535,
     msg: String,
 ) -> Result[Unit, ZmqError] ! Net {
     match tcp_connect(host, port) {
