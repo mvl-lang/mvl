@@ -38,22 +38,20 @@ fn main() -> Unit ! Console + Net {
             return
         },
     };
-    concurrently {
-        let c: Connector = actor Connector { port: port };
-        c.connect();
-        let server_stream: TcpStream = match tcp_accept(listener) {
-            Ok(s) => s,
-            Err(_) => {
-                println("accept error");
-                return
-            },
-        };
-        let read_result: Result[Tainted[String], NetError] = tcp_read(server_stream);
-        tcp_close_stream(server_stream);
-        tcp_close_listener(listener);
-        match read_result {
-            Ok(msg) => println(relabel trust(msg, "NET-READ")),
-            Err(_) => println("read error"),
-        }
+    let c: Connector = actor Connector { port: port };
+    c.connect();
+    let server_stream: TcpStream = match tcp_accept(listener) {
+        Ok(s) => s,
+        Err(_) => {
+            println("accept error");
+            return
+        },
+    };
+    let read_result: Result[Tainted[String], NetError] = tcp_read(server_stream);
+    tcp_close_stream(server_stream);
+    tcp_close_listener(listener);
+    match read_result {
+        Ok(msg) => println(relabel trust(msg, "NET-READ")),
+        Err(_) => println("read error"),
     }
 }
