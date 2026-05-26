@@ -300,7 +300,6 @@ fn collect_expr_edges(expr: &Expr, caller: &str, graph: &mut CallGraph) {
                 collect_block_edges(&arm.body, caller, graph);
             }
         }
-        Expr::Concurrently { body, .. } => collect_block_edges(body, caller, graph),
         // Leaf expressions — no sub-expressions.
         Expr::Literal(..) | Expr::Ident(..) | Expr::Quantifier(..) => {}
     }

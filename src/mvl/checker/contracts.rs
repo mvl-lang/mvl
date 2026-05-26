@@ -338,9 +338,6 @@ fn check_requires_in_expr(
                 check_requires_in_block(&arm.body, fn_map, var_refs, fn_decls, errors, mode);
             }
         }
-        Expr::Concurrently { body, .. } => {
-            check_requires_in_block(body, fn_map, var_refs, fn_decls, errors, mode);
-        }
         // Leaves: Literal, Ident, Quantifier — no sub-expressions.
         Expr::Literal(_, _) | Expr::Ident(_, _) | Expr::Quantifier(..) => {}
     }
@@ -1851,9 +1848,6 @@ fn check_spawn_refinements_in_expr(
                     mode,
                 );
             }
-        }
-        Expr::Concurrently { body, .. } => {
-            check_spawn_refinements_in_block(body, actor_fields, var_refs, fn_decls, errors, mode);
         }
         // Leaves: no sub-expressions to walk.
         Expr::Literal(_, _) | Expr::Ident(_, _) | Expr::Quantifier(..) => {}

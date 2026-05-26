@@ -1160,11 +1160,6 @@ fn analyze_expr(
                 );
             }
         }
-        Expr::Concurrently { body, .. } => {
-            analyze_block(
-                body, var_refs, fn_params, type_refs, fn_decls, errors, counts,
-            );
-        }
         // Leaves: Literal, Ident, Quantifier — no sub-expressions to walk.
         Expr::Literal(_, _) | Expr::Ident(_, _) | Expr::Quantifier(..) => {}
     }

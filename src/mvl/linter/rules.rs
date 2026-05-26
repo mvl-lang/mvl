@@ -744,7 +744,6 @@ fn expr_has_while_no_decreases(expr: &Expr) -> bool {
         Expr::Select { arms, .. } => arms
             .iter()
             .any(|a| expr_has_while_no_decreases(&a.expr) || block_has_while_no_decreases(&a.body)),
-        Expr::Concurrently { body, .. } => block_has_while_no_decreases(body),
         Expr::List { elems, .. } | Expr::Set { elems, .. } => {
             elems.iter().any(expr_has_while_no_decreases)
         }
@@ -836,7 +835,6 @@ fn expr_calls_fn(expr: &Expr, name: &str) -> bool {
         Expr::Select { arms, .. } => arms
             .iter()
             .any(|a| expr_calls_fn(&a.expr, name) || block_calls_fn(&a.body, name)),
-        Expr::Concurrently { body, .. } => block_calls_fn(body, name),
         Expr::List { elems, .. } | Expr::Set { elems, .. } => {
             elems.iter().any(|e| expr_calls_fn(e, name))
         }
@@ -921,7 +919,6 @@ fn expr_has_calls(expr: &Expr) -> bool {
         Expr::Select { arms, .. } => arms
             .iter()
             .any(|a| expr_has_calls(&a.expr) || block_has_calls(&a.body)),
-        Expr::Concurrently { body, .. } => block_has_calls(body),
         Expr::List { elems, .. } | Expr::Set { elems, .. } => elems.iter().any(expr_has_calls),
         Expr::Map { pairs, .. } => pairs
             .iter()
@@ -1589,7 +1586,6 @@ fn cyclomatic_complexity_expr(expr: &Expr) -> usize {
                 1 + cyclomatic_complexity_expr(&a.expr) + cyclomatic_complexity_block_inner(&a.body)
             })
             .sum(),
-        Expr::Concurrently { body, .. } => cyclomatic_complexity_block_inner(body),
         Expr::Quantifier(..) => 0,
         Expr::List { elems, .. } | Expr::Set { elems, .. } => {
             elems.iter().map(cyclomatic_complexity_expr).sum()
@@ -1767,12 +1763,6 @@ fn max_match_depth_expr(expr: &Expr, depth: usize) -> usize {
         Expr::Select { arms, .. } => arms
             .iter()
             .map(|a| max_match_depth_expr(&a.expr, depth))
-            .max()
-            .unwrap_or(depth),
-        Expr::Concurrently { body, .. } => body
-            .stmts
-            .iter()
-            .map(|s| max_match_depth_stmt(s, depth))
             .max()
             .unwrap_or(depth),
         Expr::Quantifier(..) => depth,

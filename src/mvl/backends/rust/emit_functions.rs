@@ -46,6 +46,8 @@ pub fn emit_fn_decl(cg: &mut RustEmitter, fd: &FnDecl) {
     // Track current function name and test status for coverage metadata.
     cg.current_fn = fd.name.clone();
     cg.current_fn_is_test = fd.is_test;
+    // #1048: inject _mvl_join_actors() at the end of fn main() when actors are present.
+    cg.inject_actor_join = cg.has_actors && fd.name == "main";
 
     // Test functions are emitted inside a #[cfg(test)] mod tests block.
     // The caller (codegen) is responsible for grouping them; here we just
@@ -264,6 +266,12 @@ fn emit_fn_body(cg: &mut RustEmitter, fd: &FnDecl) {
         if !is_unit {
             unreachable!("non-Unit function with empty body — blocked by checker (#990)");
         }
+        // #1048: even an empty fn main() must drain spawned actors.
+        if cg.inject_actor_join {
+            cg.indent();
+            cg.push("_mvl_join_actors()");
+            cg.nl();
+        }
     } else {
         // Emit all but the last statement normally
         let (head, tail) = stmts.split_at(stmts.len() - 1);
@@ -305,6 +313,15 @@ fn emit_fn_body(cg: &mut RustEmitter, fd: &FnDecl) {
                     } else {
                         cg.indent();
                         emit_expr_tail_with_return_type(cg, expr, &fd.return_type, &fd.params);
+                        // #1048: for fn main() with actors, force this stmt to have a
+                        // semicolon and emit _mvl_join_actors() as the return expression,
+                        // ensuring all spawned actors drain before the process exits.
+                        if cg.inject_actor_join {
+                            cg.push(";");
+                            cg.nl();
+                            cg.indent();
+                            cg.push("_mvl_join_actors()");
+                        }
                         cg.nl();
                     }
                 }
@@ -312,7 +329,15 @@ fn emit_fn_body(cg: &mut RustEmitter, fd: &FnDecl) {
             // Note: explicit `return` statements and other non-tail-expr last statements
             // are emitted as-is. `ensures` assertions are not injected for these paths;
             // the static checker handles postcondition verification for them at compile time.
-            other => emit_block_stmts(cg, std::slice::from_ref(other)),
+            other => {
+                emit_block_stmts(cg, std::slice::from_ref(other));
+                // #1048: last stmt was a Let/Assign/etc. (already has `;`); emit join.
+                if cg.inject_actor_join {
+                    cg.indent();
+                    cg.push("_mvl_join_actors()");
+                    cg.nl();
+                }
+            }
         }
     }
 

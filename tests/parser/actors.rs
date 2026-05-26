@@ -227,28 +227,18 @@ fn select_timeout_only_parsed() {
     assert!(arms[0].is_timeout);
 }
 
-// ── concurrently block (#69) ──────────────────────────────────────────────────
+// ── concurrently removed (#1048) ─────────────────────────────────────────────
+// `concurrently { }` is no longer a keyword. fn main() implicitly drains actors.
 
-/// GIVEN: `concurrently { }` empty block
-/// WHEN: parsed
-/// THEN: yields Expr::Concurrently
+/// GIVEN: `concurrently` identifier (keyword removed in #1048)
+/// WHEN: parsed as an expression
+/// THEN: parsed as a plain identifier — concurrently is no longer a reserved keyword
 #[test]
-fn concurrently_empty_block_parsed() {
-    let e = parse_expr("concurrently { }");
+fn concurrently_keyword_removed() {
+    let (mut p, _) = Parser::new("concurrently");
+    let e = p.parse_expr().expect("should parse as identifier");
     assert!(
-        matches!(e, Expr::Concurrently { .. }),
-        "expected Expr::Concurrently, got: {e:?}"
+        matches!(e, Expr::Ident(ref name, _) if name == "concurrently"),
+        "expected Expr::Ident('concurrently'), got: {e:?}"
     );
-}
-
-/// GIVEN: `concurrently { let x: Int = 1; }` with statements
-/// WHEN: parsed
-/// THEN: body contains the statement
-#[test]
-fn concurrently_with_stmts_parsed() {
-    let e = parse_expr("concurrently { let x: Int = 1; }");
-    let Expr::Concurrently { body, .. } = e else {
-        panic!("expected Expr::Concurrently");
-    };
-    assert_eq!(body.stmts.len(), 1);
 }

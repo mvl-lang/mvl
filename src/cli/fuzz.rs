@@ -196,7 +196,6 @@ fn expr_calls_extern(expr: &Expr, names: &[String]) -> bool {
         Expr::Select { arms, .. } => arms
             .iter()
             .any(|arm| expr_calls_extern(&arm.expr, names) || block_calls_extern(&arm.body, names)),
-        Expr::Concurrently { body, .. } => block_calls_extern(body, names),
         Expr::Literal(_, _) | Expr::Ident(_, _) | Expr::Quantifier(..) => false,
     }
 }

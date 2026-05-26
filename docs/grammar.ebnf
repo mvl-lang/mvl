@@ -158,7 +158,7 @@ expr           = literal | IDENT | field_access | fn_call | method_call
                | lambda | block_expr | propagate | construct
                | "consume" expr
                | "declassify" "(" expr ")" | "sanitize" "(" expr ")"
-               | actor_create_expr | select_expr | concurrently_expr ;
+               | actor_create_expr | select_expr ;
 (* Phase 8, #63: actor creation — `actor TypeName { field: expr, … }` — returns ActorRef *)
 actor_create_expr = "actor" IDENT "{" [ actor_field_init { "," actor_field_init } ] "}" ;
 actor_field_init  = IDENT ":" expr ;
@@ -166,8 +166,6 @@ actor_field_init  = IDENT ":" expr ;
 select_expr    = "select" "{" { select_arm } "}" ;
 select_arm     = [ IDENT "=" ] expr "=>" block    (* regular arm; optional result binding *)
                | "timeout" "(" expr ")" "=>" block ; (* timeout arm — fires after duration *)
-(* Phase 8, #69: concurrently — structured scope; spawned actors cannot outlive the block *)
-concurrently_expr = "concurrently" block ;
 unary_expr     = unary_op expr ;
 binary_expr    = expr binary_op expr ;
 unary_op       = "-" | "!" | "~" | "*" ;          (* neg, logical-not, bitwise-not, deref *)
@@ -224,7 +222,7 @@ DOC_COMMENT    = "///" { ANY_CHAR } NEWLINE ;    (* doc comment — convention, 
 (* Declaration:     fn  type  const  use  pub  extern  impl  builtin            *)
 (*                  struct  enum  actor  effect                                   *)
 (* Totality:        total  partial  test                                         *)
-(* Control flow:    if  else  for  in  while  match  return  select  concurrently *)
+(* Control flow:    if  else  for  in  while  match  return  select               *)
 (* Let binding:     let  ghost                                                    *)
 (* Ownership:       iso  val  ref  tag  consume                                  *)
 (* IFC:             label  relabel                                               *)

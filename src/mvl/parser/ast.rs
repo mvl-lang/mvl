@@ -729,14 +729,6 @@ pub enum Expr {
         arms: Vec<SelectArm>,
         span: Span,
     },
-    /// `concurrently { … }` — structured concurrency scope (Phase 8, #69).
-    ///
-    /// Actors created inside cannot outlive this block.  When the block exits,
-    /// all spawned actors are terminated.
-    Concurrently {
-        body: Block,
-        span: Span,
-    },
     /// `forall`/`exists` quantifier — valid only in `requires`/`ensures`/`invariant`
     /// contract positions (#983).  Wraps the `RefExpr` produced by `parse_ref_expr()`.
     Quantifier(Box<RefExpr>, Span),
@@ -778,8 +770,7 @@ impl Expr {
             | Expr::Relabel { span, .. }
             | Expr::Borrow { span, .. }
             | Expr::Spawn { span, .. }
-            | Expr::Select { span, .. }
-            | Expr::Concurrently { span, .. } => *span,
+            | Expr::Select { span, .. } => *span,
             Expr::Block(b) => b.span,
             Expr::Quantifier(_, s) => *s,
         }

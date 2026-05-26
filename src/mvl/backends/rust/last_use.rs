@@ -195,7 +195,6 @@ impl LastUseTracker {
                     self.visit_block(&arm.body, in_loop);
                 }
             }
-            Expr::Concurrently { body, .. } => self.visit_block(body, in_loop),
             Expr::List { elems, .. } | Expr::Set { elems, .. } => {
                 for e in elems {
                     self.visit_expr(e, in_loop);

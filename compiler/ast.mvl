@@ -67,10 +67,9 @@ pub type TokenKind = enum {
     KwVal,
     KwRef,
     KwTag,
-    // ── Phase 8: actors and structured concurrency (#63, #69) ───────────
+    // ── Phase 8: actors (#63, #69); concurrently removed (#1048) ────────
     KwActor,
     KwSelect,
-    KwConcurrently,
     // ── Effect declarations (#852) ───────────────────────────────────────
     KwEffect,
     // ── Boolean literals ────────────────────────────────────────────────

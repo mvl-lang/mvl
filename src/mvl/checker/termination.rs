@@ -238,7 +238,6 @@ fn check_expr(expr: &Expr, ctx: &TermCtx<'_>, errors: &mut Vec<CheckError>) {
                 check_block(&arm.body, ctx, errors);
             }
         }
-        Expr::Concurrently { body, .. } => check_block(body, ctx, errors),
 
         // Leaves — nothing to recurse into.
         Expr::Literal(..) | Expr::Ident(..) | Expr::Quantifier(..) => {}

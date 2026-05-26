@@ -443,7 +443,6 @@ pub fn infer_label_extended(
             .iter()
             .map(|a| infer_label_extended(&a.expr, env, explicit, inferred))
             .fold(None, ifc::join_opt),
-        Expr::Concurrently { body, .. } => tail_label_of_block(body, env, explicit, inferred),
         Expr::Literal(..) | Expr::Quantifier(..) => None,
     }
 }
@@ -722,9 +721,6 @@ fn collect_violations_in_expr(
                 collect_violations_in_expr(&arm.expr, caller, env, type_env, inferred, errors);
                 collect_violations_in_block(&arm.body, caller, env, type_env, inferred, errors);
             }
-        }
-        Expr::Concurrently { body, .. } => {
-            collect_violations_in_block(body, caller, env, type_env, inferred, errors)
         }
         Expr::Literal(..) | Expr::Ident(..) | Expr::Quantifier(..) => {}
     }

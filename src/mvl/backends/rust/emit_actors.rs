@@ -91,12 +91,12 @@ pub fn actor_name_to_snake(s: &str) -> String {
     out
 }
 
-/// Emit the thread_local join-handle registry used by `concurrently {}`.
+/// Emit the thread_local join-handle registry used by implicit actor lifecycle (#1048).
 ///
 /// Called once per program that contains at least one actor.  Registers a
 /// `thread_local!` vec of `JoinHandle`s plus two helpers:
 /// - `_mvl_register_actor(h)` — called by each `_start_*` function
-/// - `_mvl_join_actors()`     — called at the end of every `concurrently {}` block
+/// - `_mvl_join_actors()`     — called at the end of `fn main()` to drain all spawned actors
 pub fn emit_actor_runtime_preamble(cg: &mut RustEmitter) {
     cg.line("thread_local! {");
     cg.line(
@@ -303,7 +303,7 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &ActorDecl) {
     cg.push_indent();
     cg.line("let mut actor = state;");
     // Drop self-ref so the channel closes when all external handles are dropped.
-    // This allows `_mvl_join_actors()` to complete in `concurrently {}` blocks.
+    // This allows `_mvl_join_actors()` to complete when fn main() exits (#1048).
     // TODO: restore _self_ref during dispatch once weak-sender support is added.
     cg.line("actor._self_ref = None;");
     cg.line("while let Ok(msg) = rx.recv() {");

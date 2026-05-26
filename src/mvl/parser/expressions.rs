@@ -381,15 +381,6 @@ impl Parser {
             // `select { [binding =] expr => { body } … [timeout(dur) => { body }] }`
             TokenKind::Select => self.parse_select_expr(start),
 
-            // ── concurrently block (Phase 8, #69) ───────────────────────────
-            // `concurrently { … }` — structured concurrency scope
-            TokenKind::Concurrently => {
-                self.advance(); // consume `concurrently`
-                let body = self.parse_block()?;
-                let span = self.span_from(start);
-                Ok(Expr::Concurrently { body, span })
-            }
-
             // ── Lambda expression ────────────────────────────────────────────
             // `|params| body` — non-empty param list
             TokenKind::Pipe => self.parse_lambda_expr(false),

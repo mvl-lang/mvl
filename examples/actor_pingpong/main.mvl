@@ -15,8 +15,7 @@
 //   4. actor <Name> { <fields> } for actor creation — returns named handle
 //   5. tag capability — identity-only reference, sendable, no read/write
 //   6. val capability — deeply immutable, sendable, shareable across actors
-//   7. concurrently { } — structured scope that drains all actor mailboxes
-//                         before returning
+//   7. implicit lifecycle — fn main() drains all actor mailboxes on exit (#1048)
 //
 // Expected output (5 rounds):
 //   Pong  <-- ping #0
@@ -135,9 +134,8 @@ actor Ping {
 // ═══════════════════════════════════════════════════════════════════════════
 // ENTRY POINT
 //
-// concurrently { } is structured concurrency: the block does NOT return until
-// every actor spawned inside it has drained its mailbox and terminated.
-// All actors are garbage-collected when the block exits.
+// fn main() is a one-shot actor: the runtime drains all spawned child actors
+// before the process exits (#1048). No explicit concurrently keyword needed.
 // ═══════════════════════════════════════════════════════════════════════════
 
 fn main() -> Unit ! Console + Env {
@@ -152,15 +150,14 @@ fn main() -> Unit ! Console + Env {
         eprintln("error: rounds must be a positive integer")
         exit(1)
     }
-    concurrently {
-        // Spawn Pong first — Ping holds a Pong handle as its partner.
-        let pong: Pong = actor Pong { received: 0 };
 
-        // Spawn Ping with a reference to Pong and the round limit.
-        let ping: Ping = actor Ping { rounds: rounds, sent: 0, partner: pong };
+    // Spawn Pong first — Ping holds a Pong handle as its partner.
+    let pong: Pong = actor Pong { received: 0 };
 
-        // Fire the first message.  All subsequent messages are actor-driven.
-        ping.start()
-    }
-    println("Done -- ".concat(rounds.to_string()).concat(" ping-pong rounds complete."))
+    // Spawn Ping with a reference to Pong and the round limit.
+    let ping: Ping = actor Ping { rounds: rounds, sent: 0, partner: pong };
+
+    // Fire the first message.  All subsequent messages are actor-driven.
+    // The runtime joins all actors when fn main() returns.
+    ping.start()
 }

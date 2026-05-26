@@ -439,10 +439,6 @@ impl TypeChecker {
                 }
                 Ty::Unit
             }
-            Expr::Concurrently { body, .. } => {
-                self.infer_block_type(body, None);
-                Ty::Unit
-            }
 
             Expr::Lambda {
                 params,
