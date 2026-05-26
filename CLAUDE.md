@@ -264,6 +264,55 @@ make test-llvm                 # run LLVM backend tests
 make test                      # all tests
 ```
 
+## Loop Style: `while true` over recursive tail-calls
+
+**Prefer `while true` + `return` over recursive tail-call loops.**
+
+MVL supports `return` for early exit from `while true` loops. Use this instead of
+recursive function calls for server loops, accept loops, and receive loops.
+
+```mvl
+// PREFERRED — while true + return
+partial fn accept_loop(listener: TcpListener) -> Result[Unit, ZmqError] ! Net {
+    while true {
+        match tcp_accept(listener) {
+            Err(e) => {
+                if !is_transient_accept_error(e) {
+                    tcp_close_listener(listener);
+                    return Ok(())
+                }
+            },
+            Ok(stream) => {
+                let _: Result[Unit, ZmqError] = handle(stream);
+            },
+        }
+    }
+}
+
+// AVOID — recursive tail-call
+partial fn accept_loop(listener: TcpListener) -> Result[Unit, ZmqError] ! Net {
+    match tcp_accept(listener) {
+        Err(e) => {
+            if is_transient_accept_error(e) {
+                accept_loop(listener)       // recursive call = implicit loop
+            } else {
+                tcp_close_listener(listener);
+                Ok(())
+            }
+        },
+        Ok(stream) => {
+            let _: Result[Unit, ZmqError] = handle(stream);
+            accept_loop(listener)           // recursive call = implicit loop
+        },
+    }
+}
+```
+
+Note: the linter does NOT currently detect recursive tail-calls that could be `while true`.
+This is a manual style preference.
+
+---
+
 ## Key Design Principles
 
 1. **Explicit over implicit** — no hidden behavior, no implicit conversions
