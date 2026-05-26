@@ -15,8 +15,14 @@ REPO_ROOT := $(abspath $(DIR)../..)
 help: ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-12s\033[0m %s\n", $$1, $$2}'
 
-guard-mvl: ## Ensure MVL binary is built and up-to-date
-	@cargo build --manifest-path $(DIR)../../Cargo.toml --quiet
+guard-mvl: ## Ensure MVL binary is present (pre-build with `cargo build` from repo root)
+	@$(MVL) --version > /dev/null 2>&1 || { \
+		echo ""; \
+		echo "  ERROR: MVL binary not found at $(MVL)"; \
+		echo "  Run: cargo build from the repo root first."; \
+		echo ""; \
+		exit 1; \
+	}
 
 .mvl/pkg/anthropic:
 	@mkdir -p .mvl/pkg
