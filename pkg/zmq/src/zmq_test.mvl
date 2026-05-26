@@ -324,3 +324,354 @@ test fn sub_roundtrip_topic_body() -> Unit {
     assert_eq(sub_topic_str(payload), topic);
     assert_eq(sub_body_str(payload), body)
 }
+
+// ── ZMTP protocol helpers (re-declared from zmtp.mvl for standalone testing) ─
+
+type ZmtpSocketType = enum {
+    Req,
+    Rep,
+    Pub,
+    Sub,
+    Push,
+    Pull,
+}
+
+fn socket_type_name(st: val ZmtpSocketType) -> String {
+    match st {
+        ZmtpSocketType::Req  => "REQ",
+        ZmtpSocketType::Rep  => "REP",
+        ZmtpSocketType::Pub  => "PUB",
+        ZmtpSocketType::Sub  => "SUB",
+        ZmtpSocketType::Push => "PUSH",
+        ZmtpSocketType::Pull => "PULL",
+    }
+}
+
+fn parse_socket_type(name: String) -> Result[ZmtpSocketType, ZmqError] {
+    if name == "REQ" {
+        Ok(ZmtpSocketType::Req)
+    } else if name == "REP" {
+        Ok(ZmtpSocketType::Rep)
+    } else if name == "PUB" {
+        Ok(ZmtpSocketType::Pub)
+    } else if name == "SUB" {
+        Ok(ZmtpSocketType::Sub)
+    } else if name == "PUSH" {
+        Ok(ZmtpSocketType::Push)
+    } else if name == "PULL" {
+        Ok(ZmtpSocketType::Pull)
+    } else {
+        Err(ZmqError::FrameError("unknown socket type: ".concat(name)))
+    }
+}
+
+fn bval(n: Int) -> String {
+    String::from_bytes([from_int(n.bit_and(255))])
+}
+
+fn zeros_8() -> String {
+    String::from_bytes([from_int(0), from_int(0), from_int(0), from_int(0),
+                        from_int(0), from_int(0), from_int(0), from_int(0)])
+}
+
+fn zeros_16() -> String { zeros_8().concat(zeros_8()) }
+fn zeros_15() -> String {
+    String::from_bytes([from_int(0), from_int(0), from_int(0), from_int(0),
+                        from_int(0), from_int(0), from_int(0), from_int(0),
+                        from_int(0), from_int(0), from_int(0), from_int(0),
+                        from_int(0), from_int(0), from_int(0)])
+}
+fn zeros_31() -> String { zeros_16().concat(zeros_15()) }
+
+fn make_greeting(as_server: Bool) -> String {
+    let sig: String = bval(255).concat(zeros_8()).concat(bval(127));
+    let ver: String = bval(3).concat(bval(1));
+    let mech: String = "NULL".concat(zeros_16());
+    let as_srv: String = if as_server { bval(1) } else { bval(0) };
+    sig.concat(ver).concat(mech).concat(as_srv).concat(zeros_31())
+}
+
+fn validate_greeting(g: String) -> Result[Unit, ZmqError] {
+    if g.len() != 64 {
+        Err(ZmqError::FrameError("greeting not 64 bytes"))
+    } else if g.byte_at(0).to_int() != 255 {
+        Err(ZmqError::FrameError("bad signature byte 0"))
+    } else if g.byte_at(9).to_int() != 127 {
+        Err(ZmqError::FrameError("bad signature byte 9"))
+    } else if g.byte_at(10).to_int() < 3 {
+        Err(ZmqError::FrameError("ZMTP version < 3.x"))
+    } else if g.substring(12, 16) != "NULL" {
+        Err(ZmqError::FrameError("mechanism not NULL"))
+    } else {
+        Ok(())
+    }
+}
+
+fn make_ready_body(st: ZmtpSocketType) -> String {
+    let name: String = "READY";
+    let name_len: String = bval(5);
+    let key: String = "Socket-Type";
+    let key_len: String = bval(11);
+    let stype: String = socket_type_name(st);
+    let stype_len: Int = stype.len();
+    let stype_len_be: String = bval(0).concat(bval(0))
+        .concat(bval(stype_len.shift_right(8).bit_and(255)))
+        .concat(bval(stype_len.bit_and(255)));
+    name_len.concat(name).concat(key_len).concat(key).concat(stype_len_be).concat(stype)
+}
+
+fn is_ping(body: String) -> Bool {
+    if body.len() >= 5 {
+        if body.byte_at(0).to_int() == 4 {
+            body.substring(1, 5) == "PING"
+        } else {
+            false
+        }
+    } else {
+        false
+    }
+}
+
+fn ping_context(body: String) -> String {
+    let blen: Int = body.len();
+    if blen > 7 {
+        body.substring(7, blen)
+    } else {
+        ""
+    }
+}
+
+fn topic_passes_filter(plain: String, filter: String) -> Bool {
+    if filter.len() == 0 {
+        true
+    } else {
+        let topic: String = match plain.find("\n") {
+            None    => plain.substring(0, plain.len()),
+            Some(i) => plain.substring(0, i),
+        };
+        topic.starts_with(filter)
+    }
+}
+
+fn is_transient_accept_error(e: val NetError) -> Bool {
+    match e {
+        NetError::ConnectionReset => true,
+        NetError::Timeout         => true,
+        _                         => false,
+    }
+}
+
+use std.net.{NetError}
+
+// ── socket_type_name / parse_socket_type tests ──────────────────────────────
+
+test fn socket_type_name_req() -> Unit { assert_eq(socket_type_name(ZmtpSocketType::Req), "REQ") }
+test fn socket_type_name_rep() -> Unit { assert_eq(socket_type_name(ZmtpSocketType::Rep), "REP") }
+test fn socket_type_name_pub() -> Unit { assert_eq(socket_type_name(ZmtpSocketType::Pub), "PUB") }
+test fn socket_type_name_sub() -> Unit { assert_eq(socket_type_name(ZmtpSocketType::Sub), "SUB") }
+test fn socket_type_name_push() -> Unit { assert_eq(socket_type_name(ZmtpSocketType::Push), "PUSH") }
+test fn socket_type_name_pull() -> Unit { assert_eq(socket_type_name(ZmtpSocketType::Pull), "PULL") }
+
+test fn parse_socket_type_req() -> Unit {
+    assert_eq(parse_socket_type("REQ").is_ok(), true)
+}
+test fn parse_socket_type_rep() -> Unit {
+    assert_eq(parse_socket_type("REP").is_ok(), true)
+}
+test fn parse_socket_type_pub() -> Unit {
+    assert_eq(parse_socket_type("PUB").is_ok(), true)
+}
+test fn parse_socket_type_sub() -> Unit {
+    assert_eq(parse_socket_type("SUB").is_ok(), true)
+}
+test fn parse_socket_type_push() -> Unit {
+    assert_eq(parse_socket_type("PUSH").is_ok(), true)
+}
+test fn parse_socket_type_pull() -> Unit {
+    assert_eq(parse_socket_type("PULL").is_ok(), true)
+}
+test fn parse_socket_type_unknown() -> Unit {
+    assert_eq(parse_socket_type("DEALER").is_err(), true)
+}
+
+// ── greeting tests ──────────────────────────────────────────────────────────
+
+test fn greeting_is_64_bytes() -> Unit {
+    assert_eq(make_greeting(true).len(), 64);
+    assert_eq(make_greeting(false).len(), 64)
+}
+
+test fn greeting_signature_bytes() -> Unit {
+    let g: String = make_greeting(true);
+    assert_eq(g.byte_at(0).to_int(), 255);
+    assert_eq(g.byte_at(9).to_int(), 127)
+}
+
+test fn greeting_version_3_1() -> Unit {
+    let g: String = make_greeting(true);
+    assert_eq(g.byte_at(10).to_int(), 3);
+    assert_eq(g.byte_at(11).to_int(), 1)
+}
+
+test fn greeting_mechanism_null() -> Unit {
+    let g: String = make_greeting(true);
+    assert_eq(g.substring(12, 16), "NULL")
+}
+
+test fn greeting_as_server_flag() -> Unit {
+    assert_eq(make_greeting(true).byte_at(32).to_int(), 1);
+    assert_eq(make_greeting(false).byte_at(32).to_int(), 0)
+}
+
+test fn validate_greeting_roundtrip_server() -> Unit {
+    assert_eq(validate_greeting(make_greeting(true)).is_ok(), true)
+}
+
+test fn validate_greeting_roundtrip_client() -> Unit {
+    assert_eq(validate_greeting(make_greeting(false)).is_ok(), true)
+}
+
+test fn validate_greeting_too_short() -> Unit {
+    assert_eq(validate_greeting("short").is_err(), true)
+}
+
+test fn validate_greeting_bad_sig_byte_0() -> Unit {
+    let g: String = bval(0).concat(make_greeting(true).substring(1, 64));
+    assert_eq(validate_greeting(g).is_err(), true)
+}
+
+test fn validate_greeting_bad_sig_byte_9() -> Unit {
+    let g: String = make_greeting(true).substring(0, 9).concat(bval(0)).concat(make_greeting(true).substring(10, 64));
+    assert_eq(validate_greeting(g).is_err(), true)
+}
+
+test fn validate_greeting_old_version() -> Unit {
+    let g: String = make_greeting(true).substring(0, 10).concat(bval(2)).concat(make_greeting(true).substring(11, 64));
+    assert_eq(validate_greeting(g).is_err(), true)
+}
+
+test fn validate_greeting_bad_mechanism() -> Unit {
+    let g: String = make_greeting(true).substring(0, 12).concat("PLAI").concat(make_greeting(true).substring(16, 64));
+    assert_eq(validate_greeting(g).is_err(), true)
+}
+
+// ── READY body tests ────────────────────────────────────────────────────────
+
+test fn ready_body_starts_with_ready() -> Unit {
+    let body: String = make_ready_body(ZmtpSocketType::Rep);
+    assert_eq(body.byte_at(0).to_int(), 5);
+    assert_eq(body.substring(1, 6), "READY")
+}
+
+test fn ready_body_contains_socket_type() -> Unit {
+    let body: String = make_ready_body(ZmtpSocketType::Req);
+    let blen: Int = body.len();
+    assert_eq(body.substring(blen - 3, blen), "REQ")
+}
+
+// ── PING/PONG tests ────────────────────────────────────────────────────────
+
+test fn is_ping_valid() -> Unit {
+    let body: String = bval(4).concat("PING").concat(bval(0)).concat(bval(30));
+    assert_eq(is_ping(body), true)
+}
+
+test fn is_ping_wrong_name_len() -> Unit {
+    let body: String = bval(3).concat("PIN").concat(bval(0)).concat(bval(0));
+    assert_eq(is_ping(body), false)
+}
+
+test fn is_ping_wrong_name() -> Unit {
+    let body: String = bval(4).concat("PONG");
+    assert_eq(is_ping(body), false)
+}
+
+test fn is_ping_too_short() -> Unit {
+    assert_eq(is_ping("hi"), false)
+}
+
+test fn ping_context_with_data() -> Unit {
+    let body: String = bval(4).concat("PING").concat(bval(0)).concat(bval(30)).concat("ctx");
+    assert_eq(ping_context(body), "ctx")
+}
+
+test fn ping_context_empty() -> Unit {
+    let body: String = bval(4).concat("PING").concat(bval(0)).concat(bval(0));
+    assert_eq(ping_context(body), "")
+}
+
+test fn ping_context_short_body() -> Unit {
+    assert_eq(ping_context("short"), "")
+}
+
+// ── topic_passes_filter tests ───────────────────────────────────────────────
+
+test fn filter_empty_matches_all() -> Unit {
+    assert_eq(topic_passes_filter("weather\nNYC 72F", ""), true)
+}
+
+test fn filter_matching_prefix() -> Unit {
+    assert_eq(topic_passes_filter("weather\nNYC 72F", "wea"), true)
+}
+
+test fn filter_non_matching() -> Unit {
+    assert_eq(topic_passes_filter("weather\nNYC 72F", "sports"), false)
+}
+
+test fn filter_exact_topic() -> Unit {
+    assert_eq(topic_passes_filter("weather\nNYC 72F", "weather"), true)
+}
+
+test fn filter_no_newline() -> Unit {
+    assert_eq(topic_passes_filter("weather", "weather"), true)
+}
+
+// ── is_transient_accept_error tests ─────────────────────────────────────────
+
+test fn transient_connection_reset() -> Unit {
+    assert_eq(is_transient_accept_error(NetError::ConnectionReset), true)
+}
+
+test fn transient_timeout() -> Unit {
+    assert_eq(is_transient_accept_error(NetError::Timeout), true)
+}
+
+test fn not_transient_other() -> Unit {
+    assert_eq(is_transient_accept_error(NetError::ConnectionRefused), false)
+}
+
+// ── Property-based tests ────────────────────────────────────────────────────
+
+use std.pbt.{gen_string, property_check_string}
+
+test fn pbt_encode_decode_roundtrip() -> Unit ! Random {
+    property_check_string(
+        "encode/decode roundtrip", gen_string(0, 100),
+        |s: String| -> Bool {
+            match decode_frame_str(encode_frame(s)) {
+                Err(_) => false,
+                Ok(decoded) => decoded == s,
+            }
+        },
+        200
+    )
+}
+
+test fn pbt_encode_length_is_input_plus_4() -> Unit ! Random {
+    property_check_string(
+        "encode length == input + 4", gen_string(0, 100),
+        |s: String| -> Bool { encode_frame(s).len() == s.len() + 4 },
+        200
+    )
+}
+
+test fn pbt_sub_topic_body_roundtrip() -> Unit ! Random {
+    property_check_string(
+        "sub_topic/sub_body roundtrip", gen_string(1, 50),
+        |topic: String| -> Bool {
+            let payload: String = topic.concat("\n").concat("test-body");
+            sub_topic_str(payload) == topic && sub_body_str(payload) == "test-body"
+        },
+        200
+    )
+}

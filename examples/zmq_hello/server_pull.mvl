@@ -1,0 +1,60 @@
+// examples/zmq_hello/server_pull.mvl — ZMTP 3.x PULL server using pkg.zmq.
+//
+// Wire-compatible with pyzmq, cppzmq, zmq.rs, and any ZMTP 3.x PUSH client.
+// Listens on tcp://*:5557, prints each received message.
+//
+// Usage:
+//   cargo run -- run examples/zmq_hello/server_pull.mvl
+//   python3 examples/zmq_hello/client_push.py
+
+use std.net.{TcpStream, TcpListener, tcp_accept, tcp_listen,
+             tcp_close_stream, tcp_close_listener}
+use pkg.zmq.{ZmqError, zmq_error_msg, parse_zmq_addr, is_transient_accept_error}
+use pkg.zmq.zmtp.{ZmtpSocketType, zmtp_handshake_server, zmtp_recv_message}
+
+partial fn recv_loop(stream: TcpStream) -> Unit ! Console + Net {
+    while true {
+        match zmtp_recv_message(stream) {
+            Err(_) => {
+                tcp_close_stream(stream);
+                return
+            },
+            Ok(msg) => {
+                let body: String = relabel trust(msg, "PULL-DEMO");
+                println(" recv: ".concat(body));
+            },
+        }
+    }
+}
+
+partial fn accept_loop(listener: TcpListener) -> Unit ! Console + Net {
+    while true {
+        match tcp_accept(listener) {
+            Err(e) => {
+                if !is_transient_accept_error(e) {
+                    tcp_close_listener(listener);
+                    return
+                }
+            },
+            Ok(stream) => {
+                let _: Unit = match zmtp_handshake_server(stream, ZmtpSocketType::Pull) {
+                    Err(_) => tcp_close_stream(stream),
+                    Ok(_) => recv_loop(stream),
+                };
+            },
+        }
+    }
+}
+
+partial fn main() -> Unit ! Console + Net {
+    println("ZMTP 3.x PULL server listening on tcp://*:5557");
+    match parse_zmq_addr("tcp://*:5557") {
+        Err(e) => println("error: ".concat(zmq_error_msg(e))),
+        Ok(addr) => {
+            match tcp_listen(addr.host, addr.port) {
+                Err(e) => println("listen error"),
+                Ok(listener) => accept_loop(listener),
+            }
+        },
+    }
+}

@@ -1,0 +1,24 @@
+// examples/zmq_hello/server_zmtp.mvl — ZMTP 3.x REP server using pkg.zmq.
+//
+// Wire-compatible with pyzmq, cppzmq, zmq.rs, and any ZMTP 3.x REQ client.
+// Listens on tcp://*:5556, echoes every request back as "echo: <msg>".
+//
+// Usage:
+//   cargo run -- run examples/zmq_hello/server_zmtp.mvl
+//   python3 examples/zmq_hello/client_zmq.py
+
+use pkg.zmq.{zmq_error_msg}
+use pkg.zmq.reqrep.{rep_serve_zmtp}
+
+fn handle(req: Tainted[String]) -> String {
+    let plain: String = relabel trust(req, "ZMQ-REQ-HANDLER");
+    "echo: ".concat(plain)
+}
+
+partial fn main() -> Unit ! Console + Net {
+    println("ZMTP 3.x REP server listening on tcp://*:5556");
+    match rep_serve_zmtp("tcp://*:5556", handle) {
+        Ok(_)  => {},
+        Err(e) => println("error: ".concat(zmq_error_msg(e))),
+    }
+}

@@ -302,7 +302,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
     // File-level allow — inner attributes must appear at the top of the file,
     // before any items.  We strip per-module copies below.
     combined_rs.push_str(
-        "#![allow(dead_code, unused_variables, unused_imports, unused_parens, unused_unsafe, unused_assignments, non_shorthand_field_patterns)]\n\n",
+        "#![allow(dead_code, unused_variables, unused_imports, unused_parens, unused_unsafe, unused_assignments, non_shorthand_field_patterns, unpredictable_function_pointer_comparisons)]\n\n",
     );
 
     if coverage {

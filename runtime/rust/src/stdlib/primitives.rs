@@ -47,17 +47,28 @@ pub fn str_from_chars(chars: Vec<String>) -> String {
     chars.into_iter().collect()
 }
 
-/// Return the raw byte at position `i` (0-based). Returns `0` if out of range.
+/// Return the byte value at character position `i` (0-based).
+///
+/// Returns the Unicode codepoint of the i-th character, truncated to u8.
+/// For strings created via `from_bytes`, each character's codepoint equals
+/// its original byte value (Latin-1 encoding), so this round-trips correctly.
+/// Returns `0` if out of range.
 pub fn str_byte_at(s: String, i: i64) -> u8 {
     if i < 0 {
         return 0;
     }
-    s.as_bytes().get(i as usize).copied().unwrap_or(0)
+    s.chars()
+        .nth(i as usize)
+        .map(|c| c as u32 as u8)
+        .unwrap_or(0)
 }
 
-/// Reconstruct a `String` from a list of bytes (UTF-8, replacing invalid sequences).
+/// Reconstruct a `String` from a list of byte values (Latin-1 encoding).
+///
+/// Each byte value 0–255 maps to the Unicode codepoint with the same value.
+/// This preserves binary data: `from_bytes([0xFF]).byte_at(0) == 0xFF`.
 pub fn str_from_bytes(bytes: Vec<u8>) -> String {
-    String::from_utf8_lossy(&bytes).into_owned()
+    bytes.iter().map(|&b| b as char).collect()
 }
 
 /// Concatenate two strings. `str_concat(a, b)` == `a + b`.

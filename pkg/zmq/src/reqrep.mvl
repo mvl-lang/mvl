@@ -1,22 +1,21 @@
 // pkg.zmq.reqrep — REQ/REP messaging pattern.
 //
-// Synchronous request-response over TCP (one connection per exchange).
+// Two modes:
+//   1. Simplified framing (original): one connection per exchange, 4-byte length prefix.
+//      Functions: `rep_serve`, `req_request`
 //
-// Server: `rep_serve` accepts connections, decodes framed requests,
-//         calls the handler function, and sends framed replies.
-// Client: `req_request` connects to a server, sends a framed request,
-//         reads the framed reply, and returns it.
+//   2. ZMTP 3.x (interop): persistent connections, ZMTP greeting + NULL auth + multi-frame.
+//      Functions: `rep_serve_zmtp`, `req_request_zmtp`
 //
 // Import:
-//   use pkg.zmq.reqrep.{rep_serve, req_request}
+//   use pkg.zmq.reqrep.{rep_serve, req_request, rep_serve_zmtp, req_request_zmtp}
 //
 // Effects: ! Net (all functions).
 //
 // IFC: handler receives Tainted[String] — callers must relabel with a
 //      context-specific audit tag before use in security-sensitive operations.
-//      This is consistent with sub_serve and puller_serve.
 //
-// See #1032.
+// See #1032, #1047.
 
 use std.ifc.{Tainted}
 use std.net.{TcpListener, TcpStream, NetError,
@@ -24,13 +23,15 @@ use std.net.{TcpListener, TcpStream, NetError,
              tcp_close_listener, tcp_close_stream}
 use pkg.zmq.{ZmqError, encode_frame, decode_frame, map_net_err,
              zmq_bind, is_transient_accept_error}
+use pkg.zmq.zmtp.{ZmtpSocketType, zmtp_handshake_server, zmtp_handshake_client,
+                   zmtp_recv_message, zmtp_send_message}
 
 // ── Server-side ───────────────────────────────────────────────────────────────
 
 /// Write a framed request on `stream`, read the framed reply, and close.
 ///
 /// Module-private — used by `req_request`.
-fn req_exchange(stream: TcpStream, msg: String) -> Result[Tainted[String], ZmqError] ! Net {
+total fn req_exchange(stream: TcpStream, msg: String) -> Result[Tainted[String], ZmqError] ! Net {
     let framed: String = encode_frame(msg);
     match tcp_write(stream, framed) {
         Err(e) => { tcp_close_stream(stream); Err(map_net_err(e)) },
@@ -51,7 +52,7 @@ fn req_exchange(stream: TcpStream, msg: String) -> Result[Tainted[String], ZmqEr
 /// Reads a framed request, decodes it, calls `handler` with the raw
 /// `Tainted[String]` body, sends the framed reply, closes the stream.
 /// Module-private — used by `rep_accept_loop`.
-fn handle_one(
+total fn handle_one(
     stream: TcpStream,
     handler: fn(Tainted[String]) -> String,
 ) -> Result[Unit, ZmqError] ! Net {
@@ -88,19 +89,18 @@ partial fn rep_accept_loop(
     listener: TcpListener,
     handler: fn(Tainted[String]) -> String,
 ) -> Result[Unit, ZmqError] ! Net {
-    match tcp_accept(listener) {
-        Err(e) => {
-            if is_transient_accept_error(e) {
-                rep_accept_loop(listener, handler)
-            } else {
-                tcp_close_listener(listener);
-                Ok(())
-            }
-        },
-        Ok(stream) => {
-            let _: Result[Unit, ZmqError] = handle_one(stream, handler);
-            rep_accept_loop(listener, handler)
-        },
+    while true {
+        match tcp_accept(listener) {
+            Err(e) => {
+                if !is_transient_accept_error(e) {
+                    tcp_close_listener(listener);
+                    return Ok(())
+                }
+            },
+            Ok(stream) => {
+                let _: Result[Unit, ZmqError] = handle_one(stream, handler);
+            },
+        }
     }
 }
 
@@ -127,13 +127,132 @@ pub partial fn rep_serve(
 ///
 /// Connects, sends a framed request, reads the framed reply, closes.
 /// Returns the reply body as `Tainted[String]` (audit tag `ZMQ-RECV`).
-pub fn req_request(
+pub total fn req_request(
     host: String,
-    port: Int,
+    port: Int where self >= 0 && self <= 65535,
     msg: String,
 ) -> Result[Tainted[String], ZmqError] ! Net {
     match tcp_connect(host, port) {
         Err(e)     => Err(map_net_err(e)),
         Ok(stream) => req_exchange(stream, msg),
+    }
+}
+
+// ── ZMTP 3.x mode (#1047) ───────────────────────────────────────────────────
+//
+// Wire-compatible with pyzmq, zmq.go, cppzmq and any ZMTP 3.x implementation.
+// Each accepted connection performs a full ZMTP handshake before entering the
+// request/reply loop.  The connection stays open across multiple exchanges.
+
+/// Handle ZMTP exchanges on a single persistent connection.
+///
+/// After handshake, loops: read request → handler → send reply.
+/// Returns when the peer closes the connection or a network error occurs.
+partial fn zmtp_exchange_loop(
+    stream: TcpStream,
+    handler: fn(Tainted[String]) -> String,
+) -> Result[Unit, ZmqError] ! Net {
+    while true {
+        match zmtp_recv_message(stream) {
+            Err(_) => {
+                tcp_close_stream(stream);
+                return Ok(())
+            },
+            Ok(msg) => {
+                let reply_body: String = handler(msg);
+                match zmtp_send_message(stream, reply_body) {
+                    Err(_) => {
+                        tcp_close_stream(stream);
+                        return Ok(())
+                    },
+                    Ok(_) => {},
+                }
+            },
+        }
+    }
+}
+
+/// Handle one ZMTP connection: handshake + exchange loop.
+partial fn handle_zmtp_connection(
+    stream: TcpStream,
+    handler: fn(Tainted[String]) -> String,
+) -> Result[Unit, ZmqError] ! Net {
+    match zmtp_handshake_server(stream, ZmtpSocketType::Rep) {
+        Err(_) => {
+            tcp_close_stream(stream);
+            Ok(())
+        },
+        Ok(_peer_type) => zmtp_exchange_loop(stream, handler),
+    }
+}
+
+/// Accept loop for the ZMTP REP server.
+partial fn rep_zmtp_accept_loop(
+    listener: TcpListener,
+    handler: fn(Tainted[String]) -> String,
+) -> Result[Unit, ZmqError] ! Net {
+    while true {
+        match tcp_accept(listener) {
+            Err(e) => {
+                if !is_transient_accept_error(e) {
+                    tcp_close_listener(listener);
+                    return Ok(())
+                }
+            },
+            Ok(stream) => {
+                let _: Result[Unit, ZmqError] = handle_zmtp_connection(stream, handler);
+            },
+        }
+    }
+}
+
+/// Start a ZMTP 3.x REP server at `addr`.
+///
+/// Wire-compatible with pyzmq, cppzmq, and any ZMTP 3.x REQ client.
+/// Each connection performs greeting + NULL handshake, then loops request/reply.
+///
+/// `handler` receives decoded request as `Tainted[String]` and returns reply.
+pub partial fn rep_serve_zmtp(
+    addr: String,
+    handler: fn(Tainted[String]) -> String,
+) -> Result[Unit, ZmqError] ! Net {
+    match zmq_bind(addr) {
+        Err(e)       => Err(e),
+        Ok(listener) => rep_zmtp_accept_loop(listener, handler),
+    }
+}
+
+/// Send a ZMTP 3.x REQ message and receive the reply.
+///
+/// Wire-compatible with pyzmq, cppzmq, and any ZMTP 3.x REP server.
+/// Opens a connection, performs handshake, sends one request, reads one reply.
+pub partial fn req_request_zmtp(
+    host: String,
+    port: Int where self >= 0 && self <= 65535,
+    msg: String,
+) -> Result[Tainted[String], ZmqError] ! Net {
+    match tcp_connect(host, port) {
+        Err(e) => Err(map_net_err(e)),
+        Ok(stream) => {
+            match zmtp_handshake_client(stream, ZmtpSocketType::Req) {
+                Err(e) => {
+                    tcp_close_stream(stream);
+                    Err(e)
+                },
+                Ok(_peer_type) => {
+                    match zmtp_send_message(stream, msg) {
+                        Err(e) => {
+                            tcp_close_stream(stream);
+                            Err(e)
+                        },
+                        Ok(_) => {
+                            let result: Result[Tainted[String], ZmqError] = zmtp_recv_message(stream);
+                            tcp_close_stream(stream);
+                            result
+                        },
+                    }
+                },
+            }
+        },
     }
 }

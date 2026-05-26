@@ -390,6 +390,20 @@ fn emit_else_branch(cg: &mut RustEmitter, branch: &ElseBranch, cov_id: Option<us
             // the caller's `} else ` and this `if` land on the same line.
             // The false-branch coverage hit for the outer if is injected here
             // before the inner condition is tested.
+            //
+            // When the outer if's IfFalse probe needs emitting, we wrap in a
+            // block: `else { hit(N); if ... }` so the probe fires before the
+            // inner condition is evaluated.
+            let needs_block = cov_id.is_some();
+            if needs_block {
+                cg.push("{");
+                cg.nl();
+                cg.push_indent();
+                if let Some(id) = cov_id {
+                    cg.emit_cov_hit(id);
+                }
+                cg.indent();
+            }
             match stmt.as_ref() {
                 Stmt::If {
                     cond,
@@ -409,9 +423,11 @@ fn emit_else_branch(cg: &mut RustEmitter, branch: &ElseBranch, cov_id: Option<us
                     let mut check_clauses = Vec::new();
                     collect_clauses(cond, &mut check_clauses);
                     if check_clauses.len() >= 2 && cg.mcdc.is_some() {
-                        cg.push("{");
-                        cg.nl();
-                        cg.push_indent();
+                        if !needs_block {
+                            cg.push("{");
+                            cg.nl();
+                            cg.push_indent();
+                        }
                         emit_mcdc_if(
                             cg,
                             cond,
@@ -444,6 +460,11 @@ fn emit_else_branch(cg: &mut RustEmitter, branch: &ElseBranch, cov_id: Option<us
                     }
                 }
                 other => unreachable!("ElseBranch::If must always wrap Stmt::If; got {:?}", other),
+            }
+            if needs_block {
+                cg.pop_indent();
+                cg.indent();
+                cg.push("}");
             }
         }
     }

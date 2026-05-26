@@ -30,7 +30,7 @@ pub type ZmqError = enum {
 }
 
 /// Format a ZmqError as a human-readable string.
-pub fn zmq_error_msg(e: val ZmqError) -> String {
+pub total fn zmq_error_msg(e: val ZmqError) -> String {
     match e {
         ZmqError::NetError(msg)    => "net: ".concat(msg),
         ZmqError::FrameError(msg)  => "frame: ".concat(msg),
@@ -49,7 +49,9 @@ pub fn zmq_error_msg(e: val ZmqError) -> String {
 /// Encode a message as a 4-byte big-endian length-prefixed frame.
 ///
 /// Pure function.  Write the result directly to a TcpStream via tcp_write.
-pub fn encode_frame(msg: String) -> String {
+pub total fn encode_frame(msg: String) -> String
+    ensures len(result) == len(msg) + 4
+{
     let n: Int = msg.len();
     let b3: Byte = from_int(n.shift_right(24).bit_and(255));
     let b2: Byte = from_int(n.shift_right(16).bit_and(255));
@@ -66,7 +68,7 @@ pub fn encode_frame(msg: String) -> String {
 ///
 /// IFC trust boundary: the raw buffer is detainted as `ZMQ-FRAME-PARSE` for structural
 /// parsing only (length extraction + boundary check).  The body is re-tainted `ZMQ-RECV`.
-pub fn decode_frame(raw: Tainted[String]) -> Result[Tainted[String], ZmqError] {
+pub total fn decode_frame(raw: Tainted[String]) -> Result[Tainted[String], ZmqError] {
     let s: String = relabel trust(raw, "ZMQ-FRAME-PARSE");
     let slen: Int = s.len();
     if slen < 4 {
@@ -95,14 +97,14 @@ pub fn decode_frame(raw: Tainted[String]) -> Result[Tainted[String], ZmqError] {
 
 /// Parsed TCP address.
 pub type ZmqAddr = struct {
-    host: String,
-    port: Int,
+    host: String where len(self) > 0,
+    port: Int where self >= 0 && self <= 65535,
 }
 
 /// Parse a ZMQ-style address: "tcp://host:port", "tcp://*:port", or "host:port".
 ///
 /// The wildcard `*` is mapped to `0.0.0.0` (bind on all interfaces).
-pub fn parse_zmq_addr(addr: String) -> Result[ZmqAddr, ZmqError] {
+pub total fn parse_zmq_addr(addr: String) -> Result[ZmqAddr, ZmqError] {
     let stripped: String = if addr.starts_with("tcp://") {
         addr.substring(6, addr.len())
     } else {
@@ -133,7 +135,7 @@ pub fn parse_zmq_addr(addr: String) -> Result[ZmqAddr, ZmqError] {
 }
 
 /// Map a NetError to a ZmqError (for error propagation in network operations).
-pub fn map_net_err(e: NetError) -> ZmqError {
+pub total fn map_net_err(e: NetError) -> ZmqError {
     ZmqError::NetError(net_error_msg(e))
 }
 
@@ -143,7 +145,7 @@ pub fn map_net_err(e: NetError) -> ZmqError {
 ///
 /// Used by all accept loops to distinguish recoverable errors (ConnectionReset,
 /// Timeout) from fatal errors that should close the listener.
-pub fn is_transient_accept_error(e: NetError) -> Bool {
+pub total fn is_transient_accept_error(e: NetError) -> Bool {
     match e {
         NetError::ConnectionReset => true,
         NetError::Timeout         => true,
@@ -154,7 +156,7 @@ pub fn is_transient_accept_error(e: NetError) -> Bool {
 /// Bind a TCP listener at `addr` (parse + tcp_listen in one step).
 ///
 /// Used by `rep_serve`, `sub_serve`, and `puller_serve` to reduce boilerplate.
-pub fn zmq_bind(addr: String) -> Result[TcpListener, ZmqError] ! Net {
+pub total fn zmq_bind(addr: String) -> Result[TcpListener, ZmqError] ! Net {
     let parsed: ZmqAddr = parse_zmq_addr(addr)?;
     match tcp_listen(parsed.host, parsed.port) {
         Err(e)       => Err(map_net_err(e)),
@@ -167,7 +169,7 @@ pub fn zmq_bind(addr: String) -> Result[TcpListener, ZmqError] ! Net {
 /// The caller is responsible for encoding the payload with `encode_frame` before
 /// calling this function.  Network errors are returned; actor behaviors discard
 /// them as fire-and-forget.
-pub fn send_one(addr: String, payload: String) -> Result[Unit, ZmqError] ! Net {
+pub total fn send_one(addr: String, payload: String) -> Result[Unit, ZmqError] ! Net {
     let hp: ZmqAddr = parse_zmq_addr(addr)?;
     match tcp_connect(hp.host, hp.port) {
         Err(e)     => Err(map_net_err(e)),

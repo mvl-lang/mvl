@@ -16,10 +16,12 @@
 
 use std.ifc.{Tainted}
 use std.net.{TcpListener, TcpStream, NetError,
-             tcp_accept, tcp_read,
+             tcp_accept, tcp_read, tcp_connect,
              tcp_close_listener, tcp_close_stream}
 use pkg.zmq.{ZmqError, encode_frame, decode_frame, map_net_err,
              zmq_bind, send_one, is_transient_accept_error}
+use pkg.zmq.zmtp.{ZmtpSocketType, zmtp_handshake_server, zmtp_handshake_client,
+                   zmtp_recv_message, zmtp_send_body}
 
 // ── Pusher actor ──────────────────────────────────────────────────────────────
 
@@ -64,7 +66,7 @@ pub actor Pusher {
 ///
 /// Blocks until a pusher connects and sends a framed message.
 /// Returns the message body as `Tainted[String]` (audit tag `ZMQ-RECV`).
-pub fn puller_recv(listener: TcpListener) -> Result[Tainted[String], ZmqError] ! Net {
+pub total fn puller_recv(listener: TcpListener) -> Result[Tainted[String], ZmqError] ! Net {
     match tcp_accept(listener) {
         Err(e)     => Err(map_net_err(e)),
         Ok(stream) => {
@@ -97,30 +99,130 @@ partial fn puller_accept_loop(
     listener: TcpListener,
     handler: fn(Tainted[String]) -> Unit,
 ) -> Result[Unit, ZmqError] ! Net {
-    match tcp_accept(listener) {
-        Err(e) => {
-            if is_transient_accept_error(e) {
-                puller_accept_loop(listener, handler)
-            } else {
-                tcp_close_listener(listener);
-                Ok(())
-            }
+    while true {
+        match tcp_accept(listener) {
+            Err(e) => {
+                if !is_transient_accept_error(e) {
+                    tcp_close_listener(listener);
+                    return Ok(())
+                }
+            },
+            Ok(stream) => {
+                match tcp_read(stream) {
+                    Err(_)  => {
+                        tcp_close_stream(stream);
+                    },
+                    Ok(raw) => {
+                        tcp_close_stream(stream);
+                        match decode_frame(raw) {
+                            Err(_)  => {},
+                            Ok(msg) => {
+                                handler(msg);
+                            },
+                        }
+                    },
+                }
+            },
+        }
+    }
+}
+
+// ── ZMTP 3.x mode (#1054) ──────────────────────────────────────────────────
+//
+// Wire-compatible with pyzmq, zmq.rs, cppzmq PUSH/PULL sockets.
+// PUSH connects, PULL binds.  Messages are single frames (no envelope).
+
+/// Handle ZMTP messages on a single persistent PULL connection.
+///
+/// Loops: receive message → handler.  Returns when peer closes connection.
+partial fn pull_zmtp_recv_loop(
+    stream: TcpStream,
+    handler: fn(Tainted[String]) -> Unit,
+) -> Result[Unit, ZmqError] ! Net {
+    while true {
+        match zmtp_recv_message(stream) {
+            Err(_) => {
+                tcp_close_stream(stream);
+                return Ok(())
+            },
+            Ok(msg) => {
+                handler(msg);
+            },
+        }
+    }
+}
+
+/// Handle one ZMTP PULL connection: handshake + receive loop.
+partial fn handle_pull_zmtp(
+    stream: TcpStream,
+    handler: fn(Tainted[String]) -> Unit,
+) -> Result[Unit, ZmqError] ! Net {
+    match zmtp_handshake_server(stream, ZmtpSocketType::Pull) {
+        Err(_) => {
+            tcp_close_stream(stream);
+            Ok(())
         },
+        Ok(_) => pull_zmtp_recv_loop(stream, handler),
+    }
+}
+
+/// Accept loop for the ZMTP PULL server.
+partial fn pull_zmtp_accept_loop(
+    listener: TcpListener,
+    handler: fn(Tainted[String]) -> Unit,
+) -> Result[Unit, ZmqError] ! Net {
+    while true {
+        match tcp_accept(listener) {
+            Err(e) => {
+                if !is_transient_accept_error(e) {
+                    tcp_close_listener(listener);
+                    return Ok(())
+                }
+            },
+            Ok(stream) => {
+                let _: Result[Unit, ZmqError] = handle_pull_zmtp(stream, handler);
+            },
+        }
+    }
+}
+
+/// Start a ZMTP 3.x PULL server at `addr`.
+///
+/// Wire-compatible with pyzmq, cppzmq, and any ZMTP 3.x PUSH client.
+/// Each connection performs greeting + NULL handshake, then loops receiving.
+///
+/// `handler` receives each decoded message as `Tainted[String]`.
+pub partial fn pull_serve_zmtp(
+    addr: String,
+    handler: fn(Tainted[String]) -> Unit,
+) -> Result[Unit, ZmqError] ! Net {
+    match zmq_bind(addr) {
+        Err(e)       => Err(e),
+        Ok(listener) => pull_zmtp_accept_loop(listener, handler),
+    }
+}
+
+/// Send a ZMTP 3.x PUSH message (one-shot).
+///
+/// Connects, performs handshake, sends one message, closes.
+/// Wire-compatible with any ZMTP 3.x PULL server.
+pub partial fn push_connect_zmtp(
+    host: String,
+    port: Int where self >= 0 && self <= 65535,
+    msg: String,
+) -> Result[Unit, ZmqError] ! Net {
+    match tcp_connect(host, port) {
+        Err(e) => Err(map_net_err(e)),
         Ok(stream) => {
-            match tcp_read(stream) {
-                Err(_)  => {
+            match zmtp_handshake_client(stream, ZmtpSocketType::Push) {
+                Err(e) => {
                     tcp_close_stream(stream);
-                    puller_accept_loop(listener, handler)
+                    Err(e)
                 },
-                Ok(raw) => {
+                Ok(_) => {
+                    let result: Result[Unit, ZmqError] = zmtp_send_body(stream, msg);
                     tcp_close_stream(stream);
-                    match decode_frame(raw) {
-                        Err(_)  => puller_accept_loop(listener, handler),
-                        Ok(msg) => {
-                            handler(msg);
-                            puller_accept_loop(listener, handler)
-                        },
-                    }
+                    result
                 },
             }
         },
