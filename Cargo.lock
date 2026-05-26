@@ -738,13 +738,7 @@ dependencies = [
 
 [[package]]
 name = "mvl"
-<<<<<<< HEAD
 version = "0.158.0"
-||||||| parent of 41b022a1 (feat(pkg/zmq): ZMTP 3.x wire compatibility — interop with pyzmq/zmq.rs (#1047))
-version = "0.155.0"
-=======
-version = "0.156.3"
->>>>>>> 41b022a1 (feat(pkg/zmq): ZMTP 3.x wire compatibility — interop with pyzmq/zmq.rs (#1047))
 dependencies = [
  "criterion",
  "inkwell",
