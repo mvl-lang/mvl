@@ -66,7 +66,7 @@ total fn log_level_for_decision(decision: Permission) -> String {
 /// Log an access decision to the structured audit trail with IFC-safe fields.
 pub total fn log_access(
     logger: val Logger,
-    username: String,
+    username: String where len(self) > 0,
     resource: Resource,
     action: Action,
     decision: Permission,

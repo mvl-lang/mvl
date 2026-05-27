@@ -6,6 +6,10 @@
 //
 // No extern, no effects — pure type declarations.
 // Assurance note: 0 extern blocks (domain model only).
+// ── Refined types ─────────────────────────────────────────────────────────
+/// A validated, non-empty username used across audit and auth boundaries.
+pub type Username = String where len(self) > 0
+
 // ── Principals ─────────────────────────────────────────────────────────────
 /// Principal role determining access level in the RBAC policy.
 pub type Role = enum {

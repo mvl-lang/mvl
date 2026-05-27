@@ -50,7 +50,7 @@ extern "rust" {
 // audit record.
 total fn check_and_audit(
     logger: val Logger,
-    username: String,
+    username: String where len(self) > 0,
     role: Role,
     resource: Resource,
     action: Action,
