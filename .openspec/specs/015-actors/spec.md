@@ -9,8 +9,8 @@ date: 2026-05-14
 
 The MVL actor model is the primary concurrency mechanism introduced in Phase 8.  It extends
 the data race freedom guarantee proven in Phase 3 (Spec 014) from capability-level checks to
-a full architectural proof: no shared mutable state can exist between concurrently executing
-actors because message passing is the only communication mechanism and all messages are
+a full architectural proof: no shared mutable state can exist between communicating actors
+because message passing is the only communication mechanism and all messages are
 capability-safe transfers.
 
 ## Philosophy
@@ -119,11 +119,11 @@ let tag counter: ActorRef = actor Counter { count: 0 }
 // Send a message (behavior call)
 counter.increment(consume(delta))
 
-// Structured concurrency — scope lifetime
-concurrently {
+// fn main() is implicitly an actor — spawned actors are drained at exit
+fn main() -> Unit {
     let tag a: ActorRef = actor Worker {}
     a.run()
-}   // a is dropped here; runtime waits for pending messages to drain
+}   // main() returns after all spawned actors drain (ADR-0037)
 ```
 
 **Syntax design decisions:**
@@ -426,46 +426,34 @@ The only permitted interaction with an actor from the outside is sending a messa
 
 ---
 
-### Requirement 8: Structured Concurrency — Scope Lifetime [SHOULD]
+### Requirement 8: Actor Lifetime — Main Drain [SHOULD]
 
-Actors created inside a `concurrently` block MUST NOT outlive that block's scope.
-When the `concurrently` block exits, the runtime MUST drain all pending messages for
-actors created within the block before returning control to the enclosing scope.
+All actors spawned within `fn main()` are drained (joined) before the process exits.
+The runtime MUST process all pending messages in each actor's mailbox and wait for
+each actor thread to terminate before `main()` returns.
 
-This prevents dangling actor references and ensures that concurrent work is bounded
-by the scope in which it was created.
+This ensures that concurrent work is bounded by the program's execution lifetime and
+that the process does not exit with pending messages or incomplete message handlers.
 
-**Implementation:** `src/mvl/parser/expressions.rs::parse_concurrently_expr`,
-`src/mvl/checker.rs::TypeChecker::check_concurrently`,
-`src/mvl/backends/rust/emit_exprs.rs::emit_concurrently`,
-`src/mvl/backends/llvm/exprs.rs::emit_concurrently`
+**Implementation:** ADR-0037 — `fn main()` is implicitly an actor with an implicit join
+at the end. `src/mvl/backends/rust/emit_functions.rs::emit_fn_body` emits `_mvl_join_actors()`
+at the end of main; `src/mvl/backends/llvm` uses equivalent C-ABI draining.
 
-**Tests:** `tests/corpus/actors/structured_concurrency.mvl`,
-`tests/corpus/negative/req09_data_race/actor_escape_scope.mvl`
+**Tests:** `tests/corpus/actors/actor_spawn.mvl`, `tests/corpus/actors/actor_send.mvl`,
+`tests/stdlib/net_basic.mvl`
 
-**Corpus:** `tests/corpus/09_concurrency/structured_concurrency.mvl`
+#### Scenario: Spawned actors are drained before main exits
 
-#### Scenario: Actor does not escape concurrently block
-
-- GIVEN a `concurrently { let tag a = actor Worker {}; a.run() }` block
-- WHEN the outer scope attempts to use `a` after the block
-- THEN the compiler MUST emit an error: "actor `a` does not outlive its `concurrently` block"
-
-**Tests:** `tests/corpus/negative/req09_data_race/actor_escape_scope.mvl`
-
-#### Scenario: Concurrently block drains before returning
-
-- GIVEN a `concurrently` block containing `actor Worker {}` that processes messages
-- WHEN the block exits normally
-- THEN all pending messages for actors created within the block MUST be processed
-  before the enclosing scope continues
+- GIVEN a `fn main()` that spawns one or more actors and sends them messages
+- WHEN `main()` returns
+- THEN the runtime MUST process all pending messages in each actor's mailbox
+  before the process exits
 - AND this drain is **guaranteed**, not best-effort
 
-**Tests:** `tests/corpus/actors/structured_concurrency.mvl`
+**Tests:** `tests/corpus/actors/actor_spawn.mvl` (minimal spawn), `examples/programs/actor_spawn.mvl`
 
-**Note:** Graceful shutdown ordering — when a `concurrently` block is stopped externally
-or an actor within it panics, drain-before-return semantics are **not guaranteed** in
-Phase 8.  A `Supervisor.stop()` method with ordered shutdown is tracked for Phase 9.
+**Note:** If an actor panics, the actor thread terminates and remaining messages are
+dropped. Supervision and restart are tracked for Phase 9 via `std.actors.Supervisor`.
 
 ---
 
@@ -544,6 +532,5 @@ These limitations are accepted for Phase 8 and tracked as follow-up work:
   without coupling fate) are deferred to Phase 9.
 - **L6**: mailbox capacity — fixed at 256 messages per actor; overflow silently drops
   messages. Configurable capacity, blocking send, and backpressure are Phase 9 features.
-- **L7**: graceful shutdown ordering — `concurrently` block drain is guaranteed on normal
-  exit but not on actor panic or external stop. Ordered shutdown via `Supervisor.stop()` is
-  deferred to Phase 9.
+- **L7**: graceful shutdown ordering — main drain is guaranteed on normal exit but not on
+  actor panic or external stop. Ordered shutdown via `Supervisor.stop()` is deferred to Phase 9.
