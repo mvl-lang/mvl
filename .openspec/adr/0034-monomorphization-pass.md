@@ -1,9 +1,18 @@
 # ADR-0034: Monomorphization as an Explicit Pre-Analysis Pass
 
-**Status:** Accepted
+**Status:** Partially implemented — superseded for analysis passes by TIR (#1096)
 **Date:** 2026-05-17
-**Issues:** #837, #838
+**Issues:** #837, #838, #1096
 **Related:** ADR-0003 (compilation strategy — Phase 5C), ADR-0018 (five-stage pipeline), ADR-0024 (label-transparent functions), ADR-0025 (function contracts)
+
+> **Supersession note (2026-05-27):** Decision 3 ("Analysis passes accept MonoProgram") is
+> superseded by the Typed IR (TIR) work in #1096. `MonoProgram` still contains AST-level
+> `TypeExpr` nodes and would still require `CheckResult.expr_types` alongside it — no cleaner
+> abstraction than the current `Program + CheckResult`. TIR embeds resolved `Ty` into every
+> expression node, delivering the same per-instantiation precision with a single self-contained
+> input type. The `passes/mono.rs` pass (Decisions 1–2) remains valid and is the input to TIR
+> lowering. Decision 4 (backends simplify via MonoProgram) is also superseded: backends will
+> consume TIR instead.
 
 ---
 
