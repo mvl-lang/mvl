@@ -66,6 +66,229 @@ fn with_contract_counts<R>(f: impl FnOnce(&mut RefinementCounts) -> R) -> R {
     CONTRACT_COUNTS.with(|cell| f(&mut cell.borrow_mut()))
 }
 
+// ── Generic AST walkers ─────────────────────────────────────────────────────
+//
+// Three reusable walkers that replace the 6 parallel walker sets that
+// previously existed (requires, ensures, invariants, return-pred, spawn,
+// construct).  Each caller supplies a small closure for the leaf logic.
+
+/// Walk every expression in a block, calling `visitor` on each one (pre-order).
+fn walk_block_exprs(block: &Block, visitor: &mut impl FnMut(&Expr)) {
+    for stmt in &block.stmts {
+        walk_stmt_exprs(stmt, visitor);
+    }
+}
+
+fn walk_stmt_exprs(stmt: &Stmt, visitor: &mut impl FnMut(&Expr)) {
+    match stmt {
+        Stmt::Let { init, .. } => walk_expr(init, visitor),
+        Stmt::Assign { value, .. } => walk_expr(value, visitor),
+        Stmt::Return { value: Some(e), .. } => walk_expr(e, visitor),
+        Stmt::Return { value: None, .. } => {}
+        Stmt::Expr { expr, .. } => walk_expr(expr, visitor),
+        Stmt::If {
+            cond, then, else_, ..
+        } => {
+            walk_expr(cond, visitor);
+            walk_block_exprs(then, visitor);
+            if let Some(eb) = else_ {
+                match eb {
+                    ElseBranch::Block(b) => walk_block_exprs(b, visitor),
+                    ElseBranch::If(s) => walk_stmt_exprs(s, visitor),
+                }
+            }
+        }
+        Stmt::While { cond, body, .. } => {
+            walk_expr(cond, visitor);
+            walk_block_exprs(body, visitor);
+        }
+        Stmt::For { iter, body, .. } => {
+            walk_expr(iter, visitor);
+            walk_block_exprs(body, visitor);
+        }
+        Stmt::Match {
+            scrutinee, arms, ..
+        } => {
+            walk_expr(scrutinee, visitor);
+            for arm in arms {
+                match &arm.body {
+                    MatchBody::Expr(e) => walk_expr(e, visitor),
+                    MatchBody::Block(b) => walk_block_exprs(b, visitor),
+                }
+            }
+        }
+    }
+}
+
+fn walk_expr(expr: &Expr, visitor: &mut impl FnMut(&Expr)) {
+    visitor(expr);
+    match expr {
+        Expr::FnCall { args, .. } => {
+            for arg in args {
+                walk_expr(arg, visitor);
+            }
+        }
+        Expr::MethodCall { receiver, args, .. } => {
+            walk_expr(receiver, visitor);
+            for arg in args {
+                walk_expr(arg, visitor);
+            }
+        }
+        Expr::Block(b) => walk_block_exprs(b, visitor),
+        Expr::If {
+            cond, then, else_, ..
+        } => {
+            walk_expr(cond, visitor);
+            walk_block_exprs(then, visitor);
+            if let Some(e) = else_ {
+                walk_expr(e, visitor);
+            }
+        }
+        Expr::Borrow { expr, .. }
+        | Expr::Unary { expr, .. }
+        | Expr::Consume { expr, .. }
+        | Expr::Relabel { expr, .. }
+        | Expr::Propagate { expr, .. }
+        | Expr::FieldAccess { expr, .. } => walk_expr(expr, visitor),
+        Expr::Binary { left, right, .. } => {
+            walk_expr(left, visitor);
+            walk_expr(right, visitor);
+        }
+        Expr::Construct { fields, .. } | Expr::Spawn { fields, .. } => {
+            for (_, e) in fields {
+                walk_expr(e, visitor);
+            }
+        }
+        Expr::List { elems, .. } | Expr::Set { elems, .. } => {
+            for e in elems {
+                walk_expr(e, visitor);
+            }
+        }
+        Expr::Map { pairs, .. } => {
+            for (k, v) in pairs {
+                walk_expr(k, visitor);
+                walk_expr(v, visitor);
+            }
+        }
+        Expr::Match {
+            scrutinee, arms, ..
+        } => {
+            walk_expr(scrutinee, visitor);
+            for arm in arms {
+                match &arm.body {
+                    MatchBody::Expr(e) => walk_expr(e, visitor),
+                    MatchBody::Block(b) => walk_block_exprs(b, visitor),
+                }
+            }
+        }
+        Expr::Lambda { body, .. } => walk_expr(body, visitor),
+        Expr::Select { arms, .. } => {
+            for arm in arms {
+                walk_expr(&arm.expr, visitor);
+                walk_block_exprs(&arm.body, visitor);
+            }
+        }
+        Expr::Literal(_, _) | Expr::Ident(_, _) | Expr::Quantifier(..) => {}
+    }
+}
+
+/// Walk a block looking for return points (explicit `return` and tail expressions).
+///
+/// `match_arm_exprs`: if `true`, `MatchBody::Expr` arms are always treated as
+/// return points (ensures semantics); if `false`, only when the `Match` is
+/// the last statement in its block (return-refinement semantics).
+fn walk_return_points(block: &Block, match_arm_exprs: bool, visitor: &mut impl FnMut(&Expr, Span)) {
+    for (i, stmt) in block.stmts.iter().enumerate() {
+        let is_last = i + 1 == block.stmts.len();
+        match stmt {
+            Stmt::Return {
+                value: Some(e),
+                span,
+            } => visitor(e, *span),
+            Stmt::Return { value: None, .. } => {}
+            Stmt::If { then, else_, .. } => {
+                walk_return_points(then, match_arm_exprs, visitor);
+                if let Some(eb) = else_ {
+                    match eb {
+                        ElseBranch::Block(b) => walk_return_points(b, match_arm_exprs, visitor),
+                        ElseBranch::If(s) => walk_return_points_stmt(s, match_arm_exprs, visitor),
+                    }
+                }
+            }
+            Stmt::While { body, .. } | Stmt::For { body, .. } => {
+                walk_return_points(body, match_arm_exprs, visitor);
+            }
+            Stmt::Match { arms, .. } => {
+                for arm in arms {
+                    match &arm.body {
+                        MatchBody::Expr(e) if match_arm_exprs || is_last => {
+                            let span = e.span();
+                            visitor(e, span);
+                        }
+                        MatchBody::Block(b) => {
+                            walk_return_points(b, match_arm_exprs, visitor);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Stmt::Expr { expr, span } if is_last => visitor(expr, *span),
+            _ => {}
+        }
+    }
+}
+
+fn walk_return_points_stmt(
+    stmt: &Stmt,
+    match_arm_exprs: bool,
+    visitor: &mut impl FnMut(&Expr, Span),
+) {
+    if let Stmt::If { then, else_, .. } = stmt {
+        walk_return_points(then, match_arm_exprs, visitor);
+        if let Some(eb) = else_ {
+            match eb {
+                ElseBranch::Block(b) => walk_return_points(b, match_arm_exprs, visitor),
+                ElseBranch::If(s) => walk_return_points_stmt(s, match_arm_exprs, visitor),
+            }
+        }
+    }
+}
+
+/// Walk every statement in a block recursively, calling `visitor` on each (pre-order).
+///
+/// Recurses into child blocks of If, While, For, and Match statements.
+fn walk_block_stmts(block: &Block, visitor: &mut impl FnMut(&Stmt)) {
+    for stmt in &block.stmts {
+        walk_stmt_children(stmt, visitor);
+    }
+}
+
+fn walk_stmt_children(stmt: &Stmt, visitor: &mut impl FnMut(&Stmt)) {
+    visitor(stmt);
+    match stmt {
+        Stmt::If { then, else_, .. } => {
+            walk_block_stmts(then, visitor);
+            if let Some(eb) = else_ {
+                match eb {
+                    ElseBranch::Block(b) => walk_block_stmts(b, visitor),
+                    ElseBranch::If(s) => walk_stmt_children(s, visitor),
+                }
+            }
+        }
+        Stmt::While { body, .. } | Stmt::For { body, .. } => {
+            walk_block_stmts(body, visitor);
+        }
+        Stmt::Match { arms, .. } => {
+            for arm in arms {
+                if let MatchBody::Block(b) = &arm.body {
+                    walk_block_stmts(b, visitor);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Check all `requires`/`ensures` clauses for every function and method in `prog`.
 /// Returns proof-layer counts for contract checks (ensures, requires, invariants).
 pub fn check_contracts(
@@ -86,51 +309,28 @@ pub fn check_contracts(
     for decl in &prog.declarations {
         match decl {
             Decl::Fn(fd) => {
-                // Phase 3: seed var_refs with parameter where-refinements so that
-                // `requires` checks on variable arguments (e.g. `f(x)` where
-                // `x: Int where self > 0`) can be resolved by the solver.
                 let var_refs = build_param_var_refs(&fd.params);
-                check_requires_in_block(&fd.body, &fn_map, &var_refs, &fn_decls, errors, mode);
-                if !fd.ensures.is_empty() {
-                    check_ensures_in_block(
-                        &fd.body,
-                        &fd.name,
-                        &fd.ensures,
-                        &fd.params,
-                        &fn_decls,
-                        errors,
-                        mode,
-                    );
-                }
-                // Phase 3: check loop invariants.
-                check_invariants_in_block(&fd.body, &fd.name, &var_refs, &fn_decls, errors, mode);
+                check_fn_contracts(
+                    &fd.body,
+                    &fd.name,
+                    &fd.ensures,
+                    &fd.params,
+                    &fn_map,
+                    &var_refs,
+                    &fn_decls,
+                    errors,
+                    mode,
+                );
             }
             Decl::Impl(impl_d) => {
                 for method in &impl_d.methods {
                     let var_refs = build_param_var_refs(&method.params);
-                    check_requires_in_block(
-                        &method.body,
-                        &fn_map,
-                        &var_refs,
-                        &fn_decls,
-                        errors,
-                        mode,
-                    );
-                    if !method.ensures.is_empty() {
-                        check_ensures_in_block(
-                            &method.body,
-                            &method.name,
-                            &method.ensures,
-                            &method.params,
-                            &fn_decls,
-                            errors,
-                            mode,
-                        );
-                    }
-                    // Phase 3: check loop invariants.
-                    check_invariants_in_block(
+                    check_fn_contracts(
                         &method.body,
                         &method.name,
+                        &method.ensures,
+                        &method.params,
+                        &fn_map,
                         &var_refs,
                         &fn_decls,
                         errors,
@@ -151,6 +351,46 @@ pub fn check_contracts(
     CONTRACT_COUNTS.with(|cell| cell.borrow().clone())
 }
 
+/// Run requires, ensures, and invariant checks on a single function/method body.
+#[allow(clippy::too_many_arguments)]
+fn check_fn_contracts(
+    body: &Block,
+    fn_name: &str,
+    ensures: &[Expr],
+    params: &[Param],
+    fn_map: &HashMap<String, FnContracts>,
+    var_refs: &HashMap<String, Option<RefExpr>>,
+    fn_decls: &HashMap<String, FnDecl>,
+    errors: &mut Vec<CheckError>,
+    mode: SolverMode,
+) {
+    // Requires: walk all expressions looking for calls to functions with requires clauses.
+    walk_block_exprs(body, &mut |expr| {
+        if let Expr::FnCall {
+            name, args, span, ..
+        } = expr
+        {
+            if let Some(contracts) = fn_map.get(name) {
+                check_requires_at_call(
+                    name, args, *span, contracts, var_refs, fn_decls, errors, mode,
+                );
+            }
+        }
+    });
+    // Ensures: walk return points.
+    if !ensures.is_empty() {
+        walk_return_points(body, true, &mut |ret_expr, span| {
+            check_ensures_for_return(
+                ret_expr, span, fn_name, ensures, params, fn_decls, errors, mode,
+            );
+        });
+    }
+    // Invariants: walk statements looking for While/For with invariants.
+    walk_block_stmts(body, &mut |stmt| {
+        check_invariant_for_stmt(stmt, fn_name, var_refs, fn_decls, errors, mode);
+    });
+}
+
 // ── Return type refinement checking (#1067 Gap 3) ────────────────────────────
 
 /// Check that every return point in functions with a `return_refinement`
@@ -169,107 +409,12 @@ pub fn check_return_refinements(prog: &Program, errors: &mut Vec<CheckError>, mo
         for fd in fns {
             if let Some(ret_pred) = &fd.return_refinement {
                 let var_refs = build_param_var_refs(&fd.params);
-                check_return_pred_in_block(
-                    &fd.body, &fd.name, ret_pred, &var_refs, &fn_decls, errors, mode,
-                );
-            }
-        }
-    }
-}
-
-fn check_return_pred_in_block(
-    block: &Block,
-    fn_name: &str,
-    ret_pred: &RefExpr,
-    var_refs: &HashMap<String, Option<RefExpr>>,
-    fn_decls: &HashMap<String, FnDecl>,
-    errors: &mut Vec<CheckError>,
-    mode: SolverMode,
-) {
-    for (i, stmt) in block.stmts.iter().enumerate() {
-        match stmt {
-            Stmt::Return {
-                value: Some(ret_expr),
-                span,
-            } => {
-                check_return_pred_for_expr(
-                    ret_expr, *span, fn_name, ret_pred, var_refs, fn_decls, errors, mode,
-                );
-            }
-            Stmt::Return { value: None, .. } => {}
-            Stmt::If { then, else_, .. } => {
-                check_return_pred_in_block(
-                    then, fn_name, ret_pred, var_refs, fn_decls, errors, mode,
-                );
-                if let Some(eb) = else_ {
-                    match eb {
-                        ElseBranch::Block(b) => check_return_pred_in_block(
-                            b, fn_name, ret_pred, var_refs, fn_decls, errors, mode,
-                        ),
-                        ElseBranch::If(s) => check_return_pred_in_stmt(
-                            s, fn_name, ret_pred, var_refs, fn_decls, errors, mode,
-                        ),
-                    }
-                }
-            }
-            Stmt::While { body, .. } => {
-                check_return_pred_in_block(
-                    body, fn_name, ret_pred, var_refs, fn_decls, errors, mode,
-                );
-            }
-            Stmt::For { body, .. } => {
-                check_return_pred_in_block(
-                    body, fn_name, ret_pred, var_refs, fn_decls, errors, mode,
-                );
-            }
-            Stmt::Match { arms, .. } => {
-                for arm in arms {
-                    match &arm.body {
-                        MatchBody::Expr(e) => {
-                            // Match arm expr as tail position (last stmt).
-                            if i + 1 == block.stmts.len() {
-                                let span = e.span();
-                                check_return_pred_for_expr(
-                                    e, span, fn_name, ret_pred, var_refs, fn_decls, errors, mode,
-                                );
-                            }
-                        }
-                        MatchBody::Block(b) => check_return_pred_in_block(
-                            b, fn_name, ret_pred, var_refs, fn_decls, errors, mode,
-                        ),
-                    }
-                }
-            }
-            // Tail expression (implicit return) — last Stmt::Expr in the block.
-            Stmt::Expr { expr, span } if i + 1 == block.stmts.len() => {
-                check_return_pred_for_expr(
-                    expr, *span, fn_name, ret_pred, var_refs, fn_decls, errors, mode,
-                );
-            }
-            _ => {}
-        }
-    }
-}
-
-fn check_return_pred_in_stmt(
-    stmt: &Stmt,
-    fn_name: &str,
-    ret_pred: &RefExpr,
-    var_refs: &HashMap<String, Option<RefExpr>>,
-    fn_decls: &HashMap<String, FnDecl>,
-    errors: &mut Vec<CheckError>,
-    mode: SolverMode,
-) {
-    if let Stmt::If { then, else_, .. } = stmt {
-        check_return_pred_in_block(then, fn_name, ret_pred, var_refs, fn_decls, errors, mode);
-        if let Some(eb) = else_ {
-            match eb {
-                ElseBranch::Block(b) => check_return_pred_in_block(
-                    b, fn_name, ret_pred, var_refs, fn_decls, errors, mode,
-                ),
-                ElseBranch::If(s) => check_return_pred_in_stmt(
-                    s, fn_name, ret_pred, var_refs, fn_decls, errors, mode,
-                ),
+                // match_arm_exprs=false: match arm exprs only checked in tail position.
+                walk_return_points(&fd.body, false, &mut |ret_expr, span| {
+                    check_return_pred_for_expr(
+                        ret_expr, span, &fd.name, ret_pred, &var_refs, &fn_decls, errors, mode,
+                    );
+                });
             }
         }
     }
@@ -356,186 +501,6 @@ fn build_fn_decls_for_solver(prog: &Program) -> HashMap<String, FnDecl> {
 
 // ── requires: call-site checker ───────────────────────────────────────────────
 
-fn check_requires_in_block(
-    block: &Block,
-    fn_map: &HashMap<String, FnContracts>,
-    var_refs: &HashMap<String, Option<RefExpr>>,
-    fn_decls: &HashMap<String, FnDecl>,
-    errors: &mut Vec<CheckError>,
-    mode: SolverMode,
-) {
-    for stmt in &block.stmts {
-        check_requires_in_stmt(stmt, fn_map, var_refs, fn_decls, errors, mode);
-    }
-}
-
-fn check_requires_in_stmt(
-    stmt: &Stmt,
-    fn_map: &HashMap<String, FnContracts>,
-    var_refs: &HashMap<String, Option<RefExpr>>,
-    fn_decls: &HashMap<String, FnDecl>,
-    errors: &mut Vec<CheckError>,
-    mode: SolverMode,
-) {
-    match stmt {
-        Stmt::Let { init, .. } => {
-            check_requires_in_expr(init, fn_map, var_refs, fn_decls, errors, mode);
-        }
-        Stmt::Assign { value, .. } => {
-            check_requires_in_expr(value, fn_map, var_refs, fn_decls, errors, mode);
-        }
-        Stmt::Return { value: Some(e), .. } => {
-            check_requires_in_expr(e, fn_map, var_refs, fn_decls, errors, mode);
-        }
-        Stmt::Return { value: None, .. } => {}
-        Stmt::Expr { expr, .. } => {
-            check_requires_in_expr(expr, fn_map, var_refs, fn_decls, errors, mode);
-        }
-        Stmt::If {
-            cond, then, else_, ..
-        } => {
-            check_requires_in_expr(cond, fn_map, var_refs, fn_decls, errors, mode);
-            check_requires_in_block(then, fn_map, var_refs, fn_decls, errors, mode);
-            if let Some(eb) = else_ {
-                match eb {
-                    ElseBranch::Block(b) => {
-                        check_requires_in_block(b, fn_map, var_refs, fn_decls, errors, mode)
-                    }
-                    ElseBranch::If(s) => {
-                        check_requires_in_stmt(s, fn_map, var_refs, fn_decls, errors, mode)
-                    }
-                }
-            }
-        }
-        Stmt::While { cond, body, .. } => {
-            check_requires_in_expr(cond, fn_map, var_refs, fn_decls, errors, mode);
-            check_requires_in_block(body, fn_map, var_refs, fn_decls, errors, mode);
-        }
-        Stmt::For { iter, body, .. } => {
-            check_requires_in_expr(iter, fn_map, var_refs, fn_decls, errors, mode);
-            check_requires_in_block(body, fn_map, var_refs, fn_decls, errors, mode);
-        }
-        Stmt::Match {
-            scrutinee, arms, ..
-        } => {
-            check_requires_in_expr(scrutinee, fn_map, var_refs, fn_decls, errors, mode);
-            for arm in arms {
-                check_requires_in_match_body(&arm.body, fn_map, var_refs, fn_decls, errors, mode);
-            }
-        }
-    }
-}
-
-fn check_requires_in_expr(
-    expr: &Expr,
-    fn_map: &HashMap<String, FnContracts>,
-    var_refs: &HashMap<String, Option<RefExpr>>,
-    fn_decls: &HashMap<String, FnDecl>,
-    errors: &mut Vec<CheckError>,
-    mode: SolverMode,
-) {
-    match expr {
-        Expr::FnCall {
-            name, args, span, ..
-        } => {
-            // Recurse into arguments first.
-            for arg in args.iter() {
-                check_requires_in_expr(arg, fn_map, var_refs, fn_decls, errors, mode);
-            }
-            // Then check requires clauses for this callee.
-            if let Some(contracts) = fn_map.get(name) {
-                check_requires_at_call(
-                    name, args, *span, contracts, var_refs, fn_decls, errors, mode,
-                );
-            }
-        }
-        Expr::MethodCall { receiver, args, .. } => {
-            check_requires_in_expr(receiver, fn_map, var_refs, fn_decls, errors, mode);
-            for arg in args {
-                check_requires_in_expr(arg, fn_map, var_refs, fn_decls, errors, mode);
-            }
-        }
-        Expr::Block(b) => {
-            check_requires_in_block(b, fn_map, var_refs, fn_decls, errors, mode);
-        }
-        Expr::If {
-            cond, then, else_, ..
-        } => {
-            check_requires_in_expr(cond, fn_map, var_refs, fn_decls, errors, mode);
-            check_requires_in_block(then, fn_map, var_refs, fn_decls, errors, mode);
-            if let Some(e) = else_ {
-                check_requires_in_expr(e, fn_map, var_refs, fn_decls, errors, mode);
-            }
-        }
-        Expr::Borrow { expr, .. }
-        | Expr::Unary { expr, .. }
-        | Expr::Consume { expr, .. }
-        | Expr::Relabel { expr, .. }
-        | Expr::Propagate { expr, .. }
-        | Expr::FieldAccess { expr, .. } => {
-            check_requires_in_expr(expr, fn_map, var_refs, fn_decls, errors, mode);
-        }
-        Expr::Binary { left, right, .. } => {
-            check_requires_in_expr(left, fn_map, var_refs, fn_decls, errors, mode);
-            check_requires_in_expr(right, fn_map, var_refs, fn_decls, errors, mode);
-        }
-        Expr::Construct { fields, .. } => {
-            for (_, e) in fields {
-                check_requires_in_expr(e, fn_map, var_refs, fn_decls, errors, mode);
-            }
-        }
-        Expr::List { elems, .. } | Expr::Set { elems, .. } => {
-            for e in elems {
-                check_requires_in_expr(e, fn_map, var_refs, fn_decls, errors, mode);
-            }
-        }
-        Expr::Map { pairs, .. } => {
-            for (k, v) in pairs {
-                check_requires_in_expr(k, fn_map, var_refs, fn_decls, errors, mode);
-                check_requires_in_expr(v, fn_map, var_refs, fn_decls, errors, mode);
-            }
-        }
-        Expr::Match {
-            scrutinee, arms, ..
-        } => {
-            check_requires_in_expr(scrutinee, fn_map, var_refs, fn_decls, errors, mode);
-            for arm in arms {
-                check_requires_in_match_body(&arm.body, fn_map, var_refs, fn_decls, errors, mode);
-            }
-        }
-        Expr::Lambda { body, .. } => {
-            check_requires_in_expr(body, fn_map, var_refs, fn_decls, errors, mode);
-        }
-        Expr::Spawn { fields, .. } => {
-            for (_, v) in fields {
-                check_requires_in_expr(v, fn_map, var_refs, fn_decls, errors, mode);
-            }
-        }
-        Expr::Select { arms, .. } => {
-            for arm in arms {
-                check_requires_in_expr(&arm.expr, fn_map, var_refs, fn_decls, errors, mode);
-                check_requires_in_block(&arm.body, fn_map, var_refs, fn_decls, errors, mode);
-            }
-        }
-        // Leaves: Literal, Ident, Quantifier — no sub-expressions.
-        Expr::Literal(_, _) | Expr::Ident(_, _) | Expr::Quantifier(..) => {}
-    }
-}
-
-fn check_requires_in_match_body(
-    body: &MatchBody,
-    fn_map: &HashMap<String, FnContracts>,
-    var_refs: &HashMap<String, Option<RefExpr>>,
-    fn_decls: &HashMap<String, FnDecl>,
-    errors: &mut Vec<CheckError>,
-    mode: SolverMode,
-) {
-    match body {
-        MatchBody::Expr(e) => check_requires_in_expr(e, fn_map, var_refs, fn_decls, errors, mode),
-        MatchBody::Block(b) => check_requires_in_block(b, fn_map, var_refs, fn_decls, errors, mode),
-    }
-}
-
 /// Check all `requires` clauses for a single call site.
 #[allow(clippy::too_many_arguments)]
 fn check_requires_at_call(
@@ -585,111 +550,6 @@ fn check_requires_at_call(
 }
 
 // ── ensures: return-point checker ────────────────────────────────────────────
-
-fn check_ensures_in_block(
-    block: &Block,
-    fn_name: &str,
-    ensures: &[Expr],
-    params: &[Param],
-    fn_decls: &HashMap<String, FnDecl>,
-    errors: &mut Vec<CheckError>,
-    mode: SolverMode,
-) {
-    for (i, stmt) in block.stmts.iter().enumerate() {
-        match stmt {
-            Stmt::Return {
-                value: Some(ret_expr),
-                span,
-            } => {
-                check_ensures_for_return(
-                    ret_expr, *span, fn_name, ensures, params, fn_decls, errors, mode,
-                );
-            }
-            Stmt::Return { value: None, .. } => {
-                // `return;` returns Unit — nothing to check against ensures.
-            }
-            Stmt::If { then, else_, .. } => {
-                check_ensures_in_block(then, fn_name, ensures, params, fn_decls, errors, mode);
-                if let Some(eb) = else_ {
-                    match eb {
-                        ElseBranch::Block(b) => check_ensures_in_block(
-                            b, fn_name, ensures, params, fn_decls, errors, mode,
-                        ),
-                        ElseBranch::If(s) => check_ensures_in_stmt(
-                            s, fn_name, ensures, params, fn_decls, errors, mode,
-                        ),
-                    }
-                }
-            }
-            Stmt::While { body, .. } => {
-                check_ensures_in_block(body, fn_name, ensures, params, fn_decls, errors, mode);
-            }
-            Stmt::For { body, .. } => {
-                check_ensures_in_block(body, fn_name, ensures, params, fn_decls, errors, mode);
-            }
-            Stmt::Match { arms, .. } => {
-                for arm in arms {
-                    check_ensures_in_match_body(
-                        &arm.body, fn_name, ensures, params, fn_decls, errors, mode,
-                    );
-                }
-            }
-            // Tail expression (implicit return) — last Stmt::Expr in the block.
-            Stmt::Expr { expr, span } if i + 1 == block.stmts.len() => {
-                check_ensures_for_return(
-                    expr, *span, fn_name, ensures, params, fn_decls, errors, mode,
-                );
-            }
-            _ => {}
-        }
-    }
-}
-
-fn check_ensures_in_stmt(
-    stmt: &Stmt,
-    fn_name: &str,
-    ensures: &[Expr],
-    params: &[Param],
-    fn_decls: &HashMap<String, FnDecl>,
-    errors: &mut Vec<CheckError>,
-    mode: SolverMode,
-) {
-    // Recursion helper for else-if chains.
-    if let Stmt::If { then, else_, .. } = stmt {
-        check_ensures_in_block(then, fn_name, ensures, params, fn_decls, errors, mode);
-        if let Some(eb) = else_ {
-            match eb {
-                ElseBranch::Block(b) => {
-                    check_ensures_in_block(b, fn_name, ensures, params, fn_decls, errors, mode)
-                }
-                ElseBranch::If(s) => {
-                    check_ensures_in_stmt(s, fn_name, ensures, params, fn_decls, errors, mode)
-                }
-            }
-        }
-    }
-}
-
-fn check_ensures_in_match_body(
-    body: &MatchBody,
-    fn_name: &str,
-    ensures: &[Expr],
-    params: &[Param],
-    fn_decls: &HashMap<String, FnDecl>,
-    errors: &mut Vec<CheckError>,
-    mode: SolverMode,
-) {
-    match body {
-        MatchBody::Block(b) => {
-            check_ensures_in_block(b, fn_name, ensures, params, fn_decls, errors, mode)
-        }
-        MatchBody::Expr(e) => {
-            // MatchBody::Expr is a tail expression — treated as a return point.
-            let span = e.span();
-            check_ensures_for_return(e, span, fn_name, ensures, params, fn_decls, errors, mode);
-        }
-    }
-}
 
 /// Check all `ensures` clauses against a single return expression.
 ///
@@ -1091,21 +951,12 @@ fn check_multi_param_requires_literal(
 
 // ── Phase 3: invariant checker ────────────────────────────────────────────────
 
-/// Walk a block and check every `while` loop's invariants at loop entry.
-fn check_invariants_in_block(
-    block: &Block,
-    fn_name: &str,
-    var_refs: &HashMap<String, Option<RefExpr>>,
-    fn_decls: &HashMap<String, FnDecl>,
-    errors: &mut Vec<CheckError>,
-    mode: SolverMode,
-) {
-    for stmt in &block.stmts {
-        check_invariants_in_stmt(stmt, fn_name, var_refs, fn_decls, errors, mode);
-    }
-}
-
-fn check_invariants_in_stmt(
+/// Check invariant and decreases clauses for a single While or For statement.
+///
+/// Called as a visitor from `walk_block_stmts`; the walker handles recursion
+/// into child blocks.
+#[allow(clippy::too_many_arguments)]
+fn check_invariant_for_stmt(
     stmt: &Stmt,
     fn_name: &str,
     var_refs: &HashMap<String, Option<RefExpr>>,
@@ -1122,21 +973,16 @@ fn check_invariants_in_stmt(
             ..
         } => {
             for inv_expr in invariants {
-                // Expressions the solver can't handle fall back to RuntimeCheck.
                 let Some(inv_pred) = expr_to_ref_expr_ext(inv_expr, *span) else {
                     continue;
                 };
                 check_invariant_at_entry(
                     fn_name, &inv_pred, var_refs, fn_decls, errors, *span, mode,
                 );
-                // Phase 5: also verify the invariant is preserved across iterations.
                 check_invariant_preserved(
                     fn_name, &inv_pred, body, var_refs, fn_decls, errors, *span, mode,
                 );
             }
-            // Phase 5: verify the decreases measure.
-            // Expressions that can't be converted to RefExpr (e.g. method calls) fall back
-            // to RuntimeCheck — no static verification, but the loop body is never lost.
             if let Some(dec_expr) = decreases {
                 if let Some(dec_ref) = expr_to_ref_expr_ext(dec_expr, *span) {
                     check_decreases_at_entry(
@@ -1147,21 +993,6 @@ fn check_invariants_in_stmt(
                     );
                 }
             }
-            // Recurse into the body for nested loops.
-            check_invariants_in_block(body, fn_name, var_refs, fn_decls, errors, mode);
-        }
-        Stmt::If { then, else_, .. } => {
-            check_invariants_in_block(then, fn_name, var_refs, fn_decls, errors, mode);
-            if let Some(eb) = else_ {
-                match eb {
-                    ElseBranch::Block(b) => {
-                        check_invariants_in_block(b, fn_name, var_refs, fn_decls, errors, mode)
-                    }
-                    ElseBranch::If(s) => {
-                        check_invariants_in_stmt(s, fn_name, var_refs, fn_decls, errors, mode)
-                    }
-                }
-            }
         }
         Stmt::For {
             invariants,
@@ -1170,29 +1001,15 @@ fn check_invariants_in_stmt(
             ..
         } => {
             for inv_expr in invariants {
-                // Expressions the solver can't handle fall back to RuntimeCheck.
                 let Some(inv_pred) = expr_to_ref_expr_ext(inv_expr, *span) else {
                     continue;
                 };
                 check_invariant_at_entry(
                     fn_name, &inv_pred, var_refs, fn_decls, errors, *span, mode,
                 );
-                // Phase 5: also verify the invariant is preserved across iterations.
                 check_invariant_preserved(
                     fn_name, &inv_pred, body, var_refs, fn_decls, errors, *span, mode,
                 );
-            }
-            // Recurse into the body for nested loops.
-            check_invariants_in_block(body, fn_name, var_refs, fn_decls, errors, mode);
-        }
-        Stmt::Match { arms, .. } => {
-            for arm in arms {
-                match &arm.body {
-                    MatchBody::Block(b) => {
-                        check_invariants_in_block(b, fn_name, var_refs, fn_decls, errors, mode)
-                    }
-                    MatchBody::Expr(_) => {}
-                }
             }
         }
         _ => {}
@@ -1682,17 +1499,25 @@ fn check_actor_behavior_contracts(
 ) {
     for method in &ad.methods {
         let var_refs = build_param_var_refs(&method.params);
-        check_requires_in_block(&method.body, fn_map, &var_refs, fn_decls, errors, mode);
+        // Requires: walk all expressions looking for calls with requires clauses.
+        walk_block_exprs(&method.body, &mut |expr| {
+            if let Expr::FnCall {
+                name, args, span, ..
+            } = expr
+            {
+                if let Some(contracts) = fn_map.get(name) {
+                    check_requires_at_call(
+                        name, args, *span, contracts, &var_refs, fn_decls, errors, mode,
+                    );
+                }
+            }
+        });
         // Note: `ensures` checking is omitted because `ActorMethod` has no `ensures`
         // field today. If ensures support is added to actor methods, wire it in here.
-        check_invariants_in_block(
-            &method.body,
-            &method.name,
-            &var_refs,
-            fn_decls,
-            errors,
-            mode,
-        );
+        // Invariants: walk statements looking for While/For with invariants.
+        walk_block_stmts(&method.body, &mut |stmt| {
+            check_invariant_for_stmt(stmt, &method.name, &var_refs, fn_decls, errors, mode);
+        });
     }
 }
 
@@ -1713,48 +1538,61 @@ pub fn check_actor_field_refinements(
     }
     let fn_decls = build_fn_decls_for_solver(prog);
 
+    let _ = mode; // Mode is embedded in thread-local CONTRACT_COUNTS.
     for decl in &prog.declarations {
-        match decl {
-            Decl::Fn(fd) => {
-                // Seed var_refs from function parameters so the solver can use
-                // where-refinements on parameter variables as hypotheses.
-                let var_refs = build_param_var_refs(&fd.params);
-                check_spawn_refinements_in_block(
-                    &fd.body,
-                    &actor_fields,
-                    &var_refs,
-                    &fn_decls,
-                    errors,
-                    mode,
-                );
-            }
-            Decl::Impl(impl_d) => {
-                for method in &impl_d.methods {
-                    let var_refs = build_param_var_refs(&method.params);
-                    check_spawn_refinements_in_block(
-                        &method.body,
-                        &actor_fields,
-                        &var_refs,
-                        &fn_decls,
-                        errors,
-                        mode,
-                    );
+        let bodies: Vec<(&Block, HashMap<String, Option<RefExpr>>)> = match decl {
+            Decl::Fn(fd) => vec![(&fd.body, build_param_var_refs(&fd.params))],
+            Decl::Impl(impl_d) => impl_d
+                .methods
+                .iter()
+                .map(|m| (&m.body as &Block, build_param_var_refs(&m.params)))
+                .collect(),
+            Decl::Actor(ad) => ad
+                .methods
+                .iter()
+                .map(|m| (&m.body as &Block, build_param_var_refs(&m.params)))
+                .collect(),
+            _ => vec![],
+        };
+        for (body, var_refs) in &bodies {
+            walk_block_exprs(body, &mut |expr| {
+                check_spawn_refinement_for_expr(expr, &actor_fields, var_refs, &fn_decls, errors);
+            });
+        }
+    }
+}
+
+/// Check a single expression for `Expr::Spawn` field refinement violations.
+fn check_spawn_refinement_for_expr(
+    expr: &Expr,
+    actor_fields: &HashMap<String, Vec<FieldDecl>>,
+    var_refs: &HashMap<String, Option<RefExpr>>,
+    fn_decls: &HashMap<String, FnDecl>,
+    errors: &mut Vec<CheckError>,
+) {
+    if let Expr::Spawn {
+        actor_type,
+        fields,
+        span,
+    } = expr
+    {
+        if let Some(refined_fields) = actor_fields.get(actor_type) {
+            for (init_name, init_expr) in fields {
+                if let Some(field_decl) = refined_fields.iter().find(|f| &f.name == init_name) {
+                    if let Some(pred) = &field_decl.refinement {
+                        let outcome = with_contract_counts(|c| {
+                            check_arg_against_pred_counted(init_expr, pred, var_refs, fn_decls, c)
+                        });
+                        if let RefResult::Failed { counterexample } = outcome {
+                            errors.push(CheckError::RefinementViolated {
+                                pred: format!("{actor_type}.{init_name}: {}", display_pred(pred)),
+                                counterexample,
+                                span: *span,
+                            });
+                        }
+                    }
                 }
             }
-            Decl::Actor(ad) => {
-                for method in &ad.methods {
-                    let var_refs = build_param_var_refs(&method.params);
-                    check_spawn_refinements_in_block(
-                        &method.body,
-                        &actor_fields,
-                        &var_refs,
-                        &fn_decls,
-                        errors,
-                        mode,
-                    );
-                }
-            }
-            _ => {}
         }
     }
 }
@@ -1778,288 +1616,6 @@ fn build_actor_field_map(prog: &Program) -> HashMap<String, Vec<FieldDecl>> {
     map
 }
 
-/// Walk a block recursively, checking `Expr::Spawn` field-init values against
-/// field refinements.
-fn check_spawn_refinements_in_block(
-    block: &Block,
-    actor_fields: &HashMap<String, Vec<FieldDecl>>,
-    var_refs: &HashMap<String, Option<RefExpr>>,
-    fn_decls: &HashMap<String, FnDecl>,
-    errors: &mut Vec<CheckError>,
-    mode: SolverMode,
-) {
-    for stmt in &block.stmts {
-        check_spawn_refinements_in_stmt(stmt, actor_fields, var_refs, fn_decls, errors, mode);
-    }
-}
-
-fn check_spawn_refinements_in_stmt(
-    stmt: &Stmt,
-    actor_fields: &HashMap<String, Vec<FieldDecl>>,
-    var_refs: &HashMap<String, Option<RefExpr>>,
-    fn_decls: &HashMap<String, FnDecl>,
-    errors: &mut Vec<CheckError>,
-    mode: SolverMode,
-) {
-    match stmt {
-        Stmt::Let { init, .. } => {
-            check_spawn_refinements_in_expr(init, actor_fields, var_refs, fn_decls, errors, mode);
-        }
-        Stmt::Assign { value, .. } => {
-            check_spawn_refinements_in_expr(value, actor_fields, var_refs, fn_decls, errors, mode);
-        }
-        Stmt::Return { value: Some(e), .. } => {
-            check_spawn_refinements_in_expr(e, actor_fields, var_refs, fn_decls, errors, mode);
-        }
-        Stmt::Return { value: None, .. } => {}
-        Stmt::Expr { expr, .. } => {
-            check_spawn_refinements_in_expr(expr, actor_fields, var_refs, fn_decls, errors, mode);
-        }
-        Stmt::If {
-            cond, then, else_, ..
-        } => {
-            check_spawn_refinements_in_expr(cond, actor_fields, var_refs, fn_decls, errors, mode);
-            check_spawn_refinements_in_block(then, actor_fields, var_refs, fn_decls, errors, mode);
-            if let Some(eb) = else_ {
-                match eb {
-                    ElseBranch::Block(b) => check_spawn_refinements_in_block(
-                        b,
-                        actor_fields,
-                        var_refs,
-                        fn_decls,
-                        errors,
-                        mode,
-                    ),
-                    ElseBranch::If(s) => check_spawn_refinements_in_stmt(
-                        s,
-                        actor_fields,
-                        var_refs,
-                        fn_decls,
-                        errors,
-                        mode,
-                    ),
-                }
-            }
-        }
-        Stmt::While { cond, body, .. } => {
-            check_spawn_refinements_in_expr(cond, actor_fields, var_refs, fn_decls, errors, mode);
-            check_spawn_refinements_in_block(body, actor_fields, var_refs, fn_decls, errors, mode);
-        }
-        Stmt::For { iter, body, .. } => {
-            check_spawn_refinements_in_expr(iter, actor_fields, var_refs, fn_decls, errors, mode);
-            check_spawn_refinements_in_block(body, actor_fields, var_refs, fn_decls, errors, mode);
-        }
-        Stmt::Match {
-            scrutinee, arms, ..
-        } => {
-            check_spawn_refinements_in_expr(
-                scrutinee,
-                actor_fields,
-                var_refs,
-                fn_decls,
-                errors,
-                mode,
-            );
-            for arm in arms {
-                match &arm.body {
-                    MatchBody::Expr(e) => check_spawn_refinements_in_expr(
-                        e,
-                        actor_fields,
-                        var_refs,
-                        fn_decls,
-                        errors,
-                        mode,
-                    ),
-                    MatchBody::Block(b) => check_spawn_refinements_in_block(
-                        b,
-                        actor_fields,
-                        var_refs,
-                        fn_decls,
-                        errors,
-                        mode,
-                    ),
-                }
-            }
-        }
-    }
-}
-
-fn check_spawn_refinements_in_expr(
-    expr: &Expr,
-    actor_fields: &HashMap<String, Vec<FieldDecl>>,
-    var_refs: &HashMap<String, Option<RefExpr>>,
-    fn_decls: &HashMap<String, FnDecl>,
-    errors: &mut Vec<CheckError>,
-    mode: SolverMode,
-) {
-    match expr {
-        // The key case: actor creation expression.
-        Expr::Spawn {
-            actor_type,
-            fields,
-            span,
-        } => {
-            if let Some(refined_fields) = actor_fields.get(actor_type) {
-                for (init_name, init_expr) in fields {
-                    // Find the matching field declaration (if it has a refinement).
-                    if let Some(field_decl) = refined_fields.iter().find(|f| &f.name == init_name) {
-                        if let Some(pred) = &field_decl.refinement {
-                            let outcome = with_contract_counts(|c| {
-                                check_arg_against_pred_counted(
-                                    init_expr, pred, var_refs, fn_decls, c,
-                                )
-                            });
-                            if let RefResult::Failed { counterexample } = outcome {
-                                errors.push(CheckError::RefinementViolated {
-                                    pred: format!(
-                                        "{actor_type}.{init_name}: {}",
-                                        display_pred(pred)
-                                    ),
-                                    counterexample,
-                                    span: *span,
-                                });
-                            }
-                        }
-                    }
-                }
-            }
-            // Recurse into field-init expressions.
-            for (_, v) in fields {
-                check_spawn_refinements_in_expr(v, actor_fields, var_refs, fn_decls, errors, mode);
-            }
-        }
-        Expr::FnCall { args, .. } => {
-            for arg in args {
-                check_spawn_refinements_in_expr(
-                    arg,
-                    actor_fields,
-                    var_refs,
-                    fn_decls,
-                    errors,
-                    mode,
-                );
-            }
-        }
-        Expr::MethodCall { receiver, args, .. } => {
-            check_spawn_refinements_in_expr(
-                receiver,
-                actor_fields,
-                var_refs,
-                fn_decls,
-                errors,
-                mode,
-            );
-            for arg in args {
-                check_spawn_refinements_in_expr(
-                    arg,
-                    actor_fields,
-                    var_refs,
-                    fn_decls,
-                    errors,
-                    mode,
-                );
-            }
-        }
-        Expr::Block(b) => {
-            check_spawn_refinements_in_block(b, actor_fields, var_refs, fn_decls, errors, mode);
-        }
-        Expr::If {
-            cond, then, else_, ..
-        } => {
-            check_spawn_refinements_in_expr(cond, actor_fields, var_refs, fn_decls, errors, mode);
-            check_spawn_refinements_in_block(then, actor_fields, var_refs, fn_decls, errors, mode);
-            if let Some(e) = else_ {
-                check_spawn_refinements_in_expr(e, actor_fields, var_refs, fn_decls, errors, mode);
-            }
-        }
-        Expr::Binary { left, right, .. } => {
-            check_spawn_refinements_in_expr(left, actor_fields, var_refs, fn_decls, errors, mode);
-            check_spawn_refinements_in_expr(right, actor_fields, var_refs, fn_decls, errors, mode);
-        }
-        Expr::Borrow { expr, .. }
-        | Expr::Unary { expr, .. }
-        | Expr::Consume { expr, .. }
-        | Expr::Relabel { expr, .. }
-        | Expr::Propagate { expr, .. }
-        | Expr::FieldAccess { expr, .. } => {
-            check_spawn_refinements_in_expr(expr, actor_fields, var_refs, fn_decls, errors, mode);
-        }
-        Expr::Construct { fields, .. } => {
-            for (_, e) in fields {
-                check_spawn_refinements_in_expr(e, actor_fields, var_refs, fn_decls, errors, mode);
-            }
-        }
-        Expr::List { elems, .. } | Expr::Set { elems, .. } => {
-            for e in elems {
-                check_spawn_refinements_in_expr(e, actor_fields, var_refs, fn_decls, errors, mode);
-            }
-        }
-        Expr::Map { pairs, .. } => {
-            for (k, v) in pairs {
-                check_spawn_refinements_in_expr(k, actor_fields, var_refs, fn_decls, errors, mode);
-                check_spawn_refinements_in_expr(v, actor_fields, var_refs, fn_decls, errors, mode);
-            }
-        }
-        Expr::Match {
-            scrutinee, arms, ..
-        } => {
-            check_spawn_refinements_in_expr(
-                scrutinee,
-                actor_fields,
-                var_refs,
-                fn_decls,
-                errors,
-                mode,
-            );
-            for arm in arms {
-                match &arm.body {
-                    MatchBody::Expr(e) => check_spawn_refinements_in_expr(
-                        e,
-                        actor_fields,
-                        var_refs,
-                        fn_decls,
-                        errors,
-                        mode,
-                    ),
-                    MatchBody::Block(b) => check_spawn_refinements_in_block(
-                        b,
-                        actor_fields,
-                        var_refs,
-                        fn_decls,
-                        errors,
-                        mode,
-                    ),
-                }
-            }
-        }
-        Expr::Lambda { body, .. } => {
-            check_spawn_refinements_in_expr(body, actor_fields, var_refs, fn_decls, errors, mode);
-        }
-        Expr::Select { arms, .. } => {
-            for arm in arms {
-                check_spawn_refinements_in_expr(
-                    &arm.expr,
-                    actor_fields,
-                    var_refs,
-                    fn_decls,
-                    errors,
-                    mode,
-                );
-                check_spawn_refinements_in_block(
-                    &arm.body,
-                    actor_fields,
-                    var_refs,
-                    fn_decls,
-                    errors,
-                    mode,
-                );
-            }
-        }
-        // Leaves: no sub-expressions to walk.
-        Expr::Literal(_, _) | Expr::Ident(_, _) | Expr::Quantifier(..) => {}
-    }
-}
-
 // ── Struct / enum-variant field refinements (#1067 Gap 1 + Gap 6) ────────────
 
 /// Check that every `TypeName { field: value, … }` struct / enum-variant
@@ -2079,41 +1635,68 @@ pub fn check_struct_field_refinements(
     }
     let fn_decls = build_fn_decls_for_solver(prog);
 
+    let _ = mode; // Mode is embedded in thread-local CONTRACT_COUNTS.
     for decl in &prog.declarations {
-        match decl {
-            Decl::Fn(fd) => {
-                let var_refs = build_param_var_refs(&fd.params);
-                check_construct_refinements_in_block(
-                    &fd.body, &field_map, &var_refs, &fn_decls, errors, mode,
-                );
-            }
-            Decl::Impl(impl_d) => {
-                for method in &impl_d.methods {
-                    let var_refs = build_param_var_refs(&method.params);
-                    check_construct_refinements_in_block(
-                        &method.body,
-                        &field_map,
-                        &var_refs,
-                        &fn_decls,
-                        errors,
-                        mode,
-                    );
+        let bodies: Vec<(&Block, HashMap<String, Option<RefExpr>>)> = match decl {
+            Decl::Fn(fd) => vec![(&fd.body, build_param_var_refs(&fd.params))],
+            Decl::Impl(impl_d) => impl_d
+                .methods
+                .iter()
+                .map(|m| (&m.body as &Block, build_param_var_refs(&m.params)))
+                .collect(),
+            Decl::Actor(ad) => ad
+                .methods
+                .iter()
+                .map(|m| (&m.body as &Block, build_param_var_refs(&m.params)))
+                .collect(),
+            _ => vec![],
+        };
+        for (body, var_refs) in &bodies {
+            walk_block_exprs(body, &mut |expr| {
+                check_construct_refinement_for_expr(expr, &field_map, var_refs, &fn_decls, errors);
+            });
+        }
+    }
+}
+
+/// Check a single expression for `Expr::Construct` field refinement and
+/// invariant violations.
+fn check_construct_refinement_for_expr(
+    expr: &Expr,
+    field_map: &HashMap<String, (Vec<FieldDecl>, Option<RefExpr>)>,
+    var_refs: &HashMap<String, Option<RefExpr>>,
+    fn_decls: &HashMap<String, FnDecl>,
+    errors: &mut Vec<CheckError>,
+) {
+    if let Expr::Construct { name, fields, span } = expr {
+        if let Some((refined_fields, invariant)) = field_map.get(name) {
+            // ── Per-field refinement checks ─────────────────────────────
+            for (init_name, init_expr) in fields {
+                if let Some(field_decl) = refined_fields.iter().find(|f| &f.name == init_name) {
+                    if let Some(pred) = &field_decl.refinement {
+                        let outcome = with_contract_counts(|c| {
+                            check_arg_against_pred_counted(init_expr, pred, var_refs, fn_decls, c)
+                        });
+                        if let RefResult::Failed { counterexample } = outcome {
+                            errors.push(CheckError::RefinementViolated {
+                                pred: format!("{name}.{init_name}: {}", display_pred(pred)),
+                                counterexample,
+                                span: *span,
+                            });
+                        }
+                    }
                 }
             }
-            Decl::Actor(ad) => {
-                for method in &ad.methods {
-                    let var_refs = build_param_var_refs(&method.params);
-                    check_construct_refinements_in_block(
-                        &method.body,
-                        &field_map,
-                        &var_refs,
-                        &fn_decls,
-                        errors,
-                        mode,
-                    );
+            // ── Struct invariant check (Gap 2) ──────────────────────────
+            if let Some(inv) = invariant {
+                if let Some(false) = eval_invariant_with_const_fields(inv, fields) {
+                    errors.push(CheckError::RefinementViolated {
+                        pred: format!("{name}: with invariant {}", display_pred(inv)),
+                        counterexample: None,
+                        span: *span,
+                    });
                 }
             }
-            _ => {}
         }
     }
 }
@@ -2158,225 +1741,6 @@ fn build_struct_field_map(prog: &Program) -> HashMap<String, (Vec<FieldDecl>, Op
         }
     }
     map
-}
-
-fn check_construct_refinements_in_block(
-    block: &Block,
-    field_map: &HashMap<String, (Vec<FieldDecl>, Option<RefExpr>)>,
-    var_refs: &HashMap<String, Option<RefExpr>>,
-    fn_decls: &HashMap<String, FnDecl>,
-    errors: &mut Vec<CheckError>,
-    mode: SolverMode,
-) {
-    for stmt in &block.stmts {
-        check_construct_refinements_in_stmt(stmt, field_map, var_refs, fn_decls, errors, mode);
-    }
-}
-
-fn check_construct_refinements_in_stmt(
-    stmt: &Stmt,
-    field_map: &HashMap<String, (Vec<FieldDecl>, Option<RefExpr>)>,
-    var_refs: &HashMap<String, Option<RefExpr>>,
-    fn_decls: &HashMap<String, FnDecl>,
-    errors: &mut Vec<CheckError>,
-    mode: SolverMode,
-) {
-    match stmt {
-        Stmt::Let { init, .. } => {
-            check_construct_refinements_in_expr(init, field_map, var_refs, fn_decls, errors, mode);
-        }
-        Stmt::Assign { value, .. } => {
-            check_construct_refinements_in_expr(value, field_map, var_refs, fn_decls, errors, mode);
-        }
-        Stmt::Return { value: Some(e), .. } => {
-            check_construct_refinements_in_expr(e, field_map, var_refs, fn_decls, errors, mode);
-        }
-        Stmt::Return { value: None, .. } => {}
-        Stmt::Expr { expr, .. } => {
-            check_construct_refinements_in_expr(expr, field_map, var_refs, fn_decls, errors, mode);
-        }
-        Stmt::If {
-            cond, then, else_, ..
-        } => {
-            check_construct_refinements_in_expr(cond, field_map, var_refs, fn_decls, errors, mode);
-            check_construct_refinements_in_block(then, field_map, var_refs, fn_decls, errors, mode);
-            if let Some(eb) = else_ {
-                match eb {
-                    ElseBranch::Block(b) => check_construct_refinements_in_block(
-                        b, field_map, var_refs, fn_decls, errors, mode,
-                    ),
-                    ElseBranch::If(s) => check_construct_refinements_in_stmt(
-                        s, field_map, var_refs, fn_decls, errors, mode,
-                    ),
-                }
-            }
-        }
-        Stmt::While { cond, body, .. } => {
-            check_construct_refinements_in_expr(cond, field_map, var_refs, fn_decls, errors, mode);
-            check_construct_refinements_in_block(body, field_map, var_refs, fn_decls, errors, mode);
-        }
-        Stmt::For { iter, body, .. } => {
-            check_construct_refinements_in_expr(iter, field_map, var_refs, fn_decls, errors, mode);
-            check_construct_refinements_in_block(body, field_map, var_refs, fn_decls, errors, mode);
-        }
-        Stmt::Match {
-            scrutinee, arms, ..
-        } => {
-            check_construct_refinements_in_expr(
-                scrutinee, field_map, var_refs, fn_decls, errors, mode,
-            );
-            for arm in arms {
-                match &arm.body {
-                    MatchBody::Expr(e) => check_construct_refinements_in_expr(
-                        e, field_map, var_refs, fn_decls, errors, mode,
-                    ),
-                    MatchBody::Block(b) => check_construct_refinements_in_block(
-                        b, field_map, var_refs, fn_decls, errors, mode,
-                    ),
-                }
-            }
-        }
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn check_construct_refinements_in_expr(
-    expr: &Expr,
-    field_map: &HashMap<String, (Vec<FieldDecl>, Option<RefExpr>)>,
-    var_refs: &HashMap<String, Option<RefExpr>>,
-    fn_decls: &HashMap<String, FnDecl>,
-    errors: &mut Vec<CheckError>,
-    mode: SolverMode,
-) {
-    match expr {
-        // The key case: struct or enum-variant construction.
-        Expr::Construct { name, fields, span } => {
-            if let Some((refined_fields, invariant)) = field_map.get(name) {
-                // ── Per-field refinement checks ─────────────────────────────
-                for (init_name, init_expr) in fields {
-                    if let Some(field_decl) = refined_fields.iter().find(|f| &f.name == init_name) {
-                        if let Some(pred) = &field_decl.refinement {
-                            let outcome = with_contract_counts(|c| {
-                                check_arg_against_pred_counted(
-                                    init_expr, pred, var_refs, fn_decls, c,
-                                )
-                            });
-                            if let RefResult::Failed { counterexample } = outcome {
-                                errors.push(CheckError::RefinementViolated {
-                                    pred: format!("{name}.{init_name}: {}", display_pred(pred)),
-                                    counterexample,
-                                    span: *span,
-                                });
-                            }
-                        }
-                    }
-                }
-                // ── Struct invariant check (Gap 2) ──────────────────────────
-                if let Some(inv) = invariant {
-                    if let Some(false) = eval_invariant_with_const_fields(inv, fields) {
-                        errors.push(CheckError::RefinementViolated {
-                            pred: format!("{name}: with invariant {}", display_pred(inv)),
-                            counterexample: None,
-                            span: *span,
-                        });
-                    }
-                }
-            }
-            // Recurse into field-init expressions.
-            for (_, e) in fields {
-                check_construct_refinements_in_expr(e, field_map, var_refs, fn_decls, errors, mode);
-            }
-        }
-        Expr::FnCall { args, .. } => {
-            for arg in args {
-                check_construct_refinements_in_expr(
-                    arg, field_map, var_refs, fn_decls, errors, mode,
-                );
-            }
-        }
-        Expr::MethodCall { receiver, args, .. } => {
-            check_construct_refinements_in_expr(
-                receiver, field_map, var_refs, fn_decls, errors, mode,
-            );
-            for arg in args {
-                check_construct_refinements_in_expr(
-                    arg, field_map, var_refs, fn_decls, errors, mode,
-                );
-            }
-        }
-        Expr::Block(b) => {
-            check_construct_refinements_in_block(b, field_map, var_refs, fn_decls, errors, mode);
-        }
-        Expr::If {
-            cond, then, else_, ..
-        } => {
-            check_construct_refinements_in_expr(cond, field_map, var_refs, fn_decls, errors, mode);
-            check_construct_refinements_in_block(then, field_map, var_refs, fn_decls, errors, mode);
-            if let Some(e) = else_ {
-                check_construct_refinements_in_expr(e, field_map, var_refs, fn_decls, errors, mode);
-            }
-        }
-        Expr::Match {
-            scrutinee, arms, ..
-        } => {
-            check_construct_refinements_in_expr(
-                scrutinee, field_map, var_refs, fn_decls, errors, mode,
-            );
-            for arm in arms {
-                match &arm.body {
-                    MatchBody::Expr(e) => check_construct_refinements_in_expr(
-                        e, field_map, var_refs, fn_decls, errors, mode,
-                    ),
-                    MatchBody::Block(b) => check_construct_refinements_in_block(
-                        b, field_map, var_refs, fn_decls, errors, mode,
-                    ),
-                }
-            }
-        }
-        Expr::Binary { left, right, .. } => {
-            check_construct_refinements_in_expr(left, field_map, var_refs, fn_decls, errors, mode);
-            check_construct_refinements_in_expr(right, field_map, var_refs, fn_decls, errors, mode);
-        }
-        Expr::Borrow { expr, .. }
-        | Expr::Unary { expr, .. }
-        | Expr::Consume { expr, .. }
-        | Expr::Relabel { expr, .. }
-        | Expr::Propagate { expr, .. }
-        | Expr::FieldAccess { expr, .. } => {
-            check_construct_refinements_in_expr(expr, field_map, var_refs, fn_decls, errors, mode);
-        }
-        Expr::List { elems, .. } | Expr::Set { elems, .. } => {
-            for e in elems {
-                check_construct_refinements_in_expr(e, field_map, var_refs, fn_decls, errors, mode);
-            }
-        }
-        Expr::Map { pairs, .. } => {
-            for (k, v) in pairs {
-                check_construct_refinements_in_expr(k, field_map, var_refs, fn_decls, errors, mode);
-                check_construct_refinements_in_expr(v, field_map, var_refs, fn_decls, errors, mode);
-            }
-        }
-        Expr::Lambda { body, .. } => {
-            check_construct_refinements_in_expr(body, field_map, var_refs, fn_decls, errors, mode);
-        }
-        Expr::Spawn { fields, .. } => {
-            for (_, v) in fields {
-                check_construct_refinements_in_expr(v, field_map, var_refs, fn_decls, errors, mode);
-            }
-        }
-        Expr::Select { arms, .. } => {
-            for arm in arms {
-                check_construct_refinements_in_expr(
-                    &arm.expr, field_map, var_refs, fn_decls, errors, mode,
-                );
-                check_construct_refinements_in_block(
-                    &arm.body, field_map, var_refs, fn_decls, errors, mode,
-                );
-            }
-        }
-        // Leaves — no sub-expressions to walk.
-        Expr::Literal(_, _) | Expr::Ident(_, _) | Expr::Quantifier(..) => {}
-    }
 }
 
 // ── Struct invariant evaluation with constant field values (#1067 Gap 2) ─────
