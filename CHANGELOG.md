@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.158.1] - 2026-05-27
+
+### Added
+- #1059 — `pkg/zmq/tests/zmtp_handshake_integration.mvl` — ZMTP 3.x handshake integration tests (4/4 passing) with actor-based TCP loopback on ephemeral ports. Tests REQ/REP, PUB/SUB, PUSH/PULL socket type detection and full message exchange.
+- `pkg/zmq/Makefile` — `make test-integration` target with progress output, dependency on `.mvl/pkg/zmq` symlink, and timeout handling.
+- `pkg/zmq/tests/.gitignore` — Exclude `.mvl/` symlink directory.
+
+### Fixed
+- #1048 fallout — `tests/stdlib/net_basic.mvl` — Remove `concurrently {}` keyword after #1048 language change. Actor spawn and `tcp_accept` work without explicit concurrency scoping; runtime handles actor draining at process exit.
+
+### Closed
+- #1060 — Mock TcpStream not feasible in MVL (opaque types, no traits, no monadic builders).
+
 ## [0.158.0] - 2026-05-26
 
 ### Changed
