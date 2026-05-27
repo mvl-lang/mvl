@@ -1,5 +1,5 @@
 # pkg/zmq — ZeroMQ-style messaging patterns in pure MVL
-.PHONY: help guard-mvl check lint test test-integration prove assurance clean
+.PHONY: help guard-mvl check lint test test-integration sync-check prove assurance clean
 
 .DEFAULT_GOAL := help
 
@@ -54,6 +54,9 @@ test-integration: guard-mvl $(DIR)tests/.mvl/pkg/zmq ## Run ZMTP integration tes
 		printf "  \033[31m✗  pkg.zmq: integration FAIL ($$PASS passed, $$FAIL failed)\033[0m\n\n"; exit 1; \
 	fi
 
+sync-check: ## Check test re-declarations match source signatures (workaround #96)
+	@bash $(DIR)tools/check-sync.sh
+
 prove: guard-mvl ## Prove correctness: assurance report with prover verdicts
 	@$(MVL) assurance $(DIR)src/ --verbose 2>&1; RC=$$?; \
 	echo ""; \
@@ -72,7 +75,7 @@ coverage: guard-mvl ## Run tests with behavioral branch coverage report
 		printf "  \033[31m✗  pkg.zmq: coverage FAIL\033[0m\n\n"; exit 1; \
 	fi
 
-assurance: check lint prove coverage ## Full pipeline: check + lint + prove + coverage (coverage runs tests)
+assurance: check lint sync-check prove coverage ## Full pipeline: check + lint + sync-check + prove + coverage
 
 clean: ## Remove build artifacts
 	rm -rf $(TMPDIR)mvl_build_zmq
