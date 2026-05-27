@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.161.1] - 2026-05-27
+
+### Fixed
+- #1068 — LinearTypeBareBind check replaced with move semantics per ADR-0029:
+  - `let b: T = a` for non-iso linear types is now a valid move (marks `a` unavailable)
+  - `consume()` is only required for `iso` capability transfers
+  - Bzip example smoke test failures (`bwt.mvl`, `huffman.mvl`, `bitstream.mvl`) fixed
+  - LinearShadowDrop false positives eliminated for builder/accumulator patterns
+
 ## [0.161.0] - 2026-05-27
 
 ### Added
