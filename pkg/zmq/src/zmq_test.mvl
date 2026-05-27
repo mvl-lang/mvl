@@ -2,7 +2,8 @@
 //
 // All functions here are pure (no effects, no network).
 //
-// Types and helpers are re-declared locally (workaround: #96).
+// Non-pub helpers are re-declared locally (visibility constraint).
+// Pub items could use imports — see #1061.
 // Assurance note: 0 extern blocks.
 
 // ── Type re-declarations ──────────────────────────────────────────────────────
