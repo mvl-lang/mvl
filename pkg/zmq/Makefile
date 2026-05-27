@@ -33,21 +33,29 @@ $(DIR)tests/.mvl/pkg/zmq:
 	@ln -sfn $(abspath $(DIR)) $(DIR)tests/.mvl/pkg/zmq
 
 test-integration: guard-mvl $(DIR)tests/.mvl/pkg/zmq ## Run ZMTP integration tests (actor-based loopback)
-	@echo "Running ZMTP integration tests..."
-	@cd $(DIR)tests && $(abspath $(MVL)) check zmtp_handshake_integration.mvl > /dev/null 2>&1 || { \
-		echo "  ERROR: type-check failed"; \
+	@printf "Running ZMTP integration tests (type-check → transpile → compile → run)...\n"
+	@START=$$(date +%s); \
+	printf "  [1/3] Type-checking zmtp_handshake_integration.mvl..."; \
+	cd $(DIR)tests && $(abspath $(MVL)) check zmtp_handshake_integration.mvl > /dev/null 2>&1; \
+	if [ $$? -ne 0 ]; then \
+		printf " \033[31mFAIL\033[0m\n"; \
 		cd $(DIR)tests && $(abspath $(MVL)) check zmtp_handshake_integration.mvl; \
 		exit 1; \
-	}
-	@OUT=$$(cd $(DIR)tests && timeout 30 $(abspath $(MVL)) run zmtp_handshake_integration.mvl 2>&1); RC=$$?; \
+	fi; \
+	printf " ok\n"; \
+	printf "  [2/3] Transpiling + compiling (this takes a few seconds)..."; \
+	OUT=$$(cd $(DIR)tests && timeout 30 $(abspath $(MVL)) run zmtp_handshake_integration.mvl 2>&1); RC=$$?; \
+	printf " done\n"; \
+	printf "  [3/3] Results:\n"; \
+	echo "$$OUT" | grep -E "ok$$|FAIL" | sed 's/^/         /'; \
+	END=$$(date +%s); ELAPSED=$$((END - START)); \
+	echo ""; \
 	PASS=$$(echo "$$OUT" | grep -c " ok$$"); \
 	FAIL=$$(echo "$$OUT" | grep -c "FAIL"); \
-	echo "$$OUT" | grep -E "ok$$|FAIL" | sed 's/^/  /'; \
-	echo ""; \
 	if [ $$FAIL -eq 0 ] && [ $$PASS -ge 4 ]; then \
-		printf "  \033[32m✓  pkg.zmq: integration PASS ($$PASS/4)\033[0m\n\n"; \
+		printf "  \033[32m✓  pkg.zmq: integration PASS ($$PASS/4) in $${ELAPSED}s\033[0m\n\n"; \
 	else \
-		printf "  \033[31m✗  pkg.zmq: integration FAIL ($$PASS passed, $$FAIL failed)\033[0m\n\n"; exit 1; \
+		printf "  \033[31m✗  pkg.zmq: integration FAIL ($$PASS passed, $$FAIL failed) in $${ELAPSED}s\033[0m\n\n"; exit 1; \
 	fi
 
 prove: guard-mvl ## Prove correctness: assurance report with prover verdicts
