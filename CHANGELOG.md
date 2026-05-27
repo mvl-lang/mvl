@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.159.0] - 2026-05-27
+
+### Added
+- #1067 — Closed 6 Req 10 refinement prover gaps:
+  - Gap 1: Struct field `where` refinement violation checking at construction sites
+  - Gap 2: Struct `with invariant` violation checking at construction sites
+  - Gap 3: Return type refinement checking on explicit returns and tail expressions
+  - Gap 4: Let binding initialiser refinement checking against declared type aliases
+  - Gap 5: Method call argument refinement checking against parameter predicates
+  - Gap 6: Enum variant struct field `where` refinement violation checking at construction sites
+- Test suite: 6 new requirement tests validating compile-time violation detection for each gap
+
 ## [0.158.1] - 2026-05-27
 
 ### Added
