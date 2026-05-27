@@ -9,7 +9,7 @@ date: 2026-04-14
 
 The MVL data race freedom checker covers Requirement 9 (Data Race Freedom) from ADR-0001.
 This spec describes the Phase 3 partial proof.  The full architectural proof requires the
-actor model (Phase 6).
+actor model (Phase 8, see ADR-0029).
 
 ## Philosophy
 
@@ -46,7 +46,7 @@ Phase 3 proves race freedom at the capability level:
 - `iso` isolation: no two live references to the same isolated object.
 - Function-level classification: functions with no `ref` parameters are provably race-free.
 
-Phase 6 (actor model) will extend this to:
+Phase 8 (actor model, ADR-0029) will extend this to:
 - Structured concurrency lifetimes bounding task lifetimes.
 - Message-passing semantics replacing shared-state access.
 - Full architectural proof that no shared mutable state exists across actor boundaries.
@@ -155,19 +155,19 @@ evidence noting that the full actor model proof is pending Phase 6.  When some f
 ### L1: Function-Call iso Transfer
 
 Passing an `iso` variable to a non-`send` function call without `consume()` is not yet detected
-as aliasing.  This requires interprocedural capability analysis (Phase 6).
+as aliasing.  This requires interprocedural capability analysis (Phase 8, ADR-0029).
 
 ### L2: Closure iso Capture
 
 The MVL parser does not yet support lambda surface syntax.  The aliasing checker
 recurses into `Expr::Lambda` bodies (verified via AST-level unit tests), so the
 logic is correct, but it cannot be exercised from source strings until lambda
-parsing is implemented (Phase 6 / future sprint).
+parsing is implemented (Phase 8 / future sprint).
 
 ### L3: Struct Field iso Tracking
 
 An `iso` value stored in a struct field and later accessed via field access is not tracked.
-Full field-capability propagation requires a dependent type system extension (Phase 6).
+Full field-capability propagation requires a dependent type system extension (Phase 8, ADR-0029).
 
 ### L4: Multiple Alias Sites
 

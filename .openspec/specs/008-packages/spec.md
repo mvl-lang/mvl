@@ -1,5 +1,9 @@
 # Spec 008: Extended Package Model
 
+> **Status: Aspirational** — No requirements in this spec are implemented yet.
+> All implementation and test references below are planned, not current.
+> This spec describes the target package model (Phase 9+).
+
 **ADR:** [0012 — Extended Package Model](../adr/0012-extended-package-model.md)
 
 ---
