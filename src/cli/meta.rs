@@ -55,7 +55,10 @@ pub(super) fn cmd_pkg_add(args: &[String]) {
     });
     let tag = args.get(3).map(|s| s.as_str());
     let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    packages::cmd_add(pkg_id, tag, &project_root);
+    if let Err(e) = packages::cmd_add(pkg_id, tag, &project_root) {
+        eprintln!("error: {e}");
+        process::exit(1);
+    }
 }
 
 pub(super) fn cmd_init() {

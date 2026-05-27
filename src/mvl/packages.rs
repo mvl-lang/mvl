@@ -20,11 +20,60 @@ use fetch::{fetch_package, pkg_cache_dir, resolve_pkg_dir, verify_hash};
 use lock::LockFile;
 use manifest::{DepSpec, Manifest};
 use std::path::{Path, PathBuf};
-use std::process;
 
 // ── Public re-exports for use by the resolver ─────────────────────────────────
 
 pub use fetch::{local_override_dir, pkg_cache_root};
+
+// ── Unified error type ───────────────────────────────────────────────────────
+
+/// Errors that can occur during package operations.
+#[derive(Debug)]
+pub enum PackageError {
+    Fetch(fetch::FetchError),
+    Manifest(manifest::ManifestError),
+    Lock(lock::LockError),
+    /// A required field is missing from a data structure (e.g. no git URL in lock entry).
+    MissingData(String),
+    /// A write to the filesystem failed.
+    Io(String, String),
+    /// An HTTP-safety or input-validation error.
+    InvalidInput(String),
+    /// No matching version/tag was found.
+    NoVersion(String),
+}
+
+impl From<fetch::FetchError> for PackageError {
+    fn from(e: fetch::FetchError) -> Self {
+        PackageError::Fetch(e)
+    }
+}
+
+impl From<manifest::ManifestError> for PackageError {
+    fn from(e: manifest::ManifestError) -> Self {
+        PackageError::Manifest(e)
+    }
+}
+
+impl From<lock::LockError> for PackageError {
+    fn from(e: lock::LockError) -> Self {
+        PackageError::Lock(e)
+    }
+}
+
+impl std::fmt::Display for PackageError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PackageError::Fetch(e) => write!(f, "{e}"),
+            PackageError::Manifest(e) => write!(f, "{e}"),
+            PackageError::Lock(e) => write!(f, "{e}"),
+            PackageError::MissingData(msg) => write!(f, "{msg}"),
+            PackageError::Io(path, e) => write!(f, "IO error at {path}: {e}"),
+            PackageError::InvalidInput(msg) => write!(f, "{msg}"),
+            PackageError::NoVersion(msg) => write!(f, "{msg}"),
+        }
+    }
+}
 
 // ── CLI entry points ──────────────────────────────────────────────────────────
 
@@ -32,11 +81,12 @@ pub use fetch::{local_override_dir, pkg_cache_root};
 ///
 /// Fetches a package from a git URL, adds it to `mvl.toml` and `mvl.lock`.
 /// If `tag` is omitted, queries the git remote for the latest semver tag.
-pub fn cmd_add(pkg_id: &str, tag: Option<&str>, project_root: &Path) {
+pub fn cmd_add(pkg_id: &str, tag: Option<&str>, project_root: &Path) -> Result<(), PackageError> {
     // Reject plain-HTTP URLs — they are vulnerable to MITM at fetch time.
     if pkg_id.starts_with("http://") {
-        eprintln!("error: plain http:// is not allowed; use https:// to prevent MITM attacks");
-        process::exit(1);
+        return Err(PackageError::InvalidInput(
+            "plain http:// is not allowed; use https:// to prevent MITM attacks".to_string(),
+        ));
     }
 
     // Derive the git URL from the pkg-id (strip optional leading scheme)
@@ -54,14 +104,10 @@ pub fn cmd_add(pkg_id: &str, tag: Option<&str>, project_root: &Path) {
         Some(t) => t.to_string(),
         None => {
             eprintln!("Querying tags for {git_url}...");
-            let tags = fetch::list_git_tags(&git_url).unwrap_or_else(|e| {
-                eprintln!("error: {e}");
-                process::exit(1);
-            });
-            latest_semver_tag(&tags).unwrap_or_else(|| {
-                eprintln!("error: no semver tags found for {git_url}");
-                process::exit(1);
-            })
+            let tags = fetch::list_git_tags(&git_url)?;
+            latest_semver_tag(&tags).ok_or_else(|| {
+                PackageError::NoVersion(format!("no semver tags found for {git_url}"))
+            })?
         }
     };
 
@@ -71,18 +117,12 @@ pub fn cmd_add(pkg_id: &str, tag: Option<&str>, project_root: &Path) {
         .to_string();
     println!("Fetching {pkg_name} @ {resolved_tag}...");
 
-    let locked = fetch_package(&pkg_name, &git_url, &resolved_tag).unwrap_or_else(|e| {
-        eprintln!("error: {e}");
-        process::exit(1);
-    });
+    let locked = fetch_package(&pkg_name, &git_url, &resolved_tag)?;
 
     // Update or create mvl.toml
     let manifest_path = project_root.join("mvl.toml");
     let mut manifest = if manifest_path.exists() {
-        Manifest::load(project_root).unwrap_or_else(|e| {
-            eprintln!("error reading mvl.toml: {e}");
-            process::exit(1);
-        })
+        Manifest::load(project_root)?
     } else {
         let name = project_root
             .file_name()
@@ -99,20 +139,16 @@ pub fn cmd_add(pkg_id: &str, tag: Option<&str>, project_root: &Path) {
         },
     );
 
-    std::fs::write(&manifest_path, manifest.to_toml()).unwrap_or_else(|e| {
-        eprintln!("error writing mvl.toml: {e}");
-        process::exit(1);
-    });
+    std::fs::write(&manifest_path, manifest.to_toml())
+        .map_err(|e| PackageError::Io(manifest_path.display().to_string(), e.to_string()))?;
 
     // Update mvl.lock
     let mut lockfile = LockFile::load_or_empty(project_root);
     lockfile.upsert(locked);
-    lockfile.write(project_root).unwrap_or_else(|e| {
-        eprintln!("error writing mvl.lock: {e}");
-        process::exit(1);
-    });
+    lockfile.write(project_root)?;
 
     println!("Added {pkg_name} {version_str} to mvl.toml and mvl.lock");
+    Ok(())
 }
 
 /// `mvl install`
@@ -122,16 +158,12 @@ pub fn cmd_add(pkg_id: &str, tag: Option<&str>, project_root: &Path) {
 /// 2. For each package, checks if it is already cached
 /// 3. If not cached, fetches it from its git URL
 /// 4. Verifies the hash matches what's in the lock file (fails hard on mismatch)
-pub fn cmd_install(project_root: &Path) {
-    let lockfile = LockFile::load(project_root).unwrap_or_else(|e| {
-        eprintln!("error: {e}");
-        eprintln!("hint: run 'mvl add <package>' to create mvl.lock");
-        process::exit(1);
-    });
+pub fn cmd_install(project_root: &Path) -> Result<(), PackageError> {
+    let lockfile = LockFile::load(project_root)?;
 
     if lockfile.packages.is_empty() {
         println!("No dependencies in mvl.lock.");
-        return;
+        return Ok(());
     }
 
     let mut installed = 0usize;
@@ -141,39 +173,32 @@ pub fn cmd_install(project_root: &Path) {
         let dest = pkg_cache_dir(&pkg.name, &pkg.version);
         if dest.exists() {
             // Verify hash even for cached packages
-            verify_hash(&dest, &pkg.hash).unwrap_or_else(|e| {
-                eprintln!("error: {e}");
-                process::exit(1);
-            });
+            verify_hash(&dest, &pkg.hash)?;
             cached += 1;
             continue;
         }
 
         println!("Installing {} {}...", pkg.name, pkg.version);
-        let git_url = pkg.git.as_deref().unwrap_or_else(|| {
-            eprintln!(
-                "error: no git URL in mvl.lock for '{}' — cannot install",
+        let git_url = pkg.git.as_deref().ok_or_else(|| {
+            PackageError::MissingData(format!(
+                "no git URL in mvl.lock for '{}' — cannot install",
                 pkg.name
-            );
-            process::exit(1);
-        });
+            ))
+        })?;
         // Always clone by version tag.  The `commit` field is informational
         // only — `git clone --branch` does not accept raw SHAs.
         let tag = format!("v{}", pkg.version);
         let tag = tag.as_str();
 
-        let locked = fetch_package(&pkg.name, git_url, tag).unwrap_or_else(|e| {
-            eprintln!("error fetching {}: {e}", pkg.name);
-            process::exit(1);
-        });
+        let locked = fetch_package(&pkg.name, git_url, tag)?;
 
         // Verify hash after fetch
         if locked.hash != pkg.hash {
-            eprintln!(
-                "error: hash mismatch for {} after fetch:\n  expected: {}\n  actual:   {}",
-                pkg.name, pkg.hash, locked.hash
-            );
-            process::exit(1);
+            return Err(PackageError::Fetch(fetch::FetchError::HashMismatch {
+                path: pkg.name.clone(),
+                expected: pkg.hash.clone(),
+                actual: locked.hash,
+            }));
         }
 
         installed += 1;
@@ -183,21 +208,19 @@ pub fn cmd_install(project_root: &Path) {
         "Installed {} package(s), {} already cached.",
         installed, cached
     );
+    Ok(())
 }
 
 /// `mvl update`
 ///
 /// Re-resolves versions for all git dependencies, fetches any newer tags,
 /// and rewrites `mvl.lock` with updated versions and hashes.
-pub fn cmd_update(project_root: &Path) {
-    let manifest = Manifest::load(project_root).unwrap_or_else(|e| {
-        eprintln!("error reading mvl.toml: {e}");
-        process::exit(1);
-    });
+pub fn cmd_update(project_root: &Path) -> Result<(), PackageError> {
+    let manifest = Manifest::load(project_root)?;
 
     if manifest.dependencies.is_empty() {
         println!("No dependencies in mvl.toml.");
-        return;
+        return Ok(());
     }
 
     let mut lockfile = LockFile::load_or_empty(project_root);
@@ -216,16 +239,11 @@ pub fn cmd_update(project_root: &Path) {
         };
 
         println!("Checking {name}...");
-        let tags = fetch::list_git_tags(&git_url).unwrap_or_else(|e| {
-            eprintln!("error: {e}");
-            process::exit(1);
-        });
+        let tags = fetch::list_git_tags(&git_url)?;
 
         // Find the latest tag compatible with the current constraint
-        let latest = latest_semver_tag(&tags).unwrap_or_else(|| {
-            eprintln!("error: no semver tags found for {name}");
-            process::exit(1);
-        });
+        let latest = latest_semver_tag(&tags)
+            .ok_or_else(|| PackageError::NoVersion(format!("no semver tags found for {name}")))?;
 
         let current_version = lockfile
             .get(name)
@@ -239,31 +257,28 @@ pub fn cmd_update(project_root: &Path) {
         }
 
         println!("  {name}: {current_version} → {latest_version}");
-        let locked = fetch_package(name, &git_url, &latest).unwrap_or_else(|e| {
-            eprintln!("error: {e}");
-            process::exit(1);
-        });
+        let locked = fetch_package(name, &git_url, &latest)?;
         lockfile.upsert(locked);
         updated += 1;
     }
 
-    lockfile.write(project_root).unwrap_or_else(|e| {
-        eprintln!("error writing mvl.lock: {e}");
-        process::exit(1);
-    });
+    lockfile.write(project_root)?;
 
     if updated > 0 {
         println!("Updated {updated} package(s).");
     } else {
         println!("All packages are up to date.");
     }
+    Ok(())
 }
 
 /// Ensure all dependencies in `mvl.toml` are fetched before build.
 ///
 /// Called by `mvl build` before transpilation (ADR-0012 Build Integration step 2).
 /// Returns a map from package name → source directory.
-pub fn ensure_dependencies(project_root: &Path) -> std::collections::HashMap<String, PathBuf> {
+pub fn ensure_dependencies(
+    project_root: &Path,
+) -> Result<std::collections::HashMap<String, PathBuf>, PackageError> {
     let manifest = match Manifest::load(project_root) {
         Ok(m) => m,
         // No mvl.toml → no dependencies.  Emit a warning for parse/IO errors
@@ -274,59 +289,51 @@ pub fn ensure_dependencies(project_root: &Path) -> std::collections::HashMap<Str
                 ManifestError::Io(_, _) => {} // file absent is fine
                 other => eprintln!("warning: could not read mvl.toml: {other}"),
             }
-            return std::collections::HashMap::new();
+            return Ok(std::collections::HashMap::new());
         }
     };
 
     if manifest.dependencies.is_empty() {
-        return std::collections::HashMap::new();
+        return Ok(std::collections::HashMap::new());
     }
 
-    let lockfile = LockFile::load(project_root).unwrap_or_else(|e| {
-        eprintln!("error reading mvl.lock: {e}");
-        eprintln!("hint: run 'mvl install' to create mvl.lock");
-        process::exit(1);
-    });
+    let lockfile = LockFile::load(project_root)?;
 
     let mut pkg_dirs = std::collections::HashMap::new();
 
     for name in manifest.dependencies.keys() {
-        let pinned = lockfile.get(name).unwrap_or_else(|| {
-            eprintln!("error: '{name}' in mvl.toml is not in mvl.lock — run 'mvl install'");
-            process::exit(1);
-        });
+        let pinned = lockfile.get(name).ok_or_else(|| {
+            PackageError::MissingData(format!(
+                "'{name}' in mvl.toml is not in mvl.lock — run 'mvl install'"
+            ))
+        })?;
 
         // Try local override first, then global cache
         let dir = match resolve_pkg_dir(project_root, name, &pinned.version) {
             Some(d) => d,
             None => {
                 // Auto-fetch if missing
-                let git_url = pinned.git.as_deref().unwrap_or_else(|| {
-                    eprintln!("error: '{name}' not in cache and no git URL in mvl.lock");
-                    process::exit(1);
-                });
+                let git_url = pinned.git.as_deref().ok_or_else(|| {
+                    PackageError::MissingData(format!(
+                        "'{name}' not in cache and no git URL in mvl.lock"
+                    ))
+                })?;
                 let tag = format!("v{}", pinned.version);
                 eprintln!("Fetching missing dependency: {name} {}...", pinned.version);
-                fetch_package(name, git_url, &tag).unwrap_or_else(|e| {
-                    eprintln!("error: {e}");
-                    process::exit(1);
-                });
+                fetch_package(name, git_url, &tag)?;
                 pkg_cache_dir(name, &pinned.version)
             }
         };
 
         // Verify hash (fail hard on mismatch)
         if !is_local_override(project_root, name, &dir) {
-            verify_hash(&dir, &pinned.hash).unwrap_or_else(|e| {
-                eprintln!("error: {e}");
-                process::exit(1);
-            });
+            verify_hash(&dir, &pinned.hash)?;
         }
 
         pkg_dirs.insert(name.clone(), dir);
     }
 
-    pkg_dirs
+    Ok(pkg_dirs)
 }
 
 /// Check whether `dir` is the local override directory for `name`.
@@ -451,7 +458,7 @@ mod tests {
     fn ensure_deps_no_manifest_returns_empty() {
         let tmp = tempfile::tempdir().unwrap();
         // No mvl.toml present — IO error branch returns empty map silently
-        let dirs = ensure_dependencies(tmp.path());
+        let dirs = ensure_dependencies(tmp.path()).unwrap();
         assert!(dirs.is_empty());
     }
 
@@ -460,7 +467,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let content = "[package]\nname = \"proj\"\nversion = \"1.0.0\"\nlicense = \"Apache-2.0\"\nrequires-mvl = \">=0.1.0\"\n";
         std::fs::write(tmp.path().join("mvl.toml"), content).unwrap();
-        let dirs = ensure_dependencies(tmp.path());
+        let dirs = ensure_dependencies(tmp.path()).unwrap();
         assert!(dirs.is_empty());
     }
 
@@ -469,7 +476,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         // Exists but fails TOML parsing (non-IO error) → warning + empty map
         std::fs::write(tmp.path().join("mvl.toml"), "key = bare_value\n").unwrap();
-        let dirs = ensure_dependencies(tmp.path());
+        let dirs = ensure_dependencies(tmp.path()).unwrap();
         assert!(dirs.is_empty());
     }
 
@@ -488,7 +495,7 @@ mod tests {
         let override_dir = root.join(".mvl").join("pkg").join("mypkg");
         std::fs::create_dir_all(&override_dir).unwrap();
 
-        let dirs = ensure_dependencies(root);
+        let dirs = ensure_dependencies(root).unwrap();
         assert_eq!(dirs.len(), 1);
         assert_eq!(dirs.get("mypkg").unwrap(), &override_dir);
     }
@@ -498,9 +505,17 @@ mod tests {
     #[test]
     fn cmd_install_empty_lockfile_returns_early() {
         let tmp = tempfile::tempdir().unwrap();
-        // Write an empty lock file (no packages) — cmd_install should print and return
+        // Write an empty lock file (no packages) — cmd_install should return Ok
         std::fs::write(tmp.path().join("mvl.lock"), "# Generated by mvl\n").unwrap();
-        cmd_install(tmp.path()); // must not call process::exit
+        cmd_install(tmp.path()).unwrap();
+    }
+
+    #[test]
+    fn cmd_install_missing_lockfile_returns_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        // No mvl.lock → should return Err, not panic
+        let result = cmd_install(tmp.path());
+        assert!(result.is_err());
     }
 
     // --- cmd_update ---
@@ -510,7 +525,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let manifest = "[package]\nname = \"proj\"\nversion = \"1.0.0\"\nlicense = \"Apache-2.0\"\nrequires-mvl = \">=0.1.0\"\n";
         std::fs::write(tmp.path().join("mvl.toml"), manifest).unwrap();
-        cmd_update(tmp.path()); // must not call process::exit
+        cmd_update(tmp.path()).unwrap();
     }
 
     #[test]
@@ -519,7 +534,63 @@ mod tests {
         let manifest = "[package]\nname = \"proj\"\nversion = \"1.0.0\"\nlicense = \"Apache-2.0\"\nrequires-mvl = \">=0.1.0\"\n\n[dependencies]\n\"some-pkg\" = \">=1.0.0\"\n";
         std::fs::write(tmp.path().join("mvl.toml"), manifest).unwrap();
         // Version-only dep has no git URL → emits warning and skips; writes mvl.lock
-        cmd_update(tmp.path());
+        cmd_update(tmp.path()).unwrap();
         assert!(tmp.path().join("mvl.lock").exists());
+    }
+
+    #[test]
+    fn cmd_update_missing_manifest_returns_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        // No mvl.toml → should return Err, not panic
+        let result = cmd_update(tmp.path());
+        assert!(result.is_err());
+    }
+
+    // --- cmd_add error cases ---
+
+    #[test]
+    fn cmd_add_rejects_http_url() {
+        let tmp = tempfile::tempdir().unwrap();
+        let result = cmd_add("http://example.com/pkg", None, tmp.path());
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("http://"), "error should mention the protocol");
+    }
+
+    // --- PackageError Display ---
+
+    #[test]
+    fn package_error_display_missing_data() {
+        let e = PackageError::MissingData("no git URL".to_string());
+        assert!(e.to_string().contains("no git URL"));
+    }
+
+    #[test]
+    fn package_error_display_io() {
+        let e = PackageError::Io("/path".to_string(), "permission denied".to_string());
+        assert!(e.to_string().contains("/path"));
+        assert!(e.to_string().contains("permission denied"));
+    }
+
+    #[test]
+    fn package_error_from_fetch() {
+        let fetch_err = fetch::FetchError::GitError("clone failed".to_string());
+        let pkg_err: PackageError = fetch_err.into();
+        assert!(matches!(pkg_err, PackageError::Fetch(_)));
+        assert!(pkg_err.to_string().contains("clone failed"));
+    }
+
+    #[test]
+    fn package_error_from_manifest() {
+        let manifest_err = manifest::ManifestError::MissingField("name".to_string());
+        let pkg_err: PackageError = manifest_err.into();
+        assert!(matches!(pkg_err, PackageError::Manifest(_)));
+    }
+
+    #[test]
+    fn package_error_from_lock() {
+        let lock_err = lock::LockError::MissingField("version".to_string());
+        let pkg_err: PackageError = lock_err.into();
+        assert!(matches!(pkg_err, PackageError::Lock(_)));
     }
 }

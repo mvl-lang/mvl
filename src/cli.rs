@@ -239,11 +239,20 @@ pub(super) fn dispatch(args: &[String]) {
         }
         "install" => {
             let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-            packages::cmd_install(&project_root);
+            if let Err(e) = packages::cmd_install(&project_root) {
+                eprintln!("error: {e}");
+                if matches!(e, packages::PackageError::Lock(_)) {
+                    eprintln!("hint: run 'mvl add <package>' to create mvl.lock");
+                }
+                process::exit(1);
+            }
         }
         "update" => {
             let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-            packages::cmd_update(&project_root);
+            if let Err(e) = packages::cmd_update(&project_root) {
+                eprintln!("error: {e}");
+                process::exit(1);
+            }
         }
         "pin" => {
             let version_arg = args.get(2).map(|s| s.as_str());
