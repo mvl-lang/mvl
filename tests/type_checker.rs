@@ -2798,9 +2798,9 @@ fn print_rejects_tainted_argument() {
     );
 }
 
-/// `assert_eq[T]` is generic — type checking is skipped for generic calls (#1007).
-/// Labeled arguments are accepted because the generic parameter T matches anything.
-/// This is a known limitation; non-generic functions catch label mismatches via the type system.
+/// `assert_eq[T]` is generic with `Unknown` params (not real type-var params).
+/// Its params don't participate in label propagation (#1066), so labeled args are
+/// accepted and the `Unit` return is not infected with a label.
 #[test]
 fn assert_eq_accepts_labeled_argument_generic() {
     let errors = errors_for(r#"fn f(key: Secret[String]) -> Unit { assert_eq(key, "expected"); }"#);
@@ -8440,5 +8440,126 @@ fn toml_mvl_passes_proven_mode() {
         json_result.is_ok(),
         "json.mvl should pass proven-mode checks (with toml.mvl in prelude), got: {:?}",
         json_result.errors
+    );
+}
+
+// ── #1066: Generic type instantiation at call sites ───────────────────────────
+
+/// Req 1: generic call with wrong argument type is rejected (#1066).
+///
+/// `identity[T](x: T) -> T` called with `Bool` where return type is `Int`
+/// must produce a TypeMismatch (T=Bool, but caller expects Int).
+#[test]
+fn generic_wrong_arg_type_rejected() {
+    let errors = errors_for(
+        r#"fn identity[T](x: T) -> T { x }
+           fn f() -> Int { identity(true) }"#,
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "identity(true) where Int expected should be a TypeMismatch, got: {errors:?}"
+    );
+}
+
+/// Req 1: explicit type argument with wrong value type is rejected (#1066).
+///
+/// `identity[Int](true)` — explicit `T=Int` but argument is `Bool`.
+#[test]
+fn generic_explicit_type_arg_mismatch_rejected() {
+    let errors = errors_for(
+        r#"fn identity[T](x: T) -> T { x }
+           fn f() -> Int { identity[Int](true) }"#,
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "identity[Int](true) should be a TypeMismatch, got: {errors:?}"
+    );
+}
+
+/// Req 1: correct generic call produces no errors (#1066).
+#[test]
+fn generic_correct_arg_type_accepted() {
+    let errors = errors_for(
+        r#"fn identity[T](x: T) -> T { x }
+           fn f() -> Int { identity(42) }"#,
+    );
+    assert!(
+        errors.is_empty(),
+        "identity(42) : Int should be accepted, got: {errors:?}"
+    );
+}
+
+/// Req 11: IFC label preserved when Secret[String] flows through generic identity (#1066).
+#[test]
+fn generic_ifc_label_preserved_through_identity() {
+    let errors = errors_for(
+        r#"fn identity[T](x: T) -> T { x }
+           fn f(s: Secret[String]) -> Secret[String] { identity(s) }"#,
+    );
+    assert!(
+        errors.is_empty(),
+        "identity(Secret[String]) -> Secret[String] should be accepted, got: {errors:?}"
+    );
+}
+
+/// Req 11: IFC label mismatch through generic is caught (#1066).
+///
+/// Passing `Secret[String]` through `identity[T]` then treating result as bare
+/// `String` must be a type error.
+#[test]
+fn generic_ifc_label_mismatch_caught() {
+    let errors = errors_for(
+        r#"fn identity[T](x: T) -> T { x }
+           fn f(s: Secret[String]) -> String { identity(s) }"#,
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "Secret[String] through identity used as String should be TypeMismatch, got: {errors:?}"
+    );
+}
+
+/// Req 4: Option[T] wrapper preserved through generic identity (#1066).
+#[test]
+fn generic_option_wrapper_preserved() {
+    let errors = errors_for(
+        r#"fn identity[T](x: T) -> T { x }
+           fn f(opt: Option[Int]) -> Option[Int] { identity(opt) }"#,
+    );
+    assert!(
+        errors.is_empty(),
+        "identity(Option[Int]) -> Option[Int] should be accepted, got: {errors:?}"
+    );
+}
+
+/// Req 7: effectful generic function — caller must declare the effect (#1066).
+#[test]
+fn generic_effect_propagation_enforced() {
+    let errors = errors_for(
+        r#"fn with_console[T](x: T) -> T ! Console { println("x"); x }
+           fn caller(s: String) -> String { with_console(s) }"#,
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::UndeclaredEffect { .. })),
+        "caller without Console calling with_console[T] should fail, got: {errors:?}"
+    );
+}
+
+/// Corpus: generic_instantiation.mvl covers all four requirements together (#1066).
+#[test]
+fn generic_instantiation_corpus_parses_and_checks() {
+    let src = include_str!("corpus/01_basics/generic_instantiation.mvl");
+    let result = check_src(src);
+    assert!(
+        result.is_ok(),
+        "generic_instantiation.mvl should pass type checks, got: {:?}",
+        result.errors
     );
 }
