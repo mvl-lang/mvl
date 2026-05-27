@@ -14,6 +14,7 @@ pub mod llvm;
 pub mod mcdc;
 pub mod meta;
 pub mod mutate;
+pub mod openapi;
 pub mod test;
 pub mod transpile;
 
@@ -186,6 +187,10 @@ pub(super) fn dispatch(args: &[String]) {
             let path = args::require_path_arg(args, "complexity");
             let format_json = args.iter().any(|a| a == "--format=json");
             complexity::run(&path, format_json);
+        }
+        "openapi" => {
+            let path = args::require_path_arg(args, "openapi");
+            openapi::run(&path);
         }
         "fmt" => {
             let stdin = args.iter().any(|a| a == "--stdin");
