@@ -2,8 +2,9 @@
 // Copyright 2026 Schuberg Philis
 
 use mvl::mvl::checker;
+use mvl::mvl::checker::ifc;
 use mvl::mvl::checker::passes::{
-    aggregate_verdicts, source_hash, PassRegistry, Verdict, VerdictCache,
+    aggregate_verdicts, count_memory_safety_sites, source_hash, PassRegistry, Verdict, VerdictCache,
 };
 use mvl::mvl::loader;
 use mvl::mvl::parser::ast::{Decl, Program, Totality, TypeBody};
@@ -52,6 +53,21 @@ pub fn run(path: &str, json: bool, verbose: bool) {
     let mut total_enum_types: usize = 0;
     let mut total_effects_fns: usize = 0;
     let mut all_fn_details: Vec<FnDetail> = Vec::new();
+    // Verification activity counters (wired from existing counting functions).
+    let mut total_let_bindings: usize = 0;
+    let mut total_ref_bindings: usize = 0;
+    let mut total_consume_sites: usize = 0;
+    let mut total_relabel_ops: usize = 0;
+    let mut total_labeled_params: usize = 0;
+    let mut total_flow_checks: usize = 0;
+    let mut total_refined_fields: usize = 0;
+    let mut total_struct_fields: usize = 0;
+    let mut total_struct_invariants: usize = 0;
+    // Refinement proof layer breakdown (aggregated across files).
+    let mut agg_ref_proven: usize = 0;
+    let mut agg_ref_runtime: usize = 0;
+    let mut agg_ref_by_layer: [usize; 6] = [0; 6];
+    let mut all_proof_entries: Vec<mvl::mvl::checker::refinements::ProofEntry> = Vec::new();
     // Verification pass infrastructure.
     let registry = PassRegistry::default_registry();
     let mut verdict_cache = VerdictCache::default();
@@ -146,6 +162,44 @@ pub fn run(path: &str, json: bool, verbose: bool) {
         total_struct_types += stats.struct_type_count;
         total_enum_types += stats.enum_type_count;
         total_effects_fns += stats.effects_fn_count;
+        // Verification activity: wire existing counting functions.
+        let mc = count_memory_safety_sites(prog);
+        total_let_bindings += mc.let_bindings;
+        total_ref_bindings += mc.ref_bindings;
+        total_consume_sites += mc.consume_sites;
+        total_relabel_ops += ifc::count_relabels(prog);
+        total_labeled_params += ifc::count_labeled_params(prog);
+        total_flow_checks += ifc::count_flow_check_sites(prog);
+        // Refinement proof layer breakdown.
+        agg_ref_proven += result.refinement_counts.proven;
+        agg_ref_runtime += result.refinement_counts.runtime_checked;
+        for (i, &count) in result.refinement_counts.by_layer.iter().enumerate() {
+            agg_ref_by_layer[i] += count;
+        }
+        all_proof_entries.extend(result.refinement_counts.proof_log.iter().cloned().map(
+            |mut e| {
+                if e.file.is_empty() {
+                    e.file = file_str.to_string();
+                }
+                e
+            },
+        ));
+        // Count struct field refinements.
+        for decl in &prog.declarations {
+            if let Decl::Type(td) = decl {
+                if let TypeBody::Struct {
+                    fields, invariant, ..
+                } = &td.body
+                {
+                    total_struct_fields += fields.len();
+                    total_refined_fields +=
+                        fields.iter().filter(|f| f.refinement.is_some()).count();
+                    if invariant.is_some() {
+                        total_struct_invariants += 1;
+                    }
+                }
+            }
+        }
         for (i, count) in result.req_errors.iter().enumerate().skip(1) {
             req_errors[i] += count;
         }
@@ -227,6 +281,20 @@ pub fn run(path: &str, json: bool, verbose: bool) {
     "verified_pct": {verified_pct},
     "extern_pct": {extern_pct}
   }},
+  "verification_activity": {{
+    "let_bindings": {total_let_bindings},
+    "ref_bindings": {total_ref_bindings},
+    "consume_sites": {total_consume_sites},
+    "refinement_proven": {agg_ref_proven},
+    "refinement_runtime": {agg_ref_runtime},
+    "relabel_operations": {total_relabel_ops},
+    "labeled_params": {total_labeled_params},
+    "flow_checks": {total_flow_checks},
+    "effect_annotations": {total_effects_fns},
+    "struct_fields": {total_struct_fields},
+    "refined_fields": {total_refined_fields},
+    "struct_invariants": {total_struct_invariants}
+  }},
   "requirements": {{
 {req_json}
   }},
@@ -246,13 +314,78 @@ pub fn run(path: &str, json: bool, verbose: bool) {
             println!("Files checked:       {file_count}");
         }
         println!("Functions:           {total_fns}");
-        let total_implicit = total_verified - total_explicit;
-        println!("  total fn:          {total_verified} ({total_explicit} explicit, {total_implicit} implicit) — {verified_pct}% of implemented");
+        let total_implicit = total_verified.saturating_sub(total_explicit);
+        println!("  total fn:          {total_verified} ({total_explicit} explicit, {total_implicit} implicit)");
+        if total_implicit > 0 {
+            println!(
+                "  implicit total:    {total_implicit}  ⚠ consider adding explicit `total` keyword"
+            );
+        }
         println!("  partial fn:        {total_partial}");
         println!("  extern fn:         {total_extern} ({extern_pct}% trust boundary)");
         println!("  kernel builtins:   {kernel_extern_count} (stdlib strings.mvl + lists.mvl)");
         println!("  implemented:       {implemented}");
         println!("  test fn:           {total_test_fns}");
+        println!(
+            "Totality coverage:   {}/{} implemented fns are total ({} explicit, {} implicit)",
+            total_verified, implemented, total_explicit, total_implicit,
+        );
+        println!();
+        println!("Verification activity:");
+        println!(
+            "  let bindings checked: {:<8} ref bindings: {:<8} consume sites: {}",
+            total_let_bindings, total_ref_bindings, total_consume_sites,
+        );
+        println!(
+            "  refinement proofs:    {} proven, {} runtime-checked (by layer: L1={} L2={} L3={} L4={} L5={})",
+            agg_ref_proven, agg_ref_runtime,
+            agg_ref_by_layer[1], agg_ref_by_layer[2], agg_ref_by_layer[3],
+            agg_ref_by_layer[4], agg_ref_by_layer[5],
+        );
+        println!(
+            "  relabel operations:   {:<8} flow checks: {}",
+            total_relabel_ops, total_flow_checks,
+        );
+        println!(
+            "  effect annotations:   {} fns declare effects",
+            total_effects_fns
+        );
+        if total_struct_fields > 0 {
+            println!(
+                "  struct fields:        {} total, {} refined, {} struct invariant(s)",
+                total_struct_fields, total_refined_fields, total_struct_invariants,
+            );
+        }
+        if verbose && !all_proof_entries.is_empty() {
+            let layer_name = |l: usize| match l {
+                1 => "L1 trivial",
+                2 => "L2 interval",
+                3 => "L3 symbolic",
+                4 => "L4 Cooper",
+                5 => "L5 Z3",
+                _ => "runtime",
+            };
+            println!();
+            println!("Refinement proof detail:");
+            for entry in &all_proof_entries {
+                let fname = if entry.file.is_empty() {
+                    ""
+                } else {
+                    std::path::Path::new(&entry.file)
+                        .file_name()
+                        .and_then(|f| f.to_str())
+                        .unwrap_or(&entry.file)
+                };
+                let loc = format!("{}:{}", fname, entry.line);
+                println!(
+                    "  {:<10} {:<16} {:<24} {}",
+                    layer_name(entry.layer),
+                    loc,
+                    entry.callee,
+                    entry.predicate,
+                );
+            }
+        }
         println!();
         let violated_count = (1..=11usize).filter(|&i| req_errors[i] > 0).count();
         let not_proven_count = 11 - proven_count - violated_count;
@@ -275,12 +408,14 @@ pub fn run(path: &str, json: bool, verbose: bool) {
             "Memory safety",
             &req_errors,
             project_verdicts[2].is_proven(),
-            if req_errors[2] == 0 {
-                "no violations".to_string()
+            &if req_errors[2] == 0 {
+                format!(
+                    "{} let bindings, {} ref bindings, {} consume sites — no violations",
+                    total_let_bindings, total_ref_bindings, total_consume_sites,
+                )
             } else {
                 format!("{} use-after-move", req_errors[2])
-            }
-            .as_str(),
+            },
         );
         print_req_row(
             3,
@@ -333,26 +468,67 @@ pub fn run(path: &str, json: bool, verbose: bool) {
                 total_verified, total_partial, req_errors[8]
             ),
         );
+        // Req 9–11: qualitative verdicts (counts live in Prover verdicts section).
+        let req9_detail = if project_verdicts[9].is_proven() {
+            // Extract "N/M" prefix from verdict detail "N/M fns race-free ..."
+            let d = project_verdicts[9].detail();
+            let ratio = d.split(" fns race-free").next().unwrap_or("all");
+            format!("{ratio} fns race-free — isolation and sendability verified")
+        } else if project_verdicts[9].is_failed() {
+            format!("{} capability violation(s)", req_errors[9])
+        } else {
+            project_verdicts[9].detail().to_string()
+        };
         print_req_row(
             9,
             "Data race freedom",
             &req_errors,
             project_verdicts[9].is_proven(),
-            project_verdicts[9].detail(),
+            &req9_detail,
         );
+        let req10_detail = if project_verdicts[10].is_proven() {
+            let total = agg_ref_proven + agg_ref_runtime;
+            if agg_ref_runtime == 0 {
+                format!("{total} call site(s) — all statically proven")
+            } else {
+                format!(
+                    "{total} call site(s) — {agg_ref_proven} proven, {agg_ref_runtime} runtime-checked"
+                )
+            }
+        } else if project_verdicts[10].is_failed() {
+            format!("{} refinement violation(s)", req_errors[10])
+        } else if total_refined_fields > 0 {
+            format!("{total_refined_fields} struct field(s) refined but 0 call sites proven")
+        } else {
+            "no refined types used".to_string()
+        };
         print_req_row(
             10,
             "Refinements",
             &req_errors,
             project_verdicts[10].is_proven(),
-            project_verdicts[10].detail(),
+            &req10_detail,
         );
+        let req11_detail = if project_verdicts[11].is_proven() {
+            if total_relabel_ops > 0 || total_labeled_params > 0 {
+                format!(
+                    "opaque labels enforced; {} relabel point(s) auditable",
+                    total_relabel_ops,
+                )
+            } else {
+                "no information flow violations".to_string()
+            }
+        } else if project_verdicts[11].is_failed() {
+            format!("{} information flow violation(s)", req_errors[11])
+        } else {
+            "no security-labeled types — not exercised".to_string()
+        };
         print_req_row(
             11,
             "IFC",
             &req_errors,
             project_verdicts[11].is_proven(),
-            project_verdicts[11].detail(),
+            &req11_detail,
         );
         println!();
         println!("Prover verdicts:");
@@ -403,8 +579,17 @@ pub fn run(path: &str, json: bool, verbose: bool) {
                 } else {
                     fd.effects.join(",")
                 };
-                let caps = if fd.has_capabilities { "yes" } else { "-" };
-                let refs = if fd.has_refinements { "yes" } else { "-" };
+                let caps = if fd.capabilities.is_empty() {
+                    "-".to_string()
+                } else {
+                    fd.capabilities.join(",")
+                };
+                let (rp, rq, re) = fd.refinement_counts;
+                let refs = if rp + rq + re == 0 {
+                    "-".to_string()
+                } else {
+                    format!("{}p/{}r/{}e", rp, rq, re)
+                };
                 println!(
                     "{:<30} {:<8} {:<8} {:<12} {:<12} {}",
                     fd.name, kind, totality, effects, caps, refs
@@ -461,8 +646,10 @@ struct FnDetail {
     name: String,
     totality: Option<Totality>,
     effects: Vec<String>,
-    has_capabilities: bool,
-    has_refinements: bool,
+    /// Capability names used by parameters (e.g., "iso", "val", "tag").
+    capabilities: Vec<String>,
+    /// Refinement counts: (refined_params, requires_clauses, ensures_clauses).
+    refinement_counts: (usize, usize, usize),
     is_test: bool,
     is_extern: bool,
 }
@@ -519,12 +706,31 @@ fn collect_stats_from_decls(decls: &[Decl], stats: &mut AssuranceStats, collect_
                     }
                 }
                 if collect_details {
+                    let cap_names: Vec<String> = fd
+                        .params
+                        .iter()
+                        .filter_map(|p| {
+                            p.capability.as_ref().map(|c| match c {
+                                mvl::mvl::parser::ast::Capability::Iso => "iso",
+                                mvl::mvl::parser::ast::Capability::Val => "val",
+                                mvl::mvl::parser::ast::Capability::Ref => "ref",
+                                mvl::mvl::parser::ast::Capability::Tag => "tag",
+                            })
+                        })
+                        .collect::<std::collections::BTreeSet<_>>()
+                        .into_iter()
+                        .map(String::from)
+                        .collect();
+                    let refined_params =
+                        fd.params.iter().filter(|p| p.refinement.is_some()).count();
+                    let requires_count = fd.requires.len();
+                    let ensures_count = fd.ensures.len();
                     stats.fn_details.push(FnDetail {
                         name: fd.name.clone(),
                         totality: fd.totality.clone(),
                         effects: fd.effects.iter().map(|e| e.to_string()).collect(),
-                        has_capabilities: has_caps,
-                        has_refinements: has_refs,
+                        capabilities: cap_names,
+                        refinement_counts: (refined_params, requires_count, ensures_count),
                         is_test: fd.is_test,
                         is_extern: false,
                     });
@@ -532,23 +738,19 @@ fn collect_stats_from_decls(decls: &[Decl], stats: &mut AssuranceStats, collect_
             }
             Decl::Extern(ed) => {
                 // Each signature inside an extern block is a trust-boundary function.
+                // Extern fns are NOT counted toward total_fn_count — they are trust
+                // boundaries, not verified code. Counting them inflates the
+                // "verified %" denominator (was causing >100% bug).
                 stats.extern_fn_count += ed.fns.len();
                 stats.fn_count += ed.fns.len();
                 for ef in &ed.fns {
-                    match ef.totality {
-                        Some(Totality::Total) => {
-                            stats.total_fn_count += 1;
-                            stats.explicit_total_fn_count += 1;
-                        }
-                        _ => stats.total_fn_count += 1, // implicitly total
-                    }
                     if collect_details {
                         stats.fn_details.push(FnDetail {
                             name: ef.name.clone(),
                             totality: ef.totality.clone(),
                             effects: ef.effects.iter().map(|e| e.to_string()).collect(),
-                            has_capabilities: false,
-                            has_refinements: false,
+                            capabilities: vec![],
+                            refinement_counts: (0, 0, 0),
                             is_test: false,
                             is_extern: true,
                         });

@@ -16,35 +16,71 @@
 //   make run   (from examples/access_control/)
 //
 // Assurance note: 1 extern block (1 trust-boundary function).
-
 use auth::authenticate;
+
 use rbac::check_permission;
+
 use audit::log_access;
+
 use model::Role;
+
 use model::Resource;
+
 use model::Action;
+
 use model::Permission;
+
 use model::AuthError;
+
 use model::AppError;
 
+
 use std.log.{Logger, default_logger}
+
 use std.ifc.{taint}
 
-// ── Trust boundary: demo fixture data lives in Rust ───────────────────────
-
-extern "rust" {
-    // Demo fixture: returns hardcoded hash for known usernames.
-    fn get_demo_hash(username: String) -> Option[Secret[String]];
+// ── Security configuration ───────────────────────────────────────────────
+type SecurityConfig = struct {
+    max_attempts: Int where self > 0 && self <= 10,
+    session_ttl: Int where self > 0,
 }
 
-// ── Audit helper ──────────────────────────────────────────────────────────
+total fn default_security_config() -> SecurityConfig {
+    SecurityConfig { max_attempts: 3, session_ttl: 3600 }
+}
 
+/// Clamp an attempt count to the configured maximum.
+total fn clamp_attempts(n: Int where n >= 0, max: Int where max > 0) -> Int {
+    if n > max { max } else { n }
+}
+
+/// Increment attempt counter, clamped to max.
+/// Call-site proof: current >= 0 ⊢ current + 1 >= 0 (L4 Cooper).
+total fn next_attempt(current: Int where current >= 0, max: Int where max > 0) -> Int {
+    clamp_attempts(current + 1, max)
+}
+
+/// Compute total timeout from base TTL and grace period.
+/// Contract proof: base > 0 ∧ grace >= 0 ⊢ base + grace > 0.
+total fn total_timeout(base: Int where base > 0, grace: Int where grace >= 0) -> Int
+    ensures result > 0
+{
+    base + grace
+}
+
+// ── Trust boundary: demo fixture data lives in Rust ───────────────────────
+extern "rust" {
+    fn get_demo_hash(username: String) -> Option[Secret[String]]
+}
+
+// Demo fixture: returns hardcoded hash for known usernames.
+// ── Audit helper ──────────────────────────────────────────────────────────
 // Check and audit a single RBAC decision.
 // Calls check_permission (pure) then log_access (! Log) to emit a structured
 // audit record.
-fn check_and_audit(
+total fn check_and_audit(
     logger: val Logger,
-    username: String,
+    username: String where len(self) > 0,
     role: Role,
     resource: Resource,
     action: Action,
@@ -54,39 +90,41 @@ fn check_and_audit(
 }
 
 // ── Demo scenarios ────────────────────────────────────────────────────────
-
 // RBAC demo: each call produces a structured audit record (INFO or WARN).
-fn demo_rbac(logger: val Logger) -> Unit ! Log {
-    let u1: Unit = check_and_audit(logger, "admin_demo", Role::Admin,     Resource::AdminPanel,  Action::Read);
-    let u2: Unit = check_and_audit(logger, "mod_demo",   Role::Moderator, Resource::AdminPanel,  Action::Write);
-    let u3: Unit = check_and_audit(logger, "user_demo",  Role::User,      Resource::Post,        Action::Delete);
-    let u4: Unit = check_and_audit(logger, "guest_demo", Role::Guest,     Resource::Post,        Action::Read);
+total fn demo_rbac(logger: val Logger) -> Unit ! Log {
+    let u1: Unit = check_and_audit(logger, "admin_demo", Role::Admin, Resource::AdminPanel, Action::Read);
+    let u2: Unit = check_and_audit(logger, "mod_demo", Role::Moderator, Resource::AdminPanel, Action::Write);
+    let u3: Unit = check_and_audit(logger, "user_demo", Role::User, Resource::Post, Action::Delete);
+    let u4: Unit = check_and_audit(logger, "guest_demo", Role::Guest, Resource::Post, Action::Read);
     check_and_audit(logger, "guest_demo", Role::Guest, Resource::AuditLog, Action::Read)
 }
 
 // Auth demo: alice's hash is Secret[String] — cannot be printed or leaked.
 // It flows directly into hash_verify at the extern boundary inside auth module.
 // Phase 4: std.log replaces raw println; ! CryptoRandom propagated from authenticate().
-fn demo_auth(logger: val Logger) -> Unit ! Log + CryptoRandom {
+total fn demo_auth(logger: val Logger) -> Unit ! Log + CryptoRandom {
     let hash_opt: Option[Secret[String]] = get_demo_hash("alice");
     match hash_opt {
         None => logger.warn("auth attempt: user not found", {"user": "alice"}),
         Some(stored_hash) => {
             let auth_result: Result[String, AuthError] = authenticate(relabel taint("alice", "DEMO"), relabel taint("hunter2", "DEMO"), stored_hash);
             match auth_result {
-                Ok(_)  => logger.info("auth attempt: pass", {"user": "alice"}),
+                Ok(_) => logger.info("auth attempt: pass", {"user": "alice"}),
                 Err(_) => logger.warn("auth attempt: fail", {"user": "alice"}),
             }
-        }
+        },
     }
 }
 
-fn main() -> Unit ! Log + CryptoRandom {
+total fn main() -> Unit ! Log + CryptoRandom {
     let logger: Logger = default_logger();
+    let _config: SecurityConfig = default_security_config();
+    let _clamped: Int = clamp_attempts(5, 3);
+    let _next: Int = next_attempt(0, 3);
+    let _timeout: Int = total_timeout(3600, 60);
     let rbac_done: Unit = demo_rbac(logger);
     demo_auth(logger)
 }
-
 // ── Internal unit tests ───────────────────────────────────────────────────
 // TODO(#96): inline tests that call cross-module functions (check_permission,
 // log_access, authenticate) cannot run until the module resolver propagates

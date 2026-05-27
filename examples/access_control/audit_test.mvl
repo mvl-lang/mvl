@@ -6,9 +6,7 @@
 // NOTE: types and functions re-declared locally because mvl test compiles
 // files in a flat namespace where cross-module imports are not available.
 // Assurance note: 0 extern blocks.
-
 // ── Local type re-declarations (workaround: #96) ──────────────────────────
-
 type Resource = enum {
     UserProfile,
     AdminPanel,
@@ -28,20 +26,19 @@ type Permission = enum {
 }
 
 // ── Function re-declarations ───────────────────────────────────────────────
-
 total fn resource_name(resource: Resource) -> String {
     match resource {
         Resource::UserProfile => "UserProfile",
-        Resource::AdminPanel  => "AdminPanel",
-        Resource::Post        => "Post",
-        Resource::AuditLog    => "AuditLog",
+        Resource::AdminPanel => "AdminPanel",
+        Resource::Post => "Post",
+        Resource::AuditLog => "AuditLog",
     }
 }
 
 total fn action_name(action: Action) -> String {
     match action {
-        Action::Read   => "Read",
-        Action::Write  => "Write",
+        Action::Read => "Read",
+        Action::Write => "Write",
         Action::Delete => "Delete",
     }
 }
@@ -49,81 +46,79 @@ total fn action_name(action: Action) -> String {
 total fn permission_name(decision: Permission) -> String {
     match decision {
         Permission::Allow => "ALLOW",
-        Permission::Deny  => "DENY",
+        Permission::Deny => "DENY",
     }
 }
 
-fn log_level_for_decision(decision: Permission) -> String {
+total fn log_level_for_decision(decision: Permission) -> String {
     match decision {
         Permission::Allow => "info",
-        Permission::Deny  => "warn",
+        Permission::Deny => "warn",
     }
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────
-
 test fn resource_name_returns_user_profile() -> Unit {
     let name: String = resource_name(Resource::UserProfile);
     let ok: Int = match name {
         "UserProfile" => 1,
-        _             => 0,
+        _ => 0,
     };
-    assert_eq(ok, 1);
+    assert_eq(ok, 1)
 }
 
 test fn resource_name_returns_admin_panel() -> Unit {
     let name: String = resource_name(Resource::AdminPanel);
     let ok: Int = match name {
         "AdminPanel" => 1,
-        _            => 0,
+        _ => 0,
     };
-    assert_eq(ok, 1);
+    assert_eq(ok, 1)
 }
 
 test fn permission_allow_maps_to_allow_string() -> Unit {
     let name: String = permission_name(Permission::Allow);
     let ok: Int = match name {
         "ALLOW" => 1,
-        _       => 0,
+        _ => 0,
     };
-    assert_eq(ok, 1);
+    assert_eq(ok, 1)
 }
 
 test fn permission_deny_maps_to_deny_string() -> Unit {
     let name: String = permission_name(Permission::Deny);
     let ok: Int = match name {
         "DENY" => 1,
-        _      => 0,
+        _ => 0,
     };
-    assert_eq(ok, 1);
+    assert_eq(ok, 1)
 }
 
 test fn action_name_returns_delete() -> Unit {
     let name: String = action_name(Action::Delete);
     let ok: Int = match name {
         "Delete" => 1,
-        _        => 0,
+        _ => 0,
     };
-    assert_eq(ok, 1);
+    assert_eq(ok, 1)
 }
 
 // log_access carries ! Log so it cannot be called from pure test functions.
 // log_level_for_decision is the pure extraction of the routing branch.
-
 test fn allow_decision_routes_to_info_level() -> Unit {
     let level: String = log_level_for_decision(Permission::Allow);
     let ok: Int = match level {
         "info" => 1,
-        _      => 0,
+        _ => 0,
     };
-    assert_eq(ok, 1);
+    assert_eq(ok, 1)
 }
 
 test fn deny_decision_routes_to_warn_level() -> Unit {
     let level: String = log_level_for_decision(Permission::Deny);
     let ok: Int = match level {
         "warn" => 1,
-        _      => 0,
+        _ => 0,
     };
-    assert_eq(ok, 1);
+    assert_eq(ok, 1)
 }

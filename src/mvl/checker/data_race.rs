@@ -257,30 +257,58 @@ pub fn check_iso_aliasing(prog: &Program, errors: &mut Vec<CheckError>) {
 /// - Unannotated parameters are treated as locally scoped (no cross-boundary
 ///   sharing).
 ///
+/// Breakdown of race-freedom classification across all functions.
+pub struct DataRaceCounts {
+    pub total: usize,
+    pub race_free: usize,
+    pub actor_boundaries: usize,
+    pub iso_params: usize,
+    pub val_params: usize,
+    pub ref_escapes: usize,
+}
+
 /// Returns `(race_free_count, total_fn_count)`.  Extern declarations and
 /// impl blocks are excluded (they are trust-boundary items checked separately).
-pub fn count_race_free_fns(prog: &Program) -> (usize, usize) {
-    let mut total = 0usize;
-    let mut race_free = 0usize;
+pub fn count_race_free_fns(prog: &Program) -> DataRaceCounts {
+    let mut counts = DataRaceCounts {
+        total: 0,
+        race_free: 0,
+        actor_boundaries: 0,
+        iso_params: 0,
+        val_params: 0,
+        ref_escapes: 0,
+    };
+
     for decl in &prog.declarations {
         match decl {
             Decl::Fn(fd) => {
-                total += 1;
+                counts.total += 1;
                 let has_ref_param = fd
                     .params
                     .iter()
                     .any(|p| matches!(p.capability, Some(Capability::Ref)));
                 if !has_ref_param {
-                    race_free += 1;
+                    counts.race_free += 1;
+                } else {
+                    counts.ref_escapes += 1;
+                }
+                // Count capability usage across params
+                for p in &fd.params {
+                    match &p.capability {
+                        Some(Capability::Iso) => counts.iso_params += 1,
+                        Some(Capability::Val) => counts.val_params += 1,
+                        _ => {}
+                    }
                 }
             }
             Decl::Actor(ad) => {
                 for method in &ad.methods {
-                    total += 1;
+                    counts.total += 1;
                     if method.is_public {
                         // pub fn behaviors are checked by check_actor_decl: if they
                         // compile, they have only sendable params — proven race-free.
-                        race_free += 1;
+                        counts.race_free += 1;
+                        counts.actor_boundaries += 1;
                     } else {
                         // private helpers: race-free iff no ref param
                         let has_ref_param = method
@@ -288,7 +316,17 @@ pub fn count_race_free_fns(prog: &Program) -> (usize, usize) {
                             .iter()
                             .any(|p| matches!(p.capability, Some(Capability::Ref)));
                         if !has_ref_param {
-                            race_free += 1;
+                            counts.race_free += 1;
+                        } else {
+                            counts.ref_escapes += 1;
+                        }
+                    }
+                    // Count capability usage across params
+                    for p in &method.params {
+                        match &p.capability {
+                            Some(Capability::Iso) => counts.iso_params += 1,
+                            Some(Capability::Val) => counts.val_params += 1,
+                            _ => {}
                         }
                     }
                 }
@@ -296,7 +334,7 @@ pub fn count_race_free_fns(prog: &Program) -> (usize, usize) {
             _ => {}
         }
     }
-    (race_free, total)
+    counts
 }
 
 // ── Per-function iso aliasing check ──────────────────────────────────────────

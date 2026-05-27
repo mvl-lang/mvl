@@ -38,10 +38,13 @@
 //! - If the predicate references multiple names: `RuntimeCheck` (Phase 4).
 //! - `RefResult::Failed` → `CheckError::InvariantViolated`.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 
 use crate::mvl::checker::errors::CheckError;
-use crate::mvl::checker::refinements::check_arg_against_pred;
+use crate::mvl::checker::refinements::{
+    check_arg_against_pred_counted, ProofEntry, RefinementCounts,
+};
 use crate::mvl::checker::solver::{RefResult, SolverMode};
 use crate::mvl::parser::ast::{
     expr_to_ref_expr_ext, ActorDecl, ArithOp, Block, CmpOp, Decl, ElseBranch, Expr, FieldDecl,
@@ -52,8 +55,31 @@ use crate::mvl::parser::lexer::Span;
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
+thread_local! {
+    static CONTRACT_COUNTS: RefCell<RefinementCounts> = RefCell::new(RefinementCounts::default());
+}
+
+/// Access the thread-local contract counts accumulator.
+/// Called from `check_arg_against_pred` when `ext_counts` is `None` and
+/// the contract checker is active.
+fn with_contract_counts<R>(f: impl FnOnce(&mut RefinementCounts) -> R) -> R {
+    CONTRACT_COUNTS.with(|cell| f(&mut cell.borrow_mut()))
+}
+
 /// Check all `requires`/`ensures` clauses for every function and method in `prog`.
-pub fn check_contracts(prog: &Program, errors: &mut Vec<CheckError>, mode: SolverMode) {
+/// Returns proof-layer counts for contract checks (ensures, requires, invariants).
+pub fn check_contracts(
+    prog: &Program,
+    errors: &mut Vec<CheckError>,
+    mode: SolverMode,
+) -> RefinementCounts {
+    // Reset the thread-local accumulator.
+    CONTRACT_COUNTS.with(|cell| {
+        *cell.borrow_mut() = RefinementCounts {
+            mode,
+            ..Default::default()
+        };
+    });
     let fn_map = build_fn_contract_map(prog);
     let fn_decls = build_fn_decls_for_solver(prog);
 
@@ -121,6 +147,8 @@ pub fn check_contracts(prog: &Program, errors: &mut Vec<CheckError>, mode: Solve
             _ => {}
         }
     }
+    // Return accumulated proof-layer counts from all contract checks.
+    CONTRACT_COUNTS.with(|cell| cell.borrow().clone())
 }
 
 // ── Return type refinement checking (#1067 Gap 3) ────────────────────────────
@@ -531,7 +559,9 @@ fn check_requires_at_call(
             Some((param_idx, param_name)) if param_idx < args.len() => {
                 let normalized = normalize_pred(&req_pred, &param_name);
                 let arg = &args[param_idx];
-                let outcome = check_arg_against_pred(arg, &normalized, var_refs, fn_decls, mode);
+                let outcome = with_contract_counts(|c| {
+                    check_arg_against_pred_counted(arg, &normalized, var_refs, fn_decls, c)
+                });
                 if let RefResult::Failed { counterexample } = outcome {
                     errors.push(CheckError::PreconditionViolated {
                         fn_name: fn_name.to_string(),
@@ -674,7 +704,7 @@ fn check_ensures_for_return(
     params: &[Param],
     fn_decls: &HashMap<String, FnDecl>,
     errors: &mut Vec<CheckError>,
-    mode: SolverMode,
+    _mode: SolverMode,
 ) {
     // Phase 2: populate var_refs with each parameter's inline where-predicate
     // (normalised so the param name becomes "self").  This lets Layer 2 and
@@ -693,7 +723,24 @@ fn check_ensures_for_return(
 
         // Let the solver decide: Proven (silent), Failed (emit error),
         // or RuntimeCheck (silent — deferred to runtime).
-        let outcome = check_arg_against_pred(ret_expr, &normalized, &var_refs, fn_decls, mode);
+        let outcome = with_contract_counts(|c| {
+            let layer_before = c.by_layer;
+            let r = check_arg_against_pred_counted(ret_expr, &normalized, &var_refs, fn_decls, c);
+            if matches!(r, RefResult::Proven) {
+                let layer = (1..6)
+                    .find(|&i| c.by_layer[i] > layer_before[i])
+                    .unwrap_or(0);
+                c.proof_log.push(ProofEntry {
+                    file: String::new(),
+                    line: ret_span.line,
+                    caller: String::new(),
+                    callee: fn_name.to_string(),
+                    predicate: format!("ensures {}", display_pred(&ens_pred)),
+                    layer,
+                });
+            }
+            r
+        });
         if let RefResult::Failed { counterexample } = outcome {
             errors.push(CheckError::PostconditionViolated {
                 fn_name: fn_name.to_string(),
@@ -985,7 +1032,7 @@ fn check_multi_param_requires_literal(
     fn_decls: &HashMap<String, FnDecl>,
     errors: &mut Vec<CheckError>,
     call_span: Span,
-    mode: SolverMode,
+    _mode: SolverMode,
 ) {
     // Collect distinct param indices in order of first appearance.
     let idents = collect_ident_names(pred);
@@ -1027,13 +1074,9 @@ fn check_multi_param_requires_literal(
         return;
     }
 
-    let outcome = check_arg_against_pred(
-        &args[*primary_idx],
-        &modified_pred,
-        var_refs,
-        fn_decls,
-        mode,
-    );
+    let outcome = with_contract_counts(|c| {
+        check_arg_against_pred_counted(&args[*primary_idx], &modified_pred, var_refs, fn_decls, c)
+    });
     if let RefResult::Failed { counterexample } = outcome {
         errors.push(CheckError::PreconditionViolated {
             fn_name: fn_name.to_string(),
@@ -1167,7 +1210,7 @@ fn check_invariant_at_entry(
     fn_decls: &HashMap<String, FnDecl>,
     errors: &mut Vec<CheckError>,
     loop_span: Span,
-    mode: SolverMode,
+    _mode: SolverMode,
 ) {
     let idents = collect_ident_names(inv_pred);
 
@@ -1185,7 +1228,9 @@ fn check_invariant_at_entry(
             // The predicate has no `self` reference; pass a dummy literal as the argument.
             // Layer 1 will const-fold the comparison directly.
             let dummy = Expr::Literal(Literal::Integer(0), loop_span);
-            let outcome = check_arg_against_pred(&dummy, inv_pred, var_refs, fn_decls, mode);
+            let outcome = with_contract_counts(|c| {
+                check_arg_against_pred_counted(&dummy, inv_pred, var_refs, fn_decls, c)
+            });
             if let RefResult::Failed { counterexample } = outcome {
                 errors.push(CheckError::InvariantViolated {
                     fn_name: fn_name.to_string(),
@@ -1199,8 +1244,9 @@ fn check_invariant_at_entry(
             // Single free variable — normalise it to "self" and check via Ident lookup.
             let normalized = normalize_pred(inv_pred, var_name);
             let ident_expr = Expr::Ident(var_name.clone(), loop_span);
-            let outcome =
-                check_arg_against_pred(&ident_expr, &normalized, var_refs, fn_decls, mode);
+            let outcome = with_contract_counts(|c| {
+                check_arg_against_pred_counted(&ident_expr, &normalized, var_refs, fn_decls, c)
+            });
             if let RefResult::Failed { counterexample } = outcome {
                 errors.push(CheckError::InvariantViolated {
                     fn_name: fn_name.to_string(),
@@ -1430,7 +1476,7 @@ fn check_standalone_pred(
     var_refs: &HashMap<String, Option<RefExpr>>,
     fn_decls: &HashMap<String, FnDecl>,
     loop_span: Span,
-    mode: SolverMode,
+    _mode: SolverMode,
 ) -> RefResult {
     let idents = collect_ident_names(pred);
     let mut distinct: Vec<String> = Vec::new();
@@ -1444,19 +1490,25 @@ fn check_standalone_pred(
         [] => {
             // Constant predicate — pass dummy literal.
             let dummy = Expr::Literal(Literal::Integer(0), loop_span);
-            check_arg_against_pred(&dummy, pred, var_refs, fn_decls, mode)
+            with_contract_counts(|c| {
+                check_arg_against_pred_counted(&dummy, pred, var_refs, fn_decls, c)
+            })
         }
         [var_name] => {
             // Single free variable — normalise to "self".
             let normalized = normalize_pred(pred, var_name);
             let ident_expr = Expr::Ident(var_name.clone(), loop_span);
-            check_arg_against_pred(&ident_expr, &normalized, var_refs, fn_decls, mode)
+            with_contract_counts(|c| {
+                check_arg_against_pred_counted(&ident_expr, &normalized, var_refs, fn_decls, c)
+            })
         }
         _ => {
             // Multiple variables: pass dummy; the solver (Z3 / Cooper) will
             // resolve all identifiers from `var_refs`.
             let dummy = Expr::Literal(Literal::Integer(0), loop_span);
-            check_arg_against_pred(&dummy, pred, var_refs, fn_decls, mode)
+            with_contract_counts(|c| {
+                check_arg_against_pred_counted(&dummy, pred, var_refs, fn_decls, c)
+            })
         }
     }
 }
@@ -1850,8 +1902,11 @@ fn check_spawn_refinements_in_expr(
                     // Find the matching field declaration (if it has a refinement).
                     if let Some(field_decl) = refined_fields.iter().find(|f| &f.name == init_name) {
                         if let Some(pred) = &field_decl.refinement {
-                            let outcome =
-                                check_arg_against_pred(init_expr, pred, var_refs, fn_decls, mode);
+                            let outcome = with_contract_counts(|c| {
+                                check_arg_against_pred_counted(
+                                    init_expr, pred, var_refs, fn_decls, c,
+                                )
+                            });
                             if let RefResult::Failed { counterexample } = outcome {
                                 errors.push(CheckError::RefinementViolated {
                                     pred: format!(

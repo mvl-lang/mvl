@@ -7777,9 +7777,9 @@ fn actor_pub_fn_behaviors_counted_as_race_free() {
     "#;
     let (mut p, _) = Parser::new(src);
     let prog = p.parse_program();
-    let (race_free, total) = count_race_free_fns(&prog);
-    assert_eq!(total, 2, "expected 2 methods counted (2 pub fn)");
-    assert_eq!(race_free, 2, "both pub fn behaviors should be race-free");
+    let rc = count_race_free_fns(&prog);
+    assert_eq!(rc.total, 2, "expected 2 methods counted (2 pub fn)");
+    assert_eq!(rc.race_free, 2, "both pub fn behaviors should be race-free");
 }
 
 /// GIVEN: an actor with a private fn helper that has a ref param
@@ -7798,10 +7798,10 @@ fn actor_private_fn_with_ref_not_race_free() {
     "#;
     let (mut p, _) = Parser::new(src);
     let prog = p.parse_program();
-    let (race_free, total) = count_race_free_fns(&prog);
-    assert_eq!(total, 1, "expected 1 method counted");
+    let rc = count_race_free_fns(&prog);
+    assert_eq!(rc.total, 1, "expected 1 method counted");
     assert_eq!(
-        race_free, 0,
+        rc.race_free, 0,
         "private fn with ref param should not be race-free"
     );
 }

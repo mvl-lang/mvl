@@ -6,12 +6,10 @@
 //
 // Standalone: re-declares all types and functions (cross-module resolution
 // is Phase 2, issue #96).
-
 // ── Local type re-declarations ─────────────────────────────────────────────
 // workaround: #96 — cross-module type resolution not yet wired into the
 // per-file checker; types and functions are re-declared locally until the
 // module resolver is integrated.
-
 type Role = enum {
     Admin,
     Moderator,
@@ -38,18 +36,21 @@ type Permission = enum {
 }
 
 // ── Function under test ────────────────────────────────────────────────────
-
-total fn check_permission(role: Role, resource: Resource, action: Action) -> Permission {
+total fn check_permission(
+    role: Role,
+    resource: Resource,
+    action: Action,
+) -> Permission {
     match role {
         Role::Admin => Permission::Allow,
         Role::Moderator => {
             match resource {
                 Resource::AdminPanel => Permission::Deny,
-                Resource::AuditLog   => Permission::Allow,
+                Resource::AuditLog => Permission::Allow,
                 Resource::UserProfile => {
                     match action {
-                        Action::Read   => Permission::Allow,
-                        Action::Write  => Permission::Allow,
+                        Action::Read => Permission::Allow,
+                        Action::Write => Permission::Allow,
                         Action::Delete => Permission::Deny,
                     }
                 },
@@ -58,19 +59,19 @@ total fn check_permission(role: Role, resource: Resource, action: Action) -> Per
         },
         Role::User => {
             match resource {
-                Resource::AdminPanel  => Permission::Deny,
-                Resource::AuditLog    => Permission::Deny,
+                Resource::AdminPanel => Permission::Deny,
+                Resource::AuditLog => Permission::Deny,
                 Resource::UserProfile => {
                     match action {
-                        Action::Read   => Permission::Allow,
-                        Action::Write  => Permission::Allow,
+                        Action::Read => Permission::Allow,
+                        Action::Write => Permission::Allow,
                         Action::Delete => Permission::Deny,
                     }
                 },
                 Resource::Post => {
                     match action {
-                        Action::Read   => Permission::Allow,
-                        Action::Write  => Permission::Allow,
+                        Action::Read => Permission::Allow,
+                        Action::Write => Permission::Allow,
                         Action::Delete => Permission::Deny,
                     }
                 },
@@ -78,19 +79,19 @@ total fn check_permission(role: Role, resource: Resource, action: Action) -> Per
         },
         Role::Guest => {
             match resource {
-                Resource::AdminPanel  => Permission::Deny,
-                Resource::AuditLog    => Permission::Deny,
+                Resource::AdminPanel => Permission::Deny,
+                Resource::AuditLog => Permission::Deny,
                 Resource::UserProfile => {
                     match action {
-                        Action::Read   => Permission::Allow,
-                        Action::Write  => Permission::Deny,
+                        Action::Read => Permission::Allow,
+                        Action::Write => Permission::Deny,
                         Action::Delete => Permission::Deny,
                     }
                 },
                 Resource::Post => {
                     match action {
-                        Action::Read   => Permission::Allow,
-                        Action::Write  => Permission::Deny,
+                        Action::Read => Permission::Allow,
+                        Action::Write => Permission::Deny,
                         Action::Delete => Permission::Deny,
                     }
                 },
@@ -100,117 +101,167 @@ total fn check_permission(role: Role, resource: Resource, action: Action) -> Per
 }
 
 // ── Admin tests ────────────────────────────────────────────────────────────
-
 test fn admin_allow_user_profile_read() -> Unit {
     let d: Permission = check_permission(Role::Admin, Resource::UserProfile, Action::Read);
-    let ok: Int = match d { Permission::Allow => 1, Permission::Deny => 0 };
+    let ok: Int = match d {
+        Permission::Allow => 1,
+        Permission::Deny => 0,
+    };
     assert_eq(ok, 1)
 }
 
 test fn admin_allow_admin_panel_write() -> Unit {
     let d: Permission = check_permission(Role::Admin, Resource::AdminPanel, Action::Write);
-    let ok: Int = match d { Permission::Allow => 1, Permission::Deny => 0 };
+    let ok: Int = match d {
+        Permission::Allow => 1,
+        Permission::Deny => 0,
+    };
     assert_eq(ok, 1)
 }
 
 test fn admin_allow_audit_log_delete() -> Unit {
     let d: Permission = check_permission(Role::Admin, Resource::AuditLog, Action::Delete);
-    let ok: Int = match d { Permission::Allow => 1, Permission::Deny => 0 };
+    let ok: Int = match d {
+        Permission::Allow => 1,
+        Permission::Deny => 0,
+    };
     assert_eq(ok, 1)
 }
 
 // ── Moderator tests ────────────────────────────────────────────────────────
-
 test fn moderator_denied_admin_panel() -> Unit {
     let d: Permission = check_permission(Role::Moderator, Resource::AdminPanel, Action::Read);
-    let ok: Int = match d { Permission::Allow => 0, Permission::Deny => 1 };
+    let ok: Int = match d {
+        Permission::Allow => 0,
+        Permission::Deny => 1,
+    };
     assert_eq(ok, 1)
 }
 
 test fn moderator_allowed_audit_log() -> Unit {
     let d: Permission = check_permission(Role::Moderator, Resource::AuditLog, Action::Read);
-    let ok: Int = match d { Permission::Allow => 1, Permission::Deny => 0 };
+    let ok: Int = match d {
+        Permission::Allow => 1,
+        Permission::Deny => 0,
+    };
     assert_eq(ok, 1)
 }
 
 test fn moderator_cannot_delete_user_profile() -> Unit {
     let d: Permission = check_permission(Role::Moderator, Resource::UserProfile, Action::Delete);
-    let ok: Int = match d { Permission::Allow => 0, Permission::Deny => 1 };
+    let ok: Int = match d {
+        Permission::Allow => 0,
+        Permission::Deny => 1,
+    };
     assert_eq(ok, 1)
 }
 
 test fn moderator_can_write_post() -> Unit {
     let d: Permission = check_permission(Role::Moderator, Resource::Post, Action::Write);
-    let ok: Int = match d { Permission::Allow => 1, Permission::Deny => 0 };
+    let ok: Int = match d {
+        Permission::Allow => 1,
+        Permission::Deny => 0,
+    };
     assert_eq(ok, 1)
 }
 
 // ── User tests ─────────────────────────────────────────────────────────────
-
 test fn user_denied_admin_panel() -> Unit {
     let d: Permission = check_permission(Role::User, Resource::AdminPanel, Action::Read);
-    let ok: Int = match d { Permission::Allow => 0, Permission::Deny => 1 };
+    let ok: Int = match d {
+        Permission::Allow => 0,
+        Permission::Deny => 1,
+    };
     assert_eq(ok, 1)
 }
 
 test fn user_denied_audit_log() -> Unit {
     let d: Permission = check_permission(Role::User, Resource::AuditLog, Action::Read);
-    let ok: Int = match d { Permission::Allow => 0, Permission::Deny => 1 };
+    let ok: Int = match d {
+        Permission::Allow => 0,
+        Permission::Deny => 1,
+    };
     assert_eq(ok, 1)
 }
 
 test fn user_can_write_own_profile() -> Unit {
     let d: Permission = check_permission(Role::User, Resource::UserProfile, Action::Write);
-    let ok: Int = match d { Permission::Allow => 1, Permission::Deny => 0 };
+    let ok: Int = match d {
+        Permission::Allow => 1,
+        Permission::Deny => 0,
+    };
     assert_eq(ok, 1)
 }
 
 test fn user_cannot_delete_profile() -> Unit {
     let d: Permission = check_permission(Role::User, Resource::UserProfile, Action::Delete);
-    let ok: Int = match d { Permission::Allow => 0, Permission::Deny => 1 };
+    let ok: Int = match d {
+        Permission::Allow => 0,
+        Permission::Deny => 1,
+    };
     assert_eq(ok, 1)
 }
 
 test fn user_can_write_post() -> Unit {
     let d: Permission = check_permission(Role::User, Resource::Post, Action::Write);
-    let ok: Int = match d { Permission::Allow => 1, Permission::Deny => 0 };
+    let ok: Int = match d {
+        Permission::Allow => 1,
+        Permission::Deny => 0,
+    };
     assert_eq(ok, 1)
 }
 
 test fn user_cannot_delete_post() -> Unit {
     let d: Permission = check_permission(Role::User, Resource::Post, Action::Delete);
-    let ok: Int = match d { Permission::Allow => 0, Permission::Deny => 1 };
+    let ok: Int = match d {
+        Permission::Allow => 0,
+        Permission::Deny => 1,
+    };
     assert_eq(ok, 1)
 }
 
 // ── Guest tests ────────────────────────────────────────────────────────────
-
 test fn guest_can_read_post() -> Unit {
     let d: Permission = check_permission(Role::Guest, Resource::Post, Action::Read);
-    let ok: Int = match d { Permission::Allow => 1, Permission::Deny => 0 };
+    let ok: Int = match d {
+        Permission::Allow => 1,
+        Permission::Deny => 0,
+    };
     assert_eq(ok, 1)
 }
 
 test fn guest_cannot_write_post() -> Unit {
     let d: Permission = check_permission(Role::Guest, Resource::Post, Action::Write);
-    let ok: Int = match d { Permission::Allow => 0, Permission::Deny => 1 };
+    let ok: Int = match d {
+        Permission::Allow => 0,
+        Permission::Deny => 1,
+    };
     assert_eq(ok, 1)
 }
 
 test fn guest_cannot_access_admin_panel() -> Unit {
     let d: Permission = check_permission(Role::Guest, Resource::AdminPanel, Action::Read);
-    let ok: Int = match d { Permission::Allow => 0, Permission::Deny => 1 };
+    let ok: Int = match d {
+        Permission::Allow => 0,
+        Permission::Deny => 1,
+    };
     assert_eq(ok, 1)
 }
 
 test fn guest_cannot_access_audit_log() -> Unit {
     let d: Permission = check_permission(Role::Guest, Resource::AuditLog, Action::Read);
-    let ok: Int = match d { Permission::Allow => 0, Permission::Deny => 1 };
+    let ok: Int = match d {
+        Permission::Allow => 0,
+        Permission::Deny => 1,
+    };
     assert_eq(ok, 1)
 }
 
 test fn guest_can_read_user_profile() -> Unit {
     let d: Permission = check_permission(Role::Guest, Resource::UserProfile, Action::Read);
-    let ok: Int = match d { Permission::Allow => 1, Permission::Deny => 0 };
+    let ok: Int = match d {
+        Permission::Allow => 1,
+        Permission::Deny => 0,
+    };
     assert_eq(ok, 1)
 }

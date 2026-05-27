@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.160.0] - 2026-05-27
+
+### Added
+- #1065 — Quantified evidence in assurance reports:
+  - Refinement proof detail table in verbose mode showing per-proof layer, file:line, callee, and predicate
+  - Contract proof counting (ensures/requires) integrated into layer breakdown
+  - Implicit totality warning for functions defined without explicit `total`/`partial` keyword
+  - Gap surfacing for Req 10/11: shows which refinements and labels are not exercised by internal callers
+- `examples/access_control` — Added refinement types and contracts for Req 10 verification:
+  - SecurityConfig struct with integer refinements (`max_attempts: Int where self > 0 && self <= 10`)
+  - Refined functions: `clamp_attempts`, `next_attempt`, `total_timeout` (L1/L4 proofs)
+  - Username type alias with length refinement for Req 11 (L5 Z3 proofs)
+  - Explicit `total` keyword on all functions; 15 proven refinements across 8 layers
+
+### Improved
+- Assurance verbose output now includes file:line information for each proof, enabling fast navigation to proof sites
+
 ## [0.159.0] - 2026-05-27
 
 ### Added

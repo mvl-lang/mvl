@@ -6,9 +6,11 @@
 //
 // No extern, no effects — pure type declarations.
 // Assurance note: 0 extern blocks (domain model only).
+// ── Refined types ─────────────────────────────────────────────────────────
+/// A validated, non-empty username used across audit and auth boundaries.
+pub type Username = String where len(self) > 0
 
 // ── Principals ─────────────────────────────────────────────────────────────
-
 /// Principal role determining access level in the RBAC policy.
 pub type Role = enum {
     Admin,
@@ -18,7 +20,6 @@ pub type Role = enum {
 }
 
 // ── Resources and actions ──────────────────────────────────────────────────
-
 /// Protected resource that access-control decisions are made for.
 pub type Resource = enum {
     UserProfile,
@@ -35,7 +36,6 @@ pub type Action = enum {
 }
 
 // ── Policy outcome ─────────────────────────────────────────────────────────
-
 /// Policy decision for a principal attempting an action on a resource.
 pub type Permission = enum {
     Allow,
@@ -43,7 +43,6 @@ pub type Permission = enum {
 }
 
 // ── Error catalogue ────────────────────────────────────────────────────────
-
 /// Structured authentication failure reasons.
 pub type AuthError = enum {
     InvalidCredentials,

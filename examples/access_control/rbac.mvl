@@ -9,36 +9,44 @@
 //
 // No extern, no effects — pure total policy.
 // Assurance note: 0 extern blocks (pure, total policy function).
-
 use model::Role;
+
 use model::Resource;
+
 use model::Action;
+
 use model::Permission;
 
 // ── Policy ──────────────────────────────────────────────────────────────────
-
 // total fn: the compiler rejects any non-exhaustive match.
 // Every Role × Resource × Action triple has an explicit allow/deny decision.
 // No combination can fall through to an implicit default — absence of a case
 // is a compile error, not a silent security bypass.
 /// Exhaustive Role × Resource × Action policy — every triple has an explicit allow/deny.
-pub total fn check_permission(role: Role, resource: Resource, action: Action) -> Permission {
+pub total fn check_permission(
+    role: Role,
+    resource: Resource,
+    action: Action,
+) -> Permission {
     match role {
-        Role::Admin     => Permission::Allow,
+        Role::Admin => Permission::Allow,
         Role::Moderator => moderator_permission(resource, action),
-        Role::User      => user_permission(resource, action),
-        Role::Guest     => guest_permission(resource, action),
+        Role::User => user_permission(resource, action),
+        Role::Guest => guest_permission(resource, action),
     }
 }
 
-total fn moderator_permission(resource: Resource, action: Action) -> Permission {
+total fn moderator_permission(
+    resource: Resource,
+    action: Action,
+) -> Permission {
     match resource {
-        Resource::AdminPanel  => Permission::Deny,
-        Resource::AuditLog    => Permission::Allow,
+        Resource::AdminPanel => Permission::Deny,
+        Resource::AuditLog => Permission::Allow,
         Resource::UserProfile => {
             match action {
-                Action::Read   => Permission::Allow,
-                Action::Write  => Permission::Allow,
+                Action::Read => Permission::Allow,
+                Action::Write => Permission::Allow,
                 Action::Delete => Permission::Deny,
             }
         },
@@ -46,42 +54,48 @@ total fn moderator_permission(resource: Resource, action: Action) -> Permission 
     }
 }
 
-total fn user_permission(resource: Resource, action: Action) -> Permission {
+total fn user_permission(
+    resource: Resource,
+    action: Action,
+) -> Permission {
     match resource {
-        Resource::AdminPanel  => Permission::Deny,
-        Resource::AuditLog    => Permission::Deny,
+        Resource::AdminPanel => Permission::Deny,
+        Resource::AuditLog => Permission::Deny,
         Resource::UserProfile => {
             match action {
-                Action::Read   => Permission::Allow,
-                Action::Write  => Permission::Allow,
+                Action::Read => Permission::Allow,
+                Action::Write => Permission::Allow,
                 Action::Delete => Permission::Deny,
             }
         },
         Resource::Post => {
             match action {
-                Action::Read   => Permission::Allow,
-                Action::Write  => Permission::Allow,
+                Action::Read => Permission::Allow,
+                Action::Write => Permission::Allow,
                 Action::Delete => Permission::Deny,
             }
         },
     }
 }
 
-total fn guest_permission(resource: Resource, action: Action) -> Permission {
+total fn guest_permission(
+    resource: Resource,
+    action: Action,
+) -> Permission {
     match resource {
-        Resource::AdminPanel  => Permission::Deny,
-        Resource::AuditLog    => Permission::Deny,
+        Resource::AdminPanel => Permission::Deny,
+        Resource::AuditLog => Permission::Deny,
         Resource::UserProfile => {
             match action {
-                Action::Read   => Permission::Allow,
-                Action::Write  => Permission::Deny,
+                Action::Read => Permission::Allow,
+                Action::Write => Permission::Deny,
                 Action::Delete => Permission::Deny,
             }
         },
         Resource::Post => {
             match action {
-                Action::Read   => Permission::Allow,
-                Action::Write  => Permission::Deny,
+                Action::Read => Permission::Allow,
+                Action::Write => Permission::Deny,
                 Action::Delete => Permission::Deny,
             }
         },
