@@ -183,7 +183,7 @@ impl VerificationPass for MemorySafetyPass {
     fn requirement(&self) -> u8 {
         2
     }
-    fn run(&self, _prog: &Program, result: &CheckResult) -> Verdict {
+    fn run(&self, prog: &Program, result: &CheckResult) -> Verdict {
         let req = usize::from(self.requirement());
         let violations = result.req_errors[req];
         if violations > 0 {
@@ -196,8 +196,12 @@ impl VerificationPass for MemorySafetyPass {
                     .map(|e| e.span()),
             }
         } else {
+            let mc = count_memory_safety_sites(prog);
             Verdict::Proven {
-                evidence: "no use-after-move, dangling ref, or aliasing violations".to_string(),
+                evidence: format!(
+                    "{} let bindings, {} ref bindings, {} consume sites — no violations",
+                    mc.let_bindings, mc.ref_bindings, mc.consume_sites,
+                ),
             }
         }
     }
@@ -422,18 +426,24 @@ impl VerificationPass for DataRaceFreedomPass {
             };
         }
 
-        let (_race_free, total) = data_race::count_race_free_fns(prog);
+        let rc = data_race::count_race_free_fns(prog);
 
-        if total == 0 {
+        if rc.total == 0 {
             Verdict::Unchecked {
                 reason: "no functions to analyze".to_string(),
             }
         } else {
             Verdict::Proven {
-                evidence: "all functions proven race-free: \
-                     ref confinement, iso uniqueness, and actor-boundary \
-                     sendability all verified"
-                    .to_string(),
+                evidence: format!(
+                    "{}/{} fns race-free ({} actor boundaries, {} iso params, \
+                     {} val params, {} ref escapes)",
+                    rc.race_free,
+                    rc.total,
+                    rc.actor_boundaries,
+                    rc.iso_params,
+                    rc.val_params,
+                    rc.ref_escapes,
+                ),
             }
         }
     }
@@ -465,7 +475,7 @@ impl VerificationPass for RefinementsPass {
     fn requirement(&self) -> u8 {
         10
     }
-    fn run(&self, _prog: &Program, result: &CheckResult) -> Verdict {
+    fn run(&self, prog: &Program, result: &CheckResult) -> Verdict {
         let req = usize::from(self.requirement());
         let violations = result.req_errors[req];
         if violations > 0 {
@@ -486,6 +496,17 @@ impl VerificationPass for RefinementsPass {
         let total = rc.proven + rc.runtime_checked + rc.failed;
 
         if fn_total == 0 {
+            // Check for struct fields with where clauses — these are refined types
+            // that exist but have no call sites to prove.
+            let refined_fields = count_struct_field_refinements(prog);
+            if refined_fields > 0 {
+                return Verdict::Unchecked {
+                    reason: format!(
+                        "{refined_fields} struct field(s) have where clauses but \
+                         0 call sites proven — field invariants unchecked",
+                    ),
+                };
+            }
             Verdict::Unchecked {
                 reason: "no refined types used in this file".to_string(),
             }
@@ -508,6 +529,20 @@ impl VerificationPass for RefinementsPass {
             }
         }
     }
+}
+
+/// Count struct fields that have inline `where` refinement predicates.
+fn count_struct_field_refinements(prog: &Program) -> usize {
+    use crate::mvl::parser::ast::{Decl, TypeBody};
+    let mut count = 0;
+    for decl in &prog.declarations {
+        if let Decl::Type(td) = decl {
+            if let TypeBody::Struct { fields, .. } = &td.body {
+                count += fields.iter().filter(|f| f.refinement.is_some()).count();
+            }
+        }
+    }
+    count
 }
 
 // ── IFC pass (Req 11 — Phase 3 partial proof) ────────────────────────────────
@@ -548,8 +583,10 @@ impl VerificationPass for IFCPass {
             };
         }
 
-        // Count auditable relabel call sites (used by top-section numerics in assurance.rs).
-        let _relabel_count = ifc::count_relabels(prog);
+        // Count auditable relabel call sites and labeled params.
+        let relabel_count = ifc::count_relabels(prog);
+        let labeled_params = ifc::count_labeled_params(prog);
+        let flow_checks = ifc::count_flow_check_sites(prog);
 
         // Determine whether the program has any labeled types — if not, there
         // is nothing to prove and the pass is vacuously clean.
@@ -579,9 +616,10 @@ impl VerificationPass for IFCPass {
 
         if has_ifc {
             Verdict::Proven {
-                evidence: "no direct, implicit, or interprocedural information flow violations; \
-                     all relabel points auditable"
-                    .to_string(),
+                evidence: format!(
+                    "{relabel_count} relabel operations, {labeled_params} labeled params, \
+                     {flow_checks} flow checks — no violations",
+                ),
             }
         } else {
             Verdict::Unchecked {
@@ -1027,14 +1065,16 @@ fn alias_iso(channel: Channel, iso x: Payload) -> Unit {
     #[test]
     fn req11_proven_evidence_contains_audit_counts() {
         // GIVEN: a function with labeled types and no violations
-        // THEN: evidence string references relabel point count (#894)
+        // THEN: evidence string includes quantified counts (#894, #1065)
         let src = r#"fn secure(x: Secret[Bool]) -> Unit { }"#;
         let (prog, result) = check_src(src);
         let reg = PassRegistry::default_registry();
         if let Verdict::Proven { evidence } = reg.run_req(11, &prog, &result) {
             assert!(
-                evidence.contains("relabel point"),
-                "evidence should mention relabel count, got: {evidence:?}"
+                evidence.contains("relabel operations")
+                    && evidence.contains("labeled params")
+                    && evidence.contains("flow checks"),
+                "evidence should include quantified IFC counts, got: {evidence:?}"
             );
         } else {
             panic!("expected Proven for labeled program with no violations");

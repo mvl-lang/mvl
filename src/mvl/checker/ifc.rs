@@ -519,6 +519,165 @@ pub fn count_relabels(prog: &Program) -> usize {
     rc
 }
 
+/// Count function parameters that carry a security label (`Tainted[T]`, `Secret[T]`, etc.).
+pub fn count_labeled_params(prog: &Program) -> usize {
+    let mut count = 0;
+    for decl in &prog.declarations {
+        let params = match decl {
+            Decl::Fn(fd) => &fd.params[..],
+            _ => continue,
+        };
+        count += params
+            .iter()
+            .filter(|p| label_of_type_expr(&p.ty).is_some())
+            .count();
+    }
+    // Also count actor method params
+    for decl in &prog.declarations {
+        if let Decl::Actor(ad) = decl {
+            for method in &ad.methods {
+                count += method
+                    .params
+                    .iter()
+                    .filter(|p| label_of_type_expr(&p.ty).is_some())
+                    .count();
+            }
+        }
+    }
+    count
+}
+
+/// Count the number of flow-check sites: branches controlled by labeled values
+/// plus fn-call arguments that pass labeled data.
+///
+/// Walks all function bodies and counts `if`/`match` nodes where the
+/// condition/scrutinee references a labeled parameter, plus all fn-call
+/// arguments that use a labeled variable.
+pub fn count_flow_check_sites(prog: &Program) -> usize {
+    let mut count = 0;
+    for decl in &prog.declarations {
+        if let Decl::Fn(fd) = decl {
+            let labeled_params: HashSet<String> = fd
+                .params
+                .iter()
+                .filter(|p| label_of_type_expr(&p.ty).is_some())
+                .map(|p| p.name.clone())
+                .collect();
+            if !labeled_params.is_empty() {
+                count += count_flow_sites_in_block(&fd.body, &labeled_params);
+            }
+        }
+    }
+    count
+}
+
+fn count_flow_sites_in_block(block: &Block, labeled: &HashSet<String>) -> usize {
+    let mut count = 0;
+    for stmt in &block.stmts {
+        count += count_flow_sites_in_stmt(stmt, labeled);
+    }
+    count
+}
+
+fn count_flow_sites_in_stmt(stmt: &Stmt, labeled: &HashSet<String>) -> usize {
+    match stmt {
+        Stmt::Expr { expr, .. } => count_flow_sites_in_expr(expr, labeled),
+        Stmt::Return { value: Some(e), .. } => count_flow_sites_in_expr(e, labeled),
+        Stmt::Return { value: None, .. } => 0,
+        Stmt::Let { init, .. } => count_flow_sites_in_expr(init, labeled),
+        Stmt::Assign { value, .. } => count_flow_sites_in_expr(value, labeled),
+        Stmt::If {
+            cond, then, else_, ..
+        } => {
+            let mut c = if expr_uses_labeled(cond, labeled) {
+                1
+            } else {
+                0
+            };
+            c += count_flow_sites_in_block(then, labeled);
+            if let Some(eb) = else_ {
+                match eb {
+                    ElseBranch::Block(b) => c += count_flow_sites_in_block(b, labeled),
+                    ElseBranch::If(s) => c += count_flow_sites_in_stmt(s, labeled),
+                }
+            }
+            c
+        }
+        Stmt::Match {
+            scrutinee, arms, ..
+        } => {
+            let mut c = if expr_uses_labeled(scrutinee, labeled) {
+                1
+            } else {
+                0
+            };
+            for arm in arms {
+                match &arm.body {
+                    MatchBody::Block(b) => c += count_flow_sites_in_block(b, labeled),
+                    MatchBody::Expr(e) => c += count_flow_sites_in_expr(e, labeled),
+                }
+            }
+            c
+        }
+        Stmt::For { body, .. } | Stmt::While { body, .. } => {
+            count_flow_sites_in_block(body, labeled)
+        }
+    }
+}
+
+fn count_flow_sites_in_expr(expr: &Expr, labeled: &HashSet<String>) -> usize {
+    match expr {
+        Expr::If {
+            cond, then, else_, ..
+        } => {
+            let mut c = if expr_uses_labeled(cond, labeled) {
+                1
+            } else {
+                0
+            };
+            c += count_flow_sites_in_block(then, labeled);
+            if let Some(eb) = else_ {
+                c += count_flow_sites_in_expr(eb, labeled);
+            }
+            c
+        }
+        Expr::Match {
+            scrutinee, arms, ..
+        } => {
+            let mut c = if expr_uses_labeled(scrutinee, labeled) {
+                1
+            } else {
+                0
+            };
+            for arm in arms {
+                match &arm.body {
+                    MatchBody::Block(b) => c += count_flow_sites_in_block(b, labeled),
+                    MatchBody::Expr(e) => c += count_flow_sites_in_expr(e, labeled),
+                }
+            }
+            c
+        }
+        Expr::Block(b) => count_flow_sites_in_block(b, labeled),
+        Expr::FnCall { args, .. } => args
+            .iter()
+            .filter(|a| expr_uses_labeled(a, labeled))
+            .count(),
+        _ => 0,
+    }
+}
+
+fn expr_uses_labeled(expr: &Expr, labeled: &HashSet<String>) -> bool {
+    match expr {
+        Expr::Ident(name, _) => labeled.contains(name.as_str()),
+        Expr::FieldAccess { expr, .. } => expr_uses_labeled(expr, labeled),
+        Expr::Binary { left, right, .. } => {
+            expr_uses_labeled(left, labeled) || expr_uses_labeled(right, labeled)
+        }
+        Expr::Unary { expr, .. } => expr_uses_labeled(expr, labeled),
+        _ => false,
+    }
+}
+
 /// Extract the outermost security label name from a `TypeExpr`, if any.
 pub(crate) fn label_of_type_expr(te: &TypeExpr) -> Option<String> {
     match te {
