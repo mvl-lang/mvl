@@ -10,8 +10,13 @@
 ### Fixed
 - #1048 fallout — `tests/stdlib/net_basic.mvl` — Remove `concurrently {}` keyword after #1048 language change. Actor spawn and `tcp_accept` work without explicit concurrency scoping; runtime handles actor draining at process exit.
 
+### Improved
+- #1062 — `pkg/zmq/tools/check-sync.sh` — Bash script that detects signature drift between re-declared test functions and their source implementations. Integrated into `make sync-check` and `make assurance`. Catches 19 pub/non-pub function re-declarations; allow-list for intentional variants (e.g. `Tainted` stripping).
+- `zmq_test.mvl` — Replaced `decode_frame_str`, `sub_topic_str`, `sub_body_str` variants with real `Tainted`-aware functions from source. Tests now use `relabel taint/trust` at call sites, matching production code. Coverage: 65/65 branches (100%).
+
 ### Closed
 - #1060 — Mock TcpStream not feasible in MVL (opaque types, no traits, no monadic builders).
+- #1061 — Reopened with corrected analysis. Coverage instrumentation works correctly; issue is visibility-driven re-declarations (non-pub helpers must be copied locally).
 
 ## [0.158.0] - 2026-05-26
 
