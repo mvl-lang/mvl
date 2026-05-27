@@ -3,19 +3,182 @@
 
 //! Function and method call type inference for the MVL type checker.
 
+use std::collections::HashMap;
+
 use crate::mvl::checker::context::TypeBodyInfo;
 use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::ifc;
-use crate::mvl::checker::types::{types_compatible, Ty};
-use crate::mvl::parser::ast::{Expr, Totality};
+use crate::mvl::checker::types::{resolve, types_compatible, Ty};
+use crate::mvl::parser::ast::{Expr, Totality, TypeExpr};
 use crate::mvl::parser::lexer::Span;
 
 use super::TypeChecker;
 
+// ── Generic type instantiation helpers (#1066) ────────────────────────────────
+
+/// Apply a type-parameter substitution to a resolved `Ty`.
+///
+/// Names listed in `type_params` that are absent from `subst` (i.e. could not
+/// be inferred from the call-site arguments) are replaced with `Ty::Unknown` so
+/// that downstream compatibility checks degrade gracefully instead of failing
+/// on an unresolved `Named("T", [])` sentinel.
+fn substitute_ty(ty: &Ty, subst: &HashMap<String, Ty>, type_params: &[String]) -> Ty {
+    match ty {
+        // Bare named type: check if it's a type parameter.
+        Ty::Named(name, args) if args.is_empty() => {
+            if let Some(concrete) = subst.get(name.as_str()) {
+                concrete.clone()
+            } else if type_params.contains(name) {
+                Ty::Unknown // unresolved type param — error-recovery sentinel
+            } else {
+                ty.clone()
+            }
+        }
+        // Generic named type: recurse into type arguments.
+        Ty::Named(name, args) => Ty::Named(
+            name.clone(),
+            args.iter()
+                .map(|a| substitute_ty(a, subst, type_params))
+                .collect(),
+        ),
+        Ty::Option(inner) => Ty::Option(Box::new(substitute_ty(inner, subst, type_params))),
+        Ty::Result(ok, err) => Ty::Result(
+            Box::new(substitute_ty(ok, subst, type_params)),
+            Box::new(substitute_ty(err, subst, type_params)),
+        ),
+        Ty::List(elem) => Ty::List(Box::new(substitute_ty(elem, subst, type_params))),
+        Ty::Map(k, v) => Ty::Map(
+            Box::new(substitute_ty(k, subst, type_params)),
+            Box::new(substitute_ty(v, subst, type_params)),
+        ),
+        Ty::Set(elem) => Ty::Set(Box::new(substitute_ty(elem, subst, type_params))),
+        Ty::Labeled(label, inner) => Ty::Labeled(
+            label.clone(),
+            Box::new(substitute_ty(inner, subst, type_params)),
+        ),
+        Ty::Refined(base, pred) => Ty::Refined(
+            Box::new(substitute_ty(base, subst, type_params)),
+            pred.clone(),
+        ),
+        Ty::Tuple(elems) => Ty::Tuple(
+            elems
+                .iter()
+                .map(|e| substitute_ty(e, subst, type_params))
+                .collect(),
+        ),
+        Ty::Fn(params, ret, effects, totality) => Ty::Fn(
+            params
+                .iter()
+                .map(|p| substitute_ty(p, subst, type_params))
+                .collect(),
+            Box::new(substitute_ty(ret, subst, type_params)),
+            effects.clone(),
+            totality.clone(),
+        ),
+        Ty::Ref(mutable, inner) => {
+            Ty::Ref(*mutable, Box::new(substitute_ty(inner, subst, type_params)))
+        }
+        // Primitives, Never, Unknown, Session — no type params inside.
+        _ => ty.clone(),
+    }
+}
+
+/// Infer type-parameter bindings by structurally matching declared parameter
+/// types against the concrete argument types at a call site.
+///
+/// First binding for each parameter wins; conflicting second bindings are
+/// silently ignored (the subsequent per-argument compatibility check will
+/// report the mismatch).
+fn infer_type_params(
+    type_params: &[String],
+    param_tys: &[Ty],
+    arg_tys: &[Ty],
+    subst: &mut HashMap<String, Ty>,
+) {
+    for (param_ty, arg_ty) in param_tys.iter().zip(arg_tys.iter()) {
+        infer_type_param_pair(type_params, param_ty, arg_ty, subst);
+    }
+}
+
+/// Recursively infer bindings from a single (param_type, arg_type) pair.
+fn infer_type_param_pair(
+    type_params: &[String],
+    param_ty: &Ty,
+    arg_ty: &Ty,
+    subst: &mut HashMap<String, Ty>,
+) {
+    // Peel off the param label (if any) before matching; the arg may carry
+    // a label of its own which becomes part of the binding.
+    let param_base = param_ty.unlabeled();
+    match param_base {
+        // T (bare type parameter) → bind to the concrete arg type (labels included).
+        Ty::Named(name, args) if args.is_empty() && type_params.contains(name) => {
+            subst.entry(name.clone()).or_insert_with(|| arg_ty.clone());
+        }
+        // Named[A, B, ...] → recurse into type arguments.
+        Ty::Named(_, param_args) => {
+            if let Ty::Named(_, arg_args) = arg_ty.unlabeled() {
+                for (p, a) in param_args.iter().zip(arg_args.iter()) {
+                    infer_type_param_pair(type_params, p, a, subst);
+                }
+            }
+        }
+        Ty::Option(inner_p) => {
+            if let Ty::Option(inner_a) = arg_ty.unlabeled() {
+                infer_type_param_pair(type_params, inner_p, inner_a, subst);
+            }
+        }
+        Ty::Result(ok_p, err_p) => {
+            if let Ty::Result(ok_a, err_a) = arg_ty.unlabeled() {
+                infer_type_param_pair(type_params, ok_p, ok_a, subst);
+                infer_type_param_pair(type_params, err_p, err_a, subst);
+            }
+        }
+        Ty::List(inner_p) => {
+            if let Ty::List(inner_a) = arg_ty.unlabeled() {
+                infer_type_param_pair(type_params, inner_p, inner_a, subst);
+            }
+        }
+        Ty::Map(k_p, v_p) => {
+            if let Ty::Map(k_a, v_a) = arg_ty.unlabeled() {
+                infer_type_param_pair(type_params, k_p, k_a, subst);
+                infer_type_param_pair(type_params, v_p, v_a, subst);
+            }
+        }
+        Ty::Set(inner_p) => {
+            if let Ty::Set(inner_a) = arg_ty.unlabeled() {
+                infer_type_param_pair(type_params, inner_p, inner_a, subst);
+            }
+        }
+        Ty::Fn(params_p, ret_p, _, _) => {
+            if let Ty::Fn(params_a, ret_a, _, _) = arg_ty.unlabeled() {
+                for (p, a) in params_p.iter().zip(params_a.iter()) {
+                    infer_type_param_pair(type_params, p, a, subst);
+                }
+                infer_type_param_pair(type_params, ret_p, ret_a, subst);
+            }
+        }
+        Ty::Tuple(elems_p) => {
+            if let Ty::Tuple(elems_a) = arg_ty.unlabeled() {
+                for (p, a) in elems_p.iter().zip(elems_a.iter()) {
+                    infer_type_param_pair(type_params, p, a, subst);
+                }
+            }
+        }
+        _ => {} // primitives, Unknown, Never — no type params to extract
+    }
+}
+
 impl TypeChecker {
     // ── Function calls (#11) ──────────────────────────────────────────────
 
-    pub(super) fn infer_fn_call(&mut self, name: &str, args: &[Expr], span: Span) -> Ty {
+    pub(super) fn infer_fn_call(
+        &mut self,
+        name: &str,
+        type_args: &[TypeExpr],
+        args: &[Expr],
+        span: Span,
+    ) -> Ty {
         // Infer all argument types (for side-effect error collection)
         let arg_tys: Vec<Ty> = args.iter().map(|a| self.infer_expr(a)).collect();
 
@@ -31,26 +194,50 @@ impl TypeChecker {
                 });
                 return fn_info.ret.clone();
             }
-            // Type check: skip for generics (type params not yet substituted).
-            if !is_generic {
-                for (i, (expected, found)) in fn_info.params.iter().zip(arg_tys.iter()).enumerate()
-                {
-                    // #1007: all functions propagate labels unconditionally.
-                    // Strip the security label from the argument before type-checking
-                    // ONLY when the parameter is bare (unlabeled). If the parameter is
-                    // labeled, the argument must match the label exactly (#894).
-                    let found_check = if ifc::label_of(expected).is_none() {
-                        ifc::strip_label(found)
-                    } else {
-                        found
-                    };
-                    if !types_compatible(expected, found_check) {
-                        self.emit(CheckError::TypeMismatch {
-                            expected: expected.display(),
-                            found: found.display(),
-                            span: args[i].span(),
-                        });
-                    }
+
+            // #1066: For generic functions, instantiate type parameters before checking.
+            // Build a substitution map (T → concrete type) from explicit type args or
+            // by inferring from argument types, then substitute into param and return types.
+            let (inst_params, inst_ret): (Vec<Ty>, Ty) = if is_generic {
+                let subst: HashMap<String, Ty> = if !type_args.is_empty() {
+                    // Explicit type arguments: match positionally to type_params.
+                    fn_info
+                        .type_params
+                        .iter()
+                        .zip(type_args.iter())
+                        .map(|(tp_name, te)| (tp_name.clone(), resolve(te)))
+                        .collect()
+                } else {
+                    // Infer from argument types by structural matching.
+                    let mut s = HashMap::new();
+                    infer_type_params(&fn_info.type_params, &fn_info.params, &arg_tys, &mut s);
+                    s
+                };
+                let inst_params = fn_info
+                    .params
+                    .iter()
+                    .map(|ty| substitute_ty(ty, &subst, &fn_info.type_params))
+                    .collect();
+                let inst_ret = substitute_ty(&fn_info.ret, &subst, &fn_info.type_params);
+                (inst_params, inst_ret)
+            } else {
+                (fn_info.params.clone(), fn_info.ret.clone())
+            };
+
+            // Type check arguments against instantiated param types.
+            // #1007: Strip arg label only when the (instantiated) param is bare.
+            for (i, (expected, found)) in inst_params.iter().zip(arg_tys.iter()).enumerate() {
+                let found_check = if ifc::label_of(expected).is_none() {
+                    ifc::strip_label(found)
+                } else {
+                    found
+                };
+                if !types_compatible(expected, found_check) {
+                    self.emit(CheckError::TypeMismatch {
+                        expected: expected.display(),
+                        found: found.display(),
+                        span: args[i].span(),
+                    });
                 }
             }
 
@@ -92,37 +279,32 @@ impl TypeChecker {
                 });
             }
 
-            // L5-08: for generic functions the declared return type is a type-parameter
-            // name (e.g. `T`), not a concrete type.  Return Unknown so the call site
-            // unifies freely with any annotation or context type.
-            if is_generic {
-                return Ty::Unknown;
-            }
             // #1007: all functions propagate labels unconditionally.
             //
             // Propagate only the EXCESS label from each argument — the label that exceeds
-            // the function's declared parameter type.  This ensures:
+            // the instantiated parameter type.  This ensures:
             //   - format("{}", secret)  → Secret[String]  (param=String, arg=Secret[String]: excess=Secret)
             //   - write(p, tainted)     → Result[Unit,E]  (param=Tainted[String], arg=Tainted[String]: no excess)
             //   - hash_password(clean)  → Secret[String]  (no excess from arg, but ret has Secret label)
+            //   - identity(secret)      → Secret[String]  (T=Secret[String]: inst_ret=Secret[String])
             //
             // For variadic builtins (params=[]) all argument labels are propagated directly.
             // The excess is then joined with the return type's own label, and applied to the
             // stripped (unlabeled) return type.
-            let arg_label = if fn_info.params.is_empty() {
+            let arg_label = if inst_params.is_empty() {
                 // No declared params: propagate all arg labels.
                 arg_tys.iter().fold(None, |acc, ty| {
                     ifc::join_opt(acc, ifc::label_of(ty).map(|s| s.to_string()))
                 })
             } else {
-                // Non-variadic: propagate label from args where param is bare.
-                fn_info
-                    .params
+                // Non-variadic: propagate label from args where instantiated param is bare.
+                // `Unknown` params (e.g. builtin generics stored as Unknown) are treated as
+                // non-propagating — we don't know the declared type so we don't assume bare.
+                inst_params
                     .iter()
                     .zip(arg_tys.iter())
                     .fold(None, |acc, (param_ty, arg_ty)| {
-                        // Only propagate if param has no label (bare parameter).
-                        if ifc::label_of(param_ty).is_none() {
+                        if ifc::label_of(param_ty).is_none() && !matches!(param_ty, Ty::Unknown) {
                             let excess = ifc::label_of(arg_ty).map(|s| s.to_string());
                             ifc::join_opt(acc, excess)
                         } else {
@@ -130,9 +312,9 @@ impl TypeChecker {
                         }
                     })
             };
-            let ret_label = ifc::label_of(&fn_info.ret).map(|s| s.to_string());
+            let ret_label = ifc::label_of(&inst_ret).map(|s| s.to_string());
             let combined = ifc::join_opt(arg_label, ret_label);
-            ifc::apply_label(combined, ifc::strip_label(&fn_info.ret).clone())
+            ifc::apply_label(combined, ifc::strip_label(&inst_ret).clone())
         } else {
             // ── Built-in enum constructors ────────────────────────────────
             // These are not in the function table but are valid expressions.
@@ -266,12 +448,19 @@ impl TypeChecker {
                 return ret_ty;
             }
             // #928: Static method call `Type::method(args)` — resolve via method_table.
+            // #1066: Instantiate generic static methods the same way as generic functions.
             if let Some((type_name, method_name)) = name.split_once("::") {
                 if let Some(methods) = self.method_table.get(type_name) {
                     if let Some(fn_info) = methods.get(method_name).cloned() {
-                        let is_generic = !fn_info.type_params.is_empty();
-                        if is_generic {
-                            return Ty::Unknown;
+                        if !fn_info.type_params.is_empty() {
+                            let mut subst = HashMap::new();
+                            infer_type_params(
+                                &fn_info.type_params,
+                                &fn_info.params,
+                                &arg_tys,
+                                &mut subst,
+                            );
+                            return substitute_ty(&fn_info.ret, &subst, &fn_info.type_params);
                         }
                         return fn_info.ret.clone();
                     }

@@ -179,8 +179,11 @@ impl TypeChecker {
 
             // #11: Function call
             Expr::FnCall {
-                name, args, span, ..
-            } => self.infer_fn_call(name, args, *span),
+                name,
+                type_args,
+                args,
+                span,
+            } => self.infer_fn_call(name, type_args, args, *span),
 
             Expr::MethodCall {
                 receiver,
@@ -193,7 +196,7 @@ impl TypeChecker {
                 // call so stdlib lookup tables resolve `decode` correctly (#820).
                 if let Expr::Ident(name, _) = receiver.as_ref() {
                     if self.module_aliases.contains_key(name.as_str()) {
-                        return self.infer_fn_call(method, args, *span);
+                        return self.infer_fn_call(method, &[], args, *span);
                     }
                 }
                 let recv_ty = self.infer_expr(receiver);
