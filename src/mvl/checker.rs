@@ -153,9 +153,6 @@ pub fn check_with_two_preludes_mode(
         checker.collect_declarations(&p.declarations);
     }
     checker.check_program(prog);
-    termination::check_structural_recursion(prog, &mut checker.errors);
-    data_race::check_iso_aliasing(prog, &mut checker.errors);
-    data_race::check_ref_escape_to_spawn(prog, &mut checker.errors);
     // Build the whole-program program slice — used by IFC cross-function analysis,
     // the call graph, and the interprocedural label propagation pass.
     let all_prog_refs: Vec<&Program> = prelude_a
@@ -163,6 +160,12 @@ pub fn check_with_two_preludes_mode(
         .chain(prelude_b.iter().copied())
         .chain(std::iter::once(prog))
         .collect();
+    // Build call graph early so that both termination and IFC passes can use it.
+    let call_graph = call_graph::build(&all_prog_refs, &checker.env);
+    termination::check_structural_recursion(prog, &mut checker.errors);
+    termination::check_mutual_recursion(prog, &call_graph, &mut checker.errors);
+    data_race::check_iso_aliasing(prog, &mut checker.errors);
+    data_race::check_ref_escape_to_spawn(prog, &mut checker.errors);
 
     ifc::check_implicit_flows(
         prog,
@@ -198,8 +201,6 @@ pub fn check_with_two_preludes_mode(
     // `prog` carries IFC-labeled parameters — exercises the security lattice
     // even when `prog` itself defines no labeled functions.
     let has_prelude_ifc_boundary = ifc::prelude_has_ifc_boundary(prelude_a, prelude_b, prog);
-
-    let call_graph = call_graph::build(&all_prog_refs, &checker.env);
 
     // Interprocedural IFC: forward label propagation (#830/#833) then violation
     // detection (#831).  Runs after the call graph is built so that both the
@@ -312,6 +313,10 @@ struct TypeChecker {
     /// Populated from the user program's use declarations in `check_program`.
     /// Enables qualified calls: `json.decode(s)` resolves as a function call (#820).
     module_aliases: HashMap<String, Vec<String>>,
+    /// Stack of effect accumulators for nested lambda bodies (#1068 Gap 3).
+    /// When non-empty, the innermost entry collects effects used in the current
+    /// lambda body so that `Ty::Fn` carries the correct effect list.
+    lambda_body_effects: Vec<Vec<Effect>>,
 }
 
 impl TypeChecker {
@@ -336,6 +341,7 @@ impl TypeChecker {
             expr_types: HashMap::new(),
             effect_hierarchy: hierarchy,
             module_aliases: HashMap::new(),
+            lambda_body_effects: Vec::new(),
         }
     }
 

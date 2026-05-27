@@ -310,7 +310,7 @@ impl TypeChecker {
                         found: init_ty.display(),
                         span: init.span(),
                     });
-                } else if ann_ty.is_linear() {
+                } else if ann_ty.is_linear_in_env(&self.env.types) {
                     // Pony destructive-read rule: linear types require explicit consume().
                     // `let t: String = s` is forbidden; `let t: String = consume(s)` is required.
                     // Note: Stmt::Let.ty is always present (MVL requires type annotations on all
@@ -322,6 +322,18 @@ impl TypeChecker {
                             ty: ann_ty.display(),
                             span: init.span(),
                         });
+                    }
+                }
+                // Gap 2 (#1068): check if this binding shadows a live linear value.
+                if let Pattern::Ident(name, _) = pattern {
+                    if let Some(info) = self.env.lookup(name) {
+                        if !info.moved && info.ty.is_linear_in_env(&self.env.types) {
+                            self.emit(CheckError::LinearShadowDrop {
+                                name: name.clone(),
+                                ty: info.ty.display(),
+                                span: init.span(),
+                            });
+                        }
                     }
                 }
                 // Mutability is encoded in the type: `ref T` = mutable, everything else = immutable.
@@ -419,7 +431,7 @@ impl TypeChecker {
             } => {
                 let val_ty = self.infer_expr(value);
                 // #934: linear types require consume() on assignment, same as let bindings.
-                if val_ty.is_linear() {
+                if val_ty.is_linear_in_env(&self.env.types) {
                     if let Expr::Ident(src, _) = value {
                         self.emit(CheckError::LinearTypeBareBind {
                             name: src.clone(),

@@ -38,23 +38,44 @@ impl TypeChecker {
 
     // ── Reference capability checking (#22) ───────────────────────────────
 
-    /// Verify that an argument to `channel.send()` has a sendable capability.
+    /// Verify that an argument to `channel.send()` or actor behavior has a sendable capability.
     ///
-    /// Only `iso` and `val` may cross actor boundaries via `channel.send()`; `ref` may not.
+    /// Only `iso` and `val` may cross actor boundaries; `ref` may not.
     /// `tag` is sendable per ADR-0029 (identity-only, no read/write access).
-    /// `consume` wrapping is detected by looking for `Expr::Consume` (or equivalent).
     ///
-    /// # Scope limitation
-    /// Currently only checks simple identifier arguments (e.g. `channel.send(x)`).
-    /// Complex expressions like `channel.send(get_payload())` or `channel.send(obj.field)`
-    /// are not checked. See #73 for tracking.
+    /// Recursively checks all expression forms (#1068 Gap 5):
+    /// - `Ident`: check variable binding's capability
+    /// - `FieldAccess`: recursively check receiver
+    /// - `FnCall`/`MethodCall`: check if return type is `ref T`
+    /// - `Consume`: consuming transfers ownership, always sendable
+    /// - Other complex expressions: check inferred type for `ref`
     pub(super) fn check_send_capability(&mut self, arg: &Expr, span: Span) {
-        if let Expr::Ident(name, _) = arg {
-            if let Some(info) = self.env.lookup(name).cloned() {
-                // Only ref is non-sendable; iso, val, tag, and unannotated are sendable (ADR-0029 §1)
-                if let Some(Capability::Ref) = &info.capability {
+        match arg {
+            Expr::Ident(name, _) => {
+                if let Some(info) = self.env.lookup(name).cloned() {
+                    if let Some(Capability::Ref) = &info.capability {
+                        self.emit(CheckError::CapabilityViolation {
+                            param: name.clone(),
+                            capability: "ref".to_string(),
+                            span,
+                        });
+                    }
+                }
+            }
+            // Field access inherits the receiver's capability.
+            Expr::FieldAccess { expr, .. } => {
+                self.check_send_capability(expr, span);
+            }
+            // consume() transfers ownership — always sendable.
+            Expr::Consume { .. } => {}
+            // For function/method calls and other complex expressions, check
+            // whether the resolved type is `ref T` (non-sendable).
+            _ => {
+                let ty = self.infer_expr(arg);
+                if matches!(ty, super::types::Ty::Ref(_, _)) {
+                    let desc = expr_description(arg);
                     self.emit(CheckError::CapabilityViolation {
-                        param: name.clone(),
+                        param: desc,
                         capability: "ref".to_string(),
                         span,
                     });
@@ -92,6 +113,21 @@ impl TypeChecker {
                 span: init.span(),
             });
         }
+    }
+}
+
+/// Short description for an expression, used in error messages for sendability (#1068).
+fn expr_description(expr: &Expr) -> String {
+    match expr {
+        Expr::Ident(name, _) => name.clone(),
+        Expr::FieldAccess { expr, field, .. } => format!("{}.{field}", expr_description(expr)),
+        Expr::FnCall { name, .. } => format!("{name}(..)"),
+        Expr::MethodCall {
+            receiver, method, ..
+        } => {
+            format!("{}.{method}(..)", expr_description(receiver))
+        }
+        _ => "<expr>".to_string(),
     }
 }
 

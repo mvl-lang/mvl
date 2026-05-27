@@ -269,6 +269,11 @@ impl TypeChecker {
                 }
             }
 
+            // #1068 Gap 3: accumulate callee effects into the innermost lambda body.
+            if let Some(acc) = self.lambda_body_effects.last_mut() {
+                acc.extend(fn_info.effects.iter().cloned());
+            }
+
             // Req 8: Total function must not call partial functions.
             if matches!(fn_info.totality, Some(Totality::Partial))
                 && !matches!(self.current_fn_totality, Some(Totality::Partial))
@@ -432,6 +437,10 @@ impl TypeChecker {
                         }
                     }
                 }
+                // #1068 Gap 3: accumulate HOF callee effects into innermost lambda body.
+                if let Some(acc) = self.lambda_body_effects.last_mut() {
+                    acc.extend(hof_effects.iter().cloned());
+                }
                 // Req 8: total function must not call a partial HOF parameter.
                 // Note: hof_totality is None when the HOF param was declared via TypeExpr::Fn
                 // syntax (e.g. `f: fn(Int) -> Int`) because the parser does not yet support
@@ -583,6 +592,10 @@ impl TypeChecker {
                                 });
                             }
                         }
+                    }
+                    // #1068 Gap 3: accumulate method effects into innermost lambda body.
+                    if let Some(acc) = self.lambda_body_effects.last_mut() {
+                        acc.extend(method_info.effects.iter().cloned());
                     }
                     // Totality: total caller must not call partial method.
                     if matches!(method_info.totality, Some(Totality::Partial))

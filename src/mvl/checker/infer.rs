@@ -10,7 +10,7 @@ use crate::mvl::checker::context::{CapabilityState, TypeBodyInfo, VarInfo};
 use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::ifc;
 use crate::mvl::checker::types::{resolve, types_compatible, Ty};
-use crate::mvl::parser::ast::{BinaryOp, Expr, Literal, UnaryOp};
+use crate::mvl::parser::ast::{BinaryOp, Effect, Expr, Literal, UnaryOp};
 use crate::mvl::parser::lexer::Span;
 
 use super::TypeChecker;
@@ -479,7 +479,17 @@ impl TypeChecker {
                     })
                     .collect();
                 let ret_ty = ret_type.as_ref().map(|t| resolve(t)).unwrap_or(Ty::Unknown);
+                // #1068 Gap 3: collect effects used in the lambda body.
+                self.lambda_body_effects.push(Vec::new());
                 let body_ty = self.infer_expr(body);
+                let lambda_effects = self.lambda_body_effects.pop().unwrap_or_default();
+                // Deduplicate collected effects.
+                let mut deduped: Vec<Effect> = Vec::new();
+                for eff in lambda_effects {
+                    if !deduped.iter().any(|e| e.to_string() == eff.to_string()) {
+                        deduped.push(eff);
+                    }
+                }
                 // Verify body type matches declared return annotation
                 if !matches!(ret_ty, Ty::Unknown)
                     && !matches!(body_ty, Ty::Unknown)
@@ -493,7 +503,7 @@ impl TypeChecker {
                 }
                 self.env.pop_scope();
                 self.lambda_scope_starts.pop();
-                Ty::Fn(param_tys, Box::new(ret_ty), vec![], None)
+                Ty::Fn(param_tys, Box::new(ret_ty), deduped, None)
             }
 
             // Quantifier predicates only appear in contract positions (requires/ensures/invariants),

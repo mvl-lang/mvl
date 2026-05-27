@@ -86,7 +86,7 @@ pub partial fn jsonl_decode(s: String) -> Result[List[Value], JsonError] {
 // ── encode ────────────────────────────────────────────────────────────────────
 
 /// Serialises a Value to a JSON string.
-pub total fn encode(v: Value) -> String {
+pub partial fn encode(v: Value) -> String {
     match v {
         Value::Null      => "null",
         Value::Bool(b)   => if b { "true" } else { "false" },
@@ -123,7 +123,7 @@ total fn json_escape(s: String) -> String {
     out
 }
 
-total fn encode_array(arr: List[Value]) -> String {
+partial fn encode_array(arr: List[Value]) -> String {
     let len: Int = arr.len();
     if len == 0 {
         "[]"
@@ -142,7 +142,7 @@ total fn encode_array(arr: List[Value]) -> String {
     }
 }
 
-total fn encode_object(obj: Map[String, Value]) -> String {
+partial fn encode_object(obj: Map[String, Value]) -> String {
     let keys: List[String] = obj.keys();
     let len: Int = keys.len();
     if len == 0 {

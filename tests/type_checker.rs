@@ -8563,3 +8563,223 @@ fn generic_instantiation_corpus_parses_and_checks() {
         result.errors
     );
 }
+
+// ── #1068 Gap 1: Named types with linear fields require consume() ───────────
+
+#[test]
+fn struct_with_string_field_requires_consume() {
+    // GIVEN: a struct whose field is linear (String), assigned via bare identifier
+    // THEN: LinearTypeBareBind error
+    let src = r#"
+        type Config = struct { name: String }
+        fn f() -> Unit {
+            let a: Config = Config { name: "x" };
+            let b: Config = a;
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::LinearTypeBareBind { .. })),
+        "expected LinearTypeBareBind for struct with linear field, got: {errors:?}"
+    );
+}
+
+#[test]
+fn struct_with_string_field_consume_accepted() {
+    // GIVEN: struct with String field transferred via consume()
+    // THEN: no LinearTypeBareBind error
+    let src = r#"
+        type Config = struct { name: String }
+        fn f() -> Unit {
+            let a: Config = Config { name: "x" };
+            let b: Config = consume(a);
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::LinearTypeBareBind { .. })),
+        "consume() should satisfy linear struct, got: {errors:?}"
+    );
+}
+
+#[test]
+fn struct_with_only_int_fields_is_not_linear() {
+    // GIVEN: struct with only value-type fields (Int, Bool)
+    // THEN: no linear errors
+    let src = r#"
+        type Point = struct { x: Int, y: Int }
+        fn f() -> Unit {
+            let a: Point = Point { x: 1, y: 2 };
+            let b: Point = a;
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::LinearTypeBareBind { .. })),
+        "struct with only Int fields should not be linear, got: {errors:?}"
+    );
+}
+
+// ── #1068 Gap 2: Shadow-drop detection ──────────────────────────────────────
+
+#[test]
+fn shadow_drops_linear_string_detected() {
+    // GIVEN: shadowing a live String binding
+    // THEN: LinearShadowDrop error
+    let src = r#"
+        fn f() -> Unit {
+            let x: String = "hello";
+            let x: Int = 5;
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::LinearShadowDrop { .. })),
+        "expected LinearShadowDrop for shadowing live String, got: {errors:?}"
+    );
+}
+
+#[test]
+fn shadow_after_consume_ok() {
+    // GIVEN: consuming a linear value before shadowing
+    // THEN: no LinearShadowDrop error
+    let src = r#"
+        fn f() -> Unit {
+            let x: String = "hello";
+            let y: String = consume(x);
+            let x: Int = 5;
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::LinearShadowDrop { .. })),
+        "consumed binding should not trigger shadow-drop, got: {errors:?}"
+    );
+}
+
+// ── #1068 Gap 3: Lambda effect inference ────────────────────────────────────
+
+#[test]
+fn lambda_with_console_effect_propagates_to_caller() {
+    // GIVEN: a lambda that calls println (Console effect), called from a pure function
+    // THEN: UndeclaredEffect error (the lambda's effect should propagate)
+    let src = r#"
+        pub fn println(msg: String) -> Unit ! Console { }
+        fn f() -> Unit {
+            let log_it: fn(String) -> Unit = |x: String| { println(x) };
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::UndeclaredEffect { .. })),
+        "expected UndeclaredEffect for lambda calling println in pure function, got: {errors:?}"
+    );
+}
+
+#[test]
+fn lambda_with_console_effect_in_effectful_fn_ok() {
+    // GIVEN: a lambda that calls println, inside a function declaring Console
+    // THEN: no errors
+    let src = r#"
+        pub fn println(msg: String) -> Unit ! Console { }
+        fn f() -> Unit ! Console {
+            let log_it: fn(String) -> Unit = |x: String| { println(x) };
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors.iter().any(|e| matches!(
+            e,
+            CheckError::UndeclaredEffect { .. } | CheckError::MissingEffect { .. }
+        )),
+        "lambda in effectful function should be accepted, got: {errors:?}"
+    );
+}
+
+// ── #1068 Gap 4: Mutual recursion detection ─────────────────────────────────
+
+#[test]
+fn mutual_recursion_in_total_functions_detected() {
+    // GIVEN: two total functions that call each other (mutual recursion)
+    // THEN: MutualRecursionInTotal error
+    let src = r#"
+        fn ping(n: Int) -> Int { pong(n) }
+        fn pong(n: Int) -> Int { ping(n) }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::MutualRecursionInTotal { .. })),
+        "expected MutualRecursionInTotal for mutual recursion, got: {errors:?}"
+    );
+}
+
+#[test]
+fn mutual_recursion_in_partial_functions_ok() {
+    // GIVEN: two partial functions that call each other
+    // THEN: no MutualRecursionInTotal error (partial functions exempt)
+    let src = r#"
+        partial fn ping(n: Int) -> Int { pong(n) }
+        partial fn pong(n: Int) -> Int { ping(n) }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::MutualRecursionInTotal { .. })),
+        "partial functions should not trigger mutual recursion check, got: {errors:?}"
+    );
+}
+
+// ── #1068 Gap 5: Sendability checks on complex expressions ──────────────────
+
+#[test]
+fn field_access_on_ref_in_send_rejected() {
+    // GIVEN: sending a field access on a ref-capable parameter via channel.send()
+    // THEN: CapabilityViolation error (field access inherits ref capability)
+    let src = r#"
+        type Payload = struct { value: Int }
+        fn send_field(channel: Channel, ref data: Payload) -> Unit {
+            channel.send(data.value)
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::CapabilityViolation { .. })),
+        "expected CapabilityViolation for field access on ref in send, got: {errors:?}"
+    );
+}
+
+#[test]
+fn fn_call_returning_ref_in_send_rejected() {
+    // GIVEN: sending the return value of an expression that resolves to ref type
+    // THEN: CapabilityViolation error
+    let src = r#"
+        fn get_ref() -> ref String { ref "hello" }
+        fn send_expr(channel: Channel) -> Unit {
+            channel.send(get_ref())
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::CapabilityViolation { .. })),
+        "expected CapabilityViolation for fn returning ref in send, got: {errors:?}"
+    );
+}

@@ -243,14 +243,64 @@ impl Ty {
 
     /// True if this type requires explicit `consume()` for ownership transfer.
     /// Only the primitively heap-allocated types that the checker knows are non-Copy.
-    /// Named types (structs/enums) are excluded — their linearity depends on fields
-    /// and will be tracked in Phase 2 via type declarations.
-    /// TODO(#711): extend to Named once field linearity is tracked in Phase 2.
+    /// Named types (structs/enums) are excluded — use `is_linear_in_env` for recursive check.
     pub fn is_linear(&self) -> bool {
         matches!(
             self.unlabeled(),
             Ty::String | Ty::List(_) | Ty::Map(_, _) | Ty::Set(_)
         )
+    }
+
+    /// True if this type requires explicit `consume()` for ownership transfer,
+    /// recursively checking named types (structs/enums) via the type environment.
+    ///
+    /// A named type is linear if any of its fields is linear (transitively).
+    /// Uses `visited` internally to avoid infinite recursion on cyclic type defs.
+    pub fn is_linear_in_env(
+        &self,
+        types: &std::collections::HashMap<String, super::context::TypeInfo>,
+    ) -> bool {
+        let mut visited = std::collections::HashSet::new();
+        self.is_linear_rec(types, &mut visited)
+    }
+
+    fn is_linear_rec(
+        &self,
+        types: &std::collections::HashMap<String, super::context::TypeInfo>,
+        visited: &mut std::collections::HashSet<String>,
+    ) -> bool {
+        match self.unlabeled() {
+            Ty::String | Ty::List(_) | Ty::Map(_, _) | Ty::Set(_) => true,
+            Ty::Named(name, _) => {
+                if !visited.insert(name.clone()) {
+                    return false; // cycle guard
+                }
+                if let Some(info) = types.get(name) {
+                    match &info.body {
+                        super::context::TypeBodyInfo::Struct { fields, .. } => {
+                            fields.iter().any(|f| f.ty.is_linear_rec(types, visited))
+                        }
+                        super::context::TypeBodyInfo::Enum(variants) => {
+                            variants.iter().any(|v| match &v.fields {
+                                super::context::VariantFieldsInfo::Unit => false,
+                                super::context::VariantFieldsInfo::Tuple(tys) => {
+                                    tys.iter().any(|t| t.is_linear_rec(types, visited))
+                                }
+                                super::context::VariantFieldsInfo::Struct(fields) => {
+                                    fields.iter().any(|f| f.ty.is_linear_rec(types, visited))
+                                }
+                            })
+                        }
+                        super::context::TypeBodyInfo::Alias(inner) => {
+                            inner.is_linear_rec(types, visited)
+                        }
+                    }
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        }
     }
 
     /// Return the success type after unwrapping Result/Option for `?`.
