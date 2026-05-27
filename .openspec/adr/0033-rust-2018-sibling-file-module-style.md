@@ -1,6 +1,6 @@
 # ADR-0033: Rust 2018 Sibling-File Module Style
 
-**Status:** Accepted
+**Status:** Superseded by ADR-0030
 **Date:** 2026-05-16
 **Issues:** #794
 **Related:** ADR-0002 (language contraction), ADR-0007 (stdlib import model), spec 005 (module system)
