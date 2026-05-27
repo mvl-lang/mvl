@@ -6,6 +6,8 @@
 // Pub items could use imports — see #1061.
 // Assurance note: 0 extern blocks.
 
+use std.ifc.{Tainted}
+
 // ── Type re-declarations ──────────────────────────────────────────────────────
 
 type ZmqError = enum {
@@ -30,8 +32,8 @@ fn encode_frame(msg: String) -> String {
     String::from_bytes([b3, b2, b1, b0]).concat(msg)
 }
 
-/// Standalone decode that works on plain String (not Tainted) for testing.
-fn decode_frame_str(s: String) -> Result[String, ZmqError] {
+fn decode_frame(raw: Tainted[String]) -> Result[Tainted[String], ZmqError] {
+    let s: String = relabel trust(raw, "ZMQ-FRAME-PARSE");
     let slen: Int = s.len();
     if slen < 4 {
         Err(ZmqError::FrameError("frame too short"))
@@ -41,11 +43,16 @@ fn decode_frame_str(s: String) -> Result[String, ZmqError] {
         let b1: Int = s.byte_at(2).to_int();
         let b0: Int = s.byte_at(3).to_int();
         let expected_len: Int = b3.shift_left(24) + b2.shift_left(16) + b1.shift_left(8) + b0;
-        let body_len: Int = slen - 4;
-        if body_len != expected_len {
-            Err(ZmqError::FrameError("length mismatch"))
+        if expected_len < 0 || expected_len > 67108864 {
+            Err(ZmqError::FrameError("frame too large"))
         } else {
-            Ok(s.substring(4, slen))
+            let body_len: Int = slen - 4;
+            if body_len != expected_len {
+                Err(ZmqError::FrameError("length mismatch"))
+            } else {
+                let body: String = s.substring(4, slen);
+                Ok(relabel taint(body, "ZMQ-RECV"))
+            }
         }
     }
 }
@@ -80,20 +87,22 @@ fn parse_zmq_addr(addr: String) -> Result[ZmqAddr, ZmqError] {
     }
 }
 
-fn sub_topic_str(payload: String) -> String {
-    let plen: Int = payload.len();
-    match payload.find("\n") {
-        None    => payload.substring(0, plen),
-        Some(i) => payload.substring(0, i),
+fn sub_topic(payload: Tainted[String]) -> String {
+    let s: String = relabel trust(payload, "ZMQ-SUB-TOPIC");
+    match s.find("\n") {
+        None    => s,
+        Some(i) => s.substring(0, i),
     }
 }
 
-fn sub_body_str(payload: String) -> String {
-    let plen: Int = payload.len();
-    match payload.find("\n") {
+fn sub_body(payload: Tainted[String]) -> Tainted[String] {
+    let s: String = relabel trust(payload, "ZMQ-SUB-BODY");
+    let slen: Int = s.len();
+    let body: String = match s.find("\n") {
         None    => "",
-        Some(i) => payload.substring(i + 1, plen),
-    }
+        Some(i) => s.substring(i + 1, slen),
+    };
+    relabel taint(body, "ZMQ-SUB-BODY")
 }
 
 // ── encode_frame tests ────────────────────────────────────────────────────────
@@ -134,37 +143,37 @@ test fn encode_high_bytes_are_zero_for_short_msg() -> Unit {
 // ── decode_frame tests ────────────────────────────────────────────────────────
 
 test fn roundtrip_empty_string() -> Unit {
-    match decode_frame_str(encode_frame("")) {
+    match decode_frame(relabel taint(encode_frame(""), "TEST")) {
         Err(_) => assert_eq(true, false),
-        Ok(s)  => assert_eq(s, ""),
+        Ok(s)  => assert_eq(relabel trust(s, "TEST"), ""),
     }
 }
 
 test fn roundtrip_short_message() -> Unit {
-    match decode_frame_str(encode_frame("hi")) {
+    match decode_frame(relabel taint(encode_frame("hi"), "TEST")) {
         Err(_) => assert_eq(true, false),
-        Ok(s)  => assert_eq(s, "hi"),
+        Ok(s)  => assert_eq(relabel trust(s, "TEST"), "hi"),
     }
 }
 
 test fn roundtrip_longer_message() -> Unit {
     let msg: String = "the quick brown fox jumps over the lazy dog";
-    match decode_frame_str(encode_frame(msg)) {
+    match decode_frame(relabel taint(encode_frame(msg), "TEST")) {
         Err(_) => assert_eq(true, false),
-        Ok(s)  => assert_eq(s, msg),
+        Ok(s)  => assert_eq(relabel trust(s, "TEST"), msg),
     }
 }
 
 test fn roundtrip_message_with_newline() -> Unit {
     let msg: String = "line1\nline2";
-    match decode_frame_str(encode_frame(msg)) {
+    match decode_frame(relabel taint(encode_frame(msg), "TEST")) {
         Err(_) => assert_eq(true, false),
-        Ok(s)  => assert_eq(s, msg),
+        Ok(s)  => assert_eq(relabel trust(s, "TEST"), msg),
     }
 }
 
 test fn decode_too_short_is_frame_error() -> Unit {
-    match decode_frame_str("abc") {
+    match decode_frame(relabel taint("abc", "TEST")) {
         Ok(_)  => assert_eq(true, false),
         Err(e) => match e {
             ZmqError::FrameError(_) => assert_eq(true, true),
@@ -174,7 +183,7 @@ test fn decode_too_short_is_frame_error() -> Unit {
 }
 
 test fn decode_empty_string_is_frame_error() -> Unit {
-    match decode_frame_str("") {
+    match decode_frame(relabel taint("", "TEST")) {
         Ok(_)  => assert_eq(true, false),
         Err(e) => match e {
             ZmqError::FrameError(_) => assert_eq(true, true),
@@ -187,7 +196,7 @@ test fn decode_length_mismatch_is_frame_error() -> Unit {
     // Encode "hello" (5 bytes) then truncate body by 2 → length says 5, actual 3.
     let full: String = encode_frame("hello");
     let truncated: String = full.substring(0, 7);
-    match decode_frame_str(truncated) {
+    match decode_frame(relabel taint(truncated, "TEST")) {
         Ok(_)  => assert_eq(true, false),
         Err(e) => match e {
             ZmqError::FrameError(_) => assert_eq(true, true),
@@ -200,15 +209,27 @@ test fn decode_zero_length_frame_is_ok() -> Unit {
     let zero_frame: String = String::from_bytes([
         from_int(0), from_int(0), from_int(0), from_int(0)
     ]);
-    match decode_frame_str(zero_frame) {
+    match decode_frame(relabel taint(zero_frame, "TEST")) {
         Err(_) => assert_eq(true, false),
-        Ok(s)  => assert_eq(s, ""),
+        Ok(s)  => assert_eq(relabel trust(s, "TEST"), ""),
     }
 }
 
 test fn decode_3_byte_frame_is_error() -> Unit {
     let short: String = String::from_bytes([from_int(0), from_int(0), from_int(0)]);
-    match decode_frame_str(short) {
+    match decode_frame(relabel taint(short, "TEST")) {
+        Ok(_)  => assert_eq(true, false),
+        Err(e) => match e {
+            ZmqError::FrameError(_) => assert_eq(true, true),
+            _                       => assert_eq(true, false),
+        },
+    }
+}
+
+test fn decode_frame_too_large_is_error() -> Unit {
+    // Length header claims 0x7FFFFFFF bytes (> 64 MiB limit).
+    let huge: String = String::from_bytes([from_int(127), from_int(255), from_int(255), from_int(255)]);
+    match decode_frame(relabel taint(huge, "TEST")) {
         Ok(_)  => assert_eq(true, false),
         Err(e) => match e {
             ZmqError::FrameError(_) => assert_eq(true, true),
@@ -299,31 +320,31 @@ test fn parse_port_zero() -> Unit {
 // ── PUB/SUB payload helpers ───────────────────────────────────────────────────
 
 test fn sub_topic_extracts_prefix() -> Unit {
-    assert_eq(sub_topic_str("news\nhello world"), "news")
+    assert_eq(sub_topic(relabel taint("news\nhello world", "TEST")), "news")
 }
 
 test fn sub_body_extracts_suffix() -> Unit {
-    assert_eq(sub_body_str("news\nhello world"), "hello world")
+    assert_eq(relabel trust(sub_body(relabel taint("news\nhello world", "TEST")), "TEST"), "hello world")
 }
 
 test fn sub_topic_no_newline_is_whole_string() -> Unit {
-    assert_eq(sub_topic_str("no-newline"), "no-newline")
+    assert_eq(sub_topic(relabel taint("no-newline", "TEST")), "no-newline")
 }
 
 test fn sub_body_no_newline_is_empty() -> Unit {
-    assert_eq(sub_body_str("no-newline"), "")
+    assert_eq(relabel trust(sub_body(relabel taint("no-newline", "TEST")), "TEST"), "")
 }
 
 test fn sub_topic_empty_payload() -> Unit {
-    assert_eq(sub_topic_str(""), "")
+    assert_eq(sub_topic(relabel taint("", "TEST")), "")
 }
 
 test fn sub_roundtrip_topic_body() -> Unit {
     let topic: String = "alerts";
     let body: String = "server down";
-    let payload: String = topic.concat("\n").concat(body);
-    assert_eq(sub_topic_str(payload), topic);
-    assert_eq(sub_body_str(payload), body)
+    let payload: Tainted[String] = relabel taint(topic.concat("\n").concat(body), "TEST");
+    assert_eq(sub_topic(payload), topic);
+    assert_eq(relabel trust(sub_body(payload), "TEST"), body)
 }
 
 // ── ZMTP protocol helpers (re-declared from zmtp.mvl for standalone testing) ─
@@ -649,9 +670,9 @@ test fn pbt_encode_decode_roundtrip() -> Unit ! Random {
     property_check_string(
         "encode/decode roundtrip", gen_string(0, 100),
         |s: String| -> Bool {
-            match decode_frame_str(encode_frame(s)) {
+            match decode_frame(relabel taint(encode_frame(s), "TEST")) {
                 Err(_) => false,
-                Ok(decoded) => decoded == s,
+                Ok(decoded) => relabel trust(decoded, "TEST") == s,
             }
         },
         200
@@ -670,8 +691,8 @@ test fn pbt_sub_topic_body_roundtrip() -> Unit ! Random {
     property_check_string(
         "sub_topic/sub_body roundtrip", gen_string(1, 50),
         |topic: String| -> Bool {
-            let payload: String = topic.concat("\n").concat("test-body");
-            sub_topic_str(payload) == topic && sub_body_str(payload) == "test-body"
+            let payload: Tainted[String] = relabel taint(topic.concat("\n").concat("test-body"), "TEST");
+            sub_topic(payload) == topic && relabel trust(sub_body(payload), "TEST") == "test-body"
         },
         200
     )

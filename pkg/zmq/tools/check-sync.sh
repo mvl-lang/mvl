@@ -19,12 +19,9 @@ SRC_DIR="$DIR/src"
 TEST_FILE="$SRC_DIR/zmq_test.mvl"
 SOURCE_FILES=("$SRC_DIR/zmq.mvl" "$SRC_DIR/zmtp.mvl" "$SRC_DIR/pubsub.mvl")
 
-# Known intentional variants — test functions that use different names
-# or intentionally differ (e.g. removing Tainted wrappers).
+# Known intentional variants — test functions that deliberately differ
+# from source (empty if all re-declarations match source signatures).
 ALLOW_LIST=(
-  "decode_frame_str"   # intentional: String version of decode_frame
-  "sub_topic_str"      # intentional: String version of sub_topic
-  "sub_body_str"       # intentional: String version of sub_body
 )
 
 # ── Extract function/type signatures ──────────────────────────────────────────
