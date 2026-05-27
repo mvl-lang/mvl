@@ -256,6 +256,22 @@ fn emit_fn_body(cg: &mut RustEmitter, fd: &FnDecl) {
         }
     }
 
+    // #1048 + deadlock fix: when inject_actor_join is true, wrap the entire body
+    // in an inner scope `{ ... }` so that all actor handles (which hold SyncSender
+    // channels) are dropped before _mvl_join_actors() tries to join the actor
+    // threads.  Without this scope, the join deadlocks: actor threads block on
+    // rx.recv() waiting for all senders to close, but the sender in the local
+    // variable isn't dropped until main() returns — which can't happen because
+    // _mvl_join_actors() is blocking.
+    let needs_actor_scope = cg.inject_actor_join;
+    if needs_actor_scope {
+        cg.inject_actor_join = false;
+        cg.indent();
+        cg.push("{");
+        cg.nl();
+        cg.push_indent();
+    }
+
     let stmts = &fd.body.stmts;
     if stmts.is_empty() {
         // Unit-returning functions with an empty body are valid in Rust (implicit `()`).
@@ -265,12 +281,6 @@ fn emit_fn_body(cg: &mut RustEmitter, fd: &FnDecl) {
             matches!(fd.return_type.as_ref(), TypeExpr::Base { name, .. } if name == "Unit");
         if !is_unit {
             unreachable!("non-Unit function with empty body — blocked by checker (#990)");
-        }
-        // #1048: even an empty fn main() must drain spawned actors.
-        if cg.inject_actor_join {
-            cg.indent();
-            cg.push("_mvl_join_actors()");
-            cg.nl();
         }
     } else {
         // Emit all but the last statement normally
@@ -313,15 +323,6 @@ fn emit_fn_body(cg: &mut RustEmitter, fd: &FnDecl) {
                     } else {
                         cg.indent();
                         emit_expr_tail_with_return_type(cg, expr, &fd.return_type, &fd.params);
-                        // #1048: for fn main() with actors, force this stmt to have a
-                        // semicolon and emit _mvl_join_actors() as the return expression,
-                        // ensuring all spawned actors drain before the process exits.
-                        if cg.inject_actor_join {
-                            cg.push(";");
-                            cg.nl();
-                            cg.indent();
-                            cg.push("_mvl_join_actors()");
-                        }
                         cg.nl();
                     }
                 }
@@ -331,14 +332,19 @@ fn emit_fn_body(cg: &mut RustEmitter, fd: &FnDecl) {
             // the static checker handles postcondition verification for them at compile time.
             other => {
                 emit_block_stmts(cg, std::slice::from_ref(other));
-                // #1048: last stmt was a Let/Assign/etc. (already has `;`); emit join.
-                if cg.inject_actor_join {
-                    cg.indent();
-                    cg.push("_mvl_join_actors()");
-                    cg.nl();
-                }
             }
         }
+    }
+
+    // Close inner scope (drops all actor handles) and emit join.
+    if needs_actor_scope {
+        cg.pop_indent();
+        cg.indent();
+        cg.push("}");
+        cg.nl();
+        cg.indent();
+        cg.push("_mvl_join_actors()");
+        cg.nl();
     }
 
     // Return refinement: emit assert! before closing brace
