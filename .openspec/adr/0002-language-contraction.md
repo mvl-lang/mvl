@@ -30,6 +30,12 @@ The MVL drops every feature that exists for writability over readability. One wa
 | `while` in total functions | Idris 2 (2021), Lean 4 (2021) | `for` with bounded iterators; `while` only in `partial` fns |
 | `break` | — | Extract loop body into function with early `return`. `break` undermines `decreases` termination proofs — the checker can't prove the bound is reached if `break` exits early. |
 | `continue` | — | `if` condition inverted: `if cond { skip }` → `if !cond { process }`. `continue` is a goto in disguise — non-local control flow inside a loop body. |
+| Trait objects / dynamic dispatch | Rust `dyn Trait` (2015), Java interfaces (1995) | Static dispatch only. All generics are monomorphized (ADR-0034). No `dyn`, no vtables, no type erasure. |
+| Per-field visibility | Rust `pub(crate)` fields (2015) | Struct fields are always public. Access control is at the module boundary (`pub fn`), not the field level. Simplifies codegen and verification. |
+
+### Design note: `while` and termination
+
+`while` is the only loop form in MVL (there is no `for` — iteration uses higher-order functions like `map`/`fold`). It is restricted to `partial fn` because an unbounded loop cannot, in general, be proven to terminate. In `total fn`, all recursion must use a structurally decreasing argument or an explicit `decreases` clause that the checker can verify. Allowing `while` in total functions would require the programmer to supply a loop invariant and termination measure — complexity that adds no value when an LLM can emit tail-recursive or higher-order equivalents. See Spec 013 (Termination) for the enforcement details.
 
 ## What survives
 
