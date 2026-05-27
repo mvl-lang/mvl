@@ -284,9 +284,11 @@ fn check_return_pred_for_expr(
     var_refs: &HashMap<String, Option<RefExpr>>,
     fn_decls: &HashMap<String, FnDecl>,
     errors: &mut Vec<CheckError>,
-    mode: SolverMode,
+    _mode: SolverMode,
 ) {
-    let outcome = check_arg_against_pred(ret_expr, ret_pred, var_refs, fn_decls, mode);
+    let outcome = with_contract_counts(|c| {
+        check_arg_against_pred_counted(ret_expr, ret_pred, var_refs, fn_decls, c)
+    });
     if let RefResult::Failed { counterexample } = outcome {
         errors.push(CheckError::RefinementViolated {
             pred: format!(
@@ -2254,8 +2256,11 @@ fn check_construct_refinements_in_expr(
                 for (init_name, init_expr) in fields {
                     if let Some(field_decl) = refined_fields.iter().find(|f| &f.name == init_name) {
                         if let Some(pred) = &field_decl.refinement {
-                            let outcome =
-                                check_arg_against_pred(init_expr, pred, var_refs, fn_decls, mode);
+                            let outcome = with_contract_counts(|c| {
+                                check_arg_against_pred_counted(
+                                    init_expr, pred, var_refs, fn_decls, c,
+                                )
+                            });
                             if let RefResult::Failed { counterexample } = outcome {
                                 errors.push(CheckError::RefinementViolated {
                                     pred: format!("{name}.{init_name}: {}", display_pred(pred)),
