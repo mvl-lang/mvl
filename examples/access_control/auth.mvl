@@ -76,7 +76,7 @@ test fn auth_error_invalid_token_variant() -> Unit {
 // Negative-path: Err(InvalidCredentials) flows correctly through the
 // authenticate() → caller boundary when hash_verify fails.
 // Simulates the Err path without calling extern functions.
-fn auth_failure_result() -> Result[String, AuthError] { Err(AuthError::InvalidCredentials) }
+total fn auth_failure_result() -> Result[String, AuthError] { Err(AuthError::InvalidCredentials) }
 
 test fn wrong_password_yields_invalid_credentials() -> Unit {
     let result: Result[String, AuthError] = auth_failure_result();

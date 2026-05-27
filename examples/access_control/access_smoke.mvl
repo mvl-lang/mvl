@@ -28,7 +28,7 @@ type Permission = struct {
     action: Action,
 }
 
-fn allowed(p: Permission) -> Bool {
+total fn allowed(p: Permission) -> Bool {
     match p.role {
         Role::Admin => true,
         Role::Moderator => match p.resource {
@@ -52,7 +52,7 @@ fn allowed(p: Permission) -> Bool {
     }
 }
 
-fn print_decision(ok: Bool) -> Unit ! Console {
+total fn print_decision(ok: Bool) -> Unit ! Console {
     if ok {
         println("ALLOWED")
     } else {
@@ -60,7 +60,7 @@ fn print_decision(ok: Bool) -> Unit ! Console {
     }
 }
 
-fn main() -> Unit ! Console {
+total fn main() -> Unit ! Console {
     let p1: Permission = Permission { role: Role::Admin, resource: Resource::AdminPanel, action: Action::Manage };
     let p2: Permission = Permission { role: Role::Guest, resource: Resource::AdminPanel, action: Action::Write };
     print_decision(allowed(p1));

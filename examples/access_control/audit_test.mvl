@@ -50,7 +50,7 @@ total fn permission_name(decision: Permission) -> String {
     }
 }
 
-fn log_level_for_decision(decision: Permission) -> String {
+total fn log_level_for_decision(decision: Permission) -> String {
     match decision {
         Permission::Allow => "info",
         Permission::Deny => "warn",
