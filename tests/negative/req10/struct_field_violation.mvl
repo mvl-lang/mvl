@@ -1,0 +1,12 @@
+// corpus:expect-fail
+// expect-requirement: 10
+// Gap 1 (#1067): Struct field `where` refinement violated at construction site.
+// The compiler should prove this is a compile-time error, not a runtime panic.
+
+type BoundedPort = struct {
+    value: Int where self >= 0 && self <= 65535,
+}
+
+fn bad_port() -> BoundedPort {
+    BoundedPort { value: 99999 }
+}

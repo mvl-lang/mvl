@@ -926,7 +926,11 @@ fn analyze_stmt(
 ) {
     match stmt {
         Stmt::Let {
-            pattern, ty, init, ..
+            pattern,
+            ty,
+            init,
+            span,
+            ..
         } => {
             analyze_expr(
                 init, var_refs, fn_params, type_refs, fn_decls, errors, counts,
@@ -943,6 +947,26 @@ fn analyze_stmt(
                         if let Some(cv) = const_eval::try_fold_call(fd, args, fn_decls) {
                             pred = lit_eq_pred(&cv);
                         }
+                    }
+                }
+            }
+            // Check that the initialiser satisfies the declared type's refinement predicate.
+            // This catches e.g. `let x: PositiveInt = -1` at compile time.
+            if let Some(ref p) = pred {
+                let outcome = check_arg_against_pred_counted(init, p, var_refs, fn_decls, counts);
+                match outcome {
+                    RefResult::Proven => counts.proven += 1,
+                    RefResult::RuntimeCheck => counts.runtime_checked += 1,
+                    RefResult::Failed { counterexample } => {
+                        counts.failed += 1;
+                        errors.push(CheckError::RefinementViolated {
+                            pred: format!(
+                                "let binding initialiser violates refinement `{}`",
+                                display_pred(p)
+                            ),
+                            span: *span,
+                            counterexample,
+                        });
                     }
                 }
             }
@@ -1052,7 +1076,26 @@ fn analyze_expr(
                 );
             }
         }
-        Expr::MethodCall { receiver, args, .. } => {
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+            span,
+        } => {
+            // Check args against the method's parameter refinements (same as FnCall).
+            // Methods are registered under their bare name in fn_params.
+            // The first parameter of an extension/impl method is the implicit `self`
+            // receiver, which is NOT included in `args` — skip it when present.
+            if let Some(param_refs) = fn_params.get(method) {
+                let arg_params = if param_refs.first().is_some_and(|(name, _)| name == "self") {
+                    &param_refs[1..]
+                } else {
+                    param_refs.as_slice()
+                };
+                check_call_site(
+                    method, args, *span, arg_params, var_refs, fn_decls, errors, counts,
+                );
+            }
             analyze_expr(
                 receiver, var_refs, fn_params, type_refs, fn_decls, errors, counts,
             );

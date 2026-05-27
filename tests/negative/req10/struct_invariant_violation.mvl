@@ -1,0 +1,13 @@
+// corpus:expect-fail
+// expect-requirement: 10
+// Gap 2 (#1067): Struct `with invariant` violated at construction site.
+// lo > hi violates the declared invariant that lo <= hi.
+
+type Range = struct {
+    lo: Int,
+    hi: Int,
+} with invariant self.lo <= self.hi
+
+fn bad_range() -> Range {
+    Range { lo: 10, hi: 5 }
+}
