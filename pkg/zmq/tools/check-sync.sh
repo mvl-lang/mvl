@@ -126,6 +126,9 @@ done < <(extract_signatures "$TEST_FILE" true)
 
 # ── Compare ───────────────────────────────────────────────────────────────────
 
+printf "  Checking zmq_test.mvl re-declarations against source signatures\n"
+printf "  (non-pub helpers can't be imported — re-declarations must stay in sync)\n\n"
+
 DRIFT=0
 SYNCED=0
 SKIPPED=0
@@ -168,8 +171,13 @@ done
 
 MATCHED=$((SYNCED + DRIFT))
 echo ""
-printf "  sync-check: %d matched, %d synced, %d drifted, %d skipped, %d test-only\n" \
-  "$MATCHED" "$SYNCED" "$DRIFT" "$SKIPPED" "$TEST_ONLY"
+printf "  %d matched, %d synced, %d drifted\n" "$MATCHED" "$SYNCED" "$DRIFT"
+if [[ $SKIPPED -gt 0 ]]; then
+  printf "  %d skipped (intentional variants: %s)\n" "$SKIPPED" "$(IFS=', '; echo "${ALLOW_LIST[*]}")"
+fi
+if [[ $TEST_ONLY -gt 0 ]]; then
+  printf "  %d test-only (no source match)\n" "$TEST_ONLY"
+fi
 
 if [[ $DRIFT -gt 0 ]]; then
   printf "\n  \033[31m✗  pkg.zmq: sync-check FAIL (%d drifted)\033[0m\n\n" "$DRIFT"
