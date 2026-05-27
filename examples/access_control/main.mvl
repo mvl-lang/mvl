@@ -34,9 +34,25 @@ use model::AuthError;
 
 use model::AppError;
 
+
 use std.log.{Logger, default_logger}
 
 use std.ifc.{taint}
+
+// ── Security configuration ───────────────────────────────────────────────
+type SecurityConfig = struct {
+    max_attempts: Int where self > 0 && self <= 10,
+    session_ttl: Int where self > 0,
+}
+
+total fn default_security_config() -> SecurityConfig {
+    SecurityConfig { max_attempts: 3, session_ttl: 3600 }
+}
+
+/// Clamp an attempt count to the configured maximum.
+total fn clamp_attempts(n: Int where n >= 0, max: Int where max > 0) -> Int {
+    if n > max { max } else { n }
+}
 
 // ── Trust boundary: demo fixture data lives in Rust ───────────────────────
 extern "rust" {
@@ -88,6 +104,8 @@ total fn demo_auth(logger: val Logger) -> Unit ! Log + CryptoRandom {
 
 total fn main() -> Unit ! Log + CryptoRandom {
     let logger: Logger = default_logger();
+    let _config: SecurityConfig = default_security_config();
+    let _clamped: Int = clamp_attempts(5, 3);
     let rbac_done: Unit = demo_rbac(logger);
     demo_auth(logger)
 }
