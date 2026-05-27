@@ -36,6 +36,7 @@
 
 use std::collections::HashSet;
 
+use crate::mvl::checker::call_graph::CallGraph;
 use crate::mvl::checker::errors::CheckError;
 use crate::mvl::parser::ast::{
     BinaryOp, Block, Decl, ElseBranch, Expr, FnDecl, Literal, MatchArm, MatchBody, Pattern,
@@ -56,6 +57,41 @@ pub fn check_structural_recursion(prog: &Program, errors: &mut Vec<CheckError>) 
             // Totality::None == implicitly total (default); only Partial is exempt.
             if !matches!(fd.totality, Some(Totality::Partial)) {
                 check_fn(fd, errors);
+            }
+        }
+    }
+}
+
+/// Detect mutual recursion in total functions using the call graph (#1068 Gap 4).
+///
+/// For each total function `f`, check every callee `g` (where `g != f`) to see
+/// if `g` can reach back to `f` via the call graph.  If so, `f` participates in
+/// a mutual recursion cycle and must be marked `partial` or provide a `decreases`
+/// measure across the cycle.
+pub fn check_mutual_recursion(
+    prog: &Program,
+    call_graph: &CallGraph,
+    errors: &mut Vec<CheckError>,
+) {
+    let mut reported: HashSet<String> = HashSet::new();
+    for decl in &prog.declarations {
+        if let Decl::Fn(fd) = decl {
+            if matches!(fd.totality, Some(Totality::Partial)) {
+                continue;
+            }
+            for edge in call_graph.callees(&fd.name) {
+                if edge.callee == fd.name {
+                    continue; // self-recursion already handled by check_structural_recursion
+                }
+                if call_graph.reachable(&edge.callee, &fd.name) && !reported.contains(&fd.name) {
+                    reported.insert(fd.name.clone());
+                    errors.push(CheckError::MutualRecursionInTotal {
+                        fn_name: fd.name.clone(),
+                        cycle_with: edge.callee.clone(),
+                        span: edge.call_span,
+                    });
+                    break; // one error per function is enough
+                }
             }
         }
     }

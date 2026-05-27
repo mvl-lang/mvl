@@ -228,6 +228,12 @@ pub enum CheckError {
         fn_name: String,
         span: Span,
     },
+    /// Total function participates in a mutual recursion cycle (#1068 Gap 4).
+    MutualRecursionInTotal {
+        fn_name: String,
+        cycle_with: String,
+        span: Span,
+    },
 
     // ── Reference capability checking (#22) ──────────────────────────────
     /// Value with `ref` (or non-sendable) capability sent across actor boundary.
@@ -273,6 +279,12 @@ pub enum CheckError {
     /// Linear type (String, List, Map, Set, or named struct) assigned without `consume()`.
     /// MVL uses Pony-style destructive read: ownership transfer requires explicit `consume(x)`.
     LinearTypeBareBind {
+        name: String,
+        ty: String,
+        span: Span,
+    },
+    /// Shadowing a live linear binding without consuming it first (#1068 Gap 2).
+    LinearShadowDrop {
         name: String,
         ty: String,
         span: Span,
@@ -531,7 +543,8 @@ impl CheckError {
             CheckError::AssignToImmutable { .. }
             | CheckError::MutateImmutableField { .. }
             | CheckError::CaptureMutabilityViolation { .. }
-            | CheckError::LinearTypeBareBind { .. } => 6,
+            | CheckError::LinearTypeBareBind { .. }
+            | CheckError::LinearShadowDrop { .. } => 6,
             // Req 7: Effect Tracking (includes invalid names)
             CheckError::InvalidEffectName { .. }
             | CheckError::UnknownEffectParent { .. }
@@ -542,6 +555,7 @@ impl CheckError {
             CheckError::UnboundedLoopInTotal { .. }
             | CheckError::PartialCallInTotal { .. }
             | CheckError::UnprovenRecursion { .. }
+            | CheckError::MutualRecursionInTotal { .. }
             | CheckError::ForLoopInPartialFn { .. }
             | CheckError::DecreasesNotBounded { .. }
             | CheckError::DecreasesNotDecreasing { .. } => 8,
@@ -624,6 +638,7 @@ impl CheckError {
             | CheckError::UnboundedLoopInTotal { span }
             | CheckError::PartialCallInTotal { span, .. }
             | CheckError::UnprovenRecursion { span, .. }
+            | CheckError::MutualRecursionInTotal { span, .. }
             | CheckError::CapabilityViolation { span, .. }
             | CheckError::IsoAliasingViolation { span, .. }
             | CheckError::RefEscapesToConcurrentContext { span, .. }
@@ -631,6 +646,7 @@ impl CheckError {
             | CheckError::DuplicateActorMethod { span, .. }
             | CheckError::NonUnitBehaviorReturn { span, .. }
             | CheckError::LinearTypeBareBind { span, .. }
+            | CheckError::LinearShadowDrop { span, .. }
             | CheckError::InvalidRelabel { span, .. }
             | CheckError::UnknownRelabel { span, .. }
             | CheckError::InvalidDeclassify { span, .. }
@@ -787,6 +803,9 @@ impl CheckError {
             CheckError::UnprovenRecursion { fn_name, .. } => format!(
                 "recursive call in total function `{fn_name}` cannot be proven terminating — argument does not structurally decrease"
             ),
+            CheckError::MutualRecursionInTotal { fn_name, cycle_with, .. } => format!(
+                "total function `{fn_name}` participates in mutual recursion with `{cycle_with}` — mark as `partial` or add `decreases` measure"
+            ),
             CheckError::CapabilityViolation {
                 param, capability, ..
             } => format!(
@@ -811,6 +830,9 @@ impl CheckError {
             ),
             CheckError::LinearTypeBareBind { name, ty, .. } => format!(
                 "bare assignment of linear type `{ty}` — use `consume({name})` to transfer ownership (Pony destructive read semantics)"
+            ),
+            CheckError::LinearShadowDrop { name, ty, .. } => format!(
+                "linear type `{ty}` in binding `{name}` is silently dropped by shadowing — use `consume({name})` before rebinding"
             ),
             CheckError::InvalidRelabel { transition, expected_from, found, .. } => format!(
                 "`relabel {transition}` expects `{expected_from}[T]` input, found `{found}` — check the declared transition type"
