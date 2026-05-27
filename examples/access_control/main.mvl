@@ -16,29 +16,35 @@
 //   make run   (from examples/access_control/)
 //
 // Assurance note: 1 extern block (1 trust-boundary function).
-
 use auth::authenticate;
+
 use rbac::check_permission;
+
 use audit::log_access;
+
 use model::Role;
+
 use model::Resource;
+
 use model::Action;
+
 use model::Permission;
+
 use model::AuthError;
+
 use model::AppError;
 
 use std.log.{Logger, default_logger}
+
 use std.ifc.{taint}
 
 // ── Trust boundary: demo fixture data lives in Rust ───────────────────────
-
 extern "rust" {
-    // Demo fixture: returns hardcoded hash for known usernames.
-    fn get_demo_hash(username: String) -> Option[Secret[String]];
+    fn get_demo_hash(username: String) -> Option[Secret[String]]
 }
 
+// Demo fixture: returns hardcoded hash for known usernames.
 // ── Audit helper ──────────────────────────────────────────────────────────
-
 // Check and audit a single RBAC decision.
 // Calls check_permission (pure) then log_access (! Log) to emit a structured
 // audit record.
@@ -54,13 +60,12 @@ fn check_and_audit(
 }
 
 // ── Demo scenarios ────────────────────────────────────────────────────────
-
 // RBAC demo: each call produces a structured audit record (INFO or WARN).
 fn demo_rbac(logger: val Logger) -> Unit ! Log {
-    let u1: Unit = check_and_audit(logger, "admin_demo", Role::Admin,     Resource::AdminPanel,  Action::Read);
-    let u2: Unit = check_and_audit(logger, "mod_demo",   Role::Moderator, Resource::AdminPanel,  Action::Write);
-    let u3: Unit = check_and_audit(logger, "user_demo",  Role::User,      Resource::Post,        Action::Delete);
-    let u4: Unit = check_and_audit(logger, "guest_demo", Role::Guest,     Resource::Post,        Action::Read);
+    let u1: Unit = check_and_audit(logger, "admin_demo", Role::Admin, Resource::AdminPanel, Action::Read);
+    let u2: Unit = check_and_audit(logger, "mod_demo", Role::Moderator, Resource::AdminPanel, Action::Write);
+    let u3: Unit = check_and_audit(logger, "user_demo", Role::User, Resource::Post, Action::Delete);
+    let u4: Unit = check_and_audit(logger, "guest_demo", Role::Guest, Resource::Post, Action::Read);
     check_and_audit(logger, "guest_demo", Role::Guest, Resource::AuditLog, Action::Read)
 }
 
@@ -74,10 +79,10 @@ fn demo_auth(logger: val Logger) -> Unit ! Log + CryptoRandom {
         Some(stored_hash) => {
             let auth_result: Result[String, AuthError] = authenticate(relabel taint("alice", "DEMO"), relabel taint("hunter2", "DEMO"), stored_hash);
             match auth_result {
-                Ok(_)  => logger.info("auth attempt: pass", {"user": "alice"}),
+                Ok(_) => logger.info("auth attempt: pass", {"user": "alice"}),
                 Err(_) => logger.warn("auth attempt: fail", {"user": "alice"}),
             }
-        }
+        },
     }
 }
 
@@ -86,7 +91,6 @@ fn main() -> Unit ! Log + CryptoRandom {
     let rbac_done: Unit = demo_rbac(logger);
     demo_auth(logger)
 }
-
 // ── Internal unit tests ───────────────────────────────────────────────────
 // TODO(#96): inline tests that call cross-module functions (check_permission,
 // log_access, authenticate) cannot run until the module resolver propagates

@@ -429,26 +429,67 @@ pub fn run(path: &str, json: bool, verbose: bool) {
                 total_verified, total_partial, req_errors[8]
             ),
         );
+        // Req 9–11: qualitative verdicts (counts live in Prover verdicts section).
+        let req9_detail = if project_verdicts[9].is_proven() {
+            // Extract "N/M" prefix from verdict detail "N/M fns race-free ..."
+            let d = project_verdicts[9].detail();
+            let ratio = d.split(" fns race-free").next().unwrap_or("all");
+            format!("{ratio} fns race-free — isolation and sendability verified")
+        } else if project_verdicts[9].is_failed() {
+            format!("{} capability violation(s)", req_errors[9])
+        } else {
+            project_verdicts[9].detail().to_string()
+        };
         print_req_row(
             9,
             "Data race freedom",
             &req_errors,
             project_verdicts[9].is_proven(),
-            project_verdicts[9].detail(),
+            &req9_detail,
         );
+        let req10_detail = if project_verdicts[10].is_proven() {
+            let total = agg_ref_proven + agg_ref_runtime;
+            if agg_ref_runtime == 0 {
+                format!("{total} call site(s) — all statically proven")
+            } else {
+                format!(
+                    "{total} call site(s) — {agg_ref_proven} proven, {agg_ref_runtime} runtime-checked"
+                )
+            }
+        } else if project_verdicts[10].is_failed() {
+            format!("{} refinement violation(s)", req_errors[10])
+        } else if total_refined_fields > 0 {
+            format!("{total_refined_fields} struct field(s) refined but 0 call sites proven")
+        } else {
+            "no refined types used".to_string()
+        };
         print_req_row(
             10,
             "Refinements",
             &req_errors,
             project_verdicts[10].is_proven(),
-            project_verdicts[10].detail(),
+            &req10_detail,
         );
+        let req11_detail = if project_verdicts[11].is_proven() {
+            if total_relabel_ops > 0 || total_labeled_params > 0 {
+                format!(
+                    "opaque labels enforced; {} relabel point(s) auditable",
+                    total_relabel_ops,
+                )
+            } else {
+                "no information flow violations".to_string()
+            }
+        } else if project_verdicts[11].is_failed() {
+            format!("{} information flow violation(s)", req_errors[11])
+        } else {
+            "no security-labeled types — not exercised".to_string()
+        };
         print_req_row(
             11,
             "IFC",
             &req_errors,
             project_verdicts[11].is_proven(),
-            project_verdicts[11].detail(),
+            &req11_detail,
         );
         println!();
         println!("Prover verdicts:");

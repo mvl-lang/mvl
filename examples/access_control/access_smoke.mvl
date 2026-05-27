@@ -1,31 +1,63 @@
 // LLVM smoke test: access_control RBAC decision logic.
 // expect: ALLOWED
 // expect: DENIED
+type Role = enum {
+    Admin,
+    Moderator,
+    User,
+    Guest,
+}
 
-type Role = enum { Admin, Moderator, User, Guest }
-type Resource = enum { Article, UserProfile, AdminPanel, AuditLog }
-type Action = enum { Read, Write, Delete, Manage }
-type Permission = struct { role: Role, resource: Resource, action: Action }
+type Resource = enum {
+    Article,
+    UserProfile,
+    AdminPanel,
+    AuditLog,
+}
+
+type Action = enum {
+    Read,
+    Write,
+    Delete,
+    Manage,
+}
+
+type Permission = struct {
+    role: Role,
+    resource: Resource,
+    action: Action,
+}
 
 fn allowed(p: Permission) -> Bool {
     match p.role {
         Role::Admin => true,
         Role::Moderator => match p.resource {
             Resource::AdminPanel => false,
-            Resource::AuditLog   => false,
-            _                    => true,
+            Resource::AuditLog => false,
+            _ => true,
         },
         Role::User => match p.action {
-            Action::Read  => true,
-            Action::Write => match p.resource { Resource::Article => true, Resource::UserProfile => true, _ => false },
-            _             => false,
+            Action::Read => true,
+            Action::Write => match p.resource {
+                Resource::Article => true,
+                Resource::UserProfile => true,
+                _ => false,
+            },
+            _ => false,
         },
-        Role::Guest => match p.action { Action::Read => true, _ => false },
+        Role::Guest => match p.action {
+            Action::Read => true,
+            _ => false,
+        },
     }
 }
 
 fn print_decision(ok: Bool) -> Unit ! Console {
-    if ok { println("ALLOWED") } else { println("DENIED") }
+    if ok {
+        println("ALLOWED")
+    } else {
+        println("DENIED")
+    }
 }
 
 fn main() -> Unit ! Console {

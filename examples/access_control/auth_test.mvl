@@ -3,12 +3,10 @@
 // Tests the error type ADT structure without calling extern functions.
 // One assertion per test — matches MVL's block expression model.
 // Standalone: re-declares all types (cross-module resolution is Phase 2).
-
 // ── Local type re-declarations ─────────────────────────────────────────────
 // workaround: #96 — cross-module type resolution not yet wired into the
 // per-file checker; types are re-declared locally until the module resolver
 // is integrated.
-
 type AuthError = enum {
     InvalidCredentials,
     SessionExpired,
@@ -22,13 +20,12 @@ type AppError = enum {
 }
 
 // ── AuthError variant tests ────────────────────────────────────────────────
-
 test fn auth_error_invalid_credentials() -> Unit {
     let err: AuthError = AuthError::InvalidCredentials;
     let v: Int = match err {
         AuthError::InvalidCredentials => 1,
-        AuthError::SessionExpired     => 2,
-        AuthError::InvalidToken       => 3,
+        AuthError::SessionExpired => 2,
+        AuthError::InvalidToken => 3,
     };
     assert_eq(v, 1)
 }
@@ -37,8 +34,8 @@ test fn auth_error_session_expired() -> Unit {
     let err: AuthError = AuthError::SessionExpired;
     let v: Int = match err {
         AuthError::InvalidCredentials => 1,
-        AuthError::SessionExpired     => 2,
-        AuthError::InvalidToken       => 3,
+        AuthError::SessionExpired => 2,
+        AuthError::InvalidToken => 3,
     };
     assert_eq(v, 2)
 }
@@ -47,20 +44,19 @@ test fn auth_error_invalid_token() -> Unit {
     let err: AuthError = AuthError::InvalidToken;
     let v: Int = match err {
         AuthError::InvalidCredentials => 1,
-        AuthError::SessionExpired     => 2,
-        AuthError::InvalidToken       => 3,
+        AuthError::SessionExpired => 2,
+        AuthError::InvalidToken => 3,
     };
     assert_eq(v, 3)
 }
 
 // ── AppError variant tests ─────────────────────────────────────────────────
-
 test fn app_error_auth_failed() -> Unit {
     let err: AppError = AppError::AuthFailed;
     let v: Int = match err {
-        AppError::AuthFailed   => 1,
+        AppError::AuthFailed => 1,
         AppError::UserNotFound => 2,
-        AppError::MissingArg   => 3,
+        AppError::MissingArg => 3,
     };
     assert_eq(v, 1)
 }
@@ -68,9 +64,9 @@ test fn app_error_auth_failed() -> Unit {
 test fn app_error_user_not_found() -> Unit {
     let err: AppError = AppError::UserNotFound;
     let v: Int = match err {
-        AppError::AuthFailed   => 1,
+        AppError::AuthFailed => 1,
         AppError::UserNotFound => 2,
-        AppError::MissingArg   => 3,
+        AppError::MissingArg => 3,
     };
     assert_eq(v, 2)
 }
@@ -78,9 +74,9 @@ test fn app_error_user_not_found() -> Unit {
 test fn app_error_missing_arg() -> Unit {
     let err: AppError = AppError::MissingArg;
     let v: Int = match err {
-        AppError::AuthFailed   => 1,
+        AppError::AuthFailed => 1,
         AppError::UserNotFound => 2,
-        AppError::MissingArg   => 3,
+        AppError::MissingArg => 3,
     };
     assert_eq(v, 3)
 }
