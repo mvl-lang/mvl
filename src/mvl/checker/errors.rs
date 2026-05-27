@@ -276,13 +276,6 @@ pub enum CheckError {
         found: String,
         span: Span,
     },
-    /// Linear type (String, List, Map, Set, or named struct) assigned without `consume()`.
-    /// MVL uses Pony-style destructive read: ownership transfer requires explicit `consume(x)`.
-    LinearTypeBareBind {
-        name: String,
-        ty: String,
-        span: Span,
-    },
     /// Shadowing a live linear binding without consuming it first (#1068 Gap 2).
     LinearShadowDrop {
         name: String,
@@ -543,7 +536,6 @@ impl CheckError {
             CheckError::AssignToImmutable { .. }
             | CheckError::MutateImmutableField { .. }
             | CheckError::CaptureMutabilityViolation { .. }
-            | CheckError::LinearTypeBareBind { .. }
             | CheckError::LinearShadowDrop { .. } => 6,
             // Req 7: Effect Tracking (includes invalid names)
             CheckError::InvalidEffectName { .. }
@@ -645,7 +637,6 @@ impl CheckError {
             | CheckError::DuplicateActorField { span, .. }
             | CheckError::DuplicateActorMethod { span, .. }
             | CheckError::NonUnitBehaviorReturn { span, .. }
-            | CheckError::LinearTypeBareBind { span, .. }
             | CheckError::LinearShadowDrop { span, .. }
             | CheckError::InvalidRelabel { span, .. }
             | CheckError::UnknownRelabel { span, .. }
@@ -827,9 +818,6 @@ impl CheckError {
             ),
             CheckError::NonUnitBehaviorReturn { actor, method, found, .. } => format!(
                 "actor `{actor}` behavior `{method}` must return `Unit` (fire-and-forget), found `{found}`"
-            ),
-            CheckError::LinearTypeBareBind { name, ty, .. } => format!(
-                "bare assignment of linear type `{ty}` — use `consume({name})` to transfer ownership (Pony destructive read semantics)"
             ),
             CheckError::LinearShadowDrop { name, ty, .. } => format!(
                 "linear type `{ty}` in binding `{name}` is silently dropped by shadowing — use `consume({name})` before rebinding"

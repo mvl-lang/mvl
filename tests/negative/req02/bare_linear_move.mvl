@@ -1,0 +1,19 @@
+// corpus:expect-fail
+// expect-requirement: 2
+// Scenario: use after move — bare assignment moves linear type, source unavailable.
+// Per Spec 001 Req 4: `let b = a` transfers ownership; subsequent use of `a` is rejected.
+// Triggers: CheckError::UseAfterMove
+
+fn println(msg: String) -> Unit ! Console { }
+
+fn demo() -> Unit ! Console {
+    let s: String = "hello";
+    // Move: ownership transfers from s to t
+    let t: String = s;
+    // BUG: s is no longer available after move
+    println(s);
+}
+
+fn main() -> Unit ! Console {
+    demo();
+}

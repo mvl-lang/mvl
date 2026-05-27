@@ -8,7 +8,9 @@ use crate::mvl::checker::context::{CapabilityState, TypeBodyInfo};
 use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::ifc;
 use crate::mvl::checker::types::{resolve, types_compatible, Ty};
-use crate::mvl::parser::ast::{Block, ElseBranch, Expr, LValue, Pattern, Stmt, Totality};
+use crate::mvl::parser::ast::{
+    Block, ElseBranch, Expr, LValue, MatchArm, MatchBody, Pattern, Stmt, Totality,
+};
 use crate::mvl::parser::lexer::Span;
 
 use super::TypeChecker;
@@ -311,23 +313,22 @@ impl TypeChecker {
                         span: init.span(),
                     });
                 } else if ann_ty.is_linear_in_env(&self.env.types) {
-                    // Pony destructive-read rule: linear types require explicit consume().
-                    // `let t: String = s` is forbidden; `let t: String = consume(s)` is required.
-                    // Note: Stmt::Let.ty is always present (MVL requires type annotations on all
-                    // let bindings), so this branch covers every linear-typed let binding —
-                    // there is no unannotated path that could bypass this check.
+                    // Move semantics (Spec 001 Req 4): `let t: T = s` moves ownership
+                    // from `s` to `t`, making `s` unavailable. No `consume()` required —
+                    // consume() is only for `iso` capability transfers (Spec 014 Req 2).
                     if let Expr::Ident(src, _) = init {
-                        self.emit(CheckError::LinearTypeBareBind {
-                            name: src.clone(),
-                            ty: ann_ty.display(),
-                            span: init.span(),
-                        });
+                        self.env.mark_moved(src);
                     }
                 }
                 // Gap 2 (#1068): check if this binding shadows a live linear value.
+                // Skip if the init expression references the shadowed name — the old
+                // value is being consumed by the initializer (builder/accumulator pattern).
                 if let Pattern::Ident(name, _) = pattern {
                     if let Some(info) = self.env.lookup(name) {
-                        if !info.moved && info.ty.is_linear_in_env(&self.env.types) {
+                        if !info.moved
+                            && info.ty.is_linear_in_env(&self.env.types)
+                            && !expr_references_name(init, name)
+                        {
                             self.emit(CheckError::LinearShadowDrop {
                                 name: name.clone(),
                                 ty: info.ty.display(),
@@ -430,14 +431,10 @@ impl TypeChecker {
                 span,
             } => {
                 let val_ty = self.infer_expr(value);
-                // #934: linear types require consume() on assignment, same as let bindings.
+                // Move semantics: reassignment of linear type marks source as moved.
                 if val_ty.is_linear_in_env(&self.env.types) {
                     if let Expr::Ident(src, _) = value {
-                        self.emit(CheckError::LinearTypeBareBind {
-                            name: src.clone(),
-                            ty: val_ty.display(),
-                            span: value.span(),
-                        });
+                        self.env.mark_moved(src);
                     }
                 }
                 self.check_assignment(target, &val_ty, *span);
@@ -807,5 +804,97 @@ impl TypeChecker {
             });
             Ty::Unknown
         }
+    }
+}
+
+// ── Free helpers ────────────────────────────────────────────────────────────
+
+/// Returns `true` if `expr` contains a reference to `name` (shallow walk).
+///
+/// Used by shadow-drop detection: `let x: T = f(x)` should NOT trigger a
+/// shadow-drop error because `x` is consumed by `f(x)` in the initializer.
+fn expr_references_name(expr: &Expr, name: &str) -> bool {
+    match expr {
+        Expr::Ident(n, _) => n == name,
+        Expr::FnCall { args, .. } => args.iter().any(|a| expr_references_name(a, name)),
+        Expr::MethodCall { receiver, args, .. } => {
+            expr_references_name(receiver, name)
+                || args.iter().any(|a| expr_references_name(a, name))
+        }
+        Expr::FieldAccess { expr: inner, .. }
+        | Expr::Consume { expr: inner, .. }
+        | Expr::Unary { expr: inner, .. }
+        | Expr::Propagate { expr: inner, .. }
+        | Expr::Borrow { expr: inner, .. }
+        | Expr::Relabel { expr: inner, .. } => expr_references_name(inner, name),
+        Expr::Binary { left, right, .. } => {
+            expr_references_name(left, name) || expr_references_name(right, name)
+        }
+        Expr::If {
+            cond, then, else_, ..
+        } => {
+            expr_references_name(cond, name)
+                || block_references_name(then, name)
+                || else_
+                    .as_ref()
+                    .is_some_and(|e| expr_references_name(e, name))
+        }
+        Expr::Match {
+            scrutinee, arms, ..
+        } => {
+            expr_references_name(scrutinee, name)
+                || arms.iter().any(|a| match_arm_references_name(a, name))
+        }
+        Expr::Block(b) => block_references_name(b, name),
+        Expr::List { elems, .. } | Expr::Set { elems, .. } => {
+            elems.iter().any(|e| expr_references_name(e, name))
+        }
+        Expr::Map { pairs, .. } => pairs
+            .iter()
+            .any(|(k, v)| expr_references_name(k, name) || expr_references_name(v, name)),
+        Expr::Construct { fields, .. } | Expr::Spawn { fields, .. } => {
+            fields.iter().any(|(_, v)| expr_references_name(v, name))
+        }
+        Expr::Lambda { .. } => false, // lambdas capture, don't consume
+        _ => false,
+    }
+}
+
+fn block_references_name(block: &Block, name: &str) -> bool {
+    block.stmts.iter().any(|s| stmt_references_name(s, name))
+}
+
+fn stmt_references_name(stmt: &Stmt, name: &str) -> bool {
+    match stmt {
+        Stmt::Expr { expr, .. } => expr_references_name(expr, name),
+        Stmt::Return { value, .. } => value
+            .as_ref()
+            .is_some_and(|e| expr_references_name(e, name)),
+        Stmt::Let { init, .. } => expr_references_name(init, name),
+        Stmt::Assign { value, .. } => expr_references_name(value, name),
+        Stmt::If {
+            cond, then, else_, ..
+        } => {
+            expr_references_name(cond, name)
+                || block_references_name(then, name)
+                || else_.as_ref().is_some_and(|eb| match eb {
+                    ElseBranch::Block(b) => block_references_name(b, name),
+                    ElseBranch::If(s) => stmt_references_name(s, name),
+                })
+        }
+        Stmt::Match {
+            scrutinee, arms, ..
+        } => {
+            expr_references_name(scrutinee, name)
+                || arms.iter().any(|a| match_arm_references_name(a, name))
+        }
+        _ => false,
+    }
+}
+
+fn match_arm_references_name(arm: &MatchArm, name: &str) -> bool {
+    match &arm.body {
+        MatchBody::Expr(e) => expr_references_name(e, name),
+        MatchBody::Block(b) => block_references_name(b, name),
     }
 }

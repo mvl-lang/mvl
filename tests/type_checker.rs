@@ -7499,108 +7499,118 @@ fn array_unknown_size_compatible_with_concrete_size() {
     );
 }
 
-// ── #691: consume / destructive read semantics ───────────────────────────────
+// ── #691: Move semantics for linear types (Spec 001 Req 4) ────────────────────
+// Per ADR-0029, consume() is only for iso capability. Bare `let t = s` is a
+// valid move for non-iso linear types — the source is marked unavailable.
 
-/// Bare assignment of linear type String without consume() is rejected.
+/// Bare assignment of linear type moves the source — no error.
 #[test]
-fn bare_string_assignment_rejected() {
-    // GIVEN: let t: String = s (no consume)
-    // THEN: LinearTypeBareBind error
+fn bare_string_assignment_moves_source() {
+    // GIVEN: let t: String = s (bare move)
+    // THEN: no error — s is moved to t
     let src = r#"fn f() -> Unit { let s: String = "hello"; let t: String = s; }"#;
+    let errors = errors_for(src);
+    assert!(
+        errors.is_empty(),
+        "bare String assignment should be a valid move, got: {errors:?}"
+    );
+}
+
+/// Use after move is caught — source is unavailable after bare move.
+#[test]
+fn use_after_move_on_bare_string_assignment() {
+    // GIVEN: let t: String = s, then use s
+    // THEN: UseAfterMove error
+    let src = r#"
+        fn println(msg: String) -> Unit ! Console { }
+        fn f() -> Unit ! Console {
+            let s: String = "hello";
+            let t: String = s;
+            println(s);
+        }
+    "#;
     let errors = errors_for(src);
     assert!(
         errors
             .iter()
-            .any(|e| matches!(e, CheckError::LinearTypeBareBind { .. })),
-        "expected LinearTypeBareBind for bare String assignment, got: {errors:?}"
+            .any(|e| matches!(e, CheckError::UseAfterMove { name, .. } if name == "s")),
+        "expected UseAfterMove for `s` after bare move, got: {errors:?}"
     );
 }
 
-/// Explicit consume() for String ownership transfer is accepted.
+/// Explicit consume() for String ownership transfer is still accepted.
 #[test]
 fn string_assignment_with_consume_accepted() {
-    // GIVEN: let t: String = consume(s)
-    // THEN: no LinearTypeBareBind error
     let src = r#"fn f() -> Unit { let s: String = "hello"; let t: String = consume(s); }"#;
     let errors = errors_for(src);
     assert!(
-        !errors
-            .iter()
-            .any(|e| matches!(e, CheckError::LinearTypeBareBind { .. })),
-        "consume() should satisfy linear type requirement, got: {errors:?}"
+        errors.is_empty(),
+        "consume() should be accepted for linear type, got: {errors:?}"
     );
 }
 
-/// String literal assigned directly (not from ident) is fine — no consume needed.
+/// String literal assigned directly (not from ident) is fine.
 #[test]
 fn string_literal_assignment_accepted() {
     let src = r#"fn f() -> Unit { let s: String = "hello"; }"#;
     let errors = errors_for(src);
     assert!(
-        !errors
-            .iter()
-            .any(|e| matches!(e, CheckError::LinearTypeBareBind { .. })),
-        "String literal assignment should not require consume, got: {errors:?}"
+        errors.is_empty(),
+        "String literal assignment should have no errors, got: {errors:?}"
     );
 }
 
-// ── #934: linear type assignment (not let) without consume() ──────────────────
+// ── #934: linear type reassignment ────────────────────────────────────────────
 
-/// Reassignment of linear type without consume() is rejected.
+/// Reassignment of linear type moves the source — no error.
 #[test]
-fn linear_reassignment_without_consume_rejected() {
-    // GIVEN: t = s where s: String (no consume)
-    // THEN: LinearTypeBareBind error
+fn linear_reassignment_moves_source() {
+    // GIVEN: t = s where s: String (bare move)
+    // THEN: no error, s is moved
     let src = r#"
         fn f() -> Unit {
-            let mut t: String = "a";
+            let t: ref String = "a";
             let s: String = "b";
             t = s;
         }
     "#;
     let errors = errors_for(src);
     assert!(
-        errors
-            .iter()
-            .any(|e| matches!(e, CheckError::LinearTypeBareBind { .. })),
-        "expected LinearTypeBareBind for bare linear reassignment, got: {errors:?}"
+        errors.is_empty(),
+        "bare linear reassignment should be a valid move, got: {errors:?}"
     );
 }
 
-/// Reassignment of linear type with consume() is accepted.
+/// Reassignment of linear type with consume() is still accepted.
 #[test]
 fn linear_reassignment_with_consume_accepted() {
     let src = r#"
         fn f() -> Unit {
-            let mut t: String = "a";
+            let t: ref String = "a";
             let s: String = "b";
             t = consume(s);
         }
     "#;
     let errors = errors_for(src);
     assert!(
-        !errors
-            .iter()
-            .any(|e| matches!(e, CheckError::LinearTypeBareBind { .. })),
-        "consume() should satisfy linear reassignment, got: {errors:?}"
+        errors.is_empty(),
+        "consume() should be accepted for linear reassignment, got: {errors:?}"
     );
 }
 
-/// Reassignment from literal is accepted (no consume needed).
+/// Reassignment from literal is accepted.
 #[test]
 fn linear_reassignment_from_literal_accepted() {
     let src = r#"
         fn f() -> Unit {
-            let mut t: String = "a";
+            let t: ref String = "a";
             t = "b";
         }
     "#;
     let errors = errors_for(src);
     assert!(
-        !errors
-            .iter()
-            .any(|e| matches!(e, CheckError::LinearTypeBareBind { .. })),
-        "literal reassignment should not require consume, got: {errors:?}"
+        errors.is_empty(),
+        "literal reassignment should have no errors, got: {errors:?}"
     );
 }
 
@@ -8564,12 +8574,12 @@ fn generic_instantiation_corpus_parses_and_checks() {
     );
 }
 
-// ── #1068 Gap 1: Named types with linear fields require consume() ───────────
+// ── #1068 Gap 1: Named types with linear fields use move semantics ──────────
 
 #[test]
-fn struct_with_string_field_requires_consume() {
+fn struct_with_string_field_moves_source() {
     // GIVEN: a struct whose field is linear (String), assigned via bare identifier
-    // THEN: LinearTypeBareBind error
+    // THEN: valid move — source is marked unavailable
     let src = r#"
         type Config = struct { name: String }
         fn f() -> Unit {
@@ -8579,17 +8589,38 @@ fn struct_with_string_field_requires_consume() {
     "#;
     let errors = errors_for(src);
     assert!(
+        errors.is_empty(),
+        "bare struct assignment should be a valid move, got: {errors:?}"
+    );
+}
+
+#[test]
+fn struct_with_string_field_use_after_move() {
+    // GIVEN: struct moved to b, then a used again
+    // THEN: UseAfterMove
+    let src = r#"
+        type Config = struct { name: String }
+        fn use_config(c: Config) -> Unit { }
+        fn f() -> Unit {
+            let a: Config = Config { name: "x" };
+            let b: Config = a;
+            use_config(b);
+            use_config(a);
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
         errors
             .iter()
-            .any(|e| matches!(e, CheckError::LinearTypeBareBind { .. })),
-        "expected LinearTypeBareBind for struct with linear field, got: {errors:?}"
+            .any(|e| matches!(e, CheckError::UseAfterMove { name, .. } if name == "a")),
+        "expected UseAfterMove for `a` after bare move, got: {errors:?}"
     );
 }
 
 #[test]
 fn struct_with_string_field_consume_accepted() {
     // GIVEN: struct with String field transferred via consume()
-    // THEN: no LinearTypeBareBind error
+    // THEN: still valid
     let src = r#"
         type Config = struct { name: String }
         fn f() -> Unit {
@@ -8599,17 +8630,15 @@ fn struct_with_string_field_consume_accepted() {
     "#;
     let errors = errors_for(src);
     assert!(
-        !errors
-            .iter()
-            .any(|e| matches!(e, CheckError::LinearTypeBareBind { .. })),
-        "consume() should satisfy linear struct, got: {errors:?}"
+        errors.is_empty(),
+        "consume() should be accepted for linear struct, got: {errors:?}"
     );
 }
 
 #[test]
 fn struct_with_only_int_fields_is_not_linear() {
     // GIVEN: struct with only value-type fields (Int, Bool)
-    // THEN: no linear errors
+    // THEN: no errors
     let src = r#"
         type Point = struct { x: Int, y: Int }
         fn f() -> Unit {
@@ -8619,9 +8648,7 @@ fn struct_with_only_int_fields_is_not_linear() {
     "#;
     let errors = errors_for(src);
     assert!(
-        !errors
-            .iter()
-            .any(|e| matches!(e, CheckError::LinearTypeBareBind { .. })),
+        errors.is_empty(),
         "struct with only Int fields should not be linear, got: {errors:?}"
     );
 }

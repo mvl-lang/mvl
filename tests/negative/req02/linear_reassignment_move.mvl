@@ -1,0 +1,20 @@
+// corpus:expect-fail
+// expect-requirement: 2
+// Scenario: use after move on reassignment — linear type moved, source unavailable.
+// Per Spec 001 Req 4: `t = s` transfers ownership; subsequent use of `s` is rejected.
+// Triggers: CheckError::UseAfterMove
+
+fn println(msg: String) -> Unit ! Console { }
+
+fn demo() -> Unit ! Console {
+    let t: ref String = "hello";
+    let s: String = "world";
+    // Move: ownership transfers from s to t
+    t = s;
+    // BUG: s is no longer available after move
+    println(s);
+}
+
+fn main() -> Unit ! Console {
+    demo();
+}
