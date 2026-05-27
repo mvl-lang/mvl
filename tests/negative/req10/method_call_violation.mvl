@@ -1,0 +1,15 @@
+// corpus:expect-fail
+// expect-requirement: 10
+// Gap 5 (#1067): Method call argument violates a refined parameter.
+// Calling `p.scaled(-3)` where `factor: Int where factor > 0` should fail.
+
+type Point = struct { x: Int, y: Int }
+
+pub fn Point::scaled(self, factor: Int where factor > 0) -> Point {
+    Point { x: self.x * factor, y: self.y * factor }
+}
+
+fn bad_scale() -> Point {
+    let p: Point = Point { x: 1, y: 2 };
+    p.scaled(-3)
+}

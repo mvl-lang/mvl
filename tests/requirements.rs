@@ -277,6 +277,80 @@ fn req10_refinements_failed() {
     );
 }
 
+// ── Req 10 gap coverage (#1067) ───────────────────────────────────────────────
+
+/// Gap 1: Struct field `where` refinement violated at construction site → Failed.
+#[test]
+fn req10_struct_field_refinement_failed() {
+    let v = run(
+        include_str!("negative/req10/struct_field_violation.mvl"),
+        10,
+    );
+    assert!(
+        v.is_failed(),
+        "Req 10 must be Failed on struct field violation, got: {v:?}"
+    );
+}
+
+/// Gap 2: Struct `with invariant` violated at construction site → Failed.
+#[test]
+fn req10_struct_invariant_failed() {
+    let v = run(
+        include_str!("negative/req10/struct_invariant_violation.mvl"),
+        10,
+    );
+    assert!(
+        v.is_failed(),
+        "Req 10 must be Failed on struct invariant violation, got: {v:?}"
+    );
+}
+
+/// Gap 3: Return type refinement violated (`-> Int where self > 0` returning -1) → Failed.
+#[test]
+fn req10_return_refinement_failed() {
+    let v = run(
+        include_str!("negative/req10/return_refinement_violation.mvl"),
+        10,
+    );
+    assert!(
+        v.is_failed(),
+        "Req 10 must be Failed on return refinement violation, got: {v:?}"
+    );
+}
+
+/// Gap 4: Let binding initialiser violates declared type alias refinement → Failed.
+#[test]
+fn req10_let_binding_refinement_failed() {
+    let v = run(include_str!("negative/req10/let_binding_violation.mvl"), 10);
+    assert!(
+        v.is_failed(),
+        "Req 10 must be Failed on let binding violation, got: {v:?}"
+    );
+}
+
+/// Gap 5: Method call argument violates a refined parameter → Failed.
+#[test]
+fn req10_method_call_refinement_failed() {
+    let v = run(include_str!("negative/req10/method_call_violation.mvl"), 10);
+    assert!(
+        v.is_failed(),
+        "Req 10 must be Failed on method call violation, got: {v:?}"
+    );
+}
+
+/// Gap 6: Enum variant struct field refinement violated at construction site → Failed.
+#[test]
+fn req10_enum_variant_field_failed() {
+    let v = run(
+        include_str!("negative/req10/enum_variant_field_violation.mvl"),
+        10,
+    );
+    assert!(
+        v.is_failed(),
+        "Req 10 must be Failed on enum variant field violation, got: {v:?}"
+    );
+}
+
 // ── Req 11: Information Flow Control ─────────────────────────────────────────
 
 /// Security-labeled types, no violations → Proven.

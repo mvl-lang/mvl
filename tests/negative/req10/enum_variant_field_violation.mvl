@@ -1,0 +1,12 @@
+// corpus:expect-fail
+// expect-requirement: 10
+// Gap 6 (#1067): Enum variant struct field `where` refinement violated at construction site.
+
+type Payload = enum {
+    Count { value: Int where self >= 0 },
+    Empty,
+}
+
+fn bad_payload() -> Payload {
+    Payload::Count { value: -5 }
+}

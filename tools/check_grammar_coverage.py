@@ -123,6 +123,8 @@ TS_KNOWN_EXTENSIONS = {
     "session_op",
     "session_receive_type",
     "session_send_type",
+    # Structured concurrency scope (Phase 8, #69) — EBNF to follow
+    "concurrently_expr",
 }
 
 

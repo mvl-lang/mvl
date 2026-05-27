@@ -1,0 +1,8 @@
+// corpus:expect-fail
+// expect-requirement: 10
+// Gap 3 (#1067): Return type refinement violated — function returns a value that
+// statically contradicts the declared `-> T where self > 0` predicate.
+
+fn always_positive() -> Int where self > 0 {
+    -1
+}

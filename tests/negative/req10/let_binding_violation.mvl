@@ -1,0 +1,15 @@
+// corpus:expect-fail
+// expect-requirement: 10
+// Gap 4 (#1067): Let binding initialiser violates the declared type's refinement.
+// `neg_one()` is a pure function that constant-folds to -1, which violates
+// `PositiveInt = Int where self > 0`.
+
+type PositiveInt = Int where self > 0
+
+total fn neg_one() -> PositiveInt {
+    -1
+}
+
+fn bad_binding() -> Unit {
+    let _x: PositiveInt = neg_one();
+}

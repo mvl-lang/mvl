@@ -180,6 +180,8 @@ pub fn check_with_two_preludes_mode(
     contracts::check_contracts(prog, &mut checker.errors, solver_mode);
     session::check_session_types(prog, &mut checker.errors);
     contracts::check_actor_field_refinements(prog, &mut checker.errors, solver_mode);
+    contracts::check_struct_field_refinements(prog, &mut checker.errors, solver_mode);
+    contracts::check_return_refinements(prog, &mut checker.errors, solver_mode);
 
     // Determine whether any function imported from the prelude and called by
     // `prog` carries IFC-labeled parameters — exercises the security lattice
