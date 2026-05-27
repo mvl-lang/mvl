@@ -186,6 +186,9 @@ pub fn check_with_two_preludes_mode(
     for i in 0..6 {
         refinement_counts.by_layer[i] += contract_counts.by_layer[i];
     }
+    refinement_counts
+        .proof_log
+        .extend(contract_counts.proof_log);
     session::check_session_types(prog, &mut checker.errors);
     contracts::check_actor_field_refinements(prog, &mut checker.errors, solver_mode);
     contracts::check_struct_field_refinements(prog, &mut checker.errors, solver_mode);

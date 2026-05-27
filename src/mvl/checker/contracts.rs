@@ -42,7 +42,9 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use crate::mvl::checker::errors::CheckError;
-use crate::mvl::checker::refinements::{check_arg_against_pred_counted, RefinementCounts};
+use crate::mvl::checker::refinements::{
+    check_arg_against_pred_counted, ProofEntry, RefinementCounts,
+};
 use crate::mvl::checker::solver::{RefResult, SolverMode};
 use crate::mvl::parser::ast::{
     expr_to_ref_expr_ext, ActorDecl, ArithOp, Block, CmpOp, Decl, ElseBranch, Expr, FieldDecl,
@@ -722,7 +724,22 @@ fn check_ensures_for_return(
         // Let the solver decide: Proven (silent), Failed (emit error),
         // or RuntimeCheck (silent — deferred to runtime).
         let outcome = with_contract_counts(|c| {
-            check_arg_against_pred_counted(ret_expr, &normalized, &var_refs, fn_decls, c)
+            let layer_before = c.by_layer;
+            let r = check_arg_against_pred_counted(ret_expr, &normalized, &var_refs, fn_decls, c);
+            if matches!(r, RefResult::Proven) {
+                let layer = (1..6)
+                    .find(|&i| c.by_layer[i] > layer_before[i])
+                    .unwrap_or(0);
+                c.proof_log.push(ProofEntry {
+                    file: String::new(),
+                    line: ret_span.line,
+                    caller: String::new(),
+                    callee: fn_name.to_string(),
+                    predicate: format!("ensures {}", display_pred(&ens_pred)),
+                    layer,
+                });
+            }
+            r
         });
         if let RefResult::Failed { counterexample } = outcome {
             errors.push(CheckError::PostconditionViolated {

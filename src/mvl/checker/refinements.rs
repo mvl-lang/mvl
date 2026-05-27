@@ -41,6 +41,23 @@ use crate::mvl::parser::lexer::Span;
 // ── Counts ────────────────────────────────────────────────────────────────────
 
 /// Per-program refinement check outcome counts.
+/// A single refinement proof entry for detailed reporting.
+#[derive(Debug, Clone)]
+pub struct ProofEntry {
+    /// Source file (set by the assurance aggregator, empty inside the checker).
+    pub file: String,
+    /// 1-based line number of the call site / contract.
+    pub line: u32,
+    /// Function containing the call site (caller).
+    pub caller: String,
+    /// Function or contract being checked (callee / "ensures" / "requires").
+    pub callee: String,
+    /// Human-readable predicate that was proven.
+    pub predicate: String,
+    /// Layer that proved it (1–5), or 0 for runtime-checked.
+    pub layer: usize,
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct RefinementCounts {
     /// Solver mode used for this run.
@@ -59,6 +76,8 @@ pub struct RefinementCounts {
     pub fn_total: usize,
     /// Subset of `fn_total` where ALL refined call sites are statically proven.
     pub fully_verified_fns: usize,
+    /// Detailed proof log (populated only in verbose/assurance mode).
+    pub proof_log: Vec<ProofEntry>,
 }
 
 // ── Entry points ──────────────────────────────────────────────────────────────
@@ -1221,11 +1240,26 @@ fn check_call_site(
     errors: &mut Vec<CheckError>,
     counts: &mut RefinementCounts,
 ) {
-    for (arg, (_, param_pred)) in args.iter().zip(param_refs.iter()) {
+    for (arg, (param_name, param_pred)) in args.iter().zip(param_refs.iter()) {
         let Some(pred) = param_pred else { continue };
+        let layer_before: [usize; 6] = counts.by_layer;
         let outcome = check_arg_against_pred_counted(arg, pred, var_refs, fn_decls, counts);
         match outcome {
-            RefResult::Proven => counts.proven += 1,
+            RefResult::Proven => {
+                counts.proven += 1;
+                // Determine which layer proved it by diffing by_layer.
+                let layer = (1..6)
+                    .find(|&i| counts.by_layer[i] > layer_before[i])
+                    .unwrap_or(0);
+                counts.proof_log.push(ProofEntry {
+                    file: String::new(), // filled by assurance aggregator
+                    line: call_span.line,
+                    caller: String::new(), // filled by assurance aggregator
+                    callee: fn_name.to_string(),
+                    predicate: format!("{}: {}", param_name, display_pred(pred)),
+                    layer,
+                });
+            }
             RefResult::RuntimeCheck => counts.runtime_checked += 1,
             RefResult::Failed { counterexample } => {
                 counts.failed += 1;

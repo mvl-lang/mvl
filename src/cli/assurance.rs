@@ -67,6 +67,7 @@ pub fn run(path: &str, json: bool, verbose: bool) {
     let mut agg_ref_proven: usize = 0;
     let mut agg_ref_runtime: usize = 0;
     let mut agg_ref_by_layer: [usize; 6] = [0; 6];
+    let mut all_proof_entries: Vec<mvl::mvl::checker::refinements::ProofEntry> = Vec::new();
     // Verification pass infrastructure.
     let registry = PassRegistry::default_registry();
     let mut verdict_cache = VerdictCache::default();
@@ -175,6 +176,14 @@ pub fn run(path: &str, json: bool, verbose: bool) {
         for (i, &count) in result.refinement_counts.by_layer.iter().enumerate() {
             agg_ref_by_layer[i] += count;
         }
+        all_proof_entries.extend(result.refinement_counts.proof_log.iter().cloned().map(
+            |mut e| {
+                if e.file.is_empty() {
+                    e.file = file_str.to_string();
+                }
+                e
+            },
+        ));
         // Count struct field refinements.
         for decl in &prog.declarations {
             if let Decl::Type(td) = decl {
@@ -346,6 +355,36 @@ pub fn run(path: &str, json: bool, verbose: bool) {
                 "  struct fields:        {} total, {} refined, {} struct invariant(s)",
                 total_struct_fields, total_refined_fields, total_struct_invariants,
             );
+        }
+        if verbose && !all_proof_entries.is_empty() {
+            let layer_name = |l: usize| match l {
+                1 => "L1 trivial",
+                2 => "L2 interval",
+                3 => "L3 symbolic",
+                4 => "L4 Cooper",
+                5 => "L5 Z3",
+                _ => "runtime",
+            };
+            println!();
+            println!("Refinement proof detail:");
+            for entry in &all_proof_entries {
+                let fname = if entry.file.is_empty() {
+                    ""
+                } else {
+                    std::path::Path::new(&entry.file)
+                        .file_name()
+                        .and_then(|f| f.to_str())
+                        .unwrap_or(&entry.file)
+                };
+                let loc = format!("{}:{}", fname, entry.line);
+                println!(
+                    "  {:<10} {:<16} {:<24} {}",
+                    layer_name(entry.layer),
+                    loc,
+                    entry.callee,
+                    entry.predicate,
+                );
+            }
         }
         println!();
         let violated_count = (1..=11usize).filter(|&i| req_errors[i] > 0).count();
