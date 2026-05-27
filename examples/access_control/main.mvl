@@ -60,6 +60,14 @@ total fn next_attempt(current: Int where current >= 0, max: Int where max > 0) -
     clamp_attempts(current + 1, max)
 }
 
+/// Compute total timeout from base TTL and grace period.
+/// Contract proof: base > 0 ∧ grace >= 0 ⊢ base + grace > 0.
+total fn total_timeout(base: Int where base > 0, grace: Int where grace >= 0) -> Int
+    ensures result > 0
+{
+    base + grace
+}
+
 // ── Trust boundary: demo fixture data lives in Rust ───────────────────────
 extern "rust" {
     fn get_demo_hash(username: String) -> Option[Secret[String]]
@@ -113,6 +121,7 @@ total fn main() -> Unit ! Log + CryptoRandom {
     let _config: SecurityConfig = default_security_config();
     let _clamped: Int = clamp_attempts(5, 3);
     let _next: Int = next_attempt(0, 3);
+    let _timeout: Int = total_timeout(3600, 60);
     let rbac_done: Unit = demo_rbac(logger);
     demo_auth(logger)
 }

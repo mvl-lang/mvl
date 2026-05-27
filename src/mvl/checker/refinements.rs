@@ -1247,7 +1247,7 @@ fn check_call_site(
 /// Mode-aware dispatch used by `check_call_site` and `check_arg_against_pred`.
 ///
 /// Records which layer resolved the check in `counts.by_layer[n]`.
-fn check_arg_against_pred_counted(
+pub(crate) fn check_arg_against_pred_counted(
     arg: &Expr,
     pred: &RefExpr,
     var_refs: &HashMap<String, Option<RefExpr>>,
@@ -1290,23 +1290,6 @@ fn check_arg_against_pred_counted(
         }
     }
     RefResult::RuntimeCheck
-}
-
-/// Check a call-site argument against a refinement predicate.
-///
-/// Used by `contracts.rs` and other callers that do not carry a `RefinementCounts`.
-pub(crate) fn check_arg_against_pred(
-    arg: &Expr,
-    pred: &RefExpr,
-    var_refs: &HashMap<String, Option<RefExpr>>,
-    fn_decls: &HashMap<String, FnDecl>,
-    mode: SolverMode,
-) -> RefResult {
-    let mut counts = RefinementCounts {
-        mode,
-        ..Default::default()
-    };
-    check_arg_against_pred_counted(arg, pred, var_refs, fn_decls, &mut counts)
 }
 
 // ── Predicate display ─────────────────────────────────────────────────────────
