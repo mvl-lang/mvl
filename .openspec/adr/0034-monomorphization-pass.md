@@ -165,5 +165,5 @@ The deferral is intentional: current analysis passes are correct and complete fo
 ### Specifications
 
 - `013-termination/spec.md` — Req 8 mutual-recursion detection (#142) requires a concrete call graph. The mono pass is the prerequisite; the spec will need a new requirement and scenario when #838 ships.
-- `011-ifc/spec.md` (if exists) — Context-sensitive IFC label tracking (future) will reference this ADR as its structural foundation.
+- `003-information-flow/spec.md` — Context-sensitive IFC label tracking (future) will reference this ADR as its structural foundation.
 - All other specs — unaffected. The mono pass is a compiler-internal concern; no surface language semantics change.

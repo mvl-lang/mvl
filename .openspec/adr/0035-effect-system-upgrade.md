@@ -1,6 +1,6 @@
 # ADR-0035: Effect System Upgrade — Subsumption and std/effects.mvl
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-05-17
 **Issues:** #846
 
