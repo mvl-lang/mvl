@@ -41,6 +41,11 @@ src/
 in editors and diffs. The file name carries the module name, making navigation
 faster and grep more meaningful.
 
+This convention also applies to the MVL language itself (ADR-0033, now merged
+here): `mvl` module resolution prefers `foo.mvl` alongside `foo/` over the
+legacy `foo/mod.mvl` path. See Spec 005 Requirement 1 for the resolution order
+and deprecation semantics.
+
 ### 3. Formatting: `cargo fmt`
 
 All code must pass `cargo fmt --check`. Enforced via pre-commit hook. No custom

@@ -172,6 +172,6 @@ that motivates the feature.
 - `.openspec/specs/014-data-race-freedom/spec.md` — canonical capability model, sendability
   matrix, Phase 3 requirements, and known limitations. This ADR does not duplicate that content;
   it provides the architectural rationale.
-- `.openspec/specs/013-actors/` (Phase 8, forthcoming via #701) — will extend Spec 014 with
+- `.openspec/specs/015-actors/` (Phase 8, via #701) — extends Spec 014 with
   full actor lifecycle semantics grounded in this capability model.
 - No other spec files require immediate update.

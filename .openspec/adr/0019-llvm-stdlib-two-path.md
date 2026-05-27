@@ -75,7 +75,7 @@ Values that cross the C boundary use these types (defined in `mvl_runtime_c/src/
 The LLVM backend auto-discovers the library at startup:
 
 ```rust
-// src/mvl/codegen/mod.rs
+// src/mvl/backends/llvm.rs (was src/mvl/codegen/mod.rs, renamed per ADR-0027)
 pub fn find_mvl_runtime_c_lib() -> Option<PathBuf> { ... }
 ```
 

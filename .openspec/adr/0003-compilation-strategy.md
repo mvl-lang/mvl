@@ -156,6 +156,13 @@ The LLVM backend is gated on the `llvm` Cargo feature (default-on). `mvl build/r
 - Concurrency model — actors, reference capabilities, WCET refinements
 - AAE-5 certification pipeline — automated evidence for IEC 61508, DO-178C
 
+## Phase Model Note
+
+This ADR's 7-phase model was the original compilation roadmap.  The canonical
+9-phase model is now maintained in **Spec 012 (Phases)** and the README.  Where
+phase numbering differs (e.g. Phase 6 here means "trustworthy / formal proofs"
+vs Spec 012's Phase 6 "Works / stdlib + testing"), **Spec 012 is authoritative**.
+
 ## Consequences
 
 - Phase 1 accepted two-compiler friction as a temporary cost — now complete

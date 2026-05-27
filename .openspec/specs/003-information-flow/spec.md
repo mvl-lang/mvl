@@ -134,7 +134,7 @@ Error types containing `Secret` fields MUST NOT be sendable to `Public` channels
 
 Logging functions MUST accept only `Public[T]` arguments. Logging a `Secret` or `Tainted` value MUST be a compile error.
 
-**Implementation:** `src/mvl/checker.rs` (`infer_fn_call` — IFC label check for `println`/`print`/`log_*`), `std/log.mvl`, `src/mvl/checker/ifc.rs` (`PUBLIC_SINKS`)
+**Implementation:** `src/mvl/checker.rs` (`infer_fn_call` — IFC label check for `println`/`print`/`log_*`), `std/log.mvl`, `src/mvl/checker/ifc.rs` (`build_effect_reachability`, replaces `PUBLIC_SINKS` per ADR-0036)
 
 **Tests:** `tests/type_checker.rs::println_rejects_secret_argument`, `tests/type_checker.rs::println_rejects_tainted_argument`, `tests/type_checker.rs::println_accepts_public_argument`, `tests/type_checker.rs::log_debug_rejects_secret_argument`, `tests/type_checker.rs::log_info_rejects_secret_argument`, `tests/type_checker.rs::log_error_rejects_tainted_argument`, `tests/type_checker.rs::log_warn_rejects_clean_argument`, `tests/type_checker.rs::log_info_rejects_secret_value_in_fields_map`, `tests/type_checker.rs::log_info_accepts_public_argument`, `tests/type_checker.rs::caller_missing_log_effect_rejected`, `tests/type_checker.rs::caller_missing_log_effect_with_other_effects_rejected`, `tests/compile_and_run.rs::safe_division_check_passes`, `tests/compile_and_run.rs::safe_division_runs_and_produces_expected_output` (#191)
 
@@ -152,7 +152,7 @@ Logging functions MUST accept only `Public[T]` arguments. Logging a `Secret` or 
 
 The `format()` function MUST be IFC-aware. The result label MUST be the join (highest) of all argument labels. All functions propagate argument labels to their return type unconditionally using the same join semantics (#1007, ADR-0036). This closes the silent label-drop hole at stdlib boundaries (e.g. `json.decode`, `json.encode`).
 
-**Implementation:** `src/mvl/checker/ifc.rs`, `src/mvl/checker/calls.rs`
+**Implementation:** `src/mvl/checker/ifc.rs`, `src/mvl/checker/ifc_propagation.rs` (interprocedural label propagation, #825/#830/#831/#833), `src/mvl/checker/calls.rs`
 
 **Tests:** `tests/type_checker.rs::arithmetic_label_join_propagates`, `tests/type_checker.rs::arithmetic_label_join_downgrade_rejected`, `tests/type_checker.rs::format_propagates_secret_label`, `tests/type_checker.rs::fn_propagates_label`, `tests/type_checker.rs::decode_propagates_tainted_label`
 
@@ -172,7 +172,7 @@ The compiler MUST detect implicit information flows via control flow (Program Co
 
 > **Rationale:** Whether an effectful call fires reveals the value of the controlling condition. This is a covert channel — information leaks through control flow rather than data flow. The check is interprocedural: wrapping `println` in a helper does not bypass the rule.
 
-**Implementation:** `src/mvl/checker/ifc.rs` (`check_implicit_flows`, `build_effect_reachability`), `src/mvl/checker.rs`
+**Implementation:** `src/mvl/checker/ifc.rs` (`check_implicit_flows`, `build_effect_reachability`), `src/mvl/checker/ifc_propagation.rs` (interprocedural propagation), `src/mvl/checker.rs`
 
 **Tests:** `tests/type_checker.rs::implicit_flow_secret_if_condition_rejected`, `tests/type_checker.rs::implicit_flow_tainted_if_condition_rejected`, `tests/type_checker.rs::implicit_flow_public_condition_accepted`, `tests/type_checker.rs::implicit_flow_print_sink_rejected`, `tests/type_checker.rs::implicit_flow_else_branch_rejected`, `tests/type_checker.rs::implicit_flow_label_propagated_through_let`, `tests/type_checker.rs::implicit_flow_while_secret_condition_rejected`, `tests/type_checker.rs::cross_function_implicit_corpus_has_violations`, `tests/type_checker.rs::interprocedural_taint_corpus_has_violations`, `tests/type_checker.rs::return_label_inference_corpus_has_no_req11_violations`, `tests/type_checker.rs::interprocedural_clean_corpus_has_no_req11_violations`, `tests/type_checker.rs::call_chain_error_names_callee_and_observable`, `src/mvl/checker/passes.rs::req11_proven_for_labeled_types_with_no_violations`
 

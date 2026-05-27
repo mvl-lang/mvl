@@ -301,3 +301,4 @@ src/
 - ADR-0027: Multi-backend architecture
 - Spec 009: Transpiler codegen
 - Spec 012: Language completeness phases
+- Spec 022: Visitor-based emission (sub-spec — EmitVisitor trait and decorator pattern for instrumentation separation)

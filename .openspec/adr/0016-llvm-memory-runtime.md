@@ -171,3 +171,7 @@ declare ptr @mvl_string_concat(ptr, ptr)
 - The `lli --load` flag adds a build artifact dependency. CI must build `mvl_memory` before running LLVM backend tests.
 - String literals that were previously static globals (`build_global_string_ptr`) must be wrapped in `mvl_string_new` calls in Phase C. Phase B tests are unaffected (they use the transpiler backend).
 - Cycle leaks are accepted and documented. Valgrind will show them in `valgrind --leak-check=full` output. The done-condition for Phase C accepts this.
+
+## Post-ADR Update: Runtime Consolidation (ADR-0027)
+
+The standalone `mvl_memory` crate described above has been merged into `runtime/llvm/` as the `memory` module per ADR-0027.  The memory layout, C-ABI functions, and reference counting rules remain unchanged; only the crate location changed.  The merged crate keeps the package name `mvl_runtime_c` so the `libmvl_runtime_c` binary name is unchanged and `lli --load` invocations continue to work without changes.

@@ -248,7 +248,7 @@ where T: Eq, E: Display
 
 **Tests:** `tests/type_checker.rs::generic_identity_parses`, `tests/type_checker.rs::generic_type_decl_parses`, `tests/type_checker.rs::generic_pair_type_parses`, `tests/type_checker.rs::generic_with_constraint_parses`, `tests/type_checker.rs::generic_multiple_constraints_parse`, `tests/compile_and_run.rs::linked_list_check_passes`, `tests/compile_and_run.rs::linked_list_runs_and_produces_expected_output` (#194)
 
-> **Phase 1 scope note:** The parser accepts and stores generics AST nodes. Constraint *enforcement* (rejecting unconstrained `T` in operator expressions, rejecting HKT notation with a clear diagnostic, rejecting inline `<T: Ord>` syntax) is tracked for Phase 2 implementation. See rejection scenarios below for the intended semantics.
+> **Scope note:** The parser accepts and stores generics AST nodes. Monomorphization is implemented (ADR-0034). Constraint *enforcement* (rejecting unconstrained `T` in operator expressions, rejecting HKT notation with a clear diagnostic, rejecting inline `<T: Ord>` syntax) is not yet implemented. See rejection scenarios below for the intended semantics.
 
 #### Scenario: Generic identity function
 

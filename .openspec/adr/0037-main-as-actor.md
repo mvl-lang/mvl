@@ -111,7 +111,7 @@ special semantics) is not sugar, it's a limitation. ADR-0002 says contract, not 
 |-------------|--------|
 | Req 3 (Actor isolation) | **Strengthens** — actor lifetime is always managed by the runtime; no manual scoping required |
 | Req 9 (Data race freedom) | **Consistent with** — actor mailbox discipline unchanged; join point moves but race freedom is unaffected |
-| Req 11 (Composability) | **Strengthens** — actors spawned anywhere in `fn main()` are drained; `concurrently {}` could not be composed inside helpers |
+| Req 11 (IFC) | **Consistent with** — main-as-actor does not change information flow control semantics; actor isolation strengthens composability of `fn main()` by draining actors spawned anywhere, unlike `concurrently {}` which could not be composed inside helpers |
 
 All other requirements are not directly affected by this decision.
 

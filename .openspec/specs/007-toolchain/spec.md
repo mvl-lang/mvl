@@ -1,5 +1,9 @@
 # Spec 007: Toolchain Layout and Version Management
 
+> **Status: Aspirational** — No requirements in this spec are implemented yet.
+> All implementation and test references below are planned, not current.
+> This spec describes the target architecture for toolchain management (Phase 9+).
+
 **ADR:** [0009 — Toolchain Layout](../adr/0009-toolchain-layout.md)
 
 ---
