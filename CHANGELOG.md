@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.161.0] - 2026-05-27
+
+### Added
+- #1023 — `mvl openapi` subcommand to generate OpenAPI 3.0.3 JSON specs from route tables:
+  - Extracts routes from `route()` calls in MVL programs
+  - Maps MVL types to JSON Schema: structs → properties, refinements → validation keywords
+  - Refinement mapping: `self > 0` → `minimum: 1`, `len(self) > 0` → `minLength: 1`, compound predicates → min/max
+  - Effects → OpenAPI tags, IFC labels → x-security-label extension
+  - Result[Ok, Err] return types → success + error response schemas
+  - Json[T] request bodies and path parameters supported
+  - Output is valid OpenAPI 3.0.3 JSON to stdout
+
 ## [0.160.0] - 2026-05-27
 
 ### Added
