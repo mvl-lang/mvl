@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.161.2] - 2026-05-27
+
+### Fixed
+- Actor self-ref shutdown protocol: replaced channel-closure shutdown with AtomicBool
+  flags so actors that pass `self` as a `tag` argument no longer panic at runtime (#1087)
+
 ## [0.161.1] - 2026-05-27
 
 ### Fixed
