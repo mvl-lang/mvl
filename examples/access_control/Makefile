@@ -1,6 +1,6 @@
 # access_control example — MVL Phase 4 security demonstration
 # Run from this directory or from the repo root.
-.PHONY: help guard-mvl build check lint test-solver test test-llvm assurance mcdc mutate smoke run run-llvm all clean
+.PHONY: help guard-mvl build check lint format test-solver test test-llvm assurance mcdc mutate smoke run run-llvm all clean
 
 .DEFAULT_GOAL := help
 
@@ -31,6 +31,9 @@ check: guard-mvl ## Type-check all source files
 
 lint: guard-mvl ## Lint all source files
 	$(MVL) lint $(DIR)
+
+format: guard-mvl ## Format all .mvl source files
+	$(MVL) fmt $(DIR)
 
 test-solver: guard-mvl ## Show per-file solver statistics for all source files
 	@pass=0; fail=0; \
