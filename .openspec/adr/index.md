@@ -39,3 +39,4 @@
 | [0035](0035-effect-system-upgrade.md) | Effect system upgrade — named user effects, subsumption, composite IO | Accepted |
 | [0036](0036-ifc-simplification-drop-transparent-sink.md) | IFC simplification — drop transparent/sink labels, unify around Tainted/Secret | Accepted |
 | [0037](0037-main-as-actor.md) | Main-as-actor — drop `concurrently` keyword, implicit actor lifecycle | Accepted |
+| [0038](0038-typed-ir.md) | Typed Intermediate Representation (TIR) — post-checker typed expression layer | Accepted |

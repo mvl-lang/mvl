@@ -9,7 +9,7 @@
 
 use inkwell::{types::BasicTypeEnum, AddressSpace};
 
-use crate::mvl::checker::types::Ty;
+use crate::mvl::ir::Ty;
 use crate::mvl::parser::ast::{Expr, TypeBody, TypeDecl, TypeExpr, VariantFields};
 
 use super::LlvmBackend;

@@ -7,7 +7,7 @@ use crate::mvl::backends::rust::emit_stmts::{emit_mcdc_guard_block, scrutinee_ne
 use crate::mvl::backends::rust::emit_types::{emit_label, emit_type_expr};
 use crate::mvl::backends::rust::emitter::RustEmitter;
 use crate::mvl::backends::rust::mcdc_instr::DecisionKind;
-use crate::mvl::checker::types::Ty;
+use crate::mvl::ir::Ty;
 use crate::mvl::parser::ast::{BinaryOp, Expr, Literal, MatchArm, MatchBody, Pattern, UnaryOp};
 use crate::mvl::passes::coverage::BranchKind;
 use crate::mvl::passes::mcdc::analysis::count_clauses_ref;
@@ -1405,7 +1405,7 @@ fn emit_expr_as_arg(cg: &mut RustEmitter, expr: &Expr) {
 /// This is safe for function calls because the parameter type constrains `.into()`'s
 /// target, preventing the E0283 ambiguity that arises in macros like `println!`.
 fn emit_expr_as_fn_arg(cg: &mut RustEmitter, expr: &Expr) {
-    use crate::mvl::checker::types::Ty;
+    use crate::mvl::ir::Ty;
     match expr {
         Expr::Literal(Literal::Str(s), _) => {
             cg.push(&format!("\"{}\".to_string().into()", escape_str(s)));

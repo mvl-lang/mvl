@@ -4144,10 +4144,10 @@ impl<'ctx> LlvmBackend<'ctx> {
 /// else falls back to `TypeExpr::Base { "Int" }` (i64) which is safe for
 /// unknown/unhandled cases.
 fn checker_ret_ty_to_type_expr(
-    ty: &crate::mvl::checker::types::Ty,
+    ty: &crate::mvl::ir::Ty,
     span: crate::mvl::parser::lexer::Span,
 ) -> crate::mvl::parser::ast::TypeExpr {
-    use crate::mvl::checker::types::Ty;
+    use crate::mvl::ir::Ty;
     use crate::mvl::parser::ast::TypeExpr;
     match ty {
         Ty::Bool => TypeExpr::Base {
