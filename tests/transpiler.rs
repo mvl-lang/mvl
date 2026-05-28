@@ -547,12 +547,12 @@ fn no_test_fns_no_cfg_test_block() {
 
 // ── #65: Debug/Display traits + format() ──────────────────────────────────
 
-/// format() maps to Rust's format!() macro.
+/// format() maps to mvl_format() — not Rust's format! macro, to avoid collision (#901).
 #[test]
 fn format_call_emits_format_macro() {
     let src = r#"fn greeting(name: String) -> String { format("{} world", name) }"#;
     let rust = transpile_src(src);
-    assert_contains(&rust, "format!(");
+    assert_contains(&rust, "mvl_format(");
     assert_contains(&rust, "\"{} world\"");
 }
 
@@ -590,7 +590,7 @@ impl Display for Point {
         "fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {",
     );
     assert_contains(&rust, "write!(f, \"{}\",");
-    assert_contains(&rust, "format!(");
+    assert_contains(&rust, "mvl_format(");
 }
 
 /// Hex literals lex and transpile to their integer value.

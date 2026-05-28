@@ -12,21 +12,31 @@ use sha2::{Digest, Sha256, Sha512};
 /// Returns the SHA-256 digest of the input bytes as a lowercase hex string.
 ///
 /// Pure — hashing is deterministic.
-/// Implements the Rust backing for `std/crypto.mvl::sha256`.
-pub fn sha256(data: String) -> String {
+/// Implements the Rust backing for `builtin fn _sha256` in `std/crypto.mvl` (#899).
+pub fn _sha256(data: String) -> String {
     let mut hasher = Sha256::new();
     hasher.update(data.as_bytes());
     hex::encode(hasher.finalize())
 }
 
+/// Public wrapper for `_sha256` — matches the `pub fn sha256` in `std/crypto.mvl` (#899).
+pub fn sha256(data: String) -> String {
+    _sha256(data)
+}
+
 /// Returns the SHA-512 digest of the input bytes as a lowercase hex string.
 ///
 /// Pure — hashing is deterministic.
-/// Implements the Rust backing for `std/crypto.mvl::sha512`.
-pub fn sha512(data: String) -> String {
+/// Implements the Rust backing for `builtin fn _sha512` in `std/crypto.mvl` (#899).
+pub fn _sha512(data: String) -> String {
     let mut hasher = Sha512::new();
     hasher.update(data.as_bytes());
     hex::encode(hasher.finalize())
+}
+
+/// Public wrapper for `_sha512` — matches the `pub fn sha512` in `std/crypto.mvl` (#899).
+pub fn sha512(data: String) -> String {
+    _sha512(data)
 }
 
 /// Returns `n` cryptographically secure random bytes as a `Secret<Vec<i64>>`.

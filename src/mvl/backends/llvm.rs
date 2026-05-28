@@ -835,16 +835,21 @@ impl<'ctx> LlvmBackend<'ctx> {
 
     /// Derive the C-ABI symbol name for a stdlib function from its module and MVL name.
     ///
-    /// Most symbols follow `_mvl_{module}_{fn_name}`, with three exceptions:
+    /// Most symbols follow `_mvl_{module}_{fn_name}`, with four exceptions:
     /// - `time.sleep` uses `_mvl_time_thread_sleep` (POSIX thread-sleep naming).
     /// - `log.*` functions already carry the `log_` prefix in their MVL name,
     ///   so the symbol is `_mvl_{fn_name}` to avoid `_mvl_log_log_debug`.
     /// - `crypto.crypto_random_bytes` would double the prefix — use `_mvl_{fn_name}`.
+    /// - crypto private builtins (`_sha256`, `_sha512`) strip the leading `_` so
+    ///   `_sha256` → `_mvl_crypto_sha256` (existing C symbol, unchanged by #899).
     fn derive_c_abi_symbol(module: &str, fn_name: &str) -> String {
         match (module, fn_name) {
             ("time", "sleep") => "_mvl_time_thread_sleep".into(),
             ("log", _) => format!("_mvl_{fn_name}"),
             ("crypto", _) if fn_name.starts_with("crypto_") => format!("_mvl_{fn_name}"),
+            ("crypto", _) if fn_name.starts_with('_') => {
+                format!("_mvl_crypto_{}", &fn_name[1..])
+            }
             _ => format!("_mvl_{module}_{fn_name}"),
         }
     }
@@ -1033,7 +1038,8 @@ impl<'ctx> LlvmBackend<'ctx> {
 
         // Modules that have `_`-prefixed builtins with C-ABI backing in mvl_runtime_c.
         // Only these modules expose private builtins the LLVM JIT must resolve (#899).
-        const MODULES_WITH_PRIVATE_BUILTINS: &[&str] = &["time"];
+        // crypto: _sha256, _sha512 map to existing _mvl_crypto_sha256/sha512 C symbols.
+        const MODULES_WITH_PRIVATE_BUILTINS: &[&str] = &["time", "crypto"];
 
         let filename = format!("{module}.mvl");
         let Some(content) = stdlib_content(&filename) else {
@@ -1156,21 +1162,36 @@ impl<'ctx> LlvmBackend<'ctx> {
             }
         }
 
-        // #180/#438/#507: crypto tier-1 builtins — always available, no `use` import required.
-        // Derived from pub builtin fn declarations in crypto.mvl like all other stdlib symbols.
-        // Use `entry().or_insert()` so an explicit `use std.crypto.*` import doesn't conflict.
-        for fn_name in &["sha256", "sha512", "crypto_random_bytes"] {
+        // #180/#438/#507/#899: crypto tier-1 builtins — always available, no `use` import.
+        // sha256/sha512 are now backed by private builtins _sha256/_sha512 (#899).
+        // We look up the private builtin and register it under both its private name
+        // (for the pub fn wrapper body calling _sha256) and the public name (user code).
+        // derive_c_abi_symbol strips the leading _ so _sha256 → _mvl_crypto_sha256.
+        for (builtin_name, public_name) in &[
+            ("_sha256", "sha256"),
+            ("_sha512", "sha512"),
+            ("crypto_random_bytes", "crypto_random_bytes"),
+        ] {
             if let Some(fd) = module_cache
                 .get("crypto")
-                .and_then(|fns| fns.iter().find(|fd| fd.name.as_str() == *fn_name))
+                .and_then(|fns| fns.iter().find(|fd| fd.name.as_str() == *builtin_name))
             {
                 if let Some(sig) =
                     Self::stdlib_sig_from_decl("crypto", &fd.name, &fd.return_type, &fd.params)
                 {
+                    // Register under the public API name (user code calls sha256/sha512).
                     self.stdlib
                         .stdlib_imports
-                        .entry(fd.name.clone())
-                        .or_insert(sig);
+                        .entry(public_name.to_string())
+                        .or_insert(sig.clone());
+                    // Also register under the private name so the pub fn wrapper body
+                    // can call _sha256/_sha512 when compiled as LLVM IR.
+                    if builtin_name != public_name {
+                        self.stdlib
+                            .stdlib_imports
+                            .entry(builtin_name.to_string())
+                            .or_insert(sig);
+                    }
                 }
             }
         }

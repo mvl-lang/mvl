@@ -22,7 +22,8 @@
 //!
 //! # LLVM dispatch coverage
 //!
-//! `sha256` and `sha512` are wired as tier-1 builtins (`PtrIdentArg`) in codegen.
+//! `sha256`/`sha512` tier-1 dispatch routes through private builtins `_sha256`/`_sha512`
+//! (#899); `_mvl_crypto_sha256`/`_mvl_crypto_sha512` C symbols are unchanged.
 //! `crypto_random_bytes` is wired as a tier-1 builtin (`I64ReturnsPtrArg`) — see
 //! `collect_stdlib_imports` in `src/mvl/codegen/mod.rs` (#507).
 //!

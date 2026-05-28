@@ -180,8 +180,10 @@ fn emit_iterator_impl(cg: &mut RustEmitter, id: &ImplDecl) {
                 }
             }
         },
-        // Absence of `next` is rejected by the checker before transpilation (#990).
-        None => unreachable!("impl Iterator missing `next` — blocked by checker (#990)"),
+        // Absence of `next`: emit a todo!() stub so invalid code doesn't panic the transpiler.
+        None => {
+            cg.line("todo!(\"Iterator::next not implemented\")");
+        }
     }
 
     cg.pop_indent();
@@ -244,8 +246,8 @@ fn emit_from_impl(cg: &mut RustEmitter, id: &ImplDecl) {
             }
         }
         None => {
-            // Absence of `from` is rejected by the checker before transpilation (#990).
-            unreachable!("impl From missing `from` — blocked by checker (#990)");
+            // Absence of `from`: emit a todo!() stub so invalid code doesn't panic the transpiler.
+            cg.line("todo!(\"From::from not implemented\")");
         }
     }
 
