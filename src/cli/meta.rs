@@ -74,6 +74,42 @@ pub(super) fn cmd_pkg_add(args: &[String]) {
     }
 }
 
+pub(super) fn cmd_sbom(args: &[String]) {
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        eprintln!("Usage: mvl sbom [--format=cyclonedx|spdx] [--output=<file>]");
+        eprintln!("  Generate a software bill of materials from mvl.toml + mvl.lock.");
+        eprintln!("  --format=cyclonedx   CycloneDX 1.5 JSON (default)");
+        eprintln!("  --format=spdx        SPDX 2.3 tag-value");
+        eprintln!("  --output=<file>      write to file instead of stdout");
+        eprintln!("  Run from a project directory containing mvl.toml.");
+        return;
+    }
+
+    let format = args.iter().find_map(|a| a.strip_prefix("--format="));
+    let output = args.iter().find_map(|a| a.strip_prefix("--output="));
+
+    let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    match packages::cmd_sbom(format, &project_root) {
+        Err(e) => {
+            eprintln!("error: {e}");
+            if matches!(e, packages::PackageError::Manifest(_)) {
+                eprintln!("hint: run 'mvl sbom' from a project directory containing mvl.toml");
+            }
+            process::exit(1);
+        }
+        Ok(doc) => match output {
+            None => print!("{doc}"),
+            Some(path) => {
+                if let Err(e) = std::fs::write(path, &doc) {
+                    eprintln!("error: cannot write {path}: {e}");
+                    process::exit(1);
+                }
+                println!("SBOM written to {path}");
+            }
+        },
+    }
+}
+
 /// `mvl init [<name>]` — scaffold a new MVL project in the current directory.
 ///
 /// Creates `mvl.toml` and `src/main.mvl`. The package name defaults to the
@@ -103,8 +139,9 @@ pub(super) fn cmd_init(args: &[String]) {
         "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nlicense = \"MIT\"\nrequires-mvl = \">={mvl_version}\"\n"
     );
 
-    let main_mvl = "//! Entry point.\n\nfn main() -> Unit ! Console {\n    println(\"Hello from {name}!\")\n}\n"
-        .replace("{name}", &name);
+    let main_mvl =
+        "//! Entry point.\n\nfn main() -> Unit ! Console {\n    println(\"Hello from {name}!\")\n}\n"
+            .replace("{name}", &name);
 
     // Write mvl.toml
     if let Err(e) = std::fs::write(cwd.join("mvl.toml"), &toml) {
