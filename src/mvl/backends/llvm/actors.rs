@@ -120,16 +120,17 @@ impl<'ctx> LlvmBackend<'ctx> {
             let entry = self.context.append_basic_block(fn_val, "entry");
             self.builder.position_at_end(entry);
             self.locals.clear();
-            self.local_mvl_types.clear();
-            self.heap_locals.clear();
+            self.mono.local_mvl_types.clear();
+            self.heap.heap_locals.clear();
             self.terminated = false;
             self.current_fn = Some(fn_val);
 
             // param[0] is the state ptr — register each field as a GEP-based local.
             if let Some(state_param) = fn_val.get_nth_param(0) {
                 state_param.set_name("self");
-                if let Some(&state_ty) = self.llvm_struct_types.get(&state_name) {
+                if let Some(&state_ty) = self.types.llvm_struct_types.get(&state_name) {
                     let field_defs: Vec<_> = self
+                        .types
                         .struct_fields
                         .get(&state_name)
                         .cloned()
@@ -142,7 +143,8 @@ impl<'ctx> LlvmBackend<'ctx> {
                                 .build_struct_gep(state_ty, state_ptr_val, i as u32, field_name)
                                 .unwrap();
                             self.locals.insert(field_name.clone(), (gep, field_llvm_ty));
-                            self.local_mvl_types
+                            self.mono
+                                .local_mvl_types
                                 .insert(field_name.clone(), field_ty_expr.clone());
                         }
                     }
@@ -158,7 +160,8 @@ impl<'ctx> LlvmBackend<'ctx> {
                         self.builder.build_store(alloca, param_val).unwrap();
                         self.locals.insert(param.name.clone(), (alloca, ty));
                     }
-                    self.local_mvl_types
+                    self.mono
+                        .local_mvl_types
                         .insert(param.name.clone(), param.ty.clone());
                 }
             }
@@ -189,8 +192,8 @@ impl<'ctx> LlvmBackend<'ctx> {
         let entry = self.context.append_basic_block(dispatch_fn, "entry");
         self.builder.position_at_end(entry);
         self.locals.clear();
-        self.local_mvl_types.clear();
-        self.heap_locals.clear();
+        self.mono.local_mvl_types.clear();
+        self.heap.heap_locals.clear();
         self.terminated = false;
         self.current_fn = Some(dispatch_fn);
 
@@ -302,11 +305,12 @@ impl<'ctx> LlvmBackend<'ctx> {
         let dispatch_name = format!("{actor_snake}_dispatch");
 
         let i64_ty = self.context.i64_type();
-        let &state_ty = self.llvm_struct_types.get(&state_name)?;
+        let &state_ty = self.types.llvm_struct_types.get(&state_name)?;
         let state_alloca = self.builder.build_alloca(state_ty, "actor_state").ok()?;
 
         // Initialize each field from the provided initializers.
         let field_defs: Vec<_> = self
+            .types
             .struct_fields
             .get(&state_name)
             .cloned()
@@ -358,7 +362,7 @@ impl<'ctx> LlvmBackend<'ctx> {
     pub(crate) fn resolve_actor_type_name(&self, receiver: &Expr) -> Option<String> {
         let type_name = match receiver {
             Expr::Ident(name, _) => {
-                let ty = self.local_mvl_types.get(name.as_str())?;
+                let ty = self.mono.local_mvl_types.get(name.as_str())?;
                 let TypeExpr::Base { name: tn, .. } = ty else {
                     return None;
                 };
@@ -369,7 +373,7 @@ impl<'ctx> LlvmBackend<'ctx> {
                 if !matches!(expr.as_ref(), Expr::Ident(n, _) if n == "self") {
                     return None;
                 }
-                let ty = self.local_mvl_types.get(field.as_str())?;
+                let ty = self.mono.local_mvl_types.get(field.as_str())?;
                 let TypeExpr::Base { name: tn, .. } = ty else {
                     return None;
                 };
@@ -377,7 +381,8 @@ impl<'ctx> LlvmBackend<'ctx> {
             }
             _ => return None,
         };
-        self.actor_decls
+        self.actors
+            .actor_decls
             .contains_key(type_name.as_str())
             .then_some(type_name)
     }
@@ -401,7 +406,7 @@ impl<'ctx> LlvmBackend<'ctx> {
         let i64_ty = self.context.i64_type();
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
 
-        let ad = self.actor_decls.get(actor_name)?.clone();
+        let ad = self.actors.actor_decls.get(actor_name)?.clone();
         let pub_methods: Vec<_> = ad.methods.iter().filter(|m| m.is_public).collect();
         let disc = pub_methods.iter().position(|m| m.name == method)?;
         let argc = args.len();

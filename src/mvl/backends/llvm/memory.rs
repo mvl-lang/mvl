@@ -608,7 +608,7 @@ impl<'ctx> LlvmBackend<'ctx> {
     /// dropping it here would produce a use-after-free.
     pub(crate) fn emit_heap_drops_except(&self, exclude: Option<&str>) {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
-        for (name, kind) in &self.heap_locals {
+        for (name, kind) in &self.heap.heap_locals {
             if exclude == Some(name.as_str()) {
                 continue;
             }

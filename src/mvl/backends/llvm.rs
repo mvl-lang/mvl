@@ -120,7 +120,7 @@ impl LlvmCompiler {
         };
         let mut backend = LlvmBackend::new(&self.context, module_name);
         backend.expr_types = check_result.expr_types;
-        backend.mono = Some(mono);
+        backend.mono.mono = Some(mono);
         backend.assert_mode = self.assert_mode;
         backend.emit_program(&merged);
         backend.verify()?;
@@ -398,23 +398,10 @@ pub(crate) enum StdlibSig {
     VoidTwoPtrArgs(String),
 }
 
-// ── Backend struct ────────────────────────────────────────────────────────────
+// ── Backend sub-structs ───────────────────────────────────────────────────────
 
-/// Tracks alloca pointer + element type for each local variable.
-type LocalEntry<'ctx> = (PointerValue<'ctx>, BasicTypeEnum<'ctx>);
-
-struct LlvmBackend<'ctx> {
-    context: &'ctx Context,
-    module: Module<'ctx>,
-    builder: Builder<'ctx>,
-    /// Named local variables: name → (alloca, element_type).
-    locals: HashMap<String, LocalEntry<'ctx>>,
-    /// Whether the current basic block already has a terminator.
-    terminated: bool,
-    /// Current function being emitted — needed for `?` early return.
-    current_fn: Option<FunctionValue<'ctx>>,
-
-    // ── Phase B: type knowledge ──────────────────────────────────────────────
+/// LLVM type knowledge collected from Phase B declarations.
+struct TypeRegistry<'ctx> {
     /// Enum types: enum_name → [(variant_name, VariantFields)].
     enum_variants: HashMap<String, Vec<(String, crate::mvl::parser::ast::VariantFields)>>,
     /// Struct types: struct_name → [(field_name, TypeExpr)] in declaration order.
@@ -424,62 +411,136 @@ struct LlvmBackend<'ctx> {
     /// LLVM named struct types (for structs and payload enums).
     llvm_struct_types: HashMap<String, StructType<'ctx>>,
     /// Return types of user-defined functions (name → MVL TypeExpr).
-    /// Used to determine the Ok/Some payload type when extracting from Result/Option.
     fn_return_types: HashMap<String, TypeExpr>,
+}
 
-    // ── L5-08: generic monomorphization ─────────────────────────────────────
+impl<'ctx> TypeRegistry<'ctx> {
+    fn new() -> Self {
+        Self {
+            enum_variants: HashMap::new(),
+            struct_fields: HashMap::new(),
+            struct_invariants: HashMap::new(),
+            llvm_struct_types: HashMap::new(),
+            fn_return_types: HashMap::new(),
+        }
+    }
+}
+
+/// Generic monomorphization state.
+struct MonoState<'ctx> {
     /// All user function declarations (cloned), keyed by name.
-    /// Needed to emit monomorphized bodies on demand at call sites.
     fn_decls: HashMap<String, FnDecl>,
     /// Active type-parameter substitutions during monomorphized function emission.
-    /// Maps type-param name (e.g. "T") → concrete LLVM type.
     type_subs: HashMap<String, BasicTypeEnum<'ctx>>,
-    /// Mangled names of already-emitted monomorphized functions (prevents duplicate emission).
+    /// Mangled names of already-emitted monomorphized functions.
     emitted_monomorphs: HashSet<String>,
     /// MVL TypeExpr for each local variable that has an explicit type annotation.
-    /// Used to infer the Ok/Some payload type when the scrutinee is a local variable.
     local_mvl_types: HashMap<String, TypeExpr>,
     /// Type annotation of the let-binding currently being initialised, if any.
-    /// Set by Stmt::Let before calling emit_expr so that emit_list_literal can
-    /// derive the correct element size for empty list literals (fixes #520).
     pending_let_ty: Option<TypeExpr>,
-
-    // ── L5-14: heap drop tracking ────────────────────────────────────────────
-    /// Locals that hold heap-allocated collection values (String, Array, Map).
-    /// Keyed by variable name → HeapKind.  Cleared at function entry.
-    /// Used to emit `_drop` calls before `return` and at function end.
-    pub(crate) heap_locals: HashMap<String, HeapKind>,
-
-    // ── ADR-0019: stdlib import tracking ─────────────────────────────────────
-    /// Maps a MVL function name (imported via `use std.*`) to its C-ABI symbol
-    /// and calling convention in `libmvl_runtime_c`.  Populated from `Decl::Use`
-    /// nodes in emit_program.  Used by emit_fn_call to dispatch to the correct
-    /// `_mvl_*` extern via the appropriate emission helper.
-    stdlib_imports: HashMap<String, StdlibSig>,
-
-    // ── #583: checker type information ───────────────────────────────────────
-    /// Inferred type for every expression, keyed by span.  Populated from
-    /// `CheckResult::expr_types` in `compile_to_ir_with_prelude` so that
-    /// generic builtin call sites (e.g. `choice[T]`, `shuffle[T]`) can emit
-    /// type-specific inline IR without going through the C-ABI dispatch table.
-    expr_types: HashMap<crate::mvl::parser::lexer::Span, crate::mvl::ir::Ty>,
-
-    // ── ADR-0034: pre-computed monomorphization plan ──────────────────────────
-    /// All generic instantiations discovered by the mono pass before emission.
-    /// Populated in `compile_to_ir_with_prelude`; consumed by the mono pre-emit
-    /// pass in `emit_program` so every call site finds the symbol already defined.
+    /// Pre-computed monomorphization plan (ADR-0034).
     mono: Option<crate::mvl::passes::mono::MonoProgram>,
+}
 
-    // ── #588: lambda lowering ─────────────────────────────────────────────────
-    /// Counter for generating unique names for lambda functions (`__lambda_N`).
+impl<'ctx> MonoState<'ctx> {
+    fn new() -> Self {
+        Self {
+            fn_decls: HashMap::new(),
+            type_subs: HashMap::new(),
+            emitted_monomorphs: HashSet::new(),
+            local_mvl_types: HashMap::new(),
+            pending_let_ty: None,
+            mono: None,
+        }
+    }
+}
+
+/// Heap drop tracking (L5-14).
+struct HeapTracker {
+    /// Locals that hold heap-allocated collection values.  Cleared at function entry.
+    heap_locals: HashMap<String, HeapKind>,
+}
+
+impl HeapTracker {
+    fn new() -> Self {
+        Self {
+            heap_locals: HashMap::new(),
+        }
+    }
+}
+
+/// Stdlib import dispatch table (ADR-0019).
+struct StdlibDispatch {
+    /// Maps MVL function name → C-ABI symbol + calling convention.
+    stdlib_imports: HashMap<String, StdlibSig>,
+}
+
+impl StdlibDispatch {
+    fn new() -> Self {
+        Self {
+            stdlib_imports: HashMap::new(),
+        }
+    }
+}
+
+/// Lambda lowering state (#588).
+struct LambdaState {
+    /// Counter for generating unique names (`__lambda_N`).
     lambda_counter: u32,
+}
+
+impl LambdaState {
+    fn new() -> Self {
+        Self { lambda_counter: 0 }
+    }
+}
+
+/// Actor declaration registry (Phase 8 / #696).
+struct ActorState {
+    /// Actor declarations keyed by actor type name.
+    actor_decls: HashMap<String, ActorDecl>,
+}
+
+impl ActorState {
+    fn new() -> Self {
+        Self {
+            actor_decls: HashMap::new(),
+        }
+    }
+}
+
+// ── Backend struct ────────────────────────────────────────────────────────────
+
+/// Tracks alloca pointer + element type for each local variable.
+type LocalEntry<'ctx> = (PointerValue<'ctx>, BasicTypeEnum<'ctx>);
+
+struct LlvmBackend<'ctx> {
+    // ── Core LLVM infrastructure ──────────────────────────────────────────────
+    context: &'ctx Context,
+    module: Module<'ctx>,
+    builder: Builder<'ctx>,
+
+    // ── Per-function state ────────────────────────────────────────────────────
+    /// Named local variables: name → (alloca, element_type).
+    locals: HashMap<String, LocalEntry<'ctx>>,
+    /// Whether the current basic block already has a terminator.
+    terminated: bool,
+    /// Current function being emitted — needed for `?` early return.
+    current_fn: Option<FunctionValue<'ctx>>,
+
+    // ── Sub-structs ───────────────────────────────────────────────────────────
+    types: TypeRegistry<'ctx>,
+    mono: MonoState<'ctx>,
+    heap: HeapTracker,
+    stdlib: StdlibDispatch,
+    lambdas: LambdaState,
+    actors: ActorState,
+
+    // ── Checker output ────────────────────────────────────────────────────────
+    /// Inferred type for every expression, keyed by span.
+    expr_types: HashMap<crate::mvl::parser::lexer::Span, crate::mvl::ir::Ty>,
     /// Controls how struct invariants are enforced in emitted IR (issue #662).
     assert_mode: crate::mvl::backends::AssertMode,
-
-    // ── Phase 8 / #696: actor declarations ───────────────────────────────────
-    /// Actor declarations keyed by actor type name (e.g. `"Counter"`).
-    /// Used to detect actor method calls and to emit dispatch functions.
-    actor_decls: HashMap<String, ActorDecl>,
 }
 
 impl<'ctx> LlvmBackend<'ctx> {
@@ -496,23 +557,14 @@ impl<'ctx> LlvmBackend<'ctx> {
             locals: HashMap::new(),
             terminated: false,
             current_fn: None,
-            enum_variants: HashMap::new(),
-            struct_fields: HashMap::new(),
-            struct_invariants: HashMap::new(),
-            llvm_struct_types: HashMap::new(),
-            fn_return_types: HashMap::new(),
-            fn_decls: HashMap::new(),
-            type_subs: HashMap::new(),
-            emitted_monomorphs: HashSet::new(),
-            local_mvl_types: HashMap::new(),
-            pending_let_ty: None,
-            heap_locals: HashMap::new(),
-            stdlib_imports: HashMap::new(),
+            types: TypeRegistry::new(),
+            mono: MonoState::new(),
+            heap: HeapTracker::new(),
+            stdlib: StdlibDispatch::new(),
+            lambdas: LambdaState::new(),
+            actors: ActorState::new(),
             expr_types: HashMap::new(),
-            mono: None,
-            lambda_counter: 0,
             assert_mode: crate::mvl::backends::AssertMode::Always,
-            actor_decls: HashMap::new(),
         }
     }
 
@@ -530,9 +582,9 @@ impl<'ctx> LlvmBackend<'ctx> {
             }
             // Phase 8 / #696: register actor state structs alongside regular struct types.
             if let Decl::Actor(ad) = decl {
-                self.actor_decls.insert(ad.name.clone(), ad.clone());
+                self.actors.actor_decls.insert(ad.name.clone(), ad.clone());
                 let state_name = format!("{}State", ad.name);
-                self.struct_fields.insert(
+                self.types.struct_fields.insert(
                     state_name,
                     ad.fields
                         .iter()
@@ -566,15 +618,17 @@ impl<'ctx> LlvmBackend<'ctx> {
                     // Don't overwrite stdlib-registered return types: when a stdlib
                     // function shadows a prelude function (e.g. regex.find vs strings.find),
                     // the C-ABI dispatch always wins, so the return type must match.
-                    if self.stdlib_imports.contains_key(&fd.name) {
-                        self.fn_return_types
+                    if self.stdlib.stdlib_imports.contains_key(&fd.name) {
+                        self.types
+                            .fn_return_types
                             .entry(llvm_name.clone())
                             .or_insert(*fd.return_type.clone());
                     } else {
-                        self.fn_return_types
+                        self.types
+                            .fn_return_types
                             .insert(llvm_name.clone(), *fd.return_type.clone());
                     }
-                    self.fn_decls.insert(llvm_name, fd.clone());
+                    self.mono.fn_decls.insert(llvm_name, fd.clone());
                     if fd.type_params.is_empty() || fd.is_builtin {
                         self.declare_fn(fd);
                     }
@@ -605,9 +659,9 @@ impl<'ctx> LlvmBackend<'ctx> {
         // Phase 8 / #696: actor pass — emit behavior functions + dispatch functions.
         // Must run before the second pass so that dispatch function symbols are declared
         // when `emit_actor_spawn` is called inside user function bodies (e.g. main).
-        if !self.actor_decls.is_empty() {
+        if !self.actors.actor_decls.is_empty() {
             self.declare_actor_runtime_fns();
-            let actors: Vec<ActorDecl> = self.actor_decls.values().cloned().collect();
+            let actors: Vec<ActorDecl> = self.actors.actor_decls.values().cloned().collect();
             for ad in actors {
                 self.emit_actor_decl(&ad);
             }
@@ -616,7 +670,7 @@ impl<'ctx> LlvmBackend<'ctx> {
         // ADR-0034 mono pass: pre-emit all monomorphized generic function copies so
         // call sites find the symbol already defined instead of triggering JIT emission.
         // Must run before the second pass so that user function bodies can call them.
-        if let Some(mono) = &self.mono {
+        if let Some(mono) = &self.mono.mono {
             struct MonoEntry {
                 mangled: String,
                 type_sub_exprs: Vec<(String, TypeExpr)>,
@@ -1057,7 +1111,10 @@ impl<'ctx> LlvmBackend<'ctx> {
                     if let Some(sig) =
                         Self::stdlib_sig_from_decl(module, &fd.name, &fd.return_type, &fd.params)
                     {
-                        self.stdlib_imports.entry(fd.name.clone()).or_insert(sig);
+                        self.stdlib
+                            .stdlib_imports
+                            .entry(fd.name.clone())
+                            .or_insert(sig);
                     }
                 }
             } else {
@@ -1067,7 +1124,7 @@ impl<'ctx> LlvmBackend<'ctx> {
                     if let Some(sig) =
                         Self::stdlib_sig_from_decl(module, fn_name, &fd.return_type, &fd.params)
                     {
-                        self.stdlib_imports.insert(fn_name.clone(), sig);
+                        self.stdlib.stdlib_imports.insert(fn_name.clone(), sig);
                     }
                 }
             }
@@ -1091,7 +1148,10 @@ impl<'ctx> LlvmBackend<'ctx> {
                 if let Some(sig) =
                     Self::stdlib_sig_from_decl("io", &fd.name, &fd.return_type, &fd.params)
                 {
-                    self.stdlib_imports.entry(fd.name.clone()).or_insert(sig);
+                    self.stdlib
+                        .stdlib_imports
+                        .entry(fd.name.clone())
+                        .or_insert(sig);
                 }
             }
         }
@@ -1107,7 +1167,10 @@ impl<'ctx> LlvmBackend<'ctx> {
                 if let Some(sig) =
                     Self::stdlib_sig_from_decl("crypto", &fd.name, &fd.return_type, &fd.params)
                 {
-                    self.stdlib_imports.entry(fd.name.clone()).or_insert(sig);
+                    self.stdlib
+                        .stdlib_imports
+                        .entry(fd.name.clone())
+                        .or_insert(sig);
                 }
             }
         }
@@ -1133,7 +1196,8 @@ impl<'ctx> LlvmBackend<'ctx> {
                 inner: Box::new(list_int),
                 span: s,
             };
-            self.fn_return_types
+            self.types
+                .fn_return_types
                 .entry("crypto_random_bytes".into())
                 .or_insert(secret_list_int);
         }
@@ -1178,7 +1242,10 @@ impl<'ctx> LlvmBackend<'ctx> {
                 span: s,
             };
             // path(s: String) → Path
-            self.fn_return_types.entry("path".into()).or_insert(path);
+            self.types
+                .fn_return_types
+                .entry("path".into())
+                .or_insert(path);
             // Result[Unit, String] functions
             for name in &[
                 "write",
@@ -1188,13 +1255,15 @@ impl<'ctx> LlvmBackend<'ctx> {
                 "create_symlink",
                 "chmod",
             ] {
-                self.fn_return_types
+                self.types
+                    .fn_return_types
                     .entry((*name).to_string())
                     .or_insert_with(result_unit_str);
             }
             // Result[String, String] functions
             for name in &["read_to_string", "read_file", "read_link"] {
-                self.fn_return_types
+                self.types
+                    .fn_return_types
                     .entry((*name).to_string())
                     .or_insert_with(result_str_str);
             }
@@ -1227,7 +1296,8 @@ impl<'ctx> LlvmBackend<'ctx> {
             };
             let int_ty = mk_base("Int");
             // Register `DateTime = struct { year: Int, month: Int, day: Int, hour: Int, minute: Int, second: Int }`
-            self.struct_fields
+            self.types
+                .struct_fields
                 .entry("DateTime".into())
                 .or_insert_with(|| {
                     vec![
@@ -1269,31 +1339,38 @@ impl<'ctx> LlvmBackend<'ctx> {
                 span: s,
             };
             // tcp_listen(host, port) → Result[TcpListener, String]
-            self.fn_return_types
+            self.types
+                .fn_return_types
                 .entry("tcp_listen".into())
                 .or_insert_with(|| mk_result(listener_ty.clone()));
             // tcp_connect(host, port) → Result[TcpStream, String]
-            self.fn_return_types
+            self.types
+                .fn_return_types
                 .entry("tcp_connect".into())
                 .or_insert_with(|| mk_result(stream_ty.clone()));
             // tcp_accept(listener) → Result[TcpStream, String]
-            self.fn_return_types
+            self.types
+                .fn_return_types
                 .entry("tcp_accept".into())
                 .or_insert_with(|| mk_result(stream_ty.clone()));
             // tcp_read(stream) → Result[Tainted[String], String]
-            self.fn_return_types
+            self.types
+                .fn_return_types
                 .entry("tcp_read".into())
                 .or_insert_with(|| mk_result(string_ty.clone()));
             // tcp_read_exact(stream, n) → Result[Tainted[String], String]
-            self.fn_return_types
+            self.types
+                .fn_return_types
                 .entry("tcp_read_exact".into())
                 .or_insert_with(|| mk_result(string_ty.clone()));
             // _tcp_read_exact(stream, n) → Result[String, String]
-            self.fn_return_types
+            self.types
+                .fn_return_types
                 .entry("_tcp_read_exact".into())
                 .or_insert_with(|| mk_result(string_ty.clone()));
             // tcp_listener_port(listener) → Result[Int, String]
-            self.fn_return_types
+            self.types
+                .fn_return_types
                 .entry("tcp_listener_port".into())
                 .or_insert_with(|| mk_result(int_ty));
         }
@@ -1310,7 +1387,8 @@ impl<'ctx> LlvmBackend<'ctx> {
         });
         if imports_env {
             use crate::mvl::parser::ast::VariantFields;
-            self.enum_variants
+            self.types
+                .enum_variants
                 .entry("Signal".into())
                 .or_insert_with(|| {
                     vec![
@@ -1352,19 +1430,23 @@ impl<'ctx> LlvmBackend<'ctx> {
             // struct_fields so build_llvm_types can create the LLVM struct type.
             // (std/regex.mvl type declarations are not in the user program's AST so
             //  register_type_decl never sees them.)
-            self.struct_fields.entry("Match".into()).or_insert_with(|| {
-                vec![
-                    ("text".into(), string_ty.clone()),
-                    ("start".into(), int_ty.clone()),
-                    ("end".into(), int_ty.clone()),
-                ]
-            });
+            self.types
+                .struct_fields
+                .entry("Match".into())
+                .or_insert_with(|| {
+                    vec![
+                        ("text".into(), string_ty.clone()),
+                        ("start".into(), int_ty.clone()),
+                        ("end".into(), int_ty.clone()),
+                    ]
+                });
 
             let regex_ty = mk_base("Regex");
             let match_ty = mk_base("Match");
 
             // compile(pattern: String) → Result[Regex, String]
-            self.fn_return_types
+            self.types
+                .fn_return_types
                 .entry("compile".into())
                 .or_insert(TypeExpr::Result {
                     ok: Box::new(regex_ty),
@@ -1372,7 +1454,8 @@ impl<'ctx> LlvmBackend<'ctx> {
                     span: s,
                 });
             // find(re: Regex, s: String) → Option[Match]
-            self.fn_return_types
+            self.types
+                .fn_return_types
                 .entry("find".into())
                 .or_insert(TypeExpr::Option {
                     inner: Box::new(match_ty),
@@ -1931,7 +2014,7 @@ impl<'ctx> LlvmBackend<'ctx> {
         let match_ptr_pv = match_ptr.into_pointer_value();
 
         // Look up the %Match LLVM struct type (registered when std/regex.mvl is parsed).
-        let match_llvm_ty = self.llvm_struct_types.get("Match").copied()?;
+        let match_llvm_ty = self.types.llvm_struct_types.get("Match").copied()?;
 
         // Allocate a stack slot for the Match struct — sized for the full struct.
         let match_slot = self
@@ -2721,8 +2804,8 @@ impl<'ctx> LlvmBackend<'ctx> {
         let entry = self.context.append_basic_block(fn_val, "entry");
         self.builder.position_at_end(entry);
         self.locals.clear();
-        self.local_mvl_types.clear();
-        self.heap_locals.clear();
+        self.mono.local_mvl_types.clear();
+        self.heap.heap_locals.clear();
         self.terminated = false;
         self.current_fn = Some(fn_val);
 
@@ -2741,7 +2824,8 @@ impl<'ctx> LlvmBackend<'ctx> {
                         let alloca = self.builder.build_alloca(inner_ty, &param.name).unwrap();
                         self.builder.build_store(alloca, loaded).unwrap();
                         self.locals.insert(param.name.clone(), (alloca, inner_ty));
-                        self.local_mvl_types
+                        self.mono
+                            .local_mvl_types
                             .insert(param.name.clone(), *inner.clone());
                         continue;
                     }
@@ -2752,7 +2836,8 @@ impl<'ctx> LlvmBackend<'ctx> {
                     self.locals.insert(param.name.clone(), (alloca, ty));
                 }
                 // L5-08: record MVL type for Ok/Some payload inference in match arms.
-                self.local_mvl_types
+                self.mono
+                    .local_mvl_types
                     .insert(param.name.clone(), param.ty.clone());
             }
         }
@@ -2889,8 +2974,8 @@ impl<'ctx> LlvmBackend<'ctx> {
         let entry = self.context.append_basic_block(fn_val, "entry");
         self.builder.position_at_end(entry);
         self.locals.clear();
-        self.local_mvl_types.clear();
-        self.heap_locals.clear();
+        self.mono.local_mvl_types.clear();
+        self.heap.heap_locals.clear();
         self.terminated = false;
         self.current_fn = Some(fn_val);
 
@@ -2903,7 +2988,8 @@ impl<'ctx> LlvmBackend<'ctx> {
                     self.locals.insert(param.name.clone(), (alloca, ty));
                 }
                 // L5-08: record MVL type for Ok/Some payload inference in match arms.
-                self.local_mvl_types
+                self.mono
+                    .local_mvl_types
                     .insert(param.name.clone(), param.ty.clone());
             }
         }
@@ -2955,7 +3041,8 @@ impl<'ctx> LlvmBackend<'ctx> {
         let Expr::Ident(name, _) = expr else {
             return None;
         };
-        self.heap_locals
+        self.heap
+            .heap_locals
             .contains_key(name.as_str())
             .then_some(name.as_str())
     }
@@ -2968,25 +3055,27 @@ impl<'ctx> LlvmBackend<'ctx> {
         type_subs: HashMap<String, BasicTypeEnum<'ctx>>,
         mangled_name: &str,
     ) {
-        if self.emitted_monomorphs.contains(mangled_name) {
+        if self.mono.emitted_monomorphs.contains(mangled_name) {
             return;
         }
-        self.emitted_monomorphs.insert(mangled_name.to_string());
+        self.mono
+            .emitted_monomorphs
+            .insert(mangled_name.to_string());
 
         // Save builder insert point and per-function state.
         let saved_block = self.builder.get_insert_block();
-        let saved_subs = std::mem::replace(&mut self.type_subs, type_subs);
+        let saved_subs = std::mem::replace(&mut self.mono.type_subs, type_subs);
         let saved_locals = std::mem::take(&mut self.locals);
-        let saved_mvl_types = std::mem::take(&mut self.local_mvl_types);
+        let saved_mvl_types = std::mem::take(&mut self.mono.local_mvl_types);
         let saved_terminated = self.terminated;
         let saved_fn = self.current_fn;
 
         self.emit_fn_named(&fd, mangled_name);
 
         // Restore state.
-        self.type_subs = saved_subs;
+        self.mono.type_subs = saved_subs;
         self.locals = saved_locals;
-        self.local_mvl_types = saved_mvl_types;
+        self.mono.local_mvl_types = saved_mvl_types;
         self.terminated = saved_terminated;
         self.current_fn = saved_fn;
         if let Some(block) = saved_block {
@@ -3038,7 +3127,7 @@ impl<'ctx> LlvmBackend<'ctx> {
                 // Look up the actual MVL type of the argument expression.
                 let actual_ty = match arg_expr {
                     crate::mvl::parser::ast::Expr::Ident(name, _) => {
-                        self.local_mvl_types.get(name.as_str())
+                        self.mono.local_mvl_types.get(name.as_str())
                     }
                     _ => None,
                 };
@@ -3206,8 +3295,38 @@ impl<'ctx> LlvmBackend<'ctx> {
 
 #[cfg(test)]
 mod tests {
-    use super::find_cdylib;
+    use super::{find_cdylib, TypeRegistry};
     use std::io::Write;
+
+    /// TypeRegistry starts fully empty — verifiable without emitting any IR.
+    #[test]
+    fn type_registry_new_is_empty() {
+        let ctx = inkwell::context::Context::create();
+        let reg = TypeRegistry::new();
+        // Bind the registry to the context lifetime so all five fields are valid.
+        let reg: TypeRegistry<'_> = reg;
+        let _ = &ctx; // keep ctx alive
+        assert!(
+            reg.enum_variants.is_empty(),
+            "enum_variants should start empty"
+        );
+        assert!(
+            reg.struct_fields.is_empty(),
+            "struct_fields should start empty"
+        );
+        assert!(
+            reg.struct_invariants.is_empty(),
+            "struct_invariants should start empty"
+        );
+        assert!(
+            reg.llvm_struct_types.is_empty(),
+            "llvm_struct_types should start empty"
+        );
+        assert!(
+            reg.fn_return_types.is_empty(),
+            "fn_return_types should start empty"
+        );
+    }
 
     /// Extension validation: a path with a wrong extension must be rejected even
     /// if the file exists on disk.
