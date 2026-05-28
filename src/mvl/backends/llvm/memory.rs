@@ -64,7 +64,6 @@ impl<'ctx> LlvmBackend<'ctx> {
     }
 
     /// `mvl_string_clone(ptr) -> ptr`
-    #[allow(dead_code)]
     pub(crate) fn get_mvl_string_clone(&self) -> FunctionValue<'ctx> {
         self.get_or_declare_fn(
             "mvl_string_clone",
@@ -152,7 +151,6 @@ impl<'ctx> LlvmBackend<'ctx> {
     }
 
     /// `mvl_string_eq(ptr, ptr) -> i32`
-    #[allow(dead_code)]
     pub(crate) fn get_mvl_string_eq(&self) -> FunctionValue<'ctx> {
         self.get_or_declare_fn(
             "mvl_string_eq",
@@ -401,7 +399,6 @@ impl<'ctx> LlvmBackend<'ctx> {
     }
 
     /// `mvl_array_clone(ptr) -> ptr`
-    #[allow(dead_code)]
     pub(crate) fn get_mvl_array_clone(&self) -> FunctionValue<'ctx> {
         self.get_or_declare_fn(
             "mvl_array_clone",
@@ -490,7 +487,6 @@ impl<'ctx> LlvmBackend<'ctx> {
     }
 
     /// `mvl_map_clone(ptr) -> ptr`
-    #[allow(dead_code)]
     pub(crate) fn get_mvl_map_clone(&self) -> FunctionValue<'ctx> {
         self.get_or_declare_fn(
             "mvl_map_clone",
@@ -528,7 +524,6 @@ impl<'ctx> LlvmBackend<'ctx> {
     }
 
     /// `mvl_map_get(ptr map, ptr key, i64 key_len) -> ptr`
-    #[allow(dead_code)]
     pub(crate) fn get_mvl_map_get(&self) -> FunctionValue<'ctx> {
         let ptr: BasicMetadataTypeEnum = self.context.ptr_type(AddressSpace::default()).into();
         let i64: BasicMetadataTypeEnum = self.context.i64_type().into();
@@ -587,7 +582,7 @@ impl<'ctx> LlvmBackend<'ctx> {
         self.get_or_declare_fn("mvl_map_remove", &[ptr, ptr, i64], None, false)
     }
 
-    fn get_or_declare_fn(
+    pub(super) fn get_or_declare_fn(
         &self,
         name: &str,
         param_tys: &[BasicMetadataTypeEnum<'ctx>],

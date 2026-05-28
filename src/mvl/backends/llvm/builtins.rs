@@ -35,17 +35,6 @@ impl<'ctx> LlvmBackend<'ctx> {
             .add_function("dprintf", dprintf_ty, Some(Linkage::External))
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn get_strlen(&self) -> FunctionValue<'ctx> {
-        if let Some(f) = self.module.get_function("strlen") {
-            return f;
-        }
-        let ptr_ty: BasicMetadataTypeEnum = self.context.ptr_type(AddressSpace::default()).into();
-        let strlen_ty = self.context.i64_type().fn_type(&[ptr_ty], false);
-        self.module
-            .add_function("strlen", strlen_ty, Some(Linkage::External))
-    }
-
     pub(crate) fn get_snprintf(&self) -> FunctionValue<'ctx> {
         if let Some(f) = self.module.get_function("snprintf") {
             return f;

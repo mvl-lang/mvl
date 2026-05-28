@@ -33,7 +33,7 @@ use inkwell::{
     context::Context,
     module::{Linkage, Module},
     types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum, StructType},
-    values::{BasicValueEnum, FunctionValue, PointerValue},
+    values::{AnyValue, BasicValueEnum, CallSiteValue, FunctionValue, PointerValue},
     AddressSpace,
 };
 use std::collections::{HashMap, HashSet};
@@ -1507,9 +1507,8 @@ impl<'ctx> LlvmBackend<'ctx> {
         // Some branch: load element at idx, wrap in Some.
         self.builder.position_at_end(some_bb);
         self.terminated = false;
-        use inkwell::values::AnyValue;
         let get_fn = self.get_mvl_array_get();
-        let elem_ptr = inkwell::values::BasicValueEnum::try_from(
+        let elem_ptr = BasicValueEnum::try_from(
             self.builder
                 .build_call(get_fn, &[list_ptr.into(), idx.into()], "ch_eptr")
                 .unwrap()
@@ -1558,93 +1557,56 @@ impl<'ctx> LlvmBackend<'ctx> {
         Some(phi.as_basic_value())
     }
 
-    pub(crate) fn emit_stdlib_call_i64(
-        &mut self,
-        symbol: &str,
-    ) -> Option<inkwell::values::BasicValueEnum<'ctx>> {
-        let fn_val = if let Some(f) = self.module.get_function(symbol) {
-            f
-        } else {
-            let fn_ty = self.context.i64_type().fn_type(&[], false);
-            self.module
-                .add_function(symbol, fn_ty, Some(Linkage::External))
-        };
+    /// Extract a `BasicValueEnum` from a call site value, or `None` for void returns.
+    fn call_result(&self, call: CallSiteValue<'ctx>) -> Option<BasicValueEnum<'ctx>> {
+        BasicValueEnum::try_from(call.as_any_value_enum()).ok()
+    }
+
+    pub(crate) fn emit_stdlib_call_i64(&mut self, symbol: &str) -> Option<BasicValueEnum<'ctx>> {
+        let i64_ty = self.context.i64_type();
+        let fn_val = self.get_or_declare_fn(symbol, &[], Some(i64_ty.into()), false);
         let call = self.builder.build_call(fn_val, &[], "stdlib_i64").ok()?;
-        use inkwell::values::AnyValue;
-        inkwell::values::BasicValueEnum::try_from(call.as_any_value_enum()).ok()
+        self.call_result(call)
     }
 
     /// Emit a call to a stdlib C-ABI function with no arguments, returning f64.
-    pub(crate) fn emit_stdlib_call_f64(
-        &mut self,
-        symbol: &str,
-    ) -> Option<inkwell::values::BasicValueEnum<'ctx>> {
-        let fn_val = if let Some(f) = self.module.get_function(symbol) {
-            f
-        } else {
-            let fn_ty = self.context.f64_type().fn_type(&[], false);
-            self.module
-                .add_function(symbol, fn_ty, Some(Linkage::External))
-        };
+    pub(crate) fn emit_stdlib_call_f64(&mut self, symbol: &str) -> Option<BasicValueEnum<'ctx>> {
+        let f64_ty = self.context.f64_type();
+        let fn_val = self.get_or_declare_fn(symbol, &[], Some(f64_ty.into()), false);
         let call = self.builder.build_call(fn_val, &[], "stdlib_f64").ok()?;
-        use inkwell::values::AnyValue;
-        inkwell::values::BasicValueEnum::try_from(call.as_any_value_enum()).ok()
+        self.call_result(call)
     }
 
     /// Emit a call to a stdlib C-ABI function with no arguments, returning a pointer.
     pub(crate) fn emit_stdlib_call_ptr_no_arg(
         &mut self,
         symbol: &str,
-    ) -> Option<inkwell::values::BasicValueEnum<'ctx>> {
-        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
-        let fn_val = if let Some(f) = self.module.get_function(symbol) {
-            f
-        } else {
-            let fn_ty = ptr_ty.fn_type(&[], false);
-            self.module
-                .add_function(symbol, fn_ty, Some(Linkage::External))
-        };
+    ) -> Option<BasicValueEnum<'ctx>> {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let fn_val = self.get_or_declare_fn(symbol, &[], Some(ptr_ty.into()), false);
         let call = self.builder.build_call(fn_val, &[], "stdlib_ptr").ok()?;
-        use inkwell::values::AnyValue;
-        inkwell::values::BasicValueEnum::try_from(call.as_any_value_enum()).ok()
+        self.call_result(call)
     }
 
     /// Emit a call to a stdlib C-ABI function `(i64, i64) → i64`.
     pub(crate) fn emit_stdlib_call_i64_two_args(
         &mut self,
         symbol: &str,
-        a: inkwell::values::BasicValueEnum<'ctx>,
-        b: inkwell::values::BasicValueEnum<'ctx>,
-    ) -> Option<inkwell::values::BasicValueEnum<'ctx>> {
-        use inkwell::types::BasicMetadataTypeEnum;
-        use inkwell::values::BasicMetadataValueEnum;
+        a: BasicValueEnum<'ctx>,
+        b: BasicValueEnum<'ctx>,
+    ) -> Option<BasicValueEnum<'ctx>> {
         let i64_ty = self.context.i64_type();
-        let fn_val = if let Some(f) = self.module.get_function(symbol) {
-            f
-        } else {
-            let fn_ty = i64_ty.fn_type(
-                &[
-                    BasicMetadataTypeEnum::from(i64_ty),
-                    BasicMetadataTypeEnum::from(i64_ty),
-                ],
-                false,
-            );
-            self.module
-                .add_function(symbol, fn_ty, Some(Linkage::External))
-        };
+        let fn_val = self.get_or_declare_fn(
+            symbol,
+            &[i64_ty.into(), i64_ty.into()],
+            Some(i64_ty.into()),
+            false,
+        );
         let call = self
             .builder
-            .build_call(
-                fn_val,
-                &[
-                    BasicMetadataValueEnum::from(a),
-                    BasicMetadataValueEnum::from(b),
-                ],
-                "stdlib_i64_2a",
-            )
+            .build_call(fn_val, &[a.into(), b.into()], "stdlib_i64_2a")
             .ok()?;
-        use inkwell::values::AnyValue;
-        inkwell::values::BasicValueEnum::try_from(call.as_any_value_enum()).ok()
+        self.call_result(call)
     }
 
     /// Emit a call to a stdlib C-ABI function `(i64, i64) → void`.
@@ -1652,34 +1614,13 @@ impl<'ctx> LlvmBackend<'ctx> {
     pub(crate) fn emit_stdlib_call_void_two_args(
         &mut self,
         symbol: &str,
-        a: inkwell::values::BasicValueEnum<'ctx>,
-        b: inkwell::values::BasicValueEnum<'ctx>,
-    ) -> Option<inkwell::values::BasicValueEnum<'ctx>> {
-        use inkwell::types::BasicMetadataTypeEnum;
-        use inkwell::values::BasicMetadataValueEnum;
+        a: BasicValueEnum<'ctx>,
+        b: BasicValueEnum<'ctx>,
+    ) -> Option<BasicValueEnum<'ctx>> {
         let i64_ty = self.context.i64_type();
-        let fn_val = if let Some(f) = self.module.get_function(symbol) {
-            f
-        } else {
-            let fn_ty = self.context.void_type().fn_type(
-                &[
-                    BasicMetadataTypeEnum::from(i64_ty),
-                    BasicMetadataTypeEnum::from(i64_ty),
-                ],
-                false,
-            );
-            self.module
-                .add_function(symbol, fn_ty, Some(Linkage::External))
-        };
+        let fn_val = self.get_or_declare_fn(symbol, &[i64_ty.into(), i64_ty.into()], None, false);
         self.builder
-            .build_call(
-                fn_val,
-                &[
-                    BasicMetadataValueEnum::from(a),
-                    BasicMetadataValueEnum::from(b),
-                ],
-                "",
-            )
+            .build_call(fn_val, &[a.into(), b.into()], "")
             .ok()?;
         // Return i64 0 as the Unit value.
         Some(i64_ty.const_zero().into())
@@ -1691,34 +1632,13 @@ impl<'ctx> LlvmBackend<'ctx> {
     pub(crate) fn emit_stdlib_call_void_string_map(
         &mut self,
         symbol: &str,
-        msg: inkwell::values::BasicValueEnum<'ctx>,
-        fields: inkwell::values::BasicValueEnum<'ctx>,
-    ) -> Option<inkwell::values::BasicValueEnum<'ctx>> {
-        use inkwell::types::BasicMetadataTypeEnum;
-        use inkwell::values::BasicMetadataValueEnum;
-        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
-        let fn_val = if let Some(f) = self.module.get_function(symbol) {
-            f
-        } else {
-            let fn_ty = self.context.void_type().fn_type(
-                &[
-                    BasicMetadataTypeEnum::from(ptr_ty),
-                    BasicMetadataTypeEnum::from(ptr_ty),
-                ],
-                false,
-            );
-            self.module
-                .add_function(symbol, fn_ty, Some(Linkage::External))
-        };
+        msg: BasicValueEnum<'ctx>,
+        fields: BasicValueEnum<'ctx>,
+    ) -> Option<BasicValueEnum<'ctx>> {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let fn_val = self.get_or_declare_fn(symbol, &[ptr_ty.into(), ptr_ty.into()], None, false);
         self.builder
-            .build_call(
-                fn_val,
-                &[
-                    BasicMetadataValueEnum::from(msg),
-                    BasicMetadataValueEnum::from(fields),
-                ],
-                "",
-            )
+            .build_call(fn_val, &[msg.into(), fields.into()], "")
             .ok()?;
         Some(self.context.i64_type().const_zero().into())
     }
@@ -1754,26 +1674,19 @@ impl<'ctx> LlvmBackend<'ctx> {
     pub(crate) fn emit_stdlib_call_result_one_ptr_arg(
         &mut self,
         symbol: &str,
-        arg: inkwell::values::BasicValueEnum<'ctx>,
-    ) -> Option<inkwell::values::BasicValueEnum<'ctx>> {
-        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        arg: BasicValueEnum<'ctx>,
+    ) -> Option<BasicValueEnum<'ctx>> {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let result_ty = self
             .context
             .struct_type(&[self.context.i8_type().into(), ptr_ty.into()], false);
-
-        let fn_val = if let Some(f) = self.module.get_function(symbol) {
-            f
-        } else {
-            let fn_ty = result_ty.fn_type(&[ptr_ty.into()], false);
-            self.module
-                .add_function(symbol, fn_ty, Some(Linkage::External))
-        };
+        let fn_val =
+            self.get_or_declare_fn(symbol, &[ptr_ty.into()], Some(result_ty.into()), false);
         let call = self
             .builder
             .build_call(fn_val, &[arg.into()], "io_c_call")
             .ok()?;
-        use inkwell::values::AnyValue;
-        let c_val = BasicValueEnum::try_from(call.as_any_value_enum()).ok()?;
+        let c_val = self.call_result(call)?;
         self.wrap_c_result_with_slot(c_val, result_ty)
     }
 
@@ -1782,42 +1695,24 @@ impl<'ctx> LlvmBackend<'ctx> {
     pub(crate) fn emit_stdlib_call_result_two_ptr_args(
         &mut self,
         symbol: &str,
-        a: inkwell::values::BasicValueEnum<'ctx>,
-        b: inkwell::values::BasicValueEnum<'ctx>,
-    ) -> Option<inkwell::values::BasicValueEnum<'ctx>> {
-        use inkwell::types::BasicMetadataTypeEnum;
-        use inkwell::values::BasicMetadataValueEnum;
-        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        a: BasicValueEnum<'ctx>,
+        b: BasicValueEnum<'ctx>,
+    ) -> Option<BasicValueEnum<'ctx>> {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let result_ty = self
             .context
             .struct_type(&[self.context.i8_type().into(), ptr_ty.into()], false);
-
-        let fn_val = if let Some(f) = self.module.get_function(symbol) {
-            f
-        } else {
-            let fn_ty = result_ty.fn_type(
-                &[
-                    BasicMetadataTypeEnum::from(ptr_ty),
-                    BasicMetadataTypeEnum::from(ptr_ty),
-                ],
-                false,
-            );
-            self.module
-                .add_function(symbol, fn_ty, Some(Linkage::External))
-        };
+        let fn_val = self.get_or_declare_fn(
+            symbol,
+            &[ptr_ty.into(), ptr_ty.into()],
+            Some(result_ty.into()),
+            false,
+        );
         let call = self
             .builder
-            .build_call(
-                fn_val,
-                &[
-                    BasicMetadataValueEnum::from(a),
-                    BasicMetadataValueEnum::from(b),
-                ],
-                "io_c_call",
-            )
+            .build_call(fn_val, &[a.into(), b.into()], "io_c_call")
             .ok()?;
-        use inkwell::values::AnyValue;
-        let c_val = BasicValueEnum::try_from(call.as_any_value_enum()).ok()?;
+        let c_val = self.call_result(call)?;
         self.wrap_c_result_with_slot(c_val, result_ty)
     }
 
@@ -1825,22 +1720,15 @@ impl<'ctx> LlvmBackend<'ctx> {
     pub(crate) fn emit_stdlib_call_ptr_identity(
         &mut self,
         symbol: &str,
-        arg: inkwell::values::BasicValueEnum<'ctx>,
-    ) -> Option<inkwell::values::BasicValueEnum<'ctx>> {
-        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
-        let fn_val = if let Some(f) = self.module.get_function(symbol) {
-            f
-        } else {
-            let fn_ty = ptr_ty.fn_type(&[ptr_ty.into()], false);
-            self.module
-                .add_function(symbol, fn_ty, Some(Linkage::External))
-        };
+        arg: BasicValueEnum<'ctx>,
+    ) -> Option<BasicValueEnum<'ctx>> {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let fn_val = self.get_or_declare_fn(symbol, &[ptr_ty.into()], Some(ptr_ty.into()), false);
         let call = self
             .builder
             .build_call(fn_val, &[arg.into()], "io_path")
             .ok()?;
-        use inkwell::values::AnyValue;
-        BasicValueEnum::try_from(call.as_any_value_enum()).ok()
+        self.call_result(call)
     }
 
     /// Emit a call to a C-ABI `(ptr, ptr) → ptr` function (e.g. `_mvl_regex_find_all`).
@@ -1851,43 +1739,25 @@ impl<'ctx> LlvmBackend<'ctx> {
     pub(crate) fn emit_stdlib_call_ptr_two_ptr_args(
         &mut self,
         symbol: &str,
-        a: inkwell::values::BasicValueEnum<'ctx>,
-        b: inkwell::values::BasicValueEnum<'ctx>,
-    ) -> Option<inkwell::values::BasicValueEnum<'ctx>> {
-        use inkwell::types::BasicMetadataTypeEnum;
-        use inkwell::values::BasicMetadataValueEnum;
-
+        a: BasicValueEnum<'ctx>,
+        b: BasicValueEnum<'ctx>,
+    ) -> Option<BasicValueEnum<'ctx>> {
         // Coerce struct values to stack pointers so they can be passed as `ptr` to C.
         let a = self.coerce_struct_to_stack_ptr(a);
         let b = self.coerce_struct_to_stack_ptr(b);
 
-        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
-        let fn_val = if let Some(f) = self.module.get_function(symbol) {
-            f
-        } else {
-            let fn_ty = ptr_ty.fn_type(
-                &[
-                    BasicMetadataTypeEnum::from(ptr_ty),
-                    BasicMetadataTypeEnum::from(ptr_ty),
-                ],
-                false,
-            );
-            self.module
-                .add_function(symbol, fn_ty, Some(Linkage::External))
-        };
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let fn_val = self.get_or_declare_fn(
+            symbol,
+            &[ptr_ty.into(), ptr_ty.into()],
+            Some(ptr_ty.into()),
+            false,
+        );
         let call = self
             .builder
-            .build_call(
-                fn_val,
-                &[
-                    BasicMetadataValueEnum::from(a),
-                    BasicMetadataValueEnum::from(b),
-                ],
-                "ptr2_c",
-            )
+            .build_call(fn_val, &[a.into(), b.into()], "ptr2_c")
             .ok()?;
-        use inkwell::values::AnyValue;
-        BasicValueEnum::try_from(call.as_any_value_enum()).ok()
+        self.call_result(call)
     }
 
     /// Coerce a `StructValue` to a stack-allocated pointer so it can be passed to a
@@ -1916,41 +1786,22 @@ impl<'ctx> LlvmBackend<'ctx> {
     pub(crate) fn emit_stdlib_call_string_three_ptr_args(
         &mut self,
         symbol: &str,
-        a: inkwell::values::BasicValueEnum<'ctx>,
-        b: inkwell::values::BasicValueEnum<'ctx>,
-        c: inkwell::values::BasicValueEnum<'ctx>,
-    ) -> Option<inkwell::values::BasicValueEnum<'ctx>> {
-        use inkwell::types::BasicMetadataTypeEnum;
-        use inkwell::values::BasicMetadataValueEnum;
-        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
-        let fn_val = if let Some(f) = self.module.get_function(symbol) {
-            f
-        } else {
-            let fn_ty = ptr_ty.fn_type(
-                &[
-                    BasicMetadataTypeEnum::from(ptr_ty),
-                    BasicMetadataTypeEnum::from(ptr_ty),
-                    BasicMetadataTypeEnum::from(ptr_ty),
-                ],
-                false,
-            );
-            self.module
-                .add_function(symbol, fn_ty, Some(Linkage::External))
-        };
+        a: BasicValueEnum<'ctx>,
+        b: BasicValueEnum<'ctx>,
+        c: BasicValueEnum<'ctx>,
+    ) -> Option<BasicValueEnum<'ctx>> {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let fn_val = self.get_or_declare_fn(
+            symbol,
+            &[ptr_ty.into(), ptr_ty.into(), ptr_ty.into()],
+            Some(ptr_ty.into()),
+            false,
+        );
         let call = self
             .builder
-            .build_call(
-                fn_val,
-                &[
-                    BasicMetadataValueEnum::from(a),
-                    BasicMetadataValueEnum::from(b),
-                    BasicMetadataValueEnum::from(c),
-                ],
-                "regex_replace",
-            )
+            .build_call(fn_val, &[a.into(), b.into(), c.into()], "regex_replace")
             .ok()?;
-        use inkwell::values::AnyValue;
-        BasicValueEnum::try_from(call.as_any_value_enum()).ok()
+        self.call_result(call)
     }
 
     /// Emit a call to `_mvl_regex_find`: `(ptr, ptr) → {i8, ptr}` returning `Option[Match]`.
@@ -1964,46 +1815,30 @@ impl<'ctx> LlvmBackend<'ctx> {
     pub(crate) fn emit_stdlib_call_option_match_two_ptr_args(
         &mut self,
         symbol: &str,
-        handle: inkwell::values::BasicValueEnum<'ctx>,
-        input: inkwell::values::BasicValueEnum<'ctx>,
-    ) -> Option<inkwell::values::BasicValueEnum<'ctx>> {
-        use inkwell::types::BasicMetadataTypeEnum;
-        use inkwell::values::{AnyValue, BasicMetadataValueEnum};
+        handle: BasicValueEnum<'ctx>,
+        input: BasicValueEnum<'ctx>,
+    ) -> Option<BasicValueEnum<'ctx>> {
         use inkwell::IntPredicate;
 
-        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let c_result_ty = self
             .context
             .struct_type(&[self.context.i8_type().into(), ptr_ty.into()], false);
 
         // Get/declare `_mvl_regex_find(ptr, ptr) → {i8, ptr}`.
-        let fn_val = if let Some(f) = self.module.get_function(symbol) {
-            f
-        } else {
-            let fn_ty = c_result_ty.fn_type(
-                &[
-                    BasicMetadataTypeEnum::from(ptr_ty),
-                    BasicMetadataTypeEnum::from(ptr_ty),
-                ],
-                false,
-            );
-            self.module
-                .add_function(symbol, fn_ty, Some(Linkage::External))
-        };
+        let fn_val = self.get_or_declare_fn(
+            symbol,
+            &[ptr_ty.into(), ptr_ty.into()],
+            Some(c_result_ty.into()),
+            false,
+        );
 
         // Call the C function.
         let call = self
             .builder
-            .build_call(
-                fn_val,
-                &[
-                    BasicMetadataValueEnum::from(handle),
-                    BasicMetadataValueEnum::from(input),
-                ],
-                "regex_find_c",
-            )
+            .build_call(fn_val, &[handle.into(), input.into()], "regex_find_c")
             .ok()?;
-        let c_val = BasicValueEnum::try_from(call.as_any_value_enum()).ok()?;
+        let c_val = self.call_result(call)?;
         let BasicValueEnum::StructValue(c_sv) = c_val else {
             return None;
         };
@@ -2078,74 +1913,60 @@ impl<'ctx> LlvmBackend<'ctx> {
     pub(crate) fn emit_stdlib_call_i64_returns_ptr(
         &mut self,
         symbol: &str,
-        arg: inkwell::values::BasicValueEnum<'ctx>,
-    ) -> Option<inkwell::values::BasicValueEnum<'ctx>> {
-        let i64_val = match arg {
-            inkwell::values::BasicValueEnum::IntValue(v) => v,
-            _ => return None,
+        arg: BasicValueEnum<'ctx>,
+    ) -> Option<BasicValueEnum<'ctx>> {
+        let BasicValueEnum::IntValue(i64_val) = arg else {
+            return None;
         };
-        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let i64_ty = self.context.i64_type();
-        let fn_val = if let Some(f) = self.module.get_function(symbol) {
-            f
-        } else {
-            let fn_ty = ptr_ty.fn_type(&[i64_ty.into()], false);
-            self.module
-                .add_function(symbol, fn_ty, Some(Linkage::External))
-        };
+        let fn_val = self.get_or_declare_fn(symbol, &[i64_ty.into()], Some(ptr_ty.into()), false);
         let call = self
             .builder
             .build_call(fn_val, &[i64_val.into()], symbol)
             .ok()?;
-        use inkwell::values::AnyValue;
-        inkwell::values::BasicValueEnum::try_from(call.as_any_value_enum()).ok()
+        self.call_result(call)
     }
 
     /// `#536`: `(ptr) → i64` — e.g. `exists(path)`, `is_file(path)`, `is_dir(path)`.
     pub(crate) fn emit_stdlib_call_i64_one_ptr_arg(
         &mut self,
         symbol: &str,
-        arg: inkwell::values::BasicValueEnum<'ctx>,
-    ) -> Option<inkwell::values::BasicValueEnum<'ctx>> {
-        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        arg: BasicValueEnum<'ctx>,
+    ) -> Option<BasicValueEnum<'ctx>> {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let i64_ty = self.context.i64_type();
-        let fn_val = self.module.get_function(symbol).unwrap_or_else(|| {
-            let fn_ty = i64_ty.fn_type(&[ptr_ty.into()], false);
-            self.module
-                .add_function(symbol, fn_ty, Some(Linkage::External))
-        });
+        let fn_val = self.get_or_declare_fn(symbol, &[ptr_ty.into()], Some(i64_ty.into()), false);
         let call = self
             .builder
             .build_call(fn_val, &[arg.into()], symbol)
             .ok()?;
-        use inkwell::values::AnyValue;
-        inkwell::values::BasicValueEnum::try_from(call.as_any_value_enum()).ok()
+        self.call_result(call)
     }
 
     /// `#536`: `(ptr, i64) → {i8, ptr}` Result[Unit, String] — e.g. `chmod(path, mode)`.
     pub(crate) fn emit_stdlib_call_result_unit_ptr_i64_args(
         &mut self,
         symbol: &str,
-        path: inkwell::values::BasicValueEnum<'ctx>,
-        mode: inkwell::values::BasicValueEnum<'ctx>,
-    ) -> Option<inkwell::values::BasicValueEnum<'ctx>> {
-        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        path: BasicValueEnum<'ctx>,
+        mode: BasicValueEnum<'ctx>,
+    ) -> Option<BasicValueEnum<'ctx>> {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let i64_ty = self.context.i64_type();
-        let i8_ty = self.context.i8_type();
         let result_ty = self
             .context
-            .struct_type(&[i8_ty.into(), ptr_ty.into()], false);
-        let fn_val = self.module.get_function(symbol).unwrap_or_else(|| {
-            let fn_ty = result_ty.fn_type(&[ptr_ty.into(), i64_ty.into()], false);
-            self.module
-                .add_function(symbol, fn_ty, Some(Linkage::External))
-        });
+            .struct_type(&[self.context.i8_type().into(), ptr_ty.into()], false);
+        let fn_val = self.get_or_declare_fn(
+            symbol,
+            &[ptr_ty.into(), i64_ty.into()],
+            Some(result_ty.into()),
+            false,
+        );
         let call = self
             .builder
             .build_call(fn_val, &[path.into(), mode.into()], symbol)
             .ok()?;
-        use inkwell::values::AnyValue;
-        let c_val = inkwell::values::BasicValueEnum::try_from(call.as_any_value_enum()).ok()?;
+        let c_val = self.call_result(call)?;
         self.wrap_c_result_with_slot(c_val, result_ty)
     }
 
@@ -2156,14 +1977,10 @@ impl<'ctx> LlvmBackend<'ctx> {
     pub(crate) fn emit_stdlib_call_void_i64_arg(
         &mut self,
         symbol: &str,
-        arg: inkwell::values::BasicValueEnum<'ctx>,
-    ) -> Option<inkwell::values::BasicValueEnum<'ctx>> {
+        arg: BasicValueEnum<'ctx>,
+    ) -> Option<BasicValueEnum<'ctx>> {
         let i64_ty = self.context.i64_type();
-        let fn_val = self.module.get_function(symbol).unwrap_or_else(|| {
-            let fn_ty = self.context.void_type().fn_type(&[i64_ty.into()], false);
-            self.module
-                .add_function(symbol, fn_ty, Some(Linkage::External))
-        });
+        let fn_val = self.get_or_declare_fn(symbol, &[i64_ty.into()], None, false);
         self.builder
             .build_call(fn_val, &[arg.into()], symbol)
             .ok()?;
@@ -2182,19 +1999,14 @@ impl<'ctx> LlvmBackend<'ctx> {
     pub(crate) fn emit_stdlib_call_void_i8_arg(
         &mut self,
         symbol: &str,
-        arg: inkwell::values::BasicValueEnum<'ctx>,
-    ) -> Option<inkwell::values::BasicValueEnum<'ctx>> {
+        arg: BasicValueEnum<'ctx>,
+    ) -> Option<BasicValueEnum<'ctx>> {
         let i8_ty = self.context.i8_type();
-        let i64_ty = self.context.i64_type();
-        let fn_val = self.module.get_function(symbol).unwrap_or_else(|| {
-            let fn_ty = self.context.void_type().fn_type(&[i8_ty.into()], false);
-            self.module
-                .add_function(symbol, fn_ty, Some(Linkage::External))
-        });
+        let fn_val = self.get_or_declare_fn(symbol, &[i8_ty.into()], None, false);
         self.builder
             .build_call(fn_val, &[arg.into()], symbol)
             .ok()?;
-        Some(i64_ty.const_zero().into())
+        Some(self.context.i64_type().const_zero().into())
     }
 
     /// `#586`: `(i8, ptr) → void` — signal_on(sig, handler).
@@ -2204,45 +2016,16 @@ impl<'ctx> LlvmBackend<'ctx> {
     pub(crate) fn emit_stdlib_call_void_i8_fn_ptr_arg(
         &mut self,
         symbol: &str,
-        sig_arg: inkwell::values::BasicValueEnum<'ctx>,
-        fn_ptr: inkwell::values::BasicValueEnum<'ctx>,
-    ) -> Option<inkwell::values::BasicValueEnum<'ctx>> {
+        sig_arg: BasicValueEnum<'ctx>,
+        fn_ptr: BasicValueEnum<'ctx>,
+    ) -> Option<BasicValueEnum<'ctx>> {
         let i8_ty = self.context.i8_type();
-        let i64_ty = self.context.i64_type();
-        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
-        let fn_val = self.module.get_function(symbol).unwrap_or_else(|| {
-            let fn_ty = self
-                .context
-                .void_type()
-                .fn_type(&[i8_ty.into(), ptr_ty.into()], false);
-            self.module
-                .add_function(symbol, fn_ty, Some(Linkage::External))
-        });
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let fn_val = self.get_or_declare_fn(symbol, &[i8_ty.into(), ptr_ty.into()], None, false);
         self.builder
             .build_call(fn_val, &[sig_arg.into(), fn_ptr.into()], symbol)
             .ok()?;
-        Some(i64_ty.const_zero().into())
-    }
-
-    /// Truncate an i64 IntValue to the target LLVM type if narrower (e.g. i64→i1 for Bool).
-    /// Used by `extern "rust"` bridges where the C helper always returns i64.
-    #[allow(dead_code)]
-    fn trunc_int_to_ret(
-        &self,
-        raw: inkwell::values::IntValue<'ctx>,
-        ret_llvm: Option<BasicTypeEnum<'ctx>>,
-    ) -> BasicValueEnum<'ctx> {
-        match ret_llvm {
-            Some(BasicTypeEnum::IntType(it))
-                if it.get_bit_width() < raw.get_type().get_bit_width() =>
-            {
-                self.builder
-                    .build_int_truncate(raw, it, "trunc")
-                    .unwrap()
-                    .into()
-            }
-            _ => raw.into(),
-        }
+        Some(self.context.i64_type().const_zero().into())
     }
 
     /// Emit `(ptr, i64) → {i8, ptr}` — used for `tcp_listen(host, port)`.
@@ -2252,40 +2035,25 @@ impl<'ctx> LlvmBackend<'ctx> {
     pub(crate) fn emit_stdlib_call_result_ptr_i64_args(
         &mut self,
         symbol: &str,
-        ptr_arg: inkwell::values::BasicValueEnum<'ctx>,
-        i64_arg: inkwell::values::BasicValueEnum<'ctx>,
-    ) -> Option<inkwell::values::BasicValueEnum<'ctx>> {
-        use inkwell::types::BasicMetadataTypeEnum;
-        use inkwell::values::BasicMetadataValueEnum;
-        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        ptr_arg: BasicValueEnum<'ctx>,
+        i64_arg: BasicValueEnum<'ctx>,
+    ) -> Option<BasicValueEnum<'ctx>> {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let i64_ty = self.context.i64_type();
         let result_ty = self
             .context
             .struct_type(&[self.context.i8_type().into(), ptr_ty.into()], false);
-        let fn_val = self.module.get_function(symbol).unwrap_or_else(|| {
-            let fn_ty = result_ty.fn_type(
-                &[
-                    BasicMetadataTypeEnum::from(ptr_ty),
-                    BasicMetadataTypeEnum::from(i64_ty),
-                ],
-                false,
-            );
-            self.module
-                .add_function(symbol, fn_ty, Some(Linkage::External))
-        });
+        let fn_val = self.get_or_declare_fn(
+            symbol,
+            &[ptr_ty.into(), i64_ty.into()],
+            Some(result_ty.into()),
+            false,
+        );
         let call = self
             .builder
-            .build_call(
-                fn_val,
-                &[
-                    BasicMetadataValueEnum::from(ptr_arg),
-                    BasicMetadataValueEnum::from(i64_arg),
-                ],
-                "net_c_call",
-            )
+            .build_call(fn_val, &[ptr_arg.into(), i64_arg.into()], "net_c_call")
             .ok()?;
-        use inkwell::values::AnyValue;
-        let c_val = inkwell::values::BasicValueEnum::try_from(call.as_any_value_enum()).ok()?;
+        let c_val = self.call_result(call)?;
         self.wrap_c_result_with_slot(c_val, result_ty)
     }
 
@@ -2297,25 +2065,21 @@ impl<'ctx> LlvmBackend<'ctx> {
     pub(crate) fn emit_stdlib_call_result_i64_one_ptr_arg(
         &mut self,
         symbol: &str,
-        arg: inkwell::values::BasicValueEnum<'ctx>,
-    ) -> Option<inkwell::values::BasicValueEnum<'ctx>> {
-        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        arg: BasicValueEnum<'ctx>,
+    ) -> Option<BasicValueEnum<'ctx>> {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let i8_ty = self.context.i8_type();
         let i64_ty = self.context.i64_type();
         let c_result_ty = self
             .context
             .struct_type(&[i8_ty.into(), ptr_ty.into()], false);
-        let fn_val = self.module.get_function(symbol).unwrap_or_else(|| {
-            let fn_ty = c_result_ty.fn_type(&[ptr_ty.into()], false);
-            self.module
-                .add_function(symbol, fn_ty, Some(Linkage::External))
-        });
+        let fn_val =
+            self.get_or_declare_fn(symbol, &[ptr_ty.into()], Some(c_result_ty.into()), false);
         let call = self
             .builder
             .build_call(fn_val, &[arg.into()], "net_port_call")
             .ok()?;
-        use inkwell::values::AnyValue;
-        let c_val = inkwell::values::BasicValueEnum::try_from(call.as_any_value_enum()).ok()?;
+        let c_val = self.call_result(call)?;
         let disc = self
             .builder
             .build_extract_value(c_val.into_struct_value(), 0, "port_disc")
@@ -2358,15 +2122,10 @@ impl<'ctx> LlvmBackend<'ctx> {
     pub(crate) fn emit_stdlib_call_void_one_ptr(
         &mut self,
         symbol: &str,
-        arg: inkwell::values::BasicValueEnum<'ctx>,
-    ) -> Option<inkwell::values::BasicValueEnum<'ctx>> {
-        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
-        let void_ty = self.context.void_type();
-        let fn_val = self.module.get_function(symbol).unwrap_or_else(|| {
-            let fn_ty = void_ty.fn_type(&[ptr_ty.into()], false);
-            self.module
-                .add_function(symbol, fn_ty, Some(Linkage::External))
-        });
+        arg: BasicValueEnum<'ctx>,
+    ) -> Option<BasicValueEnum<'ctx>> {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let fn_val = self.get_or_declare_fn(symbol, &[ptr_ty.into()], None, false);
         self.builder
             .build_call(fn_val, &[arg.into()], "net_close_call")
             .ok()?;
@@ -2446,9 +2205,8 @@ impl<'ctx> LlvmBackend<'ctx> {
                 "pi_tag",
             )
             .ok()?;
-        use inkwell::values::AnyValue;
-        let tag_val = inkwell::values::BasicValueEnum::try_from(call.as_any_value_enum()).ok()?;
-        let inkwell::values::BasicValueEnum::IntValue(disc_i) = tag_val else {
+        let tag_val = self.call_result(call)?;
+        let BasicValueEnum::IntValue(disc_i) = tag_val else {
             return None;
         };
 
@@ -2511,9 +2269,8 @@ impl<'ctx> LlvmBackend<'ctx> {
                 "pf_tag",
             )
             .ok()?;
-        use inkwell::values::AnyValue;
-        let tag_val = inkwell::values::BasicValueEnum::try_from(call.as_any_value_enum()).ok()?;
-        let inkwell::values::BasicValueEnum::IntValue(disc_i) = tag_val else {
+        let tag_val = self.call_result(call)?;
+        let BasicValueEnum::IntValue(disc_i) = tag_val else {
             return None;
         };
 
@@ -2601,7 +2358,6 @@ impl<'ctx> LlvmBackend<'ctx> {
                     .builder
                     .build_call(chars_fn, &[arg0.into()], "chars")
                     .unwrap();
-                use inkwell::values::AnyValue;
                 let arr_ptr = BasicValueEnum::try_from(result.as_any_value_enum())
                     .expect("mvl_string_chars must return ptr");
                 self.builder.build_return(Some(&arr_ptr)).unwrap();
@@ -2616,7 +2372,6 @@ impl<'ctx> LlvmBackend<'ctx> {
                     .builder
                     .build_call(concat_fn, &[a.into(), b.into()], "concat")
                     .unwrap();
-                use inkwell::values::AnyValue;
                 let s_ptr = BasicValueEnum::try_from(result.as_any_value_enum())
                     .expect("mvl_string_concat must return ptr");
                 self.builder.build_return(Some(&s_ptr)).unwrap();
@@ -2657,7 +2412,6 @@ impl<'ctx> LlvmBackend<'ctx> {
                     .builder
                     .build_call(len_fn, &[arg0.into()], "list_len")
                     .unwrap();
-                use inkwell::values::AnyValue;
                 let len_val = BasicValueEnum::try_from(result.as_any_value_enum())
                     .expect("mvl_array_len must return i64");
                 self.builder.build_return(Some(&len_val)).unwrap();
@@ -2672,7 +2426,6 @@ impl<'ctx> LlvmBackend<'ctx> {
                     .builder
                     .build_call(get_fn, &[arr.into(), idx.into()], "raw")
                     .unwrap();
-                use inkwell::values::AnyValue;
                 let raw_ptr = BasicValueEnum::try_from(raw.as_any_value_enum())
                     .expect("mvl_array_get must return ptr")
                     .into_pointer_value();
@@ -3217,7 +2970,6 @@ impl<'ctx> LlvmBackend<'ctx> {
         c_name: &str,
         ret_ty: BasicTypeEnum<'ctx>,
     ) {
-        use inkwell::values::AnyValue;
         let arg0 = fn_val.get_first_param().expect("bridge_1: missing arg");
         let c_fn = self.module.get_function(c_name).unwrap_or_else(|| {
             let ft = ret_ty.fn_type(&[arg0.get_type().into()], false);
@@ -3234,7 +2986,6 @@ impl<'ctx> LlvmBackend<'ctx> {
 
     /// Bridge a 2-arg builtin to a C-ABI function returning ptr.
     fn emit_builtin_bridge_2_to_ptr(&mut self, fn_val: FunctionValue<'ctx>, c_name: &str) {
-        use inkwell::values::AnyValue;
         let params: Vec<_> = fn_val.get_param_iter().collect();
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let c_fn = self.module.get_function(c_name).unwrap_or_else(|| {
@@ -3255,7 +3006,6 @@ impl<'ctx> LlvmBackend<'ctx> {
 
     /// Bridge a 3-arg builtin to a C-ABI function returning ptr.
     fn emit_builtin_bridge_3_to_ptr(&mut self, fn_val: FunctionValue<'ctx>, c_name: &str) {
-        use inkwell::values::AnyValue;
         let params: Vec<_> = fn_val.get_param_iter().collect();
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let c_fn = self.module.get_function(c_name).unwrap_or_else(|| {
