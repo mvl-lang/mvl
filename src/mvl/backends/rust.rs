@@ -236,10 +236,7 @@ pub fn transpile_project(
     entry_prog: &Program,
     siblings: &[(String, Program)],
     prelude_progs: &[Program],
-    expr_types: std::collections::HashMap<
-        crate::mvl::parser::lexer::Span,
-        crate::mvl::checker::types::Ty,
-    >,
+    expr_types: std::collections::HashMap<crate::mvl::parser::lexer::Span, crate::mvl::ir::Ty>,
     assert_mode: crate::mvl::backends::AssertMode,
 ) -> ProjectOutput {
     transpile_project_with_options(
@@ -261,10 +258,7 @@ pub fn transpile_project_with_options(
     entry_prog: &Program,
     siblings: &[(String, Program)],
     prelude_progs: &[Program],
-    expr_types: std::collections::HashMap<
-        crate::mvl::parser::lexer::Span,
-        crate::mvl::checker::types::Ty,
-    >,
+    expr_types: std::collections::HashMap<crate::mvl::parser::lexer::Span, crate::mvl::ir::Ty>,
     assert_mode: crate::mvl::backends::AssertMode,
     extern_stubs: bool,
 ) -> ProjectOutput {

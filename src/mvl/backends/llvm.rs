@@ -462,7 +462,7 @@ struct LlvmBackend<'ctx> {
     /// `CheckResult::expr_types` in `compile_to_ir_with_prelude` so that
     /// generic builtin call sites (e.g. `choice[T]`, `shuffle[T]`) can emit
     /// type-specific inline IR without going through the C-ABI dispatch table.
-    expr_types: HashMap<crate::mvl::parser::lexer::Span, crate::mvl::checker::types::Ty>,
+    expr_types: HashMap<crate::mvl::parser::lexer::Span, crate::mvl::ir::Ty>,
 
     // ── ADR-0034: pre-computed monomorphization plan ──────────────────────────
     /// All generic instantiations discovered by the mono pass before emission.
@@ -1392,7 +1392,7 @@ impl<'ctx> LlvmBackend<'ctx> {
         &mut self,
         list_expr: &crate::mvl::parser::ast::Expr,
     ) -> Option<inkwell::values::BasicValueEnum<'ctx>> {
-        use crate::mvl::checker::types::Ty;
+        use crate::mvl::ir::Ty;
         let i64_ty = self.context.i64_type();
         let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
 

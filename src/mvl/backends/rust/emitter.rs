@@ -13,7 +13,7 @@ use crate::mvl::backends::rust::emit_impls::emit_impl_decl;
 use crate::mvl::backends::rust::emit_types::emit_type_decl;
 use crate::mvl::backends::rust::emit_types::{emit_security_preamble, emit_type_expr};
 use crate::mvl::backends::rust::{collect_stdlib_modules, has_std_imports};
-use crate::mvl::checker::types::Ty;
+use crate::mvl::ir::Ty;
 use crate::mvl::parser::ast::{
     BinaryOp, Decl, ExternDecl, FieldDecl, FnDecl, Param, Program, TypeDecl, TypeExpr, Variant,
     VariantFields,

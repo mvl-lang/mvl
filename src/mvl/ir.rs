@@ -28,7 +28,10 @@
 
 pub mod lower;
 
-use crate::mvl::checker::types::Ty;
+/// Re-exported so backends and passes import `Ty` from `ir`, not from `checker::types`.
+/// This keeps the checker boundary clean: backends depend on `ir`, not on `checker` internals.
+pub use crate::mvl::checker::types::Ty;
+
 use crate::mvl::parser::ast::{
     BinaryOp, Capability, Effect, LValue, LetKind, Literal, Pattern, RefExpr, Totality, UnaryOp,
 };
@@ -250,4 +253,145 @@ pub struct TirFn {
 #[derive(Debug, Clone, Default)]
 pub struct TirProgram {
     pub fns: Vec<TirFn>,
+}
+
+impl TirProgram {
+    /// Build a `Span → Ty` index over all expression nodes in this program.
+    ///
+    /// Backends that still iterate AST nodes can use this map as a drop-in replacement
+    /// for `CheckResult::expr_types` — types come from TIR (post-substitution) rather
+    /// than directly from the checker.
+    ///
+    /// # Generic functions
+    ///
+    /// When a generic function has multiple monomorphized copies (e.g. `identity_Int`
+    /// and `identity_String`), each body expression shares the same source span.
+    /// The map stores the type from the **last** instantiation encountered — callers
+    /// that need per-instantiation precision should iterate [`TirFn`] directly.
+    pub fn span_types(&self) -> std::collections::HashMap<Span, Ty> {
+        let mut map = std::collections::HashMap::new();
+        for f in &self.fns {
+            collect_block_spans(&f.body, &mut map);
+        }
+        map
+    }
+}
+
+fn collect_block_spans(block: &TirBlock, map: &mut std::collections::HashMap<Span, Ty>) {
+    for stmt in &block.stmts {
+        collect_stmt_spans(stmt, map);
+    }
+}
+
+fn collect_stmt_spans(stmt: &TirStmt, map: &mut std::collections::HashMap<Span, Ty>) {
+    match stmt {
+        TirStmt::Let { init, .. } => collect_expr_spans(init, map),
+        TirStmt::Assign { value, .. } => collect_expr_spans(value, map),
+        TirStmt::Return { value, .. } => {
+            if let Some(e) = value {
+                collect_expr_spans(e, map);
+            }
+        }
+        TirStmt::If {
+            cond, then, else_, ..
+        } => {
+            collect_expr_spans(cond, map);
+            collect_block_spans(then, map);
+            if let Some(branch) = else_ {
+                match branch {
+                    TirElseBranch::Block(b) => collect_block_spans(b, map),
+                    TirElseBranch::If(s) => collect_stmt_spans(s, map),
+                }
+            }
+        }
+        TirStmt::Match {
+            scrutinee, arms, ..
+        } => {
+            collect_expr_spans(scrutinee, map);
+            for arm in arms {
+                collect_match_body_spans(&arm.body, map);
+            }
+        }
+        TirStmt::For { iter, body, .. } => {
+            collect_expr_spans(iter, map);
+            collect_block_spans(body, map);
+        }
+        TirStmt::While { cond, body, .. } => {
+            collect_expr_spans(cond, map);
+            collect_block_spans(body, map);
+        }
+        TirStmt::Expr { expr, .. } => collect_expr_spans(expr, map),
+    }
+}
+
+fn collect_expr_spans(expr: &TirExpr, map: &mut std::collections::HashMap<Span, Ty>) {
+    map.insert(expr.span, expr.ty.clone());
+    match &expr.kind {
+        TirExprKind::Literal(_) | TirExprKind::Var(_) | TirExprKind::Quantifier(_) => {}
+        TirExprKind::FieldAccess { expr, .. } => collect_expr_spans(expr, map),
+        TirExprKind::MethodCall { receiver, args, .. } => {
+            collect_expr_spans(receiver, map);
+            for a in args {
+                collect_expr_spans(a, map);
+            }
+        }
+        TirExprKind::FnCall { args, .. } => {
+            for a in args {
+                collect_expr_spans(a, map);
+            }
+        }
+        TirExprKind::Unary { expr, .. } => collect_expr_spans(expr, map),
+        TirExprKind::Binary { left, right, .. } => {
+            collect_expr_spans(left, map);
+            collect_expr_spans(right, map);
+        }
+        TirExprKind::If { cond, then, else_ } => {
+            collect_expr_spans(cond, map);
+            collect_block_spans(then, map);
+            if let Some(e) = else_ {
+                collect_expr_spans(e, map);
+            }
+        }
+        TirExprKind::Match { scrutinee, arms } => {
+            collect_expr_spans(scrutinee, map);
+            for arm in arms {
+                collect_match_body_spans(&arm.body, map);
+            }
+        }
+        TirExprKind::Block(b) => collect_block_spans(b, map),
+        TirExprKind::Lambda { body, .. } => collect_expr_spans(body, map),
+        TirExprKind::Propagate(e)
+        | TirExprKind::Consume(e)
+        | TirExprKind::Relabel { expr: e, .. }
+        | TirExprKind::Borrow { expr: e, .. } => collect_expr_spans(e, map),
+        TirExprKind::Construct { fields, .. } | TirExprKind::Spawn { fields, .. } => {
+            for (_, e) in fields {
+                collect_expr_spans(e, map);
+            }
+        }
+        TirExprKind::List { elems } | TirExprKind::Set { elems } => {
+            for e in elems {
+                collect_expr_spans(e, map);
+            }
+        }
+        TirExprKind::Map { pairs } => {
+            for (k, v) in pairs {
+                collect_expr_spans(k, map);
+                collect_expr_spans(v, map);
+            }
+        }
+        TirExprKind::Select { arms } => {
+            for arm in arms {
+                collect_expr_spans(&arm.expr, map);
+                collect_block_spans(&arm.body, map);
+            }
+        }
+    }
+}
+
+fn collect_match_body_spans(body: &TirMatchBody, map: &mut std::collections::HashMap<Span, Ty>) {
+    match body {
+        TirMatchBody::Expr(e) => collect_expr_spans(e, map),
+        TirMatchBody::Block(b) => collect_block_spans(b, map),
+    }
 }
