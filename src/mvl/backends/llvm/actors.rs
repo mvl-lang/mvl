@@ -15,7 +15,7 @@
 use inkwell::{
     module::Linkage,
     types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum},
-    values::BasicValueEnum,
+    values::{AnyValue, BasicValueEnum},
     AddressSpace,
 };
 
@@ -347,7 +347,6 @@ impl<'ctx> LlvmBackend<'ctx> {
             )
             .ok()?;
 
-        use inkwell::values::AnyValue;
         BasicValueEnum::try_from(call.as_any_value_enum()).ok()
     }
 
@@ -454,7 +453,6 @@ impl<'ctx> LlvmBackend<'ctx> {
                             .builder
                             .build_call(box_new_fn, &[size_val.into()], "arg_box")
                             .ok()?;
-                        use inkwell::values::AnyValue;
                         let raw_ptr = BasicValueEnum::try_from(call.as_any_value_enum()).ok()?;
                         let BasicValueEnum::PointerValue(heap_ptr) = raw_ptr else {
                             return None;

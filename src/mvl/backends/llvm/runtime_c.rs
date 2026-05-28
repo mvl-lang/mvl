@@ -15,7 +15,7 @@
 
 use inkwell::{
     types::{BasicMetadataTypeEnum, BasicTypeEnum},
-    values::{BasicMetadataValueEnum, BasicValueEnum},
+    values::{AnyValue, BasicMetadataValueEnum, BasicValueEnum},
     AddressSpace,
 };
 
@@ -72,7 +72,6 @@ impl<'ctx> LlvmBackend<'ctx> {
 
         ret_llvm?;
 
-        use inkwell::values::AnyValue;
         BasicValueEnum::try_from(call.as_any_value_enum()).ok()
     }
 
