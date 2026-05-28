@@ -17,7 +17,7 @@
 
 use std::collections::HashMap;
 
-use crate::mvl::checker::types::Ty;
+use crate::mvl::checker::types::{resolve_session_op, Ty};
 use crate::mvl::parser::ast::{
     Block, ElseBranch, Expr, MatchArm, MatchBody, Param, SelectArm, Stmt, TypeExpr,
 };
@@ -151,19 +151,28 @@ fn lower_stmt(
         Stmt::For {
             pattern,
             iter,
+            invariants,
             body,
             span,
-            ..
         } => TirStmt::For {
             pattern: pattern.clone(),
             iter: lower_expr(iter, expr_types, ty_subs),
+            invariants: lower_exprs(invariants, expr_types, ty_subs),
             body: lower_block(body, expr_types, ty_subs),
             span: *span,
         },
         Stmt::While {
-            cond, body, span, ..
+            cond,
+            invariants,
+            decreases,
+            body,
+            span,
         } => TirStmt::While {
             cond: lower_expr(cond, expr_types, ty_subs),
+            invariants: lower_exprs(invariants, expr_types, ty_subs),
+            decreases: decreases
+                .as_ref()
+                .map(|d| Box::new(lower_expr(d, expr_types, ty_subs))),
             body: lower_block(body, expr_types, ty_subs),
             span: *span,
         },
@@ -193,6 +202,7 @@ fn lower_match_arms(
     arms.iter()
         .map(|arm| TirMatchArm {
             pattern: arm.pattern.clone(),
+            guard: arm.guard.clone(),
             body: match &arm.body {
                 MatchBody::Expr(e) => TirMatchBody::Expr(lower_expr(e, expr_types, ty_subs)),
                 MatchBody::Block(b) => TirMatchBody::Block(lower_block(b, expr_types, ty_subs)),
@@ -210,6 +220,16 @@ fn lower_expr(
     ty_subs: &HashMap<String, Ty>,
 ) -> TirExpr {
     let span = expr.span();
+    // Known legitimate miss cases that fall back to Ty::Unknown:
+    //   1. Expr::Quantifier — the checker never calls infer_expr on quantifiers
+    //      (spec-only, unreachable in inference position).
+    //   2. Session-typed parameter annotations resolved via typeexpr_to_ty in lower_param
+    //      hit Ty::Unknown there; body expressions with session types ARE in expr_types.
+    // Any other miss is unexpected and should be investigated.
+    debug_assert!(
+        expr_types.contains_key(&span) || matches!(expr, Expr::Quantifier(..)),
+        "TIR lower: no type for span {span:?} in {expr:?}"
+    );
     let raw_ty = expr_types.get(&span).cloned().unwrap_or(Ty::Unknown);
     let ty = substitute_ty(&raw_ty, ty_subs);
 
@@ -234,9 +254,15 @@ fn lower_expr(
             args: lower_exprs(args, expr_types, ty_subs),
         },
 
-        Expr::FnCall { name, args, .. } => TirExprKind::FnCall {
+        Expr::FnCall {
+            name,
+            args,
+            type_args,
+            ..
+        } => TirExprKind::FnCall {
             name: name.clone(),
             args: lower_exprs(args, expr_types, ty_subs),
+            type_args: type_args.clone(),
         },
 
         Expr::Unary { op, expr, .. } => TirExprKind::Unary {
@@ -444,10 +470,14 @@ fn typeexpr_to_ty(te: &TypeExpr) -> Ty {
             None,
         ),
         TypeExpr::Tuple { elems, .. } => Ty::Tuple(elems.iter().map(typeexpr_to_ty).collect()),
-        // Session types: complex dual structure — fall back to Unknown for now.
-        // Checker-resolved Ty::Session values come via expr_types lookups, not this path.
-        TypeExpr::Session { .. } => Ty::Unknown,
-        TypeExpr::IntConst { .. } => Ty::Int,
+        // Session types: convert the AST SessionOp tree to a checker SessionTy.
+        // Note: this path is taken for session-typed *parameter annotations* (via lower_param).
+        // Session-typed body *expressions* always carry a resolved Ty::Session in expr_types.
+        TypeExpr::Session { op, .. } => Ty::Session(Box::new(resolve_session_op(op))),
+        // IntConst only appears as args[1] in Array[T, N] and is consumed by the Array arm
+        // above. A standalone IntConst here is unexpected — return Unknown to match the
+        // checker's behaviour (checker/types.rs maps standalone IntConst to Ty::Unknown).
+        TypeExpr::IntConst { .. } => Ty::Unknown,
     }
 }
 
@@ -460,6 +490,10 @@ fn substitute_ty(ty: &Ty, subs: &HashMap<String, Ty>) -> Ty {
         return ty.clone();
     }
     match ty {
+        // Bare (no-arg) Named types are type-parameter references — substitute if in subs.
+        // MVL does not currently support higher-kinded type parameters, so a Named type
+        // with non-empty args is always a concrete generic (e.g. `Result[T, E]`), not a
+        // type-param application; we only recurse into its args, never substitute the name.
         Ty::Named(name, args) if args.is_empty() => {
             subs.get(name).cloned().unwrap_or_else(|| ty.clone())
         }
@@ -706,6 +740,293 @@ fn main() -> Unit { let n: Int = identity(1); }
 
         let inst = tir.fns.iter().find(|f| f.name == "identity_Int").unwrap();
         assert_eq!(inst.original_name, "identity");
+    }
+
+    // ── typeexpr_to_ty — additional variant coverage ───────────────────────────
+
+    #[test]
+    fn converts_set() {
+        let te = TypeExpr::Base {
+            name: "Set".into(),
+            args: vec![base_te("Int")],
+            span: sp(),
+        };
+        assert_eq!(typeexpr_to_ty(&te), Ty::Set(Box::new(Ty::Int)));
+    }
+
+    #[test]
+    fn converts_result() {
+        let te = TypeExpr::Result {
+            ok: Box::new(base_te("Int")),
+            err: Box::new(base_te("String")),
+            span: sp(),
+        };
+        assert_eq!(
+            typeexpr_to_ty(&te),
+            Ty::Result(Box::new(Ty::Int), Box::new(Ty::String))
+        );
+    }
+
+    #[test]
+    fn converts_ref_immutable() {
+        let te = TypeExpr::Ref {
+            mutable: false,
+            inner: Box::new(base_te("Int")),
+            span: sp(),
+        };
+        assert_eq!(typeexpr_to_ty(&te), Ty::Ref(false, Box::new(Ty::Int)));
+    }
+
+    #[test]
+    fn converts_ref_mutable() {
+        let te = TypeExpr::Ref {
+            mutable: true,
+            inner: Box::new(base_te("Bool")),
+            span: sp(),
+        };
+        assert_eq!(typeexpr_to_ty(&te), Ty::Ref(true, Box::new(Ty::Bool)));
+    }
+
+    #[test]
+    fn converts_labeled() {
+        let te = TypeExpr::Labeled {
+            label: "Tainted".into(),
+            inner: Box::new(base_te("String")),
+            span: sp(),
+        };
+        assert_eq!(
+            typeexpr_to_ty(&te),
+            Ty::Labeled("Tainted".into(), Box::new(Ty::String))
+        );
+    }
+
+    #[test]
+    fn converts_fn_type() {
+        let te = TypeExpr::Fn {
+            params: vec![base_te("Int"), base_te("Bool")],
+            ret: Box::new(base_te("String")),
+            effects: vec![],
+            span: sp(),
+        };
+        assert_eq!(
+            typeexpr_to_ty(&te),
+            Ty::Fn(vec![Ty::Int, Ty::Bool], Box::new(Ty::String), vec![], None)
+        );
+    }
+
+    #[test]
+    fn converts_tuple() {
+        let te = TypeExpr::Tuple {
+            elems: vec![base_te("Int"), base_te("Bool"), base_te("String")],
+            span: sp(),
+        };
+        assert_eq!(
+            typeexpr_to_ty(&te),
+            Ty::Tuple(vec![Ty::Int, Ty::Bool, Ty::String])
+        );
+    }
+
+    #[test]
+    fn converts_array_with_concrete_size() {
+        let te = TypeExpr::Base {
+            name: "Array".into(),
+            args: vec![
+                base_te("Int"),
+                TypeExpr::IntConst {
+                    value: 8,
+                    span: sp(),
+                },
+            ],
+            span: sp(),
+        };
+        assert_eq!(typeexpr_to_ty(&te), Ty::Array(Box::new(Ty::Int), 8));
+    }
+
+    #[test]
+    fn converts_array_with_unknown_size() {
+        use crate::mvl::checker::types::ARRAY_SIZE_UNKNOWN;
+        let te = TypeExpr::Base {
+            name: "Array".into(),
+            args: vec![base_te("Bool"), base_te("N")],
+            span: sp(),
+        };
+        assert_eq!(
+            typeexpr_to_ty(&te),
+            Ty::Array(Box::new(Ty::Bool), ARRAY_SIZE_UNKNOWN)
+        );
+    }
+
+    #[test]
+    fn converts_intconst_standalone_to_unknown() {
+        let te = TypeExpr::IntConst {
+            value: 42,
+            span: sp(),
+        };
+        // Standalone IntConst is a degenerate case — expect Ty::Unknown.
+        assert_eq!(typeexpr_to_ty(&te), Ty::Unknown);
+    }
+
+    #[test]
+    fn converts_remaining_primitives() {
+        assert_eq!(typeexpr_to_ty(&base_te("Char")), Ty::Char);
+        assert_eq!(typeexpr_to_ty(&base_te("Byte")), Ty::Byte);
+        assert_eq!(typeexpr_to_ty(&base_te("UByte")), Ty::UByte);
+        assert_eq!(typeexpr_to_ty(&base_te("UInt")), Ty::UInt);
+        assert_eq!(typeexpr_to_ty(&base_te("Never")), Ty::Never);
+    }
+
+    // ── substitute_ty — compound Ty coverage ──────────────────────────────────
+
+    #[test]
+    fn substitutes_inside_map() {
+        let mut subs = HashMap::new();
+        subs.insert("K".into(), Ty::String);
+        subs.insert("V".into(), Ty::Int);
+        let ty = Ty::Map(
+            Box::new(Ty::Named("K".into(), vec![])),
+            Box::new(Ty::Named("V".into(), vec![])),
+        );
+        assert_eq!(
+            substitute_ty(&ty, &subs),
+            Ty::Map(Box::new(Ty::String), Box::new(Ty::Int))
+        );
+    }
+
+    #[test]
+    fn substitutes_inside_result() {
+        let mut subs = HashMap::new();
+        subs.insert("T".into(), Ty::Int);
+        subs.insert("E".into(), Ty::String);
+        let ty = Ty::Result(
+            Box::new(Ty::Named("T".into(), vec![])),
+            Box::new(Ty::Named("E".into(), vec![])),
+        );
+        assert_eq!(
+            substitute_ty(&ty, &subs),
+            Ty::Result(Box::new(Ty::Int), Box::new(Ty::String))
+        );
+    }
+
+    #[test]
+    fn substitutes_inside_array_preserves_size() {
+        let mut subs = HashMap::new();
+        subs.insert("T".into(), Ty::Bool);
+        let ty = Ty::Array(Box::new(Ty::Named("T".into(), vec![])), 16);
+        assert_eq!(substitute_ty(&ty, &subs), Ty::Array(Box::new(Ty::Bool), 16));
+    }
+
+    #[test]
+    fn substitutes_inside_ref_preserves_mutability() {
+        let mut subs = HashMap::new();
+        subs.insert("T".into(), Ty::Int);
+        let ty = Ty::Ref(true, Box::new(Ty::Named("T".into(), vec![])));
+        assert_eq!(substitute_ty(&ty, &subs), Ty::Ref(true, Box::new(Ty::Int)));
+    }
+
+    #[test]
+    fn substitutes_inside_fn_params_and_ret() {
+        let mut subs = HashMap::new();
+        subs.insert("A".into(), Ty::Int);
+        subs.insert("B".into(), Ty::Bool);
+        let ty = Ty::Fn(
+            vec![Ty::Named("A".into(), vec![])],
+            Box::new(Ty::Named("B".into(), vec![])),
+            vec![],
+            None,
+        );
+        assert_eq!(
+            substitute_ty(&ty, &subs),
+            Ty::Fn(vec![Ty::Int], Box::new(Ty::Bool), vec![], None)
+        );
+    }
+
+    #[test]
+    fn substitutes_inside_tuple() {
+        let mut subs = HashMap::new();
+        subs.insert("T".into(), Ty::String);
+        let ty = Ty::Tuple(vec![Ty::Named("T".into(), vec![]), Ty::Int]);
+        assert_eq!(
+            substitute_ty(&ty, &subs),
+            Ty::Tuple(vec![Ty::String, Ty::Int])
+        );
+    }
+
+    #[test]
+    fn substitutes_inside_labeled() {
+        let mut subs = HashMap::new();
+        subs.insert("T".into(), Ty::Int);
+        let ty = Ty::Labeled("Secret".into(), Box::new(Ty::Named("T".into(), vec![])));
+        assert_eq!(
+            substitute_ty(&ty, &subs),
+            Ty::Labeled("Secret".into(), Box::new(Ty::Int))
+        );
+    }
+
+    #[test]
+    fn substitutes_inside_named_with_args() {
+        let mut subs = HashMap::new();
+        subs.insert("T".into(), Ty::Int);
+        subs.insert("E".into(), Ty::String);
+        // Ty::Named("Either", [Named("T",[]), Named("E",[])])
+        let ty = Ty::Named(
+            "Either".into(),
+            vec![Ty::Named("T".into(), vec![]), Ty::Named("E".into(), vec![])],
+        );
+        assert_eq!(
+            substitute_ty(&ty, &subs),
+            Ty::Named("Either".into(), vec![Ty::Int, Ty::String])
+        );
+    }
+
+    #[test]
+    fn substitutes_nested_two_levels_deep() {
+        let mut subs = HashMap::new();
+        subs.insert("T".into(), Ty::Int);
+        // List[Option[T]]
+        let ty = Ty::List(Box::new(Ty::Option(Box::new(Ty::Named(
+            "T".into(),
+            vec![],
+        )))));
+        assert_eq!(
+            substitute_ty(&ty, &subs),
+            Ty::List(Box::new(Ty::Option(Box::new(Ty::Int))))
+        );
+    }
+
+    // ── span_types integration ────────────────────────────────────────────────
+
+    #[test]
+    fn span_types_empty_program() {
+        use crate::mvl::ir::TirProgram;
+        let prog = TirProgram::default();
+        assert!(prog.span_types().is_empty());
+    }
+
+    #[test]
+    fn span_types_contains_body_expressions() {
+        let (prog, check) = parse_and_check(
+            r#"
+fn add(x: Int, y: Int) -> Int { x + y }
+fn main() -> Unit { let r: Int = add(1, 2); }
+"#,
+        );
+        let all_fns = crate::mvl::passes::mono::collect_fns([&prog]);
+        let mono = crate::mvl::passes::mono::monomorphize(&prog, &all_fns, &check.expr_types);
+        let tir = lower(&mono, &check.expr_types);
+
+        let span_map = tir.span_types();
+        assert!(
+            !span_map.is_empty(),
+            "span_types must not be empty for a non-trivial program"
+        );
+        // Every Ty in the map must be a concrete, non-generic type.
+        for ty in span_map.values() {
+            assert_ne!(
+                *ty,
+                Ty::Unknown,
+                "span_types should not contain Unknown types"
+            );
+        }
     }
 
     #[test]

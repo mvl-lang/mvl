@@ -33,27 +33,22 @@ pub mod lower;
 pub use crate::mvl::checker::types::Ty;
 
 use crate::mvl::parser::ast::{
-    BinaryOp, Capability, Effect, LValue, LetKind, Literal, Pattern, RefExpr, Totality, UnaryOp,
+    BinaryOp, Capability, Effect, LValue, LetKind, Literal, Pattern, RefExpr, Totality, TypeExpr,
+    UnaryOp,
 };
 use crate::mvl::parser::lexer::Span;
 
 // ── Expressions ───────────────────────────────────────────────────────────────
 
 /// A typed expression node.  The resolved type of the expression is in `ty`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TirExpr {
     pub kind: TirExprKind,
     pub ty: Ty,
     pub span: Span,
 }
 
-impl TirExpr {
-    pub fn ty(&self) -> &Ty {
-        &self.ty
-    }
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum TirExprKind {
     Literal(Literal),
     Var(String),
@@ -67,9 +62,12 @@ pub enum TirExprKind {
         args: Vec<TirExpr>,
     },
     /// Direct function call.  `name` is the mangled symbol when the callee was generic.
+    /// `type_args` preserves the original syntactic type arguments (e.g. for extern/stdlib
+    /// calls that require turbofish syntax in Rust codegen). Empty for ordinary calls.
     FnCall {
         name: String,
         args: Vec<TirExpr>,
+        type_args: Vec<TypeExpr>,
     },
     Unary {
         op: UnaryOp,
@@ -133,12 +131,16 @@ pub enum TirExprKind {
         arms: Vec<TirSelectArm>,
     },
     /// `forall`/`exists` quantifier — specification only, erased before codegen.
+    ///
+    /// The `RefExpr` payload is a parser AST node, retained intentionally: quantifier
+    /// predicates are consumed by spec-output and contract-checking passes that already
+    /// depend on `ast::RefExpr`. Backends that do not need the predicate can ignore it.
     Quantifier(Box<RefExpr>),
 }
 
 // ── Statements ────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum TirStmt {
     Let {
         kind: LetKind,
@@ -171,11 +173,17 @@ pub enum TirStmt {
     For {
         pattern: Pattern,
         iter: TirExpr,
+        /// Loop invariant predicates — `invariant pred` clauses.
+        invariants: Vec<TirExpr>,
         body: TirBlock,
         span: Span,
     },
     While {
         cond: TirExpr,
+        /// Loop invariant predicates — `invariant pred` clauses.
+        invariants: Vec<TirExpr>,
+        /// Optional termination measure — `decreases expr` clause.
+        decreases: Option<Box<TirExpr>>,
         body: TirBlock,
         span: Span,
     },
@@ -185,7 +193,7 @@ pub enum TirStmt {
     },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum TirElseBranch {
     Block(TirBlock),
     If(Box<TirStmt>),
@@ -193,26 +201,28 @@ pub enum TirElseBranch {
 
 // ── Blocks and arms ───────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TirBlock {
     pub stmts: Vec<TirStmt>,
     pub span: Span,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TirMatchArm {
     pub pattern: Pattern,
+    /// Match guard — `if pred` clause attached to this arm.  `None` for unguarded arms.
+    pub guard: Option<RefExpr>,
     pub body: TirMatchBody,
     pub span: Span,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum TirMatchBody {
     Expr(TirExpr),
     Block(TirBlock),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TirSelectArm {
     pub binding: Option<String>,
     pub expr: Box<TirExpr>,
@@ -223,7 +233,7 @@ pub struct TirSelectArm {
 
 // ── Function level ────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TirParam {
     pub name: String,
     pub ty: Ty,
@@ -232,7 +242,7 @@ pub struct TirParam {
 }
 
 /// A concrete (monomorphized), fully-typed function.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TirFn {
     /// Mangled symbol, e.g. `"map_Int_String"` for `map[T=Int, U=String]`.
     pub name: String,
@@ -250,7 +260,7 @@ pub struct TirFn {
 // ── Program ───────────────────────────────────────────────────────────────────
 
 /// Output of the TIR lowering pass — typed, monomorphized functions ready for backends.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct TirProgram {
     pub fns: Vec<TirFn>,
 }
@@ -312,12 +322,32 @@ fn collect_stmt_spans(stmt: &TirStmt, map: &mut std::collections::HashMap<Span, 
                 collect_match_body_spans(&arm.body, map);
             }
         }
-        TirStmt::For { iter, body, .. } => {
+        TirStmt::For {
+            iter,
+            invariants,
+            body,
+            ..
+        } => {
             collect_expr_spans(iter, map);
+            for inv in invariants {
+                collect_expr_spans(inv, map);
+            }
             collect_block_spans(body, map);
         }
-        TirStmt::While { cond, body, .. } => {
+        TirStmt::While {
+            cond,
+            invariants,
+            decreases,
+            body,
+            ..
+        } => {
             collect_expr_spans(cond, map);
+            for inv in invariants {
+                collect_expr_spans(inv, map);
+            }
+            if let Some(d) = decreases {
+                collect_expr_spans(d, map);
+            }
             collect_block_spans(body, map);
         }
         TirStmt::Expr { expr, .. } => collect_expr_spans(expr, map),
@@ -339,6 +369,7 @@ fn collect_expr_spans(expr: &TirExpr, map: &mut std::collections::HashMap<Span, 
             for a in args {
                 collect_expr_spans(a, map);
             }
+            // type_args are TypeExpr (no TirExpr nodes) — nothing to collect.
         }
         TirExprKind::Unary { expr, .. } => collect_expr_spans(expr, map),
         TirExprKind::Binary { left, right, .. } => {
