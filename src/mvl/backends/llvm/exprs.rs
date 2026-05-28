@@ -2861,7 +2861,13 @@ impl<'ctx> LlvmBackend<'ctx> {
             "intersection" | "difference" | "union" if args.len() == 1 => {
                 self.emit_set_algebra_method(method, receiver, args)
             }
-            _ => self.emit_user_defined_method(receiver, method, recv_val, args),
+            _ => {
+                // If `method` is a known stdlib builtin (see `BUILTINS` in
+                // backends.rs), it should have an arm above.  Reaching here
+                // means the LLVM backend is missing an emit arm — add it.
+                // Known gaps are tracked in issue #1095.
+                self.emit_user_defined_method(receiver, method, recv_val, args)
+            }
         }
     }
 
