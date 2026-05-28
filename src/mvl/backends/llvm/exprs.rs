@@ -9,7 +9,7 @@
 
 use inkwell::{
     types::{BasicType, BasicTypeEnum},
-    values::{BasicValue, BasicValueEnum},
+    values::{AnyValue, BasicValue, BasicValueEnum},
     AddressSpace, FloatPredicate, IntPredicate,
 };
 
@@ -21,6 +21,24 @@ use crate::mvl::parser::ast::{
 use super::{stmts, LlvmBackend};
 
 impl<'ctx> LlvmBackend<'ctx> {
+    // ── Call/trap helpers ────────────────────────────────────────────────────
+
+    /// Declare `llvm.trap` once and reuse across assert, panic, and invariant checks.
+    fn get_or_declare_trap(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let trap_ty = self.context.void_type().fn_type(&[], false);
+        self.module
+            .get_function("llvm.trap")
+            .unwrap_or_else(|| self.module.add_function("llvm.trap", trap_ty, None))
+    }
+
+    /// Convert a `CallSiteValue` to `Option<BasicValueEnum>`.
+    fn call_value(
+        &self,
+        call: inkwell::values::CallSiteValue<'ctx>,
+    ) -> Option<BasicValueEnum<'ctx>> {
+        BasicValueEnum::try_from(call.as_any_value_enum()).ok()
+    }
+
     // ── Expression emission ──────────────────────────────────────────────────
 
     pub(crate) fn emit_expr(&mut self, expr: &Expr) -> Option<BasicValueEnum<'ctx>> {
@@ -131,7 +149,6 @@ impl<'ctx> LlvmBackend<'ctx> {
         if name == "self" {
             if let Some(self_fn) = self.module.get_function("mvl_actor_self") {
                 let call = self.builder.build_call(self_fn, &[], "self_handle").ok()?;
-                use inkwell::values::AnyValue;
                 return BasicValueEnum::try_from(call.as_any_value_enum()).ok();
             }
         }
@@ -407,7 +424,6 @@ impl<'ctx> LlvmBackend<'ctx> {
                     self.builder.build_return(None).unwrap();
                 }
                 Some(_) => {
-                    use inkwell::values::AnyValue;
                     if let Ok(ret_val) = BasicValueEnum::try_from(call.as_any_value_enum()) {
                         self.builder.build_return(Some(&ret_val)).unwrap();
                     } else {
@@ -927,10 +943,7 @@ impl<'ctx> LlvmBackend<'ctx> {
                             .build_conditional_branch(cond, ok_bb, trap_bb)
                             .unwrap();
                         self.builder.position_at_end(trap_bb);
-                        let trap_ty = self.context.void_type().fn_type(&[], false);
-                        let trap_fn = self.module.get_function("llvm.trap").unwrap_or_else(|| {
-                            self.module.add_function("llvm.trap", trap_ty, None)
-                        });
+                        let trap_fn = self.get_or_declare_trap();
                         self.builder.build_call(trap_fn, &[], "trap").unwrap();
                         self.builder.build_unreachable().unwrap();
                         self.builder.position_at_end(ok_bb);
@@ -1519,7 +1532,6 @@ impl<'ctx> LlvmBackend<'ctx> {
                         "str_new",
                     )
                     .unwrap();
-                use inkwell::values::AnyValue;
                 BasicValueEnum::try_from(call.as_any_value_enum()).ok()
             }
             Literal::Char(c) => {
@@ -1562,7 +1574,6 @@ impl<'ctx> LlvmBackend<'ctx> {
                     .builder
                     .build_call(eq_fn, &[l.into(), r.into()], "str_eq")
                     .ok()?;
-                use inkwell::values::AnyValue;
                 let eq_i32 = BasicValueEnum::try_from(call.as_any_value_enum())
                     .ok()?
                     .into_int_value();
@@ -1680,7 +1691,6 @@ impl<'ctx> LlvmBackend<'ctx> {
             .builder
             .build_call(intrinsic_fn, &[l.into(), r.into()], result_name)
             .unwrap();
-        use inkwell::values::AnyValue;
         let result_struct = BasicValueEnum::try_from(call.as_any_value_enum()).ok()?;
 
         let val = self
@@ -1701,10 +1711,7 @@ impl<'ctx> LlvmBackend<'ctx> {
             .unwrap();
 
         // On overflow: trap via llvm.trap and unreachable.
-        let trap_fn = self.module.get_function("llvm.trap").unwrap_or_else(|| {
-            let trap_ty = self.context.void_type().fn_type(&[], false);
-            self.module.add_function("llvm.trap", trap_ty, None)
-        });
+        let trap_fn = self.get_or_declare_trap();
         let parent_fn = self
             .builder
             .get_insert_block()
@@ -1979,583 +1986,558 @@ impl<'ctx> LlvmBackend<'ctx> {
         args: &[Expr],
     ) -> Option<BasicValueEnum<'ctx>> {
         match name {
-            // format(template, values) → mvl_format(ptr, ptr) (#901)
-            "format" if args.len() == 2 => {
-                let tmpl = self.emit_expr(&args[0])?;
-                let vals = self.emit_expr(&args[1])?;
-                let fmt_fn = self.get_mvl_format();
-                let call = self
-                    .builder
-                    .build_call(fmt_fn, &[tmpl.into(), vals.into()], "formatted")
-                    .unwrap();
-                use inkwell::values::AnyValue;
-                BasicValueEnum::try_from(call.as_any_value_enum()).ok()
-            }
-            // assert(condition) — trap if condition is false.
-            "assert" if args.len() == 1 => {
-                let cond = match self.emit_expr(&args[0])? {
-                    BasicValueEnum::IntValue(v) => v,
-                    _ => return None,
+            "format" if args.len() == 2 => self.emit_format_call(args),
+            "assert" if args.len() == 1 => self.emit_assert_cond_call(args),
+            "panic" => self.emit_panic_call(args),
+            "assert_eq" | "assert_ne" if args.len() == 2 => self.emit_assert_eq_ne_call(name, args),
+            "range" if args.len() == 2 => self.emit_range_call(args),
+            _ => self.emit_fn_call_catchall(name, args),
+        }
+    }
+
+    // format(template, values) → mvl_format(ptr, ptr) (#901)
+    fn emit_format_call(&mut self, args: &[Expr]) -> Option<BasicValueEnum<'ctx>> {
+        let tmpl = self.emit_expr(&args[0])?;
+        let vals = self.emit_expr(&args[1])?;
+        let fmt_fn = self.get_mvl_format();
+        let call = self
+            .builder
+            .build_call(fmt_fn, &[tmpl.into(), vals.into()], "formatted")
+            .unwrap();
+        self.call_value(call)
+    }
+
+    // assert(condition) — trap if condition is false.
+    fn emit_assert_cond_call(&mut self, args: &[Expr]) -> Option<BasicValueEnum<'ctx>> {
+        let cond = match self.emit_expr(&args[0])? {
+            BasicValueEnum::IntValue(v) => v,
+            _ => return None,
+        };
+        let trap_fn = self.get_or_declare_trap();
+        let parent = self
+            .builder
+            .get_insert_block()
+            .unwrap()
+            .get_parent()
+            .unwrap();
+        let fail_bb = self.context.append_basic_block(parent, "assert_fail");
+        let ok_bb = self.context.append_basic_block(parent, "assert_ok");
+        let not_cond = self.builder.build_not(cond, "not_cond").unwrap();
+        self.builder
+            .build_conditional_branch(not_cond, fail_bb, ok_bb)
+            .unwrap();
+        self.builder.position_at_end(fail_bb);
+        self.builder.build_call(trap_fn, &[], "trap").unwrap();
+        self.builder.build_unreachable().unwrap();
+        self.builder.position_at_end(ok_bb);
+        None
+    }
+
+    // panic(message) — print to stderr, then trap unconditionally.
+    fn emit_panic_call(&mut self, args: &[Expr]) -> Option<BasicValueEnum<'ctx>> {
+        self.emit_eprintln(args);
+        let trap_fn = self.get_or_declare_trap();
+        self.builder.build_call(trap_fn, &[], "trap").unwrap();
+        self.builder.build_unreachable().unwrap();
+        self.terminated = true;
+        None
+    }
+
+    // assert_eq / assert_ne — polymorphic comparisons.
+    fn emit_assert_eq_ne_call(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+    ) -> Option<BasicValueEnum<'ctx>> {
+        let expect_eq = name == "assert_eq";
+        let left = self.emit_expr(&args[0])?;
+        let right = self.emit_expr(&args[1])?;
+        let fail_cond: Option<inkwell::values::IntValue<'ctx>> = match (left, right) {
+            (BasicValueEnum::IntValue(l), BasicValueEnum::IntValue(r)) => {
+                let pred = if expect_eq {
+                    inkwell::IntPredicate::NE
+                } else {
+                    inkwell::IntPredicate::EQ
                 };
-                let trap_fn = self.module.get_function("llvm.trap").unwrap_or_else(|| {
-                    let trap_ty = self.context.void_type().fn_type(&[], false);
-                    self.module.add_function("llvm.trap", trap_ty, None)
-                });
-                let parent = self
-                    .builder
-                    .get_insert_block()
-                    .unwrap()
-                    .get_parent()
-                    .unwrap();
-                let fail_bb = self.context.append_basic_block(parent, "assert_fail");
-                let ok_bb = self.context.append_basic_block(parent, "assert_ok");
-                let not_cond = self.builder.build_not(cond, "not_cond").unwrap();
-                self.builder
-                    .build_conditional_branch(not_cond, fail_bb, ok_bb)
-                    .unwrap();
-                self.builder.position_at_end(fail_bb);
-                self.builder.build_call(trap_fn, &[], "trap").unwrap();
-                self.builder.build_unreachable().unwrap();
-                self.builder.position_at_end(ok_bb);
-                None
-            }
-            // panic(message) — print to stderr, then trap unconditionally.
-            "panic" => {
-                self.emit_eprintln(args);
-                let trap_fn = self.module.get_function("llvm.trap").unwrap_or_else(|| {
-                    let trap_ty = self.context.void_type().fn_type(&[], false);
-                    self.module.add_function("llvm.trap", trap_ty, None)
-                });
-                self.builder.build_call(trap_fn, &[], "trap").unwrap();
-                self.builder.build_unreachable().unwrap();
-                self.terminated = true;
-                None
-            }
-            // assert_eq / assert_ne — polymorphic comparisons.
-            // core.mvl declares assert_eq(String, String) but call sites may pass Int or Bool.
-            // Emit a type-appropriate comparison and trap on failure.
-            "assert_eq" | "assert_ne" if args.len() == 2 => {
-                let expect_eq = name == "assert_eq";
-                let left = self.emit_expr(&args[0])?;
-                let right = self.emit_expr(&args[1])?;
-                let fail_cond: Option<inkwell::values::IntValue<'ctx>> = match (left, right) {
-                    (BasicValueEnum::IntValue(l), BasicValueEnum::IntValue(r)) => {
-                        let pred = if expect_eq {
-                            inkwell::IntPredicate::NE
-                        } else {
-                            inkwell::IntPredicate::EQ
-                        };
-                        Some(
-                            self.builder
-                                .build_int_compare(pred, l, r, "assert_cmp")
-                                .unwrap(),
-                        )
-                    }
-                    (BasicValueEnum::PointerValue(l), BasicValueEnum::PointerValue(r)) => {
-                        let eq_fn = self.get_mvl_string_eq();
-                        let call = self
-                            .builder
-                            .build_call(eq_fn, &[l.into(), r.into()], "str_eq")
-                            .unwrap();
-                        use inkwell::values::AnyValue;
-                        let eq_i32 = BasicValueEnum::try_from(call.as_any_value_enum())
-                            .ok()
-                            .and_then(|v| {
-                                if let BasicValueEnum::IntValue(i) = v {
-                                    Some(i)
-                                } else {
-                                    None
-                                }
-                            })?;
-                        let zero = self.context.i32_type().const_int(0, false);
-                        let is_eq = self
-                            .builder
-                            .build_int_compare(
-                                inkwell::IntPredicate::NE,
-                                eq_i32,
-                                zero,
-                                "str_eq_bool",
-                            )
-                            .unwrap();
-                        let pred = if expect_eq {
-                            // fail when not equal → invert is_eq
-                            self.builder.build_not(is_eq, "assert_cmp").unwrap()
-                        } else {
-                            // fail when equal → is_eq itself is the fail condition
-                            is_eq
-                        };
-                        Some(pred)
-                    }
-                    _ => None,
-                };
-                if let Some(cond) = fail_cond {
-                    let trap_fn = self.module.get_function("llvm.trap").unwrap_or_else(|| {
-                        let trap_ty = self.context.void_type().fn_type(&[], false);
-                        self.module.add_function("llvm.trap", trap_ty, None)
-                    });
-                    let parent = self
-                        .builder
-                        .get_insert_block()
-                        .unwrap()
-                        .get_parent()
-                        .unwrap();
-                    let fail_bb = self.context.append_basic_block(parent, "assert_fail");
-                    let ok_bb = self.context.append_basic_block(parent, "assert_ok");
-                    self.builder
-                        .build_conditional_branch(cond, fail_bb, ok_bb)
-                        .unwrap();
-                    self.builder.position_at_end(fail_bb);
-                    self.builder.build_call(trap_fn, &[], "trap").unwrap();
-                    self.builder.build_unreachable().unwrap();
-                    self.builder.position_at_end(ok_bb);
-                }
-                None
-            }
-            // range(start, end) as a value → { i64 start, i64 end } range struct
-            "range" if args.len() == 2 => {
-                let start = match self.emit_expr(&args[0])? {
-                    BasicValueEnum::IntValue(v) => v,
-                    _ => return None,
-                };
-                let end = match self.emit_expr(&args[1])? {
-                    BasicValueEnum::IntValue(v) => v,
-                    _ => return None,
-                };
-                let range_ty = self.context.struct_type(
-                    &[
-                        self.context.i64_type().into(),
-                        self.context.i64_type().into(),
-                    ],
-                    false,
-                );
-                let alloca = self.builder.build_alloca(range_ty, "range_tmp").unwrap();
-                let s_ptr = self
-                    .builder
-                    .build_struct_gep(range_ty, alloca, 0, "range_start")
-                    .unwrap();
-                let e_ptr = self
-                    .builder
-                    .build_struct_gep(range_ty, alloca, 1, "range_end")
-                    .unwrap();
-                self.builder.build_store(s_ptr, start).unwrap();
-                self.builder.build_store(e_ptr, end).unwrap();
                 Some(
                     self.builder
-                        .build_load(range_ty, alloca, "range_val")
+                        .build_int_compare(pred, l, r, "assert_cmp")
                         .unwrap(),
                 )
             }
-            _ => {
-                // Box::new(value) — heap-allocate T and return a pointer to it (#571, #608).
-                // Uses mvl_box_new(size) from the runtime library instead of build_malloc
-                // so that OOM aborts cleanly rather than returning null (#608).
-                if name == "Box::new" && args.len() == 1 {
-                    let val = self.emit_expr(&args[0])?;
-                    let size = self.llvm_type_byte_size(val.get_type()) as i64;
-                    let size_val = self.context.i64_type().const_int(size as u64, false);
-                    let box_new_fn = self.get_mvl_box_new();
-                    let call = self
-                        .builder
-                        .build_call(box_new_fn, &[size_val.into()], "box_alloc")
-                        .unwrap();
-                    let ptr = BasicValueEnum::try_from(call.as_any_value_enum())
-                        .ok()
-                        .and_then(|v| {
-                            if let BasicValueEnum::PointerValue(p) = v {
-                                Some(p)
-                            } else {
-                                None
-                            }
-                        })?;
-                    self.builder.build_store(ptr, val).unwrap();
-                    return Some(ptr.into());
+            (BasicValueEnum::PointerValue(l), BasicValueEnum::PointerValue(r)) => {
+                let eq_fn = self.get_mvl_string_eq();
+                let call = self
+                    .builder
+                    .build_call(eq_fn, &[l.into(), r.into()], "str_eq")
+                    .unwrap();
+                let eq_i32 = self.call_value(call).and_then(|v| {
+                    if let BasicValueEnum::IntValue(i) = v {
+                        Some(i)
+                    } else {
+                        None
+                    }
+                })?;
+                let zero = self.context.i32_type().const_int(0, false);
+                let is_eq = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::NE, eq_i32, zero, "str_eq_bool")
+                    .unwrap();
+                let pred = if expect_eq {
+                    // fail when not equal → invert is_eq
+                    self.builder.build_not(is_eq, "assert_cmp").unwrap()
+                } else {
+                    // fail when equal → is_eq itself is the fail condition
+                    is_eq
+                };
+                Some(pred)
+            }
+            _ => None,
+        };
+        if let Some(cond) = fail_cond {
+            let trap_fn = self.get_or_declare_trap();
+            let parent = self
+                .builder
+                .get_insert_block()
+                .unwrap()
+                .get_parent()
+                .unwrap();
+            let fail_bb = self.context.append_basic_block(parent, "assert_fail");
+            let ok_bb = self.context.append_basic_block(parent, "assert_ok");
+            self.builder
+                .build_conditional_branch(cond, fail_bb, ok_bb)
+                .unwrap();
+            self.builder.position_at_end(fail_bb);
+            self.builder.build_call(trap_fn, &[], "trap").unwrap();
+            self.builder.build_unreachable().unwrap();
+            self.builder.position_at_end(ok_bb);
+        }
+        None
+    }
+
+    // range(start, end) as a value → { i64 start, i64 end } range struct
+    fn emit_range_call(&mut self, args: &[Expr]) -> Option<BasicValueEnum<'ctx>> {
+        let start = match self.emit_expr(&args[0])? {
+            BasicValueEnum::IntValue(v) => v,
+            _ => return None,
+        };
+        let end = match self.emit_expr(&args[1])? {
+            BasicValueEnum::IntValue(v) => v,
+            _ => return None,
+        };
+        let range_ty = self.context.struct_type(
+            &[
+                self.context.i64_type().into(),
+                self.context.i64_type().into(),
+            ],
+            false,
+        );
+        let alloca = self.builder.build_alloca(range_ty, "range_tmp").unwrap();
+        let s_ptr = self
+            .builder
+            .build_struct_gep(range_ty, alloca, 0, "range_start")
+            .unwrap();
+        let e_ptr = self
+            .builder
+            .build_struct_gep(range_ty, alloca, 1, "range_end")
+            .unwrap();
+        self.builder.build_store(s_ptr, start).unwrap();
+        self.builder.build_store(e_ptr, end).unwrap();
+        Some(
+            self.builder
+                .build_load(range_ty, alloca, "range_val")
+                .unwrap(),
+        )
+    }
+
+    /// Catch-all for fn calls not handled by the primary dispatcher.
+    ///
+    /// Handles: Box::new, Ok/Some/Err, enum constructors, qualified static methods,
+    /// map_new, list_push, choice, shuffle, set algebra, stdlib signature dispatch,
+    /// closure variable calls, and generic / direct function calls.
+    fn emit_fn_call_catchall(&mut self, name: &str, args: &[Expr]) -> Option<BasicValueEnum<'ctx>> {
+        // Box::new(value) — heap-allocate T and return a pointer to it (#571, #608).
+        if name == "Box::new" && args.len() == 1 {
+            let val = self.emit_expr(&args[0])?;
+            let size = self.llvm_type_byte_size(val.get_type()) as i64;
+            let size_val = self.context.i64_type().const_int(size as u64, false);
+            let box_new_fn = self.get_mvl_box_new();
+            let call = self
+                .builder
+                .build_call(box_new_fn, &[size_val.into()], "box_alloc")
+                .unwrap();
+            let ptr = self.call_value(call).and_then(|v| {
+                if let BasicValueEnum::PointerValue(p) = v {
+                    Some(p)
+                } else {
+                    None
                 }
-                // Built-in Result/Option constructors: Ok(v), Err(e), Some(v)
-                if matches!(name, "Ok" | "Some") && args.len() == 1 {
+            })?;
+            self.builder.build_store(ptr, val).unwrap();
+            return Some(ptr.into());
+        }
+        // Built-in Result/Option constructors: Ok(v), Err(e), Some(v)
+        if matches!(name, "Ok" | "Some") && args.len() == 1 {
+            return self.emit_result_variant(0, args);
+        }
+        if name == "Err" && args.len() == 1 {
+            return self.emit_result_variant(1, args);
+        }
+        // L5-06: enum tuple variant constructor, e.g. `Shape::Circle(r)`
+        if name.contains("::") {
+            if let Some(pos) = name.find("::") {
+                let type_name = name[..pos].to_string();
+                let variant_name = name[pos + 2..].to_string();
+                // Qualified Result/Option constructors: Result::Ok, Result::Err, Option::Some.
+                if matches!(variant_name.as_str(), "Ok" | "Some") && args.len() == 1 {
                     return self.emit_result_variant(0, args);
                 }
-                if name == "Err" && args.len() == 1 {
+                if variant_name == "Err" && args.len() == 1 {
                     return self.emit_result_variant(1, args);
                 }
-                // L5-06: enum tuple variant constructor, e.g. `Shape::Circle(r)`
-                if name.contains("::") {
-                    if let Some(pos) = name.find("::") {
-                        let type_name = name[..pos].to_string();
-                        let variant_name = name[pos + 2..].to_string();
-                        // Qualified Result/Option constructors: Result::Ok, Result::Err, Option::Some.
-                        if matches!(variant_name.as_str(), "Ok" | "Some") && args.len() == 1 {
-                            return self.emit_result_variant(0, args);
-                        }
-                        if variant_name == "Err" && args.len() == 1 {
-                            return self.emit_result_variant(1, args);
-                        }
-                        if self.enum_variants.contains_key(&type_name) {
-                            return self.emit_enum_variant_construct(
-                                &type_name,
-                                &variant_name,
-                                args,
-                            );
-                        }
-                        // #928: static extension method call, e.g. String::from_chars(arr).
-                        // Try the mangled name (Type_method) and C-ABI name (_mvl_prefix_method).
-                        let mangled_static = format!("{}_{}", type_name, variant_name);
-                        let cabi_static = match type_name.as_str() {
-                            "String" => Some(format!("_mvl_str_{}", variant_name)),
-                            "List" => Some(format!("_mvl_list_{}", variant_name)),
-                            "Map" => Some(format!("_mvl_map_{}", variant_name)),
-                            "Set" => Some(format!("_mvl_set_{}", variant_name)),
-                            _ => None,
-                        };
-                        let static_fn = self.module.get_function(&mangled_static).or_else(|| {
-                            cabi_static
-                                .as_deref()
-                                .and_then(|n| self.module.get_function(n))
-                        });
-                        if let Some(fn_val) = static_fn {
-                            let meta_args: Vec<inkwell::values::BasicMetadataValueEnum> = args
-                                .iter()
-                                .map(|a| self.emit_expr(a).map(Into::into))
-                                .collect::<Option<Vec<_>>>()?;
-                            let call = self
-                                .builder
-                                .build_call(fn_val, &meta_args, "static_method")
-                                .unwrap();
-                            use inkwell::values::AnyValue;
-                            return BasicValueEnum::try_from(call.as_any_value_enum()).ok();
-                        }
-                    }
+                if self.enum_variants.contains_key(&type_name) {
+                    return self.emit_enum_variant_construct(&type_name, &variant_name, args);
                 }
-                // map_new[K, V]() → empty MvlMap via mvl_map_new.
-                if name == "map_new" && args.is_empty() {
-                    return self.emit_map_literal(&[]);
-                }
-
-                // list_push[T](arr, elem) → call mvl_array_push(arr, &elem), return arr.
-                // Handles the generic case where T may be a struct (e.g. Value), avoiding
-                // the type mismatch from the i64-defaulted pre-declaration.
-                if name == "list_push" && args.len() == 2 {
-                    let arr_val = self.emit_expr(&args[0])?;
-                    let elem_val = self.emit_expr(&args[1])?;
-                    let arr_ptr = arr_val.into_pointer_value();
-                    let slot = self
+                // #928: static extension method call, e.g. String::from_chars(arr).
+                let mangled_static = format!("{}_{}", type_name, variant_name);
+                let cabi_static = match type_name.as_str() {
+                    "String" => Some(format!("_mvl_str_{}", variant_name)),
+                    "List" => Some(format!("_mvl_list_{}", variant_name)),
+                    "Map" => Some(format!("_mvl_map_{}", variant_name)),
+                    "Set" => Some(format!("_mvl_set_{}", variant_name)),
+                    _ => None,
+                };
+                let static_fn = self.module.get_function(&mangled_static).or_else(|| {
+                    cabi_static
+                        .as_deref()
+                        .and_then(|n| self.module.get_function(n))
+                });
+                if let Some(fn_val) = static_fn {
+                    let meta_args: Vec<inkwell::values::BasicMetadataValueEnum> = args
+                        .iter()
+                        .map(|a| self.emit_expr(a).map(Into::into))
+                        .collect::<Option<Vec<_>>>()?;
+                    let call = self
                         .builder
-                        .build_alloca(elem_val.get_type(), "push_slot")
+                        .build_call(fn_val, &meta_args, "static_method")
                         .unwrap();
-                    self.builder.build_store(slot, elem_val).unwrap();
-                    let push_fn = self.get_mvl_array_push();
-                    self.builder
-                        .build_call(push_fn, &[arr_ptr.into(), slot.into()], "list_push")
-                        .unwrap();
-                    return Some(arr_ptr.into());
+                    return self.call_value(call);
                 }
+            }
+        }
+        // map_new[K, V]() → empty MvlMap via mvl_map_new.
+        if name == "map_new" && args.is_empty() {
+            return self.emit_map_literal(&[]);
+        }
 
-                // #583/#907: generic builtins — choice uses runtime index + inline
-                // type-dependent load; shuffle is fully delegated to runtime_c.
-                if name == "choice" && args.len() == 1 {
-                    return self.emit_random_choice(&args[0]);
-                }
-                if name == "shuffle" && args.len() == 1 {
-                    let list_val = self.emit_expr(&args[0])?;
-                    // C function deep-clones then shuffles; returns a new MvlArray*
-                    // so source and result are independent (value semantics).
-                    return self.emit_stdlib_call_ptr_identity("_mvl_random_shuffle", list_val);
-                }
+        // list_push[T](arr, elem) → call mvl_array_push(arr, &elem), return arr.
+        if name == "list_push" && args.len() == 2 {
+            let arr_val = self.emit_expr(&args[0])?;
+            let elem_val = self.emit_expr(&args[1])?;
+            let arr_ptr = arr_val.into_pointer_value();
+            let slot = self
+                .builder
+                .build_alloca(elem_val.get_type(), "push_slot")
+                .unwrap();
+            self.builder.build_store(slot, elem_val).unwrap();
+            let push_fn = self.get_mvl_array_push();
+            self.builder
+                .build_call(push_fn, &[arr_ptr.into(), slot.into()], "list_push")
+                .unwrap();
+            return Some(arr_ptr.into());
+        }
 
-                // #587/#907: set algebra — delegate to mvl_runtime_c.
-                if name == "set_intersection" && args.len() == 2 {
+        // #583/#907: generic builtins — choice uses runtime index + inline
+        // type-dependent load; shuffle is fully delegated to runtime_c.
+        if name == "choice" && args.len() == 1 {
+            return self.emit_random_choice(&args[0]);
+        }
+        if name == "shuffle" && args.len() == 1 {
+            let list_val = self.emit_expr(&args[0])?;
+            return self.emit_stdlib_call_ptr_identity("_mvl_random_shuffle", list_val);
+        }
+
+        // #587/#907: set algebra — delegate to mvl_runtime_c.
+        if name == "set_intersection" && args.len() == 2 {
+            let a = self.emit_expr(&args[0])?;
+            let b = self.emit_expr(&args[1])?;
+            return self.emit_stdlib_call_ptr_two_ptr_args("_mvl_set_intersection", a, b);
+        }
+        if name == "set_difference" && args.len() == 2 {
+            let a = self.emit_expr(&args[0])?;
+            let b = self.emit_expr(&args[1])?;
+            return self.emit_stdlib_call_ptr_two_ptr_args("_mvl_set_difference", a, b);
+        }
+        if name == "set_union" && args.len() == 2 {
+            let a = self.emit_expr(&args[0])?;
+            let b = self.emit_expr(&args[1])?;
+            return self.emit_stdlib_call_ptr_two_ptr_args("_mvl_set_union", a, b);
+        }
+
+        // ADR-0019: dispatch to libmvl_runtime_c C-ABI for stdlib imports.
+        if let Some(sig) = self.stdlib_imports.get(name).cloned() {
+            use crate::mvl::backends::llvm::StdlibSig;
+            match &sig {
+                StdlibSig::I64NoArg(sym) if args.is_empty() => {
+                    return self.emit_stdlib_call_i64(sym);
+                }
+                StdlibSig::F64NoArg(sym) if args.is_empty() => {
+                    return self.emit_stdlib_call_f64(sym);
+                }
+                // #557: ptr return, no args (env.args, args.get_args)
+                StdlibSig::PtrNoArg(sym) if args.is_empty() => {
+                    return self.emit_stdlib_call_ptr_no_arg(sym);
+                }
+                StdlibSig::I64TwoI64Args(sym) if args.len() == 2 => {
+                    let sym = sym.clone();
                     let a = self.emit_expr(&args[0])?;
                     let b = self.emit_expr(&args[1])?;
-                    return self.emit_stdlib_call_ptr_two_ptr_args("_mvl_set_intersection", a, b);
+                    return self.emit_stdlib_call_i64_two_args(&sym, a, b);
                 }
-                if name == "set_difference" && args.len() == 2 {
+                StdlibSig::VoidDurationArg(sym) if args.len() == 1 => {
+                    let sym = sym.clone();
+                    let d = self.emit_expr(&args[0])?;
+                    return self.emit_stdlib_call_void_duration_arg(&sym, d);
+                }
+                StdlibSig::VoidStringMapArg(sym) if args.len() == 2 => {
+                    let sym = sym.clone();
+                    // #1007: IFC invariant — static checker guarantees no Secret arg
+                    // reaches observable fns (log_debug/info/warn/error) without relabel.
+                    assert!(
+                        !self.is_secret_labeled(&args[0]) && !self.is_secret_labeled(&args[1]),
+                        "codegen bug: Secret-labeled value routed to observable fn without relabel"
+                    );
+                    let msg = self.emit_expr(&args[0])?;
+                    let fields = self.emit_expr(&args[1])?;
+                    return self.emit_stdlib_call_void_string_map(&sym, msg, fields);
+                }
+                // #435: io stdlib
+                StdlibSig::PtrIdentArg(sym) if args.len() == 1 => {
+                    let sym = sym.clone();
+                    let arg = self.emit_expr(&args[0])?;
+                    return self.emit_stdlib_call_ptr_identity(&sym, arg);
+                }
+                StdlibSig::ResultUnitOnePtrArg(sym) if args.len() == 1 => {
+                    let sym = sym.clone();
+                    let arg = self.emit_expr(&args[0])?;
+                    return self.emit_stdlib_call_result_one_ptr_arg(&sym, arg);
+                }
+                StdlibSig::ResultUnitTwoPtrArgs(sym) if args.len() == 2 => {
+                    let sym = sym.clone();
                     let a = self.emit_expr(&args[0])?;
                     let b = self.emit_expr(&args[1])?;
-                    return self.emit_stdlib_call_ptr_two_ptr_args("_mvl_set_difference", a, b);
+                    return self.emit_stdlib_call_result_two_ptr_args(&sym, a, b);
                 }
-                if name == "set_union" && args.len() == 2 {
+                StdlibSig::ResultStringOnePtrArg(sym) if args.len() == 1 => {
+                    let sym = sym.clone();
+                    let arg = self.emit_expr(&args[0])?;
+                    return self.emit_stdlib_call_result_one_ptr_arg(&sym, arg);
+                }
+                StdlibSig::StringThreePtrArgs(sym) if args.len() == 3 => {
+                    let sym = sym.clone();
                     let a = self.emit_expr(&args[0])?;
                     let b = self.emit_expr(&args[1])?;
-                    return self.emit_stdlib_call_ptr_two_ptr_args("_mvl_set_union", a, b);
+                    let c = self.emit_expr(&args[2])?;
+                    return self.emit_stdlib_call_string_three_ptr_args(&sym, a, b, c);
                 }
+                StdlibSig::OptionMatchTwoPtrArgs(sym) if args.len() == 2 => {
+                    let sym = sym.clone();
+                    let handle = self.emit_expr(&args[0])?;
+                    let input = self.emit_expr(&args[1])?;
+                    return self.emit_stdlib_call_option_match_two_ptr_args(&sym, handle, input);
+                }
+                // #584: (ptr, ptr) → ptr (e.g. regex.find_all → MvlArray*)
+                StdlibSig::PtrTwoPtrArgs(sym) if args.len() == 2 => {
+                    let sym = sym.clone();
+                    let a = self.emit_expr(&args[0])?;
+                    let b = self.emit_expr(&args[1])?;
+                    return self.emit_stdlib_call_ptr_two_ptr_args(&sym, a, b);
+                }
+                // #507: i64 → ptr (e.g. crypto_random_bytes(n) → *mut MvlArray)
+                StdlibSig::I64ReturnsPtrArg(sym) if args.len() == 1 => {
+                    let sym = sym.clone();
+                    let arg = self.emit_expr(&args[0])?;
+                    return self.emit_stdlib_call_i64_returns_ptr(&sym, arg);
+                }
+                // #536: ptr → i64 (exists, is_file, is_dir)
+                StdlibSig::I64OnePtrArg(sym) if args.len() == 1 => {
+                    let sym = sym.clone();
+                    let arg = self.emit_expr(&args[0])?;
+                    return self.emit_stdlib_call_i64_one_ptr_arg(&sym, arg);
+                }
+                // #536: (ptr, i64) → Result[Unit, String] (chmod)
+                StdlibSig::ResultUnitPtrI64Args(sym) if args.len() == 2 => {
+                    let sym = sym.clone();
+                    let a = self.emit_expr(&args[0])?;
+                    let b = self.emit_expr(&args[1])?;
+                    return self.emit_stdlib_call_result_unit_ptr_i64_args(&sym, a, b);
+                }
+                // #779: ptr → {i8, ptr} — tcp_listener_port(listener)
+                StdlibSig::ResultI64OnePtrArg(sym) if args.len() == 1 => {
+                    let sym = sym.clone();
+                    let arg = self.emit_expr(&args[0])?;
+                    return self.emit_stdlib_call_result_i64_one_ptr_arg(&sym, arg);
+                }
+                // #779: (ptr, i64) → {i8, ptr} — tcp_listen(host, port)
+                StdlibSig::ResultPtrPtrI64Args(sym) if args.len() == 2 => {
+                    let sym = sym.clone();
+                    let a = self.emit_expr(&args[0])?;
+                    let b = self.emit_expr(&args[1])?;
+                    return self.emit_stdlib_call_result_ptr_i64_args(&sym, a, b);
+                }
+                // #779: ptr → void — tcp_close_listener / tcp_close_stream
+                StdlibSig::VoidOnePtrArg(sym) if args.len() == 1 => {
+                    let sym = sym.clone();
+                    let arg = self.emit_expr(&args[0])?;
+                    return self.emit_stdlib_call_void_one_ptr(&sym, arg);
+                }
+                // #839: (ptr, ptr) → void — stdout_write / stderr_write
+                StdlibSig::VoidTwoPtrArgs(sym) if args.len() == 2 => {
+                    let sym = sym.clone();
+                    let a = self.emit_expr(&args[0])?;
+                    let b = self.emit_expr(&args[1])?;
+                    return self.emit_stdlib_call_void_string_map(&sym, a, b);
+                }
+                // #536: i64 → void/noreturn (exit)
+                StdlibSig::VoidI64Arg(sym) if args.len() == 1 => {
+                    let sym = sym.clone();
+                    let arg = self.emit_expr(&args[0])?;
+                    return self.emit_stdlib_call_void_i64_arg(&sym, arg);
+                }
+                // #586: i8 → void (signal_ignore, signal_reset)
+                StdlibSig::VoidI8Arg(sym) if args.len() == 1 => {
+                    let sym = sym.clone();
+                    let arg = self.emit_expr(&args[0])?;
+                    return self.emit_stdlib_call_void_i8_arg(&sym, arg);
+                }
+                // #586: (i8, fn_ptr) → void (signal_on)
+                StdlibSig::VoidI8FnPtrArg(sym) if args.len() == 2 => {
+                    let sym = sym.clone();
+                    let sig_arg = self.emit_expr(&args[0])?;
+                    let fn_ptr = match &args[1] {
+                        crate::mvl::parser::ast::Expr::Ident(fn_name, _) => {
+                            self.module.get_function(fn_name.as_str()).map(|f| {
+                                inkwell::values::BasicValueEnum::PointerValue(
+                                    f.as_global_value().as_pointer_value(),
+                                )
+                            })
+                        }
+                        _ => None,
+                    }?;
+                    return self.emit_stdlib_call_void_i8_fn_ptr_arg(&sym, sig_arg, fn_ptr);
+                }
+                _ => {}
+            }
+        }
 
-                // ADR-0019: dispatch to libmvl_runtime_c C-ABI for stdlib imports.
-                if let Some(sig) = self.stdlib_imports.get(name).cloned() {
-                    use crate::mvl::backends::llvm::StdlibSig;
-                    match &sig {
-                        StdlibSig::I64NoArg(sym) if args.is_empty() => {
-                            return self.emit_stdlib_call_i64(sym);
-                        }
-                        StdlibSig::F64NoArg(sym) if args.is_empty() => {
-                            return self.emit_stdlib_call_f64(sym);
-                        }
-                        // #557: ptr return, no args (env.args, args.get_args)
-                        StdlibSig::PtrNoArg(sym) if args.is_empty() => {
-                            return self.emit_stdlib_call_ptr_no_arg(sym);
-                        }
-                        StdlibSig::I64TwoI64Args(sym) if args.len() == 2 => {
-                            let sym = sym.clone();
-                            let a = self.emit_expr(&args[0])?;
-                            let b = self.emit_expr(&args[1])?;
-                            return self.emit_stdlib_call_i64_two_args(&sym, a, b);
-                        }
-                        StdlibSig::VoidDurationArg(sym) if args.len() == 1 => {
-                            let sym = sym.clone();
-                            let d = self.emit_expr(&args[0])?;
-                            return self.emit_stdlib_call_void_duration_arg(&sym, d);
-                        }
-                        StdlibSig::VoidStringMapArg(sym) if args.len() == 2 => {
-                            let sym = sym.clone();
-                            // #1007: IFC invariant — static checker guarantees no Secret arg
-                            // reaches observable fns (log_debug/info/warn/error) without relabel.
-                            assert!(
-                                !self.is_secret_labeled(&args[0])
-                                    && !self.is_secret_labeled(&args[1]),
-                                "codegen bug: Secret-labeled value routed to observable fn without relabel"
-                            );
-                            let msg = self.emit_expr(&args[0])?;
-                            let fields = self.emit_expr(&args[1])?;
-                            return self.emit_stdlib_call_void_string_map(&sym, msg, fields);
-                        }
-                        // #435: io stdlib
-                        StdlibSig::PtrIdentArg(sym) if args.len() == 1 => {
-                            let sym = sym.clone();
-                            let arg = self.emit_expr(&args[0])?;
-                            return self.emit_stdlib_call_ptr_identity(&sym, arg);
-                        }
-                        StdlibSig::ResultUnitOnePtrArg(sym) if args.len() == 1 => {
-                            let sym = sym.clone();
-                            let arg = self.emit_expr(&args[0])?;
-                            return self.emit_stdlib_call_result_one_ptr_arg(&sym, arg);
-                        }
-                        StdlibSig::ResultUnitTwoPtrArgs(sym) if args.len() == 2 => {
-                            let sym = sym.clone();
-                            let a = self.emit_expr(&args[0])?;
-                            let b = self.emit_expr(&args[1])?;
-                            return self.emit_stdlib_call_result_two_ptr_args(&sym, a, b);
-                        }
-                        StdlibSig::ResultStringOnePtrArg(sym) if args.len() == 1 => {
-                            let sym = sym.clone();
-                            let arg = self.emit_expr(&args[0])?;
-                            return self.emit_stdlib_call_result_one_ptr_arg(&sym, arg);
-                        }
-                        StdlibSig::StringThreePtrArgs(sym) if args.len() == 3 => {
-                            let sym = sym.clone();
-                            let a = self.emit_expr(&args[0])?;
-                            let b = self.emit_expr(&args[1])?;
-                            let c = self.emit_expr(&args[2])?;
-                            return self.emit_stdlib_call_string_three_ptr_args(&sym, a, b, c);
-                        }
-                        StdlibSig::OptionMatchTwoPtrArgs(sym) if args.len() == 2 => {
-                            let sym = sym.clone();
-                            let handle = self.emit_expr(&args[0])?;
-                            let input = self.emit_expr(&args[1])?;
-                            return self
-                                .emit_stdlib_call_option_match_two_ptr_args(&sym, handle, input);
-                        }
-                        // #584: (ptr, ptr) → ptr (e.g. regex.find_all → MvlArray*)
-                        StdlibSig::PtrTwoPtrArgs(sym) if args.len() == 2 => {
-                            let sym = sym.clone();
-                            let a = self.emit_expr(&args[0])?;
-                            let b = self.emit_expr(&args[1])?;
-                            return self.emit_stdlib_call_ptr_two_ptr_args(&sym, a, b);
-                        }
-                        // #507: i64 → ptr (e.g. crypto_random_bytes(n) → *mut MvlArray)
-                        StdlibSig::I64ReturnsPtrArg(sym) if args.len() == 1 => {
-                            let sym = sym.clone();
-                            let arg = self.emit_expr(&args[0])?;
-                            return self.emit_stdlib_call_i64_returns_ptr(&sym, arg);
-                        }
-                        // #536: ptr → i64 (exists, is_file, is_dir)
-                        StdlibSig::I64OnePtrArg(sym) if args.len() == 1 => {
-                            let sym = sym.clone();
-                            let arg = self.emit_expr(&args[0])?;
-                            return self.emit_stdlib_call_i64_one_ptr_arg(&sym, arg);
-                        }
-                        // #536: (ptr, i64) → Result[Unit, String] (chmod)
-                        StdlibSig::ResultUnitPtrI64Args(sym) if args.len() == 2 => {
-                            let sym = sym.clone();
-                            let a = self.emit_expr(&args[0])?;
-                            let b = self.emit_expr(&args[1])?;
-                            return self.emit_stdlib_call_result_unit_ptr_i64_args(&sym, a, b);
-                        }
-                        // #779: ptr → {i8, ptr} — tcp_listener_port(listener)
-                        // C encodes the i64 port as a raw pointer value (ptrtoint trick).
-                        // We ptrtoint the payload ptr → i64, alloca it, and return {i8, slot}.
-                        StdlibSig::ResultI64OnePtrArg(sym) if args.len() == 1 => {
-                            let sym = sym.clone();
-                            let arg = self.emit_expr(&args[0])?;
-                            return self.emit_stdlib_call_result_i64_one_ptr_arg(&sym, arg);
-                        }
-                        // #779: (ptr, i64) → {i8, ptr} — tcp_listen(host, port)
-                        StdlibSig::ResultPtrPtrI64Args(sym) if args.len() == 2 => {
-                            let sym = sym.clone();
-                            let a = self.emit_expr(&args[0])?;
-                            let b = self.emit_expr(&args[1])?;
-                            return self.emit_stdlib_call_result_ptr_i64_args(&sym, a, b);
-                        }
-                        // #779: ptr → void — tcp_close_listener / tcp_close_stream
-                        StdlibSig::VoidOnePtrArg(sym) if args.len() == 1 => {
-                            let sym = sym.clone();
-                            let arg = self.emit_expr(&args[0])?;
-                            return self.emit_stdlib_call_void_one_ptr(&sym, arg);
-                        }
-                        // #839: (ptr, ptr) → void — stdout_write / stderr_write
-                        StdlibSig::VoidTwoPtrArgs(sym) if args.len() == 2 => {
-                            let sym = sym.clone();
-                            let a = self.emit_expr(&args[0])?;
-                            let b = self.emit_expr(&args[1])?;
-                            return self.emit_stdlib_call_void_string_map(&sym, a, b);
-                        }
-                        // #536: i64 → void/noreturn (exit)
-                        StdlibSig::VoidI64Arg(sym) if args.len() == 1 => {
-                            let sym = sym.clone();
-                            let arg = self.emit_expr(&args[0])?;
-                            return self.emit_stdlib_call_void_i64_arg(&sym, arg);
-                        }
-                        // #586: i8 → void (signal_ignore, signal_reset)
-                        StdlibSig::VoidI8Arg(sym) if args.len() == 1 => {
-                            let sym = sym.clone();
-                            let arg = self.emit_expr(&args[0])?;
-                            return self.emit_stdlib_call_void_i8_arg(&sym, arg);
-                        }
-                        // #586: (i8, fn_ptr) → void (signal_on)
-                        StdlibSig::VoidI8FnPtrArg(sym) if args.len() == 2 => {
-                            let sym = sym.clone();
-                            let sig_arg = self.emit_expr(&args[0])?;
-                            let fn_ptr = match &args[1] {
-                                crate::mvl::parser::ast::Expr::Ident(fn_name, _) => {
-                                    self.module.get_function(fn_name.as_str()).map(|f| {
-                                        inkwell::values::BasicValueEnum::PointerValue(
-                                            f.as_global_value().as_pointer_value(),
-                                        )
-                                    })
-                                }
-                                _ => None,
-                            }?;
-                            return self.emit_stdlib_call_void_i8_fn_ptr_arg(&sym, sig_arg, fn_ptr);
-                        }
-                        _ => {}
+        // #588: indirect call through a local function-typed variable (closure
+        // calling convention).  The stored value is a ptr to { fn_ptr, env_ptr };
+        // extract both and call fn_ptr(env_ptr, args…).
+        if let Some(TypeExpr::Fn {
+            params: fn_params,
+            ret,
+            ..
+        }) = self.local_mvl_types.get(name).cloned()
+        {
+            if let Some((alloca, _)) = self.locals.get(name).copied() {
+                let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+                let closure_ty = self.closure_struct_type();
+
+                // Load the pointer-to-closure-struct from the local alloca.
+                let closure_ptr = self
+                    .builder
+                    .build_load(ptr_ty, alloca, "closure_ptr")
+                    .unwrap()
+                    .into_pointer_value();
+
+                // Extract fn_ptr (field 0) and env_ptr (field 1).
+                let fn_ptr_gep = self
+                    .builder
+                    .build_struct_gep(closure_ty, closure_ptr, 0, "fn_ptr_gep")
+                    .unwrap();
+                let fn_ptr = self
+                    .builder
+                    .build_load(ptr_ty, fn_ptr_gep, "fn_ptr")
+                    .unwrap()
+                    .into_pointer_value();
+                let env_ptr_gep = self
+                    .builder
+                    .build_struct_gep(closure_ty, closure_ptr, 1, "env_ptr_gep")
+                    .unwrap();
+                let env_ptr = self
+                    .builder
+                    .build_load(ptr_ty, env_ptr_gep, "env_ptr")
+                    .unwrap();
+
+                // Closure fn type: (ptr env, T args…) → U
+                let fn_ty = self.closure_fn_type_to_llvm(&fn_params, &ret);
+
+                // Prepend env_ptr to the argument list.
+                let mut meta_args: Vec<inkwell::values::BasicMetadataValueEnum> =
+                    vec![env_ptr.into()];
+                meta_args.extend(
+                    args.iter()
+                        .map(|a| self.emit_expr(a).map(Into::into))
+                        .collect::<Option<Vec<inkwell::values::BasicMetadataValueEnum>>>()?,
+                );
+                let call = self
+                    .builder
+                    .build_indirect_call(fn_ty, fn_ptr, &meta_args, "indirect_call")
+                    .unwrap();
+                return self.call_value(call);
+            }
+        }
+
+        // L5-15 + L5-08: single lookup for user-defined function metadata.
+        if let Some(fd) = self.fn_decls.get(name).cloned() {
+            // L5-15: mark heap-typed value arguments as moved (ownership
+            // transfers to the callee). Borrow params (val T/ref T) are skipped.
+            for (arg, param) in args.iter().zip(fd.params.iter()) {
+                if matches!(&param.ty, crate::mvl::parser::ast::TypeExpr::Ref { .. }) {
+                    continue;
+                }
+                if stmts::heap_kind_of(&param.ty).is_some() {
+                    let src = match arg {
+                        Expr::Ident(s, _) => Some(s.as_str()),
+                        _ => None,
+                    };
+                    if let Some(src) = src {
+                        self.heap_locals.remove(src);
                     }
                 }
-
-                // #588: indirect call through a local function-typed variable (closure
-                // calling convention).  The stored value is a ptr to { fn_ptr, env_ptr };
-                // extract both and call fn_ptr(env_ptr, args…).
-                if let Some(TypeExpr::Fn {
-                    params: fn_params,
-                    ret,
-                    ..
-                }) = self.local_mvl_types.get(name).cloned()
-                {
-                    if let Some((alloca, _)) = self.locals.get(name).copied() {
-                        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
-                        let closure_ty = self.closure_struct_type();
-
-                        // Load the pointer-to-closure-struct from the local alloca.
-                        let closure_ptr = self
-                            .builder
-                            .build_load(ptr_ty, alloca, "closure_ptr")
-                            .unwrap()
-                            .into_pointer_value();
-
-                        // Extract fn_ptr (field 0) and env_ptr (field 1).
-                        let fn_ptr_gep = self
-                            .builder
-                            .build_struct_gep(closure_ty, closure_ptr, 0, "fn_ptr_gep")
-                            .unwrap();
-                        let fn_ptr = self
-                            .builder
-                            .build_load(ptr_ty, fn_ptr_gep, "fn_ptr")
-                            .unwrap()
-                            .into_pointer_value();
-                        let env_ptr_gep = self
-                            .builder
-                            .build_struct_gep(closure_ty, closure_ptr, 1, "env_ptr_gep")
-                            .unwrap();
-                        let env_ptr = self
-                            .builder
-                            .build_load(ptr_ty, env_ptr_gep, "env_ptr")
-                            .unwrap();
-
-                        // Closure fn type: (ptr env, T args…) → U
-                        let fn_ty = self.closure_fn_type_to_llvm(&fn_params, &ret);
-
-                        // Prepend env_ptr to the argument list.
-                        let mut meta_args: Vec<inkwell::values::BasicMetadataValueEnum> =
-                            vec![env_ptr.into()];
-                        meta_args.extend(
-                            args.iter()
-                                .map(|a| self.emit_expr(a).map(Into::into))
-                                .collect::<Option<Vec<inkwell::values::BasicMetadataValueEnum>>>(
-                                )?,
-                        );
-                        let call = self
-                            .builder
-                            .build_indirect_call(fn_ty, fn_ptr, &meta_args, "indirect_call")
-                            .unwrap();
-                        use inkwell::values::AnyValue;
-                        return BasicValueEnum::try_from(call.as_any_value_enum()).ok();
-                    }
-                }
-
-                // L5-15 + L5-08: single lookup for user-defined function metadata.
-                if let Some(fd) = self.fn_decls.get(name).cloned() {
-                    // L5-15: mark heap-typed value arguments as moved (ownership
-                    // transfers to the callee). Borrow params (val T/ref T) are skipped.
-                    for (arg, param) in args.iter().zip(fd.params.iter()) {
-                        if matches!(&param.ty, crate::mvl::parser::ast::TypeExpr::Ref { .. }) {
-                            continue;
-                        }
-                        if stmts::heap_kind_of(&param.ty).is_some() {
-                            let src = match arg {
-                                Expr::Ident(s, _) => Some(s.as_str()),
-                                _ => None,
-                            };
-                            if let Some(src) = src {
-                                self.heap_locals.remove(src);
-                            }
-                        }
-                    }
-                    // ADR-0034: generic function → call the pre-emitted monomorphized copy.
-                    // The mono pass in emit_program pre-emits all instantiations; ensure_monomorphized
-                    // here is a no-op for those and a fallback for any the pass may have missed.
-                    // Builtin generic functions (e.g. list_get[T], list_len[T]) already have a
-                    // concrete body emitted by the fourth pass using pointer-typed parameters.
-                    if !fd.type_params.is_empty() && !fd.is_builtin {
-                        // Emit all arguments first to get their concrete LLVM types.
-                        let arg_vals: Vec<BasicValueEnum<'ctx>> =
-                            args.iter().filter_map(|a| self.emit_expr(a)).collect();
-                        if arg_vals.len() != args.len() {
-                            return None;
-                        }
-                        let mut type_subs = self.infer_type_subs(&fd, &arg_vals);
-                        self.infer_type_subs_from_args(&fd, args, &mut type_subs);
-                        let mangled = self.mangle_fn_name(&fd, &type_subs);
-                        self.ensure_monomorphized(fd, type_subs, &mangled.clone());
-                        let fn_val = self.module.get_function(&mangled)?;
-                        let meta_args: Vec<inkwell::values::BasicMetadataValueEnum> =
-                            self.coerce_args_to_signature(&arg_vals, fn_val);
-                        let call = self.builder.build_call(fn_val, &meta_args, "call").unwrap();
-                        use inkwell::values::AnyValue;
-                        return BasicValueEnum::try_from(call.as_any_value_enum()).ok();
-                    }
-                }
-                // Forward call to a user-defined function (already declared).
-                let fn_val = self.module.get_function(name)?;
-                // If any argument fails to emit, propagate the failure rather than
-                // silently substituting undef, which would produce undefined behaviour.
+            }
+            // ADR-0034: generic function → call the pre-emitted monomorphized copy.
+            if !fd.type_params.is_empty() && !fd.is_builtin {
+                // Emit all arguments first to get their concrete LLVM types.
                 let arg_vals: Vec<BasicValueEnum<'ctx>> =
                     args.iter().filter_map(|a| self.emit_expr(a)).collect();
                 if arg_vals.len() != args.len() {
                     return None;
                 }
+                let mut type_subs = self.infer_type_subs(&fd, &arg_vals);
+                self.infer_type_subs_from_args(&fd, args, &mut type_subs);
+                let mangled = self.mangle_fn_name(&fd, &type_subs);
+                self.ensure_monomorphized(fd, type_subs, &mangled.clone());
+                let fn_val = self.module.get_function(&mangled)?;
                 let meta_args: Vec<inkwell::values::BasicMetadataValueEnum> =
                     self.coerce_args_to_signature(&arg_vals, fn_val);
                 let call = self.builder.build_call(fn_val, &meta_args, "call").unwrap();
-                use inkwell::values::AnyValue;
-                BasicValueEnum::try_from(call.as_any_value_enum()).ok()
+                return self.call_value(call);
             }
         }
+        // Forward call to a user-defined function (already declared).
+        let fn_val = self.module.get_function(name)?;
+        // If any argument fails to emit, propagate the failure rather than
+        // silently substituting undef, which would produce undefined behaviour.
+        let arg_vals: Vec<BasicValueEnum<'ctx>> =
+            args.iter().filter_map(|a| self.emit_expr(a)).collect();
+        if arg_vals.len() != args.len() {
+            return None;
+        }
+        let meta_args: Vec<inkwell::values::BasicMetadataValueEnum> =
+            self.coerce_args_to_signature(&arg_vals, fn_val);
+        let call = self.builder.build_call(fn_val, &meta_args, "call").unwrap();
+        self.call_value(call)
     }
 
     /// Coerce emitted argument values to match the LLVM function signature.
@@ -2680,7 +2662,6 @@ impl<'ctx> LlvmBackend<'ctx> {
             .builder
             .build_call(new_fn, &[elem_size.into(), initial_cap.into()], "arr_new")
             .unwrap();
-        use inkwell::values::AnyValue;
         let arr_ptr = BasicValueEnum::try_from(call.as_any_value_enum()).ok()?;
 
         // Push each element.
@@ -2715,7 +2696,6 @@ impl<'ctx> LlvmBackend<'ctx> {
             .builder
             .build_call(new_fn, &[initial_cap.into()], "map_new")
             .unwrap();
-        use inkwell::values::AnyValue;
         let map_ptr = BasicValueEnum::try_from(call.as_any_value_enum()).ok()?;
 
         let insert_fn = self.get_mvl_map_insert();
@@ -2801,7 +2781,6 @@ impl<'ctx> LlvmBackend<'ctx> {
             .builder
             .build_call(new_fn, &[elem_size.into(), initial_cap.into()], "set_new")
             .unwrap();
-        use inkwell::values::AnyValue;
         let set_ptr = BasicValueEnum::try_from(call.as_any_value_enum()).ok()?;
 
         let push_fn = self.get_mvl_array_push();
@@ -2836,1115 +2815,1194 @@ impl<'ctx> LlvmBackend<'ctx> {
     ) -> Option<BasicValueEnum<'ctx>> {
         let recv_val = self.emit_expr(receiver)?;
         match method {
-            // ── len ──────────────────────────────────────────────────────────
-            "len" => match recv_val {
-                // L5-14: all collection ptrs use runtime len functions.
-                // Dispatch by MVL type; default to mvl_string_len for unknown ptrs.
-                BasicValueEnum::PointerValue(ptr) => {
-                    let recv_mvl_ty = match receiver {
-                        Expr::Ident(name, _) => self.local_mvl_types.get(name.as_str()).cloned(),
-                        _ => None,
-                    };
-                    // Strip IFC labels (Secret[List[T]] → List[T]) before dispatching.
-                    let base_name = recv_mvl_ty.as_ref().and_then(|t| {
-                        let inner = match t {
-                            TypeExpr::Labeled { inner, .. } => inner.as_ref(),
-                            other => other,
-                        };
-                        match inner {
-                            TypeExpr::Base { name, .. } => Some(name.as_str()),
-                            _ => None,
-                        }
-                    });
-                    let len_fn = match base_name {
-                        Some("List") | Some("Array") | Some("Set") => self.get_mvl_array_len(),
-                        Some("Map") => self.get_mvl_map_len(),
-                        _ => self.get_mvl_string_len(), // String or unknown ptr
-                    };
-                    let call = self
-                        .builder
-                        .build_call(len_fn, &[ptr.into()], "coll_len")
-                        .unwrap();
-                    use inkwell::values::AnyValue;
-                    BasicValueEnum::try_from(call.as_any_value_enum()).ok()
-                }
-                BasicValueEnum::StructValue(sv) => {
-                    // Legacy Range struct: { i64 start, i64 end } → end - start
-                    let n = sv.get_type().count_fields();
-                    if n == 2 {
-                        let f1_ty = sv.get_type().get_field_type_at_index(1).unwrap();
-                        if matches!(f1_ty, BasicTypeEnum::IntType(_)) {
-                            let s = self
-                                .builder
-                                .build_extract_value(sv, 0, "r_s")
-                                .ok()?
-                                .into_int_value();
-                            let e = self
-                                .builder
-                                .build_extract_value(sv, 1, "r_e")
-                                .ok()?
-                                .into_int_value();
-                            return Some(
-                                self.builder
-                                    .build_int_sub(e, s, "range_len")
-                                    .unwrap()
-                                    .into(),
-                            );
-                        }
-                    }
-                    None
-                }
-                _ => None,
-            },
-
-            // ── UFCS String / List methods (#906) ────────────────────────────
-            //
-            // Mirrors the Rust backend's STDLIB_UFCS_METHODS table: each group
-            // routes method calls directly to the declared C runtime function via
-            // the corresponding memory.rs getter.  Adding a new simple method only
-            // requires a getter in memory.rs and an entry in the matching group.
-            //
-            // Group A: ptr → ptr  (0 extra args)
-            "trim" | "to_lower" | "to_upper" | "chars" if args.is_empty() => match recv_val {
-                BasicValueEnum::PointerValue(ptr) => {
-                    let f = match method {
-                        "trim" => self.get_mvl_str_trim(),
-                        "to_lower" => self.get_mvl_str_to_lower(),
-                        "to_upper" => self.get_mvl_str_to_upper(),
-                        "chars" => self.get_mvl_string_chars(),
-                        _ => unreachable!(),
-                    };
-                    let call = self
-                        .builder
-                        .build_call(f, &[ptr.into()], "str_method")
-                        .unwrap();
-                    use inkwell::values::AnyValue;
-                    BasicValueEnum::try_from(call.as_any_value_enum()).ok()
-                }
-                _ => None,
-            },
-
-            // Group B: ptr × ptr → ptr  (1 string arg)
+            "len" => self.emit_len_method(receiver, recv_val),
+            "trim" | "to_lower" | "to_upper" | "chars" if args.is_empty() => {
+                self.emit_str_transform_method(method, recv_val)
+            }
             "concat" | "split" if args.len() == 1 => {
-                let arg = self.emit_expr(args.first()?)?;
-                match (recv_val, arg) {
-                    (BasicValueEnum::PointerValue(a), BasicValueEnum::PointerValue(b)) => {
-                        let f = match method {
-                            "concat" => self.get_mvl_string_concat(),
-                            "split" => self.get_mvl_str_split(),
-                            _ => unreachable!(),
-                        };
-                        let call = self
-                            .builder
-                            .build_call(f, &[a.into(), b.into()], "str_method2")
-                            .unwrap();
-                        use inkwell::values::AnyValue;
-                        BasicValueEnum::try_from(call.as_any_value_enum()).ok()
-                    }
-                    _ => None,
-                }
+                self.emit_str_binary_method(method, recv_val, args)
             }
-
-            // Group C: ptr × ptr → i64  (1 string arg; Bool result)
-            // `starts_with`/`ends_with` return 0/1 from the C runtime as i64, but MVL
-            // Bool lowers to i1.  Truncate at the call site so downstream consumers
-            // (assert_eq, conditional branches, &&/||) see a consistent i1.  Without
-            // this, `assert_eq(s.starts_with(p), true)` builds an `icmp i64, i1`
-            // which fails LLVM IR verification.
-            // Note: `find` returns Option[Int], NOT i64, so it is NOT included here;
-            // it is handled by the HOF dispatch arm via emit_fn_call("find", …).
             "starts_with" | "ends_with" if args.len() == 1 => {
-                let arg = self.emit_expr(args.first()?)?;
-                match (recv_val, arg) {
-                    (BasicValueEnum::PointerValue(a), BasicValueEnum::PointerValue(b)) => {
-                        let f = match method {
-                            "starts_with" => self.get_mvl_str_starts_with(),
-                            "ends_with" => self.get_mvl_str_ends_with(),
-                            _ => unreachable!(),
-                        };
-                        let call = self
-                            .builder
-                            .build_call(f, &[a.into(), b.into()], "str_pred")
-                            .unwrap();
-                        use inkwell::values::AnyValue;
-                        let raw_i64 = BasicValueEnum::try_from(call.as_any_value_enum())
-                            .ok()?
-                            .into_int_value();
-                        let bool_i1 = self
-                            .builder
-                            .build_int_truncate(raw_i64, self.context.bool_type(), "str_pred_i1")
-                            .unwrap();
-                        Some(bool_i1.into())
-                    }
-                    _ => None,
-                }
+                self.emit_str_predicate_method(method, recv_val, args)
             }
-
-            // Group D: ptr × ptr × ptr → ptr  (String.replace)
-            "replace" if args.len() == 2 => {
-                let from = self.emit_expr(&args[0])?;
-                let to = self.emit_expr(&args[1])?;
-                match (recv_val, from, to) {
-                    (
-                        BasicValueEnum::PointerValue(s),
-                        BasicValueEnum::PointerValue(f),
-                        BasicValueEnum::PointerValue(t),
-                    ) => {
-                        let fn_val = self.get_mvl_str_replace();
-                        let call = self
-                            .builder
-                            .build_call(fn_val, &[s.into(), f.into(), t.into()], "str_replace")
-                            .unwrap();
-                        use inkwell::values::AnyValue;
-                        BasicValueEnum::try_from(call.as_any_value_enum()).ok()
-                    }
-                    _ => None,
-                }
-            }
-
-            // Group E: ptr × i64 × i64 → ptr  (String.substring / List.slice)
+            "replace" if args.len() == 2 => self.emit_str_replace_method(recv_val, args),
             "substring" | "slice" if args.len() == 2 => {
-                let start = self.emit_expr(&args[0])?;
-                let end_v = self.emit_expr(&args[1])?;
-                match (recv_val, start, end_v) {
-                    (
-                        BasicValueEnum::PointerValue(ptr),
-                        BasicValueEnum::IntValue(s),
-                        BasicValueEnum::IntValue(e),
-                    ) => {
-                        let f = match method {
-                            "substring" => self.get_mvl_str_substring(),
-                            "slice" => self.get_mvl_list_slice(),
-                            _ => unreachable!(),
-                        };
-                        let call = self
-                            .builder
-                            .build_call(f, &[ptr.into(), s.into(), e.into()], "ptr_slice")
-                            .unwrap();
-                        use inkwell::values::AnyValue;
-                        BasicValueEnum::try_from(call.as_any_value_enum()).ok()
-                    }
-                    _ => None,
-                }
+                self.emit_slice_method(method, recv_val, args)
             }
-
-            // Group F: List.take(n) and List.skip(n) via _mvl_list_slice
-            // take(xs, n)  ≡ list_slice(xs, 0, n)
-            // skip(xs, n)  ≡ list_slice(xs, n, len(xs))
             "take" | "skip" if args.len() == 1 => {
-                let n = self.emit_expr(&args[0])?;
-                match (recv_val, n) {
-                    (BasicValueEnum::PointerValue(ptr), BasicValueEnum::IntValue(n_val)) => {
-                        let slice_fn = self.get_mvl_list_slice();
-                        let i64_ty = self.context.i64_type();
-                        let (start, end_v) = if method == "take" {
-                            (i64_ty.const_int(0, false), n_val)
-                        } else {
-                            // skip: start=n, end=len(xs)
-                            let len_fn = self.get_mvl_array_len();
-                            let len_call = self
-                                .builder
-                                .build_call(len_fn, &[ptr.into()], "arr_len")
-                                .unwrap();
-                            use inkwell::values::AnyValue;
-                            let len_val = BasicValueEnum::try_from(len_call.as_any_value_enum())
-                                .ok()?
-                                .into_int_value();
-                            (n_val, len_val)
-                        };
-                        let call = self
-                            .builder
-                            .build_call(
-                                slice_fn,
-                                &[ptr.into(), start.into(), end_v.into()],
-                                "list_slice_n",
-                            )
-                            .unwrap();
-                        use inkwell::values::AnyValue;
-                        BasicValueEnum::try_from(call.as_any_value_enum()).ok()
-                    }
-                    _ => None,
-                }
+                self.emit_take_skip_method(method, recv_val, args)
             }
-
-            // ── parse_int / parse_float (String → Result) ─────────────────────
-            "parse_int" => match recv_val {
-                BasicValueEnum::PointerValue(ptr) => self.emit_parse_int(ptr),
-                _ => None,
-            },
-
-            "parse_float" => match recv_val {
-                BasicValueEnum::PointerValue(ptr) => self.emit_parse_float(ptr),
-                _ => None,
-            },
-
-            // ── clamp (Int) ───────────────────────────────────────────────────
-            "clamp" if args.len() == 2 => {
-                let lo = self.emit_expr(&args[0])?.into_int_value();
-                let hi = self.emit_expr(&args[1])?.into_int_value();
-                match recv_val {
-                    BasicValueEnum::IntValue(n) => {
-                        use inkwell::IntPredicate;
-                        let gt_hi = self
-                            .builder
-                            .build_int_compare(IntPredicate::SGT, n, hi, "gt_hi")
-                            .unwrap();
-                        let after_hi = self
-                            .builder
-                            .build_select(gt_hi, hi, n, "min_hi")
-                            .unwrap()
-                            .into_int_value();
-                        let lt_lo = self
-                            .builder
-                            .build_int_compare(IntPredicate::SLT, after_hi, lo, "lt_lo")
-                            .unwrap();
-                        let result = self
-                            .builder
-                            .build_select(lt_lo, lo, after_hi, "clamped")
-                            .unwrap();
-                        Some(result)
-                    }
-                    _ => None,
-                }
+            "parse_int" | "parse_float" => self.emit_parse_method(method, recv_val),
+            "clamp" if args.len() == 2 => self.emit_clamp_method(recv_val, args),
+            "clone" if args.is_empty() => self.emit_clone_method(receiver, recv_val),
+            "push" => self.emit_push_method(recv_val, args),
+            "get" => self.emit_get_method(receiver, recv_val, args),
+            "insert" if args.len() == 2 => self.emit_map_insert_method(recv_val, args),
+            "insert" if args.len() == 1 => self.emit_set_insert_method(recv_val, args),
+            "contains_key" if args.len() == 1 => self.emit_contains_key_method(recv_val, args),
+            "keys" if args.is_empty() => self.emit_keys_method(recv_val),
+            "remove" if args.len() == 1 => self.emit_map_remove_method(recv_val, args),
+            "is_empty" if args.is_empty() => self.emit_is_empty_method(receiver, recv_val),
+            "to_list" if args.is_empty() => self.emit_to_list_method(recv_val),
+            "abs" => self.emit_abs_method(recv_val),
+            "min" => self.emit_min_method(recv_val, args),
+            "max" => self.emit_max_method(recv_val, args),
+            "ceil" | "floor" | "sqrt" => self.emit_float_intrinsic_method(method, recv_val),
+            "first" => self.emit_first_method(recv_val),
+            "contains" => self.emit_contains_method(receiver, recv_val, args),
+            "to_string" => self.emit_to_string_method(recv_val),
+            "to_float" => self.emit_to_float_method(recv_val),
+            "filter" | "map" | "any" | "all" | "find" | "take_while" | "skip_while"
+                if args.len() == 1 =>
+            {
+                self.emit_hof_method(method, receiver, args)
             }
-
-            // ── clone ─────────────────────────────────────────────────────────
-            // #904: For heap types (String/List/Array/Set/Map) call the runtime
-            // clone function which bumps the refcount so copy-on-write mutations
-            // (e.g. push) create an independent copy.  Primitives are returned
-            // as-is (they are already value types).
-            "clone" if args.is_empty() => match recv_val {
-                BasicValueEnum::PointerValue(ptr) => {
-                    let recv_mvl_ty = match receiver {
-                        Expr::Ident(name, _) => self.local_mvl_types.get(name.as_str()).cloned(),
-                        _ => None,
-                    };
-                    let base_name = recv_mvl_ty.as_ref().and_then(|t| {
-                        let inner = match t {
-                            TypeExpr::Labeled { inner, .. } => inner.as_ref(),
-                            other => other,
-                        };
-                        match inner {
-                            TypeExpr::Base { name, .. } => Some(name.as_str()),
-                            _ => None,
-                        }
-                    });
-                    let clone_fn = match base_name {
-                        Some("List") | Some("Array") | Some("Set") => {
-                            self.get_mvl_array_deep_clone()
-                        }
-                        Some("Map") => self.get_mvl_map_deep_clone(),
-                        _ => self.get_mvl_string_deep_clone(),
-                    };
-                    use inkwell::values::AnyValue;
-                    BasicValueEnum::try_from(
-                        self.builder
-                            .build_call(clone_fn, &[ptr.into()], "clone_val")
-                            .unwrap()
-                            .as_any_value_enum(),
-                    )
-                    .ok()
-                }
-                other => Some(other),
-            },
-
-            "push" => {
-                let elem = self.emit_expr(args.first()?)?;
-                match recv_val {
-                    BasicValueEnum::PointerValue(arr) => {
-                        let slot = self
-                            .builder
-                            .build_alloca(elem.get_type(), "push_slot")
-                            .unwrap();
-                        self.builder.build_store(slot, elem).unwrap();
-                        let push_fn = self.get_mvl_array_push();
-                        self.builder
-                            .build_call(push_fn, &[arr.into(), slot.into()], "arr_push")
-                            .unwrap();
-                        None
-                    }
-                    _ => None,
-                }
+            "fold" if args.len() == 2 => self.emit_fold_method(receiver, args),
+            "intersection" | "difference" | "union" if args.len() == 1 => {
+                self.emit_set_algebra_method(method, receiver, args)
             }
+            _ => self.emit_user_defined_method(receiver, method, recv_val, args),
+        }
+    }
 
-            // ── get (Array / List) ────────────────────────────────────────────
-            "get" => {
-                let key_val = self.emit_expr(args.first()?)?;
-                match (recv_val, key_val) {
-                    // List/Array.get(i: i64) → mvl_array_get returns raw ptr (Option<T>)
-                    (BasicValueEnum::PointerValue(arr), BasicValueEnum::IntValue(i)) => {
-                        let get_fn = self.get_mvl_array_get();
-                        let call = self
-                            .builder
-                            .build_call(get_fn, &[arr.into(), i.into()], "arr_get")
-                            .unwrap();
-                        use inkwell::values::AnyValue;
-                        BasicValueEnum::try_from(call.as_any_value_enum()).ok()
-                    }
-                    // Map.get(key: String) → mvl_map_get + build Option<V>
-                    (BasicValueEnum::PointerValue(map), BasicValueEnum::PointerValue(key_ptr)) => {
-                        self.emit_map_get(receiver, map, key_ptr, args)
-                    }
-                    _ => None,
-                }
-            }
+    // ── len ─────────────────────────────────────────────────────────────────
 
-            // ── Map.insert(k, v) ─────────────────────────────────────────────
-            "insert" if args.len() == 2 => {
-                let k_val = self.emit_expr(&args[0])?;
-                let v_val = self.emit_expr(&args[1])?;
-                match recv_val {
-                    BasicValueEnum::PointerValue(map) => {
-                        // Map.insert(k: String, v) — store key as string bytes, value as 8-byte slot
-                        let i64_ty = self.context.i64_type();
-                        let insert_fn = self.get_mvl_map_insert();
-                        let (key_ptr, key_len) = match k_val {
-                            BasicValueEnum::PointerValue(p) => {
-                                let sp = self.get_mvl_string_ptr();
-                                let sl = self.get_mvl_string_len();
-                                use inkwell::values::AnyValue;
-                                let cp = BasicValueEnum::try_from(
-                                    self.builder
-                                        .build_call(sp, &[p.into()], "ins_kp")
-                                        .unwrap()
-                                        .as_any_value_enum(),
-                                )
-                                .ok()?
-                                .into_pointer_value();
-                                let cl = BasicValueEnum::try_from(
-                                    self.builder
-                                        .build_call(sl, &[p.into()], "ins_kl")
-                                        .unwrap()
-                                        .as_any_value_enum(),
-                                )
-                                .ok()?;
-                                (cp, cl)
-                            }
-                            other => {
-                                let slot = self
-                                    .builder
-                                    .build_alloca(other.get_type(), "ins_k_slot")
-                                    .unwrap();
-                                self.builder.build_store(slot, other).unwrap();
-                                (slot, i64_ty.const_int(8, false).into())
-                            }
-                        };
-                        let val_slot = self
-                            .builder
-                            .build_alloca(v_val.get_type(), "ins_v_slot")
-                            .unwrap();
-                        self.builder.build_store(val_slot, v_val).unwrap();
-                        let val_size = i64_ty
-                            .const_int(self.llvm_type_byte_size(v_val.get_type()) as u64, false);
-                        self.builder
-                            .build_call(
-                                insert_fn,
-                                &[
-                                    map.into(),
-                                    key_ptr.into(),
-                                    key_len.into(),
-                                    val_slot.into(),
-                                    val_size.into(),
-                                ],
-                                "map_insert",
-                            )
-                            .unwrap();
-                        None // Unit return
-                    }
-                    _ => None,
-                }
-            }
-
-            // ── Set.insert(x) ────────────────────────────────────────────────
-            "insert" if args.len() == 1 => {
-                let elem = self.emit_expr(args.first()?)?;
-                match recv_val {
-                    BasicValueEnum::PointerValue(arr) => {
-                        let slot = self
-                            .builder
-                            .build_alloca(elem.get_type(), "set_ins_slot")
-                            .unwrap();
-                        self.builder.build_store(slot, elem).unwrap();
-                        let push_fn = self.get_mvl_array_push();
-                        self.builder
-                            .build_call(push_fn, &[arr.into(), slot.into()], "set_ins")
-                            .unwrap();
-                        None // Unit return
-                    }
-                    _ => None,
-                }
-            }
-
-            // ── Map.contains_key(key) ─────────────────────────────────────────
-            "contains_key" if args.len() == 1 => {
-                let key_val = self.emit_expr(args.first()?)?;
-                match (recv_val, key_val) {
-                    (BasicValueEnum::PointerValue(map), BasicValueEnum::PointerValue(key_str)) => {
-                        let sp = self.get_mvl_string_ptr();
-                        let sl = self.get_mvl_string_len();
-                        use inkwell::values::AnyValue;
-                        let key_data = BasicValueEnum::try_from(
-                            self.builder
-                                .build_call(sp, &[key_str.into()], "ck_kp")
-                                .unwrap()
-                                .as_any_value_enum(),
-                        )
-                        .ok()?
-                        .into_pointer_value();
-                        let key_len_val = BasicValueEnum::try_from(
-                            self.builder
-                                .build_call(sl, &[key_str.into()], "ck_kl")
-                                .unwrap()
-                                .as_any_value_enum(),
-                        )
-                        .ok()?
-                        .into_int_value();
-                        let get_fn = self.get_mvl_map_get();
-                        let raw_ptr_call = self
-                            .builder
-                            .build_call(
-                                get_fn,
-                                &[map.into(), key_data.into(), key_len_val.into()],
-                                "ck_raw",
-                            )
-                            .unwrap();
-                        let raw_ptr = BasicValueEnum::try_from(raw_ptr_call.as_any_value_enum())
-                            .ok()?
-                            .into_pointer_value();
-                        let null = self
-                            .context
-                            .ptr_type(inkwell::AddressSpace::default())
-                            .const_null();
-                        Some(
-                            self.builder
-                                .build_int_compare(
-                                    IntPredicate::NE,
-                                    raw_ptr,
-                                    null,
-                                    "contains_key_res",
-                                )
-                                .unwrap()
-                                .into(),
-                        )
-                    }
-                    _ => None,
-                }
-            }
-
-            // ── Map.keys() ───────────────────────────────────────────────────
-            "keys" if args.is_empty() => match recv_val {
-                BasicValueEnum::PointerValue(map) => {
-                    let keys_fn = self.get_mvl_map_keys();
-                    use inkwell::values::AnyValue;
-                    BasicValueEnum::try_from(
-                        self.builder
-                            .build_call(keys_fn, &[map.into()], "map_keys")
-                            .unwrap()
-                            .as_any_value_enum(),
-                    )
-                    .ok()
-                }
-                _ => None,
-            },
-
-            // ── Map.remove(key) ──────────────────────────────────────────────
-            "remove" if args.len() == 1 => {
-                let key_val = self.emit_expr(args.first()?)?;
-                match (recv_val, key_val) {
-                    (BasicValueEnum::PointerValue(map), BasicValueEnum::PointerValue(key_str)) => {
-                        let sp = self.get_mvl_string_ptr();
-                        let sl = self.get_mvl_string_len();
-                        use inkwell::values::AnyValue;
-                        let key_data = BasicValueEnum::try_from(
-                            self.builder
-                                .build_call(sp, &[key_str.into()], "rm_kp")
-                                .unwrap()
-                                .as_any_value_enum(),
-                        )
-                        .ok()?
-                        .into_pointer_value();
-                        let key_len_val = BasicValueEnum::try_from(
-                            self.builder
-                                .build_call(sl, &[key_str.into()], "rm_kl")
-                                .unwrap()
-                                .as_any_value_enum(),
-                        )
-                        .ok()?
-                        .into_int_value();
-                        let remove_fn = self.get_mvl_map_remove();
-                        self.builder
-                            .build_call(
-                                remove_fn,
-                                &[map.into(), key_data.into(), key_len_val.into()],
-                                "map_remove",
-                            )
-                            .unwrap();
-                        // remove() returns Unit; yield a dummy i64 0
-                        Some(self.context.i64_type().const_int(0, false).into())
-                    }
-                    _ => None,
-                }
-            }
-
-            // ── is_empty() ───────────────────────────────────────────────────
-            // Reuse the len arm result and compare to zero.
-            "is_empty" if args.is_empty() => {
-                let len_val = self.emit_method_call(receiver, "len", &[])?;
-                match len_val {
-                    BasicValueEnum::IntValue(n) => {
-                        let zero = self.context.i64_type().const_int(0, false);
-                        Some(
-                            self.builder
-                                .build_int_compare(IntPredicate::EQ, n, zero, "is_empty_res")
-                                .unwrap()
-                                .into(),
-                        )
-                    }
-                    _ => None,
-                }
-            }
-
-            // ── Set.to_list() ────────────────────────────────────────────────
-            // Set is backed by MvlArray; clone it and return as List.
-            "to_list" if args.is_empty() => match recv_val {
-                BasicValueEnum::PointerValue(arr) => {
-                    let clone_fn = self.get_mvl_array_clone();
-                    use inkwell::values::AnyValue;
-                    BasicValueEnum::try_from(
-                        self.builder
-                            .build_call(clone_fn, &[arr.into()], "set_to_list")
-                            .unwrap()
-                            .as_any_value_enum(),
-                    )
-                    .ok()
-                }
-                _ => None,
-            },
-
-            // ── Int math ─────────────────────────────────────────────────────
-            "abs" => match recv_val {
-                BasicValueEnum::IntValue(v) => {
-                    let zero = self.context.i64_type().const_int(0, false);
-                    let is_neg = self
-                        .builder
-                        .build_int_compare(IntPredicate::SLT, v, zero, "is_neg")
-                        .unwrap();
-                    let neg = self.builder.build_int_neg(v, "neg_v").unwrap();
-                    Some(self.builder.build_select(is_neg, neg, v, "abs_v").unwrap())
-                }
-                _ => None,
-            },
-            "min" => {
-                let arg = match self.emit_expr(args.first()?)? {
-                    BasicValueEnum::IntValue(v) => v,
-                    _ => return None,
-                };
-                match recv_val {
-                    BasicValueEnum::IntValue(a) => {
-                        let lt = self
-                            .builder
-                            .build_int_compare(IntPredicate::SLT, a, arg, "lt")
-                            .unwrap();
-                        Some(self.builder.build_select(lt, a, arg, "min_v").unwrap())
-                    }
-                    _ => None,
-                }
-            }
-            "max" => {
-                let arg = match self.emit_expr(args.first()?)? {
-                    BasicValueEnum::IntValue(v) => v,
-                    _ => return None,
-                };
-                match recv_val {
-                    BasicValueEnum::IntValue(a) => {
-                        let gt = self
-                            .builder
-                            .build_int_compare(IntPredicate::SGT, a, arg, "gt")
-                            .unwrap();
-                        Some(self.builder.build_select(gt, a, arg, "max_v").unwrap())
-                    }
-                    _ => None,
-                }
-            }
-
-            // ── Float intrinsics ──────────────────────────────────────────────
-            "ceil" | "floor" | "sqrt" => match recv_val {
-                BasicValueEnum::FloatValue(v) => {
-                    let name = format!("llvm.{method}.f64");
-                    let f64_ty = self.context.f64_type();
-                    let fn_val = self.module.get_function(&name).unwrap_or_else(|| {
-                        let fn_ty = f64_ty.fn_type(&[f64_ty.into()], false);
-                        self.module.add_function(&name, fn_ty, None)
-                    });
-                    let call = self
-                        .builder
-                        .build_call(fn_val, &[v.into()], "fintrinsic")
-                        .unwrap();
-                    use inkwell::values::AnyValue;
-                    BasicValueEnum::try_from(call.as_any_value_enum()).ok()
-                }
-                _ => None,
-            },
-
-            // ── List.first() → Option[Int] ────────────────────────────────────
-            "first" => match recv_val {
-                BasicValueEnum::StructValue(sv) if sv.get_type().count_fields() == 2 => {
-                    // Pre-Phase C struct layout (kept for compatibility)
-                    let len = self
-                        .builder
-                        .build_extract_value(sv, 0, "lst_len")
-                        .ok()?
-                        .into_int_value();
-                    let data_ptr = self
-                        .builder
-                        .build_extract_value(sv, 1, "lst_data")
-                        .ok()?
-                        .into_pointer_value();
-                    let i64_ty = self.context.i64_type();
-                    let first = self
-                        .builder
-                        .build_load(i64_ty, data_ptr, "first_elem")
-                        .unwrap()
-                        .into_int_value();
-                    let parent_fn = self.builder.get_insert_block()?.get_parent()?;
-                    let some_bb = self.context.append_basic_block(parent_fn, "first_some");
-                    let none_bb = self.context.append_basic_block(parent_fn, "first_none");
-                    let merge_bb = self.context.append_basic_block(parent_fn, "first_merge");
-                    let zero = i64_ty.const_int(0, false);
-                    let nonempty = self
-                        .builder
-                        .build_int_compare(IntPredicate::SGT, len, zero, "nonempty")
-                        .unwrap();
-                    self.builder
-                        .build_conditional_branch(nonempty, some_bb, none_bb)
-                        .unwrap();
-                    // Some branch
-                    self.builder.position_at_end(some_bb);
-                    let some_val = self.emit_some_from_val(first.into())?;
-                    let some_end = self.builder.get_insert_block()?;
-                    self.builder.build_unconditional_branch(merge_bb).unwrap();
-                    // None branch
-                    self.builder.position_at_end(none_bb);
-                    let none_val = self.emit_none_val()?;
-                    let none_end = self.builder.get_insert_block()?;
-                    self.builder.build_unconditional_branch(merge_bb).unwrap();
-                    // Merge
-                    self.builder.position_at_end(merge_bb);
-                    if some_val.get_type() == none_val.get_type() {
-                        let phi = self
-                            .builder
-                            .build_phi(some_val.get_type(), "first_result")
-                            .unwrap();
-                        phi.add_incoming(&[(&some_val, some_end), (&none_val, none_end)]);
-                        Some(phi.as_basic_value())
-                    } else {
-                        None
-                    }
-                }
-                // Post-Phase C: List is MvlArray* (heap pointer). Use runtime
-                // mvl_array_len + mvl_array_get to access element 0.
-                BasicValueEnum::PointerValue(arr_ptr) => {
-                    use inkwell::values::AnyValue;
-                    let i64_ty = self.context.i64_type();
-                    // Get length via runtime call
-                    let len_fn = self.get_mvl_array_len();
-                    let len_call = self
-                        .builder
-                        .build_call(len_fn, &[arr_ptr.into()], "arr_len")
-                        .ok()?;
-                    let len = BasicValueEnum::try_from(len_call.as_any_value_enum())
-                        .ok()?
-                        .into_int_value();
-                    let parent_fn = self.builder.get_insert_block()?.get_parent()?;
-                    let some_bb = self.context.append_basic_block(parent_fn, "first_some");
-                    let none_bb = self.context.append_basic_block(parent_fn, "first_none");
-                    let merge_bb = self.context.append_basic_block(parent_fn, "first_merge");
-                    let zero = i64_ty.const_int(0, false);
-                    let nonempty = self
-                        .builder
-                        .build_int_compare(IntPredicate::SGT, len, zero, "nonempty")
-                        .unwrap();
-                    self.builder
-                        .build_conditional_branch(nonempty, some_bb, none_bb)
-                        .unwrap();
-                    // Some branch: get element pointer at index 0, load i64
-                    self.builder.position_at_end(some_bb);
-                    let get_fn = self.get_mvl_array_get();
-                    let elem_ptr_call = self
-                        .builder
-                        .build_call(get_fn, &[arr_ptr.into(), zero.into()], "elem_ptr")
-                        .ok()?;
-                    let elem_ptr = BasicValueEnum::try_from(elem_ptr_call.as_any_value_enum())
-                        .ok()?
-                        .into_pointer_value();
-                    let first = self
-                        .builder
-                        .build_load(i64_ty, elem_ptr, "first_elem")
-                        .unwrap()
-                        .into_int_value();
-                    let some_val = self.emit_some_from_val(first.into())?;
-                    let some_end = self.builder.get_insert_block()?;
-                    self.builder.build_unconditional_branch(merge_bb).unwrap();
-                    // None branch
-                    self.builder.position_at_end(none_bb);
-                    let none_val = self.emit_none_val()?;
-                    let none_end = self.builder.get_insert_block()?;
-                    self.builder.build_unconditional_branch(merge_bb).unwrap();
-                    // Merge
-                    self.builder.position_at_end(merge_bb);
-                    if some_val.get_type() == none_val.get_type() {
-                        let phi = self
-                            .builder
-                            .build_phi(some_val.get_type(), "first_result")
-                            .unwrap();
-                        phi.add_incoming(&[(&some_val, some_end), (&none_val, none_end)]);
-                        Some(phi.as_basic_value())
-                    } else {
-                        None
-                    }
-                }
-                _ => None,
-            },
-
-            // ── contains(v) → Bool ───────────────────────────────────────────
-            // String.contains dispatches to _mvl_str_contains (C runtime, ptr×ptr→i64).
-            // Set/List.contains falls through to the loop-based implementation below.
-            "contains" => {
-                // Detect String receiver by MVL type annotation.
+    fn emit_len_method(
+        &mut self,
+        receiver: &Expr,
+        recv_val: BasicValueEnum<'ctx>,
+    ) -> Option<BasicValueEnum<'ctx>> {
+        match recv_val {
+            // L5-14: all collection ptrs use runtime len functions.
+            BasicValueEnum::PointerValue(ptr) => {
                 let recv_mvl_ty = match receiver {
                     Expr::Ident(name, _) => self.local_mvl_types.get(name.as_str()).cloned(),
                     _ => None,
                 };
-                let is_string = recv_mvl_ty.as_ref().is_some_and(|t| {
+                // Strip IFC labels (Secret[List[T]] → List[T]) before dispatching.
+                let base_name = recv_mvl_ty.as_ref().and_then(|t| {
                     let inner = match t {
                         TypeExpr::Labeled { inner, .. } => inner.as_ref(),
                         other => other,
                     };
-                    matches!(inner, TypeExpr::Base { name, .. } if name == "String")
-                });
-                if is_string {
-                    let needle = self.emit_expr(args.first()?)?;
-                    match (recv_val, needle) {
-                        (BasicValueEnum::PointerValue(s), BasicValueEnum::PointerValue(n)) => {
-                            let f = self.get_mvl_str_contains();
-                            let call = self
-                                .builder
-                                .build_call(f, &[s.into(), n.into()], "str_contains")
-                                .unwrap();
-                            use inkwell::values::AnyValue;
-                            // C runtime returns i64; MVL Bool is i1. Truncate so the
-                            // downstream consumer (assert_eq, if-cond) sees an i1.
-                            let raw_i64 = BasicValueEnum::try_from(call.as_any_value_enum())
-                                .ok()?
-                                .into_int_value();
-                            let bool_i1 = self
-                                .builder
-                                .build_int_truncate(
-                                    raw_i64,
-                                    self.context.bool_type(),
-                                    "str_contains_i1",
-                                )
-                                .unwrap();
-                            return Some(bool_i1.into());
-                        }
-                        _ => return None,
-                    }
-                }
-                let needle = match self.emit_expr(args.first()?)? {
-                    BasicValueEnum::IntValue(v) => v,
-                    _ => return None,
-                };
-                match recv_val {
-                    BasicValueEnum::StructValue(sv) if sv.get_type().count_fields() == 2 => {
-                        // Pre-Phase C struct layout (kept for compatibility)
-                        let len = self
-                            .builder
-                            .build_extract_value(sv, 0, "set_len")
-                            .ok()?
-                            .into_int_value();
-                        let data_ptr = self
-                            .builder
-                            .build_extract_value(sv, 1, "set_data")
-                            .ok()?
-                            .into_pointer_value();
-                        let i64_ty = self.context.i64_type();
-                        let bool_ty = self.context.bool_type();
-                        let found_alloca = self.builder.build_alloca(bool_ty, "found").unwrap();
-                        let i_alloca = self.builder.build_alloca(i64_ty, "set_i").unwrap();
-                        self.builder
-                            .build_store(found_alloca, bool_ty.const_int(0, false))
-                            .unwrap();
-                        self.builder
-                            .build_store(i_alloca, i64_ty.const_int(0, false))
-                            .unwrap();
-                        let parent_fn = self.builder.get_insert_block()?.get_parent()?;
-                        let cond_bb = self.context.append_basic_block(parent_fn, "set_cond");
-                        let body_bb = self.context.append_basic_block(parent_fn, "set_body");
-                        let exit_bb = self.context.append_basic_block(parent_fn, "set_exit");
-                        self.builder.build_unconditional_branch(cond_bb).unwrap();
-                        // Cond: i < len && !found
-                        self.builder.position_at_end(cond_bb);
-                        let i = self
-                            .builder
-                            .build_load(i64_ty, i_alloca, "i")
-                            .unwrap()
-                            .into_int_value();
-                        let found = self
-                            .builder
-                            .build_load(bool_ty, found_alloca, "f")
-                            .unwrap()
-                            .into_int_value();
-                        let i_lt = self
-                            .builder
-                            .build_int_compare(IntPredicate::SLT, i, len, "i_lt")
-                            .unwrap();
-                        let not_found = self.builder.build_not(found, "nf").unwrap();
-                        let go = self.builder.build_and(i_lt, not_found, "go").unwrap();
-                        self.builder
-                            .build_conditional_branch(go, body_bb, exit_bb)
-                            .unwrap();
-                        // Body
-                        self.builder.position_at_end(body_bb);
-                        let elem_ptr = unsafe {
-                            self.builder
-                                .build_gep(i64_ty, data_ptr, &[i], "ep")
-                                .unwrap()
-                        };
-                        let elem = self
-                            .builder
-                            .build_load(i64_ty, elem_ptr, "elem")
-                            .unwrap()
-                            .into_int_value();
-                        let eq = self
-                            .builder
-                            .build_int_compare(IntPredicate::EQ, elem, needle, "eq")
-                            .unwrap();
-                        self.builder.build_store(found_alloca, eq).unwrap();
-                        let i_next = self
-                            .builder
-                            .build_int_add(i, i64_ty.const_int(1, false), "i_next")
-                            .unwrap();
-                        self.builder.build_store(i_alloca, i_next).unwrap();
-                        self.builder.build_unconditional_branch(cond_bb).unwrap();
-                        // Exit
-                        self.builder.position_at_end(exit_bb);
-                        Some(
-                            self.builder
-                                .build_load(bool_ty, found_alloca, "contains_res")
-                                .unwrap(),
-                        )
-                    }
-                    // Post-Phase C: Set is MvlArray* (heap pointer). Use runtime
-                    // mvl_array_len + mvl_array_get to iterate and compare elements.
-                    BasicValueEnum::PointerValue(arr_ptr) => {
-                        use inkwell::values::AnyValue;
-                        let i64_ty = self.context.i64_type();
-                        let bool_ty = self.context.bool_type();
-                        // Get length via runtime call
-                        let len_fn = self.get_mvl_array_len();
-                        let len_call = self
-                            .builder
-                            .build_call(len_fn, &[arr_ptr.into()], "arr_len")
-                            .ok()?;
-                        let len = BasicValueEnum::try_from(len_call.as_any_value_enum())
-                            .ok()?
-                            .into_int_value();
-                        let found_alloca = self.builder.build_alloca(bool_ty, "found").unwrap();
-                        let i_alloca = self.builder.build_alloca(i64_ty, "set_i").unwrap();
-                        self.builder
-                            .build_store(found_alloca, bool_ty.const_int(0, false))
-                            .unwrap();
-                        self.builder
-                            .build_store(i_alloca, i64_ty.const_int(0, false))
-                            .unwrap();
-                        let parent_fn = self.builder.get_insert_block()?.get_parent()?;
-                        let cond_bb = self.context.append_basic_block(parent_fn, "set_cond");
-                        let body_bb = self.context.append_basic_block(parent_fn, "set_body");
-                        let exit_bb = self.context.append_basic_block(parent_fn, "set_exit");
-                        self.builder.build_unconditional_branch(cond_bb).unwrap();
-                        // Cond: i < len && !found
-                        self.builder.position_at_end(cond_bb);
-                        let i = self
-                            .builder
-                            .build_load(i64_ty, i_alloca, "i")
-                            .unwrap()
-                            .into_int_value();
-                        let found = self
-                            .builder
-                            .build_load(bool_ty, found_alloca, "f")
-                            .unwrap()
-                            .into_int_value();
-                        let i_lt = self
-                            .builder
-                            .build_int_compare(IntPredicate::SLT, i, len, "i_lt")
-                            .unwrap();
-                        let not_found = self.builder.build_not(found, "nf").unwrap();
-                        let go = self.builder.build_and(i_lt, not_found, "go").unwrap();
-                        self.builder
-                            .build_conditional_branch(go, body_bb, exit_bb)
-                            .unwrap();
-                        // Body: fetch element pointer via runtime, load i64, compare
-                        self.builder.position_at_end(body_bb);
-                        let get_fn = self.get_mvl_array_get();
-                        let elem_ptr_call = self
-                            .builder
-                            .build_call(get_fn, &[arr_ptr.into(), i.into()], "ep")
-                            .ok()?;
-                        let elem_ptr = BasicValueEnum::try_from(elem_ptr_call.as_any_value_enum())
-                            .ok()?
-                            .into_pointer_value();
-                        let elem = self
-                            .builder
-                            .build_load(i64_ty, elem_ptr, "elem")
-                            .unwrap()
-                            .into_int_value();
-                        let eq = self
-                            .builder
-                            .build_int_compare(IntPredicate::EQ, elem, needle, "eq")
-                            .unwrap();
-                        self.builder.build_store(found_alloca, eq).unwrap();
-                        let i_next = self
-                            .builder
-                            .build_int_add(i, i64_ty.const_int(1, false), "i_next")
-                            .unwrap();
-                        self.builder.build_store(i_alloca, i_next).unwrap();
-                        self.builder.build_unconditional_branch(cond_bb).unwrap();
-                        // Exit
-                        self.builder.position_at_end(exit_bb);
-                        Some(
-                            self.builder
-                                .build_load(bool_ty, found_alloca, "contains_res")
-                                .unwrap(),
-                        )
-                    }
-                    _ => None,
-                }
-            }
-
-            // ── to_string ────────────────────────────────────────────────────
-            "to_string" => match recv_val {
-                BasicValueEnum::IntValue(v) => {
-                    // Bool is i1; Int/Byte/UByte/UInt are wider — dispatch accordingly.
-                    if v.get_type().get_bit_width() == 1 {
-                        Some(self.emit_bool_to_string(v))
-                    } else {
-                        Some(self.emit_int_to_string(v))
-                    }
-                }
-                BasicValueEnum::FloatValue(v) => Some(self.emit_float_to_string(v)),
-                BasicValueEnum::PointerValue(p) => Some(p.into()),
-                _ => None,
-            },
-
-            // ── to_float (Int → f64, needed by json decode number parser) ────
-            "to_float" => match recv_val {
-                BasicValueEnum::IntValue(v) => {
-                    let f64_ty = self.context.f64_type();
-                    Some(
-                        self.builder
-                            .build_signed_int_to_float(v, f64_ty, "itof")
-                            .unwrap()
-                            .into(),
-                    )
-                }
-                BasicValueEnum::FloatValue(v) => Some(v.into()),
-                _ => None,
-            },
-
-            // ── HOF methods (#421) ─────────────────────────────────────────────
-            // Dispatch `receiver.method(args…)` → `List_method(receiver, args…)` by
-            // calling the monomorphized MVL stdlib extension method directly.
-            // Note: take/skip handled above in Group F via _mvl_list_slice.
-            "filter" | "map" | "any" | "all" | "find" | "take_while" | "skip_while"
-                if args.len() == 1 =>
-            {
-                let mut all_args = vec![receiver.clone()];
-                all_args.extend_from_slice(args);
-                let mangled = format!("List_{method}");
-                self.emit_fn_call(&mangled, &all_args)
-            }
-            "fold" if args.len() == 2 => {
-                let mut all_args = vec![receiver.clone()];
-                all_args.extend_from_slice(args);
-                self.emit_fn_call("List_fold", &all_args)
-            }
-
-            // #587/#907: set algebra — delegate to mvl_runtime_c.
-            "intersection" if args.len() == 1 => {
-                let a = self.emit_expr(receiver)?;
-                let b = self.emit_expr(&args[0])?;
-                self.emit_stdlib_call_ptr_two_ptr_args("_mvl_set_intersection", a, b)
-            }
-            "difference" if args.len() == 1 => {
-                let a = self.emit_expr(receiver)?;
-                let b = self.emit_expr(&args[0])?;
-                self.emit_stdlib_call_ptr_two_ptr_args("_mvl_set_difference", a, b)
-            }
-            "union" if args.len() == 1 => {
-                let a = self.emit_expr(receiver)?;
-                let b = self.emit_expr(&args[0])?;
-                self.emit_stdlib_call_ptr_two_ptr_args("_mvl_set_union", a, b)
-            }
-
-            // Phase 8 / #696: actor behavior calls, and #868: user-defined type methods.
-            _ => {
-                if let Some(actor_name) = self.resolve_actor_type_name(receiver) {
-                    self.emit_actor_method_call(recv_val, &actor_name, method, args)
-                } else {
-                    // #868: type-attached method — resolve receiver's MVL type and call
-                    // the mangled LLVM function `TypeName_method(self, args…)`.
-                    let recv_type_name = match receiver {
-                        Expr::Ident(name, _) => {
-                            self.local_mvl_types.get(name.as_str()).and_then(|t| {
-                                if let TypeExpr::Base { name: tn, .. } = t {
-                                    Some(tn.clone())
-                                } else {
-                                    None
-                                }
-                            })
-                        }
+                    match inner {
+                        TypeExpr::Base { name, .. } => Some(name.as_str()),
                         _ => None,
-                    };
-                    if let Some(type_name) = recv_type_name {
-                        let mangled = format!("{}_{}", type_name, method);
-                        // Also try C-ABI name for builtin extension methods (#928).
-                        let cabi_name = match type_name.as_str() {
-                            "String" => Some(format!("_mvl_str_{}", method)),
-                            "List" => Some(format!("_mvl_list_{}", method)),
-                            "Map" => Some(format!("_mvl_map_{}", method)),
-                            "Set" => Some(format!("_mvl_set_{}", method)),
-                            _ => None,
-                        };
-                        let fn_val = self.module.get_function(&mangled).or_else(|| {
-                            cabi_name
-                                .as_deref()
-                                .and_then(|n| self.module.get_function(n))
-                        });
-                        if let Some(fn_val) = fn_val {
-                            let mut call_args: Vec<inkwell::values::BasicMetadataValueEnum> =
-                                vec![recv_val.into()];
-                            for a in args {
-                                if let Some(v) = self.emit_expr(a) {
-                                    call_args.push(v.into());
-                                } else {
-                                    return None;
-                                }
-                            }
-                            let call = self
-                                .builder
-                                .build_call(fn_val, &call_args, "method_call")
-                                .unwrap();
-                            use inkwell::values::AnyValue;
-                            BasicValueEnum::try_from(call.as_any_value_enum()).ok()
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
+                    }
+                });
+                let len_fn = match base_name {
+                    Some("List") | Some("Array") | Some("Set") => self.get_mvl_array_len(),
+                    Some("Map") => self.get_mvl_map_len(),
+                    _ => self.get_mvl_string_len(), // String or unknown ptr
+                };
+                let call = self
+                    .builder
+                    .build_call(len_fn, &[ptr.into()], "coll_len")
+                    .unwrap();
+                self.call_value(call)
+            }
+            BasicValueEnum::StructValue(sv) => {
+                // Legacy Range struct: { i64 start, i64 end } → end - start
+                let n = sv.get_type().count_fields();
+                if n == 2 {
+                    let f1_ty = sv.get_type().get_field_type_at_index(1).unwrap();
+                    if matches!(f1_ty, BasicTypeEnum::IntType(_)) {
+                        let s = self
+                            .builder
+                            .build_extract_value(sv, 0, "r_s")
+                            .ok()?
+                            .into_int_value();
+                        let e = self
+                            .builder
+                            .build_extract_value(sv, 1, "r_e")
+                            .ok()?
+                            .into_int_value();
+                        return Some(
+                            self.builder
+                                .build_int_sub(e, s, "range_len")
+                                .unwrap()
+                                .into(),
+                        );
                     }
                 }
+                None
+            }
+            _ => None,
+        }
+    }
+
+    // ── UFCS String / List methods (#906) ────────────────────────────────────
+    //
+    // Group A: ptr → ptr  (0 extra args)
+    fn emit_str_transform_method(
+        &mut self,
+        method: &str,
+        recv_val: BasicValueEnum<'ctx>,
+    ) -> Option<BasicValueEnum<'ctx>> {
+        match recv_val {
+            BasicValueEnum::PointerValue(ptr) => {
+                let f = match method {
+                    "trim" => self.get_mvl_str_trim(),
+                    "to_lower" => self.get_mvl_str_to_lower(),
+                    "to_upper" => self.get_mvl_str_to_upper(),
+                    "chars" => self.get_mvl_string_chars(),
+                    _ => unreachable!(),
+                };
+                let call = self
+                    .builder
+                    .build_call(f, &[ptr.into()], "str_method")
+                    .unwrap();
+                self.call_value(call)
+            }
+            _ => None,
+        }
+    }
+
+    // Group B: ptr × ptr → ptr  (1 string arg)
+    fn emit_str_binary_method(
+        &mut self,
+        method: &str,
+        recv_val: BasicValueEnum<'ctx>,
+        args: &[Expr],
+    ) -> Option<BasicValueEnum<'ctx>> {
+        let arg = self.emit_expr(args.first()?)?;
+        match (recv_val, arg) {
+            (BasicValueEnum::PointerValue(a), BasicValueEnum::PointerValue(b)) => {
+                let f = match method {
+                    "concat" => self.get_mvl_string_concat(),
+                    "split" => self.get_mvl_str_split(),
+                    _ => unreachable!(),
+                };
+                let call = self
+                    .builder
+                    .build_call(f, &[a.into(), b.into()], "str_method2")
+                    .unwrap();
+                self.call_value(call)
+            }
+            _ => None,
+        }
+    }
+
+    // Group C: ptr × ptr → i64  (Bool result; truncate to i1)
+    fn emit_str_predicate_method(
+        &mut self,
+        method: &str,
+        recv_val: BasicValueEnum<'ctx>,
+        args: &[Expr],
+    ) -> Option<BasicValueEnum<'ctx>> {
+        let arg = self.emit_expr(args.first()?)?;
+        match (recv_val, arg) {
+            (BasicValueEnum::PointerValue(a), BasicValueEnum::PointerValue(b)) => {
+                let f = match method {
+                    "starts_with" => self.get_mvl_str_starts_with(),
+                    "ends_with" => self.get_mvl_str_ends_with(),
+                    _ => unreachable!(),
+                };
+                let call = self
+                    .builder
+                    .build_call(f, &[a.into(), b.into()], "str_pred")
+                    .unwrap();
+                let raw_i64 = self.call_value(call)?.into_int_value();
+                let bool_i1 = self
+                    .builder
+                    .build_int_truncate(raw_i64, self.context.bool_type(), "str_pred_i1")
+                    .unwrap();
+                Some(bool_i1.into())
+            }
+            _ => None,
+        }
+    }
+
+    // Group D: ptr × ptr × ptr → ptr  (String.replace)
+    fn emit_str_replace_method(
+        &mut self,
+        recv_val: BasicValueEnum<'ctx>,
+        args: &[Expr],
+    ) -> Option<BasicValueEnum<'ctx>> {
+        let from = self.emit_expr(&args[0])?;
+        let to = self.emit_expr(&args[1])?;
+        match (recv_val, from, to) {
+            (
+                BasicValueEnum::PointerValue(s),
+                BasicValueEnum::PointerValue(f),
+                BasicValueEnum::PointerValue(t),
+            ) => {
+                let fn_val = self.get_mvl_str_replace();
+                let call = self
+                    .builder
+                    .build_call(fn_val, &[s.into(), f.into(), t.into()], "str_replace")
+                    .unwrap();
+                self.call_value(call)
+            }
+            _ => None,
+        }
+    }
+
+    // Group E: ptr × i64 × i64 → ptr  (String.substring / List.slice)
+    fn emit_slice_method(
+        &mut self,
+        method: &str,
+        recv_val: BasicValueEnum<'ctx>,
+        args: &[Expr],
+    ) -> Option<BasicValueEnum<'ctx>> {
+        let start = self.emit_expr(&args[0])?;
+        let end_v = self.emit_expr(&args[1])?;
+        match (recv_val, start, end_v) {
+            (
+                BasicValueEnum::PointerValue(ptr),
+                BasicValueEnum::IntValue(s),
+                BasicValueEnum::IntValue(e),
+            ) => {
+                let f = match method {
+                    "substring" => self.get_mvl_str_substring(),
+                    "slice" => self.get_mvl_list_slice(),
+                    _ => unreachable!(),
+                };
+                let call = self
+                    .builder
+                    .build_call(f, &[ptr.into(), s.into(), e.into()], "ptr_slice")
+                    .unwrap();
+                self.call_value(call)
+            }
+            _ => None,
+        }
+    }
+
+    // Group F: List.take(n) and List.skip(n) via _mvl_list_slice
+    fn emit_take_skip_method(
+        &mut self,
+        method: &str,
+        recv_val: BasicValueEnum<'ctx>,
+        args: &[Expr],
+    ) -> Option<BasicValueEnum<'ctx>> {
+        let n = self.emit_expr(&args[0])?;
+        match (recv_val, n) {
+            (BasicValueEnum::PointerValue(ptr), BasicValueEnum::IntValue(n_val)) => {
+                let slice_fn = self.get_mvl_list_slice();
+                let i64_ty = self.context.i64_type();
+                let (start, end_v) = if method == "take" {
+                    (i64_ty.const_int(0, false), n_val)
+                } else {
+                    // skip: start=n, end=len(xs)
+                    let len_fn = self.get_mvl_array_len();
+                    let len_call = self
+                        .builder
+                        .build_call(len_fn, &[ptr.into()], "arr_len")
+                        .unwrap();
+                    let len_val = self.call_value(len_call)?.into_int_value();
+                    (n_val, len_val)
+                };
+                let call = self
+                    .builder
+                    .build_call(
+                        slice_fn,
+                        &[ptr.into(), start.into(), end_v.into()],
+                        "list_slice_n",
+                    )
+                    .unwrap();
+                self.call_value(call)
+            }
+            _ => None,
+        }
+    }
+
+    // ── parse_int / parse_float (String → Result) ────────────────────────────
+    fn emit_parse_method(
+        &mut self,
+        method: &str,
+        recv_val: BasicValueEnum<'ctx>,
+    ) -> Option<BasicValueEnum<'ctx>> {
+        match recv_val {
+            BasicValueEnum::PointerValue(p) => {
+                if method == "parse_int" {
+                    self.emit_parse_int(p)
+                } else {
+                    self.emit_parse_float(p)
+                }
+            }
+            _ => None,
+        }
+    }
+
+    // ── clamp (Int) ──────────────────────────────────────────────────────────
+    fn emit_clamp_method(
+        &mut self,
+        recv_val: BasicValueEnum<'ctx>,
+        args: &[Expr],
+    ) -> Option<BasicValueEnum<'ctx>> {
+        let lo = self.emit_expr(&args[0])?.into_int_value();
+        let hi = self.emit_expr(&args[1])?.into_int_value();
+        match recv_val {
+            BasicValueEnum::IntValue(n) => {
+                use inkwell::IntPredicate;
+                let gt_hi = self
+                    .builder
+                    .build_int_compare(IntPredicate::SGT, n, hi, "gt_hi")
+                    .unwrap();
+                let after_hi = self
+                    .builder
+                    .build_select(gt_hi, hi, n, "min_hi")
+                    .unwrap()
+                    .into_int_value();
+                let lt_lo = self
+                    .builder
+                    .build_int_compare(IntPredicate::SLT, after_hi, lo, "lt_lo")
+                    .unwrap();
+                let result = self
+                    .builder
+                    .build_select(lt_lo, lo, after_hi, "clamped")
+                    .unwrap();
+                Some(result)
+            }
+            _ => None,
+        }
+    }
+
+    // ── clone ────────────────────────────────────────────────────────────────
+    fn emit_clone_method(
+        &mut self,
+        receiver: &Expr,
+        recv_val: BasicValueEnum<'ctx>,
+    ) -> Option<BasicValueEnum<'ctx>> {
+        match recv_val {
+            BasicValueEnum::PointerValue(ptr) => {
+                let recv_mvl_ty = match receiver {
+                    Expr::Ident(name, _) => self.local_mvl_types.get(name.as_str()).cloned(),
+                    _ => None,
+                };
+                let base_name = recv_mvl_ty.as_ref().and_then(|t| {
+                    let inner = match t {
+                        TypeExpr::Labeled { inner, .. } => inner.as_ref(),
+                        other => other,
+                    };
+                    match inner {
+                        TypeExpr::Base { name, .. } => Some(name.as_str()),
+                        _ => None,
+                    }
+                });
+                let clone_fn = match base_name {
+                    Some("List") | Some("Array") | Some("Set") => self.get_mvl_array_deep_clone(),
+                    Some("Map") => self.get_mvl_map_deep_clone(),
+                    _ => self.get_mvl_string_deep_clone(),
+                };
+                self.call_value(
+                    self.builder
+                        .build_call(clone_fn, &[ptr.into()], "clone_val")
+                        .unwrap(),
+                )
+            }
+            other => Some(other),
+        }
+    }
+
+    // ── push ─────────────────────────────────────────────────────────────────
+    fn emit_push_method(
+        &mut self,
+        recv_val: BasicValueEnum<'ctx>,
+        args: &[Expr],
+    ) -> Option<BasicValueEnum<'ctx>> {
+        let elem = self.emit_expr(args.first()?)?;
+        match recv_val {
+            BasicValueEnum::PointerValue(arr) => {
+                let slot = self
+                    .builder
+                    .build_alloca(elem.get_type(), "push_slot")
+                    .unwrap();
+                self.builder.build_store(slot, elem).unwrap();
+                let push_fn = self.get_mvl_array_push();
+                self.builder
+                    .build_call(push_fn, &[arr.into(), slot.into()], "arr_push")
+                    .unwrap();
+                None
+            }
+            _ => None,
+        }
+    }
+
+    // ── get (Array / List / Map) ──────────────────────────────────────────────
+    fn emit_get_method(
+        &mut self,
+        receiver: &Expr,
+        recv_val: BasicValueEnum<'ctx>,
+        args: &[Expr],
+    ) -> Option<BasicValueEnum<'ctx>> {
+        let key_val = self.emit_expr(args.first()?)?;
+        match (recv_val, key_val) {
+            // List/Array.get(i: i64) → mvl_array_get returns raw ptr (Option<T>)
+            (BasicValueEnum::PointerValue(arr), BasicValueEnum::IntValue(i)) => {
+                let get_fn = self.get_mvl_array_get();
+                let call = self
+                    .builder
+                    .build_call(get_fn, &[arr.into(), i.into()], "arr_get")
+                    .unwrap();
+                self.call_value(call)
+            }
+            // Map.get(key: String) → mvl_map_get + build Option<V>
+            (BasicValueEnum::PointerValue(map), BasicValueEnum::PointerValue(key_ptr)) => {
+                self.emit_map_get(receiver, map, key_ptr, args)
+            }
+            _ => None,
+        }
+    }
+
+    // ── Map.insert(k, v) ─────────────────────────────────────────────────────
+    fn emit_map_insert_method(
+        &mut self,
+        recv_val: BasicValueEnum<'ctx>,
+        args: &[Expr],
+    ) -> Option<BasicValueEnum<'ctx>> {
+        let k_val = self.emit_expr(&args[0])?;
+        let v_val = self.emit_expr(&args[1])?;
+        match recv_val {
+            BasicValueEnum::PointerValue(map) => {
+                let i64_ty = self.context.i64_type();
+                let insert_fn = self.get_mvl_map_insert();
+                let (key_ptr, key_len) = match k_val {
+                    BasicValueEnum::PointerValue(p) => {
+                        let sp = self.get_mvl_string_ptr();
+                        let sl = self.get_mvl_string_len();
+                        let cp = self
+                            .call_value(
+                                self.builder.build_call(sp, &[p.into()], "ins_kp").unwrap(),
+                            )?
+                            .into_pointer_value();
+                        let cl = self.call_value(
+                            self.builder.build_call(sl, &[p.into()], "ins_kl").unwrap(),
+                        )?;
+                        (cp, cl)
+                    }
+                    other => {
+                        let slot = self
+                            .builder
+                            .build_alloca(other.get_type(), "ins_k_slot")
+                            .unwrap();
+                        self.builder.build_store(slot, other).unwrap();
+                        (slot, i64_ty.const_int(8, false).into())
+                    }
+                };
+                let val_slot = self
+                    .builder
+                    .build_alloca(v_val.get_type(), "ins_v_slot")
+                    .unwrap();
+                self.builder.build_store(val_slot, v_val).unwrap();
+                let val_size =
+                    i64_ty.const_int(self.llvm_type_byte_size(v_val.get_type()) as u64, false);
+                self.builder
+                    .build_call(
+                        insert_fn,
+                        &[
+                            map.into(),
+                            key_ptr.into(),
+                            key_len.into(),
+                            val_slot.into(),
+                            val_size.into(),
+                        ],
+                        "map_insert",
+                    )
+                    .unwrap();
+                None // Unit return
+            }
+            _ => None,
+        }
+    }
+
+    // ── Set.insert(x) ────────────────────────────────────────────────────────
+    fn emit_set_insert_method(
+        &mut self,
+        recv_val: BasicValueEnum<'ctx>,
+        args: &[Expr],
+    ) -> Option<BasicValueEnum<'ctx>> {
+        let elem = self.emit_expr(args.first()?)?;
+        match recv_val {
+            BasicValueEnum::PointerValue(arr) => {
+                let slot = self
+                    .builder
+                    .build_alloca(elem.get_type(), "set_ins_slot")
+                    .unwrap();
+                self.builder.build_store(slot, elem).unwrap();
+                let push_fn = self.get_mvl_array_push();
+                self.builder
+                    .build_call(push_fn, &[arr.into(), slot.into()], "set_ins")
+                    .unwrap();
+                None // Unit return
+            }
+            _ => None,
+        }
+    }
+
+    // ── Map.contains_key(key) ────────────────────────────────────────────────
+    fn emit_contains_key_method(
+        &mut self,
+        recv_val: BasicValueEnum<'ctx>,
+        args: &[Expr],
+    ) -> Option<BasicValueEnum<'ctx>> {
+        let key_val = self.emit_expr(args.first()?)?;
+        match (recv_val, key_val) {
+            (BasicValueEnum::PointerValue(map), BasicValueEnum::PointerValue(key_str)) => {
+                let sp = self.get_mvl_string_ptr();
+                let sl = self.get_mvl_string_len();
+                let key_data = self
+                    .call_value(
+                        self.builder
+                            .build_call(sp, &[key_str.into()], "ck_kp")
+                            .unwrap(),
+                    )?
+                    .into_pointer_value();
+                let key_len_val = self
+                    .call_value(
+                        self.builder
+                            .build_call(sl, &[key_str.into()], "ck_kl")
+                            .unwrap(),
+                    )?
+                    .into_int_value();
+                let get_fn = self.get_mvl_map_get();
+                let raw_ptr_call = self
+                    .builder
+                    .build_call(
+                        get_fn,
+                        &[map.into(), key_data.into(), key_len_val.into()],
+                        "ck_raw",
+                    )
+                    .unwrap();
+                let raw_ptr = self.call_value(raw_ptr_call)?.into_pointer_value();
+                let null = self
+                    .context
+                    .ptr_type(inkwell::AddressSpace::default())
+                    .const_null();
+                Some(
+                    self.builder
+                        .build_int_compare(IntPredicate::NE, raw_ptr, null, "contains_key_res")
+                        .unwrap()
+                        .into(),
+                )
+            }
+            _ => None,
+        }
+    }
+
+    // ── Map.keys() ───────────────────────────────────────────────────────────
+    fn emit_keys_method(&mut self, recv_val: BasicValueEnum<'ctx>) -> Option<BasicValueEnum<'ctx>> {
+        match recv_val {
+            BasicValueEnum::PointerValue(map) => {
+                let keys_fn = self.get_mvl_map_keys();
+                self.call_value(
+                    self.builder
+                        .build_call(keys_fn, &[map.into()], "map_keys")
+                        .unwrap(),
+                )
+            }
+            _ => None,
+        }
+    }
+
+    // ── Map.remove(key) ──────────────────────────────────────────────────────
+    fn emit_map_remove_method(
+        &mut self,
+        recv_val: BasicValueEnum<'ctx>,
+        args: &[Expr],
+    ) -> Option<BasicValueEnum<'ctx>> {
+        let key_val = self.emit_expr(args.first()?)?;
+        match (recv_val, key_val) {
+            (BasicValueEnum::PointerValue(map), BasicValueEnum::PointerValue(key_str)) => {
+                let sp = self.get_mvl_string_ptr();
+                let sl = self.get_mvl_string_len();
+                let key_data = self
+                    .call_value(
+                        self.builder
+                            .build_call(sp, &[key_str.into()], "rm_kp")
+                            .unwrap(),
+                    )?
+                    .into_pointer_value();
+                let key_len_val = self
+                    .call_value(
+                        self.builder
+                            .build_call(sl, &[key_str.into()], "rm_kl")
+                            .unwrap(),
+                    )?
+                    .into_int_value();
+                let remove_fn = self.get_mvl_map_remove();
+                self.builder
+                    .build_call(
+                        remove_fn,
+                        &[map.into(), key_data.into(), key_len_val.into()],
+                        "map_remove",
+                    )
+                    .unwrap();
+                // remove() returns Unit; yield a dummy i64 0
+                Some(self.context.i64_type().const_int(0, false).into())
+            }
+            _ => None,
+        }
+    }
+
+    // ── is_empty() ───────────────────────────────────────────────────────────
+    fn emit_is_empty_method(
+        &mut self,
+        receiver: &Expr,
+        recv_val: BasicValueEnum<'ctx>,
+    ) -> Option<BasicValueEnum<'ctx>> {
+        let len_val = self.emit_len_method(receiver, recv_val)?;
+        match len_val {
+            BasicValueEnum::IntValue(n) => {
+                let zero = self.context.i64_type().const_int(0, false);
+                Some(
+                    self.builder
+                        .build_int_compare(IntPredicate::EQ, n, zero, "is_empty_res")
+                        .unwrap()
+                        .into(),
+                )
+            }
+            _ => None,
+        }
+    }
+
+    // ── Set.to_list() ────────────────────────────────────────────────────────
+    fn emit_to_list_method(
+        &mut self,
+        recv_val: BasicValueEnum<'ctx>,
+    ) -> Option<BasicValueEnum<'ctx>> {
+        match recv_val {
+            BasicValueEnum::PointerValue(arr) => {
+                let clone_fn = self.get_mvl_array_clone();
+                self.call_value(
+                    self.builder
+                        .build_call(clone_fn, &[arr.into()], "set_to_list")
+                        .unwrap(),
+                )
+            }
+            _ => None,
+        }
+    }
+
+    // ── Int math ─────────────────────────────────────────────────────────────
+    fn emit_abs_method(&mut self, recv_val: BasicValueEnum<'ctx>) -> Option<BasicValueEnum<'ctx>> {
+        match recv_val {
+            BasicValueEnum::IntValue(v) => {
+                let zero = self.context.i64_type().const_int(0, false);
+                let is_neg = self
+                    .builder
+                    .build_int_compare(IntPredicate::SLT, v, zero, "is_neg")
+                    .unwrap();
+                let neg = self.builder.build_int_neg(v, "neg_v").unwrap();
+                Some(self.builder.build_select(is_neg, neg, v, "abs_v").unwrap())
+            }
+            _ => None,
+        }
+    }
+
+    fn emit_min_method(
+        &mut self,
+        recv_val: BasicValueEnum<'ctx>,
+        args: &[Expr],
+    ) -> Option<BasicValueEnum<'ctx>> {
+        let arg = match self.emit_expr(args.first()?)? {
+            BasicValueEnum::IntValue(v) => v,
+            _ => return None,
+        };
+        match recv_val {
+            BasicValueEnum::IntValue(a) => {
+                let lt = self
+                    .builder
+                    .build_int_compare(IntPredicate::SLT, a, arg, "lt")
+                    .unwrap();
+                Some(self.builder.build_select(lt, a, arg, "min_v").unwrap())
+            }
+            _ => None,
+        }
+    }
+
+    fn emit_max_method(
+        &mut self,
+        recv_val: BasicValueEnum<'ctx>,
+        args: &[Expr],
+    ) -> Option<BasicValueEnum<'ctx>> {
+        let arg = match self.emit_expr(args.first()?)? {
+            BasicValueEnum::IntValue(v) => v,
+            _ => return None,
+        };
+        match recv_val {
+            BasicValueEnum::IntValue(a) => {
+                let gt = self
+                    .builder
+                    .build_int_compare(IntPredicate::SGT, a, arg, "gt")
+                    .unwrap();
+                Some(self.builder.build_select(gt, a, arg, "max_v").unwrap())
+            }
+            _ => None,
+        }
+    }
+
+    // ── Float intrinsics ─────────────────────────────────────────────────────
+    fn emit_float_intrinsic_method(
+        &mut self,
+        method: &str,
+        recv_val: BasicValueEnum<'ctx>,
+    ) -> Option<BasicValueEnum<'ctx>> {
+        match recv_val {
+            BasicValueEnum::FloatValue(v) => {
+                let name = format!("llvm.{method}.f64");
+                let f64_ty = self.context.f64_type();
+                let fn_val = self.module.get_function(&name).unwrap_or_else(|| {
+                    let fn_ty = f64_ty.fn_type(&[f64_ty.into()], false);
+                    self.module.add_function(&name, fn_ty, None)
+                });
+                let call = self
+                    .builder
+                    .build_call(fn_val, &[v.into()], "fintrinsic")
+                    .unwrap();
+                self.call_value(call)
+            }
+            _ => None,
+        }
+    }
+
+    // ── List.first() → Option[Int] ────────────────────────────────────────────
+    fn emit_first_method(
+        &mut self,
+        recv_val: BasicValueEnum<'ctx>,
+    ) -> Option<BasicValueEnum<'ctx>> {
+        match recv_val {
+            BasicValueEnum::StructValue(sv) if sv.get_type().count_fields() == 2 => {
+                // Pre-Phase C struct layout (kept for compatibility)
+                let len = self
+                    .builder
+                    .build_extract_value(sv, 0, "lst_len")
+                    .ok()?
+                    .into_int_value();
+                let data_ptr = self
+                    .builder
+                    .build_extract_value(sv, 1, "lst_data")
+                    .ok()?
+                    .into_pointer_value();
+                let i64_ty = self.context.i64_type();
+                let first = self
+                    .builder
+                    .build_load(i64_ty, data_ptr, "first_elem")
+                    .unwrap()
+                    .into_int_value();
+                let parent_fn = self.builder.get_insert_block()?.get_parent()?;
+                let some_bb = self.context.append_basic_block(parent_fn, "first_some");
+                let none_bb = self.context.append_basic_block(parent_fn, "first_none");
+                let merge_bb = self.context.append_basic_block(parent_fn, "first_merge");
+                let zero = i64_ty.const_int(0, false);
+                let nonempty = self
+                    .builder
+                    .build_int_compare(IntPredicate::SGT, len, zero, "nonempty")
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(nonempty, some_bb, none_bb)
+                    .unwrap();
+                // Some branch
+                self.builder.position_at_end(some_bb);
+                let some_val = self.emit_some_from_val(first.into())?;
+                let some_end = self.builder.get_insert_block()?;
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+                // None branch
+                self.builder.position_at_end(none_bb);
+                let none_val = self.emit_none_val()?;
+                let none_end = self.builder.get_insert_block()?;
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+                // Merge
+                self.builder.position_at_end(merge_bb);
+                if some_val.get_type() == none_val.get_type() {
+                    let phi = self
+                        .builder
+                        .build_phi(some_val.get_type(), "first_result")
+                        .unwrap();
+                    phi.add_incoming(&[(&some_val, some_end), (&none_val, none_end)]);
+                    Some(phi.as_basic_value())
+                } else {
+                    None
+                }
+            }
+            // Post-Phase C: List is MvlArray* (heap pointer).
+            BasicValueEnum::PointerValue(arr_ptr) => {
+                let i64_ty = self.context.i64_type();
+                let len_fn = self.get_mvl_array_len();
+                let len_call = self
+                    .builder
+                    .build_call(len_fn, &[arr_ptr.into()], "arr_len")
+                    .ok()?;
+                let len = self.call_value(len_call)?.into_int_value();
+                let parent_fn = self.builder.get_insert_block()?.get_parent()?;
+                let some_bb = self.context.append_basic_block(parent_fn, "first_some");
+                let none_bb = self.context.append_basic_block(parent_fn, "first_none");
+                let merge_bb = self.context.append_basic_block(parent_fn, "first_merge");
+                let zero = i64_ty.const_int(0, false);
+                let nonempty = self
+                    .builder
+                    .build_int_compare(IntPredicate::SGT, len, zero, "nonempty")
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(nonempty, some_bb, none_bb)
+                    .unwrap();
+                // Some branch: get element pointer at index 0, load i64
+                self.builder.position_at_end(some_bb);
+                let get_fn = self.get_mvl_array_get();
+                let elem_ptr_call = self
+                    .builder
+                    .build_call(get_fn, &[arr_ptr.into(), zero.into()], "elem_ptr")
+                    .ok()?;
+                let elem_ptr = self.call_value(elem_ptr_call)?.into_pointer_value();
+                let first = self
+                    .builder
+                    .build_load(i64_ty, elem_ptr, "first_elem")
+                    .unwrap()
+                    .into_int_value();
+                let some_val = self.emit_some_from_val(first.into())?;
+                let some_end = self.builder.get_insert_block()?;
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+                // None branch
+                self.builder.position_at_end(none_bb);
+                let none_val = self.emit_none_val()?;
+                let none_end = self.builder.get_insert_block()?;
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+                // Merge
+                self.builder.position_at_end(merge_bb);
+                if some_val.get_type() == none_val.get_type() {
+                    let phi = self
+                        .builder
+                        .build_phi(some_val.get_type(), "first_result")
+                        .unwrap();
+                    phi.add_incoming(&[(&some_val, some_end), (&none_val, none_end)]);
+                    Some(phi.as_basic_value())
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    // ── contains(v) → Bool ────────────────────────────────────────────────────
+    fn emit_contains_method(
+        &mut self,
+        receiver: &Expr,
+        recv_val: BasicValueEnum<'ctx>,
+        args: &[Expr],
+    ) -> Option<BasicValueEnum<'ctx>> {
+        // Detect String receiver by MVL type annotation.
+        let recv_mvl_ty = match receiver {
+            Expr::Ident(name, _) => self.local_mvl_types.get(name.as_str()).cloned(),
+            _ => None,
+        };
+        let is_string = recv_mvl_ty.as_ref().is_some_and(|t| {
+            let inner = match t {
+                TypeExpr::Labeled { inner, .. } => inner.as_ref(),
+                other => other,
+            };
+            matches!(inner, TypeExpr::Base { name, .. } if name == "String")
+        });
+        if is_string {
+            let needle = self.emit_expr(args.first()?)?;
+            match (recv_val, needle) {
+                (BasicValueEnum::PointerValue(s), BasicValueEnum::PointerValue(n)) => {
+                    let f = self.get_mvl_str_contains();
+                    let call = self
+                        .builder
+                        .build_call(f, &[s.into(), n.into()], "str_contains")
+                        .unwrap();
+                    // C runtime returns i64; MVL Bool is i1. Truncate.
+                    let raw_i64 = self.call_value(call)?.into_int_value();
+                    let bool_i1 = self
+                        .builder
+                        .build_int_truncate(raw_i64, self.context.bool_type(), "str_contains_i1")
+                        .unwrap();
+                    return Some(bool_i1.into());
+                }
+                _ => return None,
             }
         }
+        let needle = match self.emit_expr(args.first()?)? {
+            BasicValueEnum::IntValue(v) => v,
+            _ => return None,
+        };
+        match recv_val {
+            BasicValueEnum::StructValue(sv) if sv.get_type().count_fields() == 2 => {
+                // Pre-Phase C struct layout (kept for compatibility)
+                let len = self
+                    .builder
+                    .build_extract_value(sv, 0, "set_len")
+                    .ok()?
+                    .into_int_value();
+                let data_ptr = self
+                    .builder
+                    .build_extract_value(sv, 1, "set_data")
+                    .ok()?
+                    .into_pointer_value();
+                let i64_ty = self.context.i64_type();
+                let bool_ty = self.context.bool_type();
+                let found_alloca = self.builder.build_alloca(bool_ty, "found").unwrap();
+                let i_alloca = self.builder.build_alloca(i64_ty, "set_i").unwrap();
+                self.builder
+                    .build_store(found_alloca, bool_ty.const_int(0, false))
+                    .unwrap();
+                self.builder
+                    .build_store(i_alloca, i64_ty.const_int(0, false))
+                    .unwrap();
+                let parent_fn = self.builder.get_insert_block()?.get_parent()?;
+                let cond_bb = self.context.append_basic_block(parent_fn, "set_cond");
+                let body_bb = self.context.append_basic_block(parent_fn, "set_body");
+                let exit_bb = self.context.append_basic_block(parent_fn, "set_exit");
+                self.builder.build_unconditional_branch(cond_bb).unwrap();
+                self.builder.position_at_end(cond_bb);
+                let i = self
+                    .builder
+                    .build_load(i64_ty, i_alloca, "i")
+                    .unwrap()
+                    .into_int_value();
+                let found = self
+                    .builder
+                    .build_load(bool_ty, found_alloca, "f")
+                    .unwrap()
+                    .into_int_value();
+                let i_lt = self
+                    .builder
+                    .build_int_compare(IntPredicate::SLT, i, len, "i_lt")
+                    .unwrap();
+                let not_found = self.builder.build_not(found, "nf").unwrap();
+                let go = self.builder.build_and(i_lt, not_found, "go").unwrap();
+                self.builder
+                    .build_conditional_branch(go, body_bb, exit_bb)
+                    .unwrap();
+                self.builder.position_at_end(body_bb);
+                let elem_ptr = unsafe {
+                    self.builder
+                        .build_gep(i64_ty, data_ptr, &[i], "ep")
+                        .unwrap()
+                };
+                let elem = self
+                    .builder
+                    .build_load(i64_ty, elem_ptr, "elem")
+                    .unwrap()
+                    .into_int_value();
+                let eq = self
+                    .builder
+                    .build_int_compare(IntPredicate::EQ, elem, needle, "eq")
+                    .unwrap();
+                self.builder.build_store(found_alloca, eq).unwrap();
+                let i_next = self
+                    .builder
+                    .build_int_add(i, i64_ty.const_int(1, false), "i_next")
+                    .unwrap();
+                self.builder.build_store(i_alloca, i_next).unwrap();
+                self.builder.build_unconditional_branch(cond_bb).unwrap();
+                self.builder.position_at_end(exit_bb);
+                Some(
+                    self.builder
+                        .build_load(bool_ty, found_alloca, "contains_res")
+                        .unwrap(),
+                )
+            }
+            // Post-Phase C: Set is MvlArray* (heap pointer).
+            BasicValueEnum::PointerValue(arr_ptr) => {
+                let i64_ty = self.context.i64_type();
+                let bool_ty = self.context.bool_type();
+                let len_fn = self.get_mvl_array_len();
+                let len_call = self
+                    .builder
+                    .build_call(len_fn, &[arr_ptr.into()], "arr_len")
+                    .ok()?;
+                let len = self.call_value(len_call)?.into_int_value();
+                let found_alloca = self.builder.build_alloca(bool_ty, "found").unwrap();
+                let i_alloca = self.builder.build_alloca(i64_ty, "set_i").unwrap();
+                self.builder
+                    .build_store(found_alloca, bool_ty.const_int(0, false))
+                    .unwrap();
+                self.builder
+                    .build_store(i_alloca, i64_ty.const_int(0, false))
+                    .unwrap();
+                let parent_fn = self.builder.get_insert_block()?.get_parent()?;
+                let cond_bb = self.context.append_basic_block(parent_fn, "set_cond");
+                let body_bb = self.context.append_basic_block(parent_fn, "set_body");
+                let exit_bb = self.context.append_basic_block(parent_fn, "set_exit");
+                self.builder.build_unconditional_branch(cond_bb).unwrap();
+                self.builder.position_at_end(cond_bb);
+                let i = self
+                    .builder
+                    .build_load(i64_ty, i_alloca, "i")
+                    .unwrap()
+                    .into_int_value();
+                let found = self
+                    .builder
+                    .build_load(bool_ty, found_alloca, "f")
+                    .unwrap()
+                    .into_int_value();
+                let i_lt = self
+                    .builder
+                    .build_int_compare(IntPredicate::SLT, i, len, "i_lt")
+                    .unwrap();
+                let not_found = self.builder.build_not(found, "nf").unwrap();
+                let go = self.builder.build_and(i_lt, not_found, "go").unwrap();
+                self.builder
+                    .build_conditional_branch(go, body_bb, exit_bb)
+                    .unwrap();
+                self.builder.position_at_end(body_bb);
+                let get_fn = self.get_mvl_array_get();
+                let elem_ptr_call = self
+                    .builder
+                    .build_call(get_fn, &[arr_ptr.into(), i.into()], "ep")
+                    .ok()?;
+                let elem_ptr = self.call_value(elem_ptr_call)?.into_pointer_value();
+                let elem = self
+                    .builder
+                    .build_load(i64_ty, elem_ptr, "elem")
+                    .unwrap()
+                    .into_int_value();
+                let eq = self
+                    .builder
+                    .build_int_compare(IntPredicate::EQ, elem, needle, "eq")
+                    .unwrap();
+                self.builder.build_store(found_alloca, eq).unwrap();
+                let i_next = self
+                    .builder
+                    .build_int_add(i, i64_ty.const_int(1, false), "i_next")
+                    .unwrap();
+                self.builder.build_store(i_alloca, i_next).unwrap();
+                self.builder.build_unconditional_branch(cond_bb).unwrap();
+                self.builder.position_at_end(exit_bb);
+                Some(
+                    self.builder
+                        .build_load(bool_ty, found_alloca, "contains_res")
+                        .unwrap(),
+                )
+            }
+            _ => None,
+        }
+    }
+
+    // ── to_string ────────────────────────────────────────────────────────────
+    fn emit_to_string_method(
+        &mut self,
+        recv_val: BasicValueEnum<'ctx>,
+    ) -> Option<BasicValueEnum<'ctx>> {
+        match recv_val {
+            BasicValueEnum::IntValue(v) => {
+                if v.get_type().get_bit_width() == 1 {
+                    Some(self.emit_bool_to_string(v))
+                } else {
+                    Some(self.emit_int_to_string(v))
+                }
+            }
+            BasicValueEnum::FloatValue(v) => Some(self.emit_float_to_string(v)),
+            BasicValueEnum::PointerValue(p) => Some(p.into()),
+            _ => None,
+        }
+    }
+
+    // ── to_float (Int → f64) ─────────────────────────────────────────────────
+    fn emit_to_float_method(
+        &mut self,
+        recv_val: BasicValueEnum<'ctx>,
+    ) -> Option<BasicValueEnum<'ctx>> {
+        match recv_val {
+            BasicValueEnum::IntValue(v) => {
+                let f64_ty = self.context.f64_type();
+                Some(
+                    self.builder
+                        .build_signed_int_to_float(v, f64_ty, "itof")
+                        .unwrap()
+                        .into(),
+                )
+            }
+            BasicValueEnum::FloatValue(v) => Some(v.into()),
+            _ => None,
+        }
+    }
+
+    // ── HOF methods (#421) ────────────────────────────────────────────────────
+    fn emit_hof_method(
+        &mut self,
+        method: &str,
+        receiver: &Expr,
+        args: &[Expr],
+    ) -> Option<BasicValueEnum<'ctx>> {
+        let mut all_args = vec![receiver.clone()];
+        all_args.extend_from_slice(args);
+        let mangled = format!("List_{method}");
+        self.emit_fn_call(&mangled, &all_args)
+    }
+
+    fn emit_fold_method(&mut self, receiver: &Expr, args: &[Expr]) -> Option<BasicValueEnum<'ctx>> {
+        let mut all_args = vec![receiver.clone()];
+        all_args.extend_from_slice(args);
+        self.emit_fn_call("List_fold", &all_args)
+    }
+
+    // #587/#907: set algebra — delegate to mvl_runtime_c.
+    fn emit_set_algebra_method(
+        &mut self,
+        method: &str,
+        receiver: &Expr,
+        args: &[Expr],
+    ) -> Option<BasicValueEnum<'ctx>> {
+        let a = self.emit_expr(receiver)?;
+        let b = self.emit_expr(&args[0])?;
+        let sym = match method {
+            "intersection" => "_mvl_set_intersection",
+            "difference" => "_mvl_set_difference",
+            "union" => "_mvl_set_union",
+            _ => unreachable!(),
+        };
+        self.emit_stdlib_call_ptr_two_ptr_args(sym, a, b)
+    }
+
+    // Phase 8 / #696: actor behavior calls, and #868: user-defined type methods.
+    fn emit_user_defined_method(
+        &mut self,
+        receiver: &Expr,
+        method: &str,
+        recv_val: BasicValueEnum<'ctx>,
+        args: &[Expr],
+    ) -> Option<BasicValueEnum<'ctx>> {
+        if let Some(actor_name) = self.resolve_actor_type_name(receiver) {
+            return self.emit_actor_method_call(recv_val, &actor_name, method, args);
+        }
+        // #868: type-attached method — resolve receiver's MVL type and call
+        // the mangled LLVM function `TypeName_method(self, args…)`.
+        let recv_type_name = match receiver {
+            Expr::Ident(name, _) => self.local_mvl_types.get(name.as_str()).and_then(|t| {
+                if let TypeExpr::Base { name: tn, .. } = t {
+                    Some(tn.clone())
+                } else {
+                    None
+                }
+            }),
+            _ => None,
+        };
+        if let Some(type_name) = recv_type_name {
+            let mangled = format!("{}_{}", type_name, method);
+            // Also try C-ABI name for builtin extension methods (#928).
+            let cabi_name = match type_name.as_str() {
+                "String" => Some(format!("_mvl_str_{}", method)),
+                "List" => Some(format!("_mvl_list_{}", method)),
+                "Map" => Some(format!("_mvl_map_{}", method)),
+                "Set" => Some(format!("_mvl_set_{}", method)),
+                _ => None,
+            };
+            let fn_val = self.module.get_function(&mangled).or_else(|| {
+                cabi_name
+                    .as_deref()
+                    .and_then(|n| self.module.get_function(n))
+            });
+            if let Some(fn_val) = fn_val {
+                let mut call_args: Vec<inkwell::values::BasicMetadataValueEnum> =
+                    vec![recv_val.into()];
+                for a in args {
+                    if let Some(v) = self.emit_expr(a) {
+                        call_args.push(v.into());
+                    } else {
+                        return None;
+                    }
+                }
+                let call = self
+                    .builder
+                    .build_call(fn_val, &call_args, "method_call")
+                    .unwrap();
+                return self.call_value(call);
+            }
+        }
+        None
     }
 
     /// Emit `Map[K, V].get(key)` → `Option[V]` via `mvl_map_get`.
@@ -3960,7 +4018,6 @@ impl<'ctx> LlvmBackend<'ctx> {
         key_str: inkwell::values::PointerValue<'ctx>,
         _args: &[Expr],
     ) -> Option<BasicValueEnum<'ctx>> {
-        use inkwell::values::AnyValue;
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
 
         // Extract key bytes from MvlString.
