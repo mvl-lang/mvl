@@ -12,13 +12,21 @@
 //!
 //! Effects: CryptoRandom (crypto_random_bytes only); hash functions are pure.
 
+/// Raw Rust-backed SHA-256 primitive — module-private (#899).
+/// Public API: use `sha256(data)` which wraps this builtin.
+builtin fn _sha256(data: String) -> String
+
 /// Returns the SHA-256 digest of the input bytes as a hex string.
 /// Pure — hashing is deterministic.
-pub builtin fn sha256(data: String) -> String
+pub fn sha256(data: String) -> String { _sha256(data) }
+
+/// Raw Rust-backed SHA-512 primitive — module-private (#899).
+/// Public API: use `sha512(data)` which wraps this builtin.
+builtin fn _sha512(data: String) -> String
 
 /// Returns the SHA-512 digest of the input bytes as a hex string.
 /// Pure — hashing is deterministic.
-pub builtin fn sha512(data: String) -> String
+pub fn sha512(data: String) -> String { _sha512(data) }
 
 /// Returns n cryptographically secure random bytes. Requires `! CryptoRandom`.
 /// Distinct from std.random.bytes — uses the OS CSPRNG, not a PRNG.

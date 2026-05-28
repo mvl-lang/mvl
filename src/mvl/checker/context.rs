@@ -663,9 +663,26 @@ impl TypeEnv {
             },
         );
         // Crypto — std.crypto (no import required at tier-1)
-        // sha256/sha512 are pure hash functions (#46)
+        // sha256/sha512 are pure hash functions (#46).
+        // _sha256/_sha512 are private builtins (#899); sha256/sha512 are public wrappers.
+        self.fns.insert(
+            "_sha256".into(),
+            FnInfo {
+                params: vec![Ty::String],
+                ret: Ty::String,
+                ..Default::default()
+            },
+        );
         self.fns.insert(
             "sha256".into(),
+            FnInfo {
+                params: vec![Ty::String],
+                ret: Ty::String,
+                ..Default::default()
+            },
+        );
+        self.fns.insert(
+            "_sha512".into(),
             FnInfo {
                 params: vec![Ty::String],
                 ret: Ty::String,

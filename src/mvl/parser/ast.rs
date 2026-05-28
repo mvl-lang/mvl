@@ -1138,6 +1138,16 @@ pub(crate) fn expr_to_ref_expr_ext(expr: &Expr, fallback_span: Span) -> Option<R
                 span: *span,
             })
         }
+        // old(expr) in ensures — map to RefExpr::Old for runtime postcondition asserts.
+        Expr::FnCall {
+            name, args, span, ..
+        } if name == "old" && args.len() == 1 => {
+            let inner = expr_to_ref_expr_ext(&args[0], *span)?;
+            Some(RefExpr::Old {
+                inner: Box::new(inner),
+                span: *span,
+            })
+        }
         // forall/exists quantifiers — pass through directly.
         Expr::Quantifier(ref_expr, _) => Some(*ref_expr.clone()),
         _ => {
