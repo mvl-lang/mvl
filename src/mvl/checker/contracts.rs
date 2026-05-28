@@ -66,6 +66,153 @@ struct ContractCheckCtx<'a> {
     counts: &'a mut RefinementCounts,
 }
 
+// ── Generic AST walkers ───────────────────────────────────────────────────────
+
+/// Visit every `Expr` in `block`, calling `f` on each one.
+///
+/// Traversal is post-order: sub-expressions are visited before the expression
+/// that contains them, so inner call sites are checked before outer ones.
+/// This matches the previous per-walker behaviour.
+fn walk_stmts<F>(block: &Block, ctx: &mut ContractCheckCtx<'_>, f: &mut F)
+where
+    F: FnMut(&Expr, &mut ContractCheckCtx<'_>),
+{
+    for stmt in &block.stmts {
+        walk_stmt_exprs(stmt, ctx, f);
+    }
+}
+
+fn walk_stmt_exprs<F>(stmt: &Stmt, ctx: &mut ContractCheckCtx<'_>, f: &mut F)
+where
+    F: FnMut(&Expr, &mut ContractCheckCtx<'_>),
+{
+    match stmt {
+        Stmt::Let { init, .. } => walk_expr(init, ctx, f),
+        Stmt::Assign { value, .. } => walk_expr(value, ctx, f),
+        Stmt::Return { value: Some(e), .. } => walk_expr(e, ctx, f),
+        Stmt::Return { value: None, .. } => {}
+        Stmt::Expr { expr, .. } => walk_expr(expr, ctx, f),
+        Stmt::If {
+            cond, then, else_, ..
+        } => {
+            walk_expr(cond, ctx, f);
+            walk_stmts(then, ctx, f);
+            match else_ {
+                None => {}
+                Some(ElseBranch::Block(b)) => walk_stmts(b, ctx, f),
+                Some(ElseBranch::If(s)) => walk_stmt_exprs(s, ctx, f),
+            }
+        }
+        Stmt::While { cond, body, .. } => {
+            walk_expr(cond, ctx, f);
+            walk_stmts(body, ctx, f);
+        }
+        Stmt::For { iter, body, .. } => {
+            walk_expr(iter, ctx, f);
+            walk_stmts(body, ctx, f);
+        }
+        Stmt::Match {
+            scrutinee, arms, ..
+        } => {
+            walk_expr(scrutinee, ctx, f);
+            for arm in arms {
+                match &arm.body {
+                    MatchBody::Expr(e) => walk_expr(e, ctx, f),
+                    MatchBody::Block(b) => walk_stmts(b, ctx, f),
+                }
+            }
+        }
+    }
+}
+
+fn walk_expr<F>(expr: &Expr, ctx: &mut ContractCheckCtx<'_>, f: &mut F)
+where
+    F: FnMut(&Expr, &mut ContractCheckCtx<'_>),
+{
+    // Post-order: recurse into sub-expressions first, then call the visitor.
+    match expr {
+        Expr::FnCall { args, .. } => {
+            for a in args {
+                walk_expr(a, ctx, f);
+            }
+        }
+        Expr::MethodCall { receiver, args, .. } => {
+            walk_expr(receiver, ctx, f);
+            for a in args {
+                walk_expr(a, ctx, f);
+            }
+        }
+        Expr::Block(b) => {
+            walk_stmts(b, ctx, f);
+        }
+        Expr::If {
+            cond, then, else_, ..
+        } => {
+            walk_expr(cond, ctx, f);
+            walk_stmts(then, ctx, f);
+            if let Some(e) = else_ {
+                walk_expr(e, ctx, f);
+            }
+        }
+        Expr::Binary { left, right, .. } => {
+            walk_expr(left, ctx, f);
+            walk_expr(right, ctx, f);
+        }
+        Expr::Borrow { expr, .. }
+        | Expr::Unary { expr, .. }
+        | Expr::Consume { expr, .. }
+        | Expr::Relabel { expr, .. }
+        | Expr::Propagate { expr, .. }
+        | Expr::FieldAccess { expr, .. } => {
+            walk_expr(expr, ctx, f);
+        }
+        Expr::Construct { fields, .. } => {
+            for (_, e) in fields {
+                walk_expr(e, ctx, f);
+            }
+        }
+        Expr::List { elems, .. } | Expr::Set { elems, .. } => {
+            for e in elems {
+                walk_expr(e, ctx, f);
+            }
+        }
+        Expr::Map { pairs, .. } => {
+            for (k, v) in pairs {
+                walk_expr(k, ctx, f);
+                walk_expr(v, ctx, f);
+            }
+        }
+        Expr::Match {
+            scrutinee, arms, ..
+        } => {
+            walk_expr(scrutinee, ctx, f);
+            for arm in arms {
+                match &arm.body {
+                    MatchBody::Expr(e) => walk_expr(e, ctx, f),
+                    MatchBody::Block(b) => walk_stmts(b, ctx, f),
+                }
+            }
+        }
+        Expr::Lambda { body, .. } => {
+            walk_expr(body, ctx, f);
+        }
+        Expr::Spawn { fields, .. } => {
+            for (_, v) in fields {
+                walk_expr(v, ctx, f);
+            }
+        }
+        Expr::Select { arms, .. } => {
+            for arm in arms {
+                walk_expr(&arm.expr, ctx, f);
+                walk_stmts(&arm.body, ctx, f);
+            }
+        }
+        // Leaves — no sub-expressions to walk.
+        Expr::Literal(..) | Expr::Ident(..) | Expr::Quantifier(..) => {}
+    }
+    f(expr, ctx);
+}
+
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 /// Check all `requires`/`ensures` clauses for every function and method in `prog`.
@@ -95,7 +242,18 @@ pub fn check_contracts(
                     // `requires` checks on variable arguments (e.g. `f(x)` where
                     // `x: Int where self > 0`) can be resolved by the solver.
                     let var_refs = build_param_var_refs(&fd.params);
-                    check_requires_in_block(&fd.body, &fn_map, &var_refs, &mut ctx);
+                    walk_stmts(&fd.body, &mut ctx, &mut |expr, ctx| {
+                        if let Expr::FnCall {
+                            name, args, span, ..
+                        } = expr
+                        {
+                            if let Some(contracts) = fn_map.get(name) {
+                                check_requires_at_call(
+                                    name, args, *span, contracts, &var_refs, ctx,
+                                );
+                            }
+                        }
+                    });
                     if !fd.ensures.is_empty() {
                         check_ensures_in_block(
                             &fd.body,
@@ -111,7 +269,18 @@ pub fn check_contracts(
                 Decl::Impl(impl_d) => {
                     for method in &impl_d.methods {
                         let var_refs = build_param_var_refs(&method.params);
-                        check_requires_in_block(&method.body, &fn_map, &var_refs, &mut ctx);
+                        walk_stmts(&method.body, &mut ctx, &mut |expr, ctx| {
+                            if let Expr::FnCall {
+                                name, args, span, ..
+                            } = expr
+                            {
+                                if let Some(contracts) = fn_map.get(name) {
+                                    check_requires_at_call(
+                                        name, args, *span, contracts, &var_refs, ctx,
+                                    );
+                                }
+                            }
+                        });
                         if !method.ensures.is_empty() {
                             check_ensures_in_block(
                                 &method.body,
@@ -330,172 +499,6 @@ fn build_fn_decls_for_solver(prog: &Program) -> HashMap<String, FnDecl> {
 }
 
 // ── requires: call-site checker ───────────────────────────────────────────────
-
-fn check_requires_in_block(
-    block: &Block,
-    fn_map: &HashMap<String, FnContracts>,
-    var_refs: &HashMap<String, Option<RefExpr>>,
-    ctx: &mut ContractCheckCtx<'_>,
-) {
-    for stmt in &block.stmts {
-        check_requires_in_stmt(stmt, fn_map, var_refs, ctx);
-    }
-}
-
-fn check_requires_in_stmt(
-    stmt: &Stmt,
-    fn_map: &HashMap<String, FnContracts>,
-    var_refs: &HashMap<String, Option<RefExpr>>,
-    ctx: &mut ContractCheckCtx<'_>,
-) {
-    match stmt {
-        Stmt::Let { init, .. } => {
-            check_requires_in_expr(init, fn_map, var_refs, ctx);
-        }
-        Stmt::Assign { value, .. } => {
-            check_requires_in_expr(value, fn_map, var_refs, ctx);
-        }
-        Stmt::Return { value: Some(e), .. } => {
-            check_requires_in_expr(e, fn_map, var_refs, ctx);
-        }
-        Stmt::Return { value: None, .. } => {}
-        Stmt::Expr { expr, .. } => {
-            check_requires_in_expr(expr, fn_map, var_refs, ctx);
-        }
-        Stmt::If {
-            cond, then, else_, ..
-        } => {
-            check_requires_in_expr(cond, fn_map, var_refs, ctx);
-            check_requires_in_block(then, fn_map, var_refs, ctx);
-            if let Some(eb) = else_ {
-                match eb {
-                    ElseBranch::Block(b) => check_requires_in_block(b, fn_map, var_refs, ctx),
-                    ElseBranch::If(s) => check_requires_in_stmt(s, fn_map, var_refs, ctx),
-                }
-            }
-        }
-        Stmt::While { cond, body, .. } => {
-            check_requires_in_expr(cond, fn_map, var_refs, ctx);
-            check_requires_in_block(body, fn_map, var_refs, ctx);
-        }
-        Stmt::For { iter, body, .. } => {
-            check_requires_in_expr(iter, fn_map, var_refs, ctx);
-            check_requires_in_block(body, fn_map, var_refs, ctx);
-        }
-        Stmt::Match {
-            scrutinee, arms, ..
-        } => {
-            check_requires_in_expr(scrutinee, fn_map, var_refs, ctx);
-            for arm in arms {
-                check_requires_in_match_body(&arm.body, fn_map, var_refs, ctx);
-            }
-        }
-    }
-}
-
-fn check_requires_in_expr(
-    expr: &Expr,
-    fn_map: &HashMap<String, FnContracts>,
-    var_refs: &HashMap<String, Option<RefExpr>>,
-    ctx: &mut ContractCheckCtx<'_>,
-) {
-    match expr {
-        Expr::FnCall {
-            name, args, span, ..
-        } => {
-            // Recurse into arguments first.
-            for arg in args.iter() {
-                check_requires_in_expr(arg, fn_map, var_refs, ctx);
-            }
-            // Then check requires clauses for this callee.
-            if let Some(contracts) = fn_map.get(name) {
-                check_requires_at_call(name, args, *span, contracts, var_refs, ctx);
-            }
-        }
-        Expr::MethodCall { receiver, args, .. } => {
-            check_requires_in_expr(receiver, fn_map, var_refs, ctx);
-            for arg in args {
-                check_requires_in_expr(arg, fn_map, var_refs, ctx);
-            }
-        }
-        Expr::Block(b) => {
-            check_requires_in_block(b, fn_map, var_refs, ctx);
-        }
-        Expr::If {
-            cond, then, else_, ..
-        } => {
-            check_requires_in_expr(cond, fn_map, var_refs, ctx);
-            check_requires_in_block(then, fn_map, var_refs, ctx);
-            if let Some(e) = else_ {
-                check_requires_in_expr(e, fn_map, var_refs, ctx);
-            }
-        }
-        Expr::Borrow { expr, .. }
-        | Expr::Unary { expr, .. }
-        | Expr::Consume { expr, .. }
-        | Expr::Relabel { expr, .. }
-        | Expr::Propagate { expr, .. }
-        | Expr::FieldAccess { expr, .. } => {
-            check_requires_in_expr(expr, fn_map, var_refs, ctx);
-        }
-        Expr::Binary { left, right, .. } => {
-            check_requires_in_expr(left, fn_map, var_refs, ctx);
-            check_requires_in_expr(right, fn_map, var_refs, ctx);
-        }
-        Expr::Construct { fields, .. } => {
-            for (_, e) in fields {
-                check_requires_in_expr(e, fn_map, var_refs, ctx);
-            }
-        }
-        Expr::List { elems, .. } | Expr::Set { elems, .. } => {
-            for e in elems {
-                check_requires_in_expr(e, fn_map, var_refs, ctx);
-            }
-        }
-        Expr::Map { pairs, .. } => {
-            for (k, v) in pairs {
-                check_requires_in_expr(k, fn_map, var_refs, ctx);
-                check_requires_in_expr(v, fn_map, var_refs, ctx);
-            }
-        }
-        Expr::Match {
-            scrutinee, arms, ..
-        } => {
-            check_requires_in_expr(scrutinee, fn_map, var_refs, ctx);
-            for arm in arms {
-                check_requires_in_match_body(&arm.body, fn_map, var_refs, ctx);
-            }
-        }
-        Expr::Lambda { body, .. } => {
-            check_requires_in_expr(body, fn_map, var_refs, ctx);
-        }
-        Expr::Spawn { fields, .. } => {
-            for (_, v) in fields {
-                check_requires_in_expr(v, fn_map, var_refs, ctx);
-            }
-        }
-        Expr::Select { arms, .. } => {
-            for arm in arms {
-                check_requires_in_expr(&arm.expr, fn_map, var_refs, ctx);
-                check_requires_in_block(&arm.body, fn_map, var_refs, ctx);
-            }
-        }
-        // Leaves: Literal, Ident, Quantifier — no sub-expressions.
-        Expr::Literal(_, _) | Expr::Ident(_, _) | Expr::Quantifier(..) => {}
-    }
-}
-
-fn check_requires_in_match_body(
-    body: &MatchBody,
-    fn_map: &HashMap<String, FnContracts>,
-    var_refs: &HashMap<String, Option<RefExpr>>,
-    ctx: &mut ContractCheckCtx<'_>,
-) {
-    match body {
-        MatchBody::Expr(e) => check_requires_in_expr(e, fn_map, var_refs, ctx),
-        MatchBody::Block(b) => check_requires_in_block(b, fn_map, var_refs, ctx),
-    }
-}
 
 /// Check all `requires` clauses for a single call site.
 fn check_requires_at_call(
@@ -1601,7 +1604,16 @@ fn check_actor_behavior_contracts(
 ) {
     for method in &ad.methods {
         let var_refs = build_param_var_refs(&method.params);
-        check_requires_in_block(&method.body, fn_map, &var_refs, ctx);
+        walk_stmts(&method.body, ctx, &mut |expr, ctx| {
+            if let Expr::FnCall {
+                name, args, span, ..
+            } = expr
+            {
+                if let Some(contracts) = fn_map.get(name) {
+                    check_requires_at_call(name, args, *span, contracts, &var_refs, ctx);
+                }
+            }
+        });
         // Note: `ensures` checking is omitted because `ActorMethod` has no `ensures`
         // field today. If ensures support is added to actor methods, wire it in here.
         check_invariants_in_block(&method.body, &method.name, &var_refs, ctx);
@@ -1640,28 +1652,24 @@ pub fn check_actor_field_refinements(
                 // Seed var_refs from function parameters so the solver can use
                 // where-refinements on parameter variables as hypotheses.
                 let var_refs = build_param_var_refs(&fd.params);
-                check_spawn_refinements_in_block(&fd.body, &actor_fields, &var_refs, &mut ctx);
+                walk_stmts(&fd.body, &mut ctx, &mut |expr, ctx| {
+                    check_spawn_at_site(expr, &actor_fields, &var_refs, ctx);
+                });
             }
             Decl::Impl(impl_d) => {
                 for method in &impl_d.methods {
                     let var_refs = build_param_var_refs(&method.params);
-                    check_spawn_refinements_in_block(
-                        &method.body,
-                        &actor_fields,
-                        &var_refs,
-                        &mut ctx,
-                    );
+                    walk_stmts(&method.body, &mut ctx, &mut |expr, ctx| {
+                        check_spawn_at_site(expr, &actor_fields, &var_refs, ctx);
+                    });
                 }
             }
             Decl::Actor(ad) => {
                 for method in &ad.methods {
                     let var_refs = build_param_var_refs(&method.params);
-                    check_spawn_refinements_in_block(
-                        &method.body,
-                        &actor_fields,
-                        &var_refs,
-                        &mut ctx,
-                    );
+                    walk_stmts(&method.body, &mut ctx, &mut |expr, ctx| {
+                        check_spawn_at_site(expr, &actor_fields, &var_refs, ctx);
+                    });
                 }
             }
             _ => {}
@@ -1688,202 +1696,44 @@ fn build_actor_field_map(prog: &Program) -> HashMap<String, Vec<FieldDecl>> {
     map
 }
 
-/// Walk a block recursively, checking `Expr::Spawn` field-init values against
-/// field refinements.
-fn check_spawn_refinements_in_block(
-    block: &Block,
-    actor_fields: &HashMap<String, Vec<FieldDecl>>,
-    var_refs: &HashMap<String, Option<RefExpr>>,
-    ctx: &mut ContractCheckCtx<'_>,
-) {
-    for stmt in &block.stmts {
-        check_spawn_refinements_in_stmt(stmt, actor_fields, var_refs, ctx);
-    }
-}
-
-fn check_spawn_refinements_in_stmt(
-    stmt: &Stmt,
-    actor_fields: &HashMap<String, Vec<FieldDecl>>,
-    var_refs: &HashMap<String, Option<RefExpr>>,
-    ctx: &mut ContractCheckCtx<'_>,
-) {
-    match stmt {
-        Stmt::Let { init, .. } => {
-            check_spawn_refinements_in_expr(init, actor_fields, var_refs, ctx);
-        }
-        Stmt::Assign { value, .. } => {
-            check_spawn_refinements_in_expr(value, actor_fields, var_refs, ctx);
-        }
-        Stmt::Return { value: Some(e), .. } => {
-            check_spawn_refinements_in_expr(e, actor_fields, var_refs, ctx);
-        }
-        Stmt::Return { value: None, .. } => {}
-        Stmt::Expr { expr, .. } => {
-            check_spawn_refinements_in_expr(expr, actor_fields, var_refs, ctx);
-        }
-        Stmt::If {
-            cond, then, else_, ..
-        } => {
-            check_spawn_refinements_in_expr(cond, actor_fields, var_refs, ctx);
-            check_spawn_refinements_in_block(then, actor_fields, var_refs, ctx);
-            if let Some(eb) = else_ {
-                match eb {
-                    ElseBranch::Block(b) => {
-                        check_spawn_refinements_in_block(b, actor_fields, var_refs, ctx)
-                    }
-                    ElseBranch::If(s) => {
-                        check_spawn_refinements_in_stmt(s, actor_fields, var_refs, ctx)
-                    }
-                }
-            }
-        }
-        Stmt::While { cond, body, .. } => {
-            check_spawn_refinements_in_expr(cond, actor_fields, var_refs, ctx);
-            check_spawn_refinements_in_block(body, actor_fields, var_refs, ctx);
-        }
-        Stmt::For { iter, body, .. } => {
-            check_spawn_refinements_in_expr(iter, actor_fields, var_refs, ctx);
-            check_spawn_refinements_in_block(body, actor_fields, var_refs, ctx);
-        }
-        Stmt::Match {
-            scrutinee, arms, ..
-        } => {
-            check_spawn_refinements_in_expr(scrutinee, actor_fields, var_refs, ctx);
-            for arm in arms {
-                match &arm.body {
-                    MatchBody::Expr(e) => {
-                        check_spawn_refinements_in_expr(e, actor_fields, var_refs, ctx)
-                    }
-                    MatchBody::Block(b) => {
-                        check_spawn_refinements_in_block(b, actor_fields, var_refs, ctx)
-                    }
-                }
-            }
-        }
-    }
-}
-
-fn check_spawn_refinements_in_expr(
+/// Leaf checker for `Expr::Spawn` — called by `walk_stmts` for every expression.
+/// Checks that actor field-init values satisfy their declared refinements.
+fn check_spawn_at_site(
     expr: &Expr,
     actor_fields: &HashMap<String, Vec<FieldDecl>>,
     var_refs: &HashMap<String, Option<RefExpr>>,
     ctx: &mut ContractCheckCtx<'_>,
 ) {
-    match expr {
-        // The key case: actor creation expression.
-        Expr::Spawn {
-            actor_type,
-            fields,
-            span,
-        } => {
-            if let Some(refined_fields) = actor_fields.get(actor_type) {
-                for (init_name, init_expr) in fields {
-                    // Find the matching field declaration (if it has a refinement).
-                    if let Some(field_decl) = refined_fields.iter().find(|f| &f.name == init_name) {
-                        if let Some(pred) = &field_decl.refinement {
-                            let outcome = check_arg_against_pred_counted(
-                                init_expr,
-                                pred,
-                                var_refs,
-                                ctx.fn_decls,
-                                ctx.counts,
-                            );
-                            if let RefResult::Failed { counterexample } = outcome {
-                                ctx.errors.push(CheckError::RefinementViolated {
-                                    pred: format!(
-                                        "{actor_type}.{init_name}: {}",
-                                        display_pred(pred)
-                                    ),
-                                    counterexample,
-                                    span: *span,
-                                });
-                            }
-                        }
-                    }
-                }
-            }
-            // Recurse into field-init expressions.
-            for (_, v) in fields {
-                check_spawn_refinements_in_expr(v, actor_fields, var_refs, ctx);
-            }
-        }
-        Expr::FnCall { args, .. } => {
-            for arg in args {
-                check_spawn_refinements_in_expr(arg, actor_fields, var_refs, ctx);
-            }
-        }
-        Expr::MethodCall { receiver, args, .. } => {
-            check_spawn_refinements_in_expr(receiver, actor_fields, var_refs, ctx);
-            for arg in args {
-                check_spawn_refinements_in_expr(arg, actor_fields, var_refs, ctx);
-            }
-        }
-        Expr::Block(b) => {
-            check_spawn_refinements_in_block(b, actor_fields, var_refs, ctx);
-        }
-        Expr::If {
-            cond, then, else_, ..
-        } => {
-            check_spawn_refinements_in_expr(cond, actor_fields, var_refs, ctx);
-            check_spawn_refinements_in_block(then, actor_fields, var_refs, ctx);
-            if let Some(e) = else_ {
-                check_spawn_refinements_in_expr(e, actor_fields, var_refs, ctx);
-            }
-        }
-        Expr::Binary { left, right, .. } => {
-            check_spawn_refinements_in_expr(left, actor_fields, var_refs, ctx);
-            check_spawn_refinements_in_expr(right, actor_fields, var_refs, ctx);
-        }
-        Expr::Borrow { expr, .. }
-        | Expr::Unary { expr, .. }
-        | Expr::Consume { expr, .. }
-        | Expr::Relabel { expr, .. }
-        | Expr::Propagate { expr, .. }
-        | Expr::FieldAccess { expr, .. } => {
-            check_spawn_refinements_in_expr(expr, actor_fields, var_refs, ctx);
-        }
-        Expr::Construct { fields, .. } => {
-            for (_, e) in fields {
-                check_spawn_refinements_in_expr(e, actor_fields, var_refs, ctx);
-            }
-        }
-        Expr::List { elems, .. } | Expr::Set { elems, .. } => {
-            for e in elems {
-                check_spawn_refinements_in_expr(e, actor_fields, var_refs, ctx);
-            }
-        }
-        Expr::Map { pairs, .. } => {
-            for (k, v) in pairs {
-                check_spawn_refinements_in_expr(k, actor_fields, var_refs, ctx);
-                check_spawn_refinements_in_expr(v, actor_fields, var_refs, ctx);
-            }
-        }
-        Expr::Match {
-            scrutinee, arms, ..
-        } => {
-            check_spawn_refinements_in_expr(scrutinee, actor_fields, var_refs, ctx);
-            for arm in arms {
-                match &arm.body {
-                    MatchBody::Expr(e) => {
-                        check_spawn_refinements_in_expr(e, actor_fields, var_refs, ctx)
-                    }
-                    MatchBody::Block(b) => {
-                        check_spawn_refinements_in_block(b, actor_fields, var_refs, ctx)
-                    }
+    let Expr::Spawn {
+        actor_type,
+        fields,
+        span,
+    } = expr
+    else {
+        return;
+    };
+    let Some(refined_fields) = actor_fields.get(actor_type) else {
+        return;
+    };
+    for (init_name, init_expr) in fields {
+        if let Some(field_decl) = refined_fields.iter().find(|f| &f.name == init_name) {
+            if let Some(pred) = &field_decl.refinement {
+                let outcome = check_arg_against_pred_counted(
+                    init_expr,
+                    pred,
+                    var_refs,
+                    ctx.fn_decls,
+                    ctx.counts,
+                );
+                if let RefResult::Failed { counterexample } = outcome {
+                    ctx.errors.push(CheckError::RefinementViolated {
+                        pred: format!("{actor_type}.{init_name}: {}", display_pred(pred)),
+                        counterexample,
+                        span: *span,
+                    });
                 }
             }
         }
-        Expr::Lambda { body, .. } => {
-            check_spawn_refinements_in_expr(body, actor_fields, var_refs, ctx);
-        }
-        Expr::Select { arms, .. } => {
-            for arm in arms {
-                check_spawn_refinements_in_expr(&arm.expr, actor_fields, var_refs, ctx);
-                check_spawn_refinements_in_block(&arm.body, actor_fields, var_refs, ctx);
-            }
-        }
-        // Leaves: no sub-expressions to walk.
-        Expr::Literal(_, _) | Expr::Ident(_, _) | Expr::Quantifier(..) => {}
     }
 }
 
@@ -1919,28 +1769,24 @@ pub fn check_struct_field_refinements(
         match decl {
             Decl::Fn(fd) => {
                 let var_refs = build_param_var_refs(&fd.params);
-                check_construct_refinements_in_block(&fd.body, &field_map, &var_refs, &mut ctx);
+                walk_stmts(&fd.body, &mut ctx, &mut |expr, ctx| {
+                    check_construct_at_site(expr, &field_map, &var_refs, ctx);
+                });
             }
             Decl::Impl(impl_d) => {
                 for method in &impl_d.methods {
                     let var_refs = build_param_var_refs(&method.params);
-                    check_construct_refinements_in_block(
-                        &method.body,
-                        &field_map,
-                        &var_refs,
-                        &mut ctx,
-                    );
+                    walk_stmts(&method.body, &mut ctx, &mut |expr, ctx| {
+                        check_construct_at_site(expr, &field_map, &var_refs, ctx);
+                    });
                 }
             }
             Decl::Actor(ad) => {
                 for method in &ad.methods {
                     let var_refs = build_param_var_refs(&method.params);
-                    check_construct_refinements_in_block(
-                        &method.body,
-                        &field_map,
-                        &var_refs,
-                        &mut ctx,
-                    );
+                    walk_stmts(&method.body, &mut ctx, &mut |expr, ctx| {
+                        check_construct_at_site(expr, &field_map, &var_refs, ctx);
+                    });
                 }
             }
             _ => {}
@@ -1990,203 +1836,51 @@ fn build_struct_field_map(prog: &Program) -> HashMap<String, (Vec<FieldDecl>, Op
     map
 }
 
-fn check_construct_refinements_in_block(
-    block: &Block,
-    field_map: &HashMap<String, (Vec<FieldDecl>, Option<RefExpr>)>,
-    var_refs: &HashMap<String, Option<RefExpr>>,
-    ctx: &mut ContractCheckCtx<'_>,
-) {
-    for stmt in &block.stmts {
-        check_construct_refinements_in_stmt(stmt, field_map, var_refs, ctx);
-    }
-}
-
-fn check_construct_refinements_in_stmt(
-    stmt: &Stmt,
-    field_map: &HashMap<String, (Vec<FieldDecl>, Option<RefExpr>)>,
-    var_refs: &HashMap<String, Option<RefExpr>>,
-    ctx: &mut ContractCheckCtx<'_>,
-) {
-    match stmt {
-        Stmt::Let { init, .. } => {
-            check_construct_refinements_in_expr(init, field_map, var_refs, ctx);
-        }
-        Stmt::Assign { value, .. } => {
-            check_construct_refinements_in_expr(value, field_map, var_refs, ctx);
-        }
-        Stmt::Return { value: Some(e), .. } => {
-            check_construct_refinements_in_expr(e, field_map, var_refs, ctx);
-        }
-        Stmt::Return { value: None, .. } => {}
-        Stmt::Expr { expr, .. } => {
-            check_construct_refinements_in_expr(expr, field_map, var_refs, ctx);
-        }
-        Stmt::If {
-            cond, then, else_, ..
-        } => {
-            check_construct_refinements_in_expr(cond, field_map, var_refs, ctx);
-            check_construct_refinements_in_block(then, field_map, var_refs, ctx);
-            if let Some(eb) = else_ {
-                match eb {
-                    ElseBranch::Block(b) => {
-                        check_construct_refinements_in_block(b, field_map, var_refs, ctx)
-                    }
-                    ElseBranch::If(s) => {
-                        check_construct_refinements_in_stmt(s, field_map, var_refs, ctx)
-                    }
-                }
-            }
-        }
-        Stmt::While { cond, body, .. } => {
-            check_construct_refinements_in_expr(cond, field_map, var_refs, ctx);
-            check_construct_refinements_in_block(body, field_map, var_refs, ctx);
-        }
-        Stmt::For { iter, body, .. } => {
-            check_construct_refinements_in_expr(iter, field_map, var_refs, ctx);
-            check_construct_refinements_in_block(body, field_map, var_refs, ctx);
-        }
-        Stmt::Match {
-            scrutinee, arms, ..
-        } => {
-            check_construct_refinements_in_expr(scrutinee, field_map, var_refs, ctx);
-            for arm in arms {
-                match &arm.body {
-                    MatchBody::Expr(e) => {
-                        check_construct_refinements_in_expr(e, field_map, var_refs, ctx)
-                    }
-                    MatchBody::Block(b) => {
-                        check_construct_refinements_in_block(b, field_map, var_refs, ctx)
-                    }
-                }
-            }
-        }
-    }
-}
-
-fn check_construct_refinements_in_expr(
+/// Leaf checker for `Expr::Construct` — called by `walk_stmts` for every expression.
+/// Checks that struct / enum-variant field-init values satisfy declared refinements
+/// and the optional `with invariant` clause.
+fn check_construct_at_site(
     expr: &Expr,
     field_map: &HashMap<String, (Vec<FieldDecl>, Option<RefExpr>)>,
     var_refs: &HashMap<String, Option<RefExpr>>,
     ctx: &mut ContractCheckCtx<'_>,
 ) {
-    match expr {
-        // The key case: struct or enum-variant construction.
-        Expr::Construct { name, fields, span } => {
-            if let Some((refined_fields, invariant)) = field_map.get(name) {
-                // ── Per-field refinement checks ─────────────────────────────
-                for (init_name, init_expr) in fields {
-                    if let Some(field_decl) = refined_fields.iter().find(|f| &f.name == init_name) {
-                        if let Some(pred) = &field_decl.refinement {
-                            let outcome = check_arg_against_pred_counted(
-                                init_expr,
-                                pred,
-                                var_refs,
-                                ctx.fn_decls,
-                                ctx.counts,
-                            );
-                            if let RefResult::Failed { counterexample } = outcome {
-                                ctx.errors.push(CheckError::RefinementViolated {
-                                    pred: format!("{name}.{init_name}: {}", display_pred(pred)),
-                                    counterexample,
-                                    span: *span,
-                                });
-                            }
-                        }
-                    }
-                }
-                // ── Struct invariant check (Gap 2) ──────────────────────────
-                if let Some(inv) = invariant {
-                    if let Some(false) = eval_invariant_with_const_fields(inv, fields) {
-                        ctx.errors.push(CheckError::RefinementViolated {
-                            pred: format!("{name}: with invariant {}", display_pred(inv)),
-                            counterexample: None,
-                            span: *span,
-                        });
-                    }
-                }
-            }
-            // Recurse into field-init expressions.
-            for (_, e) in fields {
-                check_construct_refinements_in_expr(e, field_map, var_refs, ctx);
-            }
-        }
-        Expr::FnCall { args, .. } => {
-            for arg in args {
-                check_construct_refinements_in_expr(arg, field_map, var_refs, ctx);
-            }
-        }
-        Expr::MethodCall { receiver, args, .. } => {
-            check_construct_refinements_in_expr(receiver, field_map, var_refs, ctx);
-            for arg in args {
-                check_construct_refinements_in_expr(arg, field_map, var_refs, ctx);
-            }
-        }
-        Expr::Block(b) => {
-            check_construct_refinements_in_block(b, field_map, var_refs, ctx);
-        }
-        Expr::If {
-            cond, then, else_, ..
-        } => {
-            check_construct_refinements_in_expr(cond, field_map, var_refs, ctx);
-            check_construct_refinements_in_block(then, field_map, var_refs, ctx);
-            if let Some(e) = else_ {
-                check_construct_refinements_in_expr(e, field_map, var_refs, ctx);
-            }
-        }
-        Expr::Match {
-            scrutinee, arms, ..
-        } => {
-            check_construct_refinements_in_expr(scrutinee, field_map, var_refs, ctx);
-            for arm in arms {
-                match &arm.body {
-                    MatchBody::Expr(e) => {
-                        check_construct_refinements_in_expr(e, field_map, var_refs, ctx)
-                    }
-                    MatchBody::Block(b) => {
-                        check_construct_refinements_in_block(b, field_map, var_refs, ctx)
-                    }
+    let Expr::Construct { name, fields, span } = expr else {
+        return;
+    };
+    let Some((refined_fields, invariant)) = field_map.get(name) else {
+        return;
+    };
+    // ── Per-field refinement checks ─────────────────────────────────────────
+    for (init_name, init_expr) in fields {
+        if let Some(field_decl) = refined_fields.iter().find(|f| &f.name == init_name) {
+            if let Some(pred) = &field_decl.refinement {
+                let outcome = check_arg_against_pred_counted(
+                    init_expr,
+                    pred,
+                    var_refs,
+                    ctx.fn_decls,
+                    ctx.counts,
+                );
+                if let RefResult::Failed { counterexample } = outcome {
+                    ctx.errors.push(CheckError::RefinementViolated {
+                        pred: format!("{name}.{init_name}: {}", display_pred(pred)),
+                        counterexample,
+                        span: *span,
+                    });
                 }
             }
         }
-        Expr::Binary { left, right, .. } => {
-            check_construct_refinements_in_expr(left, field_map, var_refs, ctx);
-            check_construct_refinements_in_expr(right, field_map, var_refs, ctx);
+    }
+    // ── Struct invariant check (Gap 2) ──────────────────────────────────────
+    if let Some(inv) = invariant {
+        if let Some(false) = eval_invariant_with_const_fields(inv, fields) {
+            ctx.errors.push(CheckError::RefinementViolated {
+                pred: format!("{name}: with invariant {}", display_pred(inv)),
+                counterexample: None,
+                span: *span,
+            });
         }
-        Expr::Borrow { expr, .. }
-        | Expr::Unary { expr, .. }
-        | Expr::Consume { expr, .. }
-        | Expr::Relabel { expr, .. }
-        | Expr::Propagate { expr, .. }
-        | Expr::FieldAccess { expr, .. } => {
-            check_construct_refinements_in_expr(expr, field_map, var_refs, ctx);
-        }
-        Expr::List { elems, .. } | Expr::Set { elems, .. } => {
-            for e in elems {
-                check_construct_refinements_in_expr(e, field_map, var_refs, ctx);
-            }
-        }
-        Expr::Map { pairs, .. } => {
-            for (k, v) in pairs {
-                check_construct_refinements_in_expr(k, field_map, var_refs, ctx);
-                check_construct_refinements_in_expr(v, field_map, var_refs, ctx);
-            }
-        }
-        Expr::Lambda { body, .. } => {
-            check_construct_refinements_in_expr(body, field_map, var_refs, ctx);
-        }
-        Expr::Spawn { fields, .. } => {
-            for (_, v) in fields {
-                check_construct_refinements_in_expr(v, field_map, var_refs, ctx);
-            }
-        }
-        Expr::Select { arms, .. } => {
-            for arm in arms {
-                check_construct_refinements_in_expr(&arm.expr, field_map, var_refs, ctx);
-                check_construct_refinements_in_block(&arm.body, field_map, var_refs, ctx);
-            }
-        }
-        // Leaves — no sub-expressions to walk.
-        Expr::Literal(_, _) | Expr::Ident(_, _) | Expr::Quantifier(..) => {}
     }
 }
 
