@@ -42,9 +42,9 @@ impl<'ctx> LlvmBackend<'ctx> {
             Stmt::Let {
                 pattern, init, ty, ..
             } => {
-                self.pending_let_ty = Some(ty.clone());
+                self.mono.pending_let_ty = Some(ty.clone());
                 let val = self.emit_expr(init);
-                self.pending_let_ty = None;
+                self.mono.pending_let_ty = None;
                 let val = val?;
                 // Determine the LLVM type: use the annotation type only when it matches the
                 // actual value type (annotation may fall back to i64 for unknown generics
@@ -62,7 +62,7 @@ impl<'ctx> LlvmBackend<'ctx> {
                 self.builder.build_store(alloca, val).unwrap();
                 self.locals.insert(name.clone(), (alloca, llvm_ty));
                 // L5-08: record MVL type annotation for Ok/Some payload inference.
-                self.local_mvl_types.insert(name.clone(), ty.clone());
+                self.mono.local_mvl_types.insert(name.clone(), ty.clone());
                 // L5-15: ownership transfer for heap moves.
                 // If init is a bare identifier, transfer ownership from
                 // the source variable — remove it from heap_locals so it is not dropped
@@ -81,7 +81,7 @@ impl<'ctx> LlvmBackend<'ctx> {
                         }
                         _ => None,
                     };
-                    src.and_then(|s| self.heap_locals.remove(s))
+                    src.and_then(|s| self.heap.heap_locals.remove(s))
                 };
                 // Register new binding: prefer the transferred kind, fall back to type annotation.
                 // Only register for drop if the alloca is in the entry block — allocas in branch
@@ -90,7 +90,7 @@ impl<'ctx> LlvmBackend<'ctx> {
                 let heap_kind = move_src_kind.or_else(|| heap_kind_of(ty));
                 if let Some(kind) = heap_kind {
                     if matches!(llvm_ty, BasicTypeEnum::PointerType(_)) && self.in_entry_block() {
-                        self.heap_locals.insert(name, kind);
+                        self.heap.heap_locals.insert(name, kind);
                     }
                 }
                 None
@@ -102,7 +102,7 @@ impl<'ctx> LlvmBackend<'ctx> {
                 // here would be a use-after-free.
                 let ret_heap_name: Option<String> = value.as_ref().and_then(|e| {
                     if let Expr::Ident(name, _) = e {
-                        if self.heap_locals.contains_key(name.as_str()) {
+                        if self.heap.heap_locals.contains_key(name.as_str()) {
                             return Some(name.clone());
                         }
                     }
@@ -136,7 +136,7 @@ impl<'ctx> LlvmBackend<'ctx> {
                         if let Some((alloca, _)) = self.locals.get(n).copied() {
                             // L5-14: drop the old heap value before overwriting to prevent a
                             // memory leak (the previous pointer is unreachable after the store).
-                            let kind_opt = self.heap_locals.get(n.as_str()).copied();
+                            let kind_opt = self.heap.heap_locals.get(n.as_str()).copied();
                             if let Some(kind) = kind_opt {
                                 let ptr_ty = self.context.ptr_type(AddressSpace::default());
                                 if let Ok(old_ptr) =
@@ -169,7 +169,7 @@ impl<'ctx> LlvmBackend<'ctx> {
                                 _ => None,
                             };
                             if let Some(src) = move_src.filter(|&s| s != n.as_str()) {
-                                self.heap_locals.remove(src);
+                                self.heap.heap_locals.remove(src);
                             }
                         }
                     }
@@ -673,14 +673,14 @@ impl<'ctx> LlvmBackend<'ctx> {
         if let Some(pos) = name.find("::") {
             let type_name = &name[..pos];
             let variant_name = &name[pos + 2..];
-            if let Some(variants) = self.enum_variants.get(type_name) {
+            if let Some(variants) = self.types.enum_variants.get(type_name) {
                 let disc = variants.iter().position(|(vn, _)| vn == variant_name)? as u64;
                 return Some(self.context.i8_type().const_int(disc, false));
             }
             return None;
         }
         // Unqualified: search all enums.
-        for variants in self.enum_variants.values() {
+        for variants in self.types.enum_variants.values() {
             if let Some(disc) = variants.iter().position(|(vn, _)| vn == name) {
                 return Some(self.context.i8_type().const_int(disc as u64, false));
             }
@@ -794,7 +794,7 @@ impl<'ctx> LlvmBackend<'ctx> {
                 (name[..pos].to_string(), name[pos + 2..].to_string())
             } else {
                 // Search for unqualified variant name.
-                let found = self.enum_variants.iter().find_map(|(tn, variants)| {
+                let found = self.types.enum_variants.iter().find_map(|(tn, variants)| {
                     variants
                         .iter()
                         .any(|(vn, _)| vn == name)
@@ -806,7 +806,7 @@ impl<'ctx> LlvmBackend<'ctx> {
                 }
             };
 
-            let variants = match self.enum_variants.get(&type_name) {
+            let variants = match self.types.enum_variants.get(&type_name) {
                 Some(v) => v.clone(),
                 None => return,
             };
@@ -861,7 +861,8 @@ impl<'ctx> LlvmBackend<'ctx> {
                     self.builder.build_store(alloca, loaded).unwrap();
                     self.locals.insert(bind_name.clone(), (alloca, llvm_ty));
                     // Register MVL type so Deref (*box_val) can load the inner type (#571).
-                    self.local_mvl_types
+                    self.mono
+                        .local_mvl_types
                         .insert(bind_name.clone(), field_ty.clone());
                 }
             }
@@ -984,7 +985,7 @@ impl<'ctx> LlvmBackend<'ctx> {
         // For `for x in xs` where `xs: List[T]`, look up T in local_mvl_types.
         let elem_ty: BasicTypeEnum<'ctx> = (|| {
             let list_ty = match iter_expr {
-                Expr::Ident(name, _) => self.local_mvl_types.get(name.as_str()).cloned(),
+                Expr::Ident(name, _) => self.mono.local_mvl_types.get(name.as_str()).cloned(),
                 _ => None,
             }?;
             let list_ty_ref: &crate::mvl::parser::ast::TypeExpr = &list_ty;
@@ -1088,7 +1089,7 @@ impl<'ctx> LlvmBackend<'ctx> {
             self.builder.build_store(alloca, elem_val).unwrap();
             self.locals.insert(var.clone(), (alloca, elem_ty));
             // Remove stale MVL type annotation (element type is resolved).
-            self.local_mvl_types.remove(&var);
+            self.mono.local_mvl_types.remove(&var);
 
             let prev_terminated = self.terminated;
             self.terminated = false;

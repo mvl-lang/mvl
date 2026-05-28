@@ -20,7 +20,7 @@ impl<'ctx> LlvmBackend<'ctx> {
     pub(crate) fn register_type_decl(&mut self, td: &TypeDecl) {
         match &td.body {
             TypeBody::Struct { fields, invariant } => {
-                self.struct_fields.insert(
+                self.types.struct_fields.insert(
                     td.name.clone(),
                     fields
                         .iter()
@@ -28,11 +28,13 @@ impl<'ctx> LlvmBackend<'ctx> {
                         .collect(),
                 );
                 if let Some(inv) = invariant {
-                    self.struct_invariants.insert(td.name.clone(), inv.clone());
+                    self.types
+                        .struct_invariants
+                        .insert(td.name.clone(), inv.clone());
                 }
             }
             TypeBody::Enum(variants) => {
-                self.enum_variants.insert(
+                self.types.enum_variants.insert(
                     td.name.clone(),
                     variants
                         .iter()
@@ -50,37 +52,37 @@ impl<'ctx> LlvmBackend<'ctx> {
     /// This handles forward references between types.
     pub(crate) fn build_llvm_types(&mut self) {
         // Pass 1: create all opaque struct types.
-        let struct_names: Vec<String> = self.struct_fields.keys().cloned().collect();
+        let struct_names: Vec<String> = self.types.struct_fields.keys().cloned().collect();
         for name in &struct_names {
             let ty = self.context.opaque_struct_type(name);
-            self.llvm_struct_types.insert(name.clone(), ty);
+            self.types.llvm_struct_types.insert(name.clone(), ty);
         }
-        let enum_names: Vec<String> = self.enum_variants.keys().cloned().collect();
+        let enum_names: Vec<String> = self.types.enum_variants.keys().cloned().collect();
         for name in &enum_names {
-            let variants = self.enum_variants[name].clone();
+            let variants = self.types.enum_variants[name].clone();
             if !Self::is_unit_enum_variants(&variants) {
                 let ty = self.context.opaque_struct_type(name);
-                self.llvm_struct_types.insert(name.clone(), ty);
+                self.types.llvm_struct_types.insert(name.clone(), ty);
             }
         }
 
         // Pass 2: set struct bodies.
         for name in &struct_names {
-            let fields: Vec<(String, TypeExpr)> = self.struct_fields[name].clone();
+            let fields: Vec<(String, TypeExpr)> = self.types.struct_fields[name].clone();
             let field_types: Vec<BasicTypeEnum<'ctx>> = fields
                 .iter()
                 .filter_map(|(_, ty)| self.mvl_type_to_llvm(ty))
                 .collect();
-            let st = self.llvm_struct_types[name];
+            let st = self.types.llvm_struct_types[name];
             st.set_body(&field_types, false);
         }
 
         // Pass 2: set enum bodies (tagged unions).
         for name in &enum_names {
-            let variants = self.enum_variants[name].clone();
+            let variants = self.types.enum_variants[name].clone();
             if !Self::is_unit_enum_variants(&variants) {
                 let max_size = Self::max_variant_payload_size_static(&variants);
-                let st = self.llvm_struct_types[name];
+                let st = self.types.llvm_struct_types[name];
                 let disc_ty: BasicTypeEnum = self.context.i8_type().into();
                 // Payload: [max_size × i8], minimum 1 byte.
                 let payload_len = max_size.max(1) as u32;
@@ -136,7 +138,7 @@ impl<'ctx> LlvmBackend<'ctx> {
             TypeExpr::Base { name, args, .. } => {
                 // L5-08: if this bare name is an active type-parameter substitution, use it.
                 if args.is_empty() {
-                    if let Some(&sub_ty) = self.type_subs.get(name.as_str()) {
+                    if let Some(&sub_ty) = self.mono.type_subs.get(name.as_str()) {
                         return Some(sub_ty);
                     }
                 }
@@ -162,21 +164,21 @@ impl<'ctx> LlvmBackend<'ctx> {
                     }
                     _ => {
                         // Known struct type → %StructName
-                        if let Some(&st) = self.llvm_struct_types.get(name.as_str()) {
+                        if let Some(&st) = self.types.llvm_struct_types.get(name.as_str()) {
                             return Some(st.into());
                         }
                         // Known unit enum → i8 discriminant
-                        if let Some(variants) = self.enum_variants.get(name.as_str()) {
+                        if let Some(variants) = self.types.enum_variants.get(name.as_str()) {
                             if Self::is_unit_enum_variants(variants) {
                                 return Some(self.context.i8_type().into());
                             }
                         }
                         // Known payload enum → %EnumName
-                        if let Some(&st) = self.llvm_struct_types.get(name.as_str()) {
+                        if let Some(&st) = self.types.llvm_struct_types.get(name.as_str()) {
                             return Some(st.into());
                         }
                         // Actor handle types are opaque heap pointers.
-                        if self.actor_decls.contains_key(name.as_str()) {
+                        if self.actors.actor_decls.contains_key(name.as_str()) {
                             return Some(
                                 self.context
                                     .ptr_type(inkwell::AddressSpace::default())
@@ -273,7 +275,7 @@ impl<'ctx> LlvmBackend<'ctx> {
         if let Expr::FnCall { name, args, .. } = expr {
             if name == "list_get" {
                 if let Some(Expr::Ident(var_name, _)) = args.first() {
-                    if let Some(list_ty) = self.local_mvl_types.get(var_name.as_str()) {
+                    if let Some(list_ty) = self.mono.local_mvl_types.get(var_name.as_str()) {
                         let stripped = Self::strip_type_wrappers(list_ty);
                         // TypeExpr for List is Base { name: "List", args: [T] }.
                         if let TypeExpr::Base {
@@ -299,7 +301,7 @@ impl<'ctx> LlvmBackend<'ctx> {
             // TypeExpr for Map is Base { name: "Map", args: [K, V] }.
             if name == "map_get" {
                 if let Some(Expr::Ident(var_name, _)) = args.first() {
-                    if let Some(map_ty) = self.local_mvl_types.get(var_name.as_str()) {
+                    if let Some(map_ty) = self.mono.local_mvl_types.get(var_name.as_str()) {
                         let stripped = Self::strip_type_wrappers(map_ty);
                         if let TypeExpr::Base {
                             name: tname,
@@ -328,7 +330,7 @@ impl<'ctx> LlvmBackend<'ctx> {
         {
             if method == "get" {
                 if let Expr::Ident(var_name, _) = receiver.as_ref() {
-                    if let Some(map_ty) = self.local_mvl_types.get(var_name.as_str()) {
+                    if let Some(map_ty) = self.mono.local_mvl_types.get(var_name.as_str()) {
                         let stripped = Self::strip_type_wrappers(map_ty);
                         if let TypeExpr::Base {
                             name: tname,
@@ -353,9 +355,9 @@ impl<'ctx> LlvmBackend<'ctx> {
 
         // Look up the MVL return/annotation type for this expression.
         let mvl_ty: Option<&TypeExpr> = match expr {
-            Expr::FnCall { name, .. } => self.fn_return_types.get(name.as_str()),
+            Expr::FnCall { name, .. } => self.types.fn_return_types.get(name.as_str()),
             // L5-08: for local variable scrutinees, use the annotation stored at let-binding.
-            Expr::Ident(name, _) => self.local_mvl_types.get(name.as_str()),
+            Expr::Ident(name, _) => self.mono.local_mvl_types.get(name.as_str()),
             _ => None,
         };
         if let Some(ret_ty) = mvl_ty {
@@ -382,8 +384,8 @@ impl<'ctx> LlvmBackend<'ctx> {
     /// the error type cannot be determined (caller falls back to ptr).
     pub(crate) fn infer_result_err_llvm_ty(&self, expr: &Expr) -> Option<BasicTypeEnum<'ctx>> {
         let mvl_ty: Option<&TypeExpr> = match expr {
-            Expr::FnCall { name, .. } => self.fn_return_types.get(name.as_str()),
-            Expr::Ident(name, _) => self.local_mvl_types.get(name.as_str()),
+            Expr::FnCall { name, .. } => self.types.fn_return_types.get(name.as_str()),
+            Expr::Ident(name, _) => self.mono.local_mvl_types.get(name.as_str()),
             _ => None,
         };
         let ret_ty = mvl_ty?;

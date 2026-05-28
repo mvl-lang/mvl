@@ -159,12 +159,16 @@ impl<'ctx> LlvmBackend<'ctx> {
         }
 
         // L5-06: unqualified unit enum variant (e.g. `Circle` without `Shape::`).
-        let found = self.enum_variants.iter().find_map(|(etype, variants)| {
-            variants
-                .iter()
-                .position(|(vn, _)| vn == name)
-                .map(|_| etype.clone())
-        });
+        let found = self
+            .types
+            .enum_variants
+            .iter()
+            .find_map(|(etype, variants)| {
+                variants
+                    .iter()
+                    .position(|(vn, _)| vn == name)
+                    .map(|_| etype.clone())
+            });
         if let Some(etype) = found {
             return self.emit_enum_variant_construct(&etype, name, &[]);
         }
@@ -207,8 +211,8 @@ impl<'ctx> LlvmBackend<'ctx> {
             len: 0,
         };
 
-        let lambda_name = format!("__lambda_{}", self.lambda_counter);
-        self.lambda_counter += 1;
+        let lambda_name = format!("__lambda_{}", self.lambdas.lambda_counter);
+        self.lambdas.lambda_counter += 1;
 
         // Determine return type: explicit annotation takes precedence.
         // When absent, use the body expression's inferred type from the checker
@@ -301,8 +305,8 @@ impl<'ctx> LlvmBackend<'ctx> {
         // the lambda trampoline as a separate top-level function.
         let saved_block = self.builder.get_insert_block();
         let saved_locals = std::mem::take(&mut self.locals);
-        let saved_mvl_types = std::mem::take(&mut self.local_mvl_types);
-        let saved_heap_locals = std::mem::take(&mut self.heap_locals);
+        let saved_mvl_types = std::mem::take(&mut self.mono.local_mvl_types);
+        let saved_heap_locals = std::mem::take(&mut self.heap.heap_locals);
         let saved_terminated = self.terminated;
         let saved_fn = self.current_fn;
 
@@ -310,8 +314,8 @@ impl<'ctx> LlvmBackend<'ctx> {
 
         // Restore enclosing function context.
         self.locals = saved_locals;
-        self.local_mvl_types = saved_mvl_types;
-        self.heap_locals = saved_heap_locals;
+        self.mono.local_mvl_types = saved_mvl_types;
+        self.heap.heap_locals = saved_heap_locals;
         self.terminated = saved_terminated;
         self.current_fn = saved_fn;
         if let Some(block) = saved_block {
@@ -486,8 +490,8 @@ impl<'ctx> LlvmBackend<'ctx> {
         let entry = self.context.append_basic_block(fn_val, "entry");
         self.builder.position_at_end(entry);
         self.locals.clear();
-        self.local_mvl_types.clear();
-        self.heap_locals.clear();
+        self.mono.local_mvl_types.clear();
+        self.heap.heap_locals.clear();
         self.terminated = false;
         self.current_fn = Some(fn_val);
 
@@ -507,7 +511,8 @@ impl<'ctx> LlvmBackend<'ctx> {
                         let alloca = self.builder.build_alloca(inner_ty, &param.name).unwrap();
                         self.builder.build_store(alloca, loaded).unwrap();
                         self.locals.insert(param.name.clone(), (alloca, inner_ty));
-                        self.local_mvl_types
+                        self.mono
+                            .local_mvl_types
                             .insert(param.name.clone(), *inner.clone());
                         continue;
                     }
@@ -517,7 +522,8 @@ impl<'ctx> LlvmBackend<'ctx> {
                     self.builder.build_store(alloca, param_val).unwrap();
                     self.locals.insert(param.name.clone(), (alloca, ty));
                 }
-                self.local_mvl_types
+                self.mono
+                    .local_mvl_types
                     .insert(param.name.clone(), param.ty.clone());
             }
         }
@@ -540,7 +546,8 @@ impl<'ctx> LlvmBackend<'ctx> {
                 let alloca = self.builder.build_alloca(*cap_llvm_ty, cap_name).unwrap();
                 self.builder.build_store(alloca, cap_val).unwrap();
                 self.locals.insert(cap_name.clone(), (alloca, *cap_llvm_ty));
-                self.local_mvl_types
+                self.mono
+                    .local_mvl_types
                     .insert(cap_name.clone(), cap_mvl_ty.clone());
             }
         }
@@ -604,7 +611,7 @@ impl<'ctx> LlvmBackend<'ctx> {
             Expr::Ident(name, _) => {
                 if !exclude.contains(name) && !seen.contains(name) {
                     if let (Some((_, llvm_ty)), Some(mvl_ty)) =
-                        (self.locals.get(name), self.local_mvl_types.get(name))
+                        (self.locals.get(name), self.mono.local_mvl_types.get(name))
                     {
                         seen.insert(name.clone());
                         captures.push((name.clone(), mvl_ty.clone(), *llvm_ty));
@@ -631,7 +638,7 @@ impl<'ctx> LlvmBackend<'ctx> {
                 // where `f` is a local closure).  Check it the same way as Expr::Ident.
                 if !exclude.contains(name) && !seen.contains(name) {
                     if let (Some((_, llvm_ty)), Some(mvl_ty)) =
-                        (self.locals.get(name), self.local_mvl_types.get(name))
+                        (self.locals.get(name), self.mono.local_mvl_types.get(name))
                     {
                         seen.insert(name.clone());
                         captures.push((name.clone(), mvl_ty.clone(), *llvm_ty));
@@ -899,14 +906,14 @@ impl<'ctx> LlvmBackend<'ctx> {
         if let Some(pos) = name.find("::") {
             let type_name = name[..pos].to_string();
             let variant_name = name[pos + 2..].to_string();
-            if self.enum_variants.contains_key(&type_name) {
+            if self.types.enum_variants.contains_key(&type_name) {
                 return self.emit_enum_struct_variant(&type_name, &variant_name, fields);
             }
         }
 
         // Regular struct construction.
-        let field_info: Vec<(String, TypeExpr)> = self.struct_fields.get(name)?.clone();
-        let struct_ty = *self.llvm_struct_types.get(name)?;
+        let field_info: Vec<(String, TypeExpr)> = self.types.struct_fields.get(name)?.clone();
+        let struct_ty = *self.types.llvm_struct_types.get(name)?;
 
         // L5-13: use alloca+GEP to build the struct so every value type has an
         // address.  This is the foundation L5-14 heap types rely on for consistent
@@ -926,7 +933,7 @@ impl<'ctx> LlvmBackend<'ctx> {
         }
 
         // Phase 6 (#670): emit invariant check according to AssertMode (#662).
-        if let Some(inv) = self.struct_invariants.get(name).cloned() {
+        if let Some(inv) = self.types.struct_invariants.get(name).cloned() {
             let field_info_copy = field_info.clone();
             if let Some(cond) = self.emit_ref_expr_bool(&inv, alloca, struct_ty, &field_info_copy) {
                 match self.assert_mode {
@@ -1173,9 +1180,9 @@ impl<'ctx> LlvmBackend<'ctx> {
         variant_name: &str,
         fields: &[(String, Expr)],
     ) -> Option<BasicValueEnum<'ctx>> {
-        let variants = self.enum_variants.get(type_name)?.clone();
+        let variants = self.types.enum_variants.get(type_name)?.clone();
         let disc = variants.iter().position(|(vn, _)| vn == variant_name)? as u64;
-        let struct_ty = *self.llvm_struct_types.get(type_name)?;
+        let struct_ty = *self.types.llvm_struct_types.get(type_name)?;
         let alloca = self.builder.build_alloca(struct_ty, "enum_sv").unwrap();
 
         // Store discriminant.
@@ -1257,7 +1264,7 @@ impl<'ctx> LlvmBackend<'ctx> {
         // Look up the struct type name → field index.
         let ty = sv.get_type();
         let type_name = ty.get_name()?.to_str().ok()?.to_string();
-        let field_info = self.struct_fields.get(&type_name)?.clone();
+        let field_info = self.types.struct_fields.get(&type_name)?.clone();
         let idx = field_info.iter().position(|(n, _)| n == field)? as u32;
 
         self.builder.build_extract_value(sv, idx, field).ok()
@@ -1284,7 +1291,7 @@ impl<'ctx> LlvmBackend<'ctx> {
             Some(n) => n.to_str().unwrap_or("").to_string(),
             None => return,
         };
-        let field_info = match self.struct_fields.get(&type_name) {
+        let field_info = match self.types.struct_fields.get(&type_name) {
             Some(fi) => fi.clone(),
             None => return,
         };
@@ -1319,7 +1326,7 @@ impl<'ctx> LlvmBackend<'ctx> {
         variant_name: &str,
         payload_args: &[Expr],
     ) -> Option<BasicValueEnum<'ctx>> {
-        let variants = self.enum_variants.get(type_name)?.clone();
+        let variants = self.types.enum_variants.get(type_name)?.clone();
         let disc = variants.iter().position(|(vn, _)| vn == variant_name)? as u64;
 
         if Self::is_unit_enum_variants(&variants) {
@@ -1328,7 +1335,7 @@ impl<'ctx> LlvmBackend<'ctx> {
         }
 
         // Payload enum: build tagged union on the stack.
-        let struct_ty = *self.llvm_struct_types.get(type_name)?;
+        let struct_ty = *self.types.llvm_struct_types.get(type_name)?;
         let alloca = self.builder.build_alloca(struct_ty, "enum_tmp").unwrap();
 
         // Store discriminant.
@@ -1359,7 +1366,7 @@ impl<'ctx> LlvmBackend<'ctx> {
                         // variant, ownership transfers — remove it from heap_locals so the
                         // original alloca is not dropped at function exit (double-free).
                         if let Expr::Ident(src, _) = arg {
-                            self.heap_locals.remove(src.as_str());
+                            self.heap.heap_locals.remove(src.as_str());
                         }
                         let field_ptr = if offset == 0 {
                             payload_ptr
@@ -1924,14 +1931,14 @@ impl<'ctx> LlvmBackend<'ctx> {
     /// where the type cannot be determined without a full type-inference pass.
     pub(crate) fn infer_expr_mvl_type(&self, expr: &Expr) -> Option<TypeExpr> {
         match expr {
-            Expr::Ident(name, _) => self.local_mvl_types.get(name.as_str()).cloned(),
+            Expr::Ident(name, _) => self.mono.local_mvl_types.get(name.as_str()).cloned(),
             Expr::FieldAccess {
                 expr: base, field, ..
             } => {
                 let base_ty = self.infer_expr_mvl_type(base)?;
                 let stripped = Self::strip_type_wrappers(&base_ty);
                 if let TypeExpr::Base { name, .. } = stripped {
-                    let fields = self.struct_fields.get(name.as_str())?;
+                    let fields = self.types.struct_fields.get(name.as_str())?;
                     fields
                         .iter()
                         .find(|(n, _)| n == field)
@@ -1971,7 +1978,7 @@ impl<'ctx> LlvmBackend<'ctx> {
     /// defense-in-depth against future codegen regressions.
     fn is_secret_labeled(&self, expr: &Expr) -> bool {
         if let Expr::Ident(name, _) = expr {
-            if let Some(ty) = self.local_mvl_types.get(name.as_str()) {
+            if let Some(ty) = self.mono.local_mvl_types.get(name.as_str()) {
                 return matches!(ty, TypeExpr::Labeled { label, .. } if label == "Secret");
             }
         }
@@ -2195,7 +2202,7 @@ impl<'ctx> LlvmBackend<'ctx> {
                 if variant_name == "Err" && args.len() == 1 {
                     return self.emit_result_variant(1, args);
                 }
-                if self.enum_variants.contains_key(&type_name) {
+                if self.types.enum_variants.contains_key(&type_name) {
                     return self.emit_enum_variant_construct(&type_name, &variant_name, args);
                 }
                 // #928: static extension method call, e.g. String::from_chars(arr).
@@ -2275,7 +2282,7 @@ impl<'ctx> LlvmBackend<'ctx> {
         }
 
         // ADR-0019: dispatch to libmvl_runtime_c C-ABI for stdlib imports.
-        if let Some(sig) = self.stdlib_imports.get(name).cloned() {
+        if let Some(sig) = self.stdlib.stdlib_imports.get(name).cloned() {
             use crate::mvl::backends::llvm::StdlibSig;
             match &sig {
                 StdlibSig::I64NoArg(sym) if args.is_empty() => {
@@ -2437,7 +2444,7 @@ impl<'ctx> LlvmBackend<'ctx> {
             params: fn_params,
             ret,
             ..
-        }) = self.local_mvl_types.get(name).cloned()
+        }) = self.mono.local_mvl_types.get(name).cloned()
         {
             if let Some((alloca, _)) = self.locals.get(name).copied() {
                 let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
@@ -2489,7 +2496,7 @@ impl<'ctx> LlvmBackend<'ctx> {
         }
 
         // L5-15 + L5-08: single lookup for user-defined function metadata.
-        if let Some(fd) = self.fn_decls.get(name).cloned() {
+        if let Some(fd) = self.mono.fn_decls.get(name).cloned() {
             // L5-15: mark heap-typed value arguments as moved (ownership
             // transfers to the callee). Borrow params (val T/ref T) are skipped.
             for (arg, param) in args.iter().zip(fd.params.iter()) {
@@ -2502,7 +2509,7 @@ impl<'ctx> LlvmBackend<'ctx> {
                         _ => None,
                     };
                     if let Some(src) = src {
-                        self.heap_locals.remove(src);
+                        self.heap.heap_locals.remove(src);
                     }
                 }
             }
@@ -2640,7 +2647,11 @@ impl<'ctx> LlvmBackend<'ctx> {
         // so that List[Value] (9-byte elements) gets the correct size instead of 8.
         let elem_size = {
             // Strip Ref/Labeled/Refined wrappers to get the underlying List[T] type.
-            let unwrapped_ty = self.pending_let_ty.as_ref().map(Self::strip_type_wrappers);
+            let unwrapped_ty = self
+                .mono
+                .pending_let_ty
+                .as_ref()
+                .map(Self::strip_type_wrappers);
             let sz = if let Some(first) = elem_vals.first() {
                 self.llvm_type_byte_size(first.get_type())
             } else if let Some(crate::mvl::parser::ast::TypeExpr::Base { args, .. }) = unwrapped_ty
@@ -2876,7 +2887,7 @@ impl<'ctx> LlvmBackend<'ctx> {
             // L5-14: all collection ptrs use runtime len functions.
             BasicValueEnum::PointerValue(ptr) => {
                 let recv_mvl_ty = match receiver {
-                    Expr::Ident(name, _) => self.local_mvl_types.get(name.as_str()).cloned(),
+                    Expr::Ident(name, _) => self.mono.local_mvl_types.get(name.as_str()).cloned(),
                     _ => None,
                 };
                 // Strip IFC labels (Secret[List[T]] → List[T]) before dispatching.
@@ -3167,7 +3178,7 @@ impl<'ctx> LlvmBackend<'ctx> {
         match recv_val {
             BasicValueEnum::PointerValue(ptr) => {
                 let recv_mvl_ty = match receiver {
-                    Expr::Ident(name, _) => self.local_mvl_types.get(name.as_str()).cloned(),
+                    Expr::Ident(name, _) => self.mono.local_mvl_types.get(name.as_str()).cloned(),
                     _ => None,
                 };
                 let base_name = recv_mvl_ty.as_ref().and_then(|t| {
@@ -3683,7 +3694,7 @@ impl<'ctx> LlvmBackend<'ctx> {
     ) -> Option<BasicValueEnum<'ctx>> {
         // Detect String receiver by MVL type annotation.
         let recv_mvl_ty = match receiver {
-            Expr::Ident(name, _) => self.local_mvl_types.get(name.as_str()).cloned(),
+            Expr::Ident(name, _) => self.mono.local_mvl_types.get(name.as_str()).cloned(),
             _ => None,
         };
         let is_string = recv_mvl_ty.as_ref().is_some_and(|t| {
@@ -3961,7 +3972,7 @@ impl<'ctx> LlvmBackend<'ctx> {
         // #868: type-attached method — resolve receiver's MVL type and call
         // the mangled LLVM function `TypeName_method(self, args…)`.
         let recv_type_name = match receiver {
-            Expr::Ident(name, _) => self.local_mvl_types.get(name.as_str()).and_then(|t| {
+            Expr::Ident(name, _) => self.mono.local_mvl_types.get(name.as_str()).and_then(|t| {
                 if let TypeExpr::Base { name: tn, .. } = t {
                     Some(tn.clone())
                 } else {
@@ -4056,7 +4067,7 @@ impl<'ctx> LlvmBackend<'ctx> {
 
         // Determine the value LLVM type from the receiver's tracked MVL type.
         let recv_mvl_ty = match receiver {
-            Expr::Ident(name, _) => self.local_mvl_types.get(name.as_str()).cloned(),
+            Expr::Ident(name, _) => self.mono.local_mvl_types.get(name.as_str()).cloned(),
             _ => None,
         };
         let val_llvm_ty: Option<inkwell::types::BasicTypeEnum<'ctx>> =
