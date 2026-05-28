@@ -570,6 +570,16 @@ impl<'ctx> LlvmBackend<'ctx> {
         )
     }
 
+    /// `mvl_map_values(ptr) -> ptr`  — returns MvlArray* of value bytes
+    pub(crate) fn get_mvl_map_values(&self) -> FunctionValue<'ctx> {
+        self.get_or_declare_fn(
+            "mvl_map_values",
+            &[self.context.ptr_type(AddressSpace::default()).into()],
+            Some(self.context.ptr_type(AddressSpace::default()).into()),
+            false,
+        )
+    }
+
     /// `mvl_map_remove(ptr map, ptr key, i64 key_len)`
     pub(crate) fn get_mvl_map_remove(&self) -> FunctionValue<'ctx> {
         let ptr: BasicMetadataTypeEnum = self.context.ptr_type(AddressSpace::default()).into();

@@ -2847,11 +2847,27 @@ impl<'ctx> LlvmBackend<'ctx> {
             "abs" => self.emit_abs_method(recv_val),
             "min" => self.emit_min_method(recv_val, args),
             "max" => self.emit_max_method(recv_val, args),
-            "ceil" | "floor" | "sqrt" => self.emit_float_intrinsic_method(method, recv_val),
+            "ceil" | "floor" | "round" | "sqrt" => {
+                self.emit_float_intrinsic_method(method, recv_val)
+            }
             "first" => self.emit_first_method(recv_val),
             "contains" => self.emit_contains_method(receiver, recv_val, args),
             "to_string" => self.emit_to_string_method(recv_val),
             "to_float" => self.emit_to_float_method(recv_val),
+            "to_int" if args.is_empty() => self.emit_to_int_method(recv_val),
+            "char_at" if args.len() == 1 => self.emit_char_at_method(recv_val, args),
+            "byte_at" if args.len() == 1 => self.emit_byte_at_method(recv_val, args),
+            "is_positive" | "is_negative" | "is_zero" if args.is_empty() => {
+                self.emit_numeric_predicate_method(method, recv_val)
+            }
+            "is_nan" | "is_finite" | "is_infinite" if args.is_empty() => {
+                self.emit_float_predicate_method(method, recv_val)
+            }
+            "values" if args.is_empty() => self.emit_values_method(recv_val),
+            "is_some" | "is_none" | "is_ok" | "is_err" if args.is_empty() => {
+                self.emit_algebraic_disc_method(method, recv_val)
+            }
+            "unwrap_or" if args.len() == 1 => self.emit_unwrap_or_method(recv_val, args),
             "filter" | "map" | "any" | "all" | "find" | "take_while" | "skip_while"
                 if args.len() == 1 =>
             {
@@ -3492,6 +3508,7 @@ impl<'ctx> LlvmBackend<'ctx> {
                 let neg = self.builder.build_int_neg(v, "neg_v").unwrap();
                 Some(self.builder.build_select(is_neg, neg, v, "abs_v").unwrap())
             }
+            BasicValueEnum::FloatValue(_) => self.emit_float_intrinsic_method("fabs", recv_val),
             _ => None,
         }
     }
@@ -3872,6 +3889,283 @@ impl<'ctx> LlvmBackend<'ctx> {
                         .build_load(bool_ty, found_alloca, "contains_res")
                         .unwrap(),
                 )
+            }
+            _ => None,
+        }
+    }
+
+    // ── to_int (Float → i64, Byte → i64) ─────────────────────────────────────
+    fn emit_to_int_method(
+        &mut self,
+        recv_val: BasicValueEnum<'ctx>,
+    ) -> Option<BasicValueEnum<'ctx>> {
+        match recv_val {
+            BasicValueEnum::FloatValue(v) => {
+                let i64_ty = self.context.i64_type();
+                Some(
+                    self.builder
+                        .build_float_to_signed_int(v, i64_ty, "ftoi")
+                        .unwrap()
+                        .into(),
+                )
+            }
+            BasicValueEnum::IntValue(v) if v.get_type().get_bit_width() < 64 => {
+                // Byte (i8) or other narrow int → zero-extend to i64
+                let i64_ty = self.context.i64_type();
+                Some(
+                    self.builder
+                        .build_int_z_extend(v, i64_ty, "bto_i")
+                        .unwrap()
+                        .into(),
+                )
+            }
+            BasicValueEnum::IntValue(v) => Some(v.into()),
+            _ => None,
+        }
+    }
+
+    // ── String.char_at(i) → String ────────────────────────────────────────────
+    fn emit_char_at_method(
+        &mut self,
+        recv_val: BasicValueEnum<'ctx>,
+        args: &[Expr],
+    ) -> Option<BasicValueEnum<'ctx>> {
+        let idx_val = self.emit_expr(args.first()?)?;
+        match (recv_val, idx_val) {
+            (BasicValueEnum::PointerValue(s), BasicValueEnum::IntValue(i)) => {
+                let char_at_fn = self.get_mvl_str_char_at();
+                self.call_value(
+                    self.builder
+                        .build_call(char_at_fn, &[s.into(), i.into()], "char_at")
+                        .unwrap(),
+                )
+            }
+            _ => None,
+        }
+    }
+
+    // ── String.byte_at(i) → Byte (i64) ───────────────────────────────────────
+    fn emit_byte_at_method(
+        &mut self,
+        recv_val: BasicValueEnum<'ctx>,
+        args: &[Expr],
+    ) -> Option<BasicValueEnum<'ctx>> {
+        let idx_val = self.emit_expr(args.first()?)?;
+        match (recv_val, idx_val) {
+            (BasicValueEnum::PointerValue(s), BasicValueEnum::IntValue(i)) => {
+                let byte_at_fn = self.get_mvl_str_byte_at();
+                self.call_value(
+                    self.builder
+                        .build_call(byte_at_fn, &[s.into(), i.into()], "byte_at")
+                        .unwrap(),
+                )
+            }
+            _ => None,
+        }
+    }
+
+    // ── Int/Float predicates ──────────────────────────────────────────────────
+    /// Handles `is_positive`, `is_negative`, `is_zero` for Int (i64) and
+    /// `is_positive`, `is_negative` for Float (f64).
+    fn emit_numeric_predicate_method(
+        &mut self,
+        method: &str,
+        recv_val: BasicValueEnum<'ctx>,
+    ) -> Option<BasicValueEnum<'ctx>> {
+        match recv_val {
+            BasicValueEnum::IntValue(v) => {
+                let zero = self.context.i64_type().const_int(0, false);
+                let pred = match method {
+                    "is_positive" => IntPredicate::SGT,
+                    "is_negative" => IntPredicate::SLT,
+                    "is_zero" => IntPredicate::EQ,
+                    _ => return None,
+                };
+                Some(
+                    self.builder
+                        .build_int_compare(pred, v, zero, "int_pred")
+                        .unwrap()
+                        .into(),
+                )
+            }
+            BasicValueEnum::FloatValue(v) => {
+                let zero = self.context.f64_type().const_float(0.0);
+                let pred = match method {
+                    "is_positive" => FloatPredicate::OGT,
+                    "is_negative" => FloatPredicate::OLT,
+                    _ => return None,
+                };
+                Some(
+                    self.builder
+                        .build_float_compare(pred, v, zero, "float_pred")
+                        .unwrap()
+                        .into(),
+                )
+            }
+            _ => None,
+        }
+    }
+
+    // ── Float-only predicates (is_nan, is_finite, is_infinite) ───────────────
+    fn emit_float_predicate_method(
+        &mut self,
+        method: &str,
+        recv_val: BasicValueEnum<'ctx>,
+    ) -> Option<BasicValueEnum<'ctx>> {
+        match recv_val {
+            BasicValueEnum::FloatValue(v) => {
+                match method {
+                    "is_nan" => {
+                        // fcmp uno v, v — true iff v is NaN
+                        Some(
+                            self.builder
+                                .build_float_compare(FloatPredicate::UNO, v, v, "is_nan")
+                                .unwrap()
+                                .into(),
+                        )
+                    }
+                    "is_infinite" => {
+                        // fabs(v) == +inf
+                        let fabs_val = self
+                            .emit_float_intrinsic_method("fabs", BasicValueEnum::FloatValue(v))?
+                            .into_float_value();
+                        let inf = self.context.f64_type().const_float(f64::INFINITY);
+                        Some(
+                            self.builder
+                                .build_float_compare(FloatPredicate::OEQ, fabs_val, inf, "is_inf")
+                                .unwrap()
+                                .into(),
+                        )
+                    }
+                    "is_finite" => {
+                        // fabs(v) < +inf (excludes both inf and NaN due to ordered compare)
+                        let fabs_val = self
+                            .emit_float_intrinsic_method("fabs", BasicValueEnum::FloatValue(v))?
+                            .into_float_value();
+                        let inf = self.context.f64_type().const_float(f64::INFINITY);
+                        Some(
+                            self.builder
+                                .build_float_compare(FloatPredicate::OLT, fabs_val, inf, "is_fin")
+                                .unwrap()
+                                .into(),
+                        )
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    // ── Map.values() → List ───────────────────────────────────────────────────
+    fn emit_values_method(
+        &mut self,
+        recv_val: BasicValueEnum<'ctx>,
+    ) -> Option<BasicValueEnum<'ctx>> {
+        match recv_val {
+            BasicValueEnum::PointerValue(map) => {
+                let values_fn = self.get_mvl_map_values();
+                self.call_value(
+                    self.builder
+                        .build_call(values_fn, &[map.into()], "map_values")
+                        .unwrap(),
+                )
+            }
+            _ => None,
+        }
+    }
+
+    // ── Option/Result disc checks (is_some, is_none, is_ok, is_err) ──────────
+    fn emit_algebraic_disc_method(
+        &mut self,
+        method: &str,
+        recv_val: BasicValueEnum<'ctx>,
+    ) -> Option<BasicValueEnum<'ctx>> {
+        match recv_val {
+            BasicValueEnum::StructValue(sv) if sv.get_type().count_fields() == 2 => {
+                let disc = self
+                    .builder
+                    .build_extract_value(sv, 0, "disc")
+                    .ok()?
+                    .into_int_value();
+                let zero = self.context.i8_type().const_int(0, false);
+                let pred = match method {
+                    "is_some" | "is_ok" => IntPredicate::EQ,
+                    "is_none" | "is_err" => IntPredicate::NE,
+                    _ => return None,
+                };
+                Some(
+                    self.builder
+                        .build_int_compare(pred, disc, zero, "disc_cmp")
+                        .unwrap()
+                        .into(),
+                )
+            }
+            _ => None,
+        }
+    }
+
+    // ── Option/Result.unwrap_or(default) ─────────────────────────────────────
+    fn emit_unwrap_or_method(
+        &mut self,
+        recv_val: BasicValueEnum<'ctx>,
+        args: &[Expr],
+    ) -> Option<BasicValueEnum<'ctx>> {
+        match recv_val {
+            BasicValueEnum::StructValue(sv) if sv.get_type().count_fields() == 2 => {
+                // Emit default first to know the value type.
+                let default_val = self.emit_expr(args.first()?)?;
+                let val_ty = default_val.get_type();
+
+                // Extract disc (i8): 0 = Some/Ok, 1 = None/Err
+                let disc = self
+                    .builder
+                    .build_extract_value(sv, 0, "uw_disc")
+                    .ok()?
+                    .into_int_value();
+                let zero_i8 = self.context.i8_type().const_int(0, false);
+                let is_present = self
+                    .builder
+                    .build_int_compare(IntPredicate::EQ, disc, zero_i8, "uw_is_present")
+                    .unwrap();
+
+                let parent_fn = self.builder.get_insert_block()?.get_parent()?;
+                let some_bb = self.context.append_basic_block(parent_fn, "uw_some");
+                let none_bb = self.context.append_basic_block(parent_fn, "uw_none");
+                let merge_bb = self.context.append_basic_block(parent_fn, "uw_merge");
+
+                self.builder
+                    .build_conditional_branch(is_present, some_bb, none_bb)
+                    .unwrap();
+
+                // Some/Ok branch: load payload from the pointer in field 1
+                self.builder.position_at_end(some_bb);
+                let payload_ptr = self
+                    .builder
+                    .build_extract_value(sv, 1, "uw_payload_ptr")
+                    .ok()?
+                    .into_pointer_value();
+                let loaded = self
+                    .builder
+                    .build_load(val_ty, payload_ptr, "uw_payload")
+                    .unwrap();
+                let some_end = self.builder.get_insert_block()?;
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+                // None/Err branch: use default
+                self.builder.position_at_end(none_bb);
+                let none_end = self.builder.get_insert_block()?;
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+                // Merge
+                self.builder.position_at_end(merge_bb);
+                if loaded.get_type() == default_val.get_type() {
+                    let phi = self.builder.build_phi(val_ty, "uw_result").unwrap();
+                    phi.add_incoming(&[(&loaded, some_end), (&default_val, none_end)]);
+                    Some(phi.as_basic_value())
+                } else {
+                    None
+                }
             }
             _ => None,
         }
