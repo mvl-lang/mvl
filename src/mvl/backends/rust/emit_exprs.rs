@@ -696,6 +696,10 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
 
                 // ── Generic Rust method fallthrough ───────────────────────────────
                 _ => {
+                    // If `method` is a known stdlib builtin (see `BUILTINS` in
+                    // backends.rs), it should have an arm above.  Reaching here
+                    // means the Rust backend is missing an emit arm — add it.
+                    // Known gaps are tracked in issue #1095.
                     // #959: if `method` is a fn-typed struct field, emit `(receiver.field)(args)`
                     // instead of `receiver.field(args)` — Rust interprets the latter as a method
                     // call on the struct and cannot find the method in the impl block.

@@ -772,6 +772,32 @@ pub unsafe extern "C" fn mvl_map_keys(m: *const MvlMap) -> *mut MvlArray {
     arr
 }
 
+/// Return an `MvlArray*` of raw-byte values stored in the map.
+///
+/// Each value is wrapped in a freshly-allocated `MvlString` (reusing the
+/// string container as a typed byte-buffer), mirroring the layout returned
+/// by `mvl_map_keys`.  Callers should drop the result with
+/// `mvl_string_ptr_array_drop` when done.
+///
+/// # Safety
+/// `m` must be a valid non-null `MvlMap` pointer.
+#[no_mangle]
+pub unsafe extern "C" fn mvl_map_values(m: *const MvlMap) -> *mut MvlArray {
+    let arr = mvl_array_new(std::mem::size_of::<*mut MvlString>(), 0);
+    if m.is_null() || (*m).cap == 0 {
+        return arr;
+    }
+    let cap = (*m).cap as usize;
+    for i in 0..cap {
+        let slot = &*(*m).slots.add(i);
+        if slot.occupied == 1 {
+            let val_s = mvl_string_new(slot.val_ptr, slot.val_len as usize);
+            mvl_array_push(arr, (&val_s as *const *mut MvlString).cast());
+        }
+    }
+    arr
+}
+
 /// Drop an array whose elements are owned `*mut MvlString` pointers.
 ///
 /// Decrements the array's refcount.  When refcount reaches zero, each element
