@@ -3,7 +3,7 @@
 
 //! Actor runtime for the LLVM backend.
 //!
-//! Provides C-ABI functions for actor lifecycle: spawn, send, drop.
+//! Provides C-ABI functions for actor lifecycle: spawn, send, drop, join_all.
 //!
 //! Each actor is a std::thread running a message-dispatch loop. The actor state
 //! is a heap-allocated raw byte array; the dispatch function is a function pointer
@@ -23,11 +23,22 @@
 //! `MvlActorHandle` which wraps a `SyncSender`. Fire-and-forget semantics:
 //! `try_send` drops messages when the queue (capacity 256) is full.
 //!
-//! Phase 8, #696.
+//! # Shutdown protocol (#1124)
+//!
+//! `mvl_actor_join_all()` is emitted at the end of `fn main()` by the LLVM
+//! backend. It:
+//! 1. Drains the global actor registry (all spawned handles + join handles)
+//! 2. Drops each live `MvlActorHandle` — closing the `SyncSender`
+//! 3. Joins all actor threads (which drain buffered messages then exit)
+//!
+//! `mvl_actor_drop` marks the handle as consumed in the registry (setting its
+//! slot to `None`) to prevent double-free when `mvl_actor_join_all` runs later.
+//!
+//! Phase 8, #696. Shutdown fix: #1124.
 
-use std::cell::Cell;
+use std::cell::RefCell;
 use std::sync::mpsc;
-use std::thread;
+use std::thread::{self, JoinHandle};
 
 /// Maximum number of `i64` arguments a single behavior call can carry.
 /// Behaviors with more parameters than this are not yet supported.
@@ -55,6 +66,20 @@ pub struct MvlActorHandle {
 /// ```
 type DispatchFn = unsafe extern "C" fn(*mut u8, i64, *const i64);
 
+/// Global registry of spawned actors.
+///
+/// Each entry is `(Option<handle_ptr as usize>, JoinHandle<()>)`.
+/// The `Option` is set to `None` when the handle has been explicitly freed
+/// via `mvl_actor_drop`, preventing double-free in `mvl_actor_join_all`.
+///
+/// Uses `thread_local!` because LLVM-generated programs spawn actors only from
+/// the main thread. `mvl_actor_join_all` is also called from the main thread,
+/// so both access the same TLS slot.
+thread_local! {
+    static ACTOR_REGISTRY: RefCell<Vec<(Option<usize>, JoinHandle<()>)>> =
+        const { RefCell::new(Vec::new()) };
+}
+
 /// Spawn a new actor thread and return an opaque actor handle.
 ///
 /// # Parameters
@@ -67,7 +92,8 @@ type DispatchFn = unsafe extern "C" fn(*mut u8, i64, *const i64);
 /// # Returns
 ///
 /// An opaque `*mut MvlActorHandle`, or null on spawn failure.
-/// The caller owns the returned pointer and must eventually call [`mvl_actor_drop`].
+/// The caller owns the returned pointer and must eventually call [`mvl_actor_drop`]
+/// or [`mvl_actor_join_all`] to release it.
 ///
 /// # Safety
 ///
@@ -92,12 +118,18 @@ pub unsafe extern "C" fn mvl_actor_spawn(
     let handle_ptr = Box::into_raw(handle);
 
     let handle_addr = handle_ptr as usize;
-    thread::spawn(move || {
+    let join_handle = thread::spawn(move || {
         CURRENT_ACTOR_HANDLE.with(|cell| cell.set(handle_addr));
         let state_ptr = state.as_mut_ptr();
         while let Ok(msg) = rx.recv() {
             dispatch(state_ptr, msg.disc, msg.args.as_ptr());
         }
+    });
+
+    // Register (handle_ptr, JoinHandle) so mvl_actor_join_all can drain and join.
+    ACTOR_REGISTRY.with(|r| {
+        r.borrow_mut()
+            .push((Some(handle_ptr as usize), join_handle));
     });
 
     handle_ptr as *mut u8
@@ -135,6 +167,7 @@ pub unsafe extern "C" fn mvl_actor_send(handle: *mut u8, disc: i64, argc: i64, a
 }
 
 // Thread-local that each actor thread sets to its own handle before processing messages.
+use std::cell::Cell;
 thread_local! {
     static CURRENT_ACTOR_HANDLE: Cell<usize> = const { Cell::new(0) };
 }
@@ -151,6 +184,8 @@ pub extern "C" fn mvl_actor_self() -> *mut u8 {
 /// Drop an actor handle, disconnecting the sender.
 ///
 /// After this call the actor thread will drain any remaining messages and then exit.
+/// The handle is marked as consumed in the global registry so that
+/// [`mvl_actor_join_all`] does not double-free it.
 ///
 /// # Safety
 ///
@@ -161,5 +196,38 @@ pub unsafe extern "C" fn mvl_actor_drop(handle: *mut u8) {
     if handle.is_null() {
         return;
     }
+    // Mark the registry entry as consumed so mvl_actor_join_all skips it.
+    ACTOR_REGISTRY.with(|r| {
+        let mut reg = r.borrow_mut();
+        if let Some(entry) = reg.iter_mut().find(|(p, _)| *p == Some(handle as usize)) {
+            entry.0 = None;
+        }
+    });
     drop(Box::from_raw(handle as *mut MvlActorHandle));
+}
+
+/// Join all spawned actor threads, waiting for them to drain and exit.
+///
+/// Emitted at the end of `fn main()` by the LLVM backend (#1124).
+///
+/// For each registered actor handle that has not been explicitly dropped:
+/// 1. Drops the `MvlActorHandle`, closing the `SyncSender`
+/// 2. The actor thread drains any buffered messages and exits
+///
+/// After dropping all handles, joins all actor threads.
+#[no_mangle]
+pub extern "C" fn mvl_actor_join_all() {
+    let entries = ACTOR_REGISTRY.with(|r| r.borrow_mut().drain(..).collect::<Vec<_>>());
+    // Drop all live handles first — closes senders so actor threads will exit.
+    for (ptr_opt, _) in &entries {
+        if let Some(ptr) = ptr_opt {
+            unsafe {
+                drop(Box::from_raw(*ptr as *mut MvlActorHandle));
+            }
+        }
+    }
+    // Join all actor threads.
+    for (_, jh) in entries {
+        let _ = jh.join();
+    }
 }
