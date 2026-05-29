@@ -139,7 +139,9 @@ pub(super) fn dispatch(args: &[String]) {
             let verbose = args.iter().any(|a| a == "--verbose" || a == "-v");
             let coverage = args.iter().any(|a| a == "--coverage");
             let bdd = args.iter().any(|a| a == "--bdd");
-            if backend == "llvm-inkwell" {
+            if backend == "llvm" {
+                llvm_text::cmd_test_llvm_text(&path, quiet, verbose);
+            } else if backend == "llvm-inkwell" {
                 #[cfg(feature = "llvm")]
                 llvm::cmd_test_llvm(&path, quiet, verbose);
                 #[cfg(not(feature = "llvm"))]

@@ -43,5 +43,6 @@
 //! ```
 
 mod emitter;
+pub mod lli;
 
 pub use emitter::LlvmTextCompiler;
