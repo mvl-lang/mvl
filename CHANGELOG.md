@@ -1,5 +1,12 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+- `mvl init [<name>]` now scaffolds a new project (`mvl.toml` + `src/main.mvl`) in the
+  current directory; name defaults to the current directory name when omitted (#1129)
+- `mvl self init` replaces `mvl init` for stdlib extraction (#1129)
+
 ## [0.161.2] - 2026-05-27
 
 ### Fixed
