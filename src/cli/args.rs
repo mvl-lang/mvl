@@ -91,6 +91,8 @@ pub fn print_usage() {
     eprintln!("  mvl install                        — fetch all deps from mvl.lock, verify hashes");
     eprintln!("  mvl update                         — re-resolve versions, update mvl.lock");
     eprintln!("  mvl pin [<version>]                — pin project to compiler version (writes .mvl-version)");
+    eprintln!("  mvl sbom [--format=cyclonedx|spdx] — generate SBOM from mvl.lock (default: CycloneDX JSON)");
+    eprintln!("           [--output=<file>]          — write SBOM to file instead of stdout");
 }
 
 /// Parse `--error-limit=N` from args; 0 means unlimited, default is 10.

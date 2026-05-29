@@ -9,11 +9,13 @@
 //! - `mvl add <git-url>[@<tag>]`  — fetch a package, add to mvl.toml + mvl.lock
 //! - `mvl install`                 — fetch all deps from mvl.lock, verify hashes
 //! - `mvl update`                  — re-resolve versions, update mvl.lock
+//! - `mvl sbom`                    — generate CycloneDX/SPDX SBOM from mvl.lock
 
 pub mod fetch;
 pub mod lock;
 pub mod manifest;
 pub mod mvs;
+pub mod sbom;
 pub mod version;
 
 use fetch::{fetch_package, pkg_cache_dir, resolve_pkg_dir, verify_hash};
@@ -270,6 +272,26 @@ pub fn cmd_update(project_root: &Path) -> Result<(), PackageError> {
         println!("All packages are up to date.");
     }
     Ok(())
+}
+
+/// `mvl sbom [--format=<fmt>]`
+///
+/// Generates a software bill of materials from `mvl.toml` and `mvl.lock` and
+/// returns it as a string so the caller can print or write it.
+///
+/// `format` defaults to `"cyclonedx"` if `None`.
+pub fn cmd_sbom(format: Option<&str>, project_root: &Path) -> Result<String, PackageError> {
+    let manifest = Manifest::load(project_root)?;
+    let lock = LockFile::load_or_empty(project_root);
+
+    let fmt_str = format.unwrap_or("cyclonedx");
+    let fmt = sbom::SbomFormat::parse(fmt_str).ok_or_else(|| {
+        PackageError::InvalidInput(format!(
+            "unknown SBOM format '{fmt_str}'; supported: cyclonedx, spdx"
+        ))
+    })?;
+
+    Ok(sbom::generate(&manifest, &lock, fmt))
 }
 
 /// Ensure all dependencies in `mvl.toml` are fetched before build.

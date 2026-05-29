@@ -259,6 +259,9 @@ pub(super) fn dispatch(args: &[String]) {
             let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
             toolchain::cmd_pin(version_arg, &project_root);
         }
+        "sbom" => {
+            meta::cmd_sbom(args);
+        }
         other => {
             eprintln!("Unknown command: {other}");
             args::print_usage();
