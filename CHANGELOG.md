@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [0.162.1] - 2026-05-29
+
+### Fixed
+- `mvl sbom` now detects application vs library component type by checking for `main.mvl` or `src/main.mvl` in the project root; CycloneDX `type` and SPDX `PrimaryPackagePurpose` reflect the result (#252)
+
 ## [0.162.0] - 2026-05-29
 
 ### Added
