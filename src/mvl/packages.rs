@@ -291,7 +291,16 @@ pub fn cmd_sbom(format: Option<&str>, project_root: &Path) -> Result<String, Pac
         ))
     })?;
 
-    Ok(sbom::generate(&manifest, &lock, fmt))
+    // Detect application vs library: presence of main.mvl anywhere in the project root.
+    let component_type = if project_root.join("main.mvl").exists()
+        || project_root.join("src").join("main.mvl").exists()
+    {
+        sbom::ComponentType::Application
+    } else {
+        sbom::ComponentType::Library
+    };
+
+    Ok(sbom::generate(&manifest, &lock, fmt, component_type))
 }
 
 /// Ensure all dependencies in `mvl.toml` are fetched before build.

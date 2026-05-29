@@ -31,16 +31,37 @@ impl SbomFormat {
 }
 
 /// Generate an SBOM document from the manifest and lock file.
-pub fn generate(manifest: &Manifest, lock: &LockFile, format: SbomFormat) -> String {
+/// CycloneDX component type for the root package.
+#[derive(Clone, Copy, PartialEq)]
+pub enum ComponentType {
+    Application,
+    Library,
+}
+
+impl ComponentType {
+    fn as_str(self) -> &'static str {
+        match self {
+            ComponentType::Application => "application",
+            ComponentType::Library => "library",
+        }
+    }
+}
+
+pub fn generate(
+    manifest: &Manifest,
+    lock: &LockFile,
+    format: SbomFormat,
+    component_type: ComponentType,
+) -> String {
     match format {
-        SbomFormat::CycloneDx => cyclonedx(manifest, lock),
-        SbomFormat::Spdx => spdx(manifest, lock),
+        SbomFormat::CycloneDx => cyclonedx(manifest, lock, component_type),
+        SbomFormat::Spdx => spdx(manifest, lock, component_type),
     }
 }
 
 // ── CycloneDX 1.5 JSON ────────────────────────────────────────────────────────
 
-fn cyclonedx(manifest: &Manifest, lock: &LockFile) -> String {
+fn cyclonedx(manifest: &Manifest, lock: &LockFile, component_type: ComponentType) -> String {
     let pkg = &manifest.package;
     let serial = make_serial(&pkg.name, &pkg.version);
     let mvl_ver = env!("CARGO_PKG_VERSION");
@@ -57,7 +78,7 @@ fn cyclonedx(manifest: &Manifest, lock: &LockFile) -> String {
         mvl_ver
     );
     out += "    \"component\": {\n";
-    out += "      \"type\": \"library\",\n";
+    out += &format!("      \"type\": \"{}\",\n", component_type.as_str());
     out += &format!("      \"name\": \"{}\",\n", json_escape(&pkg.name));
     out += &format!("      \"version\": \"{}\",\n", json_escape(&pkg.version));
     out += &format!(
@@ -135,7 +156,7 @@ fn cargo_component_json(name: &str, version: &str) -> String {
 
 // ── SPDX 2.3 tag-value ───────────────────────────────────────────────────────
 
-fn spdx(manifest: &Manifest, lock: &LockFile) -> String {
+fn spdx(manifest: &Manifest, lock: &LockFile, component_type: ComponentType) -> String {
     let pkg = &manifest.package;
     let mvl_ver = env!("CARGO_PKG_VERSION");
     let doc_name = format!("{}-{}", pkg.name, pkg.version);
@@ -159,6 +180,13 @@ fn spdx(manifest: &Manifest, lock: &LockFile) -> String {
     out += "SPDXID: SPDXRef-Package\n";
     out += &format!("PackageVersion: {}\n", pkg.version);
     out += &format!("PackageLicense: {}\n", pkg.license);
+    out += &format!(
+        "PrimaryPackagePurpose: {}\n",
+        match component_type {
+            ComponentType::Application => "APPLICATION",
+            ComponentType::Library => "LIBRARY",
+        }
+    );
     out += &format!(
         "ExternalRef: PACKAGE-MANAGER purl {}\n",
         mvl_purl(&pkg.name, &pkg.version)
@@ -345,7 +373,12 @@ mod tests {
 
     #[test]
     fn cyclonedx_is_valid_json_structure() {
-        let out = generate(&sample_manifest(), &sample_lock(), SbomFormat::CycloneDx);
+        let out = generate(
+            &sample_manifest(),
+            &sample_lock(),
+            SbomFormat::CycloneDx,
+            ComponentType::Library,
+        );
         assert!(out.starts_with('{'), "must start with {{");
         assert!(out.trim_end().ends_with('}'), "must end with }}");
         assert!(out.contains("\"bomFormat\": \"CycloneDX\""));
@@ -354,15 +387,75 @@ mod tests {
 
     #[test]
     fn cyclonedx_contains_root_package() {
-        let out = generate(&sample_manifest(), &sample_lock(), SbomFormat::CycloneDx);
+        let out = generate(
+            &sample_manifest(),
+            &sample_lock(),
+            SbomFormat::CycloneDx,
+            ComponentType::Library,
+        );
         assert!(out.contains("github.com/lab271/my-app"));
         assert!(out.contains("\"version\": \"1.0.0\""));
         assert!(out.contains("\"id\": \"MIT\""));
     }
 
     #[test]
+    fn cyclonedx_application_type_for_app() {
+        let out = generate(
+            &sample_manifest(),
+            &sample_lock(),
+            SbomFormat::CycloneDx,
+            ComponentType::Application,
+        );
+        assert!(
+            out.contains("\"type\": \"application\""),
+            "root component must be 'application'"
+        );
+    }
+
+    #[test]
+    fn cyclonedx_library_type_for_lib() {
+        let out = generate(
+            &sample_manifest(),
+            &sample_lock(),
+            SbomFormat::CycloneDx,
+            ComponentType::Library,
+        );
+        assert!(
+            out.contains("\"type\": \"library\""),
+            "root component must be 'library'"
+        );
+    }
+
+    #[test]
+    fn spdx_application_purpose_for_app() {
+        let out = generate(
+            &sample_manifest(),
+            &sample_lock(),
+            SbomFormat::Spdx,
+            ComponentType::Application,
+        );
+        assert!(out.contains("PrimaryPackagePurpose: APPLICATION"));
+    }
+
+    #[test]
+    fn spdx_library_purpose_for_lib() {
+        let out = generate(
+            &sample_manifest(),
+            &sample_lock(),
+            SbomFormat::Spdx,
+            ComponentType::Library,
+        );
+        assert!(out.contains("PrimaryPackagePurpose: LIBRARY"));
+    }
+
+    #[test]
     fn cyclonedx_contains_mvl_dependency() {
-        let out = generate(&sample_manifest(), &sample_lock(), SbomFormat::CycloneDx);
+        let out = generate(
+            &sample_manifest(),
+            &sample_lock(),
+            SbomFormat::CycloneDx,
+            ComponentType::Library,
+        );
         assert!(out.contains("github.com/lab271/mvl-stdlib"));
         assert!(out.contains("\"SHA-256\""));
         assert!(out.contains("abc123def456"));
@@ -371,14 +464,24 @@ mod tests {
 
     #[test]
     fn cyclonedx_contains_native_dependency() {
-        let out = generate(&sample_manifest(), &sample_lock(), SbomFormat::CycloneDx);
+        let out = generate(
+            &sample_manifest(),
+            &sample_lock(),
+            SbomFormat::CycloneDx,
+            ComponentType::Library,
+        );
         assert!(out.contains("\"name\": \"hyper\""));
         assert!(out.contains("pkg:cargo/hyper@1.0"));
     }
 
     #[test]
     fn cyclonedx_purl_format() {
-        let out = generate(&sample_manifest(), &sample_lock(), SbomFormat::CycloneDx);
+        let out = generate(
+            &sample_manifest(),
+            &sample_lock(),
+            SbomFormat::CycloneDx,
+            ComponentType::Library,
+        );
         assert!(out.contains("pkg:mvl/github.com/lab271/mvl-stdlib@1.2.0"));
     }
 
@@ -402,7 +505,12 @@ mod tests {
         let lock = LockFile { packages: vec![] };
         let mut manifest = sample_manifest();
         manifest.native.clear();
-        let out = generate(&manifest, &lock, SbomFormat::CycloneDx);
+        let out = generate(
+            &manifest,
+            &lock,
+            SbomFormat::CycloneDx,
+            ComponentType::Library,
+        );
         assert!(out.contains("\"components\": [\n  ]"));
     }
 
@@ -420,7 +528,12 @@ mod tests {
         };
         let mut manifest = sample_manifest();
         manifest.native.clear();
-        let out = generate(&manifest, &lock, SbomFormat::CycloneDx);
+        let out = generate(
+            &manifest,
+            &lock,
+            SbomFormat::CycloneDx,
+            ComponentType::Library,
+        );
         // git URL absent → no externalReferences
         assert!(!out.contains("externalReferences"));
     }
@@ -429,13 +542,23 @@ mod tests {
 
     #[test]
     fn spdx_starts_with_version_header() {
-        let out = generate(&sample_manifest(), &sample_lock(), SbomFormat::Spdx);
+        let out = generate(
+            &sample_manifest(),
+            &sample_lock(),
+            SbomFormat::Spdx,
+            ComponentType::Library,
+        );
         assert!(out.starts_with("SPDXVersion: SPDX-2.3\n"));
     }
 
     #[test]
     fn spdx_contains_root_package() {
-        let out = generate(&sample_manifest(), &sample_lock(), SbomFormat::Spdx);
+        let out = generate(
+            &sample_manifest(),
+            &sample_lock(),
+            SbomFormat::Spdx,
+            ComponentType::Library,
+        );
         assert!(out.contains("PackageName: github.com/lab271/my-app"));
         assert!(out.contains("PackageVersion: 1.0.0"));
         assert!(out.contains("PackageLicense: MIT"));
@@ -443,19 +566,34 @@ mod tests {
 
     #[test]
     fn spdx_contains_dependency_relationships() {
-        let out = generate(&sample_manifest(), &sample_lock(), SbomFormat::Spdx);
+        let out = generate(
+            &sample_manifest(),
+            &sample_lock(),
+            SbomFormat::Spdx,
+            ComponentType::Library,
+        );
         assert!(out.contains("Relationship: SPDXRef-Package DEPENDS_ON"));
     }
 
     #[test]
     fn spdx_contains_checksum_for_locked_package() {
-        let out = generate(&sample_manifest(), &sample_lock(), SbomFormat::Spdx);
+        let out = generate(
+            &sample_manifest(),
+            &sample_lock(),
+            SbomFormat::Spdx,
+            ComponentType::Library,
+        );
         assert!(out.contains("PackageChecksum: SHA256: abc123def456"));
     }
 
     #[test]
     fn spdx_native_deps_reference_crates_io() {
-        let out = generate(&sample_manifest(), &sample_lock(), SbomFormat::Spdx);
+        let out = generate(
+            &sample_manifest(),
+            &sample_lock(),
+            SbomFormat::Spdx,
+            ComponentType::Library,
+        );
         assert!(out.contains("https://crates.io"));
         assert!(out.contains("pkg:cargo/hyper@1.0"));
     }
