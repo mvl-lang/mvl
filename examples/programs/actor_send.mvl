@@ -11,7 +11,7 @@ actor Accumulator {
     pub fn clear() { }
 }
 
-fn main() -> Unit ! Console {
+fn main() -> Unit ! Console + Actor {
     let a: Accumulator = actor Accumulator { sum: 0, name: "acc" };
     a.add(10);
     a.add(20);

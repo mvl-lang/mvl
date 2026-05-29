@@ -24,7 +24,7 @@
 use pkg.http.{Method, Router, HttpServer, new_router, route}
 use std.net.{tcp_listen, net_error_msg}
 
-partial fn main() -> Unit ! Console + Net {
+partial fn main() -> Unit ! Console + Net + Actor {
     let r: Router = route(route(route(new_router(),
         Method::Get,  "/health",      "health"),
         Method::Get,  "/users",       "users"),

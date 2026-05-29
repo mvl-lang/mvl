@@ -11,7 +11,7 @@ actor Counter {
     pub fn reset() { }
 }
 
-fn main() -> Unit ! Console {
+fn main() -> Unit ! Console + Actor {
     let c: Counter = actor Counter { count: 0 };
     c.increment(1);
     c.increment(2);
