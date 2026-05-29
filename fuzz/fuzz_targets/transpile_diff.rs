@@ -17,7 +17,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use mvl::mvl::codegen::find_lli;
+use mvl::mvl::backends::llvm::find_lli;
 use mvl_fuzz::generator::Generator;
 use std::io::Write;
 use std::path::{Path, PathBuf};

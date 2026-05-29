@@ -12,7 +12,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use mvl::mvl::codegen::LlvmCompiler;
+use mvl::mvl::backends::llvm::LlvmCompiler;
 use mvl::mvl::parser::Parser;
 use mvl_fuzz::generator::Generator;
 

@@ -5,6 +5,7 @@ use mvl::mvl::backends::rust as transpiler;
 use mvl::mvl::backends::rust::{
     emit_mcdc_preamble, emit_mcdc_report_test, MCDCDecision, TranspileConfig,
 };
+use mvl::mvl::checker;
 use mvl::mvl::loader;
 use mvl::mvl::parser::ast::Decl;
 use mvl::mvl::passes::mcdc::analysis::{analyze_mcdc, DecisionInfo};
@@ -125,8 +126,11 @@ pub fn run(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
         let start_id = all_decisions.len();
         let static_d = analyze_mcdc(&prog, &module_name, start_id);
         all_static_decisions.extend(static_d);
+        let mut expr_types = checker::collect_prelude_expr_types(&stdlib_prelude_progs);
+        expr_types.extend(checker::check_with_prelude(&stdlib_prelude_progs, &prog).expr_types);
         let result = transpiler::transpile(
             &prog,
+            expr_types,
             TranspileConfig::new(&module_name)
                 .with_file_stem(&module_name)
                 .with_prelude(stdlib_prelude_progs.clone())
@@ -169,8 +173,11 @@ pub fn run(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
         let start_id = all_decisions.len();
         let static_d = analyze_mcdc(&prog, &module_name, start_id);
         all_static_decisions.extend(static_d);
+        let mut expr_types = checker::collect_prelude_expr_types(&stdlib_prelude_progs);
+        expr_types.extend(checker::check_with_prelude(&stdlib_prelude_progs, &prog).expr_types);
         let result = transpiler::transpile(
             &prog,
+            expr_types,
             TranspileConfig::new(&module_name)
                 .with_file_stem(&module_name)
                 .with_prelude(stdlib_prelude_progs.clone())

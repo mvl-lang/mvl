@@ -142,12 +142,22 @@ pub fn run(path: &str, run: bool, run_args: &[String], assert_mode: AssertMode) 
     let mut all_expr_types = checker::collect_prelude_expr_types(&stdlib_prelude_progs);
     let check_result = checker::check_with_prelude(&stdlib_prelude_progs, &prog);
     all_expr_types.extend(check_result.expr_types);
+    // Pre-check each sibling so the backend receives ready-made expr_types (#1110).
+    let sibling_expr_types: Vec<_> = sibling_modules
+        .iter()
+        .map(|(_, sibling)| {
+            let mut t = checker::collect_prelude_expr_types(&stdlib_prelude_progs);
+            t.extend(checker::check_with_prelude(&stdlib_prelude_progs, sibling).expr_types);
+            t
+        })
+        .collect();
     let out = transpiler::transpile_project(
         &crate_name,
         &prog,
         &sibling_modules,
         &stdlib_prelude_progs,
         all_expr_types,
+        sibling_expr_types,
         assert_mode,
     );
 

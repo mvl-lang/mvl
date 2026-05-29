@@ -8,7 +8,8 @@
 //! Fix: hoist left/right into temp `let` bindings before the match block so each
 //! sub-expression is emitted — and its mutations allocated — exactly once.
 
-use mvl::mvl::backends::rust::{transpile, TranspileConfig};
+use mvl::mvl::backends::rust::{transpile, TranspileConfig, TranspileResult};
+use mvl::mvl::checker;
 use mvl::mvl::parser::Parser;
 
 fn parse(src: &str) -> mvl::mvl::parser::ast::Program {
@@ -17,6 +18,11 @@ fn parse(src: &str) -> mvl::mvl::parser::ast::Program {
     let prog = p.parse_program();
     assert!(p.errors().is_empty(), "parse errors: {:?}", p.errors());
     prog
+}
+
+fn do_transpile(prog: &mvl::mvl::parser::ast::Program, config: TranspileConfig) -> TranspileResult {
+    let expr_types = checker::check(prog).expr_types;
+    transpile(prog, expr_types, config)
 }
 
 /// `x < 92` — the comparison operator contributes 3 mutation variants and the
@@ -28,7 +34,7 @@ fn parse(src: &str) -> mvl::mvl::parser::ast::Program {
 fn binary_with_int_literal_rhs_produces_exact_mutation_count() {
     let src = "fn f(x: Int) -> Bool { x < 92 }";
     let prog = parse(src);
-    let r = transpile(
+    let r = do_transpile(
         &prog,
         TranspileConfig::new("my_crate")
             .with_file_stem("f")
@@ -71,7 +77,7 @@ fn binary_with_int_literal_rhs_produces_exact_mutation_count() {
 fn compound_binary_expression_produces_exact_mutation_count() {
     let src = "fn f(a: Int, b: Int) -> Bool { (a < b) || (a > 0) }";
     let prog = parse(src);
-    let r = transpile(
+    let r = do_transpile(
         &prog,
         TranspileConfig::new("my_crate")
             .with_file_stem("f")
@@ -112,7 +118,7 @@ fn compound_binary_expression_produces_exact_mutation_count() {
 fn three_level_arithmetic_binary_produces_exact_mutation_count() {
     let src = "fn f(a: Int, b: Int, c: Int, d: Int) -> Bool { (a + b) < (c - d) }";
     let prog = parse(src);
-    let r = transpile(
+    let r = do_transpile(
         &prog,
         TranspileConfig::new("my_crate")
             .with_file_stem("f")
@@ -152,7 +158,7 @@ fn three_level_arithmetic_binary_produces_exact_mutation_count() {
 fn integer_literal_on_lhs_produces_exact_mutation_count() {
     let src = "fn f(x: Int) -> Bool { 5 < x }";
     let prog = parse(src);
-    let r = transpile(
+    let r = do_transpile(
         &prog,
         TranspileConfig::new("my_crate")
             .with_file_stem("f")
@@ -192,7 +198,7 @@ fn integer_literal_on_lhs_produces_exact_mutation_count() {
 fn left_associative_chain_produces_exact_mutation_count() {
     let src = "fn f(a: Int, b: Int, c: Int) -> Int { a + b + c }";
     let prog = parse(src);
-    let r = transpile(
+    let r = do_transpile(
         &prog,
         TranspileConfig::new("my_crate")
             .with_file_stem("f")
@@ -227,7 +233,7 @@ fn left_associative_chain_produces_exact_mutation_count() {
 fn single_variant_operator_produces_exact_mutation_count() {
     let src = "fn f(a: Bool, b: Bool) -> Bool { a && b }";
     let prog = parse(src);
-    let r = transpile(
+    let r = do_transpile(
         &prog,
         TranspileConfig::new("my_crate")
             .with_file_stem("f")
