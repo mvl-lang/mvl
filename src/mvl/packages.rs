@@ -177,39 +177,91 @@ pub fn cmd_install(project_root: &Path) -> Result<(), PackageError> {
             // Verify hash even for cached packages
             verify_hash(&dest, &pkg.hash)?;
             cached += 1;
-            continue;
+        } else {
+            println!("Installing {} {}...", pkg.name, pkg.version);
+            let git_url = pkg.git.as_deref().ok_or_else(|| {
+                PackageError::MissingData(format!(
+                    "no git URL in mvl.lock for '{}' — cannot install",
+                    pkg.name
+                ))
+            })?;
+            // Always clone by version tag.  The `commit` field is informational
+            // only — `git clone --branch` does not accept raw SHAs.
+            let tag = format!("v{}", pkg.version);
+            let tag = tag.as_str();
+
+            let locked = fetch_package(&pkg.name, git_url, tag)?;
+
+            // Verify hash after fetch
+            if locked.hash != pkg.hash {
+                return Err(PackageError::Fetch(fetch::FetchError::HashMismatch {
+                    path: pkg.name.clone(),
+                    expected: pkg.hash.clone(),
+                    actual: locked.hash,
+                }));
+            }
+
+            installed += 1;
         }
 
-        println!("Installing {} {}...", pkg.name, pkg.version);
-        let git_url = pkg.git.as_deref().ok_or_else(|| {
-            PackageError::MissingData(format!(
-                "no git URL in mvl.lock for '{}' — cannot install",
-                pkg.name
-            ))
-        })?;
-        // Always clone by version tag.  The `commit` field is informational
-        // only — `git clone --branch` does not accept raw SHAs.
-        let tag = format!("v{}", pkg.version);
-        let tag = tag.as_str();
-
-        let locked = fetch_package(&pkg.name, git_url, tag)?;
-
-        // Verify hash after fetch
-        if locked.hash != pkg.hash {
-            return Err(PackageError::Fetch(fetch::FetchError::HashMismatch {
-                path: pkg.name.clone(),
-                expected: pkg.hash.clone(),
-                actual: locked.hash,
-            }));
-        }
-
-        installed += 1;
+        // Link package into the project's .mvl/pkg/<short_name>/ directory
+        // so the compiler can resolve `use pkg.<short_name>.*` imports.
+        link_pkg_to_project(project_root, &dest)?;
     }
 
     println!(
         "Installed {} package(s), {} already cached.",
         installed, cached
     );
+    Ok(())
+}
+
+/// Read a package's `mvl.toml` to extract its short name, then create a
+/// symlink at `.mvl/pkg/<short_name>/` pointing to the cache directory.
+///
+/// This bridges the gap between the XDG cache (keyed by git URL + version)
+/// and the compiler's `use pkg.<name>.*` resolution (keyed by short name).
+fn link_pkg_to_project(project_root: &Path, cache_dir: &Path) -> Result<(), PackageError> {
+    let manifest_path = cache_dir.join("mvl.toml");
+    let content = std::fs::read_to_string(&manifest_path)
+        .map_err(|e| PackageError::Io(manifest_path.display().to_string(), e.to_string()))?;
+    let manifest = Manifest::parse(&content)?;
+    let short_name = &manifest.package.name;
+
+    let link_dir = project_root.join(".mvl").join("pkg");
+    std::fs::create_dir_all(&link_dir)
+        .map_err(|e| PackageError::Io(link_dir.display().to_string(), e.to_string()))?;
+
+    let link_path = link_dir.join(short_name);
+
+    // Remove existing link/dir if it's a symlink (idempotent reinstall)
+    if link_path.symlink_metadata().is_ok() {
+        if link_path
+            .symlink_metadata()
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false)
+        {
+            std::fs::remove_file(&link_path)
+                .map_err(|e| PackageError::Io(link_path.display().to_string(), e.to_string()))?;
+        } else if link_path.is_dir() {
+            // Don't overwrite a real directory (could be a local override)
+            return Ok(());
+        }
+    }
+
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(cache_dir, &link_path)
+            .map_err(|e| PackageError::Io(link_path.display().to_string(), e.to_string()))?;
+    }
+
+    #[cfg(not(unix))]
+    {
+        // On non-Unix, copy instead of symlink
+        crate::cli::copy_dir_recursive(cache_dir, &link_path)
+            .map_err(|e| PackageError::Io(link_path.display().to_string(), e.to_string()))?;
+    }
+
     Ok(())
 }
 

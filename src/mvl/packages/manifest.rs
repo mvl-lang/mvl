@@ -217,7 +217,8 @@ impl std::fmt::Display for ManifestError {
 enum TomlValue {
     String(String),
     Table(TomlTable),
-    // Inline table: { git = "...", tag = "..." }
+    /// Arrays are opaque pass-through (only used in `[native]` feature lists).
+    Array(()),
 }
 
 type TomlTable = HashMap<String, TomlValue>;
@@ -350,6 +351,10 @@ fn parse_value(s: &str, line: usize) -> Result<TomlValue, String> {
         }
         return Ok(TomlValue::Table(tbl));
     }
+    // Array: [ ... ] — opaque (only needed for [native] features)
+    if s.starts_with('[') && s.ends_with(']') {
+        return Ok(TomlValue::Array(()));
+    }
     Err(format!("line {line}: unsupported TOML value: {s:?}"))
 }
 
@@ -445,6 +450,11 @@ fn parse_dependencies(
                     .to_string();
                 DepSpec::Git { git, tag }
             }
+            TomlValue::Array(_) => {
+                return Err(ManifestError::ParseError(format!(
+                    "dep '{name}': arrays are not valid dependency specs"
+                )));
+            }
         };
         deps.insert(name.clone(), spec);
     }
@@ -460,12 +470,24 @@ fn parse_native(value: Option<&TomlValue>) -> Result<HashMap<String, String>, Ma
             .ok_or_else(|| ManifestError::ParseError("[native] must be a table".to_string()))?,
     };
     for (name, val) in tbl {
-        let version = val
-            .as_str()
-            .ok_or_else(|| {
-                ManifestError::ParseError(format!("native dep '{name}' must be a string"))
-            })?
-            .to_string();
+        // Accept either a plain string ("0.31") or a table with a `version` key
+        // ({ version = "0.31", features = [...] }).
+        let version = if let Some(s) = val.as_str() {
+            s.to_string()
+        } else if let Some(t) = val.as_table() {
+            t.get("version")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| {
+                    ManifestError::ParseError(format!(
+                        "native dep '{name}' table must have a 'version' string"
+                    ))
+                })?
+                .to_string()
+        } else {
+            return Err(ManifestError::ParseError(format!(
+                "native dep '{name}' must be a string or table with 'version'"
+            )));
+        };
         native.insert(name.clone(), version);
     }
     Ok(native)
