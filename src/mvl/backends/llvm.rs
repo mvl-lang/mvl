@@ -2688,6 +2688,16 @@ impl<'ctx> LlvmBackend<'ctx> {
             let ret_name = self.heap_return_ident(&fd.body);
             self.emit_heap_drops_except(ret_name);
             if is_c_main {
+                // #1124: join all spawned actor threads before returning from main.
+                if !self.actors.actor_decls.is_empty() {
+                    let join_fn = self
+                        .module
+                        .get_function("mvl_actor_join_all")
+                        .expect("mvl_actor_join_all not declared");
+                    self.builder
+                        .build_call(join_fn, &[], "join_actors")
+                        .unwrap();
+                }
                 let zero = self.context.i32_type().const_int(0, false);
                 self.builder.build_return(Some(&zero)).unwrap();
             } else if self.is_unit_type(&fd.return_type) {

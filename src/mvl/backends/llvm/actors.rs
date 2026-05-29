@@ -68,6 +68,13 @@ impl<'ctx> LlvmBackend<'ctx> {
             self.module
                 .add_function("mvl_actor_self", self_ty, Some(Linkage::External));
         }
+
+        // mvl_actor_join_all: () -> void — joins all spawned actor threads at end of main
+        if self.module.get_function("mvl_actor_join_all").is_none() {
+            let join_ty = self.context.void_type().fn_type(&[], false);
+            self.module
+                .add_function("mvl_actor_join_all", join_ty, Some(Linkage::External));
+        }
     }
 
     // ── Actor declaration emission ────────────────────────────────────────────
