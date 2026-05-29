@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [0.165.0] - 2026-05-29
+
+### Added
+- Actor mailbox configuration: `with mailbox(capacity)`, `with mailbox(capacity, block|drop_newest)`, `with mailbox(unbounded)` syntax on actor declarations (#1127)
+- Configurable backpressure policies: `Block` (sender waits) vs `DropNewest` (fire-and-forget, default) for bounded mailboxes (#1127)
+- Unbounded mailbox option for audit/compliance actors that must never lose messages (#1127)
+
 ## [0.164.0] - 2026-05-29
 
 ### Added
