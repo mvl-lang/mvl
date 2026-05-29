@@ -47,21 +47,32 @@ impl ComponentType {
     }
 }
 
+use std::collections::HashMap;
+
+/// License map: package name → SPDX license identifier (e.g. "Apache-2.0").
+pub type LicenseMap = HashMap<String, String>;
+
 pub fn generate(
     manifest: &Manifest,
     lock: &LockFile,
     format: SbomFormat,
     component_type: ComponentType,
+    licenses: &LicenseMap,
 ) -> String {
     match format {
-        SbomFormat::CycloneDx => cyclonedx(manifest, lock, component_type),
-        SbomFormat::Spdx => spdx(manifest, lock, component_type),
+        SbomFormat::CycloneDx => cyclonedx(manifest, lock, component_type, licenses),
+        SbomFormat::Spdx => spdx(manifest, lock, component_type, licenses),
     }
 }
 
 // ── CycloneDX 1.5 JSON ────────────────────────────────────────────────────────
 
-fn cyclonedx(manifest: &Manifest, lock: &LockFile, component_type: ComponentType) -> String {
+fn cyclonedx(
+    manifest: &Manifest,
+    lock: &LockFile,
+    component_type: ComponentType,
+    licenses: &LicenseMap,
+) -> String {
     let pkg = &manifest.package;
     let serial = make_serial(&pkg.name, &pkg.version);
     let mvl_ver = env!("CARGO_PKG_VERSION");
@@ -95,7 +106,10 @@ fn cyclonedx(manifest: &Manifest, lock: &LockFile, component_type: ComponentType
 
     let mut entries: Vec<String> = Vec::new();
     for lp in &lock.packages {
-        entries.push(mvl_component_json(lp));
+        entries.push(mvl_component_json(
+            lp,
+            licenses.get(&lp.name).map(|s| s.as_str()),
+        ));
     }
     let mut native: Vec<(&String, &String)> = manifest.native.iter().collect();
     native.sort_by_key(|(k, _)| *k);
@@ -112,7 +126,7 @@ fn cyclonedx(manifest: &Manifest, lock: &LockFile, component_type: ComponentType
     out
 }
 
-fn mvl_component_json(lp: &LockedPackage) -> String {
+fn mvl_component_json(lp: &LockedPackage, license: Option<&str>) -> String {
     let indent = "    ";
     let mut fields: Vec<String> = Vec::new();
     fields.push(format!("{indent}  \"type\": \"library\""));
@@ -129,6 +143,12 @@ fn mvl_component_json(lp: &LockedPackage) -> String {
         fields.push(format!(
             "{indent}  \"hashes\": [{{\"alg\": \"SHA-256\", \"content\": \"{}\"}}]",
             json_escape(hex)
+        ));
+    }
+    if let Some(lic) = license {
+        fields.push(format!(
+            "{indent}  \"licenses\": [{{\"license\": {{\"id\": \"{}\"}}}}]",
+            json_escape(lic)
         ));
     }
     if let Some(ref url) = lp.git {
@@ -156,7 +176,12 @@ fn cargo_component_json(name: &str, version: &str) -> String {
 
 // ── SPDX 2.3 tag-value ───────────────────────────────────────────────────────
 
-fn spdx(manifest: &Manifest, lock: &LockFile, component_type: ComponentType) -> String {
+fn spdx(
+    manifest: &Manifest,
+    lock: &LockFile,
+    component_type: ComponentType,
+    licenses: &LicenseMap,
+) -> String {
     let pkg = &manifest.package;
     let mvl_ver = env!("CARGO_PKG_VERSION");
     let doc_name = format!("{}-{}", pkg.name, pkg.version);
@@ -206,6 +231,11 @@ fn spdx(manifest: &Manifest, lock: &LockFile, component_type: ComponentType) -> 
             out += &format!("PackageDownloadLocation: {url}\n");
         } else {
             out += "PackageDownloadLocation: NOASSERTION\n";
+        }
+        if let Some(lic) = licenses.get(&lp.name) {
+            out += &format!("PackageLicense: {lic}\n");
+        } else {
+            out += "PackageLicense: NOASSERTION\n";
         }
         out += "FilesAnalyzed: false\n";
         out += &format!(
@@ -378,6 +408,7 @@ mod tests {
             &sample_lock(),
             SbomFormat::CycloneDx,
             ComponentType::Library,
+            &LicenseMap::new(),
         );
         assert!(out.starts_with('{'), "must start with {{");
         assert!(out.trim_end().ends_with('}'), "must end with }}");
@@ -392,6 +423,7 @@ mod tests {
             &sample_lock(),
             SbomFormat::CycloneDx,
             ComponentType::Library,
+            &LicenseMap::new(),
         );
         assert!(out.contains("github.com/lab271/my-app"));
         assert!(out.contains("\"version\": \"1.0.0\""));
@@ -405,6 +437,7 @@ mod tests {
             &sample_lock(),
             SbomFormat::CycloneDx,
             ComponentType::Application,
+            &LicenseMap::new(),
         );
         assert!(
             out.contains("\"type\": \"application\""),
@@ -419,6 +452,7 @@ mod tests {
             &sample_lock(),
             SbomFormat::CycloneDx,
             ComponentType::Library,
+            &LicenseMap::new(),
         );
         assert!(
             out.contains("\"type\": \"library\""),
@@ -433,6 +467,7 @@ mod tests {
             &sample_lock(),
             SbomFormat::Spdx,
             ComponentType::Application,
+            &LicenseMap::new(),
         );
         assert!(out.contains("PrimaryPackagePurpose: APPLICATION"));
     }
@@ -444,6 +479,7 @@ mod tests {
             &sample_lock(),
             SbomFormat::Spdx,
             ComponentType::Library,
+            &LicenseMap::new(),
         );
         assert!(out.contains("PrimaryPackagePurpose: LIBRARY"));
     }
@@ -455,6 +491,7 @@ mod tests {
             &sample_lock(),
             SbomFormat::CycloneDx,
             ComponentType::Library,
+            &LicenseMap::new(),
         );
         assert!(out.contains("github.com/lab271/mvl-stdlib"));
         assert!(out.contains("\"SHA-256\""));
@@ -469,6 +506,7 @@ mod tests {
             &sample_lock(),
             SbomFormat::CycloneDx,
             ComponentType::Library,
+            &LicenseMap::new(),
         );
         assert!(out.contains("\"name\": \"hyper\""));
         assert!(out.contains("pkg:cargo/hyper@1.0"));
@@ -481,6 +519,7 @@ mod tests {
             &sample_lock(),
             SbomFormat::CycloneDx,
             ComponentType::Library,
+            &LicenseMap::new(),
         );
         assert!(out.contains("pkg:mvl/github.com/lab271/mvl-stdlib@1.2.0"));
     }
@@ -510,6 +549,7 @@ mod tests {
             &lock,
             SbomFormat::CycloneDx,
             ComponentType::Library,
+            &LicenseMap::new(),
         );
         assert!(out.contains("\"components\": [\n  ]"));
     }
@@ -533,6 +573,7 @@ mod tests {
             &lock,
             SbomFormat::CycloneDx,
             ComponentType::Library,
+            &LicenseMap::new(),
         );
         // git URL absent → no externalReferences
         assert!(!out.contains("externalReferences"));
@@ -547,6 +588,7 @@ mod tests {
             &sample_lock(),
             SbomFormat::Spdx,
             ComponentType::Library,
+            &LicenseMap::new(),
         );
         assert!(out.starts_with("SPDXVersion: SPDX-2.3\n"));
     }
@@ -558,6 +600,7 @@ mod tests {
             &sample_lock(),
             SbomFormat::Spdx,
             ComponentType::Library,
+            &LicenseMap::new(),
         );
         assert!(out.contains("PackageName: github.com/lab271/my-app"));
         assert!(out.contains("PackageVersion: 1.0.0"));
@@ -571,6 +614,7 @@ mod tests {
             &sample_lock(),
             SbomFormat::Spdx,
             ComponentType::Library,
+            &LicenseMap::new(),
         );
         assert!(out.contains("Relationship: SPDXRef-Package DEPENDS_ON"));
     }
@@ -582,6 +626,7 @@ mod tests {
             &sample_lock(),
             SbomFormat::Spdx,
             ComponentType::Library,
+            &LicenseMap::new(),
         );
         assert!(out.contains("PackageChecksum: SHA256: abc123def456"));
     }
@@ -593,6 +638,7 @@ mod tests {
             &sample_lock(),
             SbomFormat::Spdx,
             ComponentType::Library,
+            &LicenseMap::new(),
         );
         assert!(out.contains("https://crates.io"));
         assert!(out.contains("pkg:cargo/hyper@1.0"));

@@ -40,3 +40,6 @@ fuzz/Cargo.lock
 # Runtime database artifacts (crud_api example)
 crud_api.db
 examples/crud_api/crud_api.db
+
+# Installed package cache (created by `mvl install`)
+.mvl/

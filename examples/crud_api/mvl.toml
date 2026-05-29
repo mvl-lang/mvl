@@ -1,0 +1,9 @@
+[package]
+name = "crud_api"
+version = "0.1.0"
+license = "MIT"
+requires-mvl = ">=0.161.2"
+
+[dependencies]
+"github.com/mvl-lang/pkg-http" = { git = "https://github.com/mvl-lang/pkg-http", tag = "v0.1.1" }
+"github.com/mvl-lang/pkg-sqlite" = { git = "https://github.com/mvl-lang/pkg-sqlite", tag = "v0.1.1" }

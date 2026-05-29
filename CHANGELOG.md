@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [0.164.0] - 2026-05-29
+
+### Added
+- Package distribution infrastructure: `mvl install` now links cached packages to `.mvl/pkg/<short_name>/` for compiler resolution (#1139)
+- SBOM license support: `mvl sbom` now reads cached package manifests to populate dependency license fields in CycloneDX and SPDX output (#1139)
+- Package manifest parser enhancements: support for TOML arrays and table-format native dependencies (e.g., `rusqlite = { version = "...", features = [...] }`) (#1139)
+- End-to-end package distribution example: `examples/crud_api` now uses `mvl add` to depend on `pkg-http` and `pkg-sqlite` as proper git dependencies with version tags (#1139)
+
 ## [0.163.0] - 2026-05-29
 
 ### Added
