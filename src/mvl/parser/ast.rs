@@ -1150,6 +1150,10 @@ pub(crate) fn expr_to_ref_expr_ext(expr: &Expr, fallback_span: Span) -> Option<R
         }
         // forall/exists quantifiers — pass through directly.
         Expr::Quantifier(ref_expr, _) => Some(*ref_expr.clone()),
+        // old(expr) in ensures: for runtime purposes treat as the current value of expr.
+        Expr::FnCall { name, args, .. } if name == "old" && args.len() == 1 => {
+            expr_to_ref_expr_ext(&args[0], fallback_span)
+        }
         _ => {
             let _ = fallback_span;
             None

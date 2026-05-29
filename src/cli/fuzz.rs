@@ -423,6 +423,15 @@ fn transpile_project(files: &[PathBuf]) -> FuzzLibOutput {
     let mut all_expr_types = checker::collect_prelude_expr_types(&stdlib_prelude);
     let check_result = checker::check_with_prelude(&stdlib_prelude, entry_prog);
     all_expr_types.extend(check_result.expr_types);
+    // Pre-check each sibling so the backend receives ready-made expr_types (#1110).
+    let sibling_expr_types: Vec<_> = siblings
+        .iter()
+        .map(|(_, sibling)| {
+            let mut t = checker::collect_prelude_expr_types(&stdlib_prelude);
+            t.extend(checker::check_with_prelude(&stdlib_prelude, sibling).expr_types);
+            t
+        })
+        .collect();
 
     let out = transpiler::transpile_project_with_options(
         entry_name,
@@ -430,6 +439,7 @@ fn transpile_project(files: &[PathBuf]) -> FuzzLibOutput {
         &siblings,
         &stdlib_prelude,
         all_expr_types,
+        &sibling_expr_types,
         mvl::mvl::backends::AssertMode::Assume, // don't panic on refinement violations in fuzz
         true, // extern_stubs: extern "rust" → todo!() so the harness links without bridges
     );

@@ -10,8 +10,9 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
+use mvl::mvl::backends::rust::{transpile, TranspileConfig};
+use mvl::mvl::checker;
 use mvl::mvl::parser::Parser;
-use mvl::mvl::transpiler::transpile;
 use mvl_fuzz::generator::Generator;
 
 fuzz_target!(|data: &[u8]| {
@@ -27,8 +28,9 @@ fuzz_target!(|data: &[u8]| {
     let prog = parser.parse_program();
 
     // Transpile — must not panic regardless of parse errors in the AST.
-    let output = transpile(&prog, "fuzz_target");
+    let expr_types = checker::check(&prog).expr_types;
+    let output = transpile(&prog, expr_types, TranspileConfig::new("fuzz_target"));
 
     // Non-empty Rust output is the minimum bar.
-    assert!(!output.lib_rs.is_empty());
+    assert!(!output.output.lib_rs.is_empty());
 });

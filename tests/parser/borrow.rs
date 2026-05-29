@@ -11,6 +11,7 @@
 //! - `clone_*`   — cases where Phase B cannot infer a borrow, so Phase A still applies
 
 use mvl::mvl::backends::rust::{transpile, TranspileConfig};
+use mvl::mvl::checker;
 use mvl::mvl::parser::Parser;
 
 fn transpile_src(src: &str) -> String {
@@ -22,7 +23,8 @@ fn transpile_src(src: &str) -> String {
         "parse errors: {:?}",
         parser.errors()
     );
-    transpile(&prog, TranspileConfig::new("test_crate"))
+    let expr_types = checker::check(&prog).expr_types;
+    transpile(&prog, expr_types, TranspileConfig::new("test_crate"))
         .output
         .lib_rs
 }

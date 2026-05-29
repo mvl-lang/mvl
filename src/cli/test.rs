@@ -2,6 +2,7 @@
 // Copyright 2026 Schuberg Philis
 
 use mvl::mvl::backends::rust as transpiler;
+use mvl::mvl::checker;
 use mvl::mvl::loader;
 use mvl::mvl::parser::ast::Decl;
 use mvl::mvl::parser::Parser;
@@ -188,10 +189,13 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
                 }
             }
         }
+        let mut expr_types = checker::collect_prelude_expr_types(&stdlib_prelude_progs);
+        expr_types.extend(checker::check_with_prelude(&stdlib_prelude_progs, &prog).expr_types);
         let (out, branches) = if coverage {
             {
                 let r = transpiler::transpile(
                     &prog,
+                    expr_types,
                     transpiler::TranspileConfig::new(&module_name)
                         .with_file_stem(&module_name)
                         .with_prelude(stdlib_prelude_progs.clone())
@@ -203,6 +207,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
             (
                 transpiler::transpile(
                     &prog,
+                    expr_types,
                     transpiler::TranspileConfig::new(&module_name)
                         .with_prelude(stdlib_prelude_progs.clone()),
                 )
@@ -255,10 +260,13 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
         if !quiet {
             println!("  (inline tests) {file_str}");
         }
+        let mut expr_types = checker::collect_prelude_expr_types(&stdlib_prelude_progs);
+        expr_types.extend(checker::check_with_prelude(&stdlib_prelude_progs, &prog).expr_types);
         let (out, branches) = if coverage {
             {
                 let r = transpiler::transpile(
                     &prog,
+                    expr_types,
                     transpiler::TranspileConfig::new(&module_name)
                         .with_file_stem(&module_name)
                         .with_prelude(stdlib_prelude_progs.clone())
@@ -271,6 +279,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
             (
                 transpiler::transpile(
                     &prog,
+                    expr_types,
                     transpiler::TranspileConfig::new(&module_name)
                         .with_prelude(stdlib_prelude_progs.clone())
                         .for_test_crate(),

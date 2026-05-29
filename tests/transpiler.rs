@@ -6,6 +6,7 @@
 //!   3. Assert expected Rust snippets are present in the output
 
 use mvl::mvl::backends::rust::transpile;
+use mvl::mvl::checker;
 use mvl::mvl::parser::Parser;
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -25,7 +26,8 @@ fn transpile_full(src: &str) -> TranspileOutput {
         "parse errors: {:?}",
         parser.errors()
     );
-    transpile(&prog, TranspileConfig::new("test_crate")).output
+    let expr_types = checker::check(&prog).expr_types;
+    transpile(&prog, expr_types, TranspileConfig::new("test_crate")).output
 }
 
 fn assert_contains(src: &str, snippet: &str) {
@@ -33,6 +35,16 @@ fn assert_contains(src: &str, snippet: &str) {
         src.contains(snippet),
         "expected to find:\n  {snippet:?}\nin:\n{src}"
     );
+}
+
+/// Convenience: check `prog` then transpile — avoids repeating the checker call
+/// at every test site that doesn't need access to the full CheckResult.
+fn do_transpile(
+    prog: &mvl::mvl::parser::ast::Program,
+    config: TranspileConfig,
+) -> mvl::mvl::backends::rust::TranspileResult {
+    let expr_types = checker::check(prog).expr_types;
+    transpile(prog, expr_types, config)
 }
 
 // ── #29: Type declarations ────────────────────────────────────────────────
@@ -407,13 +419,12 @@ fn no_extern_uses_inline_preamble() {
 /// Cargo.toml includes mvl_runtime dependency when extern blocks are present.
 #[test]
 fn extern_rust_adds_mvl_runtime_to_cargo_toml() {
-    use mvl::mvl::backends::rust::transpile;
     let src = r#"extern "rust" {
     fn greet(name: String) -> String;
 }"#;
     let (mut p, _) = mvl::mvl::parser::Parser::new(src);
     let prog = p.parse_program();
-    let out = transpile(&prog, TranspileConfig::new("my_crate")).output;
+    let out = do_transpile(&prog, TranspileConfig::new("my_crate")).output;
     assert!(
         out.cargo_toml.contains("mvl_runtime"),
         "Cargo.toml must reference mvl_runtime: {}",
@@ -450,7 +461,8 @@ fn full_program_password_checker_transpiles() {
         "should have 1 extern trust boundary"
     );
 
-    let out = transpile(&prog, TranspileConfig::new("password_checker")).output;
+    let expr_types = check_result.expr_types;
+    let out = transpile(&prog, expr_types, TranspileConfig::new("password_checker")).output;
     assert_contains(&out.lib_rs, "use mvl_runtime::prelude::*");
     assert_contains(&out.lib_rs, "extern \"Rust\"");
     // `pub` is not valid inside Rust extern blocks
@@ -990,6 +1002,7 @@ pub partial fn greet(n: Int) -> String {
         &[],
         &prelude,
         Default::default(),
+        vec![],
         Default::default(),
     );
     assert!(
@@ -1018,6 +1031,7 @@ fn prelude_stub_with_empty_body_is_skipped() {
         &[],
         &prelude,
         Default::default(),
+        vec![],
         Default::default(),
     );
     assert!(
@@ -1048,6 +1062,7 @@ fn println_from_prelude_is_emitted_as_function() {
         &[],
         &prelude,
         Default::default(),
+        vec![],
         Default::default(),
     );
     // println is no longer macro-handled (#839) so it IS emitted as a Rust function.
@@ -1072,6 +1087,7 @@ fn empty_prelude_progs_emits_no_prelude_section() {
         &[],
         &[],
         Default::default(),
+        vec![],
         Default::default(),
     );
     assert!(
@@ -1103,6 +1119,7 @@ fn main() -> Unit { }
         &[],
         &prelude,
         Default::default(),
+        vec![],
         Default::default(),
     );
     let count = out.main_rs.matches("fn my_fn(").count();
@@ -1795,7 +1812,7 @@ fn has_std_imports_false_for_non_std_use() {
 #[test]
 fn transpile_with_prelude_produces_valid_output() {
     let prog = parse_prog("fn f(x: Int) -> Int { x }");
-    let out = transpile(&prog, TranspileConfig::new("my_crate")).output;
+    let out = do_transpile(&prog, TranspileConfig::new("my_crate")).output;
     assert_contains(&out.lib_rs, "fn f(");
     assert!(!out.has_main);
     assert_contains(&out.cargo_toml, "my_crate");
@@ -1804,7 +1821,7 @@ fn transpile_with_prelude_produces_valid_output() {
 #[test]
 fn transpile_with_prelude_has_main_sets_binary() {
     let prog = parse_prog("fn main() -> Unit { }");
-    let out = transpile(&prog, TranspileConfig::new("my_app")).output;
+    let out = do_transpile(&prog, TranspileConfig::new("my_app")).output;
     assert!(out.has_main);
     assert!(
         !out.cargo_toml.contains("[lib]"),
@@ -1815,7 +1832,7 @@ fn transpile_with_prelude_has_main_sets_binary() {
 #[test]
 fn transpile_source_with_prelude_produces_valid_output() {
     let prog = parse_prog("fn f(x: Int) -> Int { x }");
-    let out = transpile(&prog, TranspileConfig::new("my_crate").for_test_crate()).output;
+    let out = do_transpile(&prog, TranspileConfig::new("my_crate").for_test_crate()).output;
     assert_contains(&out.lib_rs, "fn f(");
     assert!(!out.has_main);
 }
@@ -1824,7 +1841,7 @@ fn transpile_source_with_prelude_produces_valid_output() {
 fn transpile_covered_instruments_branches() {
     let src = "fn f(n: Int) -> Int { if n > 0 { 1 } else { 0 } }";
     let prog = parse_prog(src);
-    let r = transpile(
+    let r = do_transpile(
         &prog,
         TranspileConfig::new("my_crate")
             .with_file_stem("f")
@@ -1839,7 +1856,7 @@ fn transpile_covered_instruments_branches() {
 fn transpile_covered_with_prelude_instruments_branches() {
     let src = "fn f(n: Int) -> Int { if n > 0 { 1 } else { 0 } }";
     let prog = parse_prog(src);
-    let r = transpile(
+    let r = do_transpile(
         &prog,
         TranspileConfig::new("my_crate")
             .with_file_stem("f")
@@ -1854,7 +1871,7 @@ fn transpile_covered_with_prelude_instruments_branches() {
 fn transpile_covered_source_instruments_branches() {
     let src = "fn f(n: Int) -> Int { match n { 0 => 0, _ => 1 } }";
     let prog = parse_prog(src);
-    let r = transpile(
+    let r = do_transpile(
         &prog,
         TranspileConfig::new("my_crate")
             .with_file_stem("f")
@@ -1870,7 +1887,7 @@ fn transpile_covered_source_instruments_branches() {
 fn transpile_covered_source_with_prelude_instruments_branches() {
     let src = "fn f(n: Int) -> Int { match n { 0 => 0, _ => 1 } }";
     let prog = parse_prog(src);
-    let r = transpile(
+    let r = do_transpile(
         &prog,
         TranspileConfig::new("my_crate")
             .with_file_stem("f")
@@ -1890,7 +1907,7 @@ fn transpile_mutated_with_prelude_mutates_non_test_fn_bodies() {
     // non-test fn re-declarations.
     let src = "fn f(a: Int, b: Int) -> Int { a + b }";
     let prog = parse_prog(src);
-    let r = transpile(
+    let r = do_transpile(
         &prog,
         TranspileConfig::new("my_crate")
             .with_file_stem("f")
@@ -1909,7 +1926,7 @@ fn transpile_mutated_with_prelude_mutates_non_test_fn_bodies() {
 fn transpile_mutated_source_with_prelude_produces_mutants() {
     let src = "fn f(a: Int, b: Int) -> Int { a + b }";
     let prog = parse_prog(src);
-    let r = transpile(
+    let r = do_transpile(
         &prog,
         TranspileConfig::new("my_crate")
             .with_file_stem("f")
@@ -1927,7 +1944,7 @@ fn transpile_mutated_with_prelude_mutates_bool_literal_in_non_test_fn() {
     // source function re-declarations that cmd_mutate relies on for mutation points).
     let src = "fn flag() -> Bool { true }";
     let prog = parse_prog(src);
-    let r = transpile(
+    let r = do_transpile(
         &prog,
         TranspileConfig::new("my_crate")
             .with_file_stem("flag")
@@ -1947,7 +1964,7 @@ fn transpile_mutated_with_prelude_mutates_int_literal_in_non_test_fn() {
     // source function re-declarations that cmd_mutate relies on for mutation points).
     let src = "fn answer() -> Int { 42 }";
     let prog = parse_prog(src);
-    let r = transpile(
+    let r = do_transpile(
         &prog,
         TranspileConfig::new("my_crate")
             .with_file_stem("answer")
@@ -1972,7 +1989,7 @@ fn transpile_mutated_with_prelude_mixed_file_non_test_fn_produces_mutants() {
     let src =
         "fn f(a: Int, b: Int) -> Int { a + b }\ntest fn check_f() -> Unit { let _x: Int = 1 + 2; }";
     let prog = parse_prog(src);
-    let r = transpile(
+    let r = do_transpile(
         &prog,
         TranspileConfig::new("my_crate")
             .with_file_stem("my_test_file")
@@ -2414,6 +2431,7 @@ fn prelude_builtin_fn_is_not_emitted() {
         &[],
         &prelude,
         Default::default(),
+        vec![],
         Default::default(),
     );
     assert!(
@@ -2439,6 +2457,7 @@ fn prelude_builtin_fn_does_not_produce_todo_stub() {
         &[],
         &prelude,
         Default::default(),
+        vec![],
         Default::default(),
     );
     assert!(

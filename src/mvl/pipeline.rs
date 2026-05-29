@@ -18,7 +18,9 @@
 //! // let result = Pipeline::new().check(&prelude, &[prog]);
 //! ```
 
-use crate::mvl::backends::rust::{transpile, transpile_project, TranspileConfig, TranspileResult};
+use crate::mvl::backends::rust::{
+    transpile, transpile_project_with_options, TranspileConfig, TranspileResult,
+};
 use crate::mvl::backends::AssertMode;
 use crate::mvl::checker::{self, CheckResult};
 use crate::mvl::parser::ast::Program;
@@ -113,6 +115,7 @@ impl Pipeline {
         crate_name: impl Into<String>,
         prelude: Vec<Program>,
     ) -> TranspileResult {
+        let expr_types = assemble_expr_types(prog, &prelude);
         let mut config = TranspileConfig::new(crate_name).with_prelude(prelude);
         if self.coverage {
             config = config.with_coverage(0);
@@ -124,7 +127,7 @@ impl Pipeline {
             config = config.with_mutation();
         }
         config = config.with_assert_mode(self.assert_mode);
-        transpile(prog, config)
+        transpile(prog, expr_types, config)
     }
 
     /// Transpile a multi-file project using this pipeline's settings.
@@ -143,13 +146,19 @@ impl Pipeline {
             crate::mvl::checker::types::Ty,
         >,
     ) -> crate::mvl::backends::rust::ProjectOutput {
-        transpile_project(
+        let sibling_expr_types: Vec<_> = siblings
+            .iter()
+            .map(|(_, prog)| assemble_expr_types(prog, prelude))
+            .collect();
+        transpile_project_with_options(
             entry_name,
             entry_prog,
             siblings,
             prelude,
             expr_types,
+            &sibling_expr_types,
             self.assert_mode,
+            false,
         )
     }
 }
@@ -158,4 +167,24 @@ impl Default for Pipeline {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Assemble a fully-merged expression type map for `prog` against `prelude`.
+///
+/// Combines prelude expression types (from `collect_prelude_expr_types`) with
+/// the program's own types (from `check_with_prelude` / `check`).  This is the
+/// single canonical place where the checker is invoked for transpilation; the
+/// backend receives the result and does not re-invoke the checker.
+pub fn assemble_expr_types(
+    prog: &Program,
+    prelude: &[Program],
+) -> std::collections::HashMap<crate::mvl::parser::lexer::Span, crate::mvl::checker::types::Ty> {
+    let mut types = checker::collect_prelude_expr_types(prelude);
+    let result = if prelude.is_empty() {
+        checker::check(prog)
+    } else {
+        checker::check_with_prelude(prelude, prog)
+    };
+    types.extend(result.expr_types);
+    types
 }

@@ -237,6 +237,9 @@ pub fn transpile_project(
     siblings: &[(String, Program)],
     prelude_progs: &[Program],
     expr_types: std::collections::HashMap<crate::mvl::parser::lexer::Span, crate::mvl::ir::Ty>,
+    sibling_expr_types: Vec<
+        std::collections::HashMap<crate::mvl::parser::lexer::Span, crate::mvl::ir::Ty>,
+    >,
     assert_mode: crate::mvl::backends::AssertMode,
 ) -> ProjectOutput {
     transpile_project_with_options(
@@ -245,6 +248,7 @@ pub fn transpile_project(
         siblings,
         prelude_progs,
         expr_types,
+        &sibling_expr_types,
         assert_mode,
         false,
     )
@@ -253,12 +257,21 @@ pub fn transpile_project(
 /// Like [`transpile_project`], but with an `extern_stubs` flag controlling whether
 /// `extern "rust"` blocks are emitted as real extern declarations (default) or replaced
 /// with `todo!()` stubs (used by `mvl fuzz` so the harness links without bridges).
+///
+/// `sibling_expr_types` must have the same length as `siblings` and hold pre-checked,
+/// prelude-merged expression type maps for each sibling (assembled by the caller via
+/// [`crate::mvl::checker::check_with_prelude`] + [`crate::mvl::checker::collect_prelude_expr_types`]).
+#[allow(clippy::too_many_arguments)]
 pub fn transpile_project_with_options(
     entry_name: &str,
     entry_prog: &Program,
     siblings: &[(String, Program)],
     prelude_progs: &[Program],
     expr_types: std::collections::HashMap<crate::mvl::parser::lexer::Span, crate::mvl::ir::Ty>,
+    sibling_expr_types: &[std::collections::HashMap<
+        crate::mvl::parser::lexer::Span,
+        crate::mvl::ir::Ty,
+    >],
     assert_mode: crate::mvl::backends::AssertMode,
     extern_stubs: bool,
 ) -> ProjectOutput {
@@ -302,16 +315,10 @@ pub fn transpile_project_with_options(
                     other_progs.push(p);
                 }
             }
-            let sibling_check = crate::mvl::checker::check_with_prelude(prelude_progs, prog);
             let mut cg = RustEmitter::new();
-            // Include prelude expr_types so prelude functions emitted inside the
-            // sibling module (via emit_sibling_module) have correct type information.
-            // Without this, generic operations like map indexing fall back to the
-            // integer-array pattern instead of the correct string-key HashMap access.
-            let mut sibling_expr_types =
-                crate::mvl::checker::collect_prelude_expr_types(prelude_progs);
-            sibling_expr_types.extend(sibling_check.expr_types);
-            cg.expr_types = sibling_expr_types;
+            // Use pre-checked, prelude-merged type map supplied by the caller.
+            // This avoids re-invoking the checker inside the backend.
+            cg.expr_types = sibling_expr_types.get(idx).cloned().unwrap_or_default();
             cg.assert_mode = assert_mode;
             cg.test_extern_stubs = extern_stubs;
             if entry_uses_runtime {
@@ -348,12 +355,15 @@ pub fn transpile_project_with_options(
 
 /// Transpile a parsed [`Program`] to Rust source using the given configuration.
 ///
-/// This single function replaces the previous `transpile_*` variant family.
-/// Use [`TranspileConfig`] to configure prelude, instrumentation, and emit options.
-///
-/// Instrumentation metadata in the returned [`TranspileResult`] is non-empty only
-/// when the corresponding mode was enabled in the config.
-pub fn transpile(prog: &Program, config: TranspileConfig) -> TranspileResult {
+/// `expr_types` must be the pre-checked, prelude-merged expression type map assembled
+/// by the caller via [`crate::mvl::checker::check_with_prelude`] (or `check`) plus
+/// [`crate::mvl::checker::collect_prelude_expr_types`] for any prelude programs.
+/// The pipeline (or CLI) owns the checker invocation; the backend does not re-check.
+pub fn transpile(
+    prog: &Program,
+    expr_types: std::collections::HashMap<crate::mvl::parser::lexer::Span, crate::mvl::ir::Ty>,
+    config: TranspileConfig,
+) -> TranspileResult {
     let has_main = has_main_fn(prog);
     let extern_count = count_extern_decls(prog);
     let has_extern_rust = has_extern_rust_decls(prog);
@@ -361,20 +371,6 @@ pub fn transpile(prog: &Program, config: TranspileConfig) -> TranspileResult {
     let use_runtime = extern_count > 0
         || has_std_imports(prog)
         || (has_prelude && prelude_requires_runtime(&config.prelude_progs));
-
-    let check_result = if has_prelude {
-        crate::mvl::checker::check_with_prelude(&config.prelude_progs, prog)
-    } else {
-        crate::mvl::checker::check(prog)
-    };
-
-    let expr_types = if has_prelude {
-        let mut types = crate::mvl::checker::collect_prelude_expr_types(&config.prelude_progs);
-        types.extend(check_result.expr_types);
-        types
-    } else {
-        check_result.expr_types
-    };
 
     // ADR-0034: compute the monomorphization plan as part of the pipeline.
     // The Rust backend does not apply it to emission (Rust generics are handled
@@ -467,6 +463,12 @@ mod tests {
         prog
     }
 
+    /// Convenience: check prog then transpile (avoids repeating checker call in each test).
+    fn do_transpile(prog: &Program, config: TranspileConfig) -> TranspileResult {
+        let expr_types = crate::mvl::checker::check(prog).expr_types;
+        transpile(prog, expr_types, config)
+    }
+
     // ── collect_stdlib_modules tests (#488 #489) ───────────────────────────
 
     #[test]
@@ -515,7 +517,7 @@ mod tests {
     #[test]
     fn transpile_emits_stdlib_use_for_std_import() {
         let prog = parse("use std.env.{getuid}\nfn main() -> Unit ! Env { }");
-        let out = transpile(&prog, TranspileConfig::new("crate")).output;
+        let out = do_transpile(&prog, TranspileConfig::new("crate")).output;
         assert!(
             out.lib_rs.contains("use mvl_runtime::stdlib::env::*"),
             "emitted Rust must contain targeted stdlib import, got:\n{}",
@@ -529,7 +531,7 @@ mod tests {
     #[test]
     fn mcdc_if_emits_clause_locals_and_record() {
         let prog = parse("fn f(a: Bool, b: Bool) -> Int { if a && b { 1 } else { 0 } }");
-        let result = transpile(
+        let result = do_transpile(
             &prog,
             TranspileConfig::new("crate")
                 .with_file_stem("test")
@@ -565,7 +567,7 @@ mod tests {
     #[test]
     fn mcdc_if_recomposed_uses_clause_vars() {
         let prog = parse("fn f(a: Bool, b: Bool) -> Int { if a && b { 1 } else { 0 } }");
-        let result = transpile(
+        let result = do_transpile(
             &prog,
             TranspileConfig::new("crate")
                 .with_file_stem("test")
@@ -589,7 +591,7 @@ mod tests {
     fn mcdc_if_three_clauses_emits_three_locals() {
         let prog =
             parse("fn f(a: Bool, b: Bool, c: Bool) -> Int { if a || b || c { 1 } else { 0 } }");
-        let result = transpile(
+        let result = do_transpile(
             &prog,
             TranspileConfig::new("crate")
                 .with_file_stem("test")
@@ -606,7 +608,7 @@ mod tests {
     #[test]
     fn mcdc_record_encoding_present() {
         let prog = parse("fn f(a: Bool, b: Bool) -> Int { if a && b { 1 } else { 0 } }");
-        let result = transpile(
+        let result = do_transpile(
             &prog,
             TranspileConfig::new("crate")
                 .with_file_stem("test")
@@ -647,7 +649,7 @@ mod tests {
         let prog = parse(
             "partial fn f(a: Bool, b: Bool) -> Int { let x: ref Int = 0; while a && b { x = x + 1; } x }",
         );
-        let result = transpile(
+        let result = do_transpile(
             &prog,
             TranspileConfig::new("crate")
                 .with_file_stem("test")
@@ -670,7 +672,7 @@ mod tests {
     #[test]
     fn mcdc_simple_condition_not_instrumented() {
         let prog = parse("fn f(x: Int) -> Int { if x > 0 { 1 } else { 0 } }");
-        let result = transpile(
+        let result = do_transpile(
             &prog,
             TranspileConfig::new("crate")
                 .with_file_stem("test")
@@ -689,7 +691,7 @@ mod tests {
     fn mcdc_test_fn_excluded() {
         let prog =
             parse("test fn t(a: Bool, b: Bool) -> Bool { if a && b { true } else { false } }");
-        let result = transpile(
+        let result = do_transpile(
             &prog,
             TranspileConfig::new("crate")
                 .with_file_stem("test")
@@ -707,7 +709,7 @@ mod tests {
     #[test]
     fn mcdc_bool_return_expr_instrumented() {
         let prog = parse("fn f(a: Bool, b: Bool) -> Bool { a && b }");
-        let result = transpile(
+        let result = do_transpile(
             &prog,
             TranspileConfig::new("crate")
                 .with_file_stem("test")
@@ -735,7 +737,7 @@ mod tests {
     #[test]
     fn mcdc_non_bool_return_not_instrumented() {
         let prog = parse("fn f(a: Int, b: Int) -> Int { a + b }");
-        let result = transpile(
+        let result = do_transpile(
             &prog,
             TranspileConfig::new("crate")
                 .with_file_stem("test")
@@ -755,7 +757,7 @@ mod tests {
         // h(b) and g(a, b) both take `b` — also coupled.
         let prog =
             parse("fn d(a: Bool, b: Bool, c: Bool) -> Bool { f(a) && g(a, b) && h(b) && k(c) }");
-        let result = transpile(
+        let result = do_transpile(
             &prog,
             TranspileConfig::new("crate")
                 .with_file_stem("test")
@@ -782,7 +784,7 @@ mod tests {
     #[test]
     fn mcdc_independent_clauses_not_coupled() {
         let prog = parse("fn f(a: Bool, b: Bool) -> Bool { a && b }");
-        let result = transpile(
+        let result = do_transpile(
             &prog,
             TranspileConfig::new("crate")
                 .with_file_stem("test")
@@ -801,7 +803,7 @@ mod tests {
     fn mcdc_disjoint_field_access_not_coupled() {
         // f(v.breathing) and g(v.oxygen_sat) share param `v` but access different fields.
         let prog = parse("fn d(v: Vitals) -> Bool { f(v.breathing) && g(v.oxygen_sat) }");
-        let result = transpile(
+        let result = do_transpile(
             &prog,
             TranspileConfig::new("crate")
                 .with_file_stem("test")
@@ -820,7 +822,7 @@ mod tests {
     fn mcdc_shared_field_access_is_coupled() {
         // Both clauses use v.bp — toggling it affects both simultaneously.
         let prog = parse("fn d(v: V) -> Bool { f(v.bp) && g(v.bp) }");
-        let result = transpile(
+        let result = do_transpile(
             &prog,
             TranspileConfig::new("crate")
                 .with_file_stem("test")
@@ -842,7 +844,7 @@ mod tests {
     #[test]
     fn mcdc_nested_field_access_not_coupled() {
         let prog = parse("fn d(p: Patient) -> Bool { f(p.vitals.pulse) && g(p.vitals.bp) }");
-        let result = transpile(
+        let result = do_transpile(
             &prog,
             TranspileConfig::new("crate")
                 .with_file_stem("test")
@@ -869,7 +871,7 @@ mod tests {
              fn g(p: T) -> Bool { p.y == 2 } \
              fn d(p: T) -> Bool { f(p) || g(p) }",
         );
-        let result = transpile(
+        let result = do_transpile(
             &prog,
             TranspileConfig::new("crate")
                 .with_file_stem("test")
@@ -891,7 +893,7 @@ mod tests {
              fn g(p: T) -> Bool { p.x == 2 } \
              fn d(p: T) -> Bool { f(p) && g(p) }",
         );
-        let result = transpile(
+        let result = do_transpile(
             &prog,
             TranspileConfig::new("crate")
                 .with_file_stem("test")
@@ -922,7 +924,7 @@ mod tests {
              fn k(p: T) -> Bool { helper(p) } \
              fn d(p: T) -> Bool { h(p) && k(p) }",
         );
-        let result = transpile(
+        let result = do_transpile(
             &prog,
             TranspileConfig::new("crate")
                 .with_file_stem("test")
@@ -941,7 +943,7 @@ mod tests {
     fn mcdc_interproc_external_callee_conservative() {
         // `ext_a` and `ext_b` are not defined in the program → conservative coupling via "p".
         let prog = parse("fn d(p: T) -> Bool { ext_a(p) && ext_b(p) }");
-        let result = transpile(
+        let result = do_transpile(
             &prog,
             TranspileConfig::new("crate")
                 .with_file_stem("test")
@@ -959,7 +961,7 @@ mod tests {
     #[test]
     fn mcdc_start_id_offset_applied() {
         let prog = parse("fn f(a: Bool, b: Bool) -> Int { if a && b { 1 } else { 0 } }");
-        let result = transpile(
+        let result = do_transpile(
             &prog,
             TranspileConfig::new("crate")
                 .with_file_stem("test")
@@ -979,7 +981,7 @@ mod tests {
         let prog = parse(r#"extern "rust" { fn foo() -> Int; }"#);
         assert!(has_extern_rust_decls(&prog));
         assert!(
-            transpile(&prog, TranspileConfig::new("crate"))
+            do_transpile(&prog, TranspileConfig::new("crate"))
                 .output
                 .has_extern_rust
         );
@@ -990,7 +992,7 @@ mod tests {
     fn has_extern_rust_false_on_plain_program() {
         let prog = parse("fn add(a: Int, b: Int) -> Int { a + b }");
         assert!(!has_extern_rust_decls(&prog));
-        let out = transpile(&prog, TranspileConfig::new("crate")).output;
+        let out = do_transpile(&prog, TranspileConfig::new("crate")).output;
         assert!(!out.has_extern_rust);
         // Regression guard: `mod bridge;` must NOT appear in output for non-extern programs.
         assert!(
@@ -1005,7 +1007,7 @@ mod tests {
         let prog = parse(r#"extern "c" { fn bar() -> Int; }"#);
         assert!(!has_extern_rust_decls(&prog));
         assert!(
-            !transpile(&prog, TranspileConfig::new("crate"))
+            !do_transpile(&prog, TranspileConfig::new("crate"))
                 .output
                 .has_extern_rust
         );
@@ -1015,7 +1017,7 @@ mod tests {
     #[test]
     fn extern_count_nonzero_but_has_extern_rust_false() {
         let prog = parse(r#"extern "c" { fn baz() -> Int; }"#);
-        let out = transpile(&prog, TranspileConfig::new("crate")).output;
+        let out = do_transpile(&prog, TranspileConfig::new("crate")).output;
         assert_eq!(out.extern_count, 1);
         assert!(!out.has_extern_rust);
     }
@@ -1036,7 +1038,10 @@ impl crate::mvl::backends::Backend for RustBackend {
     }
 
     fn emit_program(&self, prog: &crate::mvl::parser::ast::Program, crate_name: &str) -> String {
-        transpile(prog, TranspileConfig::new(crate_name))
+        // Backend trait does not supply expr_types; pass empty map so the emitter
+        // works without type info. For full type-aware emission use `transpile()`
+        // with a pre-assembled expr_types from the pipeline (#1110).
+        transpile(prog, Default::default(), TranspileConfig::new(crate_name))
             .output
             .lib_rs
     }
