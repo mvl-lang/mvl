@@ -97,25 +97,25 @@ pub fn actor_name_to_snake(s: &str) -> String {
 /// `thread_local!` vec of `JoinHandle`s plus two helpers:
 /// - `_mvl_register_actor(h)` — called by each `_start_*` function
 /// - `_mvl_join_actors()`     — called at the end of `fn main()` to drain all spawned actors
+///
+/// Shutdown protocol: the main body is wrapped in an inner scope so all actor
+/// handles (holding `SyncSender`) are dropped before `_mvl_join_actors()` runs.
+/// Sender disconnect causes `rx.recv()` to return `Err(Disconnected)` after
+/// draining any buffered messages, so actors exit naturally — no polling needed
+/// (#1125).
 pub fn emit_actor_runtime_preamble(cg: &mut RustEmitter) {
-    // Each actor registers a (shutdown_flag, JoinHandle) pair.
-    // Shutdown uses AtomicBool flags — actors check the flag on recv_timeout and
-    // exit gracefully after draining all pending messages.  This avoids the race
-    // where a mailbox _Shutdown variant arrives before real work messages (#1048).
     cg.line("thread_local! {");
     cg.line(
-        "    static _MVL_ACTOR_HANDLES: std::cell::RefCell<Vec<(std::sync::Arc<std::sync::atomic::AtomicBool>, std::thread::JoinHandle<()>)>> =",
+        "    static _MVL_ACTOR_HANDLES: std::cell::RefCell<Vec<std::thread::JoinHandle<()>>> =",
     );
     cg.line("        std::cell::RefCell::new(Vec::new());");
     cg.line("}");
-    cg.line("fn _mvl_register_actor(flag: std::sync::Arc<std::sync::atomic::AtomicBool>, h: std::thread::JoinHandle<()>) {");
-    cg.line("    _MVL_ACTOR_HANDLES.with(|v| v.borrow_mut().push((flag, h)));");
+    cg.line("fn _mvl_register_actor(h: std::thread::JoinHandle<()>) {");
+    cg.line("    _MVL_ACTOR_HANDLES.with(|v| v.borrow_mut().push(h));");
     cg.line("}");
     cg.line("fn _mvl_join_actors() {");
     cg.line("    _MVL_ACTOR_HANDLES.with(|v| {");
-    cg.line("        let pairs: Vec<_> = v.borrow_mut().drain(..).collect();");
-    cg.line("        for (flag, _) in &pairs { flag.store(true, std::sync::atomic::Ordering::Relaxed); }");
-    cg.line("        for (_, h) in pairs { let _ = h.join(); }");
+    cg.line("        for h in v.borrow_mut().drain(..) { let _ = h.join(); }");
     cg.line("    });");
     cg.line("}");
 }
@@ -300,12 +300,10 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &ActorDecl) {
     //    channel — the actor needs a clone of its own sender to pass `self`
     //    as a `tag` argument inside behaviors.
     //
-    //    Shutdown protocol (#1048): each actor checks an AtomicBool flag via
-    //    `recv_timeout`.  When the flag is set (by `_mvl_join_actors`), the
-    //    actor breaks after draining all pending messages.  This avoids the
-    //    race condition where a mailbox _Shutdown variant would arrive before
-    //    real work messages, and keeps `_self_ref` alive for actors that pass
-    //    `self` as a `tag` argument.
+    //    Shutdown protocol (#1048, #1125): the main body scope drops all actor
+    //    handles (SyncSenders) before `_mvl_join_actors()` runs.  The blocking
+    //    `rx.recv()` call drains any buffered messages and returns
+    //    `Err(Disconnected)` once every sender is gone — zero polling overhead.
     cg.line(&format!(
         "fn {start_fn}(mut state: {state_name}) -> {name} {{"
     ));
@@ -314,16 +312,10 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &ActorDecl) {
     cg.line(&format!(
         "state._self_ref = Some({name} {{ _sender: tx.clone() }});"
     ));
-    cg.line("let _shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));");
-    cg.line("let _shutdown_flag = _shutdown.clone();");
     cg.line("let __handle = std::thread::spawn(move || {");
     cg.push_indent();
     cg.line("let mut actor = state;");
-    cg.line("loop {");
-    cg.push_indent();
-    cg.line("match rx.recv_timeout(std::time::Duration::from_millis(1)) {");
-    cg.push_indent();
-    cg.line("Ok(msg) => {");
+    cg.line("while let Ok(msg) = rx.recv() {");
     cg.push_indent();
     cg.line("match msg {");
     cg.push_indent();
@@ -344,17 +336,9 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &ActorDecl) {
     cg.line("}");
     cg.pop_indent();
     cg.line("}");
-    cg.line("Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {");
-    cg.line("    if _shutdown_flag.load(std::sync::atomic::Ordering::Relaxed) { break; }");
-    cg.line("}");
-    cg.line("Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,");
-    cg.pop_indent();
-    cg.line("}");
-    cg.pop_indent();
-    cg.line("}");
     cg.pop_indent();
     cg.line("});");
-    cg.line("_mvl_register_actor(_shutdown, __handle);");
+    cg.line("_mvl_register_actor(__handle);");
     cg.line(&format!("{name} {{ _sender: tx }}"));
     cg.pop_indent();
     cg.line("}");
