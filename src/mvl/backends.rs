@@ -13,6 +13,7 @@
 
 #[cfg(feature = "llvm")]
 pub mod llvm;
+pub mod llvm_text;
 pub mod rust;
 
 use crate::mvl::parser::ast::Program;

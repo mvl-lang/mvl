@@ -79,7 +79,7 @@ run: guard-mvl logs.jsonl ## Analyze logs.jsonl (requires: make generate)
 	$(MVL) run $(DIR)main.mvl -- --file logs.jsonl
 
 run-llvm: guard-mvl logs.jsonl ## Analyze logs.jsonl via LLVM backend (requires: make generate)
-	$(MVL) run $(DIR)main.mvl --backend=llvm -- --file logs.jsonl
+	$(MVL) run $(DIR)main.mvl --backend=llvm-inkwell -- --file logs.jsonl
 
 logs.jsonl:
 	$(MAKE) generate

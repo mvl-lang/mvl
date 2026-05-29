@@ -4,7 +4,7 @@
 //!   1. Generate a terminating MVL program with a main that prints Int results.
 //!   2. Write it to a temp file.
 //!   3. Run `mvl run <file>` (Rust transpiler) → capture stdout.
-//!   4. Run `mvl run <file> --backend=llvm` → capture stdout.
+//!   4. Run `mvl run <file> --backend=llvm-inkwell` → capture stdout.
 //!   5. If both succeed: assert stdout is identical.
 //!
 //! Throughput is ~100-500 iter/sec (subprocess per iteration) — much lower than
@@ -86,7 +86,7 @@ fuzz_target!(|data: &[u8]| {
     let path = tmp.path().to_path_buf();
 
     let rust_out = run_backend(&mvl, &path, &[]);
-    let llvm_out = run_backend(&mvl, &path, &["--backend=llvm"]);
+    let llvm_out = run_backend(&mvl, &path, &["--backend=llvm-inkwell"]);
 
     // Both backends compiled and ran — outputs must be identical.
     if let (Some(r), Some(l)) = (rust_out, llvm_out) {

@@ -28,9 +28,10 @@ pub fn print_usage() {
     eprintln!("  mvl test  <file|dir> --verbose     — show transpile path and all test names with captured stdout");
     eprintln!(
         "  mvl test  <file|dir> --coverage    — run with native behavioral branch coverage report
-  mvl test  <file|dir> --backend=llvm  — compile + run via LLVM/lli, check // expect: annotations
-  mvl build <file|dir> --backend=llvm  — compile to LLVM IR and invoke lli (requires --features llvm)
-  mvl run   <file|dir> --backend=llvm  — compile and run via LLVM lli (requires --features llvm)
+  mvl build <file|dir> --backend=llvm          — compile to LLVM IR text (Phase 1, no stdlib)
+  mvl build <file|dir> --backend=llvm-inkwell  — compile + run via inkwell/lli (requires --features llvm)
+  mvl run   <file|dir> --backend=llvm-inkwell  — compile and run via inkwell lli (requires --features llvm)
+  mvl test  <file|dir> --backend=llvm-inkwell  — compile + run via inkwell/lli, check // expect: annotations
   mvl build|run|check|test <file|dir> --stdlib=trusted — stdlib profile: trusted (default, 95 builtins)
   mvl build|run|check|test <file|dir> --stdlib=proven  — proven profile: verifies stdlib before user code (ADR-0023)
   mvl build|run <file|dir> --assert-mode=always     — enforce invariants unconditionally (default)

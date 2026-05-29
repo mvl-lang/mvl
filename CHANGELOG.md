@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.162.0] - 2026-05-29
+
+### Added
+- Text-based LLVM IR backend (`LlvmTextCompiler`) — pure-string IR generation without inkwell/C FFI, Phase 1 supports Int/Float/Bool/Byte/Unit, arithmetic, comparisons, if/else (phi nodes), while loops, and fn declarations/calls (#1111)
+- `--backend=llvm` now invokes the text emitter; `--backend=llvm-inkwell` invokes the inkwell backend (#1111)
+
 ### Changed
 - `mvl init [<name>]` now scaffolds a new project (`mvl.toml` + `src/main.mvl`) in the
   current directory; name defaults to the current directory name when omitted (#1129)

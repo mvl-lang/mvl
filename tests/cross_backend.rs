@@ -85,9 +85,9 @@ fn run_llvm(file: &str) -> Option<String> {
         return None;
     }
     let out = Command::new(mvl_bin())
-        .args(["run", file, "--backend=llvm"])
+        .args(["run", file, "--backend=llvm-inkwell"])
         .output()
-        .expect("failed to run mvl run --backend=llvm");
+        .expect("failed to run mvl run --backend=llvm-inkwell");
     assert!(
         out.status.success(),
         "LLVM backend failed for {file}:\nstdout: {}\nstderr: {}",
@@ -112,9 +112,9 @@ fn assert_llvm_output(file: &str, expected: &str) {
         return;
     }
     let out = Command::new(mvl_bin())
-        .args(["run", file, "--backend=llvm"])
+        .args(["run", file, "--backend=llvm-inkwell"])
         .output()
-        .expect("failed to run mvl run --backend=llvm");
+        .expect("failed to run mvl run --backend=llvm-inkwell");
     assert!(
         out.status.success(),
         "LLVM backend failed for {file}:\nstdout: {}\nstderr: {}",
@@ -757,9 +757,9 @@ fn cross_backend_eprint_stderr() {
     }
 
     let llvm = Command::new(mvl_bin())
-        .args(["run", &file, "--backend=llvm"])
+        .args(["run", &file, "--backend=llvm-inkwell"])
         .output()
-        .expect("failed to run mvl run --backend=llvm");
+        .expect("failed to run mvl run --backend=llvm-inkwell");
     assert!(
         llvm.status.success(),
         "LLVM backend failed:\nstdout: {}\nstderr: {}",
