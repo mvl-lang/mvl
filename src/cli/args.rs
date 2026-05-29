@@ -79,7 +79,10 @@ pub fn print_usage() {
         "  mvl openapi <file|dir>              — generate OpenAPI 3.0.3 JSON from route table"
     );
     eprintln!("  mvl transpile <file.mvl>           — print transpiled Rust to stdout");
-    eprintln!("  mvl init [--stdlib]                — extract stdlib to XDG_DATA_HOME/mvl/toolchains/VERSION/std/");
+    eprintln!(
+        "  mvl init [<name>]                  — scaffold a new project (mvl.toml + src/main.mvl)"
+    );
+    eprintln!("  mvl self init                      — extract stdlib to XDG_DATA_HOME/mvl/toolchains/VERSION/std/");
     eprintln!("  mvl self install <version>         — download and install a toolchain version");
     eprintln!("  mvl self use <version>             — activate an installed toolchain version");
     eprintln!("  mvl self list                      — list installed toolchain versions");
