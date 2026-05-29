@@ -427,12 +427,37 @@ impl TypeChecker {
 
             // Phase 8: spawn expression validates field initializers against the actor
             // type's declared fields (#742) and returns the actor's type name (#63/#698).
+            // Req 7: creating an actor requires the Spawn effect (#1126).
             Expr::Spawn {
                 actor_type,
                 fields,
                 span,
                 ..
-            } => self.check_construction(actor_type, fields, *span),
+            } => {
+                let ty = self.check_construction(actor_type, fields, *span);
+                let spawn_eff = Effect::new("Spawn", *span);
+                let covered = self
+                    .current_fn_effects
+                    .iter()
+                    .any(|d| self.effect_satisfies(d, &spawn_eff));
+                if !covered {
+                    if self.current_fn_effects.is_empty() {
+                        self.emit(CheckError::UndeclaredEffect {
+                            callee: format!("actor {actor_type}"),
+                            effect: "Spawn".to_string(),
+                            span: *span,
+                        });
+                    } else {
+                        self.emit(CheckError::MissingEffect {
+                            caller: self.current_fn_name.clone(),
+                            callee: format!("actor {actor_type}"),
+                            effect: "Spawn".to_string(),
+                            span: *span,
+                        });
+                    }
+                }
+                ty
+            }
 
             // Phase 8: select — evaluates to Unit (fire-and-forget arms, spec 015 §8)
             Expr::Select { arms, .. } => {

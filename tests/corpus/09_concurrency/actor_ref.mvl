@@ -23,7 +23,7 @@ actor Worker {
 }
 
 // Actor creation returns ActorRef with tag capability
-fn start_system() -> Unit {
+fn start_system() -> Unit ! Spawn + Send {
     let logger: Logger = actor Logger { prefix: "sys" };
     let worker: Worker = actor Worker { logger: logger };
     // tag is sendable — passing logger ref to another actor's behavior

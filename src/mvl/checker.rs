@@ -299,6 +299,8 @@ struct TypeChecker {
     /// Method table for type-attached methods (`fn TypeName::method(self, …)`).
     /// Maps receiver type name → method name → signature.
     method_table: HashMap<String, HashMap<String, FnInfo>>,
+    /// Names of all declared actor types — used to enforce Spawn/Send effects (#1126).
+    actor_type_names: HashSet<String>,
     /// Type parameter names in scope for the current function.
     current_type_params: HashSet<String>,
     /// Trait bounds for type params in the current function (from `where` clauses).
@@ -336,6 +338,7 @@ impl TypeChecker {
             lambda_scope_starts: Vec::new(),
             iterator_impls: HashMap::new(),
             method_table: HashMap::new(),
+            actor_type_names: HashSet::new(),
             current_type_params: HashSet::new(),
             current_type_constraints: HashMap::new(),
             expr_types: HashMap::new(),

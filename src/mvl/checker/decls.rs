@@ -72,6 +72,8 @@ impl TypeChecker {
                 },
             },
         );
+        // Track actor type name for Spawn/Send effect enforcement (#1126).
+        self.actor_type_names.insert(ad.name.clone());
     }
 
     fn register_fn(&mut self, fd: &FnDecl) {

@@ -13,7 +13,7 @@ actor Worker {
 }
 
 // Actors are spawned in fn main(); runtime joins them on exit.
-fn main() -> Unit {
+fn main() -> Unit ! Actor {
     let w1: Worker = actor Worker { id: 1 };
     let w2: Worker = actor Worker { id: 2 };
     w1.process("task-a");
