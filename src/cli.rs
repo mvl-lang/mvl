@@ -11,6 +11,7 @@ pub mod fuzz;
 pub mod lint;
 #[cfg(feature = "llvm")]
 pub mod llvm;
+pub mod llvm_text;
 pub mod mcdc;
 pub mod meta;
 pub mod mutate;
@@ -87,11 +88,13 @@ pub(super) fn dispatch(args: &[String]) {
             }
             check::maybe_check_proven_stdlib_or_exit(stdlib_profile);
             if backend == "llvm" {
+                llvm_text::build_project_llvm_text(&path);
+            } else if backend == "llvm-inkwell" {
                 #[cfg(feature = "llvm")]
                 llvm::build_project_llvm(&path, assert_mode);
                 #[cfg(not(feature = "llvm"))]
                 {
-                    eprintln!("error: --backend=llvm requires the `llvm` feature (rebuild with --features llvm)");
+                    eprintln!("error: --backend=llvm-inkwell requires the `llvm` feature (rebuild with --features llvm)");
                     process::exit(1);
                 }
             } else {
@@ -111,12 +114,12 @@ pub(super) fn dispatch(args: &[String]) {
                 .skip(1)
                 .cloned()
                 .collect();
-            if backend == "llvm" {
+            if backend == "llvm-inkwell" {
                 #[cfg(feature = "llvm")]
                 llvm::run_project_llvm(&path, assert_mode);
                 #[cfg(not(feature = "llvm"))]
                 {
-                    eprintln!("error: --backend=llvm requires the `llvm` feature (rebuild with --features llvm)");
+                    eprintln!("error: --backend=llvm-inkwell requires the `llvm` feature (rebuild with --features llvm)");
                     process::exit(1);
                 }
             } else {
@@ -136,12 +139,12 @@ pub(super) fn dispatch(args: &[String]) {
             let verbose = args.iter().any(|a| a == "--verbose" || a == "-v");
             let coverage = args.iter().any(|a| a == "--coverage");
             let bdd = args.iter().any(|a| a == "--bdd");
-            if backend == "llvm" {
+            if backend == "llvm-inkwell" {
                 #[cfg(feature = "llvm")]
                 llvm::cmd_test_llvm(&path, quiet, verbose);
                 #[cfg(not(feature = "llvm"))]
                 {
-                    eprintln!("error: --backend=llvm requires the `llvm` feature (rebuild with --features llvm)");
+                    eprintln!("error: --backend=llvm-inkwell requires the `llvm` feature (rebuild with --features llvm)");
                     process::exit(1);
                 }
             } else {
