@@ -8170,7 +8170,7 @@ fn actor_type_registered_in_pass1() {
             pub fn reset() { }
         }
 
-        fn make_counter() -> Counter {
+        fn make_counter() -> Counter ! Spawn {
             actor Counter { count: 0 }
         }
         "#,
