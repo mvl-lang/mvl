@@ -352,7 +352,24 @@ pub fn cmd_sbom(format: Option<&str>, project_root: &Path) -> Result<String, Pac
         sbom::ComponentType::Library
     };
 
-    Ok(sbom::generate(&manifest, &lock, fmt, component_type))
+    // Build license map: read each cached package's mvl.toml for its license field.
+    let mut licenses = sbom::LicenseMap::new();
+    for lp in &lock.packages {
+        let cache_dir = pkg_cache_dir(&lp.name, &lp.version);
+        if let Ok(content) = std::fs::read_to_string(cache_dir.join("mvl.toml")) {
+            if let Ok(pkg_manifest) = Manifest::parse(&content) {
+                licenses.insert(lp.name.clone(), pkg_manifest.package.license);
+            }
+        }
+    }
+
+    Ok(sbom::generate(
+        &manifest,
+        &lock,
+        fmt,
+        component_type,
+        &licenses,
+    ))
 }
 
 /// Ensure all dependencies in `mvl.toml` are fetched before build.
