@@ -107,7 +107,7 @@ actor RequestHandler {
 
 // ── Accept loop ───────────────────────────────────────────────────────────
 
-partial fn serve(listener: TcpListener, logger: val Logger, router: val Router) -> Unit ! Log + Net {
+partial fn serve(listener: TcpListener, logger: val Logger, router: val Router) -> Unit ! Log + Net + Spawn + Send {
     let running: ref Bool = true;
     while running {
         match tcp_accept(listener) {
@@ -125,7 +125,7 @@ partial fn serve(listener: TcpListener, logger: val Logger, router: val Router) 
     }
 }
 
-partial fn main() -> Unit ! Console + Env + FileRead + Log + Net {
+partial fn main() -> Unit ! Console + Env + FileRead + Log + Net + Spawn + Send {
     // Req 10: prove the literal default port lies in the valid TCP range.
     // Discharged statically (Layer 1, interval) — no runtime branch emitted.
     let _default_port_ok: Int = validate_port_range(8080);

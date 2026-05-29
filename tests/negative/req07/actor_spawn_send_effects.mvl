@@ -1,0 +1,20 @@
+// corpus:expect-fail
+// expect-requirement: 7
+// Scenario: pure functions that create actors or send to actors without ! Spawn / ! Send.
+// Triggers: CheckError::UndeclaredEffect (req7, #1126)
+
+actor Worker {
+    id: Int
+
+    pub fn process(val msg: String) { }
+}
+
+// BUG: creates an actor without declaring ! Spawn
+fn spawn_without_effect() -> Unit {
+    let _w: Worker = actor Worker { id: 1 };
+}
+
+// BUG: calls actor behavior without declaring ! Send
+fn send_without_effect(w: Worker) -> Unit {
+    w.process("task");
+}

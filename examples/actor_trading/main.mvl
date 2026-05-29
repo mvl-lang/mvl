@@ -125,7 +125,7 @@ actor Matcher {
     // Execution price: ask.price (passive side sets the price —
     // standard price-time priority).
     // This satisfies:  ask.price <= exec_price <= bid.price
-    pub fn match_orders(val bid: Order, val ask: Order) ! Console {
+    pub fn match_orders(val bid: Order, val ask: Order) ! Console + Send {
         // Quantity conservation: fill at most what both sides can provide.
         let exec_qty: Int = if bid.quantity < ask.quantity { bid.quantity } else { ask.quantity };
         let exec_price: Int = ask.price;
@@ -167,7 +167,7 @@ actor OrderBook {
     // Behavior: accept a new order and attempt a match if a crossing exists.
     //
     //   val order — immutable Order; OrderBook reads price/side and may store it
-    pub fn submit(val order: Order) ! Console {
+    pub fn submit(val order: Order) ! Console + Send {
         match order.side {
             Side::Bid => {
                 println("OrderBook: bid ".concat(order.id.to_string())
@@ -231,7 +231,7 @@ actor OrderGateway {
     // Req 10 enforcement: the `where` predicates are checked statically by the
     // solver at every call site.  A call like gw.new_bid(-50, 0) is a compile
     // error — the compiler proves `-50 > 0` false before any message is sent.
-    pub fn new_bid(val price: Int where price > 0, val quantity: Int where quantity > 0) ! Console {
+    pub fn new_bid(val price: Int where price > 0, val quantity: Int where quantity > 0) ! Console + Send {
         let order: Order = Order {
             id:       self.next_id,
             side:     Side::Bid,
@@ -244,7 +244,7 @@ actor OrderGateway {
     }
 
     // Behavior: create and submit a new ask.
-    pub fn new_ask(val price: Int where price > 0, val quantity: Int where quantity > 0) ! Console {
+    pub fn new_ask(val price: Int where price > 0, val quantity: Int where quantity > 0) ! Console + Send {
         let order: Order = Order {
             id:       self.next_id,
             side:     Side::Ask,
@@ -261,7 +261,7 @@ actor OrderGateway {
 // ENTRY POINT
 // ═══════════════════════════════════════════════════════════════════════════
 
-fn main() -> Unit ! Console {
+fn main() -> Unit ! Console + Actor {
     println("=== Verified Trading Engine ===")
 
     // ── Pre-trade compliance ───────────────────────────────────────────────

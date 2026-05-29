@@ -88,7 +88,7 @@ actor Pong {
     //   val msg     — immutable PingMsg; no ownership transfer needed
     //   tag sender  — identity-only Ping handle; Pong cannot read Ping's state,
     //                 but can send messages to it
-    pub fn ping(val msg: PingMsg, tag sender: Ping) ! Console {
+    pub fn ping(val msg: PingMsg, tag sender: Ping) ! Console + Send {
         self.received = self.received + 1
         log(msg.seq)
         sender.pong(PongMsg { seq: msg.seq })
@@ -114,7 +114,7 @@ actor Ping {
     }
 
     // Behavior: send the first ping to kick off the exchange.
-    pub fn start() ! Console {
+    pub fn start() ! Console + Send {
         self.sent = self.sent + 1
         self.partner.ping(PingMsg { seq: 0 }, self)
     }
@@ -122,7 +122,7 @@ actor Ping {
     // Behavior: receive a pong reply and send the next ping, if rounds remain.
     //
     //   val msg — immutable PongMsg; seq echoes the round we just completed
-    pub fn pong(val msg: PongMsg) ! Console {
+    pub fn pong(val msg: PongMsg) ! Console + Send {
         log(msg.seq)
         if self.sent < self.rounds {
             self.sent = self.sent + 1
@@ -138,7 +138,7 @@ actor Ping {
 // before the process exits (#1048). No explicit concurrently keyword needed.
 // ═══════════════════════════════════════════════════════════════════════════
 
-fn main() -> Unit ! Console + Env {
+fn main() -> Unit ! Console + Env + Actor {
     // Pre-session admission — exercises Req 10 (literal default proven > 0)
     // and Req 11 (Tainted input cleared via auditable relabel).
     let default_n: Int = default_rounds(5);

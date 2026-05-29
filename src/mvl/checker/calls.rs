@@ -9,7 +9,7 @@ use crate::mvl::checker::context::TypeBodyInfo;
 use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::ifc;
 use crate::mvl::checker::types::{resolve, types_compatible, Ty};
-use crate::mvl::parser::ast::{Expr, Totality, TypeExpr};
+use crate::mvl::parser::ast::{Effect, Expr, Totality, TypeExpr};
 use crate::mvl::parser::lexer::Span;
 
 use super::TypeChecker;
@@ -541,6 +541,31 @@ impl TypeChecker {
             Ty::Map(k_ty, v_ty) => Self::map_method_ty(k_ty.as_ref(), v_ty.as_ref(), method),
             Ty::Set(t_ty) => Self::set_method_ty(t_ty.as_ref(), method),
             Ty::Named(type_name, _) => {
+                // Req 7: calling any method on an actor type sends to its mailbox — requires Send (#1126).
+                // Actor behaviors are not in method_table, so this check must come first.
+                if self.actor_type_names.contains(type_name.as_str()) {
+                    let send_eff = Effect::new("Send", span);
+                    let covered = self
+                        .current_fn_effects
+                        .iter()
+                        .any(|declared| self.effect_satisfies(declared, &send_eff));
+                    if !covered {
+                        if self.current_fn_effects.is_empty() {
+                            self.emit(CheckError::UndeclaredEffect {
+                                callee: format!("{type_name}.{method}"),
+                                effect: "Send".to_string(),
+                                span,
+                            });
+                        } else {
+                            self.emit(CheckError::MissingEffect {
+                                caller: self.current_fn_name.clone(),
+                                callee: format!("{type_name}.{method}"),
+                                effect: "Send".to_string(),
+                                span,
+                            });
+                        }
+                    }
+                }
                 // User-defined type-attached method (#868): look up method table.
                 // Clone to release the borrow on `self` before calling self.emit().
                 let method_info = self
