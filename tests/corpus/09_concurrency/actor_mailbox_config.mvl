@@ -1,0 +1,34 @@
+// Corpus: actor mailbox configuration (#1127)
+//
+// Exercises `with mailbox(...)` syntax on actor declarations.
+// Default (no annotation) remains 256/DropNewest for backwards compatibility.
+
+// Default mailbox — no annotation, capacity 256, DropNewest (existing behavior).
+actor DefaultMailbox {
+    count: Int
+    pub fn tick() { }
+}
+
+// Bounded mailbox with explicit capacity, default DropNewest policy.
+actor SmallQueue {
+    count: Int
+    pub fn enqueue(val n: Int) { }
+} with mailbox(32)
+
+// Bounded mailbox with explicit Block policy — sender blocks when full.
+actor BlockingQueue {
+    count: Int
+    pub fn enqueue(val n: Int) { }
+} with mailbox(64, block)
+
+// Bounded mailbox with explicit DropNewest policy.
+actor DropQueue {
+    count: Int
+    pub fn enqueue(val n: Int) { }
+} with mailbox(128, drop_newest)
+
+// Unbounded mailbox — for audit/compliance actors that must never lose messages.
+actor AuditLog {
+    entries: Int
+    pub fn record(val msg: String) { }
+} with mailbox(unbounded)

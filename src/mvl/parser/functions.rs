@@ -12,7 +12,8 @@
 
 use crate::mvl::parser::ast::{
     ActorDecl, ActorMethod, BinaryOp, Constraint, EffectDecl, Expr, ExternDecl, ExternFnDecl,
-    FnDecl, ImplDecl, LabelDecl, Literal, Param, RefExpr, RelabelDecl, Totality, UnaryOp, UseDecl,
+    FnDecl, ImplDecl, LabelDecl, Literal, MailboxConfig, MailboxPolicy, Param, RefExpr,
+    RelabelDecl, Totality, UnaryOp, UseDecl,
 };
 use crate::mvl::parser::lexer::TokenKind;
 use crate::mvl::parser::{ParseError, Parser};
@@ -1102,6 +1103,14 @@ impl Parser {
         let rbrace = self.expect(&TokenKind::RBrace);
         self.require(rbrace)?;
 
+        // Optional `with mailbox(...)` configuration (#1127).
+        let mailbox = if matches!(self.peek_kind(), TokenKind::With) {
+            self.advance(); // consume `with`
+            Some(self.parse_mailbox_config()?)
+        } else {
+            None
+        };
+
         let span = self.span_from(start);
         Ok(ActorDecl {
             visible: false, // set by parse_decl when `pub` prefix is present
@@ -1109,8 +1118,92 @@ impl Parser {
             type_params,
             fields,
             methods,
+            mailbox,
             span,
         })
+    }
+
+    /// Parse `mailbox(...)` after `with` has been consumed.
+    ///
+    /// Syntax:
+    /// - `mailbox(unbounded)`
+    /// - `mailbox(N)`
+    /// - `mailbox(N, block)`
+    /// - `mailbox(N, drop_newest)`
+    fn parse_mailbox_config(&mut self) -> Result<MailboxConfig, ()> {
+        // Expect `mailbox` identifier.
+        let ident_result = self.expect_ident();
+        let (kw, kw_span) = self.require(ident_result)?;
+        if kw != "mailbox" {
+            self.push_recover(ParseError {
+                message: format!("expected `mailbox` after `with`, found `{kw}`"),
+                span: kw_span,
+            });
+            return Err(());
+        }
+
+        let lparen = self.expect(&TokenKind::LParen);
+        self.require(lparen)?;
+
+        // First argument: `unbounded` keyword or a positive integer capacity.
+        let config = match self.peek_kind().clone() {
+            TokenKind::Ident(s) if s == "unbounded" => {
+                self.advance(); // consume `unbounded`
+                let rparen = self.expect(&TokenKind::RParen);
+                self.require(rparen)?;
+                MailboxConfig::Unbounded
+            }
+            TokenKind::Integer(n) => {
+                let span = self.advance().span;
+                if n <= 0 {
+                    self.push_recover(ParseError {
+                        message: "mailbox capacity must be greater than zero".to_string(),
+                        span,
+                    });
+                    return Err(());
+                }
+                let capacity = n as u64;
+
+                // Optional policy: `, block` or `, drop_newest`.
+                let policy = if matches!(self.peek_kind(), TokenKind::Comma) {
+                    self.advance(); // consume `,`
+                    let policy_result = self.expect_ident();
+                    let (policy_str, policy_span) = self.require(policy_result)?;
+                    match policy_str.as_str() {
+                        "block" => MailboxPolicy::Block,
+                        "drop_newest" => MailboxPolicy::DropNewest,
+                        other => {
+                            self.push_recover(ParseError {
+                                message: format!(
+                                    "unknown mailbox policy `{other}`; expected `block` or `drop_newest`"
+                                ),
+                                span: policy_span,
+                            });
+                            return Err(());
+                        }
+                    }
+                } else {
+                    MailboxPolicy::DropNewest
+                };
+
+                let rparen = self.expect(&TokenKind::RParen);
+                self.require(rparen)?;
+                MailboxConfig::Bounded { capacity, policy }
+            }
+            _ => {
+                let span = self.peek_span();
+                self.push_recover(ParseError {
+                    message: format!(
+                        "expected a capacity (integer) or `unbounded` in `mailbox(...)`, found `{}`",
+                        self.peek_kind()
+                    ),
+                    span,
+                });
+                return Err(());
+            }
+        };
+
+        Ok(config)
     }
 
     /// Parse an actor method after `fn` (or `pub fn`) has been consumed:

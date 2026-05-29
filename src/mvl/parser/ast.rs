@@ -317,6 +317,33 @@ pub struct ImplDecl {
 
 // ── Actor declaration ──────────────────────────────────────────────────────
 
+/// Mailbox overflow policy for bounded actor mailboxes (#1127).
+#[derive(Debug, Clone, PartialEq)]
+pub enum MailboxPolicy {
+    /// Block the sender until space is available — no message loss.
+    Block,
+    /// Drop the newest message when the mailbox is full (fire-and-forget).
+    DropNewest,
+}
+
+/// Mailbox configuration attached to an actor declaration via `with mailbox(...)` (#1127).
+///
+/// Syntax:
+/// - `with mailbox(256)` — bounded, default policy (DropNewest)
+/// - `with mailbox(256, block)` — bounded, blocking sender
+/// - `with mailbox(256, drop_newest)` — bounded, drop newest on full
+/// - `with mailbox(unbounded)` — unbounded, never drops
+#[derive(Debug, Clone, PartialEq)]
+pub enum MailboxConfig {
+    /// Fixed-size mailbox.
+    Bounded {
+        capacity: u64,
+        policy: MailboxPolicy,
+    },
+    /// Unbounded mailbox — grows without limit.
+    Unbounded,
+}
+
 /// `actor TypeName { fields* behaviors* }` — an actor type declaration (Phase 8, #63).
 ///
 /// Actors encapsulate private mutable state and expose it only through behaviors
@@ -333,6 +360,8 @@ pub struct ActorDecl {
     pub fields: Vec<FieldDecl>,
     /// Methods: `pub fn` = async behavior, `fn` = private sync helper.
     pub methods: Vec<ActorMethod>,
+    /// Optional mailbox configuration. `None` = default (256 capacity, DropNewest policy).
+    pub mailbox: Option<MailboxConfig>,
     pub span: Span,
 }
 

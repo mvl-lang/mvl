@@ -54,7 +54,7 @@ use crate::mvl::backends::rust::emit_exprs::emit_block_stmts;
 use crate::mvl::backends::rust::emit_types::emit_type_expr;
 use crate::mvl::backends::rust::emitter::RustEmitter;
 use crate::mvl::backends::rust::last_use::compute_last_uses;
-use crate::mvl::parser::ast::{ActorDecl, Stmt};
+use crate::mvl::parser::ast::{ActorDecl, MailboxConfig, MailboxPolicy, Stmt};
 
 /// Convert a `snake_case` name to `PascalCase` for Rust enum variant names.
 ///
@@ -257,9 +257,13 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &ActorDecl) {
     cg.line("#[derive(Clone)]");
     cg.line(&format!("{vis}struct {name} {{"));
     cg.push_indent();
-    cg.line(&format!(
-        "_sender: std::sync::mpsc::SyncSender<{msg_name}>,"
-    ));
+    let sender_type = match &ad.mailbox {
+        Some(MailboxConfig::Unbounded) => {
+            format!("std::sync::mpsc::Sender<{msg_name}>")
+        }
+        _ => format!("std::sync::mpsc::SyncSender<{msg_name}>"),
+    };
+    cg.line(&format!("_sender: {sender_type},"));
     cg.pop_indent();
     cg.line("}");
     cg.blank();
@@ -287,7 +291,17 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &ActorDecl) {
             let fields: Vec<String> = m.params.iter().map(|p| p.name.clone()).collect();
             format!("{msg_name}::{variant} {{ {} }}", fields.join(", "))
         };
-        cg.line(&format!("let _ = self._sender.try_send({msg_expr});"));
+        let send_call = match &ad.mailbox {
+            Some(MailboxConfig::Unbounded)
+            | Some(MailboxConfig::Bounded {
+                policy: MailboxPolicy::Block,
+                ..
+            }) => {
+                format!("let _ = self._sender.send({msg_expr});")
+            }
+            _ => format!("let _ = self._sender.try_send({msg_expr});"),
+        };
+        cg.line(&send_call);
         cg.pop_indent();
         cg.line("}");
     }
@@ -308,7 +322,14 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &ActorDecl) {
         "fn {start_fn}(mut state: {state_name}) -> {name} {{"
     ));
     cg.push_indent();
-    cg.line("let (tx, rx) = std::sync::mpsc::sync_channel(256);");
+    let channel_line = match &ad.mailbox {
+        Some(MailboxConfig::Unbounded) => "let (tx, rx) = std::sync::mpsc::channel();".to_string(),
+        Some(MailboxConfig::Bounded { capacity, .. }) => {
+            format!("let (tx, rx) = std::sync::mpsc::sync_channel({capacity});")
+        }
+        None => "let (tx, rx) = std::sync::mpsc::sync_channel(256);".to_string(),
+    };
+    cg.line(&channel_line);
     cg.line(&format!(
         "state._self_ref = Some({name} {{ _sender: tx.clone() }});"
     ));

@@ -19,7 +19,7 @@ use inkwell::{
     AddressSpace,
 };
 
-use crate::mvl::parser::ast::{ActorDecl, Expr, TypeExpr};
+use crate::mvl::parser::ast::{ActorDecl, Expr, MailboxConfig, MailboxPolicy, TypeExpr};
 
 use super::LlvmBackend;
 
@@ -38,9 +38,18 @@ impl<'ctx> LlvmBackend<'ctx> {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let i64_ty = self.context.i64_type();
 
-        // mvl_actor_spawn: (ptr dispatch_fn, ptr state, i64 state_size) -> ptr handle
+        // mvl_actor_spawn: (ptr dispatch_fn, ptr state, i64 state_size, i64 capacity, i64 policy) -> ptr handle
         if self.module.get_function("mvl_actor_spawn").is_none() {
-            let spawn_ty = ptr_ty.fn_type(&[ptr_ty.into(), ptr_ty.into(), i64_ty.into()], false);
+            let spawn_ty = ptr_ty.fn_type(
+                &[
+                    ptr_ty.into(),
+                    ptr_ty.into(),
+                    i64_ty.into(),
+                    i64_ty.into(), // capacity: >0 = bounded, <=0 = unbounded (#1127)
+                    i64_ty.into(), // policy: 0 = DropNewest, 1 = Block (#1127)
+                ],
+                false,
+            );
             self.module
                 .add_function("mvl_actor_spawn", spawn_ty, Some(Linkage::External));
         }
@@ -344,12 +353,45 @@ impl<'ctx> LlvmBackend<'ctx> {
         let state_size = self.llvm_type_byte_size(state_ty.into()) as u64;
         let size_val = i64_ty.const_int(state_size, false);
 
+        // Resolve mailbox capacity and policy from the actor declaration (#1127).
+        let mailbox = self
+            .actors
+            .actor_decls
+            .get(actor_type)
+            .and_then(|ad| ad.mailbox.as_ref());
+        let (capacity_val, policy_val) = match mailbox {
+            Some(MailboxConfig::Unbounded) => {
+                (i64_ty.const_int(0u64, false), i64_ty.const_int(0, false))
+            }
+            Some(MailboxConfig::Bounded { capacity, policy }) => {
+                let p = if matches!(policy, MailboxPolicy::Block) {
+                    1u64
+                } else {
+                    0u64
+                };
+                (
+                    i64_ty.const_int(*capacity, false),
+                    i64_ty.const_int(p, false),
+                )
+            }
+            None => {
+                // Default: 256-capacity, DropNewest.
+                (i64_ty.const_int(256, false), i64_ty.const_int(0, false))
+            }
+        };
+
         let spawn_fn = self.module.get_function("mvl_actor_spawn")?;
         let call = self
             .builder
             .build_call(
                 spawn_fn,
-                &[dispatch_ptr.into(), state_alloca.into(), size_val.into()],
+                &[
+                    dispatch_ptr.into(),
+                    state_alloca.into(),
+                    size_val.into(),
+                    capacity_val.into(),
+                    policy_val.into(),
+                ],
                 "actor_handle",
             )
             .ok()?;
