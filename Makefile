@@ -248,7 +248,7 @@ test-backend-llvm: build build-llvm-runtime ## Run LLVM backend tests across ful
 			"  PASS: "*) f="$${line#  PASS: }"; short="$${f#tests/}"; printf "  $$OK  %s\n" "$$short"; pass=$$((pass + 1));; \
 			"  FAIL"*) f="$${line##*: }"; short="$${f#tests/}"; printf "  $$FAIL  %s\n" "$$short"; fail=$$((fail + 1));; \
 		esac; \
-	done < <({ $(MVL) test tests/corpus/ --backend=llvm --verbose; $(MVL) test tests/intrinsics/ --backend=llvm --verbose; $(MVL) test tests/stdlib/ --backend=llvm --verbose; } 2>&1); \
+	done < <({ $(MVL) test tests/corpus/ --backend=llvm-inkwell --verbose; $(MVL) test tests/intrinsics/ --backend=llvm-inkwell --verbose; $(MVL) test tests/stdlib/ --backend=llvm-inkwell --verbose; } 2>&1); \
 	echo ""; \
 	if [ $$fail -eq 0 ]; then \
 		printf "  \033[32m✓  $$pass passed, 0 failed\033[0m\n\n"; \

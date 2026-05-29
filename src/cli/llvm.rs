@@ -25,7 +25,7 @@ pub(super) fn prepare_llvm(
 }
 
 /// Compile an MVL file to LLVM IR and write the .ll file to the current directory.
-/// `mvl build --backend=llvm <file>`
+/// `mvl build --backend=llvm-inkwell <file>`
 pub(super) fn build_project_llvm(path: &str, assert_mode: AssertMode) {
     let (prog, _src) = super::parse_or_exit(path);
     let module_name = loader::stem(path);
@@ -48,7 +48,7 @@ pub(super) fn build_project_llvm(path: &str, assert_mode: AssertMode) {
 }
 
 /// Compile an MVL file to LLVM IR and execute it via `lli`.
-/// `mvl run --backend=llvm <file>`
+/// `mvl run --backend=llvm-inkwell <file>`
 pub(super) fn run_project_llvm(path: &str, assert_mode: AssertMode) {
     let lli = codegen::find_lli().unwrap_or_else(|| {
         eprintln!("error: `lli` not found — install LLVM 22 (brew install llvm)");
@@ -89,7 +89,7 @@ pub(super) fn run_project_llvm(path: &str, assert_mode: AssertMode) {
 }
 
 /// LLVM integration test harness (L5-03).
-/// `mvl test --backend=llvm <path>`
+/// `mvl test --backend=llvm-inkwell <path>`
 pub(super) fn cmd_test_llvm(path: &str, quiet: bool, verbose: bool) {
     let lli = codegen::find_lli().unwrap_or_else(|| {
         eprintln!("error: `lli` not found — install LLVM 22 (brew install llvm)");
