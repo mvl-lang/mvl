@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.163.0] - 2026-05-29
+
+### Added
+- LLVM text emitter Phase 2: string literals, `println`/`assert`/`format` builtins, struct construction and field access, unit enum variants with `match`/`switch`, `for`-range loops, method calls (`to_string`, `len`, `concat`), list literals (#1136)
+- Bool comparison in LLVM IR now correctly uses `icmp eq i1` instead of `icmp eq i64` (#1136)
+
 ## [0.162.1] - 2026-05-29
 
 ### Fixed
