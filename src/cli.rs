@@ -229,7 +229,7 @@ pub(super) fn dispatch(args: &[String]) {
             assurance::run(&path, json, verbose);
         }
         "init" => {
-            meta::cmd_init();
+            meta::cmd_init(args);
         }
         "self" => {
             meta::cmd_self(args);

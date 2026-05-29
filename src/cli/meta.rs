@@ -34,16 +34,29 @@ pub(super) fn cmd_self(args: &[String]) {
             });
             toolchain::cmd_self_uninstall(version);
         }
+        "init" => {
+            cmd_self_init();
+        }
         other => {
             if other.is_empty() {
-                eprintln!("Usage: mvl self <install|use|list|uninstall>");
+                eprintln!("Usage: mvl self <init|install|use|list|uninstall>");
             } else {
                 eprintln!("Unknown self subcommand: {other}");
-                eprintln!("Usage: mvl self <install|use|list|uninstall>");
+                eprintln!("Usage: mvl self <init|install|use|list|uninstall>");
             }
             process::exit(1);
         }
     }
+}
+
+/// `mvl self init` — extract the bundled stdlib to the toolchain directory.
+fn cmd_self_init() {
+    let path = stdlib::ensure_stdlib();
+    println!(
+        "mvl stdlib v{} ready at {}",
+        stdlib::STDLIB_VERSION,
+        path.display()
+    );
 }
 
 pub(super) fn cmd_pkg_add(args: &[String]) {
@@ -61,11 +74,61 @@ pub(super) fn cmd_pkg_add(args: &[String]) {
     }
 }
 
-pub(super) fn cmd_init() {
-    let path = stdlib::ensure_stdlib();
-    println!(
-        "mvl stdlib v{} ready at {}",
-        stdlib::STDLIB_VERSION,
-        path.display()
+/// `mvl init [<name>]` — scaffold a new MVL project in the current directory.
+///
+/// Creates `mvl.toml` and `src/main.mvl`. The package name defaults to the
+/// current directory name if not provided.
+pub(super) fn cmd_init(args: &[String]) {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+
+    // Refuse if mvl.toml already exists
+    if cwd.join("mvl.toml").exists() {
+        eprintln!("error: mvl.toml already exists in this directory");
+        eprintln!("hint: use 'mvl add' to add dependencies or edit mvl.toml directly");
+        process::exit(1);
+    }
+
+    // Derive the package name: explicit arg > current directory name
+    let name = if let Some(n) = args.get(2).filter(|a| !a.starts_with('-')) {
+        n.clone()
+    } else {
+        cwd.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("my-project")
+            .to_string()
+    };
+
+    let mvl_version = env!("CARGO_PKG_VERSION");
+    let toml = format!(
+        "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nlicense = \"MIT\"\nrequires-mvl = \">={mvl_version}\"\n"
     );
+
+    let main_mvl = "//! Entry point.\n\nfn main() -> Unit ! Console {\n    println(\"Hello from {name}!\")\n}\n"
+        .replace("{name}", &name);
+
+    // Write mvl.toml
+    if let Err(e) = std::fs::write(cwd.join("mvl.toml"), &toml) {
+        eprintln!("error: cannot write mvl.toml: {e}");
+        process::exit(1);
+    }
+
+    // Write src/main.mvl
+    let src_dir = cwd.join("src");
+    if let Err(e) = std::fs::create_dir_all(&src_dir) {
+        eprintln!("error: cannot create src/: {e}");
+        process::exit(1);
+    }
+    if let Err(e) = std::fs::write(src_dir.join("main.mvl"), &main_mvl) {
+        eprintln!("error: cannot write src/main.mvl: {e}");
+        process::exit(1);
+    }
+
+    println!("Created MVL project '{name}'");
+    println!("  mvl.toml");
+    println!("  src/main.mvl");
+    println!();
+    println!("Next steps:");
+    println!("  mvl check src/main.mvl   — type-check");
+    println!("  mvl sbom                  — generate SBOM");
+    println!("  mvl add <pkg>             — add a dependency");
 }
