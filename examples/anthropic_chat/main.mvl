@@ -28,7 +28,7 @@ partial fn ask_claude(
 ) -> Result[Response, AnthropicError] ! Net {
     let client: Claude = Claude::new(api_key);
     client.messages(
-        ModelId::Sonnet4,
+        ModelId::Sonnet4_6,
         [Message { role: Role::User, content: question }],
         256,
     )
@@ -61,7 +61,7 @@ fn display_error(e: AnthropicError) -> Unit ! Console {
 partial fn multi_turn(api_key: Secret[String]) -> Result[Response, AnthropicError] ! Net {
     let client: Claude = Claude::new(api_key);
     client.messages(
-        ModelId::Haiku4,
+        ModelId::Haiku4_5,
         [
             Message { role: Role::System, content: "You are a helpful assistant that explains programming languages." },
             Message { role: Role::User, content: "What makes MVL different from Rust?" },
