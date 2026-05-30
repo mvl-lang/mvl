@@ -28,6 +28,8 @@ jobs:
       compiler: ${{ steps.filter.outputs.compiler }}
       openspec: ${{ steps.filter.outputs.openspec }}
       examples: ${{ steps.filter.outputs.examples }}
+      mvl: ${{ steps.filter.outputs.mvl }}
+      code: ${{ steps.filter.outputs.code }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
@@ -46,14 +48,20 @@ jobs:
             # push to main: compare with parent; fall back to all files on first commit
             CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || git ls-files)
           fi
-          echo "$CHANGED" | grep -qE '\.rs$|^Cargo\.' && RUST=true     || RUST=false
-          echo "$CHANGED" | grep -qE '^compiler/'      && COMPILER=true || COMPILER=false
-          echo "$CHANGED" | grep -qE '^\.openspec/'    && OPENSPEC=true || OPENSPEC=false
-          echo "$CHANGED" | grep -qE '^examples/|^std/' && EXAMPLES=true || EXAMPLES=false
+          echo "$CHANGED" | grep -qE '\.rs$|^Cargo\.'   && RUST=true     || RUST=false
+          echo "$CHANGED" | grep -qE '^compiler/'        && COMPILER=true || COMPILER=false
+          echo "$CHANGED" | grep -qE '^\.openspec/'      && OPENSPEC=true || OPENSPEC=false
+          echo "$CHANGED" | grep -qE '^examples/|^std/'  && EXAMPLES=true || EXAMPLES=false
+          echo "$CHANGED" | grep -qE '\.mvl$'            && MVL=true      || MVL=false
+          # code=true when any source file changed (gates assurance + heavy jobs)
+          { [ "$RUST" = true ] || [ "$COMPILER" = true ] || [ "$EXAMPLES" = true ] || [ "$MVL" = true ]; } \
+            && CODE=true || CODE=false
           echo "rust=$RUST"         >> "$GITHUB_OUTPUT"
           echo "compiler=$COMPILER" >> "$GITHUB_OUTPUT"
           echo "openspec=$OPENSPEC" >> "$GITHUB_OUTPUT"
           echo "examples=$EXAMPLES" >> "$GITHUB_OUTPUT"
+          echo "mvl=$MVL"           >> "$GITHUB_OUTPUT"
+          echo "code=$CODE"         >> "$GITHUB_OUTPUT"
 
   # ── ISPE Assurance ──────────────────────────────────────────────────────────
   #
@@ -61,8 +69,9 @@ jobs:
   # changed — it measures the project as a whole. Reports only, does not block.
   assurance:
     name: ISPE Assurance
+    needs: [changes]
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request' && github.actor != 'dependabot[bot]'
+    if: github.event_name == 'pull_request' && github.actor != 'dependabot[bot]' && needs.changes.outputs.code == 'true'
     permissions:
       contents: read
       pull-requests: write
