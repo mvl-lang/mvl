@@ -18,37 +18,39 @@
 //!     fn helper(&mut self) -> ret { body }
 //! }
 //!
+
 //! // Tag-capability handle — cheap to clone, safe to send across threads
 //! #[derive(Clone)]
-//! pub struct Foo { _sender: std::sync::mpsc::SyncSender<FooMsg> }
+//! pub struct Foo { _sender: MvlSender<FooMailbox> }
 //!
 //! impl Foo {
 //!     pub fn behavior(&self, params) {
-//!         let _ = self._sender.try_send(FooMsg::Behavior { params });
+//!         self._sender.send(FooMailbox::Behavior { params });
 //!     }
 //! }
 //!
 //! // Start function — called by `actor Foo { field: val, ... }` expressions
 //! fn _start_foo(state: FooState) -> Foo {
-//!     let (tx, rx) = std::sync::mpsc::sync_channel(256);
-//!     std::thread::spawn(move || {
+//!     let (tx, rx) = mvl_channel(256_i64, 0_i64);
+//!     let __handle = mvl_spawn(move || {
 //!         let mut actor = state;
-//!         while let Ok(msg) = rx.recv() {
+//!         while let Some(msg) = rx.recv() {
 //!             match msg {
-//!                 FooMsg::Behavior { params } => actor.behavior(params),
-//!                 FooMsg::UnitBehavior => actor.unit_behavior(),
+//!                 FooMailbox::Behavior { params } => actor.behavior(params),
+//!                 FooMailbox::UnitBehavior => actor.unit_behavior(),
 //!             }
 //!         }
 //!     });
+//!     mvl_register_actor(__handle);
 //!     Foo { _sender: tx }
 //! }
 //! ```
 //!
-//! Runtime: `std::sync::mpsc::sync_channel` + `std::thread::spawn` (no tokio).
-//! Behaviors are fire-and-forget — `try_send` drops the message on a full queue
-//! rather than blocking the caller.  Queue capacity defaults to 256.
+//! Runtime symbols come from `mvl_runtime::actors` — the emitter calls only
+//! the named interface; the runtime crate provides the implementation.
+//! Swapping `--target` replaces the crate without touching this emitter.
 //!
-//! See Spec 015 (actors), ADR-0029. Phase 8, #695.
+//! See Spec 015 (actors), ADR-0027. Phase 8, #695, #1014.
 
 use crate::mvl::backends::rust::emit_exprs::emit_block_stmts;
 use crate::mvl::backends::rust::emit_types::emit_type_expr;
@@ -91,33 +93,14 @@ pub fn actor_name_to_snake(s: &str) -> String {
     out
 }
 
-/// Emit the thread_local join-handle registry used by implicit actor lifecycle (#1048).
+/// Emit the actor runtime import for programs that contain at least one actor.
 ///
-/// Called once per program that contains at least one actor.  Registers a
-/// `thread_local!` vec of `JoinHandle`s plus two helpers:
-/// - `_mvl_register_actor(h)` — called by each `_start_*` function
-/// - `_mvl_join_actors()`     — called at the end of `fn main()` to drain all spawned actors
-///
-/// Shutdown protocol: the main body is wrapped in an inner scope so all actor
-/// handles (holding `SyncSender`) are dropped before `_mvl_join_actors()` runs.
-/// Sender disconnect causes `rx.recv()` to return `Err(Disconnected)` after
-/// draining any buffered messages, so actors exit naturally — no polling needed
-/// (#1125).
+/// Pulls in the named interface from `mvl_runtime::actors` — the emitter
+/// calls only these symbols; the runtime crate provides the implementation.
+/// Swapping `--target` replaces the crate without changing emitter output.
+/// ADR-0027 §"Actor runtime interface".
 pub fn emit_actor_runtime_preamble(cg: &mut RustEmitter) {
-    cg.line("thread_local! {");
-    cg.line(
-        "    static _MVL_ACTOR_HANDLES: std::cell::RefCell<Vec<std::thread::JoinHandle<()>>> =",
-    );
-    cg.line("        std::cell::RefCell::new(Vec::new());");
-    cg.line("}");
-    cg.line("fn _mvl_register_actor(h: std::thread::JoinHandle<()>) {");
-    cg.line("    _MVL_ACTOR_HANDLES.with(|v| v.borrow_mut().push(h));");
-    cg.line("}");
-    cg.line("fn _mvl_join_actors() {");
-    cg.line("    _MVL_ACTOR_HANDLES.with(|v| {");
-    cg.line("        for h in v.borrow_mut().drain(..) { let _ = h.join(); }");
-    cg.line("    });");
-    cg.line("}");
+    cg.line("use mvl_runtime::actors::*;");
 }
 
 /// Emit the complete Rust runtime infrastructure for an MVL actor declaration.
@@ -257,13 +240,7 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &ActorDecl) {
     cg.line("#[derive(Clone)]");
     cg.line(&format!("{vis}struct {name} {{"));
     cg.push_indent();
-    let sender_type = match &ad.mailbox {
-        Some(MailboxConfig::Unbounded) => {
-            format!("std::sync::mpsc::Sender<{msg_name}>")
-        }
-        _ => format!("std::sync::mpsc::SyncSender<{msg_name}>"),
-    };
-    cg.line(&format!("_sender: {sender_type},"));
+    cg.line(&format!("_sender: MvlSender<{msg_name}>,"));
     cg.pop_indent();
     cg.line("}");
     cg.blank();
@@ -291,17 +268,7 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &ActorDecl) {
             let fields: Vec<String> = m.params.iter().map(|p| p.name.clone()).collect();
             format!("{msg_name}::{variant} {{ {} }}", fields.join(", "))
         };
-        let send_call = match &ad.mailbox {
-            Some(MailboxConfig::Unbounded)
-            | Some(MailboxConfig::Bounded {
-                policy: MailboxPolicy::Block,
-                ..
-            }) => {
-                format!("let _ = self._sender.send({msg_expr});")
-            }
-            _ => format!("let _ = self._sender.try_send({msg_expr});"),
-        };
-        cg.line(&send_call);
+        cg.line(&format!("self._sender.send({msg_expr});"));
         cg.pop_indent();
         cg.line("}");
     }
@@ -323,20 +290,24 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &ActorDecl) {
     ));
     cg.push_indent();
     let channel_line = match &ad.mailbox {
-        Some(MailboxConfig::Unbounded) => "let (tx, rx) = std::sync::mpsc::channel();".to_string(),
-        Some(MailboxConfig::Bounded { capacity, .. }) => {
-            format!("let (tx, rx) = std::sync::mpsc::sync_channel({capacity});")
+        Some(MailboxConfig::Unbounded) => "let (tx, rx) = mvl_channel(-1_i64, 0_i64);".to_string(),
+        Some(MailboxConfig::Bounded { capacity, policy }) => {
+            let pol: i64 = match policy {
+                MailboxPolicy::Block => 1,
+                MailboxPolicy::DropNewest => 0,
+            };
+            format!("let (tx, rx) = mvl_channel({capacity}_i64, {pol}_i64);")
         }
-        None => "let (tx, rx) = std::sync::mpsc::sync_channel(256);".to_string(),
+        None => "let (tx, rx) = mvl_channel(256_i64, 0_i64);".to_string(),
     };
     cg.line(&channel_line);
     cg.line(&format!(
         "state._self_ref = Some({name} {{ _sender: tx.clone() }});"
     ));
-    cg.line("let __handle = std::thread::spawn(move || {");
+    cg.line("let __handle = mvl_spawn(move || {");
     cg.push_indent();
     cg.line("let mut actor = state;");
-    cg.line("while let Ok(msg) = rx.recv() {");
+    cg.line("while let Some(msg) = rx.recv() {");
     cg.push_indent();
     cg.line("match msg {");
     cg.push_indent();
@@ -359,7 +330,7 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &ActorDecl) {
     cg.line("}");
     cg.pop_indent();
     cg.line("});");
-    cg.line("_mvl_register_actor(__handle);");
+    cg.line("mvl_register_actor(__handle);");
     cg.line(&format!("{name} {{ _sender: tx }}"));
     cg.pop_indent();
     cg.line("}");

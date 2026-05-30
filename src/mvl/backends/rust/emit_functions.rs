@@ -46,7 +46,7 @@ pub fn emit_fn_decl(cg: &mut RustEmitter, fd: &FnDecl) {
     // Track current function name and test status for coverage metadata.
     cg.current_fn = fd.name.clone();
     cg.current_fn_is_test = fd.is_test;
-    // #1048: inject _mvl_join_actors() at the end of fn main() when actors are present.
+    // #1048: inject mvl_join_actors() at the end of fn main() when actors are present.
     cg.inject_actor_join = cg.has_actors && fd.name == "main";
 
     // Test functions are emitted inside a #[cfg(test)] mod tests block.
@@ -258,11 +258,11 @@ fn emit_fn_body(cg: &mut RustEmitter, fd: &FnDecl) {
 
     // #1048 + deadlock fix: when inject_actor_join is true, wrap the entire body
     // in an inner scope `{ ... }` so that all actor handles (which hold SyncSender
-    // channels) are dropped before _mvl_join_actors() tries to join the actor
+    // channels) are dropped before mvl_join_actors() tries to join the actor
     // threads.  Without this scope, the join deadlocks: actor threads block on
     // rx.recv() waiting for all senders to close, but the sender in the local
     // variable isn't dropped until main() returns — which can't happen because
-    // _mvl_join_actors() is blocking.
+    // mvl_join_actors() is blocking.
     let needs_actor_scope = cg.inject_actor_join;
     if needs_actor_scope {
         cg.inject_actor_join = false;
@@ -343,7 +343,7 @@ fn emit_fn_body(cg: &mut RustEmitter, fd: &FnDecl) {
         cg.push("}");
         cg.nl();
         cg.indent();
-        cg.push("_mvl_join_actors()");
+        cg.push("mvl_join_actors()");
         cg.nl();
     }
 
