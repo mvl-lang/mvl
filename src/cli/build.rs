@@ -140,7 +140,10 @@ pub fn run(path: &str, run: bool, run_args: &[String], assert_mode: AssertMode) 
     // Collect expression types from ALL programs (prelude + user) for the
     // transpiler to emit type-specific Rust at method-call sites (#554).
     let mut all_expr_types = checker::collect_prelude_expr_types(&stdlib_prelude_progs);
-    let check_result = checker::check_with_prelude(&stdlib_prelude_progs, &prog);
+    let sibling_refs: Vec<&mvl::mvl::parser::ast::Program> =
+        sibling_modules.iter().map(|(_, p)| p).collect();
+    let check_result =
+        checker::check_with_two_preludes(&stdlib_prelude_progs, &sibling_refs, &prog);
     if check_result.has_errors() {
         for err in &check_result.errors {
             super::render_diagnostic(&file_path, &src, err);
