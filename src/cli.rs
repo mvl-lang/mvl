@@ -19,6 +19,7 @@ pub mod openapi;
 pub mod test;
 pub mod transpile;
 
+use mvl::mvl::checker::errors::CheckError;
 use mvl::mvl::loader;
 use mvl::mvl::packages;
 use mvl::mvl::parser::ast::Program;
@@ -273,6 +274,59 @@ pub(super) fn dispatch(args: &[String]) {
             process::exit(1);
         }
     }
+}
+
+/// Render a single [`CheckError`] in rustc-style source-context format.
+///
+/// ```text
+/// error[REQ10]: refinement predicate violated
+///  --> main.mvl:6:23
+///   |
+/// 6 |     let result: Int = double(-2);
+///   |                       ^^^^^^^^^^ argument to `double` violates refinement `self > 0`
+/// ```
+///
+/// Note: `Span::len` covers the full call expression, so the carets span the
+/// entire call site rather than just the invalid argument.
+///
+/// The message is split on the first `": "` into a short title (header line)
+/// and a detail annotation (caret line).  When no colon is present the full
+/// message appears on both lines.
+pub(super) fn render_diagnostic(file_path: &str, src: &str, err: &CheckError) {
+    let span = err.span();
+    let req = err.requirement_number();
+    let msg = err.message();
+
+    let (title, annotation) = match msg.find(": ") {
+        Some(pos) => (&msg[..pos], &msg[pos + 2..]),
+        None => (msg.as_str(), msg.as_str()),
+    };
+
+    let lines: Vec<&str> = src.lines().collect();
+    let source_line = lines
+        .get((span.line as usize).saturating_sub(1))
+        .copied()
+        .unwrap_or("");
+
+    let line_no_str = span.line.to_string();
+    let w = line_no_str.len();
+    let line_pad = " ".repeat(w); // w spaces  — lines up with `-->`
+    let gutter = " ".repeat(w + 1); // w+1 spaces — lines up with line number + space
+
+    let col_0 = (span.col as usize).saturating_sub(1);
+    let caret_len = (span.len as usize).max(1);
+    let spaces = " ".repeat(col_0);
+    let carets = "^".repeat(caret_len);
+
+    eprintln!("error[REQ{req}]: {title}");
+    eprintln!(
+        "{line_pad}--> {file_path}:{line}:{col}",
+        line = span.line,
+        col = span.col
+    );
+    eprintln!("{gutter}|");
+    eprintln!("{line_no_str} | {source_line}");
+    eprintln!("{gutter}| {spaces}{carets} {annotation}");
 }
 
 /// Parse the given `.mvl` file, printing errors and exiting on failure.

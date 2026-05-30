@@ -71,7 +71,7 @@ pub fn run(path: &str, run: bool, run_args: &[String], assert_mode: AssertMode) 
         path.to_string()
     };
 
-    let (prog, _src) = super::parse_or_exit(&file_path);
+    let (prog, src) = super::parse_or_exit(&file_path);
     let crate_name = loader::stem(path);
 
     // Collect sibling modules referenced via `use module::item` declarations.
@@ -143,14 +143,7 @@ pub fn run(path: &str, run: bool, run_args: &[String], assert_mode: AssertMode) 
     let check_result = checker::check_with_prelude(&stdlib_prelude_progs, &prog);
     if check_result.has_errors() {
         for err in &check_result.errors {
-            eprintln!(
-                "{}:{}:{}: error[req{}]: {}",
-                file_path,
-                err.span().line,
-                err.span().col,
-                err.requirement_number(),
-                err.message()
-            );
+            super::render_diagnostic(&file_path, &src, err);
         }
         process::exit(1);
     }
