@@ -1,8 +1,8 @@
 # ADR-0027: Multi-Backend Architecture
 
-**Status:** Accepted  
-**Date:** 2026-05-11  
-**Issue:** #646 (first step of epic #615)
+**Status:** Accepted
+**Date:** 2026-05-11 (updated 2026-05-30 — actor runtime interface, #1014)
+**Issue:** #646 (first step of epic #615), #1014 (actor runtime abstraction)
 
 ## Context
 
@@ -51,6 +51,80 @@ runtime/
 ```
 
 `mvl_memory` (heap types + lifecycle) is merged into `runtime/llvm/` as the `memory` module.  The merged crate keeps the package name `mvl_runtime_c` so the `libmvl_runtime_c` binary name is unchanged.  lli now loads a single library instead of two.
+
+### Actor runtime interface
+
+The emitter (compiler) and the runtime crate are separated by a **named interface**. The emitter
+MUST NOT reference `std::thread`, `tokio`, `std::sync::mpsc`, or any other scheduler primitive
+directly. It emits calls to named symbols; the linked runtime crate provides the implementation.
+Swapping `--target` changes the runtime crate — the emitter is unchanged.
+
+#### LLVM backend (C-ABI)
+
+The LLVM emitter declares and calls these external C symbols:
+
+```c
+// Actor lifecycle
+void* mvl_actor_spawn(void* dispatch_fn, void* state, int64_t size,
+                      int64_t capacity, int64_t policy);
+void  mvl_actor_send(void* handle, int64_t disc, int64_t argc, int64_t* args);
+void  mvl_actor_drop(void* handle);
+void* mvl_actor_self();
+void  mvl_actor_join_all();
+```
+
+`capacity`: `> 0` = bounded mailbox of that size; `<= 0` = unbounded.
+`policy`: `0` = DropNewest (`try_send`); `1` = Block (sender blocks when full).
+
+These are implemented in `runtime/llvm/src/actors.rs` and compiled into `libmvl_runtime_c`.
+
+#### Rust backend (typed interface)
+
+The Rust emitter generates code that calls only these symbols from `mvl_runtime::actors`:
+
+```rust
+// Opaque wrappers — implementation is runtime-internal
+pub struct MvlSender<M: Send + 'static>  // actor handle field type
+pub struct MvlReceiver<M: Send + 'static>
+pub struct MvlJoinHandle
+
+// Called from _start_<actor> functions:
+pub fn mvl_channel<M: Send + 'static>(capacity: i64, policy: i64)
+    -> (MvlSender<M>, MvlReceiver<M>);
+pub fn mvl_spawn<F: FnOnce() + Send + 'static>(f: F) -> MvlJoinHandle;
+pub fn mvl_register_actor(h: MvlJoinHandle);
+
+// Called at end of fn main():
+pub fn mvl_join_actors();
+
+// Called from behavior dispatch wrappers:
+impl<M: Send + 'static> MvlSender<M> {
+    pub fn send(&self, msg: M);  // respects policy (drop or block)
+    pub fn clone(&self) -> Self;
+}
+
+// Called from actor thread loop:
+impl<M: Send + 'static> MvlReceiver<M> {
+    pub fn recv(&self) -> Option<M>;  // blocks until message or disconnect
+}
+```
+
+The actor handle struct field type is always `mvl_runtime::MvlSender<XMailbox>` — never
+`std::sync::mpsc::SyncSender` or any other concrete type.
+
+#### --target selects the runtime
+
+`mvl build --target=<name>` selects which runtime crate is linked. The emitter output is
+identical for all targets.
+
+| Target | Rust runtime | LLVM runtime |
+|--------|-------------|--------------|
+| `default` | `runtime/rust` — `std::thread` + `mpsc` | `runtime/llvm` — `std::thread` + `mpsc` |
+| `tokio` | `runtime/rust-tokio` — tokio tasks | (same LLVM runtime) |
+| `freertos` | `runtime/rust-freertos` | `runtime/llvm-freertos` |
+
+`--target` is not yet implemented (Phase 9). The `default` runtime is always used until then.
+The emitter interface defined above MUST be stable before `--target` is introduced.
 
 ## Consequences
 
