@@ -5,6 +5,9 @@
 ### Added
 - ZMTP protocol test coverage expansion: 19 new tests for `parse_ready_body`, `parse_socket_type_property`, and `zmq_error_msg` achieving 100% branch coverage (80/80 branches) (#1058)
 
+### Fixed
+- `mvl build` now fails with an error message when the type checker detects violations (refinement, IFC, type errors, etc.); previously all checker errors were silently discarded and the build succeeded regardless
+
 ### Changed
 - Rust backend decoupled from checker: `transpile()` and `transpile_project*()` no longer call the checker internally; callers supply pre-built `expr_types` map; new `Pipeline::assemble_expr_types()` centralises prelude + program type assembly (#1110)
 

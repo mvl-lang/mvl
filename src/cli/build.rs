@@ -141,6 +141,19 @@ pub fn run(path: &str, run: bool, run_args: &[String], assert_mode: AssertMode) 
     // transpiler to emit type-specific Rust at method-call sites (#554).
     let mut all_expr_types = checker::collect_prelude_expr_types(&stdlib_prelude_progs);
     let check_result = checker::check_with_prelude(&stdlib_prelude_progs, &prog);
+    if check_result.has_errors() {
+        for err in &check_result.errors {
+            eprintln!(
+                "{}:{}:{}: error[req{}]: {}",
+                file_path,
+                err.span().line,
+                err.span().col,
+                err.requirement_number(),
+                err.message()
+            );
+        }
+        process::exit(1);
+    }
     all_expr_types.extend(check_result.expr_types);
     // Pre-check each sibling so the backend receives ready-made expr_types (#1110).
     let sibling_expr_types: Vec<_> = sibling_modules
