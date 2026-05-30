@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.166.0] - 2026-05-30
+
+### Added
+- Actor runtime interface decoupling: Rust backend emitter now calls named symbols (`mvl_channel`, `mvl_spawn`, `mvl_register_actor`, `mvl_join_actors`) instead of inlining `std::thread` and `std::sync::mpsc` glue. Swapping `--target` (Phase 9) will replace the runtime crate without changing emitter output (ADR-0027, #1014)
+- `runtime/rust/src/actors.rs`: default `std::thread` + `mpsc` implementation of the actor runtime interface, with `MvlSender<M>`, `MvlReceiver<M>`, and policy-aware message sending
+
 ## [0.165.0] - 2026-05-29
 
 ### Added
