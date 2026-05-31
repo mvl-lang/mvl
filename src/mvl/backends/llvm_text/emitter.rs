@@ -76,6 +76,8 @@ struct TextEmitter {
     ref_locals: HashMap<String, RefLocal>,
     current_ret_ty: TypeExpr,
     fn_ret_types: HashMap<String, TypeExpr>,
+    /// Function name → ordered parameter types (for named-fn closure trampolines).
+    fn_param_types: HashMap<String, Vec<TypeExpr>>,
     /// SSA register → LLVM type string (for phi type inference)
     reg_types: HashMap<String, String>,
     /// MVL variable name → TypeExpr (for struct field access)
@@ -86,6 +88,12 @@ struct TextEmitter {
     has_int_fmt: bool,
     has_str_true: bool,
     has_str_false: bool,
+
+    // ── Closure / lambda state (#1148) ────────────────────────────────────
+    /// Monotonic counter for generating unique lambda function names.
+    lambda_counter: usize,
+    /// True once `%__closure_type = type { ptr, ptr }` has been emitted.
+    closure_type_emitted: bool,
 }
 
 #[derive(Clone)]
@@ -119,12 +127,15 @@ impl TextEmitter {
                 span: Default::default(),
             },
             fn_ret_types: HashMap::new(),
+            fn_param_types: HashMap::new(),
             reg_types: HashMap::new(),
             local_mvl_types: HashMap::new(),
             has_println_fmt: false,
             has_int_fmt: false,
             has_str_true: false,
             has_str_false: false,
+            lambda_counter: 0,
+            closure_type_emitted: false,
         }
     }
 
@@ -445,6 +456,8 @@ impl TextEmitter {
                 }
                 "i64".into()
             }
+            // A lambda expression is a closure pointer.
+            Expr::Lambda { .. } => "ptr".into(),
             _ => "i64".into(),
         }
     }
@@ -523,6 +536,10 @@ impl TextEmitter {
                 Decl::Fn(fd) => {
                     self.fn_ret_types
                         .insert(fd.name.clone(), fd.return_type.as_ref().clone());
+                    self.fn_param_types.insert(
+                        fd.name.clone(),
+                        fd.params.iter().map(|p| p.ty.clone()).collect(),
+                    );
                 }
                 Decl::Type(td) => match &td.body {
                     TypeBody::Struct { fields, .. } => {
@@ -1162,6 +1179,13 @@ impl TextEmitter {
 
             Expr::Consume { expr, .. } | Expr::Relabel { expr, .. } => self.emit_expr(expr),
 
+            Expr::Lambda {
+                params,
+                ret_type,
+                body,
+                ..
+            } => self.emit_lambda(params, ret_type.as_deref(), body),
+
             _ => Ok(None),
         }
     }
@@ -1676,6 +1700,61 @@ impl TextEmitter {
                 self.reg_types.insert(reg.clone(), "ptr".into());
                 Ok(Some(reg))
             }
+            // ── HOF: filter / map / any / all / find / take_while / skip_while ──
+            ("filter" | "map" | "find" | "take_while" | "skip_while", "ptr") if args.len() == 1 => {
+                let closure = match self.emit_as_closure(&args[0])? {
+                    Some(p) => p,
+                    None => return Ok(None),
+                };
+                let sym = format!("List_{method}");
+                self.ensure_extern(&format!("declare ptr @{sym}(ptr, ptr)"));
+                let reg = self.next_reg();
+                self.push_instr(&format!(
+                    "{reg} = call ptr @{sym}(ptr {val}, ptr {closure})"
+                ));
+                self.reg_types.insert(reg.clone(), "ptr".into());
+                Ok(Some(reg))
+            }
+            ("any" | "all", "ptr") if args.len() == 1 => {
+                let closure = match self.emit_as_closure(&args[0])? {
+                    Some(p) => p,
+                    None => return Ok(None),
+                };
+                let sym = format!("List_{method}");
+                self.ensure_extern(&format!("declare i1 @{sym}(ptr, ptr)"));
+                let reg = self.next_reg();
+                self.push_instr(&format!("{reg} = call i1 @{sym}(ptr {val}, ptr {closure})"));
+                self.reg_types.insert(reg.clone(), "i1".into());
+                Ok(Some(reg))
+            }
+            ("fold", "ptr") if args.len() == 2 => {
+                let init_ty = self.type_of_expr(&args[0]);
+                let init_val = match self.emit_expr(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                let closure = match self.emit_as_closure(&args[1])? {
+                    Some(p) => p,
+                    None => return Ok(None),
+                };
+                // Fold passes init by pointer so the runtime can return the
+                // same type.  For scalar inits, stack-allocate a slot.
+                let slot = self.next_reg();
+                self.push_instr(&format!("{slot} = alloca {init_ty}"));
+                self.push_instr(&format!("store {init_ty} {init_val}, ptr {slot}"));
+                self.ensure_extern("declare ptr @List_fold(ptr, ptr, ptr)");
+                let reg = self.next_reg();
+                self.push_instr(&format!(
+                    "{reg} = call ptr @List_fold(ptr {val}, ptr {slot}, ptr {closure})"
+                ));
+                self.reg_types.insert(reg.clone(), "ptr".into());
+                // Load the result back out as the init type.
+                let result = self.next_reg();
+                self.push_instr(&format!("{result} = load {init_ty}, ptr {reg}"));
+                self.reg_types.insert(result.clone(), init_ty);
+                Ok(Some(result))
+            }
+
             _ => Ok(None),
         }
     }
@@ -1738,6 +1817,566 @@ impl TextEmitter {
             }
         }
         Ok(None)
+    }
+
+    // ── Closure / lambda lowering (#1148) ────────────────────────────────
+
+    /// Emit `%__closure_type = type { ptr, ptr }` exactly once.
+    fn ensure_closure_type(&mut self) {
+        if !self.closure_type_emitted {
+            self.type_defs
+                .push("%__closure_type = type { ptr, ptr }".into());
+            self.closure_type_emitted = true;
+        }
+    }
+
+    /// Collect free variables referenced in `body` that exist in `self.locals`
+    /// and are not in `exclude` (the lambda's own parameters).
+    /// Returns `(name, TypeExpr)` pairs in stable order.
+    fn collect_lambda_captures(
+        &self,
+        body: &Expr,
+        exclude: &std::collections::HashSet<String>,
+    ) -> Vec<(String, TypeExpr)> {
+        let mut seen = std::collections::HashSet::new();
+        let mut caps = Vec::new();
+        self.walk_expr_for_captures(body, exclude, &mut seen, &mut caps);
+        caps
+    }
+
+    fn walk_expr_for_captures(
+        &self,
+        expr: &Expr,
+        exclude: &std::collections::HashSet<String>,
+        seen: &mut std::collections::HashSet<String>,
+        caps: &mut Vec<(String, TypeExpr)>,
+    ) {
+        match expr {
+            Expr::Ident(name, _)
+                if !exclude.contains(name)
+                    && !seen.contains(name)
+                    && (self.locals.contains_key(name) || self.ref_locals.contains_key(name)) =>
+            {
+                let ty_opt = self
+                    .local_mvl_types
+                    .get(name)
+                    .cloned()
+                    .or_else(|| self.ref_locals.get(name).map(|rl| rl.elem_ty.clone()));
+                if let Some(ty) = ty_opt {
+                    seen.insert(name.clone());
+                    caps.push((name.clone(), ty));
+                }
+            }
+            Expr::Lambda { params, body, .. } => {
+                let mut inner_excl = exclude.clone();
+                for p in params {
+                    inner_excl.insert(p.name.clone());
+                }
+                self.walk_expr_for_captures(body, &inner_excl, seen, caps);
+            }
+            Expr::Binary { left, right, .. } => {
+                self.walk_expr_for_captures(left, exclude, seen, caps);
+                self.walk_expr_for_captures(right, exclude, seen, caps);
+            }
+            Expr::Unary { expr, .. } => {
+                self.walk_expr_for_captures(expr, exclude, seen, caps);
+            }
+            Expr::FnCall { args, .. } => {
+                for a in args {
+                    self.walk_expr_for_captures(a, exclude, seen, caps);
+                }
+            }
+            Expr::MethodCall { receiver, args, .. } => {
+                self.walk_expr_for_captures(receiver, exclude, seen, caps);
+                for a in args {
+                    self.walk_expr_for_captures(a, exclude, seen, caps);
+                }
+            }
+            Expr::FieldAccess { expr, .. } => {
+                self.walk_expr_for_captures(expr, exclude, seen, caps);
+            }
+            Expr::If {
+                cond, then, else_, ..
+            } => {
+                self.walk_expr_for_captures(cond, exclude, seen, caps);
+                self.walk_block_for_captures(then, exclude, seen, caps);
+                if let Some(e) = else_ {
+                    self.walk_expr_for_captures(e, exclude, seen, caps);
+                }
+            }
+            Expr::Block(b) => self.walk_block_for_captures(b, exclude, seen, caps),
+            Expr::Construct { fields, .. } => {
+                for (_, v) in fields {
+                    self.walk_expr_for_captures(v, exclude, seen, caps);
+                }
+            }
+            Expr::Match {
+                scrutinee, arms, ..
+            } => {
+                self.walk_expr_for_captures(scrutinee, exclude, seen, caps);
+                for arm in arms {
+                    match &arm.body {
+                        MatchBody::Expr(e) => self.walk_expr_for_captures(e, exclude, seen, caps),
+                        MatchBody::Block(b) => self.walk_block_for_captures(b, exclude, seen, caps),
+                    }
+                }
+            }
+            Expr::Consume { expr, .. }
+            | Expr::Relabel { expr, .. }
+            | Expr::Propagate { expr, .. }
+            | Expr::Borrow { expr, .. } => {
+                self.walk_expr_for_captures(expr, exclude, seen, caps);
+            }
+            Expr::List { elems, .. } | Expr::Set { elems, .. } => {
+                for e in elems {
+                    self.walk_expr_for_captures(e, exclude, seen, caps);
+                }
+            }
+            Expr::Map { pairs, .. } => {
+                for (k, v) in pairs {
+                    self.walk_expr_for_captures(k, exclude, seen, caps);
+                    self.walk_expr_for_captures(v, exclude, seen, caps);
+                }
+            }
+            Expr::Spawn { fields, .. } => {
+                for (_, v) in fields {
+                    self.walk_expr_for_captures(v, exclude, seen, caps);
+                }
+            }
+            Expr::Select { arms, .. } => {
+                for arm in arms {
+                    self.walk_expr_for_captures(&arm.expr, exclude, seen, caps);
+                    self.walk_block_for_captures(&arm.body, exclude, seen, caps);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn walk_block_for_captures(
+        &self,
+        block: &Block,
+        exclude: &std::collections::HashSet<String>,
+        seen: &mut std::collections::HashSet<String>,
+        caps: &mut Vec<(String, TypeExpr)>,
+    ) {
+        for stmt in &block.stmts {
+            match stmt {
+                Stmt::Expr { expr, .. } => self.walk_expr_for_captures(expr, exclude, seen, caps),
+                Stmt::Let { init, .. } => {
+                    self.walk_expr_for_captures(init, exclude, seen, caps);
+                }
+                Stmt::Assign { value, .. } => {
+                    self.walk_expr_for_captures(value, exclude, seen, caps);
+                }
+                Stmt::Return { value: Some(e), .. } => {
+                    self.walk_expr_for_captures(e, exclude, seen, caps);
+                }
+                Stmt::While { cond, body, .. } => {
+                    self.walk_expr_for_captures(cond, exclude, seen, caps);
+                    self.walk_block_for_captures(body, exclude, seen, caps);
+                }
+                Stmt::For { iter, body, .. } => {
+                    self.walk_expr_for_captures(iter, exclude, seen, caps);
+                    self.walk_block_for_captures(body, exclude, seen, caps);
+                }
+                Stmt::If {
+                    cond, then, else_, ..
+                } => {
+                    self.walk_expr_for_captures(cond, exclude, seen, caps);
+                    self.walk_block_for_captures(then, exclude, seen, caps);
+                    match else_ {
+                        Some(ElseBranch::Block(b)) => {
+                            self.walk_block_for_captures(b, exclude, seen, caps);
+                        }
+                        Some(ElseBranch::If(s)) => {
+                            // Recurse into else-if as a single statement.
+                            let tmp_block = Block {
+                                stmts: vec![*s.clone()],
+                                span: s.span(),
+                            };
+                            self.walk_block_for_captures(&tmp_block, exclude, seen, caps);
+                        }
+                        None => {}
+                    }
+                }
+                Stmt::Match {
+                    scrutinee, arms, ..
+                } => {
+                    self.walk_expr_for_captures(scrutinee, exclude, seen, caps);
+                    for arm in arms {
+                        match &arm.body {
+                            MatchBody::Expr(e) => {
+                                self.walk_expr_for_captures(e, exclude, seen, caps);
+                            }
+                            MatchBody::Block(b) => {
+                                self.walk_block_for_captures(b, exclude, seen, caps);
+                            }
+                        }
+                    }
+                }
+                Stmt::Return { value: None, .. } => {}
+            }
+        }
+    }
+
+    /// Emit a lambda expression as a top-level LLVM function and return a
+    /// pointer to a stack-allocated `%__closure_type { fn_ptr, env_ptr }`.
+    fn emit_lambda(
+        &mut self,
+        params: &[crate::mvl::parser::ast::Param],
+        ret_type: Option<&TypeExpr>,
+        body: &Expr,
+    ) -> Result<Option<String>, String> {
+        let lambda_name = format!("__lambda_{}", self.lambda_counter);
+        self.lambda_counter += 1;
+
+        let ret_ty = match ret_type {
+            Some(t) => t.clone(),
+            None => {
+                // Infer from the body's LLVM type when no annotation is present.
+                let inferred = self.type_of_expr(body);
+                let base_name = match inferred.as_str() {
+                    "i1" => "Bool",
+                    "double" => "Float",
+                    "ptr" => "String",
+                    "void" => "Unit",
+                    _ => "Int",
+                };
+                TypeExpr::Base {
+                    name: base_name.into(),
+                    args: vec![],
+                    span: Default::default(),
+                }
+            }
+        };
+
+        // Capture analysis — must happen before we clear locals.
+        let param_names: std::collections::HashSet<String> =
+            params.iter().map(|p| p.name.clone()).collect();
+        let captures = self.collect_lambda_captures(body, &param_names);
+
+        self.ensure_closure_type();
+
+        // ── Build env struct and alloca in the OUTER function ────────────
+        let env_ty_name = format!("__env_{lambda_name}");
+        let env_ptr: String = if captures.is_empty() {
+            "null".into()
+        } else {
+            let field_types: Vec<String> = captures
+                .iter()
+                .map(|(_, ty)| self.llvm_ty_ctx(ty))
+                .collect();
+            self.type_defs.push(format!(
+                "%{env_ty_name} = type {{ {} }}",
+                field_types.join(", ")
+            ));
+
+            let env_alloca = self.next_reg();
+            self.push_instr(&format!("{env_alloca} = alloca %{env_ty_name}"));
+            self.reg_types.insert(env_alloca.clone(), "ptr".into());
+
+            for (i, (cap_name, cap_ty)) in captures.iter().enumerate() {
+                // Ref locals: load current value from the alloca before capturing.
+                let store_val = if let Some(ref_loc) = self.ref_locals.get(cap_name).cloned() {
+                    let ty_str = self.llvm_ty_ctx(&ref_loc.elem_ty);
+                    let loaded = self.next_reg();
+                    self.push_instr(&format!("{loaded} = load {ty_str}, ptr {}", ref_loc.ptr));
+                    self.reg_types.insert(loaded.clone(), ty_str);
+                    loaded
+                } else if let Some(cap_val) = self.locals.get(cap_name).cloned() {
+                    cap_val
+                } else {
+                    continue; // not in scope (shouldn't happen after collect_lambda_captures)
+                };
+                let field_llvm_ty = self.llvm_ty_ctx(cap_ty);
+                let field_ptr = self.next_reg();
+                self.push_instr(&format!(
+                    "{field_ptr} = getelementptr %{env_ty_name}, ptr {env_alloca}, i32 0, i32 {i}"
+                ));
+                self.push_instr(&format!(
+                    "store {field_llvm_ty} {store_val}, ptr {field_ptr}"
+                ));
+            }
+            env_alloca
+        };
+
+        // ── Save outer function state ────────────────────────────────────
+        let saved_fn_buf = std::mem::take(&mut self.fn_buf);
+        let saved_locals = std::mem::take(&mut self.locals);
+        let saved_ref_locals = std::mem::take(&mut self.ref_locals);
+        let saved_reg = self.reg;
+        let saved_bb = self.bb;
+        let saved_reg_types = std::mem::take(&mut self.reg_types);
+        let saved_mvl_types = std::mem::take(&mut self.local_mvl_types);
+        let saved_ret_ty = std::mem::replace(&mut self.current_ret_ty, ret_ty.clone());
+        let saved_terminated = self.terminated;
+        let saved_current_bb = std::mem::replace(&mut self.current_bb, "entry".into());
+
+        self.reg = 0;
+        self.bb = 0;
+        self.terminated = false;
+
+        // ── Emit lambda function header ──────────────────────────────────
+        let llvm_ret = self.llvm_ty_ctx(&ret_ty);
+        let is_void = Self::is_void(&ret_ty);
+
+        let mut param_parts = vec!["ptr %__env".to_string()];
+        for p in params {
+            let ty_str = self.llvm_ty_ctx(&p.ty);
+            if ty_str != "void" {
+                param_parts.push(format!("{ty_str} %{}", p.name));
+            }
+        }
+        let params_str = param_parts.join(", ");
+
+        let define_ret = if is_void {
+            "void".into()
+        } else {
+            llvm_ret.clone()
+        };
+        self.fn_buf
+            .push(format!("define {define_ret} @{lambda_name}({params_str})"));
+        self.fn_buf.push("{".into());
+        self.fn_buf.push("entry:".into());
+
+        // Bind user parameters as locals.
+        for p in params {
+            let ty_str = self.llvm_ty_ctx(&p.ty);
+            if ty_str != "void" {
+                let ssa = format!("%{}", p.name);
+                self.locals.insert(p.name.clone(), ssa.clone());
+                self.reg_types.insert(ssa, ty_str);
+                self.local_mvl_types.insert(p.name.clone(), p.ty.clone());
+            }
+        }
+
+        // Load captures from env ptr.
+        if !captures.is_empty() {
+            for (i, (cap_name, cap_ty)) in captures.iter().enumerate() {
+                let field_llvm_ty = self.llvm_ty_ctx(cap_ty);
+                let field_ptr = self.next_reg();
+                self.push_instr(&format!(
+                    "{field_ptr} = getelementptr %{env_ty_name}, ptr %__env, i32 0, i32 {i}"
+                ));
+                let val = self.next_reg();
+                self.push_instr(&format!("{val} = load {field_llvm_ty}, ptr {field_ptr}"));
+                self.reg_types.insert(val.clone(), field_llvm_ty);
+                self.locals.insert(cap_name.clone(), val.clone());
+                self.local_mvl_types
+                    .insert(cap_name.clone(), cap_ty.clone());
+            }
+        }
+
+        // Emit body — capture any error so we can restore state before propagating.
+        let body_result = self.emit_expr(body);
+
+        let body_val = match body_result {
+            Ok(v) => v,
+            Err(e) => {
+                // Restore outer state before propagating the error.
+                self.fn_buf = saved_fn_buf;
+                self.locals = saved_locals;
+                self.ref_locals = saved_ref_locals;
+                self.reg = saved_reg;
+                self.bb = saved_bb;
+                self.reg_types = saved_reg_types;
+                self.local_mvl_types = saved_mvl_types;
+                self.current_ret_ty = saved_ret_ty;
+                self.terminated = saved_terminated;
+                self.current_bb = saved_current_bb;
+                return Err(e);
+            }
+        };
+
+        if !self.terminated {
+            if is_void {
+                self.push_instr("ret void");
+            } else if let Some(v) = body_val {
+                self.push_instr(&format!("ret {llvm_ret} {v}"));
+            } else {
+                self.push_instr(&format!("ret {llvm_ret} undef"));
+            }
+        }
+
+        self.fn_buf.push("}".into());
+        let lambda_body = self.fn_buf.join("\n");
+        self.fn_bodies.push(lambda_body);
+
+        // ── Restore outer function state ─────────────────────────────────
+        self.fn_buf = saved_fn_buf;
+        self.locals = saved_locals;
+        self.ref_locals = saved_ref_locals;
+        self.reg = saved_reg;
+        self.bb = saved_bb;
+        self.reg_types = saved_reg_types;
+        self.local_mvl_types = saved_mvl_types;
+        self.current_ret_ty = saved_ret_ty;
+        self.terminated = saved_terminated;
+        self.current_bb = saved_current_bb;
+
+        // ── Build closure struct in outer function ────────────────────────
+        let closure_alloca = self.next_reg();
+        self.push_instr(&format!("{closure_alloca} = alloca %__closure_type"));
+        self.reg_types.insert(closure_alloca.clone(), "ptr".into());
+
+        let fn_field = self.next_reg();
+        self.push_instr(&format!(
+            "{fn_field} = getelementptr %__closure_type, ptr {closure_alloca}, i32 0, i32 0"
+        ));
+        self.push_instr(&format!("store ptr @{lambda_name}, ptr {fn_field}"));
+
+        let env_field = self.next_reg();
+        self.push_instr(&format!(
+            "{env_field} = getelementptr %__closure_type, ptr {closure_alloca}, i32 0, i32 1"
+        ));
+        if captures.is_empty() {
+            self.push_instr(&format!("store ptr null, ptr {env_field}"));
+        } else {
+            self.push_instr(&format!("store ptr {env_ptr}, ptr {env_field}"));
+        }
+
+        Ok(Some(closure_alloca))
+    }
+
+    /// Wrap a named module-level function in a `{ wrapper_ptr, null }` closure struct.
+    ///
+    /// Lazily generates `__closure_wrap_NAME(ptr env, params…) → ret` that ignores
+    /// `env` and forwards to the original function.
+    fn make_named_fn_closure(&mut self, name: &str) -> Result<Option<String>, String> {
+        let wrapper_name = format!("__closure_wrap_{name}");
+        self.ensure_closure_type();
+
+        // Emit the wrapper function once.
+        if !self.fn_ret_types.contains_key(&wrapper_name) {
+            let orig_ret = match self.fn_ret_types.get(name).cloned() {
+                Some(t) => t,
+                None => return Ok(None),
+            };
+
+            let llvm_ret = self.llvm_ty_ctx(&orig_ret);
+            let is_void = Self::is_void(&orig_ret);
+            let define_ret = if is_void {
+                "void".into()
+            } else {
+                llvm_ret.clone()
+            };
+
+            // Build typed trampoline: (ptr %__env, ty0 %__arg0, ty1 %__arg1, …)
+            // The runtime calls the closure fn_ptr as fn(env, args…), so the
+            // trampoline must match the original function's arity and types.
+            let orig_params = self.fn_param_types.get(name).cloned().unwrap_or_default();
+            let mut wrapper_param_parts = vec!["ptr %__env".to_string()];
+            let mut forward_arg_parts: Vec<String> = Vec::new();
+            for (i, p_ty) in orig_params.iter().enumerate() {
+                let ty_str = self.llvm_ty_ctx(p_ty);
+                if ty_str != "void" {
+                    wrapper_param_parts.push(format!("{ty_str} %__arg{i}"));
+                    forward_arg_parts.push(format!("{ty_str} %__arg{i}"));
+                }
+            }
+            let wrapper_params_str = wrapper_param_parts.join(", ");
+            let forward_args_str = forward_arg_parts.join(", ");
+
+            // Save context.
+            let saved_fn_buf = std::mem::take(&mut self.fn_buf);
+            let saved_locals = std::mem::take(&mut self.locals);
+            let saved_ref_locals = std::mem::take(&mut self.ref_locals);
+            let saved_reg = self.reg;
+            let saved_bb = self.bb;
+            let saved_reg_types = std::mem::take(&mut self.reg_types);
+            let saved_mvl_types = std::mem::take(&mut self.local_mvl_types);
+            let saved_ret_ty = std::mem::replace(&mut self.current_ret_ty, orig_ret.clone());
+            let saved_terminated = self.terminated;
+            let saved_current_bb = std::mem::replace(&mut self.current_bb, "entry".into());
+
+            self.reg = 0;
+            self.bb = 0;
+            self.terminated = false;
+
+            self.fn_buf.push(format!(
+                "define {define_ret} @{wrapper_name}({wrapper_params_str})"
+            ));
+            self.fn_buf.push("{".into());
+            self.fn_buf.push("entry:".into());
+
+            if is_void {
+                self.push_instr(&format!("call void @{name}({forward_args_str})"));
+                self.push_instr("ret void");
+            } else {
+                let reg = self.next_reg();
+                self.push_instr(&format!(
+                    "{reg} = call {llvm_ret} @{name}({forward_args_str})"
+                ));
+                self.push_instr(&format!("ret {llvm_ret} {reg}"));
+            }
+
+            self.fn_buf.push("}".into());
+            let wrapper_body = self.fn_buf.join("\n");
+            self.fn_bodies.push(wrapper_body);
+
+            // Restore context.
+            self.fn_buf = saved_fn_buf;
+            self.locals = saved_locals;
+            self.ref_locals = saved_ref_locals;
+            self.reg = saved_reg;
+            self.bb = saved_bb;
+            self.reg_types = saved_reg_types;
+            self.local_mvl_types = saved_mvl_types;
+            self.current_ret_ty = saved_ret_ty;
+            self.terminated = saved_terminated;
+            self.current_bb = saved_current_bb;
+
+            // Record wrapper so we don't emit it twice.
+            self.fn_ret_types.insert(wrapper_name.clone(), orig_ret);
+        }
+
+        // Build `{ &wrapper, null }` closure struct.
+        let closure_alloca = self.next_reg();
+        self.push_instr(&format!("{closure_alloca} = alloca %__closure_type"));
+        self.reg_types.insert(closure_alloca.clone(), "ptr".into());
+
+        let fn_field = self.next_reg();
+        self.push_instr(&format!(
+            "{fn_field} = getelementptr %__closure_type, ptr {closure_alloca}, i32 0, i32 0"
+        ));
+        self.push_instr(&format!("store ptr @{wrapper_name}, ptr {fn_field}"));
+
+        let env_field = self.next_reg();
+        self.push_instr(&format!(
+            "{env_field} = getelementptr %__closure_type, ptr {closure_alloca}, i32 0, i32 1"
+        ));
+        self.push_instr(&format!("store ptr null, ptr {env_field}"));
+
+        Ok(Some(closure_alloca))
+    }
+
+    /// Emit `expr` as a closure pointer.
+    ///
+    /// - `Lambda` → emit the lambda and return the closure alloca
+    /// - `Ident` referencing a module-level function → `make_named_fn_closure`
+    /// - Anything else → treat as already a closure-typed local
+    fn emit_as_closure(&mut self, expr: &Expr) -> Result<Option<String>, String> {
+        match expr {
+            Expr::Lambda {
+                params,
+                ret_type,
+                body,
+                ..
+            } => self.emit_lambda(params, ret_type.as_deref(), body),
+            Expr::Ident(name, _) => {
+                // Module-level function reference (not in locals).
+                if !self.locals.contains_key(name.as_str())
+                    && self.fn_ret_types.contains_key(name.as_str())
+                {
+                    self.make_named_fn_closure(name)
+                } else {
+                    // Already a closure-typed local — just return its SSA value.
+                    self.emit_expr(expr)
+                }
+            }
+            _ => self.emit_expr(expr),
+        }
     }
 
     // ── List literal ──────────────────────────────────────────────────────
@@ -1971,5 +2610,177 @@ mod tests {
              fn circle() -> Shape { Shape::Circle }",
         );
         assert!(ir.contains("ret i64 0"), "{ir}");
+    }
+
+    // ── Closure / lambda tests (#1148) ────────────────────────────────────
+
+    #[test]
+    fn closure_type_emitted_once() {
+        // Two lambdas in the same program — closure type must appear exactly once.
+        let ir = compile(
+            "fn main() -> Unit ! Console {\n\
+             let xs: List[Int] = [1, 2];\n\
+             let _a: List[Int] = xs.filter(|x: Int| x > 0);\n\
+             let _b: Bool = xs.any(|x: Int| x > 1);\n\
+             }",
+        );
+        let count = ir.matches("%__closure_type = type").count();
+        assert_eq!(count, 1, "expected exactly one closure type def:\n{ir}");
+    }
+
+    #[test]
+    fn non_capturing_lambda_emits_function_and_null_env() {
+        // |x: Int| x * 2  — no free variables
+        let ir = compile(
+            "fn main() -> Unit ! Console {\n\
+             let xs: List[Int] = [1, 2, 3];\n\
+             let _d: List[Int] = xs.filter(|x: Int| x > 0);\n\
+             }",
+        );
+        // Lambda function emitted as a top-level define.
+        assert!(
+            ir.contains("define i1 @__lambda_0(ptr %__env, i64 %x)"),
+            "{ir}"
+        );
+        // Closure struct built with null env ptr.
+        assert!(ir.contains("store ptr null"), "{ir}");
+        // fn_ptr field set to the lambda.
+        assert!(ir.contains("store ptr @__lambda_0"), "{ir}");
+    }
+
+    #[test]
+    fn capturing_lambda_emits_env_struct_and_getelementptr() {
+        // |x: Int| x > threshold  — captures `threshold` from outer scope
+        let ir = compile(
+            "fn main() -> Unit ! Console {\n\
+             let xs: List[Int] = [1, 2, 3];\n\
+             let threshold: Int = 2;\n\
+             let _above: List[Int] = xs.filter(|x: Int| x > threshold);\n\
+             }",
+        );
+        // Env struct type must be registered.
+        assert!(ir.contains("%__env___lambda_0 = type"), "{ir}");
+        // Capture stored via GEP.
+        assert!(ir.contains("getelementptr %__env___lambda_0"), "{ir}");
+        // Lambda function has the env parameter.
+        assert!(ir.contains("define i1 @__lambda_0(ptr %__env"), "{ir}");
+        // Inside the lambda the captured value is loaded.
+        assert!(ir.contains("load i64"), "{ir}");
+    }
+
+    #[test]
+    fn hof_filter_with_lambda_emits_list_filter_call() {
+        let ir = compile(
+            "fn main() -> Unit ! Console {\n\
+             let xs: List[Int] = [1, 2, 3];\n\
+             let evens: List[Int] = xs.filter(|x: Int| x > 0);\n\
+             }",
+        );
+        assert!(ir.contains("declare ptr @List_filter(ptr, ptr)"), "{ir}");
+        assert!(ir.contains("call ptr @List_filter"), "{ir}");
+        assert!(ir.contains("@__lambda_0"), "{ir}");
+    }
+
+    #[test]
+    fn hof_any_with_lambda_emits_i1_call() {
+        let ir = compile(
+            "fn main() -> Unit ! Console {\n\
+             let xs: List[Int] = [1, 2, 3];\n\
+             let b: Bool = xs.any(|x: Int| x > 0);\n\
+             }",
+        );
+        assert!(ir.contains("declare i1 @List_any(ptr, ptr)"), "{ir}");
+        assert!(ir.contains("call i1 @List_any"), "{ir}");
+    }
+
+    #[test]
+    fn named_fn_closure_wraps_in_closure_struct() {
+        let ir = compile(
+            "fn is_pos(x: Int) -> Bool { x > 0 }\n\
+             fn main() -> Unit ! Console {\n\
+             let xs: List[Int] = [1, 2, 3];\n\
+             let evens: List[Int] = xs.filter(is_pos);\n\
+             }",
+        );
+        // Wrapper trampoline generated
+        assert!(ir.contains("@__closure_wrap_is_pos"), "{ir}");
+        // Closure struct built pointing to wrapper
+        assert!(ir.contains("store ptr @__closure_wrap_is_pos"), "{ir}");
+        assert!(ir.contains("call ptr @List_filter"), "{ir}");
+        // Trampoline must forward the element argument, not call with zero args.
+        assert!(
+            ir.contains("define i1 @__closure_wrap_is_pos(ptr %__env, i64 %__arg0)"),
+            "trampoline missing typed param:\n{ir}"
+        );
+        assert!(
+            ir.contains("call i1 @is_pos(i64 %__arg0)"),
+            "trampoline must forward arg to original:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn hof_fold_emits_init_slot_and_list_fold_call() {
+        let ir = compile(
+            "fn main() -> Unit ! Console {\n\
+             let xs: List[Int] = [1, 2, 3];\n\
+             let sum: Int = xs.fold(0, |acc: Int, x: Int| acc + x);\n\
+             }",
+        );
+        assert!(ir.contains("declare ptr @List_fold(ptr, ptr, ptr)"), "{ir}");
+        // Initial value must be stack-allocated and stored.
+        assert!(ir.contains("alloca i64"), "{ir}");
+        assert!(ir.contains("store i64 0"), "{ir}");
+        assert!(ir.contains("call ptr @List_fold(ptr"), "{ir}");
+        // Result loaded back as the accumulator type.
+        assert!(ir.contains("load i64"), "{ir}");
+        // Lambda for accumulator function has two typed params.
+        assert!(
+            ir.contains("define i64 @__lambda_0(ptr %__env, i64 %acc, i64 %x)"),
+            "{ir}"
+        );
+    }
+
+    #[test]
+    fn capturing_lambda_with_two_captures() {
+        // Captures both `lo` and `hi` — env struct must have two i64 fields.
+        let ir = compile(
+            "fn main() -> Unit ! Console {\n\
+             let xs: List[Int] = [1, 2, 3, 4, 5];\n\
+             let lo: Int = 1;\n\
+             let hi: Int = 4;\n\
+             let mid: List[Int] = xs.filter(|x: Int| x > lo);\n\
+             }",
+        );
+        // Env struct type registered.
+        assert!(ir.contains("%__env___lambda_0 = type"), "{ir}");
+        // GEP accesses for storing captures into env.
+        assert!(ir.contains("getelementptr %__env___lambda_0"), "{ir}");
+        // Two stores for the two captured values.
+        let store_count = ir.matches("store i64").count();
+        assert!(
+            store_count >= 1,
+            "expected at least one i64 store for env field, got {store_count}:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn ref_local_capture_loads_before_storing_into_env() {
+        // `count` is a mutable ref binding — must be loaded before capture.
+        let ir = compile(
+            "fn run() -> Int {\n\
+             let count: ref Int = 0;\n\
+             count = count + 1;\n\
+             let xs: List[Int] = [1, 2, 3];\n\
+             let above: List[Int] = xs.filter(|x: Int| x > count);\n\
+             above.len()\n\
+             }",
+        );
+        // ref local alloca present.
+        assert!(ir.contains("alloca i64"), "{ir}");
+        // Env struct created for the capture.
+        assert!(ir.contains("%__env___lambda_0 = type"), "{ir}");
+        // A load from the ref alloca must precede the GEP store into the env.
+        assert!(ir.contains("load i64"), "{ir}");
+        assert!(ir.contains("getelementptr %__env___lambda_0"), "{ir}");
     }
 }

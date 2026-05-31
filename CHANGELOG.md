@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [0.168.0] - 2026-05-31
+
+### Added
+- `llvm_text` backend now supports lambda expressions and closures: inline lambdas compile to top-level LLVM functions with environment pointer parameters; captures are collected via AST walk and stored in heap-allocated structs; named functions can be wrapped in closures via generated trampolines (#1148)
+- Higher-order function (HOF) support for `llvm_text`: filter, map, find, fold, any, all, take_while, skip_while methods on List types now emit runtime function calls accepting closure pointers (#1148)
+
+### Fixed
+- Named-function closures in `llvm_text`: trampoline wrappers now emit properly-typed forwarding calls instead of calling the original function with zero arguments; param types are now stored per-function enabling correct ABI (#1148)
+- Capture variable analysis: ref-local (mutable) captures are now correctly identified and loaded before storing into the closure environment struct; statement variants (Assign, Return, While, For, If, Match) and expression variants (List, Map, Set, Borrow, Spawn, Select) are now walked for capture detection (#1148)
+- State restore-on-error in lambda emission: saved emitter context is now restored before propagating any error from body expression emission, preventing state corruption on compilation failure (#1148)
+
 ## [0.167.1] - 2026-05-31
 
 ### Added
