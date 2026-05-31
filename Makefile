@@ -2,7 +2,7 @@
 .ONESHELL:
 SHELL := /bin/bash
 
-.PHONY: help version build build-memory build-llvm-runtime build-release test test-unit test-integration test-requirements test-error-messages test-fmt-roundtrip test-corpus test-solver test-stdlib check-compiler check-pkg assure-compiler test-mvl test-bdd test-backend-rust test-backend-llvm test-cross-backend test-tree-sitter test-grammar-coverage test-examples coverage validate-keywords lint mvl-lint format format-check format-mvl format-mvl-check assurance assurance-gate check-adr docs docs-serve tree-sitter-build install install-nvim setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
+.PHONY: help version build build-memory build-llvm-runtime build-release test test-unit test-integration test-requirements test-error-messages test-fmt-roundtrip test-corpus test-solver test-stdlib check-compiler assure-compiler test-mvl test-bdd test-backend-rust test-backend-llvm test-cross-backend test-tree-sitter test-grammar-coverage test-examples coverage validate-keywords lint mvl-lint format format-check format-mvl format-mvl-check assurance assurance-gate check-adr docs docs-serve tree-sitter-build install install-nvim setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
 
 .DEFAULT_GOAL := help
 
@@ -199,28 +199,6 @@ check-compiler: build ## Verify self-hosted compiler with mvl check + lint (all 
 	$(MVL) check compiler/
 	$(MVL) lint compiler/
 
-check-pkg: build ## Type-check all packages (pkg/*)
-	@echo ""
-	@echo "── check-pkg ──────────────────────────────────────"
-	@fail=0; \
-	for dir in pkg/*/; do \
-		if [ -f "$$dir/Makefile" ]; then \
-			name=$$(basename "$$dir"); \
-			printf "  checking pkg/%-12s" "$$name"; \
-			if $(MAKE) -C "$$dir" check --no-print-directory >/dev/null 2>&1; then \
-				printf "  \033[32m✓\033[0m\n"; \
-			else \
-				printf "  \033[31m✗\033[0m  (run: make -C $$dir check)\n"; \
-				fail=$$((fail + 1)); \
-			fi; \
-		fi; \
-	done; \
-	if [ $$fail -gt 0 ]; then \
-		echo ""; \
-		echo "  $$fail package(s) failed type-check"; \
-		exit 1; \
-	fi
-	@echo ""
 
 assure-compiler: build ## Assurance report for the self-hosted compiler (verbose)
 	$(MVL) assurance compiler/ --verbose

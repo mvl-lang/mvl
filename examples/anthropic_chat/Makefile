@@ -26,11 +26,11 @@ guard-mvl: ## Ensure MVL binary is present (pre-build with `cargo build` from re
 
 .mvl/pkg/anthropic:
 	@mkdir -p .mvl/pkg
-	@ln -sfn $(REPO_ROOT)/pkg/anthropic .mvl/pkg/anthropic
+	@ln -sfn $(REPO_ROOT)/.mvl/pkg/anthropic .mvl/pkg/anthropic
 
 .mvl/pkg/tls:
 	@mkdir -p .mvl/pkg
-	@ln -sfn $(REPO_ROOT)/pkg/tls .mvl/pkg/tls
+	@ln -sfn $(REPO_ROOT)/.mvl/pkg/tls .mvl/pkg/tls 2>/dev/null || true
 
 check: guard-mvl .mvl/pkg/anthropic .mvl/pkg/tls ## Type-check main.mvl
 	$(MVL) check $(DIR)main.mvl

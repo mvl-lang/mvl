@@ -1,5 +1,0 @@
-[package]
-name         = "zmq"
-version      = "0.1.0"
-license      = "Apache-2.0"
-requires-mvl = ">=0.154.0"
