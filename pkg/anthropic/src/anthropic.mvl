@@ -47,9 +47,9 @@ pub type Claude = struct {
 
 /// Model identifier for the Anthropic API.
 pub type ModelId = enum {
-    Opus4,
-    Sonnet4,
-    Haiku4,
+    Opus4_6,
+    Sonnet4_6,
+    Haiku4_5,
 }
 
 /// A single message in a conversation.
@@ -120,9 +120,9 @@ pub fn Claude::with_endpoint(api_key: Secret[String], base_url: ApiEndpoint[Stri
 /// Convert a ModelId to the API string identifier.
 pub fn model_id_string(m: val ModelId) -> String {
     match m {
-        ModelId::Opus4   => "claude-opus-4-20250514",
-        ModelId::Sonnet4 => "claude-sonnet-4-20250514",
-        ModelId::Haiku4  => "claude-haiku-4-20250514",
+        ModelId::Opus4_6   => "claude-opus-4-6",
+        ModelId::Sonnet4_6 => "claude-sonnet-4-6",
+        ModelId::Haiku4_5  => "claude-haiku-4-5-20251001",
     }
 }
 

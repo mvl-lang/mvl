@@ -8,9 +8,9 @@
 // ── Type re-declarations (workaround: #96) ────────────────────────────────
 
 type ModelId = enum {
-    Opus4,
-    Sonnet4,
-    Haiku4,
+    Opus4_6,
+    Sonnet4_6,
+    Haiku4_5,
 }
 
 type Role = enum {
@@ -67,9 +67,9 @@ type JsonError = enum {
 
 fn model_id_string(m: val ModelId) -> String {
     match m {
-        ModelId::Opus4   => "claude-opus-4-20250514",
-        ModelId::Sonnet4 => "claude-sonnet-4-20250514",
-        ModelId::Haiku4  => "claude-haiku-4-20250514",
+        ModelId::Opus4_6   => "claude-opus-4-6",
+        ModelId::Sonnet4_6 => "claude-sonnet-4-6",
+        ModelId::Haiku4_5  => "claude-haiku-4-5-20251001",
     }
 }
 
@@ -222,15 +222,15 @@ partial fn parse_response(v: Value) -> Result[Response, AnthropicError] {
 // -- Model ID tests --
 
 test fn test_model_opus() -> Unit {
-    assert_eq(model_id_string(ModelId::Opus4), "claude-opus-4-20250514")
+    assert_eq(model_id_string(ModelId::Opus4_6), "claude-opus-4-6")
 }
 
 test fn test_model_sonnet() -> Unit {
-    assert_eq(model_id_string(ModelId::Sonnet4), "claude-sonnet-4-20250514")
+    assert_eq(model_id_string(ModelId::Sonnet4_6), "claude-sonnet-4-6")
 }
 
 test fn test_model_haiku() -> Unit {
-    assert_eq(model_id_string(ModelId::Haiku4), "claude-haiku-4-20250514")
+    assert_eq(model_id_string(ModelId::Haiku4_5), "claude-haiku-4-5-20251001")
 }
 
 // -- Role string tests --
@@ -307,10 +307,10 @@ test fn test_request_body_model() -> Unit {
     let msgs: List[Message] = [
         Message { role: Role::User, content: "What is MVL?" },
     ];
-    let body: Value = build_request_body(ModelId::Sonnet4, msgs, 1024);
+    let body: Value = build_request_body(ModelId::Sonnet4_6, msgs, 1024);
     match body {
         Value::Object(obj) => match obj.get("model") {
-            Some(Value::String(m)) => assert_eq(m, "claude-sonnet-4-20250514"),
+            Some(Value::String(m)) => assert_eq(m, "claude-sonnet-4-6"),
             _ => assert(false),
         },
         _ => assert(false),
@@ -321,7 +321,7 @@ test fn test_request_body_max_tokens() -> Unit {
     let msgs: List[Message] = [
         Message { role: Role::User, content: "Hi" },
     ];
-    let body: Value = build_request_body(ModelId::Haiku4, msgs, 512);
+    let body: Value = build_request_body(ModelId::Haiku4_5, msgs, 512);
     match body {
         Value::Object(obj) => match obj.get("max_tokens") {
             Some(Value::Number(n)) => assert_eq(n, 512.0),
@@ -336,7 +336,7 @@ test fn test_request_body_system_extracted() -> Unit {
         Message { role: Role::System, content: "You are helpful." },
         Message { role: Role::User, content: "Hi" },
     ];
-    let body: Value = build_request_body(ModelId::Haiku4, msgs, 512);
+    let body: Value = build_request_body(ModelId::Haiku4_5, msgs, 512);
     match body {
         Value::Object(obj) => {
             match obj.get("system") {
@@ -359,7 +359,7 @@ test fn test_parse_response_success() -> Unit {
         "id":          Value::String("msg_01XFDUDYJgAACzvnptvVoYEL"),
         "type":        Value::String("message"),
         "role":        Value::String("assistant"),
-        "model":       Value::String("claude-sonnet-4-20250514"),
+        "model":       Value::String("claude-sonnet-4-6"),
         "stop_reason": Value::String("end_turn"),
         "content":     Value::Array([
             Value::Object({
@@ -387,7 +387,7 @@ test fn test_parse_response_success() -> Unit {
 
 test fn test_parse_response_missing_id() -> Unit {
     let json: Value = Value::Object({
-        "model":       Value::String("claude-sonnet-4-20250514"),
+        "model":       Value::String("claude-sonnet-4-6"),
         "stop_reason": Value::String("end_turn"),
         "content":     Value::String("hello"),
         "usage": Value::Object({
@@ -497,7 +497,7 @@ test fn test_get_int_field_missing() -> Unit {
 test fn test_parse_response_missing_usage() -> Unit {
     let json: Value = Value::Object({
         "id":          Value::String("msg_001"),
-        "model":       Value::String("claude-sonnet-4-20250514"),
+        "model":       Value::String("claude-sonnet-4-6"),
         "stop_reason": Value::String("end_turn"),
         "content":     Value::String("hello"),
     });
@@ -513,7 +513,7 @@ test fn test_parse_response_missing_usage() -> Unit {
 test fn test_parse_response_usage_wrong_type() -> Unit {
     let json: Value = Value::Object({
         "id":          Value::String("msg_001"),
-        "model":       Value::String("claude-sonnet-4-20250514"),
+        "model":       Value::String("claude-sonnet-4-6"),
         "stop_reason": Value::String("end_turn"),
         "content":     Value::String("hello"),
         "usage":       Value::String("not an object"),
@@ -537,7 +537,7 @@ test fn test_extract_content_empty_array() -> Unit {
 
 test fn test_request_body_no_messages() -> Unit {
     let msgs: List[Message] = [];
-    let body: Value = build_request_body(ModelId::Sonnet4, msgs, 256);
+    let body: Value = build_request_body(ModelId::Sonnet4_6, msgs, 256);
     match body {
         Value::Object(obj) => {
             match obj.get("messages") {
