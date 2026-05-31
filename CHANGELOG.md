@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [0.169.0] - 2026-05-31
+
+### Added
+- `std/log`: file sink — `Logger` now carries an `fd: Fd` field, allowing callers to direct log output to any file descriptor (file, stdout, stderr) instead of always writing to stderr. `default_logger()` defaults to `stderr()` for backward compatibility; `file_logger(fd, format, min_level)` convenience constructor added. New example `examples/log_to_file/` demonstrates file logging (#1152)
+
 ## [0.168.0] - 2026-05-31
 
 ### Added
