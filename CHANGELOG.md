@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.167.1] - 2026-05-31
+
 ### Added
 - ZMTP protocol test coverage expansion: 19 new tests for `parse_ready_body`, `parse_socket_type_property`, and `zmq_error_msg` achieving 100% branch coverage (80/80 branches) (#1058)
 
