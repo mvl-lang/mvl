@@ -76,6 +76,8 @@ struct TextEmitter {
     ref_locals: HashMap<String, RefLocal>,
     current_ret_ty: TypeExpr,
     fn_ret_types: HashMap<String, TypeExpr>,
+    /// Function name → ordered parameter types (for named-fn closure trampolines).
+    fn_param_types: HashMap<String, Vec<TypeExpr>>,
     /// SSA register → LLVM type string (for phi type inference)
     reg_types: HashMap<String, String>,
     /// MVL variable name → TypeExpr (for struct field access)
@@ -125,6 +127,7 @@ impl TextEmitter {
                 span: Default::default(),
             },
             fn_ret_types: HashMap::new(),
+            fn_param_types: HashMap::new(),
             reg_types: HashMap::new(),
             local_mvl_types: HashMap::new(),
             has_println_fmt: false,
@@ -453,6 +456,8 @@ impl TextEmitter {
                 }
                 "i64".into()
             }
+            // A lambda expression is a closure pointer.
+            Expr::Lambda { .. } => "ptr".into(),
             _ => "i64".into(),
         }
     }
@@ -531,6 +536,10 @@ impl TextEmitter {
                 Decl::Fn(fd) => {
                     self.fn_ret_types
                         .insert(fd.name.clone(), fd.return_type.as_ref().clone());
+                    self.fn_param_types.insert(
+                        fd.name.clone(),
+                        fd.params.iter().map(|p| p.ty.clone()).collect(),
+                    );
                 }
                 Decl::Type(td) => match &td.body {
                     TypeBody::Struct { fields, .. } => {
@@ -1846,11 +1855,16 @@ impl TextEmitter {
             Expr::Ident(name, _)
                 if !exclude.contains(name)
                     && !seen.contains(name)
-                    && self.locals.contains_key(name) =>
+                    && (self.locals.contains_key(name) || self.ref_locals.contains_key(name)) =>
             {
-                if let Some(ty) = self.local_mvl_types.get(name) {
+                let ty_opt = self
+                    .local_mvl_types
+                    .get(name)
+                    .cloned()
+                    .or_else(|| self.ref_locals.get(name).map(|rl| rl.elem_ty.clone()));
+                if let Some(ty) = ty_opt {
                     seen.insert(name.clone());
-                    caps.push((name.clone(), ty.clone()));
+                    caps.push((name.clone(), ty));
                 }
             }
             Expr::Lambda { params, body, .. } => {
@@ -1909,8 +1923,31 @@ impl TextEmitter {
             }
             Expr::Consume { expr, .. }
             | Expr::Relabel { expr, .. }
-            | Expr::Propagate { expr, .. } => {
+            | Expr::Propagate { expr, .. }
+            | Expr::Borrow { expr, .. } => {
                 self.walk_expr_for_captures(expr, exclude, seen, caps);
+            }
+            Expr::List { elems, .. } | Expr::Set { elems, .. } => {
+                for e in elems {
+                    self.walk_expr_for_captures(e, exclude, seen, caps);
+                }
+            }
+            Expr::Map { pairs, .. } => {
+                for (k, v) in pairs {
+                    self.walk_expr_for_captures(k, exclude, seen, caps);
+                    self.walk_expr_for_captures(v, exclude, seen, caps);
+                }
+            }
+            Expr::Spawn { fields, .. } => {
+                for (_, v) in fields {
+                    self.walk_expr_for_captures(v, exclude, seen, caps);
+                }
+            }
+            Expr::Select { arms, .. } => {
+                for arm in arms {
+                    self.walk_expr_for_captures(&arm.expr, exclude, seen, caps);
+                    self.walk_block_for_captures(&arm.body, exclude, seen, caps);
+                }
             }
             _ => {}
         }
@@ -1929,7 +1966,56 @@ impl TextEmitter {
                 Stmt::Let { init, .. } => {
                     self.walk_expr_for_captures(init, exclude, seen, caps);
                 }
-                _ => {}
+                Stmt::Assign { value, .. } => {
+                    self.walk_expr_for_captures(value, exclude, seen, caps);
+                }
+                Stmt::Return { value: Some(e), .. } => {
+                    self.walk_expr_for_captures(e, exclude, seen, caps);
+                }
+                Stmt::While { cond, body, .. } => {
+                    self.walk_expr_for_captures(cond, exclude, seen, caps);
+                    self.walk_block_for_captures(body, exclude, seen, caps);
+                }
+                Stmt::For { iter, body, .. } => {
+                    self.walk_expr_for_captures(iter, exclude, seen, caps);
+                    self.walk_block_for_captures(body, exclude, seen, caps);
+                }
+                Stmt::If {
+                    cond, then, else_, ..
+                } => {
+                    self.walk_expr_for_captures(cond, exclude, seen, caps);
+                    self.walk_block_for_captures(then, exclude, seen, caps);
+                    match else_ {
+                        Some(ElseBranch::Block(b)) => {
+                            self.walk_block_for_captures(b, exclude, seen, caps);
+                        }
+                        Some(ElseBranch::If(s)) => {
+                            // Recurse into else-if as a single statement.
+                            let tmp_block = Block {
+                                stmts: vec![*s.clone()],
+                                span: s.span(),
+                            };
+                            self.walk_block_for_captures(&tmp_block, exclude, seen, caps);
+                        }
+                        None => {}
+                    }
+                }
+                Stmt::Match {
+                    scrutinee, arms, ..
+                } => {
+                    self.walk_expr_for_captures(scrutinee, exclude, seen, caps);
+                    for arm in arms {
+                        match &arm.body {
+                            MatchBody::Expr(e) => {
+                                self.walk_expr_for_captures(e, exclude, seen, caps);
+                            }
+                            MatchBody::Block(b) => {
+                                self.walk_block_for_captures(b, exclude, seen, caps);
+                            }
+                        }
+                    }
+                }
+                Stmt::Return { value: None, .. } => {}
             }
         }
     }
@@ -1991,26 +2077,26 @@ impl TextEmitter {
             self.reg_types.insert(env_alloca.clone(), "ptr".into());
 
             for (i, (cap_name, cap_ty)) in captures.iter().enumerate() {
-                if let Some(cap_val) = self.locals.get(cap_name).cloned() {
-                    // Ref locals need an explicit load first.
-                    let store_val = if let Some(ref_loc) = self.ref_locals.get(cap_name).cloned() {
-                        let ty_str = self.llvm_ty_ctx(&ref_loc.elem_ty);
-                        let loaded = self.next_reg();
-                        self.push_instr(&format!("{loaded} = load {ty_str}, ptr {}", ref_loc.ptr));
-                        self.reg_types.insert(loaded.clone(), ty_str);
-                        loaded
-                    } else {
-                        cap_val
-                    };
-                    let field_llvm_ty = self.llvm_ty_ctx(cap_ty);
-                    let field_ptr = self.next_reg();
-                    self.push_instr(&format!(
-                        "{field_ptr} = getelementptr %{env_ty_name}, ptr {env_alloca}, i32 0, i32 {i}"
-                    ));
-                    self.push_instr(&format!(
-                        "store {field_llvm_ty} {store_val}, ptr {field_ptr}"
-                    ));
-                }
+                // Ref locals: load current value from the alloca before capturing.
+                let store_val = if let Some(ref_loc) = self.ref_locals.get(cap_name).cloned() {
+                    let ty_str = self.llvm_ty_ctx(&ref_loc.elem_ty);
+                    let loaded = self.next_reg();
+                    self.push_instr(&format!("{loaded} = load {ty_str}, ptr {}", ref_loc.ptr));
+                    self.reg_types.insert(loaded.clone(), ty_str);
+                    loaded
+                } else if let Some(cap_val) = self.locals.get(cap_name).cloned() {
+                    cap_val
+                } else {
+                    continue; // not in scope (shouldn't happen after collect_lambda_captures)
+                };
+                let field_llvm_ty = self.llvm_ty_ctx(cap_ty);
+                let field_ptr = self.next_reg();
+                self.push_instr(&format!(
+                    "{field_ptr} = getelementptr %{env_ty_name}, ptr {env_alloca}, i32 0, i32 {i}"
+                ));
+                self.push_instr(&format!(
+                    "store {field_llvm_ty} {store_val}, ptr {field_ptr}"
+                ));
             }
             env_alloca
         };
@@ -2082,8 +2168,26 @@ impl TextEmitter {
             }
         }
 
-        // Emit body.
-        let body_val = self.emit_expr(body)?;
+        // Emit body — capture any error so we can restore state before propagating.
+        let body_result = self.emit_expr(body);
+
+        let body_val = match body_result {
+            Ok(v) => v,
+            Err(e) => {
+                // Restore outer state before propagating the error.
+                self.fn_buf = saved_fn_buf;
+                self.locals = saved_locals;
+                self.ref_locals = saved_ref_locals;
+                self.reg = saved_reg;
+                self.bb = saved_bb;
+                self.reg_types = saved_reg_types;
+                self.local_mvl_types = saved_mvl_types;
+                self.current_ret_ty = saved_ret_ty;
+                self.terminated = saved_terminated;
+                self.current_bb = saved_current_bb;
+                return Err(e);
+            }
+        };
 
         if !self.terminated {
             if is_void {
@@ -2150,10 +2254,6 @@ impl TextEmitter {
                 None => return Ok(None),
             };
 
-            // We need the original function's param types.  We look them up from
-            // the parsed declarations stored in fn_ret_types; param types aren't
-            // stored separately, so emit a generic trampoline with `...` varargs.
-            // The important thing is the calling convention: env ptr is param 0.
             let llvm_ret = self.llvm_ty_ctx(&orig_ret);
             let is_void = Self::is_void(&orig_ret);
             let define_ret = if is_void {
@@ -2161,6 +2261,22 @@ impl TextEmitter {
             } else {
                 llvm_ret.clone()
             };
+
+            // Build typed trampoline: (ptr %__env, ty0 %__arg0, ty1 %__arg1, …)
+            // The runtime calls the closure fn_ptr as fn(env, args…), so the
+            // trampoline must match the original function's arity and types.
+            let orig_params = self.fn_param_types.get(name).cloned().unwrap_or_default();
+            let mut wrapper_param_parts = vec!["ptr %__env".to_string()];
+            let mut forward_arg_parts: Vec<String> = Vec::new();
+            for (i, p_ty) in orig_params.iter().enumerate() {
+                let ty_str = self.llvm_ty_ctx(p_ty);
+                if ty_str != "void" {
+                    wrapper_param_parts.push(format!("{ty_str} %__arg{i}"));
+                    forward_arg_parts.push(format!("{ty_str} %__arg{i}"));
+                }
+            }
+            let wrapper_params_str = wrapper_param_parts.join(", ");
+            let forward_args_str = forward_arg_parts.join(", ");
 
             // Save context.
             let saved_fn_buf = std::mem::take(&mut self.fn_buf);
@@ -2178,24 +2294,20 @@ impl TextEmitter {
             self.bb = 0;
             self.terminated = false;
 
-            // Wrapper takes (ptr env, ptr list_elem) — generic 1-arg trampoline.
-            // The runtime HOF functions call the closure as fn(env, elem) so a
-            // 1-arg wrapper covers filter/map/any/all.  fold uses fn(env, acc, elem).
             self.fn_buf.push(format!(
-                "define {define_ret} @{wrapper_name}(ptr %__env, ...)"
+                "define {define_ret} @{wrapper_name}({wrapper_params_str})"
             ));
             self.fn_buf.push("{".into());
             self.fn_buf.push("entry:".into());
 
-            // Forward to original: just call it with no args (runtime fills args).
-            // This trampoline is only called via the HOF runtime which handles arg
-            // forwarding through the closure struct's fn_ptr.
             if is_void {
-                self.push_instr(&format!("call void @{name}()"));
+                self.push_instr(&format!("call void @{name}({forward_args_str})"));
                 self.push_instr("ret void");
             } else {
                 let reg = self.next_reg();
-                self.push_instr(&format!("{reg} = call {llvm_ret} @{name}()"));
+                self.push_instr(&format!(
+                    "{reg} = call {llvm_ret} @{name}({forward_args_str})"
+                ));
                 self.push_instr(&format!("ret {llvm_ret} {reg}"));
             }
 
@@ -2595,5 +2707,80 @@ mod tests {
         // Closure struct built pointing to wrapper
         assert!(ir.contains("store ptr @__closure_wrap_is_pos"), "{ir}");
         assert!(ir.contains("call ptr @List_filter"), "{ir}");
+        // Trampoline must forward the element argument, not call with zero args.
+        assert!(
+            ir.contains("define i1 @__closure_wrap_is_pos(ptr %__env, i64 %__arg0)"),
+            "trampoline missing typed param:\n{ir}"
+        );
+        assert!(
+            ir.contains("call i1 @is_pos(i64 %__arg0)"),
+            "trampoline must forward arg to original:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn hof_fold_emits_init_slot_and_list_fold_call() {
+        let ir = compile(
+            "fn main() -> Unit ! Console {\n\
+             let xs: List[Int] = [1, 2, 3];\n\
+             let sum: Int = xs.fold(0, |acc: Int, x: Int| acc + x);\n\
+             }",
+        );
+        assert!(ir.contains("declare ptr @List_fold(ptr, ptr, ptr)"), "{ir}");
+        // Initial value must be stack-allocated and stored.
+        assert!(ir.contains("alloca i64"), "{ir}");
+        assert!(ir.contains("store i64 0"), "{ir}");
+        assert!(ir.contains("call ptr @List_fold(ptr"), "{ir}");
+        // Result loaded back as the accumulator type.
+        assert!(ir.contains("load i64"), "{ir}");
+        // Lambda for accumulator function has two typed params.
+        assert!(
+            ir.contains("define i64 @__lambda_0(ptr %__env, i64 %acc, i64 %x)"),
+            "{ir}"
+        );
+    }
+
+    #[test]
+    fn capturing_lambda_with_two_captures() {
+        // Captures both `lo` and `hi` — env struct must have two i64 fields.
+        let ir = compile(
+            "fn main() -> Unit ! Console {\n\
+             let xs: List[Int] = [1, 2, 3, 4, 5];\n\
+             let lo: Int = 1;\n\
+             let hi: Int = 4;\n\
+             let mid: List[Int] = xs.filter(|x: Int| x > lo);\n\
+             }",
+        );
+        // Env struct type registered.
+        assert!(ir.contains("%__env___lambda_0 = type"), "{ir}");
+        // GEP accesses for storing captures into env.
+        assert!(ir.contains("getelementptr %__env___lambda_0"), "{ir}");
+        // Two stores for the two captured values.
+        let store_count = ir.matches("store i64").count();
+        assert!(
+            store_count >= 1,
+            "expected at least one i64 store for env field, got {store_count}:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn ref_local_capture_loads_before_storing_into_env() {
+        // `count` is a mutable ref binding — must be loaded before capture.
+        let ir = compile(
+            "fn run() -> Int {\n\
+             let count: ref Int = 0;\n\
+             count = count + 1;\n\
+             let xs: List[Int] = [1, 2, 3];\n\
+             let above: List[Int] = xs.filter(|x: Int| x > count);\n\
+             above.len()\n\
+             }",
+        );
+        // ref local alloca present.
+        assert!(ir.contains("alloca i64"), "{ir}");
+        // Env struct created for the capture.
+        assert!(ir.contains("%__env___lambda_0 = type"), "{ir}");
+        // A load from the ref alloca must precede the GEP store into the env.
+        assert!(ir.contains("load i64"), "{ir}");
+        assert!(ir.contains("getelementptr %__env___lambda_0"), "{ir}");
     }
 }
