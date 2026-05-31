@@ -94,15 +94,15 @@ pub struct MvlActorHandle {
 /// ```
 type DispatchFn = unsafe extern "C" fn(*mut u8, i64, *const i64);
 
-/// Global registry of spawned actors.
-///
-/// Each entry is `(Option<handle_ptr as usize>, JoinHandle<()>)`.
-/// The `Option` is set to `None` when the handle has been explicitly freed
-/// via `mvl_actor_drop`, preventing double-free in `mvl_actor_join_all`.
-///
-/// Uses `thread_local!` because LLVM-generated programs spawn actors only from
-/// the main thread. `mvl_actor_join_all` is also called from the main thread,
-/// so both access the same TLS slot.
+// Global registry of spawned actors.
+//
+// Each entry is `(Option<handle_ptr as usize>, JoinHandle<()>)`.
+// The `Option` is set to `None` when the handle has been explicitly freed
+// via `mvl_actor_drop`, preventing double-free in `mvl_actor_join_all`.
+//
+// Uses `thread_local!` because LLVM-generated programs spawn actors only from
+// the main thread. `mvl_actor_join_all` is also called from the main thread,
+// so both access the same TLS slot.
 thread_local! {
     static ACTOR_REGISTRY: RefCell<Vec<(Option<usize>, JoinHandle<()>)>> =
         const { RefCell::new(Vec::new()) };

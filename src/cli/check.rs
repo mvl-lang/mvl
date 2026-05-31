@@ -214,7 +214,7 @@ pub fn run(path: &str, req_filter: Option<u8>, opts: CheckOptions) {
     let mut total_by_layer = [0usize; 6];
 
     // Only run the checker on explicitly requested files (not resolver-only siblings).
-    for (idx, (file_str, prog, _src)) in parsed.iter().take(check_count).enumerate() {
+    for (idx, (file_str, prog, src)) in parsed.iter().take(check_count).enumerate() {
         // Build per-file prelude: stdlib + all OTHER user modules so that
         // cross-file function and type references resolve (whole-program checking).
         // Flanking slices of all_user_progs avoid cloning individual Programs;
@@ -306,14 +306,7 @@ pub fn run(path: &str, req_filter: Option<u8>, opts: CheckOptions) {
                     error_limit.min(errors.len())
                 };
                 for err in errors.iter().take(display_count) {
-                    eprintln!(
-                        "{}:{}:{}: error[req{}]: {}",
-                        file_str,
-                        err.span().line,
-                        err.span().col,
-                        err.requirement_number(),
-                        err.message()
-                    );
+                    super::render_diagnostic(file_str, src, err);
                 }
                 if error_limit > 0 && errors.len() > error_limit {
                     eprintln!(

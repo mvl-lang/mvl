@@ -757,7 +757,7 @@ impl CheckError {
             ),
             CheckError::RefinementViolated { pred, counterexample, .. } => {
                 let cx = counterexample.as_deref().map(|c| format!(" (counterexample: {c})")).unwrap_or_default();
-                format!("refinement predicate violated: `{pred}`{cx}")
+                format!("refinement predicate violated: {pred}{cx}")
             }
             CheckError::InvalidEffectName { name, .. } => {
                 format!("unknown effect `{name}` — valid effects are declared in std/effects.mvl")

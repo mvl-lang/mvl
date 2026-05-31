@@ -71,7 +71,7 @@ pub fn run(path: &str, run: bool, run_args: &[String], assert_mode: AssertMode) 
         path.to_string()
     };
 
-    let (prog, _src) = super::parse_or_exit(&file_path);
+    let (prog, src) = super::parse_or_exit(&file_path);
     let crate_name = loader::stem(path);
 
     // Collect sibling modules referenced via `use module::item` declarations.
@@ -135,12 +135,35 @@ pub fn run(path: &str, run: bool, run_args: &[String], assert_mode: AssertMode) 
     // loaded package (e.g. pkg.anthropic imports std.json → json.mvl must be in prelude).
     let all_with_pkgs: Vec<_> = all_progs.iter().chain(pkg_progs.iter()).cloned().collect();
     stdlib_prelude_progs.extend(loader::load_mvl_native_stdlib_extras(&all_with_pkgs));
-    stdlib_prelude_progs.extend(pkg_progs);
+    stdlib_prelude_progs.extend(pkg_progs.clone());
 
     // Collect expression types from ALL programs (prelude + user) for the
     // transpiler to emit type-specific Rust at method-call sites (#554).
     let mut all_expr_types = checker::collect_prelude_expr_types(&stdlib_prelude_progs);
-    let check_result = checker::check_with_prelude(&stdlib_prelude_progs, &prog);
+
+    // Build a checker-specific prelude that includes ALL imported stdlib modules
+    // (Rust-backed ones like std.net/std.io included), so the type checker can
+    // resolve their declarations. The transpiler continues to use stdlib_prelude_progs
+    // which handles Rust-backed modules via direct Rust emission rather than MVL bodies.
+    // This mirrors what `mvl check` does via load_stdlib_prelude.
+    let user_progs_for_stdlib =
+        std::iter::once(&prog).chain(sibling_modules.iter().map(|(_, p)| p));
+    let mut checker_stdlib = loader::load_implicit_prelude();
+    checker_stdlib.extend(loader::load_stdlib_prelude(
+        user_progs_for_stdlib,
+        &stdlib_dir,
+    ));
+    checker_stdlib.extend(pkg_progs.iter().cloned());
+
+    let sibling_refs: Vec<&mvl::mvl::parser::ast::Program> =
+        sibling_modules.iter().map(|(_, p)| p).collect();
+    let check_result = checker::check_with_two_preludes(&checker_stdlib, &sibling_refs, &prog);
+    if check_result.has_errors() {
+        for err in &check_result.errors {
+            super::render_diagnostic(&file_path, &src, err);
+        }
+        process::exit(1);
+    }
     all_expr_types.extend(check_result.expr_types);
     // Pre-check each sibling so the backend receives ready-made expr_types (#1110).
     let sibling_expr_types: Vec<_> = sibling_modules

@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [0.167.1] - 2026-05-31
+
+### Added
+- ZMTP protocol test coverage expansion: 19 new tests for `parse_ready_body`, `parse_socket_type_property`, and `zmq_error_msg` achieving 100% branch coverage (80/80 branches) (#1058)
+
+### Fixed
+- `mvl build` now fails with an error message when the type checker detects violations (refinement, IFC, type errors, etc.); previously all checker errors were silently discarded and the build succeeded regardless
+
+### Changed
+- Rust backend decoupled from checker: `transpile()` and `transpile_project*()` no longer call the checker internally; callers supply pre-built `expr_types` map; new `Pipeline::assemble_expr_types()` centralises prelude + program type assembly (#1110)
+
 ## [0.167.0] - 2026-05-31
 
 ### Added
@@ -10,13 +21,11 @@
 ### Changed
 - Model ID enum: `Opus4` → `Opus4_6`, `Sonnet4` → `Sonnet4_6`, `Haiku4` → `Haiku4_5` (#1020)
 - API strings: `claude-opus-4-6`, `claude-sonnet-4-6`, `claude-haiku-4-5-20251001` (#1020)
-
 ## [0.166.0] - 2026-05-30
 
 ### Added
 - Actor runtime interface decoupling: Rust backend emitter now calls named symbols (`mvl_channel`, `mvl_spawn`, `mvl_register_actor`, `mvl_join_actors`) instead of inlining `std::thread` and `std::sync::mpsc` glue. Swapping `--target` (Phase 9) will replace the runtime crate without changing emitter output (ADR-0027, #1014)
 - `runtime/rust/src/actors.rs`: default `std::thread` + `mpsc` implementation of the actor runtime interface, with `MvlSender<M>`, `MvlReceiver<M>`, and policy-aware message sending
-
 ## [0.165.0] - 2026-05-29
 
 ### Added
@@ -31,7 +40,6 @@
 - SBOM license support: `mvl sbom` now reads cached package manifests to populate dependency license fields in CycloneDX and SPDX output (#1139)
 - Package manifest parser enhancements: support for TOML arrays and table-format native dependencies (e.g., `rusqlite = { version = "...", features = [...] }`) (#1139)
 - End-to-end package distribution example: `examples/crud_api` now uses `mvl add` to depend on `pkg-http` and `pkg-sqlite` as proper git dependencies with version tags (#1139)
-
 ## [0.163.0] - 2026-05-29
 
 ### Added
