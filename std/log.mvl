@@ -47,20 +47,34 @@ pub type LogLevel = enum {
 
 // ── Logger value ───────────────────────────────────────────────────────────
 
-/// Holds the output format and minimum level for a stream of log calls.
+/// Holds the output format, minimum level, and destination fd for a stream of log calls.
 ///
 /// Plain old data — `val`-shareable across actors. Each log call takes a
 /// Logger as its first argument; no process-global state.
+/// Use `default_logger()` for stderr output or `file_logger()` for file output.
 pub type Logger = struct {
     format:    LogFormat,
     min_level: LogLevel,
+    fd:        Fd,         // destination: stderr(), stdout(), or any open file fd
 }
 
-/// Construct a Logger with the default settings (Plain format, Debug minimum).
+/// Construct a Logger with the default settings (Plain format, Debug minimum, stderr).
 /// Emits all log levels — suitable for development. Production callers should
 /// use `LogLevel::Info` or higher to suppress debug noise.
 pub fn default_logger() -> Logger {
-    Logger { format: LogFormat::Plain, min_level: LogLevel::Debug }
+    Logger { format: LogFormat::Plain, min_level: LogLevel::Debug, fd: stderr() }
+}
+
+/// Construct a Logger that writes to an open file descriptor.
+///
+/// The caller is responsible for opening the fd before constructing the logger
+/// and closing it after all logging is done. The Logger does not own the fd.
+///
+/// Example:
+///   let fd: Fd = open(path("app.log")).unwrap_or(stderr());
+///   let logger: Logger = file_logger(fd, LogFormat::Json, LogLevel::Info);
+pub fn file_logger(fd: Fd, format: LogFormat, min_level: LogLevel) -> Logger {
+    Logger { format: format, min_level: min_level, fd: fd }
 }
 
 // ── Parsing helpers ────────────────────────────────────────────────────────
@@ -107,10 +121,10 @@ pub fn log_format_name(f: LogFormat) -> String {
 
 // ── Internal helpers ───────────────────────────────────────────────────────
 
-/// Write a pre-formatted log line to stderr.
-/// Pure MVL: delegates to eprintln, which is subsumed by ! Log > Console.
-fn log_write(line: String) -> Unit ! Log {
-    eprintln(line)
+/// Write a pre-formatted log line to the given fd.
+/// Pure MVL: delegates to write(), which carries ! Console, subsumed by ! Log > Console.
+fn log_write(fd: Fd, line: String) -> Unit ! Log {
+    let _: Result[Unit, IoError] = write(fd, line.concat("\n"));
 }
 
 /// Module-private: ISO-8601 timestamp for the current wall-clock instant.
@@ -259,7 +273,7 @@ fn log_emit(logger: Logger, level: String, msg: String, fields: Map[String, Stri
         } else {
             format_plain_line(level, ts, msg, fields)
         };
-        log_write(line)
+        log_write(logger.fd, line)
     }
 }
 
