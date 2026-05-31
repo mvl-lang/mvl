@@ -29,7 +29,7 @@ guard-mvl: ## Validate MVL binary is present and working
 # Ensure .mvl/pkg/http symlink exists for local package resolution.
 .mvl/pkg/http:
 	@mkdir -p .mvl/pkg
-	@ln -sfn $(REPO_ROOT)/pkg/http .mvl/pkg/http
+	@ln -sfn $(REPO_ROOT)/.mvl/pkg/http .mvl/pkg/http
 
 lint: guard-mvl .mvl/pkg/http ## Lint main.mvl
 	$(MVL) lint $(DIR)main.mvl

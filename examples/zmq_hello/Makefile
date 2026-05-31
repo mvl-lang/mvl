@@ -43,7 +43,7 @@ guard-mvl: ## Validate MVL binary is present
 # Ensure pkg.zmq symlink exists for local package resolution.
 .mvl/pkg/zmq:
 	@mkdir -p .mvl/pkg
-	@ln -sfn $(REPO_ROOT)/pkg/zmq .mvl/pkg/zmq
+	@ln -sfn $(REPO_ROOT)/.mvl/pkg/zmq .mvl/pkg/zmq
 
 guard-pyzmq: ## Ensure pyzmq is installed in the active venv
 	@python3 -c "import zmq" 2>/dev/null || { \
