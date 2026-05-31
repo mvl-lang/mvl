@@ -145,7 +145,7 @@ partial fn main() -> Unit ! AppIO {
         Ok(c)  => c,
     };
 
-    let logger: Logger = Logger { format: cfg.log_format, min_level: cfg.log_level };
+    let logger: Logger = Logger { format: cfg.log_format, min_level: cfg.log_level, fd: stderr() };
 
     let db: SqliteDb = match db_open(cfg.db_path) {
         Err(msg) => { logger.error("db open failed", {"error": msg}); return },

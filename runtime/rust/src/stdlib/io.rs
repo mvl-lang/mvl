@@ -31,6 +31,7 @@ impl Path {
 /// Mirrors the `Fd` struct declared in `std/io.mvl`.
 /// Obtain standard streams via the pure MVL functions `stdout()/stderr()/stdin()`.
 /// Obtain file descriptors via [`open`]. Close with [`close`].
+#[derive(Debug, Clone, PartialEq)]
 pub struct Fd {
     /// The raw Unix file descriptor number (0 = stdin, 1 = stdout, 2 = stderr, ≥3 = open file).
     pub inner: i64,

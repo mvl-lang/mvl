@@ -137,7 +137,7 @@ partial fn main() -> Unit ! Console + Env + FileRead + Log + Net + Spawn + Send 
         },
         Ok(c)   => c,
     };
-    let logger: Logger = Logger { format: cfg.log_format, min_level: cfg.log_level };
+    let logger: Logger = Logger { format: cfg.log_format, min_level: cfg.log_level, fd: stderr() };
     logger.info("server starting", {
         "host":       cfg.host,
         "port":       cfg.port.to_string(),

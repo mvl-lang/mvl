@@ -707,14 +707,16 @@ impl TypeEnv {
                 ..Default::default()
             },
         );
-        // std.log — only one Rust-backed primitive (Phase B, local Logger).
+        // std.log — all functions are pure MVL in std/log.mvl; no Rust-backed primitives.
         // All four severity methods (Logger::debug/info/warn/error) and the
-        // format/level/timestamp helpers are pure MVL in std/log.mvl.
-        //   log_write(line) — writes a pre-formatted line to stderr under ! Log
+        // format/level/timestamp helpers are loaded from std/log.mvl when imported.
+        //   log_write(fd, line) — writes a pre-formatted line to an Fd under ! Log (#1152)
+        // This registration keeps the checker aware of log_write even when std/log.mvl is
+        // not fully loaded; the MVL-loaded declaration overrides this when it is.
         self.fns.insert(
             "log_write".into(),
             FnInfo {
-                params: vec![Ty::String],
+                params: vec![Ty::Named("Fd".into(), vec![]), Ty::String],
                 ret: Ty::Unit,
                 effects: vec![Effect::new("Log", Span::new(0, 0, 0, 0))],
                 ..Default::default()

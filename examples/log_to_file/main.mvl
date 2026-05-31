@@ -1,0 +1,34 @@
+// examples/log_to_file — structured logging to a file.
+//
+// Demonstrates the file-sink pattern introduced by #1152:
+//   - open() is pure (capability entry point — no effect annotation)
+//   - file_logger() wires an open Fd to a Logger
+//   - all write effects are ! Console, subsumed by ! Log (Log > Clock + Console)
+//   - the caller owns fd lifecycle: open before logging, close after
+//
+// Run:   mvl run examples/log_to_file/main.mvl
+// Check: cargo run -- check examples/log_to_file/main.mvl
+
+use std.log.{Logger, LogFormat, LogLevel, file_logger}
+use std.io.{path, open, close, Fd}
+
+fn main() -> Unit ! Log {
+    let fd: Fd = match open(path("app.log")) {
+        Err(_) => {
+            eprintln("error: could not open app.log");
+            return
+        },
+        Ok(f) => f,
+    };
+
+    let logger: Logger = file_logger(fd, LogFormat::Json, LogLevel::Info);
+
+    logger.info("application started", {"version": "1.0.0", "env": "production"});
+    logger.warn("high memory usage", {"used_mb": "512", "limit_mb": "1024"});
+    logger.error("upstream timeout", {"service": "payments", "timeout_ms": "5000"});
+
+    // debug record is dropped — logger min_level is Info
+    logger.debug("connection pool stats", {"idle": "3", "active": "2"});
+
+    close(fd)
+}
