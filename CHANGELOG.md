@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [0.167.0] - 2026-05-31
+
+### Added
+- Package extraction: `pkg/anthropic` extracted to standalone repository at [github.com/mvl-lang/pkg-anthropic](https://github.com/mvl-lang/pkg-anthropic) v0.1.0 (#1020)
+
+### Changed
+- Model ID enum: `Opus4` → `Opus4_6`, `Sonnet4` → `Sonnet4_6`, `Haiku4` → `Haiku4_5` (#1020)
+- API strings: `claude-opus-4-6`, `claude-sonnet-4-6`, `claude-haiku-4-5-20251001` (#1020)
+
 ## [0.166.0] - 2026-05-30
 
 ### Added
