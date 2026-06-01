@@ -41,7 +41,7 @@ pub type LogSetupError = enum {
 /// For the literal "app.log", Layer 1 (interval arithmetic) statically proves
 /// len("app.log") > 0 == 7 > 0 — no runtime check emitted.
 /// Env-var paths carry a runtime check (validated at the IFC boundary).
-pub fn validate_log_path(p: String where len(p) > 0) -> String { p }
+pub total fn validate_log_path(p: String where len(p) > 0) -> String { p }
 
 /// Validate a Tainted path string from the environment.
 ///
@@ -49,7 +49,7 @@ pub fn validate_log_path(p: String where len(p) > 0) -> String { p }
 /// therefore untrusted. `relabel trust` is the explicit boundary, audited
 /// with the tag "LOG-PATH-001". An empty string after relabeling is rejected
 /// so callers receive a non-empty String.
-pub fn resolve_path(raw: Tainted[String]) -> Result[String, LogSetupError] {
+pub total fn resolve_path(raw: Tainted[String]) -> Result[String, LogSetupError] {
     let s: String = relabel trust(raw, "LOG-PATH-001");
     match s.len() > 0 {
         true  => Ok(s),
@@ -62,7 +62,7 @@ pub fn resolve_path(raw: Tainted[String]) -> Result[String, LogSetupError] {
 /// The string literal "app.log" satisfies len > 0 and is proven statically
 /// by validate_log_path (Layer 1 interval: 7 > 0).
 /// Env-var values go through resolve_path() for the IFC trust boundary.
-fn get_log_path() -> Result[String, LogSetupError] ! Env {
+total fn get_log_path() -> Result[String, LogSetupError] ! Env {
     let env_val: Option[Tainted[String]] = get("MVL_LOG_FILE");
     match env_val {
         None      => Ok(validate_log_path("app.log")),
@@ -74,7 +74,7 @@ fn get_log_path() -> Result[String, LogSetupError] ! Env {
 ///
 /// Returns Err(OpenFailed) on any I/O error. The caller is responsible for
 /// calling close() on the returned Fd when done.
-fn open_log(p: String) -> Result[Fd, LogSetupError] {
+total fn open_log(p: String) -> Result[Fd, LogSetupError] {
     match open(path(p)) {
         Err(_) => Err(LogSetupError::OpenFailed),
         Ok(fd) => Ok(fd),
@@ -83,7 +83,7 @@ fn open_log(p: String) -> Result[Fd, LogSetupError] {
 
 // ── Main ──────────────────────────────────────────────────────────────────
 
-fn main() -> Unit ! Log + Env {
+total fn main() -> Unit ! Log + Env {
     let log_path: String = match get_log_path() {
         Err(_) => {
             eprintln("error: invalid or empty log path");

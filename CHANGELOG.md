@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [0.171.1] - 2026-06-01
+
+### Fixed
+- `examples/log_to_file`: annotate all five functions with `total fn` keyword to explicitly declare totality. Assurance report now shows 5/5 implemented fns are total (5 explicit, 0 implicit), eliminating the `total*` (inferred) asterisk from the Totality column (#1166)
+
 ## [0.171.0] - 2026-06-01
 
 ### Added
