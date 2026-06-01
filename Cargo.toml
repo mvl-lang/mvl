@@ -7,7 +7,7 @@ name = "mvl"
 
 version = "0.169.0"
 edition = "2021"
-description = "MVL — Minimum Verification Language compiler"
+description = "MVL — Maximum Verifiable Language compiler"
 license = "Apache-2.0"
 
 [features]

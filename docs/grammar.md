@@ -1,6 +1,6 @@
 # MVL EBNF Grammar
 
-The complete formal grammar for the Minimum Verification Language. ~100 productions, LL(1) — parseable by recursive descent with one token of lookahead.
+The complete formal grammar for the Maximum Verifiable Language. ~100 productions, LL(1) — parseable by recursive descent with one token of lookahead.
 
 See [ADR-0005](adr/0005-recursive-descent-parser.md) for the parser design decision. See [Chapter 20](manual/20-grammar.md) of the language manual for the design rationale and LL(1) analysis.
 

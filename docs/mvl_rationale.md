@@ -29,7 +29,7 @@ If LLMs generate all code, every design decision about programming languages inv
 - **Readability shifts to the LLM.** Code comprehension — understanding intent, tracing dependencies, discovering what a system does — was historically a human burden that drove language design toward expressiveness and abstraction. LLMs read code faster and more completely than humans. This inverts the maintenance equation: verbose, explicit, heavily annotated code that a human would never want to read is trivial for an LLM to navigate. The same capability applies in reverse — recovering intent from legacy systems (COBOL, assembly, undocumented binaries) becomes a recognition task, not a deciphering task. Readability is no longer a language property. It is a capability of the reader.
 - **Architecture becomes the strategic lever.** When writing and reading code are both free, the only decisions that matter are structural: where to draw trust boundaries, how to decompose systems for independent verification, what to own versus what to delegate. Architecture shifts from a comprehension aid (layers, abstractions, clean interfaces for human navigation) to a trust management strategy (blast radius, sovereignty, regenerability). This changes how we teach architecture, how we evaluate it, and what principles govern it.
 
-This inversion is the foundation of the MVL — the Minimum Verification Language — and the research program around it.
+This inversion is the foundation of the MVL — the Maximum Verifiable Language — and the research program around it.
 
 ### From practice to theory
 
