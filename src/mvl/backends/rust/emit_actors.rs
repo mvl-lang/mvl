@@ -130,10 +130,11 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &ActorDecl) {
         cg.line(&format!("{}: {ty_str},", field.name));
     }
     if !pub_methods.is_empty() {
-        // `_self_ref` holds the actor's own handle so that behaviors can pass
-        // `self` as a `tag` argument to other actors.  Initialised to `None`
-        // at construction; set by `_start_<name>` before the thread is spawned.
-        cg.line(&format!("_self_ref: Option<{name}>,"));
+        // `_self_ref` holds a *weak* sender so that behaviors can pass `self`
+        // as a `tag` argument without keeping the mailbox channel alive.
+        // When all external handles are dropped the channel disconnects and
+        // `rx.recv()` returns `None` even though this weak ref still exists.
+        cg.line(&format!("_self_ref: Option<MvlWeakSender<{msg_name}>>,"));
     }
     cg.pop_indent();
     cg.line("}");
@@ -301,9 +302,7 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &ActorDecl) {
         None => "let (tx, rx) = mvl_channel(256_i64, 0_i64);".to_string(),
     };
     cg.line(&channel_line);
-    cg.line(&format!(
-        "state._self_ref = Some({name} {{ _sender: tx.clone() }});"
-    ));
+    cg.line("state._self_ref = Some(tx.downgrade());");
     cg.line("let __handle = mvl_spawn(move || {");
     cg.push_indent();
     cg.line("let mut actor = state;");

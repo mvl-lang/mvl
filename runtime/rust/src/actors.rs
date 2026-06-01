@@ -68,6 +68,33 @@ impl<M: Send + 'static> Clone for MvlSender<M> {
     }
 }
 
+impl<M: Send + 'static> MvlSender<M> {
+    /// Create a weak reference to this sender.  The weak ref does not prevent
+    /// the channel from closing when all strong (`MvlSender`) clones are dropped.
+    pub fn downgrade(&self) -> MvlWeakSender<M> {
+        MvlWeakSender(Arc::downgrade(&self.0))
+    }
+}
+
+/// Non-owning actor handle.  Held by the actor thread in `_self_ref` so that
+/// behaviors can pass `self` as a tag argument without keeping the channel open.
+/// When all external `MvlSender` handles are dropped the channel disconnects
+/// and `MvlReceiver::recv()` returns `None` regardless of any live weak refs.
+pub struct MvlWeakSender<M: Send + 'static>(std::sync::Weak<SenderInner<M>>);
+
+impl<M: Send + 'static> Clone for MvlWeakSender<M> {
+    fn clone(&self) -> Self {
+        MvlWeakSender(self.0.clone())
+    }
+}
+
+impl<M: Send + 'static> MvlWeakSender<M> {
+    /// Upgrade to a strong sender, or `None` if all external handles are gone.
+    pub fn upgrade(&self) -> Option<MvlSender<M>> {
+        self.0.upgrade().map(MvlSender)
+    }
+}
+
 // ── MvlReceiver impl ───────────────────────────────────────────────────────
 
 impl<M: Send + 'static> MvlReceiver<M> {

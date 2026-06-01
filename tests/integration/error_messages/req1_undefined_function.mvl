@@ -3,5 +3,5 @@
 
 fn main() -> Unit ! Console {
     let x: Int = nonexistent(42);
-    println("{}", x);
+    println(x.to_string());
 }

@@ -5,5 +5,5 @@
 fn main() -> Unit ! Console {
     let counter: ref Int = 0;
     let _g: fn(Int) -> Int = |y: Int| -> Int { counter + y };
-    println("{}", counter);
+    println(counter.to_string());
 }

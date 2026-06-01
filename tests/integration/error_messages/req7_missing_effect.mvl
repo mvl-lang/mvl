@@ -2,7 +2,7 @@
 // Triggers: CheckError::MissingEffect (req7)
 
 fn log_value(x: Int) -> Unit ! Log {
-    println("value: {}", x);
+    println(x.to_string());
 }
 
 fn main() -> Unit ! Console {

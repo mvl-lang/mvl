@@ -5,6 +5,6 @@ fn get_number() -> Int { 42 }
 
 fn main() -> Result[Unit, String] ! Console {
     let x: Int = get_number()?;
-    println("{}", x);
+    println(x.to_string());
     Ok(())
 }

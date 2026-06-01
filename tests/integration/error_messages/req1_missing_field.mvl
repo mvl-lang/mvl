@@ -5,5 +5,5 @@ type Point = struct { x: Int, y: Int }
 
 fn main() -> Unit ! Console {
     let p: Point = Point { x: 1 };
-    println("{}", p.x);
+    println(p.x.to_string());
 }

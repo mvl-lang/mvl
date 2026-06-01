@@ -11,5 +11,5 @@ fn describe(c: Color) -> String {
 }
 
 fn main() -> Unit ! Console {
-    println("{}", describe(Color::Blue));
+    println(describe(Color::Blue));
 }

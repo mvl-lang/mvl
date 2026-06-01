@@ -1379,7 +1379,12 @@ fn emit_expr_as_arg(cg: &mut RustEmitter, expr: &Expr) {
         // Phase 8: `self` used as a tag argument inside an actor behavior.
         // The actor's own handle is stored in `_self_ref`; clone it to pass.
         Expr::Ident(name, _) if name == "self" && !cg.actor_self_type.is_empty() => {
-            cg.push("self._self_ref.as_ref().unwrap().clone()");
+            // Upgrade the weak self-ref to a strong handle for the duration of this call.
+            // Safe: we are inside a dispatch, so at least one external sender is alive.
+            let ty = cg.actor_self_type.clone();
+            cg.push(&format!(
+                "{ty} {{ _sender: self._self_ref.as_ref().unwrap().upgrade().unwrap() }}"
+            ));
         }
         // Identifiers: check if this is the last use — if so, move instead of clone.
         Expr::Ident(_, span) => {
@@ -1416,7 +1421,12 @@ fn emit_expr_as_fn_arg(cg: &mut RustEmitter, expr: &Expr) {
         }
         // Phase 8: `self` used as a tag argument inside an actor behavior.
         Expr::Ident(name, _) if name == "self" && !cg.actor_self_type.is_empty() => {
-            cg.push("self._self_ref.as_ref().unwrap().clone()");
+            // Upgrade the weak self-ref to a strong handle for the duration of this call.
+            // Safe: we are inside a dispatch, so at least one external sender is alive.
+            let ty = cg.actor_self_type.clone();
+            cg.push(&format!(
+                "{ty} {{ _sender: self._self_ref.as_ref().unwrap().upgrade().unwrap() }}"
+            ));
         }
         // `self` in a type-attached method (`&self` receiver) cannot be moved — always
         // clone first so `self.clone().into()` works for any `T: Clone` type.

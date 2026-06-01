@@ -11,5 +11,5 @@ fn alias_iso(iso data: Payload) -> Int {
 
 fn main() -> Unit ! Console {
     let p: Payload = Payload { size: 10 };
-    println("{}", alias_iso(p));
+    println(alias_iso(p).to_string());
 }

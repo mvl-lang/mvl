@@ -5,5 +5,5 @@ total fn safe_divide(a: Int, b: Int where b != 0) -> Int { a / b }
 
 fn main() -> Unit ! Console {
     let result: Int = safe_divide(10, 0);
-    println("{}", result);
+    println(result.to_string());
 }

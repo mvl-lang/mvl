@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [0.173.1] - 2026-06-01
+
+### Fixed
+- `llvm_text` backend: save/restore `current_fn_is_main` in nested emit (actors, lambdas) to prevent invalid IR when main's state corrupts nested function generation; extract magic strings and add `wrap_result_pair()` helper for Result wrapping; apply PHI completeness fix to `emit_result_match` (#1169)
+- `llvm_text` backend: net_basic.mvl now properly declares `! Console + Net + Spawn + Send` effects (#1169)
+- Rust transpiler: use weak sender for actor `_self_ref` to prevent channel hang when `mvl_join_actors()` waits for actor threads; weak ref doesn't keep mailbox channel alive, allowing `rx.recv()` to return `None` when external handles drop (#1169)
+- Error message tests: fix REQ tag case sensitivity and println arity (variadic println removed) (#1169)
+
 ## [0.173.0] - 2026-06-01
 
 ### Added

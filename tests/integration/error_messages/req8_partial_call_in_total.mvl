@@ -8,5 +8,5 @@ total fn compute(n: Int) -> Int {
 }
 
 fn main() -> Unit ! Console {
-    println("{}", compute(5));
+    println(compute(5).to_string());
 }
