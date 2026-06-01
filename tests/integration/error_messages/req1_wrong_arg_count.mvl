@@ -5,5 +5,5 @@ fn add(a: Int, b: Int) -> Int { a + b }
 
 fn main() -> Unit ! Console {
     let x: Int = add(1, 2, 3);
-    println("{}", x);
+    println(x.to_string());
 }

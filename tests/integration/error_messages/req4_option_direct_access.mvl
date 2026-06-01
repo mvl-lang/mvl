@@ -9,5 +9,5 @@ fn unwrap_direct(x: Option[Int]) -> Int {
 }
 
 fn main() -> Unit ! Console {
-    println("{}", unwrap_direct(get_value()));
+    println(unwrap_direct(get_value()).to_string());
 }

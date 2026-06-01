@@ -10,5 +10,5 @@ total fn count_up(n: Int) -> Int {
 }
 
 fn main() -> Unit ! Console {
-    println("{}", count_up(5));
+    println(count_up(5).to_string());
 }

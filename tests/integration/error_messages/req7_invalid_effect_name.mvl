@@ -6,5 +6,5 @@ fn beam_up(x: Int) -> Int ! Teleport {
 }
 
 fn main() -> Unit ! Console {
-    println("{}", beam_up(42));
+    println(beam_up(42).to_string());
 }

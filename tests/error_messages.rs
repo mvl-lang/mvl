@@ -62,7 +62,7 @@ fn req1_type_mismatch_reports_expected_and_found_types() {
     assert_contains(
         &stderr,
         "req1_type_mismatch.mvl",
-        &["error[req1]", "type mismatch"],
+        &["error[REQ1]", "type mismatch"],
     );
 }
 
@@ -72,7 +72,7 @@ fn req1_undefined_variable_names_the_variable() {
     assert_contains(
         &stderr,
         "req1_undefined_variable.mvl",
-        &["error[req1]", "undefined variable", "`z`"],
+        &["error[REQ1]", "undefined variable", "`z`"],
     );
 }
 
@@ -82,7 +82,7 @@ fn req1_undefined_function_names_the_function() {
     assert_contains(
         &stderr,
         "req1_undefined_function.mvl",
-        &["error[req1]", "undefined function", "`nonexistent`"],
+        &["error[REQ1]", "undefined function", "`nonexistent`"],
     );
 }
 
@@ -92,7 +92,7 @@ fn req1_wrong_arg_count_states_expected_and_actual() {
     assert_contains(
         &stderr,
         "req1_wrong_arg_count.mvl",
-        &["error[req1]", "`add`", "2", "3"],
+        &["error[REQ1]", "`add`", "2", "3"],
     );
 }
 
@@ -102,7 +102,7 @@ fn req1_unknown_field_names_the_field_and_type() {
     assert_contains(
         &stderr,
         "req1_unknown_field.mvl",
-        &["error[req1]", "unknown field", "`z`"],
+        &["error[REQ1]", "unknown field", "`z`"],
     );
 }
 
@@ -112,7 +112,7 @@ fn req1_missing_field_names_the_field_and_type() {
     assert_contains(
         &stderr,
         "req1_missing_field.mvl",
-        &["error[req1]", "missing field", "`y`"],
+        &["error[REQ1]", "missing field", "`y`"],
     );
 }
 
@@ -122,7 +122,7 @@ fn req1_undefined_type_names_the_type() {
     assert_contains(
         &stderr,
         "req1_undefined_type.mvl",
-        &["error[req1]", "undefined type", "`Nonexistent`"],
+        &["error[REQ1]", "undefined type", "`Nonexistent`"],
     );
 }
 
@@ -134,7 +134,7 @@ fn req2_use_after_move_names_the_variable() {
     assert_contains(
         &stderr,
         "req2_use_after_move.mvl",
-        &["error[req2]", "use of moved value", "`s`"],
+        &["error[REQ2]", "use of moved value", "`s`"],
     );
 }
 
@@ -144,7 +144,7 @@ fn req2_reference_escapes_scope_names_the_variable() {
     assert_contains(
         &stderr,
         "req2_reference_escapes_scope.mvl",
-        &["error[req2]", "escapes"],
+        &["error[REQ2]", "escapes"],
     );
 }
 
@@ -156,7 +156,7 @@ fn req3_non_exhaustive_match_lists_missing_variants() {
     assert_contains(
         &stderr,
         "req3_non_exhaustive_match.mvl",
-        &["error[req3]", "non-exhaustive", "match"],
+        &["error[REQ3]", "non-exhaustive", "match"],
     );
 }
 
@@ -166,7 +166,7 @@ fn req3_guard_non_exhaustive_missing_variant() {
     assert_contains(
         &stderr,
         "req3_guard_non_exhaustive.mvl",
-        &["error[req3]", "non-exhaustive", "Blue"],
+        &["error[REQ3]", "non-exhaustive", "Blue"],
     );
 }
 
@@ -178,7 +178,7 @@ fn req4_option_direct_access_suggests_match_or_question_mark() {
     assert_contains(
         &stderr,
         "req4_option_direct_access.mvl",
-        &["error[req4]", "Option", "match"],
+        &["error[REQ4]", "Option", "match"],
     );
 }
 
@@ -190,7 +190,7 @@ fn req5_result_ignored_tells_user_to_handle_or_propagate() {
     assert_contains(
         &stderr,
         "req5_result_ignored.mvl",
-        &["error[req5]", "Result", "match"],
+        &["error[REQ5]", "Result", "match"],
     );
 }
 
@@ -200,7 +200,7 @@ fn req5_propagate_not_result_names_the_type() {
     assert_contains(
         &stderr,
         "req5_propagate_not_result.mvl",
-        &["error[req5]", "`?`", "`Int`"],
+        &["error[REQ5]", "`?`", "`Int`"],
     );
 }
 
@@ -212,7 +212,7 @@ fn req6_assign_to_immutable_names_the_binding() {
     assert_contains(
         &stderr,
         "req6_assign_to_immutable.mvl",
-        &["error[req6]", "immutable", "`x`"],
+        &["error[REQ6]", "immutable", "`x`"],
     );
 }
 
@@ -222,7 +222,7 @@ fn req6_capture_mutability_names_the_binding() {
     assert_contains(
         &stderr,
         "req6_capture_mutability.mvl",
-        &["error[req6]", "mutable", "`counter`"],
+        &["error[REQ6]", "mutable", "`counter`"],
     );
 }
 
@@ -234,7 +234,7 @@ fn req7_undeclared_effect_names_the_callee_and_effect() {
     assert_contains(
         &stderr,
         "req7_undeclared_effect.mvl",
-        &["error[req7]", "effect"],
+        &["error[REQ7]", "effect"],
     );
 }
 
@@ -244,7 +244,7 @@ fn req7_missing_effect_names_caller_callee_and_effect() {
     assert_contains(
         &stderr,
         "req7_missing_effect.mvl",
-        &["error[req7]", "effect"],
+        &["error[REQ7]", "effect"],
     );
 }
 
@@ -254,7 +254,7 @@ fn req7_invalid_effect_name_names_the_bad_effect() {
     assert_contains(
         &stderr,
         "req7_invalid_effect_name.mvl",
-        &["error[req7]", "Teleport"],
+        &["error[REQ7]", "Teleport"],
     );
 }
 
@@ -266,7 +266,7 @@ fn req8_unbounded_loop_in_total_suggests_partial() {
     assert_contains(
         &stderr,
         "req8_unbounded_loop_in_total.mvl",
-        &["error[req8]", "total"],
+        &["error[REQ8]", "total"],
     );
 }
 
@@ -276,7 +276,7 @@ fn req8_partial_call_in_total_names_the_callee() {
     assert_contains(
         &stderr,
         "req8_partial_call_in_total.mvl",
-        &["error[req8]", "`do_work`"],
+        &["error[REQ8]", "`do_work`"],
     );
 }
 
@@ -286,7 +286,7 @@ fn req8_unproven_recursion_names_the_function() {
     assert_contains(
         &stderr,
         "req8_unproven_recursion.mvl",
-        &["error[req8]", "`loop_forever`"],
+        &["error[REQ8]", "`loop_forever`"],
     );
 }
 
@@ -298,7 +298,7 @@ fn req9_iso_aliasing_names_the_variable_and_suggests_consume() {
     assert_contains(
         &stderr,
         "req9_iso_aliasing.mvl",
-        &["error[req9]", "iso", "`data`"],
+        &["error[REQ9]", "iso", "`data`"],
     );
 }
 
@@ -310,7 +310,7 @@ fn req10_refinement_violated_states_the_predicate() {
     assert_contains(
         &stderr,
         "req10_refinement_violated.mvl",
-        &["error[req10]", "refinement"],
+        &["error[REQ10]", "refinement"],
     );
 }
 
@@ -322,7 +322,7 @@ fn req11_logging_label_violation_names_the_label() {
     assert_contains(
         &stderr,
         "req11_logging_label_violation.mvl",
-        &["error[req11]", "Secret"],
+        &["error[REQ11]", "Secret"],
     );
 }
 
@@ -332,7 +332,7 @@ fn req11_implicit_flow_violation_names_the_sink() {
     assert_contains(
         &stderr,
         "req11_implicit_flow_violation.mvl",
-        &["error[req11]", "implicit"],
+        &["error[REQ11]", "implicit"],
     );
 }
 
@@ -342,7 +342,7 @@ fn req11_invalid_declassify_names_the_actual_type() {
     assert_contains(
         &stderr,
         "req11_invalid_declassify.mvl",
-        &["error[req11]", "declassify", "`Int`"],
+        &["error[REQ11]", "declassify", "`Int`"],
     );
 }
 
