@@ -28,3 +28,10 @@ version = "0.1.0"
 hash = "sha256:2ee018afa2da13d72fbab3efd499307434c8d891b9032e0833c2145c3ec7d826"
 commit = "f69a195e197551b8120416cfd85a2a7fafbec47d"
 git = "https://github.com/mvl-lang/pkg-anthropic"
+
+[[package]]
+name = "github.com/mvl-lang/pkg-tls"
+version = "0.1.0"
+hash = "sha256:0a075023d01d387e7c4e7474cc0abbc8c8ac6b7b2bbc447527ac030e3545a20d"
+commit = "4f2829f6462f50e98ebd5a4c71edf8fcd3c92260"
+git = "https://github.com/mvl-lang/pkg-tls"
