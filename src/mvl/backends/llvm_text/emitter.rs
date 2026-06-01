@@ -7,7 +7,7 @@
 //! struct construction/field access, unit enums, match expressions,
 //! method calls (to_string/len/concat), and for-range loops.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::mvl::parser::ast::{
     ActorDecl, BinaryOp, Block, Decl, ElseBranch, Expr, FnDecl, LValue, LetKind, Literal, MatchArm,
@@ -89,9 +89,11 @@ impl Default for LlvmTextCompiler {
 ///    Method calls on these types are handled via hardcoded C-ABI dispatch in
 ///    `emit_method_call` instead.
 ///
-/// 2. **Option/Result return types** — functions like `env.get_secret` or
-///    `env.env_var` that return `Option[T]` or `Result[T, E]` and call `Some`/
-///    `None`/`Ok`/`Err` constructors.  The emitter has no `Option` ABI yet.
+/// 2. **Option/Result return types** — prelude functions like `env.get_secret` or
+///    `env.env_var` that return `Option[T]` or `Result[T, E]` may call runtime
+///    symbols not available in the lli runtime.  User-defined functions with
+///    Option/Result are handled correctly by the emitter — this filter only
+///    applies to prelude functions.
 fn strip_prelude_extension_methods(prog: &Program) -> Program {
     let mut out = prog.clone();
     out.declarations.retain(|d| {
@@ -103,8 +105,8 @@ fn strip_prelude_extension_methods(prog: &Program) -> Program {
             if fd.receiver_type.is_some() {
                 return false;
             }
-            // Drop non-builtin functions whose return type is Option or Result
-            // — the emitter cannot lower Some/None/Ok/Err constructors yet.
+            // Drop non-builtin prelude functions whose return type is Option or
+            // Result — they may call runtime symbols not available in lli.
             if return_type_needs_option_abi(&fd.return_type) {
                 return false;
             }
@@ -115,8 +117,8 @@ fn strip_prelude_extension_methods(prog: &Program) -> Program {
 }
 
 /// Return `true` if `ty` is `Option[_]` or `Result[_, _]` (possibly wrapped
-/// in `Labeled` or `Refined`).  Used to skip functions the emitter can't
-/// lower because they use `Some`/`None`/`Ok`/`Err` constructors.
+/// in `Labeled` or `Refined`).  Used to skip prelude functions that may
+/// reference runtime symbols unavailable in the lli runtime.
 fn return_type_needs_option_abi(ty: &TypeExpr) -> bool {
     match ty {
         TypeExpr::Option { .. } | TypeExpr::Result { .. } => true,
@@ -198,6 +200,16 @@ struct TextEmitter {
     /// SSA registers of actor handles spawned in the current function.
     /// Emitted as `mvl_actor_drop` calls before `mvl_actor_join_all` in `main`.
     spawned_actor_handles: Vec<String>,
+
+    // ── Generic monomorphization (#1156) ──────────────────────────────────
+    /// Generic function declarations (type_params non-empty), keyed by name.
+    generic_fns: HashMap<String, FnDecl>,
+    /// Active type-parameter → concrete-type mapping during monomorphized emission.
+    type_param_map: HashMap<String, TypeExpr>,
+    /// Mangled names of monomorphized copies already emitted (avoid duplicates).
+    mono_emitted: HashSet<String>,
+    /// Queue of monomorphized functions to emit: (mangled_name, concrete_types).
+    mono_queue: Vec<(String, String, Vec<TypeExpr>)>,
 }
 
 #[derive(Clone)]
@@ -269,6 +281,10 @@ impl TextEmitter {
             builtin_syms,
             current_fn_is_main: false,
             spawned_actor_handles: Vec::new(),
+            generic_fns: HashMap::new(),
+            type_param_map: HashMap::new(),
+            mono_emitted: HashSet::new(),
+            mono_queue: Vec::new(),
         }
     }
 
@@ -448,8 +464,8 @@ impl TextEmitter {
             TypeExpr::Labeled { inner, .. } | TypeExpr::Refined { inner, .. } => {
                 Self::llvm_ty(inner)
             }
-            // Result[T, E] → { i8, ptr } tagged-union (disc byte + payload ptr)
-            TypeExpr::Result { .. } => "{ i8, ptr }".to_string(),
+            // Option[T] / Result[T, E] → { i8, ptr } tagged-union (disc byte + payload ptr)
+            TypeExpr::Option { .. } | TypeExpr::Result { .. } => "{ i8, ptr }".to_string(),
             _ => "ptr".to_string(),
         }
     }
@@ -458,6 +474,10 @@ impl TextEmitter {
     fn llvm_ty_ctx(&self, ty: &TypeExpr) -> String {
         match ty {
             TypeExpr::Base { name, .. } => {
+                // Resolve generic type parameters (active during monomorphized emission).
+                if let Some(concrete) = self.type_param_map.get(name.as_str()) {
+                    return self.llvm_ty_ctx(concrete);
+                }
                 if self.struct_fields.contains_key(name) {
                     // Actor state structs are always accessed via pointer — the
                     // actor handle is an opaque ptr, not an inline struct value.
@@ -511,6 +531,9 @@ impl TextEmitter {
             Expr::Literal(Literal::Str(_), _) => "ptr".into(),
             Expr::Literal(Literal::Unit, _) => "void".into(),
             Expr::Ident(name, _) => {
+                if name == "None" {
+                    return RESULT_LLVM_TY.into();
+                }
                 // Qualified enum variant "Type::Variant"
                 if name.contains("::") {
                     if let Some(pos) = name.find("::") {
@@ -571,6 +594,7 @@ impl TextEmitter {
                 match name.as_str() {
                     "assert" | "println" | "print" | "eprintln" => "void".into(),
                     "format" => "ptr".into(),
+                    "Some" | "None" | "Ok" | "Err" => RESULT_LLVM_TY.into(),
                     _ => {
                         if let Some(ret) = self.fn_ret_types.get(name) {
                             self.llvm_ty_ctx(ret)
@@ -784,9 +808,18 @@ impl TextEmitter {
             }
         }
 
-        // Second pass: emit each function body.
+        // Collect generic function declarations for on-demand monomorphization.
+        for decl in &prog.declarations {
+            if let Decl::Fn(fd) = decl {
+                if !fd.type_params.is_empty() {
+                    self.generic_fns.insert(fd.name.clone(), fd.clone());
+                }
+            }
+        }
+
+        // Second pass: emit each non-generic function body.
         // Skip: test fns, builtin fns (no MVL body — dispatched via C-ABI),
-        //        and generic fns (type-parameterised — not monomorphised yet).
+        //        and generic fns (monomorphized lazily when called).
         for decl in &prog.declarations {
             if let Decl::Fn(fd) = decl {
                 if !fd.is_test && !fd.is_builtin && fd.type_params.is_empty() {
@@ -794,6 +827,38 @@ impl TextEmitter {
                 }
             }
         }
+
+        // Third pass: emit monomorphized copies queued during call emission.
+        // Loop because a monomorphized body may itself call another generic fn.
+        const MONO_LIMIT: usize = 10_000;
+        let mut mono_iterations = 0usize;
+        while !self.mono_queue.is_empty() {
+            mono_iterations += 1;
+            if mono_iterations > MONO_LIMIT {
+                return Err(
+                    "monomorphization limit exceeded — possible infinite instantiation".into(),
+                );
+            }
+            let queue = std::mem::take(&mut self.mono_queue);
+            for (mangled, orig_name, concrete_types) in queue {
+                let gfd = match self.generic_fns.get(&orig_name) {
+                    Some(fd) => fd.clone(),
+                    None => continue,
+                };
+                // Set up type parameter → concrete type mapping.
+                for (tp, ct) in gfd.type_params.iter().zip(concrete_types.iter()) {
+                    self.type_param_map
+                        .insert(tp.name().to_string(), ct.clone());
+                }
+                // Emit the function under its mangled name.
+                let mut fd = gfd;
+                fd.name = mangled;
+                fd.type_params.clear();
+                self.emit_fn(&fd)?;
+                self.type_param_map.clear();
+            }
+        }
+
         Ok(())
     }
 
@@ -1253,6 +1318,14 @@ impl TextEmitter {
             return self.emit_result_match(scrutinee, &scrut_val, arms);
         }
 
+        // Delegate to Option-specific match when Some/None patterns are present.
+        let has_some_none = arms
+            .iter()
+            .any(|a| matches!(&a.pattern, Pattern::Some { .. } | Pattern::None(_)));
+        if has_some_none {
+            return self.emit_option_match(scrutinee, &scrut_val, arms);
+        }
+
         let scrut_ty = self.type_of_expr(scrutinee);
 
         let n = self.bb;
@@ -1437,6 +1510,10 @@ impl TextEmitter {
             Expr::Literal(lit, _) => self.emit_literal(lit),
 
             Expr::Ident(name, _) => {
+                // `None` as a bare identifier → Option None constructor.
+                if name == "None" {
+                    return self.emit_none_constructor();
+                }
                 // Qualified enum variant: "Shape::Circle" → discriminant i64
                 if name.contains("::") {
                     if let Some(disc) = self.pattern_discriminant(name) {
@@ -1849,6 +1926,8 @@ impl TextEmitter {
             "println" | "print" | "eprintln" => return self.emit_println_builtin(name, args),
             "format" => return self.emit_format_builtin(args),
             "Ok" | "Err" => return self.emit_result_constructor(name, args),
+            "Some" => return self.emit_option_constructor(args),
+            "None" => return self.emit_none_constructor(),
             _ => {}
         }
 
@@ -1857,6 +1936,11 @@ impl TextEmitter {
             if let Some(disc) = self.pattern_discriminant(name) {
                 return Ok(Some(format!("{disc}")));
             }
+        }
+
+        // ── Generic function monomorphization ───────────────────────────
+        if self.generic_fns.contains_key(name) {
+            return self.emit_monomorphized_call(name, args);
         }
 
         // ── User-defined functions ─────────────────────────────────────
@@ -2051,6 +2135,454 @@ impl TextEmitter {
         let r1 = self.wrap_result_pair(&disc.to_string(), &slot);
         let _ = arg_ty; // used above
         Ok(Some(r1))
+    }
+
+    // ── Option[T] helpers (#1156) ────────────────────────────────────────
+
+    /// Emit `Some(val)` — builds a `{ i8, ptr }` tagged union with disc=0.
+    fn emit_option_constructor(&mut self, args: &[Expr]) -> Result<Option<String>, String> {
+        let arg = match args.first() {
+            Some(a) => a,
+            None => return self.emit_none_constructor(),
+        };
+        let arg_ty = self.type_of_expr(arg);
+        let arg_val = match self.emit_expr(arg)? {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+        let slot = self.next_reg();
+        self.push_instr(&format!("{slot} = alloca {arg_ty}"));
+        self.push_instr(&format!("store {arg_ty} {arg_val}, ptr {slot}"));
+        let r1 = self.wrap_result_pair("0", &slot);
+        Ok(Some(r1))
+    }
+
+    /// Emit `None` — builds a `{ i8, ptr }` tagged union with disc=1 and null payload.
+    fn emit_none_constructor(&mut self) -> Result<Option<String>, String> {
+        let slot = self.next_reg();
+        self.push_instr(&format!("{slot} = alloca i8"));
+        let r1 = self.wrap_result_pair("1", &slot);
+        Ok(Some(r1))
+    }
+
+    /// Emit a `match` where at least one arm has `Pattern::Some` / `Pattern::None`.
+    fn emit_option_match(
+        &mut self,
+        scrutinee: &Expr,
+        scrut_val: &str,
+        arms: &[MatchArm],
+    ) -> Result<Option<String>, String> {
+        // Determine the inner MVL and LLVM types from the scrutinee's MVL type.
+        let mvl_ty = match scrutinee {
+            Expr::Ident(name, _) => self.local_mvl_types.get(name.as_str()).cloned(),
+            Expr::FnCall { name, .. } => self.fn_ret_types.get(name.as_str()).cloned(),
+            _ => None,
+        };
+        let (inner_load_ty, inner_mvl_ty) = match &mvl_ty {
+            Some(TypeExpr::Option { inner, .. }) => {
+                (self.llvm_ty_ctx(inner), Some(inner.as_ref().clone()))
+            }
+            _ => ("ptr".into(), None),
+        };
+
+        // Extract discriminant byte from the { i8, ptr } struct.
+        let disc_reg = self.next_reg();
+        self.push_instr(&format!(
+            "{disc_reg} = extractvalue {RESULT_LLVM_TY} {scrut_val}, 0"
+        ));
+        self.reg_types.insert(disc_reg.clone(), "i8".into());
+
+        let n = self.bb;
+        self.bb += arms.len() + 2;
+        let default_bb = format!("match_default_{n}");
+        let merge_bb = format!("match_merge_{}", n + arms.len() + 1);
+        let arm_bbs: Vec<String> = (0..arms.len())
+            .map(|i| format!("match_arm_{}", n + i))
+            .collect();
+
+        // Build switch on i8 discriminant: Some=0, None=1.
+        let mut switch_str = format!("switch i8 {disc_reg}, label %{default_bb} [\n");
+        let mut wildcard_arm: Option<usize> = None;
+        for (idx, arm) in arms.iter().enumerate() {
+            match &arm.pattern {
+                Pattern::Some { .. } => {
+                    switch_str.push_str(&format!("    i8 0, label %{}\n", arm_bbs[idx]));
+                }
+                Pattern::None(_) => {
+                    switch_str.push_str(&format!("    i8 1, label %{}\n", arm_bbs[idx]));
+                }
+                Pattern::Wildcard(_) | Pattern::Ident(_, _) => {
+                    wildcard_arm = Some(idx);
+                }
+                _ => {
+                    wildcard_arm = Some(idx);
+                }
+            }
+        }
+        switch_str.push_str("  ]");
+        self.push_instr(&switch_str);
+
+        // Emit arm blocks (skip wildcard/ident arms — emitted from default_bb).
+        let mut phi_entries: Vec<(String, String, String)> = Vec::new();
+        let mut no_val_arms: Vec<String> = Vec::new();
+
+        for (idx, arm) in arms.iter().enumerate() {
+            // Skip wildcard arms here; they are emitted via the default block.
+            if Some(idx) == wildcard_arm {
+                continue;
+            }
+
+            let arm_bb = &arm_bbs[idx];
+            self.fn_buf.push(format!("{arm_bb}:"));
+            self.current_bb = arm_bb.clone();
+            self.terminated = false;
+
+            let mut bound_var: Option<String> = None;
+
+            match &arm.pattern {
+                Pattern::Some { inner, .. } => {
+                    let pp = self.next_reg();
+                    self.push_instr(&format!(
+                        "{pp} = extractvalue {RESULT_LLVM_TY} {scrut_val}, 1"
+                    ));
+                    let some_val = self.next_reg();
+                    self.push_instr(&format!("{some_val} = load {inner_load_ty}, ptr {pp}"));
+                    self.reg_types
+                        .insert(some_val.clone(), inner_load_ty.clone());
+                    if let Pattern::Ident(var_name, _) = inner.as_ref() {
+                        if var_name != "_" {
+                            self.locals.insert(var_name.clone(), some_val.clone());
+                            if let Some(ref imty) = inner_mvl_ty {
+                                self.local_mvl_types.insert(var_name.clone(), imty.clone());
+                            }
+                            bound_var = Some(var_name.clone());
+                        }
+                    }
+                }
+                Pattern::None(_) => {
+                    // Nothing to bind.
+                }
+                _ => {}
+            }
+
+            let arm_val = match &arm.body {
+                MatchBody::Expr(e) => self.emit_expr(e)?,
+                MatchBody::Block(b) => self.emit_block(b)?,
+            };
+            let end_bb = self.current_bb.clone();
+            if !self.terminated {
+                self.push_instr(&format!("br label %{merge_bb}"));
+                if let Some(v) = arm_val {
+                    let ty = self.infer_val_type(&v);
+                    phi_entries.push((v, ty, end_bb));
+                } else {
+                    no_val_arms.push(end_bb);
+                }
+            }
+
+            if let Some(ref var_name) = bound_var {
+                self.locals.remove(var_name);
+                self.local_mvl_types.remove(var_name);
+            }
+        }
+
+        // Default block — either jumps to wildcard arm body or traps.
+        self.fn_buf.push(format!("{default_bb}:"));
+        self.current_bb = default_bb.clone();
+        self.terminated = false;
+        if let Some(wild_idx) = wildcard_arm {
+            // Emit the wildcard arm body inline in the default block.
+            let wild_arm = &arms[wild_idx];
+            let mut bound_var: Option<String> = None;
+            if let Pattern::Ident(name, _) = &wild_arm.pattern {
+                self.locals.insert(name.clone(), scrut_val.to_string());
+                bound_var = Some(name.clone());
+            }
+            let arm_val = match &wild_arm.body {
+                MatchBody::Expr(e) => self.emit_expr(e)?,
+                MatchBody::Block(b) => self.emit_block(b)?,
+            };
+            let end_bb = self.current_bb.clone();
+            if !self.terminated {
+                self.push_instr(&format!("br label %{merge_bb}"));
+                if let Some(v) = arm_val {
+                    let ty = self.infer_val_type(&v);
+                    phi_entries.push((v, ty, end_bb));
+                } else {
+                    no_val_arms.push(end_bb);
+                }
+            }
+            if let Some(ref var_name) = bound_var {
+                self.locals.remove(var_name);
+                self.local_mvl_types.remove(var_name);
+            }
+        } else {
+            self.ensure_extern("declare void @llvm.trap()");
+            self.push_instr("call void @llvm.trap()");
+            self.push_instr("unreachable");
+            self.terminated = true;
+        }
+
+        // Merge block + phi.
+        let total_incoming = phi_entries.len() + no_val_arms.len();
+        if total_incoming == 0 {
+            // All arms terminated (e.g. all `return`) — no merge block needed.
+            self.fn_buf.push(format!("{merge_bb}:"));
+            self.current_bb = merge_bb.clone();
+            self.terminated = false;
+            self.ensure_extern("declare void @llvm.trap()");
+            self.push_instr("call void @llvm.trap()");
+            self.push_instr("unreachable");
+            self.terminated = true;
+            return Ok(None);
+        }
+        self.fn_buf.push(format!("{merge_bb}:"));
+        self.current_bb = merge_bb.clone();
+        self.terminated = false;
+        if total_incoming >= 2 && !phi_entries.is_empty() {
+            let phi_ty = phi_entries[0].1.clone();
+            let mut parts: Vec<String> = phi_entries
+                .iter()
+                .map(|(v, _, from)| format!("[ {v}, %{from} ]"))
+                .collect();
+            for from in &no_val_arms {
+                parts.push(format!("[ undef, %{from} ]"));
+            }
+            let result = self.next_reg();
+            self.push_instr(&format!("{result} = phi {phi_ty} {}", parts.join(", ")));
+            self.reg_types.insert(result.clone(), phi_ty);
+            Ok(Some(result))
+        } else if phi_entries.len() == 1 && no_val_arms.is_empty() {
+            Ok(Some(phi_entries.remove(0).0))
+        } else {
+            Ok(None)
+        }
+    }
+
+    // ── Generic monomorphization (#1156) ──────────────────────────────────
+
+    /// Infer the MVL type of an expression (best-effort, for monomorphization).
+    fn mvl_type_of_expr(&self, expr: &Expr) -> TypeExpr {
+        let default_int = || TypeExpr::Base {
+            name: "Int".into(),
+            args: vec![],
+            span: Default::default(),
+        };
+        match expr {
+            Expr::Literal(lit, _) => match lit {
+                Literal::Integer(_) => default_int(),
+                Literal::Float(_) => TypeExpr::Base {
+                    name: "Float".into(),
+                    args: vec![],
+                    span: Default::default(),
+                },
+                Literal::Bool(_) => TypeExpr::Base {
+                    name: "Bool".into(),
+                    args: vec![],
+                    span: Default::default(),
+                },
+                Literal::Str(_) => TypeExpr::Base {
+                    name: "String".into(),
+                    args: vec![],
+                    span: Default::default(),
+                },
+                _ => default_int(),
+            },
+            Expr::Ident(name, _) => self
+                .local_mvl_types
+                .get(name.as_str())
+                .cloned()
+                .unwrap_or_else(default_int),
+            Expr::FnCall { name, .. } => self
+                .fn_ret_types
+                .get(name.as_str())
+                .cloned()
+                .unwrap_or_else(default_int),
+            Expr::Construct { name, .. } => TypeExpr::Base {
+                name: name.clone(),
+                args: vec![],
+                span: Default::default(),
+            },
+            _ => default_int(),
+        }
+    }
+
+    /// Sanitize a string segment for use in LLVM IR identifiers.
+    fn mangle_segment(s: &str) -> String {
+        s.chars()
+            .map(|c| {
+                if c.is_alphanumeric() || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect()
+    }
+
+    /// Mangle a generic function name with concrete types: `identity` + [Int] → `identity__Int`.
+    fn mangle_generic(name: &str, concrete: &[TypeExpr]) -> String {
+        let suffix: Vec<String> = concrete
+            .iter()
+            .map(|ty| match ty {
+                TypeExpr::Base { name, .. } => Self::mangle_segment(name),
+                TypeExpr::Option { inner, .. } => {
+                    format!(
+                        "Option_{}",
+                        Self::mangle_segment(&Self::mangle_type_name(inner))
+                    )
+                }
+                TypeExpr::Result { ok, err, .. } => {
+                    format!(
+                        "Result_{}_{}",
+                        Self::mangle_segment(&Self::mangle_type_name(ok)),
+                        Self::mangle_segment(&Self::mangle_type_name(err))
+                    )
+                }
+                _ => "T".into(),
+            })
+            .collect();
+        format!("{}__{}", Self::mangle_segment(name), suffix.join("_"))
+    }
+
+    /// Extract a human-readable type name for mangling purposes.
+    fn mangle_type_name(ty: &TypeExpr) -> String {
+        match ty {
+            TypeExpr::Base { name, .. } => name.clone(),
+            TypeExpr::Option { inner, .. } => format!("Option_{}", Self::mangle_type_name(inner)),
+            TypeExpr::Result { ok, err, .. } => {
+                format!(
+                    "Result_{}_{}",
+                    Self::mangle_type_name(ok),
+                    Self::mangle_type_name(err)
+                )
+            }
+            _ => "T".into(),
+        }
+    }
+
+    /// Emit a call to a generic function, enqueuing the monomorphized version.
+    fn emit_monomorphized_call(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+    ) -> Result<Option<String>, String> {
+        let gfd = self.generic_fns.get(name).cloned().ok_or_else(|| {
+            format!("ICE: generic fn '{name}' missing from monomorphization table")
+        })?;
+
+        // Infer concrete types for each type parameter from the argument types.
+        let mut tp_map: HashMap<String, TypeExpr> = HashMap::new();
+        for (param, arg) in gfd.params.iter().zip(args.iter()) {
+            Self::collect_type_bindings(&param.ty, &self.mvl_type_of_expr(arg), &gfd, &mut tp_map);
+        }
+        let concrete_types: Vec<TypeExpr> = gfd
+            .type_params
+            .iter()
+            .map(|tp| {
+                tp_map
+                    .get(tp.name())
+                    .cloned()
+                    .unwrap_or_else(|| TypeExpr::Base {
+                        name: "Int".into(),
+                        args: vec![],
+                        span: Default::default(),
+                    })
+            })
+            .collect();
+
+        let mangled = Self::mangle_generic(name, &concrete_types);
+
+        // Enqueue monomorphized copy if not already emitted.
+        if !self.mono_emitted.contains(&mangled) {
+            self.mono_emitted.insert(mangled.clone());
+            self.mono_queue
+                .push((mangled.clone(), name.to_string(), concrete_types.clone()));
+
+            // Register the return type for the mangled function.
+            // Resolve any type params in the return type.
+            let resolved_ret = Self::substitute_type(&gfd.return_type, &tp_map);
+            self.fn_ret_types.insert(mangled.clone(), resolved_ret);
+        }
+
+        // Emit the call.
+        let mut arg_vals: Vec<(String, String)> = Vec::new();
+        for arg in args {
+            let ty = self.type_of_expr(arg);
+            if let Some(v) = self.emit_expr(arg)? {
+                arg_vals.push((ty, v));
+            }
+        }
+        let args_str = arg_vals
+            .iter()
+            .map(|(ty, v)| format!("{ty} {v}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let ret_ty = self
+            .fn_ret_types
+            .get(&mangled)
+            .cloned()
+            .unwrap_or_else(|| TypeExpr::Base {
+                name: "Int".into(),
+                args: vec![],
+                span: Default::default(),
+            });
+        let llvm_ret = self.llvm_ty_ctx(&ret_ty);
+        let is_void = Self::is_void(&ret_ty);
+
+        if is_void {
+            self.push_instr(&format!("call void @{mangled}({args_str})"));
+            Ok(None)
+        } else {
+            let result = self.next_reg();
+            self.push_instr(&format!(
+                "{result} = call {llvm_ret} @{mangled}({args_str})"
+            ));
+            self.reg_types.insert(result.clone(), llvm_ret);
+            Ok(Some(result))
+        }
+    }
+
+    /// Match a generic parameter type against a concrete argument type to bind type variables.
+    fn collect_type_bindings(
+        param_ty: &TypeExpr,
+        arg_ty: &TypeExpr,
+        gfd: &FnDecl,
+        map: &mut HashMap<String, TypeExpr>,
+    ) {
+        if let TypeExpr::Base { name, .. } = param_ty {
+            if gfd.type_params.iter().any(|tp| tp.name() == name) {
+                map.insert(name.clone(), arg_ty.clone());
+            }
+        }
+    }
+
+    /// Substitute type parameters in a type expression using the given mapping.
+    fn substitute_type(ty: &TypeExpr, map: &HashMap<String, TypeExpr>) -> TypeExpr {
+        match ty {
+            TypeExpr::Base { name, args, span } => {
+                if let Some(concrete) = map.get(name) {
+                    concrete.clone()
+                } else {
+                    TypeExpr::Base {
+                        name: name.clone(),
+                        args: args.iter().map(|a| Self::substitute_type(a, map)).collect(),
+                        span: *span,
+                    }
+                }
+            }
+            TypeExpr::Option { inner, span } => TypeExpr::Option {
+                inner: Box::new(Self::substitute_type(inner, map)),
+                span: *span,
+            },
+            TypeExpr::Result { ok, err, span } => TypeExpr::Result {
+                ok: Box::new(Self::substitute_type(ok, map)),
+                err: Box::new(Self::substitute_type(err, map)),
+                span: *span,
+            },
+            other => other.clone(),
+        }
     }
 
     /// Emit `s.parse_int()` or `s.parse_float()` — calls the C-ABI parser and
@@ -3289,6 +3821,32 @@ mod tests {
         assert!(ir.contains("ret i64"), "{ir}");
     }
 
+    /// Regression for #1155: a 3-way `else if` chain must emit PHI nodes for
+    /// every branch so the correct value is selected at runtime. Before the fix,
+    /// the `else if` condition was silently dropped and the merge block produced
+    /// `ret i64 undef`.
+    #[test]
+    fn else_if_chain_emits_phi_for_all_branches() {
+        let ir = compile(
+            "fn classify(n: Int) -> Int {\n\
+                 if n > 0 { 1 }\n\
+                 else if n < 0 { -1 }\n\
+                 else { 0 }\n\
+             }",
+        );
+        // The `else if n < 0` condition must actually be evaluated.
+        assert!(ir.contains("icmp slt"), "{ir}");
+        // Two PHI nodes: inner selects between -1 and 0; outer selects between 1 and inner.
+        let phi_count = ir.matches(" = phi ").count();
+        assert!(
+            phi_count >= 2,
+            "else-if chain needs ≥2 phi nodes, got {phi_count}\n{ir}"
+        );
+        // Return must be a defined value, not undef.
+        assert!(ir.contains("ret i64"), "{ir}");
+        assert!(!ir.contains("ret i64 undef"), "{ir}");
+    }
+
     #[test]
     fn unit_function_emits_ret_void() {
         let ir = compile("fn noop() -> Unit { }");
@@ -3683,5 +4241,67 @@ mod tests {
              fn main() -> Int { 0 }",
         );
         assert!(ir.contains("call void @mvl_actor_join_all"), "{ir}");
+    }
+
+    // ── Generic monomorphization tests (#1156) ───────────────────────────
+
+    /// Generic `identity[T]` must produce separate monomorphized copies for
+    /// each concrete type argument used at call sites.
+    #[test]
+    fn generic_fn_monomorphized_per_concrete_type() {
+        let ir = compile(
+            "fn identity[T](x: T) -> T { x }\n\
+             fn main() -> Unit {\n\
+               let n: Int = identity(42);\n\
+               let s: String = identity(\"hi\");\n\
+             }",
+        );
+        // Two separate definitions with correct types.
+        assert!(ir.contains("define i64 @identity__Int(i64 %x)"), "{ir}");
+        assert!(ir.contains("define ptr @identity__String(ptr %x)"), "{ir}");
+        // Call sites use mangled names.
+        assert!(ir.contains("call i64 @identity__Int(i64 42)"), "{ir}");
+        assert!(ir.contains("call ptr @identity__String("), "{ir}");
+    }
+
+    // ── Option constructor + match tests (#1156) ─────────────────────────
+
+    /// `Some(val)` must emit a `{ i8, ptr }` tagged union with disc=0.
+    #[test]
+    fn some_constructor_emits_tagged_union() {
+        let ir = compile("fn wrap(n: Int) -> Option[Int] { Some(n) }");
+        assert!(
+            ir.contains("insertvalue { i8, ptr } zeroinitializer, i8 0, 0"),
+            "{ir}"
+        );
+        assert!(ir.contains("insertvalue { i8, ptr }"), "{ir}");
+        assert!(ir.contains("define { i8, ptr } @wrap"), "{ir}");
+    }
+
+    /// `None` must emit a `{ i8, ptr }` tagged union with disc=1.
+    #[test]
+    fn none_constructor_emits_tagged_union() {
+        let ir = compile("fn empty() -> Option[Int] { None }");
+        assert!(
+            ir.contains("insertvalue { i8, ptr } zeroinitializer, i8 1, 0"),
+            "{ir}"
+        );
+    }
+
+    /// Match on `Option[Int]` must emit a switch on the discriminant byte.
+    #[test]
+    fn option_match_emits_switch_on_discriminant() {
+        let ir = compile(
+            "fn unwrap_or(opt: Option[Int], default: Int) -> Int {\n\
+                 match opt {\n\
+                     Some(v) => v,\n\
+                     None => default,\n\
+                 }\n\
+             }",
+        );
+        assert!(ir.contains("switch i8"), "{ir}");
+        assert!(ir.contains("i8 0, label"), "{ir}"); // Some arm
+        assert!(ir.contains("i8 1, label"), "{ir}"); // None arm
+        assert!(ir.contains("phi i64"), "{ir}");
     }
 }
