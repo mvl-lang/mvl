@@ -23,6 +23,13 @@ use crate::mvl::parser::ast::{
 pub struct LlvmTextCompiler {
     /// Target triple emitted in the module header.
     pub target_triple: String,
+    /// `builtin fn` dispatch table: MVL name → (C-ABI symbol, return TypeExpr, param TypeExprs).
+    ///
+    /// Populated via `with_builtins()` or set directly before calling
+    /// `compile_to_ir_with_prelude`.  The emitter uses this to route calls to
+    /// `builtin fn` declarations to their C runtime symbols instead of generating
+    /// a body for the empty block.
+    pub builtin_symbols: HashMap<String, (String, TypeExpr, Vec<TypeExpr>)>,
 }
 
 impl LlvmTextCompiler {
@@ -30,12 +37,37 @@ impl LlvmTextCompiler {
     pub fn new() -> Self {
         Self {
             target_triple: default_target_triple(),
+            builtin_symbols: HashMap::new(),
         }
     }
 
-    /// Compile a MVL [`Program`] to LLVM IR text.
+    /// Compile a MVL [`Program`] to LLVM IR text (no prelude, no builtin dispatch).
     pub fn compile_to_ir(&self, prog: &Program, module_name: &str) -> Result<String, String> {
-        let mut emitter = TextEmitter::new(module_name, &self.target_triple);
+        self.compile_to_ir_with_prelude(&[], prog, module_name)
+    }
+
+    /// Compile prelude programs merged with `prog` into a single LLVM IR module.
+    ///
+    /// Prelude programs are emitted first (stdlib bodies), then `prog`.
+    /// `builtin_symbols` is pre-populated into the emitter so that calls to
+    /// `builtin fn` names are routed to their C-ABI symbols automatically.
+    ///
+    /// Non-builtin extension methods in prelude programs (e.g. `String::contains`,
+    /// `String::starts_with`) are stripped before emission — they are handled
+    /// via hardcoded C-ABI dispatch in `emit_method_call` and must not be
+    /// emitted as MVL bodies (they reference unsupported stdlib constructs).
+    pub fn compile_to_ir_with_prelude(
+        &self,
+        prelude: &[Program],
+        prog: &Program,
+        module_name: &str,
+    ) -> Result<String, String> {
+        let mut emitter =
+            TextEmitter::new_with_builtins(module_name, &self.target_triple, &self.builtin_symbols);
+        for p in prelude {
+            let stripped = strip_prelude_extension_methods(p);
+            emitter.emit_program(&stripped)?;
+        }
         emitter.emit_program(prog)?;
         Ok(emitter.finish())
     }
@@ -44,6 +76,55 @@ impl LlvmTextCompiler {
 impl Default for LlvmTextCompiler {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Remove prelude function bodies that the llvm_text emitter cannot handle.
+///
+/// Strips non-builtin functions that fall into either category:
+///
+/// 1. **Extension methods** (`receiver_type.is_some()`) — e.g. `String::contains`,
+///    `List::is_empty`.  These call other String/List kernel methods via patterns
+///    the emitter cannot yet fully lower (e.g. `self.find(sub).is_some()`).
+///    Method calls on these types are handled via hardcoded C-ABI dispatch in
+///    `emit_method_call` instead.
+///
+/// 2. **Option/Result return types** — functions like `env.get_secret` or
+///    `env.env_var` that return `Option[T]` or `Result[T, E]` and call `Some`/
+///    `None`/`Ok`/`Err` constructors.  The emitter has no `Option` ABI yet.
+fn strip_prelude_extension_methods(prog: &Program) -> Program {
+    let mut out = prog.clone();
+    out.declarations.retain(|d| {
+        if let Decl::Fn(fd) = d {
+            if fd.is_builtin {
+                return true; // keep builtin declarations
+            }
+            // Drop non-builtin extension methods.
+            if fd.receiver_type.is_some() {
+                return false;
+            }
+            // Drop non-builtin functions whose return type is Option or Result
+            // — the emitter cannot lower Some/None/Ok/Err constructors yet.
+            if return_type_needs_option_abi(&fd.return_type) {
+                return false;
+            }
+        }
+        true
+    });
+    out
+}
+
+/// Return `true` if `ty` is `Option[_]` or `Result[_, _]` (possibly wrapped
+/// in `Labeled` or `Refined`).  Used to skip functions the emitter can't
+/// lower because they use `Some`/`None`/`Ok`/`Err` constructors.
+fn return_type_needs_option_abi(ty: &TypeExpr) -> bool {
+    match ty {
+        TypeExpr::Option { .. } | TypeExpr::Result { .. } => true,
+        TypeExpr::Labeled { inner, .. } | TypeExpr::Refined { inner, .. } => {
+            return_type_needs_option_abi(inner)
+        }
+        TypeExpr::Ref { inner, .. } => return_type_needs_option_abi(inner),
+        _ => false,
     }
 }
 
@@ -100,6 +181,11 @@ struct TextEmitter {
     actor_decls: HashMap<String, ActorDecl>,
     /// True once actor runtime externs have been emitted.
     actor_runtime_declared: bool,
+
+    // ── Builtin fn dispatch (#1160) ────────────────────────────────────────
+    /// Maps MVL builtin function name → C-ABI symbol (e.g. `bytes` → `_mvl_random_bytes`).
+    /// Populated from `LlvmTextCompiler::builtin_symbols` at construction time.
+    builtin_syms: HashMap<String, String>,
 }
 
 #[derive(Clone)]
@@ -109,7 +195,31 @@ struct RefLocal {
 }
 
 impl TextEmitter {
+    #[allow(dead_code)]
     fn new(module_name: &str, target_triple: &str) -> Self {
+        Self::new_with_builtins(module_name, target_triple, &HashMap::new())
+    }
+
+    /// Construct with pre-populated builtin dispatch table.
+    ///
+    /// `builtin_map` entries are pre-loaded into `fn_ret_types` / `fn_param_types`
+    /// so call sites see the correct LLVM types even when the prelude doesn't
+    /// include `builtin fn` declarations (e.g. RUST_BACKED_STDLIB modules strip them).
+    fn new_with_builtins(
+        module_name: &str,
+        target_triple: &str,
+        builtin_map: &HashMap<String, (String, TypeExpr, Vec<TypeExpr>)>,
+    ) -> Self {
+        let mut fn_ret_types: HashMap<String, TypeExpr> = HashMap::new();
+        let mut fn_param_types: HashMap<String, Vec<TypeExpr>> = HashMap::new();
+        let mut builtin_syms: HashMap<String, String> = HashMap::new();
+
+        for (fn_name, (c_sym, ret_ty, param_tys)) in builtin_map {
+            fn_ret_types.insert(fn_name.clone(), ret_ty.clone());
+            fn_param_types.insert(fn_name.clone(), param_tys.clone());
+            builtin_syms.insert(fn_name.clone(), c_sym.clone());
+        }
+
         Self {
             module_name: module_name.to_string(),
             target_triple: target_triple.to_string(),
@@ -132,8 +242,8 @@ impl TextEmitter {
                 args: vec![],
                 span: Default::default(),
             },
-            fn_ret_types: HashMap::new(),
-            fn_param_types: HashMap::new(),
+            fn_ret_types,
+            fn_param_types,
             reg_types: HashMap::new(),
             local_mvl_types: HashMap::new(),
             has_println_fmt: false,
@@ -144,6 +254,7 @@ impl TextEmitter {
             closure_type_emitted: false,
             actor_decls: HashMap::new(),
             actor_runtime_declared: false,
+            builtin_syms,
         }
     }
 
@@ -321,6 +432,8 @@ impl TextEmitter {
             TypeExpr::Labeled { inner, .. } | TypeExpr::Refined { inner, .. } => {
                 Self::llvm_ty(inner)
             }
+            // Result[T, E] → { i8, ptr } tagged-union (disc byte + payload ptr)
+            TypeExpr::Result { .. } => "{ i8, ptr }".to_string(),
             _ => "ptr".to_string(),
         }
     }
@@ -509,6 +622,32 @@ impl TextEmitter {
         None
     }
 
+    /// Return the MVL base type name of a receiver expression when it can be
+    /// determined statically from `local_mvl_types`.
+    ///
+    /// Returns `"String"`, `"List"`, `"Map"`, `"Set"`, etc.  Returns `None`
+    /// when the type is unknown (e.g. an SSA value with no MVL annotation).
+    fn mvl_receiver_kind(&self, expr: &Expr) -> Option<&str> {
+        match expr {
+            Expr::Literal(Literal::Str(_), _) => Some("String"),
+            Expr::Ident(name, _) => {
+                let mvl_ty = self.local_mvl_types.get(name.as_str())?;
+                match mvl_ty {
+                    TypeExpr::Base { name: tn, .. } => Some(tn.as_str()),
+                    TypeExpr::Labeled { inner, .. } | TypeExpr::Refined { inner, .. } => {
+                        if let TypeExpr::Base { name: tn, .. } = inner.as_ref() {
+                            Some(tn.as_str())
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
     // ── Int/Bool → String helpers ─────────────────────────────────────────
 
     fn emit_int_to_string(&mut self, val: &str) -> String {
@@ -553,28 +692,42 @@ impl TextEmitter {
         for decl in &prog.declarations {
             match decl {
                 Decl::Fn(fd) => {
-                    self.fn_ret_types
-                        .insert(fd.name.clone(), fd.return_type.as_ref().clone());
-                    self.fn_param_types.insert(
-                        fd.name.clone(),
-                        fd.params.iter().map(|p| p.ty.clone()).collect(),
-                    );
+                    let ret = fd.return_type.as_ref().clone();
+                    let params: Vec<TypeExpr> = fd.params.iter().map(|p| p.ty.clone()).collect();
+                    // Register under the short name (e.g. `from_chars`)
+                    self.fn_ret_types.insert(fd.name.clone(), ret.clone());
+                    self.fn_param_types.insert(fd.name.clone(), params.clone());
+                    // Also register under the qualified name (e.g. `String::from_chars`)
+                    // so that static call-site lookups like `fn_ret_types["String::from_chars"]`
+                    // resolve correctly.
+                    if let Some(recv) = &fd.receiver_type {
+                        let qualified = format!("{}::{}", recv, fd.name);
+                        self.fn_ret_types.insert(qualified.clone(), ret.clone());
+                        self.fn_param_types.insert(qualified, params);
+                    }
                 }
                 Decl::Type(td) => match &td.body {
                     TypeBody::Struct { fields, .. } => {
-                        let field_list: Vec<(String, TypeExpr)> = fields
-                            .iter()
-                            .map(|f| (f.name.clone(), f.ty.clone()))
-                            .collect();
-                        // Emit type definition: %Name = type { ty0, ty1, ... }
-                        let field_types: Vec<String> =
-                            field_list.iter().map(|(_, ty)| Self::llvm_ty(ty)).collect();
-                        self.type_defs.push(format!(
-                            "%{} = type {{ {} }}",
-                            td.name,
-                            field_types.join(", ")
-                        ));
-                        self.struct_fields.insert(td.name.clone(), field_list);
+                        // Zero-field structs are opaque handles (e.g. `Instant = struct {}`).
+                        // Treat them as `ptr` instead of registering a named struct type so
+                        // that C-ABI functions returning `*mut c_void` are typed correctly.
+                        if fields.is_empty() {
+                            // Don't register — llvm_ty_ctx falls back to "ptr" for unknown names.
+                        } else {
+                            let field_list: Vec<(String, TypeExpr)> = fields
+                                .iter()
+                                .map(|f| (f.name.clone(), f.ty.clone()))
+                                .collect();
+                            // Emit type definition: %Name = type { ty0, ty1, ... }
+                            let field_types: Vec<String> =
+                                field_list.iter().map(|(_, ty)| Self::llvm_ty(ty)).collect();
+                            self.type_defs.push(format!(
+                                "%{} = type {{ {} }}",
+                                td.name,
+                                field_types.join(", ")
+                            ));
+                            self.struct_fields.insert(td.name.clone(), field_list);
+                        }
                     }
                     TypeBody::Enum(variants) => {
                         let variant_names: Vec<String> =
@@ -615,10 +768,12 @@ impl TextEmitter {
             }
         }
 
-        // Second pass: emit each function.
+        // Second pass: emit each function body.
+        // Skip: test fns, builtin fns (no MVL body — dispatched via C-ABI),
+        //        and generic fns (type-parameterised — not monomorphised yet).
         for decl in &prog.declarations {
             if let Decl::Fn(fd) = decl {
-                if !fd.is_test {
+                if !fd.is_test && !fd.is_builtin && fd.type_params.is_empty() {
                     self.emit_fn(fd)?;
                 }
             }
@@ -711,19 +866,80 @@ impl TextEmitter {
             Stmt::Expr { expr, .. } => self.emit_expr(expr),
             Stmt::If {
                 cond, then, else_, ..
-            } => {
-                let else_block = match else_ {
-                    Some(ElseBranch::Block(b)) => Some(b),
-                    _ => None,
-                };
-                self.emit_if_phi(cond, then, else_block)
-            }
+            } => self.emit_if_stmt_chain(cond, then, else_.as_ref()),
             Stmt::Match {
                 scrutinee, arms, ..
             } => self.emit_match_expr(scrutinee, arms),
             other => {
                 self.emit_stmt(other)?;
                 Ok(None)
+            }
+        }
+    }
+
+    /// Emit a `Stmt::If` as an expression, correctly handling `else if` chains.
+    ///
+    /// Unlike `emit_if_phi` (which only handles `else { block }`), this recursively
+    /// follows `ElseBranch::If` chains so that deeply nested `else if` trees produce
+    /// correct IR instead of dropping the tail branches.
+    fn emit_if_stmt_chain(
+        &mut self,
+        cond: &Expr,
+        then: &Block,
+        else_: Option<&ElseBranch>,
+    ) -> Result<Option<String>, String> {
+        match else_ {
+            None => self.emit_if_phi(cond, then, None),
+            Some(ElseBranch::Block(b)) => self.emit_if_phi(cond, then, Some(b)),
+            Some(ElseBranch::If(nested)) => {
+                if let Stmt::If {
+                    cond: ncond,
+                    then: nthen,
+                    else_: nelse,
+                    ..
+                } = nested.as_ref()
+                {
+                    let cond_val = match self.emit_expr(cond)? {
+                        Some(v) => v,
+                        None => return Ok(None),
+                    };
+                    let then_bb = self.next_bb("then");
+                    let else_bb = self.next_bb("else");
+                    let merge_bb = self.next_bb("merge");
+                    self.push_instr(&format!(
+                        "br i1 {cond_val}, label %{then_bb}, label %{else_bb}"
+                    ));
+
+                    self.start_bb(&then_bb);
+                    let then_val = self.emit_block(then)?;
+                    let then_end = self.current_bb.clone();
+                    if !self.terminated {
+                        self.push_instr(&format!("br label %{merge_bb}"));
+                    }
+
+                    self.start_bb(&else_bb);
+                    let else_val = self.emit_if_stmt_chain(ncond, nthen, nelse.as_ref())?;
+                    let else_end = self.current_bb.clone();
+                    if !self.terminated {
+                        self.push_instr(&format!("br label %{merge_bb}"));
+                    }
+
+                    self.start_bb(&merge_bb);
+                    match (then_val, else_val) {
+                        (Some(tv), Some(ev)) => {
+                            let phi_ty = self.infer_val_type(&tv);
+                            let result = self.next_reg();
+                            self.push_instr(&format!(
+                                "{result} = phi {phi_ty} [ {tv}, %{then_end} ], [ {ev}, %{else_end} ]"
+                            ));
+                            self.reg_types.insert(result.clone(), phi_ty);
+                            Ok(Some(result))
+                        }
+                        _ => Ok(None),
+                    }
+                } else {
+                    Ok(None)
+                }
             }
         }
     }
@@ -1001,6 +1217,15 @@ impl TextEmitter {
             Some(v) => v,
             None => return Ok(None),
         };
+
+        // Delegate to Result-specific match when Ok/Err patterns are present.
+        let has_ok_err = arms
+            .iter()
+            .any(|a| matches!(&a.pattern, Pattern::Ok { .. } | Pattern::Err { .. }));
+        if has_ok_err {
+            return self.emit_result_match(scrutinee, &scrut_val, arms);
+        }
+
         let scrut_ty = self.type_of_expr(scrutinee);
 
         let n = self.bb;
@@ -1229,6 +1454,8 @@ impl TextEmitter {
 
             Expr::Consume { expr, .. } | Expr::Relabel { expr, .. } => self.emit_expr(expr),
 
+            Expr::Propagate { expr, .. } => self.emit_propagate(expr),
+
             Expr::Lambda {
                 params,
                 ret_type,
@@ -1291,6 +1518,24 @@ impl TextEmitter {
 
         let is_float = Self::expr_is_float(left);
         let lhs_ty = self.type_of_expr(left);
+
+        // String equality/inequality: delegate to runtime via mvl_string_eq.
+        if lhs_ty == "ptr" && matches!(op, BinaryOp::Eq | BinaryOp::Ne) {
+            self.ensure_extern("declare i1 @mvl_string_eq(ptr, ptr)");
+            let reg = self.next_reg();
+            self.push_instr(&format!(
+                "{reg} = call i1 @mvl_string_eq(ptr {lv}, ptr {rv})"
+            ));
+            if matches!(op, BinaryOp::Ne) {
+                let neg = self.next_reg();
+                self.push_instr(&format!("{neg} = xor i1 {reg}, true"));
+                self.reg_types.insert(neg.clone(), "i1".into());
+                return Ok(Some(neg));
+            }
+            self.reg_types.insert(reg.clone(), "i1".into());
+            return Ok(Some(reg));
+        }
+
         let instr = Self::binary_instr(op, is_float, &lhs_ty, &lv, &rv);
         let reg = self.next_reg();
         self.push_instr(&format!("{reg} = {instr}"));
@@ -1568,6 +1813,7 @@ impl TextEmitter {
             "assert" => return self.emit_assert_builtin(args),
             "println" | "print" | "eprintln" => return self.emit_println_builtin(name, args),
             "format" => return self.emit_format_builtin(args),
+            "Ok" | "Err" => return self.emit_result_constructor(name, args),
             _ => {}
         }
 
@@ -1605,12 +1851,28 @@ impl TextEmitter {
         let llvm_ret = self.llvm_ty_ctx(&ret_ty);
         let is_void = Self::is_void(&ret_ty);
 
+        // If this is a builtin fn, dispatch to the C-ABI symbol directly.
+        let effective_name: String = if let Some(c_sym) = self.builtin_syms.get(name).cloned() {
+            // Emit extern declare if not already present (use arg types from call site).
+            let param_tys = arg_vals
+                .iter()
+                .map(|(ty, _)| ty.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            self.ensure_extern(&format!("declare {llvm_ret} @{c_sym}({param_tys})"));
+            c_sym
+        } else {
+            name.to_string()
+        };
+
         if is_void {
-            self.push_instr(&format!("call {llvm_ret} @{name}({args_str})"));
+            self.push_instr(&format!("call void @{effective_name}({args_str})"));
             Ok(None)
         } else {
             let reg = self.next_reg();
-            self.push_instr(&format!("{reg} = call {llvm_ret} @{name}({args_str})"));
+            self.push_instr(&format!(
+                "{reg} = call {llvm_ret} @{effective_name}({args_str})"
+            ));
             self.reg_types.insert(reg.clone(), llvm_ret);
             Ok(Some(reg))
         }
@@ -1682,6 +1944,307 @@ impl TextEmitter {
         Ok(None)
     }
 
+    // ── Result[T,E] helpers ───────────────────────────────────────────────
+
+    /// Emit `Ok(val)` or `Err(val)` — builds a `{ i8, ptr }` tagged union.
+    fn emit_result_constructor(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+    ) -> Result<Option<String>, String> {
+        let disc: i64 = if name == "Ok" { 0 } else { 1 };
+        let arg_ty;
+        let slot;
+        if let Some(arg) = args.first() {
+            arg_ty = self.type_of_expr(arg);
+            let arg_val = match self.emit_expr(arg)? {
+                Some(v) => v,
+                None => return Ok(None),
+            };
+            slot = self.next_reg();
+            self.push_instr(&format!("{slot} = alloca {arg_ty}"));
+            self.push_instr(&format!("store {arg_ty} {arg_val}, ptr {slot}"));
+        } else {
+            arg_ty = "i8".into();
+            slot = self.next_reg();
+            self.push_instr(&format!("{slot} = alloca i8"));
+        };
+        let r0 = self.next_reg();
+        self.push_instr(&format!(
+            "{r0} = insertvalue {{ i8, ptr }} undef, i8 {disc}, 0"
+        ));
+        self.reg_types.insert(r0.clone(), "{ i8, ptr }".into());
+        let r1 = self.next_reg();
+        self.push_instr(&format!(
+            "{r1} = insertvalue {{ i8, ptr }} {r0}, ptr {slot}, 1"
+        ));
+        self.reg_types.insert(r1.clone(), "{ i8, ptr }".into());
+        let _ = arg_ty; // used above
+        Ok(Some(r1))
+    }
+
+    /// Emit `s.parse_int()` or `s.parse_float()` — calls the C-ABI parser and
+    /// wraps the result in a `{ i8, ptr }` Result.
+    ///
+    /// `ok_llvm_ty` is the LLVM type of the success value (`"i64"` or `"double"`).
+    fn emit_str_parse(
+        &mut self,
+        val: &str,
+        ok_llvm_ty: &str,
+        c_sym: &str,
+    ) -> Result<Option<String>, String> {
+        let ok_slot = self.next_reg();
+        self.push_instr(&format!("{ok_slot} = alloca {ok_llvm_ty}"));
+        let err_slot = self.next_reg();
+        self.push_instr(&format!("{err_slot} = alloca ptr"));
+        self.ensure_extern(&format!("declare i8 @{c_sym}(ptr, ptr, ptr)"));
+        let disc = self.next_reg();
+        self.push_instr(&format!(
+            "{disc} = call i8 @{c_sym}(ptr {val}, ptr {ok_slot}, ptr {err_slot})"
+        ));
+        self.reg_types.insert(disc.clone(), "i8".into());
+        // Select the correct payload pointer based on discriminant.
+        let disc_is_ok = self.next_reg();
+        self.push_instr(&format!("{disc_is_ok} = icmp eq i8 {disc}, 0"));
+        self.reg_types.insert(disc_is_ok.clone(), "i1".into());
+        let payload = self.next_reg();
+        self.push_instr(&format!(
+            "{payload} = select i1 {disc_is_ok}, ptr {ok_slot}, ptr {err_slot}"
+        ));
+        self.reg_types.insert(payload.clone(), "ptr".into());
+        let r0 = self.next_reg();
+        self.push_instr(&format!(
+            "{r0} = insertvalue {{ i8, ptr }} undef, i8 {disc}, 0"
+        ));
+        self.reg_types.insert(r0.clone(), "{ i8, ptr }".into());
+        let r1 = self.next_reg();
+        self.push_instr(&format!(
+            "{r1} = insertvalue {{ i8, ptr }} {r0}, ptr {payload}, 1"
+        ));
+        self.reg_types.insert(r1.clone(), "{ i8, ptr }".into());
+        Ok(Some(r1))
+    }
+
+    /// Emit a `match` where at least one arm has `Pattern::Ok` / `Pattern::Err`.
+    fn emit_result_match(
+        &mut self,
+        scrutinee: &Expr,
+        scrut_val: &str,
+        arms: &[MatchArm],
+    ) -> Result<Option<String>, String> {
+        // Determine Ok/Err payload LLVM types from the scrutinee's MVL type.
+        let (ok_load_ty, err_load_ty) = {
+            let mvl_ty = match scrutinee {
+                Expr::Ident(name, _) => self.local_mvl_types.get(name.as_str()).cloned(),
+                Expr::FnCall { name, .. } => self.fn_ret_types.get(name.as_str()).cloned(),
+                _ => None,
+            };
+            match mvl_ty {
+                Some(TypeExpr::Result { ok, err, .. }) => (Self::llvm_ty(&ok), Self::llvm_ty(&err)),
+                _ => ("i64".into(), "ptr".into()),
+            }
+        };
+
+        // Extract discriminant byte from the { i8, ptr } struct.
+        let disc_reg = self.next_reg();
+        self.push_instr(&format!(
+            "{disc_reg} = extractvalue {{ i8, ptr }} {scrut_val}, 0"
+        ));
+        self.reg_types.insert(disc_reg.clone(), "i8".into());
+
+        let n = self.bb;
+        self.bb += arms.len() + 2;
+        let default_bb = format!("match_default_{n}");
+        let merge_bb = format!("match_merge_{}", n + arms.len() + 1);
+        let arm_bbs: Vec<String> = (0..arms.len())
+            .map(|i| format!("match_arm_{}", n + i))
+            .collect();
+
+        // Build switch on i8 discriminant.
+        let mut switch_str = format!("switch i8 {disc_reg}, label %{default_bb} [\n");
+        let mut wildcard_arm: Option<usize> = None;
+        for (idx, arm) in arms.iter().enumerate() {
+            match &arm.pattern {
+                Pattern::Ok { .. } => {
+                    switch_str.push_str(&format!("    i8 0, label %{}\n", arm_bbs[idx]));
+                }
+                Pattern::Err { .. } => {
+                    switch_str.push_str(&format!("    i8 1, label %{}\n", arm_bbs[idx]));
+                }
+                Pattern::Wildcard(_) | Pattern::Ident(_, _) => {
+                    wildcard_arm = Some(idx);
+                }
+                _ => {
+                    wildcard_arm = Some(idx);
+                }
+            }
+        }
+        switch_str.push_str("  ]");
+        self.push_instr(&switch_str);
+
+        // Emit arm blocks.
+        let mut phi_entries: Vec<(String, String, String)> = Vec::new();
+
+        for (idx, arm) in arms.iter().enumerate() {
+            let arm_bb = &arm_bbs[idx];
+            self.fn_buf.push(format!("{arm_bb}:"));
+            self.current_bb = arm_bb.clone();
+            self.terminated = false;
+
+            let mut bound_var: Option<String> = None;
+
+            match &arm.pattern {
+                Pattern::Ok { inner, .. } => {
+                    let pp = self.next_reg();
+                    self.push_instr(&format!("{pp} = extractvalue {{ i8, ptr }} {scrut_val}, 1"));
+                    let ok_val = self.next_reg();
+                    self.push_instr(&format!("{ok_val} = load {ok_load_ty}, ptr {pp}"));
+                    self.reg_types.insert(ok_val.clone(), ok_load_ty.clone());
+                    if let Pattern::Ident(var_name, _) = inner.as_ref() {
+                        if var_name != "_" {
+                            self.locals.insert(var_name.clone(), ok_val.clone());
+                            bound_var = Some(var_name.clone());
+                        }
+                    }
+                }
+                Pattern::Err { inner, .. } => {
+                    let pp = self.next_reg();
+                    self.push_instr(&format!("{pp} = extractvalue {{ i8, ptr }} {scrut_val}, 1"));
+                    let err_val = self.next_reg();
+                    self.push_instr(&format!("{err_val} = load {err_load_ty}, ptr {pp}"));
+                    self.reg_types.insert(err_val.clone(), err_load_ty.clone());
+                    if let Pattern::Ident(var_name, _) = inner.as_ref() {
+                        if var_name != "_" {
+                            self.locals.insert(var_name.clone(), err_val.clone());
+                            bound_var = Some(var_name.clone());
+                        }
+                    }
+                }
+                Pattern::Wildcard(_) | Pattern::Ident(_, _) => {
+                    if let Pattern::Ident(name, _) = &arm.pattern {
+                        self.locals.insert(name.clone(), scrut_val.to_string());
+                        bound_var = Some(name.clone());
+                    }
+                }
+                _ => {}
+            }
+
+            let arm_val = match &arm.body {
+                MatchBody::Expr(e) => self.emit_expr(e)?,
+                MatchBody::Block(b) => self.emit_block(b)?,
+            };
+            let end_bb = self.current_bb.clone();
+            if !self.terminated {
+                self.push_instr(&format!("br label %{merge_bb}"));
+            }
+            if let Some(v) = arm_val {
+                let ty = self.infer_val_type(&v);
+                phi_entries.push((v, ty, end_bb));
+            }
+
+            if let Some(var_name) = bound_var {
+                self.locals.remove(&var_name);
+            }
+        }
+
+        // Default block.
+        self.fn_buf.push(format!("{default_bb}:"));
+        self.current_bb = default_bb.clone();
+        self.terminated = false;
+        if let Some(wild_idx) = wildcard_arm {
+            let arm_bb = &arm_bbs[wild_idx];
+            self.push_instr(&format!("br label %{arm_bb}"));
+        } else {
+            self.ensure_extern("declare void @llvm.trap()");
+            self.push_instr("call void @llvm.trap()");
+            self.push_instr("unreachable");
+            self.terminated = true;
+        }
+
+        // Merge block + phi.
+        self.fn_buf.push(format!("{merge_bb}:"));
+        self.current_bb = merge_bb.clone();
+        self.terminated = false;
+        if phi_entries.len() >= 2 {
+            let phi_ty = phi_entries
+                .iter()
+                .find(|(_, ty, _)| ty != "i64")
+                .map(|(_, ty, _)| ty.clone())
+                .unwrap_or_else(|| phi_entries[0].1.clone());
+            let parts: Vec<String> = phi_entries
+                .iter()
+                .map(|(v, _, from)| format!("[ {v}, %{from} ]"))
+                .collect();
+            let result = self.next_reg();
+            self.push_instr(&format!("{result} = phi {phi_ty} {}", parts.join(", ")));
+            self.reg_types.insert(result.clone(), phi_ty);
+            Ok(Some(result))
+        } else if phi_entries.len() == 1 {
+            Ok(Some(phi_entries.remove(0).0))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Emit the `?` propagation operator on a `Result[T,E]` value.
+    ///
+    /// On Err: early-return the `{ i8, ptr }` value from the current function.
+    /// On Ok:  extract the payload and load the inner `T` value.
+    fn emit_propagate(&mut self, inner: &Expr) -> Result<Option<String>, String> {
+        let result_val = match self.emit_expr(inner)? {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+
+        let disc = self.next_reg();
+        self.push_instr(&format!(
+            "{disc} = extractvalue {{ i8, ptr }} {result_val}, 0"
+        ));
+        self.reg_types.insert(disc.clone(), "i8".into());
+
+        let is_ok = self.next_reg();
+        self.push_instr(&format!("{is_ok} = icmp eq i8 {disc}, 0"));
+        self.reg_types.insert(is_ok.clone(), "i1".into());
+
+        let ok_bb = self.next_bb("prop_ok");
+        let err_bb = self.next_bb("prop_err");
+        self.push_instr(&format!("br i1 {is_ok}, label %{ok_bb}, label %{err_bb}"));
+
+        // Err path: propagate the result upwards.
+        self.start_bb(&err_bb);
+        let ret_ty = self.current_ret_ty.clone();
+        let llvm_ret = self.llvm_ty_ctx(&ret_ty);
+        self.push_instr(&format!("ret {llvm_ret} {result_val}"));
+        self.terminated = true;
+
+        // Ok path: extract and load the success payload.
+        self.start_bb(&ok_bb);
+        let payload_ptr = self.next_reg();
+        self.push_instr(&format!(
+            "{payload_ptr} = extractvalue {{ i8, ptr }} {result_val}, 1"
+        ));
+        let ok_load_ty = self.result_ok_llvm_ty(inner);
+        let ok_val = self.next_reg();
+        self.push_instr(&format!("{ok_val} = load {ok_load_ty}, ptr {payload_ptr}"));
+        self.reg_types.insert(ok_val.clone(), ok_load_ty);
+        Ok(Some(ok_val))
+    }
+
+    /// Infer the LLVM type of the `Ok` payload from a Result-returning expression.
+    fn result_ok_llvm_ty(&self, expr: &Expr) -> String {
+        match expr {
+            Expr::FnCall { name, .. } => {
+                if let Some(TypeExpr::Result { ok, .. }) = self.fn_ret_types.get(name.as_str()) {
+                    return Self::llvm_ty(ok);
+                }
+                "i64".into()
+            }
+            Expr::MethodCall { method, .. } if method == "parse_int" => "i64".into(),
+            Expr::MethodCall { method, .. } if method == "parse_float" => "double".into(),
+            _ => "i64".into(),
+        }
+    }
+
     fn emit_format_builtin(&mut self, args: &[Expr]) -> Result<Option<String>, String> {
         if args.len() < 2 {
             return Ok(None);
@@ -1741,9 +2304,18 @@ impl TextEmitter {
                 Ok(Some(val))
             }
             ("len", "ptr") => {
-                self.ensure_extern("declare i64 @_mvl_str_len(ptr)");
+                let is_list = matches!(
+                    self.mvl_receiver_kind(receiver),
+                    Some("List") | Some("Array") | Some("Set")
+                );
                 let reg = self.next_reg();
-                self.push_instr(&format!("{reg} = call i64 @_mvl_str_len(ptr {val})"));
+                if is_list {
+                    self.ensure_extern("declare i64 @mvl_array_len(ptr)");
+                    self.push_instr(&format!("{reg} = call i64 @mvl_array_len(ptr {val})"));
+                } else {
+                    self.ensure_extern("declare i64 @_mvl_str_len(ptr)");
+                    self.push_instr(&format!("{reg} = call i64 @_mvl_str_len(ptr {val})"));
+                }
                 self.reg_types.insert(reg.clone(), "i64".into());
                 Ok(Some(reg))
             }
@@ -1764,7 +2336,12 @@ impl TextEmitter {
                 Ok(Some(reg))
             }
             // ── HOF: filter / map / any / all / find / take_while / skip_while ──
-            ("filter" | "map" | "find" | "take_while" | "skip_while", "ptr") if args.len() == 1 => {
+            // Guard: only match when the argument is closure-like (Lambda or a
+            // module-level function reference).  String::find takes a plain
+            // String argument, not a closure, so it must not match this arm.
+            ("filter" | "map" | "find" | "take_while" | "skip_while", "ptr")
+                if args.len() == 1 && self.is_closure_arg(&args[0]) =>
+            {
                 let closure = match self.emit_as_closure(&args[0])? {
                     Some(p) => p,
                     None => return Ok(None),
@@ -1816,6 +2393,52 @@ impl TextEmitter {
                 self.push_instr(&format!("{result} = load {init_ty}, ptr {reg}"));
                 self.reg_types.insert(result.clone(), init_ty);
                 Ok(Some(result))
+            }
+
+            // ── List::push(item) → List (in-place) ───────────────────────
+            ("push", "ptr") => {
+                let item_arg = match args.first() {
+                    Some(a) => a,
+                    None => return Ok(None),
+                };
+                let item_ty = self.type_of_expr(item_arg);
+                let item_val = match self.emit_expr(item_arg)? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                // mvl_array_push expects a pointer to the item.
+                let item_slot = self.next_reg();
+                self.push_instr(&format!("{item_slot} = alloca {item_ty}"));
+                self.push_instr(&format!("store {item_ty} {item_val}, ptr {item_slot}"));
+                self.ensure_extern("declare void @mvl_array_push(ptr, ptr)");
+                self.push_instr(&format!(
+                    "call void @mvl_array_push(ptr {val}, ptr {item_slot})"
+                ));
+                // push returns the array (modified in place — same pointer).
+                self.reg_types.insert(val.clone(), "ptr".into());
+                Ok(Some(val))
+            }
+
+            // ── String::parse_int / parse_float → Result[T, String] ───────
+            ("parse_int", "ptr") => self.emit_str_parse(&val, "i64", "_mvl_str_parse_int"),
+            ("parse_float", "ptr") => self.emit_str_parse(&val, "double", "_mvl_str_parse_float"),
+
+            // ── String::char_at(i) → String ───────────────────────────────
+            ("char_at", "ptr") => {
+                let idx = match args.first() {
+                    Some(a) => match self.emit_expr(a)? {
+                        Some(v) => v,
+                        None => return Ok(None),
+                    },
+                    None => return Ok(None),
+                };
+                self.ensure_extern("declare ptr @_mvl_str_char_at(ptr, i64)");
+                let reg = self.next_reg();
+                self.push_instr(&format!(
+                    "{reg} = call ptr @_mvl_str_char_at(ptr {val}, i64 {idx})"
+                ));
+                self.reg_types.insert(reg.clone(), "ptr".into());
+                Ok(Some(reg))
             }
 
             _ => Ok(None),
@@ -2439,6 +3062,20 @@ impl TextEmitter {
                 }
             }
             _ => self.emit_expr(expr),
+        }
+    }
+
+    /// Return `true` if `expr` is a closure-like argument (Lambda or a
+    /// module-level function reference).  Used to guard HOF method arms so
+    /// they don't accidentally match String kernel methods like `find`.
+    fn is_closure_arg(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::Lambda { .. } => true,
+            Expr::Ident(name, _) => {
+                !self.locals.contains_key(name.as_str())
+                    && self.fn_ret_types.contains_key(name.as_str())
+            }
+            _ => false,
         }
     }
 

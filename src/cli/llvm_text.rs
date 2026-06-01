@@ -4,17 +4,46 @@
 use mvl::mvl::backends::llvm_text::lli;
 use mvl::mvl::backends::llvm_text::LlvmTextCompiler;
 use mvl::mvl::loader;
+use mvl::mvl::parser::ast::Program;
 use mvl::mvl::parser::Parser;
 use std::fs;
 use std::path::PathBuf;
 use std::process;
+
+type BuiltinTable = std::collections::HashMap<
+    String,
+    (
+        String,
+        mvl::mvl::parser::ast::TypeExpr,
+        Vec<mvl::mvl::parser::ast::TypeExpr>,
+    ),
+>;
+
+/// Build the prelude and builtin dispatch table for the llvm_text backend.
+///
+/// Mirrors `prepare_llvm` in `src/cli/llvm.rs` but uses `collect_llvm_text_builtins`
+/// instead of the inkwell StdlibSig dispatch table.
+fn prepare_llvm_text(prog: &Program) -> (Vec<Program>, BuiltinTable) {
+    let mut prelude = loader::load_implicit_prelude();
+    prelude.extend(loader::load_mvl_native_stdlib_extras(std::slice::from_ref(
+        prog,
+    )));
+    prelude.extend(loader::load_rust_backed_stdlib_fns(std::slice::from_ref(
+        prog,
+    )));
+    let builtins = loader::collect_llvm_text_builtins(std::slice::from_ref(prog));
+    (prelude, builtins)
+}
 
 /// Compile an MVL file to LLVM IR text and write the `.ll` file.
 /// `mvl build --backend=llvm <file>`
 pub(super) fn build_project_llvm_text(path: &str) {
     let (prog, _src) = super::parse_or_exit(path);
     let module_name = loader::stem(path);
-    match LlvmTextCompiler::new().compile_to_ir(&prog, &module_name) {
+    let (prelude, builtins) = prepare_llvm_text(&prog);
+    let mut compiler = LlvmTextCompiler::new();
+    compiler.builtin_symbols = builtins;
+    match compiler.compile_to_ir_with_prelude(&prelude, &prog, &module_name) {
         Ok(ir) => {
             let out_path = format!("{module_name}.ll");
             fs::write(&out_path, &ir).unwrap_or_else(|e| {
@@ -98,7 +127,10 @@ pub(super) fn cmd_test_llvm_text(path: &str, quiet: bool, verbose: bool) {
             continue;
         }
 
-        let ir = match LlvmTextCompiler::new().compile_to_ir(&prog, &module_name) {
+        let (prelude, builtins) = prepare_llvm_text(&prog);
+        let mut compiler = LlvmTextCompiler::new();
+        compiler.builtin_symbols = builtins;
+        let ir = match compiler.compile_to_ir_with_prelude(&prelude, &prog, &module_name) {
             Ok(ir) => ir,
             Err(e) => {
                 eprintln!("  FAIL (codegen): {file_str}: {e}");
