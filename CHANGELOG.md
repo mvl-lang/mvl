@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.171.0] - 2026-06-01
+
 ### Added
 - Standalone package repositories published for all remaining `pkg/` packages:
   - [`github.com/mvl-lang/pkg-rest`](https://github.com/mvl-lang/pkg-rest) v0.1.0 -- typed REST client (JSON POST/GET over TLS)
@@ -9,6 +11,8 @@
   - [`github.com/mvl-lang/pkg-tui`](https://github.com/mvl-lang/pkg-tui) v0.1.0 -- terminal UI (raw mode, ANSI styles, keyboard input)
   - [`github.com/mvl-lang/pkg-zmq`](https://github.com/mvl-lang/pkg-zmq) v0.1.0 -- ZeroMQ-style messaging (REQ/REP, PUB/SUB, PUSH/PULL)
 - `pkg/` in-repo directory removed; all packages now live in standalone repos under `github.com/mvl-lang/`
+- Package resolution now uses XDG cache directly (`$XDG_DATA_HOME/mvl/pkg/`); no project-local `.mvl/pkg/` symlinks needed
+- `find_project_root()` walks up from cwd to find `mvl.lock`, enabling `mvl check` from any subdirectory
 
 ## [0.170.0] - 2026-06-01
 
