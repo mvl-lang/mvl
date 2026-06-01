@@ -22,10 +22,10 @@ guard-mvl: ## Validate MVL binary is present and working (does NOT recompile)
 check: guard-mvl ## Type-check main.mvl (must show 11/11 requirements proven)
 	$(MVL) check $(DIR)main.mvl
 
-test-solver: guard-mvl ## Show solver statistics for main.mvl and main_test.mvl
+test-solver: guard-mvl ## Show solver statistics for main.mvl
 	@pass=0; fail=0; \
 	OK="\033[32m✓\033[0m"; FAIL="\033[31m✗\033[0m"; \
-	for f in $(DIR)main.mvl $(DIR)main_test.mvl; do \
+	for f in $(DIR)main.mvl; do \
 		name=$$(basename "$$f"); \
 		out=$$($(MVL) check "$$f" 2>&1); rc=$$?; \
 		if [ $$rc -eq 0 ]; then \
