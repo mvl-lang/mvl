@@ -43,3 +43,6 @@ examples/crud_api/crud_api.db
 
 # Installed package cache (created by `mvl install`)
 .mvl/
+
+# Marimo notebook session data
+tracker/
