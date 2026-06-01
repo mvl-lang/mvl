@@ -3,7 +3,7 @@
 **Version:** 0.1.0 (draft)
 **Date:** 2026-04-11
 
-This is the complete language reference for the Minimum Verification Language. For design rationale and research, see [mvl_rationale.md](mvl_rationale.md).
+This is the complete language reference for the Maximum Verifiable Language. For design rationale and research, see [mvl_rationale.md](mvl_rationale.md).
 
 ## Overview
 

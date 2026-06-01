@@ -1,4 +1,4 @@
-# MVL — Minimum Verification Language
+# MVL — Maximum Verifiable Language
 
 **The smallest language where the compiler verifies the most.**
 

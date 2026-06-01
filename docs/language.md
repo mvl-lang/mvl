@@ -1,6 +1,6 @@
 # MVL Language Reference
 
-This is the complete language reference for the Minimum Verification Language. For design rationale and research, see [mvl_rationale.md](mvl_rationale.md).
+This is the complete language reference for the Maximum Verifiable Language. For design rationale and research, see [mvl_rationale.md](mvl_rationale.md).
 
 ## Overview
 

@@ -1,6 +1,6 @@
 # nvim-mvl
 
-Neovim plugin for [MVL (Minimum Verification Language)](../../README.md).
+Neovim plugin for [MVL (Maximum Verifiable Language)](../../README.md).
 
 Provides:
 - Syntax highlighting via tree-sitter
