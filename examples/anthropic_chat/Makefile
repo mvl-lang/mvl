@@ -2,15 +2,14 @@
 #
 # Demonstrates pkg.anthropic SDK with IFC-aware Secret/Tainted types.
 #
-# Package resolution: .mvl/pkg/* symlinks to ../../pkg/* so that
-# mvl commands run from this directory can find the packages.
+# Packages are resolved from the XDG cache ($XDG_DATA_HOME/mvl/pkg/).
+# Run `mvl install` from the repo root to populate the cache before using this example.
 .PHONY: help guard-mvl check test-solver test smoke clean
 
 .DEFAULT_GOAL := help
 
-MVL       := ../../target/debug/mvl
-DIR       := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
-REPO_ROOT := $(abspath $(DIR)../..)
+MVL  := ../../target/debug/mvl
+DIR  := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -24,18 +23,10 @@ guard-mvl: ## Ensure MVL binary is present (pre-build with `cargo build` from re
 		exit 1; \
 	}
 
-.mvl/pkg/anthropic:
-	@mkdir -p .mvl/pkg
-	@ln -sfn $(REPO_ROOT)/pkg/anthropic .mvl/pkg/anthropic
-
-.mvl/pkg/tls:
-	@mkdir -p .mvl/pkg
-	@ln -sfn $(REPO_ROOT)/pkg/tls .mvl/pkg/tls
-
-check: guard-mvl .mvl/pkg/anthropic .mvl/pkg/tls ## Type-check main.mvl
+check: guard-mvl ## Type-check main.mvl
 	$(MVL) check $(DIR)main.mvl
 
-test-solver: guard-mvl .mvl/pkg/anthropic .mvl/pkg/tls ## Show per-file solver statistics
+test-solver: guard-mvl ## Show per-file solver statistics
 	@OK="\033[32m✓\033[0m"; FAIL="\033[31m✗\033[0m"; \
 	out=$$($(MVL) check $(DIR)main.mvl 2>&1); rc=$$?; \
 	if [ $$rc -eq 0 ]; then \
@@ -46,7 +37,7 @@ test-solver: guard-mvl .mvl/pkg/anthropic .mvl/pkg/tls ## Show per-file solver s
 
 test: check ## No unit tests; delegates to type-check
 
-smoke: guard-mvl .mvl/pkg/anthropic .mvl/pkg/tls ## Smoke-test: build + run without API key, verify graceful error
+smoke: guard-mvl ## Smoke-test: build + run without API key, verify graceful error
 	@OK="\033[32m✓\033[0m"; FAIL="\033[31m✗\033[0m"; \
 	out=$$(env -u ANTHROPIC_API_KEY $(MVL) run $(DIR)main.mvl 2>&1); \
 	if echo "$$out" | grep -q "error: ANTHROPIC_API_KEY not set"; then \
@@ -58,4 +49,4 @@ smoke: guard-mvl .mvl/pkg/anthropic .mvl/pkg/tls ## Smoke-test: build + run with
 	fi
 
 clean: ## Remove build artifacts
-	rm -rf $(TMPDIR)mvl_build_*_main .mvl
+	rm -rf $(TMPDIR)mvl_build_*_main

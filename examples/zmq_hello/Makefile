@@ -13,14 +13,16 @@
 #   make test-pubsub   — ZMTP PUB/SUB: pyzmq PUB server + MVL SUB client
 #   make test-all      — run all test modes
 #   make check         — type-check all MVL sources
+#
+# Packages are resolved from the XDG cache ($XDG_DATA_HOME/mvl/pkg/).
+# Run `mvl install` from the repo root to populate the cache before using this example.
 .PHONY: help guard-mvl guard-pyzmq check build test test-zmq test-rust \
         test-pushpull test-pubsub test-all run run-zmtp clean smoke test-solver
 
 .DEFAULT_GOAL := help
 
-MVL       := ../../target/debug/mvl
-DIR       := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
-REPO_ROOT := $(abspath $(DIR)../..)
+MVL  := ../../target/debug/mvl
+DIR  := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 PORT      := 5555
 PORT_ZMTP := 5556
 PORT_PULL := 5557
@@ -40,11 +42,6 @@ guard-mvl: ## Validate MVL binary is present
 		exit 1; \
 	}
 
-# Ensure pkg.zmq symlink exists for local package resolution.
-.mvl/pkg/zmq:
-	@mkdir -p .mvl/pkg
-	@ln -sfn $(REPO_ROOT)/pkg/zmq .mvl/pkg/zmq
-
 guard-pyzmq: ## Ensure pyzmq is installed in the active venv
 	@python3 -c "import zmq" 2>/dev/null || { \
 		echo "  Installing pyzmq..."; \
@@ -52,20 +49,20 @@ guard-pyzmq: ## Ensure pyzmq is installed in the active venv
 	}
 
 # Pre-build all MVL binaries so `mvl run` is instant (cached cargo build).
-build: guard-mvl .mvl/pkg/zmq ## Build all MVL binaries
+build: guard-mvl ## Build all MVL binaries
 	@echo "  Building MVL binaries..."
 	@$(MVL) build $(DIR)server.mvl > /dev/null 2>&1
 	@$(MVL) build $(DIR)server_zmtp.mvl > /dev/null 2>&1
 	@$(MVL) build $(DIR)server_pull.mvl > /dev/null 2>&1
 	@$(MVL) build $(DIR)client_sub.mvl > /dev/null 2>&1
 
-check: guard-mvl .mvl/pkg/zmq ## Type-check all MVL sources
+check: guard-mvl ## Type-check all MVL sources
 	$(MVL) check $(DIR)server.mvl
 	$(MVL) check $(DIR)server_zmtp.mvl
 	$(MVL) check $(DIR)server_pull.mvl
 	$(MVL) check $(DIR)client_sub.mvl
 
-test-solver: guard-mvl .mvl/pkg/zmq ## Show solver statistics
+test-solver: guard-mvl ## Show solver statistics
 	@pass=0; fail=0; \
 	OK="\033[32m✓\033[0m"; FAIL="\033[31m✗\033[0m"; \
 	for f in $(DIR)server.mvl $(DIR)server_zmtp.mvl $(DIR)server_pull.mvl $(DIR)client_sub.mvl; do \
