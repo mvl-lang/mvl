@@ -10,8 +10,8 @@
 use std::collections::HashMap;
 
 use crate::mvl::parser::ast::{
-    BinaryOp, Block, Decl, ElseBranch, Expr, FnDecl, LValue, LetKind, Literal, MatchArm, MatchBody,
-    Pattern, Program, Stmt, TypeBody, TypeExpr, UnaryOp,
+    ActorDecl, BinaryOp, Block, Decl, ElseBranch, Expr, FnDecl, LValue, LetKind, Literal, MatchArm,
+    MatchBody, Pattern, Program, Stmt, TypeBody, TypeExpr, UnaryOp,
 };
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -94,6 +94,12 @@ struct TextEmitter {
     lambda_counter: usize,
     /// True once `%__closure_type = type { ptr, ptr }` has been emitted.
     closure_type_emitted: bool,
+
+    // ── Actor state (#1149) ───────────────────────────────────────────────
+    /// Actor declarations keyed by actor type name (populated in first pass).
+    actor_decls: HashMap<String, ActorDecl>,
+    /// True once actor runtime externs have been emitted.
+    actor_runtime_declared: bool,
 }
 
 #[derive(Clone)]
@@ -136,6 +142,8 @@ impl TextEmitter {
             has_str_false: false,
             lambda_counter: 0,
             closure_type_emitted: false,
+            actor_decls: HashMap::new(),
+            actor_runtime_declared: false,
         }
     }
 
@@ -322,10 +330,19 @@ impl TextEmitter {
         match ty {
             TypeExpr::Base { name, .. } => {
                 if self.struct_fields.contains_key(name) {
+                    // Actor state structs are always accessed via pointer — the
+                    // actor handle is an opaque ptr, not an inline struct value.
+                    if self.actor_decls.contains_key(name.as_str()) {
+                        return "ptr".to_string();
+                    }
                     return format!("%{name}");
                 }
                 if self.enum_variants.contains_key(name) {
                     return "i64".to_string(); // unit enum = discriminant
+                }
+                // Actor type without registered state struct (e.g. handle as field).
+                if self.actor_decls.contains_key(name.as_str()) {
+                    return "ptr".to_string();
                 }
                 Self::llvm_ty(ty)
             }
@@ -458,6 +475,8 @@ impl TextEmitter {
             }
             // A lambda expression is a closure pointer.
             Expr::Lambda { .. } => "ptr".into(),
+            // A spawn expression produces an opaque actor handle pointer.
+            Expr::Spawn { .. } => "ptr".into(),
             _ => "i64".into(),
         }
     }
@@ -564,7 +583,35 @@ impl TextEmitter {
                     }
                     TypeBody::Alias(_) => {}
                 },
+                Decl::Actor(ad) => {
+                    let state_name = format!("{}State", ad.name);
+                    let field_list: Vec<(String, TypeExpr)> = ad
+                        .fields
+                        .iter()
+                        .map(|f| (f.name.clone(), f.ty.clone()))
+                        .collect();
+                    let field_types: Vec<String> = field_list
+                        .iter()
+                        .map(|(_, ty)| self.llvm_ty_ctx(ty))
+                        .collect();
+                    self.type_defs.push(format!(
+                        "%{state_name} = type {{ {} }}",
+                        field_types.join(", ")
+                    ));
+                    self.struct_fields.insert(state_name, field_list);
+                    self.actor_decls.insert(ad.name.clone(), ad.clone());
+                }
                 _ => {}
+            }
+        }
+
+        // Actor pass: emit behavior functions + dispatch for each actor.
+        if !self.actor_decls.is_empty() {
+            self.ensure_actor_runtime_externs();
+            let actor_names: Vec<String> = self.actor_decls.keys().cloned().collect();
+            for name in actor_names {
+                let ad = self.actor_decls[&name].clone();
+                self.emit_actor_decl(&ad)?;
             }
         }
 
@@ -630,6 +677,9 @@ impl TextEmitter {
 
         if !self.terminated {
             if is_main {
+                if !self.actor_decls.is_empty() {
+                    self.push_instr("call void @mvl_actor_join_all()");
+                }
                 self.push_instr("ret i32 0");
             } else if Self::is_void(ret_ty) {
                 self.push_instr("ret void");
@@ -1186,6 +1236,10 @@ impl TextEmitter {
                 ..
             } => self.emit_lambda(params, ret_type.as_deref(), body),
 
+            Expr::Spawn {
+                actor_type, fields, ..
+            } => self.emit_actor_spawn(actor_type, fields),
+
             _ => Ok(None),
         }
     }
@@ -1657,6 +1711,15 @@ impl TextEmitter {
         method: &str,
         args: &[Expr],
     ) -> Result<Option<String>, String> {
+        // ── Actor method call: fire-and-forget send ───────────────────────
+        if let Some(actor_name) = self.resolve_actor_type_name(receiver) {
+            let handle_val = match self.emit_expr(receiver)? {
+                Some(v) => v,
+                None => return Ok(None),
+            };
+            return self.emit_actor_method_call(&handle_val, &actor_name.clone(), method, args);
+        }
+
         let recv_ty = self.type_of_expr(receiver);
         let val = match self.emit_expr(receiver)? {
             Some(v) => v,
@@ -2425,6 +2488,15 @@ fn default_target_triple() -> String {
     "x86_64-pc-linux-gnu".to_string()
 }
 
+// ── Actor emission submodule ──────────────────────────────────────────────────
+
+// `emit_actors.rs` lives in the same directory as `emitter.rs`.  Using
+// `#[path]` keeps it a child of `emitter` so that the private types
+// `TextEmitter` and `RefLocal` (and their private fields) remain accessible
+// without any visibility changes.
+#[path = "emit_actors.rs"]
+mod emit_actors;
+
 // ── Unit tests ────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -2782,5 +2854,104 @@ mod tests {
         // A load from the ref alloca must precede the GEP store into the env.
         assert!(ir.contains("load i64"), "{ir}");
         assert!(ir.contains("getelementptr %__env___lambda_0"), "{ir}");
+    }
+
+    // ── Actor emission tests (#1149) ──────────────────────────────────────
+
+    #[test]
+    fn actor_emits_state_struct_and_behavior_fn() {
+        let ir = compile(
+            "actor Counter {\n\
+               count: Int\n\
+               pub fn increment(val n: Int) { }\n\
+             }",
+        );
+        // State struct typedef.
+        assert!(ir.contains("%CounterState = type"), "{ir}");
+        // Behavior function.
+        assert!(
+            ir.contains("define void @counter_increment(ptr %self, i64 %n)"),
+            "{ir}"
+        );
+    }
+
+    #[test]
+    fn actor_emits_dispatch_function_with_switch() {
+        let ir = compile(
+            "actor Counter {\n\
+               count: Int\n\
+               pub fn increment(val n: Int) { }\n\
+               pub fn reset() { }\n\
+             }",
+        );
+        // Dispatch function signature.
+        assert!(
+            ir.contains("define void @counter_dispatch(ptr %state, i64 %disc, ptr %args)"),
+            "{ir}"
+        );
+        // Switch with at least two case labels.
+        assert!(ir.contains("switch i64 %disc, label %default"), "{ir}");
+        assert!(ir.contains("i64 0, label %behavior_0"), "{ir}");
+        assert!(ir.contains("i64 1, label %behavior_1"), "{ir}");
+    }
+
+    #[test]
+    fn actor_runtime_externs_emitted() {
+        let ir = compile(
+            "actor Counter {\n\
+               count: Int\n\
+               pub fn increment(val n: Int) { }\n\
+             }",
+        );
+        assert!(ir.contains("declare ptr @mvl_actor_spawn"), "{ir}");
+        assert!(ir.contains("declare void @mvl_actor_send"), "{ir}");
+        assert!(ir.contains("declare void @mvl_actor_join_all"), "{ir}");
+    }
+
+    #[test]
+    fn spawn_emits_alloca_and_actor_spawn_call() {
+        let ir = compile(
+            "actor Counter {\n\
+               count: Int\n\
+               pub fn increment(val n: Int) { }\n\
+             }\n\
+             fn main() -> Int {\n\
+               let c: Counter = actor Counter { count: 0 };\n\
+               0\n\
+             }",
+        );
+        // State alloca.
+        assert!(ir.contains("alloca %CounterState"), "{ir}");
+        // Runtime spawn call.
+        assert!(ir.contains("call ptr @mvl_actor_spawn"), "{ir}");
+    }
+
+    #[test]
+    fn actor_method_call_emits_send() {
+        let ir = compile(
+            "actor Counter {\n\
+               count: Int\n\
+               pub fn increment(val n: Int) { }\n\
+             }\n\
+             fn main() -> Int {\n\
+               let c: Counter = actor Counter { count: 0 };\n\
+               c.increment(1);\n\
+               0\n\
+             }",
+        );
+        // The send call must appear.
+        assert!(ir.contains("call void @mvl_actor_send"), "{ir}");
+    }
+
+    #[test]
+    fn join_all_emitted_in_main_when_actors_present() {
+        let ir = compile(
+            "actor Counter {\n\
+               count: Int\n\
+               pub fn increment(val n: Int) { }\n\
+             }\n\
+             fn main() -> Int { 0 }",
+        );
+        assert!(ir.contains("call void @mvl_actor_join_all"), "{ir}");
     }
 }
