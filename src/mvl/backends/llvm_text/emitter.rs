@@ -195,6 +195,9 @@ struct TextEmitter {
     // ── Per-function flags ────────────────────────────────────────────────
     /// True while emitting the `main` function (affects `ret` instruction type).
     current_fn_is_main: bool,
+    /// SSA registers of actor handles spawned in the current function.
+    /// Emitted as `mvl_actor_drop` calls before `mvl_actor_join_all` in `main`.
+    spawned_actor_handles: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -265,6 +268,7 @@ impl TextEmitter {
             actor_runtime_declared: false,
             builtin_syms,
             current_fn_is_main: false,
+            spawned_actor_handles: Vec::new(),
         }
     }
 
@@ -338,6 +342,7 @@ impl TextEmitter {
         self.local_mvl_types.clear();
         self.current_ret_ty = ret_ty;
         self.current_fn_is_main = false;
+        self.spawned_actor_handles.clear();
     }
 
     // ── Extern declaration helpers ────────────────────────────────────────
@@ -844,6 +849,11 @@ impl TextEmitter {
         if !self.terminated {
             if self.current_fn_is_main {
                 if !self.actor_decls.is_empty() {
+                    // Drop each handle to close the sender — this signals the
+                    // actor thread's recv loop to exit.
+                    for handle in std::mem::take(&mut self.spawned_actor_handles) {
+                        self.push_instr(&format!("call void @mvl_actor_drop(ptr {handle})"));
+                    }
                     self.push_instr("call void @mvl_actor_join_all()");
                 }
                 self.push_instr(MAIN_RET);

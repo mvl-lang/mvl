@@ -366,6 +366,9 @@ impl TextEmitter {
             "{handle} = call ptr @mvl_actor_spawn(ptr @{dispatch_name}, ptr {state_alloca}, i64 {state_size}, i64 {capacity}, i64 {policy})"
         ));
         self.reg_types.insert(handle.clone(), "ptr".into());
+        // Track for drop before mvl_actor_join_all (closes the sender so the
+        // actor thread's recv loop terminates).
+        self.spawned_actor_handles.push(handle.clone());
 
         Ok(Some(handle))
     }

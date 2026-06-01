@@ -23,7 +23,7 @@ actor Connector {
     }
 }
 
-fn main() -> Unit ! Console + Net {
+fn main() -> Unit ! Console + Net + Spawn + Send {
     let listener: TcpListener = match tcp_listen("127.0.0.1", 0) {
         Ok(l) => l,
         Err(_) => {
