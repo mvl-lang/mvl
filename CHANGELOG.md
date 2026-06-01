@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [0.170.0] - 2026-06-01
+
+### Added
+- Layer 1 refinement solver now statically proves `len(string_literal)` predicates via `eval_pred_str_len` / `eval_bool_str_len` / `eval_num_str_len` helpers; enables `validate_log_path("app.log")` to be proven directly instead of deferred to runtime (#1152)
+- `examples/log_to_file/` unit tests (`main_test.mvl`) covering `validate_log_path` and `resolve_path`, demonstrating IFC boundary via `relabel taint/trust` (#1152)
+
+### Changed
+- `examples/log_to_file`: bumped from 10/11 → **11/11 requirements proven**; `validate_log_path("app.log")` now statically verified at Layer 1 instead of runtime-checked (#1152)
+
 ## [0.169.0] - 2026-05-31
 
 ### Added
