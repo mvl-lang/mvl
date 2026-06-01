@@ -1,0 +1,68 @@
+// main_test.mvl — unit tests for pure functions in main.mvl.
+//
+// NOTE (issue #96): Functions are re-declared locally until the module
+// resolver enables cross-file imports in the test runner.
+//
+// Coverage:
+//   validate_log_path — Req 10 (Refinements): non-empty string refined param;
+//                       Layer 1 statically proves len("app.log") = 7 > 0.
+//   resolve_path      — Req 11 (IFC): explicit trust boundary; Req 5 (Errors):
+//                       non-empty → Ok, empty → Err(EmptyPath).
+//
+// Run with:  mvl test examples/log_to_file/
+
+// ── Local re-declarations (mirrors main.mvl) ──────────────────────────────
+
+pub type LogSetupError = enum {
+    EmptyPath,
+    OpenFailed,
+}
+
+pub fn validate_log_path(p: String where len(p) > 0) -> String { p }
+
+pub fn resolve_path(raw: Tainted[String]) -> Result[String, LogSetupError] {
+    let s: String = relabel trust(raw, "LOG-PATH-001");
+    match s.len() > 0 {
+        true  => Ok(s),
+        false => Err(LogSetupError::EmptyPath),
+    }
+}
+
+// ── validate_log_path ─────────────────────────────────────────────────────
+//
+// Layer 1 proves `len("app.log") = 7 > 0` statically — no runtime check.
+// Both calls are direct-literal arguments so the solver discharges them at
+// compile time (Req 10, Layer 1 interval arithmetic).
+
+test fn validate_app_log_path() -> Unit {
+    assert_eq(validate_log_path("app.log"), "app.log");
+}
+
+test fn validate_single_char_path() -> Unit {
+    assert_eq(validate_log_path("x"), "x");
+}
+
+// ── resolve_path ──────────────────────────────────────────────────────────
+//
+// `relabel taint` is the inverse of `relabel trust`: it wraps a plain String
+// as Tainted[String] to simulate values arriving from an untrusted source.
+// Both arms of the non-empty/empty branch must be exercised (MC/DC).
+
+test fn resolve_path_non_empty_returns_ok() -> Unit {
+    let raw: Tainted[String] = relabel taint("/var/log/app.log", "TEST-001");
+    let result: Result[String, LogSetupError] = resolve_path(raw);
+    match result {
+        Ok(s)  => assert_eq(s, "/var/log/app.log"),
+        Err(_) => assert_eq("expected Ok, got Err", ""),
+    }
+}
+
+test fn resolve_path_empty_returns_err_empty_path() -> Unit {
+    let raw: Tainted[String] = relabel taint("", "TEST-002");
+    let result: Result[String, LogSetupError] = resolve_path(raw);
+    match result {
+        Ok(_)                          => assert_eq("expected Err, got Ok", ""),
+        Err(LogSetupError::EmptyPath)  => {},
+        Err(LogSetupError::OpenFailed) => assert_eq("expected EmptyPath, got OpenFailed", ""),
+    }
+}

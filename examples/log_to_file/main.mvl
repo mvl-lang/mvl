@@ -1,21 +1,100 @@
 // examples/log_to_file — structured logging to a file.
 //
-// Demonstrates the file-sink pattern introduced by #1152:
-//   - open() is pure (capability entry point — no effect annotation)
-//   - file_logger() wires an open Fd to a Logger
-//   - all write effects are ! Console, subsumed by ! Log (Log > Clock + Console)
-//   - the caller owns fd lifecycle: open before logging, close after
+// Demonstrates:
+//   1. Req 7  (Effects): ! Log subsumes Clock + Console; ! Env for reading
+//              the log path from the OS environment. open/close are pure.
+//   2. Req 10 (Refinements): validate_log_path(p: String where len(p) > 0)
+//              ensures the path is non-empty. The compiler proves the default
+//              "app.log" satisfies this statically (Layer 1 interval: 7 > 0).
+//              Env-var paths are validated at the IFC trust boundary.
+//   3. Req 11 (IFC): MVL_LOG_FILE arrives as Tainted[String] from the OS
+//              environment; explicit relabel trust() is the only way to use it
+//              as a plain String — audited with tag "LOG-PATH-001".
+//   4. Req 5  (Errors): all failure paths return named Err variants; no panics.
 //
-// Run:   mvl run examples/log_to_file/main.mvl
-// Check: cargo run -- check examples/log_to_file/main.mvl
+// Usage:
+//   mvl run examples/log_to_file/main.mvl
+//   MVL_LOG_FILE=/var/log/app.log mvl run examples/log_to_file/main.mvl
 
 use std.log.{Logger, LogFormat, LogLevel, file_logger}
 use std.io.{path, open, close, Fd}
+use std.env.{get}
 
-fn main() -> Unit ! Log {
-    let fd: Fd = match open(path("app.log")) {
+// ── Refined types ─────────────────────────────────────────────────────────
+
+/// A filesystem path guaranteed to be non-empty.
+/// Prevents passing "" to open(), which would produce a confusing I/O error.
+/// The guarantee is enforced by validate_log_path and resolve_path.
+pub type LogPath = String where len(self) > 0
+
+// ── Error type ────────────────────────────────────────────────────────────
+
+pub type LogSetupError = enum {
+    EmptyPath,    // MVL_LOG_FILE was set to an empty string
+    OpenFailed,   // the OS could not open the file for writing
+}
+
+// ── Pure helpers ──────────────────────────────────────────────────────────
+
+/// Req 10 (Refinements): prove a path string is non-empty.
+///
+/// For the literal "app.log", Layer 1 (interval arithmetic) statically proves
+/// len("app.log") > 0 == 7 > 0 — no runtime check emitted.
+/// Env-var paths carry a runtime check (validated at the IFC boundary).
+pub fn validate_log_path(p: String where len(p) > 0) -> String { p }
+
+/// Validate a Tainted path string from the environment.
+///
+/// IFC: `raw` is Tainted[String] — it came from the OS environment and is
+/// therefore untrusted. `relabel trust` is the explicit boundary, audited
+/// with the tag "LOG-PATH-001". An empty string after relabeling is rejected
+/// so callers receive a non-empty String.
+pub fn resolve_path(raw: Tainted[String]) -> Result[String, LogSetupError] {
+    let s: String = relabel trust(raw, "LOG-PATH-001");
+    match s.len() > 0 {
+        true  => Ok(s),
+        false => Err(LogSetupError::EmptyPath),
+    }
+}
+
+/// Read the log file path: MVL_LOG_FILE env var, or "app.log" by default.
+///
+/// The string literal "app.log" satisfies len > 0 and is proven statically
+/// by validate_log_path (Layer 1 interval: 7 > 0).
+/// Env-var values go through resolve_path() for the IFC trust boundary.
+fn get_log_path() -> Result[String, LogSetupError] ! Env {
+    let env_val: Option[Tainted[String]] = get("MVL_LOG_FILE");
+    match env_val {
+        None      => Ok(validate_log_path("app.log")),
+        Some(raw) => resolve_path(raw),
+    }
+}
+
+/// Open a validated log path for writing.
+///
+/// Returns Err(OpenFailed) on any I/O error. The caller is responsible for
+/// calling close() on the returned Fd when done.
+fn open_log(p: String) -> Result[Fd, LogSetupError] {
+    match open(path(p)) {
+        Err(_) => Err(LogSetupError::OpenFailed),
+        Ok(fd) => Ok(fd),
+    }
+}
+
+// ── Main ──────────────────────────────────────────────────────────────────
+
+fn main() -> Unit ! Log + Env {
+    let log_path: String = match get_log_path() {
         Err(_) => {
-            eprintln("error: could not open app.log");
+            eprintln("error: invalid or empty log path");
+            return
+        },
+        Ok(p) => p,
+    };
+
+    let fd: Fd = match open_log(log_path) {
+        Err(_) => {
+            eprintln("error: could not open log file for writing");
             return
         },
         Ok(f) => f,
