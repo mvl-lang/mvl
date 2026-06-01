@@ -1,6 +1,6 @@
 # OpenSpec — MVL Language
 
-Specifications, architectural decisions, and design documents for the Minimum Verification Language.
+Specifications, architectural decisions, and design documents for the Maximum Verifiable Language.
 
 ## ISPE Philosophy
 
