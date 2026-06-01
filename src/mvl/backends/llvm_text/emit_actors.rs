@@ -99,11 +99,13 @@ impl TextEmitter {
             let saved_ret_ty = std::mem::replace(&mut self.current_ret_ty, ret_ty.clone());
             let saved_terminated = self.terminated;
             let saved_current_bb = std::mem::replace(&mut self.current_bb, "entry".into());
+            let saved_is_main = self.current_fn_is_main;
             // lambda_counter is intentionally NOT saved — monotonically global.
 
             self.reg = 0;
             self.bb = 0;
             self.terminated = false;
+            self.current_fn_is_main = false; // actor methods are never main
 
             self.fn_buf
                 .push(format!("define {define_ret} @{fn_name}({params_str})"));
@@ -166,6 +168,7 @@ impl TextEmitter {
                     self.current_ret_ty = saved_ret_ty;
                     self.terminated = saved_terminated;
                     self.current_bb = saved_current_bb;
+                    self.current_fn_is_main = saved_is_main;
                     return Err(e);
                 }
             };
@@ -196,6 +199,7 @@ impl TextEmitter {
             self.current_ret_ty = saved_ret_ty;
             self.terminated = saved_terminated;
             self.current_bb = saved_current_bb;
+            self.current_fn_is_main = saved_is_main;
         }
 
         // ── 2. Dispatch function ───────────────────────────────────────────

@@ -130,6 +130,11 @@ fn return_type_needs_option_abi(ty: &TypeExpr) -> bool {
 
 // ── Internal emitter ──────────────────────────────────────────────────────────
 
+/// LLVM type for `Result[T, E]` tagged unions (discriminant byte + payload pointer).
+const RESULT_LLVM_TY: &str = "{ i8, ptr }";
+/// LLVM return instruction for the C-ABI `main` entry point.
+const MAIN_RET: &str = "ret i32 0";
+
 struct TextEmitter {
     module_name: String,
     target_triple: String,
@@ -809,9 +814,8 @@ impl TextEmitter {
         let params_str = params.join(", ");
 
         let llvm_ret = self.llvm_ty_ctx(ret_ty);
-        let is_main = fd.name == "main";
 
-        let sig = if is_main {
+        let sig = if self.current_fn_is_main {
             "define i32 @main()".to_string()
         } else {
             format!(
@@ -838,11 +842,11 @@ impl TextEmitter {
         let body_val = self.emit_block(&fd.body)?;
 
         if !self.terminated {
-            if is_main {
+            if self.current_fn_is_main {
                 if !self.actor_decls.is_empty() {
                     self.push_instr("call void @mvl_actor_join_all()");
                 }
-                self.push_instr("ret i32 0");
+                self.push_instr(MAIN_RET);
             } else if Self::is_void(ret_ty) {
                 self.push_instr("ret void");
             } else if let Some(val) = body_val {
@@ -1013,7 +1017,7 @@ impl TextEmitter {
                 let ret_ty = self.current_ret_ty.clone();
                 if Self::is_void(&ret_ty) {
                     if self.current_fn_is_main {
-                        self.push_instr("ret i32 0");
+                        self.push_instr(MAIN_RET);
                     } else {
                         self.push_instr("ret void");
                     }
@@ -1026,7 +1030,7 @@ impl TextEmitter {
                         self.push_instr(&format!("ret {ty} undef"));
                     }
                 } else if self.current_fn_is_main {
-                    self.push_instr("ret i32 0");
+                    self.push_instr(MAIN_RET);
                 } else {
                     self.push_instr("ret void");
                 }
@@ -1873,20 +1877,19 @@ impl TextEmitter {
         let is_void = Self::is_void(&ret_ty);
 
         // If this is a builtin fn, dispatch to the C-ABI symbol directly.
-        let effective_name: String = if let Some(c_sym) = self.builtin_syms.get(name).cloned() {
-            // Emit extern declare if not already present (use arg types from call site).
-            let param_tys = arg_vals
-                .iter()
-                .map(|(ty, _)| ty.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            self.ensure_extern(&format!("declare {llvm_ret} @{c_sym}({param_tys})"));
-            c_sym
-        } else {
-            name.to_string()
-        };
-
-        let is_c_builtin = self.builtin_syms.contains_key(name);
+        let (effective_name, is_c_builtin): (String, bool) =
+            if let Some(c_sym) = self.builtin_syms.get(name).cloned() {
+                // Emit extern declare if not already present (use arg types from call site).
+                let param_tys = arg_vals
+                    .iter()
+                    .map(|(ty, _)| ty.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                self.ensure_extern(&format!("declare {llvm_ret} @{c_sym}({param_tys})"));
+                (c_sym, true)
+            } else {
+                (name.to_string(), false)
+            };
 
         if is_void {
             self.push_instr(&format!("call void @{effective_name}({args_str})"));
@@ -1902,28 +1905,23 @@ impl TextEmitter {
             // in the payload field.  MVL-constructed Ok/Err store a slot pointer in
             // field 1 (see emit_result_constructor).  Wrap the C payload into a slot
             // so emit_result_match can use a uniform `load T, ptr payload` convention.
-            if is_c_builtin && llvm_ret == "{ i8, ptr }" {
+            if is_c_builtin && llvm_ret == RESULT_LLVM_TY {
+                // C-ABI builtins store the raw value directly in field 1.
+                // MVL-constructed Ok/Err store a slot pointer in field 1 (see
+                // emit_result_constructor).  Wrap the C payload into a slot so
+                // emit_result_match can use a uniform `load T, ptr payload` convention.
                 let disc = self.next_reg();
-                self.push_instr(&format!("{disc} = extractvalue {{ i8, ptr }} {reg}, 0"));
+                self.push_instr(&format!("{disc} = extractvalue {RESULT_LLVM_TY} {reg}, 0"));
                 self.reg_types.insert(disc.clone(), "i8".into());
                 let raw_payload = self.next_reg();
                 self.push_instr(&format!(
-                    "{raw_payload} = extractvalue {{ i8, ptr }} {reg}, 1"
+                    "{raw_payload} = extractvalue {RESULT_LLVM_TY} {reg}, 1"
                 ));
                 self.reg_types.insert(raw_payload.clone(), "ptr".into());
                 let slot = self.next_reg();
                 self.push_instr(&format!("{slot} = alloca ptr"));
                 self.push_instr(&format!("store ptr {raw_payload}, ptr {slot}"));
-                let r0 = self.next_reg();
-                self.push_instr(&format!(
-                    "{r0} = insertvalue {{ i8, ptr }} undef, i8 {disc}, 0"
-                ));
-                self.reg_types.insert(r0.clone(), "{ i8, ptr }".into());
-                let r1 = self.next_reg();
-                self.push_instr(&format!(
-                    "{r1} = insertvalue {{ i8, ptr }} {r0}, ptr {slot}, 1"
-                ));
-                self.reg_types.insert(r1.clone(), "{ i8, ptr }".into());
+                let r1 = self.wrap_result_pair(&disc, &slot);
                 return Ok(Some(r1));
             }
 
@@ -1999,6 +1997,24 @@ impl TextEmitter {
 
     // ── Result[T,E] helpers ───────────────────────────────────────────────
 
+    /// Build a `{ i8, ptr }` Result aggregate from a discriminant byte and a payload slot pointer.
+    ///
+    /// Both fields are immediately overwritten, so `zeroinitializer` is used as the base
+    /// (safe if the struct ever gains padding fields, unlike `undef`).
+    fn wrap_result_pair(&mut self, disc: &str, slot: &str) -> String {
+        let r0 = self.next_reg();
+        self.push_instr(&format!(
+            "{r0} = insertvalue {RESULT_LLVM_TY} zeroinitializer, i8 {disc}, 0"
+        ));
+        self.reg_types.insert(r0.clone(), RESULT_LLVM_TY.into());
+        let r1 = self.next_reg();
+        self.push_instr(&format!(
+            "{r1} = insertvalue {RESULT_LLVM_TY} {r0}, ptr {slot}, 1"
+        ));
+        self.reg_types.insert(r1.clone(), RESULT_LLVM_TY.into());
+        r1
+    }
+
     /// Emit `Ok(val)` or `Err(val)` — builds a `{ i8, ptr }` tagged union.
     fn emit_result_constructor(
         &mut self,
@@ -2022,16 +2038,7 @@ impl TextEmitter {
             slot = self.next_reg();
             self.push_instr(&format!("{slot} = alloca i8"));
         };
-        let r0 = self.next_reg();
-        self.push_instr(&format!(
-            "{r0} = insertvalue {{ i8, ptr }} undef, i8 {disc}, 0"
-        ));
-        self.reg_types.insert(r0.clone(), "{ i8, ptr }".into());
-        let r1 = self.next_reg();
-        self.push_instr(&format!(
-            "{r1} = insertvalue {{ i8, ptr }} {r0}, ptr {slot}, 1"
-        ));
-        self.reg_types.insert(r1.clone(), "{ i8, ptr }".into());
+        let r1 = self.wrap_result_pair(&disc.to_string(), &slot);
         let _ = arg_ty; // used above
         Ok(Some(r1))
     }
@@ -2065,16 +2072,7 @@ impl TextEmitter {
             "{payload} = select i1 {disc_is_ok}, ptr {ok_slot}, ptr {err_slot}"
         ));
         self.reg_types.insert(payload.clone(), "ptr".into());
-        let r0 = self.next_reg();
-        self.push_instr(&format!(
-            "{r0} = insertvalue {{ i8, ptr }} undef, i8 {disc}, 0"
-        ));
-        self.reg_types.insert(r0.clone(), "{ i8, ptr }".into());
-        let r1 = self.next_reg();
-        self.push_instr(&format!(
-            "{r1} = insertvalue {{ i8, ptr }} {r0}, ptr {payload}, 1"
-        ));
-        self.reg_types.insert(r1.clone(), "{ i8, ptr }".into());
+        let r1 = self.wrap_result_pair(&disc, &payload);
         Ok(Some(r1))
     }
 
@@ -2137,6 +2135,8 @@ impl TextEmitter {
 
         // Emit arm blocks.
         let mut phi_entries: Vec<(String, String, String)> = Vec::new();
+        // Arms that branch to merge_bb but produced no value (need undef phi entries).
+        let mut no_val_arms: Vec<String> = Vec::new(); // from_bb
 
         for (idx, arm) in arms.iter().enumerate() {
             let arm_bb = &arm_bbs[idx];
@@ -2189,10 +2189,12 @@ impl TextEmitter {
             let end_bb = self.current_bb.clone();
             if !self.terminated {
                 self.push_instr(&format!("br label %{merge_bb}"));
-            }
-            if let Some(v) = arm_val {
-                let ty = self.infer_val_type(&v);
-                phi_entries.push((v, ty, end_bb));
+                if let Some(v) = arm_val {
+                    let ty = self.infer_val_type(&v);
+                    phi_entries.push((v, ty, end_bb));
+                } else {
+                    no_val_arms.push(end_bb);
+                }
             }
 
             if let Some(var_name) = bound_var {
@@ -2218,21 +2220,25 @@ impl TextEmitter {
         self.fn_buf.push(format!("{merge_bb}:"));
         self.current_bb = merge_bb.clone();
         self.terminated = false;
-        if phi_entries.len() >= 2 {
+        let total_incoming = phi_entries.len() + no_val_arms.len();
+        if total_incoming >= 2 && !phi_entries.is_empty() {
             let phi_ty = phi_entries
                 .iter()
                 .find(|(_, ty, _)| ty != "i64")
                 .map(|(_, ty, _)| ty.clone())
                 .unwrap_or_else(|| phi_entries[0].1.clone());
-            let parts: Vec<String> = phi_entries
+            let mut parts: Vec<String> = phi_entries
                 .iter()
                 .map(|(v, _, from)| format!("[ {v}, %{from} ]"))
                 .collect();
+            for from in &no_val_arms {
+                parts.push(format!("[ undef, %{from} ]"));
+            }
             let result = self.next_reg();
             self.push_instr(&format!("{result} = phi {phi_ty} {}", parts.join(", ")));
             self.reg_types.insert(result.clone(), phi_ty);
             Ok(Some(result))
-        } else if phi_entries.len() == 1 {
+        } else if phi_entries.len() == 1 && no_val_arms.is_empty() {
             Ok(Some(phi_entries.remove(0).0))
         } else {
             Ok(None)
@@ -2863,10 +2869,12 @@ impl TextEmitter {
         let saved_ret_ty = std::mem::replace(&mut self.current_ret_ty, ret_ty.clone());
         let saved_terminated = self.terminated;
         let saved_current_bb = std::mem::replace(&mut self.current_bb, "entry".into());
+        let saved_is_main = self.current_fn_is_main;
 
         self.reg = 0;
         self.bb = 0;
         self.terminated = false;
+        self.current_fn_is_main = false; // lambdas are never main
 
         // ── Emit lambda function header ──────────────────────────────────
         let llvm_ret = self.llvm_ty_ctx(&ret_ty);
@@ -2936,6 +2944,7 @@ impl TextEmitter {
                 self.current_ret_ty = saved_ret_ty;
                 self.terminated = saved_terminated;
                 self.current_bb = saved_current_bb;
+                self.current_fn_is_main = saved_is_main;
                 return Err(e);
             }
         };
@@ -2965,6 +2974,7 @@ impl TextEmitter {
         self.current_ret_ty = saved_ret_ty;
         self.terminated = saved_terminated;
         self.current_bb = saved_current_bb;
+        self.current_fn_is_main = saved_is_main;
 
         // ── Build closure struct in outer function ────────────────────────
         let closure_alloca = self.next_reg();
@@ -3281,6 +3291,14 @@ mod tests {
         let ir = compile("fn main() -> Unit { }");
         assert!(ir.contains("define i32 @main()"), "{ir}");
         assert!(ir.contains("ret i32 0"), "{ir}");
+    }
+
+    #[test]
+    fn main_explicit_return_emits_ret_i32_0() {
+        let ir = compile("fn main() -> Unit { return; }");
+        assert!(ir.contains("define i32 @main()"), "{ir}");
+        assert!(ir.contains("ret i32 0"), "{ir}");
+        assert!(!ir.contains("ret void"), "{ir}");
     }
 
     #[test]
