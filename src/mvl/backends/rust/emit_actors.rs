@@ -105,13 +105,14 @@ pub fn emit_actor_runtime_preamble(cg: &mut RustEmitter) {
 
 /// Emit the complete Rust runtime infrastructure for an MVL actor declaration.
 ///
-/// Emits six items in order (items 4–6 omitted when no public behaviors exist):
+/// Emits seven items in order (items 4–7 omitted when no public behaviors exist):
 /// 1. `{Name}State` struct — private mutable state
 /// 2. `{Name}Msg` enum — message discriminants for each public behavior
 /// 3. `impl {Name}State` — state-machine method bodies
 /// 4. `struct {Name}` — tag-capability actor handle (with `#[derive(Clone)]`)
 /// 5. `impl {Name}` — fire-and-forget dispatch wrappers
-/// 6. `fn _start_{name}` — spawns the actor thread, returns the handle
+/// 6. `fn {name}_dispatch` — dispatch free function passed to `mvl_actor_run`
+/// 7. `fn _start_{name}` — spawns the actor thread via `mvl_actor_run`, returns the handle
 pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &ActorDecl) {
     let name = &ad.name;
     let state_name = format!("{name}State");
@@ -226,7 +227,7 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &ActorDecl) {
         cg.actor_self_type.clear();
     }
 
-    // ── 4, 5, 6: actor handle, dispatch impl, start fn ────────────────────
+    // ── 4, 5, 6, 7: actor handle, dispatch impl, dispatch fn, start fn ────
     // Only emitted when there are public behaviors (otherwise there is nothing
     // to send and no point in spawning a thread).
     if pub_methods.is_empty() {
@@ -277,36 +278,13 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &ActorDecl) {
     cg.line("}");
     cg.blank();
 
-    // 6. Start function: spawn actor thread, return handle.
-    //    Takes `mut state` so we can inject `_self_ref` after creating the
-    //    channel — the actor needs a clone of its own sender to pass `self`
-    //    as a `tag` argument inside behaviors.
-    //
-    //    Shutdown protocol (#1048, #1125): the main body scope drops all actor
-    //    handles (SyncSenders) before `_mvl_join_actors()` runs.  The blocking
-    //    `rx.recv()` call drains any buffered messages and returns
-    //    `Err(Disconnected)` once every sender is gone — zero polling overhead.
+    // 6. Dispatch function: a named free function passed to `mvl_actor_run`.
+    //    Keeps the match arms out of the start function closure — generated
+    //    code contains no `while` loop or `rx.recv()` call.  ADR-0027.
+    let dispatch_fn = format!("{}_dispatch", actor_name_to_snake(name));
     cg.line(&format!(
-        "fn {start_fn}(mut state: {state_name}) -> {name} {{"
+        "fn {dispatch_fn}(actor: &mut {state_name}, msg: {msg_name}) {{"
     ));
-    cg.push_indent();
-    let channel_line = match &ad.mailbox {
-        Some(MailboxConfig::Unbounded) => "let (tx, rx) = mvl_channel(-1_i64, 0_i64);".to_string(),
-        Some(MailboxConfig::Bounded { capacity, policy }) => {
-            let pol: i64 = match policy {
-                MailboxPolicy::Block => 1,
-                MailboxPolicy::DropNewest => 0,
-            };
-            format!("let (tx, rx) = mvl_channel({capacity}_i64, {pol}_i64);")
-        }
-        None => "let (tx, rx) = mvl_channel(256_i64, 0_i64);".to_string(),
-    };
-    cg.line(&channel_line);
-    cg.line("state._self_ref = Some(tx.downgrade());");
-    cg.line("let __handle = mvl_spawn(move || {");
-    cg.push_indent();
-    cg.line("let mut actor = state;");
-    cg.line("while let Some(msg) = rx.recv() {");
     cg.push_indent();
     cg.line("match msg {");
     cg.push_indent();
@@ -327,8 +305,36 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &ActorDecl) {
     cg.line("}");
     cg.pop_indent();
     cg.line("}");
-    cg.pop_indent();
-    cg.line("});");
+    cg.blank();
+
+    // 7. Start function: spawn actor thread via `mvl_actor_run`, return handle.
+    //    Takes `mut state` so we can inject `_self_ref` after creating the
+    //    channel — the actor needs a weak sender to pass `self`
+    //    as a `tag` argument inside behaviors.
+    //
+    //    Shutdown protocol (#1048, #1125): the main body scope drops all actor
+    //    handles before `mvl_join_actors()` runs.  `MvlReceiver::recv()` drains
+    //    buffered messages then returns `None` once every sender is gone.
+    cg.line(&format!(
+        "fn {start_fn}(mut state: {state_name}) -> {name} {{"
+    ));
+    cg.push_indent();
+    let channel_line = match &ad.mailbox {
+        Some(MailboxConfig::Unbounded) => "let (tx, rx) = mvl_channel(-1_i64, 0_i64);".to_string(),
+        Some(MailboxConfig::Bounded { capacity, policy }) => {
+            let pol: i64 = match policy {
+                MailboxPolicy::Block => 1,
+                MailboxPolicy::DropNewest => 0,
+            };
+            format!("let (tx, rx) = mvl_channel({capacity}_i64, {pol}_i64);")
+        }
+        None => "let (tx, rx) = mvl_channel(256_i64, 0_i64);".to_string(),
+    };
+    cg.line(&channel_line);
+    cg.line("state._self_ref = Some(tx.downgrade());");
+    cg.line(&format!(
+        "let __handle = mvl_actor_run(rx, state, {dispatch_fn});"
+    ));
     cg.line("mvl_register_actor(__handle);");
     cg.line(&format!("{name} {{ _sender: tx }}"));
     cg.pop_indent();
