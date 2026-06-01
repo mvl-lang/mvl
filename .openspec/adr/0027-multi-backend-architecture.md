@@ -91,7 +91,9 @@ pub struct MvlJoinHandle
 // Called from _start_<actor> functions:
 pub fn mvl_channel<M: Send + 'static>(capacity: i64, policy: i64)
     -> (MvlSender<M>, MvlReceiver<M>);
-pub fn mvl_spawn<F: FnOnce() + Send + 'static>(f: F) -> MvlJoinHandle;
+pub fn mvl_actor_run<S, M>(rx: MvlReceiver<M>, state: S, dispatch: fn(&mut S, M))
+    -> MvlJoinHandle
+    where S: Send + 'static, M: Send + 'static;
 pub fn mvl_register_actor(h: MvlJoinHandle);
 
 // Called at end of fn main():
@@ -103,10 +105,9 @@ impl<M: Send + 'static> MvlSender<M> {
     pub fn clone(&self) -> Self;
 }
 
-// Called from actor thread loop:
-impl<M: Send + 'static> MvlReceiver<M> {
-    pub fn recv(&self) -> Option<M>;  // blocks until message or disconnect
-}
+// Runtime-internal (not called from generated code):
+// mvl_spawn — used internally by mvl_actor_run
+// MvlReceiver::recv — used internally by mvl_actor_run
 ```
 
 The actor handle struct field type is always `mvl_runtime::MvlSender<XMailbox>` — never

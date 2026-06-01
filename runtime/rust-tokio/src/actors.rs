@@ -90,7 +90,7 @@ impl<M: Send + 'static> MvlReceiver<M> {
     /// Uses `blocking_recv` which parks the calling thread without requiring a
     /// tokio runtime context — safe to call from `std::thread::spawn` threads.
     pub fn recv(&self) -> Option<M> {
-        let mut inner = self.0.lock().unwrap();
+        let mut inner = self.0.lock().unwrap_or_else(|p| p.into_inner());
         match &mut *inner {
             ReceiverInner::Bounded(rx) => rx.blocking_recv(),
             ReceiverInner::Unbounded(rx) => rx.blocking_recv(),
@@ -158,7 +158,30 @@ pub fn mvl_register_actor(h: MvlJoinHandle) {
 pub fn mvl_join_actors() {
     MVL_ACTOR_HANDLES.with(|v| {
         for h in v.borrow_mut().drain(..) {
-            let _ = h.0.join();
+            if h.0.join().is_err() {
+                eprintln!("[mvl runtime] actor thread panicked");
+            }
         }
     });
+}
+
+/// Spawn an actor thread that owns `state` and runs the dispatch loop.
+///
+/// Calls `dispatch(state, msg)` for each incoming message until the receiver
+/// is closed (all senders have been dropped).  Returns an opaque join handle
+/// for [`mvl_register_actor`].
+///
+/// Mirrors the default runtime implementation — generated code is identical
+/// across `--target` variants.  ADR-0027 §"Actor runtime interface".
+pub fn mvl_actor_run<S, M>(rx: MvlReceiver<M>, state: S, dispatch: fn(&mut S, M)) -> MvlJoinHandle
+where
+    S: Send + 'static,
+    M: Send + 'static,
+{
+    mvl_spawn(move || {
+        let mut actor = state;
+        while let Some(msg) = rx.recv() {
+            dispatch(&mut actor, msg);
+        }
+    })
 }

@@ -2585,36 +2585,45 @@ fn actor_decl_emits_runtime_infrastructure() {
     assert_contains(&rust, "fn increment(&mut self, n: i64)");
     assert_contains(&rust, "fn reset(&mut self)");
     assert_contains(&rust, "fn get_count(&mut self)");
-    // Actor handle
+    // Actor handle uses the named runtime type (MvlSender), not std::sync::mpsc.
     assert_contains(&rust, "struct Counter {");
-    assert_contains(
-        &rust,
-        "_sender: std::sync::mpsc::SyncSender<CounterMailbox>,",
-    );
-    // Handle impl: fire-and-forget wrappers for pub behaviors only
+    assert_contains(&rust, "_sender: MvlSender<CounterMailbox>,");
+    // Handle impl: fire-and-forget wrappers use the runtime send() interface.
     assert_contains(&rust, "impl Counter {");
     assert_contains(&rust, "pub fn increment(&self, n: i64)");
-    assert_contains(
-        &rust,
-        "let _ = self._sender.try_send(CounterMailbox::Increment { n });",
-    );
+    assert_contains(&rust, "self._sender.send(CounterMailbox::Increment { n });");
     assert_contains(&rust, "pub fn reset(&self)");
+    assert_contains(&rust, "self._sender.send(CounterMailbox::Reset);");
+    // Dispatch function: named free fn passed to mvl_actor_run. (#1141)
     assert_contains(
         &rust,
-        "let _ = self._sender.try_send(CounterMailbox::Reset);",
+        "fn counter_dispatch(actor: &mut CounterState, msg: CounterMailbox) {",
     );
-    // Start function: takes `mut state` so _self_ref can be injected.
-    assert_contains(
-        &rust,
-        "fn _start_counter(mut state: CounterState) -> Counter {",
-    );
-    assert_contains(&rust, "std::sync::mpsc::sync_channel(256)");
-    assert_contains(&rust, "std::thread::spawn");
     assert_contains(
         &rust,
         "CounterMailbox::Increment { n } => actor.increment(n),",
     );
     assert_contains(&rust, "CounterMailbox::Reset => actor.reset(),");
+    // Start function: uses mvl_channel + mvl_actor_run; no inline dispatch loop.
+    assert_contains(
+        &rust,
+        "fn _start_counter(mut state: CounterState) -> Counter {",
+    );
+    assert_contains(&rust, "mvl_channel(256_i64, 0_i64)");
+    assert_contains(&rust, "mvl_actor_run(rx, state, counter_dispatch)");
+    // Negative assertions: old inline primitives must not appear. (#1141)
+    assert!(
+        !rust.contains("std::sync::mpsc"),
+        "old mpsc must not appear in actor output: {rust}"
+    );
+    assert!(
+        !rust.contains("std::thread::spawn"),
+        "old thread::spawn must not appear in actor output: {rust}"
+    );
+    assert!(
+        !rust.contains("try_send("),
+        "old try_send must not appear in actor output: {rust}"
+    );
 }
 
 /// Actor with `pub` visibility emits `pub struct` handle. (#695)
@@ -2697,7 +2706,7 @@ fn actor_state_has_self_ref_field() {
     "#;
     let rust = transpile_src(src);
     assert_contains(&rust, "struct FooState {");
-    assert_contains(&rust, "_self_ref: Option<Foo>,");
+    assert_contains(&rust, "_self_ref: Option<MvlWeakSender<FooMailbox>>,");
 }
 
 /// The `_self_ref: None` sentinel is appended to every actor spawn call so the
@@ -2756,7 +2765,7 @@ fn actor_self_arg_becomes_self_ref_clone() {
         }
     "#;
     let rust = transpile_src(src);
-    assert_contains(&rust, "self._self_ref.as_ref().unwrap().clone()");
+    assert_contains(&rust, "self._self_ref.as_ref().unwrap().upgrade()");
 }
 
 /// `concurrently { }` emits the body statements (spawn + message sends). (#580)

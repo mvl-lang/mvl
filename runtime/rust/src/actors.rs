@@ -159,7 +159,32 @@ pub fn mvl_register_actor(h: MvlJoinHandle) {
 pub fn mvl_join_actors() {
     MVL_ACTOR_HANDLES.with(|v| {
         for h in v.borrow_mut().drain(..) {
-            let _ = h.0.join();
+            if h.0.join().is_err() {
+                eprintln!("[mvl runtime] actor thread panicked");
+            }
         }
     });
+}
+
+/// Spawn an actor thread that owns `state` and runs the dispatch loop.
+///
+/// Calls `dispatch(state, msg)` for each incoming message until the receiver
+/// is closed (all senders have been dropped).  Returns an opaque join handle
+/// for [`mvl_register_actor`].
+///
+/// The Rust backend emitter calls this instead of inlining the dispatch loop
+/// inside a `mvl_spawn` closure, keeping generated code free of the loop
+/// pattern and independent of runtime primitives.  ADR-0027 §"Actor runtime
+/// interface".
+pub fn mvl_actor_run<S, M>(rx: MvlReceiver<M>, state: S, dispatch: fn(&mut S, M)) -> MvlJoinHandle
+where
+    S: Send + 'static,
+    M: Send + 'static,
+{
+    mvl_spawn(move || {
+        let mut actor = state;
+        while let Some(msg) = rx.recv() {
+            dispatch(&mut actor, msg);
+        }
+    })
 }
