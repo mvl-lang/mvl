@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.172.0] - 2026-06-01
+
+### Added
+- `llvm_text` backend Phase 3B: actor declaration lowering — state structs, behavior functions, dispatch functions, spawn expressions, actor method calls, and `@mvl_actor_join_all` injection in `main`; implemented in `emit_actors.rs` as a child module of `emitter` (#1149)
+- `examples/anthropic_chat`: `assurance` target in `Makefile` (#1167)
+
 ## [0.171.1] - 2026-06-01
 
 ### Fixed
