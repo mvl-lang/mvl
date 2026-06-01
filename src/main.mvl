@@ -1,5 +1,0 @@
-//! Entry point.
-
-fn main() -> Unit ! Console {
-    println("Hello from agent-3!")
-}
