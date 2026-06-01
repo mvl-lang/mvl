@@ -3289,6 +3289,32 @@ mod tests {
         assert!(ir.contains("ret i64"), "{ir}");
     }
 
+    /// Regression for #1155: a 3-way `else if` chain must emit PHI nodes for
+    /// every branch so the correct value is selected at runtime. Before the fix,
+    /// the `else if` condition was silently dropped and the merge block produced
+    /// `ret i64 undef`.
+    #[test]
+    fn else_if_chain_emits_phi_for_all_branches() {
+        let ir = compile(
+            "fn classify(n: Int) -> Int {\n\
+                 if n > 0 { 1 }\n\
+                 else if n < 0 { -1 }\n\
+                 else { 0 }\n\
+             }",
+        );
+        // The `else if n < 0` condition must actually be evaluated.
+        assert!(ir.contains("icmp slt"), "{ir}");
+        // Two PHI nodes: inner selects between -1 and 0; outer selects between 1 and inner.
+        let phi_count = ir.matches(" = phi ").count();
+        assert!(
+            phi_count >= 2,
+            "else-if chain needs ≥2 phi nodes, got {phi_count}\n{ir}"
+        );
+        // Return must be a defined value, not undef.
+        assert!(ir.contains("ret i64"), "{ir}");
+        assert!(!ir.contains("ret i64 undef"), "{ir}");
+    }
+
     #[test]
     fn unit_function_emits_ret_void() {
         let ir = compile("fn noop() -> Unit { }");
