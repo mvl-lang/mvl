@@ -41,7 +41,7 @@ fuzz/Cargo.lock
 crud_api.db
 examples/crud_api/crud_api.db
 
-# Installed package cache (created by `mvl install`)
+# Local project package directories (legacy; packages now resolved from XDG cache)
 .mvl/
 
 # Marimo notebook session data

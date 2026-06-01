@@ -46,7 +46,7 @@ assurance: guard-mvl ## Full assurance: check + unit tests + assurance report
 smoke: guard-mvl ## Smoke-test: build binary (proves compilation without a terminal)
 	cd $(REPO_ROOT) && $(abspath $(MVL)) build $(DIR)main.mvl
 
-run: guard-mvl ## Run the example (runs from repo root so pkg.* resolution finds .mvl/pkg/sqlite)
+run: guard-mvl ## Run the example
 	cd $(REPO_ROOT) && $(abspath $(MVL)) run $(DIR)main.mvl
 
 clean: ## Remove build artifacts

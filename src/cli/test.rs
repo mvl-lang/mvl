@@ -89,7 +89,8 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
             .iter()
             .map(|f| super::parse_or_exit(&f.display().to_string()).0)
             .collect();
-        let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let project_root = super::find_project_root(&cwd);
         stdlib_prelude_progs.extend(loader::load_pkg_modules(
             &all_test_progs,
             &project_root,

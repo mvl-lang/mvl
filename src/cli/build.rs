@@ -118,7 +118,8 @@ pub fn run(path: &str, run: bool, run_args: &[String], assert_mode: AssertMode) 
     // `seen_pkgs` prevents infinite loops when a package's own sources contain
     // `use pkg.<self>` imports — without it, the same package would be loaded
     // every round (#1050).
-    let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let project_root = super::find_project_root(&cwd);
     let mut pkg_progs: Vec<_> = Vec::new();
     let mut seen_pkgs = std::collections::HashSet::<String>::new();
     let mut frontier: Vec<_> = all_progs.clone();
