@@ -1,6 +1,6 @@
 # zed-mvl
 
-Zed extension for [MVL (Minimum Verification Language)](../../README.md).
+Zed extension for [MVL (Maximum Verifiable Language)](../../README.md).
 
 Provides syntax highlighting, bracket matching, and smart indentation via
 Zed's native tree-sitter integration.

@@ -1,6 +1,6 @@
 # tree-sitter-mvl
 
-Tree-sitter grammar for [MVL (Minimum Verification Language)](../../README.md) — a minimal,
+Tree-sitter grammar for [MVL (Maximum Verifiable Language)](../../README.md) — a minimal,
 compiler-verified language designed for safety-critical and security-sensitive code generation.
 
 Provides syntax highlighting for **Zed** and **Neovim** (and any editor backed by tree-sitter).
@@ -67,7 +67,7 @@ make tree-sitter-test
 id = "mvl"
 name = "MVL"
 version = "0.1.0"
-description = "Minimum Verification Language support for Zed"
+description = "Maximum Verifiable Language support for Zed"
 authors = ["MVL Team"]
 repository = "https://github.com/your-org/mvl_language"
 

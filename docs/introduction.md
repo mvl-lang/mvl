@@ -10,7 +10,7 @@ Large language models generate code in any language, at any verbosity, with any 
 
 So why are we still designing languages for humans to write?
 
-The MVL — the Minimum Verification Language — turns the question around. Instead of asking "what's pleasant to type?", it asks: **what's the maximum a compiler can verify per token of generated code?** Not what's easy to write. What's easy to prove correct.
+The MVL — the Maximum Verifiable Language — turns the question around. Instead of asking "what's pleasant to type?", it asks: **what's the maximum a compiler can verify per token of generated code?** Not what's easy to write. What's easy to prove correct.
 
 ## The problem MVL solves
 
