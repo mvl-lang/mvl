@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [0.173.2] - 2026-06-02
+
+### Fixed
+- `llvm_text` backend: address PR #1176 security and correctness review findings: prevent wildcard arm duplication in option match; replace `.unwrap()` panic with proper error; sanitize LLVM IR identifiers to prevent name injection; use consistent PHI type selection; guard merge block terminator; cap monomorphization loop at 10,000 iterations (#1155, #1156)
+
 ## [0.173.1] - 2026-06-01
 
 ### Fixed
