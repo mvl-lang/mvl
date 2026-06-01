@@ -335,6 +335,8 @@ pub fn transpile_project_with_options(
         use_mvl_runtime: use_runtime,
         extern_crates: Vec::new(),
         native_dep_lines: Vec::new(),
+        mvl_runtime_path: None,
+        use_tokio: false,
     };
     let cargo_toml = if has_main {
         cargo::emit_cargo_toml_binary_opts(&opts)
@@ -427,6 +429,8 @@ pub fn transpile(
         use_mvl_runtime: use_runtime,
         extern_crates: Vec::new(),
         native_dep_lines: Vec::new(),
+        mvl_runtime_path: None,
+        use_tokio: false,
     };
     let cargo_toml = if has_main {
         cargo::emit_cargo_toml_binary_opts(&opts)

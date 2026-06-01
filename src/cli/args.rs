@@ -36,7 +36,9 @@ pub fn print_usage() {
   mvl build|run|check|test <file|dir> --stdlib=proven  — proven profile: verifies stdlib before user code (ADR-0023)
   mvl build|run <file|dir> --assert-mode=always     — enforce invariants unconditionally (default)
   mvl build|run <file|dir> --assert-mode=debug-only — enforce invariants in debug builds only
-  mvl build|run <file|dir> --assert-mode=assume     — emit llvm.assume hint; no runtime trap"
+  mvl build|run <file|dir> --assert-mode=assume     — emit llvm.assume hint; no runtime trap
+  mvl build|run <file|dir> --target=default         — actor runtime: std::thread + mpsc (default)
+  mvl build|run <file|dir> --target=tokio           — actor runtime: tokio tasks + channels"
     );
     eprintln!(
         "  mvl complexity <file|dir>           — static complexity analysis (CC, fan-out, traits)"
@@ -123,6 +125,23 @@ pub(super) fn parse_backend(args: &[String]) -> &str {
     args.iter()
         .find_map(|a| a.strip_prefix("--backend="))
         .unwrap_or("rust")
+}
+
+/// Parse `--target=<name>` from args; defaults to `"default"`.
+///
+/// Valid targets: `default` (std::thread + mpsc), `tokio` (tokio tasks + channels).
+pub(super) fn parse_target_or_exit(args: &[String]) -> &str {
+    let target = args
+        .iter()
+        .find_map(|a| a.strip_prefix("--target="))
+        .unwrap_or("default");
+    match target {
+        "default" | "tokio" => target,
+        other => {
+            eprintln!("error: unknown target '{other}' (supported: default, tokio)");
+            process::exit(1);
+        }
+    }
 }
 
 /// Parse `--stdlib=<profile>` from args; defaults to `"trusted"`.

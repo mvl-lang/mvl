@@ -83,6 +83,7 @@ pub(super) fn dispatch(args: &[String]) {
             let backend = args::parse_backend(args);
             let stdlib_profile = args::parse_stdlib_profile(args);
             let assert_mode = args::parse_assert_mode_or_exit(args);
+            let target = args::parse_target_or_exit(args);
             let verbose = args.iter().any(|a| a == "--verbose" || a == "-v");
             if verbose {
                 eprintln!("stdlib profile: {stdlib_profile}");
@@ -99,7 +100,7 @@ pub(super) fn dispatch(args: &[String]) {
                     process::exit(1);
                 }
             } else {
-                build::run(&path, false, &[], assert_mode);
+                build::run(&path, false, &[], assert_mode, target);
             }
         }
         "run" => {
@@ -107,6 +108,7 @@ pub(super) fn dispatch(args: &[String]) {
             let backend = args::parse_backend(args);
             let stdlib_profile = args::parse_stdlib_profile(args);
             let assert_mode = args::parse_assert_mode_or_exit(args);
+            let target = args::parse_target_or_exit(args);
             check::maybe_check_proven_stdlib_or_exit(stdlib_profile);
             let path_idx = args::path_arg_index(args);
             let run_args: Vec<String> = args[path_idx + 1..]
@@ -124,7 +126,7 @@ pub(super) fn dispatch(args: &[String]) {
                     process::exit(1);
                 }
             } else {
-                build::run(&path, true, &run_args, assert_mode);
+                build::run(&path, true, &run_args, assert_mode, target);
             }
         }
         "transpile" => {

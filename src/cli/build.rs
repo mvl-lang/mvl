@@ -39,7 +39,7 @@ fn inject_mod_bridge(source: &str) -> String {
 /// binary is executed with its working directory set to the source file's
 /// parent directory so that relative paths in args (e.g. `--file logs.jsonl`)
 /// resolve correctly.
-pub fn run(path: &str, run: bool, run_args: &[String], assert_mode: AssertMode) {
+pub fn run(path: &str, run: bool, run_args: &[String], assert_mode: AssertMode, target: &str) {
     let stdlib_dir = stdlib::ensure_stdlib();
     // For directory inputs, use the directory stem as the crate name and
     // concatenate all .mvl files (simple Phase 1 approach: single-crate multi-file).
@@ -245,29 +245,45 @@ pub fn run(path: &str, run: bool, run_args: &[String], assert_mode: AssertMode) 
         bridge_from_pkg = bridge_path.is_some();
     }
 
-    // If the bridge came from a pkg.* package, re-emit Cargo.toml with that
-    // package's native dependencies (from its mvl.toml [native] section).
-    // Skip this when the bridge is a user-supplied sibling bridge.rs to avoid
-    // injecting unexpected deps into unrelated builds.
-    if bridge_from_pkg {
-        let native_dep_lines = loader::collect_pkg_native_dep_lines(&all_with_pkgs, &project_root);
-        if !native_dep_lines.is_empty() {
-            let opts = transpiler::cargo::CargoOptions {
-                crate_name: &crate_name,
-                use_mvl_runtime: out.use_mvl_runtime,
-                extern_crates: Vec::new(),
-                native_dep_lines,
-            };
-            let patched = if out.has_main {
-                transpiler::cargo::emit_cargo_toml_binary_opts(&opts)
-            } else {
-                transpiler::cargo::emit_cargo_toml_library_opts(&opts)
-            };
-            fs::write(&cargo_toml_path, &patched).unwrap_or_else(|e| {
-                eprintln!("Cannot write Cargo.toml: {e}");
-                process::exit(1);
-            });
-        }
+    // Re-emit Cargo.toml when non-default settings are needed:
+    // - native deps from a pkg.* bridge (bridge_from_pkg)
+    // - tokio runtime for --target=tokio
+    // Both cases are unified here so only one final Cargo.toml write occurs.
+    let native_dep_lines: Vec<String> = if bridge_from_pkg {
+        loader::collect_pkg_native_dep_lines(&all_with_pkgs, &project_root)
+    } else {
+        Vec::new()
+    };
+    let needs_cargo_patch = !native_dep_lines.is_empty() || target != "default";
+    if needs_cargo_patch {
+        let tokio_runtime_path: Option<String> = if target == "tokio" {
+            Some(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("runtime")
+                    .join("rust-tokio")
+                    .to_string_lossy()
+                    .into_owned(),
+            )
+        } else {
+            None
+        };
+        let opts = transpiler::cargo::CargoOptions {
+            crate_name: &crate_name,
+            use_mvl_runtime: out.use_mvl_runtime,
+            extern_crates: Vec::new(),
+            native_dep_lines,
+            mvl_runtime_path: tokio_runtime_path,
+            use_tokio: target == "tokio",
+        };
+        let patched = if out.has_main {
+            transpiler::cargo::emit_cargo_toml_binary_opts(&opts)
+        } else {
+            transpiler::cargo::emit_cargo_toml_library_opts(&opts)
+        };
+        fs::write(&cargo_toml_path, &patched).unwrap_or_else(|e| {
+            eprintln!("Cannot write Cargo.toml: {e}");
+            process::exit(1);
+        });
     }
 
     if out.has_extern_rust && bridge_path.is_none() {
@@ -325,30 +341,41 @@ pub fn run(path: &str, run: bool, run_args: &[String], assert_mode: AssertMode) 
         });
     }
 
-    // If the program uses mvl_runtime, copy it inside the build dir so the
-    // relative path `./mvl_runtime` in Cargo.toml resolves.  Each build gets
-    // its own copy, which eliminates races when multiple bridge programs are
-    // built concurrently (e.g. parallel integration tests).
+    // If the program uses mvl_runtime, make it available for the build:
     //
-    // Idempotent for concurrent invocations with identical source: create_dir_all
-    // + fs::copy both tolerate pre-existing targets.  Stale artefacts from a
-    // prior build of a different version are handled by cargo's incremental cache.
+    // --target=default: copy runtime/rust to ./mvl_runtime (relative path in Cargo.toml).
+    //   Each build gets its own copy to eliminate concurrent-build races.
+    //
+    // --target=tokio: the generated Cargo.toml already references runtime/rust-tokio
+    //   via an absolute path (ADR-0027 §"--target selects the runtime"), so no copy
+    //   is needed. We just verify the source exists.
     if out.use_mvl_runtime {
-        let runtime_src = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("runtime")
-            .join("rust");
-        let runtime_dst = tmp_dir.join("mvl_runtime");
-        if !runtime_src.exists() {
-            eprintln!(
-                "error: mvl_runtime not found at {} — cannot build extern bridge",
-                runtime_src.display()
-            );
-            process::exit(1);
+        let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        if target == "tokio" {
+            let tokio_src = manifest_dir.join("runtime").join("rust-tokio");
+            if !tokio_src.exists() {
+                eprintln!(
+                    "error: tokio runtime not found at {} — ensure runtime/rust-tokio is present",
+                    tokio_src.display()
+                );
+                process::exit(1);
+            }
+            // No copy — Cargo.toml references tokio runtime via absolute path.
+        } else {
+            let runtime_src = manifest_dir.join("runtime").join("rust");
+            let runtime_dst = tmp_dir.join("mvl_runtime");
+            if !runtime_src.exists() {
+                eprintln!(
+                    "error: mvl_runtime not found at {} — cannot build extern bridge",
+                    runtime_src.display()
+                );
+                process::exit(1);
+            }
+            super::copy_dir_recursive(&runtime_src, &runtime_dst).unwrap_or_else(|e| {
+                eprintln!("error: failed to copy mvl_runtime: {e}");
+                process::exit(1);
+            });
         }
-        super::copy_dir_recursive(&runtime_src, &runtime_dst).unwrap_or_else(|e| {
-            eprintln!("error: failed to copy mvl_runtime: {e}");
-            process::exit(1);
-        });
     }
 
     println!("Transpiled to: {}", tmp_dir.display());

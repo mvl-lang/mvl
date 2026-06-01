@@ -1,0 +1,10 @@
+[package]
+name = "mvl_runtime_tokio"
+version = "0.1.0"
+edition = "2021"
+description = "MVL runtime — tokio-backed actor runtime for --target=tokio"
+license = "Apache-2.0"
+
+[dependencies]
+mvl_runtime = { path = "../rust" }
+tokio = { version = "1", features = ["sync", "rt"] }
