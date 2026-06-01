@@ -89,8 +89,11 @@ impl Default for LlvmTextCompiler {
 ///    Method calls on these types are handled via hardcoded C-ABI dispatch in
 ///    `emit_method_call` instead.
 ///
-/// 2. **Extension methods with complex bodies** — some extension methods call
-///    other methods or use patterns the emitter cannot yet lower.
+/// 2. **Option/Result return types** — prelude functions like `env.get_secret` or
+///    `env.env_var` that return `Option[T]` or `Result[T, E]` may call runtime
+///    symbols not available in the lli runtime.  User-defined functions with
+///    Option/Result are handled correctly by the emitter — this filter only
+///    applies to prelude functions.
 fn strip_prelude_extension_methods(prog: &Program) -> Program {
     let mut out = prog.clone();
     out.declarations.retain(|d| {
@@ -102,10 +105,29 @@ fn strip_prelude_extension_methods(prog: &Program) -> Program {
             if fd.receiver_type.is_some() {
                 return false;
             }
+            // Drop non-builtin prelude functions whose return type is Option or
+            // Result — they may call runtime symbols not available in lli.
+            if return_type_needs_option_abi(&fd.return_type) {
+                return false;
+            }
         }
         true
     });
     out
+}
+
+/// Return `true` if `ty` is `Option[_]` or `Result[_, _]` (possibly wrapped
+/// in `Labeled` or `Refined`).  Used to skip prelude functions that may
+/// reference runtime symbols unavailable in the lli runtime.
+fn return_type_needs_option_abi(ty: &TypeExpr) -> bool {
+    match ty {
+        TypeExpr::Option { .. } | TypeExpr::Result { .. } => true,
+        TypeExpr::Labeled { inner, .. } | TypeExpr::Refined { inner, .. } => {
+            return_type_needs_option_abi(inner)
+        }
+        TypeExpr::Ref { inner, .. } => return_type_needs_option_abi(inner),
+        _ => false,
+    }
 }
 
 // ── Internal emitter ──────────────────────────────────────────────────────────
@@ -808,7 +830,15 @@ impl TextEmitter {
 
         // Third pass: emit monomorphized copies queued during call emission.
         // Loop because a monomorphized body may itself call another generic fn.
+        const MONO_LIMIT: usize = 10_000;
+        let mut mono_iterations = 0usize;
         while !self.mono_queue.is_empty() {
+            mono_iterations += 1;
+            if mono_iterations > MONO_LIMIT {
+                return Err(
+                    "monomorphization limit exceeded — possible infinite instantiation".into(),
+                );
+            }
             let queue = std::mem::take(&mut self.mono_queue);
             for (mangled, orig_name, concrete_types) in queue {
                 let gfd = match self.generic_fns.get(&orig_name) {
@@ -2192,11 +2222,16 @@ impl TextEmitter {
         switch_str.push_str("  ]");
         self.push_instr(&switch_str);
 
-        // Emit arm blocks.
+        // Emit arm blocks (skip wildcard/ident arms — emitted from default_bb).
         let mut phi_entries: Vec<(String, String, String)> = Vec::new();
         let mut no_val_arms: Vec<String> = Vec::new();
 
         for (idx, arm) in arms.iter().enumerate() {
+            // Skip wildcard arms here; they are emitted via the default block.
+            if Some(idx) == wildcard_arm {
+                continue;
+            }
+
             let arm_bb = &arm_bbs[idx];
             self.fn_buf.push(format!("{arm_bb}:"));
             self.current_bb = arm_bb.clone();
@@ -2227,12 +2262,6 @@ impl TextEmitter {
                 Pattern::None(_) => {
                     // Nothing to bind.
                 }
-                Pattern::Wildcard(_) | Pattern::Ident(_, _) => {
-                    if let Pattern::Ident(name, _) = &arm.pattern {
-                        self.locals.insert(name.clone(), scrut_val.to_string());
-                        bound_var = Some(name.clone());
-                    }
-                }
                 _ => {}
             }
 
@@ -2257,13 +2286,36 @@ impl TextEmitter {
             }
         }
 
-        // Default block.
+        // Default block — either jumps to wildcard arm body or traps.
         self.fn_buf.push(format!("{default_bb}:"));
         self.current_bb = default_bb.clone();
         self.terminated = false;
         if let Some(wild_idx) = wildcard_arm {
-            let arm_bb = &arm_bbs[wild_idx];
-            self.push_instr(&format!("br label %{arm_bb}"));
+            // Emit the wildcard arm body inline in the default block.
+            let wild_arm = &arms[wild_idx];
+            let mut bound_var: Option<String> = None;
+            if let Pattern::Ident(name, _) = &wild_arm.pattern {
+                self.locals.insert(name.clone(), scrut_val.to_string());
+                bound_var = Some(name.clone());
+            }
+            let arm_val = match &wild_arm.body {
+                MatchBody::Expr(e) => self.emit_expr(e)?,
+                MatchBody::Block(b) => self.emit_block(b)?,
+            };
+            let end_bb = self.current_bb.clone();
+            if !self.terminated {
+                self.push_instr(&format!("br label %{merge_bb}"));
+                if let Some(v) = arm_val {
+                    let ty = self.infer_val_type(&v);
+                    phi_entries.push((v, ty, end_bb));
+                } else {
+                    no_val_arms.push(end_bb);
+                }
+            }
+            if let Some(ref var_name) = bound_var {
+                self.locals.remove(var_name);
+                self.local_mvl_types.remove(var_name);
+            }
         } else {
             self.ensure_extern("declare void @llvm.trap()");
             self.push_instr("call void @llvm.trap()");
@@ -2272,16 +2324,23 @@ impl TextEmitter {
         }
 
         // Merge block + phi.
+        let total_incoming = phi_entries.len() + no_val_arms.len();
+        if total_incoming == 0 {
+            // All arms terminated (e.g. all `return`) — no merge block needed.
+            self.fn_buf.push(format!("{merge_bb}:"));
+            self.current_bb = merge_bb.clone();
+            self.terminated = false;
+            self.ensure_extern("declare void @llvm.trap()");
+            self.push_instr("call void @llvm.trap()");
+            self.push_instr("unreachable");
+            self.terminated = true;
+            return Ok(None);
+        }
         self.fn_buf.push(format!("{merge_bb}:"));
         self.current_bb = merge_bb.clone();
         self.terminated = false;
-        let total_incoming = phi_entries.len() + no_val_arms.len();
         if total_incoming >= 2 && !phi_entries.is_empty() {
-            let phi_ty = phi_entries
-                .iter()
-                .find(|(_, ty, _)| ty != "i64")
-                .map(|(_, ty, _)| ty.clone())
-                .unwrap_or_else(|| phi_entries[0].1.clone());
+            let phi_ty = phi_entries[0].1.clone();
             let mut parts: Vec<String> = phi_entries
                 .iter()
                 .map(|(v, _, from)| format!("[ {v}, %{from} ]"))
@@ -2348,18 +2407,58 @@ impl TextEmitter {
         }
     }
 
+    /// Sanitize a string segment for use in LLVM IR identifiers.
+    fn mangle_segment(s: &str) -> String {
+        s.chars()
+            .map(|c| {
+                if c.is_alphanumeric() || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect()
+    }
+
     /// Mangle a generic function name with concrete types: `identity` + [Int] → `identity__Int`.
     fn mangle_generic(name: &str, concrete: &[TypeExpr]) -> String {
         let suffix: Vec<String> = concrete
             .iter()
             .map(|ty| match ty {
-                TypeExpr::Base { name, .. } => name.clone(),
-                TypeExpr::Option { .. } => "Option".into(),
-                TypeExpr::Result { .. } => "Result".into(),
+                TypeExpr::Base { name, .. } => Self::mangle_segment(name),
+                TypeExpr::Option { inner, .. } => {
+                    format!(
+                        "Option_{}",
+                        Self::mangle_segment(&Self::mangle_type_name(inner))
+                    )
+                }
+                TypeExpr::Result { ok, err, .. } => {
+                    format!(
+                        "Result_{}_{}",
+                        Self::mangle_segment(&Self::mangle_type_name(ok)),
+                        Self::mangle_segment(&Self::mangle_type_name(err))
+                    )
+                }
                 _ => "T".into(),
             })
             .collect();
-        format!("{name}__{}", suffix.join("_"))
+        format!("{}__{}", Self::mangle_segment(name), suffix.join("_"))
+    }
+
+    /// Extract a human-readable type name for mangling purposes.
+    fn mangle_type_name(ty: &TypeExpr) -> String {
+        match ty {
+            TypeExpr::Base { name, .. } => name.clone(),
+            TypeExpr::Option { inner, .. } => format!("Option_{}", Self::mangle_type_name(inner)),
+            TypeExpr::Result { ok, err, .. } => {
+                format!(
+                    "Result_{}_{}",
+                    Self::mangle_type_name(ok),
+                    Self::mangle_type_name(err)
+                )
+            }
+            _ => "T".into(),
+        }
     }
 
     /// Emit a call to a generic function, enqueuing the monomorphized version.
@@ -2368,7 +2467,9 @@ impl TextEmitter {
         name: &str,
         args: &[Expr],
     ) -> Result<Option<String>, String> {
-        let gfd = self.generic_fns.get(name).cloned().unwrap();
+        let gfd = self.generic_fns.get(name).cloned().ok_or_else(|| {
+            format!("ICE: generic fn '{name}' missing from monomorphization table")
+        })?;
 
         // Infer concrete types for each type parameter from the argument types.
         let mut tp_map: HashMap<String, TypeExpr> = HashMap::new();
