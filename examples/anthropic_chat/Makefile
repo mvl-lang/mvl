@@ -4,7 +4,7 @@
 #
 # Packages are resolved from the XDG cache ($XDG_DATA_HOME/mvl/pkg/).
 # Run `mvl install` from the repo root to populate the cache before using this example.
-.PHONY: help guard-mvl check test-solver test smoke clean
+.PHONY: help guard-mvl check test-solver test assurance smoke clean
 
 .DEFAULT_GOAL := help
 
@@ -36,6 +36,9 @@ test-solver: guard-mvl ## Show per-file solver statistics
 	fi
 
 test: check ## No unit tests; delegates to type-check
+
+assurance: guard-mvl ## Assurance report for main.mvl
+	$(MVL) assurance $(DIR)main.mvl
 
 smoke: guard-mvl ## Smoke-test: build + run without API key, verify graceful error
 	@OK="\033[32m✓\033[0m"; FAIL="\033[31m✗\033[0m"; \
