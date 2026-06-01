@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.173.0] - 2026-06-01
+
+### Added
+- `llvm_text` backend: `Result[T,E]` lowering (Ok/Err allocation, `is_ok`/`is_err`/`unwrap`/`unwrap_err`), `parse_int`/`parse_float` builtins, `List::push`, else-if chains, and builtin fn dispatch via C-ABI symbol map (`builtin_syms` field in `TextEmitter`); `collect_llvm_text_builtins` and `derive_builtin_c_symbol` added to `loader.rs` (#1160)
+- CI: release-only commits (touching only `Cargo.toml`/`Cargo.lock`/`CHANGELOG.md`) now skip all heavy CI jobs (#1159)
+
 ## [0.172.0] - 2026-06-01
 
 ### Added
