@@ -30,6 +30,12 @@ pub struct CargoOptions<'a> {
     /// Raw Cargo dep lines from `[native]` sections of `mvl.toml` files,
     /// e.g. `rusqlite = { version = "0.31", features = ["bundled"] }`.
     pub native_dep_lines: Vec<String>,
+    /// Absolute path to the mvl_runtime crate directory.
+    /// `None` means use the default `./mvl_runtime` (copied relative path).
+    /// Set to the `rust-tokio` absolute path when `--target=tokio`.
+    pub mvl_runtime_path: Option<String>,
+    /// Add tokio dependency (for `--target=tokio`).
+    pub use_tokio: bool,
 }
 
 impl<'a> CargoOptions<'a> {
@@ -39,6 +45,8 @@ impl<'a> CargoOptions<'a> {
             use_mvl_runtime: false,
             extern_crates: Vec::new(),
             native_dep_lines: Vec::new(),
+            mvl_runtime_path: None,
+            use_tokio: false,
         }
     }
 
@@ -55,10 +63,22 @@ fn deps_section(opts: &CargoOptions<'_>) -> String {
     if opts.use_mvl_runtime {
         // Path dep for local development — not suitable for crates.io publishing.
         // Replace with a versioned dep (`mvl_runtime = "x.y.z"`) before publishing.
-        lines.push(
-            "mvl_runtime = { path = \"./mvl_runtime\" }  # MVL security labels and prelude"
-                .to_string(),
-        );
+        let path = opts.mvl_runtime_path.as_deref().unwrap_or("./mvl_runtime");
+        if opts.use_tokio {
+            // --target=tokio: alias mvl_runtime_tokio as mvl_runtime so generated
+            // code (`use mvl_runtime::*`) resolves to the tokio-backed runtime.
+            // ADR-0027 §"--target selects the runtime".
+            lines.push(format!(
+                "mvl_runtime = {{ path = \"{path}\", package = \"mvl_runtime_tokio\" }}  # --target=tokio"
+            ));
+            lines.push(
+                "tokio = { version = \"1\", features = [\"full\"] }  # --target=tokio".to_string(),
+            );
+        } else {
+            lines.push(format!(
+                "mvl_runtime = {{ path = \"{path}\" }}  # MVL security labels and prelude"
+            ));
+        }
         publish_unsafe = true;
     }
     for krate in &opts.extern_crates {
