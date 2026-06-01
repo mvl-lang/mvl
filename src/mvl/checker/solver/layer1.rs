@@ -92,6 +92,10 @@ pub(super) fn try_trivial(
             })
         }),
 
+        // String literal: evaluate `len(ident)` predicates against the literal's length.
+        // Enables static proof of e.g. `validate_log_path("app.log")` where pred is `len(p) > 0`.
+        Expr::Literal(Literal::Str(s), _) => Some(eval_pred_str_len(s.len() as i64, pred)),
+
         // Everything else: Layer 1 cannot decide.
         _ => None,
     }
@@ -243,6 +247,107 @@ pub(super) fn eval_pred_float(self_val: f64, pred: &RefExpr) -> RefResult {
             counterexample: None,
         },
         None => RefResult::RuntimeCheck,
+    }
+}
+
+/// Evaluate a predicate against a string literal, treating `len(ident)` as the
+/// string's character count.
+///
+/// Enables static proof of refinements like `len(p) > 0` when the argument is
+/// a string literal such as `"app.log"` (len = 7).
+pub(super) fn eval_pred_str_len(len_val: i64, pred: &RefExpr) -> RefResult {
+    match eval_bool_str_len(len_val, pred) {
+        Some(true) => RefResult::Proven,
+        Some(false) => RefResult::Failed {
+            counterexample: None,
+        },
+        None => RefResult::RuntimeCheck,
+    }
+}
+
+/// Evaluate a boolean predicate with `len(x) = len_val` for any identifier `x`.
+fn eval_bool_str_len(len_val: i64, pred: &RefExpr) -> Option<bool> {
+    match pred {
+        RefExpr::Compare {
+            op, left, right, ..
+        } => {
+            let l = eval_num_str_len(len_val, left)?;
+            let r = eval_num_str_len(len_val, right)?;
+            Some(match op {
+                CmpOp::Eq => l == r,
+                CmpOp::Ne => l != r,
+                CmpOp::Lt => l < r,
+                CmpOp::Gt => l > r,
+                CmpOp::Le => l <= r,
+                CmpOp::Ge => l >= r,
+            })
+        }
+        RefExpr::LogicOp {
+            op, left, right, ..
+        } => match op {
+            LogicOp::And => {
+                let l = eval_bool_str_len(len_val, left);
+                if l == Some(false) {
+                    return Some(false);
+                }
+                let r = eval_bool_str_len(len_val, right);
+                match (l, r) {
+                    (Some(a), Some(b)) => Some(a && b),
+                    _ => None,
+                }
+            }
+            LogicOp::Or => {
+                let l = eval_bool_str_len(len_val, left);
+                if l == Some(true) {
+                    return Some(true);
+                }
+                let r = eval_bool_str_len(len_val, right);
+                match (l, r) {
+                    (Some(a), Some(b)) => Some(a || b),
+                    _ => None,
+                }
+            }
+        },
+        RefExpr::Not { inner, .. } => Some(!eval_bool_str_len(len_val, inner)?),
+        RefExpr::Grouped { inner, .. } => eval_bool_str_len(len_val, inner),
+        _ => None,
+    }
+}
+
+/// Evaluate a numeric sub-expression where `len(x)` (for any identifier `x`)
+/// is treated as `len_val`.
+fn eval_num_str_len(len_val: i64, expr: &RefExpr) -> Option<i64> {
+    match expr {
+        // Any `len(ident)` node evaluates to the string's length.
+        RefExpr::Len { .. } => Some(len_val),
+        RefExpr::Integer { value, .. } => Some(*value),
+        RefExpr::ArithOp {
+            op, left, right, ..
+        } => {
+            let l = eval_num_str_len(len_val, left)?;
+            let r = eval_num_str_len(len_val, right)?;
+            match op {
+                ArithOp::Add => l.checked_add(r),
+                ArithOp::Sub => l.checked_sub(r),
+                ArithOp::Mul => l.checked_mul(r),
+                ArithOp::Div => {
+                    if r == 0 {
+                        None
+                    } else {
+                        Some(l / r)
+                    }
+                }
+                ArithOp::Rem => {
+                    if r == 0 {
+                        None
+                    } else {
+                        Some(l % r)
+                    }
+                }
+            }
+        }
+        RefExpr::Grouped { inner, .. } => eval_num_str_len(len_val, inner),
+        _ => None,
     }
 }
 
