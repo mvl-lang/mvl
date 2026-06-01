@@ -122,7 +122,8 @@ pub fn run(path: &str, json: bool, verbose: bool) {
         parsed_assurance.iter().map(|(_, p, _)| p.clone()).collect();
     // Load any `pkg.*` package modules referenced by the checked files so the
     // checker can resolve their types and functions (mirrors check.rs behaviour).
-    let project_root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let project_root = super::find_project_root(&cwd);
     assurance_prelude.extend(loader::load_pkg_modules(
         &all_assurance_progs,
         &project_root,

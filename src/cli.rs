@@ -337,6 +337,24 @@ pub(super) fn parse_or_exit(path: &str) -> (Program, String) {
     })
 }
 
+/// Find the project root by walking up from `start` until a directory containing
+/// `mvl.lock` or `mvl.toml` is found.  Falls back to `start` if neither is found.
+///
+/// Allows running `mvl check` from any subdirectory (e.g. `make -C examples/foo check`)
+/// and still resolve packages declared in the root-level `mvl.lock`.
+pub(super) fn find_project_root(start: &Path) -> PathBuf {
+    let mut dir = start.to_path_buf();
+    loop {
+        if dir.join("mvl.lock").exists() || dir.join("mvl.toml").exists() {
+            return dir;
+        }
+        match dir.parent() {
+            Some(parent) => dir = parent.to_path_buf(),
+            None => return start.to_path_buf(),
+        }
+    }
+}
+
 pub(super) fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
     fs::create_dir_all(dst)?;
     for entry in fs::read_dir(src)? {

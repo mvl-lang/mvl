@@ -246,6 +246,9 @@ jobs:
           cargo build --no-default-features --features llvm
           cargo build -p mvl_runtime_c
 
+      - name: Install MVL packages
+        run: ./target/debug/mvl install
+
       - name: Run example smoke tests
         run: bash examples/test-all.sh --full
 

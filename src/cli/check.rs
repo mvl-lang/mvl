@@ -192,7 +192,8 @@ pub fn run(path: &str, req_filter: Option<u8>, opts: CheckOptions) {
     // Load any `pkg.*` package modules referenced by the user programs so the
     // checker can resolve their types and functions (mirrors build behaviour).
     let all_parsed_progs: Vec<Program> = parsed.iter().map(|(_, p, _)| p.clone()).collect();
-    let project_root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let project_root = super::find_project_root(&cwd);
     stdlib_prelude.extend(loader::load_pkg_modules(
         &all_parsed_progs,
         &project_root,

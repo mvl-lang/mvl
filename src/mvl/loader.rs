@@ -396,13 +396,39 @@ fn type_uses_opaque(ty: &crate::mvl::parser::ast::TypeExpr, opaque: &[&str]) -> 
     }
 }
 
+/// Build a map from package short name (e.g. `"http"`) to its source directory
+/// in the XDG cache (e.g. `~/.local/share/mvl/pkg/github.com_mvl-lang_pkg-http/0.2.0`).
+///
+/// Resolution order per package:
+///   1. Read `mvl.lock` from `project_root` to enumerate locked packages.
+///   2. For each entry, look up the XDG cache dir and read its `mvl.toml` for the short name.
+///
+/// Returns an empty map if no lock file exists or the cache is empty.
+fn build_pkg_name_map(project_root: &Path) -> std::collections::HashMap<String, PathBuf> {
+    let lockfile = packages::lock::LockFile::load_or_empty(project_root);
+    let mut map = std::collections::HashMap::new();
+    for pkg in &lockfile.packages {
+        let cache_dir = packages::fetch::pkg_cache_dir(&pkg.name, &pkg.version);
+        if !cache_dir.exists() {
+            continue;
+        }
+        if let Ok(content) = fs::read_to_string(cache_dir.join("mvl.toml")) {
+            if let Ok(manifest) = packages::manifest::Manifest::parse(&content) {
+                map.insert(manifest.package.name, cache_dir);
+            }
+        }
+    }
+    map
+}
+
 /// Load MVL source files from `pkg.*` packages referenced by `progs`.
-/// Checks local override first, then the global XDG cache.
+/// Resolves packages directly from the XDG cache using `mvl.lock`.
 pub fn load_pkg_modules(
     progs: &[Program],
     project_root: &Path,
     seen: &mut std::collections::HashSet<String>,
 ) -> Vec<Program> {
+    let pkg_map = build_pkg_name_map(project_root);
     let mut result: Vec<Program> = Vec::new();
 
     for prog in progs {
@@ -413,19 +439,8 @@ pub fn load_pkg_modules(
                         if !seen.insert(pkg_name.clone()) {
                             continue;
                         }
-                        // Resolve package source directory.
-                        // Order: installed (.mvl/pkg/<name>/) then in-repo dev (pkg/<name>/).
-                        let installed_dir =
-                            packages::fetch::local_override_dir(project_root, pkg_name);
-                        let pkg_dir = if installed_dir.exists() {
-                            installed_dir
-                        } else {
-                            let dev_dir = project_root.join("pkg").join(pkg_name.as_str());
-                            if dev_dir.exists() {
-                                dev_dir
-                            } else {
-                                continue;
-                            }
+                        let Some(pkg_dir) = pkg_map.get(pkg_name.as_str()) else {
+                            continue;
                         };
                         for sub in &["src", "src/internal"] {
                             let dir = pkg_dir.join(sub);
@@ -458,28 +473,19 @@ pub fn load_pkg_modules(
 /// Find a `bridge.rs` from a `pkg.*` package used by `progs`.
 /// Returns the path to the first valid package bridge found, or `None`.
 ///
-/// Search order:
-///   1. `.mvl/pkg/<name>/bridge.rs` — local override (may be a symlink to in-repo pkg/)
-///   2. `pkg/<name>/bridge.rs`      — in-repo development package
+/// Resolves packages directly from the XDG cache using `mvl.lock`.
 pub fn find_pkg_bridge(progs: &[Program], project_root: &Path) -> Option<PathBuf> {
+    let pkg_map = build_pkg_name_map(project_root);
     for prog in progs {
         for decl in &prog.declarations {
             if let Decl::Use(ud) = decl {
                 if ud.path.first().map(|s| s == "pkg").unwrap_or(false) {
                     if let Some(pkg_name) = ud.path.get(1) {
-                        // 1. Local override under .mvl/pkg/<name>/ — this may be a
-                        //    symlink to the in-repo pkg/<name>/ (common dev workflow).
-                        //    Accept the bridge if canonicalize succeeds (file exists).
-                        let pkg_dir = packages::fetch::local_override_dir(project_root, pkg_name);
-                        let bridge = pkg_dir.join("bridge.rs");
-                        if let Ok(canon_bridge) = fs::canonicalize(&bridge) {
-                            return Some(canon_bridge);
-                        }
-
-                        // 2. In-repo development package at pkg/<name>/bridge.rs
-                        let dev_bridge = project_root.join("pkg").join(pkg_name).join("bridge.rs");
-                        if let Ok(canon_bridge) = fs::canonicalize(&dev_bridge) {
-                            return Some(canon_bridge);
+                        if let Some(pkg_dir) = pkg_map.get(pkg_name.as_str()) {
+                            let bridge = pkg_dir.join("bridge.rs");
+                            if let Ok(canon_bridge) = fs::canonicalize(&bridge) {
+                                return Some(canon_bridge);
+                            }
                         }
                     }
                 }
@@ -494,11 +500,10 @@ pub fn find_pkg_bridge(progs: &[Program], project_root: &Path) -> Option<PathBuf
 ///   `rusqlite = { version = "0.31", features = ["bundled"] }`
 /// ready for inclusion in a generated `Cargo.toml`.
 ///
-/// Search order mirrors `find_pkg_bridge`:
-///   1. `.mvl/pkg/<name>/mvl.toml` — installed / cached package
-///   2. `pkg/<name>/mvl.toml`      — in-repo development package
+/// Resolves packages directly from the XDG cache using `mvl.lock`.
 pub fn collect_pkg_native_dep_lines(progs: &[Program], project_root: &Path) -> Vec<String> {
     use std::collections::HashSet;
+    let pkg_map = build_pkg_name_map(project_root);
     let mut seen: HashSet<String> = HashSet::new();
     let mut lines: Vec<String> = Vec::new();
 
@@ -510,16 +515,10 @@ pub fn collect_pkg_native_dep_lines(progs: &[Program], project_root: &Path) -> V
                         if !seen.insert(pkg_name.clone()) {
                             continue;
                         }
-                        let pkg_dir = packages::fetch::local_override_dir(project_root, pkg_name);
-                        // Try installed/cached package first; fall back to in-repo dev package.
-                        // Use read_to_string directly to avoid TOCTOU race from .exists() checks.
-                        let content = fs::read_to_string(pkg_dir.join("mvl.toml")).or_else(|_| {
-                            fs::read_to_string(
-                                project_root.join("pkg").join(pkg_name).join("mvl.toml"),
-                            )
-                        });
-                        if let Ok(content) = content {
-                            lines.extend(extract_native_dep_lines(&content));
+                        if let Some(pkg_dir) = pkg_map.get(pkg_name.as_str()) {
+                            if let Ok(content) = fs::read_to_string(pkg_dir.join("mvl.toml")) {
+                                lines.extend(extract_native_dep_lines(&content));
+                            }
                         }
                     }
                 }
