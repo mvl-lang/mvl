@@ -98,6 +98,8 @@ inline emission for the same inputs.
 Existing `emit_stmts.rs`/`emit_exprs.rs` inline instrumentation SHOULD be
 replaced file-by-file using the visitor interface.
 
+**Implementation:** `src/mvl/backends/rust/visitor.rs` — migration in progress (#773)
+
 ---
 
 ## Migration Plan

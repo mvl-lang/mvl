@@ -54,6 +54,8 @@ This is Design Principle 7 ("Security labels on all data"). Labels are types, no
 
 > **Status:** Partially addressed. Auto-tainting of external sources is not yet implemented (tracked in #28, requires runtime/stdlib integration). Label propagation through all functions is unconditional (#1007, ADR-0036): `decode(tainted_str)` returns `Tainted[Result[Value, JsonError]]` without any special keyword.
 
+**Implementation:** `src/mvl/checker/ifc.rs::check_relabel` — label propagation implemented; auto-tainting deferred (#28)
+
 Data from external sources MUST be automatically labeled `Tainted`. This includes:
 - HTTP request bodies, headers, query parameters
 - stdin input
@@ -113,6 +115,8 @@ Functions that process secrets MUST return secrets. The label MUST propagate thr
 ### Requirement 5: Error Messages Must Not Leak Secrets [MUST] *(Deferred — Phase 2)*
 
 > **Status:** Not yet implemented. Requires ADT field-label analysis and channel-type tracking. Tracked in #29.
+
+**Implementation:** `src/mvl/checker/ifc.rs::check_adt_labels` — deferred (#29)
 
 Error types containing `Secret` fields MUST NOT be sendable to `Public` channels (HTTP responses, logs, stdout).
 

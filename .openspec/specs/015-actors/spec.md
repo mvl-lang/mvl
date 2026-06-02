@@ -435,9 +435,9 @@ each actor thread to terminate before `main()` returns.
 This ensures that concurrent work is bounded by the program's execution lifetime and
 that the process does not exit with pending messages or incomplete message handlers.
 
-**Implementation:** ADR-0037 — `fn main()` is implicitly an actor with an implicit join
-at the end. `src/mvl/backends/rust/emit_functions.rs::emit_fn_body` emits `_mvl_join_actors()`
-at the end of main; `src/mvl/backends/llvm` uses equivalent C-ABI draining.
+**Implementation:** `src/mvl/backends/rust/emit_functions.rs::emit_fn_body` — emits `_mvl_join_actors()`
+at the end of main. ADR-0037 documents the design: `fn main()` is implicitly an actor with an
+implicit join. `src/mvl/backends/llvm_text/emitter.rs` uses equivalent `mvl_actor_join_all`.
 
 **Tests:** `tests/corpus/actors/actor_spawn.mvl`, `tests/corpus/actors/actor_send.mvl`,
 `tests/stdlib/net_basic.mvl`
