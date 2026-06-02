@@ -1,5 +1,5 @@
 // Corpus: Declassification as explicit chokepoints (Requirement 11, #27)
-// Only relabel release(, "AUTHORIZED") lowers Secret→Public; only relabel trust(, "VALIDATED") lowers Tainted→Clean.
+// Only relabel release(, "AUTHORIZED") lowers Secret→bare T; only relabel trust(, "VALIDATED") lowers Tainted→bare T.
 
 // ── relabel trust(, "VALIDATED"): Tainted[T] → T ────────────────────────────────────
 
