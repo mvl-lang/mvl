@@ -136,6 +136,9 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &ActorDecl) {
         // When all external handles are dropped the channel disconnects and
         // `rx.recv()` returns `None` even though this weak ref still exists.
         cg.line(&format!("_self_ref: Option<MvlWeakSender<{msg_name}>>,"));
+        // `_self_id` mirrors the handle's `_id` so self-ref handle construction
+        // can set the `_id` field (#1128).
+        cg.line("_self_id: ActorId,");
     }
     cg.pop_indent();
     cg.line("}");
@@ -388,6 +391,7 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &ActorDecl) {
         None => "let (tx, rx) = mvl_channel(256_i64, 0_i64);".to_string(),
     };
     cg.line(&channel_line);
+    cg.line("state._self_id = __actor_id;");
     cg.line("state._self_ref = Some(tx.downgrade());");
     // Register type-erased actor controls for link/monitor (#1177).
     // Each closure captures a sender clone and constructs the typed system message.
