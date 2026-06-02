@@ -78,7 +78,7 @@ so its purpose is unambiguous.
 | 8 | **Proves** | Concurrent programs verified — actors and model checking | 8 (Verification, applied) |
 | 9 | **Proven** | Language formally verified — Lean/Coq metatheory + supply chain | 5 (Packaging), 8 (Verification, formal) |
 
-**Implementation:** Issue labels `phase-1` through `phase-9` (LAB271/mvl_language)
+**Implementation:** `docs/PHASES.md` — issue labels `phase-1` through `phase-9` (LAB271/mvl_language)
 
 #### Scenario: Every issue carries a phase label
 

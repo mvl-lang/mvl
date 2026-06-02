@@ -158,6 +158,8 @@ from a persistent connection without waiting for EOF.
 The ZMTP implementation should be validated against multiple ZMQ
 client libraries to confirm wire compatibility.
 
+**Implementation:** `std/net.mvl::zmtp_server`, `examples/zmq_hello/`
+
 #### Scenario: pyzmq (Python) interop
 
 - GIVEN MVL ZMTP server

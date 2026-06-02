@@ -67,6 +67,8 @@ The compiler uses dual-pass compilation:
 
 Effects MUST be fine-grained, not a single `IO` bucket. The base effects are:
 
+**Implementation:** `src/mvl/checker/effects.rs::EffectHierarchy`
+
 | Effect | What it permits |
 |--------|----------------|
 | `Clock` | Read system clock |
@@ -170,6 +172,8 @@ Spawning actors, sending messages, and receiving messages MUST be separate effec
 Effects MUST NOT be hidden in FFI implementations. If a builtin function uses an effect internally, it MUST either:
 1. Declare the effect explicitly, OR
 2. Have the effect subsumed by a declared effect
+
+**Implementation:** `src/mvl/checker/decls.rs::register_extern`, `std/effects.mvl`
 
 #### Scenario: Log uses Clock via subsumption
 
