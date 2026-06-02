@@ -13,7 +13,7 @@
 //!
 //! Import:
 //!   use std.audit.{AuditLogger, AuditEvent, AuditOutcome,
-//!                  access, modify, deny, with_correlation, with_details,
+//!                  access, modify, deny, fail, with_correlation, with_details,
 //!                  file_audit_logger,
 //!                  AuditTarget, audit_target, unaudit_target,
 //!                  load_audit_target, default_audit_target}
@@ -26,6 +26,7 @@
 
 use std.env.{_env_read}
 use std.io.{append, Path, IoError, path}
+use std.json.{json_escape}
 use std.time.{now, format_instant}
 
 // ── AuditOutcome ──────────────────────────────────────────────────────────────
@@ -101,6 +102,21 @@ pub fn deny(principal: String, resource: String, reason: String) -> AuditEvent {
     }
 }
 
+/// Build a failed-operation audit event (outcome: Failure).
+///
+/// `action` should follow `"verb.noun"` convention: `"create.record"`, `"update.status"`.
+/// `reason` is stored in `details["reason"]`.
+pub fn fail(principal: String, resource: String, action: String, reason: String) -> AuditEvent {
+    AuditEvent {
+        principal:      principal,
+        action:         action,
+        resource:       resource,
+        outcome:        AuditOutcome::Failure,
+        details:        {"reason": reason},
+        correlation_id: None,
+    }
+}
+
 /// Return a new event with the given distributed-trace correlation ID attached.
 pub fn with_correlation(event: AuditEvent, id: String) -> AuditEvent {
     AuditEvent {
@@ -149,14 +165,6 @@ fn _audit_timestamp() -> String ! Clock {
     format_instant(now(), "%Y-%m-%dT%H:%M:%SZ")
 }
 
-fn _audit_json_escape(s: String) -> String {
-    let s1: String = s.replace("\\", "\\\\");
-    let s2: String = s1.replace("\"", "\\\"");
-    let s3: String = s2.replace("\n", "\\n");
-    let s4: String = s3.replace("\r", "\\r");
-    s4.replace("\t", "\\t")
-}
-
 fn _outcome_str(o: AuditOutcome) -> String {
     match o {
         AuditOutcome::Success => "Success",
@@ -174,8 +182,8 @@ fn _format_details_json(fields: Map[String, String]) -> String {
         let sep: String = if first { "" } else { "," };
         body = body
             .concat(sep)
-            .concat("\"").concat(_audit_json_escape(k)).concat("\"")
-            .concat(":\"").concat(_audit_json_escape(v)).concat("\"");
+            .concat("\"").concat(json_escape(k)).concat("\"")
+            .concat(":\"").concat(json_escape(v)).concat("\"");
         first = false
     }
     "{".concat(body).concat("}")
@@ -183,14 +191,14 @@ fn _format_details_json(fields: Map[String, String]) -> String {
 
 fn _format_audit_jsonl(ts: String, event: AuditEvent) -> String {
     let corr: String = match event.correlation_id {
-        Some(id) => "\"".concat(_audit_json_escape(id)).concat("\""),
+        Some(id) => "\"".concat(json_escape(id)).concat("\""),
         None     => "null",
     };
     "{\"timestamp\":\""
-        .concat(_audit_json_escape(ts))
-        .concat("\",\"principal\":\"").concat(_audit_json_escape(event.principal))
-        .concat("\",\"action\":\"").concat(_audit_json_escape(event.action))
-        .concat("\",\"resource\":\"").concat(_audit_json_escape(event.resource))
+        .concat(json_escape(ts))
+        .concat("\",\"principal\":\"").concat(json_escape(event.principal))
+        .concat("\",\"action\":\"").concat(json_escape(event.action))
+        .concat("\",\"resource\":\"").concat(json_escape(event.resource))
         .concat("\",\"outcome\":\"").concat(_outcome_str(event.outcome))
         .concat("\",\"details\":").concat(_format_details_json(event.details))
         .concat(",\"correlation_id\":").concat(corr)
@@ -201,12 +209,16 @@ fn _format_audit_jsonl(ts: String, event: AuditEvent) -> String {
 
 /// Append a single JSONL audit record to the sink path.
 ///
-/// The timestamp is captured at call time.  A function without `! Audit` in
-/// its signature provably never emits audit records.
-pub fn AuditLogger::emit(self, event: AuditEvent) -> Unit ! Audit {
+/// Returns `Ok(())` on success, `Err(IoError)` if the write fails.
+/// Callers that cannot propagate the error should explicitly discard:
+/// `let _: Result[Unit, IoError] = logger.emit(event);`
+///
+/// ! Audit subsumes FileWrite (append) + Clock (timestamp); see effects.mvl.
+/// A function without `! Audit` in its signature provably never emits audit records.
+pub fn AuditLogger::emit(self, event: AuditEvent) -> Result[Unit, IoError] ! Audit {
     let ts: String = _audit_timestamp();
     let line: String = _format_audit_jsonl(ts, event);
-    let _: Result[Unit, IoError] = append(self.sink, line.concat("\n"));
+    append(self.sink, line.concat("\n"))
 }
 
 // ── AuditTarget capability label (#931) ───────────────────────────────────────
