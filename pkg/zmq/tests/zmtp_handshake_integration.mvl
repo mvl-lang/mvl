@@ -1,0 +1,370 @@
+// ZMTP 3.x handshake integration test — actor-based loopback.
+//
+// Tests full ZMTP greeting + READY exchange over real TCP connections.
+// Each test binds on port 0 (OS-assigned), spawns a client actor that
+// connects and sends the ZMTP handshake bytes manually (using total fns),
+// while the main thread accepts and runs zmtp_handshake_server (partial).
+//
+// Actor pub fn can only call total functions, so the client constructs
+// wire bytes directly via make_greeting + make_ready_body + tcp_write.
+// The server side exercises the full zmtp_handshake_server code path.
+//
+// Patterns tested: REQ/REP, PUB/SUB, PUSH/PULL, plus message exchange.
+//
+// Run: mvl run pkg/zmq/tests/zmtp_handshake_integration.mvl
+//
+// expect: reqrep ok
+// expect: pubsub ok
+// expect: pushpull ok
+// expect: message ok
+//
+// Note: process may not exit cleanly — runtime actor-drain is pending (#1048).
+// Use `timeout` when running from Makefile.
+//
+// See #1059.
+
+use std.ifc.{Tainted}
+use std.net.{TcpListener, TcpStream, NetError,
+             tcp_listen, tcp_listener_port, tcp_accept, tcp_connect,
+             tcp_read_exact, tcp_write, tcp_close_listener, tcp_close_stream}
+use pkg.zmq.{ZmqError, zmq_error_msg}
+use pkg.zmq.zmtp.{ZmtpSocketType, socket_type_name,
+                   zmtp_handshake_server, zmtp_recv_message, zmtp_send_message}
+
+// ── Wire helpers (total, no partial calls) ──────────────────────────────────
+
+/// Single-byte string from int.
+total fn bval(n: Int) -> String {
+    String::from_bytes([from_int(n.bit_and(255))])
+}
+
+total fn zeros_8() -> String {
+    String::from_bytes([from_int(0), from_int(0), from_int(0), from_int(0),
+                        from_int(0), from_int(0), from_int(0), from_int(0)])
+}
+
+total fn zeros_16() -> String { zeros_8().concat(zeros_8()) }
+total fn zeros_15() -> String {
+    String::from_bytes([from_int(0), from_int(0), from_int(0), from_int(0),
+                        from_int(0), from_int(0), from_int(0), from_int(0),
+                        from_int(0), from_int(0), from_int(0), from_int(0),
+                        from_int(0), from_int(0), from_int(0)])
+}
+total fn zeros_31() -> String { zeros_16().concat(zeros_15()) }
+
+/// Build a 64-byte ZMTP greeting (client, as_server=false).
+total fn client_greeting() -> String {
+    let sig: String = bval(255).concat(zeros_8()).concat(bval(127));
+    let ver: String = bval(3).concat(bval(1));
+    let mech: String = "NULL".concat(zeros_16());
+    let as_srv: String = bval(0);
+    sig.concat(ver).concat(mech).concat(as_srv).concat(zeros_31())
+}
+
+/// Build the READY command body with Socket-Type metadata.
+total fn ready_body(stype: String) -> String {
+    let name_len: String = bval(5);
+    let key: String = "Socket-Type";
+    let key_len: String = bval(11);
+    let stype_len: Int = stype.len();
+    let stype_len_be: String = bval(0).concat(bval(0))
+        .concat(bval(stype_len.shift_right(8).bit_and(255)))
+        .concat(bval(stype_len.bit_and(255)));
+    name_len.concat("READY").concat(key_len).concat(key).concat(stype_len_be).concat(stype)
+}
+
+/// Encode a command frame: flags=0x04 (COMMAND), 1-byte size, body.
+total fn command_frame(body: String) -> String {
+    let body_len: Int = body.len();
+    let flags: Int = 4;
+    bval(flags).concat(bval(body_len)).concat(body)
+}
+
+// ── Client actor — total functions only ─────────────────────────────────────
+
+actor HandshakeClient {
+    port: Int
+    socket_type: String
+
+    /// Perform ZMTP client handshake using only total wire functions.
+    /// 1. Connect  2. Send greeting  3. Read peer greeting (64 bytes)
+    /// 4. Send READY command  5. Read peer READY command (discard)
+    pub fn handshake() ! Net + Console {
+        match tcp_connect("127.0.0.1", self.port) {
+            Err(_) => println("client: connect error"),
+            Ok(stream) => {
+                let greeting: String = client_greeting();
+                match tcp_write(stream, greeting) {
+                    Err(_) => { tcp_close_stream(stream); println("client: write greeting error") },
+                    Ok(_) => {
+                        // Read peer greeting (64 bytes)
+                        match tcp_read_exact(stream, 64) {
+                            Err(_) => { tcp_close_stream(stream); println("client: read greeting error") },
+                            Ok(_peer_greeting) => {
+                                // Send READY command
+                                let ready: String = command_frame(ready_body(self.socket_type));
+                                match tcp_write(stream, ready) {
+                                    Err(_) => { tcp_close_stream(stream); println("client: write ready error") },
+                                    Ok(_) => {
+                                        // Read peer READY (just consume it)
+                                        let _: Result[Tainted[String], NetError] = tcp_read_exact(stream, 1);
+                                        // Read size byte
+                                        match tcp_read_exact(stream, 1) {
+                                            Err(_) => tcp_close_stream(stream),
+                                            Ok(size_raw) => {
+                                                let sz: Int = relabel trust(size_raw, "TEST").byte_at(0).to_int();
+                                                let _: Result[Tainted[String], NetError] = tcp_read_exact(stream, sz);
+                                                tcp_close_stream(stream)
+                                            },
+                                        }
+                                    },
+                                }
+                            },
+                        }
+                    },
+                }
+            },
+        }
+    }
+}
+
+actor MessageClient {
+    port: Int
+
+    /// Handshake + send "ping" request + read reply.
+    pub fn exchange() ! Net + Console {
+        match tcp_connect("127.0.0.1", self.port) {
+            Err(_) => println("client: connect error"),
+            Ok(stream) => {
+                // Greeting exchange
+                match tcp_write(stream, client_greeting()) {
+                    Err(_) => { tcp_close_stream(stream) },
+                    Ok(_) => {
+                        match tcp_read_exact(stream, 64) {
+                            Err(_) => { tcp_close_stream(stream) },
+                            Ok(_) => {
+                                // READY exchange
+                                match tcp_write(stream, command_frame(ready_body("REQ"))) {
+                                    Err(_) => { tcp_close_stream(stream) },
+                                    Ok(_) => {
+                                        // Read server READY (flags + size + body)
+                                        match tcp_read_exact(stream, 1) {
+                                            Err(_) => { tcp_close_stream(stream) },
+                                            Ok(_flags) => {
+                                                match tcp_read_exact(stream, 1) {
+                                                    Err(_) => { tcp_close_stream(stream) },
+                                                    Ok(sz_raw) => {
+                                                        let sz: Int = relabel trust(sz_raw, "TEST").byte_at(0).to_int();
+                                                        match tcp_read_exact(stream, sz) {
+                                                            Err(_) => { tcp_close_stream(stream) },
+                                                            Ok(_) => {
+                                                                // Send message: empty delimiter (MORE) + body
+                                                                let delim: String = bval(1).concat(bval(0));
+                                                                let body: String = bval(0).concat(bval(4)).concat("ping");
+                                                                match tcp_write(stream, delim.concat(body)) {
+                                                                    Err(_) => { tcp_close_stream(stream) },
+                                                                    Ok(_) => {
+                                                                        // Read reply (delimiter + body)
+                                                                        let _: Result[Tainted[String], NetError] = tcp_read_exact(stream, 2);
+                                                                        let _: Result[Tainted[String], NetError] = tcp_read_exact(stream, 6);
+                                                                        tcp_close_stream(stream)
+                                                                    },
+                                                                }
+                                                            },
+                                                        }
+                                                    },
+                                                }
+                                            },
+                                        }
+                                    },
+                                }
+                            },
+                        }
+                    },
+                }
+            },
+        }
+    }
+}
+
+// ── Test helpers ────────────────────────────────────────────────────────────
+
+fn bind_ephemeral() -> Result[TcpListener, Unit] ! Net {
+    match tcp_listen("127.0.0.1", 0) {
+        Err(_) => Err(()),
+        Ok(l)  => Ok(l),
+    }
+}
+
+fn get_port(listener: TcpListener) -> Result[Int, Unit] {
+    match tcp_listener_port(listener) {
+        Err(_) => Err(()),
+        Ok(p)  => Ok(p),
+    }
+}
+
+// ── Test: REQ/REP handshake ─────────────────────────────────────────────────
+
+partial fn test_reqrep() -> Unit ! Net + Console {
+    let listener: TcpListener = match bind_ephemeral() {
+        Err(_) => { println("reqrep FAIL: listen error"); return },
+        Ok(l)  => l,
+    };
+    let port: Int = match get_port(listener) {
+        Err(_) => { tcp_close_listener(listener); println("reqrep FAIL: port error"); return },
+        Ok(p)  => p,
+    };
+    let c: HandshakeClient = actor HandshakeClient {
+        port: port, socket_type: "REQ",
+    };
+    c.handshake();
+    let stream: TcpStream = match tcp_accept(listener) {
+        Err(_) => { tcp_close_listener(listener); println("reqrep FAIL: accept error"); return },
+        Ok(s)  => s,
+    };
+    match zmtp_handshake_server(stream, ZmtpSocketType::Rep) {
+        Err(e) => {
+            tcp_close_stream(stream);
+            tcp_close_listener(listener);
+            println("reqrep FAIL: ".concat(zmq_error_msg(e)))
+        },
+        Ok(peer) => {
+            tcp_close_stream(stream);
+            tcp_close_listener(listener);
+            if socket_type_name(peer) == "REQ" {
+                println("reqrep ok")
+            } else {
+                println("reqrep FAIL: expected REQ, got ".concat(socket_type_name(peer)))
+            }
+        },
+    }
+}
+
+// ── Test: PUB/SUB handshake ─────────────────────────────────────────────────
+
+partial fn test_pubsub() -> Unit ! Net + Console {
+    let listener: TcpListener = match bind_ephemeral() {
+        Err(_) => { println("pubsub FAIL: listen error"); return },
+        Ok(l)  => l,
+    };
+    let port: Int = match get_port(listener) {
+        Err(_) => { tcp_close_listener(listener); println("pubsub FAIL: port error"); return },
+        Ok(p)  => p,
+    };
+    let c: HandshakeClient = actor HandshakeClient {
+        port: port, socket_type: "SUB",
+    };
+    c.handshake();
+    let stream: TcpStream = match tcp_accept(listener) {
+        Err(_) => { tcp_close_listener(listener); println("pubsub FAIL: accept error"); return },
+        Ok(s)  => s,
+    };
+    match zmtp_handshake_server(stream, ZmtpSocketType::Pub) {
+        Err(e) => {
+            tcp_close_stream(stream);
+            tcp_close_listener(listener);
+            println("pubsub FAIL: ".concat(zmq_error_msg(e)))
+        },
+        Ok(peer) => {
+            tcp_close_stream(stream);
+            tcp_close_listener(listener);
+            if socket_type_name(peer) == "SUB" {
+                println("pubsub ok")
+            } else {
+                println("pubsub FAIL: expected SUB, got ".concat(socket_type_name(peer)))
+            }
+        },
+    }
+}
+
+// ── Test: PUSH/PULL handshake ───────────────────────────────────────────────
+
+partial fn test_pushpull() -> Unit ! Net + Console {
+    let listener: TcpListener = match bind_ephemeral() {
+        Err(_) => { println("pushpull FAIL: listen error"); return },
+        Ok(l)  => l,
+    };
+    let port: Int = match get_port(listener) {
+        Err(_) => { tcp_close_listener(listener); println("pushpull FAIL: port error"); return },
+        Ok(p)  => p,
+    };
+    let c: HandshakeClient = actor HandshakeClient {
+        port: port, socket_type: "PUSH",
+    };
+    c.handshake();
+    let stream: TcpStream = match tcp_accept(listener) {
+        Err(_) => { tcp_close_listener(listener); println("pushpull FAIL: accept error"); return },
+        Ok(s)  => s,
+    };
+    match zmtp_handshake_server(stream, ZmtpSocketType::Pull) {
+        Err(e) => {
+            tcp_close_stream(stream);
+            tcp_close_listener(listener);
+            println("pushpull FAIL: ".concat(zmq_error_msg(e)))
+        },
+        Ok(peer) => {
+            tcp_close_stream(stream);
+            tcp_close_listener(listener);
+            if socket_type_name(peer) == "PUSH" {
+                println("pushpull ok")
+            } else {
+                println("pushpull FAIL: expected PUSH, got ".concat(socket_type_name(peer)))
+            }
+        },
+    }
+}
+
+// ── Test: REQ/REP message exchange ──────────────────────────────────────────
+
+partial fn test_message() -> Unit ! Net + Console {
+    let listener: TcpListener = match bind_ephemeral() {
+        Err(_) => { println("message FAIL: listen error"); return },
+        Ok(l)  => l,
+    };
+    let port: Int = match get_port(listener) {
+        Err(_) => { tcp_close_listener(listener); println("message FAIL: port error"); return },
+        Ok(p)  => p,
+    };
+    let c: MessageClient = actor MessageClient { port: port };
+    c.exchange();
+    let stream: TcpStream = match tcp_accept(listener) {
+        Err(_) => { tcp_close_listener(listener); println("message FAIL: accept error"); return },
+        Ok(s)  => s,
+    };
+    match zmtp_handshake_server(stream, ZmtpSocketType::Rep) {
+        Err(e) => {
+            tcp_close_stream(stream);
+            tcp_close_listener(listener);
+            println("message FAIL: handshake ".concat(zmq_error_msg(e)))
+        },
+        Ok(_) => {
+            match zmtp_recv_message(stream) {
+                Err(e) => {
+                    tcp_close_stream(stream);
+                    tcp_close_listener(listener);
+                    println("message FAIL: recv ".concat(zmq_error_msg(e)))
+                },
+                Ok(msg) => {
+                    let plain: String = relabel trust(msg, "TEST-RECV");
+                    let _: Result[Unit, ZmqError] = zmtp_send_message(stream, "pong");
+                    tcp_close_stream(stream);
+                    tcp_close_listener(listener);
+                    if plain == "ping" {
+                        println("message ok")
+                    } else {
+                        println("message FAIL: expected ping, got ".concat(plain))
+                    }
+                },
+            }
+        },
+    }
+}
+
+// ── Entry point ─────────────────────────────────────────────────────────────
+
+partial fn main() -> Unit ! Net + Console {
+    test_reqrep();
+    test_pubsub();
+    test_pushpull();
+    test_message()
+}
