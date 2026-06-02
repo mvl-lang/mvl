@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+## [0.175.0] - 2026-06-02
+
+### Added
+- `llvm_text` backend: **Map literal emission** (#1184) — `Expr::Map` emits `mvl_map_new` + `mvl_map_insert` calls; Map method dispatch for get, insert, len, keys, values, contains_key, remove
+- `llvm_text` backend: **HeapKind drop tracking** (#1185) — automatic cleanup for String, List, Map locals via `mvl_*_drop` calls at function exit; tracks both immutable bindings and mutable `ref` locals
+- `llvm_text` backend: **String builtin kernel methods** (#1186) — 12 new string methods: chars, byte_at, find, split, substring, contains, starts_with, ends_with, trim, to_lower, to_upper, replace
+
+### Fixed
+- `llvm_text` backend: **Map::get null guard** — null-check before dereferencing returned pointer; returns 0 on missing key instead of undefined behavior
+- `llvm_text` backend: **Double-drop on shadowed locals** — retain-remove old SSA from heap_locals when a binding name is shadowed, preventing double-free
+- `llvm_text` backend: **Mutable ref heap tracking** — ref locals now properly tracked for drop; emit load before drop call since ref holds stack alloca, not heap pointer directly
+- `llvm_text` backend: **Propagate error path drops** — emit heap drops before `ret` in `?` operator error branch (was previously skipped)
+- `llvm_text` backend: **String method receiver guards** — all 9 previously unguarded String method arms now check receiver type to prevent dispatch to List/Map values
+- `llvm_text` backend: **Consolidated return heap drops** — hoist single `emit_heap_drops()` call to start of `Stmt::Return`, after expression evaluation but before any `ret` instruction
+
 ## [0.174.0] - 2026-06-02
 
 ### Added
