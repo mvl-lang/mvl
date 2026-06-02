@@ -299,11 +299,17 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &ActorDecl) {
     // System variants (#1177, #1128).
     cg.line(&format!("{msg_name}::_Shutdown => return false,"));
     // Wire _ExitSignal → on_exit(from_id, reason) if the actor defines that method.
-    let has_on_exit = ad
+    let on_exit_method = ad
         .methods
         .iter()
-        .any(|m| !m.is_public && m.name == "on_exit");
-    if has_on_exit {
+        .find(|m| !m.is_public && m.name == "on_exit");
+    if let Some(m) = on_exit_method {
+        assert!(
+            m.params.len() == 2,
+            "actor `{}`: on_exit must have exactly 2 parameters (from_id: Int, reason: Int), found {}",
+            ad.name,
+            m.params.len()
+        );
         cg.line(&format!(
             "{msg_name}::_ExitSignal {{ _from_id, _reason }} => actor.on_exit(_from_id as i64, _reason as i64),"
         ));
@@ -313,11 +319,17 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &ActorDecl) {
         ));
     }
     // Wire _DownSignal → on_down(from_id, reason, monitor_ref) if defined.
-    let has_on_down = ad
+    let on_down_method = ad
         .methods
         .iter()
-        .any(|m| !m.is_public && m.name == "on_down");
-    if has_on_down {
+        .find(|m| !m.is_public && m.name == "on_down");
+    if let Some(m) = on_down_method {
+        assert!(
+            m.params.len() == 3,
+            "actor `{}`: on_down must have exactly 3 parameters (from_id: Int, reason: Int, monitor_ref: Int), found {}",
+            ad.name,
+            m.params.len()
+        );
         cg.line(&format!(
             "{msg_name}::_DownSignal {{ _from_id, _reason, _monitor_id }} => actor.on_down(_from_id as i64, _reason as i64, _monitor_id as i64),"
         ));
