@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [0.175.1] - 2026-06-02
+
+### Fixed
+- Actor thread deadlock: clear link/monitor registry before joining actor threads — Phase 9 link/monitor infrastructure (#1177) held cloned senders that prevented channels from closing, causing `rx.recv()` to block forever in both Rust and LLVM runtimes
+
 ## [0.175.0] - 2026-06-02
 
 ### Added
