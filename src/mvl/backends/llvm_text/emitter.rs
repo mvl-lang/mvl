@@ -214,7 +214,10 @@ struct TextEmitter {
     // ── Heap drop tracking (#1185) ───────────────────────────────────────
     /// Heap-allocated locals in the current function.  Entries are emitted
     /// as `mvl_*_drop` calls before every `ret` instruction.
-    heap_locals: Vec<(String, HeapKind)>,
+    /// Heap-allocated locals: (ssa_or_alloca, kind, is_ref).
+    /// When `is_ref` is true, the SSA is a stack alloca that must be loaded
+    /// before the drop call (the alloca holds the heap object pointer).
+    heap_locals: Vec<(String, HeapKind, bool)>,
 }
 
 /// Tracks heap-allocated value types for automatic drop emission.
@@ -389,14 +392,22 @@ impl TextEmitter {
     /// Emit `mvl_*_drop` calls for all tracked heap locals.
     /// Called before every `ret` instruction to clean up owned allocations.
     fn emit_heap_drops(&mut self) {
-        for (ssa, kind) in self.heap_locals.clone() {
+        for (ssa, kind, is_ref) in self.heap_locals.clone() {
             let sym = match kind {
                 HeapKind::String => "mvl_string_drop",
                 HeapKind::Array => "mvl_array_drop",
                 HeapKind::Map => "mvl_map_drop",
             };
             self.ensure_extern(&format!("declare void @{sym}(ptr)"));
-            self.push_instr(&format!("call void @{sym}(ptr {ssa})"));
+            if is_ref {
+                // For ref locals, the SSA is a stack alloca — load the heap
+                // object pointer before dropping it.
+                let loaded = self.next_reg();
+                self.push_instr(&format!("{loaded} = load ptr, ptr {ssa}"));
+                self.push_instr(&format!("call void @{sym}(ptr {loaded})"));
+            } else {
+                self.push_instr(&format!("call void @{sym}(ptr {ssa})"));
+            }
         }
     }
 
@@ -1109,6 +1120,10 @@ impl TextEmitter {
                         self.push_instr(&format!("store {ty_str} {v}, ptr {ptr}"));
                     }
                     if let Pattern::Ident(name, _) = pattern {
+                        // Track heap-allocated ref locals for drop at function exit.
+                        if let Some(hk) = Self::heap_kind(&elem_ty) {
+                            self.heap_locals.push((ptr.clone(), hk, true));
+                        }
                         self.ref_locals.insert(
                             name.clone(),
                             RefLocal {
@@ -1120,10 +1135,16 @@ impl TextEmitter {
                 } else if let (Some(v), Pattern::Ident(name, _)) = (val, pattern) {
                     let ty_str = self.llvm_ty_ctx(&elem_ty);
                     self.reg_types.insert(v.clone(), ty_str);
+                    // If this name shadows a previous heap-allocated binding,
+                    // remove the old SSA from heap_locals to prevent double-drop.
+                    if let Some(old_ssa) = self.locals.get(name) {
+                        let old_ssa = old_ssa.clone();
+                        self.heap_locals.retain(|(s, _, _)| *s != old_ssa);
+                    }
                     self.locals.insert(name.clone(), v.clone());
                     // Track heap-allocated locals for automatic drop at function exit.
                     if let Some(hk) = Self::heap_kind(&elem_ty) {
-                        self.heap_locals.push((v, hk));
+                        self.heap_locals.push((v, hk, false));
                     }
                     self.local_mvl_types.insert(name.clone(), elem_ty);
                 }
@@ -1145,28 +1166,25 @@ impl TextEmitter {
 
             Stmt::Return { value, .. } => {
                 let ret_ty = self.current_ret_ty.clone();
+                // Evaluate return expression first (if any), then drop once.
+                let ret_val = if let Some(expr) = value {
+                    self.emit_expr(expr)?
+                } else {
+                    None
+                };
+                self.emit_heap_drops();
                 if Self::is_void(&ret_ty) {
-                    self.emit_heap_drops();
                     if self.current_fn_is_main {
                         self.push_instr(MAIN_RET);
                     } else {
                         self.push_instr("ret void");
                     }
-                } else if let Some(expr) = value {
-                    let val = self.emit_expr(expr)?;
+                } else if let Some(v) = ret_val {
                     let ty = self.llvm_ty_ctx(&ret_ty);
-                    if let Some(v) = val {
-                        self.emit_heap_drops();
-                        self.push_instr(&format!("ret {ty} {v}"));
-                    } else {
-                        self.emit_heap_drops();
-                        self.push_instr(&format!("ret {ty} undef"));
-                    }
+                    self.push_instr(&format!("ret {ty} {v}"));
                 } else if self.current_fn_is_main {
-                    self.emit_heap_drops();
                     self.push_instr(MAIN_RET);
                 } else {
-                    self.emit_heap_drops();
                     self.push_instr("ret void");
                 }
                 self.terminated = true;
@@ -2877,6 +2895,7 @@ impl TextEmitter {
 
         // Err path: propagate the result upwards.
         self.start_bb(&err_bb);
+        self.emit_heap_drops();
         let ret_ty = self.current_ret_ty.clone();
         let llvm_ret = self.llvm_ty_ctx(&ret_ty);
         self.push_instr(&format!("ret {llvm_ret} {result_val}"));
@@ -3022,10 +3041,26 @@ impl TextEmitter {
                 self.push_instr(&format!(
                     "{raw} = call ptr @mvl_map_get(ptr {val}, ptr {kp}, i64 {kl})"
                 ));
-                // Load the value (i64) from the returned pointer.
-                // Returns null if key not found — the caller is expected to check.
+                // Null-guard: mvl_map_get returns null if key not found.
+                let is_null = self.next_reg();
+                self.push_instr(&format!("{is_null} = icmp eq ptr {raw}, null"));
+                let some_bb = self.next_bb("map_get_some");
+                let none_bb = self.next_bb("map_get_none");
+                let merge_bb = self.next_bb("map_get_merge");
+                self.push_instr(&format!(
+                    "br i1 {is_null}, label %{none_bb}, label %{some_bb}"
+                ));
+                self.start_bb(&some_bb);
+                let loaded = self.next_reg();
+                self.push_instr(&format!("{loaded} = load i64, ptr {raw}"));
+                self.push_instr(&format!("br label %{merge_bb}"));
+                self.start_bb(&none_bb);
+                self.push_instr(&format!("br label %{merge_bb}"));
+                self.start_bb(&merge_bb);
                 let result = self.next_reg();
-                self.push_instr(&format!("{result} = load i64, ptr {raw}"));
+                self.push_instr(&format!(
+                    "{result} = phi i64 [ {loaded}, %{some_bb} ], [ 0, %{none_bb} ]"
+                ));
                 self.reg_types.insert(result.clone(), "i64".into());
                 Ok(Some(result))
             }
@@ -3242,7 +3277,12 @@ impl TextEmitter {
             }
 
             // byte_at(i) → Int
-            ("byte_at", "ptr") => {
+            ("byte_at", "ptr")
+                if !matches!(
+                    self.mvl_receiver_kind(receiver),
+                    Some("List") | Some("Array") | Some("Set") | Some("Map")
+                ) =>
+            {
                 let idx = match args.first() {
                     Some(a) => match self.emit_expr(a)? {
                         Some(v) => v,
@@ -3275,7 +3315,12 @@ impl TextEmitter {
             }
 
             // split(delimiter) → List[String]
-            ("split", "ptr") => {
+            ("split", "ptr")
+                if !matches!(
+                    self.mvl_receiver_kind(receiver),
+                    Some("List") | Some("Array") | Some("Set") | Some("Map")
+                ) =>
+            {
                 let delim = match args.first() {
                     Some(a) => match self.emit_expr(a)? {
                         Some(v) => v,
@@ -3312,7 +3357,12 @@ impl TextEmitter {
             }
 
             // contains(sub) → Bool
-            ("contains", "ptr") => {
+            ("contains", "ptr")
+                if !matches!(
+                    self.mvl_receiver_kind(receiver),
+                    Some("List") | Some("Array") | Some("Set") | Some("Map")
+                ) =>
+            {
                 let sub = match args.first() {
                     Some(a) => match self.emit_expr(a)? {
                         Some(v) => v,
@@ -3332,7 +3382,12 @@ impl TextEmitter {
             }
 
             // starts_with(prefix) → Bool
-            ("starts_with", "ptr") => {
+            ("starts_with", "ptr")
+                if !matches!(
+                    self.mvl_receiver_kind(receiver),
+                    Some("List") | Some("Array") | Some("Set") | Some("Map")
+                ) =>
+            {
                 let prefix = match args.first() {
                     Some(a) => match self.emit_expr(a)? {
                         Some(v) => v,
@@ -3352,7 +3407,12 @@ impl TextEmitter {
             }
 
             // ends_with(suffix) → Bool
-            ("ends_with", "ptr") => {
+            ("ends_with", "ptr")
+                if !matches!(
+                    self.mvl_receiver_kind(receiver),
+                    Some("List") | Some("Array") | Some("Set") | Some("Map")
+                ) =>
+            {
                 let suffix = match args.first() {
                     Some(a) => match self.emit_expr(a)? {
                         Some(v) => v,
@@ -3372,7 +3432,12 @@ impl TextEmitter {
             }
 
             // trim() → String
-            ("trim", "ptr") => {
+            ("trim", "ptr")
+                if !matches!(
+                    self.mvl_receiver_kind(receiver),
+                    Some("List") | Some("Array") | Some("Set") | Some("Map")
+                ) =>
+            {
                 self.ensure_extern("declare ptr @_mvl_str_trim(ptr)");
                 let reg = self.next_reg();
                 self.push_instr(&format!("{reg} = call ptr @_mvl_str_trim(ptr {val})"));
@@ -3381,7 +3446,12 @@ impl TextEmitter {
             }
 
             // to_lower() → String
-            ("to_lower", "ptr") => {
+            ("to_lower", "ptr")
+                if !matches!(
+                    self.mvl_receiver_kind(receiver),
+                    Some("List") | Some("Array") | Some("Set") | Some("Map")
+                ) =>
+            {
                 self.ensure_extern("declare ptr @_mvl_str_to_lower(ptr)");
                 let reg = self.next_reg();
                 self.push_instr(&format!("{reg} = call ptr @_mvl_str_to_lower(ptr {val})"));
@@ -3390,7 +3460,12 @@ impl TextEmitter {
             }
 
             // to_upper() → String
-            ("to_upper", "ptr") => {
+            ("to_upper", "ptr")
+                if !matches!(
+                    self.mvl_receiver_kind(receiver),
+                    Some("List") | Some("Array") | Some("Set") | Some("Map")
+                ) =>
+            {
                 self.ensure_extern("declare ptr @_mvl_str_to_upper(ptr)");
                 let reg = self.next_reg();
                 self.push_instr(&format!("{reg} = call ptr @_mvl_str_to_upper(ptr {val})"));
@@ -3399,7 +3474,13 @@ impl TextEmitter {
             }
 
             // replace(old, new) → String
-            ("replace", "ptr") if args.len() >= 2 => {
+            ("replace", "ptr")
+                if args.len() >= 2
+                    && !matches!(
+                        self.mvl_receiver_kind(receiver),
+                        Some("List") | Some("Array") | Some("Set") | Some("Map")
+                    ) =>
+            {
                 let old_s = match self.emit_expr(&args[0])? {
                     Some(v) => v,
                     None => return Ok(None),
@@ -4796,6 +4877,20 @@ mod tests {
         assert!(ir.contains("icmp ne ptr"), "{ir}");
     }
 
+    #[test]
+    fn map_get_emits_null_guard_before_load() {
+        let ir = compile(
+            "fn f(m: Map[String, Int]) -> Int {\n\
+             m.get(\"key\")\n\
+             }",
+        );
+        assert!(ir.contains("call ptr @mvl_map_get(ptr"), "{ir}");
+        // Must null-check before loading
+        assert!(ir.contains("icmp eq ptr"), "{ir}");
+        assert!(ir.contains("load i64, ptr"), "{ir}");
+        assert!(ir.contains("phi i64"), "{ir}");
+    }
+
     // ── HeapKind drop tracking tests (#1185) ─────────────────────────────
 
     #[test]
@@ -4864,6 +4959,33 @@ mod tests {
         );
         // The drop should appear before the ret instruction.
         assert!(ir.contains("call void @mvl_string_drop(ptr"), "{ir}");
+    }
+
+    #[test]
+    fn shadowed_string_local_no_double_drop() {
+        let ir = compile(
+            "fn f() -> Unit {\n\
+             let s: String = \"first\";\n\
+             let s: String = \"second\";\n\
+             }",
+        );
+        // Should have exactly 1 drop call (for the second binding only;
+        // the first is removed from tracking when shadowed).
+        let drop_count = ir.matches("call void @mvl_string_drop(ptr").count();
+        assert_eq!(drop_count, 1, "expected 1 drop, got {drop_count}\n{ir}");
+    }
+
+    #[test]
+    fn ref_string_local_emits_load_then_drop() {
+        let ir = compile(
+            "fn f() -> Unit {\n\
+             let s: ref String = \"hello\";\n\
+             }",
+        );
+        // ref local: must load from alloca, then drop the loaded value.
+        assert!(ir.contains("call void @mvl_string_drop(ptr"), "{ir}");
+        // Verify the load-before-drop pattern exists.
+        assert!(ir.contains("load ptr, ptr"), "{ir}");
     }
 
     // ── String builtin kernel methods tests (#1186) ──────────────────────
