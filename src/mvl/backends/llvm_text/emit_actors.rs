@@ -40,7 +40,7 @@ const MAX_ACTOR_ARGS: usize = 8;
 impl TextEmitter {
     // ── Runtime extern declarations ───────────────────────────────────────
 
-    /// Emit all five actor runtime extern declarations exactly once.
+    /// Emit all actor runtime extern declarations exactly once.
     pub(super) fn ensure_actor_runtime_externs(&mut self) {
         if self.actor_runtime_declared {
             return;
@@ -50,6 +50,13 @@ impl TextEmitter {
         self.ensure_extern("declare void @mvl_actor_drop(ptr)");
         self.ensure_extern("declare ptr @mvl_actor_self()");
         self.ensure_extern("declare void @mvl_actor_join_all()");
+        // Link/monitor C-ABI functions (Phase 9, #1177).
+        self.ensure_extern("declare i64 @mvl_actor_get_id(ptr)");
+        self.ensure_extern("declare void @mvl_link(ptr, ptr)");
+        self.ensure_extern("declare void @mvl_unlink(ptr, ptr)");
+        self.ensure_extern("declare i64 @mvl_monitor(ptr, ptr)");
+        self.ensure_extern("declare void @mvl_demonitor(i64)");
+        self.ensure_extern("declare void @mvl_set_trap_exit(ptr)");
         self.actor_runtime_declared = true;
     }
 

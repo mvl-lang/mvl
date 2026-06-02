@@ -1,0 +1,78 @@
+// Corpus: process links and monitors (Phase 9, #1177)
+//
+// Demonstrates:
+// - Bidirectional `link(a, b)` between actors
+// - One-way `monitor(watcher, target)` for failure observation
+// - `traps_exit` flag on actor declarations
+// - ExitReason, ExitSignal, DownSignal types from std.actors
+
+use std.actors.{link, unlink, monitor, demonitor, ExitReason, ExitSignal, DownSignal}
+
+// ── Basic actor that can be linked ───────────────────────────────────────
+
+actor Worker {
+    name: String
+
+    pub fn do_work(val n: Int) { }
+}
+
+// ── Actor that traps exit signals instead of dying ───────────────────────
+
+actor Supervisor traps_exit {
+    child_count: Int
+
+    pub fn notify(val actor_id: Int, val reason: Int) { }
+    pub fn add_child(val id: Int) { }
+}
+
+// ── Actor that monitors another actor ────────────────────────────────────
+
+actor Watcher {
+    monitor_ref: Int
+
+    pub fn on_down(val actor_id: Int, val reason: Int, val ref_id: Int) { }
+}
+
+// ── Functions using link/monitor with Spawn effect ───────────────────────
+
+fn setup_linked_workers() -> Unit ! Spawn {
+    let a_id: Int = 1;
+    let b_id: Int = 2;
+
+    // Bidirectional link: if a dies, b is killed (and vice versa)
+    link(a_id, b_id);
+
+    // Can be removed later
+    unlink(a_id, b_id)
+}
+
+fn setup_monitored_worker() -> Int ! Spawn {
+    let watcher_id: Int = 1;
+    let target_id: Int = 2;
+
+    // One-way monitor: watcher observes target death
+    let ref_id: Int = monitor(watcher_id, target_id);
+
+    // Can be removed
+    demonitor(ref_id);
+
+    ref_id
+}
+
+// ── Signal types usage ───────────────────────────────────────────────────
+
+fn handle_exit_reason(r: ExitReason) -> String {
+    match r {
+        ExitReason::Normal => "clean shutdown",
+        ExitReason::Panic => "actor panicked",
+        ExitReason::Killed => "killed by link",
+    }
+}
+
+fn make_exit_signal() -> ExitSignal {
+    ExitSignal { actor_id: 42, reason: ExitReason::Normal }
+}
+
+fn make_down_signal() -> DownSignal {
+    DownSignal { actor_id: 42, reason: ExitReason::Panic, monitor_ref: 1 }
+}

@@ -17,6 +17,15 @@
 //!   types map to `i64` at the LLVM ABI level; pointer types pass as pointer-width
 //!   integers)
 //!
+//! # System discriminants (Phase 9, #1177)
+//!
+//! Negative discriminants are reserved for system messages:
+//! - `-1` = Shutdown — actor thread exits the dispatch loop
+//! - `-2` = ExitSignal — linked actor died (args[0]=from_id, args[1]=reason)
+//! - `-3` = DownSignal — monitored actor died (args[0]=from_id, args[1]=reason, args[2]=monitor_id)
+//!
+//! These are handled in the dispatch loop before calling the user dispatch function.
+//!
 //! # Mailbox configuration (#1127)
 //!
 //! `mvl_actor_spawn` accepts `capacity` and `policy` parameters:
@@ -36,15 +45,25 @@
 //! `mvl_actor_drop` marks the handle as consumed in the registry (setting its
 //! slot to `None`) to prevent double-free when `mvl_actor_join_all` runs later.
 //!
-//! Phase 8, #696. Shutdown fix: #1124. Mailbox config: #1127.
+//! Phase 8, #696. Shutdown fix: #1124. Mailbox config: #1127. Links: #1177.
 
-use std::cell::RefCell;
-use std::sync::mpsc;
+use std::cell::{Cell, RefCell};
+use std::collections::{HashMap, HashSet};
+use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{mpsc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 
 /// Maximum number of `i64` arguments a single behavior call can carry.
 /// Behaviors with more parameters than this are not yet supported.
 const MAX_ARGS: usize = 8;
+
+/// System discriminant: shut down the actor.
+const DISC_SHUTDOWN: i64 = -1;
+/// System discriminant: exit signal from a linked actor.
+const _DISC_EXIT_SIGNAL: i64 = -2;
+/// System discriminant: down signal from a monitored actor.
+const _DISC_DOWN_SIGNAL: i64 = -3;
 
 /// An in-flight actor message: behavior discriminant + packed i64 arguments.
 struct MvlMsg {
@@ -60,6 +79,16 @@ enum MvlSender {
     BoundedBlock(mpsc::SyncSender<MvlMsg>),
     /// Unbounded channel: `send` never blocks (grows without limit).
     Unbounded(mpsc::Sender<MvlMsg>),
+}
+
+impl Clone for MvlSender {
+    fn clone(&self) -> Self {
+        match self {
+            MvlSender::BoundedDrop(tx) => MvlSender::BoundedDrop(tx.clone()),
+            MvlSender::BoundedBlock(tx) => MvlSender::BoundedBlock(tx.clone()),
+            MvlSender::Unbounded(tx) => MvlSender::Unbounded(tx.clone()),
+        }
+    }
 }
 
 impl MvlSender {
@@ -85,6 +114,7 @@ impl MvlSender {
 /// [`mvl_actor_send`] and [`mvl_actor_drop`].
 pub struct MvlActorHandle {
     sender: MvlSender,
+    actor_id: u64,
 }
 
 /// C-ABI dispatch function pointer type.
@@ -107,6 +137,120 @@ thread_local! {
     static ACTOR_REGISTRY: RefCell<Vec<(Option<usize>, JoinHandle<()>)>> =
         const { RefCell::new(Vec::new()) };
 }
+
+// ── Link/monitor registry (Phase 9, #1177) ───────────────────────────────
+
+/// Unique actor identifier, assigned at spawn time.
+type ActorId = u64;
+/// Unique monitor identifier.
+type MonitorId = u64;
+
+static NEXT_ACTOR_ID: AtomicU64 = AtomicU64::new(1);
+static NEXT_MONITOR_ID: AtomicU64 = AtomicU64::new(1);
+
+struct ActorEntry {
+    /// Cloned sender for injecting system messages.
+    sender: MvlSender,
+    /// Whether this actor traps exit signals.
+    traps_exit: bool,
+}
+
+struct LinkRegistry {
+    actors: HashMap<ActorId, ActorEntry>,
+    /// Bidirectional links.
+    links: HashMap<ActorId, HashSet<ActorId>>,
+    /// Monitors: target → list of (monitor_id, watcher_id).
+    monitors: HashMap<ActorId, Vec<(MonitorId, ActorId)>>,
+    /// Reverse index: monitor_id → target.
+    monitor_targets: HashMap<MonitorId, ActorId>,
+}
+
+impl LinkRegistry {
+    fn new() -> Self {
+        Self {
+            actors: HashMap::new(),
+            links: HashMap::new(),
+            monitors: HashMap::new(),
+            monitor_targets: HashMap::new(),
+        }
+    }
+}
+
+fn global_link_registry() -> &'static Mutex<LinkRegistry> {
+    static REGISTRY: OnceLock<Mutex<LinkRegistry>> = OnceLock::new();
+    REGISTRY.get_or_init(|| Mutex::new(LinkRegistry::new()))
+}
+
+/// Process an actor's death: notify linked actors and monitors.
+fn process_actor_exit(dead_id: ActorId, reason: i64) {
+    let (kill_targets, exit_targets, down_targets) = {
+        let mut reg = global_link_registry().lock().unwrap();
+
+        let linked = reg.links.remove(&dead_id).unwrap_or_default();
+        for &peer in &linked {
+            if let Some(set) = reg.links.get_mut(&peer) {
+                set.remove(&dead_id);
+            }
+        }
+
+        let mut kill_targets: Vec<ActorId> = Vec::new();
+        let mut exit_targets: Vec<(ActorId, i64)> = Vec::new();
+        for peer in linked {
+            if reg.actors.get(&peer).map_or(false, |e| e.traps_exit) {
+                exit_targets.push((peer, reason));
+            } else {
+                kill_targets.push(peer);
+            }
+        }
+
+        let monitored = reg.monitors.remove(&dead_id).unwrap_or_default();
+        for &(mid, _) in &monitored {
+            reg.monitor_targets.remove(&mid);
+        }
+
+        reg.actors.remove(&dead_id);
+
+        (kill_targets, exit_targets, monitored)
+    };
+
+    let reg = global_link_registry().lock().unwrap();
+
+    for target in kill_targets {
+        if let Some(entry) = reg.actors.get(&target) {
+            entry.sender.send_msg(MvlMsg {
+                disc: DISC_SHUTDOWN,
+                args: [0i64; MAX_ARGS],
+            });
+        }
+    }
+
+    for (target, exit_reason) in exit_targets {
+        if let Some(entry) = reg.actors.get(&target) {
+            let mut args = [0i64; MAX_ARGS];
+            args[0] = dead_id as i64;
+            args[1] = exit_reason;
+            entry.sender.send_msg(MvlMsg {
+                disc: _DISC_EXIT_SIGNAL,
+                args,
+            });
+        }
+    }
+
+    for (mid, watcher) in down_targets {
+        if let Some(entry) = reg.actors.get(&watcher) {
+            let mut args = [0i64; MAX_ARGS];
+            args[0] = dead_id as i64;
+            args[1] = reason;
+            args[2] = mid as i64;
+            entry.sender.send_msg(MvlMsg {
+                disc: _DISC_DOWN_SIGNAL,
+                args,
+            });
+        }
+    }
+}
+
+// ── Spawn ──────────────────────────────────────────────────────────────────
 
 /// Spawn a new actor thread and return an opaque actor handle.
 ///
@@ -159,16 +303,52 @@ pub unsafe extern "C" fn mvl_actor_spawn(
         (MvlSender::Unbounded(tx), rx)
     };
 
-    let handle = Box::new(MvlActorHandle { sender });
+    // Assign unique actor ID (#1177).
+    let actor_id = NEXT_ACTOR_ID.fetch_add(1, Ordering::Relaxed);
+
+    // Register in link/monitor registry.
+    {
+        let mut reg = global_link_registry().lock().unwrap();
+        reg.actors.insert(
+            actor_id,
+            ActorEntry {
+                sender: sender.clone(),
+                traps_exit: false,
+            },
+        );
+    }
+
+    let handle = Box::new(MvlActorHandle { sender, actor_id });
     let handle_ptr = Box::into_raw(handle);
 
     let handle_addr = handle_ptr as usize;
     let join_handle = thread::spawn(move || {
         CURRENT_ACTOR_HANDLE.with(|cell| cell.set(handle_addr));
+        CURRENT_ACTOR_ID.with(|cell| cell.set(actor_id));
         let state_ptr = state.as_mut_ptr();
-        while let Ok(msg) = rx.recv() {
-            dispatch(state_ptr, msg.disc, msg.args.as_ptr());
-        }
+
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            while let Ok(msg) = rx.recv() {
+                // System discriminants are handled here, not in user dispatch.
+                if msg.disc == DISC_SHUTDOWN {
+                    return false; // shutdown requested
+                }
+                // ExitSignal and DownSignal: currently no user handler,
+                // just continue processing (actor traps the signal by surviving).
+                if msg.disc < 0 {
+                    continue;
+                }
+                dispatch(state_ptr, msg.disc, msg.args.as_ptr());
+            }
+            true // normal exit
+        }));
+
+        let reason: i64 = match result {
+            Ok(true) => 0,  // Normal
+            Ok(false) => 2, // Killed
+            Err(_) => 1,    // Panic
+        };
+        process_actor_exit(actor_id, reason);
     });
 
     // Register (handle_ptr, JoinHandle) so mvl_actor_join_all can drain and join.
@@ -181,13 +361,6 @@ pub unsafe extern "C" fn mvl_actor_spawn(
 }
 
 /// Send a behavior message to an actor (fire-and-forget).
-///
-/// # Parameters
-///
-/// - `handle`: opaque actor handle returned by [`mvl_actor_spawn`]
-/// - `disc`: behavior discriminant (0-based index of the `pub fn` behavior)
-/// - `argc`: number of `i64` arguments in `args`
-/// - `args`: pointer to an array of `i64` argument values
 ///
 /// # Safety
 ///
@@ -212,9 +385,9 @@ pub unsafe extern "C" fn mvl_actor_send(handle: *mut u8, disc: i64, argc: i64, a
 }
 
 // Thread-local that each actor thread sets to its own handle before processing messages.
-use std::cell::Cell;
 thread_local! {
     static CURRENT_ACTOR_HANDLE: Cell<usize> = const { Cell::new(0) };
+    static CURRENT_ACTOR_ID: Cell<u64> = const { Cell::new(0) };
 }
 
 /// Return the current actor's own handle (for passing `self` to other actors).
@@ -224,6 +397,18 @@ thread_local! {
 #[no_mangle]
 pub extern "C" fn mvl_actor_self() -> *mut u8 {
     CURRENT_ACTOR_HANDLE.with(|cell| cell.get() as *mut u8)
+}
+
+/// Get the actor ID from an actor handle.
+///
+/// Returns 0 if the handle is null.
+#[no_mangle]
+pub unsafe extern "C" fn mvl_actor_get_id(handle: *mut u8) -> i64 {
+    if handle.is_null() {
+        return 0;
+    }
+    let actor = &*(handle as *const MvlActorHandle);
+    actor.actor_id as i64
 }
 
 /// Drop an actor handle, disconnecting the sender.
@@ -274,5 +459,104 @@ pub extern "C" fn mvl_actor_join_all() {
     // Join all actor threads.
     for (_, jh) in entries {
         let _ = jh.join();
+    }
+}
+
+// ── Link/monitor C-ABI functions (Phase 9, #1177) ────────────────────────
+
+/// Create a bidirectional link between two actors.
+///
+/// If either actor dies, the other is killed (or receives an exit signal
+/// if it has `traps_exit` set).
+///
+/// # Safety
+///
+/// Both handles must be valid pointers returned by [`mvl_actor_spawn`].
+#[no_mangle]
+pub unsafe extern "C" fn mvl_link(handle_a: *mut u8, handle_b: *mut u8) {
+    if handle_a.is_null() || handle_b.is_null() {
+        return;
+    }
+    let a = &*(handle_a as *const MvlActorHandle);
+    let b = &*(handle_b as *const MvlActorHandle);
+    let mut reg = global_link_registry().lock().unwrap();
+    reg.links.entry(a.actor_id).or_default().insert(b.actor_id);
+    reg.links.entry(b.actor_id).or_default().insert(a.actor_id);
+}
+
+/// Remove a bidirectional link between two actors.
+///
+/// # Safety
+///
+/// Both handles must be valid pointers returned by [`mvl_actor_spawn`].
+#[no_mangle]
+pub unsafe extern "C" fn mvl_unlink(handle_a: *mut u8, handle_b: *mut u8) {
+    if handle_a.is_null() || handle_b.is_null() {
+        return;
+    }
+    let a = &*(handle_a as *const MvlActorHandle);
+    let b = &*(handle_b as *const MvlActorHandle);
+    let mut reg = global_link_registry().lock().unwrap();
+    if let Some(set) = reg.links.get_mut(&a.actor_id) {
+        set.remove(&b.actor_id);
+    }
+    if let Some(set) = reg.links.get_mut(&b.actor_id) {
+        set.remove(&a.actor_id);
+    }
+}
+
+/// Create a one-way monitor: `watcher` is notified when `target` dies.
+///
+/// Returns a monitor ID that can be passed to [`mvl_demonitor`].
+///
+/// # Safety
+///
+/// Both handles must be valid pointers returned by [`mvl_actor_spawn`].
+#[no_mangle]
+pub unsafe extern "C" fn mvl_monitor(watcher: *mut u8, target: *mut u8) -> i64 {
+    if watcher.is_null() || target.is_null() {
+        return 0;
+    }
+    let w = &*(watcher as *const MvlActorHandle);
+    let t = &*(target as *const MvlActorHandle);
+    let mid = NEXT_MONITOR_ID.fetch_add(1, Ordering::Relaxed);
+    let mut reg = global_link_registry().lock().unwrap();
+    reg.monitors
+        .entry(t.actor_id)
+        .or_default()
+        .push((mid, w.actor_id));
+    reg.monitor_targets.insert(mid, t.actor_id);
+    mid as i64
+}
+
+/// Remove a monitor.
+#[no_mangle]
+pub extern "C" fn mvl_demonitor(monitor_id: i64) {
+    let mid = monitor_id as u64;
+    let mut reg = global_link_registry().lock().unwrap();
+    if let Some(target) = reg.monitor_targets.remove(&mid) {
+        if let Some(list) = reg.monitors.get_mut(&target) {
+            list.retain(|(m, _)| *m != mid);
+        }
+    }
+}
+
+/// Set the `traps_exit` flag for an actor.
+///
+/// When a linked actor dies, this actor receives an exit signal message
+/// instead of being killed.
+///
+/// # Safety
+///
+/// `handle` must be a valid pointer returned by [`mvl_actor_spawn`].
+#[no_mangle]
+pub unsafe extern "C" fn mvl_set_trap_exit(handle: *mut u8) {
+    if handle.is_null() {
+        return;
+    }
+    let actor = &*(handle as *const MvlActorHandle);
+    let mut reg = global_link_registry().lock().unwrap();
+    if let Some(entry) = reg.actors.get_mut(&actor.actor_id) {
+        entry.traps_exit = true;
     }
 }

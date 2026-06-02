@@ -362,6 +362,9 @@ pub struct ActorDecl {
     pub methods: Vec<ActorMethod>,
     /// Optional mailbox configuration. `None` = default (256 capacity, DropNewest policy).
     pub mailbox: Option<MailboxConfig>,
+    /// Whether this actor traps exit signals from linked actors instead of dying.
+    /// Parsed from `actor Foo traps_exit { ... }`. Phase 9, #1177.
+    pub traps_exit: bool,
     pub span: Span,
 }
 
