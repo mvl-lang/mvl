@@ -783,7 +783,7 @@ impl Parser {
     /// Parse one side of a relabel declaration: `_` (bare) or an ident (label name).
     fn parse_relabel_side(&mut self) -> Result<Option<String>, ()> {
         match self.peek_kind() {
-            TokenKind::Ident(name) if name == "_" => {
+            TokenKind::Underscore => {
                 self.advance();
                 Ok(None)
             }

@@ -1,0 +1,178 @@
+// tests/stdlib/audit_test.mvl — std.audit module correctness (#808)
+//
+// Verifies runtime behaviour of the audit stdlib:
+//   - AuditEvent construction (pure constructors)
+//   - AuditOutcome variants accessible
+//   - with_correlation / with_details enrichment (pure)
+//   - AuditLogger::emit appends to a file path (! Audit)
+//   - Effect propagation: callers must declare ! Audit
+//
+// Audit output is JSONL appended to a temp path; tests verify the emit call
+// succeeds (does not panic) rather than parsing the output.
+// Temp files in /tmp are left for OS cleanup (no std.io.remove import to
+// avoid name-collision with Map::remove in the generated Rust).
+
+use std.audit.{AuditLogger, AuditEvent, AuditOutcome,
+               access, modify, deny, with_correlation, with_details,
+               file_audit_logger}
+use std.io.{path, write_file, Path, IoError}
+
+// ── AuditEvent constructors are pure ─────────────────────────────────────────
+
+test fn audit_access_constructor_returns_event() -> Unit {
+    let e: AuditEvent = access("user:alice", "patient:42");
+    assert_eq(e.action.is_empty(), false);
+}
+
+test fn audit_modify_constructor_returns_event() -> Unit {
+    let e: AuditEvent = modify("service:payment", "order:99", "update.status");
+    assert_eq(e.resource.is_empty(), false);
+}
+
+test fn audit_deny_constructor_returns_event() -> Unit {
+    let e: AuditEvent = deny("user:bob", "admin_panel", "insufficient_privilege");
+    assert_eq(e.action.is_empty(), false);
+}
+
+test fn audit_access_outcome_is_success() -> Unit {
+    let e: AuditEvent = access("user:alice", "patient:42");
+    let is_success: Bool = match e.outcome {
+        AuditOutcome::Success => true,
+        AuditOutcome::Failure => false,
+        AuditOutcome::Denied  => false,
+    };
+    assert_eq(is_success, true);
+}
+
+test fn audit_deny_outcome_is_denied() -> Unit {
+    let e: AuditEvent = deny("user:bob", "secret_panel", "no_role");
+    let is_denied: Bool = match e.outcome {
+        AuditOutcome::Success => false,
+        AuditOutcome::Failure => false,
+        AuditOutcome::Denied  => true,
+    };
+    assert_eq(is_denied, true);
+}
+
+test fn audit_modify_outcome_is_success() -> Unit {
+    let e: AuditEvent = modify("svc:worker", "job:5", "update.result");
+    let is_success: Bool = match e.outcome {
+        AuditOutcome::Success => true,
+        AuditOutcome::Failure => false,
+        AuditOutcome::Denied  => false,
+    };
+    assert_eq(is_success, true);
+}
+
+// ── with_correlation enrichment ───────────────────────────────────────────────
+
+test fn audit_with_correlation_sets_id() -> Unit {
+    let e: AuditEvent = access("user:alice", "patient:42");
+    let traced: AuditEvent = with_correlation(e, "trace-abc-123");
+    let has_id: Bool = match traced.correlation_id {
+        Some(_) => true,
+        None    => false,
+    };
+    assert_eq(has_id, true);
+}
+
+test fn audit_without_correlation_is_none() -> Unit {
+    let e: AuditEvent = access("user:alice", "patient:42");
+    let has_id: Bool = match e.correlation_id {
+        Some(_) => true,
+        None    => false,
+    };
+    assert_eq(has_id, false);
+}
+
+// ── with_details enrichment ───────────────────────────────────────────────────
+
+test fn audit_with_details_does_not_panic() -> Unit {
+    let e: AuditEvent = access("user:alice", "report:q1");
+    let enriched: AuditEvent = with_details(e, {"method": "GET", "ip": "10.0.0.1"});
+    assert_eq(enriched.principal.is_empty(), false);
+}
+
+// ── AuditLogger::emit writes to file ─────────────────────────────────────────
+
+test fn audit_emit_access_does_not_panic() -> Unit ! Audit + FileWrite {
+    let p: Path = path("/tmp/mvl_audit_test_808_access.jsonl");
+    let _: Result[Unit, IoError] = write_file(p, "");
+    let logger: AuditLogger = file_audit_logger(path("/tmp/mvl_audit_test_808_access.jsonl"));
+    let event: AuditEvent = access("user:alice", "patient:42");
+    logger.emit(event);
+    assert_eq(true, true);
+}
+
+test fn audit_emit_modify_does_not_panic() -> Unit ! Audit + FileWrite {
+    let p: Path = path("/tmp/mvl_audit_test_808_modify.jsonl");
+    let _: Result[Unit, IoError] = write_file(p, "");
+    let logger: AuditLogger = file_audit_logger(path("/tmp/mvl_audit_test_808_modify.jsonl"));
+    let event: AuditEvent = modify("svc:api", "order:7", "update.status");
+    logger.emit(event);
+    assert_eq(true, true);
+}
+
+test fn audit_emit_deny_does_not_panic() -> Unit ! Audit + FileWrite {
+    let p: Path = path("/tmp/mvl_audit_test_808_deny.jsonl");
+    let _: Result[Unit, IoError] = write_file(p, "");
+    let logger: AuditLogger = file_audit_logger(path("/tmp/mvl_audit_test_808_deny.jsonl"));
+    let event: AuditEvent = deny("user:bob", "config:settings", "no_permission");
+    logger.emit(event);
+    assert_eq(true, true);
+}
+
+test fn audit_emit_with_correlation_does_not_panic() -> Unit ! Audit + FileWrite {
+    let p: Path = path("/tmp/mvl_audit_test_808_traced.jsonl");
+    let _: Result[Unit, IoError] = write_file(p, "");
+    let logger: AuditLogger = file_audit_logger(path("/tmp/mvl_audit_test_808_traced.jsonl"));
+    let event: AuditEvent = with_correlation(
+        access("user:carol", "report:annual"),
+        "trace-xyz-789",
+    );
+    logger.emit(event);
+    assert_eq(true, true);
+}
+
+test fn audit_emit_multiple_events_does_not_panic() -> Unit ! Audit + FileWrite {
+    let p: Path = path("/tmp/mvl_audit_test_808_multi.jsonl");
+    let _: Result[Unit, IoError] = write_file(p, "");
+    let logger: AuditLogger = file_audit_logger(path("/tmp/mvl_audit_test_808_multi.jsonl"));
+    logger.emit(access("user:alice", "record:1"));
+    logger.emit(access("user:alice", "record:2"));
+    logger.emit(deny("user:alice", "admin", "no_role"));
+    assert_eq(true, true);
+}
+
+// ── Effect propagation ────────────────────────────────────────────────────────
+
+fn emit_access_event(logger: AuditLogger, user_id: String) -> Bool ! Audit {
+    let event: AuditEvent = access("user:".concat(user_id), "resource:x");
+    logger.emit(event);
+    true
+}
+
+test fn audit_effect_propagates_through_caller() -> Unit ! Audit + FileWrite {
+    let _: Result[Unit, IoError] = write_file(path("/tmp/mvl_audit_test_808_prop.jsonl"), "");
+    let logger: AuditLogger = file_audit_logger(path("/tmp/mvl_audit_test_808_prop.jsonl"));
+    assert_eq(emit_access_event(logger, "dave"), true);
+}
+
+// ── All three outcomes constructable ─────────────────────────────────────────
+
+test fn audit_failure_outcome_is_constructable() -> Unit {
+    let e: AuditEvent = AuditEvent {
+        principal:      "svc:worker",
+        action:         "create.record",
+        resource:       "db:write",
+        outcome:        AuditOutcome::Failure,
+        details:        {"error": "timeout"},
+        correlation_id: None,
+    };
+    let is_failure: Bool = match e.outcome {
+        AuditOutcome::Success => false,
+        AuditOutcome::Failure => true,
+        AuditOutcome::Denied  => false,
+    };
+    assert_eq(is_failure, true);
+}
