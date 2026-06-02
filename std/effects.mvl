@@ -30,6 +30,7 @@ effect Recv         // Receive on channels (blocking) — blocking/DoS
 // ── Composite Effects (subsumption) ──────────────────────────────────────────
 
 effect Log > Clock + Console        // Logging requires timestamps and writes to stderr
+effect Audit > FileWrite + Clock    // Compliance audit trail: append-only writes + timestamps (#808)
 effect CryptoRandom > Random        // Cryptographic PRNG is a specialisation of Random
 
 // IO subsumes all I/O effects — use as convenience umbrella

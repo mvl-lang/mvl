@@ -1,35 +1,222 @@
-//! std.audit — audit target configuration and audit actor bootstrap.
+//! std.audit — compliance audit trail and audit target configuration.
 //!
-//! The audit actor receives all relabel audit events (provenance transitions)
-//! and writes them to a configured target.  The target itself is a capability
-//! token: `AuditTarget[String]` proves the destination came from audited
-//! configuration, not from user input.
+//! Two concerns live here:
+//!   1. AuditEvent / AuditLogger — structured, append-only compliance records.
+//!   2. AuditTarget — capability label for configuring the audit sink path.
+//!
+//! Audit ≠ Log:
+//!   - Logs are operational (debugging, monitoring) — rotatable, filterable.
+//!   - Audit trails are compliance artifacts — append-only, tamper-evident,
+//!     timestamped.  Unlike std.log which rejects Secret[T] at compile time,
+//!     audit trails may contain sensitive data because they ARE the compliance
+//!     record.
 //!
 //! Import:
-//!   use std.audit.{AuditTarget, audit_target, unaudit_target,
+//!   use std.audit.{AuditLogger, AuditEvent, AuditOutcome,
+//!                  access, modify, deny, with_correlation, with_details,
+//!                  file_audit_logger,
+//!                  AuditTarget, audit_target, unaudit_target,
 //!                  load_audit_target, default_audit_target}
 //!
 //! Effects:
+//!   Audit     — AuditLogger::emit (FileWrite + Clock subsumption)
 //!   Env       — load_audit_target (reads env var)
-//!   FileWrite — audit actor writes to the target path
 //!
-//! See #931, #808, #896.
+//! See #808, #931, #896.
 
 use std.env.{_env_read}
+use std.io.{append, Path, IoError, path}
+use std.time.{now, format_instant}
 
-// ── Capability label: AuditTarget (#931) ────────────────────────────────────
+// ── AuditOutcome ──────────────────────────────────────────────────────────────
+
+/// The outcome of an audited action.
+pub type AuditOutcome = enum {
+    Success,  // action completed as intended
+    Failure,  // action attempted but failed
+    Denied,   // action was refused (authorisation check)
+}
+
+// ── AuditEvent ────────────────────────────────────────────────────────────────
+
+/// A structured compliance record of a single auditable action.
+///
+/// Construct with `access()`, `modify()`, or `deny()` and enrich with
+/// `with_correlation()` / `with_details()`.  The timestamp is set by the
+/// `AuditLogger` at emit time — constructors are pure.
+///
+/// Convention:
+///   principal = `"type:identifier"` e.g. `"user:alice"`, `"service:payment"`
+///   action    = `"verb.noun"`       e.g. `"access.read"`, `"update.status"`
+///   resource  = `"type:identifier"` e.g. `"patient:12345"`, `"order:99"`
+pub type AuditEvent = struct {
+    principal:      String,
+    action:         String,
+    resource:       String,
+    outcome:        AuditOutcome,
+    details:        Map[String, String],
+    correlation_id: Option[String],
+}
+
+// ── Convenience constructors (pure) ───────────────────────────────────────────
+
+/// Build a read-access audit event (outcome: Success).
+pub fn access(principal: String, resource: String) -> AuditEvent {
+    AuditEvent {
+        principal:      principal,
+        action:         "access.read",
+        resource:       resource,
+        outcome:        AuditOutcome::Success,
+        details:        Map::new(),
+        correlation_id: None,
+    }
+}
+
+/// Build a mutation audit event (outcome: Success).
+///
+/// `action` should follow `"verb.noun"` convention: `"update.status"`,
+/// `"delete.account"`, `"create.order"`.
+pub fn modify(principal: String, resource: String, action: String) -> AuditEvent {
+    AuditEvent {
+        principal:      principal,
+        action:         action,
+        resource:       resource,
+        outcome:        AuditOutcome::Success,
+        details:        Map::new(),
+        correlation_id: None,
+    }
+}
+
+/// Build an access-denied audit event (outcome: Denied).
+///
+/// `reason` is stored in `details["reason"]`.
+pub fn deny(principal: String, resource: String, reason: String) -> AuditEvent {
+    AuditEvent {
+        principal:      principal,
+        action:         "access.deny",
+        resource:       resource,
+        outcome:        AuditOutcome::Denied,
+        details:        {"reason": reason},
+        correlation_id: None,
+    }
+}
+
+/// Return a new event with the given distributed-trace correlation ID attached.
+pub fn with_correlation(event: AuditEvent, id: String) -> AuditEvent {
+    AuditEvent {
+        principal:      event.principal,
+        action:         event.action,
+        resource:       event.resource,
+        outcome:        event.outcome,
+        details:        event.details,
+        correlation_id: Some(id),
+    }
+}
+
+/// Return a new event with the details map replaced.
+pub fn with_details(event: AuditEvent, details: Map[String, String]) -> AuditEvent {
+    AuditEvent {
+        principal:      event.principal,
+        action:         event.action,
+        resource:       event.resource,
+        outcome:        event.outcome,
+        details:        details,
+        correlation_id: event.correlation_id,
+    }
+}
+
+// ── AuditLogger ───────────────────────────────────────────────────────────────
+
+/// Append-only compliance log writer.
+///
+/// Each `emit` call appends a single JSONL record to the configured path via
+/// `append()`, which opens, writes, and closes the file per record — no
+/// shared mutable Fd state.
+///
+/// Construct with `file_audit_logger(path("audit.log"))`.
+pub type AuditLogger = struct {
+    sink: Path,
+}
+
+/// Construct an AuditLogger that appends to the given file path.
+pub fn file_audit_logger(sink: Path) -> AuditLogger {
+    AuditLogger { sink: sink }
+}
+
+// ── Internal format helpers ────────────────────────────────────────────────────
+
+fn _audit_timestamp() -> String ! Clock {
+    format_instant(now(), "%Y-%m-%dT%H:%M:%SZ")
+}
+
+fn _audit_json_escape(s: String) -> String {
+    let s1: String = s.replace("\\", "\\\\");
+    let s2: String = s1.replace("\"", "\\\"");
+    let s3: String = s2.replace("\n", "\\n");
+    let s4: String = s3.replace("\r", "\\r");
+    s4.replace("\t", "\\t")
+}
+
+fn _outcome_str(o: AuditOutcome) -> String {
+    match o {
+        AuditOutcome::Success => "Success",
+        AuditOutcome::Failure => "Failure",
+        AuditOutcome::Denied  => "Denied",
+    }
+}
+
+fn _format_details_json(fields: Map[String, String]) -> String {
+    let keys: List[String] = fields.keys().sort();
+    let body: ref String = "";
+    let first: ref Bool = true;
+    for k in keys {
+        let v: String = match fields.get(k) { Some(s) => s, None => "" };
+        let sep: String = if first { "" } else { "," };
+        body = body
+            .concat(sep)
+            .concat("\"").concat(_audit_json_escape(k)).concat("\"")
+            .concat(":\"").concat(_audit_json_escape(v)).concat("\"");
+        first = false
+    }
+    "{".concat(body).concat("}")
+}
+
+fn _format_audit_jsonl(ts: String, event: AuditEvent) -> String {
+    let corr: String = match event.correlation_id {
+        Some(id) => "\"".concat(_audit_json_escape(id)).concat("\""),
+        None     => "null",
+    };
+    "{\"timestamp\":\""
+        .concat(_audit_json_escape(ts))
+        .concat("\",\"principal\":\"").concat(_audit_json_escape(event.principal))
+        .concat("\",\"action\":\"").concat(_audit_json_escape(event.action))
+        .concat("\",\"resource\":\"").concat(_audit_json_escape(event.resource))
+        .concat("\",\"outcome\":\"").concat(_outcome_str(event.outcome))
+        .concat("\",\"details\":").concat(_format_details_json(event.details))
+        .concat(",\"correlation_id\":").concat(corr)
+        .concat("}")
+}
+
+// ── AuditLogger::emit ─────────────────────────────────────────────────────────
+
+/// Append a single JSONL audit record to the sink path.
+///
+/// The timestamp is captured at call time.  A function without `! Audit` in
+/// its signature provably never emits audit records.
+pub fn AuditLogger::emit(self, event: AuditEvent) -> Unit ! Audit {
+    let ts: String = _audit_timestamp();
+    let line: String = _format_audit_jsonl(ts, event);
+    let _: Result[Unit, IoError] = append(self.sink, line.concat("\n"));
+}
+
+// ── AuditTarget capability label (#931) ───────────────────────────────────────
 
 /// A configuration-sourced audit log destination (capability token).
 ///
 /// `AuditTarget[String]` is an IFC label that records provenance for the
 /// audit subsystem's destination.  The audit tag tracks whether the path was
 /// loaded from an env var (`AUDIT-BOOTSTRAP`) or supplied as a compile-time
-/// default (`AUDIT-DEFAULT`).  The audit actor accepts `AuditTarget[String]`
-/// at initialization — once set, all subsequent relabel transitions produce
-/// audit events written to that destination.
-///
-/// **Security model:** Capability labels are provenance-tracking tokens, not
-/// access-control tokens.  See `std.config.ConfigPath` for details.
+/// default (`AUDIT-DEFAULT`).
 ///
 /// Produced by: `load_audit_target`, `default_audit_target`
 /// Consumed by: audit actor initialization
