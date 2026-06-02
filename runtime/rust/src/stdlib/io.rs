@@ -143,6 +143,7 @@ pub fn open(p: Path) -> Result<Fd, IoError> {
         .read(true)
         .write(true)
         .create(true)
+        .truncate(false) // open for read+write without truncating existing content
         .open(&p.inner)
         .map(|f| Fd {
             inner: f.into_raw_fd() as i64,
@@ -156,7 +157,7 @@ pub fn open(p: Path) -> Result<Fd, IoError> {
 /// Only closes fds that were opened via [`open`] (fd > 2); stdin/stdout/stderr are never closed.
 /// Out-of-range fd values are silently ignored (no panic).
 #[allow(unsafe_code)]
-pub fn close(fd: Fd) -> () {
+pub fn close(fd: Fd) {
     if fd.inner > 2 && fd.inner <= i32::MAX as i64 {
         // Reconstruct the File and let it drop, which closes the underlying fd.
         // SAFETY: fd.inner was obtained from IntoRawFd via open(), so it is valid and owned.
