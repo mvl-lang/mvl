@@ -948,6 +948,123 @@ pub unsafe extern "C" fn _mvl_str_parse_float(
     }
 }
 
+// ── Higher-order list functions (#1163) ─────────────────────────────────────
+//
+// Closure struct layout matches `%__closure_type = type { ptr, ptr }` emitted
+// by `llvm_text`.  Field 0 is the function pointer, field 1 is the captured-
+// environment pointer (null for non-capturing lambdas / named-fn wrappers).
+//
+// All closure fn_ptrs use the convention: `fn(env: ptr, params…) -> ret`.
+
+/// Closure struct matching `%__closure_type = type { ptr, ptr }`.
+#[repr(C)]
+pub struct MvlClosure {
+    fn_ptr: *const (),
+    env_ptr: *const (),
+}
+
+/// `List_filter(list, closure)` — keep elements where `closure(elem)` is true.
+///
+/// # Safety
+/// `list` must be a valid `MvlArray*`.  `closure` must point to a valid
+/// `MvlClosure` whose `fn_ptr` has signature `fn(ptr, i64) -> i1`.
+#[no_mangle]
+pub unsafe extern "C" fn List_filter(
+    list: *mut MvlArray,
+    closure: *const MvlClosure,
+) -> *mut MvlArray {
+    let len = (*list).len as usize;
+    let es = (*list).elem_size as usize;
+    let out = mvl_array_new(es, len.max(1));
+    let pred: unsafe extern "C" fn(*const u8, i64) -> bool = std::mem::transmute((*closure).fn_ptr);
+    let env = (*closure).env_ptr as *const u8;
+    for i in 0..len {
+        let elem_ptr = (*list).ptr.add(i * es);
+        let elem_val = *(elem_ptr as *const i64);
+        if pred(env, elem_val) {
+            mvl_array_push(out, elem_ptr);
+        }
+    }
+    out
+}
+
+/// `List_map(list, closure)` — transform each element via `closure(elem)`.
+///
+/// # Safety
+/// `list` must be a valid `MvlArray*`.  `closure` must point to a valid
+/// `MvlClosure` whose `fn_ptr` has signature `fn(ptr, i64) -> i64`.
+#[no_mangle]
+pub unsafe extern "C" fn List_map(
+    list: *mut MvlArray,
+    closure: *const MvlClosure,
+) -> *mut MvlArray {
+    let len = (*list).len as usize;
+    let es = (*list).elem_size as usize;
+    let out = mvl_array_new(es, len.max(1));
+    let map_fn: unsafe extern "C" fn(*const u8, i64) -> i64 =
+        std::mem::transmute((*closure).fn_ptr);
+    let env = (*closure).env_ptr as *const u8;
+    for i in 0..len {
+        let elem_ptr = (*list).ptr.add(i * es);
+        let elem_val = *(elem_ptr as *const i64);
+        let result = map_fn(env, elem_val);
+        mvl_array_push(out, (&result as *const i64) as *const u8);
+    }
+    out
+}
+
+/// `List_fold(list, acc_ptr, closure)` — reduce list with accumulator.
+///
+/// `acc_ptr` points to the initial accumulator value (stack-allocated by the
+/// caller).  The closure has signature `fn(env, acc, elem) -> acc`.  The final
+/// accumulator is written back to `acc_ptr`, which is also returned.
+///
+/// # Safety
+/// `list` must be a valid `MvlArray*`.  `acc_ptr` must be a writable pointer
+/// to at least 8 bytes.  `closure` must point to a valid `MvlClosure` whose
+/// `fn_ptr` has signature `fn(ptr, i64, i64) -> i64`.
+#[no_mangle]
+pub unsafe extern "C" fn List_fold(
+    list: *mut MvlArray,
+    acc_ptr: *mut u8,
+    closure: *const MvlClosure,
+) -> *mut u8 {
+    let len = (*list).len as usize;
+    let es = (*list).elem_size as usize;
+    let fold_fn: unsafe extern "C" fn(*const u8, i64, i64) -> i64 =
+        std::mem::transmute((*closure).fn_ptr);
+    let env = (*closure).env_ptr as *const u8;
+    let mut acc = *(acc_ptr as *const i64);
+    for i in 0..len {
+        let elem_ptr = (*list).ptr.add(i * es);
+        let elem_val = *(elem_ptr as *const i64);
+        acc = fold_fn(env, acc, elem_val);
+    }
+    *(acc_ptr as *mut i64) = acc;
+    acc_ptr
+}
+
+/// `List_any(list, closure)` — return true if any element satisfies predicate.
+///
+/// # Safety
+/// `list` must be a valid `MvlArray*`.  `closure` must point to a valid
+/// `MvlClosure` whose `fn_ptr` has signature `fn(ptr, i64) -> i1`.
+#[no_mangle]
+pub unsafe extern "C" fn List_any(list: *mut MvlArray, closure: *const MvlClosure) -> bool {
+    let len = (*list).len as usize;
+    let es = (*list).elem_size as usize;
+    let pred: unsafe extern "C" fn(*const u8, i64) -> bool = std::mem::transmute((*closure).fn_ptr);
+    let env = (*closure).env_ptr as *const u8;
+    for i in 0..len {
+        let elem_ptr = (*list).ptr.add(i * es);
+        let elem_val = *(elem_ptr as *const i64);
+        if pred(env, elem_val) {
+            return true;
+        }
+    }
+    false
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
