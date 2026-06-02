@@ -78,6 +78,8 @@ Long frames use 8-byte big-endian size.
 
 **Implementation:** `pkg/zmq/src/zmtp.mvl::read_frame_raw`, `write_frame_raw`
 
+**Tests:** `pkg/zmq/tests/zmtp_handshake_integration.mvl`, `pkg/zmq/src/zmq_test.mvl`
+
 #### Scenario: Short frame round-trip
 
 - GIVEN a ZMTP connection after handshake

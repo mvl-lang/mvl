@@ -29,6 +29,8 @@ This enables direct use in CI pipelines as a hard quality gate.
 
 **Implementation:** `src/main.rs::cmd_mcdc`
 
+**Tests:** `tests/corpus/10_verification/`, `src/cli/mcdc.rs` (module tests)
+
 #### Scenario: exit 0 on full coverage
 
 - GIVEN a project whose tests provide independence pairs for every clause

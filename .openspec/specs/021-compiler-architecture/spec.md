@@ -37,6 +37,8 @@ the 7 scattered functions currently in `main.rs`.
 
 **Implementation:** `src/mvl/loader.rs` (new)
 
+**Tests:** `tests/module_resolver.rs`
+
 #### Scenario: Load single file with dependencies
 
 - GIVEN a path to a `.mvl` file
@@ -68,6 +70,8 @@ A `Pipeline` struct MUST orchestrate the compilation phases, providing a single
 entry point for check, build, test, and analysis commands.
 
 **Implementation:** `src/mvl/pipeline.rs` (new)
+
+**Tests:** `tests/compile_and_run.rs`
 
 #### Scenario: Check pipeline
 
