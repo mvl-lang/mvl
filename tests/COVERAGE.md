@@ -215,13 +215,13 @@ and the `llvm_text` backend (post-ADR-0040, `--backend=llvm` resolves to
 
 ### Known divergences (`#[ignore]`'d, surfaced by #1154)
 
-| Test | Symptom | Likely root cause |
-|------|---------|-------------------|
-| `cross_backend_collections_basic` | `Set.contains()` prints empty string instead of `true`/`false` | bool→string conversion in dispatch |
-| `cross_backend_linked_list` | Invalid IR: `call i64 @Box::new(i64 42)` missing parens | `Box[T]` codegen regression (#571 vicinity) |
-| `cross_backend_box_field_deref` | Same as above | `Box[T]` codegen regression |
-| `cross_backend_list_ufcs_methods` | `slice`/`take`/`skip` emit empty output instead of `3\n3\n3` | List UFCS dispatch broken |
-| `llvm_move_string` | `mvl_string_drop` crashes in `checked_add_size` | runtime memory bug on owned String move |
+| Test | Status | Notes |
+|------|--------|-------|
+| `cross_backend_collections_basic` | ✅ fixed | Added `_mvl_set_contains_i64` runtime + dispatch |
+| `cross_backend_box_field_deref` | ✅ fixed | `Box::new`/`*box` codegen for primitive payloads |
+| `cross_backend_list_ufcs_methods` | ✅ fixed | Added `slice`/`take`/`skip` dispatch via `_mvl_list_slice` |
+| `llvm_move_string` | ✅ fixed | Dedupe heap_locals on consume (SSA already tracked) |
+| `cross_backend_linked_list` | ❌ ignored | Requires non-unit enum payload lowering (`Cons(Int, Box[LL])` — match arms drop payload); separate epic |
 
 Each ignored test carries a `reason` string identifying the symptom. New
 divergences MUST be triaged the same way (ignored with reason, follow-up

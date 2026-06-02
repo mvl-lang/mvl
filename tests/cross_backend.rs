@@ -216,7 +216,6 @@ fn cross_backend_shapes() {
 /// MVL bodies in std/collections.mvl dispatched by each backend's method
 /// call machinery.
 #[test]
-#[ignore = "llvm_text: Set.contains() returns empty string instead of true/false (#1154 surfaced)"]
 fn cross_backend_collections_basic() {
     assert_backends_agree("collections_basic.mvl");
 }
@@ -267,7 +266,6 @@ fn llvm_string_heap() {
 // ── L5-15: ownership-based drop (LLVM-only) ───────────────────────────────────
 
 #[test]
-#[ignore = "llvm_text: mvl_string_drop crashes in checked_add_size on owned String move (#1154 surfaced)"]
 fn llvm_move_string() {
     let file = corpus_types("move_string_llvm.mvl");
     assert_llvm_output(&file, "hello\nworld");
@@ -854,7 +852,7 @@ fn intrinsic_env_args() {
 // ── #571: recursive ADT with Box[T] ──────────────────────────────────────────
 
 #[test]
-#[ignore = "llvm_text: Box[T] codegen emits invalid IR — `call i64 @Box::new(i64 42)` lacks parens (#1154 surfaced, regression of #571)"]
+#[ignore = "llvm_text: enum payload lowering — Cons(Int, Box[LinkedList]) match arms don't extract payload (separate epic, not a Box bug)"]
 fn cross_backend_linked_list() {
     assert_backends_agree("linked_list.mvl");
     assert_llvm_output(&corpus("linked_list.mvl"), "length: 3");
@@ -863,7 +861,6 @@ fn cross_backend_linked_list() {
 // ── #606: Box[T] deref via struct field access ────────────────────────────────
 
 #[test]
-#[ignore = "llvm_text: Box[T] codegen emits invalid IR (#1154 surfaced, same as linked_list)"]
 fn cross_backend_box_field_deref() {
     assert_backends_agree("box_field_deref.mvl");
     assert_llvm_output(&corpus("box_field_deref.mvl"), "value: 42");
@@ -965,7 +962,6 @@ fn cross_backend_string_ufcs_methods() {
 ///
 /// Tests: slice (ptr×i64×i64→ptr), take (slice from 0..n), skip (slice from n..len).
 #[test]
-#[ignore = "llvm_text: list slice/take/skip produces empty output instead of `3\\n3\\n3` (#1154 surfaced)"]
 fn cross_backend_list_ufcs_methods() {
     assert_parity(&corpus_basics("list_ufcs.mvl"), "3\n3\n3");
 }

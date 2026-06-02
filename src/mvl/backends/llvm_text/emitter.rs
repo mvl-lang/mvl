@@ -749,6 +749,41 @@ impl TextEmitter {
         }
     }
 
+    /// If `expr` has MVL type `Box[T]`, return the LLVM IR type of `T`.
+    /// Used to emit `load T, ptr %box` when emitting `*box` deref (#1154).
+    fn box_inner_llvm_ty(&self, expr: &Expr) -> Option<String> {
+        let mvl_ty: TypeExpr = match expr {
+            Expr::Ident(name, _) => self.local_mvl_types.get(name.as_str()).cloned()?,
+            Expr::FieldAccess {
+                expr: receiver,
+                field,
+                ..
+            } => {
+                if let Expr::Ident(name, _) = receiver.as_ref() {
+                    let recv_ty = self.local_mvl_types.get(name.as_str())?;
+                    if let TypeExpr::Base { name: tn, .. } = recv_ty {
+                        let fields = self.struct_fields.get(tn)?;
+                        fields
+                            .iter()
+                            .find(|(fname, _)| fname == field)
+                            .map(|(_, ty)| ty.clone())?
+                    } else {
+                        return None;
+                    }
+                } else {
+                    return None;
+                }
+            }
+            _ => return None,
+        };
+        if let TypeExpr::Base { name, args, .. } = mvl_ty {
+            if name == "Box" && args.len() == 1 {
+                return Some(self.llvm_ty_ctx(&args[0]));
+            }
+        }
+        None
+    }
+
     // ── Int/Bool → String helpers ─────────────────────────────────────────
 
     fn emit_int_to_string(&mut self, val: &str) -> String {
@@ -1143,8 +1178,12 @@ impl TextEmitter {
                     }
                     self.locals.insert(name.clone(), v.clone());
                     // Track heap-allocated locals for automatic drop at function exit.
+                    // Skip if this SSA is already tracked (consume/move reuses the
+                    // source's SSA — adding it again would double-drop).
                     if let Some(hk) = Self::heap_kind(&elem_ty) {
-                        self.heap_locals.push((v, hk, false));
+                        if !self.heap_locals.iter().any(|(s, _, _)| s == &v) {
+                            self.heap_locals.push((v, hk, false));
+                        }
                     }
                     self.local_mvl_types.insert(name.clone(), elem_ty);
                 }
@@ -1888,6 +1927,16 @@ impl TextEmitter {
                 self.reg_types.insert(reg.clone(), "i64".into());
             }
             UnaryOp::Deref => {
+                // Box[T] is represented as `ptr` to a heap T (#571). The deref
+                // needs to load T. We infer the load type from the receiver's
+                // MVL type if it's Box[T]; otherwise we treat `*x` as identity
+                // (e.g. when type info is unavailable in the LLVM emitter).
+                if let Some(load_ty) = self.box_inner_llvm_ty(expr) {
+                    let loaded = self.next_reg();
+                    self.push_instr(&format!("{loaded} = load {load_ty}, ptr {val}"));
+                    self.reg_types.insert(loaded.clone(), load_ty);
+                    return Ok(Some(loaded));
+                }
                 return Ok(Some(val));
             }
         }
@@ -2018,6 +2067,30 @@ impl TextEmitter {
             if let Some(disc) = self.pattern_discriminant(name) {
                 return Ok(Some(format!("{disc}")));
             }
+        }
+
+        // ── Box::new(x) — heap-allocate and store x, return ptr ──────────
+        // The element size matches the LLVM type of the argument. Currently
+        // supports primitive payloads (8 bytes for i64 / ptr / double); other
+        // sizes fall through to the unsupported user-fn path.
+        if name == "Box::new" && args.len() == 1 {
+            let arg_ty = self.type_of_expr(&args[0]);
+            let val = match self.emit_expr(&args[0])? {
+                Some(v) => v,
+                None => return Ok(None),
+            };
+            let size: i64 = match arg_ty.as_str() {
+                "i64" | "ptr" | "double" => 8,
+                "i32" => 4,
+                "i8" | "i1" => 1,
+                _ => 8, // structs and other aggregates: emit 8 and hope
+            };
+            self.ensure_extern("declare ptr @mvl_box_new(i64)");
+            let ptr = self.next_reg();
+            self.push_instr(&format!("{ptr} = call ptr @mvl_box_new(i64 {size})"));
+            self.push_instr(&format!("store {arg_ty} {val}, ptr {ptr}"));
+            self.reg_types.insert(ptr.clone(), "ptr".into());
+            return Ok(Some(ptr));
         }
 
         // ── Generic function monomorphization ───────────────────────────
@@ -3130,6 +3203,89 @@ impl TextEmitter {
                 let reg = self.next_reg();
                 self.push_instr(&format!("{reg} = icmp ne ptr {raw}, null"));
                 self.reg_types.insert(reg.clone(), "i1".into());
+                Ok(Some(reg))
+            }
+            ("contains", "ptr") if matches!(self.mvl_receiver_kind(receiver), Some("Set")) => {
+                let needle = match args.first() {
+                    Some(a) => match self.emit_expr(a)? {
+                        Some(v) => v,
+                        None => return Ok(None),
+                    },
+                    None => return Ok(None),
+                };
+                self.ensure_extern("declare i1 @_mvl_set_contains_i64(ptr, i64)");
+                let reg = self.next_reg();
+                self.push_instr(&format!(
+                    "{reg} = call i1 @_mvl_set_contains_i64(ptr {val}, i64 {needle})"
+                ));
+                self.reg_types.insert(reg.clone(), "i1".into());
+                Ok(Some(reg))
+            }
+            // List/Array/Set slice(start, end) — direct C runtime _mvl_list_slice
+            ("slice", "ptr")
+                if args.len() == 2
+                    && matches!(
+                        self.mvl_receiver_kind(receiver),
+                        Some("List") | Some("Array") | Some("Set")
+                    ) =>
+            {
+                let start = match self.emit_expr(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                let end = match self.emit_expr(&args[1])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                self.ensure_extern("declare ptr @_mvl_list_slice(ptr, i64, i64)");
+                let reg = self.next_reg();
+                self.push_instr(&format!(
+                    "{reg} = call ptr @_mvl_list_slice(ptr {val}, i64 {start}, i64 {end})"
+                ));
+                self.reg_types.insert(reg.clone(), "ptr".into());
+                Ok(Some(reg))
+            }
+            // List/Array/Set take(n) — slice [0, n)
+            ("take", "ptr")
+                if args.len() == 1
+                    && matches!(
+                        self.mvl_receiver_kind(receiver),
+                        Some("List") | Some("Array") | Some("Set")
+                    ) =>
+            {
+                let n = match self.emit_expr(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                self.ensure_extern("declare ptr @_mvl_list_slice(ptr, i64, i64)");
+                let reg = self.next_reg();
+                self.push_instr(&format!(
+                    "{reg} = call ptr @_mvl_list_slice(ptr {val}, i64 0, i64 {n})"
+                ));
+                self.reg_types.insert(reg.clone(), "ptr".into());
+                Ok(Some(reg))
+            }
+            // List/Array/Set skip(n) — slice [n, len)
+            ("skip", "ptr")
+                if args.len() == 1
+                    && matches!(
+                        self.mvl_receiver_kind(receiver),
+                        Some("List") | Some("Array") | Some("Set")
+                    ) =>
+            {
+                let n = match self.emit_expr(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                self.ensure_extern("declare i64 @mvl_array_len(ptr)");
+                self.ensure_extern("declare ptr @_mvl_list_slice(ptr, i64, i64)");
+                let len_reg = self.next_reg();
+                self.push_instr(&format!("{len_reg} = call i64 @mvl_array_len(ptr {val})"));
+                let reg = self.next_reg();
+                self.push_instr(&format!(
+                    "{reg} = call ptr @_mvl_list_slice(ptr {val}, i64 {n}, i64 {len_reg})"
+                ));
+                self.reg_types.insert(reg.clone(), "ptr".into());
                 Ok(Some(reg))
             }
             ("remove", "ptr") if matches!(self.mvl_receiver_kind(receiver), Some("Map")) => {
