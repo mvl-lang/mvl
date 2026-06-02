@@ -136,6 +136,9 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &ActorDecl) {
         // When all external handles are dropped the channel disconnects and
         // `rx.recv()` returns `None` even though this weak ref still exists.
         cg.line(&format!("_self_ref: Option<MvlWeakSender<{msg_name}>>,"));
+        // `_self_id` mirrors the handle's `_id` so self-ref handle construction
+        // can set the `_id` field (#1128).
+        cg.line("_self_id: ActorId,");
     }
     cg.pop_indent();
     cg.line("}");
@@ -241,19 +244,23 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &ActorDecl) {
         return;
     }
 
-    // 4. Actor handle struct (tag capability: only the sender channel)
+    // 4. Actor handle struct (tag capability: sender channel + unique actor ID).
+    //    `_id` enables `actor_id()` — used by link/monitor callers (#1128).
     let vis = if ad.visible { "pub " } else { "" };
     cg.line("#[derive(Clone)]");
     cg.line(&format!("{vis}struct {name} {{"));
     cg.push_indent();
     cg.line(&format!("_sender: MvlSender<{msg_name}>,"));
+    cg.line("_id: ActorId,");
     cg.pop_indent();
     cg.line("}");
     cg.blank();
 
-    // 5. Handle impl: one fire-and-forget wrapper per public behavior
+    // 5. Handle impl: actor_id() accessor + one fire-and-forget wrapper per public behavior.
     cg.line(&format!("impl {name} {{"));
     cg.push_indent();
+    // Pure sync accessor — no mailbox send, no Send effect required.
+    cg.line("pub fn actor_id(&self) -> i64 { self._id as i64 }");
     for m in &pub_methods {
         let variant = snake_to_pascal(&m.name);
         let param_strs: Vec<String> = m
@@ -292,14 +299,48 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &ActorDecl) {
     cg.push_indent();
     cg.line("match msg {");
     cg.push_indent();
-    // System variants (#1177).
+    // System variants (#1177, #1128).
     cg.line(&format!("{msg_name}::_Shutdown => return false,"));
-    cg.line(&format!(
-        "{msg_name}::_ExitSignal {{ _from_id, _reason }} => {{}}"
-    ));
-    cg.line(&format!(
-        "{msg_name}::_DownSignal {{ _from_id, _reason, _monitor_id }} => {{}}"
-    ));
+    // Wire _ExitSignal → on_exit(from_id, reason) if the actor defines that method.
+    let on_exit_method = ad
+        .methods
+        .iter()
+        .find(|m| !m.is_public && m.name == "on_exit");
+    if let Some(m) = on_exit_method {
+        assert!(
+            m.params.len() == 2,
+            "actor `{}`: on_exit must have exactly 2 parameters (from_id: Int, reason: Int), found {}",
+            ad.name,
+            m.params.len()
+        );
+        cg.line(&format!(
+            "{msg_name}::_ExitSignal {{ _from_id, _reason }} => actor.on_exit(_from_id as i64, _reason as i64),"
+        ));
+    } else {
+        cg.line(&format!(
+            "{msg_name}::_ExitSignal {{ _from_id: _, _reason: _ }} => {{}}"
+        ));
+    }
+    // Wire _DownSignal → on_down(from_id, reason, monitor_ref) if defined.
+    let on_down_method = ad
+        .methods
+        .iter()
+        .find(|m| !m.is_public && m.name == "on_down");
+    if let Some(m) = on_down_method {
+        assert!(
+            m.params.len() == 3,
+            "actor `{}`: on_down must have exactly 3 parameters (from_id: Int, reason: Int, monitor_ref: Int), found {}",
+            ad.name,
+            m.params.len()
+        );
+        cg.line(&format!(
+            "{msg_name}::_DownSignal {{ _from_id, _reason, _monitor_id }} => actor.on_down(_from_id as i64, _reason as i64, _monitor_id as i64),"
+        ));
+    } else {
+        cg.line(&format!(
+            "{msg_name}::_DownSignal {{ _from_id: _, _reason: _, _monitor_id: _ }} => {{}}"
+        ));
+    }
     // User behavior variants.
     for m in &pub_methods {
         let variant = snake_to_pascal(&m.name);
@@ -350,6 +391,7 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &ActorDecl) {
         None => "let (tx, rx) = mvl_channel(256_i64, 0_i64);".to_string(),
     };
     cg.line(&channel_line);
+    cg.line("state._self_id = __actor_id;");
     cg.line("state._self_ref = Some(tx.downgrade());");
     // Register type-erased actor controls for link/monitor (#1177).
     // Each closure captures a sender clone and constructs the typed system message.
@@ -379,7 +421,7 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &ActorDecl) {
         "let __handle = mvl_actor_run(rx, state, {dispatch_fn}, __actor_id);"
     ));
     cg.line("mvl_register_actor(__handle);");
-    cg.line(&format!("{name} {{ _sender: tx }}"));
+    cg.line(&format!("{name} {{ _sender: tx, _id: __actor_id }}"));
     cg.pop_indent();
     cg.line("}");
 }

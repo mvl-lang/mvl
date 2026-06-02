@@ -1,0 +1,89 @@
+// Corpus: Supervisor actor with OneForOne restart strategy (Phase 9, #1128)
+//
+// Demonstrates:
+// - Supervisor actor with traps_exit + on_exit wiring
+// - RestartStrategy enum
+// - actor_id() accessor on actor handles
+// - link() to wire supervisor to children
+// - add_child() to register supervised children with non-capturing lambdas
+
+use std.actors.{link, RestartStrategy, Supervisor}
+use std.collections.{Map}
+
+// ── Worker actor (supervised child) ──────────────────────────────────────
+
+actor Worker {
+    value: Int
+
+    pub fn process(val n: Int) { }
+    pub fn reset() { }
+}
+
+// ── Counter actor (another supervised child) ─────────────────────────────
+
+actor Counter {
+    count: Int
+
+    pub fn increment(val n: Int) { }
+}
+
+// ── Supervision setup ─────────────────────────────────────────────────────
+
+fn start_supervised_system() -> Unit ! Spawn + Send {
+    let sup: Supervisor = actor Supervisor {
+        self_id: 0,
+        strategy: RestartStrategy::OneForOne,
+        starters: Map::new(),
+        live: Map::new(),
+        counts: Map::new(),
+        max_r: Map::new(),
+    };
+
+    // Initialise the supervisor with its own ID so it can re-link on restart.
+    let sup_id: Int = sup.actor_id();
+    sup.init(sup_id);
+
+    // Non-capturing lambda: spawn the child and return its ID.
+    // Supervisor's add_child handles the link(sup_id, child_id) call.
+    sup.add_child("worker", || -> Int {
+        let w: Worker = actor Worker { value: 0 };
+        w.actor_id()
+    }, 3);
+
+    sup.add_child("counter", || -> Int {
+        let c: Counter = actor Counter { count: 0 };
+        c.actor_id()
+    }, 5);
+}
+
+// ── Strategy values ───────────────────────────────────────────────────────
+
+fn one_for_one() -> RestartStrategy {
+    RestartStrategy::OneForOne
+}
+
+fn one_for_all() -> RestartStrategy {
+    RestartStrategy::OneForAll
+}
+
+fn rest_for_one() -> RestartStrategy {
+    RestartStrategy::RestForOne
+}
+
+fn describe_strategy(s: RestartStrategy) -> String {
+    match s {
+        RestartStrategy::OneForOne => "restart only the failed child",
+        RestartStrategy::OneForAll => "restart all children",
+        RestartStrategy::RestForOne => "restart failed child and those after it",
+    }
+}
+
+// ── actor_id() accessor ───────────────────────────────────────────────────
+
+fn worker_id(w: Worker) -> Int {
+    w.actor_id()
+}
+
+fn counter_id(c: Counter) -> Int {
+    c.actor_id()
+}

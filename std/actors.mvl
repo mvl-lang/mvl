@@ -1,17 +1,17 @@
-//! std.actors — Process links, monitors, and exit signal infrastructure.
+//! std.actors — Process links, monitors, exit signals, and supervision.
 //!
 //! Provides the building blocks for fault-tolerant actor systems:
 //! - Bidirectional links: if either actor dies, the other is notified/killed
 //! - One-way monitors: watcher observes target death without risking its own life
 //! - Exit trapping: actors can catch exit signals instead of dying
+//! - Supervision: restart failed children with configurable strategies
 //!
 //! Import:
 //!   use std.actors.{link, unlink, monitor, demonitor,
-//!                   ExitReason, ExitSignal, DownSignal}
+//!                   ExitReason, ExitSignal, DownSignal,
+//!                   RestartStrategy, Supervisor}
 //!
-//! Effects: Spawn (all link/monitor functions require the Spawn effect).
-//!
-//! Phase 9, #1177.
+//! Phase 9, #1177, #1128.
 
 // ── Exit reason ──────────────────────────────────────────────────────────
 
@@ -46,27 +46,19 @@ pub type DownSignal = struct {
     monitor_ref: Int,
 }
 
-// ── Link functions ───────────────────────────────────────────────────────
+// ── Link/monitor builtins ─────────────────────────────────────────────────
 
-/// Create a bidirectional link between two actors.
+/// Create a bidirectional link between two actors (by actor ID).
 ///
 /// If either actor dies:
 /// - The linked actor is **killed** (default)
 /// - Unless it has `traps_exit` — then it receives an `ExitSignal`
 ///
 /// Links are symmetric: `link(a, b)` is the same as `link(b, a)`.
-pub fn link(a: Int, b: Int) -> Unit ! Spawn {
-    // TODO(#1177): stub — runtime wiring not yet connected.
-    // Needs extern bridge to mvl_link in the runtime.
-}
+pub builtin fn link(a: Int, b: Int) -> Unit ! Spawn
 
 /// Remove a bidirectional link between two actors.
-pub fn unlink(a: Int, b: Int) -> Unit ! Spawn {
-    // TODO(#1177): stub — runtime wiring not yet connected.
-    // Needs extern bridge to mvl_unlink in the runtime.
-}
-
-// ── Monitor functions ────────────────────────────────────────────────────
+pub builtin fn unlink(a: Int, b: Int) -> Unit ! Spawn
 
 /// Create a one-way monitor: `watcher` is notified when `target` dies.
 ///
@@ -74,14 +66,134 @@ pub fn unlink(a: Int, b: Int) -> Unit ! Spawn {
 /// of the monitor. The watcher does NOT die — it just gets notified.
 ///
 /// Returns a monitor reference that can be passed to `demonitor()`.
-pub fn monitor(watcher: Int, target: Int) -> Int ! Spawn {
-    // TODO(#1177): stub — runtime wiring not yet connected.
-    // Needs extern bridge to mvl_monitor in the runtime.
-    0
-}
+pub builtin fn monitor(watcher: Int, target: Int) -> Int ! Spawn
 
 /// Remove a previously created monitor.
-pub fn demonitor(monitor_ref: Int) -> Unit ! Spawn {
-    // TODO(#1177): stub — runtime wiring not yet connected.
-    // Needs extern bridge to mvl_demonitor in the runtime.
+pub builtin fn demonitor(monitor_ref: Int) -> Unit ! Spawn
+
+// ── Supervisor ────────────────────────────────────────────────────────────
+
+/// How a supervisor restarts children after a failure.
+///
+/// - `OneForOne`  — restart only the failed child (default, #1178)
+/// - `OneForAll`  — restart all children when any fails (#1179, NOT YET IMPLEMENTED — behaves as OneForOne)
+/// - `RestForOne` — restart the failed child and those started after it (#1179, NOT YET IMPLEMENTED — behaves as OneForOne)
+pub type RestartStrategy = enum {
+    OneForOne,
+    OneForAll,
+    RestForOne,
+}
+
+/// Supervisor actor: monitors children via links and restarts them on failure.
+///
+/// Usage:
+///   1. Spawn: `let sup = actor Supervisor { self_id: 0, ... }`
+///   2. Initialise: `sup.init(sup.actor_id())`
+///   3. Register: `sup.add_child("name", || -> Int { spawn_and_return_id() }, 3)`
+///      The start lambda must NOT capture outer variables — it is stored as a
+///      function pointer and called on restart without any captured context.
+///      Linking to the supervisor is handled by `add_child` automatically.
+///
+/// The supervisor catches exit signals via `traps_exit` and the `on_exit`
+/// private method, wired by the emitter (#1128, emit_actors.rs).
+///
+/// Phase 9, #1128.
+pub actor Supervisor traps_exit {
+    self_id: Int
+    strategy: RestartStrategy
+    starters: Map[String, fn() -> Int ! Spawn]
+    live: Map[Int, String]
+    counts: Map[String, Int]
+    max_r: Map[String, Int]
+
+    /// Set the supervisor's own actor ID so it can link new children on restart.
+    ///
+    /// Call immediately after spawning: `sup.init(sup.actor_id())`.
+    pub fn init(val my_id: Int) {
+        self.self_id = my_id;
+    }
+
+    /// Register a child and start it, linking it to this supervisor.
+    ///
+    /// `start` must be a non-capturing lambda that spawns the child actor
+    /// and returns its actor ID: `|| -> Int { let a = actor Foo { ... }; a.actor_id() }`.
+    ///
+    /// PRECONDITION: `init()` must have been called first (self.self_id must not be 0).
+    /// If `name` is already registered the call is a no-op — call `remove_child` first to replace.
+    pub fn add_child(val name: String, val start: fn() -> Int ! Spawn, val max_restarts: Int) ! Spawn {
+        if self.starters.contains_key(name) {
+            return;
+        }
+        let child_id: Int = start();
+        link(self.self_id, child_id);
+        self.starters.insert(name, start);
+        self.live.insert(child_id, name);
+        self.counts.insert(name, 0);
+        self.max_r.insert(name, max_restarts);
+    }
+
+    /// Stop tracking a child by name (does not kill it).
+    ///
+    /// Scans `live` (keyed by actor ID) for entries matching `name` and removes them,
+    /// keeping the map consistent with the name-keyed tracking maps.
+    pub fn remove_child(val name: String) {
+        let _: Option[fn() -> Int ! Spawn] = self.starters.remove(name);
+        let _: Option[Int] = self.max_r.remove(name);
+        let _: Option[Int] = self.counts.remove(name);
+        let all_ids: List[Int] = self.live.keys();
+        let i: ref Int = 0;
+        while i < all_ids.len() decreases all_ids.len() - i {
+            let kid: Int = all_ids.get(i).unwrap_or(0);
+            match self.live.get(kid) {
+                Some(n) => {
+                    if n == name {
+                        let _: Option[String] = self.live.remove(kid);
+                    }
+                },
+                None => {},
+            }
+            i = i + 1;
+        }
+    }
+
+    // Called by the dispatch loop when a linked child sends an exit signal.
+    // Private: wired via _ExitSignal dispatch in the emitter (#1128).
+    //
+    // reason: 0=Normal (clean shutdown), 1=Panic, 2=Killed.
+    fn on_exit(from_id: Int, reason: Int) ! Spawn {
+        if let Some(name) = self.live.get(from_id) {
+            let _: Option[String] = self.live.remove(from_id);
+            if reason == 0 {
+                // Clean shutdown — remove all tracking, no restart.
+                let _: Option[fn() -> Int ! Spawn] = self.starters.remove(name);
+                let _: Option[Int] = self.counts.remove(name);
+                let _: Option[Int] = self.max_r.remove(name);
+            } else {
+                let count: Int = self.counts.get(name).unwrap_or(0);
+                let max: Int = self.max_r.get(name).unwrap_or(0);
+                if count >= max {
+                    // Budget exhausted — remove all tracking, no restart.
+                    let _: Option[fn() -> Int ! Spawn] = self.starters.remove(name);
+                    let _: Option[Int] = self.counts.remove(name);
+                    let _: Option[Int] = self.max_r.remove(name);
+                } else {
+                    // Restart: spawn a fresh instance and re-link it.
+                    match self.starters.get(name) {
+                        None => {
+                            // Starter missing — state inconsistency, clean up tracking.
+                            let _: Option[fn() -> Int ! Spawn] = self.starters.remove(name);
+                            let _: Option[Int] = self.counts.remove(name);
+                            let _: Option[Int] = self.max_r.remove(name);
+                        },
+                        Some(start) => {
+                            let new_id: Int = start();
+                            link(self.self_id, new_id);
+                            self.live.insert(new_id, name);
+                            self.counts.insert(name, count + 1);
+                        },
+                    }
+                }
+            }
+        }
+    }
 }

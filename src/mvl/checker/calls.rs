@@ -544,6 +544,10 @@ impl TypeChecker {
                 // Req 7: calling any method on an actor type sends to its mailbox — requires Send (#1126).
                 // Actor behaviors are not in method_table, so this check must come first.
                 if self.actor_type_names.contains(type_name.as_str()) {
+                    // actor_id() is a pure sync read of the handle's ID — no mailbox send (#1128).
+                    if method == "actor_id" {
+                        return Ty::Int;
+                    }
                     let send_eff = Effect::new("Send", span);
                     let covered = self
                         .current_fn_effects

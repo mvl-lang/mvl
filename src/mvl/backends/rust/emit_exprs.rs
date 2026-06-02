@@ -1186,12 +1186,12 @@ pub fn emit_expr(cg: &mut RustEmitter, expr: &Expr) {
                 cg.push(&format!("{field_name}: "));
                 emit_expr_as_arg(cg, val);
             }
-            // `_self_ref` is always None at construction; `_start_<name>` sets it
-            // after the channel is created (so the handle can be cloned into state).
+            // `_self_ref`/`_self_id` are always zero/None at construction;
+            // `_start_<name>` sets them after the channel is created (#1128).
             if !fields.is_empty() {
                 cg.push(", ");
             }
-            cg.push("_self_ref: None");
+            cg.push("_self_ref: None, _self_id: 0");
             cg.push("})");
         }
         // Phase 8 (#743): select { arm => { body } … } — first-ready-wins stub.
@@ -1383,7 +1383,7 @@ fn emit_expr_as_arg(cg: &mut RustEmitter, expr: &Expr) {
             // Safe: we are inside a dispatch, so at least one external sender is alive.
             let ty = cg.actor_self_type.clone();
             cg.push(&format!(
-                "{ty} {{ _sender: self._self_ref.as_ref().unwrap().upgrade().unwrap() }}"
+                "{ty} {{ _sender: self._self_ref.as_ref().unwrap().upgrade().unwrap(), _id: self._self_id }}"
             ));
         }
         // Identifiers: check if this is the last use — if so, move instead of clone.
@@ -1425,7 +1425,7 @@ fn emit_expr_as_fn_arg(cg: &mut RustEmitter, expr: &Expr) {
             // Safe: we are inside a dispatch, so at least one external sender is alive.
             let ty = cg.actor_self_type.clone();
             cg.push(&format!(
-                "{ty} {{ _sender: self._self_ref.as_ref().unwrap().upgrade().unwrap() }}"
+                "{ty} {{ _sender: self._self_ref.as_ref().unwrap().upgrade().unwrap(), _id: self._self_id }}"
             ));
         }
         // `self` in a type-attached method (`&self` receiver) cannot be moved — always
