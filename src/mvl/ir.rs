@@ -33,8 +33,8 @@ pub mod lower;
 pub use crate::mvl::checker::types::Ty;
 
 use crate::mvl::parser::ast::{
-    BinaryOp, Capability, Effect, LValue, LetKind, Literal, Pattern, RefExpr, Totality, TypeExpr,
-    UnaryOp,
+    BinaryOp, Capability, Effect, EffectDecl, GenericParam, LValue, LabelDecl, LetKind, Literal,
+    MailboxConfig, Pattern, RefExpr, RelabelDecl, Totality, TypeExpr, UnaryOp, UseDecl,
 };
 use crate::mvl::parser::lexer::Span;
 
@@ -257,12 +257,151 @@ pub struct TirFn {
     pub span: Span,
 }
 
+// ── Declaration-level TIR types ───────────────────────────────────────────────
+
+/// A struct field or actor field with a resolved type.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TirFieldDecl {
+    pub name: String,
+    pub ty: Ty,
+    /// Inline refinement predicate — kept as AST `RefExpr` (spec-only, erased before codegen).
+    pub refinement: Option<RefExpr>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TirVariant {
+    pub name: String,
+    pub fields: TirVariantFields,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TirVariantFields {
+    Unit,
+    Tuple(Vec<Ty>),
+    Struct(Vec<TirFieldDecl>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TirTypeBody {
+    Struct {
+        fields: Vec<TirFieldDecl>,
+        /// Struct-level invariant — kept as AST `RefExpr` (spec-only).
+        invariant: Option<RefExpr>,
+    },
+    Enum(Vec<TirVariant>),
+    Alias(Ty),
+}
+
+/// A type declaration with all `TypeExpr` fields resolved to `Ty`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TirTypeDecl {
+    pub visible: bool,
+    pub name: String,
+    /// Generic type parameters — kept for backends that emit generic type definitions.
+    pub params: Vec<GenericParam>,
+    pub body: TirTypeBody,
+    pub span: Span,
+}
+
+/// A single function signature inside an `extern` block, with resolved types.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TirExternFn {
+    pub name: String,
+    pub params: Vec<TirParam>,
+    pub ret_ty: Ty,
+    pub effects: Vec<Effect>,
+    pub totality: Option<Totality>,
+    pub span: Span,
+}
+
+/// An `extern "abi" { … }` block with resolved function signatures.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TirExternDecl {
+    pub abi: String,
+    pub fns: Vec<TirExternFn>,
+    pub span: Span,
+}
+
+/// A method inside an actor declaration, with a fully-typed body.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TirActorMethod {
+    /// `true` = public async behavior, `false` = private sync helper.
+    pub is_public: bool,
+    pub name: String,
+    pub params: Vec<TirParam>,
+    pub ret_ty: Ty,
+    pub effects: Vec<Effect>,
+    pub body: TirBlock,
+    pub span: Span,
+}
+
+/// An actor type declaration with resolved field types and typed method bodies.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TirActorDecl {
+    pub visible: bool,
+    pub name: String,
+    pub type_params: Vec<GenericParam>,
+    pub fields: Vec<TirFieldDecl>,
+    pub methods: Vec<TirActorMethod>,
+    /// `None` = default mailbox (256, DropNewest). Kept as AST type — no types inside.
+    pub mailbox: Option<MailboxConfig>,
+    pub traps_exit: bool,
+    pub span: Span,
+}
+
+/// An `impl Trait for Type { … }` block with fully-typed method bodies.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TirImplDecl {
+    pub trait_name: String,
+    /// Resolved trait type arguments.
+    pub trait_type_args: Vec<Ty>,
+    pub type_name: String,
+    /// Methods lowered as `TirFn`; `name == original_name` (impl methods are not mangled).
+    pub methods: Vec<TirFn>,
+    pub span: Span,
+}
+
+/// A `const` declaration with a fully-typed value expression.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TirConstDecl {
+    pub visible: bool,
+    pub name: String,
+    pub ty: Ty,
+    pub value: TirExpr,
+    pub span: Span,
+}
+
 // ── Program ───────────────────────────────────────────────────────────────────
 
-/// Output of the TIR lowering pass — typed, monomorphized functions ready for backends.
+/// Output of the TIR lowering pass — complete program representation for backends.
+///
+/// All type annotations are resolved to [`Ty`]; generic function bodies are
+/// monomorphized (one [`TirFn`] per instantiation). Non-function declarations
+/// carry resolved types but are not monomorphized — backends emit them once.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct TirProgram {
+    /// Monomorphized, fully-typed functions (one copy per generic instantiation).
     pub fns: Vec<TirFn>,
+    /// Type declarations (`struct`, `enum`, `alias`) with resolved field types.
+    pub types: Vec<TirTypeDecl>,
+    /// `extern "abi" { … }` blocks with resolved signatures.
+    pub externs: Vec<TirExternDecl>,
+    /// Actor type declarations with typed method bodies.
+    pub actors: Vec<TirActorDecl>,
+    /// `impl Trait for Type { … }` blocks with typed method bodies.
+    pub impls: Vec<TirImplDecl>,
+    /// `const` declarations with typed value expressions.
+    pub consts: Vec<TirConstDecl>,
+    /// `use` declarations — kept as AST nodes (no types to resolve).
+    pub uses: Vec<UseDecl>,
+    /// `effect` declarations — kept as AST nodes.
+    pub effect_decls: Vec<EffectDecl>,
+    /// `label` declarations — kept as AST nodes.
+    pub label_decls: Vec<LabelDecl>,
+    /// `relabel` declarations — kept as AST nodes.
+    pub relabel_decls: Vec<RelabelDecl>,
 }
 
 impl TirProgram {
@@ -282,6 +421,19 @@ impl TirProgram {
         let mut map = std::collections::HashMap::new();
         for f in &self.fns {
             collect_block_spans(&f.body, &mut map);
+        }
+        for a in &self.actors {
+            for m in &a.methods {
+                collect_block_spans(&m.body, &mut map);
+            }
+        }
+        for i in &self.impls {
+            for m in &i.methods {
+                collect_block_spans(&m.body, &mut map);
+            }
+        }
+        for c in &self.consts {
+            collect_expr_spans(&c.value, &mut map);
         }
         map
     }
