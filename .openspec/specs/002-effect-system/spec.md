@@ -25,6 +25,8 @@ Functions with side effects MUST declare them in the signature using `! Effect` 
 
 **Implementation:** `src/mvl/checker.rs`, `src/mvl/checker/calls.rs`
 
+**Tests:** `tests/type_checker.rs::pure_function_calling_effectful_rejected`, `tests/corpus/05_effects/declarations.mvl`
+
 #### Scenario: Pure function attempts I/O
 
 - GIVEN `fn add(a: Int, b: Int) -> Int { println("adding"); a + b }`
@@ -45,6 +47,8 @@ Functions with side effects MUST declare them in the signature using `! Effect` 
 Effects MUST be declared in MVL source, not hardcoded in the compiler. Base effects live in `std/effects.mvl`. User code MAY declare domain-specific effects that extend the hierarchy.
 
 **Implementation:** `src/mvl/checker.rs`, `src/mvl/checker/effects.rs`
+
+**Tests:** `tests/type_checker.rs::effect_decl_corpus_parses_and_checks`, `tests/corpus/05_effects/effect_decl.mvl`
 
 The compiler uses dual-pass compilation:
 1. **Parse pass:** Parse all files, collect `EffectDecl` nodes (no validation)
@@ -68,6 +72,8 @@ The compiler uses dual-pass compilation:
 Effects MUST be fine-grained, not a single `IO` bucket. The base effects are:
 
 **Implementation:** `src/mvl/checker/effects.rs::EffectHierarchy`
+
+**Tests:** `tests/type_checker.rs::pure_vs_effectful_corpus_parses_and_checks`, `tests/corpus/05_effects/pure_vs_effectful.mvl`
 
 | Effect | What it permits |
 |--------|----------------|
@@ -96,6 +102,8 @@ Effects MUST be fine-grained, not a single `IO` bucket. The base effects are:
 Effects MUST support subsumption. If effect `A` subsumes effect `B` (`A > B`), declaring `! A` satisfies any `! B` requirement. Subsumption is transitive.
 
 **Implementation:** `src/mvl/checker.rs`
+
+**Tests:** `tests/type_checker.rs::subsumption_corpus_checks`, `tests/corpus/05_effects/subsumption.mvl`
 
 Syntax:
 ```
@@ -132,6 +140,8 @@ Effects MUST compose. A function calling two effectful functions MUST declare ef
 
 **Implementation:** `src/mvl/checker.rs`
 
+**Tests:** `tests/type_checker.rs::propagation_corpus_parses_and_checks`, `tests/corpus/05_effects/propagation.mvl`
+
 #### Scenario: Effect union
 
 - GIVEN `fn a() -> X ! FileRead` and `fn b() -> Y ! Net`
@@ -161,6 +171,8 @@ Spawning actors, sending messages, and receiving messages MUST be separate effec
 
 **Implementation:** `std/effects.mvl`
 
+**Tests:** `tests/type_checker.rs::concurrency_effects_corpus_checks`, `tests/corpus/05_effects/concurrency_effects.mvl`
+
 #### Scenario: Spawn without send
 
 - GIVEN `fn start_worker() ! Spawn { spawn(worker); }`
@@ -174,6 +186,8 @@ Effects MUST NOT be hidden in FFI implementations. If a builtin function uses an
 2. Have the effect subsumed by a declared effect
 
 **Implementation:** `src/mvl/checker/decls.rs::register_extern`, `std/effects.mvl`
+
+**Tests:** `tests/type_checker.rs::io_composite_effect_accepted`, `std/effects.mvl`
 
 #### Scenario: Log uses Clock via subsumption
 

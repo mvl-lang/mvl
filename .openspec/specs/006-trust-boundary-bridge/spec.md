@@ -31,6 +31,8 @@ The bridge convention makes this boundary greppable, auditable, and enforced at 
 
 **Implementation:** `src/main.rs::build_project`
 
+**Tests:** `tests/transpiler.rs::extern_rust_block_transpiles`, `tests/transpiler.rs::extern_rust_adds_mvl_runtime_to_cargo_toml`
+
 #### Scenario: Bridge found
 
 - GIVEN `examples/log_analyzer/main.mvl` with an `extern "rust"` block
@@ -50,6 +52,8 @@ The bridge convention makes this boundary greppable, auditable, and enforced at 
 When `bridge.rs` is found, `mvl build` MUST inject `mod bridge;` into the generated `main.rs` (or `lib.rs` for library crates) **immediately after** the `use mvl_runtime::prelude::*;` import line.
 
 **Implementation:** `src/main.rs::inject_mod_bridge`, `src/main.rs::build_project`
+
+**Tests:** `tests/transpiler.rs::extern_rust_block_transpiles`
 
 #### Scenario: mod bridge; placement
 
@@ -91,6 +95,8 @@ If a program declares `extern "rust"` blocks but no `bridge.rs` is found in the 
 
 **Implementation:** `src/main.rs::build_project` (guarded by `out.has_extern_rust`)
 
+**Tests:** `tests/transpiler.rs::no_extern_uses_inline_preamble`
+
 #### Scenario: No extern rust — no bridge lookup
 
 - GIVEN `tests/corpus/09_full_programs/hello_world.mvl` with no `extern "rust"` blocks
@@ -114,6 +120,8 @@ A `bridge.rs` file SHOULD follow these conventions to integrate correctly with t
 3. The function signatures MUST match exactly the types emitted by the MVL transpiler
 
 **Implementation:** `examples/log_analyzer/bridge.rs`
+
+**Tests:** `tests/transpiler.rs::extern_rust_fn_effects_emitted_as_comment`
 
 #### Scenario: Bridge function signature alignment
 

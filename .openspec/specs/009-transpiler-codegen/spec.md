@@ -255,6 +255,8 @@ The transpiler MUST track whether an expression is emitted in statement context 
 
 **Implementation:** `src/mvl/backends/rust/emit_stmts.rs`, `src/mvl/backends/rust/emit_exprs.rs`
 
+**Tests:** `tests/transpiler.rs` (implicit in all emit tests)
+
 #### Scenario: Function call as statement
 
 - GIVEN `println("hello");` (result is Unit, discarded)
@@ -272,6 +274,8 @@ The transpiler MUST track whether an expression is emitted in statement context 
 Effect annotations declared on functions (`fn foo() -> T ! E1, E2`) SHOULD be preserved as Rust doc comments on the emitted function, for auditability.
 
 **Implementation:** `src/mvl/backends/rust/emit_functions.rs`
+
+**Tests:** `tests/transpiler.rs::extern_rust_fn_effects_emitted_as_comment`
 
 #### Scenario: Effect preserved as doc comment
 

@@ -56,6 +56,8 @@ This is Design Principle 7 ("Security labels on all data"). Labels are types, no
 
 **Implementation:** `src/mvl/checker/ifc.rs::check_relabel` — label propagation implemented; auto-tainting deferred (#28)
 
+**Tests:** `tests/type_checker.rs::tainted_flows_to_clean_rejected`, `tests/corpus/06_ifc/`
+
 Data from external sources MUST be automatically labeled `Tainted`. This includes:
 - HTTP request bodies, headers, query parameters
 - stdin input
@@ -117,6 +119,8 @@ Functions that process secrets MUST return secrets. The label MUST propagate thr
 > **Status:** Not yet implemented. Requires ADT field-label analysis and channel-type tracking. Tracked in #29.
 
 **Implementation:** `src/mvl/checker/ifc.rs::check_adt_labels` — deferred (#29)
+
+**Tests:** `tests/type_checker.rs::secret_to_public_rejected` — partial coverage
 
 Error types containing `Secret` fields MUST NOT be sendable to `Public` channels (HTTP responses, logs, stdout).
 

@@ -199,6 +199,8 @@ demonstrates complexity rule violations and is permitted to carry warnings.
 
 **Implementation:** `Makefile::mvl-lint`
 
+**Tests:** `Makefile::mvl-lint` (CI gate), `tests/corpus/03_linting/`
+
 #### Scenario: Clean corpus
 
 - GIVEN all corpus and example files in their committed state
@@ -225,6 +227,8 @@ Semantic rules (`unreachable_code`, `redundant_match`, `redundant_effects`,
 
 **Implementation:** `src/mvl/linter/config.rs::LintConfig::default`
 
+**Tests:** `src/mvl/linter/config.rs::default_config_has_expected_values`
+
 #### Scenario: Fresh lint produces no style warnings
 
 - GIVEN any syntactically valid MVL file
@@ -246,6 +250,8 @@ Config parsing order:
 3. Apply individual key overrides
 
 **Implementation:** `src/mvl/linter/config.rs::load_from`
+
+**Tests:** `src/mvl/linter/config.rs::style_toggle_enables_all_style_rules`
 
 #### Scenario: style = true enables all style rules
 
