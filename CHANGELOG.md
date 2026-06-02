@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [0.176.0] - 2026-06-02
+
+### Added
+- `std.audit`: compliance audit trail module per #808 — `AuditEvent` struct, `AuditOutcome` enum (Success/Failure/Denied), `AuditLogger` for JSONL append-only records, pure constructors (`access`, `modify`, `deny`, `fail`), enrichment helpers (`with_correlation`, `with_details`)
+- `Audit` effect (subsumes `FileWrite + Clock`) — distinct from `Log` effect; audit records may contain sensitive data since they ARE the compliance artifact
+- Parser support for wildcard relabel syntax: `relabel X -> _` and `relabel _ -> Y` for erasing/restoring labels
+- `json_escape` exported from `std.json` for shared JSON serialization across stdlib
+
+### Fixed
+- `AuditLogger::emit()` now returns `Result[Unit, IoError] ! Audit` instead of silently discarding write errors — callers must handle I/O failures to ensure compliance records aren't lost
+
 ## [0.175.1] - 2026-06-02
 
 ### Fixed
