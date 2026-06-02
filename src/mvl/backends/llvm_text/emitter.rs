@@ -749,6 +749,27 @@ impl TextEmitter {
         }
     }
 
+    /// True if `receiver`'s MVL type is `List`, `Array`, or `Set` — used to
+    /// guard dispatch arms that lower to the shared `_mvl_list_slice` runtime.
+    fn is_list_array_set(&self, receiver: &Expr) -> bool {
+        matches!(
+            self.mvl_receiver_kind(receiver),
+            Some("List") | Some("Array") | Some("Set")
+        )
+    }
+
+    /// Emit `call ptr @_mvl_list_slice(ptr val, i64 start, i64 end)` and
+    /// return the result register. Shared by slice/take/skip dispatch.
+    fn emit_list_slice_call(&mut self, val: &str, start: &str, end: &str) -> String {
+        self.ensure_extern("declare ptr @_mvl_list_slice(ptr, i64, i64)");
+        let reg = self.next_reg();
+        self.push_instr(&format!(
+            "{reg} = call ptr @_mvl_list_slice(ptr {val}, i64 {start}, i64 {end})"
+        ));
+        self.reg_types.insert(reg.clone(), "ptr".into());
+        reg
+    }
+
     /// If `expr` has MVL type `Box[T]`, return the LLVM IR type of `T`.
     /// Used to emit `load T, ptr %box` when emitting `*box` deref (#1154).
     fn box_inner_llvm_ty(&self, expr: &Expr) -> Option<String> {
@@ -2070,20 +2091,27 @@ impl TextEmitter {
         }
 
         // ── Box::new(x) — heap-allocate and store x, return ptr ──────────
-        // The element size matches the LLVM type of the argument. Currently
-        // supports primitive payloads (8 bytes for i64 / ptr / double); other
-        // sizes fall through to the unsupported user-fn path.
+        // Supports primitive payloads only: i64/ptr/double (8B), i32 (4B),
+        // i8/i1 (1B). Aggregate payloads (structs, enums) need a real
+        // sizeof — emit a hard error instead of guessing 8B (would be a
+        // heap buffer overflow when the struct is larger).
         if name == "Box::new" && args.len() == 1 {
             let arg_ty = self.type_of_expr(&args[0]);
-            let val = match self.emit_expr(&args[0])? {
-                Some(v) => v,
-                None => return Ok(None),
-            };
             let size: i64 = match arg_ty.as_str() {
                 "i64" | "ptr" | "double" => 8,
                 "i32" => 4,
                 "i8" | "i1" => 1,
-                _ => 8, // structs and other aggregates: emit 8 and hope
+                other => {
+                    return Err(format!(
+                        "Box::new: unsupported payload type `{other}` — only primitive \
+                         types are supported by llvm_text. Aggregate types need real \
+                         sizeof support (#1154 follow-up)."
+                    ));
+                }
+            };
+            let val = match self.emit_expr(&args[0])? {
+                Some(v) => v,
+                None => return Ok(None),
             };
             self.ensure_extern("declare ptr @mvl_box_new(i64)");
             let ptr = self.next_reg();
@@ -3221,14 +3249,30 @@ impl TextEmitter {
                 self.reg_types.insert(reg.clone(), "i1".into());
                 Ok(Some(reg))
             }
-            // List/Array/Set slice(start, end) — direct C runtime _mvl_list_slice
-            ("slice", "ptr")
-                if args.len() == 2
-                    && matches!(
-                        self.mvl_receiver_kind(receiver),
-                        Some("List") | Some("Array") | Some("Set")
-                    ) =>
+            // Set algebra — intersection / difference / union all share the same
+            // (ptr, ptr) -> ptr C-ABI shape against the i64-element array runtime.
+            ("intersection" | "difference" | "union", "ptr")
+                if args.len() == 1 && matches!(self.mvl_receiver_kind(receiver), Some("Set")) =>
             {
+                let other = match self.emit_expr(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                let sym = match method {
+                    "intersection" => "_mvl_set_intersection",
+                    "difference" => "_mvl_set_difference",
+                    "union" => "_mvl_set_union",
+                    _ => unreachable!(),
+                };
+                self.ensure_extern(&format!("declare ptr @{sym}(ptr, ptr)"));
+                let reg = self.next_reg();
+                self.push_instr(&format!("{reg} = call ptr @{sym}(ptr {val}, ptr {other})"));
+                self.reg_types.insert(reg.clone(), "ptr".into());
+                Ok(Some(reg))
+            }
+            // List/Array/Set slice(start, end) / take(n) / skip(n) — all
+            // lower to `_mvl_list_slice(ptr, i64, i64)`.
+            ("slice", "ptr") if args.len() == 2 && self.is_list_array_set(receiver) => {
                 let start = match self.emit_expr(&args[0])? {
                     Some(v) => v,
                     None => return Ok(None),
@@ -3237,56 +3281,28 @@ impl TextEmitter {
                     Some(v) => v,
                     None => return Ok(None),
                 };
-                self.ensure_extern("declare ptr @_mvl_list_slice(ptr, i64, i64)");
-                let reg = self.next_reg();
-                self.push_instr(&format!(
-                    "{reg} = call ptr @_mvl_list_slice(ptr {val}, i64 {start}, i64 {end})"
-                ));
-                self.reg_types.insert(reg.clone(), "ptr".into());
-                Ok(Some(reg))
+                Ok(Some(self.emit_list_slice_call(&val, &start, &end)))
             }
-            // List/Array/Set take(n) — slice [0, n)
-            ("take", "ptr")
-                if args.len() == 1
-                    && matches!(
-                        self.mvl_receiver_kind(receiver),
-                        Some("List") | Some("Array") | Some("Set")
-                    ) =>
-            {
+            ("take", "ptr") if args.len() == 1 && self.is_list_array_set(receiver) => {
                 let n = match self.emit_expr(&args[0])? {
                     Some(v) => v,
                     None => return Ok(None),
                 };
-                self.ensure_extern("declare ptr @_mvl_list_slice(ptr, i64, i64)");
-                let reg = self.next_reg();
-                self.push_instr(&format!(
-                    "{reg} = call ptr @_mvl_list_slice(ptr {val}, i64 0, i64 {n})"
-                ));
-                self.reg_types.insert(reg.clone(), "ptr".into());
-                Ok(Some(reg))
+                Ok(Some(self.emit_list_slice_call(&val, "0", &n)))
             }
-            // List/Array/Set skip(n) — slice [n, len)
-            ("skip", "ptr")
-                if args.len() == 1
-                    && matches!(
-                        self.mvl_receiver_kind(receiver),
-                        Some("List") | Some("Array") | Some("Set")
-                    ) =>
-            {
+            ("skip", "ptr") if args.len() == 1 && self.is_list_array_set(receiver) => {
                 let n = match self.emit_expr(&args[0])? {
                     Some(v) => v,
                     None => return Ok(None),
                 };
+                // FIXME: mvl_array_len returns u64 in Rust but is declared i64
+                // here — same as the pre-existing `len` dispatch. Safe at
+                // realistic array sizes; revisit when fixing the u64/i64 ABI
+                // mismatch across all callers.
                 self.ensure_extern("declare i64 @mvl_array_len(ptr)");
-                self.ensure_extern("declare ptr @_mvl_list_slice(ptr, i64, i64)");
                 let len_reg = self.next_reg();
                 self.push_instr(&format!("{len_reg} = call i64 @mvl_array_len(ptr {val})"));
-                let reg = self.next_reg();
-                self.push_instr(&format!(
-                    "{reg} = call ptr @_mvl_list_slice(ptr {val}, i64 {n}, i64 {len_reg})"
-                ));
-                self.reg_types.insert(reg.clone(), "ptr".into());
-                Ok(Some(reg))
+                Ok(Some(self.emit_list_slice_call(&val, &n, &len_reg)))
             }
             ("remove", "ptr") if matches!(self.mvl_receiver_kind(receiver), Some("Map")) => {
                 let key_arg = match args.first() {
