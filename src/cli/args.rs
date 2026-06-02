@@ -29,6 +29,7 @@ pub fn print_usage() {
     eprintln!(
         "  mvl test  <file|dir> --coverage    — run with native behavioral branch coverage report
   mvl build <file|dir> --backend=llvm          — compile to LLVM IR text and emit .ll file
+  mvl run   <file|dir> --backend=llvm          — compile and run via lli
   mvl test  <file|dir> --backend=llvm          — compile + run via lli, check // expect: annotations
   mvl build|run|check|test <file|dir> --stdlib=trusted — stdlib profile: trusted (default, 95 builtins)
   mvl build|run|check|test <file|dir> --stdlib=proven  — proven profile: verifies stdlib before user code (ADR-0023)

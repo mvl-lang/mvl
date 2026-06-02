@@ -197,6 +197,15 @@ fn cross_backend_collections_basic() {
 #[test]
 fn cross_backend_hof_lambdas() {
     assert_backends_agree("hof_lambdas.mvl");
+    // Pin expected output so the LLVM backend is actually verified (#1163 AC).
+    let file = corpus("hof_lambdas.mvl");
+    let expected = "filter_len=3\nmap_sum=12\nfold_sum=15\nany_even=true\nany_odd=false\n";
+    assert_eq!(
+        run_transpiler(&file),
+        expected,
+        "hof_lambdas.mvl: transpiler output mismatch"
+    );
+    assert_llvm_output(&file, expected);
 }
 
 /// Both backends must produce identical output when lambdas capture variables
@@ -213,6 +222,7 @@ fn cross_backend_closure_lambdas() {
         expected,
         "closure_lambdas.mvl: transpiler output mismatch"
     );
+    assert_llvm_output(&file, expected);
 }
 
 // ── Phase C: heap allocation tests (LLVM-only) ────────────────────────────────

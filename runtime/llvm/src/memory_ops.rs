@@ -965,16 +965,25 @@ pub struct MvlClosure {
 
 /// `List_filter(list, closure)` — keep elements where `closure(elem)` is true.
 ///
+/// Only supports 8-byte (i64) elements — all MVL scalar types use `elem_size=8`.
+///
 /// # Safety
-/// `list` must be a valid `MvlArray*`.  `closure` must point to a valid
-/// `MvlClosure` whose `fn_ptr` has signature `fn(ptr, i64) -> i1`.
+/// `list` must be a valid `MvlArray*` with `elem_size == 8`.  `closure` must
+/// point to a valid `MvlClosure` whose `fn_ptr` has signature `fn(ptr, i64) -> i1`.
 #[no_mangle]
 pub unsafe extern "C" fn List_filter(
     list: *mut MvlArray,
     closure: *const MvlClosure,
 ) -> *mut MvlArray {
+    if list.is_null() {
+        return mvl_array_new(8, 1);
+    }
+    if closure.is_null() || (*closure).fn_ptr.is_null() {
+        std::process::abort();
+    }
     let len = (*list).len as usize;
     let es = (*list).elem_size as usize;
+    debug_assert_eq!(es, 8, "List_filter: only 8-byte (i64) elements supported");
     let out = mvl_array_new(es, len.max(1));
     let pred: unsafe extern "C" fn(*const u8, i64) -> bool = std::mem::transmute((*closure).fn_ptr);
     let env = (*closure).env_ptr as *const u8;
@@ -990,16 +999,25 @@ pub unsafe extern "C" fn List_filter(
 
 /// `List_map(list, closure)` — transform each element via `closure(elem)`.
 ///
+/// Only supports i64→i64 mappings (output `elem_size` == input `elem_size`).
+///
 /// # Safety
-/// `list` must be a valid `MvlArray*`.  `closure` must point to a valid
-/// `MvlClosure` whose `fn_ptr` has signature `fn(ptr, i64) -> i64`.
+/// `list` must be a valid `MvlArray*` with `elem_size == 8`.  `closure` must
+/// point to a valid `MvlClosure` whose `fn_ptr` has signature `fn(ptr, i64) -> i64`.
 #[no_mangle]
 pub unsafe extern "C" fn List_map(
     list: *mut MvlArray,
     closure: *const MvlClosure,
 ) -> *mut MvlArray {
+    if list.is_null() {
+        return mvl_array_new(8, 1);
+    }
+    if closure.is_null() || (*closure).fn_ptr.is_null() {
+        std::process::abort();
+    }
     let len = (*list).len as usize;
     let es = (*list).elem_size as usize;
+    debug_assert_eq!(es, 8, "List_map: only 8-byte (i64) elements supported");
     let out = mvl_array_new(es, len.max(1));
     let map_fn: unsafe extern "C" fn(*const u8, i64) -> i64 =
         std::mem::transmute((*closure).fn_ptr);
@@ -1019,18 +1037,27 @@ pub unsafe extern "C" fn List_map(
 /// caller).  The closure has signature `fn(env, acc, elem) -> acc`.  The final
 /// accumulator is written back to `acc_ptr`, which is also returned.
 ///
+/// Only supports 8-byte (i64) elements and accumulator.
+///
 /// # Safety
-/// `list` must be a valid `MvlArray*`.  `acc_ptr` must be a writable pointer
-/// to at least 8 bytes.  `closure` must point to a valid `MvlClosure` whose
-/// `fn_ptr` has signature `fn(ptr, i64, i64) -> i64`.
+/// `list` must be a valid `MvlArray*` with `elem_size == 8`.  `acc_ptr` must
+/// be a writable pointer to at least 8 bytes.  `closure` must point to a valid
+/// `MvlClosure` whose `fn_ptr` has signature `fn(ptr, i64, i64) -> i64`.
 #[no_mangle]
 pub unsafe extern "C" fn List_fold(
     list: *mut MvlArray,
     acc_ptr: *mut u8,
     closure: *const MvlClosure,
 ) -> *mut u8 {
+    if list.is_null() || acc_ptr.is_null() {
+        std::process::abort();
+    }
+    if closure.is_null() || (*closure).fn_ptr.is_null() {
+        std::process::abort();
+    }
     let len = (*list).len as usize;
     let es = (*list).elem_size as usize;
+    debug_assert_eq!(es, 8, "List_fold: only 8-byte (i64) elements supported");
     let fold_fn: unsafe extern "C" fn(*const u8, i64, i64) -> i64 =
         std::mem::transmute((*closure).fn_ptr);
     let env = (*closure).env_ptr as *const u8;
@@ -1046,13 +1073,22 @@ pub unsafe extern "C" fn List_fold(
 
 /// `List_any(list, closure)` — return true if any element satisfies predicate.
 ///
+/// Only supports 8-byte (i64) elements.
+///
 /// # Safety
-/// `list` must be a valid `MvlArray*`.  `closure` must point to a valid
-/// `MvlClosure` whose `fn_ptr` has signature `fn(ptr, i64) -> i1`.
+/// `list` must be a valid `MvlArray*` with `elem_size == 8`.  `closure` must
+/// point to a valid `MvlClosure` whose `fn_ptr` has signature `fn(ptr, i64) -> i1`.
 #[no_mangle]
 pub unsafe extern "C" fn List_any(list: *mut MvlArray, closure: *const MvlClosure) -> bool {
+    if list.is_null() {
+        return false;
+    }
+    if closure.is_null() || (*closure).fn_ptr.is_null() {
+        std::process::abort();
+    }
     let len = (*list).len as usize;
     let es = (*list).elem_size as usize;
+    debug_assert_eq!(es, 8, "List_any: only 8-byte (i64) elements supported");
     let pred: unsafe extern "C" fn(*const u8, i64) -> bool = std::mem::transmute((*closure).fn_ptr);
     let env = (*closure).env_ptr as *const u8;
     for i in 0..len {
@@ -1063,6 +1099,36 @@ pub unsafe extern "C" fn List_any(list: *mut MvlArray, closure: *const MvlClosur
         }
     }
     false
+}
+
+/// `List_all(list, closure)` — return true if all elements satisfy predicate.
+///
+/// Only supports 8-byte (i64) elements.
+///
+/// # Safety
+/// `list` must be a valid `MvlArray*` with `elem_size == 8`.  `closure` must
+/// point to a valid `MvlClosure` whose `fn_ptr` has signature `fn(ptr, i64) -> i1`.
+#[no_mangle]
+pub unsafe extern "C" fn List_all(list: *mut MvlArray, closure: *const MvlClosure) -> bool {
+    if list.is_null() {
+        return true;
+    }
+    if closure.is_null() || (*closure).fn_ptr.is_null() {
+        std::process::abort();
+    }
+    let len = (*list).len as usize;
+    let es = (*list).elem_size as usize;
+    debug_assert_eq!(es, 8, "List_all: only 8-byte (i64) elements supported");
+    let pred: unsafe extern "C" fn(*const u8, i64) -> bool = std::mem::transmute((*closure).fn_ptr);
+    let env = (*closure).env_ptr as *const u8;
+    for i in 0..len {
+        let elem_ptr = (*list).ptr.add(i * es);
+        let elem_val = *(elem_ptr as *const i64);
+        if !pred(env, elem_val) {
+            return false;
+        }
+    }
+    true
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
@@ -1423,6 +1489,214 @@ mod tests {
             assert_eq!(slice, b"b");
             mvl_string_ptr_array_drop(arr);
             mvl_map_drop(m);
+        }
+    }
+
+    // ── HOF list functions (#1163) ────────────────────────────────────────────
+
+    /// Helper: build an i64 array from a slice.
+    unsafe fn make_i64_array(vals: &[i64]) -> *mut MvlArray {
+        let a = mvl_array_new(8, vals.len().max(1));
+        for v in vals {
+            mvl_array_push(a, (v as *const i64).cast());
+        }
+        a
+    }
+
+    /// Helper: read all i64 elements from an array.
+    unsafe fn read_i64_array(a: *mut MvlArray) -> Vec<i64> {
+        let len = mvl_array_len(a) as usize;
+        (0..len)
+            .map(|i| *(mvl_array_get(a, i) as *const i64))
+            .collect()
+    }
+
+    /// Simple predicate: is x even?
+    unsafe extern "C" fn pred_is_even(_env: *const u8, x: i64) -> bool {
+        x % 2 == 0
+    }
+
+    /// Simple map fn: double x.
+    unsafe extern "C" fn map_double(_env: *const u8, x: i64) -> i64 {
+        x * 2
+    }
+
+    /// Simple fold fn: add acc + x.
+    unsafe extern "C" fn fold_add(_env: *const u8, acc: i64, x: i64) -> i64 {
+        acc + x
+    }
+
+    fn make_closure(fn_ptr: *const (), env_ptr: *const ()) -> MvlClosure {
+        MvlClosure { fn_ptr, env_ptr }
+    }
+
+    #[test]
+    fn list_filter_basic() {
+        unsafe {
+            let a = make_i64_array(&[1, 2, 3, 4, 5, 6]);
+            let c = make_closure(pred_is_even as *const (), std::ptr::null());
+            let out = List_filter(a, &c);
+            assert_eq!(read_i64_array(out), vec![2, 4, 6]);
+            mvl_array_drop(out);
+            mvl_array_drop(a);
+        }
+    }
+
+    #[test]
+    fn list_filter_empty() {
+        unsafe {
+            let a = make_i64_array(&[]);
+            let c = make_closure(pred_is_even as *const (), std::ptr::null());
+            let out = List_filter(a, &c);
+            assert_eq!(mvl_array_len(out), 0);
+            mvl_array_drop(out);
+            mvl_array_drop(a);
+        }
+    }
+
+    #[test]
+    fn list_filter_none_match() {
+        unsafe {
+            let a = make_i64_array(&[1, 3, 5]);
+            let c = make_closure(pred_is_even as *const (), std::ptr::null());
+            let out = List_filter(a, &c);
+            assert_eq!(mvl_array_len(out), 0);
+            mvl_array_drop(out);
+            mvl_array_drop(a);
+        }
+    }
+
+    #[test]
+    fn list_filter_all_match() {
+        unsafe {
+            let a = make_i64_array(&[2, 4, 6]);
+            let c = make_closure(pred_is_even as *const (), std::ptr::null());
+            let out = List_filter(a, &c);
+            assert_eq!(read_i64_array(out), vec![2, 4, 6]);
+            mvl_array_drop(out);
+            mvl_array_drop(a);
+        }
+    }
+
+    #[test]
+    fn list_map_basic() {
+        unsafe {
+            let a = make_i64_array(&[1, 2, 3]);
+            let c = make_closure(map_double as *const (), std::ptr::null());
+            let out = List_map(a, &c);
+            assert_eq!(read_i64_array(out), vec![2, 4, 6]);
+            mvl_array_drop(out);
+            mvl_array_drop(a);
+        }
+    }
+
+    #[test]
+    fn list_map_empty() {
+        unsafe {
+            let a = make_i64_array(&[]);
+            let c = make_closure(map_double as *const (), std::ptr::null());
+            let out = List_map(a, &c);
+            assert_eq!(mvl_array_len(out), 0);
+            mvl_array_drop(out);
+            mvl_array_drop(a);
+        }
+    }
+
+    #[test]
+    fn list_fold_sum() {
+        unsafe {
+            let a = make_i64_array(&[1, 2, 3, 4, 5]);
+            let c = make_closure(fold_add as *const (), std::ptr::null());
+            let mut acc: i64 = 0;
+            let result = List_fold(a, (&mut acc as *mut i64).cast(), &c);
+            assert_eq!(*(result as *const i64), 15);
+            assert_eq!(acc, 15);
+            mvl_array_drop(a);
+        }
+    }
+
+    #[test]
+    fn list_fold_empty() {
+        unsafe {
+            let a = make_i64_array(&[]);
+            let c = make_closure(fold_add as *const (), std::ptr::null());
+            let mut acc: i64 = 42;
+            let result = List_fold(a, (&mut acc as *mut i64).cast(), &c);
+            assert_eq!(*(result as *const i64), 42);
+            assert_eq!(acc, 42);
+            mvl_array_drop(a);
+        }
+    }
+
+    #[test]
+    fn list_fold_nonzero_init() {
+        unsafe {
+            let a = make_i64_array(&[1, 2, 3]);
+            let c = make_closure(fold_add as *const (), std::ptr::null());
+            let mut acc: i64 = 100;
+            List_fold(a, (&mut acc as *mut i64).cast(), &c);
+            assert_eq!(acc, 106);
+            mvl_array_drop(a);
+        }
+    }
+
+    #[test]
+    fn list_any_found() {
+        unsafe {
+            let a = make_i64_array(&[1, 3, 4, 7]);
+            let c = make_closure(pred_is_even as *const (), std::ptr::null());
+            assert!(List_any(a, &c));
+            mvl_array_drop(a);
+        }
+    }
+
+    #[test]
+    fn list_any_not_found() {
+        unsafe {
+            let a = make_i64_array(&[1, 3, 5, 7]);
+            let c = make_closure(pred_is_even as *const (), std::ptr::null());
+            assert!(!List_any(a, &c));
+            mvl_array_drop(a);
+        }
+    }
+
+    #[test]
+    fn list_any_empty() {
+        unsafe {
+            let a = make_i64_array(&[]);
+            let c = make_closure(pred_is_even as *const (), std::ptr::null());
+            assert!(!List_any(a, &c));
+            mvl_array_drop(a);
+        }
+    }
+
+    #[test]
+    fn list_all_basic() {
+        unsafe {
+            let a = make_i64_array(&[2, 4, 6]);
+            let c = make_closure(pred_is_even as *const (), std::ptr::null());
+            assert!(List_all(a, &c));
+            mvl_array_drop(a);
+        }
+    }
+
+    #[test]
+    fn list_all_fails() {
+        unsafe {
+            let a = make_i64_array(&[2, 3, 6]);
+            let c = make_closure(pred_is_even as *const (), std::ptr::null());
+            assert!(!List_all(a, &c));
+            mvl_array_drop(a);
+        }
+    }
+
+    #[test]
+    fn list_all_empty() {
+        unsafe {
+            let a = make_i64_array(&[]);
+            let c = make_closure(pred_is_even as *const (), std::ptr::null());
+            assert!(List_all(a, &c)); // vacuously true
+            mvl_array_drop(a);
         }
     }
 }

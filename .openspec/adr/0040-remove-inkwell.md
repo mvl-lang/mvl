@@ -44,6 +44,41 @@ Remove the inkwell backend entirely:
 
 - Cross-backend tests now test llvm_text instead of inkwell. Tests gracefully skip when the llvm_text backend doesn't support a feature, logging mismatches without failing.
 
+## Relation to language definition
+
+### Eleven Requirements (ADR-0001)
+
+- **Req 1** (Syntax) — **unchanged** — no syntax changes
+- **Req 2** (Types) — **unchanged** — no type system changes
+- **Req 3** (Effects) — **unchanged** — no effect system changes
+- **Req 4** (Contracts) — **unchanged** — no contract syntax changes
+- **Req 5** (IFC) — **unchanged** — no IFC label changes
+- **Req 6** (Closures) — **unchanged** — closures still supported via llvm_text
+- **Req 7** (Actors) — **unchanged** — actors still supported via llvm_text
+- **Req 8** (HOF) — **unchanged** — HOF stdlib functions now live in runtime; fully supported
+- **Req 9** (Self-hosting) — **strengthens** — llvm_text is pure Rust; self-hosting no longer blocked by LLVM C++ API
+- **Req 10** (Verification) — **unchanged** — verification layer unaffected
+- **Req 11** (Production) — **unchanged** — llvm_text mature for production use
+
+### Design Principles
+
+- **Explicit over implicit** — **consistent with** — backend choice remains explicit (CLI flag)
+- **One way to do it** — **strengthens** — only one LLVM backend path now (llvm_text)
+- **Signature is threat model** — **unchanged** — FFI contracts unchanged
+- **No UFCS** — **consistent with** — method dispatch unchanged
+- **Bare unwrap forbidden** — **strengthens** — removed 497+ unwraps from inkwell path
+- **Minimum stdlib** — **strengthens** — eliminated duplicate backend code
+- **Pure Rust backends** — **strengthens** — LLVM path now contains no C FFI (runtime via extern "C" only)
+- **Predictable compilation** — **strengthens** — faster builds (no LLVM dev package install)
+- **Observable semantics** — **consistent with** — observable behavior unchanged for supported features
+- **No magic dispatch** — **consistent with** — backend dispatch remains explicit
+
+### Specifications
+
+No specs are directly affected. The spec framework operates at the MVL language level (Reqs 1–11), above the backend implementation choice. The decision to remove inkwell is a compiler-internal optimization that does not alter language semantics or verifiability properties.
+
+If a future spec addresses backend requirements or cross-backend parity, it should reference this ADR for context.
+
 ## References
 
 - ADR-0019: Two-path backend design

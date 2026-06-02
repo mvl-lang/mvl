@@ -41,3 +41,4 @@
 | [0037](0037-main-as-actor.md) | Main-as-actor — drop `concurrently` keyword, implicit actor lifecycle | Accepted |
 | [0038](0038-typed-ir.md) | Typed Intermediate Representation (TIR) — post-checker typed expression layer | Accepted |
 | [0039](0039-package-distribution-sbom.md) | Repository-less package distribution and supply chain security (SBOM, Phase A) | Accepted |
+| [0040](0040-remove-inkwell.md) | Remove inkwell / llvm-sys dependency | Accepted |
