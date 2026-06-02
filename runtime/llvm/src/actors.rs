@@ -457,8 +457,25 @@ pub unsafe extern "C" fn mvl_actor_drop(handle: *mut u8) {
 /// 2. The actor thread drains any buffered messages and exits
 ///
 /// After dropping all handles, joins all actor threads.
+///
+/// The link/monitor registry (#1177) holds cloned senders for each actor
+/// (kill/exit/down notification entries). These must be dropped before
+/// joining, otherwise the channels remain open and actor threads block
+/// forever on `recv()`.
 #[no_mangle]
 pub extern "C" fn mvl_actor_join_all() {
+    // Clear all actor entries from the link registry — this drops the
+    // cloned senders held by ActorEntry structs, allowing channels to
+    // close so actor threads can exit.
+    {
+        let mut reg = global_link_registry()
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        reg.actors.clear();
+        reg.links.clear();
+        reg.monitors.clear();
+        reg.monitor_targets.clear();
+    }
     let entries = ACTOR_REGISTRY.with(|r| r.borrow_mut().drain(..).collect::<Vec<_>>());
     // Drop all live handles first — closes senders so actor threads will exit.
     for (ptr_opt, _) in &entries {

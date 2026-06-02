@@ -198,7 +198,22 @@ pub fn mvl_register_actor(h: MvlJoinHandle) {
 /// Called once at the end of `fn main()`.  All actor handles (`MvlSender`s)
 /// must have been dropped before this call so that `MvlReceiver::recv()`
 /// returns `None` and each actor thread exits naturally.
+///
+/// The link/monitor registry (#1177) holds cloned senders for each actor
+/// (kill/exit/down notification closures). These must be dropped before
+/// joining, otherwise the channels remain open and actor threads block
+/// forever on `recv()`.
 pub fn mvl_join_actors() {
+    // Clear all actor entries from the link registry — this drops the
+    // cloned senders held by kill/exit/down closures, allowing channels
+    // to close so actor threads can exit.
+    {
+        let mut reg = global_registry().lock().unwrap_or_else(|p| p.into_inner());
+        reg.controls.clear();
+        reg.links.clear();
+        reg.monitors.clear();
+        reg.monitor_targets.clear();
+    }
     MVL_ACTOR_HANDLES.with(|v| {
         for h in v.borrow_mut().drain(..) {
             if h.0.join().is_err() {
