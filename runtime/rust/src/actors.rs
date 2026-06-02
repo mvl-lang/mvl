@@ -143,7 +143,7 @@ pub fn mvl_spawn<F: FnOnce() + Send + 'static>(f: F) -> MvlJoinHandle {
 }
 
 thread_local! {
-    static MVL_ACTOR_HANDLES: RefCell<Vec<MvlJoinHandle>> = RefCell::new(Vec::new());
+    static MVL_ACTOR_HANDLES: RefCell<Vec<MvlJoinHandle>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Register a spawned actor so [`mvl_join_actors`] can await it.

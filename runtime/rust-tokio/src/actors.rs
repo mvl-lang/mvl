@@ -71,6 +71,15 @@ pub struct MvlSender<M: Send + 'static>(Arc<SenderInner<M>>);
 /// Receiving end of an actor mailbox — consumed by the actor task.
 pub struct MvlReceiver<M: Send + 'static>(ReceiverInner<M>);
 
+impl<M: Send + 'static> MvlReceiver<M> {
+    async fn recv(&mut self) -> Option<M> {
+        match &mut self.0 {
+            ReceiverInner::Bounded(r) => r.recv().await,
+            ReceiverInner::Unbounded(r) => r.recv().await,
+        }
+    }
+}
+
 /// Opaque join handle — returned by [`mvl_spawn`] / [`mvl_actor_run`].
 pub struct MvlJoinHandle(tokio::task::JoinHandle<()>);
 
@@ -89,12 +98,14 @@ impl<M: Send + 'static> MvlSender<M> {
             }
             SenderInner::BoundedBlock(tx) => {
                 // `blocking_send` panics inside async contexts.  Use
-                // `block_in_place` which is safe from tokio worker threads and
-                // yields the scheduler while waiting for capacity.
+                // `block_in_place` + `runtime().block_on` which is safe from
+                // both tokio worker threads and non-tokio threads.
+                // Clone the sender (cheap Arc bump) because block_in_place
+                // requires an owned value; we only have a shared ref here.
                 let tx = tx.clone();
-                let _ = tokio::task::block_in_place(move || {
-                    tokio::runtime::Handle::current().block_on(tx.send(msg))
-                });
+                if tokio::task::block_in_place(move || runtime().block_on(tx.send(msg))).is_err() {
+                    eprintln!("[mvl runtime] send failed: receiver dropped");
+                }
             }
             SenderInner::Unbounded(tx) => {
                 let _ = tx.send(msg);
@@ -171,6 +182,9 @@ pub fn mvl_channel<M: Send + 'static>(
 ///
 /// Kept for API parity with the default runtime.  Actor code uses
 /// [`mvl_actor_run`] instead, which runs an async dispatch loop.
+///
+/// NOTE: each call consumes one slot from tokio's blocking-thread pool (capped
+/// at 512 by default).  Do not use for long-lived loops — use [`mvl_actor_run`].
 pub fn mvl_spawn<F: FnOnce() + Send + 'static>(f: F) -> MvlJoinHandle {
     MvlJoinHandle(runtime().spawn_blocking(f))
 }
@@ -182,10 +196,7 @@ static MVL_ACTOR_HANDLES: std::sync::Mutex<Vec<MvlJoinHandle>> = std::sync::Mute
 
 /// Register a spawned actor so [`mvl_join_actors`] can await it.
 pub fn mvl_register_actor(h: MvlJoinHandle) {
-    MVL_ACTOR_HANDLES
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
-        .push(h);
+    MVL_ACTOR_HANDLES.lock().unwrap().push(h);
 }
 
 /// Await every registered actor task, then return.
@@ -194,11 +205,7 @@ pub fn mvl_register_actor(h: MvlJoinHandle) {
 /// must have been dropped before this call so that the async recv loop exits
 /// and each task completes naturally.
 pub fn mvl_join_actors() {
-    let handles: Vec<_> = MVL_ACTOR_HANDLES
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
-        .drain(..)
-        .collect();
+    let handles: Vec<_> = MVL_ACTOR_HANDLES.lock().unwrap().drain(..).collect();
     runtime().block_on(async move {
         for h in handles {
             if h.0.await.is_err() {
@@ -224,15 +231,8 @@ where
     MvlJoinHandle(runtime().spawn(async move {
         let mut actor = state;
         let mut rx = rx;
-        loop {
-            let msg = match &mut rx.0 {
-                ReceiverInner::Bounded(r) => r.recv().await,
-                ReceiverInner::Unbounded(r) => r.recv().await,
-            };
-            match msg {
-                Some(msg) => dispatch(&mut actor, msg),
-                None => break,
-            }
+        while let Some(msg) = rx.recv().await {
+            dispatch(&mut actor, msg);
         }
     }))
 }
@@ -245,8 +245,8 @@ mod tests {
 
     /// Verify round-trip: channel → actor task → join.
     ///
-    /// Spawns a counter actor via `mvl_actor_run`, sends N increment messages,
-    /// drops the sender so the task exits, then joins via `mvl_join_actors`.
+    /// Joins the handle directly (not via the global registry) so the test is
+    /// isolated from parallel test runs that share `MVL_ACTOR_HANDLES`.
     #[test]
     fn actor_run_processes_messages_and_exits() {
         struct State {
@@ -263,17 +263,19 @@ mod tests {
 
         let (tx, rx) = mvl_channel::<Msg>(10, 0);
         let handle = mvl_actor_run(rx, State { count: 0 }, dispatch);
-        mvl_register_actor(handle);
 
         tx.send(Msg::Increment(1));
         tx.send(Msg::Increment(2));
         tx.send(Msg::Increment(3));
         drop(tx); // signal shutdown
 
-        mvl_join_actors(); // waits for the actor task to drain and exit
+        runtime().block_on(handle.0).expect("actor task panicked");
     }
 
     /// Two actors on the same tokio runtime do not deadlock each other.
+    ///
+    /// Joins handles directly to avoid sharing `MVL_ACTOR_HANDLES` with other
+    /// parallel tests.
     #[test]
     fn multiple_actors_run_concurrently() {
         enum Msg {
@@ -281,14 +283,18 @@ mod tests {
         }
         fn dispatch(_s: &mut (), _msg: Msg) {}
 
+        let mut handles = Vec::new();
         for _ in 0..4 {
             let (tx, rx) = mvl_channel::<Msg>(16, 0);
-            let h = mvl_actor_run(rx, (), dispatch);
-            mvl_register_actor(h);
+            handles.push(mvl_actor_run(rx, (), dispatch));
             tx.send(Msg::Noop);
             drop(tx);
         }
 
-        mvl_join_actors();
+        runtime().block_on(async {
+            for h in handles {
+                h.0.await.expect("actor task panicked");
+            }
+        });
     }
 }
