@@ -2793,8 +2793,7 @@ fn concurrently_block_emits_body_and_drain() {
 // ── #703: LLVM actor IR structural tests ─────────────────────────────────────
 
 /// Actor declaration emits a per-behavior function and a dispatch function in LLVM IR.
-/// Kills mutations in `LlvmBackend::emit_actor_decl` that alter dispatch logic or
-/// behavior function names. (#703)
+/// Kills mutations that alter dispatch logic or behavior function names. (#703)
 #[test]
 fn llvm_actor_emits_dispatch_and_behavior_fns() {
     let src = r#"
@@ -2806,7 +2805,9 @@ actor Counter {
 fn main() -> Unit { }
 "#;
     let prog = parse_prog(src);
-    let ir = mvl::mvl::backends::llvm::compile_to_ir(&prog, "test_actor_dispatch")
+    let compiler = mvl::mvl::backends::llvm_text::LlvmTextCompiler::new();
+    let ir = compiler
+        .compile_to_ir(&prog, "test_actor_dispatch")
         .expect("IR generation failed");
     assert!(
         ir.contains("counter_increment") || ir.contains("Counter_increment"),
@@ -2827,8 +2828,7 @@ fn main() -> Unit { }
 }
 
 /// Actor spawn expression emits a call to `mvl_actor_spawn` in LLVM IR.
-/// Kills mutations in `LlvmBackend::emit_actor_spawn` that drop or alter the spawn call.
-/// (#703)
+/// Kills mutations that drop or alter the spawn call. (#703)
 #[test]
 fn llvm_actor_spawn_emits_runtime_call() {
     let src = r#"
@@ -2841,7 +2841,9 @@ fn main() -> Unit {
 }
 "#;
     let prog = parse_prog(src);
-    let ir = mvl::mvl::backends::llvm::compile_to_ir(&prog, "test_actor_spawn")
+    let compiler = mvl::mvl::backends::llvm_text::LlvmTextCompiler::new();
+    let ir = compiler
+        .compile_to_ir(&prog, "test_actor_spawn")
         .expect("IR generation failed");
     assert!(
         ir.contains("mvl_actor_spawn"),
@@ -2889,8 +2891,7 @@ fn Counter::add(self, n: Int) -> Int { self.value }
 }
 
 /// Actor behavior call emits `mvl_actor_send` with correct discriminant slot in LLVM IR.
-/// Kills mutations in `LlvmBackend::emit_actor_method_call` that corrupt discriminant
-/// or argument packing. (#703)
+/// Kills mutations that corrupt discriminant or argument packing. (#703)
 #[test]
 fn llvm_actor_behavior_call_emits_send() {
     let src = r#"
@@ -2904,7 +2905,9 @@ fn main() -> Unit {
 }
 "#;
     let prog = parse_prog(src);
-    let ir = mvl::mvl::backends::llvm::compile_to_ir(&prog, "test_actor_send")
+    let compiler = mvl::mvl::backends::llvm_text::LlvmTextCompiler::new();
+    let ir = compiler
+        .compile_to_ir(&prog, "test_actor_send")
         .expect("IR generation failed");
     assert!(
         ir.contains("mvl_actor_send"),

@@ -175,17 +175,17 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
 
-      - name: Install LLVM 22
+      - name: Install LLVM 22 + Z3
         run: |
-          # Install LLVM 22 from the official apt.llvm.org repository.
+          # Install LLVM 22 (provides lli for LLVM text backend) and Z3.
           wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
           echo "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-22 main" \
             | sudo tee /etc/apt/sources.list.d/llvm-22.list
           sudo apt-get update -qq
-          sudo apt-get install -y llvm-22-dev libclang-22-dev libpolly-22-dev libz3-dev
-          echo "LLVM_SYS_221_PREFIX=$(llvm-config-22 --prefix)" >> "$GITHUB_ENV"
-          # Override .cargo/config.toml's macOS default so z3-sys uses the Linux system header.
+          sudo apt-get install -y llvm-22 libz3-dev
+          # Override .cargo/config.toml's macOS defaults for Linux.
           echo "Z3_SYS_Z3_HEADER=/usr/include/z3.h" >> "$GITHUB_ENV"
+          echo "LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" >> "$GITHUB_ENV"
 
       - name: Check formatting
         if: needs.changes.outputs.rust == 'true'
@@ -249,12 +249,12 @@ jobs:
           echo "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-22 main" \
             | sudo tee /etc/apt/sources.list.d/llvm-22.list
           sudo apt-get update -qq
-          sudo apt-get install -y llvm-22-dev libclang-22-dev libpolly-22-dev
-          echo "LLVM_SYS_221_PREFIX=$(llvm-config-22 --prefix)" >> "$GITHUB_ENV"
+          sudo apt-get install -y llvm-22
+          echo "LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" >> "$GITHUB_ENV"
 
       - name: Build MVL compiler and runtime
         run: |
-          cargo build --no-default-features --features llvm
+          cargo build --no-default-features
           cargo build -p mvl_runtime_c
 
       - name: Install MVL packages
@@ -286,15 +286,12 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
 
-      - name: Install LLVM 22 and Z3
+      - name: Install Z3
         run: |
-          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
-          echo "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-22 main" \
-            | sudo tee /etc/apt/sources.list.d/llvm-22.list
           sudo apt-get update -qq
-          sudo apt-get install -y llvm-22-dev libclang-22-dev libpolly-22-dev libz3-dev
-          echo "LLVM_SYS_221_PREFIX=$(llvm-config-22 --prefix)" >> "$GITHUB_ENV"
+          sudo apt-get install -y libz3-dev
           echo "Z3_SYS_Z3_HEADER=/usr/include/z3.h" >> "$GITHUB_ENV"
+          echo "LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" >> "$GITHUB_ENV"
 
       - name: Run benchmarks
         run: |

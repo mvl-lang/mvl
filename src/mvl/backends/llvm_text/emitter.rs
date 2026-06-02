@@ -3699,6 +3699,12 @@ impl TextEmitter {
     // ── List literal ──────────────────────────────────────────────────────
 
     fn emit_list_literal(&mut self, elems: &[Expr]) -> Result<Option<String>, String> {
+        // Determine element LLVM type from the first expression (default ptr).
+        let elem_ty = elems
+            .first()
+            .map(|e| self.type_of_expr(e))
+            .unwrap_or_else(|| "ptr".into());
+
         // Emit all element values first
         let mut elem_vals: Vec<String> = Vec::new();
         for e in elems {
@@ -3712,14 +3718,14 @@ impl TextEmitter {
         self.ensure_extern("declare void @mvl_array_push(ptr, ptr)");
 
         let arr = self.next_reg();
-        // elem_size=8 (pointer size for String elements)
+        // elem_size=8 for all scalar types (i64, ptr, double)
         self.push_instr(&format!("{arr} = call ptr @mvl_array_new(i64 8, i64 {n})"));
         self.reg_types.insert(arr.clone(), "ptr".into());
 
         for v in &elem_vals {
             let slot = self.next_reg();
-            self.push_instr(&format!("{slot} = alloca ptr"));
-            self.push_instr(&format!("store ptr {v}, ptr {slot}"));
+            self.push_instr(&format!("{slot} = alloca {elem_ty}"));
+            self.push_instr(&format!("store {elem_ty} {v}, ptr {slot}"));
             self.push_instr(&format!("call void @mvl_array_push(ptr {arr}, ptr {slot})"));
         }
 
