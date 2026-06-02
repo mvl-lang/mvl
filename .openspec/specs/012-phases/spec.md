@@ -78,7 +78,7 @@ so its purpose is unambiguous.
 | 8 | **Proves** | Concurrent programs verified — actors and model checking | 8 (Verification, applied) |
 | 9 | **Proven** | Language formally verified — Lean/Coq metatheory + supply chain | 5 (Packaging), 8 (Verification, formal) |
 
-**Implementation:** `docs/PHASES.md` — issue labels `phase-1` through `phase-9` (LAB271/mvl_language)
+**Implementation:** `docs/roadmap.md` — issue labels `phase-1` through `phase-9` (LAB271/mvl_language)
 
 #### Scenario: Every issue carries a phase label
 
@@ -98,7 +98,7 @@ Phase 5 MUST deliver the **Backends** pillar to the point where MVL has its
 own compilation chain: LLVM IR codegen, runtime, ownership-based drop, and
 cross-backend regression testing.
 
-**Implementation:** `src/mvl/backends/llvm/` (LLVM backend), `runtime/llvm/`, `runtime/rust/`
+**Implementation:** `src/mvl/backends/llvm_text/` (LLVM backend), `runtime/llvm/`, `runtime/rust/`
 
 #### Scenario: Phase 5 completion criteria
 
@@ -115,7 +115,7 @@ Phase 6 MUST deliver the **Stdlib** and **Testing** pillars to the point where
 real programs (not just toy corpus) run reliably and have meaningful test
 coverage including mutation, property-based, and MC/DC discipline.
 
-**Implementation:** `std/`, `tests/corpus/11_programs/`, `tools/mcdc/`
+**Implementation:** `std/`, `tests/corpus/`, `src/cli/mcdc.rs`
 
 #### Scenario: Stdlib completeness
 
@@ -256,7 +256,7 @@ Sibling concerns that are not pipeline stages:
 
 Each pipeline stage MUST live in its own top-level directory under `src/mvl/`. AST-level instrumentation transformations (coverage, MC/DC instrumentation, mutation injection) MUST live under `src/mvl/passes/`, not under `src/mvl/backends/rust/` or `src/mvl/backends/llvm/`. The transpiler and LLVM codegen MUST consume the same instrumented AST produced by the passes — instrumentation is written once per concern, not per backend.
 
-**Implementation:** `src/mvl/{parser,resolver,checker,passes,backends,linter}/`
+**Implementation:** `src/mvl/passes/` — all pipeline stages live in `src/mvl/{parser,resolver,checker,passes,backends,linter}/`
 
 #### Scenario: New AST instrumentation lands in passes/
 
