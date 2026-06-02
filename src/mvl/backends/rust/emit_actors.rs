@@ -241,19 +241,23 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &ActorDecl) {
         return;
     }
 
-    // 4. Actor handle struct (tag capability: only the sender channel)
+    // 4. Actor handle struct (tag capability: sender channel + unique actor ID).
+    //    `_id` enables `actor_id()` — used by link/monitor callers (#1128).
     let vis = if ad.visible { "pub " } else { "" };
     cg.line("#[derive(Clone)]");
     cg.line(&format!("{vis}struct {name} {{"));
     cg.push_indent();
     cg.line(&format!("_sender: MvlSender<{msg_name}>,"));
+    cg.line("_id: ActorId,");
     cg.pop_indent();
     cg.line("}");
     cg.blank();
 
-    // 5. Handle impl: one fire-and-forget wrapper per public behavior
+    // 5. Handle impl: actor_id() accessor + one fire-and-forget wrapper per public behavior.
     cg.line(&format!("impl {name} {{"));
     cg.push_indent();
+    // Pure sync accessor — no mailbox send, no Send effect required.
+    cg.line("pub fn actor_id(&self) -> i64 { self._id as i64 }");
     for m in &pub_methods {
         let variant = snake_to_pascal(&m.name);
         let param_strs: Vec<String> = m
@@ -292,14 +296,36 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &ActorDecl) {
     cg.push_indent();
     cg.line("match msg {");
     cg.push_indent();
-    // System variants (#1177).
+    // System variants (#1177, #1128).
     cg.line(&format!("{msg_name}::_Shutdown => return false,"));
-    cg.line(&format!(
-        "{msg_name}::_ExitSignal {{ _from_id, _reason }} => {{}}"
-    ));
-    cg.line(&format!(
-        "{msg_name}::_DownSignal {{ _from_id, _reason, _monitor_id }} => {{}}"
-    ));
+    // Wire _ExitSignal → on_exit(from_id, reason) if the actor defines that method.
+    let has_on_exit = ad
+        .methods
+        .iter()
+        .any(|m| !m.is_public && m.name == "on_exit");
+    if has_on_exit {
+        cg.line(&format!(
+            "{msg_name}::_ExitSignal {{ _from_id, _reason }} => actor.on_exit(_from_id as i64, _reason as i64),"
+        ));
+    } else {
+        cg.line(&format!(
+            "{msg_name}::_ExitSignal {{ _from_id: _, _reason: _ }} => {{}}"
+        ));
+    }
+    // Wire _DownSignal → on_down(from_id, reason, monitor_ref) if defined.
+    let has_on_down = ad
+        .methods
+        .iter()
+        .any(|m| !m.is_public && m.name == "on_down");
+    if has_on_down {
+        cg.line(&format!(
+            "{msg_name}::_DownSignal {{ _from_id, _reason, _monitor_id }} => actor.on_down(_from_id as i64, _reason as i64, _monitor_id as i64),"
+        ));
+    } else {
+        cg.line(&format!(
+            "{msg_name}::_DownSignal {{ _from_id: _, _reason: _, _monitor_id: _ }} => {{}}"
+        ));
+    }
     // User behavior variants.
     for m in &pub_methods {
         let variant = snake_to_pascal(&m.name);
@@ -379,7 +405,7 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &ActorDecl) {
         "let __handle = mvl_actor_run(rx, state, {dispatch_fn}, __actor_id);"
     ));
     cg.line("mvl_register_actor(__handle);");
-    cg.line(&format!("{name} {{ _sender: tx }}"));
+    cg.line(&format!("{name} {{ _sender: tx, _id: __actor_id }}"));
     cg.pop_indent();
     cg.line("}");
 }

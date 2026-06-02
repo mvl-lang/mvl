@@ -1,4 +1,5 @@
-// Test: route table that `mvl openapi` should extract.
+// Corpus: OpenAPI route extraction (#1023)
+// corpus:expect-fail — pkg.http package not yet implemented
 //
 // Exercises: route extraction, typed request/response schemas, refinement→OpenAPI
 // mapping, effect→tags, and IFC label→x-security-label.
