@@ -56,6 +56,8 @@ mapped to a phase that delivers it.
 
 **Implementation:** `README.md`, label set `phase-N` (issue tracker)
 
+**Tests:** GitHub issue tracker labels `phase-1` through `phase-9`
+
 #### Scenario: Pillar coverage check
 
 - GIVEN any open MVL issue
@@ -80,6 +82,8 @@ so its purpose is unambiguous.
 
 **Implementation:** `docs/roadmap.md` — issue labels `phase-1` through `phase-9` (LAB271/mvl_language)
 
+**Tests:** GitHub issue tracker labels
+
 #### Scenario: Every issue carries a phase label
 
 - GIVEN an open issue in the `enhancement` or `feat` category
@@ -100,6 +104,8 @@ cross-backend regression testing.
 
 **Implementation:** `src/mvl/backends/llvm_text/` (LLVM backend), `runtime/llvm/`, `runtime/rust/`
 
+**Tests:** `tests/cross_backend.rs`, `tests/compile_and_run.rs`
+
 #### Scenario: Phase 5 completion criteria
 
 - GIVEN the LLVM backend module
@@ -116,6 +122,8 @@ real programs (not just toy corpus) run reliably and have meaningful test
 coverage including mutation, property-based, and MC/DC discipline.
 
 **Implementation:** `std/`, `tests/corpus/`, `src/cli/mcdc.rs`
+
+**Tests:** `tests/stdlib.rs`, `tests/compile_and_run.rs`
 
 #### Scenario: Stdlib completeness
 
@@ -257,6 +265,8 @@ Sibling concerns that are not pipeline stages:
 Each pipeline stage MUST live in its own top-level directory under `src/mvl/`. AST-level instrumentation transformations (coverage, MC/DC instrumentation, mutation injection) MUST live under `src/mvl/passes/`, not under `src/mvl/backends/rust/` or `src/mvl/backends/llvm/`. The transpiler and LLVM codegen MUST consume the same instrumented AST produced by the passes — instrumentation is written once per concern, not per backend.
 
 **Implementation:** `src/mvl/passes/` — all pipeline stages live in `src/mvl/{parser,resolver,checker,passes,backends,linter}/`
+
+**Tests:** `tests/` (all integration tests)
 
 #### Scenario: New AST instrumentation lands in passes/
 

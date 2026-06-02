@@ -103,6 +103,8 @@ builtins.
 
 **Implementation:** `std/args.mvl::parse_args`
 
+**Tests:** `std/args.mvl` (self-testing), `examples/programs/`
+
 #### Scenario: Named flag parsed
 
 - GIVEN schema `[required("host", ArgType::Str)]`
@@ -123,6 +125,8 @@ builtins.
 argv tokens in schema-declaration order.
 
 **Implementation:** `std/args.mvl::parse_args`
+
+**Tests:** `std/args.mvl` (self-testing), `examples/programs/`
 
 #### Scenario: Required positional present
 
@@ -158,6 +162,8 @@ argv tokens in schema-declaration order.
 
 **Implementation:** `std/args.mvl::parse_args`
 
+**Tests:** `std/args.mvl` (self-testing), `examples/programs/`
+
 #### Scenario: Flag present
 
 - GIVEN schema `[flag("verbose")]`
@@ -180,6 +186,8 @@ value cannot be coerced to the declared `ArgType`.  It MUST NOT return to the
 caller on failure.
 
 **Implementation:** `std/args.mvl::parse_args`
+
+**Tests:** `std/args.mvl` (self-testing), `examples/programs/`
 
 #### Scenario: Missing required flag
 
@@ -205,6 +213,8 @@ stdout and exiting with code 0.  The usage string MUST be derived from the
 schema at runtime.
 
 **Implementation:** `std/args.mvl::parse_args`
+
+**Tests:** `std/args.mvl` (self-testing), `examples/programs/`
 
 #### Scenario: Help exits cleanly
 

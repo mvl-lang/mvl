@@ -77,6 +77,8 @@ tautology, and contradiction cases in O(1) without deeper analysis.
 
 **Issue:** #589
 
+**Tests:** `tests/type_checker.rs::refinement_literal_zero_to_nonzero_param_rejected`, `tests/corpus/07_refinements/`
+
 #### Scenario: Literal argument
 
 - GIVEN `positive(42)` where `positive` is `x > 0`
@@ -112,6 +114,8 @@ via interval containment.
 
 **Issue:** #590
 
+**Tests:** `tests/type_checker.rs::refinement_positive_literal_proven_accepted`
+
 #### Scenario: Branch narrowing
 
 - GIVEN `if x > 0 { needs_positive(x) }` where `needs_positive` requires `x > 0`
@@ -140,6 +144,8 @@ and path constraints, to prove return refinements.
 **Implementation:** `src/mvl/checker/solver/layer3.rs`
 
 **Issue:** #592
+
+**Tests:** `tests/type_checker.rs::refinements_corpus_parses`
 
 #### Scenario: Clamp-style function
 
@@ -171,6 +177,8 @@ linear integer arithmetic constraints that symbolic path analysis cannot handle.
 
 **Issue:** #593
 
+**Tests:** `tests/requirements.rs::req10_refinements_proven`
+
 #### Scenario: Linear arithmetic
 
 - GIVEN `fn always_nonzero(x: Int) -> Int where result != 0 { 2 * x + 1 }`
@@ -200,6 +208,8 @@ unavailable or when Z3 cannot decide within the timeout.
 **Implementation:** `src/mvl/checker/solver/layer5.rs`
 
 **Issue:** #543
+
+**Tests:** `tests/requirements.rs::req10_refinements_proven`
 
 #### Scenario: Z3 proves via unsatisfiability
 
