@@ -783,7 +783,7 @@ impl Parser {
     /// Parse one side of a relabel declaration: `_` (bare) or an ident (label name).
     fn parse_relabel_side(&mut self) -> Result<Option<String>, ()> {
         match self.peek_kind() {
-            TokenKind::Ident(name) if name == "_" => {
+            TokenKind::Underscore => {
                 self.advance();
                 Ok(None)
             }
@@ -1980,5 +1980,60 @@ fn Counter::set(self, n: Int) -> Unit { }
             })
             .collect();
         assert!(names.contains(&"get") && names.contains(&"set"));
+    }
+
+    // ── Relabel declaration: wildcard support ──────────────────────────────
+
+    #[test]
+    fn parse_relabel_wildcard_destination() {
+        // GIVEN: relabel unaudit_target: AuditTarget -> _
+        // THEN: from == Some("AuditTarget"), to == None (wildcard)
+        let src = "pub relabel unaudit_target: AuditTarget -> _";
+        let (mut p, lex_errs) = Parser::new(src);
+        assert!(lex_errs.is_empty(), "lex errors: {:?}", lex_errs);
+        let prog = p.parse_program();
+        assert!(p.errors.is_empty(), "parse errors: {:?}", p.errors);
+        assert_eq!(prog.declarations.len(), 1);
+        if let Decl::Relabel(rd) = &prog.declarations[0] {
+            assert_eq!(rd.from, Some("AuditTarget".to_string()));
+            assert_eq!(rd.to, None, "wildcard `_` should parse as None");
+        } else {
+            panic!("expected RelabelDecl");
+        }
+    }
+
+    #[test]
+    fn parse_relabel_wildcard_source() {
+        // GIVEN: relabel audit_target: _ -> AuditTarget
+        // THEN: from == None (wildcard), to == Some("AuditTarget")
+        let src = "pub relabel audit_target: _ -> AuditTarget";
+        let (mut p, lex_errs) = Parser::new(src);
+        assert!(lex_errs.is_empty(), "lex errors: {:?}", lex_errs);
+        let prog = p.parse_program();
+        assert!(p.errors.is_empty(), "parse errors: {:?}", p.errors);
+        assert_eq!(prog.declarations.len(), 1);
+        if let Decl::Relabel(rd) = &prog.declarations[0] {
+            assert_eq!(rd.from, None, "wildcard `_` source should parse as None");
+            assert_eq!(rd.to, Some("AuditTarget".to_string()));
+        } else {
+            panic!("expected RelabelDecl");
+        }
+    }
+
+    #[test]
+    fn parse_relabel_both_wildcards() {
+        // GIVEN: relabel symmetric: _ -> _
+        // THEN: from == None, to == None (erase label both directions)
+        let src = "pub relabel symmetric: _ -> _";
+        let (mut p, lex_errs) = Parser::new(src);
+        assert!(lex_errs.is_empty(), "lex errors: {:?}", lex_errs);
+        let prog = p.parse_program();
+        assert!(p.errors.is_empty(), "parse errors: {:?}", p.errors);
+        if let Decl::Relabel(rd) = &prog.declarations[0] {
+            assert_eq!(rd.from, None);
+            assert_eq!(rd.to, None);
+        } else {
+            panic!("expected RelabelDecl");
+        }
     }
 }

@@ -101,7 +101,7 @@ fn encode_number(n: Float) -> String {
     n.to_string()
 }
 
-total fn json_escape(s: String) -> String {
+pub total fn json_escape(s: String) -> String {
     let chars: List[String] = s.chars();
     let len: Int = chars.len();
     let out: ref String = "";
