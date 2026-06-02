@@ -61,9 +61,9 @@ const MAX_ARGS: usize = 8;
 /// System discriminant: shut down the actor.
 const DISC_SHUTDOWN: i64 = -1;
 /// System discriminant: exit signal from a linked actor.
-const _DISC_EXIT_SIGNAL: i64 = -2;
+const DISC_EXIT_SIGNAL: i64 = -2;
 /// System discriminant: down signal from a monitored actor.
-const _DISC_DOWN_SIGNAL: i64 = -3;
+const DISC_DOWN_SIGNAL: i64 = -3;
 
 /// An in-flight actor message: behavior discriminant + packed i64 arguments.
 struct MvlMsg {
@@ -182,9 +182,16 @@ fn global_link_registry() -> &'static Mutex<LinkRegistry> {
 }
 
 /// Process an actor's death: notify linked actors and monitors.
+///
+/// Collects all notification targets and clones their senders under the lock,
+/// then sends all messages outside the lock to avoid deadlock with `BoundedBlock`
+/// senders that may block when the target's mailbox is full.
 fn process_actor_exit(dead_id: ActorId, reason: i64) {
-    let (kill_targets, exit_targets, down_targets) = {
-        let mut reg = global_link_registry().lock().unwrap();
+    // Phase 1: collect targets and clone their senders under the lock.
+    let (kill_senders, exit_senders, down_senders) = {
+        let mut reg = global_link_registry()
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
 
         let linked = reg.links.remove(&dead_id).unwrap_or_default();
         for &peer in &linked {
@@ -193,60 +200,60 @@ fn process_actor_exit(dead_id: ActorId, reason: i64) {
             }
         }
 
-        let mut kill_targets: Vec<ActorId> = Vec::new();
-        let mut exit_targets: Vec<(ActorId, i64)> = Vec::new();
+        let mut kill_senders: Vec<MvlSender> = Vec::new();
+        let mut exit_senders: Vec<(MvlSender, i64)> = Vec::new();
         for peer in linked {
-            if reg.actors.get(&peer).map_or(false, |e| e.traps_exit) {
-                exit_targets.push((peer, reason));
-            } else {
-                kill_targets.push(peer);
+            if let Some(entry) = reg.actors.get(&peer) {
+                if entry.traps_exit {
+                    exit_senders.push((entry.sender.clone(), reason));
+                } else {
+                    kill_senders.push(entry.sender.clone());
+                }
             }
         }
 
         let monitored = reg.monitors.remove(&dead_id).unwrap_or_default();
-        for &(mid, _) in &monitored {
+        let mut down_senders: Vec<(MvlSender, MonitorId)> = Vec::new();
+        for (mid, watcher) in monitored {
             reg.monitor_targets.remove(&mid);
+            if let Some(entry) = reg.actors.get(&watcher) {
+                down_senders.push((entry.sender.clone(), mid));
+            }
         }
 
         reg.actors.remove(&dead_id);
 
-        (kill_targets, exit_targets, monitored)
+        (kill_senders, exit_senders, down_senders)
     };
 
-    let reg = global_link_registry().lock().unwrap();
-
-    for target in kill_targets {
-        if let Some(entry) = reg.actors.get(&target) {
-            entry.sender.send_msg(MvlMsg {
-                disc: DISC_SHUTDOWN,
-                args: [0i64; MAX_ARGS],
-            });
-        }
+    // Phase 2: send all messages outside the lock — avoids deadlock with
+    // BoundedBlock senders that may block when the target's mailbox is full.
+    for sender in kill_senders {
+        sender.send_msg(MvlMsg {
+            disc: DISC_SHUTDOWN,
+            args: [0i64; MAX_ARGS],
+        });
     }
 
-    for (target, exit_reason) in exit_targets {
-        if let Some(entry) = reg.actors.get(&target) {
-            let mut args = [0i64; MAX_ARGS];
-            args[0] = dead_id as i64;
-            args[1] = exit_reason;
-            entry.sender.send_msg(MvlMsg {
-                disc: _DISC_EXIT_SIGNAL,
-                args,
-            });
-        }
+    for (sender, exit_reason) in exit_senders {
+        let mut args = [0i64; MAX_ARGS];
+        args[0] = dead_id as i64;
+        args[1] = exit_reason;
+        sender.send_msg(MvlMsg {
+            disc: DISC_EXIT_SIGNAL,
+            args,
+        });
     }
 
-    for (mid, watcher) in down_targets {
-        if let Some(entry) = reg.actors.get(&watcher) {
-            let mut args = [0i64; MAX_ARGS];
-            args[0] = dead_id as i64;
-            args[1] = reason;
-            args[2] = mid as i64;
-            entry.sender.send_msg(MvlMsg {
-                disc: _DISC_DOWN_SIGNAL,
-                args,
-            });
-        }
+    for (sender, mid) in down_senders {
+        let mut args = [0i64; MAX_ARGS];
+        args[0] = dead_id as i64;
+        args[1] = reason;
+        args[2] = mid as i64;
+        sender.send_msg(MvlMsg {
+            disc: DISC_DOWN_SIGNAL,
+            args,
+        });
     }
 }
 
@@ -308,7 +315,9 @@ pub unsafe extern "C" fn mvl_actor_spawn(
 
     // Register in link/monitor registry.
     {
-        let mut reg = global_link_registry().lock().unwrap();
+        let mut reg = global_link_registry()
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
         reg.actors.insert(
             actor_id,
             ActorEntry {
@@ -333,8 +342,11 @@ pub unsafe extern "C" fn mvl_actor_spawn(
                 if msg.disc == DISC_SHUTDOWN {
                     return false; // shutdown requested
                 }
-                // ExitSignal and DownSignal: currently no user handler,
-                // just continue processing (actor traps the signal by surviving).
+                // TODO(#1177): ExitSignal and DownSignal are silently discarded
+                // here regardless of the `traps_exit` flag. The LLVM backend does
+                // not yet have a mechanism for user code to handle these signals
+                // (unlike the Rust backend which has typed enum variants). The
+                // actor survives, but the signal data (from_id, reason) is lost.
                 if msg.disc < 0 {
                     continue;
                 }
@@ -479,7 +491,9 @@ pub unsafe extern "C" fn mvl_link(handle_a: *mut u8, handle_b: *mut u8) {
     }
     let a = &*(handle_a as *const MvlActorHandle);
     let b = &*(handle_b as *const MvlActorHandle);
-    let mut reg = global_link_registry().lock().unwrap();
+    let mut reg = global_link_registry()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
     reg.links.entry(a.actor_id).or_default().insert(b.actor_id);
     reg.links.entry(b.actor_id).or_default().insert(a.actor_id);
 }
@@ -496,7 +510,9 @@ pub unsafe extern "C" fn mvl_unlink(handle_a: *mut u8, handle_b: *mut u8) {
     }
     let a = &*(handle_a as *const MvlActorHandle);
     let b = &*(handle_b as *const MvlActorHandle);
-    let mut reg = global_link_registry().lock().unwrap();
+    let mut reg = global_link_registry()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
     if let Some(set) = reg.links.get_mut(&a.actor_id) {
         set.remove(&b.actor_id);
     }
@@ -520,7 +536,9 @@ pub unsafe extern "C" fn mvl_monitor(watcher: *mut u8, target: *mut u8) -> i64 {
     let w = &*(watcher as *const MvlActorHandle);
     let t = &*(target as *const MvlActorHandle);
     let mid = NEXT_MONITOR_ID.fetch_add(1, Ordering::Relaxed);
-    let mut reg = global_link_registry().lock().unwrap();
+    let mut reg = global_link_registry()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
     reg.monitors
         .entry(t.actor_id)
         .or_default()
@@ -533,7 +551,9 @@ pub unsafe extern "C" fn mvl_monitor(watcher: *mut u8, target: *mut u8) -> i64 {
 #[no_mangle]
 pub extern "C" fn mvl_demonitor(monitor_id: i64) {
     let mid = monitor_id as u64;
-    let mut reg = global_link_registry().lock().unwrap();
+    let mut reg = global_link_registry()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
     if let Some(target) = reg.monitor_targets.remove(&mid) {
         if let Some(list) = reg.monitors.get_mut(&target) {
             list.retain(|(m, _)| *m != mid);
@@ -555,7 +575,9 @@ pub unsafe extern "C" fn mvl_set_trap_exit(handle: *mut u8) {
         return;
     }
     let actor = &*(handle as *const MvlActorHandle);
-    let mut reg = global_link_registry().lock().unwrap();
+    let mut reg = global_link_registry()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
     if let Some(entry) = reg.actors.get_mut(&actor.actor_id) {
         entry.traps_exit = true;
     }

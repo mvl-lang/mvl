@@ -25,6 +25,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
 
+type KillFn = Arc<dyn Fn() + Send + Sync>;
+type ExitNotifyFn = Arc<dyn Fn(ActorId, ExitReason) + Send + Sync>;
+type DownNotifyFn = Arc<dyn Fn(ActorId, ExitReason, MonitorId) + Send + Sync>;
+
 // ── Actor identity ────────────────────────────────────────────────────────
 
 /// Unique identifier for an actor instance, assigned at spawn time.
@@ -267,15 +271,15 @@ where
 struct ActorControls {
     /// Send a `_Shutdown` poison pill into the actor's typed mailbox.
     /// The dispatch loop receives it and returns `false`, stopping the actor.
-    kill_fn: Box<dyn Fn() + Send + Sync>,
+    kill_fn: KillFn,
 
     /// Send a `_ExitSignal { from_id, reason }` into the actor's typed mailbox.
     /// Only called when the actor has `traps_exit` set.
-    exit_notify_fn: Box<dyn Fn(ActorId, ExitReason) + Send + Sync>,
+    exit_notify_fn: ExitNotifyFn,
 
     /// Send a `_DownSignal { from_id, reason, monitor_id }` into the actor's mailbox.
     /// Called when a monitored actor dies.
-    down_notify_fn: Box<dyn Fn(ActorId, ExitReason, MonitorId) + Send + Sync>,
+    down_notify_fn: DownNotifyFn,
 
     /// Whether this actor traps exit signals from linked actors.
     traps_exit: bool,
@@ -324,13 +328,13 @@ pub fn mvl_register_actor_controls(
     down_notify_fn: Box<dyn Fn(ActorId, ExitReason, MonitorId) + Send + Sync>,
     traps_exit: bool,
 ) {
-    let mut reg = global_registry().lock().unwrap();
+    let mut reg = global_registry().lock().unwrap_or_else(|p| p.into_inner());
     reg.controls.insert(
         id,
         ActorControls {
-            kill_fn,
-            exit_notify_fn,
-            down_notify_fn,
+            kill_fn: Arc::from(kill_fn),
+            exit_notify_fn: Arc::from(exit_notify_fn),
+            down_notify_fn: Arc::from(down_notify_fn),
             traps_exit,
         },
     );
@@ -341,14 +345,14 @@ pub fn mvl_register_actor_controls(
 /// If either actor dies, the other is either killed (default) or receives
 /// an exit signal (if it has `traps_exit` set).
 pub fn mvl_link(a: ActorId, b: ActorId) {
-    let mut reg = global_registry().lock().unwrap();
+    let mut reg = global_registry().lock().unwrap_or_else(|p| p.into_inner());
     reg.links.entry(a).or_default().insert(b);
     reg.links.entry(b).or_default().insert(a);
 }
 
 /// Remove a bidirectional link between two actors.
 pub fn mvl_unlink(a: ActorId, b: ActorId) {
-    let mut reg = global_registry().lock().unwrap();
+    let mut reg = global_registry().lock().unwrap_or_else(|p| p.into_inner());
     if let Some(set) = reg.links.get_mut(&a) {
         set.remove(&b);
     }
@@ -362,7 +366,7 @@ pub fn mvl_unlink(a: ActorId, b: ActorId) {
 /// Returns a `MonitorId` that can be passed to [`mvl_demonitor`].
 pub fn mvl_monitor(watcher: ActorId, target: ActorId) -> MonitorId {
     let mid = next_monitor_id();
-    let mut reg = global_registry().lock().unwrap();
+    let mut reg = global_registry().lock().unwrap_or_else(|p| p.into_inner());
     reg.monitors.entry(target).or_default().push((mid, watcher));
     reg.monitor_targets.insert(mid, target);
     mid
@@ -370,7 +374,7 @@ pub fn mvl_monitor(watcher: ActorId, target: ActorId) -> MonitorId {
 
 /// Remove a monitor.
 pub fn mvl_demonitor(id: MonitorId) {
-    let mut reg = global_registry().lock().unwrap();
+    let mut reg = global_registry().lock().unwrap_or_else(|p| p.into_inner());
     if let Some(target) = reg.monitor_targets.remove(&id) {
         if let Some(list) = reg.monitors.get_mut(&target) {
             list.retain(|(mid, _)| *mid != id);
@@ -383,7 +387,7 @@ pub fn mvl_demonitor(id: MonitorId) {
 /// When a linked actor dies, this actor receives an exit notification
 /// instead of being killed.
 pub fn mvl_set_trap_exit(id: ActorId) {
-    let mut reg = global_registry().lock().unwrap();
+    let mut reg = global_registry().lock().unwrap_or_else(|p| p.into_inner());
     if let Some(ctrl) = reg.controls.get_mut(&id) {
         ctrl.traps_exit = true;
     }
@@ -394,15 +398,22 @@ pub fn mvl_set_trap_exit(id: ActorId) {
 /// Called automatically when an actor's dispatch loop exits (normal, panic,
 /// or shutdown). Runs on the dying actor's thread.
 ///
+/// Collects all notification closures under the lock, then executes them
+/// outside the lock to avoid deadlock with `BoundedBlock` senders.
+///
 /// For each linked actor:
 /// - If it has `traps_exit`: send an `_ExitSignal` message
 /// - Otherwise: send a `_Shutdown` to kill it (cascade)
 ///
 /// For each monitor watcher: send a `_DownSignal` message.
 pub fn mvl_process_exit(dead_id: ActorId, reason: ExitReason) {
-    // Collect actions under the lock, then execute outside to avoid deadlock.
-    let (kill_targets, exit_targets, down_targets) = {
-        let mut reg = global_registry().lock().unwrap();
+    // Phase 1: collect Arc-cloned closures under the lock.
+    let (kill_fns, exit_fns, down_fns): (
+        Vec<KillFn>,
+        Vec<(ExitNotifyFn, ActorId, ExitReason)>,
+        Vec<(DownNotifyFn, ActorId, ExitReason, MonitorId)>,
+    ) = {
+        let mut reg = global_registry().lock().unwrap_or_else(|p| p.into_inner());
 
         // Gather linked actors.
         let linked = reg.links.remove(&dead_id).unwrap_or_default();
@@ -414,50 +425,299 @@ pub fn mvl_process_exit(dead_id: ActorId, reason: ExitReason) {
             }
         }
 
-        // Partition linked actors by trap_exit flag.
-        let mut kill_targets: Vec<ActorId> = Vec::new();
-        let mut exit_targets: Vec<(ActorId, ExitReason)> = Vec::new();
+        // Partition linked actors by trap_exit flag, cloning Arc closures.
+        let mut kill_fns: Vec<KillFn> = Vec::new();
+        let mut exit_fns: Vec<(ExitNotifyFn, ActorId, ExitReason)> = Vec::new();
         for peer in linked {
-            if reg.controls.get(&peer).map_or(false, |c| c.traps_exit) {
-                exit_targets.push((peer, reason));
-            } else {
-                kill_targets.push(peer);
+            if let Some(ctrl) = reg.controls.get(&peer) {
+                if ctrl.traps_exit {
+                    exit_fns.push((Arc::clone(&ctrl.exit_notify_fn), dead_id, reason));
+                } else {
+                    kill_fns.push(Arc::clone(&ctrl.kill_fn));
+                }
             }
         }
 
-        // Gather monitors.
+        // Gather monitors, cloning Arc closures.
         let monitored = reg.monitors.remove(&dead_id).unwrap_or_default();
-        let down_targets: Vec<(MonitorId, ActorId)> = monitored;
-
-        // Clean up monitor reverse index.
-        for &(mid, _) in &down_targets {
+        let mut down_fns: Vec<(DownNotifyFn, ActorId, ExitReason, MonitorId)> = Vec::new();
+        for (mid, watcher) in monitored {
             reg.monitor_targets.remove(&mid);
+            if let Some(ctrl) = reg.controls.get(&watcher) {
+                down_fns.push((Arc::clone(&ctrl.down_notify_fn), dead_id, reason, mid));
+            }
         }
 
         // Remove dead actor's controls.
         reg.controls.remove(&dead_id);
 
-        (kill_targets, exit_targets, down_targets)
+        (kill_fns, exit_fns, down_fns)
     };
 
-    // Execute notifications outside the lock.
-    let reg = global_registry().lock().unwrap();
-
-    for target in kill_targets {
-        if let Some(ctrl) = reg.controls.get(&target) {
-            (ctrl.kill_fn)();
-        }
+    // Phase 2: execute all notifications outside the lock — avoids deadlock
+    // with BoundedBlock senders that may block when the target's mailbox is full.
+    for kill_fn in &kill_fns {
+        kill_fn();
     }
 
-    for (target, exit_reason) in exit_targets {
-        if let Some(ctrl) = reg.controls.get(&target) {
-            (ctrl.exit_notify_fn)(dead_id, exit_reason);
-        }
+    for (exit_fn, from_id, exit_reason) in &exit_fns {
+        exit_fn(*from_id, *exit_reason);
     }
 
-    for (mid, watcher) in down_targets {
-        if let Some(ctrl) = reg.controls.get(&watcher) {
-            (ctrl.down_notify_fn)(dead_id, reason, mid);
-        }
+    for (down_fn, from_id, exit_reason, mid) in &down_fns {
+        down_fn(*from_id, *exit_reason, *mid);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Helper: register an actor with mock closures that log into shared state.
+    fn register_mock_actor(
+        id: ActorId,
+        traps_exit: bool,
+        kill_log: Arc<Mutex<Vec<ActorId>>>,
+        exit_log: Arc<Mutex<Vec<(ActorId, ActorId, ExitReason)>>>,
+        down_log: Arc<Mutex<Vec<(ActorId, ActorId, ExitReason, MonitorId)>>>,
+    ) {
+        let kill_id = id;
+        let kl = Arc::clone(&kill_log);
+        let exit_id = id;
+        let el = Arc::clone(&exit_log);
+        let down_id = id;
+        let dl = Arc::clone(&down_log);
+        mvl_register_actor_controls(
+            id,
+            Box::new(move || {
+                kl.lock().unwrap().push(kill_id);
+            }),
+            Box::new(move |from, reason| {
+                el.lock().unwrap().push((exit_id, from, reason));
+            }),
+            Box::new(move |from, reason, mid| {
+                dl.lock().unwrap().push((down_id, from, reason, mid));
+            }),
+            traps_exit,
+        );
+    }
+
+    #[test]
+    fn linked_actor_killed_on_death() {
+        let kill_log = Arc::new(Mutex::new(Vec::new()));
+        let exit_log = Arc::new(Mutex::new(Vec::new()));
+        let down_log = Arc::new(Mutex::new(Vec::new()));
+
+        let a = mvl_next_actor_id();
+        let b = mvl_next_actor_id();
+        register_mock_actor(
+            a,
+            false,
+            Arc::clone(&kill_log),
+            Arc::clone(&exit_log),
+            Arc::clone(&down_log),
+        );
+        register_mock_actor(
+            b,
+            false,
+            Arc::clone(&kill_log),
+            Arc::clone(&exit_log),
+            Arc::clone(&down_log),
+        );
+
+        mvl_link(a, b);
+        mvl_process_exit(a, 1); // actor A panicked
+
+        let kills = kill_log.lock().unwrap();
+        assert_eq!(
+            *kills,
+            vec![b],
+            "linked actor B should be killed when A dies"
+        );
+        assert!(
+            exit_log.lock().unwrap().is_empty(),
+            "no exit signals for non-trapping actors"
+        );
+    }
+
+    #[test]
+    fn traps_exit_receives_exit_signal_instead_of_kill() {
+        let kill_log = Arc::new(Mutex::new(Vec::new()));
+        let exit_log = Arc::new(Mutex::new(Vec::new()));
+        let down_log = Arc::new(Mutex::new(Vec::new()));
+
+        let a = mvl_next_actor_id();
+        let b = mvl_next_actor_id();
+        register_mock_actor(
+            a,
+            false,
+            Arc::clone(&kill_log),
+            Arc::clone(&exit_log),
+            Arc::clone(&down_log),
+        );
+        register_mock_actor(
+            b,
+            true,
+            Arc::clone(&kill_log),
+            Arc::clone(&exit_log),
+            Arc::clone(&down_log),
+        );
+
+        mvl_link(a, b);
+        mvl_process_exit(a, 1); // actor A panicked
+
+        assert!(
+            kill_log.lock().unwrap().is_empty(),
+            "trapping actor should NOT be killed"
+        );
+        let exits = exit_log.lock().unwrap();
+        assert_eq!(exits.len(), 1);
+        assert_eq!(
+            exits[0],
+            (b, a, 1),
+            "B should receive exit signal from A with reason=1"
+        );
+    }
+
+    #[test]
+    fn monitor_watcher_receives_down_signal() {
+        let kill_log = Arc::new(Mutex::new(Vec::new()));
+        let exit_log = Arc::new(Mutex::new(Vec::new()));
+        let down_log = Arc::new(Mutex::new(Vec::new()));
+
+        let target = mvl_next_actor_id();
+        let watcher = mvl_next_actor_id();
+        register_mock_actor(
+            target,
+            false,
+            Arc::clone(&kill_log),
+            Arc::clone(&exit_log),
+            Arc::clone(&down_log),
+        );
+        register_mock_actor(
+            watcher,
+            false,
+            Arc::clone(&kill_log),
+            Arc::clone(&exit_log),
+            Arc::clone(&down_log),
+        );
+
+        let mid = mvl_monitor(watcher, target);
+        mvl_process_exit(target, 0); // target exited normally
+
+        let downs = down_log.lock().unwrap();
+        assert_eq!(downs.len(), 1);
+        assert_eq!(
+            downs[0],
+            (watcher, target, 0, mid),
+            "watcher should receive down signal"
+        );
+        assert!(
+            kill_log.lock().unwrap().is_empty(),
+            "monitor does not kill watcher"
+        );
+    }
+
+    #[test]
+    fn demonitor_prevents_down_signal() {
+        let kill_log = Arc::new(Mutex::new(Vec::new()));
+        let exit_log = Arc::new(Mutex::new(Vec::new()));
+        let down_log = Arc::new(Mutex::new(Vec::new()));
+
+        let target = mvl_next_actor_id();
+        let watcher = mvl_next_actor_id();
+        register_mock_actor(
+            target,
+            false,
+            Arc::clone(&kill_log),
+            Arc::clone(&exit_log),
+            Arc::clone(&down_log),
+        );
+        register_mock_actor(
+            watcher,
+            false,
+            Arc::clone(&kill_log),
+            Arc::clone(&exit_log),
+            Arc::clone(&down_log),
+        );
+
+        let mid = mvl_monitor(watcher, target);
+        mvl_demonitor(mid);
+        mvl_process_exit(target, 0);
+
+        assert!(
+            down_log.lock().unwrap().is_empty(),
+            "demonitored target should not send down signal"
+        );
+    }
+
+    #[test]
+    fn unlink_prevents_kill_cascade() {
+        let kill_log = Arc::new(Mutex::new(Vec::new()));
+        let exit_log = Arc::new(Mutex::new(Vec::new()));
+        let down_log = Arc::new(Mutex::new(Vec::new()));
+
+        let a = mvl_next_actor_id();
+        let b = mvl_next_actor_id();
+        register_mock_actor(
+            a,
+            false,
+            Arc::clone(&kill_log),
+            Arc::clone(&exit_log),
+            Arc::clone(&down_log),
+        );
+        register_mock_actor(
+            b,
+            false,
+            Arc::clone(&kill_log),
+            Arc::clone(&exit_log),
+            Arc::clone(&down_log),
+        );
+
+        mvl_link(a, b);
+        mvl_unlink(a, b);
+        mvl_process_exit(a, 1);
+
+        assert!(
+            kill_log.lock().unwrap().is_empty(),
+            "unlinked actor should not be killed"
+        );
+    }
+
+    #[test]
+    fn set_trap_exit_changes_behavior() {
+        let kill_log = Arc::new(Mutex::new(Vec::new()));
+        let exit_log = Arc::new(Mutex::new(Vec::new()));
+        let down_log = Arc::new(Mutex::new(Vec::new()));
+
+        let a = mvl_next_actor_id();
+        let b = mvl_next_actor_id();
+        register_mock_actor(
+            a,
+            false,
+            Arc::clone(&kill_log),
+            Arc::clone(&exit_log),
+            Arc::clone(&down_log),
+        );
+        register_mock_actor(
+            b,
+            false,
+            Arc::clone(&kill_log),
+            Arc::clone(&exit_log),
+            Arc::clone(&down_log),
+        );
+
+        mvl_link(a, b);
+        mvl_set_trap_exit(b); // dynamically enable trap
+
+        mvl_process_exit(a, 1);
+
+        assert!(
+            kill_log.lock().unwrap().is_empty(),
+            "dynamically trapping actor should NOT be killed"
+        );
+        let exits = exit_log.lock().unwrap();
+        assert_eq!(exits.len(), 1);
+        assert_eq!(exits[0], (b, a, 1));
     }
 }
