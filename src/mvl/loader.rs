@@ -489,7 +489,7 @@ pub fn collect_llvm_text_builtins(
 /// type prefix is translated to a short module prefix (`String` → `str`,
 /// `List` → `list`, etc.) to match the runtime naming convention.
 ///
-/// Mirrors the logic in the inkwell backend's `derive_c_abi_symbol`.
+/// Derives the C-ABI symbol name for the LLVM runtime.
 fn derive_builtin_c_symbol(module: &str, receiver_type: &Option<String>, fn_name: &str) -> String {
     // Extension method: use the type-based prefix (e.g. String::from_chars → _mvl_str_from_chars)
     if let Some(recv) = receiver_type {
@@ -510,7 +510,7 @@ fn derive_builtin_c_symbol(module: &str, receiver_type: &Option<String>, fn_name
 
 /// Derive the C-ABI symbol name for a module-level `builtin fn`.
 ///
-/// Mirrors the logic in the inkwell backend's `derive_c_abi_symbol`.
+/// Derives the C-ABI symbol name for the LLVM runtime.
 fn derive_c_abi_symbol(module: &str, fn_name: &str) -> String {
     match (module, fn_name) {
         ("time", "sleep") => "_mvl_time_thread_sleep".to_string(),

@@ -59,6 +59,49 @@ pub(super) fn build_project_llvm_text(path: &str) {
     }
 }
 
+/// Compile an MVL file to LLVM IR and run it via `lli`.
+/// `mvl run --backend=llvm <file>`
+pub(super) fn run_project_llvm_text(path: &str) {
+    let (prog, _src) = super::parse_or_exit(path);
+    let module_name = loader::stem(path);
+    let (prelude, builtins) = prepare_llvm_text(&prog);
+    let mut compiler = LlvmTextCompiler::new();
+    compiler.builtin_symbols = builtins;
+    let ir = match compiler.compile_to_ir_with_prelude(&prelude, &prog, &module_name) {
+        Ok(ir) => ir,
+        Err(e) => {
+            eprintln!("error: llvm codegen failed: {e}");
+            process::exit(1);
+        }
+    };
+
+    let lli_bin = lli::find_lli().unwrap_or_else(|| {
+        eprintln!("error: `lli` not found — install LLVM (brew install llvm)");
+        process::exit(1);
+    });
+
+    let tmp = tempfile::NamedTempFile::with_suffix(".ll").unwrap_or_else(|e| {
+        eprintln!("error: cannot create temp file: {e}");
+        process::exit(1);
+    });
+    fs::write(tmp.path(), &ir).unwrap_or_else(|e| {
+        eprintln!("error: cannot write IR: {e}");
+        process::exit(1);
+    });
+
+    let mut cmd = process::Command::new(&lli_bin);
+    if let Some(lib) = lli::find_mvl_runtime_c_lib() {
+        cmd.arg(format!("--load={}", lib.display()));
+    }
+    let status = cmd.arg(tmp.path()).status().unwrap_or_else(|e| {
+        eprintln!("error: failed to run lli: {e}");
+        process::exit(1);
+    });
+    if !status.success() {
+        process::exit(status.code().unwrap_or(1));
+    }
+}
+
 /// Run LLVM text backend tests: discover `.mvl` files with `// expect:` annotations,
 /// compile via `LlvmTextCompiler`, execute via `lli`, and compare output.
 /// `mvl test <path> --backend=llvm`

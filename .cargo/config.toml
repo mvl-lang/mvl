@@ -1,16 +1,14 @@
 # Build configuration for MVL compiler.
 #
-# LLVM backend (default feature, requires LLVM 22 installed):
-#   macOS homebrew (keg-only): add to PATH or set env before building:
-#     export PATH="/opt/homebrew/opt/llvm/bin:$PATH"
-#   Linux: install llvm-22 (apt install llvm-22) — llvm-sys finds it via llvm-config-22.
-#   CI: sets LLVM_SYS_221_PREFIX dynamically in .github/workflows/ci.yml.
-#   Build without LLVM: cargo build --no-default-features
+# LLVM backend (text-based IR emitter, no inkwell/llvm-sys dependency):
+#   Requires `lli` at runtime to execute generated IR.
+#   macOS homebrew: brew install llvm
+#   Linux: apt install llvm-22
 #
 # Z3 backend (default feature, requires Z3 4.x):
 #   macOS homebrew: brew install z3
 #   Linux: apt install libz3-dev  (or equivalent)
-#   Build without Z3: cargo build --features llvm --no-default-features
+#   Build without Z3: cargo build --no-default-features
 
 # Z3_SYS_Z3_HEADER lets z3-sys's build.rs find z3.h (bindgen).
 # force=false: only applied when not already set in the environment.
@@ -18,3 +16,7 @@
 # to prevent this macOS path from being used on the Linux runner.
 [env]
 Z3_SYS_Z3_HEADER = { value = "/opt/homebrew/include/z3.h", force = false }
+# macOS arm64 homebrew: z3 lib directory for the linker.
+# Previously provided transitively by llvm-sys; now set explicitly.
+# Linux CI must set LIBRARY_PATH=/usr/lib/x86_64-linux-gnu (or equivalent).
+LIBRARY_PATH = { value = "/opt/homebrew/lib", force = false }

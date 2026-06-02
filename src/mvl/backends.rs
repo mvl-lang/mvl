@@ -11,8 +11,6 @@
 //! 2. Implement the `Backend` trait for your emitter type.
 //! 3. Wire it up in `src/main.rs` via `parse_backend`.
 
-#[cfg(feature = "llvm")]
-pub mod llvm;
 pub mod llvm_text;
 pub mod rust;
 
