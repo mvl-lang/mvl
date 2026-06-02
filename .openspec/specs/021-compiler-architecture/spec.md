@@ -182,7 +182,7 @@ cleaner composition of instrumentation passes.
 A dedicated monomorphization pass MAY be added to unify the handling of
 generic functions across backends.
 
-**Implementation:** `src/mvl/passes/monomorphize.rs` (future)
+**Implementation:** `src/mvl/passes/mono.rs`
 
 #### Scenario: Generic function specialization
 
