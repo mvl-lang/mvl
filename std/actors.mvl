@@ -56,12 +56,14 @@ pub type DownSignal = struct {
 ///
 /// Links are symmetric: `link(a, b)` is the same as `link(b, a)`.
 pub fn link(a: Int, b: Int) -> Unit ! Spawn {
-    // Backed by mvl_link in the runtime.
+    // TODO(#1177): stub — runtime wiring not yet connected.
+    // Needs extern bridge to mvl_link in the runtime.
 }
 
 /// Remove a bidirectional link between two actors.
 pub fn unlink(a: Int, b: Int) -> Unit ! Spawn {
-    // Backed by mvl_unlink in the runtime.
+    // TODO(#1177): stub — runtime wiring not yet connected.
+    // Needs extern bridge to mvl_unlink in the runtime.
 }
 
 // ── Monitor functions ────────────────────────────────────────────────────
@@ -73,10 +75,13 @@ pub fn unlink(a: Int, b: Int) -> Unit ! Spawn {
 ///
 /// Returns a monitor reference that can be passed to `demonitor()`.
 pub fn monitor(watcher: Int, target: Int) -> Int ! Spawn {
+    // TODO(#1177): stub — runtime wiring not yet connected.
+    // Needs extern bridge to mvl_monitor in the runtime.
     0
 }
 
 /// Remove a previously created monitor.
 pub fn demonitor(monitor_ref: Int) -> Unit ! Spawn {
-    // Backed by mvl_demonitor in the runtime.
+    // TODO(#1177): stub — runtime wiring not yet connected.
+    // Needs extern bridge to mvl_demonitor in the runtime.
 }

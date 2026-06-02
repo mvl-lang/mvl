@@ -120,6 +120,40 @@ fn actor_pub_visibility() {
     assert!(ad.visible, "pub actor should have visible = true");
 }
 
+/// GIVEN: actor with `traps_exit` modifier
+/// WHEN: parsed
+/// THEN: `traps_exit` is true
+#[test]
+fn actor_traps_exit_flag_set() {
+    let src = r#"actor Supervisor traps_exit {
+        child_count: Int
+        pub fn notify(val id: Int) { }
+    }"#;
+    let Decl::Actor(ad) = parse_decl(src) else {
+        panic!("expected Decl::Actor");
+    };
+    assert_eq!(ad.name, "Supervisor");
+    assert!(
+        ad.traps_exit,
+        "actor with traps_exit should have traps_exit = true"
+    );
+}
+
+/// GIVEN: actor without `traps_exit` modifier
+/// WHEN: parsed
+/// THEN: `traps_exit` is false
+#[test]
+fn actor_without_traps_exit_flag_is_false() {
+    let src = "actor Worker { name: String }";
+    let Decl::Actor(ad) = parse_decl(src) else {
+        panic!("expected Decl::Actor");
+    };
+    assert!(
+        !ad.traps_exit,
+        "actor without traps_exit should have traps_exit = false"
+    );
+}
+
 // ── Actor creation expression (#63) ──────────────────────────────────────────
 
 /// GIVEN: `actor Counter { count: 0 }` in expression position

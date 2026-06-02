@@ -2635,6 +2635,47 @@ fn actor_decl_emits_runtime_infrastructure() {
     );
 }
 
+/// Actor with `traps_exit` flag emits `true` in `mvl_register_actor_controls`. (#1177)
+#[test]
+fn actor_traps_exit_emits_true_in_register() {
+    let src = r#"
+        actor Supervisor traps_exit {
+            child_count: Int,
+            pub fn notify(val id: Int) {
+            }
+        }
+    "#;
+    let rust = transpile_src(src);
+    // traps_exit = true passed as 5th argument to mvl_register_actor_controls.
+    assert_contains(&rust, "mvl_register_actor_controls(");
+    assert_contains(&rust, "true,");
+    // System variants present in mailbox enum.
+    assert_contains(&rust, "SupervisorMailbox::_Shutdown => return false,");
+    assert_contains(
+        &rust,
+        "SupervisorMailbox::_ExitSignal { _from_id, _reason } => {}",
+    );
+    assert_contains(
+        &rust,
+        "SupervisorMailbox::_DownSignal { _from_id, _reason, _monitor_id } => {}",
+    );
+}
+
+/// Actor without `traps_exit` emits `false` in `mvl_register_actor_controls`. (#1177)
+#[test]
+fn actor_without_traps_exit_emits_false_in_register() {
+    let src = r#"
+        actor Worker {
+            name: Int,
+            pub fn do_work(val n: Int) {
+            }
+        }
+    "#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "mvl_register_actor_controls(");
+    assert_contains(&rust, "false,");
+}
+
 /// Actor with `pub` visibility emits `pub struct` handle. (#695)
 #[test]
 fn pub_actor_decl_emits_pub_struct() {
