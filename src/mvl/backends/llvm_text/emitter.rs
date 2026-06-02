@@ -3249,6 +3249,27 @@ impl TextEmitter {
                 self.reg_types.insert(reg.clone(), "i1".into());
                 Ok(Some(reg))
             }
+            // Set algebra — intersection / difference / union all share the same
+            // (ptr, ptr) -> ptr C-ABI shape against the i64-element array runtime.
+            ("intersection" | "difference" | "union", "ptr")
+                if args.len() == 1 && matches!(self.mvl_receiver_kind(receiver), Some("Set")) =>
+            {
+                let other = match self.emit_expr(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                let sym = match method {
+                    "intersection" => "_mvl_set_intersection",
+                    "difference" => "_mvl_set_difference",
+                    "union" => "_mvl_set_union",
+                    _ => unreachable!(),
+                };
+                self.ensure_extern(&format!("declare ptr @{sym}(ptr, ptr)"));
+                let reg = self.next_reg();
+                self.push_instr(&format!("{reg} = call ptr @{sym}(ptr {val}, ptr {other})"));
+                self.reg_types.insert(reg.clone(), "ptr".into());
+                Ok(Some(reg))
+            }
             // List/Array/Set slice(start, end) / take(n) / skip(n) — all
             // lower to `_mvl_list_slice(ptr, i64, i64)`.
             ("slice", "ptr") if args.len() == 2 && self.is_list_array_set(receiver) => {

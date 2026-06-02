@@ -662,7 +662,6 @@ fn cross_backend_regex_find_all() {
 /// Both backends must produce identical element counts for set_intersection,
 /// set_difference, and set_union on integer sets.
 #[test]
-#[ignore = "llvm_text: set intersection/difference/union return empty stdout (separate divergence from Set.contains, follow-up needed)"]
 fn cross_backend_set_algebra() {
     let file = corpus_stdlib("set_algebra.mvl");
     let transpiler_out = run_transpiler(&file);

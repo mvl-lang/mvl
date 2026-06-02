@@ -221,8 +221,8 @@ and the `llvm_text` backend (post-ADR-0040, `--backend=llvm` resolves to
 | `cross_backend_box_field_deref` | ✅ fixed | `Box::new`/`*box` codegen for primitive payloads |
 | `cross_backend_list_ufcs_methods` | ✅ fixed | Added `slice`/`take`/`skip` dispatch via `_mvl_list_slice` |
 | `llvm_move_string` | ✅ fixed | Dedupe heap_locals on consume (SSA already tracked) |
+| `cross_backend_set_algebra` | ✅ fixed | Added intersection/difference/union method dispatch in llvm_text emitter (#1198) |
 | `cross_backend_linked_list` | ❌ ignored | Requires non-unit enum payload lowering (`Cons(Int, Box[LL])` — match arms drop payload); separate epic |
-| `cross_backend_set_algebra` | ❌ ignored | llvm_text returns empty stdout for Set intersection/difference/union (separate divergence from Set.contains); follow-up needed |
 
 Each ignored test carries a `reason` string identifying the symptom. New
 divergences MUST be triaged the same way (ignored with reason, follow-up

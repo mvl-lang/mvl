@@ -14,7 +14,7 @@
 - Actor handle self-ref construction (`self` as tag argument) now correctly populates `_id` field — previously missing, causing build failures in examples using the self-ref pattern (e.g. `actor_pingpong`)
 - `Supervisor.remove_child` now cleans the `live` map (keyed by actor ID) to stay consistent with name-keyed maps
 - `Supervisor.on_exit`: budget-exhausted path now removes all tracking for the dead child
-
+- `llvm_text` backend: **Set algebra dispatch** (#1198) — added emitter dispatch for `Set[Int].intersection`, `.difference`, `.union`; the C-ABI runtime exports already existed but no method-call lowering routed to them. `cross_backend_set_algebra` test migrated from `#[ignore]` to strict parity.
 ## [0.176.0] - 2026-06-02
 
 ### Added
