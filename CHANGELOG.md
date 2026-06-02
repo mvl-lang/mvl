@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [0.174.0] - 2026-06-02
+
+### Added
+- `--target=tokio`: actor runtime now uses M:N scheduled tokio tasks instead of OS threads, enabling 1M+ concurrent actors on fixed-size thread pool (#751)
+- End-to-end tests for `--target=tokio` actor output parity with default backend
+
+### Fixed
+- Tokio actor runtime: safer sender.send() from any calling context (uses `runtime().block_on()` instead of `Handle::current()`); logs failures instead of silent drop
+- Mutex poisoning: prefer explicit `.unwrap()` panic over silent recovery in actor handle registry
+- Unit tests: direct task joining eliminates parallel-test race conditions on `MVL_ACTOR_HANDLES`
+- Pre-existing clippy warnings: `missing_const_for_thread_local`, `suspicious_open_options`, `unused_unit` (#1183)
+
 ## [0.173.2] - 2026-06-02
 
 ### Fixed
