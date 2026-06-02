@@ -13,7 +13,7 @@
 // avoid name-collision with Map::remove in the generated Rust).
 
 use std.audit.{AuditLogger, AuditEvent, AuditOutcome,
-               access, modify, deny, with_correlation, with_details,
+               access, modify, deny, fail, with_correlation, with_details,
                file_audit_logger}
 use std.io.{path, write_file, Path, IoError}
 
@@ -21,17 +21,22 @@ use std.io.{path, write_file, Path, IoError}
 
 test fn audit_access_constructor_returns_event() -> Unit {
     let e: AuditEvent = access("user:alice", "patient:42");
-    assert_eq(e.action.is_empty(), false);
+    assert_eq(e.action, "access.read");
 }
 
 test fn audit_modify_constructor_returns_event() -> Unit {
     let e: AuditEvent = modify("service:payment", "order:99", "update.status");
-    assert_eq(e.resource.is_empty(), false);
+    assert_eq(e.action, "update.status");
 }
 
 test fn audit_deny_constructor_returns_event() -> Unit {
     let e: AuditEvent = deny("user:bob", "admin_panel", "insufficient_privilege");
-    assert_eq(e.action.is_empty(), false);
+    assert_eq(e.action, "access.deny");
+    let reason: String = match e.details.get("reason") {
+        Some(s) => s,
+        None    => "",
+    };
+    assert_eq(reason, "insufficient_privilege");
 }
 
 test fn audit_access_outcome_is_success() -> Unit {
@@ -69,11 +74,11 @@ test fn audit_modify_outcome_is_success() -> Unit {
 test fn audit_with_correlation_sets_id() -> Unit {
     let e: AuditEvent = access("user:alice", "patient:42");
     let traced: AuditEvent = with_correlation(e, "trace-abc-123");
-    let has_id: Bool = match traced.correlation_id {
-        Some(_) => true,
-        None    => false,
+    let id: String = match traced.correlation_id {
+        Some(v) => v,
+        None    => "",
     };
-    assert_eq(has_id, true);
+    assert_eq(id, "trace-abc-123");
 }
 
 test fn audit_without_correlation_is_none() -> Unit {
@@ -93,6 +98,21 @@ test fn audit_with_details_does_not_panic() -> Unit {
     assert_eq(enriched.principal.is_empty(), false);
 }
 
+test fn audit_with_details_replaces_existing_details() -> Unit {
+    let e: AuditEvent = deny("user:bob", "secret", "original");
+    let enriched: AuditEvent = with_details(e, {"method": "POST"});
+    let has_method: Bool = match enriched.details.get("method") {
+        Some(_) => true,
+        None    => false,
+    };
+    let has_reason: Bool = match enriched.details.get("reason") {
+        Some(_) => true,
+        None    => false,
+    };
+    assert_eq(has_method, true);
+    assert_eq(has_reason, false);
+}
+
 // ── AuditLogger::emit writes to file ─────────────────────────────────────────
 
 test fn audit_emit_access_does_not_panic() -> Unit ! Audit + FileWrite {
@@ -100,7 +120,7 @@ test fn audit_emit_access_does_not_panic() -> Unit ! Audit + FileWrite {
     let _: Result[Unit, IoError] = write_file(p, "");
     let logger: AuditLogger = file_audit_logger(path("/tmp/mvl_audit_test_808_access.jsonl"));
     let event: AuditEvent = access("user:alice", "patient:42");
-    logger.emit(event);
+    let _: Result[Unit, IoError] = logger.emit(event);
     assert_eq(true, true);
 }
 
@@ -109,7 +129,7 @@ test fn audit_emit_modify_does_not_panic() -> Unit ! Audit + FileWrite {
     let _: Result[Unit, IoError] = write_file(p, "");
     let logger: AuditLogger = file_audit_logger(path("/tmp/mvl_audit_test_808_modify.jsonl"));
     let event: AuditEvent = modify("svc:api", "order:7", "update.status");
-    logger.emit(event);
+    let _: Result[Unit, IoError] = logger.emit(event);
     assert_eq(true, true);
 }
 
@@ -118,7 +138,7 @@ test fn audit_emit_deny_does_not_panic() -> Unit ! Audit + FileWrite {
     let _: Result[Unit, IoError] = write_file(p, "");
     let logger: AuditLogger = file_audit_logger(path("/tmp/mvl_audit_test_808_deny.jsonl"));
     let event: AuditEvent = deny("user:bob", "config:settings", "no_permission");
-    logger.emit(event);
+    let _: Result[Unit, IoError] = logger.emit(event);
     assert_eq(true, true);
 }
 
@@ -130,7 +150,7 @@ test fn audit_emit_with_correlation_does_not_panic() -> Unit ! Audit + FileWrite
         access("user:carol", "report:annual"),
         "trace-xyz-789",
     );
-    logger.emit(event);
+    let _: Result[Unit, IoError] = logger.emit(event);
     assert_eq(true, true);
 }
 
@@ -138,9 +158,18 @@ test fn audit_emit_multiple_events_does_not_panic() -> Unit ! Audit + FileWrite 
     let p: Path = path("/tmp/mvl_audit_test_808_multi.jsonl");
     let _: Result[Unit, IoError] = write_file(p, "");
     let logger: AuditLogger = file_audit_logger(path("/tmp/mvl_audit_test_808_multi.jsonl"));
-    logger.emit(access("user:alice", "record:1"));
-    logger.emit(access("user:alice", "record:2"));
-    logger.emit(deny("user:alice", "admin", "no_role"));
+    let _: Result[Unit, IoError] = logger.emit(access("user:alice", "record:1"));
+    let _: Result[Unit, IoError] = logger.emit(access("user:alice", "record:2"));
+    let _: Result[Unit, IoError] = logger.emit(deny("user:alice", "admin", "no_role"));
+    assert_eq(true, true);
+}
+
+test fn audit_emit_fail_outcome_does_not_panic() -> Unit ! Audit + FileWrite {
+    let p: Path = path("/tmp/mvl_audit_test_808_fail.jsonl");
+    let _: Result[Unit, IoError] = write_file(p, "");
+    let logger: AuditLogger = file_audit_logger(path("/tmp/mvl_audit_test_808_fail.jsonl"));
+    let event: AuditEvent = fail("svc:worker", "db:write", "create.record", "timeout");
+    let _: Result[Unit, IoError] = logger.emit(event);
     assert_eq(true, true);
 }
 
@@ -148,7 +177,7 @@ test fn audit_emit_multiple_events_does_not_panic() -> Unit ! Audit + FileWrite 
 
 fn emit_access_event(logger: AuditLogger, user_id: String) -> Bool ! Audit {
     let event: AuditEvent = access("user:".concat(user_id), "resource:x");
-    logger.emit(event);
+    let _: Result[Unit, IoError] = logger.emit(event);
     true
 }
 
@@ -158,17 +187,36 @@ test fn audit_effect_propagates_through_caller() -> Unit ! Audit + FileWrite {
     assert_eq(emit_access_event(logger, "dave"), true);
 }
 
+// ── fail() constructor ────────────────────────────────────────────────────────
+
+test fn audit_fail_constructor_outcome_is_failure() -> Unit {
+    let e: AuditEvent = fail("svc:worker", "db:write", "create.record", "timeout");
+    let is_failure: Bool = match e.outcome {
+        AuditOutcome::Success => false,
+        AuditOutcome::Failure => true,
+        AuditOutcome::Denied  => false,
+    };
+    assert_eq(is_failure, true);
+}
+
+test fn audit_fail_constructor_stores_reason() -> Unit {
+    let e: AuditEvent = fail("svc:worker", "db:write", "create.record", "timeout");
+    let reason: String = match e.details.get("reason") {
+        Some(s) => s,
+        None    => "",
+    };
+    assert_eq(reason, "timeout");
+}
+
+test fn audit_fail_constructor_stores_action() -> Unit {
+    let e: AuditEvent = fail("svc:worker", "db:write", "create.record", "timeout");
+    assert_eq(e.action, "create.record");
+}
+
 // ── All three outcomes constructable ─────────────────────────────────────────
 
 test fn audit_failure_outcome_is_constructable() -> Unit {
-    let e: AuditEvent = AuditEvent {
-        principal:      "svc:worker",
-        action:         "create.record",
-        resource:       "db:write",
-        outcome:        AuditOutcome::Failure,
-        details:        {"error": "timeout"},
-        correlation_id: None,
-    };
+    let e: AuditEvent = fail("svc:worker", "db:write", "create.record", "timeout");
     let is_failure: Bool = match e.outcome {
         AuditOutcome::Success => false,
         AuditOutcome::Failure => true,

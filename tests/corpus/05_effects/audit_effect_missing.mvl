@@ -1,0 +1,16 @@
+// Corpus: ! Audit effect is enforced — calling emit without declaring ! Audit is a compile error.
+// corpus:expect-fail
+//
+// A function that calls AuditLogger::emit but does NOT declare ! Audit in its
+// signature must be rejected by the compiler.  This locks in the guarantee:
+// "a function without ! Audit in its signature provably never emits audit records."
+
+use std.audit.{AuditLogger, AuditEvent, access, file_audit_logger}
+use std.io.{path, IoError}
+
+// VIOLATION: emit requires ! Audit; this function declares no effects.
+// Expected: effect-missing error (Audit not declared).
+fn log_without_audit_effect(logger: AuditLogger, user_id: String) -> Unit {
+    let event: AuditEvent = access("user:".concat(user_id), "resource:x");
+    let _: Result[Unit, IoError] = logger.emit(event);
+}
