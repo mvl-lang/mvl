@@ -911,3 +911,61 @@ fn snake_game_tests_pass() {
         String::from_utf8_lossy(&out.stderr),
     );
 }
+
+// ── --target=tokio: async actor dispatch (#751) ───────────────────────────
+
+/// `actor_spawn.mvl` compiled with `--target=tokio` must produce the same
+/// output as the default backend: one "ok" line.
+///
+/// Validates that the tokio runtime (Phase 9 Stage 2) correctly runs actor
+/// dispatch loops as tokio tasks and joins them before main exits.
+#[test]
+fn actor_spawn_tokio_target_produces_expected_output() {
+    let file = corpus("actor_spawn.mvl");
+    let out = Command::new(mvl_bin())
+        .args(["run", &file, "--target=tokio"])
+        .output()
+        .expect("failed to run mvl run --target=tokio");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "mvl run actor_spawn.mvl --target=tokio failed;\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("ok"),
+        "expected .ok. in output, got: {stdout:?}\nstderr: {stderr}"
+    );
+}
+
+/// `actor_send.mvl` compiled with `--target=tokio` must produce the same
+/// output as the default backend.
+#[test]
+fn actor_send_tokio_target_matches_default_output() {
+    let file = corpus("actor_send.mvl");
+
+    let default_out = Command::new(mvl_bin())
+        .args(["run", &file])
+        .output()
+        .expect("failed to run mvl run (default)");
+    let tokio_out = Command::new(mvl_bin())
+        .args(["run", &file, "--target=tokio"])
+        .output()
+        .expect("failed to run mvl run --target=tokio");
+
+    assert!(
+        default_out.status.success(),
+        "default run failed: {}",
+        String::from_utf8_lossy(&default_out.stderr)
+    );
+    assert!(
+        tokio_out.status.success(),
+        "tokio run failed: {}",
+        String::from_utf8_lossy(&tokio_out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&default_out.stdout),
+        String::from_utf8_lossy(&tokio_out.stdout),
+        "--target=tokio output must match default backend"
+    );
+}
