@@ -12,6 +12,7 @@
 //!   - `_mvl_set_intersection` — (ptr, ptr) → ptr  (`PtrTwoPtrArgs`)
 //!   - `_mvl_set_difference`   — (ptr, ptr) → ptr  (`PtrTwoPtrArgs`)
 //!   - `_mvl_set_union`        — (ptr, ptr) → ptr  (`PtrTwoPtrArgs`)
+//!   - `_mvl_set_contains_i64` — (ptr, i64) → i1  (Set[Int].contains)
 
 use crate::memory::MvlArray;
 
@@ -86,6 +87,15 @@ pub extern "C" fn _mvl_set_difference(a: *mut MvlArray, b: *mut MvlArray) -> *mu
         }
         result
     }
+}
+
+/// True iff `needle` is present in the i64-element set `arr` (linear scan).
+///
+/// `_mvl_set_contains_i64(arr: *const MvlArray, needle: i64) -> bool`
+#[no_mangle]
+#[allow(unsafe_code)]
+pub extern "C" fn _mvl_set_contains_i64(arr: *const MvlArray, needle: i64) -> bool {
+    unsafe { array_contains_i64(arr, needle) }
 }
 
 /// Return all elements of `a` plus elements of `b` not already in `a`.

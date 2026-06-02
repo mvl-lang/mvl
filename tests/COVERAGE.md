@@ -193,3 +193,36 @@ Priority order — fill the largest gaps first:
 | 18 | `02_types/option_match.mvl` | 4 | positive | Full Option match pattern |
 | 19 | `09_concurrency/iso_transfer.mvl` | 9 | positive | iso consumed and sent |
 | 20 | `07_refinements/proven_refinement.mvl` | 10 | positive | Matching refinement proven |
+
+---
+
+## Cross-Backend Parity — `llvm_text` (#1154)
+
+`tests/cross_backend.rs` enforces stdout parity between the Rust transpiler
+and the `llvm_text` backend (post-ADR-0040, `--backend=llvm` resolves to
+`llvm_text`). Helpers `assert_backends_agree` and `assert_parity` are
+**strict**: a divergence is a test failure, not a logged warning.
+
+### Helpers
+
+| Helper | On `lli` missing | On llvm_text failure | Use case |
+|--------|:---------------:|:--------------------:|----------|
+| `run_llvm_text(file)` | `None` (skip) | **panic** | Default for new tests |
+| `run_llvm_text_or_skip(file)` | `None` (skip) | `None` (logged skip) | Legacy callers, pre-existing known-broken paths |
+| `assert_backends_agree(name)` | skip | **panic** | Compare full stdout against transpiler |
+| `assert_parity(file, expected)` | skip | **panic** | Compare against pinned `expected` |
+| `assert_llvm_output(file, expected)` | skip | **panic** | LLVM-only expected output |
+
+### Known divergences (`#[ignore]`'d, surfaced by #1154)
+
+| Test | Status | Notes |
+|------|--------|-------|
+| `cross_backend_collections_basic` | ✅ fixed | Added `_mvl_set_contains_i64` runtime + dispatch |
+| `cross_backend_box_field_deref` | ✅ fixed | `Box::new`/`*box` codegen for primitive payloads |
+| `cross_backend_list_ufcs_methods` | ✅ fixed | Added `slice`/`take`/`skip` dispatch via `_mvl_list_slice` |
+| `llvm_move_string` | ✅ fixed | Dedupe heap_locals on consume (SSA already tracked) |
+| `cross_backend_linked_list` | ❌ ignored | Requires non-unit enum payload lowering (`Cons(Int, Box[LL])` — match arms drop payload); separate epic |
+
+Each ignored test carries a `reason` string identifying the symptom. New
+divergences MUST be triaged the same way (ignored with reason, follow-up
+issue filed) — never downgraded back to a soft `eprintln!` skip.
