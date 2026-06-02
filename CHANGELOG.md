@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+## [0.177.0] - 2026-06-02
+
+### Added
+- `std.actors`: `Supervisor` actor with `OneForOne` restart strategy — monitors children via links and restarts them on failure with configurable `max_restarts` per child (#1128)
+- `std.actors`: `RestartStrategy` enum (`OneForOne`, `OneForAll`, `RestForOne`) — `OneForAll`/`RestForOne` declared, not yet implemented (see #1179)
+- `actor_id()` accessor on all actor handles — pure sync read of the handle's unique ID, no `Send` effect required
+- `link`/`unlink`/`monitor`/`demonitor` upgraded from MVL stub bodies to `builtin fn` declarations backed by a Rust bridge
+
+### Fixed
+- Actor handle self-ref construction (`self` as tag argument) now correctly populates `_id` field — previously missing, causing build failures in examples using the self-ref pattern (e.g. `actor_pingpong`)
+- `Supervisor.remove_child` now cleans the `live` map (keyed by actor ID) to stay consistent with name-keyed maps
+- `Supervisor.on_exit`: budget-exhausted path now removes all tracking for the dead child
+
 ## [0.176.0] - 2026-06-02
 
 ### Added
