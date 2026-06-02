@@ -2594,11 +2594,14 @@ fn actor_decl_emits_runtime_infrastructure() {
     assert_contains(&rust, "self._sender.send(CounterMailbox::Increment { n });");
     assert_contains(&rust, "pub fn reset(&self)");
     assert_contains(&rust, "self._sender.send(CounterMailbox::Reset);");
-    // Dispatch function: named free fn passed to mvl_actor_run. (#1141)
+    // Dispatch function: named free fn passed to mvl_actor_run.
+    // Returns bool for shutdown support (#1177). (#1141)
     assert_contains(
         &rust,
-        "fn counter_dispatch(actor: &mut CounterState, msg: CounterMailbox) {",
+        "fn counter_dispatch(actor: &mut CounterState, msg: CounterMailbox) -> bool {",
     );
+    // System variants (#1177).
+    assert_contains(&rust, "CounterMailbox::_Shutdown => return false,");
     assert_contains(
         &rust,
         "CounterMailbox::Increment { n } => actor.increment(n),",
@@ -2610,7 +2613,13 @@ fn actor_decl_emits_runtime_infrastructure() {
         "fn _start_counter(mut state: CounterState) -> Counter {",
     );
     assert_contains(&rust, "mvl_channel(256_i64, 0_i64)");
-    assert_contains(&rust, "mvl_actor_run(rx, state, counter_dispatch)");
+    // Passes actor_id and dispatch fn to mvl_actor_run (#1177).
+    assert_contains(
+        &rust,
+        "mvl_actor_run(rx, state, counter_dispatch, __actor_id)",
+    );
+    // Registers actor controls in the global link/monitor registry (#1177).
+    assert_contains(&rust, "mvl_register_actor_controls(");
     // Negative assertions: old inline primitives must not appear. (#1141)
     assert!(
         !rust.contains("std::sync::mpsc"),

@@ -1,0 +1,82 @@
+//! std.actors — Process links, monitors, and exit signal infrastructure.
+//!
+//! Provides the building blocks for fault-tolerant actor systems:
+//! - Bidirectional links: if either actor dies, the other is notified/killed
+//! - One-way monitors: watcher observes target death without risking its own life
+//! - Exit trapping: actors can catch exit signals instead of dying
+//!
+//! Import:
+//!   use std.actors.{link, unlink, monitor, demonitor,
+//!                   ExitReason, ExitSignal, DownSignal}
+//!
+//! Effects: Spawn (all link/monitor functions require the Spawn effect).
+//!
+//! Phase 9, #1177.
+
+// ── Exit reason ──────────────────────────────────────────────────────────
+
+/// Why an actor exited.
+///
+/// - `Normal` — channel closed, no messages left (clean shutdown)
+/// - `Panic`  — actor thread panicked (unhandled error)
+/// - `Killed` — killed via a link cascade or explicit shutdown
+pub type ExitReason = enum {
+    Normal,
+    Panic,
+    Killed,
+}
+
+// ── Signal types ─────────────────────────────────────────────────────────
+
+/// Signal delivered to a linked actor that has `traps_exit` set.
+///
+/// Carries the identity of the dead actor and why it died.
+pub type ExitSignal = struct {
+    actor_id: Int,
+    reason: ExitReason,
+}
+
+/// Signal delivered to a monitoring actor when its target dies.
+///
+/// Carries the identity of the dead actor, the reason, and the monitor
+/// reference (so the watcher can correlate with its `monitor()` call).
+pub type DownSignal = struct {
+    actor_id: Int,
+    reason: ExitReason,
+    monitor_ref: Int,
+}
+
+// ── Link functions ───────────────────────────────────────────────────────
+
+/// Create a bidirectional link between two actors.
+///
+/// If either actor dies:
+/// - The linked actor is **killed** (default)
+/// - Unless it has `traps_exit` — then it receives an `ExitSignal`
+///
+/// Links are symmetric: `link(a, b)` is the same as `link(b, a)`.
+pub fn link(a: Int, b: Int) -> Unit ! Spawn {
+    // Backed by mvl_link in the runtime.
+}
+
+/// Remove a bidirectional link between two actors.
+pub fn unlink(a: Int, b: Int) -> Unit ! Spawn {
+    // Backed by mvl_unlink in the runtime.
+}
+
+// ── Monitor functions ────────────────────────────────────────────────────
+
+/// Create a one-way monitor: `watcher` is notified when `target` dies.
+///
+/// The watcher receives a `DownSignal` message. The target is unaware
+/// of the monitor. The watcher does NOT die — it just gets notified.
+///
+/// Returns a monitor reference that can be passed to `demonitor()`.
+pub fn monitor(watcher: Int, target: Int) -> Int ! Spawn {
+    0
+}
+
+/// Remove a previously created monitor.
+pub fn demonitor(monitor_ref: Int) -> Unit ! Spawn {
+    // Backed by mvl_demonitor in the runtime.
+}

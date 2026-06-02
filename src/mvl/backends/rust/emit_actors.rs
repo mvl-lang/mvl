@@ -141,7 +141,7 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &ActorDecl) {
     cg.line("}");
     cg.blank();
 
-    // ── 2. Message enum (one variant per public behavior) ──────────────────
+    // ── 2. Message enum (one variant per public behavior + system variants) ─
     if !pub_methods.is_empty() {
         cg.line(&format!("enum {msg_name} {{"));
         cg.push_indent();
@@ -158,6 +158,10 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &ActorDecl) {
                 cg.line(&format!("{variant} {{ {} }},", field_strs.join(", ")));
             }
         }
+        // System variants for link/monitor infrastructure (Phase 9, #1177).
+        cg.line("_Shutdown,");
+        cg.line("_ExitSignal { _from_id: ActorId, _reason: ExitReason },");
+        cg.line("_DownSignal { _from_id: ActorId, _reason: ExitReason, _monitor_id: MonitorId },");
         cg.pop_indent();
         cg.line("}");
         cg.blank();
@@ -279,15 +283,24 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &ActorDecl) {
     cg.blank();
 
     // 6. Dispatch function: a named free function passed to `mvl_actor_run`.
-    //    Keeps the match arms out of the start function closure — generated
-    //    code contains no `while` loop or `rx.recv()` call.  ADR-0027.
+    //    Returns `bool`: `true` to continue, `false` to shut down.
+    //    Handles system variants for link/monitor (#1177).  ADR-0027.
     let dispatch_fn = format!("{}_dispatch", actor_name_to_snake(name));
     cg.line(&format!(
-        "fn {dispatch_fn}(actor: &mut {state_name}, msg: {msg_name}) {{"
+        "fn {dispatch_fn}(actor: &mut {state_name}, msg: {msg_name}) -> bool {{"
     ));
     cg.push_indent();
     cg.line("match msg {");
     cg.push_indent();
+    // System variants (#1177).
+    cg.line(&format!("{msg_name}::_Shutdown => return false,"));
+    cg.line(&format!(
+        "{msg_name}::_ExitSignal {{ _from_id, _reason }} => {{}}"
+    ));
+    cg.line(&format!(
+        "{msg_name}::_DownSignal {{ _from_id, _reason, _monitor_id }} => {{}}"
+    ));
+    // User behavior variants.
     for m in &pub_methods {
         let variant = snake_to_pascal(&m.name);
         if m.params.is_empty() {
@@ -303,6 +316,7 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &ActorDecl) {
     }
     cg.pop_indent();
     cg.line("}");
+    cg.line("true");
     cg.pop_indent();
     cg.line("}");
     cg.blank();
@@ -312,6 +326,9 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &ActorDecl) {
     //    channel — the actor needs a weak sender to pass `self`
     //    as a `tag` argument inside behaviors.
     //
+    //    Assigns a unique ActorId and registers type-erased controls in the
+    //    global link/monitor registry (#1177).
+    //
     //    Shutdown protocol (#1048, #1125): the main body scope drops all actor
     //    handles before `mvl_join_actors()` runs.  `MvlReceiver::recv()` drains
     //    buffered messages then returns `None` once every sender is gone.
@@ -319,6 +336,8 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &ActorDecl) {
         "fn {start_fn}(mut state: {state_name}) -> {name} {{"
     ));
     cg.push_indent();
+    // Assign unique actor ID (#1177).
+    cg.line("let __actor_id = mvl_next_actor_id();");
     let channel_line = match &ad.mailbox {
         Some(MailboxConfig::Unbounded) => "let (tx, rx) = mvl_channel(-1_i64, 0_i64);".to_string(),
         Some(MailboxConfig::Bounded { capacity, policy }) => {
@@ -332,8 +351,32 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &ActorDecl) {
     };
     cg.line(&channel_line);
     cg.line("state._self_ref = Some(tx.downgrade());");
+    // Register type-erased actor controls for link/monitor (#1177).
+    // Each closure captures a sender clone and constructs the typed system message.
+    cg.line("{");
+    cg.push_indent();
+    cg.line("let tx_kill = tx.clone();");
+    cg.line("let tx_exit = tx.clone();");
+    cg.line("let tx_down = tx.clone();");
+    cg.line("mvl_register_actor_controls(");
+    cg.push_indent();
+    cg.line("__actor_id,");
     cg.line(&format!(
-        "let __handle = mvl_actor_run(rx, state, {dispatch_fn});"
+        "Box::new(move || {{ tx_kill.send({msg_name}::_Shutdown); }}),"
+    ));
+    cg.line(&format!(
+        "Box::new(move |from, reason| {{ tx_exit.send({msg_name}::_ExitSignal {{ _from_id: from, _reason: reason }}); }}),"
+    ));
+    cg.line(&format!(
+        "Box::new(move |from, reason, mid| {{ tx_down.send({msg_name}::_DownSignal {{ _from_id: from, _reason: reason, _monitor_id: mid }}); }}),"
+    ));
+    cg.line(&format!("{},", ad.traps_exit));
+    cg.pop_indent();
+    cg.line(");");
+    cg.pop_indent();
+    cg.line("}");
+    cg.line(&format!(
+        "let __handle = mvl_actor_run(rx, state, {dispatch_fn}, __actor_id);"
     ));
     cg.line("mvl_register_actor(__handle);");
     cg.line(&format!("{name} {{ _sender: tx }}"));

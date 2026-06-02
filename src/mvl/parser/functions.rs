@@ -1063,6 +1063,12 @@ impl Parser {
 
         let type_params = self.parse_type_params_decl();
 
+        // Optional `traps_exit` modifier (Phase 9, #1177).
+        let traps_exit = matches!(self.peek_kind(), TokenKind::Ident(s) if s == "traps_exit");
+        if traps_exit {
+            self.advance(); // consume `traps_exit`
+        }
+
         let lbrace = self.expect(&TokenKind::LBrace);
         self.require(lbrace)?;
 
@@ -1119,6 +1125,7 @@ impl Parser {
             fields,
             methods,
             mailbox,
+            traps_exit,
             span,
         })
     }
