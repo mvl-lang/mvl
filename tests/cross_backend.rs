@@ -59,6 +59,14 @@ fn corpus_stdlib(name: &str) -> String {
     format!("{}/tests/stdlib/{name}", env!("CARGO_MANIFEST_DIR"))
 }
 
+/// Strip transpiler/backend progress lines ("Transpiled to: ...", "Running: ...").
+fn strip_progress_lines(raw: &str) -> String {
+    raw.lines()
+        .filter(|l| !l.starts_with("Transpiled to:") && !l.starts_with("Running:"))
+        .map(|l| format!("{l}\n"))
+        .collect()
+}
+
 /// Run a program via the Rust transpiler backend; return stdout.
 fn run_transpiler(file: &str) -> String {
     let out = Command::new(mvl_bin())
@@ -71,12 +79,47 @@ fn run_transpiler(file: &str) -> String {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr),
     );
-    // Strip transpiler progress lines ("Transpiled to: ...", "Running: ...").
-    let raw = String::from_utf8_lossy(&out.stdout);
-    raw.lines()
-        .filter(|l| !l.starts_with("Transpiled to:") && !l.starts_with("Running:"))
-        .map(|l| format!("{l}\n"))
-        .collect()
+    strip_progress_lines(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// Failure mode for the llvm_text runner.
+enum LlvmFailure {
+    /// Backend compile/JIT failure is a test failure — panic with stderr.
+    Panic,
+    /// Backend compile/JIT failure is a soft skip — log stderr, return None.
+    SoftSkip,
+}
+
+/// Shared implementation for both [`run_llvm_text`] and [`run_llvm_text_or_skip`].
+/// Environment skip (no `lli`) always returns `None`. Backend failure is
+/// dispatched by `on_failure`.
+fn run_llvm_text_inner(file: &str, on_failure: LlvmFailure) -> Option<String> {
+    mvl::mvl::backends::llvm_text::lli::find_lli()?;
+    let out = Command::new(mvl_bin())
+        .args(["run", file, "--backend=llvm"])
+        .output()
+        .expect("failed to run mvl run --backend=llvm");
+    if !out.status.success() {
+        match on_failure {
+            LlvmFailure::Panic => panic!(
+                "llvm_text backend failed for {file}:\nstdout: {}\nstderr: {}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr),
+            ),
+            LlvmFailure::SoftSkip => {
+                eprintln!(
+                    "SKIP {file}: llvm_text backend failed:\n{}",
+                    String::from_utf8_lossy(&out.stderr)
+                        .lines()
+                        .take(3)
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                );
+                return None;
+            }
+        }
+    }
+    Some(strip_progress_lines(&String::from_utf8_lossy(&out.stdout)))
 }
 
 /// Run a program via the llvm_text backend (`--backend=llvm`, ADR-0040).
@@ -89,26 +132,7 @@ fn run_transpiler(file: &str) -> String {
 /// If you intentionally want a soft skip on backend failure (e.g. a test
 /// that pre-dates a known-broken feature), use [`run_llvm_text_or_skip`].
 fn run_llvm_text(file: &str) -> Option<String> {
-    if mvl::mvl::backends::llvm_text::lli::find_lli().is_none() {
-        return None;
-    }
-    let out = Command::new(mvl_bin())
-        .args(["run", file, "--backend=llvm"])
-        .output()
-        .expect("failed to run mvl run --backend=llvm");
-    assert!(
-        out.status.success(),
-        "llvm_text backend failed for {file}:\nstdout: {}\nstderr: {}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr),
-    );
-    let raw = String::from_utf8_lossy(&out.stdout);
-    Some(
-        raw.lines()
-            .filter(|l| !l.starts_with("Transpiled to:") && !l.starts_with("Running:"))
-            .map(|l| format!("{l}\n"))
-            .collect(),
-    )
+    run_llvm_text_inner(file, LlvmFailure::Panic)
 }
 
 /// Soft variant of [`run_llvm_text`]: returns `None` on either environment
@@ -118,31 +142,7 @@ fn run_llvm_text(file: &str) -> Option<String> {
 /// Use this only for tests that pre-date a known-broken feature. New tests
 /// should call [`run_llvm_text`] so backend regressions surface immediately.
 fn run_llvm_text_or_skip(file: &str) -> Option<String> {
-    if mvl::mvl::backends::llvm_text::lli::find_lli().is_none() {
-        return None;
-    }
-    let out = Command::new(mvl_bin())
-        .args(["run", file, "--backend=llvm"])
-        .output()
-        .expect("failed to run mvl run --backend=llvm");
-    if !out.status.success() {
-        eprintln!(
-            "SKIP {file}: llvm_text backend failed:\n{}",
-            String::from_utf8_lossy(&out.stderr)
-                .lines()
-                .take(3)
-                .collect::<Vec<_>>()
-                .join("\n")
-        );
-        return None;
-    }
-    let raw = String::from_utf8_lossy(&out.stdout);
-    Some(
-        raw.lines()
-            .filter(|l| !l.starts_with("Transpiled to:") && !l.starts_with("Running:"))
-            .map(|l| format!("{l}\n"))
-            .collect(),
-    )
+    run_llvm_text_inner(file, LlvmFailure::SoftSkip)
 }
 
 /// Run a program via the llvm_text backend and assert expected output.
@@ -284,7 +284,7 @@ fn llvm_fn_takes_string() {
 #[test]
 fn cross_backend_env_basic() {
     let file = corpus_effects("env_basic.mvl");
-    if let Some(llvm_out) = run_llvm_text_or_skip(&file) {
+    if let Some(llvm_out) = run_llvm_text(&file) {
         let transpiler_out = run_transpiler(&file);
         assert_eq!(
             llvm_out, transpiler_out,
@@ -310,7 +310,7 @@ fn cross_backend_env_basic() {
 #[test]
 fn cross_backend_env_getuid_nonnegative() {
     let file = corpus_effects("env_basic.mvl");
-    if let Some(out) = run_llvm_text_or_skip(&file) {
+    if let Some(out) = run_llvm_text(&file) {
         let uid: i64 = out.lines().next().unwrap_or("0").parse().unwrap_or(-1);
         assert!(
             uid >= 0,
@@ -323,7 +323,7 @@ fn cross_backend_env_getuid_nonnegative() {
 #[test]
 fn cross_backend_env_getgid_nonnegative() {
     let file = corpus_effects("env_basic.mvl");
-    if let Some(out) = run_llvm_text_or_skip(&file) {
+    if let Some(out) = run_llvm_text(&file) {
         let lines: Vec<&str> = out.lines().collect();
         let gid: i64 = lines.get(1).unwrap_or(&"0").parse().unwrap_or(-1);
         assert!(
@@ -340,7 +340,7 @@ fn cross_backend_env_getgid_nonnegative() {
 #[test]
 fn cross_backend_random_int() {
     let file = corpus_effects("random_int.mvl");
-    if let Some(llvm_out) = run_llvm_text_or_skip(&file) {
+    if let Some(llvm_out) = run_llvm_text(&file) {
         let transpiler_out = run_transpiler(&file);
         assert_eq!(
             llvm_out, transpiler_out,
@@ -366,6 +366,7 @@ fn cross_backend_random_float_shape() {
         "use std.random.{float}\nfn main() -> Unit ! Random {\n  let v: Float = float();\n  println(format(\"{}\", [v.to_string()]));\n}\n",
     )
     .expect("write");
+    // TODO(llvm_text): random.float diverges from transpiler (formatting precision).
     if let Some(out) = run_llvm_text_or_skip(&tmp.path().to_string_lossy()) {
         let v: f64 = out
             .trim()
@@ -397,6 +398,7 @@ fn cross_backend_generic_fns() {
 #[test]
 fn cross_backend_random_choice() {
     let file = corpus_effects("random_choice.mvl");
+    // TODO(llvm_text): random.choice on List[Int] diverges from transpiler.
     if let Some(llvm_out) = run_llvm_text_or_skip(&file) {
         let transpiler_out = run_transpiler(&file);
         assert_eq!(
@@ -415,7 +417,7 @@ fn cross_backend_random_choice() {
 #[test]
 fn cross_backend_random_shuffle() {
     let file = corpus_effects("random_shuffle.mvl");
-    if let Some(llvm_out) = run_llvm_text_or_skip(&file) {
+    if let Some(llvm_out) = run_llvm_text(&file) {
         let transpiler_out = run_transpiler(&file);
         assert_eq!(
             llvm_out, transpiler_out,
@@ -489,6 +491,7 @@ fn cross_backend_io_write_read_roundtrip() {
         "read_ok\nappend_ok\ndir_ok\nok",
         "io_basic.mvl: unexpected output from transpiler backend"
     );
+    // TODO(llvm_text): file I/O effect dispatch diverges from transpiler.
     if let Some(llvm_out) = run_llvm_text_or_skip(&file) {
         assert_eq!(
             llvm_out, transpiler_out,
@@ -502,6 +505,7 @@ fn cross_backend_io_write_read_roundtrip() {
 #[test]
 fn cross_backend_time_sleep() {
     let file = corpus_effects("time_sleep.mvl");
+    // TODO(llvm_text): time.sleep effect dispatch diverges from transpiler.
     if let Some(llvm_out) = run_llvm_text_or_skip(&file) {
         let transpiler_out = run_transpiler(&file);
         assert_eq!(
@@ -520,6 +524,7 @@ fn cross_backend_time_sleep() {
 #[test]
 fn cross_backend_time_format_datetime() {
     let file = corpus_effects("time_format_datetime.mvl");
+    // TODO(llvm_text): time.format_datetime diverges from transpiler.
     if let Some(llvm_out) = run_llvm_text_or_skip(&file) {
         let transpiler_out = run_transpiler(&file);
         assert_eq!(
@@ -539,6 +544,7 @@ fn cross_backend_time_format_datetime() {
 #[test]
 fn cross_backend_time_format_instant() {
     let file = corpus_effects("time_format_instant.mvl");
+    // TODO(llvm_text): time.format_instant diverges from transpiler.
     if let Some(llvm_out) = run_llvm_text_or_skip(&file) {
         let transpiler_out = run_transpiler(&file);
         assert_eq!(
@@ -583,6 +589,7 @@ fn cross_backend_crypto_sha256_transpiler() {
 fn cross_backend_crypto_sha256_llvm() {
     let file = corpus_effects("crypto_sha256.mvl");
     let transpiler_out = run_transpiler(&file);
+    // TODO(llvm_text): codegen type mismatch (i64 vs ptr) in crypto path.
     if let Some(llvm_out) = run_llvm_text_or_skip(&file) {
         assert_eq!(
             llvm_out, transpiler_out,
@@ -597,6 +604,7 @@ fn cross_backend_crypto_sha256_llvm() {
 #[test]
 fn cross_backend_regex_replace() {
     let file = corpus_stdlib("regex_replace.mvl");
+    // TODO(llvm_text): regex.replace diverges from transpiler.
     if let Some(llvm_out) = run_llvm_text_or_skip(&file) {
         let transpiler_out = run_transpiler(&file);
         assert_eq!(
@@ -616,7 +624,7 @@ fn cross_backend_regex_replace() {
 #[test]
 fn cross_backend_regex_find() {
     let file = corpus_stdlib("regex_find.mvl");
-    if let Some(llvm_out) = run_llvm_text_or_skip(&file) {
+    if let Some(llvm_out) = run_llvm_text(&file) {
         let transpiler_out = run_transpiler(&file);
         assert_eq!(
             llvm_out, transpiler_out,
@@ -635,6 +643,7 @@ fn cross_backend_regex_find() {
 #[test]
 fn cross_backend_regex_find_all() {
     let file = corpus_stdlib("regex_find_all.mvl");
+    // TODO(llvm_text): regex.find_all on List[Match] diverges from transpiler.
     if let Some(llvm_out) = run_llvm_text_or_skip(&file) {
         let transpiler_out = run_transpiler(&file);
         assert_eq!(
@@ -653,6 +662,7 @@ fn cross_backend_regex_find_all() {
 /// Both backends must produce identical element counts for set_intersection,
 /// set_difference, and set_union on integer sets.
 #[test]
+#[ignore = "llvm_text: set intersection/difference/union return empty stdout (separate divergence from Set.contains, follow-up needed)"]
 fn cross_backend_set_algebra() {
     let file = corpus_stdlib("set_algebra.mvl");
     let transpiler_out = run_transpiler(&file);
@@ -661,14 +671,12 @@ fn cross_backend_set_algebra() {
         "2\n2\n6",
         "Rust transpiler: expected intersection=2, difference=2, union=6, got: {transpiler_out:?}"
     );
-    if let Some(llvm_out) = run_llvm_text_or_skip(&file) {
-        if llvm_out.trim() != transpiler_out.trim() {
-            eprintln!(
-                "MISMATCH set_algebra: LLVM output differs: {:?} vs {:?}",
-                llvm_out.trim(),
-                transpiler_out.trim()
-            );
-        }
+    if let Some(llvm_out) = run_llvm_text(&file) {
+        assert_eq!(
+            llvm_out.trim(),
+            transpiler_out.trim(),
+            "set_algebra.mvl: llvm_text output differs from transpiler"
+        );
     }
 }
 
@@ -685,7 +693,7 @@ fn cross_backend_env_signal_ignore_reset() {
         "ok",
         "Rust transpiler: expected 'ok', got: {transpiler_out:?}"
     );
-    if let Some(llvm_out) = run_llvm_text_or_skip(&file) {
+    if let Some(llvm_out) = run_llvm_text(&file) {
         assert_eq!(
             llvm_out.trim(),
             "ok",
@@ -698,7 +706,7 @@ fn cross_backend_env_signal_ignore_reset() {
 #[test]
 fn cross_backend_env_signal_on_llvm() {
     let file = corpus_effects("env_signal_on.mvl");
-    if let Some(llvm_out) = run_llvm_text_or_skip(&file) {
+    if let Some(llvm_out) = run_llvm_text(&file) {
         assert_eq!(
             llvm_out.trim(),
             "ok",
@@ -719,6 +727,7 @@ fn cross_backend_crypto_random_bytes_llvm_shape() {
         "16",
         "Rust transpiler: expected length 16, got: {transpiler_out:?}"
     );
+    // TODO(llvm_text): crypto.random_bytes diverges from transpiler.
     if let Some(llvm_out) = run_llvm_text_or_skip(&file) {
         assert_eq!(
             llvm_out.trim(),
@@ -738,6 +747,7 @@ fn cross_backend_crypto_random_bytes_zero_llvm() {
         "0",
         "Rust transpiler: expected length 0, got: {transpiler_out:?}"
     );
+    // TODO(llvm_text): crypto.random_bytes(0) diverges from transpiler.
     if let Some(llvm_out) = run_llvm_text_or_skip(&file) {
         assert_eq!(
             llvm_out.trim(),
@@ -918,7 +928,7 @@ fn cross_backend_actor_spawn() {
     assert_backends_agree("actor_spawn.mvl");
     let file = corpus("actor_spawn.mvl");
     assert_eq!(run_transpiler(&file).trim(), "ok");
-    if let Some(out) = run_llvm_text_or_skip(&file) {
+    if let Some(out) = run_llvm_text(&file) {
         assert_eq!(out.trim(), "ok");
     }
 }
@@ -930,7 +940,7 @@ fn cross_backend_actor_send() {
     assert_backends_agree("actor_send.mvl");
     let file = corpus("actor_send.mvl");
     assert_eq!(run_transpiler(&file).trim(), "sent");
-    if let Some(out) = run_llvm_text_or_skip(&file) {
+    if let Some(out) = run_llvm_text(&file) {
         assert_eq!(out.trim(), "sent");
     }
 }

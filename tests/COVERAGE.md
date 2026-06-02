@@ -222,7 +222,24 @@ and the `llvm_text` backend (post-ADR-0040, `--backend=llvm` resolves to
 | `cross_backend_list_ufcs_methods` | ✅ fixed | Added `slice`/`take`/`skip` dispatch via `_mvl_list_slice` |
 | `llvm_move_string` | ✅ fixed | Dedupe heap_locals on consume (SSA already tracked) |
 | `cross_backend_linked_list` | ❌ ignored | Requires non-unit enum payload lowering (`Cons(Int, Box[LL])` — match arms drop payload); separate epic |
+| `cross_backend_set_algebra` | ❌ ignored | llvm_text returns empty stdout for Set intersection/difference/union (separate divergence from Set.contains); follow-up needed |
 
 Each ignored test carries a `reason` string identifying the symptom. New
 divergences MUST be triaged the same way (ignored with reason, follow-up
 issue filed) — never downgraded back to a soft `eprintln!` skip.
+
+### Soft-skip pool (`run_llvm_text_or_skip`)
+
+A handful of pre-existing tests use `run_llvm_text_or_skip` because the
+llvm_text backend produces divergent output for those programs today. Each
+call site carries a `// TODO(llvm_text): <reason>` comment naming the
+specific feature gap. Categories:
+
+- `random.choice` / `random.float`
+- `time.sleep`, `time.format_datetime`, `time.format_instant`
+- `io.write_read` (file I/O effect dispatch)
+- `regex.replace`, `regex.find_all`
+- `crypto.sha256`, `crypto.random_bytes` (and zero-length variant)
+
+The path forward is to fix each divergence and migrate the call site to
+`run_llvm_text` (strict). New tests MUST NOT use the soft helper.

@@ -22,9 +22,15 @@
 - `Audit` effect (subsumes `FileWrite + Clock`) — distinct from `Log` effect; audit records may contain sensitive data since they ARE the compliance artifact
 - Parser support for wildcard relabel syntax: `relabel X -> _` and `relabel _ -> Y` for erasing/restoring labels
 - `json_escape` exported from `std.json` for shared JSON serialization across stdlib
+- `llvm_text` backend: **Set.contains dispatch** (#1154) — new C-ABI export `_mvl_set_contains_i64` and emitter dispatch for `Set[Int].contains`
+- `llvm_text` backend: **Box[T] primitive payload codegen** (#1154) — `Box::new` heap-allocates and stores primitive (i64/ptr/double/i32/i8/i1) payloads; `*box` deref emits typed load via `box_inner_llvm_ty` resolution
+- `llvm_text` backend: **List/Array/Set slice/take/skip dispatch** (#1154) — emitter routes to the existing `_mvl_list_slice` runtime
+- `tests/cross_backend.rs`: **strict parity infrastructure** (#1154) — `assert_backends_agree` / `assert_parity` now fail on mismatch instead of logging via `eprintln!`; `run_llvm_text` (panic on backend failure) split from `run_llvm_text_or_skip` (legacy soft skip with reason comments)
 
 ### Fixed
 - `AuditLogger::emit()` now returns `Result[Unit, IoError] ! Audit` instead of silently discarding write errors — callers must handle I/O failures to ensure compliance records aren't lost
+- `llvm_text` backend: **String drop double-free** (#1154) — dedupe `heap_locals` SSA tracking when consume/move reuses the source register, preventing underflow abort
+- `llvm_text` backend: **Box::new aggregate guard** (#1154) — non-primitive payload types now produce a hard codegen error instead of silently allocating 8 bytes for a wider struct (heap buffer overflow)
 
 ## [0.175.1] - 2026-06-02
 
