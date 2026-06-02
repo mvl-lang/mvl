@@ -210,6 +210,22 @@ struct TextEmitter {
     mono_emitted: HashSet<String>,
     /// Queue of monomorphized functions to emit: (mangled_name, concrete_types).
     mono_queue: Vec<(String, String, Vec<TypeExpr>)>,
+
+    // ── Heap drop tracking (#1185) ───────────────────────────────────────
+    /// Heap-allocated locals in the current function.  Entries are emitted
+    /// as `mvl_*_drop` calls before every `ret` instruction.
+    /// Heap-allocated locals: (ssa_or_alloca, kind, is_ref).
+    /// When `is_ref` is true, the SSA is a stack alloca that must be loaded
+    /// before the drop call (the alloca holds the heap object pointer).
+    heap_locals: Vec<(String, HeapKind, bool)>,
+}
+
+/// Tracks heap-allocated value types for automatic drop emission.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HeapKind {
+    String,
+    Array,
+    Map,
 }
 
 #[derive(Clone)]
@@ -285,6 +301,7 @@ impl TextEmitter {
             type_param_map: HashMap::new(),
             mono_emitted: HashSet::new(),
             mono_queue: Vec::new(),
+            heap_locals: Vec::new(),
         }
     }
 
@@ -359,6 +376,7 @@ impl TextEmitter {
         self.current_ret_ty = ret_ty;
         self.current_fn_is_main = false;
         self.spawned_actor_handles.clear();
+        self.heap_locals.clear();
     }
 
     // ── Extern declaration helpers ────────────────────────────────────────
@@ -366,6 +384,30 @@ impl TextEmitter {
     fn ensure_extern(&mut self, decl: &str) {
         if !self.extern_decls.iter().any(|d| d == decl) {
             self.extern_decls.push(decl.to_string());
+        }
+    }
+
+    // ── Heap drop emission (#1185) ─────────────────────────────────────
+
+    /// Emit `mvl_*_drop` calls for all tracked heap locals.
+    /// Called before every `ret` instruction to clean up owned allocations.
+    fn emit_heap_drops(&mut self) {
+        for (ssa, kind, is_ref) in self.heap_locals.clone() {
+            let sym = match kind {
+                HeapKind::String => "mvl_string_drop",
+                HeapKind::Array => "mvl_array_drop",
+                HeapKind::Map => "mvl_map_drop",
+            };
+            self.ensure_extern(&format!("declare void @{sym}(ptr)"));
+            if is_ref {
+                // For ref locals, the SSA is a stack alloca — load the heap
+                // object pointer before dropping it.
+                let loaded = self.next_reg();
+                self.push_instr(&format!("{loaded} = load ptr, ptr {ssa}"));
+                self.push_instr(&format!("call void @{sym}(ptr {loaded})"));
+            } else {
+                self.push_instr(&format!("call void @{sym}(ptr {ssa})"));
+            }
         }
     }
 
@@ -511,6 +553,25 @@ impl TextEmitter {
         Self::llvm_ty(ty) == "void"
     }
 
+    /// Classify a type as heap-allocated for drop tracking.
+    fn heap_kind(ty: &TypeExpr) -> Option<HeapKind> {
+        let base = match ty {
+            TypeExpr::Ref { inner, .. }
+            | TypeExpr::Labeled { inner, .. }
+            | TypeExpr::Refined { inner, .. } => inner.as_ref(),
+            other => other,
+        };
+        match base {
+            TypeExpr::Base { name, .. } => match name.as_str() {
+                "String" => Some(HeapKind::String),
+                "List" | "Array" | "Set" => Some(HeapKind::Array),
+                "Map" => Some(HeapKind::Map),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     fn is_mutable_ref(ty: &TypeExpr) -> bool {
         matches!(ty, TypeExpr::Ref { mutable: true, .. })
     }
@@ -617,7 +678,7 @@ impl TextEmitter {
                 }
             }
             Expr::FieldAccess { .. } => "i64".into(), // default; refined in emit_field_access
-            Expr::List { .. } => "ptr".into(),
+            Expr::List { .. } | Expr::Map { .. } | Expr::Set { .. } => "ptr".into(),
             Expr::Consume { expr, .. } | Expr::Relabel { expr, .. } => self.type_of_expr(expr),
             Expr::If { then, .. } => {
                 // Use the type of the last expression in `then`
@@ -912,6 +973,7 @@ impl TextEmitter {
         let body_val = self.emit_block(&fd.body)?;
 
         if !self.terminated {
+            self.emit_heap_drops();
             if self.current_fn_is_main {
                 if !self.actor_decls.is_empty() {
                     // Drop each handle to close the sender — this signals the
@@ -1058,6 +1120,10 @@ impl TextEmitter {
                         self.push_instr(&format!("store {ty_str} {v}, ptr {ptr}"));
                     }
                     if let Pattern::Ident(name, _) = pattern {
+                        // Track heap-allocated ref locals for drop at function exit.
+                        if let Some(hk) = Self::heap_kind(&elem_ty) {
+                            self.heap_locals.push((ptr.clone(), hk, true));
+                        }
                         self.ref_locals.insert(
                             name.clone(),
                             RefLocal {
@@ -1069,7 +1135,17 @@ impl TextEmitter {
                 } else if let (Some(v), Pattern::Ident(name, _)) = (val, pattern) {
                     let ty_str = self.llvm_ty_ctx(&elem_ty);
                     self.reg_types.insert(v.clone(), ty_str);
-                    self.locals.insert(name.clone(), v);
+                    // If this name shadows a previous heap-allocated binding,
+                    // remove the old SSA from heap_locals to prevent double-drop.
+                    if let Some(old_ssa) = self.locals.get(name) {
+                        let old_ssa = old_ssa.clone();
+                        self.heap_locals.retain(|(s, _, _)| *s != old_ssa);
+                    }
+                    self.locals.insert(name.clone(), v.clone());
+                    // Track heap-allocated locals for automatic drop at function exit.
+                    if let Some(hk) = Self::heap_kind(&elem_ty) {
+                        self.heap_locals.push((v, hk, false));
+                    }
                     self.local_mvl_types.insert(name.clone(), elem_ty);
                 }
                 Ok(())
@@ -1090,20 +1166,22 @@ impl TextEmitter {
 
             Stmt::Return { value, .. } => {
                 let ret_ty = self.current_ret_ty.clone();
+                // Evaluate return expression first (if any), then drop once.
+                let ret_val = if let Some(expr) = value {
+                    self.emit_expr(expr)?
+                } else {
+                    None
+                };
+                self.emit_heap_drops();
                 if Self::is_void(&ret_ty) {
                     if self.current_fn_is_main {
                         self.push_instr(MAIN_RET);
                     } else {
                         self.push_instr("ret void");
                     }
-                } else if let Some(expr) = value {
-                    let val = self.emit_expr(expr)?;
+                } else if let Some(v) = ret_val {
                     let ty = self.llvm_ty_ctx(&ret_ty);
-                    if let Some(v) = val {
-                        self.push_instr(&format!("ret {ty} {v}"));
-                    } else {
-                        self.push_instr(&format!("ret {ty} undef"));
-                    }
+                    self.push_instr(&format!("ret {ty} {v}"));
                 } else if self.current_fn_is_main {
                     self.push_instr(MAIN_RET);
                 } else {
@@ -1563,6 +1641,10 @@ impl TextEmitter {
             } => self.emit_match_expr(scrutinee, arms),
 
             Expr::List { elems, .. } => self.emit_list_literal(elems),
+
+            Expr::Set { elems, .. } => self.emit_list_literal(elems),
+
+            Expr::Map { pairs, .. } => self.emit_map_literal(pairs),
 
             Expr::Consume { expr, .. } | Expr::Relabel { expr, .. } => self.emit_expr(expr),
 
@@ -2813,6 +2895,7 @@ impl TextEmitter {
 
         // Err path: propagate the result upwards.
         self.start_bb(&err_bb);
+        self.emit_heap_drops();
         let ret_ty = self.current_ret_ty.clone();
         let llvm_ret = self.llvm_ty_ctx(&ret_ty);
         self.push_instr(&format!("ret {llvm_ret} {result_val}"));
@@ -2905,14 +2988,16 @@ impl TextEmitter {
                 Ok(Some(val))
             }
             ("len", "ptr") => {
-                let is_list = matches!(
-                    self.mvl_receiver_kind(receiver),
-                    Some("List") | Some("Array") | Some("Set")
-                );
+                let kind = self.mvl_receiver_kind(receiver);
+                let is_list = matches!(kind, Some("List") | Some("Array") | Some("Set"));
+                let is_map = matches!(kind, Some("Map"));
                 let reg = self.next_reg();
                 if is_list {
                     self.ensure_extern("declare i64 @mvl_array_len(ptr)");
                     self.push_instr(&format!("{reg} = call i64 @mvl_array_len(ptr {val})"));
+                } else if is_map {
+                    self.ensure_extern("declare i64 @mvl_map_len(ptr)");
+                    self.push_instr(&format!("{reg} = call i64 @mvl_map_len(ptr {val})"));
                 } else {
                     self.ensure_extern("declare i64 @_mvl_str_len(ptr)");
                     self.push_instr(&format!("{reg} = call i64 @_mvl_str_len(ptr {val})"));
@@ -2936,6 +3021,139 @@ impl TextEmitter {
                 self.reg_types.insert(reg.clone(), "ptr".into());
                 Ok(Some(reg))
             }
+            // ── Map methods ─────────────────────────────────────────────
+            ("get", "ptr") if matches!(self.mvl_receiver_kind(receiver), Some("Map")) => {
+                let key_arg = match args.first() {
+                    Some(a) => match self.emit_expr(a)? {
+                        Some(v) => v,
+                        None => return Ok(None),
+                    },
+                    None => return Ok(None),
+                };
+                self.ensure_extern("declare ptr @mvl_string_ptr(ptr)");
+                self.ensure_extern("declare i64 @_mvl_str_len(ptr)");
+                self.ensure_extern("declare ptr @mvl_map_get(ptr, ptr, i64)");
+                let kp = self.next_reg();
+                self.push_instr(&format!("{kp} = call ptr @mvl_string_ptr(ptr {key_arg})"));
+                let kl = self.next_reg();
+                self.push_instr(&format!("{kl} = call i64 @_mvl_str_len(ptr {key_arg})"));
+                let raw = self.next_reg();
+                self.push_instr(&format!(
+                    "{raw} = call ptr @mvl_map_get(ptr {val}, ptr {kp}, i64 {kl})"
+                ));
+                // Null-guard: mvl_map_get returns null if key not found.
+                let is_null = self.next_reg();
+                self.push_instr(&format!("{is_null} = icmp eq ptr {raw}, null"));
+                let some_bb = self.next_bb("map_get_some");
+                let none_bb = self.next_bb("map_get_none");
+                let merge_bb = self.next_bb("map_get_merge");
+                self.push_instr(&format!(
+                    "br i1 {is_null}, label %{none_bb}, label %{some_bb}"
+                ));
+                self.start_bb(&some_bb);
+                let loaded = self.next_reg();
+                self.push_instr(&format!("{loaded} = load i64, ptr {raw}"));
+                self.push_instr(&format!("br label %{merge_bb}"));
+                self.start_bb(&none_bb);
+                self.push_instr(&format!("br label %{merge_bb}"));
+                self.start_bb(&merge_bb);
+                let result = self.next_reg();
+                self.push_instr(&format!(
+                    "{result} = phi i64 [ {loaded}, %{some_bb} ], [ 0, %{none_bb} ]"
+                ));
+                self.reg_types.insert(result.clone(), "i64".into());
+                Ok(Some(result))
+            }
+            ("insert", "ptr") if matches!(self.mvl_receiver_kind(receiver), Some("Map")) => {
+                if args.len() < 2 {
+                    return Ok(None);
+                }
+                let key_arg = match self.emit_expr(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                let val_arg = match self.emit_expr(&args[1])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                self.ensure_extern("declare ptr @mvl_string_ptr(ptr)");
+                self.ensure_extern("declare i64 @_mvl_str_len(ptr)");
+                self.ensure_extern("declare void @mvl_map_insert(ptr, ptr, i64, ptr, i64)");
+                let kp = self.next_reg();
+                self.push_instr(&format!("{kp} = call ptr @mvl_string_ptr(ptr {key_arg})"));
+                let kl = self.next_reg();
+                self.push_instr(&format!("{kl} = call i64 @_mvl_str_len(ptr {key_arg})"));
+                let val_ty = self.infer_val_type(&val_arg);
+                let vs = self.next_reg();
+                self.push_instr(&format!("{vs} = alloca {val_ty}"));
+                self.push_instr(&format!("store {val_ty} {val_arg}, ptr {vs}"));
+                self.push_instr(&format!(
+                    "call void @mvl_map_insert(ptr {val}, ptr {kp}, i64 {kl}, ptr {vs}, i64 8)"
+                ));
+                // insert returns the map (modified in place)
+                Ok(Some(val))
+            }
+            ("keys", "ptr") if matches!(self.mvl_receiver_kind(receiver), Some("Map")) => {
+                self.ensure_extern("declare ptr @mvl_map_keys(ptr)");
+                let reg = self.next_reg();
+                self.push_instr(&format!("{reg} = call ptr @mvl_map_keys(ptr {val})"));
+                self.reg_types.insert(reg.clone(), "ptr".into());
+                Ok(Some(reg))
+            }
+            ("values", "ptr") if matches!(self.mvl_receiver_kind(receiver), Some("Map")) => {
+                self.ensure_extern("declare ptr @mvl_map_values(ptr)");
+                let reg = self.next_reg();
+                self.push_instr(&format!("{reg} = call ptr @mvl_map_values(ptr {val})"));
+                self.reg_types.insert(reg.clone(), "ptr".into());
+                Ok(Some(reg))
+            }
+            ("contains_key", "ptr") if matches!(self.mvl_receiver_kind(receiver), Some("Map")) => {
+                let key_arg = match args.first() {
+                    Some(a) => match self.emit_expr(a)? {
+                        Some(v) => v,
+                        None => return Ok(None),
+                    },
+                    None => return Ok(None),
+                };
+                self.ensure_extern("declare ptr @mvl_string_ptr(ptr)");
+                self.ensure_extern("declare i64 @_mvl_str_len(ptr)");
+                self.ensure_extern("declare ptr @mvl_map_get(ptr, ptr, i64)");
+                let kp = self.next_reg();
+                self.push_instr(&format!("{kp} = call ptr @mvl_string_ptr(ptr {key_arg})"));
+                let kl = self.next_reg();
+                self.push_instr(&format!("{kl} = call i64 @_mvl_str_len(ptr {key_arg})"));
+                let raw = self.next_reg();
+                self.push_instr(&format!(
+                    "{raw} = call ptr @mvl_map_get(ptr {val}, ptr {kp}, i64 {kl})"
+                ));
+                // null → false, non-null → true
+                let reg = self.next_reg();
+                self.push_instr(&format!("{reg} = icmp ne ptr {raw}, null"));
+                self.reg_types.insert(reg.clone(), "i1".into());
+                Ok(Some(reg))
+            }
+            ("remove", "ptr") if matches!(self.mvl_receiver_kind(receiver), Some("Map")) => {
+                let key_arg = match args.first() {
+                    Some(a) => match self.emit_expr(a)? {
+                        Some(v) => v,
+                        None => return Ok(None),
+                    },
+                    None => return Ok(None),
+                };
+                self.ensure_extern("declare ptr @mvl_string_ptr(ptr)");
+                self.ensure_extern("declare i64 @_mvl_str_len(ptr)");
+                self.ensure_extern("declare void @mvl_map_remove(ptr, ptr, i64)");
+                let kp = self.next_reg();
+                self.push_instr(&format!("{kp} = call ptr @mvl_string_ptr(ptr {key_arg})"));
+                let kl = self.next_reg();
+                self.push_instr(&format!("{kl} = call i64 @_mvl_str_len(ptr {key_arg})"));
+                self.push_instr(&format!(
+                    "call void @mvl_map_remove(ptr {val}, ptr {kp}, i64 {kl})"
+                ));
+                // remove returns the map (modified in place)
+                Ok(Some(val))
+            }
+
             // ── HOF: filter / map / any / all / find / take_while / skip_while ──
             // Guard: only match when the argument is closure-like (Lambda or a
             // module-level function reference).  String::find takes a plain
@@ -3037,6 +3255,244 @@ impl TextEmitter {
                 let reg = self.next_reg();
                 self.push_instr(&format!(
                     "{reg} = call ptr @_mvl_str_char_at(ptr {val}, i64 {idx})"
+                ));
+                self.reg_types.insert(reg.clone(), "ptr".into());
+                Ok(Some(reg))
+            }
+
+            // ── String kernel builtins (#1186) ───────────────────────────
+
+            // chars() → List[String]
+            ("chars", "ptr")
+                if !matches!(
+                    self.mvl_receiver_kind(receiver),
+                    Some("List") | Some("Array") | Some("Set") | Some("Map")
+                ) =>
+            {
+                self.ensure_extern("declare ptr @mvl_string_chars(ptr)");
+                let reg = self.next_reg();
+                self.push_instr(&format!("{reg} = call ptr @mvl_string_chars(ptr {val})"));
+                self.reg_types.insert(reg.clone(), "ptr".into());
+                Ok(Some(reg))
+            }
+
+            // byte_at(i) → Int
+            ("byte_at", "ptr")
+                if !matches!(
+                    self.mvl_receiver_kind(receiver),
+                    Some("List") | Some("Array") | Some("Set") | Some("Map")
+                ) =>
+            {
+                let idx = match args.first() {
+                    Some(a) => match self.emit_expr(a)? {
+                        Some(v) => v,
+                        None => return Ok(None),
+                    },
+                    None => return Ok(None),
+                };
+                self.ensure_extern("declare i64 @_mvl_str_byte_at(ptr, i64)");
+                let reg = self.next_reg();
+                self.push_instr(&format!(
+                    "{reg} = call i64 @_mvl_str_byte_at(ptr {val}, i64 {idx})"
+                ));
+                self.reg_types.insert(reg.clone(), "i64".into());
+                Ok(Some(reg))
+            }
+
+            // find(sub) → Int  (-1 if not found)
+            ("find", "ptr") if args.len() == 1 && !self.is_closure_arg(&args[0]) => {
+                let sub = match self.emit_expr(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                self.ensure_extern("declare i64 @_mvl_str_find(ptr, ptr)");
+                let reg = self.next_reg();
+                self.push_instr(&format!(
+                    "{reg} = call i64 @_mvl_str_find(ptr {val}, ptr {sub})"
+                ));
+                self.reg_types.insert(reg.clone(), "i64".into());
+                Ok(Some(reg))
+            }
+
+            // split(delimiter) → List[String]
+            ("split", "ptr")
+                if !matches!(
+                    self.mvl_receiver_kind(receiver),
+                    Some("List") | Some("Array") | Some("Set") | Some("Map")
+                ) =>
+            {
+                let delim = match args.first() {
+                    Some(a) => match self.emit_expr(a)? {
+                        Some(v) => v,
+                        None => return Ok(None),
+                    },
+                    None => return Ok(None),
+                };
+                self.ensure_extern("declare ptr @_mvl_str_split(ptr, ptr)");
+                let reg = self.next_reg();
+                self.push_instr(&format!(
+                    "{reg} = call ptr @_mvl_str_split(ptr {val}, ptr {delim})"
+                ));
+                self.reg_types.insert(reg.clone(), "ptr".into());
+                Ok(Some(reg))
+            }
+
+            // substring(start, end) → String
+            ("substring", "ptr") if args.len() >= 2 => {
+                let start = match self.emit_expr(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                let end = match self.emit_expr(&args[1])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                self.ensure_extern("declare ptr @_mvl_str_substring(ptr, i64, i64)");
+                let reg = self.next_reg();
+                self.push_instr(&format!(
+                    "{reg} = call ptr @_mvl_str_substring(ptr {val}, i64 {start}, i64 {end})"
+                ));
+                self.reg_types.insert(reg.clone(), "ptr".into());
+                Ok(Some(reg))
+            }
+
+            // contains(sub) → Bool
+            ("contains", "ptr")
+                if !matches!(
+                    self.mvl_receiver_kind(receiver),
+                    Some("List") | Some("Array") | Some("Set") | Some("Map")
+                ) =>
+            {
+                let sub = match args.first() {
+                    Some(a) => match self.emit_expr(a)? {
+                        Some(v) => v,
+                        None => return Ok(None),
+                    },
+                    None => return Ok(None),
+                };
+                self.ensure_extern("declare i64 @_mvl_str_contains(ptr, ptr)");
+                let raw = self.next_reg();
+                self.push_instr(&format!(
+                    "{raw} = call i64 @_mvl_str_contains(ptr {val}, ptr {sub})"
+                ));
+                let reg = self.next_reg();
+                self.push_instr(&format!("{reg} = icmp ne i64 {raw}, 0"));
+                self.reg_types.insert(reg.clone(), "i1".into());
+                Ok(Some(reg))
+            }
+
+            // starts_with(prefix) → Bool
+            ("starts_with", "ptr")
+                if !matches!(
+                    self.mvl_receiver_kind(receiver),
+                    Some("List") | Some("Array") | Some("Set") | Some("Map")
+                ) =>
+            {
+                let prefix = match args.first() {
+                    Some(a) => match self.emit_expr(a)? {
+                        Some(v) => v,
+                        None => return Ok(None),
+                    },
+                    None => return Ok(None),
+                };
+                self.ensure_extern("declare i64 @_mvl_str_starts_with(ptr, ptr)");
+                let raw = self.next_reg();
+                self.push_instr(&format!(
+                    "{raw} = call i64 @_mvl_str_starts_with(ptr {val}, ptr {prefix})"
+                ));
+                let reg = self.next_reg();
+                self.push_instr(&format!("{reg} = icmp ne i64 {raw}, 0"));
+                self.reg_types.insert(reg.clone(), "i1".into());
+                Ok(Some(reg))
+            }
+
+            // ends_with(suffix) → Bool
+            ("ends_with", "ptr")
+                if !matches!(
+                    self.mvl_receiver_kind(receiver),
+                    Some("List") | Some("Array") | Some("Set") | Some("Map")
+                ) =>
+            {
+                let suffix = match args.first() {
+                    Some(a) => match self.emit_expr(a)? {
+                        Some(v) => v,
+                        None => return Ok(None),
+                    },
+                    None => return Ok(None),
+                };
+                self.ensure_extern("declare i64 @_mvl_str_ends_with(ptr, ptr)");
+                let raw = self.next_reg();
+                self.push_instr(&format!(
+                    "{raw} = call i64 @_mvl_str_ends_with(ptr {val}, ptr {suffix})"
+                ));
+                let reg = self.next_reg();
+                self.push_instr(&format!("{reg} = icmp ne i64 {raw}, 0"));
+                self.reg_types.insert(reg.clone(), "i1".into());
+                Ok(Some(reg))
+            }
+
+            // trim() → String
+            ("trim", "ptr")
+                if !matches!(
+                    self.mvl_receiver_kind(receiver),
+                    Some("List") | Some("Array") | Some("Set") | Some("Map")
+                ) =>
+            {
+                self.ensure_extern("declare ptr @_mvl_str_trim(ptr)");
+                let reg = self.next_reg();
+                self.push_instr(&format!("{reg} = call ptr @_mvl_str_trim(ptr {val})"));
+                self.reg_types.insert(reg.clone(), "ptr".into());
+                Ok(Some(reg))
+            }
+
+            // to_lower() → String
+            ("to_lower", "ptr")
+                if !matches!(
+                    self.mvl_receiver_kind(receiver),
+                    Some("List") | Some("Array") | Some("Set") | Some("Map")
+                ) =>
+            {
+                self.ensure_extern("declare ptr @_mvl_str_to_lower(ptr)");
+                let reg = self.next_reg();
+                self.push_instr(&format!("{reg} = call ptr @_mvl_str_to_lower(ptr {val})"));
+                self.reg_types.insert(reg.clone(), "ptr".into());
+                Ok(Some(reg))
+            }
+
+            // to_upper() → String
+            ("to_upper", "ptr")
+                if !matches!(
+                    self.mvl_receiver_kind(receiver),
+                    Some("List") | Some("Array") | Some("Set") | Some("Map")
+                ) =>
+            {
+                self.ensure_extern("declare ptr @_mvl_str_to_upper(ptr)");
+                let reg = self.next_reg();
+                self.push_instr(&format!("{reg} = call ptr @_mvl_str_to_upper(ptr {val})"));
+                self.reg_types.insert(reg.clone(), "ptr".into());
+                Ok(Some(reg))
+            }
+
+            // replace(old, new) → String
+            ("replace", "ptr")
+                if args.len() >= 2
+                    && !matches!(
+                        self.mvl_receiver_kind(receiver),
+                        Some("List") | Some("Array") | Some("Set") | Some("Map")
+                    ) =>
+            {
+                let old_s = match self.emit_expr(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                let new_s = match self.emit_expr(&args[1])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                self.ensure_extern("declare ptr @_mvl_str_replace(ptr, ptr, ptr)");
+                let reg = self.next_reg();
+                self.push_instr(&format!(
+                    "{reg} = call ptr @_mvl_str_replace(ptr {val}, ptr {old_s}, ptr {new_s})"
                 ));
                 self.reg_types.insert(reg.clone(), "ptr".into());
                 Ok(Some(reg))
@@ -3731,6 +4187,54 @@ impl TextEmitter {
 
         Ok(Some(arr))
     }
+
+    // ── Map literal ──────────────────────────────────────────────────────
+
+    fn emit_map_literal(&mut self, pairs: &[(Expr, Expr)]) -> Result<Option<String>, String> {
+        let n = pairs.len().max(4) as i64;
+        self.ensure_extern("declare ptr @mvl_map_new(i64)");
+        self.ensure_extern("declare void @mvl_map_insert(ptr, ptr, i64, ptr, i64)");
+        self.ensure_extern("declare ptr @mvl_string_ptr(ptr)");
+        self.ensure_extern("declare i64 @_mvl_str_len(ptr)");
+
+        let map = self.next_reg();
+        self.push_instr(&format!("{map} = call ptr @mvl_map_new(i64 {n})"));
+        self.reg_types.insert(map.clone(), "ptr".into());
+
+        for (key_expr, val_expr) in pairs {
+            // Emit key (expected to be a String → ptr)
+            let key_val = match self.emit_expr(key_expr)? {
+                Some(v) => v,
+                None => continue,
+            };
+            // Get raw pointer and length from the MvlString key
+            let key_ptr = self.next_reg();
+            self.push_instr(&format!(
+                "{key_ptr} = call ptr @mvl_string_ptr(ptr {key_val})"
+            ));
+            let key_len = self.next_reg();
+            self.push_instr(&format!(
+                "{key_len} = call i64 @_mvl_str_len(ptr {key_val})"
+            ));
+
+            // Emit value and store to stack slot
+            let val_val = match self.emit_expr(val_expr)? {
+                Some(v) => v,
+                None => continue,
+            };
+            let val_ty = self.infer_val_type(&val_val);
+            let val_slot = self.next_reg();
+            self.push_instr(&format!("{val_slot} = alloca {val_ty}"));
+            self.push_instr(&format!("store {val_ty} {val_val}, ptr {val_slot}"));
+
+            // val_size = 8 for all scalar types (i64, ptr, double)
+            self.push_instr(&format!(
+                "call void @mvl_map_insert(ptr {map}, ptr {key_ptr}, i64 {key_len}, ptr {val_slot}, i64 8)"
+            ));
+        }
+
+        Ok(Some(map))
+    }
 }
 
 // ── Target triple ─────────────────────────────────────────────────────────────
@@ -4309,5 +4813,330 @@ mod tests {
         assert!(ir.contains("i8 0, label"), "{ir}"); // Some arm
         assert!(ir.contains("i8 1, label"), "{ir}"); // None arm
         assert!(ir.contains("phi i64"), "{ir}");
+    }
+
+    // ── Map literal emission tests (#1184) ───────────────────────────────
+
+    #[test]
+    fn map_literal_emits_map_new_and_insert() {
+        let ir = compile(
+            "fn main() -> Unit {\n\
+             let m: Map[String, Int] = {\"a\": 1, \"b\": 2};\n\
+             }",
+        );
+        assert!(ir.contains("call ptr @mvl_map_new(i64"), "{ir}");
+        assert!(ir.contains("call void @mvl_map_insert(ptr"), "{ir}");
+        assert!(ir.contains("call ptr @mvl_string_ptr(ptr"), "{ir}");
+        assert!(ir.contains("call i64 @_mvl_str_len(ptr"), "{ir}");
+    }
+
+    #[test]
+    fn empty_map_emits_map_new_only() {
+        let ir = compile(
+            "fn main() -> Unit {\n\
+             let m: Map[String, Int] = Map::new();\n\
+             }",
+        );
+        // Map::new() goes through FnCall, not Map literal — just verify no crash.
+        assert!(ir.contains("define i32 @main()"), "{ir}");
+    }
+
+    #[test]
+    fn map_len_emits_mvl_map_len() {
+        let ir = compile(
+            "fn main() -> Int {\n\
+             let m: Map[String, Int] = {\"a\": 1};\n\
+             m.len()\n\
+             }",
+        );
+        assert!(ir.contains("declare i64 @mvl_map_len(ptr)"), "{ir}");
+        assert!(ir.contains("call i64 @mvl_map_len(ptr"), "{ir}");
+    }
+
+    #[test]
+    fn map_keys_emits_mvl_map_keys() {
+        let ir = compile(
+            "fn main() -> Unit {\n\
+             let m: Map[String, Int] = {\"a\": 1};\n\
+             let _k: List[String] = m.keys();\n\
+             }",
+        );
+        assert!(ir.contains("declare ptr @mvl_map_keys(ptr)"), "{ir}");
+        assert!(ir.contains("call ptr @mvl_map_keys(ptr"), "{ir}");
+    }
+
+    #[test]
+    fn map_contains_key_emits_null_check() {
+        let ir = compile(
+            "fn main() -> Bool {\n\
+             let m: Map[String, Int] = {\"a\": 1};\n\
+             m.contains_key(\"a\")\n\
+             }",
+        );
+        assert!(ir.contains("call ptr @mvl_map_get(ptr"), "{ir}");
+        assert!(ir.contains("icmp ne ptr"), "{ir}");
+    }
+
+    #[test]
+    fn map_get_emits_null_guard_before_load() {
+        let ir = compile(
+            "fn f(m: Map[String, Int]) -> Int {\n\
+             m.get(\"key\")\n\
+             }",
+        );
+        assert!(ir.contains("call ptr @mvl_map_get(ptr"), "{ir}");
+        // Must null-check before loading
+        assert!(ir.contains("icmp eq ptr"), "{ir}");
+        assert!(ir.contains("load i64, ptr"), "{ir}");
+        assert!(ir.contains("phi i64"), "{ir}");
+    }
+
+    // ── HeapKind drop tracking tests (#1185) ─────────────────────────────
+
+    #[test]
+    fn string_local_emits_drop_before_ret() {
+        let ir = compile(
+            "fn greet() -> Unit {\n\
+             let s: String = \"hello\";\n\
+             }",
+        );
+        assert!(ir.contains("call void @mvl_string_drop(ptr"), "{ir}");
+        assert!(ir.contains("declare void @mvl_string_drop(ptr)"), "{ir}");
+    }
+
+    #[test]
+    fn list_local_emits_drop_before_ret() {
+        let ir = compile(
+            "fn nums() -> Unit {\n\
+             let xs: List[Int] = [1, 2, 3];\n\
+             }",
+        );
+        assert!(ir.contains("call void @mvl_array_drop(ptr"), "{ir}");
+        assert!(ir.contains("declare void @mvl_array_drop(ptr)"), "{ir}");
+    }
+
+    #[test]
+    fn map_local_emits_drop_before_ret() {
+        let ir = compile(
+            "fn maps() -> Unit {\n\
+             let m: Map[String, Int] = {\"a\": 1};\n\
+             }",
+        );
+        assert!(ir.contains("call void @mvl_map_drop(ptr"), "{ir}");
+        assert!(ir.contains("declare void @mvl_map_drop(ptr)"), "{ir}");
+    }
+
+    #[test]
+    fn multiple_heap_locals_all_dropped() {
+        let ir = compile(
+            "fn multi() -> Unit {\n\
+             let s: String = \"hello\";\n\
+             let xs: List[Int] = [1, 2];\n\
+             }",
+        );
+        assert!(ir.contains("call void @mvl_string_drop(ptr"), "{ir}");
+        assert!(ir.contains("call void @mvl_array_drop(ptr"), "{ir}");
+    }
+
+    #[test]
+    fn primitive_locals_no_drop() {
+        let ir = compile(
+            "fn prims() -> Unit {\n\
+             let x: Int = 42;\n\
+             let b: Bool = true;\n\
+             }",
+        );
+        assert!(!ir.contains("_drop"), "{ir}");
+    }
+
+    #[test]
+    fn explicit_return_emits_drops() {
+        let ir = compile(
+            "fn early() -> Int {\n\
+             let s: String = \"hello\";\n\
+             return 42;\n\
+             }",
+        );
+        // The drop should appear before the ret instruction.
+        assert!(ir.contains("call void @mvl_string_drop(ptr"), "{ir}");
+    }
+
+    #[test]
+    fn shadowed_string_local_no_double_drop() {
+        let ir = compile(
+            "fn f() -> Unit {\n\
+             let s: String = \"first\";\n\
+             let s: String = \"second\";\n\
+             }",
+        );
+        // Should have exactly 1 drop call (for the second binding only;
+        // the first is removed from tracking when shadowed).
+        let drop_count = ir.matches("call void @mvl_string_drop(ptr").count();
+        assert_eq!(drop_count, 1, "expected 1 drop, got {drop_count}\n{ir}");
+    }
+
+    #[test]
+    fn ref_string_local_emits_load_then_drop() {
+        let ir = compile(
+            "fn f() -> Unit {\n\
+             let s: ref String = \"hello\";\n\
+             }",
+        );
+        // ref local: must load from alloca, then drop the loaded value.
+        assert!(ir.contains("call void @mvl_string_drop(ptr"), "{ir}");
+        // Verify the load-before-drop pattern exists.
+        assert!(ir.contains("load ptr, ptr"), "{ir}");
+    }
+
+    // ── String builtin kernel methods tests (#1186) ──────────────────────
+
+    #[test]
+    fn string_chars_emits_runtime_call() {
+        let ir = compile(
+            "fn f(s: String) -> Unit {\n\
+             let _cs: List[String] = s.chars();\n\
+             }",
+        );
+        assert!(ir.contains("declare ptr @mvl_string_chars(ptr)"), "{ir}");
+        assert!(ir.contains("call ptr @mvl_string_chars(ptr"), "{ir}");
+    }
+
+    #[test]
+    fn string_byte_at_emits_runtime_call() {
+        let ir = compile(
+            "fn f(s: String) -> Int {\n\
+             s.byte_at(0)\n\
+             }",
+        );
+        assert!(
+            ir.contains("declare i64 @_mvl_str_byte_at(ptr, i64)"),
+            "{ir}"
+        );
+        assert!(ir.contains("call i64 @_mvl_str_byte_at(ptr"), "{ir}");
+    }
+
+    #[test]
+    fn string_find_emits_runtime_call() {
+        let ir = compile(
+            "fn f(s: String) -> Int {\n\
+             s.find(\"x\")\n\
+             }",
+        );
+        assert!(ir.contains("declare i64 @_mvl_str_find(ptr, ptr)"), "{ir}");
+        assert!(ir.contains("call i64 @_mvl_str_find(ptr"), "{ir}");
+    }
+
+    #[test]
+    fn string_split_emits_runtime_call() {
+        let ir = compile(
+            "fn f(s: String) -> Unit {\n\
+             let _parts: List[String] = s.split(\",\");\n\
+             }",
+        );
+        assert!(ir.contains("declare ptr @_mvl_str_split(ptr, ptr)"), "{ir}");
+        assert!(ir.contains("call ptr @_mvl_str_split(ptr"), "{ir}");
+    }
+
+    #[test]
+    fn string_substring_emits_runtime_call() {
+        let ir = compile(
+            "fn f(s: String) -> String {\n\
+             s.substring(0, 3)\n\
+             }",
+        );
+        assert!(
+            ir.contains("declare ptr @_mvl_str_substring(ptr, i64, i64)"),
+            "{ir}"
+        );
+        assert!(ir.contains("call ptr @_mvl_str_substring(ptr"), "{ir}");
+    }
+
+    #[test]
+    fn string_contains_emits_i64_to_bool() {
+        let ir = compile(
+            "fn f(s: String) -> Bool {\n\
+             s.contains(\"x\")\n\
+             }",
+        );
+        assert!(
+            ir.contains("declare i64 @_mvl_str_contains(ptr, ptr)"),
+            "{ir}"
+        );
+        assert!(ir.contains("icmp ne i64"), "{ir}");
+    }
+
+    #[test]
+    fn string_starts_with_emits_runtime_call() {
+        let ir = compile(
+            "fn f(s: String) -> Bool {\n\
+             s.starts_with(\"http\")\n\
+             }",
+        );
+        assert!(
+            ir.contains("declare i64 @_mvl_str_starts_with(ptr, ptr)"),
+            "{ir}"
+        );
+        assert!(ir.contains("call i64 @_mvl_str_starts_with(ptr"), "{ir}");
+    }
+
+    #[test]
+    fn string_ends_with_emits_runtime_call() {
+        let ir = compile(
+            "fn f(s: String) -> Bool {\n\
+             s.ends_with(\".mvl\")\n\
+             }",
+        );
+        assert!(
+            ir.contains("declare i64 @_mvl_str_ends_with(ptr, ptr)"),
+            "{ir}"
+        );
+        assert!(ir.contains("call i64 @_mvl_str_ends_with(ptr"), "{ir}");
+    }
+
+    #[test]
+    fn string_trim_emits_runtime_call() {
+        let ir = compile(
+            "fn f(s: String) -> String {\n\
+             s.trim()\n\
+             }",
+        );
+        assert!(ir.contains("declare ptr @_mvl_str_trim(ptr)"), "{ir}");
+        assert!(ir.contains("call ptr @_mvl_str_trim(ptr"), "{ir}");
+    }
+
+    #[test]
+    fn string_to_lower_emits_runtime_call() {
+        let ir = compile(
+            "fn f(s: String) -> String {\n\
+             s.to_lower()\n\
+             }",
+        );
+        assert!(ir.contains("declare ptr @_mvl_str_to_lower(ptr)"), "{ir}");
+        assert!(ir.contains("call ptr @_mvl_str_to_lower(ptr"), "{ir}");
+    }
+
+    #[test]
+    fn string_to_upper_emits_runtime_call() {
+        let ir = compile(
+            "fn f(s: String) -> String {\n\
+             s.to_upper()\n\
+             }",
+        );
+        assert!(ir.contains("declare ptr @_mvl_str_to_upper(ptr)"), "{ir}");
+        assert!(ir.contains("call ptr @_mvl_str_to_upper(ptr"), "{ir}");
+    }
+
+    #[test]
+    fn string_replace_emits_runtime_call() {
+        let ir = compile(
+            "fn f(s: String) -> String {\n\
+             s.replace(\"old\", \"new\")\n\
+             }",
+        );
+        assert!(
+            ir.contains("declare ptr @_mvl_str_replace(ptr, ptr, ptr)"),
+            "{ir}"
+        );
+        assert!(ir.contains("call ptr @_mvl_str_replace(ptr"), "{ir}");
     }
 }
