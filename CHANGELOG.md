@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Changed
+- **Rust backend**: enforce TIR as sole backend input boundary (#1195) — backends now accept `TirProgram` instead of raw AST + `HashMap<Span, Ty>`; all monomorphization and type lowering happens before backend entry
+- Extend `TirProgram` with all declaration types (functions, types, externs, actors, impls, consts, uses, effects, labels, relabels)
+- Dual emitter paths: TIR for user code, AST for prelude; `emit_tir_*` functions parallel existing `emit_*` for each expression/statement kind
+- TIR borrow inference (`is_read_only_param_tir`) aligned with AST path: lambda captures, relabel/consume/propagate operands, and sibling module functions now correctly handled
+
 ## [0.178.1] - 2026-06-03
 
 ### Fixed
