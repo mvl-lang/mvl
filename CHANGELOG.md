@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.178.1] - 2026-06-03
+
+### Fixed
+- `llvm_text` backend: lower non-unit enum payloads in match arms (#1200) — variants like `Some(v)` now correctly project payload fields in `match` arms instead of emitting unit-typed loads
+- `tests/corpus/06_ifc/declassification.mvl`: refresh stale comment that referenced the retired `Public`/`Clean` lattice terminology; updated to reflect the current model where `relabel trust` lowers `Tainted[T]→T` and `relabel release` lowers `Secret[T]→T` (#1201, closes #893)
+
 ## [0.178.0] - 2026-06-03
 
 ### Added
