@@ -12,6 +12,10 @@
 //! - Refinement field predicates → `assert!` in constructors (always enforced)
 
 use crate::mvl::backends::rust::emitter::RustEmitter;
+use crate::mvl::checker::types::ARRAY_SIZE_UNKNOWN;
+use crate::mvl::ir::{
+    TirExternDecl, TirFieldDecl, TirTypeBody, TirTypeDecl, TirVariant, TirVariantFields, Ty,
+};
 use crate::mvl::parser::ast::{
     FieldDecl, GenericParam, RefExpr, TypeBody, TypeDecl, TypeExpr, Variant, VariantFields,
 };
@@ -355,6 +359,58 @@ fn generic_params(params: &[GenericParam]) -> String {
     format!("<{}>", parts.join(", "))
 }
 
+// ── Ty → Rust type string ─────────────────────────────────────────────────
+
+/// Convert a resolved MVL [`Ty`] to its Rust representation.
+pub fn emit_ty(ty: &Ty) -> String {
+    match ty {
+        Ty::Int => "i64".to_string(),
+        Ty::Float => "f64".to_string(),
+        Ty::Bool => "bool".to_string(),
+        Ty::String => "String".to_string(),
+        Ty::Char => "char".to_string(),
+        Ty::Byte | Ty::UByte => "u8".to_string(),
+        Ty::UInt => "u64".to_string(),
+        Ty::Unit => "()".to_string(),
+        Ty::Never => "!".to_string(),
+        Ty::Named(name, args) => {
+            let rust_name = map_base_type(name);
+            if args.is_empty() {
+                rust_name.to_string()
+            } else {
+                let args_str: Vec<String> = args.iter().map(emit_ty).collect();
+                format!("{}<{}>", rust_name, args_str.join(", "))
+            }
+        }
+        Ty::Option(inner) => format!("Option<{}>", emit_ty(inner)),
+        Ty::Result(ok, err) => format!("Result<{}, {}>", emit_ty(ok), emit_ty(err)),
+        Ty::Ref(true, inner) => format!("&mut {}", emit_ty(inner)),
+        Ty::Ref(false, inner) => format!("&{}", emit_ty(inner)),
+        Ty::Fn(params, ret, _, _) => {
+            let params_str: Vec<String> = params.iter().map(emit_ty).collect();
+            format!("fn({}) -> {}", params_str.join(", "), emit_ty(ret))
+        }
+        Ty::Tuple(elems) => {
+            let elems_str: Vec<String> = elems.iter().map(emit_ty).collect();
+            format!("({})", elems_str.join(", "))
+        }
+        Ty::List(inner) => format!("Vec<{}>", emit_ty(inner)),
+        Ty::Array(inner, size) => {
+            if *size == ARRAY_SIZE_UNKNOWN {
+                format!("Vec<{}>", emit_ty(inner))
+            } else {
+                format!("[{}; {}]", emit_ty(inner), size)
+            }
+        }
+        Ty::Map(k, v) => format!("std::collections::HashMap<{}, {}>", emit_ty(k), emit_ty(v)),
+        Ty::Set(t) => format!("std::collections::HashSet<{}>", emit_ty(t)),
+        Ty::Refined(inner, _) => emit_ty(inner),
+        Ty::Labeled(label, inner) => format!("{}<{}>", label, emit_ty(inner)),
+        Ty::Session(_) => "/* session type */()".to_string(),
+        Ty::Unknown => "()".to_string(),
+    }
+}
+
 // ── TypeExpr → Rust type string ───────────────────────────────────────────
 
 /// Convert an MVL [`TypeExpr`] to its Rust representation.
@@ -456,6 +512,259 @@ fn map_base_type(name: &str) -> &str {
 
 pub fn emit_label(label: &str) -> &str {
     label
+}
+
+// ── TIR TypeDecl emission ─────────────────────────────────────────────────
+
+pub fn emit_tir_type_decl(cg: &mut RustEmitter, td: &TirTypeDecl) {
+    match &td.body {
+        TirTypeBody::Struct { fields, invariant } => {
+            emit_tir_struct(cg, &td.name, &td.params, fields, invariant.as_ref());
+        }
+        TirTypeBody::Enum(variants) => emit_tir_enum(cg, &td.name, &td.params, variants),
+        TirTypeBody::Alias(ty) => emit_tir_alias(cg, &td.name, &td.params, ty),
+    }
+}
+
+fn emit_tir_struct(
+    cg: &mut RustEmitter,
+    name: &str,
+    params: &[GenericParam],
+    fields: &[TirFieldDecl],
+    invariant: Option<&RefExpr>,
+) {
+    emit_derive(cg, &["Debug", "Clone", "PartialEq"]);
+    cg.line(&format!("pub struct {}{} {{", name, generic_params(params)));
+    cg.push_indent();
+    for field in fields {
+        let ty_str = emit_ty(&field.ty);
+        cg.line(&format!("pub {}: {},", field.name, ty_str));
+    }
+    cg.pop_indent();
+    cg.line("}");
+
+    let refined_fields: Vec<_> = fields.iter().filter(|f| f.refinement.is_some()).collect();
+    if !refined_fields.is_empty() || invariant.is_some() {
+        cg.blank();
+        cg.line(&format!(
+            "impl{} {}{} {{",
+            generic_params(params),
+            name,
+            generic_params(params)
+        ));
+        cg.push_indent();
+        cg.line(&format!(
+            "/// Construct `{}`, validating all refinement predicates.",
+            name
+        ));
+        let param_list: Vec<String> = fields
+            .iter()
+            .map(|f| format!("{}: {}", f.name, emit_ty(&f.ty)))
+            .collect();
+        cg.line(&format!("pub fn new({}) -> Self {{", param_list.join(", ")));
+        cg.push_indent();
+        for field in &refined_fields {
+            if let Some(pred) = &field.refinement {
+                let pred_str = emit_ref_expr_for_assert(pred, &field.name);
+                cg.line(&format!(
+                    "assert!({pred_str}, \"refinement violated: {} {{}}\", {});",
+                    field.name, field.name
+                ));
+            }
+        }
+        let field_inits: Vec<String> = fields.iter().map(|f| f.name.clone()).collect();
+        if let Some(inv) = invariant {
+            cg.line(&format!(
+                "let _mvl_val = Self {{ {} }};",
+                field_inits.join(", ")
+            ));
+            let inv_str = emit_ref_expr_for_assert(inv, "_mvl_val");
+            let inv_stmt = match cg.assert_mode {
+                crate::mvl::backends::AssertMode::Always => {
+                    format!("assert!({inv_str}, \"struct invariant violated for `{name}`\");")
+                }
+                crate::mvl::backends::AssertMode::DebugOnly => {
+                    format!("debug_assert!({inv_str}, \"struct invariant violated for `{name}`\");")
+                }
+                crate::mvl::backends::AssertMode::Assume => String::new(),
+            };
+            if !inv_stmt.is_empty() {
+                cg.line(&inv_stmt);
+            }
+            cg.line("_mvl_val");
+        } else {
+            cg.line(&format!("Self {{ {} }}", field_inits.join(", ")));
+        }
+        cg.pop_indent();
+        cg.line("}");
+        cg.pop_indent();
+        cg.line("}");
+    }
+}
+
+fn emit_tir_enum(
+    cg: &mut RustEmitter,
+    name: &str,
+    params: &[GenericParam],
+    variants: &[TirVariant],
+) {
+    emit_derive(cg, &["Debug", "Clone", "PartialEq"]);
+    cg.line(&format!("pub enum {}{} {{", name, generic_params(params)));
+    cg.push_indent();
+    for v in variants {
+        match &v.fields {
+            TirVariantFields::Unit => cg.line(&format!("{},", v.name)),
+            TirVariantFields::Tuple(tys) => {
+                let tys_str: Vec<String> = tys.iter().map(emit_ty).collect();
+                cg.line(&format!("{}({}),", v.name, tys_str.join(", ")));
+            }
+            TirVariantFields::Struct(fields) => {
+                cg.line(&format!("{} {{", v.name));
+                cg.push_indent();
+                for f in fields {
+                    let ty_str = emit_ty(&f.ty);
+                    cg.line(&format!("{}: {},", f.name, ty_str));
+                }
+                cg.pop_indent();
+                cg.line("},");
+            }
+        }
+    }
+    cg.pop_indent();
+    cg.line("}");
+}
+
+fn emit_tir_alias(cg: &mut RustEmitter, name: &str, params: &[GenericParam], ty: &Ty) {
+    match ty {
+        Ty::Refined(inner, pred) => {
+            let inner_str = emit_ty(inner);
+            if is_copy_primitive_ty(inner) {
+                emit_derive(cg, &["Debug", "Clone", "Copy", "PartialEq", "PartialOrd"]);
+            } else {
+                emit_derive(cg, &["Debug", "Clone", "PartialEq", "PartialOrd"]);
+            }
+            cg.line(&format!(
+                "pub struct {}{}(pub {});",
+                name,
+                generic_params(params),
+                inner_str
+            ));
+            cg.blank();
+            cg.line(&format!("impl {} {{", name));
+            cg.push_indent();
+            cg.line(&format!(
+                "/// Construct `{name}` — panics if the refinement is violated."
+            ));
+            cg.line(&format!("pub fn new(v: {inner_str}) -> Self {{"));
+            cg.push_indent();
+            let pred_str = emit_ref_expr_for_assert(pred, "v");
+            cg.line(&format!(
+                "assert!({pred_str}, \"refinement violated: {name}({{}})\", v);"
+            ));
+            cg.line("Self(v)");
+            cg.pop_indent();
+            cg.line("}");
+            cg.pop_indent();
+            cg.line("}");
+        }
+        _ => {
+            let ty_str = emit_ty(ty);
+            if params.is_empty() {
+                cg.line(&format!("pub type {name} = {ty_str};"));
+            } else {
+                cg.line(&format!(
+                    "pub type {}{} = {ty_str};",
+                    name,
+                    generic_params(params)
+                ));
+            }
+        }
+    }
+}
+
+fn is_copy_primitive_ty(ty: &Ty) -> bool {
+    matches!(ty, Ty::Int | Ty::Float | Ty::Bool | Ty::Char | Ty::Byte)
+}
+
+pub fn emit_tir_extern_decl(cg: &mut RustEmitter, ed: &TirExternDecl) {
+    if cg.test_extern_stubs {
+        cg.line(&format!(
+            "// ── extern \"{}\" stubs (test mode) ──────────────────────────────────────────",
+            ed.abi
+        ));
+        for f in &ed.fns {
+            if !cg.emitted_extern_stub_fns.insert(f.name.clone()) {
+                continue;
+            }
+            let params_str: Vec<String> = f
+                .params
+                .iter()
+                .map(|p| format!("{}: {}", p.name, emit_ty(&p.ty)))
+                .collect();
+            let ret_str = emit_ty(&f.ret_ty);
+            cg.line(&format!(
+                "#[allow(dead_code)] pub fn {}({}) -> {} {{ todo!(\"extern stub\") }}",
+                f.name,
+                params_str.join(", "),
+                ret_str
+            ));
+        }
+        return;
+    }
+
+    let new_fns: Vec<_> = ed
+        .fns
+        .iter()
+        .filter(|f| cg.extern_fns.insert(f.name.clone()))
+        .collect();
+    if new_fns.is_empty() {
+        return;
+    }
+
+    cg.line(&format!(
+        "// ── extern \"{}\" trust boundary ({} fn{}) ──────────────────────────────────",
+        ed.abi,
+        new_fns.len(),
+        if new_fns.len() == 1 { "" } else { "s" }
+    ));
+    let rust_abi = match ed.abi.as_str() {
+        "rust" => "Rust",
+        "c" => "C",
+        other => {
+            cg.line(&format!(
+                "// extern \"{other}\" block skipped — unsupported ABI (checker error)"
+            ));
+            return;
+        }
+    };
+    cg.line(&format!("extern \"{rust_abi}\" {{"));
+    cg.push_indent();
+    for f in &new_fns {
+        if !f.effects.is_empty() {
+            cg.line(&format!(
+                "// ! {}",
+                f.effects
+                    .iter()
+                    .map(|e| e.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        let params_str: Vec<String> = f
+            .params
+            .iter()
+            .map(|p| format!("{}: {}", p.name, emit_ty(&p.ty)))
+            .collect();
+        let ret_str = emit_ty(&f.ret_ty);
+        cg.line(&format!(
+            "fn {}({}) -> {};",
+            f.name,
+            params_str.join(", "),
+            ret_str
+        ));
+    }
+    cg.pop_indent();
+    cg.line("}");
 }
 
 // ── Refinement predicate → Rust assert expression ─────────────────────────

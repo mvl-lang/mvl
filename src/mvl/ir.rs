@@ -32,9 +32,14 @@ pub mod lower;
 /// This keeps the checker boundary clean: backends depend on `ir`, not on `checker` internals.
 pub use crate::mvl::checker::types::Ty;
 
-use crate::mvl::parser::ast::{
-    BinaryOp, Capability, Effect, EffectDecl, GenericParam, LValue, LabelDecl, LetKind, Literal,
-    MailboxConfig, Pattern, RefExpr, RelabelDecl, Totality, TypeExpr, UnaryOp, UseDecl,
+// Primitive AST types re-exported so backends can import from `crate::mvl::ir`
+// and have zero direct dependencies on `parser::ast`.  These types carry no
+// `TypeExpr` fields — they are structural primitives reused unchanged through
+// the pipeline.
+pub use crate::mvl::parser::ast::{
+    BinaryOp, Capability, Constraint, Effect, EffectDecl, GenericParam, LValue, LabelDecl, LetKind,
+    Literal, LogicOp, MailboxConfig, MailboxPolicy, Pattern, RefExpr, RelabelDecl, Totality,
+    TypeExpr, UnaryOp, UseDecl,
 };
 use crate::mvl::parser::lexer::Span;
 
@@ -248,11 +253,29 @@ pub struct TirFn {
     pub name: String,
     /// Original unmangled name.
     pub original_name: String,
+    /// Whether the item is exported from this module (`pub`).
+    pub visible: bool,
+    /// Whether the function is a test (`test fn`).
+    pub is_test: bool,
+    /// Whether the function has a runtime-provided implementation (`builtin fn`).
+    pub is_builtin: bool,
+    /// For extension methods: the receiver type name (e.g. `"String"` for `fn String::len`).
+    pub receiver_type: Option<String>,
+    /// Generic type parameters (preserved for backends that emit generic defs).
+    pub type_params: Vec<GenericParam>,
+    /// Where-clause constraints (`where T: Eq`).
+    pub constraints: Vec<Constraint>,
     /// Totality annotation: `None` = unknown/partial, `Some(Total)` = proved terminating.
     pub totality: Option<Totality>,
     pub params: Vec<TirParam>,
     pub ret_ty: Ty,
+    /// Refinement predicate on the return type (`-> Int where self > 0`).
+    pub return_refinement: Option<RefExpr>,
     pub effects: Vec<Effect>,
+    /// Preconditions lowered to `RefExpr` — ready for `emit_ref_expr_for_assert`.
+    pub requires: Vec<RefExpr>,
+    /// Postconditions lowered to `RefExpr`.
+    pub ensures: Vec<RefExpr>,
     pub body: TirBlock,
     pub span: Span,
 }

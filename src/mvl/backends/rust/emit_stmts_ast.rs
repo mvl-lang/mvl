@@ -1,42 +1,36 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Schuberg Philis
 
-//! Emit Rust statements from MVL [`TirStmt`] nodes.
+//! AST-based statement emitter (legacy path for prelude/stdlib functions).
 //!
-//! Covers statement forms defined in 000-parser/Req 5 ("Parse Statements"):
-//! `let`/`let mut`, assignment, `if`/`else`, `match`, `for`, `while`, `return`, `?`.
+//! This module preserves the AST-based emission logic for use by `emit_fn_decl_ast`
+//! when emitting prelude functions that have not been lowered to TIR.
 //!
-//! The emitted Rust preserves MVL's semantic guarantees:
-//! - `while` only appears in `partial fn` bodies (enforced by the type checker per Req 8)
-//! - `for` iterates over labeled collections, preserving security labels per Req 11
-//! - Assignments carry the label of the source expression (IFC is static, no runtime cost)
-//!
-//! Part of the ADR-0003 transpilation pipeline.  Spec link: 000-parser Req 1 (statement grammar).
-//!
-//! See ADR-0003 for the overall compilation strategy.
+//! The TIR-based replacement lives in `emit_stmts.rs`.
 
-use crate::mvl::backends::rust::emit_exprs::{
+#[allow(unused_imports)]
+use crate::mvl::backends::rust::emit_exprs_ast::{
     arms_have_str_pattern, emit_block_as_value, emit_block_stmts, emit_expr, emit_pattern,
 };
-use crate::mvl::backends::rust::emit_types::{emit_ref_expr_for_assert, emit_ty};
+use crate::mvl::backends::rust::emit_types::{emit_ref_expr_for_assert, emit_type_expr};
 use crate::mvl::backends::rust::emitter::RustEmitter;
-use crate::mvl::backends::rust::mcdc_instr::DecisionKind;
-use crate::mvl::ir::{
-    BinaryOp, LValue, LetKind, Literal, LogicOp, RefExpr, TirBlock, TirElseBranch, TirExpr,
-    TirExprKind, TirMatchBody, TirStmt, Ty,
+use crate::mvl::parser::ast::{
+    BinaryOp, ElseBranch, Expr, LValue, LetKind, Literal, LogicOp, MatchBody, RefExpr, Stmt,
+    TypeExpr,
 };
 use crate::mvl::passes::coverage::BranchKind;
-use crate::mvl::passes::mcdc::analysis::count_clauses_ref;
+use crate::mvl::passes::mcdc::analysis::{collect_clauses, count_clauses_ref};
+use crate::mvl::passes::mcdc::transform::{detect_coupled_pairs, DecisionKind};
 
 /// Emit a single statement (with indentation and trailing newline).
-pub fn emit_stmt(cg: &mut RustEmitter, stmt: &TirStmt) {
+pub fn emit_stmt_ast(cg: &mut RustEmitter, stmt: &Stmt) {
     match stmt {
         // Ghost bindings are specification-only — erased before codegen (Phase 4, #627).
-        TirStmt::Let {
+        Stmt::Let {
             kind: LetKind::Ghost,
             ..
         } => {}
-        TirStmt::Let {
+        Stmt::Let {
             kind: LetKind::Regular,
             pattern,
             ty,
@@ -44,8 +38,13 @@ pub fn emit_stmt(cg: &mut RustEmitter, stmt: &TirStmt) {
             ..
         } => {
             cg.indent();
-            // `Ty::Ref(true, _)` encodes mutability — emit `let mut` and strip the ref wrapper.
-            let (is_mutable, ty_for_emit) = if let Ty::Ref(true, inner) = ty {
+            // `ref T` in the type annotation encodes mutability — emit `let mut` and strip the ref wrapper.
+            let (is_mutable, emit_ty) = if let TypeExpr::Ref {
+                mutable: true,
+                inner,
+                ..
+            } = ty
+            {
                 (true, inner.as_ref())
             } else {
                 (false, ty)
@@ -57,14 +56,14 @@ pub fn emit_stmt(cg: &mut RustEmitter, stmt: &TirStmt) {
             }
             emit_pattern(cg, pattern);
             cg.push(": ");
-            cg.push(&emit_ty(ty_for_emit));
+            cg.push(&emit_type_expr(emit_ty));
             cg.push(" = ");
             emit_expr(cg, init);
             // When the init is a field access on a borrowed parameter (e.g.
             // `acc.items` where `acc: &ParseAcc`), the field is behind a reference
             // and cannot be moved — `.clone()` produces an owned copy.
-            let needs_clone = if let TirExprKind::FieldAccess { expr: inner, .. } = &init.kind {
-                if let TirExprKind::Var(name) = &inner.kind {
+            let needs_clone = if let Expr::FieldAccess { expr, .. } = init {
+                if let Expr::Ident(name, _) = expr.as_ref() {
                     cg.capability_param_names.contains(name.as_str())
                 } else {
                     false
@@ -77,13 +76,15 @@ pub fn emit_stmt(cg: &mut RustEmitter, stmt: &TirStmt) {
             }
             // When the declared type is a security label (e.g. Tainted<String>) and the
             // init is a plain value or function call, `.into()` converts it to the labeled
-            // type.
-            let needs_into = matches!(ty, Ty::Labeled(..))
+            // type. Covers: string literals, function calls returning plain types, and
+            // transparent-fn calls whose result needs lifting (e.g. `Clean<Counts>`).
+            // Safe for calls already returning the labeled type — `From<T> for T` is no-op.
+            let needs_into = matches!(ty, TypeExpr::Labeled { .. })
                 && matches!(
-                    &init.kind,
-                    TirExprKind::Literal(Literal::Str(_))
-                        | TirExprKind::FnCall { .. }
-                        | TirExprKind::MethodCall { .. }
+                    init,
+                    Expr::Literal(crate::mvl::parser::ast::Literal::Str(_), _)
+                        | Expr::FnCall { .. }
+                        | Expr::MethodCall { .. }
                 );
             if needs_into {
                 cg.push(".into()");
@@ -92,7 +93,7 @@ pub fn emit_stmt(cg: &mut RustEmitter, stmt: &TirStmt) {
             cg.nl();
         }
 
-        TirStmt::Assign { target, value, .. } => {
+        Stmt::Assign { target, value, .. } => {
             cg.indent();
             emit_lvalue(cg, target);
             cg.push(" = ");
@@ -101,7 +102,7 @@ pub fn emit_stmt(cg: &mut RustEmitter, stmt: &TirStmt) {
             cg.nl();
         }
 
-        TirStmt::Return { value, .. } => {
+        Stmt::Return { value, .. } => {
             cg.indent();
             if let Some(v) = value {
                 cg.push("return ");
@@ -113,7 +114,7 @@ pub fn emit_stmt(cg: &mut RustEmitter, stmt: &TirStmt) {
             cg.nl();
         }
 
-        TirStmt::If {
+        Stmt::If {
             cond,
             then,
             else_,
@@ -148,7 +149,7 @@ pub fn emit_stmt(cg: &mut RustEmitter, stmt: &TirStmt) {
             }
         }
 
-        TirStmt::Match {
+        Stmt::Match {
             scrutinee,
             arms,
             span,
@@ -168,8 +169,8 @@ pub fn emit_stmt(cg: &mut RustEmitter, stmt: &TirStmt) {
             // Clone when the scrutinee is a self.field access (can't move out of &self)
             // or a capability param (val/ref → &T/&mut T in Rust). Without clone,
             // match ergonomics yield reference bindings that fail E0507/E0277.
-            if scrutinee_needs_clone(scrutinee)
-                || matches!(&scrutinee.kind, TirExprKind::Var(name) if cg.capability_param_names.contains(name))
+            if scrutinee_needs_clone_ast(scrutinee)
+                || matches!(scrutinee, Expr::Ident(name, _) if cg.capability_param_names.contains(name))
             {
                 cg.push(".clone()");
             }
@@ -218,14 +219,14 @@ pub fn emit_stmt(cg: &mut RustEmitter, stmt: &TirStmt) {
                     cg.push(" if ");
                     if let Some(&gid) = guard_mcdc_id.as_ref() {
                         let n = count_clauses_ref(guard);
-                        cg.push(&emit_mcdc_guard_block(guard, gid, n));
+                        cg.push(&emit_mcdc_guard_block_ast(guard, gid, n));
                     } else {
                         cg.push(&emit_ref_expr_for_assert(guard, "_"));
                     }
                 }
                 cg.push(" => ");
                 match &arm.body {
-                    TirMatchBody::Expr(e) => {
+                    MatchBody::Expr(e) => {
                         // Wrap in a block to inject coverage and MC/DC hits.
                         cg.push("{ ");
                         if let Some(&id) = cov_id.as_ref() {
@@ -241,7 +242,7 @@ pub fn emit_stmt(cg: &mut RustEmitter, stmt: &TirStmt) {
                         cg.push(",");
                         cg.nl();
                     }
-                    TirMatchBody::Block(block) => {
+                    MatchBody::Block(block) => {
                         cg.push("{");
                         cg.nl();
                         cg.push_indent();
@@ -253,7 +254,7 @@ pub fn emit_stmt(cg: &mut RustEmitter, stmt: &TirStmt) {
                                 "#[cfg(test)] crate::__mvl_mcdc::record({mid}usize, {arm_idx}u32);"
                             ));
                         }
-                        // Use emit_block_as_value so the final TirStmt::Expr is a tail
+                        // Use emit_block_as_value so the final Stmt::Expr is a tail
                         // expression (no semicolon) and becomes the arm's return value.
                         emit_block_as_value(cg, &block.stmts);
                         cg.pop_indent();
@@ -269,7 +270,7 @@ pub fn emit_stmt(cg: &mut RustEmitter, stmt: &TirStmt) {
             cg.nl();
         }
 
-        TirStmt::For {
+        Stmt::For {
             pattern,
             iter,
             body,
@@ -299,7 +300,7 @@ pub fn emit_stmt(cg: &mut RustEmitter, stmt: &TirStmt) {
             cg.nl();
         }
 
-        TirStmt::While {
+        Stmt::While {
             cond, body, span, ..
         } => {
             let while_id = cg.alloc_branch(span.line, BranchKind::WhileBody);
@@ -308,8 +309,7 @@ pub fn emit_stmt(cg: &mut RustEmitter, stmt: &TirStmt) {
             } else {
                 cg.indent();
                 // `while true { … }` → `loop { … }` to avoid the Rust while_true lint.
-                let is_unconditional =
-                    matches!(&cond.kind, TirExprKind::Literal(Literal::Bool(true)));
+                let is_unconditional = matches!(cond, Expr::Literal(Literal::Bool(true), _));
                 if is_unconditional {
                     cg.push("loop {");
                 } else {
@@ -330,7 +330,7 @@ pub fn emit_stmt(cg: &mut RustEmitter, stmt: &TirStmt) {
             }
         }
 
-        TirStmt::Expr { expr, .. } => {
+        Stmt::Expr { expr, .. } => {
             cg.indent();
             emit_expr(cg, expr);
             // Determine if this needs a semicolon: add one for non-block expressions
@@ -346,9 +346,9 @@ pub fn emit_stmt(cg: &mut RustEmitter, stmt: &TirStmt) {
 /// Returns true when the match scrutinee is a direct field access on `self`
 /// (e.g. `self.best_ask`). Such expressions cannot be moved out of `&mut self`,
 /// so the emitter appends `.clone()` to the scrutinee.
-pub(crate) fn scrutinee_needs_clone(expr: &TirExpr) -> bool {
-    if let TirExprKind::FieldAccess { expr: base, .. } = &expr.kind {
-        matches!(&base.kind, TirExprKind::Var(n) if n == "self" || n == "self_")
+pub(crate) fn scrutinee_needs_clone_ast(expr: &Expr) -> bool {
+    if let Expr::FieldAccess { expr: base, .. } = expr {
+        matches!(base.as_ref(), Expr::Ident(n, _) if n == "self" || n == "self_")
     } else {
         false
     }
@@ -365,9 +365,9 @@ fn emit_lvalue(cg: &mut RustEmitter, lv: &LValue) {
     }
 }
 
-fn emit_else_branch(cg: &mut RustEmitter, branch: &TirElseBranch, cov_id: Option<usize>) {
+fn emit_else_branch(cg: &mut RustEmitter, branch: &ElseBranch, cov_id: Option<usize>) {
     match branch {
-        TirElseBranch::Block(block) => {
+        ElseBranch::Block(block) => {
             cg.push("{");
             cg.nl();
             cg.push_indent();
@@ -379,7 +379,7 @@ fn emit_else_branch(cg: &mut RustEmitter, branch: &TirElseBranch, cov_id: Option
             cg.indent();
             cg.push("}");
         }
-        TirElseBranch::If(stmt) => {
+        ElseBranch::If(stmt) => {
             // Emit the `if` inline (no leading indent, no trailing newline) so
             // the caller's `} else ` and this `if` land on the same line.
             // The false-branch coverage hit for the outer if is injected here
@@ -399,7 +399,7 @@ fn emit_else_branch(cg: &mut RustEmitter, branch: &TirElseBranch, cov_id: Option
                 cg.indent();
             }
             match stmt.as_ref() {
-                TirStmt::If {
+                Stmt::If {
                     cond,
                     then,
                     else_,
@@ -415,7 +415,7 @@ fn emit_else_branch(cg: &mut RustEmitter, branch: &TirElseBranch, cov_id: Option
                     // top-level if — mirrors analysis order so decision IDs align).
                     // Must wrap in `{ }` because `else` requires a block in Rust.
                     let mut check_clauses = Vec::new();
-                    collect_clauses_tir(cond, &mut check_clauses);
+                    collect_clauses(cond, &mut check_clauses);
                     if check_clauses.len() >= 2 && cg.mcdc.is_some() {
                         if !needs_block {
                             cg.push("{");
@@ -453,10 +453,7 @@ fn emit_else_branch(cg: &mut RustEmitter, branch: &TirElseBranch, cov_id: Option
                         emit_else_branch(cg, inner_else, inner_false_id);
                     }
                 }
-                other => unreachable!(
-                    "TirElseBranch::If must always wrap TirStmt::If; got {:?}",
-                    other
-                ),
+                other => unreachable!("ElseBranch::If must always wrap Stmt::If; got {:?}", other),
             }
             if needs_block {
                 cg.pop_indent();
@@ -475,7 +472,7 @@ fn emit_else_branch(cg: &mut RustEmitter, branch: &TirElseBranch, cov_id: Option
 /// The generated block evaluates the guard with short-circuit semantics,
 /// records an observation, and evaluates to the boolean guard outcome.
 /// Returned as a `String` because `RefExpr` uses string-building throughout.
-pub(crate) fn emit_mcdc_guard_block(guard: &RefExpr, decision_id: usize, n: usize) -> String {
+pub(crate) fn emit_mcdc_guard_block_ast(guard: &RefExpr, decision_id: usize, n: usize) -> String {
     let decls = format!(
         "let mut __d{decision_id}_c = [false; {n}]; \
          let mut __d{decision_id}_e = [false; {n}];"
@@ -542,35 +539,6 @@ fn sc_ref_outcome_str(expr: &RefExpr, id: usize, idx: &mut usize) -> String {
     }
 }
 
-// ── TIR clause counting (parallel to AST collect_clauses) ────────────────
-
-/// Count atomic boolean clauses in a TirExpr compound condition.
-fn count_clauses_tir(expr: &TirExpr) -> usize {
-    match &expr.kind {
-        TirExprKind::Binary {
-            op: BinaryOp::And | BinaryOp::Or,
-            left,
-            right,
-        } => count_clauses_tir(left) + count_clauses_tir(right),
-        _ => 1,
-    }
-}
-
-/// Collect TirExpr leaf references from a compound boolean TirExpr.
-fn collect_clauses_tir<'a>(expr: &'a TirExpr, clauses: &mut Vec<&'a TirExpr>) {
-    match &expr.kind {
-        TirExprKind::Binary {
-            op: BinaryOp::And | BinaryOp::Or,
-            left,
-            right,
-        } => {
-            collect_clauses_tir(left, clauses);
-            collect_clauses_tir(right, clauses);
-        }
-        _ => clauses.push(expr),
-    }
-}
-
 // ── MC/DC instrumentation helpers ────────────────────────────────────────
 
 /// Emit an if-statement with MC/DC clause tracking for compound conditions.
@@ -580,23 +548,20 @@ fn collect_clauses_tir<'a>(expr: &'a TirExpr, clauses: &mut Vec<&'a TirExpr>) {
 /// back to normal emission (simple condition or MC/DC inactive).
 fn emit_mcdc_if(
     cg: &mut RustEmitter,
-    cond: &TirExpr,
-    then: &TirBlock,
-    else_: &Option<TirElseBranch>,
+    cond: &Expr,
+    then: &crate::mvl::parser::ast::Block,
+    else_: &Option<ElseBranch>,
     line: u32,
     true_id: Option<usize>,
     false_id: Option<usize>,
 ) -> bool {
-    let n = count_clauses_tir(cond);
-    if n <= 1 || cg.mcdc.is_none() {
+    let mut clauses = Vec::new();
+    collect_clauses(cond, &mut clauses);
+    if clauses.len() <= 1 || cg.mcdc.is_none() {
         return false;
     }
-    let mut clauses: Vec<&TirExpr> = Vec::new();
-    collect_clauses_tir(cond, &mut clauses);
-    let coupled = crate::mvl::passes::mcdc::transform::detect_coupled_pairs_tir(
-        &clauses,
-        Some(&cg.mcdc_fn_field_reads),
-    );
+    let n = clauses.len();
+    let coupled = detect_coupled_pairs(&clauses, Some(&cg.mcdc_fn_field_reads));
     let Some(decision_id) = cg.alloc_mcdc_decision(line, n, DecisionKind::If, coupled) else {
         return false;
     };
@@ -640,21 +605,18 @@ fn emit_mcdc_if(
 /// Returns `true` when MC/DC instrumentation was applied, `false` to fall back.
 fn emit_mcdc_while(
     cg: &mut RustEmitter,
-    cond: &TirExpr,
-    body: &TirBlock,
+    cond: &Expr,
+    body: &crate::mvl::parser::ast::Block,
     line: u32,
     while_id: Option<usize>,
 ) -> bool {
-    let n = count_clauses_tir(cond);
-    if n <= 1 || cg.mcdc.is_none() {
+    let mut clauses = Vec::new();
+    collect_clauses(cond, &mut clauses);
+    if clauses.len() <= 1 || cg.mcdc.is_none() {
         return false;
     }
-    let mut clauses: Vec<&TirExpr> = Vec::new();
-    collect_clauses_tir(cond, &mut clauses);
-    let coupled = crate::mvl::passes::mcdc::transform::detect_coupled_pairs_tir(
-        &clauses,
-        Some(&cg.mcdc_fn_field_reads),
-    );
+    let n = clauses.len();
+    let coupled = detect_coupled_pairs(&clauses, Some(&cg.mcdc_fn_field_reads));
     let Some(decision_id) = cg.alloc_mcdc_decision(line, n, DecisionKind::While, coupled) else {
         return false;
     };
@@ -704,21 +666,23 @@ fn emit_mcdc_while(
 ///
 /// Returns `true` when instrumentation was applied; `false` to fall back to
 /// normal emission (simple expression, non-Bool return, or MC/DC inactive).
-pub fn emit_mcdc_return_expr(cg: &mut RustEmitter, expr: &TirExpr, ret_ty: &Ty, line: u32) -> bool {
-    let is_bool = matches!(ret_ty, Ty::Bool);
+pub fn emit_mcdc_return_expr_ast(
+    cg: &mut RustEmitter,
+    expr: &Expr,
+    return_type: &TypeExpr,
+    line: u32,
+) -> bool {
+    let is_bool = matches!(return_type, TypeExpr::Base { name, .. } if name == "Bool");
     if !is_bool {
         return false;
     }
-    let n = count_clauses_tir(expr);
-    if n <= 1 || cg.mcdc.is_none() {
+    let mut clauses = Vec::new();
+    collect_clauses(expr, &mut clauses);
+    if clauses.len() <= 1 || cg.mcdc.is_none() {
         return false;
     }
-    let mut clauses: Vec<&TirExpr> = Vec::new();
-    collect_clauses_tir(expr, &mut clauses);
-    let coupled = crate::mvl::passes::mcdc::transform::detect_coupled_pairs_tir(
-        &clauses,
-        Some(&cg.mcdc_fn_field_reads),
-    );
+    let n = clauses.len();
+    let coupled = detect_coupled_pairs(&clauses, Some(&cg.mcdc_fn_field_reads));
     let Some(decision_id) = cg.alloc_mcdc_decision(line, n, DecisionKind::Return, coupled) else {
         return false;
     };
@@ -737,7 +701,7 @@ pub fn emit_mcdc_return_expr(cg: &mut RustEmitter, expr: &TirExpr, ret_ty: &Ty, 
     true
 }
 
-/// Emit the short-circuit evaluation tree for a compound boolean TirExpr condition.
+/// Emit the short-circuit evaluation tree for a compound boolean condition.
 ///
 /// Sets `__d{id}_c[i]` (clause value) and `__d{id}_e[i]` (evaluated flag) for
 /// each leaf clause *only when it is actually reached* by short-circuit execution.
@@ -747,14 +711,14 @@ pub fn emit_mcdc_return_expr(cg: &mut RustEmitter, expr: &TirExpr, ret_ty: &Ty, 
 /// temporaries so nested `&&`/`||` nodes use distinct names.
 fn emit_mcdc_sc_outcome(
     cg: &mut RustEmitter,
-    expr: &TirExpr,
+    expr: &Expr,
     decision_id: usize,
     clause_idx: &mut usize,
     tmp_idx: &mut usize,
 ) {
-    if let TirExprKind::Binary {
+    if let Expr::Binary {
         op, left, right, ..
-    } = &expr.kind
+    } = expr
     {
         if matches!(op, BinaryOp::And | BinaryOp::Or) {
             let t = *tmp_idx;

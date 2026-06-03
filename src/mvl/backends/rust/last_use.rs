@@ -10,7 +10,7 @@
 //!
 //! # Algorithm
 //!
-//! A single recursive walk visits every [`Expr::Ident`] in textual order,
+//! A single recursive walk visits every [`TirExprKind::Var`] in textual order,
 //! overwriting the recorded span for each name on each encounter.  After the
 //! walk, the map holds exactly one span per name — the last occurrence —
 //! which becomes the returned set.
@@ -32,15 +32,19 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::mvl::parser::ast::{Block, ElseBranch, Expr, MatchBody, Stmt};
+use crate::mvl::ir::{TirBlock, TirElseBranch, TirExpr, TirExprKind, TirMatchBody, TirStmt};
+use crate::mvl::parser::ast::{
+    Block as AstBlock, ElseBranch as AstElseBranch, Expr as AstExpr, MatchBody as AstMatchBody,
+    Stmt as AstStmt,
+};
 use crate::mvl::parser::lexer::Span;
 
 /// Return the set of spans that are last uses of their respective variables.
 ///
 /// Store the result in [`Codegen::last_uses`] before emitting a function body.
-/// [`emit_expr_as_arg`] will suppress `.clone()` for `Expr::Ident` nodes
+/// [`emit_expr_as_arg`] will suppress `.clone()` for `TirExprKind::Var` nodes
 /// whose span appears in this set.
-pub fn compute_last_uses(body: &Block) -> HashSet<Span> {
+pub fn compute_last_uses(body: &TirBlock) -> HashSet<Span> {
     let mut tracker = LastUseTracker::default();
     tracker.visit_block(body, false);
     // Variables that appear in loop bodies must always be cloned: they may be
@@ -53,6 +57,165 @@ pub fn compute_last_uses(body: &Block) -> HashSet<Span> {
         .filter(|(name, _)| !looped.contains(name))
         .map(|(_, span)| span)
         .collect()
+}
+
+/// AST-based last-use analysis — same algorithm as [`compute_last_uses`] but
+/// operates on AST [`Block`] instead of [`TirBlock`].
+///
+/// Used for the AST emission path (prelude / stdlib functions) where TIR is not
+/// yet available.
+pub fn compute_last_uses_ast(body: &AstBlock) -> HashSet<Span> {
+    let mut tracker = AstLastUseTracker::default();
+    tracker.visit_block(body, false);
+    let looped = tracker.looped_vars;
+    tracker
+        .last
+        .into_iter()
+        .filter(|(name, _)| !looped.contains(name))
+        .map(|(_, span)| span)
+        .collect()
+}
+
+#[derive(Default)]
+struct AstLastUseTracker {
+    last: HashMap<String, Span>,
+    looped_vars: HashSet<String>,
+}
+
+impl AstLastUseTracker {
+    fn record(&mut self, name: &str, span: Span, in_loop: bool) {
+        if in_loop {
+            self.looped_vars.insert(name.to_string());
+        } else {
+            self.last.insert(name.to_string(), span);
+        }
+    }
+
+    fn visit_block(&mut self, block: &AstBlock, in_loop: bool) {
+        for stmt in &block.stmts {
+            self.visit_stmt(stmt, in_loop);
+        }
+    }
+
+    fn visit_stmt(&mut self, stmt: &AstStmt, in_loop: bool) {
+        match stmt {
+            AstStmt::Let { init, .. } => self.visit_expr(init, in_loop),
+            AstStmt::Assign { value, .. } => self.visit_expr(value, in_loop),
+            AstStmt::Return { value, .. } => {
+                if let Some(e) = value {
+                    self.visit_expr(e, in_loop);
+                }
+            }
+            AstStmt::If {
+                cond, then, else_, ..
+            } => {
+                self.visit_expr(cond, in_loop);
+                self.visit_block(then, in_loop);
+                if let Some(else_branch) = else_ {
+                    match else_branch {
+                        AstElseBranch::Block(b) => self.visit_block(b, in_loop),
+                        AstElseBranch::If(s) => self.visit_stmt(s, in_loop),
+                    }
+                }
+            }
+            AstStmt::Match {
+                scrutinee, arms, ..
+            } => {
+                self.visit_expr(scrutinee, in_loop);
+                for arm in arms {
+                    match &arm.body {
+                        AstMatchBody::Expr(e) => self.visit_expr(e, in_loop),
+                        AstMatchBody::Block(b) => self.visit_block(b, in_loop),
+                    }
+                }
+            }
+            AstStmt::For { iter, body, .. } => {
+                self.visit_expr(iter, in_loop);
+                self.visit_block(body, true);
+            }
+            AstStmt::While { cond, body, .. } => {
+                self.visit_expr(cond, true);
+                self.visit_block(body, true);
+            }
+            AstStmt::Expr { expr, .. } => self.visit_expr(expr, in_loop),
+        }
+    }
+
+    fn visit_expr(&mut self, expr: &AstExpr, in_loop: bool) {
+        match expr {
+            AstExpr::Ident(name, span) => {
+                self.record(name, *span, in_loop);
+            }
+            AstExpr::Literal(_, _) => {}
+            AstExpr::FieldAccess { expr: inner, .. } => self.visit_expr(inner, in_loop),
+            AstExpr::MethodCall { receiver, args, .. } => {
+                self.visit_expr(receiver, in_loop);
+                for arg in args {
+                    self.visit_expr(arg, in_loop);
+                }
+            }
+            AstExpr::FnCall { args, .. } => {
+                for arg in args {
+                    self.visit_expr(arg, in_loop);
+                }
+            }
+            AstExpr::Unary { expr: inner, .. }
+            | AstExpr::Propagate { expr: inner, .. }
+            | AstExpr::Consume { expr: inner, .. }
+            | AstExpr::Relabel { expr: inner, .. }
+            | AstExpr::Borrow { expr: inner, .. } => self.visit_expr(inner, in_loop),
+            AstExpr::Binary { left, right, .. } => {
+                self.visit_expr(left, in_loop);
+                self.visit_expr(right, in_loop);
+            }
+            AstExpr::If {
+                cond, then, else_, ..
+            } => {
+                self.visit_expr(cond, in_loop);
+                self.visit_block(then, in_loop);
+                if let Some(else_expr) = else_ {
+                    self.visit_expr(else_expr, in_loop);
+                }
+            }
+            AstExpr::Match {
+                scrutinee, arms, ..
+            } => {
+                self.visit_expr(scrutinee, in_loop);
+                for arm in arms {
+                    match &arm.body {
+                        AstMatchBody::Expr(e) => self.visit_expr(e, in_loop),
+                        AstMatchBody::Block(b) => self.visit_block(b, in_loop),
+                    }
+                }
+            }
+            AstExpr::Block(b) => self.visit_block(b, in_loop),
+            // Lambdas capture variables — the body may be called multiple times.
+            AstExpr::Lambda { .. } => {}
+            AstExpr::Construct { fields, .. } | AstExpr::Spawn { fields, .. } => {
+                for (_, e) in fields {
+                    self.visit_expr(e, in_loop);
+                }
+            }
+            AstExpr::Select { arms, .. } => {
+                for arm in arms {
+                    self.visit_expr(&arm.expr, in_loop);
+                    self.visit_block(&arm.body, in_loop);
+                }
+            }
+            AstExpr::List { elems, .. } | AstExpr::Set { elems, .. } => {
+                for e in elems {
+                    self.visit_expr(e, in_loop);
+                }
+            }
+            AstExpr::Map { pairs, .. } => {
+                for (k, v) in pairs {
+                    self.visit_expr(k, in_loop);
+                    self.visit_expr(v, in_loop);
+                }
+            }
+            AstExpr::Quantifier(_, _) => {}
+        }
+    }
 }
 
 // ── Internal tracker ─────────────────────────────────────────────────────────
@@ -75,93 +238,93 @@ impl LastUseTracker {
         }
     }
 
-    fn visit_block(&mut self, block: &Block, in_loop: bool) {
+    fn visit_block(&mut self, block: &TirBlock, in_loop: bool) {
         for stmt in &block.stmts {
             self.visit_stmt(stmt, in_loop);
         }
     }
 
-    fn visit_stmt(&mut self, stmt: &Stmt, in_loop: bool) {
+    fn visit_stmt(&mut self, stmt: &TirStmt, in_loop: bool) {
         match stmt {
-            Stmt::Let { init, .. } => self.visit_expr(init, in_loop),
-            Stmt::Assign { value, .. } => {
+            TirStmt::Let { init, .. } => self.visit_expr(init, in_loop),
+            TirStmt::Assign { value, .. } => {
                 // LValue target is intentionally not visited: assignment is a write,
                 // not a read.  Last-use analysis tracks read uses only — the value
                 // currently bound to the name is consumed by the RHS expression, not
                 // by being written to.
                 self.visit_expr(value, in_loop);
             }
-            Stmt::Return { value, .. } => {
+            TirStmt::Return { value, .. } => {
                 if let Some(e) = value {
                     self.visit_expr(e, in_loop);
                 }
             }
-            Stmt::If {
+            TirStmt::If {
                 cond, then, else_, ..
             } => {
                 self.visit_expr(cond, in_loop);
                 self.visit_block(then, in_loop);
                 if let Some(else_branch) = else_ {
                     match else_branch {
-                        ElseBranch::Block(b) => self.visit_block(b, in_loop),
-                        ElseBranch::If(s) => self.visit_stmt(s, in_loop),
+                        TirElseBranch::Block(b) => self.visit_block(b, in_loop),
+                        TirElseBranch::If(s) => self.visit_stmt(s, in_loop),
                     }
                 }
             }
-            Stmt::Match {
+            TirStmt::Match {
                 scrutinee, arms, ..
             } => {
                 self.visit_expr(scrutinee, in_loop);
                 for arm in arms {
                     match &arm.body {
-                        MatchBody::Expr(e) => self.visit_expr(e, in_loop),
-                        MatchBody::Block(b) => self.visit_block(b, in_loop),
+                        TirMatchBody::Expr(e) => self.visit_expr(e, in_loop),
+                        TirMatchBody::Block(b) => self.visit_block(b, in_loop),
                     }
                 }
             }
-            Stmt::For { iter, body, .. } => {
+            TirStmt::For { iter, body, .. } => {
                 // The iterable expression is evaluated once outside the loop.
                 self.visit_expr(iter, in_loop);
                 // Loop body executes 0..N times — conservatively exclude from last-use.
                 self.visit_block(body, true);
             }
-            Stmt::While { cond, body, .. } => {
+            TirStmt::While { cond, body, .. } => {
                 // Both condition and body execute repeatedly.
                 self.visit_expr(cond, true);
                 self.visit_block(body, true);
             }
-            Stmt::Expr { expr, .. } => self.visit_expr(expr, in_loop),
+            TirStmt::Expr { expr, .. } => self.visit_expr(expr, in_loop),
         }
     }
 
-    fn visit_expr(&mut self, expr: &Expr, in_loop: bool) {
-        match expr {
-            Expr::Ident(name, span) => {
-                self.record(name, *span, in_loop);
+    fn visit_expr(&mut self, expr: &TirExpr, in_loop: bool) {
+        match &expr.kind {
+            TirExprKind::Var(name) => {
+                self.record(name, expr.span, in_loop);
             }
-            Expr::Literal(_, _) => {}
-            Expr::FieldAccess { expr, .. } => self.visit_expr(expr, in_loop),
-            Expr::MethodCall { receiver, args, .. } => {
+            TirExprKind::Literal(_) => {}
+            TirExprKind::FieldAccess { expr: inner, .. } => self.visit_expr(inner, in_loop),
+            TirExprKind::MethodCall { receiver, args, .. } => {
                 self.visit_expr(receiver, in_loop);
                 for arg in args {
                     self.visit_expr(arg, in_loop);
                 }
             }
-            Expr::FnCall { args, .. } => {
+            TirExprKind::FnCall { args, .. } => {
                 for arg in args {
                     self.visit_expr(arg, in_loop);
                 }
             }
-            Expr::Unary { expr, .. }
-            | Expr::Propagate { expr, .. }
-            | Expr::Consume { expr, .. }
-            | Expr::Relabel { expr, .. }
-            | Expr::Borrow { expr, .. } => self.visit_expr(expr, in_loop),
-            Expr::Binary { left, right, .. } => {
+            TirExprKind::Unary { expr: inner, .. }
+            | TirExprKind::Propagate(inner)
+            | TirExprKind::Consume(inner)
+            | TirExprKind::Relabel { expr: inner, .. }
+            | TirExprKind::Borrow { expr: inner, .. } => self.visit_expr(inner, in_loop),
+            TirExprKind::Binary { left, right, .. } => {
                 self.visit_expr(left, in_loop);
                 self.visit_expr(right, in_loop);
             }
-            Expr::If {
+            TirExprKind::If {
                 cond, then, else_, ..
             } => {
                 self.visit_expr(cond, in_loop);
@@ -170,44 +333,44 @@ impl LastUseTracker {
                     self.visit_expr(else_expr, in_loop);
                 }
             }
-            Expr::Match {
+            TirExprKind::Match {
                 scrutinee, arms, ..
             } => {
                 self.visit_expr(scrutinee, in_loop);
                 for arm in arms {
                     match &arm.body {
-                        MatchBody::Expr(e) => self.visit_expr(e, in_loop),
-                        MatchBody::Block(b) => self.visit_block(b, in_loop),
+                        TirMatchBody::Expr(e) => self.visit_expr(e, in_loop),
+                        TirMatchBody::Block(b) => self.visit_block(b, in_loop),
                     }
                 }
             }
-            Expr::Block(b) => self.visit_block(b, in_loop),
+            TirExprKind::Block(b) => self.visit_block(b, in_loop),
             // Lambdas capture variables — the body may be called multiple times.
-            Expr::Lambda { .. } => {}
-            Expr::Construct { fields, .. } | Expr::Spawn { fields, .. } => {
+            TirExprKind::Lambda { .. } => {}
+            TirExprKind::Construct { fields, .. } | TirExprKind::Spawn { fields, .. } => {
                 for (_, e) in fields {
                     self.visit_expr(e, in_loop);
                 }
             }
-            Expr::Select { arms, .. } => {
+            TirExprKind::Select { arms, .. } => {
                 for arm in arms {
                     self.visit_expr(&arm.expr, in_loop);
                     self.visit_block(&arm.body, in_loop);
                 }
             }
-            Expr::List { elems, .. } | Expr::Set { elems, .. } => {
+            TirExprKind::List { elems } | TirExprKind::Set { elems } => {
                 for e in elems {
                     self.visit_expr(e, in_loop);
                 }
             }
-            Expr::Map { pairs, .. } => {
+            TirExprKind::Map { pairs } => {
                 for (k, v) in pairs {
                     self.visit_expr(k, in_loop);
                     self.visit_expr(v, in_loop);
                 }
             }
             // Quantifier predicates are contract-only — no identifiers to track.
-            Expr::Quantifier(..) => {}
+            TirExprKind::Quantifier(_) => {}
         }
     }
 }

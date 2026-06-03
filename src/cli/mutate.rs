@@ -69,9 +69,11 @@ pub fn run(path: &str, quiet: bool, gen_boundary: bool, limit: Option<usize>) {
         let module_name = s.strip_suffix("_test").unwrap_or(&s).replace('-', "_");
         let mut expr_types = checker::collect_prelude_expr_types(&stdlib_prelude_progs);
         expr_types.extend(checker::check_with_prelude(&stdlib_prelude_progs, &prog).expr_types);
+        let all_fns = mvl::mvl::passes::mono::collect_fns([&prog]);
+        let mono = mvl::mvl::passes::mono::monomorphize(&prog, &all_fns, &expr_types);
+        let tir = mvl::mvl::ir::lower::lower(&prog, &mono, &expr_types);
         let result = transpiler::transpile(
-            &prog,
-            expr_types,
+            tir,
             transpiler::TranspileConfig::new(&module_name)
                 .with_file_stem(&module_name)
                 .with_prelude(stdlib_prelude_progs.clone())
@@ -117,9 +119,11 @@ pub fn run(path: &str, quiet: bool, gen_boundary: bool, limit: Option<usize>) {
         }
         let mut expr_types = checker::collect_prelude_expr_types(&stdlib_prelude_progs);
         expr_types.extend(checker::check_with_prelude(&stdlib_prelude_progs, &prog).expr_types);
+        let all_fns = mvl::mvl::passes::mono::collect_fns([&prog]);
+        let mono = mvl::mvl::passes::mono::monomorphize(&prog, &all_fns, &expr_types);
+        let tir = mvl::mvl::ir::lower::lower(&prog, &mono, &expr_types);
         let result = transpiler::transpile(
-            &prog,
-            expr_types,
+            tir,
             transpiler::TranspileConfig::new(&module_name)
                 .with_file_stem(&module_name)
                 .with_prelude(stdlib_prelude_progs.clone())

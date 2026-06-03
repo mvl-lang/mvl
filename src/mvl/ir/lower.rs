@@ -19,9 +19,9 @@ use std::collections::HashMap;
 
 use crate::mvl::checker::types::{resolve_session_op, Ty};
 use crate::mvl::parser::ast::{
-    ActorDecl, ActorMethod, Block, ConstDecl, Decl, ElseBranch, Expr, ExternDecl, ExternFnDecl,
-    FieldDecl, ImplDecl, MatchArm, MatchBody, Param, Program, SelectArm, Stmt, TypeBody, TypeDecl,
-    TypeExpr, Variant, VariantFields,
+    expr_to_ref_expr_ext, ActorDecl, ActorMethod, Block, ConstDecl, Decl, ElseBranch, Expr,
+    ExternDecl, ExternFnDecl, FieldDecl, ImplDecl, MatchArm, MatchBody, Param, Program, SelectArm,
+    Stmt, TypeBody, TypeDecl, TypeExpr, Variant, VariantFields,
 };
 use crate::mvl::parser::lexer::Span;
 use crate::mvl::passes::mono::{MonoProgram, TypeSubst};
@@ -100,13 +100,35 @@ fn lower_fn(mf: &crate::mvl::passes::mono::MonoFn, expr_types: &HashMap<Span, Ty
     let ret_ty = typeexpr_to_ty_sub(&mf.decl.return_type, &ty_subs);
     let body = lower_block(&mf.decl.body, expr_types, &ty_subs);
 
+    let requires = mf
+        .decl
+        .requires
+        .iter()
+        .filter_map(|e| expr_to_ref_expr_ext(e, mf.decl.span))
+        .collect();
+    let ensures = mf
+        .decl
+        .ensures
+        .iter()
+        .filter_map(|e| expr_to_ref_expr_ext(e, mf.decl.span))
+        .collect();
+
     TirFn {
         name: mf.mangled_name.clone(),
         original_name: mf.original_name.clone(),
+        visible: mf.decl.visible,
+        is_test: mf.decl.is_test,
+        is_builtin: mf.decl.is_builtin,
+        receiver_type: mf.decl.receiver_type.clone(),
+        type_params: mf.decl.type_params.clone(),
+        constraints: mf.decl.constraints.clone(),
         totality: mf.decl.totality.clone(),
         params,
         ret_ty,
+        return_refinement: mf.decl.return_refinement.clone(),
         effects: mf.decl.effects.clone(),
+        requires,
+        ensures,
         body,
         span: mf.decl.span,
     }
@@ -571,10 +593,19 @@ fn lower_impl_method(
     TirFn {
         name: fd.name.clone(),
         original_name: fd.name.clone(),
+        visible: fd.visible,
+        is_test: fd.is_test,
+        is_builtin: fd.is_builtin,
+        receiver_type: fd.receiver_type.clone(),
+        type_params: fd.type_params.clone(),
+        constraints: fd.constraints.clone(),
         totality: fd.totality.clone(),
         params: fd.params.iter().map(|p| lower_param(p, ty_subs)).collect(),
         ret_ty: typeexpr_to_ty_sub(&fd.return_type, ty_subs),
+        return_refinement: None, // impl methods don't have return refinement
         effects: fd.effects.clone(),
+        requires: Vec::new(), // impl methods don't have requires clauses here
+        ensures: Vec::new(),  // impl methods don't have ensures clauses here
         body: lower_block(&fd.body, expr_types, ty_subs),
         span: fd.span,
     }

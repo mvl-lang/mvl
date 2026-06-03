@@ -9,12 +9,10 @@ pub fn run(path: &str) {
     let (prog, _src) = super::parse_or_exit(path);
     let crate_name = loader::stem(path);
     let expr_types = checker::check(&prog).expr_types;
-    let out = transpiler::transpile(
-        &prog,
-        expr_types,
-        transpiler::TranspileConfig::new(&crate_name),
-    )
-    .output;
+    let all_fns = mvl::mvl::passes::mono::collect_fns([&prog]);
+    let mono = mvl::mvl::passes::mono::monomorphize(&prog, &all_fns, &expr_types);
+    let tir = mvl::mvl::ir::lower::lower(&prog, &mono, &expr_types);
+    let out = transpiler::transpile(tir, transpiler::TranspileConfig::new(&crate_name)).output;
     println!("// === Cargo.toml ===");
     println!("{}", out.cargo_toml);
     let file_label = if out.has_main {

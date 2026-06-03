@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Schuberg Philis
 
-//! Emit Rust trait implementations from MVL [`TirImplDecl`] nodes.
+//! Emit Rust trait implementations from MVL [`ImplDecl`] nodes.
 //!
 //! Supported traits:
 //! - `impl Display for T` → `impl std::fmt::Display for T`
@@ -45,14 +45,14 @@
 //! }
 //! ```
 
-use crate::mvl::backends::rust::emit_exprs::{emit_block_stmts, emit_expr};
-use crate::mvl::backends::rust::emit_types::emit_ty;
+use crate::mvl::backends::rust::emit_exprs_ast::{emit_block_stmts, emit_expr};
+use crate::mvl::backends::rust::emit_types::emit_type_expr;
 use crate::mvl::backends::rust::emitter::RustEmitter;
-use crate::mvl::backends::rust::last_use::compute_last_uses;
-use crate::mvl::ir::{TirImplDecl, TirStmt};
+use crate::mvl::backends::rust::last_use::compute_last_uses_ast;
+use crate::mvl::parser::ast::{ImplDecl, Stmt}; // Stmt used in match below
 
 /// Emit a trait implementation block.
-pub fn emit_impl_decl(cg: &mut RustEmitter, id: &TirImplDecl) {
+pub fn emit_impl_decl_ast(cg: &mut RustEmitter, id: &ImplDecl) {
     // Phase A: reset last_uses before each impl block so that stale spans from the
     // preceding function body cannot bleed into branches that do not call
     // compute_last_uses (the unsupported-trait fallthrough and the Display
@@ -73,7 +73,7 @@ pub fn emit_impl_decl(cg: &mut RustEmitter, id: &TirImplDecl) {
 }
 
 /// Emit `impl std::fmt::Display for TypeName`.
-fn emit_display_impl(cg: &mut RustEmitter, id: &TirImplDecl) {
+fn emit_display_impl(cg: &mut RustEmitter, id: &ImplDecl) {
     cg.line(&format!("impl std::fmt::Display for {} {{", id.type_name));
     cg.push_indent();
 
@@ -86,7 +86,7 @@ fn emit_display_impl(cg: &mut RustEmitter, id: &TirImplDecl) {
     match fmt_method {
         Some(fd) => {
             // Phase A: last-use analysis for clone elision within the fmt method body.
-            cg.last_uses = compute_last_uses(&fd.body);
+            cg.last_uses = compute_last_uses_ast(&fd.body);
             let stmts = &fd.body.stmts;
             if stmts.is_empty() {
                 cg.line("write!(f, \"\")");
@@ -100,7 +100,7 @@ fn emit_display_impl(cg: &mut RustEmitter, id: &TirImplDecl) {
                 cg.indent();
                 cg.push("write!(f, \"{}\", ");
                 match last {
-                    TirStmt::Expr { expr, .. } => emit_expr(cg, expr),
+                    Stmt::Expr { expr, .. } => emit_expr(cg, expr),
                     _non_expr => {
                         // A non-expression final statement (let, assign, etc.) cannot
                         // produce a value for write!.  MVL's block type checker ensures
@@ -141,9 +141,9 @@ fn emit_display_impl(cg: &mut RustEmitter, id: &TirImplDecl) {
 ///     fn next(&mut self) -> Option<i64> { … }
 /// }
 /// ```
-fn emit_iterator_impl(cg: &mut RustEmitter, id: &TirImplDecl) {
+fn emit_iterator_impl(cg: &mut RustEmitter, id: &ImplDecl) {
     let item_ty = match id.trait_type_args.first() {
-        Some(ty) => emit_ty(ty),
+        Some(ty) => emit_type_expr(ty),
         None => {
             cg.line(&format!(
                 "// impl Iterator for {} — missing element type argument (skipped)",
@@ -168,10 +168,10 @@ fn emit_iterator_impl(cg: &mut RustEmitter, id: &TirImplDecl) {
             None => unreachable!("impl Iterator `next` has empty body — blocked by checker (#990)"),
             Some((last, head)) => {
                 // Phase A: last-use analysis for clone elision within the next method body.
-                cg.last_uses = compute_last_uses(&fd.body);
+                cg.last_uses = compute_last_uses_ast(&fd.body);
                 emit_block_stmts(cg, head);
                 match last {
-                    TirStmt::Expr { expr, .. } => {
+                    Stmt::Expr { expr, .. } => {
                         cg.indent();
                         emit_expr(cg, expr);
                         cg.nl();
@@ -193,9 +193,9 @@ fn emit_iterator_impl(cg: &mut RustEmitter, id: &TirImplDecl) {
 }
 
 /// Emit `impl std::convert::From<SourceType> for TargetType`.
-fn emit_from_impl(cg: &mut RustEmitter, id: &TirImplDecl) {
+fn emit_from_impl(cg: &mut RustEmitter, id: &ImplDecl) {
     let source_ty = match id.trait_type_args.first() {
-        Some(ty) => emit_ty(ty),
+        Some(ty) => emit_type_expr(ty),
         None => {
             cg.line(&format!(
                 "// impl From for {} — missing source type argument (skipped)",
@@ -225,7 +225,7 @@ fn emit_from_impl(cg: &mut RustEmitter, id: &TirImplDecl) {
     match from_method {
         Some(fd) => {
             // Phase A: last-use analysis for clone elision within the from method body.
-            cg.last_uses = compute_last_uses(&fd.body);
+            cg.last_uses = compute_last_uses_ast(&fd.body);
             let stmts = &fd.body.stmts;
             if stmts.is_empty() {
                 // Empty body caught as TypeMismatch by checker (#990).
@@ -236,7 +236,7 @@ fn emit_from_impl(cg: &mut RustEmitter, id: &TirImplDecl) {
                 // Emit last statement as the return expression
                 let last = &tail[0];
                 match last {
-                    TirStmt::Expr { expr, .. } => {
+                    Stmt::Expr { expr, .. } => {
                         cg.indent();
                         emit_expr(cg, expr);
                         cg.nl();

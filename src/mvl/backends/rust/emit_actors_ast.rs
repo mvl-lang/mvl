@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Schuberg Philis
 
-//! Emit Rust actor infrastructure from MVL [`TirActorDecl`] nodes.
+//! Emit Rust actor infrastructure from MVL [`ActorDecl`] nodes.
 //!
 //! Each `actor Foo { fields; pub fn behaviors; fn helpers }` compiles to:
 //!
@@ -52,11 +52,11 @@
 //!
 //! See Spec 015 (actors), ADR-0027. Phase 8, #695, #1014.
 
-use crate::mvl::backends::rust::emit_exprs::emit_block_stmts;
-use crate::mvl::backends::rust::emit_types::emit_ty;
+use crate::mvl::backends::rust::emit_exprs_ast::emit_block_stmts;
+use crate::mvl::backends::rust::emit_types::emit_type_expr;
 use crate::mvl::backends::rust::emitter::RustEmitter;
-use crate::mvl::backends::rust::last_use::compute_last_uses;
-use crate::mvl::ir::{MailboxConfig, MailboxPolicy, TirActorDecl, TirStmt};
+use crate::mvl::backends::rust::last_use::compute_last_uses_ast;
+use crate::mvl::parser::ast::{ActorDecl, MailboxConfig, MailboxPolicy, Stmt};
 
 /// Convert a `snake_case` name to `PascalCase` for Rust enum variant names.
 ///
@@ -113,7 +113,7 @@ pub fn emit_actor_runtime_preamble(cg: &mut RustEmitter) {
 /// 5. `impl {Name}` — fire-and-forget dispatch wrappers
 /// 6. `fn {name}_dispatch` — dispatch free function passed to `mvl_actor_run`
 /// 7. `fn _start_{name}` — spawns the actor thread via `mvl_actor_run`, returns the handle
-pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &TirActorDecl) {
+pub fn emit_actor_decl_ast(cg: &mut RustEmitter, ad: &ActorDecl) {
     let name = &ad.name;
     let state_name = format!("{name}State");
     // Mailbox enum is named `{Name}Mailbox` (not `{Name}Msg`) to avoid
@@ -127,7 +127,7 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &TirActorDecl) {
     cg.line(&format!("struct {state_name} {{"));
     cg.push_indent();
     for field in &ad.fields {
-        let ty_str = emit_ty(&field.ty);
+        let ty_str = emit_type_expr(&field.ty);
         cg.line(&format!("{}: {ty_str},", field.name));
     }
     if !pub_methods.is_empty() {
@@ -136,9 +136,6 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &TirActorDecl) {
         // When all external handles are dropped the channel disconnects and
         // `rx.recv()` returns `None` even though this weak ref still exists.
         cg.line(&format!("_self_ref: Option<MvlWeakSender<{msg_name}>>,"));
-        // `_self_id` mirrors the handle's `_id` so self-ref handle construction
-        // can set the `_id` field (#1128).
-        cg.line("_self_id: ActorId,");
     }
     cg.pop_indent();
     cg.line("}");
@@ -156,7 +153,7 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &TirActorDecl) {
                 let field_strs: Vec<String> = m
                     .params
                     .iter()
-                    .map(|p| format!("{}: {}", p.name, emit_ty(&p.ty)))
+                    .map(|p| format!("{}: {}", p.name, emit_type_expr(&p.ty)))
                     .collect();
                 cg.line(&format!("{variant} {{ {} }},", field_strs.join(", ")));
             }
@@ -183,14 +180,14 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &TirActorDecl) {
             let param_strs: Vec<String> = m
                 .params
                 .iter()
-                .map(|p| format!("{}: {}", p.name, emit_ty(&p.ty)))
+                .map(|p| format!("{}: {}", p.name, emit_type_expr(&p.ty)))
                 .collect();
             let params_sig = if param_strs.is_empty() {
                 String::new()
             } else {
                 format!(", {}", param_strs.join(", "))
             };
-            let ret_str = emit_ty(&m.ret_ty);
+            let ret_str = emit_type_expr(&m.return_type);
             let ret_part = if ret_str == "()" {
                 String::new()
             } else {
@@ -201,7 +198,7 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &TirActorDecl) {
                 m.name
             ));
             cg.push_indent();
-            cg.last_uses = compute_last_uses(&m.body);
+            cg.last_uses = compute_last_uses_ast(&m.body);
             let stmts = &m.body.stmts;
             if stmts.is_empty() {
                 // empty body — unit return, Rust implicit ()
@@ -212,11 +209,11 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &TirActorDecl) {
                 let (head, tail) = stmts.split_at(stmts.len() - 1);
                 emit_block_stmts(cg, head);
                 match &tail[0] {
-                    TirStmt::Expr { expr, .. } => {
+                    Stmt::Expr { expr, .. } => {
                         cg.indent();
                         // Inline the expression without a trailing semicolon so Rust
                         // treats it as the implicit return value.
-                        use crate::mvl::backends::rust::emit_exprs::emit_expr;
+                        use crate::mvl::backends::rust::emit_exprs_ast::emit_expr;
                         emit_expr(cg, expr);
                         cg.nl();
                     }
@@ -244,29 +241,25 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &TirActorDecl) {
         return;
     }
 
-    // 4. Actor handle struct (tag capability: sender channel + unique actor ID).
-    //    `_id` enables `actor_id()` — used by link/monitor callers (#1128).
+    // 4. Actor handle struct (tag capability: only the sender channel)
     let vis = if ad.visible { "pub " } else { "" };
     cg.line("#[derive(Clone)]");
     cg.line(&format!("{vis}struct {name} {{"));
     cg.push_indent();
     cg.line(&format!("_sender: MvlSender<{msg_name}>,"));
-    cg.line("_id: ActorId,");
     cg.pop_indent();
     cg.line("}");
     cg.blank();
 
-    // 5. Handle impl: actor_id() accessor + one fire-and-forget wrapper per public behavior.
+    // 5. Handle impl: one fire-and-forget wrapper per public behavior
     cg.line(&format!("impl {name} {{"));
     cg.push_indent();
-    // Pure sync accessor — no mailbox send, no Send effect required.
-    cg.line("pub fn actor_id(&self) -> i64 { self._id as i64 }");
     for m in &pub_methods {
         let variant = snake_to_pascal(&m.name);
         let param_strs: Vec<String> = m
             .params
             .iter()
-            .map(|p| format!("{}: {}", p.name, emit_ty(&p.ty)))
+            .map(|p| format!("{}: {}", p.name, emit_type_expr(&p.ty)))
             .collect();
         let params_sig = if param_strs.is_empty() {
             String::new()
@@ -299,48 +292,14 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &TirActorDecl) {
     cg.push_indent();
     cg.line("match msg {");
     cg.push_indent();
-    // System variants (#1177, #1128).
+    // System variants (#1177).
     cg.line(&format!("{msg_name}::_Shutdown => return false,"));
-    // Wire _ExitSignal → on_exit(from_id, reason) if the actor defines that method.
-    let on_exit_method = ad
-        .methods
-        .iter()
-        .find(|m| !m.is_public && m.name == "on_exit");
-    if let Some(m) = on_exit_method {
-        assert!(
-            m.params.len() == 2,
-            "actor `{}`: on_exit must have exactly 2 parameters (from_id: Int, reason: Int), found {}",
-            ad.name,
-            m.params.len()
-        );
-        cg.line(&format!(
-            "{msg_name}::_ExitSignal {{ _from_id, _reason }} => actor.on_exit(_from_id as i64, _reason as i64),"
-        ));
-    } else {
-        cg.line(&format!(
-            "{msg_name}::_ExitSignal {{ _from_id: _, _reason: _ }} => {{}}"
-        ));
-    }
-    // Wire _DownSignal → on_down(from_id, reason, monitor_ref) if defined.
-    let on_down_method = ad
-        .methods
-        .iter()
-        .find(|m| !m.is_public && m.name == "on_down");
-    if let Some(m) = on_down_method {
-        assert!(
-            m.params.len() == 3,
-            "actor `{}`: on_down must have exactly 3 parameters (from_id: Int, reason: Int, monitor_ref: Int), found {}",
-            ad.name,
-            m.params.len()
-        );
-        cg.line(&format!(
-            "{msg_name}::_DownSignal {{ _from_id, _reason, _monitor_id }} => actor.on_down(_from_id as i64, _reason as i64, _monitor_id as i64),"
-        ));
-    } else {
-        cg.line(&format!(
-            "{msg_name}::_DownSignal {{ _from_id: _, _reason: _, _monitor_id: _ }} => {{}}"
-        ));
-    }
+    cg.line(&format!(
+        "{msg_name}::_ExitSignal {{ _from_id, _reason }} => {{}}"
+    ));
+    cg.line(&format!(
+        "{msg_name}::_DownSignal {{ _from_id, _reason, _monitor_id }} => {{}}"
+    ));
     // User behavior variants.
     for m in &pub_methods {
         let variant = snake_to_pascal(&m.name);
@@ -391,7 +350,6 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &TirActorDecl) {
         None => "let (tx, rx) = mvl_channel(256_i64, 0_i64);".to_string(),
     };
     cg.line(&channel_line);
-    cg.line("state._self_id = __actor_id;");
     cg.line("state._self_ref = Some(tx.downgrade());");
     // Register type-erased actor controls for link/monitor (#1177).
     // Each closure captures a sender clone and constructs the typed system message.
@@ -421,7 +379,7 @@ pub fn emit_actor_decl(cg: &mut RustEmitter, ad: &TirActorDecl) {
         "let __handle = mvl_actor_run(rx, state, {dispatch_fn}, __actor_id);"
     ));
     cg.line("mvl_register_actor(__handle);");
-    cg.line(&format!("{name} {{ _sender: tx, _id: __actor_id }}"));
+    cg.line(&format!("{name} {{ _sender: tx }}"));
     cg.pop_indent();
     cg.line("}");
 }

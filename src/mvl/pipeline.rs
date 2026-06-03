@@ -127,7 +127,12 @@ impl Pipeline {
             config = config.with_mutation();
         }
         config = config.with_assert_mode(self.assert_mode);
-        transpile(prog, expr_types, config)
+        let all_fns = crate::mvl::passes::mono::collect_fns(
+            std::iter::once(prog).chain(config.prelude_progs.iter()),
+        );
+        let mono = crate::mvl::passes::mono::monomorphize(prog, &all_fns, &expr_types);
+        let tir = crate::mvl::ir::lower::lower(prog, &mono, &expr_types);
+        transpile(tir, config)
     }
 
     /// Transpile a multi-file project using this pipeline's settings.
