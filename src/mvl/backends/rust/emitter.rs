@@ -1007,6 +1007,19 @@ impl RustEmitter {
             self.blank();
         }
 
+        // Emit placeholder stubs for external types referenced but not defined.
+        let stubs = collect_undefined_types_tir(tir, prelude_progs, _sibling_progs);
+        if !stubs.is_empty() {
+            self.line(
+                "// ── External type stubs (Phase 1 placeholders) ──────────────────────────",
+            );
+            for name in &stubs {
+                self.line("#[derive(Debug, Clone, PartialEq)]");
+                self.line(&format!("pub struct {name};"));
+                self.blank();
+            }
+        }
+
         // Test functions
         let test_fns: Vec<&TirFn> = tir.fns.iter().filter(|f| f.is_test).collect();
         if !test_fns.is_empty() {
@@ -1126,6 +1139,135 @@ fn emit_extern_decl(cg: &mut RustEmitter, ed: &ExternDecl) {
 // ── Undefined type collection ─────────────────────────────────────────────
 
 /// Collect the names of all base types referenced in the program that are
+/// TIR-based version: collect undefined types from [`TirProgram`] function signatures.
+fn collect_undefined_types_tir(
+    tir: &TirProgram,
+    prelude_progs: &[Program],
+    sibling_progs: &[&Program],
+) -> Vec<String> {
+    use crate::mvl::ir::Ty;
+
+    let builtins: std::collections::HashSet<&str> = [
+        "Int",
+        "Float",
+        "Bool",
+        "String",
+        "Char",
+        "Byte",
+        "Unit",
+        "Never",
+        "List",
+        "Public",
+        "Tainted",
+        "Secret",
+        "Clean",
+        "Option",
+        "Result",
+        "Vec",
+        "Box",
+        "Positional",
+        "UByte",
+        "UInt",
+        "Map",
+        "Set",
+        "Array",
+    ]
+    .iter()
+    .copied()
+    .collect();
+
+    let mut defined: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for td in &tir.types {
+        defined.insert(td.name.clone());
+    }
+    for ad in &tir.actors {
+        defined.insert(ad.name.clone());
+    }
+    for pp in prelude_progs {
+        for decl in &pp.declarations {
+            if let Decl::Type(td) = decl {
+                defined.insert(td.name.clone());
+            }
+        }
+    }
+    for sp in sibling_progs {
+        for decl in &sp.declarations {
+            match decl {
+                Decl::Type(td) => {
+                    defined.insert(td.name.clone());
+                }
+                Decl::Actor(ad) => {
+                    defined.insert(ad.name.clone());
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // Types from Rust-backed stdlib modules
+    for ud in &tir.uses {
+        if ud.path.first().map(|s| s == "std").unwrap_or(false) && ud.path.len() >= 2 {
+            let module = &ud.path[1];
+            let filename = format!("{module}.mvl");
+            if let Some(content) = crate::mvl::stdlib::stdlib_content(&filename) {
+                let (mut p, _) = crate::mvl::parser::Parser::new(content);
+                let stdlib_prog = p.parse_program();
+                for d in &stdlib_prog.declarations {
+                    if let Decl::Type(td) = d {
+                        defined.insert(td.name.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    fn collect_ty_names(ty: &Ty, out: &mut std::collections::HashSet<String>) {
+        match ty {
+            Ty::Named(name, args) => {
+                out.insert(name.clone());
+                for a in args {
+                    collect_ty_names(a, out);
+                }
+            }
+            Ty::List(inner) | Ty::Set(inner) | Ty::Option(inner) | Ty::Labeled(_, inner) => {
+                collect_ty_names(inner, out);
+            }
+            Ty::Map(k, v) | Ty::Result(k, v) => {
+                collect_ty_names(k, out);
+                collect_ty_names(v, out);
+            }
+            Ty::Tuple(elems) => {
+                for e in elems {
+                    collect_ty_names(e, out);
+                }
+            }
+            Ty::Ref(_, inner) => collect_ty_names(inner, out),
+            Ty::Fn(params, ret, _, _) => {
+                for p in params {
+                    collect_ty_names(p, out);
+                }
+                collect_ty_names(ret, out);
+            }
+            _ => {}
+        }
+    }
+
+    let mut referenced: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for f in &tir.fns {
+        for p in &f.params {
+            collect_ty_names(&p.ty, &mut referenced);
+        }
+        collect_ty_names(&f.ret_ty, &mut referenced);
+    }
+
+    let mut stubs: Vec<String> = referenced
+        .into_iter()
+        .filter(|name| !defined.contains(name) && !builtins.contains(name.as_str()))
+        .collect();
+    stubs.sort();
+    stubs
+}
+
 /// not defined by a `TypeDecl` in this program and are not MVL built-ins.
 /// Returns a sorted, deduplicated list suitable for emitting stub structs.
 /// `prelude_progs` types are treated as already-defined so they are never stubbed.

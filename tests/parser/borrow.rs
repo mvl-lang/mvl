@@ -23,8 +23,8 @@ fn transpile_src(src: &str) -> String {
         "parse errors: {:?}",
         parser.errors()
     );
-    let expr_types = checker::check(&prog).expr_types;
-    transpile(&prog, expr_types, TranspileConfig::new("test_crate"))
+    mvl::mvl::pipeline::Pipeline::new()
+        .build(&prog, "test_crate", vec![])
         .output
         .lib_rs
 }

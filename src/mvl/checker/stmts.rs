@@ -511,15 +511,18 @@ impl TypeChecker {
             Stmt::For {
                 pattern,
                 iter,
+                invariants,
                 body,
                 span,
-                ..
             } => {
                 // Req 8: `for` loops are bounded (total) — reject in `partial` functions.
                 if matches!(self.current_fn_totality, Some(Totality::Partial)) {
                     self.emit(CheckError::ForLoopInPartialFn { span: *span });
                 }
                 let iter_ty = self.infer_expr(iter);
+                for inv in invariants {
+                    self.infer_expr(inv);
+                }
                 let iter_span = iter.span();
                 let elem_ty = self.check_iterator_type(&iter_ty, iter_span);
                 self.env.push_scope();
@@ -533,10 +536,10 @@ impl TypeChecker {
 
             Stmt::While {
                 cond,
+                invariants,
                 decreases,
                 body,
                 span,
-                ..
             } => {
                 let cond_ty = self.infer_expr(cond);
                 if !cond_ty.is_bool() && !matches!(cond_ty, Ty::Unknown) {
@@ -545,6 +548,13 @@ impl TypeChecker {
                         found: cond_ty.display(),
                         span: cond.span(),
                     });
+                }
+                // Record types for invariant and decreases expressions so TIR lowering can find them.
+                for inv in invariants {
+                    self.infer_expr(inv);
+                }
+                if let Some(dec) = decreases {
+                    self.infer_expr(dec);
                 }
                 // Req 8: reject `while` in total functions unless a `decreases` measure
                 // is provided (Phase 5, #628 — decreases enables bounded while loops).

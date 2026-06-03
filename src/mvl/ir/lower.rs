@@ -24,7 +24,7 @@ use crate::mvl::parser::ast::{
     Stmt, TypeBody, TypeDecl, TypeExpr, Variant, VariantFields,
 };
 use crate::mvl::parser::lexer::Span;
-use crate::mvl::passes::mono::{MonoProgram, TypeSubst};
+use crate::mvl::passes::mono::MonoProgram;
 
 use super::{
     TirActorDecl, TirActorMethod, TirBlock, TirConstDecl, TirElseBranch, TirExpr, TirExprKind,
@@ -40,11 +40,14 @@ use super::{
 /// - Functions come from `mono` (monomorphized, one copy per generic instantiation).
 /// - All other declarations (types, externs, actors, impls, consts) come from `prog`.
 /// - `expr_types` is [`CheckResult::expr_types`] — the `Span → Ty` map from the checker.
-pub fn lower(prog: &Program, mono: &MonoProgram, expr_types: &HashMap<Span, Ty>) -> TirProgram {
+pub fn lower(prog: &Program, _mono: &MonoProgram, expr_types: &HashMap<Span, Ty>) -> TirProgram {
     let empty_subs: HashMap<String, Ty> = HashMap::new();
 
-    let fns = mono.fns.iter().map(|mf| lower_fn(mf, expr_types)).collect();
-
+    // Lower functions directly from AST, preserving generics.
+    // The Rust backend relies on native Rust generics rather than monomorphization
+    // (ADR-0034). MonoProgram is computed for pipeline parity with LLVM but not
+    // applied to emission here.
+    let mut fns = Vec::new();
     let mut types = Vec::new();
     let mut externs = Vec::new();
     let mut actors = Vec::new();
@@ -57,6 +60,7 @@ pub fn lower(prog: &Program, mono: &MonoProgram, expr_types: &HashMap<Span, Ty>)
 
     for decl in &prog.declarations {
         match decl {
+            Decl::Fn(fd) => fns.push(lower_fn_decl(fd, expr_types, &empty_subs)),
             Decl::Type(td) => types.push(lower_type_decl(td)),
             Decl::Extern(ed) => externs.push(lower_extern_decl(ed, &empty_subs)),
             Decl::Actor(ad) => actors.push(lower_actor_decl(ad, expr_types, &empty_subs)),
@@ -66,8 +70,6 @@ pub fn lower(prog: &Program, mono: &MonoProgram, expr_types: &HashMap<Span, Ty>)
             Decl::EffectDecl(ed) => effect_decls.push(ed.clone()),
             Decl::Label(ld) => label_decls.push(ld.clone()),
             Decl::Relabel(rd) => relabel_decls.push(rd.clone()),
-            // Functions are handled via MonoProgram above.
-            Decl::Fn(_) => {}
         }
     }
 
@@ -87,50 +89,45 @@ pub fn lower(prog: &Program, mono: &MonoProgram, expr_types: &HashMap<Span, Ty>)
 
 // ── Function lowering ─────────────────────────────────────────────────────────
 
-fn lower_fn(mf: &crate::mvl::passes::mono::MonoFn, expr_types: &HashMap<Span, Ty>) -> TirFn {
-    let ty_subs = build_ty_subs(&mf.type_subs);
+/// Lower an AST `FnDecl` directly to `TirFn`, preserving generics.
+fn lower_fn_decl(
+    fd: &crate::mvl::parser::ast::FnDecl,
+    expr_types: &HashMap<Span, Ty>,
+    ty_subs: &HashMap<String, Ty>,
+) -> TirFn {
+    let params = fd.params.iter().map(|p| lower_param(p, ty_subs)).collect();
+    let ret_ty = typeexpr_to_ty_sub(&fd.return_type, ty_subs);
+    let body = lower_block(&fd.body, expr_types, ty_subs);
 
-    let params = mf
-        .decl
-        .params
-        .iter()
-        .map(|p| lower_param(p, &ty_subs))
-        .collect();
-
-    let ret_ty = typeexpr_to_ty_sub(&mf.decl.return_type, &ty_subs);
-    let body = lower_block(&mf.decl.body, expr_types, &ty_subs);
-
-    let requires = mf
-        .decl
+    let requires = fd
         .requires
         .iter()
-        .filter_map(|e| expr_to_ref_expr_ext(e, mf.decl.span))
+        .filter_map(|e| expr_to_ref_expr_ext(e, fd.span))
         .collect();
-    let ensures = mf
-        .decl
+    let ensures = fd
         .ensures
         .iter()
-        .filter_map(|e| expr_to_ref_expr_ext(e, mf.decl.span))
+        .filter_map(|e| expr_to_ref_expr_ext(e, fd.span))
         .collect();
 
     TirFn {
-        name: mf.mangled_name.clone(),
-        original_name: mf.original_name.clone(),
-        visible: mf.decl.visible,
-        is_test: mf.decl.is_test,
-        is_builtin: mf.decl.is_builtin,
-        receiver_type: mf.decl.receiver_type.clone(),
-        type_params: mf.decl.type_params.clone(),
-        constraints: mf.decl.constraints.clone(),
-        totality: mf.decl.totality.clone(),
+        name: fd.name.clone(),
+        original_name: fd.name.clone(),
+        visible: fd.visible,
+        is_test: fd.is_test,
+        is_builtin: fd.is_builtin,
+        receiver_type: fd.receiver_type.clone(),
+        type_params: fd.type_params.clone(),
+        constraints: fd.constraints.clone(),
+        totality: fd.totality.clone(),
         params,
         ret_ty,
-        return_refinement: mf.decl.return_refinement.clone(),
-        effects: mf.decl.effects.clone(),
+        return_refinement: fd.return_refinement.clone(),
+        effects: fd.effects.clone(),
         requires,
         ensures,
         body,
-        span: mf.decl.span,
+        span: fd.span,
     }
 }
 
@@ -649,14 +646,6 @@ fn lower_const_decl(
 
 // ── Type utilities ────────────────────────────────────────────────────────────
 
-/// Build a `Ty`-level substitution map from a mono pass `TypeSubst` (`String → TypeExpr`).
-fn build_ty_subs(type_subs: &TypeSubst) -> HashMap<String, Ty> {
-    type_subs
-        .iter()
-        .map(|(name, te)| (name.clone(), typeexpr_to_ty(te)))
-        .collect()
-}
-
 /// Convert a `TypeExpr` to `Ty`, then apply `ty_subs` to substitute type parameters.
 fn typeexpr_to_ty_sub(te: &TypeExpr, ty_subs: &HashMap<String, Ty>) -> Ty {
     substitute_ty(&typeexpr_to_ty(te), ty_subs)
@@ -943,7 +932,7 @@ fn main() -> Unit { let r: Int = add(1, 2); }
     }
 
     #[test]
-    fn lower_generic_function_resolves_type_param() {
+    fn lower_generic_function_preserves_generics() {
         let (prog, check) = parse_and_check(
             r#"
 fn identity[T](x: T) -> T { x }
@@ -957,37 +946,15 @@ fn main() -> Unit {
         let mono = crate::mvl::passes::mono::monomorphize(&prog, &all_fns, &check.expr_types);
         let tir = lower(&prog, &mono, &check.expr_types);
 
-        let int_inst = tir
+        // Rust backend preserves generics — one generic function, not monomorphized copies.
+        let identity = tir
             .fns
             .iter()
-            .find(|f| f.name == "identity_Int")
-            .expect("identity_Int must be in TIR");
-        assert_eq!(int_inst.ret_ty, Ty::Int);
-        assert_eq!(int_inst.params[0].ty, Ty::Int);
-
-        let str_inst = tir
-            .fns
-            .iter()
-            .find(|f| f.name == "identity_String")
-            .expect("identity_String must be in TIR");
-        assert_eq!(str_inst.ret_ty, Ty::String);
-        assert_eq!(str_inst.params[0].ty, Ty::String);
-    }
-
-    #[test]
-    fn lower_preserves_original_name() {
-        let (prog, check) = parse_and_check(
-            r#"
-fn identity[T](x: T) -> T { x }
-fn main() -> Unit { let n: Int = identity(1); }
-"#,
-        );
-        let all_fns = crate::mvl::passes::mono::collect_fns([&prog]);
-        let mono = crate::mvl::passes::mono::monomorphize(&prog, &all_fns, &check.expr_types);
-        let tir = lower(&prog, &mono, &check.expr_types);
-
-        let inst = tir.fns.iter().find(|f| f.name == "identity_Int").unwrap();
-        assert_eq!(inst.original_name, "identity");
+            .find(|f| f.name == "identity")
+            .expect("identity must be in TIR");
+        assert_eq!(identity.type_params.len(), 1);
+        assert_eq!(identity.name, "identity");
+        assert_eq!(identity.original_name, "identity");
     }
 
     // ── typeexpr_to_ty — additional variant coverage ───────────────────────────

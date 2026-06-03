@@ -22,7 +22,10 @@ fn parse(src: &str) -> mvl::mvl::parser::ast::Program {
 
 fn do_transpile(prog: &mvl::mvl::parser::ast::Program, config: TranspileConfig) -> TranspileResult {
     let expr_types = checker::check(prog).expr_types;
-    transpile(prog, expr_types, config)
+    let all_fns = mvl::mvl::passes::mono::collect_fns(std::iter::once(prog));
+    let mono = mvl::mvl::passes::mono::monomorphize(prog, &all_fns, &expr_types);
+    let tir = mvl::mvl::ir::lower::lower(prog, &mono, &expr_types);
+    transpile(tir, config)
 }
 
 /// `x < 92` — the comparison operator contributes 3 mutation variants and the
