@@ -1,0 +1,120 @@
+// tests/stdlib/ifc_test.mvl — information flow control labels
+//
+// Verifies IFC label operations from std/ifc.mvl.
+// Run with:  mvl test tests/stdlib/
+
+// ── Tainted label ────────────────────────────────────────────────────────────
+
+test fn taint_wraps_value() -> Unit {
+    let raw: String = "user input";
+    let tainted: Tainted[String] = relabel taint(raw, "TEST-TAINT");
+    // Tainted value exists (type system enforces label)
+    let trusted: String = relabel trust(tainted, "TEST-TRUST");
+    assert_eq(trusted, "user input");
+}
+
+test fn taint_int_value() -> Unit {
+    let raw: Int = 42;
+    let tainted: Tainted[Int] = relabel taint(raw, "TEST-INT");
+    let trusted: Int = relabel trust(tainted, "TEST-TRUST");
+    assert_eq(trusted, 42);
+}
+
+// ── Secret label ─────────────────────────────────────────────────────────────
+
+test fn classify_wraps_secret() -> Unit {
+    let password: String = "hunter2";
+    let secret: Secret[String] = relabel classify(password, "TEST-CLASSIFY");
+    // Secret value exists (type system enforces label)
+    let released: String = relabel release(secret, "TEST-RELEASE");
+    assert_eq(released, "hunter2");
+}
+
+test fn classify_int_secret() -> Unit {
+    let pin: Int = 1234;
+    let secret: Secret[Int] = relabel classify(pin, "TEST-PIN");
+    let released: Int = relabel release(secret, "TEST-RELEASE");
+    assert_eq(released, 1234);
+}
+
+// ── Round-trip: bare → Tainted → bare ────────────────────────────────────────
+
+test fn tainted_round_trip() -> Unit {
+    let original: String = "data";
+    let tainted: Tainted[String] = relabel taint(original, "TAINT-001");
+    let validated: String = relabel trust(tainted, "VALID-001");
+    assert_eq(validated, original);
+}
+
+// ── Round-trip: bare → Secret → bare ─────────────────────────────────────────
+
+test fn secret_round_trip() -> Unit {
+    let original: String = "secret_key";
+    let secret: Secret[String] = relabel classify(original, "CLASS-001");
+    let released: String = relabel release(secret, "RELEASE-001");
+    assert_eq(released, original);
+}
+
+// ── Labels on struct fields ──────────────────────────────────────────────────
+
+type Credentials = struct {
+    username: String,
+    password: Secret[String],
+}
+
+test fn struct_with_secret_field() -> Unit {
+    let creds: Credentials = Credentials {
+        username: "alice",
+        password: relabel classify("pass123", "CRED-CREATE"),
+    };
+    assert_eq(creds.username, "alice");
+    // password is Secret — must release to access
+    let pw: String = relabel release(creds.password, "CRED-VERIFY");
+    assert_eq(pw, "pass123");
+}
+
+type UserInput = struct {
+    raw_data: Tainted[String],
+}
+
+test fn struct_with_tainted_field() -> Unit {
+    let input: UserInput = UserInput {
+        raw_data: relabel taint("form data", "INPUT-FORM"),
+    };
+    let validated: String = relabel trust(input.raw_data, "INPUT-VALID");
+    assert_eq(validated, "form data");
+}
+
+// ── Labels in function parameters ────────────────────────────────────────────
+
+fn process_tainted(input: Tainted[String]) -> String {
+    let clean: String = relabel trust(input, "PROCESS-TRUST");
+    "processed: ".concat(clean)
+}
+
+test fn function_accepts_tainted_param() -> Unit {
+    let raw: Tainted[String] = relabel taint("hello", "RAW-INPUT");
+    let result: String = process_tainted(raw);
+    assert_eq(result, "processed: hello");
+}
+
+fn verify_secret(secret: Secret[String], expected: String) -> Bool {
+    let actual: String = relabel release(secret, "VERIFY-RELEASE");
+    actual == expected
+}
+
+test fn function_accepts_secret_param() -> Unit {
+    let s: Secret[String] = relabel classify("test", "CREATE-SECRET");
+    assert_eq(verify_secret(s, "test"), true);
+}
+
+// ── Audit tags are required ──────────────────────────────────────────────────
+
+test fn audit_tag_documents_relabel() -> Unit {
+    // Each relabel requires a tag — this tests the syntax is accepted
+    let t1: Tainted[Int] = relabel taint(1, "AUDIT-001");
+    let t2: Tainted[Int] = relabel taint(2, "AUDIT-002");
+    let v1: Int = relabel trust(t1, "VALID-001");
+    let v2: Int = relabel trust(t2, "VALID-002");
+    assert_eq(v1 + v2, 3);
+}

@@ -1,0 +1,105 @@
+// tests/stdlib/db_test.mvl — shared database value types
+//
+// Verifies DbValue enum and related types from std/db.mvl.
+// Run with:  mvl test tests/stdlib/
+
+// ── DbValue enum construction ────────────────────────────────────────────────
+
+test fn dbvalue_null_variant() -> Unit {
+    let v: DbValue = DbValue::Null;
+    let is_null: Bool = match v {
+        DbValue::Null => true,
+        _ => false,
+    };
+    assert_eq(is_null, true);
+}
+
+test fn dbvalue_bool_variant() -> Unit {
+    let v: DbValue = DbValue::Bool(true);
+    let extracted: Bool = match v {
+        DbValue::Bool(b) => b,
+        _ => false,
+    };
+    assert_eq(extracted, true);
+}
+
+test fn dbvalue_int_variant() -> Unit {
+    let v: DbValue = DbValue::Int(42);
+    let extracted: Int = match v {
+        DbValue::Int(i) => i,
+        _ => 0,
+    };
+    assert_eq(extracted, 42);
+}
+
+test fn dbvalue_float_variant() -> Unit {
+    let v: DbValue = DbValue::Float(3.14);
+    let is_float: Bool = match v {
+        DbValue::Float(_) => true,
+        _ => false,
+    };
+    assert_eq(is_float, true);
+}
+
+test fn dbvalue_text_variant() -> Unit {
+    let v: DbValue = DbValue::Text("hello");
+    let extracted: String = match v {
+        DbValue::Text(s) => s,
+        _ => "",
+    };
+    assert_eq(extracted, "hello");
+}
+
+test fn dbvalue_blob_variant() -> Unit {
+    let v: DbValue = DbValue::Blob([1, 2, 3]);
+    let len: Int = match v {
+        DbValue::Blob(bytes) => bytes.len(),
+        _ => 0,
+    };
+    assert_eq(len, 3);
+}
+
+// ── DbValue matching exhaustive ──────────────────────────────────────────────
+
+test fn dbvalue_match_all_variants() -> Unit {
+    let values: List[DbValue] = [
+        DbValue::Null,
+        DbValue::Bool(false),
+        DbValue::Int(0),
+        DbValue::Float(0.0),
+        DbValue::Text(""),
+        DbValue::Blob([]),
+    ];
+    let count: ref Int = 0;
+    for v in values {
+        match v {
+            DbValue::Null => count = count + 1,
+            DbValue::Bool(_) => count = count + 1,
+            DbValue::Int(_) => count = count + 1,
+            DbValue::Float(_) => count = count + 1,
+            DbValue::Text(_) => count = count + 1,
+            DbValue::Blob(_) => count = count + 1,
+        }
+    }
+    assert_eq(count, 6);
+}
+
+// ── DbValue in list (params) ─────────────────────────────────────────────────
+
+test fn dbvalue_list_as_params() -> Unit {
+    let params: List[DbValue] = [
+        DbValue::Int(1),
+        DbValue::Text("Alice"),
+        DbValue::Int(30),
+    ];
+    assert_eq(params.len(), 3);
+}
+
+// ── default_db_url ───────────────────────────────────────────────────────────
+
+test fn default_db_url_wraps_string() -> Unit {
+    let url: DbUrl[String] = default_db_url("sqlite::memory:");
+    // The wrapped value should be accessible via undb_url
+    let raw: String = relabel undb_url(url, "TEST-UNWRAP");
+    assert_eq(raw, "sqlite::memory:");
+}

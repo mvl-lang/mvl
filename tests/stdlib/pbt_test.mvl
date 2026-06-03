@@ -1,0 +1,177 @@
+// tests/stdlib/pbt_test.mvl — property-based testing generators
+//
+// Verifies generator types and combinators from std/pbt.mvl.
+// Run with:  mvl test tests/stdlib/
+
+// ── IntGen construction ──────────────────────────────────────────────────────
+
+test fn gen_int_creates_range() -> Unit {
+    let g: IntGen = gen_int(0, 100);
+    let is_range: Bool = match g {
+        IntGen::Range(lo, hi) => lo == 0 && hi == 100,
+        _ => false,
+    };
+    assert_eq(is_range, true);
+}
+
+test fn gen_int_negative_range() -> Unit {
+    let g: IntGen = gen_int(-50, 50);
+    let is_range: Bool = match g {
+        IntGen::Range(lo, hi) => lo == -50 && hi == 50,
+        _ => false,
+    };
+    assert_eq(is_range, true);
+}
+
+test fn intgen_one_of_variant() -> Unit {
+    let g: IntGen = IntGen::OneOf([1, 2, 3, 5, 8, 13]);
+    let is_one_of: Bool = match g {
+        IntGen::OneOf(choices) => choices.len() == 6,
+        _ => false,
+    };
+    assert_eq(is_one_of, true);
+}
+
+test fn intgen_weighted_variant() -> Unit {
+    let g: IntGen = IntGen::Weighted([1, 2, 3], [10, 20, 70]);
+    let is_weighted: Bool = match g {
+        IntGen::Weighted(vals, weights) => vals.len() == 3 && weights.len() == 3,
+        _ => false,
+    };
+    assert_eq(is_weighted, true);
+}
+
+// ── FloatGen construction ────────────────────────────────────────────────────
+
+test fn gen_float_creates_struct() -> Unit {
+    let g: FloatGen = gen_float(0.0, 1.0);
+    assert_eq(g.min, 0.0);
+    assert_eq(g.max, 1.0);
+}
+
+test fn gen_float_negative_range() -> Unit {
+    let g: FloatGen = gen_float(-100.0, 100.0);
+    assert_eq(g.min, -100.0);
+    assert_eq(g.max, 100.0);
+}
+
+// ── BoolGen construction ─────────────────────────────────────────────────────
+
+test fn gen_bool_creates_random() -> Unit {
+    let g: BoolGen = gen_bool();
+    let is_random: Bool = match g {
+        BoolGen::BoolRandom => true,
+        _ => false,
+    };
+    assert_eq(is_random, true);
+}
+
+// ── StringGen construction ───────────────────────────────────────────────────
+
+test fn gen_string_creates_struct() -> Unit {
+    let g: StringGen = gen_string(5, 20);
+    assert_eq(g.min_len, 5);
+    assert_eq(g.max_len, 20);
+}
+
+test fn gen_string_zero_length() -> Unit {
+    let g: StringGen = gen_string(0, 0);
+    assert_eq(g.min_len, 0);
+    assert_eq(g.max_len, 0);
+}
+
+// ── ListIntGen construction ──────────────────────────────────────────────────
+
+test fn gen_list_int_creates_struct() -> Unit {
+    let g: ListIntGen = gen_list_int(0, 100, 10);
+    assert_eq(g.min_val, 0);
+    assert_eq(g.max_val, 100);
+    assert_eq(g.max_len, 10);
+}
+
+// ── BytesGen construction ────────────────────────────────────────────────────
+
+test fn bytes_gen_struct() -> Unit {
+    let g: BytesGen = BytesGen { min_len: 1, max_len: 256 };
+    assert_eq(g.min_len, 1);
+    assert_eq(g.max_len, 256);
+}
+
+// ── RawStringGen construction ────────────────────────────────────────────────
+
+test fn raw_string_gen_struct() -> Unit {
+    let g: RawStringGen = RawStringGen { min_len: 0, max_len: 1000 };
+    assert_eq(g.min_len, 0);
+    assert_eq(g.max_len, 1000);
+}
+
+// ── FuzzConfig construction ──────────────────────────────────────────────────
+
+test fn fuzz_config_struct() -> Unit {
+    let cfg: FuzzConfig = FuzzConfig {
+        max_cases: 1000,
+        timeout_ms: 5000,
+        memory_limit_bytes: 1073741824,
+    };
+    assert_eq(cfg.max_cases, 1000);
+    assert_eq(cfg.timeout_ms, 5000);
+}
+
+// ── gen_map_int_bool combinator ──────────────────────────────────────────────
+
+test fn gen_map_int_bool_creates_mapped() -> Unit {
+    let int_gen: IntGen = gen_int(0, 10);
+    let bool_gen: BoolGen = gen_map_int_bool(int_gen, |x: Int| x > 5);
+    let is_mapped: Bool = match bool_gen {
+        BoolGen::MappedFromInt(lo, hi, _) => lo == 0 && hi == 10,
+        _ => false,
+    };
+    assert_eq(is_mapped, true);
+}
+
+// ── gen_filter_int combinator ────────────────────────────────────────────────
+
+test fn gen_filter_int_creates_filtered() -> Unit {
+    let base: IntGen = gen_int(0, 100);
+    let filtered: IntGen = gen_filter_int(base, |x: Int| x % 2 == 0);
+    let is_filtered: Bool = match filtered {
+        IntGen::Filtered(lo, hi, _) => lo == 0 && hi == 100,
+        _ => false,
+    };
+    assert_eq(is_filtered, true);
+}
+
+// ── CheckResult enum ─────────────────────────────────────────────────────────
+
+test fn check_result_passed() -> Unit {
+    let result: CheckResult = CheckResult::Passed(100);
+    let passed: Bool = match result {
+        CheckResult::Passed(n) => n == 100,
+        _ => false,
+    };
+    assert_eq(passed, true);
+}
+
+test fn check_result_failed() -> Unit {
+    let result: CheckResult = CheckResult::Failed(42, 10);
+    let is_failed: Bool = match result {
+        CheckResult::Failed(value, attempt) => value == 42 && attempt == 10,
+        _ => false,
+    };
+    assert_eq(is_failed, true);
+}
+
+test fn check_result_exhaustive() -> Unit {
+    let results: List[CheckResult] = [
+        CheckResult::Passed(50),
+        CheckResult::Failed(1, 5),
+    ];
+    let count: ref Int = 0;
+    for r in results {
+        match r {
+            CheckResult::Passed(_) => count = count + 1,
+            CheckResult::Failed(_, _) => count = count + 1,
+        }
+    }
+    assert_eq(count, 2);
+}

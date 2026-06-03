@@ -1,0 +1,156 @@
+// tests/stdlib/actors_test.mvl — actor system primitives
+//
+// Verifies types and enums from std/actors.mvl.
+// Note: actual actor runtime tests require Phase 9 (#1177).
+// These tests verify the type definitions compile and match correctly.
+// Run with:  mvl test tests/stdlib/
+
+// ── ExitReason enum ──────────────────────────────────────────────────────────
+
+test fn exit_reason_normal_variant() -> Unit {
+    let reason: ExitReason = ExitReason::Normal;
+    let is_normal: Bool = match reason {
+        ExitReason::Normal => true,
+        ExitReason::Panic => false,
+        ExitReason::Killed => false,
+    };
+    assert_eq(is_normal, true);
+}
+
+test fn exit_reason_panic_variant() -> Unit {
+    let reason: ExitReason = ExitReason::Panic;
+    let is_panic: Bool = match reason {
+        ExitReason::Normal => false,
+        ExitReason::Panic => true,
+        ExitReason::Killed => false,
+    };
+    assert_eq(is_panic, true);
+}
+
+test fn exit_reason_killed_variant() -> Unit {
+    let reason: ExitReason = ExitReason::Killed;
+    let is_killed: Bool = match reason {
+        ExitReason::Normal => false,
+        ExitReason::Panic => false,
+        ExitReason::Killed => true,
+    };
+    assert_eq(is_killed, true);
+}
+
+test fn exit_reason_exhaustive_match() -> Unit {
+    let reasons: List[ExitReason] = [
+        ExitReason::Normal,
+        ExitReason::Panic,
+        ExitReason::Killed,
+    ];
+    let count: ref Int = 0;
+    for r in reasons {
+        match r {
+            ExitReason::Normal => count = count + 1,
+            ExitReason::Panic => count = count + 1,
+            ExitReason::Killed => count = count + 1,
+        }
+    }
+    assert_eq(count, 3);
+}
+
+// ── ExitSignal struct ────────────────────────────────────────────────────────
+
+test fn exit_signal_construction() -> Unit {
+    let signal: ExitSignal = ExitSignal {
+        actor_id: 42,
+        reason: ExitReason::Normal,
+    };
+    assert_eq(signal.actor_id, 42);
+}
+
+test fn exit_signal_with_panic_reason() -> Unit {
+    let signal: ExitSignal = ExitSignal {
+        actor_id: 1,
+        reason: ExitReason::Panic,
+    };
+    let is_panic: Bool = match signal.reason {
+        ExitReason::Panic => true,
+        _ => false,
+    };
+    assert_eq(is_panic, true);
+}
+
+// ── DownSignal struct ────────────────────────────────────────────────────────
+
+test fn down_signal_construction() -> Unit {
+    let signal: DownSignal = DownSignal {
+        actor_id: 100,
+        reason: ExitReason::Killed,
+        monitor_ref: 5,
+    };
+    assert_eq(signal.actor_id, 100);
+    assert_eq(signal.monitor_ref, 5);
+}
+
+test fn down_signal_reason_access() -> Unit {
+    let signal: DownSignal = DownSignal {
+        actor_id: 1,
+        reason: ExitReason::Normal,
+        monitor_ref: 1,
+    };
+    let is_normal: Bool = match signal.reason {
+        ExitReason::Normal => true,
+        _ => false,
+    };
+    assert_eq(is_normal, true);
+}
+
+// ── RestartStrategy enum ─────────────────────────────────────────────────────
+
+test fn restart_strategy_one_for_one() -> Unit {
+    let strategy: RestartStrategy = RestartStrategy::OneForOne;
+    let is_one_for_one: Bool = match strategy {
+        RestartStrategy::OneForOne => true,
+        RestartStrategy::OneForAll => false,
+        RestartStrategy::RestForOne => false,
+    };
+    assert_eq(is_one_for_one, true);
+}
+
+test fn restart_strategy_exhaustive() -> Unit {
+    let strategies: List[RestartStrategy] = [
+        RestartStrategy::OneForOne,
+        RestartStrategy::OneForAll,
+        RestartStrategy::RestForOne,
+    ];
+    let count: ref Int = 0;
+    for s in strategies {
+        match s {
+            RestartStrategy::OneForOne => count = count + 1,
+            RestartStrategy::OneForAll => count = count + 1,
+            RestartStrategy::RestForOne => count = count + 1,
+        }
+    }
+    assert_eq(count, 3);
+}
+
+// ── Supervisor struct ────────────────────────────────────────────────────────
+
+test fn supervisor_construction() -> Unit {
+    let sup: Supervisor = Supervisor {
+        strategy: RestartStrategy::OneForOne,
+        max_restarts: 3,
+        window_seconds: 60,
+    };
+    assert_eq(sup.max_restarts, 3);
+    assert_eq(sup.window_seconds, 60);
+}
+
+test fn supervisor_with_one_for_all() -> Unit {
+    let sup: Supervisor = Supervisor {
+        strategy: RestartStrategy::OneForAll,
+        max_restarts: 5,
+        window_seconds: 30,
+    };
+    let is_one_for_all: Bool = match sup.strategy {
+        RestartStrategy::OneForAll => true,
+        _ => false,
+    };
+    assert_eq(is_one_for_all, true);
+}

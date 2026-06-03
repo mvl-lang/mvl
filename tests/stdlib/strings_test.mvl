@@ -1,0 +1,156 @@
+// tests/stdlib/strings_test.mvl — String type operations
+//
+// Verifies runtime behaviour of String methods from std/strings.mvl.
+// Run with:  mvl test tests/stdlib/
+
+// ── len ──────────────────────────────────────────────────────────────────────
+
+test fn len_empty_string() -> Unit {
+    assert_eq("".len(), 0);
+}
+
+test fn len_ascii_string() -> Unit {
+    assert_eq("hello".len(), 5);
+}
+
+test fn len_unicode_string() -> Unit {
+    // Each emoji is one Unicode scalar value
+    assert_eq("hi".len(), 2);
+}
+
+// ── chars ────────────────────────────────────────────────────────────────────
+
+test fn chars_empty_string() -> Unit {
+    let cs: List[String] = "".chars();
+    assert_eq(cs.len(), 0);
+}
+
+test fn chars_ascii_string() -> Unit {
+    let cs: List[String] = "abc".chars();
+    assert_eq(cs.len(), 3);
+    assert_eq(cs.get(0).unwrap_or(""), "a");
+    assert_eq(cs.get(1).unwrap_or(""), "b");
+    assert_eq(cs.get(2).unwrap_or(""), "c");
+}
+
+// ── char_at ──────────────────────────────────────────────────────────────────
+
+test fn char_at_valid_index() -> Unit {
+    assert_eq("hello".char_at(0), "h");
+    assert_eq("hello".char_at(4), "o");
+}
+
+test fn char_at_out_of_range() -> Unit {
+    assert_eq("hi".char_at(5), "");
+}
+
+// ── concat ───────────────────────────────────────────────────────────────────
+
+test fn concat_two_strings() -> Unit {
+    assert_eq("hello".concat(" world"), "hello world");
+}
+
+test fn concat_with_empty() -> Unit {
+    assert_eq("abc".concat(""), "abc");
+    assert_eq("".concat("xyz"), "xyz");
+}
+
+// ── find ─────────────────────────────────────────────────────────────────────
+
+test fn find_substring_present() -> Unit {
+    let idx: Option[Int] = "hello world".find("world");
+    assert_eq(idx.unwrap_or(-1), 6);
+}
+
+test fn find_substring_absent() -> Unit {
+    let idx: Option[Int] = "hello".find("xyz");
+    assert_eq(idx.is_none(), true);
+}
+
+test fn find_empty_substring() -> Unit {
+    let idx: Option[Int] = "hello".find("");
+    assert_eq(idx.unwrap_or(-1), 0);
+}
+
+// ── split ────────────────────────────────────────────────────────────────────
+
+test fn split_by_comma() -> Unit {
+    let parts: List[String] = "a,b,c".split(",");
+    assert_eq(parts.len(), 3);
+    assert_eq(parts.get(0).unwrap_or(""), "a");
+    assert_eq(parts.get(1).unwrap_or(""), "b");
+    assert_eq(parts.get(2).unwrap_or(""), "c");
+}
+
+test fn split_no_delimiter() -> Unit {
+    let parts: List[String] = "hello".split(",");
+    assert_eq(parts.len(), 1);
+    assert_eq(parts.get(0).unwrap_or(""), "hello");
+}
+
+// ── substring ────────────────────────────────────────────────────────────────
+
+test fn substring_middle() -> Unit {
+    assert_eq("hello world".substring(0, 5), "hello");
+}
+
+test fn substring_end() -> Unit {
+    assert_eq("hello".substring(2, 5), "llo");
+}
+
+test fn substring_clamped() -> Unit {
+    // Out-of-range should be clamped
+    assert_eq("hi".substring(0, 100), "hi");
+}
+
+// ── contains ─────────────────────────────────────────────────────────────────
+
+test fn contains_present() -> Unit {
+    assert_eq("hello world".contains("wor"), true);
+}
+
+test fn contains_absent() -> Unit {
+    assert_eq("hello".contains("xyz"), false);
+}
+
+// ── starts_with ──────────────────────────────────────────────────────────────
+
+test fn starts_with_true() -> Unit {
+    assert_eq("hello world".starts_with("hello"), true);
+}
+
+test fn starts_with_false() -> Unit {
+    assert_eq("hello".starts_with("world"), false);
+}
+
+test fn starts_with_empty() -> Unit {
+    assert_eq("hello".starts_with(""), true);
+}
+
+// ── ends_with ────────────────────────────────────────────────────────────────
+
+test fn ends_with_true() -> Unit {
+    assert_eq("hello world".ends_with("world"), true);
+}
+
+test fn ends_with_false() -> Unit {
+    assert_eq("hello".ends_with("xyz"), false);
+}
+
+// ── trim ─────────────────────────────────────────────────────────────────────
+
+test fn trim_whitespace() -> Unit {
+    assert_eq("  hello  ".trim(), "hello");
+}
+
+test fn trim_tabs_and_newlines() -> Unit {
+    assert_eq("\t\nhello\n\t".trim(), "hello");
+}
+
+test fn trim_no_whitespace() -> Unit {
+    assert_eq("hello".trim(), "hello");
+}
+
+test fn trim_all_whitespace() -> Unit {
+    assert_eq("   ".trim(), "");
+}

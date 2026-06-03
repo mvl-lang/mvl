@@ -1,0 +1,99 @@
+// tests/stdlib/effects_test.mvl — effect system declarations
+//
+// Verifies that effect declarations from std/effects.mvl parse correctly
+// and can be used in function signatures.
+// Run with:  mvl test tests/stdlib/
+
+// ── Base effect declarations ─────────────────────────────────────────────────
+
+// Pure function (no effects)
+fn pure_add(a: Int, b: Int) -> Int {
+    a + b
+}
+
+test fn pure_function_compiles() -> Unit {
+    assert_eq(pure_add(2, 3), 5);
+}
+
+// Function with Console effect
+fn greet(name: String) -> String ! Console {
+    "Hello, ".concat(name)
+}
+
+test fn console_effect_in_signature() -> Unit {
+    // Just verify it compiles and runs
+    let msg: String = greet("World");
+    assert_eq(msg.len() > 0, true);
+}
+
+// Function with multiple effects
+fn read_and_log(path: String) -> String ! FileRead + Console {
+    path.concat(" (would be read)")
+}
+
+test fn multiple_effects_in_signature() -> Unit {
+    let result: String = read_and_log("/tmp/test");
+    assert_eq(result.contains("would be read"), true);
+}
+
+// ── Effect subsumption ───────────────────────────────────────────────────────
+
+// Log subsumes Clock + Console
+fn log_message(msg: String) -> String ! Log {
+    "[LOG] ".concat(msg)
+}
+
+test fn log_effect_subsumes_clock_console() -> Unit {
+    let result: String = log_message("test");
+    assert_eq(result.starts_with("[LOG]"), true);
+}
+
+// ── Effect in struct method ──────────────────────────────────────────────────
+
+type Counter = struct {
+    value: Int,
+}
+
+fn Counter::display(self) -> String ! Console {
+    "Counter: ".concat(self.value.to_string())
+}
+
+test fn effect_on_method() -> Unit {
+    let c: Counter = Counter { value: 42 };
+    let s: String = c.display();
+    assert_eq(s, "Counter: 42");
+}
+
+// ── Effect propagation ───────────────────────────────────────────────────────
+
+fn inner() -> Int ! Console {
+    42
+}
+
+fn outer() -> Int ! Console {
+    inner()
+}
+
+test fn effect_propagates_to_caller() -> Unit {
+    assert_eq(outer(), 42);
+}
+
+// ── IO composite effect ──────────────────────────────────────────────────────
+
+fn do_io(x: Int) -> Int ! IO {
+    x + 1
+}
+
+test fn io_composite_effect() -> Unit {
+    assert_eq(do_io(10), 11);
+}
+
+// ── Actor composite effect ───────────────────────────────────────────────────
+
+fn do_actor_stuff(x: Int) -> Int ! Actor {
+    x * 2
+}
+
+test fn actor_composite_effect() -> Unit {
+    assert_eq(do_actor_stuff(5), 10);
+}
