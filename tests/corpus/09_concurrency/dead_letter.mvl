@@ -1,0 +1,77 @@
+// Corpus: Dead-letter handling for undeliverable messages (Phase 9, #1180)
+//
+// Demonstrates:
+// - DeadLetterReason enum variants (ActorDead, ActorRestarting, MailboxFull)
+// - DeadLetter struct construction (sender known / unknown)
+// - DeadLetterHandler actor for logging undeliverable messages
+// - Custom dead-letter handler pattern (user-defined actor)
+// - describe_reason helper via pattern match
+
+use std.actors.{DeadLetterReason, DeadLetter, DeadLetterHandler}
+use std.log.{Logger, default_logger}
+
+// ── Custom dead-letter sink (metrics only, no logging) ────────────────────
+
+actor MetricsDeadLetterHandler {
+    count: Int
+
+    pub fn undeliverable(val msg: DeadLetter) {
+        self.count = self.count + 1;
+    }
+
+    fn get_count() -> Int { self.count }
+}
+
+// ── Reason description ────────────────────────────────────────────────────
+
+fn describe_reason(r: DeadLetterReason) -> String {
+    match r {
+        DeadLetterReason::ActorDead       => "actor terminated",
+        DeadLetterReason::ActorRestarting => "actor restarting",
+        DeadLetterReason::MailboxFull     => "mailbox full",
+    }
+}
+
+// ── Dead-letter construction ──────────────────────────────────────────────
+
+fn make_dead_letter(sender_id: Int, target_id: Int, r: DeadLetterReason) -> DeadLetter {
+    DeadLetter { sender: Some(sender_id), target: target_id, reason: r }
+}
+
+fn make_anonymous_dead_letter(target_id: Int, r: DeadLetterReason) -> DeadLetter {
+    DeadLetter { sender: None, target: target_id, reason: r }
+}
+
+// ── System setup ──────────────────────────────────────────────────────────
+
+fn start_with_dead_letter_handler() -> Unit ! Spawn + Send {
+    // Default handler: logs at WARN level.
+    let dl: DeadLetterHandler = actor DeadLetterHandler {
+        logger: default_logger(),
+        count: 0,
+    };
+    let _handler_id: Int = dl.actor_id();
+
+    // Route an undeliverable message to the default handler.
+    let letter: DeadLetter = make_dead_letter(1, 42, DeadLetterReason::ActorDead);
+    dl.undeliverable(letter);
+
+    // Custom metrics-only handler (no logging overhead).
+    let metrics: MetricsDeadLetterHandler = actor MetricsDeadLetterHandler { count: 0 };
+    let anon: DeadLetter = make_anonymous_dead_letter(99, DeadLetterReason::MailboxFull);
+    metrics.undeliverable(anon)
+}
+
+// ── Reason enum coverage ──────────────────────────────────────────────────
+
+fn reason_actor_dead() -> DeadLetterReason {
+    DeadLetterReason::ActorDead
+}
+
+fn reason_actor_restarting() -> DeadLetterReason {
+    DeadLetterReason::ActorRestarting
+}
+
+fn reason_mailbox_full() -> DeadLetterReason {
+    DeadLetterReason::MailboxFull
+}
