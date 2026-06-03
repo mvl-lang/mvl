@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.179.0] - 2026-06-03
+
+### Added
+- `std.actors`: **OneForAll and RestForOne supervisor strategies** (#1179) — `Supervisor` gains `order: List[String]` to track child registration sequence; `on_exit` now branches on `self.strategy`: `OneForOne` is unchanged; `OneForAll` unlinks all live siblings in reverse registration order then restarts all children in registration order (only the failed child's restart budget is charged); `RestForOne` unlinks the failed child and every younger sibling (reverse order) then restarts them (forward order)
+- Corpus `tests/corpus/09_concurrency/supervisor.mvl` extended with `OneForAll` and `RestForOne` constructor examples
+
 ## [Unreleased]
 
 ## [0.188.0] - 2026-06-05
