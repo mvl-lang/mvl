@@ -24,6 +24,7 @@
 //!
 //! ADR-0027 §"Actor runtime interface".
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
@@ -58,6 +59,41 @@ enum SenderInner<M: Send + 'static> {
 enum ReceiverInner<M: Send + 'static> {
     Bounded(mpsc::Receiver<M>),
     Unbounded(mpsc::UnboundedReceiver<M>),
+}
+
+// ── Supervisor / link types (Phase 9, #1177) ──────────────────────────────
+//
+// Stubs that make generated code compile today.  Full implementations land
+// with the supervisor feature (#1177 – #1180).
+
+/// Unique identifier assigned to every actor at spawn time.
+pub type ActorId = u64;
+
+/// Reason an actor terminated (stub — fields added in #1177).
+#[derive(Clone, Debug)]
+pub struct ExitReason;
+
+/// Opaque monitor registration token (stub — fields added in #1177).
+#[derive(Clone, Debug)]
+pub struct MonitorId;
+
+static MVL_ACTOR_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+/// Allocate a fresh [`ActorId`] unique within this process.
+pub fn mvl_next_actor_id() -> ActorId {
+    MVL_ACTOR_COUNTER.fetch_add(1, Ordering::Relaxed)
+}
+
+/// Register type-erased actor controls for link/monitor support (stub).
+///
+/// No-op until the supervisor runtime (#1177) is implemented.
+pub fn mvl_register_actor_controls(
+    _id: ActorId,
+    _kill: Box<dyn FnOnce() + Send>,
+    _exit: Box<dyn Fn(ActorId, ExitReason) + Send>,
+    _down: Box<dyn Fn(ActorId, ExitReason, MonitorId) + Send>,
+    _traps_exit: bool,
+) {
 }
 
 // ── Public types ────────────────────────────────────────────────────────────
@@ -223,7 +259,14 @@ pub fn mvl_join_actors() {
 ///
 /// Mirrors the default runtime API — generated code is identical across
 /// `--target` variants.  ADR-0027 §"Actor runtime interface".
-pub fn mvl_actor_run<S, M>(rx: MvlReceiver<M>, state: S, dispatch: fn(&mut S, M)) -> MvlJoinHandle
+/// `_actor_id` is accepted for API parity with the supervisor runtime; unused
+/// until Phase 9 link/monitor support lands (#1177).
+pub fn mvl_actor_run<S, M>(
+    rx: MvlReceiver<M>,
+    state: S,
+    dispatch: fn(&mut S, M) -> bool,
+    _actor_id: ActorId,
+) -> MvlJoinHandle
 where
     S: Send + 'static,
     M: Send + 'static,
@@ -232,7 +275,9 @@ where
         let mut actor = state;
         let mut rx = rx;
         while let Some(msg) = rx.recv().await {
-            dispatch(&mut actor, msg);
+            if !dispatch(&mut actor, msg) {
+                break;
+            }
         }
     }))
 }

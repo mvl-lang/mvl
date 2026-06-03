@@ -26,8 +26,9 @@ fn transpile_full(src: &str) -> TranspileOutput {
         "parse errors: {:?}",
         parser.errors()
     );
-    let expr_types = checker::check(&prog).expr_types;
-    transpile(&prog, expr_types, TranspileConfig::new("test_crate")).output
+    mvl::mvl::pipeline::Pipeline::new()
+        .build(&prog, "test_crate", vec![])
+        .output
 }
 
 fn assert_contains(src: &str, snippet: &str) {
@@ -44,7 +45,10 @@ fn do_transpile(
     config: TranspileConfig,
 ) -> mvl::mvl::backends::rust::TranspileResult {
     let expr_types = checker::check(prog).expr_types;
-    transpile(prog, expr_types, config)
+    let all_fns = mvl::mvl::passes::mono::collect_fns(std::iter::once(prog));
+    let mono = mvl::mvl::passes::mono::monomorphize(prog, &all_fns, &expr_types);
+    let tir = mvl::mvl::ir::lower::lower(prog, &mono, &expr_types);
+    transpile(tir, config)
 }
 
 // ── #29: Type declarations ────────────────────────────────────────────────
@@ -462,7 +466,10 @@ fn full_program_password_checker_transpiles() {
     );
 
     let expr_types = check_result.expr_types;
-    let out = transpile(&prog, expr_types, TranspileConfig::new("password_checker")).output;
+    let all_fns = mvl::mvl::passes::mono::collect_fns(std::iter::once(&prog));
+    let mono = mvl::mvl::passes::mono::monomorphize(&prog, &all_fns, &expr_types);
+    let tir = mvl::mvl::ir::lower::lower(&prog, &mono, &expr_types);
+    let out = transpile(tir, TranspileConfig::new("password_checker")).output;
     assert_contains(&out.lib_rs, "use mvl_runtime::prelude::*");
     assert_contains(&out.lib_rs, "extern \"Rust\"");
     // `pub` is not valid inside Rust extern blocks
@@ -1113,12 +1120,13 @@ fn main() -> Unit { }
     let prelude = vec![parse_prog(prelude_src)];
     let user_prog = parse_prog(user_src);
 
+    let expr_types = mvl::mvl::pipeline::assemble_expr_types(&user_prog, &prelude);
     let out = transpile_project(
         "crate",
         &user_prog,
         &[],
         &prelude,
-        Default::default(),
+        expr_types,
         vec![],
         Default::default(),
     );

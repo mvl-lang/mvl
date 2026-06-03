@@ -6,14 +6,21 @@
 //! [`RustEmitter`] is the single writer passed through every emit function.
 //! All other `emit_*` modules take `&mut RustEmitter` and append to it.
 
-use crate::mvl::backends::rust::capability_params::build_capability_params_map_with_siblings;
+use crate::mvl::backends::rust::capability_params::{
+    build_capability_params_map_tir, build_capability_params_map_with_siblings,
+    explicit_borrow_flags_pub,
+};
 use crate::mvl::backends::rust::emit_actors::{emit_actor_decl, emit_actor_runtime_preamble};
-use crate::mvl::backends::rust::emit_functions::emit_fn_decl;
+use crate::mvl::backends::rust::emit_actors_ast::emit_actor_decl_ast;
+use crate::mvl::backends::rust::emit_functions::{emit_fn_decl, emit_fn_decl_ast};
 use crate::mvl::backends::rust::emit_impls::emit_impl_decl;
-use crate::mvl::backends::rust::emit_types::emit_type_decl;
-use crate::mvl::backends::rust::emit_types::{emit_security_preamble, emit_type_expr};
+use crate::mvl::backends::rust::emit_impls_ast::emit_impl_decl_ast;
+use crate::mvl::backends::rust::emit_types::{
+    emit_security_preamble, emit_tir_extern_decl, emit_tir_type_decl, emit_type_decl,
+    emit_type_expr,
+};
 use crate::mvl::backends::rust::{collect_stdlib_modules, has_std_imports};
-use crate::mvl::ir::Ty;
+use crate::mvl::ir::{TirFn, TirProgram, Ty};
 use crate::mvl::parser::ast::{
     BinaryOp, Decl, ExternDecl, FieldDecl, FnDecl, Param, Program, TypeDecl, TypeExpr, Variant,
     VariantFields,
@@ -76,7 +83,7 @@ pub struct RustEmitter {
     pub test_extern_stubs: bool,
     /// Tracks stub function names already emitted in test mode, preventing duplicate
     /// stub definitions when multiple prelude programs declare the same extern fn.
-    emitted_extern_stub_fns: std::collections::HashSet<String>,
+    pub(crate) emitted_extern_stub_fns: std::collections::HashSet<String>,
     /// Spans of last uses for the current function body (Phase A, Spec 009 Req 2).
     ///
     /// Populated by [`last_use::compute_last_uses`] before each function body is
@@ -324,26 +331,26 @@ impl RustEmitter {
 
     // ── Program-level emit ───────────────────────────────────────────────
 
-    /// Emit a complete Rust file from a [`Program`].
-    pub fn emit_program(&mut self, prog: &Program) {
-        self.emit_program_core(prog, &[], false, &[], &[]);
+    /// Emit a complete Rust file from a [`TirProgram`].
+    pub fn emit_program(&mut self, tir: &TirProgram) {
+        self.emit_program_core(tir, &[], false, &[], &[]);
     }
 
-    /// Emit a complete Rust file from a [`Program`], prepending `pub mod` declarations
+    /// Emit a complete Rust file from a [`TirProgram`], prepending `pub mod` declarations
     /// for each sibling module name in `sibling_mods` (used by multi-file project builds).
     /// `prelude_progs` are stdlib programs whose non-stub functions are emitted before
     /// the user program's declarations so they are available at the call site.
     pub fn emit_program_with_mods(
         &mut self,
-        prog: &Program,
+        tir: &TirProgram,
         sibling_mods: &[&str],
         prelude_progs: &[Program],
         sibling_progs: &[&Program],
     ) {
-        self.emit_program_core(prog, sibling_mods, false, prelude_progs, sibling_progs);
+        self.emit_program_core(tir, sibling_mods, false, prelude_progs, sibling_progs);
     }
 
-    /// Emit a sibling module file that shares the `mvl_runtime` prelude with the crate root.
+    /// Emit a sibling module file (still AST-based for the project build path).
     ///
     /// Use when the project entry point has `extern` blocks — the sibling must use the same
     /// runtime types (`Tainted`, `Clean`, etc.) to avoid duplicate-definition conflicts.
@@ -357,10 +364,10 @@ impl RustEmitter {
         prelude_progs: &[Program],
         sibling_progs: &[&Program],
     ) {
-        self.emit_program_core(prog, &[], true, prelude_progs, sibling_progs);
+        self.emit_sibling_module_core(prog, &[], true, prelude_progs, sibling_progs);
     }
 
-    fn emit_program_core(
+    fn emit_sibling_module_core(
         &mut self,
         prog: &Program,
         sibling_mods: &[&str],
@@ -373,16 +380,6 @@ impl RustEmitter {
         self.line("#![allow(dead_code, unused_variables, unused_imports, unused_parens, unpredictable_function_pointer_comparisons)]");
         self.blank();
 
-        // MVL runtime prelude: security labels, effect markers, refinement macro,
-        // and stdlib function implementations (read_file, get_arg, etc.).
-        // When mvl_runtime is available as a dependency we use it directly;
-        // otherwise fall back to the inlined preamble for standalone files.
-        // `force_runtime` is set for sibling modules in a project that uses mvl_runtime,
-        // so all modules share the same type definitions.
-        // Also check prelude programs for builtin declarations: std/strings.mvl and
-        // std/lists.mvl have `pub builtin fn` declarations for the kernel primitives,
-        // so any program that loads the Phase 4 prelude needs `use mvl_runtime::prelude::*;`
-        // to resolve them (implemented in mvl_runtime::stdlib::primitives).
         let prelude_has_extern = prelude_progs.iter().any(|p| {
             p.declarations.iter().any(|d| match d {
                 Decl::Extern(_) => true,
@@ -627,7 +624,7 @@ impl RustEmitter {
                         continue;
                     }
                 }
-                emit_fn_decl(self, fd);
+                emit_fn_decl_ast(self, fd);
                 self.blank();
             }
             self.coverage = saved_coverage;
@@ -687,7 +684,7 @@ impl RustEmitter {
         for decl in &prog.declarations {
             match decl {
                 Decl::Type(td) => emit_type_decl(self, td),
-                Decl::Fn(fd) if !fd.is_test => emit_fn_decl(self, fd),
+                Decl::Fn(fd) if !fd.is_test => emit_fn_decl_ast(self, fd),
                 Decl::Fn(_) => continue, // test fns emitted below
                 Decl::Extern(ed) => emit_extern_decl(self, ed),
                 Decl::Const(_) => {
@@ -726,8 +723,8 @@ impl RustEmitter {
                     }
                     continue; // use decls don't get a trailing blank line
                 }
-                Decl::Actor(ad) => emit_actor_decl(self, ad),
-                Decl::Impl(id) => emit_impl_decl(self, id),
+                Decl::Actor(ad) => emit_actor_decl_ast(self, ad),
+                Decl::Impl(id) => emit_impl_decl_ast(self, id),
                 Decl::EffectDecl(_) => continue, // compile-time only, no Rust emission
                 Decl::Label(_) | Decl::Relabel(_) => continue, // IFC metadata, no Rust emission
             }
@@ -741,6 +738,291 @@ impl RustEmitter {
             .filter_map(|d| if let Decl::Fn(fd) = d { Some(fd) } else { None })
             .filter(|fd| fd.is_test)
             .collect();
+        if !test_fns.is_empty() {
+            self.line("#[cfg(test)]");
+            self.line("mod tests {");
+            self.push_indent();
+            self.line("use super::*;");
+            self.blank();
+            for fd in test_fns {
+                emit_fn_decl_ast(self, fd);
+                self.blank();
+            }
+            self.pop_indent();
+            self.line("}");
+        }
+    }
+
+    fn emit_program_core(
+        &mut self,
+        tir: &TirProgram,
+        sibling_mods: &[&str],
+        _force_runtime: bool,
+        prelude_progs: &[Program],
+        _sibling_progs: &[&Program],
+    ) {
+        self.line("// Generated by MVL transpiler — do not edit manually.");
+        self.line("#![allow(dead_code, unused_variables, unused_imports, unused_parens, unpredictable_function_pointer_comparisons)]");
+        self.blank();
+
+        let prelude_has_extern = prelude_progs.iter().any(|p| {
+            p.declarations.iter().any(|d| match d {
+                Decl::Extern(_) => true,
+                Decl::Fn(fd) => fd.is_builtin,
+                _ => false,
+            })
+        });
+        let has_runtime = prelude_has_extern
+            || !tir.externs.is_empty()
+            || tir
+                .uses
+                .iter()
+                .any(|ud| ud.path.first().map(|s| s == "std").unwrap_or(false));
+
+        if has_runtime {
+            self.use_mvl_runtime = true;
+            self.line("use mvl_runtime::prelude::*;");
+            self.blank();
+
+            let mut all_modules: Vec<String> = {
+                let mut seen = std::collections::HashSet::new();
+                tir.uses
+                    .iter()
+                    .filter_map(|ud| {
+                        if ud.path.first().map(|s| s == "std").unwrap_or(false)
+                            && ud.path.len() >= 2
+                        {
+                            let m = ud.path[1].as_str();
+                            if crate::mvl::backends::rust::RUST_RUNTIME_IMPORTS.contains(&m) {
+                                Some(ud.path[1].clone())
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    })
+                    .filter(|m| seen.insert(m.clone()))
+                    .collect()
+            };
+            for pp in prelude_progs {
+                for m in collect_stdlib_modules(pp) {
+                    if !all_modules.contains(&m) {
+                        all_modules.push(m);
+                    }
+                }
+            }
+            if !all_modules.contains(&"io".to_string()) {
+                all_modules.push("io".to_string());
+            }
+            for module in &all_modules {
+                self.line(&format!("use mvl_runtime::stdlib::{}::*;", module));
+                for (m, fns) in STDLIB_CONFLICTS {
+                    if *m == module.as_str() {
+                        for fn_name in *fns {
+                            self.stdlib_fn_qualified.insert(
+                                (*fn_name).to_string(),
+                                format!("mvl_runtime::stdlib::{module}::{fn_name}"),
+                            );
+                        }
+                    }
+                }
+            }
+        } else {
+            emit_security_preamble(self);
+        }
+        self.blank();
+
+        for mod_name in sibling_mods {
+            self.line(&format!("pub mod {mod_name};"));
+        }
+        if !sibling_mods.is_empty() {
+            self.blank();
+        }
+
+        let user_fn_names: std::collections::HashSet<&str> =
+            tir.fns.iter().map(|f| f.original_name.as_str()).collect();
+        let user_type_names: std::collections::HashSet<&str> =
+            tir.types.iter().map(|t| t.name.as_str()).collect();
+
+        let mut seen_prelude_fns: std::collections::HashSet<&str> =
+            std::collections::HashSet::new();
+        let prelude_fns: Vec<&FnDecl> = prelude_progs
+            .iter()
+            .flat_map(|p| p.declarations.iter())
+            .filter_map(|d| if let Decl::Fn(fd) = d { Some(fd) } else { None })
+            .filter(|fd| !fd.is_builtin)
+            .filter(|fd| !fd.body.stmts.is_empty())
+            .filter(|fd| !fd.is_test)
+            .filter(|fd| !user_fn_names.contains(fd.name.as_str()))
+            .filter(|fd| seen_prelude_fns.insert(fd.name.as_str()))
+            .collect();
+
+        let mut seen_prelude_types: std::collections::HashSet<&str> =
+            std::collections::HashSet::new();
+        let prelude_types: Vec<&TypeDecl> = prelude_progs
+            .iter()
+            .flat_map(|p| p.declarations.iter())
+            .filter_map(|d| {
+                if let Decl::Type(td) = d {
+                    Some(td)
+                } else {
+                    None
+                }
+            })
+            .filter(|td| !user_type_names.contains(td.name.as_str()))
+            .filter(|td| seen_prelude_types.insert(td.name.as_str()))
+            .collect();
+
+        // Phase B: capability params map from TIR + sibling modules
+        self.capability_params_map =
+            build_capability_params_map_tir(tir, &prelude_fns, _sibling_progs);
+
+        // Explicit borrow annotations from prelude fns (builtin/no-body fns excluded above)
+        for pp in prelude_progs {
+            for decl in &pp.declarations {
+                if let Decl::Fn(fd) = decl {
+                    if !self.capability_params_map.contains_key(&fd.name) {
+                        let flags = explicit_borrow_flags_pub(&fd.params);
+                        if flags.iter().any(|b| b.is_some()) {
+                            self.capability_params_map.insert(fd.name.clone(), flags);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Rust-backed stdlib modules — scan for capability params
+        {
+            use crate::mvl::backends::rust::RUST_BACKED_STDLIB;
+            use crate::mvl::parser::Parser;
+            use crate::mvl::stdlib;
+            let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+            for ud in &tir.uses {
+                if ud.path.first().map(|s| s == "std").unwrap_or(false) && ud.path.len() >= 2 {
+                    let m = ud.path[1].as_str();
+                    if RUST_BACKED_STDLIB.contains(&m) && seen.insert(m.to_string()) {
+                        let filename = format!("{m}.mvl");
+                        if let Some(content) = stdlib::stdlib_content(&filename) {
+                            let (mut p, _) = Parser::new(content);
+                            let loaded = p.parse_program();
+                            for d in &loaded.declarations {
+                                if let Decl::Fn(fd) = d {
+                                    if !self.capability_params_map.contains_key(&fd.name) {
+                                        let flags = explicit_borrow_flags_pub(&fd.params);
+                                        if flags.iter().any(|b| b.is_some()) {
+                                            self.capability_params_map
+                                                .insert(fd.name.clone(), flags);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // #959: fn-typed struct fields
+        self.fn_typed_struct_fields = collect_fn_typed_struct_fields_tir(tir, prelude_progs);
+
+        // Prelude extern blocks
+        let prelude_externs: Vec<&ExternDecl> = prelude_progs
+            .iter()
+            .flat_map(|p| p.declarations.iter())
+            .filter_map(|d| {
+                if let Decl::Extern(ed) = d {
+                    Some(ed)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if !prelude_types.is_empty() || !prelude_fns.is_empty() || !prelude_externs.is_empty() {
+            self.line(
+                "// ── stdlib prelude (transpiled from MVL source) ──────────────────────────",
+            );
+            let saved_coverage = self.coverage.take();
+            let saved_mutation = self.mutation.take();
+            let saved_mcdc = self.mcdc.take();
+            for ed in prelude_externs {
+                emit_extern_decl(self, ed);
+                self.blank();
+            }
+            for td in &prelude_types {
+                emit_type_decl(self, td);
+                self.blank();
+            }
+            for fd in prelude_fns {
+                emit_fn_decl_ast(self, fd);
+                self.blank();
+            }
+            self.coverage = saved_coverage;
+            self.mutation = saved_mutation;
+            self.mcdc = saved_mcdc;
+        }
+
+        // Actor runtime preamble
+        if !tir.actors.is_empty() {
+            self.has_actors = true;
+            emit_actor_runtime_preamble(self);
+            self.blank();
+        }
+
+        // Top-level TIR declarations
+        for td in &tir.types {
+            emit_tir_type_decl(self, td);
+            self.blank();
+        }
+        for ed in &tir.externs {
+            emit_tir_extern_decl(self, ed);
+            self.blank();
+        }
+        for ud in &tir.uses {
+            if ud.path.len() > 1 {
+                let is_std = ud.path.first().map(|s| s == "std").unwrap_or(false);
+                let is_pkg = ud.path.first().map(|s| s == "pkg").unwrap_or(false);
+                if !is_std && !is_pkg && !self.test_extern_stubs {
+                    self.line(&format!("use crate::{};", ud.path.join("::")));
+                }
+            } else if ud.path.len() == 1 {
+                let mod_name = &ud.path[0];
+                let is_std = mod_name == "std";
+                let is_pkg = mod_name == "pkg";
+                if !is_std && !is_pkg && !self.test_extern_stubs {
+                    self.line(&format!("use crate::{}::*;", mod_name));
+                }
+            }
+        }
+        for ad in &tir.actors {
+            emit_actor_decl(self, ad);
+            self.blank();
+        }
+        for id in &tir.impls {
+            emit_impl_decl(self, id);
+            self.blank();
+        }
+        for fd in tir.fns.iter().filter(|f| !f.is_test) {
+            emit_fn_decl(self, fd);
+            self.blank();
+        }
+
+        // Emit placeholder stubs for external types referenced but not defined.
+        let stubs = collect_undefined_types_tir(tir, prelude_progs, _sibling_progs);
+        if !stubs.is_empty() {
+            self.line(
+                "// ── External type stubs (Phase 1 placeholders) ──────────────────────────",
+            );
+            for name in &stubs {
+                self.line("#[derive(Debug, Clone, PartialEq)]");
+                self.line(&format!("pub struct {name};"));
+                self.blank();
+            }
+        }
+
+        // Test functions
+        let test_fns: Vec<&TirFn> = tir.fns.iter().filter(|f| f.is_test).collect();
         if !test_fns.is_empty() {
             self.line("#[cfg(test)]");
             self.line("mod tests {");
@@ -858,6 +1140,135 @@ fn emit_extern_decl(cg: &mut RustEmitter, ed: &ExternDecl) {
 // ── Undefined type collection ─────────────────────────────────────────────
 
 /// Collect the names of all base types referenced in the program that are
+/// TIR-based version: collect undefined types from [`TirProgram`] function signatures.
+fn collect_undefined_types_tir(
+    tir: &TirProgram,
+    prelude_progs: &[Program],
+    sibling_progs: &[&Program],
+) -> Vec<String> {
+    use crate::mvl::ir::Ty;
+
+    let builtins: std::collections::HashSet<&str> = [
+        "Int",
+        "Float",
+        "Bool",
+        "String",
+        "Char",
+        "Byte",
+        "Unit",
+        "Never",
+        "List",
+        "Public",
+        "Tainted",
+        "Secret",
+        "Clean",
+        "Option",
+        "Result",
+        "Vec",
+        "Box",
+        "Positional",
+        "UByte",
+        "UInt",
+        "Map",
+        "Set",
+        "Array",
+    ]
+    .iter()
+    .copied()
+    .collect();
+
+    let mut defined: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for td in &tir.types {
+        defined.insert(td.name.clone());
+    }
+    for ad in &tir.actors {
+        defined.insert(ad.name.clone());
+    }
+    for pp in prelude_progs {
+        for decl in &pp.declarations {
+            if let Decl::Type(td) = decl {
+                defined.insert(td.name.clone());
+            }
+        }
+    }
+    for sp in sibling_progs {
+        for decl in &sp.declarations {
+            match decl {
+                Decl::Type(td) => {
+                    defined.insert(td.name.clone());
+                }
+                Decl::Actor(ad) => {
+                    defined.insert(ad.name.clone());
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // Types from Rust-backed stdlib modules
+    for ud in &tir.uses {
+        if ud.path.first().map(|s| s == "std").unwrap_or(false) && ud.path.len() >= 2 {
+            let module = &ud.path[1];
+            let filename = format!("{module}.mvl");
+            if let Some(content) = crate::mvl::stdlib::stdlib_content(&filename) {
+                let (mut p, _) = crate::mvl::parser::Parser::new(content);
+                let stdlib_prog = p.parse_program();
+                for d in &stdlib_prog.declarations {
+                    if let Decl::Type(td) = d {
+                        defined.insert(td.name.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    fn collect_ty_names(ty: &Ty, out: &mut std::collections::HashSet<String>) {
+        match ty {
+            Ty::Named(name, args) => {
+                out.insert(name.clone());
+                for a in args {
+                    collect_ty_names(a, out);
+                }
+            }
+            Ty::List(inner) | Ty::Set(inner) | Ty::Option(inner) | Ty::Labeled(_, inner) => {
+                collect_ty_names(inner, out);
+            }
+            Ty::Map(k, v) | Ty::Result(k, v) => {
+                collect_ty_names(k, out);
+                collect_ty_names(v, out);
+            }
+            Ty::Tuple(elems) => {
+                for e in elems {
+                    collect_ty_names(e, out);
+                }
+            }
+            Ty::Ref(_, inner) => collect_ty_names(inner, out),
+            Ty::Fn(params, ret, _, _) => {
+                for p in params {
+                    collect_ty_names(p, out);
+                }
+                collect_ty_names(ret, out);
+            }
+            _ => {}
+        }
+    }
+
+    let mut referenced: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for f in &tir.fns {
+        for p in &f.params {
+            collect_ty_names(&p.ty, &mut referenced);
+        }
+        collect_ty_names(&f.ret_ty, &mut referenced);
+    }
+
+    let mut stubs: Vec<String> = referenced
+        .into_iter()
+        .filter(|name| !defined.contains(name) && !builtins.contains(name.as_str()))
+        .collect();
+    stubs.sort();
+    stubs
+}
+
 /// not defined by a `TypeDecl` in this program and are not MVL built-ins.
 /// Returns a sorted, deduplicated list suitable for emitting stub structs.
 /// `prelude_progs` types are treated as already-defined so they are never stubbed.
@@ -986,6 +1397,36 @@ fn collect_fn_typed_struct_fields(
     let all_progs = std::iter::once(prog).chain(prelude_progs.iter());
     for p in all_progs {
         for decl in &p.declarations {
+            if let Decl::Type(td) = decl {
+                if let crate::mvl::parser::ast::TypeBody::Struct { fields, .. } = &td.body {
+                    for field in fields {
+                        if matches!(&field.ty, TypeExpr::Fn { .. }) {
+                            out.insert((td.name.clone(), field.name.clone()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+fn collect_fn_typed_struct_fields_tir(
+    tir: &TirProgram,
+    prelude_progs: &[Program],
+) -> std::collections::HashSet<(String, String)> {
+    let mut out = std::collections::HashSet::new();
+    for td in &tir.types {
+        if let crate::mvl::ir::TirTypeBody::Struct { fields, .. } = &td.body {
+            for field in fields {
+                if matches!(&field.ty, crate::mvl::checker::types::Ty::Fn(..)) {
+                    out.insert((td.name.clone(), field.name.clone()));
+                }
+            }
+        }
+    }
+    for pp in prelude_progs {
+        for decl in &pp.declarations {
             if let Decl::Type(td) = decl {
                 if let crate::mvl::parser::ast::TypeBody::Struct { fields, .. } = &td.body {
                     for field in fields {

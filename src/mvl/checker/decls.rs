@@ -337,6 +337,47 @@ impl TypeChecker {
                 });
             }
         }
+        // Type-check method bodies so expression types are recorded for TIR lowering.
+        // Register `self` as the impl target type, then check each method body.
+        // Suppress errors: the checker is not fully impl-aware (e.g. `Self` resolution),
+        // so errors are expected; we only need the expression types for codegen.
+        let self_ty = Ty::Named(id.type_name.clone(), vec![]);
+        let error_count_before = self.errors.len();
+        for method in &id.methods {
+            // Resolve `Self` to the concrete impl target type.
+            let ret_ty = {
+                let raw = resolve(&method.return_type);
+                if matches!(&raw, Ty::Named(n, _) if n == "Self") {
+                    self_ty.clone()
+                } else {
+                    raw
+                }
+            };
+            let prev_ret = self.current_return_ty.replace(ret_ty.clone());
+            let prev_fn_name = std::mem::replace(&mut self.current_fn_name, method.name.clone());
+            self.env.push_scope();
+            for param in &method.params {
+                if param.name == "self" {
+                    self.env
+                        .define("self".to_string(), VarInfo::new(self_ty.clone(), false));
+                } else {
+                    let ty = resolve(&param.ty);
+                    let env_ty = match &ty {
+                        crate::mvl::checker::types::Ty::Ref(_, inner) => (**inner).clone(),
+                        _ => ty.clone(),
+                    };
+                    self.env
+                        .define(param.name.clone(), VarInfo::new(env_ty, false));
+                }
+            }
+            self.infer_block_type(&method.body, Some(&ret_ty));
+            self.env.pop_scope();
+            self.current_return_ty = prev_ret;
+            self.current_fn_name = prev_fn_name;
+        }
+        // Discard any errors from impl body checking — these are false positives
+        // from the checker's limited impl support (e.g. trait method resolution).
+        self.errors.truncate(error_count_before);
     }
 
     fn check_extern_decl(&mut self, ed: &ExternDecl) {

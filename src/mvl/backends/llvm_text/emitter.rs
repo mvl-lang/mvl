@@ -3508,23 +3508,20 @@ impl TextEmitter {
             let mut bound_var: Option<String> = None;
 
             match &arm.pattern {
-                Pattern::Ok { inner, .. } => {
-                    if ok_load_ty != "void" {
-                        let pp = self.next_reg();
-                        self.push_instr(&format!(
-                            "{pp} = extractvalue {{ i8, ptr }} {scrut_val}, 1"
-                        ));
-                        let ok_val = self.next_reg();
-                        self.push_instr(&format!("{ok_val} = load {ok_load_ty}, ptr {pp}"));
-                        self.reg_types.insert(ok_val.clone(), ok_load_ty.clone());
-                        if let Pattern::Ident(var_name, _) = inner.as_ref() {
-                            if var_name != "_" {
-                                self.locals.insert(var_name.clone(), ok_val.clone());
-                                bound_var = Some(var_name.clone());
-                            }
+                Pattern::Ok { inner, .. } if ok_load_ty != "void" => {
+                    let pp = self.next_reg();
+                    self.push_instr(&format!("{pp} = extractvalue {{ i8, ptr }} {scrut_val}, 1"));
+                    let ok_val = self.next_reg();
+                    self.push_instr(&format!("{ok_val} = load {ok_load_ty}, ptr {pp}"));
+                    self.reg_types.insert(ok_val.clone(), ok_load_ty.clone());
+                    if let Pattern::Ident(var_name, _) = inner.as_ref() {
+                        if var_name != "_" {
+                            self.locals.insert(var_name.clone(), ok_val.clone());
+                            bound_var = Some(var_name.clone());
                         }
                     }
                 }
+                Pattern::Ok { .. } => {}
                 Pattern::Err { inner, .. } => {
                     let pp = self.next_reg();
                     self.push_instr(&format!("{pp} = extractvalue {{ i8, ptr }} {scrut_val}, 1"));

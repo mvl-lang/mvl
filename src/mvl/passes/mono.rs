@@ -471,7 +471,7 @@ impl<'a> Monomorphizer<'a> {
     fn seed(&mut self, prog: &Program) {
         for decl in &prog.declarations {
             if let Decl::Fn(fd) = decl {
-                if fd.type_params.is_empty() && !fd.is_test && (fd.name == "main" || fd.visible) {
+                if fd.type_params.is_empty() {
                     self.enqueue(fd.name.clone(), fd.clone(), TypeSubst::new());
                 }
             }
