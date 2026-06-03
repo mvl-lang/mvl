@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+## [0.178.0] - 2026-06-03
+
+### Added
+- `llvm_text` backend: **stdlib C-ABI dispatch parity** (#1202) — wire 11 previously soft-skipped stdlib functions into direct C-ABI dispatch: `sha256`, `sha512`, `crypto_random_bytes`, `format_datetime`, `format_instant`, `find_all`, `replace`, `Float::to_string`, `choice`, `path`; all 11 `run_llvm_text_or_skip` tests migrated to strict `run_llvm_text`
+- `_mvl_time_format_datetime` / `_mvl_time_format_instant` C-ABI exports in `runtime/llvm` (MvlString ABI)
+- `_mvl_float_to_string` C-ABI export for `Float::to_string()` over the LLVM boundary
+- `emit_choice_call` emitter method: SSA-correct `Option[T]` codegen for `choice[T](list)` via `_mvl_random_choice_index`
+- `STDLIB_REPLACED_BY_DISPATCH` constant: named list of MVL prelude bodies stripped in favour of C-ABI dispatch to prevent SSA dominance violations
+
+### Fixed
+- `emit_propagate` / `emit_result_match` / `emit_result_constructor`: guard `load`/`alloca`/`store` against `void` for `Result[Unit, E]` in `?`, match arms, and `Ok(())` constructor
+- `heap_kind`: skip heap tracking for `List[T]` with complex element types (e.g. `List[Match]`) to prevent SSA dominance violations from out-of-scope drops
+- `type_of_expr` for `FnCall`: return correct `ptr` type for dispatched functions so `Ok(expr)` wrapping uses correct LLVM type
+- stdlib dispatch block in `emit_fn_call` now runs before `generic_fns` check, fixing `choice` being intercepted by generic monomorphization
+
 ## [0.177.1] - 2026-06-02
 
 ### Fixed
