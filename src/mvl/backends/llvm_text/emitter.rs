@@ -79,6 +79,23 @@ impl Default for LlvmTextCompiler {
     }
 }
 
+// Pure-MVL stdlib functions replaced by direct C-ABI dispatch in the LLVM backend.
+// Their bodies use while-loops / iterators that violate SSA dominance when lowered
+// naively, so we strip them and emit custom dispatch arms instead.
+const STDLIB_REPLACED_BY_DISPATCH: &[&str] = &[
+    // std.time — replaced by _mvl_time_format_datetime / _mvl_time_format_instant
+    "format_datetime",
+    "format_instant",
+    "instant_to_datetime",
+    "epoch_secs_to_datetime",
+    "dt_digit",
+    "dt_pad2",
+    "dt_pad4",
+    // std.regex — replaced by _mvl_regex_find_all / _mvl_regex_replace
+    "find_all",
+    "replace",
+];
+
 /// Remove prelude function bodies that the llvm_text emitter cannot handle.
 ///
 /// Strips non-builtin functions that fall into either category:
@@ -103,6 +120,10 @@ fn strip_prelude_extension_methods(prog: &Program) -> Program {
             }
             // Drop non-builtin extension methods.
             if fd.receiver_type.is_some() {
+                return false;
+            }
+            // Drop stdlib functions replaced by direct C-ABI dispatch (#1202).
+            if STDLIB_REPLACED_BY_DISPATCH.contains(&fd.name.as_str()) {
                 return false;
             }
             // Drop non-builtin prelude functions whose return type is Option or
@@ -562,9 +583,27 @@ impl TextEmitter {
             other => other,
         };
         match base {
-            TypeExpr::Base { name, .. } => match name.as_str() {
+            TypeExpr::Base { name, args, .. } => match name.as_str() {
                 "String" => Some(HeapKind::String),
-                "List" | "Array" | "Set" => Some(HeapKind::Array),
+                "List" | "Array" | "Set" => {
+                    // Lists whose element type is not a known primitive heap type
+                    // (e.g. List[Match]) require per-element cleanup that the LLVM
+                    // emitter cannot generate.  Skip heap tracking for these to
+                    // avoid SSA dominance violations from out-of-scope drops (#1202).
+                    let elem_is_known = args.first().is_none_or(|a| {
+                        matches!(
+                            a,
+                            TypeExpr::Base { name, .. }
+                            if matches!(name.as_str(), "Int" | "Float" | "Bool" | "String"
+                                | "UInt" | "Byte" | "UByte" | "Char")
+                        )
+                    });
+                    if elem_is_known {
+                        Some(HeapKind::Array)
+                    } else {
+                        None
+                    }
+                }
                 "Map" => Some(HeapKind::Map),
                 _ => None,
             },
@@ -656,6 +695,11 @@ impl TextEmitter {
                     "assert" | "println" | "print" | "eprintln" => "void".into(),
                     "format" => "ptr".into(),
                     "Some" | "None" | "Ok" | "Err" => RESULT_LLVM_TY.into(),
+                    // Stdlib C-ABI dispatch functions whose return types are
+                    // stripped from fn_ret_types by the prelude filter (#1202).
+                    "path" | "format_datetime" | "format_instant" | "find_all" | "replace" => {
+                        "ptr".into()
+                    }
                     _ => {
                         if let Some(ret) = self.fn_ret_types.get(name) {
                             self.llvm_ty_ctx(ret)
@@ -744,6 +788,10 @@ impl TextEmitter {
                     }
                     _ => None,
                 }
+            }
+            // Relabel/Consume strip the IFC label — recurse into the inner expr.
+            Expr::Relabel { expr: inner, .. } | Expr::Consume { expr: inner, .. } => {
+                self.mvl_receiver_kind(inner)
             }
             _ => None,
         }
@@ -2121,6 +2169,115 @@ impl TextEmitter {
             return Ok(Some(ptr));
         }
 
+        // ── Stdlib C-ABI dispatch (#1202) ────────────────────────────────
+        // Must run before generic_fns check: generic builtins like `choice` are
+        // also in generic_fns but have no MVL body to monomorphize.
+        // Functions whose pure-MVL bodies are stripped from the prelude (to avoid
+        // SSA dominance bugs) or whose return type isn't registered (opaque types).
+        match name {
+            "path" if args.len() == 1 => {
+                let s = match self.emit_expr(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                self.ensure_extern("declare ptr @_mvl_io_path(ptr)");
+                let r = self.next_reg();
+                self.push_instr(&format!("{r} = call ptr @_mvl_io_path(ptr {s})"));
+                self.reg_types.insert(r.clone(), "ptr".into());
+                return Ok(Some(r));
+            }
+            "format_datetime" if args.len() == 2 => {
+                let dt = match self.emit_expr(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                let pattern = match self.emit_expr(&args[1])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                // Flatten DateTime { year, month, day, hour, minute, second } → 6 × i64.
+                let mut fields = Vec::new();
+                for i in 0..6usize {
+                    let r = self.next_reg();
+                    self.push_instr(&format!("{r} = extractvalue %DateTime {dt}, {i}"));
+                    self.reg_types.insert(r.clone(), "i64".into());
+                    fields.push(r);
+                }
+                let args_str = format!(
+                    "i64 {}, i64 {}, i64 {}, i64 {}, i64 {}, i64 {}, ptr {}",
+                    fields[0], fields[1], fields[2], fields[3], fields[4], fields[5], pattern
+                );
+                self.ensure_extern(
+                    "declare ptr @_mvl_time_format_datetime(i64, i64, i64, i64, i64, i64, ptr)",
+                );
+                let r = self.next_reg();
+                self.push_instr(&format!(
+                    "{r} = call ptr @_mvl_time_format_datetime({args_str})"
+                ));
+                self.reg_types.insert(r.clone(), "ptr".into());
+                return Ok(Some(r));
+            }
+            "format_instant" if args.len() == 2 => {
+                let handle = match self.emit_expr(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                let pattern = match self.emit_expr(&args[1])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                self.ensure_extern("declare ptr @_mvl_time_format_instant(ptr, ptr)");
+                let r = self.next_reg();
+                self.push_instr(&format!(
+                    "{r} = call ptr @_mvl_time_format_instant(ptr {handle}, ptr {pattern})"
+                ));
+                self.reg_types.insert(r.clone(), "ptr".into());
+                return Ok(Some(r));
+            }
+            "find_all" if args.len() == 2 => {
+                let re = match self.emit_expr(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                let s = match self.emit_expr(&args[1])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                self.ensure_extern("declare ptr @_mvl_regex_find_all(ptr, ptr)");
+                let r = self.next_reg();
+                self.push_instr(&format!(
+                    "{r} = call ptr @_mvl_regex_find_all(ptr {re}, ptr {s})"
+                ));
+                self.reg_types.insert(r.clone(), "ptr".into());
+                return Ok(Some(r));
+            }
+            "replace" if args.len() == 3 => {
+                let re = match self.emit_expr(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                let s = match self.emit_expr(&args[1])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                let repl = match self.emit_expr(&args[2])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                self.ensure_extern("declare ptr @_mvl_regex_replace(ptr, ptr, ptr)");
+                let r = self.next_reg();
+                self.push_instr(&format!(
+                    "{r} = call ptr @_mvl_regex_replace(ptr {re}, ptr {s}, ptr {repl})"
+                ));
+                self.reg_types.insert(r.clone(), "ptr".into());
+                return Ok(Some(r));
+            }
+            "choice" if args.len() == 1 => {
+                return self.emit_choice_call(&args[0]);
+            }
+            _ => {}
+        }
+
         // ── Generic function monomorphization ───────────────────────────
         if self.generic_fns.contains_key(name) {
             return self.emit_monomorphized_call(name, args);
@@ -2272,6 +2429,122 @@ impl TextEmitter {
         Ok(None)
     }
 
+    // ── random.choice custom codegen (#1202) ─────────────────────────────
+
+    /// Emit `choice[T](list)` using `_mvl_random_choice_index`.
+    ///
+    /// Returns `Option[T]` as `{ i8, ptr }`: disc=0 for Some, disc=1 for None.
+    /// Index −1 from the runtime signals an empty list → None.
+    fn emit_choice_call(&mut self, list_arg: &Expr) -> Result<Option<String>, String> {
+        // Determine the element LLVM type from the MVL type of the argument.
+        let elem_llvm_ty = match list_arg {
+            Expr::Ident(name, _) => {
+                if let Some(mvl_ty) = self.local_mvl_types.get(name.as_str()) {
+                    match mvl_ty {
+                        TypeExpr::Base {
+                            args: type_args, ..
+                        } if !type_args.is_empty() => self.llvm_ty_ctx(&type_args[0].clone()),
+                        _ => "i64".to_string(),
+                    }
+                } else {
+                    "i64".to_string()
+                }
+            }
+            _ => "i64".to_string(),
+        };
+
+        let arr = match self.emit_expr(list_arg)? {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+
+        self.ensure_extern("declare i64 @_mvl_random_choice_index(ptr)");
+        let idx = self.next_reg();
+        self.push_instr(&format!(
+            "{idx} = call i64 @_mvl_random_choice_index(ptr {arr})"
+        ));
+        self.reg_types.insert(idx.clone(), "i64".into());
+
+        let is_none = self.next_reg();
+        self.push_instr(&format!("{is_none} = icmp eq i64 {idx}, -1"));
+        self.reg_types.insert(is_none.clone(), "i1".into());
+
+        let none_bb = self.next_bb("choice_none");
+        let some_bb = self.next_bb("choice_some");
+        let merge_bb = self.next_bb("choice_merge");
+
+        // Allocate a result slot shared by both branches.
+        let result_slot = self.next_reg();
+        self.push_instr(&format!("{result_slot} = alloca {RESULT_LLVM_TY}"));
+        self.reg_types.insert(result_slot.clone(), "ptr".into());
+
+        self.push_instr(&format!(
+            "br i1 {is_none}, label %{none_bb}, label %{some_bb}"
+        ));
+
+        // ── None branch ──────────────────────────────────────────────────
+        self.start_bb(&none_bb);
+        let none_r0 = self.next_reg();
+        self.push_instr(&format!(
+            "{none_r0} = insertvalue {RESULT_LLVM_TY} zeroinitializer, i8 1, 0"
+        ));
+        self.reg_types
+            .insert(none_r0.clone(), RESULT_LLVM_TY.into());
+        let none_r1 = self.next_reg();
+        self.push_instr(&format!(
+            "{none_r1} = insertvalue {RESULT_LLVM_TY} {none_r0}, ptr null, 1"
+        ));
+        self.reg_types
+            .insert(none_r1.clone(), RESULT_LLVM_TY.into());
+        self.push_instr(&format!(
+            "store {RESULT_LLVM_TY} {none_r1}, ptr {result_slot}"
+        ));
+        self.push_instr(&format!("br label %{merge_bb}"));
+        self.terminated = true;
+
+        // ── Some branch ──────────────────────────────────────────────────
+        self.start_bb(&some_bb);
+        self.ensure_extern("declare ptr @mvl_array_get(ptr, i64)");
+        let elem_ptr = self.next_reg();
+        self.push_instr(&format!(
+            "{elem_ptr} = call ptr @mvl_array_get(ptr {arr}, i64 {idx})"
+        ));
+        self.reg_types.insert(elem_ptr.clone(), "ptr".into());
+        let elem_val = self.next_reg();
+        self.push_instr(&format!("{elem_val} = load {elem_llvm_ty}, ptr {elem_ptr}"));
+        self.reg_types
+            .insert(elem_val.clone(), elem_llvm_ty.clone());
+        let elem_slot = self.next_reg();
+        self.push_instr(&format!("{elem_slot} = alloca {elem_llvm_ty}"));
+        self.push_instr(&format!("store {elem_llvm_ty} {elem_val}, ptr {elem_slot}"));
+        let some_r0 = self.next_reg();
+        self.push_instr(&format!(
+            "{some_r0} = insertvalue {RESULT_LLVM_TY} zeroinitializer, i8 0, 0"
+        ));
+        self.reg_types
+            .insert(some_r0.clone(), RESULT_LLVM_TY.into());
+        let some_r1 = self.next_reg();
+        self.push_instr(&format!(
+            "{some_r1} = insertvalue {RESULT_LLVM_TY} {some_r0}, ptr {elem_slot}, 1"
+        ));
+        self.reg_types
+            .insert(some_r1.clone(), RESULT_LLVM_TY.into());
+        self.push_instr(&format!(
+            "store {RESULT_LLVM_TY} {some_r1}, ptr {result_slot}"
+        ));
+        self.push_instr(&format!("br label %{merge_bb}"));
+        self.terminated = true;
+
+        // ── Merge ────────────────────────────────────────────────────────
+        self.start_bb(&merge_bb);
+        let result = self.next_reg();
+        self.push_instr(&format!(
+            "{result} = load {RESULT_LLVM_TY}, ptr {result_slot}"
+        ));
+        self.reg_types.insert(result.clone(), RESULT_LLVM_TY.into());
+        Ok(Some(result))
+    }
+
     // ── Result[T,E] helpers ───────────────────────────────────────────────
 
     /// Build a `{ i8, ptr }` Result aggregate from a discriminant byte and a payload slot pointer.
@@ -2302,14 +2575,23 @@ impl TextEmitter {
         let arg_ty;
         let slot;
         if let Some(arg) = args.first() {
-            arg_ty = self.type_of_expr(arg);
-            let arg_val = match self.emit_expr(arg)? {
-                Some(v) => v,
-                None => return Ok(None),
-            };
-            slot = self.next_reg();
-            self.push_instr(&format!("{slot} = alloca {arg_ty}"));
-            self.push_instr(&format!("store {arg_ty} {arg_val}, ptr {slot}"));
+            let inferred_ty = self.type_of_expr(arg);
+            if inferred_ty == "void" {
+                // Ok(()) / Err(()) — Unit payload; use a dummy slot (no store).
+                let _ = self.emit_expr(arg)?;
+                arg_ty = "i8".into();
+                slot = self.next_reg();
+                self.push_instr(&format!("{slot} = alloca i8"));
+            } else {
+                arg_ty = inferred_ty;
+                let arg_val = match self.emit_expr(arg)? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                slot = self.next_reg();
+                self.push_instr(&format!("{slot} = alloca {arg_ty}"));
+                self.push_instr(&format!("store {arg_ty} {arg_val}, ptr {slot}"));
+            }
         } else {
             arg_ty = "i8".into();
             slot = self.next_reg();
@@ -2873,15 +3155,19 @@ impl TextEmitter {
 
             match &arm.pattern {
                 Pattern::Ok { inner, .. } => {
-                    let pp = self.next_reg();
-                    self.push_instr(&format!("{pp} = extractvalue {{ i8, ptr }} {scrut_val}, 1"));
-                    let ok_val = self.next_reg();
-                    self.push_instr(&format!("{ok_val} = load {ok_load_ty}, ptr {pp}"));
-                    self.reg_types.insert(ok_val.clone(), ok_load_ty.clone());
-                    if let Pattern::Ident(var_name, _) = inner.as_ref() {
-                        if var_name != "_" {
-                            self.locals.insert(var_name.clone(), ok_val.clone());
-                            bound_var = Some(var_name.clone());
+                    if ok_load_ty != "void" {
+                        let pp = self.next_reg();
+                        self.push_instr(&format!(
+                            "{pp} = extractvalue {{ i8, ptr }} {scrut_val}, 1"
+                        ));
+                        let ok_val = self.next_reg();
+                        self.push_instr(&format!("{ok_val} = load {ok_load_ty}, ptr {pp}"));
+                        self.reg_types.insert(ok_val.clone(), ok_load_ty.clone());
+                        if let Pattern::Ident(var_name, _) = inner.as_ref() {
+                            if var_name != "_" {
+                                self.locals.insert(var_name.clone(), ok_val.clone());
+                                bound_var = Some(var_name.clone());
+                            }
                         }
                     }
                 }
@@ -3004,11 +3290,15 @@ impl TextEmitter {
 
         // Ok path: extract and load the success payload.
         self.start_bb(&ok_bb);
+        let ok_load_ty = self.result_ok_llvm_ty(inner);
+        if ok_load_ty == "void" {
+            // Result[Unit, E] — no payload to load; the ? expression yields nothing.
+            return Ok(None);
+        }
         let payload_ptr = self.next_reg();
         self.push_instr(&format!(
             "{payload_ptr} = extractvalue {{ i8, ptr }} {result_val}, 1"
         ));
-        let ok_load_ty = self.result_ok_llvm_ty(inner);
         let ok_val = self.next_reg();
         self.push_instr(&format!("{ok_val} = load {ok_load_ty}, ptr {payload_ptr}"));
         self.reg_types.insert(ok_val.clone(), ok_load_ty);
@@ -3082,6 +3372,15 @@ impl TextEmitter {
                     self.emit_bool_to_string(&val)
                 };
                 Ok(Some(s))
+            }
+            ("to_string", "double") => {
+                self.ensure_extern("declare ptr @_mvl_float_to_string(double)");
+                let reg = self.next_reg();
+                self.push_instr(&format!(
+                    "{reg} = call ptr @_mvl_float_to_string(double {val})"
+                ));
+                self.reg_types.insert(reg.clone(), "ptr".into());
+                Ok(Some(reg))
             }
             ("to_string", _) => {
                 // String.to_string() is identity
