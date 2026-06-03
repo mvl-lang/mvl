@@ -10,15 +10,7 @@ use crate::mvl::backends::rust::capability_params::{
     build_capability_params_map_tir, build_capability_params_map_with_siblings,
     explicit_borrow_flags_pub,
 };
-use crate::mvl::backends::rust::emit_actors::{emit_actor_decl, emit_actor_runtime_preamble};
-use crate::mvl::backends::rust::emit_actors_ast::emit_actor_decl_ast;
-use crate::mvl::backends::rust::emit_functions::{emit_fn_decl, emit_fn_decl_ast};
-use crate::mvl::backends::rust::emit_impls::emit_impl_decl;
-use crate::mvl::backends::rust::emit_impls_ast::emit_impl_decl_ast;
-use crate::mvl::backends::rust::emit_types::{
-    emit_security_preamble, emit_tir_extern_decl, emit_tir_type_decl, emit_type_decl,
-    emit_type_expr,
-};
+use crate::mvl::backends::rust::emit_types::emit_type_expr;
 use crate::mvl::backends::rust::{collect_stdlib_modules, has_std_imports};
 use crate::mvl::ir::{TirFn, TirProgram, Ty};
 use crate::mvl::parser::ast::{
@@ -430,7 +422,7 @@ impl RustEmitter {
                 }
             }
         } else {
-            emit_security_preamble(self);
+            self.emit_security_preamble();
         }
         self.blank();
 
@@ -602,7 +594,7 @@ impl RustEmitter {
                     // "mismatched types" errors at cross-module call sites.
                     self.line(&format!("pub use crate::{};", td.name));
                 } else {
-                    emit_type_decl(self, td);
+                    self.emit_type_decl(td);
                 }
                 self.blank();
             }
@@ -624,7 +616,7 @@ impl RustEmitter {
                         continue;
                     }
                 }
-                emit_fn_decl_ast(self, fd);
+                self.emit_fn_decl_ast(fd);
                 self.blank();
             }
             self.coverage = saved_coverage;
@@ -676,15 +668,15 @@ impl RustEmitter {
             .any(|d| matches!(d, Decl::Actor(_)))
         {
             self.has_actors = true;
-            emit_actor_runtime_preamble(self);
+            self.emit_actor_runtime_preamble();
             self.blank();
         }
 
         // Top-level declarations (non-test)
         for decl in &prog.declarations {
             match decl {
-                Decl::Type(td) => emit_type_decl(self, td),
-                Decl::Fn(fd) if !fd.is_test => emit_fn_decl_ast(self, fd),
+                Decl::Type(td) => self.emit_type_decl(td),
+                Decl::Fn(fd) if !fd.is_test => self.emit_fn_decl_ast(fd),
                 Decl::Fn(_) => continue, // test fns emitted below
                 Decl::Extern(ed) => emit_extern_decl(self, ed),
                 Decl::Const(_) => {
@@ -723,8 +715,8 @@ impl RustEmitter {
                     }
                     continue; // use decls don't get a trailing blank line
                 }
-                Decl::Actor(ad) => emit_actor_decl_ast(self, ad),
-                Decl::Impl(id) => emit_impl_decl_ast(self, id),
+                Decl::Actor(ad) => self.emit_actor_decl_ast(ad),
+                Decl::Impl(id) => self.emit_impl_decl_ast(id),
                 Decl::EffectDecl(_) => continue, // compile-time only, no Rust emission
                 Decl::Label(_) | Decl::Relabel(_) => continue, // IFC metadata, no Rust emission
             }
@@ -745,7 +737,7 @@ impl RustEmitter {
             self.line("use super::*;");
             self.blank();
             for fd in test_fns {
-                emit_fn_decl_ast(self, fd);
+                self.emit_fn_decl_ast(fd);
                 self.blank();
             }
             self.pop_indent();
@@ -829,7 +821,7 @@ impl RustEmitter {
                 }
             }
         } else {
-            emit_security_preamble(self);
+            self.emit_security_preamble();
         }
         self.blank();
 
@@ -951,11 +943,11 @@ impl RustEmitter {
                 self.blank();
             }
             for td in &prelude_types {
-                emit_type_decl(self, td);
+                self.emit_type_decl(td);
                 self.blank();
             }
             for fd in prelude_fns {
-                emit_fn_decl_ast(self, fd);
+                self.emit_fn_decl_ast(fd);
                 self.blank();
             }
             self.coverage = saved_coverage;
@@ -966,17 +958,17 @@ impl RustEmitter {
         // Actor runtime preamble
         if !tir.actors.is_empty() {
             self.has_actors = true;
-            emit_actor_runtime_preamble(self);
+            self.emit_actor_runtime_preamble();
             self.blank();
         }
 
         // Top-level TIR declarations
         for td in &tir.types {
-            emit_tir_type_decl(self, td);
+            self.emit_tir_type_decl(td);
             self.blank();
         }
         for ed in &tir.externs {
-            emit_tir_extern_decl(self, ed);
+            self.emit_tir_extern_decl(ed);
             self.blank();
         }
         for ud in &tir.uses {
@@ -996,15 +988,15 @@ impl RustEmitter {
             }
         }
         for ad in &tir.actors {
-            emit_actor_decl(self, ad);
+            self.emit_actor_decl(ad);
             self.blank();
         }
         for id in &tir.impls {
-            emit_impl_decl(self, id);
+            self.emit_impl_decl(id);
             self.blank();
         }
         for fd in tir.fns.iter().filter(|f| !f.is_test) {
-            emit_fn_decl(self, fd);
+            self.emit_fn_decl(fd);
             self.blank();
         }
 
@@ -1030,7 +1022,7 @@ impl RustEmitter {
             self.line("use super::*;");
             self.blank();
             for fd in test_fns {
-                emit_fn_decl(self, fd);
+                self.emit_fn_decl(fd);
                 self.blank();
             }
             self.pop_indent();
