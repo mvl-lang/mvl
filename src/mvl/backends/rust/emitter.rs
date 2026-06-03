@@ -109,12 +109,6 @@ pub struct RustEmitter {
     /// Used by let-binding emission to add `.clone()` when reading a field
     /// from a capability parameter (`acc.items` where `acc: &ParseAcc`).
     pub capability_param_names: std::collections::HashSet<String>,
-    /// Names of parameters that have been converted to Rust references (&T)
-    /// in the current function.
-    ///
-    /// Used in function call argument emission to avoid applying `.clone()`
-    /// to parameters that are already references.
-    pub borrowed_param_names: std::collections::HashSet<String>,
     /// Fully-qualified Rust paths for stdlib function names that would shadow
     /// built-in primitives in the generated file (#420: regex.replace / regex.find).
     ///
@@ -880,8 +874,9 @@ impl RustEmitter {
             .filter(|td| seen_prelude_types.insert(td.name.as_str()))
             .collect();
 
-        // Phase B: capability params map from TIR
-        self.capability_params_map = build_capability_params_map_tir(tir, &prelude_fns);
+        // Phase B: capability params map from TIR + sibling modules
+        self.capability_params_map =
+            build_capability_params_map_tir(tir, &prelude_fns, _sibling_progs);
 
         // Explicit borrow annotations from prelude fns (builtin/no-body fns excluded above)
         for pp in prelude_progs {

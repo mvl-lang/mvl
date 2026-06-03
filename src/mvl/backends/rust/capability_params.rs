@@ -536,9 +536,14 @@ fn lvalue_is_param(lval: &LValue, param: &str) -> bool {
 ///
 /// Mirrors [`build_capability_params_map_with_siblings`] but operates on TIR
 /// so the backend dispatch loop can use TIR without re-parsing the AST.
+///
+/// `sibling_progs` are needed so that cross-module calls emit correct borrow
+/// annotations at call sites (e.g. `log_access` defined in `audit.mvl` but
+/// called from `main.mvl`).
 pub fn build_capability_params_map_tir(
     tir: &crate::mvl::ir::TirProgram,
     prelude_fns: &[&FnDecl],
+    sibling_progs: &[&Program],
 ) -> HashMap<String, Vec<Option<bool>>> {
     let mut map = HashMap::new();
 
@@ -555,6 +560,18 @@ pub fn build_capability_params_map_tir(
         let flags = capability_params_for_tir_fn(f);
         if flags.iter().any(|b| b.is_some()) {
             map.insert(f.name.clone(), flags);
+        }
+    }
+
+    // Sibling module functions — same analysis as user functions.
+    for sibling in sibling_progs {
+        for decl in &sibling.declarations {
+            if let Decl::Fn(fd) = decl {
+                let flags = capability_params_for_fn(fd);
+                if flags.iter().any(|b| b.is_some()) {
+                    map.insert(fd.name.clone(), flags);
+                }
+            }
         }
     }
 
@@ -720,12 +737,13 @@ fn expr_has_disqualifying_use_tir(param: &str, expr: &crate::mvl::ir::TirExpr) -
                 || expr_has_disqualifying_use_tir(param, right)
         }
         TirExprKind::Unary { expr: inner, .. } => expr_has_disqualifying_use_tir(param, inner),
-        TirExprKind::Propagate(inner) | TirExprKind::Consume(inner) => {
-            expr_has_disqualifying_use_tir(param, inner)
+        TirExprKind::Propagate(inner)
+        | TirExprKind::Consume(inner)
+        | TirExprKind::Relabel { expr: inner, .. } => {
+            matches!(&inner.kind, TirExprKind::Var(n) if n == param)
+                || expr_has_disqualifying_use_tir(param, inner)
         }
-        TirExprKind::Relabel { expr: inner, .. } | TirExprKind::Borrow { expr: inner, .. } => {
-            expr_has_disqualifying_use_tir(param, inner)
-        }
+        TirExprKind::Borrow { expr: inner, .. } => expr_has_disqualifying_use_tir(param, inner),
         TirExprKind::If {
             cond, then, else_, ..
         } => {
@@ -746,7 +764,14 @@ fn expr_has_disqualifying_use_tir(param: &str, expr: &crate::mvl::ir::TirExpr) -
                 })
         }
         TirExprKind::Block(b) => block_has_disqualifying_use_tir(param, b),
-        TirExprKind::Lambda { .. } => false, // conservative: lambdas may capture
+        TirExprKind::Lambda {
+            params: lambda_params,
+            body,
+            ..
+        } => {
+            let shadowed = lambda_params.iter().any(|p| p.name == param);
+            !shadowed && expr_mentions_param_tir(param, body)
+        }
         TirExprKind::Construct { fields, .. } | TirExprKind::Spawn { fields, .. } => {
             fields.iter().any(|(_, e)| {
                 matches!(&e.kind, TirExprKind::Var(n) if n == param)
@@ -768,6 +793,109 @@ fn expr_has_disqualifying_use_tir(param: &str, expr: &crate::mvl::ir::TirExpr) -
                 || expr_has_disqualifying_use_tir(param, v)
         }),
         TirExprKind::Var(_) | TirExprKind::Literal(_) | TirExprKind::Quantifier(_) => false,
+    }
+}
+
+/// Returns `true` if `param` appears anywhere inside the TIR expression —
+/// used to conservatively disqualify params captured by lambdas.
+fn expr_mentions_param_tir(param: &str, expr: &crate::mvl::ir::TirExpr) -> bool {
+    use crate::mvl::ir::TirExprKind;
+    match &expr.kind {
+        TirExprKind::Var(n) => n == param,
+        TirExprKind::FnCall { args, .. } => args.iter().any(|a| expr_mentions_param_tir(param, a)),
+        TirExprKind::MethodCall { receiver, args, .. } => {
+            expr_mentions_param_tir(param, receiver)
+                || args.iter().any(|a| expr_mentions_param_tir(param, a))
+        }
+        TirExprKind::Binary { left, right, .. } => {
+            expr_mentions_param_tir(param, left) || expr_mentions_param_tir(param, right)
+        }
+        TirExprKind::Unary { expr: inner, .. }
+        | TirExprKind::FieldAccess { expr: inner, .. }
+        | TirExprKind::Relabel { expr: inner, .. }
+        | TirExprKind::Consume(inner)
+        | TirExprKind::Propagate(inner)
+        | TirExprKind::Borrow { expr: inner, .. } => expr_mentions_param_tir(param, inner),
+        TirExprKind::Construct { fields, .. } | TirExprKind::Spawn { fields, .. } => fields
+            .iter()
+            .any(|(_, v)| expr_mentions_param_tir(param, v)),
+        TirExprKind::List { elems } | TirExprKind::Set { elems } => {
+            elems.iter().any(|e| expr_mentions_param_tir(param, e))
+        }
+        TirExprKind::Map { pairs } => pairs
+            .iter()
+            .any(|(k, v)| expr_mentions_param_tir(param, k) || expr_mentions_param_tir(param, v)),
+        TirExprKind::If {
+            cond, then, else_, ..
+        } => {
+            expr_mentions_param_tir(param, cond)
+                || block_mentions_param_tir(param, then)
+                || else_
+                    .as_ref()
+                    .is_some_and(|e| expr_mentions_param_tir(param, e))
+        }
+        TirExprKind::Match {
+            scrutinee, arms, ..
+        } => {
+            expr_mentions_param_tir(param, scrutinee)
+                || arms.iter().any(|a| match &a.body {
+                    crate::mvl::ir::TirMatchBody::Block(b) => block_mentions_param_tir(param, b),
+                    crate::mvl::ir::TirMatchBody::Expr(e) => expr_mentions_param_tir(param, e),
+                })
+        }
+        TirExprKind::Block(b) => block_mentions_param_tir(param, b),
+        TirExprKind::Lambda { params, body, .. } => {
+            let shadowed = params.iter().any(|p| p.name == param);
+            !shadowed && expr_mentions_param_tir(param, body)
+        }
+        TirExprKind::Select { arms, .. } => arms.iter().any(|a| {
+            expr_mentions_param_tir(param, &a.expr) || block_mentions_param_tir(param, &a.body)
+        }),
+        TirExprKind::Literal(_) | TirExprKind::Quantifier(_) => false,
+    }
+}
+
+fn block_mentions_param_tir(param: &str, block: &crate::mvl::ir::TirBlock) -> bool {
+    block
+        .stmts
+        .iter()
+        .any(|s| stmt_mentions_param_tir(param, s))
+}
+
+fn stmt_mentions_param_tir(param: &str, stmt: &crate::mvl::ir::TirStmt) -> bool {
+    use crate::mvl::ir::{TirElseBranch, TirStmt};
+    match stmt {
+        TirStmt::Assign { value, .. } => expr_mentions_param_tir(param, value),
+        TirStmt::Return { value, .. } => value
+            .as_ref()
+            .is_some_and(|e| expr_mentions_param_tir(param, e)),
+        TirStmt::Let { init, .. } => expr_mentions_param_tir(param, init),
+        TirStmt::Expr { expr, .. } => expr_mentions_param_tir(param, expr),
+        TirStmt::If {
+            cond, then, else_, ..
+        } => {
+            expr_mentions_param_tir(param, cond)
+                || block_mentions_param_tir(param, then)
+                || else_.as_ref().is_some_and(|e| match e {
+                    TirElseBranch::Block(b) => block_mentions_param_tir(param, b),
+                    TirElseBranch::If(s) => stmt_mentions_param_tir(param, s),
+                })
+        }
+        TirStmt::Match {
+            scrutinee, arms, ..
+        } => {
+            expr_mentions_param_tir(param, scrutinee)
+                || arms.iter().any(|a| match &a.body {
+                    crate::mvl::ir::TirMatchBody::Block(b) => block_mentions_param_tir(param, b),
+                    crate::mvl::ir::TirMatchBody::Expr(e) => expr_mentions_param_tir(param, e),
+                })
+        }
+        TirStmt::For { iter, body, .. } => {
+            expr_mentions_param_tir(param, iter) || block_mentions_param_tir(param, body)
+        }
+        TirStmt::While { cond, body, .. } => {
+            expr_mentions_param_tir(param, cond) || block_mentions_param_tir(param, body)
+        }
     }
 }
 

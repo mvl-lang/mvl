@@ -191,7 +191,6 @@ fn emit_fn_body_tir(cg: &mut RustEmitter, fd: &TirFn) {
     cg.last_uses = compute_last_uses(&fd.body);
 
     cg.capability_param_names.clear();
-    cg.borrowed_param_names.clear();
     let borrows = cg
         .capability_params_map
         .get(&fd.name)
@@ -200,7 +199,6 @@ fn emit_fn_body_tir(cg: &mut RustEmitter, fd: &TirFn) {
     for (i, param) in fd.params.iter().enumerate() {
         if borrows.get(i).copied().flatten().is_some() {
             cg.capability_param_names.insert(param.name.clone());
-            cg.borrowed_param_names.insert(param.name.clone());
         }
     }
 
@@ -303,8 +301,6 @@ fn emit_fn_body_tir(cg: &mut RustEmitter, fd: &TirFn) {
             }
         }
     }
-
-    cg.borrowed_param_names.clear();
 }
 
 /// Emit TIR function parameters.

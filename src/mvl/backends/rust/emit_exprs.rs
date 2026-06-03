@@ -1313,21 +1313,10 @@ fn emit_expr_as_fn_arg(cg: &mut RustEmitter, expr: &TirExpr) {
             }
         }
         // Value identifiers: `.into()` allows unlabeled (Public) values to coerce into
-        // labeled parameters. Borrowed parameters (converted to & references in Rust)
-        // should not be cloned and converted.
+        // labeled parameters.
         TirExprKind::Var(name) => {
-            let ty = cg.expr_types.get(&expr.span);
-            let is_ref = matches!(ty, Some(Ty::Ref(_, _)));
-
-            // Check if this variable is a function parameter that has been converted
-            // to a borrow in Rust. Such parameters should not be cloned or converted.
-            let is_borrowed_param = cg.borrowed_param_names.contains(name.as_str());
-
             emit_expr(cg, expr);
-            if is_ref || is_borrowed_param {
-                // Reference types and borrowed parameters cannot be cloned and
-                // converted with Into generically. Pass as-is without .clone().
-            } else if !cg.last_uses.contains(&expr.span)
+            if !cg.last_uses.contains(&expr.span)
                 || cg.capability_param_names.contains(name.as_str())
             {
                 cg.push(".clone().into()");
@@ -1337,11 +1326,7 @@ fn emit_expr_as_fn_arg(cg: &mut RustEmitter, expr: &TirExpr) {
         }
         TirExprKind::FieldAccess { .. } => {
             emit_expr(cg, expr);
-            // Check if field type is a reference
-            let ty = cg.expr_types.get(&expr.span);
-            if !matches!(ty, Some(Ty::Ref(_, _))) {
-                cg.push(".clone().into()");
-            }
+            cg.push(".clone().into()");
         }
         _ => {
             emit_expr(cg, expr);
