@@ -366,8 +366,7 @@ fn cross_backend_random_float_shape() {
         "use std.random.{float}\nfn main() -> Unit ! Random {\n  let v: Float = float();\n  println(format(\"{}\", [v.to_string()]));\n}\n",
     )
     .expect("write");
-    // TODO(llvm_text): random.float diverges from transpiler (formatting precision).
-    if let Some(out) = run_llvm_text_or_skip(&tmp.path().to_string_lossy()) {
+    if let Some(out) = run_llvm_text(&tmp.path().to_string_lossy()) {
         let v: f64 = out
             .trim()
             .parse()
@@ -398,8 +397,7 @@ fn cross_backend_generic_fns() {
 #[test]
 fn cross_backend_random_choice() {
     let file = corpus_effects("random_choice.mvl");
-    // TODO(llvm_text): random.choice on List[Int] diverges from transpiler.
-    if let Some(llvm_out) = run_llvm_text_or_skip(&file) {
+    if let Some(llvm_out) = run_llvm_text(&file) {
         let transpiler_out = run_transpiler(&file);
         assert_eq!(
             llvm_out, transpiler_out,
@@ -491,8 +489,7 @@ fn cross_backend_io_write_read_roundtrip() {
         "read_ok\nappend_ok\ndir_ok\nok",
         "io_basic.mvl: unexpected output from transpiler backend"
     );
-    // TODO(llvm_text): file I/O effect dispatch diverges from transpiler.
-    if let Some(llvm_out) = run_llvm_text_or_skip(&file) {
+    if let Some(llvm_out) = run_llvm_text(&file) {
         assert_eq!(
             llvm_out, transpiler_out,
             "io_basic.mvl: LLVM and transpiler backends must produce identical output"
@@ -505,8 +502,7 @@ fn cross_backend_io_write_read_roundtrip() {
 #[test]
 fn cross_backend_time_sleep() {
     let file = corpus_effects("time_sleep.mvl");
-    // TODO(llvm_text): time.sleep effect dispatch diverges from transpiler.
-    if let Some(llvm_out) = run_llvm_text_or_skip(&file) {
+    if let Some(llvm_out) = run_llvm_text(&file) {
         let transpiler_out = run_transpiler(&file);
         assert_eq!(
             llvm_out, transpiler_out,
@@ -524,8 +520,7 @@ fn cross_backend_time_sleep() {
 #[test]
 fn cross_backend_time_format_datetime() {
     let file = corpus_effects("time_format_datetime.mvl");
-    // TODO(llvm_text): time.format_datetime diverges from transpiler.
-    if let Some(llvm_out) = run_llvm_text_or_skip(&file) {
+    if let Some(llvm_out) = run_llvm_text(&file) {
         let transpiler_out = run_transpiler(&file);
         assert_eq!(
             llvm_out, transpiler_out,
@@ -544,8 +539,7 @@ fn cross_backend_time_format_datetime() {
 #[test]
 fn cross_backend_time_format_instant() {
     let file = corpus_effects("time_format_instant.mvl");
-    // TODO(llvm_text): time.format_instant diverges from transpiler.
-    if let Some(llvm_out) = run_llvm_text_or_skip(&file) {
+    if let Some(llvm_out) = run_llvm_text(&file) {
         let transpiler_out = run_transpiler(&file);
         assert_eq!(
             llvm_out, transpiler_out,
@@ -589,8 +583,7 @@ fn cross_backend_crypto_sha256_transpiler() {
 fn cross_backend_crypto_sha256_llvm() {
     let file = corpus_effects("crypto_sha256.mvl");
     let transpiler_out = run_transpiler(&file);
-    // TODO(llvm_text): codegen type mismatch (i64 vs ptr) in crypto path.
-    if let Some(llvm_out) = run_llvm_text_or_skip(&file) {
+    if let Some(llvm_out) = run_llvm_text(&file) {
         assert_eq!(
             llvm_out, transpiler_out,
             "crypto_sha256.mvl: LLVM and transpiler backends must produce identical output"
@@ -604,8 +597,7 @@ fn cross_backend_crypto_sha256_llvm() {
 #[test]
 fn cross_backend_regex_replace() {
     let file = corpus_stdlib("regex_replace.mvl");
-    // TODO(llvm_text): regex.replace diverges from transpiler.
-    if let Some(llvm_out) = run_llvm_text_or_skip(&file) {
+    if let Some(llvm_out) = run_llvm_text(&file) {
         let transpiler_out = run_transpiler(&file);
         assert_eq!(
             llvm_out, transpiler_out,
@@ -643,8 +635,7 @@ fn cross_backend_regex_find() {
 #[test]
 fn cross_backend_regex_find_all() {
     let file = corpus_stdlib("regex_find_all.mvl");
-    // TODO(llvm_text): regex.find_all on List[Match] diverges from transpiler.
-    if let Some(llvm_out) = run_llvm_text_or_skip(&file) {
+    if let Some(llvm_out) = run_llvm_text(&file) {
         let transpiler_out = run_transpiler(&file);
         assert_eq!(
             llvm_out, transpiler_out,
@@ -726,8 +717,7 @@ fn cross_backend_crypto_random_bytes_llvm_shape() {
         "16",
         "Rust transpiler: expected length 16, got: {transpiler_out:?}"
     );
-    // TODO(llvm_text): crypto.random_bytes diverges from transpiler.
-    if let Some(llvm_out) = run_llvm_text_or_skip(&file) {
+    if let Some(llvm_out) = run_llvm_text(&file) {
         assert_eq!(
             llvm_out.trim(),
             "16",
@@ -746,8 +736,7 @@ fn cross_backend_crypto_random_bytes_zero_llvm() {
         "0",
         "Rust transpiler: expected length 0, got: {transpiler_out:?}"
     );
-    // TODO(llvm_text): crypto.random_bytes(0) diverges from transpiler.
-    if let Some(llvm_out) = run_llvm_text_or_skip(&file) {
+    if let Some(llvm_out) = run_llvm_text(&file) {
         assert_eq!(
             llvm_out.trim(),
             "0",

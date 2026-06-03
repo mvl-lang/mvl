@@ -23,14 +23,37 @@
 //! `_instant_epoch_seconds(handle)` to read the i64 and compute formatting
 //! entirely in MVL — no `_mvl_time_format_*` C-ABI shims required.
 
+use std::slice;
 use std::time::{Duration as StdDuration, SystemTime, UNIX_EPOCH};
 
 use libc::{c_char, c_void};
 
 use crate::abi::string_to_c;
+use crate::memory::{mvl_string_new, MvlString};
 use mvl_runtime::stdlib::time as rt;
 use mvl_runtime::stdlib::time::{sleep, Duration};
 use rt::Instant;
+
+// ── MvlString helpers (mirrors regex.rs) ─────────────────────────────────────
+
+#[allow(unsafe_code)]
+unsafe fn read_mvl_string(s: *const MvlString) -> String {
+    if s.is_null() {
+        return String::new();
+    }
+    let len = (*s).len as usize;
+    if len == 0 || (*s).ptr.is_null() {
+        return String::new();
+    }
+    let bytes = slice::from_raw_parts((*s).ptr as *const u8, len);
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
+#[allow(unsafe_code)]
+fn new_mvl_str(s: &str) -> *mut c_void {
+    let bytes = s.as_bytes();
+    unsafe { mvl_string_new(bytes.as_ptr(), bytes.len()) as *mut c_void }
+}
 
 // ── Wall-clock ────────────────────────────────────────────────────────────────
 
@@ -93,6 +116,58 @@ pub unsafe extern "C" fn _mvl_time__instant_epoch_seconds(handle: *const c_void)
         return 0;
     }
     *(handle as *const i64)
+}
+
+// ── Datetime formatting (#1202) ───────────────────────────────────────────────
+
+/// Format a DateTime (6 flattened i64 fields) as a string using the given pattern.
+///
+/// Flattening matches `%DateTime = type { i64, i64, i64, i64, i64, i64 }`.
+/// Returned `*mut c_void` is a heap-allocated `MvlString`; caller must drop it.
+#[no_mangle]
+#[allow(unsafe_code)]
+pub unsafe extern "C" fn _mvl_time_format_datetime(
+    year: i64,
+    month: i64,
+    day: i64,
+    hour: i64,
+    minute: i64,
+    second: i64,
+    pattern: *const MvlString,
+) -> *mut c_void {
+    let pat = read_mvl_string(pattern);
+    let dt = rt::DateTime {
+        year,
+        month,
+        day,
+        hour,
+        minute,
+        second,
+    };
+    let s = rt::format_datetime(dt, pat);
+    new_mvl_str(&s)
+}
+
+/// Format an Instant handle (boxed epoch-seconds i64) as a string using the given pattern.
+///
+/// `handle` is the opaque `*mut c_void` returned by `_mvl_time_now()`.
+/// Returned `*mut c_void` is a heap-allocated `MvlString`; caller must drop it.
+#[no_mangle]
+#[allow(unsafe_code)]
+pub unsafe extern "C" fn _mvl_time_format_instant(
+    handle: *const c_void,
+    pattern: *const MvlString,
+) -> *mut c_void {
+    let secs = if handle.is_null() {
+        0i64
+    } else {
+        *(handle as *const i64)
+    };
+    let systime = UNIX_EPOCH + StdDuration::from_secs(secs.max(0) as u64);
+    let instant = Instant(systime);
+    let pat = read_mvl_string(pattern);
+    let s = rt::format_instant(instant, pat);
+    new_mvl_str(&s)
 }
 
 // ── Legacy ISO 8601 formatting ─────────────────────────────────────────────────

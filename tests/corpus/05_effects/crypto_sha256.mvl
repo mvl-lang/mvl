@@ -11,6 +11,8 @@
 //
 // Used by: tests/cross_backend.rs::cross_backend_crypto_sha256
 
+use std.crypto.{sha256, sha512}
+
 fn main() -> Unit ! Console {
     let h1: String = sha256("");
     let h2: String = sha256("abc");

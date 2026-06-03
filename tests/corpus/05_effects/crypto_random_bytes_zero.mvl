@@ -3,6 +3,8 @@
 // Verifies that crypto_random_bytes(0) returns an empty list on both backends.
 // Used by: tests/cross_backend.rs::cross_backend_crypto_random_bytes_zero_llvm
 
+use std.crypto.{crypto_random_bytes}
+
 fn main() -> Unit ! CryptoRandom + Console {
     let bs: Secret[List[Int]] = crypto_random_bytes(0);
     println(format("{}", [relabel release(bs, "AUTHORIZED").len().to_string()]));

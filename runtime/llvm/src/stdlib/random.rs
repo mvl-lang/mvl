@@ -17,7 +17,25 @@
 //! `_mvl_random_choice_index` and `_mvl_random_shuffle_i64` use the old
 //! length-prefixed i64 layout and are deferred pending LLVM wiring.
 
+use libc::c_void;
+
+use crate::memory::mvl_string_new;
 use mvl_runtime::stdlib::random;
+
+// ── Float → string conversion (#1202) ────────────────────────────────────────
+
+/// Convert a `Float` (f64) to a heap-allocated `MvlString*`.
+///
+/// Used by the LLVM backend for `Float::to_string()`. Returns the shortest
+/// round-trip decimal representation via Rust's default `f64` Display impl.
+/// The returned `*mut c_void` is a `*mut MvlString`; the caller must drop it.
+#[no_mangle]
+#[allow(unsafe_code)]
+pub extern "C" fn _mvl_float_to_string(v: f64) -> *mut c_void {
+    let s = format!("{v}");
+    let bytes = s.as_bytes();
+    unsafe { mvl_string_new(bytes.as_ptr(), bytes.len()) as *mut c_void }
+}
 
 // ── Primitive dispatch ────────────────────────────────────────────────────────
 
