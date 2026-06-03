@@ -11,7 +11,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::mvl::parser::ast::{
     ActorDecl, BinaryOp, Block, Decl, ElseBranch, Expr, FnDecl, LValue, LetKind, Literal, MatchArm,
-    MatchBody, Pattern, Program, Stmt, TypeBody, TypeExpr, UnaryOp,
+    MatchBody, Pattern, Program, Stmt, TypeBody, TypeExpr, UnaryOp, VariantFields,
 };
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -174,6 +174,14 @@ struct TextEmitter {
     struct_fields: HashMap<String, Vec<(String, TypeExpr)>>,
     /// enum name → ordered list of variant names (index = discriminant)
     enum_variants: HashMap<String, Vec<String>>,
+    /// enum name → ordered list of variant payload field type lists (#1200).
+    ///
+    /// Parallel to `enum_variants`: index = discriminant. Each entry is the
+    /// list of `TypeExpr`s for the variant's tuple-struct fields. Unit variants
+    /// have an empty `Vec`. An enum is a "payload enum" if any variant has a
+    /// non-empty field list — payload enums lower to `{ i8, ptr }` instead of
+    /// a bare `i64` discriminant.
+    enum_variant_fields: HashMap<String, Vec<Vec<TypeExpr>>>,
 
     // ── Per-function state (reset on every new function) ──────────────────
     fn_buf: Vec<String>,
@@ -291,6 +299,7 @@ impl TextEmitter {
             extern_decls: Vec::new(),
             struct_fields: HashMap::new(),
             enum_variants: HashMap::new(),
+            enum_variant_fields: HashMap::new(),
             fn_buf: Vec::new(),
             current_bb: String::new(),
             terminated: false,
@@ -550,7 +559,11 @@ impl TextEmitter {
                     return format!("%{name}");
                 }
                 if self.enum_variants.contains_key(name) {
-                    return "i64".to_string(); // unit enum = discriminant
+                    // Payload enums lower to `{ i8, ptr }`; pure unit enums stay i64 (#1200).
+                    if self.enum_has_payloads(name) {
+                        return RESULT_LLVM_TY.to_string();
+                    }
+                    return "i64".to_string();
                 }
                 // Actor type without registered state struct (e.g. handle as field).
                 if self.actor_decls.contains_key(name.as_str()) {
@@ -639,6 +652,9 @@ impl TextEmitter {
                     if let Some(pos) = name.find("::") {
                         let type_name = &name[..pos];
                         if self.enum_variants.contains_key(type_name) {
+                            if self.enum_has_payloads(type_name) {
+                                return RESULT_LLVM_TY.into();
+                            }
                             return "i64".into();
                         }
                     }
@@ -652,6 +668,9 @@ impl TextEmitter {
                         return format!("%{tn}");
                     }
                     if self.enum_variants.contains_key(&tn) {
+                        if self.enum_has_payloads(&tn) {
+                            return RESULT_LLVM_TY.into();
+                        }
                         return "i64".into();
                     }
                 }
@@ -687,6 +706,9 @@ impl TextEmitter {
                     if let Some(pos) = name.find("::") {
                         let type_name = &name[..pos];
                         if self.enum_variants.contains_key(type_name) {
+                            if self.enum_has_payloads(type_name) {
+                                return RESULT_LLVM_TY.into();
+                            }
                             return "i64".into();
                         }
                     }
@@ -724,6 +746,13 @@ impl TextEmitter {
             Expr::FieldAccess { .. } => "i64".into(), // default; refined in emit_field_access
             Expr::List { .. } | Expr::Map { .. } | Expr::Set { .. } => "ptr".into(),
             Expr::Consume { expr, .. } | Expr::Relabel { expr, .. } => self.type_of_expr(expr),
+            Expr::Unary {
+                op: UnaryOp::Deref,
+                expr: inner,
+                ..
+            } => self
+                .box_inner_llvm_ty(inner)
+                .unwrap_or_else(|| "i64".into()),
             Expr::If { then, .. } => {
                 // Use the type of the last expression in `then`
                 if let Some(Stmt::Expr { expr, .. }) = then.stmts.last() {
@@ -937,7 +966,16 @@ impl TextEmitter {
                     TypeBody::Enum(variants) => {
                         let variant_names: Vec<String> =
                             variants.iter().map(|v| v.name.clone()).collect();
+                        let variant_fields: Vec<Vec<TypeExpr>> = variants
+                            .iter()
+                            .map(|v| match &v.fields {
+                                VariantFields::Tuple(tys) => tys.clone(),
+                                _ => Vec::new(),
+                            })
+                            .collect();
                         self.enum_variants.insert(td.name.clone(), variant_names);
+                        self.enum_variant_fields
+                            .insert(td.name.clone(), variant_fields);
                     }
                     TypeBody::Alias(_) => {}
                 },
@@ -1512,6 +1550,11 @@ impl TextEmitter {
             return self.emit_option_match(scrutinee, &scrut_val, arms);
         }
 
+        // Delegate to payload-enum match if the scrutinee is a payload enum (#1200).
+        if let Some(enum_name) = self.scrutinee_payload_enum(scrutinee) {
+            return self.emit_payload_enum_match(&enum_name, &scrut_val, arms);
+        }
+
         let scrut_ty = self.type_of_expr(scrutinee);
 
         let n = self.bb;
@@ -1675,6 +1718,30 @@ impl TextEmitter {
         }
     }
 
+    /// Returns true if any variant of `enum_name` has tuple payload fields (#1200).
+    ///
+    /// Payload enums lower to `{ i8, ptr }`; pure unit enums stay as `i64` discriminants.
+    fn enum_has_payloads(&self, enum_name: &str) -> bool {
+        self.enum_variant_fields
+            .get(enum_name)
+            .is_some_and(|vs| vs.iter().any(|f| !f.is_empty()))
+    }
+
+    /// Split a qualified variant name `"Type::Variant"` into `(type, variant)`.
+    fn split_qualified(name: &str) -> Option<(&str, &str)> {
+        let pos = name.find("::")?;
+        Some((&name[..pos], &name[pos + 2..]))
+    }
+
+    /// Look up the tuple payload types for `Type::Variant` (#1200).
+    fn variant_payload_types(&self, qualified_name: &str) -> Option<&[TypeExpr]> {
+        let (type_name, variant_name) = Self::split_qualified(qualified_name)?;
+        let names = self.enum_variants.get(type_name)?;
+        let idx = names.iter().position(|n| n == variant_name)?;
+        let fields = self.enum_variant_fields.get(type_name)?;
+        fields.get(idx).map(|v| v.as_slice())
+    }
+
     /// Resolve a pattern name like "Shape::Circle" to its discriminant i64.
     fn pattern_discriminant(&self, name: &str) -> Option<i64> {
         if let Some(pos) = name.find("::") {
@@ -1700,9 +1767,15 @@ impl TextEmitter {
                 if name == "None" {
                     return self.emit_none_constructor();
                 }
-                // Qualified enum variant: "Shape::Circle" → discriminant i64
+                // Qualified enum variant: "Shape::Circle" → discriminant i64,
+                // or "LinkedList::Nil" (payload enum, unit variant) → { i8, ptr } (#1200).
                 if name.contains("::") {
                     if let Some(disc) = self.pattern_discriminant(name) {
+                        if let Some((type_name, _)) = Self::split_qualified(name) {
+                            if self.enum_has_payloads(type_name) {
+                                return self.emit_enum_variant_constructor(name, disc, &[]);
+                            }
+                        }
                         return Ok(Some(format!("{disc}")));
                     }
                 }
@@ -2131,9 +2204,15 @@ impl TextEmitter {
             _ => {}
         }
 
-        // ── Enum variant constructors: "Shape::Circle" ─────────────────
+        // ── Enum variant constructors: "Shape::Circle" or "LinkedList::Cons(...)" ─
         if name.contains("::") {
             if let Some(disc) = self.pattern_discriminant(name) {
+                let (type_name, _variant_name) = Self::split_qualified(name)
+                    .ok_or_else(|| format!("malformed qualified name: {name}"))?;
+                if self.enum_has_payloads(type_name) {
+                    return self.emit_enum_variant_constructor(name, disc, args);
+                }
+                // Pure unit enum — bare i64 discriminant (legacy path).
                 return Ok(Some(format!("{disc}")));
             }
         }
@@ -2149,6 +2228,9 @@ impl TextEmitter {
                 "i64" | "ptr" | "double" => 8,
                 "i32" => 4,
                 "i8" | "i1" => 1,
+                // Payload-enum tagged union { i8 tag, ptr payload } (#1200).
+                // On 64-bit: i8 (1) + 7B padding + ptr (8) = 16 bytes.
+                t if t == RESULT_LLVM_TY => 16,
                 other => {
                     return Err(format!(
                         "Box::new: unsupported payload type `{other}` — only primitive \
@@ -2602,6 +2684,60 @@ impl TextEmitter {
         Ok(Some(r1))
     }
 
+    // ── Enum variant constructor (payload enums, #1200) ──────────────────
+
+    /// Build a `{ i8, ptr }` tagged union for a payload-enum variant.
+    ///
+    /// Unit variants → payload ptr is null.
+    /// Tuple variants → allocate one slot per field on the stack, store the args,
+    /// then point the payload at the first slot. Match-arm extraction GEPs across
+    /// these slots by index (each slot is `ptr`-sized so GEP is uniform).
+    fn emit_enum_variant_constructor(
+        &mut self,
+        qualified_name: &str,
+        disc: i64,
+        args: &[Expr],
+    ) -> Result<Option<String>, String> {
+        let field_tys: Vec<TypeExpr> = self
+            .variant_payload_types(qualified_name)
+            .map(|s| s.to_vec())
+            .unwrap_or_default();
+
+        let payload_ptr: String = if field_tys.is_empty() {
+            // Unit variant in a payload enum — null payload.
+            "null".to_string()
+        } else {
+            if args.len() != field_tys.len() {
+                return Err(format!(
+                    "variant {qualified_name}: expected {} fields, got {}",
+                    field_tys.len(),
+                    args.len()
+                ));
+            }
+            // Allocate a flat array of ptr-sized slots (one per field). Each slot
+            // is typed by the field's LLVM type at store/load time. This matches
+            // Option/Result's `alloca` + `store` pattern but extends it to N fields.
+            let n = field_tys.len();
+            let base = self.next_reg();
+            self.push_instr(&format!("{base} = alloca [{n} x i64]"));
+            for (i, (ty_expr, arg)) in field_tys.iter().zip(args.iter()).enumerate() {
+                let field_llvm = self.llvm_ty_ctx(ty_expr);
+                let arg_val = match self.emit_expr(arg)? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                let slot = self.next_reg();
+                self.push_instr(&format!(
+                    "{slot} = getelementptr [{n} x i64], ptr {base}, i32 0, i32 {i}"
+                ));
+                self.push_instr(&format!("store {field_llvm} {arg_val}, ptr {slot}"));
+            }
+            base
+        };
+        let r1 = self.wrap_result_pair(&disc.to_string(), &payload_ptr);
+        Ok(Some(r1))
+    }
+
     // ── Option[T] helpers (#1156) ────────────────────────────────────────
 
     /// Emit `Some(val)` — builds a `{ i8, ptr }` tagged union with disc=0.
@@ -2792,6 +2928,224 @@ impl TextEmitter {
         let total_incoming = phi_entries.len() + no_val_arms.len();
         if total_incoming == 0 {
             // All arms terminated (e.g. all `return`) — no merge block needed.
+            self.fn_buf.push(format!("{merge_bb}:"));
+            self.current_bb = merge_bb.clone();
+            self.terminated = false;
+            self.ensure_extern("declare void @llvm.trap()");
+            self.push_instr("call void @llvm.trap()");
+            self.push_instr("unreachable");
+            self.terminated = true;
+            return Ok(None);
+        }
+        self.fn_buf.push(format!("{merge_bb}:"));
+        self.current_bb = merge_bb.clone();
+        self.terminated = false;
+        if total_incoming >= 2 && !phi_entries.is_empty() {
+            let phi_ty = phi_entries[0].1.clone();
+            let mut parts: Vec<String> = phi_entries
+                .iter()
+                .map(|(v, _, from)| format!("[ {v}, %{from} ]"))
+                .collect();
+            for from in &no_val_arms {
+                parts.push(format!("[ undef, %{from} ]"));
+            }
+            let result = self.next_reg();
+            self.push_instr(&format!("{result} = phi {phi_ty} {}", parts.join(", ")));
+            self.reg_types.insert(result.clone(), phi_ty);
+            Ok(Some(result))
+        } else if phi_entries.len() == 1 && no_val_arms.is_empty() {
+            Ok(Some(phi_entries.remove(0).0))
+        } else {
+            Ok(None)
+        }
+    }
+
+    // ── Payload enum match (#1200) ────────────────────────────────────────
+
+    /// Identify whether `scrutinee` is a payload-enum expression and return
+    /// the enum type name. Returns `None` for non-enum or pure-unit-enum
+    /// scrutinees (those go through the legacy i64-switch path).
+    fn scrutinee_payload_enum(&self, scrutinee: &Expr) -> Option<String> {
+        let mvl_ty = match scrutinee {
+            Expr::Ident(name, _) => self.local_mvl_types.get(name.as_str()).cloned()?,
+            Expr::FnCall { name, .. } => self.fn_ret_types.get(name.as_str()).cloned()?,
+            _ => return None,
+        };
+        // Unwrap label/refinement wrappers.
+        let mut cur = &mvl_ty;
+        while let TypeExpr::Labeled { inner, .. }
+        | TypeExpr::Refined { inner, .. }
+        | TypeExpr::Ref { inner, .. } = cur
+        {
+            cur = inner.as_ref();
+        }
+        if let TypeExpr::Base { name, .. } = cur {
+            if self.enum_variants.contains_key(name) && self.enum_has_payloads(name) {
+                return Some(name.clone());
+            }
+        }
+        None
+    }
+
+    /// Emit match arms for a payload enum (#1200).
+    ///
+    /// Scrutinee is `{ i8 tag, ptr payload }`. Each arm is dispatched on the
+    /// tag byte; payload fields are loaded by GEP-ing into the payload slot
+    /// array (see `emit_enum_variant_constructor` for the storage layout).
+    fn emit_payload_enum_match(
+        &mut self,
+        enum_name: &str,
+        scrut_val: &str,
+        arms: &[MatchArm],
+    ) -> Result<Option<String>, String> {
+        // Extract discriminant byte.
+        let disc_reg = self.next_reg();
+        self.push_instr(&format!(
+            "{disc_reg} = extractvalue {RESULT_LLVM_TY} {scrut_val}, 0"
+        ));
+        self.reg_types.insert(disc_reg.clone(), "i8".into());
+
+        let n = self.bb;
+        self.bb += arms.len() + 2;
+        let default_bb = format!("match_default_{n}");
+        let merge_bb = format!("match_merge_{}", n + arms.len() + 1);
+        let arm_bbs: Vec<String> = (0..arms.len())
+            .map(|i| format!("match_arm_{}", n + i))
+            .collect();
+
+        // Build switch on i8 discriminant.
+        let mut switch_str = format!("switch i8 {disc_reg}, label %{default_bb} [\n");
+        let mut wildcard_arm: Option<usize> = None;
+        for (idx, arm) in arms.iter().enumerate() {
+            let disc_opt = match &arm.pattern {
+                Pattern::TupleStruct { name, .. } => self.pattern_discriminant(name),
+                Pattern::Ident(name, _) if name.contains("::") => self.pattern_discriminant(name),
+                Pattern::Wildcard(_) | Pattern::Ident(_, _) => {
+                    wildcard_arm = Some(idx);
+                    continue;
+                }
+                _ => None,
+            };
+            if let Some(disc) = disc_opt {
+                switch_str.push_str(&format!("    i8 {disc}, label %{}\n", arm_bbs[idx]));
+            } else {
+                wildcard_arm = Some(idx);
+            }
+        }
+        switch_str.push_str("  ]");
+        self.push_instr(&switch_str);
+
+        let mut phi_entries: Vec<(String, String, String)> = Vec::new();
+        let mut no_val_arms: Vec<String> = Vec::new();
+
+        for (idx, arm) in arms.iter().enumerate() {
+            if Some(idx) == wildcard_arm {
+                continue;
+            }
+            let arm_bb = &arm_bbs[idx];
+            self.fn_buf.push(format!("{arm_bb}:"));
+            self.current_bb = arm_bb.clone();
+            self.terminated = false;
+
+            let mut bound_vars: Vec<String> = Vec::new();
+
+            if let Pattern::TupleStruct { name, fields, .. } = &arm.pattern {
+                let field_tys: Vec<TypeExpr> = self
+                    .variant_payload_types(name)
+                    .map(|s| s.to_vec())
+                    .unwrap_or_default();
+                if !fields.is_empty() && !field_tys.is_empty() {
+                    let payload_ptr = self.next_reg();
+                    self.push_instr(&format!(
+                        "{payload_ptr} = extractvalue {RESULT_LLVM_TY} {scrut_val}, 1"
+                    ));
+                    self.reg_types.insert(payload_ptr.clone(), "ptr".into());
+                    let n_slots = field_tys.len();
+                    for (i, inner_pat) in fields.iter().enumerate() {
+                        let Some(field_ty_expr) = field_tys.get(i) else {
+                            continue;
+                        };
+                        let field_llvm = self.llvm_ty_ctx(field_ty_expr);
+                        let slot = self.next_reg();
+                        self.push_instr(&format!(
+                            "{slot} = getelementptr [{n_slots} x i64], ptr {payload_ptr}, i32 0, i32 {i}"
+                        ));
+                        let val = self.next_reg();
+                        self.push_instr(&format!("{val} = load {field_llvm}, ptr {slot}"));
+                        self.reg_types.insert(val.clone(), field_llvm);
+                        if let Pattern::Ident(var_name, _) = inner_pat {
+                            if var_name != "_" {
+                                self.locals.insert(var_name.clone(), val.clone());
+                                self.local_mvl_types
+                                    .insert(var_name.clone(), field_ty_expr.clone());
+                                bound_vars.push(var_name.clone());
+                            }
+                        }
+                    }
+                }
+            }
+
+            let arm_val = match &arm.body {
+                MatchBody::Expr(e) => self.emit_expr(e)?,
+                MatchBody::Block(b) => self.emit_block(b)?,
+            };
+            let end_bb = self.current_bb.clone();
+            if !self.terminated {
+                self.push_instr(&format!("br label %{merge_bb}"));
+                if let Some(v) = arm_val {
+                    let ty = self.infer_val_type(&v);
+                    phi_entries.push((v, ty, end_bb));
+                } else {
+                    no_val_arms.push(end_bb);
+                }
+            }
+            for var_name in &bound_vars {
+                self.locals.remove(var_name);
+                self.local_mvl_types.remove(var_name);
+            }
+        }
+
+        // Default block — either jumps to wildcard arm body or traps.
+        self.fn_buf.push(format!("{default_bb}:"));
+        self.current_bb = default_bb.clone();
+        self.terminated = false;
+        if let Some(wild_idx) = wildcard_arm {
+            let wild_arm = &arms[wild_idx];
+            let mut bound_var: Option<String> = None;
+            if let Pattern::Ident(name, _) = &wild_arm.pattern {
+                if !name.contains("::") {
+                    self.locals.insert(name.clone(), scrut_val.to_string());
+                    bound_var = Some(name.clone());
+                }
+            }
+            let arm_val = match &wild_arm.body {
+                MatchBody::Expr(e) => self.emit_expr(e)?,
+                MatchBody::Block(b) => self.emit_block(b)?,
+            };
+            let end_bb = self.current_bb.clone();
+            if !self.terminated {
+                self.push_instr(&format!("br label %{merge_bb}"));
+                if let Some(v) = arm_val {
+                    let ty = self.infer_val_type(&v);
+                    phi_entries.push((v, ty, end_bb));
+                } else {
+                    no_val_arms.push(end_bb);
+                }
+            }
+            if let Some(ref var_name) = bound_var {
+                self.locals.remove(var_name);
+            }
+        } else {
+            self.ensure_extern("declare void @llvm.trap()");
+            self.push_instr("call void @llvm.trap()");
+            self.push_instr("unreachable");
+            self.terminated = true;
+        }
+
+        let _ = enum_name; // currently only used implicitly via pattern_discriminant
+                           // Merge block + phi.
+        let total_incoming = phi_entries.len() + no_val_arms.len();
+        if total_incoming == 0 {
             self.fn_buf.push(format!("{merge_bb}:"));
             self.current_bb = merge_bb.clone();
             self.terminated = false;
