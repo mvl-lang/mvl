@@ -222,7 +222,7 @@ and the `llvm_text` backend (post-ADR-0040, `--backend=llvm` resolves to
 | `cross_backend_list_ufcs_methods` | ✅ fixed | Added `slice`/`take`/`skip` dispatch via `_mvl_list_slice` |
 | `llvm_move_string` | ✅ fixed | Dedupe heap_locals on consume (SSA already tracked) |
 | `cross_backend_set_algebra` | ✅ fixed | Added intersection/difference/union method dispatch in llvm_text emitter (#1198) |
-| `cross_backend_linked_list` | ❌ ignored | Requires non-unit enum payload lowering (`Cons(Int, Box[LL])` — match arms drop payload); separate epic |
+| `cross_backend_linked_list` | ✅ fixed | Non-unit enum payload lowering in llvm_text — `{ i8, ptr }` tagged union + per-variant payload slot array, match arms GEP/load each field (#1200) |
 
 Each ignored test carries a `reason` string identifying the symptom. New
 divergences MUST be triaged the same way (ignored with reason, follow-up

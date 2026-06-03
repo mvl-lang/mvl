@@ -850,7 +850,6 @@ fn intrinsic_env_args() {
 // ── #571: recursive ADT with Box[T] ──────────────────────────────────────────
 
 #[test]
-#[ignore = "llvm_text: enum payload lowering — Cons(Int, Box[LinkedList]) match arms don't extract payload (separate epic, not a Box bug)"]
 fn cross_backend_linked_list() {
     assert_backends_agree("linked_list.mvl");
     assert_llvm_output(&corpus("linked_list.mvl"), "length: 3");
