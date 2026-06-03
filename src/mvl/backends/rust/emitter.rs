@@ -109,6 +109,12 @@ pub struct RustEmitter {
     /// Used by let-binding emission to add `.clone()` when reading a field
     /// from a capability parameter (`acc.items` where `acc: &ParseAcc`).
     pub capability_param_names: std::collections::HashSet<String>,
+    /// Names of parameters that have been converted to Rust references (&T)
+    /// in the current function.
+    ///
+    /// Used in function call argument emission to avoid applying `.clone()`
+    /// to parameters that are already references.
+    pub borrowed_param_names: std::collections::HashSet<String>,
     /// Fully-qualified Rust paths for stdlib function names that would shadow
     /// built-in primitives in the generated file (#420: regex.replace / regex.find).
     ///
