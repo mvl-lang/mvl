@@ -45,214 +45,217 @@
 //! }
 //! ```
 
-use crate::mvl::backends::rust::emit_exprs_ast::{emit_block_stmts, emit_expr};
+use super::emitter::RustEmitter;
 use crate::mvl::backends::rust::emit_types::emit_type_expr;
-use crate::mvl::backends::rust::emitter::RustEmitter;
 use crate::mvl::backends::rust::last_use::compute_last_uses_ast;
 use crate::mvl::parser::ast::{ImplDecl, Stmt}; // Stmt used in match below
 
-/// Emit a trait implementation block.
-pub fn emit_impl_decl_ast(cg: &mut RustEmitter, id: &ImplDecl) {
-    // Phase A: reset last_uses before each impl block so that stale spans from the
-    // preceding function body cannot bleed into branches that do not call
-    // compute_last_uses (the unsupported-trait fallthrough and the Display
-    // None-method branch).  Each supported impl re-sets last_uses per method body
-    // immediately before emitting that body.
-    cg.last_uses = Default::default();
-    match id.trait_name.as_str() {
-        "Display" => emit_display_impl(cg, id),
-        "From" => emit_from_impl(cg, id),
-        "Iterator" => emit_iterator_impl(cg, id),
-        other => {
-            cg.line(&format!(
-                "// impl {other} for {} — unsupported trait (skipped)",
-                id.type_name
-            ));
-        }
-    }
-}
-
-/// Emit `impl std::fmt::Display for TypeName`.
-fn emit_display_impl(cg: &mut RustEmitter, id: &ImplDecl) {
-    cg.line(&format!("impl std::fmt::Display for {} {{", id.type_name));
-    cg.push_indent();
-
-    // Find the `fmt` method.  Absence is rejected by the checker before transpilation (#990).
-    let fmt_method = id.methods.iter().find(|m| m.name == "fmt");
-
-    cg.line("fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {");
-    cg.push_indent();
-
-    match fmt_method {
-        Some(fd) => {
-            // Phase A: last-use analysis for clone elision within the fmt method body.
-            cg.last_uses = compute_last_uses_ast(&fd.body);
-            let stmts = &fd.body.stmts;
-            if stmts.is_empty() {
-                cg.line("write!(f, \"\")");
-            } else {
-                // Emit all but the last statement (let bindings, etc.)
-                let (head, tail) = stmts.split_at(stmts.len() - 1);
-                emit_block_stmts(cg, head);
-
-                // Last statement becomes the value passed to write!
-                let last = &tail[0];
-                cg.indent();
-                cg.push("write!(f, \"{}\", ");
-                match last {
-                    Stmt::Expr { expr, .. } => emit_expr(cg, expr),
-                    _non_expr => {
-                        // A non-expression final statement (let, assign, etc.) cannot
-                        // produce a value for write!.  MVL's block type checker ensures
-                        // the tail is an Expr statement, so this arm is unreachable
-                        // in well-typed programs.
-                        unreachable!(
-                            "Display::fmt body must end with an expression — enforced by checker"
-                        );
-                    }
-                }
-                cg.push(")");
-                cg.nl();
+impl RustEmitter {
+    /// Emit a trait implementation block.
+    pub fn emit_impl_decl_ast(&mut self, id: &ImplDecl) {
+        // Phase A: reset last_uses before each impl block so that stale spans from the
+        // preceding function body cannot bleed into branches that do not call
+        // compute_last_uses (the unsupported-trait fallthrough and the Display
+        // None-method branch).  Each supported impl re-sets last_uses per method body
+        // immediately before emitting that body.
+        self.last_uses = Default::default();
+        match id.trait_name.as_str() {
+            "Display" => self.emit_display_impl_ast(id),
+            "From" => self.emit_from_impl_ast(id),
+            "Iterator" => self.emit_iterator_impl_ast(id),
+            other => {
+                self.line(&format!(
+                    "// impl {other} for {} — unsupported trait (skipped)",
+                    id.type_name
+                ));
             }
         }
-        None => {
-            // Absence of `fmt` is rejected by the checker before transpilation (#990).
-            unreachable!("impl Display missing `fmt` — blocked by checker (#990)");
-        }
     }
 
-    cg.pop_indent();
-    cg.line("}");
-    cg.pop_indent();
-    cg.line("}");
-}
+    /// Emit `impl std::fmt::Display for TypeName`.
+    fn emit_display_impl_ast(&mut self, id: &ImplDecl) {
+        self.line(&format!("impl std::fmt::Display for {} {{", id.type_name));
+        self.push_indent();
 
-/// Emit `impl std::iter::Iterator for TypeName` (001-type-system Req 11).
-///
-/// ```text
-/// impl Iterator<Int> for Counter {
-///     fn next(mut self) -> Option<Int> { … }
-/// }
-/// ```
-/// transpiles to:
-/// ```text
-/// impl std::iter::Iterator for Counter {
-///     type Item = i64;
-///     fn next(&mut self) -> Option<i64> { … }
-/// }
-/// ```
-fn emit_iterator_impl(cg: &mut RustEmitter, id: &ImplDecl) {
-    let item_ty = match id.trait_type_args.first() {
-        Some(ty) => emit_type_expr(ty),
-        None => {
-            cg.line(&format!(
-                "// impl Iterator for {} — missing element type argument (skipped)",
-                id.type_name
-            ));
-            return;
-        }
-    };
+        // Find the `fmt` method.  Absence is rejected by the checker before transpilation (#990).
+        let fmt_method = id.methods.iter().find(|m| m.name == "fmt");
 
-    cg.line(&format!("impl std::iter::Iterator for {} {{", id.type_name));
-    cg.push_indent();
-    cg.line(&format!("type Item = {item_ty};"));
+        self.line("fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {");
+        self.push_indent();
 
-    let next_method = id.methods.iter().find(|m| m.name == "next");
+        match fmt_method {
+            Some(fd) => {
+                // Phase A: last-use analysis for clone elision within the fmt method body.
+                self.last_uses = compute_last_uses_ast(&fd.body);
+                let stmts = &fd.body.stmts;
+                if stmts.is_empty() {
+                    self.line("write!(f, \"\")");
+                } else {
+                    // Emit all but the last statement (let bindings, etc.)
+                    let (head, tail) = stmts.split_at(stmts.len() - 1);
+                    self.emit_block_stmts_ast(head);
 
-    cg.line(&format!("fn next(&mut self) -> Option<{item_ty}> {{"));
-    cg.push_indent();
-
-    match next_method {
-        Some(fd) => match fd.body.stmts.split_last() {
-            // Empty `next` body — caught as TypeMismatch by checker (#990).
-            None => unreachable!("impl Iterator `next` has empty body — blocked by checker (#990)"),
-            Some((last, head)) => {
-                // Phase A: last-use analysis for clone elision within the next method body.
-                cg.last_uses = compute_last_uses_ast(&fd.body);
-                emit_block_stmts(cg, head);
-                match last {
-                    Stmt::Expr { expr, .. } => {
-                        cg.indent();
-                        emit_expr(cg, expr);
-                        cg.nl();
+                    // Last statement becomes the value passed to write!
+                    let last = &tail[0];
+                    self.indent();
+                    self.push("write!(f, \"{}\", ");
+                    match last {
+                        Stmt::Expr { expr, .. } => self.emit_expr_ast(expr),
+                        _non_expr => {
+                            // A non-expression final statement (let, assign, etc.) cannot
+                            // produce a value for write!.  MVL's block type checker ensures
+                            // the tail is an Expr statement, so this arm is unreachable
+                            // in well-typed programs.
+                            unreachable!(
+                                "Display::fmt body must end with an expression — enforced by checker"
+                            );
+                        }
                     }
-                    other => emit_block_stmts(cg, std::slice::from_ref(other)),
+                    self.push(")");
+                    self.nl();
                 }
             }
-        },
-        // Absence of `next`: emit a todo!() stub so invalid code doesn't panic the transpiler.
-        None => {
-            cg.line("todo!(\"Iterator::next not implemented\")");
-        }
-    }
-
-    cg.pop_indent();
-    cg.line("}");
-    cg.pop_indent();
-    cg.line("}");
-}
-
-/// Emit `impl std::convert::From<SourceType> for TargetType`.
-fn emit_from_impl(cg: &mut RustEmitter, id: &ImplDecl) {
-    let source_ty = match id.trait_type_args.first() {
-        Some(ty) => emit_type_expr(ty),
-        None => {
-            cg.line(&format!(
-                "// impl From for {} — missing source type argument (skipped)",
-                id.type_name
-            ));
-            return;
-        }
-    };
-
-    cg.line(&format!(
-        "impl std::convert::From<{source_ty}> for {} {{",
-        id.type_name
-    ));
-    cg.push_indent();
-
-    // Find the `from` method
-    let from_method = id.methods.iter().find(|m| m.name == "from");
-
-    // Use the actual MVL parameter name so the emitted body can reference it.
-    let param_name = from_method
-        .and_then(|fd| fd.params.first())
-        .map(|p| p.name.as_str())
-        .unwrap_or("value");
-    cg.line(&format!("fn from({param_name}: {source_ty}) -> Self {{"));
-    cg.push_indent();
-
-    match from_method {
-        Some(fd) => {
-            // Phase A: last-use analysis for clone elision within the from method body.
-            cg.last_uses = compute_last_uses_ast(&fd.body);
-            let stmts = &fd.body.stmts;
-            if stmts.is_empty() {
-                // Empty body caught as TypeMismatch by checker (#990).
-                unreachable!("impl From `from` has empty body — blocked by checker (#990)");
-            } else {
-                let (head, tail) = stmts.split_at(stmts.len() - 1);
-                emit_block_stmts(cg, head);
-                // Emit last statement as the return expression
-                let last = &tail[0];
-                match last {
-                    Stmt::Expr { expr, .. } => {
-                        cg.indent();
-                        emit_expr(cg, expr);
-                        cg.nl();
-                    }
-                    other => emit_block_stmts(cg, std::slice::from_ref(other)),
-                }
+            None => {
+                // Absence of `fmt` is rejected by the checker before transpilation (#990).
+                unreachable!("impl Display missing `fmt` — blocked by checker (#990)");
             }
         }
-        None => {
-            // Absence of `from`: emit a todo!() stub so invalid code doesn't panic the transpiler.
-            cg.line("todo!(\"From::from not implemented\")");
-        }
+
+        self.pop_indent();
+        self.line("}");
+        self.pop_indent();
+        self.line("}");
     }
 
-    cg.pop_indent();
-    cg.line("}");
-    cg.pop_indent();
-    cg.line("}");
+    /// Emit `impl std::iter::Iterator for TypeName` (001-type-system Req 11).
+    ///
+    /// ```text
+    /// impl Iterator<Int> for Counter {
+    ///     fn next(mut self) -> Option<Int> { … }
+    /// }
+    /// ```
+    /// transpiles to:
+    /// ```text
+    /// impl std::iter::Iterator for Counter {
+    ///     type Item = i64;
+    ///     fn next(&mut self) -> Option<i64> { … }
+    /// }
+    /// ```
+    fn emit_iterator_impl_ast(&mut self, id: &ImplDecl) {
+        let item_ty = match id.trait_type_args.first() {
+            Some(ty) => emit_type_expr(ty),
+            None => {
+                self.line(&format!(
+                    "// impl Iterator for {} — missing element type argument (skipped)",
+                    id.type_name
+                ));
+                return;
+            }
+        };
+
+        self.line(&format!("impl std::iter::Iterator for {} {{", id.type_name));
+        self.push_indent();
+        self.line(&format!("type Item = {item_ty};"));
+
+        let next_method = id.methods.iter().find(|m| m.name == "next");
+
+        self.line(&format!("fn next(&mut self) -> Option<{item_ty}> {{"));
+        self.push_indent();
+
+        match next_method {
+            Some(fd) => match fd.body.stmts.split_last() {
+                // Empty `next` body — caught as TypeMismatch by checker (#990).
+                None => {
+                    unreachable!("impl Iterator `next` has empty body — blocked by checker (#990)")
+                }
+                Some((last, head)) => {
+                    // Phase A: last-use analysis for clone elision within the next method body.
+                    self.last_uses = compute_last_uses_ast(&fd.body);
+                    self.emit_block_stmts_ast(head);
+                    match last {
+                        Stmt::Expr { expr, .. } => {
+                            self.indent();
+                            self.emit_expr_ast(expr);
+                            self.nl();
+                        }
+                        other => self.emit_block_stmts_ast(std::slice::from_ref(other)),
+                    }
+                }
+            },
+            // Absence of `next`: emit a todo!() stub so invalid code doesn't panic the transpiler.
+            None => {
+                self.line("todo!(\"Iterator::next not implemented\")");
+            }
+        }
+
+        self.pop_indent();
+        self.line("}");
+        self.pop_indent();
+        self.line("}");
+    }
+
+    /// Emit `impl std::convert::From<SourceType> for TargetType`.
+    fn emit_from_impl_ast(&mut self, id: &ImplDecl) {
+        let source_ty = match id.trait_type_args.first() {
+            Some(ty) => emit_type_expr(ty),
+            None => {
+                self.line(&format!(
+                    "// impl From for {} — missing source type argument (skipped)",
+                    id.type_name
+                ));
+                return;
+            }
+        };
+
+        self.line(&format!(
+            "impl std::convert::From<{source_ty}> for {} {{",
+            id.type_name
+        ));
+        self.push_indent();
+
+        // Find the `from` method
+        let from_method = id.methods.iter().find(|m| m.name == "from");
+
+        // Use the actual MVL parameter name so the emitted body can reference it.
+        let param_name = from_method
+            .and_then(|fd| fd.params.first())
+            .map(|p| p.name.as_str())
+            .unwrap_or("value");
+        self.line(&format!("fn from({param_name}: {source_ty}) -> Self {{"));
+        self.push_indent();
+
+        match from_method {
+            Some(fd) => {
+                // Phase A: last-use analysis for clone elision within the from method body.
+                self.last_uses = compute_last_uses_ast(&fd.body);
+                let stmts = &fd.body.stmts;
+                if stmts.is_empty() {
+                    // Empty body caught as TypeMismatch by checker (#990).
+                    unreachable!("impl From `from` has empty body — blocked by checker (#990)");
+                } else {
+                    let (head, tail) = stmts.split_at(stmts.len() - 1);
+                    self.emit_block_stmts_ast(head);
+                    // Emit last statement as the return expression
+                    let last = &tail[0];
+                    match last {
+                        Stmt::Expr { expr, .. } => {
+                            self.indent();
+                            self.emit_expr_ast(expr);
+                            self.nl();
+                        }
+                        other => self.emit_block_stmts_ast(std::slice::from_ref(other)),
+                    }
+                }
+            }
+            None => {
+                // Absence of `from`: emit a todo!() stub so invalid code doesn't panic the transpiler.
+                self.line("todo!(\"From::from not implemented\")");
+            }
+        }
+
+        self.pop_indent();
+        self.line("}");
+        self.pop_indent();
+        self.line("}");
+    }
 }

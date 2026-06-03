@@ -13,12 +13,10 @@
 //! - Type params with constraints → Rust generic bounds
 //! - Return refinement → `assert!` at end of body
 
-use crate::mvl::backends::rust::emit_exprs::{emit_block_stmts, emit_expr};
-use crate::mvl::backends::rust::emit_stmts::emit_mcdc_return_expr;
+use super::emitter::RustEmitter;
 use crate::mvl::backends::rust::emit_types::{
     emit_label, emit_ref_expr_for_assert, emit_ty, emit_type_expr,
 };
-use crate::mvl::backends::rust::emitter::RustEmitter;
 use crate::mvl::backends::rust::last_use::{compute_last_uses, compute_last_uses_ast};
 use crate::mvl::ir::{
     Capability, Constraint, GenericParam, TirBlock, TirExprKind, TirFn, TirParam, TirStmt,
@@ -49,255 +47,263 @@ fn emit_fn_param_ty(ty: &Ty) -> String {
     }
 }
 
-/// Emit a TIR function declaration.
-pub fn emit_fn_decl(cg: &mut RustEmitter, fd: &TirFn) {
-    // Track current function name and test status for coverage metadata.
-    cg.current_fn = fd.name.clone();
-    cg.current_fn_is_test = fd.is_test;
-    // #1048: inject mvl_join_actors() at the end of fn main() when actors are present.
-    cg.inject_actor_join = cg.has_actors && fd.name == "main";
+impl RustEmitter {
+    /// Emit a TIR function declaration.
+    pub fn emit_fn_decl(&mut self, fd: &TirFn) {
+        // Track current function name and test status for coverage metadata.
+        self.current_fn = fd.name.clone();
+        self.current_fn_is_test = fd.is_test;
+        // #1048: inject mvl_join_actors() at the end of fn main() when actors are present.
+        self.inject_actor_join = self.has_actors && fd.name == "main";
 
-    let borrows: Vec<Option<bool>> = cg
-        .capability_params_map
-        .get(&fd.name)
-        .cloned()
-        .unwrap_or_default();
+        let borrows: Vec<Option<bool>> = self
+            .capability_params_map
+            .get(&fd.name)
+            .cloned()
+            .unwrap_or_default();
 
-    let mutated_params = collect_mutated_map_params_tir(&fd.body, &cg.capability_params_map);
+        let mutated_params = collect_mutated_map_params_tir(&fd.body, &self.capability_params_map);
 
-    if fd.is_test {
-        cg.line("#[test]");
-        let generics =
-            emit_generics_with_tir_params(&fd.type_params, &fd.constraints, &fd.params, &fd.ret_ty);
-        let params_str = emit_tir_params(&fd.params, &borrows, &mutated_params);
-        let ret_str = emit_ty(&fd.ret_ty);
-        cg.line(&format!(
-            "fn {}{generics}({params_str}) -> {ret_str} {{",
-            fd.name
-        ));
-        cg.push_indent();
-        emit_fn_body_tir(cg, fd);
-        cg.pop_indent();
-        cg.line("}");
-        return;
-    }
-
-    // Doc comments for MVL-specific annotations that Rust cannot express directly
-    if let Some(Totality::Total) = &fd.totality {
-        cg.line("/// # Totality");
-        cg.line("/// This function is declared `total` in MVL: it must terminate for all inputs.");
-    }
-    if !fd.effects.is_empty() {
-        cg.line(&format!(
-            "/// # Effects: {}",
-            fd.effects
-                .iter()
-                .map(|e| e.to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
-        cg.line("/// MVL effect annotations — informational in Phase 1.");
-    }
-
-    // Function signature
-    let generics =
-        emit_generics_with_tir_params(&fd.type_params, &fd.constraints, &fd.params, &fd.ret_ty);
-    let ret_str = emit_ty(&fd.ret_ty);
-
-    if let Some(recv_ty) = &fd.receiver_type {
-        let is_builtin_type = matches!(
-            recv_ty.as_str(),
-            "String"
-                | "Int"
-                | "Float"
-                | "Bool"
-                | "Byte"
-                | "UByte"
-                | "UInt"
-                | "List"
-                | "Map"
-                | "Set"
-                | "Option"
-                | "Result"
-        );
-        if !is_builtin_type {
-            let has_self = fd.params.first().is_some_and(|p| p.name == "self");
-            let (param_start, self_prefix) = if has_self { (1usize, "&self") } else { (0, "") };
-            let rest_params = emit_tir_params(
-                fd.params.get(param_start..).unwrap_or(&[]),
-                borrows.get(param_start..).unwrap_or(&[]),
-                &mutated_params,
+        if fd.is_test {
+            self.line("#[test]");
+            let generics = emit_generics_with_tir_params(
+                &fd.type_params,
+                &fd.constraints,
+                &fd.params,
+                &fd.ret_ty,
             );
-            let params_str = match (self_prefix.is_empty(), rest_params.is_empty()) {
-                (true, true) => String::new(),
-                (true, false) => rest_params,
-                (false, true) => self_prefix.to_string(),
-                (false, false) => format!("{self_prefix}, {rest_params}"),
-            };
-            cg.line(&format!("impl {recv_ty} {{"));
-            cg.push_indent();
-            cg.line(&format!(
-                "pub fn {}{generics}({params_str}) -> {ret_str} {{",
+            let params_str = emit_tir_params(&fd.params, &borrows, &mutated_params);
+            let ret_str = emit_ty(&fd.ret_ty);
+            self.line(&format!(
+                "fn {}{generics}({params_str}) -> {ret_str} {{",
                 fd.name
             ));
-            cg.push_indent();
-            if let Some(id) = cg.alloc_branch(fd.span.line, BranchKind::FnEntry) {
-                cg.emit_cov_hit(id);
-            }
-            for req_pred in &fd.requires {
-                let pred_str = emit_ref_expr_for_assert(req_pred, "self");
-                let msg = pred_str.replace('{', "{{").replace('}', "}}");
-                cg.line(&format!("assert!({pred_str}, \"requires: {msg}\");"));
-            }
-            emit_fn_body_tir(cg, fd);
-            cg.pop_indent();
-            cg.line("}");
-            cg.pop_indent();
-            cg.line("}");
+            self.push_indent();
+            self.emit_fn_body_tir(fd);
+            self.pop_indent();
+            self.line("}");
             return;
         }
-    }
 
-    let has_self_param = fd.receiver_type.is_some();
-    if has_self_param {
-        cg.self_as_free_param = true;
-    }
-
-    let params_str = emit_tir_params(&fd.params, &borrows, &mutated_params);
-    cg.line(&format!(
-        "pub fn {}{generics}({params_str}) -> {ret_str} {{",
-        fd.name
-    ));
-    cg.push_indent();
-    if let Some(id) = cg.alloc_branch(fd.span.line, BranchKind::FnEntry) {
-        cg.emit_cov_hit(id);
-    }
-    for req_pred in &fd.requires {
-        let pred_str = emit_ref_expr_for_assert(req_pred, "self");
-        let msg = pred_str.replace('{', "{{").replace('}', "}}");
-        cg.line(&format!("assert!({pred_str}, \"requires: {msg}\");"));
-    }
-    emit_fn_body_tir(cg, fd);
-    cg.pop_indent();
-    cg.line("}");
-
-    if has_self_param {
-        cg.self_as_free_param = false;
-    }
-}
-
-/// Emit the statements and return-refinement check for a TIR function body.
-fn emit_fn_body_tir(cg: &mut RustEmitter, fd: &TirFn) {
-    cg.last_uses = compute_last_uses(&fd.body);
-
-    cg.capability_param_names.clear();
-    let borrows = cg
-        .capability_params_map
-        .get(&fd.name)
-        .cloned()
-        .unwrap_or_default();
-    for (i, param) in fd.params.iter().enumerate() {
-        if borrows.get(i).copied().flatten().is_some() {
-            cg.capability_param_names.insert(param.name.clone());
+        // Doc comments for MVL-specific annotations that Rust cannot express directly
+        if let Some(Totality::Total) = &fd.totality {
+            self.line("/// # Totality");
+            self.line(
+                "/// This function is declared `total` in MVL: it must terminate for all inputs.",
+            );
         }
-    }
+        if !fd.effects.is_empty() {
+            self.line(&format!(
+                "/// # Effects: {}",
+                fd.effects
+                    .iter()
+                    .map(|e| e.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+            self.line("/// MVL effect annotations — informational in Phase 1.");
+        }
 
-    // #960: for HOF params (fn-typed parameters), temporarily insert their inner
-    // parameter borrow flags into capability_params_map.
-    let mut hof_param_entries: Vec<(String, Option<Vec<Option<bool>>>)> = Vec::new();
-    for param in &fd.params {
-        if let Ty::Fn(fn_params, _, _, _) = &param.ty {
-            let flags: Vec<Option<bool>> = fn_params
-                .iter()
-                .map(|p| {
-                    if let Ty::Ref(mutable, _) = p {
-                        Some(*mutable)
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            if flags.iter().any(|b| b.is_some()) {
-                let previous = cg.capability_params_map.insert(param.name.clone(), flags);
-                hof_param_entries.push((param.name.clone(), previous));
+        // Function signature
+        let generics =
+            emit_generics_with_tir_params(&fd.type_params, &fd.constraints, &fd.params, &fd.ret_ty);
+        let ret_str = emit_ty(&fd.ret_ty);
+
+        if let Some(recv_ty) = &fd.receiver_type {
+            let is_builtin_type = matches!(
+                recv_ty.as_str(),
+                "String"
+                    | "Int"
+                    | "Float"
+                    | "Bool"
+                    | "Byte"
+                    | "UByte"
+                    | "UInt"
+                    | "List"
+                    | "Map"
+                    | "Set"
+                    | "Option"
+                    | "Result"
+            );
+            if !is_builtin_type {
+                let has_self = fd.params.first().is_some_and(|p| p.name == "self");
+                let (param_start, self_prefix) = if has_self { (1usize, "&self") } else { (0, "") };
+                let rest_params = emit_tir_params(
+                    fd.params.get(param_start..).unwrap_or(&[]),
+                    borrows.get(param_start..).unwrap_or(&[]),
+                    &mutated_params,
+                );
+                let params_str = match (self_prefix.is_empty(), rest_params.is_empty()) {
+                    (true, true) => String::new(),
+                    (true, false) => rest_params,
+                    (false, true) => self_prefix.to_string(),
+                    (false, false) => format!("{self_prefix}, {rest_params}"),
+                };
+                self.line(&format!("impl {recv_ty} {{"));
+                self.push_indent();
+                self.line(&format!(
+                    "pub fn {}{generics}({params_str}) -> {ret_str} {{",
+                    fd.name
+                ));
+                self.push_indent();
+                if let Some(id) = self.alloc_branch(fd.span.line, BranchKind::FnEntry) {
+                    self.emit_cov_hit(id);
+                }
+                for req_pred in &fd.requires {
+                    let pred_str = emit_ref_expr_for_assert(req_pred, "self");
+                    let msg = pred_str.replace('{', "{{").replace('}', "}}");
+                    self.line(&format!("assert!({pred_str}, \"requires: {msg}\");"));
+                }
+                self.emit_fn_body_tir(fd);
+                self.pop_indent();
+                self.line("}");
+                self.pop_indent();
+                self.line("}");
+                return;
             }
         }
-    }
 
-    let needs_actor_scope = cg.inject_actor_join;
-    if needs_actor_scope {
-        cg.inject_actor_join = false;
-        cg.indent();
-        cg.push("{");
-        cg.nl();
-        cg.push_indent();
-    }
-
-    let stmts = &fd.body.stmts;
-    if stmts.is_empty() {
-        let is_unit = matches!(fd.ret_ty, Ty::Unit);
-        if !is_unit {
-            unreachable!("non-Unit function with empty body — blocked by checker (#990)");
+        let has_self_param = fd.receiver_type.is_some();
+        if has_self_param {
+            self.self_as_free_param = true;
         }
-    } else {
-        let (head, tail) = stmts.split_at(stmts.len() - 1);
-        emit_block_stmts(cg, head);
 
-        let last = &tail[0];
-        let is_unit = matches!(fd.ret_ty, Ty::Unit);
-        let has_ensures = !fd.ensures.is_empty() && !is_unit;
-        match last {
-            TirStmt::Expr { expr, .. } => {
-                if !emit_mcdc_return_expr(cg, expr, &fd.ret_ty, expr.span.line) {
-                    if has_ensures {
-                        cg.indent();
-                        cg.push("let _result = ");
-                        emit_expr_tail_with_return_type_tir(cg, expr, &fd.ret_ty, &fd.params);
-                        cg.push(";");
-                        cg.nl();
-                        for ens_pred in &fd.ensures {
-                            let pred_str = emit_ref_expr_for_assert(ens_pred, "_result");
-                            let msg = pred_str.replace('{', "{{").replace('}', "}}");
-                            cg.line(&format!("assert!({pred_str}, \"ensures: {msg}\");"));
+        let params_str = emit_tir_params(&fd.params, &borrows, &mutated_params);
+        self.line(&format!(
+            "pub fn {}{generics}({params_str}) -> {ret_str} {{",
+            fd.name
+        ));
+        self.push_indent();
+        if let Some(id) = self.alloc_branch(fd.span.line, BranchKind::FnEntry) {
+            self.emit_cov_hit(id);
+        }
+        for req_pred in &fd.requires {
+            let pred_str = emit_ref_expr_for_assert(req_pred, "self");
+            let msg = pred_str.replace('{', "{{").replace('}', "}}");
+            self.line(&format!("assert!({pred_str}, \"requires: {msg}\");"));
+        }
+        self.emit_fn_body_tir(fd);
+        self.pop_indent();
+        self.line("}");
+
+        if has_self_param {
+            self.self_as_free_param = false;
+        }
+    }
+
+    /// Emit the statements and return-refinement check for a TIR function body.
+    fn emit_fn_body_tir(&mut self, fd: &TirFn) {
+        self.last_uses = compute_last_uses(&fd.body);
+
+        self.capability_param_names.clear();
+        let borrows = self
+            .capability_params_map
+            .get(&fd.name)
+            .cloned()
+            .unwrap_or_default();
+        for (i, param) in fd.params.iter().enumerate() {
+            if borrows.get(i).copied().flatten().is_some() {
+                self.capability_param_names.insert(param.name.clone());
+            }
+        }
+
+        // #960: for HOF params (fn-typed parameters), temporarily insert their inner
+        // parameter borrow flags into capability_params_map.
+        let mut hof_param_entries: Vec<(String, Option<Vec<Option<bool>>>)> = Vec::new();
+        for param in &fd.params {
+            if let Ty::Fn(fn_params, _, _, _) = &param.ty {
+                let flags: Vec<Option<bool>> = fn_params
+                    .iter()
+                    .map(|p| {
+                        if let Ty::Ref(mutable, _) = p {
+                            Some(*mutable)
+                        } else {
+                            None
                         }
-                        cg.line("_result");
-                    } else {
-                        cg.indent();
-                        emit_expr_tail_with_return_type_tir(cg, expr, &fd.ret_ty, &fd.params);
-                        cg.nl();
-                    }
+                    })
+                    .collect();
+                if flags.iter().any(|b| b.is_some()) {
+                    let previous = self.capability_params_map.insert(param.name.clone(), flags);
+                    hof_param_entries.push((param.name.clone(), previous));
                 }
             }
-            other => {
-                emit_block_stmts(cg, std::slice::from_ref(other));
+        }
+
+        let needs_actor_scope = self.inject_actor_join;
+        if needs_actor_scope {
+            self.inject_actor_join = false;
+            self.indent();
+            self.push("{");
+            self.nl();
+            self.push_indent();
+        }
+
+        let stmts = &fd.body.stmts;
+        if stmts.is_empty() {
+            let is_unit = matches!(fd.ret_ty, Ty::Unit);
+            if !is_unit {
+                unreachable!("non-Unit function with empty body — blocked by checker (#990)");
+            }
+        } else {
+            let (head, tail) = stmts.split_at(stmts.len() - 1);
+            self.emit_block_stmts(head);
+
+            let last = &tail[0];
+            let is_unit = matches!(fd.ret_ty, Ty::Unit);
+            let has_ensures = !fd.ensures.is_empty() && !is_unit;
+            match last {
+                TirStmt::Expr { expr, .. } => {
+                    if !self.emit_mcdc_return_expr(expr, &fd.ret_ty, expr.span.line) {
+                        if has_ensures {
+                            self.indent();
+                            self.push("let _result = ");
+                            self.emit_expr_tail_with_return_type_tir(expr, &fd.ret_ty, &fd.params);
+                            self.push(";");
+                            self.nl();
+                            for ens_pred in &fd.ensures {
+                                let pred_str = emit_ref_expr_for_assert(ens_pred, "_result");
+                                let msg = pred_str.replace('{', "{{").replace('}', "}}");
+                                self.line(&format!("assert!({pred_str}, \"ensures: {msg}\");"));
+                            }
+                            self.line("_result");
+                        } else {
+                            self.indent();
+                            self.emit_expr_tail_with_return_type_tir(expr, &fd.ret_ty, &fd.params);
+                            self.nl();
+                        }
+                    }
+                }
+                other => {
+                    self.emit_block_stmts(std::slice::from_ref(other));
+                }
             }
         }
-    }
 
-    if needs_actor_scope {
-        cg.pop_indent();
-        cg.indent();
-        cg.push("}");
-        cg.nl();
-        cg.indent();
-        cg.push("mvl_join_actors()");
-        cg.nl();
-    }
+        if needs_actor_scope {
+            self.pop_indent();
+            self.indent();
+            self.push("}");
+            self.nl();
+            self.indent();
+            self.push("mvl_join_actors()");
+            self.nl();
+        }
 
-    if let Some(pred) = &fd.return_refinement {
-        let pred_str = emit_ref_expr_for_assert(pred, "_return_val");
-        cg.line(&format!(
-            "// return refinement: assert!({pred_str}) — checked by MVL type checker"
-        ));
-    }
+        if let Some(pred) = &fd.return_refinement {
+            let pred_str = emit_ref_expr_for_assert(pred, "_return_val");
+            self.line(&format!(
+                "// return refinement: assert!({pred_str}) — checked by MVL type checker"
+            ));
+        }
 
-    for (name, previous) in hof_param_entries {
-        match previous {
-            Some(v) => {
-                cg.capability_params_map.insert(name, v);
-            }
-            None => {
-                cg.capability_params_map.remove(&name);
+        for (name, previous) in hof_param_entries {
+            match previous {
+                Some(v) => {
+                    self.capability_params_map.insert(name, v);
+                }
+                None => {
+                    self.capability_params_map.remove(&name);
+                }
             }
         }
     }
@@ -558,53 +564,55 @@ fn scan_tir_expr_for_mut_calls(
 
 // ── Tail expression emitter (TIR) ─────────────────────────────────────────
 
-/// Emit an expression as the tail (implicit return) of a TIR function body.
-fn emit_expr_tail_with_return_type_tir(
-    cg: &mut RustEmitter,
-    expr: &crate::mvl::ir::TirExpr,
-    ret_ty: &Ty,
-    params: &[TirParam],
-) {
-    if matches!(ret_ty, Ty::Unit) {
-        emit_expr(cg, expr);
-        cg.push(";");
-        return;
-    }
-    match ret_ty {
-        Ty::Labeled(label, ..) if is_raw_value_tir(expr, params) => {
-            let label_name = emit_label(label.as_str());
-            cg.push(&format!("{label_name}("));
-            emit_expr(cg, expr);
-            cg.push(")");
+impl RustEmitter {
+    /// Emit an expression as the tail (implicit return) of a TIR function body.
+    fn emit_expr_tail_with_return_type_tir(
+        &mut self,
+        expr: &crate::mvl::ir::TirExpr,
+        ret_ty: &Ty,
+        params: &[TirParam],
+    ) {
+        if matches!(ret_ty, Ty::Unit) {
+            self.emit_expr(expr);
+            self.push(";");
             return;
         }
-        Ty::Labeled(..)
-            if matches!(
-                &expr.kind,
-                TirExprKind::FnCall { .. } | TirExprKind::MethodCall { .. }
-            ) =>
-        {
-            emit_expr(cg, expr);
-            cg.push(".into()");
-            return;
-        }
-        Ty::Result(ok, _) => {
-            if let Ty::Labeled(label, _) = ok.as_ref() {
-                if let TirExprKind::FnCall { name, args, .. } = &expr.kind {
-                    if name == "Ok" && args.len() == 1 && is_raw_value_tir(&args[0], params) {
-                        let label_name = emit_label(label.as_str());
-                        cg.push("Ok(");
-                        cg.push(&format!("{label_name}("));
-                        emit_expr(cg, &args[0]);
-                        cg.push("))");
-                        return;
+        match ret_ty {
+            Ty::Labeled(label, ..) if is_raw_value_tir(expr, params) => {
+                let label_name = emit_label(label.as_str());
+                self.push(&format!("{label_name}("));
+                self.emit_expr(expr);
+                self.push(")");
+                return;
+            }
+            Ty::Labeled(..)
+                if matches!(
+                    &expr.kind,
+                    TirExprKind::FnCall { .. } | TirExprKind::MethodCall { .. }
+                ) =>
+            {
+                self.emit_expr(expr);
+                self.push(".into()");
+                return;
+            }
+            Ty::Result(ok, _) => {
+                if let Ty::Labeled(label, _) = ok.as_ref() {
+                    if let TirExprKind::FnCall { name, args, .. } = &expr.kind {
+                        if name == "Ok" && args.len() == 1 && is_raw_value_tir(&args[0], params) {
+                            let label_name = emit_label(label.as_str());
+                            self.push("Ok(");
+                            self.push(&format!("{label_name}("));
+                            self.emit_expr(&args[0]);
+                            self.push("))");
+                            return;
+                        }
                     }
                 }
             }
+            _ => {}
         }
-        _ => {}
+        self.emit_expr(expr);
     }
-    emit_expr(cg, expr);
 }
 
 fn is_raw_value_tir(expr: &crate::mvl::ir::TirExpr, params: &[TirParam]) -> bool {
@@ -634,304 +642,315 @@ fn emit_fn_param_type(ty: &TypeExpr) -> String {
     }
 }
 
-/// Emit an AST function declaration (used for prelude and stdlib functions).
-pub fn emit_fn_decl_ast(cg: &mut RustEmitter, fd: &FnDecl) {
-    // Track current function name and test status for coverage metadata.
-    cg.current_fn = fd.name.clone();
-    cg.current_fn_is_test = fd.is_test;
-    // #1048: inject mvl_join_actors() at the end of fn main() when actors are present.
-    cg.inject_actor_join = cg.has_actors && fd.name == "main";
+impl RustEmitter {
+    /// Emit an AST function declaration (used for prelude and stdlib functions).
+    pub fn emit_fn_decl_ast(&mut self, fd: &FnDecl) {
+        // Track current function name and test status for coverage metadata.
+        self.current_fn = fd.name.clone();
+        self.current_fn_is_test = fd.is_test;
+        // #1048: inject mvl_join_actors() at the end of fn main() when actors are present.
+        self.inject_actor_join = self.has_actors && fd.name == "main";
 
-    // Test functions are emitted inside a #[cfg(test)] mod tests block.
-    // The caller (codegen) is responsible for grouping them; here we just
-    // emit the #[test] attribute and a non-pub signature.
-    // Retrieve borrow flags for this function (Phase B, Spec 009 Req 2).
-    let borrows: Vec<Option<bool>> = cg
-        .capability_params_map
-        .get(&fd.name)
-        .cloned()
-        .unwrap_or_default();
+        // Test functions are emitted inside a #[cfg(test)] mod tests block.
+        // The caller (codegen) is responsible for grouping them; here we just
+        // emit the #[test] attribute and a non-pub signature.
+        // Retrieve borrow flags for this function (Phase B, Spec 009 Req 2).
+        let borrows: Vec<Option<bool>> = self
+            .capability_params_map
+            .get(&fd.name)
+            .cloned()
+            .unwrap_or_default();
 
-    let mutated_params = collect_mutated_map_params(&fd.body, &cg.capability_params_map);
+        let mutated_params = collect_mutated_map_params(&fd.body, &self.capability_params_map);
 
-    if fd.is_test {
-        cg.line("#[test]");
+        if fd.is_test {
+            self.line("#[test]");
+            let generics = emit_generics_with_params(
+                &fd.type_params,
+                &fd.constraints,
+                &fd.params,
+                &fd.return_type,
+            );
+            let params_str = emit_params(&fd.params, &borrows, &mutated_params);
+            let ret_str = emit_type_expr(&fd.return_type);
+            self.line(&format!(
+                "fn {}{generics}({params_str}) -> {ret_str} {{",
+                fd.name
+            ));
+            self.push_indent();
+            self.emit_fn_body(fd);
+            self.pop_indent();
+            self.line("}");
+            return;
+        }
+
+        // Doc comments for MVL-specific annotations that Rust cannot express directly
+        if let Some(AstTotality::Total) = &fd.totality {
+            self.line("/// # Totality");
+            self.line(
+                "/// This function is declared `total` in MVL: it must terminate for all inputs.",
+            );
+        }
+        if !fd.effects.is_empty() {
+            self.line(&format!(
+                "/// # Effects: {}",
+                fd.effects
+                    .iter()
+                    .map(|e| e.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+            self.line("/// MVL effect annotations — informational in Phase 1.");
+        }
+
+        // Function signature
         let generics = emit_generics_with_params(
             &fd.type_params,
             &fd.constraints,
             &fd.params,
             &fd.return_type,
         );
-        let params_str = emit_params(&fd.params, &borrows, &mutated_params);
         let ret_str = emit_type_expr(&fd.return_type);
-        cg.line(&format!(
-            "fn {}{generics}({params_str}) -> {ret_str} {{",
+
+        if let Some(recv_ty) = &fd.receiver_type {
+            // #928: Built-in types (String, List, Map, etc.) cannot have `impl` blocks
+            // in Rust because they are defined outside the crate.  Emit their extension
+            // methods as free functions so the UFCS dispatch table can call them.
+            let is_builtin_type = matches!(
+                recv_ty.as_str(),
+                "String"
+                    | "Int"
+                    | "Float"
+                    | "Bool"
+                    | "Byte"
+                    | "UByte"
+                    | "UInt"
+                    | "List"
+                    | "Map"
+                    | "Set"
+                    | "Option"
+                    | "Result"
+            );
+            if !is_builtin_type {
+                // Type-attached method (#868): emit inside `impl ReceiverType { … }`.
+                let has_self = fd.params.first().is_some_and(|p| p.name == "self");
+                let (param_start, self_prefix) = if has_self { (1usize, "&self") } else { (0, "") };
+                let rest_params = emit_params(
+                    fd.params.get(param_start..).unwrap_or(&[]),
+                    borrows.get(param_start..).unwrap_or(&[]),
+                    &mutated_params,
+                );
+                let params_str = match (self_prefix.is_empty(), rest_params.is_empty()) {
+                    (true, true) => String::new(),
+                    (true, false) => rest_params,
+                    (false, true) => self_prefix.to_string(),
+                    (false, false) => format!("{self_prefix}, {rest_params}"),
+                };
+                self.line(&format!("impl {recv_ty} {{"));
+                self.push_indent();
+                self.line(&format!(
+                    "pub fn {}{generics}({params_str}) -> {ret_str} {{",
+                    fd.name
+                ));
+                self.push_indent();
+                // Fn-entry probe
+                if let Some(id) = self.alloc_branch(fd.span.line, BranchKind::FnEntry) {
+                    self.emit_cov_hit(id);
+                }
+                for req_expr in &fd.requires {
+                    if let Some(req_pred) = expr_to_ref_expr_ext(req_expr, Span::default()) {
+                        let pred_str = emit_ref_expr_for_assert(&req_pred, "self");
+                        let msg = pred_str.replace('{', "{{").replace('}', "}}");
+                        self.line(&format!("assert!({pred_str}, \"requires: {msg}\");"));
+                    }
+                }
+                self.emit_fn_body(fd);
+                self.pop_indent();
+                self.line("}");
+                self.pop_indent();
+                self.line("}");
+                return;
+            }
+            // Fall through: emit as a free function with `self` as a regular parameter.
+        }
+
+        // #928: extension methods on built-in types are emitted as free functions
+        // where `self` is renamed to `self_` (Rust keyword).
+        let has_self_param = fd.receiver_type.is_some();
+        if has_self_param {
+            self.self_as_free_param = true;
+        }
+
+        let params_str = emit_params(&fd.params, &borrows, &mutated_params);
+        self.line(&format!(
+            "pub fn {}{generics}({params_str}) -> {ret_str} {{",
             fd.name
         ));
-        cg.push_indent();
-        emit_fn_body(cg, fd);
-        cg.pop_indent();
-        cg.line("}");
-        return;
-    }
-
-    // Doc comments for MVL-specific annotations that Rust cannot express directly
-    if let Some(AstTotality::Total) = &fd.totality {
-        cg.line("/// # Totality");
-        cg.line("/// This function is declared `total` in MVL: it must terminate for all inputs.");
-    }
-    if !fd.effects.is_empty() {
-        cg.line(&format!(
-            "/// # Effects: {}",
-            fd.effects
-                .iter()
-                .map(|e| e.to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
-        cg.line("/// MVL effect annotations — informational in Phase 1.");
-    }
-
-    // Function signature
-    let generics = emit_generics_with_params(
-        &fd.type_params,
-        &fd.constraints,
-        &fd.params,
-        &fd.return_type,
-    );
-    let ret_str = emit_type_expr(&fd.return_type);
-
-    if let Some(recv_ty) = &fd.receiver_type {
-        // #928: Built-in types (String, List, Map, etc.) cannot have `impl` blocks
-        // in Rust because they are defined outside the crate.  Emit their extension
-        // methods as free functions so the UFCS dispatch table can call them.
-        let is_builtin_type = matches!(
-            recv_ty.as_str(),
-            "String"
-                | "Int"
-                | "Float"
-                | "Bool"
-                | "Byte"
-                | "UByte"
-                | "UInt"
-                | "List"
-                | "Map"
-                | "Set"
-                | "Option"
-                | "Result"
-        );
-        if !is_builtin_type {
-            // Type-attached method (#868): emit inside `impl ReceiverType { … }`.
-            let has_self = fd.params.first().is_some_and(|p| p.name == "self");
-            let (param_start, self_prefix) = if has_self { (1usize, "&self") } else { (0, "") };
-            let rest_params = emit_params(
-                fd.params.get(param_start..).unwrap_or(&[]),
-                borrows.get(param_start..).unwrap_or(&[]),
-                &mutated_params,
-            );
-            let params_str = match (self_prefix.is_empty(), rest_params.is_empty()) {
-                (true, true) => String::new(),
-                (true, false) => rest_params,
-                (false, true) => self_prefix.to_string(),
-                (false, false) => format!("{self_prefix}, {rest_params}"),
-            };
-            cg.line(&format!("impl {recv_ty} {{"));
-            cg.push_indent();
-            cg.line(&format!(
-                "pub fn {}{generics}({params_str}) -> {ret_str} {{",
-                fd.name
-            ));
-            cg.push_indent();
-            // Fn-entry probe
-            if let Some(id) = cg.alloc_branch(fd.span.line, BranchKind::FnEntry) {
-                cg.emit_cov_hit(id);
-            }
-            for req_expr in &fd.requires {
-                if let Some(req_pred) = expr_to_ref_expr_ext(req_expr, Span::default()) {
-                    let pred_str = emit_ref_expr_for_assert(&req_pred, "self");
-                    let msg = pred_str.replace('{', "{{").replace('}', "}}");
-                    cg.line(&format!("assert!({pred_str}, \"requires: {msg}\");"));
-                }
-            }
-            emit_fn_body(cg, fd);
-            cg.pop_indent();
-            cg.line("}");
-            cg.pop_indent();
-            cg.line("}");
-            return;
+        self.push_indent();
+        // Fn-entry probe: records whether the function was ever called.
+        if let Some(id) = self.alloc_branch(fd.span.line, BranchKind::FnEntry) {
+            self.emit_cov_hit(id);
         }
-        // Fall through: emit as a free function with `self` as a regular parameter.
-    }
-
-    // #928: extension methods on built-in types are emitted as free functions
-    // where `self` is renamed to `self_` (Rust keyword).
-    let has_self_param = fd.receiver_type.is_some();
-    if has_self_param {
-        cg.self_as_free_param = true;
-    }
-
-    let params_str = emit_params(&fd.params, &borrows, &mutated_params);
-    cg.line(&format!(
-        "pub fn {}{generics}({params_str}) -> {ret_str} {{",
-        fd.name
-    ));
-    cg.push_indent();
-    // Fn-entry probe: records whether the function was ever called.
-    if let Some(id) = cg.alloc_branch(fd.span.line, BranchKind::FnEntry) {
-        cg.emit_cov_hit(id);
-    }
-    // Emit runtime precondition guards for `requires` clauses (Phase 4, #627).
-    for req_expr in &fd.requires {
-        if let Some(req_pred) = expr_to_ref_expr_ext(req_expr, Span::default()) {
-            let pred_str = emit_ref_expr_for_assert(&req_pred, "self");
-            let msg = pred_str.replace('{', "{{").replace('}', "}}");
-            cg.line(&format!("assert!({pred_str}, \"requires: {msg}\");"));
-        }
-    }
-    emit_fn_body(cg, fd);
-    cg.pop_indent();
-    cg.line("}");
-
-    if has_self_param {
-        cg.self_as_free_param = false;
-    }
-}
-
-/// Emit the statements and return-refinement check for an AST function body.
-fn emit_fn_body(cg: &mut RustEmitter, fd: &FnDecl) {
-    // Phase A: compute last uses so emit_expr_as_arg can elide .clone() at move points.
-    cg.last_uses = compute_last_uses_ast(&fd.body);
-
-    // Populate borrow_param_names so let-binding emission can add `.clone()`
-    // when reading a field from a borrowed parameter (e.g. `acc.items`).
-    cg.capability_param_names.clear();
-    let borrows = cg
-        .capability_params_map
-        .get(&fd.name)
-        .cloned()
-        .unwrap_or_default();
-    for (i, param) in fd.params.iter().enumerate() {
-        if borrows.get(i).copied().flatten().is_some() {
-            cg.capability_param_names.insert(param.name.clone());
-        }
-    }
-
-    // #960: for HOF params (fn-typed parameters), temporarily insert their inner
-    // parameter borrow flags into capability_params_map so that calls through
-    // the fn pointer use `&x` instead of `x.clone().into()` for `val T` params.
-    let mut hof_param_entries: Vec<(String, Option<Vec<Option<bool>>>)> = Vec::new();
-    for param in &fd.params {
-        if let TypeExpr::Fn {
-            params: fn_params, ..
-        } = &param.ty
-        {
-            let flags: Vec<Option<bool>> = fn_params
-                .iter()
-                .map(|p| {
-                    if let TypeExpr::Ref { mutable, .. } = p {
-                        Some(*mutable)
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            if flags.iter().any(|b| b.is_some()) {
-                let previous = cg.capability_params_map.insert(param.name.clone(), flags);
-                hof_param_entries.push((param.name.clone(), previous));
+        // Emit runtime precondition guards for `requires` clauses (Phase 4, #627).
+        for req_expr in &fd.requires {
+            if let Some(req_pred) = expr_to_ref_expr_ext(req_expr, Span::default()) {
+                let pred_str = emit_ref_expr_for_assert(&req_pred, "self");
+                let msg = pred_str.replace('{', "{{").replace('}', "}}");
+                self.line(&format!("assert!({pred_str}, \"requires: {msg}\");"));
             }
         }
+        self.emit_fn_body(fd);
+        self.pop_indent();
+        self.line("}");
+
+        if has_self_param {
+            self.self_as_free_param = false;
+        }
     }
 
-    // #1048 + deadlock fix: when inject_actor_join is true, wrap the entire body
-    // in an inner scope `{ ... }` so that all actor handles are dropped before
-    // mvl_join_actors().
-    let needs_actor_scope = cg.inject_actor_join;
-    if needs_actor_scope {
-        cg.inject_actor_join = false;
-        cg.indent();
-        cg.push("{");
-        cg.nl();
-        cg.push_indent();
-    }
+    /// Emit the statements and return-refinement check for an AST function body.
+    fn emit_fn_body(&mut self, fd: &FnDecl) {
+        // Phase A: compute last uses so emit_expr_as_arg can elide .clone() at move points.
+        self.last_uses = compute_last_uses_ast(&fd.body);
 
-    // NOTE: emit_fn_body for AST FnDecl uses AST-based emit_block_stmts.
-    // Since emit_block_stmts now takes TirStmt, we need a separate AST-based emission.
-    // We use the internal helpers directly.
-    use crate::mvl::backends::rust::emit_stmts_ast::emit_stmt_ast;
-    let stmts = &fd.body.stmts;
-    if stmts.is_empty() {
-        let is_unit =
-            matches!(fd.return_type.as_ref(), TypeExpr::Base { name, .. } if name == "Unit");
-        if !is_unit {
-            unreachable!("non-Unit function with empty body — blocked by checker (#990)");
-        }
-    } else {
-        let (head, tail) = stmts.split_at(stmts.len() - 1);
-        for stmt in head {
-            emit_stmt_ast(cg, stmt);
+        // Populate borrow_param_names so let-binding emission can add `.clone()`
+        // when reading a field from a borrowed parameter (e.g. `acc.items`).
+        self.capability_param_names.clear();
+        let borrows = self
+            .capability_params_map
+            .get(&fd.name)
+            .cloned()
+            .unwrap_or_default();
+        for (i, param) in fd.params.iter().enumerate() {
+            if borrows.get(i).copied().flatten().is_some() {
+                self.capability_param_names.insert(param.name.clone());
+            }
         }
 
-        let last = &tail[0];
-        let is_unit =
-            matches!(fd.return_type.as_ref(), TypeExpr::Base { name, .. } if name == "Unit");
-        let has_ensures = !fd.ensures.is_empty() && !is_unit;
-        match last {
-            Stmt::Expr { expr, .. } => {
-                use crate::mvl::backends::rust::emit_stmts_ast::emit_mcdc_return_expr_ast;
-                if !emit_mcdc_return_expr_ast(cg, expr, &fd.return_type, expr.span().line) {
-                    if has_ensures {
-                        cg.indent();
-                        cg.push("let _result = ");
-                        emit_expr_tail_with_return_type_ast(cg, expr, &fd.return_type, &fd.params);
-                        cg.push(";");
-                        cg.nl();
-                        for ens_expr in &fd.ensures {
-                            if let Some(ens_pred) = expr_to_ref_expr_ext(ens_expr, Span::default())
-                            {
-                                let pred_str = emit_ref_expr_for_assert(&ens_pred, "_result");
-                                let msg = pred_str.replace('{', "{{").replace('}', "}}");
-                                cg.line(&format!("assert!({pred_str}, \"ensures: {msg}\");"));
-                            }
+        // #960: for HOF params (fn-typed parameters), temporarily insert their inner
+        // parameter borrow flags into capability_params_map so that calls through
+        // the fn pointer use `&x` instead of `x.clone().into()` for `val T` params.
+        let mut hof_param_entries: Vec<(String, Option<Vec<Option<bool>>>)> = Vec::new();
+        for param in &fd.params {
+            if let TypeExpr::Fn {
+                params: fn_params, ..
+            } = &param.ty
+            {
+                let flags: Vec<Option<bool>> = fn_params
+                    .iter()
+                    .map(|p| {
+                        if let TypeExpr::Ref { mutable, .. } = p {
+                            Some(*mutable)
+                        } else {
+                            None
                         }
-                        cg.line("_result");
-                    } else {
-                        cg.indent();
-                        emit_expr_tail_with_return_type_ast(cg, expr, &fd.return_type, &fd.params);
-                        cg.nl();
-                    }
+                    })
+                    .collect();
+                if flags.iter().any(|b| b.is_some()) {
+                    let previous = self.capability_params_map.insert(param.name.clone(), flags);
+                    hof_param_entries.push((param.name.clone(), previous));
                 }
             }
-            other => {
-                emit_stmt_ast(cg, other);
+        }
+
+        // #1048 + deadlock fix: when inject_actor_join is true, wrap the entire body
+        // in an inner scope `{ ... }` so that all actor handles are dropped before
+        // mvl_join_actors().
+        let needs_actor_scope = self.inject_actor_join;
+        if needs_actor_scope {
+            self.inject_actor_join = false;
+            self.indent();
+            self.push("{");
+            self.nl();
+            self.push_indent();
+        }
+
+        // NOTE: emit_fn_body for AST FnDecl uses AST-based emit_block_stmts.
+        // Since emit_block_stmts now takes TirStmt, we need a separate AST-based emission.
+        // We use the internal helpers directly.
+        let stmts = &fd.body.stmts;
+        if stmts.is_empty() {
+            let is_unit =
+                matches!(fd.return_type.as_ref(), TypeExpr::Base { name, .. } if name == "Unit");
+            if !is_unit {
+                unreachable!("non-Unit function with empty body — blocked by checker (#990)");
+            }
+        } else {
+            let (head, tail) = stmts.split_at(stmts.len() - 1);
+            for stmt in head {
+                self.emit_stmt_ast(stmt);
+            }
+
+            let last = &tail[0];
+            let is_unit =
+                matches!(fd.return_type.as_ref(), TypeExpr::Base { name, .. } if name == "Unit");
+            let has_ensures = !fd.ensures.is_empty() && !is_unit;
+            match last {
+                Stmt::Expr { expr, .. } => {
+                    if !self.emit_mcdc_return_expr_ast(expr, &fd.return_type, expr.span().line) {
+                        if has_ensures {
+                            self.indent();
+                            self.push("let _result = ");
+                            self.emit_expr_tail_with_return_type_ast(
+                                expr,
+                                &fd.return_type,
+                                &fd.params,
+                            );
+                            self.push(";");
+                            self.nl();
+                            for ens_expr in &fd.ensures {
+                                if let Some(ens_pred) =
+                                    expr_to_ref_expr_ext(ens_expr, Span::default())
+                                {
+                                    let pred_str = emit_ref_expr_for_assert(&ens_pred, "_result");
+                                    let msg = pred_str.replace('{', "{{").replace('}', "}}");
+                                    self.line(&format!("assert!({pred_str}, \"ensures: {msg}\");"));
+                                }
+                            }
+                            self.line("_result");
+                        } else {
+                            self.indent();
+                            self.emit_expr_tail_with_return_type_ast(
+                                expr,
+                                &fd.return_type,
+                                &fd.params,
+                            );
+                            self.nl();
+                        }
+                    }
+                }
+                other => {
+                    self.emit_stmt_ast(other);
+                }
             }
         }
-    }
 
-    if needs_actor_scope {
-        cg.pop_indent();
-        cg.indent();
-        cg.push("}");
-        cg.nl();
-        cg.indent();
-        cg.push("mvl_join_actors()");
-        cg.nl();
-    }
+        if needs_actor_scope {
+            self.pop_indent();
+            self.indent();
+            self.push("}");
+            self.nl();
+            self.indent();
+            self.push("mvl_join_actors()");
+            self.nl();
+        }
 
-    if let Some(pred) = &fd.return_refinement {
-        let pred_str = emit_ref_expr_for_assert(pred, "_return_val");
-        cg.line(&format!(
-            "// return refinement: assert!({pred_str}) — checked by MVL type checker"
-        ));
-    }
+        if let Some(pred) = &fd.return_refinement {
+            let pred_str = emit_ref_expr_for_assert(pred, "_return_val");
+            self.line(&format!(
+                "// return refinement: assert!({pred_str}) — checked by MVL type checker"
+            ));
+        }
 
-    // #960: restore capability_params_map entries displaced above.
-    for (name, previous) in hof_param_entries {
-        match previous {
-            Some(v) => {
-                cg.capability_params_map.insert(name, v);
-            }
-            None => {
-                cg.capability_params_map.remove(&name);
+        // #960: restore capability_params_map entries displaced above.
+        for (name, previous) in hof_param_entries {
+            match previous {
+                Some(v) => {
+                    self.capability_params_map.insert(name, v);
+                }
+                None => {
+                    self.capability_params_map.remove(&name);
+                }
             }
         }
     }
@@ -1197,50 +1216,51 @@ fn emit_params(
 
 // ── AST tail expression emitter ─────────────────────────────────────────
 
-fn emit_expr_tail_with_return_type_ast(
-    cg: &mut RustEmitter,
-    expr: &Expr,
-    return_type: &TypeExpr,
-    params: &[Param],
-) {
-    use crate::mvl::backends::rust::emit_exprs_ast::emit_expr_ast;
-    if matches!(return_type, TypeExpr::Base { name, .. } if name == "Unit") {
-        emit_expr_ast(cg, expr);
-        cg.push(";");
-        return;
-    }
-    match return_type {
-        TypeExpr::Labeled { label, .. } if is_raw_value(expr, params) => {
-            let label_name = emit_label(label.as_str());
-            cg.push(&format!("{label_name}("));
-            emit_expr_ast(cg, expr);
-            cg.push(")");
+impl RustEmitter {
+    fn emit_expr_tail_with_return_type_ast(
+        &mut self,
+        expr: &Expr,
+        return_type: &TypeExpr,
+        params: &[Param],
+    ) {
+        if matches!(return_type, TypeExpr::Base { name, .. } if name == "Unit") {
+            self.emit_expr_ast(expr);
+            self.push(";");
             return;
         }
-        TypeExpr::Labeled { .. }
-            if matches!(expr, Expr::FnCall { .. } | Expr::MethodCall { .. }) =>
-        {
-            emit_expr_ast(cg, expr);
-            cg.push(".into()");
-            return;
-        }
-        TypeExpr::Result { ok, .. } => {
-            if let TypeExpr::Labeled { label, .. } = ok.as_ref() {
-                if let Expr::FnCall { name, args, .. } = expr {
-                    if name == "Ok" && args.len() == 1 && is_raw_value(&args[0], params) {
-                        let label_name = emit_label(label.as_str());
-                        cg.push("Ok(");
-                        cg.push(&format!("{label_name}("));
-                        emit_expr_ast(cg, &args[0]);
-                        cg.push("))");
-                        return;
+        match return_type {
+            TypeExpr::Labeled { label, .. } if is_raw_value(expr, params) => {
+                let label_name = emit_label(label.as_str());
+                self.push(&format!("{label_name}("));
+                self.emit_expr_ast(expr);
+                self.push(")");
+                return;
+            }
+            TypeExpr::Labeled { .. }
+                if matches!(expr, Expr::FnCall { .. } | Expr::MethodCall { .. }) =>
+            {
+                self.emit_expr_ast(expr);
+                self.push(".into()");
+                return;
+            }
+            TypeExpr::Result { ok, .. } => {
+                if let TypeExpr::Labeled { label, .. } = ok.as_ref() {
+                    if let Expr::FnCall { name, args, .. } = expr {
+                        if name == "Ok" && args.len() == 1 && is_raw_value(&args[0], params) {
+                            let label_name = emit_label(label.as_str());
+                            self.push("Ok(");
+                            self.push(&format!("{label_name}("));
+                            self.emit_expr_ast(&args[0]);
+                            self.push("))");
+                            return;
+                        }
                     }
                 }
             }
+            _ => {}
         }
-        _ => {}
+        self.emit_expr_ast(expr);
     }
-    emit_expr_ast(cg, expr);
 }
 
 fn is_raw_value(expr: &Expr, params: &[Param]) -> bool {

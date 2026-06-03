@@ -11,7 +11,7 @@
 //! - Security labels (Public<T> etc.) → module-level preamble structs
 //! - Refinement field predicates → `assert!` in constructors (always enforced)
 
-use crate::mvl::backends::rust::emitter::RustEmitter;
+use super::emitter::RustEmitter;
 use crate::mvl::checker::types::ARRAY_SIZE_UNKNOWN;
 use crate::mvl::ir::{
     TirExternDecl, TirFieldDecl, TirTypeBody, TirTypeDecl, TirVariant, TirVariantFields, Ty,
@@ -22,203 +22,209 @@ use crate::mvl::parser::ast::{
 
 // ── Security label preamble ───────────────────────────────────────────────
 
-/// Emit the security-label newtype wrappers that every MVL program needs.
-///
-/// ```rust
-/// #[derive(Debug, Clone, PartialEq)]
-/// pub struct Public<T>(pub T);
-/// // … etc.
-/// ```
-///
-/// Phase 1: only `From`/`Into` for upward lattice flows are generated.
-/// The lattice is: Tainted → Clean → Public (least trusted to most trusted).
-/// Secret is a separate confidentiality label; only explicit declassify/sanitize
-/// can convert between them.
-pub fn emit_security_preamble(cg: &mut RustEmitter) {
-    cg.line("// ── Security label newtypes (MVL Req 11) ─────────────────────────────────");
-    cg.blank();
+impl RustEmitter {
+    /// Emit the security-label newtype wrappers that every MVL program needs.
+    ///
+    /// ```rust
+    /// #[derive(Debug, Clone, PartialEq)]
+    /// pub struct Public<T>(pub T);
+    /// // … etc.
+    /// ```
+    ///
+    /// Phase 1: only `From`/`Into` for upward lattice flows are generated.
+    /// The lattice is: Tainted → Clean → Public (least trusted to most trusted).
+    /// Secret is a separate confidentiality label; only explicit declassify/sanitize
+    /// can convert between them.
+    pub fn emit_security_preamble(&mut self) {
+        self.line("// ── Security label newtypes (MVL Req 11) ─────────────────────────────────");
+        self.blank();
 
-    for label in ["Public", "Tainted", "Secret", "Clean"] {
-        emit_label_newtype(cg, label);
-        cg.blank();
-    }
-
-    // Lattice flows: Tainted → Clean (after sanitize)
-    // We express this as a From impl: Clean<T>: From<Tainted<T>> is NOT emitted
-    // because sanitize() is an explicit conversion; the Rust type system enforces
-    // that you must call sanitize() / declassify() explicitly.
-    //
-    // Phase 1: conversion functions emitted as standalone fns.
-    cg.line("/// Sanitize a tainted value — cleans external input.");
-    cg.line("/// MVL: `sanitize(x)` where x: Tainted<T>");
-    cg.line("pub fn sanitize<T>(v: Tainted<T>) -> Clean<T> { Clean(v.0) }");
-    cg.blank();
-    cg.line("/// Declassify a secret value — makes it public.");
-    cg.line("/// MVL: `declassify(x)` where x: Secret<T>");
-    cg.line("pub fn declassify<T>(v: Secret<T>) -> Public<T> { Public(v.0) }");
-    cg.blank();
-    // Numeric conversion helpers for labeled integer/float types
-    cg.line("impl Public<i64> {");
-    cg.push_indent();
-    cg.line("/// Convert labeled integer to raw f64 (for use with Float-typed functions).");
-    cg.line("pub fn to_float(&self) -> f64 { self.0 as f64 }");
-    cg.pop_indent();
-    cg.line("}");
-    cg.blank();
-}
-
-fn emit_label_newtype(cg: &mut RustEmitter, label: &str) {
-    cg.line("#[derive(Debug, Clone, PartialEq)]");
-    cg.line(&format!("pub struct {label}<T>(pub T);"));
-    cg.blank();
-    // Copy impl: labels over Copy types are themselves Copy (e.g. Public<i64>)
-    cg.line(&format!("impl<T: Copy> Copy for {label}<T> {{}}"));
-    cg.blank();
-    cg.line(&format!("impl<T> {label}<T> {{"));
-    cg.push_indent();
-    cg.line("pub fn new(v: T) -> Self { Self(v) }");
-    cg.line("pub fn into_inner(self) -> T { self.0 }");
-    cg.line("pub fn as_inner(&self) -> &T { &self.0 }");
-    cg.pop_indent();
-    cg.line("}");
-    cg.blank();
-    // as_str(): enables `match labeled_string.as_str() { "foo" => ... }` in generated code
-    cg.line(&format!(
-        "impl {label}<String> {{ pub fn as_str(&self) -> &str {{ self.0.as_str() }} }}"
-    ));
-    cg.blank();
-    // Display: label<T> displays as T when T: Display
-    cg.line(&format!(
-        "impl<T: std::fmt::Display> std::fmt::Display for {label}<T> {{"
-    ));
-    cg.push_indent();
-    cg.line("fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { self.0.fmt(f) }");
-    cg.pop_indent();
-    cg.line("}");
-    cg.blank();
-    // Arithmetic: delegate ops to the inner value, preserving the label
-    for (trait_name, method, op) in [
-        ("std::ops::Add", "add", "+"),
-        ("std::ops::Sub", "sub", "-"),
-        ("std::ops::Mul", "mul", "*"),
-        ("std::ops::Div", "div", "/"),
-        ("std::ops::Rem", "rem", "%"),
-    ] {
-        cg.line(&format!(
-            "impl<T: {trait_name}<Output=T>> {trait_name} for {label}<T> {{"
-        ));
-        cg.push_indent();
-        cg.line(&format!("type Output = {label}<T>;"));
-        cg.line(&format!(
-            "fn {method}(self, rhs: Self) -> Self {{ {label}(self.0 {op} rhs.0) }}"
-        ));
-        cg.pop_indent();
-        cg.line("}");
-        cg.blank();
-    }
-    cg.line(&format!(
-        "impl<T: std::ops::Neg<Output=T>> std::ops::Neg for {label}<T> {{"
-    ));
-    cg.push_indent();
-    cg.line(&format!("type Output = {label}<T>;"));
-    cg.line(&format!("fn neg(self) -> Self {{ {label}(-self.0) }}"));
-    cg.pop_indent();
-    cg.line("}");
-}
-
-// ── TypeDecl ─────────────────────────────────────────────────────────────
-
-pub fn emit_type_decl(cg: &mut RustEmitter, td: &TypeDecl) {
-    match &td.body {
-        TypeBody::Struct { fields, invariant } => {
-            emit_struct(cg, &td.name, &td.params, fields, invariant.as_ref());
+        for label in ["Public", "Tainted", "Secret", "Clean"] {
+            self.emit_label_newtype(label);
+            self.blank();
         }
-        TypeBody::Enum(variants) => emit_enum(cg, &td.name, &td.params, variants),
-        TypeBody::Alias(ty) => emit_alias(cg, &td.name, &td.params, ty),
+
+        // Lattice flows: Tainted → Clean (after sanitize)
+        // We express this as a From impl: Clean<T>: From<Tainted<T>> is NOT emitted
+        // because sanitize() is an explicit conversion; the Rust type system enforces
+        // that you must call sanitize() / declassify() explicitly.
+        //
+        // Phase 1: conversion functions emitted as standalone fns.
+        self.line("/// Sanitize a tainted value — cleans external input.");
+        self.line("/// MVL: `sanitize(x)` where x: Tainted<T>");
+        self.line("pub fn sanitize<T>(v: Tainted<T>) -> Clean<T> { Clean(v.0) }");
+        self.blank();
+        self.line("/// Declassify a secret value — makes it public.");
+        self.line("/// MVL: `declassify(x)` where x: Secret<T>");
+        self.line("pub fn declassify<T>(v: Secret<T>) -> Public<T> { Public(v.0) }");
+        self.blank();
+        // Numeric conversion helpers for labeled integer/float types
+        self.line("impl Public<i64> {");
+        self.push_indent();
+        self.line("/// Convert labeled integer to raw f64 (for use with Float-typed functions).");
+        self.line("pub fn to_float(&self) -> f64 { self.0 as f64 }");
+        self.pop_indent();
+        self.line("}");
+        self.blank();
     }
-}
 
-// ── Struct ────────────────────────────────────────────────────────────────
-
-fn emit_struct(
-    cg: &mut RustEmitter,
-    name: &str,
-    params: &[GenericParam],
-    fields: &[FieldDecl],
-    invariant: Option<&RefExpr>,
-) {
-    emit_derive(cg, &["Debug", "Clone", "PartialEq"]);
-    cg.line(&format!("pub struct {}{} {{", name, generic_params(params)));
-    cg.push_indent();
-    for field in fields {
-        let ty_str = emit_type_expr(&field.ty);
-        cg.line(&format!("pub {}: {},", field.name, ty_str));
-    }
-    cg.pop_indent();
-    cg.line("}");
-
-    // Emit a constructor if any field has a refinement predicate or a struct invariant exists
-    let refined_fields: Vec<_> = fields.iter().filter(|f| f.refinement.is_some()).collect();
-    if !refined_fields.is_empty() || invariant.is_some() {
-        cg.blank();
-        cg.line(&format!(
-            "impl{} {}{} {{",
-            generic_params(params),
-            name,
-            generic_params(params)
+    fn emit_label_newtype(&mut self, label: &str) {
+        self.line("#[derive(Debug, Clone, PartialEq)]");
+        self.line(&format!("pub struct {label}<T>(pub T);"));
+        self.blank();
+        // Copy impl: labels over Copy types are themselves Copy (e.g. Public<i64>)
+        self.line(&format!("impl<T: Copy> Copy for {label}<T> {{}}"));
+        self.blank();
+        self.line(&format!("impl<T> {label}<T> {{"));
+        self.push_indent();
+        self.line("pub fn new(v: T) -> Self { Self(v) }");
+        self.line("pub fn into_inner(self) -> T { self.0 }");
+        self.line("pub fn as_inner(&self) -> &T { &self.0 }");
+        self.pop_indent();
+        self.line("}");
+        self.blank();
+        // as_str(): enables `match labeled_string.as_str() { "foo" => ... }` in generated code
+        self.line(&format!(
+            "impl {label}<String> {{ pub fn as_str(&self) -> &str {{ self.0.as_str() }} }}"
         ));
-        cg.push_indent();
-        cg.line(&format!(
-            "/// Construct `{}`, validating all refinement predicates.",
-            name
+        self.blank();
+        // Display: label<T> displays as T when T: Display
+        self.line(&format!(
+            "impl<T: std::fmt::Display> std::fmt::Display for {label}<T> {{"
         ));
-        let param_list: Vec<String> = fields
-            .iter()
-            .map(|f| format!("{}: {}", f.name, emit_type_expr(&f.ty)))
-            .collect();
-        cg.line(&format!("pub fn new({}) -> Self {{", param_list.join(", ")));
-        cg.push_indent();
-        for field in &refined_fields {
-            if let Some(pred) = &field.refinement {
-                let pred_str = emit_ref_expr_for_assert(pred, &field.name);
-                cg.line(&format!(
-                    "assert!({pred_str}, \"refinement violated: {} {{}}\", {});",
-                    field.name, field.name
-                ));
-            }
-        }
-        let field_inits: Vec<String> = fields.iter().map(|f| f.name.clone()).collect();
-        if let Some(inv) = invariant {
-            // Build struct first, then assert the invariant using field access on the value.
-            cg.line(&format!(
-                "let _mvl_val = Self {{ {} }};",
-                field_inits.join(", ")
+        self.push_indent();
+        self.line(
+            "fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { self.0.fmt(f) }",
+        );
+        self.pop_indent();
+        self.line("}");
+        self.blank();
+        // Arithmetic: delegate ops to the inner value, preserving the label
+        for (trait_name, method, op) in [
+            ("std::ops::Add", "add", "+"),
+            ("std::ops::Sub", "sub", "-"),
+            ("std::ops::Mul", "mul", "*"),
+            ("std::ops::Div", "div", "/"),
+            ("std::ops::Rem", "rem", "%"),
+        ] {
+            self.line(&format!(
+                "impl<T: {trait_name}<Output=T>> {trait_name} for {label}<T> {{"
             ));
-            let inv_str = emit_ref_expr_for_assert(inv, "_mvl_val");
-            // Enforce invariant according to the active AssertMode (#662).
-            let inv_stmt = match cg.assert_mode {
-                crate::mvl::backends::AssertMode::Always => {
-                    format!("assert!({inv_str}, \"struct invariant violated for `{name}`\");")
-                }
-                crate::mvl::backends::AssertMode::DebugOnly => {
-                    format!("debug_assert!({inv_str}, \"struct invariant violated for `{name}`\");")
-                }
-                crate::mvl::backends::AssertMode::Assume => {
-                    // Assume mode: omit runtime check entirely.
-                    String::new()
-                }
-            };
-            if !inv_stmt.is_empty() {
-                cg.line(&inv_stmt);
-            }
-            cg.line("_mvl_val");
-        } else {
-            cg.line(&format!("Self {{ {} }}", field_inits.join(", ")));
+            self.push_indent();
+            self.line(&format!("type Output = {label}<T>;"));
+            self.line(&format!(
+                "fn {method}(self, rhs: Self) -> Self {{ {label}(self.0 {op} rhs.0) }}"
+            ));
+            self.pop_indent();
+            self.line("}");
+            self.blank();
         }
-        cg.pop_indent();
-        cg.line("}");
-        cg.pop_indent();
-        cg.line("}");
+        self.line(&format!(
+            "impl<T: std::ops::Neg<Output=T>> std::ops::Neg for {label}<T> {{"
+        ));
+        self.push_indent();
+        self.line(&format!("type Output = {label}<T>;"));
+        self.line(&format!("fn neg(self) -> Self {{ {label}(-self.0) }}"));
+        self.pop_indent();
+        self.line("}");
+    }
+
+    // ── TypeDecl ─────────────────────────────────────────────────────────────
+
+    pub fn emit_type_decl(&mut self, td: &TypeDecl) {
+        match &td.body {
+            TypeBody::Struct { fields, invariant } => {
+                self.emit_struct(&td.name, &td.params, fields, invariant.as_ref());
+            }
+            TypeBody::Enum(variants) => self.emit_enum(&td.name, &td.params, variants),
+            TypeBody::Alias(ty) => self.emit_alias(&td.name, &td.params, ty),
+        }
+    }
+
+    // ── Struct ────────────────────────────────────────────────────────────────
+
+    fn emit_struct(
+        &mut self,
+        name: &str,
+        params: &[GenericParam],
+        fields: &[FieldDecl],
+        invariant: Option<&RefExpr>,
+    ) {
+        self.emit_derive(&["Debug", "Clone", "PartialEq"]);
+        self.line(&format!("pub struct {}{} {{", name, generic_params(params)));
+        self.push_indent();
+        for field in fields {
+            let ty_str = emit_type_expr(&field.ty);
+            self.line(&format!("pub {}: {},", field.name, ty_str));
+        }
+        self.pop_indent();
+        self.line("}");
+
+        // Emit a constructor if any field has a refinement predicate or a struct invariant exists
+        let refined_fields: Vec<_> = fields.iter().filter(|f| f.refinement.is_some()).collect();
+        if !refined_fields.is_empty() || invariant.is_some() {
+            self.blank();
+            self.line(&format!(
+                "impl{} {}{} {{",
+                generic_params(params),
+                name,
+                generic_params(params)
+            ));
+            self.push_indent();
+            self.line(&format!(
+                "/// Construct `{}`, validating all refinement predicates.",
+                name
+            ));
+            let param_list: Vec<String> = fields
+                .iter()
+                .map(|f| format!("{}: {}", f.name, emit_type_expr(&f.ty)))
+                .collect();
+            self.line(&format!("pub fn new({}) -> Self {{", param_list.join(", ")));
+            self.push_indent();
+            for field in &refined_fields {
+                if let Some(pred) = &field.refinement {
+                    let pred_str = emit_ref_expr_for_assert(pred, &field.name);
+                    self.line(&format!(
+                        "assert!({pred_str}, \"refinement violated: {} {{}}\", {});",
+                        field.name, field.name
+                    ));
+                }
+            }
+            let field_inits: Vec<String> = fields.iter().map(|f| f.name.clone()).collect();
+            if let Some(inv) = invariant {
+                // Build struct first, then assert the invariant using field access on the value.
+                self.line(&format!(
+                    "let _mvl_val = Self {{ {} }};",
+                    field_inits.join(", ")
+                ));
+                let inv_str = emit_ref_expr_for_assert(inv, "_mvl_val");
+                // Enforce invariant according to the active AssertMode (#662).
+                let inv_stmt = match self.assert_mode {
+                    crate::mvl::backends::AssertMode::Always => {
+                        format!("assert!({inv_str}, \"struct invariant violated for `{name}`\");")
+                    }
+                    crate::mvl::backends::AssertMode::DebugOnly => {
+                        format!(
+                            "debug_assert!({inv_str}, \"struct invariant violated for `{name}`\");"
+                        )
+                    }
+                    crate::mvl::backends::AssertMode::Assume => {
+                        // Assume mode: omit runtime check entirely.
+                        String::new()
+                    }
+                };
+                if !inv_stmt.is_empty() {
+                    self.line(&inv_stmt);
+                }
+                self.line("_mvl_val");
+            } else {
+                self.line(&format!("Self {{ {} }}", field_inits.join(", ")));
+            }
+            self.pop_indent();
+            self.line("}");
+            self.pop_indent();
+            self.line("}");
+        }
     }
 }
 
@@ -249,81 +255,83 @@ fn unwrap_refined_ty(ty: &TypeExpr) -> &TypeExpr {
 
 // ── Enum ──────────────────────────────────────────────────────────────────
 
-fn emit_enum(cg: &mut RustEmitter, name: &str, params: &[GenericParam], variants: &[Variant]) {
-    emit_derive(cg, &["Debug", "Clone", "PartialEq"]);
-    cg.line(&format!("pub enum {}{} {{", name, generic_params(params)));
-    cg.push_indent();
-    for v in variants {
-        match &v.fields {
-            VariantFields::Unit => cg.line(&format!("{},", v.name)),
-            VariantFields::Tuple(tys) => {
-                let tys_str: Vec<String> = tys.iter().map(emit_type_expr).collect();
-                cg.line(&format!("{}({}),", v.name, tys_str.join(", ")));
-            }
-            VariantFields::Struct(fields) => {
-                cg.line(&format!("{} {{", v.name));
-                cg.push_indent();
-                for f in fields {
-                    let ty_str = emit_type_expr(&f.ty);
-                    cg.line(&format!("{}: {},", f.name, ty_str));
+impl RustEmitter {
+    fn emit_enum(&mut self, name: &str, params: &[GenericParam], variants: &[Variant]) {
+        self.emit_derive(&["Debug", "Clone", "PartialEq"]);
+        self.line(&format!("pub enum {}{} {{", name, generic_params(params)));
+        self.push_indent();
+        for v in variants {
+            match &v.fields {
+                VariantFields::Unit => self.line(&format!("{},", v.name)),
+                VariantFields::Tuple(tys) => {
+                    let tys_str: Vec<String> = tys.iter().map(emit_type_expr).collect();
+                    self.line(&format!("{}({}),", v.name, tys_str.join(", ")));
                 }
-                cg.pop_indent();
-                cg.line("},");
+                VariantFields::Struct(fields) => {
+                    self.line(&format!("{} {{", v.name));
+                    self.push_indent();
+                    for f in fields {
+                        let ty_str = emit_type_expr(&f.ty);
+                        self.line(&format!("{}: {},", f.name, ty_str));
+                    }
+                    self.pop_indent();
+                    self.line("},");
+                }
             }
         }
+        self.pop_indent();
+        self.line("}");
     }
-    cg.pop_indent();
-    cg.line("}");
-}
 
-// ── Type alias / refined alias ────────────────────────────────────────────
+    // ── Type alias / refined alias ────────────────────────────────────────────
 
-fn emit_alias(cg: &mut RustEmitter, name: &str, params: &[GenericParam], ty: &TypeExpr) {
-    match ty {
-        TypeExpr::Refined { inner, pred, .. } => {
-            // Refined alias becomes a newtype with constructor validation
-            let inner_str = emit_type_expr(inner);
-            // Add Copy when the inner type is a primitive (i64, f64, bool, char, u8)
-            if is_copy_primitive(inner) {
-                emit_derive(cg, &["Debug", "Clone", "Copy", "PartialEq", "PartialOrd"]);
-            } else {
-                emit_derive(cg, &["Debug", "Clone", "PartialEq", "PartialOrd"]);
-            }
-            cg.line(&format!(
-                "pub struct {}{}(pub {});",
-                name,
-                generic_params(params),
-                inner_str
-            ));
-            cg.blank();
-            cg.line(&format!("impl {} {{", name));
-            cg.push_indent();
-            cg.line(&format!(
-                "/// Construct `{name}` — panics if the refinement is violated."
-            ));
-            cg.line(&format!("pub fn new(v: {inner_str}) -> Self {{"));
-            cg.push_indent();
-            let pred_str = emit_ref_expr_for_assert(pred, "v");
-            cg.line(&format!(
-                "assert!({pred_str}, \"refinement violated: {name}({{}})\", v);"
-            ));
-            cg.line("Self(v)");
-            cg.pop_indent();
-            cg.line("}");
-            cg.pop_indent();
-            cg.line("}");
-        }
-        _ => {
-            // Plain alias
-            let ty_str = emit_type_expr(ty);
-            if params.is_empty() {
-                cg.line(&format!("pub type {name} = {ty_str};"));
-            } else {
-                cg.line(&format!(
-                    "pub type {}{} = {ty_str};",
+    fn emit_alias(&mut self, name: &str, params: &[GenericParam], ty: &TypeExpr) {
+        match ty {
+            TypeExpr::Refined { inner, pred, .. } => {
+                // Refined alias becomes a newtype with constructor validation
+                let inner_str = emit_type_expr(inner);
+                // Add Copy when the inner type is a primitive (i64, f64, bool, char, u8)
+                if is_copy_primitive(inner) {
+                    self.emit_derive(&["Debug", "Clone", "Copy", "PartialEq", "PartialOrd"]);
+                } else {
+                    self.emit_derive(&["Debug", "Clone", "PartialEq", "PartialOrd"]);
+                }
+                self.line(&format!(
+                    "pub struct {}{}(pub {});",
                     name,
-                    generic_params(params)
+                    generic_params(params),
+                    inner_str
                 ));
+                self.blank();
+                self.line(&format!("impl {} {{", name));
+                self.push_indent();
+                self.line(&format!(
+                    "/// Construct `{name}` — panics if the refinement is violated."
+                ));
+                self.line(&format!("pub fn new(v: {inner_str}) -> Self {{"));
+                self.push_indent();
+                let pred_str = emit_ref_expr_for_assert(pred, "v");
+                self.line(&format!(
+                    "assert!({pred_str}, \"refinement violated: {name}({{}})\", v);"
+                ));
+                self.line("Self(v)");
+                self.pop_indent();
+                self.line("}");
+                self.pop_indent();
+                self.line("}");
+            }
+            _ => {
+                // Plain alias
+                let ty_str = emit_type_expr(ty);
+                if params.is_empty() {
+                    self.line(&format!("pub type {name} = {ty_str};"));
+                } else {
+                    self.line(&format!(
+                        "pub type {}{} = {ty_str};",
+                        name,
+                        generic_params(params)
+                    ));
+                }
             }
         }
     }
@@ -341,8 +349,10 @@ fn is_copy_primitive(ty: &TypeExpr) -> bool {
     }
 }
 
-fn emit_derive(cg: &mut RustEmitter, traits: &[&str]) {
-    cg.line(&format!("#[derive({})]", traits.join(", ")));
+impl RustEmitter {
+    fn emit_derive(&mut self, traits: &[&str]) {
+        self.line(&format!("#[derive({})]", traits.join(", ")));
+    }
 }
 
 fn generic_params(params: &[GenericParam]) -> String {
@@ -516,167 +526,166 @@ pub fn emit_label(label: &str) -> &str {
 
 // ── TIR TypeDecl emission ─────────────────────────────────────────────────
 
-pub fn emit_tir_type_decl(cg: &mut RustEmitter, td: &TirTypeDecl) {
-    match &td.body {
-        TirTypeBody::Struct { fields, invariant } => {
-            emit_tir_struct(cg, &td.name, &td.params, fields, invariant.as_ref());
-        }
-        TirTypeBody::Enum(variants) => emit_tir_enum(cg, &td.name, &td.params, variants),
-        TirTypeBody::Alias(ty) => emit_tir_alias(cg, &td.name, &td.params, ty),
-    }
-}
-
-fn emit_tir_struct(
-    cg: &mut RustEmitter,
-    name: &str,
-    params: &[GenericParam],
-    fields: &[TirFieldDecl],
-    invariant: Option<&RefExpr>,
-) {
-    emit_derive(cg, &["Debug", "Clone", "PartialEq"]);
-    cg.line(&format!("pub struct {}{} {{", name, generic_params(params)));
-    cg.push_indent();
-    for field in fields {
-        let ty_str = emit_ty(&field.ty);
-        cg.line(&format!("pub {}: {},", field.name, ty_str));
-    }
-    cg.pop_indent();
-    cg.line("}");
-
-    let refined_fields: Vec<_> = fields.iter().filter(|f| f.refinement.is_some()).collect();
-    if !refined_fields.is_empty() || invariant.is_some() {
-        cg.blank();
-        cg.line(&format!(
-            "impl{} {}{} {{",
-            generic_params(params),
-            name,
-            generic_params(params)
-        ));
-        cg.push_indent();
-        cg.line(&format!(
-            "/// Construct `{}`, validating all refinement predicates.",
-            name
-        ));
-        let param_list: Vec<String> = fields
-            .iter()
-            .map(|f| format!("{}: {}", f.name, emit_ty(&f.ty)))
-            .collect();
-        cg.line(&format!("pub fn new({}) -> Self {{", param_list.join(", ")));
-        cg.push_indent();
-        for field in &refined_fields {
-            if let Some(pred) = &field.refinement {
-                let pred_str = emit_ref_expr_for_assert(pred, &field.name);
-                cg.line(&format!(
-                    "assert!({pred_str}, \"refinement violated: {} {{}}\", {});",
-                    field.name, field.name
-                ));
+impl RustEmitter {
+    pub fn emit_tir_type_decl(&mut self, td: &TirTypeDecl) {
+        match &td.body {
+            TirTypeBody::Struct { fields, invariant } => {
+                self.emit_tir_struct(&td.name, &td.params, fields, invariant.as_ref());
             }
-        }
-        let field_inits: Vec<String> = fields.iter().map(|f| f.name.clone()).collect();
-        if let Some(inv) = invariant {
-            cg.line(&format!(
-                "let _mvl_val = Self {{ {} }};",
-                field_inits.join(", ")
-            ));
-            let inv_str = emit_ref_expr_for_assert(inv, "_mvl_val");
-            let inv_stmt = match cg.assert_mode {
-                crate::mvl::backends::AssertMode::Always => {
-                    format!("assert!({inv_str}, \"struct invariant violated for `{name}`\");")
-                }
-                crate::mvl::backends::AssertMode::DebugOnly => {
-                    format!("debug_assert!({inv_str}, \"struct invariant violated for `{name}`\");")
-                }
-                crate::mvl::backends::AssertMode::Assume => String::new(),
-            };
-            if !inv_stmt.is_empty() {
-                cg.line(&inv_stmt);
-            }
-            cg.line("_mvl_val");
-        } else {
-            cg.line(&format!("Self {{ {} }}", field_inits.join(", ")));
-        }
-        cg.pop_indent();
-        cg.line("}");
-        cg.pop_indent();
-        cg.line("}");
-    }
-}
-
-fn emit_tir_enum(
-    cg: &mut RustEmitter,
-    name: &str,
-    params: &[GenericParam],
-    variants: &[TirVariant],
-) {
-    emit_derive(cg, &["Debug", "Clone", "PartialEq"]);
-    cg.line(&format!("pub enum {}{} {{", name, generic_params(params)));
-    cg.push_indent();
-    for v in variants {
-        match &v.fields {
-            TirVariantFields::Unit => cg.line(&format!("{},", v.name)),
-            TirVariantFields::Tuple(tys) => {
-                let tys_str: Vec<String> = tys.iter().map(emit_ty).collect();
-                cg.line(&format!("{}({}),", v.name, tys_str.join(", ")));
-            }
-            TirVariantFields::Struct(fields) => {
-                cg.line(&format!("{} {{", v.name));
-                cg.push_indent();
-                for f in fields {
-                    let ty_str = emit_ty(&f.ty);
-                    cg.line(&format!("{}: {},", f.name, ty_str));
-                }
-                cg.pop_indent();
-                cg.line("},");
-            }
+            TirTypeBody::Enum(variants) => self.emit_tir_enum(&td.name, &td.params, variants),
+            TirTypeBody::Alias(ty) => self.emit_tir_alias(&td.name, &td.params, ty),
         }
     }
-    cg.pop_indent();
-    cg.line("}");
-}
 
-fn emit_tir_alias(cg: &mut RustEmitter, name: &str, params: &[GenericParam], ty: &Ty) {
-    match ty {
-        Ty::Refined(inner, pred) => {
-            let inner_str = emit_ty(inner);
-            if is_copy_primitive_ty(inner) {
-                emit_derive(cg, &["Debug", "Clone", "Copy", "PartialEq", "PartialOrd"]);
-            } else {
-                emit_derive(cg, &["Debug", "Clone", "PartialEq", "PartialOrd"]);
-            }
-            cg.line(&format!(
-                "pub struct {}{}(pub {});",
-                name,
+    fn emit_tir_struct(
+        &mut self,
+        name: &str,
+        params: &[GenericParam],
+        fields: &[TirFieldDecl],
+        invariant: Option<&RefExpr>,
+    ) {
+        self.emit_derive(&["Debug", "Clone", "PartialEq"]);
+        self.line(&format!("pub struct {}{} {{", name, generic_params(params)));
+        self.push_indent();
+        for field in fields {
+            let ty_str = emit_ty(&field.ty);
+            self.line(&format!("pub {}: {},", field.name, ty_str));
+        }
+        self.pop_indent();
+        self.line("}");
+
+        let refined_fields: Vec<_> = fields.iter().filter(|f| f.refinement.is_some()).collect();
+        if !refined_fields.is_empty() || invariant.is_some() {
+            self.blank();
+            self.line(&format!(
+                "impl{} {}{} {{",
                 generic_params(params),
-                inner_str
+                name,
+                generic_params(params)
             ));
-            cg.blank();
-            cg.line(&format!("impl {} {{", name));
-            cg.push_indent();
-            cg.line(&format!(
-                "/// Construct `{name}` — panics if the refinement is violated."
+            self.push_indent();
+            self.line(&format!(
+                "/// Construct `{}`, validating all refinement predicates.",
+                name
             ));
-            cg.line(&format!("pub fn new(v: {inner_str}) -> Self {{"));
-            cg.push_indent();
-            let pred_str = emit_ref_expr_for_assert(pred, "v");
-            cg.line(&format!(
-                "assert!({pred_str}, \"refinement violated: {name}({{}})\", v);"
-            ));
-            cg.line("Self(v)");
-            cg.pop_indent();
-            cg.line("}");
-            cg.pop_indent();
-            cg.line("}");
-        }
-        _ => {
-            let ty_str = emit_ty(ty);
-            if params.is_empty() {
-                cg.line(&format!("pub type {name} = {ty_str};"));
-            } else {
-                cg.line(&format!(
-                    "pub type {}{} = {ty_str};",
-                    name,
-                    generic_params(params)
+            let param_list: Vec<String> = fields
+                .iter()
+                .map(|f| format!("{}: {}", f.name, emit_ty(&f.ty)))
+                .collect();
+            self.line(&format!("pub fn new({}) -> Self {{", param_list.join(", ")));
+            self.push_indent();
+            for field in &refined_fields {
+                if let Some(pred) = &field.refinement {
+                    let pred_str = emit_ref_expr_for_assert(pred, &field.name);
+                    self.line(&format!(
+                        "assert!({pred_str}, \"refinement violated: {} {{}}\", {});",
+                        field.name, field.name
+                    ));
+                }
+            }
+            let field_inits: Vec<String> = fields.iter().map(|f| f.name.clone()).collect();
+            if let Some(inv) = invariant {
+                self.line(&format!(
+                    "let _mvl_val = Self {{ {} }};",
+                    field_inits.join(", ")
                 ));
+                let inv_str = emit_ref_expr_for_assert(inv, "_mvl_val");
+                let inv_stmt = match self.assert_mode {
+                    crate::mvl::backends::AssertMode::Always => {
+                        format!("assert!({inv_str}, \"struct invariant violated for `{name}`\");")
+                    }
+                    crate::mvl::backends::AssertMode::DebugOnly => {
+                        format!(
+                            "debug_assert!({inv_str}, \"struct invariant violated for `{name}`\");"
+                        )
+                    }
+                    crate::mvl::backends::AssertMode::Assume => String::new(),
+                };
+                if !inv_stmt.is_empty() {
+                    self.line(&inv_stmt);
+                }
+                self.line("_mvl_val");
+            } else {
+                self.line(&format!("Self {{ {} }}", field_inits.join(", ")));
+            }
+            self.pop_indent();
+            self.line("}");
+            self.pop_indent();
+            self.line("}");
+        }
+    }
+
+    fn emit_tir_enum(&mut self, name: &str, params: &[GenericParam], variants: &[TirVariant]) {
+        self.emit_derive(&["Debug", "Clone", "PartialEq"]);
+        self.line(&format!("pub enum {}{} {{", name, generic_params(params)));
+        self.push_indent();
+        for v in variants {
+            match &v.fields {
+                TirVariantFields::Unit => self.line(&format!("{},", v.name)),
+                TirVariantFields::Tuple(tys) => {
+                    let tys_str: Vec<String> = tys.iter().map(emit_ty).collect();
+                    self.line(&format!("{}({}),", v.name, tys_str.join(", ")));
+                }
+                TirVariantFields::Struct(fields) => {
+                    self.line(&format!("{} {{", v.name));
+                    self.push_indent();
+                    for f in fields {
+                        let ty_str = emit_ty(&f.ty);
+                        self.line(&format!("{}: {},", f.name, ty_str));
+                    }
+                    self.pop_indent();
+                    self.line("},");
+                }
+            }
+        }
+        self.pop_indent();
+        self.line("}");
+    }
+
+    fn emit_tir_alias(&mut self, name: &str, params: &[GenericParam], ty: &Ty) {
+        match ty {
+            Ty::Refined(inner, pred) => {
+                let inner_str = emit_ty(inner);
+                if is_copy_primitive_ty(inner) {
+                    self.emit_derive(&["Debug", "Clone", "Copy", "PartialEq", "PartialOrd"]);
+                } else {
+                    self.emit_derive(&["Debug", "Clone", "PartialEq", "PartialOrd"]);
+                }
+                self.line(&format!(
+                    "pub struct {}{}(pub {});",
+                    name,
+                    generic_params(params),
+                    inner_str
+                ));
+                self.blank();
+                self.line(&format!("impl {} {{", name));
+                self.push_indent();
+                self.line(&format!(
+                    "/// Construct `{name}` — panics if the refinement is violated."
+                ));
+                self.line(&format!("pub fn new(v: {inner_str}) -> Self {{"));
+                self.push_indent();
+                let pred_str = emit_ref_expr_for_assert(pred, "v");
+                self.line(&format!(
+                    "assert!({pred_str}, \"refinement violated: {name}({{}})\", v);"
+                ));
+                self.line("Self(v)");
+                self.pop_indent();
+                self.line("}");
+                self.pop_indent();
+                self.line("}");
+            }
+            _ => {
+                let ty_str = emit_ty(ty);
+                if params.is_empty() {
+                    self.line(&format!("pub type {name} = {ty_str};"));
+                } else {
+                    self.line(&format!(
+                        "pub type {}{} = {ty_str};",
+                        name,
+                        generic_params(params)
+                    ));
+                }
             }
         }
     }
@@ -686,15 +695,70 @@ fn is_copy_primitive_ty(ty: &Ty) -> bool {
     matches!(ty, Ty::Int | Ty::Float | Ty::Bool | Ty::Char | Ty::Byte)
 }
 
-pub fn emit_tir_extern_decl(cg: &mut RustEmitter, ed: &TirExternDecl) {
-    if cg.test_extern_stubs {
-        cg.line(&format!(
-            "// ── extern \"{}\" stubs (test mode) ──────────────────────────────────────────",
-            ed.abi
+impl RustEmitter {
+    pub fn emit_tir_extern_decl(&mut self, ed: &TirExternDecl) {
+        if self.test_extern_stubs {
+            self.line(&format!(
+                "// ── extern \"{}\" stubs (test mode) ──────────────────────────────────────────",
+                ed.abi
+            ));
+            for f in &ed.fns {
+                if !self.emitted_extern_stub_fns.insert(f.name.clone()) {
+                    continue;
+                }
+                let params_str: Vec<String> = f
+                    .params
+                    .iter()
+                    .map(|p| format!("{}: {}", p.name, emit_ty(&p.ty)))
+                    .collect();
+                let ret_str = emit_ty(&f.ret_ty);
+                self.line(&format!(
+                    "#[allow(dead_code)] pub fn {}({}) -> {} {{ todo!(\"extern stub\") }}",
+                    f.name,
+                    params_str.join(", "),
+                    ret_str
+                ));
+            }
+            return;
+        }
+
+        let new_fns: Vec<_> = ed
+            .fns
+            .iter()
+            .filter(|f| self.extern_fns.insert(f.name.clone()))
+            .collect();
+        if new_fns.is_empty() {
+            return;
+        }
+
+        self.line(&format!(
+            "// ── extern \"{}\" trust boundary ({} fn{}) ──────────────────────────────────",
+            ed.abi,
+            new_fns.len(),
+            if new_fns.len() == 1 { "" } else { "s" }
         ));
-        for f in &ed.fns {
-            if !cg.emitted_extern_stub_fns.insert(f.name.clone()) {
-                continue;
+        let rust_abi = match ed.abi.as_str() {
+            "rust" => "Rust",
+            "c" => "C",
+            other => {
+                self.line(&format!(
+                    "// extern \"{other}\" block skipped — unsupported ABI (checker error)"
+                ));
+                return;
+            }
+        };
+        self.line(&format!("extern \"{rust_abi}\" {{"));
+        self.push_indent();
+        for f in &new_fns {
+            if !f.effects.is_empty() {
+                self.line(&format!(
+                    "// ! {}",
+                    f.effects
+                        .iter()
+                        .map(|e| e.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
             }
             let params_str: Vec<String> = f
                 .params
@@ -702,69 +766,16 @@ pub fn emit_tir_extern_decl(cg: &mut RustEmitter, ed: &TirExternDecl) {
                 .map(|p| format!("{}: {}", p.name, emit_ty(&p.ty)))
                 .collect();
             let ret_str = emit_ty(&f.ret_ty);
-            cg.line(&format!(
-                "#[allow(dead_code)] pub fn {}({}) -> {} {{ todo!(\"extern stub\") }}",
+            self.line(&format!(
+                "fn {}({}) -> {};",
                 f.name,
                 params_str.join(", "),
                 ret_str
             ));
         }
-        return;
+        self.pop_indent();
+        self.line("}");
     }
-
-    let new_fns: Vec<_> = ed
-        .fns
-        .iter()
-        .filter(|f| cg.extern_fns.insert(f.name.clone()))
-        .collect();
-    if new_fns.is_empty() {
-        return;
-    }
-
-    cg.line(&format!(
-        "// ── extern \"{}\" trust boundary ({} fn{}) ──────────────────────────────────",
-        ed.abi,
-        new_fns.len(),
-        if new_fns.len() == 1 { "" } else { "s" }
-    ));
-    let rust_abi = match ed.abi.as_str() {
-        "rust" => "Rust",
-        "c" => "C",
-        other => {
-            cg.line(&format!(
-                "// extern \"{other}\" block skipped — unsupported ABI (checker error)"
-            ));
-            return;
-        }
-    };
-    cg.line(&format!("extern \"{rust_abi}\" {{"));
-    cg.push_indent();
-    for f in &new_fns {
-        if !f.effects.is_empty() {
-            cg.line(&format!(
-                "// ! {}",
-                f.effects
-                    .iter()
-                    .map(|e| e.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ));
-        }
-        let params_str: Vec<String> = f
-            .params
-            .iter()
-            .map(|p| format!("{}: {}", p.name, emit_ty(&p.ty)))
-            .collect();
-        let ret_str = emit_ty(&f.ret_ty);
-        cg.line(&format!(
-            "fn {}({}) -> {};",
-            f.name,
-            params_str.join(", "),
-            ret_str
-        ));
-    }
-    cg.pop_indent();
-    cg.line("}");
 }
 
 // ── Refinement predicate → Rust assert expression ─────────────────────────
