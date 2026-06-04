@@ -104,7 +104,14 @@ total fn main() -> Unit ! Log + Env {
     let logger: Logger = file_logger(fd, LogFormat::Json, LogLevel::Debug);
 
     let m: Manifest = manifest();
-    logger.info("application started", {"app": m.app_name, "version": m.app_version, "mvl": m.mvl_version, "env": "production"});
+    logger.info("application started", {
+        "app":     m.app_name,
+        "version": m.app_version,
+        "mvl":     m.mvl_version,
+        "runtime": m.runtime_version,
+        "stdlib":  m.stdlib_version,
+        "env":     "production",
+    });
     logger.warn("high memory usage", {"used_mb": "512", "limit_mb": "1024"});
     logger.error("upstream timeout", {"service": "payments", "timeout_ms": "5000"});
 

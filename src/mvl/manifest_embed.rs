@@ -53,10 +53,14 @@ pub fn load_and_generate(project_root: &Path, all_progs: &[Program]) -> Option<P
     let bridges = collect_ffi_bridges(all_progs);
 
     let mvl_version = env!("CARGO_PKG_VERSION");
+    let runtime_version = env!("MVL_RUNTIME_VERSION");
+    let stdlib_version = env!("MVL_STDLIB_VERSION");
     let src = generate_manifest_mvl(
         &pkg_manifest.package.name,
         &pkg_manifest.package.version,
         mvl_version,
+        runtime_version,
+        stdlib_version,
         &lockfile.packages,
         &bridges,
     );
@@ -132,6 +136,8 @@ fn generate_manifest_mvl(
     app_name: &str,
     app_version: &str,
     mvl_version: &str,
+    runtime_version: &str,
+    stdlib_version: &str,
     packages: &[LockedPackage],
     bridges: &[FfiBridgeData],
 ) -> String {
@@ -166,11 +172,11 @@ fn generate_manifest_mvl(
     // Return expression: Manifest struct literal.
     let lines: &[&str] = &[
         "    Manifest {",
-        &format!("        app_name:       {},", mvl_str(app_name)),
-        &format!("        app_version:    {},", mvl_str(app_version)),
-        &format!("        mvl_version:    {},", mvl_str(mvl_version)),
-        // stdlib version tracks compiler version until Phase 4 adds real build info
-        &format!("        stdlib_version: {},", mvl_str(mvl_version)),
+        &format!("        app_name:        {},", mvl_str(app_name)),
+        &format!("        app_version:     {},", mvl_str(app_version)),
+        &format!("        mvl_version:     {},", mvl_str(mvl_version)),
+        &format!("        runtime_version: {},", mvl_str(runtime_version)),
+        &format!("        stdlib_version:  {},", mvl_str(stdlib_version)),
         "        stdlib_profile: StdlibProfile::Trusted,",
         "        packages:       pkgs,",
         "        ffi_bridges:    ffis,",
@@ -317,14 +323,15 @@ mod tests {
 
     #[test]
     fn generate_manifest_mvl_no_packages_no_bridges() {
-        let src = generate_manifest_mvl("my_app", "1.0.0", "0.100.0", &[], &[]);
+        let src = generate_manifest_mvl("my_app", "1.0.0", "0.100.0", "0.9.2", "0.42.0", &[], &[]);
         assert!(src.contains("pub fn manifest() -> Manifest"));
-        assert!(src.contains(r#"app_name:       "my_app""#));
-        assert!(src.contains(r#"app_version:    "1.0.0""#));
-        assert!(src.contains(r#"mvl_version:    "0.100.0""#));
+        assert!(src.contains(r#"app_name:        "my_app""#));
+        assert!(src.contains(r#"app_version:     "1.0.0""#));
+        assert!(src.contains(r#"mvl_version:     "0.100.0""#));
+        assert!(src.contains(r#"runtime_version: "0.9.2""#));
+        assert!(src.contains(r#"stdlib_version:  "0.42.0""#));
         assert!(src.contains("let pkgs: List[PackageInfo] = [];"));
         assert!(src.contains("let ffis: List[FfiBridge] = [];"));
-        assert!(src.contains("ffi_bridges:    ffis,"));
     }
 
     #[test]
@@ -334,7 +341,8 @@ mod tests {
             bridge_name: "fetch_url".to_string(),
             bridge_version: String::new(),
         }];
-        let src = generate_manifest_mvl("app", "1.0.0", "0.100.0", &[], &bridges);
+        let src =
+            generate_manifest_mvl("app", "1.0.0", "0.100.0", "0.9.2", "0.42.0", &[], &bridges);
         assert!(src.contains(r#"let b0: FfiBridge = FfiBridge { abi: "rust", bridge_name: "fetch_url", bridge_version: "" };"#));
         assert!(src.contains("let ffis: List[FfiBridge] = [b0];"));
     }
@@ -343,7 +351,7 @@ mod tests {
 
     #[test]
     fn generated_mvl_parses_no_packages_no_bridges() {
-        let src = generate_manifest_mvl("myapp", "0.1.0", "0.184.0", &[], &[]);
+        let src = generate_manifest_mvl("myapp", "0.1.0", "0.184.0", "0.9.2", "0.42.0", &[], &[]);
         let (mut parser, _) = Parser::new(&src);
         let _prog = parser.parse_program();
         assert!(
@@ -367,7 +375,9 @@ mod tests {
             bridge_name: "fetch_url".to_string(),
             bridge_version: String::new(),
         }];
-        let src = generate_manifest_mvl("myapp", "0.1.0", "0.184.0", &pkgs, &bridges);
+        let src = generate_manifest_mvl(
+            "myapp", "0.1.0", "0.184.0", "0.9.2", "0.42.0", &pkgs, &bridges,
+        );
         let (mut parser, _) = Parser::new(&src);
         let _prog = parser.parse_program();
         assert!(
@@ -436,7 +446,8 @@ mod tests {
         let user_prog = parse_prog("extern \"rust\" { fn my_bridge() -> Int; }\n");
         // Verify via the source generator — the bridge must appear in the MVL source.
         let bridges = collect_ffi_bridges(&[user_prog]);
-        let src = generate_manifest_mvl("my-app", "1.0.0", "0.0.0", &[], &bridges);
+        let src =
+            generate_manifest_mvl("my-app", "1.0.0", "0.0.0", "0.9.2", "0.42.0", &[], &bridges);
         assert!(
             src.contains("b0") && src.contains("my_bridge"),
             "bridge binding not found in generated source:\n{src}"

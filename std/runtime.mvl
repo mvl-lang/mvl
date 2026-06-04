@@ -72,11 +72,12 @@ pub type AssuranceInfo = struct {
 ///
 /// Phase 1 returns stub values; later phases embed real compile-time data.
 pub type Manifest = struct {
-    app_name:       String,
-    app_version:    String,
-    mvl_version:    String,
-    stdlib_version: String,
-    stdlib_profile: StdlibProfile,
+    app_name:        String,
+    app_version:     String,
+    mvl_version:     String,
+    runtime_version: String,
+    stdlib_version:  String,
+    stdlib_profile:  StdlibProfile,
     packages:       List[PackageInfo],
     ffi_bridges:    List[FfiBridge],
     build:          BuildInfo,
@@ -93,11 +94,12 @@ pub type Manifest = struct {
 /// package.lock, extern blocks, and checker output at build time.
 pub fn manifest() -> Manifest {
     Manifest {
-        app_name:       "",
-        app_version:    "0.0.0",
-        mvl_version:    "",
-        stdlib_version: "",
-        stdlib_profile: StdlibProfile::Trusted,
+        app_name:        "",
+        app_version:     "0.0.0",
+        mvl_version:     "",
+        runtime_version: "",
+        stdlib_version:  "",
+        stdlib_profile:  StdlibProfile::Trusted,
         packages:       [],
         ffi_bridges:    [],
         build:          BuildInfo {
@@ -164,6 +166,7 @@ pub fn manifest_to_logfmt(m: Manifest) -> String {
     let base: String = "app=".concat(m.app_name)
         .concat(" app_version=").concat(m.app_version)
         .concat(" mvl=").concat(m.mvl_version)
+        .concat(" runtime=").concat(m.runtime_version)
         .concat(" stdlib=").concat(m.stdlib_version)
         .concat(" stdlib_profile=").concat(profile)
         .concat(" built=").concat(m.build.date);
@@ -223,6 +226,7 @@ pub fn manifest_to_json(m: Manifest) -> String {
     "{\"app\":".concat(json_str(m.app_name))
         .concat(",\"app_version\":").concat(json_str(m.app_version))
         .concat(",\"mvl\":").concat(json_str(m.mvl_version))
+        .concat(",\"runtime\":").concat(json_str(m.runtime_version))
         .concat(",\"stdlib\":").concat(json_str(m.stdlib_version))
         .concat(",\"stdlib_profile\":").concat(json_str(profile))
         .concat(",\"built\":").concat(json_str(m.build.date))
@@ -259,8 +263,9 @@ pub fn manifest_to_block(m: Manifest) -> String {
         .concat(title)
         .concat(sep)
         .concat(block_row("app:",    app_str))
-        .concat(block_row("mvl:",    m.mvl_version))
-        .concat(block_row("stdlib:", stdlib_str))
+        .concat(block_row("mvl:",     m.mvl_version))
+        .concat(block_row("runtime:", m.runtime_version))
+        .concat(block_row("stdlib:",  stdlib_str))
         .concat(block_row("built:",  m.build.date))
         .concat(bottom)
 }
