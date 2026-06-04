@@ -33,10 +33,36 @@ fn collect_mvl_files(dir: &Path, rel_prefix: &str, entries: &mut Vec<(String, St
     }
 }
 
+/// Read the `version = "…"` field from a Cargo.toml file.
+fn read_toml_version(path: &Path) -> String {
+    let content = fs::read_to_string(path).unwrap_or_default();
+    for line in content.lines() {
+        let line = line.trim();
+        if line.starts_with("version") {
+            if let Some(v) = line.split('"').nth(1) {
+                return v.to_string();
+            }
+        }
+    }
+    "unknown".to_string()
+}
+
 fn main() {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
     let std_dir = Path::new(&manifest_dir).join("std");
     let out_dir = std::env::var("OUT_DIR").unwrap();
+
+    // Expose the mvl_runtime crate version so manifest_embed.rs can embed it.
+    let runtime_toml = Path::new(&manifest_dir).join("runtime/rust/Cargo.toml");
+    println!(
+        "cargo:rustc-env=MVL_RUNTIME_VERSION={}",
+        read_toml_version(&runtime_toml)
+    );
+    println!("cargo:rerun-if-changed=runtime/rust/Cargo.toml");
+
+    // Stdlib content version — independently tracked from the compiler.
+    // Updated when std/*.mvl files have a meaningful release.
+    println!("cargo:rustc-env=MVL_STDLIB_VERSION=0.42.0");
 
     println!("cargo:rerun-if-changed=std/");
 

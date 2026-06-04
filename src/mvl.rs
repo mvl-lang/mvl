@@ -6,6 +6,7 @@ pub mod checker;
 pub mod ir;
 pub mod linter;
 pub mod loader;
+pub mod manifest_embed;
 pub mod packages;
 pub mod parser;
 pub mod passes;

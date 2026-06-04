@@ -1,0 +1,5 @@
+[package]
+name = "log_to_file"
+version = "1.0.0"
+license = "MIT"
+requires-mvl = ">=0.184.0"

@@ -1,0 +1,277 @@
+//! std.runtime — compile-time manifest with SBOM-style observability.
+//!
+//! Every MVL program embeds a MANIFEST at compile time: app identity,
+//! compiler/stdlib versions, packages, FFI bridges, build provenance,
+//! and assurance statistics.
+//!
+//! Phase 1 (this file): type hierarchy + three output formats + stub manifest.
+//! Phase 2+: compiler will synthesize real values from package.toml, package.lock,
+//! extern declarations, and checker output.
+//!
+//! Import:
+//!   use std.runtime.{manifest, manifest_to_logfmt, manifest_to_json, manifest_to_block,
+//!                    Manifest, StdlibProfile, PackageInfo, FfiBridge, BuildInfo, AssuranceInfo}
+//!
+//! See #803.
+
+// ── Stdlib profile ─────────────────────────────────────────────────────────
+
+/// Stdlib verification profile selected at build time via --stdlib flag.
+///
+/// Trusted: default stdlib, no additional proof obligations.
+/// Proven:  --stdlib=proven; all stdlib functions carry SMT-verified proofs.
+pub type StdlibProfile = enum {
+    Trusted,
+    Proven,
+}
+
+// ── Sub-types ───────────────────────────────────────────────────────────────
+
+/// A resolved MVL package dependency from package.lock.
+pub type PackageInfo = struct {
+    name: String,
+    version: String,
+    license: String,
+}
+
+/// An FFI trust boundary declared via `extern "rust"` or `extern "c"`.
+pub type FfiBridge = struct {
+    abi: String,
+    bridge_name: String,
+    bridge_version: String,
+}
+
+/// Build provenance: toolchain versions, target triple, and build timestamp.
+///
+/// Fields are populated progressively across phases:
+///   Phase 3 adds backend ("rust" or "llvm").
+///   Phase 4 adds rustc_version, llvm_version, target, profile, date.
+pub type BuildInfo = struct {
+    backend:       String,
+    rustc_version: Option[String],
+    llvm_version:  Option[String],
+    target:        String,
+    profile:       String,
+    date:          String,
+}
+
+/// Assurance statistics collected by the MVL checker at build time.
+///
+/// Populated in Phase 5.
+pub type AssuranceInfo = struct {
+    extern_ratio:        Float,
+    extern_count:        Int,
+    total_functions:     Int,
+    requirements_proven: Int,
+}
+
+// ── Manifest ────────────────────────────────────────────────────────────────
+
+/// Compile-time SBOM: all metadata embedded into the binary at build time.
+///
+/// Construct via `manifest()`. The compiler synthesizes this value from
+/// package.toml, package.lock, extern declarations, and checker output.
+///
+/// Phase 1 returns stub values; later phases embed real compile-time data.
+pub type Manifest = struct {
+    app_name:        String,
+    app_version:     String,
+    mvl_version:     String,
+    runtime_version: String,
+    stdlib_version:  String,
+    stdlib_profile:  StdlibProfile,
+    packages:       List[PackageInfo],
+    ffi_bridges:    List[FfiBridge],
+    build:          BuildInfo,
+    licenses:       List[String],
+    assurance:      AssuranceInfo,
+}
+
+// ── Constructor ─────────────────────────────────────────────────────────────
+
+/// Return the compile-time manifest embedded by the compiler.
+///
+/// Phase 1: returns a stub manifest with empty fields.
+/// Phase 2+: the compiler synthesizes real values from package.toml and
+/// package.lock, extern blocks, and checker output at build time.
+pub fn manifest() -> Manifest {
+    Manifest {
+        app_name:        "",
+        app_version:     "0.0.0",
+        mvl_version:     "",
+        runtime_version: "",
+        stdlib_version:  "",
+        stdlib_profile:  StdlibProfile::Trusted,
+        packages:       [],
+        ffi_bridges:    [],
+        build:          BuildInfo {
+            backend:       "rust",
+            rustc_version: None,
+            llvm_version:  None,
+            target:        "",
+            profile:       "debug",
+            date:          "",
+        },
+        licenses:  [],
+        assurance: AssuranceInfo {
+            extern_ratio:        0.0,
+            extern_count:        0,
+            total_functions:     0,
+            requirements_proven: 0,
+        },
+    }
+}
+
+// ── Internal helpers ────────────────────────────────────────────────────────
+
+fn stdlib_profile_name(p: StdlibProfile) -> String {
+    match p {
+        StdlibProfile::Trusted => "trusted",
+        StdlibProfile::Proven  => "proven",
+    }
+}
+
+/// Wrap a string in JSON double-quotes with escaping.
+///
+/// Uses `json_escape` from the implicit prelude (std/strings.mvl).
+fn json_str(s: String) -> String {
+    "\"".concat(json_escape(s)).concat("\"")
+}
+
+/// One line in the manifest block: `│ lbl        value\n`
+///
+/// Uses `pad_right` from the implicit prelude (std/strings.mvl).
+fn block_row(lbl: String, value: String) -> String {
+    "│ ".concat(pad_right(lbl, 11, " ")).concat(value).concat("\n")
+}
+
+/// Join a list of strings with `sep`, returning "" for an empty list.
+fn join_list(items: List[String], sep: String) -> String {
+    let result: ref String = "";
+    let first: ref Bool = true;
+    for item in items {
+        let s: String = if first { item } else { sep.concat(item) };
+        result = result.concat(s);
+        first = false
+    }
+    result
+}
+
+// ── Format: logfmt ──────────────────────────────────────────────────────────
+
+/// Format the manifest as a single logfmt line.
+///
+/// Suitable for structured log ingestion (Loki, Datadog, Splunk, etc.).
+/// Example:
+///   app=my_service app_version=1.2.3 mvl=0.115.0 stdlib=0.115.0 stdlib_profile=proven
+pub fn manifest_to_logfmt(m: Manifest) -> String {
+    let profile: String = stdlib_profile_name(m.stdlib_profile);
+    let base: String = "app=".concat(m.app_name)
+        .concat(" app_version=").concat(m.app_version)
+        .concat(" mvl=").concat(m.mvl_version)
+        .concat(" runtime=").concat(m.runtime_version)
+        .concat(" stdlib=").concat(m.stdlib_version)
+        .concat(" stdlib_profile=").concat(profile)
+        .concat(" backend=").concat(m.build.backend)
+        .concat(" built=").concat(m.build.date);
+    let pkg_parts: ref List[String] = [];
+    for p in m.packages {
+        pkg_parts = pkg_parts.concat([p.name.concat(":").concat(p.version)])
+    }
+    let ffi_parts: ref List[String] = [];
+    for f in m.ffi_bridges {
+        ffi_parts = ffi_parts.concat([f.bridge_name.concat("(").concat(f.abi).concat(")")])
+    }
+    let pkg_str: String = join_list(pkg_parts, ",");
+    let ffi_str: String = join_list(ffi_parts, ",");
+    let with_pkgs: String = if pkg_str.is_empty() {
+        base
+    } else {
+        base.concat(" packages=").concat(pkg_str)
+    };
+    if ffi_str.is_empty() {
+        with_pkgs
+    } else {
+        with_pkgs.concat(" ffi=").concat(ffi_str)
+    }
+}
+
+// ── Format: JSON ─────────────────────────────────────────────────────────────
+
+/// Format the manifest as a single JSON object.
+///
+/// Suitable for structured log systems that consume JSONL.
+pub fn manifest_to_json(m: Manifest) -> String {
+    let profile: String = stdlib_profile_name(m.stdlib_profile);
+    let pkg_parts: ref List[String] = [];
+    for p in m.packages {
+        let entry: String = "{\"name\":".concat(json_str(p.name))
+            .concat(",\"version\":").concat(json_str(p.version))
+            .concat(",\"license\":").concat(json_str(p.license))
+            .concat("}");
+        pkg_parts = pkg_parts.concat([entry])
+    }
+    let ffi_parts: ref List[String] = [];
+    for f in m.ffi_bridges {
+        let entry: String = "{\"abi\":".concat(json_str(f.abi))
+            .concat(",\"name\":").concat(json_str(f.bridge_name))
+            .concat(",\"version\":").concat(json_str(f.bridge_version))
+            .concat("}");
+        ffi_parts = ffi_parts.concat([entry])
+    }
+    let rustc: String = match m.build.rustc_version {
+        Some(v) => json_str(v),
+        None    => "null",
+    };
+    let llvm: String = match m.build.llvm_version {
+        Some(v) => json_str(v),
+        None    => "null",
+    };
+    "{\"app\":".concat(json_str(m.app_name))
+        .concat(",\"app_version\":").concat(json_str(m.app_version))
+        .concat(",\"mvl\":").concat(json_str(m.mvl_version))
+        .concat(",\"runtime\":").concat(json_str(m.runtime_version))
+        .concat(",\"stdlib\":").concat(json_str(m.stdlib_version))
+        .concat(",\"stdlib_profile\":").concat(json_str(profile))
+        .concat(",\"backend\":").concat(json_str(m.build.backend))
+        .concat(",\"built\":").concat(json_str(m.build.date))
+        .concat(",\"rustc\":").concat(rustc)
+        .concat(",\"llvm\":").concat(llvm)
+        .concat(",\"packages\":[").concat(join_list(pkg_parts, ",")).concat("]")
+        .concat(",\"ffi\":[").concat(join_list(ffi_parts, ",")).concat("]")
+        .concat("}")
+}
+
+// ── Format: block ─────────────────────────────────────────────────────────────
+
+/// Format the manifest as a human-readable bordered block.
+///
+/// Suitable for startup logs and debug output.
+/// Example:
+///   ┌─────────────────────────────────────────────────┐
+///   │ MVL Runtime Manifest
+///   ├─────────────────────────────────────────────────┤
+///   │ app:        my_service v1.2.3
+///   │ mvl:        0.115.0
+///   │ stdlib:     0.115.0 (proven)
+///   │ built:      2026-05-16T10:00:00Z
+///   └─────────────────────────────────────────────────┘
+pub fn manifest_to_block(m: Manifest) -> String {
+    let profile: String = stdlib_profile_name(m.stdlib_profile);
+    let stdlib_str: String = m.stdlib_version.concat(" (").concat(profile).concat(")");
+    let app_str: String = m.app_name.concat(" v").concat(m.app_version);
+    let border: String    = "┌─────────────────────────────────────────────────┐\n";
+    let sep: String       = "├─────────────────────────────────────────────────┤\n";
+    let bottom: String    = "└─────────────────────────────────────────────────┘";
+    let title: String     = "│ MVL Runtime Manifest\n";
+    border
+        .concat(title)
+        .concat(sep)
+        .concat(block_row("app:",    app_str))
+        .concat(block_row("backend:", m.build.backend))
+        .concat(block_row("mvl:",     m.mvl_version))
+        .concat(block_row("runtime:", m.runtime_version))
+        .concat(block_row("stdlib:",  stdlib_str))
+        .concat(block_row("built:",  m.build.date))
+        .concat(bottom)
+}
