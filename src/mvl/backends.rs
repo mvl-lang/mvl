@@ -77,7 +77,7 @@ pub enum Receiver {
 /// 2. One emit arm in each backend's dispatcher.
 ///
 /// C-ABI calling-convention details (`StdlibSig` in the LLVM backend) stay
-/// backend-local — `BuiltinDesc` captures *identity*, not *calling convention*.
+/// backend-local — `BuiltinDesc` captures *identity* and optional *dispatch hints*.
 #[derive(Debug, Clone)]
 pub struct BuiltinDesc {
     /// Method or function name (without receiver prefix).
@@ -88,6 +88,14 @@ pub struct BuiltinDesc {
     pub min_args: usize,
     /// Maximum argument count, excluding `self` for methods.
     pub max_args: usize,
+    /// Rust backend dispatch hint: the runtime function name used for
+    /// `fn_name(receiver.clone().into(), args)` dispatch.
+    /// `None` means the backend uses a hand-written match arm or passthrough.
+    pub rust_emit: Option<&'static str>,
+    /// LLVM backend dispatch hint: C-ABI symbol for `ensure_extern + call` dispatch.
+    /// `None` means the backend uses a hand-written match arm or the method is not
+    /// yet implemented in the LLVM backend.
+    pub llvm_symbol: Option<&'static str>,
 }
 
 impl BuiltinDesc {
@@ -97,6 +105,26 @@ impl BuiltinDesc {
             receiver: Receiver::Type(ty),
             min_args: min,
             max_args: max,
+            rust_emit: None,
+            llvm_symbol: None,
+        }
+    }
+
+    pub const fn method_with(
+        name: &'static str,
+        ty: &'static str,
+        min: usize,
+        max: usize,
+        rust_emit: Option<&'static str>,
+        llvm_symbol: Option<&'static str>,
+    ) -> Self {
+        Self {
+            name,
+            receiver: Receiver::Type(ty),
+            min_args: min,
+            max_args: max,
+            rust_emit,
+            llvm_symbol,
         }
     }
 
@@ -106,6 +134,8 @@ impl BuiltinDesc {
             receiver: Receiver::Free(module),
             min_args: min,
             max_args: max,
+            rust_emit: None,
+            llvm_symbol: None,
         }
     }
 
@@ -116,6 +146,22 @@ impl BuiltinDesc {
     pub fn is_free_fn(&self) -> bool {
         matches!(self.receiver, Receiver::Free(_))
     }
+}
+
+/// Look up the Rust runtime function name for a builtin method on a given type.
+///
+/// Returns `Some("fn_name")` when the method has a `rust_emit` dispatch hint,
+/// meaning the backend should emit `fn_name(receiver.clone().into(), args)`.
+/// Returns `None` for methods that require hand-written dispatch logic.
+pub fn rust_emit_for(name: &str, ty: &str) -> Option<&'static str> {
+    BUILTINS
+        .iter()
+        .find(|d| {
+            d.name == name
+                && matches!(&d.receiver, Receiver::Type(t) if *t == ty)
+                && d.rust_emit.is_some()
+        })
+        .and_then(|d| d.rust_emit)
 }
 
 /// Returns `true` if `name` is a known stdlib method on any type.
@@ -214,24 +260,66 @@ pub(crate) const STRING_LABEL_PRESERVING_METHODS: &[&str] = &[
 pub const BUILTINS: &[BuiltinDesc] = &[
     // ── String — kernel builtins (std/strings.mvl `pub builtin fn`) ──────────
     BuiltinDesc::method("len", "String", 0, 0),
-    BuiltinDesc::method("chars", "String", 0, 0),
-    BuiltinDesc::method("char_at", "String", 1, 1),
-    BuiltinDesc::method("byte_at", "String", 1, 1),
+    BuiltinDesc::method_with(
+        "chars",
+        "String",
+        0,
+        0,
+        Some("str_chars"),
+        Some("mvl_string_chars"),
+    ),
+    BuiltinDesc::method_with(
+        "char_at",
+        "String",
+        1,
+        1,
+        Some("str_char_at"),
+        Some("_mvl_str_char_at"),
+    ),
+    BuiltinDesc::method_with(
+        "byte_at",
+        "String",
+        1,
+        1,
+        Some("str_byte_at"),
+        Some("_mvl_str_byte_at"),
+    ),
     BuiltinDesc::method("concat", "String", 1, 1),
-    BuiltinDesc::method("find", "String", 1, 1),
-    BuiltinDesc::method("split", "String", 1, 1),
-    BuiltinDesc::method("substring", "String", 2, 2),
-    BuiltinDesc::method("parse_int", "String", 0, 0),
-    BuiltinDesc::method("parse_float", "String", 0, 0),
+    BuiltinDesc::method_with(
+        "find",
+        "String",
+        1,
+        1,
+        Some("str_find"),
+        Some("_mvl_str_find"),
+    ),
+    BuiltinDesc::method_with(
+        "split",
+        "String",
+        1,
+        1,
+        Some("str_split"),
+        Some("_mvl_str_split"),
+    ),
+    BuiltinDesc::method_with(
+        "substring",
+        "String",
+        2,
+        2,
+        Some("str_substring"),
+        Some("_mvl_str_substring"),
+    ),
+    BuiltinDesc::method_with("parse_int", "String", 0, 0, Some("str_parse_int"), None),
+    BuiltinDesc::method_with("parse_float", "String", 0, 0, Some("str_parse_float"), None),
     // String — compiler intrinsics (both backends emit explicitly)
     BuiltinDesc::method("contains", "String", 1, 1),
     BuiltinDesc::method("is_empty", "String", 0, 0),
     BuiltinDesc::method("to_string", "String", 0, 0),
     // ── List — kernel builtins (std/lists.mvl `pub builtin fn`) ──────────────
     BuiltinDesc::method("len", "List", 0, 0),
-    BuiltinDesc::method("get", "List", 1, 1),
+    BuiltinDesc::method_with("get", "List", 1, 1, Some("list_get"), None),
     BuiltinDesc::method("push", "List", 1, 1),
-    BuiltinDesc::method("slice", "List", 2, 2),
+    BuiltinDesc::method_with("slice", "List", 2, 2, Some("list_slice"), None),
     BuiltinDesc::method("concat", "List", 1, 1),
     BuiltinDesc::method("contains", "List", 1, 1),
     // List — compiler intrinsics
