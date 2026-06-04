@@ -73,11 +73,15 @@ pub enum Receiver {
 ///    both backends handle every entry identically.
 ///
 /// Adding a new builtin requires:
-/// 1. One entry here.
-/// 2. One emit arm in each backend's dispatcher.
+/// 1. One entry here (with optional `rust_emit` / `llvm_symbol` dispatch hints).
+/// 2. One emit arm in each backend's dispatcher — *unless* the method can use
+///    table-driven dispatch via `rust_emit` / `llvm_symbol` hints, in which
+///    case no hand-written match arm is needed.
 ///
-/// C-ABI calling-convention details (`StdlibSig` in the LLVM backend) stay
-/// backend-local — `BuiltinDesc` captures *identity* and optional *dispatch hints*.
+/// Dispatch hints allow simple methods (runtime-fn calls) to be emitted by a
+/// single generic match arm that queries [`rust_emit_by_name`] or similar.
+/// Complex methods (type-aware, higher-order, etc.) leave hints as `None` and
+/// require hand-written emit arms in each backend.
 #[derive(Debug, Clone)]
 pub struct BuiltinDesc {
     /// Method or function name (without receiver prefix).
@@ -544,6 +548,79 @@ mod registry_tests {
                 key.0,
                 key.1
             );
+        }
+    }
+
+    #[test]
+    fn rust_emit_hints_are_valid_identifiers() {
+        for d in BUILTINS {
+            if let Some(hint) = d.rust_emit {
+                assert!(
+                    hint.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'),
+                    "rust_emit '{}' for {} is not a valid Rust identifier",
+                    hint,
+                    d.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn llvm_symbol_hints_are_valid_identifiers() {
+        for d in BUILTINS {
+            if let Some(sym) = d.llvm_symbol {
+                assert!(
+                    sym.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'),
+                    "llvm_symbol '{}' for {} is not a valid C identifier",
+                    sym,
+                    d.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn rust_emit_by_name_returns_expected_values() {
+        assert_eq!(rust_emit_by_name("chars"), Some("str_chars"));
+        assert_eq!(rust_emit_by_name("find"), Some("str_find"));
+        assert_eq!(rust_emit_by_name("split"), Some("str_split"));
+        assert_eq!(rust_emit_by_name("substring"), Some("str_substring"));
+        assert_eq!(rust_emit_by_name("parse_int"), Some("str_parse_int"));
+        assert_eq!(rust_emit_by_name("parse_float"), Some("str_parse_float"));
+        assert_eq!(rust_emit_by_name("char_at"), Some("str_char_at"));
+        assert_eq!(rust_emit_by_name("byte_at"), Some("str_byte_at"));
+        assert_eq!(rust_emit_by_name("slice"), Some("list_slice"));
+        assert_eq!(rust_emit_by_name("get"), Some("list_get"));
+        // Methods without hints return None.
+        assert_eq!(rust_emit_by_name("len"), None);
+        assert_eq!(rust_emit_by_name("contains"), None);
+        assert_eq!(rust_emit_by_name("map"), None);
+    }
+
+    #[test]
+    fn rust_emit_for_type_specific() {
+        assert_eq!(rust_emit_for("chars", "String"), Some("str_chars"));
+        assert_eq!(rust_emit_for("get", "List"), Some("list_get"));
+        // Same method name on a different type returns None.
+        assert_eq!(rust_emit_for("get", "Map"), None);
+    }
+
+    #[test]
+    fn no_conflicting_rust_emit_hints() {
+        // Ensure no two entries with the same name have different rust_emit hints.
+        // (Same name on different types with hints would cause rust_emit_by_name ambiguity.)
+        let with_hints: Vec<_> = BUILTINS.iter().filter(|d| d.rust_emit.is_some()).collect();
+        let mut seen: HashSet<&str> = HashSet::new();
+        for d in &with_hints {
+            if seen.contains(d.name) {
+                let others: Vec<_> = with_hints.iter().filter(|o| o.name == d.name).collect();
+                panic!(
+                    "method '{}' has rust_emit hints on multiple types: {:?}",
+                    d.name,
+                    others.iter().map(|o| &o.receiver).collect::<Vec<_>>()
+                );
+            }
+            seen.insert(d.name);
         }
     }
 }
