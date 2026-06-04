@@ -494,9 +494,10 @@ impl<'src> Printer<'src> {
         let vis = if d.visible { "pub " } else { "" };
         let from = d.from.as_deref().unwrap_or("_");
         let to = d.to.as_deref().unwrap_or("_");
+        let audit_kw = if d.audit { " audit" } else { "" };
         self.line(&format!(
-            "{}{}relabel {}: {} -> {}",
-            ind, vis, d.name, from, to
+            "{}{}relabel {}: {} -> {}{}",
+            ind, vis, d.name, from, to, audit_kw
         ));
     }
 
@@ -918,13 +919,19 @@ impl<'src> Printer<'src> {
                 format!("consume({})", self.fmt_expr(expr, indent))
             }
             Expr::Relabel {
-                name, expr, tag, ..
+                name,
+                expr,
+                tag,
+                audit,
+                ..
             } => {
+                let audit_kw = if *audit { " audit" } else { "" };
                 format!(
-                    "relabel {}({}, {:?})",
+                    "relabel {}({}, {:?}){}",
                     name,
                     self.fmt_expr(expr, indent),
-                    tag
+                    tag,
+                    audit_kw
                 )
             }
             Expr::Borrow { mutable, expr, .. } => {

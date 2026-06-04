@@ -16,7 +16,8 @@
 //!                  access, modify, deny, fail, with_correlation, with_details,
 //!                  file_audit_logger,
 //!                  AuditTarget, audit_target, unaudit_target,
-//!                  load_audit_target, default_audit_target}
+//!                  load_audit_target, default_audit_target,
+//!                  RelabelEvent, emit_relabel_event}
 //!
 //! Effects:
 //!   Audit     — AuditLogger::emit (FileWrite + Clock subsumption)
@@ -258,3 +259,37 @@ pub fn load_audit_target(key: String) -> Option[AuditTarget[String]] ! Env {
 pub fn default_audit_target(fallback: String) -> AuditTarget[String] {
     relabel audit_target(fallback, "AUDIT-DEFAULT")
 }
+
+// ── RelabelEvent — IFC relabel audit events (#896) ────────────────────────────
+
+/// A structured record of a single IFC label transition at runtime.
+///
+/// Emitted when a `relabel` expression or declaration carries the `audit` keyword.
+/// Consumers use this for SOX, HIPAA, or PCI-DSS compliance trails.
+pub type RelabelEvent = struct {
+    /// Relabel transition name, e.g. `"trust"` or `"release"`.
+    transition: String,
+    /// Source label name, `"_"` for bare.
+    from_label: String,
+    /// Destination label name, `"_"` for bare.
+    to_label: String,
+    /// Audit tag supplied at the call site, e.g. `"XSS-001"`.
+    tag: String,
+    /// Source location hint, e.g. `"src/api.mvl"`.
+    location: String,
+}
+
+/// Emit a structured JSONL audit event for an IFC relabel transition.
+///
+/// Called automatically by the compiler when the `audit` keyword is present on
+/// a `relabel` declaration or expression.  Writes to `$MVL_AUDIT_SINK` (file
+/// path env var) or stderr if the variable is unset.
+///
+/// ! Audit effect — callers must declare `! Audit` in their signatures.
+pub builtin fn emit_relabel_event(
+    transition: String,
+    from_label: String,
+    to_label: String,
+    tag: String,
+    location: String,
+) -> Unit ! Audit

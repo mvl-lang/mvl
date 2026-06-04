@@ -33,10 +33,12 @@ impl TypeChecker {
                 Decl::Actor(ad) => self.register_actor(ad),
                 Decl::EffectDecl(_) => {} // collected by EffectHierarchy pass, not here
                 Decl::Label(ld) => self.env.register_label(ld.name.clone()),
-                Decl::Relabel(rd) => {
-                    self.env
-                        .register_relabel(rd.name.clone(), rd.from.clone(), rd.to.clone())
-                }
+                Decl::Relabel(rd) => self.env.register_relabel(
+                    rd.name.clone(),
+                    rd.from.clone(),
+                    rd.to.clone(),
+                    rd.audit,
+                ),
             }
         }
     }

@@ -519,6 +519,16 @@ pub fn count_relabels(prog: &Program) -> usize {
     rc
 }
 
+/// Count relabel declarations that carry the `audit` keyword (#896).
+///
+/// These are transitions where every call site emits a runtime audit event.
+pub fn count_audit_relabels(prog: &Program) -> usize {
+    prog.declarations
+        .iter()
+        .filter(|d| matches!(d, Decl::Relabel(rd) if rd.audit))
+        .count()
+}
+
 /// Count function parameters that carry a security label (`Tainted[T]`, `Secret[T]`, etc.).
 pub fn count_labeled_params(prog: &Program) -> usize {
     let mut count = 0;

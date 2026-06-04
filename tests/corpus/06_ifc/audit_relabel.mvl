@@ -1,0 +1,44 @@
+// Corpus: audit keyword on relabel declarations and expressions (#896)
+//
+// Tests both levels:
+//   - Declaration-level `audit`: ALL call sites of that transition emit runtime events.
+//   - Expression-level `audit`: only this specific call site emits a runtime event.
+
+// ── Declaration-level audit ────────────────────────────────────────────────
+//
+// `pub relabel release_audited: Secret -> _ audit`
+// means every use of `relabel release_audited(...)` emits an audit event.
+
+pub label Sensitive
+
+pub relabel classify_audited: _ -> Sensitive audit
+pub relabel declassify_audited: Sensitive -> _ audit
+
+fn wrap_sensitive(s: String) -> Sensitive[String] {
+    relabel classify_audited(s, "CLASSIFY-001")
+}
+
+fn unwrap_sensitive(s: Sensitive[String]) -> String {
+    relabel declassify_audited(s, "DECLASSIFY-001")
+}
+
+// ── Expression-level audit ─────────────────────────────────────────────────
+//
+// Regular transition, but a specific call site opts in with `audit`.
+
+fn trust_with_audit(input: Tainted[String]) -> String {
+    relabel trust(input, "TRUST-AUDIT-001") audit
+}
+
+fn trust_without_audit(input: Tainted[String]) -> String {
+    relabel trust(input, "TRUST-001")
+}
+
+// ── Mixed: declaration-level audit via built-in trust ─────────────────────
+//
+// Verify plain relabels still work alongside audited ones.
+
+fn secret_roundtrip(s: String) -> String {
+    let enc: Secret[String] = relabel classify(s, "WRAP-001");
+    relabel release(enc, "UNWRAP-001")
+}

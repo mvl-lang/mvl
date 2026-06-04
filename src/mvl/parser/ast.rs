@@ -529,6 +529,8 @@ pub struct RelabelDecl {
     pub from: Option<String>,
     /// Destination label: `None` = bare `_`, `Some("Secret")` = that label.
     pub to: Option<String>,
+    /// Whether every call site emits a runtime audit event (`relabel trust: T -> _ audit`).
+    pub audit: bool,
     pub span: Span,
 }
 
@@ -738,6 +740,9 @@ pub enum Expr {
         name: String,
         expr: Box<Expr>,
         tag: String,
+        /// Whether this call site emits a runtime audit event — set by the `audit`
+        /// keyword on the expression, or propagated from a declaration-level `audit`.
+        audit: bool,
         span: Span,
     },
     /// Expression-level borrow: `val expr` (shared) or `ref expr` (mutable).
