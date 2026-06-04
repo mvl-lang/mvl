@@ -5,6 +5,7 @@ use mvl::mvl::backends::rust as transpiler;
 use mvl::mvl::backends::AssertMode;
 use mvl::mvl::checker;
 use mvl::mvl::loader;
+use mvl::mvl::manifest_embed;
 use mvl::mvl::resolver;
 use mvl::mvl::stdlib;
 use std::fs;
@@ -137,6 +138,15 @@ pub fn run(path: &str, run: bool, run_args: &[String], assert_mode: AssertMode, 
     let all_with_pkgs: Vec<_> = all_progs.iter().chain(pkg_progs.iter()).cloned().collect();
     stdlib_prelude_progs.extend(loader::load_mvl_native_stdlib_extras(&all_with_pkgs));
     stdlib_prelude_progs.extend(pkg_progs.clone());
+
+    // Phase 2 (#803): embed real manifest data when the program uses std.runtime.
+    // A synthetic manifest() override is prepended so it wins the "first wins"
+    // deduplication in emit_program_core, replacing the Phase 1 stub values.
+    if manifest_embed::any_uses_std_runtime(&all_with_pkgs) {
+        if let Some(override_prog) = manifest_embed::load_and_generate(&project_root) {
+            stdlib_prelude_progs.insert(0, override_prog);
+        }
+    }
 
     // Collect expression types from ALL programs (prelude + user) for the
     // transpiler to emit type-specific Rust at method-call sites (#554).
