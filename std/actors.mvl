@@ -223,9 +223,21 @@ pub actor Supervisor traps_exit {
                             // Restart only the failed child.
                             match self.starters.get(name) {
                                 None => {
+                                    // Starter missing — state inconsistency, clean up.
                                     let _: Option[fn() -> Int ! Spawn] = self.starters.remove(name);
                                     let _: Option[Int] = self.counts.remove(name);
                                     let _: Option[Int] = self.max_r.remove(name);
+                                    // Remove from spawn order.
+                                    let new_order: List[String] = [];
+                                    let oi: ref Int = 0;
+                                    while oi < self.order.len() decreases self.order.len() - oi {
+                                        let entry: String = self.order.get(oi).unwrap_or("");
+                                        if entry != name {
+                                            new_order.push(entry);
+                                        }
+                                        oi = oi + 1;
+                                    }
+                                    self.order = new_order;
                                 },
                                 Some(start) => {
                                     let new_id: Int = start();
@@ -237,7 +249,8 @@ pub actor Supervisor traps_exit {
                         },
                         RestartStrategy::OneForAll => {
                             // Restart all children when any child fails.
-                            // Unlink all remaining live children.
+                            // NOTE: unlinked children become orphaned — no kill primitive
+                            // exists yet (Phase 9). Old instances are not stopped.
                             let all_ids: List[Int] = self.live.keys();
                             let ui: ref Int = 0;
                             while ui < all_ids.len() decreases all_ids.len() - ui {
@@ -260,25 +273,32 @@ pub actor Supervisor traps_exit {
                                 }
                                 ri = ri + 1;
                             }
+                            // Only the triggering child's restart counter is incremented.
+                            // Co-restarted siblings did not fail — their budgets are not
+                            // consumed. This matches Erlang/OTP per-event intensity semantics.
                             self.counts.insert(name, count + 1);
                         },
                         RestartStrategy::RestForOne => {
                             // Restart the failed child and all children started after it.
-                            // Find position of failed child in order.
+                            // Find position of failed child in order (first match).
                             let pos: ref Int = self.order.len();
                             let fi: ref Int = 0;
                             while fi < self.order.len() decreases self.order.len() - fi {
                                 let n: String = self.order.get(fi).unwrap_or("");
                                 if n == name {
-                                    pos = fi;
+                                    if pos == self.order.len() {
+                                        pos = fi;
+                                    }
                                 }
                                 fi = fi + 1;
                             }
+                            // NOTE: unlinked children become orphaned — no kill primitive
+                            // exists yet (Phase 9). Old instances are not stopped.
                             // Unlink and remove children at pos and after from live.
+                            let all_ids: List[Int] = self.live.keys();
                             let ri: ref Int = pos;
                             while ri < self.order.len() decreases self.order.len() - ri {
                                 let child_name: String = self.order.get(ri).unwrap_or("");
-                                let all_ids: List[Int] = self.live.keys();
                                 let ki: ref Int = 0;
                                 while ki < all_ids.len() decreases all_ids.len() - ki {
                                     let kid: Int = all_ids.get(ki).unwrap_or(0);
@@ -309,6 +329,7 @@ pub actor Supervisor traps_exit {
                                 }
                                 ri = ri + 1;
                             }
+                            // Only the triggering child's restart counter is incremented.
                             self.counts.insert(name, count + 1);
                         },
                     }
