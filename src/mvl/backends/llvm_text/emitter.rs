@@ -1253,8 +1253,8 @@ mod tests {
              }",
         );
         assert!(ir.contains("call ptr @mvl_map_new(i64"), "{ir}");
-        assert!(ir.contains("call void @mvl_map_insert(ptr"), "{ir}");
-        assert!(ir.contains("call ptr @mvl_string_ptr(ptr"), "{ir}");
+        assert!(ir.contains("call void @_mvl_map_insert(ptr"), "{ir}");
+        assert!(ir.contains("call ptr @_mvl_string_ptr(ptr"), "{ir}");
         assert!(ir.contains("call i64 @_mvl_str_len(ptr"), "{ir}");
     }
 
@@ -1277,8 +1277,8 @@ mod tests {
              m.len()\n\
              }",
         );
-        assert!(ir.contains("declare i64 @mvl_map_len(ptr)"), "{ir}");
-        assert!(ir.contains("call i64 @mvl_map_len(ptr"), "{ir}");
+        assert!(ir.contains("declare i64 @_mvl_map_len(ptr)"), "{ir}");
+        assert!(ir.contains("call i64 @_mvl_map_len(ptr"), "{ir}");
     }
 
     #[test]
@@ -1289,8 +1289,8 @@ mod tests {
              let _k: List[String] = m.keys();\n\
              }",
         );
-        assert!(ir.contains("declare ptr @mvl_map_keys(ptr)"), "{ir}");
-        assert!(ir.contains("call ptr @mvl_map_keys(ptr"), "{ir}");
+        assert!(ir.contains("declare ptr @_mvl_map_keys(ptr)"), "{ir}");
+        assert!(ir.contains("call ptr @_mvl_map_keys(ptr"), "{ir}");
     }
 
     #[test]
@@ -1301,7 +1301,7 @@ mod tests {
              m.contains_key(\"a\")\n\
              }",
         );
-        assert!(ir.contains("call ptr @mvl_map_get(ptr"), "{ir}");
+        assert!(ir.contains("call ptr @_mvl_map_get(ptr"), "{ir}");
         assert!(ir.contains("icmp ne ptr"), "{ir}");
     }
 
@@ -1312,7 +1312,7 @@ mod tests {
              m.get(\"key\")\n\
              }",
         );
-        assert!(ir.contains("call ptr @mvl_map_get(ptr"), "{ir}");
+        assert!(ir.contains("call ptr @_mvl_map_get(ptr"), "{ir}");
         // Must null-check before loading
         assert!(ir.contains("icmp eq ptr"), "{ir}");
         assert!(ir.contains("load i64, ptr"), "{ir}");

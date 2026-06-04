@@ -678,8 +678,8 @@ impl TextEmitter {
     ) -> Result<Option<String>, String> {
         let n = pairs.len().max(4) as i64;
         self.ensure_extern("declare ptr @mvl_map_new(i64)");
-        self.ensure_extern("declare void @mvl_map_insert(ptr, ptr, i64, ptr, i64)");
-        self.ensure_extern("declare ptr @mvl_string_ptr(ptr)");
+        self.ensure_extern("declare void @_mvl_map_insert(ptr, ptr, i64, ptr, i64)");
+        self.ensure_extern("declare ptr @_mvl_string_ptr(ptr)");
         self.ensure_extern("declare i64 @_mvl_str_len(ptr)");
 
         let map = self.next_reg();
@@ -695,7 +695,7 @@ impl TextEmitter {
             // Get raw pointer and length from the MvlString key
             let key_ptr = self.next_reg();
             self.push_instr(&format!(
-                "{key_ptr} = call ptr @mvl_string_ptr(ptr {key_val})"
+                "{key_ptr} = call ptr @_mvl_string_ptr(ptr {key_val})"
             ));
             let key_len = self.next_reg();
             self.push_instr(&format!(
@@ -714,7 +714,7 @@ impl TextEmitter {
 
             // val_size = 8 for all scalar types (i64, ptr, double)
             self.push_instr(&format!(
-                "call void @mvl_map_insert(ptr {map}, ptr {key_ptr}, i64 {key_len}, ptr {val_slot}, i64 8)"
+                "call void @_mvl_map_insert(ptr {map}, ptr {key_ptr}, i64 {key_len}, ptr {val_slot}, i64 8)"
             ));
         }
 

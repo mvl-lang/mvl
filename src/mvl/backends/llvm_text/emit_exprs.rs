@@ -988,9 +988,9 @@ impl TextEmitter {
             self.push_instr(&format!(
                 "{reg} = call ptr @mvl_string_new(ptr @{empty_g}, i64 0)"
             ));
-            self.ensure_extern("declare ptr @mvl_string_ptr(ptr)");
+            self.ensure_extern("declare ptr @_mvl_string_ptr(ptr)");
             let raw = self.next_reg();
-            self.push_instr(&format!("{raw} = call ptr @mvl_string_ptr(ptr {reg})"));
+            self.push_instr(&format!("{raw} = call ptr @_mvl_string_ptr(ptr {reg})"));
             self.push_instr(&format!(
                 "call i32 (i32, ptr, ...) @dprintf(i32 {fd}, ptr @{fmt}, ptr {raw})"
             ));
@@ -1001,10 +1001,10 @@ impl TextEmitter {
             None => return Ok(None),
         };
         let fmt = self.ensure_println_fmt();
-        self.ensure_extern("declare ptr @mvl_string_ptr(ptr)");
+        self.ensure_extern("declare ptr @_mvl_string_ptr(ptr)");
         self.ensure_extern("declare i32 @dprintf(i32, ptr, ...)");
         let raw = self.next_reg();
-        self.push_instr(&format!("{raw} = call ptr @mvl_string_ptr(ptr {val})"));
+        self.push_instr(&format!("{raw} = call ptr @_mvl_string_ptr(ptr {val})"));
         self.push_instr(&format!(
             "call i32 (i32, ptr, ...) @dprintf(i32 {fd}, ptr @{fmt}, ptr {raw})"
         ));
