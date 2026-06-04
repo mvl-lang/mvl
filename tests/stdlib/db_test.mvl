@@ -3,6 +3,8 @@
 // Verifies DbValue enum and related types from std/db.mvl.
 // Run with:  mvl test tests/stdlib/
 
+use std.db.{DbValue}
+
 // ── DbValue enum construction ────────────────────────────────────────────────
 
 test fn dbvalue_null_variant() -> Unit {
@@ -73,12 +75,12 @@ test fn dbvalue_match_all_variants() -> Unit {
     let count: ref Int = 0;
     for v in values {
         match v {
-            DbValue::Null => count = count + 1,
-            DbValue::Bool(_) => count = count + 1,
-            DbValue::Int(_) => count = count + 1,
-            DbValue::Float(_) => count = count + 1,
-            DbValue::Text(_) => count = count + 1,
-            DbValue::Blob(_) => count = count + 1,
+            DbValue::Null => { count = count + 1 },
+            DbValue::Bool(_) => { count = count + 1 },
+            DbValue::Int(_) => { count = count + 1 },
+            DbValue::Float(_) => { count = count + 1 },
+            DbValue::Text(_) => { count = count + 1 },
+            DbValue::Blob(_) => { count = count + 1 },
         }
     }
     assert_eq(count, 6);

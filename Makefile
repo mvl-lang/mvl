@@ -193,7 +193,20 @@ test-solver: build ## Run solver layer programs — real MVL programs of progres
 
 test-stdlib: build ## Verify stdlib runtime correctness: transpile tests/stdlib/ → cargo test
 	@echo "Running stdlib correctness tests..."
-	$(MVL) test tests/stdlib/
+	@pass=0; fail=0; total=0; \
+	for f in tests/stdlib/*_test.mvl; do \
+		total=$$((total+1)); \
+		if $(MVL) test "$$f" > /dev/null 2>&1; then \
+			pass=$$((pass+1)); \
+		else \
+			fail=$$((fail+1)); \
+			echo "  FAIL: $$f"; \
+			$(MVL) test "$$f" 2>&1 | tail -5; \
+		fi; \
+	done; \
+	echo ""; \
+	echo "  $$pass/$$total stdlib tests passed, $$fail failed"; \
+	[ "$$fail" -eq 0 ]
 
 check-compiler: build ## Verify self-hosted compiler with mvl check + lint (all 4 source files)
 	$(MVL) check compiler/

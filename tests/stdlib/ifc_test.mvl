@@ -40,19 +40,17 @@ test fn classify_int_secret() -> Unit {
 // ── Round-trip: bare → Tainted → bare ────────────────────────────────────────
 
 test fn tainted_round_trip() -> Unit {
-    let original: String = "data";
-    let tainted: Tainted[String] = relabel taint(original, "TAINT-001");
+    let tainted: Tainted[String] = relabel taint("data", "TAINT-001");
     let validated: String = relabel trust(tainted, "VALID-001");
-    assert_eq(validated, original);
+    assert_eq(validated, "data");
 }
 
 // ── Round-trip: bare → Secret → bare ─────────────────────────────────────────
 
 test fn secret_round_trip() -> Unit {
-    let original: String = "secret_key";
-    let secret: Secret[String] = relabel classify(original, "CLASS-001");
+    let secret: Secret[String] = relabel classify("secret_key", "CLASS-001");
     let released: String = relabel release(secret, "RELEASE-001");
-    assert_eq(released, original);
+    assert_eq(released, "secret_key");
 }
 
 // ── Labels on struct fields ──────────────────────────────────────────────────
