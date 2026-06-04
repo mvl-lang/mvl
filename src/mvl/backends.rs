@@ -73,11 +73,15 @@ pub enum Receiver {
 ///    both backends handle every entry identically.
 ///
 /// Adding a new builtin requires:
-/// 1. One entry here.
-/// 2. One emit arm in each backend's dispatcher.
+/// 1. One entry here (with optional `rust_emit` / `llvm_symbol` dispatch hints).
+/// 2. One emit arm in each backend's dispatcher — *unless* the method can use
+///    table-driven dispatch via `rust_emit` / `llvm_symbol` hints, in which
+///    case no hand-written match arm is needed.
 ///
-/// C-ABI calling-convention details (`StdlibSig` in the LLVM backend) stay
-/// backend-local — `BuiltinDesc` captures *identity*, not *calling convention*.
+/// Dispatch hints allow simple methods (runtime-fn calls) to be emitted by a
+/// single generic match arm that queries [`rust_emit_by_name`] or similar.
+/// Complex methods (type-aware, higher-order, etc.) leave hints as `None` and
+/// require hand-written emit arms in each backend.
 #[derive(Debug, Clone)]
 pub struct BuiltinDesc {
     /// Method or function name (without receiver prefix).
@@ -88,6 +92,14 @@ pub struct BuiltinDesc {
     pub min_args: usize,
     /// Maximum argument count, excluding `self` for methods.
     pub max_args: usize,
+    /// Rust backend dispatch hint: the runtime function name used for
+    /// `fn_name(receiver.clone().into(), args)` dispatch.
+    /// `None` means the backend uses a hand-written match arm or passthrough.
+    pub rust_emit: Option<&'static str>,
+    /// LLVM backend dispatch hint: C-ABI symbol for `ensure_extern + call` dispatch.
+    /// `None` means the backend uses a hand-written match arm or the method is not
+    /// yet implemented in the LLVM backend.
+    pub llvm_symbol: Option<&'static str>,
 }
 
 impl BuiltinDesc {
@@ -97,6 +109,26 @@ impl BuiltinDesc {
             receiver: Receiver::Type(ty),
             min_args: min,
             max_args: max,
+            rust_emit: None,
+            llvm_symbol: None,
+        }
+    }
+
+    pub const fn method_with(
+        name: &'static str,
+        ty: &'static str,
+        min: usize,
+        max: usize,
+        rust_emit: Option<&'static str>,
+        llvm_symbol: Option<&'static str>,
+    ) -> Self {
+        Self {
+            name,
+            receiver: Receiver::Type(ty),
+            min_args: min,
+            max_args: max,
+            rust_emit,
+            llvm_symbol,
         }
     }
 
@@ -106,6 +138,8 @@ impl BuiltinDesc {
             receiver: Receiver::Free(module),
             min_args: min,
             max_args: max,
+            rust_emit: None,
+            llvm_symbol: None,
         }
     }
 
@@ -116,6 +150,35 @@ impl BuiltinDesc {
     pub fn is_free_fn(&self) -> bool {
         matches!(self.receiver, Receiver::Free(_))
     }
+}
+
+/// Look up the Rust runtime function name for a builtin method on a given type.
+///
+/// Returns `Some("fn_name")` when the method has a `rust_emit` dispatch hint,
+/// meaning the backend should emit `fn_name(receiver.clone().into(), args)`.
+/// Returns `None` for methods that require hand-written dispatch logic.
+pub fn rust_emit_for(name: &str, ty: &str) -> Option<&'static str> {
+    BUILTINS
+        .iter()
+        .find(|d| {
+            d.name == name
+                && matches!(&d.receiver, Receiver::Type(t) if *t == ty)
+                && d.rust_emit.is_some()
+        })
+        .and_then(|d| d.rust_emit)
+}
+
+/// Look up the Rust runtime function name for a builtin method by name only.
+///
+/// Unlike [`rust_emit_for`], this does not require knowing the receiver type.
+/// It returns the first match across all receiver types.  This is safe when
+/// the method name is unambiguous (only one receiver type has a `rust_emit`
+/// hint for it), which is the case for all current entries.
+pub fn rust_emit_by_name(name: &str) -> Option<&'static str> {
+    BUILTINS
+        .iter()
+        .find(|d| d.name == name && d.rust_emit.is_some())
+        .and_then(|d| d.rust_emit)
 }
 
 /// Returns `true` if `name` is a known stdlib method on any type.
@@ -130,6 +193,57 @@ pub fn is_stdlib_method(name: &str) -> bool {
 pub fn is_stdlib_fn(name: &str) -> bool {
     BUILTINS.iter().any(|d| d.is_free_fn() && d.name == name)
 }
+
+// ── Shared dispatch constants (Rust backend) ────────────────────────────────
+//
+// These constants are used by both the TIR and AST expression emitters in the
+// Rust backend.  Centralised here to eliminate duplication between
+// `emit_exprs.rs` and `emit_exprs_ast.rs`.
+
+/// Pure MVL stdlib methods — transpiled as free functions, dispatched via UFCS
+/// as `method(receiver.clone().into(), args)`.
+///
+/// When the transpiler sees `receiver.method(args)` for one of these names it
+/// emits a UFCS free-function call instead: `method(receiver.clone().into(), args)`.
+/// The `.into()` coercion allows IFC-label wrapper types (`Clean<String>`, etc.) to
+/// flow into functions that take the plain inner type — `From<Label<T>> for T` is
+/// implemented in `mvl_runtime::ifc`.
+///
+/// # 4-way sync (#992)
+///
+/// This list is one of **four** places that must stay in sync when adding a new builtin
+/// method.  See `checker/method_types.rs` for the authoritative list and full explanation.
+/// The planned fix (method desugaring) is tracked in issue #992.
+pub(crate) const STDLIB_UFCS_METHODS: &[&str] = &[
+    // std/strings.mvl (pure MVL, have bodies)
+    "trim",
+    "to_upper",
+    "to_lower",
+    "starts_with",
+    "ends_with",
+    "replace",
+    // Note: `contains` and `is_empty` have hardcoded type-aware handlers above.
+    // std/lists.mvl (pure MVL, have bodies)
+    "take",
+    "skip",
+    "first",
+    "last",
+    "flatten",
+    "reverse",
+];
+
+/// String methods that return a `String` with the same IFC label as their receiver.
+/// When the receiver is `Label<String>`, the call result must be re-wrapped in `Label::new(…)`
+/// because the UFCS trampoline (`method(receiver.clone().into(), …)`) strips the label via
+/// `.into()` before passing to the stdlib function (which returns plain `String`).
+pub(crate) const STRING_LABEL_PRESERVING_METHODS: &[&str] = &[
+    "trim",
+    "to_upper",
+    "to_lower",
+    "concat",
+    "replace",
+    "substring",
+];
 
 /// Shared registry of all MVL builtin methods and stdlib free functions.
 ///
@@ -146,24 +260,66 @@ pub fn is_stdlib_fn(name: &str) -> bool {
 pub const BUILTINS: &[BuiltinDesc] = &[
     // ── String — kernel builtins (std/strings.mvl `pub builtin fn`) ──────────
     BuiltinDesc::method("len", "String", 0, 0),
-    BuiltinDesc::method("chars", "String", 0, 0),
-    BuiltinDesc::method("char_at", "String", 1, 1),
-    BuiltinDesc::method("byte_at", "String", 1, 1),
+    BuiltinDesc::method_with(
+        "chars",
+        "String",
+        0,
+        0,
+        Some("str_chars"),
+        Some("mvl_string_chars"),
+    ),
+    BuiltinDesc::method_with(
+        "char_at",
+        "String",
+        1,
+        1,
+        Some("str_char_at"),
+        Some("_mvl_str_char_at"),
+    ),
+    BuiltinDesc::method_with(
+        "byte_at",
+        "String",
+        1,
+        1,
+        Some("str_byte_at"),
+        Some("_mvl_str_byte_at"),
+    ),
     BuiltinDesc::method("concat", "String", 1, 1),
-    BuiltinDesc::method("find", "String", 1, 1),
-    BuiltinDesc::method("split", "String", 1, 1),
-    BuiltinDesc::method("substring", "String", 2, 2),
-    BuiltinDesc::method("parse_int", "String", 0, 0),
-    BuiltinDesc::method("parse_float", "String", 0, 0),
+    BuiltinDesc::method_with(
+        "find",
+        "String",
+        1,
+        1,
+        Some("str_find"),
+        Some("_mvl_str_find"),
+    ),
+    BuiltinDesc::method_with(
+        "split",
+        "String",
+        1,
+        1,
+        Some("str_split"),
+        Some("_mvl_str_split"),
+    ),
+    BuiltinDesc::method_with(
+        "substring",
+        "String",
+        2,
+        2,
+        Some("str_substring"),
+        Some("_mvl_str_substring"),
+    ),
+    BuiltinDesc::method_with("parse_int", "String", 0, 0, Some("str_parse_int"), None),
+    BuiltinDesc::method_with("parse_float", "String", 0, 0, Some("str_parse_float"), None),
     // String — compiler intrinsics (both backends emit explicitly)
     BuiltinDesc::method("contains", "String", 1, 1),
     BuiltinDesc::method("is_empty", "String", 0, 0),
     BuiltinDesc::method("to_string", "String", 0, 0),
     // ── List — kernel builtins (std/lists.mvl `pub builtin fn`) ──────────────
     BuiltinDesc::method("len", "List", 0, 0),
-    BuiltinDesc::method("get", "List", 1, 1),
+    BuiltinDesc::method_with("get", "List", 1, 1, Some("list_get"), None),
     BuiltinDesc::method("push", "List", 1, 1),
-    BuiltinDesc::method("slice", "List", 2, 2),
+    BuiltinDesc::method_with("slice", "List", 2, 2, Some("list_slice"), None),
     BuiltinDesc::method("concat", "List", 1, 1),
     BuiltinDesc::method("contains", "List", 1, 1),
     // List — compiler intrinsics
@@ -392,6 +548,79 @@ mod registry_tests {
                 key.0,
                 key.1
             );
+        }
+    }
+
+    #[test]
+    fn rust_emit_hints_are_valid_identifiers() {
+        for d in BUILTINS {
+            if let Some(hint) = d.rust_emit {
+                assert!(
+                    hint.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'),
+                    "rust_emit '{}' for {} is not a valid Rust identifier",
+                    hint,
+                    d.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn llvm_symbol_hints_are_valid_identifiers() {
+        for d in BUILTINS {
+            if let Some(sym) = d.llvm_symbol {
+                assert!(
+                    sym.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'),
+                    "llvm_symbol '{}' for {} is not a valid C identifier",
+                    sym,
+                    d.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn rust_emit_by_name_returns_expected_values() {
+        assert_eq!(rust_emit_by_name("chars"), Some("str_chars"));
+        assert_eq!(rust_emit_by_name("find"), Some("str_find"));
+        assert_eq!(rust_emit_by_name("split"), Some("str_split"));
+        assert_eq!(rust_emit_by_name("substring"), Some("str_substring"));
+        assert_eq!(rust_emit_by_name("parse_int"), Some("str_parse_int"));
+        assert_eq!(rust_emit_by_name("parse_float"), Some("str_parse_float"));
+        assert_eq!(rust_emit_by_name("char_at"), Some("str_char_at"));
+        assert_eq!(rust_emit_by_name("byte_at"), Some("str_byte_at"));
+        assert_eq!(rust_emit_by_name("slice"), Some("list_slice"));
+        assert_eq!(rust_emit_by_name("get"), Some("list_get"));
+        // Methods without hints return None.
+        assert_eq!(rust_emit_by_name("len"), None);
+        assert_eq!(rust_emit_by_name("contains"), None);
+        assert_eq!(rust_emit_by_name("map"), None);
+    }
+
+    #[test]
+    fn rust_emit_for_type_specific() {
+        assert_eq!(rust_emit_for("chars", "String"), Some("str_chars"));
+        assert_eq!(rust_emit_for("get", "List"), Some("list_get"));
+        // Same method name on a different type returns None.
+        assert_eq!(rust_emit_for("get", "Map"), None);
+    }
+
+    #[test]
+    fn no_conflicting_rust_emit_hints() {
+        // Ensure no two entries with the same name have different rust_emit hints.
+        // (Same name on different types with hints would cause rust_emit_by_name ambiguity.)
+        let with_hints: Vec<_> = BUILTINS.iter().filter(|d| d.rust_emit.is_some()).collect();
+        let mut seen: HashSet<&str> = HashSet::new();
+        for d in &with_hints {
+            if seen.contains(d.name) {
+                let others: Vec<_> = with_hints.iter().filter(|o| o.name == d.name).collect();
+                panic!(
+                    "method '{}' has rust_emit hints on multiple types: {:?}",
+                    d.name,
+                    others.iter().map(|o| &o.receiver).collect::<Vec<_>>()
+                );
+            }
+            seen.insert(d.name);
         }
     }
 }

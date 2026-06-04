@@ -13,8 +13,15 @@
 //!
 //! 1. **`std/*.mvl`** — declare the method (signature + body or `builtin`)
 //! 2. **`checker/method_types.rs`** ← *this file* — add the return type mapping
-//! 3. **`backends/rust/emit_exprs.rs`** — add an emission match arm (or STDLIB_UFCS_METHODS)
-//! 4. **`backends/llvm/exprs.rs`** — add the LLVM emission arm
+//! 3. **`backends/rust/emit_exprs.rs`** — add an emission match arm, or add a
+//!    `rust_emit` hint to `BUILTINS` in `backends.rs` for table-driven dispatch
+//! 4. **`backends/llvm_text/emit_method_call.rs`** — add the LLVM emission arm
+//!
+//! **Shared constants** (`STDLIB_UFCS_METHODS`, `STRING_LABEL_PRESERVING_METHODS`)
+//! now live in `backends.rs` as the single source of truth — both TIR and AST
+//! emitters import from there.  Runtime function mappings (previously
+//! `STDLIB_BUILTIN_METHODS`) are encoded as `BuiltinDesc.rust_emit` hints in
+//! the `BUILTINS` registry.
 //!
 //! Missing any one of these causes: wrong type inference (#985), missing emission
 //! (runtime crash), or method not callable.  See issue #992 for the planned fix
