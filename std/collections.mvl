@@ -73,6 +73,43 @@ pub fn Map[K, V]::is_empty(self) -> Bool {
     self.len() == 0
 }
 
+// ── Map HOFs (transpiler-handled) ────────────────────────────────────────
+
+/// Apply `f` to each value, producing a new map with the same keys.
+///
+/// Transpiler-handled: emits `map.into_iter().map(|(k,v)| (k, f(v))).collect()`.
+pub fn Map[K, V]::map_values[U](self, f: fn(V) -> U) -> Map[K, U] where V: Clone, U: Clone {
+    self.map_values(f)
+}
+
+/// Retain entries whose value satisfies predicate `f`.
+///
+/// Transpiler-handled: emits `map.into_iter().filter(|(_,v)| f(v)).collect()`.
+pub fn Map[K, V]::filter(self, f: fn(V) -> Bool) -> Map[K, V] where V: Clone {
+    self.filter(f)
+}
+
+/// Left fold over map values: reduce to a single value using `f` and accumulator `init`.
+///
+/// Transpiler-handled: emits `map.into_iter().fold(init, |acc, (_, v)| f(acc, v))`.
+pub fn Map[K, V]::fold[U](self, init: U, f: fn(U, V) -> U) -> U where V: Clone, U: Clone {
+    self.fold(init, f)
+}
+
+/// True if at least one value satisfies `f`.
+///
+/// Transpiler-handled: emits `map.into_iter().any(|(_,v)| f(v))`.
+pub fn Map[K, V]::any(self, f: fn(V) -> Bool) -> Bool where V: Clone {
+    self.any(f)
+}
+
+/// True if every value satisfies `f`.
+///
+/// Transpiler-handled: emits `map.into_iter().all(|(_,v)| f(v))`.
+pub fn Map[K, V]::all(self, f: fn(V) -> Bool) -> Bool where V: Clone {
+    self.all(f)
+}
+
 // ── Set[T] ─────────────────────────────────────────────────────────────────
 
 /// True if the set contains `x`.
@@ -118,4 +155,41 @@ pub fn Set[T]::difference(self, other: Set[T]) -> Set[T] {
 /// Elements present in either set.
 pub fn Set[T]::union(self, other: Set[T]) -> Set[T] {
     self.union(other)
+}
+
+// ── Set HOFs (transpiler-handled) ────────────────────────────────────────
+
+/// Apply `f` to each element, collecting results into a new set.
+///
+/// Transpiler-handled: emits `set.into_iter().map(|x| f(x)).collect::<HashSet<_>>()`.
+pub fn Set[T]::map[U](self, f: fn(T) -> U) -> Set[U] where T: Clone, U: Clone {
+    self.map(f)
+}
+
+/// Retain elements satisfying predicate `f`.
+///
+/// Transpiler-handled: emits `set.into_iter().filter(|x| f(x)).collect::<HashSet<_>>()`.
+pub fn Set[T]::filter(self, f: fn(T) -> Bool) -> Set[T] where T: Clone {
+    self.filter(f)
+}
+
+/// Left fold: reduce to a single value using `f` and accumulator `init`.
+///
+/// Transpiler-handled: emits `set.into_iter().fold(init, |acc, x| f(acc, x))`.
+pub fn Set[T]::fold[U](self, init: U, f: fn(U, T) -> U) -> U where T: Clone, U: Clone {
+    self.fold(init, f)
+}
+
+/// True if at least one element satisfies `f`.
+///
+/// Transpiler-handled: emits `set.into_iter().any(|x| f(x))`.
+pub fn Set[T]::any(self, f: fn(T) -> Bool) -> Bool where T: Clone {
+    self.any(f)
+}
+
+/// True if every element satisfies `f`.
+///
+/// Transpiler-handled: emits `set.into_iter().all(|x| f(x))`.
+pub fn Set[T]::all(self, f: fn(T) -> Bool) -> Bool where T: Clone {
+    self.all(f)
 }

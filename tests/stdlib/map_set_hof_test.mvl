@@ -1,0 +1,185 @@
+// tests/stdlib/map_set_hof_test.mvl — Map and Set higher-order function tests
+//
+// Verifies runtime behavior of Map/Set HOF methods: map_values, filter, fold, any, all.
+// Run with:  mvl test tests/stdlib/
+
+use std.collections.{Map}
+
+fn is_big(x: Int) -> Bool { x > 10 }
+fn double(x: Int) -> Int { x * 2 }
+
+// ── Map.map_values ──────────────────────────────────────────────────────────
+
+test fn map_map_values_doubles() -> Unit {
+    let m: Map[String, Int] = {"a": 1, "b": 2, "c": 3};
+    let m2: Map[String, Int] = m.map_values(|v: Int| v * 2);
+    assert_eq(m2.len(), 3)
+}
+
+test fn map_map_values_check_value() -> Unit {
+    let m: Map[String, Int] = {"x": 5, "y": 10};
+    let m2: Map[String, Int] = m.map_values(double);
+    assert_eq(m2.len(), 2);
+    match m2.get("x") {
+        Some(v) => assert_eq(v, 10),
+        None    => assert(false),
+    }
+}
+
+test fn map_map_values_empty() -> Unit {
+    let m: Map[String, Int] = Map::new();
+    let m2: Map[String, Int] = m.map_values(|v: Int| v + 1);
+    assert_eq(m2.len(), 0)
+}
+
+// ── Map.filter ──────────────────────────────────────────────────────────────
+
+test fn map_filter_keeps_big_values() -> Unit {
+    let m: Map[String, Int] = {"a": 20, "b": 5, "c": 30, "d": 3};
+    let m2: Map[String, Int] = m.filter(|v: Int| v > 10);
+    assert_eq(m2.len(), 2);
+    assert_eq(m2.contains_key("a"), true);
+    assert_eq(m2.contains_key("b"), false)
+}
+
+test fn map_filter_empty() -> Unit {
+    let m: Map[String, Int] = Map::new();
+    let m2: Map[String, Int] = m.filter(|v: Int| v > 0);
+    assert_eq(m2.len(), 0)
+}
+
+test fn map_filter_none_match() -> Unit {
+    let m: Map[String, Int] = {"a": 1, "b": 2};
+    let m2: Map[String, Int] = m.filter(|v: Int| v > 100);
+    assert_eq(m2.len(), 0)
+}
+
+test fn map_filter_all_match() -> Unit {
+    let m: Map[String, Int] = {"a": 1, "b": 2};
+    let m2: Map[String, Int] = m.filter(|v: Int| v > 0);
+    assert_eq(m2.len(), 2)
+}
+
+// ── Map.fold ────────────────────────────────────────────────────────────────
+
+test fn map_fold_sum_values() -> Unit {
+    let m: Map[String, Int] = {"a": 1, "b": 2, "c": 3};
+    assert_eq(m.fold(0, |acc: Int, v: Int| acc + v), 6)
+}
+
+test fn map_fold_empty() -> Unit {
+    let m: Map[String, Int] = Map::new();
+    assert_eq(m.fold(0, |acc: Int, v: Int| acc + v), 0)
+}
+
+test fn map_fold_count_big() -> Unit {
+    let m: Map[String, Int] = {"a": 20, "b": 5, "c": 30};
+    assert_eq(m.fold(0, |acc: Int, v: Int| if v > 10 { acc + 1 } else { acc }), 2)
+}
+
+// ── Map.any / Map.all ───────────────────────────────────────────────────────
+
+test fn map_any_found() -> Unit {
+    let m: Map[String, Int] = {"a": 5, "b": 20, "c": 3};
+    assert_eq(m.any(is_big), true)
+}
+
+test fn map_any_not_found() -> Unit {
+    let m: Map[String, Int] = {"a": 1, "b": 2};
+    assert_eq(m.any(is_big), false)
+}
+
+test fn map_any_empty() -> Unit {
+    let m: Map[String, Int] = Map::new();
+    assert_eq(m.any(is_big), false)
+}
+
+test fn map_all_true() -> Unit {
+    let m: Map[String, Int] = {"a": 20, "b": 30, "c": 40};
+    assert_eq(m.all(is_big), true)
+}
+
+test fn map_all_false() -> Unit {
+    let m: Map[String, Int] = {"a": 20, "b": 5, "c": 30};
+    assert_eq(m.all(is_big), false)
+}
+
+test fn map_all_empty() -> Unit {
+    let m: Map[String, Int] = Map::new();
+    assert_eq(m.all(is_big), true)
+}
+
+// ── Set.map ─────────────────────────────────────────────────────────────────
+
+test fn set_map_doubles() -> Unit {
+    let s: Set[Int] = {1, 2, 3};
+    let s2: Set[Int] = s.map(|x: Int| x * 2);
+    assert_eq(s2.len(), 3);
+    assert_eq(s2.contains(2), true);
+    assert_eq(s2.contains(6), true)
+}
+
+test fn set_map_with_fn_ref() -> Unit {
+    let s: Set[Int] = {1, 2, 3};
+    let s2: Set[Int] = s.map(double);
+    assert_eq(s2.contains(4), true);
+    assert_eq(s2.contains(6), true)
+}
+
+test fn set_map_collapses_duplicates() -> Unit {
+    let s: Set[Int] = {1, 2, 3, 4};
+    let s2: Set[Int] = s.map(|x: Int| x % 2);
+    // 1%2=1, 2%2=0, 3%2=1, 4%2=0 → {0, 1}
+    assert_eq(s2.len(), 2)
+}
+
+// ── Set.filter ──────────────────────────────────────────────────────────────
+
+test fn set_filter_keeps_big() -> Unit {
+    let s: Set[Int] = {5, 15, 25, 3, 8};
+    let s2: Set[Int] = s.filter(|x: Int| x > 10);
+    assert_eq(s2.len(), 2);
+    assert_eq(s2.contains(15), true);
+    assert_eq(s2.contains(5), false)
+}
+
+test fn set_filter_none_match() -> Unit {
+    let s: Set[Int] = {1, 2, 3};
+    let s2: Set[Int] = s.filter(|x: Int| x > 100);
+    assert_eq(s2.len(), 0)
+}
+
+test fn set_filter_with_fn_ref() -> Unit {
+    let s: Set[Int] = {5, 20, 3, 40};
+    let s2: Set[Int] = s.filter(is_big);
+    assert_eq(s2.len(), 2)
+}
+
+// ── Set.fold ────────────────────────────────────────────────────────────────
+
+test fn set_fold_sum() -> Unit {
+    let s: Set[Int] = {1, 2, 3};
+    assert_eq(s.fold(0, |acc: Int, x: Int| acc + x), 6)
+}
+
+// ── Set.any / Set.all ───────────────────────────────────────────────────────
+
+test fn set_any_found() -> Unit {
+    let s: Set[Int] = {5, 20, 3};
+    assert_eq(s.any(is_big), true)
+}
+
+test fn set_any_not_found() -> Unit {
+    let s: Set[Int] = {1, 2, 3};
+    assert_eq(s.any(is_big), false)
+}
+
+test fn set_all_true() -> Unit {
+    let s: Set[Int] = {20, 30, 40};
+    assert_eq(s.all(is_big), true)
+}
+
+test fn set_all_false() -> Unit {
+    let s: Set[Int] = {20, 5, 30};
+    assert_eq(s.all(is_big), false)
+}
