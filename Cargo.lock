@@ -700,7 +700,7 @@ dependencies = [
 
 [[package]]
 name = "mvl"
-version = "0.180.0"
+version = "0.183.0"
 dependencies = [
  "criterion",
  "libc",
@@ -723,6 +723,7 @@ dependencies = [
 name = "mvl_runtime_c"
 version = "0.1.0"
 dependencies = [
+ "crossbeam-deque",
  "libc",
  "mvl_runtime",
 ]

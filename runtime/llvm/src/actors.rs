@@ -1,69 +1,71 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Schuberg Philis
 
-//! Actor runtime for the LLVM backend.
+//! Actor runtime for the LLVM backend — work-stealing scheduler (#1226).
 //!
-//! Provides C-ABI functions for actor lifecycle: spawn, send, drop, join_all.
+//! Replaces the Phase 1 thread-per-actor model with a task-per-message
+//! work-stealing scheduler:
 //!
-//! Each actor is a std::thread running a message-dispatch loop. The actor state
-//! is a heap-allocated raw byte array; the dispatch function is a function pointer
-//! with the signature `fn(state_ptr: *mut u8, disc: i64, args: *const i64)`.
+//! - N worker threads (one per hardware thread) share a global injector queue.
+//! - Each actor is an `ActorCell` holding its mailbox, state, and scheduling flag.
+//! - Sending a message schedules the actor on the injector (if not already queued).
+//! - Workers pop or steal `Arc<ActorCell>` tasks, dispatch one message per slot,
+//!   and re-schedule the actor if its mailbox still has messages.
 //!
-//! # Message protocol
+//! This enables ~100K actors with no OS-thread-per-actor overhead.
 //!
-//! - `disc` (discriminant): which public behavior to invoke (0-based index in
-//!   declaration order)
-//! - `args`: array of `i64` values, one per behavior parameter (all MVL scalar
-//!   types map to `i64` at the LLVM ABI level; pointer types pass as pointer-width
-//!   integers)
+//! # Message protocol (unchanged from Phase 1)
+//!
+//! - `disc` (discriminant): which public behavior to invoke (0-based index)
+//! - `args`: packed `i64` array — all MVL scalar types map to `i64` at the C ABI
 //!
 //! # System discriminants (Phase 9, #1177)
 //!
 //! Negative discriminants are reserved for system messages:
-//! - `-1` = Shutdown — actor thread exits the dispatch loop
+//! - `-1` = Shutdown — actor drains remaining messages then exits
 //! - `-2` = ExitSignal — linked actor died (args[0]=from_id, args[1]=reason)
 //! - `-3` = DownSignal — monitored actor died (args[0]=from_id, args[1]=reason, args[2]=monitor_id)
 //!
-//! These are handled in the dispatch loop before calling the user dispatch function.
-//!
 //! # Mailbox configuration (#1127)
 //!
-//! `mvl_actor_spawn` accepts `capacity` and `policy` parameters:
-//! - `capacity > 0`: bounded sync_channel(capacity)
-//! - `capacity <= 0`: unbounded channel (grows without limit)
-//! - `policy = 0`: DropNewest — `try_send`, drop new message when full
-//! - `policy = 1`: Block — `send`, block the sender until space is available
+//! - `capacity > 0`: bounded (drop-newest when full)
+//! - `capacity <= 0`: unbounded
+//! - `policy = 1` (Block) degrades to DropNewest in Phase 2; backpressure is Phase 3
 //!
-//! # Shutdown protocol (#1124)
+//! # Shutdown protocol
 //!
-//! `mvl_actor_join_all()` is emitted at the end of `fn main()` by the LLVM
-//! backend. It:
-//! 1. Drains the global actor registry (all spawned handles + join handles)
-//! 2. Drops each live `MvlActorHandle` — closing the sender
-//! 3. Joins all actor threads (which drain buffered messages then exit)
+//! `mvl_actor_join_all()` is emitted at end of `fn main()` by the LLVM backend:
+//! 1. Clears the link/monitor registry (releases all `Arc<ActorCell>` refs there)
+//! 2. Sends `DISC_SHUTDOWN` to every live actor cell
+//! 3. Spin-waits until every cell is idle (`scheduled = false`)
+//! 4. Signals worker threads to exit and joins them
 //!
-//! `mvl_actor_drop` marks the handle as consumed in the registry (setting its
-//! slot to `None`) to prevent double-free when `mvl_actor_join_all` runs later.
-//!
-//! Phase 8, #696. Shutdown fix: #1124. Mailbox config: #1127. Links: #1177.
+//! Phase 8, #696. Shutdown: #1124. Mailbox config: #1127. Links: #1177.
+//! Yield points: #1181. Work-stealing scheduler: #1226.
 
-use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, HashSet};
+use std::cell::Cell;
+use std::cell::UnsafeCell;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{mpsc, Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 
+use crossbeam_deque::{Injector, Steal, Stealer, Worker};
+
+// ── Constants ─────────────────────────────────────────────────────────────
+
 /// Maximum number of `i64` arguments a single behavior call can carry.
-/// Behaviors with more parameters than this are not yet supported.
 const MAX_ARGS: usize = 8;
 
-/// System discriminant: shut down the actor.
 const DISC_SHUTDOWN: i64 = -1;
-/// System discriminant: exit signal from a linked actor.
 const DISC_EXIT_SIGNAL: i64 = -2;
-/// System discriminant: down signal from a monitored actor.
 const DISC_DOWN_SIGNAL: i64 = -3;
+
+/// Erlang-default reduction budget per scheduling slot (#1181).
+const REDUCTION_LIMIT: u64 = 4000;
+
+// ── Message ────────────────────────────────────────────────────────────────
 
 /// An in-flight actor message: behavior discriminant + packed i64 arguments.
 struct MvlMsg {
@@ -71,97 +73,257 @@ struct MvlMsg {
     args: [i64; MAX_ARGS],
 }
 
-/// Typed mailbox sender — captures both channel type and overflow policy (#1127).
-enum MvlSender {
-    /// Bounded channel, drop-newest policy: `try_send` (fire-and-forget).
-    BoundedDrop(mpsc::SyncSender<MvlMsg>),
-    /// Bounded channel, blocking policy: `send` (blocks sender when full).
-    BoundedBlock(mpsc::SyncSender<MvlMsg>),
-    /// Unbounded channel: `send` never blocks (grows without limit).
-    Unbounded(mpsc::Sender<MvlMsg>),
-}
+// ── C-ABI dispatch function ────────────────────────────────────────────────
 
-impl Clone for MvlSender {
-    fn clone(&self) -> Self {
-        match self {
-            MvlSender::BoundedDrop(tx) => MvlSender::BoundedDrop(tx.clone()),
-            MvlSender::BoundedBlock(tx) => MvlSender::BoundedBlock(tx.clone()),
-            MvlSender::Unbounded(tx) => MvlSender::Unbounded(tx.clone()),
-        }
-    }
-}
-
-impl MvlSender {
-    fn send_msg(&self, msg: MvlMsg) {
-        match self {
-            MvlSender::BoundedDrop(tx) => {
-                let _ = tx.try_send(msg);
-            }
-            MvlSender::BoundedBlock(tx) => {
-                let _ = tx.send(msg);
-            }
-            MvlSender::Unbounded(tx) => {
-                let _ = tx.send(msg);
-            }
-        }
-    }
-}
-
-/// Opaque actor handle allocated on the heap.
-///
-/// The LLVM backend stores this as a `ptr` (opaque pointer) in LLVM IR.
-/// Callers must treat the returned pointer as opaque and only pass it to
-/// [`mvl_actor_send`] and [`mvl_actor_drop`].
-pub struct MvlActorHandle {
-    sender: MvlSender,
-    actor_id: u64,
-}
-
-/// C-ABI dispatch function pointer type.
-///
 /// ```c
 /// void dispatch(void *state, int64_t disc, int64_t const *args);
 /// ```
 type DispatchFn = unsafe extern "C" fn(*mut u8, i64, *const i64);
 
-// Global registry of spawned actors.
-//
-// Each entry is `(Option<handle_ptr as usize>, JoinHandle<()>)`.
-// The `Option` is set to `None` when the handle has been explicitly freed
-// via `mvl_actor_drop`, preventing double-free in `mvl_actor_join_all`.
-//
-// Uses `thread_local!` because LLVM-generated programs spawn actors only from
-// the main thread. `mvl_actor_join_all` is also called from the main thread,
-// so both access the same TLS slot.
-thread_local! {
-    static ACTOR_REGISTRY: RefCell<Vec<(Option<usize>, JoinHandle<()>)>> =
-        const { RefCell::new(Vec::new()) };
+// ── Actor cell ─────────────────────────────────────────────────────────────
+
+/// Per-actor execution unit shared between the handle, link registry, and scheduler.
+///
+/// Only one worker processes an actor at a time — enforced by the `scheduled`
+/// `AtomicBool` used as a single-owner token.  This makes accessing `state`
+/// without a lock safe: the worker holding `scheduled = true` is the exclusive
+/// reader/writer of the state bytes.
+struct ActorCell {
+    dispatch: DispatchFn,
+    /// Actor state bytes.  Protected by the `scheduled` single-owner invariant:
+    /// only the worker currently holding `scheduled = true` may touch this.
+    state: UnsafeCell<Vec<u8>>,
+    /// Pending messages (multiple producers → `Mutex`).
+    mailbox: Mutex<VecDeque<MvlMsg>>,
+    /// True while this cell is queued in a worker or the injector.
+    scheduled: AtomicBool,
+    actor_id: u64,
+    /// Bounded mailbox capacity (0 = unbounded).  Messages are silently dropped
+    /// when the mailbox is full (DropNewest policy; Block degrades here in Phase 2).
+    capacity: usize,
+    /// Raw pointer to the owning `MvlActorHandle` — for `mvl_actor_self()`.
+    /// Cleared to 0 by `mvl_actor_drop` / `mvl_actor_join_all`.
+    handle_ptr: AtomicUsize,
+}
+
+// Safety: Only one worker touches `state` at a time (scheduled AtomicBool token).
+// `dispatch` is a C function pointer — always `Send + Sync`.
+unsafe impl Send for ActorCell {}
+unsafe impl Sync for ActorCell {}
+
+impl ActorCell {
+    /// Push a message respecting capacity.  Returns `false` if dropped.
+    fn push_msg(&self, msg: MvlMsg) -> bool {
+        let mut mb = self.mailbox.lock().unwrap_or_else(|p| p.into_inner());
+        if self.capacity > 0 && mb.len() >= self.capacity {
+            return false; // DropNewest
+        }
+        mb.push_back(msg);
+        true
+    }
+
+    /// Schedule this cell on the global injector if not already queued.
+    fn schedule(self: &Arc<Self>) {
+        if !self.scheduled.swap(true, Ordering::AcqRel) {
+            global_scheduler().injector.push(Arc::clone(self));
+        }
+    }
+}
+
+// ── Work-stealing scheduler ────────────────────────────────────────────────
+
+/// Global N-thread work-stealing scheduler.
+struct GlobalScheduler {
+    injector: Injector<Arc<ActorCell>>,
+    workers: Mutex<Vec<JoinHandle<()>>>,
+    /// Set to `true` by `mvl_actor_join_all` to signal workers to exit.
+    shutdown: AtomicBool,
+}
+
+static GLOBAL_SCHED: OnceLock<GlobalScheduler> = OnceLock::new();
+
+fn global_scheduler() -> &'static GlobalScheduler {
+    GLOBAL_SCHED.get_or_init(|| {
+        let n = thread::available_parallelism()
+            .map(|p| p.get())
+            .unwrap_or(4);
+
+        let local_workers: Vec<Worker<Arc<ActorCell>>> =
+            (0..n).map(|_| Worker::new_fifo()).collect();
+        let stealers: Vec<Stealer<Arc<ActorCell>>> =
+            local_workers.iter().map(|w| w.stealer()).collect();
+
+        let join_handles: Vec<JoinHandle<()>> = local_workers
+            .into_iter()
+            .map(|local| {
+                let my_stealers = stealers.clone();
+                thread::spawn(move || worker_loop(local, my_stealers))
+            })
+            .collect();
+
+        GlobalScheduler {
+            injector: Injector::new(),
+            workers: Mutex::new(join_handles),
+            shutdown: AtomicBool::new(false),
+        }
+    })
+}
+
+// ── Worker thread ──────────────────────────────────────────────────────────
+
+fn worker_loop(local: Worker<Arc<ActorCell>>, stealers: Vec<Stealer<Arc<ActorCell>>>) {
+    let sched = global_scheduler();
+    loop {
+        match pop_task(&local, sched, &stealers) {
+            Some(cell) => process_one_message(cell, &local),
+            None => {
+                if sched.shutdown.load(Ordering::Acquire) {
+                    break;
+                }
+                thread::yield_now();
+            }
+        }
+    }
+}
+
+/// Try to obtain a task: local queue → injector (batch) → sibling steal (batch).
+fn pop_task(
+    local: &Worker<Arc<ActorCell>>,
+    sched: &GlobalScheduler,
+    stealers: &[Stealer<Arc<ActorCell>>],
+) -> Option<Arc<ActorCell>> {
+    // 1. Local queue (cheapest).
+    if let Some(t) = local.pop() {
+        return Some(t);
+    }
+    // 2. Global injector — batch-steal for cache efficiency.
+    loop {
+        match sched.injector.steal_batch_and_pop(local) {
+            Steal::Success(t) => return Some(t),
+            Steal::Empty => break,
+            Steal::Retry => {}
+        }
+    }
+    // 3. Steal from sibling workers.
+    for stealer in stealers {
+        loop {
+            match stealer.steal_batch_and_pop(local) {
+                Steal::Success(t) => return Some(t),
+                Steal::Empty => break,
+                Steal::Retry => {}
+            }
+        }
+    }
+    None
+}
+
+/// Dispatch one message from `cell`, then re-schedule or go idle.
+fn process_one_message(cell: Arc<ActorCell>, local: &Worker<Arc<ActorCell>>) {
+    // Pop one message (brief lock).
+    let msg = cell
+        .mailbox
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .pop_front();
+    let msg = match msg {
+        Some(m) => m,
+        None => {
+            // Spurious schedule: mailbox empty, release the scheduled token.
+            cell.scheduled.store(false, Ordering::Release);
+            return;
+        }
+    };
+
+    // Set per-task thread-locals (for mvl_actor_self / mvl_yield_check).
+    CURRENT_ACTOR_PTR.with(|c| c.set(cell.handle_ptr.load(Ordering::Acquire)));
+    CURRENT_ACTOR_ID.with(|c| c.set(cell.actor_id));
+    ACTOR_REDUCTIONS.with(|c| c.set(REDUCTION_LIMIT));
+
+    // ── System discriminants ──────────────────────────────────────────────
+
+    if msg.disc == DISC_SHUTDOWN {
+        // Drain mailbox, release token, notify links/monitors.
+        cell.mailbox
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clear();
+        cell.scheduled.store(false, Ordering::Release);
+        process_actor_exit(cell.actor_id, 2); // Killed
+        return;
+    }
+
+    // ExitSignal / DownSignal: consumed but not dispatched to user code (#1177 TODO).
+    // The LLVM backend has no user-visible signal-handling mechanism yet.
+    // Note: on bounded mailboxes these signals may be silently lost when push_msg
+    // returns false (mailbox full) — this is a known limitation.
+
+    if msg.disc >= 0 {
+        // ── User message: call the actor's dispatch function ──────────────
+        // Safety: `state` is only accessed here, and only one worker holds the
+        // `scheduled = true` token, so there is no concurrent access.
+        let state_ptr = unsafe { (*cell.state.get()).as_mut_ptr() };
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            unsafe { (cell.dispatch)(state_ptr, msg.disc, msg.args.as_ptr()) };
+        }));
+        if result.is_err() {
+            // Actor panicked: drain and exit.
+            cell.mailbox
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clear();
+            cell.scheduled.store(false, Ordering::Release);
+            process_actor_exit(cell.actor_id, 1); // Panic
+            return;
+        }
+    }
+
+    // ── Re-schedule or go idle ────────────────────────────────────────────
+
+    let has_more = !cell
+        .mailbox
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .is_empty();
+    if has_more {
+        // Stay on the local queue for immediate re-processing.
+        local.push(cell);
+    } else {
+        // Release the scheduled token.
+        cell.scheduled.store(false, Ordering::Release);
+        // Guard against the producer-race window: a producer may have pushed a
+        // message between our `is_empty` check and `scheduled.store(false)`.
+        // If they saw `scheduled = false` they did NOT schedule the cell, so we
+        // must re-schedule it ourselves.
+        if !cell
+            .mailbox
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .is_empty()
+            && !cell.scheduled.swap(true, Ordering::AcqRel)
+        {
+            local.push(cell);
+        }
+    }
 }
 
 // ── Link/monitor registry (Phase 9, #1177) ───────────────────────────────
 
-/// Unique actor identifier, assigned at spawn time.
 type ActorId = u64;
-/// Unique monitor identifier.
 type MonitorId = u64;
 
 static NEXT_ACTOR_ID: AtomicU64 = AtomicU64::new(1);
 static NEXT_MONITOR_ID: AtomicU64 = AtomicU64::new(1);
 
 struct ActorEntry {
-    /// Cloned sender for injecting system messages.
-    sender: MvlSender,
-    /// Whether this actor traps exit signals.
+    /// Cell reference for injecting system messages without going through a handle.
+    cell: Arc<ActorCell>,
     traps_exit: bool,
 }
 
 struct LinkRegistry {
     actors: HashMap<ActorId, ActorEntry>,
-    /// Bidirectional links.
     links: HashMap<ActorId, HashSet<ActorId>>,
-    /// Monitors: target → list of (monitor_id, watcher_id).
     monitors: HashMap<ActorId, Vec<(MonitorId, ActorId)>>,
-    /// Reverse index: monitor_id → target.
     monitor_targets: HashMap<MonitorId, ActorId>,
 }
 
@@ -183,12 +345,11 @@ fn global_link_registry() -> &'static Mutex<LinkRegistry> {
 
 /// Process an actor's death: notify linked actors and monitors.
 ///
-/// Collects all notification targets and clones their senders under the lock,
-/// then sends all messages outside the lock to avoid deadlock with `BoundedBlock`
-/// senders that may block when the target's mailbox is full.
+/// Collects target cells under the lock, then injects messages outside the lock
+/// to avoid deadlock with bounded-mailbox actors.
 fn process_actor_exit(dead_id: ActorId, reason: i64) {
-    // Phase 1: collect targets and clone their senders under the lock.
-    let (kill_senders, exit_senders, down_senders) = {
+    // Phase 1: collect notification targets under the lock.
+    let (kill_cells, exit_cells, down_cells) = {
         let mut reg = global_link_registry()
             .lock()
             .unwrap_or_else(|p| p.into_inner());
@@ -200,81 +361,109 @@ fn process_actor_exit(dead_id: ActorId, reason: i64) {
             }
         }
 
-        let mut kill_senders: Vec<MvlSender> = Vec::new();
-        let mut exit_senders: Vec<(MvlSender, i64)> = Vec::new();
+        let mut kill_cells: Vec<Arc<ActorCell>> = Vec::new();
+        let mut exit_cells: Vec<(Arc<ActorCell>, i64)> = Vec::new();
         for peer in linked {
             if let Some(entry) = reg.actors.get(&peer) {
                 if entry.traps_exit {
-                    exit_senders.push((entry.sender.clone(), reason));
+                    exit_cells.push((Arc::clone(&entry.cell), reason));
                 } else {
-                    kill_senders.push(entry.sender.clone());
+                    kill_cells.push(Arc::clone(&entry.cell));
                 }
             }
         }
 
         let monitored = reg.monitors.remove(&dead_id).unwrap_or_default();
-        let mut down_senders: Vec<(MvlSender, MonitorId)> = Vec::new();
+        let mut down_cells: Vec<(Arc<ActorCell>, MonitorId)> = Vec::new();
         for (mid, watcher) in monitored {
             reg.monitor_targets.remove(&mid);
             if let Some(entry) = reg.actors.get(&watcher) {
-                down_senders.push((entry.sender.clone(), mid));
+                down_cells.push((Arc::clone(&entry.cell), mid));
             }
         }
 
         reg.actors.remove(&dead_id);
-
-        (kill_senders, exit_senders, down_senders)
+        (kill_cells, exit_cells, down_cells)
     };
 
-    // Phase 2: send all messages outside the lock — avoids deadlock with
-    // BoundedBlock senders that may block when the target's mailbox is full.
-    for sender in kill_senders {
-        sender.send_msg(MvlMsg {
+    // Phase 2: inject messages outside the lock.
+    for cell in kill_cells {
+        if cell.push_msg(MvlMsg {
             disc: DISC_SHUTDOWN,
-            args: [0i64; MAX_ARGS],
-        });
+            args: [0; MAX_ARGS],
+        }) {
+            cell.schedule();
+        }
     }
-
-    for (sender, exit_reason) in exit_senders {
+    for (cell, exit_reason) in exit_cells {
         let mut args = [0i64; MAX_ARGS];
         args[0] = dead_id as i64;
         args[1] = exit_reason;
-        sender.send_msg(MvlMsg {
+        if cell.push_msg(MvlMsg {
             disc: DISC_EXIT_SIGNAL,
             args,
-        });
+        }) {
+            cell.schedule();
+        }
     }
-
-    for (sender, mid) in down_senders {
+    for (cell, mid) in down_cells {
         let mut args = [0i64; MAX_ARGS];
         args[0] = dead_id as i64;
         args[1] = reason;
         args[2] = mid as i64;
-        sender.send_msg(MvlMsg {
+        if cell.push_msg(MvlMsg {
             disc: DISC_DOWN_SIGNAL,
             args,
-        });
+        }) {
+            cell.schedule();
+        }
     }
+}
+
+// ── Global actor registry ─────────────────────────────────────────────────
+
+/// Tracks every spawned actor: `(Option<handle_raw_ptr>, Arc<ActorCell>)`.
+/// `Option` is `None` when the handle has been explicitly dropped via `mvl_actor_drop`.
+fn global_actor_registry() -> &'static Mutex<Vec<(Option<usize>, Arc<ActorCell>)>> {
+    static REGISTRY: OnceLock<Mutex<Vec<(Option<usize>, Arc<ActorCell>)>>> = OnceLock::new();
+    REGISTRY.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+// ── Thread-local context ──────────────────────────────────────────────────
+
+thread_local! {
+    /// Raw pointer to the current task's `MvlActorHandle` (for `mvl_actor_self()`).
+    /// Set by the worker before each dispatch; 0 outside actor context.
+    static CURRENT_ACTOR_PTR: Cell<usize> = const { Cell::new(0) };
+    static CURRENT_ACTOR_ID: Cell<u64> = const { Cell::new(0) };
+    /// Remaining reductions for cooperative scheduling (#1181).
+    static ACTOR_REDUCTIONS: Cell<u64> = const { Cell::new(REDUCTION_LIMIT) };
+}
+
+// ── Public handle type ────────────────────────────────────────────────────
+
+/// Opaque actor handle allocated on the heap.
+///
+/// The LLVM backend stores this as a `ptr` (opaque pointer) in LLVM IR.
+/// Only pass to [`mvl_actor_send`], [`mvl_actor_drop`], [`mvl_actor_get_id`],
+/// [`mvl_link`], [`mvl_unlink`], [`mvl_monitor`], [`mvl_set_trap_exit`].
+pub struct MvlActorHandle {
+    cell: Arc<ActorCell>,
+    actor_id: u64,
 }
 
 // ── Spawn ──────────────────────────────────────────────────────────────────
 
-/// Spawn a new actor thread and return an opaque actor handle.
+/// Spawn a new actor and return an opaque handle.
 ///
 /// # Parameters
 ///
-/// - `dispatch`: the actor's behavior dispatch function
-///   (generated by the MVL LLVM backend from `actor` declarations)
+/// - `dispatch`: behavior dispatch function (generated by the MVL LLVM backend)
 /// - `state_ptr`: pointer to the initial actor state struct
-/// - `state_size`: byte size of the state struct (used to heap-copy the state)
-/// - `capacity`: mailbox capacity — `> 0` for bounded, `<= 0` for unbounded (#1127)
-/// - `policy`: overflow policy — `0` = DropNewest (`try_send`), `1` = Block (`send`) (#1127)
-///
-/// # Returns
-///
-/// An opaque `*mut MvlActorHandle`, or null on spawn failure.
-/// The caller owns the returned pointer and must eventually call [`mvl_actor_drop`]
-/// or [`mvl_actor_join_all`] to release it.
+/// - `state_size`: byte size of the state struct (deep-copied)
+/// - `capacity`: mailbox bound — `> 0` for bounded, `<= 0` for unbounded (#1127)
+/// - `policy`: overflow policy — `0` = DropNewest, `1` = Block (degrades to
+///   DropNewest in Phase 2; backpressure scheduling is Phase 3)
 ///
 /// # Safety
 ///
@@ -287,31 +476,34 @@ pub unsafe extern "C" fn mvl_actor_spawn(
     capacity: i64,
     policy: i64,
 ) -> *mut u8 {
-    // Guard: reject negative sizes and null state pointer.
     if state_size < 0 || state_ptr.is_null() {
         return std::ptr::null_mut();
     }
     let size = state_size as usize;
-    // Deep-copy the initial state so the actor thread fully owns it.
-    let mut state: Vec<u8> = std::slice::from_raw_parts(state_ptr, size).to_vec();
-
-    // Build the typed sender based on capacity and policy (#1127).
-    let (sender, rx): (MvlSender, _) = if capacity > 0 {
-        let cap = capacity as usize;
-        let (tx, rx) = mpsc::sync_channel::<MvlMsg>(cap);
-        let sender = if policy == 1 {
-            MvlSender::BoundedBlock(tx)
-        } else {
-            MvlSender::BoundedDrop(tx)
-        };
-        (sender, rx)
-    } else {
-        let (tx, rx) = mpsc::channel::<MvlMsg>();
-        (MvlSender::Unbounded(tx), rx)
-    };
-
-    // Assign unique actor ID (#1177).
+    let state: Vec<u8> = std::slice::from_raw_parts(state_ptr, size).to_vec();
     let actor_id = NEXT_ACTOR_ID.fetch_add(1, Ordering::Relaxed);
+    let cap = if capacity > 0 { capacity as usize } else { 0 };
+    let _ = policy; // Block degrades to DropNewest in Phase 2
+
+    let cell = Arc::new(ActorCell {
+        dispatch,
+        state: UnsafeCell::new(state),
+        mailbox: Mutex::new(VecDeque::new()),
+        scheduled: AtomicBool::new(false),
+        actor_id,
+        capacity: cap,
+        handle_ptr: AtomicUsize::new(0), // filled after handle is allocated below
+    });
+
+    let handle = Box::new(MvlActorHandle {
+        cell: Arc::clone(&cell),
+        actor_id,
+    });
+    let handle_ptr = Box::into_raw(handle);
+
+    // Store the handle's address back into the cell for mvl_actor_self().
+    cell.handle_ptr
+        .store(handle_ptr as usize, Ordering::Release);
 
     // Register in link/monitor registry.
     {
@@ -321,57 +513,25 @@ pub unsafe extern "C" fn mvl_actor_spawn(
         reg.actors.insert(
             actor_id,
             ActorEntry {
-                sender: sender.clone(),
+                cell: Arc::clone(&cell),
                 traps_exit: false,
             },
         );
     }
 
-    let handle = Box::new(MvlActorHandle { sender, actor_id });
-    let handle_ptr = Box::into_raw(handle);
+    // Register in actor registry.
+    global_actor_registry()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .push((Some(handle_ptr as usize), cell));
 
-    let handle_addr = handle_ptr as usize;
-    let join_handle = thread::spawn(move || {
-        CURRENT_ACTOR_HANDLE.with(|cell| cell.set(handle_addr));
-        CURRENT_ACTOR_ID.with(|cell| cell.set(actor_id));
-        ACTOR_REDUCTIONS.with(|cell| cell.set(REDUCTION_LIMIT));
-        let state_ptr = state.as_mut_ptr();
-
-        let result = catch_unwind(AssertUnwindSafe(|| {
-            while let Ok(msg) = rx.recv() {
-                // System discriminants are handled here, not in user dispatch.
-                if msg.disc == DISC_SHUTDOWN {
-                    return false; // shutdown requested
-                }
-                // TODO(#1177): ExitSignal and DownSignal are silently discarded
-                // here regardless of the `traps_exit` flag. The LLVM backend does
-                // not yet have a mechanism for user code to handle these signals
-                // (unlike the Rust backend which has typed enum variants). The
-                // actor survives, but the signal data (from_id, reason) is lost.
-                if msg.disc < 0 {
-                    continue;
-                }
-                dispatch(state_ptr, msg.disc, msg.args.as_ptr());
-            }
-            true // normal exit
-        }));
-
-        let reason: i64 = match result {
-            Ok(true) => 0,  // Normal
-            Ok(false) => 2, // Killed
-            Err(_) => 1,    // Panic
-        };
-        process_actor_exit(actor_id, reason);
-    });
-
-    // Register (handle_ptr, JoinHandle) so mvl_actor_join_all can drain and join.
-    ACTOR_REGISTRY.with(|r| {
-        r.borrow_mut()
-            .push((Some(handle_ptr as usize), join_handle));
-    });
+    // Ensure the scheduler (and its worker threads) is running.
+    let _ = global_scheduler();
 
     handle_ptr as *mut u8
 }
+
+// ── Send ───────────────────────────────────────────────────────────────────
 
 /// Send a behavior message to an actor (fire-and-forget).
 ///
@@ -385,6 +545,9 @@ pub unsafe extern "C" fn mvl_actor_send(handle: *mut u8, disc: i64, argc: i64, a
         return;
     }
     let actor = &*(handle as *const MvlActorHandle);
+    if argc < 0 {
+        return;
+    }
     let argc = (argc as usize).min(MAX_ARGS);
     let mut msg = MvlMsg {
         disc,
@@ -394,53 +557,23 @@ pub unsafe extern "C" fn mvl_actor_send(handle: *mut u8, disc: i64, argc: i64, a
         let src = std::slice::from_raw_parts(args, argc);
         msg.args[..argc].copy_from_slice(src);
     }
-    actor.sender.send_msg(msg);
+    if actor.cell.push_msg(msg) {
+        actor.cell.schedule();
+    }
 }
 
-// Thread-local that each actor thread sets to its own handle before processing messages.
-thread_local! {
-    static CURRENT_ACTOR_HANDLE: Cell<usize> = const { Cell::new(0) };
-    static CURRENT_ACTOR_ID: Cell<u64> = const { Cell::new(0) };
-    /// Remaining reductions for the current actor thread (#1181).
-    ///
-    /// Decremented by `mvl_yield_check()` at loop back-edges. When exhausted,
-    /// resets to `REDUCTION_LIMIT`. Work-stealing yield is Phase 2.
-    static ACTOR_REDUCTIONS: Cell<u64> = const { Cell::new(REDUCTION_LIMIT) };
-}
+// ── Self / ID ──────────────────────────────────────────────────────────────
 
-/// Number of reductions before cooperative yield — matches Erlang default (#1181).
-const REDUCTION_LIMIT: u64 = 4000;
-
-/// Cooperative yield check — called at loop back-edges by LLVM-compiled code (#1181).
+/// Return the current actor's own handle pointer.
 ///
-/// Decrements the per-actor reduction counter. When it reaches zero, resets to
-/// `REDUCTION_LIMIT`. Scheduling yield (work-stealing) is deferred to Phase 2.
-#[no_mangle]
-pub extern "C" fn mvl_yield_check() {
-    ACTOR_REDUCTIONS.with(|cell| {
-        let remaining = cell.get();
-        if remaining <= 1 {
-            cell.set(REDUCTION_LIMIT);
-            // TODO(#1181 Phase 2): suspend current actor fiber and switch to
-            // next ready actor in the work-stealing scheduler.
-        } else {
-            cell.set(remaining - 1);
-        }
-    });
-}
-
-/// Return the current actor's own handle (for passing `self` to other actors).
-///
-/// Must only be called from within a behavior dispatch. Returns null if called
-/// from a non-actor thread.
+/// Must only be called from within a behavior dispatch.
+/// Returns null if called from a non-actor context.
 #[no_mangle]
 pub extern "C" fn mvl_actor_self() -> *mut u8 {
-    CURRENT_ACTOR_HANDLE.with(|cell| cell.get() as *mut u8)
+    CURRENT_ACTOR_PTR.with(|c| c.get() as *mut u8)
 }
 
-/// Get the actor ID from an actor handle.
-///
-/// Returns 0 if the handle is null.
+/// Get the actor ID from a handle.  Returns 0 for a null handle.
 #[no_mangle]
 pub unsafe extern "C" fn mvl_actor_get_id(handle: *mut u8) -> i64 {
     if handle.is_null() {
@@ -450,50 +583,50 @@ pub unsafe extern "C" fn mvl_actor_get_id(handle: *mut u8) -> i64 {
     actor.actor_id as i64
 }
 
-/// Drop an actor handle, disconnecting the sender.
+// ── Drop ───────────────────────────────────────────────────────────────────
+
+/// Drop an actor handle.
 ///
-/// After this call the actor thread will drain any remaining messages and then exit.
-/// The handle is marked as consumed in the global registry so that
-/// [`mvl_actor_join_all`] does not double-free it.
+/// Clears the back-pointer in the cell (so `mvl_actor_self()` returns null
+/// from within this actor) and marks the registry entry as consumed so that
+/// `mvl_actor_join_all` does not double-free it.
 ///
 /// # Safety
 ///
-/// `handle` must be a valid pointer returned by [`mvl_actor_spawn`] and must not
-/// be used after this call.
+/// `handle` must be a valid pointer returned by [`mvl_actor_spawn`] and must
+/// not be used after this call.
 #[no_mangle]
 pub unsafe extern "C" fn mvl_actor_drop(handle: *mut u8) {
     if handle.is_null() {
         return;
     }
-    // Mark the registry entry as consumed so mvl_actor_join_all skips it.
-    ACTOR_REGISTRY.with(|r| {
-        let mut reg = r.borrow_mut();
-        if let Some(entry) = reg.iter_mut().find(|(p, _)| *p == Some(handle as usize)) {
-            entry.0 = None;
-        }
-    });
+    // Hold the registry lock for the entire drop sequence so that a concurrent
+    // mvl_actor_join_all cannot finish before this Box is freed, preventing
+    // a use-after-free of the handle_ptr value in worker thread-locals.
+    let mut reg = global_actor_registry()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    if let Some(entry) = reg.iter_mut().find(|(p, _)| *p == Some(handle as usize)) {
+        entry.0 = None;
+    }
+    let actor = &*(handle as *const MvlActorHandle);
+    actor.cell.handle_ptr.store(0, Ordering::Release);
     drop(Box::from_raw(handle as *mut MvlActorHandle));
 }
 
-/// Join all spawned actor threads, waiting for them to drain and exit.
+// ── Join all ───────────────────────────────────────────────────────────────
+
+/// Drain and shut down all actors, then join worker threads.
 ///
 /// Emitted at the end of `fn main()` by the LLVM backend (#1124).
 ///
-/// For each registered actor handle that has not been explicitly dropped:
-/// 1. Drops the `MvlActorHandle`, closing the `SyncSender`
-/// 2. The actor thread drains any buffered messages and exits
-///
-/// After dropping all handles, joins all actor threads.
-///
-/// The link/monitor registry (#1177) holds cloned senders for each actor
-/// (kill/exit/down notification entries). These must be dropped before
-/// joining, otherwise the channels remain open and actor threads block
-/// forever on `recv()`.
+/// 1. Clear the link/monitor registry — drops `Arc<ActorCell>` refs held there.
+/// 2. Drain the actor registry — send `DISC_SHUTDOWN` to every live cell.
+/// 3. Spin-wait until every cell is idle (`scheduled = false`).
+/// 4. Set `shutdown = true` and join all worker threads.
 #[no_mangle]
 pub extern "C" fn mvl_actor_join_all() {
-    // Clear all actor entries from the link registry — this drops the
-    // cloned senders held by ActorEntry structs, allowing channels to
-    // close so actor threads can exit.
+    // 1. Clear link/monitor registry.
     {
         let mut reg = global_link_registry()
             .lock()
@@ -503,27 +636,76 @@ pub extern "C" fn mvl_actor_join_all() {
         reg.monitors.clear();
         reg.monitor_targets.clear();
     }
-    let entries = ACTOR_REGISTRY.with(|r| r.borrow_mut().drain(..).collect::<Vec<_>>());
-    // Drop all live handles first — closes senders so actor threads will exit.
-    for (ptr_opt, _) in &entries {
-        if let Some(ptr) = ptr_opt {
-            unsafe {
-                drop(Box::from_raw(*ptr as *mut MvlActorHandle));
+
+    // 2. Drain actor registry; collect all cells and drop live handles.
+    let cells: Vec<Arc<ActorCell>> = global_actor_registry()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .drain(..)
+        .map(|(ptr_opt, cell)| {
+            if let Some(ptr) = ptr_opt {
+                cell.handle_ptr.store(0, Ordering::Release);
+                unsafe { drop(Box::from_raw(ptr as *mut MvlActorHandle)) };
             }
+            cell
+        })
+        .collect();
+
+    // 3. Push DISC_SHUTDOWN to every live actor cell.
+    for cell in &cells {
+        cell.mailbox
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .push_back(MvlMsg {
+                disc: DISC_SHUTDOWN,
+                args: [0; MAX_ARGS],
+            });
+        cell.schedule();
+    }
+
+    // 4. Spin-wait until all cells are idle (DISC_SHUTDOWN has been processed).
+    // Sleep 1ms per iteration rather than yield_now to avoid burning CPU and
+    // to give workers time to run on single-core hosts.
+    loop {
+        let all_idle = cells.iter().all(|c| !c.scheduled.load(Ordering::Acquire));
+        if all_idle {
+            break;
+        }
+        thread::sleep(std::time::Duration::from_millis(1));
+    }
+
+    // 5. Signal workers to stop, then join them.
+    if let Some(sched) = GLOBAL_SCHED.get() {
+        sched.shutdown.store(true, Ordering::Release);
+        let mut handles = sched.workers.lock().unwrap_or_else(|p| p.into_inner());
+        for jh in handles.drain(..) {
+            let _ = jh.join();
         }
     }
-    // Join all actor threads.
-    for (_, jh) in entries {
-        let _ = jh.join();
-    }
+}
+
+// ── Reduction-based cooperative yield (#1181) ─────────────────────────────
+
+/// Cooperative yield check — inserted at loop back-edges by the LLVM compiler.
+///
+/// Decrements the per-task reduction budget.  When exhausted, resets to
+/// `REDUCTION_LIMIT`.  The work-stealing scheduler takes over naturally: when
+/// the worker finishes dispatching this message it pops the next ready actor.
+#[no_mangle]
+pub extern "C" fn mvl_yield_check() {
+    ACTOR_REDUCTIONS.with(|cell| {
+        let remaining = cell.get();
+        if remaining <= 1 {
+            cell.set(REDUCTION_LIMIT);
+        } else {
+            cell.set(remaining - 1);
+        }
+    });
 }
 
 // ── Link/monitor C-ABI functions (Phase 9, #1177) ────────────────────────
 
-/// Create a bidirectional link between two actors.
-///
-/// If either actor dies, the other is killed (or receives an exit signal
-/// if it has `traps_exit` set).
+/// Create a bidirectional link between two actors (#1177).
 ///
 /// # Safety
 ///
@@ -535,6 +717,12 @@ pub unsafe extern "C" fn mvl_link(handle_a: *mut u8, handle_b: *mut u8) {
     }
     let a = &*(handle_a as *const MvlActorHandle);
     let b = &*(handle_b as *const MvlActorHandle);
+    // Guard against self-links: a reflexively-linked actor that dies would
+    // send DISC_SHUTDOWN to itself repeatedly, causing an infinite cascade
+    // and hanging mvl_actor_join_all.
+    if a.actor_id == b.actor_id {
+        return;
+    }
     let mut reg = global_link_registry()
         .lock()
         .unwrap_or_else(|p| p.into_inner());
@@ -567,7 +755,7 @@ pub unsafe extern "C" fn mvl_unlink(handle_a: *mut u8, handle_b: *mut u8) {
 
 /// Create a one-way monitor: `watcher` is notified when `target` dies.
 ///
-/// Returns a monitor ID that can be passed to [`mvl_demonitor`].
+/// Returns a monitor ID for use with [`mvl_demonitor`].
 ///
 /// # Safety
 ///
@@ -591,7 +779,7 @@ pub unsafe extern "C" fn mvl_monitor(watcher: *mut u8, target: *mut u8) -> i64 {
     mid as i64
 }
 
-/// Remove a monitor.
+/// Remove a monitor by ID.
 #[no_mangle]
 pub extern "C" fn mvl_demonitor(monitor_id: i64) {
     let mid = monitor_id as u64;
@@ -605,9 +793,9 @@ pub extern "C" fn mvl_demonitor(monitor_id: i64) {
     }
 }
 
-/// Set the `traps_exit` flag for an actor.
+/// Enable exit-signal trapping for an actor.
 ///
-/// When a linked actor dies, this actor receives an exit signal message
+/// When a linked actor dies, this actor receives an `ExitSignal` message
 /// instead of being killed.
 ///
 /// # Safety
