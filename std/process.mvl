@@ -32,6 +32,27 @@ pub type ProcessError = enum {
     Other(String),
 }
 
+// ── Error rendering (Pattern 003) ─────────────────────────────────────────
+
+/// Safe, user-facing error description. No internal details exposed.
+pub fn ProcessError::user_message(self) -> String {
+    match self {
+        ProcessError::NotFound         => "command not found",
+        ProcessError::PermissionDenied => "permission denied",
+        ProcessError::Other(_)         => "process error",
+    }
+}
+
+/// Full diagnostic detail wrapped in Secret — IFC prevents public exposure.
+pub fn ProcessError::debug_message(self) -> Secret[String] {
+    let msg: String = match self {
+        ProcessError::NotFound         => "ProcessError::NotFound",
+        ProcessError::PermissionDenied => "ProcessError::PermissionDenied",
+        ProcessError::Other(detail)    => "ProcessError::Other: ".concat(detail),
+    };
+    relabel classify(msg, "ERR-DEBUG")
+}
+
 // ── Stdio configuration ────────────────────────────────────────────────────
 
 /// Configures how a child process's stdio stream is connected.

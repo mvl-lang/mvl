@@ -89,6 +89,27 @@ pub type ParseError = enum {
     NullNotAllowed(String),
 }
 
+// ── Error rendering (Pattern 003) ─────────────────────────────────────────────
+
+/// Safe, user-facing error description. No field names or details exposed.
+pub fn ParseError::user_message(self) -> String {
+    match self {
+        ParseError::TypeMismatch(_)   => "database type mismatch",
+        ParseError::MissingField(_)   => "missing database field",
+        ParseError::NullNotAllowed(_) => "unexpected null value",
+    }
+}
+
+/// Full diagnostic detail wrapped in Secret — IFC prevents public exposure.
+pub fn ParseError::debug_message(self) -> Secret[String] {
+    let msg: String = match self {
+        ParseError::TypeMismatch(detail)   => "ParseError::TypeMismatch: ".concat(detail),
+        ParseError::MissingField(detail)   => "ParseError::MissingField: ".concat(detail),
+        ParseError::NullNotAllowed(detail) => "ParseError::NullNotAllowed: ".concat(detail),
+    };
+    relabel classify(msg, "ERR-DEBUG")
+}
+
 // ── Row ───────────────────────────────────────────────────────────────────────
 
 // Row = Map[String, DbValue] is the intended type alias but generic type aliases

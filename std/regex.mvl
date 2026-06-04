@@ -17,6 +17,23 @@ pub type RegexError = enum {
     InvalidPattern(String),
 }
 
+// ── Error rendering (Pattern 003) ─────────────────────────────────────────
+
+/// Safe, user-facing error description. No pattern details exposed.
+pub fn RegexError::user_message(self) -> String {
+    match self {
+        RegexError::InvalidPattern(_) => "invalid regular expression",
+    }
+}
+
+/// Full diagnostic detail wrapped in Secret — IFC prevents public exposure.
+pub fn RegexError::debug_message(self) -> Secret[String] {
+    let msg: String = match self {
+        RegexError::InvalidPattern(detail) => "RegexError::InvalidPattern: ".concat(detail),
+    };
+    relabel classify(msg, "ERR-DEBUG")
+}
+
 /// A compiled regular expression pattern.
 pub type Regex = struct {}
 

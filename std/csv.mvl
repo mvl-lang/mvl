@@ -33,6 +33,29 @@ pub type CsvError = enum {
     InvalidField(Int, String),
 }
 
+// ── Error rendering (Pattern 003) ─────────────────────────────────────────────
+
+/// Safe, user-facing error description. No line numbers or field details exposed.
+pub fn CsvError::user_message(self) -> String {
+    match self {
+        CsvError::IoError(_)             => "CSV I/O error",
+        CsvError::ParseError(_, _)       => "CSV parse error",
+        CsvError::WrongColumnCount(_, _) => "CSV column count mismatch",
+        CsvError::InvalidField(_, _)     => "CSV invalid field",
+    }
+}
+
+/// Full diagnostic detail wrapped in Secret — IFC prevents public exposure.
+pub fn CsvError::debug_message(self) -> Secret[String] {
+    let msg: String = match self {
+        CsvError::IoError(detail)               => "CsvError::IoError: ".concat(detail),
+        CsvError::ParseError(line, detail)      => "CsvError::ParseError at line ".concat(line.to_string()).concat(": ").concat(detail),
+        CsvError::WrongColumnCount(expected, got) => "CsvError::WrongColumnCount: expected ".concat(expected.to_string()).concat(", got ").concat(got.to_string()),
+        CsvError::InvalidField(col, detail)     => "CsvError::InvalidField at column ".concat(col.to_string()).concat(": ").concat(detail),
+    };
+    relabel classify(msg, "ERR-DEBUG")
+}
+
 // ── Options ───────────────────────────────────────────────────────────────────
 
 /// Options controlling CSV parsing and encoding.

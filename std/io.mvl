@@ -37,6 +37,29 @@ pub type IoError = enum {
     Other(String),
 }
 
+// ── Error rendering (Pattern 003) ─────────────────────────────────────────
+
+/// Safe, user-facing error description. No internal paths or OS details.
+pub fn IoError::user_message(self) -> String {
+    match self {
+        IoError::NotFound         => "resource not found",
+        IoError::PermissionDenied => "permission denied",
+        IoError::AlreadyExists    => "resource already exists",
+        IoError::Other(_)         => "I/O error",
+    }
+}
+
+/// Full diagnostic detail wrapped in Secret — IFC prevents public exposure.
+pub fn IoError::debug_message(self) -> Secret[String] {
+    let msg: String = match self {
+        IoError::NotFound         => "IoError::NotFound",
+        IoError::PermissionDenied => "IoError::PermissionDenied",
+        IoError::AlreadyExists    => "IoError::AlreadyExists",
+        IoError::Other(detail)    => "IoError::Other: ".concat(detail),
+    };
+    relabel classify(msg, "ERR-DEBUG")
+}
+
 // ── Types ─────────────────────────────────────────────────────────────────
 
 /// A file descriptor — stdout (1), stderr (2), stdin (0), or any open file.

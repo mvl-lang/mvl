@@ -192,7 +192,36 @@ pub builtin fn tcp_close_stream(stream: TcpStream) -> Unit
 /// validation.
 pub builtin fn http_request_path(raw: Tainted[String]) -> String ! Net
 
+// ── Error rendering (Pattern 003) ────────────────────────────────────────────
+
+/// Safe, user-facing error description. No internal details exposed.
+pub fn NetError::user_message(self) -> String {
+    match self {
+        NetError::ConnectionRefused => "connection refused",
+        NetError::ConnectionReset   => "connection reset",
+        NetError::Timeout           => "request timed out",
+        NetError::AddressInUse      => "address already in use",
+        NetError::HostUnreachable   => "host unreachable",
+        NetError::Other(_)          => "network error",
+    }
+}
+
+/// Full diagnostic detail wrapped in Secret — IFC prevents public exposure.
+pub fn NetError::debug_message(self) -> Secret[String] {
+    let msg: String = match self {
+        NetError::ConnectionRefused => "NetError::ConnectionRefused",
+        NetError::ConnectionReset   => "NetError::ConnectionReset",
+        NetError::Timeout           => "NetError::Timeout",
+        NetError::AddressInUse      => "NetError::AddressInUse",
+        NetError::HostUnreachable   => "NetError::HostUnreachable",
+        NetError::Other(detail)     => "NetError::Other: ".concat(detail),
+    };
+    relabel classify(msg, "ERR-DEBUG")
+}
+
 /// Format a NetError as a human-readable string (useful for logging).
+/// Deprecated: prefer `user_message()` for external output,
+/// `debug_message()` for internal diagnostics.
 pub fn net_error_msg(e: NetError) -> String {
     match e {
         NetError::ConnectionRefused => "connection refused",
