@@ -95,11 +95,11 @@ impl TextEmitter {
                     },
                     None => return Ok(None),
                 };
-                self.ensure_extern("declare ptr @mvl_string_ptr(ptr)");
+                self.ensure_extern("declare ptr @_mvl_string_ptr(ptr)");
                 self.ensure_extern("declare i64 @_mvl_str_len(ptr)");
                 self.ensure_extern("declare ptr @_mvl_map_get(ptr, ptr, i64)");
                 let kp = self.next_reg();
-                self.push_instr(&format!("{kp} = call ptr @mvl_string_ptr(ptr {key_arg})"));
+                self.push_instr(&format!("{kp} = call ptr @_mvl_string_ptr(ptr {key_arg})"));
                 let kl = self.next_reg();
                 self.push_instr(&format!("{kl} = call i64 @_mvl_str_len(ptr {key_arg})"));
                 let raw = self.next_reg();
@@ -141,11 +141,11 @@ impl TextEmitter {
                     Some(v) => v,
                     None => return Ok(None),
                 };
-                self.ensure_extern("declare ptr @mvl_string_ptr(ptr)");
+                self.ensure_extern("declare ptr @_mvl_string_ptr(ptr)");
                 self.ensure_extern("declare i64 @_mvl_str_len(ptr)");
                 self.ensure_extern("declare void @_mvl_map_insert(ptr, ptr, i64, ptr, i64)");
                 let kp = self.next_reg();
-                self.push_instr(&format!("{kp} = call ptr @mvl_string_ptr(ptr {key_arg})"));
+                self.push_instr(&format!("{kp} = call ptr @_mvl_string_ptr(ptr {key_arg})"));
                 let kl = self.next_reg();
                 self.push_instr(&format!("{kl} = call i64 @_mvl_str_len(ptr {key_arg})"));
                 let val_ty = self.infer_val_type(&val_arg);
@@ -180,11 +180,11 @@ impl TextEmitter {
                     },
                     None => return Ok(None),
                 };
-                self.ensure_extern("declare ptr @mvl_string_ptr(ptr)");
+                self.ensure_extern("declare ptr @_mvl_string_ptr(ptr)");
                 self.ensure_extern("declare i64 @_mvl_str_len(ptr)");
                 self.ensure_extern("declare ptr @_mvl_map_get(ptr, ptr, i64)");
                 let kp = self.next_reg();
-                self.push_instr(&format!("{kp} = call ptr @mvl_string_ptr(ptr {key_arg})"));
+                self.push_instr(&format!("{kp} = call ptr @_mvl_string_ptr(ptr {key_arg})"));
                 let kl = self.next_reg();
                 self.push_instr(&format!("{kl} = call i64 @_mvl_str_len(ptr {key_arg})"));
                 let raw = self.next_reg();
@@ -276,11 +276,11 @@ impl TextEmitter {
                     },
                     None => return Ok(None),
                 };
-                self.ensure_extern("declare ptr @mvl_string_ptr(ptr)");
+                self.ensure_extern("declare ptr @_mvl_string_ptr(ptr)");
                 self.ensure_extern("declare i64 @_mvl_str_len(ptr)");
                 self.ensure_extern("declare void @_mvl_map_remove(ptr, ptr, i64)");
                 let kp = self.next_reg();
-                self.push_instr(&format!("{kp} = call ptr @mvl_string_ptr(ptr {key_arg})"));
+                self.push_instr(&format!("{kp} = call ptr @_mvl_string_ptr(ptr {key_arg})"));
                 let kl = self.next_reg();
                 self.push_instr(&format!("{kl} = call i64 @_mvl_str_len(ptr {key_arg})"));
                 self.push_instr(&format!(
