@@ -9,9 +9,14 @@
 //! Import:
 //!   use std.actors.{link, unlink, monitor, demonitor,
 //!                   ExitReason, ExitSignal, DownSignal,
-//!                   RestartStrategy, Supervisor}
+//!                   RestartStrategy, Supervisor,
+//!                   DeadLetterReason, DeadLetter, DeadLetterHandler}
 //!
-//! Phase 9, #1177, #1128.
+//! Phase 9, #1177, #1128, #1180.
+
+use std.collections.{Map}
+use std.log.{Logger}
+use std.math.{int_to_string}
 
 // ── Exit reason ──────────────────────────────────────────────────────────
 
@@ -157,6 +162,7 @@ pub actor Supervisor traps_exit {
     }
 
     // Called by the dispatch loop when a linked child sends an exit signal.
+
     // Private: wired via _ExitSignal dispatch in the emitter (#1128).
     //
     // reason: 0=Normal (clean shutdown), 1=Panic, 2=Killed.
@@ -197,3 +203,57 @@ pub actor Supervisor traps_exit {
         }
     }
 }
+
+// ── Dead-letter handling ──────────────────────────────────────────────────
+
+/// Why a message could not be delivered to its target actor.
+///
+/// - `ActorDead`        — the target actor has terminated
+/// - `ActorRestarting`  — the target actor is currently being restarted
+/// - `MailboxFull`      — the target actor's mailbox has exceeded its capacity
+pub type DeadLetterReason = enum {
+    ActorDead,
+    ActorRestarting,
+    MailboxFull,
+}
+
+/// A message that could not be delivered to its intended recipient.
+///
+/// Captured by a `DeadLetterHandler` (or user-defined handler actor) for
+/// logging, metrics, or optional retry.
+/// `sender` is `None` when the origin actor is unknown (fire-and-forget sends).
+pub type DeadLetter = struct {
+    sender: Option[Int],
+    target: Int,
+    reason: DeadLetterReason,
+}
+
+/// Default dead-letter handler: logs every undeliverable message at WARN level
+/// and counts the total number of dead letters received.
+///
+/// Usage:
+///   1. Spawn: `let dl: DeadLetterHandler = actor DeadLetterHandler { logger: default_logger(), count: 0 }`
+///   2. Pass `dl.actor_id()` to the runtime or supervisor so it can route
+///      undeliverable messages here.
+///   3. Replace with any custom actor that exposes `pub fn undeliverable(val msg: DeadLetter)`.
+///
+/// Phase 9, #1180.
+pub actor DeadLetterHandler {
+    logger: Logger
+    count: Int
+
+    /// Receive an undeliverable message and log it at WARN level.
+    pub fn undeliverable(val msg: DeadLetter) ! Log {
+        self.count = self.count + 1;
+        let reason_str: String = match msg.reason {
+            DeadLetterReason::ActorDead       => "actor_dead",
+            DeadLetterReason::ActorRestarting => "actor_restarting",
+            DeadLetterReason::MailboxFull     => "mailbox_full",
+        };
+        let fields: Map[String, String] = {
+            "target": int_to_string(msg.target),
+            "reason": reason_str,
+        };
+        self.logger.warn("dead letter", fields)
+    }
+} with mailbox(unbounded)

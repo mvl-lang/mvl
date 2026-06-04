@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [0.180.0] - 2026-06-03
+
+### Added
+- `std.actors`: dead-letter handling — `DeadLetterReason`, `DeadLetter`, `DeadLetterHandler` actor for capturing and logging undeliverable messages (#1180)
+
 ### Changed
 - **Rust backend**: enforce TIR as sole backend input boundary (#1195) — backends now accept `TirProgram` instead of raw AST + `HashMap<Span, Ty>`; all monomorphization and type lowering happens before backend entry
 - Extend `TirProgram` with all declaration types (functions, types, externs, actors, impls, consts, uses, effects, labels, relabels)

@@ -2661,11 +2661,11 @@ fn actor_traps_exit_emits_true_in_register() {
     assert_contains(&rust, "SupervisorMailbox::_Shutdown => return false,");
     assert_contains(
         &rust,
-        "SupervisorMailbox::_ExitSignal { _from_id, _reason } => {}",
+        "SupervisorMailbox::_ExitSignal { _from_id: _, _reason: _ } => {}",
     );
     assert_contains(
         &rust,
-        "SupervisorMailbox::_DownSignal { _from_id, _reason, _monitor_id } => {}",
+        "SupervisorMailbox::_DownSignal { _from_id: _, _reason: _, _monitor_id: _ } => {}",
     );
 }
 
