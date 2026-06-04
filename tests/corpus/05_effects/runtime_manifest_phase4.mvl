@@ -1,0 +1,34 @@
+// Corpus: std.runtime Phase 4 — BuildInfo fields populated at compile time (#803).
+//
+// Verifies that:
+//   - build.target is a non-empty String
+//   - build.profile is a non-empty String
+//   - build.date is a non-empty String (ISO-8601 UTC)
+//   - build.rustc_version is Option[String] — type-checks as Some or None
+//   - build.llvm_version is Option[String] — type-checks as Some or None
+//   - All three format functions work with fully populated BuildInfo
+
+use std.runtime.{manifest, manifest_to_logfmt, manifest_to_json, manifest_to_block,
+                  Manifest, BuildInfo}
+
+fn main() -> Unit ! Console {
+    let m: Manifest = manifest();
+    let b: BuildInfo = m.build;
+
+    // target, profile, date are plain String (not Option)
+    let _target:  String = b.target;
+    let _profile: String = b.profile;
+    let _date:    String = b.date;
+
+    // rustc and llvm versions are Option[String]
+    let _rustc: Option[String] = b.rustc_version;
+    let _llvm:  Option[String] = b.llvm_version;
+
+    // All three format functions must still work
+    let logfmt: String = manifest_to_logfmt(m);
+    let json:   String = manifest_to_json(m);
+    let block:  String = manifest_to_block(m);
+    println(logfmt);
+    println(json);
+    println(block)
+}

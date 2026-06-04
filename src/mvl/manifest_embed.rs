@@ -59,6 +59,11 @@ pub fn load_and_generate(
     let mvl_version = env!("CARGO_PKG_VERSION");
     let runtime_version = env!("MVL_RUNTIME_VERSION");
     let stdlib_version = env!("MVL_STDLIB_VERSION");
+    let rustc_version = env!("MVL_RUSTC_VERSION");
+    let llvm_version = env!("MVL_LLVM_VERSION");
+    let target = env!("MVL_TARGET");
+    let profile = env!("MVL_PROFILE");
+    let build_date = env!("MVL_BUILD_DATE");
     let meta = ManifestMeta {
         app_name: &pkg_manifest.package.name,
         app_version: &pkg_manifest.package.version,
@@ -66,6 +71,11 @@ pub fn load_and_generate(
         runtime_version,
         stdlib_version,
         backend,
+        rustc_version,
+        llvm_version,
+        target,
+        profile,
+        build_date,
     };
     let src = generate_manifest_mvl(&meta, &lockfile.packages, &bridges);
 
@@ -139,6 +149,13 @@ struct ManifestMeta<'a> {
     runtime_version: &'a str,
     stdlib_version: &'a str,
     backend: &'a str,
+    /// `rustc --version` output, or empty → `None` in generated MVL.
+    rustc_version: &'a str,
+    /// `llvm-config --version` output, or empty → `None` in generated MVL.
+    llvm_version: &'a str,
+    target: &'a str,
+    profile: &'a str,
+    build_date: &'a str,
 }
 
 /// Generate MVL source for the real `manifest()` function.
@@ -158,6 +175,11 @@ fn generate_manifest_mvl(
         runtime_version,
         stdlib_version,
         backend,
+        rustc_version,
+        llvm_version,
+        target,
+        profile,
+        build_date,
     } = meta;
     let mut src = String::from("pub fn manifest() -> Manifest {\n");
 
@@ -200,11 +222,17 @@ fn generate_manifest_mvl(
         "        ffi_bridges:    ffis,",
         "        build:          BuildInfo {",
         &format!("            backend:       {},", mvl_str(backend)),
-        "            rustc_version: None,",
-        "            llvm_version:  None,",
-        "            target:        \"\",",
-        "            profile:       \"debug\",",
-        "            date:          \"\",",
+        &format!(
+            "            rustc_version: {},",
+            mvl_option_str(rustc_version)
+        ),
+        &format!(
+            "            llvm_version:  {},",
+            mvl_option_str(llvm_version)
+        ),
+        &format!("            target:        {},", mvl_str(target)),
+        &format!("            profile:       {},", mvl_str(profile)),
+        &format!("            date:          {},", mvl_str(build_date)),
         "        },",
         "        licenses:  [],",
         "        assurance: AssuranceInfo {",
@@ -239,6 +267,15 @@ fn make_list(n: usize, prefix: &str) -> String {
 /// Return `s` as a double-quoted MVL string literal with minimal escaping.
 fn mvl_str(s: &str) -> String {
     format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+/// Return `s` as `None` (when empty) or `Some("…")` for MVL `Option[String]` fields.
+fn mvl_option_str(s: &str) -> String {
+    if s.is_empty() {
+        "None".to_string()
+    } else {
+        format!("Some({})", mvl_str(s))
+    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -338,6 +375,18 @@ mod tests {
         assert_eq!(bridges[0].bridge_name, "alpha");
     }
 
+    // --- mvl_option_str ---
+
+    #[test]
+    fn mvl_option_str_empty_is_none() {
+        assert_eq!(mvl_option_str(""), "None");
+    }
+
+    #[test]
+    fn mvl_option_str_non_empty_wraps_some() {
+        assert_eq!(mvl_option_str("rustc 1.87.0"), r#"Some("rustc 1.87.0")"#);
+    }
+
     // --- generate_manifest_mvl ---
 
     #[test]
@@ -349,6 +398,11 @@ mod tests {
             runtime_version: "0.9.2",
             stdlib_version: "0.42.0",
             backend: "rust",
+            rustc_version: "rustc 1.87.0",
+            llvm_version: "",
+            target: "aarch64-apple-darwin",
+            profile: "debug",
+            build_date: "2026-06-04T00:00:00Z",
         };
         let src = generate_manifest_mvl(&meta, &[], &[]);
         assert!(src.contains("pub fn manifest() -> Manifest"));
@@ -359,6 +413,12 @@ mod tests {
         assert!(src.contains(r#"stdlib_version:  "0.42.0""#));
         assert!(src.contains("let pkgs: List[PackageInfo] = [];"));
         assert!(src.contains("let ffis: List[FfiBridge] = [];"));
+        // Phase 4: BuildInfo fields are populated, not stubs.
+        assert!(src.contains(r#"rustc_version: Some("rustc 1.87.0")"#));
+        assert!(src.contains("llvm_version:  None"));
+        assert!(src.contains(r#"target:        "aarch64-apple-darwin""#));
+        assert!(src.contains(r#"profile:       "debug""#));
+        assert!(src.contains(r#"date:          "2026-06-04T00:00:00Z""#));
     }
 
     #[test]
@@ -375,6 +435,11 @@ mod tests {
             runtime_version: "0.9.2",
             stdlib_version: "0.42.0",
             backend: "rust",
+            rustc_version: "",
+            llvm_version: "",
+            target: "x86_64-unknown-linux-gnu",
+            profile: "release",
+            build_date: "2026-06-04T00:00:00Z",
         };
         let src = generate_manifest_mvl(&meta, &[], &bridges);
         assert!(src.contains(r#"let b0: FfiBridge = FfiBridge { abi: "rust", bridge_name: "fetch_url", bridge_version: "" };"#));
@@ -392,6 +457,11 @@ mod tests {
             runtime_version: "0.9.2",
             stdlib_version: "0.42.0",
             backend: "rust",
+            rustc_version: "rustc 1.87.0 (17067e9ac 2025-05-09)",
+            llvm_version: "18.1.8",
+            target: "aarch64-apple-darwin",
+            profile: "debug",
+            build_date: "2026-06-04T12:00:00Z",
         };
         let src = generate_manifest_mvl(&meta, &[], &[]);
         let (mut parser, _) = Parser::new(&src);
@@ -424,6 +494,11 @@ mod tests {
             runtime_version: "0.9.2",
             stdlib_version: "0.42.0",
             backend: "rust",
+            rustc_version: "",
+            llvm_version: "",
+            target: "x86_64-unknown-linux-gnu",
+            profile: "debug",
+            build_date: "2026-06-04T00:00:00Z",
         };
         let src = generate_manifest_mvl(&meta, &pkgs, &bridges);
         let (mut parser, _) = Parser::new(&src);
@@ -501,6 +576,11 @@ mod tests {
             runtime_version: "0.9.2",
             stdlib_version: "0.42.0",
             backend: "rust",
+            rustc_version: "",
+            llvm_version: "",
+            target: "aarch64-apple-darwin",
+            profile: "debug",
+            build_date: "2026-06-04T00:00:00Z",
         };
         let src = generate_manifest_mvl(&meta, &[], &bridges);
         assert!(

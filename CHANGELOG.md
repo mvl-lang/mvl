@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+## [0.185.0] - 2026-06-05
+
+### Added
+
+- **std.runtime Phase 4 — BuildInfo fully populated at compile time** (#1241 #803)
+  - `rustc_version`: extracted from `rustc --version`; `None` if rustc unavailable
+  - `llvm_version`: extracted from `llvm-config --version`; `None` if llvm-config unavailable
+  - `target`: from Cargo `TARGET` env var (e.g. `"aarch64-apple-darwin"`)
+  - `profile`: from Cargo `PROFILE` env var (`"debug"` or `"release"`)
+  - `date`: UTC timestamp at build time via Hinnant's civil calendar algorithm (no external deps)
+  - All fields embedded into `manifest()` override during compilation
+  - New corpus test: `runtime_manifest_phase4.mvl` validates all BuildInfo field types
+
 ## [0.184.0] - 2026-06-04
 
 ### Added

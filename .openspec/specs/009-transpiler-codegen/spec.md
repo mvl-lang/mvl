@@ -325,3 +325,9 @@ These are explicitly out of scope for the current transpiler:
 - **Expression-level type tracking in emitter:** The transpiler operates on AST nodes, not typed IR. Type-aware emission is Phase 3.
 - **Rust formatting:** The emitted Rust does not need to pass `rustfmt`. Correctness over style.
 - **Lifetime annotations:** All cloned values are owned. No borrows in emitted Rust (Phase 1).
+
+## Open Issues
+
+### Stdlib method dispatch simplification (#1217)
+
+The emitter currently special-cases ~25 stdlib method calls (sort, map, filter, fold, etc.) with inline Rust/LLVM code generation instead of compiling the MVL body. This creates a 4-way sync requirement and leads to stub methods with incorrect MVL bodies. Proposed direction: eliminate emitter special-casing, keep emitter builtins only for kernel primitives. See #1217; to be documented as ADR-0041.

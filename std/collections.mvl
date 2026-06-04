@@ -2,8 +2,7 @@
 //!
 //! Pure MVL implementations dispatched by both the Rust transpiler (direct
 //! Rust emission via checker type info, #554) and the LLVM backend (explicit
-//! codegen in exprs.rs). Deferred to #436: Map.remove, Map.keys, Map.values,
-//! Set set-algebra (LLVM).
+//! codegen in exprs.rs).
 //!
 //! Import: instance methods (`.get()`, `.insert()`, etc.) work without import.
 //! Static constructors (`Map::new()`, `Set::new()`) require `use std.collections.{Map}` / `{Set}`.
@@ -41,7 +40,6 @@ pub fn Map[K, V]::without(self, key: K) -> Map[K, V] {
 }
 
 /// Remove `key`, returning the old value if present.
-// LLVM: deferred to #436 — no codegen arm for `remove` in exprs.rs yet.
 pub fn Map[K, V]::remove(self, key: K) -> Option[V] {
     self.remove(key)
 }
@@ -52,13 +50,11 @@ pub fn Map[K, V]::contains_key(self, key: K) -> Bool {
 }
 
 /// Return all keys as a list (order unspecified).
-// LLVM: deferred to #436.
 pub fn Map[K, V]::keys(self) -> List[K] {
     self.keys()
 }
 
 /// Return all values as a list (order unspecified).
-// LLVM: deferred to #436.
 pub fn Map[K, V]::values(self) -> List[V] {
     self.values()
 }

@@ -195,26 +195,38 @@ pub fn List[T]::all(self, f: fn(T) -> Bool) -> Bool where T: Clone {
 
 /// Smallest element, or None for an empty list.
 ///
-/// Stub body delegates to `first`; the transpiler's generic fallthrough handles
-/// actual min semantics at `xs.min()` call sites.
+/// Transpiler-handled: emits `into_iter().min_by(partial_cmp)`.
+/// MVL body is a fallback for LLVM backend (returns first, not min).
 pub fn List[T]::min(self) -> Option[T] where T: Clone {
     self.first()
 }
 
 /// Largest element, or None for an empty list.
 ///
-/// Stub body delegates to `last`; the transpiler's generic fallthrough handles
-/// actual max semantics at `xs.max()` call sites.
+/// Transpiler-handled: emits `into_iter().max_by(partial_cmp)`.
+/// MVL body is a fallback for LLVM backend (returns last, not max).
 pub fn List[T]::max(self) -> Option[T] where T: Clone {
     self.last()
 }
 
 /// Join a list of strings with separator `sep`.
 ///
-/// Stub body returns empty string; the transpiler's generic fallthrough handles
-/// actual semantics at `xs.join(sep)` call sites (delegates to Rust's slice::join).
+/// Transpiler-handled: emits Rust `slice::join`.
+/// MVL body is a fallback for LLVM backend.
 pub fn List[String]::join(self, sep: String) -> String {
-    ""
+    if self.is_empty() {
+        return ""
+    };
+    let result: ref String = "";
+    let i: ref Int = 0;
+    for s in self {
+        if i > 0 {
+            result = result.concat(sep)
+        };
+        result = result.concat(s);
+        i = i + 1
+    };
+    result
 }
 
 /// Group elements by the key returned by `f`, producing a map from
