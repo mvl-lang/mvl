@@ -226,7 +226,7 @@ test-spikes: build ## Run spike 001-parser tests manually (NOT part of CI — se
 	$(MVL) test tests/spikes/001-parser/
 
 test-bdd: build ## Run BDD corpus scenarios with Gherkin report (mvl test --bdd)
-	$(MVL) test tests/corpus/11_bdd/ --bdd
+	$(MVL) test tests/corpus/17_bdd/ --bdd
 
 test-backend-rust: build ## Run end-to-end transpiler tests: .mvl → parse → check → transpile → cargo → binary → assert output
 	cargo test --test compile_and_run
@@ -267,7 +267,7 @@ mvl-lint: build ## Run MVL linter on corpus and examples
 	@failed=0; \
 	for f in tests/corpus/**/*.mvl examples/**/*.mvl; do \
 		[ -f "$$f" ] || continue; \
-		case "$$f" in tests/corpus/04_linting/*) continue;; esac; \
+		case "$$f" in tests/corpus/14_linting/*) continue;; esac; \
 		out=$$(cargo run --quiet -- lint "$$f" 2>&1); \
 		if [ -n "$$out" ] && echo "$$out" | grep -q "warning\|error"; then \
 			echo "$$out"; failed=1; \

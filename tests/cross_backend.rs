@@ -34,28 +34,35 @@ fn corpus(name: &str) -> String {
     format!("{}/examples/programs/{name}", env!("CARGO_MANIFEST_DIR"))
 }
 
-fn corpus_types(name: &str) -> String {
+fn corpus_primitives(name: &str) -> String {
     format!(
-        "{}/tests/corpus/02_types/{name}",
+        "{}/tests/corpus/04_primitives/{name}",
         env!("CARGO_MANIFEST_DIR")
     )
 }
 
-fn corpus_effects(name: &str) -> String {
+fn corpus_13_stdlib(name: &str) -> String {
     format!(
-        "{}/tests/corpus/05_effects/{name}",
+        "{}/tests/corpus/13_stdlib/{name}",
         env!("CARGO_MANIFEST_DIR")
     )
 }
 
-fn corpus_basics(name: &str) -> String {
+fn corpus_ownership(name: &str) -> String {
     format!(
-        "{}/tests/corpus/01_basics/{name}",
+        "{}/tests/corpus/06_ownership/{name}",
         env!("CARGO_MANIFEST_DIR")
     )
 }
 
-fn corpus_stdlib(name: &str) -> String {
+fn corpus_collections(name: &str) -> String {
+    format!(
+        "{}/tests/corpus/05_collections/{name}",
+        env!("CARGO_MANIFEST_DIR")
+    )
+}
+
+fn corpus_stdlib_tests(name: &str) -> String {
     format!("{}/tests/stdlib/{name}", env!("CARGO_MANIFEST_DIR"))
 }
 
@@ -259,7 +266,7 @@ fn cross_backend_closure_lambdas() {
 
 #[test]
 fn llvm_string_heap() {
-    let file = corpus_types("string_heap_llvm.mvl");
+    let file = corpus_primitives("string_heap_llvm.mvl");
     assert_llvm_output(&file, "5\nhello world\n11");
 }
 
@@ -267,13 +274,13 @@ fn llvm_string_heap() {
 
 #[test]
 fn llvm_move_string() {
-    let file = corpus_types("move_string_llvm.mvl");
+    let file = corpus_primitives("move_string_llvm.mvl");
     assert_llvm_output(&file, "hello\nworld");
 }
 
 #[test]
 fn llvm_fn_takes_string() {
-    let file = corpus_types("fn_takes_string_llvm.mvl");
+    let file = corpus_primitives("fn_takes_string_llvm.mvl");
     assert_llvm_output(&file, "hello world");
 }
 
@@ -283,7 +290,7 @@ fn llvm_fn_takes_string() {
 /// Both ultimately call the same POSIX syscalls, so UID and GID are the same.
 #[test]
 fn cross_backend_env_basic() {
-    let file = corpus_effects("env_basic.mvl");
+    let file = corpus_13_stdlib("env_basic.mvl");
     if let Some(llvm_out) = run_llvm_text(&file) {
         let transpiler_out = run_transpiler(&file);
         assert_eq!(
@@ -309,7 +316,7 @@ fn cross_backend_env_basic() {
 /// Both backends call `getuid()` — result must be non-negative.
 #[test]
 fn cross_backend_env_getuid_nonnegative() {
-    let file = corpus_effects("env_basic.mvl");
+    let file = corpus_13_stdlib("env_basic.mvl");
     if let Some(out) = run_llvm_text(&file) {
         let uid: i64 = out.lines().next().unwrap_or("0").parse().unwrap_or(-1);
         assert!(
@@ -322,7 +329,7 @@ fn cross_backend_env_getuid_nonnegative() {
 /// Both backends call `getgid()` — result must be non-negative.
 #[test]
 fn cross_backend_env_getgid_nonnegative() {
-    let file = corpus_effects("env_basic.mvl");
+    let file = corpus_13_stdlib("env_basic.mvl");
     if let Some(out) = run_llvm_text(&file) {
         let lines: Vec<&str> = out.lines().collect();
         let gid: i64 = lines.get(1).unwrap_or(&"0").parse().unwrap_or(-1);
@@ -339,7 +346,7 @@ fn cross_backend_env_getgid_nonnegative() {
 /// Both backends must produce identical output: "42\n0\n".
 #[test]
 fn cross_backend_random_int() {
-    let file = corpus_effects("random_int.mvl");
+    let file = corpus_13_stdlib("random_int.mvl");
     if let Some(llvm_out) = run_llvm_text(&file) {
         let transpiler_out = run_transpiler(&file);
         assert_eq!(
@@ -396,7 +403,7 @@ fn cross_backend_generic_fns() {
 /// Empty list always returns `None`.  Both backends must match.
 #[test]
 fn cross_backend_random_choice() {
-    let file = corpus_effects("random_choice.mvl");
+    let file = corpus_13_stdlib("random_choice.mvl");
     if let Some(llvm_out) = run_llvm_text(&file) {
         let transpiler_out = run_transpiler(&file);
         assert_eq!(
@@ -414,7 +421,7 @@ fn cross_backend_random_choice() {
 /// Both backends must return a list of length 1, and empty stays empty.
 #[test]
 fn cross_backend_random_shuffle() {
-    let file = corpus_effects("random_shuffle.mvl");
+    let file = corpus_13_stdlib("random_shuffle.mvl");
     if let Some(llvm_out) = run_llvm_text(&file) {
         let transpiler_out = run_transpiler(&file);
         assert_eq!(
@@ -438,7 +445,7 @@ fn cross_backend_random_shuffle() {
 /// LLVM backend.  Tracked as a pre-existing LLVM limitation.
 #[test]
 fn cross_backend_log_stderr() {
-    let file = corpus_effects("log_output.mvl");
+    let file = corpus_13_stdlib("log_output.mvl");
 
     // Always assert the transpiler path regardless of LLVM availability.
     let transpiler = Command::new(mvl_bin())
@@ -473,7 +480,7 @@ fn cross_backend_log_stderr() {
 /// Error-path coverage lives in tests/stdlib/net_test.mvl (test-stdlib suite).
 #[test]
 fn cross_backend_net_basic() {
-    assert_parity(&corpus_stdlib("net_basic.mvl"), "net ok");
+    assert_parity(&corpus_stdlib_tests("net_basic.mvl"), "net ok");
 }
 
 // ── #417 + #435: io stdlib — both backends ────────────────────────────────────
@@ -482,7 +489,7 @@ fn cross_backend_net_basic() {
 /// Both backends must produce identical output: the file round-trips correctly.
 #[test]
 fn cross_backend_io_write_read_roundtrip() {
-    let file = corpus_effects("io_basic.mvl");
+    let file = corpus_13_stdlib("io_basic.mvl");
     let transpiler_out = run_transpiler(&file);
     assert_eq!(
         transpiler_out.trim(),
@@ -501,7 +508,7 @@ fn cross_backend_io_write_read_roundtrip() {
 /// error and both backends must print "ok".
 #[test]
 fn cross_backend_time_sleep() {
-    let file = corpus_effects("time_sleep.mvl");
+    let file = corpus_13_stdlib("time_sleep.mvl");
     if let Some(llvm_out) = run_llvm_text(&file) {
         let transpiler_out = run_transpiler(&file);
         assert_eq!(
@@ -519,7 +526,7 @@ fn cross_backend_time_sleep() {
 /// `time.format_datetime` with a fixed `DateTime` — deterministic on all backends.
 #[test]
 fn cross_backend_time_format_datetime() {
-    let file = corpus_effects("time_format_datetime.mvl");
+    let file = corpus_13_stdlib("time_format_datetime.mvl");
     if let Some(llvm_out) = run_llvm_text(&file) {
         let transpiler_out = run_transpiler(&file);
         assert_eq!(
@@ -538,7 +545,7 @@ fn cross_backend_time_format_datetime() {
 /// backends must return a 4-character year string.
 #[test]
 fn cross_backend_time_format_instant() {
-    let file = corpus_effects("time_format_instant.mvl");
+    let file = corpus_13_stdlib("time_format_instant.mvl");
     if let Some(llvm_out) = run_llvm_text(&file) {
         let transpiler_out = run_transpiler(&file);
         assert_eq!(
@@ -566,7 +573,7 @@ const SHA512_EMPTY: &str = concat!(
 /// The Rust backend calls mvl_runtime::stdlib::crypto directly via the prelude.
 #[test]
 fn cross_backend_crypto_sha256_transpiler() {
-    let file = corpus_effects("crypto_sha256.mvl");
+    let file = corpus_13_stdlib("crypto_sha256.mvl");
     let out = run_transpiler(&file);
     let lines: Vec<&str> = out.lines().collect();
     assert_eq!(lines.len(), 3, "expected 3 output lines, got: {out:?}");
@@ -581,7 +588,7 @@ fn cross_backend_crypto_sha256_transpiler() {
 /// libmvl_runtime_c) produces the same NIST vectors as the Rust transpiler path.
 #[test]
 fn cross_backend_crypto_sha256_llvm() {
-    let file = corpus_effects("crypto_sha256.mvl");
+    let file = corpus_13_stdlib("crypto_sha256.mvl");
     let transpiler_out = run_transpiler(&file);
     if let Some(llvm_out) = run_llvm_text(&file) {
         assert_eq!(
@@ -596,7 +603,7 @@ fn cross_backend_crypto_sha256_llvm() {
 /// Both backends must produce identical output for `regex.compile` + `regex.replace`.
 #[test]
 fn cross_backend_regex_replace() {
-    let file = corpus_stdlib("regex_replace.mvl");
+    let file = corpus_stdlib_tests("regex_replace.mvl");
     if let Some(llvm_out) = run_llvm_text(&file) {
         let transpiler_out = run_transpiler(&file);
         assert_eq!(
@@ -615,7 +622,7 @@ fn cross_backend_regex_replace() {
 /// Verifies that text extraction and None handling are consistent.
 #[test]
 fn cross_backend_regex_find() {
-    let file = corpus_stdlib("regex_find.mvl");
+    let file = corpus_stdlib_tests("regex_find.mvl");
     if let Some(llvm_out) = run_llvm_text(&file) {
         let transpiler_out = run_transpiler(&file);
         assert_eq!(
@@ -634,7 +641,7 @@ fn cross_backend_regex_find() {
 /// Verifies that the match count is correct for a multi-match and a zero-match input.
 #[test]
 fn cross_backend_regex_find_all() {
-    let file = corpus_stdlib("regex_find_all.mvl");
+    let file = corpus_stdlib_tests("regex_find_all.mvl");
     if let Some(llvm_out) = run_llvm_text(&file) {
         let transpiler_out = run_transpiler(&file);
         assert_eq!(
@@ -654,7 +661,7 @@ fn cross_backend_regex_find_all() {
 /// set_difference, and set_union on integer sets.
 #[test]
 fn cross_backend_set_algebra() {
-    let file = corpus_stdlib("set_algebra.mvl");
+    let file = corpus_stdlib_tests("set_algebra.mvl");
     let transpiler_out = run_transpiler(&file);
     assert_eq!(
         transpiler_out.trim(),
@@ -676,7 +683,7 @@ fn cross_backend_set_algebra() {
 /// Both are no-op stubs; the test verifies they compile and run without crashing.
 #[test]
 fn cross_backend_env_signal_ignore_reset() {
-    let file = corpus_effects("env_signal_ignore.mvl");
+    let file = corpus_13_stdlib("env_signal_ignore.mvl");
     let transpiler_out = run_transpiler(&file);
     assert_eq!(
         transpiler_out.trim(),
@@ -695,7 +702,7 @@ fn cross_backend_env_signal_ignore_reset() {
 /// LLVM-only: `signal_on` with a named non-capturing handler must not crash.
 #[test]
 fn cross_backend_env_signal_on_llvm() {
-    let file = corpus_effects("env_signal_on.mvl");
+    let file = corpus_13_stdlib("env_signal_on.mvl");
     if let Some(llvm_out) = run_llvm_text(&file) {
         assert_eq!(
             llvm_out.trim(),
@@ -710,7 +717,7 @@ fn cross_backend_env_signal_on_llvm() {
 /// Non-deterministic values are not compared; only the length (always == n) is checked.
 #[test]
 fn cross_backend_crypto_random_bytes_llvm_shape() {
-    let file = corpus_effects("crypto_random_bytes_shape.mvl");
+    let file = corpus_13_stdlib("crypto_random_bytes_shape.mvl");
     let transpiler_out = run_transpiler(&file);
     assert_eq!(
         transpiler_out.trim(),
@@ -729,7 +736,7 @@ fn cross_backend_crypto_random_bytes_llvm_shape() {
 /// crypto_random_bytes(0) — both backends must return an empty list.
 #[test]
 fn cross_backend_crypto_random_bytes_zero_llvm() {
-    let file = corpus_effects("crypto_random_bytes_zero.mvl");
+    let file = corpus_13_stdlib("crypto_random_bytes_zero.mvl");
     let transpiler_out = run_transpiler(&file);
     assert_eq!(
         transpiler_out.trim(),
@@ -748,7 +755,7 @@ fn cross_backend_crypto_random_bytes_zero_llvm() {
 /// parse_int / parse_float — verify both succeed and fail correctly in the LLVM backend.
 #[test]
 fn cross_backend_parse_int_float_llvm() {
-    let file = corpus_types("parse_int_float_llvm.mvl");
+    let file = corpus_primitives("parse_int_float_llvm.mvl");
     assert_llvm_output(&file, "42\n1\nok\n1");
 }
 
@@ -761,7 +768,7 @@ fn cross_backend_println_multi_arg() {
 /// eprint/eprintln both backends write to stderr with identical output (#556).
 #[test]
 fn cross_backend_eprint_stderr() {
-    let file = corpus_basics("eprint_stderr.mvl");
+    let file = corpus_13_stdlib("eprint_stderr.mvl");
 
     // Transpiler path: capture stderr.
     let transpiler = Command::new(mvl_bin())
@@ -938,7 +945,7 @@ fn cross_backend_actor_send() {
 /// length is unchanged (both backends must print "3").
 #[test]
 fn clone_list_independent_of_original() {
-    assert_parity(&corpus_basics("clone_heap_independence.mvl"), "3");
+    assert_parity(&corpus_ownership("clone_heap_independence.mvl"), "3");
 }
 
 /// #906: UFCS String method parity — LLVM backend now has a dispatch table
@@ -949,7 +956,7 @@ fn clone_list_independent_of_original() {
 #[test]
 fn cross_backend_string_ufcs_methods() {
     assert_parity(
-        &corpus_basics("string_ufcs.mvl"),
+        &corpus_primitives("string_ufcs.mvl"),
         "Hello, World!\nmvl\nMVL\nstarts_ok\nends_ok\ncontains_ok\nHello, MVL!\nHello\nfoobar\n3",
     );
 }
@@ -960,7 +967,7 @@ fn cross_backend_string_ufcs_methods() {
 /// Tests: slice (ptr×i64×i64→ptr), take (slice from 0..n), skip (slice from n..len).
 #[test]
 fn cross_backend_list_ufcs_methods() {
-    assert_parity(&corpus_basics("list_ufcs.mvl"), "3\n3\n3");
+    assert_parity(&corpus_collections("list_ufcs.mvl"), "3\n3\n3");
 }
 
 // ── #1234: Expanded cross-backend parity — examples/programs ─────────────────

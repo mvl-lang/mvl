@@ -392,7 +392,7 @@ fn check_fails_with_args(path: &str, extra_args: &[&str]) -> String {
 #[test]
 fn refinement_solver_bogus_mode_exits_with_error() {
     let stderr = check_fails_with_args(
-        &corpus("07_refinements/refinements_fully_proven.mvl"),
+        &corpus("09_refinements/refinements_fully_proven.mvl"),
         &["--refinement-solver=bogus"],
     );
     assert_contains(
@@ -405,7 +405,7 @@ fn refinement_solver_bogus_mode_exits_with_error() {
 #[test]
 fn refinement_stats_prints_header_and_layer_for_proven_file() {
     let stderr = check_ok_with_args(
-        &corpus("07_refinements/refinements_fully_proven.mvl"),
+        &corpus("09_refinements/refinements_fully_proven.mvl"),
         &["--refinement-stats"],
     );
     assert_contains(
@@ -422,7 +422,7 @@ fn refinement_stats_prints_header_and_layer_for_proven_file() {
 #[test]
 fn refinement_stats_respects_solver_mode_label() {
     let stderr = check_ok_with_args(
-        &corpus("07_refinements/refinements_fully_proven.mvl"),
+        &corpus("09_refinements/refinements_fully_proven.mvl"),
         &["--refinement-stats", "--refinement-solver=fast-only"],
     );
     assert_contains(
@@ -436,7 +436,7 @@ fn refinement_stats_respects_solver_mode_label() {
 fn refinement_stats_no_layer_lines_when_zero_proven() {
     // A file with no refinement call sites should print stats but no layer lines.
     let stderr = check_ok_with_args(
-        &corpus("01_basics/expressions.mvl"),
+        &corpus("01_syntax/expressions.mvl"),
         &["--refinement-stats"],
     );
     assert_contains(
