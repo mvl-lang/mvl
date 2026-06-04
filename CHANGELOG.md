@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+## [0.181.0] - 2026-06-04
+
+### Added
+
+- **IFC audit keyword** (#896) — adds `audit` contextual keyword to `relabel` declarations and expressions
+  - Declaration-level: `pub relabel release: Secret -> _ audit` — ALL call sites emit a `RelabelEvent` to the runtime audit trail
+  - Expression-level: `relabel trust(input, "XSS-001") audit` — this specific call site emits an event
+  - Events written as JSONL to `$MVL_AUDIT_SINK` (file path env var) or stderr if unset
+  - Connects compile-time IFC enforcement to the runtime audit trail infrastructure (#808)
+  - `RelabelEvent` type in `std.audit` carries: transition name, from/to labels, audit tag, location
+  - New runtime module: `runtime/rust/src/stdlib/audit.rs` with `emit_relabel_event` Rust implementation
+
+### Changed
+
+- Checker: relabel map extended to carry `(from, to, audit)` tuple
+- Parser: `relabel` declarations now support optional `audit` keyword: `pub relabel X: A -> B audit`
+- Parser: `relabel` expressions now support optional `audit` keyword: `relabel X(expr, "tag") audit`
+- Assurance report: displays count of audit-marked relabel transitions separately
+- EBNF grammar: fixed `relabel_decl` to support `pub` and `_` wildcard sides; added `relabel_expr` to `expr` production
+
 ## [0.180.0] - 2026-06-03
 
 ### Added
