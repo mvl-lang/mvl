@@ -36,7 +36,7 @@ fn run(src: &str, req: u8) -> Verdict {
 /// Clean typed program → Proven.
 #[test]
 fn req01_type_safety_proven() {
-    let v = run(include_str!("corpus/02_types/basic_types.mvl"), 1);
+    let v = run(include_str!("corpus/03_types/basic_types.mvl"), 1);
     assert!(
         v.is_proven(),
         "Req 1 must be Proven on clean types corpus, got: {v:?}"
@@ -58,7 +58,7 @@ fn req01_type_safety_failed() {
 /// Clean ownership program → Proven.
 #[test]
 fn req02_memory_safety_proven() {
-    let v = run(include_str!("corpus/04_ownership/ownership.mvl"), 2);
+    let v = run(include_str!("corpus/06_ownership/ownership.mvl"), 2);
     assert!(
         v.is_proven(),
         "Req 2 must be Proven on clean ownership corpus, got: {v:?}"
@@ -80,7 +80,7 @@ fn req02_memory_safety_failed() {
 /// Exhaustive matches, no partial calls → Proven.
 #[test]
 fn req03_totality_proven() {
-    let v = run(include_str!("corpus/02_types/exhaustive_match.mvl"), 3);
+    let v = run(include_str!("corpus/03_types/exhaustive_match.mvl"), 3);
     assert!(
         v.is_proven(),
         "Req 3 must be Proven on exhaustive match corpus, got: {v:?}"
@@ -102,7 +102,7 @@ fn req03_totality_failed() {
 /// Proper Option handling → Proven.
 #[test]
 fn req04_null_elimination_proven() {
-    let v = run(include_str!("corpus/02_types/option_result.mvl"), 4);
+    let v = run(include_str!("corpus/03_types/option_result.mvl"), 4);
     assert!(
         v.is_proven(),
         "Req 4 must be Proven on option_result corpus, got: {v:?}"
@@ -124,7 +124,7 @@ fn req04_null_elimination_failed() {
 /// All Results handled → Proven.
 #[test]
 fn req05_error_visibility_proven() {
-    let v = run(include_str!("corpus/02_types/option_result.mvl"), 5);
+    let v = run(include_str!("corpus/03_types/option_result.mvl"), 5);
     assert!(
         v.is_proven(),
         "Req 5 must be Proven on option_result corpus, got: {v:?}"
@@ -146,7 +146,7 @@ fn req05_error_visibility_failed() {
 /// No immutability violations → Proven.
 #[test]
 fn req06_ownership_proven() {
-    let v = run(include_str!("corpus/04_ownership/ownership.mvl"), 6);
+    let v = run(include_str!("corpus/06_ownership/ownership.mvl"), 6);
     assert!(
         v.is_proven(),
         "Req 6 must be Proven on clean ownership corpus, got: {v:?}"
@@ -168,7 +168,7 @@ fn req06_ownership_failed() {
 /// All effects declared and propagated → Proven.
 #[test]
 fn req07_effects_proven() {
-    let v = run(include_str!("corpus/05_effects/propagation.mvl"), 7);
+    let v = run(include_str!("corpus/07_effects/propagation.mvl"), 7);
     assert!(
         v.is_proven(),
         "Req 7 must be Proven on effects propagation corpus, got: {v:?}"
@@ -191,7 +191,7 @@ fn req07_effects_failed() {
 #[test]
 fn req08_termination_proven() {
     let v = run(
-        include_str!("corpus/08_termination/total_vs_partial.mvl"),
+        include_str!("corpus/10_termination/total_vs_partial.mvl"),
         8,
     );
     assert!(
@@ -215,7 +215,7 @@ fn req08_termination_failed() {
 /// All functions use only iso/val capabilities (no ref) → Proven.
 #[test]
 fn req09_data_race_freedom_proven() {
-    let v = run(include_str!("corpus/09_concurrency/race_free_fns.mvl"), 9);
+    let v = run(include_str!("corpus/12_actors/race_free_fns.mvl"), 9);
     assert!(
         v.is_proven(),
         "Req 9 must be Proven on race_free_fns corpus, got: {v:?}"
@@ -225,7 +225,7 @@ fn req09_data_race_freedom_proven() {
 /// Actor pub fn behaviors (sendable params only) counted as race-free → Proven (#63/#506).
 #[test]
 fn req09_data_race_freedom_actors_proven() {
-    let v = run(include_str!("corpus/09_concurrency/actors.mvl"), 9);
+    let v = run(include_str!("corpus/12_actors/actors.mvl"), 9);
     assert!(
         v.is_proven(),
         "Req 9 must be Proven on actors corpus, got: {v:?}"
@@ -258,7 +258,7 @@ fn req09_data_race_freedom_ref_escapes_to_actor_failed() {
 #[test]
 fn req10_refinements_proven() {
     let v = run(
-        include_str!("corpus/07_refinements/refinements_fully_proven.mvl"),
+        include_str!("corpus/09_refinements/refinements_fully_proven.mvl"),
         10,
     );
     assert!(
@@ -356,7 +356,7 @@ fn req10_enum_variant_field_failed() {
 /// Security-labeled types, no violations → Proven.
 #[test]
 fn req11_ifc_proven() {
-    let v = run(include_str!("corpus/06_ifc/labels.mvl"), 11);
+    let v = run(include_str!("corpus/08_ifc/labels.mvl"), 11);
     assert!(
         v.is_proven(),
         "Req 11 must be Proven on labels corpus, got: {v:?}"

@@ -530,9 +530,9 @@ fn core_types_demo_runs_and_produces_expected_output() {
 
 // ── unix.mvl — Unix process lifecycle and environment (#45) ───────────────
 
-fn corpus_basics(name: &str) -> String {
+fn corpus_13_stdlib(name: &str) -> String {
     format!(
-        "{}/tests/corpus/01_basics/{name}",
+        "{}/tests/corpus/13_stdlib/{name}",
         env!("CARGO_MANIFEST_DIR")
     )
 }
@@ -543,7 +543,7 @@ fn corpus_basics(name: &str) -> String {
 #[test]
 fn unix_process_lifecycle_check_passes() {
     let out = Command::new(mvl_bin())
-        .args(["check", &corpus_basics("unix.mvl")])
+        .args(["check", &corpus_13_stdlib("unix.mvl")])
         .output()
         .expect("failed to run mvl check");
     assert!(
@@ -579,16 +579,9 @@ fn println_non_string_first_arg_runs() {
 
 // ── log stdlib (#416) ─────────────────────────────────────────────────────
 
-fn corpus_effects(name: &str) -> String {
-    format!(
-        "{}/tests/corpus/05_effects/{name}",
-        env!("CARGO_MANIFEST_DIR")
-    )
-}
-
 #[test]
 fn log_output_check_passes() {
-    let out = run_check(&corpus_effects("log_output.mvl"));
+    let out = run_check(&corpus_13_stdlib("log_output.mvl"));
     assert!(
         out.status.success(),
         "log_output: mvl check failed:\n{}",
@@ -604,7 +597,7 @@ fn log_output_check_passes() {
 #[test]
 fn log_output_formats_correctly() {
     let out = Command::new(mvl_bin())
-        .args(["run", &corpus_effects("log_output.mvl")])
+        .args(["run", &corpus_13_stdlib("log_output.mvl")])
         .output()
         .expect("failed to run mvl run");
     assert!(
@@ -714,7 +707,7 @@ fn pbt_operations_runs_without_panic() {
 }
 
 fn corpus_bdd(name: &str) -> String {
-    format!("{}/tests/corpus/11_bdd/{name}", env!("CARGO_MANIFEST_DIR"))
+    format!("{}/tests/corpus/17_bdd/{name}", env!("CARGO_MANIFEST_DIR"))
 }
 
 /// Spec 004 Req 5 (ADR-0020): BDD naming convention — given_*/when_*/then_*/scenario_*
