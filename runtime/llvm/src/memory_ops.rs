@@ -620,8 +620,7 @@ pub unsafe extern "C" fn _mvl_list_concat(a: *const MvlArray, b: *const MvlArray
 ///
 /// # Safety
 /// `m`, `key`, and `val` must be valid non-null pointers.
-#[no_mangle]
-pub unsafe extern "C" fn mvl_map_insert(
+pub(crate) unsafe fn mvl_map_insert(
     m: *mut MvlMap,
     key: *const u8,
     key_len: usize,
@@ -691,12 +690,7 @@ pub unsafe extern "C" fn mvl_map_insert(
 /// # Safety
 /// `m` and `key` must be valid non-null pointers.
 /// The returned pointer is valid only while `m` is alive and not mutated.
-#[no_mangle]
-pub unsafe extern "C" fn mvl_map_get(
-    m: *const MvlMap,
-    key: *const u8,
-    key_len: usize,
-) -> *const u8 {
+pub(crate) unsafe fn mvl_map_get(m: *const MvlMap, key: *const u8, key_len: usize) -> *const u8 {
     if m.is_null() || key.is_null() {
         return ptr::null();
     }
@@ -717,8 +711,7 @@ pub unsafe extern "C" fn mvl_map_get(
 ///
 /// # Safety
 /// `m` must be a valid non-null `MvlMap` pointer.
-#[no_mangle]
-pub unsafe extern "C" fn mvl_map_len(m: *const MvlMap) -> u64 {
+pub(crate) unsafe fn mvl_map_len(m: *const MvlMap) -> u64 {
     if m.is_null() {
         return 0;
     }
@@ -755,8 +748,7 @@ pub unsafe extern "C" fn mvl_string_chars(s: *const MvlString) -> *mut MvlArray 
 ///
 /// # Safety
 /// `m` must be a valid non-null `MvlMap` pointer.
-#[no_mangle]
-pub unsafe extern "C" fn mvl_map_keys(m: *const MvlMap) -> *mut MvlArray {
+pub(crate) unsafe fn mvl_map_keys(m: *const MvlMap) -> *mut MvlArray {
     let arr = mvl_array_new(std::mem::size_of::<*mut MvlString>(), 0);
     if m.is_null() || (*m).cap == 0 {
         return arr;
@@ -781,8 +773,7 @@ pub unsafe extern "C" fn mvl_map_keys(m: *const MvlMap) -> *mut MvlArray {
 ///
 /// # Safety
 /// `m` must be a valid non-null `MvlMap` pointer.
-#[no_mangle]
-pub unsafe extern "C" fn mvl_map_values(m: *const MvlMap) -> *mut MvlArray {
+pub(crate) unsafe fn mvl_map_values(m: *const MvlMap) -> *mut MvlArray {
     let arr = mvl_array_new(std::mem::size_of::<*mut MvlString>(), 0);
     if m.is_null() || (*m).cap == 0 {
         return arr;
@@ -842,8 +833,7 @@ pub unsafe extern "C" fn mvl_string_ptr_array_drop(arr: *mut MvlArray) {
 ///
 /// # Safety
 /// `m` and `key` must be valid non-null pointers.
-#[no_mangle]
-pub unsafe extern "C" fn mvl_map_remove(m: *mut MvlMap, key: *const u8, key_len: usize) {
+pub(crate) unsafe fn mvl_map_remove(m: *mut MvlMap, key: *const u8, key_len: usize) {
     if m.is_null() || key.is_null() || key_len == 0 || (*m).cap == 0 {
         return;
     }
