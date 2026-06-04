@@ -1,0 +1,33 @@
+//! std.error — error message exposure conventions.
+//!
+//! MVL error types carry two rendering methods:
+//!
+//!   - `user_message(self) -> String`
+//!     Safe for external consumers (HTTP responses, user-facing CLI output).
+//!     Contains NO internal details — no SQL queries, file paths, stack traces,
+//!     or connection strings.
+//!
+//!   - `debug_message(self) -> Secret[String]`
+//!     Full diagnostic detail wrapped in `Secret[String]` via `relabel classify`.
+//!     IFC prevents this from flowing to public sinks (`println`, HTTP responses).
+//!     Use for internal logging and audit trails only.
+//!
+//! The IFC label system enforces this boundary at compile time:
+//!
+//!   ```mvl
+//!   fn handle(e: IoError) -> String {
+//!       // COMPILE ERROR: Secret[String] cannot flow to String return
+//!       e.debug_message()
+//!
+//!       // OK: user_message() returns plain String
+//!       e.user_message()
+//!   }
+//!   ```
+//!
+//! Both methods are pure — no effects required.
+//!
+//! See: Pattern 003 (Error Message Exposure), ADR-0032.
+//!
+//! Import:
+//!   Typically not needed — methods are defined as extensions on each error type
+//!   in their respective modules (std.io, std.net, std.process, etc.).

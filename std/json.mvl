@@ -17,6 +17,23 @@ pub type JsonError = enum {
     ParseError(String),
 }
 
+// ── Error rendering (Pattern 003) ─────────────────────────────────────────
+
+/// Safe, user-facing error description. No parse details exposed.
+pub fn JsonError::user_message(self) -> String {
+    match self {
+        JsonError::ParseError(_) => "invalid JSON",
+    }
+}
+
+/// Full diagnostic detail wrapped in Secret — IFC prevents public exposure.
+pub fn JsonError::debug_message(self) -> Secret[String] {
+    let msg: String = match self {
+        JsonError::ParseError(detail) => "JsonError::ParseError: ".concat(detail),
+    };
+    relabel classify(msg, "ERR-DEBUG")
+}
+
 /// A dynamically-typed JSON value.
 pub type Value = enum {
     Null,

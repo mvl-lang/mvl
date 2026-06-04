@@ -84,6 +84,27 @@ pub type ConfigError = enum {
     EnvError(String),
 }
 
+// ── Error rendering (Pattern 003) ─────────────────────────────────────────────
+
+/// Safe, user-facing error description. No key names or details exposed.
+pub fn ConfigError::user_message(self) -> String {
+    match self {
+        ConfigError::MissingKey(_)  => "missing configuration key",
+        ConfigError::TypeMismatch(_) => "configuration type mismatch",
+        ConfigError::EnvError(_)    => "environment configuration error",
+    }
+}
+
+/// Full diagnostic detail wrapped in Secret — IFC prevents public exposure.
+pub fn ConfigError::debug_message(self) -> Secret[String] {
+    let msg: String = match self {
+        ConfigError::MissingKey(key)   => "ConfigError::MissingKey: ".concat(key),
+        ConfigError::TypeMismatch(detail) => "ConfigError::TypeMismatch: ".concat(detail),
+        ConfigError::EnvError(detail)  => "ConfigError::EnvError: ".concat(detail),
+    };
+    relabel classify(msg, "ERR-DEBUG")
+}
+
 // ── ConfigValue ───────────────────────────────────────────────────────────────
 
 /// A unified, dynamically-typed configuration value.

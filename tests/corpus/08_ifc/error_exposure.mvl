@@ -1,0 +1,49 @@
+// Corpus: error message exposure pattern (Pattern 003, #823)
+//
+// Demonstrates the user_message() / debug_message() convention for safe
+// error rendering with IFC enforcement.
+
+use std.io.{IoError}
+use std.net.{NetError}
+
+// ── Positive: user_message() returns plain String ─────────────────────────
+
+fn safe_error_response(e: IoError) -> String {
+    e.user_message()
+}
+
+fn safe_net_response(e: NetError) -> String {
+    e.user_message()
+}
+
+// ── Positive: debug_message() returns Secret[String] ──────────────────────
+
+fn get_debug_info(e: IoError) -> Secret[String] {
+    e.debug_message()
+}
+
+// ── Positive: Secret can be released with explicit audit tag ──────────────
+
+fn release_for_audit(e: IoError) -> String {
+    let detail: Secret[String] = e.debug_message();
+    relabel release(detail, "AUDIT-LOG")
+}
+
+// ── Positive: match on error then use user_message ────────────────────────
+
+fn handle_io_error(e: IoError) -> String {
+    match e {
+        IoError::NotFound => "404: ".concat(e.user_message()),
+        IoError::PermissionDenied => "403: ".concat(e.user_message()),
+        _ => "500: ".concat(e.user_message()),
+    }
+}
+
+// ── Positive: construct error and call methods ────────────────────────────
+
+fn demo_error_methods() -> String {
+    let e: IoError = IoError::Other("sensitive/path/to/file.db");
+    let safe: String = e.user_message();
+    let _detail: Secret[String] = e.debug_message();
+    safe
+}

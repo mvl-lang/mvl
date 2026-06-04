@@ -15,6 +15,23 @@ pub type TomlError = enum {
     ParseError(String),
 }
 
+// ── Error rendering (Pattern 003) ─────────────────────────────────────────
+
+/// Safe, user-facing error description. No parse details exposed.
+pub fn TomlError::user_message(self) -> String {
+    match self {
+        TomlError::ParseError(_) => "invalid TOML",
+    }
+}
+
+/// Full diagnostic detail wrapped in Secret — IFC prevents public exposure.
+pub fn TomlError::debug_message(self) -> Secret[String] {
+    let msg: String = match self {
+        TomlError::ParseError(detail) => "TomlError::ParseError: ".concat(detail),
+    };
+    relabel classify(msg, "ERR-DEBUG")
+}
+
 /// A dynamically-typed TOML value.
 ///
 /// All function/type names are prefixed with `toml_` to avoid collisions with

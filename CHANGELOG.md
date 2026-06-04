@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+## [0.186.0] - 2026-06-05
+
+### Added
+
+- **Error message exposure pattern with IFC enforcement** (#823)
+  - New `user_message()` and `debug_message()` extension methods on all stdlib error types
+  - `user_message()` returns a safe generic string for end users (e.g., "resource not found")
+  - `debug_message()` returns a `Secret[String]` with full diagnostic details, enforced at compile time via IFC
+  - Pattern documented in `.openspec/patterns/003-error-exposure.md` and applied to all 10 error types
+  - IFC corpus test: `tests/corpus/08_ifc/error_exposure.mvl` validates label transitions
+
+- **Per-package LLVM backend convention** (#811)
+  - New ADR-0042: `llvm.rs` + `extern "c"` ABI for opt-in LLVM support in packages
+  - LLVM emitter now handles `Decl::Extern` with `extern "c"` ABI, emitting LLVM `declare` instructions
+  - CLI discovers `llvm.rs` files via `find_pkg_llvm_bridge()` and compiles them to cdylib
+  - Package `ffi.mvl` supports dual `extern "rust"` / `extern "c"` blocks; backend selects appropriate path
+  - Build flow: discover → compile → emit declarations → execute with `lli --load=libpkg_llvm_bridge.{dylib,so}`
+  - Enables packages like `pkg.sqlite` to provide LLVM-compatible implementations without Rust-backend overhead
+
 ## [0.185.0] - 2026-06-05
 
 ### Added
