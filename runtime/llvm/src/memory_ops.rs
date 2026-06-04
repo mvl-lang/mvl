@@ -185,7 +185,7 @@ pub unsafe extern "C" fn mvl_string_len(s: *const MvlString) -> u64 {
 /// `s` must be a valid non-null `MvlString` pointer.
 /// The returned pointer is only valid while `s` is alive.
 #[no_mangle]
-pub unsafe extern "C" fn mvl_string_ptr(s: *const MvlString) -> *const u8 {
+pub unsafe extern "C" fn _mvl_string_ptr(s: *const MvlString) -> *const u8 {
     if s.is_null() {
         return b"\0".as_ptr();
     }
@@ -1137,7 +1137,7 @@ mod tests {
         unsafe {
             let s = mvl_string_new(b"hello".as_ptr(), 5);
             assert_eq!(mvl_string_len(s), 5);
-            assert_eq!(*mvl_string_ptr(s).add(5), 0); // null-terminated
+            assert_eq!(*_mvl_string_ptr(s).add(5), 0); // null-terminated
             mvl_string_drop(s);
         }
     }
@@ -1147,7 +1147,7 @@ mod tests {
         unsafe {
             let s = mvl_string_new(b"".as_ptr(), 0);
             assert_eq!(mvl_string_len(s), 0);
-            assert_eq!(*mvl_string_ptr(s), 0);
+            assert_eq!(*_mvl_string_ptr(s), 0);
             mvl_string_drop(s);
         }
     }
@@ -1159,9 +1159,9 @@ mod tests {
             let b = mvl_string_new(b"bar".as_ptr(), 3);
             let c = mvl_string_concat(a, b);
             assert_eq!(mvl_string_len(c), 6);
-            let slice = std::slice::from_raw_parts(mvl_string_ptr(c), 6);
+            let slice = std::slice::from_raw_parts(_mvl_string_ptr(c), 6);
             assert_eq!(slice, b"foobar");
-            assert_eq!(*mvl_string_ptr(c).add(6), 0);
+            assert_eq!(*_mvl_string_ptr(c).add(6), 0);
             mvl_string_drop(a);
             mvl_string_drop(b);
             mvl_string_drop(c);
@@ -1391,7 +1391,7 @@ mod tests {
                 let elem_ptr = mvl_array_get(arr, i) as *const *mut MvlString;
                 let cs = *elem_ptr;
                 assert_eq!(mvl_string_len(cs), 1);
-                let slice = std::slice::from_raw_parts(mvl_string_ptr(cs), 1);
+                let slice = std::slice::from_raw_parts(_mvl_string_ptr(cs), 1);
                 assert_eq!(slice, *exp);
             }
             mvl_string_ptr_array_drop(arr);
@@ -1421,12 +1421,12 @@ mod tests {
             // First char: 'a' (1 byte)
             let p0 = *(mvl_array_get(arr, 0) as *const *mut MvlString);
             assert_eq!(mvl_string_len(p0), 1);
-            let s0 = std::slice::from_raw_parts(mvl_string_ptr(p0), 1);
+            let s0 = std::slice::from_raw_parts(_mvl_string_ptr(p0), 1);
             assert_eq!(s0, b"a");
             // Second char: 'é' (2 bytes)
             let p1 = *(mvl_array_get(arr, 1) as *const *mut MvlString);
             assert_eq!(mvl_string_len(p1), 2);
-            let s1 = std::slice::from_raw_parts(mvl_string_ptr(p1), 2);
+            let s1 = std::slice::from_raw_parts(_mvl_string_ptr(p1), 2);
             assert_eq!(s1, "é".as_bytes());
             mvl_string_ptr_array_drop(arr);
             mvl_string_drop(s);
@@ -1450,7 +1450,7 @@ mod tests {
                 let elem_ptr = mvl_array_get(arr, i) as *const *mut MvlString;
                 let ks = *elem_ptr;
                 let len = mvl_string_len(ks) as usize;
-                let slice = std::slice::from_raw_parts(mvl_string_ptr(ks), len);
+                let slice = std::slice::from_raw_parts(_mvl_string_ptr(ks), len);
                 found.insert(std::str::from_utf8(slice).unwrap().to_string());
             }
             assert!(found.contains("alpha"));
@@ -1475,7 +1475,8 @@ mod tests {
                 "tombstone key must not appear in keys()"
             );
             let ks = *(mvl_array_get(arr, 0) as *const *mut MvlString);
-            let slice = std::slice::from_raw_parts(mvl_string_ptr(ks), mvl_string_len(ks) as usize);
+            let slice =
+                std::slice::from_raw_parts(_mvl_string_ptr(ks), mvl_string_len(ks) as usize);
             assert_eq!(slice, b"b");
             mvl_string_ptr_array_drop(arr);
             mvl_map_drop(m);

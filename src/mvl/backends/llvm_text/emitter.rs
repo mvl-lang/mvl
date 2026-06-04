@@ -1259,7 +1259,7 @@ mod tests {
         );
         assert!(ir.contains("call ptr @mvl_map_new(i64"), "{ir}");
         assert!(ir.contains("call void @_mvl_map_insert(ptr"), "{ir}");
-        assert!(ir.contains("call ptr @mvl_string_ptr(ptr"), "{ir}");
+        assert!(ir.contains("call ptr @_mvl_string_ptr(ptr"), "{ir}");
         assert!(ir.contains("call i64 @_mvl_str_len(ptr"), "{ir}");
     }
 
