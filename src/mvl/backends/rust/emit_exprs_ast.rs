@@ -87,7 +87,8 @@ impl RustEmitter {
                     // ── Higher-order collection methods ──────────────────────────────
 
                     // map(f) — direct Rust dispatch using checker type info (#554).
-                    // Option/Result use .map(); List and unknown types use into_iter().collect().
+                    // Option/Result use .map(); Set uses into_iter().collect::<HashSet>();
+                    // List and unknown types use into_iter().collect::<Vec>().
                     "map" if args.len() == 1 => {
                         let receiver_ty = self.expr_types.get(&receiver.span()).cloned();
                         // Use is_option/is_result which strip security labels (Labeled<Option<T>>
@@ -95,20 +96,34 @@ impl RustEmitter {
                         let is_opt_or_result = receiver_ty
                             .as_ref()
                             .is_some_and(|t| t.is_option() || t.is_result());
+                        let is_set = receiver_ty
+                            .as_ref()
+                            .is_some_and(|t| matches!(t.unlabeled(), Ty::Set(_)));
                         if is_opt_or_result {
                             self.emit_expr_ast(receiver);
                             self.push(".map(|__x| (");
                             self.emit_expr_ast(&args[0]);
                             self.push(")(__x.clone()))");
+                        } else if is_set {
+                            // Set.map: into_iter + collect into HashSet.
+                            self.emit_expr_ast(receiver);
+                            self.push(".into_iter().map(|__x| (");
+                            self.emit_expr_ast(&args[0]);
+                            self.push(")(__x.clone())).collect::<std::collections::HashSet<_>>()");
                         } else {
                             // List (and unknown types) use into_iter().collect().
-                            // Set.map is not a valid MVL operation (checker returns Ty::Unknown),
-                            // so this arm is only reached for List receivers in valid programs.
                             self.emit_expr_ast(receiver);
                             self.push(".into_iter().map(|__x| (");
                             self.emit_expr_ast(&args[0]);
                             self.push(")(__x.clone())).collect::<Vec<_>>()");
                         }
+                    }
+                    // map_values(f) — Map only: transform values, keep keys.
+                    "map_values" if args.len() == 1 => {
+                        self.emit_expr_ast(receiver);
+                        self.push(".clone().into_iter().map(|(__k, __v)| (__k, (");
+                        self.emit_expr_ast(&args[0]);
+                        self.push(")(__v.clone()))).collect::<std::collections::HashMap<_, _>>()");
                     }
 
                     // ── Pure MVL higher-order list methods ────────────────────────────
@@ -120,48 +135,88 @@ impl RustEmitter {
                     // bare fn pointers.
                     //
                     // filter / take_while / skip_while — predicate applied to a clone
-                    // of each element; result collected back into Vec.
+                    // of each element; result collected back into Vec (or HashMap/HashSet).
                     "filter" | "take_while" | "skip_while" if args.len() == 1 => {
-                        let needs_borrow = if let Expr::Ident(name, _) = &args[0] {
-                            self.capability_params_map
-                                .get(name.as_str())
-                                .and_then(|b| b.first().copied())
-                                .flatten()
-                                .is_some()
+                        let receiver_ty = self.expr_types.get(&receiver.span()).cloned();
+                        let is_map = method == "filter"
+                            && receiver_ty
+                                .as_ref()
+                                .is_some_and(|t| matches!(t.unlabeled(), Ty::Map(_, _)));
+                        let is_set = method == "filter"
+                            && receiver_ty
+                                .as_ref()
+                                .is_some_and(|t| matches!(t.unlabeled(), Ty::Set(_)));
+                        if is_map {
+                            // Map.filter(f: fn(V) -> Bool): destructure entry, test value.
+                            self.emit_expr_ast(receiver);
+                            self.push(".clone().into_iter().filter(|(_k, __v)| (");
+                            self.emit_expr_ast(&args[0]);
+                            self.push(
+                                ")(__v.clone())).collect::<std::collections::HashMap<_, _>>()",
+                            );
+                        } else if is_set {
+                            // Set.filter(f: fn(T) -> Bool): same as List but collect HashSet.
+                            self.emit_expr_ast(receiver);
+                            self.push(".clone().into_iter().filter(|__x| (");
+                            self.emit_expr_ast(&args[0]);
+                            self.push(")(__x.clone())).collect::<std::collections::HashSet<_>>()");
                         } else {
-                            false
-                        };
-                        self.emit_expr_ast(receiver);
-                        self.push(".clone().into_iter().");
-                        self.push(method);
-                        self.push("(|__x| (");
-                        self.emit_expr_ast(&args[0]);
-                        if needs_borrow {
-                            self.push(")(&__x.clone())).collect::<Vec<_>>()");
-                        } else {
-                            self.push(")(__x.clone())).collect::<Vec<_>>()");
+                            let needs_borrow = if let Expr::Ident(name, _) = &args[0] {
+                                self.capability_params_map
+                                    .get(name.as_str())
+                                    .and_then(|b| b.first().copied())
+                                    .flatten()
+                                    .is_some()
+                            } else {
+                                false
+                            };
+                            self.emit_expr_ast(receiver);
+                            self.push(".clone().into_iter().");
+                            self.push(method);
+                            self.push("(|__x| (");
+                            self.emit_expr_ast(&args[0]);
+                            if needs_borrow {
+                                self.push(")(&__x.clone())).collect::<Vec<_>>()");
+                            } else {
+                                self.push(")(__x.clone())).collect::<Vec<_>>()");
+                            }
                         }
                     }
                     // any / all — same predicate pattern but return bool, no collect.
                     "any" | "all" if args.len() == 1 => {
-                        let needs_borrow = if let Expr::Ident(name, _) = &args[0] {
-                            self.capability_params_map
-                                .get(name.as_str())
-                                .and_then(|b| b.first().copied())
-                                .flatten()
-                                .is_some()
+                        let receiver_ty = self.expr_types.get(&receiver.span()).cloned();
+                        let is_map = receiver_ty
+                            .as_ref()
+                            .is_some_and(|t| matches!(t.unlabeled(), Ty::Map(_, _)));
+                        if is_map {
+                            // Map.any/all(f: fn(V) -> Bool): destructure entry, test value.
+                            self.emit_expr_ast(receiver);
+                            self.push(".clone().into_iter().");
+                            self.push(method);
+                            self.push("(|(_k, __v)| (");
+                            self.emit_expr_ast(&args[0]);
+                            self.push(")(__v.clone()))");
                         } else {
-                            false
-                        };
-                        self.emit_expr_ast(receiver);
-                        self.push(".clone().into_iter().");
-                        self.push(method);
-                        self.push("(|__x| (");
-                        self.emit_expr_ast(&args[0]);
-                        if needs_borrow {
-                            self.push(")(&__x.clone()))");
-                        } else {
-                            self.push(")(__x.clone()))");
+                            // List, Set, and other types iterate elements directly.
+                            let needs_borrow = if let Expr::Ident(name, _) = &args[0] {
+                                self.capability_params_map
+                                    .get(name.as_str())
+                                    .and_then(|b| b.first().copied())
+                                    .flatten()
+                                    .is_some()
+                            } else {
+                                false
+                            };
+                            self.emit_expr_ast(receiver);
+                            self.push(".clone().into_iter().");
+                            self.push(method);
+                            self.push("(|__x| (");
+                            self.emit_expr_ast(&args[0]);
+                            if needs_borrow {
+                                self.push(")(&__x.clone()))");
+                            } else {
+                                self.push(")(__x.clone()))");
+                            }
                         }
                     }
                     // fold(init, f) — init cloned (value arg); f wrapped in closure
@@ -169,32 +224,47 @@ impl RustEmitter {
                     // When f is a named function with borrow params, add & to the
                     // accumulator and/or element in the generated lambda.
                     "fold" if args.len() == 2 => {
-                        let (borrow_acc, borrow_elem) = if let Expr::Ident(name, _) = &args[1] {
-                            let borrows = self
-                                .capability_params_map
-                                .get(name.as_str())
-                                .cloned()
-                                .unwrap_or_default();
-                            let b0 = borrows.first().copied().flatten().is_some();
-                            let b1 = borrows.get(1).copied().flatten().is_some();
-                            (b0, b1)
+                        let receiver_ty = self.expr_types.get(&receiver.span()).cloned();
+                        let is_map = receiver_ty
+                            .as_ref()
+                            .is_some_and(|t| matches!(t.unlabeled(), Ty::Map(_, _)));
+                        if is_map {
+                            // Map.fold(init, f: fn(U, V) -> U): destructure entry, fold over values.
+                            self.emit_expr_ast(receiver);
+                            self.push(".clone().into_iter().fold(");
+                            self.emit_expr_as_arg_ast(&args[0]);
+                            self.push(", |acc, (_k, __v)| (");
+                            self.emit_expr_ast(&args[1]);
+                            self.push(")(acc, __v))");
                         } else {
-                            (false, false)
-                        };
-                        self.emit_expr_ast(receiver);
-                        self.push(".clone().into_iter().fold(");
-                        self.emit_expr_as_arg_ast(&args[0]);
-                        self.push(", |acc, __x| (");
-                        self.emit_expr_ast(&args[1]);
-                        self.push(")(");
-                        if borrow_acc {
-                            self.push("&");
+                            // List, Set, and other types iterate elements directly.
+                            let (borrow_acc, borrow_elem) = if let Expr::Ident(name, _) = &args[1] {
+                                let borrows = self
+                                    .capability_params_map
+                                    .get(name.as_str())
+                                    .cloned()
+                                    .unwrap_or_default();
+                                let b0 = borrows.first().copied().flatten().is_some();
+                                let b1 = borrows.get(1).copied().flatten().is_some();
+                                (b0, b1)
+                            } else {
+                                (false, false)
+                            };
+                            self.emit_expr_ast(receiver);
+                            self.push(".clone().into_iter().fold(");
+                            self.emit_expr_as_arg_ast(&args[0]);
+                            self.push(", |acc, __x| (");
+                            self.emit_expr_ast(&args[1]);
+                            self.push(")(");
+                            if borrow_acc {
+                                self.push("&");
+                            }
+                            self.push("acc, ");
+                            if borrow_elem {
+                                self.push("&");
+                            }
+                            self.push("__x))");
                         }
-                        self.push("acc, ");
-                        if borrow_elem {
-                            self.push("&");
-                        }
-                        self.push("__x))");
                     }
                     // windows(n)/chunks(n) — Rust returns &[T] slices; collect into Vec<Vec<T>>.
                     // MVL passes n as Int (i64); Rust requires usize, so cast.

@@ -538,8 +538,10 @@ impl TypeChecker {
             Ty::List(elem_ty) => Self::list_method_ty(elem_ty.as_ref(), method, arg_tys),
             Ty::Option(inner) => Self::option_method_ty(inner.as_ref(), method, arg_tys),
             Ty::Result(ok_ty, _) => Self::result_method_ty(ok_ty.as_ref(), method, arg_tys),
-            Ty::Map(k_ty, v_ty) => Self::map_method_ty(k_ty.as_ref(), v_ty.as_ref(), method),
-            Ty::Set(t_ty) => Self::set_method_ty(t_ty.as_ref(), method),
+            Ty::Map(k_ty, v_ty) => {
+                Self::map_method_ty(k_ty.as_ref(), v_ty.as_ref(), method, arg_tys)
+            }
+            Ty::Set(t_ty) => Self::set_method_ty(t_ty.as_ref(), method, arg_tys),
             Ty::Named(type_name, _) => {
                 // Req 7: calling any method on an actor type sends to its mailbox — requires Send (#1126).
                 // Actor behaviors are not in method_table, so this check must come first.

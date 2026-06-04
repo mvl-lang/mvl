@@ -343,6 +343,12 @@ pub const BUILTINS: &[BuiltinDesc] = &[
     BuiltinDesc::method("remove", "Map", 1, 1),
     BuiltinDesc::method("is_empty", "Map", 0, 0),
     BuiltinDesc::method("len", "Map", 0, 0),
+    // Map — higher-order methods (pure MVL bodies; both backends emit explicitly)
+    BuiltinDesc::method("map_values", "Map", 1, 1),
+    BuiltinDesc::method("filter", "Map", 1, 1),
+    BuiltinDesc::method("fold", "Map", 2, 2),
+    BuiltinDesc::method("any", "Map", 1, 1),
+    BuiltinDesc::method("all", "Map", 1, 1),
     // ── Set — compiler intrinsics ─────────────────────────────────────────────
     BuiltinDesc::method("insert", "Set", 1, 1),
     BuiltinDesc::method("contains", "Set", 1, 1),
@@ -352,6 +358,12 @@ pub const BUILTINS: &[BuiltinDesc] = &[
     BuiltinDesc::method("union", "Set", 1, 1),
     BuiltinDesc::method("intersection", "Set", 1, 1),
     BuiltinDesc::method("difference", "Set", 1, 1),
+    // Set — higher-order methods (pure MVL bodies; both backends emit explicitly)
+    BuiltinDesc::method("map", "Set", 1, 1),
+    BuiltinDesc::method("filter", "Set", 1, 1),
+    BuiltinDesc::method("fold", "Set", 2, 2),
+    BuiltinDesc::method("any", "Set", 1, 1),
+    BuiltinDesc::method("all", "Set", 1, 1),
     // ── Int — compiler intrinsics ─────────────────────────────────────────────
     BuiltinDesc::method("abs", "Int", 0, 0),
     BuiltinDesc::method("pow", "Int", 1, 1),

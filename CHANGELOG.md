@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [0.182.0] - 2026-06-04
+
+### Added
+
+- **Map/Set higher-order functions** (#1213) — add `map_values`, `filter`, `fold`, `any`, `all` to Map and Set collections
+  - Map HOFs operate on **values only** (single-arg closures), keeping keys unchanged
+  - Set HOFs mirror List patterns exactly, collecting into `HashSet` instead of `Vec`
+  - Closes HOF surface gap: `map.keys().filter(...)` and `set.to_list().map(...)` now have direct methods
+  - Full 4-way sync: stdlib declarations, checker types, both Rust backends, BUILTINS registry
+  - LLVM backend deferred to #436 (existing pattern for new HOF methods)
+  - 27 new runtime tests, 1 corpus type-check test
+
 ## [0.181.0] - 2026-06-04
 
 ### Added

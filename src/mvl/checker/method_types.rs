@@ -323,7 +323,7 @@ impl TypeChecker {
     }
 
     /// Return type for methods on `Map<K, V>`.
-    pub(super) fn map_method_ty(k_ty: &Ty, v_ty: &Ty, method: &str) -> Ty {
+    pub(super) fn map_method_ty(k_ty: &Ty, v_ty: &Ty, method: &str, arg_tys: &[Ty]) -> Ty {
         match method {
             // Safe access — Option<V>, never panic
             "get" => Ty::Option(Box::new(v_ty.clone())),
@@ -339,18 +339,62 @@ impl TypeChecker {
             "keys" => Ty::List(Box::new(k_ty.clone())),
             "values" => Ty::List(Box::new(v_ty.clone())),
             "entries" => Ty::List(Box::new(Ty::Tuple(vec![k_ty.clone(), v_ty.clone()]))),
+            // ── HOFs ──
+            // map_values(f: fn(V) -> U) -> Map<K, U>  — infer U from lambda return type
+            "map_values" => {
+                let u_ty = if let Some(Ty::Fn(_, ret, ..)) = arg_tys.first() {
+                    *ret.clone()
+                } else {
+                    Ty::Unknown
+                };
+                Ty::Map(Box::new(k_ty.clone()), Box::new(u_ty))
+            }
+            // filter(f: fn(V) -> Bool) -> Map<K, V>
+            "filter" => Ty::Map(Box::new(k_ty.clone()), Box::new(v_ty.clone())),
+            // fold(init: U, f: fn(U, V) -> U) -> U  — U inferred from init type
+            "fold" => {
+                if let Some(init_ty) = arg_tys.first() {
+                    init_ty.clone()
+                } else {
+                    Ty::Unknown
+                }
+            }
+            // any/all(f: fn(V) -> Bool) -> Bool
+            "any" | "all" => Ty::Bool,
             _ => Ty::Unknown,
         }
     }
 
     /// Return type for methods on `Set<T>`.
-    pub(super) fn set_method_ty(t_ty: &Ty, method: &str) -> Ty {
+    pub(super) fn set_method_ty(t_ty: &Ty, method: &str, arg_tys: &[Ty]) -> Ty {
         match method {
             "contains" | "is_empty" | "is_subset" | "is_superset" => Ty::Bool,
             "len" => Ty::Int,
             "insert" | "remove" => Ty::Unit,
             "iter" | "to_list" => Ty::List(Box::new(t_ty.clone())),
             "union" | "intersection" | "difference" => Ty::Set(Box::new(t_ty.clone())),
+            // ── HOFs ──
+            // map(f: fn(T) -> U) -> Set<U>  — infer U from lambda return type
+            "map" => {
+                let u_ty = if let Some(Ty::Fn(_, ret, ..)) = arg_tys.first() {
+                    *ret.clone()
+                } else {
+                    Ty::Unknown
+                };
+                Ty::Set(Box::new(u_ty))
+            }
+            // filter(f: fn(T) -> Bool) -> Set<T>
+            "filter" => Ty::Set(Box::new(t_ty.clone())),
+            // fold(init: U, f: fn(U, T) -> U) -> U  — U inferred from init type
+            "fold" => {
+                if let Some(init_ty) = arg_tys.first() {
+                    init_ty.clone()
+                } else {
+                    Ty::Unknown
+                }
+            }
+            // any/all(f: fn(T) -> Bool) -> Bool
+            "any" | "all" => Ty::Bool,
             _ => Ty::Unknown,
         }
     }

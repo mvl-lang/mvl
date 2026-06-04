@@ -1,0 +1,72 @@
+// tests/corpus/02_types/map_set_hof.mvl — Map and Set HOF type checking
+//
+// Verifies that Map/Set higher-order methods resolve correct return types.
+
+use std.collections.{Map}
+
+fn is_positive(x: Int) -> Bool { x > 0 }
+fn double(x: Int) -> Int { x * 2 }
+
+// Map HOFs
+fn test_map_map_values() -> Map[String, Int] {
+    let m: Map[String, Int] = {"a": 1, "b": 2};
+    m.map_values(|v: Int| v * 2)
+}
+
+fn test_map_filter() -> Map[String, Int] {
+    let m: Map[String, Int] = {"a": 1, "b": -2};
+    m.filter(|v: Int| v > 0)
+}
+
+fn test_map_fold() -> Int {
+    let m: Map[String, Int] = {"a": 1, "b": 2};
+    m.fold(0, |acc: Int, v: Int| acc + v)
+}
+
+fn test_map_any() -> Bool {
+    let m: Map[String, Int] = {"a": 1, "b": -2};
+    m.any(is_positive)
+}
+
+fn test_map_all() -> Bool {
+    let m: Map[String, Int] = {"a": 1, "b": 2};
+    m.all(is_positive)
+}
+
+// Set HOFs
+fn test_set_map() -> Set[Int] {
+    let s: Set[Int] = {1, 2, 3};
+    s.map(|x: Int| x * 2)
+}
+
+fn test_set_filter() -> Set[Int] {
+    let s: Set[Int] = {1, -2, 3};
+    s.filter(|x: Int| x > 0)
+}
+
+fn test_set_fold() -> Int {
+    let s: Set[Int] = {1, 2, 3};
+    s.fold(0, |acc: Int, x: Int| acc + x)
+}
+
+fn test_set_any() -> Bool {
+    let s: Set[Int] = {1, -2, 3};
+    s.any(is_positive)
+}
+
+fn test_set_all() -> Bool {
+    let s: Set[Int] = {1, 2, 3};
+    s.all(is_positive)
+}
+
+// Map.map_values type change
+fn test_map_values_type_change() -> Map[String, String] {
+    let m: Map[String, Int] = {"a": 1, "b": 2};
+    m.map_values(|v: Int| v.to_string())
+}
+
+// Set.map type change
+fn test_set_map_type_change() -> Set[String] {
+    let s: Set[Int] = {1, 2, 3};
+    s.map(|x: Int| x.to_string())
+}
