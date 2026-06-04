@@ -185,6 +185,10 @@ impl TextEmitter {
                 } else {
                     None
                 };
+                // Exclude the returned value from drops (move semantics).
+                if let Some(expr) = value {
+                    self.exclude_returned_value(expr);
+                }
                 self.emit_heap_drops();
                 if Self::is_void(&ret_ty) {
                     if self.current_fn_is_main {

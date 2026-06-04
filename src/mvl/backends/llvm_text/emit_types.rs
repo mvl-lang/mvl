@@ -10,6 +10,31 @@ use super::{HeapKind, TextEmitter, RESULT_LLVM_TY};
 impl TextEmitter {
     // ── Heap drop emission (#1185) ─────────────────────────────────────
 
+    /// Remove the heap-local entry for a value that is about to be returned
+    /// (moved out of the function), preventing `emit_heap_drops` from freeing it.
+    pub(super) fn exclude_returned_value(&mut self, expr: &Expr) {
+        match expr {
+            Expr::Ident(name, _) => {
+                // Check ref locals first — the alloca ptr is tracked in heap_locals.
+                if let Some(loc) = self.ref_locals.get(name) {
+                    let ptr = loc.ptr.clone();
+                    self.heap_locals.retain(|(s, _, _)| *s != ptr);
+                    return;
+                }
+                // Check regular (non-ref) locals — the SSA itself is tracked.
+                if let Some(ssa) = self.locals.get(name) {
+                    let ssa = ssa.clone();
+                    self.heap_locals.retain(|(s, _, _)| *s != ssa);
+                }
+            }
+            // Consume / Relabel are transparent wrappers — recurse.
+            Expr::Consume { expr: inner, .. } | Expr::Relabel { expr: inner, .. } => {
+                self.exclude_returned_value(inner);
+            }
+            _ => {}
+        }
+    }
+
     /// Emit `mvl_*_drop` calls for all tracked heap locals.
     /// Called before every `ret` instruction to clean up owned allocations.
     pub(super) fn emit_heap_drops(&mut self) {

@@ -10,7 +10,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::mvl::parser::ast::{
-    ActorDecl, Decl, FnDecl, Program, TypeBody, TypeExpr, VariantFields,
+    ActorDecl, Decl, FnDecl, Program, Stmt, TypeBody, TypeExpr, VariantFields,
 };
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -612,6 +612,11 @@ impl TextEmitter {
         let body_val = self.emit_block(&fd.body)?;
 
         if !self.terminated {
+            // If the function returns a heap-allocated local, exclude it from
+            // drops — ownership transfers to the caller (move semantics).
+            if let Some(Stmt::Expr { expr, .. }) = fd.body.stmts.last() {
+                self.exclude_returned_value(expr);
+            }
             self.emit_heap_drops();
             if self.current_fn_is_main {
                 if !self.actor_decls.is_empty() {
