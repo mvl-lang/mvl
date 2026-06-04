@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [0.183.0] - 2026-06-04
+
+### Added
+
+- **LLVM actor scheduler — Phase 1: reduction counting** (#1181)
+  - Compiler: Insert `call void @mvl_yield_check()` at loop back-edges in `emit_for_range()` and `emit_while()`
+  - Runtime: Add `mvl_yield_check()` C-ABI function with per-thread reduction counter (4000 reductions, Erlang default)
+  - Cooperative yield infrastructure in place for Phase 2 work-stealing scheduler
+
 ## [0.182.2] - 2026-06-04
 
 ### Fixed

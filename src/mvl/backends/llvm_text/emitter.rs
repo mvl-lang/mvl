@@ -216,6 +216,8 @@ struct TextEmitter {
     actor_decls: HashMap<String, ActorDecl>,
     /// True once actor runtime externs have been emitted.
     actor_runtime_declared: bool,
+    /// True once `declare void @mvl_yield_check()` has been emitted (#1181).
+    yield_check_declared: bool,
 
     // ── Builtin fn dispatch (#1160) ────────────────────────────────────────
     /// Maps MVL builtin function name → C-ABI symbol (e.g. `bytes` → `_mvl_random_bytes`).
@@ -323,6 +325,7 @@ impl TextEmitter {
             closure_type_emitted: false,
             actor_decls: HashMap::new(),
             actor_runtime_declared: false,
+            yield_check_declared: false,
             builtin_syms,
             current_fn_is_main: false,
             spawned_actor_handles: Vec::new(),
@@ -413,6 +416,17 @@ impl TextEmitter {
     fn ensure_extern(&mut self, decl: &str) {
         if !self.extern_decls.iter().any(|d| d == decl) {
             self.extern_decls.push(decl.to_string());
+        }
+    }
+
+    /// Ensure `@mvl_yield_check` is declared once per module (#1181).
+    ///
+    /// Called at every loop back-edge insertion point. The flag avoids repeated
+    /// linear scans through `extern_decls`.
+    pub(super) fn ensure_yield_check_extern(&mut self) {
+        if !self.yield_check_declared {
+            self.ensure_extern("declare void @mvl_yield_check()");
+            self.yield_check_declared = true;
         }
     }
 

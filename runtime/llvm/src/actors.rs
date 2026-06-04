@@ -334,6 +334,7 @@ pub unsafe extern "C" fn mvl_actor_spawn(
     let join_handle = thread::spawn(move || {
         CURRENT_ACTOR_HANDLE.with(|cell| cell.set(handle_addr));
         CURRENT_ACTOR_ID.with(|cell| cell.set(actor_id));
+        ACTOR_REDUCTIONS.with(|cell| cell.set(REDUCTION_LIMIT));
         let state_ptr = state.as_mut_ptr();
 
         let result = catch_unwind(AssertUnwindSafe(|| {
@@ -400,6 +401,32 @@ pub unsafe extern "C" fn mvl_actor_send(handle: *mut u8, disc: i64, argc: i64, a
 thread_local! {
     static CURRENT_ACTOR_HANDLE: Cell<usize> = const { Cell::new(0) };
     static CURRENT_ACTOR_ID: Cell<u64> = const { Cell::new(0) };
+    /// Remaining reductions for the current actor thread (#1181).
+    ///
+    /// Decremented by `mvl_yield_check()` at loop back-edges. When exhausted,
+    /// resets to `REDUCTION_LIMIT`. Work-stealing yield is Phase 2.
+    static ACTOR_REDUCTIONS: Cell<u64> = const { Cell::new(REDUCTION_LIMIT) };
+}
+
+/// Number of reductions before cooperative yield — matches Erlang default (#1181).
+const REDUCTION_LIMIT: u64 = 4000;
+
+/// Cooperative yield check — called at loop back-edges by LLVM-compiled code (#1181).
+///
+/// Decrements the per-actor reduction counter. When it reaches zero, resets to
+/// `REDUCTION_LIMIT`. Scheduling yield (work-stealing) is deferred to Phase 2.
+#[no_mangle]
+pub extern "C" fn mvl_yield_check() {
+    ACTOR_REDUCTIONS.with(|cell| {
+        let remaining = cell.get();
+        if remaining <= 1 {
+            cell.set(REDUCTION_LIMIT);
+            // TODO(#1181 Phase 2): suspend current actor fiber and switch to
+            // next ready actor in the work-stealing scheduler.
+        } else {
+            cell.set(remaining - 1);
+        }
+    });
 }
 
 /// Return the current actor's own handle (for passing `self` to other actors).
