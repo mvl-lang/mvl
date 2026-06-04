@@ -2,6 +2,28 @@
 
 ## [Unreleased]
 
+## [0.184.0] - 2026-06-04
+
+### Added
+
+- **LLVM actor scheduler — Phase 2: work-stealing** (#1226)
+  - Replace 1-thread-per-actor model with N work-stealing worker threads using `crossbeam-deque`
+  - Each actor is now a lightweight `ActorCell` (mailbox + state + scheduling flag) instead of an OS thread
+  - Enables ~100K actors with no thread-stack overhead per actor
+  - Worker threads use batch-steal pattern: local queue → injector → sibling steal
+  - Producer-race-window guard ensures messages are never lost during re-schedule
+  - `mvl_yield_check()` now works with the scheduler (reduction budget consumed, work-stealing handles fairness)
+
+### Fixed
+
+- **Work-stealing scheduler safety fixes** (#1227)
+  - Fix use-after-free window in `mvl_actor_drop` by holding registry lock through Box::from_raw
+  - Add guard against self-links in `mvl_link` (prevents infinite death cascade)
+  - Upgrade `handle_ptr` load from Relaxed to Acquire (correct memory ordering)
+  - Replace spin-wait `yield_now()` with `sleep(1ms)` in `join_all` (avoid CPU burn)
+  - Add explicit negative argc guard in `mvl_actor_send` (buffer safety)
+  - Document ExitSignal/DownSignal handling and bounded-mailbox loss limitation
+
 ## [0.183.0] - 2026-06-04
 
 ### Added
