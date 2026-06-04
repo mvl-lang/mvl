@@ -1,0 +1,64 @@
+// db.mvl — Labeled data in database operations.
+//
+// Demonstrates IFC labels surviving database round-trips:
+//   1. Tainted data from DB queries — all query results are untrusted
+//   2. Secret data stays Secret through storage — encryption before write
+//
+// These patterns apply to any domain (HIPAA, PCI-DSS, etc.) where
+// database I/O crosses trust boundaries.
+
+use std.ifc.{Tainted, Secret, taint, trust, classify, release}
+
+// ── Tainted data from DB queries ────────────────────────────────────────────
+
+/// Simulate a database query — results are tainted external input.
+/// Every value from the DB is untrusted until explicitly validated.
+fn query_user_name() -> Tainted[String] {
+    // In production: db_query("SELECT name FROM users WHERE id = ?", id)
+    relabel taint("alice", "DB-QUERY-001")
+}
+
+/// Validate a tainted DB result for safe use.
+fn validate_user(raw: Tainted[String]) -> String {
+    relabel trust(raw, "USER-VALIDATED")
+}
+
+/// Query and validate in one step — common pattern for DB reads.
+fn get_validated_user() -> String {
+    let raw: Tainted[String] = query_user_name();
+    validate_user(raw)
+}
+
+// ── Secret data through DB round-trip ───────────────────────────────────────
+
+/// Release a secret for encryption before storage.
+/// The raw secret never touches the DB — only ciphertext is stored.
+fn encrypt_for_storage(key: Secret[String]) -> String {
+    let raw: String = relabel release(key, "ENCRYPT-001");
+    // In production: apply_encryption(raw)
+    raw
+}
+
+/// Store an encrypted key — Secret is released before write.
+fn store_encrypted_key(key: Secret[String]) -> String {
+    let ciphertext: String = encrypt_for_storage(key);
+    // In production: db_insert("keys", ciphertext)
+    ciphertext
+}
+
+/// Load a credential from the database and mark it as Secret.
+fn load_credential(name: String) -> Secret[String] {
+    // In production: db_query("SELECT value FROM secrets WHERE name = ?", name)
+    relabel classify(name, "CREDENTIAL-LOAD")
+}
+
+// ── Combined patterns ───────────────────────────────────────────────────────
+
+/// Full round-trip: load a Secret credential, store it encrypted,
+/// then reload it as Secret again.
+fn credential_round_trip() -> Secret[String] {
+    let key: Secret[String] = load_credential("admin-key");
+    let _stored: String = store_encrypted_key(key);
+    // Reload from DB — still classified as Secret
+    load_credential("admin-key")
+}

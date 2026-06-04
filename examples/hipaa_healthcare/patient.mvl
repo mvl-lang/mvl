@@ -1,0 +1,98 @@
+// patient.mvl — HIPAA-compliant patient data handling.
+//
+// Demonstrates:
+//   1. User-defined label PHI for Protected Health Information
+//   2. Explicit ingestion boundary: raw String -> PHI[String]
+//   3. Audited release: PHI[String] -> String (HIPAA audit trail)
+//   4. Compile-time enforcement: PHI data cannot leak to output
+//   5. Database patterns: Tainted labeling on query results
+//
+// Usage:
+//   mvl check examples/hipaa_healthcare/patient.mvl
+//   make check   (from examples/hipaa_healthcare/)
+
+use std.ifc.{Tainted, taint, trust}
+use std.log.{Logger, default_logger}
+
+// ── User-defined HIPAA label ────────────────────────────────────────────────
+
+/// Protected Health Information — HIPAA 45 CFR 164.312
+label PHI
+
+/// Release PHI with mandatory audit trail.
+relabel hipaa_release: PHI -> _ audit
+
+/// Mark raw data as PHI at ingestion boundary.
+relabel ingest_phi: _ -> PHI
+
+// ── Ingestion boundary ──────────────────────────────────────────────────────
+
+/// Load a patient record and mark it as PHI at the ingestion point.
+/// Once wrapped, the data cannot reach output without hipaa_release.
+fn load_patient(name: String) -> PHI[String] {
+    relabel ingest_phi(name, "PATIENT-LOAD")
+}
+
+// ── Authorized release ──────────────────────────────────────────────────────
+
+/// Release PHI for sharing with an insurer.
+/// The hipaa_release transition is declaration-level audited — every call
+/// emits a runtime audit event documenting who released what, when, and why.
+fn share_with_insurer(r: PHI[String]) -> String {
+    relabel hipaa_release(r, "INSURER-SHARE-001")
+}
+
+/// Release PHI for appointment confirmation.
+/// Separate audit tag allows tracking which fields were released.
+fn release_for_appointment(r: PHI[String]) -> String {
+    relabel hipaa_release(r, "APPOINTMENT-CONFIRM")
+}
+
+// ── Database patterns: Tainted data from queries ────────────────────────────
+
+/// Simulate a database query returning tainted data.
+/// Raw DB results are untrusted external input — wrap in Tainted.
+fn query_patient_name() -> Tainted[String] {
+    relabel taint("Jane Doe", "DB-QUERY-001")
+}
+
+/// Validate and ingest tainted DB data as PHI.
+/// Two-step boundary crossing: Tainted -> bare -> PHI.
+fn load_from_db() -> PHI[String] {
+    let raw: Tainted[String] = query_patient_name();
+    let validated: String = relabel trust(raw, "DB-VALIDATED");
+    relabel ingest_phi(validated, "DB-INGEST")
+}
+
+// ── Demo scenarios ──────────────────────────────────────────────────────────
+
+fn main() -> Unit ! Log {
+    let logger: Logger = default_logger();
+
+    // 1. Ingest: raw string becomes PHI-labeled
+    let record: PHI[String] = load_patient("Jane Doe");
+    logger.info("patient loaded as PHI", {"status": "ingested"});
+
+    // 2. Authorized release: PHI -> bare String (audited)
+    let released: String = share_with_insurer(record);
+    logger.info("shared with insurer", {"patient": released});
+
+    // 3. Database pattern: Tainted -> validated -> PHI
+    let db_record: PHI[String] = load_from_db();
+    let db_released: String = relabel hipaa_release(db_record, "AUDIT-REVIEW");
+    logger.info("db record released", {"name": db_released})
+
+    // ── Compile errors (if uncommented) ─────────────────────────────────
+    //
+    // PHI[String] cannot flow to Console or Log without hipaa_release:
+    //
+    //   println(record)
+    //   // ERROR: expected String, found PHI[String]
+    //
+    //   logger.info("patient", {"name": record})
+    //   // ERROR: expected String, found PHI[String]
+    //
+    // This is the HIPAA guarantee: PHI data is compile-time protected.
+    // Every release is audited via hipaa_release with a documented tag.
+    // `grep "relabel hipaa_release"` shows every PHI release in the codebase.
+}

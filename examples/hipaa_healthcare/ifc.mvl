@@ -1,0 +1,27 @@
+//! healthcare/ifc.mvl — HIPAA-compliant IFC labels for Protected Health Information.
+//!
+//! Demonstrates user-defined labels for healthcare regulatory compliance.
+//! PHI (Protected Health Information) is an opaque wrapper — no implicit flow.
+//! Every label crossing is explicit and audited per HIPAA 45 CFR 164.312.
+//!
+//! Import:
+//!   use std.ifc.{Tainted, Secret, classify, taint, trust, release}
+//!   (PHI label and transitions are defined locally — user-defined labels)
+
+// ── Label declarations ──────────────────────────────────────────────────────
+
+/// Protected Health Information — patient records, diagnoses, treatment data.
+/// Data wrapped in PHI[T] cannot flow to Console, Log, or Net without
+/// an explicit `relabel hipaa_release(...)` with audit tag.
+pub label PHI
+
+// ── Relabel transitions ─────────────────────────────────────────────────────
+
+/// Release PHI data for authorized purposes (insurer, referral, patient request).
+/// Declaration-level `audit` — HIPAA requires an audit trail for every release.
+/// Every call site automatically emits a runtime audit event.
+pub relabel hipaa_release: PHI -> _ audit
+
+/// Mark raw data as Protected Health Information at ingestion boundary.
+/// Use when loading records from database, HL7 feed, or external system.
+pub relabel ingest_phi: _ -> PHI
