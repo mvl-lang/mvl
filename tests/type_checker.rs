@@ -1162,6 +1162,30 @@ fn session_types_corpus_parses_and_checks() {
     );
 }
 
+#[test]
+fn dead_letter_corpus_parses_and_checks() {
+    // GIVEN: dead-letter types and handler actor (Phase 9, #1180)
+    // THEN: all declarations type-check cleanly with std.actors stdlib loaded
+    let (mut p, _) = Parser::new(include_str!("../std/effects.mvl"));
+    let effects = p.parse_program();
+    let (mut p, _) = Parser::new(include_str!("../std/collections.mvl"));
+    let collections = p.parse_program();
+    let (mut p, _) = Parser::new(include_str!("../std/math.mvl"));
+    let math = p.parse_program();
+    let (mut p, _) = Parser::new(include_str!("../std/log.mvl"));
+    let log = p.parse_program();
+    let (mut p, _) = Parser::new(include_str!("../std/actors.mvl"));
+    let actors = p.parse_program();
+    let (mut p, _) = Parser::new(include_str!("corpus/09_concurrency/dead_letter.mvl"));
+    let prog = p.parse_program();
+    let result = check_with_prelude(&[effects, collections, math, log, actors], &prog);
+    assert!(
+        result.is_ok(),
+        "dead letter corpus should type-check cleanly, got: {:?}",
+        result.errors
+    );
+}
+
 // ── Session type model checker (D1, #134) ────────────────────────────────────
 
 #[test]

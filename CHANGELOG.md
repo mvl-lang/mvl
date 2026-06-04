@@ -2,8 +2,6 @@
 
 ## [Unreleased]
 
-### Changed
-
 ## [0.180.0] - 2026-06-03
 
 ### Added

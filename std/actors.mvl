@@ -16,6 +16,7 @@
 
 use std.collections.{Map}
 use std.log.{Logger}
+use std.math.{int_to_string}
 
 // ── Exit reason ──────────────────────────────────────────────────────────
 
@@ -244,10 +245,15 @@ pub actor DeadLetterHandler {
     /// Receive an undeliverable message and log it at WARN level.
     pub fn undeliverable(val msg: DeadLetter) ! Log {
         self.count = self.count + 1;
-        let fields: Map[String, String] = Map::new();
+        let reason_str: String = match msg.reason {
+            DeadLetterReason::ActorDead       => "actor_dead",
+            DeadLetterReason::ActorRestarting => "actor_restarting",
+            DeadLetterReason::MailboxFull     => "mailbox_full",
+        };
+        let fields: Map[String, String] = {
+            "target": int_to_string(msg.target),
+            "reason": reason_str,
+        };
         self.logger.warn("dead letter", fields)
     }
-
-    /// Return the number of dead letters received so far.
-    fn get_count() -> Int { self.count }
-}
+} with mailbox(unbounded)
