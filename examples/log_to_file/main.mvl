@@ -100,13 +100,12 @@ total fn main() -> Unit ! Log + Env {
         Ok(f) => f,
     };
 
-    let logger: Logger = file_logger(fd, LogFormat::Json, LogLevel::Info);
+    let logger: Logger = file_logger(fd, LogFormat::Json, LogLevel::Debug);
 
     logger.info("application started", {"version": "1.0.0", "env": "production"});
     logger.warn("high memory usage", {"used_mb": "512", "limit_mb": "1024"});
     logger.error("upstream timeout", {"service": "payments", "timeout_ms": "5000"});
 
-    // debug record is dropped — logger min_level is Info
     logger.debug("connection pool stats", {"idle": "3", "active": "2"});
 
     close(fd)
