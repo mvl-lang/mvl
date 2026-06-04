@@ -1125,7 +1125,7 @@ fn corpus_ifc(name: &str) -> String {
     format!("{}/tests/corpus/06_ifc/{name}", env!("CARGO_MANIFEST_DIR"))
 }
 
-fn assert_check_parity(file: &str) {
+fn assert_check_passes(file: &str) {
     let out = std::process::Command::new(mvl_bin())
         .args(["check", file])
         .output()
@@ -1139,75 +1139,75 @@ fn assert_check_parity(file: &str) {
 
 #[test]
 fn cross_backend_check_ownership_consume() {
-    assert_check_parity(&corpus_ownership("consume_transfer.mvl"));
+    assert_check_passes(&corpus_ownership("consume_transfer.mvl"));
 }
 
 #[test]
 fn cross_backend_check_ownership_multi_use() {
-    assert_check_parity(&corpus_ownership("multi_use_clone.mvl"));
+    assert_check_passes(&corpus_ownership("multi_use_clone.mvl"));
 }
 
 #[test]
 fn cross_backend_check_ownership_last_use() {
-    assert_check_parity(&corpus_ownership("last_use_move.mvl"));
+    assert_check_passes(&corpus_ownership("last_use_move.mvl"));
 }
 
 #[test]
 fn cross_backend_check_ownership_field_access() {
-    assert_check_parity(&corpus_ownership("field_access.mvl"));
+    assert_check_passes(&corpus_ownership("field_access.mvl"));
 }
 
 #[test]
 fn cross_backend_check_ownership_nested_calls() {
-    assert_check_parity(&corpus_ownership("nested_calls.mvl"));
+    assert_check_passes(&corpus_ownership("nested_calls.mvl"));
 }
 
 #[test]
 fn cross_backend_check_ownership_value_semantics() {
-    assert_check_parity(&corpus_ownership("value_semantics.mvl"));
+    assert_check_passes(&corpus_ownership("value_semantics.mvl"));
 }
 
 #[test]
 fn cross_backend_check_ownership_ref_mutation() {
-    assert_check_parity(&corpus_ownership("ref_mutation.mvl"));
+    assert_check_passes(&corpus_ownership("ref_mutation.mvl"));
 }
 
 #[test]
 fn cross_backend_check_ownership_lambda_capture() {
-    assert_check_parity(&corpus_ownership("lambda_capture.mvl"));
+    assert_check_passes(&corpus_ownership("lambda_capture.mvl"));
 }
 
 #[test]
 fn cross_backend_check_ownership_loop_clone() {
-    assert_check_parity(&corpus_ownership("loop_clone.mvl"));
+    assert_check_passes(&corpus_ownership("loop_clone.mvl"));
 }
 
 #[test]
 fn cross_backend_check_ownership_collection_post_use() {
-    assert_check_parity(&corpus_ownership("collection_post_use.mvl"));
+    assert_check_passes(&corpus_ownership("collection_post_use.mvl"));
 }
 
 #[test]
 fn cross_backend_check_ifc_labels() {
-    assert_check_parity(&corpus_ifc("labels.mvl"));
+    assert_check_passes(&corpus_ifc("labels.mvl"));
 }
 
 #[test]
 fn cross_backend_check_ifc_propagation() {
-    assert_check_parity(&corpus_ifc("propagation.mvl"));
+    assert_check_passes(&corpus_ifc("propagation.mvl"));
 }
 
 #[test]
 fn cross_backend_check_ifc_declassification() {
-    assert_check_parity(&corpus_ifc("declassification.mvl"));
+    assert_check_passes(&corpus_ifc("declassification.mvl"));
 }
 
 #[test]
 fn cross_backend_check_ifc_interprocedural_clean() {
-    assert_check_parity(&corpus_ifc("interprocedural_clean.mvl"));
+    assert_check_passes(&corpus_ifc("interprocedural_clean.mvl"));
 }
 
 #[test]
 fn cross_backend_check_ifc_lattice() {
-    assert_check_parity(&corpus_ifc("lattice.mvl"));
+    assert_check_passes(&corpus_ifc("lattice.mvl"));
 }

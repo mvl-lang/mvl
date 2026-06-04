@@ -87,6 +87,14 @@ fn lint_missing_totality() {
     assert_lint_has_rule(src, "missing-totality", "missing_totality.mvl");
 }
 
+// ── Effect rules ─────────────────────────────────────────────────────────────
+
+#[test]
+fn lint_redundant_effects() {
+    let src = include_str!("corpus/03_linting/redundant_effects.mvl");
+    assert_lint_has_rule(src, "redundant-effects", "redundant_effects.mvl");
+}
+
 // ── Suggestion rules ─────────────────────────────────────────────────────────
 
 #[test]

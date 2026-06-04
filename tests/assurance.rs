@@ -68,14 +68,15 @@ fn assurance_json_is_valid() {
     let out = run_assurance(&corpus("hello_world.mvl"), &["--json"]);
     assert!(out.status.success(), "mvl assurance --json failed");
     let stdout = String::from_utf8_lossy(&out.stdout);
+    let trimmed = stdout.trim();
     assert!(
-        stdout.trim().starts_with('{'),
-        "JSON output must start with '{{': {stdout}"
+        trimmed.starts_with('{') && trimmed.ends_with('}'),
+        "JSON output must be a top-level object: {stdout}"
     );
-    assert!(
-        stdout.trim().ends_with('}'),
-        "JSON output must end with '}}': {stdout}"
-    );
+    // Validate structural correctness: balanced braces
+    let open = trimmed.chars().filter(|&c| c == '{').count();
+    let close = trimmed.chars().filter(|&c| c == '}').count();
+    assert_eq!(open, close, "unbalanced braces in JSON output:\n{stdout}");
     assert!(
         stdout.contains("\"functions\""),
         "JSON must contain functions field:\n{stdout}"
@@ -124,12 +125,18 @@ fn assurance_json_requirements_array() {
     let out = run_assurance(&corpus("calculator.mvl"), &["--json"]);
     assert!(out.status.success(), "mvl assurance --json failed");
     let stdout = String::from_utf8_lossy(&out.stdout);
-    // Verify all 11 requirements are present in JSON (keys are "1".."11")
+    // Find the requirements object and verify all 11 keys are present
+    assert!(
+        stdout.contains("\"requirements\""),
+        "JSON must contain requirements object:\n{stdout}"
+    );
+    let req_start = stdout.find("\"requirements\"").unwrap();
+    let req_section = &stdout[req_start..];
     for i in 1..=11 {
         let key = format!("\"{i}\":");
         assert!(
-            stdout.contains(&key),
-            "JSON missing requirement {i}:\n{stdout}"
+            req_section.contains(&key),
+            "requirements object missing key {i}:\n{req_section}"
         );
     }
 }

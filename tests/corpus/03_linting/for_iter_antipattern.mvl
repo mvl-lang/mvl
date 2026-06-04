@@ -7,6 +7,7 @@
 //
 // Expected errors:
 //   for-iter-antipattern — while loop with .get(i) / None => () body
+//   while-to-for-range  — counter-based while loop also triggers this co-firing rule
 
 /// Sum of all elements — WRONG: uses the while/get anti-pattern.
 /// This function should be rewritten to use `for x in xs { }`.
