@@ -1000,53 +1000,82 @@ impl RustEmitter {
                 // `consume` mirrors Pony's `consume` for iso; just emit the inner expr in Phase 1
                 self.emit_expr(inner);
             }
-            // `relabel name(expr, "tag")` — IFC label bridge (#894).
+            // `relabel name(expr, "tag")` — IFC label bridge (#894, #896).
             TirExprKind::Relabel {
-                name, expr: inner, ..
+                name,
+                expr: inner,
+                tag,
+                audit,
             } => {
-                match name.as_str() {
-                    // Unwrap: strip the label newtype to get the inner value.
-                    "trust" | "release" | "undb_url" | "unconfig_path" | "unapi_endpoint"
-                    | "unaudit_target" => {
-                        self.push("(");
-                        self.emit_expr(inner);
-                        self.push(").0.clone()");
-                    }
-                    // Wrap: construct the label newtype around the value.
-                    "classify" => {
-                        self.push("Secret((");
-                        self.emit_expr(inner);
-                        self.push("))");
-                    }
-                    "taint" => {
-                        self.push("Tainted((");
-                        self.emit_expr(inner);
-                        self.push("))");
-                    }
-                    "db_url" => {
-                        self.push("DbUrl((");
-                        self.emit_expr(inner);
-                        self.push("))");
-                    }
-                    "config_path" => {
-                        self.push("ConfigPath((");
-                        self.emit_expr(inner);
-                        self.push("))");
-                    }
-                    "api_endpoint" => {
-                        self.push("ApiEndpoint((");
-                        self.emit_expr(inner);
-                        self.push("))");
-                    }
-                    "audit_target" => {
-                        self.push("AuditTarget((");
-                        self.emit_expr(inner);
-                        self.push("))");
-                    }
-                    _ => {
-                        unreachable!(
+                // Emit runtime audit event if expression-level or declaration-level `audit` (#896).
+                let needs_audit = *audit || self.audit_relabels.contains_key(name.as_str());
+                if needs_audit {
+                    let (from_lbl, to_lbl) = self.relabel_label_strings(name);
+                    let loc = self.current_file.clone();
+                    self.push("{ let _mvl_rv = ");
+                    self.emit_expr(inner);
+                    self.push("; ");
+                    self.push(&format!(
+                        "mvl_runtime::stdlib::audit::emit_relabel_event({name:?}.to_string(), {from_lbl:?}.to_string(), {to_lbl:?}.to_string(), {tag:?}.to_string(), {loc:?}.to_string());"
+                    ));
+                    match name.as_str() {
+                        "trust" | "release" | "undb_url" | "unconfig_path" | "unapi_endpoint"
+                        | "unaudit_target" => self.push("(_mvl_rv).0.clone() }"),
+                        "classify" => self.push("Secret((_mvl_rv)) }"),
+                        "taint" => self.push("Tainted((_mvl_rv)) }"),
+                        "db_url" => self.push("DbUrl((_mvl_rv)) }"),
+                        "config_path" => self.push("ConfigPath((_mvl_rv)) }"),
+                        "api_endpoint" => self.push("ApiEndpoint((_mvl_rv)) }"),
+                        "audit_target" => self.push("AuditTarget((_mvl_rv)) }"),
+                        _ => unreachable!(
                             "relabel '{name}': unknown transition — blocked by checker (#990)"
-                        );
+                        ),
+                    }
+                } else {
+                    match name.as_str() {
+                        // Unwrap: strip the label newtype to get the inner value.
+                        "trust" | "release" | "undb_url" | "unconfig_path" | "unapi_endpoint"
+                        | "unaudit_target" => {
+                            self.push("(");
+                            self.emit_expr(inner);
+                            self.push(").0.clone()");
+                        }
+                        // Wrap: construct the label newtype around the value.
+                        "classify" => {
+                            self.push("Secret((");
+                            self.emit_expr(inner);
+                            self.push("))");
+                        }
+                        "taint" => {
+                            self.push("Tainted((");
+                            self.emit_expr(inner);
+                            self.push("))");
+                        }
+                        "db_url" => {
+                            self.push("DbUrl((");
+                            self.emit_expr(inner);
+                            self.push("))");
+                        }
+                        "config_path" => {
+                            self.push("ConfigPath((");
+                            self.emit_expr(inner);
+                            self.push("))");
+                        }
+                        "api_endpoint" => {
+                            self.push("ApiEndpoint((");
+                            self.emit_expr(inner);
+                            self.push("))");
+                        }
+                        "audit_target" => {
+                            self.push("AuditTarget((");
+                            self.emit_expr(inner);
+                            self.push("))");
+                        }
+                        _ => {
+                            unreachable!(
+                                "relabel '{name}': unknown transition — blocked by checker (#990)"
+                            );
+                        }
                     }
                 }
             }

@@ -86,11 +86,16 @@ actor_method   = [ "pub" ] "fn" IDENT "(" [ param_list ] ")" [ "->" return_type 
 (* `effect IO` — base effect; `effect FileIO > IO` — subsumes IO (#852). *)
 effect_decl    = "effect" IDENT [ ">" IDENT { "+" IDENT } ] ";" ;
 
-(* === IFC label declarations (#894) === *)
+(* === IFC label declarations (#894, #896) === *)
 (* `label Tainted;` — declares a user-defined security label for the module. *)
-(* `relabel trust: Tainted -> Secret;` — declares a label transition. *)
+(* `relabel trust: Tainted -> _` — declares a label transition.             *)
+(* `relabel trust: Tainted -> _ audit` — all call sites emit audit events.  *)
 label_decl     = "label" IDENT ";" ;
-relabel_decl   = "relabel" IDENT ":" IDENT "->" IDENT ";" ;
+label_ref      = IDENT | "_" ;
+relabel_decl   = [ "pub" ] "relabel" IDENT ":" label_ref "->" label_ref [ "audit" ] ";" ;
+(* `relabel trust(expr, "TAG")` — applies a transition (expression form).   *)
+(* `relabel trust(expr, "TAG") audit` — this call site emits an audit event. *)
+relabel_expr   = "relabel" IDENT "(" expr "," STRING ")" [ "audit" ] ;
 
 (* === Extern blocks === *)
 (* Declares foreign functions.  "c" ABI: thin C-linkage declarations (linker provides body). *)
@@ -158,7 +163,7 @@ expr           = literal | IDENT | field_access | fn_call | method_call
                | lambda | block_expr | propagate | construct
                | "consume" expr
                | "declassify" "(" expr ")" | "sanitize" "(" expr ")"
-               | actor_create_expr | select_expr ;
+               | actor_create_expr | select_expr | relabel_expr ;
 (* Phase 8, #63: actor creation — `actor TypeName { field: expr, … }` — returns ActorRef *)
 actor_create_expr = "actor" IDENT "{" [ actor_field_init { "," actor_field_init } ] "}" ;
 actor_field_init  = IDENT ":" expr ;

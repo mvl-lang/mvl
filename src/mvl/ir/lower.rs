@@ -401,11 +401,16 @@ fn lower_expr(
         }
 
         Expr::Relabel {
-            name, expr, tag, ..
+            name,
+            expr,
+            tag,
+            audit,
+            ..
         } => TirExprKind::Relabel {
             name: name.clone(),
             expr: Box::new(lower_expr(expr, expr_types, ty_subs)),
             tag: tag.clone(),
+            audit: *audit,
         },
 
         Expr::Borrow { mutable, expr, .. } => TirExprKind::Borrow {

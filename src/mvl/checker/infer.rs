@@ -391,11 +391,12 @@ impl TypeChecker {
                 name,
                 expr,
                 tag: _,
+                audit: _,
                 span,
             } => {
                 let inner_ty = self.infer_expr(expr);
                 // Look up the declared relabel transition.
-                if let Some((from, to)) = self.env.lookup_relabel(name) {
+                if let Some((from, to, _audit_decl)) = self.env.lookup_relabel(name) {
                     let inner_base = inner_ty.base();
                     let input_matches = match &from {
                         None => !matches!(inner_base, Ty::Labeled(..)), // bare → not labeled

@@ -58,6 +58,7 @@ pub fn run(path: &str, json: bool, verbose: bool) {
     let mut total_ref_bindings: usize = 0;
     let mut total_consume_sites: usize = 0;
     let mut total_relabel_ops: usize = 0;
+    let mut total_audit_relabels: usize = 0;
     let mut total_labeled_params: usize = 0;
     let mut total_flow_checks: usize = 0;
     let mut total_refined_fields: usize = 0;
@@ -169,6 +170,7 @@ pub fn run(path: &str, json: bool, verbose: bool) {
         total_ref_bindings += mc.ref_bindings;
         total_consume_sites += mc.consume_sites;
         total_relabel_ops += ifc::count_relabels(prog);
+        total_audit_relabels += ifc::count_audit_relabels(prog);
         total_labeled_params += ifc::count_labeled_params(prog);
         total_flow_checks += ifc::count_flow_check_sites(prog);
         // Refinement proof layer breakdown.
@@ -289,6 +291,7 @@ pub fn run(path: &str, json: bool, verbose: bool) {
     "refinement_proven": {agg_ref_proven},
     "refinement_runtime": {agg_ref_runtime},
     "relabel_operations": {total_relabel_ops},
+    "audit_relabels": {total_audit_relabels},
     "labeled_params": {total_labeled_params},
     "flow_checks": {total_flow_checks},
     "effect_annotations": {total_effects_fns},
@@ -343,9 +346,14 @@ pub fn run(path: &str, json: bool, verbose: bool) {
             agg_ref_by_layer[1], agg_ref_by_layer[2], agg_ref_by_layer[3],
             agg_ref_by_layer[4], agg_ref_by_layer[5],
         );
+        let audit_note = if total_audit_relabels > 0 {
+            format!(", {} audit-marked", total_audit_relabels)
+        } else {
+            String::new()
+        };
         println!(
-            "  relabel operations:   {:<8} flow checks: {}",
-            total_relabel_ops, total_flow_checks,
+            "  relabel operations:   {:<8} flow checks: {}{}",
+            total_relabel_ops, total_flow_checks, audit_note,
         );
         println!(
             "  effect annotations:   {} fns declare effects",

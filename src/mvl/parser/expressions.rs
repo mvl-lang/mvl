@@ -335,11 +335,17 @@ impl Parser {
                 };
                 let rp = self.expect(&TokenKind::RParen);
                 self.require(rp)?;
+                // Optional `audit` contextual keyword (#896): `relabel trust(x, "TAG") audit`
+                let audit = matches!(self.peek_kind(), TokenKind::Ident(kw) if kw == "audit");
+                if audit {
+                    self.advance(); // consume `audit`
+                }
                 let span = self.span_from(start);
                 Ok(Expr::Relabel {
                     name,
                     expr: Box::new(inner),
                     tag,
+                    audit,
                     span,
                 })
             }
@@ -1096,6 +1102,33 @@ mod tests {
         let e = parse_expr(r#"relabel release(secret_key, "AUTH-001")"#);
         assert!(
             matches!(&e, Expr::Relabel { name, .. } if name == "release"),
+            "got: {:?}",
+            e
+        );
+    }
+
+    // ── Requirement 6 / Scenario: Parse relabel audit keyword (#896) ─────────
+
+    #[test]
+    fn parse_relabel_expression_audit_keyword() {
+        // GIVEN: relabel trust(user_input, "XSS-001") audit
+        // THEN: Relabel with audit=true
+        let e = parse_expr(r#"relabel trust(user_input, "XSS-001") audit"#);
+        assert!(
+            matches!(&e, Expr::Relabel { name, tag, audit, .. }
+                if name == "trust" && tag == "XSS-001" && *audit),
+            "got: {:?}",
+            e
+        );
+    }
+
+    #[test]
+    fn parse_relabel_expression_no_audit() {
+        // GIVEN: relabel trust(user_input, "XSS-001") — no audit keyword
+        // THEN: Relabel with audit=false
+        let e = parse_expr(r#"relabel trust(user_input, "XSS-001")"#);
+        assert!(
+            matches!(&e, Expr::Relabel { audit, .. } if !*audit),
             "got: {:?}",
             e
         );
