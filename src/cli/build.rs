@@ -145,7 +145,7 @@ pub fn run(path: &str, run: bool, run_args: &[String], assert_mode: AssertMode, 
     // Phase 3 additionally collects FFI bridges from extern blocks in all_with_pkgs.
     if manifest_embed::any_uses_std_runtime(&all_with_pkgs) {
         if let Some(override_prog) =
-            manifest_embed::load_and_generate(&project_root, &all_with_pkgs)
+            manifest_embed::load_and_generate(&project_root, &all_with_pkgs, "rust")
         {
             stdlib_prelude_progs.insert(0, override_prog);
         }

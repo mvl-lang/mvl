@@ -44,8 +44,10 @@ pub type FfiBridge = struct {
 /// Build provenance: toolchain versions, target triple, and build timestamp.
 ///
 /// Fields are populated progressively across phases:
+///   Phase 3 adds backend ("rust" or "llvm").
 ///   Phase 4 adds rustc_version, llvm_version, target, profile, date.
 pub type BuildInfo = struct {
+    backend:       String,
     rustc_version: Option[String],
     llvm_version:  Option[String],
     target:        String,
@@ -103,6 +105,7 @@ pub fn manifest() -> Manifest {
         packages:       [],
         ffi_bridges:    [],
         build:          BuildInfo {
+            backend:       "rust",
             rustc_version: None,
             llvm_version:  None,
             target:        "",
@@ -169,6 +172,7 @@ pub fn manifest_to_logfmt(m: Manifest) -> String {
         .concat(" runtime=").concat(m.runtime_version)
         .concat(" stdlib=").concat(m.stdlib_version)
         .concat(" stdlib_profile=").concat(profile)
+        .concat(" backend=").concat(m.build.backend)
         .concat(" built=").concat(m.build.date);
     let pkg_parts: ref List[String] = [];
     for p in m.packages {
@@ -229,6 +233,7 @@ pub fn manifest_to_json(m: Manifest) -> String {
         .concat(",\"runtime\":").concat(json_str(m.runtime_version))
         .concat(",\"stdlib\":").concat(json_str(m.stdlib_version))
         .concat(",\"stdlib_profile\":").concat(json_str(profile))
+        .concat(",\"backend\":").concat(json_str(m.build.backend))
         .concat(",\"built\":").concat(json_str(m.build.date))
         .concat(",\"rustc\":").concat(rustc)
         .concat(",\"llvm\":").concat(llvm)
@@ -263,6 +268,7 @@ pub fn manifest_to_block(m: Manifest) -> String {
         .concat(title)
         .concat(sep)
         .concat(block_row("app:",    app_str))
+        .concat(block_row("backend:", m.build.backend))
         .concat(block_row("mvl:",     m.mvl_version))
         .concat(block_row("runtime:", m.runtime_version))
         .concat(block_row("stdlib:",  stdlib_str))
