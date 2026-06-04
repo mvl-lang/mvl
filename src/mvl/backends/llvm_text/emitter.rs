@@ -508,6 +508,26 @@ impl TextEmitter {
                     self.struct_fields.insert(state_name, field_list);
                     self.actor_decls.insert(ad.name.clone(), ad.clone());
                 }
+                Decl::Extern(ed) if ed.abi == "c" => {
+                    // Emit LLVM `declare` for each extern "c" function (#811).
+                    // These are resolved at link time from a loaded shared library
+                    // (e.g. `lli --load=libpkg_foo.{dylib,so}`).
+                    for ef in &ed.fns {
+                        let ret_ty = Self::llvm_ty(&ef.return_type);
+                        let param_tys: Vec<String> =
+                            ef.params.iter().map(|p| Self::llvm_ty(&p.ty)).collect();
+                        let decl =
+                            format!("declare {} @{}({})", ret_ty, ef.name, param_tys.join(", "));
+                        self.ensure_extern(&decl);
+                        // Register return type and param types so call emission works.
+                        self.fn_ret_types
+                            .insert(ef.name.clone(), ef.return_type.as_ref().clone());
+                        self.fn_param_types.insert(
+                            ef.name.clone(),
+                            ef.params.iter().map(|p| p.ty.clone()).collect(),
+                        );
+                    }
+                }
                 _ => {}
             }
         }
@@ -1585,5 +1605,38 @@ mod tests {
             "{ir}"
         );
         assert!(ir.contains("call ptr @_mvl_str_replace(ptr"), "{ir}");
+    }
+
+    /// `extern "c"` block emits LLVM `declare` instructions (#811).
+    #[test]
+    fn extern_c_emits_declare() {
+        let ir = compile(
+            "extern \"c\" {\n\
+             fn sqlite_open(path: String) -> Int\n\
+             fn sqlite_close(db: Int) -> Unit\n\
+             }",
+        );
+        assert!(
+            ir.contains("declare i64 @sqlite_open(ptr)"),
+            "missing sqlite_open declare: {ir}"
+        );
+        assert!(
+            ir.contains("declare void @sqlite_close(i64)"),
+            "missing sqlite_close declare: {ir}"
+        );
+    }
+
+    /// `extern "rust"` block is NOT emitted by LLVM backend (handled by Rust backend only).
+    #[test]
+    fn extern_rust_not_emitted_by_llvm() {
+        let ir = compile(
+            "extern \"rust\" {\n\
+             fn bridge_fn(x: Int) -> Int\n\
+             }",
+        );
+        assert!(
+            !ir.contains("declare") || !ir.contains("bridge_fn"),
+            "extern rust should not emit declare: {ir}"
+        );
     }
 }
