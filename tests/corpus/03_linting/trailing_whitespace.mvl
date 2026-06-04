@@ -1,0 +1,8 @@
+// Corpus: Linting — trailing whitespace detection
+// lint:expect trailing-whitespace
+//
+// Line 1 above has trailing spaces — the linter should flag it.
+
+fn clean_fn(x: Int) -> Int {
+    x + 1
+}

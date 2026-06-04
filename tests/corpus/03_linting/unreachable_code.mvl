@@ -1,0 +1,17 @@
+// Corpus: Linting — unreachable code detection
+// lint:expect unreachable-code
+//
+// Code after a return statement is unreachable.
+
+fn early_return(x: Int) -> Int {
+    if x > 0 {
+        return x;
+    }
+    0
+}
+
+fn unreachable_after_return(x: Int) -> Int {
+    return x;
+    let y: Int = x + 1;
+    y
+}

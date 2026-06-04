@@ -1,0 +1,35 @@
+// Corpus: Ownership — field access expressions (always cloned)
+//
+// Accessing a struct field creates a clone of that field's value.
+// The original struct remains usable. No partial moves allowed.
+
+type Config = struct {
+    host: String,
+    port: Int,
+    max_retries: Int,
+}
+
+fn get_port(cfg: Config) -> Int {
+    cfg.port
+}
+
+// Multiple field accesses from same struct — struct not consumed
+fn validate(cfg: Config) -> Bool {
+    let port_ok: Bool = cfg.port > 0;
+    let retries_ok: Bool = cfg.max_retries >= 0;
+    port_ok && retries_ok
+}
+
+// Nested struct field access
+type Server = struct {
+    config: Config,
+    name: String,
+}
+
+fn server_port(s: Server) -> Int {
+    s.config.port
+}
+
+fn server_name(s: Server) -> String {
+    s.name
+}

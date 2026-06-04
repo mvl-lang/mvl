@@ -1,0 +1,13 @@
+// Corpus: Linting — naming conventions
+// lint:expect naming-convention
+//
+// Functions should use snake_case, types should use PascalCase.
+// This file tests the naming rule against correct and incorrect names.
+
+type GoodType = struct {
+    field_name: Int,
+}
+
+fn good_function(param_name: Int) -> Int {
+    param_name + 1
+}

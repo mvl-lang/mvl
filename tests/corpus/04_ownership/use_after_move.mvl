@@ -1,0 +1,19 @@
+// Corpus: Ownership — use-after-move detection (negative test)
+// corpus:expect-fail
+//
+// After consume(x), any subsequent use of x must be rejected.
+// The checker emits UseAfterMove errors for these programs.
+
+type Token = struct {
+    value: String,
+}
+
+fn accept(t: Token) -> String {
+    t.value
+}
+
+// Use after consume — must be rejected
+fn use_after_consume(t: Token) -> String {
+    let _moved: Token = consume(t);
+    t.value
+}

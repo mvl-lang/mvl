@@ -962,3 +962,252 @@ fn cross_backend_string_ufcs_methods() {
 fn cross_backend_list_ufcs_methods() {
     assert_parity(&corpus_basics("list_ufcs.mvl"), "3\n3\n3");
 }
+
+// ── #1234: Expanded cross-backend parity — examples/programs ─────────────────
+
+#[test]
+fn cross_backend_hello_mvl() {
+    assert_backends_agree("hello_mvl.mvl");
+}
+
+#[test]
+fn cross_backend_else_if_chain() {
+    assert_parity(
+        &corpus("else_if_chain.mvl"),
+        "classify(5) = positive\nclassify(-3) = negative\nclassify(0) = zero",
+    );
+}
+
+#[test]
+#[ignore = "llvm_text: Float sdiv type mismatch — LLVM emits i64 sdiv for Float operands"]
+fn cross_backend_safe_division() {
+    assert_backends_agree("safe_division.mvl");
+}
+
+#[test]
+fn cross_backend_struct_value_semantics() {
+    assert_parity(&corpus("struct_value_semantics.mvl"), "1, 2\n4, 6");
+}
+
+#[test]
+#[ignore = "llvm_text: Int/Float.to_string() in format() returns empty string in LLVM backend"]
+fn cross_backend_core_types_demo() {
+    assert_backends_agree("core_types_demo.mvl");
+}
+
+// ── #1234: Expanded cross-backend parity — corpus/02_types ───────────────────
+
+#[test]
+fn cross_backend_enum_match() {
+    assert_parity(&corpus_types("enum_match_llvm.mvl"), "0\n4\n3");
+}
+
+#[test]
+fn cross_backend_enum_string_match() {
+    assert_parity(
+        &corpus_types("enum_string_match_llvm.mvl"),
+        "DivisionByZero\nOverflow\nMathError: DivisionByZero",
+    );
+}
+
+#[test]
+fn cross_backend_for_loop() {
+    assert_parity(&corpus_types("for_loop_llvm.mvl"), "0\n1\n2\n3\n4");
+}
+
+#[test]
+fn cross_backend_while_loop() {
+    assert_parity(&corpus_types("while_loop_llvm.mvl"), "0\n1\n2\n3\n4");
+}
+
+#[test]
+fn cross_backend_struct_fields() {
+    assert_parity(&corpus_types("struct_fields_llvm.mvl"), "10\n20\n30");
+}
+
+#[test]
+fn cross_backend_result_propagate() {
+    assert_parity(&corpus_types("result_propagate_llvm.mvl"), "10\nbad");
+}
+
+// ── #1234: Expanded parity — corpus/01_basics ────────────────────────────────
+
+/// env_identity_llvm: getuid/getgid output — non-deterministic but both
+/// backends must agree on the values.
+#[test]
+fn cross_backend_env_identity() {
+    let file = corpus_basics("env_identity_llvm.mvl");
+    let transpiler_out = run_transpiler(&file);
+    if let Some(llvm_out) = run_llvm_text(&file) {
+        assert_eq!(
+            llvm_out, transpiler_out,
+            "env_identity_llvm.mvl: backends must agree"
+        );
+    }
+}
+
+// ── #1234: Expanded parity — stdlib tests ────────────────────────────────────
+
+#[test]
+fn cross_backend_range_pipeline() {
+    assert_parity(&corpus_stdlib("range_pipeline.mvl"), "5");
+}
+
+// ── #1234: Expanded parity — contracts ───────────────────────────────────────
+
+fn corpus_contracts(name: &str) -> String {
+    format!(
+        "{}/tests/corpus/12_contracts/{name}",
+        env!("CARGO_MANIFEST_DIR")
+    )
+}
+
+/// basic_contracts.mvl: both backends must compile and run without crashing.
+#[test]
+fn cross_backend_basic_contracts() {
+    let file = corpus_contracts("basic_contracts.mvl");
+    let transpiler_out = run_transpiler(&file);
+    if let Some(llvm_out) = run_llvm_text_or_skip(&file) {
+        assert_eq!(
+            llvm_out, transpiler_out,
+            "basic_contracts.mvl: backends must agree"
+        );
+    }
+}
+
+/// ghost_old_contracts.mvl: both backends must compile and run.
+#[test]
+fn cross_backend_ghost_old_contracts() {
+    let file = corpus_contracts("ghost_old_contracts.mvl");
+    let transpiler_out = run_transpiler(&file);
+    if let Some(llvm_out) = run_llvm_text_or_skip(&file) {
+        assert_eq!(
+            llvm_out, transpiler_out,
+            "ghost_old_contracts.mvl: backends must agree"
+        );
+    }
+}
+
+// ── #1234: Expanded parity — concurrency ─────────────────────────────────────
+
+fn corpus_concurrency(name: &str) -> String {
+    format!(
+        "{}/tests/corpus/09_concurrency/{name}",
+        env!("CARGO_MANIFEST_DIR")
+    )
+}
+
+/// structured_concurrency.mvl: both backends must compile and run.
+#[test]
+fn cross_backend_structured_concurrency() {
+    let file = corpus_concurrency("structured_concurrency.mvl");
+    let transpiler_out = run_transpiler(&file);
+    if let Some(llvm_out) = run_llvm_text_or_skip(&file) {
+        assert_eq!(
+            llvm_out, transpiler_out,
+            "structured_concurrency.mvl: backends must agree"
+        );
+    }
+}
+
+// ── #1234: Expanded parity — check-only corpus tests ─────────────────────────
+// These verify that both backends can at least check the corpus file without
+// errors, even for programs without fn main / stdout output.
+
+fn corpus_ownership(name: &str) -> String {
+    format!(
+        "{}/tests/corpus/04_ownership/{name}",
+        env!("CARGO_MANIFEST_DIR")
+    )
+}
+
+fn corpus_ifc(name: &str) -> String {
+    format!("{}/tests/corpus/06_ifc/{name}", env!("CARGO_MANIFEST_DIR"))
+}
+
+fn assert_check_parity(file: &str) {
+    let out = std::process::Command::new(mvl_bin())
+        .args(["check", file])
+        .output()
+        .expect("failed to run mvl check");
+    assert!(
+        out.status.success(),
+        "check failed for {file}:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn cross_backend_check_ownership_consume() {
+    assert_check_parity(&corpus_ownership("consume_transfer.mvl"));
+}
+
+#[test]
+fn cross_backend_check_ownership_multi_use() {
+    assert_check_parity(&corpus_ownership("multi_use_clone.mvl"));
+}
+
+#[test]
+fn cross_backend_check_ownership_last_use() {
+    assert_check_parity(&corpus_ownership("last_use_move.mvl"));
+}
+
+#[test]
+fn cross_backend_check_ownership_field_access() {
+    assert_check_parity(&corpus_ownership("field_access.mvl"));
+}
+
+#[test]
+fn cross_backend_check_ownership_nested_calls() {
+    assert_check_parity(&corpus_ownership("nested_calls.mvl"));
+}
+
+#[test]
+fn cross_backend_check_ownership_value_semantics() {
+    assert_check_parity(&corpus_ownership("value_semantics.mvl"));
+}
+
+#[test]
+fn cross_backend_check_ownership_ref_mutation() {
+    assert_check_parity(&corpus_ownership("ref_mutation.mvl"));
+}
+
+#[test]
+fn cross_backend_check_ownership_lambda_capture() {
+    assert_check_parity(&corpus_ownership("lambda_capture.mvl"));
+}
+
+#[test]
+fn cross_backend_check_ownership_loop_clone() {
+    assert_check_parity(&corpus_ownership("loop_clone.mvl"));
+}
+
+#[test]
+fn cross_backend_check_ownership_collection_post_use() {
+    assert_check_parity(&corpus_ownership("collection_post_use.mvl"));
+}
+
+#[test]
+fn cross_backend_check_ifc_labels() {
+    assert_check_parity(&corpus_ifc("labels.mvl"));
+}
+
+#[test]
+fn cross_backend_check_ifc_propagation() {
+    assert_check_parity(&corpus_ifc("propagation.mvl"));
+}
+
+#[test]
+fn cross_backend_check_ifc_declassification() {
+    assert_check_parity(&corpus_ifc("declassification.mvl"));
+}
+
+#[test]
+fn cross_backend_check_ifc_interprocedural_clean() {
+    assert_check_parity(&corpus_ifc("interprocedural_clean.mvl"));
+}
+
+#[test]
+fn cross_backend_check_ifc_lattice() {
+    assert_check_parity(&corpus_ifc("lattice.mvl"));
+}

@@ -1,0 +1,20 @@
+// Corpus: Linting — redundant match detection
+// lint:expect redundant-match
+//
+// A match that just returns the matched value is redundant.
+
+type Status = enum {
+    Ok,
+    Error,
+}
+
+fn check_status(s: Status) -> Status {
+    match s {
+        Status::Ok => Status::Ok,
+        Status::Error => Status::Error,
+    }
+}
+
+fn identity_int(x: Int) -> Int {
+    x
+}

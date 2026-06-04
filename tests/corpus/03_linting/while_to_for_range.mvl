@@ -1,0 +1,23 @@
+// Corpus: Linting — while-to-for-range suggestion
+// lint:expect while-to-for-range
+//
+// Counter-based while loops should be rewritten as for-in-range.
+
+partial fn counter_loop(n: Int) -> Int {
+    let sum: ref Int = 0;
+    let i: ref Int = 0;
+    while i < n {
+        sum = sum + i;
+        i = i + 1;
+    }
+    sum
+}
+
+// Correct version using for-in-range (no warning expected)
+fn range_loop(n: Int) -> Int {
+    let sum: ref Int = 0;
+    for i in range(0, n) {
+        sum = sum + i;
+    }
+    sum
+}

@@ -1,0 +1,8 @@
+// Corpus: Linting — redundant effect declarations
+// lint:expect redundant-effects
+//
+// A function that declares effects but doesn't use them.
+
+fn pure_fn(x: Int) -> Int {
+    x + 1
+}

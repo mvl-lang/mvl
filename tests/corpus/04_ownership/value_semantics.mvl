@@ -1,0 +1,37 @@
+// Corpus: Ownership — value semantics (no aliasing)
+//
+// In MVL, struct assignment creates an independent copy (value semantics).
+// Modifying one binding does not affect another.
+
+type Pair = struct {
+    first: Int,
+    second: Int,
+}
+
+// Struct can be used multiple times — each use clones
+fn independent_copies(p: Pair) -> Int {
+    let a: Pair = p;
+    let b: Pair = p;
+    a.first + b.second
+}
+
+// Passing to multiple functions — each gets its own copy
+fn use_in_two_fns(p: Pair) -> Int {
+    let x: Int = p.first;
+    let y: Int = p.second;
+    x + y
+}
+
+// Int is a value type — no move semantics
+fn int_copies(x: Int) -> Int {
+    let a: Int = x;
+    let b: Int = x;
+    a + b
+}
+
+// Bool is a value type
+fn bool_copies(b: Bool) -> Bool {
+    let x: Bool = b;
+    let y: Bool = b;
+    x && y
+}

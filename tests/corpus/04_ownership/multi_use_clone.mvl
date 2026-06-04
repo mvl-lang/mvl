@@ -1,0 +1,37 @@
+// Corpus: Ownership — multi-use variables require clone insertion
+//
+// When a value-type variable is used more than once, the Rust backend
+// must insert .clone() at all non-last use sites. The checker accepts
+// these programs; clone insertion is a backend concern.
+
+type Point = struct {
+    x: Int,
+    y: Int,
+}
+
+fn distance_x(p: Point) -> Int {
+    p.x
+}
+
+fn distance_y(p: Point) -> Int {
+    p.y
+}
+
+// p is used twice — clone required at first call site
+fn total_distance(p: Point) -> Int {
+    let dx: Int = distance_x(p);
+    let dy: Int = distance_y(p);
+    dx + dy
+}
+
+// List used in two function calls
+fn sum_and_len(items: List[Int]) -> Int {
+    let s: Int = items.len();
+    let t: Int = items.len();
+    s + t
+}
+
+// Int used in multiple expressions (value type, trivial copy)
+fn triple(x: Int) -> Int {
+    x + x + x
+}

@@ -1,0 +1,45 @@
+// Corpus: Ownership — last-use move elision (Phase A, Spec 009 Req 2)
+//
+// When a variable is used exactly once (its last use), the backend
+// can move it instead of cloning. The checker accepts all of these.
+
+type Buffer = struct {
+    data: String,
+    size: Int,
+}
+
+fn process(b: Buffer) -> Int {
+    b.size
+}
+
+// Single use of b — move, no clone
+fn single_use(b: Buffer) -> Int {
+    process(b)
+}
+
+// Variable used once in a return expression
+fn pass_through(s: String) -> String {
+    s
+}
+
+// Variable used once inside a match
+fn check_option(opt: Option[Int]) -> Int {
+    match opt {
+        Some(v) => v,
+        None => 0,
+    }
+}
+
+// Variable used once as argument to a constructor
+fn wrap_in_option(x: Int) -> Option[Int] {
+    Some(x)
+}
+
+// Last use in one branch of if/else
+fn conditional_use(flag: Bool, s: String) -> String {
+    if flag {
+        s
+    } else {
+        "default"
+    }
+}

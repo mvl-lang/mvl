@@ -1,0 +1,37 @@
+// Corpus: Ownership — nested function calls with shared arguments
+//
+// When the same variable is passed to multiple nested calls,
+// clone insertion must handle the evaluation order correctly.
+
+fn add(a: Int, b: Int) -> Int { a + b }
+fn mul(a: Int, b: Int) -> Int { a * b }
+
+// x used in both arguments to add — clone needed
+fn double(x: Int) -> Int {
+    add(x, x)
+}
+
+// x used in nested calls
+fn square_plus(x: Int) -> Int {
+    add(mul(x, x), x)
+}
+
+// Struct passed to multiple functions
+type Pair = struct {
+    first: Int,
+    second: Int,
+}
+
+fn sum_pair(p: Pair) -> Int {
+    p.first + p.second
+}
+
+fn max_pair(p: Pair) -> Int {
+    if p.first > p.second { p.first } else { p.second }
+}
+
+fn sum_and_max(p: Pair) -> Int {
+    let s: Int = sum_pair(p);
+    let m: Int = max_pair(p);
+    s + m
+}

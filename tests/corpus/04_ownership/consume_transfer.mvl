@@ -1,0 +1,33 @@
+// Corpus: Ownership — consume() for explicit ownership transfer
+//
+// consume(x) is the sole mechanism for destructive read in MVL.
+// After consume, the variable is moved and further use is an error.
+
+type Resource = struct {
+    handle: Int,
+    name: String,
+}
+
+fn take_resource(r: Resource) -> Int {
+    r.handle
+}
+
+// Explicit consume transfers ownership
+fn transfer_resource(r: Resource) -> Int {
+    take_resource(consume(r))
+}
+
+// consume in a let binding
+fn rebind_resource(r: Resource) -> Resource {
+    let moved: Resource = consume(r);
+    moved
+}
+
+// consume inside a conditional
+fn maybe_consume(flag: Bool, r: Resource) -> Int {
+    if flag {
+        take_resource(consume(r))
+    } else {
+        0
+    }
+}

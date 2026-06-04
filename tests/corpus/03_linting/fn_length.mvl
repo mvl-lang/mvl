@@ -1,0 +1,52 @@
+// Corpus: Linting — function body length
+// lint:expect fn-length
+//
+// A function with a very long body should trigger the fn-length rule.
+
+fn short_fn(x: Int) -> Int {
+    x + 1
+}
+
+fn long_fn(x: Int) -> Int {
+    let a: Int = x + 1;
+    let b: Int = a + 1;
+    let c: Int = b + 1;
+    let d: Int = c + 1;
+    let e: Int = d + 1;
+    let f: Int = e + 1;
+    let g: Int = f + 1;
+    let h: Int = g + 1;
+    let i: Int = h + 1;
+    let j: Int = i + 1;
+    let k: Int = j + 1;
+    let l: Int = k + 1;
+    let m: Int = l + 1;
+    let n: Int = m + 1;
+    let o: Int = n + 1;
+    let p: Int = o + 1;
+    let q: Int = p + 1;
+    let r: Int = q + 1;
+    let s: Int = r + 1;
+    let t: Int = s + 1;
+    let u: Int = t + 1;
+    let v: Int = u + 1;
+    let w: Int = v + 1;
+    let xx: Int = w + 1;
+    let y: Int = xx + 1;
+    let z: Int = y + 1;
+    let a2: Int = z + 1;
+    let b2: Int = a2 + 1;
+    let c2: Int = b2 + 1;
+    let d2: Int = c2 + 1;
+    let e2: Int = d2 + 1;
+    let f2: Int = e2 + 1;
+    let g2: Int = f2 + 1;
+    let h2: Int = g2 + 1;
+    let i2: Int = h2 + 1;
+    let j2: Int = i2 + 1;
+    let k2: Int = j2 + 1;
+    let l2: Int = k2 + 1;
+    let m2: Int = l2 + 1;
+    let n2: Int = m2 + 1;
+    n2
+}
