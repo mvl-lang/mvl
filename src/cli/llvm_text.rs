@@ -7,7 +7,7 @@ use mvl::mvl::loader;
 use mvl::mvl::parser::ast::Program;
 use mvl::mvl::parser::Parser;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process;
 
 type BuiltinTable = std::collections::HashMap<
@@ -59,6 +59,47 @@ pub(super) fn build_project_llvm_text(path: &str) {
     }
 }
 
+/// Compile a package `llvm.rs` to a cdylib shared library (#811).
+///
+/// Returns the path to the compiled `.dylib`/`.so` on success, or `None`
+/// if compilation fails. The output is placed in a temp directory.
+fn compile_llvm_bridge(llvm_rs: &Path) -> Option<PathBuf> {
+    let tmp_dir = tempfile::tempdir().ok()?;
+    let ext = if cfg!(target_os = "macos") {
+        "dylib"
+    } else {
+        "so"
+    };
+    let lib_name = format!("libpkg_llvm_bridge.{ext}");
+    let output_path = tmp_dir.path().join(&lib_name);
+    // Keep the temp directory alive until the caller is done with the library.
+    // `forget` prevents cleanup so lli can load the .dylib/.so later.
+    std::mem::forget(tmp_dir);
+
+    let status = process::Command::new("rustc")
+        .arg("--crate-type=cdylib")
+        .arg("--edition=2021")
+        .arg("-o")
+        .arg(&output_path)
+        .arg(llvm_rs)
+        .status();
+
+    match status {
+        Ok(s) if s.success() => Some(output_path),
+        Ok(_) => {
+            eprintln!(
+                "warning: failed to compile llvm.rs at {} — extern \"c\" symbols may be unresolved",
+                llvm_rs.display()
+            );
+            None
+        }
+        Err(e) => {
+            eprintln!("warning: rustc not found for llvm.rs compilation: {e}");
+            None
+        }
+    }
+}
+
 /// Compile an MVL file to LLVM IR and run it via `lli`.
 /// `mvl run --backend=llvm <file>`
 pub(super) fn run_project_llvm_text(path: &str) {
@@ -93,6 +134,19 @@ pub(super) fn run_project_llvm_text(path: &str) {
     if let Some(lib) = lli::find_mvl_runtime_c_lib() {
         cmd.arg(format!("--load={}", lib.display()));
     }
+
+    // Discover and load package llvm.rs shared libraries (#811).
+    let project_root = Path::new(path)
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf();
+    if let Some(llvm_rs) = loader::find_pkg_llvm_bridge(std::slice::from_ref(&prog), &project_root)
+    {
+        if let Some(lib) = compile_llvm_bridge(&llvm_rs) {
+            cmd.arg(format!("--load={}", lib.display()));
+        }
+    }
+
     let status = cmd.arg(tmp.path()).status().unwrap_or_else(|e| {
         eprintln!("error: failed to run lli: {e}");
         process::exit(1);

@@ -597,6 +597,32 @@ pub fn find_pkg_bridge(progs: &[Program], project_root: &Path) -> Option<PathBuf
     None
 }
 
+/// Find an `llvm.rs` from a `pkg.*` package used by `progs` (#811).
+///
+/// Parallel to `find_pkg_bridge` but for the LLVM backend path.
+/// `llvm.rs` provides `#[no_mangle] pub extern "C" fn` implementations
+/// that are compiled into a shared library and loaded via `lli --load=`.
+pub fn find_pkg_llvm_bridge(progs: &[Program], project_root: &Path) -> Option<PathBuf> {
+    let pkg_map = build_pkg_name_map(project_root);
+    for prog in progs {
+        for decl in &prog.declarations {
+            if let Decl::Use(ud) = decl {
+                if ud.path.first().map(|s| s == "pkg").unwrap_or(false) {
+                    if let Some(pkg_name) = ud.path.get(1) {
+                        if let Some(pkg_dir) = pkg_map.get(pkg_name.as_str()) {
+                            let llvm_bridge = pkg_dir.join("llvm.rs");
+                            if let Ok(canon) = fs::canonicalize(&llvm_bridge) {
+                                return Some(canon);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Collect raw Cargo dep lines from the `[native]` section of `mvl.toml` for
 /// any `pkg.*` package referenced by `progs`. Returns lines like:
 ///   `rusqlite = { version = "0.31", features = ["bundled"] }`

@@ -43,3 +43,4 @@
 | [0039](0039-package-distribution-sbom.md) | Repository-less package distribution and supply chain security (SBOM, Phase A) | Accepted |
 | [0040](0040-remove-inkwell.md) | Remove inkwell / llvm-sys dependency | Accepted |
 | [0041](0041-stdlib-method-dispatch.md) | Stdlib method dispatch — eliminate emitter special-casing | Accepted |
+| [0042](0042-pkg-llvm-backend-convention.md) | Per-package LLVM backend convention — `llvm.rs` + `extern "c"` ABI | Accepted |
