@@ -19,6 +19,7 @@
 use std.log.{Logger, LogFormat, LogLevel, file_logger}
 use std.io.{path, open, close, Fd}
 use std.env.{get}
+use std.runtime.{manifest, Manifest}
 
 // ── Refined types ─────────────────────────────────────────────────────────
 
@@ -102,7 +103,8 @@ total fn main() -> Unit ! Log + Env {
 
     let logger: Logger = file_logger(fd, LogFormat::Json, LogLevel::Debug);
 
-    logger.info("application started", {"version": "1.0.0", "env": "production"});
+    let m: Manifest = manifest();
+    logger.info("application started", {"app": m.app_name, "version": m.app_version, "mvl": m.mvl_version, "env": "production"});
     logger.warn("high memory usage", {"used_mb": "512", "limit_mb": "1024"});
     logger.error("upstream timeout", {"service": "payments", "timeout_ms": "5000"});
 

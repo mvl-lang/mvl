@@ -57,7 +57,7 @@ smoke: guard-mvl ## Smoke-test: build binary (proves compilation without a termi
 	cd $(REPO_ROOT) && $(abspath $(MVL)) build $(DIR)main.mvl
 
 run: guard-mvl ## Run the example; writes $(DIR)app.log and prints it
-	MVL_LOG_FILE=$(DIR)app.log cd $(REPO_ROOT) && $(abspath $(MVL)) run $(DIR)main.mvl
+	cd $(DIR) && MVL_LOG_FILE=$(DIR)app.log $(abspath $(MVL)) run $(DIR)main.mvl
 	@echo ""
 	@echo "── app.log ─────────────────────────────────────────────"
 	@cat $(DIR)app.log
