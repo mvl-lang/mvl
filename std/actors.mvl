@@ -81,8 +81,8 @@ pub builtin fn demonitor(monitor_ref: Int) -> Unit ! Spawn
 /// How a supervisor restarts children after a failure.
 ///
 /// - `OneForOne`  — restart only the failed child (default, #1178)
-/// - `OneForAll`  — restart all children when any fails (#1179, NOT YET IMPLEMENTED — behaves as OneForOne)
-/// - `RestForOne` — restart the failed child and those started after it (#1179, NOT YET IMPLEMENTED — behaves as OneForOne)
+/// - `OneForAll`  — restart all children when any fails (#1179, #1221)
+/// - `RestForOne` — restart the failed child and those started after it (#1179, #1221)
 pub type RestartStrategy = enum {
     OneForOne,
     OneForAll,
@@ -110,6 +110,7 @@ pub actor Supervisor traps_exit {
     live: Map[Int, String]
     counts: Map[String, Int]
     max_r: Map[String, Int]
+    order: List[String]
 
     /// Set the supervisor's own actor ID so it can link new children on restart.
     ///
@@ -135,6 +136,7 @@ pub actor Supervisor traps_exit {
         self.live.insert(child_id, name);
         self.counts.insert(name, 0);
         self.max_r.insert(name, max_restarts);
+        self.order.push(name);
     }
 
     /// Stop tracking a child by name (does not kill it).
@@ -159,6 +161,17 @@ pub actor Supervisor traps_exit {
             }
             i = i + 1;
         }
+        // Remove from spawn order tracking.
+        let new_order: List[String] = [];
+        let j: ref Int = 0;
+        while j < self.order.len() decreases self.order.len() - j {
+            let entry: String = self.order.get(j).unwrap_or("");
+            if entry != name {
+                new_order.push(entry);
+            }
+            j = j + 1;
+        }
+        self.order = new_order;
     }
 
     // Called by the dispatch loop when a linked child sends an exit signal.
@@ -174,6 +187,17 @@ pub actor Supervisor traps_exit {
                 let _: Option[fn() -> Int ! Spawn] = self.starters.remove(name);
                 let _: Option[Int] = self.counts.remove(name);
                 let _: Option[Int] = self.max_r.remove(name);
+                // Remove from spawn order.
+                let new_order: List[String] = [];
+                let oi: ref Int = 0;
+                while oi < self.order.len() decreases self.order.len() - oi {
+                    let entry: String = self.order.get(oi).unwrap_or("");
+                    if entry != name {
+                        new_order.push(entry);
+                    }
+                    oi = oi + 1;
+                }
+                self.order = new_order;
             } else {
                 let count: Int = self.counts.get(name).unwrap_or(0);
                 let max: Int = self.max_r.get(name).unwrap_or(0);
@@ -182,19 +206,130 @@ pub actor Supervisor traps_exit {
                     let _: Option[fn() -> Int ! Spawn] = self.starters.remove(name);
                     let _: Option[Int] = self.counts.remove(name);
                     let _: Option[Int] = self.max_r.remove(name);
+                    // Remove from spawn order.
+                    let new_order: List[String] = [];
+                    let oi: ref Int = 0;
+                    while oi < self.order.len() decreases self.order.len() - oi {
+                        let entry: String = self.order.get(oi).unwrap_or("");
+                        if entry != name {
+                            new_order.push(entry);
+                        }
+                        oi = oi + 1;
+                    }
+                    self.order = new_order;
                 } else {
-                    // Restart: spawn a fresh instance and re-link it.
-                    match self.starters.get(name) {
-                        None => {
-                            // Starter missing — state inconsistency, clean up tracking.
-                            let _: Option[fn() -> Int ! Spawn] = self.starters.remove(name);
-                            let _: Option[Int] = self.counts.remove(name);
-                            let _: Option[Int] = self.max_r.remove(name);
+                    match self.strategy {
+                        RestartStrategy::OneForOne => {
+                            // Restart only the failed child.
+                            match self.starters.get(name) {
+                                None => {
+                                    // Starter missing — state inconsistency, clean up.
+                                    let _: Option[fn() -> Int ! Spawn] = self.starters.remove(name);
+                                    let _: Option[Int] = self.counts.remove(name);
+                                    let _: Option[Int] = self.max_r.remove(name);
+                                    // Remove from spawn order.
+                                    let new_order: List[String] = [];
+                                    let oi: ref Int = 0;
+                                    while oi < self.order.len() decreases self.order.len() - oi {
+                                        let entry: String = self.order.get(oi).unwrap_or("");
+                                        if entry != name {
+                                            new_order.push(entry);
+                                        }
+                                        oi = oi + 1;
+                                    }
+                                    self.order = new_order;
+                                },
+                                Some(start) => {
+                                    let new_id: Int = start();
+                                    link(self.self_id, new_id);
+                                    self.live.insert(new_id, name);
+                                    self.counts.insert(name, count + 1);
+                                },
+                            }
                         },
-                        Some(start) => {
-                            let new_id: Int = start();
-                            link(self.self_id, new_id);
-                            self.live.insert(new_id, name);
+                        RestartStrategy::OneForAll => {
+                            // Restart all children when any child fails.
+                            // NOTE: unlinked children become orphaned — no kill primitive
+                            // exists yet (Phase 9). Old instances are not stopped.
+                            let all_ids: List[Int] = self.live.keys();
+                            let ui: ref Int = 0;
+                            while ui < all_ids.len() decreases all_ids.len() - ui {
+                                let kid: Int = all_ids.get(ui).unwrap_or(0);
+                                unlink(self.self_id, kid);
+                                ui = ui + 1;
+                            }
+                            self.live = Map::new();
+                            // Respawn all children in registration order.
+                            let ri: ref Int = 0;
+                            while ri < self.order.len() decreases self.order.len() - ri {
+                                let child_name: String = self.order.get(ri).unwrap_or("");
+                                match self.starters.get(child_name) {
+                                    Some(start) => {
+                                        let new_id: Int = start();
+                                        link(self.self_id, new_id);
+                                        self.live.insert(new_id, child_name);
+                                    },
+                                    None => {},
+                                }
+                                ri = ri + 1;
+                            }
+                            // Only the triggering child's restart counter is incremented.
+                            // Co-restarted siblings did not fail — their budgets are not
+                            // consumed. This matches Erlang/OTP per-event intensity semantics.
+                            self.counts.insert(name, count + 1);
+                        },
+                        RestartStrategy::RestForOne => {
+                            // Restart the failed child and all children started after it.
+                            // Find position of failed child in order (first match).
+                            let pos: ref Int = self.order.len();
+                            let fi: ref Int = 0;
+                            while fi < self.order.len() decreases self.order.len() - fi {
+                                let n: String = self.order.get(fi).unwrap_or("");
+                                if n == name {
+                                    if pos == self.order.len() {
+                                        pos = fi;
+                                    }
+                                }
+                                fi = fi + 1;
+                            }
+                            // NOTE: unlinked children become orphaned — no kill primitive
+                            // exists yet (Phase 9). Old instances are not stopped.
+                            // Unlink and remove children at pos and after from live.
+                            let all_ids: List[Int] = self.live.keys();
+                            let ri: ref Int = pos;
+                            while ri < self.order.len() decreases self.order.len() - ri {
+                                let child_name: String = self.order.get(ri).unwrap_or("");
+                                let ki: ref Int = 0;
+                                while ki < all_ids.len() decreases all_ids.len() - ki {
+                                    let kid: Int = all_ids.get(ki).unwrap_or(0);
+                                    match self.live.get(kid) {
+                                        Some(kid_name) => {
+                                            if kid_name == child_name {
+                                                unlink(self.self_id, kid);
+                                                let _: Option[String] = self.live.remove(kid);
+                                            }
+                                        },
+                                        None => {},
+                                    }
+                                    ki = ki + 1;
+                                }
+                                ri = ri + 1;
+                            }
+                            // Respawn children from pos onwards.
+                            ri = pos;
+                            while ri < self.order.len() decreases self.order.len() - ri {
+                                let child_name: String = self.order.get(ri).unwrap_or("");
+                                match self.starters.get(child_name) {
+                                    Some(start) => {
+                                        let new_id: Int = start();
+                                        link(self.self_id, new_id);
+                                        self.live.insert(new_id, child_name);
+                                    },
+                                    None => {},
+                                }
+                                ri = ri + 1;
+                            }
+                            // Only the triggering child's restart counter is incremented.
                             self.counts.insert(name, count + 1);
                         },
                     }
