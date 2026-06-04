@@ -159,6 +159,25 @@ mvl run --backend=llvm app.mvl
 
 ---
 
+## Relation to language definition
+
+### Eleven Requirements (ADR-0001)
+
+- **Req 1 (Explicit over implicit):** **Strengthens.** Dual `extern "rust"` / `extern "c"` blocks in `ffi.mvl` make backend-specific function declarations explicit and greppable. LLVM bridging via discoverable `llvm.rs` files is explicit rather than implicit.
+- **Req 6 (No hidden behaviour):** **Strengthens.** Package `llvm.rs` implementations are visible, auditable Rust code. The LLVM backend cannot invoke hidden fallback behaviours — only explicitly bridged functions are resolved.
+- **Req 11 (Backend parity):** **Addresses.** Enables per-package LLVM support, reducing backend divergence. Packages can opt in rather than being forced to choose one backend.
+
+Requirements 2–5, 7–10 are not directly affected by this decision.
+
+### Design Principles (README)
+
+- **Explicit over implicit** — **Strengthens.** Both the presence of `llvm.rs` and the dual `extern` blocks are explicit syntax; discovery via greppable conventions (filename, ABI tag).
+- **One way to do it** — **Consistent with.** Extends the `bridge.rs` convention from ADR-0006 to LLVM, using the same two-file-per-package pattern.
+- **The signature is the threat model** — **Consistent with.** LLVM extern declarations in `ffi.mvl` clearly show what C-ABI functions are called; calling code sees the threat model in the signature.
+- **No hidden behaviour** — **Strengthens.** No implicit fallbacks: if `llvm.rs` is absent or missing a symbol, the error is explicit at link time, not silent no-op stubs.
+
+---
+
 ## Related
 
 - ADR-0006 — FFI via `extern "rust"` and the `bridge.rs` convention
