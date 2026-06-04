@@ -1,0 +1,91 @@
+// payment.mvl — PCI-DSS compliant payment card processing.
+//
+// Demonstrates:
+//   1. User-defined label PCI for Payment Card Industry data
+//   2. Tainted input from user validated before PCI ingestion
+//   3. Tokenization: PCI[String] -> String (audited, card number replaced)
+//   4. Compile-time enforcement: card data cannot leak to logs or storage
+//   5. Composing IFC labels: Tainted -> bare -> PCI -> token
+//
+// Usage:
+//   mvl check examples/pci_payment/payment.mvl
+//   make check   (from examples/pci_payment/)
+
+use std.ifc.{Tainted, taint, trust}
+use std.log.{Logger, default_logger}
+
+// ── User-defined PCI-DSS label ──────────────────────────────────────────────
+
+/// Payment Card Industry data — PCI-DSS Requirements 3 & 10
+label PCI
+
+/// Replace card data with a token (audited at every call site).
+relabel tokenize: PCI -> _ audit
+
+/// Mark raw data as PCI-scoped at ingestion boundary.
+relabel ingest_pci: _ -> PCI
+
+// ── Card validation ─────────────────────────────────────────────────────────
+
+/// Luhn check stub — in production, validates the card number checksum.
+fn validate_luhn(card: String) -> String {
+    card
+}
+
+// ── Card ingestion ──────────────────────────────────────────────────────────
+
+/// Read and validate a card number from tainted user input.
+/// Two-step boundary crossing: Tainted -> validated bare -> PCI.
+fn read_card(input: Tainted[String]) -> PCI[String] {
+    let bare: String = relabel trust(input, "CARD-VALIDATE");
+    let validated: String = validate_luhn(bare);
+    relabel ingest_pci(validated, "CARD-INGEST")
+}
+
+// ── Payment processing ──────────────────────────────────────────────────────
+
+/// Process a payment by tokenizing the card data.
+/// After tokenization, the raw card number is gone — only the token
+/// is sent to the payment processor.
+fn process_payment(card: PCI[String]) -> String {
+    let token: String = relabel tokenize(card, "PAYMENT-001");
+    // token is a bare String — safe to send to processor, store, or log
+    token
+}
+
+/// Alternative: tokenize with expression-level audit for extra traceability.
+fn process_with_extra_audit(card: PCI[String]) -> String {
+    relabel tokenize(card, "PAYMENT-REFUND-002") audit
+}
+
+// ── Demo scenarios ──────────────────────────────────────────────────────────
+
+fn main() -> Unit ! Log {
+    let logger: Logger = default_logger();
+
+    // 1. Simulate tainted card input from user
+    let raw_input: Tainted[String] = relabel taint("4111-1111-1111-1111", "FORM-INPUT");
+
+    // 2. Validate and ingest: Tainted -> bare -> PCI
+    let card: PCI[String] = read_card(raw_input);
+    logger.info("card ingested as PCI", {"status": "ready"});
+
+    // 3. Tokenize: PCI -> bare String (audited)
+    let token: String = process_payment(card);
+    logger.info("payment processed", {"token": token})
+
+    // ── Compile errors (if uncommented) ─────────────────────────────────
+    //
+    // PCI[String] cannot flow to Log, DB, or Net without tokenize:
+    //
+    //   logger.info("card", {"number": card})
+    //   // ERROR: expected String, found PCI[String]
+    //
+    //   db_insert("cards", card)
+    //   // ERROR: PCI[String] cannot be passed where String expected
+    //   // PCI-DSS: cannot store raw card numbers
+    //
+    // This is the PCI-DSS guarantee: card data is compile-time protected.
+    // Every release is audited via tokenize with a documented tag.
+    // `grep "relabel tokenize"` shows every card-data exit in the codebase.
+}

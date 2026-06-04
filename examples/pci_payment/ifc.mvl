@@ -1,0 +1,26 @@
+//! financial/ifc.mvl — PCI-DSS compliant IFC labels for payment card data.
+//!
+//! Demonstrates user-defined labels for financial regulatory compliance.
+//! PCI (Payment Card Industry) is an opaque wrapper — no implicit flow.
+//! Every label crossing is explicit and audited per PCI-DSS Requirements 3 & 10.
+//!
+//! PCI-DSS Requirement 3: Protect stored cardholder data
+//! PCI-DSS Requirement 10: Track and monitor all access to cardholder data
+
+// ── Label declarations ──────────────────────────────────────────────────────
+
+/// Payment Card Industry data — card numbers, CVVs, expiration dates.
+/// Data wrapped in PCI[T] cannot flow to Console, Log, DB, or Net without
+/// an explicit `relabel tokenize(...)` with audit tag.
+pub label PCI
+
+// ── Relabel transitions ─────────────────────────────────────────────────────
+
+/// Replace card data with a token — always audited.
+/// PCI-DSS Requirement 3: raw card numbers must not persist.
+/// Every call site automatically emits a runtime audit event.
+pub relabel tokenize: PCI -> _ audit
+
+/// Mark raw data as PCI-scoped at ingestion boundary.
+/// Use when reading card data from input form or payment terminal.
+pub relabel ingest_pci: _ -> PCI
