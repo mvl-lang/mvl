@@ -15,7 +15,7 @@ use crate::mvl::passes::coverage::BranchKind;
 use crate::mvl::passes::mcdc::analysis::count_clauses_ref;
 
 use crate::mvl::backends::{
-    STDLIB_BUILTIN_METHODS, STDLIB_UFCS_METHODS, STRING_LABEL_PRESERVING_METHODS,
+    rust_emit_by_name, STDLIB_UFCS_METHODS, STRING_LABEL_PRESERVING_METHODS,
 };
 
 impl RustEmitter {
@@ -586,12 +586,10 @@ impl RustEmitter {
                     }
 
                     // ── Builtin stdlib method dispatch (#928) ───────────────────────────
-                    m if STDLIB_BUILTIN_METHODS.iter().any(|(mvl, _)| *mvl == m) => {
-                        let (_, rust_fn) = STDLIB_BUILTIN_METHODS
-                            .iter()
-                            .find(|(mvl, _)| *mvl == m)
-                            .unwrap();
-                        self.push(rust_fn);
+                    // Kernel builtins with `rust_emit` hints in `BUILTINS` are dispatched
+                    // as `runtime_fn(receiver.clone().into(), args)`.
+                    m if rust_emit_by_name(m).is_some() => {
+                        self.push(rust_emit_by_name(m).unwrap());
                         self.push("(");
                         self.emit_expr(receiver);
                         self.push(".clone().into()");

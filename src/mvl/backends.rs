@@ -164,6 +164,19 @@ pub fn rust_emit_for(name: &str, ty: &str) -> Option<&'static str> {
         .and_then(|d| d.rust_emit)
 }
 
+/// Look up the Rust runtime function name for a builtin method by name only.
+///
+/// Unlike [`rust_emit_for`], this does not require knowing the receiver type.
+/// It returns the first match across all receiver types.  This is safe when
+/// the method name is unambiguous (only one receiver type has a `rust_emit`
+/// hint for it), which is the case for all current entries.
+pub fn rust_emit_by_name(name: &str) -> Option<&'static str> {
+    BUILTINS
+        .iter()
+        .find(|d| d.name == name && d.rust_emit.is_some())
+        .and_then(|d| d.rust_emit)
+}
+
 /// Returns `true` if `name` is a known stdlib method on any type.
 ///
 /// Called by backend `_` dispatch arms (debug builds only) to detect missing
@@ -213,23 +226,6 @@ pub(crate) const STDLIB_UFCS_METHODS: &[&str] = &[
     "last",
     "flatten",
     "reverse",
-];
-
-/// Builtin stdlib methods that are unambiguous (only one receiver type).
-/// Dispatched as `runtime_fn(receiver.clone().into(), args)`.
-pub(crate) const STDLIB_BUILTIN_METHODS: &[(&str, &str)] = &[
-    // String-only methods
-    ("chars", "str_chars"),
-    ("find", "str_find"),
-    ("split", "str_split"),
-    ("substring", "str_substring"),
-    ("parse_int", "str_parse_int"),
-    ("parse_float", "str_parse_float"),
-    ("char_at", "str_char_at"),
-    ("byte_at", "str_byte_at"),
-    // List-only methods
-    ("slice", "list_slice"),
-    ("get", "list_get"),
 ];
 
 /// String methods that return a `String` with the same IFC label as their receiver.
