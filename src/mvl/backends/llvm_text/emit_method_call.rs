@@ -61,8 +61,8 @@ impl TextEmitter {
                     self.ensure_extern("declare i64 @mvl_array_len(ptr)");
                     self.push_instr(&format!("{reg} = call i64 @mvl_array_len(ptr {val})"));
                 } else if is_map {
-                    self.ensure_extern("declare i64 @mvl_map_len(ptr)");
-                    self.push_instr(&format!("{reg} = call i64 @mvl_map_len(ptr {val})"));
+                    self.ensure_extern("declare i64 @_mvl_map_len(ptr)");
+                    self.push_instr(&format!("{reg} = call i64 @_mvl_map_len(ptr {val})"));
                 } else {
                     self.ensure_extern("declare i64 @_mvl_str_len(ptr)");
                     self.push_instr(&format!("{reg} = call i64 @_mvl_str_len(ptr {val})"));
@@ -97,16 +97,16 @@ impl TextEmitter {
                 };
                 self.ensure_extern("declare ptr @mvl_string_ptr(ptr)");
                 self.ensure_extern("declare i64 @_mvl_str_len(ptr)");
-                self.ensure_extern("declare ptr @mvl_map_get(ptr, ptr, i64)");
+                self.ensure_extern("declare ptr @_mvl_map_get(ptr, ptr, i64)");
                 let kp = self.next_reg();
                 self.push_instr(&format!("{kp} = call ptr @mvl_string_ptr(ptr {key_arg})"));
                 let kl = self.next_reg();
                 self.push_instr(&format!("{kl} = call i64 @_mvl_str_len(ptr {key_arg})"));
                 let raw = self.next_reg();
                 self.push_instr(&format!(
-                    "{raw} = call ptr @mvl_map_get(ptr {val}, ptr {kp}, i64 {kl})"
+                    "{raw} = call ptr @_mvl_map_get(ptr {val}, ptr {kp}, i64 {kl})"
                 ));
-                // Null-guard: mvl_map_get returns null if key not found.
+                // Null-guard: _mvl_map_get returns null if key not found.
                 let is_null = self.next_reg();
                 self.push_instr(&format!("{is_null} = icmp eq ptr {raw}, null"));
                 let some_bb = self.next_bb("map_get_some");
@@ -143,7 +143,7 @@ impl TextEmitter {
                 };
                 self.ensure_extern("declare ptr @mvl_string_ptr(ptr)");
                 self.ensure_extern("declare i64 @_mvl_str_len(ptr)");
-                self.ensure_extern("declare void @mvl_map_insert(ptr, ptr, i64, ptr, i64)");
+                self.ensure_extern("declare void @_mvl_map_insert(ptr, ptr, i64, ptr, i64)");
                 let kp = self.next_reg();
                 self.push_instr(&format!("{kp} = call ptr @mvl_string_ptr(ptr {key_arg})"));
                 let kl = self.next_reg();
@@ -153,22 +153,22 @@ impl TextEmitter {
                 self.push_instr(&format!("{vs} = alloca {val_ty}"));
                 self.push_instr(&format!("store {val_ty} {val_arg}, ptr {vs}"));
                 self.push_instr(&format!(
-                    "call void @mvl_map_insert(ptr {val}, ptr {kp}, i64 {kl}, ptr {vs}, i64 8)"
+                    "call void @_mvl_map_insert(ptr {val}, ptr {kp}, i64 {kl}, ptr {vs}, i64 8)"
                 ));
                 // insert returns the map (modified in place)
                 Ok(Some(val))
             }
             ("keys", "ptr") if matches!(self.mvl_receiver_kind(receiver), Some("Map")) => {
-                self.ensure_extern("declare ptr @mvl_map_keys(ptr)");
+                self.ensure_extern("declare ptr @_mvl_map_keys(ptr)");
                 let reg = self.next_reg();
-                self.push_instr(&format!("{reg} = call ptr @mvl_map_keys(ptr {val})"));
+                self.push_instr(&format!("{reg} = call ptr @_mvl_map_keys(ptr {val})"));
                 self.reg_types.insert(reg.clone(), "ptr".into());
                 Ok(Some(reg))
             }
             ("values", "ptr") if matches!(self.mvl_receiver_kind(receiver), Some("Map")) => {
-                self.ensure_extern("declare ptr @mvl_map_values(ptr)");
+                self.ensure_extern("declare ptr @_mvl_map_values(ptr)");
                 let reg = self.next_reg();
-                self.push_instr(&format!("{reg} = call ptr @mvl_map_values(ptr {val})"));
+                self.push_instr(&format!("{reg} = call ptr @_mvl_map_values(ptr {val})"));
                 self.reg_types.insert(reg.clone(), "ptr".into());
                 Ok(Some(reg))
             }
@@ -182,14 +182,14 @@ impl TextEmitter {
                 };
                 self.ensure_extern("declare ptr @mvl_string_ptr(ptr)");
                 self.ensure_extern("declare i64 @_mvl_str_len(ptr)");
-                self.ensure_extern("declare ptr @mvl_map_get(ptr, ptr, i64)");
+                self.ensure_extern("declare ptr @_mvl_map_get(ptr, ptr, i64)");
                 let kp = self.next_reg();
                 self.push_instr(&format!("{kp} = call ptr @mvl_string_ptr(ptr {key_arg})"));
                 let kl = self.next_reg();
                 self.push_instr(&format!("{kl} = call i64 @_mvl_str_len(ptr {key_arg})"));
                 let raw = self.next_reg();
                 self.push_instr(&format!(
-                    "{raw} = call ptr @mvl_map_get(ptr {val}, ptr {kp}, i64 {kl})"
+                    "{raw} = call ptr @_mvl_map_get(ptr {val}, ptr {kp}, i64 {kl})"
                 ));
                 // null → false, non-null → true
                 let reg = self.next_reg();
@@ -278,13 +278,13 @@ impl TextEmitter {
                 };
                 self.ensure_extern("declare ptr @mvl_string_ptr(ptr)");
                 self.ensure_extern("declare i64 @_mvl_str_len(ptr)");
-                self.ensure_extern("declare void @mvl_map_remove(ptr, ptr, i64)");
+                self.ensure_extern("declare void @_mvl_map_remove(ptr, ptr, i64)");
                 let kp = self.next_reg();
                 self.push_instr(&format!("{kp} = call ptr @mvl_string_ptr(ptr {key_arg})"));
                 let kl = self.next_reg();
                 self.push_instr(&format!("{kl} = call i64 @_mvl_str_len(ptr {key_arg})"));
                 self.push_instr(&format!(
-                    "call void @mvl_map_remove(ptr {val}, ptr {kp}, i64 {kl})"
+                    "call void @_mvl_map_remove(ptr {val}, ptr {kp}, i64 {kl})"
                 ));
                 // remove returns the map (modified in place)
                 Ok(Some(val))

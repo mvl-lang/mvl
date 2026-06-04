@@ -11,6 +11,7 @@ pub mod args;
 pub mod crypto;
 pub mod env;
 pub mod io;
+pub mod map;
 pub mod net;
 pub mod process;
 pub mod random;
