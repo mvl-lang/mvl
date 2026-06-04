@@ -1,0 +1,22 @@
+// Corpus: std.runtime — compile-time manifest type hierarchy and format functions (#803)
+//
+// Verifies that:
+//   - Manifest type hierarchy is well-formed
+//   - manifest() constructor returns a Manifest
+//   - Three output formats type-check correctly
+//   - Format output can be used in Console context
+//
+// Phase 1: stub manifest only; compile-time embedding in Phase 2+.
+
+use std.runtime.{manifest, manifest_to_logfmt, manifest_to_json, manifest_to_block,
+                  Manifest, StdlibProfile, PackageInfo, FfiBridge, BuildInfo, AssuranceInfo}
+
+fn main() -> Unit ! Console {
+    let m: Manifest = manifest();
+    let logfmt: String = manifest_to_logfmt(m);
+    let json:   String = manifest_to_json(manifest());
+    let block:  String = manifest_to_block(manifest());
+    println(logfmt);
+    println(json);
+    println(block)
+}
