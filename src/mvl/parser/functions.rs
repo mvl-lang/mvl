@@ -770,12 +770,19 @@ impl Parser {
 
         let to = self.parse_relabel_side()?;
 
+        // Optional `audit` contextual keyword (#896): `relabel trust: T -> _ audit`
+        let audit = matches!(self.peek_kind(), TokenKind::Ident(kw) if kw == "audit");
+        if audit {
+            self.advance(); // consume `audit`
+        }
+
         let span = self.span_from(start);
         Ok(RelabelDecl {
             visible,
             name,
             from,
             to,
+            audit,
             span,
         })
     }
@@ -2032,6 +2039,43 @@ fn Counter::set(self, n: Int) -> Unit { }
         if let Decl::Relabel(rd) = &prog.declarations[0] {
             assert_eq!(rd.from, None);
             assert_eq!(rd.to, None);
+        } else {
+            panic!("expected RelabelDecl");
+        }
+    }
+
+    // ── #896: audit keyword on relabel declarations ────────────────────────
+
+    #[test]
+    fn parse_relabel_decl_audit_keyword() {
+        // GIVEN: pub relabel release: Secret -> _ audit
+        // THEN: audit == true
+        let src = "pub relabel release: Secret -> _ audit";
+        let (mut p, lex_errs) = Parser::new(src);
+        assert!(lex_errs.is_empty(), "lex errors: {:?}", lex_errs);
+        let prog = p.parse_program();
+        assert!(p.errors.is_empty(), "parse errors: {:?}", p.errors);
+        if let Decl::Relabel(rd) = &prog.declarations[0] {
+            assert!(rd.audit, "expected audit=true");
+            assert_eq!(rd.name, "release");
+            assert_eq!(rd.from, Some("Secret".to_string()));
+            assert_eq!(rd.to, None);
+        } else {
+            panic!("expected RelabelDecl");
+        }
+    }
+
+    #[test]
+    fn parse_relabel_decl_no_audit() {
+        // GIVEN: pub relabel trust: Tainted -> _
+        // THEN: audit == false
+        let src = "pub relabel trust: Tainted -> _";
+        let (mut p, lex_errs) = Parser::new(src);
+        assert!(lex_errs.is_empty(), "lex errors: {:?}", lex_errs);
+        let prog = p.parse_program();
+        assert!(p.errors.is_empty(), "parse errors: {:?}", p.errors);
+        if let Decl::Relabel(rd) = &prog.declarations[0] {
+            assert!(!rd.audit, "expected audit=false");
         } else {
             panic!("expected RelabelDecl");
         }

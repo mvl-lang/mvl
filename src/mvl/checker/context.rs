@@ -213,10 +213,11 @@ pub struct TypeEnv {
     /// Declared IFC labels (#894). Maps label name → unit.
     /// Pre-seeded with `Tainted` and `Secret` from std/ifc.mvl.
     pub known_labels: HashSet<String>,
-    /// Declared IFC relabel transitions (#894).
-    /// Maps transition name → (from: Option<String>, to: Option<String>).
+    /// Declared IFC relabel transitions (#894, #896).
+    /// Maps transition name → (from, to, audit).
     /// `None` = bare type; `Some(name)` = declared label.
-    pub relabels: HashMap<String, (Option<String>, Option<String>)>,
+    /// `audit` = true when declaration carries `audit` keyword (#896).
+    pub relabels: HashMap<String, (Option<String>, Option<String>, bool)>,
 }
 
 impl Default for TypeEnv {
@@ -238,21 +239,39 @@ impl TypeEnv {
         // Pre-seed the four standard relabel transitions from std/ifc.mvl (#894).
         // These are always available without an explicit `use std.ifc` import,
         // mirroring how `Tainted` and `Secret` are pre-seeded as known labels.
-        let mut relabels: HashMap<String, (Option<String>, Option<String>)> = HashMap::new();
-        relabels.insert("classify".into(), (None, Some("Secret".into()))); // _ -> Secret
-        relabels.insert("taint".into(), (None, Some("Tainted".into()))); // _ -> Tainted
-        relabels.insert("trust".into(), (Some("Tainted".into()), None)); // Tainted -> _
-        relabels.insert("release".into(), (Some("Secret".into()), None)); // Secret -> _
+        let mut relabels: HashMap<String, (Option<String>, Option<String>, bool)> = HashMap::new();
+        relabels.insert("classify".into(), (None, Some("Secret".into()), false)); // _ -> Secret
+        relabels.insert("taint".into(), (None, Some("Tainted".into()), false)); // _ -> Tainted
+        relabels.insert("trust".into(), (Some("Tainted".into()), None, false)); // Tainted -> _
+        relabels.insert("release".into(), (Some("Secret".into()), None, false)); // Secret -> _
 
         // Capability relabel transitions (#931): IFC labels as capability tokens.
-        relabels.insert("config_path".into(), (None, Some("ConfigPath".into()))); // _ -> ConfigPath
-        relabels.insert("unconfig_path".into(), (Some("ConfigPath".into()), None)); // ConfigPath -> _
-        relabels.insert("db_url".into(), (None, Some("DbUrl".into()))); // _ -> DbUrl
-        relabels.insert("undb_url".into(), (Some("DbUrl".into()), None)); // DbUrl -> _
-        relabels.insert("api_endpoint".into(), (None, Some("ApiEndpoint".into()))); // _ -> ApiEndpoint
-        relabels.insert("unapi_endpoint".into(), (Some("ApiEndpoint".into()), None)); // ApiEndpoint -> _
-        relabels.insert("audit_target".into(), (None, Some("AuditTarget".into()))); // _ -> AuditTarget
-        relabels.insert("unaudit_target".into(), (Some("AuditTarget".into()), None)); // AuditTarget -> _
+        relabels.insert(
+            "config_path".into(),
+            (None, Some("ConfigPath".into()), false),
+        ); // _ -> ConfigPath
+        relabels.insert(
+            "unconfig_path".into(),
+            (Some("ConfigPath".into()), None, false),
+        ); // ConfigPath -> _
+        relabels.insert("db_url".into(), (None, Some("DbUrl".into()), false)); // _ -> DbUrl
+        relabels.insert("undb_url".into(), (Some("DbUrl".into()), None, false)); // DbUrl -> _
+        relabels.insert(
+            "api_endpoint".into(),
+            (None, Some("ApiEndpoint".into()), false),
+        ); // _ -> ApiEndpoint
+        relabels.insert(
+            "unapi_endpoint".into(),
+            (Some("ApiEndpoint".into()), None, false),
+        ); // ApiEndpoint -> _
+        relabels.insert(
+            "audit_target".into(),
+            (None, Some("AuditTarget".into()), false),
+        ); // _ -> AuditTarget
+        relabels.insert(
+            "unaudit_target".into(),
+            (Some("AuditTarget".into()), None, false),
+        ); // AuditTarget -> _
         let mut env = TypeEnv {
             scopes: vec![HashMap::new()],
             types: HashMap::new(),
@@ -266,8 +285,8 @@ impl TypeEnv {
     }
 
     /// Look up a relabel transition by name.
-    /// Returns `(from, to)` where `None` = bare and `Some(name)` = label.
-    pub fn lookup_relabel(&self, name: &str) -> Option<(Option<String>, Option<String>)> {
+    /// Returns `(from, to, audit)` where `None` = bare and `Some(name)` = label.
+    pub fn lookup_relabel(&self, name: &str) -> Option<(Option<String>, Option<String>, bool)> {
         self.relabels.get(name).cloned()
     }
 
@@ -277,8 +296,14 @@ impl TypeEnv {
     }
 
     /// Register a relabel transition.
-    pub fn register_relabel(&mut self, name: String, from: Option<String>, to: Option<String>) {
-        self.relabels.insert(name, (from, to));
+    pub fn register_relabel(
+        &mut self,
+        name: String,
+        from: Option<String>,
+        to: Option<String>,
+        audit: bool,
+    ) {
+        self.relabels.insert(name, (from, to, audit));
     }
 
     /// Register a `From<source>` impl for `target`.

@@ -14,6 +14,7 @@
 
 pub mod actors;
 pub mod args;
+pub mod audit;
 pub mod crypto;
 pub mod env;
 pub mod io;

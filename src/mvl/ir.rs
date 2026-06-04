@@ -120,6 +120,8 @@ pub enum TirExprKind {
         name: String,
         expr: Box<TirExpr>,
         tag: String,
+        /// Combined audit flag: true if expression-level `audit` OR declaration-level `audit`.
+        audit: bool,
     },
     /// `val expr` / `ref expr` — expression-level borrow.
     Borrow {
