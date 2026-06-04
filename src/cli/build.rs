@@ -139,11 +139,14 @@ pub fn run(path: &str, run: bool, run_args: &[String], assert_mode: AssertMode, 
     stdlib_prelude_progs.extend(loader::load_mvl_native_stdlib_extras(&all_with_pkgs));
     stdlib_prelude_progs.extend(pkg_progs.clone());
 
-    // Phase 2 (#803): embed real manifest data when the program uses std.runtime.
+    // Phase 2+3 (#803): embed real manifest data when the program uses std.runtime.
     // A synthetic manifest() override is prepended so it wins the "first wins"
     // deduplication in emit_program_core, replacing the Phase 1 stub values.
+    // Phase 3 additionally collects FFI bridges from extern blocks in all_with_pkgs.
     if manifest_embed::any_uses_std_runtime(&all_with_pkgs) {
-        if let Some(override_prog) = manifest_embed::load_and_generate(&project_root) {
+        if let Some(override_prog) =
+            manifest_embed::load_and_generate(&project_root, &all_with_pkgs)
+        {
             stdlib_prelude_progs.insert(0, override_prog);
         }
     }
