@@ -249,6 +249,12 @@ Built-in functions from `std/core.mvl` MUST be translated to valid Rust macro in
 
 **Tests:** `tests/transpiler.rs::println_non_string_args` (#198)
 
+> **ADR:** [ADR-0041 — Stdlib method dispatch: eliminate emitter special-casing](../adr/0041-stdlib-method-dispatch.md)
+> The current dispatch table (above) reflects the transitional state. Phases 1–3 of ADR-0041 will migrate
+> category B–E methods out of the emitter. When complete, this requirement will describe only category A
+> (kernel builtins: `len`, `push`, `get`, `slice`, `concat`, `contains`) and the `builtin fn` dispatch
+> rule; all other stdlib methods will compile from their MVL bodies like user functions.
+
 ### Requirement 5: Expression Context vs Statement Context [MUST]
 
 The transpiler MUST track whether an expression is emitted in statement context (result discarded, semicolon appended) or expression context (result used, no semicolon). Function calls, `match`, and `if/else` can appear in both contexts.
