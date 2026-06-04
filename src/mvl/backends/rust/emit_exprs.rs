@@ -327,6 +327,23 @@ impl RustEmitter {
                         self.emit_expr(receiver);
                         self.push(");__v.sort_by(|__a,__b|__a.partial_cmp(__b).unwrap_or(std::cmp::Ordering::Equal));__v}");
                     }
+                    // min() — smallest element via partial_cmp
+                    "min" if args.is_empty() => {
+                        self.emit_expr(receiver);
+                        self.push(".into_iter().min_by(|__a,__b|__a.partial_cmp(__b).unwrap_or(std::cmp::Ordering::Equal))");
+                    }
+                    // max() — largest element via partial_cmp
+                    "max" if args.is_empty() => {
+                        self.emit_expr(receiver);
+                        self.push(".into_iter().max_by(|__a,__b|__a.partial_cmp(__b).unwrap_or(std::cmp::Ordering::Equal))");
+                    }
+                    // join(sep) — join strings with separator
+                    "join" if args.len() == 1 => {
+                        self.emit_expr(receiver);
+                        self.push(".join(&");
+                        self.emit_expr(&args[0]);
+                        self.push(")");
+                    }
 
                     // ── Operator-level methods ────────────────────────────────────────
                     //
