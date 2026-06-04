@@ -116,7 +116,7 @@ Rejected because HOF methods (`map`, `filter`, `fold`) require closure arguments
 
 ---
 
-## Relation to Language Definition
+## Relation to language definition
 
 ### Eleven Requirements (ADR-0001)
 
