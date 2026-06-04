@@ -1,0 +1,31 @@
+// tests/corpus/02_types/list_stubs.mvl
+// Type-check test: sort, partition, group_by, windows, chunks
+// These were previously stub/recursive methods, now builtin or properly implemented.
+
+fn is_even(x: Int) -> Bool { x % 2 == 0 }
+fn identity(x: Int) -> Int { x }
+
+fn test_sort() -> List[Int] {
+    let xs: List[Int] = [3, 1, 2];
+    xs.sort()
+}
+
+fn test_partition() -> (List[Int], List[Int]) {
+    let xs: List[Int] = [1, 2, 3, 4];
+    xs.partition(is_even)
+}
+
+fn test_group_by() -> Map[Int, List[Int]] {
+    let xs: List[Int] = [1, 2, 3];
+    xs.group_by(identity)
+}
+
+fn test_windows() -> List[List[Int]] {
+    let xs: List[Int] = [1, 2, 3, 4];
+    xs.windows(2)
+}
+
+fn test_chunks() -> List[List[Int]] {
+    let xs: List[Int] = [1, 2, 3, 4, 5];
+    xs.chunks(2)
+}

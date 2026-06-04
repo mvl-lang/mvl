@@ -305,7 +305,9 @@ impl RustEmitter {
                             } else {
                                 false
                             };
+                            self.push("(");
                             self.emit_expr_ast(arg);
+                            self.push(")");
                             if needs_borrow {
                                 self.push("(&__v.clone())");
                             } else {

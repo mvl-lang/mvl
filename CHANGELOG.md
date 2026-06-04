@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [0.182.1] - 2026-06-04
+
+### Fixed
+
+- **List stub methods** (#1214) — replace broken stub MVL bodies with proper implementations
+  - `sort`, `partition`, `group_by`: changed to `pub builtin fn` (can't express PartialOrd/tuple construction/Map operations in pure MVL yet)
+  - `windows`, `chunks`: replaced recursive stubs with real MVL implementations using while loops + slice builtin
+  - Both Rust and LLVM backends now work correctly (previously LLVM would crash on recursive stubs)
+  - Fixed pre-existing `group_by` emit bug: inline lambdas weren't parenthesized in both Rust emitters
+  - 23 new runtime tests, 1 corpus type-check test
+
 ## [0.182.0] - 2026-06-04
 
 ### Added
