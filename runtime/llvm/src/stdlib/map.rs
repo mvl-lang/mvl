@@ -91,7 +91,7 @@ mod tests {
 
     #[allow(unsafe_code)]
     unsafe fn make_map() -> *mut MvlMap {
-        mvl_map_new()
+        mvl_map_new(0)
     }
 
     #[test]

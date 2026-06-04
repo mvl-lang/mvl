@@ -235,7 +235,7 @@ fn process_one_message(cell: Arc<ActorCell>, local: &Worker<Arc<ActorCell>>) {
     };
 
     // Set per-task thread-locals (for mvl_actor_self / mvl_yield_check).
-    CURRENT_ACTOR_PTR.with(|c| c.set(cell.handle_ptr.load(Ordering::Relaxed)));
+    CURRENT_ACTOR_PTR.with(|c| c.set(cell.handle_ptr.load(Ordering::Acquire)));
     CURRENT_ACTOR_ID.with(|c| c.set(cell.actor_id));
     ACTOR_REDUCTIONS.with(|c| c.set(REDUCTION_LIMIT));
 
@@ -252,8 +252,10 @@ fn process_one_message(cell: Arc<ActorCell>, local: &Worker<Arc<ActorCell>>) {
         return;
     }
 
-    // ExitSignal / DownSignal: silently discarded for now (#1177 TODO — LLVM
-    // backend has no user-visible signal-handling mechanism yet).
+    // ExitSignal / DownSignal: consumed but not dispatched to user code (#1177 TODO).
+    // The LLVM backend has no user-visible signal-handling mechanism yet.
+    // Note: on bounded mailboxes these signals may be silently lost when push_msg
+    // returns false (mailbox full) — this is a known limitation.
 
     if msg.disc >= 0 {
         // ── User message: call the actor's dispatch function ──────────────
@@ -543,6 +545,9 @@ pub unsafe extern "C" fn mvl_actor_send(handle: *mut u8, disc: i64, argc: i64, a
         return;
     }
     let actor = &*(handle as *const MvlActorHandle);
+    if argc < 0 {
+        return;
+    }
     let argc = (argc as usize).min(MAX_ARGS);
     let mut msg = MvlMsg {
         disc,
@@ -595,13 +600,14 @@ pub unsafe extern "C" fn mvl_actor_drop(handle: *mut u8) {
     if handle.is_null() {
         return;
     }
-    {
-        let mut reg = global_actor_registry()
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
-        if let Some(entry) = reg.iter_mut().find(|(p, _)| *p == Some(handle as usize)) {
-            entry.0 = None;
-        }
+    // Hold the registry lock for the entire drop sequence so that a concurrent
+    // mvl_actor_join_all cannot finish before this Box is freed, preventing
+    // a use-after-free of the handle_ptr value in worker thread-locals.
+    let mut reg = global_actor_registry()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    if let Some(entry) = reg.iter_mut().find(|(p, _)| *p == Some(handle as usize)) {
+        entry.0 = None;
     }
     let actor = &*(handle as *const MvlActorHandle);
     actor.cell.handle_ptr.store(0, Ordering::Release);
@@ -658,12 +664,14 @@ pub extern "C" fn mvl_actor_join_all() {
     }
 
     // 4. Spin-wait until all cells are idle (DISC_SHUTDOWN has been processed).
+    // Sleep 1ms per iteration rather than yield_now to avoid burning CPU and
+    // to give workers time to run on single-core hosts.
     loop {
         let all_idle = cells.iter().all(|c| !c.scheduled.load(Ordering::Acquire));
         if all_idle {
             break;
         }
-        thread::yield_now();
+        thread::sleep(std::time::Duration::from_millis(1));
     }
 
     // 5. Signal workers to stop, then join them.
@@ -709,6 +717,12 @@ pub unsafe extern "C" fn mvl_link(handle_a: *mut u8, handle_b: *mut u8) {
     }
     let a = &*(handle_a as *const MvlActorHandle);
     let b = &*(handle_b as *const MvlActorHandle);
+    // Guard against self-links: a reflexively-linked actor that dies would
+    // send DISC_SHUTDOWN to itself repeatedly, causing an infinite cascade
+    // and hanging mvl_actor_join_all.
+    if a.actor_id == b.actor_id {
+        return;
+    }
     let mut reg = global_link_registry()
         .lock()
         .unwrap_or_else(|p| p.into_inner());
