@@ -136,19 +136,17 @@ pub fn List[T]::fold[U](self, init: U, f: fn(U, T) -> U) -> U where T: Clone, U:
 
 /// Sort in ascending order using natural ordering.
 ///
-/// Stub: requires PartialOrd which MVL cannot express as a where-bound yet.
-/// The transpiler's sort arm handles actual semantics at `xs.sort()` call sites.
-pub fn List[T]::sort(self) -> List[T] where T: Clone {
-    self.slice(0, self.len())
-}
+/// Builtin: requires PartialOrd which MVL cannot express as a where-bound yet.
+/// Rust backend emits `sort_by(|a,b| a.partial_cmp(b)…)`.
+/// LLVM: deferred to #436.
+pub builtin fn List[T]::sort(self) -> List[T]
 
 /// Split into elements satisfying `f` and those that do not.
 ///
-/// Stub: MVL has no tuple-construction expression yet; the transpiler's
-/// partition arm handles actual semantics at `xs.partition(f)` call sites.
-pub fn List[T]::partition(self, f: fn(T) -> Bool) -> (List[T], List[T]) where T: Clone {
-    self.partition(f)
-}
+/// Builtin: MVL has no tuple-construction expression yet.
+/// Rust backend emits `into_iter().partition::<Vec<_>, _>(…)`.
+/// LLVM: deferred to #436.
+pub builtin fn List[T]::partition(self, f: fn(T) -> Bool) -> (List[T], List[T])
 
 /// Retain leading elements while `f` returns true; stop at first false.
 pub fn List[T]::take_while(self, f: fn(T) -> Bool) -> List[T] where T: Clone {
@@ -222,23 +220,32 @@ pub fn List[String]::join(self, sep: String) -> String {
 /// Group elements by the key returned by `f`, producing a map from
 /// each key to the list of elements that produced it (order within groups preserved).
 ///
-/// Transpiler-handled: emits a Rust HashMap fold.
-pub fn List[T]::group_by[K](self, f: fn(T) -> K) -> Map[K, List[T]] where T: Clone, K: Clone {
-    self.group_by(f)
-}
+/// Builtin: requires Map get-or-insert-default which MVL cannot express yet.
+/// Rust backend emits a HashMap fold.
+/// LLVM: deferred to #436.
+pub builtin fn List[T]::group_by[K](self, f: fn(T) -> K) -> Map[K, List[T]]
 
 /// Return all contiguous windows of length `n`. If `n` > `len` the result
 /// is empty. Each window is a new list of exactly `n` elements.
-///
-/// Transpiler-handled: emits `xs.windows(n).map(|w| w.to_vec()).collect()`.
 pub fn List[T]::windows(self, n: Int) -> List[List[T]] where T: Clone {
-    self.windows(n)
+    let result: ref List[List[T]] = [];
+    let i: ref Int = 0;
+    while i + n <= self.len() decreases self.len() - i {
+        result.push(self.slice(i, i + n));
+        i = i + 1
+    };
+    result
 }
 
 /// Divide into non-overlapping chunks of at most `n` elements. The last
 /// chunk may be shorter than `n`.
-///
-/// Transpiler-handled: emits `xs.chunks(n).map(|c| c.to_vec()).collect()`.
 pub fn List[T]::chunks(self, n: Int) -> List[List[T]] where T: Clone {
-    self.chunks(n)
+    let result: ref List[List[T]] = [];
+    let i: ref Int = 0;
+    while i < self.len() decreases self.len() - i {
+        let end: Int = if i + n < self.len() { i + n } else { self.len() };
+        result.push(self.slice(i, end));
+        i = i + n
+    };
+    result
 }

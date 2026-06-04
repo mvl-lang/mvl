@@ -1,0 +1,171 @@
+// tests/stdlib/list_stubs_test.mvl — Tests for previously-stubbed List methods
+//
+// Verifies sort, partition, group_by, windows, chunks from std/lists.mvl.
+// Run with:  mvl test tests/stdlib/
+
+fn is_even(x: Int) -> Bool { x % 2 == 0 }
+
+// ── sort ────────────────────────────────────────────────────────────────────
+
+test fn sort_ascending_order() -> Unit {
+    let xs: List[Int] = [3, 1, 4, 1, 5, 9, 2, 6];
+    let sorted: List[Int] = xs.sort();
+    assert_eq(sorted.first().unwrap_or(0), 1);
+    assert_eq(sorted.last().unwrap_or(0), 9);
+    assert_eq(sorted.len(), 8)
+}
+
+test fn sort_already_sorted() -> Unit {
+    let xs: List[Int] = [1, 2, 3];
+    let sorted: List[Int] = xs.sort();
+    assert_eq(sorted.len(), 3);
+    match sorted.get(0) {
+        Some(v) => assert_eq(v, 1),
+        None => assert(false),
+    }
+}
+
+test fn sort_empty() -> Unit {
+    let xs: List[Int] = [];
+    assert_eq(xs.sort().len(), 0)
+}
+
+test fn sort_single_element() -> Unit {
+    let xs: List[Int] = [42];
+    let sorted: List[Int] = xs.sort();
+    assert_eq(sorted.len(), 1);
+    assert_eq(sorted.first().unwrap_or(0), 42)
+}
+
+// ── partition ───────────────────────────────────────────────────────────────
+
+test fn partition_splits_evens_odds() -> Unit {
+    let xs: List[Int] = [1, 2, 3, 4, 5, 6];
+    let (evens, odds): (List[Int], List[Int]) = xs.partition(is_even);
+    assert_eq(evens.len(), 3);
+    assert_eq(odds.len(), 3)
+}
+
+test fn partition_all_match() -> Unit {
+    let xs: List[Int] = [2, 4, 6];
+    let (matching, rest): (List[Int], List[Int]) = xs.partition(is_even);
+    assert_eq(matching.len(), 3);
+    assert_eq(rest.len(), 0)
+}
+
+test fn partition_none_match() -> Unit {
+    let xs: List[Int] = [1, 3, 5];
+    let (matching, rest): (List[Int], List[Int]) = xs.partition(is_even);
+    assert_eq(matching.len(), 0);
+    assert_eq(rest.len(), 3)
+}
+
+test fn partition_empty() -> Unit {
+    let xs: List[Int] = [];
+    let (a, b): (List[Int], List[Int]) = xs.partition(is_even);
+    assert_eq(a.len(), 0);
+    assert_eq(b.len(), 0)
+}
+
+// ── group_by ────────────────────────────────────────────────────────────────
+
+test fn group_by_parity() -> Unit {
+    let xs: List[Int] = [1, 2, 3, 4, 5, 6];
+    let groups: Map[Int, List[Int]] = xs.group_by(|x: Int| x % 2);
+    assert_eq(groups.len(), 2)
+}
+
+test fn group_by_identity() -> Unit {
+    let xs: List[Int] = [1, 1, 2, 2, 3];
+    let groups: Map[Int, List[Int]] = xs.group_by(|x: Int| x);
+    assert_eq(groups.len(), 3)
+}
+
+test fn group_by_empty() -> Unit {
+    let xs: List[Int] = [];
+    let groups: Map[Int, List[Int]] = xs.group_by(|x: Int| x);
+    assert_eq(groups.len(), 0)
+}
+
+// ── windows ─────────────────────────────────────────────────────────────────
+
+test fn windows_basic() -> Unit {
+    let xs: List[Int] = [1, 2, 3, 4, 5];
+    let wins: List[List[Int]] = xs.windows(3);
+    assert_eq(wins.len(), 3)
+}
+
+test fn windows_size_equals_len() -> Unit {
+    let xs: List[Int] = [1, 2, 3];
+    let wins: List[List[Int]] = xs.windows(3);
+    assert_eq(wins.len(), 1)
+}
+
+test fn windows_size_exceeds_len() -> Unit {
+    let xs: List[Int] = [1, 2];
+    let wins: List[List[Int]] = xs.windows(5);
+    assert_eq(wins.len(), 0)
+}
+
+test fn windows_size_one() -> Unit {
+    let xs: List[Int] = [1, 2, 3];
+    let wins: List[List[Int]] = xs.windows(1);
+    assert_eq(wins.len(), 3)
+}
+
+test fn windows_empty_list() -> Unit {
+    let xs: List[Int] = [];
+    let wins: List[List[Int]] = xs.windows(2);
+    assert_eq(wins.len(), 0)
+}
+
+test fn windows_element_check() -> Unit {
+    let xs: List[Int] = [10, 20, 30, 40];
+    let wins: List[List[Int]] = xs.windows(2);
+    match wins.get(0) {
+        Some(w) => assert_eq(w.len(), 2),
+        None => assert(false),
+    }
+}
+
+// ── chunks ──────────────────────────────────────────────────────────────────
+
+test fn chunks_even_split() -> Unit {
+    let xs: List[Int] = [1, 2, 3, 4, 5, 6];
+    let chs: List[List[Int]] = xs.chunks(2);
+    assert_eq(chs.len(), 3)
+}
+
+test fn chunks_uneven_split() -> Unit {
+    let xs: List[Int] = [1, 2, 3, 4, 5];
+    let chs: List[List[Int]] = xs.chunks(2);
+    assert_eq(chs.len(), 3)
+}
+
+test fn chunks_size_exceeds_len() -> Unit {
+    let xs: List[Int] = [1, 2];
+    let chs: List[List[Int]] = xs.chunks(5);
+    assert_eq(chs.len(), 1)
+}
+
+test fn chunks_size_one() -> Unit {
+    let xs: List[Int] = [1, 2, 3];
+    let chs: List[List[Int]] = xs.chunks(1);
+    assert_eq(chs.len(), 3)
+}
+
+test fn chunks_empty_list() -> Unit {
+    let xs: List[Int] = [];
+    let chs: List[List[Int]] = xs.chunks(2);
+    assert_eq(chs.len(), 0)
+}
+
+test fn chunks_last_chunk_shorter() -> Unit {
+    let xs: List[Int] = [10, 20, 30, 40, 50];
+    let chs: List[List[Int]] = xs.chunks(3);
+    assert_eq(chs.len(), 2);
+    match chs.get(1) {
+        Some(last) => assert_eq(last.len(), 2),
+        None => assert(false),
+    }
+}
