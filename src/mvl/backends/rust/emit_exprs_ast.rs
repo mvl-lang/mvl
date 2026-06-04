@@ -17,71 +17,9 @@ use crate::mvl::passes::coverage::BranchKind;
 use crate::mvl::passes::mcdc::analysis::count_clauses_ref;
 use crate::mvl::passes::mcdc::transform::DecisionKind;
 
-/// Methods implemented as pure MVL functions in std/strings.mvl and std/lists.mvl.
-///
-/// When the transpiler sees `receiver.method(args)` for one of these names it
-/// emits a UFCS free-function call instead: `method(receiver.clone().into(), args)`.
-/// The `.into()` coercion allows IFC-label wrapper types (`Clean<String>`, etc.) to
-/// flow into functions that take the plain inner type — `From<Label<T>> for T` is
-/// implemented in `mvl_runtime::ifc`.
-///
-/// Phase 4 (ADR-0003): replaces per-method hardcoded Rust emission with an explicit
-/// trust boundary declared as `pub builtin fn` in std/strings.mvl and std/lists.mvl.
-/// Pure MVL stdlib methods — transpiled as free functions, dispatched via UFCS
-/// as `method(receiver.clone().into(), args)`.
-///
-/// # 4-way sync (#992)
-///
-/// This list is one of **four** places that must stay in sync when adding a new builtin
-/// method.  See `checker/method_types.rs` for the authoritative list and full explanation.
-/// The planned fix (method desugaring) is tracked in issue #992.
-const STDLIB_UFCS_METHODS: &[&str] = &[
-    // std/strings.mvl (pure MVL, have bodies)
-    "trim",
-    "to_upper",
-    "to_lower",
-    "starts_with",
-    "ends_with",
-    "replace",
-    // Note: `contains` and `is_empty` have hardcoded type-aware handlers above.
-    // std/lists.mvl (pure MVL, have bodies)
-    "take",
-    "skip",
-    "first",
-    "last",
-    "flatten",
-    "reverse",
-];
-
-/// Builtin stdlib methods that are unambiguous (only one receiver type).
-/// Dispatched as `runtime_fn(receiver.clone().into(), args)`.
-const STDLIB_BUILTIN_METHODS: &[(&str, &str)] = &[
-    // String-only methods
-    ("chars", "str_chars"),
-    ("find", "str_find"),
-    ("split", "str_split"),
-    ("substring", "str_substring"),
-    ("parse_int", "str_parse_int"),
-    ("parse_float", "str_parse_float"),
-    ("char_at", "str_char_at"),
-    ("byte_at", "str_byte_at"),
-    // List-only methods
-    ("slice", "list_slice"),
-    ("get", "list_get"),
-];
-
-/// String methods that return a `String` with the same IFC label as their receiver.
-/// When the receiver is `Label<String>`, the call result must be re-wrapped in `Label::new(…)`
-/// because the UFCS trampoline (`method(receiver.clone().into(), …)`) strips the label via
-/// `.into()` before passing to the stdlib function (which returns plain `String`).
-const STRING_LABEL_PRESERVING_METHODS: &[&str] = &[
-    "trim",
-    "to_upper",
-    "to_lower",
-    "concat",
-    "replace",
-    "substring",
-];
+use crate::mvl::backends::{
+    STDLIB_BUILTIN_METHODS, STDLIB_UFCS_METHODS, STRING_LABEL_PRESERVING_METHODS,
+};
 
 impl RustEmitter {
     /// Emit an expression into the code buffer (no trailing newline).
