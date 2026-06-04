@@ -1,0 +1,25 @@
+// Work-stealing scheduler: behavior receives val arguments and prints them.
+// Tests argument unpacking from the flat i64 args array in the dispatch
+// function, plus FIFO ordering within a single actor's mailbox.
+//
+// expect: n=1
+// expect: n=2
+// expect: n=3
+// expect: msg=done
+
+actor Recorder {
+    pub fn record_int(val n: Int) ! Console {
+        println(format("n={}", [n.to_string()]))
+    }
+    pub fn record_str(val msg: String) ! Console {
+        println(format("msg={}", [msg]))
+    }
+}
+
+fn main() -> Unit ! Console + Actor {
+    let r: Recorder = actor Recorder {};
+    r.record_int(1);
+    r.record_int(2);
+    r.record_int(3);
+    r.record_str("done");
+}
