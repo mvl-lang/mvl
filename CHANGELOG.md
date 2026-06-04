@@ -2,6 +2,27 @@
 
 ## [Unreleased]
 
+## [0.182.2] - 2026-06-04
+
+### Fixed
+
+- **Stdlib test suite** — fix all test files to pass individually
+  - Added missing `use` imports (actors, db, pbt types)
+  - Fixed match arm assignments with braces syntax
+  - Removed phantom `CheckResult` and invalid `Supervisor` tests
+  - Changed Makefile to run test files individually (avoids cross-module name collisions)
+  - 34/34 stdlib tests now passing (was 0/34)
+
+- **Grammar coverage** — document known intentional divergences
+  - Added `label_ref` to `EBNF_KNOWN_ABSENT` (inlined into relabel_decl as $.identifier)
+  - Grammar coverage now passing
+
+- **LLVM backend use-after-free bug** — exclude returned heap locals from drop emission
+  - Added `exclude_returned_value()` to prevent premature drop of values being returned
+  - Fixed `range_pipeline.mvl` test (expected "5", got garbage "44032"/"58368")
+  - Applied to both tail-expression and explicit return statements
+  - All 19 LLVM backend tests passing
+
 ## [0.182.1] - 2026-06-04
 
 ### Fixed

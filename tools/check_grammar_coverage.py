@@ -59,6 +59,8 @@ EBNF_KNOWN_ABSENT = {
     "fn_contract": "split in tree-sitter into contract_clause and ghost_let_stmt",
     # guard_expr = expr — inlined into match_arm as optional(seq("if", $.expr))
     "guard_expr": "inlined into match_arm as optional(seq(\"if\", $.expr))",
+    # label_ref = IDENT | "_" — inlined into relabel_decl as $.identifier
+    "label_ref": "inlined into relabel_decl as $.identifier",
     # Uppercase EBNF terminals map to regex patterns, not named rules
     "COMMENT": "terminal — mapped to line_comment regex",
     "DOC_COMMENT": "terminal — mapped to line_comment regex (prefix ///)",

@@ -5,6 +5,8 @@
 // These tests verify the type definitions compile and match correctly.
 // Run with:  mvl test tests/stdlib/
 
+use std.actors.{ExitReason, ExitSignal, DownSignal, RestartStrategy}
+
 // ── ExitReason enum ──────────────────────────────────────────────────────────
 
 test fn exit_reason_normal_variant() -> Unit {
@@ -46,9 +48,9 @@ test fn exit_reason_exhaustive_match() -> Unit {
     let count: ref Int = 0;
     for r in reasons {
         match r {
-            ExitReason::Normal => count = count + 1,
-            ExitReason::Panic => count = count + 1,
-            ExitReason::Killed => count = count + 1,
+            ExitReason::Normal => { count = count + 1 },
+            ExitReason::Panic => { count = count + 1 },
+            ExitReason::Killed => { count = count + 1 },
         }
     }
     assert_eq(count, 3);
@@ -122,35 +124,14 @@ test fn restart_strategy_exhaustive() -> Unit {
     let count: ref Int = 0;
     for s in strategies {
         match s {
-            RestartStrategy::OneForOne => count = count + 1,
-            RestartStrategy::OneForAll => count = count + 1,
-            RestartStrategy::RestForOne => count = count + 1,
+            RestartStrategy::OneForOne => { count = count + 1 },
+            RestartStrategy::OneForAll => { count = count + 1 },
+            RestartStrategy::RestForOne => { count = count + 1 },
         }
     }
     assert_eq(count, 3);
 }
 
-// ── Supervisor struct ────────────────────────────────────────────────────────
-
-test fn supervisor_construction() -> Unit {
-    let sup: Supervisor = Supervisor {
-        strategy: RestartStrategy::OneForOne,
-        max_restarts: 3,
-        window_seconds: 60,
-    };
-    assert_eq(sup.max_restarts, 3);
-    assert_eq(sup.window_seconds, 60);
-}
-
-test fn supervisor_with_one_for_all() -> Unit {
-    let sup: Supervisor = Supervisor {
-        strategy: RestartStrategy::OneForAll,
-        max_restarts: 5,
-        window_seconds: 30,
-    };
-    let is_one_for_all: Bool = match sup.strategy {
-        RestartStrategy::OneForAll => true,
-        _ => false,
-    };
-    assert_eq(is_one_for_all, true);
-}
+// ── Supervisor ──────────────────────────────────────────────────────────────
+// Supervisor is an actor (not a struct), so it cannot be constructed with a
+// struct literal.  Actual supervisor tests require Phase 9 (#1177).
