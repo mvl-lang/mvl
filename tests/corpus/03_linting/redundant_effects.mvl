@@ -1,0 +1,9 @@
+// Corpus: Linting — redundant effect declarations
+// lint:expect redundant-effects
+//
+// A function that declares effects but doesn't use them.
+// The linter should flag the unused Console effect.
+
+fn pure_fn(x: Int) -> Int ! Console {
+    x + 1
+}

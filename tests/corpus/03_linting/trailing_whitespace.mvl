@@ -1,0 +1,9 @@
+// Corpus: Linting — trailing whitespace detection (parse-only)
+//
+// The trailing-whitespace rule is opt-in (default: false) and tested at the
+// unit level. Corpus files cannot carry literal trailing spaces because git
+// strips them on commit. This file exists for the parse-cleanly bulk check.
+
+fn clean_fn(x: Int) -> Int {
+    x + 1
+}

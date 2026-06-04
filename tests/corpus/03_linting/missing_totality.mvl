@@ -1,0 +1,20 @@
+// Corpus: Linting — missing totality annotation
+// lint:expect missing-totality
+//
+// Public functions without explicit total/partial annotation.
+
+pub fn unannotated(x: Int) -> Int {
+    x + 1
+}
+
+total fn annotated_total(x: Int) -> Int {
+    x + 1
+}
+
+partial fn annotated_partial(n: Int) -> Int {
+    let i: ref Int = 0;
+    while i < n {
+        i = i + 1;
+    }
+    i
+}

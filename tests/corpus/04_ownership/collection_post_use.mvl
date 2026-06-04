@@ -1,0 +1,24 @@
+// Corpus: Ownership — collection iteration with post-loop use
+//
+// After iterating over a collection, the collection must still be
+// usable (value semantics — iteration clones or borrows).
+
+partial fn process_and_count(items: List[Int]) -> Int {
+    let i: ref Int = 0;
+    while i < items.len() {
+        i = i + 1;
+    }
+    // items still usable after the loop
+    items.len()
+}
+
+fn first_or_default(items: List[Int]) -> Int {
+    items.get(0).unwrap_or(0)
+}
+
+// Map used after multiple lookups
+fn lookup_twice(m: Map[String, Int]) -> Int {
+    let a: Int = m.get("x").unwrap_or(0);
+    let b: Int = m.get("y").unwrap_or(0);
+    a + b
+}
