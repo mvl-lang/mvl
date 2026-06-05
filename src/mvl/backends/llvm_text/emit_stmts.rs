@@ -142,8 +142,16 @@ impl TextEmitter {
                         );
                     }
                 } else if let (Some(v), Pattern::Ident(name, _)) = (val, pattern) {
-                    let ty_str = self.llvm_ty_ctx(&elem_ty);
-                    self.reg_types.insert(v.clone(), ty_str);
+                    // Only set reg_types if the register doesn't already have
+                    // an entry.  The emitter that produced the value (e.g.
+                    // emit_propagate for `?`) already recorded the correct
+                    // LLVM-level type; the MVL-derived type from `llvm_ty_ctx`
+                    // may disagree (e.g. `%Child` vs the actual `ptr` from a
+                    // C-ABI Result extraction).
+                    if !self.reg_types.contains_key(&v) {
+                        let ty_str = self.llvm_ty_ctx(&elem_ty);
+                        self.reg_types.insert(v.clone(), ty_str);
+                    }
                     // If this name shadows a previous heap-allocated binding,
                     // remove the old SSA from heap_locals to prevent double-drop.
                     if let Some(old_ssa) = self.locals.get(name) {

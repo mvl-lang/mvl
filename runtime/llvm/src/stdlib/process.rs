@@ -15,27 +15,29 @@
 //!   must NOT use the pointer after passing it to these functions.
 //! - `_mvl_process_output_free` releases a `ProcessOutput` handle.
 
-use libc::c_char;
 use mvl_runtime::ifc::Clean;
 use mvl_runtime::stdlib::process::{self, Child, ProcessOutput, Stdio};
 
-use crate::abi::{c_to_string, string_to_c, MvlOption, MvlResult};
+use crate::abi::{string_to_c, LlvmResult, MvlOption};
+use crate::memory::{MvlArray, MvlString};
 
-// TODO #782: LLVM process uses MvlResult (string errors) — full enum ABI deferred
-// until the process LLVM path is migrated to LlvmResult.
-fn process_error_to_string(e: &process::ProcessError) -> String {
-    match e {
-        process::ProcessError::NotFound => "command not found".to_string(),
-        process::ProcessError::PermissionDenied => "permission denied".to_string(),
-        process::ProcessError::Other(msg) => msg.clone(),
-    }
+/// Convert a `ProcessError` into an `LlvmResult::err_mvl` (heap-allocated MvlString).
+#[allow(unsafe_code)]
+fn process_err_result(e: &process::ProcessError) -> LlvmResult {
+    let msg = match e {
+        process::ProcessError::NotFound => "command not found",
+        process::ProcessError::PermissionDenied => "permission denied",
+        process::ProcessError::Other(msg) => msg.as_str(),
+    };
+    let str_ptr = unsafe { crate::memory::mvl_string_new(msg.as_ptr(), msg.len()) };
+    LlvmResult::err_mvl(str_ptr as *mut libc::c_void)
 }
 
 // ── Stdio mode encoding ─────────────────────────────────────────────────────
-// Encoded as i8 at the C boundary:
+// Encoded as i64 at the LLVM boundary (unit enum → i64 discriminant):
 //   0 = Pipe, 1 = Capture, 2 = Inherit, 3 = Devnull
 
-fn decode_stdio(tag: i8) -> Stdio {
+fn decode_stdio(tag: i64) -> Stdio {
     match tag {
         0 => Stdio::Pipe,
         1 => Stdio::Capture,
@@ -44,39 +46,58 @@ fn decode_stdio(tag: i8) -> Stdio {
     }
 }
 
+/// Extract a Rust `String` from a `*const MvlString`.
+///
+/// # Safety
+/// `s` must be a valid `MvlString` pointer or null.
+#[inline]
+#[allow(unsafe_code)]
+unsafe fn mvl_str_to_string(s: *const MvlString) -> String {
+    if s.is_null() {
+        return String::new();
+    }
+    let len = (*s).len as usize;
+    if len == 0 || (*s).ptr.is_null() {
+        return String::new();
+    }
+    let bytes = std::slice::from_raw_parts((*s).ptr, len);
+    std::str::from_utf8(bytes).unwrap_or("").to_string()
+}
+
 // ── Spawn ───────────────────────────────────────────────────────────────────
 
 /// Spawn a child process.
 ///
-/// `cmd` — NUL-terminated command path (must be `Clean`).
-/// `argv` — null-terminated array of `*const c_char` argument pointers.
-/// `stdin_mode`, `stdout_mode`, `stderr_mode` — Stdio encoding (0-3).
+/// `cmd` — `*const MvlString` command path.
+/// `argv` — `*const MvlArray` of `MvlString` pointers (the argument list).
+/// `stdin_mode`, `stdout_mode`, `stderr_mode` — Stdio encoding as i64
+///   (unit enum discriminant: 0=Pipe, 1=Capture, 2=Inherit, 3=Devnull).
 ///
-/// Returns an opaque `*mut c_void` handle on success; `MvlResult::err_str`
+/// Returns an opaque `*mut c_void` handle on success; `LlvmResult::err_mvl`
 /// on failure. The handle must eventually be passed to `_mvl_process_wait` or
 /// `_mvl_process_kill` to avoid a resource leak.
 #[no_mangle]
 #[allow(unsafe_code)]
 pub extern "C" fn _mvl_process_spawn(
-    cmd: *const c_char,
-    argv: *const *const c_char,
-    stdin_mode: i8,
-    stdout_mode: i8,
-    stderr_mode: i8,
-) -> MvlResult {
-    let cmd_s = unsafe { c_to_string(cmd) };
+    cmd: *const MvlString,
+    argv: *const MvlArray,
+    stdin_mode: i64,
+    stdout_mode: i64,
+    stderr_mode: i64,
+) -> LlvmResult {
+    let cmd_s = unsafe { mvl_str_to_string(cmd) };
 
-    // Collect null-terminated argv array.
+    // Extract argument strings from the MvlArray of MvlString pointers.
     let mut args: Vec<Clean<String>> = Vec::new();
     if !argv.is_null() {
-        let mut i = 0;
-        loop {
-            let p = unsafe { *argv.add(i) };
-            if p.is_null() {
-                break;
-            }
-            args.push(Clean(unsafe { c_to_string(p) }));
-            i += 1;
+        let arr = unsafe { &*argv };
+        let len = arr.len as usize;
+        let elem_size = arr.elem_size as usize;
+        for i in 0..len {
+            // Each element is a pointer-sized slot containing a *const MvlString.
+            let slot_ptr = unsafe { arr.ptr.add(i * elem_size) } as *const *const MvlString;
+            let str_ptr = unsafe { *slot_ptr };
+            args.push(Clean(unsafe { mvl_str_to_string(str_ptr) }));
         }
     }
 
@@ -89,13 +110,9 @@ pub extern "C" fn _mvl_process_spawn(
     ) {
         Ok(child) => {
             let boxed = Box::new(child);
-            MvlResult {
-                tag: 0,
-                payload: Box::into_raw(boxed) as *mut libc::c_void,
-                err: std::ptr::null_mut(),
-            }
+            LlvmResult::ok_ptr(Box::into_raw(boxed) as *mut libc::c_void)
         }
-        Err(e) => MvlResult::err_str(&process_error_to_string(&e)),
+        Err(e) => process_err_result(&e),
     }
 }
 
@@ -108,22 +125,20 @@ pub extern "C" fn _mvl_process_spawn(
 /// call `_mvl_process_output_free` to release it.
 #[no_mangle]
 #[allow(unsafe_code)]
-pub extern "C" fn _mvl_process_wait(child_ptr: *mut libc::c_void) -> MvlResult {
+pub extern "C" fn _mvl_process_wait(child_ptr: *mut libc::c_void) -> LlvmResult {
     if child_ptr.is_null() {
-        return MvlResult::err_str("null child handle");
+        let msg = "null child handle";
+        let str_ptr = unsafe { crate::memory::mvl_string_new(msg.as_ptr(), msg.len()) };
+        return LlvmResult::err_mvl(str_ptr as *mut libc::c_void);
     }
     // Safety: child_ptr was allocated by _mvl_process_spawn via Box::into_raw.
     let child: Child = unsafe { *Box::from_raw(child_ptr as *mut Child) };
     match process::wait(child) {
         Ok(out) => {
             let boxed = Box::new(out);
-            MvlResult {
-                tag: 0,
-                payload: Box::into_raw(boxed) as *mut libc::c_void,
-                err: std::ptr::null_mut(),
-            }
+            LlvmResult::ok_ptr(Box::into_raw(boxed) as *mut libc::c_void)
         }
-        Err(e) => MvlResult::err_str(&process_error_to_string(&e)),
+        Err(e) => process_err_result(&e),
     }
 }
 
@@ -142,9 +157,11 @@ pub extern "C" fn _mvl_process_wait(child_ptr: *mut libc::c_void) -> MvlResult {
 /// `err` holds an error message (caller frees with `libc::free`).
 #[no_mangle]
 #[allow(unsafe_code)]
-pub extern "C" fn _mvl_process_kill(child_ptr: *mut libc::c_void) -> MvlResult {
+pub extern "C" fn _mvl_process_kill(child_ptr: *mut libc::c_void) -> LlvmResult {
     if child_ptr.is_null() {
-        return MvlResult::err_str("null child handle");
+        let msg = "null child handle";
+        let str_ptr = unsafe { crate::memory::mvl_string_new(msg.as_ptr(), msg.len()) };
+        return LlvmResult::err_mvl(str_ptr as *mut libc::c_void);
     }
     // Safety: child_ptr was allocated by _mvl_process_spawn or a prior _mvl_process_kill.
     // The child is unconditionally moved out here; child_ptr must not be used after this call.
@@ -152,14 +169,10 @@ pub extern "C" fn _mvl_process_kill(child_ptr: *mut libc::c_void) -> MvlResult {
     match process::kill(child) {
         Ok(child) => {
             let boxed = Box::new(child);
-            MvlResult {
-                tag: 0,
-                payload: Box::into_raw(boxed) as *mut libc::c_void,
-                err: std::ptr::null_mut(),
-            }
+            LlvmResult::ok_ptr(Box::into_raw(boxed) as *mut libc::c_void)
         }
         // child was moved into process::kill and dropped on error — no handle to return.
-        Err(e) => MvlResult::err_str(&process_error_to_string(&e)),
+        Err(e) => process_err_result(&e),
     }
 }
 
@@ -253,25 +266,41 @@ pub extern "C" fn _mvl_process_is_success(status_tag: i8) -> i8 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ffi::CString;
+    use crate::memory::mvl_string_new;
+    use crate::memory_ops::mvl_array_push;
 
-    fn null_argv() -> *const *const c_char {
-        // A single null pointer — empty argv.
-        static NULL_PTR: libc::uintptr_t = 0;
-        &NULL_PTR as *const libc::uintptr_t as *const *const c_char
+    /// Create a `*const MvlString` from a Rust `&str`.
+    #[allow(unsafe_code)]
+    fn make_mvl_str(s: &str) -> *const MvlString {
+        unsafe { mvl_string_new(s.as_ptr(), s.len()) as *const MvlString }
+    }
+
+    /// Create a `*const MvlArray` containing the given `MvlString` pointers.
+    #[allow(unsafe_code)]
+    fn make_mvl_argv(strs: &[*const MvlString]) -> *const MvlArray {
+        let arr = unsafe { crate::memory::mvl_array_new(8, strs.len().max(4)) };
+        for s in strs {
+            let mut slot = *s as usize;
+            let slot_ptr = &mut slot as *mut usize as *const u8;
+            unsafe { mvl_array_push(arr, slot_ptr) };
+        }
+        arr as *const MvlArray
+    }
+
+    /// Create an empty `MvlArray` (no arguments).
+    #[allow(unsafe_code)]
+    fn empty_argv() -> *const MvlArray {
+        unsafe { crate::memory::mvl_array_new(8, 4) as *const MvlArray }
     }
 
     #[test]
     fn spawn_echo_and_wait() {
-        let cmd = CString::new("echo").unwrap();
-        let arg1 = CString::new("hello_mvl_c").unwrap();
-        // Two-element argv: arg1 + null terminator.
-        let argv: [*const c_char; 2] = [arg1.as_ptr(), std::ptr::null()];
+        let cmd = make_mvl_str("echo");
+        let arg1 = make_mvl_str("hello_mvl_c");
+        let argv = make_mvl_argv(&[arg1]);
 
         let spawn_r = _mvl_process_spawn(
-            cmd.as_ptr(),
-            argv.as_ptr(),
-            3, // stdin=Devnull
+            cmd, argv, 3, // stdin=Devnull
             1, // stdout=Capture
             3, // stderr=Devnull
         );
@@ -287,7 +316,7 @@ mod tests {
         assert_eq!(stdout_opt.tag, 1, "stdout must be captured");
         #[allow(unsafe_code)]
         let s = unsafe {
-            std::ffi::CStr::from_ptr(stdout_opt.payload as *const c_char)
+            std::ffi::CStr::from_ptr(stdout_opt.payload as *const libc::c_char)
                 .to_str()
                 .unwrap()
                 .to_owned()
@@ -304,13 +333,11 @@ mod tests {
 
     #[test]
     fn spawn_nonexistent_command_returns_err() {
-        let cmd = CString::new("mvl_nonexistent_xyz_12345").unwrap();
-        let r = _mvl_process_spawn(cmd.as_ptr(), null_argv(), 3, 3, 3);
+        let cmd = make_mvl_str("mvl_nonexistent_xyz_12345");
+        let r = _mvl_process_spawn(cmd, empty_argv(), 3, 3, 3);
         assert_eq!(r.tag, 1, "spawn of nonexistent command must return Err");
-        #[allow(unsafe_code)]
-        unsafe {
-            libc::free(r.err as *mut libc::c_void)
-        };
+        // LlvmResult stores error message in payload (MvlString*)
+        assert!(!r.payload.is_null(), "error payload must not be null");
     }
 
     #[test]
@@ -321,10 +348,10 @@ mod tests {
 
     #[test]
     fn kill_and_wait_terminates() {
-        let cmd = CString::new("sleep").unwrap();
-        let arg = CString::new("60").unwrap();
-        let argv: [*const c_char; 2] = [arg.as_ptr(), std::ptr::null()];
-        let r = _mvl_process_spawn(cmd.as_ptr(), argv.as_ptr(), 3, 3, 3);
+        let cmd = make_mvl_str("sleep");
+        let arg = make_mvl_str("60");
+        let argv = make_mvl_argv(&[arg]);
+        let r = _mvl_process_spawn(cmd, argv, 3, 3, 3);
         assert_eq!(r.tag, 0);
         let kill_r = _mvl_process_kill(r.payload);
         assert_eq!(kill_r.tag, 0, "kill must succeed");
@@ -339,20 +366,14 @@ mod tests {
     fn wait_null_returns_err() {
         let r = _mvl_process_wait(std::ptr::null_mut());
         assert_eq!(r.tag, 1, "wait(null) must return Err");
-        #[allow(unsafe_code)]
-        unsafe {
-            libc::free(r.err as *mut libc::c_void)
-        };
+        assert!(!r.payload.is_null(), "error payload must not be null");
     }
 
     #[test]
     fn kill_null_returns_err() {
         let r = _mvl_process_kill(std::ptr::null_mut());
         assert_eq!(r.tag, 1, "kill(null) must return Err");
-        #[allow(unsafe_code)]
-        unsafe {
-            libc::free(r.err as *mut libc::c_void)
-        };
+        assert!(!r.payload.is_null(), "error payload must not be null");
     }
 
     #[test]
