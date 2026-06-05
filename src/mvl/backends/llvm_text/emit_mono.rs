@@ -515,10 +515,10 @@ impl TextEmitter {
             Some(v) => v,
             None => return Ok(None),
         };
-        self.ensure_extern("declare ptr @mvl_format(ptr, ptr)");
+        self.ensure_extern("declare ptr @_mvl_format(ptr, ptr)");
         let reg = self.next_reg();
         self.push_instr(&format!(
-            "{reg} = call ptr @mvl_format(ptr {template}, ptr {list})"
+            "{reg} = call ptr @_mvl_format(ptr {template}, ptr {list})"
         ));
         self.reg_types.insert(reg.clone(), "ptr".into());
         Ok(Some(reg))

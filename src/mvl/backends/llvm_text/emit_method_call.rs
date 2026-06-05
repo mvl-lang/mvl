@@ -71,7 +71,7 @@ impl TextEmitter {
                 Ok(Some(reg))
             }
             ("concat", "ptr") => {
-                self.ensure_extern("declare ptr @mvl_string_concat(ptr, ptr)");
+                self.ensure_extern("declare ptr @_mvl_string_concat(ptr, ptr)");
                 let other = match args.first() {
                     Some(a) => match self.emit_expr(a)? {
                         Some(v) => v,
@@ -81,7 +81,7 @@ impl TextEmitter {
                 };
                 let reg = self.next_reg();
                 self.push_instr(&format!(
-                    "{reg} = call ptr @mvl_string_concat(ptr {val}, ptr {other})"
+                    "{reg} = call ptr @_mvl_string_concat(ptr {val}, ptr {other})"
                 ));
                 self.reg_types.insert(reg.clone(), "ptr".into());
                 Ok(Some(reg))
@@ -423,9 +423,9 @@ impl TextEmitter {
                     Some("List") | Some("Array") | Some("Set") | Some("Map")
                 ) =>
             {
-                self.ensure_extern("declare ptr @mvl_string_chars(ptr)");
+                self.ensure_extern("declare ptr @_mvl_string_chars(ptr)");
                 let reg = self.next_reg();
-                self.push_instr(&format!("{reg} = call ptr @mvl_string_chars(ptr {val})"));
+                self.push_instr(&format!("{reg} = call ptr @_mvl_string_chars(ptr {val})"));
                 self.reg_types.insert(reg.clone(), "ptr".into());
                 Ok(Some(reg))
             }
