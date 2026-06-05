@@ -65,7 +65,7 @@ pub extern "C" fn _mvl_random_bytes(n: i64) -> *mut crate::memory::MvlArray {
     let arr = unsafe { mvl_array_new(std::mem::size_of::<i64>(), vals.len().max(1)) };
     for v in vals {
         unsafe {
-            crate::memory_ops::mvl_array_push(arr, (&v as *const i64).cast());
+            crate::memory_ops::_mvl_array_push(arr, (&v as *const i64).cast());
         }
     }
     arr
@@ -82,7 +82,7 @@ pub extern "C" fn _mvl_random_choice_index(arr: *mut crate::memory::MvlArray) ->
     if arr.is_null() {
         return -1;
     }
-    let len = unsafe { crate::memory_ops::mvl_array_len(arr as *const crate::memory::MvlArray) };
+    let len = unsafe { crate::memory_ops::_mvl_array_len(arr as *const crate::memory::MvlArray) };
     if len == 0 {
         return -1;
     }
@@ -108,7 +108,7 @@ pub extern "C" fn _mvl_random_shuffle(
         // Deep-clone so source and result are independent (value semantics).
         let clone = crate::memory::mvl_array_deep_clone(arr);
         let len =
-            crate::memory_ops::mvl_array_len(clone as *const crate::memory::MvlArray) as usize;
+            crate::memory_ops::_mvl_array_len(clone as *const crate::memory::MvlArray) as usize;
         if len <= 1 {
             return clone;
         }
@@ -117,10 +117,10 @@ pub extern "C" fn _mvl_random_shuffle(
             let j = random::int(0, i as i64) as usize;
             if i != j {
                 let ptr_i =
-                    crate::memory_ops::mvl_array_get(clone as *const crate::memory::MvlArray, i)
+                    crate::memory_ops::_mvl_array_get(clone as *const crate::memory::MvlArray, i)
                         as *mut i64;
                 let ptr_j =
-                    crate::memory_ops::mvl_array_get(clone as *const crate::memory::MvlArray, j)
+                    crate::memory_ops::_mvl_array_get(clone as *const crate::memory::MvlArray, j)
                         as *mut i64;
                 let tmp = ptr_i.read();
                 ptr_i.write(ptr_j.read());
@@ -164,7 +164,7 @@ mod tests {
         use crate::memory::{mvl_array_drop, MvlArray};
         let arr = _mvl_random_bytes(16);
         assert!(!arr.is_null());
-        let len = unsafe { crate::memory_ops::mvl_array_len(arr as *const MvlArray) };
+        let len = unsafe { crate::memory_ops::_mvl_array_len(arr as *const MvlArray) };
         assert_eq!(len, 16);
         unsafe { mvl_array_drop(arr) };
     }

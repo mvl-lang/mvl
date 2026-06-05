@@ -610,6 +610,17 @@ impl RustEmitter {
                     // E0283 when the element type is plain (e.g. Vec<i64>.push(n.into())):
                     // Rust cannot infer which Into impl to use.  Only add `.into()` when
                     // the receiver element type is labeled (e.g. Vec<Clean<String>>).
+                    // set(i, value) — in-place index assignment.
+                    "set" if args.len() == 2 => {
+                        self.push("{ let __mvl_i = (");
+                        self.emit_expr_ast(&args[0]);
+                        self.push("); (");
+                        self.emit_expr_ast(receiver);
+                        self.push(")[__mvl_i as usize] = ");
+                        self.emit_expr_as_arg_ast(&args[1]);
+                        self.push("; }");
+                    }
+
                     "push" if args.len() == 1 => {
                         let elem_is_labeled = self
                             .expr_types
@@ -768,6 +779,18 @@ impl RustEmitter {
                     self.push("(");
                     self.emit_args_no_into_ast(args);
                     self.push(")");
+                } else if name.as_str() == "List::filled" {
+                    // List::filled(n, value) → vec![(value).clone(); (n) as usize]
+                    debug_assert_eq!(args.len(), 2, "List::filled requires exactly 2 arguments");
+                    self.push("vec![(");
+                    if let Some(v) = args.get(1) {
+                        self.emit_expr_ast(v);
+                    }
+                    self.push(").clone(); (");
+                    if let Some(n) = args.first() {
+                        self.emit_expr_ast(n);
+                    }
+                    self.push(") as usize]");
                 } else if name.as_str() == "map_new" || name.as_str() == "Map::new" {
                     // map_new[K, V]() / Map::new() → std::collections::HashMap::new().
                     // Type is inferred from the let-binding annotation.

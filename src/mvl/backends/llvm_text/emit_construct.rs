@@ -653,7 +653,7 @@ impl TextEmitter {
 
         let n = elem_vals.len().max(4) as i64;
         self.ensure_extern("declare ptr @mvl_array_new(i64, i64)");
-        self.ensure_extern("declare void @mvl_array_push(ptr, ptr)");
+        self.ensure_extern("declare void @_mvl_array_push(ptr, ptr)");
 
         let arr = self.next_reg();
         // elem_size=8 for all scalar types (i64, ptr, double)
@@ -664,9 +664,38 @@ impl TextEmitter {
             let slot = self.next_reg();
             self.push_instr(&format!("{slot} = alloca {elem_ty}"));
             self.push_instr(&format!("store {elem_ty} {v}, ptr {slot}"));
-            self.push_instr(&format!("call void @mvl_array_push(ptr {arr}, ptr {slot})"));
+            self.push_instr(&format!(
+                "call void @_mvl_array_push(ptr {arr}, ptr {slot})"
+            ));
         }
 
+        Ok(Some(arr))
+    }
+
+    // ── List::filled(n, value) ───────────────────────────────────────────
+    pub(super) fn emit_list_filled(
+        &mut self,
+        n_expr: &Expr,
+        val_expr: &Expr,
+    ) -> Result<Option<String>, String> {
+        let elem_ty = self.type_of_expr(val_expr);
+        let n_val = match self.emit_expr(n_expr)? {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+        let val = match self.emit_expr(val_expr)? {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+        let item_slot = self.next_reg();
+        self.push_instr(&format!("{item_slot} = alloca {elem_ty}"));
+        self.push_instr(&format!("store {elem_ty} {val}, ptr {item_slot}"));
+        let arr = self.next_reg();
+        self.ensure_extern("declare ptr @_mvl_array_filled(i64, i64, ptr)");
+        self.push_instr(&format!(
+            "{arr} = call ptr @_mvl_array_filled(i64 8, i64 {n_val}, ptr {item_slot})"
+        ));
+        self.reg_types.insert(arr.clone(), "ptr".into());
         Ok(Some(arr))
     }
 

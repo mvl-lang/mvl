@@ -61,7 +61,7 @@ pub unsafe extern "C" fn mvl_format(
         if tmpl[i] == b'{' && i + 1 < tmpl_len && tmpl[i + 1] == b'}' {
             // Replace {} with next value
             if val_idx < val_count {
-                let elem_ptr = mvl_array_get(values, val_idx) as *const *mut MvlString;
+                let elem_ptr = _mvl_array_get(values, val_idx) as *const *mut MvlString;
                 let s = *elem_ptr;
                 if !s.is_null() {
                     let s_len = (*s).len as usize;
@@ -118,7 +118,7 @@ fn checked_add_size(a: usize, b: usize) -> usize {
     a.checked_add(b).unwrap_or_else(|| std::process::abort())
 }
 
-/// Growth cap used in `mvl_array_push` to mirror `crate::memory::ARRAY_INITIAL_CAP`.
+/// Growth cap used in `_mvl_array_push` to mirror `crate::memory::ARRAY_INITIAL_CAP`.
 const ARRAY_INITIAL_CAP: usize = 4;
 
 /// Minimum slot count for map growth to mirror `crate::memory::MAP_INITIAL_CAP`.
@@ -393,7 +393,7 @@ pub unsafe extern "C" fn _mvl_str_split(
     let delimiter = as_str(sep);
     for part in text.split(delimiter) {
         let part_s = str_to_mvl(part);
-        mvl_array_push(arr, (&part_s as *const *mut MvlString).cast());
+        _mvl_array_push(arr, (&part_s as *const *mut MvlString).cast());
     }
     arr
 }
@@ -509,7 +509,7 @@ pub unsafe extern "C" fn _mvl_str_from_bytes(arr: *const MvlArray) -> *mut MvlSt
 /// `a` must be a valid non-null `MvlArray` pointer.
 /// `elem` must point to at least `(*a).elem_size` readable bytes.
 #[no_mangle]
-pub unsafe extern "C" fn mvl_array_push(a: *mut MvlArray, elem: *const u8) {
+pub unsafe extern "C" fn _mvl_array_push(a: *mut MvlArray, elem: *const u8) {
     if a.is_null() || elem.is_null() {
         return;
     }
@@ -532,12 +532,51 @@ pub unsafe extern "C" fn mvl_array_push(a: *mut MvlArray, elem: *const u8) {
     (*a).len += 1;
 }
 
+/// Overwrite the element at index `idx` in place.  No-op if out of bounds.
+///
+/// # Safety
+/// `a` must be a valid non-null `MvlArray` pointer.
+/// `elem` must point to at least `(*a).elem_size` readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_array_set(a: *mut MvlArray, idx: i64, elem: *const u8) {
+    if a.is_null() || elem.is_null() || idx < 0 || idx as u64 >= (*a).len {
+        return;
+    }
+    let es = (*a).elem_size as usize;
+    let dest = (*a).ptr.add(idx as usize * es);
+    ptr::copy_nonoverlapping(elem, dest, es);
+}
+
+/// Create a new array of `n` elements all initialised to the value pointed to by `elem`.
+///
+/// # Safety
+/// `elem` must point to at least `elem_size` readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_array_filled(
+    elem_size: i64,
+    n: i64,
+    elem: *const u8,
+) -> *mut MvlArray {
+    let es = elem_size as usize;
+    let count = if n > 0 { n as usize } else { 0 };
+    let arr = mvl_array_new(es, count);
+    if arr.is_null() || count == 0 || elem.is_null() {
+        return arr;
+    }
+    for i in 0..count {
+        let dest = (*arr).ptr.add(i * es);
+        ptr::copy_nonoverlapping(elem, dest, es);
+    }
+    (*arr).len = count as u64;
+    arr
+}
+
 /// Return a pointer to element at `idx`.  Returns null if out of bounds.
 ///
 /// # Safety
 /// `a` must be a valid non-null `MvlArray` pointer.
 #[no_mangle]
-pub unsafe extern "C" fn mvl_array_get(a: *const MvlArray, idx: usize) -> *const u8 {
+pub unsafe extern "C" fn _mvl_array_get(a: *const MvlArray, idx: usize) -> *const u8 {
     if a.is_null() || idx >= (*a).len as usize {
         return ptr::null();
     }
@@ -549,7 +588,7 @@ pub unsafe extern "C" fn mvl_array_get(a: *const MvlArray, idx: usize) -> *const
 /// # Safety
 /// `a` must be a valid non-null `MvlArray` pointer.
 #[no_mangle]
-pub unsafe extern "C" fn mvl_array_len(a: *const MvlArray) -> u64 {
+pub unsafe extern "C" fn _mvl_array_len(a: *const MvlArray) -> u64 {
     if a.is_null() {
         return 0;
     }
@@ -578,7 +617,7 @@ pub unsafe extern "C" fn _mvl_list_slice(
     let out = mvl_array_new(es, count.max(1));
     for i in lo..hi {
         let src = (*arr).ptr.add(i * es);
-        mvl_array_push(out, src);
+        _mvl_array_push(out, src);
     }
     out
 }
@@ -603,11 +642,11 @@ pub unsafe extern "C" fn _mvl_list_concat(a: *const MvlArray, b: *const MvlArray
     let out = mvl_array_new(es, (la + lb).max(1));
     for i in 0..la {
         let src = (*a).ptr.add(i * es);
-        mvl_array_push(out, src);
+        _mvl_array_push(out, src);
     }
     for i in 0..lb {
         let src = (*b).ptr.add(i * es);
-        mvl_array_push(out, src);
+        _mvl_array_push(out, src);
     }
     out
 }
@@ -739,7 +778,7 @@ pub unsafe extern "C" fn mvl_string_chars(s: *const MvlString) -> *mut MvlArray 
         let mut buf = [0u8; 4];
         let encoded = ch.encode_utf8(&mut buf);
         let char_s = mvl_string_new(encoded.as_ptr(), encoded.len());
-        mvl_array_push(arr, (&char_s as *const *mut MvlString).cast());
+        _mvl_array_push(arr, (&char_s as *const *mut MvlString).cast());
     }
     arr
 }
@@ -758,7 +797,7 @@ pub(crate) unsafe fn mvl_map_keys(m: *const MvlMap) -> *mut MvlArray {
         let slot = &*(*m).slots.add(i);
         if slot.occupied == 1 {
             let key_s = mvl_string_new(slot.key_ptr, slot.key_len as usize);
-            mvl_array_push(arr, (&key_s as *const *mut MvlString).cast());
+            _mvl_array_push(arr, (&key_s as *const *mut MvlString).cast());
         }
     }
     arr
@@ -783,7 +822,7 @@ pub(crate) unsafe fn mvl_map_values(m: *const MvlMap) -> *mut MvlArray {
         let slot = &*(*m).slots.add(i);
         if slot.occupied == 1 {
             let val_s = mvl_string_new(slot.val_ptr, slot.val_len as usize);
-            mvl_array_push(arr, (&val_s as *const *mut MvlString).cast());
+            _mvl_array_push(arr, (&val_s as *const *mut MvlString).cast());
         }
     }
     arr
@@ -981,7 +1020,7 @@ pub unsafe extern "C" fn List_filter(
         let elem_ptr = (*list).ptr.add(i * es);
         let elem_val = *(elem_ptr as *const i64);
         if pred(env, elem_val) {
-            mvl_array_push(out, elem_ptr);
+            _mvl_array_push(out, elem_ptr);
         }
     }
     out
@@ -1016,7 +1055,7 @@ pub unsafe extern "C" fn List_map(
         let elem_ptr = (*list).ptr.add(i * es);
         let elem_val = *(elem_ptr as *const i64);
         let result = map_fn(env, elem_val);
-        mvl_array_push(out, (&result as *const i64) as *const u8);
+        _mvl_array_push(out, (&result as *const i64) as *const u8);
     }
     out
 }
@@ -1191,17 +1230,17 @@ mod tests {
     fn array_push_get_len() {
         unsafe {
             let a = mvl_array_new(8, 0); // i64 elements
-            assert_eq!(mvl_array_len(a), 0);
+            assert_eq!(_mvl_array_len(a), 0);
             let v1: i64 = 42;
             let v2: i64 = 99;
-            mvl_array_push(a, (&v1 as *const i64).cast());
-            mvl_array_push(a, (&v2 as *const i64).cast());
-            assert_eq!(mvl_array_len(a), 2);
-            let p1 = mvl_array_get(a, 0) as *const i64;
-            let p2 = mvl_array_get(a, 1) as *const i64;
+            _mvl_array_push(a, (&v1 as *const i64).cast());
+            _mvl_array_push(a, (&v2 as *const i64).cast());
+            assert_eq!(_mvl_array_len(a), 2);
+            let p1 = _mvl_array_get(a, 0) as *const i64;
+            let p2 = _mvl_array_get(a, 1) as *const i64;
             assert_eq!(*p1, 42);
             assert_eq!(*p2, 99);
-            assert!(mvl_array_get(a, 2).is_null());
+            assert!(_mvl_array_get(a, 2).is_null());
             mvl_array_drop(a);
         }
     }
@@ -1211,11 +1250,11 @@ mod tests {
         unsafe {
             let a = mvl_array_new(8, 2);
             for i in 0i64..16 {
-                mvl_array_push(a, (&i as *const i64).cast());
+                _mvl_array_push(a, (&i as *const i64).cast());
             }
-            assert_eq!(mvl_array_len(a), 16);
+            assert_eq!(_mvl_array_len(a), 16);
             for i in 0i64..16 {
-                let p = mvl_array_get(a, i as usize) as *const i64;
+                let p = _mvl_array_get(a, i as usize) as *const i64;
                 assert_eq!(*p, i);
             }
             mvl_array_drop(a);
@@ -1227,7 +1266,7 @@ mod tests {
         unsafe {
             let a = mvl_array_new(8, 0);
             let v: i64 = 7;
-            mvl_array_push(a, (&v as *const i64).cast());
+            _mvl_array_push(a, (&v as *const i64).cast());
             let a2 = mvl_array_clone(a);
             assert_eq!((*a).refcount, 2);
             mvl_array_drop(a2);
@@ -1385,10 +1424,10 @@ mod tests {
         unsafe {
             let s = mvl_string_new(b"abc".as_ptr(), 3);
             let arr = mvl_string_chars(s);
-            assert_eq!(mvl_array_len(arr), 3);
+            assert_eq!(_mvl_array_len(arr), 3);
             let expected = [b"a" as &[u8], b"b", b"c"];
             for (i, exp) in expected.iter().enumerate() {
-                let elem_ptr = mvl_array_get(arr, i) as *const *mut MvlString;
+                let elem_ptr = _mvl_array_get(arr, i) as *const *mut MvlString;
                 let cs = *elem_ptr;
                 assert_eq!(mvl_string_len(cs), 1);
                 let slice = std::slice::from_raw_parts(_mvl_string_ptr(cs), 1);
@@ -1404,7 +1443,7 @@ mod tests {
         unsafe {
             let s = mvl_string_new(b"".as_ptr(), 0);
             let arr = mvl_string_chars(s);
-            assert_eq!(mvl_array_len(arr), 0);
+            assert_eq!(_mvl_array_len(arr), 0);
             mvl_string_ptr_array_drop(arr);
             mvl_string_drop(s);
         }
@@ -1417,14 +1456,14 @@ mod tests {
             let text = "aé"; // 3 bytes: 'a' + 0xC3 + 0xA9
             let s = mvl_string_new(text.as_ptr(), text.len());
             let arr = mvl_string_chars(s);
-            assert_eq!(mvl_array_len(arr), 2, "expected 2 chars: 'a' and 'é'");
+            assert_eq!(_mvl_array_len(arr), 2, "expected 2 chars: 'a' and 'é'");
             // First char: 'a' (1 byte)
-            let p0 = *(mvl_array_get(arr, 0) as *const *mut MvlString);
+            let p0 = *(_mvl_array_get(arr, 0) as *const *mut MvlString);
             assert_eq!(mvl_string_len(p0), 1);
             let s0 = std::slice::from_raw_parts(_mvl_string_ptr(p0), 1);
             assert_eq!(s0, b"a");
             // Second char: 'é' (2 bytes)
-            let p1 = *(mvl_array_get(arr, 1) as *const *mut MvlString);
+            let p1 = *(_mvl_array_get(arr, 1) as *const *mut MvlString);
             assert_eq!(mvl_string_len(p1), 2);
             let s1 = std::slice::from_raw_parts(_mvl_string_ptr(p1), 2);
             assert_eq!(s1, "é".as_bytes());
@@ -1443,11 +1482,11 @@ mod tests {
             mvl_map_insert(m, b"alpha".as_ptr(), 5, (&v as *const i64).cast(), 8);
             mvl_map_insert(m, b"beta".as_ptr(), 4, (&v as *const i64).cast(), 8);
             let arr = mvl_map_keys(m);
-            assert_eq!(mvl_array_len(arr), 2);
+            assert_eq!(_mvl_array_len(arr), 2);
             // Collect returned key strings into a set for order-independent check.
             let mut found = std::collections::HashSet::new();
             for i in 0..2usize {
-                let elem_ptr = mvl_array_get(arr, i) as *const *mut MvlString;
+                let elem_ptr = _mvl_array_get(arr, i) as *const *mut MvlString;
                 let ks = *elem_ptr;
                 let len = mvl_string_len(ks) as usize;
                 let slice = std::slice::from_raw_parts(_mvl_string_ptr(ks), len);
@@ -1470,11 +1509,11 @@ mod tests {
             mvl_map_remove(m, b"a".as_ptr(), 1);
             let arr = mvl_map_keys(m);
             assert_eq!(
-                mvl_array_len(arr),
+                _mvl_array_len(arr),
                 1,
                 "tombstone key must not appear in keys()"
             );
-            let ks = *(mvl_array_get(arr, 0) as *const *mut MvlString);
+            let ks = *(_mvl_array_get(arr, 0) as *const *mut MvlString);
             let slice =
                 std::slice::from_raw_parts(_mvl_string_ptr(ks), mvl_string_len(ks) as usize);
             assert_eq!(slice, b"b");
@@ -1489,16 +1528,16 @@ mod tests {
     unsafe fn make_i64_array(vals: &[i64]) -> *mut MvlArray {
         let a = mvl_array_new(8, vals.len().max(1));
         for v in vals {
-            mvl_array_push(a, (v as *const i64).cast());
+            _mvl_array_push(a, (v as *const i64).cast());
         }
         a
     }
 
     /// Helper: read all i64 elements from an array.
     unsafe fn read_i64_array(a: *mut MvlArray) -> Vec<i64> {
-        let len = mvl_array_len(a) as usize;
+        let len = _mvl_array_len(a) as usize;
         (0..len)
-            .map(|i| *(mvl_array_get(a, i) as *const i64))
+            .map(|i| *(_mvl_array_get(a, i) as *const i64))
             .collect()
     }
 
@@ -1539,7 +1578,7 @@ mod tests {
             let a = make_i64_array(&[]);
             let c = make_closure(pred_is_even as *const (), std::ptr::null());
             let out = List_filter(a, &c);
-            assert_eq!(mvl_array_len(out), 0);
+            assert_eq!(_mvl_array_len(out), 0);
             mvl_array_drop(out);
             mvl_array_drop(a);
         }
@@ -1551,7 +1590,7 @@ mod tests {
             let a = make_i64_array(&[1, 3, 5]);
             let c = make_closure(pred_is_even as *const (), std::ptr::null());
             let out = List_filter(a, &c);
-            assert_eq!(mvl_array_len(out), 0);
+            assert_eq!(_mvl_array_len(out), 0);
             mvl_array_drop(out);
             mvl_array_drop(a);
         }
@@ -1587,7 +1626,7 @@ mod tests {
             let a = make_i64_array(&[]);
             let c = make_closure(map_double as *const (), std::ptr::null());
             let out = List_map(a, &c);
-            assert_eq!(mvl_array_len(out), 0);
+            assert_eq!(_mvl_array_len(out), 0);
             mvl_array_drop(out);
             mvl_array_drop(a);
         }

@@ -606,6 +606,17 @@ impl RustEmitter {
                         );
                     }
 
+                    // set(i, value) — in-place index assignment.
+                    "set" if args.len() == 2 => {
+                        self.push("{ let __mvl_i = (");
+                        self.emit_expr(&args[0]);
+                        self.push("); (");
+                        self.emit_expr(receiver);
+                        self.push(")[__mvl_i as usize] = ");
+                        self.emit_expr_as_arg(&args[1]);
+                        self.push("; }");
+                    }
+
                     // push(elem) / extend(iter) / append(other) — collection mutators.
                     "push" if args.len() == 1 => {
                         let elem_is_labeled = self
@@ -738,6 +749,18 @@ impl RustEmitter {
                     self.push("(");
                     self.emit_args_no_into(args);
                     self.push(")");
+                } else if name.as_str() == "List::filled" {
+                    // List::filled(n, value) → vec![(value).clone(); (n) as usize]
+                    debug_assert_eq!(args.len(), 2, "List::filled requires exactly 2 arguments");
+                    self.push("vec![(");
+                    if let Some(v) = args.get(1) {
+                        self.emit_expr(v);
+                    }
+                    self.push(").clone(); (");
+                    if let Some(n) = args.first() {
+                        self.emit_expr(n);
+                    }
+                    self.push(") as usize]");
                 } else if name.as_str() == "map_new" || name.as_str() == "Map::new" {
                     self.push("std::collections::HashMap::new()");
                 } else if name.as_str() == "from_int" || name.as_str() == "wrapping_from_int" {
