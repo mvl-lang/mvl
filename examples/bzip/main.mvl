@@ -8,9 +8,6 @@
 //   compress:   rle_encode → bwt_encode → mtf_encode → huffman → bitstream
 //   decompress: bitstream → huffman decode → mtf_decode → bwt_decode → rle_decode
 //
-// Effect boundary is greppable:
-//   grep '!' examples/bzip/main.mvl   → only main() appears
-//
 // R2  (memory safety): each stage borrows its input — large byte blocks
 //     are never cloned across function call boundaries.
 // R5  (errors):  CompressError models all failure modes explicitly.
@@ -49,19 +46,13 @@ type CompressError = enum {
 // ── Pure compression pipeline ─────────────────────────────────────────────────
 
 // Compress a block of bytes using the bzip2 algorithm pipeline.
-// All stages are pure: no file I/O, no console, no randomness.
-// Input is borrowed throughout — a 900KB block is never cloned.
-pub partial fn compress_bytes(input: val List[Int]) -> Result[List[Int], CompressError] {
+pub partial fn compress_bytes(input: val List[Byte]) -> Result[List[Byte], CompressError] {
     if input.is_empty() {
         Err(CompressError::EmptyInput)
     } else {
-        // Stage 1: RLE — collapse runs of 4+ identical bytes
-        let rle_out: List[Int] = rle_encode(input);
-        // Stage 2: BWT — permute so similar bytes cluster
+        let rle_out: List[Byte] = rle_encode(input);
         let bwt_out: BwtResult = bwt_encode(val rle_out);
-        // Stage 3: MTF — convert clusters to small integers
         let mtf_out: List[Int] = mtf_encode(val bwt_out.data);
-        // Stage 4: Huffman — build optimal prefix-free codes
         let freqs: List[Int] = count_freqs(val mtf_out);
         match build_tree(val freqs) {
             None        => Err(CompressError::HuffmanFailed),
@@ -70,11 +61,10 @@ pub partial fn compress_bytes(input: val List[Int]) -> Result[List[Int], Compres
     }
 }
 
-// Huffman-encode a sequence of MTF symbols using precomputed code table.
 partial fn huffman_encode_stream(
     symbols: val List[Int],
     codes:   val List[List[Int]],
-) -> Result[List[Int], CompressError] {
+) -> Result[List[Byte], CompressError] {
     let writer: BitWriter = new_writer();
     match encode_symbols(symbols, codes, writer, 0) {
         Err(e) => Err(e),
@@ -100,26 +90,19 @@ partial fn encode_symbols(
 }
 
 // Decompress bytes produced by compress_bytes.
-// Takes compressed data by value — it is consumed by the bit reader.
 pub partial fn decompress_bytes(
-    input:    List[Int],   // by value — consumed by the bit reader
+    input:    List[Byte],
     primary:  Int,
     freqs:    val List[Int],
-) -> Result[List[Int], CompressError] {
-    // The decoder needs the Huffman tree (rebuilt from stored frequencies)
-    // and the BWT primary index (stored alongside the compressed stream).
+) -> Result[List[Byte], CompressError] {
     match build_tree(val freqs) {
         None        => Err(CompressError::HuffmanFailed),
         Some(result) => {
-            // Stage 5 reverse: decode bit stream to MTF symbols
             let n_total: Int = freqs_total(freqs);
             let mtf_decoded: List[Int] = huffman_decode_stream(input, result.tree, n_total);
-            // Stage 4 reverse: MTF → BWT output
-            let bwt_data: List[Int] = mtf_decode(val mtf_decoded);
-            // Stage 3 reverse: BWT decode (takes BwtResult by value)
+            let bwt_data: List[Byte] = mtf_decode(val mtf_decoded);
             let bwt_block: BwtResult = BwtResult { data: bwt_data, primary: primary };
-            let rle_out: List[Int] = bwt_decode(bwt_block);
-            // Stage 2 reverse: RLE decode
+            let rle_out: List[Byte] = bwt_decode(bwt_block);
             Ok(rle_decode(val rle_out))
         },
     }
@@ -133,10 +116,8 @@ fn freqs_total(freqs: val List[Int]) -> Int {
     acc
 }
 
-// Huffman decode: walk the tree for each symbol until total_symbols are decoded.
-// Takes packed by value — List[Int] is stored directly in the BitReader.
 partial fn huffman_decode_stream(
-    packed:     List[Int],
+    packed:     List[Byte],
     tree:       HuffmanTree,
     n_symbols:  Int,
 ) -> List[Int] {
@@ -144,8 +125,6 @@ partial fn huffman_decode_stream(
     huf_dec_loop(tree, reader, [], 0, n_symbols)
 }
 
-// Decode symbols from the bit stream one at a time using tree traversal.
-// The tree is passed once and re-walked for each symbol (partial: non-structural).
 partial fn huf_dec_loop(
     tree:       HuffmanTree,
     r:          BitReader,
@@ -168,7 +147,6 @@ type DecodeOneResult = struct {
     reader: BitReader,
 }
 
-// Walk the tree from root to leaf for a single symbol.
 partial fn decode_one_symbol(node: HuffmanTree, r: BitReader) -> DecodeOneResult {
     match node {
         HuffmanTree::Leaf(sym, _) => DecodeOneResult { symbol: sym, reader: r },
@@ -183,16 +161,19 @@ partial fn decode_one_symbol(node: HuffmanTree, r: BitReader) -> DecodeOneResult
     }
 }
 
-// ── Entry point (only function with effects) ──────────────────────────────────
+// ── Entry point ────────────────────────────────────────────────────────────────
+
+// Build a List[Byte] from a String (one byte per ASCII character).
+fn to_bytes(s: String) -> List[Byte] {
+    let out: ref List[Byte] = [];
+    for i in range(0, s.len()) {
+        out.push(s.byte_at(i))
+    }
+    out
+}
 
 partial fn main() -> Unit ! Console {
-    // Demo: compress a short sequence and report the result.
-    // A real implementation would read/write files via bridge.rs.
-    let input: List[Int] = [
-        65, 65, 65, 65, 65, 65, 65, 65,  // AAAAAAAA — runs compress well
-        66, 66, 66, 66, 67, 67, 67, 67,  // BBBBCCCC
-        68, 69, 70, 71, 72, 73, 74, 75,  // DEFGHIJK — no runs
-    ];
+    let input: List[Byte] = to_bytes("AAAAAAAABBBBCCCCDEFGHIJK");
     println("bzip demo");
     println("input length:  ".concat(input.len().to_string()));
     match compress_bytes(val input) {
@@ -211,4 +192,3 @@ partial fn main() -> Unit ! Console {
         },
     }
 }
-

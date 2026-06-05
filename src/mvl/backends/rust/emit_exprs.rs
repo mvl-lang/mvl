@@ -740,13 +740,17 @@ impl RustEmitter {
                     self.push(")");
                 } else if name.as_str() == "map_new" || name.as_str() == "Map::new" {
                     self.push("std::collections::HashMap::new()");
-                } else if name.as_str() == "from_int" {
-                    debug_assert_eq!(args.len(), 1, "from_int requires exactly one argument");
-                    self.push("(");
+                } else if name.as_str() == "from_int" || name.as_str() == "wrapping_from_int" {
+                    // from_int: safe (prover enforces 0–255); wrapping_from_int: intentional truncation.
+                    // Both emit identical Rust: ((arg) as i64 as u8).
+                    // Cast through i64 so negative literals work: (-1 as i64 as u8) is valid,
+                    // but (-1 as u8) triggers E0600 (cannot negate u8).
+                    debug_assert_eq!(args.len(), 1, "{} requires exactly one argument", name);
+                    self.push("((");
                     if let Some(arg) = args.first() {
                         self.emit_expr(arg);
                     }
-                    self.push(" as u8)");
+                    self.push(") as i64 as u8)");
                 } else if name == "String::from_chars" {
                     self.push("str_from_chars(");
                     self.emit_args(args);

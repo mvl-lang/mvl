@@ -1,0 +1,243 @@
+// tests/stdlib/byte_test.mvl — Byte (u8) runtime validation
+//
+// Covers all Byte operations declared in std/math.mvl:
+// from_int / to_int / to_string, bitwise, wrapping arithmetic, checked arithmetic.
+// Also explicitly validates from_int wrapping semantics — it is a deliberate
+// wrapping cast (same as Rust `n as u8`), not a checked conversion.
+//
+// Run with:  mvl test tests/stdlib/
+
+// ── from_int / to_int / to_string ────────────────────────────────────────────
+
+test fn byte_from_int_basic() -> Unit {
+    let b: Byte = from_int(65);
+    assert_eq(b.to_int(), 65)
+}
+
+test fn byte_from_int_zero() -> Unit {
+    let b: Byte = from_int(0);
+    assert_eq(b.to_int(), 0)
+}
+
+test fn byte_from_int_max() -> Unit {
+    let b: Byte = from_int(255);
+    assert_eq(b.to_int(), 255)
+}
+
+// wrapping_from_int is the explicit escape hatch for intentional truncation.
+// from_int requires [0, 255]; wrapping_from_int accepts any Int.
+test fn byte_wrapping_from_int_at_256() -> Unit {
+    let b0: Byte   = from_int(0);
+    let b256: Byte = wrapping_from_int(256);
+    assert_eq(b256.to_int(), b0.to_int())
+}
+
+test fn byte_wrapping_from_int_at_257() -> Unit {
+    let b1: Byte   = from_int(1);
+    let b257: Byte = wrapping_from_int(257);
+    assert_eq(b257.to_int(), b1.to_int())
+}
+
+test fn byte_wrapping_from_int_negative() -> Unit {
+    // -1 wraps to 255 (two's-complement u8)
+    let b: Byte = wrapping_from_int(-1);
+    assert_eq(b.to_int(), 255)
+}
+
+test fn byte_to_string_decimal() -> Unit {
+    let b: Byte = from_int(42);
+    assert_eq(b.to_string(), "42")
+}
+
+test fn byte_to_string_zero() -> Unit {
+    assert_eq(from_int(0).to_string(), "0")
+}
+
+test fn byte_to_string_max() -> Unit {
+    assert_eq(from_int(255).to_string(), "255")
+}
+
+// ── Bitwise ──────────────────────────────────────────────────────────────────
+
+test fn byte_bit_and_masks_lower_nibble() -> Unit {
+    let a: Byte    = from_int(0xAB);
+    let mask: Byte = from_int(0x0F);
+    assert_eq(a.bit_and(mask).to_int(), 0x0B)
+}
+
+test fn byte_bit_and_zero_clears() -> Unit {
+    let a: Byte = from_int(0xFF);
+    let z: Byte = from_int(0x00);
+    assert_eq(a.bit_and(z).to_int(), 0)
+}
+
+test fn byte_bit_or_sets_bit() -> Unit {
+    let a: Byte = from_int(0x10);
+    let b: Byte = from_int(0x01);
+    assert_eq(a.bit_or(b).to_int(), 0x11)
+}
+
+test fn byte_bit_or_with_self() -> Unit {
+    let a: Byte = from_int(0xAB);
+    assert_eq(a.bit_or(a).to_int(), 0xAB)
+}
+
+test fn byte_bit_xor_toggles() -> Unit {
+    let a: Byte = from_int(0xFF);
+    let b: Byte = from_int(0x0F);
+    assert_eq(a.bit_xor(b).to_int(), 0xF0)
+}
+
+test fn byte_bit_xor_self_is_zero() -> Unit {
+    let a: Byte = from_int(0xAB);
+    assert_eq(a.bit_xor(a).to_int(), 0)
+}
+
+test fn byte_bit_not_inverts_zero() -> Unit {
+    let a: Byte = from_int(0x00);
+    assert_eq(a.bit_not().to_int(), 0xFF)
+}
+
+test fn byte_bit_not_inverts_ff() -> Unit {
+    let a: Byte = from_int(0xFF);
+    assert_eq(a.bit_not().to_int(), 0x00)
+}
+
+test fn byte_shift_left_by_one() -> Unit {
+    let a: Byte = from_int(1);
+    let n: Byte = from_int(1);
+    assert_eq(a.shift_left(n).to_int(), 2)
+}
+
+test fn byte_shift_left_by_three() -> Unit {
+    let a: Byte = from_int(1);
+    let n: Byte = from_int(3);
+    assert_eq(a.shift_left(n).to_int(), 8)
+}
+
+test fn byte_shift_right_by_two() -> Unit {
+    let a: Byte = from_int(16);
+    let n: Byte = from_int(2);
+    assert_eq(a.shift_right(n).to_int(), 4)
+}
+
+test fn byte_shift_right_by_four() -> Unit {
+    let a: Byte = from_int(0xF0);
+    let n: Byte = from_int(4);
+    assert_eq(a.shift_right(n).to_int(), 0x0F)
+}
+
+// ── Wrapping arithmetic ───────────────────────────────────────────────────────
+
+test fn byte_wrapping_add_no_overflow() -> Unit {
+    let a: Byte = from_int(100);
+    let b: Byte = from_int(50);
+    assert_eq(a.wrapping_add(b).to_int(), 150)
+}
+
+test fn byte_wrapping_add_overflows() -> Unit {
+    // 200 + 100 = 300; 300 mod 256 = 44
+    let a: Byte = from_int(200);
+    let b: Byte = from_int(100);
+    assert_eq(a.wrapping_add(b).to_int(), 44)
+}
+
+test fn byte_wrapping_sub_no_underflow() -> Unit {
+    let a: Byte = from_int(100);
+    let b: Byte = from_int(40);
+    assert_eq(a.wrapping_sub(b).to_int(), 60)
+}
+
+test fn byte_wrapping_sub_underflows() -> Unit {
+    // 0 - 1 wraps to 255
+    let a: Byte = from_int(0);
+    let b: Byte = from_int(1);
+    assert_eq(a.wrapping_sub(b).to_int(), 255)
+}
+
+test fn byte_wrapping_mul_no_overflow() -> Unit {
+    let a: Byte = from_int(10);
+    let b: Byte = from_int(20);
+    assert_eq(a.wrapping_mul(b).to_int(), 200)
+}
+
+test fn byte_wrapping_mul_overflows() -> Unit {
+    // 100 * 3 = 300; 300 mod 256 = 44
+    let a: Byte = from_int(100);
+    let b: Byte = from_int(3);
+    assert_eq(a.wrapping_mul(b).to_int(), 44)
+}
+
+// ── Checked arithmetic ────────────────────────────────────────────────────────
+
+test fn byte_checked_add_ok() -> Unit {
+    let a: Byte = from_int(100);
+    let b: Byte = from_int(50);
+    let r: Option[Byte] = a.checked_add(b);
+    assert_eq(r.is_some(), true);
+    assert_eq(r.unwrap_or(from_int(0)).to_int(), 150)
+}
+
+test fn byte_checked_add_overflow_is_none() -> Unit {
+    let a: Byte = from_int(200);
+    let b: Byte = from_int(100);
+    assert_eq(a.checked_add(b).is_none(), true)
+}
+
+test fn byte_checked_sub_ok() -> Unit {
+    let a: Byte = from_int(100);
+    let b: Byte = from_int(40);
+    let r: Option[Byte] = a.checked_sub(b);
+    assert_eq(r.unwrap_or(from_int(0)).to_int(), 60)
+}
+
+test fn byte_checked_sub_underflow_is_none() -> Unit {
+    let a: Byte = from_int(0);
+    let b: Byte = from_int(1);
+    assert_eq(a.checked_sub(b).is_none(), true)
+}
+
+test fn byte_checked_mul_ok() -> Unit {
+    let a: Byte = from_int(10);
+    let b: Byte = from_int(20);
+    let r: Option[Byte] = a.checked_mul(b);
+    assert_eq(r.unwrap_or(from_int(0)).to_int(), 200)
+}
+
+test fn byte_checked_mul_overflow_is_none() -> Unit {
+    // 100 * 3 = 300 > 255
+    let a: Byte = from_int(100);
+    let b: Byte = from_int(3);
+    assert_eq(a.checked_mul(b).is_none(), true)
+}
+
+// ── List[Byte] basic operations ──────────────────────────────────────────────
+
+test fn byte_list_push_and_len() -> Unit {
+    let xs: ref List[Byte] = [];
+    xs.push(from_int(1));
+    xs.push(from_int(2));
+    xs.push(from_int(3));
+    assert_eq(xs.len(), 3)
+}
+
+test fn byte_list_get() -> Unit {
+    let xs: ref List[Byte] = [];
+    xs.push(from_int(10));
+    xs.push(from_int(20));
+    assert_eq(xs.get(0).unwrap_or(from_int(0)).to_int(), 10);
+    assert_eq(xs.get(1).unwrap_or(from_int(0)).to_int(), 20)
+}
+
+test fn byte_list_roundtrip_via_to_int() -> Unit {
+    let original: List[Int] = [65, 66, 67, 68];
+    let bytes: ref List[Byte] = [];
+    for v in original {
+        bytes.push(from_int(v))
+    }
+    let recovered: ref List[Int] = [];
+    for b in bytes {
+        recovered.push(b.to_int())
+    }
+    assert_eq(recovered, original)
+}

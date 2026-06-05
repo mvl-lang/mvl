@@ -1,24 +1,24 @@
 // bitstream.mvl — Bit-stream packing and unpacking
 //
-// Demonstrates native bit operators: val   |  ^  ~  <<  >>
+// Demonstrates native bit operators: &  |  ^  ~  <<  >>
 // These are the language-level operators added in #483/#484 (epic #480).
 //
-// Byte values are stored as Int (0-255). A BitWriter accumulates bits into
-// bytes; a BitReader extracts them. Both are purely functional — every
-// operation returns an updated value, keeping the API composable.
+// Packed bytes are stored as List[Byte] (u8) — same density as Rust's Vec<u8>.
+// The accumulator (`current`) and bit indices remain Int since they participate
+// in shift/mask arithmetic before being committed to the byte stream.
 //
 // R1  (types):    BitWriter and BitReader structs
 // R10 (refinements): n_bits constrained to prevent shift overflow
 // R7  (effects):  pure — no file or console access
 
 pub type BitWriter = struct {
-    bytes:   List[Int],  // fully-packed output bytes so far (values 0-255)
-    current: Int,        // accumulator for the byte being built
-    bit_pos: Int,        // bits already written into current (0-7)
+    bytes:   List[Byte],  // fully-packed output bytes so far
+    current: Int,         // accumulator for the byte being built (0-255)
+    bit_pos: Int,         // bits already written into current (0-7)
 }
 
 pub type BitReader = struct {
-    bytes:   List[Int],
+    bytes:   List[Byte],
     pos:     Int,        // current byte index
     bit_pos: Int,        // next bit to read within current byte (0-7)
 }
@@ -35,15 +35,14 @@ pub total fn new_writer() -> BitWriter {
 }
 
 // Flush any remaining bits and return the packed byte sequence.
-pub total fn flush_writer(w: BitWriter) -> List[Int] {
-    // Bind to local to signal ownership transfer (prevents auto-borrow inference).
+pub total fn flush_writer(w: BitWriter) -> List[Byte] {
     let owned: BitWriter = w;
     if owned.bit_pos == 0 {
         owned.bytes
     } else {
         // Pad the final partial byte with zeros on the high bits
-        let out: ref List[Int] = owned.bytes;
-        out.push(owned.current);
+        let out: ref List[Byte] = owned.bytes;
+        out.push(from_int(owned.current));
         out
     }
 }
@@ -58,15 +57,13 @@ fn write_bits_loop(w: BitWriter, value: Int, remaining: Int) -> BitWriter {
     if remaining <= 0 {
         w
     } else {
-        // Extract the lowest bit and place it at the current bit_pos
         let bit: Int = value & 1;
         let next_value: Int = value >> 1;
         let new_current: Int = w.current | (bit << w.bit_pos);
         let new_bit_pos: Int = w.bit_pos + 1;
         if new_bit_pos == 8 {
-            // Current byte is full — flush it and start the next byte
-            let new_bytes: ref List[Int] = w.bytes;
-            new_bytes.push(new_current);
+            let new_bytes: ref List[Byte] = w.bytes;
+            new_bytes.push(from_int(new_current));
             let next_w: BitWriter = BitWriter {
                 bytes:   new_bytes,
                 current: 0,
@@ -85,7 +82,7 @@ fn write_bits_loop(w: BitWriter, value: Int, remaining: Int) -> BitWriter {
 }
 
 // Create a BitReader over a packed byte array.
-pub total fn new_reader(bytes: List[Int]) -> BitReader {
+pub total fn new_reader(bytes: List[Byte]) -> BitReader {
     BitReader { bytes: bytes, pos: 0, bit_pos: 0 }
 }
 
@@ -101,8 +98,7 @@ fn read_bits_loop(r: BitReader, remaining: Int, acc: Int, shift: Int) -> ReadRes
     } else if r.pos >= r.bytes.len() {
         ReadResult { rval: acc, reader: r }
     } else {
-        let byte_v: Int = r.bytes.get(r.pos).unwrap_or(0);
-        // Extract the bit at bit_pos, accumulate into result
+        let byte_v: Int = r.bytes.get(r.pos).unwrap_or(from_int(0)).to_int();
         let bit: Int = (byte_v >> r.bit_pos) & 1;
         let new_acc: Int = acc | (bit << shift);
         let new_bit_pos: Int = r.bit_pos + 1;
@@ -125,7 +121,6 @@ fn read_bits_loop(r: BitReader, remaining: Int, acc: Int, shift: Int) -> ReadRes
 }
 
 // ── Bit manipulation utilities ────────────────────────────────────────────────
-// These standalone functions showcase the native bit operators directly.
 
 // Pack a Huffman code (list of 0/1 bits) into a BitWriter.
 pub total fn write_code(w: BitWriter, bits: List[Int]) -> BitWriter {
@@ -137,7 +132,7 @@ pub total fn write_code(w: BitWriter, bits: List[Int]) -> BitWriter {
 }
 
 // Compute a CRC32-style table entry.
-// Demonstrates: val  (mask), ^ (XOR), >> (shift right), ~ (bitwise NOT).
+// Demonstrates: &  (mask), ^ (XOR), >> (shift right), ~ (bitwise NOT).
 pub total fn crc32_step(crc: Int, byte_in: Int) -> Int {
     let combined: Int = crc ^ byte_in;
     let masked: Int = combined & 0xFF;
@@ -167,7 +162,6 @@ fn crc32_bit_step(st: Crc32ByteState, poly: Int) -> Crc32ByteState {
 }
 
 // Extract a bit field: bits [lo, lo+len) of v.
-// Demonstrates: << (align mask), & (apply mask), >> (shift result down).
 pub total fn bit_field(v: Int, lo: Int, len: Int where self >= 1 && self <= 24) -> Int {
     let mask: Int = (1 << len) - 1;
     (v >> lo) & mask
@@ -178,7 +172,7 @@ pub total fn bit_field(v: Int, lo: Int, len: Int where self >= 1 && self <= 24) 
 test fn write_then_read_8bits() -> Unit {
     let w0: BitWriter = new_writer();
     let w1: BitWriter = write_bits(w0, 0xA5, 8);
-    let packed: List[Int] = flush_writer(w1);
+    let packed: List[Byte] = flush_writer(w1);
     assert_eq(packed.len(), 1);
     let r0: BitReader = new_reader(packed);
     let res: ReadResult = read_bits(r0, 8);
@@ -189,7 +183,7 @@ test fn write_then_read_across_boundary() -> Unit {
     let w0: BitWriter = new_writer();
     let w1: BitWriter = write_bits(w0, 3, 4);
     let w2: BitWriter = write_bits(w1, 12, 4);
-    let packed: List[Int] = flush_writer(w2);
+    let packed: List[Byte] = flush_writer(w2);
     assert_eq(packed.len(), 1);
     let r0: BitReader = new_reader(packed);
     let res1: ReadResult = read_bits(r0, 4);

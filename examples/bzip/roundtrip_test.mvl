@@ -12,7 +12,7 @@
 // ── Type re-declarations (workaround: #96) ──────────────────────────────
 
 type BwtResult = struct {
-    data:    List[Int],
+    data:    List[Byte],
     primary: Int,
 }
 
@@ -34,13 +34,13 @@ type BuildResult = struct {
 }
 
 type BitWriter = struct {
-    bytes:   List[Int],
+    bytes:   List[Byte],
     current: Int,
     bit_pos: Int,
 }
 
 type BitReader = struct {
-    bytes:   List[Int],
+    bytes:   List[Byte],
     pos:     Int,
     bit_pos: Int,
 }
@@ -72,11 +72,19 @@ fn ll_set(list: List[List[Int]], idx: Int, new_v: List[Int]) -> List[List[Int]] 
     result
 }
 
+fn b(xs: List[Int]) -> List[Byte] {
+    xs.map(|v: Int| -> Byte { from_int(v) })
+}
+
+fn repeat_byte(bv: Byte, count: Int) -> List[Byte] {
+    range(0, count).map(|_x: Int| -> Byte { bv })
+}
+
 // ── RLE (re-declaration) ────────────────────────────────────────────────
 
-type RleEncState = struct { out: List[Int], skip: Int }
+type RleEncState = struct { out: List[Byte], skip: Int }
 
-fn rle_encode(data: val List[Int]) -> List[Int] {
+fn rle_encode(data: val List[Byte]) -> List[Byte] {
     let n: Int = data.len();
     let st: ref RleEncState = RleEncState { out: [], skip: 0 };
     for idx in range(0, n) {
@@ -85,43 +93,43 @@ fn rle_encode(data: val List[Int]) -> List[Int] {
     st.out
 }
 
-fn rle_enc_step(st: RleEncState, data: val List[Int], idx: Int) -> RleEncState {
+fn rle_enc_step(st: RleEncState, data: val List[Byte], idx: Int) -> RleEncState {
     if idx < st.skip { st }
     else {
-        let b: Int = data.get(idx).unwrap();
-        let run: Int = count_run(data, idx, b);
-        if run >= 4 { rle_emit_run(st.out, b, run, idx) }
-        else { rle_emit_byte(st.out, b, st.skip) }
+        let bv: Byte = data.get(idx).unwrap_or(from_int(0));
+        let run: Int = count_run(data, idx, bv);
+        if run >= 4 { rle_emit_run(st.out, bv, run, idx) }
+        else { rle_emit_byte(st.out, bv, st.skip) }
     }
 }
 
-fn rle_emit_run(out: List[Int], b: Int, run: Int, idx: Int) -> RleEncState {
+fn rle_emit_run(out: List[Byte], bv: Byte, run: Int, idx: Int) -> RleEncState {
     let extra: Int = if run - 4 > 255 { 255 } else { run - 4 };
-    let new_out: ref List[Int] = out;
-    new_out.push(b); new_out.push(b); new_out.push(b); new_out.push(b);
-    new_out.push(extra);
+    let new_out: ref List[Byte] = out;
+    new_out.push(bv); new_out.push(bv); new_out.push(bv); new_out.push(bv);
+    new_out.push(from_int(extra));
     RleEncState { out: new_out, skip: idx + 4 + extra }
 }
 
-fn rle_emit_byte(out: List[Int], b: Int, skip: Int) -> RleEncState {
-    let new_out: ref List[Int] = out;
-    new_out.push(b);
+fn rle_emit_byte(out: List[Byte], bv: Byte, skip: Int) -> RleEncState {
+    let new_out: ref List[Byte] = out;
+    new_out.push(bv);
     RleEncState { out: new_out, skip: skip }
 }
 
-fn count_run(data: val List[Int], start: Int, b: Int) -> Int {
+fn count_run(data: val List[Byte], start: Int, bv: Byte) -> Int {
     let n: Int = data.len();
     let cap: Int = if n - start < 259 { n - start } else { 259 };
     let count: ref Int = 0;
     for j in range(0, cap) {
-        if count == j && data.get(start + j).unwrap() == b { count = count + 1 }
+        if count == j && data.get(start + j).unwrap_or(from_int(0)) == bv { count = count + 1 }
     }
     count
 }
 
-type RleDecState = struct { out: List[Int], skip: Int }
+type RleDecState = struct { out: List[Byte], skip: Int }
 
-fn rle_decode(data: val List[Int]) -> List[Int] {
+fn rle_decode(data: val List[Byte]) -> List[Byte] {
     let n: Int = data.len();
     let st: ref RleDecState = RleDecState { out: [], skip: 0 };
     for idx in range(0, n) {
@@ -130,76 +138,72 @@ fn rle_decode(data: val List[Int]) -> List[Int] {
     st.out
 }
 
-fn rle_dec_step(st: RleDecState, data: val List[Int], idx: Int, n: Int) -> RleDecState {
+fn rle_dec_step(st: RleDecState, data: val List[Byte], idx: Int, n: Int) -> RleDecState {
     if idx < st.skip { st }
     else if idx + 4 < n {
-        let b0: Int = data.get(idx).unwrap();
-        let b1: Int = data.get(idx + 1).unwrap();
-        let b2: Int = data.get(idx + 2).unwrap();
-        let b3: Int = data.get(idx + 3).unwrap();
+        let b0: Byte = data.get(idx).unwrap_or(from_int(0));
+        let b1: Byte = data.get(idx + 1).unwrap_or(from_int(0));
+        let b2: Byte = data.get(idx + 2).unwrap_or(from_int(0));
+        let b3: Byte = data.get(idx + 3).unwrap_or(from_int(0));
         if b0 == b1 && b1 == b2 && b2 == b3 {
-            rle_expand_run(st.out, b0, data.get(idx + 4).unwrap(), idx)
+            rle_expand_run(st.out, b0, data.get(idx + 4).unwrap_or(from_int(0)), idx)
         } else { rle_dec_byte(st.out, b0, st.skip) }
-    } else { rle_dec_byte(st.out, data.get(idx).unwrap(), st.skip) }
+    } else { rle_dec_byte(st.out, data.get(idx).unwrap_or(from_int(0)), st.skip) }
 }
 
-fn rle_expand_run(out: List[Int], b: Int, extra: Int, idx: Int) -> RleDecState {
-    let new_out: ref List[Int] = out;
-    new_out.extend(repeat_int(b, 4 + extra));
+fn rle_expand_run(out: List[Byte], bv: Byte, extra: Byte, idx: Int) -> RleDecState {
+    let new_out: ref List[Byte] = out;
+    new_out.extend(repeat_byte(bv, 4 + extra.to_int()));
     RleDecState { out: new_out, skip: idx + 5 }
 }
 
-fn rle_dec_byte(out: List[Int], b: Int, skip: Int) -> RleDecState {
-    let new_out: ref List[Int] = out;
-    new_out.push(b);
+fn rle_dec_byte(out: List[Byte], bv: Byte, skip: Int) -> RleDecState {
+    let new_out: ref List[Byte] = out;
+    new_out.push(bv);
     RleDecState { out: new_out, skip: skip }
-}
-
-fn repeat_int(b: Int, count: Int) -> List[Int] {
-    range(0, count).map(|_x: Int| -> Int { b })
 }
 
 // ── BWT (re-declaration) ────────────────────────────────────────────────
 
-fn bwt_encode(input: val List[Int]) -> BwtResult {
+fn bwt_encode(input: val List[Byte]) -> BwtResult {
     let n: Int = input.len();
-    let rotations: ref List[List[Int]] = [];
+    let rotations: ref List[List[Byte]] = [];
     for i in range(0, n) { rotations.push(make_rotation(input, n, i)) }
-    let sorted: List[List[Int]] = rotations.sort();
-    let original: List[Int] = make_rotation(input, n, 0);
-    let last: ref List[Int] = [];
+    let sorted: List[List[Byte]] = rotations.sort();
+    let original: List[Byte] = make_rotation(input, n, 0);
+    let last: ref List[Byte] = [];
     let primary: ref Int = 0;
     for idx in range(0, n) {
-        let rot: List[Int] = sorted.get(idx).unwrap();
-        last.push(rot.get(n - 1).unwrap());
+        let rot: List[Byte] = sorted.get(idx).unwrap_or([]);
+        last.push(rot.get(n - 1).unwrap_or(from_int(0)));
         if rot == original { primary = idx }
     }
     BwtResult { data: last, primary: primary }
 }
 
-fn make_rotation(input: val List[Int], n: Int, i: Int) -> List[Int] {
-    let rot: ref List[Int] = input.slice(i, n);
-    let head: List[Int] = input.slice(0, i);
+fn make_rotation(input: val List[Byte], n: Int, i: Int) -> List[Byte] {
+    let rot: ref List[Byte] = input.slice(i, n);
+    let head: List[Byte] = input.slice(0, i);
     rot.extend(head);
     rot
 }
 
-fn sort_copy(data: val List[Int]) -> List[Int] {
-    let copy: List[Int] = data.slice(0, data.len());
+fn sort_copy(data: val List[Byte]) -> List[Byte] {
+    let copy: List[Byte] = data.slice(0, data.len());
     copy.sort()
 }
 
-fn bwt_decode(block: BwtResult) -> List[Int] {
+fn bwt_decode(block: BwtResult) -> List[Byte] {
     let owned: BwtResult = block;
     let n: Int = owned.data.len();
-    let first: List[Int] = sort_copy(val owned.data);
+    let first: List[Byte] = sort_copy(val owned.data);
     let lf: List[Int] = build_t(val owned.data, val first, n);
     let fl: List[Int] = invert_perm(lf, n);
-    let result: ref List[Int] = [];
+    let result: ref List[Byte] = [];
     let pos: ref Int = owned.primary;
     for _step in range(0, n) {
-        result.push(first.get(pos).unwrap());
-        pos = fl.get(pos).unwrap()
+        result.push(first.get(pos).unwrap_or(from_int(0)));
+        pos = fl.get(pos).unwrap_or(0)
     }
     result
 }
@@ -207,42 +211,42 @@ fn bwt_decode(block: BwtResult) -> List[Int] {
 fn invert_perm(perm: List[Int], n: Int) -> List[Int] {
     let inv: ref List[Int] = range(0, n).map(zero_int);
     for i in range(0, n) {
-        let j: Int = perm.get(i).unwrap();
+        let j: Int = perm.get(i).unwrap_or(0);
         inv = int_list_set(inv, j, i)
     }
     inv
 }
 
-fn build_t(last: val List[Int], first: val List[Int], n: Int) -> List[Int] {
+fn build_t(last: val List[Byte], first: val List[Byte], n: Int) -> List[Int] {
     let seen: ref List[Int] = range(0, 256).map(zero_int);
     let first_occ: List[Int] = build_first_occ(first, n);
     let t: ref List[Int] = range(0, n).map(zero_int);
     for i in range(0, n) {
-        let sym: Int = last.get(i).unwrap();
-        let rank: Int = seen.get(sym).unwrap();
-        let f_pos: Int = first_occ.get(sym).unwrap() + rank;
+        let sym: Int = last.get(i).unwrap_or(from_int(0)).to_int();
+        let rank: Int = seen.get(sym).unwrap_or(0);
+        let f_pos: Int = first_occ.get(sym).unwrap_or(0) + rank;
         t = int_list_set(t, i, f_pos);
         seen = int_list_set(seen, sym, rank + 1)
     }
     t
 }
 
-fn build_first_occ(first: val List[Int], n: Int) -> List[Int] {
+fn build_first_occ(first: val List[Byte], n: Int) -> List[Int] {
     let occ: ref List[Int] = range(0, 256).map(|_x: Int| -> Int { n });
     for i in range(0, n) {
-        let sym: Int = first.get(i).unwrap();
-        if occ.get(sym).unwrap() == n { occ = int_list_set(occ, sym, i) }
+        let sym: Int = first.get(i).unwrap_or(from_int(0)).to_int();
+        if occ.get(sym).unwrap_or(0) == n { occ = int_list_set(occ, sym, i) }
     }
     occ
 }
 
 // ── MTF (re-declaration) ────────────────────────────────────────────────
 
-fn mtf_encode(data: val List[Int]) -> List[Int] {
+fn mtf_encode(data: val List[Byte]) -> List[Int] {
     let alphabet: ref List[Int] = range(0, 256);
     let out: ref List[Int] = [];
     for i in range(0, data.len()) {
-        let sym: Int = data.get(i).unwrap();
+        let sym: Int = data.get(i).unwrap_or(from_int(0)).to_int();
         let pos: Int = find_in_alphabet(val alphabet, sym);
         out.push(pos);
         alphabet = move_to_front(alphabet, sym, pos)
@@ -250,13 +254,13 @@ fn mtf_encode(data: val List[Int]) -> List[Int] {
     out
 }
 
-fn mtf_decode(encoded: val List[Int]) -> List[Int] {
+fn mtf_decode(encoded: val List[Int]) -> List[Byte] {
     let alphabet: ref List[Int] = range(0, 256);
-    let out: ref List[Int] = [];
+    let out: ref List[Byte] = [];
     for i in range(0, encoded.len()) {
-        let pos: Int = encoded.get(i).unwrap();
-        let sym: Int = alphabet.get(pos).unwrap();
-        out.push(sym);
+        let pos: Int = encoded.get(i).unwrap_or(0);
+        let sym: Int = alphabet.get(pos).unwrap_or(0);
+        out.push(from_int(sym));
         alphabet = move_to_front(alphabet, sym, pos)
     }
     out
@@ -265,7 +269,7 @@ fn mtf_decode(encoded: val List[Int]) -> List[Int] {
 fn find_in_alphabet(alphabet: val List[Int], sym: Int) -> Int {
     let found: ref Int = 0;
     for i in range(0, alphabet.len()) {
-        if alphabet.get(i).unwrap() == sym { found = i }
+        if alphabet.get(i).unwrap_or(0) == sym { found = i }
     }
     found
 }
@@ -291,8 +295,8 @@ fn tree_weight(t: val HuffmanTree) -> Int {
 fn count_freqs(data: val List[Int]) -> List[Int] {
     let freqs: ref List[Int] = range(0, 256).map(zero_int);
     for i in range(0, data.len()) {
-        let sym: Int = data.get(i).unwrap();
-        let old: Int = freqs.get(sym).unwrap();
+        let sym: Int = data.get(i).unwrap_or(0);
+        let old: Int = freqs.get(sym).unwrap_or(0);
         freqs = int_list_set(freqs, sym, old + 1)
     }
     freqs
@@ -307,15 +311,15 @@ fn build_tree(freqs: val List[Int]) -> Option[BuildResult] {
     let init: InitState = build_init(freqs);
     if init.queue.is_empty() { None }
     else if init.queue.len() == 1 {
-        let sym: Int = init.syms.get(0).unwrap().get(0).unwrap();
+        let sym: Int = init.syms.get(0).unwrap_or([]).get(0).unwrap_or(0);
         let codes: ref List[List[Int]] = range(0, 256).map(empty_code);
         codes = ll_set(codes, sym, [0]);
-        Some(BuildResult { tree: init.queue.get(0).unwrap(), codes: codes })
+        Some(BuildResult { tree: init.queue.get(0).unwrap_or(HuffmanTree::Leaf(0, 0)), codes: codes })
     } else {
         let codes: List[List[Int]] = range(0, 256).map(empty_code);
         let build_st: BuildState = BuildState { queue: init.queue, syms: init.syms, codes: codes };
         let final_st: BuildState = build_loop(build_st);
-        Some(BuildResult { tree: final_st.queue.get(0).unwrap(), codes: final_st.codes })
+        Some(BuildResult { tree: final_st.queue.get(0).unwrap_or(HuffmanTree::Leaf(0, 0)), codes: final_st.codes })
     }
 }
 
@@ -326,7 +330,7 @@ fn build_init(freqs: val List[Int]) -> InitState {
 }
 
 fn init_step(st: InitState, freqs: val List[Int], sym: Int) -> InitState {
-    let f: Int = freqs.get(sym).unwrap();
+    let f: Int = freqs.get(sym).unwrap_or(0);
     if f > 0 { add_leaf(st, sym, f) } else { st }
 }
 
@@ -349,13 +353,13 @@ fn build_loop(init: BuildState) -> BuildState {
 
 fn build_merge(st: BuildState) -> BuildState {
     let li: Int = min_weight_idx(val st.queue);
-    let left: HuffmanTree  = st.queue.get(li).unwrap();
-    let syms_li: List[Int] = st.syms.get(li).unwrap();
+    let left: HuffmanTree  = st.queue.get(li).unwrap_or(HuffmanTree::Leaf(0, 0));
+    let syms_li: List[Int] = st.syms.get(li).unwrap_or([]);
     let q2: List[HuffmanTree]  = remove_at(st.queue, li);
     let syms2: List[List[Int]] = remove_at_ll(st.syms, li);
     let ri: Int = min_weight_idx(val q2);
-    let right: HuffmanTree = q2.get(ri).unwrap();
-    let syms_ri: List[Int] = syms2.get(ri).unwrap();
+    let right: HuffmanTree = q2.get(ri).unwrap_or(HuffmanTree::Leaf(0, 0));
+    let syms_ri: List[Int] = syms2.get(ri).unwrap_or([]);
     let q3: List[HuffmanTree]  = remove_at(q2, ri);
     let syms3: List[List[Int]] = remove_at_ll(syms2, ri);
     let codes1: List[List[Int]] = prepend_bit_for(st.codes, val syms_li, 0);
@@ -374,8 +378,8 @@ fn build_merge(st: BuildState) -> BuildState {
 fn prepend_bit_for(codes: List[List[Int]], syms: val List[Int], bit: Int) -> List[List[Int]] {
     let c: ref List[List[Int]] = codes;
     for i in range(0, syms.len()) {
-        let sym: Int      = syms.get(i).unwrap();
-        let old: List[Int] = c.get(sym).unwrap();
+        let sym: Int       = syms.get(i).unwrap_or(0);
+        let old: List[Int] = c.get(sym).unwrap_or([]);
         c = ll_set(c, sym, prepend_bit(old, bit))
     }
     c
@@ -389,9 +393,9 @@ fn prepend_bit(code: List[Int], bit: Int) -> List[Int] {
 
 fn min_weight_idx(queue: val List[HuffmanTree]) -> Int {
     let best_idx: ref Int = 0;
-    let best_w: ref Int = tree_weight(val queue.get(0).unwrap());
+    let best_w: ref Int = tree_weight(val queue.get(0).unwrap_or(HuffmanTree::Leaf(0, 0)));
     for i in range(1, queue.len()) {
-        let w: Int = tree_weight(val queue.get(i).unwrap());
+        let w: Int = tree_weight(val queue.get(i).unwrap_or(HuffmanTree::Leaf(0, 0)));
         if w < best_w { best_idx = i; best_w = w }
     }
     best_idx
@@ -414,7 +418,7 @@ fn remove_at_ll(list: List[List[Int]], idx: Int) -> List[List[Int]] {
 }
 
 fn encode_symbol(codes: val List[List[Int]], sym: Int) -> Option[List[Int]] {
-    let code: List[Int] = codes.get(sym).unwrap();
+    let code: List[Int] = codes.get(sym).unwrap_or([]);
     if code.len() > 0 { Some(code) } else { None }
 }
 
@@ -422,12 +426,12 @@ fn encode_symbol(codes: val List[List[Int]], sym: Int) -> Option[List[Int]] {
 
 fn new_writer() -> BitWriter { BitWriter { bytes: [], current: 0, bit_pos: 0 } }
 
-fn flush_writer(w: BitWriter) -> List[Int] {
+fn flush_writer(w: BitWriter) -> List[Byte] {
     let owned: BitWriter = w;
     if owned.bit_pos == 0 { owned.bytes }
     else {
-        let out: ref List[Int] = owned.bytes;
-        out.push(owned.current);
+        let out: ref List[Byte] = owned.bytes;
+        out.push(from_int(owned.current));
         out
     }
 }
@@ -444,8 +448,8 @@ fn write_bits_loop(w: BitWriter, value: Int, remaining: Int) -> BitWriter {
         let new_current: Int = w.current | (bit << w.bit_pos);
         let new_bit_pos: Int = w.bit_pos + 1;
         if new_bit_pos == 8 {
-            let new_bytes: ref List[Int] = w.bytes;
-            new_bytes.push(new_current);
+            let new_bytes: ref List[Byte] = w.bytes;
+            new_bytes.push(from_int(new_current));
             write_bits_loop(BitWriter { bytes: new_bytes, current: 0, bit_pos: 0 }, next_value, remaining - 1)
         } else {
             write_bits_loop(BitWriter { bytes: w.bytes, current: new_current, bit_pos: new_bit_pos }, next_value, remaining - 1)
@@ -453,7 +457,7 @@ fn write_bits_loop(w: BitWriter, value: Int, remaining: Int) -> BitWriter {
     }
 }
 
-fn new_reader(bytes: List[Int]) -> BitReader { BitReader { bytes: bytes, pos: 0, bit_pos: 0 } }
+fn new_reader(bytes: List[Byte]) -> BitReader { BitReader { bytes: bytes, pos: 0, bit_pos: 0 } }
 
 fn read_bits(r: BitReader, n_bits: Int) -> ReadResult { read_bits_loop(r, n_bits, 0, 0) }
 
@@ -461,7 +465,7 @@ fn read_bits_loop(r: BitReader, remaining: Int, acc: Int, shift: Int) -> ReadRes
     if remaining <= 0 { ReadResult { rval: acc, reader: r } }
     else if r.pos >= r.bytes.len() { ReadResult { rval: acc, reader: r } }
     else {
-        let byte_v: Int = r.bytes.get(r.pos).unwrap();
+        let byte_v: Int = r.bytes.get(r.pos).unwrap_or(from_int(0)).to_int();
         let bit: Int = (byte_v >> r.bit_pos) & 1;
         let new_acc: Int = acc | (bit << shift);
         let new_bit_pos: Int = r.bit_pos + 1;
@@ -481,10 +485,10 @@ fn write_code(w: BitWriter, bits: List[Int]) -> BitWriter {
 
 // ── Pipeline (re-declaration from main.mvl) ─────────────────────────────
 
-fn compress_bytes(input: val List[Int]) -> Result[List[Int], CompressError] {
+fn compress_bytes(input: val List[Byte]) -> Result[List[Byte], CompressError] {
     if input.is_empty() { Err(CompressError::EmptyInput) }
     else {
-        let rle_out: List[Int] = rle_encode(input);
+        let rle_out: List[Byte] = rle_encode(input);
         let bwt_out: BwtResult = bwt_encode(val rle_out);
         let mtf_out: List[Int] = mtf_encode(val bwt_out.data);
         let freqs: List[Int] = count_freqs(val mtf_out);
@@ -495,7 +499,7 @@ fn compress_bytes(input: val List[Int]) -> Result[List[Int], CompressError] {
     }
 }
 
-fn huffman_encode_stream(symbols: val List[Int], codes: val List[List[Int]]) -> Result[List[Int], CompressError] {
+fn huffman_encode_stream(symbols: val List[Int], codes: val List[List[Int]]) -> Result[List[Byte], CompressError] {
     let writer: BitWriter = new_writer();
     match encode_symbols(symbols, codes, writer, 0) {
         Err(e) => Err(e),
@@ -506,7 +510,7 @@ fn huffman_encode_stream(symbols: val List[Int], codes: val List[List[Int]]) -> 
 partial fn encode_symbols(symbols: val List[Int], codes: val List[List[Int]], w: BitWriter, i: Int) -> Result[BitWriter, CompressError] {
     if i >= symbols.len() { Ok(w) }
     else {
-        let sym: Int = symbols.get(i).unwrap();
+        let sym: Int = symbols.get(i).unwrap_or(0);
         match encode_symbol(codes, sym) {
             None       => Err(CompressError::SymbolNotInTree),
             Some(bits) => encode_symbols(symbols, codes, write_code(w, bits), i + 1),
@@ -514,15 +518,15 @@ partial fn encode_symbols(symbols: val List[Int], codes: val List[List[Int]], w:
     }
 }
 
-fn decompress_bytes(input: List[Int], primary: Int, freqs: val List[Int]) -> Result[List[Int], CompressError] {
+fn decompress_bytes(input: List[Byte], primary: Int, freqs: val List[Int]) -> Result[List[Byte], CompressError] {
     match build_tree(freqs) {
         None         => Err(CompressError::HuffmanFailed),
         Some(result) => {
             let n_total: Int = freqs_total(freqs);
             let mtf_decoded: List[Int] = huffman_decode_stream(input, result.tree, n_total);
-            let bwt_data: List[Int] = mtf_decode(val mtf_decoded);
+            let bwt_data: List[Byte] = mtf_decode(val mtf_decoded);
             let bwt_block: BwtResult = BwtResult { data: bwt_data, primary: primary };
-            let rle_out: List[Int] = bwt_decode(bwt_block);
+            let rle_out: List[Byte] = bwt_decode(bwt_block);
             Ok(rle_decode(val rle_out))
         },
     }
@@ -530,7 +534,7 @@ fn decompress_bytes(input: List[Int], primary: Int, freqs: val List[Int]) -> Res
 
 fn freqs_total(freqs: val List[Int]) -> Int {
     let acc: ref Int = 0;
-    for i in range(0, freqs.len()) { acc = acc + freqs.get(i).unwrap() }
+    for i in range(0, freqs.len()) { acc = acc + freqs.get(i).unwrap_or(0) }
     acc
 }
 
@@ -539,7 +543,7 @@ type DecodeOneResult = struct {
     reader: BitReader,
 }
 
-fn huffman_decode_stream(packed: List[Int], tree: HuffmanTree, n_symbols: Int) -> List[Int] {
+fn huffman_decode_stream(packed: List[Byte], tree: HuffmanTree, n_symbols: Int) -> List[Int] {
     let reader: BitReader = new_reader(packed);
     huf_dec_loop(tree, reader, [], 0, n_symbols)
 }
@@ -570,8 +574,8 @@ partial fn decode_one_symbol(node: HuffmanTree, r: BitReader) -> DecodeOneResult
 
 // ── Roundtrip helper ────────────────────────────────────────────────────
 
-fn run_roundtrip(input: List[Int]) -> Bool {
-    let rle_out: List[Int] = rle_encode(val input);
+fn run_roundtrip(input: List[Byte]) -> Bool {
+    let rle_out: List[Byte] = rle_encode(val input);
     let bwt_out: BwtResult = bwt_encode(val rle_out);
     let mtf_out: List[Int] = mtf_encode(val bwt_out.data);
     let freqs:   List[Int] = count_freqs(val mtf_out);
@@ -588,8 +592,8 @@ fn run_roundtrip(input: List[Int]) -> Bool {
 // ── Tests ───────────────────────────────────────────────────────────────
 
 test fn compress_empty_is_error() -> Unit {
-    let empty: List[Int] = [];
-    let result: Result[List[Int], CompressError] = compress_bytes(val empty);
+    let empty: List[Byte] = [];
+    let result: Result[List[Byte], CompressError] = compress_bytes(val empty);
     let is_err: Bool = match result {
         Err(CompressError::EmptyInput) => true,
         _                              => false,
@@ -598,8 +602,8 @@ test fn compress_empty_is_error() -> Unit {
 }
 
 test fn compress_produces_output() -> Unit {
-    let input: List[Int] = [65, 65, 65, 65, 65, 65, 65, 65];
-    let result: Result[List[Int], CompressError] = compress_bytes(val input);
+    let input: List[Byte] = b([65, 65, 65, 65, 65, 65, 65, 65]);
+    let result: Result[List[Byte], CompressError] = compress_bytes(val input);
     let ok: Bool = match result {
         Ok(_)  => true,
         Err(_) => false,
@@ -608,35 +612,30 @@ test fn compress_produces_output() -> Unit {
 }
 
 test fn roundtrip_single_byte() -> Unit {
-    let input: List[Int] = [42];
-    assert_eq(run_roundtrip(input), true)
+    assert_eq(run_roundtrip(b([42])), true)
 }
 
 test fn roundtrip_all_same_bytes() -> Unit {
-    let input: List[Int] = [65, 65, 65, 65, 65, 65, 65, 65];
-    assert_eq(run_roundtrip(input), true)
+    assert_eq(run_roundtrip(b([65, 65, 65, 65, 65, 65, 65, 65])), true)
 }
 
 test fn roundtrip_no_repetition() -> Unit {
-    let input: List[Int] = [1, 2, 3, 4, 5, 6, 7, 8];
-    assert_eq(run_roundtrip(input), true)
+    assert_eq(run_roundtrip(b([1, 2, 3, 4, 5, 6, 7, 8])), true)
 }
 
 test fn roundtrip_mixed_runs_and_random() -> Unit {
-    let input: List[Int] = [
+    let input: List[Byte] = b([
         70, 70, 70, 70, 70,
         71, 72, 73, 74, 75, 76,
         77, 77, 77, 77,
-    ];
+    ]);
     assert_eq(run_roundtrip(input), true)
 }
 
 test fn roundtrip_two_byte_alphabet() -> Unit {
-    let input: List[Int] = [0, 1, 0, 1, 0, 0, 1, 1, 0, 1];
-    assert_eq(run_roundtrip(input), true)
+    assert_eq(run_roundtrip(b([0, 1, 0, 1, 0, 0, 1, 1, 0, 1])), true)
 }
 
 test fn roundtrip_ascending_sequence() -> Unit {
-    let input: List[Int] = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
-    assert_eq(run_roundtrip(input), true)
+    assert_eq(run_roundtrip(b([10, 20, 30, 40, 50, 60, 70, 80, 90, 100])), true)
 }
