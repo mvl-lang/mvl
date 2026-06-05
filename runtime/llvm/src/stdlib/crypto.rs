@@ -126,6 +126,7 @@ pub extern "C" fn _mvl_crypto_random_bytes(n: i64) -> *mut MvlArray {
 /// `xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx` (y = 8/9/a/b).
 /// Uses the OS CSPRNG for 16 random bytes.
 #[no_mangle]
+#[allow(unsafe_code)]
 pub extern "C" fn _mvl_crypto_uuid_v4() -> *mut MvlString {
     new_mvl_str(&mvl_runtime::stdlib::crypto::uuid_v4())
 }
@@ -141,15 +142,20 @@ pub extern "C" fn _mvl_crypto_uuid_from_bytes(arr: *const MvlArray) -> *mut MvlS
     if arr.is_null() {
         return new_mvl_str("");
     }
+    // Safety: arr is non-null (checked above); cast to *mut is required by mvl_array_len
+    // signature but no mutation occurs — these are read-only operations.
     let len = unsafe { crate::memory_ops::mvl_array_len(arr as *mut MvlArray) } as usize;
     if len != 16 {
         return new_mvl_str("");
     }
     let mut bytes: Vec<i64> = Vec::with_capacity(16);
     for i in 0..16 {
-        let elem_ptr =
-            unsafe { crate::memory_ops::mvl_array_get(arr as *mut MvlArray, i) as *const i64 };
-        bytes.push(unsafe { elem_ptr.read() });
+        // Safety: len == 16 checked above; null-check guards against corrupted array internals
+        let elem_ptr = unsafe { crate::memory_ops::mvl_array_get(arr as *mut MvlArray, i) };
+        if elem_ptr.is_null() {
+            return new_mvl_str("");
+        }
+        bytes.push(unsafe { (elem_ptr as *const i64).read() });
     }
     new_mvl_str(&mvl_runtime::stdlib::crypto::uuid_from_bytes(bytes))
 }
@@ -320,6 +326,22 @@ mod tests {
         let out = _mvl_crypto_uuid_from_bytes(arr);
         assert!(!out.is_null());
         assert_eq!(from_mvl_str(out), "00000000-0000-4000-8000-000000000000");
+        unsafe { crate::memory::mvl_array_drop(arr) };
+    }
+
+    #[test]
+    fn uuid_from_bytes_wrong_length_returns_empty() {
+        let arr = unsafe { crate::memory::mvl_array_new(std::mem::size_of::<i64>(), 10) };
+        assert!(!arr.is_null());
+        for _ in 0..10 {
+            let zero: i64 = 0;
+            unsafe {
+                crate::memory_ops::mvl_array_push(arr, (&zero as *const i64).cast());
+            }
+        }
+        let out = _mvl_crypto_uuid_from_bytes(arr);
+        assert!(!out.is_null());
+        assert_eq!(from_mvl_str(out), "");
         unsafe { crate::memory::mvl_array_drop(arr) };
     }
 

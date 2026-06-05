@@ -8,7 +8,7 @@
 //! sha256/sha512 accept unlabeled String; Secret[String] is a compile error.
 //!
 //! Import (optional — builtins are already in scope):
-//!   use std.crypto.{sha256, sha512, crypto_random_bytes}
+//!   use std.crypto.{sha256, sha512, crypto_random_bytes, uuid_v4, uuid_from_bytes}
 //!
 //! Effects: CryptoRandom (crypto_random_bytes only); hash functions are pure.
 

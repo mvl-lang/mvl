@@ -111,4 +111,5 @@ test fn uuid_from_bytes_sets_version_and_variant() -> Unit {
     let bytes: List[Int] = [255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255];
     let id: String = uuid_from_bytes(bytes);
     assert_eq(id.char_at(14), "4");
+    assert_eq(id.char_at(19), "b");
 }

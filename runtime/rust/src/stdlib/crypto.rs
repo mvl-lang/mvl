@@ -72,7 +72,7 @@ pub fn uuid_v4() -> String {
 /// Pure — deterministic for the same input. Panics if `bytes` does not have exactly 16 elements.
 /// Each element must be in `[0, 255]`.
 pub fn uuid_from_bytes(bytes: Vec<i64>) -> String {
-    assert!(
+    debug_assert!(
         bytes.len() == 16,
         "uuid_from_bytes requires exactly 16 bytes"
     );
@@ -238,16 +238,12 @@ mod tests {
 
     #[test]
     fn uuid_v4_variant_bits() {
-        let c = u8::from_str_radix(&id_char_at_19(), 16).unwrap();
+        let id = uuid_v4();
+        let c = u8::from_str_radix(&id[19..20], 16).unwrap();
         assert!(
             (0x8..=0xB).contains(&c),
             "variant nibble must be 8, 9, a, or b; got {c:x}"
         );
-    }
-
-    fn id_char_at_19() -> String {
-        let id = uuid_v4();
-        id[19..20].to_string()
     }
 
     #[test]
@@ -293,6 +289,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(debug_assertions)]
     #[should_panic(expected = "uuid_from_bytes requires exactly 16 bytes")]
     fn uuid_from_bytes_wrong_length_panics() {
         uuid_from_bytes(vec![0; 10]);
