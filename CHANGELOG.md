@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [0.189.0] - 2026-06-05
+
+### Added
+
+- **`uuid_v4()` and `uuid_from_bytes()` in `std/crypto`** (#1279)
+  - `uuid_v4() -> String ! CryptoRandom` — generates random UUID v4 (RFC 4122) using the OS CSPRNG
+  - `uuid_from_bytes(bytes: List[Int]) -> String` — formats 16 bytes as a UUID string (pure, deterministic)
+  - Both set version 4 bits and RFC 4122 variant bits
+  - Implemented as runtime builtins with Rust and C-ABI (LLVM) backends
+  - 9 Rust unit tests, 4 LLVM unit tests, 7 MVL stdlib tests, 1 corpus test
+
 ## [0.188.2] - 2026-06-05
 
 ### Fixed

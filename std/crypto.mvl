@@ -8,7 +8,7 @@
 //! sha256/sha512 accept unlabeled String; Secret[String] is a compile error.
 //!
 //! Import (optional — builtins are already in scope):
-//!   use std.crypto.{sha256, sha512, crypto_random_bytes}
+//!   use std.crypto.{sha256, sha512, crypto_random_bytes, uuid_v4, uuid_from_bytes}
 //!
 //! Effects: CryptoRandom (crypto_random_bytes only); hash functions are pure.
 
@@ -31,3 +31,13 @@ pub fn sha512(data: String) -> String { _sha512(data) }
 /// Returns n cryptographically secure random bytes. Requires `! CryptoRandom`.
 /// Distinct from std.random.bytes — uses the OS CSPRNG, not a PRNG.
 pub builtin fn crypto_random_bytes(n: Int) -> Secret[List[Int]] ! CryptoRandom
+
+/// Generate a random UUID v4 (RFC 4122).
+/// Format: "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx" (y = 8/9/a/b)
+/// Uses the OS CSPRNG for the 16 random bytes.
+pub builtin fn uuid_v4() -> String ! CryptoRandom
+
+/// Format 16 bytes as a UUID string (sets version 4 and RFC 4122 variant bits).
+/// Pure — no effect, deterministic for the same input.
+/// Each element must be in [0, 255]; list must have exactly 16 elements.
+pub builtin fn uuid_from_bytes(bytes: List[Int]) -> String
