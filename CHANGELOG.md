@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [0.188.2] - 2026-06-05
+
+### Fixed
+
+- **`min()`, `max()`, `join()` transpiler intercepts** (#1222)
+  - Restored emitter intercepts: `min()` → `min_by(partial_cmp)`, `max()` → `max_by(partial_cmp)`, `join()` → `slice::join`
+  - Added MVL fallback implementation for `join()` in LLVM backend
+  - Validation: all 1175 unit tests, 18 examples, 51 cross-backend tests passing
+
+- **Stale issue references in `std/collections.mvl`** (#1222)
+  - Removed 3 references to closed issue #436 from stdlib comments
+
 ## [0.188.1] - 2026-06-05
 
 ### Fixed
