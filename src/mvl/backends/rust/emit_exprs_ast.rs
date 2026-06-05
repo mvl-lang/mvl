@@ -772,17 +772,17 @@ impl RustEmitter {
                     // map_new[K, V]() / Map::new() → std::collections::HashMap::new().
                     // Type is inferred from the let-binding annotation.
                     self.push("std::collections::HashMap::new()");
-                } else if name.as_str() == "from_int" {
-                    // from_int(n: Int) -> Byte — wrapping cast i64 → u8.
-                    // The checker enforces exactly 1 Int argument; assert here as a
-                    // second line of defence so a missed check produces a clear panic
-                    // rather than silent `( as u8)` which would be a Rust syntax error.
-                    debug_assert_eq!(args.len(), 1, "from_int requires exactly one argument");
-                    self.push("(");
+                } else if name.as_str() == "from_int" || name.as_str() == "wrapping_from_int" {
+                    // from_int: safe (prover enforces 0–255); wrapping_from_int: intentional truncation.
+                    // Both emit identical Rust: ((arg) as i64 as u8).
+                    // Cast through i64 so negative literals work: (-1 as i64 as u8) is valid,
+                    // but (-1 as u8) triggers E0600 (cannot negate u8).
+                    debug_assert_eq!(args.len(), 1, "{} requires exactly one argument", name);
+                    self.push("((");
                     if let Some(arg) = args.first() {
                         self.emit_expr_ast(arg);
                     }
-                    self.push(" as u8)");
+                    self.push(") as i64 as u8)");
                 } else if name == "String::from_chars" {
                     // #928: static builtin method → runtime free function.
                     self.push("str_from_chars(");
