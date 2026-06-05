@@ -1,0 +1,32 @@
+// generic_multi_instantiation.mvl — Monomorphization cross-backend test (#1251)
+//
+// Verifies that generic functions are correctly monomorphized when called with
+// multiple concrete types in the same program. Both Rust and LLVM backends
+// must produce identical output.
+//
+// Expected stdout:
+//   id_int=42
+//   id_str=hello
+//   pick_a=10
+//   pick_b=world
+
+fn id[T](x: T) -> T { x }
+
+fn pick_fst[A, B](a: A, b: B) -> A { a }
+fn pick_snd[A, B](a: A, b: B) -> B { b }
+
+fn main() -> Unit ! Console {
+    // Same generic function called with Int and String
+    let i: Int = id(42);
+    println(format("id_int={}", [i.to_string()]));
+
+    let s: String = id("hello");
+    println(format("id_str={}", [s]));
+
+    // Multi-type-param generics
+    let f: Int = pick_fst(10, "world");
+    println(format("pick_a={}", [f.to_string()]));
+
+    let sc: String = pick_snd(10, "world");
+    println(format("pick_b={}", [sc]));
+}

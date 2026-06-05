@@ -1,0 +1,31 @@
+// closure_value_capture.mvl — Cross-backend closure capture tests (#1250)
+//
+// Verifies that closures correctly capture Int values from enclosing scopes
+// across both Rust and LLVM backends, using HOF patterns.
+//
+// Expected stdout:
+//   above_threshold=3
+//   shifted_sum=36
+//   fold_with_base=65
+
+fn main() -> Unit ! Console {
+    let nums: List[Int] = [1, 2, 3, 4, 5, 6];
+
+    // Capture Int in filter lambda
+    let threshold: Int = 3;
+    let above: List[Int] = nums.filter(|x: Int| x > threshold);
+    println(format("above_threshold={}", [above.len().to_string()]));
+
+    // Capture Int in map + fold lambdas
+    let offset: Int = 10;
+    let small: List[Int] = [1, 2, 3];
+    let shifted: List[Int] = small.map(|x: Int| x + offset);
+    let sum: Int = shifted.fold(0, |acc: Int, x: Int| acc + x);
+    println(format("shifted_sum={}", [sum.to_string()]));
+
+    // Capture Int in fold accumulator lambda
+    let base: Int = 10;
+    let five: List[Int] = [1, 2, 3, 4, 5];
+    let result: Int = five.fold(0, |acc: Int, x: Int| acc + x + base);
+    println(format("fold_with_base={}", [result.to_string()]));
+}

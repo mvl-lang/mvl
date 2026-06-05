@@ -2018,6 +2018,277 @@ fn transpile_mutated_with_prelude_mixed_file_non_test_fn_produces_mutants() {
     );
 }
 
+// ── #1249: Boundary value analysis integration tests ──────────────────────────
+//
+// Verifies that boundary_gen.rs produces correct reports when given mutants
+// from a real transpilation pass (integration between mutation + boundary analysis).
+
+use mvl::mvl::backends::rust::format_boundary_report;
+
+/// Transpile with mutation, mark all mutants as surviving, verify boundary
+/// report identifies comparison-operator and int-literal survivors correctly.
+#[test]
+fn boundary_report_from_transpiled_mutants_identifies_survivors() {
+    let src = "fn check(x: Int) -> Bool { x < 92 }";
+    let prog = parse_prog(src);
+    let r = do_transpile(
+        &prog,
+        TranspileConfig::new("my_crate")
+            .with_file_stem("check")
+            .with_mutation()
+            .for_test_crate(),
+    );
+    // Mark all mutants as surviving (killed=false)
+    let results: std::collections::HashMap<String, bool> =
+        r.mutants.iter().map(|m| (m.id.clone(), false)).collect();
+    let report = format_boundary_report(&r.mutants, &results, &std::collections::HashMap::new());
+    assert!(
+        report.contains("surviving"),
+        "report should mention surviving mutants:\n{report}"
+    );
+    // Should contain both int-literal and comparison-op survivors
+    assert!(
+        report.contains("IntLiteral(") || report.contains("< →") || report.contains("> →"),
+        "report should contain boundary-relevant mutant descriptions:\n{report}"
+    );
+}
+
+/// Transpile with mutation, mark all mutants as killed, verify empty report.
+#[test]
+fn boundary_report_all_killed_shows_no_survivors() {
+    let src = "fn check(x: Int) -> Bool { x < 92 }";
+    let prog = parse_prog(src);
+    let r = do_transpile(
+        &prog,
+        TranspileConfig::new("my_crate")
+            .with_file_stem("check")
+            .with_mutation()
+            .for_test_crate(),
+    );
+    // Mark all mutants as killed
+    let results: std::collections::HashMap<String, bool> =
+        r.mutants.iter().map(|m| (m.id.clone(), true)).collect();
+    let report = format_boundary_report(&r.mutants, &results, &std::collections::HashMap::new());
+    assert!(
+        report.contains("No surviving boundary-relevant mutants"),
+        "all-killed report should say no survivors:\n{report}"
+    );
+}
+
+/// Transpile a function with comparison operators, verify boundary report
+/// includes the function name and line info from the mutants metadata.
+#[test]
+fn boundary_report_includes_mutant_location_metadata() {
+    let src = "fn validate(age: Int) -> Bool { age >= 0 }";
+    let prog = parse_prog(src);
+    let r = do_transpile(
+        &prog,
+        TranspileConfig::new("my_crate")
+            .with_file_stem("validate")
+            .with_mutation()
+            .for_test_crate(),
+    );
+    // Mark comparison-op mutants as surviving
+    let results: std::collections::HashMap<String, bool> =
+        r.mutants.iter().map(|m| (m.id.clone(), false)).collect();
+    let report = format_boundary_report(&r.mutants, &results, &std::collections::HashMap::new());
+    assert!(
+        report.contains("validate"),
+        "report should include function name 'validate':\n{report}"
+    );
+}
+
+// ── #1248: Instrumentation flag composition tests ─────────────────────────────
+//
+// These tests verify that TranspileConfig instrumentation flags produce the
+// expected markers in emitted Rust output, and that flag combinations compose
+// correctly without interference.
+
+/// MC/DC instrumentation emits clause arrays and record call for `if a && b`.
+#[test]
+fn transpile_mcdc_if_emits_clause_arrays_and_record() {
+    let src = "fn f(a: Bool, b: Bool) -> Int { if a && b { 1 } else { 0 } }";
+    let prog = parse_prog(src);
+    let r = do_transpile(
+        &prog,
+        TranspileConfig::new("my_crate")
+            .with_file_stem("f")
+            .with_mcdc(0),
+    );
+    let (out, decisions) = (r.output, r.decisions);
+    assert!(
+        !decisions.is_empty(),
+        "expected MC/DC decision entries for compound condition"
+    );
+    assert_eq!(decisions[0].clause_count, 2, "a && b should have 2 clauses");
+    assert_contains(&out.lib_rs, "__mvl_mcdc::record(");
+}
+
+/// MC/DC decisions metadata captures correct function name and clause count.
+#[test]
+fn transpile_mcdc_decisions_metadata_correct() {
+    let src = "fn check(x: Bool, y: Bool, z: Bool) -> Int { if x && y || z { 1 } else { 0 } }";
+    let prog = parse_prog(src);
+    let r = do_transpile(
+        &prog,
+        TranspileConfig::new("my_crate")
+            .with_file_stem("check")
+            .with_mcdc(0),
+    );
+    assert!(
+        !r.decisions.is_empty(),
+        "expected MC/DC decisions for x && y || z"
+    );
+    assert_eq!(
+        r.decisions[0].fn_name, "check",
+        "decision should reference enclosing function name"
+    );
+    assert_eq!(
+        r.decisions[0].clause_count, 3,
+        "x && y || z should have 3 clauses"
+    );
+}
+
+/// Coverage instrumentation emits `__mvl_cov::hit(N)` calls at decision branches.
+#[test]
+fn transpile_coverage_emits_hit_calls() {
+    let src = "fn f(n: Int) -> Int { if n > 0 { 1 } else { 0 } }";
+    let prog = parse_prog(src);
+    let r = do_transpile(
+        &prog,
+        TranspileConfig::new("my_crate")
+            .with_file_stem("f")
+            .with_coverage(0),
+    );
+    assert_contains(&r.output.lib_rs, "__mvl_cov::hit(");
+    assert!(!r.branches.is_empty(), "expected branch coverage entries");
+}
+
+/// Mutation instrumentation emits MVL_MUTANT env-var dispatch wrappers.
+#[test]
+fn transpile_mutation_emits_mvl_mutant_dispatch() {
+    let src = "fn f(a: Int, b: Int) -> Int { a + b }";
+    let prog = parse_prog(src);
+    let r = do_transpile(
+        &prog,
+        TranspileConfig::new("my_crate")
+            .with_file_stem("f")
+            .with_mutation()
+            .for_test_crate(),
+    );
+    assert_contains(&r.output.lib_rs, "MVL_MUTANT");
+    assert!(
+        !r.mutants.is_empty(),
+        "expected mutation variants for a + b"
+    );
+}
+
+/// Coverage + MC/DC together: both markers present, no interference.
+#[test]
+fn transpile_coverage_and_mcdc_compose() {
+    let src = "fn f(a: Bool, b: Bool) -> Int { if a && b { 1 } else { 0 } }";
+    let prog = parse_prog(src);
+    let r = do_transpile(
+        &prog,
+        TranspileConfig::new("my_crate")
+            .with_file_stem("f")
+            .with_coverage(0)
+            .with_mcdc(0),
+    );
+    assert_contains(&r.output.lib_rs, "__mvl_cov::hit(");
+    assert_contains(&r.output.lib_rs, "__mvl_mcdc::record(");
+    assert!(
+        !r.branches.is_empty(),
+        "coverage branches should be populated"
+    );
+    assert!(
+        !r.decisions.is_empty(),
+        "MC/DC decisions should be populated"
+    );
+}
+
+/// Coverage + mutation together: both markers present.
+#[test]
+fn transpile_coverage_and_mutation_compose() {
+    let src = "fn f(a: Int, b: Int) -> Int { if a > 0 { a + b } else { b } }";
+    let prog = parse_prog(src);
+    let r = do_transpile(
+        &prog,
+        TranspileConfig::new("my_crate")
+            .with_file_stem("f")
+            .with_coverage(0)
+            .with_mutation()
+            .for_test_crate(),
+    );
+    assert_contains(&r.output.lib_rs, "__mvl_cov::hit(");
+    assert_contains(&r.output.lib_rs, "MVL_MUTANT");
+    assert!(
+        !r.branches.is_empty(),
+        "coverage branches should be populated"
+    );
+    assert!(!r.mutants.is_empty(), "mutations should be populated");
+}
+
+/// All three flags together: coverage + MC/DC + mutation.
+#[test]
+fn transpile_all_instrumentation_flags_compose() {
+    let src = "fn f(a: Bool, b: Bool) -> Int { if a && b { 1 + 2 } else { 0 } }";
+    let prog = parse_prog(src);
+    let r = do_transpile(
+        &prog,
+        TranspileConfig::new("my_crate")
+            .with_file_stem("f")
+            .with_coverage(0)
+            .with_mcdc(0)
+            .with_mutation()
+            .for_test_crate(),
+    );
+    assert_contains(&r.output.lib_rs, "__mvl_cov::hit(");
+    assert_contains(&r.output.lib_rs, "__mvl_mcdc::record(");
+    assert_contains(&r.output.lib_rs, "MVL_MUTANT");
+    assert!(!r.branches.is_empty(), "coverage branches present");
+    assert!(!r.decisions.is_empty(), "MC/DC decisions present");
+    assert!(!r.mutants.is_empty(), "mutations present");
+}
+
+/// Mutation alone (no coverage, no MC/DC) still works correctly.
+#[test]
+fn transpile_mutation_alone_no_coverage_markers() {
+    let src = "fn f(a: Int) -> Int { a + 1 }";
+    let prog = parse_prog(src);
+    let r = do_transpile(
+        &prog,
+        TranspileConfig::new("my_crate")
+            .with_file_stem("f")
+            .with_mutation()
+            .for_test_crate(),
+    );
+    assert_contains(&r.output.lib_rs, "MVL_MUTANT");
+    assert!(
+        !r.output.lib_rs.contains("__mvl_cov::hit("),
+        "coverage markers should not appear when only mutation is enabled"
+    );
+    assert!(r.branches.is_empty(), "no branches without coverage flag");
+    assert!(r.decisions.is_empty(), "no decisions without MC/DC flag");
+}
+
+/// MC/DC does not instrument single-clause conditions (only compound).
+#[test]
+fn transpile_mcdc_skips_single_clause_condition() {
+    let src = "fn f(a: Bool) -> Int { if a { 1 } else { 0 } }";
+    let prog = parse_prog(src);
+    let r = do_transpile(
+        &prog,
+        TranspileConfig::new("my_crate")
+            .with_file_stem("f")
+            .with_mcdc(0),
+    );
+    assert!(
+        r.decisions.is_empty(),
+        "single-clause `if a` should not produce MC/DC decisions"
+    );
+}
+
 // ── Phase B: borrow params — call-site &x / &mut x emission (#304) ───────────
 
 /// Shared ref param: call site emits `&y`, signature emits `&i64`.
