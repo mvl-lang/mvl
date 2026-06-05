@@ -1,0 +1,23 @@
+// Corpus: std.runtime source_digest field (#1246).
+//
+// Verifies that:
+//   - Manifest struct has a source_digest: String field
+//   - All three format functions accept a Manifest with source_digest populated
+//   - The field type-checks as String
+
+use std.runtime.{manifest, manifest_to_logfmt, manifest_to_json, manifest_to_block, Manifest}
+
+fn main() -> Unit ! Console {
+    let m: Manifest = manifest();
+
+    // source_digest is a plain String (not Option)
+    let _digest: String = m.source_digest;
+
+    // All three format functions must work with source_digest present
+    let logfmt: String = manifest_to_logfmt(m);
+    let json:   String = manifest_to_json(m);
+    let block:  String = manifest_to_block(m);
+    println(logfmt);
+    println(json);
+    println(block)
+}

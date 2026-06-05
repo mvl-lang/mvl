@@ -64,6 +64,7 @@ pub fn load_and_generate(
     let target = env!("MVL_TARGET");
     let profile = env!("MVL_PROFILE");
     let build_date = env!("MVL_BUILD_DATE");
+    let source_digest_computed = compute_source_digest(project_root);
     let meta = ManifestMeta {
         app_name: &pkg_manifest.package.name,
         app_version: &pkg_manifest.package.version,
@@ -76,6 +77,7 @@ pub fn load_and_generate(
         target,
         profile,
         build_date,
+        source_digest: &source_digest_computed,
     };
     let src = generate_manifest_mvl(&meta, &lockfile.packages, &bridges);
 
@@ -156,6 +158,8 @@ struct ManifestMeta<'a> {
     target: &'a str,
     profile: &'a str,
     build_date: &'a str,
+    /// `"sha256:<hex>"` of the project source tree, or `""` when unavailable.
+    source_digest: &'a str,
 }
 
 /// Generate MVL source for the real `manifest()` function.
@@ -180,6 +184,7 @@ fn generate_manifest_mvl(
         target,
         profile,
         build_date,
+        source_digest,
     } = meta;
     let mut src = String::from("pub fn manifest() -> Manifest {\n");
 
@@ -241,6 +246,7 @@ fn generate_manifest_mvl(
         "            total_functions:     0,",
         "            requirements_proven: 0,",
         "        },",
+        &format!("        source_digest:  {},", mvl_str(source_digest)),
         "    }",
         "}",
     ];
@@ -275,6 +281,56 @@ fn mvl_option_str(s: &str) -> String {
         "None".to_string()
     } else {
         format!("Some({})", mvl_str(s))
+    }
+}
+
+/// Compute a deterministic SHA-256 digest over all `.mvl` files under `root`.
+///
+/// Returns `"sha256:<hex>"` — the same format that `mvl sbom` records for external
+/// verification.  Returns `""` if no `.mvl` files are found or the directory is
+/// unreadable.
+fn compute_source_digest(root: &Path) -> String {
+    use crate::mvl::packages::hash::sha256_source_tree;
+
+    let mut pairs: Vec<(String, String)> = Vec::new();
+    collect_mvl_for_digest(root, root, &mut pairs);
+    if pairs.is_empty() {
+        return String::new();
+    }
+    let refs: Vec<(&str, &str)> = pairs
+        .iter()
+        .map(|(p, h)| (p.as_str(), h.as_str()))
+        .collect();
+    sha256_source_tree(&refs)
+}
+
+fn collect_mvl_for_digest(root: &Path, dir: &Path, out: &mut Vec<(String, String)>) {
+    use crate::mvl::packages::hash::sha256_hex;
+
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if path.is_dir() {
+            if path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with('.'))
+            {
+                continue;
+            }
+            collect_mvl_for_digest(root, &path, out);
+        } else if path.extension().is_some_and(|x| x == "mvl") {
+            if let Ok(data) = std::fs::read(&path) {
+                let rel = path
+                    .strip_prefix(root)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                out.push((rel, sha256_hex(&data)));
+            }
+        }
     }
 }
 
@@ -403,6 +459,7 @@ mod tests {
             target: "aarch64-apple-darwin",
             profile: "debug",
             build_date: "2026-06-04T00:00:00Z",
+            source_digest: "",
         };
         let src = generate_manifest_mvl(&meta, &[], &[]);
         assert!(src.contains("pub fn manifest() -> Manifest"));
@@ -440,6 +497,7 @@ mod tests {
             target: "x86_64-unknown-linux-gnu",
             profile: "release",
             build_date: "2026-06-04T00:00:00Z",
+            source_digest: "",
         };
         let src = generate_manifest_mvl(&meta, &[], &bridges);
         assert!(src.contains(r#"let b0: FfiBridge = FfiBridge { abi: "rust", bridge_name: "fetch_url", bridge_version: "" };"#));
@@ -462,6 +520,7 @@ mod tests {
             target: "aarch64-apple-darwin",
             profile: "debug",
             build_date: "2026-06-04T12:00:00Z",
+            source_digest: "",
         };
         let src = generate_manifest_mvl(&meta, &[], &[]);
         let (mut parser, _) = Parser::new(&src);
@@ -499,6 +558,7 @@ mod tests {
             target: "x86_64-unknown-linux-gnu",
             profile: "debug",
             build_date: "2026-06-04T00:00:00Z",
+            source_digest: "",
         };
         let src = generate_manifest_mvl(&meta, &pkgs, &bridges);
         let (mut parser, _) = Parser::new(&src);
@@ -581,11 +641,117 @@ mod tests {
             target: "aarch64-apple-darwin",
             profile: "debug",
             build_date: "2026-06-04T00:00:00Z",
+            source_digest: "",
         };
         let src = generate_manifest_mvl(&meta, &[], &bridges);
         assert!(
             src.contains("b0") && src.contains("my_bridge"),
             "bridge binding not found in generated source:\n{src}"
         );
+    }
+
+    // --- source_digest ---
+
+    fn base_meta<'a>() -> ManifestMeta<'a> {
+        ManifestMeta {
+            app_name: "test-app",
+            app_version: "1.0.0",
+            mvl_version: "0.187.0",
+            runtime_version: "0.9.2",
+            stdlib_version: "0.42.0",
+            backend: "rust",
+            rustc_version: "",
+            llvm_version: "",
+            target: "aarch64-apple-darwin",
+            profile: "debug",
+            build_date: "2026-06-05T00:00:00Z",
+            source_digest: "",
+        }
+    }
+
+    #[test]
+    fn source_digest_empty_emits_empty_string() {
+        let src = generate_manifest_mvl(&base_meta(), &[], &[]);
+        assert!(
+            src.contains(r#"source_digest:  """#),
+            "empty digest must emit empty string literal"
+        );
+    }
+
+    #[test]
+    fn source_digest_non_empty_emits_correctly() {
+        let digest = "sha256:3a7bd3e2360a3d29b8b9e8cc5a1da3e63a0b8e3d";
+        let mut meta = base_meta();
+        meta.source_digest = digest;
+        let src = generate_manifest_mvl(&meta, &[], &[]);
+        assert!(
+            src.contains(&format!(r#"source_digest:  "{digest}""#)),
+            "non-empty digest must be embedded as string literal"
+        );
+    }
+
+    #[test]
+    fn source_digest_parses_in_generated_mvl() {
+        let digest = "sha256:abc123def456";
+        let mut meta = base_meta();
+        meta.source_digest = digest;
+        let src = generate_manifest_mvl(&meta, &[], &[]);
+        let (mut parser, _) = Parser::new(&src);
+        let _prog = parser.parse_program();
+        assert!(
+            parser.errors().is_empty(),
+            "generated MVL with source_digest must parse cleanly\nSource:\n{src}"
+        );
+    }
+
+    #[test]
+    fn compute_source_digest_empty_dir_returns_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let digest = compute_source_digest(tmp.path());
+        assert_eq!(digest, "", "no .mvl files → empty string");
+    }
+
+    #[test]
+    fn compute_source_digest_with_mvl_files_returns_sha256() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("main.mvl"), b"fn main() {}").unwrap();
+        let digest = compute_source_digest(tmp.path());
+        assert!(
+            digest.starts_with("sha256:"),
+            "must start with sha256: prefix"
+        );
+        assert_eq!(digest.len(), "sha256:".len() + 64, "must be 64 hex chars");
+    }
+
+    #[test]
+    fn compute_source_digest_is_deterministic() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.mvl"), b"hello").unwrap();
+        std::fs::write(tmp.path().join("b.mvl"), b"world").unwrap();
+        let d1 = compute_source_digest(tmp.path());
+        let d2 = compute_source_digest(tmp.path());
+        assert_eq!(d1, d2, "digest must be deterministic");
+    }
+
+    #[test]
+    fn compute_source_digest_changes_on_content_change() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("main.mvl"), b"version1").unwrap();
+        let d1 = compute_source_digest(tmp.path());
+        std::fs::write(tmp.path().join("main.mvl"), b"version2").unwrap();
+        let d2 = compute_source_digest(tmp.path());
+        assert_ne!(d1, d2, "digest must change when file content changes");
+    }
+
+    #[test]
+    fn compute_source_digest_skips_hidden_dirs() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("main.mvl"), b"hello").unwrap();
+        let base = compute_source_digest(tmp.path());
+        // Adding a .mvl file inside a hidden dir must not change the digest
+        std::fs::create_dir(tmp.path().join(".git")).unwrap();
+        std::fs::write(tmp.path().join(".git").join("hook.mvl"), b"secret").unwrap();
+        let after = compute_source_digest(tmp.path());
+        assert_eq!(base, after, "hidden dirs must be skipped");
     }
 }

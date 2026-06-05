@@ -85,6 +85,7 @@ pub type Manifest = struct {
     build:          BuildInfo,
     licenses:       List[String],
     assurance:      AssuranceInfo,
+    source_digest:  String,
 }
 
 // ── Constructor ─────────────────────────────────────────────────────────────
@@ -112,13 +113,14 @@ pub fn manifest() -> Manifest {
             profile:       "debug",
             date:          "",
         },
-        licenses:  [],
+        licenses:      [],
         assurance: AssuranceInfo {
             extern_ratio:        0.0,
             extern_count:        0,
             total_functions:     0,
             requirements_proven: 0,
         },
+        source_digest: "",
     }
 }
 
@@ -189,10 +191,15 @@ pub fn manifest_to_logfmt(m: Manifest) -> String {
     } else {
         base.concat(" packages=").concat(pkg_str)
     };
-    if ffi_str.is_empty() {
+    let with_ffi: String = if ffi_str.is_empty() {
         with_pkgs
     } else {
         with_pkgs.concat(" ffi=").concat(ffi_str)
+    };
+    if m.source_digest.is_empty() {
+        with_ffi
+    } else {
+        with_ffi.concat(" source=").concat(m.source_digest)
     }
 }
 
@@ -239,6 +246,7 @@ pub fn manifest_to_json(m: Manifest) -> String {
         .concat(",\"llvm\":").concat(llvm)
         .concat(",\"packages\":[").concat(join_list(pkg_parts, ",")).concat("]")
         .concat(",\"ffi\":[").concat(join_list(ffi_parts, ",")).concat("]")
+        .concat(",\"source_digest\":").concat(json_str(m.source_digest))
         .concat("}")
 }
 
@@ -273,5 +281,6 @@ pub fn manifest_to_block(m: Manifest) -> String {
         .concat(block_row("runtime:", m.runtime_version))
         .concat(block_row("stdlib:",  stdlib_str))
         .concat(block_row("built:",  m.build.date))
+        .concat(block_row("source:", m.source_digest))
         .concat(bottom)
 }
