@@ -19,13 +19,12 @@
 //! | `if` cond    | `if`      | One per boolean clause     | Top-level and `else if` chains |
 //! | `while` cond | `while`   | One per boolean clause     | Loop guard                     |
 //! | `match` arms | `match`   | One per arm                | Each arm must be taken once    |
-//! | match guard  | `guard`   | One per boolean clause     | `pat if a && b =>` (parser TODO)|
+//! | match guard  | `guard`   | One per boolean clause     | `pat if a && b =>`              |
 //!
 //! ## What is NOT tracked
 //!
 //! - Single-clause conditions (no `&&`/`||`) — they have trivially one obligation
 //! - Conditions inside macro calls or `extern "rust"` blocks
-//! - Match arm guards — parser does not yet implement `pat if expr =>` (#9)
 //! - LLVM backend — no MC/DC infrastructure in `src/mvl/codegen/`
 
 use crate::mvl::parser::ast::{
@@ -593,10 +592,64 @@ mod tests {
         assert_eq!(decisions[1].clause_count, 2);
     }
 
-    // NOTE: MatchGuard tests are deferred — the MVL parser does not yet implement
-    // guard patterns (`pat if expr =>`; see parser/statements.rs TODO #9).
-    // The analysis and transform code for DecisionKind::MatchGuard is in place
-    // and will activate once parser support is added.
+    // ── Match guard coverage tests ─────────────────────────────────────
+
+    #[test]
+    fn match_guard_compound_tracked() {
+        // A compound guard (`if a && b`) produces a MatchGuard decision.
+        let decisions = decisions_for(
+            "fn f(a: Bool, b: Bool, x: Int) -> Int { match x { n if a && b => n, _ => 0 } }",
+        );
+        let guards: Vec<_> = decisions
+            .iter()
+            .filter(|d| d.kind == DecisionKind::MatchGuard)
+            .collect();
+        assert_eq!(guards.len(), 1);
+        assert_eq!(guards[0].clause_count, 2);
+    }
+
+    #[test]
+    fn match_guard_single_clause_not_tracked() {
+        // A single-clause guard (`if a`) has no MC/DC obligation — excluded.
+        let decisions =
+            decisions_for("fn f(a: Bool, x: Int) -> Int { match x { n if a => n, _ => 0 } }");
+        let guards: Vec<_> = decisions
+            .iter()
+            .filter(|d| d.kind == DecisionKind::MatchGuard)
+            .collect();
+        assert_eq!(guards.len(), 0);
+    }
+
+    #[test]
+    fn match_guard_and_match_both_tracked() {
+        // Match itself (2 arms) + compound guard on first arm.
+        // Order: Match decision is registered first, then MatchGuard decisions.
+        let decisions = decisions_for(
+            "fn f(a: Bool, b: Bool, x: Int) -> Int { match x { n if a || b => n, _ => 0 } }",
+        );
+        assert_eq!(decisions.len(), 2);
+        assert_eq!(decisions[0].kind, DecisionKind::Match);
+        assert_eq!(decisions[0].clause_count, 2);
+        assert_eq!(decisions[1].kind, DecisionKind::MatchGuard);
+        assert_eq!(decisions[1].clause_count, 2);
+    }
+
+    #[test]
+    fn match_guard_triple_clause() {
+        // Three-clause guard: `if a && b || c`.
+        let decisions = decisions_for(
+            "fn f(a: Bool, b: Bool, c: Bool, x: Int) -> Int { match x { n if a && b || c => n, _ => 0 } }",
+        );
+        let guards: Vec<_> = decisions
+            .iter()
+            .filter(|d| d.kind == DecisionKind::MatchGuard)
+            .collect();
+        assert_eq!(guards.len(), 1);
+        assert_eq!(guards[0].clause_count, 3);
+    }
+
+    // ── count_clauses_ref unit tests ────────────────────────────────────
+
     #[test]
     fn count_clauses_ref_basic() {
         use crate::mvl::parser::ast::{LogicOp, RefExpr};
