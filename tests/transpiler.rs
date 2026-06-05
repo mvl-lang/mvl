@@ -2038,6 +2038,10 @@ fn boundary_report_from_transpiled_mutants_identifies_survivors() {
             .with_mutation()
             .for_test_crate(),
     );
+    assert!(
+        !r.mutants.is_empty(),
+        "transpiler should emit mutants for `x < 92`"
+    );
     // Mark all mutants as surviving (killed=false)
     let results: std::collections::HashMap<String, bool> =
         r.mutants.iter().map(|m| (m.id.clone(), false)).collect();
@@ -2065,6 +2069,10 @@ fn boundary_report_all_killed_shows_no_survivors() {
             .with_mutation()
             .for_test_crate(),
     );
+    assert!(
+        !r.mutants.is_empty(),
+        "transpiler should emit mutants for `x < 92`"
+    );
     // Mark all mutants as killed
     let results: std::collections::HashMap<String, bool> =
         r.mutants.iter().map(|m| (m.id.clone(), true)).collect();
@@ -2087,6 +2095,10 @@ fn boundary_report_includes_mutant_location_metadata() {
             .with_file_stem("validate")
             .with_mutation()
             .for_test_crate(),
+    );
+    assert!(
+        !r.mutants.is_empty(),
+        "transpiler should emit mutants for `age >= 0`"
     );
     // Mark comparison-op mutants as surviving
     let results: std::collections::HashMap<String, bool> =
@@ -2135,9 +2147,10 @@ fn transpile_mcdc_decisions_metadata_correct() {
             .with_file_stem("check")
             .with_mcdc(0),
     );
-    assert!(
-        !r.decisions.is_empty(),
-        "expected MC/DC decisions for x && y || z"
+    assert_eq!(
+        r.decisions.len(),
+        1,
+        "expected exactly one MC/DC decision for x && y || z"
     );
     assert_eq!(
         r.decisions[0].fn_name, "check",
