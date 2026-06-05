@@ -96,7 +96,8 @@ applies only to production code.
 **Tests:** `src/mvl/backends/rust.rs::tests::mcdc_test_fn_excluded`,
 `src/mvl/backends/rust.rs::tests::mcdc_start_id_offset_applied`,
 `src/mvl/backends/rust.rs::tests::mcdc_bool_return_expr_instrumented`,
-`src/mvl/backends/rust.rs::tests::mcdc_non_bool_return_not_instrumented`
+`src/mvl/backends/rust.rs::tests::mcdc_non_bool_return_not_instrumented`,
+`tests/transpiler.rs::transpile_mcdc_skips_single_clause_condition`
 
 ---
 
@@ -154,7 +155,9 @@ so clause arrays are re-evaluated on every iteration.
   and `__mvl_mcdc::record(0usize,`
 
 **Tests:** `src/mvl/backends/rust.rs::tests::mcdc_if_emits_clause_locals_and_record`,
-`src/mvl/backends/rust.rs::tests::mcdc_record_encoding_present`
+`src/mvl/backends/rust.rs::tests::mcdc_record_encoding_present`,
+`tests/transpiler.rs::transpile_mcdc_if_emits_clause_arrays_and_record`,
+`tests/transpiler.rs::transpile_mcdc_decisions_metadata_correct`
 
 #### Scenario: while with A && B is restructured as loop
 
