@@ -258,7 +258,7 @@ impl TypeChecker {
             "first" | "last" => Ty::Option(Box::new(elem_ty.clone())),
             "get" => Ty::Option(Box::new(elem_ty.clone())),
             // Mutations
-            "push" | "extend" | "append" => Ty::Unit,
+            "push" | "extend" | "append" | "set" => Ty::Unit,
             // List → List transformations
             "concat" | "reverse" => Ty::List(Box::new(elem_ty.clone())),
             // Flat-map

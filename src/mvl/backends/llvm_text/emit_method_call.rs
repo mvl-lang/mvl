@@ -374,6 +374,28 @@ impl TextEmitter {
                 Ok(Some(val))
             }
 
+            // ── List::set(i, value) → Unit ────────────────────────────────
+            ("set", "ptr") if args.len() == 2 => {
+                let idx = match self.emit_expr(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                let item_arg = &args[1];
+                let item_ty = self.type_of_expr(item_arg);
+                let item_val = match self.emit_expr(item_arg)? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                let item_slot = self.next_reg();
+                self.push_instr(&format!("{item_slot} = alloca {item_ty}"));
+                self.push_instr(&format!("store {item_ty} {item_val}, ptr {item_slot}"));
+                self.ensure_extern("declare void @mvl_array_set(ptr, i64, ptr)");
+                self.push_instr(&format!(
+                    "call void @mvl_array_set(ptr {val}, i64 {idx}, ptr {item_slot})"
+                ));
+                Ok(None)
+            }
+
             // ── String::parse_int / parse_float → Result[T, String] ───────
             ("parse_int", "ptr") => self.emit_str_parse(&val, "i64", "_mvl_str_parse_int"),
             ("parse_float", "ptr") => self.emit_str_parse(&val, "double", "_mvl_str_parse_float"),

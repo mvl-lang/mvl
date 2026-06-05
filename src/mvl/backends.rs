@@ -319,6 +319,7 @@ pub const BUILTINS: &[BuiltinDesc] = &[
     BuiltinDesc::method("len", "List", 0, 0),
     BuiltinDesc::method_with("get", "List", 1, 1, Some("list_get"), None),
     BuiltinDesc::method("push", "List", 1, 1),
+    BuiltinDesc::method("set", "List", 2, 2),
     BuiltinDesc::method_with("slice", "List", 2, 2, Some("list_slice"), None),
     BuiltinDesc::method("concat", "List", 1, 1),
     BuiltinDesc::method("contains", "List", 1, 1),

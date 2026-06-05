@@ -857,6 +857,9 @@ impl TextEmitter {
             "choice" if args.len() == 1 => {
                 return self.emit_choice_call(&args[0]);
             }
+            "List::filled" if args.len() == 2 => {
+                return self.emit_list_filled(&args[0], &args[1]);
+            }
             _ => {}
         }
 

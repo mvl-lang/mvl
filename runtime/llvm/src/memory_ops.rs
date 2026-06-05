@@ -532,6 +532,45 @@ pub unsafe extern "C" fn mvl_array_push(a: *mut MvlArray, elem: *const u8) {
     (*a).len += 1;
 }
 
+/// Overwrite the element at index `idx` in place.  No-op if out of bounds.
+///
+/// # Safety
+/// `a` must be a valid non-null `MvlArray` pointer.
+/// `elem` must point to at least `(*a).elem_size` readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn mvl_array_set(a: *mut MvlArray, idx: i64, elem: *const u8) {
+    if a.is_null() || elem.is_null() || idx < 0 || idx as u64 >= (*a).len {
+        return;
+    }
+    let es = (*a).elem_size as usize;
+    let dest = (*a).ptr.add(idx as usize * es);
+    ptr::copy_nonoverlapping(elem, dest, es);
+}
+
+/// Create a new array of `n` elements all initialised to the value pointed to by `elem`.
+///
+/// # Safety
+/// `elem` must point to at least `elem_size` readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn mvl_array_filled(
+    elem_size: i64,
+    n: i64,
+    elem: *const u8,
+) -> *mut MvlArray {
+    let es = elem_size as usize;
+    let count = if n > 0 { n as usize } else { 0 };
+    let arr = mvl_array_new(es, count);
+    if arr.is_null() || count == 0 || elem.is_null() {
+        return arr;
+    }
+    for i in 0..count {
+        let dest = (*arr).ptr.add(i * es);
+        ptr::copy_nonoverlapping(elem, dest, es);
+    }
+    (*arr).len = count as u64;
+    arr
+}
+
 /// Return a pointer to element at `idx`.  Returns null if out of bounds.
 ///
 /// # Safety

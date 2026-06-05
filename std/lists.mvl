@@ -30,6 +30,13 @@ pub builtin fn List[T]::get(self, i: Int) -> Option[T]
 /// Append `x` to the list in place.
 pub builtin fn List[T]::push(self, x: T) -> Unit
 
+/// Replace the element at index `i` with `value`. Panics if `i` is out of bounds.
+pub builtin fn List[T]::set(self, i: Int, value: T) -> Unit
+
+/// Create a list of `n` elements, all initialised to `value`.
+/// Useful for lookup tables and pre-allocated scratch buffers.
+pub builtin fn List[T]::filled(n: Int, value: T) -> List[T]
+
 /// Safe slice `[start, end)` — clamped, never panics.
 pub builtin fn List[T]::slice(self, start: Int, end: Int) -> List[T]
 
