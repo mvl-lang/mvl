@@ -1109,10 +1109,10 @@ impl TextEmitter {
 
         // ── Some branch ──────────────────────────────────────────────────
         self.start_bb(&some_bb);
-        self.ensure_extern("declare ptr @mvl_array_get(ptr, i64)");
+        self.ensure_extern("declare ptr @_mvl_array_get(ptr, i64)");
         let elem_ptr = self.next_reg();
         self.push_instr(&format!(
-            "{elem_ptr} = call ptr @mvl_array_get(ptr {arr}, i64 {idx})"
+            "{elem_ptr} = call ptr @_mvl_array_get(ptr {arr}, i64 {idx})"
         ));
         self.reg_types.insert(elem_ptr.clone(), "ptr".into());
         let elem_val = self.next_reg();

@@ -267,7 +267,7 @@ pub extern "C" fn _mvl_process_is_success(status_tag: i8) -> i8 {
 mod tests {
     use super::*;
     use crate::memory::mvl_string_new;
-    use crate::memory_ops::mvl_array_push;
+    use crate::memory_ops::_mvl_array_push;
 
     /// Create a `*const MvlString` from a Rust `&str`.
     #[allow(unsafe_code)]
@@ -282,7 +282,7 @@ mod tests {
         for s in strs {
             let mut slot = *s as usize;
             let slot_ptr = &mut slot as *mut usize as *const u8;
-            unsafe { mvl_array_push(arr, slot_ptr) };
+            unsafe { _mvl_array_push(arr, slot_ptr) };
         }
         arr as *const MvlArray
     }

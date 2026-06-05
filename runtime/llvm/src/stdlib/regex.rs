@@ -196,7 +196,7 @@ pub unsafe extern "C" fn _mvl_regex_find_all(
     input: *const MvlString,
 ) -> *mut crate::memory::MvlArray {
     use crate::memory::{mvl_array_new, MvlArray};
-    use crate::memory_ops::mvl_array_push;
+    use crate::memory_ops::_mvl_array_push;
     let arr: *mut MvlArray = mvl_array_new(std::mem::size_of::<*mut MvlMatch>(), 0);
     if handle.is_null() {
         return arr;
@@ -210,7 +210,7 @@ pub unsafe extern "C" fn _mvl_regex_find_all(
             end: m.end,
         });
         let ptr: *mut MvlMatch = Box::into_raw(heap);
-        mvl_array_push(arr, (&ptr as *const *mut MvlMatch).cast());
+        _mvl_array_push(arr, (&ptr as *const *mut MvlMatch).cast());
     }
     arr
 }

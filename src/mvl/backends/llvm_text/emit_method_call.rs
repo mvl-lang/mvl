@@ -58,8 +58,8 @@ impl TextEmitter {
                 let is_map = matches!(kind, Some("Map"));
                 let reg = self.next_reg();
                 if is_list {
-                    self.ensure_extern("declare i64 @mvl_array_len(ptr)");
-                    self.push_instr(&format!("{reg} = call i64 @mvl_array_len(ptr {val})"));
+                    self.ensure_extern("declare i64 @_mvl_array_len(ptr)");
+                    self.push_instr(&format!("{reg} = call i64 @_mvl_array_len(ptr {val})"));
                 } else if is_map {
                     self.ensure_extern("declare i64 @_mvl_map_len(ptr)");
                     self.push_instr(&format!("{reg} = call i64 @_mvl_map_len(ptr {val})"));
@@ -263,9 +263,9 @@ impl TextEmitter {
                 // here — same as the pre-existing `len` dispatch. Safe at
                 // realistic array sizes; revisit when fixing the u64/i64 ABI
                 // mismatch across all callers.
-                self.ensure_extern("declare i64 @mvl_array_len(ptr)");
+                self.ensure_extern("declare i64 @_mvl_array_len(ptr)");
                 let len_reg = self.next_reg();
-                self.push_instr(&format!("{len_reg} = call i64 @mvl_array_len(ptr {val})"));
+                self.push_instr(&format!("{len_reg} = call i64 @_mvl_array_len(ptr {val})"));
                 Ok(Some(self.emit_list_slice_call(&val, &n, &len_reg)))
             }
             ("remove", "ptr") if matches!(self.mvl_receiver_kind(receiver), Some("Map")) => {
@@ -365,9 +365,9 @@ impl TextEmitter {
                 let item_slot = self.next_reg();
                 self.push_instr(&format!("{item_slot} = alloca {item_ty}"));
                 self.push_instr(&format!("store {item_ty} {item_val}, ptr {item_slot}"));
-                self.ensure_extern("declare void @mvl_array_push(ptr, ptr)");
+                self.ensure_extern("declare void @_mvl_array_push(ptr, ptr)");
                 self.push_instr(&format!(
-                    "call void @mvl_array_push(ptr {val}, ptr {item_slot})"
+                    "call void @_mvl_array_push(ptr {val}, ptr {item_slot})"
                 ));
                 // push returns the array (modified in place — same pointer).
                 self.reg_types.insert(val.clone(), "ptr".into());
@@ -389,9 +389,9 @@ impl TextEmitter {
                 let item_slot = self.next_reg();
                 self.push_instr(&format!("{item_slot} = alloca {item_ty}"));
                 self.push_instr(&format!("store {item_ty} {item_val}, ptr {item_slot}"));
-                self.ensure_extern("declare void @mvl_array_set(ptr, i64, ptr)");
+                self.ensure_extern("declare void @_mvl_array_set(ptr, i64, ptr)");
                 self.push_instr(&format!(
-                    "call void @mvl_array_set(ptr {val}, i64 {idx}, ptr {item_slot})"
+                    "call void @_mvl_array_set(ptr {val}, i64 {idx}, ptr {item_slot})"
                 ));
                 Ok(None)
             }

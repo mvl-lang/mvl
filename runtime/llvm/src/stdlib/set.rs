@@ -19,7 +19,7 @@ use crate::memory::MvlArray;
 /// Read the i64 element at index `i` from a `MvlArray*`.
 #[allow(unsafe_code)]
 unsafe fn array_get_i64(arr: *const MvlArray, i: u64) -> i64 {
-    let ptr = crate::memory_ops::mvl_array_get(arr, i as usize);
+    let ptr = crate::memory_ops::_mvl_array_get(arr, i as usize);
     if ptr.is_null() {
         0
     } else {
@@ -30,13 +30,13 @@ unsafe fn array_get_i64(arr: *const MvlArray, i: u64) -> i64 {
 /// Push an i64 value into a `MvlArray*`.
 #[allow(unsafe_code)]
 unsafe fn array_push_i64(arr: *mut MvlArray, val: i64) {
-    crate::memory_ops::mvl_array_push(arr, (&val as *const i64).cast());
+    crate::memory_ops::_mvl_array_push(arr, (&val as *const i64).cast());
 }
 
 /// Check if `needle` exists in `arr` (linear scan).
 #[allow(unsafe_code)]
 unsafe fn array_contains_i64(arr: *const MvlArray, needle: i64) -> bool {
-    let len = crate::memory_ops::mvl_array_len(arr);
+    let len = crate::memory_ops::_mvl_array_len(arr);
     for i in 0..len {
         if array_get_i64(arr, i) == needle {
             return true;
@@ -59,7 +59,7 @@ unsafe fn new_i64_array(cap: usize) -> *mut MvlArray {
 pub extern "C" fn _mvl_set_intersection(a: *mut MvlArray, b: *mut MvlArray) -> *mut MvlArray {
     unsafe {
         let result = new_i64_array(4);
-        let len_a = crate::memory_ops::mvl_array_len(a as *const MvlArray);
+        let len_a = crate::memory_ops::_mvl_array_len(a as *const MvlArray);
         for i in 0..len_a {
             let elem = array_get_i64(a as *const MvlArray, i);
             if array_contains_i64(b as *const MvlArray, elem) {
@@ -78,7 +78,7 @@ pub extern "C" fn _mvl_set_intersection(a: *mut MvlArray, b: *mut MvlArray) -> *
 pub extern "C" fn _mvl_set_difference(a: *mut MvlArray, b: *mut MvlArray) -> *mut MvlArray {
     unsafe {
         let result = new_i64_array(4);
-        let len_a = crate::memory_ops::mvl_array_len(a as *const MvlArray);
+        let len_a = crate::memory_ops::_mvl_array_len(a as *const MvlArray);
         for i in 0..len_a {
             let elem = array_get_i64(a as *const MvlArray, i);
             if !array_contains_i64(b as *const MvlArray, elem) {
@@ -106,8 +106,8 @@ pub extern "C" fn _mvl_set_contains_i64(arr: *const MvlArray, needle: i64) -> bo
 pub extern "C" fn _mvl_set_union(a: *mut MvlArray, b: *mut MvlArray) -> *mut MvlArray {
     unsafe {
         let result = new_i64_array(4);
-        let len_a = crate::memory_ops::mvl_array_len(a as *const MvlArray);
-        let len_b = crate::memory_ops::mvl_array_len(b as *const MvlArray);
+        let len_a = crate::memory_ops::_mvl_array_len(a as *const MvlArray);
+        let len_b = crate::memory_ops::_mvl_array_len(b as *const MvlArray);
         // Copy all of a
         for i in 0..len_a {
             let elem = array_get_i64(a as *const MvlArray, i);
@@ -139,7 +139,7 @@ mod tests {
 
     #[allow(unsafe_code)]
     unsafe fn read_set(arr: *const MvlArray) -> Vec<i64> {
-        let len = crate::memory_ops::mvl_array_len(arr);
+        let len = crate::memory_ops::_mvl_array_len(arr);
         (0..len).map(|i| array_get_i64(arr, i)).collect()
     }
 

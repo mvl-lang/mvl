@@ -143,7 +143,7 @@ pub extern "C" fn _mvl_env_args() -> *mut crate::memory::MvlArray {
     for mvl_runtime::ifc::Tainted(s) in mvl_runtime::stdlib::env::args() {
         let s_ptr = unsafe { mvl_string_new(s.as_ptr(), s.len()) };
         unsafe {
-            crate::memory_ops::mvl_array_push(arr, (&s_ptr as *const *mut MvlString).cast());
+            crate::memory_ops::_mvl_array_push(arr, (&s_ptr as *const *mut MvlString).cast());
         }
     }
     arr

@@ -149,8 +149,14 @@ mod tests {
             _mvl_map_insert(m, b"b".as_ptr(), 1, b"2".as_ptr(), 1);
             let keys = _mvl_map_keys(m as *const MvlMap);
             let vals = _mvl_map_values(m as *const MvlMap);
-            assert_eq!(crate::memory_ops::mvl_array_len(keys as *const MvlArray), 2);
-            assert_eq!(crate::memory_ops::mvl_array_len(vals as *const MvlArray), 2);
+            assert_eq!(
+                crate::memory_ops::_mvl_array_len(keys as *const MvlArray),
+                2
+            );
+            assert_eq!(
+                crate::memory_ops::_mvl_array_len(vals as *const MvlArray),
+                2
+            );
         }
     }
 
