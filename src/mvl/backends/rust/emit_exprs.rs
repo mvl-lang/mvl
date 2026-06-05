@@ -87,7 +87,7 @@ impl RustEmitter {
                     // Option/Result use .map(); Set uses into_iter().collect::<HashSet>();
                     // List and unknown types use into_iter().collect::<Vec>().
                     "map" if args.len() == 1 => {
-                        let receiver_ty = self.expr_types.get(&receiver.span).cloned();
+                        let receiver_ty = Some(receiver.ty.clone());
                         // Use is_option/is_result which strip security labels (Labeled<Option<T>>
                         // and Labeled<Result<T,E>> are still Option/Result for dispatch purposes).
                         let is_opt_or_result = receiver_ty
@@ -134,7 +134,7 @@ impl RustEmitter {
                     // filter / take_while / skip_while — predicate applied to a clone
                     // of each element; result collected back into Vec (or HashMap/HashSet).
                     "filter" | "take_while" | "skip_while" if args.len() == 1 => {
-                        let receiver_ty = self.expr_types.get(&receiver.span).cloned();
+                        let receiver_ty = Some(receiver.ty.clone());
                         let is_map = method == "filter"
                             && receiver_ty
                                 .as_ref()
@@ -181,7 +181,7 @@ impl RustEmitter {
                     }
                     // any / all — same predicate pattern but return bool, no collect.
                     "any" | "all" if args.len() == 1 => {
-                        let receiver_ty = self.expr_types.get(&receiver.span).cloned();
+                        let receiver_ty = Some(receiver.ty.clone());
                         let is_map = receiver_ty
                             .as_ref()
                             .is_some_and(|t| matches!(t.unlabeled(), Ty::Map(_, _)));
@@ -221,7 +221,7 @@ impl RustEmitter {
                     // When f is a named function with borrow params, add & to the
                     // accumulator and/or element in the generated lambda.
                     "fold" if args.len() == 2 => {
-                        let receiver_ty = self.expr_types.get(&receiver.span).cloned();
+                        let receiver_ty = Some(receiver.ty.clone());
                         let is_map = receiver_ty
                             .as_ref()
                             .is_some_and(|t| matches!(t.unlabeled(), Ty::Map(_, _)));
@@ -411,7 +411,7 @@ impl RustEmitter {
                     // pow(e) — direct Rust using checker type info (#554).
                     // i64: .pow(e as u32); f64: .powf(e).
                     "pow" if args.len() == 1 => {
-                        let receiver_ty = self.expr_types.get(&receiver.span).cloned();
+                        let receiver_ty = Some(receiver.ty.clone());
                         self.emit_expr(receiver);
                         match receiver_ty.as_ref() {
                             Some(Ty::Float) => {
@@ -433,7 +433,7 @@ impl RustEmitter {
                     // contains(x) — direct Rust using checker type info (#554).
                     // String: .contains(arg.as_str()); List/Set: .contains(&arg).
                     "contains" if args.len() == 1 => {
-                        let receiver_ty = self.expr_types.get(&receiver.span).cloned();
+                        let receiver_ty = Some(receiver.ty.clone());
                         self.emit_expr(receiver);
                         match receiver_ty.as_ref() {
                             Some(Ty::String) => {
@@ -454,7 +454,7 @@ impl RustEmitter {
                     //   String: str_concat(receiver, other)
                     //   List:   list_concat(receiver, other)
                     "concat" if args.len() == 1 => {
-                        let receiver_ty = self.expr_types.get(&receiver.span).cloned();
+                        let receiver_ty = Some(receiver.ty.clone());
                         let rust_fn = match receiver_ty.as_ref() {
                             Some(Ty::List(_)) => "list_concat",
                             _ => "str_concat",
@@ -473,7 +473,7 @@ impl RustEmitter {
                     // get(key) — direct Rust using checker type info (#554).
                     // Map: .get(&key).cloned(); List: bounds-checked index.
                     "get" if args.len() == 1 => {
-                        let receiver_ty = self.expr_types.get(&receiver.span).cloned();
+                        let receiver_ty = Some(receiver.ty.clone());
                         match receiver_ty.as_ref() {
                             Some(Ty::Map(_, _)) => {
                                 self.emit_expr(receiver);
@@ -495,7 +495,7 @@ impl RustEmitter {
                     // String: .chars().count() as i64; List/Map/Set: .len() as i64.
                     // Labeled types: propagate label via field access.
                     "len" if args.is_empty() => {
-                        let receiver_ty = self.expr_types.get(&receiver.span).cloned();
+                        let receiver_ty = Some(receiver.ty.clone());
                         self.emit_len_direct(receiver, receiver_ty.as_ref());
                     }
 
@@ -619,10 +619,7 @@ impl RustEmitter {
 
                     // push(elem) / extend(iter) / append(other) — collection mutators.
                     "push" if args.len() == 1 => {
-                        let elem_is_labeled = self
-                            .expr_types
-                            .get(&receiver.span)
-                            .is_some_and(|ty| matches!(ty, Ty::List(inner) if matches!(inner.as_ref(), Ty::Labeled(..))));
+                        let elem_is_labeled = matches!(&receiver.ty, Ty::List(inner) if matches!(inner.as_ref(), Ty::Labeled(..)));
                         self.emit_expr(receiver);
                         self.push(".push(");
                         if elem_is_labeled {
@@ -633,10 +630,7 @@ impl RustEmitter {
                         self.push(")");
                     }
                     "extend" | "append" if args.len() == 1 => {
-                        let elem_is_labeled = self
-                            .expr_types
-                            .get(&receiver.span)
-                            .is_some_and(|ty| matches!(ty, Ty::List(inner) if matches!(inner.as_ref(), Ty::Labeled(..))));
+                        let elem_is_labeled = matches!(&receiver.ty, Ty::List(inner) if matches!(inner.as_ref(), Ty::Labeled(..)));
                         self.emit_expr(receiver);
                         self.push(".");
                         self.push(method);
@@ -654,7 +648,8 @@ impl RustEmitter {
                         // Check whether we must re-wrap the result in a label newtype.
                         let wrap_label: Option<String> =
                             if STRING_LABEL_PRESERVING_METHODS.contains(&m) {
-                                self.expr_types.get(&receiver.span).and_then(|ty| {
+                                {
+                                    let ty = &receiver.ty;
                                     if let Ty::Labeled(label, inner) = ty {
                                         if matches!(inner.as_ref(), Ty::String) {
                                             Some(emit_label(label.as_str()).to_string())
@@ -664,7 +659,7 @@ impl RustEmitter {
                                     } else {
                                         None
                                     }
-                                })
+                                }
                             } else {
                                 None
                             };
@@ -702,16 +697,15 @@ impl RustEmitter {
 
                     // ── Generic Rust method fallthrough ───────────────────────────────
                     _ => {
-                        let is_fn_typed_field = if let Some(Ty::Named(type_name, type_args)) =
-                            self.expr_types.get(&receiver.span)
-                        {
-                            type_args.is_empty()
-                                && self
-                                    .fn_typed_struct_fields
-                                    .contains(&(type_name.clone(), method.clone()))
-                        } else {
-                            false
-                        };
+                        let is_fn_typed_field =
+                            if let Ty::Named(type_name, type_args) = &receiver.ty {
+                                type_args.is_empty()
+                                    && self
+                                        .fn_typed_struct_fields
+                                        .contains(&(type_name.clone(), method.clone()))
+                            } else {
+                                false
+                            };
                         if is_fn_typed_field {
                             self.push("(");
                         }
@@ -887,7 +881,7 @@ impl RustEmitter {
                     // For Int arithmetic, emit checked methods to match LLVM backend
                     // overflow behaviour (trap on overflow rather than wrapping).
                     let is_int_arith = matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul)
-                        && matches!(self.expr_types.get(&span), Some(Ty::Int));
+                        && matches!(expr.ty, Ty::Int);
                     if is_int_arith {
                         let method = match op {
                             BinaryOp::Add => "checked_add",
@@ -1386,19 +1380,14 @@ impl RustEmitter {
             }
             // Function-typed identifiers (callbacks, named function references) must NOT
             // get `.into()` — Rust function items do not implement `Into<_>` generically.
-            TirExprKind::Var(_) if matches!(self.expr_types.get(&expr.span), Some(Ty::Fn(..))) => {
+            TirExprKind::Var(_) if matches!(expr.ty, Ty::Fn(..)) => {
                 self.emit_expr(expr);
                 if !self.last_uses.contains(&expr.span) {
                     self.push(".clone()");
                 }
             }
             // Option/Result identifiers must NOT get `.into()`
-            TirExprKind::Var(_)
-                if matches!(
-                    self.expr_types.get(&expr.span),
-                    Some(Ty::Option(_) | Ty::Result(_, _))
-                ) =>
-            {
+            TirExprKind::Var(_) if matches!(expr.ty, Ty::Option(_) | Ty::Result(_, _)) => {
                 self.emit_expr(expr);
                 if !self.last_uses.contains(&expr.span) {
                     self.push(".clone()");
