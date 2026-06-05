@@ -1265,6 +1265,7 @@ fn cross_backend_closure_string_bool_capture() {
 // ── #1251: LLVM monomorphization cross-backend tests ─────────────────────────
 
 /// Generic function instantiation — check-only (no fn main).
+/// Not a parity test; renamed from cross_backend_check_generic_instantiation (#1272).
 #[test]
 fn check_generic_instantiation() {
     assert_check_passes(&corpus_functions("generic_instantiation.mvl"));
@@ -1279,16 +1280,18 @@ fn cross_backend_generic_multi_instantiation() {
     );
 }
 
-/// Methods on generic containers: map/fold on List (#1272).
+/// HOF methods on generic containers: map/fold on List (#1272).
 #[test]
-fn cross_backend_generic_struct_methods() {
+fn cross_backend_generic_container_ops() {
     assert_parity(
-        &corpus_functions("generic_struct_methods.mvl"),
+        &corpus_functions("generic_container_ops.mvl"),
         "opt_count=4\npair_sum=60",
     );
 }
 
-/// Nested Option[Int] unwrapping — LLVM backend returns 0 (#1272).
+/// Nested Option[Int] unwrapping (#1272).
+/// LLVM emits some_sum=0 and nested_first=0; both match-arm payload extractions
+/// are broken when the payload is Option[Int] or List[Int].
 #[test]
 #[ignore = "llvm_text: Option[Int] match unwrap returns 0 in LLVM backend (#1272)"]
 fn cross_backend_generic_nested_option() {
@@ -1350,9 +1353,10 @@ fn cross_backend_actor_println_parity() {
     assert_parity(&corpus_actors("actor_println_llvm.mvl"), "ping\npong\nping");
 }
 
-/// Actor state mutation: val arguments unpacked and printed in order (#1273).
+/// Actor val arguments: unpacked and printed in order (#1273).
+/// (Corpus file name `actor_state_mutation_llvm.mvl` is historical — no mutable state is tested.)
 #[test]
-fn cross_backend_actor_state_mutation_parity() {
+fn cross_backend_actor_val_argument_parity() {
     assert_parity(
         &corpus_actors("actor_state_mutation_llvm.mvl"),
         "n=1\nn=2\nn=3\nmsg=done",

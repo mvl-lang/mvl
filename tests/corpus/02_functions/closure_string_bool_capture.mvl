@@ -15,14 +15,10 @@ fn main() -> Unit ! Console {
     let matches: List[String] = items.filter(|s: String| s == target);
     println(format("matches={}", [matches.len().to_string()]));
 
-    // Bool capture: conditional filter based on captured Bool
+    // Bool capture: Bool variable captured inside closure body
     let include_large: Bool = true;
     let nums: List[Int] = [1, 5, 10, 20, 50];
-    let kept: List[Int] = if include_large {
-        nums.filter(|n: Int| n >= 10)
-    } else {
-        nums.filter(|n: Int| n < 10)
-    };
+    let kept: List[Int] = nums.filter(|n: Int| if include_large { n >= 10 } else { n < 10 });
     println(format("kept={}", [kept.len().to_string()]));
 
     // String capture in fold: accumulate lengths using captured offset

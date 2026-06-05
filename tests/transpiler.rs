@@ -2318,7 +2318,10 @@ fn transpile_mcdc_alone_no_coverage_markers() {
         !r.output.lib_rs.contains("__mvl_cov::hit("),
         "coverage markers should not appear when only MC/DC is enabled"
     );
-    assert!(r.branches.is_empty(), "no branches without coverage flag");
+    assert!(
+        r.branches.is_empty(),
+        "no branch coverage data without with_coverage flag"
+    );
     assert!(!r.decisions.is_empty(), "MC/DC decisions should be present");
 }
 

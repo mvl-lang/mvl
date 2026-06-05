@@ -1,4 +1,4 @@
-// generic_struct_methods.mvl — Methods on generic containers (#1272)
+// generic_container_ops.mvl — HOF methods on generic containers (#1272)
 //
 // Verifies that methods on generic containers (map, fold, filter on List)
 // are correctly monomorphized across both backends.
