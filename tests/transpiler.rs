@@ -2302,6 +2302,26 @@ fn transpile_mcdc_skips_single_clause_condition() {
     );
 }
 
+/// MC/DC alone (no coverage) does not emit `__mvl_cov::hit(` markers (#1275).
+#[test]
+fn transpile_mcdc_alone_no_coverage_markers() {
+    let src = "fn f(a: Bool, b: Bool) -> Int { if a && b { 1 } else { 0 } }";
+    let prog = parse_prog(src);
+    let r = do_transpile(
+        &prog,
+        TranspileConfig::new("my_crate")
+            .with_file_stem("f")
+            .with_mcdc(0),
+    );
+    assert_contains(&r.output.lib_rs, "__mvl_mcdc::record(");
+    assert!(
+        !r.output.lib_rs.contains("__mvl_cov::hit("),
+        "coverage markers should not appear when only MC/DC is enabled"
+    );
+    assert!(r.branches.is_empty(), "no branches without coverage flag");
+    assert!(!r.decisions.is_empty(), "MC/DC decisions should be present");
+}
+
 // ── Phase B: borrow params — call-site &x / &mut x emission (#304) ───────────
 
 /// Shared ref param: call site emits `&y`, signature emits `&i64`.

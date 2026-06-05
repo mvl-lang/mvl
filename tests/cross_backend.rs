@@ -1253,11 +1253,20 @@ fn cross_backend_closure_nested() {
     );
 }
 
+/// String and Bool capture: closures capturing non-Int types (#1271).
+#[test]
+fn cross_backend_closure_string_bool_capture() {
+    assert_parity(
+        &corpus_functions("closure_string_bool_capture.mvl"),
+        "matches=2\nkept=3\ntotal_len=13",
+    );
+}
+
 // ── #1251: LLVM monomorphization cross-backend tests ─────────────────────────
 
 /// Generic function instantiation — check-only (no fn main).
 #[test]
-fn cross_backend_check_generic_instantiation() {
+fn check_generic_instantiation() {
     assert_check_passes(&corpus_functions("generic_instantiation.mvl"));
 }
 
@@ -1267,6 +1276,25 @@ fn cross_backend_generic_multi_instantiation() {
     assert_parity(
         &corpus_functions("generic_multi_instantiation.mvl"),
         "id_int=42\nid_str=hello\npick_a=10\npick_b=world",
+    );
+}
+
+/// Methods on generic containers: map/fold on List (#1272).
+#[test]
+fn cross_backend_generic_struct_methods() {
+    assert_parity(
+        &corpus_functions("generic_struct_methods.mvl"),
+        "opt_count=4\npair_sum=60",
+    );
+}
+
+/// Nested Option[Int] unwrapping — LLVM backend returns 0 (#1272).
+#[test]
+#[ignore = "llvm_text: Option[Int] match unwrap returns 0 in LLVM backend (#1272)"]
+fn cross_backend_generic_nested_option() {
+    assert_parity(
+        &corpus_functions("generic_nested_option.mvl"),
+        "some_sum=6\nnested_first=10",
     );
 }
 
@@ -1312,6 +1340,23 @@ fn cross_backend_actor_corpus_process_links() {
 #[test]
 fn cross_backend_actor_corpus_select() {
     assert_check_passes(&corpus_actors("select.mvl"));
+}
+
+// ── #1273: Actor runtime parity tests ─────────────────────────────────────────
+
+/// Actor println: spawn actor, call behaviors, verify FIFO output (#1273).
+#[test]
+fn cross_backend_actor_println_parity() {
+    assert_parity(&corpus_actors("actor_println_llvm.mvl"), "ping\npong\nping");
+}
+
+/// Actor state mutation: val arguments unpacked and printed in order (#1273).
+#[test]
+fn cross_backend_actor_state_mutation_parity() {
+    assert_parity(
+        &corpus_actors("actor_state_mutation_llvm.mvl"),
+        "n=1\nn=2\nn=3\nmsg=done",
+    );
 }
 
 // ── #1254: C runtime cross-backend tests ─────────────────────────────────────
