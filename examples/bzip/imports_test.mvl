@@ -1,0 +1,52 @@
+// imports_test.mvl — Cross-module import validation (fix for #96)
+//
+// Verifies that `*_test.mvl` files can import from pure-function sibling
+// modules (no type declarations, no extern blocks) without re-declaring
+// everything inline.  rle.mvl and mtf.mvl are canonical examples: they
+// contain only `pub fn` declarations, which the old test runner skipped.
+//
+// Before the fix: `mtf_encode` and `rle_encode` were unknown — the test
+//   runner only loaded sibling files that had extern or type declarations.
+// After the fix:  sibling files explicitly imported via `use` are loaded
+//   regardless of whether they have types/extern.
+
+use rle::rle_encode;
+use rle::rle_decode;
+use mtf::mtf_encode;
+use mtf::mtf_decode;
+
+// ── RLE round-trip via clean `use` import ────────────────────────────────────
+
+test fn imports_rle_encode_is_callable() -> Unit {
+    let input: List[Byte] = [from_int(65), from_int(65), from_int(65), from_int(65)];
+    let encoded: List[Byte] = rle_encode(val input);
+    // 4 identical bytes produce [b b b b 0] — five bytes, last byte = extra count
+    assert_eq(encoded.len(), 5)
+}
+
+test fn imports_rle_roundtrip() -> Unit {
+    let input: List[Byte] = [
+        from_int(65), from_int(65), from_int(65), from_int(65),
+        from_int(66), from_int(67)
+    ];
+    let encoded: List[Byte] = rle_encode(val input);
+    let decoded: List[Byte] = rle_decode(val encoded);
+    assert_eq(decoded.len(), input.len())
+}
+
+// ── MTF round-trip via clean `use` import ────────────────────────────────────
+
+test fn imports_mtf_encode_is_callable() -> Unit {
+    let input: List[Byte] = [from_int(65), from_int(66), from_int(65)];
+    let encoded: List[Int] = mtf_encode(val input);
+    assert_eq(encoded.len(), 3)
+}
+
+test fn imports_mtf_roundtrip() -> Unit {
+    let input: List[Byte] = [
+        from_int(65), from_int(66), from_int(67), from_int(65)
+    ];
+    let encoded: List[Int] = mtf_encode(val input);
+    let decoded: List[Byte] = mtf_decode(val encoded);
+    assert_eq(decoded.len(), input.len())
+}
