@@ -82,12 +82,17 @@ fn needs_extraction(target: &Path) -> bool {
             if v.trim() != STDLIB_VERSION {
                 return true;
             }
-            // Version matches but verify all expected files are present.
-            // This handles the case where new stdlib files are added in a
-            // patch that doesn't bump the version.
-            STDLIB_FILES
-                .iter()
-                .any(|(name, _)| !target.join(name).exists())
+            // Version matches — verify all expected files are present and
+            // their content matches the embedded copy.  This handles both
+            // new stdlib files added in a patch (missing file) and stale
+            // cache from another branch or manual edit (content diverged).
+            STDLIB_FILES.iter().any(|(name, content)| {
+                let on_disk = target.join(name);
+                match fs::read_to_string(&on_disk) {
+                    Ok(disk) => disk != *content,
+                    Err(_) => true, // missing file
+                }
+            })
         }
         Err(_) => true,
     }
