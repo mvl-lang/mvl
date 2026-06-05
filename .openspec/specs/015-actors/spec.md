@@ -146,7 +146,7 @@ The `actor` keyword is a hard-reserved keyword and is used for both declaration 
 **Implementation:** `src/mvl/parser/ast.rs::Decl::Actor`,
 `src/mvl/parser/functions.rs::parse_actor_decl`
 
-**Tests:** `tests/corpus/actors/basic_actor.mvl`,
+**Tests:** `tests/corpus/12_actors/basic_actor.mvl`,
 `tests/corpus/negative/req09_data_race/actor_syntax_errors.mvl`
 
 **Corpus:** `tests/corpus/09_concurrency/actors.mvl`, `examples/programs/actor_spawn.mvl`
@@ -157,7 +157,7 @@ The `actor` keyword is a hard-reserved keyword and is used for both declaration 
 - WHEN the parser processes the source
 - THEN the AST MUST contain a `Decl::Actor` node with the correct field list and behavior list
 
-**Tests:** `tests/corpus/actors/basic_actor.mvl`
+**Tests:** `tests/corpus/12_actors/basic_actor.mvl`
 
 #### Scenario: Actor keyword is reserved
 
@@ -183,7 +183,7 @@ A behavior (`pub fn` inside an actor) is an asynchronous message handler.  The c
 `src/mvl/backends/rust/emit_functions.rs::emit_behavior`,
 `src/mvl/backends/llvm.rs::emit_behavior`
 
-**Tests:** `tests/corpus/actors/behaviors.mvl`,
+**Tests:** `tests/corpus/12_actors/behaviors.mvl`,
 `tests/corpus/negative/req09_data_race/behavior_ref_param.mvl`
 
 **Corpus:** `tests/corpus/09_concurrency/actors.mvl`, `examples/programs/actor_send.mvl`
@@ -203,7 +203,7 @@ A behavior (`pub fn` inside an actor) is an asynchronous message handler.  The c
 - WHEN the checker processes the behavior
 - THEN the compiler MUST accept the declaration
 
-**Tests:** `tests/corpus/actors/behaviors.mvl`
+**Tests:** `tests/corpus/12_actors/behaviors.mvl`
 
 #### Scenario: Behavior with return type rejected
 
@@ -219,7 +219,7 @@ A behavior (`pub fn` inside an actor) is an asynchronous message handler.  The c
 - WHEN the checker processes the function
 - THEN the compiler MUST accept — private helpers are sync and may return values
 
-**Tests:** `tests/corpus/actors/behaviors.mvl`
+**Tests:** `tests/corpus/12_actors/behaviors.mvl`
 
 ---
 
@@ -243,7 +243,7 @@ An actor terminates when:
 `src/mvl/backends/rust/emit_exprs.rs::emit_actor_creation`,
 `src/mvl/backends/llvm/exprs.rs::emit_actor_creation`
 
-**Tests:** `tests/corpus/actors/lifecycle.mvl`,
+**Tests:** `tests/corpus/12_actors/lifecycle.mvl`,
 `tests/corpus/negative/req09_data_race/actor_field_mismatch.mvl`
 
 **Corpus:** `examples/programs/actor_spawn.mvl`, `examples/programs/actor_send.mvl`
@@ -254,7 +254,7 @@ An actor terminates when:
 - WHEN the checker processes the actor expression
 - THEN the type of `counter` MUST be `ActorRef` with `tag` capability
 
-**Tests:** `tests/corpus/actors/lifecycle.mvl`
+**Tests:** `tests/corpus/12_actors/lifecycle.mvl`
 
 #### Scenario: Actor creation with wrong field types rejected
 
@@ -277,7 +277,7 @@ The compiler MUST reject a behavior call that passes an `iso` value without cons
 **Implementation:** `src/mvl/checker/capabilities.rs::check_send_capability`,
 `src/mvl/checker.rs::TypeChecker::check_behavior_call`
 
-**Tests:** `tests/corpus/actors/message_send.mvl`,
+**Tests:** `tests/corpus/12_actors/message_send.mvl`,
 `tests/corpus/negative/req09_data_race/iso_send_without_consume.mvl`
 
 **Corpus:** `tests/corpus/09_concurrency/actors.mvl`, `examples/programs/actor_send.mvl`
@@ -297,7 +297,7 @@ The compiler MUST reject a behavior call that passes an `iso` value without cons
 - WHEN the checker processes the behavior call
 - THEN the compiler MUST accept — ownership transfers to the receiving actor
 
-**Tests:** `tests/corpus/actors/message_send.mvl`
+**Tests:** `tests/corpus/12_actors/message_send.mvl`
 
 #### Scenario: val message send requires no consume
 
@@ -305,7 +305,7 @@ The compiler MUST reject a behavior call that passes an `iso` value without cons
 - WHEN the checker processes the behavior call
 - THEN the compiler MUST accept — `val` is freely shareable, no consume needed
 
-**Tests:** `tests/corpus/actors/message_send.mvl`
+**Tests:** `tests/corpus/12_actors/message_send.mvl`
 
 #### Scenario: Mailbox full — message is dropped silently
 
@@ -313,7 +313,7 @@ The compiler MUST reject a behavior call that passes an `iso` value without cons
 - WHEN a behavior call is made via `try_send`
 - THEN the message IS dropped — no error is raised, no blocking occurs
 
-**Tests:** `tests/corpus/actors/mailbox_overflow.mvl`
+**Tests:** `tests/corpus/12_actors/mailbox_overflow.mvl`
 
 ---
 
@@ -376,7 +376,7 @@ The only permitted interaction with an actor from the outside is sending a messa
 - WHEN the checker processes the behavior
 - THEN `self.count` field access MUST be accepted (within actor, no isolation violation)
 
-**Tests:** `tests/corpus/actors/basic_actor.mvl`
+**Tests:** `tests/corpus/12_actors/basic_actor.mvl`
 
 ---
 
@@ -393,7 +393,7 @@ The only permitted interaction with an actor from the outside is sending a messa
 **Implementation:** `src/mvl/checker.rs::TypeChecker::check_actor_creation`,
 `src/mvl/parser/ast.rs::Type::ActorRef`
 
-**Tests:** `tests/corpus/actors/actor_ref.mvl`
+**Tests:** `tests/corpus/12_actors/actor_ref.mvl`
 
 **Corpus:** `tests/corpus/09_concurrency/actor_ref.mvl`
 
@@ -404,7 +404,7 @@ The only permitted interaction with an actor from the outside is sending a messa
 - WHEN the checker processes the call
 - THEN the compiler MUST accept — `tag` is sendable
 
-**Tests:** `tests/corpus/actors/actor_ref.mvl`
+**Tests:** `tests/corpus/12_actors/actor_ref.mvl`
 
 #### Scenario: ActorRef identity comparison accepted
 
@@ -412,7 +412,7 @@ The only permitted interaction with an actor from the outside is sending a messa
 - WHEN `a == b` is evaluated
 - THEN the result MUST be `Bool` — true iff both refer to the same actor
 
-**Tests:** `tests/corpus/actors/actor_ref.mvl`
+**Tests:** `tests/corpus/12_actors/actor_ref.mvl`
 
 #### Scenario: Reply pattern — passing ActorRef for callbacks
 
@@ -422,7 +422,7 @@ The only permitted interaction with an actor from the outside is sending a messa
 - THEN the worker MAY call `self_ref.on_result(consume(result))` to deliver the reply
 - AND the compiler MUST accept — `tag ActorRef` is sendable and carries only identity
 
-**Tests:** `tests/corpus/actors/actor_ref.mvl`, `examples/programs/actor_pingpong.mvl`
+**Tests:** `tests/corpus/12_actors/actor_ref.mvl`, `examples/programs/actor_pingpong.mvl`
 
 ---
 
@@ -439,7 +439,7 @@ that the process does not exit with pending messages or incomplete message handl
 at the end of main. ADR-0037 documents the design: `fn main()` is implicitly an actor with an
 implicit join. `src/mvl/backends/llvm_text/emitter.rs` uses equivalent `mvl_actor_join_all`.
 
-**Tests:** `tests/corpus/actors/actor_spawn.mvl`, `tests/corpus/actors/actor_send.mvl`,
+**Tests:** `tests/corpus/12_actors/actor_spawn.mvl`, `tests/corpus/12_actors/actor_send.mvl`,
 `tests/stdlib/net_basic.mvl`
 
 #### Scenario: Spawned actors are drained before main exits
@@ -450,7 +450,7 @@ implicit join. `src/mvl/backends/llvm_text/emitter.rs` uses equivalent `mvl_acto
   before the process exits
 - AND this drain is **guaranteed**, not best-effort
 
-**Tests:** `tests/corpus/actors/actor_spawn.mvl` (minimal spawn), `examples/programs/actor_spawn.mvl`
+**Tests:** `tests/corpus/12_actors/actor_spawn.mvl` (minimal spawn), `examples/programs/actor_spawn.mvl`
 
 **Note:** If an actor panics, the actor thread terminates and remaining messages are
 dropped. Supervision and restart are tracked for Phase 9 via `std.actors.Supervisor`.
@@ -479,7 +479,7 @@ The `select` expression:
 `src/mvl/backends/rust/emit_exprs.rs::emit_select`,
 `src/mvl/backends/llvm/exprs.rs::emit_select`
 
-**Tests:** `tests/corpus/actors/select.mvl`,
+**Tests:** `tests/corpus/12_actors/select.mvl`,
 `tests/corpus/negative/req09_data_race/select_no_timeout.mvl`
 
 **Corpus:** `tests/corpus/09_concurrency/select.mvl`
@@ -490,7 +490,7 @@ The `select` expression:
 - WHEN one actor delivers a message before the other
 - THEN the first branch's handler MUST execute; the other branch is discarded
 
-**Tests:** `tests/corpus/actors/select.mvl`
+**Tests:** `tests/corpus/12_actors/select.mvl`
 
 #### Scenario: Select with timeout fires when no branch ready
 
@@ -498,7 +498,7 @@ The `select` expression:
 - WHEN the actor does not deliver a message within 50 ms
 - THEN the timeout branch MUST execute
 
-**Tests:** `tests/corpus/actors/select.mvl`
+**Tests:** `tests/corpus/12_actors/select.mvl`
 
 ---
 
@@ -511,8 +511,15 @@ Actor semantics MUST be identical across the Rust and LLVM backends (#698):
 - Creation/terminate lifecycle MUST behave identically
 - `select` timeout precision is backend-defined but MUST be best-effort
 
-**Tests:** `tests/corpus/actors/` — all files in this directory are run against both backends
+**Tests:** `tests/corpus/12_actors/` — all files in this directory are run against both backends
 as part of cross-backend parity validation.
+`tests/cross_backend.rs::cross_backend_actor_corpus_actors`,
+`tests/cross_backend.rs::cross_backend_actor_corpus_capabilities`,
+`tests/cross_backend.rs::cross_backend_actor_corpus_session_types`,
+`tests/cross_backend.rs::cross_backend_actor_corpus_supervisor`,
+`tests/cross_backend.rs::cross_backend_actor_corpus_dead_letter`,
+`tests/cross_backend.rs::cross_backend_actor_corpus_process_links`,
+`tests/cross_backend.rs::cross_backend_actor_corpus_select`
 
 ## Known Limitations (Phase 8)
 

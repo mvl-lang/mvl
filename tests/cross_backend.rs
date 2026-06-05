@@ -66,6 +66,27 @@ fn corpus_stdlib_tests(name: &str) -> String {
     format!("{}/tests/stdlib/{name}", env!("CARGO_MANIFEST_DIR"))
 }
 
+fn corpus_types(name: &str) -> String {
+    format!(
+        "{}/tests/corpus/03_types/{name}",
+        env!("CARGO_MANIFEST_DIR")
+    )
+}
+
+fn corpus_functions(name: &str) -> String {
+    format!(
+        "{}/tests/corpus/02_functions/{name}",
+        env!("CARGO_MANIFEST_DIR")
+    )
+}
+
+fn corpus_actors(name: &str) -> String {
+    format!(
+        "{}/tests/corpus/12_actors/{name}",
+        env!("CARGO_MANIFEST_DIR")
+    )
+}
+
 /// Strip transpiler/backend progress lines ("Transpiled to: ...", "Running: ...").
 fn strip_progress_lines(raw: &str) -> String {
     raw.lines()
@@ -986,7 +1007,7 @@ fn cross_backend_else_if_chain() {
 }
 
 #[test]
-#[ignore = "llvm_text: Float sdiv type mismatch — LLVM emits i64 sdiv for Float operands"]
+#[ignore = "llvm_text: Float sdiv type mismatch — LLVM emits i64 sdiv for Float operands (#1252)"]
 fn cross_backend_safe_division() {
     assert_backends_agree("safe_division.mvl");
 }
@@ -997,7 +1018,7 @@ fn cross_backend_struct_value_semantics() {
 }
 
 #[test]
-#[ignore = "llvm_text: Int/Float.to_string() in format() returns empty string in LLVM backend"]
+#[ignore = "llvm_text: Int/Float.to_string() in format() returns empty string in LLVM backend (#1252)"]
 fn cross_backend_core_types_demo() {
     assert_backends_agree("core_types_demo.mvl");
 }
@@ -1019,12 +1040,12 @@ fn cross_backend_enum_string_match() {
 
 #[test]
 fn cross_backend_for_loop() {
-    assert_parity(&corpus_types("for_loop_llvm.mvl"), "0\n1\n2\n3\n4");
+    assert_parity(&corpus_primitives("for_loop_llvm.mvl"), "0\n1\n2\n3\n4");
 }
 
 #[test]
 fn cross_backend_while_loop() {
-    assert_parity(&corpus_types("while_loop_llvm.mvl"), "0\n1\n2\n3\n4");
+    assert_parity(&corpus_primitives("while_loop_llvm.mvl"), "0\n1\n2\n3\n4");
 }
 
 #[test]
@@ -1043,7 +1064,7 @@ fn cross_backend_result_propagate() {
 /// backends must agree on the values.
 #[test]
 fn cross_backend_env_identity() {
-    let file = corpus_basics("env_identity_llvm.mvl");
+    let file = corpus_13_stdlib("env_identity_llvm.mvl");
     let transpiler_out = run_transpiler(&file);
     if let Some(llvm_out) = run_llvm_text(&file) {
         assert_eq!(
@@ -1057,14 +1078,14 @@ fn cross_backend_env_identity() {
 
 #[test]
 fn cross_backend_range_pipeline() {
-    assert_parity(&corpus_stdlib("range_pipeline.mvl"), "5");
+    assert_parity(&corpus_stdlib_tests("range_pipeline.mvl"), "5");
 }
 
 // ── #1234: Expanded parity — contracts ───────────────────────────────────────
 
 fn corpus_contracts(name: &str) -> String {
     format!(
-        "{}/tests/corpus/12_contracts/{name}",
+        "{}/tests/corpus/11_contracts/{name}",
         env!("CARGO_MANIFEST_DIR")
     )
 }
@@ -1099,7 +1120,7 @@ fn cross_backend_ghost_old_contracts() {
 
 fn corpus_concurrency(name: &str) -> String {
     format!(
-        "{}/tests/corpus/09_concurrency/{name}",
+        "{}/tests/corpus/12_actors/{name}",
         env!("CARGO_MANIFEST_DIR")
     )
 }
@@ -1121,15 +1142,8 @@ fn cross_backend_structured_concurrency() {
 // These verify that both backends can at least check the corpus file without
 // errors, even for programs without fn main / stdout output.
 
-fn corpus_ownership(name: &str) -> String {
-    format!(
-        "{}/tests/corpus/04_ownership/{name}",
-        env!("CARGO_MANIFEST_DIR")
-    )
-}
-
 fn corpus_ifc(name: &str) -> String {
-    format!("{}/tests/corpus/06_ifc/{name}", env!("CARGO_MANIFEST_DIR"))
+    format!("{}/tests/corpus/08_ifc/{name}", env!("CARGO_MANIFEST_DIR"))
 }
 
 fn assert_check_passes(file: &str) {
@@ -1217,4 +1231,109 @@ fn cross_backend_check_ifc_interprocedural_clean() {
 #[test]
 fn cross_backend_check_ifc_lattice() {
     assert_check_passes(&corpus_ifc("lattice.mvl"));
+}
+
+// ── #1250: LLVM closure capture cross-backend tests ──────────────────────────
+
+/// Value capture: closures capturing Int values via filter/map/fold HOFs.
+#[test]
+fn cross_backend_closure_value_capture() {
+    assert_parity(
+        &corpus_functions("closure_value_capture.mvl"),
+        "above_threshold=3\nshifted_sum=36\nfold_with_base=65",
+    );
+}
+
+/// Closure composition: multiple closures capturing from same scope via fold.
+#[test]
+fn cross_backend_closure_nested() {
+    assert_parity(
+        &corpus_functions("closure_nested.mvl"),
+        "doubled_sum=12\ncombined=27",
+    );
+}
+
+/// Existing closure_lambdas.mvl: filter/map/fold with capturing lambdas.
+#[test]
+fn cross_backend_closure_capturing_lambdas() {
+    assert_parity(
+        &corpus("closure_lambdas.mvl"),
+        "above_threshold=3\nmap_with_offset=36\nfold_with_base=65",
+    );
+}
+
+// ── #1251: LLVM monomorphization cross-backend tests ─────────────────────────
+
+/// Generic function instantiation — check-only (no fn main).
+#[test]
+fn cross_backend_check_generic_instantiation() {
+    assert_check_passes(&corpus_functions("generic_instantiation.mvl"));
+}
+
+/// Multiple generic instantiations in one program — run and compare output.
+#[test]
+fn cross_backend_generic_multi_instantiation() {
+    assert_parity(
+        &corpus_functions("generic_multi_instantiation.mvl"),
+        "id_int=42\nid_str=hello\npick_a=10\npick_b=world",
+    );
+}
+
+// ── #1253: Actor system cross-backend tests ──────────────────────────────────
+
+/// Actor model declarations — check-only.
+#[test]
+fn cross_backend_actor_corpus_actors() {
+    assert_check_passes(&corpus_actors("actors.mvl"));
+}
+
+/// Actor capability enforcement — check-only.
+#[test]
+fn cross_backend_actor_corpus_capabilities() {
+    assert_check_passes(&corpus_actors("capabilities.mvl"));
+}
+
+/// Actor session types — check-only.
+#[test]
+fn cross_backend_actor_corpus_session_types() {
+    assert_check_passes(&corpus_actors("session_types.mvl"));
+}
+
+/// Actor supervisor — check-only.
+#[test]
+fn cross_backend_actor_corpus_supervisor() {
+    assert_check_passes(&corpus_actors("supervisor.mvl"));
+}
+
+/// Actor dead letter handling — check-only.
+#[test]
+fn cross_backend_actor_corpus_dead_letter() {
+    assert_check_passes(&corpus_actors("dead_letter.mvl"));
+}
+
+/// Actor process links — check-only.
+#[test]
+fn cross_backend_actor_corpus_process_links() {
+    assert_check_passes(&corpus_actors("process_links.mvl"));
+}
+
+/// Actor select — check-only.
+#[test]
+fn cross_backend_actor_corpus_select() {
+    assert_check_passes(&corpus_actors("select.mvl"));
+}
+
+// ── #1254: C runtime cross-backend tests ─────────────────────────────────────
+
+/// SHA256 determinism: same input produces same hash across backends.
+#[test]
+fn cross_backend_crypto_sha256_corpus_parity() {
+    let file = corpus_13_stdlib("crypto_sha256.mvl");
+    let transpiler_out = run_transpiler(&file);
+    if let Some(llvm_out) = run_llvm_text_or_skip(&file) {
+        assert_eq!(
+            llvm_out, transpiler_out,
+            "crypto_sha256.mvl: crypto hash must be deterministic across backends"
+        );
+    }
 }

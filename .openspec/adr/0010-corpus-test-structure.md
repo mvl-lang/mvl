@@ -100,3 +100,5 @@ examples/               Multi-file real projects (access_control, log_analyzer).
 - Phase 4 (#130): Stdlib generation uses this corpus as validation
 - Corpus hypothesis (Paper 3): generation quality measured per tier
 - Issue #1239: Reorganize test corpus
+- Issue #1247: Backend test balance — cross-backend parity tests added for closures (#1250),
+  monomorphization (#1251), actors (#1253), and C runtime (#1254) across tiers 02, 12, 13
