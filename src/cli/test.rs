@@ -97,6 +97,15 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
             &mut std::collections::HashSet::new(),
         ));
 
+        // Pre-compute which module names are explicitly imported by test files so
+        // that pure-function sibling modules (no types/extern blocks) are also
+        // loaded into the prelude when a test file uses `use module::fn`.
+        // This fixes the cross-module import limitation tracked in issue #96.
+        let imported_by_test_files: std::collections::HashSet<String> = all_test_progs
+            .iter()
+            .flat_map(loader::collect_imported_module_names)
+            .collect();
+
         // For packages tested from their own src/ directory, also load sibling
         // .mvl files (non-test, including internal/) so types and extern
         // declarations are in scope during transpilation.
@@ -138,12 +147,19 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
                                 // causes duplicate type/function definitions when combined with
                                 // test-local re-declarations.
                                 //
-                                // Also skip pure-function helper/demo files (no extern blocks
-                                // or type declarations): loading them shadows runtime primitives
-                                // and causes compilation failures (e.g. collections.mvl defining
-                                // `fn list_get()` that shadows `list_get<T>` from mvl_runtime).
+                                // Load files that have extern blocks or type declarations.
+                                // Also load pure-function files (no types/extern) only when a
+                                // test file explicitly imports them via `use module::fn` — this
+                                // resolves cross-module imports without risking shadowing of
+                                // runtime primitives by unreferenced helpers (fix for #96).
+                                let file_stem = p
+                                    .file_stem()
+                                    .and_then(|s| s.to_str())
+                                    .unwrap_or("")
+                                    .to_owned();
                                 if !transpiler::has_main_fn(&parsed)
-                                    && transpiler::has_extern_or_type_decls(&parsed)
+                                    && (transpiler::has_extern_or_type_decls(&parsed)
+                                        || imported_by_test_files.contains(&file_stem))
                                 {
                                     sibling_progs.push(parsed.clone());
                                     stdlib_prelude_progs.push(parsed);
@@ -202,7 +218,8 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
                     transpiler::TranspileConfig::new(&module_name)
                         .with_file_stem(&module_name)
                         .with_prelude(stdlib_prelude_progs.clone())
-                        .with_coverage(next_branch_id),
+                        .with_coverage(next_branch_id)
+                        .for_test_crate(),
                 );
                 (r.output, r.branches)
             }
@@ -211,7 +228,8 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
                 transpiler::transpile(
                     tir,
                     transpiler::TranspileConfig::new(&module_name)
-                        .with_prelude(stdlib_prelude_progs.clone()),
+                        .with_prelude(stdlib_prelude_progs.clone())
+                        .for_test_crate(),
                 )
                 .output,
                 Vec::new(),

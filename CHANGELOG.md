@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [0.188.1] - 2026-06-05
+
+### Fixed
+
+- **Test runner cross-module imports** (#96)
+  - Sibling pure-function modules (no types/extern blocks) now loaded into prelude when explicitly imported via `use` declarations
+  - All test-file transpile configs now call `.for_test_crate()` to properly suppress `use crate::X` imports in test crates
+  - Validation: `examples/bzip/imports_test.mvl` uses clean imports without inline re-declarations
+
 ## [0.188.0] - 2026-06-05
 
 ### Added
