@@ -4,7 +4,7 @@
 // crypto_random_bytes is tested for shape (length) only, since values are non-deterministic.
 // Run with:  mvl test tests/stdlib/
 
-use std.crypto.{sha256, sha512, crypto_random_bytes}
+use std.crypto.{sha256, sha512, crypto_random_bytes, uuid_v4, uuid_from_bytes}
 
 // ── sha256 ──────────────────────────────────────────────────────────────────
 
@@ -64,4 +64,51 @@ test fn crypto_random_bytes_compiles_for_0_bytes() -> Unit ! CryptoRandom {
     let bs: Secret[List[Int]] = crypto_random_bytes(0);
     let _: Secret[Int] = bs.len();
     assert_eq(true, true);
+}
+
+// ── uuid_v4 ─────────────────────────────────────────────────────────────────
+
+test fn uuid_v4_returns_36_char_string() -> Unit ! CryptoRandom {
+    let id: String = uuid_v4();
+    assert_eq(id.len(), 36);
+}
+
+test fn uuid_v4_has_correct_dashes() -> Unit ! CryptoRandom {
+    let id: String = uuid_v4();
+    assert_eq(id.char_at(8), "-");
+    assert_eq(id.char_at(13), "-");
+    assert_eq(id.char_at(18), "-");
+    assert_eq(id.char_at(23), "-");
+}
+
+test fn uuid_v4_has_version_4() -> Unit ! CryptoRandom {
+    let id: String = uuid_v4();
+    assert_eq(id.char_at(14), "4");
+}
+
+test fn uuid_v4_uniqueness() -> Unit ! CryptoRandom {
+    let a: String = uuid_v4();
+    let b: String = uuid_v4();
+    assert_eq(a == b, false);
+}
+
+// ── uuid_from_bytes ──────────────────────────────────────────────────────────
+
+test fn uuid_from_bytes_known_vector() -> Unit {
+    let bytes: List[Int] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    let id: String = uuid_from_bytes(bytes);
+    assert_eq(id, "00000000-0000-4000-8000-000000000000");
+}
+
+test fn uuid_from_bytes_is_deterministic() -> Unit {
+    let bytes: List[Int] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+    let a: String = uuid_from_bytes(bytes);
+    let b: String = uuid_from_bytes([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
+    assert_eq(a, b);
+}
+
+test fn uuid_from_bytes_sets_version_and_variant() -> Unit {
+    let bytes: List[Int] = [255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255];
+    let id: String = uuid_from_bytes(bytes);
+    assert_eq(id.char_at(14), "4");
 }

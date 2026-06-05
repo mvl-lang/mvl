@@ -732,6 +732,25 @@ impl TypeEnv {
                 ..Default::default()
             },
         );
+        // uuid_v4 requires ! CryptoRandom; returns a UUID v4 string
+        self.fns.insert(
+            "uuid_v4".into(),
+            FnInfo {
+                params: vec![],
+                ret: Ty::String,
+                effects: vec![Effect::new("CryptoRandom", Span::new(0, 0, 0, 0))],
+                ..Default::default()
+            },
+        );
+        // uuid_from_bytes is pure; formats 16 bytes as UUID string
+        self.fns.insert(
+            "uuid_from_bytes".into(),
+            FnInfo {
+                params: vec![Ty::List(Box::new(Ty::Int))],
+                ret: Ty::String,
+                ..Default::default()
+            },
+        );
         // std.log — all functions are pure MVL in std/log.mvl; no Rust-backed primitives.
         // All four severity methods (Logger::debug/info/warn/error) and the
         // format/level/timestamp helpers are loaded from std/log.mvl when imported.

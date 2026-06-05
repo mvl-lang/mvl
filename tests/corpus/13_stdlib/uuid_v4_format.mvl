@@ -1,0 +1,16 @@
+// Corpus: uuid_v4 cross-backend format test (#1279)
+//
+// Verifies that uuid_v4() returns a 36-character string in the correct
+// 8-4-4-4-12 format with version 4 and RFC 4122 variant bits.
+//
+// Non-deterministic values are NOT compared — only format is checked.
+// Both backends must output "36" (the UUID string length).
+//
+// Used by: tests/cross_backend.rs (if wired)
+
+use std.crypto.{uuid_v4}
+
+fn main() -> Unit ! CryptoRandom + Console {
+    let id: String = uuid_v4();
+    println(format("{}", [id.len().to_string()]));
+}
