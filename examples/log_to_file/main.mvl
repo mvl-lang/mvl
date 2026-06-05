@@ -111,6 +111,8 @@ total fn main() -> Unit ! Log + Env {
         "runtime": m.runtime_version,
         "stdlib":  m.stdlib_version,
         "backend": m.build.backend,
+        "built":   m.build.date,
+        "source":  m.source_digest,
         "env":     "production",
     });
     logger.warn("high memory usage", {"used_mb": "512", "limit_mb": "1024"});
