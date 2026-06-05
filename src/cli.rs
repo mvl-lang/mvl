@@ -87,10 +87,11 @@ pub(super) fn dispatch(args: &[String]) {
                 eprintln!("stdlib profile: {stdlib_profile}");
             }
             check::maybe_check_proven_stdlib_or_exit(stdlib_profile);
+            let release = args.iter().any(|a| a == "--release");
             if backend == "llvm" {
                 llvm_text::build_project_llvm_text(&path);
             } else {
-                build::run(&path, false, &[], assert_mode, target);
+                build::run(&path, false, &[], assert_mode, target, release);
             }
         }
         "run" => {
@@ -99,6 +100,7 @@ pub(super) fn dispatch(args: &[String]) {
             let stdlib_profile = args::parse_stdlib_profile(args);
             let assert_mode = args::parse_assert_mode_or_exit(args);
             let target = args::parse_target_or_exit(args);
+            let release = args.iter().any(|a| a == "--release");
             check::maybe_check_proven_stdlib_or_exit(stdlib_profile);
             let path_idx = args::path_arg_index(args);
             let run_args: Vec<String> = args[path_idx + 1..]
@@ -110,7 +112,7 @@ pub(super) fn dispatch(args: &[String]) {
             if backend == "llvm" {
                 llvm_text::run_project_llvm_text(&path);
             } else {
-                build::run(&path, true, &run_args, assert_mode, target);
+                build::run(&path, true, &run_args, assert_mode, target, release);
             }
         }
         "transpile" => {

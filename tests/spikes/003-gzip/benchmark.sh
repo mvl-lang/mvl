@@ -66,21 +66,36 @@ FLATE2_SECS=$(echo "$FLATE2_OUT" | grep -oE '[0-9]+\.[0-9]+s total' | grep -oE '
 FLATE2_US=$(echo "$FLATE2_OUT" | grep -oE '[0-9]+\.[0-9]+µs/iter' | grep -oE '[0-9]+\.[0-9]+')
 echo ""
 
-# ── 3. MVL gzip ──────────────────────────────────────────────────────────────
-echo "▸ mvl/gzip (pre-building binary)..."
+# ── 3. MVL gzip (debug) ──────────────────────────────────────────────────────
+echo "▸ mvl/gzip debug (pre-building)..."
 BUILD_OUT=$("$MVL" build "$SCRIPT_DIR/gzip_perf.mvl" 2>&1)
 BUILD_DIR=$(echo "$BUILD_OUT" | grep "Transpiled to:" | awk '{print $3}')
-MVL_BIN="$BUILD_DIR/target/debug/gzip_perf"
+MVL_BIN_DBG="$BUILD_DIR/target/debug/gzip_perf"
 
-if [ -x "$MVL_BIN" ]; then
-    MVL_SECS=$(time_cmd "$MVL_BIN" --iterations "$ITERS")
-    MVL_US=$(python3 -c "print(f'{$MVL_SECS / $ITERS * 1_000_000:.1f}')")
-    echo "  mvl/gzip: ${ITERS} iters, ${MVL_SECS}s, ${MVL_US}µs/iter"
+if [ -x "$MVL_BIN_DBG" ]; then
+    MVL_DBG_SECS=$(time_cmd "$MVL_BIN_DBG" --iterations "$ITERS")
+    MVL_DBG_US=$(python3 -c "print(f'{$MVL_DBG_SECS / $ITERS * 1_000_000:.1f}')")
+    echo "  mvl/gzip debug: ${ITERS} iters, ${MVL_DBG_SECS}s, ${MVL_DBG_US}µs/iter"
 else
-    echo "  ERROR: could not find MVL binary at $MVL_BIN"
-    echo "  Build output: $BUILD_OUT"
-    MVL_SECS="N/A"
-    MVL_US="N/A"
+    echo "  ERROR: could not find MVL binary at $MVL_BIN_DBG"
+    MVL_DBG_SECS="N/A"
+    MVL_DBG_US="N/A"
+fi
+
+# ── 4. MVL gzip (release) ───────────────────────────────────────────────────
+echo "▸ mvl/gzip release (pre-building)..."
+BUILD_OUT=$("$MVL" build --release "$SCRIPT_DIR/gzip_perf.mvl" 2>&1)
+BUILD_DIR=$(echo "$BUILD_OUT" | grep "Transpiled to:" | awk '{print $3}')
+MVL_BIN_REL="$BUILD_DIR/target/release/gzip_perf"
+
+if [ -x "$MVL_BIN_REL" ]; then
+    MVL_REL_SECS=$(time_cmd "$MVL_BIN_REL" --iterations "$ITERS")
+    MVL_REL_US=$(python3 -c "print(f'{$MVL_REL_SECS / $ITERS * 1_000_000:.1f}')")
+    echo "  mvl/gzip release: ${ITERS} iters, ${MVL_REL_SECS}s, ${MVL_REL_US}µs/iter"
+else
+    echo "  ERROR: could not find MVL binary at $MVL_BIN_REL"
+    MVL_REL_SECS="N/A"
+    MVL_REL_US="N/A"
 fi
 echo ""
 
@@ -92,7 +107,8 @@ printf "  %-20s %10s %14s\n" "Implementation" "Total (s)" "Per-iter (µs)"
 printf "  %-20s %10s %14s\n" "──────────────────" "─────────" "─────────────"
 printf "  %-20s %10s %14s\n" "system gzip (C)" "$GZIP_SECS" "$GZIP_US"
 printf "  %-20s %10s %14s\n" "rust/flate2" "$FLATE2_SECS" "$FLATE2_US"
-printf "  %-20s %10s %14s\n" "mvl/gzip" "$MVL_SECS" "$MVL_US"
+printf "  %-20s %10s %14s\n" "mvl/gzip (debug)" "$MVL_DBG_SECS" "$MVL_DBG_US"
+printf "  %-20s %10s %14s\n" "mvl/gzip (release)" "$MVL_REL_SECS" "$MVL_REL_US"
 echo "═══════════════════════════════════════════════════════════════"
 
 # Cleanup

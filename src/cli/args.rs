@@ -21,7 +21,9 @@ pub fn print_usage() {
   mvl check --stdin                   — read MVL source from stdin and type-check it"
     );
     eprintln!("  mvl build <file|dir>               — transpile to Rust and run cargo build");
+    eprintln!("  mvl build <file|dir> --release     — build with release optimizations");
     eprintln!("  mvl run   [--] <file.mvl>          — transpile, build, and execute");
+    eprintln!("  mvl run   [--] <file.mvl> --release — build and run with release optimizations");
     eprintln!("  mvl run   [--] <file.mvl> -- ...   — pass args to the compiled binary");
     eprintln!("  mvl test  <file|dir>               — find *_test.mvl files and run cargo test");
     eprintln!("  mvl test  <file|dir> -q            — suppress MVL output, pass -q to cargo test (dot progress)");
