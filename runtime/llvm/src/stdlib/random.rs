@@ -86,7 +86,7 @@ pub extern "C" fn _mvl_random_choice_index(arr: *mut crate::memory::MvlArray) ->
     if len == 0 {
         return -1;
     }
-    random::int(0, (len - 1) as i64)
+    random::int(0, len - 1)
 }
 
 /// Deep-clone the array, then Fisher-Yates shuffle the clone. Returns a new `MvlArray*`.
@@ -107,14 +107,13 @@ pub extern "C" fn _mvl_random_shuffle(
     unsafe {
         // Deep-clone so source and result are independent (value semantics).
         let clone = crate::memory::mvl_array_deep_clone(arr);
-        let len =
-            crate::memory_ops::_mvl_array_len(clone as *const crate::memory::MvlArray) as usize;
+        let len = crate::memory_ops::_mvl_array_len(clone as *const crate::memory::MvlArray);
         if len <= 1 {
             return clone;
         }
         // Fisher-Yates: iterate i from len-1 down to 1, swap clone[i] with clone[rand(0..=i)].
         for i in (1..len).rev() {
-            let j = random::int(0, i as i64) as usize;
+            let j = random::int(0, i);
             if i != j {
                 let ptr_i =
                     crate::memory_ops::_mvl_array_get(clone as *const crate::memory::MvlArray, i)

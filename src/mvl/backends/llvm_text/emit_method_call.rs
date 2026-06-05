@@ -259,10 +259,6 @@ impl TextEmitter {
                     Some(v) => v,
                     None => return Ok(None),
                 };
-                // FIXME: mvl_array_len returns u64 in Rust but is declared i64
-                // here — same as the pre-existing `len` dispatch. Safe at
-                // realistic array sizes; revisit when fixing the u64/i64 ABI
-                // mismatch across all callers.
                 self.ensure_extern("declare i64 @_mvl_array_len(ptr)");
                 let len_reg = self.next_reg();
                 self.push_instr(&format!("{len_reg} = call i64 @_mvl_array_len(ptr {val})"));

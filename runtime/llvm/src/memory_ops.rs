@@ -61,7 +61,7 @@ pub unsafe extern "C" fn mvl_format(
         if tmpl[i] == b'{' && i + 1 < tmpl_len && tmpl[i + 1] == b'}' {
             // Replace {} with next value
             if val_idx < val_count {
-                let elem_ptr = _mvl_array_get(values, val_idx) as *const *mut MvlString;
+                let elem_ptr = _mvl_array_get(values, val_idx as i64) as *const *mut MvlString;
                 let s = *elem_ptr;
                 if !s.is_null() {
                     let s_len = (*s).len as usize;
@@ -172,11 +172,11 @@ unsafe fn map_find_slot(slots: *mut MvlMapSlot, cap: u64, key: *const u8, key_le
 /// # Safety
 /// `s` must be a valid non-null `MvlString` pointer.
 #[no_mangle]
-pub unsafe extern "C" fn mvl_string_len(s: *const MvlString) -> u64 {
+pub unsafe extern "C" fn mvl_string_len(s: *const MvlString) -> i64 {
     if s.is_null() {
         return 0;
     }
-    (*s).len
+    (*s).len as i64
 }
 
 /// Return a null-terminated `char*` pointer into the string's data (for printf).
@@ -576,11 +576,12 @@ pub unsafe extern "C" fn _mvl_array_filled(
 /// # Safety
 /// `a` must be a valid non-null `MvlArray` pointer.
 #[no_mangle]
-pub unsafe extern "C" fn _mvl_array_get(a: *const MvlArray, idx: usize) -> *const u8 {
-    if a.is_null() || idx >= (*a).len as usize {
+pub unsafe extern "C" fn _mvl_array_get(a: *const MvlArray, idx: i64) -> *const u8 {
+    if a.is_null() || idx < 0 || idx as u64 >= (*a).len {
         return ptr::null();
     }
-    (*a).ptr.add(idx * (*a).elem_size as usize)
+    let i = idx as usize;
+    (*a).ptr.add(i * (*a).elem_size as usize)
 }
 
 /// Return the number of elements in the array.
@@ -588,11 +589,11 @@ pub unsafe extern "C" fn _mvl_array_get(a: *const MvlArray, idx: usize) -> *cons
 /// # Safety
 /// `a` must be a valid non-null `MvlArray` pointer.
 #[no_mangle]
-pub unsafe extern "C" fn _mvl_array_len(a: *const MvlArray) -> u64 {
+pub unsafe extern "C" fn _mvl_array_len(a: *const MvlArray) -> i64 {
     if a.is_null() {
         return 0;
     }
-    (*a).len
+    (*a).len as i64
 }
 
 /// Return a new `MvlArray` containing elements `[start, end)` from `arr` (safe clamping).
@@ -1254,7 +1255,7 @@ mod tests {
             }
             assert_eq!(_mvl_array_len(a), 16);
             for i in 0i64..16 {
-                let p = _mvl_array_get(a, i as usize) as *const i64;
+                let p = _mvl_array_get(a, i) as *const i64;
                 assert_eq!(*p, i);
             }
             mvl_array_drop(a);
@@ -1427,7 +1428,7 @@ mod tests {
             assert_eq!(_mvl_array_len(arr), 3);
             let expected = [b"a" as &[u8], b"b", b"c"];
             for (i, exp) in expected.iter().enumerate() {
-                let elem_ptr = _mvl_array_get(arr, i) as *const *mut MvlString;
+                let elem_ptr = _mvl_array_get(arr, i as i64) as *const *mut MvlString;
                 let cs = *elem_ptr;
                 assert_eq!(mvl_string_len(cs), 1);
                 let slice = std::slice::from_raw_parts(_mvl_string_ptr(cs), 1);
@@ -1485,7 +1486,7 @@ mod tests {
             assert_eq!(_mvl_array_len(arr), 2);
             // Collect returned key strings into a set for order-independent check.
             let mut found = std::collections::HashSet::new();
-            for i in 0..2usize {
+            for i in 0..2i64 {
                 let elem_ptr = _mvl_array_get(arr, i) as *const *mut MvlString;
                 let ks = *elem_ptr;
                 let len = mvl_string_len(ks) as usize;
@@ -1535,7 +1536,7 @@ mod tests {
 
     /// Helper: read all i64 elements from an array.
     unsafe fn read_i64_array(a: *mut MvlArray) -> Vec<i64> {
-        let len = _mvl_array_len(a) as usize;
+        let len = _mvl_array_len(a);
         (0..len)
             .map(|i| *(_mvl_array_get(a, i) as *const i64))
             .collect()
