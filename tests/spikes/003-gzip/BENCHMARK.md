@@ -23,11 +23,13 @@ Benchmark: `make benchmark ITERS=1000` (512-byte "Hello World!" repeated payload
 
 ## Approaches tested but rejected
 
-| Approach | Result | Reason |
-|----------|--------|--------|
-| Hash-based LZ77 (`List::filled(256)` + `List.set`) | 412 µs (5% slower) | Per-call table allocation (~20µs) exceeds lookup savings for 512B payload. Would win at 4KB+ where O(n×window) linear scan dominates. |
-| CRC32 lookup table (`List::filled(256)` + precompute) | 395 µs (within noise) | Table build (256 × 8 iters) + allocation offsets saving vs on-the-fly (512 × 8 iters). No net improvement at 512B. |
-| Inline `find_best_match` (ref vars, no struct) | 403 µs (within noise) | Rust optimizes small struct copies well even in debug. Eliminating `SearchState` + `update_search` had no measurable impact. |
+| Approach | Debug | Release | Reason |
+|----------|-------|---------|--------|
+| Hash-based LZ77 (`List::filled` + `set`) | 412µs (+5%) | not tested | Per-call table allocation exceeds lookup savings at 512B |
+| CRC32 lookup table (`List::filled` + precompute) | 395µs (~0%) | 286µs (+47%) | In release, LLVM optimizes on-the-fly CRC to tight ALU ops; table adds heap allocation overhead |
+| Inline `find_best_match` (ref vars, no struct) | 403µs (~0%) | 309µs (+59%) | LLVM optimizes struct copies + pure function inlining better than multiple mutable `ref` variables |
+
+**Key insight**: Approaches that look faster in theory are pessimizations in release mode. LLVM's optimizer favors small pure functions + value-type structs over mutable ref variables and heap-allocated lookup tables.
 
 ## Conclusion
 
