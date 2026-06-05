@@ -47,12 +47,17 @@ pub struct FfiBridgeData {
 ///
 /// Returns `None` when no `mvl.toml` exists (single-file builds that have no
 /// project manifest), or when the generated MVL fails to parse unexpectedly.
+///
+/// `project_root` — used for package lock resolution (mvl.lock).
+/// `manifest_root` — used for app identity (mvl.toml app_name/version) and source digest.
+///   Typically the source file's own directory; falls back to `project_root` when equal.
 pub fn load_and_generate(
     project_root: &Path,
+    manifest_root: &Path,
     all_progs: &[Program],
     backend: &str,
 ) -> Option<Program> {
-    let pkg_manifest = PkgManifest::load(project_root).ok()?;
+    let pkg_manifest = PkgManifest::load(manifest_root).ok()?;
     let lockfile = LockFile::load_or_empty(project_root);
     let bridges = collect_ffi_bridges(all_progs);
 
@@ -64,7 +69,7 @@ pub fn load_and_generate(
     let target = env!("MVL_TARGET");
     let profile = env!("MVL_PROFILE");
     let build_date = env!("MVL_BUILD_DATE");
-    let source_digest_computed = compute_source_digest(project_root);
+    let source_digest_computed = compute_source_digest(manifest_root);
     let meta = ManifestMeta {
         app_name: &pkg_manifest.package.name,
         app_version: &pkg_manifest.package.version,
@@ -589,7 +594,7 @@ mod tests {
     #[test]
     fn load_and_generate_returns_none_for_missing_manifest() {
         let tmp = tempfile::tempdir().unwrap();
-        assert!(load_and_generate(tmp.path(), &[], "rust").is_none());
+        assert!(load_and_generate(tmp.path(), tmp.path(), &[], "rust").is_none());
     }
 
     #[test]
@@ -601,7 +606,7 @@ mod tests {
                         license = \"MIT\"\n\
                         requires-mvl = \">=0.1.0\"\n";
         std::fs::write(tmp.path().join("mvl.toml"), manifest).unwrap();
-        let prog = load_and_generate(tmp.path(), &[], "rust").unwrap();
+        let prog = load_and_generate(tmp.path(), tmp.path(), &[], "rust").unwrap();
         let fn_names: Vec<&str> = prog
             .declarations
             .iter()
