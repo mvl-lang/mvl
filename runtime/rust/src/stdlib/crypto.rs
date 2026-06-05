@@ -58,42 +58,6 @@ fn os_random_bytes(n: usize) -> Vec<u8> {
     buf
 }
 
-/// Generate a random UUID v4 string (RFC 4122).
-///
-/// Rust-backend mirror of the pure MVL implementation in `std/crypto.mvl`.
-/// The transpiler imports this via `use mvl_runtime::stdlib::crypto::*`.
-pub fn uuid_v4() -> String {
-    let bytes = os_random_bytes(16);
-    format_uuid_bytes(&bytes)
-}
-
-/// Format 16 bytes as a UUID v4 string, setting version and variant bits.
-///
-/// Rust-backend mirror of the pure MVL implementation in `std/crypto.mvl`.
-pub fn uuid_from_bytes(bytes: Vec<i64>) -> String {
-    let raw: Vec<u8> = bytes.iter().map(|&b| (b & 0xFF) as u8).collect();
-    format_uuid_bytes(&raw)
-}
-
-/// Shared formatter: sets version 4 and RFC 4122 variant bits, then formats as
-/// `xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx`.
-fn format_uuid_bytes(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut b = [0u8; 16];
-    b.copy_from_slice(bytes);
-    b[6] = (b[6] & 0x0F) | 0x40;
-    b[8] = (b[8] & 0x3F) | 0x80;
-    let mut out = String::with_capacity(36);
-    for (i, &byte) in b.iter().enumerate() {
-        if i == 4 || i == 6 || i == 8 || i == 10 {
-            out.push('-');
-        }
-        out.push(HEX[(byte >> 4) as usize] as char);
-        out.push(HEX[(byte & 0x0F) as usize] as char);
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

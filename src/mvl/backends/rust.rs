@@ -153,15 +153,16 @@ pub fn has_std_imports(prog: &Program) -> bool {
     })
 }
 
-/// Modules that have a Rust implementation in `mvl_runtime::stdlib`.
+/// Modules **fully** backed by Rust — their `.mvl` files are NOT loaded as prelude.
 /// Pure-MVL modules (json, collections, strings, lists, math, …) are excluded:
 /// their symbols arrive via the prelude and need no `use mvl_runtime::stdlib::X::*` import.
 ///
-/// Note: `log` is intentionally absent — `std/log.mvl` contains pure-MVL wrappers
-/// (`log_debug` etc.) that are loaded by `load_mvl_native_stdlib_extras`.  The Rust
-/// runtime provides only atomic getters/setters; see `RUST_RUNTIME_IMPORTS`.
+/// Hybrid modules (builtins + pure MVL wrappers) belong in `RUST_RUNTIME_IMPORTS`
+/// but NOT here. This lets the loader transpile non-builtin functions inline while
+/// builtins resolve from `use mvl_runtime::stdlib::X::*`.
+/// Hybrid modules: `crypto` (#1283), `env` (#897), `log`.
 pub const RUST_BACKED_STDLIB: &[&str] = &[
-    "crypto", "io", "net", "process", "random", "regex",
+    "io", "net", "process", "random", "regex",
     "time",
     // Note: `env` is intentionally absent — `std/env.mvl` contains pure-MVL wrappers
     // (`get_secret`) that must be loaded by `load_mvl_native_stdlib_extras` and emitted
