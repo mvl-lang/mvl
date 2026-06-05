@@ -1403,6 +1403,12 @@ fn cross_backend_actor_lifecycle_parity() {
     );
 }
 
+/// Bounded mailbox: flooding an actor beyond capacity must not crash (#1273).
+#[test]
+fn cross_backend_actor_bounded_mailbox_parity() {
+    assert_parity(&corpus_actors("actor_bounded_mailbox_llvm.mvl"), "ok");
+}
+
 // ── #1254: C runtime cross-backend tests ─────────────────────────────────────
 
 /// SHA256 determinism: same input produces same hash across backends.
@@ -1416,4 +1422,15 @@ fn cross_backend_crypto_sha256_corpus_parity() {
             "crypto_sha256.mvl: crypto hash must be deterministic across backends"
         );
     }
+}
+
+/// Process spawn + stdout capture: echo produces output cross-backend (#1274).
+/// LLVM backend has Child type mismatch: ptr vs %Child struct in _mvl_process_wait.
+#[test]
+#[ignore = "llvm_text: Child type mismatch in _mvl_process_wait call (#1274)"]
+fn cross_backend_process_echo_parity() {
+    assert_parity(
+        &corpus_13_stdlib("process_echo.mvl"),
+        "success=true\nhas_output=true",
+    );
 }

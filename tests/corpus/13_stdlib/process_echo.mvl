@@ -1,0 +1,27 @@
+// process_echo.mvl -- Process spawn + capture stdout (#1274)
+//
+// Spawns echo, captures stdout, verifies exit success and output presence.
+// Uses POSIX echo available on all Unix platforms.
+//
+// Expected stdout:
+//   success=true
+//   has_output=true
+
+use std.process.{spawn, wait, is_success, Stdio, Child, ProcessOutput, ProcessError}
+
+fn run() -> Result[Unit, ProcessError] ! Console + ProcessSpawn {
+    let child: Child = spawn("echo", ["mvl_test"], Stdio::Devnull, Stdio::Capture, Stdio::Devnull)?;
+    let out: ProcessOutput = wait(child)?;
+    let ok: Bool = is_success(out.status);
+    println(format("success={}", [ok.to_string()]));
+    let has_output: Bool = out.stdout.is_some();
+    println(format("has_output={}", [has_output.to_string()]));
+    Ok(())
+}
+
+fn main() -> Unit ! Console + ProcessSpawn {
+    match run() {
+        Ok(_) => {},
+        Err(_) => println("error"),
+    }
+}
