@@ -161,6 +161,32 @@ impl TextEmitter {
         let mvl_ty = match scrutinee {
             Expr::Ident(name, _) => self.local_mvl_types.get(name.as_str()).cloned(),
             Expr::FnCall { name, .. } => self.fn_ret_types.get(name.as_str()).cloned(),
+            // MethodCall: infer Option[T] from receiver's element type for get/first/last.
+            Expr::MethodCall {
+                receiver, method, ..
+            } => {
+                if let Expr::Ident(rname, _) = receiver.as_ref() {
+                    if let Some(TypeExpr::Base { args, .. }) =
+                        self.local_mvl_types.get(rname.as_str())
+                    {
+                        if let Some(inner) = args.first() {
+                            match method.as_str() {
+                                "get" | "first" | "last" => Some(TypeExpr::Option {
+                                    inner: Box::new(inner.clone()),
+                                    span: Default::default(),
+                                }),
+                                _ => None,
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
             _ => None,
         };
         let (inner_load_ty, inner_mvl_ty) = match &mvl_ty {

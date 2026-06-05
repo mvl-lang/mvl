@@ -347,9 +347,26 @@ impl TextEmitter {
                     }
                 }
             }
-            Expr::MethodCall { method, .. } => match method.as_str() {
+            Expr::MethodCall {
+                method,
+                receiver,
+                args: margs,
+                ..
+            } => match method.as_str() {
                 "to_string" | "concat" | "to_lower" | "to_upper" | "trim" => "ptr".into(),
                 "len" => "i64".into(),
+                "is_some" | "is_none" => "i1".into(),
+                "unwrap_or" => {
+                    if let Some(a) = margs.first() {
+                        self.type_of_expr(a)
+                    } else {
+                        "i64".into()
+                    }
+                }
+                "get" if matches!(self.mvl_receiver_kind(receiver), Some("List") | Some("Map")) => {
+                    "{ i8, ptr }".into()
+                }
+                "first" | "last" => "{ i8, ptr }".into(),
                 _ => "ptr".into(),
             },
             Expr::Construct { name, .. } => {
