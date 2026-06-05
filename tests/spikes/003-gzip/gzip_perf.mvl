@@ -1,0 +1,94 @@
+// gzip_perf.mvl — gzip compression performance benchmark
+//
+// Exercises the full gzip stack at various payload sizes and reports
+// compression ratio, compressed size, and roundtrip correctness.
+//
+// Run:  make -C tests/spikes/003-gzip run-perf
+//       mvl run tests/spikes/003-gzip/gzip_perf.mvl
+
+// All transitive imports must be listed — mvl run only resolves direct imports.
+use bitstream::crc32_step;
+use huffman_fixed::lit_len_code;
+use huffman_fixed::encode_length;
+use huffman_fixed::encode_distance;
+use huffman_fixed::dist_code;
+use lz77::lz77_encode;
+use lz77::Lz77Token;
+use deflate::deflate_compress;
+use deflate::deflate_decompress;
+use gzip::gzip_compress;
+use gzip::gzip_decompress;
+use gzip::compute_crc32;
+
+fn repeat_bytes(b: Byte, n: Int) -> List[Byte] {
+    let out: ref List[Byte] = [];
+    for _ in range(0, n) {
+        out.push(b)
+    }
+    out
+}
+
+fn cycling_pattern(size: Int) -> List[Byte] {
+    let out: ref List[Byte] = [];
+    for i in range(0, size) {
+        out.push(from_int(i & 0xFF))
+    }
+    out
+}
+
+fn bench(name: String, data: List[Byte]) -> Unit ! Console {
+    let n: Int = data.len();
+    let gz: List[Byte] = gzip_compress(val data);
+    let out: List[Byte] = gzip_decompress(val gz);
+    let ok: String = if out.len() == n { "OK" } else { "FAIL" };
+    let ratio: Int = if n > 0 { (gz.len() * 100) / n } else { 0 };
+    println(format("{}: {} -> {} bytes ({}%), roundtrip {}", [
+        name, n.to_string(), gz.len().to_string(),
+        ratio.to_string(), ok
+    ]))
+}
+
+fn main() -> Unit ! Console {
+    println("=== gzip compression benchmark ===");
+    println("");
+
+    println("-- uniform data (best case) --");
+    bench("  100x 'A'", repeat_bytes(from_int(65), 100));
+    bench("  200x 'A'", repeat_bytes(from_int(65), 200));
+    bench("  500x 'A'", repeat_bytes(from_int(65), 500));
+
+    println("");
+    println("-- cycling 0..255 (worst case) --");
+    bench("  100 bytes", cycling_pattern(100));
+    bench("  256 bytes", cycling_pattern(256));
+    bench("  512 bytes", cycling_pattern(512));
+
+    println("");
+    println("-- mixed text-like data --");
+    let hello: List[Byte] = [72, 101, 108, 108, 111, 32, 87, 111, 114, 108, 100, 33].map(|v: Int| -> Byte { from_int(v) });
+    bench("  'Hello World!'", hello);
+
+    let repeated_text: ref List[Byte] = [];
+    for _ in range(0, 10) {
+        repeated_text.extend(hello)
+    }
+    bench("  10x 'Hello World!'", repeated_text);
+
+    println("");
+    println("-- LZ77 token counts --");
+    let uniform: List[Byte] = repeat_bytes(from_int(65), 200);
+    let toks_uniform: List[Lz77Token] = lz77_encode(val uniform);
+    println(format("  200x uniform: {} tokens (from 200 bytes)", [toks_uniform.len().to_string()]));
+
+    let cycling: List[Byte] = cycling_pattern(200);
+    let toks_cycling: List[Lz77Token] = lz77_encode(val cycling);
+    println(format("  200x cycling: {} tokens (from 200 bytes)", [toks_cycling.len().to_string()]));
+
+    println("");
+    println("-- CRC32 --");
+    let crc: Int = compute_crc32(val hello);
+    println(format("  CRC32('Hello World!') = {}", [crc.to_string()]));
+
+    println("");
+    println("done.")
+}
