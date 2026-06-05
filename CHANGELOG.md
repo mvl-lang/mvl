@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [0.189.1] - 2026-06-05
+
+### Fixed
+
+- **Stdlib cache: detect stale extracted files** (#1294)
+  - `needs_extraction()` now compares on-disk file content against embedded copy
+  - Catches stale cache from other branches or manual edits that previously went undetected when version stamp matched
+  - Regression test: `modified_file_triggers_reextraction_despite_valid_stamp`
+
 ## [0.189.0] - 2026-06-05
 
 ### Added

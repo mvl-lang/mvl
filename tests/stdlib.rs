@@ -143,6 +143,41 @@ fn missing_file_triggers_reextraction_despite_valid_stamp() {
     });
 }
 
+/// A modified stdlib file with a valid version stamp triggers re-extraction.
+///
+/// This is the scenario from the stale-cache bug: a file from another branch
+/// is on disk with different content, the version stamp matches, but the
+/// content has diverged from the embedded copy.
+#[test]
+fn modified_file_triggers_reextraction_despite_valid_stamp() {
+    with_mvl_home(|_home| {
+        // First extraction — all files present, stamp written.
+        let stdlib_dir = ensure_stdlib();
+
+        // Tamper with one stdlib file to simulate stale cache from another branch.
+        let (first_file, first_content) = &STDLIB_FILES[0];
+        let target = stdlib_dir.join(first_file);
+        fs::write(&target, "// stale content from another branch\n").expect("write tampered file");
+
+        // Verify the file was actually changed.
+        let tampered = fs::read_to_string(&target).expect("read tampered");
+        assert_ne!(
+            tampered, *first_content,
+            "file must be tampered before test"
+        );
+
+        // Second call — stamp is current, file exists, but content diverged → must re-extract.
+        let _ = ensure_stdlib();
+
+        let on_disk = fs::read_to_string(&target)
+            .unwrap_or_else(|_| panic!("{first_file} must be re-extracted"));
+        assert_eq!(
+            on_disk, *first_content,
+            "re-extracted {first_file} must match embedded content after content-change detection"
+        );
+    });
+}
+
 #[test]
 fn stale_stamp_triggers_reextraction() {
     with_mvl_home(|home| {
