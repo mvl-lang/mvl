@@ -14,6 +14,17 @@
 use super::lock::{LockFile, LockedPackage};
 use super::manifest::Manifest;
 
+/// A source file included in the SBOM: relative path + `sha256:<hex>` digest.
+///
+/// Collect these by walking the project root with `hash::sha256_file` before
+/// calling `generate()`.
+pub struct SourceFile {
+    /// Canonical relative path from the project root (e.g. `"src/main.mvl"`).
+    pub rel_path: String,
+    /// `"sha256:<64-char-hex>"` — the raw SHA-256 of the file bytes.
+    pub digest: String,
+}
+
 /// Output format for `mvl sbom`.
 pub enum SbomFormat {
     CycloneDx,
@@ -58,10 +69,11 @@ pub fn generate(
     format: SbomFormat,
     component_type: ComponentType,
     licenses: &LicenseMap,
+    sources: &[SourceFile],
 ) -> String {
     match format {
-        SbomFormat::CycloneDx => cyclonedx(manifest, lock, component_type, licenses),
-        SbomFormat::Spdx => spdx(manifest, lock, component_type, licenses),
+        SbomFormat::CycloneDx => cyclonedx(manifest, lock, component_type, licenses, sources),
+        SbomFormat::Spdx => spdx(manifest, lock, component_type, licenses, sources),
     }
 }
 
@@ -72,6 +84,7 @@ fn cyclonedx(
     lock: &LockFile,
     component_type: ComponentType,
     licenses: &LicenseMap,
+    sources: &[SourceFile],
 ) -> String {
     let pkg = &manifest.package;
     let serial = make_serial(&pkg.name, &pkg.version);
@@ -115,6 +128,11 @@ fn cyclonedx(
     native.sort_by_key(|(k, _)| *k);
     for (name, version) in &native {
         entries.push(cargo_component_json(name, version));
+    }
+    let mut sorted_sources: Vec<&SourceFile> = sources.iter().collect();
+    sorted_sources.sort_by_key(|s| s.rel_path.as_str());
+    for sf in sorted_sources {
+        entries.push(source_file_component_json(sf));
     }
 
     out += &entries.join(",\n");
@@ -174,6 +192,23 @@ fn cargo_component_json(name: &str, version: &str) -> String {
     format!("{indent}{{\n{}\n{indent}}}", fields.join(",\n"))
 }
 
+fn source_file_component_json(sf: &SourceFile) -> String {
+    let indent = "    ";
+    let mut fields: Vec<String> = Vec::new();
+    fields.push(format!("{indent}  \"type\": \"file\""));
+    fields.push(format!(
+        "{indent}  \"name\": \"{}\"",
+        json_escape(&sf.rel_path)
+    ));
+    if let Some(hex) = sf.digest.strip_prefix("sha256:") {
+        fields.push(format!(
+            "{indent}  \"hashes\": [{{\"alg\": \"SHA-256\", \"content\": \"{}\"}}]",
+            json_escape(hex)
+        ));
+    }
+    format!("{indent}{{\n{}\n{indent}}}", fields.join(",\n"))
+}
+
 // ── SPDX 2.3 tag-value ───────────────────────────────────────────────────────
 
 fn spdx(
@@ -181,6 +216,7 @@ fn spdx(
     lock: &LockFile,
     component_type: ComponentType,
     licenses: &LicenseMap,
+    sources: &[SourceFile],
 ) -> String {
     let pkg = &manifest.package;
     let mvl_ver = env!("CARGO_PKG_VERSION");
@@ -263,6 +299,32 @@ fn spdx(
         );
         out += "\n";
         out += &format!("Relationship: SPDXRef-Package DEPENDS_ON {spdx_id}\n");
+        out += "\n";
+    }
+
+    // Source files
+    let mut sorted_sources: Vec<&SourceFile> = sources.iter().collect();
+    sorted_sources.sort_by_key(|s| s.rel_path.as_str());
+    for sf in sorted_sources {
+        let spdx_id = format!(
+            "SPDXRef-file-{}",
+            sf.rel_path
+                .chars()
+                .map(|c| if c.is_alphanumeric() || c == '-' || c == '.' {
+                    c
+                } else {
+                    '-'
+                })
+                .collect::<String>()
+        );
+        out += &format!("FileName: ./{}\n", sf.rel_path);
+        out += &format!("SPDXID: {spdx_id}\n");
+        if let Some(hex) = sf.digest.strip_prefix("sha256:") {
+            out += &format!("FileChecksum: SHA256: {hex}\n");
+        }
+        out += &format!("LicenseConcluded: {}\n", &manifest.package.license);
+        out += "\n";
+        out += &format!("Relationship: SPDXRef-Package CONTAINS {spdx_id}\n");
         out += "\n";
     }
 
@@ -409,6 +471,7 @@ mod tests {
             SbomFormat::CycloneDx,
             ComponentType::Library,
             &LicenseMap::new(),
+            &[],
         );
         assert!(out.starts_with('{'), "must start with {{");
         assert!(out.trim_end().ends_with('}'), "must end with }}");
@@ -424,6 +487,7 @@ mod tests {
             SbomFormat::CycloneDx,
             ComponentType::Library,
             &LicenseMap::new(),
+            &[],
         );
         assert!(out.contains("github.com/lab271/my-app"));
         assert!(out.contains("\"version\": \"1.0.0\""));
@@ -438,6 +502,7 @@ mod tests {
             SbomFormat::CycloneDx,
             ComponentType::Application,
             &LicenseMap::new(),
+            &[],
         );
         assert!(
             out.contains("\"type\": \"application\""),
@@ -453,6 +518,7 @@ mod tests {
             SbomFormat::CycloneDx,
             ComponentType::Library,
             &LicenseMap::new(),
+            &[],
         );
         assert!(
             out.contains("\"type\": \"library\""),
@@ -468,6 +534,7 @@ mod tests {
             SbomFormat::Spdx,
             ComponentType::Application,
             &LicenseMap::new(),
+            &[],
         );
         assert!(out.contains("PrimaryPackagePurpose: APPLICATION"));
     }
@@ -480,6 +547,7 @@ mod tests {
             SbomFormat::Spdx,
             ComponentType::Library,
             &LicenseMap::new(),
+            &[],
         );
         assert!(out.contains("PrimaryPackagePurpose: LIBRARY"));
     }
@@ -492,6 +560,7 @@ mod tests {
             SbomFormat::CycloneDx,
             ComponentType::Library,
             &LicenseMap::new(),
+            &[],
         );
         assert!(out.contains("github.com/lab271/mvl-stdlib"));
         assert!(out.contains("\"SHA-256\""));
@@ -507,6 +576,7 @@ mod tests {
             SbomFormat::CycloneDx,
             ComponentType::Library,
             &LicenseMap::new(),
+            &[],
         );
         assert!(out.contains("\"name\": \"hyper\""));
         assert!(out.contains("pkg:cargo/hyper@1.0"));
@@ -520,6 +590,7 @@ mod tests {
             SbomFormat::CycloneDx,
             ComponentType::Library,
             &LicenseMap::new(),
+            &[],
         );
         assert!(out.contains("pkg:mvl/github.com/lab271/mvl-stdlib@1.2.0"));
     }
@@ -550,6 +621,7 @@ mod tests {
             SbomFormat::CycloneDx,
             ComponentType::Library,
             &LicenseMap::new(),
+            &[],
         );
         assert!(out.contains("\"components\": [\n  ]"));
     }
@@ -574,6 +646,7 @@ mod tests {
             SbomFormat::CycloneDx,
             ComponentType::Library,
             &LicenseMap::new(),
+            &[],
         );
         // git URL absent → no externalReferences
         assert!(!out.contains("externalReferences"));
@@ -589,6 +662,7 @@ mod tests {
             SbomFormat::Spdx,
             ComponentType::Library,
             &LicenseMap::new(),
+            &[],
         );
         assert!(out.starts_with("SPDXVersion: SPDX-2.3\n"));
     }
@@ -601,6 +675,7 @@ mod tests {
             SbomFormat::Spdx,
             ComponentType::Library,
             &LicenseMap::new(),
+            &[],
         );
         assert!(out.contains("PackageName: github.com/lab271/my-app"));
         assert!(out.contains("PackageVersion: 1.0.0"));
@@ -615,6 +690,7 @@ mod tests {
             SbomFormat::Spdx,
             ComponentType::Library,
             &LicenseMap::new(),
+            &[],
         );
         assert!(out.contains("Relationship: SPDXRef-Package DEPENDS_ON"));
     }
@@ -627,6 +703,7 @@ mod tests {
             SbomFormat::Spdx,
             ComponentType::Library,
             &LicenseMap::new(),
+            &[],
         );
         assert!(out.contains("PackageChecksum: SHA256: abc123def456"));
     }
@@ -639,6 +716,7 @@ mod tests {
             SbomFormat::Spdx,
             ComponentType::Library,
             &LicenseMap::new(),
+            &[],
         );
         assert!(out.contains("https://crates.io"));
         assert!(out.contains("pkg:cargo/hyper@1.0"));
@@ -680,5 +758,139 @@ mod tests {
     fn json_escape_control_chars() {
         assert_eq!(json_escape("a\nb"), r"a\nb");
         assert_eq!(json_escape("a\tb"), r"a\tb");
+    }
+
+    // ── source file components ─────────────────────────────────────────────────
+
+    fn sample_sources() -> Vec<SourceFile> {
+        vec![
+            SourceFile {
+                rel_path: "src/main.mvl".to_string(),
+                digest: "sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+                    .to_string(),
+            },
+            SourceFile {
+                rel_path: "lib/util.mvl".to_string(),
+                digest: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                    .to_string(),
+            },
+        ]
+    }
+
+    #[test]
+    fn cyclonedx_source_files_appear_as_file_components() {
+        let sources = sample_sources();
+        let out = generate(
+            &sample_manifest(),
+            &sample_lock(),
+            SbomFormat::CycloneDx,
+            ComponentType::Application,
+            &LicenseMap::new(),
+            &sources,
+        );
+        assert!(
+            out.contains("\"type\": \"file\""),
+            "source files use type=file"
+        );
+        assert!(out.contains("src/main.mvl"));
+        assert!(out.contains("lib/util.mvl"));
+        assert!(out.contains("2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"));
+    }
+
+    #[test]
+    fn cyclonedx_source_files_sorted_by_path() {
+        // Feed in reverse order — output should still be lib/ before src/.
+        let sources = vec![
+            SourceFile {
+                rel_path: "src/main.mvl".to_string(),
+                digest: "sha256:aaaa".to_string(),
+            },
+            SourceFile {
+                rel_path: "lib/util.mvl".to_string(),
+                digest: "sha256:bbbb".to_string(),
+            },
+        ];
+        let out = generate(
+            &sample_manifest(),
+            &sample_lock(),
+            SbomFormat::CycloneDx,
+            ComponentType::Application,
+            &LicenseMap::new(),
+            &sources,
+        );
+        let pos_lib = out.find("lib/util.mvl").unwrap();
+        let pos_src = out.find("src/main.mvl").unwrap();
+        assert!(
+            pos_lib < pos_src,
+            "lib/ must appear before src/ (sorted order)"
+        );
+    }
+
+    #[test]
+    fn cyclonedx_no_sources_produces_no_file_components() {
+        let out = generate(
+            &sample_manifest(),
+            &sample_lock(),
+            SbomFormat::CycloneDx,
+            ComponentType::Library,
+            &LicenseMap::new(),
+            &[],
+        );
+        assert!(!out.contains("\"type\": \"file\""));
+    }
+
+    #[test]
+    fn spdx_source_files_appear_as_file_entries() {
+        let sources = sample_sources();
+        let out = generate(
+            &sample_manifest(),
+            &sample_lock(),
+            SbomFormat::Spdx,
+            ComponentType::Application,
+            &LicenseMap::new(),
+            &sources,
+        );
+        assert!(out.contains("FileName: ./src/main.mvl"));
+        assert!(out.contains("FileName: ./lib/util.mvl"));
+        assert!(out.contains("FileChecksum: SHA256:"));
+        assert!(out.contains("Relationship: SPDXRef-Package CONTAINS"));
+    }
+
+    #[test]
+    fn spdx_no_sources_produces_no_filename_entries() {
+        let out = generate(
+            &sample_manifest(),
+            &sample_lock(),
+            SbomFormat::Spdx,
+            ComponentType::Library,
+            &LicenseMap::new(),
+            &[],
+        );
+        assert!(!out.contains("FileName:"));
+    }
+
+    #[test]
+    fn source_file_without_sha256_prefix_omits_hash() {
+        // Use empty lock so no package hashes are emitted either.
+        let empty_lock = LockFile { packages: vec![] };
+        let mut manifest = sample_manifest();
+        manifest.native.clear();
+        let sources = vec![SourceFile {
+            rel_path: "main.mvl".to_string(),
+            digest: "md5:badhash".to_string(), // wrong prefix — should be ignored
+        }];
+        let out = generate(
+            &manifest,
+            &empty_lock,
+            SbomFormat::CycloneDx,
+            ComponentType::Application,
+            &LicenseMap::new(),
+            &sources,
+        );
+        assert!(out.contains("main.mvl"));
+        assert!(
+            !out.contains("\"hashes\""),
+            "non-sha256 prefix must not emit hashes field"
+        );
     }
 }

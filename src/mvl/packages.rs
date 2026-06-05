@@ -12,6 +12,7 @@
 //! - `mvl sbom`                    — generate CycloneDX/SPDX SBOM from mvl.lock
 
 pub mod fetch;
+pub mod hash;
 pub mod lock;
 pub mod manifest;
 pub mod mvs;
@@ -310,13 +311,59 @@ pub fn cmd_sbom(format: Option<&str>, project_root: &Path) -> Result<String, Pac
         }
     }
 
+    // Collect source files: walk project root for .mvl files and hash each one.
+    let sources = collect_source_files(project_root);
+
     Ok(sbom::generate(
         &manifest,
         &lock,
         fmt,
         component_type,
         &licenses,
+        &sources,
     ))
+}
+
+/// Walk `root` recursively for `.mvl` files and return a sorted list of
+/// `SourceFile` entries with canonical relative paths and SHA-256 digests.
+fn collect_source_files(root: &Path) -> Vec<sbom::SourceFile> {
+    let mut out = Vec::new();
+    collect_mvl_files_recursive(root, root, &mut out);
+    out.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
+    out
+}
+
+fn collect_mvl_files_recursive(root: &Path, dir: &Path, out: &mut Vec<sbom::SourceFile>) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if path.is_dir() {
+            // Skip hidden directories (e.g. .git)
+            if path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with('.'))
+            {
+                continue;
+            }
+            collect_mvl_files_recursive(root, &path, out);
+        } else if path.extension().is_some_and(|x| x == "mvl") {
+            if let Ok(digest) = hash::sha256_file(&path) {
+                let rel = path
+                    .strip_prefix(root)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                out.push(sbom::SourceFile {
+                    rel_path: rel,
+                    digest,
+                });
+            }
+        }
+    }
 }
 
 /// Ensure all dependencies in `mvl.toml` are fetched before build.
