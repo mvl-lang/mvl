@@ -35,35 +35,23 @@ pub total fn flush_writer(w: BitWriter) -> List[Byte] {
     }
 }
 
+// Bulk bit write — inspired by miniz_oxide put_bits(): accumulate all bits
+// in a wide buffer with one OR+shift, then flush completed bytes.
+// Replaces per-bit recursion (8 struct allocs per byte → 1 OR + 1 flush).
 pub total fn write_bits(w: BitWriter, value: Int, n_bits: Int where self >= 1 && self <= 24) -> BitWriter {
-    write_bits_loop(w, value, n_bits)
+    let mask: Int = (1 << n_bits) - 1;
+    let new_current: Int = w.current | ((value & mask) << w.bit_pos);
+    let new_bit_pos: Int = w.bit_pos + n_bits;
+    flush_bytes(w.bytes, new_current, new_bit_pos)
 }
 
-fn write_bits_loop(w: BitWriter, value: Int, remaining: Int) -> BitWriter {
-    if remaining <= 0 {
-        w
+fn flush_bytes(bytes: List[Byte], current: Int, bit_pos: Int) -> BitWriter {
+    if bit_pos >= 8 {
+        let out: ref List[Byte] = bytes;
+        out.push(from_int(current & 0xFF));
+        flush_bytes(out, current >> 8, bit_pos - 8)
     } else {
-        let bit: Int = value & 1;
-        let next_value: Int = value >> 1;
-        let new_current: Int = w.current | (bit << w.bit_pos);
-        let new_bit_pos: Int = w.bit_pos + 1;
-        if new_bit_pos == 8 {
-            let new_bytes: ref List[Byte] = w.bytes;
-            new_bytes.push(from_int(new_current));
-            let next_w: BitWriter = BitWriter {
-                bytes:   new_bytes,
-                current: 0,
-                bit_pos: 0,
-            };
-            write_bits_loop(next_w, next_value, remaining - 1)
-        } else {
-            let next_w: BitWriter = BitWriter {
-                bytes:   w.bytes,
-                current: new_current,
-                bit_pos: new_bit_pos,
-            };
-            write_bits_loop(next_w, next_value, remaining - 1)
-        }
+        BitWriter { bytes: bytes, current: current, bit_pos: bit_pos }
     }
 }
 
