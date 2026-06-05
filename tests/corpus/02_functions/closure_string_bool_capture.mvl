@@ -1,0 +1,29 @@
+// closure_string_bool_capture.mvl — Closure capture of String and Bool types (#1271)
+//
+// Verifies that closures correctly capture non-Int types from enclosing scopes
+// across both Rust and LLVM backends.
+//
+// Expected stdout:
+//   matches=2
+//   kept=3
+//   total_len=13
+
+fn main() -> Unit ! Console {
+    // String capture: filter items matching a captured string
+    let target: String = "yes";
+    let items: List[String] = ["yes", "no", "yes", "maybe"];
+    let matches: List[String] = items.filter(|s: String| s == target);
+    println(format("matches={}", [matches.len().to_string()]));
+
+    // Bool capture: Bool variable captured inside closure body
+    let include_large: Bool = true;
+    let nums: List[Int] = [1, 5, 10, 20, 50];
+    let kept: List[Int] = nums.filter(|n: Int| if include_large { n >= 10 } else { n < 10 });
+    println(format("kept={}", [kept.len().to_string()]));
+
+    // String capture in fold: accumulate lengths using captured offset
+    let bonus: Int = 1;
+    let words: List[String] = ["hi", "hey", "hello"];
+    let total_len: Int = words.fold(0, |acc: Int, w: String| acc + w.len() + bonus);
+    println(format("total_len={}", [total_len.to_string()]));
+}

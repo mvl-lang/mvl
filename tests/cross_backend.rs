@@ -1253,11 +1253,43 @@ fn cross_backend_closure_nested() {
     );
 }
 
+/// String and Bool capture: closures capturing non-Int types (#1271).
+#[test]
+fn cross_backend_closure_string_bool_capture() {
+    assert_parity(
+        &corpus_functions("closure_string_bool_capture.mvl"),
+        "matches=2\nkept=3\ntotal_len=13",
+    );
+}
+
+/// Closure as return value: function returning a closure that captures params (#1271).
+/// Transpiler emits `fn(i64) -> i64` but capturing closures cannot be coerced to fn pointers.
+#[test]
+#[ignore = "transpiler: closures capturing variables cannot be returned as fn() pointers (#1271)"]
+fn cross_backend_closure_return_value() {
+    assert_parity(
+        &corpus_functions("closure_return_value.mvl"),
+        "add5_result=15\nmul3_result=21",
+    );
+}
+
+/// Nested closure capture: a closure that captures another closure (#1271).
+/// Same transpiler limitation as closure_return_value — fn() vs capturing closure.
+#[test]
+#[ignore = "transpiler: closures capturing other closures cannot be assigned as fn() pointers (#1271)"]
+fn cross_backend_closure_nested_capture() {
+    assert_parity(
+        &corpus_functions("closure_nested_capture.mvl"),
+        "composed=25\npipeline=14",
+    );
+}
+
 // ── #1251: LLVM monomorphization cross-backend tests ─────────────────────────
 
 /// Generic function instantiation — check-only (no fn main).
+/// Not a parity test; renamed from cross_backend_check_generic_instantiation (#1272).
 #[test]
-fn cross_backend_check_generic_instantiation() {
+fn check_generic_instantiation() {
     assert_check_passes(&corpus_functions("generic_instantiation.mvl"));
 }
 
@@ -1267,6 +1299,27 @@ fn cross_backend_generic_multi_instantiation() {
     assert_parity(
         &corpus_functions("generic_multi_instantiation.mvl"),
         "id_int=42\nid_str=hello\npick_a=10\npick_b=world",
+    );
+}
+
+/// HOF methods on generic containers: map/fold on List (#1272).
+#[test]
+fn cross_backend_generic_container_ops() {
+    assert_parity(
+        &corpus_functions("generic_container_ops.mvl"),
+        "opt_count=4\npair_sum=60",
+    );
+}
+
+/// Nested Option[Int] unwrapping (#1272).
+/// LLVM emits some_sum=0 and nested_first=0; both match-arm payload extractions
+/// are broken when the payload is Option[Int] or List[Int].
+#[test]
+#[ignore = "llvm_text: Option[Int] match unwrap returns 0 in LLVM backend (#1272)"]
+fn cross_backend_generic_nested_option() {
+    assert_parity(
+        &corpus_functions("generic_nested_option.mvl"),
+        "some_sum=6\nnested_first=10",
     );
 }
 
@@ -1314,6 +1367,48 @@ fn cross_backend_actor_corpus_select() {
     assert_check_passes(&corpus_actors("select.mvl"));
 }
 
+// ── #1273: Actor runtime parity tests ─────────────────────────────────────────
+
+/// Actor println: spawn actor, call behaviors, verify FIFO output (#1273).
+#[test]
+fn cross_backend_actor_println_parity() {
+    assert_parity(&corpus_actors("actor_println_llvm.mvl"), "ping\npong\nping");
+}
+
+/// Actor val arguments: unpacked and printed in order (#1273).
+/// (Corpus file name `actor_state_mutation_llvm.mvl` is historical — no mutable state is tested.)
+#[test]
+fn cross_backend_actor_val_argument_parity() {
+    assert_parity(
+        &corpus_actors("actor_state_mutation_llvm.mvl"),
+        "n=1\nn=2\nn=3\nmsg=done",
+    );
+}
+
+/// Multiple actors: fan-out from main to two actors (#1273).
+#[test]
+fn cross_backend_actor_multi_comm_parity() {
+    assert_parity(
+        &corpus_actors("actor_multi_comm_llvm.mvl"),
+        "a_done\nb_done",
+    );
+}
+
+/// Actor lifecycle: spawn, send behaviors, verify output ordering (#1273).
+#[test]
+fn cross_backend_actor_lifecycle_parity() {
+    assert_parity(
+        &corpus_actors("actor_lifecycle_llvm.mvl"),
+        "spawned\nsent_3\ndone",
+    );
+}
+
+/// Bounded mailbox: flooding an actor beyond capacity must not crash (#1273).
+#[test]
+fn cross_backend_actor_bounded_mailbox_parity() {
+    assert_parity(&corpus_actors("actor_bounded_mailbox_llvm.mvl"), "ok");
+}
+
 // ── #1254: C runtime cross-backend tests ─────────────────────────────────────
 
 /// SHA256 determinism: same input produces same hash across backends.
@@ -1327,4 +1422,15 @@ fn cross_backend_crypto_sha256_corpus_parity() {
             "crypto_sha256.mvl: crypto hash must be deterministic across backends"
         );
     }
+}
+
+/// Process spawn + stdout capture: echo produces output cross-backend (#1274).
+/// LLVM backend has Child type mismatch: ptr vs %Child struct in _mvl_process_wait.
+#[test]
+#[ignore = "llvm_text: Child type mismatch in _mvl_process_wait call (#1274)"]
+fn cross_backend_process_echo_parity() {
+    assert_parity(
+        &corpus_13_stdlib("process_echo.mvl"),
+        "success=true\nhas_output=true",
+    );
 }

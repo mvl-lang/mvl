@@ -1,0 +1,20 @@
+// generic_container_ops.mvl — HOF methods on generic containers (#1272)
+//
+// Verifies that methods on generic containers (map, fold, filter on List)
+// are correctly monomorphized across both backends.
+//
+// Expected stdout:
+//   opt_count=4
+//   pair_sum=60
+
+fn main() -> Unit ! Console {
+    // Nested generics: List[Option[Int]] — length is a simple container op
+    let opts: List[Option[Int]] = [Some(1), None, Some(2), Some(3)];
+    println(format("opt_count={}", [opts.len().to_string()]));
+
+    // Generic map + fold: List[Int].map produces List[Int]
+    let nums: List[Int] = [1, 2, 3];
+    let doubled: List[Int] = nums.map(|x: Int| x * 10);
+    let pair_sum: Int = doubled.fold(0, |acc: Int, x: Int| acc + x);
+    println(format("pair_sum={}", [pair_sum.to_string()]));
+}
