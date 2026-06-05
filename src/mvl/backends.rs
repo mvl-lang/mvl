@@ -438,8 +438,6 @@ pub const BUILTINS: &[BuiltinDesc] = &[
     BuiltinDesc::free("sha256", "crypto", 1, 1),
     BuiltinDesc::free("sha512", "crypto", 1, 1),
     BuiltinDesc::free("crypto_random_bytes", "crypto", 1, 1),
-    BuiltinDesc::free("uuid_v4", "crypto", 0, 0),
-    BuiltinDesc::free("uuid_from_bytes", "crypto", 1, 1),
     // ── Free: random (std/random.mvl) ─────────────────────────────────────────
     BuiltinDesc::free("int", "random", 2, 2),
     BuiltinDesc::free("float", "random", 0, 0),

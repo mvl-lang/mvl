@@ -118,48 +118,6 @@ pub extern "C" fn _mvl_crypto_random_bytes(n: i64) -> *mut MvlArray {
     }
 }
 
-// ── UUID v4 (non-deterministic, ! CryptoRandom) ──────────────────────────────
-
-/// Generate a random UUID v4 string (RFC 4122).
-///
-/// Returns a heap-allocated `MvlString*` of 36 characters:
-/// `xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx` (y = 8/9/a/b).
-/// Uses the OS CSPRNG for 16 random bytes.
-#[no_mangle]
-#[allow(unsafe_code)]
-pub extern "C" fn _mvl_crypto_uuid_v4() -> *mut MvlString {
-    new_mvl_str(&mvl_runtime::stdlib::crypto::uuid_v4())
-}
-
-/// Format 16 bytes as a UUID v4 string (RFC 4122).
-///
-/// Pure — deterministic for the same input. Takes a heap-allocated `*const MvlArray`
-/// with 16 i64 elements in `[0, 255]`. Returns a heap-allocated `MvlString*` (36 chars).
-/// Returns an empty string if the array is null or has wrong length.
-#[no_mangle]
-#[allow(unsafe_code)]
-pub extern "C" fn _mvl_crypto_uuid_from_bytes(arr: *const MvlArray) -> *mut MvlString {
-    if arr.is_null() {
-        return new_mvl_str("");
-    }
-    // Safety: arr is non-null (checked above); cast to *mut is required by mvl_array_len
-    // signature but no mutation occurs — these are read-only operations.
-    let len = unsafe { crate::memory_ops::mvl_array_len(arr as *mut MvlArray) } as usize;
-    if len != 16 {
-        return new_mvl_str("");
-    }
-    let mut bytes: Vec<i64> = Vec::with_capacity(16);
-    for i in 0..16 {
-        // Safety: len == 16 checked above; null-check guards against corrupted array internals
-        let elem_ptr = unsafe { crate::memory_ops::mvl_array_get(arr as *mut MvlArray, i) };
-        if elem_ptr.is_null() {
-            return new_mvl_str("");
-        }
-        bytes.push(unsafe { (elem_ptr as *const i64).read() });
-    }
-    new_mvl_str(&mvl_runtime::stdlib::crypto::uuid_from_bytes(bytes))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -300,55 +258,5 @@ mod tests {
         let out = _mvl_crypto_sha512(std::ptr::null());
         assert!(!out.is_null());
         assert_eq!(from_mvl_str(out), SHA512_EMPTY);
-    }
-
-    #[test]
-    fn uuid_v4_format() {
-        let out = _mvl_crypto_uuid_v4();
-        assert!(!out.is_null());
-        let id = from_mvl_str(out);
-        assert_eq!(id.len(), 36);
-        assert_eq!(&id[14..15], "4"); // version
-        let variant = u8::from_str_radix(&id[19..20], 16).unwrap();
-        assert!((0x8..=0xB).contains(&variant));
-    }
-
-    #[test]
-    fn uuid_from_bytes_known_vector() {
-        let arr = unsafe { crate::memory::mvl_array_new(std::mem::size_of::<i64>(), 16) };
-        assert!(!arr.is_null());
-        for _ in 0..16 {
-            let zero: i64 = 0;
-            unsafe {
-                crate::memory_ops::mvl_array_push(arr, (&zero as *const i64).cast());
-            }
-        }
-        let out = _mvl_crypto_uuid_from_bytes(arr);
-        assert!(!out.is_null());
-        assert_eq!(from_mvl_str(out), "00000000-0000-4000-8000-000000000000");
-        unsafe { crate::memory::mvl_array_drop(arr) };
-    }
-
-    #[test]
-    fn uuid_from_bytes_wrong_length_returns_empty() {
-        let arr = unsafe { crate::memory::mvl_array_new(std::mem::size_of::<i64>(), 10) };
-        assert!(!arr.is_null());
-        for _ in 0..10 {
-            let zero: i64 = 0;
-            unsafe {
-                crate::memory_ops::mvl_array_push(arr, (&zero as *const i64).cast());
-            }
-        }
-        let out = _mvl_crypto_uuid_from_bytes(arr);
-        assert!(!out.is_null());
-        assert_eq!(from_mvl_str(out), "");
-        unsafe { crate::memory::mvl_array_drop(arr) };
-    }
-
-    #[test]
-    fn uuid_from_bytes_null_returns_empty() {
-        let out = _mvl_crypto_uuid_from_bytes(std::ptr::null());
-        assert!(!out.is_null());
-        assert_eq!(from_mvl_str(out), "");
     }
 }
