@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [0.187.0] - 2026-06-05
+
+### Added
+
+- **Source file hashes in SBOM generation** (#185)
+  - Extracted pure-Rust FIPS 180-4 SHA-256 into shared `packages/hash.rs` module; zero new Cargo dependencies
+  - `SourceFile { rel_path, digest }` struct for including `.mvl` files in SBOMs
+  - CycloneDX: source files emitted as `type=file` components with `SHA-256` hash entries
+  - SPDX 2.3: source files emitted as `FileName/FileChecksum/CONTAINS` entries
+  - `cmd_sbom()` now walks project root, hashes all `.mvl` files with `hash::sha256_file()`, passes list to `generate()`
+  - 7 new unit tests in sbom.rs; 6 NIST-vector tests in hash.rs; 1212 total tests passing
+
 ## [0.186.0] - 2026-06-05
 
 ### Added
