@@ -49,4 +49,4 @@ test-gzip: guard-mvl ## Run full gzip functional tests
 	cd "$(ROOT)" && $(MVL) test $(DIR)/gzip_test.mvl
 
 test-perf: guard-mvl ## Run performance / ratio tests
-	cd "$(ROOT)" && $(MVL) test $(DIR)/gzip_perf.mvl
+	cd "$(ROOT)" && $(MVL) test $(DIR)/gzip_perf_test.mvl
