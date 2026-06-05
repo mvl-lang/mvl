@@ -1262,6 +1262,28 @@ fn cross_backend_closure_string_bool_capture() {
     );
 }
 
+/// Closure as return value: function returning a closure that captures params (#1271).
+/// Transpiler emits `fn(i64) -> i64` but capturing closures cannot be coerced to fn pointers.
+#[test]
+#[ignore = "transpiler: closures capturing variables cannot be returned as fn() pointers (#1271)"]
+fn cross_backend_closure_return_value() {
+    assert_parity(
+        &corpus_functions("closure_return_value.mvl"),
+        "add5_result=15\nmul3_result=21",
+    );
+}
+
+/// Nested closure capture: a closure that captures another closure (#1271).
+/// Same transpiler limitation as closure_return_value — fn() vs capturing closure.
+#[test]
+#[ignore = "transpiler: closures capturing other closures cannot be assigned as fn() pointers (#1271)"]
+fn cross_backend_closure_nested_capture() {
+    assert_parity(
+        &corpus_functions("closure_nested_capture.mvl"),
+        "composed=25\npipeline=14",
+    );
+}
+
 // ── #1251: LLVM monomorphization cross-backend tests ─────────────────────────
 
 /// Generic function instantiation — check-only (no fn main).
@@ -1360,6 +1382,24 @@ fn cross_backend_actor_val_argument_parity() {
     assert_parity(
         &corpus_actors("actor_state_mutation_llvm.mvl"),
         "n=1\nn=2\nn=3\nmsg=done",
+    );
+}
+
+/// Multiple actors: fan-out from main to two actors (#1273).
+#[test]
+fn cross_backend_actor_multi_comm_parity() {
+    assert_parity(
+        &corpus_actors("actor_multi_comm_llvm.mvl"),
+        "a_done\nb_done",
+    );
+}
+
+/// Actor lifecycle: spawn, send behaviors, verify output ordering (#1273).
+#[test]
+fn cross_backend_actor_lifecycle_parity() {
+    assert_parity(
+        &corpus_actors("actor_lifecycle_llvm.mvl"),
+        "spawned\nsent_3\ndone",
     );
 }
 

@@ -1,0 +1,27 @@
+// actor_lifecycle_llvm.mvl -- Actor lifecycle: spawn, process, stop (#1273)
+//
+// Verifies the basic actor lifecycle: spawn an actor, send it messages
+// via behaviors, then verify main's output after all messages are sent.
+//
+// Expected stdout:
+//   spawned
+//   sent_3
+//   done
+
+actor Counter {
+    count: Int
+
+    pub fn increment(val n: Int) { }
+    pub fn reset() { }
+}
+
+fn main() -> Unit ! Console + Actor {
+    let c: Counter = actor Counter { count: 0 };
+    println("spawned");
+    c.increment(1);
+    c.increment(2);
+    c.increment(3);
+    println("sent_3");
+    c.reset();
+    println("done")
+}
