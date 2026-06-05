@@ -24,17 +24,25 @@ Benchmark: `make benchmark ITERS=1000` (512-byte "Hello World!" repeated payload
 
 | Approach | Result | Reason |
 |----------|--------|--------|
-| Hash-based LZ77 (`List::filled(256, -1)` + `List.set`) | 412 µs (5% slower) | Per-call table allocation (~20µs) exceeds lookup savings for 512B payload. Would win at 4KB+ where O(n×window) linear scan dominates. |
+| Hash-based LZ77 (`List::filled(256)` + `List.set`) | 412 µs (5% slower) | Per-call table allocation (~20µs) exceeds lookup savings for 512B payload. Would win at 4KB+ where O(n×window) linear scan dominates. |
+| CRC32 lookup table (`List::filled(256)` + precompute) | 395 µs (within noise) | Table build (256 × 8 iters) + allocation offsets saving vs on-the-fly (512 × 8 iters). No net improvement at 512B. |
+| Inline `find_best_match` (ref vars, no struct) | 403 µs (within noise) | Rust optimizes small struct copies well even in debug. Eliminating `SearchState` + `update_search` had no measurable impact. |
+
+## Conclusion
+
+**391µs is the algorithmic floor for 512B payloads with the current MVL runtime.** All remaining approaches that avoid per-call allocation converge to ~390-405µs. The gap to flate2 (~12µs, ~33x) is dominated by runtime/compiler factors, not algorithmic choices.
 
 ## Remaining gap analysis (391µs vs flate2's 12µs ≈ 33x)
 
-**Algorithmic (fixable in MVL):**
+**Algorithmic — tested, no further gains at 512B:**
 
-| Bottleneck | Current | flate2 | Estimated impact |
-|------------|---------|--------|------------------|
-| CRC32 per-byte | 8-iter loop per byte (4096 total) | Precomputed 256-entry table, 1 lookup per byte | ~10% (table build amortized) |
-| `find_best_match` struct threading | `SearchState` + `update_search` per candidate | Inline variables, no struct alloc | ~5% |
-| `reverse_bits` loop | 8 struct allocs per Huffman code | O(1) bit-swap formula or precomputed table | ~2% |
+| Approach | Tested | Result |
+|----------|--------|--------|
+| CRC32 lookup table | Yes | Within noise — allocation cost offsets savings |
+| Inline struct threading | Yes | Within noise — Rust optimizes struct copies |
+| Hash-based LZ77 | Yes | Slower — allocation dominates at 512B |
+
+**Runtime/compiler (not fixable in MVL code):**
 
 **Runtime/compiler (not fixable in MVL code):**
 
