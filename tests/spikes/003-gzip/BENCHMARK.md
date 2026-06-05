@@ -9,16 +9,17 @@ Benchmark: `make benchmark ITERS=1000` (512-byte "Hello World!" repeated payload
 | Baseline | 3181 | 1x | Initial implementation: bit-at-a-time BitWriter, for-loop LZ77 with full 258-iter match_length, bytes-to-bits DEFLATE decoder, wrong CRC32 |
 | Early-exit match + direct bit reads | 616 | 5.2x | `match_length` while-loop exits on first mismatch; DEFLATE decoder reads bits directly from byte array (eliminates 8x `List[Int]` expansion); `while !done` replaces for+flag |
 | Best-match early exit | 500 | 6.4x | `find_best_match` stops scanning when match reaches max possible length |
-| Greedy + bulk writes + while-loop | **391** | **8.1x** | Nearest-first scan + stop at first match >= 3; `write_bits` accumulates in wide buffer then flushes bytes (inspired by miniz_oxide `put_bits`); `while pos < n` replaces `for _ in range(0, n)` eliminating 498 no-op `enc_step` calls |
+| Greedy + bulk writes + while-loop | 391 | 8.1x | Nearest-first scan + stop at first match >= 3; `write_bits` accumulates in wide buffer then flushes bytes (inspired by miniz_oxide `put_bits`); `while pos < n` replaces `for _ in range(0, n)` eliminating 498 no-op `enc_step` calls |
+| `mvl build --release` | **194** | **16.4x** | Added `--release` flag to `mvl build`/`mvl run`. Enables Rust compiler optimizations: inlining, bounds-check elision, LLVM opt passes. Same MVL code, no algorithmic changes. |
 
 ## Reference implementations
 
-| Implementation | µs/iter | vs MVL | Notes |
-|----------------|---------|--------|-------|
-| system gzip (C) | ~6500 | 0.06x | Process spawn overhead dominates — MVL is 16x faster |
-| rust/flate2 (release) | ~12 | 33x faster | In-process, optimized, hash-based LZ77, SIMD match |
-| **mvl/gzip (debug)** | **391** | **baseline** | Pure MVL, compiled to unoptimized Rust |
-| mvl/gzip (release) | ~325 | 1.2x faster | Same code, `cargo build --release` |
+| Implementation | µs/iter | vs MVL release | Notes |
+|----------------|---------|----------------|-------|
+| system gzip (C) | ~6700 | 34x slower | Process spawn overhead dominates |
+| rust/flate2 (release) | ~20 | 10x faster | In-process, hash-based LZ77, SIMD match |
+| mvl/gzip (debug) | ~414 | 2.1x slower | Same code, unoptimized Rust (`cargo build`) |
+| **mvl/gzip (release)** | **~194** | **baseline** | Same code, optimized Rust (`cargo build --release`) |
 
 ## Approaches tested but rejected
 
@@ -30,28 +31,18 @@ Benchmark: `make benchmark ITERS=1000` (512-byte "Hello World!" repeated payload
 
 ## Conclusion
 
-**391µs is the algorithmic floor for 512B payloads with the current MVL runtime.** All remaining approaches that avoid per-call allocation converge to ~390-405µs. The gap to flate2 (~12µs, ~33x) is dominated by runtime/compiler factors, not algorithmic choices.
+**194µs/iter in release mode — 16.4x faster than initial implementation, within 10x of flate2.**
 
-## Remaining gap analysis (391µs vs flate2's 12µs ≈ 33x)
+The optimization journey had two distinct phases:
 
-**Algorithmic — tested, no further gains at 512B:**
+1. **Algorithmic (3181µs → 391µs, 8.1x)**: Early-exit loops, direct bit reads, greedy matching, bulk bit writes, while-loop LZ77. All changes to MVL source code.
 
-| Approach | Tested | Result |
-|----------|--------|--------|
-| CRC32 lookup table | Yes | Within noise — allocation cost offsets savings |
-| Inline struct threading | Yes | Within noise — Rust optimizes struct copies |
-| Hash-based LZ77 | Yes | Slower — allocation dominates at 512B |
+2. **Compiler (391µs → 194µs, 2.0x)**: `mvl build --release` passes `--release` to `cargo build`. Rust compiler eliminates bounds checks, inlines functions, runs LLVM optimization passes. Zero changes to MVL source.
 
-**Runtime/compiler (not fixable in MVL code):**
-
-**Runtime/compiler (not fixable in MVL code):**
-
-| Factor | MVL | flate2 | Gap |
-|--------|-----|--------|-----|
-| Build profile | debug (bounds checks, no inlining) | release (full optimization) | ~1.2x |
-| Match comparison | 1 byte/iter via `List.get().unwrap_or().to_int()` | 8 bytes/iter via u64 XOR + trailing_zeros | ~8x |
-| Output buffer | `Vec::push()` with reallocation | Pre-allocated `&mut [u8]` with direct indexing | ~1.5x |
-| Hash table | Linear scan (no `List.set` at time of testing) | Flat `u16[]` array, O(1) lookup | ~2x (for larger payloads) |
+The remaining 10x gap to flate2 is dominated by:
+- 8-byte SIMD match comparison (flate2 uses `u64 XOR` + `trailing_zeros`; MVL does 1 byte/iter)
+- Pre-allocated flat arrays (flate2 uses `&mut [u8]`; MVL uses `Vec::push()`)
+- Hash-based LZ77 (flate2: 1 hash lookup/position; MVL: linear scan — blocked by `List::filled` allocation cost at 512B)
 
 ## How to run
 
@@ -64,4 +55,7 @@ make -C tests/spikes/003-gzip benchmark ITERS=1000
 
 # Unit tests
 make -C tests/spikes/003-gzip test
+
+# Run with release optimizations directly
+mvl run --release tests/spikes/003-gzip/gzip_perf.mvl -- --iterations 100
 ```
