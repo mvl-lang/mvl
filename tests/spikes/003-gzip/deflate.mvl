@@ -84,27 +84,26 @@ fn encode_token(w: BitWriter, tok: Lz77Token) -> BitWriter {
 // ── Decoder ───────────────────────────────────────────────────────────────────
 
 pub total fn deflate_decompress(compressed: val List[Byte]) -> List[Byte] {
-    let bits: List[Int] = bytes_to_bits(val compressed);
+    // Decode directly from byte array — no flat bit-list expansion.
+    let total_bits: Int = compressed.len() * 8;
     let out: ref List[Byte] = [];
     let pos: ref Int = 3;
     let done: ref Bool = false;
-    for _ in range(0, bits.len()) {
-        if !done {
-            let result: DecodeStep = decode_symbol(bits, pos);
-            pos = result.next_pos;
-            if result.sym == 256 {
-                done = true
-            } else if result.sym < 256 {
-                out.push(from_int(result.sym))
-            } else {
-                let llen: LenResult = decode_length(bits, result.sym, pos);
-                pos = llen.next_pos;
-                let dsym: DecodeStep = decode_dist_sym(bits, pos);
-                pos = dsym.next_pos;
-                let ldist: LenResult = decode_dist(bits, dsym.sym, pos);
-                pos = ldist.next_pos;
-                out = expand_backref(out, llen.value, ldist.value)
-            }
+    while !done && pos < total_bits decreases total_bits - pos + 1 {
+        let result: DecodeStep = decode_symbol(val compressed, pos);
+        pos = result.next_pos;
+        if result.sym == 256 {
+            done = true
+        } else if result.sym < 256 {
+            out.push(from_int(result.sym))
+        } else {
+            let llen: LenResult = decode_length(val compressed, result.sym, pos);
+            pos = llen.next_pos;
+            let dsym: DecodeStep = decode_dist_sym(val compressed, pos);
+            pos = dsym.next_pos;
+            let ldist: LenResult = decode_dist(val compressed, dsym.sym, pos);
+            pos = ldist.next_pos;
+            out = expand_backref(out, llen.value, ldist.value)
         }
     }
     out
@@ -113,85 +112,73 @@ pub total fn deflate_decompress(compressed: val List[Byte]) -> List[Byte] {
 type DecodeStep = struct { sym: Int, next_pos: Int }
 type LenResult  = struct { value: Int, next_pos: Int }
 
-fn bytes_to_bits(data: val List[Byte]) -> List[Int] {
-    let bits: ref List[Int] = [];
-    for i in range(0, data.len()) {
-        let b: Int = data.get(i).unwrap_or(from_int(0)).to_int();
-        for bit_idx in range(0, 8) {
-            bits.push((b >> bit_idx) & 1)
-        }
-    }
-    bits
+// Read a single bit directly from a byte array at the given bit position.
+fn get_bit(data: val List[Byte], bit_pos: Int) -> Int {
+    let byte_idx: Int = bit_pos / 8;
+    let bit_idx: Int = bit_pos & 7;
+    let b: Int = data.get(byte_idx).unwrap_or(from_int(0)).to_int();
+    (b >> bit_idx) & 1
 }
 
-fn get_bit(bits: val List[Int], pos: Int) -> Int {
-    bits.get(pos).unwrap_or(0)
-}
-
-// Read n bits from the stream, building the Huffman code MSB-first.
-fn read_code_msb(bits: val List[Int], pos: Int, n: Int) -> Int {
+// Read n bits from the byte array, building the Huffman code MSB-first.
+fn read_code_msb(data: val List[Byte], pos: Int, n: Int) -> Int {
     let code: ref Int = 0;
     for i in range(0, n) {
-        code = (code << 1) | get_bit(val bits, pos + i)
+        code = (code << 1) | get_bit(val data, pos + i)
     }
     code
 }
 
 // Decode one fixed-Huffman literal/length symbol.
-// Reads bits MSB-first (matching the reversed encoder output).
-fn decode_symbol(bits: val List[Int], pos: Int) -> DecodeStep {
-    let code7: Int = read_code_msb(val bits, pos, 7);
+fn decode_symbol(data: val List[Byte], pos: Int) -> DecodeStep {
+    let code7: Int = read_code_msb(val data, pos, 7);
     if code7 <= 23 {
-        // 7-bit: symbols 256-279
         DecodeStep { sym: 256 + code7, next_pos: pos + 7 }
     } else {
-        let code8: Int = (code7 << 1) | get_bit(val bits, pos + 7);
+        let code8: Int = (code7 << 1) | get_bit(val data, pos + 7);
         if code8 >= 0x30 && code8 <= 0xBF {
-            // 8-bit: symbols 0-143
             DecodeStep { sym: code8 - 0x30, next_pos: pos + 8 }
         } else if code8 >= 0xC0 && code8 <= 0xC7 {
-            // 8-bit: symbols 280-287
             DecodeStep { sym: 280 + (code8 - 0xC0), next_pos: pos + 8 }
         } else {
-            // 9-bit: symbols 144-255
-            let code9: Int = (code8 << 1) | get_bit(val bits, pos + 8);
+            let code9: Int = (code8 << 1) | get_bit(val data, pos + 8);
             DecodeStep { sym: 144 + (code9 - 0x190), next_pos: pos + 9 }
         }
     }
 }
 
 // Decode match length from symbol (257-285) + extra bits (LSB-first).
-fn decode_length(bits: val List[Int], sym: Int, pos: Int) -> LenResult {
+fn decode_length(data: val List[Byte], sym: Int, pos: Int) -> LenResult {
     if sym <= 264 {
         LenResult { value: sym - 254, next_pos: pos }
     } else if sym <= 268 {
-        let eb: Int = get_bit(val bits, pos);
+        let eb: Int = get_bit(val data, pos);
         LenResult { value: 11 + (sym - 265) * 2 + eb, next_pos: pos + 1 }
     } else if sym <= 272 {
-        let eb: Int = get_bit(val bits, pos) | (get_bit(val bits, pos + 1) << 1);
+        let eb: Int = get_bit(val data, pos) | (get_bit(val data, pos + 1) << 1);
         LenResult { value: 19 + (sym - 269) * 4 + eb, next_pos: pos + 2 }
     } else if sym <= 276 {
-        let eb: Int = get_bit(val bits, pos) | (get_bit(val bits, pos + 1) << 1) | (get_bit(val bits, pos + 2) << 2);
+        let eb: Int = get_bit(val data, pos) | (get_bit(val data, pos + 1) << 1) | (get_bit(val data, pos + 2) << 2);
         LenResult { value: 35 + (sym - 273) * 8 + eb, next_pos: pos + 3 }
     } else if sym <= 280 {
-        let eb: Int = get_bit(val bits, pos) | (get_bit(val bits, pos + 1) << 1) | (get_bit(val bits, pos + 2) << 2) | (get_bit(val bits, pos + 3) << 3);
+        let eb: Int = get_bit(val data, pos) | (get_bit(val data, pos + 1) << 1) | (get_bit(val data, pos + 2) << 2) | (get_bit(val data, pos + 3) << 3);
         LenResult { value: 67 + (sym - 277) * 16 + eb, next_pos: pos + 4 }
     } else if sym <= 284 {
-        let eb: Int = get_bit(val bits, pos) | (get_bit(val bits, pos + 1) << 1) | (get_bit(val bits, pos + 2) << 2) | (get_bit(val bits, pos + 3) << 3) | (get_bit(val bits, pos + 4) << 4);
+        let eb: Int = get_bit(val data, pos) | (get_bit(val data, pos + 1) << 1) | (get_bit(val data, pos + 2) << 2) | (get_bit(val data, pos + 3) << 3) | (get_bit(val data, pos + 4) << 4);
         LenResult { value: 131 + (sym - 281) * 32 + eb, next_pos: pos + 5 }
     } else {
         LenResult { value: 258, next_pos: pos }
     }
 }
 
-// Decode 5-bit distance symbol (MSB-first, matching reversed encoder output).
-fn decode_dist_sym(bits: val List[Int], pos: Int) -> DecodeStep {
-    let code: Int = read_code_msb(val bits, pos, 5);
+// Decode 5-bit distance symbol (MSB-first).
+fn decode_dist_sym(data: val List[Byte], pos: Int) -> DecodeStep {
+    let code: Int = read_code_msb(val data, pos, 5);
     DecodeStep { sym: code, next_pos: pos + 5 }
 }
 
 // Decode distance value from symbol + extra bits (LSB-first).
-fn decode_dist(bits: val List[Int], sym: Int, pos: Int) -> LenResult {
+fn decode_dist(data: val List[Byte], sym: Int, pos: Int) -> LenResult {
     if sym <= 3 {
         LenResult { value: sym + 1, next_pos: pos }
     } else {
@@ -199,7 +186,7 @@ fn decode_dist(bits: val List[Int], sym: Int, pos: Int) -> LenResult {
         let base_dist: Int = dist_base(sym);
         let eb: ref Int = 0;
         for i in range(0, extra_bits) {
-            eb = eb | (get_bit(val bits, pos + i) << i)
+            eb = eb | (get_bit(val data, pos + i) << i)
         }
         LenResult { value: base_dist + eb, next_pos: pos + extra_bits }
     }

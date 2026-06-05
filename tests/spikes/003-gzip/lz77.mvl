@@ -76,12 +76,11 @@ fn find_best_match(data: val List[Byte], pos: Int, n: Int) -> MatchResult {
 fn match_length(data: val List[Byte], pos: Int, prev: Int, n: Int) -> Int {
     let max_len: Int = if n - pos < 258 { n - pos } else { 258 };
     let len: ref Int = 0;
-    for i in range(0, max_len) {
-        let a: Int = data.get(pos + i).unwrap_or(from_int(0)).to_int();
-        let b: Int = data.get(prev + i).unwrap_or(from_int(0)).to_int();
-        if len == i && a == b {
-            len = len + 1
-        }
+    let go: ref Bool = true;
+    while go && len < max_len decreases max_len - len {
+        let a: Int = data.get(pos + len).unwrap_or(from_int(0)).to_int();
+        let b: Int = data.get(prev + len).unwrap_or(from_int(0)).to_int();
+        if a == b { len = len + 1 } else { go = false }
     }
     len
 }
