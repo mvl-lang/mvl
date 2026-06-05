@@ -11,7 +11,9 @@ ROOT := $(shell git -C "$(dir $(abspath $(lastword $(MAKEFILE_LIST))))" rev-pars
 MVL  := $(ROOT)/target/debug/mvl
 DIR  := tests/spikes/003-gzip
 
-.PHONY: help build guard-mvl check test test-lz77 test-huffman test-deflate test-gzip run-perf
+ITERS ?= 10
+
+.PHONY: help build guard-mvl check test test-lz77 test-huffman test-deflate test-gzip run-perf benchmark
 
 .DEFAULT_GOAL := help
 
@@ -48,5 +50,8 @@ test-deflate: guard-mvl ## Run DEFLATE roundtrip tests
 test-gzip: guard-mvl ## Run full gzip functional tests
 	cd "$(ROOT)" && $(MVL) test $(DIR)/gzip_test.mvl
 
-run-perf: guard-mvl ## Run compression benchmark (sizes, ratios, roundtrip)
-	cd "$(ROOT)" && $(MVL) run $(DIR)/gzip_perf.mvl
+run-perf: guard-mvl ## Run compression ratio report
+	cd "$(ROOT)" && $(MVL) run $(DIR)/gzip_perf.mvl -- 1
+
+benchmark: guard-mvl ## Time MVL vs system gzip vs Rust/flate2 (ITERS=10|100|1000)
+	cd "$(ROOT)" && bash $(DIR)/benchmark.sh $(ITERS)
