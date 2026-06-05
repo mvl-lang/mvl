@@ -1,0 +1,142 @@
+// lz77.mvl — LZ77 sliding-window compression (DEFLATE subset)
+//
+// Implements LZ77 encode/decode using a linear backward scan.
+// Window size: 256 bytes (spike simplification), max match length: 258 bytes.
+// Matches are encoded as (length, distance) pairs; literals as single bytes.
+//
+// Token type:
+//   - literal:  is_literal = true,  value = byte value (0-255)
+//   - backref:  is_literal = false, value = length (3-258), dist = distance (1-256)
+
+pub type Lz77Token = struct {
+    is_literal: Bool,
+    value:      Int,   // literal byte OR match length
+    dist:       Int,   // 0 for literals, 1-256 for back-refs
+}
+
+// ── Encoder ───────────────────────────────────────────────────────────────────
+
+type EncState = struct {
+    tokens: List[Lz77Token],
+    pos:    Int,
+}
+
+pub total fn lz77_encode(data: val List[Byte]) -> List[Lz77Token] {
+    let n: Int = data.len();
+    let st: ref EncState = EncState { tokens: [], pos: 0 };
+    for _ in range(0, n) {
+        st = enc_step(st, data, n)
+    }
+    st.tokens
+}
+
+fn enc_step(st: EncState, data: val List[Byte], n: Int) -> EncState {
+    if st.pos >= n {
+        st
+    } else {
+        let best: MatchResult = find_best_match(data, st.pos, n);
+        if best.length >= 3 {
+            let tok: Lz77Token = Lz77Token {
+                is_literal: false,
+                value:      best.length,
+                dist:       best.dist,
+            };
+            let new_tokens: ref List[Lz77Token] = st.tokens;
+            new_tokens.push(tok);
+            EncState { tokens: new_tokens, pos: st.pos + best.length }
+        } else {
+            let byte_val: Int = data.get(st.pos).unwrap_or(from_int(0)).to_int();
+            let tok: Lz77Token = Lz77Token {
+                is_literal: true,
+                value:      byte_val,
+                dist:       0,
+            };
+            let new_tokens: ref List[Lz77Token] = st.tokens;
+            new_tokens.push(tok);
+            EncState { tokens: new_tokens, pos: st.pos + 1 }
+        }
+    }
+}
+
+type MatchResult = struct { length: Int, dist: Int }
+
+// Linear scan backward up to 256 bytes to find the longest match.
+fn find_best_match(data: val List[Byte], pos: Int, n: Int) -> MatchResult {
+    let win_start: Int = if pos > 256 { pos - 256 } else { 0 };
+    let best: ref MatchResult = MatchResult { length: 0, dist: 0 };
+    for prev in range(win_start, pos) {
+        let ml: Int = match_length(data, pos, prev, n);
+        if ml > best.length {
+            best = MatchResult { length: ml, dist: pos - prev }
+        }
+    }
+    best
+}
+
+fn match_length(data: val List[Byte], pos: Int, prev: Int, n: Int) -> Int {
+    let max_len: Int = if n - pos < 258 { n - pos } else { 258 };
+    let len: ref Int = 0;
+    for i in range(0, max_len) {
+        let a: Int = data.get(pos + i).unwrap_or(from_int(0)).to_int();
+        let b: Int = data.get(prev + i).unwrap_or(from_int(0)).to_int();
+        if len == i && a == b {
+            len = len + 1
+        }
+    }
+    len
+}
+
+// ── Decoder ───────────────────────────────────────────────────────────────────
+
+pub total fn lz77_decode(tokens: val List[Lz77Token]) -> List[Byte] {
+    let out: ref List[Byte] = [];
+    for i in range(0, tokens.len()) {
+        let tok: Lz77Token = tokens.get(i).unwrap_or(Lz77Token { is_literal: true, value: 0, dist: 0 });
+        if tok.is_literal {
+            out.push(from_int(tok.value))
+        } else {
+            out = expand_backref(out, tok.value, tok.dist)
+        }
+    }
+    out
+}
+
+fn expand_backref(out: List[Byte], length: Int, dist: Int) -> List[Byte] {
+    let start: Int = out.len() - dist;
+    let result: ref List[Byte] = out;
+    for i in range(0, length) {
+        let src: Int = start + i;
+        let b: Byte = result.get(src).unwrap_or(from_int(0));
+        result.push(b)
+    }
+    result
+}
+
+// ── Unit tests ────────────────────────────────────────────────────────────────
+
+fn bytes(xs: List[Int]) -> List[Byte] {
+    xs.map(|v: Int| -> Byte { from_int(v) })
+}
+
+test fn lz77_literal_passthrough() -> Unit {
+    let data: List[Byte] = bytes([1, 2, 3, 4, 5]);
+    let tokens: List[Lz77Token] = lz77_encode(val data);
+    let decoded: List[Byte] = lz77_decode(val tokens);
+    assert_eq(decoded, data)
+}
+
+test fn lz77_roundtrip_with_repetition() -> Unit {
+    let data: List[Byte] = bytes([65, 66, 65, 66, 65, 66, 65, 66]);
+    let tokens: List[Lz77Token] = lz77_encode(val data);
+    let decoded: List[Byte] = lz77_decode(val tokens);
+    assert_eq(decoded, data)
+}
+
+test fn lz77_compress_repetitive_data() -> Unit {
+    // "AAAAAAAAAA" should produce fewer tokens than 10 literals
+    let data: List[Byte] = bytes([65, 65, 65, 65, 65, 65, 65, 65, 65, 65]);
+    let tokens: List[Lz77Token] = lz77_encode(val data);
+    let decoded: List[Byte] = lz77_decode(val tokens);
+    assert_eq(decoded, data);
+    assert_eq(tokens.len() < 10, true)
+}

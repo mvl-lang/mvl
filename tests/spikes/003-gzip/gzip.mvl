@@ -1,0 +1,120 @@
+// gzip.mvl — gzip framing (RFC 1952)
+//
+// Wraps a DEFLATE payload in a gzip header and footer.
+//
+// Header (10 bytes, FLG=0):
+//   ID1=0x1F, ID2=0x8B, CM=8, FLG=0, MTIME=0 (4 bytes), XFL=0, OS=0xFF
+// Footer (8 bytes):
+//   CRC32 of original data (4 bytes LE), ISIZE mod 2^32 (4 bytes LE)
+//
+// This spike implementation always writes FLG=0 (no optional header fields).
+// The decompressor trusts that the header is exactly 10 bytes and the footer
+// is 8 bytes — consistent with what gzip_compress produces.
+//
+// Imports:
+use deflate::deflate_compress;
+use deflate::deflate_decompress;
+use bitstream::crc32_step;
+
+// ── Public API ────────────────────────────────────────────────────────────────
+
+pub total fn gzip_compress(data: val List[Byte]) -> List[Byte] {
+    let crc: Int   = compute_crc32(val data);
+    let isize: Int = data.len();
+    let payload: List[Byte] = deflate_compress(val data);
+
+    let out: ref List[Byte] = [];
+    // Header — 10 bytes
+    out.push(from_int(0x1F));  // ID1
+    out.push(from_int(0x8B));  // ID2
+    out.push(from_int(8));     // CM = deflate
+    out.push(from_int(0));     // FLG = no optional fields
+    out.push(from_int(0));     // MTIME byte 0
+    out.push(from_int(0));     // MTIME byte 1
+    out.push(from_int(0));     // MTIME byte 2
+    out.push(from_int(0));     // MTIME byte 3
+    out.push(from_int(0));     // XFL
+    out.push(from_int(0xFF));  // OS = unknown
+    // DEFLATE payload
+    out.extend(payload);
+    // Footer: CRC32 LE
+    out.push(from_int(crc & 0xFF));
+    out.push(from_int((crc >> 8) & 0xFF));
+    out.push(from_int((crc >> 16) & 0xFF));
+    out.push(from_int((crc >> 24) & 0xFF));
+    // Footer: ISIZE LE
+    out.push(from_int(isize & 0xFF));
+    out.push(from_int((isize >> 8) & 0xFF));
+    out.push(from_int((isize >> 16) & 0xFF));
+    out.push(from_int((isize >> 24) & 0xFF));
+    out
+}
+
+pub total fn gzip_decompress(gz: val List[Byte]) -> List[Byte] {
+    // Header is exactly 10 bytes (FLG=0, no optional fields).
+    // Footer is 8 bytes (CRC32 + ISIZE). Payload is everything between.
+    let payload_start: Int = 10;
+    let payload_end: Int   = gz.len() - 8;
+    let compressed: List[Byte] = gz.slice(payload_start, payload_end);
+    deflate_decompress(val compressed)
+}
+
+// ── CRC32 (IEEE 802.3 — same polynomial as gzip) ─────────────────────────────
+
+pub total fn compute_crc32(data: val List[Byte]) -> Int {
+    let crc: ref Int = 0xFFFFFFFF;
+    for i in range(0, data.len()) {
+        let b: Int = data.get(i).unwrap_or(from_int(0)).to_int();
+        crc = crc32_step(crc, b)
+    }
+    crc ^ 0xFFFFFFFF
+}
+
+// ── Unit tests ────────────────────────────────────────────────────────────────
+
+fn bytes(xs: List[Int]) -> List[Byte] {
+    xs.map(|v: Int| -> Byte { from_int(v) })
+}
+
+test fn gzip_header_magic() -> Unit {
+    let data: List[Byte] = bytes([65, 66, 67]);
+    let gz: List[Byte] = gzip_compress(val data);
+    assert_eq(gz.get(0).unwrap_or(from_int(0)).to_int(), 0x1F);
+    assert_eq(gz.get(1).unwrap_or(from_int(0)).to_int(), 0x8B)
+}
+
+test fn gzip_cm_is_deflate() -> Unit {
+    let data: List[Byte] = bytes([65]);
+    let gz: List[Byte] = gzip_compress(val data);
+    assert_eq(gz.get(2).unwrap_or(from_int(0)).to_int(), 8)
+}
+
+test fn gzip_roundtrip_empty() -> Unit {
+    let data: List[Byte] = [];
+    let gz: List[Byte] = gzip_compress(val data);
+    let out: List[Byte] = gzip_decompress(val gz);
+    assert_eq(out, data)
+}
+
+test fn gzip_roundtrip_hello() -> Unit {
+    let data: List[Byte] = bytes([72, 101, 108, 108, 111]);
+    let gz: List[Byte] = gzip_compress(val data);
+    let out: List[Byte] = gzip_decompress(val gz);
+    assert_eq(out, data)
+}
+
+test fn gzip_roundtrip_repetitive() -> Unit {
+    let data: ref List[Byte] = [];
+    for _ in range(0, 20) {
+        data.push(from_int(65))
+    }
+    let gz: List[Byte] = gzip_compress(val data);
+    let out: List[Byte] = gzip_decompress(val gz);
+    assert_eq(out.len(), 20)
+}
+
+test fn crc32_empty_is_zero() -> Unit {
+    let empty: List[Byte] = [];
+    let crc: Int = compute_crc32(val empty);
+    assert_eq(crc, 0)
+}

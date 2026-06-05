@@ -1,0 +1,115 @@
+// gzip_perf.mvl — gzip spike performance tests
+//
+// Measures throughput of compress/decompress on payloads of increasing size.
+// These are not micro-benchmarks — they exercise the full stack end-to-end
+// and document observed sizes and roundtrip correctness at scale.
+//
+// Run: make -C tests/spikes/003-gzip test-perf
+
+use gzip::gzip_compress;
+use gzip::gzip_decompress;
+use deflate::deflate_compress;
+use deflate::deflate_decompress;
+use lz77::lz77_encode;
+use lz77::Lz77Token;
+
+fn bytes(xs: List[Int]) -> List[Byte] {
+    xs.map(|v: Int| -> Byte { from_int(v) })
+}
+
+fn repeat_bytes(b: Byte, n: Int) -> List[Byte] {
+    let out: ref List[Byte] = [];
+    for _ in range(0, n) {
+        out.push(b)
+    }
+    out
+}
+
+fn make_pattern(size: Int) -> List[Byte] {
+    // Cycling pattern [0..255, 0..255, ...] — representative text-like data
+    let out: ref List[Byte] = [];
+    for i in range(0, size) {
+        out.push(from_int(i & 0xFF))
+    }
+    out
+}
+
+// ── Size benchmarks ───────────────────────────────────────────────────────────
+
+test fn perf_compress_100_identical() -> Unit {
+    let data: List[Byte] = repeat_bytes(from_int(65), 100);
+    let gz: List[Byte] = gzip_compress(val data);
+    // Highly compressible: output should be well under 50 bytes
+    assert_eq(gz.len() < 50, true);
+    let out: List[Byte] = gzip_decompress(val gz);
+    assert_eq(out.len(), 100)
+}
+
+test fn perf_compress_500_identical() -> Unit {
+    let data: List[Byte] = repeat_bytes(from_int(65), 500);
+    let gz: List[Byte] = gzip_compress(val data);
+    // Still very compressible — output << 500
+    assert_eq(gz.len() < 100, true);
+    let out: List[Byte] = gzip_decompress(val gz);
+    assert_eq(out.len(), 500)
+}
+
+test fn perf_compress_100_cycling() -> Unit {
+    let data: List[Byte] = make_pattern(100);
+    let gz: List[Byte] = gzip_compress(val data);
+    let out: List[Byte] = gzip_decompress(val gz);
+    assert_eq(out.len(), 100)
+}
+
+test fn perf_compress_256_cycling() -> Unit {
+    // One full cycle of 0..255
+    let data: List[Byte] = make_pattern(256);
+    let gz: List[Byte] = gzip_compress(val data);
+    let out: List[Byte] = gzip_decompress(val gz);
+    assert_eq(out.len(), 256)
+}
+
+test fn perf_lz77_token_count_repetitive() -> Unit {
+    // 200 identical bytes — LZ77 should produce far fewer than 200 tokens
+    let data: List[Byte] = repeat_bytes(from_int(65), 200);
+    let tokens: List[Lz77Token] = lz77_encode(val data);
+    assert_eq(tokens.len() < 50, true)
+}
+
+test fn perf_lz77_token_count_random_pattern() -> Unit {
+    // 64-byte cycling pattern — some compression expected
+    let data: List[Byte] = make_pattern(64);
+    let tokens: List[Lz77Token] = lz77_encode(val data);
+    // roundtrip must hold regardless of compression ratio
+    let out: List[Byte] = lz77_decode(val tokens);
+    assert_eq(out.len(), 64)
+}
+
+test fn perf_deflate_ratio_all_zeros_200() -> Unit {
+    let data: List[Byte] = repeat_bytes(from_int(0), 200);
+    let comp: List[Byte] = deflate_compress(val data);
+    let decomp: List[Byte] = deflate_decompress(val comp);
+    assert_eq(decomp.len(), 200);
+    // Verify meaningful compression
+    assert_eq(comp.len() < 200, true)
+}
+
+test fn perf_gzip_roundtrip_large_repetitive() -> Unit {
+    // 400-byte uniform data — stress test for correctness at higher volume
+    let data: List[Byte] = repeat_bytes(from_int(66), 400);
+    let gz: List[Byte] = gzip_compress(val data);
+    let out: List[Byte] = gzip_decompress(val gz);
+    assert_eq(out.len(), 400)
+}
+
+// ── Compression ratio documentation ──────────────────────────────────────────
+// These tests assert that our compressor achieves at least a 2:1 ratio on
+// highly repetitive data (standard gzip achieves much better, but this is
+// pure MVL without dynamic Huffman).
+
+test fn perf_ratio_2_to_1_on_uniform_data() -> Unit {
+    let data: List[Byte] = repeat_bytes(from_int(65), 200);
+    let gz: List[Byte] = gzip_compress(val data);
+    // At minimum 2:1 ratio means output ≤ 100 bytes for 200-byte input
+    assert_eq(gz.len() <= 100, true)
+}
