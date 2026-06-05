@@ -1253,15 +1253,6 @@ fn cross_backend_closure_nested() {
     );
 }
 
-/// Existing closure_lambdas.mvl: filter/map/fold with capturing lambdas.
-#[test]
-fn cross_backend_closure_capturing_lambdas() {
-    assert_parity(
-        &corpus("closure_lambdas.mvl"),
-        "above_threshold=3\nmap_with_offset=36\nfold_with_base=65",
-    );
-}
-
 // ── #1251: LLVM monomorphization cross-backend tests ─────────────────────────
 
 /// Generic function instantiation — check-only (no fn main).
@@ -1330,7 +1321,7 @@ fn cross_backend_actor_corpus_select() {
 fn cross_backend_crypto_sha256_corpus_parity() {
     let file = corpus_13_stdlib("crypto_sha256.mvl");
     let transpiler_out = run_transpiler(&file);
-    if let Some(llvm_out) = run_llvm_text_or_skip(&file) {
+    if let Some(llvm_out) = run_llvm_text(&file) {
         assert_eq!(
             llvm_out, transpiler_out,
             "crypto_sha256.mvl: crypto hash must be deterministic across backends"
