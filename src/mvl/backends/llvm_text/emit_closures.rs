@@ -70,7 +70,22 @@ impl TextEmitter {
             Expr::Unary { expr, .. } => {
                 self.walk_expr_for_captures(expr, exclude, seen, caps);
             }
-            Expr::FnCall { args, .. } => {
+            Expr::FnCall { name, args, .. } => {
+                // If the callee is a local closure binding, capture it too.
+                if !exclude.contains(name)
+                    && !seen.contains(name)
+                    && (self.locals.contains_key(name) || self.ref_locals.contains_key(name))
+                {
+                    if let Some(ty) = self
+                        .local_mvl_types
+                        .get(name)
+                        .cloned()
+                        .or_else(|| self.ref_locals.get(name).map(|rl| rl.elem_ty.clone()))
+                    {
+                        seen.insert(name.clone());
+                        caps.push((name.clone(), ty));
+                    }
+                }
                 for a in args {
                     self.walk_expr_for_captures(a, exclude, seen, caps);
                 }

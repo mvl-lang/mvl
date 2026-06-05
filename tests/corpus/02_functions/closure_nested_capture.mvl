@@ -4,7 +4,7 @@
 // demonstrating closure-over-closure semantics.
 //
 // Expected stdout:
-//   composed=25
+//   composed=26
 //   pipeline=14
 
 fn main() -> Unit ! Console {
