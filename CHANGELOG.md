@@ -2,6 +2,30 @@
 
 ## [Unreleased]
 
+## [0.188.0] - 2026-06-05
+
+### Added
+
+- **`source_digest` field in `std.runtime.Manifest`** (#1246)
+  - `Manifest.source_digest: String` — SHA-256 tree digest of all `.mvl` source files, computed at compile time
+  - `manifest_to_logfmt`, `manifest_to_json`, `manifest_to_block` updated to include `source_digest`
+  - `load_and_generate()` computes digest from the source file's own project root (not the invoking cwd)
+  - Corpus test: `tests/corpus/13_stdlib/runtime_manifest_source_digest.mvl`
+
+### Fixed
+
+- **`app_name`/`app_version` now read from the entry file's `mvl.toml`** (#1246)
+  - Added `manifest_root` parameter to `load_and_generate()` separate from `project_root`
+  - `project_root` (from cwd) used for package lock resolution; `manifest_root` (from entry file dir) used for app identity
+  - Fixes `mvl run examples/crud_api/main.mvl` showing `app=mvl_language` instead of `app=crud_api`
+
+### Changed
+
+- **`crud_api` example startup logging restructured** (#1246)
+  - Three focused log lines: `application` (app, version, built), `versions` (mvl, runtime, stdlib), `source` (digest)
+  - Followed by `settings` (host, port, log_level, log_format, db_path), optional seeding, then `listening`
+  - `examples/crud_api/mvl.toml` bumped to `v0.2.0`
+
 ## [0.187.0] - 2026-06-05
 
 ### Added

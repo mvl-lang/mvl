@@ -120,7 +120,19 @@ pub fn run(path: &str, run: bool, run_args: &[String], assert_mode: AssertMode, 
     // `use pkg.<self>` imports — without it, the same package would be loaded
     // every round (#1050).
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    // project_root: used for package resolution (mvl.lock). Starts from cwd so that
+    // Makefiles that invoke `cd REPO_ROOT && mvl build examples/foo/main.mvl` use the
+    // repo-level lock file which has all packages installed.
     let project_root = super::find_project_root(&cwd);
+    // manifest_root: used only for app metadata (app_name, app_version, source_digest).
+    // Starts from the source file's own directory so that the example's own mvl.toml is
+    // used instead of the repo root's mvl.toml.
+    let manifest_root = {
+        let abs = entry_dir
+            .canonicalize()
+            .unwrap_or_else(|_| cwd.join(entry_dir));
+        super::find_project_root(&abs)
+    };
     let mut pkg_progs: Vec<_> = Vec::new();
     let mut seen_pkgs = std::collections::HashSet::<String>::new();
     let mut frontier: Vec<_> = all_progs.clone();
@@ -145,7 +157,7 @@ pub fn run(path: &str, run: bool, run_args: &[String], assert_mode: AssertMode, 
     // Phase 3 additionally collects FFI bridges from extern blocks in all_with_pkgs.
     if manifest_embed::any_uses_std_runtime(&all_with_pkgs) {
         if let Some(override_prog) =
-            manifest_embed::load_and_generate(&project_root, &all_with_pkgs, "rust")
+            manifest_embed::load_and_generate(&project_root, &manifest_root, &all_with_pkgs, "rust")
         {
             stdlib_prelude_progs.insert(0, override_prog);
         }
