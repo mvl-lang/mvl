@@ -147,6 +147,20 @@ partial fn main() -> Unit ! AppIO {
     };
 
     let logger: Logger = Logger { format: cfg.log_format, min_level: cfg.log_level, fd: stderr() };
+    let m: Manifest = manifest();
+    logger.info("application", {
+        "app":     m.app_name,
+        "version": m.app_version,
+        "built":   m.build.date,
+    });
+    logger.info("versions", {
+        "mvl":     m.mvl_version,
+        "runtime": m.runtime_version,
+        "stdlib":  m.stdlib_version,
+    });
+    logger.info("source", {
+        "digest": m.source_digest,
+    });
 
     let db: SqliteDb = match db_open(cfg.db_path) {
         Err(msg) => { logger.error("db open failed", {"error": msg}); return },
@@ -158,6 +172,16 @@ partial fn main() -> Unit ! AppIO {
         Ok(_)    => {},
     }
 
+    let router: Router = setup_router();
+
+    logger.info("settings", {
+        "host":       cfg.host,
+        "port":       cfg.port.to_string(),
+        "log_level":  log_level_name(cfg.log_level),
+        "log_format": log_format_name(cfg.log_format),
+        "db_path":    cfg.db_path,
+    });
+
     if cfg.seed_file != "" {
         logger.info("seeding from CSV", {"path": cfg.seed_file});
         match db_seed_from_csv(db, logger, cfg.seed_file) {
@@ -166,17 +190,7 @@ partial fn main() -> Unit ! AppIO {
         }
     } else {}
 
-    let router: Router = setup_router();
-    let m: Manifest = manifest();
-
-    logger.info("crud_api listening", {
-        "host":       cfg.host,
-        "port":       cfg.port.to_string(),
-        "log_level":  log_level_name(cfg.log_level),
-        "log_format": log_format_name(cfg.log_format),
-        "built":      m.build.date,
-        "source":     m.source_digest,
-    });
+    logger.info("listening", {"status": "ready"});
 
     match tcp_listen(cfg.host, cfg.port) {
         Err(e) => logger.error("listen failed", {"error": net_error_msg(e)}),

@@ -120,7 +120,12 @@ pub fn run(path: &str, run: bool, run_args: &[String], assert_mode: AssertMode, 
     // `use pkg.<self>` imports — without it, the same package would be loaded
     // every round (#1050).
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let project_root = super::find_project_root(&cwd);
+    // Search from the source file's own directory so that `mvl run examples/foo/main.mvl`
+    // (invoked from the repo root) picks up examples/foo/mvl.toml, not the root mvl.toml.
+    let entry_dir_abs = entry_dir
+        .canonicalize()
+        .unwrap_or_else(|_| cwd.join(entry_dir));
+    let project_root = super::find_project_root(&entry_dir_abs);
     let mut pkg_progs: Vec<_> = Vec::new();
     let mut seen_pkgs = std::collections::HashSet::<String>::new();
     let mut frontier: Vec<_> = all_progs.clone();
