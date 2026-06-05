@@ -2,37 +2,32 @@
 // The BWT permutes a byte block so similar bytes cluster together,
 // enabling much better compression in the subsequent MTF + Huffman stages.
 //
-// Byte values are stored as Int (0-255) for literal convenience.
+// Byte values are stored as Byte (u8) — same density as Rust's Vec<u8>.
 //
-// R2 (memory safety): encode borrows input via val List[Int] — avoids cloning
+// R2 (memory safety): encode borrows input via val List[Byte] — avoids cloning
 //   blocks that can be up to 900KB. Only rotation metadata is allocated.
 // R3 (totality): all for-loop helpers are bounded.
 // R7 (effects): pure — no file or console access.
 
 pub type BwtResult = struct {
-    data:    List[Int],
+    data:    List[Byte],
     primary: Int,       // index of original string in sorted rotation order
 }
 
 // Encode: sort all cyclic rotations, extract the last column.
-// The last column is what bzip2 stores; it can be decoded losslessly
-// given the primary index.
-pub total fn bwt_encode(input: val List[Int]) -> BwtResult {
+pub total fn bwt_encode(input: val List[Byte]) -> BwtResult {
     let n: Int = input.len();
-    // Build all cyclic rotations (each is a new List[Int])
-    let rotations: ref List[List[Int]] = [];
+    let rotations: ref List[List[Byte]] = [];
     for i in range(0, n) {
         rotations.push(make_rotation(input, n, i))
     }
-    // Sort lexicographically — natural sort on List[Int] compares element-by-element
-    let sorted: List[List[Int]] = rotations.sort();
-    // Find which sorted row corresponds to the original (rotation starting at 0)
-    let original: List[Int] = make_rotation(input, n, 0);
-    let last: ref List[Int] = [];
+    let sorted: List[List[Byte]] = rotations.sort();
+    let original: List[Byte] = make_rotation(input, n, 0);
+    let last: ref List[Byte] = [];
     let primary: ref Int = 0;
     for idx in range(0, n) {
-        let rot: List[Int] = sorted.get(idx).unwrap_or([]);
-        last.push(rot.get(n - 1).unwrap_or(0));
+        let rot: List[Byte] = sorted.get(idx).unwrap_or([]);
+        last.push(rot.get(n - 1).unwrap_or(from_int(0)));
         if rot == original {
             primary = idx
         }
@@ -41,28 +36,24 @@ pub total fn bwt_encode(input: val List[Int]) -> BwtResult {
 }
 
 // Build cyclic rotation starting at index i: input[i..] ++ input[..i]
-fn make_rotation(input: val List[Int], n: Int, i: Int) -> List[Int] {
-    let rot: ref List[Int] = input.slice(i, n);
-    let head: List[Int] = input.slice(0, i);
+fn make_rotation(input: val List[Byte], n: Int, i: Int) -> List[Byte] {
+    let rot: ref List[Byte] = input.slice(i, n);
+    let head: List[Byte] = input.slice(0, i);
     rot.extend(head);
     rot
 }
 
 // Decode: reconstruct original block from last column + primary index.
-// Takes BwtResult by value (consumed after decode — caller doesn't need it again).
-pub total fn bwt_decode(block: BwtResult) -> List[Int] {
-    // Bind to local to signal ownership transfer (prevents auto-borrow inference).
+pub total fn bwt_decode(block: BwtResult) -> List[Byte] {
     let owned: BwtResult = block;
     let n: Int = owned.data.len();
-    // First column = sorted copy of last column.
-    let first: List[Int] = sort_copy(val owned.data);
-    // build_t computes LF-mapping; invert it to get FL-mapping for forward reconstruction.
+    let first: List[Byte] = sort_copy(val owned.data);
     let lf: List[Int] = build_t(val owned.data, val first, n);
     let fl: List[Int] = invert_perm(lf, n);
-    let result: ref List[Int] = [];
+    let result: ref List[Byte] = [];
     let pos: ref Int = owned.primary;
     for _step in range(0, n) {
-        result.push(first.get(pos).unwrap_or(0));
+        result.push(first.get(pos).unwrap_or(from_int(0)));
         pos = fl.get(pos).unwrap_or(0)
     }
     result
@@ -79,15 +70,12 @@ fn invert_perm(perm: List[Int], n: Int) -> List[Int] {
 }
 
 // Build the T-vector for BWT decode.
-// t[i] = position in first[] where last[i] "maps to" (accounting for rank).
-fn build_t(last: val List[Int], first: val List[Int], n: Int) -> List[Int] {
-    // seen[sym] tracks how many times sym has appeared in last[0..i]
+fn build_t(last: val List[Byte], first: val List[Byte], n: Int) -> List[Int] {
     let seen: ref List[Int] = range(0, 256).map(zero_int);
-    // first_occ[sym] = index of first occurrence of sym in first[] (or n if absent)
     let first_occ: List[Int] = build_first_occ(first, n);
     let t: ref List[Int] = range(0, n).map(zero_int);
     for i in range(0, n) {
-        let sym: Int = last.get(i).unwrap_or(0);
+        let sym: Int = last.get(i).unwrap_or(from_int(0)).to_int();
         let rank: Int = seen.get(sym).unwrap_or(0);
         let f_pos: Int = first_occ.get(sym).unwrap_or(0) + rank;
         t = int_list_set(t, i, f_pos);
@@ -96,11 +84,11 @@ fn build_t(last: val List[Int], first: val List[Int], n: Int) -> List[Int] {
     t
 }
 
-// Build first-occurrence table: first_occ[sym] = smallest i where first[i] == sym.
-fn build_first_occ(first: val List[Int], n: Int) -> List[Int] {
-    let occ: ref List[Int] = range(0, 256).map(|_x: Int| -> Int { n }); // n = "not present"
+// Build first-occurrence table.
+fn build_first_occ(first: val List[Byte], n: Int) -> List[Int] {
+    let occ: ref List[Int] = range(0, 256).map(|_x: Int| -> Int { n });
     for i in range(0, n) {
-        let sym: Int = first.get(i).unwrap_or(0);
+        let sym: Int = first.get(i).unwrap_or(from_int(0)).to_int();
         if occ.get(sym).unwrap_or(0) == n {
             occ = int_list_set(occ, sym, i)
         }
@@ -110,17 +98,13 @@ fn build_first_occ(first: val List[Int], n: Int) -> List[Int] {
 
 // ── Shared helpers ─────────────────────────────────────────────────────────────
 
-// Sort a list of ints without consuming the original.
-// The borrow prevents the transpiler from moving block.data into the sort.
-fn sort_copy(data: val List[Int]) -> List[Int] {
-    let copy: List[Int] = data.slice(0, data.len());
+fn sort_copy(data: val List[Byte]) -> List[Byte] {
+    let copy: List[Byte] = data.slice(0, data.len());
     copy.sort()
 }
 
 fn zero_int(_x: Int) -> Int { 0 }
 
-// Functional update: return a new list with list[idx] replaced by new_val.
-// Used throughout because list mutation (push/extend) is append-only.
 fn int_list_set(list: List[Int], idx: Int, new_val: Int) -> List[Int] {
     let before: List[Int] = list.slice(0, idx);
     let after: List[Int]  = list.slice(idx + 1, list.len());
@@ -132,23 +116,27 @@ fn int_list_set(list: List[Int], idx: Int, new_val: Int) -> List[Int] {
 
 // ── Unit tests ────────────────────────────────────────────────────────────────
 
+fn b(xs: List[Int]) -> List[Byte] {
+    xs.map(|v: Int| -> Byte { from_int(v) })
+}
+
 test fn bwt_known_transform() -> Unit {
     // "banana" = [98, 97, 110, 97, 110, 97]; BWT primary index = 3
-    let input: List[Int] = [98, 97, 110, 97, 110, 97];
+    let input: List[Byte] = b([98, 97, 110, 97, 110, 97]);
     let result: BwtResult = bwt_encode(val input);
     assert_eq(result.primary, 3)
 }
 
 test fn bwt_roundtrip_short() -> Unit {
-    let input: List[Int] = [104, 101, 108, 108, 111]; // "hello"
+    let input: List[Byte] = b([104, 101, 108, 108, 111]); // "hello"
     let encoded: BwtResult = bwt_encode(val input);
-    let decoded: List[Int] = bwt_decode(encoded);
+    let decoded: List[Byte] = bwt_decode(encoded);
     assert_eq(decoded, input)
 }
 
 test fn bwt_roundtrip_repeated_bytes() -> Unit {
-    let input: List[Int] = [65, 65, 65, 66, 66, 65]; // AAABBA
+    let input: List[Byte] = b([65, 65, 65, 66, 66, 65]); // AAABBA
     let encoded: BwtResult = bwt_encode(val input);
-    let decoded: List[Int] = bwt_decode(encoded);
+    let decoded: List[Byte] = bwt_decode(encoded);
     assert_eq(decoded, input)
 }

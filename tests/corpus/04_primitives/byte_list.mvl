@@ -1,0 +1,53 @@
+// Corpus: List[Byte] as a first-class generic type (#1255)
+//
+// Validates that List[Byte] works for construction, iteration, function
+// passing, and use of Byte values as lookup-table indices.
+// All examples must parse and type-check without errors.
+
+// Construct a List[Byte] from explicit byte values.
+fn make_byte_list() -> List[Byte] {
+    [from_int(65), from_int(66), from_int(67)]
+}
+
+// Accept List[Byte] by value and return element count.
+fn byte_list_len(data: List[Byte]) -> Int {
+    data.len()
+}
+
+// Borrow a List[Byte] and sum the int values of each byte.
+fn sum_bytes(data: val List[Byte]) -> Int {
+    let acc: ref Int = 0;
+    for b in data {
+        acc = acc + b.to_int()
+    }
+    acc
+}
+
+// Copy bytes into a new list — demonstrates push to List[Byte].
+fn copy_bytes(src: val List[Byte]) -> List[Byte] {
+    let out: ref List[Byte] = [];
+    for b in src {
+        out.push(b)
+    }
+    out
+}
+
+// Use a Byte value as an index into an Int lookup table.
+// Common pattern in compression algorithms (alphabet lookup).
+fn lookup_table(table: List[Int], key: Byte) -> Int {
+    table.get(key.to_int()).unwrap_or(0)
+}
+
+// Pass List[Byte] through a function and get it back.
+fn identity_bytes(xs: List[Byte]) -> List[Byte] {
+    xs
+}
+
+// Build a byte list from an integer range using from_int.
+fn byte_range(n: Int) -> List[Byte] {
+    let out: ref List[Byte] = [];
+    for i in range(0, n) {
+        out.push(from_int(i))
+    }
+    out
+}

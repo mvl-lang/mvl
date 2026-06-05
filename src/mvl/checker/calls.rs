@@ -331,11 +331,13 @@ impl TypeChecker {
                 "Some" => return Ty::Option(Box::new(first_arg)),
                 "Ok" => return Ty::Result(Box::new(first_arg), Box::new(Ty::Unknown)),
                 "Err" => return Ty::Result(Box::new(Ty::Unknown), Box::new(first_arg)),
-                // Byte constructor: from_int(n: Int) -> Byte  (wrapping cast)
-                "from_int" => {
+                // Byte constructors:
+                //   from_int(n)          — safe, requires n ∈ [0, 255] (prover-enforced)
+                //   wrapping_from_int(n) — intentional truncation, any Int
+                "from_int" | "wrapping_from_int" => {
                     if arg_count != 1 {
                         self.emit(CheckError::WrongArgCount {
-                            name: "from_int".to_string(),
+                            name: name.to_string(),
                             expected: 1,
                             found: arg_count,
                             span,

@@ -154,3 +154,37 @@ test fn trim_no_whitespace() -> Unit {
 test fn trim_all_whitespace() -> Unit {
     assert_eq("   ".trim(), "");
 }
+
+// ── byte_at ───────────────────────────────────────────────────────────────────
+
+test fn byte_at_ascii_A() -> Unit {
+    assert_eq("A".byte_at(0).to_int(), 65)
+}
+
+test fn byte_at_mid_string() -> Unit {
+    assert_eq("Hello".byte_at(1).to_int(), 101)  // 'e' = 101
+}
+
+test fn byte_at_out_of_range_returns_zero() -> Unit {
+    assert_eq("hi".byte_at(10).to_int(), 0)
+}
+
+// ── from_bytes ────────────────────────────────────────────────────────────────
+
+test fn from_bytes_roundtrip_hello() -> Unit {
+    let bytes: List[Byte] = [from_int(72), from_int(101), from_int(108), from_int(108), from_int(111)];
+    assert_eq(String::from_bytes(bytes), "Hello")
+}
+
+test fn from_bytes_then_byte_at_roundtrip() -> Unit {
+    let bytes: List[Byte] = [from_int(65), from_int(66), from_int(67)];
+    let s: String = String::from_bytes(bytes);
+    assert_eq(s.byte_at(0).to_int(), 65);
+    assert_eq(s.byte_at(1).to_int(), 66);
+    assert_eq(s.byte_at(2).to_int(), 67)
+}
+
+test fn from_bytes_empty() -> Unit {
+    let bytes: List[Byte] = [];
+    assert_eq(String::from_bytes(bytes), "")
+}

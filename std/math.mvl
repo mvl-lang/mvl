@@ -214,8 +214,22 @@ pub fn bool_to_string(b: Bool) -> String {
 // Byte is an 8-bit unsigned integer (u8 in Rust).  All operations mirror the
 // Int set; types are Byte for both receiver and arguments unless noted.
 
-/// Cast `n: Int` to `Byte`, wrapping on overflow (i64 → u8 wrapping cast).
-pub builtin fn from_int(n: Int) -> Byte
+/// Cast `n: Int` to `Byte`.
+///
+/// **Requires `n ∈ [0, 255]`.**  The prover enforces this constraint at each
+/// call site; constant violations are compile-time errors, dynamic violations
+/// produce runtime assertions.
+///
+/// For intentional out-of-range truncation (e.g., computing values modulo 256,
+/// processing raw bit-streams), use `wrapping_from_int` instead.
+pub builtin fn from_int(n: Int where self >= 0 && self <= 255) -> Byte
+
+/// Cast `n: Int` to `Byte`, wrapping on overflow (i64 → u8 two's-complement).
+///
+/// Identical to Rust's `n as u8`.  Use only when truncation is intentional —
+/// e.g., CRC computation, bit-stream accumulators, or explicit modular arithmetic.
+/// Prefer `from_int` for all other byte construction; it enforces range safety.
+pub builtin fn wrapping_from_int(n: Int) -> Byte
 
 /// Reinterpret `b` as an `Int` (zero-extending u8 → i64).
 pub fn byte_to_int(b: Byte) -> Int { b.to_int() }
