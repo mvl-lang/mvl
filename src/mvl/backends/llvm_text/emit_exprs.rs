@@ -873,12 +873,6 @@ impl TextEmitter {
                 arg_vals.push((ty, v));
             }
         }
-        let args_str = arg_vals
-            .iter()
-            .map(|(ty, v)| format!("{ty} {v}"))
-            .collect::<Vec<_>>()
-            .join(", ");
-
         let ret_ty = self
             .fn_ret_types
             .get(name)
@@ -893,18 +887,44 @@ impl TextEmitter {
         let is_void = Self::is_void(&ret_ty);
 
         // If this is a builtin fn, dispatch to the C-ABI symbol directly.
-        let (effective_name, is_c_builtin): (String, bool) =
+        // For opaque handle types (where the SSA register actually holds `ptr`
+        // but type_of_expr reports `%StructName`), rewrite the argument type to
+        // `ptr` so the LLVM declare and call match the register's true type.
+        // Inline struct values (e.g. Duration from a constructor) keep their
+        // struct type — reg_types will hold `%Duration`, not `ptr`.
+        let (effective_name, is_c_builtin, args_str): (String, bool, String) =
             if let Some(c_sym) = self.builtin_syms.get(name).cloned() {
-                // Emit extern declare if not already present (use arg types from call site).
-                let param_tys = arg_vals
+                let c_abi_args: Vec<(String, &str)> = arg_vals
+                    .iter()
+                    .map(|(ty, v)| {
+                        let actual_ty = self.reg_types.get(v).cloned();
+                        let abi_ty = if ty.starts_with('%') && actual_ty.as_deref() == Some("ptr") {
+                            "ptr".to_string()
+                        } else {
+                            ty.clone()
+                        };
+                        (abi_ty, v.as_str())
+                    })
+                    .collect();
+                let param_tys = c_abi_args
                     .iter()
                     .map(|(ty, _)| ty.as_str())
                     .collect::<Vec<_>>()
                     .join(", ");
                 self.ensure_extern(&format!("declare {llvm_ret} @{c_sym}({param_tys})"));
-                (c_sym, true)
+                let abi_args_str = c_abi_args
+                    .iter()
+                    .map(|(ty, v)| format!("{ty} {v}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                (c_sym, true, abi_args_str)
             } else {
-                (name.to_string(), false)
+                let args_str = arg_vals
+                    .iter()
+                    .map(|(ty, v)| format!("{ty} {v}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                (name.to_string(), false, args_str)
             };
 
         if is_void {
