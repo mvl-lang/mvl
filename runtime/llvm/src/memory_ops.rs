@@ -995,11 +995,13 @@ pub struct MvlClosure {
 
 /// `List_filter(list, closure)` — keep elements where `closure(elem)` is true.
 ///
-/// Only supports 8-byte (i64) elements — all MVL scalar types use `elem_size=8`.
+/// Supports any element size.  The closure receives a *pointer* to each element
+/// (not the element by value), so it works for both scalars and aggregates like
+/// `Option[Int]` (`{ i8, ptr }`).
 ///
 /// # Safety
-/// `list` must be a valid `MvlArray*` with `elem_size == 8`.  `closure` must
-/// point to a valid `MvlClosure` whose `fn_ptr` has signature `fn(ptr, i64) -> i1`.
+/// `list` must be a valid `MvlArray*`.  `closure` must point to a valid
+/// `MvlClosure` whose `fn_ptr` has signature `fn(env: ptr, elem: ptr) -> i1`.
 #[no_mangle]
 pub unsafe extern "C" fn List_filter(
     list: *mut MvlArray,
@@ -1013,14 +1015,13 @@ pub unsafe extern "C" fn List_filter(
     }
     let len = (*list).len as usize;
     let es = (*list).elem_size as usize;
-    debug_assert_eq!(es, 8, "List_filter: only 8-byte (i64) elements supported");
     let out = mvl_array_new(es, len.max(1));
-    let pred: unsafe extern "C" fn(*const u8, i64) -> bool = std::mem::transmute((*closure).fn_ptr);
+    let pred: unsafe extern "C" fn(*const u8, *const u8) -> bool =
+        std::mem::transmute((*closure).fn_ptr);
     let env = (*closure).env_ptr as *const u8;
     for i in 0..len {
         let elem_ptr = (*list).ptr.add(i * es);
-        let elem_val = *(elem_ptr as *const i64);
-        if pred(env, elem_val) {
+        if pred(env, elem_ptr) {
             _mvl_array_push(out, elem_ptr);
         }
     }
@@ -1029,11 +1030,12 @@ pub unsafe extern "C" fn List_filter(
 
 /// `List_map(list, closure)` — transform each element via `closure(elem)`.
 ///
-/// Only supports i64→i64 mappings (output `elem_size` == input `elem_size`).
+/// The closure receives a pointer to each element and returns an i64-sized
+/// result (output `elem_size` == 8).  Input elements can be any size.
 ///
 /// # Safety
-/// `list` must be a valid `MvlArray*` with `elem_size == 8`.  `closure` must
-/// point to a valid `MvlClosure` whose `fn_ptr` has signature `fn(ptr, i64) -> i64`.
+/// `list` must be a valid `MvlArray*`.  `closure` must point to a valid
+/// `MvlClosure` whose `fn_ptr` has signature `fn(env: ptr, elem: ptr) -> i64`.
 #[no_mangle]
 pub unsafe extern "C" fn List_map(
     list: *mut MvlArray,
@@ -1047,15 +1049,13 @@ pub unsafe extern "C" fn List_map(
     }
     let len = (*list).len as usize;
     let es = (*list).elem_size as usize;
-    debug_assert_eq!(es, 8, "List_map: only 8-byte (i64) elements supported");
     let out = mvl_array_new(es, len.max(1));
-    let map_fn: unsafe extern "C" fn(*const u8, i64) -> i64 =
+    let map_fn: unsafe extern "C" fn(*const u8, *const u8) -> i64 =
         std::mem::transmute((*closure).fn_ptr);
     let env = (*closure).env_ptr as *const u8;
     for i in 0..len {
         let elem_ptr = (*list).ptr.add(i * es);
-        let elem_val = *(elem_ptr as *const i64);
-        let result = map_fn(env, elem_val);
+        let result = map_fn(env, elem_ptr);
         _mvl_array_push(out, (&result as *const i64) as *const u8);
     }
     out
@@ -1064,15 +1064,15 @@ pub unsafe extern "C" fn List_map(
 /// `List_fold(list, acc_ptr, closure)` — reduce list with accumulator.
 ///
 /// `acc_ptr` points to the initial accumulator value (stack-allocated by the
-/// caller).  The closure has signature `fn(env, acc, elem) -> acc`.  The final
-/// accumulator is written back to `acc_ptr`, which is also returned.
+/// caller).  The closure has signature `fn(env, acc_val, elem_ptr) -> acc_val`.
+/// The final accumulator is written back to `acc_ptr`, which is also returned.
 ///
-/// Only supports 8-byte (i64) elements and accumulator.
+/// Accumulator is i64 (8 bytes).  Elements can be any size (passed by pointer).
 ///
 /// # Safety
-/// `list` must be a valid `MvlArray*` with `elem_size == 8`.  `acc_ptr` must
-/// be a writable pointer to at least 8 bytes.  `closure` must point to a valid
-/// `MvlClosure` whose `fn_ptr` has signature `fn(ptr, i64, i64) -> i64`.
+/// `list` must be a valid `MvlArray*`.  `acc_ptr` must be a writable pointer
+/// to at least 8 bytes.  `closure` must point to a valid `MvlClosure` whose
+/// `fn_ptr` has signature `fn(env: ptr, acc: i64, elem: ptr) -> i64`.
 #[no_mangle]
 pub unsafe extern "C" fn List_fold(
     list: *mut MvlArray,
@@ -1087,15 +1087,13 @@ pub unsafe extern "C" fn List_fold(
     }
     let len = (*list).len as usize;
     let es = (*list).elem_size as usize;
-    debug_assert_eq!(es, 8, "List_fold: only 8-byte (i64) elements supported");
-    let fold_fn: unsafe extern "C" fn(*const u8, i64, i64) -> i64 =
+    let fold_fn: unsafe extern "C" fn(*const u8, i64, *const u8) -> i64 =
         std::mem::transmute((*closure).fn_ptr);
     let env = (*closure).env_ptr as *const u8;
     let mut acc = *(acc_ptr as *const i64);
     for i in 0..len {
         let elem_ptr = (*list).ptr.add(i * es);
-        let elem_val = *(elem_ptr as *const i64);
-        acc = fold_fn(env, acc, elem_val);
+        acc = fold_fn(env, acc, elem_ptr);
     }
     *(acc_ptr as *mut i64) = acc;
     acc_ptr
@@ -1103,11 +1101,9 @@ pub unsafe extern "C" fn List_fold(
 
 /// `List_any(list, closure)` — return true if any element satisfies predicate.
 ///
-/// Only supports 8-byte (i64) elements.
-///
 /// # Safety
-/// `list` must be a valid `MvlArray*` with `elem_size == 8`.  `closure` must
-/// point to a valid `MvlClosure` whose `fn_ptr` has signature `fn(ptr, i64) -> i1`.
+/// `list` must be a valid `MvlArray*`.  `closure` must point to a valid
+/// `MvlClosure` whose `fn_ptr` has signature `fn(env: ptr, elem: ptr) -> i1`.
 #[no_mangle]
 pub unsafe extern "C" fn List_any(list: *mut MvlArray, closure: *const MvlClosure) -> bool {
     if list.is_null() {
@@ -1118,13 +1114,12 @@ pub unsafe extern "C" fn List_any(list: *mut MvlArray, closure: *const MvlClosur
     }
     let len = (*list).len as usize;
     let es = (*list).elem_size as usize;
-    debug_assert_eq!(es, 8, "List_any: only 8-byte (i64) elements supported");
-    let pred: unsafe extern "C" fn(*const u8, i64) -> bool = std::mem::transmute((*closure).fn_ptr);
+    let pred: unsafe extern "C" fn(*const u8, *const u8) -> bool =
+        std::mem::transmute((*closure).fn_ptr);
     let env = (*closure).env_ptr as *const u8;
     for i in 0..len {
         let elem_ptr = (*list).ptr.add(i * es);
-        let elem_val = *(elem_ptr as *const i64);
-        if pred(env, elem_val) {
+        if pred(env, elem_ptr) {
             return true;
         }
     }
@@ -1133,11 +1128,9 @@ pub unsafe extern "C" fn List_any(list: *mut MvlArray, closure: *const MvlClosur
 
 /// `List_all(list, closure)` — return true if all elements satisfy predicate.
 ///
-/// Only supports 8-byte (i64) elements.
-///
 /// # Safety
-/// `list` must be a valid `MvlArray*` with `elem_size == 8`.  `closure` must
-/// point to a valid `MvlClosure` whose `fn_ptr` has signature `fn(ptr, i64) -> i1`.
+/// `list` must be a valid `MvlArray*`.  `closure` must point to a valid
+/// `MvlClosure` whose `fn_ptr` has signature `fn(env: ptr, elem: ptr) -> i1`.
 #[no_mangle]
 pub unsafe extern "C" fn List_all(list: *mut MvlArray, closure: *const MvlClosure) -> bool {
     if list.is_null() {
@@ -1148,13 +1141,12 @@ pub unsafe extern "C" fn List_all(list: *mut MvlArray, closure: *const MvlClosur
     }
     let len = (*list).len as usize;
     let es = (*list).elem_size as usize;
-    debug_assert_eq!(es, 8, "List_all: only 8-byte (i64) elements supported");
-    let pred: unsafe extern "C" fn(*const u8, i64) -> bool = std::mem::transmute((*closure).fn_ptr);
+    let pred: unsafe extern "C" fn(*const u8, *const u8) -> bool =
+        std::mem::transmute((*closure).fn_ptr);
     let env = (*closure).env_ptr as *const u8;
     for i in 0..len {
         let elem_ptr = (*list).ptr.add(i * es);
-        let elem_val = *(elem_ptr as *const i64);
-        if !pred(env, elem_val) {
+        if !pred(env, elem_ptr) {
             return false;
         }
     }
@@ -1542,18 +1534,21 @@ mod tests {
             .collect()
     }
 
-    /// Simple predicate: is x even?
-    unsafe extern "C" fn pred_is_even(_env: *const u8, x: i64) -> bool {
+    /// Simple predicate: is x even?  (receives pointer to i64 element)
+    unsafe extern "C" fn pred_is_even(_env: *const u8, elem: *const u8) -> bool {
+        let x = *(elem as *const i64);
         x % 2 == 0
     }
 
-    /// Simple map fn: double x.
-    unsafe extern "C" fn map_double(_env: *const u8, x: i64) -> i64 {
+    /// Simple map fn: double x.  (receives pointer to i64 element)
+    unsafe extern "C" fn map_double(_env: *const u8, elem: *const u8) -> i64 {
+        let x = *(elem as *const i64);
         x * 2
     }
 
-    /// Simple fold fn: add acc + x.
-    unsafe extern "C" fn fold_add(_env: *const u8, acc: i64, x: i64) -> i64 {
+    /// Simple fold fn: add acc + x.  (receives pointer to i64 element)
+    unsafe extern "C" fn fold_add(_env: *const u8, acc: i64, elem: *const u8) -> i64 {
+        let x = *(elem as *const i64);
         acc + x
     }
 

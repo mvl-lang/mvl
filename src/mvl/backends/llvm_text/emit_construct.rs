@@ -682,8 +682,10 @@ impl TextEmitter {
         self.ensure_extern("declare void @_mvl_array_push(ptr, ptr)");
 
         let arr = self.next_reg();
-        // elem_size=8 for all scalar types (i64, ptr, double)
-        self.push_instr(&format!("{arr} = call ptr @mvl_array_new(i64 8, i64 {n})"));
+        let elem_size = Self::llvm_type_size(&elem_ty);
+        self.push_instr(&format!(
+            "{arr} = call ptr @mvl_array_new(i64 {elem_size}, i64 {n})"
+        ));
         self.reg_types.insert(arr.clone(), "ptr".into());
 
         for v in &elem_vals {
@@ -717,9 +719,10 @@ impl TextEmitter {
         self.push_instr(&format!("{item_slot} = alloca {elem_ty}"));
         self.push_instr(&format!("store {elem_ty} {val}, ptr {item_slot}"));
         let arr = self.next_reg();
+        let elem_size = Self::llvm_type_size(&elem_ty);
         self.ensure_extern("declare ptr @_mvl_array_filled(i64, i64, ptr)");
         self.push_instr(&format!(
-            "{arr} = call ptr @_mvl_array_filled(i64 8, i64 {n_val}, ptr {item_slot})"
+            "{arr} = call ptr @_mvl_array_filled(i64 {elem_size}, i64 {n_val}, ptr {item_slot})"
         ));
         self.reg_types.insert(arr.clone(), "ptr".into());
         Ok(Some(arr))

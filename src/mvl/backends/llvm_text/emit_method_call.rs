@@ -293,7 +293,8 @@ impl TextEmitter {
             ("filter" | "map" | "find" | "take_while" | "skip_while", "ptr")
                 if args.len() == 1 && self.is_closure_arg(&args[0]) =>
             {
-                let closure = match self.emit_as_closure(&args[0])? {
+                // Runtime passes element by pointer: fn(env, elem_ptr) -> ...
+                let closure = match self.emit_as_hof_closure(&args[0], &[0])? {
                     Some(p) => p,
                     None => return Ok(None),
                 };
@@ -307,7 +308,8 @@ impl TextEmitter {
                 Ok(Some(reg))
             }
             ("any" | "all", "ptr") if args.len() == 1 => {
-                let closure = match self.emit_as_closure(&args[0])? {
+                // Runtime passes element by pointer: fn(env, elem_ptr) -> i1
+                let closure = match self.emit_as_hof_closure(&args[0], &[0])? {
                     Some(p) => p,
                     None => return Ok(None),
                 };
@@ -324,7 +326,9 @@ impl TextEmitter {
                     Some(v) => v,
                     None => return Ok(None),
                 };
-                let closure = match self.emit_as_closure(&args[1])? {
+                // Fold closure: fn(env, acc_val, elem_ptr) -> acc_val
+                // param 0 (acc) is by-value, param 1 (elem) is by-pointer
+                let closure = match self.emit_as_hof_closure(&args[1], &[1])? {
                     Some(p) => p,
                     None => return Ok(None),
                 };
