@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [0.189.2] - 2026-06-06
+
+### Fixed
+
+- **C-ABI boundary u64/i64 mismatch** (#1292)
+  - `_mvl_array_len`: return type `u64` → `i64` (cast at C-ABI boundary)
+  - `_mvl_array_get`: parameter type `usize` → `i64` (with negative index guard)
+  - `_mvl_string_len`: return type `u64` → `i64` (cast at C-ABI boundary)
+  - Fixed double-underscore naming bugs in `crypto.rs` (`__mvl_*` → `_mvl_*`)
+  - Removed dead uuid C-ABI wrappers (now pure MVL implementations)
+  - MVL's `Int` type is `i64`, so C-ABI boundary now matches the language type system
+
 ## [0.189.1] - 2026-06-05
 
 ### Fixed

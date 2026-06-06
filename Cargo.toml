@@ -4,7 +4,7 @@ exclude = ["fuzz"]
 
 [package]
 name = "mvl"
-version = "0.189.1"
+version = "0.189.2"
 edition = "2021"
 description = "MVL — Maximum Verifiable Language compiler"
 license = "Apache-2.0"
