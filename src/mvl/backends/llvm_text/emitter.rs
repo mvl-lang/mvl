@@ -975,8 +975,9 @@ mod tests {
              }",
         );
         // Lambda function emitted as a top-level define.
+        // HOF lambdas receive element by pointer from the runtime.
         assert!(
-            ir.contains("define i1 @__lambda_0(ptr %__env, i64 %x)"),
+            ir.contains("define i1 @__lambda_0(ptr %__env, ptr %__raw_x)"),
             "{ir}"
         );
         // Closure struct built with null env ptr.
@@ -1039,19 +1040,23 @@ mod tests {
              let evens: List[Int] = xs.filter(is_pos);\n\
              }",
         );
-        // Wrapper trampoline generated
-        assert!(ir.contains("@__closure_wrap_is_pos"), "{ir}");
+        // Wrapper trampoline generated (HOF wrapper receives element by pointer)
+        assert!(ir.contains("@__closure_wrap_is_pos_hof0"), "{ir}");
         // Closure struct built pointing to wrapper
-        assert!(ir.contains("store ptr @__closure_wrap_is_pos"), "{ir}");
+        assert!(ir.contains("store ptr @__closure_wrap_is_pos_hof0"), "{ir}");
         assert!(ir.contains("call ptr @List_filter"), "{ir}");
-        // Trampoline must forward the element argument, not call with zero args.
+        // Trampoline receives element by pointer and loads before forwarding.
         assert!(
-            ir.contains("define i1 @__closure_wrap_is_pos(ptr %__env, i64 %__arg0)"),
-            "trampoline missing typed param:\n{ir}"
+            ir.contains("define i1 @__closure_wrap_is_pos_hof0(ptr %__env, ptr %__raw_arg0)"),
+            "trampoline missing ptr param:\n{ir}"
         );
         assert!(
-            ir.contains("call i1 @is_pos(i64 %__arg0)"),
-            "trampoline must forward arg to original:\n{ir}"
+            ir.contains("load i64, ptr %__raw_arg0"),
+            "trampoline must load element from ptr:\n{ir}"
+        );
+        assert!(
+            ir.contains("call i1 @is_pos(i64 %__loaded_arg0)"),
+            "trampoline must forward loaded arg to original:\n{ir}"
         );
     }
 
@@ -1070,9 +1075,9 @@ mod tests {
         assert!(ir.contains("call ptr @List_fold(ptr"), "{ir}");
         // Result loaded back as the accumulator type.
         assert!(ir.contains("load i64"), "{ir}");
-        // Lambda for accumulator function has two typed params.
+        // Lambda for fold: acc is by-value (i64), element is by-pointer from runtime.
         assert!(
-            ir.contains("define i64 @__lambda_0(ptr %__env, i64 %acc, i64 %x)"),
+            ir.contains("define i64 @__lambda_0(ptr %__env, i64 %acc, ptr %__raw_x)"),
             "{ir}"
         );
     }

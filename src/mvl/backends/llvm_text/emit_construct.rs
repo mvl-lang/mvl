@@ -161,6 +161,32 @@ impl TextEmitter {
         let mvl_ty = match scrutinee {
             Expr::Ident(name, _) => self.local_mvl_types.get(name.as_str()).cloned(),
             Expr::FnCall { name, .. } => self.fn_ret_types.get(name.as_str()).cloned(),
+            // MethodCall: infer Option[T] from receiver's element type for get/first/last.
+            Expr::MethodCall {
+                receiver, method, ..
+            } => {
+                if let Expr::Ident(rname, _) = receiver.as_ref() {
+                    if let Some(TypeExpr::Base { args, .. }) =
+                        self.local_mvl_types.get(rname.as_str())
+                    {
+                        if let Some(inner) = args.first() {
+                            match method.as_str() {
+                                "get" | "first" | "last" => Some(TypeExpr::Option {
+                                    inner: Box::new(inner.clone()),
+                                    span: Default::default(),
+                                }),
+                                _ => None,
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
             _ => None,
         };
         let (inner_load_ty, inner_mvl_ty) = match &mvl_ty {
@@ -656,8 +682,10 @@ impl TextEmitter {
         self.ensure_extern("declare void @_mvl_array_push(ptr, ptr)");
 
         let arr = self.next_reg();
-        // elem_size=8 for all scalar types (i64, ptr, double)
-        self.push_instr(&format!("{arr} = call ptr @mvl_array_new(i64 8, i64 {n})"));
+        let elem_size = Self::llvm_type_size(&elem_ty);
+        self.push_instr(&format!(
+            "{arr} = call ptr @mvl_array_new(i64 {elem_size}, i64 {n})"
+        ));
         self.reg_types.insert(arr.clone(), "ptr".into());
 
         for v in &elem_vals {
@@ -691,9 +719,10 @@ impl TextEmitter {
         self.push_instr(&format!("{item_slot} = alloca {elem_ty}"));
         self.push_instr(&format!("store {elem_ty} {val}, ptr {item_slot}"));
         let arr = self.next_reg();
+        let elem_size = Self::llvm_type_size(&elem_ty);
         self.ensure_extern("declare ptr @_mvl_array_filled(i64, i64, ptr)");
         self.push_instr(&format!(
-            "{arr} = call ptr @_mvl_array_filled(i64 8, i64 {n_val}, ptr {item_slot})"
+            "{arr} = call ptr @_mvl_array_filled(i64 {elem_size}, i64 {n_val}, ptr {item_slot})"
         ));
         self.reg_types.insert(arr.clone(), "ptr".into());
         Ok(Some(arr))

@@ -868,6 +868,62 @@ impl TextEmitter {
             return self.emit_monomorphized_call(name, args);
         }
 
+        // ── Local closure call (closure-over-closure capture) ─────────
+        // If `name` is a local binding holding a `%__closure_type` (e.g. a
+        // captured closure), do an indirect call through its fn_ptr field,
+        // passing its env_ptr as the first argument.
+        if let Some(closure_ptr) = self.locals.get(name).cloned() {
+            if self
+                .local_mvl_types
+                .get(name)
+                .is_some_and(|t| matches!(t, TypeExpr::Fn { .. }))
+            {
+                // Load fn_ptr (field 0) and env_ptr (field 1).
+                let fn_field = self.next_reg();
+                self.push_instr(&format!(
+                    "{fn_field} = getelementptr %__closure_type, ptr {closure_ptr}, i32 0, i32 0"
+                ));
+                let fn_ptr = self.next_reg();
+                self.push_instr(&format!("{fn_ptr} = load ptr, ptr {fn_field}"));
+                let env_field = self.next_reg();
+                self.push_instr(&format!(
+                    "{env_field} = getelementptr %__closure_type, ptr {closure_ptr}, i32 0, i32 1"
+                ));
+                let env_ptr = self.next_reg();
+                self.push_instr(&format!("{env_ptr} = load ptr, ptr {env_field}"));
+
+                // Emit arguments.
+                let mut call_args = vec![format!("ptr {env_ptr}")];
+                for arg in args {
+                    let ty = self.type_of_expr(arg);
+                    if let Some(v) = self.emit_expr(arg)? {
+                        call_args.push(format!("{ty} {v}"));
+                    }
+                }
+                let args_str = call_args.join(", ");
+
+                // Determine return type from the fn type annotation.
+                let (llvm_ret, is_void) =
+                    if let Some(TypeExpr::Fn { ret, .. }) = self.local_mvl_types.get(name) {
+                        let r = self.llvm_ty_ctx(ret);
+                        let v = Self::is_void(ret);
+                        (r, v)
+                    } else {
+                        ("i64".into(), false)
+                    };
+
+                if is_void {
+                    self.push_instr(&format!("call void {fn_ptr}({args_str})"));
+                    return Ok(None);
+                } else {
+                    let reg = self.next_reg();
+                    self.push_instr(&format!("{reg} = call {llvm_ret} {fn_ptr}({args_str})"));
+                    self.reg_types.insert(reg.clone(), llvm_ret);
+                    return Ok(Some(reg));
+                }
+            }
+        }
+
         // ── User-defined functions ─────────────────────────────────────
         let mut arg_vals: Vec<(String, String)> = Vec::new();
         for arg in args {

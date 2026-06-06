@@ -70,7 +70,22 @@ impl TextEmitter {
             Expr::Unary { expr, .. } => {
                 self.walk_expr_for_captures(expr, exclude, seen, caps);
             }
-            Expr::FnCall { args, .. } => {
+            Expr::FnCall { name, args, .. } => {
+                // If the callee is a local closure binding, capture it too.
+                if !exclude.contains(name)
+                    && !seen.contains(name)
+                    && (self.locals.contains_key(name) || self.ref_locals.contains_key(name))
+                {
+                    if let Some(ty) = self
+                        .local_mvl_types
+                        .get(name)
+                        .cloned()
+                        .or_else(|| self.ref_locals.get(name).map(|rl| rl.elem_ty.clone()))
+                    {
+                        seen.insert(name.clone());
+                        caps.push((name.clone(), ty));
+                    }
+                }
                 for a in args {
                     self.walk_expr_for_captures(a, exclude, seen, caps);
                 }
@@ -217,6 +232,31 @@ impl TextEmitter {
         ret_type: Option<&TypeExpr>,
         body: &Expr,
     ) -> Result<Option<String>, String> {
+        self.emit_lambda_inner(params, ret_type, body, &[])
+    }
+
+    /// Emit a lambda for use by HOF runtime functions (filter/map/fold/any/all).
+    ///
+    /// `ptr_param_indices` lists parameter indices (0-based, within user params)
+    /// that the runtime passes as raw pointers to array elements.  The lambda
+    /// receives `ptr` for those params and emits a `load` to recover the real type.
+    pub(super) fn emit_hof_lambda(
+        &mut self,
+        params: &[crate::mvl::parser::ast::Param],
+        ret_type: Option<&TypeExpr>,
+        body: &Expr,
+        ptr_param_indices: &[usize],
+    ) -> Result<Option<String>, String> {
+        self.emit_lambda_inner(params, ret_type, body, ptr_param_indices)
+    }
+
+    fn emit_lambda_inner(
+        &mut self,
+        params: &[crate::mvl::parser::ast::Param],
+        ret_type: Option<&TypeExpr>,
+        body: &Expr,
+        ptr_param_indices: &[usize],
+    ) -> Result<Option<String>, String> {
         let lambda_name = format!("__lambda_{}", self.lambda_counter);
         self.lambda_counter += 1;
 
@@ -313,10 +353,15 @@ impl TextEmitter {
         let is_void = Self::is_void(&ret_ty);
 
         let mut param_parts = vec!["ptr %__env".to_string()];
-        for p in params {
+        for (i, p) in params.iter().enumerate() {
             let ty_str = self.llvm_ty_ctx(&p.ty);
             if ty_str != "void" {
-                param_parts.push(format!("{ty_str} %{}", p.name));
+                if ptr_param_indices.contains(&i) {
+                    // Runtime passes a raw pointer to the array element.
+                    param_parts.push(format!("ptr %__raw_{}", p.name));
+                } else {
+                    param_parts.push(format!("{ty_str} %{}", p.name));
+                }
             }
         }
         let params_str = param_parts.join(", ");
@@ -332,12 +377,20 @@ impl TextEmitter {
         self.fn_buf.push("entry:".into());
 
         // Bind user parameters as locals.
-        for p in params {
+        for (i, p) in params.iter().enumerate() {
             let ty_str = self.llvm_ty_ctx(&p.ty);
             if ty_str != "void" {
-                let ssa = format!("%{}", p.name);
-                self.locals.insert(p.name.clone(), ssa.clone());
-                self.reg_types.insert(ssa, ty_str);
+                if ptr_param_indices.contains(&i) {
+                    // Load the real type from the pointer the runtime passed us.
+                    let loaded = self.next_reg();
+                    self.push_instr(&format!("{loaded} = load {ty_str}, ptr %__raw_{}", p.name));
+                    self.locals.insert(p.name.clone(), loaded.clone());
+                    self.reg_types.insert(loaded, ty_str);
+                } else {
+                    let ssa = format!("%{}", p.name);
+                    self.locals.insert(p.name.clone(), ssa.clone());
+                    self.reg_types.insert(ssa, ty_str);
+                }
                 self.local_mvl_types.insert(p.name.clone(), p.ty.clone());
             }
         }
@@ -436,8 +489,26 @@ impl TextEmitter {
     ///
     /// Lazily generates `__closure_wrap_NAME(ptr env, params…) → ret` that ignores
     /// `env` and forwards to the original function.
-    pub(super) fn make_named_fn_closure(&mut self, name: &str) -> Result<Option<String>, String> {
-        let wrapper_name = format!("__closure_wrap_{name}");
+    pub(super) fn make_named_fn_closure_hof(
+        &mut self,
+        name: &str,
+        ptr_param_indices: &[usize],
+    ) -> Result<Option<String>, String> {
+        // Include ptr_param_indices in the wrapper name so we get distinct
+        // wrappers for HOF vs non-HOF uses of the same named function.
+        let suffix = if ptr_param_indices.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "_hof{}",
+                ptr_param_indices
+                    .iter()
+                    .map(|i| i.to_string())
+                    .collect::<Vec<_>>()
+                    .join("_")
+            )
+        };
+        let wrapper_name = format!("__closure_wrap_{name}{suffix}");
         self.ensure_closure_type();
 
         // Emit the wrapper function once.
@@ -456,16 +527,24 @@ impl TextEmitter {
             };
 
             // Build typed trampoline: (ptr %__env, ty0 %__arg0, ty1 %__arg1, …)
-            // The runtime calls the closure fn_ptr as fn(env, args…), so the
-            // trampoline must match the original function's arity and types.
+            // For HOF params (in ptr_param_indices), accept ptr and load inside.
             let orig_params = self.fn_param_types.get(name).cloned().unwrap_or_default();
             let mut wrapper_param_parts = vec!["ptr %__env".to_string()];
             let mut forward_arg_parts: Vec<String> = Vec::new();
+            let mut loads: Vec<String> = Vec::new();
             for (i, p_ty) in orig_params.iter().enumerate() {
                 let ty_str = self.llvm_ty_ctx(p_ty);
                 if ty_str != "void" {
-                    wrapper_param_parts.push(format!("{ty_str} %__arg{i}"));
-                    forward_arg_parts.push(format!("{ty_str} %__arg{i}"));
+                    if ptr_param_indices.contains(&i) {
+                        // Runtime passes element by pointer.
+                        wrapper_param_parts.push(format!("ptr %__raw_arg{i}"));
+                        let loaded = format!("%__loaded_arg{i}");
+                        loads.push(format!("  {loaded} = load {ty_str}, ptr %__raw_arg{i}"));
+                        forward_arg_parts.push(format!("{ty_str} {loaded}"));
+                    } else {
+                        wrapper_param_parts.push(format!("{ty_str} %__arg{i}"));
+                        forward_arg_parts.push(format!("{ty_str} %__arg{i}"));
+                    }
                 }
             }
             let wrapper_params_str = wrapper_param_parts.join(", ");
@@ -492,6 +571,11 @@ impl TextEmitter {
             ));
             self.fn_buf.push("{".into());
             self.fn_buf.push("entry:".into());
+
+            // Emit loads for by-pointer HOF params.
+            for load in &loads {
+                self.fn_buf.push(load.clone());
+            }
 
             if is_void {
                 self.push_instr(&format!("call void @{name}({forward_args_str})"));
@@ -544,25 +628,37 @@ impl TextEmitter {
         Ok(Some(closure_alloca))
     }
 
-    /// Emit `expr` as a closure pointer.
+    /// Emit `expr` as a closure for HOF runtime functions.
     ///
-    /// - `Lambda` → emit the lambda and return the closure alloca
-    /// - `Ident` referencing a module-level function → `make_named_fn_closure`
-    /// - Anything else → treat as already a closure-typed local
-    pub(super) fn emit_as_closure(&mut self, expr: &Expr) -> Result<Option<String>, String> {
+    /// `ptr_param_indices` specifies which lambda params are passed by pointer
+    /// (the runtime passes a raw pointer to the array element).  The generated
+    /// lambda loads the real type from that pointer.  Pass `&[]` for non-HOF use.
+    pub(super) fn emit_as_hof_closure(
+        &mut self,
+        expr: &Expr,
+        ptr_param_indices: &[usize],
+    ) -> Result<Option<String>, String> {
+        self.emit_as_closure_inner(expr, ptr_param_indices)
+    }
+
+    fn emit_as_closure_inner(
+        &mut self,
+        expr: &Expr,
+        ptr_param_indices: &[usize],
+    ) -> Result<Option<String>, String> {
         match expr {
             Expr::Lambda {
                 params,
                 ret_type,
                 body,
                 ..
-            } => self.emit_lambda(params, ret_type.as_deref(), body),
+            } => self.emit_hof_lambda(params, ret_type.as_deref(), body, ptr_param_indices),
             Expr::Ident(name, _) => {
                 // Module-level function reference (not in locals).
                 if !self.locals.contains_key(name.as_str())
                     && self.fn_ret_types.contains_key(name.as_str())
                 {
-                    self.make_named_fn_closure(name)
+                    self.make_named_fn_closure_hof(name, ptr_param_indices)
                 } else {
                     // Already a closure-typed local — just return its SSA value.
                     self.emit_expr(expr)

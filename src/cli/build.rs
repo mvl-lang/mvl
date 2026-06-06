@@ -40,7 +40,14 @@ fn inject_mod_bridge(source: &str) -> String {
 /// binary is executed with its working directory set to the source file's
 /// parent directory so that relative paths in args (e.g. `--file logs.jsonl`)
 /// resolve correctly.
-pub fn run(path: &str, run: bool, run_args: &[String], assert_mode: AssertMode, target: &str) {
+pub fn run(
+    path: &str,
+    run: bool,
+    run_args: &[String],
+    assert_mode: AssertMode,
+    target: &str,
+    release: bool,
+) {
     let stdlib_dir = stdlib::ensure_stdlib();
     // For directory inputs, use the directory stem as the crate name and
     // concatenate all .mvl files (simple Phase 1 approach: single-crate multi-file).
@@ -404,22 +411,22 @@ pub fn run(path: &str, run: bool, run_args: &[String], assert_mode: AssertMode, 
     }
 
     println!("Transpiled to: {}", tmp_dir.display());
-    println!("Running: cargo build");
+    let profile_label = if release { "release" } else { "dev" };
+    println!("Running: cargo build (profile: {profile_label})");
 
-    let build_status = process::Command::new("cargo")
-        .arg("build")
-        .current_dir(&tmp_dir)
-        .status()
-        .unwrap_or_else(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                eprintln!(
-                    "error: `cargo` not found in PATH — install Rust from https://rustup.rs/"
-                );
-            } else {
-                eprintln!("error: failed to run cargo: {e}");
-            }
-            process::exit(1);
-        });
+    let mut cmd = process::Command::new("cargo");
+    cmd.arg("build").current_dir(&tmp_dir);
+    if release {
+        cmd.arg("--release");
+    }
+    let build_status = cmd.status().unwrap_or_else(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            eprintln!("error: `cargo` not found in PATH — install Rust from https://rustup.rs/");
+        } else {
+            eprintln!("error: failed to run cargo: {e}");
+        }
+        process::exit(1);
+    });
 
     if !build_status.success() {
         eprintln!("cargo build failed");
@@ -432,7 +439,10 @@ pub fn run(path: &str, run: bool, run_args: &[String], assert_mode: AssertMode, 
         // against the project directory regardless of where `mvl run` was invoked.
         // Package/bridge resolution uses project_root (invocation CWD) and happens
         // earlier, so it is unaffected by this CWD change.
-        let binary = tmp_dir.join("target").join("debug").join(&crate_name);
+        let binary = tmp_dir
+            .join("target")
+            .join(if release { "release" } else { "debug" })
+            .join(&crate_name);
         let source_dir = Path::new(&file_path)
             .parent()
             .and_then(|p| fs::canonicalize(p).ok())

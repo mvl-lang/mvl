@@ -1,0 +1,164 @@
+// huffman_fixed.mvl — RFC 1951 §3.2.6 fixed Huffman code tables
+//
+// Fixed literal/length codes:
+//   0-143:   8-bit codes  (prefix 00110000..10111111)
+//   144-255: 9-bit codes  (prefix 110010000..111111111)
+//   256-279: 7-bit codes  (prefix 0000000..0010111)
+//   280-287: 8-bit codes  (prefix 11000000..11000111)
+//
+// Fixed distance codes: 5-bit codes, symbols 0-29.
+//
+// All code functions return the code as an integer; bit width is returned
+// separately. Encoding: LSB-first (same as DEFLATE bit order).
+
+// ── Literal/length codes ─────────────────────────────────────────────────────
+
+// Returns {code, width} for a literal/length symbol 0-287.
+pub type HuffCode = struct { code: Int, width: Int }
+
+pub total fn lit_len_code(sym: Int) -> HuffCode {
+    if sym <= 143 {
+        // 8 bits, base 0x30 (00110000)
+        HuffCode { code: 0x30 + sym, width: 8 }
+    } else if sym <= 255 {
+        // 9 bits, base 0x190 (110010000)
+        HuffCode { code: 0x190 + (sym - 144), width: 9 }
+    } else if sym <= 279 {
+        // 7 bits, base 0x00 (0000000)
+        HuffCode { code: sym - 256, width: 7 }
+    } else {
+        // 8 bits, base 0xC0 (11000000)
+        HuffCode { code: 0xC0 + (sym - 280), width: 8 }
+    }
+}
+
+// Distance codes are 5-bit, value = symbol (0-29).
+pub total fn dist_code(sym: Int) -> HuffCode {
+    HuffCode { code: sym, width: 5 }
+}
+
+// ── Length encoding (RFC 1951 Table 1) ───────────────────────────────────────
+// Each match length 3-258 maps to a symbol (257-285) + extra bits.
+
+pub type LengthCode = struct {
+    sym:        Int,   // literal/length symbol (257-285)
+    extra_bits: Int,   // number of extra bits
+    extra_val:  Int,   // value of extra bits
+}
+
+pub total fn encode_length(len: Int) -> LengthCode {
+    if len <= 10 {
+        LengthCode { sym: 254 + len, extra_bits: 0, extra_val: 0 }
+    } else if len <= 18 {
+        let base: Int = 265 + (len - 11) / 2;
+        LengthCode { sym: base, extra_bits: 1, extra_val: (len - 11) & 1 }
+    } else if len <= 34 {
+        let base: Int = 269 + (len - 19) / 4;
+        LengthCode { sym: base, extra_bits: 2, extra_val: (len - 19) & 3 }
+    } else if len <= 66 {
+        let base: Int = 273 + (len - 35) / 8;
+        LengthCode { sym: base, extra_bits: 3, extra_val: (len - 35) & 7 }
+    } else if len <= 130 {
+        let base: Int = 277 + (len - 67) / 16;
+        LengthCode { sym: base, extra_bits: 4, extra_val: (len - 67) & 15 }
+    } else if len <= 257 {
+        let base: Int = 281 + (len - 131) / 32;
+        LengthCode { sym: base, extra_bits: 5, extra_val: (len - 131) & 31 }
+    } else {
+        // len == 258
+        LengthCode { sym: 285, extra_bits: 0, extra_val: 0 }
+    }
+}
+
+pub type DistCode = struct {
+    sym:        Int,
+    extra_bits: Int,
+    extra_val:  Int,
+}
+
+pub total fn encode_distance(dist: Int) -> DistCode {
+    if dist <= 4 {
+        DistCode { sym: dist - 1, extra_bits: 0, extra_val: 0 }
+    } else if dist <= 8 {
+        let sym: Int = 4 + (dist - 5) / 2;
+        DistCode { sym: sym, extra_bits: 1, extra_val: (dist - 5) & 1 }
+    } else if dist <= 16 {
+        let sym: Int = 6 + (dist - 9) / 4;
+        DistCode { sym: sym, extra_bits: 2, extra_val: (dist - 9) & 3 }
+    } else if dist <= 32 {
+        let sym: Int = 8 + (dist - 17) / 8;
+        DistCode { sym: sym, extra_bits: 3, extra_val: (dist - 17) & 7 }
+    } else if dist <= 64 {
+        let sym: Int = 10 + (dist - 33) / 16;
+        DistCode { sym: sym, extra_bits: 4, extra_val: (dist - 33) & 15 }
+    } else if dist <= 128 {
+        let sym: Int = 12 + (dist - 65) / 32;
+        DistCode { sym: sym, extra_bits: 5, extra_val: (dist - 65) & 31 }
+    } else if dist <= 256 {
+        let sym: Int = 14 + (dist - 129) / 64;
+        DistCode { sym: sym, extra_bits: 6, extra_val: (dist - 129) & 63 }
+    } else if dist <= 512 {
+        let sym: Int = 16 + (dist - 257) / 128;
+        DistCode { sym: sym, extra_bits: 7, extra_val: (dist - 257) & 127 }
+    } else if dist <= 1024 {
+        let sym: Int = 18 + (dist - 513) / 256;
+        DistCode { sym: sym, extra_bits: 8, extra_val: (dist - 513) & 255 }
+    } else if dist <= 2048 {
+        let sym: Int = 20 + (dist - 1025) / 512;
+        DistCode { sym: sym, extra_bits: 9, extra_val: (dist - 1025) & 511 }
+    } else if dist <= 4096 {
+        let sym: Int = 22 + (dist - 2049) / 1024;
+        DistCode { sym: sym, extra_bits: 10, extra_val: (dist - 2049) & 1023 }
+    } else if dist <= 8192 {
+        let sym: Int = 24 + (dist - 4097) / 2048;
+        DistCode { sym: sym, extra_bits: 11, extra_val: (dist - 4097) & 2047 }
+    } else if dist <= 16384 {
+        let sym: Int = 26 + (dist - 8193) / 4096;
+        DistCode { sym: sym, extra_bits: 12, extra_val: (dist - 8193) & 4095 }
+    } else {
+        let sym: Int = 28 + (dist - 16385) / 8192;
+        DistCode { sym: sym, extra_bits: 13, extra_val: (dist - 16385) & 8191 }
+    }
+}
+
+// ── Unit tests ────────────────────────────────────────────────────────────────
+
+test fn lit_len_code_literal_a() -> Unit {
+    let c: HuffCode = lit_len_code(65);
+    assert_eq(c.width, 8)
+}
+
+test fn lit_len_code_eob() -> Unit {
+    // Symbol 256 = end-of-block, 7 bits
+    let c: HuffCode = lit_len_code(256);
+    assert_eq(c.width, 7);
+    assert_eq(c.code, 0)
+}
+
+test fn lit_len_code_high_literal() -> Unit {
+    // Symbol 200 (> 143) = 9-bit code
+    let c: HuffCode = lit_len_code(200);
+    assert_eq(c.width, 9)
+}
+
+test fn encode_length_minimal() -> Unit {
+    let lc: LengthCode = encode_length(3);
+    assert_eq(lc.sym, 257);
+    assert_eq(lc.extra_bits, 0)
+}
+
+test fn encode_length_max() -> Unit {
+    let lc: LengthCode = encode_length(258);
+    assert_eq(lc.sym, 285)
+}
+
+test fn encode_distance_minimal() -> Unit {
+    let dc: DistCode = encode_distance(1);
+    assert_eq(dc.sym, 0);
+    assert_eq(dc.extra_bits, 0)
+}
+
+test fn dist_code_width() -> Unit {
+    let c: HuffCode = dist_code(0);
+    assert_eq(c.width, 5)
+}

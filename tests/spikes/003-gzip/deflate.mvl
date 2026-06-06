@@ -1,0 +1,262 @@
+// deflate.mvl — DEFLATE block codec (RFC 1951, fixed Huffman, type 01)
+//
+// Encodes using fixed Huffman + LZ77 tokens; decodes a flat bit list.
+// Block type: 01 (fixed Huffman codes), BFINAL=1 (single block).
+//
+// Huffman codes are packed MSB-first into the LSB-first bitstream (RFC 1951
+// §3.1.1): the encoder reverses code bits before writing, the decoder reads
+// bits sequentially and rebuilds codes MSB-first. Extra bits (lengths,
+// distances) are packed LSB-first as raw data.
+//
+// Imports:
+use lz77::lz77_encode;
+use lz77::Lz77Token;
+use huffman_fixed::lit_len_code;
+use huffman_fixed::dist_code;
+use huffman_fixed::encode_length;
+use huffman_fixed::encode_distance;
+use huffman_fixed::HuffCode;
+use huffman_fixed::LengthCode;
+use huffman_fixed::DistCode;
+use bitstream::BitWriter;
+use bitstream::new_writer;
+use bitstream::flush_writer;
+use bitstream::write_bits;
+
+// ── Bit reversal (MSB-first Huffman packing into LSB-first stream) ───────────
+
+type RevState = struct { result: Int, input: Int }
+
+fn reverse_bits(code: Int, width: Int) -> Int {
+    let st: ref RevState = RevState { result: 0, input: code };
+    for _ in range(0, width) {
+        st = RevState { result: (st.result << 1) | (st.input & 1), input: st.input >> 1 }
+    }
+    st.result
+}
+
+fn write_huffman(w: BitWriter, code: Int, width: Int) -> BitWriter {
+    write_bits(w, reverse_bits(code, width), width)
+}
+
+// ── Encoder ───────────────────────────────────────────────────────────────────
+
+pub total fn deflate_compress(data: val List[Byte]) -> List[Byte] {
+    let tokens: List[Lz77Token] = lz77_encode(val data);
+    let w: ref BitWriter = new_writer();
+    // BFINAL=1, BTYPE=01 — raw data bits, LSB-first
+    w = write_bits(w, 1, 1);
+    w = write_bits(w, 1, 2);
+    for i in range(0, tokens.len()) {
+        let tok: Lz77Token = tokens.get(i).unwrap_or(Lz77Token { is_literal: true, value: 0, dist: 0 });
+        w = encode_token(w, tok)
+    }
+    // End-of-block (symbol 256) — Huffman code, MSB-first
+    let eob: HuffCode = lit_len_code(256);
+    w = write_huffman(w, eob.code, eob.width);
+    flush_writer(w)
+}
+
+fn encode_token(w: BitWriter, tok: Lz77Token) -> BitWriter {
+    if tok.is_literal {
+        let c: HuffCode = lit_len_code(tok.value);
+        write_huffman(w, c.code, c.width)
+    } else {
+        let lc: LengthCode = encode_length(tok.value);
+        let len_huff: HuffCode = lit_len_code(lc.sym);
+        let w1: BitWriter = write_huffman(w, len_huff.code, len_huff.width);
+        let w2: BitWriter = if lc.extra_bits > 0 {
+            write_bits(w1, lc.extra_val, lc.extra_bits)
+        } else {
+            w1
+        };
+        let dc: DistCode = encode_distance(tok.dist);
+        let dist_huff: HuffCode = dist_code(dc.sym);
+        let w3: BitWriter = write_huffman(w2, dist_huff.code, dist_huff.width);
+        if dc.extra_bits > 0 {
+            write_bits(w3, dc.extra_val, dc.extra_bits)
+        } else {
+            w3
+        }
+    }
+}
+
+// ── Decoder ───────────────────────────────────────────────────────────────────
+
+pub total fn deflate_decompress(compressed: val List[Byte]) -> List[Byte] {
+    // Decode directly from byte array — no flat bit-list expansion.
+    let total_bits: Int = compressed.len() * 8;
+    let out: ref List[Byte] = [];
+    let pos: ref Int = 3;
+    let done: ref Bool = false;
+    while !done && pos < total_bits decreases total_bits - pos + 1 {
+        let result: DecodeStep = decode_symbol(val compressed, pos);
+        pos = result.next_pos;
+        if result.sym == 256 {
+            done = true
+        } else if result.sym < 256 {
+            out.push(from_int(result.sym))
+        } else {
+            let llen: LenResult = decode_length(val compressed, result.sym, pos);
+            pos = llen.next_pos;
+            let dsym: DecodeStep = decode_dist_sym(val compressed, pos);
+            pos = dsym.next_pos;
+            let ldist: LenResult = decode_dist(val compressed, dsym.sym, pos);
+            pos = ldist.next_pos;
+            out = expand_backref(out, llen.value, ldist.value)
+        }
+    }
+    out
+}
+
+type DecodeStep = struct { sym: Int, next_pos: Int }
+type LenResult  = struct { value: Int, next_pos: Int }
+
+// Read a single bit directly from a byte array at the given bit position.
+fn get_bit(data: val List[Byte], bit_pos: Int) -> Int {
+    let byte_idx: Int = bit_pos / 8;
+    let bit_idx: Int = bit_pos & 7;
+    let b: Int = data.get(byte_idx).unwrap_or(from_int(0)).to_int();
+    (b >> bit_idx) & 1
+}
+
+// Read n bits from the byte array, building the Huffman code MSB-first.
+fn read_code_msb(data: val List[Byte], pos: Int, n: Int) -> Int {
+    let code: ref Int = 0;
+    for i in range(0, n) {
+        code = (code << 1) | get_bit(val data, pos + i)
+    }
+    code
+}
+
+// Decode one fixed-Huffman literal/length symbol.
+fn decode_symbol(data: val List[Byte], pos: Int) -> DecodeStep {
+    let code7: Int = read_code_msb(val data, pos, 7);
+    if code7 <= 23 {
+        DecodeStep { sym: 256 + code7, next_pos: pos + 7 }
+    } else {
+        let code8: Int = (code7 << 1) | get_bit(val data, pos + 7);
+        if code8 >= 0x30 && code8 <= 0xBF {
+            DecodeStep { sym: code8 - 0x30, next_pos: pos + 8 }
+        } else if code8 >= 0xC0 && code8 <= 0xC7 {
+            DecodeStep { sym: 280 + (code8 - 0xC0), next_pos: pos + 8 }
+        } else {
+            let code9: Int = (code8 << 1) | get_bit(val data, pos + 8);
+            DecodeStep { sym: 144 + (code9 - 0x190), next_pos: pos + 9 }
+        }
+    }
+}
+
+// Decode match length from symbol (257-285) + extra bits (LSB-first).
+fn decode_length(data: val List[Byte], sym: Int, pos: Int) -> LenResult {
+    if sym <= 264 {
+        LenResult { value: sym - 254, next_pos: pos }
+    } else if sym <= 268 {
+        let eb: Int = get_bit(val data, pos);
+        LenResult { value: 11 + (sym - 265) * 2 + eb, next_pos: pos + 1 }
+    } else if sym <= 272 {
+        let eb: Int = get_bit(val data, pos) | (get_bit(val data, pos + 1) << 1);
+        LenResult { value: 19 + (sym - 269) * 4 + eb, next_pos: pos + 2 }
+    } else if sym <= 276 {
+        let eb: Int = get_bit(val data, pos) | (get_bit(val data, pos + 1) << 1) | (get_bit(val data, pos + 2) << 2);
+        LenResult { value: 35 + (sym - 273) * 8 + eb, next_pos: pos + 3 }
+    } else if sym <= 280 {
+        let eb: Int = get_bit(val data, pos) | (get_bit(val data, pos + 1) << 1) | (get_bit(val data, pos + 2) << 2) | (get_bit(val data, pos + 3) << 3);
+        LenResult { value: 67 + (sym - 277) * 16 + eb, next_pos: pos + 4 }
+    } else if sym <= 284 {
+        let eb: Int = get_bit(val data, pos) | (get_bit(val data, pos + 1) << 1) | (get_bit(val data, pos + 2) << 2) | (get_bit(val data, pos + 3) << 3) | (get_bit(val data, pos + 4) << 4);
+        LenResult { value: 131 + (sym - 281) * 32 + eb, next_pos: pos + 5 }
+    } else {
+        LenResult { value: 258, next_pos: pos }
+    }
+}
+
+// Decode 5-bit distance symbol (MSB-first).
+fn decode_dist_sym(data: val List[Byte], pos: Int) -> DecodeStep {
+    let code: Int = read_code_msb(val data, pos, 5);
+    DecodeStep { sym: code, next_pos: pos + 5 }
+}
+
+// Decode distance value from symbol + extra bits (LSB-first).
+fn decode_dist(data: val List[Byte], sym: Int, pos: Int) -> LenResult {
+    if sym <= 3 {
+        LenResult { value: sym + 1, next_pos: pos }
+    } else {
+        let extra_bits: Int = (sym / 2) - 1;
+        let base_dist: Int = dist_base(sym);
+        let eb: ref Int = 0;
+        for i in range(0, extra_bits) {
+            eb = eb | (get_bit(val data, pos + i) << i)
+        }
+        LenResult { value: base_dist + eb, next_pos: pos + extra_bits }
+    }
+}
+
+fn dist_base(sym: Int) -> Int {
+    if sym == 4  { 5  } else if sym == 5  { 7  } else
+    if sym == 6  { 9  } else if sym == 7  { 13 } else
+    if sym == 8  { 17 } else if sym == 9  { 25 } else
+    if sym == 10 { 33 } else if sym == 11 { 49 } else
+    if sym == 12 { 65 } else if sym == 13 { 97 } else
+    if sym == 14 { 129 } else if sym == 15 { 193 } else
+    if sym == 16 { 257 } else if sym == 17 { 385 } else
+    if sym == 18 { 513 } else if sym == 19 { 769 } else
+    if sym == 20 { 1025 } else if sym == 21 { 1537 } else
+    if sym == 22 { 2049 } else if sym == 23 { 3073 } else
+    if sym == 24 { 4097 } else if sym == 25 { 6145 } else
+    if sym == 26 { 8193 } else if sym == 27 { 12289 } else
+    if sym == 28 { 16385 } else { 24577 }
+}
+
+fn expand_backref(out: List[Byte], length: Int, dist: Int) -> List[Byte] {
+    let start: Int = out.len() - dist;
+    let result: ref List[Byte] = out;
+    for i in range(0, length) {
+        let b: Byte = result.get(start + i).unwrap_or(from_int(0));
+        result.push(b)
+    }
+    result
+}
+
+// ── Unit tests ────────────────────────────────────────────────────────────────
+
+fn bytes(xs: List[Int]) -> List[Byte] {
+    xs.map(|v: Int| -> Byte { from_int(v) })
+}
+
+test fn deflate_roundtrip_empty() -> Unit {
+    let data: List[Byte] = [];
+    let compressed: List[Byte] = deflate_compress(val data);
+    let decompressed: List[Byte] = deflate_decompress(val compressed);
+    assert_eq(decompressed, data)
+}
+
+test fn deflate_roundtrip_single_byte() -> Unit {
+    let data: List[Byte] = bytes([65]);
+    let compressed: List[Byte] = deflate_compress(val data);
+    let decompressed: List[Byte] = deflate_decompress(val compressed);
+    assert_eq(decompressed, data)
+}
+
+test fn deflate_roundtrip_hello() -> Unit {
+    let data: List[Byte] = bytes([72, 101, 108, 108, 111]);
+    let compressed: List[Byte] = deflate_compress(val data);
+    let decompressed: List[Byte] = deflate_decompress(val compressed);
+    assert_eq(decompressed, data)
+}
+
+test fn deflate_roundtrip_repetitive() -> Unit {
+    let data: List[Byte] = bytes([65, 65, 65, 65, 65, 65, 65, 65, 65, 65]);
+    let compressed: List[Byte] = deflate_compress(val data);
+    let decompressed: List[Byte] = deflate_decompress(val compressed);
+    assert_eq(decompressed, data)
+}
+
+test fn reverse_bits_identity_zero() -> Unit {
+    assert_eq(reverse_bits(0, 8), 0)
+}
+
+test fn reverse_bits_known_value() -> Unit {
+    // 0x78 = 0b01111000, reversed 8-bit = 0b00011110 = 0x1E
+    assert_eq(reverse_bits(0x78, 8), 0x1E)
+}

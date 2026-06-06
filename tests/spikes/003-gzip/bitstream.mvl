@@ -1,0 +1,114 @@
+// bitstream.mvl — Bit-stream packing and unpacking (copied from examples/bzip)
+//
+// BitWriter/BitReader — immutable threading pattern.
+// Functions return new instances; state is threaded to caller.
+
+pub type BitWriter = struct {
+    bytes:   List[Byte],
+    current: Int,
+    bit_pos: Int,
+}
+
+pub type BitReader = struct {
+    bytes:   List[Byte],
+    pos:     Int,
+    bit_pos: Int,
+}
+
+pub type ReadResult = struct {
+    rval:   Int,
+    reader: BitReader,
+}
+
+pub total fn new_writer() -> BitWriter {
+    BitWriter { bytes: [], current: 0, bit_pos: 0 }
+}
+
+pub total fn flush_writer(w: BitWriter) -> List[Byte] {
+    let owned: BitWriter = w;
+    if owned.bit_pos == 0 {
+        owned.bytes
+    } else {
+        let out: ref List[Byte] = owned.bytes;
+        out.push(from_int(owned.current));
+        out
+    }
+}
+
+// Bulk bit write — inspired by miniz_oxide put_bits(): accumulate all bits
+// in a wide buffer with one OR+shift, then flush completed bytes.
+// Replaces per-bit recursion (8 struct allocs per byte → 1 OR + 1 flush).
+pub total fn write_bits(w: BitWriter, value: Int, n_bits: Int where self >= 1 && self <= 24) -> BitWriter {
+    let mask: Int = (1 << n_bits) - 1;
+    let new_current: Int = w.current | ((value & mask) << w.bit_pos);
+    let new_bit_pos: Int = w.bit_pos + n_bits;
+    flush_bytes(w.bytes, new_current, new_bit_pos)
+}
+
+fn flush_bytes(bytes: List[Byte], current: Int, bit_pos: Int) -> BitWriter {
+    if bit_pos >= 8 {
+        let out: ref List[Byte] = bytes;
+        out.push(from_int(current & 0xFF));
+        flush_bytes(out, current >> 8, bit_pos - 8)
+    } else {
+        BitWriter { bytes: bytes, current: current, bit_pos: bit_pos }
+    }
+}
+
+pub total fn new_reader(bytes: List[Byte]) -> BitReader {
+    BitReader { bytes: bytes, pos: 0, bit_pos: 0 }
+}
+
+pub total fn read_bits(r: BitReader, n_bits: Int where self >= 1 && self <= 24) -> ReadResult {
+    read_bits_loop(r, n_bits, 0, 0)
+}
+
+fn read_bits_loop(r: BitReader, remaining: Int, acc: Int, shift: Int) -> ReadResult {
+    if remaining <= 0 {
+        ReadResult { rval: acc, reader: r }
+    } else if r.pos >= r.bytes.len() {
+        ReadResult { rval: acc, reader: r }
+    } else {
+        let byte_v: Int = r.bytes.get(r.pos).unwrap_or(from_int(0)).to_int();
+        let bit: Int = (byte_v >> r.bit_pos) & 1;
+        let new_acc: Int = acc | (bit << shift);
+        let new_bit_pos: Int = r.bit_pos + 1;
+        if new_bit_pos == 8 {
+            let next_r: BitReader = BitReader {
+                bytes:   r.bytes,
+                pos:     r.pos + 1,
+                bit_pos: 0,
+            };
+            read_bits_loop(next_r, remaining - 1, new_acc, shift + 1)
+        } else {
+            let next_r: BitReader = BitReader {
+                bytes:   r.bytes,
+                pos:     r.pos,
+                bit_pos: new_bit_pos,
+            };
+            read_bits_loop(next_r, remaining - 1, new_acc, shift + 1)
+        }
+    }
+}
+
+// CRC32 (IEEE 802.3 / gzip polynomial 0xEDB88320)
+// Standard algorithm: crc = (crc >> 8) ^ table[(crc ^ byte) & 0xFF]
+// Table entry computed on-the-fly via 8 rounds of bit-reflect XOR.
+pub total fn crc32_step(crc: Int, byte_in: Int) -> Int {
+    let index: Int = (crc ^ byte_in) & 0xFF;
+    let table_val: Int = crc32_table_entry(index);
+    (crc >> 8) ^ table_val
+}
+
+fn crc32_table_entry(b: Int) -> Int {
+    let c: ref Int = b;
+    for _ in range(0, 8) {
+        c = if (c & 1) == 1 { (c >> 1) ^ 0xEDB88320 } else { c >> 1 }
+    }
+    c
+}
+
+pub total fn bit_field(v: Int, lo: Int, len: Int where self >= 1 && self <= 24) -> Int {
+    let mask: Int = (1 << len) - 1;
+    (v >> lo) & mask
+}

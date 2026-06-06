@@ -1,6 +1,6 @@
 [workspace]
 members = [".", "runtime/rust", "runtime/rust-tokio", "runtime/llvm"]
-exclude = ["fuzz"]
+exclude = ["fuzz", "tests/spikes/003-gzip/bench"]
 
 [package]
 name = "mvl"

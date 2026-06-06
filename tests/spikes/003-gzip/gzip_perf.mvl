@@ -1,0 +1,56 @@
+// gzip_perf.mvl — gzip compress+decompress benchmark loop
+//
+// Usage: mvl run tests/spikes/003-gzip/gzip_perf.mvl -- <iterations>
+//
+// Builds a 512-byte payload, then runs compress+decompress N times.
+// Timing is done externally by the benchmark harness (Makefile).
+
+use std.args.{parse_args, required, ArgType, ArgValue}
+
+// All transitive imports must be listed — mvl run only resolves direct imports.
+use bitstream::crc32_step;
+use huffman_fixed::lit_len_code;
+use huffman_fixed::encode_length;
+use huffman_fixed::encode_distance;
+use huffman_fixed::dist_code;
+use lz77::lz77_encode;
+use lz77::Lz77Token;
+use deflate::deflate_compress;
+use deflate::deflate_decompress;
+use gzip::gzip_compress;
+use gzip::gzip_decompress;
+use gzip::compute_crc32;
+
+fn make_payload() -> List[Byte] {
+    // 512 bytes: "Hello World!" repeated, cycling pattern at the end
+    let hello: List[Byte] = [72, 101, 108, 108, 111, 32, 87, 111, 114, 108, 100, 33].map(|v: Int| -> Byte { from_int(v) });
+    let out: ref List[Byte] = [];
+    for _ in range(0, 40) {
+        out.extend(hello)
+    }
+    // Trim/pad to exactly 512
+    out.slice(0, 512)
+}
+
+fn get_iterations(args: Map[String, ArgValue]) -> Int {
+    match args.get("iterations") {
+        Some(ArgValue::Int(n)) => n,
+        _ => 10,
+    }
+}
+
+fn main() -> Unit ! Console + Env {
+    let args: Map[String, ArgValue] = parse_args([required("iterations", ArgType::Int)]);
+    let n: Int = get_iterations(args);
+    let payload: List[Byte] = make_payload();
+
+    println(format("mvl/gzip: {} iterations, payload {} bytes", [n.to_string(), payload.len().to_string()]));
+
+    for _ in range(0, n) {
+        let gz: List[Byte] = gzip_compress(val payload);
+        let out: List[Byte] = gzip_decompress(val gz);
+        assert_eq(out.len(), payload.len())
+    }
+
+    println("done")
+}

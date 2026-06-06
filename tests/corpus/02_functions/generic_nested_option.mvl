@@ -1,7 +1,6 @@
 // generic_nested_option.mvl — Nested generic operations (#1272)
 //
 // Exercises Option[Int] unwrapping and Option[List[Int]] nesting.
-// Note: LLVM backend returns 0 for these operations (known divergence).
 //
 // Expected stdout:
 //   some_sum=6

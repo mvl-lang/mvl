@@ -36,6 +36,7 @@ make -C tests/spikes/001-parser help
 | Directory | Topic | Status | Related issue |
 |-----------|-------|--------|---------------|
 | `001-parser/` | Parser-in-MVL — recursive-descent parser written in MVL itself | Active | #187 |
+| `003-gzip/` | gzip compress/decompress in pure MVL (LZ77 + fixed Huffman + RFC 1952 framing) | Active | #1256 |
 
 ## Adding a new spike
 

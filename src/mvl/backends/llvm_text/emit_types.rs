@@ -203,6 +203,23 @@ impl TextEmitter {
         Self::llvm_ty(ty) == "void"
     }
 
+    /// Return the byte size of an LLVM IR type string on a 64-bit target.
+    ///
+    /// Used to compute `elem_size` for `mvl_array_new`.
+    pub(super) fn llvm_type_size(ty: &str) -> usize {
+        match ty {
+            "i1" | "i8" => 1,
+            "i16" => 2,
+            "i32" => 4,
+            "i64" | "double" | "ptr" => 8,
+            // Tagged unions: { i8, ptr } → 16 bytes (8-byte aligned)
+            s if s.starts_with("{ i8, ptr }") => 16,
+            // Named struct types (%Foo) — conservatively use pointer size
+            s if s.starts_with('%') => 8,
+            _ => 8,
+        }
+    }
+
     /// Classify a type as heap-allocated for drop tracking.
     pub(super) fn heap_kind(ty: &TypeExpr) -> Option<HeapKind> {
         let base = match ty {
@@ -347,9 +364,26 @@ impl TextEmitter {
                     }
                 }
             }
-            Expr::MethodCall { method, .. } => match method.as_str() {
+            Expr::MethodCall {
+                method,
+                receiver,
+                args: margs,
+                ..
+            } => match method.as_str() {
                 "to_string" | "concat" | "to_lower" | "to_upper" | "trim" => "ptr".into(),
                 "len" => "i64".into(),
+                "is_some" | "is_none" => "i1".into(),
+                "unwrap_or" => {
+                    if let Some(a) = margs.first() {
+                        self.type_of_expr(a)
+                    } else {
+                        "i64".into()
+                    }
+                }
+                "get" if matches!(self.mvl_receiver_kind(receiver), Some("List") | Some("Map")) => {
+                    "{ i8, ptr }".into()
+                }
+                "first" | "last" => "{ i8, ptr }".into(),
                 _ => "ptr".into(),
             },
             Expr::Construct { name, .. } => {
