@@ -71,7 +71,7 @@ impl TextEmitter {
                 Ok(Some(reg))
             }
             ("concat", "ptr") => {
-                self.ensure_extern("declare ptr @mvl_string_concat(ptr, ptr)");
+                self.ensure_extern("declare ptr @_mvl_string_concat(ptr, ptr)");
                 let other = match args.first() {
                     Some(a) => match self.emit_expr(a)? {
                         Some(v) => v,
@@ -81,7 +81,7 @@ impl TextEmitter {
                 };
                 let reg = self.next_reg();
                 self.push_instr(&format!(
-                    "{reg} = call ptr @mvl_string_concat(ptr {val}, ptr {other})"
+                    "{reg} = call ptr @_mvl_string_concat(ptr {val}, ptr {other})"
                 ));
                 self.reg_types.insert(reg.clone(), "ptr".into());
                 Ok(Some(reg))
@@ -259,10 +259,6 @@ impl TextEmitter {
                     Some(v) => v,
                     None => return Ok(None),
                 };
-                // FIXME: mvl_array_len returns u64 in Rust but is declared i64
-                // here — same as the pre-existing `len` dispatch. Safe at
-                // realistic array sizes; revisit when fixing the u64/i64 ABI
-                // mismatch across all callers.
                 self.ensure_extern("declare i64 @_mvl_array_len(ptr)");
                 let len_reg = self.next_reg();
                 self.push_instr(&format!("{len_reg} = call i64 @_mvl_array_len(ptr {val})"));
@@ -427,9 +423,9 @@ impl TextEmitter {
                     Some("List") | Some("Array") | Some("Set") | Some("Map")
                 ) =>
             {
-                self.ensure_extern("declare ptr @mvl_string_chars(ptr)");
+                self.ensure_extern("declare ptr @_mvl_string_chars(ptr)");
                 let reg = self.next_reg();
-                self.push_instr(&format!("{reg} = call ptr @mvl_string_chars(ptr {val})"));
+                self.push_instr(&format!("{reg} = call ptr @_mvl_string_chars(ptr {val})"));
                 self.reg_types.insert(reg.clone(), "ptr".into());
                 Ok(Some(reg))
             }

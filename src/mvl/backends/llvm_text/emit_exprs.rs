@@ -382,10 +382,10 @@ impl TextEmitter {
 
         // String equality/inequality: delegate to runtime via mvl_string_eq.
         if lhs_ty == "ptr" && matches!(op, BinaryOp::Eq | BinaryOp::Ne) {
-            self.ensure_extern("declare i1 @mvl_string_eq(ptr, ptr)");
+            self.ensure_extern("declare i1 @_mvl_string_eq(ptr, ptr)");
             let reg = self.next_reg();
             self.push_instr(&format!(
-                "{reg} = call i1 @mvl_string_eq(ptr {lv}, ptr {rv})"
+                "{reg} = call i1 @_mvl_string_eq(ptr {lv}, ptr {rv})"
             ));
             if matches!(op, BinaryOp::Ne) {
                 let neg = self.next_reg();

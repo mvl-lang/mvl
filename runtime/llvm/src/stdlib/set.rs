@@ -18,8 +18,8 @@ use crate::memory::MvlArray;
 
 /// Read the i64 element at index `i` from a `MvlArray*`.
 #[allow(unsafe_code)]
-unsafe fn array_get_i64(arr: *const MvlArray, i: u64) -> i64 {
-    let ptr = crate::memory_ops::_mvl_array_get(arr, i as usize);
+unsafe fn array_get_i64(arr: *const MvlArray, i: i64) -> i64 {
+    let ptr = crate::memory_ops::_mvl_array_get(arr, i);
     if ptr.is_null() {
         0
     } else {

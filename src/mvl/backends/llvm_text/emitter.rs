@@ -1464,8 +1464,8 @@ mod tests {
              let _cs: List[String] = s.chars();\n\
              }",
         );
-        assert!(ir.contains("declare ptr @mvl_string_chars(ptr)"), "{ir}");
-        assert!(ir.contains("call ptr @mvl_string_chars(ptr"), "{ir}");
+        assert!(ir.contains("declare ptr @_mvl_string_chars(ptr)"), "{ir}");
+        assert!(ir.contains("call ptr @_mvl_string_chars(ptr"), "{ir}");
     }
 
     #[test]
