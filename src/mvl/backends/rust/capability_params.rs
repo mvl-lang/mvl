@@ -542,16 +542,20 @@ fn lvalue_is_param(lval: &LValue, param: &str) -> bool {
 /// called from `main.mvl`).
 pub fn build_capability_params_map_tir(
     tir: &crate::mvl::ir::TirProgram,
-    prelude_fns: &[&FnDecl],
-    sibling_progs: &[&Program],
+    prelude_tirs: &[crate::mvl::ir::TirProgram],
 ) -> HashMap<String, Vec<Option<bool>>> {
     let mut map = HashMap::new();
 
-    // Prelude functions (stdlib) — explicit &T only, no body to analyse.
-    for fd in prelude_fns {
-        let flags = explicit_borrow_flags(&fd.params);
-        if flags.iter().any(|b| b.is_some()) {
-            map.insert(fd.name.clone(), flags);
+    // Prelude functions (stdlib) — explicit annotations only (no body analysis),
+    // mirroring the old AST path which used explicit_borrow_flags(&fd.params).
+    // Body analysis on stdlib is incorrect: it would mark `default` in
+    // `unwrap_or(self, default: T)` as `&T` since the body only reads it.
+    for pt in prelude_tirs {
+        for f in &pt.fns {
+            let flags = explicit_borrow_flags_tir(f);
+            if flags.iter().any(|b| b.is_some()) {
+                map.insert(f.name.clone(), flags);
+            }
         }
     }
 
@@ -563,19 +567,22 @@ pub fn build_capability_params_map_tir(
         }
     }
 
-    // Sibling module functions — same analysis as user functions.
-    for sibling in sibling_progs {
-        for decl in &sibling.declarations {
-            if let Decl::Fn(fd) = decl {
-                let flags = capability_params_for_fn(fd);
-                if flags.iter().any(|b| b.is_some()) {
-                    map.insert(fd.name.clone(), flags);
-                }
-            }
-        }
-    }
-
     map
+}
+
+/// Explicit-only borrow flags for a TIR function (no body analysis).
+/// Used for prelude/stdlib functions where body analysis is incorrect.
+fn explicit_borrow_flags_tir(fd: &crate::mvl::ir::TirFn) -> Vec<Option<bool>> {
+    fd.params
+        .iter()
+        .map(|p| {
+            if let crate::mvl::ir::Ty::Ref(mutable, _) = &p.ty {
+                Some(*mutable)
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 /// Borrow kinds for a single TIR function.

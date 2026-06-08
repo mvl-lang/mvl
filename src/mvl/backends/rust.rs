@@ -30,14 +30,10 @@ pub mod cargo;
 pub mod config;
 pub mod coverage_emit;
 pub mod emit_actors;
-pub mod emit_actors_ast;
 pub mod emit_exprs;
-pub mod emit_exprs_ast;
 pub mod emit_functions;
 pub mod emit_impls;
-pub mod emit_impls_ast;
 pub mod emit_stmts;
-pub mod emit_stmts_ast;
 pub mod emit_types;
 pub mod emitter;
 pub mod last_use;
@@ -323,7 +319,6 @@ pub fn transpile_project_with_options(
         || prelude_requires_runtime(prelude_progs);
 
     let sibling_names: Vec<&str> = siblings.iter().map(|(n, _)| n.as_str()).collect();
-    let sibling_prog_refs: Vec<&Program> = siblings.iter().map(|(_, p)| p).collect();
 
     // Lower entry program to TIR for the TIR-based emitter path.
     let entry_all_fns = crate::mvl::passes::mono::collect_fns(
@@ -333,16 +328,21 @@ pub fn transpile_project_with_options(
         crate::mvl::passes::mono::monomorphize(entry_prog, &entry_all_fns, &expr_types);
     let entry_tir = crate::mvl::ir::lower::lower(entry_prog, &entry_mono, &expr_types);
 
+    // Lower prelude programs to TIR before moving expr_types into the emitter.
+    let prelude_tirs: Vec<crate::mvl::ir::TirProgram> = prelude_progs
+        .iter()
+        .map(|p| {
+            let all_fns = crate::mvl::passes::mono::collect_fns([p]);
+            let m = crate::mvl::passes::mono::monomorphize(p, &all_fns, &expr_types);
+            crate::mvl::ir::lower::lower(p, &m, &expr_types)
+        })
+        .collect();
+
     let mut cg = RustEmitter::new();
     cg.expr_types = expr_types;
     cg.assert_mode = assert_mode;
     cg.test_extern_stubs = extern_stubs;
-    cg.emit_program_with_mods(
-        &entry_tir,
-        &sibling_names,
-        prelude_progs,
-        &sibling_prog_refs,
-    );
+    cg.emit_program_with_mods(&entry_tir, &sibling_names, &prelude_tirs);
     let main_rs = cg.finish();
 
     // Sibling modules share the runtime prelude with the entry point so type
@@ -352,26 +352,19 @@ pub fn transpile_project_with_options(
         .iter()
         .enumerate()
         .map(|(idx, (name, prog))| {
-            // Build sibling_progs for this module: entry + all OTHER siblings.
-            let mut other_progs: Vec<&Program> = vec![entry_prog];
-            for (j, (_, p)) in siblings.iter().enumerate() {
-                if j != idx {
-                    other_progs.push(p);
-                }
-            }
             let sib_et = sibling_expr_types.get(idx).cloned().unwrap_or_default();
+            // Lower sibling to TIR (used for both the runtime and non-runtime paths).
+            let sib_all_fns = crate::mvl::passes::mono::collect_fns([prog]);
+            let sib_mono = crate::mvl::passes::mono::monomorphize(prog, &sib_all_fns, &sib_et);
+            let sib_tir = crate::mvl::ir::lower::lower(prog, &sib_mono, &sib_et);
+
             let mut cg = RustEmitter::new();
-            // Use pre-checked, prelude-merged type map supplied by the caller.
-            // This avoids re-invoking the checker inside the backend.
-            cg.expr_types = sib_et.clone();
+            cg.expr_types = sib_et;
             cg.assert_mode = assert_mode;
             cg.test_extern_stubs = extern_stubs;
             if entry_uses_runtime {
-                cg.emit_sibling_module(prog, prelude_progs, &other_progs);
+                cg.emit_sibling_module(&sib_tir, &prelude_tirs);
             } else {
-                let sib_all_fns = crate::mvl::passes::mono::collect_fns([prog]);
-                let sib_mono = crate::mvl::passes::mono::monomorphize(prog, &sib_all_fns, &sib_et);
-                let sib_tir = crate::mvl::ir::lower::lower(prog, &sib_mono, &sib_et);
                 cg.emit_program(&sib_tir);
             }
             (name.clone(), cg.finish())
@@ -418,16 +411,23 @@ pub fn transpile(tir: crate::mvl::ir::TirProgram, config: TranspileConfig) -> Tr
         || has_std_imports_tir(&tir)
         || (has_prelude && prelude_requires_runtime(&config.prelude_progs));
 
-    // Merge prelude expr_types so the AST-based prelude emission path can
-    // resolve receiver types for span-keyed lookups (e.g. method dispatch
-    // on `f64::pow` → `.powf`).  The prelude is still emitted from AST in
-    // the TIR-based path (#1195), so its spans must be in the type map.
     let mut expr_types = tir.span_types();
     if has_prelude {
         expr_types.extend(crate::mvl::checker::collect_prelude_expr_types(
             &config.prelude_progs,
         ));
     }
+
+    // Lower prelude programs to TIR using the merged expr_types.
+    let prelude_tirs: Vec<crate::mvl::ir::TirProgram> = config
+        .prelude_progs
+        .iter()
+        .map(|p| {
+            let all_fns = crate::mvl::passes::mono::collect_fns([p]);
+            let m = crate::mvl::passes::mono::monomorphize(p, &all_fns, &expr_types);
+            crate::mvl::ir::lower::lower(p, &m, &expr_types)
+        })
+        .collect();
 
     let mut cg = RustEmitter::new();
     cg.expr_types = expr_types;
@@ -436,12 +436,8 @@ pub fn transpile(tir: crate::mvl::ir::TirProgram, config: TranspileConfig) -> Tr
     // Set test_extern_stubs: explicitly from config OR when prelude contains extern blocks.
     // Extern blocks in the prelude (e.g. pkg FFI bindings) cannot be linked in test
     // crates, so they are replaced with `todo!()` stubs.
-    cg.test_extern_stubs = config.test_extern_stubs
-        || (has_prelude
-            && config
-                .prelude_progs
-                .iter()
-                .any(|p| p.declarations.iter().any(|d| matches!(d, Decl::Extern(_)))));
+    cg.test_extern_stubs =
+        config.test_extern_stubs || prelude_tirs.iter().any(|t| !t.externs.is_empty());
     cg.current_file_is_test = config.is_test_file;
 
     if let Some(start_id) = config.coverage_start_id {
@@ -456,7 +452,7 @@ pub fn transpile(tir: crate::mvl::ir::TirProgram, config: TranspileConfig) -> Tr
     }
 
     if has_prelude {
-        cg.emit_program_with_mods(&tir, &[], &config.prelude_progs, &[]);
+        cg.emit_program_with_mods(&tir, &[], &prelude_tirs);
     } else {
         cg.emit_program(&tir);
     }
