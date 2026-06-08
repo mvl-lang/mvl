@@ -3183,11 +3183,11 @@ fn main() -> Unit { }
         "LLVM IR must contain dispatch function.\nIR:\n{ir}"
     );
     assert!(
-        ir.contains("mvl_actor_spawn"),
+        ir.contains("_mvl_actor_spawn"),
         "LLVM IR must declare mvl_actor_spawn runtime call.\nIR:\n{ir}"
     );
     assert!(
-        ir.contains("mvl_actor_send"),
+        ir.contains("_mvl_actor_send"),
         "LLVM IR must declare mvl_actor_send runtime call.\nIR:\n{ir}"
     );
 }
@@ -3211,7 +3211,7 @@ fn main() -> Unit {
         .compile_to_ir(&prog, "test_actor_spawn")
         .expect("IR generation failed");
     assert!(
-        ir.contains("mvl_actor_spawn"),
+        ir.contains("_mvl_actor_spawn"),
         "actor spawn expression must emit mvl_actor_spawn call.\nIR:\n{ir}"
     );
 }
@@ -3275,7 +3275,7 @@ fn main() -> Unit {
         .compile_to_ir(&prog, "test_actor_send")
         .expect("IR generation failed");
     assert!(
-        ir.contains("mvl_actor_send"),
+        ir.contains("_mvl_actor_send"),
         "actor behavior call must emit mvl_actor_send.\nIR:\n{ir}"
     );
 }

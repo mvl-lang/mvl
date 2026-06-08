@@ -27,7 +27,7 @@ use std::ptr;
 
 // ── Internal size arithmetic helpers ─────────────────────────────────────────
 //
-// All size calculations before `mvl_alloc` calls use these helpers to abort
+// All size calculations before `_mvl_alloc` calls use these helpers to abort
 // on integer overflow instead of producing a truncated allocation that could
 // lead to heap buffer overruns.
 
@@ -48,9 +48,9 @@ fn checked_add_size(a: usize, b: usize) -> usize {
 /// Allocate `size` bytes, aligned to 8 bytes.  Aborts on allocation failure.
 ///
 /// # Safety
-/// Caller must free with `mvl_free` using the same `size`.
+/// Caller must free with `_mvl_free` using the same `size`.
 #[no_mangle]
-pub unsafe extern "C" fn mvl_alloc(size: usize) -> *mut u8 {
+pub unsafe extern "C" fn _mvl_alloc(size: usize) -> *mut u8 {
     if size == 0 {
         return ptr::NonNull::dangling().as_ptr();
     }
@@ -59,18 +59,18 @@ pub unsafe extern "C" fn mvl_alloc(size: usize) -> *mut u8 {
     };
     let ptr = alloc(layout);
     if ptr.is_null() {
-        mvl_panic(b"mvl_alloc: out of memory\0".as_ptr().cast());
+        _mvl_panic(b"_mvl_alloc: out of memory\0".as_ptr().cast());
     }
     ptr
 }
 
-/// Free memory allocated by `mvl_alloc`.
+/// Free memory allocated by `_mvl_alloc`.
 ///
 /// # Safety
-/// `ptr` must have been returned by `mvl_alloc(size)` and must not have been
+/// `ptr` must have been returned by `_mvl_alloc(size)` and must not have been
 /// freed already.  Passing `size = 0` with a dangling pointer is a no-op.
 #[no_mangle]
-pub unsafe extern "C" fn mvl_free(ptr: *mut u8, size: usize) {
+pub unsafe extern "C" fn _mvl_free(ptr: *mut u8, size: usize) {
     if size == 0 || ptr.is_null() {
         return;
     }
@@ -89,23 +89,23 @@ pub unsafe extern "C" fn mvl_free(ptr: *mut u8, size: usize) {
 /// # Safety
 /// Caller must free the returned pointer with `free(ptr)`.
 #[no_mangle]
-pub unsafe extern "C" fn mvl_box_new(size: i64) -> *mut u8 {
+pub unsafe extern "C" fn _mvl_box_new(size: i64) -> *mut u8 {
     if size <= 0 {
         std::process::abort();
     }
     let ptr = libc::malloc(size as libc::size_t) as *mut u8;
     if ptr.is_null() {
-        mvl_panic(b"mvl_box_new: out of memory\0".as_ptr().cast());
+        _mvl_panic(b"_mvl_box_new: out of memory\0".as_ptr().cast());
     }
     ptr
 }
 
 /// Print `msg` (null-terminated C string) to stderr and abort.
 #[no_mangle]
-pub unsafe extern "C" fn mvl_panic(msg: *const u8) {
+pub unsafe extern "C" fn _mvl_panic(msg: *const u8) {
     use std::io::Write;
     let msg_str = if msg.is_null() {
-        "mvl_panic: (null message)"
+        "_mvl_panic: (null message)"
     } else {
         let len = libc::strlen(msg.cast());
         std::str::from_utf8(std::slice::from_raw_parts(msg, len)).unwrap_or("(invalid utf8)")
@@ -132,10 +132,10 @@ pub struct MvlString {
 
 impl MvlString {
     // alloc_bytes removed: mvl_string_concat moved to mvl_runtime_c::memory_ops (#490),
-    // so alloc_bytes had no callers. Use mvl_alloc directly.
+    // so alloc_bytes had no callers. Use _mvl_alloc directly.
 
     unsafe fn free_bytes(ptr: *mut u8, cap: usize) {
-        mvl_free(ptr, cap);
+        _mvl_free(ptr, cap);
     }
 }
 
@@ -145,14 +145,14 @@ impl MvlString {
 /// # Safety
 /// `bytes` must be a valid pointer to at least `len` readable bytes.
 #[no_mangle]
-pub unsafe extern "C" fn mvl_string_new(bytes: *const u8, len: usize) -> *mut MvlString {
+pub unsafe extern "C" fn _mvl_string_new(bytes: *const u8, len: usize) -> *mut MvlString {
     let cap = checked_add_size(len, 1); // +1 for null terminator
-    let data = mvl_alloc(cap) as *mut u8;
+    let data = _mvl_alloc(cap) as *mut u8;
     if len > 0 {
         ptr::copy_nonoverlapping(bytes, data, len);
     }
     *data.add(len) = 0; // null terminator
-    let s = mvl_alloc(std::mem::size_of::<MvlString>()) as *mut MvlString;
+    let s = _mvl_alloc(std::mem::size_of::<MvlString>()) as *mut MvlString;
     s.write(MvlString {
         ptr: data,
         len: len as u64,
@@ -168,11 +168,11 @@ pub unsafe extern "C" fn mvl_string_new(bytes: *const u8, len: usize) -> *mut Mv
 /// # Safety
 /// `s` must be a valid non-null `MvlString` pointer.
 #[no_mangle]
-pub unsafe extern "C" fn mvl_string_deep_clone(s: *mut MvlString) -> *mut MvlString {
+pub unsafe extern "C" fn _mvl_string_deep_clone(s: *mut MvlString) -> *mut MvlString {
     if s.is_null() {
         return s;
     }
-    mvl_string_new((*s).ptr, (*s).len as usize)
+    _mvl_string_new((*s).ptr, (*s).len as usize)
 }
 
 /// Increment refcount and return the same pointer.
@@ -180,7 +180,7 @@ pub unsafe extern "C" fn mvl_string_deep_clone(s: *mut MvlString) -> *mut MvlStr
 /// # Safety
 /// `s` must be a valid non-null `MvlString` pointer.
 #[no_mangle]
-pub unsafe extern "C" fn mvl_string_clone(s: *mut MvlString) -> *mut MvlString {
+pub unsafe extern "C" fn _mvl_string_clone(s: *mut MvlString) -> *mut MvlString {
     if s.is_null() {
         return s;
     }
@@ -196,7 +196,7 @@ pub unsafe extern "C" fn mvl_string_clone(s: *mut MvlString) -> *mut MvlString {
 /// # Safety
 /// `s` must be a valid non-null `MvlString` pointer.  Must not be used after drop.
 #[no_mangle]
-pub unsafe extern "C" fn mvl_string_drop(s: *mut MvlString) {
+pub unsafe extern "C" fn _mvl_string_drop(s: *mut MvlString) {
     if s.is_null() {
         return;
     }
@@ -206,7 +206,7 @@ pub unsafe extern "C" fn mvl_string_drop(s: *mut MvlString) {
         .unwrap_or_else(|| std::process::abort());
     if (*s).refcount == 0 {
         MvlString::free_bytes((*s).ptr, (*s).cap as usize);
-        mvl_free(s as *mut u8, std::mem::size_of::<MvlString>());
+        _mvl_free(s as *mut u8, std::mem::size_of::<MvlString>());
     }
 }
 
@@ -239,14 +239,14 @@ const ARRAY_INITIAL_CAP: u64 = 4;
 /// # Safety
 /// Always safe to call; `elem_size` must be > 0.
 #[no_mangle]
-pub unsafe extern "C" fn mvl_array_new(elem_size: usize, initial_cap: usize) -> *mut MvlArray {
+pub unsafe extern "C" fn _mvl_array_new(elem_size: usize, initial_cap: usize) -> *mut MvlArray {
     let cap = initial_cap.max(ARRAY_INITIAL_CAP as usize);
     let data = if cap > 0 && elem_size > 0 {
-        mvl_alloc(checked_mul_size(cap, elem_size))
+        _mvl_alloc(checked_mul_size(cap, elem_size))
     } else {
         ptr::null_mut()
     };
-    let a = mvl_alloc(std::mem::size_of::<MvlArray>()) as *mut MvlArray;
+    let a = _mvl_alloc(std::mem::size_of::<MvlArray>()) as *mut MvlArray;
     a.write(MvlArray {
         ptr: data,
         len: 0,
@@ -264,7 +264,7 @@ pub unsafe extern "C" fn mvl_array_new(elem_size: usize, initial_cap: usize) -> 
 /// # Safety
 /// `a` must be a valid non-null `MvlArray` pointer.
 #[no_mangle]
-pub unsafe extern "C" fn mvl_array_deep_clone(a: *mut MvlArray) -> *mut MvlArray {
+pub unsafe extern "C" fn _mvl_array_deep_clone(a: *mut MvlArray) -> *mut MvlArray {
     if a.is_null() {
         return a;
     }
@@ -273,7 +273,7 @@ pub unsafe extern "C" fn mvl_array_deep_clone(a: *mut MvlArray) -> *mut MvlArray
     let cap = ((*a).cap as usize).max(len);
     let data = if cap > 0 && elem_size > 0 {
         let bytes = checked_mul_size(cap, elem_size);
-        let new_data = mvl_alloc(bytes);
+        let new_data = _mvl_alloc(bytes);
         if len > 0 && !(*a).ptr.is_null() {
             ptr::copy_nonoverlapping((*a).ptr, new_data, checked_mul_size(len, elem_size));
         }
@@ -281,7 +281,7 @@ pub unsafe extern "C" fn mvl_array_deep_clone(a: *mut MvlArray) -> *mut MvlArray
     } else {
         ptr::null_mut()
     };
-    let new_a = mvl_alloc(std::mem::size_of::<MvlArray>()) as *mut MvlArray;
+    let new_a = _mvl_alloc(std::mem::size_of::<MvlArray>()) as *mut MvlArray;
     new_a.write(MvlArray {
         ptr: data,
         len: (*a).len,
@@ -297,7 +297,7 @@ pub unsafe extern "C" fn mvl_array_deep_clone(a: *mut MvlArray) -> *mut MvlArray
 /// # Safety
 /// `a` must be a valid non-null `MvlArray` pointer.
 #[no_mangle]
-pub unsafe extern "C" fn mvl_array_clone(a: *mut MvlArray) -> *mut MvlArray {
+pub unsafe extern "C" fn _mvl_array_clone(a: *mut MvlArray) -> *mut MvlArray {
     if a.is_null() {
         return a;
     }
@@ -313,7 +313,7 @@ pub unsafe extern "C" fn mvl_array_clone(a: *mut MvlArray) -> *mut MvlArray {
 /// # Safety
 /// `a` must be a valid non-null `MvlArray` pointer.  Must not be used after drop.
 #[no_mangle]
-pub unsafe extern "C" fn mvl_array_drop(a: *mut MvlArray) {
+pub unsafe extern "C" fn _mvl_array_drop(a: *mut MvlArray) {
     if a.is_null() {
         return;
     }
@@ -324,9 +324,9 @@ pub unsafe extern "C" fn mvl_array_drop(a: *mut MvlArray) {
     if (*a).refcount == 0 {
         let data_size = checked_mul_size((*a).cap as usize, (*a).elem_size as usize);
         if data_size > 0 && !(*a).ptr.is_null() {
-            mvl_free((*a).ptr, data_size);
+            _mvl_free((*a).ptr, data_size);
         }
-        mvl_free(a as *mut u8, std::mem::size_of::<MvlArray>());
+        _mvl_free(a as *mut u8, std::mem::size_of::<MvlArray>());
     }
 }
 
@@ -371,15 +371,15 @@ const SLOT_SIZE: usize = std::mem::size_of::<MvlMapSlot>();
 /// # Safety
 /// Always safe to call.
 #[no_mangle]
-pub unsafe extern "C" fn mvl_map_new(initial_cap: usize) -> *mut MvlMap {
+pub unsafe extern "C" fn _mvl_map_new(initial_cap: usize) -> *mut MvlMap {
     let cap = initial_cap
         .next_power_of_two()
         .max(MAP_INITIAL_CAP as usize);
     let slot_bytes = checked_mul_size(cap, SLOT_SIZE);
-    let slots = mvl_alloc(slot_bytes) as *mut MvlMapSlot;
+    let slots = _mvl_alloc(slot_bytes) as *mut MvlMapSlot;
     // Zero-initialize all slots (occupied = 0).
     ptr::write_bytes(slots as *mut u8, 0, slot_bytes);
-    let m = mvl_alloc(std::mem::size_of::<MvlMap>()) as *mut MvlMap;
+    let m = _mvl_alloc(std::mem::size_of::<MvlMap>()) as *mut MvlMap;
     m.write(MvlMap {
         slots,
         len: 0,
@@ -396,20 +396,20 @@ pub unsafe extern "C" fn mvl_map_new(initial_cap: usize) -> *mut MvlMap {
 /// # Safety
 /// `m` must be a valid non-null `MvlMap` pointer.
 #[no_mangle]
-pub unsafe extern "C" fn mvl_map_deep_clone(m: *mut MvlMap) -> *mut MvlMap {
+pub unsafe extern "C" fn _mvl_map_deep_clone(m: *mut MvlMap) -> *mut MvlMap {
     if m.is_null() {
         return m;
     }
     let cap = (*m).cap as usize;
     let slot_bytes = checked_mul_size(cap, SLOT_SIZE);
-    let new_slots = mvl_alloc(slot_bytes) as *mut MvlMapSlot;
+    let new_slots = _mvl_alloc(slot_bytes) as *mut MvlMapSlot;
     ptr::write_bytes(new_slots as *mut u8, 0, slot_bytes);
     for i in 0..cap {
         let src = &*(*m).slots.add(i);
         if src.occupied != 0 {
-            let key_copy = mvl_alloc(src.key_len as usize);
+            let key_copy = _mvl_alloc(src.key_len as usize);
             ptr::copy_nonoverlapping(src.key_ptr, key_copy, src.key_len as usize);
-            let val_copy = mvl_alloc(src.val_len as usize);
+            let val_copy = _mvl_alloc(src.val_len as usize);
             ptr::copy_nonoverlapping(src.val_ptr, val_copy, src.val_len as usize);
             (*new_slots.add(i)) = MvlMapSlot {
                 occupied: src.occupied,
@@ -420,7 +420,7 @@ pub unsafe extern "C" fn mvl_map_deep_clone(m: *mut MvlMap) -> *mut MvlMap {
             };
         }
     }
-    let new_m = mvl_alloc(std::mem::size_of::<MvlMap>()) as *mut MvlMap;
+    let new_m = _mvl_alloc(std::mem::size_of::<MvlMap>()) as *mut MvlMap;
     new_m.write(MvlMap {
         slots: new_slots,
         len: (*m).len,
@@ -435,7 +435,7 @@ pub unsafe extern "C" fn mvl_map_deep_clone(m: *mut MvlMap) -> *mut MvlMap {
 /// # Safety
 /// `m` must be a valid non-null `MvlMap` pointer.
 #[no_mangle]
-pub unsafe extern "C" fn mvl_map_clone(m: *mut MvlMap) -> *mut MvlMap {
+pub unsafe extern "C" fn _mvl_map_clone(m: *mut MvlMap) -> *mut MvlMap {
     if m.is_null() {
         return m;
     }
@@ -451,7 +451,7 @@ pub unsafe extern "C" fn mvl_map_clone(m: *mut MvlMap) -> *mut MvlMap {
 /// # Safety
 /// `m` must be a valid non-null `MvlMap` pointer.  Must not be used after drop.
 #[no_mangle]
-pub unsafe extern "C" fn mvl_map_drop(m: *mut MvlMap) {
+pub unsafe extern "C" fn _mvl_map_drop(m: *mut MvlMap) {
     if m.is_null() {
         return;
     }
@@ -464,12 +464,12 @@ pub unsafe extern "C" fn mvl_map_drop(m: *mut MvlMap) {
         for i in 0..cap {
             let slot = &*(*m).slots.add(i);
             if slot.occupied != 0 {
-                mvl_free(slot.key_ptr, slot.key_len as usize);
-                mvl_free(slot.val_ptr, slot.val_len as usize);
+                _mvl_free(slot.key_ptr, slot.key_len as usize);
+                _mvl_free(slot.val_ptr, slot.val_len as usize);
             }
         }
-        mvl_free((*m).slots as *mut u8, checked_mul_size(cap, SLOT_SIZE));
-        mvl_free(m as *mut u8, std::mem::size_of::<MvlMap>());
+        _mvl_free((*m).slots as *mut u8, checked_mul_size(cap, SLOT_SIZE));
+        _mvl_free(m as *mut u8, std::mem::size_of::<MvlMap>());
     }
 }
 
@@ -491,35 +491,35 @@ mod tests {
     #[test]
     fn string_new_fields() {
         unsafe {
-            let s = mvl_string_new(b"hello".as_ptr(), 5);
+            let s = _mvl_string_new(b"hello".as_ptr(), 5);
             assert_eq!((*s).len, 5);
             assert_eq!((*s).refcount, 1);
             assert!(!(*s).ptr.is_null());
             assert_eq!(*(*s).ptr.add(5), 0); // null-terminated
-            mvl_string_drop(s);
+            _mvl_string_drop(s);
         }
     }
 
     #[test]
     fn string_clone_and_drop() {
         unsafe {
-            let s = mvl_string_new(b"world".as_ptr(), 5);
-            let s2 = mvl_string_clone(s);
+            let s = _mvl_string_new(b"world".as_ptr(), 5);
+            let s2 = _mvl_string_clone(s);
             assert_eq!((*s).refcount, 2);
-            mvl_string_drop(s2);
+            _mvl_string_drop(s2);
             assert_eq!((*s).refcount, 1);
-            mvl_string_drop(s);
+            _mvl_string_drop(s);
         }
     }
 
     #[test]
     fn string_new_empty() {
         unsafe {
-            let s = mvl_string_new(b"".as_ptr(), 0);
+            let s = _mvl_string_new(b"".as_ptr(), 0);
             assert_eq!((*s).len, 0);
             assert_eq!((*s).refcount, 1);
             assert_eq!(*(*s).ptr, 0); // null terminator
-            mvl_string_drop(s);
+            _mvl_string_drop(s);
         }
     }
 
@@ -528,23 +528,23 @@ mod tests {
     #[test]
     fn array_new_fields() {
         unsafe {
-            let a = mvl_array_new(8, 0); // i64 elements, default cap
+            let a = _mvl_array_new(8, 0); // i64 elements, default cap
             assert_eq!((*a).len, 0);
             assert_eq!((*a).elem_size, 8);
             assert_eq!((*a).refcount, 1);
-            mvl_array_drop(a);
+            _mvl_array_drop(a);
         }
     }
 
     #[test]
     fn array_clone_and_drop() {
         unsafe {
-            let a = mvl_array_new(8, 4);
-            let a2 = mvl_array_clone(a);
+            let a = _mvl_array_new(8, 4);
+            let a2 = _mvl_array_clone(a);
             assert_eq!((*a).refcount, 2);
-            mvl_array_drop(a2);
+            _mvl_array_drop(a2);
             assert_eq!((*a).refcount, 1);
-            mvl_array_drop(a);
+            _mvl_array_drop(a);
         }
     }
 
@@ -553,23 +553,23 @@ mod tests {
     #[test]
     fn map_new_fields() {
         unsafe {
-            let m = mvl_map_new(0);
+            let m = _mvl_map_new(0);
             assert_eq!((*m).len, 0);
             assert!((*m).cap >= 8); // >= MAP_INITIAL_CAP
             assert_eq!((*m).refcount, 1);
-            mvl_map_drop(m);
+            _mvl_map_drop(m);
         }
     }
 
     #[test]
     fn map_clone_and_drop() {
         unsafe {
-            let m = mvl_map_new(0);
-            let m2 = mvl_map_clone(m);
+            let m = _mvl_map_new(0);
+            let m2 = _mvl_map_clone(m);
             assert_eq!((*m).refcount, 2);
-            mvl_map_drop(m2);
+            _mvl_map_drop(m2);
             assert_eq!((*m).refcount, 1);
-            mvl_map_drop(m);
+            _mvl_map_drop(m);
         }
     }
 }

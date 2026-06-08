@@ -29,7 +29,7 @@ fn process_err_result(e: &process::ProcessError) -> LlvmResult {
         process::ProcessError::PermissionDenied => "permission denied",
         process::ProcessError::Other(msg) => msg.as_str(),
     };
-    let str_ptr = unsafe { crate::memory::mvl_string_new(msg.as_ptr(), msg.len()) };
+    let str_ptr = unsafe { crate::memory::_mvl_string_new(msg.as_ptr(), msg.len()) };
     LlvmResult::err_mvl(str_ptr as *mut libc::c_void)
 }
 
@@ -128,7 +128,7 @@ pub extern "C" fn _mvl_process_spawn(
 pub extern "C" fn _mvl_process_wait(child_ptr: *mut libc::c_void) -> LlvmResult {
     if child_ptr.is_null() {
         let msg = "null child handle";
-        let str_ptr = unsafe { crate::memory::mvl_string_new(msg.as_ptr(), msg.len()) };
+        let str_ptr = unsafe { crate::memory::_mvl_string_new(msg.as_ptr(), msg.len()) };
         return LlvmResult::err_mvl(str_ptr as *mut libc::c_void);
     }
     // Safety: child_ptr was allocated by _mvl_process_spawn via Box::into_raw.
@@ -160,7 +160,7 @@ pub extern "C" fn _mvl_process_wait(child_ptr: *mut libc::c_void) -> LlvmResult 
 pub extern "C" fn _mvl_process_kill(child_ptr: *mut libc::c_void) -> LlvmResult {
     if child_ptr.is_null() {
         let msg = "null child handle";
-        let str_ptr = unsafe { crate::memory::mvl_string_new(msg.as_ptr(), msg.len()) };
+        let str_ptr = unsafe { crate::memory::_mvl_string_new(msg.as_ptr(), msg.len()) };
         return LlvmResult::err_mvl(str_ptr as *mut libc::c_void);
     }
     // Safety: child_ptr was allocated by _mvl_process_spawn or a prior _mvl_process_kill.
@@ -266,19 +266,19 @@ pub extern "C" fn _mvl_process_is_success(status_tag: i8) -> i8 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::mvl_string_new;
+    use crate::memory::_mvl_string_new;
     use crate::memory_ops::_mvl_array_push;
 
     /// Create a `*const MvlString` from a Rust `&str`.
     #[allow(unsafe_code)]
     fn make_mvl_str(s: &str) -> *const MvlString {
-        unsafe { mvl_string_new(s.as_ptr(), s.len()) as *const MvlString }
+        unsafe { _mvl_string_new(s.as_ptr(), s.len()) as *const MvlString }
     }
 
     /// Create a `*const MvlArray` containing the given `MvlString` pointers.
     #[allow(unsafe_code)]
     fn make_mvl_argv(strs: &[*const MvlString]) -> *const MvlArray {
-        let arr = unsafe { crate::memory::mvl_array_new(8, strs.len().max(4)) };
+        let arr = unsafe { crate::memory::_mvl_array_new(8, strs.len().max(4)) };
         for s in strs {
             let mut slot = *s as usize;
             let slot_ptr = &mut slot as *mut usize as *const u8;
@@ -290,7 +290,7 @@ mod tests {
     /// Create an empty `MvlArray` (no arguments).
     #[allow(unsafe_code)]
     fn empty_argv() -> *const MvlArray {
-        unsafe { crate::memory::mvl_array_new(8, 4) as *const MvlArray }
+        unsafe { crate::memory::_mvl_array_new(8, 4) as *const MvlArray }
     }
 
     #[test]

@@ -34,7 +34,7 @@
 //!
 //! # Shutdown protocol
 //!
-//! `mvl_actor_join_all()` is emitted at end of `fn main()` by the LLVM backend:
+//! `_mvl_actor_join_all()` is emitted at end of `fn main()` by the LLVM backend:
 //! 1. Clears the link/monitor registry (releases all `Arc<ActorCell>` refs there)
 //! 2. Sends `DISC_SHUTDOWN` to every live actor cell
 //! 3. Spin-waits until every cell is idle (`scheduled = false`)
@@ -101,8 +101,8 @@ struct ActorCell {
     /// Bounded mailbox capacity (0 = unbounded).  Messages are silently dropped
     /// when the mailbox is full (DropNewest policy; Block degrades here in Phase 2).
     capacity: usize,
-    /// Raw pointer to the owning `MvlActorHandle` — for `mvl_actor_self()`.
-    /// Cleared to 0 by `mvl_actor_drop` / `mvl_actor_join_all`.
+    /// Raw pointer to the owning `MvlActorHandle` — for `_mvl_actor_self()`.
+    /// Cleared to 0 by `_mvl_actor_drop` / `_mvl_actor_join_all`.
     handle_ptr: AtomicUsize,
 }
 
@@ -136,7 +136,7 @@ impl ActorCell {
 struct GlobalScheduler {
     injector: Injector<Arc<ActorCell>>,
     workers: Mutex<Vec<JoinHandle<()>>>,
-    /// Set to `true` by `mvl_actor_join_all` to signal workers to exit.
+    /// Set to `true` by `_mvl_actor_join_all` to signal workers to exit.
     shutdown: AtomicBool,
 }
 
@@ -234,7 +234,7 @@ fn process_one_message(cell: Arc<ActorCell>, local: &Worker<Arc<ActorCell>>) {
         }
     };
 
-    // Set per-task thread-locals (for mvl_actor_self / mvl_yield_check).
+    // Set per-task thread-locals (for _mvl_actor_self / _mvl_yield_check).
     CURRENT_ACTOR_PTR.with(|c| c.set(cell.handle_ptr.load(Ordering::Acquire)));
     CURRENT_ACTOR_ID.with(|c| c.set(cell.actor_id));
     ACTOR_REDUCTIONS.with(|c| c.set(REDUCTION_LIMIT));
@@ -423,7 +423,7 @@ fn process_actor_exit(dead_id: ActorId, reason: i64) {
 // ── Global actor registry ─────────────────────────────────────────────────
 
 /// Tracks every spawned actor: `(Option<handle_raw_ptr>, Arc<ActorCell>)`.
-/// `Option` is `None` when the handle has been explicitly dropped via `mvl_actor_drop`.
+/// `Option` is `None` when the handle has been explicitly dropped via `_mvl_actor_drop`.
 fn global_actor_registry() -> &'static Mutex<Vec<(Option<usize>, Arc<ActorCell>)>> {
     static REGISTRY: OnceLock<Mutex<Vec<(Option<usize>, Arc<ActorCell>)>>> = OnceLock::new();
     REGISTRY.get_or_init(|| Mutex::new(Vec::new()))
@@ -432,7 +432,7 @@ fn global_actor_registry() -> &'static Mutex<Vec<(Option<usize>, Arc<ActorCell>)
 // ── Thread-local context ──────────────────────────────────────────────────
 
 thread_local! {
-    /// Raw pointer to the current task's `MvlActorHandle` (for `mvl_actor_self()`).
+    /// Raw pointer to the current task's `MvlActorHandle` (for `_mvl_actor_self()`).
     /// Set by the worker before each dispatch; 0 outside actor context.
     static CURRENT_ACTOR_PTR: Cell<usize> = const { Cell::new(0) };
     static CURRENT_ACTOR_ID: Cell<u64> = const { Cell::new(0) };
@@ -445,8 +445,8 @@ thread_local! {
 /// Opaque actor handle allocated on the heap.
 ///
 /// The LLVM backend stores this as a `ptr` (opaque pointer) in LLVM IR.
-/// Only pass to [`mvl_actor_send`], [`mvl_actor_drop`], [`mvl_actor_get_id`],
-/// [`mvl_link`], [`mvl_unlink`], [`mvl_monitor`], [`mvl_set_trap_exit`].
+/// Only pass to [`_mvl_actor_send`], [`_mvl_actor_drop`], [`_mvl_actor_get_id`],
+/// [`_mvl_link`], [`_mvl_unlink`], [`_mvl_monitor`], [`_mvl_set_trap_exit`].
 pub struct MvlActorHandle {
     cell: Arc<ActorCell>,
     actor_id: u64,
@@ -469,7 +469,7 @@ pub struct MvlActorHandle {
 ///
 /// `state_ptr` must point to at least `state_size` valid bytes.
 #[no_mangle]
-pub unsafe extern "C" fn mvl_actor_spawn(
+pub unsafe extern "C" fn _mvl_actor_spawn(
     dispatch: DispatchFn,
     state_ptr: *mut u8,
     state_size: i64,
@@ -501,7 +501,7 @@ pub unsafe extern "C" fn mvl_actor_spawn(
     });
     let handle_ptr = Box::into_raw(handle);
 
-    // Store the handle's address back into the cell for mvl_actor_self().
+    // Store the handle's address back into the cell for _mvl_actor_self().
     cell.handle_ptr
         .store(handle_ptr as usize, Ordering::Release);
 
@@ -537,10 +537,10 @@ pub unsafe extern "C" fn mvl_actor_spawn(
 ///
 /// # Safety
 ///
-/// `handle` must be a valid pointer returned by [`mvl_actor_spawn`] and not yet
+/// `handle` must be a valid pointer returned by [`_mvl_actor_spawn`] and not yet
 /// dropped. `args` must point to at least `argc` valid `i64` values.
 #[no_mangle]
-pub unsafe extern "C" fn mvl_actor_send(handle: *mut u8, disc: i64, argc: i64, args: *const i64) {
+pub unsafe extern "C" fn _mvl_actor_send(handle: *mut u8, disc: i64, argc: i64, args: *const i64) {
     if handle.is_null() {
         return;
     }
@@ -569,13 +569,13 @@ pub unsafe extern "C" fn mvl_actor_send(handle: *mut u8, disc: i64, argc: i64, a
 /// Must only be called from within a behavior dispatch.
 /// Returns null if called from a non-actor context.
 #[no_mangle]
-pub extern "C" fn mvl_actor_self() -> *mut u8 {
+pub extern "C" fn _mvl_actor_self() -> *mut u8 {
     CURRENT_ACTOR_PTR.with(|c| c.get() as *mut u8)
 }
 
 /// Get the actor ID from a handle.  Returns 0 for a null handle.
 #[no_mangle]
-pub unsafe extern "C" fn mvl_actor_get_id(handle: *mut u8) -> i64 {
+pub unsafe extern "C" fn _mvl_actor_get_id(handle: *mut u8) -> i64 {
     if handle.is_null() {
         return 0;
     }
@@ -587,21 +587,21 @@ pub unsafe extern "C" fn mvl_actor_get_id(handle: *mut u8) -> i64 {
 
 /// Drop an actor handle.
 ///
-/// Clears the back-pointer in the cell (so `mvl_actor_self()` returns null
+/// Clears the back-pointer in the cell (so `_mvl_actor_self()` returns null
 /// from within this actor) and marks the registry entry as consumed so that
-/// `mvl_actor_join_all` does not double-free it.
+/// `_mvl_actor_join_all` does not double-free it.
 ///
 /// # Safety
 ///
-/// `handle` must be a valid pointer returned by [`mvl_actor_spawn`] and must
+/// `handle` must be a valid pointer returned by [`_mvl_actor_spawn`] and must
 /// not be used after this call.
 #[no_mangle]
-pub unsafe extern "C" fn mvl_actor_drop(handle: *mut u8) {
+pub unsafe extern "C" fn _mvl_actor_drop(handle: *mut u8) {
     if handle.is_null() {
         return;
     }
     // Hold the registry lock for the entire drop sequence so that a concurrent
-    // mvl_actor_join_all cannot finish before this Box is freed, preventing
+    // _mvl_actor_join_all cannot finish before this Box is freed, preventing
     // a use-after-free of the handle_ptr value in worker thread-locals.
     let mut reg = global_actor_registry()
         .lock()
@@ -625,7 +625,7 @@ pub unsafe extern "C" fn mvl_actor_drop(handle: *mut u8) {
 /// 3. Spin-wait until every cell is idle (`scheduled = false`).
 /// 4. Set `shutdown = true` and join all worker threads.
 #[no_mangle]
-pub extern "C" fn mvl_actor_join_all() {
+pub extern "C" fn _mvl_actor_join_all() {
     // 1. Clear link/monitor registry.
     {
         let mut reg = global_link_registry()
@@ -692,7 +692,7 @@ pub extern "C" fn mvl_actor_join_all() {
 /// `REDUCTION_LIMIT`.  The work-stealing scheduler takes over naturally: when
 /// the worker finishes dispatching this message it pops the next ready actor.
 #[no_mangle]
-pub extern "C" fn mvl_yield_check() {
+pub extern "C" fn _mvl_yield_check() {
     ACTOR_REDUCTIONS.with(|cell| {
         let remaining = cell.get();
         if remaining <= 1 {
@@ -709,9 +709,9 @@ pub extern "C" fn mvl_yield_check() {
 ///
 /// # Safety
 ///
-/// Both handles must be valid pointers returned by [`mvl_actor_spawn`].
+/// Both handles must be valid pointers returned by [`_mvl_actor_spawn`].
 #[no_mangle]
-pub unsafe extern "C" fn mvl_link(handle_a: *mut u8, handle_b: *mut u8) {
+pub unsafe extern "C" fn _mvl_link(handle_a: *mut u8, handle_b: *mut u8) {
     if handle_a.is_null() || handle_b.is_null() {
         return;
     }
@@ -719,7 +719,7 @@ pub unsafe extern "C" fn mvl_link(handle_a: *mut u8, handle_b: *mut u8) {
     let b = &*(handle_b as *const MvlActorHandle);
     // Guard against self-links: a reflexively-linked actor that dies would
     // send DISC_SHUTDOWN to itself repeatedly, causing an infinite cascade
-    // and hanging mvl_actor_join_all.
+    // and hanging _mvl_actor_join_all.
     if a.actor_id == b.actor_id {
         return;
     }
@@ -734,9 +734,9 @@ pub unsafe extern "C" fn mvl_link(handle_a: *mut u8, handle_b: *mut u8) {
 ///
 /// # Safety
 ///
-/// Both handles must be valid pointers returned by [`mvl_actor_spawn`].
+/// Both handles must be valid pointers returned by [`_mvl_actor_spawn`].
 #[no_mangle]
-pub unsafe extern "C" fn mvl_unlink(handle_a: *mut u8, handle_b: *mut u8) {
+pub unsafe extern "C" fn _mvl_unlink(handle_a: *mut u8, handle_b: *mut u8) {
     if handle_a.is_null() || handle_b.is_null() {
         return;
     }
@@ -755,13 +755,13 @@ pub unsafe extern "C" fn mvl_unlink(handle_a: *mut u8, handle_b: *mut u8) {
 
 /// Create a one-way monitor: `watcher` is notified when `target` dies.
 ///
-/// Returns a monitor ID for use with [`mvl_demonitor`].
+/// Returns a monitor ID for use with [`_mvl_demonitor`].
 ///
 /// # Safety
 ///
-/// Both handles must be valid pointers returned by [`mvl_actor_spawn`].
+/// Both handles must be valid pointers returned by [`_mvl_actor_spawn`].
 #[no_mangle]
-pub unsafe extern "C" fn mvl_monitor(watcher: *mut u8, target: *mut u8) -> i64 {
+pub unsafe extern "C" fn _mvl_monitor(watcher: *mut u8, target: *mut u8) -> i64 {
     if watcher.is_null() || target.is_null() {
         return 0;
     }
@@ -781,7 +781,7 @@ pub unsafe extern "C" fn mvl_monitor(watcher: *mut u8, target: *mut u8) -> i64 {
 
 /// Remove a monitor by ID.
 #[no_mangle]
-pub extern "C" fn mvl_demonitor(monitor_id: i64) {
+pub extern "C" fn _mvl_demonitor(monitor_id: i64) {
     let mid = monitor_id as u64;
     let mut reg = global_link_registry()
         .lock()
@@ -800,9 +800,9 @@ pub extern "C" fn mvl_demonitor(monitor_id: i64) {
 ///
 /// # Safety
 ///
-/// `handle` must be a valid pointer returned by [`mvl_actor_spawn`].
+/// `handle` must be a valid pointer returned by [`_mvl_actor_spawn`].
 #[no_mangle]
-pub unsafe extern "C" fn mvl_set_trap_exit(handle: *mut u8) {
+pub unsafe extern "C" fn _mvl_set_trap_exit(handle: *mut u8) {
     if handle.is_null() {
         return;
     }

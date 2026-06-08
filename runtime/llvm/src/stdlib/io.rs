@@ -30,7 +30,7 @@
 use std::slice;
 
 use crate::abi::LlvmEnumError;
-use crate::memory::{mvl_string_new, MvlString};
+use crate::memory::{MvlString, _mvl_string_new};
 use libc::c_void;
 
 // ── IoError discriminants (must match variant order in std/io.mvl) ────────────
@@ -69,7 +69,7 @@ unsafe fn read_mvl_string(s: *const MvlString) -> String {
 #[allow(unsafe_code)]
 fn new_mvl_str(s: &str) -> *mut c_void {
     let bytes = s.as_bytes();
-    unsafe { mvl_string_new(bytes.as_ptr(), bytes.len()) as *mut c_void }
+    unsafe { _mvl_string_new(bytes.as_ptr(), bytes.len()) as *mut c_void }
 }
 
 // ── C-ABI Result type ─────────────────────────────────────────────────────────
@@ -434,10 +434,10 @@ pub unsafe extern "C" fn _mvl_io_stderr_write(_s: *const c_void, line: *const Mv
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::{mvl_string_drop, mvl_string_new};
+    use crate::memory::{_mvl_string_drop, _mvl_string_new};
 
     unsafe fn make_str(s: &str) -> *mut MvlString {
-        mvl_string_new(s.as_bytes().as_ptr(), s.len())
+        _mvl_string_new(s.as_bytes().as_ptr(), s.len())
     }
 
     #[test]
@@ -446,7 +446,7 @@ mod tests {
             let ms = make_str("/tmp/test");
             let out = _mvl_io_path(ms);
             assert_eq!(out, ms as *const MvlString);
-            mvl_string_drop(ms);
+            _mvl_string_drop(ms);
         }
     }
 
@@ -465,8 +465,8 @@ mod tests {
             assert_eq!(read_back, "hello llvm io");
             // cleanup
             let _ = std::fs::remove_file(&path_str);
-            mvl_string_drop(path_ms);
-            mvl_string_drop(content_ms);
+            _mvl_string_drop(path_ms);
+            _mvl_string_drop(content_ms);
         }
     }
 
@@ -485,9 +485,9 @@ mod tests {
             let s = read_mvl_string(rd.payload as *const MvlString);
             assert_eq!(s, "hello world");
             let _ = std::fs::remove_file(&path_str);
-            mvl_string_drop(path_ms);
-            mvl_string_drop(c1);
-            mvl_string_drop(c2);
+            _mvl_string_drop(path_ms);
+            _mvl_string_drop(c1);
+            _mvl_string_drop(c2);
         }
     }
 
@@ -501,7 +501,7 @@ mod tests {
             assert_eq!(cr.tag, 0, "create_dir_all should succeed");
             let rm = _mvl_io_remove(path_ms);
             assert_eq!(rm.tag, 0, "remove dir should succeed");
-            mvl_string_drop(path_ms);
+            _mvl_string_drop(path_ms);
         }
     }
 
@@ -516,7 +516,7 @@ mod tests {
             let wr = _mvl_io_write(bad_fd, content_ms);
             assert_eq!(wr.tag, 1, "write to invalid fd should fail");
             drop(Box::from_raw(bad_fd));
-            mvl_string_drop(content_ms);
+            _mvl_string_drop(content_ms);
         }
     }
 
@@ -526,7 +526,7 @@ mod tests {
             let content_ms = make_str("data");
             let wr = _mvl_io_write(std::ptr::null(), content_ms);
             assert_eq!(wr.tag, 1, "write with null fd should fail");
-            mvl_string_drop(content_ms);
+            _mvl_string_drop(content_ms);
         }
     }
 }

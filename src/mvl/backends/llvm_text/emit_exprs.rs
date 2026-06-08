@@ -743,9 +743,9 @@ impl TextEmitter {
                 Some(v) => v,
                 None => return Ok(None),
             };
-            self.ensure_extern("declare ptr @mvl_box_new(i64)");
+            self.ensure_extern("declare ptr @_mvl_box_new(i64)");
             let ptr = self.next_reg();
-            self.push_instr(&format!("{ptr} = call ptr @mvl_box_new(i64 {size})"));
+            self.push_instr(&format!("{ptr} = call ptr @_mvl_box_new(i64 {size})"));
             self.push_instr(&format!("store {arg_ty} {val}, ptr {ptr}"));
             self.reg_types.insert(ptr.clone(), "ptr".into());
             return Ok(Some(ptr));
@@ -1065,7 +1065,7 @@ impl TextEmitter {
             let empty_g = self.emit_str_global("");
             let reg = self.next_reg();
             self.push_instr(&format!(
-                "{reg} = call ptr @mvl_string_new(ptr @{empty_g}, i64 0)"
+                "{reg} = call ptr @_mvl_string_new(ptr @{empty_g}, i64 0)"
             ));
             self.ensure_extern("declare ptr @_mvl_string_ptr(ptr)");
             let raw = self.next_reg();

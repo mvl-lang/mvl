@@ -40,9 +40,9 @@ impl TextEmitter {
     pub(super) fn emit_heap_drops(&mut self) {
         for (ssa, kind, is_ref) in self.heap_locals.clone() {
             let sym = match kind {
-                HeapKind::String => "mvl_string_drop",
-                HeapKind::Array => "mvl_array_drop",
-                HeapKind::Map => "mvl_map_drop",
+                HeapKind::String => "_mvl_string_drop",
+                HeapKind::Array => "_mvl_array_drop",
+                HeapKind::Map => "_mvl_map_drop",
             };
             self.ensure_extern(&format!("declare void @{sym}(ptr)"));
             if is_ref {
@@ -121,10 +121,10 @@ impl TextEmitter {
     pub(super) fn emit_string_literal(&mut self, s: &str) -> String {
         let global = self.emit_str_global(s);
         let len = s.len();
-        self.ensure_extern("declare ptr @mvl_string_new(ptr, i64)");
+        self.ensure_extern("declare ptr @_mvl_string_new(ptr, i64)");
         let reg = self.next_reg();
         self.push_instr(&format!(
-            "{reg} = call ptr @mvl_string_new(ptr @{global}, i64 {len})"
+            "{reg} = call ptr @_mvl_string_new(ptr @{global}, i64 {len})"
         ));
         self.reg_types.insert(reg.clone(), "ptr".into());
         reg
@@ -537,7 +537,7 @@ impl TextEmitter {
     pub(super) fn emit_int_to_string(&mut self, val: &str) -> String {
         let int_fmt = self.ensure_int_fmt();
         self.ensure_extern("declare i32 @snprintf(ptr, i64, ptr, ...)");
-        self.ensure_extern("declare ptr @mvl_string_new(ptr, i64)");
+        self.ensure_extern("declare ptr @_mvl_string_new(ptr, i64)");
         let buf = self.next_reg();
         self.push_instr(&format!("{buf} = alloca [32 x i8]"));
         let len32 = self.next_reg();
@@ -548,7 +548,7 @@ impl TextEmitter {
         self.push_instr(&format!("{len} = sext i32 {len32} to i64"));
         let str_reg = self.next_reg();
         self.push_instr(&format!(
-            "{str_reg} = call ptr @mvl_string_new(ptr {buf}, i64 {len})"
+            "{str_reg} = call ptr @_mvl_string_new(ptr {buf}, i64 {len})"
         ));
         self.reg_types.insert(str_reg.clone(), "ptr".into());
         str_reg
@@ -556,14 +556,14 @@ impl TextEmitter {
 
     pub(super) fn emit_bool_to_string(&mut self, val: &str) -> String {
         let (t, f) = self.ensure_bool_str_globals();
-        self.ensure_extern("declare ptr @mvl_string_new(ptr, i64)");
+        self.ensure_extern("declare ptr @_mvl_string_new(ptr, i64)");
         let cptr = self.next_reg();
         self.push_instr(&format!("{cptr} = select i1 {val}, ptr @{t}, ptr @{f}"));
         let clen = self.next_reg();
         self.push_instr(&format!("{clen} = select i1 {val}, i64 4, i64 5"));
         let str_reg = self.next_reg();
         self.push_instr(&format!(
-            "{str_reg} = call ptr @mvl_string_new(ptr {cptr}, i64 {clen})"
+            "{str_reg} = call ptr @_mvl_string_new(ptr {cptr}, i64 {clen})"
         ));
         self.reg_types.insert(str_reg.clone(), "ptr".into());
         str_reg

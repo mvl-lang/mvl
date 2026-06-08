@@ -10,14 +10,14 @@
 //! # String ownership
 //!
 //! - Input strings (`*const MvlString`): borrowed from the LLVM heap — not freed.
-//! - Output strings (`*mut MvlString`): heap-allocated via `mvl_string_new`.
+//! - Output strings (`*mut MvlString`): heap-allocated via `_mvl_string_new`.
 //!   LLVM heap-drop tracking frees them at scope exit.
 //!
 //! # Array return for `_mvl_crypto_random_bytes`
 //!
 //! Returns a heap-allocated `*mut MvlArray` (element size 8, one i64 per byte).
 //! Each element is in `[0, 255]` (byte range stored as i64).
-//! The array is owned by the LLVM heap-drop system and freed via `mvl_array_drop`.
+//! The array is owned by the LLVM heap-drop system and freed via `_mvl_array_drop`.
 //! This is compatible with all list stdlib operations (`list_len`, `list_get`, …).
 //!
 //! # LLVM dispatch coverage
@@ -37,7 +37,7 @@
 
 use std::slice;
 
-use crate::memory::{mvl_array_new, mvl_string_new, MvlArray, MvlString};
+use crate::memory::{MvlArray, MvlString, _mvl_array_new, _mvl_string_new};
 use mvl_runtime::ifc::Secret;
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -61,7 +61,7 @@ unsafe fn read_mvl_string(s: *const MvlString) -> String {
 #[allow(unsafe_code)]
 fn new_mvl_str(s: &str) -> *mut MvlString {
     let bytes = s.as_bytes();
-    unsafe { mvl_string_new(bytes.as_ptr(), bytes.len()) }
+    unsafe { _mvl_string_new(bytes.as_ptr(), bytes.len()) }
 }
 
 // ── Hash functions (pure, deterministic) ─────────────────────────────────────
@@ -107,7 +107,7 @@ pub extern "C" fn _mvl_crypto_random_bytes(n: i64) -> *mut MvlArray {
     }
     let Secret(vals) = mvl_runtime::stdlib::crypto::crypto_random_bytes(n);
     unsafe {
-        let arr = mvl_array_new(std::mem::size_of::<i64>(), vals.len());
+        let arr = _mvl_array_new(std::mem::size_of::<i64>(), vals.len());
         if arr.is_null() {
             return std::ptr::null_mut();
         }
@@ -143,7 +143,7 @@ mod tests {
     #[allow(unsafe_code)]
     fn from_mvl_str(ptr: *mut MvlString) -> String {
         let s = unsafe { read_mvl_string(ptr) };
-        unsafe { crate::memory::mvl_string_drop(ptr) };
+        unsafe { crate::memory::_mvl_string_drop(ptr) };
         s
     }
 
@@ -151,7 +151,7 @@ mod tests {
     fn sha256_empty_nist_vector() {
         let input = mvl_str("");
         let out = _mvl_crypto_sha256(input);
-        unsafe { crate::memory::mvl_string_drop(input) };
+        unsafe { crate::memory::_mvl_string_drop(input) };
         assert!(!out.is_null());
         assert_eq!(from_mvl_str(out), SHA256_EMPTY);
     }
@@ -160,7 +160,7 @@ mod tests {
     fn sha256_abc_nist_vector() {
         let input = mvl_str("abc");
         let out = _mvl_crypto_sha256(input);
-        unsafe { crate::memory::mvl_string_drop(input) };
+        unsafe { crate::memory::_mvl_string_drop(input) };
         assert!(!out.is_null());
         assert_eq!(from_mvl_str(out), SHA256_ABC);
     }
@@ -169,7 +169,7 @@ mod tests {
     fn sha512_empty_nist_vector() {
         let input = mvl_str("");
         let out = _mvl_crypto_sha512(input);
-        unsafe { crate::memory::mvl_string_drop(input) };
+        unsafe { crate::memory::_mvl_string_drop(input) };
         assert!(!out.is_null());
         assert_eq!(from_mvl_str(out), SHA512_EMPTY);
     }
@@ -178,7 +178,7 @@ mod tests {
     fn sha256_output_is_lowercase_hex() {
         let input = mvl_str("hello world");
         let out = _mvl_crypto_sha256(input);
-        unsafe { crate::memory::mvl_string_drop(input) };
+        unsafe { crate::memory::_mvl_string_drop(input) };
         assert!(!out.is_null());
         let result = from_mvl_str(out);
         assert_eq!(result.len(), 64);
@@ -193,7 +193,7 @@ mod tests {
         assert!(!arr.is_null());
         let len = unsafe { crate::memory_ops::_mvl_array_len(arr) };
         assert_eq!(len, 16);
-        unsafe { crate::memory::mvl_array_drop(arr) };
+        unsafe { crate::memory::_mvl_array_drop(arr) };
     }
 
     #[test]
@@ -202,7 +202,7 @@ mod tests {
         assert!(!arr.is_null());
         let len = unsafe { crate::memory_ops::_mvl_array_len(arr) };
         assert_eq!(len, 0);
-        unsafe { crate::memory::mvl_array_drop(arr) };
+        unsafe { crate::memory::_mvl_array_drop(arr) };
     }
 
     #[test]
@@ -215,14 +215,14 @@ mod tests {
             let v = unsafe { elem_ptr.read() };
             assert!((0..=255).contains(&v), "byte value {v} out of range");
         }
-        unsafe { crate::memory::mvl_array_drop(arr) };
+        unsafe { crate::memory::_mvl_array_drop(arr) };
     }
 
     #[test]
     fn sha512_abc_nist_vector() {
         let input = mvl_str("abc");
         let out = _mvl_crypto_sha512(input);
-        unsafe { crate::memory::mvl_string_drop(input) };
+        unsafe { crate::memory::_mvl_string_drop(input) };
         assert!(!out.is_null());
         assert_eq!(from_mvl_str(out), SHA512_ABC);
     }
@@ -231,7 +231,7 @@ mod tests {
     fn sha512_output_is_128_hex_chars() {
         let input = mvl_str("hello world");
         let out = _mvl_crypto_sha512(input);
-        unsafe { crate::memory::mvl_string_drop(input) };
+        unsafe { crate::memory::_mvl_string_drop(input) };
         assert!(!out.is_null());
         let result = from_mvl_str(out);
         assert_eq!(result.len(), 128);
@@ -246,7 +246,7 @@ mod tests {
         assert!(!arr.is_null());
         let len = unsafe { crate::memory_ops::_mvl_array_len(arr) };
         assert_eq!(len, 0, "negative n must produce 0 bytes");
-        unsafe { crate::memory::mvl_array_drop(arr) };
+        unsafe { crate::memory::_mvl_array_drop(arr) };
     }
 
     #[test]

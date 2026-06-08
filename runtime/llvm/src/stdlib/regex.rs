@@ -23,7 +23,7 @@
 use std::slice;
 
 use crate::abi::{LlvmEnumError, LlvmResult};
-use crate::memory::{mvl_string_drop, mvl_string_new, MvlString};
+use crate::memory::{MvlString, _mvl_string_drop, _mvl_string_new};
 use libc::c_void;
 use mvl_runtime::stdlib::regex as rt;
 
@@ -50,7 +50,7 @@ unsafe fn read_mvl_string(s: *const MvlString) -> String {
 #[allow(unsafe_code)]
 fn new_mvl_str(s: &str) -> *mut c_void {
     let bytes = s.as_bytes();
-    unsafe { mvl_string_new(bytes.as_ptr(), bytes.len()) as *mut c_void }
+    unsafe { _mvl_string_new(bytes.as_ptr(), bytes.len()) as *mut c_void }
 }
 
 // ── Regex lifecycle ────────────────────────────────────────────────────────────
@@ -144,7 +144,7 @@ pub unsafe extern "C" fn _mvl_match_drop(m: *mut MvlMatch) {
     if !m.is_null() {
         // Free the inner MvlString before dropping the struct itself.
         if !(*m).text.is_null() {
-            mvl_string_drop((*m).text);
+            _mvl_string_drop((*m).text);
         }
         drop(Box::from_raw(m));
     }
@@ -169,7 +169,7 @@ pub unsafe extern "C" fn _mvl_regex_find(
     match re.find_borrowed(&s) {
         Some(m) => {
             let heap = Box::new(MvlMatch {
-                text: mvl_string_new(m.text.as_ptr(), m.text.len()),
+                text: _mvl_string_new(m.text.as_ptr(), m.text.len()),
                 start: m.start,
                 end: m.end,
             });
@@ -195,9 +195,9 @@ pub unsafe extern "C" fn _mvl_regex_find_all(
     handle: *mut c_void,
     input: *const MvlString,
 ) -> *mut crate::memory::MvlArray {
-    use crate::memory::{mvl_array_new, MvlArray};
+    use crate::memory::{MvlArray, _mvl_array_new};
     use crate::memory_ops::_mvl_array_push;
-    let arr: *mut MvlArray = mvl_array_new(std::mem::size_of::<*mut MvlMatch>(), 0);
+    let arr: *mut MvlArray = _mvl_array_new(std::mem::size_of::<*mut MvlMatch>(), 0);
     if handle.is_null() {
         return arr;
     }
@@ -205,7 +205,7 @@ pub unsafe extern "C" fn _mvl_regex_find_all(
     let re: &rt::Regex = &*(handle as *const rt::Regex);
     for m in re.find_all_borrowed(&s) {
         let heap = Box::new(MvlMatch {
-            text: mvl_string_new(m.text.as_ptr(), m.text.len()),
+            text: _mvl_string_new(m.text.as_ptr(), m.text.len()),
             start: m.start,
             end: m.end,
         });
@@ -230,7 +230,7 @@ mod tests {
     /// Build a MvlString* from a Rust str for testing.
     unsafe fn mvl_str(s: &str) -> *mut MvlString {
         let bytes = s.as_bytes();
-        mvl_string_new(bytes.as_ptr(), bytes.len())
+        _mvl_string_new(bytes.as_ptr(), bytes.len())
     }
 
     #[test]

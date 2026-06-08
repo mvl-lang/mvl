@@ -316,7 +316,7 @@ impl TextEmitter {
             self.push_instr(&format!("{next_i} = add i64 {cur_i}, 1"));
             self.push_instr(&format!("store i64 {next_i}, ptr {i_ptr}"));
             self.ensure_yield_check_extern();
-            self.push_instr("call void @mvl_yield_check()");
+            self.push_instr("call void @_mvl_yield_check()");
             self.push_instr(&format!("br label %{cond_bb}"));
         }
 
@@ -345,7 +345,7 @@ impl TextEmitter {
         self.emit_block(body)?;
         if !self.terminated {
             self.ensure_yield_check_extern();
-            self.push_instr("call void @mvl_yield_check()");
+            self.push_instr("call void @_mvl_yield_check()");
             self.push_instr(&format!("br label %{loop_bb}"));
         }
 

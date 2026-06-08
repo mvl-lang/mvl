@@ -216,7 +216,7 @@ struct TextEmitter {
     actor_decls: HashMap<String, ActorDecl>,
     /// True once actor runtime externs have been emitted.
     actor_runtime_declared: bool,
-    /// True once `declare void @mvl_yield_check()` has been emitted (#1181).
+    /// True once `declare void @_mvl_yield_check()` has been emitted (#1181).
     yield_check_declared: bool,
 
     // ── Builtin fn dispatch (#1160) ────────────────────────────────────────
@@ -419,13 +419,13 @@ impl TextEmitter {
         }
     }
 
-    /// Ensure `@mvl_yield_check` is declared once per module (#1181).
+    /// Ensure `@_mvl_yield_check` is declared once per module (#1181).
     ///
     /// Called at every loop back-edge insertion point. The flag avoids repeated
     /// linear scans through `extern_decls`.
     pub(super) fn ensure_yield_check_extern(&mut self) {
         if !self.yield_check_declared {
-            self.ensure_extern("declare void @mvl_yield_check()");
+            self.ensure_extern("declare void @_mvl_yield_check()");
             self.yield_check_declared = true;
         }
     }
@@ -657,9 +657,9 @@ impl TextEmitter {
                     // Drop each handle to close the sender — this signals the
                     // actor thread's recv loop to exit.
                     for handle in std::mem::take(&mut self.spawned_actor_handles) {
-                        self.push_instr(&format!("call void @mvl_actor_drop(ptr {handle})"));
+                        self.push_instr(&format!("call void @_mvl_actor_drop(ptr {handle})"));
                     }
-                    self.push_instr("call void @mvl_actor_join_all()");
+                    self.push_instr("call void @_mvl_actor_join_all()");
                 }
                 self.push_instr(MAIN_RET);
             } else if Self::is_void(ret_ty) {
@@ -917,7 +917,7 @@ mod tests {
     #[test]
     fn string_literal_emits_global_and_string_new() {
         let ir = compile("fn main() -> Unit ! Console { println(\"hello\") }");
-        assert!(ir.contains("mvl_string_new"), "{ir}");
+        assert!(ir.contains("_mvl_string_new"), "{ir}");
         assert!(ir.contains("hello"), "{ir}");
         assert!(ir.contains("dprintf"), "{ir}");
     }
@@ -1014,8 +1014,11 @@ mod tests {
              let evens: List[Int] = xs.filter(|x: Int| x > 0);\n\
              }",
         );
-        assert!(ir.contains("declare ptr @List_filter(ptr, ptr)"), "{ir}");
-        assert!(ir.contains("call ptr @List_filter"), "{ir}");
+        assert!(
+            ir.contains("declare ptr @_mvl_list_filter(ptr, ptr)"),
+            "{ir}"
+        );
+        assert!(ir.contains("call ptr @_mvl_list_filter"), "{ir}");
         assert!(ir.contains("@__lambda_0"), "{ir}");
     }
 
@@ -1027,8 +1030,8 @@ mod tests {
              let b: Bool = xs.any(|x: Int| x > 0);\n\
              }",
         );
-        assert!(ir.contains("declare i1 @List_any(ptr, ptr)"), "{ir}");
-        assert!(ir.contains("call i1 @List_any"), "{ir}");
+        assert!(ir.contains("declare i1 @_mvl_list_any(ptr, ptr)"), "{ir}");
+        assert!(ir.contains("call i1 @_mvl_list_any"), "{ir}");
     }
 
     #[test]
@@ -1044,7 +1047,7 @@ mod tests {
         assert!(ir.contains("@__closure_wrap_is_pos_hof0"), "{ir}");
         // Closure struct built pointing to wrapper
         assert!(ir.contains("store ptr @__closure_wrap_is_pos_hof0"), "{ir}");
-        assert!(ir.contains("call ptr @List_filter"), "{ir}");
+        assert!(ir.contains("call ptr @_mvl_list_filter"), "{ir}");
         // Trampoline receives element by pointer and loads before forwarding.
         assert!(
             ir.contains("define i1 @__closure_wrap_is_pos_hof0(ptr %__env, ptr %__raw_arg0)"),
@@ -1068,11 +1071,14 @@ mod tests {
              let sum: Int = xs.fold(0, |acc: Int, x: Int| acc + x);\n\
              }",
         );
-        assert!(ir.contains("declare ptr @List_fold(ptr, ptr, ptr)"), "{ir}");
+        assert!(
+            ir.contains("declare ptr @_mvl_list_fold(ptr, ptr, ptr)"),
+            "{ir}"
+        );
         // Initial value must be stack-allocated and stored.
         assert!(ir.contains("alloca i64"), "{ir}");
         assert!(ir.contains("store i64 0"), "{ir}");
-        assert!(ir.contains("call ptr @List_fold(ptr"), "{ir}");
+        assert!(ir.contains("call ptr @_mvl_list_fold(ptr"), "{ir}");
         // Result loaded back as the accumulator type.
         assert!(ir.contains("load i64"), "{ir}");
         // Lambda for fold: acc is by-value (i64), element is by-pointer from runtime.
@@ -1173,9 +1179,9 @@ mod tests {
                pub fn increment(val n: Int) { }\n\
              }",
         );
-        assert!(ir.contains("declare ptr @mvl_actor_spawn"), "{ir}");
-        assert!(ir.contains("declare void @mvl_actor_send"), "{ir}");
-        assert!(ir.contains("declare void @mvl_actor_join_all"), "{ir}");
+        assert!(ir.contains("declare ptr @_mvl_actor_spawn"), "{ir}");
+        assert!(ir.contains("declare void @_mvl_actor_send"), "{ir}");
+        assert!(ir.contains("declare void @_mvl_actor_join_all"), "{ir}");
     }
 
     #[test]
@@ -1193,7 +1199,7 @@ mod tests {
         // State alloca.
         assert!(ir.contains("alloca %CounterState"), "{ir}");
         // Runtime spawn call.
-        assert!(ir.contains("call ptr @mvl_actor_spawn"), "{ir}");
+        assert!(ir.contains("call ptr @_mvl_actor_spawn"), "{ir}");
     }
 
     #[test]
@@ -1210,7 +1216,7 @@ mod tests {
              }",
         );
         // The send call must appear.
-        assert!(ir.contains("call void @mvl_actor_send"), "{ir}");
+        assert!(ir.contains("call void @_mvl_actor_send"), "{ir}");
     }
 
     #[test]
@@ -1222,7 +1228,7 @@ mod tests {
              }\n\
              fn main() -> Int { 0 }",
         );
-        assert!(ir.contains("call void @mvl_actor_join_all"), "{ir}");
+        assert!(ir.contains("call void @_mvl_actor_join_all"), "{ir}");
     }
 
     // ── Generic monomorphization tests (#1156) ───────────────────────────
@@ -1296,7 +1302,7 @@ mod tests {
              let m: Map[String, Int] = {\"a\": 1, \"b\": 2};\n\
              }",
         );
-        assert!(ir.contains("call ptr @mvl_map_new(i64"), "{ir}");
+        assert!(ir.contains("call ptr @_mvl_map_new(i64"), "{ir}");
         assert!(ir.contains("call void @_mvl_map_insert(ptr"), "{ir}");
         assert!(ir.contains("call ptr @_mvl_string_ptr(ptr"), "{ir}");
         assert!(ir.contains("call i64 @_mvl_str_len(ptr"), "{ir}");
@@ -1372,8 +1378,8 @@ mod tests {
              let s: String = \"hello\";\n\
              }",
         );
-        assert!(ir.contains("call void @mvl_string_drop(ptr"), "{ir}");
-        assert!(ir.contains("declare void @mvl_string_drop(ptr)"), "{ir}");
+        assert!(ir.contains("call void @_mvl_string_drop(ptr"), "{ir}");
+        assert!(ir.contains("declare void @_mvl_string_drop(ptr)"), "{ir}");
     }
 
     #[test]
@@ -1383,8 +1389,8 @@ mod tests {
              let xs: List[Int] = [1, 2, 3];\n\
              }",
         );
-        assert!(ir.contains("call void @mvl_array_drop(ptr"), "{ir}");
-        assert!(ir.contains("declare void @mvl_array_drop(ptr)"), "{ir}");
+        assert!(ir.contains("call void @_mvl_array_drop(ptr"), "{ir}");
+        assert!(ir.contains("declare void @_mvl_array_drop(ptr)"), "{ir}");
     }
 
     #[test]
@@ -1394,8 +1400,8 @@ mod tests {
              let m: Map[String, Int] = {\"a\": 1};\n\
              }",
         );
-        assert!(ir.contains("call void @mvl_map_drop(ptr"), "{ir}");
-        assert!(ir.contains("declare void @mvl_map_drop(ptr)"), "{ir}");
+        assert!(ir.contains("call void @_mvl_map_drop(ptr"), "{ir}");
+        assert!(ir.contains("declare void @_mvl_map_drop(ptr)"), "{ir}");
     }
 
     #[test]
@@ -1406,8 +1412,8 @@ mod tests {
              let xs: List[Int] = [1, 2];\n\
              }",
         );
-        assert!(ir.contains("call void @mvl_string_drop(ptr"), "{ir}");
-        assert!(ir.contains("call void @mvl_array_drop(ptr"), "{ir}");
+        assert!(ir.contains("call void @_mvl_string_drop(ptr"), "{ir}");
+        assert!(ir.contains("call void @_mvl_array_drop(ptr"), "{ir}");
     }
 
     #[test]
@@ -1430,7 +1436,7 @@ mod tests {
              }",
         );
         // The drop should appear before the ret instruction.
-        assert!(ir.contains("call void @mvl_string_drop(ptr"), "{ir}");
+        assert!(ir.contains("call void @_mvl_string_drop(ptr"), "{ir}");
     }
 
     #[test]
@@ -1443,7 +1449,7 @@ mod tests {
         );
         // Should have exactly 1 drop call (for the second binding only;
         // the first is removed from tracking when shadowed).
-        let drop_count = ir.matches("call void @mvl_string_drop(ptr").count();
+        let drop_count = ir.matches("call void @_mvl_string_drop(ptr").count();
         assert_eq!(drop_count, 1, "expected 1 drop, got {drop_count}\n{ir}");
     }
 
@@ -1455,7 +1461,7 @@ mod tests {
              }",
         );
         // ref local: must load from alloca, then drop the loaded value.
-        assert!(ir.contains("call void @mvl_string_drop(ptr"), "{ir}");
+        assert!(ir.contains("call void @_mvl_string_drop(ptr"), "{ir}");
         // Verify the load-before-drop pattern exists.
         assert!(ir.contains("load ptr, ptr"), "{ir}");
     }
