@@ -21,7 +21,7 @@
 
 use std::io::{Read, Write};
 
-use crate::memory::{mvl_string_new, MvlString};
+use crate::memory::{MvlString, _mvl_string_new};
 use libc::c_void;
 
 use super::io::LlvmResult;
@@ -46,7 +46,7 @@ fn new_mvl_str(s: &str) -> *mut c_void {
     let bytes = s.as_bytes();
     #[allow(unsafe_code)]
     unsafe {
-        mvl_string_new(bytes.as_ptr(), bytes.len()) as *mut c_void
+        _mvl_string_new(bytes.as_ptr(), bytes.len()) as *mut c_void
     }
 }
 

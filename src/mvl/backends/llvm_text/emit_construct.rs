@@ -678,13 +678,13 @@ impl TextEmitter {
         }
 
         let n = elem_vals.len().max(4) as i64;
-        self.ensure_extern("declare ptr @mvl_array_new(i64, i64)");
+        self.ensure_extern("declare ptr @_mvl_array_new(i64, i64)");
         self.ensure_extern("declare void @_mvl_array_push(ptr, ptr)");
 
         let arr = self.next_reg();
         let elem_size = Self::llvm_type_size(&elem_ty);
         self.push_instr(&format!(
-            "{arr} = call ptr @mvl_array_new(i64 {elem_size}, i64 {n})"
+            "{arr} = call ptr @_mvl_array_new(i64 {elem_size}, i64 {n})"
         ));
         self.reg_types.insert(arr.clone(), "ptr".into());
 
@@ -735,13 +735,13 @@ impl TextEmitter {
         pairs: &[(Expr, Expr)],
     ) -> Result<Option<String>, String> {
         let n = pairs.len().max(4) as i64;
-        self.ensure_extern("declare ptr @mvl_map_new(i64)");
+        self.ensure_extern("declare ptr @_mvl_map_new(i64)");
         self.ensure_extern("declare void @_mvl_map_insert(ptr, ptr, i64, ptr, i64)");
         self.ensure_extern("declare ptr @_mvl_string_ptr(ptr)");
         self.ensure_extern("declare i64 @_mvl_str_len(ptr)");
 
         let map = self.next_reg();
-        self.push_instr(&format!("{map} = call ptr @mvl_map_new(i64 {n})"));
+        self.push_instr(&format!("{map} = call ptr @_mvl_map_new(i64 {n})"));
         self.reg_types.insert(map.clone(), "ptr".into());
 
         for (key_expr, val_expr) in pairs {

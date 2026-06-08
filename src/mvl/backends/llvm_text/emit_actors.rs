@@ -45,18 +45,18 @@ impl TextEmitter {
         if self.actor_runtime_declared {
             return;
         }
-        self.ensure_extern("declare ptr @mvl_actor_spawn(ptr, ptr, i64, i64, i64)");
-        self.ensure_extern("declare void @mvl_actor_send(ptr, i64, i64, ptr)");
-        self.ensure_extern("declare void @mvl_actor_drop(ptr)");
-        self.ensure_extern("declare ptr @mvl_actor_self()");
-        self.ensure_extern("declare void @mvl_actor_join_all()");
+        self.ensure_extern("declare ptr @_mvl_actor_spawn(ptr, ptr, i64, i64, i64)");
+        self.ensure_extern("declare void @_mvl_actor_send(ptr, i64, i64, ptr)");
+        self.ensure_extern("declare void @_mvl_actor_drop(ptr)");
+        self.ensure_extern("declare ptr @_mvl_actor_self()");
+        self.ensure_extern("declare void @_mvl_actor_join_all()");
         // Link/monitor C-ABI functions (Phase 9, #1177).
-        self.ensure_extern("declare i64 @mvl_actor_get_id(ptr)");
-        self.ensure_extern("declare void @mvl_link(ptr, ptr)");
-        self.ensure_extern("declare void @mvl_unlink(ptr, ptr)");
-        self.ensure_extern("declare i64 @mvl_monitor(ptr, ptr)");
-        self.ensure_extern("declare void @mvl_demonitor(i64)");
-        self.ensure_extern("declare void @mvl_set_trap_exit(ptr)");
+        self.ensure_extern("declare i64 @_mvl_actor_get_id(ptr)");
+        self.ensure_extern("declare void @_mvl_link(ptr, ptr)");
+        self.ensure_extern("declare void @_mvl_unlink(ptr, ptr)");
+        self.ensure_extern("declare i64 @_mvl_monitor(ptr, ptr)");
+        self.ensure_extern("declare void @_mvl_demonitor(i64)");
+        self.ensure_extern("declare void @_mvl_set_trap_exit(ptr)");
         self.actor_runtime_declared = true;
     }
 
@@ -306,7 +306,7 @@ impl TextEmitter {
     /// Emit `Expr::Spawn { actor_type, fields }`.
     ///
     /// Allocates the state struct on the stack, stores field initializers,
-    /// and calls `@mvl_actor_spawn` returning the opaque handle pointer.
+    /// and calls `@_mvl_actor_spawn` returning the opaque handle pointer.
     pub(super) fn emit_actor_spawn(
         &mut self,
         actor_type: &str,
@@ -370,7 +370,7 @@ impl TextEmitter {
 
         let handle = self.next_reg();
         self.push_instr(&format!(
-            "{handle} = call ptr @mvl_actor_spawn(ptr @{dispatch_name}, ptr {state_alloca}, i64 {state_size}, i64 {capacity}, i64 {policy})"
+            "{handle} = call ptr @_mvl_actor_spawn(ptr @{dispatch_name}, ptr {state_alloca}, i64 {state_size}, i64 {capacity}, i64 {policy})"
         ));
         self.reg_types.insert(handle.clone(), "ptr".into());
         // Track for drop before mvl_actor_join_all (closes the sender so the
@@ -414,7 +414,7 @@ impl TextEmitter {
     /// Emit an actor behavior call `handle.behavior(args…)` as a fire-and-forget send.
     ///
     /// Packs arguments into a flat `[N x i64]` array (coercing all types to i64),
-    /// then calls `@mvl_actor_send(handle, disc, argc, args_ptr)`.
+    /// then calls `@_mvl_actor_send(handle, disc, argc, args_ptr)`.
     /// Returns `Ok(None)` — behaviors produce Unit.
     pub(super) fn emit_actor_method_call(
         &mut self,
@@ -480,7 +480,7 @@ impl TextEmitter {
         };
 
         self.push_instr(&format!(
-            "call void @mvl_actor_send(ptr {handle_val}, i64 {disc}, i64 {argc}, ptr {args_ptr})"
+            "call void @_mvl_actor_send(ptr {handle_val}, i64 {disc}, i64 {argc}, ptr {args_ptr})"
         ));
 
         Ok(None) // fire-and-forget returns Unit

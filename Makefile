@@ -252,6 +252,7 @@ test-cross-backend: build build-llvm-runtime ## Run Rust integration tests for b
 	cargo test --test cross_backend
 
 test-examples: build build-llvm-runtime ## Run `make test` for every example subdirectory (BACKEND=llvm for LLVM backend)
+	@./target/debug/mvl install
 	@examples/test-all.sh $(if $(filter llvm,$(BACKEND)),--llvm)
 
 # === Quality ===

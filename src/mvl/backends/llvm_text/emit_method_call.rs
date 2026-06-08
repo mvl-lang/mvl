@@ -298,7 +298,7 @@ impl TextEmitter {
                     Some(p) => p,
                     None => return Ok(None),
                 };
-                let sym = format!("List_{method}");
+                let sym = format!("_mvl_list_{method}");
                 self.ensure_extern(&format!("declare ptr @{sym}(ptr, ptr)"));
                 let reg = self.next_reg();
                 self.push_instr(&format!(
@@ -313,7 +313,7 @@ impl TextEmitter {
                     Some(p) => p,
                     None => return Ok(None),
                 };
-                let sym = format!("List_{method}");
+                let sym = format!("_mvl_list_{method}");
                 self.ensure_extern(&format!("declare i1 @{sym}(ptr, ptr)"));
                 let reg = self.next_reg();
                 self.push_instr(&format!("{reg} = call i1 @{sym}(ptr {val}, ptr {closure})"));
@@ -337,10 +337,10 @@ impl TextEmitter {
                 let slot = self.next_reg();
                 self.push_instr(&format!("{slot} = alloca {init_ty}"));
                 self.push_instr(&format!("store {init_ty} {init_val}, ptr {slot}"));
-                self.ensure_extern("declare ptr @List_fold(ptr, ptr, ptr)");
+                self.ensure_extern("declare ptr @_mvl_list_fold(ptr, ptr, ptr)");
                 let reg = self.next_reg();
                 self.push_instr(&format!(
-                    "{reg} = call ptr @List_fold(ptr {val}, ptr {slot}, ptr {closure})"
+                    "{reg} = call ptr @_mvl_list_fold(ptr {val}, ptr {slot}, ptr {closure})"
                 ));
                 self.reg_types.insert(reg.clone(), "ptr".into());
                 // Load the result back out as the init type.

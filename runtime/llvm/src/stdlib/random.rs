@@ -19,7 +19,7 @@
 
 use libc::c_void;
 
-use crate::memory::mvl_string_new;
+use crate::memory::_mvl_string_new;
 use mvl_runtime::stdlib::random;
 
 // ── Float → string conversion (#1202) ────────────────────────────────────────
@@ -34,7 +34,7 @@ use mvl_runtime::stdlib::random;
 pub extern "C" fn _mvl_float_to_string(v: f64) -> *mut c_void {
     let s = format!("{v}");
     let bytes = s.as_bytes();
-    unsafe { mvl_string_new(bytes.as_ptr(), bytes.len()) as *mut c_void }
+    unsafe { _mvl_string_new(bytes.as_ptr(), bytes.len()) as *mut c_void }
 }
 
 // ── Primitive dispatch ────────────────────────────────────────────────────────
@@ -56,13 +56,13 @@ pub extern "C" fn _mvl_random_float() -> f64 {
 /// Return `n` pseudo-random bytes as a `*mut MvlArray` of i64 values in [0, 255].
 ///
 /// Each element is an i64 byte value. The LLVM caller is responsible for
-/// dropping the array via `mvl_array_drop`. Wired via `I64ReturnsPtrArg`.
+/// dropping the array via `_mvl_array_drop`. Wired via `I64ReturnsPtrArg`.
 #[no_mangle]
 #[allow(unsafe_code)]
 pub extern "C" fn _mvl_random_bytes(n: i64) -> *mut crate::memory::MvlArray {
-    use crate::memory::mvl_array_new;
+    use crate::memory::_mvl_array_new;
     let vals = random::bytes(n);
-    let arr = unsafe { mvl_array_new(std::mem::size_of::<i64>(), vals.len().max(1)) };
+    let arr = unsafe { _mvl_array_new(std::mem::size_of::<i64>(), vals.len().max(1)) };
     for v in vals {
         unsafe {
             crate::memory_ops::_mvl_array_push(arr, (&v as *const i64).cast());
@@ -106,7 +106,7 @@ pub extern "C" fn _mvl_random_shuffle(
     }
     unsafe {
         // Deep-clone so source and result are independent (value semantics).
-        let clone = crate::memory::mvl_array_deep_clone(arr);
+        let clone = crate::memory::_mvl_array_deep_clone(arr);
         let len = crate::memory_ops::_mvl_array_len(clone as *const crate::memory::MvlArray);
         if len <= 1 {
             return clone;
@@ -160,11 +160,11 @@ mod tests {
     #[test]
     #[allow(unsafe_code)]
     fn test_random_bytes_length() {
-        use crate::memory::{mvl_array_drop, MvlArray};
+        use crate::memory::{MvlArray, _mvl_array_drop};
         let arr = _mvl_random_bytes(16);
         assert!(!arr.is_null());
         let len = unsafe { crate::memory_ops::_mvl_array_len(arr as *const MvlArray) };
         assert_eq!(len, 16);
-        unsafe { mvl_array_drop(arr) };
+        unsafe { _mvl_array_drop(arr) };
     }
 }

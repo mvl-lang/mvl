@@ -189,9 +189,9 @@ impl LlvmEnumError {
     #[inline]
     #[allow(unsafe_code)]
     pub fn with_str(disc: u8, msg: &str) -> *mut c_void {
-        use crate::memory::mvl_string_new;
+        use crate::memory::_mvl_string_new;
         let bytes = msg.as_bytes();
-        let str_ptr = unsafe { mvl_string_new(bytes.as_ptr(), bytes.len()) as usize };
+        let str_ptr = unsafe { _mvl_string_new(bytes.as_ptr(), bytes.len()) as usize };
         let mut payload = [0u8; 8];
         payload.copy_from_slice(&str_ptr.to_ne_bytes());
         Box::into_raw(Box::new(LlvmEnumError { disc, payload })) as *mut c_void

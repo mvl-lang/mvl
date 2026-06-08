@@ -48,7 +48,7 @@ unsafe fn array_contains_i64(arr: *const MvlArray, needle: i64) -> bool {
 /// Allocate a new empty `MvlArray*` with 8-byte element slots.
 #[allow(unsafe_code)]
 unsafe fn new_i64_array(cap: usize) -> *mut MvlArray {
-    crate::memory::mvl_array_new(std::mem::size_of::<i64>(), cap.max(1))
+    crate::memory::_mvl_array_new(std::mem::size_of::<i64>(), cap.max(1))
 }
 
 /// Return elements of `a` that are also in `b`.

@@ -29,7 +29,7 @@ use std::time::{Duration as StdDuration, SystemTime, UNIX_EPOCH};
 use libc::{c_char, c_void};
 
 use crate::abi::string_to_c;
-use crate::memory::{mvl_string_new, MvlString};
+use crate::memory::{MvlString, _mvl_string_new};
 use mvl_runtime::stdlib::time as rt;
 use mvl_runtime::stdlib::time::{sleep, Duration};
 use rt::Instant;
@@ -52,7 +52,7 @@ unsafe fn read_mvl_string(s: *const MvlString) -> String {
 #[allow(unsafe_code)]
 fn new_mvl_str(s: &str) -> *mut c_void {
     let bytes = s.as_bytes();
-    unsafe { mvl_string_new(bytes.as_ptr(), bytes.len()) as *mut c_void }
+    unsafe { _mvl_string_new(bytes.as_ptr(), bytes.len()) as *mut c_void }
 }
 
 // ── Wall-clock ────────────────────────────────────────────────────────────────
