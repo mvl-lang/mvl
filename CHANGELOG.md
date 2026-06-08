@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **TIR emitter**: replaced all 16 `expr_types.get(&span)` lookups with direct `TirExpr.ty` access (#1291)
+
 ## [0.189.2] - 2026-06-06
 
 ### Fixed
