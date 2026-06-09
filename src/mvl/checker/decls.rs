@@ -18,7 +18,7 @@ use crate::mvl::parser::lexer::Span;
 use std::collections::{HashMap, HashSet};
 
 use super::capabilities::block_return_flows_from_ref_param;
-use super::TypeChecker;
+use super::{FnContext, TypeChecker};
 
 impl TypeChecker {
     pub(super) fn collect_declarations(&mut self, decls: &[Decl]) {
@@ -299,16 +299,16 @@ impl TypeChecker {
                     VarInfo::new(ty, false).with_capability(param.capability.clone()),
                 );
             }
-            // Set effect/name context so effect checking (req7) works correctly.
-            let prev_fn_name = std::mem::replace(&mut self.current_fn_name, method.name.clone());
-            let prev_effects =
-                std::mem::replace(&mut self.current_fn_effects, method.effects.clone());
+            // Push per-function context so effect checking (req7) works correctly.
             let ret_ty = resolve(&method.return_type);
-            let prev_ret = self.current_return_ty.replace(ret_ty.clone());
+            self.push_fn_context(FnContext {
+                fn_name: method.name.clone(),
+                return_ty: Some(ret_ty.clone()),
+                effects: method.effects.clone(),
+                ..FnContext::default()
+            });
             self.infer_block_type(&method.body, Some(&ret_ty));
-            self.current_return_ty = prev_ret;
-            self.current_fn_name = prev_fn_name;
-            self.current_fn_effects = prev_effects;
+            self.pop_fn_context();
             self.env.pop_scope();
         }
 
@@ -355,8 +355,11 @@ impl TypeChecker {
                     raw
                 }
             };
-            let prev_ret = self.current_return_ty.replace(ret_ty.clone());
-            let prev_fn_name = std::mem::replace(&mut self.current_fn_name, method.name.clone());
+            self.push_fn_context(FnContext {
+                fn_name: method.name.clone(),
+                return_ty: Some(ret_ty.clone()),
+                ..FnContext::default()
+            });
             self.env.push_scope();
             for param in &method.params {
                 if param.name == "self" {
@@ -374,8 +377,7 @@ impl TypeChecker {
             }
             self.infer_block_type(&method.body, Some(&ret_ty));
             self.env.pop_scope();
-            self.current_return_ty = prev_ret;
-            self.current_fn_name = prev_fn_name;
+            self.pop_fn_context();
         }
         // Discard any errors from impl body checking — these are false positives
         // from the checker's limited impl support (e.g. trait method resolution).
@@ -407,7 +409,6 @@ impl TypeChecker {
         }
 
         let ret_ty = resolve(&fd.return_type);
-        let prev_ret = self.current_return_ty.replace(ret_ty.clone());
 
         // Phase C (Spec 009 Req 2): scope-based lifetime check.
         // If the return type is val T / ref T and the function has no val/ref parameters,
@@ -451,17 +452,7 @@ impl TypeChecker {
             }
         }
 
-        // Save and set effect/totality context (Req 7, 8, 9).
-        let prev_fn_name = std::mem::replace(&mut self.current_fn_name, fd.name.clone());
-        let prev_effects = std::mem::replace(&mut self.current_fn_effects, fd.effects.clone());
-        let prev_totality = std::mem::replace(&mut self.current_fn_totality, fd.totality.clone());
-
         // Build type-param constraint context (001-type-system/Req 9).
-        let type_params: HashSet<String> = fd
-            .type_params
-            .iter()
-            .map(|p| p.name().to_string())
-            .collect();
         let mut type_constraints: HashMap<String, Vec<String>> = HashMap::new();
         for c in &fd.constraints {
             type_constraints
@@ -469,9 +460,20 @@ impl TypeChecker {
                 .or_default()
                 .push(c.bound.clone());
         }
-        let prev_type_params = std::mem::replace(&mut self.current_type_params, type_params);
-        let prev_type_constraints =
-            std::mem::replace(&mut self.current_type_constraints, type_constraints);
+
+        // Push per-function context (Req 7, 8, 9) — replaces manual save/restore (#1258).
+        self.push_fn_context(FnContext {
+            fn_name: fd.name.clone(),
+            return_ty: Some(ret_ty.clone()),
+            effects: fd.effects.clone(),
+            totality: fd.totality.clone(),
+            type_params: fd
+                .type_params
+                .iter()
+                .map(|p| p.name().to_string())
+                .collect(),
+            type_constraints,
+        });
 
         // Phase D (Spec 009 Req 2): mutable-reference alias check.
         // Two `ref T` parameters of the same inner type, or a `val T` + `ref T` pair,
@@ -532,13 +534,7 @@ impl TypeChecker {
         // at the end of Result-returning functions.
         self.infer_block_type(&fd.body, Some(&ret_ty));
         self.env.pop_scope();
-
-        self.current_return_ty = prev_ret;
-        self.current_fn_name = prev_fn_name;
-        self.current_fn_effects = prev_effects;
-        self.current_fn_totality = prev_totality;
-        self.current_type_params = prev_type_params;
-        self.current_type_constraints = prev_type_constraints;
+        self.pop_fn_context();
     }
 
     fn check_const_decl(&mut self, cd: &ConstDecl) {

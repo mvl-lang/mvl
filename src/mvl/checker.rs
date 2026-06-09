@@ -272,19 +272,36 @@ pub fn collect_prelude_expr_types(programs: &[Program]) -> HashMap<Span, Ty> {
     checker.expr_types
 }
 
+// ── FnContext ────────────────────────────────────────────────────────────────
+
+/// Per-function context saved/restored on function entry/exit (#1258).
+///
+/// Replaces the former `current_*` fields on `TypeChecker` with an explicit
+/// stack, consistent with how `TypeEnv` manages lexical scopes.
+#[derive(Default)]
+struct FnContext {
+    /// Name of the function currently being checked (for effect error messages).
+    fn_name: String,
+    /// Return type of the function currently being checked (for `?` and `return`).
+    return_ty: Option<Ty>,
+    /// Effects declared by the current function (Req 7, 8).
+    effects: Vec<Effect>,
+    /// Totality of the current function (Req 8); None = implicitly total.
+    totality: Option<Totality>,
+    /// Type parameter names in scope for the current function.
+    type_params: HashSet<String>,
+    /// Trait bounds for type params in the current function (from `where` clauses).
+    type_constraints: HashMap<String, Vec<String>>,
+}
+
 // ── TypeChecker ──────────────────────────────────────────────────────────────
 
 struct TypeChecker {
     errors: Vec<CheckError>,
     env: TypeEnv,
-    /// Return type of the function currently being checked (for `?` and `return`).
-    current_return_ty: Option<Ty>,
-    /// Name of the function currently being checked (for effect error messages).
-    current_fn_name: String,
-    /// Effects declared by the current function (Req 7, 8).
-    current_fn_effects: Vec<Effect>,
-    /// Totality of the current function (Req 8); None = implicitly total.
-    current_fn_totality: Option<Totality>,
+    /// Per-function context stack (#1258). The top entry holds the context
+    /// for the function currently being checked; push on fn entry, pop on exit.
+    fn_context_stack: Vec<FnContext>,
     /// Count of extern declarations for assurance reporting.
     extern_count: usize,
     /// Stack of scope depths at each lambda entry point.
@@ -301,10 +318,6 @@ struct TypeChecker {
     method_table: HashMap<String, HashMap<String, FnInfo>>,
     /// Names of all declared actor types — used to enforce Spawn/Send effects (#1126).
     actor_type_names: HashSet<String>,
-    /// Type parameter names in scope for the current function.
-    current_type_params: HashSet<String>,
-    /// Trait bounds for type params in the current function (from `where` clauses).
-    current_type_constraints: HashMap<String, Vec<String>>,
     /// Inferred type for every expression, keyed by span. Populated during
     /// `infer_expr` and surfaced in [`CheckResult::expr_types`] for the
     /// transpiler to use when emitting type-specific Rust code (#554).
@@ -330,22 +343,40 @@ impl TypeChecker {
         TypeChecker {
             errors: Vec::new(),
             env: TypeEnv::new(),
-            current_return_ty: None,
-            current_fn_name: String::new(),
-            current_fn_effects: Vec::new(),
-            current_fn_totality: None,
+            fn_context_stack: vec![FnContext::default()],
             extern_count: 0,
             lambda_scope_starts: Vec::new(),
             iterator_impls: HashMap::new(),
             method_table: HashMap::new(),
             actor_type_names: HashSet::new(),
-            current_type_params: HashSet::new(),
-            current_type_constraints: HashMap::new(),
             expr_types: HashMap::new(),
             effect_hierarchy: hierarchy,
             module_aliases: HashMap::new(),
             lambda_body_effects: Vec::new(),
         }
+    }
+
+    // ── FnContext stack management (#1258) ────────────────────────────────
+
+    /// Returns a reference to the current function context (top of stack).
+    fn fn_context(&self) -> &FnContext {
+        self.fn_context_stack
+            .last()
+            .expect("fn_context_stack must never be empty")
+    }
+
+    /// Pushes a new function context onto the stack.
+    fn push_fn_context(&mut self, ctx: FnContext) {
+        self.fn_context_stack.push(ctx);
+    }
+
+    /// Pops the current function context, restoring the previous one.
+    fn pop_fn_context(&mut self) {
+        self.fn_context_stack.pop();
+        debug_assert!(
+            !self.fn_context_stack.is_empty(),
+            "fn_context_stack underflow"
+        );
     }
 
     fn emit(&mut self, err: CheckError) {
