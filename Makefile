@@ -229,8 +229,22 @@ test-spikes: build ## Run spike 001-parser tests manually (NOT part of CI — se
 test-bdd: build ## Run BDD corpus scenarios with Gherkin report (mvl test --bdd)
 	$(MVL) test tests/corpus/17_bdd/ --bdd
 
-test-backend-rust: build ## Run end-to-end transpiler tests: .mvl → parse → check → transpile → cargo → binary → assert output
+test-backend-rust: build ## Run end-to-end transpiler tests: compile_and_run + expect-annotated corpus/intrinsics/stdlib
 	cargo test --test compile_and_run
+	@pass=0; fail=0; \
+	OK="\033[32m✓\033[0m"; FAIL="\033[31m✗\033[0m"; \
+	while IFS= read -r line; do \
+		case "$$line" in \
+			"  PASS: "*) f="$${line#  PASS: }"; short="$${f#tests/}"; printf "  $$OK  %s\n" "$$short"; pass=$$((pass + 1));; \
+			"  FAIL"*) f="$${line##*: }"; short="$${f#tests/}"; printf "  $$FAIL  %s\n" "$$short"; fail=$$((fail + 1));; \
+		esac; \
+	done < <({ $(MVL) test tests/corpus/ --expect --verbose; $(MVL) test tests/intrinsics/ --expect --verbose; $(MVL) test tests/stdlib/ --expect --verbose; } 2>&1); \
+	echo ""; \
+	if [ $$fail -eq 0 ]; then \
+		printf "  \033[32m✓  $$pass passed, 0 failed\033[0m\n\n"; \
+	else \
+		printf "  \033[31m✗  $$pass passed, $$fail failed\033[0m\n\n"; exit 1; \
+	fi
 
 test-backend-llvm: build build-llvm-runtime ## Run LLVM backend tests across full corpus + intrinsics
 	@pass=0; fail=0; \
