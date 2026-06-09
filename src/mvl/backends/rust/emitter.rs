@@ -711,6 +711,21 @@ fn collect_undefined_types_tir(tir: &TirProgram, prelude_tirs: &[TirProgram]) ->
         }
     }
 
+    // Types imported from sibling modules (e.g. `use game::Direction`)
+    for ud in &tir.uses {
+        let is_std = ud.path.first().map(|s| s == "std").unwrap_or(false);
+        let is_pkg = ud.path.first().map(|s| s == "pkg").unwrap_or(false);
+        if !is_std && !is_pkg && ud.path.len() >= 2 {
+            // `use game::Direction` → path = ["game", "Direction"], last segment is the type
+            let imported_name = ud.path.last().unwrap();
+            defined.insert(imported_name.clone());
+            // `use game::{Direction, Pos}` → items = ["Direction", "Pos"]
+            for item in &ud.items {
+                defined.insert(item.clone());
+            }
+        }
+    }
+
     // Types from Rust-backed stdlib modules
     for ud in &tir.uses {
         if ud.path.first().map(|s| s == "std").unwrap_or(false) && ud.path.len() >= 2 {
