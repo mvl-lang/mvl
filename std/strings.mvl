@@ -87,45 +87,17 @@ pub fn String::trim(self) -> String {
     self.substring(start, end)
 }
 
-/// Convert all ASCII lowercase characters to uppercase. Non-ASCII characters pass through unchanged.
-pub fn String::to_upper(self) -> String {
-    let result: ref List[String] = [];
-    for c in self.chars() {
-        let u: String =
-            if c == "a" { "A" } else if c == "b" { "B" } else if c == "c" { "C" }
-            else if c == "d" { "D" } else if c == "e" { "E" } else if c == "f" { "F" }
-            else if c == "g" { "G" } else if c == "h" { "H" } else if c == "i" { "I" }
-            else if c == "j" { "J" } else if c == "k" { "K" } else if c == "l" { "L" }
-            else if c == "m" { "M" } else if c == "n" { "N" } else if c == "o" { "O" }
-            else if c == "p" { "P" } else if c == "q" { "Q" } else if c == "r" { "R" }
-            else if c == "s" { "S" } else if c == "t" { "T" } else if c == "u" { "U" }
-            else if c == "v" { "V" } else if c == "w" { "W" } else if c == "x" { "X" }
-            else if c == "y" { "Y" } else if c == "z" { "Z" }
-            else { c };
-        result.push(u)
-    };
-    String::from_chars(result)
-}
+/// Convert all characters to uppercase (Unicode-aware).
+///
+/// Backed by the runtime's full Unicode case conversion (Rust: `str::to_uppercase`,
+/// LLVM: `_mvl_str_to_upper`).
+pub builtin fn String::to_upper(self) -> String
 
-/// Convert all ASCII uppercase characters to lowercase. Non-ASCII characters pass through unchanged.
-pub fn String::to_lower(self) -> String {
-    let result: ref List[String] = [];
-    for c in self.chars() {
-        let l: String =
-            if c == "A" { "a" } else if c == "B" { "b" } else if c == "C" { "c" }
-            else if c == "D" { "d" } else if c == "E" { "e" } else if c == "F" { "f" }
-            else if c == "G" { "g" } else if c == "H" { "h" } else if c == "I" { "i" }
-            else if c == "J" { "j" } else if c == "K" { "k" } else if c == "L" { "l" }
-            else if c == "M" { "m" } else if c == "N" { "n" } else if c == "O" { "o" }
-            else if c == "P" { "p" } else if c == "Q" { "q" } else if c == "R" { "r" }
-            else if c == "S" { "s" } else if c == "T" { "t" } else if c == "U" { "u" }
-            else if c == "V" { "v" } else if c == "W" { "w" } else if c == "X" { "x" }
-            else if c == "Y" { "y" } else if c == "Z" { "z" }
-            else { c };
-        result.push(l)
-    };
-    String::from_chars(result)
-}
+/// Convert all characters to lowercase (Unicode-aware).
+///
+/// Backed by the runtime's full Unicode case conversion (Rust: `str::to_lowercase`,
+/// LLVM: `_mvl_str_to_lower`).
+pub builtin fn String::to_lower(self) -> String
 
 /// Replace all occurrences of `from` with `to`.
 pub fn String::replace(self, from: String, to: String) -> String {

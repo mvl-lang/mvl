@@ -217,8 +217,7 @@ pub fn is_stdlib_fn(name: &str) -> bool {
 pub(crate) const STDLIB_UFCS_METHODS: &[&str] = &[
     // std/strings.mvl (pure MVL, have bodies)
     "trim",
-    "to_upper",
-    "to_lower",
+    // to_upper/to_lower: now `builtin fn`, dispatched via BUILTINS rust_emit hints
     "starts_with",
     "ends_with",
     "replace",
@@ -311,6 +310,23 @@ pub const BUILTINS: &[BuiltinDesc] = &[
     ),
     BuiltinDesc::method_with("parse_int", "String", 0, 0, Some("str_parse_int"), None),
     BuiltinDesc::method_with("parse_float", "String", 0, 0, Some("str_parse_float"), None),
+    // String — Unicode-aware case conversion (builtin fn, #1267)
+    BuiltinDesc::method_with(
+        "to_upper",
+        "String",
+        0,
+        0,
+        Some("str_to_upper"),
+        Some("_mvl_str_to_upper"),
+    ),
+    BuiltinDesc::method_with(
+        "to_lower",
+        "String",
+        0,
+        0,
+        Some("str_to_lower"),
+        Some("_mvl_str_to_lower"),
+    ),
     // String — compiler intrinsics (both backends emit explicitly)
     BuiltinDesc::method("contains", "String", 1, 1),
     BuiltinDesc::method("is_empty", "String", 0, 0),

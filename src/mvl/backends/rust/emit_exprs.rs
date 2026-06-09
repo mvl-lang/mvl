@@ -684,6 +684,24 @@ impl RustEmitter {
                     // Kernel builtins with `rust_emit` hints in `BUILTINS` are dispatched
                     // as `runtime_fn(receiver.clone().into(), args)`.
                     m if rust_emit_by_name(m).is_some() => {
+                        // Label-preserving methods on String need re-wrapping (#1267).
+                        let wrap_label: Option<String> =
+                            if STRING_LABEL_PRESERVING_METHODS.contains(&m) {
+                                if let Ty::Labeled(label, inner) = &receiver.ty {
+                                    if matches!(inner.as_ref(), Ty::String) {
+                                        Some(emit_label(label.as_str()).to_string())
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            };
+                        if let Some(ref lname) = wrap_label {
+                            self.push(&format!("{lname}::new("));
+                        }
                         self.push(rust_emit_by_name(m).unwrap());
                         self.push("(");
                         self.emit_expr(receiver);
@@ -693,6 +711,9 @@ impl RustEmitter {
                             self.emit_args(args);
                         }
                         self.push(")");
+                        if wrap_label.is_some() {
+                            self.push(")");
+                        }
                     }
 
                     // ── Generic Rust method fallthrough ───────────────────────────────
