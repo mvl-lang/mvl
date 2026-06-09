@@ -1363,10 +1363,10 @@ mod tests {
              }",
         );
         assert!(ir.contains("call ptr @_mvl_map_get(ptr"), "{ir}");
-        // Must null-check before loading
+        // Must null-check before building Option struct
         assert!(ir.contains("icmp eq ptr"), "{ir}");
-        assert!(ir.contains("load i64, ptr"), "{ir}");
-        assert!(ir.contains("phi i64"), "{ir}");
+        assert!(ir.contains("insertvalue { i8, ptr }"), "{ir}");
+        assert!(ir.contains("phi { i8, ptr }"), "{ir}");
     }
 
     // ── HeapKind drop tracking tests (#1185) ─────────────────────────────

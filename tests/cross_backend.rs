@@ -283,6 +283,22 @@ fn cross_backend_closure_lambdas() {
     assert_llvm_output(&file, expected);
 }
 
+/// Category-D list builtins: sort/partition/group_by/windows/chunks must agree
+/// across backends (#1290).
+#[test]
+fn cross_backend_list_stubs() {
+    assert_backends_agree("list_stubs.mvl");
+    let file = corpus("list_stubs.mvl");
+    let expected =
+        "sort=[1, 1, 3, 4, 5]\npartition_yes=2\npartition_no=3\ngroup_by_key1=2\nwindows=3\nchunks=3\n";
+    assert_eq!(
+        run_transpiler(&file),
+        expected,
+        "list_stubs.mvl: transpiler output mismatch"
+    );
+    assert_llvm_output(&file, expected);
+}
+
 // ── Phase C: heap allocation tests (LLVM-only) ────────────────────────────────
 
 #[test]
