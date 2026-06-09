@@ -161,9 +161,10 @@ expr_stmt      = expr ";" ;
 expr           = literal | IDENT | field_access | fn_call | method_call
                | unary_expr | binary_expr | borrow_expr | if_expr | match_expr
                | lambda | block_expr | propagate | construct
-               | "consume" expr
+               | "consume" expr | as_expr
                | "declassify" "(" expr ")" | "sanitize" "(" expr ")"
                | actor_create_expr | select_expr | relabel_expr ;
+as_expr        = expr "as" type_expr ;                   (* checked coercion — runtime refinement check if unproven *)
 (* Phase 8, #63: actor creation — `actor TypeName { field: expr, … }` — returns ActorRef *)
 actor_create_expr = "actor" IDENT "{" [ actor_field_init { "," actor_field_init } ] "}" ;
 actor_field_init  = IDENT ":" expr ;
@@ -227,6 +228,7 @@ DOC_COMMENT    = "///" { ANY_CHAR } NEWLINE ;    (* doc comment — convention, 
 (* Declaration:     fn  type  const  use  pub  extern  impl  builtin            *)
 (*                  struct  enum  actor  effect                                   *)
 (* Totality:        total  partial  test                                         *)
+(* Cast:            as                                                            *)
 (* Control flow:    if  else  for  in  while  match  return  select               *)
 (* Let binding:     let  ghost                                                    *)
 (* Ownership:       iso  val  ref  tag  consume                                  *)

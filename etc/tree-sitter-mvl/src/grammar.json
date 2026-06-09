@@ -2638,6 +2638,10 @@
           }
         },
         {
+          "type": "SYMBOL",
+          "name": "as_expr"
+        },
+        {
           "type": "PREC_LEFT",
           "value": 11,
           "content": {
@@ -3678,6 +3682,35 @@
         }
       ]
     },
+    "as_expr": {
+      "type": "PREC_LEFT",
+      "value": 12,
+      "content": {
+        "type": "SEQ",
+        "members": [
+          {
+            "type": "FIELD",
+            "name": "operand",
+            "content": {
+              "type": "SYMBOL",
+              "name": "expr"
+            }
+          },
+          {
+            "type": "STRING",
+            "value": "as"
+          },
+          {
+            "type": "FIELD",
+            "name": "type",
+            "content": {
+              "type": "SYMBOL",
+              "name": "type_expr"
+            }
+          }
+        ]
+      }
+    },
     "concurrently_expr": {
       "type": "SEQ",
       "members": [
@@ -4378,6 +4411,9 @@
     ],
     [
       "base_type"
+    ],
+    [
+      "effect_list"
     ]
   ],
   "precedences": [],

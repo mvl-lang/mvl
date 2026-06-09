@@ -18,7 +18,7 @@
 //   9  MUL       * / %
 //  10  UNARY     ! ~ - move consume  (right-assoc)
 //  11  CALL      . ()                (left-assoc — method/field access)
-//  12  POSTFIX   ?                   (left-assoc — Result propagation)
+//  12  POSTFIX   ? as                (left-assoc — Result propagation, type cast)
 
 const PREC = {
   OR: 1,
@@ -58,6 +58,8 @@ module.exports = grammar({
     [$.effect],
     // `[` after identifier in base_type: generic args vs other uses of `[`
     [$.base_type],
+    // `as fn() -> T ! E + …` — `+` could be effect_list continuation or binary plus
+    [$.effect_list],
   ],
 
   rules: {
@@ -500,6 +502,8 @@ module.exports = grammar({
           PREC.POSTFIX,
           seq(field("operand", $.expr), "?")
         ),
+        // Postfix — checked coercion: `expr as Type` (#1324)
+        $.as_expr,
         // Member access: method call (must come before field access — more specific)
         prec.left(
           PREC.CALL,
@@ -669,6 +673,14 @@ module.exports = grammar({
         ),
         // Timeout arm: `timeout(duration) => block`
         seq("timeout", "(", $.expr, ")", "=>", $.block)
+      ),
+
+    // Checked coercion: `expr as Type` — refined type alias cast (#1324)
+    // Same precedence as `?` (POSTFIX) — `x.method() as Port` parses as `(x.method()) as Port`
+    as_expr: ($) =>
+      prec.left(
+        PREC.POSTFIX,
+        seq(field("operand", $.expr), "as", field("type", $.type_expr))
       ),
 
     // Phase 8, #69: `concurrently { … }` — structured concurrency scope
