@@ -667,7 +667,8 @@ impl CallCollector {
             Expr::Propagate { expr, .. }
             | Expr::Consume { expr, .. }
             | Expr::Relabel { expr, .. }
-            | Expr::Borrow { expr, .. } => self.expr(expr),
+            | Expr::Borrow { expr, .. }
+            | Expr::As { expr, .. } => self.expr(expr),
             Expr::Construct { fields, .. } | Expr::Spawn { fields, .. } => {
                 for (_, e) in fields {
                     self.expr(e);

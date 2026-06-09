@@ -140,6 +140,32 @@
     }
   },
   {
+    "type": "as_expr",
+    "named": true,
+    "fields": {
+      "operand": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "expr",
+            "named": true
+          }
+        ]
+      },
+      "type": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "type_expr",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "assign_stmt",
     "named": true,
     "fields": {},
@@ -585,6 +611,10 @@
       "types": [
         {
           "type": "actor_create_expr",
+          "named": true
+        },
+        {
+          "type": "as_expr",
           "named": true
         },
         {
@@ -2322,6 +2352,10 @@
   },
   {
     "type": "actor",
+    "named": false
+  },
+  {
+    "type": "as",
     "named": false
   },
   {

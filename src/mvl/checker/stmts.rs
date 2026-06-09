@@ -100,7 +100,7 @@ impl TypeChecker {
                             if !matches!(last_ty, Ty::Unknown)
                                 && !matches!(resolved_ret, Ty::Unknown)
                                 && !last_ty.is_result()
-                                && !types_compatible(&resolved_ret, &last_ty)
+                                && !self.types_compatible_resolved(&resolved_ret, &last_ty)
                             {
                                 self.emit(CheckError::TypeMismatch {
                                     expected: ret.display(),
@@ -116,7 +116,7 @@ impl TypeChecker {
                         // caller is discarding the Result — emit ResultIgnored as usual.
                         if last_ty.is_result() {
                             let consumed_by_caller = return_ty
-                                .map(|rt| types_compatible(rt, &last_ty))
+                                .map(|rt| self.types_compatible_resolved(rt, &last_ty))
                                 .unwrap_or(false);
                             if !consumed_by_caller {
                                 self.emit(CheckError::ResultIgnored { span: expr.span() });
@@ -138,7 +138,7 @@ impl TypeChecker {
                             if !matches!(last_ty, Ty::Unknown)
                                 && !matches!(resolved_ret, Ty::Unknown)
                                 && !last_ty.is_result()
-                                && !types_compatible(&resolved_ret, &last_ty)
+                                && !self.types_compatible_resolved(&resolved_ret, &last_ty)
                             {
                                 self.emit(CheckError::TypeMismatch {
                                     expected: ret.display(),
@@ -151,7 +151,7 @@ impl TypeChecker {
                         // that produces an unhandled Result must still be flagged.
                         if last_ty.is_result() {
                             let consumed_by_caller = return_ty
-                                .map(|rt| types_compatible(rt, &last_ty))
+                                .map(|rt| self.types_compatible_resolved(rt, &last_ty))
                                 .unwrap_or(false);
                             if !consumed_by_caller {
                                 self.emit(CheckError::ResultIgnored { span: *span });
@@ -175,7 +175,7 @@ impl TypeChecker {
                             if !matches!(last_ty, Ty::Unknown)
                                 && !matches!(resolved_ret, Ty::Unknown)
                                 && !last_ty.is_result()
-                                && !types_compatible(&resolved_ret, &last_ty)
+                                && !self.types_compatible_resolved(&resolved_ret, &last_ty)
                             {
                                 self.emit(CheckError::TypeMismatch {
                                     expected: ret.display(),
@@ -306,7 +306,7 @@ impl TypeChecker {
                 };
                 if is_ref_assignment {
                     self.check_capability_scope(pattern, init);
-                } else if !types_compatible(&ann_ty, &init_ty) {
+                } else if !self.types_compatible_resolved(&ann_ty, &init_ty) {
                     self.emit(CheckError::TypeMismatch {
                         expected: ann_ty.display(),
                         found: init_ty.display(),
@@ -448,7 +448,7 @@ impl TypeChecker {
                     // loop body is still checked against the function's return type.
                     let effective_ret = return_ty.or(self.fn_context().return_ty.as_ref());
                     if let Some(ret) = effective_ret {
-                        if !types_compatible(ret, &found) {
+                        if !self.types_compatible_resolved(ret, &found) {
                             self.emit(CheckError::TypeMismatch {
                                 expected: ret.display(),
                                 found: found.display(),
@@ -590,7 +590,7 @@ impl TypeChecker {
                         });
                     }
                     // #17: also verify the assigned value is type-compatible
-                    if !types_compatible(&info.ty, val_ty) {
+                    if !self.types_compatible_resolved(&info.ty, val_ty) {
                         self.emit(CheckError::TypeMismatch {
                             expected: info.ty.display(),
                             found: val_ty.display(),
@@ -629,16 +629,33 @@ impl TypeChecker {
 
     /// Resolve a named type through the type environment if it is a type alias.
     /// Returns the alias base type (with Refined stripped), or the original type if not an alias.
+    /// Recursively resolves chained aliases (e.g. `Port → PositiveInt → Int`).
     /// Used for return-type and arithmetic checks where named aliases should be transparent.
     pub(super) fn resolve_alias(&self, ty: Ty) -> Ty {
         if let Ty::Named(ref name, _) = ty {
             if let Some(type_info) = self.env.lookup_type(name) {
                 if let TypeBodyInfo::Alias(inner) = &type_info.body {
-                    return inner.base().clone();
+                    // Recurse to resolve chained aliases.
+                    return self.resolve_alias(inner.base().clone());
                 }
             }
         }
         ty
+    }
+
+    /// Type compatibility that sees through type aliases (#1324).
+    ///
+    /// A refined type alias like `Port = Int where ...` is treated as structurally
+    /// compatible with its base type `Int` in both directions:
+    /// - `Int` where `Port` expected: allowed (refinement checked separately)
+    /// - `Port` where `Int` expected: always safe (widening)
+    pub(super) fn types_compatible_resolved(&self, expected: &Ty, found: &Ty) -> bool {
+        if types_compatible(expected, found) {
+            return true;
+        }
+        let expected_resolved = self.resolve_alias(expected.clone());
+        let found_resolved = self.resolve_alias(found.clone());
+        types_compatible(&expected_resolved, &found_resolved)
     }
 
     /// Resolve named aliases inside a Labeled wrapper.

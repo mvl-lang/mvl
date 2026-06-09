@@ -107,6 +107,8 @@ pub enum TokenKind {
     Forall,
     /// `exists` — existential quantifier in ghost/contract predicates (Phase 5, #628).
     Exists,
+    /// `as` — type cast for refined type aliases (`expr as Port`, #1324).
+    As,
 
     // ── Capability markers ────────────────────────────────────────────────
     Iso,
@@ -217,6 +219,7 @@ impl fmt::Display for TokenKind {
             TokenKind::Effect => write!(f, "effect"),
             TokenKind::Forall => write!(f, "forall"),
             TokenKind::Exists => write!(f, "exists"),
+            TokenKind::As => write!(f, "as"),
             TokenKind::Iso => write!(f, "iso"),
             TokenKind::Val => write!(f, "val"),
             TokenKind::Ref => write!(f, "ref"),
@@ -950,6 +953,7 @@ fn keyword_or_ident(s: String) -> TokenKind {
         "effect" => TokenKind::Effect,
         "forall" => TokenKind::Forall,
         "exists" => TokenKind::Exists,
+        "as" => TokenKind::As,
         // Boolean literals
         "true" => TokenKind::True,
         "false" => TokenKind::False,

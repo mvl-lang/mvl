@@ -533,6 +533,26 @@ impl TypeChecker {
                 Ty::Fn(param_tys, Box::new(ret_ty), deduped, None)
             }
 
+            // `expr as Type` — checked cast to a refined type alias (#1324).
+            // Infer the inner expression's type and return the target type.
+            // Base type compatibility and refinement checking are handled elsewhere.
+            Expr::As { expr, target, .. } => {
+                let _inner_ty = self.infer_expr(expr);
+                let target_ty = resolve(target);
+                // Resolve the target through aliases to get the base type for
+                // compatibility checking. E.g. Port → Int.
+                let target_base = self.resolve_alias(target_ty.clone());
+                let inner_base = self.resolve_alias(_inner_ty.clone());
+                if !types_compatible(&target_base, &inner_base) {
+                    self.emit(CheckError::TypeMismatch {
+                        expected: target_ty.display(),
+                        found: _inner_ty.display(),
+                        span: expr.span(),
+                    });
+                }
+                target_ty
+            }
+
             // Quantifier predicates only appear in contract positions (requires/ensures/invariants),
             // never in expression positions that type inference walks.
             Expr::Quantifier(..) => unreachable!("Quantifier in type-inference position"),

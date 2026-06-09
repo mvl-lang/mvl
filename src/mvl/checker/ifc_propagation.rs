@@ -370,7 +370,8 @@ pub fn infer_label_extended(
         | Expr::Borrow { expr, .. }
         | Expr::FieldAccess { expr, .. }
         | Expr::Consume { expr, .. }
-        | Expr::Propagate { expr, .. } => infer_label_extended(expr, env, explicit, inferred),
+        | Expr::Propagate { expr, .. }
+        | Expr::As { expr, .. } => infer_label_extended(expr, env, explicit, inferred),
         Expr::If { then, else_, .. } => {
             // The value label of an if-expression is the join of its branch
             // result labels only. The condition label tracks implicit flow and
@@ -661,7 +662,8 @@ fn collect_violations_in_expr(
         | Expr::Consume { expr, .. }
         | Expr::Relabel { expr, .. }
         | Expr::Borrow { expr, .. }
-        | Expr::FieldAccess { expr, .. } => {
+        | Expr::FieldAccess { expr, .. }
+        | Expr::As { expr, .. } => {
             collect_violations_in_expr(expr, caller, env, type_env, inferred, errors);
         }
         Expr::If {

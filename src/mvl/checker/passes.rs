@@ -363,7 +363,10 @@ pub fn count_memory_safety_sites(prog: &Program) -> MemorySafetyCounts {
                     count_expr(v, c);
                 }
             }
-            Expr::Unary { expr, .. } | Expr::Propagate { expr, .. } | Expr::Borrow { expr, .. } => {
+            Expr::Unary { expr, .. }
+            | Expr::Propagate { expr, .. }
+            | Expr::Borrow { expr, .. }
+            | Expr::As { expr, .. } => {
                 count_expr(expr, c);
             }
             Expr::Binary { left, right, .. } => {

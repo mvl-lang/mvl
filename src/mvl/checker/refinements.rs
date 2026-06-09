@@ -1137,7 +1137,8 @@ fn analyze_expr(
         | Expr::Propagate { expr: inner, .. }
         | Expr::Consume { expr: inner, .. }
         | Expr::Relabel { expr: inner, .. }
-        | Expr::Borrow { expr: inner, .. } => {
+        | Expr::Borrow { expr: inner, .. }
+        | Expr::As { expr: inner, .. } => {
             analyze_expr(
                 inner, var_refs, fn_params, type_refs, fn_decls, errors, counts,
             );

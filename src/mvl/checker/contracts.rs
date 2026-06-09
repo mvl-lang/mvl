@@ -163,7 +163,8 @@ where
         | Expr::Consume { expr, .. }
         | Expr::Relabel { expr, .. }
         | Expr::Propagate { expr, .. }
-        | Expr::FieldAccess { expr, .. } => {
+        | Expr::FieldAccess { expr, .. }
+        | Expr::As { expr, .. } => {
             walk_expr(expr, ctx, f);
         }
         Expr::Construct { fields, .. } => {

@@ -270,7 +270,8 @@ fn collect_expr_edges(expr: &Expr, caller: &str, graph: &mut CallGraph) {
         | Expr::Propagate { expr, .. }
         | Expr::Consume { expr, .. }
         | Expr::Relabel { expr, .. }
-        | Expr::Borrow { expr, .. } => collect_expr_edges(expr, caller, graph),
+        | Expr::Borrow { expr, .. }
+        | Expr::As { expr, .. } => collect_expr_edges(expr, caller, graph),
         Expr::FieldAccess { expr, .. } => collect_expr_edges(expr, caller, graph),
         Expr::Construct { fields, .. } => {
             for (_, e) in fields {

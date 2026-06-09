@@ -62,6 +62,7 @@ pub type TokenKind = enum {
     KwDecreases,
     KwForall,
     KwExists,
+    KwAs,
     // ── Capability markers ──────────────────────────────────────────────
     KwIso,
     KwVal,

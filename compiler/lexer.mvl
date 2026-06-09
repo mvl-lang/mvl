@@ -88,6 +88,7 @@ total fn keyword_kind(s: String) -> TokenKind {
         "decreases"   => TokenKind::KwDecreases,
         "forall"      => TokenKind::KwForall,
         "exists"      => TokenKind::KwExists,
+        "as"          => TokenKind::KwAs,
         "true"        => TokenKind::KwTrue,
         "false"       => TokenKind::KwFalse,
         "iso"          => TokenKind::KwIso,

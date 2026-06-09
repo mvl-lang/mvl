@@ -769,6 +769,16 @@ pub enum Expr {
     /// `forall`/`exists` quantifier — valid only in `requires`/`ensures`/`invariant`
     /// contract positions (#983).  Wraps the `RefExpr` produced by `parse_ref_expr()`.
     Quantifier(Box<RefExpr>, Span),
+    /// `expr as Type` — checked cast to a refined type alias (#1324).
+    ///
+    /// For refined aliases like `type Port = Int where self >= 1 && self <= 65535`:
+    /// - If the compiler can prove the refinement statically → no runtime check.
+    /// - Otherwise → runtime assertion (panics if the refinement fails).
+    As {
+        expr: Box<Expr>,
+        target: Box<TypeExpr>,
+        span: Span,
+    },
 }
 
 /// One arm of a `select` expression.
@@ -807,7 +817,8 @@ impl Expr {
             | Expr::Relabel { span, .. }
             | Expr::Borrow { span, .. }
             | Expr::Spawn { span, .. }
-            | Expr::Select { span, .. } => *span,
+            | Expr::Select { span, .. }
+            | Expr::As { span, .. } => *span,
             Expr::Block(b) => b.span,
             Expr::Quantifier(_, s) => *s,
         }

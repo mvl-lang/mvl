@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use crate::mvl::checker::context::TypeBodyInfo;
 use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::ifc;
-use crate::mvl::checker::types::{resolve, types_compatible, Ty};
+use crate::mvl::checker::types::{resolve, Ty};
 use crate::mvl::parser::ast::{Effect, Expr, Totality, TypeExpr};
 use crate::mvl::parser::lexer::Span;
 
@@ -232,7 +232,7 @@ impl TypeChecker {
                 } else {
                     found
                 };
-                if !types_compatible(expected, found_check) {
+                if !self.types_compatible_resolved(expected, found_check) {
                     self.emit(CheckError::TypeMismatch {
                         expected: expected.display(),
                         found: found.display(),
@@ -408,7 +408,7 @@ impl TypeChecker {
                 } else {
                     // Check each argument type against the declared parameter type.
                     for (i, (expected, found)) in param_tys.iter().zip(arg_tys.iter()).enumerate() {
-                        if !types_compatible(expected, found) {
+                        if !self.types_compatible_resolved(expected, found) {
                             self.emit(CheckError::TypeMismatch {
                                 expected: expected.display(),
                                 found: found.display(),
@@ -598,7 +598,7 @@ impl TypeChecker {
                     }
                     // Per-argument type check (skip self at index 0).
                     for (expected, found) in method_info.params[1..].iter().zip(arg_tys.iter()) {
-                        if !types_compatible(expected, found) {
+                        if !self.types_compatible_resolved(expected, found) {
                             self.emit(CheckError::TypeMismatch {
                                 expected: expected.display(),
                                 found: found.display(),

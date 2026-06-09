@@ -1,0 +1,66 @@
+// Corpus: refined type alias coercion + explicit `as` cast (#1324)
+//
+// Refined type aliases should accept their base type when the refinement
+// is statically provable, matching inline `where` behaviour.
+
+// ── Type alias declarations ─────────────────────────────────────────────
+
+type Port = Int where self >= 1 && self <= 65535
+type PositiveInt = Int where self > 0
+type Score = Int where self >= 0 && self <= 100
+
+// ── 1. Let binding with literal (provable) ──────────────────────────────
+
+fn test_let_literal() -> Int {
+    let port: Port = 5558;
+    let pos: PositiveInt = 42;
+    let score: Score = 85;
+    port
+}
+
+// ── 2. Function call with literal argument (provable) ───────────────────
+
+fn use_port(p: Port) -> Int { p }
+fn use_positive(n: PositiveInt) -> Int { n }
+
+fn test_fn_call_literal() -> Int {
+    let a: Int = use_port(8080);
+    let b: Int = use_positive(1);
+    a + b
+}
+
+// ── 3. Return value coercion ────────────────────────────────────────────
+
+fn make_port() -> Port {
+    5558
+}
+
+fn make_positive() -> PositiveInt {
+    42
+}
+
+// ── 4. Reverse direction: refined alias where base expected ─────────────
+
+fn take_int(n: Int) -> Int { n }
+
+fn test_reverse() -> Int {
+    let port: Port = 5558;
+    take_int(port)
+}
+
+// ── 5. Explicit `as` cast ───────────────────────────────────────────────
+
+fn test_as_cast(n: Int) -> Port {
+    n as Port
+}
+
+fn test_as_cast_literal() -> Port {
+    5558 as Port
+}
+
+// ── 6. Variable passed to refined alias param ───────────────────────────
+
+fn test_variable_arg() -> Int {
+    let n: Int = 443;
+    use_port(n)
+}

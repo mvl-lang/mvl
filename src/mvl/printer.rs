@@ -950,6 +950,13 @@ impl<'src> Printer<'src> {
             }
             Expr::Select { arms, .. } => self.fmt_select(arms, indent),
 
+            Expr::As { expr, target, .. } => {
+                format!(
+                    "{} as {}",
+                    self.fmt_expr(expr, indent),
+                    self.fmt_type_expr(target)
+                )
+            }
             Expr::Quantifier(ref_expr, _) => self.fmt_ref_expr(ref_expr),
         }
     }
