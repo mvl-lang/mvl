@@ -711,15 +711,17 @@ fn collect_undefined_types_tir(tir: &TirProgram, prelude_tirs: &[TirProgram]) ->
         }
     }
 
-    // Types imported from sibling modules (e.g. `use game::Direction`)
+    // Types imported from sibling modules (e.g. `use game::Direction`, `use models::{User, Req}`)
     for ud in &tir.uses {
         let is_std = ud.path.first().map(|s| s == "std").unwrap_or(false);
         let is_pkg = ud.path.first().map(|s| s == "pkg").unwrap_or(false);
-        if !is_std && !is_pkg && ud.path.len() >= 2 {
-            // `use game::Direction` → path = ["game", "Direction"], last segment is the type
-            let imported_name = ud.path.last().unwrap();
-            defined.insert(imported_name.clone());
-            // `use game::{Direction, Pos}` → items = ["Direction", "Pos"]
+        if !is_std && !is_pkg {
+            // `use game::Direction` → path = ["game", "Direction"], last segment is the type/fn
+            if ud.path.len() >= 2 {
+                let imported_name = ud.path.last().unwrap();
+                defined.insert(imported_name.clone());
+            }
+            // `use models::{User, Req}` → items = ["User", "Req"]
             for item in &ud.items {
                 defined.insert(item.clone());
             }
