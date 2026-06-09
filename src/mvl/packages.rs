@@ -46,6 +46,12 @@ pub enum PackageError {
     InvalidInput(String),
     /// No matching version/tag was found.
     NoVersion(String),
+    /// License policy rejected the package (#635).
+    LicenseRejected {
+        package: String,
+        license: String,
+        reason: String,
+    },
 }
 
 impl From<fetch::FetchError> for PackageError {
@@ -76,21 +82,31 @@ impl std::fmt::Display for PackageError {
             PackageError::Io(path, e) => write!(f, "IO error at {path}: {e}"),
             PackageError::InvalidInput(msg) => write!(f, "{msg}"),
             PackageError::NoVersion(msg) => write!(f, "{msg}"),
+            PackageError::LicenseRejected {
+                package,
+                license,
+                reason,
+            } => write!(
+                f,
+                "license rejected for '{package}': {license} — {reason}. Use --allow-license to override."
+            ),
         }
     }
 }
 
 // ── CLI entry points ──────────────────────────────────────────────────────────
 
-/// `mvl add <git-url-or-pkg-id> [<tag>] [--rationale "..."]`
+/// `mvl add <git-url-or-pkg-id> [<tag>] [--rationale "..."] [--allow-license]`
 ///
 /// Fetches a package from a git URL, adds it to `mvl.toml` and `mvl.lock`.
 /// If `tag` is omitted, queries the git remote for the latest semver tag.
 /// If `rationale` is provided, it is stored alongside the dependency spec.
+/// If `allow_license` is provided, it overrides a license policy rejection.
 pub fn cmd_add(
     pkg_id: &str,
     tag: Option<&str>,
     rationale: Option<&str>,
+    allow_license: Option<&str>,
     project_root: &Path,
 ) -> Result<(), PackageError> {
     // Reject plain-HTTP URLs — they are vulnerable to MITM at fetch time.
@@ -128,7 +144,13 @@ pub fn cmd_add(
         .to_string();
     println!("Fetching {pkg_name} @ {resolved_tag}...");
 
-    let locked = fetch_package(&pkg_name, &git_url, &resolved_tag)?;
+    let mut locked = fetch_package(&pkg_name, &git_url, &resolved_tag)?;
+
+    // Read the fetched package's license from its mvl.toml (#635)
+    let pkg_license = read_package_license(&pkg_name, &version_str);
+    if let Some(ref lic) = pkg_license {
+        locked.license = Some(lic.clone());
+    }
 
     // Update or create mvl.toml
     let manifest_path = project_root.join("mvl.toml");
@@ -141,6 +163,32 @@ pub fn cmd_add(
             .unwrap_or("project");
         Manifest::new_project(name, env!("CARGO_PKG_VERSION"))
     };
+
+    // Check license policy (#635)
+    if let Some(ref lic) = pkg_license {
+        let policy = &manifest.license_policy;
+        if let Err(reason) = policy.check(lic) {
+            if let Some(override_reason) = allow_license {
+                eprintln!(
+                    "  License: {lic} — incompatible with project policy ({})",
+                    policy.mode_str()
+                );
+                eprintln!("  Overridden: {override_reason}");
+                locked.allow_license_override = Some(override_reason.to_string());
+            } else {
+                return Err(PackageError::LicenseRejected {
+                    package: pkg_name,
+                    license: lic.clone(),
+                    reason,
+                });
+            }
+        } else {
+            println!(
+                "  License: {lic} — compatible with project policy ({})",
+                policy.mode_str()
+            );
+        }
+    }
 
     manifest.dependencies.insert(
         pkg_name.clone(),
@@ -437,6 +485,205 @@ pub fn cmd_audit_supply_chain(
 ) -> Result<audit::SupplyChainAudit, PackageError> {
     let manifest = Manifest::load(project_root)?;
     Ok(audit::scan_all(&manifest.native, &manifest.c_native))
+}
+
+// ── License audit (#635) ─────────────────────────────────────────────────────
+
+/// Result of auditing a single dependency for license compliance.
+#[derive(Debug)]
+pub struct LicenseEntry {
+    /// Dependency name.
+    pub name: String,
+    /// Section: "dependency", "native", or "c-native".
+    pub section: String,
+    /// License expression, or "unknown" if absent.
+    pub license: String,
+    /// Policy check result.
+    pub status: LicenseStatus,
+}
+
+/// License compliance status for a single dependency.
+#[derive(Debug, PartialEq)]
+pub enum LicenseStatus {
+    /// License is compatible with policy.
+    Compatible,
+    /// License is incompatible with policy (reason provided).
+    Rejected(String),
+    /// License was rejected but overridden via `--allow-license`.
+    Overridden(String),
+    /// License is unknown (not declared).
+    Unknown,
+}
+
+/// Summary of a license audit.
+#[derive(Debug)]
+pub struct LicenseAudit {
+    pub entries: Vec<LicenseEntry>,
+    pub policy_mode: String,
+}
+
+impl LicenseAudit {
+    /// Number of rejected licenses (excluding overrides).
+    pub fn rejected_count(&self) -> usize {
+        self.entries
+            .iter()
+            .filter(|e| matches!(e.status, LicenseStatus::Rejected(_)))
+            .count()
+    }
+
+    /// Number of unknown licenses.
+    pub fn unknown_count(&self) -> usize {
+        self.entries
+            .iter()
+            .filter(|e| matches!(e.status, LicenseStatus::Unknown))
+            .count()
+    }
+
+    /// True when the audit should fail as a CI gate.
+    pub fn has_violations(&self) -> bool {
+        self.rejected_count() > 0
+    }
+
+    /// Render the audit report to a string.
+    pub fn render(&self) -> String {
+        let mut out = String::new();
+        out.push_str(&format!("License audit (policy: {}):\n", self.policy_mode));
+
+        let mut entries: Vec<&LicenseEntry> = self.entries.iter().collect();
+        entries.sort_by(|a, b| a.section.cmp(&b.section).then(a.name.cmp(&b.name)));
+
+        for e in &entries {
+            let status_str = match &e.status {
+                LicenseStatus::Compatible => "ok".to_string(),
+                LicenseStatus::Rejected(reason) => format!("REJECTED ({reason})"),
+                LicenseStatus::Overridden(reason) => format!("overridden ({reason})"),
+                LicenseStatus::Unknown => "UNKNOWN".to_string(),
+            };
+            out.push_str(&format!(
+                "  [{:<10}] {:<40} {:<20} {}\n",
+                e.section, e.name, e.license, status_str
+            ));
+        }
+        out.push('\n');
+
+        let rejected = self.rejected_count();
+        let unknown = self.unknown_count();
+        if rejected > 0 {
+            out.push_str(&format!(
+                "  {} license{} rejected.\n",
+                rejected,
+                if rejected == 1 { "" } else { "s" }
+            ));
+        }
+        if unknown > 0 {
+            out.push_str(&format!(
+                "  {} unknown license{}.\n",
+                unknown,
+                if unknown == 1 { "" } else { "s" }
+            ));
+        }
+        if rejected == 0 && unknown == 0 {
+            out.push_str("  All licenses compatible.\n");
+        }
+        out
+    }
+}
+
+/// `mvl audit --license`
+///
+/// Checks all dependency licenses against the project's license policy (#635).
+/// - MVL deps: reads license from `mvl.lock` (set by `mvl add`)
+/// - C-native: reads license from `[c-native]` inline table
+/// - Native (Rust): not enforced yet (would need Cargo metadata)
+pub fn cmd_audit_license(project_root: &Path) -> Result<LicenseAudit, PackageError> {
+    let manifest = Manifest::load(project_root)?;
+    let lockfile = LockFile::load_or_empty(project_root);
+    let policy = &manifest.license_policy;
+
+    let mut entries = Vec::new();
+
+    // Check MVL dependencies (from lock file)
+    for lp in &lockfile.packages {
+        let license_str = match (&lp.license, &lp.allow_license_override) {
+            (Some(lic), Some(reason)) => {
+                entries.push(LicenseEntry {
+                    name: lp.name.clone(),
+                    section: "dependency".to_string(),
+                    license: lic.clone(),
+                    status: LicenseStatus::Overridden(reason.clone()),
+                });
+                continue;
+            }
+            (Some(lic), None) => lic.clone(),
+            (None, _) => {
+                // Try reading from cached package mvl.toml
+                let cached_license = read_package_license(&lp.name, &lp.version);
+                match cached_license {
+                    Some(lic) => lic,
+                    None => {
+                        entries.push(LicenseEntry {
+                            name: lp.name.clone(),
+                            section: "dependency".to_string(),
+                            license: "unknown".to_string(),
+                            status: LicenseStatus::Unknown,
+                        });
+                        continue;
+                    }
+                }
+            }
+        };
+
+        let status = match policy.check(&license_str) {
+            Ok(()) => LicenseStatus::Compatible,
+            Err(reason) => LicenseStatus::Rejected(reason),
+        };
+        entries.push(LicenseEntry {
+            name: lp.name.clone(),
+            section: "dependency".to_string(),
+            license: license_str,
+            status,
+        });
+    }
+
+    // Check C-native dependencies
+    for (name, spec) in &manifest.c_native {
+        match &spec.license {
+            Some(lic) => {
+                let status = match policy.check(lic) {
+                    Ok(()) => LicenseStatus::Compatible,
+                    Err(reason) => LicenseStatus::Rejected(reason),
+                };
+                entries.push(LicenseEntry {
+                    name: name.clone(),
+                    section: "c-native".to_string(),
+                    license: lic.clone(),
+                    status,
+                });
+            }
+            None => {
+                entries.push(LicenseEntry {
+                    name: name.clone(),
+                    section: "c-native".to_string(),
+                    license: "unknown".to_string(),
+                    status: LicenseStatus::Unknown,
+                });
+            }
+        }
+    }
+
+    Ok(LicenseAudit {
+        entries,
+        policy_mode: policy.mode_str().to_string(),
+    })
+}
+
+/// Read the license field from a cached package's `mvl.toml`.
+fn read_package_license(name: &str, version: &str) -> Option<String> {
+    let cache_dir = fetch::pkg_cache_dir(name, version);
+    let toml_path = cache_dir.join("mvl.toml");
+    let content = std::fs::read_to_string(toml_path).ok()?;
+    let pkg_manifest = Manifest::parse(&content).ok()?;
+    Some(pkg_manifest.package.license)
 }
 
 /// `mvl audit --paradox`
@@ -842,7 +1089,7 @@ mod tests {
     #[test]
     fn cmd_add_rejects_http_url() {
         let tmp = tempfile::tempdir().unwrap();
-        let result = cmd_add("http://example.com/pkg", None, None, tmp.path());
+        let result = cmd_add("http://example.com/pkg", None, None, None, tmp.path());
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("http://"), "error should mention the protocol");

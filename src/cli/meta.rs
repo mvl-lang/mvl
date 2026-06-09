@@ -61,10 +61,15 @@ fn cmd_self_init() {
 
 pub(super) fn cmd_pkg_add(args: &[String]) {
     let pkg_id = args.get(2).unwrap_or_else(|| {
-        eprintln!("Usage: mvl add <pkg-id> [<tag>] [--rationale \"...\"]");
-        eprintln!("  pkg-id:      git URL or github.com/user/repo style identifier");
-        eprintln!("  tag:         optional version tag (e.g. v1.2.0); omit to use latest");
-        eprintln!("  --rationale: justification for adding this dependency");
+        eprintln!(
+            "Usage: mvl add <pkg-id> [<tag>] [--rationale \"...\"] [--allow-license \"...\"]"
+        );
+        eprintln!("  pkg-id:          git URL or github.com/user/repo style identifier");
+        eprintln!("  tag:             optional version tag (e.g. v1.2.0); omit to use latest");
+        eprintln!("  --rationale:     justification for adding this dependency");
+        eprintln!(
+            "  --allow-license: override a license policy rejection (reason logged in mvl.lock)"
+        );
         process::exit(1);
     });
     // Parse positional tag (first arg after pkg-id that doesn't start with --)
@@ -77,8 +82,13 @@ pub(super) fn cmd_pkg_add(args: &[String]) {
         .windows(2)
         .find(|w| w[0] == "--rationale")
         .map(|w| w[1].as_str());
+    // Parse --allow-license flag (#635)
+    let allow_license = args
+        .windows(2)
+        .find(|w| w[0] == "--allow-license")
+        .map(|w| w[1].as_str());
     let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    if let Err(e) = packages::cmd_add(pkg_id, tag, rationale, &project_root) {
+    if let Err(e) = packages::cmd_add(pkg_id, tag, rationale, allow_license, &project_root) {
         eprintln!("error: {e}");
         process::exit(1);
     }
@@ -123,20 +133,30 @@ pub(super) fn cmd_sbom(args: &[String]) {
 pub(super) fn cmd_audit(args: &[String]) {
     let paradox = args.iter().any(|a| a == "--paradox");
     let supply_chain = args.iter().any(|a| a == "--supply-chain");
+    let license = args.iter().any(|a| a == "--license");
 
-    if paradox && supply_chain {
-        eprintln!("error: --paradox and --supply-chain are mutually exclusive");
+    let flag_count = [paradox, supply_chain, license]
+        .iter()
+        .filter(|&&f| f)
+        .count();
+
+    if flag_count > 1 {
+        eprintln!("error: --paradox, --supply-chain, and --license are mutually exclusive");
         process::exit(1);
     }
 
-    if !paradox && !supply_chain {
-        eprintln!("Usage: mvl audit <--paradox | --supply-chain>");
+    if flag_count == 0 {
+        eprintln!("Usage: mvl audit <--paradox | --supply-chain | --license>");
         eprintln!("  --paradox:       audit dependencies for the Dependency Paradox policy");
         eprintln!("                   exits with code 1 if any dep below complexity threshold lacks rationale");
         eprintln!(
             "  --supply-chain:  scan [native] and [c-native] deps against NVD/OSV for CVEs (#633)"
         );
         eprintln!("                   exits with code 1 if any vulnerability is found");
+        eprintln!("  --license:       check dependency licenses against project policy (#635)");
+        eprintln!(
+            "                   exits with code 1 if any license is rejected; warns on unknown"
+        );
         eprintln!();
         eprintln!("Environment variables:");
         eprintln!("  NVD_API_KEY      NVD API key for higher rate limits (60 req/min vs 5/min)");
@@ -169,6 +189,21 @@ pub(super) fn cmd_audit(args: &[String]) {
             Ok(audit) => {
                 print!("{}", audit.render());
                 if audit.has_vulnerabilities() {
+                    process::exit(1);
+                }
+            }
+        }
+    }
+
+    if license {
+        match packages::cmd_audit_license(&project_root) {
+            Err(e) => {
+                eprintln!("error: {e}");
+                process::exit(1);
+            }
+            Ok(audit) => {
+                print!("{}", audit.render());
+                if audit.has_violations() {
                     process::exit(1);
                 }
             }

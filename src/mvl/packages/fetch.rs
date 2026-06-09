@@ -103,6 +103,8 @@ pub fn fetch_package(name: &str, git_url: &str, tag: &str) -> Result<LockedPacka
             hash,
             commit,
             git: Some(git_url.to_string()),
+            license: None,
+            allow_license_override: None,
         });
     }
 
@@ -137,6 +139,8 @@ pub fn fetch_package(name: &str, git_url: &str, tag: &str) -> Result<LockedPacka
         hash,
         commit,
         git: Some(git_url.to_string()),
+        license: None,
+        allow_license_override: None,
     })
 }
 

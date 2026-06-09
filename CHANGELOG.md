@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+## [0.194.0] - 2026-06-09
+
+### Added
+
+- **License policy enforcement at resolve time** (#635) — build license checking into the MVL package resolver to reject incompatible licenses at `mvl add` time:
+  - `LicensePolicy` type with modes: `permissive`, `copyleft-ok`, `any`, `custom` (default: `permissive`)
+  - `[license-policy]` manifest section with `allow` and `deny` lists for fine-grained control
+  - SPDX OR expression handling — if any alternative in a dual-licensed package is compatible, the whole expression passes
+  - `[c-native]` inline table syntax: `{ version = "...", license = "..." }` for declaring C dependency licenses
+  - `--allow-license "reason"` flag on `mvl add` to override policy rejections with audit trail stored in `mvl.lock`
+  - `mvl audit --license` command to scan all dependencies against project policy, warn on unknown licenses, fail on rejected
+  - `LicenseAudit` report with `Compatible`/`Rejected`/`Overridden`/`Unknown` statuses per dependency
+  - TOML parser extended to support string arrays for `allow`/`deny` lists in `[license-policy]`
+
+### Fixed
+
+- **pbt_operations test** — fixed `fn_bytes_len_nonneg` signature to use `List[Byte]` instead of `List[Int]` to match `fuzz_check_bytes` callback contract
+
 ## [0.193.1] - 2026-06-09
 
 ### Fixed
