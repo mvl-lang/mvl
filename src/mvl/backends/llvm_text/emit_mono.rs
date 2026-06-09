@@ -54,6 +54,24 @@ impl TextEmitter {
                 args: vec![],
                 span: Default::default(),
             },
+            Expr::FieldAccess {
+                expr: receiver,
+                field,
+                ..
+            } => {
+                let recv_ty = self.mvl_type_of_expr(receiver);
+                if let TypeExpr::Base { name: tn, .. } = &recv_ty {
+                    if let Some(fields) = self.struct_fields.get(tn) {
+                        if let Some((_, fty)) = fields.iter().find(|(f, _)| f == field) {
+                            return fty.clone();
+                        }
+                    }
+                }
+                default_int()
+            }
+            Expr::Consume { expr: inner, .. } | Expr::Relabel { expr: inner, .. } => {
+                self.mvl_type_of_expr(inner)
+            }
             _ => default_int(),
         }
     }
