@@ -2,9 +2,14 @@
 
 ## [Unreleased]
 
-### Changed
+## [0.190.1] - 2026-06-09
 
-- **TIR emitter**: replaced all 16 `expr_types.get(&span)` lookups with direct `TirExpr.ty` access (#1291)
+### Fixed
+
+- **Rust backend**: skip type stub generation for types imported from sibling modules in multi-file programs (#1311)
+- **Rust backend**: properly handle both dot-path imports (`use game::Direction`) and brace-group imports (`use models::{User, Req}`)
+- **MVL examples**: corrected `val` annotation position from type-position to capability-position in function parameters across access_control, bzip, and crud_api examples
+- **Test infrastructure**: removed example tests from compile_and_run.rs (covered by make test-examples) and split example testing by backend (Rust vs LLVM)
 
 ## [0.190.0] - 2026-06-09
 
