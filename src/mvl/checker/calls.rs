@@ -246,11 +246,12 @@ impl TypeChecker {
             // (prefix subsetting via `effect_satisfies`).
             for required in &fn_info.effects {
                 let covered = self
-                    .current_fn_effects
+                    .fn_context()
+                    .effects
                     .iter()
                     .any(|declared| self.effect_satisfies(declared, required));
                 if !covered {
-                    if self.current_fn_effects.is_empty() {
+                    if self.fn_context().effects.is_empty() {
                         // Pure function calling effectful one (#19)
                         self.emit(CheckError::UndeclaredEffect {
                             callee: name.to_string(),
@@ -260,7 +261,7 @@ impl TypeChecker {
                     } else {
                         // Caller has some effects but not this one (#20)
                         self.emit(CheckError::MissingEffect {
-                            caller: self.current_fn_name.clone(),
+                            caller: self.fn_context().fn_name.clone(),
                             callee: name.to_string(),
                             effect: required.to_string(),
                             span,
@@ -276,7 +277,7 @@ impl TypeChecker {
 
             // Req 8: Total function must not call partial functions.
             if matches!(fn_info.totality, Some(Totality::Partial))
-                && !matches!(self.current_fn_totality, Some(Totality::Partial))
+                && !matches!(self.fn_context().totality, Some(Totality::Partial))
             {
                 self.emit(CheckError::PartialCallInTotal {
                     callee: name.to_string(),
@@ -419,11 +420,12 @@ impl TypeChecker {
                 // Req 7: propagate callee effects — HOF call sites obey same rules as named calls.
                 for required in &hof_effects {
                     let covered = self
-                        .current_fn_effects
+                        .fn_context()
+                        .effects
                         .iter()
                         .any(|declared| self.effect_satisfies(declared, required));
                     if !covered {
-                        if self.current_fn_effects.is_empty() {
+                        if self.fn_context().effects.is_empty() {
                             self.emit(CheckError::UndeclaredEffect {
                                 callee: name.to_string(),
                                 effect: required.to_string(),
@@ -431,7 +433,7 @@ impl TypeChecker {
                             });
                         } else {
                             self.emit(CheckError::MissingEffect {
-                                caller: self.current_fn_name.clone(),
+                                caller: self.fn_context().fn_name.clone(),
                                 callee: name.to_string(),
                                 effect: required.to_string(),
                                 span,
@@ -449,7 +451,7 @@ impl TypeChecker {
                 // totality annotations in function-type expressions. In that case this guard
                 // is a no-op — a known Phase 1 gap tracked in #711.
                 if matches!(hof_totality, Some(Totality::Partial))
-                    && !matches!(self.current_fn_totality, Some(Totality::Partial))
+                    && !matches!(self.fn_context().totality, Some(Totality::Partial))
                 {
                     self.emit(CheckError::PartialCallInTotal {
                         callee: name.to_string(),
@@ -554,11 +556,12 @@ impl TypeChecker {
                     }
                     let send_eff = Effect::new("Send", span);
                     let covered = self
-                        .current_fn_effects
+                        .fn_context()
+                        .effects
                         .iter()
                         .any(|declared| self.effect_satisfies(declared, &send_eff));
                     if !covered {
-                        if self.current_fn_effects.is_empty() {
+                        if self.fn_context().effects.is_empty() {
                             self.emit(CheckError::UndeclaredEffect {
                                 callee: format!("{type_name}.{method}"),
                                 effect: "Send".to_string(),
@@ -566,7 +569,7 @@ impl TypeChecker {
                             });
                         } else {
                             self.emit(CheckError::MissingEffect {
-                                caller: self.current_fn_name.clone(),
+                                caller: self.fn_context().fn_name.clone(),
                                 callee: format!("{type_name}.{method}"),
                                 effect: "Send".to_string(),
                                 span,
@@ -606,11 +609,12 @@ impl TypeChecker {
                     // Effect propagation: caller must declare all effects of this method.
                     for required in &method_info.effects {
                         let covered = self
-                            .current_fn_effects
+                            .fn_context()
+                            .effects
                             .iter()
                             .any(|declared| self.effect_satisfies(declared, required));
                         if !covered {
-                            if self.current_fn_effects.is_empty() {
+                            if self.fn_context().effects.is_empty() {
                                 self.emit(CheckError::UndeclaredEffect {
                                     callee: format!("{type_name}.{method}"),
                                     effect: required.to_string(),
@@ -618,7 +622,7 @@ impl TypeChecker {
                                 });
                             } else {
                                 self.emit(CheckError::MissingEffect {
-                                    caller: self.current_fn_name.clone(),
+                                    caller: self.fn_context().fn_name.clone(),
                                     callee: format!("{type_name}.{method}"),
                                     effect: required.to_string(),
                                     span,
@@ -632,7 +636,7 @@ impl TypeChecker {
                     }
                     // Totality: total caller must not call partial method.
                     if matches!(method_info.totality, Some(Totality::Partial))
-                        && !matches!(self.current_fn_totality, Some(Totality::Partial))
+                        && !matches!(self.fn_context().totality, Some(Totality::Partial))
                     {
                         self.emit(CheckError::PartialCallInTotal {
                             callee: format!("{type_name}.{method}"),

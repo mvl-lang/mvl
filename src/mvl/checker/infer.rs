@@ -355,7 +355,7 @@ impl TypeChecker {
                 // verify error types are compatible — either identical or convertible via From.
                 if let (Ty::Result(_, expr_err), Some(Ty::Result(_, ret_err))) = (
                     ty.unlabeled(),
-                    self.current_return_ty.as_ref().map(|t| t.unlabeled()),
+                    self.fn_context().return_ty.as_ref().map(|t| t.unlabeled()),
                 ) {
                     let from_ty = expr_err.display();
                     let into_ty = ret_err.display();
@@ -438,11 +438,12 @@ impl TypeChecker {
                 let ty = self.check_construction(actor_type, fields, *span);
                 let spawn_eff = Effect::new("Spawn", *span);
                 let covered = self
-                    .current_fn_effects
+                    .fn_context()
+                    .effects
                     .iter()
                     .any(|d| self.effect_satisfies(d, &spawn_eff));
                 if !covered {
-                    if self.current_fn_effects.is_empty() {
+                    if self.fn_context().effects.is_empty() {
                         self.emit(CheckError::UndeclaredEffect {
                             callee: format!("actor {actor_type}"),
                             effect: "Spawn".to_string(),
@@ -450,7 +451,7 @@ impl TypeChecker {
                         });
                     } else {
                         self.emit(CheckError::MissingEffect {
-                            caller: self.current_fn_name.clone(),
+                            caller: self.fn_context().fn_name.clone(),
                             callee: format!("actor {actor_type}"),
                             effect: "Spawn".to_string(),
                             span: *span,
@@ -632,16 +633,16 @@ impl TypeChecker {
                 };
                 for operand_ty in [&lt, &rt] {
                     if let Ty::Named(name, args) = operand_ty.unlabeled() {
-                        if args.is_empty() && self.current_type_params.contains(name) {
+                        if args.is_empty() && self.fn_context().type_params.contains(name) {
                             let has_bound =
-                                self.current_type_constraints
-                                    .get(name)
-                                    .is_some_and(|bounds| {
+                                self.fn_context().type_constraints.get(name).is_some_and(
+                                    |bounds| {
                                         bounds.iter().any(|b| {
                                             b == required_bound
                                                 || (required_bound == "Eq" && b == "Ord")
                                         })
-                                    });
+                                    },
+                                );
                             if !has_bound {
                                 self.emit(CheckError::MissingConstraint {
                                     type_param: name.clone(),
