@@ -6,6 +6,21 @@
 
 - **TIR emitter**: replaced all 16 `expr_types.get(&span)` lookups with direct `TirExpr.ty` access (#1291)
 
+## [0.190.0] - 2026-06-09
+
+### Added
+
+- **LLVM backend**: full dispatch arms for five Category-D list builtins — `sort`, `partition`, `group_by`, `windows`, `chunks` (#1290, ADR-0041 Phase 1)
+- **C-ABI runtime**: `_mvl_list_sort`, `_mvl_list_partition`, `_mvl_list_group_by`, `_mvl_list_windows`, `_mvl_list_chunks` implementations
+- **LLVM backend**: `Pattern::Tuple` let-binding destructuring for partition results
+- **LLVM backend**: `type_of_block_tail` helper for correct lambda return-type inference from block/if/match tails
+
+### Fixed
+
+- **LLVM backend**: `Map::get` now supports integer keys (stack-allocated) and returns `{ i8, ptr }` Option struct compatible with `unwrap_or`
+- **LLVM backend**: `Map::contains_key` now supports integer keys (same key_ty branching as `get`)
+- **std/lists.mvl**: `windows` and `chunks` promoted from `pub fn` to `pub builtin fn` to avoid LLVM SSA-dominance issues (#992)
+
 ## [0.189.3] - 2026-06-09
 
 ### Fixed

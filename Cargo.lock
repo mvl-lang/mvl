@@ -700,7 +700,7 @@ dependencies = [
 
 [[package]]
 name = "mvl"
-version = "0.189.2"
+version = "0.190.0"
 dependencies = [
  "criterion",
  "libc",
