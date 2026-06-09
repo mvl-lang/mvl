@@ -12,6 +12,7 @@
 //! - `mvl sbom`                    — generate CycloneDX/SPDX SBOM from mvl.lock
 //! - `mvl audit --paradox`         — Dependency Paradox audit (#637)
 
+pub mod audit;
 pub mod fetch;
 pub mod hash;
 pub mod lock;
@@ -424,6 +425,18 @@ impl ParadoxAudit {
         }
         out
     }
+}
+
+/// `mvl audit --supply-chain`
+///
+/// Scans `[native]` and `[c-native]` dependencies against vulnerability
+/// databases (NVD for C libs, OSV for both), mapping CVEs to MVL requirement
+/// gaps (#633).
+pub fn cmd_audit_supply_chain(
+    project_root: &Path,
+) -> Result<audit::SupplyChainAudit, PackageError> {
+    let manifest = Manifest::load(project_root)?;
+    Ok(audit::scan_all(&manifest.native, &manifest.c_native))
 }
 
 /// `mvl audit --paradox`

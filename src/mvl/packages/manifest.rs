@@ -77,6 +77,8 @@ pub struct Manifest {
     pub dependencies: HashMap<String, DepSpec>,
     /// `[native]` — Rust crates used in `bridge.rs` (for SBOM).
     pub native: HashMap<String, String>,
+    /// `[c-native]` — C libraries linked via `extern "c"` blocks (#633).
+    pub c_native: HashMap<String, String>,
     /// `[dependency-policy]` — Dependency Paradox enforcement settings.
     pub dependency_policy: DependencyPolicy,
 }
@@ -125,7 +127,8 @@ impl Manifest {
             .map(|s| s.to_string());
 
         let dependencies = parse_dependencies(table.get("dependencies"))?;
-        let native = parse_native(table.get("native"))?;
+        let native = parse_native(table.get("native"), "native")?;
+        let c_native = parse_native(table.get("c-native"), "c-native")?;
         let dependency_policy = parse_dependency_policy(table.get("dependency-policy"))?;
 
         Ok(Manifest {
@@ -138,6 +141,7 @@ impl Manifest {
             },
             dependencies,
             native,
+            c_native,
             dependency_policy,
         })
     }
@@ -232,6 +236,15 @@ impl Manifest {
             }
         }
 
+        if !self.c_native.is_empty() {
+            out.push_str("\n[c-native]\n");
+            let mut c_native: Vec<(&String, &String)> = self.c_native.iter().collect();
+            c_native.sort_by_key(|(k, _)| *k);
+            for (name, version) in c_native {
+                out.push_str(&format!("{} = \"{}\"\n", name, toml_escape(version)));
+            }
+        }
+
         out
     }
 
@@ -247,6 +260,7 @@ impl Manifest {
             },
             dependencies: HashMap::new(),
             native: HashMap::new(),
+            c_native: HashMap::new(),
             dependency_policy: DependencyPolicy::default(),
         }
     }
@@ -593,13 +607,16 @@ fn parse_dependency_policy(value: Option<&TomlValue>) -> Result<DependencyPolicy
     Ok(policy)
 }
 
-fn parse_native(value: Option<&TomlValue>) -> Result<HashMap<String, String>, ManifestError> {
+fn parse_native(
+    value: Option<&TomlValue>,
+    section: &str,
+) -> Result<HashMap<String, String>, ManifestError> {
     let mut native = HashMap::new();
     let tbl = match value {
         None => return Ok(native),
         Some(v) => v
             .as_table()
-            .ok_or_else(|| ManifestError::ParseError("[native] must be a table".to_string()))?,
+            .ok_or_else(|| ManifestError::ParseError(format!("[{section}] must be a table")))?,
     };
     for (name, val) in tbl {
         // Accept either a plain string ("0.31") or a table with a `version` key
@@ -611,13 +628,13 @@ fn parse_native(value: Option<&TomlValue>) -> Result<HashMap<String, String>, Ma
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| {
                     ManifestError::ParseError(format!(
-                        "native dep '{name}' table must have a 'version' string"
+                        "{section} dep '{name}' table must have a 'version' string"
                     ))
                 })?
                 .to_string()
         } else {
             return Err(ManifestError::ParseError(format!(
-                "native dep '{name}' must be a string or table with 'version'"
+                "{section} dep '{name}' must be a string or table with 'version'"
             )));
         };
         native.insert(name.clone(), version);
@@ -651,6 +668,19 @@ tls = { git = "https://github.com/lab271/mvl_tls", tag = "v0.4.0" }
 
 [native]
 hyper = "1.0"
+"#;
+
+    const WITH_C_NATIVE: &str = r#"
+[package]
+name = "crypto-app"
+version = "0.1.0"
+license = "MIT"
+requires-mvl = ">=0.40.0"
+extern-rationale = "links openssl and zlib"
+
+[c-native]
+libz = "1.3"
+openssl = "3.0"
 "#;
 
     // ── Existing tests ────────────────────────────────────────────────────────
@@ -1025,5 +1055,54 @@ rationale-required = false
         let table = parse_toml_table(content).unwrap();
         let sec = table.get("section").unwrap().as_table().unwrap();
         assert_eq!(sec.get("count").unwrap().as_integer(), Some(42));
+    }
+
+    // --- [c-native] parsing (#633) ---
+
+    #[test]
+    fn parse_c_native_section() {
+        let m = Manifest::parse(WITH_C_NATIVE).unwrap();
+        assert_eq!(m.c_native.len(), 2);
+        assert_eq!(m.c_native.get("libz").map(String::as_str), Some("1.3"));
+        assert_eq!(m.c_native.get("openssl").map(String::as_str), Some("3.0"));
+    }
+
+    #[test]
+    fn c_native_empty_when_absent() {
+        let m = Manifest::parse(MINIMAL).unwrap();
+        assert!(m.c_native.is_empty());
+    }
+
+    #[test]
+    fn c_native_roundtrip() {
+        let m = Manifest::parse(WITH_C_NATIVE).unwrap();
+        let toml = m.to_toml();
+        assert!(toml.contains("[c-native]"));
+        let m2 = Manifest::parse(&toml).unwrap();
+        assert_eq!(m2.c_native.len(), 2);
+        assert_eq!(m2.c_native.get("libz").map(String::as_str), Some("1.3"));
+        assert_eq!(m2.c_native.get("openssl").map(String::as_str), Some("3.0"));
+    }
+
+    #[test]
+    fn c_native_with_inline_table_version() {
+        let content = r#"
+[package]
+name = "foo"
+version = "0.1.0"
+license = "MIT"
+requires-mvl = ">=0.1.0"
+
+[c-native]
+libz = { version = "1.3" }
+"#;
+        let m = Manifest::parse(content).unwrap();
+        assert_eq!(m.c_native.get("libz").map(String::as_str), Some("1.3"));
+    }
+
+    #[test]
+    fn new_project_has_empty_c_native() {
+        let m = Manifest::new_project("app", "1.0.0");
+        assert!(m.c_native.is_empty());
     }
 }
