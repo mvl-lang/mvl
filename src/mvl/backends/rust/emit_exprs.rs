@@ -913,20 +913,30 @@ impl RustEmitter {
                 } else {
                     // For Int arithmetic, emit checked methods to match LLVM backend
                     // overflow behaviour (trap on overflow rather than wrapping).
-                    let is_int_arith = matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul)
-                        && matches!(expr.ty, Ty::Int);
+                    // Div/Rem: checked_div/checked_rem catch division-by-zero and
+                    // i64::MIN / -1 overflow (#1266).
+                    let is_int_arith = matches!(
+                        op,
+                        BinaryOp::Add
+                            | BinaryOp::Sub
+                            | BinaryOp::Mul
+                            | BinaryOp::Div
+                            | BinaryOp::Rem
+                    ) && matches!(expr.ty, Ty::Int);
                     if is_int_arith {
-                        let method = match op {
-                            BinaryOp::Add => "checked_add",
-                            BinaryOp::Sub => "checked_sub",
-                            BinaryOp::Mul => "checked_mul",
+                        let (method, msg) = match op {
+                            BinaryOp::Add => ("checked_add", "integer overflow"),
+                            BinaryOp::Sub => ("checked_sub", "integer overflow"),
+                            BinaryOp::Mul => ("checked_mul", "integer overflow"),
+                            BinaryOp::Div => ("checked_div", "division by zero or overflow"),
+                            BinaryOp::Rem => ("checked_rem", "remainder by zero or overflow"),
                             _ => unreachable!(),
                         };
                         self.push("(<i64>::clone(&(");
                         self.emit_expr(left);
                         self.push(&format!(")).{method}(<i64>::clone(&("));
                         self.emit_expr(right);
-                        self.push("))).expect(\"integer overflow\"))");
+                        self.push(&format!("))).expect(\"{msg}\"))"));
                     } else {
                         self.push("(");
                         self.emit_expr(left);
