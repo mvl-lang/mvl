@@ -1,7 +1,7 @@
 // examples/crud_api/db.mvl — SQLite CRUD operations for the User entity.
 //
 // Opens/initialises a file-backed SQLite database.
-// All query functions take `val SqliteDb` — the caller keeps ownership and
+// All query functions take `SqliteDb` — the caller keeps ownership and
 // passes it to each request in the synchronous accept loop.
 //
 // Effects: ! DB (+ FileRead + FileWrite for open).

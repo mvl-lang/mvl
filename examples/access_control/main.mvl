@@ -79,7 +79,7 @@ extern "rust" {
 // Calls check_permission (pure) then log_access (! Log) to emit a structured
 // audit record.
 total fn check_and_audit(
-    logger: val Logger,
+    val logger: Logger,
     username: String where len(self) > 0,
     role: Role,
     resource: Resource,
@@ -91,7 +91,7 @@ total fn check_and_audit(
 
 // ── Demo scenarios ────────────────────────────────────────────────────────
 // RBAC demo: each call produces a structured audit record (INFO or WARN).
-total fn demo_rbac(logger: val Logger) -> Unit ! Log {
+total fn demo_rbac(val logger: Logger) -> Unit ! Log {
     let u1: Unit = check_and_audit(logger, "admin_demo", Role::Admin, Resource::AdminPanel, Action::Read);
     let u2: Unit = check_and_audit(logger, "mod_demo", Role::Moderator, Resource::AdminPanel, Action::Write);
     let u3: Unit = check_and_audit(logger, "user_demo", Role::User, Resource::Post, Action::Delete);
@@ -102,7 +102,7 @@ total fn demo_rbac(logger: val Logger) -> Unit ! Log {
 // Auth demo: alice's hash is Secret[String] — cannot be printed or leaked.
 // It flows directly into hash_verify at the extern boundary inside auth module.
 // Phase 4: std.log replaces raw println; ! CryptoRandom propagated from authenticate().
-total fn demo_auth(logger: val Logger) -> Unit ! Log + CryptoRandom {
+total fn demo_auth(val logger: Logger) -> Unit ! Log + CryptoRandom {
     let hash_opt: Option[Secret[String]] = get_demo_hash("alice");
     match hash_opt {
         None => logger.warn("auth attempt: user not found", {"user": "alice"}),

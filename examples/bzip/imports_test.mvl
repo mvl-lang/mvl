@@ -19,7 +19,7 @@ use mtf::mtf_decode;
 
 test fn imports_rle_encode_is_callable() -> Unit {
     let input: List[Byte] = [from_int(65), from_int(65), from_int(65), from_int(65)];
-    let encoded: List[Byte] = rle_encode(val input);
+    let encoded: List[Byte] = rle_encode(input);
     // 4 identical bytes produce [b b b b 0] — five bytes, last byte = extra count
     assert_eq(encoded.len(), 5)
 }
@@ -29,8 +29,8 @@ test fn imports_rle_roundtrip() -> Unit {
         from_int(65), from_int(65), from_int(65), from_int(65),
         from_int(66), from_int(67)
     ];
-    let encoded: List[Byte] = rle_encode(val input);
-    let decoded: List[Byte] = rle_decode(val encoded);
+    let encoded: List[Byte] = rle_encode(input);
+    let decoded: List[Byte] = rle_decode(encoded);
     assert_eq(decoded.len(), input.len())
 }
 
@@ -38,7 +38,7 @@ test fn imports_rle_roundtrip() -> Unit {
 
 test fn imports_mtf_encode_is_callable() -> Unit {
     let input: List[Byte] = [from_int(65), from_int(66), from_int(65)];
-    let encoded: List[Int] = mtf_encode(val input);
+    let encoded: List[Int] = mtf_encode(input);
     assert_eq(encoded.len(), 3)
 }
 
@@ -46,7 +46,7 @@ test fn imports_mtf_roundtrip() -> Unit {
     let input: List[Byte] = [
         from_int(65), from_int(66), from_int(67), from_int(65)
     ];
-    let encoded: List[Int] = mtf_encode(val input);
-    let decoded: List[Byte] = mtf_decode(val encoded);
+    let encoded: List[Int] = mtf_encode(input);
+    let decoded: List[Byte] = mtf_decode(encoded);
     assert_eq(decoded.len(), input.len())
 }

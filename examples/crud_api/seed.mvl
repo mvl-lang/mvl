@@ -30,7 +30,7 @@ total fn decode_row(row: List[String]) -> Result[CreateUserRequest, String] {
 
 // ── Row insertion ───────────────────────────────────────────────────────────
 
-partial fn insert_row(val db: SqliteDb, logger: val Logger, i: Int, row: List[String]) -> Bool ! DB + Log {
+partial fn insert_row(val db: SqliteDb, val logger: Logger, i: Int, row: List[String]) -> Bool ! DB + Log {
     match decode_row(row) {
         Err(msg) => { logger.warn("skip row", {"row": (i + 1).to_string(), "reason": msg}); false },
         Ok(req)  => match db_create_user(db, req) {
@@ -45,7 +45,7 @@ partial fn insert_row(val db: SqliteDb, logger: val Logger, i: Int, row: List[St
 /// Read a CSV file and insert each row as a new user.
 /// The first row must be a header (name,email) and is skipped.
 /// Returns the number of rows successfully inserted.
-pub partial fn db_seed_from_csv(val db: SqliteDb, logger: val Logger, path: String) -> Result[Int, String] ! DB + FileRead + Log {
+pub partial fn db_seed_from_csv(val db: SqliteDb, val logger: Logger, path: String) -> Result[Int, String] ! DB + FileRead + Log {
     match read_file(path) {
         Err(_) => Err("failed to read seed file"),
         Ok(raw) => {

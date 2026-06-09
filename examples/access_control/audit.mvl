@@ -65,7 +65,7 @@ total fn log_level_for_decision(decision: Permission) -> String {
 // username is a plain String — callers are responsible for passing clean values.
 /// Log an access decision to the structured audit trail with IFC-safe fields.
 pub total fn log_access(
-    logger: val Logger,
+    val logger: Logger,
     username: String where len(self) > 0,
     resource: Resource,
     action: Action,
