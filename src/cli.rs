@@ -131,7 +131,13 @@ pub(super) fn dispatch(args: &[String]) {
             if backend == "llvm" {
                 llvm_text::cmd_test_llvm_text(&path, quiet, verbose);
             } else {
-                test::run(&path, quiet, verbose, coverage, bdd);
+                let expect_only = args.iter().any(|a| a == "--expect");
+                if expect_only {
+                    // Only run // expect: annotated files through the Rust transpiler
+                    test::run_expect_tests(&path, quiet, verbose);
+                } else {
+                    test::run(&path, quiet, verbose, coverage, bdd);
+                }
             }
         }
         "mutate" => {

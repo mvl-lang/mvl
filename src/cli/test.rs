@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Schuberg Philis
 
+use mvl::mvl::backends::llvm_text::lli;
 use mvl::mvl::backends::rust as transpiler;
 use mvl::mvl::checker;
 use mvl::mvl::loader;
@@ -497,6 +498,172 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
             "{}",
             transpiler::format_report(&all_branches, &hits, &stems)
         );
+    }
+}
+
+/// Run `// expect:` annotation tests through the Rust transpiler backend.
+///
+/// Mirrors the LLVM text backend's `cmd_test_llvm_text` — discovers `.mvl` files
+/// with `fn main` + `// expect:` annotations, compiles via the Rust transpiler,
+/// runs the resulting binary, and compares stdout against the expected output.
+///
+/// This creates parity between `test-backend-rust` and `test-backend-llvm` so both
+/// backends are exercised against the same corpus of expect-annotated test programs.
+pub fn run_expect_tests(path: &str, quiet: bool, verbose: bool) {
+    let all_mvl = loader::mvl_files_all(path);
+    let mut test_cases: Vec<(PathBuf, String, bool)> = Vec::new();
+
+    for file in &all_mvl {
+        let src = match fs::read_to_string(file) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        if !src.contains("fn main(") {
+            continue;
+        }
+        // Skip files annotated for LLVM-only testing (e.g. IFC differences)
+        // or known Rust transpiler limitations (e.g. closure capture → fn pointer)
+        if src.contains("corpus:llvm") || src.contains("rust-expect-skip:") {
+            continue;
+        }
+        if let Some(pat) = lli::parse_expect_pattern_annotation(&src) {
+            test_cases.push((file.clone(), pat, true));
+        } else if let Some(expected) = lli::parse_expect_annotation(&src) {
+            test_cases.push((file.clone(), expected, false));
+        }
+    }
+
+    if test_cases.is_empty() {
+        if !quiet {
+            println!(
+                "No Rust transpiler expect-tests found (files with `fn main` + `// expect:`)."
+            );
+        }
+        return;
+    }
+
+    if !quiet {
+        println!("Rust transpiler: {} expect-test file(s)", test_cases.len());
+    }
+
+    let mvl_bin = std::env::current_exe().unwrap_or_else(|e| {
+        eprintln!("error: cannot determine mvl binary path: {e}");
+        process::exit(1);
+    });
+    let compiler_version = env!("CARGO_PKG_VERSION");
+    let mut passed = 0usize;
+    let mut failed = 0usize;
+
+    for (file, expected, is_pattern) in &test_cases {
+        let file_str = file.display().to_string();
+        let crate_name = loader::stem(&file_str);
+
+        // Build the file silently via `mvl build`
+        let build_output = process::Command::new(&mvl_bin)
+            .args(["build", &file_str])
+            .stdout(process::Stdio::null())
+            .stderr(process::Stdio::piped())
+            .output();
+
+        match build_output {
+            Ok(ref o) if o.status.success() => {}
+            Ok(ref o) => {
+                if verbose {
+                    let stderr = String::from_utf8_lossy(&o.stderr);
+                    let lines: Vec<&str> = stderr.lines().collect();
+                    let start = lines.len().saturating_sub(10);
+                    eprintln!("  FAIL (build): {file_str}");
+                    for line in &lines[start..] {
+                        eprintln!("    {line}");
+                    }
+                } else {
+                    eprintln!("  FAIL (build): {file_str}");
+                }
+                failed += 1;
+                continue;
+            }
+            Err(e) => {
+                eprintln!("  FAIL (build): {file_str}: {e}");
+                failed += 1;
+                continue;
+            }
+        }
+
+        // Locate the compiled binary
+        let binary = std::env::temp_dir()
+            .join(format!("mvl_build_{compiler_version}_{crate_name}"))
+            .join(&crate_name)
+            .join("target")
+            .join("debug")
+            .join(&crate_name);
+
+        if !binary.exists() {
+            eprintln!("  FAIL (binary not found): {file_str}");
+            eprintln!("    expected at: {}", binary.display());
+            failed += 1;
+            continue;
+        }
+
+        // Run the binary and capture stdout
+        let output = match process::Command::new(&binary).output() {
+            Ok(o) => o,
+            Err(e) => {
+                eprintln!("  FAIL (run): {file_str}: {e}");
+                failed += 1;
+                continue;
+            }
+        };
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            eprintln!("  FAIL (exit {}): {file_str}", output.status);
+            if verbose {
+                for line in stderr.lines().take(10) {
+                    eprintln!("    {line}");
+                }
+            }
+            failed += 1;
+            continue;
+        }
+
+        let actual = String::from_utf8_lossy(&output.stdout);
+        let actual_trimmed = actual.trim_end_matches('\n');
+        let expected_trimmed = expected.trim_end_matches('\n');
+
+        let matched = if *is_pattern {
+            lli::glob_match(expected_trimmed, actual_trimmed)
+        } else {
+            actual_trimmed == expected_trimmed
+        };
+
+        if matched {
+            if verbose {
+                println!("  PASS: {file_str}");
+            } else if !quiet {
+                print!(".");
+                let _ = std::io::Write::flush(&mut std::io::stdout());
+            }
+            passed += 1;
+        } else {
+            if !quiet {
+                println!("\n  FAIL: {file_str}");
+                if *is_pattern {
+                    println!("    pattern:  {expected_trimmed:?}");
+                } else {
+                    println!("    expected: {expected_trimmed:?}");
+                }
+                println!("    got:      {actual_trimmed:?}");
+            }
+            failed += 1;
+        }
+    }
+
+    if !quiet && !verbose {
+        println!();
+    }
+    println!("{passed} passed, {failed} failed");
+    if failed > 0 {
+        process::exit(1);
     }
 }
 

@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [0.191.0] - 2026-06-09
+
+### Added
+
+- **Rust transpiler expect-test runner**: `mvl test --expect` discovers `.mvl` files with `// expect:` annotations and runs them through the Rust backend (build → run → assert output), mirroring the LLVM backend's expect-test infrastructure (#1247)
+- **Backend test parity**: Updated `make test-backend-rust` to run expect-annotated corpus/intrinsics/stdlib tests alongside compile_and_run tests, now matching `make test-backend-llvm`'s test directory structure
+- **Corpus annotations**: Added `rust-expect-skip:` annotation type for known Rust transpiler limitations (e.g. closure capture → fn pointer; #1313)
+
 ## [0.190.1] - 2026-06-09
 
 ### Fixed
