@@ -43,7 +43,7 @@ version tag. Short `github.com/user/repo` identifiers MUST expand to the full
 downloaded archive before extracting any package. A hash mismatch MUST be a hard
 error (non-zero exit, no partial install).
 
-**Implementation:** `src/mvl/packages/fetch.rs`, `src/mvl/packages.rs::cmd_install`
+**Implementation:** `src/mvl/packages/fetch.rs`, `src/mvl/packages/hash.rs`, `src/mvl/packages.rs::cmd_install`
 
 #### Scenario: Hash mismatch on install
 
@@ -190,3 +190,36 @@ without overwriting the project's `mvl.toml`. This MUST be separate from `mvl in
 the `--output` option, then exit with code 0 (no error).
 
 **Implementation:** `src/cli/meta.rs::cmd_sbom`
+
+---
+
+### Requirement 10: Source File Hash Model [MUST]
+
+A shared SHA-256 hashing module MUST provide the cryptographic primitives used by
+lock file verification (Req 2), SBOM generation (Req 4), and runtime manifest
+source digest embedding. The hash model defines normalization rules for
+deterministic, cross-platform hashing. (#1245)
+
+**Implementation:** `src/mvl/packages/hash.rs::sha256_hex`, `src/mvl/packages/hash.rs::sha256_file`, `src/mvl/packages/hash.rs::sha256_source_tree`
+
+#### Scenario: Per-file hash uses raw bytes
+
+- GIVEN a `.mvl` source file on disk
+- WHEN `sha256_file(path)` is called
+- THEN the result MUST be the SHA-256 of the raw file bytes (no line-ending normalization)
+- AND the result MUST be prefixed with `"sha256:"` and use lowercase hex
+
+#### Scenario: Source tree digest is order-independent
+
+- GIVEN a set of `(relative_path, file_sha256)` pairs in any order
+- WHEN `sha256_source_tree(files)` is called
+- THEN the result MUST be identical regardless of input order
+- AND the hash input per entry MUST be `"<rel_path>:<file_sha256>\n"` with paths sorted lexicographically
+
+#### Scenario: Known test vectors
+
+- GIVEN the empty string `""`
+- WHEN `sha256_hex(b"")` is called
+- THEN the result MUST be `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`
+
+**Tests:** `src/mvl/packages/hash.rs::tests::sha256_hex_empty`, `::sha256_hex_hello`, `::sha256_file_round_trip`, `::sha256_source_tree_sorted_deterministic`, `::sha256_source_tree_differs_on_content_change`, `::sha256_source_tree_differs_on_path_change`, `::sha256_source_tree_empty_returns_sha256_prefix`

@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-05-29
-**Issues:** #252, #56, #1120, #1129, #1131, #1135
+**Issues:** #252, #56, #1120, #1129, #1131, #1135, #1245
 **Related:** ADR-0009 (toolchain layout), ADR-0012 (extended package model)
 
 ---
@@ -67,6 +67,12 @@ hash    = "sha256:e3b0c44298fc1c149afb..."
 
 The lock file is the integrity anchor. `mvl install` verifies hashes before
 extracting packages. Any hash mismatch is a hard error.
+
+The hash primitives (`sha256_hex`, `sha256_file`, `sha256_source_tree`) live in
+`src/mvl/packages/hash.rs` — a pure-Rust FIPS 180-4 SHA-256 implementation with
+no external crate dependencies (#1245). Normalization rules: raw bytes (no
+line-ending conversion), relative forward-slash paths, lexicographic sort for
+tree digests, lowercase hex output.
 
 ### Toolchain Layout
 
