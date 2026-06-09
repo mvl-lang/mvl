@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [0.195.0] - 2026-06-10
+
+### Added
+
+- **Checked coercion and explicit `as` cast for refined type aliases** (#1324) — enable seamless type-safe migration between refined type aliases and their base types:
+  - Automatic coercion when compiler proves refinement statically (e.g., `let port: Port = 5558` where `type Port = Int where self >= 1 && self <= 65535`)
+  - Explicit `n as Port` cast with runtime check when refinement cannot be proven statically
+  - Bidirectional support: works for both `Int → Port` and `Port → Int` conversions
+  - Updated EBNF grammar, tree-sitter grammar, and self-hosted MVL compiler to track `as` keyword
+
 ## [0.194.0] - 2026-06-09
 
 ### Added
