@@ -308,6 +308,26 @@ impl Manifest {
         Ok(())
     }
 
+    /// Validate dependency rationale policy (#637).
+    ///
+    /// When `rationale-required` is true, returns a list of dependency names
+    /// that are missing a rationale string. Returns an empty vec when all
+    /// deps are compliant or when enforcement is disabled.
+    pub fn audit_dep_rationale(&self) -> Vec<String> {
+        if !self.dependency_policy.rationale_required {
+            return Vec::new();
+        }
+        let mut missing = Vec::new();
+        let mut deps: Vec<(&String, &DepSpec)> = self.dependencies.iter().collect();
+        deps.sort_by_key(|(k, _)| k.as_str());
+        for (name, spec) in deps {
+            if spec.rationale().is_none() {
+                missing.push(name.clone());
+            }
+        }
+        missing
+    }
+
     /// Serialize the manifest back to TOML text.
     pub fn to_toml(&self) -> String {
         let mut out = String::new();
@@ -465,6 +485,8 @@ pub enum ManifestError {
     MissingField(String),
     /// E700: extern-rationale required when extern blocks are present.
     MissingExternRationale(String),
+    /// E701: dependency rationale required by policy (#637).
+    MissingDepRationale(Vec<String>),
 }
 
 impl std::fmt::Display for ManifestError {
@@ -478,6 +500,13 @@ impl std::fmt::Display for ManifestError {
                 f,
                 "E700: extern-rationale required when extern blocks are present in '{pkg}'"
             ),
+            ManifestError::MissingDepRationale(deps) => {
+                write!(
+                    f,
+                    "E701: dependency rationale required for: {}",
+                    deps.join(", ")
+                )
+            }
         }
     }
 }
@@ -1694,5 +1723,76 @@ deny = ["GPL-3.0-only"]
         let sec = table.get("section").unwrap().as_table().unwrap();
         let arr = sec.get("items").unwrap().as_string_array().unwrap();
         assert!(arr.is_empty());
+    }
+
+    // --- audit_dep_rationale (#637) ---
+
+    #[test]
+    fn audit_reports_missing_rationale() {
+        let content = r#"
+[package]
+name = "my-app"
+version = "0.1.0"
+license = "MIT"
+requires-mvl = ">=0.1.0"
+
+[dependencies]
+ring = { git = "https://github.com/ring", tag = "v0.17.8", rationale = "Crypto" }
+uuid = { git = "https://github.com/uuid", tag = "v1.0.0" }
+"#;
+        let m = Manifest::parse(content).unwrap();
+        let missing = m.audit_dep_rationale();
+        assert_eq!(missing, vec!["uuid"]);
+    }
+
+    #[test]
+    fn audit_passes_when_all_have_rationale() {
+        let content = r#"
+[package]
+name = "my-app"
+version = "0.1.0"
+license = "MIT"
+requires-mvl = ">=0.1.0"
+
+[dependencies]
+ring = { git = "https://github.com/ring", tag = "v0.17.8", rationale = "Crypto" }
+"#;
+        let m = Manifest::parse(content).unwrap();
+        assert!(m.audit_dep_rationale().is_empty());
+    }
+
+    #[test]
+    fn audit_skipped_when_policy_disabled() {
+        let content = r#"
+[package]
+name = "my-app"
+version = "0.1.0"
+license = "MIT"
+requires-mvl = ">=0.1.0"
+
+[dependencies]
+uuid = { git = "https://github.com/uuid", tag = "v1.0.0" }
+
+[dependency-policy]
+rationale-required = false
+"#;
+        let m = Manifest::parse(content).unwrap();
+        assert!(m.audit_dep_rationale().is_empty());
+    }
+
+    #[test]
+    fn audit_empty_deps_passes() {
+        let m = Manifest::parse(MINIMAL).unwrap();
+        assert!(m.audit_dep_rationale().is_empty());
+    }
+
+    #[test]
+    fn missing_dep_rationale_error_display() {
+        let e =
+            ManifestError::MissingDepRationale(vec!["uuid".to_string(), "left-pad".to_string()]);
+        let s = e.to_string();
+        assert!(s.contains("E701"));
+        assert!(s.contains("uuid"));
+        assert!(s.contains("left-pad"));
     }
 }
