@@ -446,7 +446,7 @@ impl TypeChecker {
                     // Use `return_ty` if available; fall back to the function-level
                     // `current_return_ty` so that early `return` inside a for/while
                     // loop body is still checked against the function's return type.
-                    let effective_ret = return_ty.or(self.current_return_ty.as_ref());
+                    let effective_ret = return_ty.or(self.fn_context().return_ty.as_ref());
                     if let Some(ret) = effective_ret {
                         if !types_compatible(ret, &found) {
                             self.emit(CheckError::TypeMismatch {
@@ -516,7 +516,7 @@ impl TypeChecker {
                 span,
             } => {
                 // Req 8: `for` loops are bounded (total) — reject in `partial` functions.
-                if matches!(self.current_fn_totality, Some(Totality::Partial)) {
+                if matches!(self.fn_context().totality, Some(Totality::Partial)) {
                     self.emit(CheckError::ForLoopInPartialFn { span: *span });
                 }
                 let iter_ty = self.infer_expr(iter);
@@ -558,7 +558,7 @@ impl TypeChecker {
                 }
                 // Req 8: reject `while` in total functions unless a `decreases` measure
                 // is provided (Phase 5, #628 — decreases enables bounded while loops).
-                if !matches!(self.current_fn_totality, Some(Totality::Partial))
+                if !matches!(self.fn_context().totality, Some(Totality::Partial))
                     && decreases.is_none()
                 {
                     self.emit(CheckError::UnboundedLoopInTotal { span: *span });
