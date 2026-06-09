@@ -12,6 +12,14 @@ use std.net.{TcpStream, TcpListener, tcp_accept, tcp_listen,
 use pkg.zmq.{ZmqError, zmq_error_msg, parse_zmq_addr, is_transient_accept_error}
 use pkg.zmq.zmtp.{ZmtpSocketType, zmtp_handshake_server, zmtp_recv_message}
 
+fn make_bind_addr(host: String, port: Int) -> String
+    requires port >= 1
+    requires port <= 65535
+    ensures len(result) > 0
+{
+    "tcp://".concat(host).concat(":").concat(port.to_string())
+}
+
 partial fn recv_loop(stream: TcpStream) -> Unit ! Console + Net {
     while true {
         match zmtp_recv_message(stream) {
@@ -47,7 +55,8 @@ partial fn accept_loop(listener: TcpListener) -> Unit ! Console + Net {
 }
 
 partial fn main() -> Unit ! Console + Net {
-    println("ZMTP 3.x PULL server listening on tcp://*:5557");
+    let addr: String = make_bind_addr("*", 5557);
+    println("ZMTP 3.x PULL server listening on ".concat(addr));
     match parse_zmq_addr("tcp://*:5557") {
         Err(e) => println("error: ".concat(zmq_error_msg(e))),
         Ok(addr) => {
