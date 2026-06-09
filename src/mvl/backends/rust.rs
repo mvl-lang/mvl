@@ -328,7 +328,7 @@ pub fn transpile_project_with_options(
         crate::mvl::passes::mono::monomorphize(entry_prog, &entry_all_fns, &expr_types);
     let entry_tir = crate::mvl::ir::lower::lower(entry_prog, &entry_mono, &expr_types);
 
-    // Lower prelude programs to TIR before moving expr_types into the emitter.
+    // Lower prelude programs to TIR.
     let prelude_tirs: Vec<crate::mvl::ir::TirProgram> = prelude_progs
         .iter()
         .map(|p| {
@@ -339,7 +339,6 @@ pub fn transpile_project_with_options(
         .collect();
 
     let mut cg = RustEmitter::new();
-    cg.expr_types = expr_types;
     cg.assert_mode = assert_mode;
     cg.test_extern_stubs = extern_stubs;
     cg.emit_program_with_mods(&entry_tir, &sibling_names, &prelude_tirs);
@@ -359,7 +358,6 @@ pub fn transpile_project_with_options(
             let sib_tir = crate::mvl::ir::lower::lower(prog, &sib_mono, &sib_et);
 
             let mut cg = RustEmitter::new();
-            cg.expr_types = sib_et;
             cg.assert_mode = assert_mode;
             cg.test_extern_stubs = extern_stubs;
             if entry_uses_runtime {
@@ -430,7 +428,6 @@ pub fn transpile(tir: crate::mvl::ir::TirProgram, config: TranspileConfig) -> Tr
         .collect();
 
     let mut cg = RustEmitter::new();
-    cg.expr_types = expr_types;
     cg.assert_mode = config.assert_mode;
     cg.current_file = config.file_stem.clone();
     // Set test_extern_stubs: explicitly from config OR when prelude contains extern blocks.
@@ -1082,9 +1079,9 @@ impl crate::mvl::backends::Backend for RustBackend {
     }
 
     fn emit_program(&self, prog: &crate::mvl::parser::ast::Program, crate_name: &str) -> String {
-        // Backend trait does not supply expr_types; use empty map so the emitter
-        // works without type info. For full type-aware emission use `transpile()`
-        // with a pre-assembled expr_types from the pipeline (#1110).
+        // Backend trait does not supply expr_types; use empty map for TIR
+        // lowering. For full type-aware emission use `transpile()` with
+        // pre-checked expr_types from the pipeline (#1110).
         let expr_types: std::collections::HashMap<_, _> = Default::default();
         let all_fns = crate::mvl::passes::mono::collect_fns([prog]);
         let mono = crate::mvl::passes::mono::monomorphize(prog, &all_fns, &expr_types);

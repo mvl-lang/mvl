@@ -9,7 +9,7 @@
 use crate::mvl::backends::rust::capability_params::{
     build_capability_params_map_tir, explicit_borrow_flags_pub,
 };
-use crate::mvl::ir::{TirFn, TirProgram, Ty};
+use crate::mvl::ir::{TirFn, TirProgram};
 use crate::mvl::parser::ast::{BinaryOp, Decl};
 use crate::mvl::parser::lexer::Span;
 use crate::mvl::passes::coverage::{BranchKind, CoverageMap};
@@ -102,12 +102,6 @@ pub struct RustEmitter {
     /// At FnCall emission time, a hit in this map causes the call to be emitted
     /// as `mvl_runtime::stdlib::MODULE::fn_name(...)` instead of `fn_name(...)`.
     pub stdlib_fn_qualified: std::collections::HashMap<String, String>,
-    /// Inferred type for every expression, keyed by span.
-    ///
-    /// Populated from [`CheckResult::expr_types`] before emission so that
-    /// method-call sites can emit type-specific Rust (e.g. `.len() as i64` vs
-    /// `.chars().count() as i64`) without needing trait dispatch (#554).
-    pub expr_types: std::collections::HashMap<Span, Ty>,
     /// Controls how struct invariants are enforced at runtime (issue #662).
     pub assert_mode: crate::mvl::backends::AssertMode,
     /// Names of all methods (pub fn and fn) in the actor currently being emitted.

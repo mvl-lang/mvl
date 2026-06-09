@@ -1003,12 +1003,13 @@ pub partial fn greet(n: Int) -> String {
     let prelude = vec![parse_prog(prelude_src)];
     let user_prog = parse_prog(user_src);
 
+    let expr_types = mvl::mvl::pipeline::assemble_expr_types(&user_prog, &prelude);
     let out = transpile_project(
         "crate",
         &user_prog,
         &[],
         &prelude,
-        Default::default(),
+        expr_types,
         vec![],
         Default::default(),
     );
@@ -1063,12 +1064,13 @@ fn println_from_prelude_is_emitted_as_function() {
     let prelude = vec![parse_prog(prelude_src)];
     let user_prog = parse_prog(user_src);
 
+    let expr_types = mvl::mvl::pipeline::assemble_expr_types(&user_prog, &prelude);
     let out = transpile_project(
         "crate",
         &user_prog,
         &[],
         &prelude,
-        Default::default(),
+        expr_types,
         vec![],
         Default::default(),
     );
