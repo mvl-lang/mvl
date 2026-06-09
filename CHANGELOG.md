@@ -6,6 +6,12 @@
 
 - **TIR emitter**: replaced all 16 `expr_types.get(&span)` lookups with direct `TirExpr.ty` access (#1291)
 
+## [0.189.3] - 2026-06-09
+
+### Fixed
+
+- **std/lists.mvl**: corrected stale comment on `List::sort` that incorrectly claimed MVL lacks `PartialOrd` where-bounds; actual reason is LLVM SSA-dominance (#992, ADR-0041 Phase 2) (#1309)
+
 ## [0.189.2] - 2026-06-06
 
 ### Fixed
