@@ -12,7 +12,7 @@ pub fn run(path: &str) {
     let all_fns = mvl::mvl::passes::mono::collect_fns([&prog]);
     let mono = mvl::mvl::passes::mono::monomorphize(&prog, &all_fns, &expr_types);
     let tir = mvl::mvl::ir::lower::lower(&prog, &mono, &expr_types);
-    let out = transpiler::transpile(tir, transpiler::TranspileConfig::new(&crate_name)).output;
+    let out = transpiler::transpile(&tir, transpiler::TranspileConfig::new(&crate_name)).output;
     println!("// === Cargo.toml ===");
     println!("{}", out.cargo_toml);
     let file_label = if out.has_main {

@@ -3,6 +3,7 @@
 
 //! Type mapping, classification, and helper emitters for the `llvm_text` backend.
 
+use crate::mvl::checker::types::Ty;
 use crate::mvl::parser::ast::{BinaryOp, Expr, Literal, Stmt, TypeExpr, UnaryOp};
 
 use super::{HeapKind, TextEmitter, RESULT_LLVM_TY};
@@ -130,7 +131,64 @@ impl TextEmitter {
         reg
     }
 
+    // ── Checked-type helpers (Ty → LLVM) (#1302) ──────────────────────────
+
+    /// Map a checker-resolved [`Ty`] to its LLVM IR type string (static).
+    pub(super) fn ty_to_llvm(ty: &Ty) -> String {
+        match ty {
+            Ty::Int | Ty::UInt => "i64".into(),
+            Ty::Float => "double".into(),
+            Ty::Bool => "i1".into(),
+            Ty::Byte | Ty::UByte => "i8".into(),
+            Ty::Char => "i32".into(),
+            Ty::Unit => "void".into(),
+            Ty::String => "ptr".into(),
+            Ty::Option(_) | Ty::Result(_, _) => RESULT_LLVM_TY.into(),
+            Ty::List(_) | Ty::Array(_, _) | Ty::Set(_) | Ty::Map(_, _) => "ptr".into(),
+            Ty::Ref(_, inner) => Self::ty_to_llvm(inner),
+            Ty::Labeled(_, inner) => Self::ty_to_llvm(inner),
+            Ty::Refined(inner, _) => Self::ty_to_llvm(inner),
+            Ty::Named(_, _) | Ty::Fn(_, _, _, _) | Ty::Tuple(_) => "ptr".into(),
+            // Never (bottom type) maps to void — expressions of this type diverge
+            // and should never produce a value.
+            Ty::Never => "void".into(),
+            Ty::Session(_) | Ty::Unknown => "ptr".into(),
+        }
+    }
+
+    /// Map a checker-resolved [`Ty`] to its LLVM IR type, consulting registries.
+    pub(super) fn ty_to_llvm_ctx(&self, ty: &Ty) -> String {
+        match ty {
+            Ty::Named(name, _) => {
+                if self.struct_fields.contains_key(name) {
+                    if self.actor_decls.contains_key(name.as_str()) {
+                        return "ptr".into();
+                    }
+                    return format!("%{name}");
+                }
+                if self.enum_variants.contains_key(name) {
+                    if self.enum_has_payloads(name) {
+                        return RESULT_LLVM_TY.into();
+                    }
+                    return "i64".into();
+                }
+                if self.actor_decls.contains_key(name.as_str()) {
+                    return "ptr".into();
+                }
+                Self::ty_to_llvm(ty)
+            }
+            Ty::Ref(_, inner) => self.ty_to_llvm_ctx(inner),
+            Ty::Labeled(_, inner) => self.ty_to_llvm_ctx(inner),
+            Ty::Refined(inner, _) => self.ty_to_llvm_ctx(inner),
+            _ => Self::ty_to_llvm(ty),
+        }
+    }
+
     // ── Type helpers ──────────────────────────────────────────────────────
+
+    // ── AST-based type helpers (TypeExpr → LLVM) ────────────────────────
+    // NOTE: Structural twin of `ty_to_llvm` / `ty_to_llvm_ctx` above (Ty variant).
+    // Once the full TIR migration removes all TypeExpr-based paths, these can be deleted.
 
     /// Map a MVL `TypeExpr` to its LLVM IR type string (static, no context).
     pub(super) fn llvm_ty(ty: &TypeExpr) -> String {
@@ -269,7 +327,15 @@ impl TextEmitter {
     }
 
     /// Infer the LLVM type of an expression without emitting instructions.
+    ///
+    /// When checker-resolved `expr_types` are available (#1302), looks up
+    /// the expression's span for an accurate type before falling back to
+    /// AST-based inference.
     pub(super) fn type_of_expr(&self, expr: &Expr) -> String {
+        // Try checker-resolved type first (available when checker ran in the pipeline).
+        if let Some(ty) = self.expr_types.get(&expr.span()) {
+            return self.ty_to_llvm_ctx(ty);
+        }
         match expr {
             Expr::Literal(Literal::Integer(_), _) => "i64".into(),
             Expr::Literal(Literal::Float(_), _) => "double".into(),

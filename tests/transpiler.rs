@@ -48,7 +48,7 @@ fn do_transpile(
     let all_fns = mvl::mvl::passes::mono::collect_fns(std::iter::once(prog));
     let mono = mvl::mvl::passes::mono::monomorphize(prog, &all_fns, &expr_types);
     let tir = mvl::mvl::ir::lower::lower(prog, &mono, &expr_types);
-    transpile(tir, config)
+    transpile(&tir, config)
 }
 
 // ── #29: Type declarations ────────────────────────────────────────────────
@@ -469,7 +469,7 @@ fn full_program_password_checker_transpiles() {
     let all_fns = mvl::mvl::passes::mono::collect_fns(std::iter::once(&prog));
     let mono = mvl::mvl::passes::mono::monomorphize(&prog, &all_fns, &expr_types);
     let tir = mvl::mvl::ir::lower::lower(&prog, &mono, &expr_types);
-    let out = transpile(tir, TranspileConfig::new("password_checker")).output;
+    let out = transpile(&tir, TranspileConfig::new("password_checker")).output;
     assert_contains(&out.lib_rs, "use mvl_runtime::prelude::*");
     assert_contains(&out.lib_rs, "extern \"Rust\"");
     // `pub` is not valid inside Rust extern blocks
@@ -1003,12 +1003,13 @@ pub partial fn greet(n: Int) -> String {
     let prelude = vec![parse_prog(prelude_src)];
     let user_prog = parse_prog(user_src);
 
+    let expr_types = mvl::mvl::pipeline::assemble_expr_types(&user_prog, &prelude);
     let out = transpile_project(
         "crate",
         &user_prog,
         &[],
         &prelude,
-        Default::default(),
+        expr_types,
         vec![],
         Default::default(),
     );
@@ -1063,12 +1064,13 @@ fn println_from_prelude_is_emitted_as_function() {
     let prelude = vec![parse_prog(prelude_src)];
     let user_prog = parse_prog(user_src);
 
+    let expr_types = mvl::mvl::pipeline::assemble_expr_types(&user_prog, &prelude);
     let out = transpile_project(
         "crate",
         &user_prog,
         &[],
         &prelude,
-        Default::default(),
+        expr_types,
         vec![],
         Default::default(),
     );

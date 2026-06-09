@@ -132,7 +132,7 @@ impl Pipeline {
         );
         let mono = crate::mvl::passes::mono::monomorphize(prog, &all_fns, &expr_types);
         let tir = crate::mvl::ir::lower::lower(prog, &mono, &expr_types);
-        transpile(tir, config)
+        transpile(&tir, config)
     }
 
     /// Transpile a multi-file project using this pipeline's settings.

@@ -73,7 +73,7 @@ pub fn run(path: &str, quiet: bool, gen_boundary: bool, limit: Option<usize>) {
         let mono = mvl::mvl::passes::mono::monomorphize(&prog, &all_fns, &expr_types);
         let tir = mvl::mvl::ir::lower::lower(&prog, &mono, &expr_types);
         let result = transpiler::transpile(
-            tir,
+            &tir,
             transpiler::TranspileConfig::new(&module_name)
                 .with_file_stem(&module_name)
                 .with_prelude(stdlib_prelude_progs.clone())
@@ -123,7 +123,7 @@ pub fn run(path: &str, quiet: bool, gen_boundary: bool, limit: Option<usize>) {
         let mono = mvl::mvl::passes::mono::monomorphize(&prog, &all_fns, &expr_types);
         let tir = mvl::mvl::ir::lower::lower(&prog, &mono, &expr_types);
         let result = transpiler::transpile(
-            tir,
+            &tir,
             transpiler::TranspileConfig::new(&module_name)
                 .with_file_stem(&module_name)
                 .with_prelude(stdlib_prelude_progs.clone())

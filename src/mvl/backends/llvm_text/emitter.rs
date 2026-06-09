@@ -9,9 +9,11 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::mvl::checker::types::Ty;
 use crate::mvl::parser::ast::{
     ActorDecl, Decl, FnDecl, Program, Stmt, TypeBody, TypeExpr, VariantFields,
 };
+use crate::mvl::parser::lexer::Span;
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
@@ -29,6 +31,13 @@ pub struct LlvmTextCompiler {
     /// `builtin fn` declarations to their C runtime symbols instead of generating
     /// a body for the empty block.
     pub builtin_symbols: HashMap<String, (String, TypeExpr, Vec<TypeExpr>)>,
+    /// Checker-resolved expression types, keyed by source span.
+    ///
+    /// When populated (via [`crate::mvl::checker::check`] in the CLI pipeline),
+    /// the emitter can look up accurate types for any expression by span instead
+    /// of relying on AST-based type inference.  This enables type-dependent
+    /// dispatch (IFC labels, generic resolution, method dispatch).
+    pub expr_types: HashMap<Span, Ty>,
 }
 
 impl LlvmTextCompiler {
@@ -37,6 +46,20 @@ impl LlvmTextCompiler {
         Self {
             target_triple: default_target_triple(),
             builtin_symbols: HashMap::new(),
+            expr_types: HashMap::new(),
+        }
+    }
+
+    /// Create a compiler pre-populated with builtin dispatch table and
+    /// checker-resolved expression types.
+    pub fn with_context(
+        builtin_symbols: HashMap<String, (String, TypeExpr, Vec<TypeExpr>)>,
+        expr_types: HashMap<Span, Ty>,
+    ) -> Self {
+        Self {
+            target_triple: default_target_triple(),
+            builtin_symbols,
+            expr_types,
         }
     }
 
@@ -63,6 +86,7 @@ impl LlvmTextCompiler {
     ) -> Result<String, String> {
         let mut emitter =
             TextEmitter::new_with_builtins(module_name, &self.target_triple, &self.builtin_symbols);
+        emitter.expr_types = self.expr_types.clone();
         for p in prelude {
             let stripped = strip_prelude_extension_methods(p);
             emitter.emit_program(&stripped)?;
@@ -248,6 +272,12 @@ struct TextEmitter {
     /// When `is_ref` is true, the SSA is a stack alloca that must be loaded
     /// before the drop call (the alloca holds the heap object pointer).
     heap_locals: Vec<(String, HeapKind, bool)>,
+
+    // ── Checker-resolved types (#1302) ───────────────────────────────────
+    /// Checker-resolved expression types, keyed by source span.
+    /// When non-empty, `type_of_expr` consults this map first for accurate
+    /// type information before falling back to AST-based inference.
+    expr_types: HashMap<Span, Ty>,
 }
 
 /// Tracks heap-allocated value types for automatic drop emission.
@@ -334,6 +364,7 @@ impl TextEmitter {
             mono_emitted: HashSet::new(),
             mono_queue: Vec::new(),
             heap_locals: Vec::new(),
+            expr_types: HashMap::new(),
         }
     }
 

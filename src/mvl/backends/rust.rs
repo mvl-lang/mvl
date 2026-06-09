@@ -328,7 +328,7 @@ pub fn transpile_project_with_options(
         crate::mvl::passes::mono::monomorphize(entry_prog, &entry_all_fns, &expr_types);
     let entry_tir = crate::mvl::ir::lower::lower(entry_prog, &entry_mono, &expr_types);
 
-    // Lower prelude programs to TIR before moving expr_types into the emitter.
+    // Lower prelude programs to TIR.
     let prelude_tirs: Vec<crate::mvl::ir::TirProgram> = prelude_progs
         .iter()
         .map(|p| {
@@ -339,7 +339,6 @@ pub fn transpile_project_with_options(
         .collect();
 
     let mut cg = RustEmitter::new();
-    cg.expr_types = expr_types;
     cg.assert_mode = assert_mode;
     cg.test_extern_stubs = extern_stubs;
     cg.emit_program_with_mods(&entry_tir, &sibling_names, &prelude_tirs);
@@ -359,7 +358,6 @@ pub fn transpile_project_with_options(
             let sib_tir = crate::mvl::ir::lower::lower(prog, &sib_mono, &sib_et);
 
             let mut cg = RustEmitter::new();
-            cg.expr_types = sib_et;
             cg.assert_mode = assert_mode;
             cg.test_extern_stubs = extern_stubs;
             if entry_uses_runtime {
@@ -402,13 +400,13 @@ pub fn transpile_project_with_options(
 /// running the checker, monomorphizer, and TIR lowering pass before calling this
 /// function.  The backend receives a fully-typed, monomorphized TIR and does not
 /// re-invoke any earlier pipeline stage.
-pub fn transpile(tir: crate::mvl::ir::TirProgram, config: TranspileConfig) -> TranspileResult {
-    let has_main = has_main_fn_tir(&tir);
-    let extern_count = count_extern_decls_tir(&tir);
-    let has_extern_rust = has_extern_rust_decls_tir(&tir);
+pub fn transpile(tir: &crate::mvl::ir::TirProgram, config: TranspileConfig) -> TranspileResult {
+    let has_main = has_main_fn_tir(tir);
+    let extern_count = count_extern_decls_tir(tir);
+    let has_extern_rust = has_extern_rust_decls_tir(tir);
     let has_prelude = !config.prelude_progs.is_empty();
     let use_runtime = extern_count > 0
-        || has_std_imports_tir(&tir)
+        || has_std_imports_tir(tir)
         || (has_prelude && prelude_requires_runtime(&config.prelude_progs));
 
     let mut expr_types = tir.span_types();
@@ -430,7 +428,6 @@ pub fn transpile(tir: crate::mvl::ir::TirProgram, config: TranspileConfig) -> Tr
         .collect();
 
     let mut cg = RustEmitter::new();
-    cg.expr_types = expr_types;
     cg.assert_mode = config.assert_mode;
     cg.current_file = config.file_stem.clone();
     // Set test_extern_stubs: explicitly from config OR when prelude contains extern blocks.
@@ -445,16 +442,16 @@ pub fn transpile(tir: crate::mvl::ir::TirProgram, config: TranspileConfig) -> Tr
     }
     if let Some(start_id) = config.mcdc_start_id {
         cg.mcdc = Some(mcdc_instr::MCDCMap::new(start_id));
-        cg.mcdc_fn_field_reads = mcdc_instr::build_fn_field_reads_tir(&tir);
+        cg.mcdc_fn_field_reads = mcdc_instr::build_fn_field_reads_tir(tir);
     }
     if config.mutation {
         cg.mutation = Some(MutationMap::new());
     }
 
     if has_prelude {
-        cg.emit_program_with_mods(&tir, &[], &prelude_tirs);
+        cg.emit_program_with_mods(tir, &[], &prelude_tirs);
     } else {
-        cg.emit_program(&tir);
+        cg.emit_program(tir);
     }
 
     let branches = cg.coverage.take().map(|c| c.branches).unwrap_or_default();
@@ -510,7 +507,7 @@ mod tests {
         let all_fns = crate::mvl::passes::mono::collect_fns([prog]);
         let mono = crate::mvl::passes::mono::monomorphize(prog, &all_fns, &expr_types);
         let tir = crate::mvl::ir::lower::lower(prog, &mono, &expr_types);
-        transpile(tir, config)
+        transpile(&tir, config)
     }
 
     // ── collect_stdlib_modules tests (#488 #489) ───────────────────────────
@@ -1070,6 +1067,9 @@ mod tests {
 // ── Backend trait implementation ─────────────────────────────────────────────
 
 /// Unit struct implementing the [`Backend`] trait for the Rust transpiler.
+///
+/// The caller runs the full pipeline (`checker → mono → lower`) and passes the
+/// resulting [`TirProgram`] to `emit_program`.
 pub struct RustBackend;
 
 impl crate::mvl::backends::Backend for RustBackend {
@@ -1081,14 +1081,7 @@ impl crate::mvl::backends::Backend for RustBackend {
         "rs"
     }
 
-    fn emit_program(&self, prog: &crate::mvl::parser::ast::Program, crate_name: &str) -> String {
-        // Backend trait does not supply expr_types; use empty map so the emitter
-        // works without type info. For full type-aware emission use `transpile()`
-        // with a pre-assembled expr_types from the pipeline (#1110).
-        let expr_types: std::collections::HashMap<_, _> = Default::default();
-        let all_fns = crate::mvl::passes::mono::collect_fns([prog]);
-        let mono = crate::mvl::passes::mono::monomorphize(prog, &all_fns, &expr_types);
-        let tir = crate::mvl::ir::lower::lower(prog, &mono, &expr_types);
+    fn emit_program(&self, tir: &crate::mvl::ir::TirProgram, crate_name: &str) -> String {
         transpile(tir, TranspileConfig::new(crate_name))
             .output
             .lib_rs

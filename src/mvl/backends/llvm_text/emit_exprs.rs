@@ -377,8 +377,12 @@ impl TextEmitter {
             None => return Ok(None),
         };
 
-        let is_float = Self::expr_is_float(left);
         let lhs_ty = self.type_of_expr(left);
+        // Use the resolved LLVM type to detect float arithmetic: a parameter of
+        // type Float is resolved to "double" by type_of_expr (via checker types
+        // when available, or AST TypeExpr fallback), while expr_is_float only
+        // checks for float literals and binary expressions.
+        let is_float = lhs_ty == "double" || Self::expr_is_float(left);
 
         // String equality/inequality: delegate to runtime via mvl_string_eq.
         if lhs_ty == "ptr" && matches!(op, BinaryOp::Eq | BinaryOp::Ne) {
