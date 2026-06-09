@@ -768,6 +768,18 @@ impl RustEmitter {
                         self.emit_expr(arg);
                     }
                     self.push(") as i64 as u8)");
+                } else if name.as_str() == "float_checked_to_int" {
+                    // Checked Float→Int: returns None for NaN, ±Inf, out-of-range.
+                    debug_assert_eq!(
+                        args.len(),
+                        1,
+                        "float_checked_to_int requires exactly one argument"
+                    );
+                    self.push("{ let __x = ");
+                    if let Some(arg) = args.first() {
+                        self.emit_expr(arg);
+                    }
+                    self.push("; if __x.is_finite() && __x >= (i64::MIN as f64) && __x <= (i64::MAX as f64) { Some(__x as i64) } else { None } }");
                 } else if name == "String::from_chars" {
                     self.push("str_from_chars(");
                     self.emit_args(args);

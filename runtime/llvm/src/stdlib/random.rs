@@ -37,6 +37,24 @@ pub extern "C" fn _mvl_float_to_string(v: f64) -> *mut c_void {
     unsafe { _mvl_string_new(bytes.as_ptr(), bytes.len()) as *mut c_void }
 }
 
+// ── Float → Int checked conversion (#1262) ───────────────────────────────────
+
+/// Checked Float→Int: writes `*out = truncated` and returns 0 (Some) when `v`
+/// is finite and within i64 range; returns 1 (None) for NaN, ±Inf, or
+/// out-of-range values.
+///
+/// # Safety
+/// `out` must be a valid non-null writable pointer.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_float_checked_to_int(v: f64, out: *mut i64) -> i8 {
+    if v.is_finite() && v >= (i64::MIN as f64) && v <= (i64::MAX as f64) {
+        *out = v as i64;
+        0 // Some
+    } else {
+        1 // None
+    }
+}
+
 // ── Primitive dispatch ────────────────────────────────────────────────────────
 
 /// Return a random integer in `[min, max]` (inclusive). Both args and return are i64.
