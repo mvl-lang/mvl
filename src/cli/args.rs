@@ -101,6 +101,9 @@ pub fn print_usage() {
     eprintln!(
         "  mvl audit --paradox                — Dependency Paradox audit (exit 1 on violations)"
     );
+    eprintln!(
+        "  mvl audit --supply-chain           — scan [native]/[c-native] deps for CVEs (NVD/OSV)"
+    );
 }
 
 /// Parse `--error-limit=N` from args; 0 means unlimited, default is 10.

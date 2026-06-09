@@ -122,25 +122,50 @@ pub(super) fn cmd_sbom(args: &[String]) {
 
 pub(super) fn cmd_audit(args: &[String]) {
     let paradox = args.iter().any(|a| a == "--paradox");
-    if !paradox {
-        eprintln!("Usage: mvl audit --paradox");
-        eprintln!("  --paradox: audit dependencies for the Dependency Paradox policy");
+    let supply_chain = args.iter().any(|a| a == "--supply-chain");
+
+    if !paradox && !supply_chain {
+        eprintln!("Usage: mvl audit <--paradox | --supply-chain>");
+        eprintln!("  --paradox:       audit dependencies for the Dependency Paradox policy");
+        eprintln!("                   exits with code 1 if any dep below complexity threshold lacks rationale");
         eprintln!(
-            "             exits with code 1 if any dep below complexity threshold lacks rationale"
+            "  --supply-chain:  scan [native] and [c-native] deps against NVD/OSV for CVEs (#633)"
         );
+        eprintln!("                   exits with code 1 if any vulnerability is found");
+        eprintln!();
+        eprintln!("Environment variables:");
+        eprintln!("  NVD_API_KEY      NVD API key for higher rate limits (60 req/min vs 5/min)");
         process::exit(1);
     }
 
     let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    match packages::cmd_audit_paradox(&project_root) {
-        Err(e) => {
-            eprintln!("error: {e}");
-            process::exit(1);
-        }
-        Ok(audit) => {
-            print!("{}", audit.render());
-            if audit.has_violations() {
+
+    if paradox {
+        match packages::cmd_audit_paradox(&project_root) {
+            Err(e) => {
+                eprintln!("error: {e}");
                 process::exit(1);
+            }
+            Ok(audit) => {
+                print!("{}", audit.render());
+                if audit.has_violations() {
+                    process::exit(1);
+                }
+            }
+        }
+    }
+
+    if supply_chain {
+        match packages::cmd_audit_supply_chain(&project_root) {
+            Err(e) => {
+                eprintln!("error: {e}");
+                process::exit(1);
+            }
+            Ok(audit) => {
+                print!("{}", audit.render());
+                if audit.has_vulnerabilities() {
+                    process::exit(1);
+                }
             }
         }
     }

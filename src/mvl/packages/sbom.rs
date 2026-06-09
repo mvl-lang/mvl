@@ -437,6 +437,7 @@ mod tests {
                 m.insert("hyper".to_string(), "1.0".to_string());
                 m
             },
+            c_native: HashMap::new(),
             dependency_policy: Default::default(),
         }
     }
