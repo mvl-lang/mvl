@@ -1482,15 +1482,15 @@ mod tests {
     #[test]
     fn string_byte_at_emits_runtime_call() {
         let ir = compile(
-            "fn f(s: String) -> Int {\n\
+            "fn f(s: String) -> Option[Byte] {\n\
              s.byte_at(0)\n\
              }",
         );
         assert!(
-            ir.contains("declare i64 @_mvl_str_byte_at(ptr, i64)"),
+            ir.contains("declare i8 @_mvl_str_byte_at(ptr, i64, ptr)"),
             "{ir}"
         );
-        assert!(ir.contains("call i64 @_mvl_str_byte_at(ptr"), "{ir}");
+        assert!(ir.contains("call i8 @_mvl_str_byte_at(ptr"), "{ir}");
     }
 
     #[test]

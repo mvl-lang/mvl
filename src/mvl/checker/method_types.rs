@@ -191,9 +191,9 @@ impl TypeChecker {
             "find" | "rfind" => Ty::Option(Box::new(Ty::Int)),
             // Predicates
             "contains" | "starts_with" | "ends_with" | "is_empty" => Ty::Bool,
-            // Indexing: char_at(i) -> String, byte_at(i) -> Byte
-            "char_at" => Ty::String,
-            "byte_at" => Ty::Byte,
+            // Indexing: char_at(i) -> Option[String], byte_at(i) -> Option[Byte]
+            "char_at" => Ty::Option(Box::new(Ty::String)),
+            "byte_at" => Ty::Option(Box::new(Ty::Byte)),
             // Numeric
             "len" => Ty::Int,
             // Parsing

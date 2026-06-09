@@ -138,11 +138,11 @@ total fn make_greeting(as_server: Bool) -> String {
 total fn validate_greeting(g: String) -> Result[Unit, ZmqError] {
     if g.len() != 64 {
         Err(ZmqError::FrameError("greeting not 64 bytes"))
-    } else if g.byte_at(0).to_int() != 255 {
+    } else if g.byte_at(0).unwrap_or(from_int(0)).to_int() != 255 {
         Err(ZmqError::FrameError("bad signature byte 0"))
-    } else if g.byte_at(9).to_int() != 127 {
+    } else if g.byte_at(9).unwrap_or(from_int(0)).to_int() != 127 {
         Err(ZmqError::FrameError("bad signature byte 9"))
-    } else if g.byte_at(10).to_int() < 3 {
+    } else if g.byte_at(10).unwrap_or(from_int(0)).to_int() < 3 {
         Err(ZmqError::FrameError("ZMTP version < 3.x"))
     } else if g.substring(12, 16) != "NULL" {
         Err(ZmqError::FrameError("mechanism not NULL"))
@@ -183,7 +183,7 @@ partial fn parse_ready_body(body: String) -> Result[ZmtpSocketType, ZmqError] {
     if blen < 6 {
         Err(ZmqError::FrameError("READY body too short"))
     } else {
-        let name_len: Int = body.byte_at(0).to_int();
+        let name_len: Int = body.byte_at(0).unwrap_or(from_int(0)).to_int();
         if name_len != 5 {
             Err(ZmqError::FrameError("READY name length != 5"))
         } else {
@@ -203,17 +203,17 @@ partial fn parse_socket_type_property(body: String, offset: Int) -> Result[ZmtpS
     if offset >= blen {
         Err(ZmqError::FrameError("no Socket-Type in READY"))
     } else {
-        let key_len: Int = body.byte_at(offset).to_int();
+        let key_len: Int = body.byte_at(offset).unwrap_or(from_int(0)).to_int();
         let key_start: Int = offset + 1;
         let key_end: Int = key_start + key_len;
         if key_end + 4 > blen {
             Err(ZmqError::FrameError("truncated READY property"))
         } else {
             let key: String = body.substring(key_start, key_end);
-            let vl_b1: Int = body.byte_at(key_end).to_int();
-            let vl_b2: Int = body.byte_at(key_end + 1).to_int();
-            let vl_b3: Int = body.byte_at(key_end + 2).to_int();
-            let vl_b4: Int = body.byte_at(key_end + 3).to_int();
+            let vl_b1: Int = body.byte_at(key_end).unwrap_or(from_int(0)).to_int();
+            let vl_b2: Int = body.byte_at(key_end + 1).unwrap_or(from_int(0)).to_int();
+            let vl_b3: Int = body.byte_at(key_end + 2).unwrap_or(from_int(0)).to_int();
+            let vl_b4: Int = body.byte_at(key_end + 3).unwrap_or(from_int(0)).to_int();
             let vl: Int = vl_b1.shift_left(24) + vl_b2.shift_left(16)
                 + vl_b3.shift_left(8) + vl_b4;
             let vs: Int = key_end + 4;
@@ -252,20 +252,20 @@ type ReadFrame = struct {
 /// Read one ZMTP frame from `stream`.
 total fn read_frame_raw(stream: TcpStream) -> Result[ReadFrame, ZmqError] ! Net {
     let flag_str: String = read_bytes(stream, 1)?;
-    let flags: Int = flag_str.byte_at(0).to_int();
+    let flags: Int = flag_str.byte_at(0).unwrap_or(from_int(0)).to_int();
     let has_more: Bool = flags.bit_and(1) != 0;
     let is_long: Bool = flags.bit_and(2) != 0;
     let is_command: Bool = flags.bit_and(4) != 0;
     let size: Int = if is_long {
         let s: String = read_bytes(stream, 8)?;
-        let b4: Int = s.byte_at(4).to_int();
-        let b5: Int = s.byte_at(5).to_int();
-        let b6: Int = s.byte_at(6).to_int();
-        let b7: Int = s.byte_at(7).to_int();
+        let b4: Int = s.byte_at(4).unwrap_or(from_int(0)).to_int();
+        let b5: Int = s.byte_at(5).unwrap_or(from_int(0)).to_int();
+        let b6: Int = s.byte_at(6).unwrap_or(from_int(0)).to_int();
+        let b7: Int = s.byte_at(7).unwrap_or(from_int(0)).to_int();
         b4.shift_left(24) + b5.shift_left(16) + b6.shift_left(8) + b7
     } else {
         let s: String = read_bytes(stream, 1)?;
-        s.byte_at(0).to_int()
+        s.byte_at(0).unwrap_or(from_int(0)).to_int()
     };
     if size < 0 || size > 67108864 {
         Err(ZmqError::FrameError("frame too large"))
@@ -414,7 +414,7 @@ pub partial fn zmtp_recv_subscribe(stream: TcpStream) -> Result[String, ZmqError
         if frame.command {
             let body: String = frame.body;
             if body.len() >= 10 {
-                let name_len: Int = body.byte_at(0).to_int();
+                let name_len: Int = body.byte_at(0).unwrap_or(from_int(0)).to_int();
                 if name_len == 9 {
                     let name: String = body.substring(1, 10);
                     if name == "SUBSCRIBE" {
@@ -426,7 +426,7 @@ pub partial fn zmtp_recv_subscribe(stream: TcpStream) -> Result[String, ZmqError
             // ZMTP 3.0 fallback: message frame with 0x01 prefix = subscribe
             let body: String = frame.body;
             if body.len() >= 1 {
-                if body.byte_at(0).to_int() == 1 {
+                if body.byte_at(0).unwrap_or(from_int(0)).to_int() == 1 {
                     return Ok(body.substring(1, body.len()))
                 }
             }
@@ -442,7 +442,7 @@ pub partial fn zmtp_recv_subscribe(stream: TcpStream) -> Result[String, ZmqError
 /// Check if a command frame body is a PING.
 total fn is_ping(body: String) -> Bool {
     if body.len() >= 5 {
-        if body.byte_at(0).to_int() == 4 {
+        if body.byte_at(0).unwrap_or(from_int(0)).to_int() == 4 {
             body.substring(1, 5) == "PING"
         } else {
             false

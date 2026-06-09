@@ -162,7 +162,7 @@ partial fn kv_serialize_blob(bytes: List[Int]) -> String {
 partial fn kv_parse_blob(s: String) -> Result[List[Int], String] {
     let trimmed: String = s.trim();
     let n: Int = trimmed.len();
-    if n < 2 || trimmed.char_at(0) != "[" || trimmed.char_at(n - 1) != "]" {
+    if n < 2 || trimmed.char_at(0).unwrap_or("") != "[" || trimmed.char_at(n - 1).unwrap_or("") != "]" {
         Err("blob must be enclosed in [ ]")
     } else {
         let inner: String = trimmed.substring(1, n - 1).trim();
@@ -269,7 +269,7 @@ partial fn kv_parse_value(type_str: String, val_str: String) -> Result[KvValue, 
         }
     } else if type_str == "text" {
         let n: Int = val_str.len();
-        if n < 2 || val_str.char_at(0) != "\"" || val_str.char_at(n - 1) != "\"" {
+        if n < 2 || val_str.char_at(0).unwrap_or("") != "\"" || val_str.char_at(n - 1).unwrap_or("") != "\"" {
             Err("text value must be double-quoted")
         } else {
             let inner: String = val_str.substring(1, n - 1);

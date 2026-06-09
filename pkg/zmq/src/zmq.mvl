@@ -74,10 +74,10 @@ pub total fn decode_frame(raw: Tainted[String]) -> Result[Tainted[String], ZmqEr
     if slen < 4 {
         Err(ZmqError::FrameError("frame too short"))
     } else {
-        let b3: Int = s.byte_at(0).to_int();
-        let b2: Int = s.byte_at(1).to_int();
-        let b1: Int = s.byte_at(2).to_int();
-        let b0: Int = s.byte_at(3).to_int();
+        let b3: Int = s.byte_at(0).unwrap_or(from_int(0)).to_int();
+        let b2: Int = s.byte_at(1).unwrap_or(from_int(0)).to_int();
+        let b1: Int = s.byte_at(2).unwrap_or(from_int(0)).to_int();
+        let b0: Int = s.byte_at(3).unwrap_or(from_int(0)).to_int();
         let expected_len: Int = b3.shift_left(24) + b2.shift_left(16) + b1.shift_left(8) + b0;
         if expected_len < 0 || expected_len > 67108864 {
             Err(ZmqError::FrameError("frame too large"))

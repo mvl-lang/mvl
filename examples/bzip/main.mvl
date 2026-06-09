@@ -167,7 +167,7 @@ partial fn decode_one_symbol(node: HuffmanTree, r: BitReader) -> DecodeOneResult
 fn to_bytes(s: String) -> List[Byte] {
     let out: ref List[Byte] = [];
     for i in range(0, s.len()) {
-        out.push(s.byte_at(i))
+        out.push(s.byte_at(i).unwrap_or(from_int(0)))
     }
     out
 }

@@ -101,9 +101,9 @@ pub fn format_datetime(t: DateTime, pattern: String) -> String {
     let result: ref String = "";
     let i: ref Int = 0;
     while i < n decreases n - i {
-        let c: String = pattern.char_at(i);
+        let c: String = pattern.char_at(i).unwrap_or("");
         if c == "%" && i + 1 < n {
-            let spec: String = pattern.char_at(i + 1);
+            let spec: String = pattern.char_at(i + 1).unwrap_or("");
             let fmtd: String =
                 if spec == "Y" { dt_pad4(t.year) }
                 else if spec == "m" { dt_pad2(t.month) }

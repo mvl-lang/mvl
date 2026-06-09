@@ -38,10 +38,10 @@ fn decode_frame(raw: Tainted[String]) -> Result[Tainted[String], ZmqError] {
     if slen < 4 {
         Err(ZmqError::FrameError("frame too short"))
     } else {
-        let b3: Int = s.byte_at(0).to_int();
-        let b2: Int = s.byte_at(1).to_int();
-        let b1: Int = s.byte_at(2).to_int();
-        let b0: Int = s.byte_at(3).to_int();
+        let b3: Int = s.byte_at(0).unwrap_or(from_int(0)).to_int();
+        let b2: Int = s.byte_at(1).unwrap_or(from_int(0)).to_int();
+        let b1: Int = s.byte_at(2).unwrap_or(from_int(0)).to_int();
+        let b0: Int = s.byte_at(3).unwrap_or(from_int(0)).to_int();
         let expected_len: Int = b3.shift_left(24) + b2.shift_left(16) + b1.shift_left(8) + b0;
         if expected_len < 0 || expected_len > 67108864 {
             Err(ZmqError::FrameError("frame too large"))
@@ -119,10 +119,10 @@ test fn encode_adds_length_to_body() -> Unit {
 
 test fn encode_length_prefix_is_correct() -> Unit {
     let f: String = encode_frame("hello");
-    let b3: Int = f.byte_at(0).to_int();
-    let b2: Int = f.byte_at(1).to_int();
-    let b1: Int = f.byte_at(2).to_int();
-    let b0: Int = f.byte_at(3).to_int();
+    let b3: Int = f.byte_at(0).unwrap_or(from_int(0)).to_int();
+    let b2: Int = f.byte_at(1).unwrap_or(from_int(0)).to_int();
+    let b1: Int = f.byte_at(2).unwrap_or(from_int(0)).to_int();
+    let b0: Int = f.byte_at(3).unwrap_or(from_int(0)).to_int();
     let n: Int = b3.shift_left(24) + b2.shift_left(16) + b1.shift_left(8) + b0;
     assert_eq(n, 5)
 }
@@ -134,10 +134,10 @@ test fn encode_body_appended_after_header() -> Unit {
 
 test fn encode_high_bytes_are_zero_for_short_msg() -> Unit {
     let f: String = encode_frame("x");
-    assert_eq(f.byte_at(0).to_int(), 0);
-    assert_eq(f.byte_at(1).to_int(), 0);
-    assert_eq(f.byte_at(2).to_int(), 0);
-    assert_eq(f.byte_at(3).to_int(), 1)
+    assert_eq(f.byte_at(0).unwrap_or(from_int(0)).to_int(), 0);
+    assert_eq(f.byte_at(1).unwrap_or(from_int(0)).to_int(), 0);
+    assert_eq(f.byte_at(2).unwrap_or(from_int(0)).to_int(), 0);
+    assert_eq(f.byte_at(3).unwrap_or(from_int(0)).to_int(), 1)
 }
 
 // ── decode_frame tests ────────────────────────────────────────────────────────
@@ -416,11 +416,11 @@ fn make_greeting(as_server: Bool) -> String {
 fn validate_greeting(g: String) -> Result[Unit, ZmqError] {
     if g.len() != 64 {
         Err(ZmqError::FrameError("greeting not 64 bytes"))
-    } else if g.byte_at(0).to_int() != 255 {
+    } else if g.byte_at(0).unwrap_or(from_int(0)).to_int() != 255 {
         Err(ZmqError::FrameError("bad signature byte 0"))
-    } else if g.byte_at(9).to_int() != 127 {
+    } else if g.byte_at(9).unwrap_or(from_int(0)).to_int() != 127 {
         Err(ZmqError::FrameError("bad signature byte 9"))
-    } else if g.byte_at(10).to_int() < 3 {
+    } else if g.byte_at(10).unwrap_or(from_int(0)).to_int() < 3 {
         Err(ZmqError::FrameError("ZMTP version < 3.x"))
     } else if g.substring(12, 16) != "NULL" {
         Err(ZmqError::FrameError("mechanism not NULL"))
@@ -444,7 +444,7 @@ fn make_ready_body(st: ZmtpSocketType) -> String {
 
 fn is_ping(body: String) -> Bool {
     if body.len() >= 5 {
-        if body.byte_at(0).to_int() == 4 {
+        if body.byte_at(0).unwrap_or(from_int(0)).to_int() == 4 {
             body.substring(1, 5) == "PING"
         } else {
             false
@@ -480,7 +480,7 @@ fn parse_ready_body(body: String) -> Result[ZmtpSocketType, ZmqError] {
     if blen < 6 {
         Err(ZmqError::FrameError("READY body too short"))
     } else {
-        let name_len: Int = body.byte_at(0).to_int();
+        let name_len: Int = body.byte_at(0).unwrap_or(from_int(0)).to_int();
         if name_len != 5 {
             Err(ZmqError::FrameError("READY name length != 5"))
         } else {
@@ -499,17 +499,17 @@ fn parse_socket_type_property(body: String, offset: Int) -> Result[ZmtpSocketTyp
     if offset >= blen {
         Err(ZmqError::FrameError("no Socket-Type in READY"))
     } else {
-        let key_len: Int = body.byte_at(offset).to_int();
+        let key_len: Int = body.byte_at(offset).unwrap_or(from_int(0)).to_int();
         let key_start: Int = offset + 1;
         let key_end: Int = key_start + key_len;
         if key_end + 4 > blen {
             Err(ZmqError::FrameError("truncated READY property"))
         } else {
             let key: String = body.substring(key_start, key_end);
-            let vl_b1: Int = body.byte_at(key_end).to_int();
-            let vl_b2: Int = body.byte_at(key_end + 1).to_int();
-            let vl_b3: Int = body.byte_at(key_end + 2).to_int();
-            let vl_b4: Int = body.byte_at(key_end + 3).to_int();
+            let vl_b1: Int = body.byte_at(key_end).unwrap_or(from_int(0)).to_int();
+            let vl_b2: Int = body.byte_at(key_end + 1).unwrap_or(from_int(0)).to_int();
+            let vl_b3: Int = body.byte_at(key_end + 2).unwrap_or(from_int(0)).to_int();
+            let vl_b4: Int = body.byte_at(key_end + 3).unwrap_or(from_int(0)).to_int();
             let vl: Int = vl_b1.shift_left(24) + vl_b2.shift_left(16)
                 + vl_b3.shift_left(8) + vl_b4;
             let vs: Int = key_end + 4;
@@ -586,14 +586,14 @@ test fn greeting_is_64_bytes() -> Unit {
 
 test fn greeting_signature_bytes() -> Unit {
     let g: String = make_greeting(true);
-    assert_eq(g.byte_at(0).to_int(), 255);
-    assert_eq(g.byte_at(9).to_int(), 127)
+    assert_eq(g.byte_at(0).unwrap_or(from_int(0)).to_int(), 255);
+    assert_eq(g.byte_at(9).unwrap_or(from_int(0)).to_int(), 127)
 }
 
 test fn greeting_version_3_1() -> Unit {
     let g: String = make_greeting(true);
-    assert_eq(g.byte_at(10).to_int(), 3);
-    assert_eq(g.byte_at(11).to_int(), 1)
+    assert_eq(g.byte_at(10).unwrap_or(from_int(0)).to_int(), 3);
+    assert_eq(g.byte_at(11).unwrap_or(from_int(0)).to_int(), 1)
 }
 
 test fn greeting_mechanism_null() -> Unit {
@@ -602,8 +602,8 @@ test fn greeting_mechanism_null() -> Unit {
 }
 
 test fn greeting_as_server_flag() -> Unit {
-    assert_eq(make_greeting(true).byte_at(32).to_int(), 1);
-    assert_eq(make_greeting(false).byte_at(32).to_int(), 0)
+    assert_eq(make_greeting(true).byte_at(32).unwrap_or(from_int(0)).to_int(), 1);
+    assert_eq(make_greeting(false).byte_at(32).unwrap_or(from_int(0)).to_int(), 0)
 }
 
 test fn validate_greeting_roundtrip_server() -> Unit {
@@ -642,7 +642,7 @@ test fn validate_greeting_bad_mechanism() -> Unit {
 
 test fn ready_body_starts_with_ready() -> Unit {
     let body: String = make_ready_body(ZmtpSocketType::Rep);
-    assert_eq(body.byte_at(0).to_int(), 5);
+    assert_eq(body.byte_at(0).unwrap_or(from_int(0)).to_int(), 5);
     assert_eq(body.substring(1, 6), "READY")
 }
 

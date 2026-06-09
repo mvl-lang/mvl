@@ -416,15 +416,48 @@ pub unsafe extern "C" fn _mvl_str_substring(
     str_to_mvl(&result)
 }
 
-/// Return a one-character `MvlString` at char-index `i`, or `""` if out of range.
+/// Return a one-character `MvlString` at char-index `i`, or None if out of range.
+///
+/// Returns tag=0 (Some) and writes `*out = MvlString*`, or tag=1 (None).
+///
+/// # Safety
+/// `s` must be a valid `MvlString` pointer or null.
+/// `out` must be a valid writable pointer.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_str_char_at(
+    s: *const MvlString,
+    i: i64,
+    out: *mut *mut MvlString,
+) -> i8 {
+    let text = as_str(s);
+    if i < 0 {
+        return 1; // None
+    }
+    match text.chars().nth(i as usize) {
+        Some(ch) => {
+            let mut buf = [0u8; 4];
+            let encoded = ch.encode_utf8(&mut buf);
+            *out = str_to_mvl(encoded);
+            0 // Some
+        }
+        None => 1, // None
+    }
+}
+
+/// Backwards-compatible sentinel version for internal use.
+/// Returns `""` if out of range. Used by stdlib callers that check bounds first.
 ///
 /// # Safety
 /// `s` must be a valid `MvlString` pointer or null.
 #[no_mangle]
-pub unsafe extern "C" fn _mvl_str_char_at(s: *const MvlString, i: i64) -> *mut MvlString {
+pub unsafe extern "C" fn _mvl_str_char_at_or(
+    s: *const MvlString,
+    i: i64,
+    default: *mut MvlString,
+) -> *mut MvlString {
     let text = as_str(s);
     if i < 0 {
-        return str_to_mvl("");
+        return default;
     }
     match text.chars().nth(i as usize) {
         Some(ch) => {
@@ -432,7 +465,7 @@ pub unsafe extern "C" fn _mvl_str_char_at(s: *const MvlString, i: i64) -> *mut M
             let encoded = ch.encode_utf8(&mut buf);
             str_to_mvl(encoded)
         }
-        None => str_to_mvl(""),
+        None => default,
     }
 }
 
@@ -462,21 +495,31 @@ pub unsafe extern "C" fn _mvl_str_from_chars(arr: *const MvlArray) -> *mut MvlSt
     str_to_mvl(&result)
 }
 
-/// Return the raw byte at byte-index `i`, or 0 if out of range.
+/// Return the byte at char-index `i`, or None if out of range or codepoint > 255.
+///
+/// Returns tag=0 (Some) and writes `*out = byte_value`, or tag=1 (None).
 ///
 /// # Safety
 /// `s` must be a valid `MvlString` pointer or null.
+/// `out` must be a valid writable pointer.
 #[no_mangle]
-pub unsafe extern "C" fn _mvl_str_byte_at(s: *const MvlString, i: i64) -> i64 {
-    if s.is_null() || i < 0 {
-        return 0;
+pub unsafe extern "C" fn _mvl_str_byte_at(s: *const MvlString, i: i64, out: *mut i64) -> i8 {
+    let text = as_str(s);
+    if i < 0 {
+        return 1; // None
     }
-    let idx = i as usize;
-    let len = (*s).len as usize;
-    if idx >= len || (*s).ptr.is_null() {
-        return 0;
+    match text.chars().nth(i as usize) {
+        Some(c) => {
+            let cp = c as u32;
+            if cp <= 255 {
+                *out = cp as i64;
+                0 // Some
+            } else {
+                1 // None
+            }
+        }
+        None => 1, // None
     }
-    *(*s).ptr.add(idx) as i64
 }
 
 /// Reconstruct a `MvlString` from a `MvlArray*` of i64 byte values (UTF-8, lossy).

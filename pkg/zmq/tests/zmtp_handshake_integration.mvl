@@ -112,7 +112,7 @@ actor HandshakeClient {
                                         match tcp_read_exact(stream, 1) {
                                             Err(_) => tcp_close_stream(stream),
                                             Ok(size_raw) => {
-                                                let sz: Int = relabel trust(size_raw, "TEST").byte_at(0).to_int();
+                                                let sz: Int = relabel trust(size_raw, "TEST").byte_at(0).unwrap_or(from_int(0)).to_int();
                                                 let _: Result[Tainted[String], NetError] = tcp_read_exact(stream, sz);
                                                 tcp_close_stream(stream)
                                             },
@@ -154,7 +154,7 @@ actor MessageClient {
                                                 match tcp_read_exact(stream, 1) {
                                                     Err(_) => { tcp_close_stream(stream) },
                                                     Ok(sz_raw) => {
-                                                        let sz: Int = relabel trust(sz_raw, "TEST").byte_at(0).to_int();
+                                                        let sz: Int = relabel trust(sz_raw, "TEST").byte_at(0).unwrap_or(from_int(0)).to_int();
                                                         match tcp_read_exact(stream, sz) {
                                                             Err(_) => { tcp_close_stream(stream) },
                                                             Ok(_) => {

@@ -25,14 +25,14 @@ pub builtin fn String::len(self) -> Int
 /// Decompose a string into a list of single-character strings.
 pub builtin fn String::chars(self) -> List[String]
 
-/// Single character at char-index `i`. Returns `""` if out of range.
-pub builtin fn String::char_at(self, i: Int) -> String
+/// Single character at char-index `i`. Returns `None` if out of range.
+pub builtin fn String::char_at(self, i: Int) -> Option[String]
 
 /// Reconstruct a String from a list of single-character strings.
 pub builtin fn String::from_chars(chars: List[String]) -> String
 
-/// Raw byte at byte-index `i`. Returns 0 if out of range.
-pub builtin fn String::byte_at(self, i: Int) -> Byte
+/// Raw byte at char-index `i`. Returns `None` if out of range or codepoint > 255.
+pub builtin fn String::byte_at(self, i: Int) -> Option[Byte]
 
 /// Reconstruct a String from a list of bytes (UTF-8, lossy).
 pub builtin fn String::from_bytes(bytes: List[Byte]) -> String
@@ -77,11 +77,11 @@ fn is_ws(c: String) -> Bool {
 pub fn String::trim(self) -> String {
     let n: Int = self.len();
     let start: ref Int = 0;
-    while start < n && is_ws(self.char_at(start)) decreases n - start {
+    while start < n && is_ws(self.char_at(start).unwrap_or("")) decreases n - start {
         start = start + 1
     };
     let end: ref Int = n;
-    while end > start && is_ws(self.char_at(end - 1)) decreases end - start {
+    while end > start && is_ws(self.char_at(end - 1).unwrap_or("")) decreases end - start {
         end = end - 1
     };
     self.substring(start, end)

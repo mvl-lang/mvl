@@ -36,12 +36,12 @@ test fn chars_ascii_string() -> Unit {
 // ── char_at ──────────────────────────────────────────────────────────────────
 
 test fn char_at_valid_index() -> Unit {
-    assert_eq("hello".char_at(0), "h");
-    assert_eq("hello".char_at(4), "o");
+    assert_eq("hello".char_at(0).unwrap_or(""), "h");
+    assert_eq("hello".char_at(4).unwrap_or(""), "o");
 }
 
 test fn char_at_out_of_range() -> Unit {
-    assert_eq("hi".char_at(5), "");
+    assert_eq("hi".char_at(5).is_none(), true);
 }
 
 // ── concat ───────────────────────────────────────────────────────────────────
@@ -158,15 +158,15 @@ test fn trim_all_whitespace() -> Unit {
 // ── byte_at ───────────────────────────────────────────────────────────────────
 
 test fn byte_at_ascii_A() -> Unit {
-    assert_eq("A".byte_at(0).to_int(), 65)
+    assert_eq("A".byte_at(0).unwrap_or(from_int(0)).to_int(), 65)
 }
 
 test fn byte_at_mid_string() -> Unit {
-    assert_eq("Hello".byte_at(1).to_int(), 101)  // 'e' = 101
+    assert_eq("Hello".byte_at(1).unwrap_or(from_int(0)).to_int(), 101)  // 'e' = 101
 }
 
 test fn byte_at_out_of_range_returns_zero() -> Unit {
-    assert_eq("hi".byte_at(10).to_int(), 0)
+    assert_eq("hi".byte_at(10).is_none(), true)
 }
 
 // ── from_bytes ────────────────────────────────────────────────────────────────
@@ -179,9 +179,9 @@ test fn from_bytes_roundtrip_hello() -> Unit {
 test fn from_bytes_then_byte_at_roundtrip() -> Unit {
     let bytes: List[Byte] = [from_int(65), from_int(66), from_int(67)];
     let s: String = String::from_bytes(bytes);
-    assert_eq(s.byte_at(0).to_int(), 65);
-    assert_eq(s.byte_at(1).to_int(), 66);
-    assert_eq(s.byte_at(2).to_int(), 67)
+    assert_eq(s.byte_at(0).unwrap_or(from_int(0)).to_int(), 65);
+    assert_eq(s.byte_at(1).unwrap_or(from_int(0)).to_int(), 66);
+    assert_eq(s.byte_at(2).unwrap_or(from_int(0)).to_int(), 67)
 }
 
 test fn from_bytes_empty() -> Unit {
