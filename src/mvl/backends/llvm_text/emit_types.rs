@@ -459,7 +459,9 @@ impl TextEmitter {
                     "ptr".into()
                 }
             }
-            Expr::FieldAccess { .. } => "i64".into(), // default; refined in emit_field_access
+            Expr::FieldAccess { expr, field, .. } => self
+                .field_type_of(expr, field)
+                .unwrap_or_else(|| "i64".into()),
             Expr::List { .. } | Expr::Map { .. } | Expr::Set { .. } => "ptr".into(),
             Expr::Consume { expr, .. } | Expr::Relabel { expr, .. } => self.type_of_expr(expr),
             Expr::Unary {
@@ -522,14 +524,21 @@ impl TextEmitter {
 
     /// Look up the struct type name (e.g. "Point") of an expression, if known.
     pub(super) fn struct_name_of_expr(&self, expr: &Expr) -> Option<String> {
-        if let Expr::Ident(name, _) = expr {
-            if let Some(TypeExpr::Base { name: tn, .. }) = self.local_mvl_types.get(name) {
-                if self.struct_fields.contains_key(tn) {
-                    return Some(tn.clone());
-                }
+        let mvl_ty = self.mvl_type_of_expr(expr);
+        if let TypeExpr::Base { name: tn, .. } = &mvl_ty {
+            if self.struct_fields.contains_key(tn) {
+                return Some(tn.clone());
             }
         }
         None
+    }
+
+    /// Resolve the LLVM type of a struct field access without emitting code.
+    fn field_type_of(&self, receiver: &Expr, field: &str) -> Option<String> {
+        let sn = self.struct_name_of_expr(receiver)?;
+        let fields = self.struct_fields.get(&sn)?;
+        let (_, field_ty) = fields.iter().find(|(f, _)| f == field)?;
+        Some(self.llvm_ty_ctx(field_ty))
     }
 
     /// Return the MVL base type name of a receiver expression when it can be

@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.193.1] - 2026-06-09
+
+### Fixed
+
+- **LLVM backend struct field types** (#1320) — resolve enum and nested struct field types correctly in LLVM IR struct type definitions and function call arguments. Fixes 3 example test failures: `access_control`, `flight_clearance`, `medical_triage`.
+
 ## [0.193.0] - 2026-06-09
 
 ### Added

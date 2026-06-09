@@ -464,6 +464,27 @@ impl TextEmitter {
     // ── Program emission ──────────────────────────────────────────────────
 
     fn emit_program(&mut self, prog: &Program) -> Result<(), String> {
+        // Pre-pass: register all enums so that struct field type resolution
+        // via `llvm_ty_ctx` can see enum types regardless of declaration order.
+        for decl in &prog.declarations {
+            if let Decl::Type(td) = decl {
+                if let TypeBody::Enum(variants) = &td.body {
+                    let variant_names: Vec<String> =
+                        variants.iter().map(|v| v.name.clone()).collect();
+                    let variant_fields: Vec<Vec<TypeExpr>> = variants
+                        .iter()
+                        .map(|v| match &v.fields {
+                            VariantFields::Tuple(tys) => tys.clone(),
+                            _ => Vec::new(),
+                        })
+                        .collect();
+                    self.enum_variants.insert(td.name.clone(), variant_names);
+                    self.enum_variant_fields
+                        .insert(td.name.clone(), variant_fields);
+                }
+            }
+        }
+
         // First pass: register all function return types and type declarations.
         for decl in &prog.declarations {
             match decl {
@@ -495,8 +516,11 @@ impl TextEmitter {
                                 .map(|f| (f.name.clone(), f.ty.clone()))
                                 .collect();
                             // Emit type definition: %Name = type { ty0, ty1, ... }
-                            let field_types: Vec<String> =
-                                field_list.iter().map(|(_, ty)| Self::llvm_ty(ty)).collect();
+                            // Use llvm_ty_ctx to resolve enum/struct field types correctly.
+                            let field_types: Vec<String> = field_list
+                                .iter()
+                                .map(|(_, ty)| self.llvm_ty_ctx(ty))
+                                .collect();
                             self.type_defs.push(format!(
                                 "%{} = type {{ {} }}",
                                 td.name,
@@ -505,20 +529,8 @@ impl TextEmitter {
                             self.struct_fields.insert(td.name.clone(), field_list);
                         }
                     }
-                    TypeBody::Enum(variants) => {
-                        let variant_names: Vec<String> =
-                            variants.iter().map(|v| v.name.clone()).collect();
-                        let variant_fields: Vec<Vec<TypeExpr>> = variants
-                            .iter()
-                            .map(|v| match &v.fields {
-                                VariantFields::Tuple(tys) => tys.clone(),
-                                _ => Vec::new(),
-                            })
-                            .collect();
-                        self.enum_variants.insert(td.name.clone(), variant_names);
-                        self.enum_variant_fields
-                            .insert(td.name.clone(), variant_fields);
-                    }
+                    // Enums already registered in pre-pass above.
+                    TypeBody::Enum(_) => {}
                     TypeBody::Alias(_) => {}
                 },
                 Decl::Actor(ad) => {
