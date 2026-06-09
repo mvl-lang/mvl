@@ -1214,8 +1214,8 @@ impl RustEmitter {
 
 // ── Lambda param type helper ──────────────────────────────────────────────
 
-/// Emit a lambda parameter type. `Ty::Fn` becomes `impl Fn(…) -> …` so
-/// closures can be passed where function pointers are expected.
+/// Emit a lambda parameter type.  Fn types stay as bare `fn(T) -> U` to
+/// remain compatible with enum/struct fields that use `fn(T) -> U`.
 fn emit_fn_param_ty(ty: &Ty) -> String {
     match ty {
         Ty::Fn(params, ret, _, _) => {

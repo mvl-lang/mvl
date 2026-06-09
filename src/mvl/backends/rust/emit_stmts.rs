@@ -55,9 +55,19 @@ impl RustEmitter {
                     self.push("let ");
                 }
                 self.emit_pattern(pattern);
-                self.push(": ");
-                self.push(&emit_ty(ty_for_emit));
+                // Fn types: omit the annotation so Rust infers the concrete
+                // closure type — `fn(T)->U` rejects capturing closures (#1313).
+                if !matches!(ty_for_emit, Ty::Fn(..)) {
+                    self.push(": ");
+                    self.push(&emit_ty(ty_for_emit));
+                }
                 self.push(" = ");
+                // For Fn types: wrap Lambda in move so closure owns captures
+                let wrap_move = matches!(ty_for_emit, Ty::Fn(..))
+                    && matches!(&init.kind, TirExprKind::Lambda { .. });
+                if wrap_move {
+                    self.push("move ");
+                }
                 self.emit_expr(init);
                 // When the init is a field access on a borrowed parameter (e.g.
                 // `acc.items` where `acc: &ParseAcc`), the field is behind a reference
@@ -104,6 +114,11 @@ impl RustEmitter {
                 self.indent();
                 if let Some(v) = value {
                     self.push("return ");
+                    // Wrap Lambda in move when returning from function so
+                    // closure owns captured variables (#1313).
+                    if matches!(&v.kind, TirExprKind::Lambda { .. }) {
+                        self.push("move ");
+                    }
                     self.emit_expr(v);
                     self.push(";");
                 } else {

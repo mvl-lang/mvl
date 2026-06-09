@@ -24,12 +24,24 @@ use crate::mvl::passes::coverage::BranchKind;
 
 // ── TIR version ───────────────────────────────────────────────────────────
 
+/// Emit a function return type from a resolved `Ty`.
+///
+/// MVL's `fn(T) -> U` becomes `impl Fn(T) -> U` in return position so
+/// functions can return capturing closures (#1313).
+fn emit_fn_return_ty(ty: &Ty) -> String {
+    match ty {
+        Ty::Fn(params, ret, _, _) => {
+            let params_str: Vec<String> = params.iter().map(emit_ty).collect();
+            format!("impl Fn({}) -> {}", params_str.join(", "), emit_ty(ret))
+        }
+        _ => emit_ty(ty),
+    }
+}
+
 /// Emit a function-parameter type from a resolved `Ty`.
 ///
-/// MVL's `fn(T) -> U` is a bare Rust function pointer.  When used as a
-/// function *parameter* the caller may pass a closure, which is not a bare
-/// `fn` pointer.  Emitting `fn(T) -> U` accepts both in practice for the
-/// transpiler's use cases.
+/// MVL's `fn(T) -> U` stays as a bare Rust function pointer in parameter
+/// position — enum/struct fields use `fn(T) -> U`, and parameters must match.
 fn emit_fn_param_ty(ty: &Ty) -> String {
     match ty {
         Ty::Fn(params, ret, _, _) => {
@@ -66,7 +78,7 @@ impl RustEmitter {
                 &fd.ret_ty,
             );
             let params_str = emit_tir_params(&fd.params, &borrows, &mutated_params);
-            let ret_str = emit_ty(&fd.ret_ty);
+            let ret_str = emit_fn_return_ty(&fd.ret_ty);
             self.line(&format!(
                 "fn {}{generics}({params_str}) -> {ret_str} {{",
                 fd.name
@@ -100,7 +112,7 @@ impl RustEmitter {
         // Function signature
         let generics =
             emit_generics_with_tir_params(&fd.type_params, &fd.constraints, &fd.params, &fd.ret_ty);
-        let ret_str = emit_ty(&fd.ret_ty);
+        let ret_str = emit_fn_return_ty(&fd.ret_ty);
 
         if let Some(recv_ty) = &fd.receiver_type {
             let is_builtin_type = matches!(
@@ -603,6 +615,10 @@ impl RustEmitter {
                 }
             }
             _ => {}
+        }
+        // Lambda return from function: wrap in move so closure owns captures (#1313)
+        if matches!(ret_ty, Ty::Fn(..)) && matches!(&expr.kind, TirExprKind::Lambda { .. }) {
+            self.push("move ");
         }
         self.emit_expr(expr);
     }
