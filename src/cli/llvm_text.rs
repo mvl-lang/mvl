@@ -3,9 +3,11 @@
 
 use mvl::mvl::backends::llvm_text::lli;
 use mvl::mvl::backends::llvm_text::LlvmTextCompiler;
+use mvl::mvl::checker;
 use mvl::mvl::loader;
 use mvl::mvl::parser::ast::Program;
 use mvl::mvl::parser::Parser;
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
@@ -19,11 +21,17 @@ type BuiltinTable = std::collections::HashMap<
     ),
 >;
 
-/// Build the prelude and builtin dispatch table for the llvm_text backend.
+type ExprTypes = HashMap<mvl::mvl::parser::lexer::Span, mvl::mvl::checker::types::Ty>;
+
+/// Build the prelude, builtin dispatch table, and checker-resolved types
+/// for the llvm_text backend.
 ///
 /// Mirrors `prepare_llvm` in `src/cli/llvm.rs` but uses `collect_llvm_text_builtins`
 /// instead of the inkwell StdlibSig dispatch table.
-fn prepare_llvm_text(prog: &Program) -> (Vec<Program>, BuiltinTable) {
+///
+/// Runs the type checker on the program with prelude context so that
+/// `expr_types` are available for accurate type dispatch in the emitter (#1302).
+fn prepare_llvm_text(prog: &Program) -> (Vec<Program>, BuiltinTable, ExprTypes) {
     let mut prelude = loader::load_implicit_prelude();
     prelude.extend(loader::load_mvl_native_stdlib_extras(std::slice::from_ref(
         prog,
@@ -32,7 +40,14 @@ fn prepare_llvm_text(prog: &Program) -> (Vec<Program>, BuiltinTable) {
         prog,
     )));
     let builtins = loader::collect_llvm_text_builtins(std::slice::from_ref(prog));
-    (prelude, builtins)
+
+    // Run checker to get expression types for the LLVM emitter (#1302).
+    // Collect prelude types first, then check the user program with prelude context.
+    let mut expr_types = checker::collect_prelude_expr_types(&prelude);
+    let check_result = checker::check_with_prelude(&prelude, prog);
+    expr_types.extend(check_result.expr_types);
+
+    (prelude, builtins, expr_types)
 }
 
 /// Compile an MVL file to LLVM IR text and write the `.ll` file.
@@ -40,9 +55,10 @@ fn prepare_llvm_text(prog: &Program) -> (Vec<Program>, BuiltinTable) {
 pub(super) fn build_project_llvm_text(path: &str) {
     let (prog, _src) = super::parse_or_exit(path);
     let module_name = loader::stem(path);
-    let (prelude, builtins) = prepare_llvm_text(&prog);
+    let (prelude, builtins, expr_types) = prepare_llvm_text(&prog);
     let mut compiler = LlvmTextCompiler::new();
     compiler.builtin_symbols = builtins;
+    compiler.expr_types = expr_types;
     match compiler.compile_to_ir_with_prelude(&prelude, &prog, &module_name) {
         Ok(ir) => {
             let out_path = format!("{module_name}.ll");
@@ -105,9 +121,10 @@ fn compile_llvm_bridge(llvm_rs: &Path) -> Option<PathBuf> {
 pub(super) fn run_project_llvm_text(path: &str) {
     let (prog, _src) = super::parse_or_exit(path);
     let module_name = loader::stem(path);
-    let (prelude, builtins) = prepare_llvm_text(&prog);
+    let (prelude, builtins, expr_types) = prepare_llvm_text(&prog);
     let mut compiler = LlvmTextCompiler::new();
     compiler.builtin_symbols = builtins;
+    compiler.expr_types = expr_types;
     let ir = match compiler.compile_to_ir_with_prelude(&prelude, &prog, &module_name) {
         Ok(ir) => ir,
         Err(e) => {
@@ -224,9 +241,10 @@ pub(super) fn cmd_test_llvm_text(path: &str, quiet: bool, verbose: bool) {
             continue;
         }
 
-        let (prelude, builtins) = prepare_llvm_text(&prog);
+        let (prelude, builtins, expr_types) = prepare_llvm_text(&prog);
         let mut compiler = LlvmTextCompiler::new();
         compiler.builtin_symbols = builtins;
+        compiler.expr_types = expr_types;
         let ir = match compiler.compile_to_ir_with_prelude(&prelude, &prog, &module_name) {
             Ok(ir) => ir,
             Err(e) => {
