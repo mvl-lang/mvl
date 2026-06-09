@@ -470,7 +470,8 @@ fn collect_calls_in_expr(expr: &Expr, names: &mut std::collections::HashSet<Stri
         | Expr::Propagate { expr, .. }
         | Expr::Consume { expr, .. }
         | Expr::Relabel { expr, .. }
-        | Expr::Borrow { expr, .. } => collect_calls_in_expr(expr, names),
+        | Expr::Borrow { expr, .. }
+        | Expr::As { expr, .. } => collect_calls_in_expr(expr, names),
         Expr::FieldAccess { expr, .. } => collect_calls_in_expr(expr, names),
         Expr::Construct { fields, .. } => {
             for (_, e) in fields {
@@ -984,7 +985,8 @@ fn check_expr_flows(
         | Expr::Consume { expr, .. }
         | Expr::Propagate { expr, .. }
         | Expr::FieldAccess { expr, .. }
-        | Expr::Borrow { expr, .. } => {
+        | Expr::Borrow { expr, .. }
+        | Expr::As { expr, .. } => {
             check_expr_flows(expr, pc, env, caller_fn, effect_reach, errors);
         }
         Expr::MethodCall {
@@ -1144,7 +1146,8 @@ fn count_in_expr(expr: &Expr, dc: &mut usize, sc: &mut usize) {
         | Expr::Consume { expr, .. }
         | Expr::Propagate { expr, .. }
         | Expr::FieldAccess { expr, .. }
-        | Expr::Borrow { expr, .. } => count_in_expr(expr, dc, sc),
+        | Expr::Borrow { expr, .. }
+        | Expr::As { expr, .. } => count_in_expr(expr, dc, sc),
         Expr::MethodCall { receiver, args, .. } => {
             count_in_expr(receiver, dc, sc);
             for a in args {

@@ -161,7 +161,8 @@ fn expr_calls_extern(expr: &Expr, names: &[String]) -> bool {
         | Expr::Unary { expr, .. }
         | Expr::Propagate { expr, .. }
         | Expr::Consume { expr, .. }
-        | Expr::Borrow { expr, .. } => expr_calls_extern(expr, names),
+        | Expr::Borrow { expr, .. }
+        | Expr::As { expr, .. } => expr_calls_extern(expr, names),
         Expr::Relabel { expr, .. } => expr_calls_extern(expr, names),
         Expr::Binary { left, right, .. } => {
             expr_calls_extern(left, names) || expr_calls_extern(right, names)

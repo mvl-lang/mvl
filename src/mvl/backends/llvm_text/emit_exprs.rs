@@ -313,7 +313,9 @@ impl TextEmitter {
 
             Expr::Map { pairs, .. } => self.emit_map_literal(pairs),
 
-            Expr::Consume { expr, .. } | Expr::Relabel { expr, .. } => self.emit_expr(expr),
+            Expr::Consume { expr, .. } | Expr::Relabel { expr, .. } | Expr::As { expr, .. } => {
+                self.emit_expr(expr)
+            }
 
             Expr::Propagate { expr, .. } => self.emit_propagate(expr),
 

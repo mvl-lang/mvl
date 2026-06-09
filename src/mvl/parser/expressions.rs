@@ -243,6 +243,17 @@ impl Parser {
                         span,
                     };
                 }
+                // `expr as Type` — checked cast to refined type alias (#1324).
+                TokenKind::As => {
+                    self.advance();
+                    let target = self.parse_type_expr()?;
+                    let span = self.span_from(start);
+                    expr = Expr::As {
+                        expr: Box::new(expr),
+                        target: Box::new(target),
+                        span,
+                    };
+                }
                 _ => break,
             }
         }

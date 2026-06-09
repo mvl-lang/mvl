@@ -163,7 +163,8 @@ impl AstLastUseTracker {
             | AstExpr::Propagate { expr: inner, .. }
             | AstExpr::Consume { expr: inner, .. }
             | AstExpr::Relabel { expr: inner, .. }
-            | AstExpr::Borrow { expr: inner, .. } => self.visit_expr(inner, in_loop),
+            | AstExpr::Borrow { expr: inner, .. }
+            | AstExpr::As { expr: inner, .. } => self.visit_expr(inner, in_loop),
             AstExpr::Binary { left, right, .. } => {
                 self.visit_expr(left, in_loop);
                 self.visit_expr(right, in_loop);

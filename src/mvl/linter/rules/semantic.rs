@@ -401,7 +401,8 @@ fn expr_has_while_no_decreases(expr: &Expr) -> bool {
         | Expr::Propagate { expr: e, .. }
         | Expr::Consume { expr: e, .. }
         | Expr::Relabel { expr: e, .. }
-        | Expr::Borrow { expr: e, .. } => expr_has_while_no_decreases(e),
+        | Expr::Borrow { expr: e, .. }
+        | Expr::As { expr: e, .. } => expr_has_while_no_decreases(e),
         Expr::FnCall { args, .. } => args.iter().any(expr_has_while_no_decreases),
         Expr::MethodCall { receiver, args, .. } => {
             expr_has_while_no_decreases(receiver) || args.iter().any(expr_has_while_no_decreases)
@@ -477,7 +478,8 @@ fn expr_calls_fn(expr: &Expr, name: &str) -> bool {
         | Expr::Propagate { expr: e, .. }
         | Expr::Consume { expr: e, .. }
         | Expr::Relabel { expr: e, .. }
-        | Expr::Borrow { expr: e, .. } => expr_calls_fn(e, name),
+        | Expr::Borrow { expr: e, .. }
+        | Expr::As { expr: e, .. } => expr_calls_fn(e, name),
         Expr::Block(b) => block_calls_fn(b, name),
         Expr::If {
             cond, then, else_, ..
@@ -582,7 +584,8 @@ fn expr_has_calls(expr: &Expr) -> bool {
         Expr::Propagate { expr: e, .. }
         | Expr::Consume { expr: e, .. }
         | Expr::Relabel { expr: e, .. }
-        | Expr::Borrow { expr: e, .. } => expr_has_calls(e),
+        | Expr::Borrow { expr: e, .. }
+        | Expr::As { expr: e, .. } => expr_has_calls(e),
         Expr::Construct { fields, .. } => fields.iter().any(|(_, e)| expr_has_calls(e)),
         Expr::Spawn { fields, .. } => fields.iter().any(|(_, e)| expr_has_calls(e)),
         Expr::Select { arms, .. } => arms

@@ -435,6 +435,10 @@ fn lower_expr(
                 .collect(),
         },
 
+        // `as` cast is transparent at runtime — the inner expression has the same
+        // representation as the target refined type (#1324).
+        Expr::As { expr, .. } => return lower_expr(expr, expr_types, ty_subs),
+
         Expr::Quantifier(ref_expr, _) => TirExprKind::Quantifier(ref_expr.clone()),
     };
 

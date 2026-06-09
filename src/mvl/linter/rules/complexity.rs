@@ -166,7 +166,8 @@ fn cyclomatic_complexity_expr(expr: &Expr) -> usize {
         | Expr::Propagate { expr: e, .. }
         | Expr::Consume { expr: e, .. }
         | Expr::Relabel { expr: e, .. }
-        | Expr::Borrow { expr: e, .. } => cyclomatic_complexity_expr(e),
+        | Expr::Borrow { expr: e, .. }
+        | Expr::As { expr: e, .. } => cyclomatic_complexity_expr(e),
         Expr::Construct { fields, .. } | Expr::Spawn { fields, .. } => fields
             .iter()
             .map(|(_, e)| cyclomatic_complexity_expr(e))
@@ -332,7 +333,8 @@ fn max_match_depth_expr(expr: &Expr, depth: usize) -> usize {
         | Expr::Propagate { expr: e, .. }
         | Expr::Consume { expr: e, .. }
         | Expr::Relabel { expr: e, .. }
-        | Expr::Borrow { expr: e, .. } => max_match_depth_expr(e, depth),
+        | Expr::Borrow { expr: e, .. }
+        | Expr::As { expr: e, .. } => max_match_depth_expr(e, depth),
         Expr::FnCall { args, .. } => args
             .iter()
             .map(|e| max_match_depth_expr(e, depth))
