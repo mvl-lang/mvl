@@ -143,9 +143,10 @@ pub fn List[T]::fold[U](self, init: U, f: fn(U, T) -> U) -> U where T: Clone, U:
 
 /// Sort in ascending order using natural ordering.
 ///
-/// Builtin: requires PartialOrd which MVL cannot express as a where-bound yet.
-/// Rust backend emits `sort_by(|a,b| a.partial_cmp(b)…)`.
-/// LLVM: deferred to #436.
+/// Builtin: promoted from MVL body to avoid LLVM SSA-dominance issues with
+/// ref-variable loops (#992). MVL already supports `where T: Ord` bounds,
+/// so a pure MVL body is feasible once #992 is resolved (ADR-0041 Phase 2).
+/// C-ABI: `_mvl_list_sort`. Closes #1290.
 pub builtin fn List[T]::sort(self) -> List[T]
 
 /// Split into elements satisfying `f` and those that do not.
