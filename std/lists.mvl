@@ -250,11 +250,11 @@ pub builtin fn List[T]::group_by[K](self, f: fn(T) -> K) -> Map[K, List[T]]
 ///
 /// Builtin: promoted from MVL body to avoid LLVM SSA-dominance issues with
 /// ref-variable loops (#992). C-ABI: `_mvl_list_windows`. Closes #1290.
-pub builtin fn List[T]::windows(self, n: Int) -> List[List[T]]
+pub builtin fn List[T]::windows(self, n: Int where self >= 1) -> List[List[T]]
 
 /// Divide into non-overlapping chunks of at most `n` elements. The last
 /// chunk may be shorter than `n`.
 ///
 /// Builtin: promoted from MVL body to avoid LLVM SSA-dominance issues with
 /// ref-variable loops (#992). C-ABI: `_mvl_list_chunks`. Closes #1290.
-pub builtin fn List[T]::chunks(self, n: Int) -> List[List[T]]
+pub builtin fn List[T]::chunks(self, n: Int where self >= 1) -> List[List[T]]
