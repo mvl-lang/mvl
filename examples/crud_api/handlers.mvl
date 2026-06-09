@@ -19,7 +19,7 @@ use pkg.sqlite.{SqliteDb}
 
 // ── JSON encoding helpers ─────────────────────────────────────────────────────
 
-fn user_to_json(u: val User) -> String {
+fn user_to_json(val u: User) -> String {
     "{\"id\":".concat(u.id.to_string())
         .concat(",\"name\":").concat(json_str(u.name))
         .concat(",\"email\":").concat(json_str(u.email))

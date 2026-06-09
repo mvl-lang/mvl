@@ -14,7 +14,7 @@
 //
 // R3  (totality): all functions use bounded for loops — no recursion.
 // R7  (effects): all functions here are pure — no ! annotations.
-// R2  (memory safety): input borrowed via val List[Byte] — no clone of the block.
+// R2  (memory safety): input borrowed via List[Byte] — no clone of the block.
 
 // ── Encode ────────────────────────────────────────────────────────────────────
 
@@ -25,7 +25,7 @@ type RleEncState = struct {
 
 // Encode a byte block, collapsing runs of 4+ identical bytes.
 // Input borrowed — large blocks must not be cloned at every call site.
-pub total fn rle_encode(data: val List[Byte]) -> List[Byte] {
+pub total fn rle_encode(val data: List[Byte]) -> List[Byte] {
     let n: Int = data.len();
     let st: ref RleEncState = RleEncState { out: [], skip: 0 };
     for idx in range(0, n) {
@@ -35,7 +35,7 @@ pub total fn rle_encode(data: val List[Byte]) -> List[Byte] {
 }
 
 // Advance the encode state by one index position.
-fn rle_enc_step(st: RleEncState, data: val List[Byte], idx: Int) -> RleEncState {
+fn rle_enc_step(st: RleEncState, val data: List[Byte], idx: Int) -> RleEncState {
     if idx < st.skip {
         // This position was already consumed as part of a previous run.
         st
@@ -68,7 +68,7 @@ fn rle_emit_byte(out: List[Byte], b: Byte, skip: Int) -> RleEncState {
 }
 
 // Count consecutive bytes equal to b starting at start, capped at 259.
-fn count_run(data: val List[Byte], start: Int, b: Byte) -> Int {
+fn count_run(val data: List[Byte], start: Int, b: Byte) -> Int {
     let n: Int = data.len();
     let cap: Int = if n - start < 259 { n - start } else { 259 };
     let count: ref Int = 0;
@@ -88,7 +88,7 @@ type RleDecState = struct {
 }
 
 // Decode: expand RLE-encoded runs back to original bytes.
-pub total fn rle_decode(data: val List[Byte]) -> List[Byte] {
+pub total fn rle_decode(val data: List[Byte]) -> List[Byte] {
     let n: Int = data.len();
     let st: ref RleDecState = RleDecState { out: [], skip: 0 };
     for idx in range(0, n) {
@@ -97,7 +97,7 @@ pub total fn rle_decode(data: val List[Byte]) -> List[Byte] {
     st.out
 }
 
-fn rle_dec_step(st: RleDecState, data: val List[Byte], idx: Int, n: Int) -> RleDecState {
+fn rle_dec_step(st: RleDecState, val data: List[Byte], idx: Int, n: Int) -> RleDecState {
     if idx < st.skip {
         st
     } else if idx + 4 < n {
@@ -139,23 +139,23 @@ fn b(xs: List[Int]) -> List[Byte] {
 
 test fn rle_roundtrip_no_runs() -> Unit {
     let data: List[Byte] = b([1, 2, 3, 4, 5]);
-    let encoded: List[Byte] = rle_encode(val data);
-    let decoded: List[Byte] = rle_decode(val encoded);
+    let encoded: List[Byte] = rle_encode(data);
+    let decoded: List[Byte] = rle_decode(encoded);
     assert_eq(decoded, data)
 }
 
 test fn rle_roundtrip_run_of_four() -> Unit {
     let data: List[Byte] = b([7, 7, 7, 7, 9]);
-    let encoded: List[Byte] = rle_encode(val data);
+    let encoded: List[Byte] = rle_encode(data);
     assert_eq(encoded.len(), 6);
-    let decoded: List[Byte] = rle_decode(val encoded);
+    let decoded: List[Byte] = rle_decode(encoded);
     assert_eq(decoded, data)
 }
 
 test fn rle_roundtrip_run_of_eight() -> Unit {
     let data: List[Byte] = b([3, 3, 3, 3, 3, 3, 3, 3]);
-    let encoded: List[Byte] = rle_encode(val data);
+    let encoded: List[Byte] = rle_encode(data);
     assert_eq(encoded.len(), 5);
-    let decoded: List[Byte] = rle_decode(val encoded);
+    let decoded: List[Byte] = rle_decode(encoded);
     assert_eq(decoded, data)
 }

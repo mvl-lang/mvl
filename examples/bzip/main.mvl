@@ -46,24 +46,24 @@ type CompressError = enum {
 // ── Pure compression pipeline ─────────────────────────────────────────────────
 
 // Compress a block of bytes using the bzip2 algorithm pipeline.
-pub partial fn compress_bytes(input: val List[Byte]) -> Result[List[Byte], CompressError] {
+pub partial fn compress_bytes(val input: List[Byte]) -> Result[List[Byte], CompressError] {
     if input.is_empty() {
         Err(CompressError::EmptyInput)
     } else {
         let rle_out: List[Byte] = rle_encode(input);
-        let bwt_out: BwtResult = bwt_encode(val rle_out);
-        let mtf_out: List[Int] = mtf_encode(val bwt_out.data);
-        let freqs: List[Int] = count_freqs(val mtf_out);
-        match build_tree(val freqs) {
+        let bwt_out: BwtResult = bwt_encode(rle_out);
+        let mtf_out: List[Int] = mtf_encode(bwt_out.data);
+        let freqs: List[Int] = count_freqs(mtf_out);
+        match build_tree(freqs) {
             None        => Err(CompressError::HuffmanFailed),
-            Some(result) => huffman_encode_stream(val mtf_out, val result.codes),
+            Some(result) => huffman_encode_stream(mtf_out, result.codes),
         }
     }
 }
 
 partial fn huffman_encode_stream(
-    symbols: val List[Int],
-    codes:   val List[List[Int]],
+    val symbols: List[Int],
+    codes:   List[List[Int]],
 ) -> Result[List[Byte], CompressError] {
     let writer: BitWriter = new_writer();
     match encode_symbols(symbols, codes, writer, 0) {
@@ -73,8 +73,8 @@ partial fn huffman_encode_stream(
 }
 
 partial fn encode_symbols(
-    symbols: val List[Int],
-    codes:   val List[List[Int]],
+    val symbols: List[Int],
+    codes:   List[List[Int]],
     w:       BitWriter,
     i:       Int,
 ) -> Result[BitWriter, CompressError] {
@@ -82,7 +82,7 @@ partial fn encode_symbols(
         Ok(w)
     } else {
         let sym: Int = symbols.get(i).unwrap_or(0);
-        match encode_symbol(val codes, sym) {
+        match encode_symbol(codes, sym) {
             None       => Err(CompressError::SymbolNotInTree),
             Some(bits) => encode_symbols(symbols, codes, write_code(w, bits), i + 1),
         }
@@ -93,22 +93,22 @@ partial fn encode_symbols(
 pub partial fn decompress_bytes(
     input:    List[Byte],
     primary:  Int,
-    freqs:    val List[Int],
+    freqs:    List[Int],
 ) -> Result[List[Byte], CompressError] {
-    match build_tree(val freqs) {
+    match build_tree(freqs) {
         None        => Err(CompressError::HuffmanFailed),
         Some(result) => {
             let n_total: Int = freqs_total(freqs);
             let mtf_decoded: List[Int] = huffman_decode_stream(input, result.tree, n_total);
-            let bwt_data: List[Byte] = mtf_decode(val mtf_decoded);
+            let bwt_data: List[Byte] = mtf_decode(mtf_decoded);
             let bwt_block: BwtResult = BwtResult { data: bwt_data, primary: primary };
             let rle_out: List[Byte] = bwt_decode(bwt_block);
-            Ok(rle_decode(val rle_out))
+            Ok(rle_decode(rle_out))
         },
     }
 }
 
-fn freqs_total(freqs: val List[Int]) -> Int {
+fn freqs_total(val freqs: List[Int]) -> Int {
     let acc: ref Int = 0;
     for i in range(0, freqs.len()) {
         acc = acc + freqs.get(i).unwrap_or(0)
@@ -176,7 +176,7 @@ partial fn main() -> Unit ! Console {
     let input: List[Byte] = to_bytes("AAAAAAAABBBBCCCCDEFGHIJK");
     println("bzip demo");
     println("input length:  ".concat(input.len().to_string()));
-    match compress_bytes(val input) {
+    match compress_bytes(input) {
         Err(e) => {
             let msg: String = match e {
                 CompressError::EmptyInput      => "empty input",

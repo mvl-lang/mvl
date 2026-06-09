@@ -21,7 +21,7 @@ pub type HuffmanTree = enum {
 }
 
 // Extract the weight from any tree node — exhaustive match demonstrates R3.
-pub total fn tree_weight(t: val HuffmanTree) -> Int {
+pub total fn tree_weight(val t: HuffmanTree) -> Int {
     match t {
         HuffmanTree::Leaf(_, w)    => w + 0,
         HuffmanTree::Node(w, _, _) => w + 0,
@@ -39,7 +39,7 @@ pub type BuildResult = struct {
 
 // Count symbol frequencies from a symbol stream.
 // Returns a List[Int] of length 256; index i = frequency of symbol i.
-pub total fn count_freqs(data: val List[Int]) -> List[Int] {
+pub total fn count_freqs(val data: List[Int]) -> List[Int] {
     let freqs: ref List[Int] = range(0, 256).map(zero_int);
     for i in range(0, data.len()) {
         let sym: Int = data.get(i).unwrap_or(0);
@@ -88,7 +88,7 @@ type BuildState = struct {
 
 // Build a Huffman tree from a frequency table.
 // Returns None only if all frequencies are zero (empty data).
-pub total fn build_tree(freqs: val List[Int]) -> Option[BuildResult] {
+pub total fn build_tree(val freqs: List[Int]) -> Option[BuildResult] {
     let init: InitState = build_init(freqs);
     if init.queue.is_empty() {
         None
@@ -120,7 +120,7 @@ fn empty_code(_x: Int) -> List[Int] { [] }
 
 // Build the initial priority queue: one leaf per symbol with freq > 0.
 // Uses a state struct so the for body is a single assignment (no nesting).
-fn build_init(freqs: val List[Int]) -> InitState {
+fn build_init(val freqs: List[Int]) -> InitState {
     let st: ref InitState = InitState { queue: [], syms: [] };
     for sym in range(0, 256) {
         st = init_step(st, freqs, sym)
@@ -128,7 +128,7 @@ fn build_init(freqs: val List[Int]) -> InitState {
     st
 }
 
-fn init_step(st: InitState, freqs: val List[Int], sym: Int) -> InitState {
+fn init_step(st: InitState, val freqs: List[Int], sym: Int) -> InitState {
     let f: Int = freqs.get(sym).unwrap_or(0);
     if f > 0 {
         add_leaf(st, sym, f)
@@ -160,20 +160,20 @@ fn build_loop(init: BuildState) -> BuildState {
 // Perform one merge step: extract the two lowest-weight trees, prepend code
 // bits to their symbol sets, combine into a new node, update queue and syms.
 fn build_merge(st: BuildState) -> BuildState {
-    let li: Int  = min_weight_idx(val st.queue);
+    let li: Int  = min_weight_idx(st.queue);
     let left: HuffmanTree  = st.queue.get(li).unwrap_or(HuffmanTree::Leaf(0, 0));
     let syms_li: List[Int] = st.syms.get(li).unwrap_or([]);
     let q2: List[HuffmanTree]    = remove_at(st.queue, li);
     let syms2: List[List[Int]]   = remove_at_ll(st.syms, li);
-    let ri: Int  = min_weight_idx(val q2);
+    let ri: Int  = min_weight_idx(q2);
     let right: HuffmanTree = q2.get(ri).unwrap_or(HuffmanTree::Leaf(0, 0));
     let syms_ri: List[Int] = syms2.get(ri).unwrap_or([]);
     let q3: List[HuffmanTree]    = remove_at(q2, ri);
     let syms3: List[List[Int]]   = remove_at_ll(syms2, ri);
     // Prepend 0 to codes for left subtree, 1 for right subtree.
-    let codes1: List[List[Int]] = prepend_bit_for(st.codes, val syms_li, 0);
-    let codes2: List[List[Int]] = prepend_bit_for(codes1, val syms_ri, 1);
-    let w: Int = tree_weight(val left) + tree_weight(val right);
+    let codes1: List[List[Int]] = prepend_bit_for(st.codes, syms_li, 0);
+    let codes2: List[List[Int]] = prepend_bit_for(codes1, syms_ri, 1);
+    let w: Int = tree_weight(left) + tree_weight(right);
     let merged: HuffmanTree = HuffmanTree::Node(w, Box::new(left), Box::new(right));
     let new_syms: ref List[Int]         = syms_li;
     let new_q: ref List[HuffmanTree]    = q3;
@@ -185,7 +185,7 @@ fn build_merge(st: BuildState) -> BuildState {
 }
 
 // Prepend bit 0 or 1 to the code of every symbol in the subtree.
-fn prepend_bit_for(codes: List[List[Int]], syms: val List[Int], bit: Int) -> List[List[Int]] {
+fn prepend_bit_for(codes: List[List[Int]], val syms: List[Int], bit: Int) -> List[List[Int]] {
     let c: ref List[List[Int]] = codes;
     for i in range(0, syms.len()) {
         let sym: Int      = syms.get(i).unwrap_or(0);
@@ -204,11 +204,11 @@ fn prepend_bit(code: List[Int], bit: Int) -> List[Int] {
 
 // ── Priority-queue helpers ────────────────────────────────────────────────────
 
-fn min_weight_idx(queue: val List[HuffmanTree]) -> Int {
+fn min_weight_idx(val queue: List[HuffmanTree]) -> Int {
     let best_idx: ref Int = 0;
-    let best_w: ref Int = tree_weight(val queue.get(0).unwrap_or(HuffmanTree::Leaf(0, 0)));
+    let best_w: ref Int = tree_weight(queue.get(0).unwrap_or(HuffmanTree::Leaf(0, 0)));
     for i in range(1, queue.len()) {
-        let w: Int = tree_weight(val queue.get(i).unwrap_or(HuffmanTree::Leaf(0, 0)));
+        let w: Int = tree_weight(queue.get(i).unwrap_or(HuffmanTree::Leaf(0, 0)));
         if w < best_w {
             best_idx = i;
             best_w = w
@@ -237,7 +237,7 @@ fn remove_at_ll(list: List[List[Int]], idx: Int) -> List[List[Int]] {
 
 // Encode a symbol: look up its precomputed code in the codes table.
 // Returns None if sym is absent from the tree (code is empty list).
-pub total fn encode_symbol(codes: val List[List[Int]], sym: Int) -> Option[List[Int]] {
+pub total fn encode_symbol(val codes: List[List[Int]], sym: Int) -> Option[List[Int]] {
     let code: List[Int] = codes.get(sym).unwrap_or([]);
     if code.len() > 0 {
         Some(code)
@@ -250,15 +250,15 @@ pub total fn encode_symbol(codes: val List[List[Int]], sym: Int) -> Option[List[
 
 // Find which symbol has the given bit sequence as its code.
 // Returns -1 if no match (should not occur for valid compressed streams).
-pub total fn find_code(codes: val List[List[Int]], bits: List[Int]) -> Int {
+pub total fn find_code(val codes: List[List[Int]], bits: List[Int]) -> Int {
     let found: ref Int = -1;
     for sym in range(0, 256) {
-        found = try_match(codes, val bits, sym, found)
+        found = try_match(codes, bits, sym, found)
     }
     found
 }
 
-fn try_match(codes: val List[List[Int]], bits: val List[Int], sym: Int, current: Int) -> Int {
+fn try_match(val codes: List[List[Int]], val bits: List[Int], sym: Int, current: Int) -> Int {
     if current >= 0 {
         current
     } else {
@@ -275,21 +275,21 @@ fn try_match(codes: val List[List[Int]], bits: val List[Int], sym: Int, current:
 
 test fn tree_weight_leaf() -> Unit {
     let t: HuffmanTree = HuffmanTree::Leaf(65, 10);
-    assert_eq(tree_weight(val t), 10)
+    assert_eq(tree_weight(t), 10)
 }
 
 test fn tree_weight_node() -> Unit {
     let left: HuffmanTree  = HuffmanTree::Leaf(65, 3);
     let right: HuffmanTree = HuffmanTree::Leaf(66, 7);
     let node: HuffmanTree  = HuffmanTree::Node(10, Box::new(left), Box::new(right));
-    assert_eq(tree_weight(val node), 10)
+    assert_eq(tree_weight(node), 10)
 }
 
 test fn build_tree_two_symbols() -> Unit {
     let freqs: ref List[Int] = range(0, 256).map(zero_int);
     freqs = int_list_set(freqs, 65, 3);
     freqs = int_list_set(freqs, 66, 7);
-    let result_opt: Option[BuildResult] = build_tree(val freqs);
+    let result_opt: Option[BuildResult] = build_tree(freqs);
     let is_some: Bool = match result_opt {
         None    => false,
         Some(_) => true,
@@ -301,11 +301,11 @@ test fn encode_symbol_finds_code() -> Unit {
     let freqs: ref List[Int] = range(0, 256).map(zero_int);
     freqs = int_list_set(freqs, 65, 3);
     freqs = int_list_set(freqs, 66, 7);
-    let result_opt: Option[BuildResult] = build_tree(val freqs);
+    let result_opt: Option[BuildResult] = build_tree(freqs);
     let found: Bool = match result_opt {
         None         => false,
         Some(result) => {
-            let bits: Option[List[Int]] = encode_symbol(val result.codes, 65);
+            let bits: Option[List[Int]] = encode_symbol(result.codes, 65);
             match bits {
                 None    => false,
                 Some(_) => true,

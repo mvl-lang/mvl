@@ -14,6 +14,7 @@ FULL=0
 for arg in "$@"; do
     case "$arg" in
         --llvm) TEST_TARGET="test-llvm" ;;
+        --smoke) TEST_TARGET="smoke" ;;
         --full) FULL=1 ;;
         -h|--help)
             echo ""
@@ -23,6 +24,7 @@ for arg in "$@"; do
             echo ""
             echo "Options:"
             echo "  --llvm    Use LLVM backend (runs \`make test-llvm\` instead of \`make test\`)"
+            echo "  --smoke   Run Rust transpiler smoke build (runs \`make smoke\` instead of \`make test\`)"
             echo "  --full    Also run \`make check\`, \`make test-solver\`, and \`make smoke\` per example"
             echo "  -h, --help  Show this help and exit"
             echo ""
@@ -52,11 +54,16 @@ echo ""
 echo "  Using: $MVL_BIN  ($MVL_VERSION)"
 echo ""
 
-pass=0; fail=0
+pass=0; fail=0; skip=0
 
 run_target() {
     local dir="$1" target="$2"
     make -C "$dir" --no-print-directory "$target" 2>&1
+}
+
+has_target() {
+    local dir="$1" target="$2"
+    grep -q "^${target}:" "$dir/Makefile" 2>/dev/null
 }
 
 for dir in "$SCRIPT_DIR"/*/; do
@@ -84,6 +91,11 @@ for dir in "$SCRIPT_DIR"/*/; do
             pass=$((pass + 1))
         fi
     else
+        if ! has_target "$dir" "$TEST_TARGET"; then
+            printf "  %-20s  \033[33m-  SKIP\033[0m\n" "$name"
+            skip=$((skip + 1))
+            continue
+        fi
         printf "  %-20s  " "$name"
         if out=$(run_target "$dir" "$TEST_TARGET" 2>&1); then
             printf "\033[32m✓  PASS\033[0m\n"
@@ -97,9 +109,13 @@ for dir in "$SCRIPT_DIR"/*/; do
 done
 echo ""
 
+skip_msg=""
+if [ "$skip" -gt 0 ]; then
+    skip_msg=" ($skip skipped)"
+fi
 if [ "$fail" -eq 0 ]; then
-    printf "  \033[32m✓  All %d example(s) passed\033[0m\n\n" "$pass"
+    printf "  \033[32m✓  All %d example(s) passed%s\033[0m\n\n" "$pass" "$skip_msg"
 else
-    printf "  \033[31m✗  %d of %d example(s) failed\033[0m\n\n" "$fail" "$((pass + fail))"
+    printf "  \033[31m✗  %d of %d example(s) failed%s\033[0m\n\n" "$fail" "$((pass + fail))" "$skip_msg"
     exit 1
 fi

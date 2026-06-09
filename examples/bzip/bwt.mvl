@@ -4,7 +4,7 @@
 //
 // Byte values are stored as Byte (u8) — same density as Rust's Vec<u8>.
 //
-// R2 (memory safety): encode borrows input via val List[Byte] — avoids cloning
+// R2 (memory safety): encode borrows input via List[Byte] — avoids cloning
 //   blocks that can be up to 900KB. Only rotation metadata is allocated.
 // R3 (totality): all for-loop helpers are bounded.
 // R7 (effects): pure — no file or console access.
@@ -15,7 +15,7 @@ pub type BwtResult = struct {
 }
 
 // Encode: sort all cyclic rotations, extract the last column.
-pub total fn bwt_encode(input: val List[Byte]) -> BwtResult {
+pub total fn bwt_encode(val input: List[Byte]) -> BwtResult {
     let n: Int = input.len();
     let rotations: ref List[List[Byte]] = [];
     for i in range(0, n) {
@@ -36,7 +36,7 @@ pub total fn bwt_encode(input: val List[Byte]) -> BwtResult {
 }
 
 // Build cyclic rotation starting at index i: input[i..] ++ input[..i]
-fn make_rotation(input: val List[Byte], n: Int, i: Int) -> List[Byte] {
+fn make_rotation(val input: List[Byte], n: Int, i: Int) -> List[Byte] {
     let rot: ref List[Byte] = input.slice(i, n);
     let head: List[Byte] = input.slice(0, i);
     rot.extend(head);
@@ -47,8 +47,8 @@ fn make_rotation(input: val List[Byte], n: Int, i: Int) -> List[Byte] {
 pub total fn bwt_decode(block: BwtResult) -> List[Byte] {
     let owned: BwtResult = block;
     let n: Int = owned.data.len();
-    let first: List[Byte] = sort_copy(val owned.data);
-    let lf: List[Int] = build_t(val owned.data, val first, n);
+    let first: List[Byte] = sort_copy(owned.data);
+    let lf: List[Int] = build_t(owned.data, first, n);
     let fl: List[Int] = invert_perm(lf, n);
     let result: ref List[Byte] = [];
     let pos: ref Int = owned.primary;
@@ -70,7 +70,7 @@ fn invert_perm(perm: List[Int], n: Int) -> List[Int] {
 }
 
 // Build the T-vector for BWT decode.
-fn build_t(last: val List[Byte], first: val List[Byte], n: Int) -> List[Int] {
+fn build_t(val last: List[Byte], val first: List[Byte], n: Int) -> List[Int] {
     let seen: ref List[Int] = range(0, 256).map(zero_int);
     let first_occ: List[Int] = build_first_occ(first, n);
     let t: ref List[Int] = range(0, n).map(zero_int);
@@ -85,7 +85,7 @@ fn build_t(last: val List[Byte], first: val List[Byte], n: Int) -> List[Int] {
 }
 
 // Build first-occurrence table.
-fn build_first_occ(first: val List[Byte], n: Int) -> List[Int] {
+fn build_first_occ(val first: List[Byte], n: Int) -> List[Int] {
     let occ: ref List[Int] = range(0, 256).map(|_x: Int| -> Int { n });
     for i in range(0, n) {
         let sym: Int = first.get(i).unwrap_or(from_int(0)).to_int();
@@ -98,7 +98,7 @@ fn build_first_occ(first: val List[Byte], n: Int) -> List[Int] {
 
 // ── Shared helpers ─────────────────────────────────────────────────────────────
 
-fn sort_copy(data: val List[Byte]) -> List[Byte] {
+fn sort_copy(val data: List[Byte]) -> List[Byte] {
     let copy: List[Byte] = data.slice(0, data.len());
     copy.sort()
 }
@@ -123,20 +123,20 @@ fn b(xs: List[Int]) -> List[Byte] {
 test fn bwt_known_transform() -> Unit {
     // "banana" = [98, 97, 110, 97, 110, 97]; BWT primary index = 3
     let input: List[Byte] = b([98, 97, 110, 97, 110, 97]);
-    let result: BwtResult = bwt_encode(val input);
+    let result: BwtResult = bwt_encode(input);
     assert_eq(result.primary, 3)
 }
 
 test fn bwt_roundtrip_short() -> Unit {
     let input: List[Byte] = b([104, 101, 108, 108, 111]); // "hello"
-    let encoded: BwtResult = bwt_encode(val input);
+    let encoded: BwtResult = bwt_encode(input);
     let decoded: List[Byte] = bwt_decode(encoded);
     assert_eq(decoded, input)
 }
 
 test fn bwt_roundtrip_repeated_bytes() -> Unit {
     let input: List[Byte] = b([65, 65, 65, 66, 66, 65]); // AAABBA
-    let encoded: BwtResult = bwt_encode(val input);
+    let encoded: BwtResult = bwt_encode(input);
     let decoded: List[Byte] = bwt_decode(encoded);
     assert_eq(decoded, input)
 }

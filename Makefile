@@ -2,7 +2,7 @@
 .ONESHELL:
 SHELL := /bin/bash
 
-.PHONY: help version build build-memory build-llvm-runtime build-release test test-unit test-integration test-requirements test-error-messages test-fmt-roundtrip test-corpus test-solver test-stdlib check-compiler assure-compiler test-mvl test-bdd test-backend-rust test-backend-llvm test-cross-backend test-tree-sitter test-grammar-coverage test-examples coverage validate-keywords lint mvl-lint format format-check format-mvl format-mvl-check assurance assurance-gate check-adr docs docs-serve tree-sitter-build install install-nvim setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
+.PHONY: help version build build-memory build-llvm-runtime build-release test test-unit test-integration test-requirements test-error-messages test-fmt-roundtrip test-corpus test-solver test-stdlib check-compiler assure-compiler test-mvl test-bdd test-backend-rust test-backend-llvm test-cross-backend test-tree-sitter test-grammar-coverage test-examples test-examples-rust test-examples-llvm coverage validate-keywords lint mvl-lint format format-check format-mvl format-mvl-check assurance assurance-gate check-adr docs docs-serve tree-sitter-build install install-nvim setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
 
 .DEFAULT_GOAL := help
 
@@ -102,7 +102,8 @@ test: build build-llvm-runtime ## Run all test suites and print a one-line PASS/
 	run_suite "Backend (Rust)"    test-backend-rust; \
 	run_suite "LLVM backend"      test-backend-llvm; \
 	run_suite "Cross-backend"     test-cross-backend; \
-	run_suite "Examples"          test-examples; \
+	run_suite "Examples (Rust)"   test-examples-rust; \
+	run_suite "Examples (LLVM)"   test-examples-llvm; \
 	run_suite "Tree-sitter"       test-tree-sitter; \
 	run_suite "Grammar coverage"  test-grammar-coverage; \
 	run_suite "MVL compiler"      test-mvl; \
@@ -251,9 +252,17 @@ test-cross-backend: build build-llvm-runtime ## Run Rust integration tests for b
 	@echo "Running cross-backend tests (transpiler vs LLVM parity)..."
 	cargo test --test cross_backend
 
-test-examples: build build-llvm-runtime ## Run `make test` for every example subdirectory (BACKEND=llvm for LLVM backend)
+test-examples: build ## Run `make test` for every example subdirectory
 	@./target/debug/mvl install
-	@examples/test-all.sh $(if $(filter llvm,$(BACKEND)),--llvm)
+	@examples/test-all.sh
+
+test-examples-rust: build ## Run Rust transpiler smoke build for every example subdirectory
+	@./target/debug/mvl install
+	@examples/test-all.sh --smoke
+
+test-examples-llvm: build build-llvm-runtime ## Run LLVM backend tests for every example subdirectory
+	@./target/debug/mvl install
+	@examples/test-all.sh --llvm
 
 # === Quality ===
 

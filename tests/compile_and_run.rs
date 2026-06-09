@@ -11,7 +11,6 @@
 //!   5. struct_value_semantics.mvl — struct value semantics, Clone-on-pass
 //!   6. safe_division.mvl  — Result<T,E>, match on Result, IFC labels (Req 5)
 //!   7. linked_list.mvl    — recursive enum (Box<T>), deref, total fn recursion
-//!   8. examples/log_analyzer — multi-file, bridge.rs, IFC labels end-to-end
 
 use std::process::Command;
 
@@ -267,71 +266,6 @@ fn auth_handler_check_passes() {
     assert!(
         stdout.contains("OK"),
         "expected 'OK' in check output:\n{stdout}"
-    );
-}
-
-// ── 8. examples/log_analyzer (multi-file, bridge.rs) ─────────────────────
-
-/// Multi-file example: log_analyzer uses main.mvl + parser.mvl + utils.mvl
-/// with a Rust bridge (bridge.rs). `mvl build` must succeed end-to-end.
-///
-/// We pass the *directory* (not main.mvl) so the crate name is "log_analyzer",
-/// avoiding the `/tmp/mvl_build_main` collision with bridge tests.
-///
-/// Issue #195: multi-file builds need CI coverage.
-#[test]
-fn log_analyzer_build_succeeds() {
-    let path = format!("{}/examples/log_analyzer", env!("CARGO_MANIFEST_DIR"));
-    let out = run_mvl_build(&path);
-    assert!(
-        out.status.success(),
-        "mvl build must succeed for examples/log_analyzer;\n\
-         stdout: {}\nstderr: {}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr),
-    );
-}
-
-/// Multi-file example: log_analyzer run produces a JSON summary.
-///
-/// logs.jsonl is gitignored (*.jsonl), so we generate a small inline fixture.
-/// 4 entries: 1 error, 1 warn, 2 info → expected: {"count":4,"errors":1,"warnings":1,"infos":2}
-#[test]
-fn log_analyzer_run_produces_json_summary() {
-    use std::io::Write;
-    // Pass the directory so crate_name = "log_analyzer" (not "main").
-    let log_analyzer_dir = format!("{}/examples/log_analyzer", env!("CARGO_MANIFEST_DIR"));
-    // Write a small JSONL fixture to a temp file.
-    let mut tmp = tempfile::NamedTempFile::new().expect("create temp file");
-    writeln!(
-        tmp,
-        r#"{{"level":"error","message":"disk full","timestamp":1000}}"#
-    )
-    .unwrap();
-    writeln!(
-        tmp,
-        r#"{{"level":"warn","message":"retrying","timestamp":1001}}"#
-    )
-    .unwrap();
-    writeln!(
-        tmp,
-        r#"{{"level":"info","message":"started","timestamp":1002}}"#
-    )
-    .unwrap();
-    writeln!(
-        tmp,
-        r#"{{"level":"info","message":"ready","timestamp":1003}}"#
-    )
-    .unwrap();
-    let logs_path = tmp.path().to_string_lossy().to_string();
-    let out = Command::new(mvl_bin())
-        .args(["run", &log_analyzer_dir, "--", "--file", &logs_path])
-        .output()
-        .expect("failed to run mvl run for log_analyzer");
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(
-        stdout.contains("\"count\":4"),
-        "expected JSON summary with \"count\":4, got:\n{stdout}"
     );
 }
 
@@ -860,48 +794,6 @@ fn stdlib_proven_verbose_reports_profile() {
     assert!(
         stderr.contains("stdlib profile: proven"),
         "expected 'stdlib profile: proven' in stderr, got:\n{stderr}"
-    );
-}
-
-// ── 9. examples/snake_game (multi-file, bridge.rs, ! Terminal + Clock) ───────
-
-/// Multi-file example: snake_game uses game.mvl + input.mvl + render.mvl +
-/// main.mvl with a Rust bridge (bridge.rs). `mvl build` must succeed end-to-end.
-///
-/// `mvl run` is intentionally omitted — the game requires an interactive
-/// terminal (raw mode via stty) and does not produce machine-verifiable stdout
-/// output in a CI environment.
-///
-/// Issue #175: demonstrates pure game core with ! Terminal + Clock effects at
-/// the I/O boundary.
-#[test]
-fn snake_game_build_succeeds() {
-    let path = format!("{}/examples/snake_game", env!("CARGO_MANIFEST_DIR"));
-    let out = run_mvl_build(&path);
-    assert!(
-        out.status.success(),
-        "mvl build must succeed for examples/snake_game;\n\
-         stdout: {}\nstderr: {}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr),
-    );
-}
-
-/// Run the pure-logic tests (game_test.mvl + input.mvl) in CI.
-/// `mvl test <dir>` discovers all test functions in the directory including
-/// input.mvl tests. No terminal required.
-#[test]
-fn snake_game_tests_pass() {
-    let dir = format!("{}/examples/snake_game", env!("CARGO_MANIFEST_DIR"));
-    let out = Command::new(mvl_bin())
-        .args(["test", &dir])
-        .output()
-        .expect("failed to run mvl test");
-    assert!(
-        out.status.success(),
-        "mvl test examples/snake_game failed;\nstdout: {}\nstderr: {}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr),
     );
 }
 
