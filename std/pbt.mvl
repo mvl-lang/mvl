@@ -398,7 +398,7 @@ partial fn run_property_string(
         let j: ref Int = 0;
         while j < len {
             let idx: Int = int(0, 94);
-            s = s.concat(printable.char_at(idx));
+            s = s.concat(printable.char_at(idx).unwrap_or(""));
             j = j + 1
         };
         if !prop(s) { failed = true; failing_val = s };
@@ -624,13 +624,13 @@ pub fn mutate_string(s: String) -> String ! Random {
         match int(0, 2) {
             0 => s.substring(0, n - 1),
             1 => {
-                let c: String = s.char_at(0);
+                let c: String = s.char_at(0).unwrap_or("");
                 c.concat(s)
             },
             _ => {
                 if n >= 2 {
-                    let a: String = s.char_at(0);
-                    let b: String = s.char_at(1);
+                    let a: String = s.char_at(0).unwrap_or("");
+                    let b: String = s.char_at(1).unwrap_or("");
                     let rest: String = s.substring(2, n);
                     b.concat(a).concat(rest)
                 } else {
@@ -805,13 +805,13 @@ pub partial fn property_check_with_mutation_int_verbose(
 pub partial fn fuzz_check_bytes(
     name: String,
     gen: BytesGen,
-    prop: fn(List[Int]) -> Bool,
+    prop: fn(List[Byte]) -> Bool,
     config: FuzzConfig
 ) -> Unit ! Random {
     let i: ref Int = 0;
     while i < config.max_cases {
         let n: Int = int(gen.min_len, gen.max_len);
-        let bs: List[Int] = bytes(n);
+        let bs: List[Byte] = bytes(n);
         if !prop(bs) {
             panic(name.concat(": property failed on raw byte input"))
         };
@@ -840,7 +840,7 @@ pub partial fn fuzz_check_string(
         let j: ref Int = 0;
         while j < n {
             let idx: Int = int(0, charset_len - 1);
-            s = s.concat(charset.char_at(idx));
+            s = s.concat(charset.char_at(idx).unwrap_or(""));
             j = j + 1
         };
         if !prop(s) {

@@ -37,6 +37,24 @@ pub extern "C" fn _mvl_float_to_string(v: f64) -> *mut c_void {
     unsafe { _mvl_string_new(bytes.as_ptr(), bytes.len()) as *mut c_void }
 }
 
+// ── Float → Int checked conversion (#1262) ───────────────────────────────────
+
+/// Checked Float→Int: writes `*out = truncated` and returns 0 (Some) when `v`
+/// is finite and within i64 range; returns 1 (None) for NaN, ±Inf, or
+/// out-of-range values.
+///
+/// # Safety
+/// `out` must be a valid non-null writable pointer.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_float_checked_to_int(v: f64, out: *mut i64) -> i8 {
+    if v.is_finite() && v >= (i64::MIN as f64) && v <= (i64::MAX as f64) {
+        *out = v as i64;
+        0 // Some
+    } else {
+        1 // None
+    }
+}
+
 // ── Primitive dispatch ────────────────────────────────────────────────────────
 
 /// Return a random integer in `[min, max]` (inclusive). Both args and return are i64.
@@ -55,8 +73,8 @@ pub extern "C" fn _mvl_random_float() -> f64 {
 
 /// Return `n` pseudo-random bytes as a `*mut MvlArray` of i64 values in [0, 255].
 ///
-/// Each element is an i64 byte value. The LLVM caller is responsible for
-/// dropping the array via `_mvl_array_drop`. Wired via `I64ReturnsPtrArg`.
+/// Each element is stored as i64 in the MvlArray (LLVM backend uniform layout).
+/// The LLVM caller is responsible for dropping the array via `_mvl_array_drop`.
 #[no_mangle]
 #[allow(unsafe_code)]
 pub extern "C" fn _mvl_random_bytes(n: i64) -> *mut crate::memory::MvlArray {
@@ -64,8 +82,9 @@ pub extern "C" fn _mvl_random_bytes(n: i64) -> *mut crate::memory::MvlArray {
     let vals = random::bytes(n);
     let arr = unsafe { _mvl_array_new(std::mem::size_of::<i64>(), vals.len().max(1)) };
     for v in vals {
+        let wide = v as i64;
         unsafe {
-            crate::memory_ops::_mvl_array_push(arr, (&v as *const i64).cast());
+            crate::memory_ops::_mvl_array_push(arr, (&wide as *const i64).cast());
         }
     }
     arr

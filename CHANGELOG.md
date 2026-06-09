@@ -2,6 +2,32 @@
 
 ## [Unreleased]
 
+## [0.192.0] - 2026-06-09
+
+### Changed
+
+- **BREAKING: `String::char_at` returns `Option[String]`** instead of sentinel `""` — callers must handle `None` (#1263)
+- **BREAKING: `String::byte_at` returns `Option[Byte]`** instead of sentinel `from_int(0)` — callers must handle `None` (#1263)
+- **BREAKING: `random.bytes()` returns `List[Byte]`** instead of `List[Int]` — fuzz callbacks updated (#1266)
+- **`String::to_upper` / `to_lower` promoted to builtins** with runtime backing, removed from UFCS transpile path (#1263)
+
+### Added
+
+- **`float_checked_to_int` builtin** — safe Float→Int conversion returning `Option[Int]`, with NaN/Infinity/range checks (#1264)
+- **Refinement constraints on `int_pow`, `int_shift_left`, `int_shift_right`** — `exp`/`amount` params require `self >= 0` (#1261)
+- **Refinement constraints on `List::windows` and `List::chunks`** — size param requires `self >= 1` (#1262)
+- **Checked division and remainder** in Rust backend — `BinaryOp::Div` and `BinaryOp::Rem` now use checked arithmetic (#1265)
+- **`random.int()` overflow fix** — uses `i128` arithmetic to prevent panic on full-range `[Int.min, Int.max]` (#1267)
+
+### Removed
+
+- **`pkg/zmq/` local package** — removed in-repo copy; relies solely on external `pkg-zmq` registry package (#1268)
+
+### Fixed
+
+- **82 call-site migrations** across std/, tests/, and examples/ for `char_at`/`byte_at` Option API (#1263)
+- **`pkg-zmq` updated to v0.2.0** in lock file to match new `byte_at` API (#1268)
+
 ## [0.191.0] - 2026-06-09
 
 ### Added

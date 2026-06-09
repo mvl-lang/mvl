@@ -17,7 +17,7 @@
 // runnable via `mvl run compiler/main.mvl` or `make -C tests/spikes/001-parser compiler`.
 //
 // Lexer design:
-//   - src.char_at(pos) → single-char String; "" when pos ≥ len.
+//   - src.char_at(pos).unwrap_or("") → single-char String; "" when pos ≥ len.
 //     Provided by the implicit prelude (std/strings.mvl) — no explicit import.
 //   - Scanner helpers (scan_word, scan_number, scan_string_body,
 //     scan_comment_end) are partial fn — they use while-loops.
@@ -82,7 +82,7 @@ fn is_keyword(s: String) -> Bool {
 
 partial fn scan_word(src: String, pos: Int, src_len: Int) -> ScanResult {
     let p: ref Int = pos;
-    while p < src_len && is_alnum(src.char_at(p)) {
+    while p < src_len && is_alnum(src.char_at(p).unwrap_or("")) {
         p = p + 1
     }
     let lexeme: String = src.substring(pos, p);
@@ -92,12 +92,12 @@ partial fn scan_word(src: String, pos: Int, src_len: Int) -> ScanResult {
 
 partial fn scan_number(src: String, pos: Int, src_len: Int) -> ScanResult {
     let p: ref Int = pos;
-    while p < src_len && is_digit(src.char_at(p)) {
+    while p < src_len && is_digit(src.char_at(p).unwrap_or("")) {
         p = p + 1
     }
-    if p < src_len && src.char_at(p) == "." && is_digit(src.char_at(p + 1)) {
+    if p < src_len && src.char_at(p).unwrap_or("") == "." && is_digit(src.char_at(p + 1).unwrap_or("")) {
         p = p + 1;
-        while p < src_len && is_digit(src.char_at(p)) {
+        while p < src_len && is_digit(src.char_at(p).unwrap_or("")) {
             p = p + 1
         }
         ScanResult { cat: TokenCat::Number, lexeme: src.substring(pos, p), end_pos: p }
@@ -108,7 +108,7 @@ partial fn scan_number(src: String, pos: Int, src_len: Int) -> ScanResult {
 
 partial fn scan_comment_end(src: String, pos: Int, src_len: Int) -> Int {
     let p: ref Int = pos;
-    while p < src_len && src.char_at(p) != "\n" {
+    while p < src_len && src.char_at(p).unwrap_or("") != "\n" {
         p = p + 1
     }
     p
@@ -116,8 +116,8 @@ partial fn scan_comment_end(src: String, pos: Int, src_len: Int) -> Int {
 
 partial fn scan_string_body(src: String, pos: Int, src_len: Int) -> ScanResult {
     let p: ref Int = pos;
-    while p < src_len && src.char_at(p) != "\"" {
-        if src.char_at(p) == "\\" && p + 1 < src_len {
+    while p < src_len && src.char_at(p).unwrap_or("") != "\"" {
+        if src.char_at(p).unwrap_or("") == "\\" && p + 1 < src_len {
             p = p + 2
         } else {
             p = p + 1
@@ -169,8 +169,8 @@ partial fn lex_counts(src: String) -> Counts {
     let cm: ref Int  = 0;
 
     while pos < src_len {
-        let c: String = src.char_at(pos);
-        let c2: String = src.char_at(pos + 1);
+        let c: String = src.char_at(pos).unwrap_or("");
+        let c2: String = src.char_at(pos + 1).unwrap_or("");
 
         if is_whitespace(c) {
             pos = pos + 1

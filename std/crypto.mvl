@@ -35,7 +35,7 @@ pub builtin fn crypto_random_bytes(n: Int) -> Secret[List[Int]] ! CryptoRandom
 /// Convert a byte value (0–255) to a 2-character lowercase hex string.
 fn byte_to_hex(b: Int) -> String {
     let hex: String = "0123456789abcdef";
-    hex.char_at(b.shift_right(4).bit_and(15)).concat(hex.char_at(b.bit_and(15)))
+    hex.char_at(b.shift_right(4).bit_and(15)).unwrap_or("").concat(hex.char_at(b.bit_and(15)).unwrap_or(""))
 }
 
 /// Format 16 bytes as a UUID string (sets version 4 and RFC 4122 variant bits).

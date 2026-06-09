@@ -684,6 +684,24 @@ impl RustEmitter {
                     // Kernel builtins with `rust_emit` hints in `BUILTINS` are dispatched
                     // as `runtime_fn(receiver.clone().into(), args)`.
                     m if rust_emit_by_name(m).is_some() => {
+                        // Label-preserving methods on String need re-wrapping (#1267).
+                        let wrap_label: Option<String> =
+                            if STRING_LABEL_PRESERVING_METHODS.contains(&m) {
+                                if let Ty::Labeled(label, inner) = &receiver.ty {
+                                    if matches!(inner.as_ref(), Ty::String) {
+                                        Some(emit_label(label.as_str()).to_string())
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            };
+                        if let Some(ref lname) = wrap_label {
+                            self.push(&format!("{lname}::new("));
+                        }
                         self.push(rust_emit_by_name(m).unwrap());
                         self.push("(");
                         self.emit_expr(receiver);
@@ -693,6 +711,9 @@ impl RustEmitter {
                             self.emit_args(args);
                         }
                         self.push(")");
+                        if wrap_label.is_some() {
+                            self.push(")");
+                        }
                     }
 
                     // ── Generic Rust method fallthrough ───────────────────────────────
@@ -768,6 +789,18 @@ impl RustEmitter {
                         self.emit_expr(arg);
                     }
                     self.push(") as i64 as u8)");
+                } else if name.as_str() == "float_checked_to_int" {
+                    // Checked Float→Int: returns None for NaN, ±Inf, out-of-range.
+                    debug_assert_eq!(
+                        args.len(),
+                        1,
+                        "float_checked_to_int requires exactly one argument"
+                    );
+                    self.push("{ let __x = ");
+                    if let Some(arg) = args.first() {
+                        self.emit_expr(arg);
+                    }
+                    self.push("; if __x.is_finite() && __x >= (i64::MIN as f64) && __x <= (i64::MAX as f64) { Some(__x as i64) } else { None } }");
                 } else if name == "String::from_chars" {
                     self.push("str_from_chars(");
                     self.emit_args(args);
@@ -880,20 +913,30 @@ impl RustEmitter {
                 } else {
                     // For Int arithmetic, emit checked methods to match LLVM backend
                     // overflow behaviour (trap on overflow rather than wrapping).
-                    let is_int_arith = matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul)
-                        && matches!(expr.ty, Ty::Int);
+                    // Div/Rem: checked_div/checked_rem catch division-by-zero and
+                    // i64::MIN / -1 overflow (#1266).
+                    let is_int_arith = matches!(
+                        op,
+                        BinaryOp::Add
+                            | BinaryOp::Sub
+                            | BinaryOp::Mul
+                            | BinaryOp::Div
+                            | BinaryOp::Rem
+                    ) && matches!(expr.ty, Ty::Int);
                     if is_int_arith {
-                        let method = match op {
-                            BinaryOp::Add => "checked_add",
-                            BinaryOp::Sub => "checked_sub",
-                            BinaryOp::Mul => "checked_mul",
+                        let (method, msg) = match op {
+                            BinaryOp::Add => ("checked_add", "integer overflow"),
+                            BinaryOp::Sub => ("checked_sub", "integer overflow"),
+                            BinaryOp::Mul => ("checked_mul", "integer overflow"),
+                            BinaryOp::Div => ("checked_div", "division by zero or overflow"),
+                            BinaryOp::Rem => ("checked_rem", "remainder by zero or overflow"),
                             _ => unreachable!(),
                         };
                         self.push("(<i64>::clone(&(");
                         self.emit_expr(left);
                         self.push(&format!(")).{method}(<i64>::clone(&("));
                         self.emit_expr(right);
-                        self.push("))).expect(\"integer overflow\"))");
+                        self.push(&format!("))).expect(\"{msg}\"))"));
                     } else {
                         self.push("(");
                         self.emit_expr(left);

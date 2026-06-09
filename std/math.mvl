@@ -19,7 +19,8 @@ pub fn int_abs(n: Int) -> Int {
 /// `n` raised to the power `exp`.
 ///
 /// Transpiler-handled via direct Rust emission using checker type info (#554); stub body for free-function use.
-pub fn int_pow(n: Int, exp: Int) -> Int {
+/// Negative exponents are always a bug for integer pow — use Float for fractional powers.
+pub fn int_pow(n: Int, exp: Int where self >= 0) -> Int {
     n.pow(exp)
 }
 
@@ -79,11 +80,11 @@ pub fn int_bit_xor(a: Int, b: Int) -> Int { a.bit_xor(b) }
 /// Bitwise complement of `n`.
 pub fn int_bit_not(n: Int) -> Int { n.bit_not() }
 
-/// Shift `n` left by `amount` bits (wrapping; no panic on out-of-range).
-pub fn int_shift_left(n: Int, amount: Int) -> Int { n.shift_left(amount) }
+/// Shift `n` left by `amount` bits.  Negative shift amounts are always a bug.
+pub fn int_shift_left(n: Int, amount: Int where self >= 0) -> Int { n.shift_left(amount) }
 
-/// Shift `n` right by `amount` bits (wrapping; no panic on out-of-range).
-pub fn int_shift_right(n: Int, amount: Int) -> Int { n.shift_right(amount) }
+/// Shift `n` right by `amount` bits.  Negative shift amounts are always a bug.
+pub fn int_shift_right(n: Int, amount: Int where self >= 0) -> Int { n.shift_right(amount) }
 
 // ── Int wrapping arithmetic ───────────────────────────────────────────────────
 //
@@ -170,10 +171,15 @@ pub fn float_is_finite(x: Float) -> Bool {
 
 /// Truncate `x` toward zero and return as Int.
 ///
-/// Transpiler-handled as a Rust cast (`x as i64`); uses to_int arm.
+/// Saturating: NaN→0, ±Inf→MIN/MAX, large values clamp.
+/// For safe conversion, use `float_checked_to_int` instead.
 pub fn float_to_int(x: Float) -> Int {
     x.to_int()
 }
+
+/// Checked Float-to-Int conversion. Returns `None` for NaN, ±Infinity,
+/// and values outside the representable Int range; `Some(truncated)` otherwise.
+pub builtin fn float_checked_to_int(x: Float) -> Option[Int]
 
 /// Convert `x` to its string representation.
 pub fn float_to_string(x: Float) -> String {

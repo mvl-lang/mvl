@@ -14,7 +14,7 @@ pub builtin fn int(min: Int, max: Int) -> Int ! Random
 pub builtin fn float() -> Float ! Random
 
 /// Returns n pseudo-random bytes. Requires `! Random`.
-pub builtin fn bytes(n: Int) -> List[Int] ! Random
+pub builtin fn bytes(n: Int) -> List[Byte] ! Random
 
 /// Returns a random element from the list, or None if empty. Requires `! Random`.
 pub builtin fn choice[T](list: List[T]) -> Option[T] ! Random

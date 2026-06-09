@@ -31,15 +31,12 @@ pub fn str_chars(s: String) -> Vec<String> {
     s.chars().map(|c| c.to_string()).collect()
 }
 
-/// Return the character at index `i` (0-based). Returns `""` if out of range.
-pub fn str_char_at(s: String, i: i64) -> String {
+/// Return the character at index `i` (0-based). Returns `None` if out of range.
+pub fn str_char_at(s: String, i: i64) -> Option<String> {
     if i < 0 {
-        return String::new();
+        return None;
     }
-    s.chars()
-        .nth(i as usize)
-        .map(|c| c.to_string())
-        .unwrap_or_default()
+    s.chars().nth(i as usize).map(|c| c.to_string())
 }
 
 /// Reconstruct a `String` from a list of single-character strings.
@@ -49,18 +46,20 @@ pub fn str_from_chars(chars: Vec<String>) -> String {
 
 /// Return the byte value at character position `i` (0-based).
 ///
-/// Returns the Unicode codepoint of the i-th character, truncated to u8.
-/// For strings created via `from_bytes`, each character's codepoint equals
-/// its original byte value (Latin-1 encoding), so this round-trips correctly.
-/// Returns `0` if out of range.
-pub fn str_byte_at(s: String, i: i64) -> u8 {
+/// Returns `None` if out of range or if the character's codepoint > 255
+/// (cannot be represented as a single Byte).
+pub fn str_byte_at(s: String, i: i64) -> Option<u8> {
     if i < 0 {
-        return 0;
+        return None;
     }
-    s.chars()
-        .nth(i as usize)
-        .map(|c| c as u32 as u8)
-        .unwrap_or(0)
+    s.chars().nth(i as usize).and_then(|c| {
+        let cp = c as u32;
+        if cp <= 255 {
+            Some(cp as u8)
+        } else {
+            None
+        }
+    })
 }
 
 /// Reconstruct a `String` from a list of byte values (Latin-1 encoding).

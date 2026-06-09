@@ -505,7 +505,7 @@ impl TextEmitter {
             ("parse_int", "ptr") => self.emit_str_parse(&val, "i64", "_mvl_str_parse_int"),
             ("parse_float", "ptr") => self.emit_str_parse(&val, "double", "_mvl_str_parse_float"),
 
-            // ── String::char_at(i) → String ───────────────────────────────
+            // ── String::char_at(i) → Option[String] ──────────────────────
             ("char_at", "ptr") => {
                 let idx = match args.first() {
                     Some(a) => match self.emit_expr(a)? {
@@ -514,13 +514,20 @@ impl TextEmitter {
                     },
                     None => return Ok(None),
                 };
-                self.ensure_extern("declare ptr @_mvl_str_char_at(ptr, i64)");
-                let reg = self.next_reg();
+                self.ensure_extern("declare i8 @_mvl_str_char_at(ptr, i64, ptr)");
+                let out = self.next_reg();
+                self.push_instr(&format!("{out} = alloca ptr"));
+                let tag = self.next_reg();
                 self.push_instr(&format!(
-                    "{reg} = call ptr @_mvl_str_char_at(ptr {val}, i64 {idx})"
+                    "{tag} = call i8 @_mvl_str_char_at(ptr {val}, i64 {idx}, ptr {out})"
                 ));
-                self.reg_types.insert(reg.clone(), "ptr".into());
-                Ok(Some(reg))
+                let payload = self.next_reg();
+                self.push_instr(&format!("{payload} = load ptr, ptr {out}"));
+                let slot = self.next_reg();
+                self.push_instr(&format!("{slot} = alloca ptr"));
+                self.push_instr(&format!("store ptr {payload}, ptr {slot}"));
+                let r = self.wrap_result_pair(&tag, &slot);
+                Ok(Some(r))
             }
 
             // ── String kernel builtins (#1186) ───────────────────────────
@@ -539,7 +546,7 @@ impl TextEmitter {
                 Ok(Some(reg))
             }
 
-            // byte_at(i) → Int
+            // byte_at(i) → Option[Byte]
             ("byte_at", "ptr")
                 if !matches!(
                     self.mvl_receiver_kind(receiver),
@@ -553,13 +560,20 @@ impl TextEmitter {
                     },
                     None => return Ok(None),
                 };
-                self.ensure_extern("declare i64 @_mvl_str_byte_at(ptr, i64)");
-                let reg = self.next_reg();
+                self.ensure_extern("declare i8 @_mvl_str_byte_at(ptr, i64, ptr)");
+                let out = self.next_reg();
+                self.push_instr(&format!("{out} = alloca i64"));
+                let tag = self.next_reg();
                 self.push_instr(&format!(
-                    "{reg} = call i64 @_mvl_str_byte_at(ptr {val}, i64 {idx})"
+                    "{tag} = call i8 @_mvl_str_byte_at(ptr {val}, i64 {idx}, ptr {out})"
                 ));
-                self.reg_types.insert(reg.clone(), "i64".into());
-                Ok(Some(reg))
+                let byte_val = self.next_reg();
+                self.push_instr(&format!("{byte_val} = load i64, ptr {out}"));
+                let slot = self.next_reg();
+                self.push_instr(&format!("{slot} = alloca i64"));
+                self.push_instr(&format!("store i64 {byte_val}, ptr {slot}"));
+                let r = self.wrap_result_pair(&tag, &slot);
+                Ok(Some(r))
             }
 
             // find(sub) → Int  (-1 if not found)

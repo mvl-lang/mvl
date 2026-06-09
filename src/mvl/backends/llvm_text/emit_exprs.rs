@@ -860,6 +860,28 @@ impl TextEmitter {
             "List::filled" if args.len() == 2 => {
                 return self.emit_list_filled(&args[0], &args[1]);
             }
+            "float_checked_to_int" if args.len() == 1 => {
+                let v = match self.emit_expr(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                self.ensure_extern("declare i8 @mvl_float_checked_to_int(double, ptr)");
+                let out = self.next_reg();
+                self.push_instr(&format!("{out} = alloca i64"));
+                let tag = self.next_reg();
+                self.push_instr(&format!(
+                    "{tag} = call i8 @mvl_float_checked_to_int(double {v}, ptr {out})"
+                ));
+                // Load the value (only meaningful when tag==0, i.e. Some).
+                let val = self.next_reg();
+                self.push_instr(&format!("{val} = load i64, ptr {out}"));
+                // Alloca for the payload pointer expected by { i8, ptr }.
+                let slot = self.next_reg();
+                self.push_instr(&format!("{slot} = alloca i64"));
+                self.push_instr(&format!("store i64 {val}, ptr {slot}"));
+                let r = self.wrap_result_pair(&tag, &slot);
+                return Ok(Some(r));
+            }
             _ => {}
         }
 
