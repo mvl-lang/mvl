@@ -42,13 +42,15 @@ fn next_u64() -> u64 {
 // ── Public stdlib functions ────────────────────────────────────────────────
 
 /// Returns a random integer in `[min, max]` (inclusive). Requires `! Random`.
+///
+/// Uses i128 arithmetic to avoid overflow when `max - min` spans the full i64 range.
 pub fn int(min: i64, max: i64) -> i64 {
     if min >= max {
         return min;
     }
-    let range = (max - min) as u64 + 1;
-    let r = next_u64() % range;
-    min + r as i64
+    let range = (max as i128) - (min as i128) + 1; // always positive for max > min
+    let r = (next_u64() as u128) % (range as u128);
+    ((min as i128) + (r as i128)) as i64
 }
 
 /// Returns a random float in `[0.0, 1.0)`. Requires `! Random`.
@@ -58,15 +60,15 @@ pub fn float() -> f64 {
     f64::from_bits(bits) - 1.0
 }
 
-/// Returns `n` pseudo-random bytes as a `Vec<i64>` in `[0, 255]`. Requires `! Random`.
-pub fn bytes(n: i64) -> Vec<i64> {
+/// Returns `n` pseudo-random bytes as a `Vec<u8>`. Requires `! Random`.
+pub fn bytes(n: i64) -> Vec<u8> {
     let count = n.max(0) as usize;
     let mut out = Vec::with_capacity(count);
     let mut i = 0;
     while i < count {
         let word = next_u64();
         for shift in (0..8u32).take(count - i) {
-            out.push(((word >> (shift * 8)) & 0xFF) as i64);
+            out.push(((word >> (shift * 8)) & 0xFF) as u8);
         }
         i += 8;
     }
@@ -118,6 +120,14 @@ mod tests {
     }
 
     #[test]
+    fn int_full_i64_range_does_not_overflow() {
+        // This previously panicked due to (max - min) overflowing i64.
+        let v = int(i64::MIN, i64::MAX);
+        // Just verify it doesn't panic — any i64 is a valid result.
+        let _ = v;
+    }
+
+    #[test]
     fn float_in_unit_interval() {
         for _ in 0..1000 {
             let v = float();
@@ -134,10 +144,11 @@ mod tests {
     }
 
     #[test]
-    fn bytes_values_in_byte_range() {
-        for b in bytes(64) {
-            assert!((0..=255).contains(&b), "byte out of range: {b}");
-        }
+    fn bytes_values_are_u8() {
+        let bs = bytes(64);
+        assert_eq!(bs.len(), 64);
+        // u8 is always in [0, 255] by construction — verify non-trivial output.
+        assert!(bs.iter().any(|&b| b > 0), "all-zero output unlikely");
     }
 
     #[test]

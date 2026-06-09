@@ -805,13 +805,13 @@ pub partial fn property_check_with_mutation_int_verbose(
 pub partial fn fuzz_check_bytes(
     name: String,
     gen: BytesGen,
-    prop: fn(List[Int]) -> Bool,
+    prop: fn(List[Byte]) -> Bool,
     config: FuzzConfig
 ) -> Unit ! Random {
     let i: ref Int = 0;
     while i < config.max_cases {
         let n: Int = int(gen.min_len, gen.max_len);
-        let bs: List[Int] = bytes(n);
+        let bs: List[Byte] = bytes(n);
         if !prop(bs) {
             panic(name.concat(": property failed on raw byte input"))
         };

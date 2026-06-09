@@ -29,12 +29,12 @@ test fn random_float_in_unit_interval() -> Unit ! Random {
 // ── bytes ─────────────────────────────────────────────────────────────────────
 
 test fn random_bytes_zero_returns_empty() -> Unit ! Random {
-    let bs: List[Int] = bytes(0);
+    let bs: List[Byte] = bytes(0);
     assert_eq(bs.len(), 0);
 }
 
 test fn random_bytes_returns_requested_length() -> Unit ! Random {
-    let bs: List[Int] = bytes(8);
+    let bs: List[Byte] = bytes(8);
     assert_eq(bs.len(), 8);
 }
 

@@ -73,8 +73,8 @@ pub extern "C" fn _mvl_random_float() -> f64 {
 
 /// Return `n` pseudo-random bytes as a `*mut MvlArray` of i64 values in [0, 255].
 ///
-/// Each element is an i64 byte value. The LLVM caller is responsible for
-/// dropping the array via `_mvl_array_drop`. Wired via `I64ReturnsPtrArg`.
+/// Each element is stored as i64 in the MvlArray (LLVM backend uniform layout).
+/// The LLVM caller is responsible for dropping the array via `_mvl_array_drop`.
 #[no_mangle]
 #[allow(unsafe_code)]
 pub extern "C" fn _mvl_random_bytes(n: i64) -> *mut crate::memory::MvlArray {
@@ -82,8 +82,9 @@ pub extern "C" fn _mvl_random_bytes(n: i64) -> *mut crate::memory::MvlArray {
     let vals = random::bytes(n);
     let arr = unsafe { _mvl_array_new(std::mem::size_of::<i64>(), vals.len().max(1)) };
     for v in vals {
+        let wide = v as i64;
         unsafe {
-            crate::memory_ops::_mvl_array_push(arr, (&v as *const i64).cast());
+            crate::memory_ops::_mvl_array_push(arr, (&wide as *const i64).cast());
         }
     }
     arr
