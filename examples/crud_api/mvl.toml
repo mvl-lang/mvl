@@ -1,7 +1,7 @@
 [package]
 name = "crud_api"
-version = "0.2.0"
-license = "MIT"
+version = "0.2.1"
+license = "Apache-2.0"
 requires-mvl = ">=0.161.2"
 
 [dependencies]

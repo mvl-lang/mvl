@@ -181,6 +181,50 @@ requires-mvl = ">=0.1.0"
     assert!(m2.audit_dep_rationale().is_empty());
 }
 
+// ── License validation ───────────────────────────────────────────────────────
+
+fn manifest_dir(dir: &str) -> std::path::PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join(dir)
+}
+
+#[test]
+fn root_license_matches_manifest() {
+    let dir = manifest_dir(".");
+    let m = Manifest::load(&dir).unwrap();
+    assert!(m.validate_license(&dir).is_ok());
+}
+
+#[test]
+fn zmq_hello_license_matches_manifest() {
+    let dir = manifest_dir("examples/zmq_hello");
+    let m = Manifest::load(&dir).unwrap();
+    assert!(
+        m.validate_license(&dir).is_ok(),
+        "zmq_hello: {}",
+        m.validate_license(&dir).unwrap_err()
+    );
+}
+
+#[test]
+fn all_examples_license_matches() {
+    for name in &[
+        "actor_webserver",
+        "anthropic_chat",
+        "crud_api",
+        "log_to_file",
+        "sqlite_basic",
+        "zmq_hello",
+    ] {
+        let dir = manifest_dir(&format!("examples/{name}"));
+        let m = Manifest::load(&dir).unwrap();
+        assert!(
+            m.validate_license(&dir).is_ok(),
+            "{name}: {}",
+            m.validate_license(&dir).unwrap_err()
+        );
+    }
+}
+
 // ── Regression: examples without deps still pass ─────────────────────────────
 
 #[test]

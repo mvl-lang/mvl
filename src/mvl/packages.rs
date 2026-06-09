@@ -337,6 +337,28 @@ pub fn cmd_update(project_root: &Path) -> Result<(), PackageError> {
 /// returns it as a string so the caller can print or write it.
 ///
 /// `format` defaults to `"cyclonedx"` if `None`.
+/// Check whether a project directory contains any `.mvl` file with `fn main()`.
+fn has_main_entry(dir: &Path) -> bool {
+    // Fast path: conventional main.mvl
+    if dir.join("main.mvl").exists() || dir.join("src").join("main.mvl").exists() {
+        return true;
+    }
+    // Scan top-level .mvl files for `fn main(`
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().is_some_and(|e| e == "mvl") {
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    if content.contains("fn main(") {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
 pub fn cmd_sbom(format: Option<&str>, project_root: &Path) -> Result<String, PackageError> {
     let manifest = Manifest::load(project_root)?;
     let lock = LockFile::load_or_empty(project_root);
@@ -348,10 +370,8 @@ pub fn cmd_sbom(format: Option<&str>, project_root: &Path) -> Result<String, Pac
         ))
     })?;
 
-    // Detect application vs library: presence of main.mvl anywhere in the project root.
-    let component_type = if project_root.join("main.mvl").exists()
-        || project_root.join("src").join("main.mvl").exists()
-    {
+    // Detect application vs library: presence of any .mvl file with fn main().
+    let component_type = if has_main_entry(project_root) {
         sbom::ComponentType::Application
     } else {
         sbom::ComponentType::Library

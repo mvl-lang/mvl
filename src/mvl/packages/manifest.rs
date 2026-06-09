@@ -308,6 +308,51 @@ impl Manifest {
         Ok(())
     }
 
+    /// Validate that the `license` field in `mvl.toml` matches the LICENSE file.
+    ///
+    /// Checks two things:
+    /// 1. A LICENSE file exists in the project directory
+    /// 2. The LICENSE file content is consistent with the declared SPDX identifier
+    ///
+    /// Returns `Ok(())` on success, `Err(LicenseMismatch)` on failure.
+    pub fn validate_license(&self, dir: &Path) -> Result<(), ManifestError> {
+        let license_path = dir.join("LICENSE");
+        if !license_path.exists() {
+            return Err(ManifestError::LicenseMismatch(format!(
+                "license = \"{}\" but no LICENSE file found in {}",
+                self.package.license,
+                dir.display()
+            )));
+        }
+        let content = std::fs::read_to_string(&license_path)
+            .map_err(|e| ManifestError::Io(license_path.display().to_string(), e.to_string()))?;
+        let expected = &self.package.license;
+        let matches = match expected.as_str() {
+            "Apache-2.0" => content.contains("Apache License") && content.contains("Version 2.0"),
+            "MIT" => {
+                content.contains("MIT License") || content.contains("Permission is hereby granted")
+            }
+            "BSD-2-Clause" => {
+                content.contains("BSD 2-Clause") || content.contains("Redistribution and use")
+            }
+            "BSD-3-Clause" => {
+                content.contains("BSD 3-Clause") || content.contains("neither the name")
+            }
+            "ISC" => {
+                content.contains("ISC License")
+                    || content.contains("Permission to use, copy, modify")
+            }
+            _ => true, // unknown SPDX id — skip content check, file existence is enough
+        };
+        if !matches {
+            return Err(ManifestError::LicenseMismatch(format!(
+                "license = \"{}\" but LICENSE file content does not match",
+                expected
+            )));
+        }
+        Ok(())
+    }
+
     /// Validate dependency rationale policy (#637).
     ///
     /// When `rationale-required` is true, returns a list of dependency names
@@ -487,6 +532,8 @@ pub enum ManifestError {
     MissingExternRationale(String),
     /// E701: dependency rationale required by policy (#637).
     MissingDepRationale(Vec<String>),
+    /// E702: license field does not match LICENSE file.
+    LicenseMismatch(String),
 }
 
 impl std::fmt::Display for ManifestError {
@@ -506,6 +553,9 @@ impl std::fmt::Display for ManifestError {
                     "E701: dependency rationale required for: {}",
                     deps.join(", ")
                 )
+            }
+            ManifestError::LicenseMismatch(msg) => {
+                write!(f, "E702: {msg}")
             }
         }
     }
@@ -1794,5 +1844,61 @@ rationale-required = false
         assert!(s.contains("E701"));
         assert!(s.contains("uuid"));
         assert!(s.contains("left-pad"));
+    }
+
+    // --- validate_license ---
+
+    #[test]
+    fn validate_license_passes_when_file_matches() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("mvl.toml"), MINIMAL).unwrap();
+        std::fs::write(
+            tmp.path().join("LICENSE"),
+            "MIT License\n\nPermission is hereby granted...",
+        )
+        .unwrap();
+        let m = Manifest::load(tmp.path()).unwrap();
+        assert!(m.validate_license(tmp.path()).is_ok());
+    }
+
+    #[test]
+    fn validate_license_fails_when_no_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("mvl.toml"), MINIMAL).unwrap();
+        let m = Manifest::load(tmp.path()).unwrap();
+        let err = m.validate_license(tmp.path()).unwrap_err();
+        assert!(matches!(err, ManifestError::LicenseMismatch(_)));
+        assert!(err.to_string().contains("E702"));
+        assert!(err.to_string().contains("no LICENSE file"));
+    }
+
+    #[test]
+    fn validate_license_fails_on_content_mismatch() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("mvl.toml"), MINIMAL).unwrap();
+        // MINIMAL says license = "MIT" but we write Apache content
+        std::fs::write(
+            tmp.path().join("LICENSE"),
+            "Apache License\nVersion 2.0, January 2004",
+        )
+        .unwrap();
+        let m = Manifest::load(tmp.path()).unwrap();
+        let err = m.validate_license(tmp.path()).unwrap_err();
+        assert!(matches!(err, ManifestError::LicenseMismatch(_)));
+        assert!(err.to_string().contains("does not match"));
+    }
+
+    #[test]
+    fn validate_license_apache2_matches() {
+        let tmp = tempfile::tempdir().unwrap();
+        let toml = MINIMAL.replace("MIT", "Apache-2.0");
+        std::fs::write(tmp.path().join("mvl.toml"), &toml).unwrap();
+        std::fs::write(
+            tmp.path().join("LICENSE"),
+            "Apache License\nVersion 2.0, January 2004\n...",
+        )
+        .unwrap();
+        let m = Manifest::load(tmp.path()).unwrap();
+        assert!(m.validate_license(tmp.path()).is_ok());
     }
 }
