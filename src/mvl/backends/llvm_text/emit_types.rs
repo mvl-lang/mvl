@@ -149,7 +149,10 @@ impl TextEmitter {
             Ty::Labeled(_, inner) => Self::ty_to_llvm(inner),
             Ty::Refined(inner, _) => Self::ty_to_llvm(inner),
             Ty::Named(_, _) | Ty::Fn(_, _, _, _) | Ty::Tuple(_) => "ptr".into(),
-            Ty::Session(_) | Ty::Never | Ty::Unknown => "ptr".into(),
+            // Never (bottom type) maps to void — expressions of this type diverge
+            // and should never produce a value.
+            Ty::Never => "void".into(),
+            Ty::Session(_) | Ty::Unknown => "ptr".into(),
         }
     }
 
@@ -182,6 +185,10 @@ impl TextEmitter {
     }
 
     // ── Type helpers ──────────────────────────────────────────────────────
+
+    // ── AST-based type helpers (TypeExpr → LLVM) ────────────────────────
+    // NOTE: Structural twin of `ty_to_llvm` / `ty_to_llvm_ctx` above (Ty variant).
+    // Once the full TIR migration removes all TypeExpr-based paths, these can be deleted.
 
     /// Map a MVL `TypeExpr` to its LLVM IR type string (static, no context).
     pub(super) fn llvm_ty(ty: &TypeExpr) -> String {

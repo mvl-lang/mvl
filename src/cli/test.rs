@@ -215,7 +215,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
         let (out, branches) = if coverage {
             {
                 let r = transpiler::transpile(
-                    tir,
+                    &tir,
                     transpiler::TranspileConfig::new(&module_name)
                         .with_file_stem(&module_name)
                         .with_prelude(stdlib_prelude_progs.clone())
@@ -227,7 +227,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
         } else {
             (
                 transpiler::transpile(
-                    tir,
+                    &tir,
                     transpiler::TranspileConfig::new(&module_name)
                         .with_prelude(stdlib_prelude_progs.clone())
                         .for_test_crate(),
@@ -289,7 +289,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
         let (out, branches) = if coverage {
             {
                 let r = transpiler::transpile(
-                    tir,
+                    &tir,
                     transpiler::TranspileConfig::new(&module_name)
                         .with_file_stem(&module_name)
                         .with_prelude(stdlib_prelude_progs.clone())
@@ -301,7 +301,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
         } else {
             (
                 transpiler::transpile(
-                    tir,
+                    &tir,
                     transpiler::TranspileConfig::new(&module_name)
                         .with_prelude(stdlib_prelude_progs.clone())
                         .for_test_crate(),

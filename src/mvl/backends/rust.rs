@@ -400,13 +400,13 @@ pub fn transpile_project_with_options(
 /// running the checker, monomorphizer, and TIR lowering pass before calling this
 /// function.  The backend receives a fully-typed, monomorphized TIR and does not
 /// re-invoke any earlier pipeline stage.
-pub fn transpile(tir: crate::mvl::ir::TirProgram, config: TranspileConfig) -> TranspileResult {
-    let has_main = has_main_fn_tir(&tir);
-    let extern_count = count_extern_decls_tir(&tir);
-    let has_extern_rust = has_extern_rust_decls_tir(&tir);
+pub fn transpile(tir: &crate::mvl::ir::TirProgram, config: TranspileConfig) -> TranspileResult {
+    let has_main = has_main_fn_tir(tir);
+    let extern_count = count_extern_decls_tir(tir);
+    let has_extern_rust = has_extern_rust_decls_tir(tir);
     let has_prelude = !config.prelude_progs.is_empty();
     let use_runtime = extern_count > 0
-        || has_std_imports_tir(&tir)
+        || has_std_imports_tir(tir)
         || (has_prelude && prelude_requires_runtime(&config.prelude_progs));
 
     let mut expr_types = tir.span_types();
@@ -442,16 +442,16 @@ pub fn transpile(tir: crate::mvl::ir::TirProgram, config: TranspileConfig) -> Tr
     }
     if let Some(start_id) = config.mcdc_start_id {
         cg.mcdc = Some(mcdc_instr::MCDCMap::new(start_id));
-        cg.mcdc_fn_field_reads = mcdc_instr::build_fn_field_reads_tir(&tir);
+        cg.mcdc_fn_field_reads = mcdc_instr::build_fn_field_reads_tir(tir);
     }
     if config.mutation {
         cg.mutation = Some(MutationMap::new());
     }
 
     if has_prelude {
-        cg.emit_program_with_mods(&tir, &[], &prelude_tirs);
+        cg.emit_program_with_mods(tir, &[], &prelude_tirs);
     } else {
-        cg.emit_program(&tir);
+        cg.emit_program(tir);
     }
 
     let branches = cg.coverage.take().map(|c| c.branches).unwrap_or_default();
@@ -507,7 +507,7 @@ mod tests {
         let all_fns = crate::mvl::passes::mono::collect_fns([prog]);
         let mono = crate::mvl::passes::mono::monomorphize(prog, &all_fns, &expr_types);
         let tir = crate::mvl::ir::lower::lower(prog, &mono, &expr_types);
-        transpile(tir, config)
+        transpile(&tir, config)
     }
 
     // ── collect_stdlib_modules tests (#488 #489) ───────────────────────────
@@ -1082,7 +1082,7 @@ impl crate::mvl::backends::Backend for RustBackend {
     }
 
     fn emit_program(&self, tir: &crate::mvl::ir::TirProgram, crate_name: &str) -> String {
-        transpile(tir.clone(), TranspileConfig::new(crate_name))
+        transpile(tir, TranspileConfig::new(crate_name))
             .output
             .lib_rs
     }

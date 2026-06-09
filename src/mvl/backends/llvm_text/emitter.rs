@@ -50,6 +50,19 @@ impl LlvmTextCompiler {
         }
     }
 
+    /// Create a compiler pre-populated with builtin dispatch table and
+    /// checker-resolved expression types.
+    pub fn with_context(
+        builtin_symbols: HashMap<String, (String, TypeExpr, Vec<TypeExpr>)>,
+        expr_types: HashMap<Span, Ty>,
+    ) -> Self {
+        Self {
+            target_triple: default_target_triple(),
+            builtin_symbols,
+            expr_types,
+        }
+    }
+
     /// Compile a MVL [`Program`] to LLVM IR text (no prelude, no builtin dispatch).
     pub fn compile_to_ir(&self, prog: &Program, module_name: &str) -> Result<String, String> {
         self.compile_to_ir_with_prelude(&[], prog, module_name)

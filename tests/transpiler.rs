@@ -48,7 +48,7 @@ fn do_transpile(
     let all_fns = mvl::mvl::passes::mono::collect_fns(std::iter::once(prog));
     let mono = mvl::mvl::passes::mono::monomorphize(prog, &all_fns, &expr_types);
     let tir = mvl::mvl::ir::lower::lower(prog, &mono, &expr_types);
-    transpile(tir, config)
+    transpile(&tir, config)
 }
 
 // ── #29: Type declarations ────────────────────────────────────────────────
@@ -469,7 +469,7 @@ fn full_program_password_checker_transpiles() {
     let all_fns = mvl::mvl::passes::mono::collect_fns(std::iter::once(&prog));
     let mono = mvl::mvl::passes::mono::monomorphize(&prog, &all_fns, &expr_types);
     let tir = mvl::mvl::ir::lower::lower(&prog, &mono, &expr_types);
-    let out = transpile(tir, TranspileConfig::new("password_checker")).output;
+    let out = transpile(&tir, TranspileConfig::new("password_checker")).output;
     assert_contains(&out.lib_rs, "use mvl_runtime::prelude::*");
     assert_contains(&out.lib_rs, "extern \"Rust\"");
     // `pub` is not valid inside Rust extern blocks

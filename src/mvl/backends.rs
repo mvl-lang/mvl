@@ -15,7 +15,6 @@ pub mod llvm_text;
 pub mod rust;
 
 use crate::mvl::ir::TirProgram;
-use crate::mvl::parser::ast::Program;
 
 /// Controls how struct invariants and refinement conditions are enforced at runtime.
 ///
@@ -667,15 +666,4 @@ pub trait Backend {
     /// `crate_name` is used as the Rust crate/module name for the Rust backend
     /// and ignored by the LLVM backend.
     fn emit_program(&self, tir: &TirProgram, crate_name: &str) -> String;
-}
-
-/// Legacy trait for backends that still operate on raw AST.
-///
-/// Provided for incremental migration — the LLVM backend still walks the AST
-/// for emission while using checker-resolved types for dispatch.  Once the LLVM
-/// emitter consumes TIR directly, this trait can be removed.
-pub trait LegacyBackend {
-    fn name(&self) -> &'static str;
-    fn file_extension(&self) -> &'static str;
-    fn emit_program(&self, prog: &Program, crate_name: &str) -> String;
 }
