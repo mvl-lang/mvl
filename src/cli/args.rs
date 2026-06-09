@@ -98,6 +98,9 @@ pub fn print_usage() {
     eprintln!("  mvl pin [<version>]                — pin project to compiler version (writes .mvl-version)");
     eprintln!("  mvl sbom [--format=cyclonedx|spdx] — generate SBOM from mvl.lock (default: CycloneDX JSON)");
     eprintln!("           [--output=<file>]          — write SBOM to file instead of stdout");
+    eprintln!(
+        "  mvl audit --paradox                — Dependency Paradox audit (exit 1 on violations)"
+    );
 }
 
 /// Parse `--error-limit=N` from args; 0 means unlimited, default is 10.

@@ -61,14 +61,24 @@ fn cmd_self_init() {
 
 pub(super) fn cmd_pkg_add(args: &[String]) {
     let pkg_id = args.get(2).unwrap_or_else(|| {
-        eprintln!("Usage: mvl add <pkg-id> [<tag>]");
-        eprintln!("  pkg-id: git URL or github.com/user/repo style identifier");
-        eprintln!("  tag:    optional version tag (e.g. v1.2.0); omit to use latest");
+        eprintln!("Usage: mvl add <pkg-id> [<tag>] [--rationale \"...\"]");
+        eprintln!("  pkg-id:      git URL or github.com/user/repo style identifier");
+        eprintln!("  tag:         optional version tag (e.g. v1.2.0); omit to use latest");
+        eprintln!("  --rationale: justification for adding this dependency");
         process::exit(1);
     });
-    let tag = args.get(3).map(|s| s.as_str());
+    // Parse positional tag (first arg after pkg-id that doesn't start with --)
+    let tag = args
+        .get(3)
+        .filter(|a| !a.starts_with("--"))
+        .map(|s| s.as_str());
+    // Parse --rationale flag
+    let rationale = args
+        .windows(2)
+        .find(|w| w[0] == "--rationale")
+        .map(|w| w[1].as_str());
     let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    if let Err(e) = packages::cmd_add(pkg_id, tag, &project_root) {
+    if let Err(e) = packages::cmd_add(pkg_id, tag, rationale, &project_root) {
         eprintln!("error: {e}");
         process::exit(1);
     }
@@ -107,6 +117,32 @@ pub(super) fn cmd_sbom(args: &[String]) {
                 println!("SBOM written to {path}");
             }
         },
+    }
+}
+
+pub(super) fn cmd_audit(args: &[String]) {
+    let paradox = args.iter().any(|a| a == "--paradox");
+    if !paradox {
+        eprintln!("Usage: mvl audit --paradox");
+        eprintln!("  --paradox: audit dependencies for the Dependency Paradox policy");
+        eprintln!(
+            "             exits with code 1 if any dep below complexity threshold lacks rationale"
+        );
+        process::exit(1);
+    }
+
+    let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    match packages::cmd_audit_paradox(&project_root) {
+        Err(e) => {
+            eprintln!("error: {e}");
+            process::exit(1);
+        }
+        Ok(audit) => {
+            print!("{}", audit.render());
+            if audit.has_violations() {
+                process::exit(1);
+            }
+        }
     }
 }
 

@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [0.193.0] - 2026-06-09
+
+### Added
+
+- **Dependency Paradox policy layer** (#637) — make dependency decisions explicit and auditable:
+  - `DepSpec::Git` now carries optional `rationale` field for justifying dependencies
+  - `[dependency-policy]` manifest section with configurable `complexity-threshold` (default 1000 LOC) and `rationale-required` (default true)
+  - `mvl add --rationale "..."` flag to attach justification when adding dependencies
+  - `mvl audit --paradox` command that counts source LOC per cached dependency, flags deps below threshold without rationale, and exits 1 as CI gate
+  - TOML parser support for boolean and integer literals in inline tables
+
 ## [0.192.0] - 2026-06-09
 
 ### Changed

@@ -187,17 +187,6 @@ fn is_screaming_snake_case(s: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mvl::linter::config::LintConfig;
-
-    fn cfg() -> LintConfig {
-        let mut c = LintConfig::default();
-        c.line_length = 120;
-        c.trailing_ws = true;
-        c.indentation = true;
-        c.final_newline = true;
-        c.consistent_comment_style = true;
-        c
-    }
 
     // -- naming --
 

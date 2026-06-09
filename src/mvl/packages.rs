@@ -10,6 +10,7 @@
 //! - `mvl install`                 — fetch all deps from mvl.lock, verify hashes
 //! - `mvl update`                  — re-resolve versions, update mvl.lock
 //! - `mvl sbom`                    — generate CycloneDX/SPDX SBOM from mvl.lock
+//! - `mvl audit --paradox`         — Dependency Paradox audit (#637)
 
 pub mod fetch;
 pub mod hash;
@@ -80,11 +81,17 @@ impl std::fmt::Display for PackageError {
 
 // ── CLI entry points ──────────────────────────────────────────────────────────
 
-/// `mvl add <git-url-or-pkg-id> [<tag>]`
+/// `mvl add <git-url-or-pkg-id> [<tag>] [--rationale "..."]`
 ///
 /// Fetches a package from a git URL, adds it to `mvl.toml` and `mvl.lock`.
 /// If `tag` is omitted, queries the git remote for the latest semver tag.
-pub fn cmd_add(pkg_id: &str, tag: Option<&str>, project_root: &Path) -> Result<(), PackageError> {
+/// If `rationale` is provided, it is stored alongside the dependency spec.
+pub fn cmd_add(
+    pkg_id: &str,
+    tag: Option<&str>,
+    rationale: Option<&str>,
+    project_root: &Path,
+) -> Result<(), PackageError> {
     // Reject plain-HTTP URLs — they are vulnerable to MITM at fetch time.
     if pkg_id.starts_with("http://") {
         return Err(PackageError::InvalidInput(
@@ -139,6 +146,7 @@ pub fn cmd_add(pkg_id: &str, tag: Option<&str>, project_root: &Path) -> Result<(
         DepSpec::Git {
             git: git_url,
             tag: resolved_tag,
+            rationale: rationale.map(|s| s.to_string()),
         },
     );
 
@@ -322,6 +330,182 @@ pub fn cmd_sbom(format: Option<&str>, project_root: &Path) -> Result<String, Pac
         &licenses,
         &sources,
     ))
+}
+
+// ── Dependency Paradox audit (#637) ──────────────────────────────────────────
+
+/// Result of auditing a single dependency for the Dependency Paradox.
+#[derive(Debug)]
+pub struct ParadoxEntry {
+    /// Dependency name.
+    pub name: String,
+    /// Estimated lines of code (from cached source tree), or `None` if unavailable.
+    pub loc: Option<u64>,
+    /// The rationale string, if provided in `mvl.toml`.
+    pub rationale: Option<String>,
+    /// Whether this dep is below the complexity threshold.
+    pub below_threshold: bool,
+}
+
+/// Summary of a Dependency Paradox audit.
+#[derive(Debug)]
+pub struct ParadoxAudit {
+    pub entries: Vec<ParadoxEntry>,
+    pub threshold: u64,
+    pub rationale_required: bool,
+}
+
+impl ParadoxAudit {
+    /// Number of deps below threshold that lack a rationale.
+    pub fn missing_rationale_count(&self) -> usize {
+        self.entries
+            .iter()
+            .filter(|e| e.below_threshold && e.rationale.is_none())
+            .count()
+    }
+
+    /// Number of deps below threshold (regardless of rationale).
+    pub fn below_threshold_count(&self) -> usize {
+        self.entries.iter().filter(|e| e.below_threshold).count()
+    }
+
+    /// True when the audit should fail as a CI gate.
+    pub fn has_violations(&self) -> bool {
+        self.rationale_required && self.missing_rationale_count() > 0
+    }
+
+    /// Render the audit report to a string.
+    pub fn render(&self) -> String {
+        let mut out = String::new();
+        out.push_str("Dependency Paradox audit:\n");
+        let mut entries: Vec<&ParadoxEntry> = self.entries.iter().collect();
+        entries.sort_by(|a, b| a.name.cmp(&b.name));
+        for e in &entries {
+            let loc_str = match e.loc {
+                Some(n) => format!("{:>6} LOC", n),
+                None => "     ? LOC".to_string(),
+            };
+            let rationale_str = match &e.rationale {
+                Some(r) => format!("rationale: \"{}\"", r),
+                None => "rationale: missing".to_string(),
+            };
+            let status = if e.rationale.is_some() {
+                "ok"
+            } else if e.below_threshold {
+                "MISSING"
+            } else {
+                "warn"
+            };
+            out.push_str(&format!(
+                "  {:<40} {loc_str}  — {rationale_str}  {status}\n",
+                e.name
+            ));
+        }
+        out.push('\n');
+        let below = self.below_threshold_count();
+        if below > 0 {
+            out.push_str(&format!(
+                "  {} dependenc{} below complexity threshold ({} LOC).\n",
+                below,
+                if below == 1 { "y" } else { "ies" },
+                self.threshold
+            ));
+        }
+        let missing = self.missing_rationale_count();
+        if missing > 0 {
+            out.push_str(&format!(
+                "  {} missing rationale{}.\n",
+                missing,
+                if missing == 1 { "" } else { "s" }
+            ));
+        }
+        if below == 0 && missing == 0 {
+            out.push_str("  All dependencies above complexity threshold or have rationale.\n");
+        }
+        out
+    }
+}
+
+/// `mvl audit --paradox`
+///
+/// Audits all dependencies for the Dependency Paradox policy (#637).
+/// Returns an audit result that the caller can render and use as a CI gate.
+pub fn cmd_audit_paradox(project_root: &Path) -> Result<ParadoxAudit, PackageError> {
+    let manifest = Manifest::load(project_root)?;
+    let policy = &manifest.dependency_policy;
+
+    let mut entries = Vec::new();
+
+    for (name, spec) in &manifest.dependencies {
+        let rationale = spec.rationale().map(|s| s.to_string());
+
+        // Try to estimate LOC from the cached source tree
+        let loc = estimate_dep_loc(project_root, name, spec);
+
+        let below_threshold = match loc {
+            Some(n) => n < policy.complexity_threshold,
+            None => false, // unknown → don't flag
+        };
+
+        entries.push(ParadoxEntry {
+            name: name.clone(),
+            loc,
+            rationale,
+            below_threshold,
+        });
+    }
+
+    Ok(ParadoxAudit {
+        entries,
+        threshold: policy.complexity_threshold,
+        rationale_required: policy.rationale_required,
+    })
+}
+
+/// Estimate LOC for a dependency by counting non-blank lines in its cached source tree.
+fn estimate_dep_loc(project_root: &Path, name: &str, spec: &DepSpec) -> Option<u64> {
+    let version = spec
+        .version_str()
+        .strip_prefix('v')
+        .unwrap_or(spec.version_str());
+
+    // Check local override first, then global cache
+    let dir = resolve_pkg_dir(project_root, name, version)?;
+    Some(count_source_lines(&dir))
+}
+
+/// Count non-blank source lines (`.mvl` + `.rs`) recursively in a directory.
+fn count_source_lines(dir: &Path) -> u64 {
+    let mut total = 0u64;
+    count_lines_recursive(dir, &mut total);
+    total
+}
+
+fn count_lines_recursive(dir: &Path, total: &mut u64) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if path.is_dir() {
+            if path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with('.'))
+            {
+                continue;
+            }
+            count_lines_recursive(&path, total);
+        } else {
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+            if ext == "mvl" || ext == "rs" {
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    *total += content.lines().filter(|l| !l.trim().is_empty()).count() as u64;
+                }
+            }
+        }
+    }
 }
 
 /// Walk `root` recursively for `.mvl` files and return a sorted list of
@@ -645,7 +829,7 @@ mod tests {
     #[test]
     fn cmd_add_rejects_http_url() {
         let tmp = tempfile::tempdir().unwrap();
-        let result = cmd_add("http://example.com/pkg", None, tmp.path());
+        let result = cmd_add("http://example.com/pkg", None, None, tmp.path());
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("http://"), "error should mention the protocol");
@@ -686,5 +870,188 @@ mod tests {
         let lock_err = lock::LockError::MissingField("version".to_string());
         let pkg_err: PackageError = lock_err.into();
         assert!(matches!(pkg_err, PackageError::Lock(_)));
+    }
+
+    // --- Dependency Paradox audit (#637) ---
+
+    fn write_manifest_with_deps(root: &Path, deps: &str) {
+        let content = format!(
+            "[package]\nname = \"test\"\nversion = \"0.1.0\"\nlicense = \"MIT\"\nrequires-mvl = \">=0.1.0\"\n\n{deps}"
+        );
+        std::fs::write(root.join("mvl.toml"), content).unwrap();
+    }
+
+    #[test]
+    fn audit_paradox_no_deps() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_manifest_with_deps(tmp.path(), "");
+        let audit = cmd_audit_paradox(tmp.path()).unwrap();
+        assert!(audit.entries.is_empty());
+        assert!(!audit.has_violations());
+    }
+
+    #[test]
+    fn audit_paradox_with_rationale_no_violations() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_manifest_with_deps(
+            tmp.path(),
+            r#"[dependencies]
+ring = { git = "https://example.com/ring", tag = "v0.17.8", rationale = "Crypto" }
+"#,
+        );
+        let audit = cmd_audit_paradox(tmp.path()).unwrap();
+        assert_eq!(audit.entries.len(), 1);
+        assert_eq!(audit.entries[0].rationale.as_deref(), Some("Crypto"));
+        assert!(!audit.has_violations());
+    }
+
+    #[test]
+    fn audit_paradox_missing_rationale_with_small_dep() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_manifest_with_deps(
+            tmp.path(),
+            r#"[dependencies]
+small = { git = "https://example.com/small", tag = "v1.0.0" }
+"#,
+        );
+
+        // Create a local override with a small source tree (< 1000 LOC)
+        let pkg_dir = tmp.path().join(".mvl").join("pkg").join("small");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        std::fs::write(
+            pkg_dir.join("lib.mvl"),
+            "fn hello() -> Unit ! Console {\n    println(\"hi\")\n}\n",
+        )
+        .unwrap();
+
+        let audit = cmd_audit_paradox(tmp.path()).unwrap();
+        assert_eq!(audit.entries.len(), 1);
+        assert!(audit.entries[0].below_threshold);
+        assert!(audit.entries[0].rationale.is_none());
+        assert!(audit.has_violations());
+        assert_eq!(audit.missing_rationale_count(), 1);
+    }
+
+    #[test]
+    fn audit_paradox_small_dep_with_rationale_passes() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_manifest_with_deps(
+            tmp.path(),
+            r#"[dependencies]
+small = { git = "https://example.com/small", tag = "v1.0.0", rationale = "RFC compliance" }
+"#,
+        );
+
+        let pkg_dir = tmp.path().join(".mvl").join("pkg").join("small");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        std::fs::write(pkg_dir.join("lib.mvl"), "fn f() -> Int { 1 }\n").unwrap();
+
+        let audit = cmd_audit_paradox(tmp.path()).unwrap();
+        assert!(audit.entries[0].below_threshold);
+        assert!(audit.entries[0].rationale.is_some());
+        assert!(!audit.has_violations());
+    }
+
+    #[test]
+    fn audit_paradox_rationale_required_false_disables_violations() {
+        let tmp = tempfile::tempdir().unwrap();
+        let content = r#"
+[package]
+name = "test"
+version = "0.1.0"
+license = "MIT"
+requires-mvl = ">=0.1.0"
+
+[dependencies]
+small = { git = "https://example.com/small", tag = "v1.0.0" }
+
+[dependency-policy]
+rationale-required = false
+"#;
+        std::fs::write(tmp.path().join("mvl.toml"), content).unwrap();
+
+        let pkg_dir = tmp.path().join(".mvl").join("pkg").join("small");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        std::fs::write(pkg_dir.join("lib.mvl"), "fn f() -> Int { 1 }\n").unwrap();
+
+        let audit = cmd_audit_paradox(tmp.path()).unwrap();
+        assert!(!audit.rationale_required);
+        assert!(!audit.has_violations()); // violations suppressed
+    }
+
+    #[test]
+    fn audit_paradox_custom_threshold() {
+        let tmp = tempfile::tempdir().unwrap();
+        let content = r#"
+[package]
+name = "test"
+version = "0.1.0"
+license = "MIT"
+requires-mvl = ">=0.1.0"
+
+[dependencies]
+medium = { git = "https://example.com/medium", tag = "v1.0.0" }
+
+[dependency-policy]
+complexity-threshold = 5
+"#;
+        std::fs::write(tmp.path().join("mvl.toml"), content).unwrap();
+
+        // 3 non-blank lines
+        let pkg_dir = tmp.path().join(".mvl").join("pkg").join("medium");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        std::fs::write(
+            pkg_dir.join("lib.mvl"),
+            "fn a() -> Int { 1 }\nfn b() -> Int { 2 }\nfn c() -> Int { 3 }\n",
+        )
+        .unwrap();
+
+        let audit = cmd_audit_paradox(tmp.path()).unwrap();
+        assert_eq!(audit.threshold, 5);
+        assert!(audit.entries[0].below_threshold);
+        assert_eq!(audit.entries[0].loc, Some(3));
+    }
+
+    #[test]
+    fn audit_paradox_render_output() {
+        let audit = ParadoxAudit {
+            entries: vec![
+                ParadoxEntry {
+                    name: "ring".to_string(),
+                    loc: Some(42000),
+                    rationale: Some("Crypto".to_string()),
+                    below_threshold: false,
+                },
+                ParadoxEntry {
+                    name: "uuid".to_string(),
+                    loc: Some(847),
+                    rationale: None,
+                    below_threshold: true,
+                },
+            ],
+            threshold: 1000,
+            rationale_required: true,
+        };
+        let output = audit.render();
+        assert!(output.contains("ring"));
+        assert!(output.contains("42000 LOC"));
+        assert!(output.contains("Crypto"));
+        assert!(output.contains("uuid"));
+        assert!(output.contains("847 LOC"));
+        assert!(output.contains("missing"));
+        assert!(output.contains("1 missing rationale"));
+    }
+
+    #[test]
+    fn count_source_lines_counts_mvl_and_rs() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("lib.mvl"),
+            "fn a() -> Int { 1 }\n\nfn b() -> Int { 2 }\n",
+        )
+        .unwrap();
+        std::fs::write(tmp.path().join("bridge.rs"), "pub fn c() {}\n").unwrap();
+        std::fs::write(tmp.path().join("readme.txt"), "not counted\n").unwrap();
+        assert_eq!(count_source_lines(tmp.path()), 3);
     }
 }
