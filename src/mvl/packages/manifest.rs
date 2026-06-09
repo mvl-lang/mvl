@@ -26,7 +26,11 @@ pub enum DepSpec {
     /// Version constraint string: `">=1.0.0, <2.0.0"`.
     Version(String),
     /// Git dependency with a tag: `{ git = "...", tag = "v1.2.0" }`.
-    Git { git: String, tag: String },
+    Git {
+        git: String,
+        tag: String,
+        rationale: Option<String>,
+    },
 }
 
 impl DepSpec {
@@ -35,6 +39,32 @@ impl DepSpec {
         match self {
             DepSpec::Version(v) => v,
             DepSpec::Git { tag, .. } => tag,
+        }
+    }
+
+    /// Return the dependency rationale, if any.
+    pub fn rationale(&self) -> Option<&str> {
+        match self {
+            DepSpec::Git { rationale, .. } => rationale.as_deref(),
+            DepSpec::Version(_) => None,
+        }
+    }
+}
+
+/// Dependency policy configuration from `[dependency-policy]`.
+#[derive(Debug, Clone)]
+pub struct DependencyPolicy {
+    /// LOC threshold below which a rationale warning fires. Default: 1000.
+    pub complexity_threshold: u64,
+    /// Whether rationale is required for all dependencies. Default: true.
+    pub rationale_required: bool,
+}
+
+impl Default for DependencyPolicy {
+    fn default() -> Self {
+        DependencyPolicy {
+            complexity_threshold: 1000,
+            rationale_required: true,
         }
     }
 }
@@ -47,6 +77,8 @@ pub struct Manifest {
     pub dependencies: HashMap<String, DepSpec>,
     /// `[native]` — Rust crates used in `bridge.rs` (for SBOM).
     pub native: HashMap<String, String>,
+    /// `[dependency-policy]` — Dependency Paradox enforcement settings.
+    pub dependency_policy: DependencyPolicy,
 }
 
 impl Manifest {
@@ -94,6 +126,7 @@ impl Manifest {
 
         let dependencies = parse_dependencies(table.get("dependencies"))?;
         let native = parse_native(table.get("native"))?;
+        let dependency_policy = parse_dependency_policy(table.get("dependency-policy"))?;
 
         Ok(Manifest {
             package: PackageInfo {
@@ -105,6 +138,7 @@ impl Manifest {
             },
             dependencies,
             native,
+            dependency_policy,
         })
     }
 
@@ -144,15 +178,48 @@ impl Manifest {
                     DepSpec::Version(v) => {
                         out.push_str(&format!("\"{}\" = \"{}\"\n", name, toml_escape(v)));
                     }
-                    DepSpec::Git { git, tag } => {
-                        out.push_str(&format!(
-                            "\"{}\" = {{ git = \"{}\", tag = \"{}\" }}\n",
-                            name,
+                    DepSpec::Git {
+                        git,
+                        tag,
+                        rationale,
+                    } => {
+                        let base = format!(
+                            "git = \"{}\", tag = \"{}\"",
                             toml_escape(git),
                             toml_escape(tag)
-                        ));
+                        );
+                        if let Some(ref r) = rationale {
+                            out.push_str(&format!(
+                                "\"{}\" = {{ {}, rationale = \"{}\" }}\n",
+                                name,
+                                base,
+                                toml_escape(r)
+                            ));
+                        } else {
+                            out.push_str(&format!("\"{}\" = {{ {} }}\n", name, base));
+                        }
                     }
                 }
+            }
+        }
+
+        // Write [dependency-policy] only when non-default
+        let default_policy = DependencyPolicy::default();
+        if self.dependency_policy.complexity_threshold != default_policy.complexity_threshold
+            || self.dependency_policy.rationale_required != default_policy.rationale_required
+        {
+            out.push_str("\n[dependency-policy]\n");
+            if self.dependency_policy.complexity_threshold != default_policy.complexity_threshold {
+                out.push_str(&format!(
+                    "complexity-threshold = {}\n",
+                    self.dependency_policy.complexity_threshold
+                ));
+            }
+            if self.dependency_policy.rationale_required != default_policy.rationale_required {
+                out.push_str(&format!(
+                    "rationale-required = {}\n",
+                    self.dependency_policy.rationale_required
+                ));
             }
         }
 
@@ -180,6 +247,7 @@ impl Manifest {
             },
             dependencies: HashMap::new(),
             native: HashMap::new(),
+            dependency_policy: DependencyPolicy::default(),
         }
     }
 }
@@ -217,6 +285,10 @@ impl std::fmt::Display for ManifestError {
 enum TomlValue {
     String(String),
     Table(TomlTable),
+    /// Boolean literal (`true` / `false`).
+    Bool(bool),
+    /// Integer literal.
+    Integer(i64),
     /// Arrays are opaque pass-through (only used in `[native]` feature lists).
     Array(()),
 }
@@ -235,6 +307,22 @@ impl TomlValue {
     fn as_table(&self) -> Option<&TomlTable> {
         if let TomlValue::Table(t) = self {
             Some(t)
+        } else {
+            None
+        }
+    }
+
+    fn as_bool(&self) -> Option<bool> {
+        if let TomlValue::Bool(b) = self {
+            Some(*b)
+        } else {
+            None
+        }
+    }
+
+    fn as_integer(&self) -> Option<i64> {
+        if let TomlValue::Integer(n) = self {
+            Some(*n)
         } else {
             None
         }
@@ -355,6 +443,17 @@ fn parse_value(s: &str, line: usize) -> Result<TomlValue, String> {
     if s.starts_with('[') && s.ends_with(']') {
         return Ok(TomlValue::Array(()));
     }
+    // Boolean literals
+    if s == "true" {
+        return Ok(TomlValue::Bool(true));
+    }
+    if s == "false" {
+        return Ok(TomlValue::Bool(false));
+    }
+    // Integer literals
+    if let Ok(n) = s.parse::<i64>() {
+        return Ok(TomlValue::Integer(n));
+    }
     Err(format!("line {line}: unsupported TOML value: {s:?}"))
 }
 
@@ -448,17 +547,50 @@ fn parse_dependencies(
                         ManifestError::ParseError(format!("dep '{name}': missing 'tag'"))
                     })?
                     .to_string();
-                DepSpec::Git { git, tag }
+                let rationale = t
+                    .get("rationale")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                DepSpec::Git {
+                    git,
+                    tag,
+                    rationale,
+                }
             }
-            TomlValue::Array(_) => {
+            _ => {
                 return Err(ManifestError::ParseError(format!(
-                    "dep '{name}': arrays are not valid dependency specs"
+                    "dep '{name}': invalid dependency spec (expected string or inline table)"
                 )));
             }
         };
         deps.insert(name.clone(), spec);
     }
     Ok(deps)
+}
+
+fn parse_dependency_policy(value: Option<&TomlValue>) -> Result<DependencyPolicy, ManifestError> {
+    let mut policy = DependencyPolicy::default();
+    let tbl = match value {
+        None => return Ok(policy),
+        Some(v) => v.as_table().ok_or_else(|| {
+            ManifestError::ParseError("[dependency-policy] must be a table".to_string())
+        })?,
+    };
+    if let Some(v) = tbl.get("complexity-threshold") {
+        policy.complexity_threshold = v.as_integer().ok_or_else(|| {
+            ManifestError::ParseError(
+                "dependency-policy: complexity-threshold must be an integer".to_string(),
+            )
+        })? as u64;
+    }
+    if let Some(v) = tbl.get("rationale-required") {
+        policy.rationale_required = v.as_bool().ok_or_else(|| {
+            ManifestError::ParseError(
+                "dependency-policy: rationale-required must be a boolean".to_string(),
+            )
+        })?;
+    }
+    Ok(policy)
 }
 
 fn parse_native(value: Option<&TomlValue>) -> Result<HashMap<String, String>, ManifestError> {
@@ -545,7 +677,7 @@ hyper = "1.0"
         assert!(m.dependencies.contains_key("github.com/lab271/mvl-stdlib"));
         assert!(m.dependencies.contains_key("tls"));
         match m.dependencies.get("tls").unwrap() {
-            DepSpec::Git { git, tag } => {
+            DepSpec::Git { git, tag, .. } => {
                 assert!(git.contains("mvl_tls"));
                 assert_eq!(tag, "v0.4.0");
             }
@@ -661,6 +793,7 @@ bar = { git = "https://example.com/bar" }
         let spec = DepSpec::Git {
             git: "https://example.com/pkg".to_string(),
             tag: "v1.2.3".to_string(),
+            rationale: None,
         };
         assert_eq!(spec.version_str(), "v1.2.3");
     }
@@ -766,5 +899,131 @@ requires-mvl = ">=0.40.0"
 "#;
         let m = Manifest::parse(content).unwrap();
         assert_eq!(m.package.name, "github.com/lab271/mvl-stdlib");
+    }
+
+    // --- dependency rationale (#637) ---
+
+    #[test]
+    fn parse_dep_with_rationale() {
+        let content = r#"
+[package]
+name = "my-app"
+version = "0.1.0"
+license = "MIT"
+requires-mvl = ">=0.1.0"
+
+[dependencies]
+ring = { git = "https://github.com/briansmith/ring", tag = "v0.17.8", rationale = "Crypto — constant-time guarantees" }
+"#;
+        let m = Manifest::parse(content).unwrap();
+        let dep = m.dependencies.get("ring").unwrap();
+        assert_eq!(dep.rationale(), Some("Crypto — constant-time guarantees"));
+    }
+
+    #[test]
+    fn parse_dep_without_rationale_returns_none() {
+        let m = Manifest::parse(WITH_DEPS).unwrap();
+        let dep = m.dependencies.get("tls").unwrap();
+        assert!(dep.rationale().is_none());
+    }
+
+    #[test]
+    fn rationale_roundtrip() {
+        let content = r#"
+[package]
+name = "my-app"
+version = "0.1.0"
+license = "MIT"
+requires-mvl = ">=0.1.0"
+
+[dependencies]
+ring = { git = "https://github.com/briansmith/ring", tag = "v0.17.8", rationale = "Crypto needs" }
+"#;
+        let m = Manifest::parse(content).unwrap();
+        let toml = m.to_toml();
+        let m2 = Manifest::parse(&toml).unwrap();
+        assert_eq!(
+            m2.dependencies.get("ring").unwrap().rationale(),
+            Some("Crypto needs")
+        );
+    }
+
+    #[test]
+    fn version_dep_rationale_is_none() {
+        let spec = DepSpec::Version(">=1.0.0".to_string());
+        assert!(spec.rationale().is_none());
+    }
+
+    // --- dependency policy (#637) ---
+
+    #[test]
+    fn parse_default_dependency_policy() {
+        let m = Manifest::parse(MINIMAL).unwrap();
+        assert_eq!(m.dependency_policy.complexity_threshold, 1000);
+        assert!(m.dependency_policy.rationale_required);
+    }
+
+    #[test]
+    fn parse_custom_dependency_policy() {
+        let content = r#"
+[package]
+name = "my-app"
+version = "0.1.0"
+license = "MIT"
+requires-mvl = ">=0.1.0"
+
+[dependency-policy]
+complexity-threshold = 500
+rationale-required = false
+"#;
+        let m = Manifest::parse(content).unwrap();
+        assert_eq!(m.dependency_policy.complexity_threshold, 500);
+        assert!(!m.dependency_policy.rationale_required);
+    }
+
+    #[test]
+    fn dependency_policy_roundtrip() {
+        let content = r#"
+[package]
+name = "my-app"
+version = "0.1.0"
+license = "MIT"
+requires-mvl = ">=0.1.0"
+
+[dependency-policy]
+complexity-threshold = 2000
+rationale-required = false
+"#;
+        let m = Manifest::parse(content).unwrap();
+        let toml = m.to_toml();
+        let m2 = Manifest::parse(&toml).unwrap();
+        assert_eq!(m2.dependency_policy.complexity_threshold, 2000);
+        assert!(!m2.dependency_policy.rationale_required);
+    }
+
+    #[test]
+    fn default_policy_not_serialized() {
+        let m = Manifest::parse(MINIMAL).unwrap();
+        let toml = m.to_toml();
+        assert!(!toml.contains("[dependency-policy]"));
+    }
+
+    // --- TOML parser: booleans and integers ---
+
+    #[test]
+    fn parse_toml_boolean_values() {
+        let content = "[section]\nflag = true\nother = false\n";
+        let table = parse_toml_table(content).unwrap();
+        let sec = table.get("section").unwrap().as_table().unwrap();
+        assert_eq!(sec.get("flag").unwrap().as_bool(), Some(true));
+        assert_eq!(sec.get("other").unwrap().as_bool(), Some(false));
+    }
+
+    #[test]
+    fn parse_toml_integer_values() {
+        let content = "[section]\ncount = 42\n";
+        let table = parse_toml_table(content).unwrap();
+        let sec = table.get("section").unwrap().as_table().unwrap();
+        assert_eq!(sec.get("count").unwrap().as_integer(), Some(42));
     }
 }

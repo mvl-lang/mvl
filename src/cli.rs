@@ -254,6 +254,9 @@ pub(super) fn dispatch(args: &[String]) {
         "sbom" => {
             meta::cmd_sbom(args);
         }
+        "audit" => {
+            meta::cmd_audit(args);
+        }
         other => {
             eprintln!("Unknown command: {other}");
             args::print_usage();
