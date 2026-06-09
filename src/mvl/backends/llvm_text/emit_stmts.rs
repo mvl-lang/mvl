@@ -145,6 +145,9 @@ impl TextEmitter {
                     // Tuple destructuring: `let (a, b) = partition_result`
                     // The RHS is a ptr to a contiguous block of `ptr`-sized slots,
                     // one per element.  Extract via GEP + load (index = slot offset).
+                    // NOTE: Currently only supports ptr-typed tuple elements (e.g.
+                    // partition's (List, List)).  Scalar tuples (Int, Int) would
+                    // need type-aware element size/load instructions.
                     for (i, elem_pat) in elems.iter().enumerate() {
                         if let Pattern::Ident(name, _) = elem_pat {
                             let slot = self.next_reg();

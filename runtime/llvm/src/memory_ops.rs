@@ -17,8 +17,8 @@
 use std::ptr;
 
 use crate::memory::{
-    MvlArray, MvlMap, MvlMapSlot, MvlString, _mvl_alloc, _mvl_array_new, _mvl_free,
-    _mvl_string_drop, _mvl_string_new,
+    _mvl_alloc, _mvl_array_new, _mvl_free, _mvl_string_drop, _mvl_string_new, MvlArray, MvlMap,
+    MvlMapSlot, MvlString,
 };
 
 // ── format (#901) ───────────────────────────────────────────────────────────
@@ -1157,8 +1157,9 @@ pub unsafe extern "C" fn _mvl_list_all(list: *mut MvlArray, closure: *const MvlC
 
 /// `_mvl_list_sort(list)` — return a new list with elements sorted ascending.
 ///
-/// Elements are compared as i64 (8-byte) values, suitable for Int, Float, Bool,
-/// and Byte lists.  Phase 1 (#1290): generic ordering via partial_cmp on i64.
+/// Elements are compared as i64 (8-byte) values.  Correct for Int, Bool, and
+/// Byte lists only.  Float lists will sort by bit pattern (wrong for negatives
+/// and NaN).  TODO: add type-aware comparator for Float (#1290 Phase 2).
 ///
 /// # Safety
 /// `list` must be a valid `MvlArray*` or null.
@@ -1176,38 +1177,27 @@ pub unsafe extern "C" fn _mvl_list_sort(list: *mut MvlArray) -> *mut MvlArray {
     if len <= 1 {
         return out;
     }
-    // Sort by i64 (covers Int, Float, Bool, Byte — all <= 8 bytes).
-    // For larger elements (e.g. ptr-sized sub-arrays), sort by pointer value.
-    if es <= 8 {
-        // Pad to i64, sort, write back.
-        let mut vals: Vec<i64> = (0..len)
-            .map(|i| {
-                let mut buf = [0u8; 8];
-                let src = (*out).ptr.add(i * es);
-                std::ptr::copy_nonoverlapping(src, buf.as_mut_ptr(), es);
-                i64::from_ne_bytes(buf)
-            })
-            .collect();
-        vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        for (i, v) in vals.iter().enumerate() {
-            let dst = (*out).ptr.add(i * es);
-            std::ptr::copy_nonoverlapping(v.to_ne_bytes().as_ptr(), dst, es);
-        }
-    } else {
-        // Pointer-sized elements — sort by interpreting as usize.
-        let mut ptrs: Vec<usize> = (0..len)
-            .map(|i| {
-                let mut buf = [0u8; 8];
-                let src = (*out).ptr.add(i * es);
-                std::ptr::copy_nonoverlapping(src, buf.as_mut_ptr(), 8);
-                usize::from_ne_bytes(buf)
-            })
-            .collect();
-        ptrs.sort();
-        for (i, p) in ptrs.iter().enumerate() {
-            let dst = (*out).ptr.add(i * es);
-            std::ptr::copy_nonoverlapping(p.to_ne_bytes().as_ptr(), dst, 8);
-        }
+    // All MVL scalar types (Int, Bool, Byte, Float) are stored as 8 bytes.
+    // Sort by reading each element as i64 and comparing numerically.
+    // NOTE: Float sort is incorrect for negative values / NaN (bit-pattern
+    // comparison). A type-aware comparator is needed for Phase 2.
+    debug_assert!(
+        es <= 8,
+        "_mvl_list_sort: elem_size {} > 8 not supported",
+        es
+    );
+    let mut vals: Vec<i64> = (0..len)
+        .map(|i| {
+            let mut buf = [0u8; 8];
+            let src = (*out).ptr.add(i * es);
+            std::ptr::copy_nonoverlapping(src, buf.as_mut_ptr(), es);
+            i64::from_ne_bytes(buf)
+        })
+        .collect();
+    vals.sort_unstable();
+    for (i, v) in vals.iter().enumerate() {
+        let dst = (*out).ptr.add(i * es);
+        std::ptr::copy_nonoverlapping(v.to_ne_bytes().as_ptr(), dst, es);
     }
     out
 }
@@ -1218,7 +1208,16 @@ pub unsafe extern "C" fn _mvl_list_sort(list: *mut MvlArray) -> *mut MvlArray {
 /// is true, index 1 is elements where predicate is false.  The LLVM emitter
 /// destructures this into two named bindings via `getelementptr` + `load`.
 ///
+/// **Ownership:** The caller owns the returned 16-byte pair buffer and both
+/// inner `MvlArray*` pointers.  The emitter must free the pair buffer after
+/// extracting the two arrays.
+///
 /// Predicate signature: `fn(env: ptr, elem: ptr) -> i1`.
+///
+/// Note: category-D HOFs (partition, group_by) pass elements by pointer,
+/// unlike category-A/B HOFs (filter, map, fold) which pass by i64 value.
+/// The LLVM emitter uses `ptr_param_indices` in `emit_as_hof_closure` to
+/// generate the correct closure wrapper.
 ///
 /// # Safety
 /// `list` and `closure` must be valid non-null pointers.
@@ -1263,6 +1262,9 @@ pub unsafe extern "C" fn _mvl_list_partition(
 /// are 8-byte pointer slots storing `MvlArray*` pointers.
 ///
 /// Key closure signature: `fn(env: ptr, elem: ptr) -> i64`.
+///
+/// Note: like `_mvl_list_partition`, elements are passed by pointer (not
+/// by i64 value).  See partition doc for calling convention rationale.
 ///
 /// # Safety
 /// `list` and `closure` must be valid non-null pointers.

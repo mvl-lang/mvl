@@ -4,7 +4,7 @@
 // Both the Rust transpiler and LLVM backends must agree on output.
 //
 // Expected stdout:
-//   sort=[1, 2, 3, 4, 5]
+//   sort=[1, 1, 3, 4, 5]
 //   partition_yes=2
 //   partition_no=3
 //   group_by_key1=2

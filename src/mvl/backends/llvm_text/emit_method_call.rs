@@ -191,20 +191,32 @@ impl TextEmitter {
                 Ok(Some(reg))
             }
             ("contains_key", "ptr") if matches!(self.mvl_receiver_kind(receiver), Some("Map")) => {
-                let key_arg = match args.first() {
-                    Some(a) => match self.emit_expr(a)? {
-                        Some(v) => v,
-                        None => return Ok(None),
-                    },
+                let key_expr = match args.first() {
+                    Some(a) => a,
                     None => return Ok(None),
                 };
-                self.ensure_extern("declare ptr @_mvl_string_ptr(ptr)");
-                self.ensure_extern("declare i64 @_mvl_str_len(ptr)");
+                let key_ty = self.type_of_expr(key_expr);
+                let key_arg = match self.emit_expr(key_expr)? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
                 self.ensure_extern("declare ptr @_mvl_map_get(ptr, ptr, i64)");
-                let kp = self.next_reg();
-                self.push_instr(&format!("{kp} = call ptr @_mvl_string_ptr(ptr {key_arg})"));
-                let kl = self.next_reg();
-                self.push_instr(&format!("{kl} = call i64 @_mvl_str_len(ptr {key_arg})"));
+                let (kp, kl) = if key_ty == "i64" {
+                    // Integer key: stack-allocate the 8-byte key.
+                    let slot = self.next_reg();
+                    self.push_instr(&format!("{slot} = alloca i64"));
+                    self.push_instr(&format!("store i64 {key_arg}, ptr {slot}"));
+                    (slot, "8".to_string())
+                } else {
+                    // String key: use string pointer + length.
+                    self.ensure_extern("declare ptr @_mvl_string_ptr(ptr)");
+                    self.ensure_extern("declare i64 @_mvl_str_len(ptr)");
+                    let kp = self.next_reg();
+                    self.push_instr(&format!("{kp} = call ptr @_mvl_string_ptr(ptr {key_arg})"));
+                    let kl_reg = self.next_reg();
+                    self.push_instr(&format!("{kl_reg} = call i64 @_mvl_str_len(ptr {key_arg})"));
+                    (kp, kl_reg)
+                };
                 let raw = self.next_reg();
                 self.push_instr(&format!(
                     "{raw} = call ptr @_mvl_map_get(ptr {val}, ptr {kp}, i64 {kl})"

@@ -415,17 +415,21 @@ impl TextEmitter {
 
     /// Infer the LLVM type from the tail of a block (the last statement).
     /// Handles `Stmt::Expr`, `Stmt::If`, and `Stmt::Match` as tail positions.
+    ///
+    /// For `Stmt::If`, only the `then` branch is inspected — MVL requires both
+    /// branches to have the same type, so the `then` branch is sufficient.
     pub(super) fn type_of_block_tail(&self, b: &crate::mvl::parser::ast::Block) -> String {
         match b.stmts.last() {
             Some(Stmt::Expr { expr, .. }) => self.type_of_expr(expr),
             Some(Stmt::If { then, .. }) => self.type_of_block_tail(then),
             Some(Stmt::Match { arms, .. }) => {
                 for arm in arms {
-                    if let crate::mvl::parser::ast::MatchBody::Expr(e) = &arm.body {
-                        let t = self.type_of_expr(e);
-                        if t != "i64" {
-                            return t;
-                        }
+                    let t = match &arm.body {
+                        crate::mvl::parser::ast::MatchBody::Expr(e) => self.type_of_expr(e),
+                        crate::mvl::parser::ast::MatchBody::Block(b) => self.type_of_block_tail(b),
+                    };
+                    if t != "i64" {
+                        return t;
                     }
                 }
                 "i64".into()
