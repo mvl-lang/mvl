@@ -124,6 +124,11 @@ pub(super) fn cmd_audit(args: &[String]) {
     let paradox = args.iter().any(|a| a == "--paradox");
     let supply_chain = args.iter().any(|a| a == "--supply-chain");
 
+    if paradox && supply_chain {
+        eprintln!("error: --paradox and --supply-chain are mutually exclusive");
+        process::exit(1);
+    }
+
     if !paradox && !supply_chain {
         eprintln!("Usage: mvl audit <--paradox | --supply-chain>");
         eprintln!("  --paradox:       audit dependencies for the Dependency Paradox policy");
