@@ -9,6 +9,7 @@
 //!
 //! Also scans `[native]` (Rust crates) against OSV for ecosystem `"crates.io"`.
 
+use super::manifest::CNativeSpec;
 use std::collections::HashMap;
 
 // ── CVE severity ─────────────────────────────────────────────────────────────
@@ -692,7 +693,7 @@ fn url_encode(s: &str) -> String {
 /// Run supply-chain audit on all `[native]` and `[c-native]` dependencies.
 pub fn scan_all(
     native: &HashMap<String, String>,
-    c_native: &HashMap<String, String>,
+    c_native: &HashMap<String, CNativeSpec>,
 ) -> SupplyChainAudit {
     let mut results = Vec::new();
     let mut errors = Vec::new();
@@ -705,7 +706,8 @@ pub fn scan_all(
         std::time::Duration::from_millis(12_000) // ~5 req/min
     };
     // Scan [c-native] — query both NVD and OSV
-    for (idx, (name, version)) in c_native.iter().enumerate() {
+    for (idx, (name, spec)) in c_native.iter().enumerate() {
+        let version = &spec.version;
         let mut findings = Vec::new();
 
         // Rate-limit NVD calls (skip delay before first call)
@@ -1318,7 +1320,7 @@ mod tests {
         // We can only test scan_all's error accumulation with an empty dep map
         // (no network calls). Verify the happy-path shape of the returned struct.
         let native: HashMap<String, String> = HashMap::new();
-        let c_native: HashMap<String, String> = HashMap::new();
+        let c_native: HashMap<String, CNativeSpec> = HashMap::new();
         let audit = scan_all(&native, &c_native);
         assert!(audit.results.is_empty());
         assert!(audit.errors.is_empty());

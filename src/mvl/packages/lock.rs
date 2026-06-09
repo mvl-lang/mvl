@@ -29,6 +29,10 @@ pub struct LockedPackage {
     pub commit: Option<String>,
     /// The git URL the package was fetched from.
     pub git: Option<String>,
+    /// SPDX license expression from the package's mvl.toml (#635).
+    pub license: Option<String>,
+    /// Audit trail when `--allow-license` was used to override policy (#635).
+    pub allow_license_override: Option<String>,
 }
 
 /// The full lock file: an ordered list of locked packages.
@@ -101,6 +105,15 @@ impl LockFile {
             if let Some(ref g) = pkg.git {
                 out.push_str(&format!("git = \"{}\"\n", toml_escape(g)));
             }
+            if let Some(ref lic) = pkg.license {
+                out.push_str(&format!("license = \"{}\"\n", toml_escape(lic)));
+            }
+            if let Some(ref reason) = pkg.allow_license_override {
+                out.push_str(&format!(
+                    "allow-license-override = \"{}\"\n",
+                    toml_escape(reason)
+                ));
+            }
         }
         out
     }
@@ -170,12 +183,16 @@ fn locked_from_map(mut map: HashMap<String, String>) -> Result<LockedPackage, Lo
     }
     let commit = map.remove("commit");
     let git = map.remove("git");
+    let license = map.remove("license");
+    let allow_license_override = map.remove("allow-license-override");
     Ok(LockedPackage {
         name,
         version,
         hash,
         commit,
         git,
+        license,
+        allow_license_override,
     })
 }
 
@@ -245,6 +262,8 @@ hash = "sha256:aaabbbccc"
             hash: "sha256:newhash".to_string(),
             commit: None,
             git: None,
+            license: None,
+            allow_license_override: None,
         });
         assert_eq!(lf.packages.len(), 2); // still 2
         assert_eq!(lf.get("tls").unwrap().version, "0.5.0");
@@ -259,6 +278,8 @@ hash = "sha256:aaabbbccc"
             hash: "sha256:aaa".to_string(),
             commit: None,
             git: None,
+            license: None,
+            allow_license_override: None,
         });
         assert_eq!(lf.packages.len(), 1);
     }
@@ -400,6 +421,8 @@ hash = "sha256:aaabbbccc"
             hash: "sha256:xyz".to_string(),
             commit: None,
             git: None,
+            license: None,
+            allow_license_override: None,
         });
         let toml = lf.to_toml();
         assert!(!toml.contains("commit ="), "commit should be absent");
@@ -415,6 +438,8 @@ hash = "sha256:aaabbbccc"
             hash: "sha256:abc".to_string(),
             commit: Some("cafebabe".to_string()),
             git: Some("https://example.com/pkg".to_string()),
+            license: None,
+            allow_license_override: None,
         });
         let toml = lf.to_toml();
         assert!(toml.contains("commit = \"cafebabe\""));
@@ -464,6 +489,8 @@ hash = "sha256:aaabbbccc"
             hash: "sha256:deadbeef".to_string(),
             commit: Some("abc123".to_string()),
             git: Some("https://example.com/mypkg".to_string()),
+            license: None,
+            allow_license_override: None,
         });
         lf.write(tmp.path()).unwrap();
 

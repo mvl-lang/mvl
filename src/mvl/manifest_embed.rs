@@ -545,6 +545,8 @@ mod tests {
             hash: "sha256:abc".to_string(),
             commit: None,
             git: None,
+            license: None,
+            allow_license_override: None,
         }];
         let bridges = vec![FfiBridgeData {
             abi: "rust".to_string(),

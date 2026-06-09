@@ -439,6 +439,7 @@ mod tests {
             },
             c_native: HashMap::new(),
             dependency_policy: Default::default(),
+            license_policy: Default::default(),
         }
     }
 
@@ -451,6 +452,8 @@ mod tests {
                     hash: "sha256:abc123def456".to_string(),
                     commit: Some("deadbeef".to_string()),
                     git: Some("https://github.com/lab271/mvl-stdlib".to_string()),
+                    license: None,
+                    allow_license_override: None,
                 },
                 LockedPackage {
                     name: "tls".to_string(),
@@ -458,6 +461,8 @@ mod tests {
                     hash: "sha256:aabbccdd".to_string(),
                     commit: None,
                     git: None,
+                    license: None,
+                    allow_license_override: None,
                 },
             ],
         }
@@ -638,6 +643,8 @@ mod tests {
                 hash: "sha256:deadbeef".to_string(),
                 commit: None,
                 git: None,
+                license: None,
+                allow_license_override: None,
             }],
         };
         let mut manifest = sample_manifest();

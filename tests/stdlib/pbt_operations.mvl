@@ -168,8 +168,8 @@ partial fn test_mutation_based_pbt() -> Unit ! Random {
 // ── Fuzz: raw-input generators (#617) ─────────────────────────────────────────
 
 // Property: any byte sequence has non-negative length.
-fn fn_bytes_len_nonneg(bs: List[Int]) -> Bool {
-    let xs: List[Int] = bs;
+fn fn_bytes_len_nonneg(bs: List[Byte]) -> Bool {
+    let xs: List[Byte] = bs;
     xs.len() >= 0
 }
 

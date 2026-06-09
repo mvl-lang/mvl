@@ -20,6 +20,152 @@ pub struct PackageInfo {
     pub extern_rationale: Option<String>,
 }
 
+/// A C-native dependency specification with optional license.
+#[derive(Debug, Clone)]
+pub struct CNativeSpec {
+    pub version: String,
+    pub license: Option<String>,
+}
+
+/// License policy mode (#635).
+#[derive(Debug, Clone, PartialEq)]
+pub enum LicensePolicyMode {
+    /// Allow standard permissive licenses; reject copyleft. Default.
+    Permissive,
+    /// Allow both permissive and copyleft licenses.
+    CopyleftOk,
+    /// Allow everything — no enforcement.
+    Any,
+    /// Use explicit allow/deny lists.
+    Custom,
+}
+
+/// License policy configuration from `[license-policy]` (#635).
+#[derive(Debug, Clone)]
+pub struct LicensePolicy {
+    pub mode: LicensePolicyMode,
+    /// Explicit allow list (used in `Custom` mode, but also extends other modes).
+    pub allow: Vec<String>,
+    /// Explicit deny list (used in `Custom` mode, but also applies in all modes).
+    pub deny: Vec<String>,
+}
+
+/// Standard permissive SPDX license IDs accepted by the `Permissive` policy.
+const PERMISSIVE_LICENSES: &[&str] = &[
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "0BSD",
+    "Unlicense",
+    "CC0-1.0",
+    "BSL-1.0",
+];
+
+/// Additional copyleft licenses accepted by the `CopyleftOk` policy.
+const COPYLEFT_LICENSES: &[&str] = &[
+    "GPL-2.0-only",
+    "GPL-2.0-or-later",
+    "GPL-3.0-only",
+    "GPL-3.0-or-later",
+    "LGPL-2.1-only",
+    "LGPL-2.1-or-later",
+    "LGPL-3.0-only",
+    "LGPL-3.0-or-later",
+    "MPL-2.0",
+    "AGPL-3.0-only",
+    "AGPL-3.0-or-later",
+];
+
+impl Default for LicensePolicy {
+    fn default() -> Self {
+        LicensePolicy {
+            mode: LicensePolicyMode::Permissive,
+            allow: Vec::new(),
+            deny: Vec::new(),
+        }
+    }
+}
+
+impl LicensePolicy {
+    /// Check whether an SPDX license expression is compatible with this policy.
+    ///
+    /// For `OR` expressions (e.g. "MIT OR Apache-2.0"), the license is
+    /// compatible if *any* alternative is allowed.
+    ///
+    /// Returns `Ok(())` if compatible, or `Err(reason)` if rejected.
+    pub fn check(&self, license_expr: &str) -> Result<(), String> {
+        if self.mode == LicensePolicyMode::Any {
+            return Ok(());
+        }
+
+        // Split on " OR " to handle SPDX disjunctions
+        let alternatives: Vec<&str> = license_expr.split(" OR ").map(|s| s.trim()).collect();
+
+        // Check deny list first — any denied alternative taints the expression
+        // unless another alternative is allowed
+        let mut any_allowed = false;
+        let mut all_denied_reason = String::new();
+
+        for alt in &alternatives {
+            // Explicit deny list always wins
+            if self.deny.iter().any(|d| d == alt) {
+                all_denied_reason = format!("{alt} is in the deny list");
+                continue;
+            }
+
+            // Explicit allow list always passes
+            if self.allow.iter().any(|a| a == alt) {
+                any_allowed = true;
+                break;
+            }
+
+            match self.mode {
+                LicensePolicyMode::Permissive => {
+                    if PERMISSIVE_LICENSES.iter().any(|p| p == alt) {
+                        any_allowed = true;
+                        break;
+                    }
+                    all_denied_reason = format!("{alt} is not a recognized permissive license");
+                }
+                LicensePolicyMode::CopyleftOk => {
+                    if PERMISSIVE_LICENSES.iter().any(|p| p == alt)
+                        || COPYLEFT_LICENSES.iter().any(|c| c == alt)
+                    {
+                        any_allowed = true;
+                        break;
+                    }
+                    all_denied_reason =
+                        format!("{alt} is not a recognized permissive or copyleft license");
+                }
+                LicensePolicyMode::Custom => {
+                    // In custom mode, only explicitly allowed licenses pass
+                    all_denied_reason = format!("{alt} is not in the allow list");
+                }
+                LicensePolicyMode::Any => unreachable!(),
+            }
+        }
+
+        if any_allowed {
+            Ok(())
+        } else {
+            Err(all_denied_reason)
+        }
+    }
+
+    /// Human-readable policy name for display.
+    pub fn mode_str(&self) -> &'static str {
+        match self.mode {
+            LicensePolicyMode::Permissive => "permissive",
+            LicensePolicyMode::CopyleftOk => "copyleft-ok",
+            LicensePolicyMode::Any => "any",
+            LicensePolicyMode::Custom => "custom",
+        }
+    }
+}
+
 /// A dependency specification.
 #[derive(Debug, Clone)]
 pub enum DepSpec {
@@ -77,10 +223,12 @@ pub struct Manifest {
     pub dependencies: HashMap<String, DepSpec>,
     /// `[native]` — Rust crates used in `bridge.rs` (for SBOM).
     pub native: HashMap<String, String>,
-    /// `[c-native]` — C libraries linked via `extern "c"` blocks (#633).
-    pub c_native: HashMap<String, String>,
+    /// `[c-native]` — C libraries linked via `extern "c"` blocks (#633/#635).
+    pub c_native: HashMap<String, CNativeSpec>,
     /// `[dependency-policy]` — Dependency Paradox enforcement settings.
     pub dependency_policy: DependencyPolicy,
+    /// `[license-policy]` — License enforcement settings (#635).
+    pub license_policy: LicensePolicy,
 }
 
 impl Manifest {
@@ -128,8 +276,9 @@ impl Manifest {
 
         let dependencies = parse_dependencies(table.get("dependencies"))?;
         let native = parse_native(table.get("native"), "native")?;
-        let c_native = parse_native(table.get("c-native"), "c-native")?;
+        let c_native = parse_c_native_section(table.get("c-native"))?;
         let dependency_policy = parse_dependency_policy(table.get("dependency-policy"))?;
+        let license_policy = parse_license_policy(table.get("license-policy"))?;
 
         Ok(Manifest {
             package: PackageInfo {
@@ -143,6 +292,7 @@ impl Manifest {
             native,
             c_native,
             dependency_policy,
+            license_policy,
         })
     }
 
@@ -238,10 +388,49 @@ impl Manifest {
 
         if !self.c_native.is_empty() {
             out.push_str("\n[c-native]\n");
-            let mut c_native: Vec<(&String, &String)> = self.c_native.iter().collect();
+            let mut c_native: Vec<(&String, &CNativeSpec)> = self.c_native.iter().collect();
             c_native.sort_by_key(|(k, _)| *k);
-            for (name, version) in c_native {
-                out.push_str(&format!("{} = \"{}\"\n", name, toml_escape(version)));
+            for (name, spec) in c_native {
+                if let Some(ref lic) = spec.license {
+                    out.push_str(&format!(
+                        "{} = {{ version = \"{}\", license = \"{}\" }}\n",
+                        name,
+                        toml_escape(&spec.version),
+                        toml_escape(lic)
+                    ));
+                } else {
+                    out.push_str(&format!("{} = \"{}\"\n", name, toml_escape(&spec.version)));
+                }
+            }
+        }
+
+        // Write [license-policy] only when non-default
+        let default_lp = LicensePolicy::default();
+        if self.license_policy.mode != default_lp.mode
+            || !self.license_policy.allow.is_empty()
+            || !self.license_policy.deny.is_empty()
+        {
+            out.push_str("\n[license-policy]\n");
+            if self.license_policy.mode != default_lp.mode {
+                out.push_str(&format!("mode = \"{}\"\n", self.license_policy.mode_str()));
+            }
+            if !self.license_policy.allow.is_empty() {
+                let items: Vec<String> = self
+                    .license_policy
+                    .allow
+                    .iter()
+                    .map(|s| format!("\"{}\"", toml_escape(s)))
+                    .collect();
+                out.push_str(&format!("allow = [{}]\n", items.join(", ")));
+            }
+            if !self.license_policy.deny.is_empty() {
+                let items: Vec<String> = self
+                    .license_policy
+                    .deny
+                    .iter()
+                    .map(|s| format!("\"{}\"", toml_escape(s)))
+                    .collect();
+                out.push_str(&format!("deny = [{}]\n", items.join(", ")));
             }
         }
 
@@ -262,6 +451,7 @@ impl Manifest {
             native: HashMap::new(),
             c_native: HashMap::new(),
             dependency_policy: DependencyPolicy::default(),
+            license_policy: LicensePolicy::default(),
         }
     }
 }
@@ -303,8 +493,8 @@ enum TomlValue {
     Bool(bool),
     /// Integer literal.
     Integer(i64),
-    /// Arrays are opaque pass-through (only used in `[native]` feature lists).
-    Array(()),
+    /// String arrays (e.g. license allow/deny lists).
+    Array(Vec<String>),
 }
 
 type TomlTable = HashMap<String, TomlValue>;
@@ -337,6 +527,14 @@ impl TomlValue {
     fn as_integer(&self) -> Option<i64> {
         if let TomlValue::Integer(n) = self {
             Some(*n)
+        } else {
+            None
+        }
+    }
+
+    fn as_string_array(&self) -> Option<&[String]> {
+        if let TomlValue::Array(a) = self {
+            Some(a)
         } else {
             None
         }
@@ -453,9 +651,20 @@ fn parse_value(s: &str, line: usize) -> Result<TomlValue, String> {
         }
         return Ok(TomlValue::Table(tbl));
     }
-    // Array: [ ... ] — opaque (only needed for [native] features)
+    // Array: [ "a", "b", "c" ] — extract string elements
     if s.starts_with('[') && s.ends_with(']') {
-        return Ok(TomlValue::Array(()));
+        let inner = s[1..s.len() - 1].trim();
+        if inner.is_empty() {
+            return Ok(TomlValue::Array(vec![]));
+        }
+        let mut items = Vec::new();
+        for part in split_on_comma(inner) {
+            let part = part.trim();
+            if part.starts_with('"') && part.ends_with('"') && part.len() >= 2 {
+                items.push(unescape_string(&part[1..part.len() - 1]));
+            }
+        }
+        return Ok(TomlValue::Array(items));
     }
     // Boolean literals
     if s == "true" {
@@ -640,6 +849,99 @@ fn parse_native(
         native.insert(name.clone(), version);
     }
     Ok(native)
+}
+
+/// Parse `[c-native]` section into `CNativeSpec` entries (#635).
+///
+/// Accepts bare strings (`libz = "1.3"`) or inline tables with an optional
+/// `license` field (`libz = { version = "1.3", license = "Zlib" }`).
+fn parse_c_native_section(
+    value: Option<&TomlValue>,
+) -> Result<HashMap<String, CNativeSpec>, ManifestError> {
+    let mut deps = HashMap::new();
+    let tbl = match value {
+        None => return Ok(deps),
+        Some(v) => v
+            .as_table()
+            .ok_or_else(|| ManifestError::ParseError("[c-native] must be a table".to_string()))?,
+    };
+    for (name, val) in tbl {
+        let spec = if let Some(s) = val.as_str() {
+            CNativeSpec {
+                version: s.to_string(),
+                license: None,
+            }
+        } else if let Some(t) = val.as_table() {
+            let version = t
+                .get("version")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| {
+                    ManifestError::ParseError(format!(
+                        "c-native dep '{name}' table must have a 'version' string"
+                    ))
+                })?
+                .to_string();
+            let license = t
+                .get("license")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            CNativeSpec { version, license }
+        } else {
+            return Err(ManifestError::ParseError(format!(
+                "c-native dep '{name}' must be a string or table with 'version'"
+            )));
+        };
+        deps.insert(name.clone(), spec);
+    }
+    Ok(deps)
+}
+
+/// Parse `[license-policy]` section (#635).
+fn parse_license_policy(value: Option<&TomlValue>) -> Result<LicensePolicy, ManifestError> {
+    let mut policy = LicensePolicy::default();
+    let tbl = match value {
+        None => return Ok(policy),
+        Some(v) => v.as_table().ok_or_else(|| {
+            ManifestError::ParseError("[license-policy] must be a table".to_string())
+        })?,
+    };
+    if let Some(v) = tbl.get("mode") {
+        let mode_str = v.as_str().ok_or_else(|| {
+            ManifestError::ParseError("license-policy: mode must be a string".to_string())
+        })?;
+        policy.mode = match mode_str {
+            "permissive" => LicensePolicyMode::Permissive,
+            "copyleft-ok" => LicensePolicyMode::CopyleftOk,
+            "any" => LicensePolicyMode::Any,
+            "custom" => LicensePolicyMode::Custom,
+            other => {
+                return Err(ManifestError::ParseError(format!(
+                    "license-policy: unknown mode '{other}'; expected permissive, copyleft-ok, any, or custom"
+                )));
+            }
+        };
+    }
+    if let Some(v) = tbl.get("allow") {
+        policy.allow = v
+            .as_string_array()
+            .ok_or_else(|| {
+                ManifestError::ParseError(
+                    "license-policy: allow must be an array of strings".to_string(),
+                )
+            })?
+            .to_vec();
+    }
+    if let Some(v) = tbl.get("deny") {
+        policy.deny = v
+            .as_string_array()
+            .ok_or_else(|| {
+                ManifestError::ParseError(
+                    "license-policy: deny must be an array of strings".to_string(),
+                )
+            })?
+            .to_vec();
+    }
+    Ok(policy)
 }
 
 #[cfg(test)]
@@ -1060,11 +1362,19 @@ rationale-required = false
     // --- [c-native] parsing (#633) ---
 
     #[test]
-    fn parse_c_native_section() {
+    fn parse_c_native_section_test() {
         let m = Manifest::parse(WITH_C_NATIVE).unwrap();
         assert_eq!(m.c_native.len(), 2);
-        assert_eq!(m.c_native.get("libz").map(String::as_str), Some("1.3"));
-        assert_eq!(m.c_native.get("openssl").map(String::as_str), Some("3.0"));
+        assert_eq!(
+            m.c_native.get("libz").map(|s| s.version.as_str()),
+            Some("1.3")
+        );
+        assert_eq!(
+            m.c_native.get("openssl").map(|s| s.version.as_str()),
+            Some("3.0")
+        );
+        // Bare strings have no license
+        assert!(m.c_native.get("libz").unwrap().license.is_none());
     }
 
     #[test]
@@ -1080,8 +1390,14 @@ rationale-required = false
         assert!(toml.contains("[c-native]"));
         let m2 = Manifest::parse(&toml).unwrap();
         assert_eq!(m2.c_native.len(), 2);
-        assert_eq!(m2.c_native.get("libz").map(String::as_str), Some("1.3"));
-        assert_eq!(m2.c_native.get("openssl").map(String::as_str), Some("3.0"));
+        assert_eq!(
+            m2.c_native.get("libz").map(|s| s.version.as_str()),
+            Some("1.3")
+        );
+        assert_eq!(
+            m2.c_native.get("openssl").map(|s| s.version.as_str()),
+            Some("3.0")
+        );
     }
 
     #[test]
@@ -1097,12 +1413,286 @@ requires-mvl = ">=0.1.0"
 libz = { version = "1.3" }
 "#;
         let m = Manifest::parse(content).unwrap();
-        assert_eq!(m.c_native.get("libz").map(String::as_str), Some("1.3"));
+        assert_eq!(
+            m.c_native.get("libz").map(|s| s.version.as_str()),
+            Some("1.3")
+        );
+        assert!(m.c_native.get("libz").unwrap().license.is_none());
+    }
+
+    #[test]
+    fn c_native_with_license_field() {
+        let content = r#"
+[package]
+name = "foo"
+version = "0.1.0"
+license = "MIT"
+requires-mvl = ">=0.1.0"
+
+[c-native]
+libz = { version = "1.3", license = "Zlib" }
+openssl = { version = "3.0", license = "Apache-2.0" }
+libc = "0.2"
+"#;
+        let m = Manifest::parse(content).unwrap();
+        assert_eq!(m.c_native.len(), 3);
+        assert_eq!(
+            m.c_native.get("libz").unwrap().license.as_deref(),
+            Some("Zlib")
+        );
+        assert_eq!(
+            m.c_native.get("openssl").unwrap().license.as_deref(),
+            Some("Apache-2.0")
+        );
+        assert!(m.c_native.get("libc").unwrap().license.is_none());
+    }
+
+    #[test]
+    fn c_native_license_roundtrip() {
+        let content = r#"
+[package]
+name = "foo"
+version = "0.1.0"
+license = "MIT"
+requires-mvl = ">=0.1.0"
+
+[c-native]
+libz = { version = "1.3", license = "Zlib" }
+libc = "0.2"
+"#;
+        let m = Manifest::parse(content).unwrap();
+        let toml = m.to_toml();
+        assert!(toml.contains("license = \"Zlib\""));
+        let m2 = Manifest::parse(&toml).unwrap();
+        assert_eq!(
+            m2.c_native.get("libz").unwrap().license.as_deref(),
+            Some("Zlib")
+        );
+        assert!(m2.c_native.get("libc").unwrap().license.is_none());
     }
 
     #[test]
     fn new_project_has_empty_c_native() {
         let m = Manifest::new_project("app", "1.0.0");
         assert!(m.c_native.is_empty());
+    }
+
+    // --- license policy (#635) ---
+
+    #[test]
+    fn parse_default_license_policy() {
+        let m = Manifest::parse(MINIMAL).unwrap();
+        assert_eq!(m.license_policy.mode, LicensePolicyMode::Permissive);
+        assert!(m.license_policy.allow.is_empty());
+        assert!(m.license_policy.deny.is_empty());
+    }
+
+    #[test]
+    fn parse_custom_license_policy() {
+        let content = r#"
+[package]
+name = "my-app"
+version = "0.1.0"
+license = "MIT"
+requires-mvl = ">=0.1.0"
+
+[license-policy]
+mode = "custom"
+allow = ["MIT", "Apache-2.0", "BSD-3-Clause"]
+deny = ["GPL-3.0-only"]
+"#;
+        let m = Manifest::parse(content).unwrap();
+        assert_eq!(m.license_policy.mode, LicensePolicyMode::Custom);
+        assert_eq!(
+            m.license_policy.allow,
+            vec!["MIT", "Apache-2.0", "BSD-3-Clause"]
+        );
+        assert_eq!(m.license_policy.deny, vec!["GPL-3.0-only"]);
+    }
+
+    #[test]
+    fn parse_copyleft_ok_license_policy() {
+        let content = r#"
+[package]
+name = "my-app"
+version = "0.1.0"
+license = "MIT"
+requires-mvl = ">=0.1.0"
+
+[license-policy]
+mode = "copyleft-ok"
+"#;
+        let m = Manifest::parse(content).unwrap();
+        assert_eq!(m.license_policy.mode, LicensePolicyMode::CopyleftOk);
+    }
+
+    #[test]
+    fn parse_any_license_policy() {
+        let content = r#"
+[package]
+name = "my-app"
+version = "0.1.0"
+license = "MIT"
+requires-mvl = ">=0.1.0"
+
+[license-policy]
+mode = "any"
+"#;
+        let m = Manifest::parse(content).unwrap();
+        assert_eq!(m.license_policy.mode, LicensePolicyMode::Any);
+    }
+
+    #[test]
+    fn license_policy_invalid_mode_returns_error() {
+        let content = r#"
+[package]
+name = "my-app"
+version = "0.1.0"
+license = "MIT"
+requires-mvl = ">=0.1.0"
+
+[license-policy]
+mode = "strict"
+"#;
+        let err = Manifest::parse(content).unwrap_err();
+        assert!(matches!(err, ManifestError::ParseError(ref s) if s.contains("strict")));
+    }
+
+    #[test]
+    fn license_policy_roundtrip() {
+        let content = r#"
+[package]
+name = "my-app"
+version = "0.1.0"
+license = "MIT"
+requires-mvl = ">=0.1.0"
+
+[license-policy]
+mode = "custom"
+allow = ["MIT", "Apache-2.0"]
+deny = ["GPL-3.0-only"]
+"#;
+        let m = Manifest::parse(content).unwrap();
+        let toml = m.to_toml();
+        let m2 = Manifest::parse(&toml).unwrap();
+        assert_eq!(m2.license_policy.mode, LicensePolicyMode::Custom);
+        assert_eq!(m2.license_policy.allow, vec!["MIT", "Apache-2.0"]);
+        assert_eq!(m2.license_policy.deny, vec!["GPL-3.0-only"]);
+    }
+
+    #[test]
+    fn default_license_policy_not_serialized() {
+        let m = Manifest::parse(MINIMAL).unwrap();
+        let toml = m.to_toml();
+        assert!(!toml.contains("[license-policy]"));
+    }
+
+    // --- LicensePolicy::check ---
+
+    #[test]
+    fn permissive_policy_allows_mit() {
+        let policy = LicensePolicy::default();
+        assert!(policy.check("MIT").is_ok());
+    }
+
+    #[test]
+    fn permissive_policy_allows_apache() {
+        let policy = LicensePolicy::default();
+        assert!(policy.check("Apache-2.0").is_ok());
+    }
+
+    #[test]
+    fn permissive_policy_rejects_gpl() {
+        let policy = LicensePolicy::default();
+        assert!(policy.check("GPL-3.0-only").is_err());
+    }
+
+    #[test]
+    fn permissive_policy_allows_or_expression_with_permissive_alt() {
+        let policy = LicensePolicy::default();
+        assert!(policy.check("MIT OR Apache-2.0").is_ok());
+        assert!(policy.check("GPL-3.0-only OR MIT").is_ok());
+    }
+
+    #[test]
+    fn permissive_policy_rejects_all_copyleft_or() {
+        let policy = LicensePolicy::default();
+        assert!(policy.check("GPL-3.0-only OR AGPL-3.0-only").is_err());
+    }
+
+    #[test]
+    fn copyleft_ok_policy_allows_gpl() {
+        let policy = LicensePolicy {
+            mode: LicensePolicyMode::CopyleftOk,
+            allow: vec![],
+            deny: vec![],
+        };
+        assert!(policy.check("GPL-3.0-only").is_ok());
+        assert!(policy.check("MIT").is_ok());
+    }
+
+    #[test]
+    fn any_policy_allows_everything() {
+        let policy = LicensePolicy {
+            mode: LicensePolicyMode::Any,
+            allow: vec![],
+            deny: vec![],
+        };
+        assert!(policy.check("GPL-3.0-only").is_ok());
+        assert!(policy.check("UNKNOWN-LICENSE").is_ok());
+    }
+
+    #[test]
+    fn custom_policy_only_allows_listed() {
+        let policy = LicensePolicy {
+            mode: LicensePolicyMode::Custom,
+            allow: vec!["MIT".to_string(), "ISC".to_string()],
+            deny: vec![],
+        };
+        assert!(policy.check("MIT").is_ok());
+        assert!(policy.check("ISC").is_ok());
+        assert!(policy.check("Apache-2.0").is_err());
+    }
+
+    #[test]
+    fn deny_list_overrides_mode() {
+        let policy = LicensePolicy {
+            mode: LicensePolicyMode::Permissive,
+            allow: vec![],
+            deny: vec!["MIT".to_string()],
+        };
+        // MIT is normally permissive, but explicitly denied
+        assert!(policy.check("MIT").is_err());
+    }
+
+    #[test]
+    fn allow_list_extends_mode() {
+        let policy = LicensePolicy {
+            mode: LicensePolicyMode::Permissive,
+            allow: vec!["CUSTOM-1.0".to_string()],
+            deny: vec![],
+        };
+        // Custom license not in permissive list, but explicitly allowed
+        assert!(policy.check("CUSTOM-1.0").is_ok());
+    }
+
+    // --- TOML parser: string arrays ---
+
+    #[test]
+    fn parse_toml_string_array() {
+        let content = "[section]\nitems = [\"a\", \"b\", \"c\"]\n";
+        let table = parse_toml_table(content).unwrap();
+        let sec = table.get("section").unwrap().as_table().unwrap();
+        let arr = sec.get("items").unwrap().as_string_array().unwrap();
+        assert_eq!(arr, &["a", "b", "c"]);
+    }
+
+    #[test]
+    fn parse_toml_empty_array() {
+        let content = "[section]\nitems = []\n";
+        let table = parse_toml_table(content).unwrap();
+        let sec = table.get("section").unwrap().as_table().unwrap();
+        let arr = sec.get("items").unwrap().as_string_array().unwrap();
+        assert!(arr.is_empty());
     }
 }
