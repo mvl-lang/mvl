@@ -141,6 +141,24 @@ impl TextEmitter {
                             },
                         );
                     }
+                } else if let (Some(v), Pattern::Tuple { elems, .. }) = (&val, pattern) {
+                    // Tuple destructuring: `let (a, b) = partition_result`
+                    // The RHS is a ptr to a contiguous block of `ptr`-sized slots,
+                    // one per element.  Extract via GEP + load (index = slot offset).
+                    for (i, elem_pat) in elems.iter().enumerate() {
+                        if let Pattern::Ident(name, _) = elem_pat {
+                            let slot = self.next_reg();
+                            self.push_instr(&format!(
+                                "{slot} = getelementptr ptr, ptr {v}, i64 {i}"
+                            ));
+                            let field = self.next_reg();
+                            self.push_instr(&format!("{field} = load ptr, ptr {slot}"));
+                            self.reg_types.insert(field.clone(), "ptr".into());
+                            self.locals.insert(name.clone(), field.clone());
+                            self.heap_locals
+                                .push((field, super::HeapKind::Array, false));
+                        }
+                    }
                 } else if let (Some(v), Pattern::Ident(name, _)) = (val, pattern) {
                     // Only set reg_types if the register doesn't already have
                     // an entry.  The emitter that produced the value (e.g.

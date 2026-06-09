@@ -247,25 +247,14 @@ pub builtin fn List[T]::group_by[K](self, f: fn(T) -> K) -> Map[K, List[T]]
 
 /// Return all contiguous windows of length `n`. If `n` > `len` the result
 /// is empty. Each window is a new list of exactly `n` elements.
-pub fn List[T]::windows(self, n: Int) -> List[List[T]] where T: Clone {
-    let result: ref List[List[T]] = [];
-    let i: ref Int = 0;
-    while i + n <= self.len() decreases self.len() - i {
-        result.push(self.slice(i, i + n));
-        i = i + 1
-    };
-    result
-}
+///
+/// Builtin: promoted from MVL body to avoid LLVM SSA-dominance issues with
+/// ref-variable loops (#992). C-ABI: `_mvl_list_windows`. Closes #1290.
+pub builtin fn List[T]::windows(self, n: Int) -> List[List[T]]
 
 /// Divide into non-overlapping chunks of at most `n` elements. The last
 /// chunk may be shorter than `n`.
-pub fn List[T]::chunks(self, n: Int) -> List[List[T]] where T: Clone {
-    let result: ref List[List[T]] = [];
-    let i: ref Int = 0;
-    while i < self.len() decreases self.len() - i {
-        let end: Int = if i + n < self.len() { i + n } else { self.len() };
-        result.push(self.slice(i, end));
-        i = i + n
-    };
-    result
-}
+///
+/// Builtin: promoted from MVL body to avoid LLVM SSA-dominance issues with
+/// ref-variable loops (#992). C-ABI: `_mvl_list_chunks`. Closes #1290.
+pub builtin fn List[T]::chunks(self, n: Int) -> List[List[T]]

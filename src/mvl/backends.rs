@@ -335,6 +335,12 @@ pub const BUILTINS: &[BuiltinDesc] = &[
     BuiltinDesc::method("find", "List", 1, 1),
     BuiltinDesc::method("take_while", "List", 1, 1),
     BuiltinDesc::method("skip_while", "List", 1, 1),
+    // List — category-D builtins: explicit emitter arms in both backends (#1290)
+    BuiltinDesc::method_with("sort", "List", 0, 0, None, Some("_mvl_list_sort")),
+    BuiltinDesc::method_with("partition", "List", 1, 1, None, Some("_mvl_list_partition")),
+    BuiltinDesc::method_with("group_by", "List", 1, 1, None, Some("_mvl_list_group_by")),
+    BuiltinDesc::method_with("windows", "List", 1, 1, None, Some("_mvl_list_windows")),
+    BuiltinDesc::method_with("chunks", "List", 1, 1, None, Some("_mvl_list_chunks")),
     // ── Map — compiler intrinsics ─────────────────────────────────────────────
     BuiltinDesc::method("get", "Map", 1, 1),
     BuiltinDesc::method("insert", "Map", 2, 2),

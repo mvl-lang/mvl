@@ -1153,6 +1153,210 @@ pub unsafe extern "C" fn _mvl_list_all(list: *mut MvlArray, closure: *const MvlC
     true
 }
 
+// ── Category-D builtins: sort / partition / group_by / windows / chunks ────────
+
+/// `_mvl_list_sort(list)` — return a new list with elements sorted ascending.
+///
+/// Elements are compared as i64 (8-byte) values, suitable for Int, Float, Bool,
+/// and Byte lists.  Phase 1 (#1290): generic ordering via partial_cmp on i64.
+///
+/// # Safety
+/// `list` must be a valid `MvlArray*` or null.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_list_sort(list: *mut MvlArray) -> *mut MvlArray {
+    if list.is_null() {
+        return _mvl_array_new(8, 0);
+    }
+    let len = (*list).len as usize;
+    let es = (*list).elem_size as usize;
+    let out = _mvl_array_new(es, len.max(1));
+    for i in 0..len {
+        _mvl_array_push(out, (*list).ptr.add(i * es));
+    }
+    if len <= 1 {
+        return out;
+    }
+    // Sort by i64 (covers Int, Float, Bool, Byte — all <= 8 bytes).
+    // For larger elements (e.g. ptr-sized sub-arrays), sort by pointer value.
+    if es <= 8 {
+        // Pad to i64, sort, write back.
+        let mut vals: Vec<i64> = (0..len)
+            .map(|i| {
+                let mut buf = [0u8; 8];
+                let src = (*out).ptr.add(i * es);
+                std::ptr::copy_nonoverlapping(src, buf.as_mut_ptr(), es);
+                i64::from_ne_bytes(buf)
+            })
+            .collect();
+        vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        for (i, v) in vals.iter().enumerate() {
+            let dst = (*out).ptr.add(i * es);
+            std::ptr::copy_nonoverlapping(v.to_ne_bytes().as_ptr(), dst, es);
+        }
+    } else {
+        // Pointer-sized elements — sort by interpreting as usize.
+        let mut ptrs: Vec<usize> = (0..len)
+            .map(|i| {
+                let mut buf = [0u8; 8];
+                let src = (*out).ptr.add(i * es);
+                std::ptr::copy_nonoverlapping(src, buf.as_mut_ptr(), 8);
+                usize::from_ne_bytes(buf)
+            })
+            .collect();
+        ptrs.sort();
+        for (i, p) in ptrs.iter().enumerate() {
+            let dst = (*out).ptr.add(i * es);
+            std::ptr::copy_nonoverlapping(p.to_ne_bytes().as_ptr(), dst, 8);
+        }
+    }
+    out
+}
+
+/// `_mvl_list_partition(list, closure)` — split into matching and non-matching.
+///
+/// Returns a heap-allocated `[ptr; 2]`: index 0 is elements where predicate
+/// is true, index 1 is elements where predicate is false.  The LLVM emitter
+/// destructures this into two named bindings via `getelementptr` + `load`.
+///
+/// Predicate signature: `fn(env: ptr, elem: ptr) -> i1`.
+///
+/// # Safety
+/// `list` and `closure` must be valid non-null pointers.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_list_partition(
+    list: *mut MvlArray,
+    closure: *const MvlClosure,
+) -> *mut u8 {
+    let pair = _mvl_alloc(16) as *mut *mut MvlArray;
+    if list.is_null() {
+        *pair = _mvl_array_new(8, 0);
+        *pair.add(1) = _mvl_array_new(8, 0);
+        return pair as *mut u8;
+    }
+    if closure.is_null() || (*closure).fn_ptr.is_null() {
+        std::process::abort();
+    }
+    let len = (*list).len as usize;
+    let es = (*list).elem_size as usize;
+    let yes = _mvl_array_new(es, len.max(1));
+    let no = _mvl_array_new(es, len.max(1));
+    let pred: unsafe extern "C" fn(*const u8, *const u8) -> bool =
+        std::mem::transmute((*closure).fn_ptr);
+    let env = (*closure).env_ptr as *const u8;
+    for i in 0..len {
+        let elem_ptr = (*list).ptr.add(i * es);
+        if pred(env, elem_ptr) {
+            _mvl_array_push(yes, elem_ptr);
+        } else {
+            _mvl_array_push(no, elem_ptr);
+        }
+    }
+    *pair = yes;
+    *pair.add(1) = no;
+    pair as *mut u8
+}
+
+/// `_mvl_list_group_by(list, closure)` — group elements by key.
+///
+/// Calls `closure(env, elem_ptr) -> i64` for each element.  Returns a
+/// `MvlMap*` mapping each i64 key to its `MvlArray*` group.  Map values
+/// are 8-byte pointer slots storing `MvlArray*` pointers.
+///
+/// Key closure signature: `fn(env: ptr, elem: ptr) -> i64`.
+///
+/// # Safety
+/// `list` and `closure` must be valid non-null pointers.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_list_group_by(
+    list: *mut MvlArray,
+    closure: *const MvlClosure,
+) -> *mut MvlMap {
+    let map = crate::memory::_mvl_map_new(0);
+    if list.is_null() {
+        return map;
+    }
+    if closure.is_null() || (*closure).fn_ptr.is_null() {
+        std::process::abort();
+    }
+    let len = (*list).len as usize;
+    let es = (*list).elem_size as usize;
+    let key_fn: unsafe extern "C" fn(*const u8, *const u8) -> i64 =
+        std::mem::transmute((*closure).fn_ptr);
+    let env = (*closure).env_ptr as *const u8;
+    for i in 0..len {
+        let elem_ptr = (*list).ptr.add(i * es);
+        let key: i64 = key_fn(env, elem_ptr);
+        let key_bytes = key.to_ne_bytes();
+        let existing = crate::memory_ops::mvl_map_get(map as *const MvlMap, key_bytes.as_ptr(), 8);
+        let group: *mut MvlArray = if existing.is_null() {
+            let new_group = _mvl_array_new(es, 1);
+            let ptr_val = new_group as usize;
+            let ptr_bytes = ptr_val.to_ne_bytes();
+            crate::memory_ops::mvl_map_insert(map, key_bytes.as_ptr(), 8, ptr_bytes.as_ptr(), 8);
+            new_group
+        } else {
+            // The map stores the 8-byte pointer value; dereference it.
+            *(existing as *const *mut MvlArray)
+        };
+        _mvl_array_push(group, elem_ptr);
+    }
+    map
+}
+
+/// `_mvl_list_windows(list, n)` — all contiguous windows of length `n`.
+///
+/// Returns a `MvlArray*` of `MvlArray*` pointers (List[List[T]]).
+/// Each inner array is a fresh slice of `n` elements.
+///
+/// # Safety
+/// `list` must be a valid `MvlArray*` or null.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_list_windows(list: *mut MvlArray, n: i64) -> *mut MvlArray {
+    // Result is a list of ptrs (elem_size = 8).
+    let out = _mvl_array_new(8, 1);
+    if list.is_null() || n <= 0 {
+        return out;
+    }
+    let len = (*list).len as i64;
+    if n > len {
+        return out;
+    }
+    let count = (len - n + 1) as usize;
+    for i in 0..count {
+        let window = _mvl_list_slice(list, i as i64, i as i64 + n);
+        let ptr_val = window as usize;
+        let ptr_bytes = ptr_val.to_ne_bytes();
+        _mvl_array_push(out, ptr_bytes.as_ptr());
+    }
+    out
+}
+
+/// `_mvl_list_chunks(list, n)` — non-overlapping chunks of at most `n` elements.
+///
+/// Returns a `MvlArray*` of `MvlArray*` pointers (List[List[T]]).
+/// The last chunk may be shorter than `n`.
+///
+/// # Safety
+/// `list` must be a valid `MvlArray*` or null.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_list_chunks(list: *mut MvlArray, n: i64) -> *mut MvlArray {
+    let out = _mvl_array_new(8, 1);
+    if list.is_null() || n <= 0 {
+        return out;
+    }
+    let len = (*list).len as i64;
+    let mut i: i64 = 0;
+    while i < len {
+        let end = (i + n).min(len);
+        let chunk = _mvl_list_slice(list, i, end);
+        let ptr_val = chunk as usize;
+        let ptr_bytes = ptr_val.to_ne_bytes();
+        _mvl_array_push(out, ptr_bytes.as_ptr());
+        i += n;
+    }
+    out
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

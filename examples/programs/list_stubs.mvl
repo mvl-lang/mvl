@@ -1,0 +1,48 @@
+// list_stubs.mvl — Category-D builtins: sort/partition/group_by/windows/chunks (#1290)
+//
+// Exercises the five methods that previously had no LLVM dispatch arm.
+// Both the Rust transpiler and LLVM backends must agree on output.
+//
+// Expected stdout:
+//   sort=[1, 2, 3, 4, 5]
+//   partition_yes=2
+//   partition_no=3
+//   group_by_key1=2
+//   windows=3
+//   chunks=3
+
+fn is_even(x: Int) -> Bool { x % 2 == 0 }
+fn identity(x: Int) -> Int { x }
+
+fn main() -> Unit ! Console {
+    // sort: ascending order
+    let xs: List[Int] = [3, 1, 4, 1, 5];
+    let sorted: List[Int] = xs.sort();
+    let s: ref String = sorted.fold("[", |acc: String, v: Int| {
+        if acc == "[" { acc.concat(v.to_string()) } else { acc.concat(", ").concat(v.to_string()) }
+    });
+    s = s.concat("]");
+    println(format("sort={}", [s]));
+
+    // partition: split evens/odds
+    let nums: List[Int] = [1, 2, 3, 4, 5];
+    let (evens, odds): (List[Int], List[Int]) = nums.partition(is_even);
+    println(format("partition_yes={}", [evens.len().to_string()]));
+    println(format("partition_no={}", [odds.len().to_string()]));
+
+    // group_by: group [1,2,3,1,2] by identity → key 1 maps to 2 elements
+    let gs: List[Int] = [1, 2, 3, 1, 2];
+    let grouped: Map[Int, List[Int]] = gs.group_by(identity);
+    let key1_list: List[Int] = grouped.get(1).unwrap_or([]);
+    println(format("group_by_key1={}", [key1_list.len().to_string()]));
+
+    // windows: [1,2,3,4] with n=2 → 3 windows
+    let ws: List[Int] = [1, 2, 3, 4];
+    let wins: List[List[Int]] = ws.windows(2);
+    println(format("windows={}", [wins.len().to_string()]));
+
+    // chunks: [1,2,3,4,5] with n=2 → 3 chunks
+    let cs: List[Int] = [1, 2, 3, 4, 5];
+    let chs: List[List[Int]] = cs.chunks(2);
+    println(format("chunks={}", [chs.len().to_string()]));
+}

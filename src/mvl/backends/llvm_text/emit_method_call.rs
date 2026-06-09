@@ -88,25 +88,39 @@ impl TextEmitter {
             }
             // ── Map methods ─────────────────────────────────────────────
             ("get", "ptr") if matches!(self.mvl_receiver_kind(receiver), Some("Map")) => {
-                let key_arg = match args.first() {
-                    Some(a) => match self.emit_expr(a)? {
-                        Some(v) => v,
-                        None => return Ok(None),
-                    },
+                let key_expr = match args.first() {
+                    Some(a) => a,
                     None => return Ok(None),
                 };
-                self.ensure_extern("declare ptr @_mvl_string_ptr(ptr)");
-                self.ensure_extern("declare i64 @_mvl_str_len(ptr)");
+                let key_ty = self.type_of_expr(key_expr);
+                let key_arg = match self.emit_expr(key_expr)? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
                 self.ensure_extern("declare ptr @_mvl_map_get(ptr, ptr, i64)");
-                let kp = self.next_reg();
-                self.push_instr(&format!("{kp} = call ptr @_mvl_string_ptr(ptr {key_arg})"));
-                let kl = self.next_reg();
-                self.push_instr(&format!("{kl} = call i64 @_mvl_str_len(ptr {key_arg})"));
+                let (kp, kl) = if key_ty == "i64" {
+                    // Integer key: stack-allocate the 8-byte key.
+                    let slot = self.next_reg();
+                    self.push_instr(&format!("{slot} = alloca i64"));
+                    self.push_instr(&format!("store i64 {key_arg}, ptr {slot}"));
+                    (slot, "8".to_string())
+                } else {
+                    // String key: use string pointer + length.
+                    self.ensure_extern("declare ptr @_mvl_string_ptr(ptr)");
+                    self.ensure_extern("declare i64 @_mvl_str_len(ptr)");
+                    let kp = self.next_reg();
+                    self.push_instr(&format!("{kp} = call ptr @_mvl_string_ptr(ptr {key_arg})"));
+                    let kl_reg = self.next_reg();
+                    self.push_instr(&format!("{kl_reg} = call i64 @_mvl_str_len(ptr {key_arg})"));
+                    (kp, kl_reg)
+                };
                 let raw = self.next_reg();
                 self.push_instr(&format!(
                     "{raw} = call ptr @_mvl_map_get(ptr {val}, ptr {kp}, i64 {kl})"
                 ));
-                // Null-guard: _mvl_map_get returns null if key not found.
+                // Build Option[T] as { i8, ptr }: disc=0 for Some (raw ptr IS the payload
+                // pointer), disc=1 for None.  _mvl_map_get returns a pointer to the
+                // stored value bytes — exactly the payload ptr unwrap_or expects.
                 let is_null = self.next_reg();
                 self.push_instr(&format!("{is_null} = icmp eq ptr {raw}, null"));
                 let some_bb = self.next_bb("map_get_some");
@@ -116,17 +130,21 @@ impl TextEmitter {
                     "br i1 {is_null}, label %{none_bb}, label %{some_bb}"
                 ));
                 self.start_bb(&some_bb);
-                let loaded = self.next_reg();
-                self.push_instr(&format!("{loaded} = load i64, ptr {raw}"));
+                let opt_some = self.next_reg();
+                self.push_instr(&format!(
+                    "{opt_some} = insertvalue {{ i8, ptr }} {{ i8 0, ptr null }}, ptr {raw}, 1"
+                ));
                 self.push_instr(&format!("br label %{merge_bb}"));
+                let some_end = self.current_bb.clone();
                 self.start_bb(&none_bb);
                 self.push_instr(&format!("br label %{merge_bb}"));
+                let none_end = self.current_bb.clone();
                 self.start_bb(&merge_bb);
                 let result = self.next_reg();
                 self.push_instr(&format!(
-                    "{result} = phi i64 [ {loaded}, %{some_bb} ], [ 0, %{none_bb} ]"
+                    "{result} = phi {{ i8, ptr }} [ {opt_some}, %{some_end} ], [ {{ i8 1, ptr null }}, %{none_end} ]"
                 ));
-                self.reg_types.insert(result.clone(), "i64".into());
+                self.reg_types.insert(result.clone(), "{ i8, ptr }".into());
                 Ok(Some(result))
             }
             ("insert", "ptr") if matches!(self.mvl_receiver_kind(receiver), Some("Map")) => {
@@ -348,6 +366,81 @@ impl TextEmitter {
                 self.push_instr(&format!("{result} = load {init_ty}, ptr {reg}"));
                 self.reg_types.insert(result.clone(), init_ty);
                 Ok(Some(result))
+            }
+
+            // ── Category-D: sort / windows / chunks / partition / group_by ─
+            // (#1290) All five promoted to `pub builtin fn` with C-ABI impls.
+
+            // List::sort() → List[T] — returns a new sorted copy
+            ("sort", "ptr") if args.is_empty() => {
+                self.ensure_extern("declare ptr @_mvl_list_sort(ptr)");
+                let reg = self.next_reg();
+                self.push_instr(&format!("{reg} = call ptr @_mvl_list_sort(ptr {val})"));
+                self.reg_types.insert(reg.clone(), "ptr".into());
+                Ok(Some(reg))
+            }
+
+            // List::windows(n) → List[List[T]]
+            ("windows", "ptr") if args.len() == 1 => {
+                let n = match self.emit_expr(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                self.ensure_extern("declare ptr @_mvl_list_windows(ptr, i64)");
+                let reg = self.next_reg();
+                self.push_instr(&format!(
+                    "{reg} = call ptr @_mvl_list_windows(ptr {val}, i64 {n})"
+                ));
+                self.reg_types.insert(reg.clone(), "ptr".into());
+                Ok(Some(reg))
+            }
+
+            // List::chunks(n) → List[List[T]]
+            ("chunks", "ptr") if args.len() == 1 => {
+                let n = match self.emit_expr(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                self.ensure_extern("declare ptr @_mvl_list_chunks(ptr, i64)");
+                let reg = self.next_reg();
+                self.push_instr(&format!(
+                    "{reg} = call ptr @_mvl_list_chunks(ptr {val}, i64 {n})"
+                ));
+                self.reg_types.insert(reg.clone(), "ptr".into());
+                Ok(Some(reg))
+            }
+
+            // List::partition(f) → (List[T], List[T])
+            // Returns ptr to a 2-slot array of MvlArray* pointers; the
+            // LLVM emitter destructures it via Pattern::Tuple in emit_stmts.
+            ("partition", "ptr") if args.len() == 1 && self.is_closure_arg(&args[0]) => {
+                let closure = match self.emit_as_hof_closure(&args[0], &[0])? {
+                    Some(p) => p,
+                    None => return Ok(None),
+                };
+                self.ensure_extern("declare ptr @_mvl_list_partition(ptr, ptr)");
+                let reg = self.next_reg();
+                self.push_instr(&format!(
+                    "{reg} = call ptr @_mvl_list_partition(ptr {val}, ptr {closure})"
+                ));
+                self.reg_types.insert(reg.clone(), "ptr".into());
+                Ok(Some(reg))
+            }
+
+            // List::group_by(f) → Map[K, List[T]]
+            // Key closure signature: fn(env, elem_ptr) -> i64.
+            ("group_by", "ptr") if args.len() == 1 && self.is_closure_arg(&args[0]) => {
+                let closure = match self.emit_as_hof_closure(&args[0], &[0])? {
+                    Some(p) => p,
+                    None => return Ok(None),
+                };
+                self.ensure_extern("declare ptr @_mvl_list_group_by(ptr, ptr)");
+                let reg = self.next_reg();
+                self.push_instr(&format!(
+                    "{reg} = call ptr @_mvl_list_group_by(ptr {val}, ptr {closure})"
+                ));
+                self.reg_types.insert(reg.clone(), "ptr".into());
+                Ok(Some(reg))
             }
 
             // ── List::push(item) → List (in-place) ───────────────────────
