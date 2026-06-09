@@ -17,9 +17,9 @@ git = "https://github.com/mvl-lang/pkg-sqlite"
 
 [[package]]
 name = "github.com/mvl-lang/pkg-zmq"
-version = "0.1.0"
-hash = "sha256:076b5ccb05602166a2b478f80fa13ec36eecfa318f6d9ccb1f2d6b2748d1c20b"
-commit = "0cc10e6d79ce72601897ccf5e5433cc7c9be3809"
+version = "0.2.0"
+hash = "sha256:10a930a80ae240bd9bb22f593d66bd61a1b91eeae13906b2f619cae005333135"
+commit = "c386b652ad226b197b80bb94b0a3a849c41aa73b"
 git = "https://github.com/mvl-lang/pkg-zmq"
 
 [[package]]
