@@ -1,5 +1,4 @@
 // closure_nested_capture.mvl -- Nested closure capture (#1271)
-// rust-expect-skip: Rust transpiler emits fn() pointer for capturing closures (#1313)
 //
 // A closure that captures another closure from the enclosing scope,
 // demonstrating closure-over-closure semantics.

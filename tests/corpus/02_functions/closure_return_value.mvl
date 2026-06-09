@@ -1,5 +1,4 @@
 // closure_return_value.mvl — Function returning a closure (#1271)
-// rust-expect-skip: Rust transpiler emits fn() pointer for capturing closures (#1313)
 //
 // Verifies that a function can return a closure that captures variables
 // from its enclosing scope, and the closure works correctly when called.
