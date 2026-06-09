@@ -1067,6 +1067,9 @@ mod tests {
 // ── Backend trait implementation ─────────────────────────────────────────────
 
 /// Unit struct implementing the [`Backend`] trait for the Rust transpiler.
+///
+/// The caller runs the full pipeline (`checker → mono → lower`) and passes the
+/// resulting [`TirProgram`] to `emit_program`.
 pub struct RustBackend;
 
 impl crate::mvl::backends::Backend for RustBackend {
@@ -1078,15 +1081,8 @@ impl crate::mvl::backends::Backend for RustBackend {
         "rs"
     }
 
-    fn emit_program(&self, prog: &crate::mvl::parser::ast::Program, crate_name: &str) -> String {
-        // Backend trait does not supply expr_types; use empty map for TIR
-        // lowering. For full type-aware emission use `transpile()` with
-        // pre-checked expr_types from the pipeline (#1110).
-        let expr_types: std::collections::HashMap<_, _> = Default::default();
-        let all_fns = crate::mvl::passes::mono::collect_fns([prog]);
-        let mono = crate::mvl::passes::mono::monomorphize(prog, &all_fns, &expr_types);
-        let tir = crate::mvl::ir::lower::lower(prog, &mono, &expr_types);
-        transpile(tir, TranspileConfig::new(crate_name))
+    fn emit_program(&self, tir: &crate::mvl::ir::TirProgram, crate_name: &str) -> String {
+        transpile(tir.clone(), TranspileConfig::new(crate_name))
             .output
             .lib_rs
     }

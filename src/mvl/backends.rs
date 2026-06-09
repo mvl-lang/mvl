@@ -14,6 +14,7 @@
 pub mod llvm_text;
 pub mod rust;
 
+use crate::mvl::ir::TirProgram;
 use crate::mvl::parser::ast::Program;
 
 /// Controls how struct invariants and refinement conditions are enforced at runtime.
@@ -646,10 +647,14 @@ mod registry_tests {
 
 /// Common interface shared by all MVL code-generation backends.
 ///
-/// Each backend receives a checked program (plus any prelude programs) and
-/// produces output that can be compiled or executed.  The trait is intentionally
-/// minimal; specialised functionality (coverage, MC/DC, mutation) lives on the
-/// concrete backend types and is called directly from `src/main.rs`.
+/// Each backend receives a fully-typed [`TirProgram`] (post-checker,
+/// post-monomorphization, post-TIR-lowering) and produces output that can be
+/// compiled or executed.  The caller is responsible for running the analysis
+/// pipeline (`checker → mono → lower`) before invoking the backend.
+///
+/// The trait is intentionally minimal; specialised functionality (coverage,
+/// MC/DC, mutation) lives on concrete backend types and is called directly
+/// from `src/main.rs`.
 pub trait Backend {
     /// Human-readable backend identifier (matches the `--backend=` flag value).
     fn name(&self) -> &'static str;
@@ -661,5 +666,16 @@ pub trait Backend {
     ///
     /// `crate_name` is used as the Rust crate/module name for the Rust backend
     /// and ignored by the LLVM backend.
+    fn emit_program(&self, tir: &TirProgram, crate_name: &str) -> String;
+}
+
+/// Legacy trait for backends that still operate on raw AST.
+///
+/// Provided for incremental migration — the LLVM backend still walks the AST
+/// for emission while using checker-resolved types for dispatch.  Once the LLVM
+/// emitter consumes TIR directly, this trait can be removed.
+pub trait LegacyBackend {
+    fn name(&self) -> &'static str;
+    fn file_extension(&self) -> &'static str;
     fn emit_program(&self, prog: &Program, crate_name: &str) -> String;
 }
