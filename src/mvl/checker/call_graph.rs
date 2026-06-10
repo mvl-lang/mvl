@@ -38,7 +38,8 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::mvl::checker::context::TypeEnv;
-use crate::mvl::parser::ast::{Block, Decl, ElseBranch, Expr, MatchBody, Program, Stmt};
+use crate::mvl::checker::walk::walk_block;
+use crate::mvl::parser::ast::{Decl, Expr, Program};
 use crate::mvl::parser::lexer::Span;
 
 // ── Public types ──────────────────────────────────────────────────────────────
@@ -144,165 +145,39 @@ pub fn build(programs: &[&Program], type_env: &TypeEnv) -> CallGraph {
 
 fn collect_program_edges(prog: &Program, graph: &mut CallGraph) {
     for decl in &prog.declarations {
-        match decl {
-            Decl::Fn(fd) => {
-                graph.nodes.insert(fd.name.clone());
-                collect_block_edges(&fd.body, &fd.name, graph);
-            }
-            Decl::Impl(id) => {
-                for method in &id.methods {
-                    graph.nodes.insert(method.name.clone());
-                    collect_block_edges(&method.body, &method.name, graph);
+        let bodies: Vec<(String, _)> = match decl {
+            Decl::Fn(fd) => vec![(fd.name.clone(), &fd.body)],
+            Decl::Impl(id) => id
+                .methods
+                .iter()
+                .map(|m| (m.name.clone(), &m.body))
+                .collect(),
+            Decl::Actor(ad) => ad
+                .methods
+                .iter()
+                .map(|m| (m.name.clone(), &m.body))
+                .collect(),
+            _ => continue,
+        };
+        for (caller, body) in bodies {
+            graph.nodes.insert(caller.clone());
+            walk_block(body, &mut |expr| {
+                if let Expr::FnCall {
+                    name: callee, span, ..
+                } = expr
+                {
+                    graph
+                        .edges
+                        .entry(caller.clone())
+                        .or_default()
+                        .push(CallEdge {
+                            callee: callee.clone(),
+                            call_span: *span,
+                        });
+                    graph.nodes.insert(callee.clone());
                 }
-            }
-            Decl::Actor(ad) => {
-                for method in &ad.methods {
-                    graph.nodes.insert(method.name.clone());
-                    collect_block_edges(&method.body, &method.name, graph);
-                }
-            }
-            _ => {}
+            });
         }
-    }
-}
-
-fn collect_block_edges(block: &Block, caller: &str, graph: &mut CallGraph) {
-    for stmt in &block.stmts {
-        collect_stmt_edges(stmt, caller, graph);
-    }
-}
-
-fn collect_stmt_edges(stmt: &Stmt, caller: &str, graph: &mut CallGraph) {
-    match stmt {
-        Stmt::Let { init, .. } => collect_expr_edges(init, caller, graph),
-        Stmt::Assign { value, .. } => collect_expr_edges(value, caller, graph),
-        Stmt::Return { value: Some(e), .. } => collect_expr_edges(e, caller, graph),
-        Stmt::Return { value: None, .. } => {}
-        Stmt::Expr { expr, .. } => collect_expr_edges(expr, caller, graph),
-        Stmt::If {
-            cond, then, else_, ..
-        } => {
-            collect_expr_edges(cond, caller, graph);
-            collect_block_edges(then, caller, graph);
-            match else_ {
-                Some(ElseBranch::Block(b)) => collect_block_edges(b, caller, graph),
-                Some(ElseBranch::If(s)) => collect_stmt_edges(s, caller, graph),
-                None => {}
-            }
-        }
-        Stmt::Match {
-            scrutinee, arms, ..
-        } => {
-            collect_expr_edges(scrutinee, caller, graph);
-            for arm in arms {
-                match &arm.body {
-                    MatchBody::Expr(e) => collect_expr_edges(e, caller, graph),
-                    MatchBody::Block(b) => collect_block_edges(b, caller, graph),
-                }
-            }
-        }
-        Stmt::For { iter, body, .. } => {
-            collect_expr_edges(iter, caller, graph);
-            collect_block_edges(body, caller, graph);
-        }
-        Stmt::While { cond, body, .. } => {
-            collect_expr_edges(cond, caller, graph);
-            collect_block_edges(body, caller, graph);
-        }
-    }
-}
-
-fn collect_expr_edges(expr: &Expr, caller: &str, graph: &mut CallGraph) {
-    match expr {
-        Expr::FnCall {
-            name, args, span, ..
-        } => {
-            // Record the call edge.
-            graph
-                .edges
-                .entry(caller.to_string())
-                .or_default()
-                .push(CallEdge {
-                    callee: name.clone(),
-                    call_span: *span,
-                });
-            // Also ensure the callee is a node (may not be in type_env if the
-            // call is to an unresolved or prelude name not yet registered).
-            graph.nodes.insert(name.clone());
-            for arg in args {
-                collect_expr_edges(arg, caller, graph);
-            }
-        }
-        // MethodCall: callee cannot be statically determined without receiver
-        // type resolution — tracked for post-monomorphization (#838).
-        Expr::MethodCall { receiver, args, .. } => {
-            collect_expr_edges(receiver, caller, graph);
-            for arg in args {
-                collect_expr_edges(arg, caller, graph);
-            }
-        }
-        Expr::Match {
-            scrutinee, arms, ..
-        } => {
-            collect_expr_edges(scrutinee, caller, graph);
-            for arm in arms {
-                match &arm.body {
-                    MatchBody::Expr(e) => collect_expr_edges(e, caller, graph),
-                    MatchBody::Block(b) => collect_block_edges(b, caller, graph),
-                }
-            }
-        }
-        Expr::If {
-            cond, then, else_, ..
-        } => {
-            collect_expr_edges(cond, caller, graph);
-            collect_block_edges(then, caller, graph);
-            if let Some(e) = else_ {
-                collect_expr_edges(e, caller, graph);
-            }
-        }
-        Expr::Block(b) => collect_block_edges(b, caller, graph),
-        Expr::Binary { left, right, .. } => {
-            collect_expr_edges(left, caller, graph);
-            collect_expr_edges(right, caller, graph);
-        }
-        Expr::Unary { expr, .. }
-        | Expr::Propagate { expr, .. }
-        | Expr::Consume { expr, .. }
-        | Expr::Relabel { expr, .. }
-        | Expr::Borrow { expr, .. }
-        | Expr::As { expr, .. } => collect_expr_edges(expr, caller, graph),
-        Expr::FieldAccess { expr, .. } => collect_expr_edges(expr, caller, graph),
-        Expr::Construct { fields, .. } => {
-            for (_, e) in fields {
-                collect_expr_edges(e, caller, graph);
-            }
-        }
-        Expr::List { elems, .. } | Expr::Set { elems, .. } => {
-            for e in elems {
-                collect_expr_edges(e, caller, graph);
-            }
-        }
-        Expr::Map { pairs, .. } => {
-            for (k, v) in pairs {
-                collect_expr_edges(k, caller, graph);
-                collect_expr_edges(v, caller, graph);
-            }
-        }
-        Expr::Lambda { body, .. } => collect_expr_edges(body, caller, graph),
-        Expr::Spawn { fields, .. } => {
-            for (_, e) in fields {
-                collect_expr_edges(e, caller, graph);
-            }
-        }
-        Expr::Select { arms, .. } => {
-            for arm in arms {
-                collect_expr_edges(&arm.expr, caller, graph);
-                collect_block_edges(&arm.body, caller, graph);
-            }
-        }
-        // Leaf expressions — no sub-expressions.
-        Expr::Literal(..) | Expr::Ident(..) | Expr::Quantifier(..) => {}
     }
 }
 
