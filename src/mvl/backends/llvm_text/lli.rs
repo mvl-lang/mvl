@@ -47,16 +47,16 @@ fn which_lli() -> Option<PathBuf> {
     None
 }
 
-// ── mvl_runtime_c library discovery ──────────────────────────────────────────
+// ── mvl_runtime_llvm library discovery ───────────────────────────────────────
 
-/// Locate `libmvl_runtime_c` for `lli --load=<lib>` (ADR-0018).
+/// Locate `libmvl_runtime_llvm` for `lli --load=<lib>` (ADR-0018).
 ///
 /// Search order:
-/// 1. `MVL_RUNTIME_C_LIB` env var (must end in `.dylib` or `.so`)
-/// 2. Sibling of the current executable: `target/{profile}/libmvl_runtime_c.{dylib,so}`
-/// 3. Cargo cdylib output: `target/{profile}/deps/libmvl_runtime_c.{dylib,so}`
-pub fn find_mvl_runtime_c_lib() -> Option<PathBuf> {
-    find_cdylib("MVL_RUNTIME_C_LIB", "libmvl_runtime_c")
+/// 1. `MVL_RUNTIME_LLVM_LIB` env var (must end in `.dylib` or `.so`)
+/// 2. Sibling of the current executable: `target/{profile}/libmvl_runtime_llvm.{dylib,so}`
+/// 3. Cargo cdylib output: `target/{profile}/deps/libmvl_runtime_llvm.{dylib,so}`
+pub fn find_mvl_runtime_llvm_lib() -> Option<PathBuf> {
+    find_cdylib("MVL_RUNTIME_LLVM_LIB", "libmvl_runtime_llvm")
 }
 
 fn find_cdylib(env_var: &str, lib_name: &str) -> Option<PathBuf> {

@@ -1,17 +1,17 @@
 [package]
-name = "mvl_runtime_c"
-version = "0.1.0"
+name = "mvl_runtime_llvm"
+version = "0.196.0"
 edition = "2021"
 description = "MVL C-ABI stdlib runtime — cdylib loaded by lli at runtime via --load (merged with mvl_memory)"
 license = "Apache-2.0"
 
-# cdylib: loaded by lli at runtime via --load=libmvl_runtime_c.{dylib,so}
+# cdylib: loaded by lli at runtime via --load=libmvl_runtime_llvm.{dylib,so}
 # rlib: allows Rust tests to call the functions directly with cargo test
 [lib]
-name = "mvl_runtime_c"
+name = "mvl_runtime_llvm"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-mvl_runtime = { path = "../rust" }
+mvl_runtime = { path = "../rust", package = "mvl_runtime_rust" }
 libc = "0.2"
 crossbeam-deque = "0.8"

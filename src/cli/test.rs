@@ -369,7 +369,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
             process::exit(1);
         }
         format!(
-            "mvl_runtime = {{ path = \"{}\" }}  # MVL security labels and prelude\n",
+            "mvl_runtime = {{ path = \"{}\", package = \"mvl_runtime_rust\" }}  # MVL security labels and prelude\n",
             runtime_src.display()
         )
     } else {

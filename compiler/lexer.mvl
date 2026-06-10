@@ -7,7 +7,7 @@
 // String, returns List[Token].  No I/O effects.
 //
 // Design notes:
-//   - src.char_at(pos) → single-char String; "" when pos ≥ len.
+//   - src.char_at(pos) → Option[String]; use .unwrap_or("") for "" when pos ≥ len.
 //     Available from the implicit prelude (std/strings.mvl).
 //   - Scanner helpers return a ScanResult struct (kind + lexeme + end_pos)
 //     because MVL does not yet support tuple construction as expressions.
@@ -113,7 +113,7 @@ partial fn scan_word(src: String, pos: Int, src_len: Int) -> ScanResult
     let p: ref Int = pos;
     // Termination: p advances by 1 each step; loop exits when p == src_len or
     // char is not alphanumeric. Measure src_len - p decreases monotonically.
-    while p < src_len && is_alnum(src.char_at(p)) decreases src_len - p {
+    while p < src_len && is_alnum(src.char_at(p).unwrap_or("")) decreases src_len - p {
         p = p + 1
     }
     let lexeme: String = src.substring(pos, p);
@@ -129,13 +129,13 @@ partial fn scan_number(src: String, pos: Int, src_len: Int) -> ScanResult
 {
     let p: ref Int = pos;
     // Termination: p strictly increases each step (by 1); bounded above by src_len.
-    while p < src_len && is_digit(src.char_at(p)) decreases src_len - p {
+    while p < src_len && is_digit(src.char_at(p).unwrap_or("")) decreases src_len - p {
         p = p + 1
     }
-    if p < src_len && src.char_at(p) == "." && is_digit(src.char_at(p + 1)) {
+    if p < src_len && src.char_at(p).unwrap_or("") == "." && is_digit(src.char_at(p + 1).unwrap_or("")) {
         p = p + 1;
         // Termination: same argument — p increases, bounded by src_len.
-        while p < src_len && is_digit(src.char_at(p)) decreases src_len - p {
+        while p < src_len && is_digit(src.char_at(p).unwrap_or("")) decreases src_len - p {
             p = p + 1
         }
         ScanResult { kind: TokenKind::FloatLit, lexeme: src.substring(pos, p), end_pos: p }
@@ -152,7 +152,7 @@ partial fn scan_comment_end(src: String, pos: Int, src_len: Int) -> Int
 {
     let p: ref Int = pos;
     // Termination: p increases by 1 per step; exits at '\n' or when p == src_len.
-    while p < src_len && src.char_at(p) != "\n" decreases src_len - p {
+    while p < src_len && src.char_at(p).unwrap_or("") != "\n" decreases src_len - p {
         p = p + 1
     }
     p
@@ -168,8 +168,8 @@ partial fn scan_string_body(src: String, pos: Int, src_len: Int) -> ScanResult
     let p: ref Int = pos;
     // Termination: p advances by 1 or 2 each step (escape sequences advance by 2).
     // Both increments are positive, so src_len - p strictly decreases each iteration.
-    while p < src_len && src.char_at(p) != "\"" decreases src_len - p {
-        if src.char_at(p) == "\\" && p + 1 < src_len {
+    while p < src_len && src.char_at(p).unwrap_or("") != "\"" decreases src_len - p {
+        if src.char_at(p).unwrap_or("") == "\\" && p + 1 < src_len {
             p = p + 2
         } else {
             p = p + 1
@@ -215,8 +215,8 @@ pub partial fn lex(src: String) -> List[Token]
     // (scan_word/scan_number/scan_string_body may advance by more). The guard
     // pos < src_len is thus falsified in at most src_len iterations.
     while pos < src_len decreases src_len - pos {
-        let c: String = src.char_at(pos);
-        let c2: String = src.char_at(pos + 1);
+        let c: String = src.char_at(pos).unwrap_or("");
+        let c2: String = src.char_at(pos + 1).unwrap_or("");
         let span: Span = Span { line: line, col: col };
 
         if is_whitespace(c) {

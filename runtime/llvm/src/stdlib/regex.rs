@@ -5,7 +5,7 @@
 //!
 //! Mirrors `mvl_runtime::stdlib::regex`. Every public function has a
 //! corresponding `_mvl_regex_*` symbol callable from LLVM-generated code
-//! via `lli --load=libmvl_runtime_c`.
+//! via `lli --load=libmvl_runtime_llvm`.
 //!
 //! # String convention
 //!
