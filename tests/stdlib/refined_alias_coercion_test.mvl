@@ -59,3 +59,18 @@ test fn make_port_return() -> Unit {
     let n: Int = use_port(port);
     assert_eq(n, 1234)
 }
+
+test fn port_into_via_from_impl() -> Unit {
+    // Port → Int via .into() (From<Port> for i64 impl) (#1328)
+    // This tests the generic .into() path used by method call arg emission
+    let port: Port = 8080;
+    let n: Int = take_int(port);
+    assert_eq(n, 8080)
+}
+
+test fn port_arithmetic() -> Unit {
+    // Port → Int coercion in arithmetic context (#1328)
+    let port: Port = 443;
+    let doubled: Int = take_int(port) + take_int(port);
+    assert_eq(doubled, 886)
+}
