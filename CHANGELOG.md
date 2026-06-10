@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+## [0.197.1] - 2026-06-10
+
+### Fixed
+
+- **LLVM type substitution** (#1333) — `substitute_type` was silently dropping 5 type variants (`Refined`, `Tainted`, `Secret`, `Actor`, `Infer`) in the LLVM backend; fix clippy PI errors
+- **anthropic_chat example** — add missing `mvl.toml`, `mvl.lock`, and `LICENSE` to example package; update `checked_div`/`rem` expectations
+
+### Changed
+
+- **Checker** — extract `walk.rs` and replace 3 AST traversal triples with shared walker (#1338); remove `TirProgram::span_types` round-trip (#1337)
+- **Backends** — drop AST twin helpers in `capability_params.rs` (#1335); gate `openapi.rs` behind `self-host` feature flag (#1336)
+- **Parser** — split `functions.rs` into `declarations/`, `externs/`, `actors/` modules (#1339); remove dead cli stubs, pre-TIR helpers, and solver façade (#1334)
+
 ## [0.197.0] - 2026-06-10
 
 ### Added
