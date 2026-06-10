@@ -1,0 +1,8 @@
+[package]
+name = "zmq_hello"
+version = "0.1.1"
+license = "Apache-2.0"
+requires-mvl = ">=0.184.0"
+
+[dependencies]
+"github.com/mvl-lang/pkg-zmq" = { git = "https://github.com/mvl-lang/pkg-zmq", tag = "v0.2.0", rationale = "ZMTP 3.x wire protocol — 3k+ LOC framing, handshake, and socket patterns" }

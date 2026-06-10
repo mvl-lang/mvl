@@ -4,8 +4,8 @@
   "scopeName": "source.mvl",
   "fileTypes": ["mvl"],
   "patterns": [
-    { "include": "#comments" },
     { "include": "#strings" },
+    { "include": "#comments" },
     { "include": "#chars" },
     { "include": "#numbers" },
     { "include": "#special-forms" },

@@ -2,6 +2,32 @@
 
 ## [Unreleased]
 
+## [0.196.0] - 2026-06-10
+
+### Added
+
+- **Dependency rationale enforcement** (#637) — require audit justification for external dependencies to enforce conscious dependency decisions:
+  - `[dependency-policy]` manifest section with `complexity-threshold` and `rationale-required` flags
+  - `rationale` field on each dependency in `[dependencies]` section
+  - `audit_dep_rationale()` API validates all dependencies have rationale
+  - Applied to all examples with external packages: `actor_webserver`, `sqlite_basic`, `zmq_hello`, `crud_api`
+
+- **License validation** (#635 extension) — validate SPDX license ID in mvl.toml matches LICENSE file content
+  - `validate_license()` API checks LICENSE file exists and matches declared SPDX id
+  - Applied to all examples with external packages
+
+- **SBOM application type detection** — distinguish libraries from applications in generated SBOM/CycloneDX output
+  - Scans for `fn main()` in package root to classify as application vs library
+  - Applied to examples with entry points
+
+- **Refined type alias coercion at call sites** — improved Port type handling in zmq_hello example
+  - Demonstrated L1, L4, L5 refinement solver proofs in server_pull.mvl
+
+- **Syntax highlighting fixes**
+  - Tree-sitter: wrap `string_literal` and `raw_string_literal` in `token()` to prevent `//` inside strings being parsed as line comments
+  - TextMate: reorder patterns to check strings before comments
+  - nvim-mvl: remove invalid `"transparent" @keyword.modifier` node type reference
+
 ## [0.195.2] - 2026-06-10
 
 ### Fixed

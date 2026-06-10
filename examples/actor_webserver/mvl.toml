@@ -1,0 +1,8 @@
+[package]
+name = "actor_webserver"
+version = "0.1.1"
+license = "Apache-2.0"
+requires-mvl = ">=0.184.0"
+
+[dependencies]
+"github.com/mvl-lang/pkg-http" = { git = "https://github.com/mvl-lang/pkg-http", tag = "v0.2.0", rationale = "HTTP routing, request parsing, and response serialization — 2k+ LOC protocol implementation" }

@@ -17,7 +17,7 @@
 # Packages are resolved from the XDG cache ($XDG_DATA_HOME/mvl/pkg/).
 # Run `mvl install` from the repo root to populate the cache before using this example.
 .PHONY: help guard-mvl guard-pyzmq check build test test-zmq test-rust \
-        test-pushpull test-pubsub test-all run run-zmtp clean smoke test-solver
+        test-pushpull test-pubsub test-all run run-zmtp clean smoke test-solver assurance
 
 .DEFAULT_GOAL := help
 
@@ -291,6 +291,9 @@ test-pubsub: build guard-pyzmq ## ZMTP PUB/SUB: pyzmq PUB server + MVL SUB clien
 # ── Run all ──────────────────────────────────────────────────────────────────
 
 test-all: test test-zmq test-rust test-pushpull test-pubsub ## Run all test modes
+
+assurance: guard-mvl ## Assurance report for all MVL sources
+	$(MVL) assurance $(DIR)
 
 smoke: build ## Smoke-test: verify all MVL binaries compile
 	@echo "  \033[32m✓  all MVL binaries built successfully\033[0m"

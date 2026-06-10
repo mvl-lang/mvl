@@ -308,6 +308,71 @@ impl Manifest {
         Ok(())
     }
 
+    /// Validate that the `license` field in `mvl.toml` matches the LICENSE file.
+    ///
+    /// Checks two things:
+    /// 1. A LICENSE file exists in the project directory
+    /// 2. The LICENSE file content is consistent with the declared SPDX identifier
+    ///
+    /// Returns `Ok(())` on success, `Err(LicenseMismatch)` on failure.
+    pub fn validate_license(&self, dir: &Path) -> Result<(), ManifestError> {
+        let license_path = dir.join("LICENSE");
+        if !license_path.exists() {
+            return Err(ManifestError::LicenseMismatch(format!(
+                "license = \"{}\" but no LICENSE file found in {}",
+                self.package.license,
+                dir.display()
+            )));
+        }
+        let content = std::fs::read_to_string(&license_path)
+            .map_err(|e| ManifestError::Io(license_path.display().to_string(), e.to_string()))?;
+        let expected = &self.package.license;
+        let matches = match expected.as_str() {
+            "Apache-2.0" => content.contains("Apache License") && content.contains("Version 2.0"),
+            "MIT" => {
+                content.contains("MIT License") || content.contains("Permission is hereby granted")
+            }
+            "BSD-2-Clause" => {
+                content.contains("BSD 2-Clause") || content.contains("Redistribution and use")
+            }
+            "BSD-3-Clause" => {
+                content.contains("BSD 3-Clause") || content.contains("neither the name")
+            }
+            "ISC" => {
+                content.contains("ISC License")
+                    || content.contains("Permission to use, copy, modify")
+            }
+            _ => true, // unknown SPDX id — skip content check, file existence is enough
+        };
+        if !matches {
+            return Err(ManifestError::LicenseMismatch(format!(
+                "license = \"{}\" but LICENSE file content does not match",
+                expected
+            )));
+        }
+        Ok(())
+    }
+
+    /// Validate dependency rationale policy (#637).
+    ///
+    /// When `rationale-required` is true, returns a list of dependency names
+    /// that are missing a rationale string. Returns an empty vec when all
+    /// deps are compliant or when enforcement is disabled.
+    pub fn audit_dep_rationale(&self) -> Vec<String> {
+        if !self.dependency_policy.rationale_required {
+            return Vec::new();
+        }
+        let mut missing = Vec::new();
+        let mut deps: Vec<(&String, &DepSpec)> = self.dependencies.iter().collect();
+        deps.sort_by_key(|(k, _)| k.as_str());
+        for (name, spec) in deps {
+            if spec.rationale().is_none() {
+                missing.push(name.clone());
+            }
+        }
+        missing
+    }
+
     /// Serialize the manifest back to TOML text.
     pub fn to_toml(&self) -> String {
         let mut out = String::new();
@@ -465,6 +530,10 @@ pub enum ManifestError {
     MissingField(String),
     /// E700: extern-rationale required when extern blocks are present.
     MissingExternRationale(String),
+    /// E701: dependency rationale required by policy (#637).
+    MissingDepRationale(Vec<String>),
+    /// E702: license field does not match LICENSE file.
+    LicenseMismatch(String),
 }
 
 impl std::fmt::Display for ManifestError {
@@ -478,6 +547,16 @@ impl std::fmt::Display for ManifestError {
                 f,
                 "E700: extern-rationale required when extern blocks are present in '{pkg}'"
             ),
+            ManifestError::MissingDepRationale(deps) => {
+                write!(
+                    f,
+                    "E701: dependency rationale required for: {}",
+                    deps.join(", ")
+                )
+            }
+            ManifestError::LicenseMismatch(msg) => {
+                write!(f, "E702: {msg}")
+            }
         }
     }
 }
@@ -1694,5 +1773,132 @@ deny = ["GPL-3.0-only"]
         let sec = table.get("section").unwrap().as_table().unwrap();
         let arr = sec.get("items").unwrap().as_string_array().unwrap();
         assert!(arr.is_empty());
+    }
+
+    // --- audit_dep_rationale (#637) ---
+
+    #[test]
+    fn audit_reports_missing_rationale() {
+        let content = r#"
+[package]
+name = "my-app"
+version = "0.1.0"
+license = "MIT"
+requires-mvl = ">=0.1.0"
+
+[dependencies]
+ring = { git = "https://github.com/ring", tag = "v0.17.8", rationale = "Crypto" }
+uuid = { git = "https://github.com/uuid", tag = "v1.0.0" }
+"#;
+        let m = Manifest::parse(content).unwrap();
+        let missing = m.audit_dep_rationale();
+        assert_eq!(missing, vec!["uuid"]);
+    }
+
+    #[test]
+    fn audit_passes_when_all_have_rationale() {
+        let content = r#"
+[package]
+name = "my-app"
+version = "0.1.0"
+license = "MIT"
+requires-mvl = ">=0.1.0"
+
+[dependencies]
+ring = { git = "https://github.com/ring", tag = "v0.17.8", rationale = "Crypto" }
+"#;
+        let m = Manifest::parse(content).unwrap();
+        assert!(m.audit_dep_rationale().is_empty());
+    }
+
+    #[test]
+    fn audit_skipped_when_policy_disabled() {
+        let content = r#"
+[package]
+name = "my-app"
+version = "0.1.0"
+license = "MIT"
+requires-mvl = ">=0.1.0"
+
+[dependencies]
+uuid = { git = "https://github.com/uuid", tag = "v1.0.0" }
+
+[dependency-policy]
+rationale-required = false
+"#;
+        let m = Manifest::parse(content).unwrap();
+        assert!(m.audit_dep_rationale().is_empty());
+    }
+
+    #[test]
+    fn audit_empty_deps_passes() {
+        let m = Manifest::parse(MINIMAL).unwrap();
+        assert!(m.audit_dep_rationale().is_empty());
+    }
+
+    #[test]
+    fn missing_dep_rationale_error_display() {
+        let e =
+            ManifestError::MissingDepRationale(vec!["uuid".to_string(), "left-pad".to_string()]);
+        let s = e.to_string();
+        assert!(s.contains("E701"));
+        assert!(s.contains("uuid"));
+        assert!(s.contains("left-pad"));
+    }
+
+    // --- validate_license ---
+
+    #[test]
+    fn validate_license_passes_when_file_matches() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("mvl.toml"), MINIMAL).unwrap();
+        std::fs::write(
+            tmp.path().join("LICENSE"),
+            "MIT License\n\nPermission is hereby granted...",
+        )
+        .unwrap();
+        let m = Manifest::load(tmp.path()).unwrap();
+        assert!(m.validate_license(tmp.path()).is_ok());
+    }
+
+    #[test]
+    fn validate_license_fails_when_no_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("mvl.toml"), MINIMAL).unwrap();
+        let m = Manifest::load(tmp.path()).unwrap();
+        let err = m.validate_license(tmp.path()).unwrap_err();
+        assert!(matches!(err, ManifestError::LicenseMismatch(_)));
+        assert!(err.to_string().contains("E702"));
+        assert!(err.to_string().contains("no LICENSE file"));
+    }
+
+    #[test]
+    fn validate_license_fails_on_content_mismatch() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("mvl.toml"), MINIMAL).unwrap();
+        // MINIMAL says license = "MIT" but we write Apache content
+        std::fs::write(
+            tmp.path().join("LICENSE"),
+            "Apache License\nVersion 2.0, January 2004",
+        )
+        .unwrap();
+        let m = Manifest::load(tmp.path()).unwrap();
+        let err = m.validate_license(tmp.path()).unwrap_err();
+        assert!(matches!(err, ManifestError::LicenseMismatch(_)));
+        assert!(err.to_string().contains("does not match"));
+    }
+
+    #[test]
+    fn validate_license_apache2_matches() {
+        let tmp = tempfile::tempdir().unwrap();
+        let toml = MINIMAL.replace("MIT", "Apache-2.0");
+        std::fs::write(tmp.path().join("mvl.toml"), &toml).unwrap();
+        std::fs::write(
+            tmp.path().join("LICENSE"),
+            "Apache License\nVersion 2.0, January 2004\n...",
+        )
+        .unwrap();
+        let m = Manifest::load(tmp.path()).unwrap();
+        assert!(m.validate_license(tmp.path()).is_ok());
     }
 }

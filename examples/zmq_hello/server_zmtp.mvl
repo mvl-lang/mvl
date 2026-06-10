@@ -10,14 +10,21 @@
 use pkg.zmq.{zmq_error_msg}
 use pkg.zmq.reqrep.{rep_serve_zmtp}
 
-fn handle(req: Tainted[String]) -> String {
+type Port = Int where self >= 1 && self <= 65535
+
+fn handle(req: Tainted[String]) -> String
+    ensures len(result) > 0
+{
     let plain: String = relabel trust(req, "ZMQ-REQ-HANDLER");
     "echo: ".concat(plain)
 }
 
 partial fn main() -> Unit ! Console + Net {
-    println("ZMTP 3.x REP server listening on tcp://*:5556");
-    match rep_serve_zmtp("tcp://*:5556", handle) {
+    let port: Port = 5556;
+    let port_n: Int = port;
+    let addr: String = "tcp://*:".concat(port_n.to_string());
+    println("ZMTP 3.x REP server listening on ".concat(addr));
+    match rep_serve_zmtp(addr, handle) {
         Ok(_)  => {},
         Err(e) => println("error: ".concat(zmq_error_msg(e))),
     }
