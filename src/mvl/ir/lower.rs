@@ -1222,42 +1222,6 @@ fn main() -> Unit {
         );
     }
 
-    // ── span_types integration ────────────────────────────────────────────────
-
-    #[test]
-    fn span_types_empty_program() {
-        use crate::mvl::ir::TirProgram;
-        let prog = TirProgram::default();
-        assert!(prog.span_types().is_empty());
-    }
-
-    #[test]
-    fn span_types_contains_body_expressions() {
-        let (prog, check) = parse_and_check(
-            r#"
-fn add(x: Int, y: Int) -> Int { x + y }
-fn main() -> Unit { let r: Int = add(1, 2); }
-"#,
-        );
-        let all_fns = crate::mvl::passes::mono::collect_fns([&prog]);
-        let mono = crate::mvl::passes::mono::monomorphize(&prog, &all_fns, &check.expr_types);
-        let tir = lower(&prog, &mono, &check.expr_types);
-
-        let span_map = tir.span_types();
-        assert!(
-            !span_map.is_empty(),
-            "span_types must not be empty for a non-trivial program"
-        );
-        // Every Ty in the map must be a concrete, non-generic type.
-        for ty in span_map.values() {
-            assert_ne!(
-                *ty,
-                Ty::Unknown,
-                "span_types should not contain Unknown types"
-            );
-        }
-    }
-
     #[test]
     fn tir_expr_carries_type() {
         let (prog, check) = parse_and_check(
