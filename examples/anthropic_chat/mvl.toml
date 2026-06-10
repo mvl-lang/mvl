@@ -1,0 +1,8 @@
+[package]
+name = "anthropic_chat"
+version = "0.1.0"
+license = "Apache-2.0"
+requires-mvl = ">=0.184.0"
+
+[dependencies]
+"github.com/mvl-lang/pkg-anthropic" = { git = "https://github.com/mvl-lang/pkg-anthropic", tag = "v0.1.0", rationale = "Anthropic Claude API SDK — typed message protocol, auth, streaming" }
