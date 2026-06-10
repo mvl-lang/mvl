@@ -162,10 +162,15 @@ pub fn run(
     // A synthetic manifest() override is prepended so it wins the "first wins"
     // deduplication in emit_program_core, replacing the Phase 1 stub values.
     // Phase 3 additionally collects FFI bridges from extern blocks in all_with_pkgs.
+    // Phase 5: requirements_proven is 0 here — build does not run the pass registry.
     if manifest_embed::any_uses_std_runtime(&all_with_pkgs) {
-        if let Some(override_prog) =
-            manifest_embed::load_and_generate(&project_root, &manifest_root, &all_with_pkgs, "rust")
-        {
+        if let Some(override_prog) = manifest_embed::load_and_generate(
+            &project_root,
+            &manifest_root,
+            &all_with_pkgs,
+            "rust",
+            0,
+        ) {
             stdlib_prelude_progs.insert(0, override_prog);
         }
     }

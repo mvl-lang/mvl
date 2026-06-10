@@ -13,6 +13,8 @@
 //! |-------|--------------------|
 //! | 2     | `app_name`, `app_version`, `mvl_version`, `stdlib_version`, `packages` |
 //! | 3     | `ffi_bridges` — extracted from `extern "rust"` / `extern "c"` blocks |
+//! | 5     | `assurance.extern_count`, `total_functions`, `extern_ratio`, `requirements_proven` |
+//! | 6     | `licenses` — deduplicated from `mvl.lock` package metadata |
 //!
 //! The override is prepended to `stdlib_prelude_progs` before transpilation.
 //! The emitter's "first wins" prelude deduplication makes it shadow the stub
@@ -43,7 +45,12 @@ pub struct FfiBridgeData {
 /// Try to load project metadata and generate a `manifest()` override program.
 ///
 /// `all_progs` — the entry program + sibling modules + package modules, used
-/// to collect `extern` declarations for the `ffi_bridges` field (Phase 3).
+/// to collect `extern` declarations for the `ffi_bridges` field (Phase 3) and
+/// function counts for `AssuranceInfo` (Phase 5).
+///
+/// `requirements_proven` — number of the 11 verification requirements that the
+/// caller has proven.  Pass 0 when the verification pass registry has not been
+/// run (e.g. `mvl build`, which only type-checks).
 ///
 /// Returns `None` when no `mvl.toml` exists (single-file builds that have no
 /// project manifest), or when the generated MVL fails to parse unexpectedly.
@@ -56,10 +63,12 @@ pub fn load_and_generate(
     manifest_root: &Path,
     all_progs: &[Program],
     backend: &str,
+    requirements_proven: usize,
 ) -> Option<Program> {
     let pkg_manifest = PkgManifest::load(manifest_root).ok()?;
     let lockfile = LockFile::load_or_empty(project_root);
     let bridges = collect_ffi_bridges(all_progs);
+    let (extern_count, total_functions) = collect_fn_counts(all_progs);
 
     let mvl_version = env!("CARGO_PKG_VERSION");
     let runtime_version = env!("MVL_RUNTIME_VERSION");
@@ -83,6 +92,9 @@ pub fn load_and_generate(
         profile,
         build_date,
         source_digest: &source_digest_computed,
+        extern_count,
+        total_functions,
+        requirements_proven,
     };
     let src = generate_manifest_mvl(&meta, &lockfile.packages, &bridges);
 
@@ -132,6 +144,26 @@ pub fn collect_ffi_bridges(progs: &[Program]) -> Vec<FfiBridgeData> {
     bridges
 }
 
+/// Count `(extern_fn_count, total_fn_count)` across all programs.
+///
+/// `extern_fn_count` — total individual function signatures inside all
+/// `extern "abi" { … }` blocks.  `total_fn_count` = regular `fn` declarations
+/// plus `extern_fn_count`.  Used to populate `AssuranceInfo` (Phase 5).
+pub fn collect_fn_counts(progs: &[Program]) -> (usize, usize) {
+    let mut extern_count = 0usize;
+    let mut fn_count = 0usize;
+    for prog in progs {
+        for decl in &prog.declarations {
+            match decl {
+                Decl::Extern(ed) => extern_count += ed.fns.len(),
+                Decl::Fn(_) => fn_count += 1,
+                _ => {}
+            }
+        }
+    }
+    (extern_count, fn_count + extern_count)
+}
+
 /// Return true if any program in `progs` imports `use std.runtime.*`.
 pub fn any_uses_std_runtime(progs: &[Program]) -> bool {
     progs.iter().any(|p| {
@@ -165,6 +197,12 @@ struct ManifestMeta<'a> {
     build_date: &'a str,
     /// `"sha256:<hex>"` of the project source tree, or `""` when unavailable.
     source_digest: &'a str,
+    /// Phase 5: number of individual fn signatures inside `extern` blocks.
+    extern_count: usize,
+    /// Phase 5: regular fn declarations + extern_count.
+    total_functions: usize,
+    /// Phase 5: number of the 11 verification requirements proven by the caller.
+    requirements_proven: usize,
 }
 
 /// Generate MVL source for the real `manifest()` function.
@@ -190,7 +228,31 @@ fn generate_manifest_mvl(
         profile,
         build_date,
         source_digest,
+        extern_count,
+        total_functions,
+        requirements_proven,
     } = meta;
+
+    // Phase 6: collect unique non-empty license strings, sorted for determinism.
+    let mut licenses: Vec<String> = packages
+        .iter()
+        .filter_map(|p| {
+            p.license
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned)
+        })
+        .collect();
+    licenses.sort();
+    licenses.dedup();
+
+    // Phase 5: assurance ratios.
+    let extern_ratio = if *total_functions == 0 {
+        0.0_f64
+    } else {
+        *extern_count as f64 / *total_functions as f64
+    };
+
     let mut src = String::from("pub fn manifest() -> Manifest {\n");
 
     // Per-package let bindings.
@@ -200,9 +262,17 @@ fn generate_manifest_mvl(
              name: {name}, version: {ver}, license: {lic} }};\n",
             name = mvl_str(&pkg.name),
             ver = mvl_str(&pkg.version),
-            lic = mvl_str(""), // license aggregation deferred to Phase 6
+            lic = mvl_str(pkg.license.as_deref().unwrap_or("")),
         ));
     }
+
+    // Phase 6: licenses list let binding.
+    let lic_list = if licenses.is_empty() {
+        "[]".to_string()
+    } else {
+        let items: Vec<String> = licenses.iter().map(|l| mvl_str(l)).collect();
+        format!("[{}]", items.join(", "))
+    };
     let pkg_list = make_list(packages.len(), "p");
     src.push_str(&format!("    let pkgs: List[PackageInfo] = {pkg_list};\n"));
 
@@ -244,12 +314,15 @@ fn generate_manifest_mvl(
         &format!("            profile:       {},", mvl_str(profile)),
         &format!("            date:          {},", mvl_str(build_date)),
         "        },",
-        "        licenses:  [],",
+        &format!("        licenses:  {lic_list},"),
         "        assurance: AssuranceInfo {",
-        "            extern_ratio:        0.0,",
-        "            extern_count:        0,",
-        "            total_functions:     0,",
-        "            requirements_proven: 0,",
+        &format!(
+            "            extern_ratio:        {},",
+            mvl_float(extern_ratio)
+        ),
+        &format!("            extern_count:        {},", extern_count),
+        &format!("            total_functions:     {},", total_functions),
+        &format!("            requirements_proven: {},", requirements_proven),
         "        },",
         &format!("        source_digest:  {},", mvl_str(source_digest)),
         "    }",
@@ -272,6 +345,16 @@ fn make_list(n: usize, prefix: &str) -> String {
     } else {
         let vars: Vec<String> = (0..n).map(|i| format!("{prefix}{i}")).collect();
         format!("[{}]", vars.join(", "))
+    }
+}
+
+/// Return `f` as a MVL Float literal, ensuring a decimal point is present.
+fn mvl_float(f: f64) -> String {
+    let s = format!("{f}");
+    if s.contains('.') {
+        s
+    } else {
+        format!("{s}.0")
     }
 }
 
@@ -436,6 +519,152 @@ mod tests {
         assert_eq!(bridges[0].bridge_name, "alpha");
     }
 
+    // --- collect_fn_counts (Phase 5) ---
+
+    #[test]
+    fn collect_fn_counts_empty() {
+        let (ec, tf) = collect_fn_counts(&[]);
+        assert_eq!(ec, 0);
+        assert_eq!(tf, 0);
+    }
+
+    #[test]
+    fn collect_fn_counts_only_regular_fns() {
+        let prog = parse_prog("fn foo() -> Unit {}\nfn bar() -> Int { 1 }\n");
+        let (ec, tf) = collect_fn_counts(&[prog]);
+        assert_eq!(ec, 0);
+        assert_eq!(tf, 2);
+    }
+
+    #[test]
+    fn collect_fn_counts_only_extern_fns() {
+        let src = "extern \"rust\" { fn a() -> Int; fn b() -> String; }\n";
+        let prog = parse_prog(src);
+        let (ec, tf) = collect_fn_counts(&[prog]);
+        assert_eq!(ec, 2);
+        assert_eq!(tf, 2);
+    }
+
+    #[test]
+    fn collect_fn_counts_mixed() {
+        let src = "fn my_fn() -> Unit {}\nextern \"c\" { fn c_fn() -> Int; }\n";
+        let prog = parse_prog(src);
+        let (ec, tf) = collect_fn_counts(&[prog]);
+        assert_eq!(ec, 1);
+        assert_eq!(tf, 2); // 1 regular + 1 extern
+    }
+
+    // --- mvl_float ---
+
+    #[test]
+    fn mvl_float_zero_has_decimal_point() {
+        assert_eq!(mvl_float(0.0), "0.0");
+    }
+
+    #[test]
+    fn mvl_float_fractional_preserved() {
+        assert!(mvl_float(0.5).contains('.'));
+    }
+
+    #[test]
+    fn mvl_float_integer_gets_decimal_point() {
+        let s = mvl_float(1.0);
+        assert!(s.contains('.'), "1.0 must have a decimal point, got {s}");
+    }
+
+    // --- Phase 5/6 in generate_manifest_mvl ---
+
+    #[test]
+    fn generate_manifest_mvl_assurance_real_values() {
+        let mut meta = base_meta();
+        meta.extern_count = 2;
+        meta.total_functions = 5;
+        meta.requirements_proven = 3;
+        let src = generate_manifest_mvl(&meta, &[], &[]);
+        assert!(src.contains("extern_count:        2"));
+        assert!(src.contains("total_functions:     5"));
+        assert!(src.contains("requirements_proven: 3"));
+        assert!(src.contains("extern_ratio:"));
+        // ratio = 2/5 = 0.4
+        assert!(src.contains("0.4"), "extern_ratio should be 0.4");
+    }
+
+    #[test]
+    fn generate_manifest_mvl_zero_total_functions_gives_zero_ratio() {
+        let src = generate_manifest_mvl(&base_meta(), &[], &[]);
+        assert!(src.contains("extern_ratio:        0.0"));
+    }
+
+    #[test]
+    fn generate_manifest_mvl_licenses_from_packages() {
+        let pkgs = vec![
+            LockedPackage {
+                name: "pkg-a".to_string(),
+                version: "1.0.0".to_string(),
+                hash: "sha256:aaa".to_string(),
+                commit: None,
+                git: None,
+                license: Some("MIT".to_string()),
+                allow_license_override: None,
+            },
+            LockedPackage {
+                name: "pkg-b".to_string(),
+                version: "2.0.0".to_string(),
+                hash: "sha256:bbb".to_string(),
+                commit: None,
+                git: None,
+                license: Some("Apache-2.0".to_string()),
+                allow_license_override: None,
+            },
+        ];
+        let src = generate_manifest_mvl(&base_meta(), &pkgs, &[]);
+        assert!(
+            src.contains(r#"licenses:  ["Apache-2.0", "MIT"]"#),
+            "sorted dedup licenses"
+        );
+        assert!(
+            src.contains(r#"license: "MIT""#),
+            "per-package license populated"
+        );
+        assert!(src.contains(r#"license: "Apache-2.0""#));
+    }
+
+    #[test]
+    fn generate_manifest_mvl_licenses_deduplicates() {
+        let pkg = LockedPackage {
+            name: "pkg".to_string(),
+            version: "1.0.0".to_string(),
+            hash: "sha256:abc".to_string(),
+            commit: None,
+            git: None,
+            license: Some("MIT".to_string()),
+            allow_license_override: None,
+        };
+        let src = generate_manifest_mvl(&base_meta(), &[pkg.clone(), pkg], &[]);
+        // Only one "MIT" in the licenses list
+        let count = src.matches(r#""MIT""#).count();
+        // 2 per-package bindings + 1 in licenses list = 3 occurrences
+        assert_eq!(
+            count, 3,
+            "MIT should appear in 2 pkg bindings + 1 license list"
+        );
+    }
+
+    #[test]
+    fn generate_manifest_mvl_licenses_skips_none() {
+        let pkg = LockedPackage {
+            name: "pkg".to_string(),
+            version: "1.0.0".to_string(),
+            hash: "sha256:abc".to_string(),
+            commit: None,
+            git: None,
+            license: None,
+            allow_license_override: None,
+        };
+        let src = generate_manifest_mvl(&base_meta(), &[pkg], &[]);
+        assert!(src.contains("licenses:  [],"), "None license → empty list");
+    }
+
     // --- mvl_option_str ---
 
     #[test]
@@ -465,6 +694,9 @@ mod tests {
             profile: "debug",
             build_date: "2026-06-04T00:00:00Z",
             source_digest: "",
+            extern_count: 0,
+            total_functions: 0,
+            requirements_proven: 0,
         };
         let src = generate_manifest_mvl(&meta, &[], &[]);
         assert!(src.contains("pub fn manifest() -> Manifest"));
@@ -503,6 +735,9 @@ mod tests {
             profile: "release",
             build_date: "2026-06-04T00:00:00Z",
             source_digest: "",
+            extern_count: 0,
+            total_functions: 0,
+            requirements_proven: 0,
         };
         let src = generate_manifest_mvl(&meta, &[], &bridges);
         assert!(src.contains(r#"let b0: FfiBridge = FfiBridge { abi: "rust", bridge_name: "fetch_url", bridge_version: "" };"#));
@@ -526,6 +761,9 @@ mod tests {
             profile: "debug",
             build_date: "2026-06-04T12:00:00Z",
             source_digest: "",
+            extern_count: 0,
+            total_functions: 0,
+            requirements_proven: 0,
         };
         let src = generate_manifest_mvl(&meta, &[], &[]);
         let (mut parser, _) = Parser::new(&src);
@@ -566,6 +804,9 @@ mod tests {
             profile: "debug",
             build_date: "2026-06-04T00:00:00Z",
             source_digest: "",
+            extern_count: 0,
+            total_functions: 0,
+            requirements_proven: 0,
         };
         let src = generate_manifest_mvl(&meta, &pkgs, &bridges);
         let (mut parser, _) = Parser::new(&src);
@@ -596,7 +837,7 @@ mod tests {
     #[test]
     fn load_and_generate_returns_none_for_missing_manifest() {
         let tmp = tempfile::tempdir().unwrap();
-        assert!(load_and_generate(tmp.path(), tmp.path(), &[], "rust").is_none());
+        assert!(load_and_generate(tmp.path(), tmp.path(), &[], "rust", 0).is_none());
     }
 
     #[test]
@@ -608,7 +849,7 @@ mod tests {
                         license = \"MIT\"\n\
                         requires-mvl = \">=0.1.0\"\n";
         std::fs::write(tmp.path().join("mvl.toml"), manifest).unwrap();
-        let prog = load_and_generate(tmp.path(), tmp.path(), &[], "rust").unwrap();
+        let prog = load_and_generate(tmp.path(), tmp.path(), &[], "rust", 0).unwrap();
         let fn_names: Vec<&str> = prog
             .declarations
             .iter()
@@ -649,6 +890,9 @@ mod tests {
             profile: "debug",
             build_date: "2026-06-04T00:00:00Z",
             source_digest: "",
+            extern_count: 0,
+            total_functions: 0,
+            requirements_proven: 0,
         };
         let src = generate_manifest_mvl(&meta, &[], &bridges);
         assert!(
@@ -673,6 +917,9 @@ mod tests {
             profile: "debug",
             build_date: "2026-06-05T00:00:00Z",
             source_digest: "",
+            extern_count: 0,
+            total_functions: 0,
+            requirements_proven: 0,
         }
     }
 

@@ -1,0 +1,20 @@
+// Corpus: std.runtime Phase 6 — licenses list populated from mvl.lock (#803).
+//
+// Verifies that:
+//   - licenses is List[String] — type-checks correctly
+//   - PackageInfo.license is String — type-checks correctly
+//   - The field is accessible on the Manifest struct
+
+use std.runtime.{manifest, Manifest, PackageInfo}
+
+fn main() -> Unit ! Console {
+    let m: Manifest = manifest();
+
+    let _licenses: List[String] = m.licenses;
+
+    for p in m.packages {
+        let _lic: String = p.license;
+    }
+
+    println("licenses ok")
+}
