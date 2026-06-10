@@ -435,9 +435,14 @@ fn lower_expr(
                 .collect(),
         },
 
-        // `as` cast is transparent at runtime — the inner expression has the same
-        // representation as the target refined type (#1324).
-        Expr::As { expr, .. } => return lower_expr(expr, expr_types, ty_subs),
+        // `as` cast (#1324/#1326): preserve source type so the Rust emitter
+        // can detect the type mismatch and insert wrapping/unwrapping.
+        Expr::As { expr: inner, .. } => {
+            let lowered = lower_expr(inner, expr_types, ty_subs);
+            // Keep the lowered expression with its original type intact.
+            // The emitter handles coercion at let bindings, call args, and returns.
+            return lowered;
+        }
 
         Expr::Quantifier(ref_expr, _) => TirExprKind::Quantifier(ref_expr.clone()),
     };

@@ -834,7 +834,12 @@ impl RustEmitter {
                         .get(name.as_str())
                         .cloned()
                         .unwrap_or_default();
-                    self.emit_args_with_borrows(args, &borrows);
+                    let param_tys: Vec<Ty> = self
+                        .fn_param_types
+                        .get(name.as_str())
+                        .cloned()
+                        .unwrap_or_default();
+                    self.emit_args_with_borrows_and_coerce(args, &borrows, &param_tys);
                     self.push(")");
                     if is_extern {
                         self.push(" }");
@@ -1324,15 +1329,52 @@ impl RustEmitter {
         }
     }
 
-    /// Emit arguments for a function call, using per-parameter borrow kinds (Phase B).
-    fn emit_args_with_borrows(&mut self, args: &[TirExpr], borrows: &[Option<bool>]) {
+    /// Emit arguments for a function call, using per-parameter borrow kinds (Phase B)
+    /// and refined alias wrapping/unwrapping (#1326).
+    fn emit_args_with_borrows_and_coerce(
+        &mut self,
+        args: &[TirExpr],
+        borrows: &[Option<bool>],
+        param_tys: &[Ty],
+    ) {
         for (i, arg) in args.iter().enumerate() {
             if i > 0 {
                 self.push(", ");
             }
-            match borrows.get(i).copied().flatten() {
-                Some(mutable) => self.emit_expr_as_borrow_arg(arg, mutable),
-                None => self.emit_expr_as_fn_arg(arg),
+            let param_ty = param_tys.get(i);
+            // Check if we need refined alias wrapping/unwrapping
+            let wrap_alias = param_ty.and_then(|pt| {
+                if let Ty::Named(name, _) = pt {
+                    if self.refined_aliases.contains_key(name.as_str())
+                        && self.refined_alias_base(&arg.ty).is_none()
+                    {
+                        return Some(name.clone());
+                    }
+                }
+                None
+            });
+            let unwrap_alias = param_ty.is_some_and(|pt| {
+                self.refined_alias_base(pt).is_none() && self.refined_alias_base(&arg.ty).is_some()
+            });
+
+            if let Some(ref alias_name) = wrap_alias {
+                self.push(&format!("{}::new(", alias_name));
+            }
+            if wrap_alias.is_some() || unwrap_alias {
+                // Refined alias coercion: emit raw expression without .into()
+                // since wrapping/unwrapping handles the type conversion.
+                self.emit_expr(arg);
+            } else {
+                match borrows.get(i).copied().flatten() {
+                    Some(mutable) => self.emit_expr_as_borrow_arg(arg, mutable),
+                    None => self.emit_expr_as_fn_arg(arg),
+                }
+            }
+            if unwrap_alias {
+                self.push(".0");
+            }
+            if wrap_alias.is_some() {
+                self.push(")");
             }
         }
     }

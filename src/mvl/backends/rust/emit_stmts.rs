@@ -62,6 +62,17 @@ impl RustEmitter {
                     self.push(&emit_ty(ty_for_emit));
                 }
                 self.push(" = ");
+                // Refined alias wrapping: `let port: Port = 5558` → `Port::new(5558)` (#1326)
+                let refined_wrap = self.refined_alias_base(ty_for_emit).is_some()
+                    && self.refined_alias_base(&init.ty).is_none();
+                // Refined alias unwrapping: `let n: Int = port` → `port.0` (#1326)
+                let refined_unwrap = self.refined_alias_base(ty_for_emit).is_none()
+                    && self.refined_alias_base(&init.ty).is_some();
+                if refined_wrap {
+                    if let Ty::Named(name, _) = ty_for_emit {
+                        self.push(&format!("{}::new(", name));
+                    }
+                }
                 // For Fn types: wrap Lambda in move so closure owns captures
                 let wrap_move = matches!(ty_for_emit, Ty::Fn(..))
                     && matches!(&init.kind, TirExprKind::Lambda { .. });
@@ -83,6 +94,12 @@ impl RustEmitter {
                 };
                 if needs_clone {
                     self.push(".clone()");
+                }
+                if refined_unwrap {
+                    self.push(".0");
+                }
+                if refined_wrap {
+                    self.push(")");
                 }
                 // When the declared type is a security label (e.g. Tainted<String>) and the
                 // init is a plain value or function call, `.into()` converts it to the labeled

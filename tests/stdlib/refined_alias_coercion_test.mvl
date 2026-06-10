@@ -1,0 +1,61 @@
+// tests/stdlib/refined_alias_coercion_test.mvl — Rust backend newtype coercion (#1326)
+//
+// Verifies that the transpiler emits correct newtype wrapping/unwrapping
+// for refined type aliases when coercing between base and alias types.
+
+type Port = Int where self >= 1 && self <= 65535
+
+fn use_port(p: Port) -> Int { p }
+
+fn take_int(n: Int) -> Int { n }
+
+fn make_port(n: Int) -> Port { n as Port }
+
+test fn let_binding_wrap() -> Unit {
+    // Int literal → Port (wrap with Port::new)
+    let port: Port = 5558;
+    let n: Int = use_port(port);
+    assert_eq(n, 5558)
+}
+
+test fn fn_call_literal_arg() -> Unit {
+    // Int literal passed to Port param (wrap at call site)
+    let a: Int = use_port(8080);
+    assert_eq(a, 8080)
+}
+
+test fn fn_call_variable_arg() -> Unit {
+    // Int variable passed to Port param (wrap at call site)
+    let n: Int = 443;
+    let a: Int = use_port(n);
+    assert_eq(a, 443)
+}
+
+test fn return_unwrap() -> Unit {
+    // Port → Int in function return (unwrap with .0)
+    let port: Port = 9090;
+    let n: Int = use_port(port);
+    assert_eq(n, 9090)
+}
+
+test fn explicit_as_cast() -> Unit {
+    // Explicit `as` cast: Int → Port
+    let n: Int = 443;
+    let port: Port = n as Port;
+    let result: Int = use_port(port);
+    assert_eq(result, 443)
+}
+
+test fn reverse_let_binding() -> Unit {
+    // Port → Int in let binding (unwrap with .0)
+    let port: Port = 5558;
+    let n: Int = take_int(port);
+    assert_eq(n, 5558)
+}
+
+test fn make_port_return() -> Unit {
+    // Int → Port in function return via as cast
+    let port: Port = make_port(1234);
+    let n: Int = use_port(port);
+    assert_eq(n, 1234)
+}

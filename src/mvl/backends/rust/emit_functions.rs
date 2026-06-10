@@ -616,6 +616,24 @@ impl RustEmitter {
             }
             _ => {}
         }
+        // Refined alias wrapping: return base type where refined alias expected (#1326)
+        if let Some(_base) = self.refined_alias_base(ret_ty) {
+            if self.refined_alias_base(&expr.ty).is_none() {
+                if let Ty::Named(name, _) = ret_ty {
+                    self.push(&format!("{}::new(", name));
+                    self.emit_expr(expr);
+                    self.push(")");
+                    return;
+                }
+            }
+        }
+        // Refined alias unwrapping: return refined alias where base type expected (#1326)
+        if self.refined_alias_base(&expr.ty).is_some() && self.refined_alias_base(ret_ty).is_none()
+        {
+            self.emit_expr(expr);
+            self.push(".0");
+            return;
+        }
         // Lambda return from function: wrap in move so closure owns captures (#1313)
         if matches!(ret_ty, Ty::Fn(..)) && matches!(&expr.kind, TirExprKind::Lambda { .. }) {
             self.push("move ");
