@@ -49,3 +49,13 @@ pub mod version;
 
 // Re-export the pilot symbol at crate root for visibility in tests.
 pub use version::_mvl_runtime_version;
+
+/// Integer exponentiation: `base ^ exp`.
+/// Negative exponents return 0 (consistent with Rust `i64::pow` saturating behaviour).
+#[no_mangle]
+pub extern "C" fn _mvl_int_pow(base: i64, exp: i64) -> i64 {
+    if exp < 0 {
+        return 0;
+    }
+    base.wrapping_pow(exp as u32)
+}
