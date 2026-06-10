@@ -4,15 +4,14 @@
 //! Heap-collection operations for the MVL LLVM backend.
 //!
 //! This module provides the `extern "C"` operation functions for `MvlString`,
-//! `MvlArray`, and `MvlMap` that were previously in `mvl_memory`.
+//! `MvlArray`, and `MvlMap`.
 //!
 //! # Architecture (ADR-0016, #490)
 //!
-//! `mvl_memory` is responsible for **type definitions + lifecycle** (new/clone/drop).
+//! `memory` is responsible for **type definitions + lifecycle** (new/clone/drop).
 //! This module is responsible for **operations** (len, ptr, concat, get, push, insert, …).
 //!
-//! Both sets of symbols are exported from `libmvl_runtime_c.{dylib,so}`, which
-//! the LLVM backend loads alongside `libmvl_memory.{dylib,so}`.
+//! Both sets of symbols are exported from `libmvl_runtime_llvm.{dylib,so}`.
 
 use std::ptr;
 

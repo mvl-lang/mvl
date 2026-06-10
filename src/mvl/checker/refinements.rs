@@ -30,7 +30,8 @@ use std::collections::HashMap;
 use crate::mvl::checker::const_eval;
 use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::solver::{
-    binary_op_to_cmp, dummy_span, RefResult, RefinementSolver, SolverMode,
+    binary_op_to_cmp, dummy_span, try_cooper, try_interval, try_symbolic, try_trivial, try_z3,
+    RefResult, SolverMode,
 };
 use crate::mvl::parser::ast::{
     ArithOp, BinaryOp, Block, CmpOp, Decl, ElseBranch, Expr, FnDecl, LValue, Literal, LogicOp,
@@ -1301,27 +1302,18 @@ pub(crate) fn check_arg_against_pred_counted(
     }
     match counts.mode {
         SolverMode::Z3Only => {
-            try_layer!(5, RefinementSolver::try_z3(pred, arg, var_refs));
+            try_layer!(5, try_z3(pred, arg, var_refs));
         }
         SolverMode::FastOnly => {
-            try_layer!(
-                1,
-                RefinementSolver::try_trivial(pred, arg, var_refs, fn_decls)
-            );
-            try_layer!(2, RefinementSolver::try_interval(pred, arg, var_refs));
+            try_layer!(1, try_trivial(pred, arg, var_refs, fn_decls));
+            try_layer!(2, try_interval(pred, arg, var_refs));
         }
         SolverMode::Layered => {
-            try_layer!(
-                1,
-                RefinementSolver::try_trivial(pred, arg, var_refs, fn_decls)
-            );
-            try_layer!(2, RefinementSolver::try_interval(pred, arg, var_refs));
-            try_layer!(
-                3,
-                RefinementSolver::try_symbolic(pred, arg, var_refs, fn_decls)
-            );
-            try_layer!(4, RefinementSolver::try_cooper(pred, arg, var_refs));
-            try_layer!(5, RefinementSolver::try_z3(pred, arg, var_refs));
+            try_layer!(1, try_trivial(pred, arg, var_refs, fn_decls));
+            try_layer!(2, try_interval(pred, arg, var_refs));
+            try_layer!(3, try_symbolic(pred, arg, var_refs, fn_decls));
+            try_layer!(4, try_cooper(pred, arg, var_refs));
+            try_layer!(5, try_z3(pred, arg, var_refs));
         }
     }
     RefResult::RuntimeCheck

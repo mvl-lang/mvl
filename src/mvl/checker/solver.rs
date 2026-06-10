@@ -94,74 +94,46 @@ pub(crate) fn binary_op_to_cmp(op: BinaryOp) -> Option<CmpOp> {
     }
 }
 
-// ── Solver ────────────────────────────────────────────────────────────────────
+// ── Solver dispatch ───────────────────────────────────────────────────────────
 
-/// The layered refinement solver.
-///
-/// Each layer returns `None` to signal "I cannot decide — try the next one."
-/// The caller falls back to `RuntimeCheck` when all layers are exhausted.
-pub(crate) struct RefinementSolver;
+pub(crate) fn try_trivial(
+    pred: &RefExpr,
+    arg: &Expr,
+    var_refs: &HashMap<String, Option<RefExpr>>,
+    fn_decls: &HashMap<String, FnDecl>,
+) -> Option<RefResult> {
+    layer1::try_trivial(pred, arg, var_refs, fn_decls)
+}
 
-impl RefinementSolver {
-    /// Try to prove or disprove `pred` for `arg` using Layer 1 (trivial patterns).
-    ///
-    /// Returns `None` when this layer cannot make a decision.
-    pub(crate) fn try_trivial(
-        pred: &RefExpr,
-        arg: &Expr,
-        var_refs: &HashMap<String, Option<RefExpr>>,
-        fn_decls: &HashMap<String, FnDecl>,
-    ) -> Option<RefResult> {
-        layer1::try_trivial(pred, arg, var_refs, fn_decls)
-    }
+pub(crate) fn try_interval(
+    pred: &RefExpr,
+    arg: &Expr,
+    var_refs: &HashMap<String, Option<RefExpr>>,
+) -> Option<RefResult> {
+    layer2::try_interval(pred, arg, var_refs)
+}
 
-    /// Try to prove or disprove `pred` for `arg` using Layer 2 (interval arithmetic).
-    ///
-    /// Returns `None` when this layer cannot make a decision.
-    pub(crate) fn try_interval(
-        pred: &RefExpr,
-        arg: &Expr,
-        var_refs: &HashMap<String, Option<RefExpr>>,
-    ) -> Option<RefResult> {
-        layer2::try_interval(pred, arg, var_refs)
-    }
+pub(crate) fn try_symbolic(
+    pred: &RefExpr,
+    arg: &Expr,
+    var_refs: &HashMap<String, Option<RefExpr>>,
+    fn_decls: &HashMap<String, FnDecl>,
+) -> Option<RefResult> {
+    layer3::try_symbolic(pred, arg, var_refs, fn_decls)
+}
 
-    /// Try to prove or disprove `pred` for `arg` using Layer 3 (symbolic path analysis).
-    ///
-    /// Only applicable when `arg` is a call to a pure function in `fn_decls`.
-    /// Returns `None` when this layer cannot make a decision.
-    pub(crate) fn try_symbolic(
-        pred: &RefExpr,
-        arg: &Expr,
-        var_refs: &HashMap<String, Option<RefExpr>>,
-        fn_decls: &HashMap<String, FnDecl>,
-    ) -> Option<RefResult> {
-        layer3::try_symbolic(pred, arg, var_refs, fn_decls)
-    }
+pub(crate) fn try_cooper(
+    pred: &RefExpr,
+    arg: &Expr,
+    var_refs: &HashMap<String, Option<RefExpr>>,
+) -> Option<RefResult> {
+    layer4::try_cooper(pred, arg, var_refs)
+}
 
-    /// Try to prove `pred` for `arg` using Layer 4 (Cooper's Presburger QE).
-    ///
-    /// Handles linear-expression arguments and divisibility constraints that
-    /// Layers 1–3 cannot decide.
-    /// Returns `None` when the predicate is non-linear or too complex.
-    pub(crate) fn try_cooper(
-        pred: &RefExpr,
-        arg: &Expr,
-        var_refs: &HashMap<String, Option<RefExpr>>,
-    ) -> Option<RefResult> {
-        layer4::try_cooper(pred, arg, var_refs)
-    }
-
-    /// Try to prove `pred` for `arg` using Layer 5 (Z3 SMT solver).
-    ///
-    /// Only available when compiled with the `z3` feature.  Returns `Some(Proven)`
-    /// when Z3 confirms the implication, `None` on unsupported constructs,
-    /// timeout, or satisfiable negation.
-    pub(crate) fn try_z3(
-        pred: &RefExpr,
-        arg: &Expr,
-        var_refs: &HashMap<String, Option<RefExpr>>,
-    ) -> Option<RefResult> {
-        layer5::try_z3(pred, arg, var_refs)
-    }
+pub(crate) fn try_z3(
+    pred: &RefExpr,
+    arg: &Expr,
+    var_refs: &HashMap<String, Option<RefExpr>>,
+) -> Option<RefResult> {
+    layer5::try_z3(pred, arg, var_refs)
 }

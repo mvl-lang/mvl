@@ -1,4 +1,4 @@
-// tests/corpus/02_types/list_stubs.mvl
+// tests/corpus/05_collections/list_stubs.mvl
 // Type-check test: sort, partition, group_by, windows, chunks
 // These were previously stub/recursive methods, now builtin or properly implemented.
 
