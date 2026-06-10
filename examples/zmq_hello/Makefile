@@ -54,7 +54,7 @@ build: guard-mvl ## Build all MVL binaries
 	@$(MVL) build $(DIR)server.mvl > /dev/null 2>&1
 	@$(MVL) build $(DIR)server_zmtp.mvl > /dev/null 2>&1
 	@$(MVL) build $(DIR)server_pull.mvl > /dev/null 2>&1
-	@$(MVL) build $(DIR)client_sub.mvl > /dev/null 2>&1 || true  # #1328: Port→Int coercion at call sites
+	@$(MVL) build $(DIR)client_sub.mvl > /dev/null 2>&1
 
 check: guard-mvl ## Type-check all MVL sources
 	$(MVL) check $(DIR)server.mvl

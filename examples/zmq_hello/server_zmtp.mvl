@@ -21,8 +21,10 @@ fn handle(req: Tainted[String]) -> String
 
 partial fn main() -> Unit ! Console + Net {
     let port: Port = 5556;
-    println("ZMTP 3.x REP server listening on tcp://*:5556");
-    match rep_serve_zmtp("tcp://*:5556", handle) {
+    let port_n: Int = port;
+    let addr: String = "tcp://*:".concat(port_n.to_string());
+    println("ZMTP 3.x REP server listening on ".concat(addr));
+    match rep_serve_zmtp(addr, handle) {
         Ok(_)  => {},
         Err(e) => println("error: ".concat(zmq_error_msg(e))),
     }
