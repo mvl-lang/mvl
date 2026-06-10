@@ -1408,11 +1408,6 @@
     }
   },
   {
-    "type": "raw_string_literal",
-    "named": true,
-    "fields": {}
-  },
-  {
     "type": "reexport_decl",
     "named": true,
     "fields": {},
@@ -1852,11 +1847,6 @@
     }
   },
   {
-    "type": "string_literal",
-    "named": true,
-    "fields": {}
-  },
-  {
     "type": "struct_body",
     "named": true,
     "fields": {},
@@ -2191,10 +2181,6 @@
     "named": false
   },
   {
-    "type": "\"",
-    "named": false
-  },
-  {
     "type": "%",
     "named": false
   },
@@ -2503,11 +2489,11 @@
     "named": false
   },
   {
-    "type": "r\"",
-    "named": false
+    "type": "raw_multiline_string_literal",
+    "named": true
   },
   {
-    "type": "raw_multiline_string_literal",
+    "type": "raw_string_literal",
     "named": true
   },
   {
@@ -2537,6 +2523,10 @@
   {
     "type": "select",
     "named": false
+  },
+  {
+    "type": "string_literal",
+    "named": true
   },
   {
     "type": "struct",

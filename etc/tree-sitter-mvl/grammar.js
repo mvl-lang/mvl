@@ -749,7 +749,7 @@ module.exports = grammar({
     float_literal: ($) => /[0-9]+\.[0-9]+/,
 
     string_literal: ($) =>
-      seq('"', repeat(choice(/[^"\\]/, /\\./)), '"'),
+      token(seq('"', repeat(choice(/[^"\\]/, /\\./)), '"')),
 
     // `"""…"""` — multiline string (escape sequences processed).
     // Uses token() to avoid lookahead: content is any run of non-quote/non-backslash
@@ -764,7 +764,7 @@ module.exports = grammar({
 
     // `r"…"` — raw single-line string (no escape processing).
     raw_string_literal: ($) =>
-      seq('r"', repeat(/[^"]/), '"'),
+      token(seq('r"', repeat(/[^"]/), '"')),
 
     // `r"""…"""` — raw multiline string (no escape processing).
     // Uses token() to avoid lookahead: same approach as multiline_string_literal
