@@ -12,6 +12,8 @@ use pkg.zmq.{ZmqError, zmq_error_msg, map_net_err}
 use pkg.zmq.zmtp.{ZmtpSocketType, zmtp_handshake_client,
                    zmtp_recv_message, zmtp_send_subscribe}
 
+type Port = Int where self >= 1 && self <= 65535
+
 partial fn recv_loop(stream: TcpStream) -> Unit ! Console + Net {
     while true {
         match zmtp_recv_message(stream) {
@@ -29,8 +31,9 @@ partial fn recv_loop(stream: TcpStream) -> Unit ! Console + Net {
 }
 
 partial fn main() -> Unit ! Console + Net {
+    let port: Port = 5558;
     println("ZMTP 3.x SUB client connecting to tcp://127.0.0.1:5558");
-    match tcp_connect("127.0.0.1", 5558) {
+    match tcp_connect("127.0.0.1", port) {
         Err(e) => println("connect error"),
         Ok(stream) => {
             match zmtp_handshake_client(stream, ZmtpSocketType::Sub) {

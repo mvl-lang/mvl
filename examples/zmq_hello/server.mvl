@@ -9,6 +9,8 @@
 use pkg.zmq.{zmq_error_msg}
 use pkg.zmq.reqrep.{rep_serve}
 
+type Port = Int where self >= 1 && self <= 65535
+
 fn handle(req: Tainted[String]) -> String
     ensures len(result) > 0
 {
@@ -17,6 +19,7 @@ fn handle(req: Tainted[String]) -> String
 }
 
 partial fn main() -> Unit ! Console + Net {
+    let port: Port = 5555;
     println("REP server listening on tcp://*:5555");
     match rep_serve("tcp://*:5555", handle) {
         Ok(_)  => {},
