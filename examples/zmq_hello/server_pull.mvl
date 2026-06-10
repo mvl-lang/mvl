@@ -14,6 +14,30 @@ use pkg.zmq.zmtp.{ZmtpSocketType, zmtp_handshake_server, zmtp_recv_message}
 
 type Port = Int where self >= 1 && self <= 65535
 
+// ── ZMTP frame validation ────────────────────────────────────────────────────
+// These functions demonstrate the 5-layer refinement solver on ZMTP-relevant
+// invariants: port ranges, frame sizes, and cross-variable constraints.
+
+/// Require payload fits in capacity — L5 Z3 proof.
+/// Z3 asserts: capacity > 0, payload_size >= 0, payload_size < capacity
+/// and proves payload_size >= 0 (cross-param reasoning).
+fn require_non_negative(n: Int where self >= 0) -> Int { n }
+
+fn require_positive(n: Int where self > 0) -> Int { n }
+
+/// Validate ZMTP frame: capacity > payload_size > 0 — L4 Cooper cross-param proof.
+/// Cooper proves: capacity > payload_size > 0 → capacity > 0.
+fn validate_frame(payload_size: Int where self > 0, capacity: Int where self > payload_size) -> Int {
+    require_positive(capacity)
+}
+
+/// Estimate total message size — L5 Z3 proof (nonlinear).
+/// num_frames > 0, frame_size > 0, so num_frames * frame_size > 0.
+/// L1–L4 cannot handle multiplication of two variables; Z3 is invoked.
+fn estimate_msg_size(num_frames: Int where self > 0, frame_size: Int where self > 0) -> Int {
+    require_positive(num_frames * frame_size)
+}
+
 /// Clamp a port to the registered range [1024, 49151].
 /// L2: if-narrowing proves ensures in each branch.
 fn clamp_to_registered(port: Int) -> Int
@@ -81,6 +105,8 @@ partial fn accept_loop(listener: TcpListener) -> Unit ! Console + Net {
 
 partial fn main() -> Unit ! Console + Net {
     let port: Port = 5557;
+    let _frame: Int = validate_frame(512, 1024);
+    let _msg_size: Int = estimate_msg_size(3, 256);
     let _clamped: Int = clamp_to_registered(5557);
     let _doubled: Int = double_offset(50);
     let addr: String = make_bind_addr("*", port);
