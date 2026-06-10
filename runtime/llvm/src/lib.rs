@@ -9,14 +9,14 @@
 // call site (C has no notion of `unsafe`).
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 
-//! `mvl_runtime_c` — C-ABI stdlib for the MVL LLVM backend.
+//! `mvl_runtime_llvm` — C-ABI stdlib for the MVL LLVM backend.
 //!
-//! `mvl_runtime_c` — C-ABI stdlib for the MVL LLVM backend (merged with `mvl_memory`).
+//! `mvl_runtime_llvm` — C-ABI stdlib for the MVL LLVM backend (merged with `mvl_memory`).
 //!
 //! This crate is a `cdylib` loaded by `lli` at runtime:
 //!
 //! ```text
-//! lli --load=libmvl_runtime_c.{dylib,so} program.ll
+//! lli --load=libmvl_runtime_llvm.{dylib,so} program.ll
 //! ```
 //!
 //! It wraps `mvl_runtime` Rust APIs with `#[no_mangle] extern "C"` symbols
@@ -35,7 +35,7 @@
 //!                             stdlib via `use mvl_runtime::prelude::*`
 //!
 //! Path 2 (LLVM backend):     MVL → LLVM IR → lli
-//!                             stdlib via libmvl_runtime_c (this crate)
+//!                             stdlib via libmvl_runtime_llvm (this crate)
 //! ```
 
 #[macro_use]
@@ -49,3 +49,13 @@ pub mod version;
 
 // Re-export the pilot symbol at crate root for visibility in tests.
 pub use version::_mvl_runtime_version;
+
+/// Integer exponentiation: `base ^ exp`.
+/// Negative exponents return 0 (consistent with Rust `i64::pow` saturating behaviour).
+#[no_mangle]
+pub extern "C" fn _mvl_int_pow(base: i64, exp: i64) -> i64 {
+    if exp < 0 {
+        return 0;
+    }
+    base.wrapping_pow(exp as u32)
+}

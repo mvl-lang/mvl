@@ -322,7 +322,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
 
     // Write Cargo.toml + lib.rs.
     let mvl_runtime_dep = if need_mvl_runtime {
-        "mvl_runtime = { path = \"./mvl_runtime\" }\n"
+        "mvl_runtime = { path = \"./mvl_runtime\", package = \"mvl_runtime_rust\" }\n"
     } else {
         ""
     };

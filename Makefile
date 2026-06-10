@@ -2,7 +2,7 @@
 .ONESHELL:
 SHELL := /bin/bash
 
-.PHONY: help version build build-memory build-llvm-runtime build-release test test-unit test-integration test-requirements test-error-messages test-fmt-roundtrip test-corpus test-solver test-stdlib check-compiler assure-compiler test-mvl test-bdd test-backend-rust test-backend-llvm test-cross-backend test-tree-sitter test-grammar-coverage test-examples test-examples-rust test-examples-llvm coverage validate-keywords lint mvl-lint format format-check format-mvl format-mvl-check assurance assurance-gate check-adr docs docs-serve tree-sitter-build install install-nvim setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
+.PHONY: help version build build-llvm-runtime build-release test test-unit test-integration test-requirements test-error-messages test-fmt-roundtrip test-corpus test-solver test-stdlib check-compiler assure-compiler test-mvl test-bdd test-backend-rust test-backend-llvm test-cross-backend test-tree-sitter test-grammar-coverage test-examples test-examples-rust test-examples-llvm coverage validate-keywords lint mvl-lint format format-check format-mvl format-mvl-check assurance assurance-gate check-adr docs docs-serve tree-sitter-build install install-nvim setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
 
 .DEFAULT_GOAL := help
 
@@ -52,8 +52,8 @@ doctor: ## Check that all dev tools are available
 install: build-release build-llvm-runtime-release ## Install mvl binary + LLVM runtime to ~/.local/bin
 	@mkdir -p ~/.local/bin
 	cp target/release/mvl ~/.local/bin/mvl
-	cp target/release/libmvl_runtime_c.dylib ~/.local/bin/libmvl_runtime_c.dylib 2>/dev/null || true
-	cp target/release/libmvl_runtime_c.so    ~/.local/bin/libmvl_runtime_c.so    2>/dev/null || true
+	cp target/release/libmvl_runtime_llvm.dylib ~/.local/bin/libmvl_runtime_llvm.dylib 2>/dev/null || true
+	cp target/release/libmvl_runtime_llvm.so    ~/.local/bin/libmvl_runtime_llvm.so    2>/dev/null || true
 	@echo "Installed: ~/.local/bin/mvl"
 
 # === Build ===
@@ -62,11 +62,11 @@ build: ## Build the MVL compiler
 	@echo "Building MVL compiler..."
 	cargo build
 
-build-llvm-runtime: ## Build the LLVM runtime cdylib (mvl_runtime_c at runtime/llvm)
-	cargo build -p mvl_runtime_c
+build-llvm-runtime: ## Build the LLVM runtime cdylib (mvl_runtime_llvm at runtime/llvm)
+	cargo build -p mvl_runtime_llvm
 
 build-llvm-runtime-release: ## Build the LLVM runtime cdylib in release mode
-	cargo build --release -p mvl_runtime_c
+	cargo build --release -p mvl_runtime_llvm
 
 build-release: ## Build release binary
 	cargo build --release

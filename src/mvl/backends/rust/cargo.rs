@@ -69,14 +69,14 @@ fn deps_section(opts: &CargoOptions<'_>) -> String {
             // code (`use mvl_runtime::*`) resolves to the tokio-backed runtime.
             // ADR-0027 §"--target selects the runtime".
             lines.push(format!(
-                "mvl_runtime = {{ path = \"{path}\", package = \"mvl_runtime_tokio\" }}  # --target=tokio"
+                "mvl_runtime = {{ path = \"{path}\", package = \"mvl_runtime_tokio\" }}  # --target=tokio (aliased as mvl_runtime)"
             ));
             lines.push(
                 "tokio = { version = \"1\", features = [\"full\"] }  # --target=tokio".to_string(),
             );
         } else {
             lines.push(format!(
-                "mvl_runtime = {{ path = \"{path}\" }}  # MVL security labels and prelude"
+                "mvl_runtime = {{ path = \"{path}\", package = \"mvl_runtime_rust\" }}  # MVL security labels and prelude"
             ));
         }
         publish_unsafe = true;

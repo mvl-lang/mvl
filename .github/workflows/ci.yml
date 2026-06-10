@@ -198,8 +198,8 @@ jobs:
       - name: Build
         run: cargo build
 
-      - name: Build mvl_runtime_c cdylib
-        run: cargo build -p mvl_runtime_c
+      - name: Build mvl_runtime_llvm cdylib
+        run: cargo build -p mvl_runtime_llvm
 
       - name: Validate keyword consistency
         if: needs.changes.outputs.rust == 'true'
@@ -255,7 +255,7 @@ jobs:
       - name: Build MVL compiler and runtime
         run: |
           cargo build --no-default-features
-          cargo build -p mvl_runtime_c
+          cargo build -p mvl_runtime_llvm
 
       - name: Install MVL packages
         run: ./target/debug/mvl install

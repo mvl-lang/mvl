@@ -24,8 +24,8 @@
 //      Every branch either advances curr via ps_advance (pos += 1) or sets a
 //      boolean flag that exits the loop.  The token list is finite and immutable,
 //      so curr.pos reaches tokens.len() in at most O(n) steps.
-//      Formal measure:  len(curr.tokens) - curr.pos
-//      Written as:      decreases len(curr.tokens) - curr.pos
+//      Formal measure:  curr.tokens.len() - curr.pos
+//      Written as:      decreases curr.tokens.len() - curr.pos
 //      (#726: len() now accepts field-access arguments)
 //
 //   2. Depth-bounded recursion — parse_type_expr_depth(ps, max_depth):
@@ -250,7 +250,7 @@ partial fn skip_body(ps: ParserState) -> ParserState {
     let depth: ref Int = 1;
     // Termination: curr.pos strictly increases each iteration (ps_advance).
     // depth changes but is bounded by curr.pos (each '{' or '}' costs 1 token).
-    while depth > 0 && !ps_at_eof(curr) decreases len(curr.tokens) - curr.pos {
+    while depth > 0 && !ps_at_eof(curr) decreases curr.tokens.len() - curr.pos {
         if ps_at_punct(curr, "{") {
             depth = depth + 1;
             curr = ps_advance(curr)
@@ -318,7 +318,7 @@ partial fn parse_type_expr_depth(ps: ParserState, max_depth: Int) -> TypeExprR
         let paren_depth: ref Int = 1;
         // Termination: curr.pos advances by 1 every iteration (all three branches
         // call ps_advance).
-        while paren_depth > 0 && !ps_at_eof(curr) decreases len(curr.tokens) - curr.pos {
+        while paren_depth > 0 && !ps_at_eof(curr) decreases curr.tokens.len() - curr.pos {
             if ps_at_punct(curr, "(") {
                 paren_depth = paren_depth + 1; curr = ps_advance(curr)
             } else if ps_at_punct(curr, ")") {
@@ -339,7 +339,7 @@ partial fn parse_type_expr_depth(ps: ParserState, max_depth: Int) -> TypeExprR
         let args: ref List[TypeExpr] = [];
         // Termination: each iteration advances curr past at least one token;
         // recursive calls use max_depth - 1 (bounded by requires max_depth >= 0).
-        while !ps_at_eof(curr) && !ps_at_punct(curr, "]") decreases len(curr.tokens) - curr.pos {
+        while !ps_at_eof(curr) && !ps_at_punct(curr, "]") decreases curr.tokens.len() - curr.pos {
             let arg_r: TypeExprR = parse_type_expr_depth(curr, max_depth - 1);
             args.push(arg_r.value);
             curr = arg_r.ps;
@@ -944,7 +944,7 @@ partial fn collect_mod_flags(ps: ParserState) -> ModFlags {
 // Termination: every match arm either delegates to a parse_X helper (which
 // advances curr past at least one token) or falls to the default skip arm
 // (curr = ps_advance(curr), pos += 1).  ps_at_eof(curr) becomes true when
-// curr.pos == len(curr.tokens).
+// curr.pos == curr.tokens.len().
 partial fn parse_program(ps: ParserState) -> Program {
     let curr: ref ParserState = ps;
     let fns: ref     List[FnDecl]     = [];
@@ -954,7 +954,7 @@ partial fn parse_program(ps: ParserState) -> Program {
     let externs: ref List[ExternDecl] = [];
     let impls: ref   List[ImplDecl]   = [];
 
-    while !ps_at_eof(curr) decreases len(curr.tokens) - curr.pos {
+    while !ps_at_eof(curr) decreases curr.tokens.len() - curr.pos {
         let tok: Token = ps_current(curr);
         match tok.kind {
             TokenKind::KwUse => {

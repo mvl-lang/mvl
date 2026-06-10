@@ -1,7 +1,7 @@
 // Corpus: io stdlib basics — write+read roundtrip, append, create/remove (#417, #435)
 //
 // Exercises both the Rust transpiler path (mvl_runtime::stdlib::io) and the
-// LLVM backend C-ABI path (mvl_runtime_c::stdlib::io).
+// LLVM backend C-ABI path (mvl_runtime_llvm::stdlib::io).
 //
 // Used by: tests/cross_backend.rs::cross_backend_io_write_read_roundtrip
 

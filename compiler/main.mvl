@@ -125,7 +125,7 @@ partial fn process_file(name: String, raw: Tainted[String]) -> Program ! Console
         prog.errors.len().to_string()]));
 
     let i_fns: ref Int = 0;
-    while i_fns < prog.fns.len() {
+    while i_fns < prog.fns.len() decreases prog.fns.len() - i_fns {
         if let Some(f) = prog.fns.get(i_fns) {
             println(format_fn_sig(f))
         }
@@ -133,7 +133,7 @@ partial fn process_file(name: String, raw: Tainted[String]) -> Program ! Console
     }
 
     let i_types: ref Int = 0;
-    while i_types < prog.types.len() {
+    while i_types < prog.types.len() decreases prog.types.len() - i_types {
         if let Some(t) = prog.types.get(i_types) {
             let kind_str: String = match t.body_kind {
                 TypeBodyKind::IsStruct => "struct",
@@ -148,7 +148,7 @@ partial fn process_file(name: String, raw: Tainted[String]) -> Program ! Console
     }
 
     let i_uses: ref Int = 0;
-    while i_uses < prog.uses.len() {
+    while i_uses < prog.uses.len() decreases prog.uses.len() - i_uses {
         if let Some(u) = prog.uses.get(i_uses) {
             println(format("  use {}.{{{}}}",
                 [format_path(u.path), format_imports(u.imports)]))
@@ -157,7 +157,7 @@ partial fn process_file(name: String, raw: Tainted[String]) -> Program ! Console
     }
 
     let i_errs: ref Int = 0;
-    while i_errs < prog.errors.len() {
+    while i_errs < prog.errors.len() decreases prog.errors.len() - i_errs {
         if let Some(e) = prog.errors.get(i_errs) {
             println(format("  ERROR L{}: {}", [e.span.line.to_string(), e.message]))
         }

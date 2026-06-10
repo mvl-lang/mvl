@@ -5,7 +5,7 @@
 //!
 //! Mirrors `mvl_runtime::stdlib::env`. Every public function in that module
 //! has a corresponding `_mvl_env_*` symbol here, callable from LLVM IR via
-//! `lli --load=libmvl_runtime_c.{dylib,so}`.
+//! `lli --load=libmvl_runtime_llvm.{dylib,so}`.
 //!
 //! # String ownership
 //!

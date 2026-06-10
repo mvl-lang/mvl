@@ -141,7 +141,7 @@ pub(super) fn run_project_llvm_text(path: &str) {
     });
 
     let mut cmd = process::Command::new(&lli_bin);
-    if let Some(lib) = lli::find_mvl_runtime_c_lib() {
+    if let Some(lib) = lli::find_mvl_runtime_llvm_lib() {
         cmd.arg(format!("--load={}", lib.display()));
     }
 
@@ -259,7 +259,7 @@ pub(super) fn cmd_test_llvm_text(path: &str, quiet: bool, verbose: bool) {
         }
 
         let mut lli_cmd = process::Command::new(&lli_bin);
-        if let Some(lib) = lli::find_mvl_runtime_c_lib() {
+        if let Some(lib) = lli::find_mvl_runtime_llvm_lib() {
             lli_cmd.arg(format!("--load={}", lib.display()));
         }
         let output = match lli_cmd.arg(tmp.path()).output() {

@@ -435,23 +435,57 @@ impl TextEmitter {
                 receiver,
                 args: margs,
                 ..
-            } => match method.as_str() {
-                "to_string" | "concat" | "to_lower" | "to_upper" | "trim" => "ptr".into(),
-                "len" => "i64".into(),
-                "is_some" | "is_none" => "i1".into(),
-                "unwrap_or" => {
-                    if let Some(a) = margs.first() {
-                        self.type_of_expr(a)
-                    } else {
-                        "i64".into()
+            } => {
+                let recv_ty = self.type_of_expr(receiver);
+                match (method.as_str(), recv_ty.as_str()) {
+                    // Int (i64) methods returning i64
+                    ("abs" | "min" | "max" | "clamp" | "pow", "i64") => "i64".into(),
+                    // Int (i64) predicates returning i1
+                    ("is_positive" | "is_negative" | "is_zero", "i64") => "i1".into(),
+                    // Int → Float conversion
+                    ("to_float", "i64") => "double".into(),
+                    // Float (double) methods returning double
+                    (
+                        "abs" | "ceil" | "floor" | "round" | "sqrt" | "min" | "max" | "clamp"
+                        | "pow",
+                        "double",
+                    ) => "double".into(),
+                    // Float → Int conversion
+                    ("to_int", "double") => "i64".into(),
+                    // Float predicates returning i1
+                    (
+                        "is_nan" | "is_finite" | "is_infinite" | "is_positive" | "is_negative",
+                        "double",
+                    ) => "i1".into(),
+                    // String-returning methods
+                    ("to_string" | "concat" | "to_lower" | "to_upper" | "trim", _) => "ptr".into(),
+                    // Length: always i64
+                    ("len", _) => "i64".into(),
+                    // Boolean predicates on collections/strings
+                    ("is_some" | "is_none" | "is_empty" | "contains" | "contains_key", _) => {
+                        "i1".into()
                     }
+                    // Option/Result unwrap: type comes from default argument
+                    ("unwrap_or", _) => {
+                        if let Some(a) = margs.first() {
+                            self.type_of_expr(a)
+                        } else {
+                            "i64".into()
+                        }
+                    }
+                    // Indexed access returning Option
+                    ("get", _)
+                        if matches!(
+                            self.mvl_receiver_kind(receiver),
+                            Some("List") | Some("Map")
+                        ) =>
+                    {
+                        "{ i8, ptr }".into()
+                    }
+                    ("first" | "last", _) => "{ i8, ptr }".into(),
+                    _ => "ptr".into(),
                 }
-                "get" if matches!(self.mvl_receiver_kind(receiver), Some("List") | Some("Map")) => {
-                    "{ i8, ptr }".into()
-                }
-                "first" | "last" => "{ i8, ptr }".into(),
-                _ => "ptr".into(),
-            },
+            }
             Expr::Construct { name, .. } => {
                 if self.struct_fields.contains_key(name) {
                     format!("%{name}")

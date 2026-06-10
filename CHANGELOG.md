@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [0.196.1] - 2026-06-10
+
+### Fixed
+
+- **Runtime naming and versioning** — rename `mvl_runtime` → `mvl_runtime_rust` and `mvl_runtime_c` → `mvl_runtime_llvm`; align all runtime versions to `0.196.0`; update CI, Makefile, and all generated Cargo.toml code to use new names (#1330)
+- **make test-mvl** — fix `String::char_at()` calls in `compiler/lexer.mvl` to handle `Option[String]` return type; fix `len(curr.tokens)` → `curr.tokens.len()` in `compiler/parser.mvl`
+- **LLVM numeric methods** — implement `Int`/`Float` methods (`abs`, `min`, `max`, `clamp`, `pow`, `ceil`, `floor`, `round`, `sqrt`, etc.) via LLVM intrinsics; fix `type_of_expr` so chained `.to_string()` calls work correctly (fixes #1252)
+
 ## [0.196.0] - 2026-06-10
 
 ### Added

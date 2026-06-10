@@ -52,6 +52,243 @@ impl TextEmitter {
                 self.reg_types.insert(val.clone(), "ptr".into());
                 Ok(Some(val))
             }
+
+            // ── Int (i64) numeric methods ─────────────────────────────────────
+            ("abs", "i64") => {
+                let reg = self.next_reg();
+                self.push_instr(&format!("{reg} = call i64 @llvm.abs.i64(i64 {val}, i1 0)"));
+                self.reg_types.insert(reg.clone(), "i64".into());
+                Ok(Some(reg))
+            }
+            ("is_positive", "i64") => {
+                let reg = self.next_reg();
+                self.push_instr(&format!("{reg} = icmp sgt i64 {val}, 0"));
+                self.reg_types.insert(reg.clone(), "i1".into());
+                Ok(Some(reg))
+            }
+            ("is_negative", "i64") => {
+                let reg = self.next_reg();
+                self.push_instr(&format!("{reg} = icmp slt i64 {val}, 0"));
+                self.reg_types.insert(reg.clone(), "i1".into());
+                Ok(Some(reg))
+            }
+            ("is_zero", "i64") => {
+                let reg = self.next_reg();
+                self.push_instr(&format!("{reg} = icmp eq i64 {val}, 0"));
+                self.reg_types.insert(reg.clone(), "i1".into());
+                Ok(Some(reg))
+            }
+            ("to_float", "i64") => {
+                let reg = self.next_reg();
+                self.push_instr(&format!("{reg} = sitofp i64 {val} to double"));
+                self.reg_types.insert(reg.clone(), "double".into());
+                Ok(Some(reg))
+            }
+            ("min", "i64") if args.len() == 1 => {
+                let other = match self.emit_expr(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                let reg = self.next_reg();
+                self.push_instr(&format!(
+                    "{reg} = call i64 @llvm.smin.i64(i64 {val}, i64 {other})"
+                ));
+                self.reg_types.insert(reg.clone(), "i64".into());
+                Ok(Some(reg))
+            }
+            ("max", "i64") if args.len() == 1 => {
+                let other = match self.emit_expr(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                let reg = self.next_reg();
+                self.push_instr(&format!(
+                    "{reg} = call i64 @llvm.smax.i64(i64 {val}, i64 {other})"
+                ));
+                self.reg_types.insert(reg.clone(), "i64".into());
+                Ok(Some(reg))
+            }
+            ("clamp", "i64") if args.len() == 2 => {
+                let lo = match self.emit_expr(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                let hi = match self.emit_expr(&args[1])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                let clamped_lo = self.next_reg();
+                self.push_instr(&format!(
+                    "{clamped_lo} = call i64 @llvm.smax.i64(i64 {val}, i64 {lo})"
+                ));
+                let reg = self.next_reg();
+                self.push_instr(&format!(
+                    "{reg} = call i64 @llvm.smin.i64(i64 {clamped_lo}, i64 {hi})"
+                ));
+                self.reg_types.insert(reg.clone(), "i64".into());
+                Ok(Some(reg))
+            }
+            ("pow", "i64") if args.len() == 1 => {
+                let exp = match self.emit_expr(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                self.ensure_extern("declare i64 @_mvl_int_pow(i64, i64)");
+                let reg = self.next_reg();
+                self.push_instr(&format!(
+                    "{reg} = call i64 @_mvl_int_pow(i64 {val}, i64 {exp})"
+                ));
+                self.reg_types.insert(reg.clone(), "i64".into());
+                Ok(Some(reg))
+            }
+
+            // ── Float (double) numeric methods ────────────────────────────────
+            ("abs", "double") => {
+                let reg = self.next_reg();
+                self.push_instr(&format!("{reg} = call double @llvm.fabs.f64(double {val})"));
+                self.reg_types.insert(reg.clone(), "double".into());
+                Ok(Some(reg))
+            }
+            ("ceil", "double") => {
+                let reg = self.next_reg();
+                self.push_instr(&format!("{reg} = call double @llvm.ceil.f64(double {val})"));
+                self.reg_types.insert(reg.clone(), "double".into());
+                Ok(Some(reg))
+            }
+            ("floor", "double") => {
+                let reg = self.next_reg();
+                self.push_instr(&format!(
+                    "{reg} = call double @llvm.floor.f64(double {val})"
+                ));
+                self.reg_types.insert(reg.clone(), "double".into());
+                Ok(Some(reg))
+            }
+            ("round", "double") => {
+                let reg = self.next_reg();
+                self.push_instr(&format!(
+                    "{reg} = call double @llvm.round.f64(double {val})"
+                ));
+                self.reg_types.insert(reg.clone(), "double".into());
+                Ok(Some(reg))
+            }
+            ("sqrt", "double") => {
+                let reg = self.next_reg();
+                self.push_instr(&format!("{reg} = call double @llvm.sqrt.f64(double {val})"));
+                self.reg_types.insert(reg.clone(), "double".into());
+                Ok(Some(reg))
+            }
+            ("to_int", "double") => {
+                let reg = self.next_reg();
+                self.push_instr(&format!("{reg} = fptosi double {val} to i64"));
+                self.reg_types.insert(reg.clone(), "i64".into());
+                Ok(Some(reg))
+            }
+            ("is_nan", "double") => {
+                // fcmp uno: true if either operand is a NaN
+                let reg = self.next_reg();
+                self.push_instr(&format!("{reg} = fcmp uno double {val}, 0.0"));
+                self.reg_types.insert(reg.clone(), "i1".into());
+                Ok(Some(reg))
+            }
+            ("is_finite", "double") => {
+                // finite = not NaN and not infinite: fcmp ord (not NaN) AND fabs < +inf
+                let abs_reg = self.next_reg();
+                self.push_instr(&format!(
+                    "{abs_reg} = call double @llvm.fabs.f64(double {val})"
+                ));
+                let not_nan = self.next_reg();
+                self.push_instr(&format!("{not_nan} = fcmp ord double {val}, 0.0"));
+                let not_inf = self.next_reg();
+                self.push_instr(&format!(
+                    "{not_inf} = fcmp olt double {abs_reg}, 0x7FF0000000000000"
+                ));
+                let reg = self.next_reg();
+                self.push_instr(&format!("{reg} = and i1 {not_nan}, {not_inf}"));
+                self.reg_types.insert(reg.clone(), "i1".into());
+                Ok(Some(reg))
+            }
+            ("is_infinite", "double") => {
+                // infinite = fabs == +inf
+                let abs_reg = self.next_reg();
+                self.push_instr(&format!(
+                    "{abs_reg} = call double @llvm.fabs.f64(double {val})"
+                ));
+                let reg = self.next_reg();
+                self.push_instr(&format!(
+                    "{reg} = fcmp oeq double {abs_reg}, 0x7FF0000000000000"
+                ));
+                self.reg_types.insert(reg.clone(), "i1".into());
+                Ok(Some(reg))
+            }
+            ("is_positive", "double") => {
+                let reg = self.next_reg();
+                self.push_instr(&format!("{reg} = fcmp ogt double {val}, 0.0"));
+                self.reg_types.insert(reg.clone(), "i1".into());
+                Ok(Some(reg))
+            }
+            ("is_negative", "double") => {
+                let reg = self.next_reg();
+                self.push_instr(&format!("{reg} = fcmp olt double {val}, 0.0"));
+                self.reg_types.insert(reg.clone(), "i1".into());
+                Ok(Some(reg))
+            }
+            ("min", "double") if args.len() == 1 => {
+                let other = match self.emit_expr(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                let reg = self.next_reg();
+                self.push_instr(&format!(
+                    "{reg} = call double @llvm.minnum.f64(double {val}, double {other})"
+                ));
+                self.reg_types.insert(reg.clone(), "double".into());
+                Ok(Some(reg))
+            }
+            ("max", "double") if args.len() == 1 => {
+                let other = match self.emit_expr(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                let reg = self.next_reg();
+                self.push_instr(&format!(
+                    "{reg} = call double @llvm.maxnum.f64(double {val}, double {other})"
+                ));
+                self.reg_types.insert(reg.clone(), "double".into());
+                Ok(Some(reg))
+            }
+            ("clamp", "double") if args.len() == 2 => {
+                let lo = match self.emit_expr(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                let hi = match self.emit_expr(&args[1])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                let clamped_lo = self.next_reg();
+                self.push_instr(&format!(
+                    "{clamped_lo} = call double @llvm.maxnum.f64(double {val}, double {lo})"
+                ));
+                let reg = self.next_reg();
+                self.push_instr(&format!(
+                    "{reg} = call double @llvm.minnum.f64(double {clamped_lo}, double {hi})"
+                ));
+                self.reg_types.insert(reg.clone(), "double".into());
+                Ok(Some(reg))
+            }
+            ("pow", "double") if args.len() == 1 => {
+                let exp = match self.emit_expr(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                let reg = self.next_reg();
+                self.push_instr(&format!(
+                    "{reg} = call double @llvm.pow.f64(double {val}, double {exp})"
+                ));
+                self.reg_types.insert(reg.clone(), "double".into());
+                Ok(Some(reg))
+            }
+
             ("len", "ptr") => {
                 let kind = self.mvl_receiver_kind(receiver);
                 let is_list = matches!(kind, Some("List") | Some("Array") | Some("Set"));

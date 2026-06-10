@@ -322,7 +322,10 @@ fn build_fuzz_workspace(
         .join("rust");
     let need_runtime = project_out.need_runtime;
     let runtime_dep = if need_runtime && runtime_src.exists() {
-        format!("mvl_runtime = {{ path = \"{}\" }}\n", runtime_src.display())
+        format!(
+            "mvl_runtime = {{ path = \"{}\", package = \"mvl_runtime_rust\" }}\n",
+            runtime_src.display()
+        )
     } else {
         String::new()
     };
@@ -343,7 +346,7 @@ fn build_fuzz_workspace(
     // mvl_runtime is a direct dep so the harness can use Tainted/Clean/Secret directly.
     let fuzz_runtime_dep = if runtime_src.exists() {
         format!(
-            "[dependencies.mvl_runtime]\npath = \"{}\"\n\n",
+            "[dependencies.mvl_runtime]\npath = \"{}\"\npackage = \"mvl_runtime_rust\"\n\n",
             runtime_src.display()
         )
     } else {
