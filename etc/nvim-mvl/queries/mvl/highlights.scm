@@ -66,7 +66,6 @@
 (declassify_expr "declassify" @keyword.special)
 (sanitize_expr "sanitize" @keyword.special)
 
-"transparent" @keyword.modifier
 "with" @keyword
 "invariant" @keyword
 
