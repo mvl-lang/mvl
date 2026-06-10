@@ -80,10 +80,10 @@ pub fn print_usage() {
     eprintln!("  mvl assurance <file|dir>           — emit assurance report");
     eprintln!("  mvl assurance <file|dir> --json    — emit assurance report as JSON");
     eprintln!("  mvl assurance <file|dir> --verbose — per-function requirement detail");
+    #[cfg(feature = "openapi")]
     eprintln!(
         "  mvl openapi <file|dir>              — generate OpenAPI 3.0.3 JSON from route table"
     );
-    eprintln!("  mvl transpile <file.mvl>           — print transpiled Rust to stdout");
     eprintln!(
         "  mvl init [<name>]                  — scaffold a new project (mvl.toml + src/main.mvl)"
     );

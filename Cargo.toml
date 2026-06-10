@@ -13,8 +13,11 @@ license = "Apache-2.0"
 # Z3 backend is on by default. Requires Z3 installed.
 # macOS homebrew: brew install z3  (paths set via .cargo/config.toml)
 # To build without Z3: cargo build --no-default-features
-default = ["z3"]
+default = ["z3", "openapi"]
 z3 = ["dep:z3"]
+# OpenAPI generation — walks AST surface, excluded from self-host build (#1336).
+# To build without: cargo build --no-default-features [--features z3]
+openapi = []
 
 [dependencies]
 ureq = "2"

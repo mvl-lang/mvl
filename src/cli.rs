@@ -12,6 +12,7 @@ pub mod llvm_text;
 pub mod mcdc;
 pub mod meta;
 pub mod mutate;
+#[cfg(feature = "openapi")]
 pub mod openapi;
 pub mod test;
 
@@ -192,6 +193,7 @@ pub(super) fn dispatch(args: &[String]) {
                 }
             }
         }
+        #[cfg(feature = "openapi")]
         "openapi" => {
             let path = args::require_path_arg(args, "openapi");
             openapi::run(&path);
