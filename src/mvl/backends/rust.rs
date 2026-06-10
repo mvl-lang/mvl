@@ -395,21 +395,17 @@ pub fn transpile(tir: &crate::mvl::ir::TirProgram, config: TranspileConfig) -> T
         || has_std_imports_tir(tir)
         || (has_prelude && prelude_requires_runtime(&config.prelude_progs));
 
-    let mut expr_types = tir.span_types();
-    if has_prelude {
-        expr_types.extend(crate::mvl::checker::collect_prelude_expr_types(
-            &config.prelude_progs,
-        ));
-    }
-
-    // Lower prelude programs to TIR using the merged expr_types.
+    // Lower prelude programs to TIR using the prelude's own checker types.
+    // Types are read inline from TirExpr.ty for the main program; preludes only
+    // need their own checker-inferred types (spans never overlap with main).
+    let prelude_expr_types = crate::mvl::checker::collect_prelude_expr_types(&config.prelude_progs);
     let prelude_tirs: Vec<crate::mvl::ir::TirProgram> = config
         .prelude_progs
         .iter()
         .map(|p| {
             let all_fns = crate::mvl::passes::mono::collect_fns([p]);
-            let m = crate::mvl::passes::mono::monomorphize(p, &all_fns, &expr_types);
-            crate::mvl::ir::lower::lower(p, &m, &expr_types)
+            let m = crate::mvl::passes::mono::monomorphize(p, &all_fns, &prelude_expr_types);
+            crate::mvl::ir::lower::lower(p, &m, &prelude_expr_types)
         })
         .collect();
 
