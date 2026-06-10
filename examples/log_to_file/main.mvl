@@ -19,7 +19,7 @@
 use std.log.{Logger, LogFormat, LogLevel, file_logger}
 use std.io.{path, open, close, Fd}
 use std.env.{get}
-use std.runtime.{manifest, Manifest}
+use std.runtime.{manifest, Manifest, log_manifest}
 
 // ── Refined types ─────────────────────────────────────────────────────────
 
@@ -85,6 +85,8 @@ total fn open_log(p: String) -> Result[Fd, LogSetupError] {
 // ── Main ──────────────────────────────────────────────────────────────────
 
 total fn main() -> Unit ! Log + Env {
+    log_manifest();
+
     let log_path: String = match get_log_path() {
         Err(_) => {
             eprintln("error: invalid or empty log path");

@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [0.197.0] - 2026-06-10
+
+### Added
+
+- **Runtime manifest phases 5-7** (#1244) — complete the 7-phase `std.runtime.manifest()` embedding system:
+  - Phase 5: `AssuranceInfo` fields (`extern_count`, `total_functions`, `extern_ratio`, `requirements_proven`) now populated at compile time by counting function declarations and extern blocks
+  - Phase 6: `licenses` list populated from `mvl.lock` package metadata — deduplicated and sorted SPDX license identifiers
+  - Phase 7: `log_manifest() -> Unit ! Log` stdlib function for startup logging of full build provenance to the default logger
+  - All assurance metrics previously hardcoded to zero/empty are now real compile-time values
+
 ## [0.196.1] - 2026-06-10
 
 ### Fixed

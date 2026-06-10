@@ -1,0 +1,22 @@
+// Corpus: std.runtime Phase 5 — AssuranceInfo fields populated at compile time (#803).
+//
+// Verifies that:
+//   - assurance.extern_count is Int
+//   - assurance.total_functions is Int
+//   - assurance.extern_ratio is Float
+//   - assurance.requirements_proven is Int
+//   - Fields are accessible and type-correct
+
+use std.runtime.{manifest, Manifest, AssuranceInfo}
+
+fn main() -> Unit ! Console {
+    let m: Manifest = manifest();
+    let a: AssuranceInfo = m.assurance;
+
+    let _ec:  Int   = a.extern_count;
+    let _tf:  Int   = a.total_functions;
+    let _er:  Float = a.extern_ratio;
+    let _rp:  Int   = a.requirements_proven;
+
+    println("assurance ok")
+}
