@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [0.195.1] - 2026-06-10
+
+### Fixed
+
+- **Rust backend newtype coercion for refined type aliases** (#1326) — emit correct `Type::new(expr)` wrapping and `.0` unwrapping when coercing between refined type aliases and their base types:
+  - Let bindings: `let port: Port = 5558` now emits `Port::new(5558)`
+  - Function call arguments: automatic wrapping/unwrapping at call sites
+  - Return expressions: correct wrapping in return context
+  - `as` cast expressions: type-aware coercion in cast operations
+  - Maintains distinct refined alias types in Rust-generated code while handling seamless MVL-level conversions
+
 ## [0.195.0] - 2026-06-10
 
 ### Added
