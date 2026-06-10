@@ -1023,7 +1023,6 @@ fn cross_backend_else_if_chain() {
 }
 
 #[test]
-#[ignore = "llvm_text: Float sdiv type mismatch — LLVM emits i64 sdiv for Float operands (#1252)"]
 fn cross_backend_safe_division() {
     assert_backends_agree("safe_division.mvl");
 }
@@ -1034,7 +1033,6 @@ fn cross_backend_struct_value_semantics() {
 }
 
 #[test]
-#[ignore = "llvm_text: Int/Float.to_string() in format() returns empty string in LLVM backend (#1252)"]
 fn cross_backend_core_types_demo() {
     assert_backends_agree("core_types_demo.mvl");
 }
@@ -1279,9 +1277,8 @@ fn cross_backend_closure_string_bool_capture() {
 }
 
 /// Closure as return value: function returning a closure that captures params (#1271).
-/// Transpiler emits `fn(i64) -> i64` but capturing closures cannot be coerced to fn pointers.
+/// Closures capturing variables can now be returned (#1271 fixed).
 #[test]
-#[ignore = "transpiler: closures capturing variables cannot be returned as fn() pointers (#1271)"]
 fn cross_backend_closure_return_value() {
     assert_parity(
         &corpus_functions("closure_return_value.mvl"),
@@ -1290,13 +1287,11 @@ fn cross_backend_closure_return_value() {
 }
 
 /// Nested closure capture: a closure that captures another closure (#1271).
-/// Same transpiler limitation as closure_return_value — fn() vs capturing closure.
 #[test]
-#[ignore = "transpiler: closures capturing other closures cannot be assigned as fn() pointers (#1271)"]
 fn cross_backend_closure_nested_capture() {
     assert_parity(
         &corpus_functions("closure_nested_capture.mvl"),
-        "composed=25\npipeline=14",
+        "composed=26\npipeline=14",
     );
 }
 
@@ -1331,7 +1326,6 @@ fn cross_backend_generic_container_ops() {
 /// LLVM emits some_sum=0 and nested_first=0; both match-arm payload extractions
 /// are broken when the payload is Option[Int] or List[Int].
 #[test]
-#[ignore = "llvm_text: Option[Int] match unwrap returns 0 in LLVM backend (#1272)"]
 fn cross_backend_generic_nested_option() {
     assert_parity(
         &corpus_functions("generic_nested_option.mvl"),
