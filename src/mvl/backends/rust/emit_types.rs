@@ -319,6 +319,17 @@ impl RustEmitter {
                 self.line("}");
                 self.pop_indent();
                 self.line("}");
+                // Generate From<Alias> for BaseType so `.into()` unwraps correctly (#1328)
+                self.blank();
+                self.line(&format!("impl From<{name}> for {inner_str} {{"));
+                self.push_indent();
+                self.line(&format!("fn from(v: {name}) -> {inner_str} {{"));
+                self.push_indent();
+                self.line("v.0");
+                self.pop_indent();
+                self.line("}");
+                self.pop_indent();
+                self.line("}");
             }
             _ => {
                 // Plain alias
@@ -670,6 +681,17 @@ impl RustEmitter {
                     "assert!({pred_str}, \"refinement violated: {name}({{}})\", v);"
                 ));
                 self.line("Self(v)");
+                self.pop_indent();
+                self.line("}");
+                self.pop_indent();
+                self.line("}");
+                // Generate From<Alias> for BaseType so `.into()` unwraps correctly (#1328)
+                self.blank();
+                self.line(&format!("impl From<{name}> for {inner_str} {{"));
+                self.push_indent();
+                self.line(&format!("fn from(v: {name}) -> {inner_str} {{"));
+                self.push_indent();
+                self.line("v.0");
                 self.pop_indent();
                 self.line("}");
                 self.pop_indent();

@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [0.195.2] - 2026-06-10
+
+### Fixed
+
+- **Refined alias From trait implementation** (#1328) — generate `impl From<Port> for i64` alongside refined alias struct so `.into()` correctly unwraps the newtype at all call sites (method calls, stdlib functions, etc.):
+  - Previously, `port.into()` failed with "trait `From<Port>` not implemented for `i64`"
+  - Now generates automatic unwrapping via `From` impl to enable transparent coercion at argument emission
+
 ## [0.195.1] - 2026-06-10
 
 ### Fixed
