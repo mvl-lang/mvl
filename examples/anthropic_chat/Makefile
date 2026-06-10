@@ -35,7 +35,8 @@ test-solver: guard-mvl ## Show per-file solver statistics
 		printf "  $$FAIL  main.mvl\n"; exit 1; \
 	fi
 
-test: check ## No unit tests; delegates to type-check
+test: ## Requires external package — skipped in test-all, use `make check` after `mvl install`
+	@echo "  SKIP: anthropic_chat requires \`mvl install\` first (external package: pkg-anthropic)"
 
 assurance: guard-mvl ## Assurance report for main.mvl
 	$(MVL) assurance $(DIR)main.mvl

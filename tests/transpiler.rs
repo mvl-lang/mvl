@@ -2433,20 +2433,20 @@ fn binary_mul_emits_star() {
     assert_contains(&rust, ".checked_mul(");
 }
 
-/// Division operator emits `/`.
+/// Division operator emits `checked_div` for safety.
 #[test]
 fn binary_div_emits_slash() {
     let src = "fn f(a: Int, b: Int) -> Int { a / b }";
     let rust = transpile_src(src);
-    assert_contains(&rust, "a / b");
+    assert_contains(&rust, "checked_div");
 }
 
-/// Remainder operator emits `%`.
+/// Remainder operator emits `checked_rem` for safety.
 #[test]
 fn binary_rem_emits_percent() {
     let src = "fn f(a: Int, b: Int) -> Int { a % b }";
     let rust = transpile_src(src);
-    assert_contains(&rust, "a % b");
+    assert_contains(&rust, "checked_rem");
 }
 
 /// Equality operator emits `==`.
