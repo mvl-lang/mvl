@@ -11,8 +11,6 @@
 
 //! `mvl_runtime_llvm` — C-ABI stdlib for the MVL LLVM backend.
 //!
-//! `mvl_runtime_llvm` — C-ABI stdlib for the MVL LLVM backend (merged with `mvl_memory`).
-//!
 //! This crate is a `cdylib` loaded by `lli` at runtime:
 //!
 //! ```text

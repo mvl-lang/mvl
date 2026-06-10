@@ -36,6 +36,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::types::Ty;
+use crate::mvl::checker::walk::walk_block;
 use crate::mvl::parser::ast::{
     Block, Decl, ElseBranch, Expr, MatchBody, Pattern, Program, Stmt, TypeExpr,
 };
@@ -193,24 +194,36 @@ fn build_effect_reachability(
     let mut callee_map: HashMap<String, HashSet<String>> = HashMap::new();
     for prog in programs {
         for decl in &prog.declarations {
-            match decl {
-                Decl::Fn(fd) => {
-                    let callees = callee_map.entry(fd.name.clone()).or_default();
-                    collect_calls_in_block(&fd.body, callees);
-                }
-                Decl::Impl(id) => {
-                    for m in &id.methods {
-                        let callees = callee_map.entry(m.name.clone()).or_default();
-                        collect_calls_in_block(&m.body, callees);
+            let named_bodies: Vec<(String, &Block)> = match decl {
+                Decl::Fn(fd) => vec![(fd.name.clone(), &fd.body)],
+                Decl::Impl(id) => id
+                    .methods
+                    .iter()
+                    .map(|m| (m.name.clone(), &m.body))
+                    .collect(),
+                Decl::Actor(ad) => ad
+                    .methods
+                    .iter()
+                    .map(|m| (m.name.clone(), &m.body))
+                    .collect(),
+                _ => vec![],
+            };
+            for (name, body) in named_bodies {
+                let callees = callee_map.entry(name).or_default();
+                walk_block(body, &mut |expr| match expr {
+                    Expr::FnCall { name: callee, .. } => {
+                        callees.insert(callee.clone());
                     }
-                }
-                Decl::Actor(ad) => {
-                    for m in &ad.methods {
-                        let callees = callee_map.entry(m.name.clone()).or_default();
-                        collect_calls_in_block(&m.body, callees);
+                    Expr::MethodCall {
+                        receiver, method, ..
+                    } => {
+                        callees.insert(method.clone());
+                        if let Expr::Ident(recv_name, _) = receiver.as_ref() {
+                            callees.insert(format!("{recv_name}::{method}"));
+                        }
                     }
-                }
-                _ => {}
+                    _ => {}
+                });
             }
         }
     }
@@ -341,169 +354,30 @@ pub fn prelude_has_ifc_boundary(
 fn collect_called_fn_names(prog: &Program) -> std::collections::HashSet<String> {
     let mut names = std::collections::HashSet::new();
     for decl in &prog.declarations {
-        match decl {
-            Decl::Fn(fd) => collect_calls_in_block(&fd.body, &mut names),
-            Decl::Impl(id) => {
-                for m in &id.methods {
-                    collect_calls_in_block(&m.body, &mut names);
+        let bodies: Vec<&Block> = match decl {
+            Decl::Fn(fd) => vec![&fd.body],
+            Decl::Impl(id) => id.methods.iter().map(|m| &m.body).collect(),
+            Decl::Actor(ad) => ad.methods.iter().map(|m| &m.body).collect(),
+            _ => vec![],
+        };
+        for body in bodies {
+            walk_block(body, &mut |expr| match expr {
+                Expr::FnCall { name, .. } => {
+                    names.insert(name.clone());
                 }
-            }
-            Decl::Actor(ad) => {
-                for m in &ad.methods {
-                    collect_calls_in_block(&m.body, &mut names);
+                Expr::MethodCall {
+                    receiver, method, ..
+                } => {
+                    names.insert(method.clone());
+                    if let Expr::Ident(recv_name, _) = receiver.as_ref() {
+                        names.insert(format!("{recv_name}::{method}"));
+                    }
                 }
-            }
-            _ => {}
+                _ => {}
+            });
         }
     }
     names
-}
-
-fn collect_calls_in_block(block: &Block, names: &mut std::collections::HashSet<String>) {
-    for stmt in &block.stmts {
-        collect_calls_in_stmt(stmt, names);
-    }
-}
-
-fn collect_calls_in_stmt(
-    stmt: &crate::mvl::parser::ast::Stmt,
-    names: &mut std::collections::HashSet<String>,
-) {
-    match stmt {
-        crate::mvl::parser::ast::Stmt::Let { init, .. } => collect_calls_in_expr(init, names),
-        crate::mvl::parser::ast::Stmt::Assign { value, .. } => collect_calls_in_expr(value, names),
-        crate::mvl::parser::ast::Stmt::Return { value: Some(e), .. } => {
-            collect_calls_in_expr(e, names)
-        }
-        crate::mvl::parser::ast::Stmt::Return { value: None, .. } => {}
-        crate::mvl::parser::ast::Stmt::Expr { expr, .. } => collect_calls_in_expr(expr, names),
-        crate::mvl::parser::ast::Stmt::If {
-            cond, then, else_, ..
-        } => {
-            collect_calls_in_expr(cond, names);
-            collect_calls_in_block(then, names);
-            match else_ {
-                Some(crate::mvl::parser::ast::ElseBranch::Block(b)) => {
-                    collect_calls_in_block(b, names)
-                }
-                Some(crate::mvl::parser::ast::ElseBranch::If(s)) => collect_calls_in_stmt(s, names),
-                None => {}
-            }
-        }
-        crate::mvl::parser::ast::Stmt::Match {
-            scrutinee, arms, ..
-        } => {
-            collect_calls_in_expr(scrutinee, names);
-            for arm in arms {
-                match &arm.body {
-                    crate::mvl::parser::ast::MatchBody::Expr(e) => collect_calls_in_expr(e, names),
-                    crate::mvl::parser::ast::MatchBody::Block(b) => {
-                        collect_calls_in_block(b, names)
-                    }
-                }
-            }
-        }
-        crate::mvl::parser::ast::Stmt::For { iter, body, .. } => {
-            collect_calls_in_expr(iter, names);
-            collect_calls_in_block(body, names);
-        }
-        crate::mvl::parser::ast::Stmt::While { cond, body, .. } => {
-            collect_calls_in_expr(cond, names);
-            collect_calls_in_block(body, names);
-        }
-    }
-}
-
-fn collect_calls_in_expr(expr: &Expr, names: &mut std::collections::HashSet<String>) {
-    match expr {
-        Expr::FnCall { name, args, .. } => {
-            names.insert(name.clone());
-            for a in args {
-                collect_calls_in_expr(a, names);
-            }
-        }
-        Expr::MethodCall {
-            receiver,
-            method,
-            args,
-            ..
-        } => {
-            // Insert both bare method name and qualified `Receiver::method` so
-            // build_effect_reachability can seed from any sink method call (#956).
-            names.insert(method.clone());
-            if let Expr::Ident(recv_name, _) = receiver.as_ref() {
-                names.insert(format!("{recv_name}::{method}"));
-            }
-            collect_calls_in_expr(receiver, names);
-            for a in args {
-                collect_calls_in_expr(a, names);
-            }
-        }
-        Expr::Match {
-            scrutinee, arms, ..
-        } => {
-            collect_calls_in_expr(scrutinee, names);
-            for arm in arms {
-                match &arm.body {
-                    crate::mvl::parser::ast::MatchBody::Expr(e) => collect_calls_in_expr(e, names),
-                    crate::mvl::parser::ast::MatchBody::Block(b) => {
-                        collect_calls_in_block(b, names)
-                    }
-                }
-            }
-        }
-        Expr::If {
-            cond, then, else_, ..
-        } => {
-            collect_calls_in_expr(cond, names);
-            collect_calls_in_block(then, names);
-            if let Some(e) = else_ {
-                collect_calls_in_expr(e, names);
-            }
-        }
-        Expr::Block(b) => collect_calls_in_block(b, names),
-        Expr::Binary { left, right, .. } => {
-            collect_calls_in_expr(left, names);
-            collect_calls_in_expr(right, names);
-        }
-        Expr::Unary { expr, .. }
-        | Expr::Propagate { expr, .. }
-        | Expr::Consume { expr, .. }
-        | Expr::Relabel { expr, .. }
-        | Expr::Borrow { expr, .. }
-        | Expr::As { expr, .. } => collect_calls_in_expr(expr, names),
-        Expr::FieldAccess { expr, .. } => collect_calls_in_expr(expr, names),
-        Expr::Construct { fields, .. } => {
-            for (_, e) in fields {
-                collect_calls_in_expr(e, names);
-            }
-        }
-        Expr::List { elems, .. } | Expr::Set { elems, .. } => {
-            for e in elems {
-                collect_calls_in_expr(e, names);
-            }
-        }
-        Expr::Map { pairs, .. } => {
-            for (k, v) in pairs {
-                collect_calls_in_expr(k, names);
-                collect_calls_in_expr(v, names);
-            }
-        }
-        Expr::Lambda { body, .. } => collect_calls_in_expr(body, names),
-        Expr::Spawn { fields, .. } => {
-            for (_, e) in fields {
-                collect_calls_in_expr(e, names);
-            }
-        }
-        Expr::Select { arms, .. } => {
-            for arm in arms {
-                collect_calls_in_expr(&arm.expr, names);
-                collect_calls_in_block(&arm.body, names);
-            }
-        }
-        // Leaf expressions — no sub-expressions.
-        Expr::Literal(..) | Expr::Ident(..) | Expr::Quantifier(..) => {}
-    }
 }
 
 /// Count all `Expr::Relabel` call sites in the program.
@@ -511,10 +385,13 @@ fn collect_calls_in_expr(expr: &Expr, names: &mut std::collections::HashSet<Stri
 /// Used by the IFC pass to include the auditable relabel count in the `Proven` evidence.
 pub fn count_relabels(prog: &Program) -> usize {
     let mut rc = 0usize;
-    let mut _ignored = 0usize;
     for decl in &prog.declarations {
         if let Decl::Fn(fd) = decl {
-            count_in_block(&fd.body, &mut rc, &mut _ignored);
+            walk_block(&fd.body, &mut |expr| {
+                if matches!(expr, Expr::Relabel { .. }) {
+                    rc += 1;
+                }
+            });
         }
     }
     rc
@@ -1076,133 +953,6 @@ fn check_expr_flows(
             }
         }
         // Leaves — no sub-expressions to walk.
-        Expr::Literal(..) | Expr::Ident(..) | Expr::Quantifier(..) => {}
-    }
-}
-
-/// Recursively count `Expr::Relabel` nodes in a block.
-fn count_in_block(block: &Block, dc: &mut usize, sc: &mut usize) {
-    for stmt in &block.stmts {
-        count_in_stmt(stmt, dc, sc);
-    }
-}
-
-fn count_in_stmt(stmt: &Stmt, dc: &mut usize, sc: &mut usize) {
-    match stmt {
-        Stmt::Let { init, .. } => count_in_expr(init, dc, sc),
-        Stmt::Assign { value, .. } => count_in_expr(value, dc, sc),
-        Stmt::Return { value: Some(e), .. } => count_in_expr(e, dc, sc),
-        Stmt::Return { value: None, .. } => {}
-        Stmt::Expr { expr, .. } => count_in_expr(expr, dc, sc),
-        Stmt::If {
-            cond, then, else_, ..
-        } => {
-            count_in_expr(cond, dc, sc);
-            count_in_block(then, dc, sc);
-            match else_ {
-                Some(ElseBranch::Block(blk)) => count_in_block(blk, dc, sc),
-                Some(ElseBranch::If(s)) => count_in_stmt(s, dc, sc),
-                None => {}
-            }
-        }
-        Stmt::Match {
-            scrutinee, arms, ..
-        } => {
-            count_in_expr(scrutinee, dc, sc);
-            for arm in arms {
-                match &arm.body {
-                    MatchBody::Expr(e) => count_in_expr(e, dc, sc),
-                    MatchBody::Block(blk) => count_in_block(blk, dc, sc),
-                }
-            }
-        }
-        Stmt::While { cond, body, .. } => {
-            count_in_expr(cond, dc, sc);
-            count_in_block(body, dc, sc);
-        }
-        Stmt::For { iter, body, .. } => {
-            count_in_expr(iter, dc, sc);
-            count_in_block(body, dc, sc);
-        }
-    }
-}
-
-fn count_in_expr(expr: &Expr, dc: &mut usize, sc: &mut usize) {
-    match expr {
-        Expr::Relabel { expr, .. } => {
-            *dc += 1;
-            count_in_expr(expr, dc, sc);
-        }
-        Expr::FnCall { args, .. } => {
-            for a in args {
-                count_in_expr(a, dc, sc);
-            }
-        }
-        Expr::Binary { left, right, .. } => {
-            count_in_expr(left, dc, sc);
-            count_in_expr(right, dc, sc);
-        }
-        Expr::Unary { expr, .. }
-        | Expr::Consume { expr, .. }
-        | Expr::Propagate { expr, .. }
-        | Expr::FieldAccess { expr, .. }
-        | Expr::Borrow { expr, .. }
-        | Expr::As { expr, .. } => count_in_expr(expr, dc, sc),
-        Expr::MethodCall { receiver, args, .. } => {
-            count_in_expr(receiver, dc, sc);
-            for a in args {
-                count_in_expr(a, dc, sc);
-            }
-        }
-        Expr::If {
-            cond, then, else_, ..
-        } => {
-            count_in_expr(cond, dc, sc);
-            count_in_block(then, dc, sc);
-            if let Some(e) = else_ {
-                count_in_expr(e, dc, sc);
-            }
-        }
-        Expr::Match {
-            scrutinee, arms, ..
-        } => {
-            count_in_expr(scrutinee, dc, sc);
-            for arm in arms {
-                match &arm.body {
-                    MatchBody::Expr(e) => count_in_expr(e, dc, sc),
-                    MatchBody::Block(blk) => count_in_block(blk, dc, sc),
-                }
-            }
-        }
-        Expr::Block(blk) => count_in_block(blk, dc, sc),
-        Expr::Lambda { body, .. } => count_in_expr(body, dc, sc),
-        Expr::Construct { fields, .. } => {
-            for (_, v) in fields {
-                count_in_expr(v, dc, sc);
-            }
-        }
-        Expr::List { elems, .. } | Expr::Set { elems, .. } => {
-            for e in elems {
-                count_in_expr(e, dc, sc);
-            }
-        }
-        Expr::Map { pairs, .. } => {
-            for (k, v) in pairs {
-                count_in_expr(k, dc, sc);
-                count_in_expr(v, dc, sc);
-            }
-        }
-        Expr::Spawn { fields, .. } => {
-            for (_, v) in fields {
-                count_in_expr(v, dc, sc);
-            }
-        }
-        Expr::Select { arms, .. } => {
-            for arm in arms {
-                count_in_expr(&arm.expr, dc, sc);
-                count_in_block(&arm.body, dc, sc);
-            }
-        }
         Expr::Literal(..) | Expr::Ident(..) | Expr::Quantifier(..) => {}
     }
 }

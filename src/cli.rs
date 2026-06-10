@@ -5,7 +5,6 @@ pub mod args;
 pub mod assurance;
 pub mod build;
 pub mod check;
-pub mod complexity;
 pub mod fmt;
 pub mod fuzz;
 pub mod lint;
@@ -13,9 +12,9 @@ pub mod llvm_text;
 pub mod mcdc;
 pub mod meta;
 pub mod mutate;
+#[cfg(feature = "openapi")]
 pub mod openapi;
 pub mod test;
-pub mod transpile;
 
 use mvl::mvl::checker::errors::CheckError;
 use mvl::mvl::loader;
@@ -115,10 +114,6 @@ pub(super) fn dispatch(args: &[String]) {
                 build::run(&path, true, &run_args, assert_mode, target, release);
             }
         }
-        "transpile" => {
-            let path = args::require_path_arg(args, "transpile");
-            transpile::run(&path);
-        }
         "test" => {
             let path = args::require_path_arg(args, "test");
             let backend = args::parse_backend(args);
@@ -176,10 +171,29 @@ pub(super) fn dispatch(args: &[String]) {
             mcdc::run(&path, quiet, verbose, masking, json);
         }
         "complexity" => {
+            use mvl::mvl::passes::complexity;
             let path = args::require_path_arg(args, "complexity");
             let format_json = args.iter().any(|a| a == "--format=json");
-            complexity::run(&path, format_json);
+            let files = loader::mvl_files(&path, false);
+            if files.is_empty() {
+                eprintln!("No .mvl files found at: {path}");
+                process::exit(1);
+            }
+            let mut reports = Vec::new();
+            for f in &files {
+                let file_str = f.display().to_string();
+                let (prog, _src) = parse_or_exit(&file_str);
+                reports.push(complexity::analyze(&file_str, &prog));
+            }
+            if format_json {
+                complexity::print_json(&reports);
+            } else {
+                for report in &reports {
+                    complexity::print_human(report);
+                }
+            }
         }
+        #[cfg(feature = "openapi")]
         "openapi" => {
             let path = args::require_path_arg(args, "openapi");
             openapi::run(&path);

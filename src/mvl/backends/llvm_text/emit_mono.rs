@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 
 use crate::mvl::parser::ast::{Expr, FnDecl, Literal, MatchArm, MatchBody, Pattern, TypeExpr};
+use crate::mvl::passes::mono;
 
 use super::TextEmitter;
 
@@ -170,7 +171,7 @@ impl TextEmitter {
 
             // Register the return type for the mangled function.
             // Resolve any type params in the return type.
-            let resolved_ret = Self::substitute_type(&gfd.return_type, &tp_map);
+            let resolved_ret = mono::substitute_type(&gfd.return_type, &tp_map);
             self.fn_ret_types.insert(mangled.clone(), resolved_ret);
         }
 
@@ -224,33 +225,6 @@ impl TextEmitter {
             if gfd.type_params.iter().any(|tp| tp.name() == name) {
                 map.insert(name.clone(), arg_ty.clone());
             }
-        }
-    }
-
-    /// Substitute type parameters in a type expression using the given mapping.
-    pub(super) fn substitute_type(ty: &TypeExpr, map: &HashMap<String, TypeExpr>) -> TypeExpr {
-        match ty {
-            TypeExpr::Base { name, args, span } => {
-                if let Some(concrete) = map.get(name) {
-                    concrete.clone()
-                } else {
-                    TypeExpr::Base {
-                        name: name.clone(),
-                        args: args.iter().map(|a| Self::substitute_type(a, map)).collect(),
-                        span: *span,
-                    }
-                }
-            }
-            TypeExpr::Option { inner, span } => TypeExpr::Option {
-                inner: Box::new(Self::substitute_type(inner, map)),
-                span: *span,
-            },
-            TypeExpr::Result { ok, err, span } => TypeExpr::Result {
-                ok: Box::new(Self::substitute_type(ok, map)),
-                err: Box::new(Self::substitute_type(err, map)),
-                span: *span,
-            },
-            other => other.clone(),
         }
     }
 

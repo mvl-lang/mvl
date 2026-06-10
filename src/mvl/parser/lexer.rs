@@ -1112,6 +1112,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::approx_constant)]
     fn tokenize_float_literal() {
         let kinds = lex_kinds_no_eof("3.14");
         assert_eq!(kinds, vec![TokenKind::Float(3.14)]);
@@ -1136,6 +1137,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::approx_constant)]
     fn tokenize_all_literal_kinds() {
         // GIVEN: 42 3.14 "hello" 'c' true false
         // THEN: INTEGER FLOAT STRING CHAR BOOL BOOL

@@ -220,20 +220,6 @@ fn has_std_imports_tir(tir: &crate::mvl::ir::TirProgram) -> bool {
         .any(|ud| ud.path.first().map(|s| s == "std").unwrap_or(false))
 }
 
-#[allow(dead_code)]
-fn collect_stdlib_modules_tir(tir: &crate::mvl::ir::TirProgram) -> Vec<String> {
-    let mut modules: Vec<String> = Vec::new();
-    for ud in &tir.uses {
-        if ud.path.first().map(|s| s == "std").unwrap_or(false) && ud.path.len() >= 2 {
-            let module = ud.path[1].as_str();
-            if RUST_RUNTIME_IMPORTS.contains(&module) && !modules.contains(&module.to_string()) {
-                modules.push(module.to_string());
-            }
-        }
-    }
-    modules
-}
-
 /// Output of a successful multi-file project transpilation.
 pub struct ProjectOutput {
     /// Contents of `src/main.rs` or `src/lib.rs` for the entry-point module.

@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Schuberg Philis
 
+pub mod actors;
 pub mod ast;
+pub mod declarations;
 pub mod diagnostics;
 pub mod expressions;
+pub mod externs;
 pub mod functions;
 pub mod lexer;
 pub mod statements;

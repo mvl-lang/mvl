@@ -39,6 +39,7 @@ pub(crate) mod solver;
 mod stmts;
 pub mod termination;
 pub mod types;
+pub(crate) mod walk;
 
 pub use crate::mvl::checker::solver::SolverMode;
 

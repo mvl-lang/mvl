@@ -3,7 +3,7 @@
 
 //! MVL memory runtime — heap allocation and reference counting for collection types.
 //!
-//! Compiled as a `cdylib` and loaded by `lli` at runtime via `--load=libmvl_memory.{dylib,so}`.
+//! Compiled as part of `mvl_runtime_llvm` and loaded by `lli` at runtime via `--load=libmvl_runtime_llvm.{dylib,so}`.
 //! All exported functions use C ABI (`extern "C"` + `#[no_mangle]`) so the LLVM IR
 //! can call them with `declare` + `Linkage::External`.
 //!
