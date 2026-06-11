@@ -90,6 +90,7 @@ pub type TokenKind = enum {
     IntLit,
     FloatLit,
     StrLit,
+    CharLit,
     // ── Punctuation and operators ──────────────────────────────────────────
     Punct,
     // ── Line comment (//) ─────────────────────────────────────────────────
@@ -296,13 +297,17 @@ pub type RelabelDecl = struct {
 
 /// The top-level parsed program, with separate lists for each declaration kind.
 pub type Program = struct {
-    fns:     List[FnDecl],
-    types:   List[TypeDecl],
-    uses:    List[UseDecl],
-    consts:  List[ConstDecl],
-    externs: List[ExternDecl],
-    impls:   List[ImplDecl],
-    errors:  List[ParseError],
+    fns:           List[FnDecl],
+    types:         List[TypeDecl],
+    uses:          List[UseDecl],
+    consts:        List[ConstDecl],
+    externs:       List[ExternDecl],
+    impls:         List[ImplDecl],
+    actors:        List[String],
+    effect_decls:  List[EffectDecl],
+    label_decls:   List[LabelDecl],
+    relabel_decls: List[RelabelDecl],
+    errors:        List[ParseError],
 }
 
 // ── TIR primitive enums ──────────────────────────────────────────────────────

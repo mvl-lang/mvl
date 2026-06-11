@@ -4,8 +4,9 @@
 // compiler/parser.mvl — S3: recursive-descent MVL parser (issue #187)
 //
 // Parses a flat List[Token] (from compiler/lexer.mvl) into a Program AST
-// (compiler/ast.mvl).  Handles all six top-level declaration kinds:
-//   use, const, type, fn (with modifiers), extern, impl
+// (compiler/tir.mvl).  Handles all top-level declaration kinds:
+//   use, const, type, fn (with modifiers), extern, impl,
+//   actor, effect, label, relabel
 //
 // Design:
 //   - ParserState threads { tokens, pos, errors } through every parse fn.
@@ -54,6 +55,9 @@ use tir::ConstDecl;
 use tir::ExternFnDecl;
 use tir::ExternDecl;
 use tir::ImplDecl;
+use tir::EffectDecl;
+use tir::LabelDecl;
+use tir::RelabelDecl;
 use tir::Program;
 use lexer::lex;
 
@@ -171,6 +175,24 @@ pub type ImplR = struct {
     ps:    ParserState,
 }
 
+/// Result carrier for an `EffectDecl` parse sub-result plus updated parser state.
+pub type EffectDeclR = struct {
+    value: EffectDecl,
+    ps:    ParserState,
+}
+
+/// Result carrier for a `LabelDecl` parse sub-result plus updated parser state.
+pub type LabelDeclR = struct {
+    value: LabelDecl,
+    ps:    ParserState,
+}
+
+/// Result carrier for a `RelabelDecl` parse sub-result plus updated parser state.
+pub type RelabelDeclR = struct {
+    value: RelabelDecl,
+    ps:    ParserState,
+}
+
 // ── Sentinel / empty values ───────────────────────────────────────────────────
 
 total fn empty_span() -> Span {
@@ -262,6 +284,45 @@ partial fn skip_body(ps: ParserState) -> ParserState {
         }
     }
     curr
+}
+
+// Skip balanced parentheses (consumes the opening '(' itself).
+partial fn skip_parens(ps: ParserState) -> ParserState {
+    let curr: ref ParserState = ps_expect_punct(ps, "(");
+    let depth: ref Int = 1;
+    while depth > 0 && !ps_at_eof(curr) decreases curr.tokens.len() - curr.pos {
+        if ps_at_punct(curr, "(") {
+            depth = depth + 1; curr = ps_advance(curr)
+        } else if ps_at_punct(curr, ")") {
+            depth = depth - 1; curr = ps_advance(curr)
+        } else {
+            curr = ps_advance(curr)
+        }
+    }
+    curr
+}
+
+// True if tok could start a top-level declaration — used to stop refinement skipping.
+total fn is_decl_start(tok: Token) -> Bool {
+    match tok.kind {
+        TokenKind::KwFn      => true,
+        TokenKind::KwType    => true,
+        TokenKind::KwPub     => true,
+        TokenKind::KwConst   => true,
+        TokenKind::KwExtern  => true,
+        TokenKind::KwImpl    => true,
+        TokenKind::KwActor   => true,
+        TokenKind::KwEffect  => true,
+        TokenKind::KwLabel   => true,
+        TokenKind::KwRelabel => true,
+        TokenKind::KwTotal   => true,
+        TokenKind::KwPartial => true,
+        TokenKind::KwTest    => true,
+        TokenKind::KwUse     => true,
+        TokenKind::KwBuiltin => true,
+        TokenKind::Eof       => true,
+        _                    => false,
+    }
 }
 
 // ── Type expression parser (depth-limited to avoid mutual recursion) ───────────
@@ -545,9 +606,17 @@ partial fn parse_fn_decl(
     let sp: Span = ps_current(ps).span;
     // consume 'fn'
     let curr: ref ParserState = ps_advance(ps);
-    // name
+    // name (or Type::method for extension methods)
     let name_r: StringR = ps_expect_name(curr);
     curr = name_r.ps;
+    let fn_name: String = if ps_at_punct(curr, "::") {
+        curr = ps_advance(curr);
+        let method_r: StringR = ps_expect_name(curr);
+        curr = method_r.ps;
+        format("{}::{}", [name_r.value, method_r.value])
+    } else {
+        name_r.value
+    };
     // optional generic type params
     let gp_r: GenParamsR = parse_type_params(curr);
     curr = gp_r.ps;
@@ -605,7 +674,7 @@ partial fn parse_fn_decl(
     FnDeclR {
         value: FnDecl {
             visible: visible, is_test: is_test, is_builtin: is_builtin,
-            totality: totality, name: name_r.value,
+            totality: totality, name: fn_name,
             type_params: gp_r.value, params: params_r.value, ret_type: ret_type,
             effects: eff_r.value, constraints: con_r.value, has_body: has_body,
             span: sp,
@@ -659,6 +728,19 @@ partial fn parse_type_decl(ps: ParserState, visible: Bool) -> TypeDeclR {
                 if ps_at_punct(curr, ",") { curr = ps_advance(curr) }
             }
             curr = ps_expect_punct(curr, "}");
+            // Skip optional 'with invariant <refinement>'
+            let has_with: Bool = match ps_current(curr).kind { TokenKind::KwWith => true, _ => false };
+            if has_with {
+                curr = ps_advance(curr); // consume 'with'
+                let has_inv: Bool = match ps_current(curr).kind { TokenKind::KwInvariant => true, _ => false };
+                if has_inv {
+                    curr = ps_advance(curr); // consume 'invariant'
+                    let wi_done: ref Bool = false;
+                    while !wi_done && !ps_at_eof(curr) decreases curr.tokens.len() - curr.pos {
+                        if is_decl_start(ps_current(curr)) { wi_done = true } else { curr = ps_advance(curr) }
+                    }
+                } else { () }
+            } else { () }
             TypeDeclR {
                 value: TypeDecl {
                     visible: visible, name: name_r.value, type_params: gp_r.value,
@@ -676,6 +758,10 @@ partial fn parse_type_decl(ps: ParserState, visible: Bool) -> TypeDeclR {
                 let vn_r: StringR = ps_expect_name(curr);
                 curr = vn_r.ps;
                 variants.push(vn_r.value);
+                // Skip tuple payload: Variant(T, U, …)
+                if ps_at_punct(curr, "(") { curr = skip_parens(curr) } else { () }
+                // Skip struct payload: Variant { field: T, … }
+                if ps_at_punct(curr, "{") { curr = skip_body(curr) } else { () }
                 if ps_at_punct(curr, ",") { curr = ps_advance(curr) }
             }
             curr = ps_expect_punct(curr, "}");
@@ -912,6 +998,114 @@ partial fn parse_impl_decl(ps: ParserState) -> ImplR {
     }
 }
 
+// ── actor declaration parser ──────────────────────────────────────────────────
+// Entry: current token is 'actor'.  Stores only the name; body is skipped.
+
+partial fn parse_actor_decl(ps: ParserState, visible: Bool) -> StringR {
+    let curr: ref ParserState = ps_advance(ps); // consume 'actor'
+    let name_r: StringR = ps_expect_name(curr);
+    curr = name_r.ps;
+    // optional type params
+    let gp_r: GenParamsR = parse_type_params(curr);
+    curr = gp_r.ps;
+    // optional 'traps_exit'
+    let is_traps: Bool = match ps_current(curr).kind {
+        TokenKind::Ident => ps_current(curr).lexeme == "traps_exit",
+        _ => false,
+    };
+    if is_traps { curr = ps_advance(curr) } else { () }
+    // optional 'with mailbox(...)'
+    let has_with: Bool = match ps_current(curr).kind { TokenKind::KwWith => true, _ => false };
+    if has_with {
+        curr = ps_advance(curr); // consume 'with'
+        let mb_r: StringR = ps_expect_name(curr); // consume 'mailbox'
+        curr = mb_r.ps;
+        if ps_at_punct(curr, "(") { curr = skip_parens(curr) } else { () }
+    } else { () }
+    // skip body
+    if ps_at_punct(curr, "{") { curr = skip_body(curr) } else { () }
+    StringR { value: name_r.value, ps: curr }
+}
+
+// ── effect declaration parser ─────────────────────────────────────────────────
+// Entry: current token is 'effect'.
+// Syntax: effect IDENT [> IDENT {+ IDENT}] ;
+
+partial fn parse_effect_decl(ps: ParserState) -> EffectDeclR {
+    let sp: Span = ps_current(ps).span;
+    let curr: ref ParserState = ps_advance(ps); // consume 'effect'
+    let name_r: StringR = ps_expect_name(curr);
+    curr = name_r.ps;
+    let subsumes: ref List[String] = [];
+    let has_gt: Bool = ps_at_punct(curr, ">");
+    if has_gt {
+        curr = ps_advance(curr); // consume '>'
+        let done: ref Bool = false;
+        while !done && !ps_at_eof(curr) decreases curr.tokens.len() - curr.pos {
+            let sub_r: StringR = ps_expect_name(curr);
+            curr = sub_r.ps;
+            subsumes.push(sub_r.value);
+            if ps_at_punct(curr, "+") { curr = ps_advance(curr) } else { done = true }
+        }
+    } else { () }
+    if ps_at_punct(curr, ";") { curr = ps_advance(curr) } else { () }
+    EffectDeclR {
+        value: EffectDecl { name: name_r.value, subsumes: subsumes, span: sp },
+        ps: curr,
+    }
+}
+
+// ── label declaration parser ──────────────────────────────────────────────────
+// Entry: current token is 'label'.
+// Syntax: label IDENT ;
+
+total fn parse_label_decl(ps: ParserState, visible: Bool) -> LabelDeclR {
+    let sp: Span = ps_current(ps).span;
+    let curr: ref ParserState = ps_advance(ps); // consume 'label'
+    let name_r: StringR = ps_expect_name(curr);
+    let after_name: ParserState = if ps_at_punct(name_r.ps, ";") { ps_advance(name_r.ps) } else { name_r.ps };
+    LabelDeclR {
+        value: LabelDecl { visible: visible, name: name_r.value, span: sp },
+        ps: after_name,
+    }
+}
+
+// ── relabel declaration parser ────────────────────────────────────────────────
+// Entry: current token is 'relabel'.
+// Syntax: relabel IDENT : label_ref -> label_ref [audit] ;
+// label_ref = IDENT | "_"
+
+partial fn parse_relabel_decl(ps: ParserState, visible: Bool) -> RelabelDeclR {
+    let sp: Span = ps_current(ps).span;
+    let curr: ref ParserState = ps_advance(ps); // consume 'relabel'
+    let name_r: StringR = ps_expect_name(curr);
+    curr = name_r.ps;
+    curr = ps_expect_punct(curr, ":");
+    // from label_ref
+    let from_tok: Token = ps_current(curr);
+    let from_val: Option[String] = if from_tok.lexeme == "_" { None } else { Some(from_tok.lexeme) };
+    curr = ps_advance(curr);
+    curr = ps_expect_punct(curr, "->");
+    // to label_ref
+    let to_tok: Token = ps_current(curr);
+    let to_val: Option[String] = if to_tok.lexeme == "_" { None } else { Some(to_tok.lexeme) };
+    curr = ps_advance(curr);
+    // optional 'audit'
+    let is_audit: Bool = match ps_current(curr).kind {
+        TokenKind::Ident => ps_current(curr).lexeme == "audit",
+        _ => false,
+    };
+    if is_audit { curr = ps_advance(curr) } else { () }
+    if ps_at_punct(curr, ";") { curr = ps_advance(curr) } else { () }
+    RelabelDeclR {
+        value: RelabelDecl {
+            visible: visible, name: name_r.value,
+            from: from_val, to: to_val, audit: is_audit, span: sp,
+        },
+        ps: curr,
+    }
+}
+
 // ── Modifier parsing helper ───────────────────────────────────────────────────
 // Collect optional pub/test/builtin/transparent after total/partial.
 
@@ -947,12 +1141,16 @@ partial fn collect_mod_flags(ps: ParserState) -> ModFlags {
 // curr.pos == curr.tokens.len().
 partial fn parse_program(ps: ParserState) -> Program {
     let curr: ref ParserState = ps;
-    let fns: ref     List[FnDecl]     = [];
-    let types: ref   List[TypeDecl]   = [];
-    let uses: ref    List[UseDecl]    = [];
-    let consts: ref  List[ConstDecl]  = [];
-    let externs: ref List[ExternDecl] = [];
-    let impls: ref   List[ImplDecl]   = [];
+    let fns: ref           List[FnDecl]     = [];
+    let types: ref         List[TypeDecl]   = [];
+    let uses: ref          List[UseDecl]    = [];
+    let consts: ref        List[ConstDecl]  = [];
+    let externs: ref       List[ExternDecl] = [];
+    let impls: ref         List[ImplDecl]   = [];
+    let actors: ref        List[String]     = [];
+    let effect_decls: ref  List[EffectDecl] = [];
+    let label_decls: ref   List[LabelDecl]  = [];
+    let relabel_decls: ref List[RelabelDecl]= [];
 
     while !ps_at_eof(curr) decreases curr.tokens.len() - curr.pos {
         let tok: Token = ps_current(curr);
@@ -1027,6 +1225,21 @@ partial fn parse_program(ps: ParserState) -> Program {
                         fns.push(fr.value);
                         curr = fr.ps
                     }
+                    TokenKind::KwActor => {
+                        let ar: StringR = parse_actor_decl(curr, true);
+                        actors.push(ar.value);
+                        curr = ar.ps
+                    }
+                    TokenKind::KwLabel => {
+                        let lr: LabelDeclR = parse_label_decl(curr, true);
+                        label_decls.push(lr.value);
+                        curr = lr.ps
+                    }
+                    TokenKind::KwRelabel => {
+                        let rr: RelabelDeclR = parse_relabel_decl(curr, true);
+                        relabel_decls.push(rr.value);
+                        curr = rr.ps
+                    }
                     _ => { curr = ps_advance(curr) }
                 }
             }
@@ -1071,6 +1284,26 @@ partial fn parse_program(ps: ParserState) -> Program {
                 fns.push(fr.value);
                 curr = fr.ps
             }
+            TokenKind::KwActor => {
+                let ar: StringR = parse_actor_decl(curr, false);
+                actors.push(ar.value);
+                curr = ar.ps
+            }
+            TokenKind::KwEffect => {
+                let er: EffectDeclR = parse_effect_decl(curr);
+                effect_decls.push(er.value);
+                curr = er.ps
+            }
+            TokenKind::KwLabel => {
+                let lr: LabelDeclR = parse_label_decl(curr, false);
+                label_decls.push(lr.value);
+                curr = lr.ps
+            }
+            TokenKind::KwRelabel => {
+                let rr: RelabelDeclR = parse_relabel_decl(curr, false);
+                relabel_decls.push(rr.value);
+                curr = rr.ps
+            }
             // Comments and unknown tokens — skip
             _ => { curr = ps_advance(curr) }
         }
@@ -1079,6 +1312,8 @@ partial fn parse_program(ps: ParserState) -> Program {
     Program {
         fns: fns, types: types, uses: uses,
         consts: consts, externs: externs, impls: impls,
+        actors: actors, effect_decls: effect_decls,
+        label_decls: label_decls, relabel_decls: relabel_decls,
         errors: curr.errors,
     }
 }
