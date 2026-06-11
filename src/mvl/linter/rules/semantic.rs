@@ -706,6 +706,31 @@ fn type_expr_name(ty: &TypeExpr) -> String {
     }
 }
 
+/// Warn on `extern "rust"` blocks — deprecated in favour of `extern "C"` (#561).
+///
+/// Rule id: `deprecated-extern-rust`
+///
+/// `extern "rust"` only works with the Rust transpiler backend. Use `extern "C"` with
+/// `#[no_mangle] pub extern "C"` on the Rust side for backend-symmetric FFI.
+pub fn deprecated_extern_rust(prog: &Program, cfg: &LintConfig, out: &mut Vec<LintDiag>) {
+    if !cfg.deprecated_extern_rust {
+        return;
+    }
+    for decl in &prog.declarations {
+        if let Decl::Extern(ed) = decl {
+            if ed.abi == "rust" {
+                let s = ed.span;
+                out.push(LintDiag::warning(
+                    "deprecated-extern-rust",
+                    "extern \"rust\" is deprecated; use extern \"C\" with #[no_mangle] pub extern \"C\" on the Rust implementation",
+                    s.line,
+                    s.col,
+                ));
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1102,6 +1127,48 @@ mod tests {
         missing_totality(&prog, &cfg_off, &mut diags);
         assert!(
             diags.iter().all(|d| d.rule != "missing-totality"),
+            "rule must be silent when disabled; got: {diags:?}"
+        );
+    }
+
+    // -- deprecated_extern_rust --
+
+    #[test]
+    fn deprecated_extern_rust_fires_on_extern_rust() {
+        let src = "extern \"rust\" {\n    fn hash(data: String) -> String;\n}\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        deprecated_extern_rust(&prog, &cfg(), &mut diags);
+        assert!(
+            diags.iter().any(|d| d.rule == "deprecated-extern-rust"),
+            "extern \"rust\" should trigger deprecated-extern-rust; got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn deprecated_extern_rust_silent_for_extern_c() {
+        let src = "extern \"c\" {\n    fn sqrt(x: Float) -> Float;\n}\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        deprecated_extern_rust(&prog, &cfg(), &mut diags);
+        assert!(
+            diags.iter().all(|d| d.rule != "deprecated-extern-rust"),
+            "extern \"c\" must not trigger the rule; got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn deprecated_extern_rust_off_when_disabled() {
+        let cfg_off = LintConfig {
+            deprecated_extern_rust: false,
+            ..LintConfig::default()
+        };
+        let src = "extern \"rust\" {\n    fn hash(data: String) -> String;\n}\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        deprecated_extern_rust(&prog, &cfg_off, &mut diags);
+        assert!(
+            diags.iter().all(|d| d.rule != "deprecated-extern-rust"),
             "rule must be silent when disabled; got: {diags:?}"
         );
     }

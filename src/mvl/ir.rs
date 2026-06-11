@@ -345,6 +345,8 @@ pub struct TirExternFn {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TirExternDecl {
     pub abi: String,
+    /// Libraries to link against (from `link("m", "pthread")`).
+    pub link_libs: Vec<String>,
     pub fns: Vec<TirExternFn>,
     pub span: Span,
 }

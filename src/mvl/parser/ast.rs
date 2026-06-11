@@ -277,6 +277,9 @@ pub struct ConstDecl {
 pub struct ExternDecl {
     /// The ABI string, e.g. `"rust"` or `"c"`.
     pub abi: String,
+    /// Optional library names to link against: `extern "C" link("m") { … }`.
+    /// Rust backend emits `#[link(name = "...")]`; LLVM backend notes them as comments.
+    pub link_libs: Vec<String>,
     /// The function declarations inside the block.
     pub fns: Vec<ExternFnDecl>,
     pub span: Span,

@@ -12,12 +12,12 @@ impl Parser {
         let start = self.peek_span();
         self.advance(); // consume `extern`
 
-        // ABI string: e.g. `"rust"` or `"c"`
+        // ABI string: e.g. `"rust"`, `"c"`, or `"C"` (normalized to lowercase).
         let abi = match self.peek_kind() {
             TokenKind::Str(_) => {
                 let tok = self.advance();
                 match tok.kind {
-                    TokenKind::Str(s) => s,
+                    TokenKind::Str(s) => s.to_ascii_lowercase(),
                     _ => unreachable!(),
                 }
             }
@@ -32,6 +32,49 @@ impl Parser {
                 self.push_recover(err);
                 return Err(());
             }
+        };
+
+        // Optional `link("lib1", "lib2")` — library names to link against.
+        let link_libs = if matches!(self.peek_kind(), TokenKind::Ident(s) if s == "link") {
+            self.advance(); // consume `link`
+            let lparen = self.expect(&TokenKind::LParen);
+            self.require(lparen)?;
+            let mut libs = Vec::new();
+            while !matches!(self.peek_kind(), TokenKind::RParen | TokenKind::Eof) {
+                if !libs.is_empty() {
+                    let comma = self.expect(&TokenKind::Comma);
+                    if self.require(comma).is_err() {
+                        break;
+                    }
+                }
+                if matches!(self.peek_kind(), TokenKind::RParen) {
+                    break;
+                }
+                match self.peek_kind() {
+                    TokenKind::Str(_) => {
+                        let tok = self.advance();
+                        if let TokenKind::Str(s) = tok.kind {
+                            libs.push(s);
+                        }
+                    }
+                    _ => {
+                        let err = ParseError {
+                            message: format!(
+                                "expected library name string in `link(...)`, found `{}`",
+                                self.peek_kind()
+                            ),
+                            span: self.peek_span(),
+                        };
+                        self.push_recover(err);
+                        break;
+                    }
+                }
+            }
+            let rparen = self.expect(&TokenKind::RParen);
+            self.require(rparen)?;
+            libs
+        } else {
+            Vec::new()
         };
 
         let lbrace = self.expect(&TokenKind::LBrace);
@@ -80,7 +123,12 @@ impl Parser {
         let rbrace = self.expect(&TokenKind::RBrace);
         self.require(rbrace)?;
         let span = self.span_from(start);
-        Ok(ExternDecl { abi, fns, span })
+        Ok(ExternDecl {
+            abi,
+            link_libs,
+            fns,
+            span,
+        })
     }
 
     /// Parse a single `[total] fn foo(params) -> RetType [! Effects]` inside an extern block.

@@ -1,12 +1,12 @@
 // Corpus: Cross-requirement interaction — Effect + Information Flow Control
-// Tests that effects and security labels compose correctly via extern "rust".
+// Tests that effects and security labels compose correctly via extern "C".
 // Requirement: 001 Req 7 (Effects) + 001 Req 11 (Information Flow Control)
 //
-// HTTP is bridged via extern "rust" (ureq). The return type carries a
+// HTTP is bridged via extern "C". The return type carries a
 // Tainted[String] label — documenting the intended auto-tainting convention
 // from spec 003-information-flow/Req 2 (Phase 2: #28).
 
-extern "rust" {
+extern "C" {
     fn http_get(url: String) -> Result[Tainted[String], String];
 }
 

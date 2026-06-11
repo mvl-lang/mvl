@@ -550,6 +550,7 @@ fn lower_extern_fn(ef: &ExternFnDecl, ty_subs: &HashMap<String, Ty>) -> TirExter
 fn lower_extern_decl(ed: &ExternDecl, ty_subs: &HashMap<String, Ty>) -> TirExternDecl {
     TirExternDecl {
         abi: ed.abi.clone(),
+        link_libs: ed.link_libs.clone(),
         fns: ed.fns.iter().map(|f| lower_extern_fn(f, ty_subs)).collect(),
         span: ed.span,
     }
@@ -684,6 +685,9 @@ fn typeexpr_to_ty(te: &TypeExpr) -> Ty {
             "Never" if args.is_empty() => Ty::Never,
             "List" if args.len() == 1 => Ty::List(Box::new(typeexpr_to_ty(&args[0]))),
             "Set" if args.len() == 1 => Ty::Set(Box::new(typeexpr_to_ty(&args[0]))),
+            "Ptr" if args.len() == 1 => Ty::Ptr(Box::new(typeexpr_to_ty(&args[0]))),
+            // `Void` is a C-FFI alias for Unit, only meaningful inside Ptr[Void].
+            "Void" if args.is_empty() => Ty::Unit,
             "Map" if args.len() == 2 => Ty::Map(
                 Box::new(typeexpr_to_ty(&args[0])),
                 Box::new(typeexpr_to_ty(&args[1])),
@@ -776,6 +780,7 @@ fn substitute_ty(ty: &Ty, subs: &HashMap<String, Ty>) -> Ty {
             Ty::Labeled(label.clone(), Box::new(substitute_ty(inner, subs)))
         }
         Ty::Refined(inner, pred) => Ty::Refined(Box::new(substitute_ty(inner, subs)), pred.clone()),
+        Ty::Ptr(inner) => Ty::Ptr(Box::new(substitute_ty(inner, subs))),
         // Primitives and terminal types — no substitution needed.
         Ty::Int
         | Ty::Float

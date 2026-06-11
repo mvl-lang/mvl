@@ -1,7 +1,7 @@
 // Corpus: std.runtime Phase 3 — ffi_bridges populated from extern blocks (#803).
 //
 // Verifies that:
-//   - extern "rust" blocks are captured in manifest().ffi_bridges
+//   - extern "C" blocks are captured in manifest().ffi_bridges
 //   - ffi_bridges has type List[FfiBridge]
 //   - Each FfiBridge has the three required string fields
 //   - Type-checking passes when accessing bridge fields
@@ -9,7 +9,7 @@
 
 use std.runtime.{manifest, manifest_to_logfmt, manifest_to_json, Manifest, FfiBridge}
 
-extern "rust" {
+extern "C" {
     fn mvl_fetch_url(url: String) -> String;
 }
 

@@ -394,11 +394,49 @@ impl TypeChecker {
             });
             return;
         }
+        // Validate link library names: only [a-zA-Z0-9_.-] allowed.
+        // Prevents injection of arbitrary Rust attributes or LLVM IR via crafted names (#561).
+        for lib in &ed.link_libs {
+            if lib.is_empty()
+                || !lib
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.' || c == '-')
+            {
+                self.emit(CheckError::InvalidLinkLibName {
+                    name: lib.clone(),
+                    span: ed.span,
+                });
+            }
+        }
         // Count only validated extern blocks in the assurance metric.
         self.extern_count += 1;
-        // Each extern fn must have a valid return type (basic check).
-        // Future: verify no MVL-specific types (security labels) cross the boundary
-        // without explicit wrapping — for now we accept all types.
+        // Warn when security-labeled types cross the C ABI boundary (#894).
+        // Labels (Tainted[T], Secret[T]) are meaningless in C; callers must relabel first.
+        // Only applies to extern "c" — extern "rust" interoperates with MVL's runtime which
+        // understands labels, so labeled types there may be intentional.
+        if ed.abi != "c" {
+            return;
+        }
+        for ef in &ed.fns {
+            let ret_ty = resolve(&ef.return_type);
+            if let Ty::Labeled(label, _) = &ret_ty {
+                self.emit(CheckError::LabeledTypeCrossesFfiBoundary {
+                    fn_name: ef.name.clone(),
+                    label: label.clone(),
+                    span: ef.span,
+                });
+            }
+            for param in &ef.params {
+                let param_ty = resolve(&param.ty);
+                if let Ty::Labeled(label, _) = &param_ty {
+                    self.emit(CheckError::LabeledTypeCrossesFfiBoundary {
+                        fn_name: ef.name.clone(),
+                        label: label.clone(),
+                        span: param.span,
+                    });
+                }
+            }
+        }
     }
 
     fn check_fn_decl(&mut self, fd: &FnDecl) {
