@@ -1061,8 +1061,7 @@ partial fn parse_effect_decl(ps: ParserState) -> EffectDeclR {
 
 total fn parse_label_decl(ps: ParserState, visible: Bool) -> LabelDeclR {
     let sp: Span = ps_current(ps).span;
-    let curr: ref ParserState = ps_advance(ps); // consume 'label'
-    let name_r: StringR = ps_expect_name(curr);
+    let name_r: StringR = ps_expect_name(ps_advance(ps));
     let after_name: ParserState = if ps_at_punct(name_r.ps, ";") { ps_advance(name_r.ps) } else { name_r.ps };
     LabelDeclR {
         value: LabelDecl { visible: visible, name: name_r.value, span: sp },
