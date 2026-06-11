@@ -3,6 +3,7 @@
 //
 // compiler/tir.mvl — unified compiler type definitions (issue #1114)
 //
+//! Pure type definitions — Req 9/10/11 not applicable: no functions, no inline refinements, no IFC.
 // Single source of truth for all shared types used by the self-hosting
 // compiler port.  Absorbs compiler/ast.mvl and adds:
 //   - TIR primitive types (ported from src/mvl/parser/ast.rs)
