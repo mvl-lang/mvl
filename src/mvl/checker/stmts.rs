@@ -4,7 +4,7 @@
 //! Block, statement, and expression-statement type checking for the MVL type checker.
 //! Also includes field access, struct construction, and alias resolution helpers.
 
-use crate::mvl::checker::context::{CapabilityState, TypeBodyInfo};
+use crate::mvl::checker::context::{CapabilityState, TypeBodyInfo, VariantFieldsInfo};
 use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::ifc;
 use crate::mvl::checker::types::{resolve, types_compatible, Ty};
@@ -780,7 +780,15 @@ impl TypeChecker {
             .map(|(fname, fexpr)| (fname.clone(), self.infer_expr(fexpr)))
             .collect();
 
-        if let Some(type_info) = self.env.lookup_type(name).cloned() {
+        // Resolve the lookup name: for "EnumType::Variant { … }" construction,
+        // split on "::" and look up the base enum type.
+        let (lookup_name, variant_name) = if let Some((base, var)) = name.split_once("::") {
+            (base, Some(var))
+        } else {
+            (name, None)
+        };
+
+        if let Some(type_info) = self.env.lookup_type(lookup_name).cloned() {
             match &type_info.body {
                 TypeBodyInfo::Struct {
                     fields: declared_fields,
@@ -814,12 +822,46 @@ impl TypeChecker {
                             });
                         }
                     }
-                    Ty::Named(name.to_string(), vec![])
+                    Ty::Named(lookup_name.to_string(), vec![])
                 }
-                TypeBodyInfo::Enum(_) => {
-                    // Enum variant construction — name might be "EnumType::Variant"
-                    // For now just return the type
-                    Ty::Named(name.to_string(), vec![])
+                TypeBodyInfo::Enum(variants) => {
+                    // Named-field enum variant construction: "EnumType::Variant { field: val }"
+                    // Find the variant and type-check its fields.
+                    if let Some(var_name) = variant_name {
+                        if let Some(vi) = variants.iter().find(|v| v.name == var_name) {
+                            if let VariantFieldsInfo::Struct(declared_fields) = &vi.fields {
+                                for df in declared_fields.iter() {
+                                    if !provided.iter().any(|(pname, _)| pname == &df.name) {
+                                        self.emit(CheckError::MissingField {
+                                            ty: name.to_string(),
+                                            field: df.name.clone(),
+                                            span,
+                                        });
+                                    }
+                                }
+                                for (pname, pty) in &provided {
+                                    if let Some(df) =
+                                        declared_fields.iter().find(|f| &f.name == pname)
+                                    {
+                                        if !types_compatible(&df.ty, pty) {
+                                            self.emit(CheckError::TypeMismatch {
+                                                expected: df.ty.display(),
+                                                found: pty.display(),
+                                                span,
+                                            });
+                                        }
+                                    } else {
+                                        self.emit(CheckError::UnknownField {
+                                            ty: name.to_string(),
+                                            field: pname.clone(),
+                                            span,
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Ty::Named(lookup_name.to_string(), vec![])
                 }
                 TypeBodyInfo::Alias(inner) => inner.clone(),
             }

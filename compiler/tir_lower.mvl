@@ -1,0 +1,310 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// compiler/tir_lower.mvl — TIR lowering pass: Program → TirProgram (issue #1115)
+//
+// Corresponds to src/mvl/ir/lower.rs in the Rust compiler.
+//
+// Phase 2a scope: structural lowering of declarations + type conversion.
+// Expression body lowering is deferred to Phase 3 (#1116) once full AST
+// Expr types are available in the self-hosted compiler.
+//
+// Key transforms:
+//   TypeExpr   → Ty            (typeexpr_to_ty)
+//   Ty         → Ty            (substitute_ty — type-param substitution)
+//   Param      → TirParam      (lower_param)
+//   FieldDecl  → TirFieldDecl  (lower_field_decl)
+//   FnDecl     → TirFn         (lower_fn_decl; body = empty block)
+//   TypeDecl   → TirTypeDecl   (lower_type_decl)
+//   ExternDecl → TirExternDecl (lower_extern_decl)
+//   ImplDecl   → TirImplDecl   (lower_impl_decl)
+//   Program    → TirProgram    (lower)
+
+use std.collections.{Map}
+use tir::Capability;
+use tir::ExternDecl;
+use tir::ExternFnDecl;
+use tir::FieldDecl;
+use tir::FnDecl;
+use tir::ImplDecl;
+use tir::Param;
+use tir::Program;
+use tir::Span;
+use tir::TirBlock;
+use tir::TirExternDecl;
+use tir::TirExternFn;
+use tir::TirFieldDecl;
+use tir::TirFn;
+use tir::TirImplDecl;
+use tir::TirParam;
+use tir::TirProgram;
+use tir::TirTypeBody;
+use tir::TirTypeDecl;
+use tir::TirVariant;
+use tir::TirVariantFields;
+use tir::Totality;
+use tir::Ty;
+use tir::TypeBodyKind;
+use tir::TypeDecl;
+use tir::TypeExpr;
+
+// ── Public API ────────────────────────────────────────────────────────────────
+
+/// Lower a parsed Program to a TirProgram.
+///
+/// Corresponds to `lower()` in src/mvl/ir/lower.rs.
+///
+/// Phase 2a: function and const expression bodies are emitted as empty
+/// TirBlocks — full Expr types arrive in Phase 3 (#1116).
+/// Actors are dropped (Program.actors is List[String], no fields or methods).
+pub partial fn lower(prog: Program) -> TirProgram {
+    let subs: Map[String, Ty] = Map::new();
+    let fns: List[TirFn] = prog.fns.map(|fd: FnDecl| lower_fn_decl(fd, subs));
+    let types: List[TirTypeDecl] = prog.types.map(|td: TypeDecl| lower_type_decl(td));
+    let externs: List[TirExternDecl] = prog.externs.map(|ed: ExternDecl| lower_extern_decl(ed, subs));
+    let impls: List[TirImplDecl] = prog.impls.map(|id: ImplDecl| lower_impl_decl(id, subs));
+    TirProgram {
+        fns: fns,
+        types: types,
+        externs: externs,
+        actors: [],
+        impls: impls,
+        consts: [],
+        uses: prog.uses,
+        effect_decls: prog.effect_decls,
+        label_decls: prog.label_decls,
+        relabel_decls: prog.relabel_decls,
+    }
+}
+
+// ── Type conversion ───────────────────────────────────────────────────────────
+
+/// Extract te.args[idx] → Ty, returning Ty::Unknown if out of bounds.
+partial fn arg_ty(te: TypeExpr, idx: Int) -> Ty {
+    match te.args.get(idx) {
+        Some(a) => typeexpr_to_ty(a),
+        None    => Ty::Unknown,
+    }
+}
+
+/// Convert a simplified TypeExpr (name + generic args) to a resolved Ty.
+///
+/// The simplified TypeExpr encodes all type forms as a name string with
+/// zero or more generic arguments.  Mirrors the "Base" arm of the Rust
+/// typeexpr_to_ty plus the primitive forms (Option, Result, Ref, …).
+partial fn typeexpr_to_ty(te: TypeExpr) -> Ty {
+    let argc: Int = te.args.len();
+    match te.name {
+        "Int"    => Ty::Int,
+        "Float"  => Ty::Float,
+        "String" => Ty::Str,
+        "Bool"   => Ty::Bool,
+        "Char"   => Ty::Char,
+        "Byte"   => Ty::Byte,
+        "UByte"  => Ty::UByte,
+        "UInt"   => Ty::UInt,
+        "Unit"   => Ty::Unit,
+        "Never"  => Ty::Never,
+        "Void"   => Ty::Unit,
+        "List"   => if argc == 1 { Ty::List(Box::new(arg_ty(te, 0))) } else { Ty::Unknown },
+        "Set"    => if argc == 1 { Ty::Set(Box::new(arg_ty(te, 0))) } else { Ty::Unknown },
+        "Option" => if argc == 1 { Ty::Option(Box::new(arg_ty(te, 0))) } else { Ty::Unknown },
+        "Ptr"    => if argc == 1 { Ty::Ptr(Box::new(arg_ty(te, 0))) } else { Ty::Unknown },
+        "Map"    => if argc == 2 {
+            Ty::Map(Box::new(arg_ty(te, 0)), Box::new(arg_ty(te, 1)))
+        } else { Ty::Unknown },
+        "Result" => if argc == 2 {
+            Ty::Result(Box::new(arg_ty(te, 0)), Box::new(arg_ty(te, 1)))
+        } else { Ty::Unknown },
+        _ => Ty::Named(te.name, te.args.map(|a: TypeExpr| typeexpr_to_ty(a))),
+    }
+}
+
+/// Convert TypeExpr to Ty and apply ty-param substitution.
+partial fn typeexpr_to_ty_sub(te: TypeExpr, subs: Map[String, Ty]) -> Ty {
+    substitute_ty(typeexpr_to_ty(te), subs)
+}
+
+/// Recursively substitute type-parameter placeholders in a Ty.
+///
+/// Bare Named types (no args) whose name is in subs are replaced with the
+/// concrete Ty.  Compound types recurse into their inner types.
+/// Mirrors substitute_ty() in src/mvl/ir/lower.rs.
+partial fn substitute_ty(ty: Ty, subs: Map[String, Ty]) -> Ty {
+    if subs.len() == 0 {
+        ty
+    } else {
+        match ty {
+            Ty::Named(name, args) => {
+                if args.len() == 0 {
+                    match subs.get(name) {
+                        Some(t) => t,
+                        None    => Ty::Named(name, args),
+                    }
+                } else {
+                    Ty::Named(name, args.map(|a: Ty| substitute_ty(a, subs)))
+                }
+            },
+            Ty::List(inner)           => Ty::List(Box::new(substitute_ty(*inner, subs))),
+            Ty::Set(inner)            => Ty::Set(Box::new(substitute_ty(*inner, subs))),
+            Ty::Option(inner)         => Ty::Option(Box::new(substitute_ty(*inner, subs))),
+            Ty::Ptr(inner)            => Ty::Ptr(Box::new(substitute_ty(*inner, subs))),
+            Ty::Ref(mutable, inner)   => Ty::Ref(mutable, Box::new(substitute_ty(*inner, subs))),
+            Ty::Map(k, v)             => Ty::Map(
+                Box::new(substitute_ty(*k, subs)),
+                Box::new(substitute_ty(*v, subs)),
+            ),
+            Ty::Result(ok, err)       => Ty::Result(
+                Box::new(substitute_ty(*ok, subs)),
+                Box::new(substitute_ty(*err, subs)),
+            ),
+            Ty::Tuple(elems)          => Ty::Tuple(elems.map(|e: Ty| substitute_ty(e, subs))),
+            // Array, Labeled, Refined, TyFn: pass through without inner substitution.
+            // Phase 2a: the simplified AST rarely produces these in generic positions.
+            _ => ty,
+        }
+    }
+}
+
+// ── Small converters ──────────────────────────────────────────────────────────
+
+/// Parse a totality annotation string → Option[Totality].
+total fn str_to_totality(s: String) -> Option[Totality] {
+    if s == "total" { Some(Totality::Total) }
+    else if s == "partial" { Some(Totality::Partial) }
+    else { None }
+}
+
+/// Parse a capability annotation string → Option[Capability].
+total fn str_to_cap(s: String) -> Option[Capability] {
+    if s == "iso" { Some(Capability::Iso) }
+    else if s == "val" { Some(Capability::Val) }
+    else if s == "ref" { Some(Capability::RefCap) }
+    else if s == "tag" { Some(Capability::Tag) }
+    else { None }
+}
+
+// ── Parameter / field lowering ────────────────────────────────────────────────
+
+/// Lower Param → TirParam, converting its TypeExpr and applying subs.
+partial fn lower_param(p: Param, subs: Map[String, Ty]) -> TirParam {
+    TirParam {
+        name:       p.name,
+        ty:         typeexpr_to_ty_sub(p.ty, subs),
+        capability: str_to_cap(p.capability),
+        span:       p.span,
+    }
+}
+
+/// Lower FieldDecl → TirFieldDecl (refinement defaults to None in Phase 2a).
+partial fn lower_field_decl(f: FieldDecl, subs: Map[String, Ty]) -> TirFieldDecl {
+    TirFieldDecl {
+        name:       f.name,
+        ty:         typeexpr_to_ty_sub(f.ty, subs),
+        refinement: None,
+        span:       f.span,
+    }
+}
+
+// ── Function lowering ─────────────────────────────────────────────────────────
+
+/// Lower FnDecl → TirFn.
+///
+/// Phase 2a: body is an empty TirBlock.  Fields absent from the simplified
+/// FnDecl (receiver_type, pre_conds, post_conds, return_refinement) default
+/// to None / [].
+partial fn lower_fn_decl(fd: FnDecl, subs: Map[String, Ty]) -> TirFn {
+    let params: List[TirParam] = fd.params.map(|p: Param| lower_param(p, subs));
+    let ret_ty: Ty = typeexpr_to_ty_sub(fd.ret_type, subs);
+    TirFn {
+        name:              fd.name,
+        original_name:     fd.name,
+        visible:           fd.visible,
+        is_test:           fd.is_test,
+        is_builtin:        fd.is_builtin,
+        receiver_type:     None,
+        type_params:       fd.type_params,
+        constraints:       fd.constraints,
+        totality:          str_to_totality(fd.totality),
+        params:            params,
+        ret_ty:            ret_ty,
+        return_refinement: None,
+        effects:           fd.effects,
+        pre_conds:         [],
+        post_conds:        [],
+        body:              TirBlock { stmts: [], span: fd.span },
+        span:              fd.span,
+    }
+}
+
+// ── Type declaration lowering ─────────────────────────────────────────────────
+
+/// Lower TypeDecl → TirTypeDecl.
+///
+/// The simplified TypeDecl uses body_kind + flat field/variant lists.
+/// Enum variants are emitted as Unit variants — full payload types require
+/// the complete Variant representation (Phase 3).
+partial fn lower_type_decl(td: TypeDecl) -> TirTypeDecl {
+    let subs: Map[String, Ty] = Map::new();
+    let body: TirTypeBody = match td.body_kind {
+        TypeBodyKind::IsStruct => TirTypeBody::Struct {
+            fields:         td.fields.map(|f: FieldDecl| lower_field_decl(f, subs)),
+            type_invariant: None,
+        },
+        TypeBodyKind::IsEnum => TirTypeBody::Enum(
+            td.variants.map(|name: String| TirVariant {
+                name:   name,
+                fields: TirVariantFields::Unit,
+                span:   td.span,
+            }),
+        ),
+        TypeBodyKind::IsAlias => TirTypeBody::Alias(typeexpr_to_ty(td.alias_ty)),
+    };
+    TirTypeDecl {
+        visible: td.visible,
+        name:    td.name,
+        params:  td.type_params,
+        body:    body,
+        span:    td.span,
+    }
+}
+
+// ── Extern declaration lowering ───────────────────────────────────────────────
+
+/// Lower ExternFnDecl → TirExternFn.
+partial fn lower_extern_fn(ef: ExternFnDecl, subs: Map[String, Ty]) -> TirExternFn {
+    TirExternFn {
+        name:     ef.name,
+        params:   ef.params.map(|p: Param| lower_param(p, subs)),
+        ret_ty:   typeexpr_to_ty_sub(ef.ret_ty, subs),
+        effects:  ef.effects,
+        totality: None,
+        span:     ef.span,
+    }
+}
+
+/// Lower ExternDecl → TirExternDecl.
+/// link_libs defaults to [] — not present in the simplified ExternDecl.
+partial fn lower_extern_decl(ed: ExternDecl, subs: Map[String, Ty]) -> TirExternDecl {
+    TirExternDecl {
+        abi:       ed.lang,
+        link_libs: [],
+        fns:       ed.fns.map(|ef: ExternFnDecl| lower_extern_fn(ef, subs)),
+        span:      ed.span,
+    }
+}
+
+// ── Impl declaration lowering ─────────────────────────────────────────────────
+
+/// Lower ImplDecl → TirImplDecl.
+partial fn lower_impl_decl(id: ImplDecl, subs: Map[String, Ty]) -> TirImplDecl {
+    let trait_type_args: List[Ty] = id.trait_args.map(|te: TypeExpr| typeexpr_to_ty_sub(te, subs));
+    let methods: List[TirFn] = id.methods.map(|fd: FnDecl| lower_fn_decl(fd, subs));
+    TirImplDecl {
+        trait_name:      id.trait_name,
+        trait_type_args: trait_type_args,
+        type_name:       id.ty.name,
+        methods:         methods,
+        span:            id.span,
+    }
+}
