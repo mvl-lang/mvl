@@ -1,0 +1,430 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// Spike 004 — TIR Backend Stage A: MVL Rust emitter
+//
+// Reads TirProgram JSON (from `mvl tir <file>`) on stdin, emits Rust source.
+//
+// Usage:
+//   mvl tir hello.mvl | mvl run tests/spikes/004-tir-backend/backend_rust.mvl
+
+use std.io.{read, stdin}
+use std.json.{decode, Value}
+
+// ── JSON helpers ──────────────────────────────────────────────────────────────
+
+total fn jstr(v: Value, key: String) -> String {
+    match v {
+        Value::Object(m) => match m.get(key) { Some(Value::String(s)) => s, _ => "" },
+        _ => "",
+    }
+}
+
+total fn jbool(v: Value, key: String) -> Bool {
+    match v {
+        Value::Object(m) => match m.get(key) { Some(Value::Bool(b)) => b, _ => false },
+        _ => false,
+    }
+}
+
+total fn jarr(v: Value, key: String) -> List[Value] {
+    match v {
+        Value::Object(m) => match m.get(key) { Some(Value::Array(a)) => a, _ => [] },
+        _ => [],
+    }
+}
+
+total fn jget(v: Value, key: String) -> Value {
+    match v {
+        Value::Object(m) => match m.get(key) { Some(inner) => inner, None => Value::Null },
+        _ => Value::Null,
+    }
+}
+
+total fn jtag(v: Value) -> String { jstr(v, "tag") }
+
+total fn is_null(v: Value) -> Bool {
+    match v { Value::Null => true, _ => false }
+}
+
+// Brace helpers — MVL format() does not support {{ escaping
+total fn lbrace() -> String { "{" }
+total fn rbrace() -> String { "}" }
+
+// Wrap body lines in a Rust block
+total fn in_block(body: String) -> String {
+    lbrace().concat("\n").concat(body).concat("\n").concat(rbrace())
+}
+
+total fn in_block_ind(body: String, indent: String) -> String {
+    lbrace().concat("\n").concat(body).concat("\n").concat(indent).concat(rbrace())
+}
+
+// ── Type emission ─────────────────────────────────────────────────────────────
+
+partial fn emit_ty(v: Value) -> String {
+    let t: String = jtag(v);
+    match t {
+        "Int"     => "i64",    "Float"   => "f64",
+        "Str"     => "String", "Bool"    => "bool",
+        "Char"    => "char",   "Byte"    => "u8",
+        "UByte"   => "u8",     "UInt"    => "u64",
+        "Unit"    => "()",     "Never"   => "!",
+        "Unknown" => "_",
+        "Option"  => format("Option<{}>", [emit_ty(jget(v, "inner"))]),
+        "List"    => format("Vec<{}>",    [emit_ty(jget(v, "inner"))]),
+        "Set"     => format("HashSet<{}>", [emit_ty(jget(v, "inner"))]),
+        "Result"  => format("Result<{}, {}>", [emit_ty(jget(v, "ok")), emit_ty(jget(v, "err"))]),
+        "Ref"     => emit_ty(jget(v, "inner")),
+        "Labeled" => emit_ty(jget(v, "inner")),
+        "Refined" => emit_ty(jget(v, "inner")),
+        "Tuple"   => format("({})", [jarr(v, "elems").map(|e: Value| emit_ty(e)).join(", ")]),
+        "Map"     => format("HashMap<{}, {}>", [emit_ty(jget(v, "key")), emit_ty(jget(v, "val"))]),
+        "TyFn"    => format("fn({})", [jarr(v, "params").map(|p: Value| emit_ty(p)).join(", ")]),
+        "Named"   => {
+            let name: String = jstr(v, "name");
+            let args: List[Value] = jarr(v, "args");
+            if args.len() == 0 { name } else {
+                format("{}<{}>", [name, args.map(|a: Value| emit_ty(a)).join(", ")])
+            }
+        },
+        _ => format("/* ty:{} */", [t]),
+    }
+}
+
+// ── Literal emission ──────────────────────────────────────────────────────────
+
+total fn emit_literal(v: Value) -> String {
+    let t: String = jtag(v);
+    match t {
+        "Integer" => format("{}i64", [jstr(v, "value")]),
+        "Float"   => format("{}f64", [jstr(v, "value")]),
+        "Str"     => format("\"{}\"", [jstr(v, "value")]),
+        "Char"    => format("'{}'", [jstr(v, "value")]),
+        "Bool"    => jstr(v, "value"),
+        "Unit"    => "()",
+        _         => format("/* lit:{} */", [t]),
+    }
+}
+
+// ── Operators ─────────────────────────────────────────────────────────────────
+
+total fn emit_binop(op: String) -> String {
+    match op {
+        "Add" => "+",  "Sub" => "-",  "Mul" => "*",  "Div" => "/",  "Rem" => "%",
+        "Eq"  => "==", "Ne"  => "!=", "Lt"  => "<",  "Gt"  => ">",
+        "Le"  => "<=", "Ge"  => ">=", "And" => "&&", "Or"  => "||",
+        "BitAnd" => "&", "BitOr" => "|", "BitXor" => "^",
+        "Shl" => "<<", "Shr" => ">>",
+        _     => op,
+    }
+}
+
+total fn emit_unop(op: String) -> String {
+    match op { "Neg" => "-", "Not" => "!", "Deref" => "*", "BitNot" => "!", _ => op }
+}
+
+// ── Patterns ──────────────────────────────────────────────────────────────────
+
+partial fn emit_pattern(p: Value) -> String {
+    let t: String = jtag(p);
+    match t {
+        "Wildcard"    => "_",
+        "Ident"       => jstr(p, "name"),
+        "Literal"     => emit_literal(jget(p, "lit")),
+        "Some"        => format("Some({})", [emit_pattern(jget(p, "inner"))]),
+        "None"        => "None",
+        "Ok"          => format("Ok({})",  [emit_pattern(jget(p, "inner"))]),
+        "Err"         => format("Err({})", [emit_pattern(jget(p, "inner"))]),
+        "TupleStruct" => {
+            let parts: List[String] = jarr(p, "fields").map(|f: Value| emit_pattern(f));
+            format("{}({})", [jstr(p, "name"), parts.join(", ")])
+        },
+        "Struct" => {
+            let parts: List[String] = jarr(p, "fields").map(|f: Value|
+                format("{}: {}", [jstr(f, "name"), emit_pattern(jget(f, "pattern"))])
+            );
+            // struct pattern: Name { f: p, ... }
+            jstr(p, "name").concat(" ").concat(lbrace()).concat(" ")
+                .concat(parts.join(", ")).concat(" ").concat(rbrace())
+        },
+        "Tuple" => {
+            let parts: List[String] = jarr(p, "elems").map(|e: Value| emit_pattern(e));
+            format("({})", [parts.join(", ")])
+        },
+        _ => format("/* pat:{} */", [t]),
+    }
+}
+
+// ── LValue ────────────────────────────────────────────────────────────────────
+
+partial fn emit_lvalue(lv: Value) -> String {
+    let t: String = jtag(lv);
+    match t {
+        "Ident" => jstr(lv, "name"),
+        "Field" => format("{}.{}", [emit_lvalue(jget(lv, "base")), jstr(lv, "field")]),
+        _       => format("/* lv:{} */", [t]),
+    }
+}
+
+// ── Expressions ───────────────────────────────────────────────────────────────
+
+partial fn emit_expr(v: Value) -> String {
+    let kind: Value = jget(v, "kind");
+    let t: String   = jtag(kind);
+    match t {
+        "Literal"     => emit_literal(jget(kind, "lit")),
+        "Var"         => jstr(kind, "name"),
+        "Binary"      => format("({} {} {})", [
+            emit_expr(jget(kind, "left")),
+            emit_binop(jstr(kind, "op")),
+            emit_expr(jget(kind, "right")),
+        ]),
+        "Unary" => format("({}{})", [emit_unop(jstr(kind, "op")), emit_expr(jget(kind, "expr"))]),
+        "FieldAccess" => format("{}.{}", [emit_expr(jget(kind, "expr")), jstr(kind, "field")]),
+        "MethodCall"  => {
+            let arg_s: String = jarr(kind, "args").map(|a: Value| emit_expr(a)).join(", ");
+            format("{}.{}({})", [emit_expr(jget(kind, "receiver")), jstr(kind, "method"), arg_s])
+        },
+        "FnCall" => {
+            let name: String  = jstr(kind, "name");
+            let arg_s: String = jarr(kind, "args").map(|a: Value| emit_expr(a)).join(", ");
+            match name {
+                "println" => "println!(\"{}\", ".concat(arg_s).concat(")"),
+                "print"   => "print!(\"{}\", ".concat(arg_s).concat(")"),
+                _         => format("{}({})", [name, arg_s]),
+            }
+        },
+        "If" => {
+            let else_v: Value  = jget(kind, "else_br");
+            let then_s: String = " ".concat(lbrace()).concat(" ").concat(emit_block_inline(jget(kind, "then"))).concat(" ").concat(rbrace());
+            let else_s: String = if is_null(else_v) {
+                ""
+            } else {
+                " else ".concat(lbrace()).concat(" ").concat(emit_expr(else_v)).concat(" ").concat(rbrace())
+            };
+            format("if {}{}{}", [emit_expr(jget(kind, "cond")), then_s, else_s])
+        },
+        "Block"     => emit_block_inline(jget(kind, "block")),
+        "Propagate" => format("{}?", [emit_expr(jget(kind, "expr"))]),
+        "Construct" => {
+            let field_s: String = jarr(kind, "fields")
+                .map(|f: Value| format("{}: {}", [jstr(f, "name"), emit_expr(jget(f, "expr"))]))
+                .join(", ");
+            jstr(kind, "name").concat(" ").concat(lbrace()).concat(" ").concat(field_s).concat(" ").concat(rbrace())
+        },
+        "ListLit"  => format("vec![{}]", [jarr(kind, "elems").map(|e: Value| emit_expr(e)).join(", ")]),
+        "Borrow"   => emit_expr(jget(kind, "expr")),
+        "Consume"  => emit_expr(jget(kind, "expr")),
+        "Relabel"  => emit_expr(jget(kind, "expr")),
+        "Match"    => {
+            let arm_s: String = jarr(kind, "arms").map(|a: Value| emit_match_arm(a)).join(" ");
+            "match ".concat(emit_expr(jget(kind, "scrutinee"))).concat(" ")
+                .concat(lbrace()).concat(" ").concat(arm_s).concat(" ").concat(rbrace())
+        },
+        "Quantifier" => "true /* quantifier */",
+        _            => format("/* expr:{} */", [t]),
+    }
+}
+
+partial fn emit_block_inline(b: Value) -> String {
+    let stmts: List[Value] = jarr(b, "stmts");
+    let n: Int = stmts.len();
+    if n == 0 {
+        "()"
+    } else if n == 1 {
+        match stmts.get(0) {
+            None    => "()",
+            Some(s) => match jtag(s) {
+                "Expr" => emit_expr(jget(s, "expr")),
+                _      => emit_stmt(s),
+            },
+        }
+    } else {
+        let parts: List[String] = stmts.map(|s: Value| match jtag(s) {
+            "Expr" => emit_expr(jget(s, "expr")),
+            _      => emit_stmt(s),
+        });
+        lbrace().concat(" ").concat(parts.join("; ")).concat(" ").concat(rbrace())
+    }
+}
+
+partial fn emit_match_arm(arm: Value) -> String {
+    let pat_s: String  = emit_pattern(jget(arm, "pattern"));
+    let body: Value    = jget(arm, "body");
+    let body_s: String = match jtag(body) {
+        "Expr"  => emit_expr(jget(body, "expr")),
+        "Block" => in_block(emit_block_body(jget(body, "block"))),
+        _       => "/* body */",
+    };
+    format("{} => {},", [pat_s, body_s])
+}
+
+// ── Statements ────────────────────────────────────────────────────────────────
+
+partial fn emit_stmt(s: Value) -> String {
+    let t: String = jtag(s);
+    match t {
+        "Let"    => format("    let {}: {} = {};", [
+            emit_pattern(jget(s, "pattern")),
+            emit_ty(jget(s, "ty")),
+            emit_expr(jget(s, "init")),
+        ]),
+        "Assign" => format("    {} = {};", [emit_lvalue(jget(s, "target")), emit_expr(jget(s, "value"))]),
+        "Return" => {
+            let rv: Value = jget(s, "value");
+            if is_null(rv) { "    return;" } else { format("    return {};", [emit_expr(rv)]) }
+        },
+        "Expr"   => format("    {};", [emit_expr(jget(s, "expr"))]),
+        "If"     => {
+            let else_v: Value  = jget(s, "else_br");
+            let else_s: String = if is_null(else_v) {
+                ""
+            } else {
+                " else ".concat(in_block_ind(emit_else_body(else_v), "    "))
+            };
+            "    if ".concat(emit_expr(jget(s, "cond"))).concat(" ")
+                .concat(in_block_ind(emit_block_body(jget(s, "then")), "    "))
+                .concat(else_s)
+        },
+        "While"  => {
+            "    while ".concat(emit_expr(jget(s, "cond"))).concat(" ")
+                .concat(in_block_ind(emit_block_body(jget(s, "body")), "    "))
+        },
+        "For"    => {
+            "    for ".concat(emit_pattern(jget(s, "pattern")))
+                .concat(" in ").concat(emit_expr(jget(s, "iter"))).concat(" ")
+                .concat(in_block_ind(emit_block_body(jget(s, "body")), "    "))
+        },
+        "Match"  => {
+            let arm_s: String = jarr(s, "arms")
+                .map(|a: Value| format("        {}", [emit_match_arm(a)]))
+                .join("\n");
+            "    match ".concat(emit_expr(jget(s, "scrutinee"))).concat(" ")
+                .concat(in_block_ind(arm_s, "    "))
+        },
+        _ => format("    /* stmt:{} */", [t]),
+    }
+}
+
+partial fn emit_else_body(eb: Value) -> String {
+    let t: String = jtag(eb);
+    match t {
+        "Block" => emit_block_body(jget(eb, "block")),
+        "If"    => {
+            let inner: Value = jget(eb, "stmt");
+            "    if ".concat(emit_expr(jget(inner, "cond"))).concat(" ")
+                .concat(in_block_ind(emit_block_body(jget(inner, "then")), "    "))
+        },
+        _ => "",
+    }
+}
+
+// Emit block stmts; last Expr stmt is the return value (no semicolon)
+partial fn emit_block_body(b: Value) -> String {
+    let stmts: List[Value] = jarr(b, "stmts");
+    let n: Int = stmts.len();
+    if n == 0 {
+        ""
+    } else {
+        let parts: ref List[String] = [];
+        let i: ref Int = 0;
+        while i < n decreases n - i {
+            match stmts.get(i) {
+                None    => ()
+                Some(s) => {
+                    let is_last: Bool = i == n - 1;
+                    let is_expr: Bool = jtag(s) == "Expr";
+                    if is_last && is_expr {
+                        parts.push(format("    {}", [emit_expr(jget(s, "expr"))]))
+                    } else {
+                        parts.push(emit_stmt(s))
+                    }
+                }
+            }
+            i = i + 1
+        }
+        parts.join("\n")
+    }
+}
+
+// ── Function emission ─────────────────────────────────────────────────────────
+
+partial fn emit_fn(f: Value) -> String {
+    let vis_s: String   = if jbool(f, "visible") { "pub " } else { "" };
+    let name: String    = jstr(f, "name");
+    let param_s: String = jarr(f, "params")
+        .map(|p: Value| format("{}: {}", [jstr(p, "name"), emit_ty(jget(p, "ty"))]))
+        .join(", ");
+    let ret_s: String   = emit_ty(jget(f, "ret_ty"));
+    let ret_ann: String = if ret_s == "()" { "" } else { format(" -> {}", [ret_s]) };
+    let body_s: String  = emit_block_body(jget(f, "body"));
+    vis_s.concat("fn ").concat(name).concat("(").concat(param_s).concat(")")
+        .concat(ret_ann).concat(" ").concat(in_block(body_s)).concat("\n")
+}
+
+// ── Type declaration emission ─────────────────────────────────────────────────
+
+partial fn emit_type_decl(td: Value) -> String {
+    let vis_s: String = if jbool(td, "visible") { "pub " } else { "" };
+    let name: String  = jstr(td, "name");
+    let body: Value   = jget(td, "body");
+    let bt: String    = jtag(body);
+    match bt {
+        "Struct" => {
+            let field_s: String = jarr(body, "fields")
+                .map(|f: Value| format("    pub {}: {},", [jstr(f, "name"), emit_ty(jget(f, "ty"))]))
+                .join("\n");
+            vis_s.concat("struct ").concat(name).concat(" ")
+                .concat(in_block(field_s)).concat("\n")
+        },
+        "Enum" => {
+            let var_s: String = jarr(body, "variants").map(|vv: Value| {
+                let vname: String = jstr(vv, "name");
+                let vf: Value     = jget(vv, "fields");
+                match jtag(vf) {
+                    "Unit"   => format("    {},", [vname]),
+                    "Tuple"  => {
+                        let ty_s: String = jarr(vf, "tys").map(|tv: Value| emit_ty(tv)).join(", ");
+                        format("    {}({}),", [vname, ty_s])
+                    },
+                    "Struct" => {
+                        let fd_s: String = jarr(vf, "fields")
+                            .map(|fd: Value| format("        {}: {},", [jstr(fd, "name"), emit_ty(jget(fd, "ty"))]))
+                            .join("\n");
+                        "    ".concat(vname).concat(" ").concat(in_block(fd_s)).concat(",")
+                    },
+                    _ => format("    {},", [vname]),
+                }
+            }).join("\n");
+            vis_s.concat("enum ").concat(name).concat(" ")
+                .concat(in_block(var_s)).concat("\n")
+        },
+        "Alias" => format("{}type {} = {};\n", [vis_s, name, emit_ty(jget(body, "ty"))]),
+        _       => format("/* type:{} */\n", [bt]),
+    }
+}
+
+// ── Program emission ──────────────────────────────────────────────────────────
+
+partial fn emit_program(tir: Value) -> String {
+    let preamble: String = "// Auto-generated by compiler/backend_rust.mvl (spike 004)\n#![allow(unused_variables, dead_code, non_snake_case)]\nuse std::collections::HashMap;\n\n";
+    let type_s: String   = jarr(tir, "types").map(|td: Value| emit_type_decl(td)).join("\n");
+    let fn_s: String     = jarr(tir, "fns").map(|f: Value| emit_fn(f)).join("\n");
+    preamble.concat(type_s).concat(fn_s)
+}
+
+// ── Entry point ───────────────────────────────────────────────────────────────
+
+partial fn main() -> Unit ! Console {
+    match read(stdin(), 100000000) {
+        Err(_)  => println("error: could not read stdin"),
+        Ok(raw) => {
+            let src: String = relabel trust(raw, "TIR_INPUT");
+            match decode(src) {
+                Err(e)  => println(format("error: {}", [e.user_message()])),
+                Ok(tir) => println(emit_program(tir)),
+            }
+        }
+    }
+}

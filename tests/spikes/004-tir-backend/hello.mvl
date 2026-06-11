@@ -1,0 +1,10 @@
+// Spike 004 — TIR Backend Stage A: test program
+// Expected output: 5
+
+fn add(a: Int, b: Int) -> Int {
+    a + b
+}
+
+fn main() -> Unit ! Console {
+    println(add(2, 3).to_string())
+}
