@@ -154,7 +154,9 @@ No struct wrappers are needed; MVL's tuple type syntax handles these directly.
 
 ---
 
-## Eleven Requirements (ADR-0001)
+## Relation to language definition
+
+### Eleven Requirements (ADR-0001)
 
 | Req | Effect |
 |-----|--------|
