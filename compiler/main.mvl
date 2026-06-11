@@ -20,19 +20,19 @@
 
 use lexer::lex;
 use parser::parse;
-use ast::Token;
-use ast::TokenKind;
-use ast::FnDecl;
-use ast::TypeDecl;
-use ast::TypeBodyKind;
-use ast::UseDecl;
-use ast::ConstDecl;
-use ast::ExternDecl;
-use ast::ImplDecl;
-use ast::Program;
-use ast::TypeExpr;
-use ast::Param;
-use ast::Effect;
+use tir::Token;
+use tir::TokenKind;
+use tir::FnDecl;
+use tir::TypeDecl;
+use tir::TypeBodyKind;
+use tir::UseDecl;
+use tir::ConstDecl;
+use tir::ExternDecl;
+use tir::ImplDecl;
+use tir::Program;
+use tir::TypeExpr;
+use tir::Param;
+use tir::Effect;
 use std.io.{path, join, read_dir, read_to_string, to_string, Path}
 use std.env.{args}
 

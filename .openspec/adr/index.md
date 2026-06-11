@@ -44,3 +44,5 @@
 | [0040](0040-remove-inkwell.md) | Remove inkwell / llvm-sys dependency | Accepted |
 | [0041](0041-stdlib-method-dispatch.md) | Stdlib method dispatch — eliminate emitter special-casing | Accepted |
 | [0042](0042-pkg-llvm-backend-convention.md) | Per-package LLVM backend convention — `llvm.rs` + `extern "c"` ABI | Accepted |
+| [0043](0043-no-broken-crypto-in-stdlib.md) | No broken crypto in stdlib — algorithm allow-list and deprecation path | Accepted |
+| [0044](0044-self-hosting-tir-first-strategy.md) | Self-hosting strategy — TIR-first phase plan and `compiler/tir.mvl` unified types | Accepted |

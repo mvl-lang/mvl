@@ -21,9 +21,9 @@
 //
 // Public surface: lex(src: String) -> List[Token]
 
-use ast::TokenKind;
-use ast::Token;
-use ast::Span;
+use tir::TokenKind;
+use tir::Token;
+use tir::Span;
 
 // ── Internal scan result ─────────────────────────────────────────────────────
 
@@ -180,6 +180,23 @@ partial fn scan_string_body(src: String, pos: Int, src_len: Int) -> ScanResult
     ScanResult { kind: TokenKind::StrLit, lexeme: content, end_pos: after_close }
 }
 
+// Scan a character literal body (call after the opening '\'' is consumed).
+// Handles escape sequences (\n, \\, \', etc.). Returns CharLit token.
+total fn scan_char_body(src: String, pos: Int, src_len: Int) -> ScanResult
+  requires pos >= 0
+  ensures result.end_pos >= pos
+{
+    let p: ref Int = pos;
+    if p < src_len && src.char_at(p).unwrap_or("") == "\\" && p + 1 < src_len {
+        p = p + 2
+    } else if p < src_len {
+        p = p + 1
+    } else { () }
+    let content: String = src.substring(pos, p);
+    let after_close: Int = if p < src_len && src.char_at(p).unwrap_or("") == "'" { p + 1 } else { p };
+    ScanResult { kind: TokenKind::CharLit, lexeme: content, end_pos: after_close }
+}
+
 // Return the two-char operator spelling if (c, c2) forms one; "" otherwise.
 total fn two_char_punct(c: String, c2: String) -> String
   ensures len(result) == 0 || len(result) == 2
@@ -232,6 +249,11 @@ pub partial fn lex(src: String) -> List[Token]
             tokens.push(Token { kind: TokenKind::Comment, lexeme: "", span: span });
             col = col + (end - pos);
             pos = end
+        } else if c == "'" {
+            let res: ScanResult = scan_char_body(src, pos + 1, src_len);
+            tokens.push(Token { kind: TokenKind::CharLit, lexeme: res.lexeme, span: span });
+            col = col + (res.end_pos - pos);
+            pos = res.end_pos
         } else if c == "\"" {
             let res: ScanResult = scan_string_body(src, pos + 1, src_len);
             tokens.push(Token { kind: TokenKind::StrLit, lexeme: res.lexeme, span: span });
