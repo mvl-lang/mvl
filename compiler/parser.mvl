@@ -36,25 +36,25 @@
 //
 // Public surface: parse(tokens: List[Token]) -> Program
 
-use ast::Token;
-use ast::TokenKind;
-use ast::Span;
-use ast::ParseError;
-use ast::TypeExpr;
-use ast::GenericParam;
-use ast::Effect;
-use ast::Constraint;
-use ast::Param;
-use ast::FnDecl;
-use ast::FieldDecl;
-use ast::TypeBodyKind;
-use ast::TypeDecl;
-use ast::UseDecl;
-use ast::ConstDecl;
-use ast::ExternFnDecl;
-use ast::ExternDecl;
-use ast::ImplDecl;
-use ast::Program;
+use tir::Token;
+use tir::TokenKind;
+use tir::Span;
+use tir::ParseError;
+use tir::TypeExpr;
+use tir::GenericParam;
+use tir::Effect;
+use tir::Constraint;
+use tir::Param;
+use tir::FnDecl;
+use tir::FieldDecl;
+use tir::TypeBodyKind;
+use tir::TypeDecl;
+use tir::UseDecl;
+use tir::ConstDecl;
+use tir::ExternFnDecl;
+use tir::ExternDecl;
+use tir::ImplDecl;
+use tir::Program;
 use lexer::lex;
 
 // ── Parser state ──────────────────────────────────────────────────────────────

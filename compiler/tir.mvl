@@ -1,0 +1,797 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// compiler/tir.mvl — unified compiler type definitions (issue #1114)
+//
+// Single source of truth for all shared types used by the self-hosting
+// compiler port.  Absorbs compiler/ast.mvl and adds:
+//   - TIR primitive types (ported from src/mvl/parser/ast.rs)
+//   - Resolved type system Ty / SessionTy (from src/mvl/checker/types.rs)
+//   - TIR node types (from src/mvl/ir.rs)
+//
+// Naming renames from Rust (keyword / collision avoidance):
+//   Ty::String        → Ty::Str           (String is a builtin type)
+//   Literal::Float    → Literal::Floating  (avoids Ty::Float collision)
+//   Literal::Char     → Literal::Character (avoids Ty::Char collision)
+//   Capability::Ref   → Capability::RefCap (avoids Ty::Ref collision)
+//   TirFn.requires    → .pre_conds         (requires is a keyword)
+//   TirFn.ensures     → .post_conds        (ensures is a keyword)
+//   TirStmt.decreases → .decrease_by       (decreases is a keyword)
+//   TirStmt.else_     → .else_br           (else is a keyword)
+//   Ty::Fn variant    → TyFn { … }         (named-field form for clarity)
+//   Ty::Array variant → Array { elem, size }
+
+// ── Source location ──────────────────────────────────────────────────────────
+
+/// Source location (line + column) within a source file, one-based.
+pub type Span = struct {
+    line: Int,
+    col:  Int,
+}
+
+// ── Token classification ─────────────────────────────────────────────────────
+
+/// Lexical category of a token produced by the lexer.
+pub type TokenKind = enum {
+    // ── Declaration keywords ──────────────────────────────────────────────
+    KwFn,
+    KwLet,
+    KwMut,
+    KwMatch,
+    KwIf,
+    KwElse,
+    KwFor,
+    KwWhile,
+    KwType,
+    KwTotal,
+    KwPartial,
+    KwReturn,
+    KwMove,
+    KwConsume,
+    KwLabel,
+    KwRelabel,
+    KwConst,
+    KwWhere,
+    KwIn,
+    KwExtern,
+    KwStruct,
+    KwEnum,
+    KwPub,
+    KwUse,
+    KwTest,
+    KwImpl,
+    KwBuiltin,
+    KwTransparent,
+    KwRequires,
+    KwEnsures,
+    KwInvariant,
+    KwWith,
+    KwGhost,
+    KwDecreases,
+    KwForall,
+    KwExists,
+    KwAs,
+    // ── Capability markers ────────────────────────────────────────────────
+    KwIso,
+    KwVal,
+    KwRef,
+    KwTag,
+    // ── Phase 8: actors (#63, #69); concurrently removed (#1048) ──────────
+    KwActor,
+    KwSelect,
+    // ── Effect declarations (#852) ─────────────────────────────────────────
+    KwEffect,
+    // ── Boolean literals ──────────────────────────────────────────────────
+    KwTrue,
+    KwFalse,
+    // ── Value-carrying kinds (actual text in Token.lexeme) ─────────────────
+    Ident,
+    IntLit,
+    FloatLit,
+    StrLit,
+    // ── Punctuation and operators ──────────────────────────────────────────
+    Punct,
+    // ── Line comment (//) ─────────────────────────────────────────────────
+    Comment,
+    // ── End of file ───────────────────────────────────────────────────────
+    Eof,
+}
+
+// ── Token ────────────────────────────────────────────────────────────────────
+
+/// A single lexical token with its category, raw text, and source location.
+pub type Token = struct {
+    kind:   TokenKind,
+    lexeme: String,
+    span:   Span,
+}
+
+// ── Parse error ──────────────────────────────────────────────────────────────
+
+/// A parse error with a human-readable message and the span where it occurred.
+pub type ParseError = struct {
+    message: String,
+    span:    Span,
+}
+
+// ── Type expression (simplified — parser-stage form) ─────────────────────────
+//
+// Intentionally simplified vs the full Rust TypeExpr enum.  The parser
+// (compiler/parser.mvl) builds values of this struct directly.  The full
+// TypeExpr enum port is deferred to Phase 3 (#1116).
+
+/// A type expression: a name with optional generic arguments (e.g. `List[Int]`).
+pub type TypeExpr = struct {
+    name: String,
+    args: List[TypeExpr],
+    span: Span,
+}
+
+// ── Generic type parameter (simplified — parser-stage form) ──────────────────
+
+/// A generic type parameter with an optional trait bound (e.g. `T: Display`).
+pub type GenericParam = struct {
+    name:  String,
+    bound: String,
+    span:  Span,
+}
+
+// ── Effect annotation ─────────────────────────────────────────────────────────
+
+/// An effect annotation on a function signature (e.g. `! IO`, `! DB[conn]`).
+pub type Effect = struct {
+    name:  String,
+    param: String,
+    span:  Span,
+}
+
+/// An effect declaration (`effect Name` or `effect Name > Parent + …`).
+pub type EffectDecl = struct {
+    name:     String,
+    subsumes: List[String],
+    span:     Span,
+}
+
+// ── Where-clause constraint ───────────────────────────────────────────────────
+
+/// A where-clause constraint binding a generic parameter to a trait bound.
+pub type Constraint = struct {
+    param: String,
+    bound: String,
+    span:  Span,
+}
+
+// ── Function parameter ────────────────────────────────────────────────────────
+
+/// A function parameter with optional capability marker, mutability flag, name, and type.
+pub type Param = struct {
+    capability: String,
+    mutable:    Bool,
+    name:       String,
+    ty:         TypeExpr,
+    span:       Span,
+}
+
+// ── Function declaration (simplified — parser-stage form) ─────────────────────
+//
+// Matches what compiler/parser.mvl constructs.  Fields uses simplified types
+// (totality: String, has_body: Bool) rather than the full Rust FnDecl.
+// The fully-resolved TIR equivalent is TirFn below.
+
+/// A function declaration including visibility, totality, signature, and body flag.
+pub type FnDecl = struct {
+    visible:     Bool,
+    is_test:     Bool,
+    is_builtin:  Bool,
+    totality:    String,
+    name:        String,
+    type_params: List[GenericParam],
+    params:      List[Param],
+    ret_type:    TypeExpr,
+    effects:     List[Effect],
+    constraints: List[Constraint],
+    has_body:    Bool,
+    span:        Span,
+}
+
+// ── Struct field declaration ──────────────────────────────────────────────────
+
+/// A struct field declaration: name, type, and source span.
+pub type FieldDecl = struct {
+    name: String,
+    ty:   TypeExpr,
+    span: Span,
+}
+
+// ── Type declaration body kind (simplified) ───────────────────────────────────
+
+/// Discriminates struct, enum, and type-alias declarations (simplified form).
+pub type TypeBodyKind = enum { IsStruct, IsEnum, IsAlias }
+
+// ── Type declaration (simplified — parser-stage form) ─────────────────────────
+
+/// A type declaration: struct, enum, or type alias with optional generic parameters.
+pub type TypeDecl = struct {
+    visible:     Bool,
+    name:        String,
+    type_params: List[GenericParam],
+    body_kind:   TypeBodyKind,
+    fields:      List[FieldDecl],
+    variants:    List[String],
+    alias_ty:    TypeExpr,
+    span:        Span,
+}
+
+// ── Use declaration ───────────────────────────────────────────────────────────
+
+/// A use declaration importing names from a module path.
+pub type UseDecl = struct {
+    visible: Bool,
+    path:    List[String],
+    imports: List[String],
+    span:    Span,
+}
+
+// ── Const declaration (simplified — parser-stage form) ────────────────────────
+
+/// A constant declaration with a name, type, and literal value (simplified).
+pub type ConstDecl = struct {
+    visible: Bool,
+    name:    String,
+    ty:      TypeExpr,
+    value:   String,
+    span:    Span,
+}
+
+// ── Extern declarations (simplified — parser-stage form) ──────────────────────
+
+/// An extern function signature declaring a trust-boundary foreign function.
+pub type ExternFnDecl = struct {
+    name:    String,
+    params:  List[Param],
+    ret_ty:  TypeExpr,
+    effects: List[Effect],
+    span:    Span,
+}
+
+/// An extern block grouping foreign function signatures for a target language.
+pub type ExternDecl = struct {
+    lang: String,
+    fns:  List[ExternFnDecl],
+    span: Span,
+}
+
+// ── Impl block declaration (simplified — parser-stage form) ───────────────────
+
+/// A trait implementation block for a concrete type.
+pub type ImplDecl = struct {
+    ty:         TypeExpr,
+    trait_name: String,
+    trait_args: List[TypeExpr],
+    methods:    List[FnDecl],
+    span:       Span,
+}
+
+// ── IFC label and relabel declarations ───────────────────────────────────────
+
+/// A user-declared IFC label (`label Tainted`).
+pub type LabelDecl = struct {
+    visible: Bool,
+    name:    String,
+    span:    Span,
+}
+
+/// A relabel transition declaration (`relabel trust: Tainted -> _`).
+pub type RelabelDecl = struct {
+    visible: Bool,
+    name:    String,
+    from:    Option[String],
+    to:      Option[String],
+    audit:   Bool,
+    span:    Span,
+}
+
+// ── Top-level parsed program (simplified — parser-stage form) ─────────────────
+
+/// The top-level parsed program, with separate lists for each declaration kind.
+pub type Program = struct {
+    fns:     List[FnDecl],
+    types:   List[TypeDecl],
+    uses:    List[UseDecl],
+    consts:  List[ConstDecl],
+    externs: List[ExternDecl],
+    impls:   List[ImplDecl],
+    errors:  List[ParseError],
+}
+
+// ── TIR primitive enums ──────────────────────────────────────────────────────
+
+/// Totality annotation for functions and loops.
+pub type Totality = enum {
+    Total,
+    Partial,
+}
+
+/// Ownership / borrowing capability marker on a parameter or binding.
+pub type Capability = enum {
+    Iso,
+    Val,
+    RefCap,  // Rust: Ref — renamed to avoid collision with Ty::Ref
+    Tag,
+}
+
+/// Binding kind for `let` statements.
+pub type LetKind = enum {
+    /// Ordinary `let` binding emitted at runtime.
+    Regular,
+    /// `ghost let` — specification-only binding, erased before codegen.
+    Ghost,
+}
+
+/// Mailbox overflow policy for bounded actor mailboxes.
+pub type MailboxPolicy = enum {
+    Block,
+    DropNewest,
+}
+
+/// Mailbox configuration attached to an actor declaration via `with mailbox(…)`.
+pub type MailboxConfig = enum {
+    Bounded { capacity: Int, policy: MailboxPolicy },
+    Unbounded,
+}
+
+// ── Operators ────────────────────────────────────────────────────────────────
+
+/// Unary prefix operator.
+pub type UnaryOp = enum {
+    Neg,
+    Not,
+    Deref,
+    BitNot,
+}
+
+/// Binary infix operator.
+pub type BinaryOp = enum {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Rem,
+    Eq,
+    Ne,
+    Lt,
+    Gt,
+    Le,
+    Ge,
+    And,
+    Or,
+    BitAnd,
+    BitOr,
+    BitXor,
+    Shl,
+    Shr,
+}
+
+/// Logical connective used in refinement predicates.
+pub type LogicOp = enum { And, Or }
+
+/// Comparison operator used in refinement predicates.
+pub type CmpOp = enum { Eq, Ne, Lt, Gt, Le, Ge }
+
+/// Arithmetic operator used in refinement predicates.
+pub type ArithOp = enum { Add, Sub, Mul, Div, Rem }
+
+// ── Literals ─────────────────────────────────────────────────────────────────
+
+/// A compile-time literal value.
+pub type Literal = enum {
+    Integer(Int),
+    Floating(Float),    // Rust: Float — renamed to avoid Ty::Float collision
+    Str(String),
+    Character(Char),    // Rust: Char — renamed to avoid Ty::Char collision
+    Bool(Bool),
+    Unit,
+}
+
+// ── Left-hand values ─────────────────────────────────────────────────────────
+
+/// Assignable location: a bare identifier or a field path.
+pub type LValue = enum {
+    Ident(String, Span),
+    Field { base: Box[LValue], field: String, span: Span },
+}
+
+// ── Patterns ─────────────────────────────────────────────────────────────────
+
+/// A match pattern.
+pub type Pattern = enum {
+    Wildcard(Span),
+    Ident(String, Span),
+    Literal(Literal, Span),
+    Tuple { elems: List[Pattern], span: Span },
+    /// `Name(p1, p2, …)` — tuple-struct or enum-variant with positional fields.
+    TupleStruct { name: String, fields: List[Pattern], span: Span },
+    /// `Name { field: pat, … }` — struct or enum-variant with named fields.
+    Struct { name: String, fields: List[(String, Pattern)], span: Span },
+    Some { inner: Box[Pattern], span: Span },
+    None(Span),
+    Ok { inner: Box[Pattern], span: Span },
+    Err { inner: Box[Pattern], span: Span },
+}
+
+// ── Refinement predicates ─────────────────────────────────────────────────────
+
+/// Predicate language for refinement types and contracts.
+pub type RefExpr = enum {
+    Logic { op: LogicOp, left: Box[RefExpr], right: Box[RefExpr], span: Span },
+    Compare { op: CmpOp, left: Box[RefExpr], right: Box[RefExpr], span: Span },
+    Arith { op: ArithOp, left: Box[RefExpr], right: Box[RefExpr], span: Span },
+    Not { inner: Box[RefExpr], span: Span },
+    Ident { name: String, span: Span },
+    FieldAccess { object: Box[RefExpr], field: String, span: Span },
+    Integer { value: Int, span: Span },
+    Float { value: Float, span: Span },
+    Len { ident: String, span: Span },
+    Grouped { inner: Box[RefExpr], span: Span },
+    /// `old(expr)` — entry-time value in `ensures` postconditions.
+    Old { inner: Box[RefExpr], span: Span },
+    /// `forall x: T, pred` — universal quantifier.
+    Forall { var: String, ty: Box[TypeExpr], body: Box[RefExpr], span: Span },
+    /// `exists x: T, pred` — existential quantifier.
+    Exists { var: String, ty: Box[TypeExpr], body: Box[RefExpr], span: Span },
+}
+
+// ── Session protocol (parser-stage) ──────────────────────────────────────────
+
+/// One step in a typed session-type protocol (Honda 1993).
+pub type SessionOp = enum {
+    /// `!T. S` — send a value of type T, then continue as S.
+    Send { msg: Box[TypeExpr], cont: Box[SessionOp], span: Span },
+    /// `?T. S` — receive a value of type T, then continue as S.
+    Receive { msg: Box[TypeExpr], cont: Box[SessionOp], span: Span },
+    /// `+{ l1: S1, … }` — internal choice: this side selects a branch.
+    InternalChoice { branches: List[(String, SessionOp)], span: Span },
+    /// `&{ l1: S1, … }` — external choice: the other side selects.
+    ExternalChoice { branches: List[(String, SessionOp)], span: Span },
+    /// `end` — protocol terminated.
+    End { span: Span },
+}
+
+// ── Resolved session type (checker output) ────────────────────────────────────
+
+/// Resolved session type — checker's semantic representation of a protocol.
+pub type SessionTy = enum {
+    /// `!T. S` — send T, then continue as S.
+    Send(Box[Ty], Box[SessionTy]),
+    /// `?T. S` — receive T, then continue as S.
+    Receive(Box[Ty], Box[SessionTy]),
+    /// `+{ l1: S1, … }` — internal choice.
+    InternalChoice(List[(String, SessionTy)]),
+    /// `&{ l1: S1, … }` — external choice.
+    ExternalChoice(List[(String, SessionTy)]),
+    /// `end` — protocol complete.
+    End,
+}
+
+// ── Resolved type system ──────────────────────────────────────────────────────
+
+/// Resolved type used throughout the checker and TIR.
+/// Produced by the checker; backends consume this via TIR nodes.
+pub type Ty = enum {
+    // ── Primitive types ───────────────────────────────────────────────────
+    Int,
+    Float,
+    Str,     // Rust: String — renamed to avoid conflict with the String builtin
+    Bool,
+    Char,
+    Byte,
+    UByte,
+    UInt,
+    Unit,
+    Never,
+    // ── Named / generic ───────────────────────────────────────────────────
+    Named(String, List[Ty]),
+    // ── Compound types ────────────────────────────────────────────────────
+    Option(Box[Ty]),
+    Result(Box[Ty], Box[Ty]),
+    Ref(Bool, Box[Ty]),
+    /// Function type: params, return type, declared effects, totality.
+    TyFn { params: List[Ty], ret: Box[Ty], effects: List[Effect], totality: Option[Totality] },
+    Tuple(List[Ty]),
+    List(Box[Ty]),
+    /// Fixed-size array: element type + compile-time size.
+    Array { elem: Box[Ty], size: Int },
+    Map(Box[Ty], Box[Ty]),
+    Set(Box[Ty]),
+    // ── Refined and labeled ───────────────────────────────────────────────
+    Refined(Box[Ty], Box[RefExpr]),
+    Labeled(String, Box[Ty]),
+    // ── Session type ──────────────────────────────────────────────────────
+    Session(Box[SessionTy]),
+    // ── Error placeholder ─────────────────────────────────────────────────
+    Unknown,
+}
+
+// ── TIR expression types ──────────────────────────────────────────────────────
+
+/// A typed expression node — every node carries its fully-resolved Ty inline.
+pub type TirExpr = struct {
+    kind: TirExprKind,
+    ty:   Ty,
+    span: Span,
+}
+
+/// The expression node kind (mirrors ast::ExprKind but with Ty embedded).
+pub type TirExprKind = enum {
+    Literal(Literal),
+    Var(String),
+    FieldAccess { expr: Box[TirExpr], field: String },
+    MethodCall { receiver: Box[TirExpr], method: String, args: List[TirExpr] },
+    /// Direct function call.  `type_args` preserves syntactic type arguments for
+    /// extern / stdlib calls that require turbofish syntax in codegen.
+    FnCall { name: String, args: List[TirExpr], type_args: List[TypeExpr] },
+    Unary { op: UnaryOp, expr: Box[TirExpr] },
+    Binary { op: BinaryOp, left: Box[TirExpr], right: Box[TirExpr] },
+    If { cond: Box[TirExpr], then: TirBlock, else_br: Option[Box[TirExpr]] },
+    Match { scrutinee: Box[TirExpr], arms: List[TirMatchArm] },
+    Block(TirBlock),
+    Lambda { params: List[TirParam], body: Box[TirExpr] },
+    /// `expr?` — propagate Result/Option failure.
+    Propagate(Box[TirExpr]),
+    /// `Name { field: value, … }` struct / enum-variant construction.
+    Construct { name: String, fields: List[(String, TirExpr)] },
+    ListLit { elems: List[TirExpr] },
+    MapLit { pairs: List[(TirExpr, TirExpr)] },
+    SetLit { elems: List[TirExpr] },
+    /// `consume expr` — move out of an `iso` binding.
+    Consume(Box[TirExpr]),
+    /// `relabel name(expr, "tag")` — IFC relabel transition.
+    Relabel { name: String, expr: Box[TirExpr], audit_tag: String, audit: Bool },
+    /// `val expr` / `ref expr` — expression-level borrow.
+    Borrow { mutable: Bool, expr: Box[TirExpr] },
+    /// `actor ActorType { … }` — actor spawn.
+    Spawn { actor_type: String, fields: List[(String, TirExpr)] },
+    /// `select { … }` — concurrent branch selection.
+    Select { arms: List[TirSelectArm] },
+    /// `forall` / `exists` quantifier — specification only, erased before codegen.
+    Quantifier(Box[RefExpr]),
+}
+
+// ── TIR statement types ───────────────────────────────────────────────────────
+
+/// A typed statement node.
+pub type TirStmt = enum {
+    Let {
+        kind:    LetKind,
+        pattern: Pattern,
+        ty:      Ty,
+        init:    TirExpr,
+        span:    Span,
+    },
+    Assign {
+        target: LValue,
+        value:  TirExpr,
+        span:   Span,
+    },
+    Return {
+        value: Option[TirExpr],
+        span:  Span,
+    },
+    If {
+        cond:    TirExpr,
+        then:    TirBlock,
+        else_br: Option[TirElseBranch],
+        span:    Span,
+    },
+    Match {
+        scrutinee: TirExpr,
+        arms:      List[TirMatchArm],
+        span:      Span,
+    },
+    For {
+        pattern:    Pattern,
+        iter:       TirExpr,
+        invariants: List[TirExpr],
+        body:       TirBlock,
+        span:       Span,
+    },
+    While {
+        cond:        TirExpr,
+        invariants:  List[TirExpr],
+        decrease_by: Option[Box[TirExpr]],
+        body:        TirBlock,
+        span:        Span,
+    },
+    Expr {
+        expr: TirExpr,
+        span: Span,
+    },
+}
+
+/// The else-branch of a TIR if-statement.
+pub type TirElseBranch = enum {
+    Block(TirBlock),
+    If(Box[TirStmt]),
+}
+
+// ── TIR blocks and match arms ─────────────────────────────────────────────────
+
+/// A block of TIR statements.
+pub type TirBlock = struct {
+    stmts: List[TirStmt],
+    span:  Span,
+}
+
+/// A single arm of a TIR match expression.
+pub type TirMatchArm = struct {
+    pattern: Pattern,
+    guard:   Option[RefExpr],
+    body:    TirMatchBody,
+    span:    Span,
+}
+
+/// The body of a match arm — either an expression or a block.
+pub type TirMatchBody = enum {
+    Expr(TirExpr),
+    Block(TirBlock),
+}
+
+/// A single arm of a `select` expression (actor receive / timeout).
+pub type TirSelectArm = struct {
+    binding:    Option[String],
+    expr:       Box[TirExpr],
+    is_timeout: Bool,
+    body:       TirBlock,
+    span:       Span,
+}
+
+// ── TIR function ──────────────────────────────────────────────────────────────
+
+/// A function parameter with its fully-resolved type.
+pub type TirParam = struct {
+    name:       String,
+    ty:         Ty,
+    capability: Option[Capability],
+    span:       Span,
+}
+
+/// A concrete (monomorphized), fully-typed function.
+pub type TirFn = struct {
+    /// Mangled symbol (e.g. `"map_Int_String"` for `map[T=Int, U=String]`).
+    name:              String,
+    original_name:     String,
+    visible:           Bool,
+    is_test:           Bool,
+    is_builtin:        Bool,
+    /// For extension methods: the receiver type name (e.g. `"String"` for `fn String::len`).
+    receiver_type:     Option[String],
+    type_params:       List[GenericParam],
+    constraints:       List[Constraint],
+    totality:          Option[Totality],
+    params:            List[TirParam],
+    ret_ty:            Ty,
+    return_refinement: Option[RefExpr],
+    effects:           List[Effect],
+    pre_conds:         List[RefExpr],   // Rust: requires — keyword in MVL
+    post_conds:        List[RefExpr],   // Rust: ensures — keyword in MVL
+    body:              TirBlock,
+    span:              Span,
+}
+
+// ── TIR declaration types ─────────────────────────────────────────────────────
+
+/// A struct field or actor field with a resolved type.
+pub type TirFieldDecl = struct {
+    name:       String,
+    ty:         Ty,
+    refinement: Option[RefExpr],
+    span:       Span,
+}
+
+/// A single enum variant with its payload.
+pub type TirVariant = struct {
+    name:   String,
+    fields: TirVariantFields,
+    span:   Span,
+}
+
+/// The payload of a TIR enum variant.
+pub type TirVariantFields = enum {
+    Unit,
+    Tuple(List[Ty]),
+    Struct(List[TirFieldDecl]),
+}
+
+/// The body of a type declaration — struct, enum, or alias.
+pub type TirTypeBody = enum {
+    Struct { fields: List[TirFieldDecl], type_invariant: Option[RefExpr] },
+    Enum(List[TirVariant]),
+    Alias(Ty),
+}
+
+/// A type declaration with all TypeExpr fields resolved to Ty.
+pub type TirTypeDecl = struct {
+    visible: Bool,
+    name:    String,
+    params:  List[GenericParam],
+    body:    TirTypeBody,
+    span:    Span,
+}
+
+/// A single function signature inside an `extern` block, with resolved types.
+pub type TirExternFn = struct {
+    name:     String,
+    params:   List[TirParam],
+    ret_ty:   Ty,
+    effects:  List[Effect],
+    totality: Option[Totality],
+    span:     Span,
+}
+
+/// An `extern "abi" { … }` block with resolved function signatures.
+pub type TirExternDecl = struct {
+    abi:  String,
+    fns:  List[TirExternFn],
+    span: Span,
+}
+
+/// A method inside an actor declaration, with a fully-typed body.
+pub type TirActorMethod = struct {
+    /// true = public async behavior, false = private sync helper.
+    is_public: Bool,
+    name:      String,
+    params:    List[TirParam],
+    ret_ty:    Ty,
+    effects:   List[Effect],
+    body:      TirBlock,
+    span:      Span,
+}
+
+/// An actor type declaration with resolved field types and typed method bodies.
+pub type TirActorDecl = struct {
+    visible:    Bool,
+    name:       String,
+    type_params: List[GenericParam],
+    fields:     List[TirFieldDecl],
+    methods:    List[TirActorMethod],
+    mailbox:    Option[MailboxConfig],
+    traps_exit: Bool,
+    span:       Span,
+}
+
+/// An `impl Trait for Type { … }` block with fully-typed method bodies.
+pub type TirImplDecl = struct {
+    trait_name:      String,
+    trait_type_args: List[Ty],
+    type_name:       String,
+    methods:         List[TirFn],
+    span:            Span,
+}
+
+/// A `const` declaration with a fully-typed value expression.
+pub type TirConstDecl = struct {
+    visible: Bool,
+    name:    String,
+    ty:      Ty,
+    value:   TirExpr,
+    span:    Span,
+}
+
+// ── TIR program ───────────────────────────────────────────────────────────────
+
+/// Output of the TIR lowering pass — complete program representation for backends.
+///
+/// All type annotations are resolved to Ty; generic function bodies are
+/// monomorphized (one TirFn per instantiation).
+pub type TirProgram = struct {
+    fns:           List[TirFn],
+    types:         List[TirTypeDecl],
+    externs:       List[TirExternDecl],
+    actors:        List[TirActorDecl],
+    impls:         List[TirImplDecl],
+    consts:        List[TirConstDecl],
+    uses:          List[UseDecl],
+    effect_decls:  List[EffectDecl],
+    label_decls:   List[LabelDecl],
+    relabel_decls: List[RelabelDecl],
+}

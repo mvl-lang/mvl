@@ -21,9 +21,9 @@
 //
 // Public surface: lex(src: String) -> List[Token]
 
-use ast::TokenKind;
-use ast::Token;
-use ast::Span;
+use tir::TokenKind;
+use tir::Token;
+use tir::Span;
 
 // ── Internal scan result ─────────────────────────────────────────────────────
 
