@@ -75,6 +75,7 @@ pub fn print_usage() {
     eprintln!(
         "  mvl fmt   --stdin                  — read from stdin, write formatted output to stdout"
     );
+    eprintln!("  mvl tir   <file>                   — emit TirProgram as JSON (spike 004, self-hosting Stage A)");
     eprintln!("  mvl lint  <file|dir>               — check style rules");
     eprintln!("  mvl lint  <file|dir> --show-config — show active linter configuration");
     eprintln!("  mvl assurance <file|dir>           — emit assurance report");

@@ -15,6 +15,7 @@ pub mod mutate;
 #[cfg(feature = "openapi")]
 pub mod openapi;
 pub mod test;
+pub mod tir;
 
 use mvl::mvl::checker::errors::CheckError;
 use mvl::mvl::loader;
@@ -134,6 +135,10 @@ pub(super) fn dispatch(args: &[String]) {
                     test::run(&path, quiet, verbose, coverage, bdd);
                 }
             }
+        }
+        "tir" => {
+            let path = args::require_path_arg(args, "tir");
+            tir::run(&path);
         }
         "mutate" => {
             let path = args::require_path_arg(args, "mutate");
