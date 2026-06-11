@@ -1130,4 +1130,46 @@ mod tests {
             "rule must be silent when disabled; got: {diags:?}"
         );
     }
+
+    // -- deprecated_extern_rust --
+
+    #[test]
+    fn deprecated_extern_rust_fires_on_extern_rust() {
+        let src = "extern \"rust\" {\n    fn hash(data: String) -> String;\n}\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        deprecated_extern_rust(&prog, &cfg(), &mut diags);
+        assert!(
+            diags.iter().any(|d| d.rule == "deprecated-extern-rust"),
+            "extern \"rust\" should trigger deprecated-extern-rust; got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn deprecated_extern_rust_silent_for_extern_c() {
+        let src = "extern \"c\" {\n    fn sqrt(x: Float) -> Float;\n}\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        deprecated_extern_rust(&prog, &cfg(), &mut diags);
+        assert!(
+            diags.iter().all(|d| d.rule != "deprecated-extern-rust"),
+            "extern \"c\" must not trigger the rule; got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn deprecated_extern_rust_off_when_disabled() {
+        let cfg_off = LintConfig {
+            deprecated_extern_rust: false,
+            ..LintConfig::default()
+        };
+        let src = "extern \"rust\" {\n    fn hash(data: String) -> String;\n}\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        deprecated_extern_rust(&prog, &cfg_off, &mut diags);
+        assert!(
+            diags.iter().all(|d| d.rule != "deprecated-extern-rust"),
+            "rule must be silent when disabled; got: {diags:?}"
+        );
+    }
 }

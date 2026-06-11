@@ -392,7 +392,7 @@ fn extern_c_block_transpiles() {
     assert_contains(&rust, "fn abs_val");
 }
 
-/// extern "C" with link("libname") emits `#[link(name = "...")]`.
+/// extern "C" with link("libname") emits `#[link(name = "...")]` before the extern block.
 #[test]
 fn extern_c_link_emits_link_attribute() {
     let src = r#"extern "C" link("m") {
@@ -402,9 +402,16 @@ fn extern_c_link_emits_link_attribute() {
     assert_contains(&rust, "#[link(name = \"m\")]");
     assert_contains(&rust, "extern \"C\"");
     assert_contains(&rust, "fn sin");
+    // #[link] must precede the extern block it annotates.
+    let link_pos = rust.find("#[link(name = \"m\")]").unwrap();
+    let extern_pos = rust.find("extern \"C\"").unwrap();
+    assert!(
+        link_pos < extern_pos,
+        "#[link] must appear before extern block"
+    );
 }
 
-/// Ptr[T] in extern "C" transpiles to `*const T`.
+/// Ptr[T] in extern "C" transpiles to `*mut T` (C pointers are mutable by default).
 #[test]
 fn extern_c_ptr_type_transpiles() {
     let src = r#"extern "C" {
@@ -413,8 +420,8 @@ fn extern_c_ptr_type_transpiles() {
     fn strlen(s: Ptr[Int]) -> Int;
 }"#;
     let rust = transpile_src(src);
-    assert_contains(&rust, "*const std::ffi::c_void");
-    assert_contains(&rust, "*const i64");
+    assert_contains(&rust, "*mut std::ffi::c_void");
+    assert_contains(&rust, "*mut i64");
 }
 
 // ── Extern "rust" blocks (#52, #91, #93) ──────────────────────────────────

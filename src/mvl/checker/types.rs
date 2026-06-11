@@ -182,7 +182,7 @@ impl Ty {
             Ty::Array(inner, size) => format!("Array<{}, {}>", inner.display(), size),
             Ty::Map(k, v) => format!("Map<{}, {}>", k.display(), v.display()),
             Ty::Set(t) => format!("Set<{}>", t.display()),
-            Ty::Ptr(inner) => format!("Ptr[{}]", inner.display()),
+            Ty::Ptr(inner) => format!("Ptr<{}>", inner.display()),
             Ty::Refined(inner, _pred) => inner.display(),
             Ty::Labeled(label, inner) => {
                 format!("{}<{}>", label, inner.display())
@@ -355,10 +355,16 @@ pub fn resolve(expr: &TypeExpr) -> Ty {
             "Map" => Ty::Unknown,
             "Set" if args.len() == 1 => Ty::Set(Box::new(resolve(&args[0]))),
             "Set" => Ty::Unknown,
-            "Ptr" if args.len() == 1 => Ty::Ptr(Box::new(resolve(&args[0]))),
+            "Ptr" if args.len() == 1 => {
+                // `Void` is only meaningful as the inner type of Ptr[Void] = C `void*`.
+                // Inline the alias here so bare `Void` outside Ptr remains an unknown type.
+                let inner = match &args[0] {
+                    TypeExpr::Base { name: n, .. } if n == "Void" => Ty::Unit,
+                    other => resolve(other),
+                };
+                Ty::Ptr(Box::new(inner))
+            }
             "Ptr" => Ty::Unknown,
-            // `Void` is an alias for Unit, valid in FFI pointer context: `Ptr[Void]` = C `void*`.
-            "Void" => Ty::Unit,
             _ => Ty::Named(name.clone(), args.iter().map(resolve).collect()),
         },
         TypeExpr::Option { inner, .. } => Ty::Option(Box::new(resolve(inner))),
@@ -461,6 +467,7 @@ pub fn types_compatible(a: &Ty, b: &Ty) -> bool {
         }
         (Ty::Map(ak, av), Ty::Map(bk, bv)) => types_compatible(ak, bk) && types_compatible(av, bv),
         (Ty::Set(ai), Ty::Set(bi)) => types_compatible(ai, bi),
+        (Ty::Ptr(ai), Ty::Ptr(bi)) => types_compatible(ai, bi),
         (Ty::Ref(am, ai), Ty::Ref(bm, bi)) => am == bm && types_compatible(ai, bi),
         // A plain value T is compatible where val/ref T is expected (env types are stripped).
         (Ty::Ref(_, ai), _) => types_compatible(ai, b),

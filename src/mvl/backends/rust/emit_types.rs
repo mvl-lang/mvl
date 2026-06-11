@@ -426,8 +426,8 @@ pub fn emit_ty(ty: &Ty) -> String {
         Ty::Map(k, v) => format!("std::collections::HashMap<{}, {}>", emit_ty(k), emit_ty(v)),
         Ty::Set(t) => format!("std::collections::HashSet<{}>", emit_ty(t)),
         Ty::Ptr(inner) => match inner.as_ref() {
-            Ty::Unit => "*const std::ffi::c_void".to_string(),
-            other => format!("*const {}", emit_ty(other)),
+            Ty::Unit => "*mut std::ffi::c_void".to_string(),
+            other => format!("*mut {}", emit_ty(other)),
         },
         Ty::Refined(inner, _) => emit_ty(inner),
         Ty::Labeled(label, inner) => format!("{}<{}>", label, emit_ty(inner)),
@@ -461,15 +461,16 @@ pub fn emit_type_expr(ty: &TypeExpr) -> String {
             if name == "Positional" && args.len() == 1 {
                 return emit_type_expr(&args[0]);
             }
-            // Ptr[T] → *const T; Ptr[Unit] / Ptr[Void] → *const std::ffi::c_void
+            // Ptr[T] → *mut T; Ptr[Unit] / Ptr[Void] → *mut std::ffi::c_void.
+            // C pointers are mutable by default; *const would prevent write-through (malloc, memcpy).
             if name == "Ptr" && args.len() == 1 {
                 let inner = &args[0];
                 let is_void =
                     matches!(inner, TypeExpr::Base { name: n, .. } if n == "Unit" || n == "Void");
                 return if is_void {
-                    "*const std::ffi::c_void".to_string()
+                    "*mut std::ffi::c_void".to_string()
                 } else {
-                    format!("*const {}", emit_type_expr(inner))
+                    format!("*mut {}", emit_type_expr(inner))
                 };
             }
             let rust_name = map_base_type(name);

@@ -381,6 +381,21 @@ pub enum CheckError {
         abi: String,
         span: Span,
     },
+    /// `link(...)` contains an invalid library name (injection guard, #561).
+    /// Only `[a-zA-Z0-9_.\-]` is allowed to prevent injecting arbitrary Rust attributes
+    /// or LLVM IR instructions via crafted library names.
+    InvalidLinkLibName {
+        name: String,
+        span: Span,
+    },
+    /// An `extern "C"` function parameter or return type carries a security label
+    /// (`Tainted[T]` / `Secret[T]`). Labels are meaningless across the C ABI boundary —
+    /// use `relabel` to strip the label before passing to FFI (#894).
+    LabeledTypeCrossesFfiBoundary {
+        fn_name: String,
+        label: String,
+        span: Span,
+    },
 
     // ── Function contracts (#621) ─────────────────────────────────────────
     /// A `requires` precondition was statically proven to be violated at this call site.
@@ -583,6 +598,8 @@ impl CheckError {
             // Req 1: Type Safety (declaration-level — malformed extern ABI is a type/decl error,
             // not an IFC violation; grouping it under Req 11 would pollute IFC metrics).
             CheckError::UnsupportedExternAbi { .. } => 1,
+            CheckError::InvalidLinkLibName { .. } => 1,
+            CheckError::LabeledTypeCrossesFfiBoundary { .. } => 11,
             // Req 1: Type Safety — Iterator trait constraint
             CheckError::NotIterator { .. } => 1,
             // Req 9: Generics — constraint enforcement
@@ -645,6 +662,8 @@ impl CheckError {
             | CheckError::ImplicitFlowViolation { span, .. }
             | CheckError::CrossFunctionImplicitFlowViolation { span, .. }
             | CheckError::UnsupportedExternAbi { span, .. }
+            | CheckError::InvalidLinkLibName { span, .. }
+            | CheckError::LabeledTypeCrossesFfiBoundary { span, .. }
             | CheckError::PropagateIncompatibleError { span, .. }
             | CheckError::NotIterator { span, .. }
             | CheckError::ForLoopInPartialFn { span }
@@ -842,6 +861,12 @@ impl CheckError {
             ),
             CheckError::UnsupportedExternAbi { abi, .. } => format!(
                 "unsupported extern ABI `\"{abi}\"` — only \"rust\" and \"c\" are allowed"
+            ),
+            CheckError::InvalidLinkLibName { name, .. } => format!(
+                "invalid link library name `{name:?}` — only [a-zA-Z0-9_.-] characters are allowed"
+            ),
+            CheckError::LabeledTypeCrossesFfiBoundary { fn_name, label, .. } => format!(
+                "extern fn `{fn_name}` uses labeled type `{label}` across the C FFI boundary — labels are meaningless in C ABI; use `relabel` to strip before passing"
             ),
             CheckError::NotIterator { ty, .. } => format!(
                 "`{ty}` does not implement `Iterator` — only types with `impl Iterator<T>` can be used in `for...in`"
