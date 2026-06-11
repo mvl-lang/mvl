@@ -2403,6 +2403,133 @@ fn extern_unsupported_abi_is_an_error() {
     );
 }
 
+// ── FFI: extern "C" + Ptr[T] (#561) ──────────────────────────────────────
+
+#[test]
+fn extern_c_block_type_checks() {
+    use mvl::mvl::checker::check;
+    use mvl::mvl::parser::Parser;
+    let src = r#"extern "C" {
+    fn sqrt(x: Float) -> Float;
+    fn strlen(s: String) -> Int;
+}"#;
+    let (mut p, _) = Parser::new(src);
+    let prog = p.parse_program();
+    assert!(p.errors().is_empty(), "parse errors: {:?}", p.errors());
+    let result = check(&prog);
+    assert!(
+        result.is_ok(),
+        "extern \"C\" should type-check, got: {:?}",
+        result.errors
+    );
+    assert_eq!(result.extern_count, 1);
+}
+
+#[test]
+fn extern_c_with_link_parses_and_checks() {
+    use mvl::mvl::checker::check;
+    use mvl::mvl::parser::Parser;
+    let src = r#"extern "C" link("m") {
+    fn sin(x: Float) -> Float;
+    fn cos(x: Float) -> Float;
+}"#;
+    let (mut p, _) = Parser::new(src);
+    let prog = p.parse_program();
+    assert!(p.errors().is_empty(), "parse errors: {:?}", p.errors());
+    let result = check(&prog);
+    assert!(
+        result.is_ok(),
+        "extern \"C\" link(...) should type-check, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn ptr_type_resolves_in_extern_c() {
+    use mvl::mvl::checker::check;
+    use mvl::mvl::checker::types::Ty;
+    use mvl::mvl::parser::Parser;
+    let src = r#"extern "C" {
+    fn malloc(size: Int) -> Ptr[Void];
+    fn free(ptr: Ptr[Void]) -> Unit;
+    fn strlen(s: Ptr[Int]) -> Int;
+}"#;
+    let (mut p, _) = Parser::new(src);
+    let prog = p.parse_program();
+    assert!(p.errors().is_empty(), "parse errors: {:?}", p.errors());
+    let result = check(&prog);
+    assert!(
+        result.is_ok(),
+        "Ptr[Void] should type-check, got: {:?}",
+        result.errors
+    );
+    // Ptr[Void] resolves to Ty::Ptr(Ty::Unit) (Void is an alias for Unit in FFI context)
+    let malloc_info = result
+        .type_env
+        .lookup_fn("malloc")
+        .expect("malloc should be registered");
+    assert!(
+        matches!(&malloc_info.ret, Ty::Ptr(inner) if matches!(inner.as_ref(), Ty::Unit)),
+        "malloc return type should be Ptr[Unit], got: {:?}",
+        malloc_info.ret
+    );
+    // strlen: Ptr[Int] param resolves to Ty::Ptr(Ty::Int)
+    let strlen_info = result
+        .type_env
+        .lookup_fn("strlen")
+        .expect("strlen should be registered");
+    assert!(
+        matches!(&strlen_info.params[0], Ty::Ptr(inner) if matches!(inner.as_ref(), Ty::Int)),
+        "strlen param should be Ptr[Int], got: {:?}",
+        strlen_info.params
+    );
+}
+
+#[test]
+fn extern_rust_deprecation_warning_fires() {
+    use mvl::mvl::linter::{config::LintConfig, lint};
+    use mvl::mvl::parser::Parser;
+    let src = r#"extern "rust" {
+    fn hash(data: String) -> String;
+}"#;
+    let (mut p, _) = Parser::new(src);
+    let prog = p.parse_program();
+    let cfg = LintConfig::default(); // deprecated_extern_rust = true by default
+    let result = lint(&prog, src, &cfg);
+    assert!(
+        result
+            .diags
+            .iter()
+            .any(|d| d.rule == "deprecated-extern-rust"),
+        "extern \"rust\" should trigger deprecated-extern-rust warning, got: {:?}",
+        result.diags
+    );
+}
+
+#[test]
+fn extern_rust_deprecation_warning_suppressible() {
+    use mvl::mvl::linter::{config::LintConfig, lint};
+    use mvl::mvl::parser::Parser;
+    let src = r#"extern "rust" {
+    fn hash(data: String) -> String;
+}"#;
+    let (mut p, _) = Parser::new(src);
+    let prog = p.parse_program();
+    let cfg = LintConfig {
+        deprecated_extern_rust: false,
+        ..LintConfig::default()
+    };
+    let result = lint(&prog, src, &cfg);
+    assert!(
+        result
+            .diags
+            .iter()
+            .all(|d| d.rule != "deprecated-extern-rust"),
+        "rule must be silent when disabled, got: {:?}",
+        result.diags
+    );
+}
+
 #[test]
 fn extern_fn_callable_from_mvl_code() {
     // extern-declared functions must be resolvable in MVL call expressions.

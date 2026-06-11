@@ -42,6 +42,9 @@ pub enum Ty {
     Array(Box<Ty>, u64),
     Map(Box<Ty>, Box<Ty>),
     Set(Box<Ty>),
+    // Raw pointer for C FFI: `Ptr[T]`. Not tracked by MVL's ownership system.
+    // `Ptr[Unit]` / `Ptr[Void]` is the MVL spelling of C `void*`.
+    Ptr(Box<Ty>),
     // Refined type wrapper: underlying type + predicate AST node
     Refined(Box<Ty>, Box<RefExpr>),
     // Security label wrapper: label name + inner type (Requirement 11, #894)
@@ -179,6 +182,7 @@ impl Ty {
             Ty::Array(inner, size) => format!("Array<{}, {}>", inner.display(), size),
             Ty::Map(k, v) => format!("Map<{}, {}>", k.display(), v.display()),
             Ty::Set(t) => format!("Set<{}>", t.display()),
+            Ty::Ptr(inner) => format!("Ptr[{}]", inner.display()),
             Ty::Refined(inner, _pred) => inner.display(),
             Ty::Labeled(label, inner) => {
                 format!("{}<{}>", label, inner.display())
@@ -351,6 +355,10 @@ pub fn resolve(expr: &TypeExpr) -> Ty {
             "Map" => Ty::Unknown,
             "Set" if args.len() == 1 => Ty::Set(Box::new(resolve(&args[0]))),
             "Set" => Ty::Unknown,
+            "Ptr" if args.len() == 1 => Ty::Ptr(Box::new(resolve(&args[0]))),
+            "Ptr" => Ty::Unknown,
+            // `Void` is an alias for Unit, valid in FFI pointer context: `Ptr[Void]` = C `void*`.
+            "Void" => Ty::Unit,
             _ => Ty::Named(name.clone(), args.iter().map(resolve).collect()),
         },
         TypeExpr::Option { inner, .. } => Ty::Option(Box::new(resolve(inner))),

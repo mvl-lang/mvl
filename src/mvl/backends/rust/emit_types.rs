@@ -425,6 +425,10 @@ pub fn emit_ty(ty: &Ty) -> String {
         }
         Ty::Map(k, v) => format!("std::collections::HashMap<{}, {}>", emit_ty(k), emit_ty(v)),
         Ty::Set(t) => format!("std::collections::HashSet<{}>", emit_ty(t)),
+        Ty::Ptr(inner) => match inner.as_ref() {
+            Ty::Unit => "*const std::ffi::c_void".to_string(),
+            other => format!("*const {}", emit_ty(other)),
+        },
         Ty::Refined(inner, _) => emit_ty(inner),
         Ty::Labeled(label, inner) => format!("{}<{}>", label, emit_ty(inner)),
         Ty::Session(_) => "/* session type */()".to_string(),
@@ -456,6 +460,17 @@ pub fn emit_type_expr(ty: &TypeExpr) -> String {
             // Positional<T> is a CLI annotation — transparent at runtime, emit just T
             if name == "Positional" && args.len() == 1 {
                 return emit_type_expr(&args[0]);
+            }
+            // Ptr[T] → *const T; Ptr[Unit] / Ptr[Void] → *const std::ffi::c_void
+            if name == "Ptr" && args.len() == 1 {
+                let inner = &args[0];
+                let is_void =
+                    matches!(inner, TypeExpr::Base { name: n, .. } if n == "Unit" || n == "Void");
+                return if is_void {
+                    "*const std::ffi::c_void".to_string()
+                } else {
+                    format!("*const {}", emit_type_expr(inner))
+                };
             }
             let rust_name = map_base_type(name);
             if args.is_empty() {
@@ -759,6 +774,9 @@ impl RustEmitter {
             new_fns.len(),
             if new_fns.len() == 1 { "" } else { "s" }
         ));
+        for lib in &ed.link_libs {
+            self.line(&format!("#[link(name = \"{lib}\")]"));
+        }
         let rust_abi = match ed.abi.as_str() {
             "rust" => "Rust",
             "c" => "C",

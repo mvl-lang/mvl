@@ -377,6 +377,46 @@ fn full_program_auth_handler_transpiles() {
     assert_contains(&rust, "/// # Effects: Console");
 }
 
+// ── Extern "C" FFI (#561) ─────────────────────────────────────────────────
+
+/// extern "C" block transpiles to a Rust `extern "C"` block.
+#[test]
+fn extern_c_block_transpiles() {
+    let src = r#"extern "C" {
+    fn sqrt(x: Float) -> Float;
+    fn abs_val(x: Int) -> Int;
+}"#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "extern \"C\"");
+    assert_contains(&rust, "fn sqrt");
+    assert_contains(&rust, "fn abs_val");
+}
+
+/// extern "C" with link("libname") emits `#[link(name = "...")]`.
+#[test]
+fn extern_c_link_emits_link_attribute() {
+    let src = r#"extern "C" link("m") {
+    fn sin(x: Float) -> Float;
+}"#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "#[link(name = \"m\")]");
+    assert_contains(&rust, "extern \"C\"");
+    assert_contains(&rust, "fn sin");
+}
+
+/// Ptr[T] in extern "C" transpiles to `*const T`.
+#[test]
+fn extern_c_ptr_type_transpiles() {
+    let src = r#"extern "C" {
+    fn malloc(size: Int) -> Ptr[Void];
+    fn free(ptr: Ptr[Void]) -> Unit;
+    fn strlen(s: Ptr[Int]) -> Int;
+}"#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "*const std::ffi::c_void");
+    assert_contains(&rust, "*const i64");
+}
+
 // ── Extern "rust" blocks (#52, #91, #93) ──────────────────────────────────
 
 /// extern "rust" block parses and transpiles to a Rust extern "Rust" block.

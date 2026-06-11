@@ -1,0 +1,13 @@
+// Corpus: FFI — extern "C" with library linking (#561)
+// Verifies that link("libname") parses and is preserved for backends.
+// Requirement: 001 Req 11 (trust boundary)
+
+extern "C" link("m") {
+    fn sin(x: Float) -> Float;
+    fn cos(x: Float) -> Float;
+    fn pow(base: Float, exp: Float) -> Float;
+}
+
+fn unit_circle(angle: Float) -> Float {
+    sin(angle) * sin(angle) + cos(angle) * cos(angle)
+}

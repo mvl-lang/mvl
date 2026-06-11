@@ -555,6 +555,9 @@ impl TextEmitter {
                     // Emit LLVM `declare` for each extern "c" function (#811).
                     // These are resolved at link time from a loaded shared library
                     // (e.g. `lli --load=libpkg_foo.{dylib,so}`).
+                    for lib in &ed.link_libs {
+                        self.ensure_extern(&format!("; link: {lib}"));
+                    }
                     for ef in &ed.fns {
                         let ret_ty = Self::llvm_ty(&ef.return_type);
                         let param_tys: Vec<String> =

@@ -144,7 +144,7 @@ impl TextEmitter {
             Ty::Unit => "void".into(),
             Ty::String => "ptr".into(),
             Ty::Option(_) | Ty::Result(_, _) => RESULT_LLVM_TY.into(),
-            Ty::List(_) | Ty::Array(_, _) | Ty::Set(_) | Ty::Map(_, _) => "ptr".into(),
+            Ty::List(_) | Ty::Array(_, _) | Ty::Set(_) | Ty::Map(_, _) | Ty::Ptr(_) => "ptr".into(),
             Ty::Ref(_, inner) => Self::ty_to_llvm(inner),
             Ty::Labeled(_, inner) => Self::ty_to_llvm(inner),
             Ty::Refined(inner, _) => Self::ty_to_llvm(inner),

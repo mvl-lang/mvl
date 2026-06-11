@@ -706,6 +706,31 @@ fn type_expr_name(ty: &TypeExpr) -> String {
     }
 }
 
+/// Warn on `extern "rust"` blocks — deprecated in favour of `extern "C"` (#561).
+///
+/// Rule id: `deprecated-extern-rust`
+///
+/// `extern "rust"` only works with the Rust transpiler backend. Use `extern "C"` with
+/// `#[no_mangle] pub extern "C"` on the Rust side for backend-symmetric FFI.
+pub fn deprecated_extern_rust(prog: &Program, cfg: &LintConfig, out: &mut Vec<LintDiag>) {
+    if !cfg.deprecated_extern_rust {
+        return;
+    }
+    for decl in &prog.declarations {
+        if let Decl::Extern(ed) = decl {
+            if ed.abi == "rust" {
+                let s = ed.span;
+                out.push(LintDiag::warning(
+                    "deprecated-extern-rust",
+                    "extern \"rust\" is deprecated; use extern \"C\" with #[no_mangle] pub extern \"C\" on the Rust implementation",
+                    s.line,
+                    s.col,
+                ));
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

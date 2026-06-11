@@ -433,6 +433,11 @@ pub fn ty_to_type_expr(ty: &Ty) -> TypeExpr {
             args: vec![ty_to_type_expr(inner)],
             span: sp,
         },
+        Ty::Ptr(inner) => TypeExpr::Base {
+            name: "Ptr".into(),
+            args: vec![ty_to_type_expr(inner)],
+            span: sp,
+        },
         Ty::Refined(inner, _) => ty_to_type_expr(inner),
         Ty::Labeled(label, inner) => TypeExpr::Labeled {
             label: label.clone(),
