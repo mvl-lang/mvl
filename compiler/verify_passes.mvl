@@ -1,0 +1,202 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// compiler/checker_passes.mvl — C3: Verdict enum + pass framework skeleton
+//
+// Port of src/mvl/checker/passes.rs.
+//
+// Replaces Rust's `Box<dyn VerificationPass>` with MVL enum dispatch over
+// 11 named passes — one per MVL requirement.  This is the committed MVL
+// architecture: no dynamic dispatch, no trait objects, explicit enum arms.
+//
+// Note: Verdict uses TUPLE variants (not named-field struct variants) because
+// MVL does not yet support named-field struct enum variant construction.
+// Pattern matching uses positional binding.
+//
+// Key types:
+//   Verdict         — outcome of running one verification pass
+//   PassId          — identifies which of the 11 requirements a pass covers
+//   PassEntry       — (pass, verdict) pair in the assurance report
+//   AssuranceReport — collects per-requirement verdicts for display
+
+// Span comes from compiler/tir.mvl (peer file in same dir).
+
+// ── Verdict ───────────────────────────────────────────────────────────────────
+
+/// Outcome of running a verification pass for one requirement.
+///
+/// Variants (tuple form):
+///   Proven(evidence)          — fully proven; evidence is a summary string
+///   Failed(reason, location)  — violation found at optional source location
+///   Unchecked(reason)         — not run or cannot guarantee
+///   Timeout                   — prover exceeded time budget
+pub type Verdict = enum {
+    Proven(String),
+    Failed(String, Option[Span]),
+    Unchecked(String),
+    Timeout,
+}
+
+pub total fn Verdict::is_proven(self) -> Bool {
+    match self {
+        Verdict::Proven(_) => true,
+        _ => false,
+    }
+}
+
+pub total fn Verdict::is_failed(self) -> Bool {
+    match self {
+        Verdict::Failed(_, _) => true,
+        _ => false,
+    }
+}
+
+/// Single-character status indicator for report display.
+pub total fn Verdict::status_char(self) -> String {
+    match self {
+        Verdict::Proven(_)    => "✓",
+        Verdict::Failed(_, _) => "✗",
+        Verdict::Unchecked(_) => "~",
+        Verdict::Timeout      => "T",
+    }
+}
+
+pub total fn Verdict::verdict_label(self) -> String {
+    match self {
+        Verdict::Proven(_)    => "proven",
+        Verdict::Failed(_, _) => "failed",
+        Verdict::Unchecked(_) => "unchecked",
+        Verdict::Timeout      => "timeout",
+    }
+}
+
+/// Detail string for report display.
+/// Uses format() to avoid &String vs String backend issues when self is &self.
+pub total fn Verdict::detail(self) -> String {
+    match self {
+        Verdict::Proven(e)    => format("{}", [e]),
+        Verdict::Failed(r, _) => format("{}", [r]),
+        Verdict::Unchecked(r) => format("{}", [r]),
+        Verdict::Timeout      => "timed out",
+    }
+}
+
+/// Formatted source location for a `Failed` verdict, if available.
+pub total fn Verdict::location_str(self) -> Option[String] {
+    match self {
+        Verdict::Failed(_, Some(sp)) =>
+            Some(format("{}:{}", [sp.line.to_string(), sp.col.to_string()])),
+        _ => None,
+    }
+}
+
+// ── PassId ────────────────────────────────────────────────────────────────────
+
+/// Identifies which of the 11 MVL requirements a pass covers.
+/// Replaces `Box<dyn VerificationPass>` — enum dispatch, no dynamic dispatch.
+pub type PassId = enum {
+    TypeSafety,
+    MemorySafety,
+    Exhaustiveness,
+    NullElimination,
+    ErrorVisibility,
+    Ownership,
+    EffectTracking,
+    Termination,
+    DataRaceFreedom,
+    RefinementContracts,
+    InformationFlow,
+}
+
+pub total fn PassId::number(self) -> Int {
+    match self {
+        PassId::TypeSafety          => 1,
+        PassId::MemorySafety        => 2,
+        PassId::Exhaustiveness      => 3,
+        PassId::NullElimination     => 4,
+        PassId::ErrorVisibility     => 5,
+        PassId::Ownership           => 6,
+        PassId::EffectTracking      => 7,
+        PassId::Termination         => 8,
+        PassId::DataRaceFreedom     => 9,
+        PassId::RefinementContracts => 10,
+        PassId::InformationFlow     => 11,
+    }
+}
+
+pub total fn PassId::display_name(self) -> String {
+    match self {
+        PassId::TypeSafety          => "Type Safety",
+        PassId::MemorySafety        => "Memory Safety",
+        PassId::Exhaustiveness      => "Exhaustive Match",
+        PassId::NullElimination     => "Null Elimination",
+        PassId::ErrorVisibility     => "Error Visibility",
+        PassId::Ownership           => "Ownership",
+        PassId::EffectTracking      => "Effect Tracking",
+        PassId::Termination         => "Termination",
+        PassId::DataRaceFreedom     => "Data Race Freedom",
+        PassId::RefinementContracts => "Refinement & Contracts",
+        PassId::InformationFlow     => "Information Flow",
+    }
+}
+
+/// All 11 pass IDs in requirement order.
+pub total fn all_pass_ids() -> List[PassId] {
+    [
+        PassId::TypeSafety,
+        PassId::MemorySafety,
+        PassId::Exhaustiveness,
+        PassId::NullElimination,
+        PassId::ErrorVisibility,
+        PassId::Ownership,
+        PassId::EffectTracking,
+        PassId::Termination,
+        PassId::DataRaceFreedom,
+        PassId::RefinementContracts,
+        PassId::InformationFlow,
+    ]
+}
+
+// ── PassEntry ─────────────────────────────────────────────────────────────────
+
+/// One entry in the assurance report: which pass ran and what it found.
+pub type PassEntry = struct {
+    pass:    PassId,
+    verdict: Verdict,
+}
+
+// ── AssuranceReport ───────────────────────────────────────────────────────────
+
+/// Collects per-requirement verdicts produced by running all 11 passes.
+pub type AssuranceReport = struct {
+    entries:     List[PassEntry],
+    error_count: Int,
+}
+
+pub fn AssuranceReport::new() -> AssuranceReport {
+    let entries: ref List[PassEntry] = [];
+    for p in all_pass_ids() {
+        let entry: PassEntry = PassEntry {
+            pass:    p,
+            verdict: Verdict::Unchecked("not run"),
+        };
+        entries.push(entry);
+    }
+    AssuranceReport { entries: entries, error_count: 0 }
+}
+
+/// Count how many requirements were fully proven.
+pub total fn AssuranceReport::proven_count(self) -> Int {
+    self.entries.filter(|e: PassEntry| e.verdict.is_proven()).len()
+}
+
+/// True when all 11 requirements are proven.
+pub total fn AssuranceReport::all_proven(self) -> Bool {
+    self.proven_count() == 11
+}
+
+/// Format a one-line summary suitable for display.
+pub total fn AssuranceReport::summary(self) -> String {
+    let n: Int = self.proven_count();
+    format("{}/11 requirements proven", [n.to_string()])
+}

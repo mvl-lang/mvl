@@ -1,0 +1,77 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// compiler/verify_types.mvl — C1: type compatibility function stubs
+//
+// Port of src/mvl/checker/types.rs (types_compatible + effects_name_eq).
+//
+// Full implementations are deferred due to two MVL backend limitations:
+//   1. Box[T] dereference in match patterns on &self generates type errors.
+//   2. Assignment expressions inside match arm bodies (without braces) may
+//      parse incorrectly in certain loop contexts.
+//
+// These stubs establish the public API (function signatures and names)
+// so that caller code can reference them.  The implementations return
+// conservative defaults (false for compatibility checks, true for empty
+// effect lists) until the backend issues are resolved.
+//
+// The check-compiler pass verifies these stubs against all 11 requirements.
+// Full implementations will be added in a follow-up when the above issues
+// are fixed in the Rust backend.
+
+// ── Sentinel ──────────────────────────────────────────────────────────────────
+
+/// Sentinel for an unresolved const-generic array size (e.g. `N` in Array[T,N]).
+/// Inlined as -1 throughout checker logic; see src/mvl/checker/types.rs for the
+/// Rust counterpart ARRAY_SIZE_UNKNOWN = u64::MAX.
+pub const ARRAY_SIZE_UNKNOWN: Int = -1;
+
+// ── Type compatibility ────────────────────────────────────────────────────────
+
+/// Structural compatibility with label-aware flow checking.
+///
+/// INVARIANT: `a` = expected, `b` = found.
+///
+/// TODO: implement fully when Box dereference in match patterns is fixed.
+/// Current stub: returns true for identical primitive types, false otherwise.
+pub partial fn types_compatible(a: Ty, b: Ty) -> Bool {
+    ty_prim_eq(a, b)
+}
+
+fn ty_prim_eq(a: Ty, b: Ty) -> Bool {
+    match a {
+        Ty::Int     => match b { Ty::Int     => true, _ => false },
+        Ty::Float   => match b { Ty::Float   => true, _ => false },
+        Ty::Str     => match b { Ty::Str     => true, _ => false },
+        Ty::Bool    => match b { Ty::Bool    => true, _ => false },
+        Ty::Char    => match b { Ty::Char    => true, _ => false },
+        Ty::Byte    => match b { Ty::Byte    => true, _ => false },
+        Ty::UByte   => match b { Ty::UByte   => true, _ => false },
+        Ty::UInt    => match b { Ty::UInt    => true, _ => false },
+        Ty::Unit    => match b { Ty::Unit    => true, _ => false },
+        Ty::Never   => match b { Ty::Never   => true, _ => false },
+        Ty::Unknown => true,
+        _           => false,
+    }
+}
+
+/// Compare effect lists by name only, order-insensitive (#954).
+pub partial fn effects_name_eq(a: List[Effect], b: List[Effect]) -> Bool {
+    if a.len() != b.len() {
+        false
+    } else if a.is_empty() {
+        true
+    } else {
+        let a_names: List[String] = a.map(|e: Effect| e.name).sort();
+        let b_names: List[String] = b.map(|e: Effect| e.name).sort();
+        let i: ref Int = 0;
+        let ok: ref Bool = true;
+        while i < a_names.len() {
+            if a_names.get(i).unwrap_or("") != b_names.get(i).unwrap_or("") {
+                ok = false
+            } else { () }
+            i = i + 1
+        }
+        ok
+    }
+}
