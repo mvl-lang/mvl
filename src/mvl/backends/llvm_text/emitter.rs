@@ -205,6 +205,9 @@ struct TextEmitter {
     /// non-empty field list — payload enums lower to `{ i8, ptr }` instead of
     /// a bare `i64` discriminant.
     enum_variant_fields: HashMap<String, Vec<Vec<TypeExpr>>>,
+    /// "EnumType::VariantName" → ordered field names for struct variants (#1357).
+    /// Only populated for `VariantFields::Struct` variants.
+    enum_struct_variant_field_names: HashMap<String, Vec<String>>,
 
     // ── Per-function state (reset on every new function) ──────────────────
     fn_buf: Vec<String>,
@@ -331,6 +334,7 @@ impl TextEmitter {
             struct_fields: HashMap::new(),
             enum_variants: HashMap::new(),
             enum_variant_fields: HashMap::new(),
+            enum_struct_variant_field_names: HashMap::new(),
             fn_buf: Vec::new(),
             current_bb: String::new(),
             terminated: false,
@@ -475,9 +479,22 @@ impl TextEmitter {
                         .iter()
                         .map(|v| match &v.fields {
                             VariantFields::Tuple(tys) => tys.clone(),
-                            _ => Vec::new(),
+                            VariantFields::Struct(fields) => {
+                                fields.iter().map(|f| f.ty.clone()).collect()
+                            }
+                            VariantFields::Unit => Vec::new(),
                         })
                         .collect();
+                    // Register field names for struct variants so emit_construct
+                    // can reorder named fields to declaration order (#1357).
+                    for v in variants {
+                        if let VariantFields::Struct(fields) = &v.fields {
+                            let qname = format!("{}::{}", td.name, v.name);
+                            let names: Vec<String> =
+                                fields.iter().map(|f| f.name.clone()).collect();
+                            self.enum_struct_variant_field_names.insert(qname, names);
+                        }
+                    }
                     self.enum_variants.insert(td.name.clone(), variant_names);
                     self.enum_variant_fields
                         .insert(td.name.clone(), variant_fields);

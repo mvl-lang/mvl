@@ -1,0 +1,29 @@
+// Corpus: named-field enum variant construction (#1357)
+
+// Non-generic enum with named-field variants
+type Shape = enum {
+    Circle { radius: Float },
+    Rect { width: Float, height: Float },
+}
+
+// Generic enum with named-field variants
+type Outcome[T, E] = enum {
+    Success { value: T },
+    Failure { error: E },
+}
+
+fn area(s: Shape) -> Float {
+    match s {
+        Shape::Circle { radius: r } => r,
+        Shape::Rect { width: w, height: h } => w,
+    }
+}
+
+fn main() -> Unit {
+    // Non-generic named-field variant construction
+    let c: Shape = Shape::Circle { radius: 1.5 };
+    let r: Shape = Shape::Rect { width: 3.0, height: 4.0 };
+
+    // Generic named-field variant construction
+    let ok: Outcome[Int, String] = Outcome::Success { value: 42 };
+}
