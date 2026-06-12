@@ -561,10 +561,16 @@ impl Parser {
                     let span = self.span_from(start);
                     Ok(Pattern::TupleStruct { name, fields, span })
                 } else if matches!(self.peek_kind(), TokenKind::LBrace) {
-                    // Struct: Name { field: pat, ... }
+                    // Struct: Name { field: pat, .., ... }
                     self.advance();
                     let mut fields = Vec::new();
+                    let mut rest = false;
                     while !matches!(self.peek_kind(), TokenKind::RBrace | TokenKind::Eof) {
+                        if self.eat(&TokenKind::DotDot) {
+                            rest = true;
+                            self.eat(&TokenKind::Comma);
+                            break;
+                        }
                         let ir = self.expect_ident();
                         let (fname, _) = self.require(ir)?;
                         let colon = self.expect(&TokenKind::Colon);
@@ -578,7 +584,12 @@ impl Parser {
                     let rb = self.expect(&TokenKind::RBrace);
                     self.require(rb)?;
                     let span = self.span_from(start);
-                    Ok(Pattern::Struct { name, fields, span })
+                    Ok(Pattern::Struct {
+                        name,
+                        fields,
+                        rest,
+                        span,
+                    })
                 } else {
                     Ok(Pattern::Ident(name, start))
                 }

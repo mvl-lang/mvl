@@ -1013,6 +1013,7 @@ pub enum Pattern {
     Struct {
         name: String,
         fields: Vec<(String, Pattern)>,
+        rest: bool,
         span: Span,
     },
     /// `Some(p)`

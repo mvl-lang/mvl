@@ -153,6 +153,7 @@ pub enum TokenKind {
     Bang,       // !
     Question,   // ?
     Dot,        // .
+    DotDot,     // ..
     ColonColon, // ::
     Arrow,      // ->
     FatArrow,   // =>
@@ -251,6 +252,7 @@ impl fmt::Display for TokenKind {
             TokenKind::Bang => write!(f, "!"),
             TokenKind::Question => write!(f, "?"),
             TokenKind::Dot => write!(f, "."),
+            TokenKind::DotDot => write!(f, ".."),
             TokenKind::ColonColon => write!(f, "::"),
             TokenKind::Arrow => write!(f, "->"),
             TokenKind::FatArrow => write!(f, "=>"),
@@ -455,7 +457,14 @@ impl<'src> Lexer<'src> {
                 '[' => TokenKind::LBracket,
                 ']' => TokenKind::RBracket,
                 '?' => TokenKind::Question,
-                '.' => TokenKind::Dot,
+                '.' => {
+                    if self.peek_char() == Some('.') {
+                        self.advance();
+                        TokenKind::DotDot
+                    } else {
+                        TokenKind::Dot
+                    }
+                }
 
                 // ── One-or-two character tokens ───────────────────────────
                 '|' => {

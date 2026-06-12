@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.202.0] - 2026-06-12
+
+### Added
+
+- **Struct pattern wildcards** (#1356) — MVL now supports `Foo { x, .. }` syntax in match patterns to ignore remaining fields. Eliminates brittle exhaustive field lists when matching large structs like `TirExpr` and `FnDecl` during self-hosting work. Adds `DotDot` token to lexer, `rest: bool` to `Pattern::Struct` AST node, and emits `..` in the Rust backend. EBNF grammar updated.
+
 ## [0.201.0] - 2026-06-12
 
 ### Added

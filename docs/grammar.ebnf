@@ -197,7 +197,7 @@ block_expr     = block ;
 pattern        = base_pattern { "|" base_pattern } ;
 base_pattern   = "_" | IDENT | literal
                | IDENT "(" [ pattern_list ] ")"
-               | IDENT "{" { IDENT ":" base_pattern "," } "}"
+               | IDENT "{" { IDENT ":" base_pattern "," } [ ".." ] "}"
                | "(" pattern "," pattern_list ")"
                | "Some" "(" pattern ")" | "None"
                | "Ok" "(" pattern ")" | "Err" "(" pattern ")" ;

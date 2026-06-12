@@ -315,7 +315,12 @@ fn jpattern(p: &Pattern) -> String {
             ),
             ("span", jspan(span)),
         ]),
-        Pattern::Struct { name, fields, span } => {
+        Pattern::Struct {
+            name,
+            fields,
+            rest,
+            span,
+        } => {
             let field_arr: Vec<String> = fields
                 .iter()
                 .map(|(k, v)| obj(&[("name", q(k)), ("pattern", jpattern(v))]))
@@ -324,6 +329,14 @@ fn jpattern(p: &Pattern) -> String {
                 ("tag", q("Struct")),
                 ("name", q(name)),
                 ("fields", arr(&field_arr)),
+                (
+                    "rest",
+                    if *rest {
+                        "true".to_string()
+                    } else {
+                        "false".to_string()
+                    },
+                ),
                 ("span", jspan(span)),
             ])
         }

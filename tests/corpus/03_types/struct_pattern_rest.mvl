@@ -1,0 +1,34 @@
+// Corpus: struct pattern rest (..) — ignore remaining fields (#1356)
+
+type Point = struct {
+    x: Int,
+    y: Int,
+    z: Int,
+}
+
+type Shape = enum {
+    Circle { radius: Int, color: String },
+    Rect { width: Int, height: Int, color: String },
+}
+
+/// Extract only x from a 3-D point.
+pub fn get_x(p: Point) -> Int {
+    match p {
+        Point { x: x, .. } => x,
+    }
+}
+
+/// Extract x and y, ignore z.
+pub fn get_xy(p: Point) -> Int {
+    match p {
+        Point { x: x, y: y, .. } => x + y,
+    }
+}
+
+/// Match struct enum variants, ignoring color.
+pub fn area(s: Shape) -> Int {
+    match s {
+        Shape::Circle { radius: r, .. } => r * r,
+        Shape::Rect { width: w, height: h, .. } => w * h,
+    }
+}
