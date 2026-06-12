@@ -458,6 +458,7 @@ fn subterm_vars(pattern: &Pattern) -> Vec<String> {
         Pattern::Some { inner, .. } | Pattern::Ok { inner, .. } | Pattern::Err { inner, .. } => {
             leaf_idents(inner).collect()
         }
+        Pattern::Or { patterns, .. } => patterns.iter().flat_map(subterm_vars).collect(),
     }
 }
 

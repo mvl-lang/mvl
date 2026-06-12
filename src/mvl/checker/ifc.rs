@@ -126,6 +126,11 @@ pub(crate) fn bind_pattern_labels(pat: &Pattern, label: &str, env: &mut HashMap<
         Pattern::Some { inner, .. } | Pattern::Ok { inner, .. } | Pattern::Err { inner, .. } => {
             bind_pattern_labels(inner, label, env);
         }
+        Pattern::Or { patterns, .. } => {
+            for p in patterns {
+                bind_pattern_labels(p, label, env);
+            }
+        }
         Pattern::Wildcard(_) | Pattern::Literal(..) | Pattern::None(_) => {}
     }
 }

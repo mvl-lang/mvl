@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.200.0] - 2026-06-12
+
+### Added
+
+- **OR patterns in match arms** (#1355) — MVL now supports `A | B => body` syntax in match expressions. All alternatives bind identically-named variables (standard OR-pattern semantics). Self-hosting checker code can now match multiple error/AST variants in a single arm without repetition.
+
 ## [0.199.0] - 2026-06-12
 
 ### Added

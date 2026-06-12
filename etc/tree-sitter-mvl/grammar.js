@@ -688,7 +688,18 @@ module.exports = grammar({
 
     // === Patterns ===
 
+    // An OR pattern: one or more _base_patterns separated by `|`.
+    // _base_pattern is private (inlined) so single patterns stay unwrapped.
     pattern: ($) =>
+      choice(
+        $.or_pattern,
+        $._base_pattern,
+      ),
+
+    or_pattern: ($) =>
+      seq($._base_pattern, repeat1(seq("|", $._base_pattern))),
+
+    _base_pattern: ($) =>
       choice(
         "_",
         $.literal,
@@ -709,7 +720,7 @@ module.exports = grammar({
       seq(
         $.identifier,
         "{",
-        repeat(seq($.identifier, ":", $.pattern, ",")),
+        repeat(seq($.identifier, ":", $._base_pattern, ",")),
         "}"
       ),
 

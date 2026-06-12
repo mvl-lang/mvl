@@ -194,9 +194,10 @@ match_expr     = "match" expr "{" { match_arm } "}" ;
 block_expr     = block ;
 
 (* === Patterns === *)
-pattern        = "_" | IDENT | literal
+pattern        = base_pattern { "|" base_pattern } ;
+base_pattern   = "_" | IDENT | literal
                | IDENT "(" [ pattern_list ] ")"
-               | IDENT "{" { IDENT ":" pattern "," } "}"
+               | IDENT "{" { IDENT ":" base_pattern "," } "}"
                | "(" pattern "," pattern_list ")"
                | "Some" "(" pattern ")" | "None"
                | "Ok" "(" pattern ")" | "Err" "(" pattern ")" ;

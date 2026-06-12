@@ -57,24 +57,14 @@ impl TextEmitter {
         let mut wildcard_arm: Option<usize> = None;
 
         for (idx, arm) in arms.iter().enumerate() {
-            match &arm.pattern {
-                Pattern::TupleStruct { name, .. } => {
-                    if let Some(disc) = self.pattern_discriminant(name) {
-                        switch_arms.push((disc, idx));
-                        continue;
-                    }
-                }
-                Pattern::Ident(name, _) if name.contains("::") => {
-                    if let Some(disc) = self.pattern_discriminant(name) {
-                        switch_arms.push((disc, idx));
-                        continue;
-                    }
-                }
-                Pattern::Wildcard(_) | Pattern::Ident(_, _) => {
-                    wildcard_arm = Some(idx);
-                    continue;
-                }
-                _ => {}
+            if collect_or_discriminants(
+                &arm.pattern,
+                idx,
+                self,
+                &mut switch_arms,
+                &mut wildcard_arm,
+            ) {
+                continue;
             }
             wildcard_arm = Some(idx);
         }
@@ -1232,5 +1222,47 @@ impl TextEmitter {
         ));
         self.reg_types.insert(result.clone(), RESULT_LLVM_TY.into());
         Ok(Some(result))
+    }
+}
+
+/// Classify an arm pattern for LLVM switch generation.
+/// Returns `true` if the pattern was fully classified (as a discriminant or wildcard).
+/// Handles `Pattern::Or` by recursively classifying each alternative.
+fn collect_or_discriminants(
+    pattern: &Pattern,
+    idx: usize,
+    emitter: &TextEmitter,
+    switch_arms: &mut Vec<(i64, usize)>,
+    wildcard_arm: &mut Option<usize>,
+) -> bool {
+    match pattern {
+        Pattern::Or { patterns, .. } => {
+            let mut any = false;
+            for p in patterns {
+                any |= collect_or_discriminants(p, idx, emitter, switch_arms, wildcard_arm);
+            }
+            any
+        }
+        Pattern::TupleStruct { name, .. } => {
+            if let Some(disc) = emitter.pattern_discriminant(name) {
+                switch_arms.push((disc, idx));
+                true
+            } else {
+                false
+            }
+        }
+        Pattern::Ident(name, _) if name.contains("::") => {
+            if let Some(disc) = emitter.pattern_discriminant(name) {
+                switch_arms.push((disc, idx));
+                true
+            } else {
+                false
+            }
+        }
+        Pattern::Wildcard(_) | Pattern::Ident(_, _) => {
+            *wildcard_arm = Some(idx);
+            true
+        }
+        _ => false,
     }
 }

@@ -416,7 +416,25 @@ impl Parser {
     // ── Patterns ───────────────────────────────────────────────────────────
 
     /// Parse a pattern (used in `let`, `match`, and `for` contexts).
+    /// In match arm context, collects `|`-separated alternatives into `Pattern::Or`.
     pub fn parse_pattern(&mut self) -> Result<Pattern, ()> {
+        let start = self.peek_span();
+        let first = self.parse_base_pattern()?;
+        if !matches!(self.peek_kind(), TokenKind::Pipe) {
+            return Ok(first);
+        }
+        let mut alternatives = vec![first];
+        while self.eat(&TokenKind::Pipe) {
+            alternatives.push(self.parse_base_pattern()?);
+        }
+        let span = self.span_from(start);
+        Ok(Pattern::Or {
+            patterns: alternatives,
+            span,
+        })
+    }
+
+    fn parse_base_pattern(&mut self) -> Result<Pattern, ()> {
         let start = self.peek_span();
         match self.peek_kind().clone() {
             TokenKind::Underscore => {
