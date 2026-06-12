@@ -120,6 +120,7 @@ fn jty(ty: &Ty) -> String {
             ("label", q(label)),
             ("inner", jty(inner)),
         ]),
+        Ty::Ptr(inner) => obj(&[("tag", q("Ptr")), ("inner", jty(inner))]),
         Ty::Session(_) => obj(&[("tag", q("Session"))]),
     }
 }

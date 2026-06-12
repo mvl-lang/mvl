@@ -512,6 +512,8 @@ pub type Ty = enum {
     // ── Refined and labeled ───────────────────────────────────────────────
     Refined(Box[Ty], Box[RefExpr]),
     Labeled(String, Box[Ty]),
+    // ── C FFI pointer (Ptr[T]) ────────────────────────────────────────────
+    Ptr(Box[Ty]),
     // ── Session type ──────────────────────────────────────────────────────
     Session(Box[SessionTy]),
     // ── Error placeholder ─────────────────────────────────────────────────
@@ -736,9 +738,10 @@ pub type TirExternFn = struct {
 
 /// An `extern "abi" { … }` block with resolved function signatures.
 pub type TirExternDecl = struct {
-    abi:  String,
-    fns:  List[TirExternFn],
-    span: Span,
+    abi:       String,
+    link_libs: List[String],
+    fns:       List[TirExternFn],
+    span:      Span,
 }
 
 /// A method inside an actor declaration, with a fully-typed body.
