@@ -1,0 +1,413 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// compiler/verify_types.mvl — C1: Ty methods + type compatibility
+//
+// Port of src/mvl/checker/types.rs.
+//
+// Provides:
+//   - Ty extension methods (display, base, unlabeled, is_*, propagate_inner)
+//   - SessionTy::dual, SessionTy::display
+//   - types_compatible, effects_name_eq, session_types_compatible
+//   - ARRAY_SIZE_UNKNOWN sentinel
+//
+// Language features used (all now available post #1355–#1359):
+//   - Cross-file extension methods on Ty (#1358, #1359)
+//   - OR patterns in match (#1355)
+//   - Struct pattern wildcards `..` (#1356)
+//   - Box[T] dereference via *box — works in value-receiver extension methods (#1359)
+//
+// Ty naming from tir.mvl:
+//   Ty::Str   = String primitive (avoids clash with builtin String type)
+//   Ty::List  = List[T] compound (variant name, not the builtin)
+//   Ty::TyFn  = function type  (named-field form)
+//   Ty::Array = fixed-size array (named-field form)
+
+// ── Sentinel ──────────────────────────────────────────────────────────────────
+
+/// Sentinel for an unresolved const-generic array size (e.g. `N` in Array[T,N]).
+/// Value -1: sizes are non-negative, so -1 is size-compatible with any concrete size.
+pub const ARRAY_SIZE_UNKNOWN: Int = -1;
+
+// ── SessionTy methods ─────────────────────────────────────────────────────────
+
+/// Compute the dual of this session type: `!` ↔ `?`, `+` ↔ `&`, `end` ↔ `end`.
+/// Compute the dual of this session type: ! <-> ?, + <-> &, end <-> end.
+/// InternalChoice/ExternalChoice branch mapping requires tuple construction
+/// which is not yet supported as a value expression; those arms swap as-is.
+pub fn SessionTy::dual(self) -> SessionTy {
+    match self {
+        SessionTy::Send(t, cont) =>
+            SessionTy::Receive(t, Box::new((*cont).dual())),
+        SessionTy::Receive(t, cont) =>
+            SessionTy::Send(t, Box::new((*cont).dual())),
+        SessionTy::InternalChoice(branches) =>
+            SessionTy::ExternalChoice(branches),
+        SessionTy::ExternalChoice(branches) =>
+            SessionTy::InternalChoice(branches),
+        SessionTy::End => SessionTy::End,
+    }
+}
+
+pub fn SessionTy::display(self) -> String {
+    match self {
+        SessionTy::Send(t, cont) =>
+            format("!{}. {}", [(*t).display(), (*cont).display()]),
+        SessionTy::Receive(t, cont) =>
+            format("?{}. {}", [(*t).display(), (*cont).display()]),
+        SessionTy::InternalChoice(branches) => {
+            let parts: ref List[String] = [];
+            for (lbl, sty) in branches {
+                parts.push(format("{}: {}", [lbl, sty.display()]))
+            }
+            format("+{{ {} }}", [parts.join(", ")])
+        },
+        SessionTy::ExternalChoice(branches) => {
+            let parts: ref List[String] = [];
+            for (lbl, sty) in branches {
+                parts.push(format("{}: {}", [lbl, sty.display()]))
+            }
+            format("&{{ {} }}", [parts.join(", ")])
+        },
+        SessionTy::End => "end",
+    }
+}
+
+// ── Ty::display ───────────────────────────────────────────────────────────────
+
+pub fn Ty::display(self) -> String {
+    match self {
+        Ty::Int     => "Int",
+        Ty::Float   => "Float",
+        Ty::Str     => "String",
+        Ty::Bool    => "Bool",
+        Ty::Char    => "Char",
+        Ty::Byte    => "Byte",
+        Ty::UByte   => "UByte",
+        Ty::UInt    => "UInt",
+        Ty::Unit    => "Unit",
+        Ty::Never   => "Never",
+        Ty::Unknown => "<unknown>",
+        Ty::Named(name, args) =>
+            if args.is_empty() {
+                name
+            } else {
+                let s: String = args.map(|t: Ty| t.display()).join(", ");
+                format("{}[{}]", [name, s])
+            },
+        Ty::Option(inner) =>
+            format("Option[{}]", [(*inner).display()]),
+        Ty::Result(ok, err) =>
+            format("Result[{}, {}]", [(*ok).display(), (*err).display()]),
+        Ty::Ref(is_mut, inner) =>
+            if is_mut { format("ref {}", [(*inner).display()]) }
+            else      { format("val {}", [(*inner).display()]) },
+        Ty::TyFn { params: ps, ret: r, effects: effs, .. } => {
+            let params_str: String = ps.map(|t: Ty| t.display()).join(", ");
+            let effects_str: String =
+                if effs.is_empty() { "" }
+                else {
+                    let e: String = effs.map(|ef: Effect| ef.name).join(", ");
+                    format(" ! {}", [e])
+                };
+            format("fn({}) -> {}{}", [params_str, (*r).display(), effects_str])
+        },
+        Ty::Tuple(elems) => {
+            let s: String = elems.map(|t: Ty| t.display()).join(", ");
+            format("({})", [s])
+        },
+        Ty::List(inner) =>
+            format("List[{}]", [(*inner).display()]),
+        Ty::Array { elem: e, size: sz } =>
+            if sz == -1 { format("Array[{}, _]", [(*e).display()]) }
+            else        { format("Array[{}, {}]", [(*e).display(), sz.to_string()]) },
+        Ty::Map(k, v) =>
+            format("Map[{}, {}]", [(*k).display(), (*v).display()]),
+        Ty::Set(t) =>
+            format("Set[{}]", [(*t).display()]),
+        Ty::Refined(inner, _pred) =>
+            (*inner).display(),
+        Ty::Labeled(lbl, inner) =>
+            format("{}[{}]", [lbl, (*inner).display()]),
+        Ty::Ptr(inner) =>
+            format("Ptr[{}]", [(*inner).display()]),
+        Ty::Session(s) =>
+            (*s).display(),
+    }
+}
+
+// ── Ty structural accessors ───────────────────────────────────────────────────
+
+/// Strip `Refined` wrappers; labels are preserved.
+pub fn Ty::base(self) -> Ty {
+    match self {
+        Ty::Refined(inner, _) => (*inner).base(),
+        other => other,
+    }
+}
+
+/// Strip both `Refined` and `Labeled` wrappers.
+pub fn Ty::unlabeled(self) -> Ty {
+    match self {
+        Ty::Refined(inner, _) => (*inner).unlabeled(),
+        Ty::Labeled(_, inner)  => (*inner).unlabeled(),
+        other => other,
+    }
+}
+
+// ── Ty predicates ─────────────────────────────────────────────────────────────
+
+pub fn Ty::is_numeric(self) -> Bool {
+    match self.unlabeled() {
+        Ty::Int | Ty::Float | Ty::Byte | Ty::UByte | Ty::UInt => true,
+        _ => false,
+    }
+}
+
+pub fn Ty::is_unsigned_int(self) -> Bool {
+    match self.unlabeled() {
+        Ty::UByte | Ty::UInt => true,
+        _ => false,
+    }
+}
+
+pub fn Ty::is_integer(self) -> Bool {
+    match self.unlabeled() {
+        Ty::Int | Ty::Byte | Ty::UByte | Ty::UInt => true,
+        _ => false,
+    }
+}
+
+pub fn Ty::is_bool(self) -> Bool {
+    match self.unlabeled() { Ty::Bool => true, _ => false }
+}
+
+pub fn Ty::is_option(self) -> Bool {
+    match self.unlabeled() { Ty::Option(_) => true, _ => false }
+}
+
+pub fn Ty::is_result(self) -> Bool {
+    match self.unlabeled() { Ty::Result(_, _) => true, _ => false }
+}
+
+pub fn Ty::is_propagatable(self) -> Bool {
+    self.is_option() || self.is_result()
+}
+
+pub fn Ty::is_linear(self) -> Bool {
+    match self.unlabeled() {
+        Ty::Str | Ty::List(_) | Ty::Map(_, _) | Ty::Set(_) => true,
+        _ => false,
+    }
+}
+
+pub fn Ty::is_unknown(self) -> Bool {
+    match self { Ty::Unknown => true, _ => false }
+}
+
+pub fn Ty::is_never(self) -> Bool {
+    match self { Ty::Never => true, _ => false }
+}
+
+/// Return the success type after unwrapping `Result`/`Option` for `?`.
+pub fn Ty::propagate_inner(self) -> Ty {
+    match self.unlabeled() {
+        Ty::Result(ok, _) => *ok,
+        Ty::Option(inner) => *inner,
+        _ => Ty::Unknown,
+    }
+}
+
+// ── Type compatibility ────────────────────────────────────────────────────────
+
+/// Structural compatibility with label-aware flow checking.
+///
+/// `Unknown` unifies with anything (error recovery).
+/// `Never` (bottom type) satisfies any expected type.
+///
+/// INVARIANT: `a` = expected, `b` = found.  Reversing args inverts IFC.
+pub partial fn types_compatible(a: Ty, b: Ty) -> Bool {
+    let a2: Ty = a.base();
+    let b2: Ty = b.base();
+    if a2.is_unknown() || b2.is_unknown() {
+        true
+    } else if b2.is_never() {
+        true
+    } else {
+        match a2 {
+            // Both labeled: exact label match required — no lattice (#894).
+            Ty::Labeled(la, ia) => match b2 {
+                Ty::Labeled(lb, ib) => la == lb && types_compatible(*ia, *ib),
+                _ => false,
+            },
+            Ty::Option(ai) => match b2 {
+                Ty::Option(bi) => types_compatible(*ai, *bi),
+                _ => false,
+            },
+            Ty::Result(ao, ae) => match b2 {
+                Ty::Result(bo, be) =>
+                    types_compatible(*ao, *bo) && types_compatible(*ae, *be),
+                _ => false,
+            },
+            Ty::List(ai) => match b2 {
+                Ty::List(bi) => types_compatible(*ai, *bi),
+                _ => false,
+            },
+            Ty::Array { elem: ae, size: an } => match b2 {
+                Ty::Array { elem: be, size: bn } =>
+                    (an == bn || an == -1 || bn == -1) && types_compatible(*ae, *be),
+                _ => false,
+            },
+            Ty::Map(ak, av) => match b2 {
+                Ty::Map(bk, bv) =>
+                    types_compatible(*ak, *bk) && types_compatible(*av, *bv),
+                _ => false,
+            },
+            Ty::Set(ai) => match b2 {
+                Ty::Set(bi) => types_compatible(*ai, *bi),
+                _ => false,
+            },
+            Ty::Ptr(ai) => match b2 {
+                Ty::Ptr(bi) => types_compatible(*ai, *bi),
+                _ => false,
+            },
+            Ty::Ref(am, ai) => match b2 {
+                Ty::Ref(bm, bi) => am == bm && types_compatible(*ai, *bi),
+                // Plain value T compatible where val/ref T expected.
+                _ => types_compatible(*ai, b2),
+            },
+            Ty::Tuple(a_elems) => match b2 {
+                Ty::Tuple(b_elems) => tys_all_compat(a_elems, b_elems),
+                _ => false,
+            },
+            Ty::Named(an, aa) => named_compat(an, aa, b2),
+            Ty::Session(sa) => match b2 {
+                Ty::Session(sb) => session_types_compatible(*sa, *sb),
+                _ => false,
+            },
+            Ty::TyFn { params: ap, ret: ar, effects: ae, totality: at } => match b2 {
+                Ty::TyFn { params: bp, ret: br, effects: be, totality: bt } =>
+                    tys_all_compat(ap, bp)
+                        && types_compatible(*ar, *br)
+                        && effects_name_eq(ae, be)
+                        && totality_eq(at, bt),
+                _ => false,
+            },
+            _ => ty_primitive_eq(a2, b2),
+        }
+    }
+}
+
+partial fn named_compat(an: String, aa: List[Ty], b: Ty) -> Bool {
+    if an == "Positional" && aa.len() == 1 {
+        types_compatible(aa.get(0).unwrap_or(Ty::Unknown), b)
+    } else {
+        match b {
+            Ty::Named(bn, ba) =>
+                if bn == "Positional" && ba.len() == 1 {
+                    types_compatible(Ty::Named(an, aa), ba.get(0).unwrap_or(Ty::Unknown))
+                } else {
+                    an == bn && tys_all_compat(aa, ba)
+                },
+            _ => false,
+        }
+    }
+}
+
+partial fn tys_all_compat(as_list: List[Ty], bs_list: List[Ty]) -> Bool {
+    if as_list.len() != bs_list.len() {
+        false
+    } else {
+        let i: ref Int = 0;
+        let ok: ref Bool = true;
+        while i < as_list.len() {
+            let a: Ty = as_list.get(i).unwrap_or(Ty::Unknown);
+            let b: Ty = bs_list.get(i).unwrap_or(Ty::Unknown);
+            if !types_compatible(a, b) { ok = false } else { () }
+            i = i + 1
+        }
+        ok
+    }
+}
+
+fn ty_primitive_eq(a: Ty, b: Ty) -> Bool {
+    match a {
+        Ty::Int   => match b { Ty::Int   => true, _ => false },
+        Ty::Float => match b { Ty::Float => true, _ => false },
+        Ty::Str   => match b { Ty::Str   => true, _ => false },
+        Ty::Bool  => match b { Ty::Bool  => true, _ => false },
+        Ty::Char  => match b { Ty::Char  => true, _ => false },
+        Ty::Byte  => match b { Ty::Byte  => true, _ => false },
+        Ty::UByte => match b { Ty::UByte => true, _ => false },
+        Ty::UInt  => match b { Ty::UInt  => true, _ => false },
+        Ty::Unit  => match b { Ty::Unit  => true, _ => false },
+        Ty::Never => match b { Ty::Never => true, _ => false },
+        _ => false,
+    }
+}
+
+fn totality_eq(a: Option[Totality], b: Option[Totality]) -> Bool {
+    match a {
+        None => match b { None => true, _ => false },
+        Some(Totality::Total) => match b {
+            Some(Totality::Total) => true, _ => false,
+        },
+        Some(Totality::Partial) => match b {
+            Some(Totality::Partial) => true, _ => false,
+        },
+    }
+}
+
+/// Compare effect lists by name only, order-insensitive (#954).
+pub partial fn effects_name_eq(a: List[Effect], b: List[Effect]) -> Bool {
+    if a.len() != b.len() {
+        false
+    } else if a.is_empty() {
+        true
+    } else {
+        let a_names: List[String] = a.map(|e: Effect| e.name).sort();
+        let b_names: List[String] = b.map(|e: Effect| e.name).sort();
+        let i: ref Int = 0;
+        let ok: ref Bool = true;
+        while i < a_names.len() {
+            if a_names.get(i).unwrap_or("") != b_names.get(i).unwrap_or("") {
+                ok = false
+            } else { () }
+            i = i + 1
+        }
+        ok
+    }
+}
+
+/// Structural compatibility for session types.
+pub partial fn session_types_compatible(a: SessionTy, b: SessionTy) -> Bool {
+    match a {
+        SessionTy::Send(ta, ca) => match b {
+            SessionTy::Send(tb, cb) =>
+                types_compatible(*ta, *tb) && session_types_compatible(*ca, *cb),
+            _ => false,
+        },
+        SessionTy::Receive(ta, ca) => match b {
+            SessionTy::Receive(tb, cb) =>
+                types_compatible(*ta, *tb) && session_types_compatible(*ca, *cb),
+            _ => false,
+        },
+        SessionTy::InternalChoice(bsa) => match b {
+            SessionTy::InternalChoice(bsb) => session_branches_compatible(bsa, bsb),
+            _ => false,
+        },
+        SessionTy::ExternalChoice(bsa) => match b {
+            SessionTy::ExternalChoice(bsb) => session_branches_compatible(bsa, bsb),
+            _ => false,
+        },
+        SessionTy::End => match b { SessionTy::End => true, _ => false },
+    }
+}
+
+partial fn session_branches_compatible(
+    a: List[(String, SessionTy)],
+    b: List[(String, SessionTy)],
+) -> Bool {
+    // TODO: full label+content comparison requires 'for' in partial fn (pending fix)
+    a.len() == b.len()
+}
