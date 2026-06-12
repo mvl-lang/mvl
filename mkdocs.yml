@@ -31,6 +31,7 @@ theme:
 
 nav:
   - Home: index.md
+  - Getting Started: getting-started.md
   - Introduction: introduction.md
   - Rationale: mvl_rationale.md
   - The Eleven Requirements: requirements.md
