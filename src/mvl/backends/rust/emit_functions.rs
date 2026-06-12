@@ -132,7 +132,20 @@ impl RustEmitter {
             );
             if !is_builtin_type {
                 let has_self = fd.params.first().is_some_and(|p| p.name == "self");
-                let (param_start, self_prefix) = if has_self { (1usize, "&self") } else { (0, "") };
+                let (param_start, self_prefix) = if has_self {
+                    let self_borrow = borrows.first().copied().flatten();
+                    let prefix = match self_borrow {
+                        Some(true) => "&mut self",
+                        Some(false) => "&self",
+                        None => match fd.params[0].capability {
+                            Some(Capability::Val) | Some(Capability::Ref) => "&self",
+                            _ => "self",
+                        },
+                    };
+                    (1usize, prefix)
+                } else {
+                    (0usize, "")
+                };
                 let rest_params = emit_tir_params(
                     fd.params.get(param_start..).unwrap_or(&[]),
                     borrows.get(param_start..).unwrap_or(&[]),
