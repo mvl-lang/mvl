@@ -59,6 +59,36 @@ use tir::EffectDecl;
 use tir::LabelDecl;
 use tir::RelabelDecl;
 use tir::Program;
+// Phase 3 (#1116): expression and statement AST types
+use tir::AstLiteral;
+use tir::StructField;
+use tir::MapEntry;
+use tir::PatField;
+use tir::AstBinaryExpr;
+use tir::AstUnaryExpr;
+use tir::AstFieldExpr;
+use tir::AstIndexExpr;
+use tir::AstCallExpr;
+use tir::AstMethodExpr;
+use tir::AstIfExpr;
+use tir::AstMatchExpr;
+use tir::AstStructLit;
+use tir::AstMapLit;
+use tir::AstCastExpr;
+use tir::AstRelabelExpr;
+use tir::TuplePattern;
+use tir::TupleStructPattern;
+use tir::MatchArm;
+use tir::Expr;
+use tir::AstLetStmt;
+use tir::AstAssignStmt;
+use tir::AstWhileStmt;
+use tir::AstForStmt;
+use tir::Stmt;
+use tir::Block;
+use tir::BinaryOp;
+use tir::UnaryOp;
+use tir::Pattern;
 use lexer::lex;
 
 // ── Parser state ──────────────────────────────────────────────────────────────
@@ -193,6 +223,79 @@ pub type RelabelDeclR = struct {
     ps:    ParserState,
 }
 
+// ── Phase 3 result carriers ──────────────────────────────────────────────────
+
+/// Result carrier for an `Expr` parse sub-result plus updated parser state.
+pub type ExprR = struct {
+    value: Expr,
+    ps:    ParserState,
+}
+
+/// Result carrier for `Option[Expr]` plus updated parser state.
+pub type OptExprR = struct {
+    value: Option[Expr],
+    ps:    ParserState,
+}
+
+/// Result carrier for a `List[Expr]` parse sub-result plus updated parser state.
+pub type ExprListR = struct {
+    value: List[Expr],
+    ps:    ParserState,
+}
+
+/// Result carrier for a `Stmt` parse sub-result plus updated parser state.
+pub type StmtR = struct {
+    value: Stmt,
+    ps:    ParserState,
+}
+
+/// Result carrier for a `Block` parse sub-result plus updated parser state.
+pub type BlockR = struct {
+    value: Block,
+    ps:    ParserState,
+}
+
+/// Result carrier for a `MatchArm` parse sub-result plus updated parser state.
+pub type MatchArmR = struct {
+    value: MatchArm,
+    ps:    ParserState,
+}
+
+/// Result carrier for a `List[MatchArm]` parse sub-result plus updated parser state.
+pub type MatchArmsR = struct {
+    value: List[MatchArm],
+    ps:    ParserState,
+}
+
+/// Result carrier for a `Pattern` parse sub-result plus updated parser state.
+pub type PatternR = struct {
+    value: Pattern,
+    ps:    ParserState,
+}
+
+/// Result carrier for a `List[StructField]` plus updated parser state.
+pub type StructFieldsR = struct {
+    value: List[StructField],
+    ps:    ParserState,
+}
+
+/// Result carrier for a `List[MapEntry]` plus updated parser state.
+pub type MapEntriesR = struct {
+    value: List[MapEntry],
+    ps:    ParserState,
+}
+
+// ── Binary operator info ──────────────────────────────────────────────────────
+
+/// Binary operator lookup result: whether the current token is a binary op,
+/// its operator, and its precedence level.
+type OpInfo = struct {
+    has_op: Bool,
+    op:     BinaryOp,
+    prec:   Int,
+    span:   Span,
+}
+
 // ── Sentinel / empty values ───────────────────────────────────────────────────
 
 total fn empty_span() -> Span {
@@ -201,6 +304,30 @@ total fn empty_span() -> Span {
 
 total fn empty_type_expr() -> TypeExpr {
     TypeExpr { name: "", args: [], span: empty_span() }
+}
+
+total fn empty_block() -> Block {
+    Block { stmts: [], tail_expr: [], span: empty_span() }
+}
+
+total fn empty_expr() -> Expr {
+    Expr::Ident("", empty_span())
+}
+
+// ── List[T] indirection helpers ───────────────────────────────────────────────
+// Expr/Pattern fields use List[T] to break the Rust infinite-size cycle.
+// These helpers wrap/unwrap single-element lists.
+
+total fn box_expr(e: Expr) -> List[Expr] { [e] }
+
+total fn unbox_expr(cell: List[Expr]) -> Expr {
+    match cell.get(0) { Some(e) => e, None => empty_expr() }
+}
+
+total fn box_pat(p: Pattern) -> List[Pattern] { [p] }
+
+total fn unbox_pat(cell: List[Pattern]) -> Pattern {
+    match cell.get(0) { Some(p) => p, None => Pattern::Wildcard(empty_span()) }
 }
 
 // ── ParserState utilities ─────────────────────────────────────────────────────
@@ -263,6 +390,908 @@ total fn ps_expect_name(ps: ParserState) -> StringR {
             StringR { value: lex, ps: ps_advance(ps) }
         }
     }
+}
+
+// ── Phase 3: Expression & Statement Parser ────────────────────────────────────
+//
+// Public entry point: parse_block(ps) -> BlockR
+//
+// Calling graph (depth-bounded recursion via max_depth parameter):
+//   parse_block  → parse_stmt  → parse_expr_depth
+//   parse_expr_depth → parse_binary_prec → parse_unary → parse_postfix → parse_primary
+//   parse_primary → parse_block_depth (for block literals and if/match bodies)
+//
+// Termination:
+//   - All while loops carry `decreases curr.tokens.len() - curr.pos`.
+//   - All mutual recursion uses max_depth (requires max_depth >= 0; calls use max_depth - 1).
+//   - At max_depth == 0 we return empty_expr() without further recursion.
+//
+// MVL constraints observed in this section:
+//   - Guard patterns on enum variants (e.g. `Punct if lex == "("`) cause parse errors.
+//     Use `Punct => { if lex == "(" { … } else … }` instead.
+//   - Assignment expressions in match arm bodies must be inside `{ }` blocks.
+//   - `ref` bindings are used for any variable reassigned in a loop or branch.
+
+// ── Binary operator lookup ────────────────────────────────────────────────────
+
+// Returns precedence (1–9) and BinaryOp for the current token, or has_op=false.
+// Precedences:  || < && < cmp < | < ^ < & < << >> < + - < * / %
+total fn binary_op_at(ps: ParserState) -> OpInfo {
+    let tok: Token = ps_current(ps);
+    let sp: Span = tok.span;
+    match tok.kind {
+        TokenKind::Punct => {
+            let lex: String = tok.lexeme;
+            if lex == "||"      { OpInfo { has_op: true, op: BinaryOp::Or,     prec: 1, span: sp } }
+            else if lex == "&&" { OpInfo { has_op: true, op: BinaryOp::And,    prec: 2, span: sp } }
+            else if lex == "==" { OpInfo { has_op: true, op: BinaryOp::Eq,     prec: 3, span: sp } }
+            else if lex == "!=" { OpInfo { has_op: true, op: BinaryOp::Ne,     prec: 3, span: sp } }
+            else if lex == "<"  { OpInfo { has_op: true, op: BinaryOp::Lt,     prec: 3, span: sp } }
+            else if lex == ">"  { OpInfo { has_op: true, op: BinaryOp::Gt,     prec: 3, span: sp } }
+            else if lex == "<=" { OpInfo { has_op: true, op: BinaryOp::Le,     prec: 3, span: sp } }
+            else if lex == ">=" { OpInfo { has_op: true, op: BinaryOp::Ge,     prec: 3, span: sp } }
+            else if lex == "|"  { OpInfo { has_op: true, op: BinaryOp::BitOr,  prec: 4, span: sp } }
+            else if lex == "^"  { OpInfo { has_op: true, op: BinaryOp::BitXor, prec: 5, span: sp } }
+            else if lex == "&"  { OpInfo { has_op: true, op: BinaryOp::BitAnd, prec: 6, span: sp } }
+            else if lex == "<<" { OpInfo { has_op: true, op: BinaryOp::Shl,    prec: 7, span: sp } }
+            else if lex == ">>" { OpInfo { has_op: true, op: BinaryOp::Shr,    prec: 7, span: sp } }
+            else if lex == "+"  { OpInfo { has_op: true, op: BinaryOp::Add,    prec: 8, span: sp } }
+            else if lex == "-"  { OpInfo { has_op: true, op: BinaryOp::Sub,    prec: 8, span: sp } }
+            else if lex == "*"  { OpInfo { has_op: true, op: BinaryOp::Mul,    prec: 9, span: sp } }
+            else if lex == "/"  { OpInfo { has_op: true, op: BinaryOp::Div,    prec: 9, span: sp } }
+            else if lex == "%"  { OpInfo { has_op: true, op: BinaryOp::Rem,    prec: 9, span: sp } }
+            else                { OpInfo { has_op: false, op: BinaryOp::Add,   prec: 0, span: sp } }
+        }
+        _ => OpInfo { has_op: false, op: BinaryOp::Add, prec: 0, span: sp }
+    }
+}
+
+// ── Pattern parser ────────────────────────────────────────────────────────────
+//
+// Termination: each branch consumes at least one token (ps_advance or delegate).
+// Depth counter prevents infinite recursion for nested patterns.
+
+partial fn parse_pattern_depth(ps: ParserState, max_depth: Int) -> PatternR
+  requires max_depth >= 0
+{
+    let tok: Token = ps_current(ps);
+    let sp: Span = tok.span;
+    match tok.kind {
+        TokenKind::Punct => {
+            if tok.lexeme == "_" {
+                PatternR { value: Pattern::Wildcard(sp), ps: ps_advance(ps) }
+            } else if tok.lexeme == "(" {
+                // Tuple pattern: (a, b, …)
+                let curr: ref ParserState = ps_advance(ps);
+                let elems: ref List[Pattern] = [];
+                while !ps_at_eof(curr) && !ps_at_punct(curr, ")") decreases curr.tokens.len() - curr.pos {
+                    let pr: PatternR = if max_depth > 0 {
+                        parse_pattern_depth(curr, max_depth - 1)
+                    } else {
+                        PatternR { value: Pattern::Wildcard(ps_current(curr).span), ps: ps_advance(curr) }
+                    };
+                    elems.push(pr.value);
+                    curr = pr.ps;
+                    if ps_at_punct(curr, ",") { curr = ps_advance(curr) } else { () }
+                }
+                curr = ps_expect_punct(curr, ")");
+                PatternR { value: Pattern::Tuple(TuplePattern { elems: elems, span: sp }), ps: curr }
+            } else {
+                PatternR { value: Pattern::Wildcard(sp), ps: ps_advance(ps) }
+            }
+        }
+        TokenKind::KwTrue  => PatternR { value: Pattern::Literal(AstLiteral::Bool(true), sp),  ps: ps_advance(ps) }
+        TokenKind::KwFalse => PatternR { value: Pattern::Literal(AstLiteral::Bool(false), sp), ps: ps_advance(ps) }
+        TokenKind::IntLit  => {
+            let n: Int = match tok.lexeme.parse_int() { Ok(v) => v, Err(_) => 0 };
+            PatternR { value: Pattern::Literal(AstLiteral::Integer(n), sp), ps: ps_advance(ps) }
+        }
+        TokenKind::StrLit => {
+            PatternR { value: Pattern::Literal(AstLiteral::Str(tok.lexeme), sp), ps: ps_advance(ps) }
+        }
+        TokenKind::Ident => {
+            let name: String = tok.lexeme;
+            let curr: ref ParserState = ps_advance(ps);
+            // Check for :: (enum variant path: Foo::Bar or Foo::Bar(…))
+            if ps_at_punct(curr, "::") {
+                curr = ps_advance(curr);
+                let variant_r: StringR = ps_expect_name(curr);
+                curr = variant_r.ps;
+                let full_name: String = format("{}::{}", [name, variant_r.value]);
+                if ps_at_punct(curr, "(") {
+                    // Tuple-struct pattern: Name::Variant(fields…)
+                    curr = ps_advance(curr);
+                    let fields: ref List[Pattern] = [];
+                    while !ps_at_eof(curr) && !ps_at_punct(curr, ")") decreases curr.tokens.len() - curr.pos {
+                        let pr: PatternR = if max_depth > 0 {
+                            parse_pattern_depth(curr, max_depth - 1)
+                        } else {
+                            PatternR { value: Pattern::Wildcard(ps_current(curr).span), ps: ps_advance(curr) }
+                        };
+                        fields.push(pr.value);
+                        curr = pr.ps;
+                        if ps_at_punct(curr, ",") { curr = ps_advance(curr) } else { () }
+                    }
+                    curr = ps_expect_punct(curr, ")");
+                    PatternR { value: Pattern::TupleStruct(TupleStructPattern { name: full_name, fields: fields, span: sp }), ps: curr }
+                } else {
+                    // Unit variant: Foo::Bar
+                    PatternR { value: Pattern::Ident(full_name, sp), ps: curr }
+                }
+            } else if name == "Some" && ps_at_punct(curr, "(") {
+                curr = ps_advance(curr);
+                let inner_r: PatternR = if max_depth > 0 {
+                    parse_pattern_depth(curr, max_depth - 1)
+                } else {
+                    PatternR { value: Pattern::Wildcard(sp), ps: curr }
+                };
+                curr = ps_expect_punct(inner_r.ps, ")");
+                PatternR { value: Pattern::Some(box_pat(inner_r.value), sp), ps: curr }
+            } else if name == "None" {
+                PatternR { value: Pattern::None(sp), ps: curr }
+            } else if name == "Ok" && ps_at_punct(curr, "(") {
+                curr = ps_advance(curr);
+                let inner_r: PatternR = if max_depth > 0 {
+                    parse_pattern_depth(curr, max_depth - 1)
+                } else {
+                    PatternR { value: Pattern::Wildcard(sp), ps: curr }
+                };
+                curr = ps_expect_punct(inner_r.ps, ")");
+                PatternR { value: Pattern::Ok(box_pat(inner_r.value), sp), ps: curr }
+            } else if name == "Err" && ps_at_punct(curr, "(") {
+                curr = ps_advance(curr);
+                let inner_r: PatternR = if max_depth > 0 {
+                    parse_pattern_depth(curr, max_depth - 1)
+                } else {
+                    PatternR { value: Pattern::Wildcard(sp), ps: curr }
+                };
+                curr = ps_expect_punct(inner_r.ps, ")");
+                PatternR { value: Pattern::Err(box_pat(inner_r.value), sp), ps: curr }
+            } else if ps_at_punct(curr, "(") {
+                // TupleStruct pattern: Name(fields…) without ::
+                curr = ps_advance(curr);
+                let fields: ref List[Pattern] = [];
+                while !ps_at_eof(curr) && !ps_at_punct(curr, ")") decreases curr.tokens.len() - curr.pos {
+                    let pr: PatternR = if max_depth > 0 {
+                        parse_pattern_depth(curr, max_depth - 1)
+                    } else {
+                        PatternR { value: Pattern::Wildcard(ps_current(curr).span), ps: ps_advance(curr) }
+                    };
+                    fields.push(pr.value);
+                    curr = pr.ps;
+                    if ps_at_punct(curr, ",") { curr = ps_advance(curr) } else { () }
+                }
+                curr = ps_expect_punct(curr, ")");
+                PatternR { value: Pattern::TupleStruct(TupleStructPattern { name: name, fields: fields, span: sp }), ps: curr }
+            } else {
+                // Plain identifier / unit enum variant
+                PatternR { value: Pattern::Ident(name, sp), ps: curr }
+            }
+        }
+        // keyword used as pattern (e.g. None, _)
+        _ => {
+            PatternR { value: Pattern::Wildcard(sp), ps: ps_advance(ps) }
+        }
+    }
+}
+
+partial fn parse_pattern(ps: ParserState) -> PatternR {
+    parse_pattern_depth(ps, 8)
+}
+
+// ── Match arms ────────────────────────────────────────────────────────────────
+
+partial fn parse_match_arms(ps: ParserState, max_depth: Int) -> MatchArmsR
+  requires max_depth >= 0
+{
+    let curr: ref ParserState = ps;
+    let arms: ref List[MatchArm] = [];
+    while !ps_at_eof(curr) && !ps_at_punct(curr, "}") decreases curr.tokens.len() - curr.pos {
+        let sp: Span = ps_current(curr).span;
+        let pat_r: PatternR = parse_pattern(curr);
+        curr = pat_r.ps;
+        curr = ps_expect_punct(curr, "=>");
+        let body_r: ExprR = if max_depth > 0 {
+            parse_expr_depth(curr, max_depth - 1)
+        } else {
+            ExprR { value: empty_expr(), ps: curr }
+        };
+        arms.push(MatchArm { pattern: pat_r.value, body: box_expr(body_r.value), span: sp });
+        curr = body_r.ps;
+        if ps_at_punct(curr, ",") { curr = ps_advance(curr) } else { () }
+    }
+    MatchArmsR { value: arms, ps: curr }
+}
+
+// ── Argument list: (e1, e2, …) ───────────────────────────────────────────────
+
+partial fn parse_arg_list(ps: ParserState, max_depth: Int) -> ExprListR
+  requires max_depth >= 0
+{
+    let curr: ref ParserState = ps_expect_punct(ps, "(");
+    let args: ref List[Expr] = [];
+    while !ps_at_eof(curr) && !ps_at_punct(curr, ")") decreases curr.tokens.len() - curr.pos {
+        let er: ExprR = if max_depth > 0 {
+            parse_expr_depth(curr, max_depth - 1)
+        } else {
+            ExprR { value: empty_expr(), ps: curr }
+        };
+        args.push(er.value);
+        curr = er.ps;
+        if ps_at_punct(curr, ",") { curr = ps_advance(curr) } else { () }
+    }
+    ExprListR { value: args, ps: ps_expect_punct(curr, ")") }
+}
+
+// ── Primary expression parser ─────────────────────────────────────────────────
+//
+// Parses literals, identifiers, parenthesized expressions, blocks,
+// if/match expressions, and collection literals.
+//
+// NOTE: Guard patterns on enum variants cause MVL parse errors.
+// The TokenKind::Punct arm uses nested if-else on tok.lexeme instead.
+
+partial fn parse_primary(ps: ParserState, max_depth: Int) -> ExprR
+  requires max_depth >= 0
+{
+    let tok: Token = ps_current(ps);
+    let sp: Span = tok.span;
+    match tok.kind {
+        TokenKind::IntLit => {
+            let n: Int = match tok.lexeme.parse_int() { Ok(v) => v, Err(_) => 0 };
+            ExprR { value: Expr::Lit(AstLiteral::Integer(n), sp), ps: ps_advance(ps) }
+        }
+        TokenKind::FloatLit => {
+            let f: Float = match tok.lexeme.parse_float() { Ok(v) => v, Err(_) => 0.0 };
+            ExprR { value: Expr::Lit(AstLiteral::Floating(f), sp), ps: ps_advance(ps) }
+        }
+        TokenKind::StrLit => {
+            ExprR { value: Expr::Lit(AstLiteral::Str(tok.lexeme), sp), ps: ps_advance(ps) }
+        }
+        TokenKind::CharLit => {
+            ExprR { value: Expr::Lit(AstLiteral::Char(tok.lexeme), sp), ps: ps_advance(ps) }
+        }
+        TokenKind::KwTrue  => ExprR { value: Expr::Lit(AstLiteral::Bool(true), sp),  ps: ps_advance(ps) }
+        TokenKind::KwFalse => ExprR { value: Expr::Lit(AstLiteral::Bool(false), sp), ps: ps_advance(ps) }
+        TokenKind::KwIf => {
+            if max_depth > 0 {
+                parse_if_expr(ps, max_depth - 1)
+            } else {
+                ExprR { value: empty_expr(), ps: ps_advance(ps) }
+            }
+        }
+        TokenKind::KwMatch => {
+            if max_depth > 0 {
+                parse_match_expr(ps, max_depth - 1)
+            } else {
+                ExprR { value: empty_expr(), ps: ps_advance(ps) }
+            }
+        }
+        TokenKind::KwConsume => {
+            let curr: ref ParserState = ps_advance(ps);
+            if max_depth > 0 {
+                let inner_r: ExprR = parse_expr_depth(curr, max_depth - 1);
+                ExprR { value: Expr::Consume(box_expr(inner_r.value), sp), ps: inner_r.ps }
+            } else {
+                ExprR { value: Expr::Consume(box_expr(empty_expr()), sp), ps: curr }
+            }
+        }
+        TokenKind::KwRelabel => {
+            let curr: ref ParserState = ps_advance(ps);
+            let fname_r: StringR = ps_expect_name(curr);
+            curr = fname_r.ps;
+            curr = ps_expect_punct(curr, "(");
+            let inner_r: ExprR = if max_depth > 0 {
+                parse_expr_depth(curr, max_depth - 1)
+            } else {
+                ExprR { value: empty_expr(), ps: curr }
+            };
+            curr = inner_r.ps;
+            if ps_at_punct(curr, ",") { curr = ps_advance(curr) } else { () }
+            let is_str_tag: Bool = match ps_current(curr).kind { TokenKind::StrLit => true, _ => false };
+            let audit: String = if is_str_tag {
+                let s: String = ps_current(curr).lexeme;
+                curr = ps_advance(curr);
+                s
+            } else { "" };
+            curr = ps_expect_punct(curr, ")");
+            ExprR {
+                value: Expr::Relabel(AstRelabelExpr {
+                    func: fname_r.value, expr: box_expr(inner_r.value),
+                    audit_tag: audit, span: sp,
+                }),
+                ps: curr,
+            }
+        }
+        TokenKind::Ident => {
+            let name: String = tok.lexeme;
+            let curr: ref ParserState = ps_advance(ps);
+            // Only interpret `Name { ... }` as a struct literal when Name starts
+            // with an uppercase letter (type/constructor convention).  Lowercase
+            // names followed by `{` appear in scrutinee position (`match n { }`)
+            // or iterator position (`for x in xs { }`) and the `{` belongs to the
+            // enclosing keyword syntax, not to a struct literal.
+            let first_ch: String = name.char_at(0).unwrap_or("");
+            let name_is_upper: Bool = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".contains(first_ch);
+            if ps_at_punct(curr, "{") && name_is_upper {
+                if max_depth > 0 {
+                    let sl_r: StructFieldsR = parse_struct_fields(curr, max_depth - 1);
+                    ExprR {
+                        value: Expr::StructLit(AstStructLit { name: name, fields: sl_r.value, span: sp }),
+                        ps: sl_r.ps,
+                    }
+                } else {
+                    ExprR { value: Expr::Ident(name, sp), ps: skip_body(curr) }
+                }
+            } else if ps_at_punct(curr, "(") {
+                if max_depth > 0 {
+                    let al_r: ExprListR = parse_arg_list(curr, max_depth - 1);
+                    ExprR {
+                        value: Expr::Call(AstCallExpr { name: name, args: al_r.value, span: sp }),
+                        ps: al_r.ps,
+                    }
+                } else {
+                    ExprR { value: Expr::Ident(name, sp), ps: skip_parens(curr) }
+                }
+            } else if ps_at_punct(curr, "::") {
+                curr = ps_advance(curr);
+                let variant_r: StringR = ps_expect_name(curr);
+                curr = variant_r.ps;
+                let full_name: String = format("{}::{}", [name, variant_r.value]);
+                if ps_at_punct(curr, "(") {
+                    if max_depth > 0 {
+                        let al_r: ExprListR = parse_arg_list(curr, max_depth - 1);
+                        ExprR {
+                            value: Expr::Call(AstCallExpr { name: full_name, args: al_r.value, span: sp }),
+                            ps: al_r.ps,
+                        }
+                    } else {
+                        ExprR { value: Expr::Ident(full_name, sp), ps: skip_parens(curr) }
+                    }
+                } else if ps_at_punct(curr, "{") {
+                    if max_depth > 0 {
+                        let sl_r: StructFieldsR = parse_struct_fields(curr, max_depth - 1);
+                        ExprR {
+                            value: Expr::StructLit(AstStructLit { name: full_name, fields: sl_r.value, span: sp }),
+                            ps: sl_r.ps,
+                        }
+                    } else {
+                        ExprR { value: Expr::Ident(full_name, sp), ps: skip_body(curr) }
+                    }
+                } else {
+                    ExprR { value: Expr::Ident(full_name, sp), ps: curr }
+                }
+            } else {
+                ExprR { value: Expr::Ident(name, sp), ps: curr }
+            }
+        }
+        // Punct-started primary expressions: `(`, `[`, `{`
+        // (No guard patterns — use nested if-else on tok.lexeme)
+        TokenKind::Punct => {
+            let lex: String = tok.lexeme;
+            if lex == "(" {
+                let curr: ref ParserState = ps_advance(ps);
+                if ps_at_punct(curr, ")") {
+                    ExprR { value: Expr::Lit(AstLiteral::Unit, sp), ps: ps_advance(curr) }
+                } else {
+                    let inner_r: ExprR = if max_depth > 0 {
+                        parse_expr_depth(curr, max_depth - 1)
+                    } else {
+                        ExprR { value: empty_expr(), ps: curr }
+                    };
+                    ExprR { value: inner_r.value, ps: ps_expect_punct(inner_r.ps, ")") }
+                }
+            } else if lex == "[" {
+                let curr: ref ParserState = ps_advance(ps);
+                let elems: ref List[Expr] = [];
+                while !ps_at_eof(curr) && !ps_at_punct(curr, "]") decreases curr.tokens.len() - curr.pos {
+                    let er: ExprR = if max_depth > 0 {
+                        parse_expr_depth(curr, max_depth - 1)
+                    } else {
+                        ExprR { value: empty_expr(), ps: curr }
+                    };
+                    elems.push(er.value);
+                    curr = er.ps;
+                    if ps_at_punct(curr, ",") { curr = ps_advance(curr) } else { () }
+                }
+                curr = ps_expect_punct(curr, "]");
+                ExprR { value: Expr::ListLit(elems, sp), ps: curr }
+            } else if lex == "{" {
+                let br: BlockR = if max_depth > 0 {
+                    parse_block_depth(ps, max_depth - 1)
+                } else {
+                    BlockR { value: empty_block(), ps: skip_body(ps) }
+                };
+                ExprR { value: Expr::BlockExpr(br.value, sp), ps: br.ps }
+            } else {
+                ExprR { value: empty_expr(), ps: ps_advance(ps) }
+            }
+        }
+        _ => {
+            let lex: String = tok.lexeme;
+            ExprR { value: Expr::Ident(lex, sp), ps: ps_advance(ps) }
+        }
+    }
+}
+
+// ── Struct literal field list: `{ name: expr, … }` ───────────────────────────
+
+partial fn parse_struct_fields(ps: ParserState, max_depth: Int) -> StructFieldsR
+  requires max_depth >= 0
+{
+    let curr: ref ParserState = ps_expect_punct(ps, "{");
+    let fields: ref List[StructField] = [];
+    while !ps_at_eof(curr) && !ps_at_punct(curr, "}") decreases curr.tokens.len() - curr.pos {
+        let name_r: StringR = ps_expect_name(curr);
+        curr = name_r.ps;
+        curr = ps_expect_punct(curr, ":");
+        let er: ExprR = if max_depth > 0 {
+            parse_expr_depth(curr, max_depth - 1)
+        } else {
+            ExprR { value: empty_expr(), ps: curr }
+        };
+        fields.push(StructField { name: name_r.value, expr: box_expr(er.value) });
+        curr = er.ps;
+        if ps_at_punct(curr, ",") { curr = ps_advance(curr) } else { () }
+    }
+    StructFieldsR { value: fields, ps: ps_expect_punct(curr, "}") }
+}
+
+// ── if expression ─────────────────────────────────────────────────────────────
+
+partial fn parse_if_expr(ps: ParserState, max_depth: Int) -> ExprR
+  requires max_depth >= 0
+{
+    let sp: Span = ps_current(ps).span;
+    let curr: ref ParserState = ps_advance(ps); // consume 'if'
+    // Optional `let` binding: `if let Some(v) = expr { … }`
+    let is_if_let: Bool = match ps_current(curr).kind { TokenKind::KwLet => true, _ => false };
+    if is_if_let {
+        // Skip `let Pat = ` and parse the RHS expression as the condition
+        curr = ps_advance(curr); // consume 'let'
+        let _pat_r: PatternR = parse_pattern(curr);
+        curr = _pat_r.ps;
+        curr = ps_expect_punct(curr, "=");
+    } else { () }
+    let cond_r: ExprR = if max_depth > 0 {
+        parse_expr_depth(curr, max_depth - 1)
+    } else {
+        ExprR { value: empty_expr(), ps: curr }
+    };
+    curr = cond_r.ps;
+    let then_r: BlockR = if max_depth > 0 {
+        parse_block_depth(curr, max_depth - 1)
+    } else {
+        BlockR { value: empty_block(), ps: skip_body(curr) }
+    };
+    curr = then_r.ps;
+    // optional else branch
+    let has_else: Bool = match ps_current(curr).kind { TokenKind::KwElse => true, _ => false };
+    // else_br: List[Expr] — empty = no else, [e] = has else  (replaces Option[Expr])
+    let else_list: List[Expr] = if has_else {
+        curr = ps_advance(curr);
+        let is_else_if: Bool = match ps_current(curr).kind { TokenKind::KwIf => true, _ => false };
+        if is_else_if && max_depth > 0 {
+            let ei_r: ExprR = parse_if_expr(curr, max_depth - 1);
+            curr = ei_r.ps;
+            box_expr(ei_r.value)
+        } else if max_depth > 0 {
+            let eb_r: BlockR = parse_block_depth(curr, max_depth - 1);
+            curr = eb_r.ps;
+            box_expr(Expr::BlockExpr(eb_r.value, ps_current(curr).span))
+        } else {
+            curr = skip_body(curr);
+            []
+        }
+    } else {
+        []
+    };
+    ExprR {
+        value: Expr::If(AstIfExpr { cond: box_expr(cond_r.value), then: then_r.value, else_br: else_list, span: sp }),
+        ps: curr,
+    }
+}
+
+// ── match expression ──────────────────────────────────────────────────────────
+
+partial fn parse_match_expr(ps: ParserState, max_depth: Int) -> ExprR
+  requires max_depth >= 0
+{
+    let sp: Span = ps_current(ps).span;
+    let curr: ref ParserState = ps_advance(ps); // consume 'match'
+    let scrut_r: ExprR = if max_depth > 0 {
+        parse_expr_depth(curr, max_depth - 1)
+    } else {
+        ExprR { value: empty_expr(), ps: curr }
+    };
+    curr = scrut_r.ps;
+    curr = ps_expect_punct(curr, "{");
+    let arms_r: MatchArmsR = if max_depth > 0 {
+        parse_match_arms(curr, max_depth - 1)
+    } else {
+        MatchArmsR { value: [], ps: curr }
+    };
+    curr = arms_r.ps;
+    curr = ps_expect_punct(curr, "}");
+    ExprR {
+        value: Expr::MatchExpr(AstMatchExpr { scrutinee: box_expr(scrut_r.value), arms: arms_r.value, span: sp }),
+        ps: curr,
+    }
+}
+
+// ── Postfix: field access, index, method call, propagation ───────────────────
+
+partial fn parse_postfix(ps: ParserState, base: Expr, max_depth: Int) -> ExprR
+  requires max_depth >= 0
+{
+    let curr: ref ParserState = ps;
+    let result: ref Expr = base;
+    let done: ref Bool = false;
+    // Termination: each loop iteration advances curr.pos by at least 1 (operator token).
+    while !done && !ps_at_eof(curr) decreases curr.tokens.len() - curr.pos {
+        let tok: Token = ps_current(curr);
+        if tok.lexeme == "." {
+            curr = ps_advance(curr);
+            let field_tok: Token = ps_current(curr);
+            let sp: Span = field_tok.span;
+            let field_name: String = field_tok.lexeme;
+            curr = ps_advance(curr);
+            // method call: expr.method(args…)
+            if ps_at_punct(curr, "(") && max_depth > 0 {
+                let al_r: ExprListR = parse_arg_list(curr, max_depth - 1);
+                curr = al_r.ps;
+                result = Expr::Method(AstMethodExpr { receiver: box_expr(result), method: field_name, args: al_r.value, span: sp })
+            } else {
+                result = Expr::Field(AstFieldExpr { expr: box_expr(result), field: field_name, span: sp })
+            }
+        } else if tok.lexeme == "?" {
+            let sp: Span = tok.span;
+            curr = ps_advance(curr);
+            result = Expr::Propagate(box_expr(result), sp)
+        } else if tok.lexeme == "[" && max_depth > 0 {
+            let sp: Span = tok.span;
+            curr = ps_advance(curr);
+            let idx_r: ExprR = parse_expr_depth(curr, max_depth - 1);
+            curr = ps_expect_punct(idx_r.ps, "]");
+            result = Expr::Index(AstIndexExpr { expr: box_expr(result), index: box_expr(idx_r.value), span: sp })
+        } else if tok.lexeme == "(" && max_depth > 0 {
+            // Direct call on a result expression: (expr)(args) — rare but valid
+            let sp: Span = tok.span;
+            let al_r: ExprListR = parse_arg_list(curr, max_depth - 1);
+            curr = al_r.ps;
+            result = Expr::Method(AstMethodExpr { receiver: box_expr(result), method: "", args: al_r.value, span: sp })
+        } else {
+            done = true
+        }
+    }
+    ExprR { value: result, ps: curr }
+}
+
+// ── Unary operator parser ─────────────────────────────────────────────────────
+
+partial fn parse_unary(ps: ParserState, max_depth: Int) -> ExprR
+  requires max_depth >= 0
+{
+    if max_depth == 0 {
+        parse_primary(ps, 0)
+    } else {
+        let tok: Token = ps_current(ps);
+        let sp: Span = tok.span;
+        if tok.lexeme == "-" {
+            let curr: ParserState = ps_advance(ps);
+            let inner_r: ExprR = parse_unary(curr, max_depth - 1);
+            let e: ExprR = ExprR {
+                value: Expr::Unary(AstUnaryExpr { op: UnaryOp::Neg, expr: box_expr(inner_r.value), span: sp }),
+                ps: inner_r.ps,
+            };
+            parse_postfix(e.ps, e.value, max_depth - 1)
+        } else if tok.lexeme == "!" {
+            let curr: ParserState = ps_advance(ps);
+            let inner_r: ExprR = parse_unary(curr, max_depth - 1);
+            let e: ExprR = ExprR {
+                value: Expr::Unary(AstUnaryExpr { op: UnaryOp::Not, expr: box_expr(inner_r.value), span: sp }),
+                ps: inner_r.ps,
+            };
+            parse_postfix(e.ps, e.value, max_depth - 1)
+        } else if tok.lexeme == "~" {
+            let curr: ParserState = ps_advance(ps);
+            let inner_r: ExprR = parse_unary(curr, max_depth - 1);
+            let e: ExprR = ExprR {
+                value: Expr::Unary(AstUnaryExpr { op: UnaryOp::BitNot, expr: box_expr(inner_r.value), span: sp }),
+                ps: inner_r.ps,
+            };
+            parse_postfix(e.ps, e.value, max_depth - 1)
+        } else {
+            let prim_r: ExprR = parse_primary(ps, max_depth - 1);
+            parse_postfix(prim_r.ps, prim_r.value, max_depth - 1)
+        }
+    }
+}
+
+// ── Pratt binary operator parser ──────────────────────────────────────────────
+//
+// Termination:
+//   Outer recursion: decreases max_depth (requires max_depth >= 0).
+//   Inner while loop: each iteration consumes the operator token (pos+1); outer
+//   recursion uses max_depth - 1, bounded by requires.
+//   Combined: finite depth × finite token stream → terminates.
+
+partial fn parse_binary_prec(ps: ParserState, min_prec: Int, max_depth: Int) -> ExprR
+  requires max_depth >= 0
+{
+    let left_r: ExprR = parse_unary(ps, max_depth);
+    let left: ref Expr = left_r.value;
+    let curr: ref ParserState = left_r.ps;
+    let done: ref Bool = false;
+    // Termination: each iteration advances curr by ≥1 token (the operator).
+    while !done && max_depth > 0 && !ps_at_eof(curr) decreases curr.tokens.len() - curr.pos {
+        let op_info: OpInfo = binary_op_at(curr);
+        if op_info.has_op && op_info.prec >= min_prec {
+            curr = ps_advance(curr); // consume operator
+            let right_r: ExprR = parse_binary_prec(curr, op_info.prec + 1, max_depth - 1);
+            let bin: AstBinaryExpr = AstBinaryExpr {
+                op: op_info.op, left: box_expr(left), right: box_expr(right_r.value), span: op_info.span,
+            };
+            left = Expr::Binary(bin);
+            curr = right_r.ps
+        } else {
+            done = true
+        }
+    }
+    // Handle `as` cast in postfix
+    let final_expr: ref Expr = left;
+    let cast_done: ref Bool = false;
+    while !cast_done && !ps_at_eof(curr) decreases curr.tokens.len() - curr.pos {
+        let cast_tok: Token = ps_current(curr);
+        let is_as: Bool = match cast_tok.kind { TokenKind::KwAs => true, _ => false };
+        if is_as && max_depth > 0 {
+            curr = ps_advance(curr);
+            let ty_r: TypeExprR = parse_type_expr(curr);
+            curr = ty_r.ps;
+            final_expr = Expr::Cast(AstCastExpr { expr: box_expr(final_expr), ty: ty_r.value, span: cast_tok.span })
+        } else {
+            cast_done = true
+        }
+    }
+    ExprR { value: final_expr, ps: curr }
+}
+
+// ── Top-level expression parser ───────────────────────────────────────────────
+
+partial fn parse_expr_depth(ps: ParserState, max_depth: Int) -> ExprR
+  requires max_depth >= 0
+{
+    parse_binary_prec(ps, 0, max_depth)
+}
+
+partial fn parse_expr(ps: ParserState) -> ExprR {
+    parse_expr_depth(ps, 20)
+}
+
+// ── Statement parsers ─────────────────────────────────────────────────────────
+
+// `let [ref] name: Type = expr;`
+partial fn parse_let_stmt(ps: ParserState, max_depth: Int) -> StmtR
+  requires max_depth >= 0
+{
+    let sp: Span = ps_current(ps).span;
+    let curr: ref ParserState = ps_advance(ps); // consume 'let'
+    // Optional `ref` for mutable bindings
+    let is_mut: Bool = ps_at_punct(curr, "ref");
+    if is_mut { curr = ps_advance(curr) } else { () }
+    let name_r: StringR = ps_expect_name(curr);
+    curr = name_r.ps;
+    curr = ps_expect_punct(curr, ":");
+    let ty_r: TypeExprR = parse_type_expr(curr);
+    curr = ty_r.ps;
+    curr = ps_expect_punct(curr, "=");
+    let val_r: ExprR = if max_depth > 0 {
+        parse_expr_depth(curr, max_depth - 1)
+    } else {
+        ExprR { value: empty_expr(), ps: curr }
+    };
+    curr = val_r.ps;
+    if ps_at_punct(curr, ";") { curr = ps_advance(curr) } else { () }
+    StmtR {
+        value: Stmt::Let(AstLetStmt {
+            mutable: is_mut, name: name_r.value,
+            ty: ty_r.value, value: box_expr(val_r.value), span: sp,
+        }),
+        ps: curr,
+    }
+}
+
+// True if the current token could start a statement (not a `}` or Eof).
+total fn is_stmt_start(ps: ParserState) -> Bool {
+    let is_end: Bool = ps_at_eof(ps) || ps_at_punct(ps, "}");
+    !is_end
+}
+
+// Parse a single statement, advancing past its trailing `;` where applicable.
+partial fn parse_stmt(ps: ParserState, max_depth: Int) -> StmtR
+  requires max_depth >= 0
+{
+    let tok: Token = ps_current(ps);
+    let sp: Span = tok.span;
+    match tok.kind {
+        // let binding
+        TokenKind::KwLet => {
+            parse_let_stmt(ps, max_depth)
+        }
+        // return statement
+        TokenKind::KwReturn => {
+            let curr: ref ParserState = ps_advance(ps);
+            let is_semi: Bool = ps_at_punct(curr, ";") || ps_at_eof(curr) || ps_at_punct(curr, "}");
+            let ret_list: List[Expr] = if is_semi || max_depth == 0 {
+                []
+            } else {
+                let vr: ExprR = parse_expr_depth(curr, max_depth - 1);
+                curr = vr.ps;
+                box_expr(vr.value)
+            };
+            if ps_at_punct(curr, ";") { curr = ps_advance(curr) } else { () }
+            StmtR { value: Stmt::Return(ret_list, sp), ps: curr }
+        }
+        // while loop
+        TokenKind::KwWhile => {
+            let curr: ref ParserState = ps_advance(ps);
+            let cond_r: ExprR = if max_depth > 0 {
+                parse_expr_depth(curr, max_depth - 1)
+            } else {
+                ExprR { value: empty_expr(), ps: curr }
+            };
+            curr = cond_r.ps;
+            // optional `decreases expr` — consume silently
+            let has_dec: Bool = match ps_current(curr).kind { TokenKind::KwDecreases => true, _ => false };
+            if has_dec {
+                curr = ps_advance(curr);
+                // skip the decreases expression until '{'
+                let dec_done: ref Bool = false;
+                while !dec_done && !ps_at_eof(curr) decreases curr.tokens.len() - curr.pos {
+                    if ps_at_punct(curr, "{") { dec_done = true } else { curr = ps_advance(curr) }
+                }
+            } else { () }
+            // optional `invariant expr` — consume silently
+            let has_inv: Bool = match ps_current(curr).kind { TokenKind::KwInvariant => true, _ => false };
+            if has_inv {
+                curr = ps_advance(curr);
+                let inv_done: ref Bool = false;
+                while !inv_done && !ps_at_eof(curr) decreases curr.tokens.len() - curr.pos {
+                    if ps_at_punct(curr, "{") { inv_done = true } else { curr = ps_advance(curr) }
+                }
+            } else { () }
+            let body_r: BlockR = if max_depth > 0 {
+                parse_block_depth(curr, max_depth - 1)
+            } else {
+                BlockR { value: empty_block(), ps: skip_body(curr) }
+            };
+            StmtR {
+                value: Stmt::While(AstWhileStmt { cond: box_expr(cond_r.value), body: body_r.value, span: sp }),
+                ps: body_r.ps,
+            }
+        }
+        // for loop: `for pat in iter { body }`
+        TokenKind::KwFor => {
+            let curr: ref ParserState = ps_advance(ps);
+            let pat_r: PatternR = parse_pattern(curr);
+            curr = pat_r.ps;
+            let is_in: Bool = match ps_current(curr).kind { TokenKind::KwIn => true, _ => false };
+            if is_in { curr = ps_advance(curr) } else { () }
+            let iter_r: ExprR = if max_depth > 0 {
+                parse_expr_depth(curr, max_depth - 1)
+            } else {
+                ExprR { value: empty_expr(), ps: curr }
+            };
+            curr = iter_r.ps;
+            let body_r: BlockR = if max_depth > 0 {
+                parse_block_depth(curr, max_depth - 1)
+            } else {
+                BlockR { value: empty_block(), ps: skip_body(curr) }
+            };
+            // Use pattern as a string name (simplified: use first Ident in pattern)
+            let var_name: String = match pat_r.value {
+                Pattern::Ident(n, _) => n,
+                _                    => "_",
+            };
+            StmtR {
+                value: Stmt::For(AstForStmt { var: var_name, iter: box_expr(iter_r.value), body: body_r.value, span: sp }),
+                ps: body_r.ps,
+            }
+        }
+        // Assignment: `name = expr;` — detected via lookahead
+        TokenKind::Ident => {
+            let name: String = tok.lexeme;
+            let next_ps: ParserState = ps_advance(ps);
+            // peek at next token: if it's `=` (not `==`), it's an assignment
+            let next_tok: Token = ps_current(next_ps);
+            let is_assign: Bool = next_tok.lexeme == "=" && {
+                let after_eq: Token = ps_current(ps_advance(next_ps));
+                after_eq.lexeme != "=" // ensure it's = not ==
+            };
+            if is_assign {
+                let curr: ref ParserState = ps_advance(next_ps); // skip '='
+                let val_r: ExprR = if max_depth > 0 {
+                    parse_expr_depth(curr, max_depth - 1)
+                } else {
+                    ExprR { value: empty_expr(), ps: curr }
+                };
+                curr = val_r.ps;
+                if ps_at_punct(curr, ";") { curr = ps_advance(curr) } else { () }
+                StmtR {
+                    value: Stmt::Assign(AstAssignStmt { target: name, value: box_expr(val_r.value), span: sp }),
+                    ps: curr,
+                }
+            } else {
+                // Expression statement
+                let er: ExprR = if max_depth > 0 {
+                    parse_expr_depth(ps, max_depth - 1)
+                } else {
+                    ExprR { value: empty_expr(), ps: next_ps }
+                };
+                let curr: ref ParserState = er.ps;
+                if ps_at_punct(curr, ";") { curr = ps_advance(curr) } else { () }
+                StmtR { value: Stmt::ExprStmt(box_expr(er.value), sp), ps: curr }
+            }
+        }
+        // All other expression statements (if, match, block, literals, etc.)
+        _ => {
+            let er: ExprR = if max_depth > 0 {
+                parse_expr_depth(ps, max_depth - 1)
+            } else {
+                ExprR { value: empty_expr(), ps: ps_advance(ps) }
+            };
+            let curr: ref ParserState = er.ps;
+            if ps_at_punct(curr, ";") { curr = ps_advance(curr) } else { () }
+            StmtR { value: Stmt::ExprStmt(box_expr(er.value), sp), ps: curr }
+        }
+    }
+}
+
+// ── Block parser ──────────────────────────────────────────────────────────────
+//
+// A block is `{ stmts… [tail_expr] }`.
+// The tail expression is the last expression without a trailing semicolon.
+//
+// Termination:
+//   - The while loop advances curr by at least 1 token per iteration via parse_stmt.
+//   - max_depth decreases at each recursive call to parse_stmt, parse_expr_depth.
+//   - Combined: finite depth × finite token stream → terminates.
+
+partial fn parse_block_depth(ps: ParserState, max_depth: Int) -> BlockR
+  requires max_depth >= 0
+{
+    let sp: Span = ps_current(ps).span;
+    let curr: ref ParserState = ps_expect_punct(ps, "{");
+    let stmts: ref List[Stmt] = [];
+    // Use a flag+sentinel instead of ref Option[Expr] (MVL: ref Option = None causes lifetime error).
+    let has_tail: ref Bool = false;
+    let tail_val: ref Expr = empty_expr();
+    // Termination: each parse_stmt call advances curr by at least 1 token.
+    while !ps_at_eof(curr) && !ps_at_punct(curr, "}") decreases curr.tokens.len() - curr.pos {
+        let stmt_r: StmtR = if max_depth > 0 {
+            parse_stmt(curr, max_depth - 1)
+        } else {
+            StmtR { value: Stmt::ExprStmt(box_expr(empty_expr()), empty_span()), ps: ps_advance(curr) }
+        };
+        curr = stmt_r.ps;
+        let at_close: Bool = ps_at_eof(curr) || ps_at_punct(curr, "}");
+        let is_expr_stmt: Bool = match stmt_r.value { Stmt::ExprStmt(_, _) => true, _ => false };
+        if at_close && is_expr_stmt {
+            match stmt_r.value {
+                Stmt::ExprStmt(e_list, _) => { has_tail = true; tail_val = unbox_expr(e_list) },
+                _                         => { stmts.push(stmt_r.value) },
+            }
+        } else {
+            stmts.push(stmt_r.value)
+        }
+    }
+    curr = ps_expect_punct(curr, "}");
+    let block_tail: List[Expr] = if has_tail { box_expr(tail_val) } else { [] };
+    BlockR { value: Block { stmts: stmts, tail_expr: block_tail, span: sp }, ps: curr }
+}
+
+partial fn parse_block(ps: ParserState) -> BlockR {
+    parse_block_depth(ps, 20)
 }
 
 // ── Body skipping ─────────────────────────────────────────────────────────────
@@ -665,18 +1694,21 @@ partial fn parse_fn_decl(
         }
     }
     // body or extern semicolon
-    let has_body: Bool = ps_at_punct(curr, "{");
-    if has_body {
-        curr = skip_body(curr)
-    } else if ps_at_punct(curr, ";") {
-        curr = ps_advance(curr)
-    }
+    let has_brace: Bool = ps_at_punct(curr, "{");
+    let fn_body: Option[Block] = if has_brace {
+        let br: BlockR = parse_block(curr);
+        curr = br.ps;
+        Some(br.value)
+    } else {
+        if ps_at_punct(curr, ";") { curr = ps_advance(curr) } else { () }
+        None
+    };
     FnDeclR {
         value: FnDecl {
             visible: visible, is_test: is_test, is_builtin: is_builtin,
             totality: totality, name: fn_name,
             type_params: gp_r.value, params: params_r.value, ret_type: ret_type,
-            effects: eff_r.value, constraints: con_r.value, has_body: has_body,
+            effects: eff_r.value, constraints: con_r.value, body: fn_body,
             span: sp,
         },
         ps: curr,

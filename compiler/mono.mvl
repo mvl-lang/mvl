@@ -175,7 +175,7 @@ partial fn substitute_decl(fd: FnDecl, subs: MonoSubs) -> FnDecl {
         ret_type:    substitute_type(fd.ret_type, subs),
         effects:     fd.effects,
         constraints: fd.constraints,
-        has_body:    fd.has_body,
+        body:        fd.body,
         span:        fd.span,
     }
 }

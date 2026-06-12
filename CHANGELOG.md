@@ -6,8 +6,13 @@
 
 ### Added
 
+- **Expression & statement parser in MVL** (#1116) — Phase 3 of the self-hosting epic. Implements recursive-descent expression parser (Pratt binary, if/match, while/for, struct/list literals, method chains, pattern matching), statement parser (let/assign/return/while/for), block parser, and pattern parser. Wired into `parse_fn_decl` replacing `skip_body`. 15 new tests.
 - **OR patterns in match arms** (#1355) — MVL now supports `A | B => body` syntax in match expressions. All alternatives bind identically-named variables (standard OR-pattern semantics). Self-hosting checker code can now match multiple error/AST variants in a single arm without repetition.
+- **ADR-0045** — Documents Phase 3 technical decisions: `List[T]` as heap indirection for recursive fields, struct literal disambiguation by name case, `AstLiteral` vs `Literal`, and tuple-variant-only constraint.
 
+### Fixed
+
+- `compiler/mono.mvl`: update `substitute_decl` to use `body: fd.body` (renamed from `has_body: Bool` in Phase 3)
 ## [0.199.0] - 2026-06-12
 
 ### Added

@@ -42,8 +42,9 @@ test fn bare_fn_no_params() -> Unit {
             assert_eq(f.name,       "foo");
             assert_eq(f.visible,    false);
             assert_eq(f.totality,   "");
-            assert_eq(f.has_body,   true);
-            assert_eq(f.params.len(), 0)
+            assert_eq(f.params.len(), 0);
+            let has_body: Bool = match f.body { Some(_) => true, None => false };
+            assert_eq(has_body, true)
         }
     }
 }
@@ -201,7 +202,10 @@ test fn fn_without_body() -> Unit {
     assert_eq(p.fns.len(), 1);
     match p.fns.get(0) {
         None    => assert_eq(true, false),
-        Some(f) => assert_eq(f.has_body, false)
+        Some(f) => {
+            let has_body: Bool = match f.body { Some(_) => true, None => false };
+            assert_eq(has_body, false)
+        }
     }
 }
 
@@ -384,6 +388,139 @@ test fn capability_qualified_type_no_errors() -> Unit {
         None    => assert_eq(true, false),
         Some(f) => assert_eq(f.params.len(), 1)
     }
+}
+
+// ── Phase 3: body parsing tests ───────────────────────────────────────────────
+
+test fn fn_body_is_some_when_braces_present() -> Unit {
+    let p: Program = lp("fn add(a: Int, b: Int) -> Int { a + b }");
+    assert_eq(p.errors.len(), 0);
+    match p.fns.get(0) {
+        None    => assert_eq(true, false),
+        Some(f) => {
+            let has_body: Bool = match f.body { Some(_) => true, None => false };
+            assert_eq(has_body, true)
+        }
+    }
+}
+
+test fn fn_body_none_on_semicolon_stub() -> Unit {
+    let p: Program = lp("builtin fn add(a: Int, b: Int) -> Int;");
+    assert_eq(p.errors.len(), 0);
+    match p.fns.get(0) {
+        None    => assert_eq(true, false),
+        Some(f) => {
+            let has_body: Bool = match f.body { Some(_) => true, None => false };
+            assert_eq(has_body, false)
+        }
+    }
+}
+
+test fn fn_body_with_let_stmt_no_errors() -> Unit {
+    let p: Program = lp("fn double(x: Int) -> Int { let y: Int = x + x; y }");
+    assert_eq(p.errors.len(), 0);
+    match p.fns.get(0) {
+        None    => assert_eq(true, false),
+        Some(f) => {
+            let has_body: Bool = match f.body { Some(_) => true, None => false };
+            assert_eq(has_body, true)
+        }
+    }
+}
+
+test fn fn_body_with_if_expr_no_errors() -> Unit {
+    let p: Program = lp("fn abs(x: Int) -> Int { if x >= 0 { x } else { 0 - x } }");
+    assert_eq(p.errors.len(), 0);
+    match p.fns.get(0) {
+        None    => assert_eq(true, false),
+        Some(f) => {
+            let has_body: Bool = match f.body { Some(_) => true, None => false };
+            assert_eq(has_body, true)
+        }
+    }
+}
+
+test fn fn_body_with_match_no_errors() -> Unit {
+    let src: String = "fn describe(n: Int) -> String { match n { 0 => \"zero\", _ => \"other\", } }";
+    let p: Program = lp(src);
+    assert_eq(p.errors.len(), 0);
+    match p.fns.get(0) {
+        None    => assert_eq(true, false),
+        Some(f) => {
+            let has_body: Bool = match f.body { Some(_) => true, None => false };
+            assert_eq(has_body, true)
+        }
+    }
+}
+
+test fn fn_body_with_while_loop_no_errors() -> Unit {
+    let src: String = "partial fn count(n: Int) -> Int { let i: ref Int = 0; while i < n decreases n - i { i = i + 1 }; i }";
+    let p: Program = lp(src);
+    assert_eq(p.errors.len(), 0);
+    match p.fns.get(0) {
+        None    => assert_eq(true, false),
+        Some(f) => {
+            let has_body: Bool = match f.body { Some(_) => true, None => false };
+            assert_eq(has_body, true)
+        }
+    }
+}
+
+test fn fn_body_return_stmt_no_errors() -> Unit {
+    let p: Program = lp("fn early(x: Int) -> Int { return x; 0 }");
+    assert_eq(p.errors.len(), 0);
+    match p.fns.get(0) {
+        None    => assert_eq(true, false),
+        Some(f) => {
+            let has_body: Bool = match f.body { Some(_) => true, None => false };
+            assert_eq(has_body, true)
+        }
+    }
+}
+
+test fn fn_body_nested_calls_no_errors() -> Unit {
+    let src: String = "fn greet(name: String) -> Unit ! Console { println(format(\"Hello, {}!\", [name])) }";
+    let p: Program = lp(src);
+    assert_eq(p.errors.len(), 0)
+}
+
+test fn fn_body_list_literal_no_errors() -> Unit {
+    let p: Program = lp("fn nums() -> List[Int] { [1, 2, 3, 4, 5] }");
+    assert_eq(p.errors.len(), 0)
+}
+
+test fn fn_body_struct_literal_no_errors() -> Unit {
+    let p: Program = lp("type Point = struct { x: Int, y: Int } fn origin() -> Point { Point { x: 0, y: 0 } }");
+    assert_eq(p.errors.len(), 0)
+}
+
+test fn fn_body_binary_arithmetic_no_errors() -> Unit {
+    let p: Program = lp("fn calc(a: Int, b: Int) -> Int { a * b + a - b / 2 }");
+    assert_eq(p.errors.len(), 0)
+}
+
+test fn fn_body_method_chain_no_errors() -> Unit {
+    let p: Program = lp("fn join(xs: List[String]) -> String { xs.fold(\"\", |acc: String, s: String| acc.concat(s)) }");
+    assert_eq(p.errors.len(), 0)
+}
+
+test fn fn_body_for_loop_no_errors() -> Unit {
+    let src: String = "partial fn sum(xs: List[Int]) -> Int { let total: ref Int = 0; for x in xs { total = total + x }; total }";
+    let p: Program = lp(src);
+    assert_eq(p.errors.len(), 0)
+}
+
+test fn fn_body_match_some_none_pattern_no_errors() -> Unit {
+    let src: String = "fn unwrap_or(opt: Option[Int], dflt: Int) -> Int { match opt { Some(v) => v, None => dflt, } }";
+    let p: Program = lp(src);
+    assert_eq(p.errors.len(), 0)
+}
+
+test fn multiple_fns_with_bodies_no_errors() -> Unit {
+    let src: String = "fn a() -> Int { 1 } fn b() -> Int { 2 } fn c() -> Int { a() + b() }";
+    let p: Program = lp(src);
+    assert_eq(p.fns.len(),    3);
+    assert_eq(p.errors.len(), 0)
 }
 
 test fn return_type_refinement_no_errors() -> Unit {

@@ -209,6 +209,45 @@ The parser MUST parse security-labeled types (`Public[T]`, `Tainted[T]`, `Secret
 
 **Corpus:** `tests/corpus/05_ifc/labels.mvl`
 
+### Requirement 8-SH: Self-Hosted Parser — Alternative Implementation [MUST]
+
+The MVL parser SHALL have a self-hosted implementation written in MVL itself
+(`compiler/parser.mvl`) that produces an AST equivalent to the Rust reference
+implementation for all corpus programs (#1116).
+
+**Primary implementation:** `src/mvl/parser/` (Rust, reference)
+**Self-hosted implementation:** `compiler/parser.mvl` + `compiler/tir.mvl`
+
+The self-hosted parser MUST satisfy cross-validation requirements:
+- It SHALL tokenize all corpus programs identically to `compiler/lexer.mvl`.
+- It SHALL produce a structurally equivalent AST for all corpus programs.
+- It SHALL parse its own source file without errors (self-referential test).
+- Error spans MUST match (same line/column as Rust parser).
+
+**Shared type definitions:** `compiler/tir.mvl` — single source of truth for
+`Token`, `TokenKind`, `Expr`, `Stmt`, `Block`, `Pattern`, `FnDecl`, and all
+AST node types used by both the parser and downstream stages.
+
+**Tests:** `compiler/parser_test.mvl` (Phase 3 section)
+
+#### Scenario: Self-hosted body parsing
+
+- GIVEN a function with a body `fn add(a: Int, b: Int) -> Int { a + b }`
+- WHEN parsed by `compiler/parser.mvl`
+- THEN `FnDecl.body` MUST be `Some(block)` where block contains a BinaryExpr tail
+
+#### Scenario: Self-referential parse
+
+- GIVEN the file `compiler/parser.mvl` itself as input
+- WHEN parsed by `compiler/parser.mvl`
+- THEN all functions MUST be parsed without errors (body = Some(…))
+
+#### Scenario: Cross-validation
+
+- GIVEN any corpus `.mvl` file
+- WHEN parsed by both the Rust parser and `compiler/parser.mvl`
+- THEN the declaration counts (fns, types, uses, consts) MUST match
+
 ### Requirement 8: Error Recovery and Diagnostics [MUST]
 
 The parser MUST recover from errors and report multiple diagnostics per file. Every diagnostic MUST include file path, line number, column number, and a human-readable message. The parser SHOULD suggest fixes where possible.
