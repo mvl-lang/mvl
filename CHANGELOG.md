@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.201.0] - 2026-06-12
+
+### Added
+
+- **Named-field enum variant construction** (#1357) — MVL now supports `Enum::Variant { field: value }` syntax for constructing enum variants with named fields. Parser already handled the syntax; enhanced the type checker to infer generic type parameters from provided field values and return the correctly parameterized enum type. LLVM backend tracks struct-variant field names and reorders them to declaration order. Supports both non-generic and generic enum variants.
+
 ## [0.200.0] - 2026-06-12
 
 ### Added
