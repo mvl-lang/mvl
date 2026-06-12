@@ -21,6 +21,19 @@ use super::capabilities::block_return_flows_from_ref_param;
 use super::{FnContext, TypeChecker};
 
 impl TypeChecker {
+    /// Register only type and actor declarations — used as a pre-pass in
+    /// multi-file checking so cross-file extension methods can validate their
+    /// receiver type before the full prelude is collected (#1358).
+    pub(super) fn collect_type_declarations_only(&mut self, decls: &[Decl]) {
+        for decl in decls {
+            match decl {
+                Decl::Type(td) => self.register_type(td),
+                Decl::Actor(ad) => self.register_actor(ad),
+                _ => {}
+            }
+        }
+    }
+
     pub(super) fn collect_declarations(&mut self, decls: &[Decl]) {
         for decl in decls {
             match decl {

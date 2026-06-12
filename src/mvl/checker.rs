@@ -150,6 +150,19 @@ pub fn check_with_two_preludes_mode(
 
     let mut checker = TypeChecker::new_with_hierarchy(hierarchy);
     checker.errors.extend(hierarchy_errors);
+    // Pre-pass: register all type/actor declarations from ALL files (including
+    // prog) before the full prelude collection.  This ensures that cross-file
+    // extension methods in the prelude can validate their receiver type even
+    // when that type is defined only in the current file (#1358).
+    // define_type is idempotent (HashMap insert), so re-registering in the
+    // main pass is safe.
+    for p in prelude_a
+        .iter()
+        .chain(prelude_b.iter().copied())
+        .chain(std::iter::once(prog))
+    {
+        checker.collect_type_declarations_only(&p.declarations);
+    }
     for p in prelude_a.iter().chain(prelude_b.iter().copied()) {
         checker.collect_declarations(&p.declarations);
     }

@@ -2,12 +2,17 @@
 
 ## [Unreleased]
 
+## [0.202.1] - 2026-06-13
+
+### Fixed
+
+- **Cross-file extension method type conflict** (#1358) — Fixed false `UndefinedType` errors when a prelude file defines an extension method whose receiver type is declared only in the current file under type-check. The root cause was incorrect ordering of declaration passes in `check_with_two_preludes_mode`; now type declarations are pre-registered from all files (prelude + prog) before extension method validation occurs.
+
 ## [0.202.0] - 2026-06-12
 
 ### Added
 
 - **Struct pattern wildcards** (#1356) — MVL now supports `Foo { x, .. }` syntax in match patterns to ignore remaining fields. Eliminates brittle exhaustive field lists when matching large structs like `TirExpr` and `FnDecl` during self-hosting work. Adds `DotDot` token to lexer, `rest: bool` to `Pattern::Struct` AST node, and emits `..` in the Rust backend. EBNF grammar updated.
-
 ## [0.201.0] - 2026-06-12
 
 ### Added
