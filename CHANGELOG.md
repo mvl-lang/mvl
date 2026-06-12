@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.202.2] - 2026-06-13
+
+### Fixed
+
+- **Extension method self receiver semantics** (#1359) — Fixed Rust backend hardcoding `&self` for all extension methods on user-defined types, ignoring MVL ownership semantics. Now correctly derives receiver from capability analysis: consuming methods without inferred borrow get `self`, read-only methods inferred as `&self`, and explicit `val`/`ref` capabilities control the receiver kind. Added `*self` dereference detection in capability analysis to mark methods like `Box[T]::unwrap` as consuming. Annotated `Logger` methods with `val self: Logger` for correct multi-call semantics.
+
 ## [0.202.1] - 2026-06-13
 
 ### Fixed

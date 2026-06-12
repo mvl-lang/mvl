@@ -283,21 +283,21 @@ fn log_emit(logger: Logger, level: String, msg: String, fields: Map[String, Stri
 ///
 /// Requires `! Log`. A function that calls this without `! Log` is a compile
 /// error. IFC: Secret[T] or Tainted[T] arguments cause a compile error.
-pub fn Logger::debug(self, msg: String, fields: Map[String, String]) -> Unit ! Log {
+pub fn Logger::debug(val self: Logger, msg: String, fields: Map[String, String]) -> Unit ! Log {
     log_emit(self, "DEBUG", msg, fields)
 }
 
 /// Emit an INFO-level structured log record (normal operational events).
-pub fn Logger::info(self, msg: String, fields: Map[String, String]) -> Unit ! Log {
+pub fn Logger::info(val self: Logger, msg: String, fields: Map[String, String]) -> Unit ! Log {
     log_emit(self, "INFO", msg, fields)
 }
 
 /// Emit a WARN-level structured log record (recoverable anomalies).
-pub fn Logger::warn(self, msg: String, fields: Map[String, String]) -> Unit ! Log {
+pub fn Logger::warn(val self: Logger, msg: String, fields: Map[String, String]) -> Unit ! Log {
     log_emit(self, "WARN", msg, fields)
 }
 
 /// Emit an ERROR-level structured log record (per-operation failures).
-pub fn Logger::error(self, msg: String, fields: Map[String, String]) -> Unit ! Log {
+pub fn Logger::error(val self: Logger, msg: String, fields: Map[String, String]) -> Unit ! Log {
     log_emit(self, "ERROR", msg, fields)
 }

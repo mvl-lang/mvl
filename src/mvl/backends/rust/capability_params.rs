@@ -263,7 +263,17 @@ fn expr_has_disqualifying_use_tir(param: &str, expr: &crate::mvl::ir::TirExpr) -
                 || expr_has_disqualifying_use_tir(param, left)
                 || expr_has_disqualifying_use_tir(param, right)
         }
-        TirExprKind::Unary { expr: inner, .. } => expr_has_disqualifying_use_tir(param, inner),
+        TirExprKind::Unary {
+            op, expr: inner, ..
+        } => {
+            // Direct `*param` dereference consumes the value (e.g., Box[T]::unwrap).
+            if matches!(op, crate::mvl::parser::ast::UnaryOp::Deref)
+                && matches!(&inner.kind, TirExprKind::Var(n) if n == param)
+            {
+                return true;
+            }
+            expr_has_disqualifying_use_tir(param, inner)
+        }
         TirExprKind::Propagate(inner)
         | TirExprKind::Consume(inner)
         | TirExprKind::Relabel { expr: inner, .. } => {
