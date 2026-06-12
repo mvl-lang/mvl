@@ -6309,6 +6309,42 @@ fn cross_file_mutual_calls_both_resolve() {
     );
 }
 
+// ── #1358: cross-file extension method / type conflict ────────────────────────
+
+#[test]
+fn cross_file_extension_method_type_in_current_file_no_false_error() {
+    // GIVEN: module B defines an extension method on TypeFoo::helper()
+    //        module A defines type TypeFoo (the receiver type)
+    // WHEN:  A is checked with B as prelude
+    // THEN:  no false UndefinedType error for the extension method in B
+    let module_a = parse_src("pub type TypeFoo = struct { x: Int }");
+    let module_b = parse_src("pub fn TypeFoo::helper(self) -> Int { self.x }");
+    let result = check_with_two_preludes(&[], &[&module_b], &module_a);
+    assert!(
+        result.is_ok(),
+        "no false error when extension method receiver type is in current file, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn cross_file_extension_method_call_resolves() {
+    // GIVEN: module A defines type TypeBar
+    //        module B defines fn TypeBar::double(self) -> Int
+    //        module C calls v.double() where v: TypeBar
+    // WHEN:  C is checked with A and B as prelude
+    // THEN:  the method call resolves — no UndefinedFunction error
+    let module_a = parse_src("pub type TypeBar = struct { n: Int }");
+    let module_b = parse_src("pub fn TypeBar::double(self) -> Int { self.n + self.n }");
+    let module_c = parse_src("fn use_it(v: TypeBar) -> Int { v.double() }");
+    let result = check_with_two_preludes(&[module_a, module_b], &[], &module_c);
+    assert!(
+        result.is_ok(),
+        "cross-file extension method call should resolve, got: {:?}",
+        result.errors
+    );
+}
+
 // ── #593: Layer 4 — Cooper's Presburger QE ────────────────────────────────────
 
 #[test]
