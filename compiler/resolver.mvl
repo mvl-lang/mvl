@@ -1,0 +1,304 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// compiler/resolver.mvl — module resolver: List[NamedProgram] → ResolveResult (issue #1115)
+//
+// Corresponds to src/mvl/resolver.rs + resolver/cycle_check.rs + resolver/visibility.rs.
+//
+// Three-pass algorithm:
+//   Pass 1: collect public exports for every module
+//   Pass 2: validate each module's use declarations against the export map
+//   Pass 3: detect circular imports via DFS on the import adjacency graph
+//
+// MVL totality rules applied throughout:
+//   total fn — no recursion, uses for loops; provably terminates
+//   partial fn — recursive or calls partial; uses while loops
+
+use std.collections.{Map}
+use tir::ConstDecl;
+use tir::FnDecl;
+use tir::Program;
+use tir::TypeDecl;
+use tir::UseDecl;
+
+// ── Input / output types ──────────────────────────────────────────────────────
+
+/// A parsed module: its dotted name and its Program.
+pub type NamedProgram = struct {
+    name:    String,
+    program: Program,
+}
+
+/// A single resolved import within a module.
+pub type ResolvedImport = struct {
+    item:        String,
+    source_path: List[String],
+    reexport:    Bool,
+}
+
+/// A resolved module.
+pub type ResolvedModule = struct {
+    name:    List[String],
+    exports: List[String],
+    imports: List[ResolvedImport],
+}
+
+/// Resolution error.
+pub type ResolveError = enum {
+    MissingModule  { module: String, missing_path: List[String] },
+    NotExported    { module: String, item: String, source: String },
+    CircularImport { cycle: List[String] },
+}
+
+/// Output of the resolver pass.
+pub type ResolveResult = struct {
+    modules: Map[String, ResolvedModule],
+    errors:  List[ResolveError],
+}
+
+// ── DFS helpers ───────────────────────────────────────────────────────────────
+
+/// Carrier for a DFS traversal result.
+pub type DfsResult = struct {
+    cycle: List[String],
+    found: Bool,
+}
+
+/// Safely get item i from a List[String], or "" if out of bounds.
+total fn get_str(list: List[String], i: Int) -> String {
+    match list.get(i) { Some(s) => s, None => "" }
+}
+
+/// Safely get item i from a List[List[String]], or [] if out of bounds.
+total fn get_strs(list: List[List[String]], i: Int) -> List[String] {
+    match list.get(i) { Some(s) => s, None => [] }
+}
+
+/// Safely get item i from a List[NamedProgram], or a dummy if out of bounds.
+total fn get_np(list: List[NamedProgram], i: Int) -> NamedProgram {
+    match list.get(i) {
+        Some(np) => np,
+        None     => NamedProgram {
+            name:    "",
+            program: Program {
+                fns: [], types: [], uses: [], consts: [], externs: [],
+                impls: [], actors: [], effect_decls: [], label_decls: [],
+                relabel_decls: [], errors: [],
+            },
+        },
+    }
+}
+
+// ── DFS cycle detection ───────────────────────────────────────────────────────
+
+/// DFS from `node` over `graph`.
+/// `path`    = current recursion stack
+/// `visited` = globally finished nodes
+///
+/// Returns DfsResult with found=true and the cycle when a back-edge is detected.
+partial fn dfs_visit(
+    node:    String,
+    graph:   Map[String, List[String]],
+    path:    List[String],
+    visited: List[String],
+) -> DfsResult {
+    if visited.any(|v: String| v == node) {
+        DfsResult { cycle: [], found: false }
+    } else if path.any(|p: String| p == node) {
+        // Back-edge: reconstruct cycle from first occurrence of node.
+        let cycle: ref List[String] = [];
+        let in_cycle: ref Bool = false;
+        let i: ref Int = 0;
+        while i < path.len() {
+            let seg: String = get_str(path, i);
+            if seg == node { in_cycle = true }
+            if in_cycle { cycle.push(seg) }
+            i = i + 1
+        }
+        cycle.push(node);
+        DfsResult { cycle: cycle, found: true }
+    } else {
+        let new_path: ref List[String] = [];
+        let cp: ref Int = 0;
+        while cp < path.len() {
+            new_path.push(get_str(path, cp));
+            cp = cp + 1
+        }
+        new_path.push(node);
+        let neighbors: List[String] = match graph.get(node) {
+            Some(ns) => ns,
+            None     => [],
+        };
+        let result: ref DfsResult = DfsResult { cycle: [], found: false };
+        let ni: ref Int = 0;
+        while ni < neighbors.len() {
+            if !result.found {
+                let neighbor: String = get_str(neighbors, ni);
+                let r: DfsResult = dfs_visit(neighbor, graph, new_path, visited);
+                if r.found { result = r }
+            }
+            ni = ni + 1
+        }
+        result
+    }
+}
+
+/// Run DFS from every unvisited node; return all cycles found.
+partial fn detect_cycles(graph: Map[String, List[String]]) -> List[List[String]] {
+    let visited: ref List[String] = [];
+    let cycles: ref List[List[String]] = [];
+    let keys: List[String] = graph.keys();
+    let ki: ref Int = 0;
+    while ki < keys.len() {
+        let node: String = get_str(keys, ki);
+        if !visited.any(|v: String| v == node) {
+            let r: DfsResult = dfs_visit(node, graph, [], visited);
+            if r.found { cycles.push(r.cycle) }
+            visited.push(node)
+        }
+        ki = ki + 1
+    }
+    cycles
+}
+
+// ── Export collection (total) ─────────────────────────────────────────────────
+
+/// Collect public item names from a Program (fns, types, consts).
+total fn collect_exports(prog: Program) -> List[String] {
+    let out: ref List[String] = [];
+    for f in prog.fns    { if f.visible { out.push(f.name) } }
+    for t in prog.types  { if t.visible { out.push(t.name) } }
+    for c in prog.consts { if c.visible { out.push(c.name) } }
+    out
+}
+
+total fn has_export(exports: List[String], name: String) -> Bool {
+    exports.any(|e: String| e == name)
+}
+
+total fn path_to_str(path: List[String]) -> String {
+    path.join(".")
+}
+
+total fn first_segment(path: List[String]) -> String {
+    match path.get(0) { Some(s) => s, None => "" }
+}
+
+// ── Use validation (total) ────────────────────────────────────────────────────
+
+/// Validate one module's use declarations; return errors found.
+total fn validate_uses(
+    module_name: String,
+    uses:        List[UseDecl],
+    export_map:  Map[String, List[String]],
+) -> List[ResolveError] {
+    let errors: ref List[ResolveError] = [];
+    for ud in uses {
+        let source_str: String = path_to_str(ud.path);
+        let is_external: Bool = first_segment(ud.path) == "std" ||
+                                first_segment(ud.path) == "pkg";
+        if !is_external {
+            match export_map.get(source_str) {
+                None => errors.push(ResolveError::MissingModule {
+                    module:       module_name,
+                    missing_path: ud.path,
+                }),
+                Some(src_exports) => {
+                    for item in ud.imports {
+                        if !has_export(src_exports, item) {
+                            errors.push(ResolveError::NotExported {
+                                module: module_name,
+                                item:   item,
+                                source: source_str,
+                            })
+                        }
+                    }
+                },
+            }
+        }
+    }
+    errors
+}
+
+// ── Import graph (total) ──────────────────────────────────────────────────────
+
+/// Build adjacency list: module → modules it imports from.
+total fn build_import_graph(modules: List[NamedProgram]) -> Map[String, List[String]] {
+    let graph: ref Map[String, List[String]] = Map::new();
+    for nm in modules {
+        let deps: ref List[String] = [];
+        for ud in nm.program.uses {
+            let src: String = path_to_str(ud.path);
+            if src != nm.name { deps.push(src) }
+        }
+        graph.insert(nm.name, deps)
+    }
+    graph
+}
+
+// ── Top-level resolver (partial) ──────────────────────────────────────────────
+
+/// Resolve a list of named modules: collect exports, validate uses, detect cycles.
+///
+/// Corresponds to `resolve()` in src/mvl/resolver.rs.
+pub partial fn resolve(modules: List[NamedProgram]) -> ResolveResult {
+    let errors: ref List[ResolveError] = [];
+
+    // Pass 1: collect exports.
+    let export_map: ref Map[String, List[String]] = Map::new();
+    let i1: ref Int = 0;
+    while i1 < modules.len() {
+        let nm: NamedProgram = get_np(modules, i1);
+        export_map.insert(nm.name, collect_exports(nm.program));
+        i1 = i1 + 1
+    }
+
+    // Pass 2: validate use declarations.
+    let i2: ref Int = 0;
+    while i2 < modules.len() {
+        let nm: NamedProgram = get_np(modules, i2);
+        let use_errors: List[ResolveError] = validate_uses(nm.name, nm.program.uses, export_map);
+        let ei: ref Int = 0;
+        while ei < use_errors.len() {
+            match use_errors.get(ei) { Some(e) => errors.push(e), None => {} }
+            ei = ei + 1
+        }
+        i2 = i2 + 1
+    }
+
+    // Pass 3: detect circular imports.
+    let graph: Map[String, List[String]] = build_import_graph(modules);
+    let cycles: List[List[String]] = detect_cycles(graph);
+    let ci: ref Int = 0;
+    while ci < cycles.len() {
+        let cycle: List[String] = get_strs(cycles, ci);
+        errors.push(ResolveError::CircularImport { cycle: cycle });
+        ci = ci + 1
+    }
+
+    // Build the resolved module map.
+    let resolved: ref Map[String, ResolvedModule] = Map::new();
+    let i3: ref Int = 0;
+    while i3 < modules.len() {
+        let nm: NamedProgram = get_np(modules, i3);
+        let exports: List[String] = match export_map.get(nm.name) {
+            Some(ex) => ex,
+            None     => [],
+        };
+        let imports: List[ResolvedImport] = nm.program.uses.map(|ud: UseDecl|
+            ResolvedImport {
+                item:        ud.imports.join(","),
+                source_path: ud.path,
+                reexport:    ud.visible,
+            }
+        );
+        resolved.insert(nm.name, ResolvedModule {
+            name:    [nm.name],
+            exports: exports,
+            imports: imports,
+        });
+        i3 = i3 + 1
+    }
+
+    ResolveResult { modules: resolved, errors: errors }
+}
