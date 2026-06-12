@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [0.199.0] - 2026-06-12
+
+### Added
+
+- **Resolver in MVL** (#1115) — port the three-pass module resolver (`src/mvl/resolver.rs`) to `compiler/resolver.mvl`. Collects public exports (Pass 1), validates use declarations (Pass 2), and detects circular imports via recursive DFS (Pass 3). Operates entirely at declaration scope, feasible with simplified types.
+- **Mono infrastructure in MVL** (#1115) — port monomorphization machinery (`src/mvl/passes/mono.rs`) to `compiler/mono.mvl`. Implements `MonoSubs`/`MonoFn`/`MonoProgram` types, `substitute_type` (restructured to avoid Rust backend move-then-capture issue), `mangle_name`, `ty_to_type_expr` bridge, and entry-point seeding. Transitive call-site discovery deferred to Phase 3 (#1116).
+
 ## [0.198.0] - 2026-06-11
 
 ### Added

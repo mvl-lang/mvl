@@ -1,0 +1,248 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// compiler/mono.mvl — monomorphization pass: Program → MonoProgram (issue #1115)
+//
+// Corresponds to src/mvl/passes/mono.rs in the Rust compiler.
+//
+// Phase 2b scope:
+//   ✅ MonoProgram / MonoFn / MonoSubs types
+//   ✅ substitute_type — apply MonoSubs to a TypeExpr
+//   ✅ mangle_name — generate mangled symbol names
+//   ✅ Entry-point seeding — non-generic fns → MonoFn with empty subs
+//   ✅ ty_to_type_expr — bridge Ty → TypeExpr for substitution maps
+//   ⏳ CallCollector (body walking) — deferred to Phase 3 (#1116)
+//      Full Expr/Stmt types needed to discover transitive generic instantiations.
+//
+// MVL totality rules:
+//   total fn — non-recursive, finite iteration; must use for loops
+//   partial fn — recursive on TypeExpr/Ty trees; must use while when iterating
+
+use tir::Effect;
+use tir::FnDecl;
+use tir::GenericParam;
+use tir::Param;
+use tir::Program;
+use tir::Span;
+use tir::Ty;
+use tir::TypeExpr;
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+/// One (param_name, concrete TypeExpr) substitution entry.
+pub type MonoSubsEntry = struct {
+    param: String,
+    ty:    TypeExpr,
+}
+
+/// A type-parameter substitution list.
+/// Represents { "T" → Int, "U" → String } for e.g. `map[T=Int, U=String]`.
+pub type MonoSubs = struct {
+    entries: List[MonoSubsEntry],
+}
+
+/// A monomorphized function: one copy per generic instantiation.
+pub type MonoFn = struct {
+    mangled_name:  String,
+    original_name: String,
+    type_subs:     MonoSubs,
+    decl:          FnDecl,  // concrete decl; type_params cleared
+}
+
+/// Output of the monomorphization pass.
+pub type MonoProgram = struct {
+    fns: List[MonoFn],
+}
+
+// ── MonoSubs helpers ──────────────────────────────────────────────────────────
+
+/// Empty substitution.
+total fn empty_subs() -> MonoSubs {
+    MonoSubs { entries: [] }
+}
+
+/// Zero-span TypeExpr sentinel used as a "not found" placeholder.
+total fn nil_te() -> TypeExpr {
+    TypeExpr { name: "", args: [], span: Span { line: 0, col: 0 } }
+}
+
+/// Look up a type parameter in a MonoSubs.
+total fn subs_get(subs: MonoSubs, name: String) -> Option[TypeExpr] {
+    let found: ref Bool = false;
+    let result: ref TypeExpr = nil_te();
+    for e in subs.entries {
+        if e.param == name && !found {
+            result = e.ty;
+            found = true
+        }
+    }
+    if found { Some(result) } else { None }
+}
+
+total fn subs_len(subs: MonoSubs) -> Int {
+    subs.entries.len()
+}
+
+// ── Type name for mangling ────────────────────────────────────────────────────
+
+/// Convert a TypeExpr to a flat string for use in mangled names.
+/// e.g. TypeExpr{name:"List", args:[{name:"Int"}]} → "List_Int"
+/// Recursion depth bounded by TypeExpr tree depth (partial — no finite proof).
+partial fn type_name(te: TypeExpr) -> String {
+    if te.args.len() == 0 {
+        te.name
+    } else {
+        let parts: List[String] = te.args.map(|a: TypeExpr| type_name(a));
+        format("{}_{}", [te.name, parts.join("_")])
+    }
+}
+
+// ── Name mangling ─────────────────────────────────────────────────────────────
+
+/// Mangle a function name with its instantiated type parameters.
+/// Non-generic functions are returned unchanged.
+/// e.g. "map" + [T, U] + {T→Int, U→String} → "map_Int_String"
+partial fn mangle_name(name: String, type_params: List[GenericParam], subs: MonoSubs) -> String {
+    if type_params.len() == 0 {
+        name
+    } else {
+        let parts: ref List[String] = [name];
+        let i: ref Int = 0;
+        while i < type_params.len() {
+            match type_params.get(i) {
+                Some(gp) => match subs_get(subs, gp.name) {
+                    Some(te) => parts.push(type_name(te)),
+                    None     => parts.push(gp.name),
+                },
+                None => {}
+            }
+            i = i + 1
+        }
+        parts.join("_")
+    }
+}
+
+// ── Type substitution ─────────────────────────────────────────────────────────
+
+/// Apply a MonoSubs to a TypeExpr: replace bare type-param names with concrete
+/// TypeExprs and recurse into generic arguments.
+///
+/// Structured so each execution branch uses `subs` at most once — avoids
+/// the Rust backend's move-then-capture issue with non-Copy struct types.
+partial fn substitute_type(te: TypeExpr, subs: MonoSubs) -> TypeExpr {
+    if subs.entries.len() == 0 {
+        // No substitutions — return as-is (field access, no move of subs).
+        te
+    } else if te.args.len() == 0 {
+        // Leaf node: check whether te.name is a type parameter.
+        // subs is consumed here; closure path (below) is not taken.
+        match subs_get(subs, te.name) {
+            Some(t) => t,
+            None    => te,
+        }
+    } else {
+        // Generic constructor: recurse into args.
+        // subs is consumed by the closure; subs_get path (above) is not taken.
+        TypeExpr {
+            name: te.name,
+            args: te.args.map(|a: TypeExpr| substitute_type(a, subs)),
+            span: te.span,
+        }
+    }
+}
+
+/// Apply subs to a Param.
+partial fn substitute_param(p: Param, subs: MonoSubs) -> Param {
+    Param {
+        capability: p.capability,
+        mutable:    p.mutable,
+        name:       p.name,
+        ty:         substitute_type(p.ty, subs),
+        span:       p.span,
+    }
+}
+
+/// Apply subs to an FnDecl: substitute param/return types, clear type_params.
+partial fn substitute_decl(fd: FnDecl, subs: MonoSubs) -> FnDecl {
+    FnDecl {
+        visible:     fd.visible,
+        is_test:     fd.is_test,
+        is_builtin:  fd.is_builtin,
+        totality:    fd.totality,
+        name:        fd.name,
+        type_params: [],
+        params:      fd.params.map(|p: Param| substitute_param(p, subs)),
+        ret_type:    substitute_type(fd.ret_type, subs),
+        effects:     fd.effects,
+        constraints: fd.constraints,
+        has_body:    fd.has_body,
+        span:        fd.span,
+    }
+}
+
+// ── Ty → TypeExpr bridge ──────────────────────────────────────────────────────
+
+/// Convert a resolved Ty back to a simplified TypeExpr.
+/// Used when building MonoSubs from checker-inferred argument types.
+pub partial fn ty_to_type_expr(ty: Ty) -> TypeExpr {
+    let z: Span = Span { line: 0, col: 0 };
+    match ty {
+        Ty::Int    => TypeExpr { name: "Int",    args: [], span: z },
+        Ty::Float  => TypeExpr { name: "Float",  args: [], span: z },
+        Ty::Str    => TypeExpr { name: "String", args: [], span: z },
+        Ty::Bool   => TypeExpr { name: "Bool",   args: [], span: z },
+        Ty::Char   => TypeExpr { name: "Char",   args: [], span: z },
+        Ty::Byte   => TypeExpr { name: "Byte",   args: [], span: z },
+        Ty::UByte  => TypeExpr { name: "UByte",  args: [], span: z },
+        Ty::UInt   => TypeExpr { name: "UInt",   args: [], span: z },
+        Ty::Unit   => TypeExpr { name: "Unit",   args: [], span: z },
+        Ty::Never  => TypeExpr { name: "Never",  args: [], span: z },
+        Ty::Named(name, args) => TypeExpr {
+            name: name,
+            args: args.map(|a: Ty| ty_to_type_expr(a)),
+            span: z,
+        },
+        Ty::List(inner)   => TypeExpr { name: "List",   args: [ty_to_type_expr(*inner)], span: z },
+        Ty::Option(inner) => TypeExpr { name: "Option", args: [ty_to_type_expr(*inner)], span: z },
+        Ty::Set(inner)    => TypeExpr { name: "Set",    args: [ty_to_type_expr(*inner)], span: z },
+        Ty::Ptr(inner)    => TypeExpr { name: "Ptr",    args: [ty_to_type_expr(*inner)], span: z },
+        Ty::Map(k, v) => TypeExpr {
+            name: "Map",
+            args: [ty_to_type_expr(*k), ty_to_type_expr(*v)],
+            span: z,
+        },
+        Ty::Result(ok, err) => TypeExpr {
+            name: "Result",
+            args: [ty_to_type_expr(*ok), ty_to_type_expr(*err)],
+            span: z,
+        },
+        _ => TypeExpr { name: "Unknown", args: [], span: z },
+    }
+}
+
+// ── Entry-point seeding ───────────────────────────────────────────────────────
+
+/// Wrap a concrete (non-generic) FnDecl as a MonoFn with empty substitution.
+total fn seed_fn(fd: FnDecl) -> MonoFn {
+    MonoFn {
+        mangled_name:  fd.name,
+        original_name: fd.name,
+        type_subs:     empty_subs(),
+        decl:          fd,
+    }
+}
+
+// ── Top-level ─────────────────────────────────────────────────────────────────
+
+/// Monomorphize a Program.
+///
+/// Phase 2b: seeds only non-generic entry points (functions with no type params).
+/// Generic call-site discovery via body walking is deferred to Phase 3 (#1116).
+///
+/// Corresponds to `monomorphize()` in src/mvl/passes/mono.rs.
+pub total fn monomorphize(prog: Program) -> MonoProgram {
+    let fns: List[MonoFn] = prog.fns
+        .filter(|fd: FnDecl| fd.type_params.len() == 0)
+        .map(|fd: FnDecl| seed_fn(fd));
+    MonoProgram { fns: fns }
+}
