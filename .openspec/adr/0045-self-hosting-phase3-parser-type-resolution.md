@@ -174,6 +174,41 @@ variant restriction is not fundamental to the language design.
 - `Block.tail_expr: List[Expr]` replaces `Option[Expr]` to avoid a separate
   MVL limitation (`ref Option[T] = None` causes a lifetime error)
 
+---
+
+## Relation to language definition
+
+### Eleven Requirements (ADR-0001)
+
+This decision affects **Req 5** (verifiable language) and **Req 9** (no undefined behavior):
+
+- **Req 5 (verifiable):** Strengthened. Using `List[T]` instead of `Box[T]` makes MVL-to-Rust codegen correct without requiring Box construction support, enabling the self-hosted parser to be verified.
+- **Req 9 (no undefined):** Unchanged. The type system ensures correct indirection; no Rust `unsafe` is required.
+
+All other requirements unaffected.
+
+### Design Principles (README)
+
+- **Explicit over implicit** — Consistent with. Helper functions `box_expr`/`unbox_expr` make indirection explicit.
+- **One way to do it** — Strengthened. Disallows multiple workarounds; establishes single pattern for recursive types in MVP.
+- **Signature is the threat model** — Consistent with. Type signatures show that recursive fields require `List[T]` indirection; callers must unwrap.
+- **No UFCS** — Unchanged.
+- **No bare unwrap** — Consistent with. `unbox_expr` requires pattern match with default fallback.
+- **Minimal core** — Strengthened. Avoids hardcoding `Box[T]` support in the compiler.
+- **First-class patterns** — Consistent with. Structs and enums encode patterns (tuple variants vs struct variants).
+- **Principle of least power** — Consistent with. Uses only standard `List[T]` with established semantics.
+- **User intent is the spec** — Consistent with. Naming convention (uppercase for types) is explicit in parser code.
+- **No silent performance** — Consistent with. `unbox_expr` costs are explicit and visible.
+
+### Specifications
+
+**Affected:**
+- `.openspec/specs/000-parser/spec.md` — Requirement 8-SH documents parser AST structure including `List[T]` indirection for recursive fields.
+
+**Updates needed:** None — spec uses abstract AST representation; `List[T]` indirection is an implementation detail not exposed in the spec.
+
+---
+
 ## References
 
 - Issue #1116: Phase 3 implementation
