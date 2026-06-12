@@ -1653,7 +1653,9 @@ impl RustEmitter {
                 }
                 self.push(")");
             }
-            Pattern::Struct { name, fields, .. } => {
+            Pattern::Struct {
+                name, fields, rest, ..
+            } => {
                 self.push(name);
                 self.push(" { ");
                 for (i, (fname, fpat)) in fields.iter().enumerate() {
@@ -1663,6 +1665,12 @@ impl RustEmitter {
                     self.push(fname);
                     self.push(": ");
                     self.emit_pattern(fpat);
+                }
+                if *rest {
+                    if !fields.is_empty() {
+                        self.push(", ");
+                    }
+                    self.push("..");
                 }
                 self.push(" }");
             }

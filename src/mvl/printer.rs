@@ -1268,13 +1268,17 @@ impl<'src> Printer<'src> {
                     .join(", ");
                 format!("{}({})", name, fs)
             }
-            Pattern::Struct { name, fields, .. } => {
-                let fs = fields
+            Pattern::Struct {
+                name, fields, rest, ..
+            } => {
+                let mut parts: Vec<String> = fields
                     .iter()
                     .map(|(k, p)| format!("{}: {}", k, self.fmt_pattern(p)))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("{} {{ {} }}", name, fs)
+                    .collect();
+                if *rest {
+                    parts.push("..".to_string());
+                }
+                format!("{} {{ {} }}", name, parts.join(", "))
             }
             Pattern::Some { inner, .. } => format!("Some({})", self.fmt_pattern(inner)),
             Pattern::None(_) => "None".to_string(),
