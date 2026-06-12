@@ -1280,6 +1280,11 @@ impl<'src> Printer<'src> {
             Pattern::None(_) => "None".to_string(),
             Pattern::Ok { inner, .. } => format!("Ok({})", self.fmt_pattern(inner)),
             Pattern::Err { inner, .. } => format!("Err({})", self.fmt_pattern(inner)),
+            Pattern::Or { patterns, .. } => patterns
+                .iter()
+                .map(|p| self.fmt_pattern(p))
+                .collect::<Vec<_>>()
+                .join(" | "),
         }
     }
 

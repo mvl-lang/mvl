@@ -343,6 +343,14 @@ fn jpattern(p: &Pattern) -> String {
             ("inner", jpattern(inner)),
             ("span", jspan(span)),
         ]),
+        Pattern::Or { patterns, span } => obj(&[
+            ("tag", q("Or")),
+            (
+                "patterns",
+                arr(&patterns.iter().map(jpattern).collect::<Vec<_>>()),
+            ),
+            ("span", jspan(span)),
+        ]),
     }
 }
 

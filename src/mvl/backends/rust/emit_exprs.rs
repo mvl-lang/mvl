@@ -1682,6 +1682,14 @@ impl RustEmitter {
                 self.emit_pattern(inner);
                 self.push(")");
             }
+            Pattern::Or { patterns, .. } => {
+                for (i, p) in patterns.iter().enumerate() {
+                    if i > 0 {
+                        self.push(" | ");
+                    }
+                    self.emit_pattern(p);
+                }
+            }
         }
     }
 

@@ -1031,6 +1031,11 @@ pub enum Pattern {
         inner: Box<Pattern>,
         span: Span,
     },
+    /// `P1 | P2 | …` — OR pattern; all alternatives must bind identical names/types
+    Or {
+        patterns: Vec<Pattern>,
+        span: Span,
+    },
 }
 
 impl Pattern {
@@ -1043,7 +1048,8 @@ impl Pattern {
             | Pattern::Struct { span, .. }
             | Pattern::Some { span, .. }
             | Pattern::Ok { span, .. }
-            | Pattern::Err { span, .. } => *span,
+            | Pattern::Err { span, .. }
+            | Pattern::Or { span, .. } => *span,
         }
     }
 }

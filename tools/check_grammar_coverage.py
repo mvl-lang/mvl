@@ -54,6 +54,8 @@ EBNF_KNOWN_ABSENT = {
     # borrow_expr and impl_decl added to EBNF (hardening #384); ts update pending
     "borrow_expr": "not yet implemented in tree-sitter grammar",
     "impl_decl": "not yet implemented in tree-sitter grammar",
+    # base_pattern is a private rule in tree-sitter (_base_pattern, gets inlined)
+    "base_pattern": "inlined as private _base_pattern in grammar.js",
     # fn_contract covers both requires/ensures and ghost let as a unit;
     # tree-sitter splits it into contract_clause + ghost_let_stmt instead
     "fn_contract": "split in tree-sitter into contract_clause and ghost_let_stmt",
@@ -92,6 +94,8 @@ TS_KNOWN_EXTENSIONS = {
     # Private/inline rules (start with _)
     "_atom_expr",
     # Pattern sub-rules (split from the single `pattern` production)
+    "or_pattern",       # inlined in EBNF as `{ "|" base_pattern }` within pattern rule
+    "_base_pattern",    # private rule backing EBNF base_pattern (inlined in TS parse tree)
     "constructor_pattern",
     "struct_pattern",
     "tuple_pattern",

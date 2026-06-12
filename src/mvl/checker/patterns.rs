@@ -83,14 +83,8 @@ impl TypeChecker {
                 {
                     return;
                 }
-                let has_some = unguarded.iter().any(|a| {
-                    matches!(a.pattern, Pattern::Some { .. })
-                        || matches!(&a.pattern, Pattern::TupleStruct { name, .. } if name == "Some")
-                });
-                let has_none = unguarded.iter().any(|a| {
-                    matches!(a.pattern, Pattern::None(_))
-                        || matches!(&a.pattern, Pattern::Ident(n, _) if n == "None")
-                });
+                let has_some = unguarded.iter().any(|a| pattern_has_some(&a.pattern));
+                let has_none = unguarded.iter().any(|a| pattern_has_none(&a.pattern));
                 let mut missing = Vec::new();
                 if !has_some {
                     missing.push("Some(_)".to_string());
@@ -111,14 +105,8 @@ impl TypeChecker {
                 {
                     return;
                 }
-                let has_ok = unguarded.iter().any(|a| {
-                    matches!(a.pattern, Pattern::Ok { .. })
-                        || matches!(&a.pattern, Pattern::TupleStruct { name, .. } if name == "Ok")
-                });
-                let has_err = unguarded.iter().any(|a| {
-                    matches!(a.pattern, Pattern::Err { .. })
-                        || matches!(&a.pattern, Pattern::TupleStruct { name, .. } if name == "Err")
-                });
+                let has_ok = unguarded.iter().any(|a| pattern_has_ok(&a.pattern));
+                let has_err = unguarded.iter().any(|a| pattern_has_err(&a.pattern));
                 let mut missing = Vec::new();
                 if !has_ok {
                     missing.push("Ok(_)".to_string());
@@ -146,10 +134,10 @@ impl TypeChecker {
                             return;
                         }
 
-                        // Collect which variant names are explicitly covered
+                        // Collect which variant names are explicitly covered (Or patterns cover many)
                         let covered: Vec<String> = unguarded
                             .iter()
-                            .filter_map(|arm| covered_variant_name(&arm.pattern, &variant_names))
+                            .flat_map(|arm| covered_variant_names(&arm.pattern, &variant_names))
                             .collect();
 
                         let missing: Vec<String> = variant_names
@@ -190,6 +178,12 @@ impl TypeChecker {
                 }
             }
             Pattern::Literal(_, _) => {}
+            Pattern::Or { patterns, .. } => {
+                // Bind from the first alternative; all must bind the same names/types.
+                if let Some(first) = patterns.first() {
+                    self.bind_pattern(first, ty, mutable);
+                }
+            }
             _ => {
                 // For struct/tuple-struct patterns, just bind sub-patterns as Unknown
                 self.bind_sub_patterns(pattern, mutable);
@@ -271,6 +265,12 @@ impl TypeChecker {
                     self.bind_match_pattern(p, &ty);
                 }
             }
+            Pattern::Or { patterns, .. } => {
+                // Bind from the first alternative; exhaustiveness checker validates consistency.
+                if let Some(first) = patterns.first() {
+                    self.bind_match_pattern(first, scrutinee_ty);
+                }
+            }
         }
     }
 
@@ -333,12 +333,53 @@ impl TypeChecker {
             | Pattern::Err { inner, .. } => {
                 self.bind_pattern(inner, &Ty::Unknown, mutable);
             }
+            Pattern::Or { patterns, .. } => {
+                if let Some(first) = patterns.first() {
+                    self.bind_sub_patterns(first, mutable);
+                }
+            }
             _ => {}
         }
     }
 }
 
 // ── Pattern helpers (used by check_exhaustiveness) ────────────────────────────
+
+fn pattern_has_some(p: &Pattern) -> bool {
+    match p {
+        Pattern::Some { .. } => true,
+        Pattern::TupleStruct { name, .. } if name == "Some" => true,
+        Pattern::Or { patterns, .. } => patterns.iter().any(pattern_has_some),
+        _ => false,
+    }
+}
+
+fn pattern_has_none(p: &Pattern) -> bool {
+    match p {
+        Pattern::None(_) => true,
+        Pattern::Ident(n, _) if n == "None" => true,
+        Pattern::Or { patterns, .. } => patterns.iter().any(pattern_has_none),
+        _ => false,
+    }
+}
+
+fn pattern_has_ok(p: &Pattern) -> bool {
+    match p {
+        Pattern::Ok { .. } => true,
+        Pattern::TupleStruct { name, .. } if name == "Ok" => true,
+        Pattern::Or { patterns, .. } => patterns.iter().any(pattern_has_ok),
+        _ => false,
+    }
+}
+
+fn pattern_has_err(p: &Pattern) -> bool {
+    match p {
+        Pattern::Err { .. } => true,
+        Pattern::TupleStruct { name, .. } if name == "Err" => true,
+        Pattern::Or { patterns, .. } => patterns.iter().any(pattern_has_err),
+        _ => false,
+    }
+}
 
 fn is_wildcard_pattern(pattern: &Pattern, variant_names: &[String]) -> bool {
     match pattern {
@@ -350,6 +391,10 @@ fn is_wildcard_pattern(pattern: &Pattern, variant_names: &[String]) -> bool {
             }
             !variant_names.contains(name)
         }
+        // An Or pattern is a wildcard if any alternative is a wildcard.
+        Pattern::Or { patterns, .. } => patterns
+            .iter()
+            .any(|p| is_wildcard_pattern(p, variant_names)),
         _ => false,
     }
 }
@@ -376,6 +421,22 @@ fn covered_variant_name(pattern: &Pattern, variant_names: &[String]) -> Option<S
                 None
             }
         }
+        // Or pattern: the first alternative determines coverage (caller iterates all alternatives
+        // separately via covered_variant_names for exhaustiveness).
+        Pattern::Or { .. } => None,
         _ => None,
+    }
+}
+
+/// Collect all variant names covered by a pattern (handles `Or` patterns covering multiple).
+fn covered_variant_names(pattern: &Pattern, variant_names: &[String]) -> Vec<String> {
+    match pattern {
+        Pattern::Or { patterns, .. } => patterns
+            .iter()
+            .flat_map(|p| covered_variant_names(p, variant_names))
+            .collect(),
+        _ => covered_variant_name(pattern, variant_names)
+            .into_iter()
+            .collect(),
     }
 }

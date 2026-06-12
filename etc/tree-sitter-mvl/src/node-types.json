@@ -1270,6 +1270,53 @@
     }
   },
   {
+    "type": "or_pattern",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "constructor_pattern",
+          "named": true
+        },
+        {
+          "type": "err_pattern",
+          "named": true
+        },
+        {
+          "type": "identifier",
+          "named": true
+        },
+        {
+          "type": "literal",
+          "named": true
+        },
+        {
+          "type": "none_pattern",
+          "named": true
+        },
+        {
+          "type": "ok_pattern",
+          "named": true
+        },
+        {
+          "type": "some_pattern",
+          "named": true
+        },
+        {
+          "type": "struct_pattern",
+          "named": true
+        },
+        {
+          "type": "tuple_pattern",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "param",
     "named": true,
     "fields": {},
@@ -1356,6 +1403,10 @@
         },
         {
           "type": "ok_pattern",
+          "named": true
+        },
+        {
+          "type": "or_pattern",
           "named": true
         },
         {
@@ -1874,11 +1925,39 @@
       "required": true,
       "types": [
         {
+          "type": "constructor_pattern",
+          "named": true
+        },
+        {
+          "type": "err_pattern",
+          "named": true
+        },
+        {
           "type": "identifier",
           "named": true
         },
         {
-          "type": "pattern",
+          "type": "literal",
+          "named": true
+        },
+        {
+          "type": "none_pattern",
+          "named": true
+        },
+        {
+          "type": "ok_pattern",
+          "named": true
+        },
+        {
+          "type": "some_pattern",
+          "named": true
+        },
+        {
+          "type": "struct_pattern",
+          "named": true
+        },
+        {
+          "type": "tuple_pattern",
           "named": true
         }
       ]
