@@ -9,7 +9,7 @@ use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::ifc;
 use crate::mvl::checker::types::{resolve, types_compatible, Ty};
 use crate::mvl::parser::ast::{
-    Block, ElseBranch, Expr, LValue, MatchArm, MatchBody, Pattern, Stmt, Totality,
+    Block, ElseBranch, Expr, GenericParam, LValue, MatchArm, MatchBody, Pattern, Stmt, Totality,
 };
 use crate::mvl::parser::lexer::Span;
 
@@ -830,6 +830,22 @@ impl TypeChecker {
                     if let Some(var_name) = variant_name {
                         if let Some(vi) = variants.iter().find(|v| v.name == var_name) {
                             if let VariantFieldsInfo::Struct(declared_fields) = &vi.fields {
+                                // Infer generic type params from the provided field values.
+                                let param_names: Vec<String> = type_info
+                                    .params
+                                    .iter()
+                                    .map(GenericParam::name)
+                                    .map(str::to_string)
+                                    .collect();
+                                let mut subst = std::collections::HashMap::<String, Ty>::new();
+                                for df in declared_fields.iter() {
+                                    if let Some((_, pty)) =
+                                        provided.iter().find(|(pn, _)| pn == &df.name)
+                                    {
+                                        infer_type_param(&param_names, &df.ty, pty, &mut subst);
+                                    }
+                                }
+
                                 for df in declared_fields.iter() {
                                     if !provided.iter().any(|(pname, _)| pname == &df.name) {
                                         self.emit(CheckError::MissingField {
@@ -843,9 +859,10 @@ impl TypeChecker {
                                     if let Some(df) =
                                         declared_fields.iter().find(|f| &f.name == pname)
                                     {
-                                        if !types_compatible(&df.ty, pty) {
+                                        let expected = apply_subst(&df.ty, &param_names, &subst);
+                                        if !types_compatible(&expected, pty) {
                                             self.emit(CheckError::TypeMismatch {
-                                                expected: df.ty.display(),
+                                                expected: expected.display(),
                                                 found: pty.display(),
                                                 span,
                                             });
@@ -858,6 +875,13 @@ impl TypeChecker {
                                         });
                                     }
                                 }
+
+                                // Return the enum type with inferred type args.
+                                let type_args: Vec<Ty> = param_names
+                                    .iter()
+                                    .map(|n| subst.get(n).cloned().unwrap_or(Ty::Unknown))
+                                    .collect();
+                                return Ty::Named(lookup_name.to_string(), type_args);
                             }
                         }
                     }
@@ -965,5 +989,60 @@ fn match_arm_references_name(arm: &MatchArm, name: &str) -> bool {
     match &arm.body {
         MatchBody::Expr(e) => expr_references_name(e, name),
         MatchBody::Block(b) => block_references_name(b, name),
+    }
+}
+
+/// Infer a single generic type-parameter binding from a declared/actual type pair.
+///
+/// Handles the common case of `T` (bare parameter) and recursively handles
+/// compound declared types like `List[T]`, `Option[T]`, etc.
+fn infer_type_param(
+    params: &[String],
+    declared: &Ty,
+    actual: &Ty,
+    subst: &mut std::collections::HashMap<String, Ty>,
+) {
+    match declared {
+        Ty::Named(name, args) if args.is_empty() && params.contains(name) => {
+            subst.entry(name.clone()).or_insert_with(|| actual.clone());
+        }
+        Ty::Named(_, decl_args) => {
+            if let Ty::Named(_, actual_args) = actual {
+                for (d, a) in decl_args.iter().zip(actual_args.iter()) {
+                    infer_type_param(params, d, a, subst);
+                }
+            }
+        }
+        Ty::List(elem) => {
+            if let Ty::List(aelem) = actual {
+                infer_type_param(params, elem, aelem, subst);
+            }
+        }
+        Ty::Option(inner) => {
+            if let Ty::Option(ainner) = actual {
+                infer_type_param(params, inner, ainner, subst);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Substitute inferred type parameters in a declared type.
+fn apply_subst(ty: &Ty, params: &[String], subst: &std::collections::HashMap<String, Ty>) -> Ty {
+    match ty {
+        Ty::Named(name, args) if args.is_empty() && params.contains(name) => {
+            subst.get(name.as_str()).cloned().unwrap_or(Ty::Unknown)
+        }
+        Ty::Named(name, args) => Ty::Named(
+            name.clone(),
+            args.iter().map(|a| apply_subst(a, params, subst)).collect(),
+        ),
+        Ty::List(elem) => Ty::List(Box::new(apply_subst(elem, params, subst))),
+        Ty::Option(inner) => Ty::Option(Box::new(apply_subst(inner, params, subst))),
+        Ty::Result(ok, err) => Ty::Result(
+            Box::new(apply_subst(ok, params, subst)),
+            Box::new(apply_subst(err, params, subst)),
+        ),
+        _ => ty.clone(),
     }
 }

@@ -593,6 +593,37 @@ impl TextEmitter {
         name: &str,
         fields: &[(String, Expr)],
     ) -> Result<Option<String>, String> {
+        // Named-field enum variant construction: "Type::Variant { field: val }" (#1357)
+        if let Some((type_name, _)) = name.split_once("::") {
+            if self.enum_variants.contains_key(type_name) {
+                let disc = self.pattern_discriminant(name).unwrap_or(0);
+                // Look up declaration-order field names for this struct variant.
+                let ordered_names = self
+                    .enum_struct_variant_field_names
+                    .get(name)
+                    .cloned()
+                    .unwrap_or_default();
+                // Build positional args in declaration order, using undef for any
+                // missing fields (checker already validated completeness).
+                let args: Vec<Expr> = if ordered_names.is_empty() {
+                    // Unit or tuple variant — use provided fields in order.
+                    fields.iter().map(|(_, e)| e.clone()).collect()
+                } else {
+                    ordered_names
+                        .iter()
+                        .map(|fname| {
+                            fields
+                                .iter()
+                                .find(|(n, _)| n == fname)
+                                .map(|(_, e)| e.clone())
+                                .unwrap_or(Expr::Ident("undef".to_string(), Default::default()))
+                        })
+                        .collect()
+                };
+                return self.emit_enum_variant_constructor(name, disc, &args);
+            }
+        }
+
         let field_defs = match self.struct_fields.get(name).cloned() {
             Some(f) => f,
             None => return Ok(None),
