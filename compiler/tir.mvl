@@ -180,7 +180,11 @@ pub type Param = struct {
 // (totality: String, has_body: Bool) rather than the full Rust FnDecl.
 // The fully-resolved TIR equivalent is TirFn below.
 
-/// A function declaration including visibility, totality, signature, and body flag.
+/// A function declaration including visibility, totality, signature, and parsed body.
+///
+/// `body` is None for extern/trait stubs (formerly `has_body: false`).
+/// Phase 3 (#1116): changed from `has_body: Bool` to `body: Option[Block]`
+/// so that function bodies are fully parsed, not just skipped.
 pub type FnDecl = struct {
     visible:     Bool,
     is_test:     Bool,
@@ -192,7 +196,7 @@ pub type FnDecl = struct {
     ret_type:    TypeExpr,
     effects:     List[Effect],
     constraints: List[Constraint],
-    has_body:    Bool,
+    body:        Option[Block],
     span:        Span,
 }
 
@@ -409,20 +413,266 @@ pub type LValue = enum {
 
 // ── Patterns ─────────────────────────────────────────────────────────────────
 
+// Helper structs for Pattern variants that need multiple fields.
+// Struct-style enum variants cannot be constructed in MVL yet, so each
+// complex variant uses a helper struct as its tuple-variant payload.
+
+/// Helper for `Pattern::Tuple`: an ordered list of sub-patterns.
+pub type TuplePattern = struct { elems: List[Pattern], span: Span }
+
+/// Helper for `Pattern::TupleStruct`: a named variant with positional fields.
+pub type TupleStructPattern = struct { name: String, fields: List[Pattern], span: Span }
+
+/// Helper for `Pattern::Struct`: a named variant with field bindings.
+pub type StructPattern = struct { name: String, fields: List[PatField], span: Span }
+
 /// A match pattern.
+///
+/// Changed from the original (which used struct enum variants and Box)
+/// to constructible forms: struct variants → helper-struct tuple variants,
+/// Box[Pattern] → direct Pattern (MVL GC handles heap allocation).
+/// Literal payload changed from Literal (uses Char primitive) to AstLiteral.
 pub type Pattern = enum {
     Wildcard(Span),
     Ident(String, Span),
-    Literal(Literal, Span),
-    Tuple { elems: List[Pattern], span: Span },
+    Literal(AstLiteral, Span),
+    Tuple(TuplePattern),
     /// `Name(p1, p2, …)` — tuple-struct or enum-variant with positional fields.
-    TupleStruct { name: String, fields: List[Pattern], span: Span },
+    TupleStruct(TupleStructPattern),
     /// `Name { field: pat, … }` — struct or enum-variant with named fields.
-    Struct { name: String, fields: List[(String, Pattern)], span: Span },
-    Some { inner: Box[Pattern], span: Span },
+    Struct(StructPattern),
+    Some(List[Pattern], Span),   // [1] — List breaks Rust infinite-size cycle
     None(Span),
-    Ok { inner: Box[Pattern], span: Span },
-    Err { inner: Box[Pattern], span: Span },
+    Ok(List[Pattern], Span),     // [1]
+    Err(List[Pattern], Span),    // [1]
+}
+
+// ── Parser-stage AST (Phase 3: #1116) ────────────────────────────────────────
+//
+// These types are produced by compiler/parser.mvl when parsing function bodies.
+// They live between the lexer (Token) and the checker (TIR) phases.
+//
+// Design notes:
+//   - Struct enum variants are not yet constructible in MVL → all complex Expr
+//     and Stmt variants use helper structs as tuple-variant payloads.
+//   - AstLiteral stores Char as String (single-char lexeme) because the Char
+//     primitive type has no construction path from String in MVL yet.
+//   - Block, Stmt, and Expr are mutually recursive; MVL handles heap-allocation
+//     of recursive values automatically — no Box needed.
+//   - FnDecl.body replaces the old has_body: Bool with Option[Block].
+
+/// Parser-stage literal — note Char is stored as a single-char String lexeme
+/// because the Char primitive cannot be constructed from a String in MVL yet.
+pub type AstLiteral = enum {
+    Integer(Int),
+    Floating(Float),
+    Str(String),
+    Char(String),   // raw char lexeme, e.g. "a" for 'a'
+    Bool(Bool),
+    Unit,
+}
+
+/// A struct literal field initializer: `name: expr`.
+pub type StructField = struct { name: String, expr: List[Expr] }   // expr [1]
+
+/// A map literal key-value pair: `key: value`.
+pub type MapEntry = struct { key: List[Expr], value: List[Expr] }  // each [1]
+
+/// A struct pattern field binding: `name: pattern`.
+pub type PatField = struct { name: String, pattern: Pattern }
+
+// ── Expr helper structs ────────────────────────────────────────────────────────
+//
+// Rust constraint: all directly-embedded recursive fields must be heap-
+// allocated to avoid infinite type size (E0072).  Box<T> would fix this but
+// cannot be constructed in MVL code.  Solution: use List[Expr] / List[Pattern]
+// as a single-element indirection (Vec<T> in Rust is always heap-allocated).
+//   Construction:  `[expr]`  (singleton list literal)
+//   Access:        `cell.get(0)` → Option[Expr]; use unbox_expr() helper.
+//
+// Fields marked "// [1]" contain exactly one element; "// [0,1]" = optional.
+
+/// Binary infix expression: `left op right`.
+pub type AstBinaryExpr = struct {
+    op:    BinaryOp,
+    left:  List[Expr],   // [1]
+    right: List[Expr],   // [1]
+    span:  Span,
+}
+
+/// Unary prefix expression: `op expr`.
+pub type AstUnaryExpr = struct {
+    op:   UnaryOp,
+    expr: List[Expr],    // [1]
+    span: Span,
+}
+
+/// Field access: `expr.field`.
+pub type AstFieldExpr = struct {
+    expr:  List[Expr],   // [1]
+    field: String,
+    span:  Span,
+}
+
+/// Index expression: `expr[index]`.
+pub type AstIndexExpr = struct {
+    expr:  List[Expr],   // [1]
+    index: List[Expr],   // [1]
+    span:  Span,
+}
+
+/// Free function call: `name(args…)`.
+pub type AstCallExpr = struct {
+    name: String,
+    args: List[Expr],
+    span: Span,
+}
+
+/// Method call: `receiver.method(args…)`.
+pub type AstMethodExpr = struct {
+    receiver: List[Expr],   // [1]
+    method:   String,
+    args:     List[Expr],
+    span:     Span,
+}
+
+/// If / if-else expression: `if cond { then } else { else_br }`.
+pub type AstIfExpr = struct {
+    cond:    List[Expr],   // [1]
+    then:    Block,
+    else_br: List[Expr],   // [0,1]  empty = no else
+    span:    Span,
+}
+
+/// Match expression: `match scrutinee { arms… }`.
+pub type AstMatchExpr = struct {
+    scrutinee: List[Expr],   // [1]
+    arms:      List[MatchArm],
+    span:      Span,
+}
+
+/// Struct literal: `TypeName { field: value, … }`.
+pub type AstStructLit = struct {
+    name:   String,
+    fields: List[StructField],
+    span:   Span,
+}
+
+/// Map literal helper: the pair list for `{ key: val, … }`.
+pub type AstMapLit = struct {
+    pairs: List[MapEntry],
+    span:  Span,
+}
+
+/// Type cast: `expr as Type`.
+pub type AstCastExpr = struct {
+    expr: List[Expr],    // [1]
+    ty:   TypeExpr,
+    span: Span,
+}
+
+/// IFC relabel call: `relabel func(expr, "audit_tag")`.
+pub type AstRelabelExpr = struct {
+    func:      String,
+    expr:      List[Expr],    // [1]
+    audit_tag: String,
+    span:      Span,
+}
+
+// ── Parser-stage match arm ─────────────────────────────────────────────────────
+
+/// A single arm in a match expression: `pattern => body`.
+pub type MatchArm = struct {
+    pattern: Pattern,
+    body:    List[Expr],   // [1]
+    span:    Span,
+}
+
+// ── Parser-stage expression ────────────────────────────────────────────────────
+
+/// A parser-stage expression node.
+///
+/// Tuple-variant form throughout (MVL struct enum variants can't be constructed).
+/// Simple variants inline their fields; complex variants wrap a helper struct.
+/// Variants that embed Expr or Block use List[Expr] (single element) to break
+/// the Rust infinite-size cycle — see comment above AstBinaryExpr.
+pub type Expr = enum {
+    Lit(AstLiteral, Span),            // literal value
+    Ident(String, Span),              // bare name
+    Binary(AstBinaryExpr),            // left op right
+    Unary(AstUnaryExpr),              // op expr
+    Field(AstFieldExpr),              // expr.field
+    Index(AstIndexExpr),              // expr[index]
+    Call(AstCallExpr),                // name(args)
+    Method(AstMethodExpr),            // receiver.method(args)
+    If(AstIfExpr),                    // if cond { then } [else …]
+    MatchExpr(AstMatchExpr),          // match scrutinee { arms }
+    ListLit(List[Expr], Span),        // [elems…]
+    MapLit(AstMapLit),                // {key: val, …}
+    SetLit(List[Expr], Span),         // #{elems…}  (set-literal notation)
+    StructLit(AstStructLit),          // Name { field: value, … }
+    BlockExpr(Block, Span),           // { stmts… [tail_expr] }
+    Propagate(List[Expr], Span),      // expr?  — [1]
+    Cast(AstCastExpr),                // expr as Type
+    Consume(List[Expr], Span),        // consume expr  — [1]
+    Relabel(AstRelabelExpr),          // relabel func(expr, "tag")
+}
+
+// ── Stmt helper structs ────────────────────────────────────────────────────────
+
+/// `let [ref] name: Type = value;` statement.
+pub type AstLetStmt = struct {
+    mutable: Bool,
+    name:    String,
+    ty:      TypeExpr,
+    value:   List[Expr],   // [1]
+    span:    Span,
+}
+
+/// Assignment statement: `name = value;` or `name.field = value;`.
+pub type AstAssignStmt = struct {
+    target: String,
+    value:  List[Expr],   // [1]
+    span:   Span,
+}
+
+/// `while cond { body }` statement.
+pub type AstWhileStmt = struct {
+    cond: List[Expr],   // [1]
+    body: Block,
+    span: Span,
+}
+
+/// `for var in iter { body }` statement.
+pub type AstForStmt = struct {
+    var:  String,
+    iter: List[Expr],   // [1]
+    body: Block,
+    span: Span,
+}
+
+// ── Parser-stage statement ─────────────────────────────────────────────────────
+
+/// A parser-stage statement node.
+pub type Stmt = enum {
+    Let(AstLetStmt),
+    Assign(AstAssignStmt),
+    Return(List[Expr], Span),   // [0,1]  empty = `return;` / Unit
+    While(AstWhileStmt),
+    For(AstForStmt),
+    ExprStmt(List[Expr], Span), // [1]
+}
+
+// ── Parser-stage block ─────────────────────────────────────────────────────────
+
+/// A block of statements with an optional tail expression.
+///
+/// tail_expr is List[Expr] with 0 or 1 element (replaces Option[Expr]).
+/// Using List avoids the `ref Option[Expr] = None` lifetime error in MVL.
+pub type Block = struct {
+    stmts:     List[Stmt],
+    tail_expr: List[Expr],    // [0,1]  empty = no tail / returns Unit
+    span:      Span,
 }
 
 // ── Refinement predicates ─────────────────────────────────────────────────────

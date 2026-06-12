@@ -202,7 +202,7 @@ total fn make_fn(visible: Bool, totality: String, is_test: Bool,
         ret_type:    simple_ty(ret_name),
         effects:     effects,
         constraints: [],
-        has_body:    true,
+        body:        None,
         span:        zero_span()
     }
 }
