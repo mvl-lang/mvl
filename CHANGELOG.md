@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+## [0.203.0] - 2026-06-13
+
+### Added
+
+- **Type checker foundations (C1/C2/C3 phases)** (#1117) — Ported three foundational MVL files for the self-hosted type checker (issue #1117), establishing the data model and enum-dispatch architecture for verification passes:
+  - `compiler/verify_types.mvl` (C1) — Full implementations of `Ty` and `SessionTy` extension methods (`display`, `base`, `unlabeled`, `is_*` predicates, `propagate_inner`), `types_compatible()` structural matching for all type variants including the new `Ty::Ptr` arm, and `effects_name_eq()` effect list comparison. Uses OR patterns (#1355) for efficient multi-case matching.
+  - `compiler/verify_errors.mvl` (C2) — `CheckError` enum with 80+ variants in named-field struct form, mapping all 11 requirements with tagged variants. Accessor method implementations deferred pending Rust backend fixes for Copy-type field extraction in `&self` context.
+  - `compiler/verify_passes.mvl` (C3) — `Verdict` enum (tuple variants), `PassId` enum (11 requirements), `PassEntry` and `AssuranceReport` structs. Establishes enum-dispatch over 11 passes, replacing Rust trait objects (`Box<dyn VerificationPass>`) with explicit MVL enum matching.
+  - Discovered three MVL language constraints (orthogonal to #1355-#1359): tuple match scrutinees unsupported, tuple value construction as expressions unsupported (workaround: pass-through in branches), and `for` loops forbidden in `partial fn` (workaround: use `while` with manual indexing).
+
+### Fixed
+
+- **`AuditLogger::emit` ownership semantics** — Updated to `val self: AuditLogger` parameter to reflect correct non-consuming borrow after #1359 self receiver fix. Multi-emit tests were failing with "use of moved value" due to `plain self` now being consuming per ownership semantics. Applies same pattern as `std/log.mvl` `Logger` methods in #1359.
+
 ## [0.202.2] - 2026-06-13
 
 ### Fixed
