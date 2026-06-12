@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [0.198.0] - 2026-06-11
+
+### Added
+
+- **TIR Lower in MVL** (#1115) — port the TIR lowering pass (`src/mvl/ir/lower.rs`) to `compiler/tir_lower.mvl`, the first self-hosted pipeline stage. Includes `typeexpr_to_ty`, `substitute_ty`, and declaration lowering (fn, type, extern, impl). Expression bodies deferred to Phase 3 (#1116).
+- **Ptr type support** — add missing `Ptr(Box[Ty])` variant to the TIR type system for C FFI pointers
+
+### Fixed
+
+- **Named-field enum variant construction** — fix checker gap where `EnumType::Variant { field: val }` was silently rejected; now properly type-checked against variant field declarations
+
 ## [0.197.1] - 2026-06-10
 
 ### Fixed
