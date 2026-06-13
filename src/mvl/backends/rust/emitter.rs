@@ -829,11 +829,6 @@ fn collect_undefined_types_tir(tir: &TirProgram, prelude_tirs: &[TirProgram]) ->
                 collect_ty_names(k, out);
                 collect_ty_names(v, out);
             }
-            Ty::Tuple(elems) => {
-                for e in elems {
-                    collect_ty_names(e, out);
-                }
-            }
             Ty::Ref(_, inner) => collect_ty_names(inner, out),
             Ty::Fn(params, ret, _, _) => {
                 for p in params {

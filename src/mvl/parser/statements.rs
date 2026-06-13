@@ -594,21 +594,6 @@ impl Parser {
                     Ok(Pattern::Ident(name, start))
                 }
             }
-            TokenKind::LParen => {
-                // Tuple pattern: (p1, p2, ...)
-                self.advance();
-                let mut elems = Vec::new();
-                while !matches!(self.peek_kind(), TokenKind::RParen | TokenKind::Eof) {
-                    elems.push(self.parse_pattern()?);
-                    if !self.eat(&TokenKind::Comma) {
-                        break;
-                    }
-                }
-                let rp = self.expect(&TokenKind::RParen);
-                self.require(rp)?;
-                let span = self.span_from(start);
-                Ok(Pattern::Tuple { elems, span })
-            }
             _ => {
                 let err = ParseError {
                     message: format!("expected pattern, found `{}`", self.peek_kind()),
@@ -917,19 +902,6 @@ mod tests {
             Stmt::Match { arms, .. } => {
                 assert!(
                     matches!(&arms[0].pattern, Pattern::TupleStruct { name, .. } if name == "Point")
-                );
-            }
-            _ => panic!("got: {:?}", s),
-        }
-    }
-
-    #[test]
-    fn parse_tuple_pattern() {
-        let s = one_stmt("{ match x { (a, b) => 0 } }");
-        match &s {
-            Stmt::Match { arms, .. } => {
-                assert!(
-                    matches!(&arms[0].pattern, Pattern::Tuple { elems, .. } if elems.len() == 2)
                 );
             }
             _ => panic!("got: {:?}", s),

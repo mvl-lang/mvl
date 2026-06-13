@@ -179,7 +179,7 @@ fn cyclomatic_complexity_expr(expr: &Expr) -> usize {
             })
             .sum(),
         Expr::Quantifier(..) => 0,
-        Expr::List { elems, .. } | Expr::Set { elems, .. } | Expr::Tuple { elems, .. } => {
+        Expr::List { elems, .. } | Expr::Set { elems, .. } => {
             elems.iter().map(cyclomatic_complexity_expr).sum()
         }
         Expr::Map { pairs, .. } => pairs
@@ -359,7 +359,7 @@ fn max_match_depth_expr(expr: &Expr, depth: usize) -> usize {
             .max()
             .unwrap_or(depth),
         Expr::Quantifier(..) => depth,
-        Expr::List { elems, .. } | Expr::Set { elems, .. } | Expr::Tuple { elems, .. } => elems
+        Expr::List { elems, .. } | Expr::Set { elems, .. } => elems
             .iter()
             .map(|e| max_match_depth_expr(e, depth))
             .max()

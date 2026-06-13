@@ -188,7 +188,7 @@ fn expr_calls_extern(expr: &Expr, names: &[String]) -> bool {
         Expr::Construct { fields, .. } | Expr::Spawn { fields, .. } => {
             fields.iter().any(|(_, e)| expr_calls_extern(e, names))
         }
-        Expr::List { elems, .. } | Expr::Set { elems, .. } | Expr::Tuple { elems, .. } => {
+        Expr::List { elems, .. } | Expr::Set { elems, .. } => {
             elems.iter().any(|e| expr_calls_extern(e, names))
         }
         Expr::Map { pairs, .. } => pairs

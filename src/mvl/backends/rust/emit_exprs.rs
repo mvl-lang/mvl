@@ -1090,16 +1090,6 @@ impl RustEmitter {
                 self.emit_args(elems);
                 self.push("])");
             }
-            TirExprKind::Tuple { elems } => {
-                self.push("(");
-                for (i, e) in elems.iter().enumerate() {
-                    if i > 0 {
-                        self.push(", ");
-                    }
-                    self.emit_expr(e);
-                }
-                self.push(")");
-            }
             TirExprKind::Consume(inner) => {
                 // `consume` mirrors Pony's `consume` for iso; just emit the inner expr in Phase 1
                 self.emit_expr(inner);
@@ -1648,16 +1638,6 @@ impl RustEmitter {
             Pattern::Wildcard(_) => self.push("_"),
             Pattern::Ident(name, _) => self.push(&map_ident(name)),
             Pattern::Literal(lit, _) => self.emit_literal_in_pattern(lit),
-            Pattern::Tuple { elems, .. } => {
-                self.push("(");
-                for (i, e) in elems.iter().enumerate() {
-                    if i > 0 {
-                        self.push(", ");
-                    }
-                    self.emit_pattern(e);
-                }
-                self.push(")");
-            }
             Pattern::TupleStruct { name, fields, .. } => {
                 self.push(name);
                 self.push("(");

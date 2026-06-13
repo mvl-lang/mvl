@@ -396,10 +396,6 @@ fn lower_expr(
             elems: lower_exprs(elems, expr_types, ty_subs),
         },
 
-        Expr::Tuple { elems, .. } => TirExprKind::Tuple {
-            elems: lower_exprs(elems, expr_types, ty_subs),
-        },
-
         Expr::Consume { expr, .. } => {
             TirExprKind::Consume(Box::new(lower_expr(expr, expr_types, ty_subs)))
         }
@@ -728,7 +724,6 @@ fn typeexpr_to_ty(te: &TypeExpr) -> Ty {
             effects.clone(),
             None,
         ),
-        TypeExpr::Tuple { elems, .. } => Ty::Tuple(elems.iter().map(typeexpr_to_ty).collect()),
         // Session types: convert the AST SessionOp tree to a checker SessionTy.
         // Note: this path is taken for session-typed *parameter annotations* (via lower_param).
         // Session-typed body *expressions* always carry a resolved Ty::Session in expr_types.
@@ -779,7 +774,6 @@ fn substitute_ty(ty: &Ty, subs: &HashMap<String, Ty>) -> Ty {
             effects.clone(),
             totality.clone(),
         ),
-        Ty::Tuple(elems) => Ty::Tuple(elems.iter().map(|e| substitute_ty(e, subs)).collect()),
         Ty::Labeled(label, inner) => {
             Ty::Labeled(label.clone(), Box::new(substitute_ty(inner, subs)))
         }
@@ -1053,18 +1047,6 @@ fn main() -> Unit {
     }
 
     #[test]
-    fn converts_tuple() {
-        let te = TypeExpr::Tuple {
-            elems: vec![base_te("Int"), base_te("Bool"), base_te("String")],
-            span: sp(),
-        };
-        assert_eq!(
-            typeexpr_to_ty(&te),
-            Ty::Tuple(vec![Ty::Int, Ty::Bool, Ty::String])
-        );
-    }
-
-    #[test]
     fn converts_array_with_concrete_size() {
         let te = TypeExpr::Base {
             name: "Array".into(),
@@ -1175,17 +1157,6 @@ fn main() -> Unit {
         assert_eq!(
             substitute_ty(&ty, &subs),
             Ty::Fn(vec![Ty::Int], Box::new(Ty::Bool), vec![], None)
-        );
-    }
-
-    #[test]
-    fn substitutes_inside_tuple() {
-        let mut subs = HashMap::new();
-        subs.insert("T".into(), Ty::String);
-        let ty = Ty::Tuple(vec![Ty::Named("T".into(), vec![]), Ty::Int]);
-        assert_eq!(
-            substitute_ty(&ty, &subs),
-            Ty::Tuple(vec![Ty::String, Ty::Int])
         );
     }
 

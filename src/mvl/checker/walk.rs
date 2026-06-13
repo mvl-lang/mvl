@@ -126,7 +126,7 @@ where
                 walk_expr(e, f);
             }
         }
-        Expr::List { elems, .. } | Expr::Set { elems, .. } | Expr::Tuple { elems, .. } => {
+        Expr::List { elems, .. } | Expr::Set { elems, .. } => {
             for e in elems {
                 walk_expr(e, f);
             }

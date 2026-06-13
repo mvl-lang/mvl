@@ -408,7 +408,7 @@ pub fn infer_label_extended(
             .iter()
             .map(|(_, e)| infer_label_extended(e, env, explicit, inferred))
             .fold(None, ifc::join_opt),
-        Expr::List { elems, .. } | Expr::Set { elems, .. } | Expr::Tuple { elems, .. } => elems
+        Expr::List { elems, .. } | Expr::Set { elems, .. } => elems
             .iter()
             .map(|e| infer_label_extended(e, env, explicit, inferred))
             .fold(None, ifc::join_opt),
@@ -707,7 +707,7 @@ fn collect_violations_in_expr(
                 collect_violations_in_expr(e, caller, env, type_env, inferred, errors);
             }
         }
-        Expr::List { elems, .. } | Expr::Set { elems, .. } | Expr::Tuple { elems, .. } => {
+        Expr::List { elems, .. } | Expr::Set { elems, .. } => {
             for e in elems {
                 collect_violations_in_expr(e, caller, env, type_env, inferred, errors);
             }
@@ -1142,36 +1142,6 @@ mod tests {
         );
     }
 
-    // #850: taint through tuple destructuring is tracked.
-    #[test]
-    fn tuple_destructure_taint_tracked() {
-        // let (a, b): (String, String) = pair_source();  — Pattern::Tuple arm
-        // pair_source is registered as Tainted; both a and b must get Tainted in
-        // env so that log_it(a) produces a violation.
-        use crate::mvl::checker::context::FnInfo;
-        use crate::mvl::checker::types::Ty;
-        let prog = parse(
-            "fn caller() -> Unit { \
-                 let (a, b): (String, String) = pair_source(); \
-                 log_it(a) \
-             }",
-        );
-        let mut env = env_with_taint_source();
-        env.fns.insert(
-            "pair_source".into(),
-            FnInfo {
-                ret: Ty::Labeled("Tainted".to_string(), Box::new(Ty::String)),
-                ..Default::default()
-            },
-        );
-        let inferred = propagate(&[&prog], &env);
-        let violations = detect_violations(&prog, &env, &inferred);
-        assert!(
-            !violations.is_empty(),
-            "taint through Pattern::Tuple let binding (a, b) must propagate to log_it(a)"
-        );
-    }
-
     // #851: lambda parameter label is propagated into the lambda body.
     #[test]
     fn lambda_param_label_visible_in_body() {
@@ -1244,36 +1214,6 @@ mod tests {
         assert!(
             !violations.is_empty(),
             "tainted iterator must propagate label to loop variable x → log_it(x) is a violation"
-        );
-    }
-
-    // #858 gap 2: nested destructuring `(Some(a), b)` preserves taint.
-    #[test]
-    fn nested_destructuring_taint_tracked() {
-        // let (Some(a), b) = pair_source(); log_it(a) must be a violation.
-        // The outer Tuple contains a Some pattern; the old code only handled
-        // immediate Ident sub-patterns and would silently drop the taint for `a`.
-        use crate::mvl::checker::context::FnInfo;
-        use crate::mvl::checker::types::Ty;
-        let prog = parse(
-            "fn caller() -> Unit { \
-                 let (Some(a), b): (Option[String], String) = pair_source(); \
-                 log_it(a) \
-             }",
-        );
-        let mut env = env_with_taint_source();
-        env.fns.insert(
-            "pair_source".into(),
-            FnInfo {
-                ret: Ty::Labeled("Tainted".to_string(), Box::new(Ty::String)),
-                ..Default::default()
-            },
-        );
-        let inferred = propagate(&[&prog], &env);
-        let violations = detect_violations(&prog, &env, &inferred);
-        assert!(
-            !violations.is_empty(),
-            "nested Pattern::Some inside Tuple must propagate taint to `a` → log_it(a) is a violation"
         );
     }
 

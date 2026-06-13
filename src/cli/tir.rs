@@ -102,10 +102,6 @@ fn jty(ty: &Ty) -> String {
             ),
             ("totality", jopt(totality, jtotality)),
         ]),
-        Ty::Tuple(elems) => obj(&[
-            ("tag", q("Tuple")),
-            ("elems", arr(&elems.iter().map(jty).collect::<Vec<_>>())),
-        ]),
         Ty::List(inner) => obj(&[("tag", q("List")), ("inner", jty(inner))]),
         Ty::Array(elem, size) => obj(&[
             ("tag", q("Array")),
@@ -230,13 +226,6 @@ fn jtypeexpr(te: &mvl::mvl::parser::ast::TypeExpr) -> String {
                 arr(&effects.iter().map(jeffect).collect::<Vec<_>>()),
             ),
         ]),
-        TypeExpr::Tuple { elems, .. } => obj(&[
-            ("tag", q("Tuple")),
-            (
-                "elems",
-                arr(&elems.iter().map(jtypeexpr).collect::<Vec<_>>()),
-            ),
-        ]),
         TypeExpr::IntConst { value, .. } => {
             obj(&[("tag", q("IntConst")), ("value", value.to_string())])
         }
@@ -296,14 +285,6 @@ fn jpattern(p: &Pattern) -> String {
         Pattern::Literal(lit, span) => obj(&[
             ("tag", q("Literal")),
             ("lit", jliteral(lit)),
-            ("span", jspan(span)),
-        ]),
-        Pattern::Tuple { elems, span } => obj(&[
-            ("tag", q("Tuple")),
-            (
-                "elems",
-                arr(&elems.iter().map(jpattern).collect::<Vec<_>>()),
-            ),
             ("span", jspan(span)),
         ]),
         Pattern::TupleStruct { name, fields, span } => obj(&[
@@ -512,10 +493,6 @@ fn jexpr_kind(k: &TirExprKind) -> String {
         }
         TirExprKind::Set { elems } => obj(&[
             ("tag", q("SetLit")),
-            ("elems", arr(&elems.iter().map(jexpr).collect::<Vec<_>>())),
-        ]),
-        TirExprKind::Tuple { elems } => obj(&[
-            ("tag", q("TupleLit")),
             ("elems", arr(&elems.iter().map(jexpr).collect::<Vec<_>>())),
         ]),
         TirExprKind::Consume(expr) => obj(&[("tag", q("Consume")), ("expr", jexpr(expr))]),

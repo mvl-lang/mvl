@@ -341,11 +341,6 @@ impl TypeChecker {
                 Ty::Set(Box::new(elem_ty))
             }
 
-            Expr::Tuple { elems, .. } => {
-                let elem_tys: Vec<Ty> = elems.iter().map(|e| self.infer_expr(e)).collect();
-                Ty::Tuple(elem_tys)
-            }
-
             // #14: `?` propagation
             Expr::Propagate { expr, span } => {
                 let ty = self.infer_expr(expr);

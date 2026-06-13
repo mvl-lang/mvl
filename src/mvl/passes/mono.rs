@@ -141,12 +141,6 @@ pub fn type_name(ty: &TypeExpr) -> String {
         TypeExpr::Labeled { inner, .. } => type_name(inner),
         TypeExpr::Refined { inner, .. } => type_name(inner),
         TypeExpr::Fn { .. } => "Fn".into(),
-        TypeExpr::Tuple { elems, .. } => {
-            format!(
-                "Tuple_{}",
-                elems.iter().map(type_name).collect::<Vec<_>>().join("_")
-            )
-        }
         TypeExpr::IntConst { value, .. } => value.to_string(),
         TypeExpr::Session { .. } => "Session".into(),
     }
@@ -206,10 +200,6 @@ pub fn substitute_type(ty: &TypeExpr, subs: &TypeSubst) -> TypeExpr {
             params: params.iter().map(|p| substitute_type(p, subs)).collect(),
             ret: Box::new(substitute_type(ret, subs)),
             effects: effects.clone(),
-            span: *span,
-        },
-        TypeExpr::Tuple { elems, span } => TypeExpr::Tuple {
-            elems: elems.iter().map(|e| substitute_type(e, subs)).collect(),
             span: *span,
         },
         TypeExpr::IntConst { .. } | TypeExpr::Session { .. } => ty.clone(),
@@ -291,13 +281,6 @@ pub fn unify(
                     unify(p, t, type_params, subs);
                 }
                 unify(ret, ret_ty, type_params, subs);
-            }
-        }
-        TypeExpr::Tuple { elems, .. } => {
-            if let Ty::Tuple(tys) = concrete {
-                for (e, t) in elems.iter().zip(tys.iter()) {
-                    unify(e, t, type_params, subs);
-                }
             }
         }
         TypeExpr::IntConst { .. } | TypeExpr::Session { .. } => {}
@@ -401,10 +384,6 @@ pub fn ty_to_type_expr(ty: &Ty) -> TypeExpr {
             params: params.iter().map(ty_to_type_expr).collect(),
             ret: Box::new(ty_to_type_expr(ret)),
             effects: effects.clone(),
-            span: sp,
-        },
-        Ty::Tuple(elems) => TypeExpr::Tuple {
-            elems: elems.iter().map(ty_to_type_expr).collect(),
             span: sp,
         },
         Ty::List(inner) => TypeExpr::Base {
@@ -679,7 +658,7 @@ impl CallCollector {
                     self.expr(e);
                 }
             }
-            Expr::List { elems, .. } | Expr::Set { elems, .. } | Expr::Tuple { elems, .. } => {
+            Expr::List { elems, .. } | Expr::Set { elems, .. } => {
                 for e in elems {
                     self.expr(e);
                 }

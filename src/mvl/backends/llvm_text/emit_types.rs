@@ -148,7 +148,7 @@ impl TextEmitter {
             Ty::Ref(_, inner) => Self::ty_to_llvm(inner),
             Ty::Labeled(_, inner) => Self::ty_to_llvm(inner),
             Ty::Refined(inner, _) => Self::ty_to_llvm(inner),
-            Ty::Named(_, _) | Ty::Fn(_, _, _, _) | Ty::Tuple(_) => "ptr".into(),
+            Ty::Named(_, _) | Ty::Fn(_, _, _, _) => "ptr".into(),
             // Never (bottom type) maps to void — expressions of this type diverge
             // and should never produce a value.
             Ty::Never => "void".into(),
@@ -496,9 +496,7 @@ impl TextEmitter {
             Expr::FieldAccess { expr, field, .. } => self
                 .field_type_of(expr, field)
                 .unwrap_or_else(|| "i64".into()),
-            Expr::List { .. } | Expr::Map { .. } | Expr::Set { .. } | Expr::Tuple { .. } => {
-                "ptr".into()
-            }
+            Expr::List { .. } | Expr::Map { .. } | Expr::Set { .. } => "ptr".into(),
             Expr::Consume { expr, .. } | Expr::Relabel { expr, .. } => self.type_of_expr(expr),
             Expr::Unary {
                 op: UnaryOp::Deref,
