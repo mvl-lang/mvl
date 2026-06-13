@@ -532,9 +532,17 @@ impl RustEmitter {
         let user_type_names: std::collections::HashSet<&str> =
             tir.types.iter().map(|t| t.name.as_str()).collect();
 
-        // Dedup by name for builtin-type methods (they become free functions in global scope
-        // and would conflict if two modules define e.g. String::is_empty and List::is_empty).
-        // User-defined type methods go into `impl` blocks and never conflict by name (#1371).
+        // All struct type names from the prelude (e.g. Span from std/text.mvl) plus the
+        // user's own types — these are emitted as `impl T { }` blocks and never collide by
+        // method name. Builtin primitives (String, Int, List …) become free functions in
+        // global scope and must be deduplicated by name (#1371).
+        let impl_block_type_names: std::collections::HashSet<&str> = prelude_tirs
+            .iter()
+            .flat_map(|t| t.types.iter())
+            .map(|t| t.name.as_str())
+            .chain(user_type_names.iter().copied())
+            .collect();
+
         let mut seen_prelude_fns: std::collections::HashSet<&str> =
             std::collections::HashSet::new();
         let prelude_fns: Vec<&crate::mvl::ir::TirFn> = prelude_tirs
@@ -545,28 +553,15 @@ impl RustEmitter {
             .filter(|f| !f.is_test)
             .filter(|f| !user_fn_names.contains(f.original_name.as_str()))
             .filter(|f| {
-                let is_user_defined_type = f.receiver_type.as_deref().is_some_and(|rt| {
-                    !matches!(
-                        rt,
-                        "String"
-                            | "Int"
-                            | "Float"
-                            | "Bool"
-                            | "Byte"
-                            | "UByte"
-                            | "UInt"
-                            | "List"
-                            | "Map"
-                            | "Set"
-                            | "Option"
-                            | "Result"
-                    )
-                });
-                // User-defined type methods are emitted as `impl T { fn name() }` — no
+                let is_impl_block_type = f
+                    .receiver_type
+                    .as_deref()
+                    .is_some_and(|rt| impl_block_type_names.contains(rt));
+                // Struct-type methods are emitted as `impl T { fn name() }` — no
                 // global-scope conflict, so always include them.
                 // Builtin-type methods become global free functions — dedup by name to avoid
                 // duplicate `pub fn is_empty` etc. across String/List/Map/Set.
-                is_user_defined_type || seen_prelude_fns.insert(f.original_name.as_str())
+                is_impl_block_type || seen_prelude_fns.insert(f.original_name.as_str())
             })
             .collect();
 

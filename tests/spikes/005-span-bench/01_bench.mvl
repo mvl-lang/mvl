@@ -24,7 +24,6 @@
 // Run: make -C tests/spikes/005-span-bench bench
 
 use std.text.{Span}
-use std.time.{now, Instant}
 use std.math.{int_to_string}
 
 fn make_csv(n: Int) -> String {
@@ -61,13 +60,7 @@ fn bench_split_spans(src: String, sep: String, iters: Int) -> Int {
     count
 }
 
-fn elapsed_secs(t0: Instant, t1: Instant) -> Int {
-    let s0: Int = 0;
-    let s1: Int = 0;
-    s1 - s0
-}
-
-fn main() -> Unit ! Console + Clock {
+fn main() -> Unit ! Console {
     let n: Int = 10000;
     let iters: Int = 100;
     println("=== Spike 005: split vs split_spans ===");
@@ -80,16 +73,13 @@ fn main() -> Unit ! Console + Clock {
     println("");
 
     // ── split (owned strings) ──────────────────────────────────────────────
-    let t0: Instant = now();
+    // Note: sub-millisecond timing requires #1372 (find_from builtin + nanosecond clock).
     let split_count: Int = bench_split(src, ",", iters);
-    let t1: Instant = now();
     println("split:        ".concat(int_to_string(split_count)).concat(" parts (check)"));
     println("  Each call allocates ".concat(int_to_string(split_count)).concat(" String objects"));
 
     // ── split_spans (index pairs) ──────────────────────────────────────────
-    let t2: Instant = now();
     let spans_count: Int = bench_split_spans(src, ",", iters);
-    let t3: Instant = now();
     println("split_spans:  ".concat(int_to_string(spans_count)).concat(" spans (check)"));
     println("  Each call allocates 0 Strings; spans are 2-Int structs (~16 bytes each)");
     println("");

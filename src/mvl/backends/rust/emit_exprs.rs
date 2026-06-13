@@ -598,7 +598,7 @@ impl RustEmitter {
                             ".union(&__b).cloned().collect::<std::collections::HashSet<_>>() }",
                         );
                     }
-                    "difference" if args.len() == 1 => {
+                    "difference" if args.len() == 1 && matches!(receiver.ty, Ty::Set(_)) => {
                         let b = &args[0];
                         self.push("{ let __b = ");
                         self.emit_expr(b);

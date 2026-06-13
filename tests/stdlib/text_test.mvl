@@ -153,13 +153,24 @@ test fn span_intersect_disjoint_is_empty() -> Unit {
     let a: Span = Span { start: 0, end: 3 };
     let b: Span = Span { start: 5, end: 8 };
     let i: Span = a.intersect(b);
+    assert_eq(i.start, 0);
+    assert_eq(i.end, 0);
     assert_eq(i.is_empty(), true)
+}
+
+test fn span_intersect_disjoint_commutative() -> Unit {
+    let ab: Span = Span { start: 0, end: 3 }.intersect(Span { start: 5, end: 8 });
+    let ba: Span = Span { start: 5, end: 8 }.intersect(Span { start: 0, end: 3 });
+    assert_eq(ab.start, ba.start);
+    assert_eq(ab.end, ba.end)
 }
 
 test fn span_intersect_adjacent_is_empty() -> Unit {
     let a: Span = Span { start: 0, end: 3 };
     let b: Span = Span { start: 3, end: 6 };
     let i: Span = a.intersect(b);
+    assert_eq(i.start, 0);
+    assert_eq(i.end, 0);
     assert_eq(i.is_empty(), true)
 }
 
@@ -205,13 +216,17 @@ test fn split_spans_leading_separator() -> Unit {
     let src: String = ",a,b";
     let spans: List[Span] = src.split_spans(",");
     assert_eq(spans.len(), 3);
-    assert_eq(spans.get(0).unwrap_or(Span { start: 0, end: 0 }).text(src), "")
+    assert_eq(spans.get(0).unwrap_or(Span { start: 0, end: 0 }).text(src), "");
+    assert_eq(spans.get(1).unwrap_or(Span { start: 0, end: 0 }).text(src), "a");
+    assert_eq(spans.get(2).unwrap_or(Span { start: 0, end: 0 }).text(src), "b")
 }
 
 test fn split_spans_trailing_separator() -> Unit {
     let src: String = "a,b,";
     let spans: List[Span] = src.split_spans(",");
     assert_eq(spans.len(), 3);
+    assert_eq(spans.get(0).unwrap_or(Span { start: 0, end: 0 }).text(src), "a");
+    assert_eq(spans.get(1).unwrap_or(Span { start: 0, end: 0 }).text(src), "b");
     assert_eq(spans.get(2).unwrap_or(Span { start: 0, end: 0 }).text(src), "")
 }
 
@@ -229,7 +244,9 @@ test fn find_all_spans_basic() -> Unit {
     let spans: List[Span] = src.find_all_spans("b");
     assert_eq(spans.len(), 2);
     assert_eq(spans.get(0).unwrap_or(Span { start: 0, end: 0 }).start, 1);
-    assert_eq(spans.get(1).unwrap_or(Span { start: 0, end: 0 }).start, 4)
+    assert_eq(spans.get(0).unwrap_or(Span { start: 0, end: 0 }).end, 2);
+    assert_eq(spans.get(1).unwrap_or(Span { start: 0, end: 0 }).start, 4);
+    assert_eq(spans.get(1).unwrap_or(Span { start: 0, end: 0 }).end, 5)
 }
 
 test fn find_all_spans_not_found() -> Unit {

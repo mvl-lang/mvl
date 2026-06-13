@@ -57,11 +57,11 @@ pub fn Span::union(self, other: Span) -> Span {
     Span { start: s, end: e }
 }
 
-/// Intersection of two spans, or an empty span at `self.start` if disjoint.
+/// Intersection of two spans, or `Span { start: 0, end: 0 }` if disjoint.
 pub fn Span::intersect(self, other: Span) -> Span {
     let s: Int = if self.start > other.start { self.start } else { other.start };
     let e: Int = if self.end < other.end { self.end } else { other.end };
-    if s >= e { Span { start: self.start, end: self.start } }
+    if s >= e { Span { start: 0, end: 0 } }
     else { Span { start: s, end: e } }
 }
 

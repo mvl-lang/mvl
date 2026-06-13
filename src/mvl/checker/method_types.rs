@@ -208,6 +208,7 @@ impl TypeChecker {
             }
             "substring" => Ty::Unknown,
             // std/text.mvl — List[Span] returning String extensions (#1371)
+            // LLVM step 4 pending (#1372): LLVM backend returns Ok(None) for these.
             "split_spans" | "find_all_spans" => {
                 Ty::List(Box::new(Ty::Named("Span".into(), vec![])))
             }
