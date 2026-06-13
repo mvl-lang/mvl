@@ -3,21 +3,202 @@
 
 //! Method call dispatch for the `llvm_text` backend.
 
-use crate::mvl::backends::llvm_symbol_by_name;
+use crate::mvl::backends::llvm_text::dispatch::{self, Dispatch};
 use crate::mvl::parser::ast::{Expr, TypeExpr};
 
 use super::TextEmitter;
 
-/// Look up the LLVM C-ABI symbol for a builtin method that has its
-/// `llvm_symbol` hint populated in the shared `BUILTINS` registry.
-///
-/// Panics if the symbol is missing — callers in this file only invoke this
-/// for the 13 methods explicitly tagged in `backends.rs`, so a missing entry
-/// indicates the registry and emitter have drifted.
-fn builtin_sym(name: &'static str) -> &'static str {
-    llvm_symbol_by_name(name).unwrap_or_else(|| {
-        panic!("BUILTINS missing llvm_symbol for '{name}' — drift between backends.rs and emit_method_call.rs");
+/// Look up a dispatch entry, panicking with a drift-detection message on miss.
+fn lookup_dispatch(method: &str) -> &'static Dispatch {
+    dispatch::lookup(method).unwrap_or_else(|| {
+        panic!("LLVM_DISPATCH missing entry for '{method}' — drift between dispatch.rs and emit_method_call.rs")
     })
+}
+
+/// Build the LLVM argument list for a C-ABI call with an opaque-pointer receiver.
+fn build_arg_list(recv_val: &str, extra_args: &[(&'static str, &str)]) -> String {
+    let mut s = format!("ptr {recv_val}");
+    for (ty, v) in extra_args {
+        s.push_str(&format!(", {ty} {v}"));
+    }
+    s
+}
+
+impl TextEmitter {
+    /// Emit a Shape A builtin call: simple C-ABI runtime function with a
+    /// single return register.  Reads `sym`, `signature`, and `ret_ty` from
+    /// the `LLVM_DISPATCH` row for `method` (must be [`Dispatch::CCall`]).
+    ///
+    /// Emits:
+    /// ```text
+    /// declare {signature}             // via ensure_extern (deduped)
+    /// {reg} = call {ret_ty} @{sym}(ptr {recv_val}{, extra_args})
+    /// ```
+    /// and inserts `{reg} -> ret_ty` into `reg_types`.  Returns the result
+    /// register name; call sites typically wrap with `Ok(Some(reg))`.
+    ///
+    /// Panics on a dispatch-table miss — same drift-detection contract used
+    /// across all helpers in this file.
+    pub(super) fn emit_c_call_simple(
+        &mut self,
+        method: &str,
+        recv_val: &str,
+        extra_args: &[(&'static str, &str)],
+    ) -> String {
+        let Dispatch::CCall {
+            sym,
+            signature,
+            ret_ty,
+        } = lookup_dispatch(method)
+        else {
+            panic!(
+                "LLVM_DISPATCH entry for '{method}' is not Dispatch::CCall — use a different emit_c_call_* helper"
+            );
+        };
+        self.ensure_extern(&format!("declare {signature}"));
+        let arg_list = build_arg_list(recv_val, extra_args);
+        let reg = self.next_reg();
+        self.push_instr(&format!("{reg} = call {ret_ty} @{sym}({arg_list})"));
+        self.reg_types.insert(reg.clone(), ret_ty.to_string());
+        reg
+    }
+
+    /// Emit a Shape B builtin call: C call returns `i64`, result is coerced
+    /// to `i1` via `icmp ne i64 X, 0`.  Reads sym + signature from the
+    /// `LLVM_DISPATCH` row for `method` (must be
+    /// [`Dispatch::CCallBoolFromI64`]).
+    ///
+    /// Emits:
+    /// ```text
+    /// declare {signature}
+    /// {raw} = call i64 @{sym}(ptr {recv_val}{, extra_args})
+    /// {reg} = icmp ne i64 {raw}, 0
+    /// ```
+    /// and inserts `{reg} -> i1` into `reg_types`.  Returns the result
+    /// register (the i1, not the raw i64).
+    pub(super) fn emit_c_call_bool_from_i64(
+        &mut self,
+        method: &str,
+        recv_val: &str,
+        extra_args: &[(&'static str, &str)],
+    ) -> String {
+        let Dispatch::CCallBoolFromI64 { sym, signature } = lookup_dispatch(method) else {
+            panic!(
+                "LLVM_DISPATCH entry for '{method}' is not Dispatch::CCallBoolFromI64 — use a different emit_c_call_* helper"
+            );
+        };
+        self.ensure_extern(&format!("declare {signature}"));
+        let arg_list = build_arg_list(recv_val, extra_args);
+        let raw = self.next_reg();
+        self.push_instr(&format!("{raw} = call i64 @{sym}({arg_list})"));
+        let reg = self.next_reg();
+        self.push_instr(&format!("{reg} = icmp ne i64 {raw}, 0"));
+        self.reg_types.insert(reg.clone(), "i1".to_string());
+        reg
+    }
+
+    /// Emit a Shape D builtin call: C call returns a pointer to an N-slot
+    /// array of pointers; emitter loads each slot and assembles a named
+    /// LLVM struct via `insertvalue`.
+    ///
+    /// Reads sym + signature + struct_name + slot_tys from the
+    /// `LLVM_DISPATCH` row for `method` (must be
+    /// [`Dispatch::CCallStructFromSlots`]).
+    ///
+    /// Returns the register holding the assembled struct value.
+    pub(super) fn emit_c_call_struct_from_slots(
+        &mut self,
+        method: &str,
+        recv_val: &str,
+        extra_args: &[(&'static str, &str)],
+    ) -> String {
+        let Dispatch::CCallStructFromSlots {
+            sym,
+            signature,
+            struct_name,
+            slot_tys,
+        } = lookup_dispatch(method)
+        else {
+            panic!(
+                "LLVM_DISPATCH entry for '{method}' is not Dispatch::CCallStructFromSlots — use a different emit_c_call_* helper"
+            );
+        };
+        assert!(
+            !slot_tys.is_empty(),
+            "LLVM_DISPATCH entry for '{method}' has empty slot_tys — CCallStructFromSlots requires at least one slot"
+        );
+        self.ensure_extern(&format!("declare {signature}"));
+        let arg_list = build_arg_list(recv_val, extra_args);
+        let raw = self.next_reg();
+        self.push_instr(&format!("{raw} = call ptr @{sym}({arg_list})"));
+
+        // Load each slot.
+        let mut slot_vals: Vec<String> = Vec::with_capacity(slot_tys.len());
+        for (i, slot_ty) in slot_tys.iter().enumerate() {
+            let slot_ptr = self.next_reg();
+            self.push_instr(&format!(
+                "{slot_ptr} = getelementptr {slot_ty}, ptr {raw}, i64 {i}"
+            ));
+            let val = self.next_reg();
+            self.push_instr(&format!("{val} = load {slot_ty}, ptr {slot_ptr}"));
+            slot_vals.push(val);
+        }
+
+        // Assemble the struct: undef → insertvalue chain.
+        let mut prev = format!("{struct_name} undef");
+        let mut last_reg = String::new();
+        for (i, (slot_ty, val)) in slot_tys.iter().zip(slot_vals.iter()).enumerate() {
+            let next = self.next_reg();
+            self.push_instr(&format!(
+                "{next} = insertvalue {prev}, {slot_ty} {val}, {i}"
+            ));
+            prev = format!("{struct_name} {next}");
+            last_reg = next;
+        }
+        self.reg_types
+            .insert(last_reg.clone(), struct_name.to_string());
+        last_reg
+    }
+
+    /// Emit a Shape C builtin call: C call returns an `i8` discriminant and
+    /// fills an out-pointer with the payload.  Result is wrapped as
+    /// `Option[T]` via [`wrap_result_pair`].  Reads sym + signature +
+    /// payload_ty from the `LLVM_DISPATCH` row for `method` (must be
+    /// [`Dispatch::CCallOptionOutPtr`]).
+    ///
+    /// The out-pointer is alloca'd by the helper; `extra_args` should NOT
+    /// include it.  The helper appends `, ptr {out}` to the call's argument
+    /// list automatically.
+    pub(super) fn emit_c_call_option_out_ptr(
+        &mut self,
+        method: &str,
+        recv_val: &str,
+        extra_args: &[(&'static str, &str)],
+    ) -> String {
+        let Dispatch::CCallOptionOutPtr {
+            sym,
+            signature,
+            payload_ty,
+        } = lookup_dispatch(method)
+        else {
+            panic!(
+                "LLVM_DISPATCH entry for '{method}' is not Dispatch::CCallOptionOutPtr — use a different emit_c_call_* helper"
+            );
+        };
+        self.ensure_extern(&format!("declare {signature}"));
+        let out = self.next_reg();
+        self.push_instr(&format!("{out} = alloca {payload_ty}"));
+        let mut arg_list = build_arg_list(recv_val, extra_args);
+        arg_list.push_str(&format!(", ptr {out}"));
+        let tag = self.next_reg();
+        self.push_instr(&format!("{tag} = call i8 @{sym}({arg_list})"));
+        let payload = self.next_reg();
+        self.push_instr(&format!("{payload} = load {payload_ty}, ptr {out}"));
+        let slot = self.next_reg();
+        self.push_instr(&format!("{slot} = alloca {payload_ty}"));
+        self.push_instr(&format!("store {payload_ty} {payload}, ptr {slot}"));
+        self.wrap_result_pair(&tag, &slot)
+    }
 }
 
 impl TextEmitter {
@@ -635,12 +816,7 @@ impl TextEmitter {
 
             // List::sort() → List[T] — returns a new sorted copy
             ("sort", "ptr") if args.is_empty() => {
-                let sym = builtin_sym("sort");
-                self.ensure_extern(&format!("declare ptr @{sym}(ptr)"));
-                let reg = self.next_reg();
-                self.push_instr(&format!("{reg} = call ptr @{sym}(ptr {val})"));
-                self.reg_types.insert(reg.clone(), "ptr".into());
-                Ok(Some(reg))
+                Ok(Some(self.emit_c_call_simple("sort", &val, &[])))
             }
 
             // List::windows(n) → List[List[T]]
@@ -649,12 +825,11 @@ impl TextEmitter {
                     Some(v) => v,
                     None => return Ok(None),
                 };
-                let sym = builtin_sym("windows");
-                self.ensure_extern(&format!("declare ptr @{sym}(ptr, i64)"));
-                let reg = self.next_reg();
-                self.push_instr(&format!("{reg} = call ptr @{sym}(ptr {val}, i64 {n})"));
-                self.reg_types.insert(reg.clone(), "ptr".into());
-                Ok(Some(reg))
+                Ok(Some(self.emit_c_call_simple(
+                    "windows",
+                    &val,
+                    &[("i64", &n)],
+                )))
             }
 
             // List::chunks(n) → List[List[T]]
@@ -663,69 +838,44 @@ impl TextEmitter {
                     Some(v) => v,
                     None => return Ok(None),
                 };
-                let sym = builtin_sym("chunks");
-                self.ensure_extern(&format!("declare ptr @{sym}(ptr, i64)"));
-                let reg = self.next_reg();
-                self.push_instr(&format!("{reg} = call ptr @{sym}(ptr {val}, i64 {n})"));
-                self.reg_types.insert(reg.clone(), "ptr".into());
-                Ok(Some(reg))
+                Ok(Some(self.emit_c_call_simple(
+                    "chunks",
+                    &val,
+                    &[("i64", &n)],
+                )))
             }
 
             // List::partition(f) → Partitioned[T]   (struct, not tuple — #1380)
-            // Runtime returns ptr to a 2-slot array of MvlArray* pointers; load
-            // the two slots and assemble a `%Partitioned = { ptr, ptr }` struct
-            // value so downstream `result.matching` / `result.rest` work as
+            // Runtime returns ptr to a 2-slot array of MvlArray* pointers; the
+            // helper loads each slot and assembles a `%Partitioned { ptr, ptr }`
+            // struct so downstream `result.matching` / `result.rest` work as
             // ordinary `extractvalue` field accesses.
             ("partition", _) if args.len() == 1 && self.is_closure_arg(&args[0]) => {
                 let closure = match self.emit_as_hof_closure(&args[0], &[0])? {
                     Some(p) => p,
                     None => return Ok(None),
                 };
-                let sym = builtin_sym("partition");
-                self.ensure_extern(&format!("declare ptr @{sym}(ptr, ptr)"));
-                let raw = self.next_reg();
-                self.push_instr(&format!(
-                    "{raw} = call ptr @{sym}(ptr {val}, ptr {closure})"
-                ));
-                // Load slot 0 -> matching.
-                let slot0 = self.next_reg();
-                self.push_instr(&format!("{slot0} = getelementptr ptr, ptr {raw}, i64 0"));
-                let matching = self.next_reg();
-                self.push_instr(&format!("{matching} = load ptr, ptr {slot0}"));
-                // Load slot 1 -> rest.
-                let slot1 = self.next_reg();
-                self.push_instr(&format!("{slot1} = getelementptr ptr, ptr {raw}, i64 1"));
-                let rest = self.next_reg();
-                self.push_instr(&format!("{rest} = load ptr, ptr {slot1}"));
-                // Build Partitioned { matching, rest }.
-                let tmp = self.next_reg();
-                self.push_instr(&format!(
-                    "{tmp} = insertvalue %Partitioned undef, ptr {matching}, 0"
-                ));
-                let val_reg = self.next_reg();
-                self.push_instr(&format!(
-                    "{val_reg} = insertvalue %Partitioned {tmp}, ptr {rest}, 1"
-                ));
-                self.reg_types
-                    .insert(val_reg.clone(), "%Partitioned".into());
-                Ok(Some(val_reg))
+                Ok(Some(self.emit_c_call_struct_from_slots(
+                    "partition",
+                    &val,
+                    &[("ptr", &closure)],
+                )))
             }
 
             // List::group_by(f) → Map[K, List[T]]
             // Key closure signature: fn(env, elem_ptr) -> i64.
+            // Shape A: closure ptr is just another arg — emit_c_call_simple
+            // handles it identically to a non-HOF call.
             ("group_by", "ptr") if args.len() == 1 && self.is_closure_arg(&args[0]) => {
                 let closure = match self.emit_as_hof_closure(&args[0], &[0])? {
                     Some(p) => p,
                     None => return Ok(None),
                 };
-                let sym = builtin_sym("group_by");
-                self.ensure_extern(&format!("declare ptr @{sym}(ptr, ptr)"));
-                let reg = self.next_reg();
-                self.push_instr(&format!(
-                    "{reg} = call ptr @{sym}(ptr {val}, ptr {closure})"
-                ));
-                self.reg_types.insert(reg.clone(), "ptr".into());
-                Ok(Some(reg))
+                Ok(Some(self.emit_c_call_simple(
+                    "group_by",
+                    &val,
+                    &[("ptr", &closure)],
+                )))
             }
 
             // ── List::push(item) → List (in-place) ───────────────────────
@@ -787,21 +937,11 @@ impl TextEmitter {
                     },
                     None => return Ok(None),
                 };
-                let sym = builtin_sym("char_at");
-                self.ensure_extern(&format!("declare i8 @{sym}(ptr, i64, ptr)"));
-                let out = self.next_reg();
-                self.push_instr(&format!("{out} = alloca ptr"));
-                let tag = self.next_reg();
-                self.push_instr(&format!(
-                    "{tag} = call i8 @{sym}(ptr {val}, i64 {idx}, ptr {out})"
-                ));
-                let payload = self.next_reg();
-                self.push_instr(&format!("{payload} = load ptr, ptr {out}"));
-                let slot = self.next_reg();
-                self.push_instr(&format!("{slot} = alloca ptr"));
-                self.push_instr(&format!("store ptr {payload}, ptr {slot}"));
-                let r = self.wrap_result_pair(&tag, &slot);
-                Ok(Some(r))
+                Ok(Some(self.emit_c_call_option_out_ptr(
+                    "char_at",
+                    &val,
+                    &[("i64", &idx)],
+                )))
             }
 
             // ── String kernel builtins (#1186) ───────────────────────────
@@ -813,12 +953,7 @@ impl TextEmitter {
                     Some("List") | Some("Array") | Some("Set") | Some("Map")
                 ) =>
             {
-                let sym = builtin_sym("chars");
-                self.ensure_extern(&format!("declare ptr @{sym}(ptr)"));
-                let reg = self.next_reg();
-                self.push_instr(&format!("{reg} = call ptr @{sym}(ptr {val})"));
-                self.reg_types.insert(reg.clone(), "ptr".into());
-                Ok(Some(reg))
+                Ok(Some(self.emit_c_call_simple("chars", &val, &[])))
             }
 
             // byte_at(i) → Option[Byte]
@@ -835,21 +970,11 @@ impl TextEmitter {
                     },
                     None => return Ok(None),
                 };
-                let sym = builtin_sym("byte_at");
-                self.ensure_extern(&format!("declare i8 @{sym}(ptr, i64, ptr)"));
-                let out = self.next_reg();
-                self.push_instr(&format!("{out} = alloca i64"));
-                let tag = self.next_reg();
-                self.push_instr(&format!(
-                    "{tag} = call i8 @{sym}(ptr {val}, i64 {idx}, ptr {out})"
-                ));
-                let byte_val = self.next_reg();
-                self.push_instr(&format!("{byte_val} = load i64, ptr {out}"));
-                let slot = self.next_reg();
-                self.push_instr(&format!("{slot} = alloca i64"));
-                self.push_instr(&format!("store i64 {byte_val}, ptr {slot}"));
-                let r = self.wrap_result_pair(&tag, &slot);
-                Ok(Some(r))
+                Ok(Some(self.emit_c_call_option_out_ptr(
+                    "byte_at",
+                    &val,
+                    &[("i64", &idx)],
+                )))
             }
 
             // find(sub) → Int  (-1 if not found)
@@ -858,12 +983,11 @@ impl TextEmitter {
                     Some(v) => v,
                     None => return Ok(None),
                 };
-                let sym = builtin_sym("find");
-                self.ensure_extern(&format!("declare i64 @{sym}(ptr, ptr)"));
-                let reg = self.next_reg();
-                self.push_instr(&format!("{reg} = call i64 @{sym}(ptr {val}, ptr {sub})"));
-                self.reg_types.insert(reg.clone(), "i64".into());
-                Ok(Some(reg))
+                Ok(Some(self.emit_c_call_simple(
+                    "find",
+                    &val,
+                    &[("ptr", &sub)],
+                )))
             }
 
             // split(delimiter) → List[String]
@@ -880,12 +1004,11 @@ impl TextEmitter {
                     },
                     None => return Ok(None),
                 };
-                let sym = builtin_sym("split");
-                self.ensure_extern(&format!("declare ptr @{sym}(ptr, ptr)"));
-                let reg = self.next_reg();
-                self.push_instr(&format!("{reg} = call ptr @{sym}(ptr {val}, ptr {delim})"));
-                self.reg_types.insert(reg.clone(), "ptr".into());
-                Ok(Some(reg))
+                Ok(Some(self.emit_c_call_simple(
+                    "split",
+                    &val,
+                    &[("ptr", &delim)],
+                )))
             }
 
             // substring(start, end) → String
@@ -898,14 +1021,11 @@ impl TextEmitter {
                     Some(v) => v,
                     None => return Ok(None),
                 };
-                let sym = builtin_sym("substring");
-                self.ensure_extern(&format!("declare ptr @{sym}(ptr, i64, i64)"));
-                let reg = self.next_reg();
-                self.push_instr(&format!(
-                    "{reg} = call ptr @{sym}(ptr {val}, i64 {start}, i64 {end})"
-                ));
-                self.reg_types.insert(reg.clone(), "ptr".into());
-                Ok(Some(reg))
+                Ok(Some(self.emit_c_call_simple(
+                    "substring",
+                    &val,
+                    &[("i64", &start), ("i64", &end)],
+                )))
             }
 
             // contains(sub) → Bool
@@ -922,15 +1042,11 @@ impl TextEmitter {
                     },
                     None => return Ok(None),
                 };
-                self.ensure_extern("declare i64 @_mvl_str_contains(ptr, ptr)");
-                let raw = self.next_reg();
-                self.push_instr(&format!(
-                    "{raw} = call i64 @_mvl_str_contains(ptr {val}, ptr {sub})"
-                ));
-                let reg = self.next_reg();
-                self.push_instr(&format!("{reg} = icmp ne i64 {raw}, 0"));
-                self.reg_types.insert(reg.clone(), "i1".into());
-                Ok(Some(reg))
+                Ok(Some(self.emit_c_call_bool_from_i64(
+                    "contains",
+                    &val,
+                    &[("ptr", &sub)],
+                )))
             }
 
             // starts_with(prefix) → Bool
@@ -947,15 +1063,11 @@ impl TextEmitter {
                     },
                     None => return Ok(None),
                 };
-                self.ensure_extern("declare i64 @_mvl_str_starts_with(ptr, ptr)");
-                let raw = self.next_reg();
-                self.push_instr(&format!(
-                    "{raw} = call i64 @_mvl_str_starts_with(ptr {val}, ptr {prefix})"
-                ));
-                let reg = self.next_reg();
-                self.push_instr(&format!("{reg} = icmp ne i64 {raw}, 0"));
-                self.reg_types.insert(reg.clone(), "i1".into());
-                Ok(Some(reg))
+                Ok(Some(self.emit_c_call_bool_from_i64(
+                    "starts_with",
+                    &val,
+                    &[("ptr", &prefix)],
+                )))
             }
 
             // ends_with(suffix) → Bool
@@ -972,15 +1084,11 @@ impl TextEmitter {
                     },
                     None => return Ok(None),
                 };
-                self.ensure_extern("declare i64 @_mvl_str_ends_with(ptr, ptr)");
-                let raw = self.next_reg();
-                self.push_instr(&format!(
-                    "{raw} = call i64 @_mvl_str_ends_with(ptr {val}, ptr {suffix})"
-                ));
-                let reg = self.next_reg();
-                self.push_instr(&format!("{reg} = icmp ne i64 {raw}, 0"));
-                self.reg_types.insert(reg.clone(), "i1".into());
-                Ok(Some(reg))
+                Ok(Some(self.emit_c_call_bool_from_i64(
+                    "ends_with",
+                    &val,
+                    &[("ptr", &suffix)],
+                )))
             }
 
             // trim() → String
@@ -1004,12 +1112,7 @@ impl TextEmitter {
                     Some("List") | Some("Array") | Some("Set") | Some("Map")
                 ) =>
             {
-                let sym = builtin_sym("to_lower");
-                self.ensure_extern(&format!("declare ptr @{sym}(ptr)"));
-                let reg = self.next_reg();
-                self.push_instr(&format!("{reg} = call ptr @{sym}(ptr {val})"));
-                self.reg_types.insert(reg.clone(), "ptr".into());
-                Ok(Some(reg))
+                Ok(Some(self.emit_c_call_simple("to_lower", &val, &[])))
             }
 
             // to_upper() → String
@@ -1019,12 +1122,7 @@ impl TextEmitter {
                     Some("List") | Some("Array") | Some("Set") | Some("Map")
                 ) =>
             {
-                let sym = builtin_sym("to_upper");
-                self.ensure_extern(&format!("declare ptr @{sym}(ptr)"));
-                let reg = self.next_reg();
-                self.push_instr(&format!("{reg} = call ptr @{sym}(ptr {val})"));
-                self.reg_types.insert(reg.clone(), "ptr".into());
-                Ok(Some(reg))
+                Ok(Some(self.emit_c_call_simple("to_upper", &val, &[])))
             }
 
             // replace(old, new) → String

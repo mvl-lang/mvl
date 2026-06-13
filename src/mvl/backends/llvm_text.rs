@@ -43,6 +43,7 @@
 //! ```
 
 pub mod c_symbols;
+pub mod dispatch;
 mod emitter;
 pub mod lli;
 
