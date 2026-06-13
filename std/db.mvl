@@ -26,12 +26,19 @@ use std.env.{_env_read}
 /// wrappers accept `DbUrl[String]`, not raw `String`, so the compiler
 /// enforces label compatibility at call boundaries.
 ///
+/// **Subsumes Secret:** Database URLs contain credentials (passwords, tokens).
+/// `DbUrl` provides both provenance tracking AND credential protection —
+/// `DbUrl[T]` values cannot flow to unlabeled sinks (logs, error messages)
+/// without explicit `relabel undb_url`. This subsumption means code handling
+/// `DbUrl` gets `Secret` guarantees automatically; no separate `Secret` wrapper
+/// is needed.
+///
 /// **Security model:** Capability labels are provenance-tracking tokens, not
 /// access-control tokens.  See `std.config.ConfigPath` for details.
 ///
 /// Produced by: `load_db_url`, `default_db_url`
 /// Consumed by: `pkg.sqlite.open`, `pkg.postgres.connect`, etc.
-pub label DbUrl
+pub label DbUrl > Secret
 
 /// Wrap a bare string in `DbUrl` — marks it as an audited database URL.
 pub relabel db_url: _ -> DbUrl
