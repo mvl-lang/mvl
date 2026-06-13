@@ -71,6 +71,7 @@ test fn dbvalue_match_all_variants() -> Unit {
         DbValue::Float(0.0),
         DbValue::Text(""),
         DbValue::Blob([]),
+        DbValue::Timestamp(0),
     ];
     let count: ref Int = 0;
     for v in values {
@@ -81,9 +82,10 @@ test fn dbvalue_match_all_variants() -> Unit {
             DbValue::Float(_) => { count = count + 1 },
             DbValue::Text(_) => { count = count + 1 },
             DbValue::Blob(_) => { count = count + 1 },
+            DbValue::Timestamp(_) => { count = count + 1 },
         }
     }
-    assert_eq(count, 6);
+    assert_eq(count, 7);
 }
 
 // ── DbValue in list (params) ─────────────────────────────────────────────────
