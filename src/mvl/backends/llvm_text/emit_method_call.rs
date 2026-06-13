@@ -112,6 +112,53 @@ impl TextEmitter {
         self.reg_types.insert(reg.clone(), "i1".to_string());
         reg
     }
+
+    /// Emit a Shape C builtin call: C call returns an `i8` discriminant and
+    /// fills an out-pointer with the payload.  Result is wrapped as
+    /// `Option[T]` via [`wrap_result_pair`].  Reads sym + signature +
+    /// payload_ty from the `LLVM_DISPATCH` row for `method` (must be
+    /// [`Dispatch::CCallOptionOutPtr`]).
+    ///
+    /// The out-pointer is alloca'd by the helper; `extra_args` should NOT
+    /// include it.  The helper appends `, ptr {out}` to the call's argument
+    /// list automatically.
+    pub(super) fn emit_c_call_option_out_ptr(
+        &mut self,
+        method: &'static str,
+        recv_val: &str,
+        extra_args: &[(&'static str, &str)],
+    ) -> String {
+        let Dispatch::CCallOptionOutPtr {
+            sym,
+            signature,
+            payload_ty,
+        } = dispatch::lookup(method).unwrap_or_else(|| {
+            panic!(
+                "LLVM_DISPATCH missing entry for '{method}' — drift between dispatch.rs and emit_method_call.rs"
+            )
+        })
+        else {
+            panic!(
+                "LLVM_DISPATCH entry for '{method}' is not Dispatch::CCallOptionOutPtr"
+            );
+        };
+        self.ensure_extern(&format!("declare {signature}"));
+        let out = self.next_reg();
+        self.push_instr(&format!("{out} = alloca {payload_ty}"));
+        let mut arg_list = format!("ptr {recv_val}");
+        for (ty, v) in extra_args {
+            arg_list.push_str(&format!(", {ty} {v}"));
+        }
+        arg_list.push_str(&format!(", ptr {out}"));
+        let tag = self.next_reg();
+        self.push_instr(&format!("{tag} = call i8 @{sym}({arg_list})"));
+        let payload = self.next_reg();
+        self.push_instr(&format!("{payload} = load {payload_ty}, ptr {out}"));
+        let slot = self.next_reg();
+        self.push_instr(&format!("{slot} = alloca {payload_ty}"));
+        self.push_instr(&format!("store {payload_ty} {payload}, ptr {slot}"));
+        self.wrap_result_pair(&tag, &slot)
+    }
 }
 
 impl TextEmitter {
@@ -874,21 +921,11 @@ impl TextEmitter {
                     },
                     None => return Ok(None),
                 };
-                let sym = builtin_sym("char_at");
-                self.ensure_extern(&format!("declare i8 @{sym}(ptr, i64, ptr)"));
-                let out = self.next_reg();
-                self.push_instr(&format!("{out} = alloca ptr"));
-                let tag = self.next_reg();
-                self.push_instr(&format!(
-                    "{tag} = call i8 @{sym}(ptr {val}, i64 {idx}, ptr {out})"
-                ));
-                let payload = self.next_reg();
-                self.push_instr(&format!("{payload} = load ptr, ptr {out}"));
-                let slot = self.next_reg();
-                self.push_instr(&format!("{slot} = alloca ptr"));
-                self.push_instr(&format!("store ptr {payload}, ptr {slot}"));
-                let r = self.wrap_result_pair(&tag, &slot);
-                Ok(Some(r))
+                Ok(Some(self.emit_c_call_option_out_ptr(
+                    "char_at",
+                    &val,
+                    &[("i64", &idx)],
+                )))
             }
 
             // ── String kernel builtins (#1186) ───────────────────────────
@@ -917,21 +954,11 @@ impl TextEmitter {
                     },
                     None => return Ok(None),
                 };
-                let sym = builtin_sym("byte_at");
-                self.ensure_extern(&format!("declare i8 @{sym}(ptr, i64, ptr)"));
-                let out = self.next_reg();
-                self.push_instr(&format!("{out} = alloca i64"));
-                let tag = self.next_reg();
-                self.push_instr(&format!(
-                    "{tag} = call i8 @{sym}(ptr {val}, i64 {idx}, ptr {out})"
-                ));
-                let byte_val = self.next_reg();
-                self.push_instr(&format!("{byte_val} = load i64, ptr {out}"));
-                let slot = self.next_reg();
-                self.push_instr(&format!("{slot} = alloca i64"));
-                self.push_instr(&format!("store i64 {byte_val}, ptr {slot}"));
-                let r = self.wrap_result_pair(&tag, &slot);
-                Ok(Some(r))
+                Ok(Some(self.emit_c_call_option_out_ptr(
+                    "byte_at",
+                    &val,
+                    &[("i64", &idx)],
+                )))
             }
 
             // find(sub) → Int  (-1 if not found)

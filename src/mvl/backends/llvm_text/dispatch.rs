@@ -56,6 +56,30 @@ pub enum Dispatch {
         sym: &'static str,
         signature: &'static str,
     },
+    /// Shape C: C call uses an out-pointer for the payload, returning the
+    /// `i8` discriminant directly.  The MVL-level result is `Option[T]`
+    /// where `T` has LLVM type `payload_ty`.
+    ///
+    /// Emits:
+    /// ```text
+    /// declare {signature}                              // returns i8
+    /// {out} = alloca {payload_ty}
+    /// {tag} = call i8 @{sym}({arg_list}, ptr {out})
+    /// {payload} = load {payload_ty}, ptr {out}
+    /// {slot} = alloca {payload_ty}
+    /// store {payload_ty} {payload}, ptr {slot}
+    /// {reg} = wrap_result_pair({tag}, {slot})
+    /// ```
+    /// The trailing `, ptr {out}` is appended to the call's `arg_list`
+    /// automatically by the helper — the dispatch entry's `signature`
+    /// must already include the out-ptr parameter.
+    CCallOptionOutPtr {
+        sym: &'static str,
+        signature: &'static str,
+        /// LLVM type of the payload stored at the out-pointer
+        /// (e.g. `"ptr"` for `Option[String]`, `"i64"` for `Option[Byte]`).
+        payload_ty: &'static str,
+    },
 }
 
 impl Dispatch {
@@ -64,6 +88,7 @@ impl Dispatch {
         match self {
             Dispatch::CCall { sym, .. } => sym,
             Dispatch::CCallBoolFromI64 { sym, .. } => sym,
+            Dispatch::CCallOptionOutPtr { sym, .. } => sym,
         }
     }
 }
@@ -88,18 +113,18 @@ pub const LLVM_DISPATCH: &[(&str, Dispatch)] = &[
     ),
     (
         "char_at",
-        Dispatch::CCall {
+        Dispatch::CCallOptionOutPtr {
             sym: "_mvl_str_char_at",
             signature: "i8 @_mvl_str_char_at(ptr, i64, ptr)",
-            ret_ty: "i8",
+            payload_ty: "ptr",
         },
     ),
     (
         "byte_at",
-        Dispatch::CCall {
+        Dispatch::CCallOptionOutPtr {
             sym: "_mvl_str_byte_at",
             signature: "i8 @_mvl_str_byte_at(ptr, i64, ptr)",
-            ret_ty: "i8",
+            payload_ty: "i64",
         },
     ),
     (
