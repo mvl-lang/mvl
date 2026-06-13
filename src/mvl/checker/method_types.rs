@@ -21,7 +21,10 @@
 //! now live in `backends.rs` as the single source of truth — both TIR and AST
 //! emitters import from there.  Runtime function mappings (previously
 //! `STDLIB_BUILTIN_METHODS`) are encoded as `BuiltinDesc.rust_emit` hints in
-//! the `BUILTINS` registry.
+//! the `BUILTINS` registry.  `STDLIB_UFCS_METHODS` now carries
+//! `(method, receiver_type)` pairs, and the `ufcs_sync_tests` module at the
+//! bottom of this file asserts every entry has a non-`Unknown` return-type arm
+//! here — closing one direction of the divergence gap (#1390).
 //!
 //! Missing any one of these causes: wrong type inference (#985), missing emission
 //! (runtime crash), or method not callable.  See issue #992 for the planned fix
@@ -405,6 +408,42 @@ impl TypeChecker {
             // any/all(f: fn(T) -> Bool) -> Bool
             "any" | "all" => Ty::Bool,
             _ => Ty::Unknown,
+        }
+    }
+}
+
+#[cfg(test)]
+mod ufcs_sync_tests {
+    //! Closes one direction of the 4-way sync (#992): every method listed in
+    //! `STDLIB_UFCS_METHODS` (backends.rs) must have a non-`Unknown` return
+    //! type arm in this file.  Without this test, a UFCS entry could be added
+    //! to the transpiler without a matching type-inference arm, causing
+    //! silent `Unknown`-typed expressions downstream.
+
+    use super::*;
+    use crate::mvl::backends::STDLIB_UFCS_METHODS;
+    use crate::mvl::checker::TypeChecker;
+
+    #[test]
+    fn stdlib_ufcs_methods_have_return_types() {
+        let placeholder = Ty::Int;
+        for (method, receiver) in STDLIB_UFCS_METHODS {
+            let ty = match *receiver {
+                "String" => TypeChecker::string_method_ty(method, &[]),
+                "List" => TypeChecker::list_method_ty(&placeholder, method, &[]),
+                other => panic!(
+                    "STDLIB_UFCS_METHODS entry ({method}, {other}) — receiver type \
+                     not handled by ufcs_sync_tests; add an arm for '{other}'"
+                ),
+            };
+            assert_ne!(
+                ty,
+                Ty::Unknown,
+                "{receiver}::{method} is in STDLIB_UFCS_METHODS but \
+                 {}_method_ty returns Ty::Unknown — divergence between \
+                 backends.rs and checker/method_types.rs",
+                receiver.to_lowercase()
+            );
         }
     }
 }

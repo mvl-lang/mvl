@@ -15,7 +15,7 @@ use crate::mvl::passes::coverage::BranchKind;
 use crate::mvl::passes::mcdc::analysis::count_clauses_ref;
 
 use crate::mvl::backends::{
-    rust_emit_by_name, STDLIB_UFCS_METHODS, STRING_LABEL_PRESERVING_METHODS,
+    is_stdlib_ufcs_method, rust_emit_by_name, STRING_LABEL_PRESERVING_METHODS,
 };
 
 impl RustEmitter {
@@ -650,7 +650,7 @@ impl RustEmitter {
                     }
 
                     // ── UFCS dispatch for pure MVL stdlib methods ─────────────────────
-                    m if STDLIB_UFCS_METHODS.contains(&m) => {
+                    m if is_stdlib_ufcs_method(m) => {
                         // Check whether we must re-wrap the result in a label newtype.
                         let wrap_label: Option<String> =
                             if STRING_LABEL_PRESERVING_METHODS.contains(&m) {
