@@ -133,12 +133,12 @@ fn list_join() -> String {
     parts.join(", ")
 }
 
-fn list_enumerate() -> List[(Int, String)] {
+fn list_enumerate() -> List[Indexed[String]] {
     let words: List[String] = ["alpha", "beta", "gamma"];
     words.enumerate()
 }
 
-fn list_zip() -> List[(String, Int)] {
+fn list_zip() -> List[Pair[String, Int]] {
     let names: List[String] = ["alice", "bob", "carol"];
     let scores: List[Int] = [95, 87, 92];
     names.zip(scores)
@@ -266,7 +266,7 @@ fn list_flatten() -> List[Int] {
     xss.flatten()
 }
 
-fn list_partition() -> (List[Int], List[Int]) {
+fn list_partition() -> Partitioned[Int] {
     let xs: List[Int] = [1, 2, 3, 4, 5, 6];
     xs.partition(is_even)
 }

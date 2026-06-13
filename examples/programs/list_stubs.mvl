@@ -26,9 +26,9 @@ fn main() -> Unit ! Console {
 
     // partition: split evens/odds
     let nums: List[Int] = [1, 2, 3, 4, 5];
-    let (evens, odds): (List[Int], List[Int]) = nums.partition(is_even);
-    println(format("partition_yes={}", [evens.len().to_string()]));
-    println(format("partition_no={}", [odds.len().to_string()]));
+    let result: Partitioned[Int] = nums.partition(is_even);
+    println(format("partition_yes={}", [result.matching.len().to_string()]));
+    println(format("partition_no={}", [result.rest.len().to_string()]));
 
     // group_by: group [1,2,3,1,2] by identity → key 1 maps to 2 elements
     let gs: List[Int] = [1, 2, 3, 1, 2];

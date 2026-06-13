@@ -169,32 +169,32 @@ fn is_even_p(x: Int) -> Bool { x % 2 == 0 }
 
 test fn list_partition_splits_correctly() -> Unit {
     let xs: List[Int] = [1, 2, 3, 4, 5, 6];
-    let (evens, odds): (List[Int], List[Int]) = xs.partition(is_even_p);
-    assert_eq(evens.len(), 3);
-    assert_eq(odds.len(), 3);
+    let result: Partitioned[Int] = xs.partition(is_even_p);
+    assert_eq(result.matching.len(), 3);
+    assert_eq(result.rest.len(), 3);
 }
 
 test fn list_partition_all_match() -> Unit {
     let xs: List[Int] = [2, 4, 6];
-    let (evens, odds): (List[Int], List[Int]) = xs.partition(is_even_p);
-    assert_eq(evens.len(), 3);
-    assert_eq(odds.len(), 0);
+    let result: Partitioned[Int] = xs.partition(is_even_p);
+    assert_eq(result.matching.len(), 3);
+    assert_eq(result.rest.len(), 0);
 }
 
 test fn list_partition_none_match() -> Unit {
     let xs: List[Int] = [1, 3, 5];
-    let (evens, odds): (List[Int], List[Int]) = xs.partition(is_even_p);
-    assert_eq(evens.len(), 0);
-    assert_eq(odds.len(), 3);
+    let result: Partitioned[Int] = xs.partition(is_even_p);
+    assert_eq(result.matching.len(), 0);
+    assert_eq(result.rest.len(), 3);
 }
 
 test fn list_partition_correct_sides() -> Unit {
     let xs: List[Int] = [1, 2, 3, 4];
-    let (evens, odds): (List[Int], List[Int]) = xs.partition(is_even_p);
-    assert_eq(evens.contains(2), true);
-    assert_eq(evens.contains(1), false);
-    assert_eq(odds.contains(1), true);
-    assert_eq(odds.contains(2), false);
+    let result: Partitioned[Int] = xs.partition(is_even_p);
+    assert_eq(result.matching.contains(2), true);
+    assert_eq(result.matching.contains(1), false);
+    assert_eq(result.rest.contains(1), true);
+    assert_eq(result.rest.contains(2), false);
 }
 
 test fn range_inverted_is_empty() -> Unit {
@@ -538,17 +538,17 @@ fn is_gt_3(x: Int) -> Bool { x > 3 }
 
 test fn collections_partition_destructure_len_ops() -> Unit {
     let xs: List[Int] = [1, 2, 3, 4, 5, 6];
-    let (evens, odds): (List[Int], List[Int]) = xs.partition(is_even_chain);
-    assert_eq(evens.len(), 3);
-    assert_eq(odds.len(), 3);
-    assert_eq(evens.len() + odds.len(), 6);
+    let result: Partitioned[Int] = xs.partition(is_even_chain);
+    assert_eq(result.matching.len(), 3);
+    assert_eq(result.rest.len(), 3);
+    assert_eq(result.matching.len() + result.rest.len(), 6);
 }
 
 test fn collections_partition_evens_further_mapped() -> Unit {
     let xs: List[Int] = [1, 2, 3, 4, 5, 6];
-    let (evens, odds): (List[Int], List[Int]) = xs.partition(is_even_chain);
-    let doubled_evens: List[Int] = evens.map(|x: Int| x * 2);
-    // evens = [2,4,6] → doubled = [4,8,12]
+    let result: Partitioned[Int] = xs.partition(is_even_chain);
+    let doubled_evens: List[Int] = result.matching.map(|x: Int| x * 2);
+    // matching = [2,4,6] → doubled = [4,8,12]
     assert_eq(doubled_evens.contains(4), true);
     assert_eq(doubled_evens.contains(8), true);
     assert_eq(doubled_evens.contains(12), true);
@@ -557,16 +557,16 @@ test fn collections_partition_evens_further_mapped() -> Unit {
 
 test fn collections_partition_odds_filtered_and_summed() -> Unit {
     let xs: List[Int] = [1, 2, 3, 4, 5, 6, 7];
-    let (evens, odds): (List[Int], List[Int]) = xs.partition(is_even_chain);
-    let odd_sum: Int = odds.fold(0, |acc: Int, x: Int| acc + x);
-    // odds: [1,3,5,7] → sum = 16
+    let result: Partitioned[Int] = xs.partition(is_even_chain);
+    let odd_sum: Int = result.rest.fold(0, |acc: Int, x: Int| acc + x);
+    // rest: [1,3,5,7] → sum = 16
     assert_eq(odd_sum, 16);
 }
 
 test fn collections_partition_then_filter_on_part() -> Unit {
     let xs: List[Int] = [1, 2, 3, 4, 5, 6];
-    let (evens, odds): (List[Int], List[Int]) = xs.partition(is_even_chain);
-    let large_odds: List[Int] = odds.filter(is_gt_3);
+    let result: Partitioned[Int] = xs.partition(is_even_chain);
+    let large_odds: List[Int] = result.rest.filter(is_gt_3);
     assert_eq(large_odds.len(), 1);
     assert_eq(large_odds.contains(5), true);
 }

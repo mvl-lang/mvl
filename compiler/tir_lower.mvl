@@ -158,7 +158,6 @@ partial fn substitute_ty(ty: Ty, subs: Map[String, Ty]) -> Ty {
                 Box::new(substitute_ty(*ok, subs)),
                 Box::new(substitute_ty(*err, subs)),
             ),
-            Ty::Tuple(elems)          => Ty::Tuple(elems.map(|e: Ty| substitute_ty(e, subs))),
             // Array, Labeled, Refined, TyFn: pass through without inner substitution.
             // Phase 2a: the simplified AST rarely produces these in generic positions.
             _ => ty,

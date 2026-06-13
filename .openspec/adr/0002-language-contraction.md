@@ -32,6 +32,19 @@ The MVL drops every feature that exists for writability over readability. One wa
 | `continue` | — | `if` condition inverted: `if cond { skip }` → `if !cond { process }`. `continue` is a goto in disguise — non-local control flow inside a loop body. |
 | Trait objects / dynamic dispatch | Rust `dyn Trait` (2015), Java interfaces (1995) | Static dispatch only. All generics are monomorphized (ADR-0034). No `dyn`, no vtables, no type erasure. |
 | Per-field visibility | Rust `pub(crate)` fields (2015) | Struct fields are always public. Access control is at the module boundary (`pub fn`), not the field level. Simplifies codegen and verification. |
+| Anonymous tuples (`(Int, String)`, `.0`, `.1`) | ML (1973), Python (1991), Rust (2010), Go (multiple returns, 2009) | Named structs. `Indexed[T]`, `Pair[A,B]`, `Partitioned[T]`, `Entry[K,V]` for stdlib pairs; user code declares its own (#1380, 2026-06). |
+
+### Design note: tuples removed
+
+Anonymous tuples were briefly available (#1366) and then removed (#1380, 2026-06) before adoption spread. Five reasons:
+
+1. **Implicit meaning violates "Explicit over Implicit"** — `(Int, Int)` could be `(x, y)`, `(width, height)`, or `(min, max)`. `.0` says nothing; `.x` does.
+2. **Safety hazard** — Swapped destructuring (`let (min, max) = bounds()` vs the function returning `(max, min)`) is a latent defect the compiler can't catch.
+3. **LLM-unfriendly** — Field names are self-documenting context for token interpolation. Positional access is not.
+4. **Auditability** — `result.error_code` traces back to a spec line; `result.0` does not.
+5. **Refactoring hazard** — Adding a field to a tuple silently breaks every positional access.
+
+If your data has meaning, give it a name. Stdlib pairs (enumerate, zip, partition, entries, env.all) return named records; user code does the same. The `for (a, b) in xs` shorthand is replaced by `for item in xs { let a = item.field; … }` — slightly more verbose, which is the point.
 
 ### Design note: `while` and termination
 

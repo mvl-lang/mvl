@@ -97,10 +97,24 @@ pub fn remove_var(name: String) {
     std::env::remove_var(&name);
 }
 
-/// Return all environment variables as (name, value) pairs.
-pub fn all() -> Vec<(Tainted<String>, Tainted<String>)> {
+/// An entry returned by `all()` — mirrors the MVL `EnvEntry` struct from std/env.mvl.
+///
+/// `Tainted<String>` for both fields because env data is externally controlled.
+#[derive(Clone, Debug)]
+pub struct EnvEntry {
+    /// Environment variable name (tainted — externally controlled).
+    pub key: Tainted<String>,
+    /// Environment variable value (tainted — externally controlled).
+    pub value: Tainted<String>,
+}
+
+/// Return all environment variables as `EnvEntry` records.
+pub fn all() -> Vec<EnvEntry> {
     std::env::vars()
-        .map(|(k, v)| (Tainted(k), Tainted(v)))
+        .map(|(k, v)| EnvEntry {
+            key: Tainted(k),
+            value: Tainted(v),
+        })
         .collect()
 }
 
@@ -256,7 +270,7 @@ mod tests {
         let pairs = all();
         let found = pairs
             .iter()
-            .any(|(k, v)| k.0 == "MVL_ENV_TEST_ALL_KEY" && v.0 == "mvl_all_value");
+            .any(|e| e.key.0 == "MVL_ENV_TEST_ALL_KEY" && e.value.0 == "mvl_all_value");
         std::env::remove_var("MVL_ENV_TEST_ALL_KEY");
         assert!(found, "all() must include variables set in the process env");
     }

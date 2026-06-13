@@ -57,15 +57,15 @@ pub fn SessionTy::display(self) -> String {
             format("?{}. {}", [(*t).display(), (*cont).display()]),
         SessionTy::InternalChoice(branches) => {
             let parts: ref List[String] = [];
-            for (lbl, sty) in branches {
-                parts.push(format("{}: {}", [lbl, sty.display()]))
+            for br in branches {
+                parts.push(format("{}: {}", [br.name, br.session.display()]))
             }
             format("+{{ {} }}", [parts.join(", ")])
         },
         SessionTy::ExternalChoice(branches) => {
             let parts: ref List[String] = [];
-            for (lbl, sty) in branches {
-                parts.push(format("{}: {}", [lbl, sty.display()]))
+            for br in branches {
+                parts.push(format("{}: {}", [br.name, br.session.display()]))
             }
             format("&{{ {} }}", [parts.join(", ")])
         },
@@ -111,10 +111,6 @@ pub fn Ty::display(self) -> String {
                     format(" ! {}", [e])
                 };
             format("fn({}) -> {}{}", [params_str, (*r).display(), effects_str])
-        },
-        Ty::Tuple(elems) => {
-            let s: String = elems.map(|t: Ty| t.display()).join(", ");
-            format("({})", [s])
         },
         Ty::List(inner) =>
             format("List[{}]", [(*inner).display()]),
@@ -276,10 +272,6 @@ pub partial fn types_compatible(a: Ty, b: Ty) -> Bool {
                 // Plain value T compatible where val/ref T expected.
                 _ => types_compatible(*ai, b2),
             },
-            Ty::Tuple(a_elems) => match b2 {
-                Ty::Tuple(b_elems) => tys_all_compat(a_elems, b_elems),
-                _ => false,
-            },
             Ty::Named(an, aa) => named_compat(an, aa, b2),
             Ty::Session(sa) => match b2 {
                 Ty::Session(sb) => session_types_compatible(*sa, *sb),
@@ -405,8 +397,8 @@ pub partial fn session_types_compatible(a: SessionTy, b: SessionTy) -> Bool {
 }
 
 partial fn session_branches_compatible(
-    a: List[(String, SessionTy)],
-    b: List[(String, SessionTy)],
+    a: List[SessionTyBranch],
+    b: List[SessionTyBranch],
 ) -> Bool {
     // TODO: full label+content comparison requires 'for' in partial fn (pending fix)
     a.len() == b.len()
