@@ -29,7 +29,7 @@ use tir::FnDecl;
 use tir::ImplDecl;
 use tir::Param;
 use tir::Program;
-use tir::Span;
+use tir::SourceLoc;
 use tir::TirBlock;
 use tir::TirExternDecl;
 use tir::TirExternFn;

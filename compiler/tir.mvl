@@ -21,11 +21,15 @@
 //   TirStmt.else_     → .else_br           (else is a keyword)
 //   Ty::Fn variant    → TyFn { … }         (named-field form for clarity)
 //   Ty::Array variant → Array { elem, size }
+//   SourceLoc              → SourceLoc          (line/col location; #1372 — index SourceLoc from std.text)
+
+use std.text.{Span}
 
 // ── Source location ──────────────────────────────────────────────────────────
 
 /// Source location (line + column) within a source file, one-based.
-pub type Span = struct {
+/// Carried alongside the index-based `Span` in every `Token` (#1372).
+pub type SourceLoc = struct {
     line: Int,
     col:  Int,
 }
@@ -85,7 +89,7 @@ pub type TokenKind = enum {
     // ── Boolean literals ──────────────────────────────────────────────────
     KwTrue,
     KwFalse,
-    // ── Value-carrying kinds (actual text in Token.lexeme) ─────────────────
+    // ── Value-carrying kinds (text via tok.span.text(src)) ────────────────
     Ident,
     IntLit,
     FloatLit,
@@ -101,19 +105,21 @@ pub type TokenKind = enum {
 
 // ── Token ────────────────────────────────────────────────────────────────────
 
-/// A single lexical token with its category, raw text, and source location.
+/// A single lexical token: kind, zero-alloc index span into source, and source location.
+/// `span` is a stdlib `Span { start, end }` — extract text with `tok.span.text(src)` (#1372).
+/// `loc` carries the line/col for error messages.
 pub type Token = struct {
-    kind:   TokenKind,
-    lexeme: String,
-    span:   Span,
+    kind: TokenKind,
+    span: Span,       // std.text.Span { start, end } — char range in source buffer
+    loc:  SourceLoc,  // line + col for error reporting
 }
 
 // ── Parse error ──────────────────────────────────────────────────────────────
 
-/// A parse error with a human-readable message and the span where it occurred.
+/// A parse error with a human-readable message and the source location.
 pub type ParseError = struct {
     message: String,
-    span:    Span,
+    span:    SourceLoc,
 }
 
 // ── Type expression (simplified — parser-stage form) ─────────────────────────
@@ -126,7 +132,7 @@ pub type ParseError = struct {
 pub type TypeExpr = struct {
     name: String,
     args: List[TypeExpr],
-    span: Span,
+    span: SourceLoc,
 }
 
 // ── Generic type parameter (simplified — parser-stage form) ──────────────────
@@ -135,7 +141,7 @@ pub type TypeExpr = struct {
 pub type GenericParam = struct {
     name:  String,
     bound: String,
-    span:  Span,
+    span:  SourceLoc,
 }
 
 // ── Effect annotation ─────────────────────────────────────────────────────────
@@ -144,14 +150,14 @@ pub type GenericParam = struct {
 pub type Effect = struct {
     name:  String,
     param: String,
-    span:  Span,
+    span:  SourceLoc,
 }
 
 /// An effect declaration (`effect Name` or `effect Name > Parent + …`).
 pub type EffectDecl = struct {
     name:     String,
     subsumes: List[String],
-    span:     Span,
+    span:     SourceLoc,
 }
 
 // ── Where-clause constraint ───────────────────────────────────────────────────
@@ -160,7 +166,7 @@ pub type EffectDecl = struct {
 pub type Constraint = struct {
     param: String,
     bound: String,
-    span:  Span,
+    span:  SourceLoc,
 }
 
 // ── Function parameter ────────────────────────────────────────────────────────
@@ -171,7 +177,7 @@ pub type Param = struct {
     mutable:    Bool,
     name:       String,
     ty:         TypeExpr,
-    span:       Span,
+    span:       SourceLoc,
 }
 
 // ── Function declaration (simplified — parser-stage form) ─────────────────────
@@ -197,7 +203,7 @@ pub type FnDecl = struct {
     effects:     List[Effect],
     constraints: List[Constraint],
     body:        Option[Block],
-    span:        Span,
+    span:        SourceLoc,
 }
 
 // ── Struct field declaration ──────────────────────────────────────────────────
@@ -206,7 +212,7 @@ pub type FnDecl = struct {
 pub type FieldDecl = struct {
     name: String,
     ty:   TypeExpr,
-    span: Span,
+    span: SourceLoc,
 }
 
 // ── Type declaration body kind (simplified) ───────────────────────────────────
@@ -225,7 +231,7 @@ pub type TypeDecl = struct {
     fields:      List[FieldDecl],
     variants:    List[String],
     alias_ty:    TypeExpr,
-    span:        Span,
+    span:        SourceLoc,
 }
 
 // ── Use declaration ───────────────────────────────────────────────────────────
@@ -235,7 +241,7 @@ pub type UseDecl = struct {
     visible: Bool,
     path:    List[String],
     imports: List[String],
-    span:    Span,
+    span:    SourceLoc,
 }
 
 // ── Const declaration (simplified — parser-stage form) ────────────────────────
@@ -246,7 +252,7 @@ pub type ConstDecl = struct {
     name:    String,
     ty:      TypeExpr,
     value:   String,
-    span:    Span,
+    span:    SourceLoc,
 }
 
 // ── Extern declarations (simplified — parser-stage form) ──────────────────────
@@ -257,14 +263,14 @@ pub type ExternFnDecl = struct {
     params:  List[Param],
     ret_ty:  TypeExpr,
     effects: List[Effect],
-    span:    Span,
+    span:    SourceLoc,
 }
 
 /// An extern block grouping foreign function signatures for a target language.
 pub type ExternDecl = struct {
     lang: String,
     fns:  List[ExternFnDecl],
-    span: Span,
+    span: SourceLoc,
 }
 
 // ── Impl block declaration (simplified — parser-stage form) ───────────────────
@@ -275,7 +281,7 @@ pub type ImplDecl = struct {
     trait_name: String,
     trait_args: List[TypeExpr],
     methods:    List[FnDecl],
-    span:       Span,
+    span:       SourceLoc,
 }
 
 // ── IFC label and relabel declarations ───────────────────────────────────────
@@ -284,7 +290,7 @@ pub type ImplDecl = struct {
 pub type LabelDecl = struct {
     visible: Bool,
     name:    String,
-    span:    Span,
+    span:    SourceLoc,
 }
 
 /// A relabel transition declaration (`relabel trust: Tainted -> _`).
@@ -294,7 +300,7 @@ pub type RelabelDecl = struct {
     from:    Option[String],
     to:      Option[String],
     audit:   Bool,
-    span:    Span,
+    span:    SourceLoc,
 }
 
 // ── Top-level parsed program (simplified — parser-stage form) ─────────────────
@@ -407,8 +413,8 @@ pub type Literal = enum {
 
 /// Assignable location: a bare identifier or a field path.
 pub type LValue = enum {
-    Ident(String, Span),
-    Field { base: Box[LValue], field: String, span: Span },
+    Ident(String, SourceLoc),
+    Field { base: Box[LValue], field: String, span: SourceLoc },
 }
 
 // ── Patterns ─────────────────────────────────────────────────────────────────
@@ -418,13 +424,13 @@ pub type LValue = enum {
 // complex variant uses a helper struct as its tuple-variant payload.
 
 /// Helper for `Pattern::Tuple`: an ordered list of sub-patterns.
-pub type TuplePattern = struct { elems: List[Pattern], span: Span }
+pub type TuplePattern = struct { elems: List[Pattern], span: SourceLoc }
 
 /// Helper for `Pattern::TupleStruct`: a named variant with positional fields.
-pub type TupleStructPattern = struct { name: String, fields: List[Pattern], span: Span }
+pub type TupleStructPattern = struct { name: String, fields: List[Pattern], span: SourceLoc }
 
 /// Helper for `Pattern::Struct`: a named variant with field bindings.
-pub type StructPattern = struct { name: String, fields: List[PatField], span: Span }
+pub type StructPattern = struct { name: String, fields: List[PatField], span: SourceLoc }
 
 /// A match pattern.
 ///
@@ -433,18 +439,18 @@ pub type StructPattern = struct { name: String, fields: List[PatField], span: Sp
 /// Box[Pattern] → direct Pattern (MVL GC handles heap allocation).
 /// Literal payload changed from Literal (uses Char primitive) to AstLiteral.
 pub type Pattern = enum {
-    Wildcard(Span),
-    Ident(String, Span),
-    Literal(AstLiteral, Span),
+    Wildcard(SourceLoc),
+    Ident(String, SourceLoc),
+    Literal(AstLiteral, SourceLoc),
     Tuple(TuplePattern),
     /// `Name(p1, p2, …)` — tuple-struct or enum-variant with positional fields.
     TupleStruct(TupleStructPattern),
     /// `Name { field: pat, … }` — struct or enum-variant with named fields.
     Struct(StructPattern),
-    Some(List[Pattern], Span),   // [1] — List breaks Rust infinite-size cycle
-    None(Span),
-    Ok(List[Pattern], Span),     // [1]
-    Err(List[Pattern], Span),    // [1]
+    Some(List[Pattern], SourceLoc),   // [1] — List breaks Rust infinite-size cycle
+    None(SourceLoc),
+    Ok(List[Pattern], SourceLoc),     // [1]
+    Err(List[Pattern], SourceLoc),    // [1]
 }
 
 // ── Parser-stage AST (Phase 3: #1116) ────────────────────────────────────────
@@ -497,35 +503,35 @@ pub type AstBinaryExpr = struct {
     op:    BinaryOp,
     left:  List[Expr],   // [1]
     right: List[Expr],   // [1]
-    span:  Span,
+    span:  SourceLoc,
 }
 
 /// Unary prefix expression: `op expr`.
 pub type AstUnaryExpr = struct {
     op:   UnaryOp,
     expr: List[Expr],    // [1]
-    span: Span,
+    span: SourceLoc,
 }
 
 /// Field access: `expr.field`.
 pub type AstFieldExpr = struct {
     expr:  List[Expr],   // [1]
     field: String,
-    span:  Span,
+    span:  SourceLoc,
 }
 
 /// Index expression: `expr[index]`.
 pub type AstIndexExpr = struct {
     expr:  List[Expr],   // [1]
     index: List[Expr],   // [1]
-    span:  Span,
+    span:  SourceLoc,
 }
 
 /// Free function call: `name(args…)`.
 pub type AstCallExpr = struct {
     name: String,
     args: List[Expr],
-    span: Span,
+    span: SourceLoc,
 }
 
 /// Method call: `receiver.method(args…)`.
@@ -533,7 +539,7 @@ pub type AstMethodExpr = struct {
     receiver: List[Expr],   // [1]
     method:   String,
     args:     List[Expr],
-    span:     Span,
+    span:     SourceLoc,
 }
 
 /// If / if-else expression: `if cond { then } else { else_br }`.
@@ -541,34 +547,34 @@ pub type AstIfExpr = struct {
     cond:    List[Expr],   // [1]
     then:    Block,
     else_br: List[Expr],   // [0,1]  empty = no else
-    span:    Span,
+    span:    SourceLoc,
 }
 
 /// Match expression: `match scrutinee { arms… }`.
 pub type AstMatchExpr = struct {
     scrutinee: List[Expr],   // [1]
     arms:      List[MatchArm],
-    span:      Span,
+    span:      SourceLoc,
 }
 
 /// Struct literal: `TypeName { field: value, … }`.
 pub type AstStructLit = struct {
     name:   String,
     fields: List[StructField],
-    span:   Span,
+    span:   SourceLoc,
 }
 
 /// Map literal helper: the pair list for `{ key: val, … }`.
 pub type AstMapLit = struct {
     pairs: List[MapEntry],
-    span:  Span,
+    span:  SourceLoc,
 }
 
 /// Type cast: `expr as Type`.
 pub type AstCastExpr = struct {
     expr: List[Expr],    // [1]
     ty:   TypeExpr,
-    span: Span,
+    span: SourceLoc,
 }
 
 /// IFC relabel call: `relabel func(expr, "audit_tag")`.
@@ -576,7 +582,7 @@ pub type AstRelabelExpr = struct {
     func:      String,
     expr:      List[Expr],    // [1]
     audit_tag: String,
-    span:      Span,
+    span:      SourceLoc,
 }
 
 // ── Parser-stage match arm ─────────────────────────────────────────────────────
@@ -585,7 +591,7 @@ pub type AstRelabelExpr = struct {
 pub type MatchArm = struct {
     pattern: Pattern,
     body:    List[Expr],   // [1]
-    span:    Span,
+    span:    SourceLoc,
 }
 
 // ── Parser-stage expression ────────────────────────────────────────────────────
@@ -597,8 +603,8 @@ pub type MatchArm = struct {
 /// Variants that embed Expr or Block use List[Expr] (single element) to break
 /// the Rust infinite-size cycle — see comment above AstBinaryExpr.
 pub type Expr = enum {
-    Lit(AstLiteral, Span),            // literal value
-    Ident(String, Span),              // bare name
+    Lit(AstLiteral, SourceLoc),            // literal value
+    Ident(String, SourceLoc),              // bare name
     Binary(AstBinaryExpr),            // left op right
     Unary(AstUnaryExpr),              // op expr
     Field(AstFieldExpr),              // expr.field
@@ -607,14 +613,14 @@ pub type Expr = enum {
     Method(AstMethodExpr),            // receiver.method(args)
     If(AstIfExpr),                    // if cond { then } [else …]
     MatchExpr(AstMatchExpr),          // match scrutinee { arms }
-    ListLit(List[Expr], Span),        // [elems…]
+    ListLit(List[Expr], SourceLoc),        // [elems…]
     MapLit(AstMapLit),                // {key: val, …}
-    SetLit(List[Expr], Span),         // #{elems…}  (set-literal notation)
+    SetLit(List[Expr], SourceLoc),         // #{elems…}  (set-literal notation)
     StructLit(AstStructLit),          // Name { field: value, … }
-    BlockExpr(Block, Span),           // { stmts… [tail_expr] }
-    Propagate(List[Expr], Span),      // expr?  — [1]
+    BlockExpr(Block, SourceLoc),           // { stmts… [tail_expr] }
+    Propagate(List[Expr], SourceLoc),      // expr?  — [1]
     Cast(AstCastExpr),                // expr as Type
-    Consume(List[Expr], Span),        // consume expr  — [1]
+    Consume(List[Expr], SourceLoc),        // consume expr  — [1]
     Relabel(AstRelabelExpr),          // relabel func(expr, "tag")
 }
 
@@ -626,21 +632,21 @@ pub type AstLetStmt = struct {
     name:    String,
     ty:      TypeExpr,
     value:   List[Expr],   // [1]
-    span:    Span,
+    span:    SourceLoc,
 }
 
 /// Assignment statement: `name = value;` or `name.field = value;`.
 pub type AstAssignStmt = struct {
     target: String,
     value:  List[Expr],   // [1]
-    span:   Span,
+    span:   SourceLoc,
 }
 
 /// `while cond { body }` statement.
 pub type AstWhileStmt = struct {
     cond: List[Expr],   // [1]
     body: Block,
-    span: Span,
+    span: SourceLoc,
 }
 
 /// `for var in iter { body }` statement.
@@ -648,7 +654,7 @@ pub type AstForStmt = struct {
     var:  String,
     iter: List[Expr],   // [1]
     body: Block,
-    span: Span,
+    span: SourceLoc,
 }
 
 // ── Parser-stage statement ─────────────────────────────────────────────────────
@@ -657,10 +663,10 @@ pub type AstForStmt = struct {
 pub type Stmt = enum {
     Let(AstLetStmt),
     Assign(AstAssignStmt),
-    Return(List[Expr], Span),   // [0,1]  empty = `return;` / Unit
+    Return(List[Expr], SourceLoc),   // [0,1]  empty = `return;` / Unit
     While(AstWhileStmt),
     For(AstForStmt),
-    ExprStmt(List[Expr], Span), // [1]
+    ExprStmt(List[Expr], SourceLoc), // [1]
 }
 
 // ── Parser-stage block ─────────────────────────────────────────────────────────
@@ -672,29 +678,29 @@ pub type Stmt = enum {
 pub type Block = struct {
     stmts:     List[Stmt],
     tail_expr: List[Expr],    // [0,1]  empty = no tail / returns Unit
-    span:      Span,
+    span:      SourceLoc,
 }
 
 // ── Refinement predicates ─────────────────────────────────────────────────────
 
 /// Predicate language for refinement types and contracts.
 pub type RefExpr = enum {
-    Logic { op: LogicOp, left: Box[RefExpr], right: Box[RefExpr], span: Span },
-    Compare { op: CmpOp, left: Box[RefExpr], right: Box[RefExpr], span: Span },
-    Arith { op: ArithOp, left: Box[RefExpr], right: Box[RefExpr], span: Span },
-    Not { inner: Box[RefExpr], span: Span },
-    Ident { name: String, span: Span },
-    FieldAccess { object: Box[RefExpr], field: String, span: Span },
-    Integer { value: Int, span: Span },
-    Float { value: Float, span: Span },
-    Len { ident: String, span: Span },
-    Grouped { inner: Box[RefExpr], span: Span },
+    Logic { op: LogicOp, left: Box[RefExpr], right: Box[RefExpr], span: SourceLoc },
+    Compare { op: CmpOp, left: Box[RefExpr], right: Box[RefExpr], span: SourceLoc },
+    Arith { op: ArithOp, left: Box[RefExpr], right: Box[RefExpr], span: SourceLoc },
+    Not { inner: Box[RefExpr], span: SourceLoc },
+    Ident { name: String, span: SourceLoc },
+    FieldAccess { object: Box[RefExpr], field: String, span: SourceLoc },
+    Integer { value: Int, span: SourceLoc },
+    Float { value: Float, span: SourceLoc },
+    Len { ident: String, span: SourceLoc },
+    Grouped { inner: Box[RefExpr], span: SourceLoc },
     /// `old(expr)` — entry-time value in `ensures` postconditions.
-    Old { inner: Box[RefExpr], span: Span },
+    Old { inner: Box[RefExpr], span: SourceLoc },
     /// `forall x: T, pred` — universal quantifier.
-    Forall { var: String, ty: Box[TypeExpr], body: Box[RefExpr], span: Span },
+    Forall { var: String, ty: Box[TypeExpr], body: Box[RefExpr], span: SourceLoc },
     /// `exists x: T, pred` — existential quantifier.
-    Exists { var: String, ty: Box[TypeExpr], body: Box[RefExpr], span: Span },
+    Exists { var: String, ty: Box[TypeExpr], body: Box[RefExpr], span: SourceLoc },
 }
 
 // ── Session protocol (parser-stage) ──────────────────────────────────────────
@@ -709,15 +715,15 @@ pub type SessionOpBranch = struct {
 /// One step in a typed session-type protocol (Honda 1993).
 pub type SessionOp = enum {
     /// `!T. S` — send a value of type T, then continue as S.
-    Send { msg: Box[TypeExpr], cont: Box[SessionOp], span: Span },
+    Send { msg: Box[TypeExpr], cont: Box[SessionOp], span: SourceLoc },
     /// `?T. S` — receive a value of type T, then continue as S.
-    Receive { msg: Box[TypeExpr], cont: Box[SessionOp], span: Span },
+    Receive { msg: Box[TypeExpr], cont: Box[SessionOp], span: SourceLoc },
     /// `+{ l1: S1, … }` — internal choice: this side selects a branch.
-    InternalChoice { branches: List[SessionOpBranch], span: Span },
+    InternalChoice { branches: List[SessionOpBranch], span: SourceLoc },
     /// `&{ l1: S1, … }` — external choice: the other side selects.
-    ExternalChoice { branches: List[SessionOpBranch], span: Span },
+    ExternalChoice { branches: List[SessionOpBranch], span: SourceLoc },
     /// `end` — protocol terminated.
-    End { span: Span },
+    End { span: SourceLoc },
 }
 
 // ── Resolved session type (checker output) ────────────────────────────────────
@@ -789,7 +795,7 @@ pub type Ty = enum {
 pub type TirExpr = struct {
     kind: TirExprKind,
     ty:   Ty,
-    span: Span,
+    span: SourceLoc,
 }
 
 /// A named field with its typed expression.
@@ -850,45 +856,45 @@ pub type TirStmt = enum {
         pattern: Pattern,
         ty:      Ty,
         init:    TirExpr,
-        span:    Span,
+        span:    SourceLoc,
     },
     Assign {
         target: LValue,
         value:  TirExpr,
-        span:   Span,
+        span:   SourceLoc,
     },
     Return {
         value: Option[TirExpr],
-        span:  Span,
+        span:  SourceLoc,
     },
     If {
         cond:    TirExpr,
         then:    TirBlock,
         else_br: Option[TirElseBranch],
-        span:    Span,
+        span:    SourceLoc,
     },
     Match {
         scrutinee: TirExpr,
         arms:      List[TirMatchArm],
-        span:      Span,
+        span:      SourceLoc,
     },
     For {
         pattern:    Pattern,
         iter:       TirExpr,
         invariants: List[TirExpr],
         body:       TirBlock,
-        span:       Span,
+        span:       SourceLoc,
     },
     While {
         cond:        TirExpr,
         invariants:  List[TirExpr],
         decrease_by: Option[Box[TirExpr]],
         body:        TirBlock,
-        span:        Span,
+        span:        SourceLoc,
     },
     Expr {
         expr: TirExpr,
-        span: Span,
+        span: SourceLoc,
     },
 }
 
@@ -903,7 +909,7 @@ pub type TirElseBranch = enum {
 /// A block of TIR statements.
 pub type TirBlock = struct {
     stmts: List[TirStmt],
-    span:  Span,
+    span:  SourceLoc,
 }
 
 /// A single arm of a TIR match expression.
@@ -911,7 +917,7 @@ pub type TirMatchArm = struct {
     pattern: Pattern,
     guard:   Option[RefExpr],
     body:    TirMatchBody,
-    span:    Span,
+    span:    SourceLoc,
 }
 
 /// The body of a match arm — either an expression or a block.
@@ -926,7 +932,7 @@ pub type TirSelectArm = struct {
     expr:       Box[TirExpr],
     is_timeout: Bool,
     body:       TirBlock,
-    span:       Span,
+    span:       SourceLoc,
 }
 
 // ── TIR function ──────────────────────────────────────────────────────────────
@@ -936,7 +942,7 @@ pub type TirParam = struct {
     name:       String,
     ty:         Ty,
     capability: Option[Capability],
-    span:       Span,
+    span:       SourceLoc,
 }
 
 /// A concrete (monomorphized), fully-typed function.
@@ -959,7 +965,7 @@ pub type TirFn = struct {
     pre_conds:         List[RefExpr],   // Rust: requires — keyword in MVL
     post_conds:        List[RefExpr],   // Rust: ensures — keyword in MVL
     body:              TirBlock,
-    span:              Span,
+    span:              SourceLoc,
 }
 
 // ── TIR declaration types ─────────────────────────────────────────────────────
@@ -969,14 +975,14 @@ pub type TirFieldDecl = struct {
     name:       String,
     ty:         Ty,
     refinement: Option[RefExpr],
-    span:       Span,
+    span:       SourceLoc,
 }
 
 /// A single enum variant with its payload.
 pub type TirVariant = struct {
     name:   String,
     fields: TirVariantFields,
-    span:   Span,
+    span:   SourceLoc,
 }
 
 /// The payload of a TIR enum variant.
@@ -999,7 +1005,7 @@ pub type TirTypeDecl = struct {
     name:    String,
     params:  List[GenericParam],
     body:    TirTypeBody,
-    span:    Span,
+    span:    SourceLoc,
 }
 
 /// A single function signature inside an `extern` block, with resolved types.
@@ -1009,7 +1015,7 @@ pub type TirExternFn = struct {
     ret_ty:   Ty,
     effects:  List[Effect],
     totality: Option[Totality],
-    span:     Span,
+    span:     SourceLoc,
 }
 
 /// An `extern "abi" { … }` block with resolved function signatures.
@@ -1017,7 +1023,7 @@ pub type TirExternDecl = struct {
     abi:       String,
     link_libs: List[String],
     fns:       List[TirExternFn],
-    span:      Span,
+    span:      SourceLoc,
 }
 
 /// A method inside an actor declaration, with a fully-typed body.
@@ -1029,7 +1035,7 @@ pub type TirActorMethod = struct {
     ret_ty:    Ty,
     effects:   List[Effect],
     body:      TirBlock,
-    span:      Span,
+    span:      SourceLoc,
 }
 
 /// An actor type declaration with resolved field types and typed method bodies.
@@ -1041,7 +1047,7 @@ pub type TirActorDecl = struct {
     methods:    List[TirActorMethod],
     mailbox:    Option[MailboxConfig],
     traps_exit: Bool,
-    span:       Span,
+    span:       SourceLoc,
 }
 
 /// An `impl Trait for Type { … }` block with fully-typed method bodies.
@@ -1050,7 +1056,7 @@ pub type TirImplDecl = struct {
     trait_type_args: List[Ty],
     type_name:       String,
     methods:         List[TirFn],
-    span:            Span,
+    span:            SourceLoc,
 }
 
 /// A `const` declaration with a fully-typed value expression.
@@ -1059,7 +1065,7 @@ pub type TirConstDecl = struct {
     name:    String,
     ty:      Ty,
     value:   TirExpr,
-    span:    Span,
+    span:    SourceLoc,
 }
 
 // ── TIR program ───────────────────────────────────────────────────────────────

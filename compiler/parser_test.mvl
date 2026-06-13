@@ -16,7 +16,7 @@
 // ── Helper: lex + parse a source string ──────────────────────────────────────
 
 total fn lp(src: String) -> Program {
-    parse(lex(src))
+    parse(lex(src), src)
 }
 
 // ── Empty source ──────────────────────────────────────────────────────────────

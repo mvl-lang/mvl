@@ -32,7 +32,7 @@
 ///   Timeout                   — prover exceeded time budget
 pub type Verdict = enum {
     Proven(String),
-    Failed(String, Option[Span]),
+    Failed(String, Option[SourceLoc]),
     Unchecked(String),
     Timeout,
 }

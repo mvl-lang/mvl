@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.207.0] - 2026-06-13
+
+### Added
+
+- **Self-hosted compiler: zero-alloc lexer tokens** (#1372) — Lexer now emits `Token { span: Span { start, end }, loc: SourceLoc }` instead of `Token { lexeme: String }`, eliminating N heap allocations per token (N = token count). The `span` field indexes into the source buffer; parser recovers token text on-demand via `tok.span.text(src)`. Type system update: renamed `tir.Span { line, col }` → `SourceLoc` to avoid collision with the new `std.text.Span` index type. Reduces memory pressure during parsing and enables the self-hosted parser to match the Rust backend's allocation footprint.
+
 ## [0.206.0] - 2026-06-13
 
 ### Added

@@ -6,11 +6,11 @@
 // Port of src/mvl/checker/errors.rs (type definition only).
 //
 // CheckError carries one variant per type-checker / verification failure,
-// each with a Span and enough context for human-readable messages.
+// each with a SourceLoc and enough context for human-readable messages.
 //
 // Methods (span, requirement_number, message) are DEFERRED.  The Rust backend
-// currently generates `&Span` in struct field patterns when the receiver is
-// `&self`, but the return type expects `Span` (owned, Copy type).  Until this
+// currently generates `&SourceLoc` in struct field patterns when the receiver is
+// `&self`, but the return type expects `SourceLoc` (owned, Copy type).  Until this
 // is fixed, calling these methods will not compile via `mvl test`.  The method
 // implementations are preserved in git history; re-enable them when the backend
 // correctly dereferences struct field bindings in `&self` match arms.
@@ -28,98 +28,98 @@
 // Key types: Vec<String> → List[String], Option<String> → Option[String],
 //            usize → Int.
 
-// Span comes from compiler/tir.mvl (peer file in same dir).
+// SourceLoc comes from compiler/tir.mvl (peer file in same dir).
 
 /// A type-system or verification violation found during checking.
 pub type CheckError = enum {
     // ── Req 1: Type Safety ────────────────────────────────────────────────
-    TypeMismatch          { expected: String, found: String, span: Span },
-    UndefinedVariable     { name: String, span: Span },
-    UndefinedType         { name: String, span: Span },
-    NonNumericArithmetic  { ty: String, span: Span },
-    ArithmeticTypeMismatch { op: String, left: String, right: String, span: Span },
-    LogicTypeMismatch     { op: String, ty: String, span: Span },
-    UndefinedFunction     { name: String, span: Span },
-    UnknownMethod         { receiver_ty: String, method: String, span: Span },
-    WrongArgCount         { name: String, expected: Int, found: Int, span: Span },
-    MissingField          { ty: String, field: String, span: Span },
-    UnknownField          { ty: String, field: String, span: Span },
-    FieldNotFound         { ty: String, field: String, span: Span },
-    FieldAccessOnEnum     { ty: String, span: Span },
-    UnknownVariant        { ty: String, variant: String, span: Span },
-    NotAStruct            { ty: String, span: Span },
+    TypeMismatch          { expected: String, found: String, span: SourceLoc },
+    UndefinedVariable     { name: String, span: SourceLoc },
+    UndefinedType         { name: String, span: SourceLoc },
+    NonNumericArithmetic  { ty: String, span: SourceLoc },
+    ArithmeticTypeMismatch { op: String, left: String, right: String, span: SourceLoc },
+    LogicTypeMismatch     { op: String, ty: String, span: SourceLoc },
+    UndefinedFunction     { name: String, span: SourceLoc },
+    UnknownMethod         { receiver_ty: String, method: String, span: SourceLoc },
+    WrongArgCount         { name: String, expected: Int, found: Int, span: SourceLoc },
+    MissingField          { ty: String, field: String, span: SourceLoc },
+    UnknownField          { ty: String, field: String, span: SourceLoc },
+    FieldNotFound         { ty: String, field: String, span: SourceLoc },
+    FieldAccessOnEnum     { ty: String, span: SourceLoc },
+    UnknownVariant        { ty: String, variant: String, span: SourceLoc },
+    NotAStruct            { ty: String, span: SourceLoc },
     // ── Req 3: Exhaustive match ───────────────────────────────────────────
-    NonExhaustiveMatch    { missing: List[String], span: Span },
+    NonExhaustiveMatch    { missing: List[String], span: SourceLoc },
     // ── Req 4: Null elimination ───────────────────────────────────────────
-    OptionDirectAccess    { span: Span },
+    OptionDirectAccess    { span: SourceLoc },
     // ── Req 5: Error visibility ───────────────────────────────────────────
-    ResultIgnored         { span: Span },
-    PropagateNotResult    { ty: String, span: Span },
-    PropagateIncompatibleError { from_ty: String, into_ty: String, span: Span },
+    ResultIgnored         { span: SourceLoc },
+    PropagateNotResult    { ty: String, span: SourceLoc },
+    PropagateIncompatibleError { from_ty: String, into_ty: String, span: SourceLoc },
     // ── Req 6: Ownership / immutability ──────────────────────────────────
-    AssignToImmutable     { name: String, span: Span },
-    MutateImmutableField  { ty: String, field: String, span: Span },
-    CaptureMutabilityViolation { name: String, span: Span },
-    LinearShadowDrop      { name: String, ty: String, span: Span },
+    AssignToImmutable     { name: String, span: SourceLoc },
+    MutateImmutableField  { ty: String, field: String, span: SourceLoc },
+    CaptureMutabilityViolation { name: String, span: SourceLoc },
+    LinearShadowDrop      { name: String, ty: String, span: SourceLoc },
     // ── Req 2: Memory safety ──────────────────────────────────────────────
-    UseAfterMove          { name: String, span: Span },
-    ReferenceEscapesScope { name: String, span: Span },
-    ReferenceOutlivesOwner { ref_name: String, owner_name: String, span: Span },
-    AliasingMutableBorrow { name: String, span: Span },
-    DoubleMutableBorrow   { name: String, span: Span },
+    UseAfterMove          { name: String, span: SourceLoc },
+    ReferenceEscapesScope { name: String, span: SourceLoc },
+    ReferenceOutlivesOwner { ref_name: String, owner_name: String, span: SourceLoc },
+    AliasingMutableBorrow { name: String, span: SourceLoc },
+    DoubleMutableBorrow   { name: String, span: SourceLoc },
     // ── Req 10: Refinement types ──────────────────────────────────────────
-    RefinementViolated    { pred: String, span: Span, counterexample: Option[String] },
+    RefinementViolated    { pred: String, span: SourceLoc, counterexample: Option[String] },
     // ── Req 7: Effect tracking ────────────────────────────────────────────
-    InvalidEffectName     { name: String, span: Span },
-    UnknownEffectParent   { eff: String, parent: String, span: Span },
-    EffectCycle           { chain: List[String], span: Span },
-    UndeclaredEffect      { callee: String, eff: String, span: Span },
-    MissingEffect         { caller: String, callee: String, eff: String, span: Span },
+    InvalidEffectName     { name: String, span: SourceLoc },
+    UnknownEffectParent   { eff: String, parent: String, span: SourceLoc },
+    EffectCycle           { chain: List[String], span: SourceLoc },
+    UndeclaredEffect      { callee: String, eff: String, span: SourceLoc },
+    MissingEffect         { caller: String, callee: String, eff: String, span: SourceLoc },
     // ── Req 8: Termination ────────────────────────────────────────────────
-    UnboundedLoopInTotal  { span: Span },
-    PartialCallInTotal    { callee: String, span: Span },
-    UnprovenRecursion     { fn_name: String, span: Span },
-    MutualRecursionInTotal { fn_name: String, cycle_with: String, span: Span },
-    ForLoopInPartialFn    { span: Span },
-    DecreasesNotBounded   { fn_name: String, measure: String, span: Span },
-    DecreasesNotDecreasing { fn_name: String, measure: String, span: Span },
+    UnboundedLoopInTotal  { span: SourceLoc },
+    PartialCallInTotal    { callee: String, span: SourceLoc },
+    UnprovenRecursion     { fn_name: String, span: SourceLoc },
+    MutualRecursionInTotal { fn_name: String, cycle_with: String, span: SourceLoc },
+    ForLoopInPartialFn    { span: SourceLoc },
+    DecreasesNotBounded   { fn_name: String, measure: String, span: SourceLoc },
+    DecreasesNotDecreasing { fn_name: String, measure: String, span: SourceLoc },
     // ── Req 9: Data race freedom ──────────────────────────────────────────
-    CapabilityViolation   { param: String, capability: String, span: Span },
-    IsoAliasingViolation  { name: String, span: Span },
-    RefEscapesToConcurrentContext { name: String, actor_name: String, span: Span },
-    DuplicateActorField   { actor_name: String, field: String, span: Span },
-    DuplicateActorMethod  { actor_name: String, method: String, span: Span },
-    NonUnitBehaviorReturn { actor_name: String, method: String, ret_ty: String, span: Span },
-    MissingConstraint     { type_param: String, required_bound: String, span: Span },
+    CapabilityViolation   { param: String, capability: String, span: SourceLoc },
+    IsoAliasingViolation  { name: String, span: SourceLoc },
+    RefEscapesToConcurrentContext { name: String, actor_name: String, span: SourceLoc },
+    DuplicateActorField   { actor_name: String, field: String, span: SourceLoc },
+    DuplicateActorMethod  { actor_name: String, method: String, span: SourceLoc },
+    NonUnitBehaviorReturn { actor_name: String, method: String, ret_ty: String, span: SourceLoc },
+    MissingConstraint     { type_param: String, required_bound: String, span: SourceLoc },
     // ── Req 10: Contracts ─────────────────────────────────────────────────
-    PreconditionViolated  { fn_name: String, pred: String, span: Span, counterexample: Option[String] },
-    PostconditionViolated { fn_name: String, pred: String, span: Span, counterexample: Option[String] },
-    InvariantViolated     { fn_name: String, pred: String, span: Span, counterexample: Option[String] },
-    InvariantNotPreserved { fn_name: String, pred: String, span: Span },
-    QuantifierOutsideGhost { span: Span },
+    PreconditionViolated  { fn_name: String, pred: String, span: SourceLoc, counterexample: Option[String] },
+    PostconditionViolated { fn_name: String, pred: String, span: SourceLoc, counterexample: Option[String] },
+    InvariantViolated     { fn_name: String, pred: String, span: SourceLoc, counterexample: Option[String] },
+    InvariantNotPreserved { fn_name: String, pred: String, span: SourceLoc },
+    QuantifierOutsideGhost { span: SourceLoc },
     // ── Req 1: Session types ──────────────────────────────────────────────
-    SessionProtocolMismatch { expected: String, found: String, span: Span },
-    SessionDualityMismatch  { side_a: String, side_b: String, span: Span },
-    SessionUnknownBranch    { lbl: String, available: List[String], span: Span },
-    SessionAfterEnd         { span: Span },
-    SessionDeadlock         { span: Span },
-    SessionDuplicateLabel   { lbl: String, span: Span },
+    SessionProtocolMismatch { expected: String, found: String, span: SourceLoc },
+    SessionDualityMismatch  { side_a: String, side_b: String, span: SourceLoc },
+    SessionUnknownBranch    { lbl: String, available: List[String], span: SourceLoc },
+    SessionAfterEnd         { span: SourceLoc },
+    SessionDeadlock         { span: SourceLoc },
+    SessionDuplicateLabel   { lbl: String, span: SourceLoc },
     // ── Req 11: IFC ───────────────────────────────────────────────────────
-    InvalidRelabel    { transition: String, expected_from: String, found: String, span: Span },
-    UnknownRelabel    { name: String, span: Span },
-    InvalidDeclassify { found: String, span: Span },
-    InvalidSanitize   { found: String, span: Span },
+    InvalidRelabel    { transition: String, expected_from: String, found: String, span: SourceLoc },
+    UnknownRelabel    { name: String, span: SourceLoc },
+    InvalidDeclassify { found: String, span: SourceLoc },
+    InvalidSanitize   { found: String, span: SourceLoc },
     ImplicitFlowViolation {
         pc_lbl:        String,
         observable_fn: String,
-        span:          Span,
+        span:          SourceLoc,
     },
     CrossFunctionImplicitFlowViolation {
         pc_lbl:        String,
         caller:        String,
         callee:        String,
         observable_fn: String,
-        span:          Span,
+        span:          SourceLoc,
     },
     InterprocFlowViolation {
         callee:       String,
@@ -128,13 +128,13 @@ pub type CheckError = enum {
         inferred_lbl: String,
         chain:        List[String],
         caller:       String,
-        span:         Span,
+        span:         SourceLoc,
     },
     // ── Req 1: FFI ────────────────────────────────────────────────────────
-    UnsupportedExternAbi          { abi: String, span: Span },
-    InvalidLinkLibName            { name: String, span: Span },
-    LabeledTypeCrossesFfiBoundary { fn_name: String, lbl: String, span: Span },
+    UnsupportedExternAbi          { abi: String, span: SourceLoc },
+    InvalidLinkLibName            { name: String, span: SourceLoc },
+    LabeledTypeCrossesFfiBoundary { fn_name: String, lbl: String, span: SourceLoc },
     // ── Req 1: Iterator / trait ───────────────────────────────────────────
-    NotIterator     { ty: String, span: Span },
-    MissingTraitMethod { trait_name: String, type_name: String, method: String, span: Span },
+    NotIterator     { ty: String, span: SourceLoc },
+    MissingTraitMethod { trait_name: String, type_name: String, method: String, span: SourceLoc },
 }

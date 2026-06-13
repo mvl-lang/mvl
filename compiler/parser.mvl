@@ -9,9 +9,9 @@
 //   actor, effect, label, relabel
 //
 // Design:
-//   - ParserState threads { tokens, pos, errors } through every parse fn.
-//   - Result carriers (BoolR, StringR, …) carry (value, updated_state) because
-//     MVL has no tuple syntax and no generic user types.
+//   - ParserState threads { tokens, pos, src, errors } through every parse fn.
+//   - Result carriers (BoolR, StringR, …) carry (value, updated_state);
+//     named structs are the idiomatic MVL pattern for multi-value returns.
 //   - partial fn throughout (while-loops, self-recursion in type parser).
 //   - Type expression parsing uses a depth counter to avoid mutual recursion:
 //     parse_type_expr_depth(ps, 4) recurses via itself with depth-1, so no
@@ -35,12 +35,13 @@
 //      No while loop in this function can increase max_depth, so both the
 //      recursion and its inner loops terminate.
 //
-// Public surface: parse(tokens: List[Token]) -> Program
+// Public surface: parse(tokens: List[Token], src: String) -> Program
 
 use tir::Token;
 use tir::TokenKind;
-use tir::Span;
+use tir::SourceLoc;
 use tir::ParseError;
+use std.text.{Span}
 use tir::TypeExpr;
 use tir::GenericParam;
 use tir::Effect;
@@ -93,9 +94,11 @@ use lexer::lex;
 
 // ── Parser state ──────────────────────────────────────────────────────────────
 
-/// Mutable parsing cursor: token stream, current position, and accumulated errors.
+/// Mutable parsing cursor: token stream, source buffer, current position, and accumulated errors.
+/// `src` is carried so that token text can be recovered via `tok.span.text(ps.src)` (#1372).
 pub type ParserState = struct {
     tokens: List[Token],
+    src:    String,
     pos:    Int,
     errors: List[ParseError],
 }
@@ -293,25 +296,25 @@ type OpInfo = struct {
     has_op: Bool,
     op:     BinaryOp,
     prec:   Int,
-    span:   Span,
+    span:   SourceLoc,
 }
 
 // ── Sentinel / empty values ───────────────────────────────────────────────────
 
-total fn empty_span() -> Span {
-    Span { line: 0, col: 0 }
+total fn empty_loc() -> SourceLoc {
+    SourceLoc { line: 0, col: 0 }
 }
 
 total fn empty_type_expr() -> TypeExpr {
-    TypeExpr { name: "", args: [], span: empty_span() }
+    TypeExpr { name: "", args: [], span: empty_loc() }
 }
 
 total fn empty_block() -> Block {
-    Block { stmts: [], tail_expr: [], span: empty_span() }
+    Block { stmts: [], tail_expr: [], span: empty_loc() }
 }
 
 total fn empty_expr() -> Expr {
-    Expr::Ident("", empty_span())
+    Expr::Ident("", empty_loc())
 }
 
 // ── List[T] indirection helpers ───────────────────────────────────────────────
@@ -327,14 +330,14 @@ total fn unbox_expr(cell: List[Expr]) -> Expr {
 total fn box_pat(p: Pattern) -> List[Pattern] { [p] }
 
 total fn unbox_pat(cell: List[Pattern]) -> Pattern {
-    match cell.get(0) { Some(p) => p, None => Pattern::Wildcard(empty_span()) }
+    match cell.get(0) { Some(p) => p, None => Pattern::Wildcard(empty_loc()) }
 }
 
 // ── ParserState utilities ─────────────────────────────────────────────────────
 
 total fn ps_current(ps: ParserState) -> Token {
     match ps.tokens.get(ps.pos) {
-        None    => Token { kind: TokenKind::Eof, lexeme: "", span: empty_span() },
+        None    => Token { kind: TokenKind::Eof, span: Span { start: 0, end: 0 }, loc: empty_loc() },
         Some(t) => t,
     }
 }
@@ -350,7 +353,7 @@ total fn ps_at_eof(ps: ParserState) -> Bool {
 total fn ps_at_punct(ps: ParserState, p: String) -> Bool {
     let tok: Token = ps_current(ps);
     match tok.kind {
-        TokenKind::Punct => tok.lexeme == p,
+        TokenKind::Punct => tok.span.text(ps.src) == p,
         _                => false,
     }
 }
@@ -358,15 +361,15 @@ total fn ps_at_punct(ps: ParserState, p: String) -> Bool {
 total fn ps_advance(ps: ParserState) -> ParserState
   ensures result.pos == ps.pos + 1
 {
-    ParserState { tokens: ps.tokens, pos: ps.pos + 1, errors: ps.errors }
+    ParserState { tokens: ps.tokens, src: ps.src, pos: ps.pos + 1, errors: ps.errors }
 }
 
 total fn ps_add_error(ps: ParserState, msg: String) -> ParserState {
     let tok: Token = ps_current(ps);
-    let err: ParseError = ParseError { message: msg, span: tok.span };
+    let err: ParseError = ParseError { message: msg, span: tok.loc };
     let errs: ref List[ParseError] = ps.errors;
     errs.push(err);
-    ParserState { tokens: ps.tokens, pos: ps.pos, errors: errs }
+    ParserState { tokens: ps.tokens, src: ps.src, pos: ps.pos, errors: errs }
 }
 
 total fn ps_expect_punct(ps: ParserState, p: String) -> ParserState {
@@ -374,7 +377,7 @@ total fn ps_expect_punct(ps: ParserState, p: String) -> ParserState {
         ps_advance(ps)
     } else {
         let tok: Token = ps_current(ps);
-        ps_add_error(ps, format("expected '{}', got '{}'", [p, tok.lexeme]))
+        ps_add_error(ps, format("expected '{}', got '{}'", [p, tok.span.text(ps.src)]))
     }
 }
 
@@ -382,11 +385,11 @@ total fn ps_expect_punct(ps: ParserState, p: String) -> ParserState {
 total fn ps_expect_name(ps: ParserState) -> StringR {
     let tok: Token = ps_current(ps);
     match tok.kind {
-        TokenKind::Ident => StringR { value: tok.lexeme, ps: ps_advance(ps) },
+        TokenKind::Ident => StringR { value: tok.span.text(ps.src), ps: ps_advance(ps) },
         TokenKind::Eof   => StringR { value: "", ps: ps_add_error(ps, "unexpected end of file") },
         _ => {
             // keywords appearing as names (e.g. field named 'type', or 'use' path segments)
-            let lex: String = tok.lexeme;
+            let lex: String = tok.span.text(ps.src);
             StringR { value: lex, ps: ps_advance(ps) }
         }
     }
@@ -418,10 +421,10 @@ total fn ps_expect_name(ps: ParserState) -> StringR {
 // Precedences:  || < && < cmp < | < ^ < & < << >> < + - < * / %
 total fn binary_op_at(ps: ParserState) -> OpInfo {
     let tok: Token = ps_current(ps);
-    let sp: Span = tok.span;
+    let sp: SourceLoc = tok.loc;
     match tok.kind {
         TokenKind::Punct => {
-            let lex: String = tok.lexeme;
+            let lex: String = tok.span.text(ps.src);
             if lex == "||"      { OpInfo { has_op: true, op: BinaryOp::Or,     prec: 1, span: sp } }
             else if lex == "&&" { OpInfo { has_op: true, op: BinaryOp::And,    prec: 2, span: sp } }
             else if lex == "==" { OpInfo { has_op: true, op: BinaryOp::Eq,     prec: 3, span: sp } }
@@ -455,12 +458,13 @@ partial fn parse_pattern_depth(ps: ParserState, max_depth: Int) -> PatternR
   requires max_depth >= 0
 {
     let tok: Token = ps_current(ps);
-    let sp: Span = tok.span;
+    let sp: SourceLoc = tok.loc;
     match tok.kind {
         TokenKind::Punct => {
-            if tok.lexeme == "_" {
+            let lex: String = tok.span.text(ps.src);
+            if lex == "_" {
                 PatternR { value: Pattern::Wildcard(sp), ps: ps_advance(ps) }
-            } else if tok.lexeme == "(" {
+            } else if lex == "(" {
                 // Tuple pattern: (a, b, …)
                 let curr: ref ParserState = ps_advance(ps);
                 let elems: ref List[Pattern] = [];
@@ -468,7 +472,7 @@ partial fn parse_pattern_depth(ps: ParserState, max_depth: Int) -> PatternR
                     let pr: PatternR = if max_depth > 0 {
                         parse_pattern_depth(curr, max_depth - 1)
                     } else {
-                        PatternR { value: Pattern::Wildcard(ps_current(curr).span), ps: ps_advance(curr) }
+                        PatternR { value: Pattern::Wildcard(ps_current(curr).loc), ps: ps_advance(curr) }
                     };
                     elems.push(pr.value);
                     curr = pr.ps;
@@ -483,14 +487,14 @@ partial fn parse_pattern_depth(ps: ParserState, max_depth: Int) -> PatternR
         TokenKind::KwTrue  => PatternR { value: Pattern::Literal(AstLiteral::Bool(true), sp),  ps: ps_advance(ps) }
         TokenKind::KwFalse => PatternR { value: Pattern::Literal(AstLiteral::Bool(false), sp), ps: ps_advance(ps) }
         TokenKind::IntLit  => {
-            let n: Int = match tok.lexeme.parse_int() { Ok(v) => v, Err(_) => 0 };
+            let n: Int = match tok.span.text(ps.src).parse_int() { Ok(v) => v, Err(_) => 0 };
             PatternR { value: Pattern::Literal(AstLiteral::Integer(n), sp), ps: ps_advance(ps) }
         }
         TokenKind::StrLit => {
-            PatternR { value: Pattern::Literal(AstLiteral::Str(tok.lexeme), sp), ps: ps_advance(ps) }
+            PatternR { value: Pattern::Literal(AstLiteral::Str(tok.span.text(ps.src)), sp), ps: ps_advance(ps) }
         }
         TokenKind::Ident => {
-            let name: String = tok.lexeme;
+            let name: String = tok.span.text(ps.src);
             let curr: ref ParserState = ps_advance(ps);
             // Check for :: (enum variant path: Foo::Bar or Foo::Bar(…))
             if ps_at_punct(curr, "::") {
@@ -506,7 +510,7 @@ partial fn parse_pattern_depth(ps: ParserState, max_depth: Int) -> PatternR
                         let pr: PatternR = if max_depth > 0 {
                             parse_pattern_depth(curr, max_depth - 1)
                         } else {
-                            PatternR { value: Pattern::Wildcard(ps_current(curr).span), ps: ps_advance(curr) }
+                            PatternR { value: Pattern::Wildcard(ps_current(curr).loc), ps: ps_advance(curr) }
                         };
                         fields.push(pr.value);
                         curr = pr.ps;
@@ -555,7 +559,7 @@ partial fn parse_pattern_depth(ps: ParserState, max_depth: Int) -> PatternR
                     let pr: PatternR = if max_depth > 0 {
                         parse_pattern_depth(curr, max_depth - 1)
                     } else {
-                        PatternR { value: Pattern::Wildcard(ps_current(curr).span), ps: ps_advance(curr) }
+                        PatternR { value: Pattern::Wildcard(ps_current(curr).loc), ps: ps_advance(curr) }
                     };
                     fields.push(pr.value);
                     curr = pr.ps;
@@ -587,7 +591,7 @@ partial fn parse_match_arms(ps: ParserState, max_depth: Int) -> MatchArmsR
     let curr: ref ParserState = ps;
     let arms: ref List[MatchArm] = [];
     while !ps_at_eof(curr) && !ps_at_punct(curr, "}") decreases curr.tokens.len() - curr.pos {
-        let sp: Span = ps_current(curr).span;
+        let sp: SourceLoc = ps_current(curr).loc;
         let pat_r: PatternR = parse_pattern(curr);
         curr = pat_r.ps;
         curr = ps_expect_punct(curr, "=>");
@@ -629,27 +633,27 @@ partial fn parse_arg_list(ps: ParserState, max_depth: Int) -> ExprListR
 // if/match expressions, and collection literals.
 //
 // NOTE: Guard patterns on enum variants cause MVL parse errors.
-// The TokenKind::Punct arm uses nested if-else on tok.lexeme instead.
+// The TokenKind::Punct arm uses nested if-else on tok.span.text(ps.src) instead.
 
 partial fn parse_primary(ps: ParserState, max_depth: Int) -> ExprR
   requires max_depth >= 0
 {
     let tok: Token = ps_current(ps);
-    let sp: Span = tok.span;
+    let sp: SourceLoc = tok.loc;
     match tok.kind {
         TokenKind::IntLit => {
-            let n: Int = match tok.lexeme.parse_int() { Ok(v) => v, Err(_) => 0 };
+            let n: Int = match tok.span.text(ps.src).parse_int() { Ok(v) => v, Err(_) => 0 };
             ExprR { value: Expr::Lit(AstLiteral::Integer(n), sp), ps: ps_advance(ps) }
         }
         TokenKind::FloatLit => {
-            let f: Float = match tok.lexeme.parse_float() { Ok(v) => v, Err(_) => 0.0 };
+            let f: Float = match tok.span.text(ps.src).parse_float() { Ok(v) => v, Err(_) => 0.0 };
             ExprR { value: Expr::Lit(AstLiteral::Floating(f), sp), ps: ps_advance(ps) }
         }
         TokenKind::StrLit => {
-            ExprR { value: Expr::Lit(AstLiteral::Str(tok.lexeme), sp), ps: ps_advance(ps) }
+            ExprR { value: Expr::Lit(AstLiteral::Str(tok.span.text(ps.src)), sp), ps: ps_advance(ps) }
         }
         TokenKind::CharLit => {
-            ExprR { value: Expr::Lit(AstLiteral::Char(tok.lexeme), sp), ps: ps_advance(ps) }
+            ExprR { value: Expr::Lit(AstLiteral::Char(tok.span.text(ps.src)), sp), ps: ps_advance(ps) }
         }
         TokenKind::KwTrue  => ExprR { value: Expr::Lit(AstLiteral::Bool(true), sp),  ps: ps_advance(ps) }
         TokenKind::KwFalse => ExprR { value: Expr::Lit(AstLiteral::Bool(false), sp), ps: ps_advance(ps) }
@@ -690,7 +694,7 @@ partial fn parse_primary(ps: ParserState, max_depth: Int) -> ExprR
             if ps_at_punct(curr, ",") { curr = ps_advance(curr) } else { () }
             let is_str_tag: Bool = match ps_current(curr).kind { TokenKind::StrLit => true, _ => false };
             let audit: String = if is_str_tag {
-                let s: String = ps_current(curr).lexeme;
+                let s: String = ps_current(curr).span.text(curr.src);
                 curr = ps_advance(curr);
                 s
             } else { "" };
@@ -704,7 +708,7 @@ partial fn parse_primary(ps: ParserState, max_depth: Int) -> ExprR
             }
         }
         TokenKind::Ident => {
-            let name: String = tok.lexeme;
+            let name: String = tok.span.text(ps.src);
             let curr: ref ParserState = ps_advance(ps);
             // Only interpret `Name { ... }` as a struct literal when Name starts
             // with an uppercase letter (type/constructor convention).  Lowercase
@@ -766,9 +770,9 @@ partial fn parse_primary(ps: ParserState, max_depth: Int) -> ExprR
             }
         }
         // Punct-started primary expressions: `(`, `[`, `{`
-        // (No guard patterns — use nested if-else on tok.lexeme)
+        // (No guard patterns — use nested if-else on tok.span.text(ps.src))
         TokenKind::Punct => {
-            let lex: String = tok.lexeme;
+            let lex: String = tok.span.text(ps.src);
             if lex == "(" {
                 let curr: ref ParserState = ps_advance(ps);
                 if ps_at_punct(curr, ")") {
@@ -808,7 +812,7 @@ partial fn parse_primary(ps: ParserState, max_depth: Int) -> ExprR
             }
         }
         _ => {
-            let lex: String = tok.lexeme;
+            let lex: String = tok.span.text(ps.src);
             ExprR { value: Expr::Ident(lex, sp), ps: ps_advance(ps) }
         }
     }
@@ -842,7 +846,7 @@ partial fn parse_struct_fields(ps: ParserState, max_depth: Int) -> StructFieldsR
 partial fn parse_if_expr(ps: ParserState, max_depth: Int) -> ExprR
   requires max_depth >= 0
 {
-    let sp: Span = ps_current(ps).span;
+    let sp: SourceLoc = ps_current(ps).loc;
     let curr: ref ParserState = ps_advance(ps); // consume 'if'
     // Optional `let` binding: `if let Some(v) = expr { … }`
     let is_if_let: Bool = match ps_current(curr).kind { TokenKind::KwLet => true, _ => false };
@@ -878,7 +882,7 @@ partial fn parse_if_expr(ps: ParserState, max_depth: Int) -> ExprR
         } else if max_depth > 0 {
             let eb_r: BlockR = parse_block_depth(curr, max_depth - 1);
             curr = eb_r.ps;
-            box_expr(Expr::BlockExpr(eb_r.value, ps_current(curr).span))
+            box_expr(Expr::BlockExpr(eb_r.value, ps_current(curr).loc))
         } else {
             curr = skip_body(curr);
             []
@@ -897,7 +901,7 @@ partial fn parse_if_expr(ps: ParserState, max_depth: Int) -> ExprR
 partial fn parse_match_expr(ps: ParserState, max_depth: Int) -> ExprR
   requires max_depth >= 0
 {
-    let sp: Span = ps_current(ps).span;
+    let sp: SourceLoc = ps_current(ps).loc;
     let curr: ref ParserState = ps_advance(ps); // consume 'match'
     let scrut_r: ExprR = if max_depth > 0 {
         parse_expr_depth(curr, max_depth - 1)
@@ -930,11 +934,13 @@ partial fn parse_postfix(ps: ParserState, base: Expr, max_depth: Int) -> ExprR
     // Termination: each loop iteration advances curr.pos by at least 1 (operator token).
     while !done && !ps_at_eof(curr) decreases curr.tokens.len() - curr.pos {
         let tok: Token = ps_current(curr);
-        if tok.lexeme == "." {
+        let tok_lex: String = tok.span.text(curr.src);
+        let tok_sp: SourceLoc = tok.loc;
+        if tok_lex == "." {
             curr = ps_advance(curr);
             let field_tok: Token = ps_current(curr);
-            let sp: Span = field_tok.span;
-            let field_name: String = field_tok.lexeme;
+            let sp: SourceLoc = field_tok.loc;
+            let field_name: String = field_tok.span.text(curr.src);
             curr = ps_advance(curr);
             // method call: expr.method(args…)
             if ps_at_punct(curr, "(") && max_depth > 0 {
@@ -944,22 +950,19 @@ partial fn parse_postfix(ps: ParserState, base: Expr, max_depth: Int) -> ExprR
             } else {
                 result = Expr::Field(AstFieldExpr { expr: box_expr(result), field: field_name, span: sp })
             }
-        } else if tok.lexeme == "?" {
-            let sp: Span = tok.span;
+        } else if tok_lex == "?" {
             curr = ps_advance(curr);
-            result = Expr::Propagate(box_expr(result), sp)
-        } else if tok.lexeme == "[" && max_depth > 0 {
-            let sp: Span = tok.span;
+            result = Expr::Propagate(box_expr(result), tok_sp)
+        } else if tok_lex == "[" && max_depth > 0 {
             curr = ps_advance(curr);
             let idx_r: ExprR = parse_expr_depth(curr, max_depth - 1);
             curr = ps_expect_punct(idx_r.ps, "]");
-            result = Expr::Index(AstIndexExpr { expr: box_expr(result), index: box_expr(idx_r.value), span: sp })
-        } else if tok.lexeme == "(" && max_depth > 0 {
+            result = Expr::Index(AstIndexExpr { expr: box_expr(result), index: box_expr(idx_r.value), span: tok_sp })
+        } else if tok_lex == "(" && max_depth > 0 {
             // Direct call on a result expression: (expr)(args) — rare but valid
-            let sp: Span = tok.span;
             let al_r: ExprListR = parse_arg_list(curr, max_depth - 1);
             curr = al_r.ps;
-            result = Expr::Method(AstMethodExpr { receiver: box_expr(result), method: "", args: al_r.value, span: sp })
+            result = Expr::Method(AstMethodExpr { receiver: box_expr(result), method: "", args: al_r.value, span: tok_sp })
         } else {
             done = true
         }
@@ -976,8 +979,9 @@ partial fn parse_unary(ps: ParserState, max_depth: Int) -> ExprR
         parse_primary(ps, 0)
     } else {
         let tok: Token = ps_current(ps);
-        let sp: Span = tok.span;
-        if tok.lexeme == "-" {
+        let sp: SourceLoc = tok.loc;
+        let tok_lex: String = tok.span.text(ps.src);
+        if tok_lex == "-" {
             let curr: ParserState = ps_advance(ps);
             let inner_r: ExprR = parse_unary(curr, max_depth - 1);
             let e: ExprR = ExprR {
@@ -985,7 +989,7 @@ partial fn parse_unary(ps: ParserState, max_depth: Int) -> ExprR
                 ps: inner_r.ps,
             };
             parse_postfix(e.ps, e.value, max_depth - 1)
-        } else if tok.lexeme == "!" {
+        } else if tok_lex == "!" {
             let curr: ParserState = ps_advance(ps);
             let inner_r: ExprR = parse_unary(curr, max_depth - 1);
             let e: ExprR = ExprR {
@@ -993,7 +997,7 @@ partial fn parse_unary(ps: ParserState, max_depth: Int) -> ExprR
                 ps: inner_r.ps,
             };
             parse_postfix(e.ps, e.value, max_depth - 1)
-        } else if tok.lexeme == "~" {
+        } else if tok_lex == "~" {
             let curr: ParserState = ps_advance(ps);
             let inner_r: ExprR = parse_unary(curr, max_depth - 1);
             let e: ExprR = ExprR {
@@ -1048,7 +1052,7 @@ partial fn parse_binary_prec(ps: ParserState, min_prec: Int, max_depth: Int) -> 
             curr = ps_advance(curr);
             let ty_r: TypeExprR = parse_type_expr(curr);
             curr = ty_r.ps;
-            final_expr = Expr::Cast(AstCastExpr { expr: box_expr(final_expr), ty: ty_r.value, span: cast_tok.span })
+            final_expr = Expr::Cast(AstCastExpr { expr: box_expr(final_expr), ty: ty_r.value, span: cast_tok.loc })
         } else {
             cast_done = true
         }
@@ -1074,7 +1078,7 @@ partial fn parse_expr(ps: ParserState) -> ExprR {
 partial fn parse_let_stmt(ps: ParserState, max_depth: Int) -> StmtR
   requires max_depth >= 0
 {
-    let sp: Span = ps_current(ps).span;
+    let sp: SourceLoc = ps_current(ps).loc;
     let curr: ref ParserState = ps_advance(ps); // consume 'let'
     // Optional `ref` for mutable bindings
     let is_mut: Bool = ps_at_punct(curr, "ref");
@@ -1112,7 +1116,7 @@ partial fn parse_stmt(ps: ParserState, max_depth: Int) -> StmtR
   requires max_depth >= 0
 {
     let tok: Token = ps_current(ps);
-    let sp: Span = tok.span;
+    let sp: SourceLoc = tok.loc;
     match tok.kind {
         // let binding
         TokenKind::KwLet => {
@@ -1200,13 +1204,13 @@ partial fn parse_stmt(ps: ParserState, max_depth: Int) -> StmtR
         }
         // Assignment: `name = expr;` — detected via lookahead
         TokenKind::Ident => {
-            let name: String = tok.lexeme;
+            let name: String = tok.span.text(ps.src);
             let next_ps: ParserState = ps_advance(ps);
             // peek at next token: if it's `=` (not `==`), it's an assignment
             let next_tok: Token = ps_current(next_ps);
-            let is_assign: Bool = next_tok.lexeme == "=" && {
+            let is_assign: Bool = next_tok.span.text(ps.src) == "=" && {
                 let after_eq: Token = ps_current(ps_advance(next_ps));
-                after_eq.lexeme != "=" // ensure it's = not ==
+                after_eq.span.text(ps.src) != "=" // ensure it's = not ==
             };
             if is_assign {
                 let curr: ref ParserState = ps_advance(next_ps); // skip '='
@@ -1260,7 +1264,7 @@ partial fn parse_stmt(ps: ParserState, max_depth: Int) -> StmtR
 partial fn parse_block_depth(ps: ParserState, max_depth: Int) -> BlockR
   requires max_depth >= 0
 {
-    let sp: Span = ps_current(ps).span;
+    let sp: SourceLoc = ps_current(ps).loc;
     let curr: ref ParserState = ps_expect_punct(ps, "{");
     let stmts: ref List[Stmt] = [];
     // Use a flag+sentinel instead of ref Option[Expr] (MVL: ref Option = None causes lifetime error).
@@ -1271,7 +1275,7 @@ partial fn parse_block_depth(ps: ParserState, max_depth: Int) -> BlockR
         let stmt_r: StmtR = if max_depth > 0 {
             parse_stmt(curr, max_depth - 1)
         } else {
-            StmtR { value: Stmt::ExprStmt(box_expr(empty_expr()), empty_span()), ps: ps_advance(curr) }
+            StmtR { value: Stmt::ExprStmt(box_expr(empty_expr()), empty_loc()), ps: ps_advance(curr) }
         };
         curr = stmt_r.ps;
         let at_close: Bool = ps_at_eof(curr) || ps_at_punct(curr, "}");
@@ -1369,7 +1373,7 @@ partial fn parse_type_expr_depth(ps: ParserState, max_depth: Int) -> TypeExprR
   requires max_depth >= 0
 {
     let tok: Token = ps_current(ps);
-    let sp: Span = tok.span;
+    let sp: SourceLoc = tok.loc;
     let is_eof: Bool = match tok.kind { TokenKind::Eof => true, _ => false };
     // Capability keywords (val/iso/ref/tag) may appear in type position: "val DbConn"
     let is_cap_kw: Bool = match tok.kind {
@@ -1379,7 +1383,7 @@ partial fn parse_type_expr_depth(ps: ParserState, max_depth: Int) -> TypeExprR
         TokenKind::KwTag => true,
         _                => false,
     };
-    let tok_lex: String = tok.lexeme;
+    let tok_lex: String = tok.span.text(ps.src);
     let curr: ref ParserState = if is_eof {
         ps_add_error(ps, "expected type name")
     } else {
@@ -1394,7 +1398,7 @@ partial fn parse_type_expr_depth(ps: ParserState, max_depth: Int) -> TypeExprR
         if is_next_eof {
             tok_lex
         } else {
-            let next_lex: String = next.lexeme;
+            let next_lex: String = next.span.text(ps.src);
             curr = ps_advance(curr);
             format("{} {}", [tok_lex, next_lex])
         }
@@ -1458,7 +1462,7 @@ partial fn parse_type_params(ps: ParserState) -> GenParamsR {
         let params: ref List[GenericParam] = [];
         while !ps_at_eof(curr) && !ps_at_punct(curr, "]") {
             let tok: Token = ps_current(curr);
-            let sp: Span = tok.span;
+            let sp: SourceLoc = tok.loc;
             let name_r: StringR = ps_expect_name(curr);
             curr = name_r.ps;
             let bound: String = if ps_at_punct(curr, ":") {
@@ -1483,7 +1487,7 @@ partial fn parse_type_params(ps: ParserState) -> GenParamsR {
 
 partial fn parse_param(ps: ParserState) -> ParamR {
     let tok: Token = ps_current(ps);
-    let sp: Span = tok.span;
+    let sp: SourceLoc = tok.loc;
     let cap_str: String = match tok.kind {
         TokenKind::KwIso => "iso",
         TokenKind::KwVal => "val",
@@ -1547,10 +1551,10 @@ partial fn parse_effects(ps: ParserState) -> EffectsR {
         let done: ref Bool = false;
         while !done && !ps_at_eof(curr) {
             let tok: Token = ps_current(curr);
-            let sp: Span = tok.span;
+            let sp: SourceLoc = tok.loc;
             match tok.kind {
                 TokenKind::Ident => {
-                    let eff_name: String = tok.lexeme;
+                    let eff_name: String = tok.span.text(ps.src);
                     curr = ps_advance(curr);
                     let eff_param: String = if ps_at_punct(curr, "[") {
                         curr = ps_advance(curr);
@@ -1586,8 +1590,8 @@ partial fn parse_where_clause(ps: ParserState) -> ConstrR {
                 let tok: Token = ps_current(curr);
                 match tok.kind {
                     TokenKind::Ident => {
-                        let pname: String = tok.lexeme;
-                        let sp: Span = tok.span;
+                        let pname: String = tok.span.text(ps.src);
+                        let sp: SourceLoc = tok.loc;
                         curr = ps_advance(curr);
                         // Type bound: "T: Eq"  vs  refinement expression: "self > 0"
                         if ps_at_punct(curr, ":") {
@@ -1632,7 +1636,7 @@ partial fn parse_fn_decl(
     is_builtin: Bool,
     totality: String,
 ) -> FnDeclR {
-    let sp: Span = ps_current(ps).span;
+    let sp: SourceLoc = ps_current(ps).loc;
     // consume 'fn'
     let curr: ref ParserState = ps_advance(ps);
     // name (or Type::method for extension methods)
@@ -1719,7 +1723,7 @@ partial fn parse_fn_decl(
 // Entry: current token is 'type'.
 
 partial fn parse_type_decl(ps: ParserState, visible: Bool) -> TypeDeclR {
-    let sp: Span = ps_current(ps).span;
+    let sp: SourceLoc = ps_current(ps).loc;
     let curr: ref ParserState = ps_advance(ps); // consume 'type'
     let name_r: StringR = ps_expect_name(curr);
     curr = name_r.ps;
@@ -1734,7 +1738,7 @@ partial fn parse_type_decl(ps: ParserState, visible: Bool) -> TypeDeclR {
             let fields: ref List[FieldDecl] = [];
             while !ps_at_eof(curr) && !ps_at_punct(curr, "}") {
                 let ftok: Token = ps_current(curr);
-                let fsp: Span = ftok.span;
+                let fsp: SourceLoc = ftok.loc;
                 // Skip optional 'mut' on struct fields
                 let fld_mut: Bool = match ftok.kind { TokenKind::KwMut => true, _ => false };
                 if fld_mut { curr = ps_advance(curr) } else { () }
@@ -1826,7 +1830,7 @@ partial fn parse_type_decl(ps: ParserState, visible: Bool) -> TypeDeclR {
 // Entry: current token is 'use'.
 
 partial fn parse_use_decl(ps: ParserState, visible: Bool) -> UseDeclR {
-    let sp: Span = ps_current(ps).span;
+    let sp: SourceLoc = ps_current(ps).loc;
     let curr: ref ParserState = ps_advance(ps); // consume 'use'
     let path_segs: ref List[String] = [];
     let imports: ref List[String] = [];
@@ -1878,7 +1882,7 @@ partial fn parse_use_decl(ps: ParserState, visible: Bool) -> UseDeclR {
 // Entry: current token is 'const'.
 
 partial fn parse_const_decl(ps: ParserState, visible: Bool) -> ConstDeclR {
-    let sp: Span = ps_current(ps).span;
+    let sp: SourceLoc = ps_current(ps).loc;
     let curr: ref ParserState = ps_advance(ps); // consume 'const'
     let name_r: StringR = ps_expect_name(curr);
     curr = name_r.ps;
@@ -1895,7 +1899,8 @@ partial fn parse_const_decl(ps: ParserState, visible: Bool) -> ConstDeclR {
             vdone = true
         } else {
             let vt: Token = ps_current(curr);
-            value_str = if value_str == "" { vt.lexeme } else { format("{} {}", [value_str, vt.lexeme]) };
+            let vt_lex: String = vt.span.text(ps.src);
+            value_str = if value_str == "" { vt_lex } else { format("{} {}", [value_str, vt_lex]) };
             curr = ps_advance(curr)
         }
     }
@@ -1912,7 +1917,7 @@ partial fn parse_const_decl(ps: ParserState, visible: Bool) -> ConstDeclR {
 // Entry: current token is 'extern'.
 
 partial fn parse_extern_fn(ps: ParserState) -> ExtFnR {
-    let sp: Span = ps_current(ps).span;
+    let sp: SourceLoc = ps_current(ps).loc;
     let curr: ref ParserState = ps_advance(ps); // consume 'fn'
     let name_r: StringR = ps_expect_name(curr);
     curr = name_r.ps;
@@ -1939,10 +1944,10 @@ partial fn parse_extern_fn(ps: ParserState) -> ExtFnR {
 }
 
 partial fn parse_extern_decl(ps: ParserState) -> ExternR {
-    let sp: Span = ps_current(ps).span;
+    let sp: SourceLoc = ps_current(ps).loc;
     let curr: ref ParserState = ps_advance(ps); // consume 'extern'
     let is_str_lit: Bool = match ps_current(curr).kind { TokenKind::StrLit => true, _ => false };
-    let lang: String = if is_str_lit { ps_current(curr).lexeme } else { "" };
+    let lang: String = if is_str_lit { ps_current(curr).span.text(curr.src) } else { "" };
     if is_str_lit { curr = ps_advance(curr) } else { () }
     curr = ps_expect_punct(curr, "{");
     let efns: ref List[ExternFnDecl] = [];
@@ -1965,7 +1970,7 @@ partial fn parse_extern_decl(ps: ParserState) -> ExternR {
 // Syntax: impl Type { methods... }  or  impl Trait[Args] for Type { methods... }
 
 partial fn parse_impl_decl(ps: ParserState) -> ImplR {
-    let sp: Span = ps_current(ps).span;
+    let sp: SourceLoc = ps_current(ps).loc;
     let curr: ref ParserState = ps_advance(ps); // consume 'impl'
     let first_ty_r: TypeExprR = parse_type_expr(curr);
     curr = first_ty_r.ps;
@@ -1976,7 +1981,7 @@ partial fn parse_impl_decl(ps: ParserState) -> ImplR {
 
     let trait_name: ref String = "";
     let trait_args: ref List[TypeExpr] = [];
-    let impl_ty: TypeExpr = if for_tok.lexeme == "for" {
+    let impl_ty: TypeExpr = if for_tok.span.text(ps.src) == "for" {
         // first_ty was the trait
         trait_name = consume(first_ty.name);
         trait_args = consume(first_ty.args);
@@ -2042,7 +2047,7 @@ partial fn parse_actor_decl(ps: ParserState, visible: Bool) -> StringR {
     curr = gp_r.ps;
     // optional 'traps_exit'
     let is_traps: Bool = match ps_current(curr).kind {
-        TokenKind::Ident => ps_current(curr).lexeme == "traps_exit",
+        TokenKind::Ident => ps_current(curr).span.text(curr.src) == "traps_exit",
         _ => false,
     };
     if is_traps { curr = ps_advance(curr) } else { () }
@@ -2064,7 +2069,7 @@ partial fn parse_actor_decl(ps: ParserState, visible: Bool) -> StringR {
 // Syntax: effect IDENT [> IDENT {+ IDENT}] ;
 
 partial fn parse_effect_decl(ps: ParserState) -> EffectDeclR {
-    let sp: Span = ps_current(ps).span;
+    let sp: SourceLoc = ps_current(ps).loc;
     let curr: ref ParserState = ps_advance(ps); // consume 'effect'
     let name_r: StringR = ps_expect_name(curr);
     curr = name_r.ps;
@@ -2092,7 +2097,7 @@ partial fn parse_effect_decl(ps: ParserState) -> EffectDeclR {
 // Syntax: label IDENT ;
 
 total fn parse_label_decl(ps: ParserState, visible: Bool) -> LabelDeclR {
-    let sp: Span = ps_current(ps).span;
+    let sp: SourceLoc = ps_current(ps).loc;
     let name_r: StringR = ps_expect_name(ps_advance(ps));
     let after_name: ParserState = if ps_at_punct(name_r.ps, ";") { ps_advance(name_r.ps) } else { name_r.ps };
     LabelDeclR {
@@ -2107,23 +2112,25 @@ total fn parse_label_decl(ps: ParserState, visible: Bool) -> LabelDeclR {
 // label_ref = IDENT | "_"
 
 partial fn parse_relabel_decl(ps: ParserState, visible: Bool) -> RelabelDeclR {
-    let sp: Span = ps_current(ps).span;
+    let sp: SourceLoc = ps_current(ps).loc;
     let curr: ref ParserState = ps_advance(ps); // consume 'relabel'
     let name_r: StringR = ps_expect_name(curr);
     curr = name_r.ps;
     curr = ps_expect_punct(curr, ":");
     // from label_ref
     let from_tok: Token = ps_current(curr);
-    let from_val: Option[String] = if from_tok.lexeme == "_" { None } else { Some(from_tok.lexeme) };
+    let from_lex: String = from_tok.span.text(ps.src);
+    let from_val: Option[String] = if from_lex == "_" { None } else { Some(from_lex) };
     curr = ps_advance(curr);
     curr = ps_expect_punct(curr, "->");
     // to label_ref
     let to_tok: Token = ps_current(curr);
-    let to_val: Option[String] = if to_tok.lexeme == "_" { None } else { Some(to_tok.lexeme) };
+    let to_lex: String = to_tok.span.text(curr.src);
+    let to_val: Option[String] = if to_lex == "_" { None } else { Some(to_lex) };
     curr = ps_advance(curr);
     // optional 'audit'
     let is_audit: Bool = match ps_current(curr).kind {
-        TokenKind::Ident => ps_current(curr).lexeme == "audit",
+        TokenKind::Ident => ps_current(curr).span.text(curr.src) == "audit",
         _ => false,
     };
     if is_audit { curr = ps_advance(curr) } else { () }
@@ -2352,10 +2359,12 @@ partial fn parse_program(ps: ParserState) -> Program {
 // ── Public entry point ────────────────────────────────────────────────────────
 
 /// Parse a token stream produced by `lex` into a `Program` AST.
+/// `src` is the original source buffer; token text is recovered on demand via
+/// `tok.span.text(ps.src)` rather than stored per-token (#1372).
 /// Parse errors are accumulated in `Program.errors` rather than aborting.
-pub partial fn parse(tokens: List[Token]) -> Program
+pub partial fn parse(tokens: List[Token], src: String) -> Program
   requires len(tokens) >= 1
 {
-    let ps: ParserState = ParserState { tokens: tokens, pos: 0, errors: [] };
+    let ps: ParserState = ParserState { tokens: tokens, src: src, pos: 0, errors: [] };
     parse_program(ps)
 }
