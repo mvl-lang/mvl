@@ -229,6 +229,9 @@ pub(crate) const STDLIB_UFCS_METHODS: &[&str] = &[
     "last",
     "flatten",
     "reverse",
+    // std/text.mvl — String extension methods returning List[Span] (#1371)
+    "split_spans",
+    "find_all_spans",
 ];
 
 /// String methods that return a `String` with the same IFC label as their receiver.

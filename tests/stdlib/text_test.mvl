@@ -1,0 +1,271 @@
+// tests/stdlib/text_test.mvl — std.text Span type and String extensions
+//
+// Verifies runtime behaviour of Span and index-based text extraction from std/text.mvl.
+// Run with:  mvl test tests/stdlib/text_test.mvl
+
+use std.text.{Span}
+
+// ── Span::new ────────────────────────────────────────────────────────────────
+
+test fn span_new_valid() -> Unit {
+    let s: Span = Span::new(2, 7);
+    assert_eq(s.start, 2);
+    assert_eq(s.end, 7)
+}
+
+test fn span_new_clamps_negative_start() -> Unit {
+    let s: Span = Span::new(-3, 5);
+    assert_eq(s.start, 0);
+    assert_eq(s.end, 5)
+}
+
+test fn span_new_clamps_end_below_start() -> Unit {
+    let s: Span = Span::new(5, 2);
+    assert_eq(s.start, 5);
+    assert_eq(s.end, 5)
+}
+
+test fn span_new_both_zero() -> Unit {
+    let s: Span = Span::new(0, 0);
+    assert_eq(s.start, 0);
+    assert_eq(s.end, 0)
+}
+
+// ── Span::text ───────────────────────────────────────────────────────────────
+
+test fn span_text_middle() -> Unit {
+    let src: String = "hello world";
+    let s: Span = Span { start: 6, end: 11 };
+    assert_eq(s.text(src), "world")
+}
+
+test fn span_text_start() -> Unit {
+    let src: String = "hello world";
+    let s: Span = Span { start: 0, end: 5 };
+    assert_eq(s.text(src), "hello")
+}
+
+test fn span_text_full() -> Unit {
+    let src: String = "abc";
+    let s: Span = Span { start: 0, end: 3 };
+    assert_eq(s.text(src), "abc")
+}
+
+test fn span_text_empty_span() -> Unit {
+    let src: String = "hello";
+    let s: Span = Span { start: 2, end: 2 };
+    assert_eq(s.text(src), "")
+}
+
+test fn span_text_out_of_range_clamps() -> Unit {
+    let src: String = "hi";
+    let s: Span = Span { start: 0, end: 100 };
+    assert_eq(s.text(src), "hi")
+}
+
+// ── Span::len ────────────────────────────────────────────────────────────────
+
+test fn span_len_normal() -> Unit {
+    let s: Span = Span { start: 2, end: 7 };
+    assert_eq(s.len(), 5)
+}
+
+test fn span_len_zero() -> Unit {
+    let s: Span = Span { start: 4, end: 4 };
+    assert_eq(s.len(), 0)
+}
+
+test fn span_len_inverted_clamps_to_zero() -> Unit {
+    let s: Span = Span { start: 7, end: 2 };
+    assert_eq(s.len(), 0)
+}
+
+// ── Span::is_empty ───────────────────────────────────────────────────────────
+
+test fn span_is_empty_true() -> Unit {
+    let s: Span = Span { start: 3, end: 3 };
+    assert_eq(s.is_empty(), true)
+}
+
+test fn span_is_empty_false() -> Unit {
+    let s: Span = Span { start: 0, end: 1 };
+    assert_eq(s.is_empty(), false)
+}
+
+test fn span_is_empty_inverted() -> Unit {
+    let s: Span = Span { start: 5, end: 2 };
+    assert_eq(s.is_empty(), true)
+}
+
+// ── Span::union ──────────────────────────────────────────────────────────────
+
+test fn span_union_non_overlapping() -> Unit {
+    let a: Span = Span { start: 0, end: 3 };
+    let b: Span = Span { start: 5, end: 8 };
+    let u: Span = a.union(b);
+    assert_eq(u.start, 0);
+    assert_eq(u.end, 8)
+}
+
+test fn span_union_overlapping() -> Unit {
+    let a: Span = Span { start: 1, end: 6 };
+    let b: Span = Span { start: 4, end: 9 };
+    let u: Span = a.union(b);
+    assert_eq(u.start, 1);
+    assert_eq(u.end, 9)
+}
+
+test fn span_union_contained() -> Unit {
+    let a: Span = Span { start: 0, end: 10 };
+    let b: Span = Span { start: 3, end: 7 };
+    let u: Span = a.union(b);
+    assert_eq(u.start, 0);
+    assert_eq(u.end, 10)
+}
+
+test fn span_union_identical() -> Unit {
+    let a: Span = Span { start: 2, end: 5 };
+    let b: Span = Span { start: 2, end: 5 };
+    let u: Span = a.union(b);
+    assert_eq(u.start, 2);
+    assert_eq(u.end, 5)
+}
+
+// ── Span::intersect ──────────────────────────────────────────────────────────
+
+test fn span_intersect_overlapping() -> Unit {
+    let a: Span = Span { start: 1, end: 6 };
+    let b: Span = Span { start: 4, end: 9 };
+    let i: Span = a.intersect(b);
+    assert_eq(i.start, 4);
+    assert_eq(i.end, 6)
+}
+
+test fn span_intersect_contained() -> Unit {
+    let a: Span = Span { start: 0, end: 10 };
+    let b: Span = Span { start: 3, end: 7 };
+    let i: Span = a.intersect(b);
+    assert_eq(i.start, 3);
+    assert_eq(i.end, 7)
+}
+
+test fn span_intersect_disjoint_is_empty() -> Unit {
+    let a: Span = Span { start: 0, end: 3 };
+    let b: Span = Span { start: 5, end: 8 };
+    let i: Span = a.intersect(b);
+    assert_eq(i.start, 0);
+    assert_eq(i.end, 0);
+    assert_eq(i.is_empty(), true)
+}
+
+test fn span_intersect_disjoint_commutative() -> Unit {
+    let ab: Span = Span { start: 0, end: 3 }.intersect(Span { start: 5, end: 8 });
+    let ba: Span = Span { start: 5, end: 8 }.intersect(Span { start: 0, end: 3 });
+    assert_eq(ab.start, ba.start);
+    assert_eq(ab.end, ba.end)
+}
+
+test fn span_intersect_adjacent_is_empty() -> Unit {
+    let a: Span = Span { start: 0, end: 3 };
+    let b: Span = Span { start: 3, end: 6 };
+    let i: Span = a.intersect(b);
+    assert_eq(i.start, 0);
+    assert_eq(i.end, 0);
+    assert_eq(i.is_empty(), true)
+}
+
+// ── String::split_spans ──────────────────────────────────────────────────────
+
+test fn split_spans_basic() -> Unit {
+    let src: String = "a,bb,ccc";
+    let spans: List[Span] = src.split_spans(",");
+    assert_eq(spans.len(), 3);
+    assert_eq(spans.get(0).unwrap_or(Span { start: 0, end: 0 }).text(src), "a");
+    assert_eq(spans.get(1).unwrap_or(Span { start: 0, end: 0 }).text(src), "bb");
+    assert_eq(spans.get(2).unwrap_or(Span { start: 0, end: 0 }).text(src), "ccc")
+}
+
+test fn split_spans_matches_split_content() -> Unit {
+    let src: String = "one:two:three";
+    let spans: List[Span] = src.split_spans(":");
+    let parts: List[String] = src.split(":");
+    assert_eq(spans.len(), parts.len());
+    assert_eq(spans.get(0).unwrap_or(Span { start: 0, end: 0 }).text(src),
+              parts.get(0).unwrap_or(""));
+    assert_eq(spans.get(1).unwrap_or(Span { start: 0, end: 0 }).text(src),
+              parts.get(1).unwrap_or(""));
+    assert_eq(spans.get(2).unwrap_or(Span { start: 0, end: 0 }).text(src),
+              parts.get(2).unwrap_or(""))
+}
+
+test fn split_spans_no_separator() -> Unit {
+    let src: String = "hello";
+    let spans: List[Span] = src.split_spans(",");
+    assert_eq(spans.len(), 1);
+    assert_eq(spans.get(0).unwrap_or(Span { start: 0, end: 0 }).text(src), "hello")
+}
+
+test fn split_spans_empty_string() -> Unit {
+    let src: String = "";
+    let spans: List[Span] = src.split_spans(",");
+    assert_eq(spans.len(), 1);
+    assert_eq(spans.get(0).unwrap_or(Span { start: 0, end: 0 }).text(src), "")
+}
+
+test fn split_spans_leading_separator() -> Unit {
+    let src: String = ",a,b";
+    let spans: List[Span] = src.split_spans(",");
+    assert_eq(spans.len(), 3);
+    assert_eq(spans.get(0).unwrap_or(Span { start: 0, end: 0 }).text(src), "");
+    assert_eq(spans.get(1).unwrap_or(Span { start: 0, end: 0 }).text(src), "a");
+    assert_eq(spans.get(2).unwrap_or(Span { start: 0, end: 0 }).text(src), "b")
+}
+
+test fn split_spans_trailing_separator() -> Unit {
+    let src: String = "a,b,";
+    let spans: List[Span] = src.split_spans(",");
+    assert_eq(spans.len(), 3);
+    assert_eq(spans.get(0).unwrap_or(Span { start: 0, end: 0 }).text(src), "a");
+    assert_eq(spans.get(1).unwrap_or(Span { start: 0, end: 0 }).text(src), "b");
+    assert_eq(spans.get(2).unwrap_or(Span { start: 0, end: 0 }).text(src), "")
+}
+
+test fn split_spans_multi_char_sep() -> Unit {
+    let src: String = "foo::bar::baz";
+    let spans: List[Span] = src.split_spans("::");
+    assert_eq(spans.len(), 3);
+    assert_eq(spans.get(1).unwrap_or(Span { start: 0, end: 0 }).text(src), "bar")
+}
+
+// ── String::find_all_spans ───────────────────────────────────────────────────
+
+test fn find_all_spans_basic() -> Unit {
+    let src: String = "abcabc";
+    let spans: List[Span] = src.find_all_spans("b");
+    assert_eq(spans.len(), 2);
+    assert_eq(spans.get(0).unwrap_or(Span { start: 0, end: 0 }).start, 1);
+    assert_eq(spans.get(0).unwrap_or(Span { start: 0, end: 0 }).end, 2);
+    assert_eq(spans.get(1).unwrap_or(Span { start: 0, end: 0 }).start, 4);
+    assert_eq(spans.get(1).unwrap_or(Span { start: 0, end: 0 }).end, 5)
+}
+
+test fn find_all_spans_not_found() -> Unit {
+    let src: String = "hello";
+    let spans: List[Span] = src.find_all_spans("z");
+    assert_eq(spans.len(), 0)
+}
+
+test fn find_all_spans_text_correct() -> Unit {
+    let src: String = "key=val&key=val2";
+    let spans: List[Span] = src.find_all_spans("key");
+    assert_eq(spans.len(), 2);
+    assert_eq(spans.get(0).unwrap_or(Span { start: 0, end: 0 }).text(src), "key");
+    assert_eq(spans.get(1).unwrap_or(Span { start: 0, end: 0 }).text(src), "key")
+}
+
+test fn find_all_spans_non_overlapping() -> Unit {
+    let src: String = "aaa";
+    let spans: List[Span] = src.find_all_spans("aa");
+    assert_eq(spans.len(), 1);
+    assert_eq(spans.get(0).unwrap_or(Span { start: 0, end: 0 }).start, 0)
+}

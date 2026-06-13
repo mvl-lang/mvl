@@ -1,0 +1,118 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// tests/spikes/005-span-bench/01_bench.mvl
+//
+// Spike 005 — Memory and time: String::split vs String::split_spans
+//
+// Context: issue #1371 — add Span type for zero-alloc index-based parsing.
+//
+// Goal: demonstrate that split_spans produces correct results identical to split,
+// and show the timing difference (coarse, second resolution) at scale.
+//
+// Memory argument:
+//   split(sep) → List[String]   — N owned String allocations (one per part)
+//   split_spans(sep) → List[Span] — N Span values of 2 Ints each (16 bytes, stack)
+//
+// With 10_000 fields: split allocates 10_000 Strings; split_spans allocates nothing
+// beyond the Vec itself. The text is extracted on demand via span.text(src).
+//
+// Timing: wall-clock resolution is seconds (std.time uses _instant_epoch_seconds).
+// A loop over 10_000 fields finishes in microseconds — both show "0 s elapsed".
+// The spike still validates correctness at scale and demonstrates the pattern.
+//
+// Run: make -C tests/spikes/005-span-bench bench
+
+use std.text.{Span}
+use std.math.{int_to_string}
+
+fn make_csv(n: Int) -> String {
+    let result: ref String = "";
+    let i: ref Int = 0;
+    while i < n decreases n - i {
+        if i > 0 { result = result.concat(",") } else {}
+        result = result.concat("field");
+        result = result.concat(int_to_string(i));
+        i = i + 1
+    }
+    result
+}
+
+fn bench_split(src: String, sep: String, iters: Int) -> Int {
+    let count: ref Int = 0;
+    let i: ref Int = 0;
+    while i < iters decreases iters - i {
+        let parts: List[String] = src.split(sep);
+        count = parts.len();
+        i = i + 1
+    }
+    count
+}
+
+fn bench_split_spans(src: String, sep: String, iters: Int) -> Int {
+    let count: ref Int = 0;
+    let i: ref Int = 0;
+    while i < iters decreases iters - i {
+        let spans: List[Span] = src.split_spans(sep);
+        count = spans.len();
+        i = i + 1
+    }
+    count
+}
+
+fn main() -> Unit ! Console {
+    let n: Int = 10000;
+    let iters: Int = 100;
+    println("=== Spike 005: split vs split_spans ===");
+    println("CSV fields: ".concat(int_to_string(n)));
+    println("Iterations per benchmark: ".concat(int_to_string(iters)));
+    println("");
+
+    let src: String = make_csv(n);
+    println("Source length (chars): ".concat(int_to_string(src.len())));
+    println("");
+
+    // ── split (owned strings) ──────────────────────────────────────────────
+    // Note: sub-millisecond timing requires #1372 (find_from builtin + nanosecond clock).
+    let split_count: Int = bench_split(src, ",", iters);
+    println("split:        ".concat(int_to_string(split_count)).concat(" parts (check)"));
+    println("  Each call allocates ".concat(int_to_string(split_count)).concat(" String objects"));
+
+    // ── split_spans (index pairs) ──────────────────────────────────────────
+    let spans_count: Int = bench_split_spans(src, ",", iters);
+    println("split_spans:  ".concat(int_to_string(spans_count)).concat(" spans (check)"));
+    println("  Each call allocates 0 Strings; spans are 2-Int structs (~16 bytes each)");
+    println("");
+
+    // ── Correctness: reconstruct and compare ──────────────────────────────
+    let parts: List[String] = src.split(",");
+    let spans: List[Span] = src.split_spans(",");
+
+    let ok: ref Bool = true;
+    let i: ref Int = 0;
+    while i < parts.len() decreases parts.len() - i {
+        let expected: String = parts.get(i).unwrap_or("MISSING");
+        let actual: String = spans.get(i).unwrap_or(Span { start: 0, end: 0 }).text(src);
+        if expected != actual {
+            ok = false;
+            println("MISMATCH at ".concat(int_to_string(i)).concat(": expected=").concat(expected).concat(" got=").concat(actual))
+        } else {}
+        i = i + 1
+    }
+
+    if ok {
+        println("Correctness: PASS — all ".concat(int_to_string(parts.len())).concat(" parts match"))
+    } else {
+        println("Correctness: FAIL")
+    }
+    println("");
+
+    // ── Memory model summary ───────────────────────────────────────────────
+    println("Memory model:");
+    println("  split       → ".concat(int_to_string(split_count)).concat(" heap String allocations per call"));
+    println("  split_spans → 1 Vec allocation per call (spans are value types)");
+    println("  Savings     → ~".concat(int_to_string(split_count - 1)).concat(" allocations per call"));
+    println("");
+    println("Note: wall-clock timing requires nanosecond resolution to show difference.");
+    println("Both approaches complete in microseconds for 10k fields.")
+}

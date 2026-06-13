@@ -1,0 +1,20 @@
+// Regression test for #1371 Set union/intersection type guard bug:
+// A user-defined struct with a method named "union" must not have its method
+// replaced by Set::union dispatch in the Rust emitter (#1371 fix in emit_exprs.rs).
+use std.text.{Span}
+
+test fn span_union_dispatches_correctly_not_as_set_union() -> Unit {
+    let a: Span = Span { start: 0, end: 5 };
+    let b: Span = Span { start: 3, end: 8 };
+    let u: Span = a.union(b);
+    assert_eq(u.start, 0);
+    assert_eq(u.end, 8)
+}
+
+test fn span_intersect_dispatches_correctly_not_as_set_intersection() -> Unit {
+    let a: Span = Span { start: 0, end: 6 };
+    let b: Span = Span { start: 3, end: 9 };
+    let i: Span = a.intersect(b);
+    assert_eq(i.start, 3);
+    assert_eq(i.end, 6)
+}
