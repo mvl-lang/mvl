@@ -1,0 +1,290 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// compiler/effects.mvl — C4: EffectHierarchy
+//
+// Port of src/mvl/checker/effects.rs (#1117 self-host(4)).
+//
+// EffectHierarchy is built once from all EffectDecl nodes collected across
+// every parsed module (std + user).  Three-pass construction:
+//   1. Register all declared effect names.
+//   2. Register parent edges; emit UnknownEffectParent for undeclared parents.
+//   3. DFS cycle detection; emit EffectCycle once per cycle (dedup by min-name).
+//
+// Query API:
+//   subsumes_transitive — BFS reachability in the parents DAG.
+//   contains           — effect name is declared.
+//   has_any            — at least one effect declared (guards validation skip).
+//
+// Rust tuple return (Self, Vec<CheckError>) replaced by EffectHierarchyResult.
+// HashSet<String> replaced by List[String] (Set::new() not available; hierarchies
+// are always small, so O(n) membership checks are acceptable).
+//
+// Types in scope from peer compiler files (loaded as part of the compiler/ module):
+//   CheckError (verify_errors.mvl), EffectDecl / SourceLoc (tir.mvl).
+
+use std.collections.{Map}
+
+// ── Types ──────────────────────────────────────────────────────────────────────
+
+/// Resolved effect subsumption hierarchy.
+pub type EffectHierarchy = struct {
+    effects: List[String],
+    parents: Map[String, List[String]],
+}
+
+/// Result of building the hierarchy (replaces Rust's `(Self, Vec<CheckError>)` tuple).
+pub type EffectHierarchyResult = struct {
+    hierarchy: EffectHierarchy,
+    errors:    List[CheckError],
+}
+
+// ── Construction ───────────────────────────────────────────────────────────────
+
+/// Build the hierarchy from all EffectDecl nodes found across loaded modules.
+///
+/// Validates that all parent names are declared.  Detects cycles.
+/// The hierarchy is always returned (partially populated on error) so the
+/// caller can continue collecting further errors.
+pub partial fn EffectHierarchy::from_decls(decls: List[EffectDecl]) -> EffectHierarchyResult {
+    let effects: ref List[String]               = [];
+    let parents: ref Map[String, List[String]]  = Map::new();
+    let errors:  ref List[CheckError]           = [];
+
+    // Pass 1: register all effect names.
+    let di: ref Int = 0;
+    while di < decls.len() {
+        if let Some(decl) = decls.get(di) {
+            if !effects.any(|e: String| e == decl.name) {
+                effects.push(decl.name);
+            }
+        }
+        di = di + 1
+    }
+
+    // Pass 2: register parent edges, validate parent names exist.
+    let di2: ref Int = 0;
+    while di2 < decls.len() {
+        if let Some(decl) = decls.get(di2) {
+            let valid_parents: ref List[String] = [];
+            let pi: ref Int = 0;
+            while pi < decl.subsumes.len() {
+                if let Some(parent) = decl.subsumes.get(pi) {
+                    if effects.any(|e: String| e == parent) {
+                        valid_parents.push(parent);
+                    } else {
+                        errors.push(CheckError::UnknownEffectParent {
+                            eff:    decl.name,
+                            parent: parent,
+                            span:   decl.span,
+                        });
+                    }
+                }
+                pi = pi + 1
+            }
+            parents.insert(decl.name, valid_parents);
+        }
+        di2 = di2 + 1
+    }
+
+    // Pass 3: DFS cycle detection from each node.
+    // Deduplicate by only reporting when `name` is the lex-min node in the cycle.
+    let ni: ref Int = 0;
+    while ni < effects.len() {
+        if let Some(name) = effects.get(ni) {
+            let cycle_opt: Option[List[String]] = eff_find_cycle(parents, name);
+            match cycle_opt {
+                Some(chain) => {
+                    let min_name: String = eff_min_str(chain);
+                    if min_name == name {
+                        let span: SourceLoc = eff_span_for(decls, name);
+                        errors.push(CheckError::EffectCycle { chain: chain, span: span });
+                    }
+                },
+                None => {},
+            }
+        }
+        ni = ni + 1
+    }
+
+    EffectHierarchyResult {
+        hierarchy: EffectHierarchy { effects: effects, parents: parents },
+        errors:    errors,
+    }
+}
+
+// ── Queries ────────────────────────────────────────────────────────────────────
+
+/// True if `name` is a declared effect.
+pub total fn EffectHierarchy::contains(self, name: String) -> Bool {
+    self.effects.any(|e: String| e == name)
+}
+
+/// True when at least one effect has been declared.
+/// Used to skip effect validation in unit tests that load no effects.mvl.
+pub total fn EffectHierarchy::has_any(self) -> Bool {
+    !self.effects.is_empty()
+}
+
+/// True if `declared` (transitively) subsumes `required`.
+/// `IO > Log > Clock` means `subsumes_transitive("IO", "Clock") = true`.
+pub partial fn EffectHierarchy::subsumes_transitive(
+    self,
+    declared: String,
+    required: String,
+) -> Bool {
+    if declared == required {
+        true
+    } else {
+        eff_can_reach(self.parents, declared, required)
+    }
+}
+
+// ── Internal helpers ───────────────────────────────────────────────────────────
+
+/// Iterative BFS reachability from `start` to `target` through the parents graph.
+/// Visited list prevents re-traversal in DAGs and acts as a cycle guard.
+partial fn eff_can_reach(
+    parents: Map[String, List[String]],
+    start:   String,
+    target:  String,
+) -> Bool {
+    let queue:   ref List[String] = [start];
+    let visited: ref List[String] = [start];
+    let head: ref Int = 0;
+    while head < queue.len() {
+        if let Some(current) = queue.get(head) {
+            head = head + 1;
+            let ps: List[String] = match parents.get(current) { Some(ps) => ps, None => [] };
+            let pi: ref Int = 0;
+            while pi < ps.len() {
+                if let Some(p) = ps.get(pi) {
+                    if p == target {
+                        return true
+                    }
+                    if !visited.any(|v: String| v == p) {
+                        visited.push(p);
+                        queue.push(p);
+                    }
+                }
+                pi = pi + 1
+            }
+        } else {
+            head = head + 1
+        }
+    }
+    false
+}
+
+/// Start a DFS from `start`; return the cycle chain if a cycle is reachable.
+partial fn eff_find_cycle(
+    parents: Map[String, List[String]],
+    start:   String,
+) -> Option[List[String]] {
+    eff_dfs_cycle(parents, start, [], [])
+}
+
+/// Recursive DFS cycle detection.
+///
+/// `path`     — nodes on the current DFS path (for cycle reconstruction).
+/// `on_stack` — same nodes tracked as a list for membership check.
+partial fn eff_dfs_cycle(
+    parents:  Map[String, List[String]],
+    node:     String,
+    path:     List[String],
+    on_stack: List[String],
+) -> Option[List[String]] {
+    // Extend path and on_stack with the current node.
+    let new_path: ref List[String] = [];
+    let pi: ref Int = 0;
+    while pi < path.len() {
+        if let Some(s) = path.get(pi) { new_path.push(s) }
+        pi = pi + 1
+    }
+    new_path.push(node);
+
+    let new_stack: ref List[String] = [];
+    let si: ref Int = 0;
+    while si < on_stack.len() {
+        if let Some(s) = on_stack.get(si) { new_stack.push(s) }
+        si = si + 1
+    }
+    new_stack.push(node);
+
+    let ps: List[String] = match parents.get(node) { Some(ps) => ps, None => [] };
+    let found_cycle: ref Bool = false;
+    let cycle_chain: ref List[String] = [];
+    let i: ref Int = 0;
+    while i < ps.len() {
+        if !found_cycle {
+            if let Some(parent) = ps.get(i) {
+                if new_stack.any(|s: String| s == parent) {
+                    // Back-edge — reconstruct cycle from first occurrence of parent.
+                    let in_cycle: ref Bool = false;
+                    let ci: ref Int = 0;
+                    while ci < new_path.len() {
+                        if let Some(seg) = new_path.get(ci) {
+                            if seg == parent { in_cycle = true }
+                            if in_cycle { cycle_chain.push(seg) }
+                        }
+                        ci = ci + 1
+                    }
+                    cycle_chain.push(parent);
+                    found_cycle = true
+                } else {
+                    let sub: Option[List[String]] =
+                        eff_dfs_cycle(parents, parent, new_path, new_stack);
+                    match sub {
+                        Some(chain) => {
+                            let xi: ref Int = 0;
+                            while xi < chain.len() {
+                                if let Some(s) = chain.get(xi) { cycle_chain.push(s) }
+                                xi = xi + 1
+                            }
+                            found_cycle = true
+                        },
+                        None => {},
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    if found_cycle { Some(cycle_chain) } else { None }
+}
+
+/// Lexicographic minimum string in a non-empty list (empty → "").
+partial fn eff_min_str(items: List[String]) -> String {
+    let min: ref String = match items.get(0) { Some(s) => s, None => "" };
+    let i: ref Int = 1;
+    while i < items.len() {
+        if let Some(s) = items.get(i) {
+            if eff_str_lt(s, min) { min = s }
+        }
+        i = i + 1
+    }
+    min
+}
+
+/// Lexicographic less-than for strings (byte-by-byte via to_int()).
+partial fn eff_str_lt(a: String, b: String) -> Bool {
+    let n: Int = if a.len() < b.len() { a.len() } else { b.len() };
+    let i: ref Int = 0;
+    while i < n {
+        let ba: Int = match a.byte_at(i) { Some(x) => x.to_int(), None => 0 };
+        let bb: Int = match b.byte_at(i) { Some(x) => x.to_int(), None => 0 };
+        if ba < bb { return true }
+        if ba > bb { return false }
+        i = i + 1
+    }
+    a.len() < b.len()
+}
+
+/// Return the SourceLoc for the EffectDecl named `name`, or a zero location.
+total fn eff_span_for(decls: List[EffectDecl], name: String) -> SourceLoc {
+    let found: ref SourceLoc = SourceLoc { line: 0, col: 0 };
+    for d in decls {
+        if d.name == name { found = d.span }
+    }
+    found
+}

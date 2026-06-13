@@ -1,0 +1,681 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// compiler/context.mvl — C5: TypeEnv (port of src/mvl/checker/context.rs, #1117)
+//
+// Type environment: the three lookup tables used throughout type checking.
+//   scopes   — lexically-scoped variable bindings (stack of maps)
+//   types    — global type declarations (structs, enums, aliases)
+//   fns      — global function signatures
+//
+// Also carries:
+//   from_impls   — registered From[A] for B implementations
+//   known_labels — declared IFC label names
+//   relabels     — declared IFC relabel transitions
+//
+// Mutation model: methods return a new TypeEnv value.  The caller holds the
+// environment in a `ref TypeEnv` binding and reassigns after each mutation:
+//   env = env.define("x", var_info);
+//   env = env.push_scope();
+//
+// Types in scope from peer compiler files (no explicit import needed):
+//   Ty, Effect, Totality, Capability, EffectDecl, SourceLoc (tir.mvl),
+//   CheckError (verify_errors.mvl).
+
+use std.collections.{Map}
+
+// ── CapabilityState ────────────────────────────────────────────────────────────
+
+/// Active capability state for a variable binding (Spec 009 Req 2).
+///
+/// Transitions:
+///   Owned → Val(n) when `val x` references are created.
+///   Owned → Ref    when a `ref x` reference is created.
+///   Val(n) decrements back to Owned when val-references go out of scope.
+///   Ref    resets to Owned when the ref-reference goes out of scope.
+pub type CapabilityState = enum {
+    Owned,
+    Val(Int),
+    Ref,
+}
+
+// ── VarInfo ────────────────────────────────────────────────────────────────────
+
+/// Per-variable metadata held in the variable scope stack.
+pub type VarInfo = struct {
+    ty:               Ty,
+    mutable:          Bool,
+    moved:            Bool,
+    capability:       Option[Capability],
+    scope_depth:      Int,
+    capability_state: CapabilityState,
+    ref_var:          Option[String],
+}
+
+/// Construct a basic VarInfo (moved=false, Owned, no capability).
+pub total fn VarInfo::new(ty: Ty, mutable: Bool) -> VarInfo {
+    VarInfo {
+        ty:               ty,
+        mutable:          mutable,
+        moved:            false,
+        capability:       None,
+        scope_depth:      0,
+        capability_state: CapabilityState::Owned,
+        ref_var:          None,
+    }
+}
+
+/// Return a copy of this VarInfo with the given capability.
+pub total fn VarInfo::with_capability(self, cap: Option[Capability]) -> VarInfo {
+    VarInfo {
+        ty:               self.ty,
+        mutable:          self.mutable,
+        moved:            self.moved,
+        capability:       cap,
+        scope_depth:      self.scope_depth,
+        capability_state: self.capability_state,
+        ref_var:          self.ref_var,
+    }
+}
+
+// ── FieldInfo ──────────────────────────────────────────────────────────────────
+
+/// A resolved struct field: name, type, and mutability flag.
+pub type FieldInfo = struct {
+    name:    String,
+    ty:      Ty,
+    mutable: Bool,
+}
+
+// ── VariantFieldsInfo / VariantInfo ────────────────────────────────────────────
+
+/// The field layout of an enum variant.
+pub type VariantFieldsInfo = enum {
+    Unit,
+    Tuple(List[Ty]),
+    Struct(List[FieldInfo]),
+}
+
+/// A resolved enum variant: name + field layout.
+pub type VariantInfo = struct {
+    name:   String,
+    fields: VariantFieldsInfo,
+}
+
+// ── TypeBodyInfo / TypeInfo ────────────────────────────────────────────────────
+
+/// The resolved body of a type declaration.
+pub type TypeBodyInfo = enum {
+    Struct { fields: List[FieldInfo], inv: Option[String] },
+    Enum(List[VariantInfo]),
+    Alias(Ty),
+}
+
+/// Complete type declaration info: generic parameters + body.
+pub type TypeInfo = struct {
+    params: List[String],
+    body:   TypeBodyInfo,
+}
+
+// ── FnInfo ─────────────────────────────────────────────────────────────────────
+
+/// Resolved function signature stored in the function table.
+pub type FnInfo = struct {
+    params:      List[Ty],
+    ret:         Ty,
+    effects:     List[Effect],
+    totality:    Option[Totality],
+    type_params: List[String],
+}
+
+/// Construct a simple pure function signature (no effects, implicitly total).
+pub total fn FnInfo::pure(params: List[Ty], ret: Ty) -> FnInfo {
+    FnInfo {
+        params:      params,
+        ret:         ret,
+        effects:     [],
+        totality:    None,
+        type_params: [],
+    }
+}
+
+/// Construct a function signature with effects.
+pub total fn FnInfo::effectful(params: List[Ty], ret: Ty, effects: List[Effect]) -> FnInfo {
+    FnInfo {
+        params:      params,
+        ret:         ret,
+        effects:     effects,
+        totality:    None,
+        type_params: [],
+    }
+}
+
+/// Construct a partial (may not terminate) function signature.
+pub total fn FnInfo::partial_sig(params: List[Ty], ret: Ty) -> FnInfo {
+    FnInfo {
+        params:      params,
+        ret:         ret,
+        effects:     [],
+        totality:    Some(Totality::Partial),
+        type_params: [],
+    }
+}
+
+/// Construct a generic function signature (type_params non-empty, args are Unknown).
+pub total fn FnInfo::generic(params: List[Ty], ret: Ty, type_params: List[String]) -> FnInfo {
+    FnInfo {
+        params:      params,
+        ret:         ret,
+        effects:     [],
+        totality:    None,
+        type_params: type_params,
+    }
+}
+
+/// True if this function has generic type parameters.
+pub total fn FnInfo::is_generic(self) -> Bool {
+    !self.type_params.is_empty()
+}
+
+// ── RelabelInfo ────────────────────────────────────────────────────────────────
+
+/// An IFC relabel transition: (from_label, to_label, audit_required).
+/// Replaces the Rust `(Option<String>, Option<String>, bool)` tuple.
+pub type RelabelInfo = struct {
+    from_lbl: Option[String],
+    to_lbl:   Option[String],
+    audit:    Bool,
+}
+
+// ── TypeEnv ────────────────────────────────────────────────────────────────────
+
+/// Lexically-scoped variable environment + global type/function tables.
+pub type TypeEnv = struct {
+    scopes:       List[Map[String, VarInfo]],
+    types:        Map[String, TypeInfo],
+    fns:          Map[String, FnInfo],
+    from_impls:   Map[String, List[String]],
+    known_labels: List[String],
+    relabels:     Map[String, RelabelInfo],
+}
+
+// ── Constructor ────────────────────────────────────────────────────────────────
+
+/// Convenience: build an Effect annotation with no param and zero span.
+total fn builtin_effect(name: String) -> Effect {
+    Effect { name: name, param: "", span: SourceLoc { line: 0, col: 0 } }
+}
+
+/// Convenience: build a simple Named type.
+total fn named_ty(name: String) -> Ty {
+    Ty::Named(name, [])
+}
+
+/// Create a fresh TypeEnv with built-in stdlib functions and types pre-registered.
+pub partial fn TypeEnv::new() -> TypeEnv {
+    let types:        ref Map[String, TypeInfo]       = Map::new();
+    let fns:          ref Map[String, FnInfo]         = Map::new();
+    let from_impls:   ref Map[String, List[String]]   = Map::new();
+    let relabels:     ref Map[String, RelabelInfo]    = Map::new();
+
+    // Pre-seed known IFC labels.
+    let known_labels: ref List[String] = [
+        "Tainted", "Secret",
+        "ConfigPath", "DbUrl", "ApiEndpoint", "AuditTarget",
+    ];
+
+    // Pre-seed standard relabel transitions from std/ifc.mvl.
+    relabels.insert("classify",       RelabelInfo { from_lbl: None,               to_lbl: Some("Secret"),      audit: false });
+    relabels.insert("taint",          RelabelInfo { from_lbl: None,               to_lbl: Some("Tainted"),     audit: false });
+    relabels.insert("trust",          RelabelInfo { from_lbl: Some("Tainted"),    to_lbl: None,                audit: false });
+    relabels.insert("release",        RelabelInfo { from_lbl: Some("Secret"),     to_lbl: None,                audit: false });
+    relabels.insert("config_path",    RelabelInfo { from_lbl: None,               to_lbl: Some("ConfigPath"),  audit: false });
+    relabels.insert("unconfig_path",  RelabelInfo { from_lbl: Some("ConfigPath"), to_lbl: None,                audit: false });
+    relabels.insert("db_url",         RelabelInfo { from_lbl: None,               to_lbl: Some("DbUrl"),       audit: false });
+    relabels.insert("undb_url",       RelabelInfo { from_lbl: Some("DbUrl"),      to_lbl: None,                audit: false });
+    relabels.insert("api_endpoint",   RelabelInfo { from_lbl: None,               to_lbl: Some("ApiEndpoint"), audit: false });
+    relabels.insert("unapi_endpoint", RelabelInfo { from_lbl: Some("ApiEndpoint"),to_lbl: None,                audit: false });
+    relabels.insert("audit_target",   RelabelInfo { from_lbl: None,               to_lbl: Some("AuditTarget"), audit: false });
+    relabels.insert("unaudit_target", RelabelInfo { from_lbl: Some("AuditTarget"),to_lbl: None,                audit: false });
+
+    // ── Built-in types ────────────────────────────────────────────────────────
+    let empty_struct: TypeInfo = TypeInfo {
+        params: [],
+        body: TypeBodyInfo::Struct { fields: [], inv: None },
+    };
+    let builtin_tys: List[String] = ["Instant", "DateTime", "Duration", "Regex", "Match", "Captures"];
+    let bti: ref Int = 0;
+    while bti < builtin_tys.len() {
+        if let Some(tname) = builtin_tys.get(bti) { types.insert(tname, empty_struct) }
+        bti = bti + 1
+    }
+    // json.Value enum
+    types.insert("Value", TypeInfo {
+        params: [],
+        body: TypeBodyInfo::Enum([
+            VariantInfo { name: "String",  fields: VariantFieldsInfo::Tuple([Ty::Str]) },
+            VariantInfo { name: "Number",  fields: VariantFieldsInfo::Tuple([Ty::Float]) },
+            VariantInfo { name: "Null",    fields: VariantFieldsInfo::Unit },
+        ]),
+    });
+
+    // ── Built-in functions ────────────────────────────────────────────────────
+    let console_eff: List[Effect] = [builtin_effect("Console")];
+    let clock_eff:   List[Effect] = [builtin_effect("Clock")];
+    let random_eff:  List[Effect] = [builtin_effect("Random")];
+    let crypto_eff:  List[Effect] = [builtin_effect("CryptoRandom")];
+    let log_eff:     List[Effect] = [builtin_effect("Log")];
+    let io_error: Ty = named_ty("IoError");
+    let fd_ty:    Ty = named_ty("Fd");
+
+    // Console I/O (#839, #976)
+    fns.insert("stdout", FnInfo::pure([], fd_ty));
+    fns.insert("stderr", FnInfo::pure([], fd_ty));
+    fns.insert("write",  FnInfo::effectful(
+        [fd_ty, Ty::Str],
+        Ty::Result(Box::new(Ty::Unit), Box::new(io_error)),
+        console_eff,
+    ));
+
+    // Assertion helpers (pure)
+    fns.insert("assert",    FnInfo::pure([Ty::Bool], Ty::Unit));
+    fns.insert("assert_eq", FnInfo::generic([Ty::Unknown, Ty::Unknown], Ty::Unit, ["T"]));
+    fns.insert("assert_ne", FnInfo::generic([Ty::Unknown, Ty::Unknown], Ty::Unit, ["T"]));
+    fns.insert("panic",     FnInfo::partial_sig([Ty::Str], Ty::Never));
+
+    // Math (pure)
+    fns.insert("abs", FnInfo::pure([Ty::Int], Ty::Int));
+    fns.insert("max", FnInfo::pure([Ty::Int, Ty::Int], Ty::Int));
+    fns.insert("min", FnInfo::pure([Ty::Int, Ty::Int], Ty::Int));
+
+    // String utilities (pure)
+    fns.insert("parse_int", FnInfo::pure(
+        [Ty::Str],
+        Ty::Result(Box::new(Ty::Int), Box::new(Ty::Str)),
+    ));
+    fns.insert("format", FnInfo::pure(
+        [Ty::Str, Ty::List(Box::new(Ty::Str))],
+        Ty::Str,
+    ));
+    fns.insert("range", FnInfo::pure(
+        [Ty::Int, Ty::Int],
+        Ty::List(Box::new(Ty::Int)),
+    ));
+
+    // Time (! Clock)
+    fns.insert("now",   FnInfo::effectful([], named_ty("Instant"), clock_eff));
+    fns.insert("sleep", FnInfo::effectful([named_ty("Duration")], Ty::Unit, clock_eff));
+    fns.insert("_instant_epoch_seconds", FnInfo::pure([named_ty("Instant")], Ty::Int));
+    fns.insert("parse",   FnInfo::pure([Ty::Str, Ty::Str], Ty::Option(Box::new(named_ty("DateTime")))));
+    fns.insert("seconds", FnInfo::pure([Ty::Int], named_ty("Duration")));
+    fns.insert("millis",  FnInfo::pure([Ty::Int], named_ty("Duration")));
+
+    // Regex (pure)
+    fns.insert("compile", FnInfo::pure(
+        [Ty::Str],
+        Ty::Result(Box::new(named_ty("Regex")), Box::new(Ty::Str)),
+    ));
+    fns.insert("find", FnInfo::pure(
+        [named_ty("Regex"), Ty::Str],
+        Ty::Option(Box::new(named_ty("Match"))),
+    ));
+    fns.insert("find_all", FnInfo::pure(
+        [named_ty("Regex"), Ty::Str],
+        Ty::List(Box::new(named_ty("Match"))),
+    ));
+    fns.insert("replace", FnInfo::pure(
+        [named_ty("Regex"), Ty::Str, Ty::Str],
+        Ty::Str,
+    ));
+    fns.insert("captures", FnInfo::pure(
+        [named_ty("Regex"), Ty::Str],
+        Ty::Option(Box::new(named_ty("Captures"))),
+    ));
+
+    // JSON (pure)
+    fns.insert("encode", FnInfo::pure([named_ty("Value")], Ty::Str));
+    fns.insert("decode", FnInfo::pure(
+        [Ty::Str],
+        Ty::Result(Box::new(named_ty("Value")), Box::new(Ty::Str)),
+    ));
+
+    // Random (! Random)
+    fns.insert("int",     FnInfo::effectful([Ty::Int, Ty::Int], Ty::Int, random_eff));
+    fns.insert("float",   FnInfo::effectful([], Ty::Float, random_eff));
+    fns.insert("bytes",   FnInfo::effectful([Ty::Int], Ty::List(Box::new(Ty::Int)), random_eff));
+    fns.insert("choice",  FnInfo {
+        params: [Ty::Unknown], ret: Ty::Option(Box::new(Ty::Unknown)),
+        effects: random_eff, totality: None, type_params: ["T"],
+    });
+    fns.insert("shuffle", FnInfo {
+        params: [Ty::Unknown], ret: Ty::List(Box::new(Ty::Unknown)),
+        effects: random_eff, totality: None, type_params: ["T"],
+    });
+
+    // Crypto (pure for hashes; ! CryptoRandom for random bytes)
+    fns.insert("_sha256", FnInfo::pure([Ty::Str], Ty::Str));
+    fns.insert("sha256",  FnInfo::pure([Ty::Str], Ty::Str));
+    fns.insert("_sha512", FnInfo::pure([Ty::Str], Ty::Str));
+    fns.insert("sha512",  FnInfo::pure([Ty::Str], Ty::Str));
+    fns.insert("crypto_random_bytes", FnInfo::effectful(
+        [Ty::Int],
+        Ty::Labeled("Secret", Box::new(Ty::List(Box::new(Ty::Int)))),
+        crypto_eff,
+    ));
+
+    // Log (! Log)
+    fns.insert("log_write", FnInfo::effectful([named_ty("Fd"), Ty::Str], Ty::Unit, log_eff));
+
+    // One global scope (the module scope).
+    let init_scope: Map[String, VarInfo] = Map::new();
+    TypeEnv {
+        scopes:       [init_scope],
+        types:        types,
+        fns:          fns,
+        from_impls:   from_impls,
+        known_labels: known_labels,
+        relabels:     relabels,
+    }
+}
+
+// ── Scope management ───────────────────────────────────────────────────────────
+
+/// Push a new inner scope and return the updated env.
+pub total fn TypeEnv::push_scope(self) -> TypeEnv {
+    let new_scopes: ref List[Map[String, VarInfo]] = [];
+    for s in self.scopes { new_scopes.push(s) }
+    new_scopes.push(Map::new());
+    TypeEnv {
+        scopes:       new_scopes,
+        types:        self.types,
+        fns:          self.fns,
+        from_impls:   self.from_impls,
+        known_labels: self.known_labels,
+        relabels:     self.relabels,
+    }
+}
+
+/// Pop the innermost scope and return the updated env.
+/// Note: capability release on scope exit is deferred (see Rust pop_scope).
+pub total fn TypeEnv::pop_scope(self) -> TypeEnv {
+    let n: Int = self.scopes.len();
+    if n <= 1 {
+        self
+    } else {
+        let new_scopes: ref List[Map[String, VarInfo]] = [];
+        for i in range(0, n - 1) {
+            match self.scopes.get(i) { Some(s) => new_scopes.push(s), None => {} }
+        }
+        TypeEnv {
+            scopes:       new_scopes,
+            types:        self.types,
+            fns:          self.fns,
+            from_impls:   self.from_impls,
+            known_labels: self.known_labels,
+            relabels:     self.relabels,
+        }
+    }
+}
+
+/// Return the raw scope-stack height (number of open scopes).
+pub total fn TypeEnv::scope_depth(self) -> Int {
+    self.scopes.len()
+}
+
+// ── Variable operations ────────────────────────────────────────────────────────
+
+/// Define a variable in the innermost scope.
+pub total fn TypeEnv::define(self, name: String, info: VarInfo) -> TypeEnv {
+    let n: Int = self.scopes.len();
+    let new_scopes: ref List[Map[String, VarInfo]] = [];
+    for i in range(0, n - 1) {
+        match self.scopes.get(i) { Some(s) => new_scopes.push(s), None => {} }
+    }
+    let last: ref Map[String, VarInfo] = match self.scopes.get(n - 1) {
+        Some(s) => s,
+        None    => Map::new(),
+    };
+    let updated_info: VarInfo = VarInfo {
+        ty:               info.ty,
+        mutable:          info.mutable,
+        moved:            info.moved,
+        capability:       info.capability,
+        scope_depth:      if n > 0 { n - 1 } else { 0 },
+        capability_state: info.capability_state,
+        ref_var:          info.ref_var,
+    };
+    last.insert(name, updated_info);
+    new_scopes.push(last);
+    TypeEnv {
+        scopes:       new_scopes,
+        types:        self.types,
+        fns:          self.fns,
+        from_impls:   self.from_impls,
+        known_labels: self.known_labels,
+        relabels:     self.relabels,
+    }
+}
+
+/// Look up a variable, searching scopes from innermost to outermost.
+pub total fn TypeEnv::lookup(self, name: String) -> Option[VarInfo] {
+    let n: Int = self.scopes.len();
+    for i in range(0, n).reverse() {
+        let scope: Map[String, VarInfo] = match self.scopes.get(i) {
+            Some(s) => s,
+            None    => Map::new(),
+        };
+        match scope.get(name) {
+            Some(info) => { return Some(info) },
+            None       => {},
+        }
+    }
+    None
+}
+
+/// Look up a variable and return (scope_index, VarInfo).
+/// scope_index 0 = outermost. Used by lambda-capture checking.
+pub total fn TypeEnv::lookup_with_scope_index(self, name: String) -> Option[ScopedVar] {
+    let n: Int = self.scopes.len();
+    for i in range(0, n).reverse() {
+        let scope: Map[String, VarInfo] = match self.scopes.get(i) {
+            Some(s) => s,
+            None    => Map::new(),
+        };
+        match scope.get(name) {
+            Some(info) => { return Some(ScopedVar { scope_index: i, info: info }) },
+            None       => {},
+        }
+    }
+    None
+}
+
+/// Mark a variable as moved (searching scopes from innermost out, updating first match).
+pub total fn TypeEnv::mark_moved(self, name: String) -> TypeEnv {
+    let n: Int = self.scopes.len();
+    let new_scopes: ref List[Map[String, VarInfo]] = [];
+    let moved_done: ref Bool = false;
+    for i in range(0, n) {
+        let scope: ref Map[String, VarInfo] = match self.scopes.get(i) {
+            Some(s) => s,
+            None    => Map::new(),
+        };
+        if !moved_done {
+            match scope.get(name) {
+                Some(old_info) => {
+                    let new_info: VarInfo = VarInfo {
+                        ty:               old_info.ty,
+                        mutable:          old_info.mutable,
+                        moved:            true,
+                        capability:       old_info.capability,
+                        scope_depth:      old_info.scope_depth,
+                        capability_state: old_info.capability_state,
+                        ref_var:          old_info.ref_var,
+                    };
+                    scope.insert(name, new_info);
+                    moved_done = true
+                },
+                None => {},
+            }
+        }
+        new_scopes.push(scope);
+    }
+    TypeEnv {
+        scopes:       new_scopes,
+        types:        self.types,
+        fns:          self.fns,
+        from_impls:   self.from_impls,
+        known_labels: self.known_labels,
+        relabels:     self.relabels,
+    }
+}
+
+// ── Type table ─────────────────────────────────────────────────────────────────
+
+/// Register a type declaration.
+pub total fn TypeEnv::define_type(self, name: String, info: TypeInfo) -> TypeEnv {
+    let new_types: ref Map[String, TypeInfo] = self.types;
+    new_types.insert(name, info);
+    TypeEnv {
+        scopes:       self.scopes,
+        types:        new_types,
+        fns:          self.fns,
+        from_impls:   self.from_impls,
+        known_labels: self.known_labels,
+        relabels:     self.relabels,
+    }
+}
+
+/// Look up a type declaration by name.
+pub total fn TypeEnv::lookup_type(self, name: String) -> Option[TypeInfo] {
+    self.types.get(name)
+}
+
+// ── Function table ─────────────────────────────────────────────────────────────
+
+/// Register a function signature.
+pub total fn TypeEnv::define_fn(self, name: String, info: FnInfo) -> TypeEnv {
+    let new_fns: ref Map[String, FnInfo] = self.fns;
+    new_fns.insert(name, info);
+    TypeEnv {
+        scopes:       self.scopes,
+        types:        self.types,
+        fns:          new_fns,
+        from_impls:   self.from_impls,
+        known_labels: self.known_labels,
+        relabels:     self.relabels,
+    }
+}
+
+/// Remove a function signature (used for temporary actor-method registrations).
+pub total fn TypeEnv::undefine_fn(self, name: String) -> TypeEnv {
+    let new_fns: ref Map[String, FnInfo] = self.fns;
+    new_fns.remove(name);
+    TypeEnv {
+        scopes:       self.scopes,
+        types:        self.types,
+        fns:          new_fns,
+        from_impls:   self.from_impls,
+        known_labels: self.known_labels,
+        relabels:     self.relabels,
+    }
+}
+
+/// Look up a function signature by name.
+pub total fn TypeEnv::lookup_fn(self, name: String) -> Option[FnInfo] {
+    self.fns.get(name)
+}
+
+/// Return all registered function names.
+pub total fn TypeEnv::fn_names(self) -> List[String] {
+    self.fns.keys()
+}
+
+// ── IFC label and relabel registration ────────────────────────────────────────
+
+/// Register a new IFC label.
+pub total fn TypeEnv::register_label(self, name: String) -> TypeEnv {
+    let new_labels: ref List[String] = [];
+    for lbl in self.known_labels { new_labels.push(lbl) }
+    if !new_labels.any(|l: String| l == name) {
+        new_labels.push(name);
+    }
+    TypeEnv {
+        scopes:       self.scopes,
+        types:        self.types,
+        fns:          self.fns,
+        from_impls:   self.from_impls,
+        known_labels: new_labels,
+        relabels:     self.relabels,
+    }
+}
+
+/// True if `name` is a known IFC label.
+pub total fn TypeEnv::is_known_label(self, name: String) -> Bool {
+    self.known_labels.any(|l: String| l == name)
+}
+
+/// Register an IFC relabel transition.
+pub total fn TypeEnv::register_relabel(
+    self,
+    name: String,
+    info: RelabelInfo,
+) -> TypeEnv {
+    let new_relabels: ref Map[String, RelabelInfo] = self.relabels;
+    new_relabels.insert(name, info);
+    TypeEnv {
+        scopes:       self.scopes,
+        types:        self.types,
+        fns:          self.fns,
+        from_impls:   self.from_impls,
+        known_labels: self.known_labels,
+        relabels:     new_relabels,
+    }
+}
+
+/// Look up a relabel transition by name.
+pub total fn TypeEnv::lookup_relabel(self, name: String) -> Option[RelabelInfo] {
+    self.relabels.get(name)
+}
+
+// ── From-impl registration ─────────────────────────────────────────────────────
+
+/// Register a `From[source] for target` implementation.
+pub total fn TypeEnv::register_from_impl(self, target: String, source: String) -> TypeEnv {
+    let sources: ref List[String] = match self.from_impls.get(target) {
+        Some(ss) => {
+            let copy: ref List[String] = [];
+            for s in ss { copy.push(s) }
+            copy
+        },
+        None => [],
+    };
+    if !sources.any(|s: String| s == source) {
+        sources.push(source);
+    }
+    let new_from_impls: ref Map[String, List[String]] = self.from_impls;
+    new_from_impls.insert(target, sources);
+    TypeEnv {
+        scopes:       self.scopes,
+        types:        self.types,
+        fns:          self.fns,
+        from_impls:   new_from_impls,
+        known_labels: self.known_labels,
+        relabels:     self.relabels,
+    }
+}
+
+/// True if `From[source] for target` has been registered.
+pub total fn TypeEnv::has_from_impl(self, target: String, source: String) -> Bool {
+    match self.from_impls.get(target) {
+        Some(sources) => sources.any(|s: String| s == source),
+        None          => false,
+    }
+}
+
+// ── Auxiliary types ────────────────────────────────────────────────────────────
+
+/// Result of lookup_with_scope_index.
+pub type ScopedVar = struct {
+    scope_index: Int,
+    info:        VarInfo,
+}
