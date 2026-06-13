@@ -23,7 +23,7 @@ use tir::FnDecl;
 use tir::GenericParam;
 use tir::Param;
 use tir::Program;
-use tir::Span;
+use tir::SourceLoc;
 use tir::Ty;
 use tir::TypeExpr;
 
@@ -63,7 +63,7 @@ total fn empty_subs() -> MonoSubs {
 
 /// Zero-span TypeExpr sentinel used as a "not found" placeholder.
 total fn nil_te() -> TypeExpr {
-    TypeExpr { name: "", args: [], span: Span { line: 0, col: 0 } }
+    TypeExpr { name: "", args: [], span: SourceLoc { line: 0, col: 0 } }
 }
 
 /// Look up a type parameter in a MonoSubs.
@@ -185,7 +185,7 @@ partial fn substitute_decl(fd: FnDecl, subs: MonoSubs) -> FnDecl {
 /// Convert a resolved Ty back to a simplified TypeExpr.
 /// Used when building MonoSubs from checker-inferred argument types.
 pub partial fn ty_to_type_expr(ty: Ty) -> TypeExpr {
-    let z: Span = Span { line: 0, col: 0 };
+    let z: SourceLoc = SourceLoc { line: 0, col: 0 };
     match ty {
         Ty::Int    => TypeExpr { name: "Int",    args: [], span: z },
         Ty::Float  => TypeExpr { name: "Float",  args: [], span: z },

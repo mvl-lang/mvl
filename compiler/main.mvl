@@ -33,6 +33,7 @@ use tir::Program;
 use tir::TypeExpr;
 use tir::Param;
 use tir::Effect;
+use tir::SourceLoc;
 use std.io.{path, join, read_dir, read_to_string, to_string, Path}
 use std.env.{args}
 
@@ -101,7 +102,7 @@ total fn format_imports(imports: List[String]) -> String {
 
 partial fn lex_and_parse(src: String) -> Program {
     let tokens: List[Token] = lex(src);
-    parse(tokens)
+    parse(tokens, src)
 }
 
 // ── Argument helpers ──────────────────────────────────────────────────────────
@@ -172,20 +173,20 @@ partial fn process_file(name: String, raw: Tainted[String]) -> Program ! Console
 // Tests construct AST nodes directly (no lex/parse) so they remain `total`
 // and pass `mvl check`.
 
-total fn zero_span() -> Span {
-    Span { line: 0, col: 0 }
+total fn zero_loc() -> SourceLoc {
+    SourceLoc { line: 0, col: 0 }
 }
 
 total fn simple_ty(name: String) -> TypeExpr {
-    TypeExpr { name: name, args: [], span: zero_span() }
+    TypeExpr { name: name, args: [], span: zero_loc() }
 }
 
 total fn make_param(name: String, ty_name: String) -> Param {
-    Param { capability: "", mutable: false, name: name, ty: simple_ty(ty_name), span: zero_span() }
+    Param { capability: "", mutable: false, name: name, ty: simple_ty(ty_name), span: zero_loc() }
 }
 
 total fn make_effect(name: String) -> Effect {
-    Effect { name: name, param: "", span: zero_span() }
+    Effect { name: name, param: "", span: zero_loc() }
 }
 
 total fn make_fn(visible: Bool, totality: String, is_test: Bool,
@@ -203,7 +204,7 @@ total fn make_fn(visible: Bool, totality: String, is_test: Bool,
         effects:     effects,
         constraints: [],
         body:        None,
-        span:        zero_span()
+        span:        zero_loc()
     }
 }
 
@@ -215,7 +216,7 @@ test fn format_type_expr_simple_name() -> Unit {
 
 test fn format_type_expr_generic_one_arg() -> Unit {
     let arg: TypeExpr = simple_ty("Int");
-    let ty: TypeExpr = TypeExpr { name: "List", args: [arg], span: zero_span() };
+    let ty: TypeExpr = TypeExpr { name: "List", args: [arg], span: zero_loc() };
     assert_eq(format_type_expr(ty), "List[Int]")
 }
 
