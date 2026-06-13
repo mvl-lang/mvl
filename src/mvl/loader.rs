@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Schuberg Philis
 
+use crate::mvl::backends::llvm_text::c_symbols::derive_builtin_c_symbol;
 use crate::mvl::backends::rust::{RUST_BACKED_STDLIB, RUST_RUNTIME_IMPORTS};
 use crate::mvl::packages;
 use crate::mvl::parser::ast::{Decl, Program, TypeExpr};
@@ -481,46 +482,6 @@ pub fn collect_llvm_text_builtins(
         }
     }
     result
-}
-
-/// Derive the C-ABI symbol name for a `builtin fn` in a given stdlib module.
-///
-/// For extension methods (e.g. `pub builtin fn String::from_chars`), the receiver
-/// type prefix is translated to a short module prefix (`String` → `str`,
-/// `List` → `list`, etc.) to match the runtime naming convention.
-///
-/// Derives the C-ABI symbol name for the LLVM runtime.
-fn derive_builtin_c_symbol(module: &str, receiver_type: &Option<String>, fn_name: &str) -> String {
-    // Extension method: use the type-based prefix (e.g. String::from_chars → _mvl_str_from_chars)
-    if let Some(recv) = receiver_type {
-        let prefix = match recv.as_str() {
-            "String" => "str",
-            "List" => "list",
-            "Map" => "map",
-            "Set" => "set",
-            "Option" => "option",
-            "Result" => "result",
-            other => other,
-        };
-        return format!("_mvl_{prefix}_{fn_name}");
-    }
-    // Module-level builtin
-    derive_c_abi_symbol(module, fn_name)
-}
-
-/// Derive the C-ABI symbol name for a module-level `builtin fn`.
-///
-/// Derives the C-ABI symbol name for the LLVM runtime.
-fn derive_c_abi_symbol(module: &str, fn_name: &str) -> String {
-    match (module, fn_name) {
-        ("time", "sleep") => "_mvl_time_thread_sleep".to_string(),
-        ("log", _) => format!("_mvl_{fn_name}"),
-        ("crypto", _) if fn_name.starts_with("crypto_") => format!("_mvl_{fn_name}"),
-        ("crypto", _) if fn_name.starts_with('_') => {
-            format!("_mvl_crypto_{}", &fn_name[1..])
-        }
-        _ => format!("_mvl_{module}_{fn_name}"),
-    }
 }
 
 /// Load MVL source files from `pkg.*` packages referenced by `progs`.

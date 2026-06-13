@@ -42,6 +42,7 @@
 //! assert!(ir.contains("define i64 @add"));
 //! ```
 
+pub mod c_symbols;
 mod emitter;
 pub mod lli;
 
