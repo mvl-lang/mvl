@@ -1,0 +1,35 @@
+// Corpus: tuple literal expressions (#1366)
+// Parser, checker, IR, and backends support `(e1, e2, ...)` in expression position.
+// Note: `let (a, b) = ...` destructuring is a separate feature, not exercised here.
+
+fn pair() -> (Int, String) {
+    (42, "hello")
+}
+
+fn triple() -> (Int, String, Bool) {
+    (1, "two", true)
+}
+
+fn nested() -> (Int, (String, Bool)) {
+    (7, ("inner", false))
+}
+
+fn from_locals() -> (Int, Int) {
+    let a: Int = 10;
+    let b: Int = 20;
+    (a, b)
+}
+
+fn from_expressions() -> (Int, Int) {
+    let x: Int = 5;
+    (x + 1, x * 2)
+}
+
+fn returns_pair_in_list() -> List[(Int, Int)] {
+    [(1, 2), (3, 4)]
+}
+
+fn grouped_paren_still_works() -> Int {
+    let x: Int = (1 + 2);
+    x
+}

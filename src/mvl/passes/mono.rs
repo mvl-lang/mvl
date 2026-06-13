@@ -679,7 +679,7 @@ impl CallCollector {
                     self.expr(e);
                 }
             }
-            Expr::List { elems, .. } | Expr::Set { elems, .. } => {
+            Expr::List { elems, .. } | Expr::Set { elems, .. } | Expr::Tuple { elems, .. } => {
                 for e in elems {
                     self.expr(e);
                 }

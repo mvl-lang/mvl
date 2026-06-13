@@ -416,7 +416,7 @@ impl Parser {
                 }
             },
 
-            // ── Parenthesised expression or unit `()` ────────────────────────
+            // ── Parenthesised expression, unit `()`, or tuple literal ─────────
             TokenKind::LParen => {
                 let lp_span = self.peek_span();
                 self.advance();
@@ -425,10 +425,25 @@ impl Parser {
                     let span = self.span_from(lp_span);
                     return Ok(Expr::Literal(Literal::Unit, span));
                 }
-                let inner = self.parse_expr()?;
+                let first = self.parse_expr()?;
+                if !self.eat(&TokenKind::Comma) {
+                    // single-element paren — just grouping, unwrap
+                    let rp = self.expect(&TokenKind::RParen);
+                    self.require(rp)?;
+                    return Ok(first);
+                }
+                // tuple literal: `(e1, e2, …)` — comma seen, parse remaining
+                let mut elems = vec![first];
+                while !matches!(self.peek_kind(), TokenKind::RParen | TokenKind::Eof) {
+                    elems.push(self.parse_expr()?);
+                    if !self.eat(&TokenKind::Comma) {
+                        break;
+                    }
+                }
                 let rp = self.expect(&TokenKind::RParen);
                 self.require(rp)?;
-                Ok(inner)
+                let span = self.span_from(start);
+                Ok(Expr::Tuple { elems, span })
             }
 
             // ── List literal ─────────────────────────────────────────────────

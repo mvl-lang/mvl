@@ -190,7 +190,7 @@ fn check_expr_ref_escape(expr: &Expr, ref_vars: &HashSet<&str>, errors: &mut Vec
                 check_expr_ref_escape(v, ref_vars, errors);
             }
         }
-        Expr::List { elems, .. } | Expr::Set { elems, .. } => {
+        Expr::List { elems, .. } | Expr::Set { elems, .. } | Expr::Tuple { elems, .. } => {
             for e in elems {
                 check_expr_ref_escape(e, ref_vars, errors);
             }
@@ -542,7 +542,7 @@ fn check_expr_iso(expr: &Expr, iso_vars: &mut HashSet<String>, errors: &mut Vec<
             }
         }
 
-        Expr::List { elems, .. } | Expr::Set { elems, .. } => {
+        Expr::List { elems, .. } | Expr::Set { elems, .. } | Expr::Tuple { elems, .. } => {
             for e in elems {
                 check_expr_iso(e, iso_vars, errors);
             }

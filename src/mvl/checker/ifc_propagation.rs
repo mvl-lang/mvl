@@ -408,7 +408,7 @@ pub fn infer_label_extended(
             .iter()
             .map(|(_, e)| infer_label_extended(e, env, explicit, inferred))
             .fold(None, ifc::join_opt),
-        Expr::List { elems, .. } | Expr::Set { elems, .. } => elems
+        Expr::List { elems, .. } | Expr::Set { elems, .. } | Expr::Tuple { elems, .. } => elems
             .iter()
             .map(|e| infer_label_extended(e, env, explicit, inferred))
             .fold(None, ifc::join_opt),
@@ -707,7 +707,7 @@ fn collect_violations_in_expr(
                 collect_violations_in_expr(e, caller, env, type_env, inferred, errors);
             }
         }
-        Expr::List { elems, .. } | Expr::Set { elems, .. } => {
+        Expr::List { elems, .. } | Expr::Set { elems, .. } | Expr::Tuple { elems, .. } => {
             for e in elems {
                 collect_violations_in_expr(e, caller, env, type_env, inferred, errors);
             }

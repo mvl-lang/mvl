@@ -933,7 +933,7 @@ fn check_expr_flows(
                 check_expr_flows(v, pc.clone(), env, caller_fn, effect_reach, errors);
             }
         }
-        Expr::List { elems, .. } | Expr::Set { elems, .. } => {
+        Expr::List { elems, .. } | Expr::Set { elems, .. } | Expr::Tuple { elems, .. } => {
             for e in elems {
                 check_expr_flows(e, pc.clone(), env, caller_fn, effect_reach, errors);
             }
