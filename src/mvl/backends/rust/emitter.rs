@@ -527,12 +527,30 @@ impl RustEmitter {
             self.blank();
         }
 
-        let user_fn_names: std::collections::HashSet<&str> =
-            tir.fns.iter().map(|f| f.original_name.as_str()).collect();
+        // Qualify by (receiver_type, original_name) for extension methods on user-defined
+        // types, so a free function `fail` and `AuditEvent::fail` are treated as distinct
+        // symbols and don't shadow each other during prelude dedup.
+        //
+        // Extension methods on builtin types (String, List, Map, …) are emitted as UFCS-style
+        // free Rust functions (not impl methods), so they still use a bare name key — allowing
+        // the existing dedup to prevent multiple definitions of the same Rust free function.
+        const BUILTIN_RECEIVER_TYPES: &[&str] = &[
+            "String", "Int", "Float", "Bool", "Byte", "UByte", "UInt", "List", "Map", "Set",
+            "Option", "Result",
+        ];
+        let fn_key = |f: &crate::mvl::ir::TirFn| -> String {
+            match &f.receiver_type {
+                Some(r) if !BUILTIN_RECEIVER_TYPES.contains(&r.as_str()) => {
+                    format!("{}::{}", r, f.original_name)
+                }
+                _ => f.original_name.clone(),
+            }
+        };
+        let user_fn_keys: std::collections::HashSet<String> = tir.fns.iter().map(fn_key).collect();
         let user_type_names: std::collections::HashSet<&str> =
             tir.types.iter().map(|t| t.name.as_str()).collect();
 
-        let mut seen_prelude_fns: std::collections::HashSet<&str> =
+        let mut seen_prelude_fns: std::collections::HashSet<String> =
             std::collections::HashSet::new();
         let prelude_fns: Vec<&crate::mvl::ir::TirFn> = prelude_tirs
             .iter()
@@ -540,8 +558,8 @@ impl RustEmitter {
             .filter(|f| !f.is_builtin)
             .filter(|f| !f.body.stmts.is_empty())
             .filter(|f| !f.is_test)
-            .filter(|f| !user_fn_names.contains(f.original_name.as_str()))
-            .filter(|f| seen_prelude_fns.insert(f.original_name.as_str()))
+            .filter(|f| !user_fn_keys.contains(&fn_key(f)))
+            .filter(|f| seen_prelude_fns.insert(fn_key(f)))
             .collect();
 
         let mut seen_prelude_types: std::collections::HashSet<&str> =
