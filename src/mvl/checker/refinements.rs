@@ -1198,7 +1198,7 @@ fn analyze_expr(
                 analyze_expr(e, var_refs, fn_params, type_refs, fn_decls, errors, counts);
             }
         }
-        Expr::List { elems, .. } | Expr::Set { elems, .. } => {
+        Expr::List { elems, .. } | Expr::Set { elems, .. } | Expr::Tuple { elems, .. } => {
             for e in elems {
                 analyze_expr(e, var_refs, fn_params, type_refs, fn_decls, errors, counts);
             }

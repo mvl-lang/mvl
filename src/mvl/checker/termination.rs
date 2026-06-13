@@ -246,7 +246,7 @@ fn check_expr(expr: &Expr, ctx: &TermCtx<'_>, errors: &mut Vec<CheckError>) {
                 check_expr(v, ctx, errors);
             }
         }
-        Expr::List { elems, .. } | Expr::Set { elems, .. } => {
+        Expr::List { elems, .. } | Expr::Set { elems, .. } | Expr::Tuple { elems, .. } => {
             for e in elems {
                 check_expr(e, ctx, errors);
             }

@@ -113,6 +113,10 @@ pub enum TirExprKind {
     Set {
         elems: Vec<TirExpr>,
     },
+    /// `(e1, e2, …)` tuple literal.
+    Tuple {
+        elems: Vec<TirExpr>,
+    },
     /// `consume expr` — move out of an `iso` binding.
     Consume(Box<TirExpr>),
     /// `relabel name(expr, "tag")` — IFC relabel transition.

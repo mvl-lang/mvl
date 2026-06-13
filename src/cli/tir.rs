@@ -514,6 +514,10 @@ fn jexpr_kind(k: &TirExprKind) -> String {
             ("tag", q("SetLit")),
             ("elems", arr(&elems.iter().map(jexpr).collect::<Vec<_>>())),
         ]),
+        TirExprKind::Tuple { elems } => obj(&[
+            ("tag", q("TupleLit")),
+            ("elems", arr(&elems.iter().map(jexpr).collect::<Vec<_>>())),
+        ]),
         TirExprKind::Consume(expr) => obj(&[("tag", q("Consume")), ("expr", jexpr(expr))]),
         TirExprKind::Relabel {
             name,

@@ -301,6 +301,8 @@ impl TextEmitter {
 
             Expr::Set { elems, .. } => self.emit_list_literal(elems),
 
+            Expr::Tuple { elems, .. } => self.emit_tuple_literal(elems),
+
             Expr::Map { pairs, .. } => self.emit_map_literal(pairs),
 
             Expr::Consume { expr, .. } | Expr::Relabel { expr, .. } | Expr::As { expr, .. } => {

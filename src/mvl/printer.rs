@@ -915,6 +915,14 @@ impl<'src> Printer<'src> {
                     .join(", ");
                 format!("{{{}}}", s)
             }
+            Expr::Tuple { elems, .. } => {
+                let s = elems
+                    .iter()
+                    .map(|e| self.fmt_expr(e, indent))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("({})", s)
+            }
             Expr::Consume { expr, .. } => {
                 format!("consume({})", self.fmt_expr(expr, indent))
             }

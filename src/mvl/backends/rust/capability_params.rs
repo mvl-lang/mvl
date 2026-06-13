@@ -319,10 +319,12 @@ fn expr_has_disqualifying_use_tir(param: &str, expr: &crate::mvl::ir::TirExpr) -
             expr_has_disqualifying_use_tir(param, &a.expr)
                 || block_has_disqualifying_use_tir(param, &a.body)
         }),
-        TirExprKind::List { elems } | TirExprKind::Set { elems } => elems.iter().any(|e| {
-            matches!(&e.kind, TirExprKind::Var(n) if n == param)
-                || expr_has_disqualifying_use_tir(param, e)
-        }),
+        TirExprKind::List { elems } | TirExprKind::Set { elems } | TirExprKind::Tuple { elems } => {
+            elems.iter().any(|e| {
+                matches!(&e.kind, TirExprKind::Var(n) if n == param)
+                    || expr_has_disqualifying_use_tir(param, e)
+            })
+        }
         TirExprKind::Map { pairs } => pairs.iter().any(|(k, v)| {
             matches!(&k.kind, TirExprKind::Var(n) if n == param)
                 || expr_has_disqualifying_use_tir(param, k)
@@ -356,7 +358,7 @@ fn expr_mentions_param_tir(param: &str, expr: &crate::mvl::ir::TirExpr) -> bool 
         TirExprKind::Construct { fields, .. } | TirExprKind::Spawn { fields, .. } => fields
             .iter()
             .any(|(_, v)| expr_mentions_param_tir(param, v)),
-        TirExprKind::List { elems } | TirExprKind::Set { elems } => {
+        TirExprKind::List { elems } | TirExprKind::Set { elems } | TirExprKind::Tuple { elems } => {
             elems.iter().any(|e| expr_mentions_param_tir(param, e))
         }
         TirExprKind::Map { pairs } => pairs

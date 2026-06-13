@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+## [0.204.0] - 2026-06-13
+
+### Added
+
+- **Tuple expression literals** (#1366) — Parser, type checker, and backends now support tuple construction syntax `(e1, e2, ...)` as first-class expressions. Type annotations `(Int, String)` and patterns `(a, b)` already worked; this completes the pipeline. Enables multi-return functions without per-shape struct wrappers, supporting self-hosted checker implementation.
+
+### Fixed
+
+- **Data race: iso aliasing via tuple packing** — Detection now catches `let t = (iso_x, other)` and `t = (iso_x, other)` which create hidden aliases, violating the single-reference isolation invariant.
+- **Data race: ref escape via tuple in spawn field** — Detection now catches `Spawn { field: (ref_x, other) }` which allows mutable refs to escape into actor initial state.
+- **IFC: tuple match scrutinee** — Tuple-valued match scrutinees now properly raise the program counter label for implicit flow analysis, preventing secret information leakage through observable side effects.
+- **Linear binding: shadow-drop detection** — Now correctly identifies references within tuple expressions when checking linear (iso) binding shadows.
+- **LLVM backend: tuple type** — Fixed `type_of_expr` to return correct type for tuple expressions instead of falling through to `i64`.
+- **Parser: single-element tuple grammar** — Trailing comma `(e,)` is now normalized to grouping syntax to enforce the two-or-more-elements invariant for `Expr::Tuple`.
+
 ## [0.203.0] - 2026-06-13
 
 ### Added
