@@ -1,0 +1,122 @@
+//! std.text — Text parsing primitives: zero-alloc spans and index-based extraction.
+//!
+//! Span is a half-open [start, end) character range into a source string.
+//! Storing indices instead of substrings avoids per-token heap allocations when
+//! lexing or parsing large inputs — the pattern used by rust-analyzer, tree-sitter,
+//! and Roslyn. Text is extracted on demand via `Span::text(source)`.
+//!
+//! Pure MVL: no builtins required. All methods compose String::substring and String::find.
+//!
+//! Import: use std.text.{Span}
+//!
+//! Effects: none (all functions are pure).
+//!
+//! See: #1371 (Span stdlib type), #1372 (lexer zero-alloc refactor)
+
+// ── Span ─────────────────────────────────────────────────────────────────────
+
+/// A half-open [start, end) character range into a source string.
+///
+/// Invariant: start <= end. Use `Span::new` to enforce it, or construct
+/// directly when indices are already known to be valid.
+/// Character indices (not byte offsets) — consistent with String::substring.
+pub type Span = struct {
+    start: Int,
+    end: Int,
+}
+
+/// Construct a Span, clamping so that start >= 0 and end >= start.
+pub fn Span::new(start: Int, end: Int) -> Span {
+    let s: Int = if start < 0 { 0 } else { start };
+    let e: Int = if end < s { s } else { end };
+    Span { start: s, end: e }
+}
+
+/// Extract the text this span refers to in `source`.
+///
+/// Delegates to String::substring which clamps indices, so out-of-range
+/// spans return whatever source characters are available.
+pub fn Span::text(self, source: String) -> String {
+    source.substring(self.start, self.end)
+}
+
+/// Length of the span in characters.
+pub fn Span::len(self) -> Int {
+    if self.end > self.start { self.end - self.start } else { 0 }
+}
+
+/// True if the span covers no characters.
+pub fn Span::is_empty(self) -> Bool {
+    self.start >= self.end
+}
+
+/// Smallest span covering both `self` and `other` (convex hull).
+pub fn Span::union(self, other: Span) -> Span {
+    let s: Int = if self.start < other.start { self.start } else { other.start };
+    let e: Int = if self.end > other.end { self.end } else { other.end };
+    Span { start: s, end: e }
+}
+
+/// Intersection of two spans, or an empty span at `self.start` if disjoint.
+pub fn Span::intersect(self, other: Span) -> Span {
+    let s: Int = if self.start > other.start { self.start } else { other.start };
+    let e: Int = if self.end < other.end { self.end } else { other.end };
+    if s >= e { Span { start: self.start, end: self.start } }
+    else { Span { start: s, end: e } }
+}
+
+// ── String extensions ─────────────────────────────────────────────────────────
+
+/// Split `self` by `sep`, returning spans into `self` instead of owned substrings.
+///
+/// Zero long-lived string allocations: each span is two integers.
+/// The substring call per iteration is a temporary needed because String::find
+/// has no start-offset variant; see #1372 for a future `find_from` builtin.
+///
+/// Behaviour matches String::split for non-empty `sep`:
+///   "a,bb,ccc".split_spans(",") → [Span{0,1}, Span{2,4}, Span{5,8}]
+///   span.text("a,bb,ccc")       → "a", "bb", "ccc"
+///
+/// Empty `sep`: advances one character per step (avoids infinite loop).
+pub fn String::split_spans(self, sep: String) -> List[Span] {
+    let sep_len: Int = sep.len();
+    let src_len: Int = self.len();
+    let result: ref List[Span] = [];
+    let pos: ref Int = 0;
+    while pos <= src_len decreases src_len + 1 - pos {
+        match self.substring(pos, src_len).find(sep) {
+            None => {
+                result.push(Span { start: pos, end: src_len });
+                pos = src_len + 1
+            },
+            Some(rel) => {
+                let abs_end: Int = pos + rel;
+                result.push(Span { start: pos, end: abs_end });
+                pos = if sep_len > 0 { abs_end + sep_len } else { pos + 1 }
+            }
+        }
+    }
+    result
+}
+
+/// Find all non-overlapping occurrences of `needle` in `self`, returning their spans.
+///
+/// Zero long-lived string allocations.
+/// Empty `needle`: advances one character per step.
+pub fn String::find_all_spans(self, needle: String) -> List[Span] {
+    let needle_len: Int = needle.len();
+    let src_len: Int = self.len();
+    let result: ref List[Span] = [];
+    let pos: ref Int = 0;
+    while pos <= src_len decreases src_len + 1 - pos {
+        match self.substring(pos, src_len).find(needle) {
+            None => { pos = src_len + 1 },
+            Some(rel) => {
+                let abs: Int = pos + rel;
+                result.push(Span { start: abs, end: abs + needle_len });
+                pos = if needle_len > 0 { abs + needle_len } else { pos + 1 }
+            }
+        }
+    }
+    result
+}

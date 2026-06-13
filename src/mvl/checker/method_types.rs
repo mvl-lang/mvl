@@ -207,6 +207,10 @@ impl TypeChecker {
                 Ty::String
             }
             "substring" => Ty::Unknown,
+            // std/text.mvl — List[Span] returning String extensions (#1371)
+            "split_spans" | "find_all_spans" => {
+                Ty::List(Box::new(Ty::Named("Span".into(), vec![])))
+            }
             _ => Ty::Unknown,
         }
     }

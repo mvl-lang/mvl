@@ -575,7 +575,10 @@ impl RustEmitter {
                     }
 
                     // intersection(b) / union(b) / difference(b) — Set operations.
-                    "intersection" if args.len() == 1 => {
+                    // Type-guarded: only fire for Set receivers so that user-defined types
+                    // with methods named `union`/`intersection` fall through to generic emit
+                    // (e.g. Span::union, Span::intersect — #1371).
+                    "intersection" if args.len() == 1 && matches!(receiver.ty, Ty::Set(_)) => {
                         let b = &args[0];
                         self.push("{ let __b = ");
                         self.emit_expr(b);
@@ -585,7 +588,7 @@ impl RustEmitter {
                             ".intersection(&__b).cloned().collect::<std::collections::HashSet<_>>() }",
                         );
                     }
-                    "union" if args.len() == 1 => {
+                    "union" if args.len() == 1 && matches!(receiver.ty, Ty::Set(_)) => {
                         let b = &args[0];
                         self.push("{ let __b = ");
                         self.emit_expr(b);
