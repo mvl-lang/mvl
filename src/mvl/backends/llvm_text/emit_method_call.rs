@@ -3,21 +3,68 @@
 
 //! Method call dispatch for the `llvm_text` backend.
 
-use crate::mvl::backends::llvm_symbol_by_name;
+use crate::mvl::backends::{llvm_dispatch_by_name, llvm_symbol_by_name, Dispatch};
 use crate::mvl::parser::ast::{Expr, TypeExpr};
 
 use super::TextEmitter;
 
 /// Look up the LLVM C-ABI symbol for a builtin method that has its
-/// `llvm_symbol` hint populated in the shared `BUILTINS` registry.
+/// `Dispatch::CCall` populated in the shared `BUILTINS` registry.
 ///
 /// Panics if the symbol is missing — callers in this file only invoke this
-/// for the 13 methods explicitly tagged in `backends.rs`, so a missing entry
+/// for the methods explicitly tagged in `backends.rs`, so a missing entry
 /// indicates the registry and emitter have drifted.
+///
+/// Used by Shape C/D/E arms (char_at, byte_at, partition, group_by) where
+/// the call site still owns the call emission and just needs the symbol.
+/// Shape A arms use [`emit_c_call_simple`] instead.
 fn builtin_sym(name: &'static str) -> &'static str {
     llvm_symbol_by_name(name).unwrap_or_else(|| {
-        panic!("BUILTINS missing llvm_symbol for '{name}' — drift between backends.rs and emit_method_call.rs");
+        panic!("BUILTINS missing Dispatch::CCall for '{name}' — drift between backends.rs and emit_method_call.rs");
     })
+}
+
+impl TextEmitter {
+    /// Emit a Shape A builtin call: simple C-ABI runtime function with a
+    /// single return register.  Reads `sym`, `signature`, and `ret_ty` from
+    /// `BUILTINS[name].dispatch` (must be [`Dispatch::CCall`]).
+    ///
+    /// Emits:
+    /// ```text
+    /// declare {signature}             // via ensure_extern (deduped)
+    /// {reg} = call {ret_ty} @{sym}(ptr {recv_val}{, extra_args})
+    /// ```
+    /// and inserts `{reg} -> ret_ty` into `reg_types`.  Returns the result
+    /// register name; call sites typically wrap with `Ok(Some(reg))`.
+    ///
+    /// Panics on a registry miss — same drift-detection contract as
+    /// [`builtin_sym`].
+    pub(super) fn emit_c_call_simple(
+        &mut self,
+        method: &'static str,
+        recv_val: &str,
+        extra_args: &[(&'static str, &str)],
+    ) -> String {
+        let (sym, signature, ret_ty) = match llvm_dispatch_by_name(method) {
+            Some(Dispatch::CCall {
+                sym,
+                signature,
+                ret_ty,
+            }) => (*sym, *signature, *ret_ty),
+            _ => panic!(
+                "BUILTINS missing Dispatch::CCall for '{method}' — drift between backends.rs and emit_method_call.rs"
+            ),
+        };
+        self.ensure_extern(&format!("declare {signature}"));
+        let mut arg_list = format!("ptr {recv_val}");
+        for (ty, v) in extra_args {
+            arg_list.push_str(&format!(", {ty} {v}"));
+        }
+        let reg = self.next_reg();
+        self.push_instr(&format!("{reg} = call {ret_ty} @{sym}({arg_list})"));
+        self.reg_types.insert(reg.clone(), ret_ty.to_string());
+        reg
+    }
 }
 
 impl TextEmitter {
@@ -635,12 +682,7 @@ impl TextEmitter {
 
             // List::sort() → List[T] — returns a new sorted copy
             ("sort", "ptr") if args.is_empty() => {
-                let sym = builtin_sym("sort");
-                self.ensure_extern(&format!("declare ptr @{sym}(ptr)"));
-                let reg = self.next_reg();
-                self.push_instr(&format!("{reg} = call ptr @{sym}(ptr {val})"));
-                self.reg_types.insert(reg.clone(), "ptr".into());
-                Ok(Some(reg))
+                Ok(Some(self.emit_c_call_simple("sort", &val, &[])))
             }
 
             // List::windows(n) → List[List[T]]
@@ -649,12 +691,11 @@ impl TextEmitter {
                     Some(v) => v,
                     None => return Ok(None),
                 };
-                let sym = builtin_sym("windows");
-                self.ensure_extern(&format!("declare ptr @{sym}(ptr, i64)"));
-                let reg = self.next_reg();
-                self.push_instr(&format!("{reg} = call ptr @{sym}(ptr {val}, i64 {n})"));
-                self.reg_types.insert(reg.clone(), "ptr".into());
-                Ok(Some(reg))
+                Ok(Some(self.emit_c_call_simple(
+                    "windows",
+                    &val,
+                    &[("i64", &n)],
+                )))
             }
 
             // List::chunks(n) → List[List[T]]
@@ -663,12 +704,11 @@ impl TextEmitter {
                     Some(v) => v,
                     None => return Ok(None),
                 };
-                let sym = builtin_sym("chunks");
-                self.ensure_extern(&format!("declare ptr @{sym}(ptr, i64)"));
-                let reg = self.next_reg();
-                self.push_instr(&format!("{reg} = call ptr @{sym}(ptr {val}, i64 {n})"));
-                self.reg_types.insert(reg.clone(), "ptr".into());
-                Ok(Some(reg))
+                Ok(Some(self.emit_c_call_simple(
+                    "chunks",
+                    &val,
+                    &[("i64", &n)],
+                )))
             }
 
             // List::partition(f) → Partitioned[T]   (struct, not tuple — #1380)
@@ -813,12 +853,7 @@ impl TextEmitter {
                     Some("List") | Some("Array") | Some("Set") | Some("Map")
                 ) =>
             {
-                let sym = builtin_sym("chars");
-                self.ensure_extern(&format!("declare ptr @{sym}(ptr)"));
-                let reg = self.next_reg();
-                self.push_instr(&format!("{reg} = call ptr @{sym}(ptr {val})"));
-                self.reg_types.insert(reg.clone(), "ptr".into());
-                Ok(Some(reg))
+                Ok(Some(self.emit_c_call_simple("chars", &val, &[])))
             }
 
             // byte_at(i) → Option[Byte]
@@ -858,12 +893,11 @@ impl TextEmitter {
                     Some(v) => v,
                     None => return Ok(None),
                 };
-                let sym = builtin_sym("find");
-                self.ensure_extern(&format!("declare i64 @{sym}(ptr, ptr)"));
-                let reg = self.next_reg();
-                self.push_instr(&format!("{reg} = call i64 @{sym}(ptr {val}, ptr {sub})"));
-                self.reg_types.insert(reg.clone(), "i64".into());
-                Ok(Some(reg))
+                Ok(Some(self.emit_c_call_simple(
+                    "find",
+                    &val,
+                    &[("ptr", &sub)],
+                )))
             }
 
             // split(delimiter) → List[String]
@@ -880,12 +914,11 @@ impl TextEmitter {
                     },
                     None => return Ok(None),
                 };
-                let sym = builtin_sym("split");
-                self.ensure_extern(&format!("declare ptr @{sym}(ptr, ptr)"));
-                let reg = self.next_reg();
-                self.push_instr(&format!("{reg} = call ptr @{sym}(ptr {val}, ptr {delim})"));
-                self.reg_types.insert(reg.clone(), "ptr".into());
-                Ok(Some(reg))
+                Ok(Some(self.emit_c_call_simple(
+                    "split",
+                    &val,
+                    &[("ptr", &delim)],
+                )))
             }
 
             // substring(start, end) → String
@@ -898,14 +931,11 @@ impl TextEmitter {
                     Some(v) => v,
                     None => return Ok(None),
                 };
-                let sym = builtin_sym("substring");
-                self.ensure_extern(&format!("declare ptr @{sym}(ptr, i64, i64)"));
-                let reg = self.next_reg();
-                self.push_instr(&format!(
-                    "{reg} = call ptr @{sym}(ptr {val}, i64 {start}, i64 {end})"
-                ));
-                self.reg_types.insert(reg.clone(), "ptr".into());
-                Ok(Some(reg))
+                Ok(Some(self.emit_c_call_simple(
+                    "substring",
+                    &val,
+                    &[("i64", &start), ("i64", &end)],
+                )))
             }
 
             // contains(sub) → Bool
@@ -1004,12 +1034,7 @@ impl TextEmitter {
                     Some("List") | Some("Array") | Some("Set") | Some("Map")
                 ) =>
             {
-                let sym = builtin_sym("to_lower");
-                self.ensure_extern(&format!("declare ptr @{sym}(ptr)"));
-                let reg = self.next_reg();
-                self.push_instr(&format!("{reg} = call ptr @{sym}(ptr {val})"));
-                self.reg_types.insert(reg.clone(), "ptr".into());
-                Ok(Some(reg))
+                Ok(Some(self.emit_c_call_simple("to_lower", &val, &[])))
             }
 
             // to_upper() → String
@@ -1019,12 +1044,7 @@ impl TextEmitter {
                     Some("List") | Some("Array") | Some("Set") | Some("Map")
                 ) =>
             {
-                let sym = builtin_sym("to_upper");
-                self.ensure_extern(&format!("declare ptr @{sym}(ptr)"));
-                let reg = self.next_reg();
-                self.push_instr(&format!("{reg} = call ptr @{sym}(ptr {val})"));
-                self.reg_types.insert(reg.clone(), "ptr".into());
-                Ok(Some(reg))
+                Ok(Some(self.emit_c_call_simple("to_upper", &val, &[])))
             }
 
             // replace(old, new) → String
