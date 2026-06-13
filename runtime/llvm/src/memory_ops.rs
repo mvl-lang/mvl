@@ -1195,6 +1195,75 @@ pub unsafe extern "C" fn _mvl_list_all(list: *mut MvlArray, closure: *const MvlC
     true
 }
 
+/// `_mvl_list_take_while(list, closure)` — return a new list of leading elements
+/// that satisfy `closure`; stop at the first element that does not.
+///
+/// # Safety
+/// `list` must be a valid `MvlArray*`.  `closure` must point to a valid
+/// `MvlClosure` whose `fn_ptr` has signature `fn(env: ptr, elem: ptr) -> bool`.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_list_take_while(
+    list: *mut MvlArray,
+    closure: *const MvlClosure,
+) -> *mut MvlArray {
+    if list.is_null() {
+        return _mvl_array_new(8, 1);
+    }
+    if closure.is_null() || (*closure).fn_ptr.is_null() {
+        std::process::abort();
+    }
+    let len = (*list).len as usize;
+    let es = (*list).elem_size as usize;
+    let out = _mvl_array_new(es, len.max(1));
+    let pred: unsafe extern "C" fn(*const u8, *const u8) -> bool =
+        std::mem::transmute((*closure).fn_ptr);
+    let env = (*closure).env_ptr as *const u8;
+    for i in 0..len {
+        let elem_ptr = (*list).ptr.add(i * es);
+        if !pred(env, elem_ptr) {
+            break;
+        }
+        _mvl_array_push(out, elem_ptr);
+    }
+    out
+}
+
+/// `_mvl_list_skip_while(list, closure)` — return a new list with the leading
+/// elements that satisfy `closure` removed; keep everything from the first
+/// element that does not satisfy it onwards.
+///
+/// # Safety
+/// `list` must be a valid `MvlArray*`.  `closure` must point to a valid
+/// `MvlClosure` whose `fn_ptr` has signature `fn(env: ptr, elem: ptr) -> bool`.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_list_skip_while(
+    list: *mut MvlArray,
+    closure: *const MvlClosure,
+) -> *mut MvlArray {
+    if list.is_null() {
+        return _mvl_array_new(8, 1);
+    }
+    if closure.is_null() || (*closure).fn_ptr.is_null() {
+        std::process::abort();
+    }
+    let len = (*list).len as usize;
+    let es = (*list).elem_size as usize;
+    let out = _mvl_array_new(es, len.max(1));
+    let pred: unsafe extern "C" fn(*const u8, *const u8) -> bool =
+        std::mem::transmute((*closure).fn_ptr);
+    let env = (*closure).env_ptr as *const u8;
+    let mut skipping = true;
+    for i in 0..len {
+        let elem_ptr = (*list).ptr.add(i * es);
+        if skipping && pred(env, elem_ptr) {
+            continue;
+        }
+        skipping = false;
+        _mvl_array_push(out, elem_ptr);
+    }
+    out
+}
+
 // ── Category-D builtins: sort / partition / group_by / windows / chunks ────────
 
 /// `_mvl_list_sort(list)` — return a new list with elements sorted ascending.

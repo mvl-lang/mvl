@@ -509,8 +509,18 @@ impl TextEmitter {
                     },
                     None => return Ok(None),
                 };
+                // List::concat → _mvl_list_concat; String::concat → _mvl_string_concat.
+                // Both are `builtin fn` — receiver kind determines which C symbol to use.
+                let dispatch_key = if matches!(
+                    self.mvl_receiver_kind(receiver),
+                    Some("List") | Some("Array")
+                ) {
+                    "list_concat"
+                } else {
+                    "concat"
+                };
                 Ok(Some(self.emit_c_call_simple(
-                    "concat",
+                    dispatch_key,
                     &val,
                     &[("ptr", &other)],
                 )))
@@ -665,6 +675,9 @@ impl TextEmitter {
                 Ok(Some(reg))
             }
             // Set algebra — intersection / difference / union (#1399 phase 5)
+            // All three share the same (ptr, ptr) → ptr C-ABI shape against the
+            // i64-element array runtime; emit_c_call_simple dispatches to the
+            // correct symbol per method name via LLVM_DISPATCH.
             ("intersection" | "difference" | "union", "ptr")
                 if args.len() == 1 && matches!(self.mvl_receiver_kind(receiver), Some("Set")) =>
             {
@@ -733,8 +746,7 @@ impl TextEmitter {
             // ── HOF: filter / map / take_while / skip_while / any / all ──────
             // Closure ptr is just another arg — LLVM_DISPATCH entries each carry
             // the fixed symbol; emit_c_call_simple handles them identically to
-            // non-HOF calls.  List::find keeps a separate hand-emitted arm below
-            // because "find" is already taken in the table by String::find.
+            // non-HOF calls.
             ("filter" | "map" | "take_while" | "skip_while", "ptr")
                 if args.len() == 1 && self.is_closure_arg(&args[0]) =>
             {
@@ -748,7 +760,7 @@ impl TextEmitter {
                     &[("ptr", &closure)],
                 )))
             }
-            ("any" | "all", "ptr") if args.len() == 1 => {
+            ("any" | "all", "ptr") if args.len() == 1 && self.is_closure_arg(&args[0]) => {
                 let closure = match self.emit_as_hof_closure(&args[0], &[0])? {
                     Some(p) => p,
                     None => return Ok(None),
@@ -759,21 +771,7 @@ impl TextEmitter {
                     &[("ptr", &closure)],
                 )))
             }
-            // List::find(f) → Option[T] — hand-emitted because "find" in
-            // LLVM_DISPATCH is taken by String::find (_mvl_str_find).
-            ("find", "ptr") if args.len() == 1 && self.is_closure_arg(&args[0]) => {
-                let closure = match self.emit_as_hof_closure(&args[0], &[0])? {
-                    Some(p) => p,
-                    None => return Ok(None),
-                };
-                self.ensure_extern("declare ptr @_mvl_list_find(ptr, ptr)");
-                let reg = self.next_reg();
-                self.push_instr(&format!(
-                    "{reg} = call ptr @_mvl_list_find(ptr {val}, ptr {closure})"
-                ));
-                self.reg_types.insert(reg.clone(), "ptr".into());
-                Ok(Some(reg))
-            }
+
             ("fold", "ptr") if args.len() == 2 => {
                 let init_ty = self.type_of_expr(&args[0]);
                 let init_val = match self.emit_expr(&args[0])? {

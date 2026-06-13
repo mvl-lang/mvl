@@ -260,6 +260,17 @@ pub const LLVM_DISPATCH: &[(&str, Dispatch)] = &[
             ret_ty: "ptr",
         },
     ),
+    // "list_concat" is a synthetic dispatch key (MVL method is also named "concat"
+    // but the receiver is a List/Array — the emit arm guards on receiver kind and
+    // routes to this entry to avoid calling _mvl_string_concat on list data).
+    (
+        "list_concat",
+        Dispatch::CCall {
+            sym: "_mvl_list_concat",
+            signature: "ptr @_mvl_list_concat(ptr, ptr)",
+            ret_ty: "ptr",
+        },
+    ),
     // ── Phase 5: Map arms ────────────────────────────────────────────────
     (
         "keys",
