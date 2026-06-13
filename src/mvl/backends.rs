@@ -224,30 +224,43 @@ pub fn is_stdlib_fn(name: &str) -> bool {
 /// flow into functions that take the plain inner type — `From<Label<T>> for T` is
 /// implemented in `mvl_runtime::ifc`.
 ///
+/// Each entry is `(method_name, receiver_type)`.  The receiver type matches the
+/// dispatch keys in `checker/method_types.rs` ("String", "List") and is used by
+/// `stdlib_ufcs_methods_have_return_types` to enforce alignment between this
+/// table and the return-type lookup.
+///
 /// # 4-way sync (#992)
 ///
-/// This list is one of **four** places that must stay in sync when adding a new builtin
-/// method.  See `checker/method_types.rs` for the authoritative list and full explanation.
-/// The planned fix (method desugaring) is tracked in issue #992.
-pub(crate) const STDLIB_UFCS_METHODS: &[&str] = &[
+/// This list is one of **four** places that must stay in sync when adding a new
+/// builtin method.  See `checker/method_types.rs` for the full explanation.
+/// The planned fix (method desugaring) is tracked in issue #992.  The
+/// `stdlib_ufcs_methods_have_return_types` test in `checker::method_types`
+/// closes one direction of the divergence gap by verifying every entry here
+/// has a non-`Unknown` return-type arm.
+pub(crate) const STDLIB_UFCS_METHODS: &[(&str, &str)] = &[
     // std/strings.mvl (pure MVL, have bodies)
-    "trim",
+    ("trim", "String"),
     // to_upper/to_lower: now `builtin fn`, dispatched via BUILTINS rust_emit hints
-    "starts_with",
-    "ends_with",
-    "replace",
+    ("starts_with", "String"),
+    ("ends_with", "String"),
+    ("replace", "String"),
     // Note: `contains` and `is_empty` have hardcoded type-aware handlers above.
     // std/lists.mvl (pure MVL, have bodies)
-    "take",
-    "skip",
-    "first",
-    "last",
-    "flatten",
-    "reverse",
+    ("take", "List"),
+    ("skip", "List"),
+    ("first", "List"),
+    ("last", "List"),
+    ("flatten", "List"),
+    ("reverse", "List"),
     // std/text.mvl — String extension methods returning List[Span] (#1371)
-    "split_spans",
-    "find_all_spans",
+    ("split_spans", "String"),
+    ("find_all_spans", "String"),
 ];
+
+/// True if `name` is a UFCS-dispatched stdlib method on any receiver type.
+pub fn is_stdlib_ufcs_method(name: &str) -> bool {
+    STDLIB_UFCS_METHODS.iter().any(|(m, _)| *m == name)
+}
 
 /// String methods that return a `String` with the same IFC label as their receiver.
 /// When the receiver is `Label<String>`, the call result must be re-wrapped in `Label::new(…)`
