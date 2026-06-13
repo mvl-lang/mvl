@@ -80,6 +80,30 @@ pub enum Dispatch {
         /// (e.g. `"ptr"` for `Option[String]`, `"i64"` for `Option[Byte]`).
         payload_ty: &'static str,
     },
+    /// Shape D: C call returns a pointer to an N-slot array; emitter loads
+    /// each slot and assembles a named LLVM struct.  Currently used only
+    /// for `List::partition`, which returns ptr to a 2-slot array of
+    /// `MvlArray*` and is wrapped as `%Partitioned { ptr, ptr }`.
+    ///
+    /// Emits:
+    /// ```text
+    /// declare {signature}                                  // returns ptr
+    /// {raw} = call ptr @{sym}({arg_list})
+    /// for i in 0..slot_tys.len():
+    ///   {ptr_i} = getelementptr {slot_tys[i]}, ptr {raw}, i64 i
+    ///   {val_i} = load {slot_tys[i]}, ptr {ptr_i}
+    /// {tmp_0} = insertvalue {struct_name} undef, {slot_tys[0]} {val_0}, 0
+    /// {tmp_i} = insertvalue {struct_name} {tmp_(i-1)}, {slot_tys[i]} {val_i}, i
+    /// ```
+    /// The final `{tmp_(N-1)}` is the result register.
+    CCallStructFromSlots {
+        sym: &'static str,
+        signature: &'static str,
+        /// Named LLVM struct type to assemble (e.g. `"%Partitioned"`).
+        struct_name: &'static str,
+        /// LLVM type of each slot in the runtime-returned array, in order.
+        slot_tys: &'static [&'static str],
+    },
 }
 
 impl Dispatch {
@@ -89,6 +113,7 @@ impl Dispatch {
             Dispatch::CCall { sym, .. } => sym,
             Dispatch::CCallBoolFromI64 { sym, .. } => sym,
             Dispatch::CCallOptionOutPtr { sym, .. } => sym,
+            Dispatch::CCallStructFromSlots { sym, .. } => sym,
         }
     }
 }
@@ -177,10 +202,11 @@ pub const LLVM_DISPATCH: &[(&str, Dispatch)] = &[
     ),
     (
         "partition",
-        Dispatch::CCall {
+        Dispatch::CCallStructFromSlots {
             sym: "_mvl_list_partition",
             signature: "ptr @_mvl_list_partition(ptr, ptr)",
-            ret_ty: "ptr",
+            struct_name: "%Partitioned",
+            slot_tys: &["ptr", "ptr"],
         },
     ),
     (

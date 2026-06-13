@@ -184,16 +184,6 @@ pub fn rust_emit_by_name(name: &str) -> Option<&'static str> {
         .and_then(|d| d.rust_emit)
 }
 
-/// Look up the LLVM C-ABI symbol for a builtin method by name only.
-///
-/// Thin re-export of
-/// [`crate::mvl::backends::llvm_text::dispatch::sym`] so callers outside the
-/// LLVM backend (the legacy `builtin_sym` shim in `emit_method_call.rs`) can
-/// keep the import path they had before the dispatch table moved.
-pub fn llvm_symbol_by_name(name: &str) -> Option<&'static str> {
-    crate::mvl::backends::llvm_text::dispatch::sym(name)
-}
-
 /// Returns `true` if `name` is a known stdlib method on any type.
 ///
 /// Called by backend `_` dispatch arms (debug builds only) to detect missing

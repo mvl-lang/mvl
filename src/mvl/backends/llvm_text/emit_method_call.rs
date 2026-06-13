@@ -8,22 +8,6 @@ use crate::mvl::parser::ast::{Expr, TypeExpr};
 
 use super::TextEmitter;
 
-/// Look up the LLVM C-ABI symbol for a builtin method that has a row in
-/// `LLVM_DISPATCH`.
-///
-/// Panics if the symbol is missing — callers in this file only invoke this
-/// for the methods explicitly tagged in `dispatch::LLVM_DISPATCH`, so a
-/// missing entry indicates the dispatch table and emitter have drifted.
-///
-/// Used by Shape C/D/E arms (char_at, byte_at, partition, group_by) where
-/// the call site still owns the call emission and just needs the symbol.
-/// Shape A arms use [`TextEmitter::emit_c_call_simple`] instead.
-fn builtin_sym(name: &'static str) -> &'static str {
-    dispatch::sym(name).unwrap_or_else(|| {
-        panic!("LLVM_DISPATCH missing entry for '{name}' — drift between dispatch.rs and emit_method_call.rs");
-    })
-}
-
 impl TextEmitter {
     /// Emit a Shape A builtin call: simple C-ABI runtime function with a
     /// single return register.  Reads `sym`, `signature`, and `ret_ty` from
@@ -122,6 +106,72 @@ impl TextEmitter {
     /// The out-pointer is alloca'd by the helper; `extra_args` should NOT
     /// include it.  The helper appends `, ptr {out}` to the call's argument
     /// list automatically.
+    /// Emit a Shape D builtin call: C call returns a pointer to an N-slot
+    /// array of pointers; emitter loads each slot and assembles a named
+    /// LLVM struct via `insertvalue`.
+    ///
+    /// Reads sym + signature + struct_name + slot_tys from the
+    /// `LLVM_DISPATCH` row for `method` (must be
+    /// [`Dispatch::CCallStructFromSlots`]).
+    ///
+    /// Returns the register holding the assembled struct value.
+    pub(super) fn emit_c_call_struct_from_slots(
+        &mut self,
+        method: &'static str,
+        recv_val: &str,
+        extra_args: &[(&'static str, &str)],
+    ) -> String {
+        let Dispatch::CCallStructFromSlots {
+            sym,
+            signature,
+            struct_name,
+            slot_tys,
+        } = dispatch::lookup(method).unwrap_or_else(|| {
+            panic!(
+                "LLVM_DISPATCH missing entry for '{method}' — drift between dispatch.rs and emit_method_call.rs"
+            )
+        })
+        else {
+            panic!(
+                "LLVM_DISPATCH entry for '{method}' is not Dispatch::CCallStructFromSlots"
+            );
+        };
+        self.ensure_extern(&format!("declare {signature}"));
+        let mut arg_list = format!("ptr {recv_val}");
+        for (ty, v) in extra_args {
+            arg_list.push_str(&format!(", {ty} {v}"));
+        }
+        let raw = self.next_reg();
+        self.push_instr(&format!("{raw} = call ptr @{sym}({arg_list})"));
+
+        // Load each slot.
+        let mut slot_vals: Vec<String> = Vec::with_capacity(slot_tys.len());
+        for (i, slot_ty) in slot_tys.iter().enumerate() {
+            let slot_ptr = self.next_reg();
+            self.push_instr(&format!(
+                "{slot_ptr} = getelementptr {slot_ty}, ptr {raw}, i64 {i}"
+            ));
+            let val = self.next_reg();
+            self.push_instr(&format!("{val} = load {slot_ty}, ptr {slot_ptr}"));
+            slot_vals.push(val);
+        }
+
+        // Assemble the struct: undef → insertvalue chain.
+        let mut prev = format!("{struct_name} undef");
+        let mut last_reg = String::new();
+        for (i, (slot_ty, val)) in slot_tys.iter().zip(slot_vals.iter()).enumerate() {
+            let next = self.next_reg();
+            self.push_instr(&format!(
+                "{next} = insertvalue {prev}, {slot_ty} {val}, {i}"
+            ));
+            prev = format!("{struct_name} {next}");
+            last_reg = next;
+        }
+        self.reg_types
+            .insert(last_reg.clone(), struct_name.to_string());
+        last_reg
+    }
+
     pub(super) fn emit_c_call_option_out_ptr(
         &mut self,
         method: &'static str,
@@ -806,60 +856,36 @@ impl TextEmitter {
             }
 
             // List::partition(f) → Partitioned[T]   (struct, not tuple — #1380)
-            // Runtime returns ptr to a 2-slot array of MvlArray* pointers; load
-            // the two slots and assemble a `%Partitioned = { ptr, ptr }` struct
-            // value so downstream `result.matching` / `result.rest` work as
+            // Runtime returns ptr to a 2-slot array of MvlArray* pointers; the
+            // helper loads each slot and assembles a `%Partitioned { ptr, ptr }`
+            // struct so downstream `result.matching` / `result.rest` work as
             // ordinary `extractvalue` field accesses.
             ("partition", _) if args.len() == 1 && self.is_closure_arg(&args[0]) => {
                 let closure = match self.emit_as_hof_closure(&args[0], &[0])? {
                     Some(p) => p,
                     None => return Ok(None),
                 };
-                let sym = builtin_sym("partition");
-                self.ensure_extern(&format!("declare ptr @{sym}(ptr, ptr)"));
-                let raw = self.next_reg();
-                self.push_instr(&format!(
-                    "{raw} = call ptr @{sym}(ptr {val}, ptr {closure})"
-                ));
-                // Load slot 0 -> matching.
-                let slot0 = self.next_reg();
-                self.push_instr(&format!("{slot0} = getelementptr ptr, ptr {raw}, i64 0"));
-                let matching = self.next_reg();
-                self.push_instr(&format!("{matching} = load ptr, ptr {slot0}"));
-                // Load slot 1 -> rest.
-                let slot1 = self.next_reg();
-                self.push_instr(&format!("{slot1} = getelementptr ptr, ptr {raw}, i64 1"));
-                let rest = self.next_reg();
-                self.push_instr(&format!("{rest} = load ptr, ptr {slot1}"));
-                // Build Partitioned { matching, rest }.
-                let tmp = self.next_reg();
-                self.push_instr(&format!(
-                    "{tmp} = insertvalue %Partitioned undef, ptr {matching}, 0"
-                ));
-                let val_reg = self.next_reg();
-                self.push_instr(&format!(
-                    "{val_reg} = insertvalue %Partitioned {tmp}, ptr {rest}, 1"
-                ));
-                self.reg_types
-                    .insert(val_reg.clone(), "%Partitioned".into());
-                Ok(Some(val_reg))
+                Ok(Some(self.emit_c_call_struct_from_slots(
+                    "partition",
+                    &val,
+                    &[("ptr", &closure)],
+                )))
             }
 
             // List::group_by(f) → Map[K, List[T]]
             // Key closure signature: fn(env, elem_ptr) -> i64.
+            // Shape A: closure ptr is just another arg — emit_c_call_simple
+            // handles it identically to a non-HOF call.
             ("group_by", "ptr") if args.len() == 1 && self.is_closure_arg(&args[0]) => {
                 let closure = match self.emit_as_hof_closure(&args[0], &[0])? {
                     Some(p) => p,
                     None => return Ok(None),
                 };
-                let sym = builtin_sym("group_by");
-                self.ensure_extern(&format!("declare ptr @{sym}(ptr, ptr)"));
-                let reg = self.next_reg();
-                self.push_instr(&format!(
-                    "{reg} = call ptr @{sym}(ptr {val}, ptr {closure})"
-                ));
-                self.reg_types.insert(reg.clone(), "ptr".into());
-                Ok(Some(reg))
+                Ok(Some(self.emit_c_call_simple(
+                    "group_by",
+                    &val,
+                    &[("ptr", &closure)],
+                )))
             }
 
             // ── List::push(item) → List (in-place) ───────────────────────
