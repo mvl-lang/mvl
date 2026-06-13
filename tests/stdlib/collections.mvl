@@ -191,6 +191,11 @@ fn map_values() -> List[Int] {
     m.values()
 }
 
+fn map_entries() -> List[Entry[String, Int]] {
+    let m: Map[String, Int] = {"x": 10, "y": 20};
+    m.entries()
+}
+
 fn map_len() -> Int {
     let m: Map[String, Int] = {"a": 1, "b": 2, "c": 3};
     m.len()

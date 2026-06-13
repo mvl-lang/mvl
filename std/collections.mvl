@@ -64,6 +64,13 @@ pub fn Map[K, V]::values(self) -> List[V] {
     self.values()
 }
 
+/// Return all key-value pairs as a list of `Entry[K, V]` records (order unspecified).
+///
+/// Replaces the prior `List[(K, V)]` tuple pattern (ADR-0002, #1380).
+/// Builtin: Rust backend emits `into_iter().map(|(k, v)| Entry { … })`.
+/// LLVM: C-ABI `_mvl_map_entries`. Closes #1383.
+pub builtin fn Map[K, V]::entries(self) -> List[Entry[K, V]]
+
 /// Number of entries.
 pub fn Map[K, V]::len(self) -> Int {
     self.len()

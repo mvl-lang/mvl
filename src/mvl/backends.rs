@@ -320,12 +320,16 @@ pub const BUILTINS: &[BuiltinDesc] = &[
     BuiltinDesc::method("group_by", "List", 1, 1),
     BuiltinDesc::method("windows", "List", 1, 1),
     BuiltinDesc::method("chunks", "List", 1, 1),
+    // List — struct-returning builtins (#1383): Rust emits native iterators; LLVM Shape A
+    BuiltinDesc::method("enumerate", "List", 0, 0),
+    BuiltinDesc::method("zip", "List", 1, 1),
     // ── Map — compiler intrinsics ─────────────────────────────────────────────
     BuiltinDesc::method("get", "Map", 1, 1),
     BuiltinDesc::method("insert", "Map", 2, 2),
     BuiltinDesc::method("contains_key", "Map", 1, 1),
     BuiltinDesc::method("keys", "Map", 0, 0),
     BuiltinDesc::method("values", "Map", 0, 0),
+    BuiltinDesc::method("entries", "Map", 0, 0),
     BuiltinDesc::method("remove", "Map", 1, 1),
     BuiltinDesc::method("is_empty", "Map", 0, 0),
     BuiltinDesc::method("len", "Map", 0, 0),

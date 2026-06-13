@@ -277,6 +277,18 @@ impl RustEmitter {
                         }
                         self.push(").map(|w| w.to_vec()).collect::<Vec<_>>()");
                     }
+                    // enumerate() -> List[Indexed[T]]   (struct, not tuple — #1383)
+                    "enumerate" if args.is_empty() => {
+                        self.emit_expr(receiver);
+                        self.push(".into_iter().enumerate().map(|(__i, __v)| Indexed { index: __i as i64, value: __v }).collect::<Vec<_>>()");
+                    }
+                    // zip(other) -> List[Pair[T, U]]   (struct, not tuple — #1383)
+                    "zip" if args.len() == 1 => {
+                        self.emit_expr(receiver);
+                        self.push(".into_iter().zip(");
+                        self.emit_expr(&args[0]);
+                        self.push(".into_iter()).map(|(__a, __b)| Pair { first: __a, second: __b }).collect::<Vec<_>>()");
+                    }
                     // partition(f) -> Partitioned[T]   (struct, not tuple — #1380)
                     "partition" => {
                         self.push("{ let (__matching, __rest): (Vec<_>, Vec<_>) = ");
@@ -569,6 +581,12 @@ impl RustEmitter {
                     "values" if args.is_empty() => {
                         self.emit_expr(receiver);
                         self.push(".values().cloned().collect::<Vec<_>>()");
+                    }
+
+                    // entries() -> List[Entry[K, V]]   (struct, not tuple — #1383)
+                    "entries" if args.is_empty() => {
+                        self.emit_expr(receiver);
+                        self.push(".into_iter().map(|(__k, __v)| Entry { key: __k, value: __v }).collect::<Vec<_>>()");
                     }
 
                     // to_list() — Set: collect HashSet::iter() into Vec.

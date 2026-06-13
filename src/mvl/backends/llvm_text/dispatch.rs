@@ -202,6 +202,33 @@ pub const LLVM_DISPATCH: &[(&str, Dispatch)] = &[
             ret_ty: "ptr",
         },
     ),
+    // List::enumerate() → List[Indexed[T]]   elem_size=16: { i64 index, 8-byte value }
+    (
+        "enumerate",
+        Dispatch::CCall {
+            sym: "_mvl_list_enumerate",
+            signature: "ptr @_mvl_list_enumerate(ptr)",
+            ret_ty: "ptr",
+        },
+    ),
+    // List::zip(other) → List[Pair[T, U]]   elem_size=16: { 8-byte first, 8-byte second }
+    (
+        "zip",
+        Dispatch::CCall {
+            sym: "_mvl_list_zip",
+            signature: "ptr @_mvl_list_zip(ptr, ptr)",
+            ret_ty: "ptr",
+        },
+    ),
+    // Map::entries() → List[Entry[K, V]]   elem_size=16: { ptr key, 8-byte value }
+    (
+        "entries",
+        Dispatch::CCall {
+            sym: "_mvl_map_entries",
+            signature: "ptr @_mvl_map_entries(ptr)",
+            ret_ty: "ptr",
+        },
+    ),
     (
         "partition",
         Dispatch::CCallStructFromSlots {
