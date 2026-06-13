@@ -405,30 +405,13 @@ impl Parser {
                 })
             }
 
-            // (A, B, C)  — tuple type
+            // ( T )  — parenthesised type, just grouping (no anonymous tuples; #1380)
             TokenKind::LParen => {
                 self.advance();
-                let first = self.parse_type_expr()?;
-                if !self.eat(&TokenKind::Comma) {
-                    // single-element paren — just grouping, unwrap
-                    let paren = self.expect(&TokenKind::RParen);
-                    self.require(paren)?;
-                    return Ok(first);
-                }
-                let mut elems = vec![first];
-                while !matches!(self.peek_kind(), TokenKind::RParen | TokenKind::Eof) {
-                    match self.parse_type_expr() {
-                        Ok(ty) => elems.push(ty),
-                        Err(()) => break,
-                    }
-                    if !self.eat(&TokenKind::Comma) {
-                        break;
-                    }
-                }
+                let inner = self.parse_type_expr()?;
                 let paren = self.expect(&TokenKind::RParen);
                 self.require(paren)?;
-                let span = self.span_from(start);
-                Ok(TypeExpr::Tuple { elems, span })
+                Ok(inner)
             }
 
             // Named types: Option[T], Result[T, E], or generic Foo[A, B]
@@ -1321,15 +1304,6 @@ mod tests {
     fn parse_fn_type() {
         let ty = type_expr("fn(Int, String) -> Bool");
         assert!(matches!(ty, TypeExpr::Fn { .. }));
-    }
-
-    #[test]
-    fn parse_tuple_type() {
-        let ty = type_expr("(Int, String)");
-        let TypeExpr::Tuple { elems, .. } = ty else {
-            panic!()
-        };
-        assert_eq!(elems.len(), 2);
     }
 
     #[test]

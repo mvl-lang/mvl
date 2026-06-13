@@ -731,32 +731,6 @@ impl TextEmitter {
         Ok(Some(arr))
     }
 
-    pub(super) fn emit_tuple_literal(&mut self, elems: &[Expr]) -> Result<Option<String>, String> {
-        let mut elem_tys: Vec<String> = Vec::new();
-        let mut elem_vals: Vec<String> = Vec::new();
-        for e in elems {
-            let llvm_ty = self.type_of_expr(e);
-            match self.emit_expr(e)? {
-                Some(v) => {
-                    elem_tys.push(llvm_ty);
-                    elem_vals.push(v);
-                }
-                None => return Ok(None),
-            }
-        }
-        let struct_ty = format!("{{ {} }}", elem_tys.join(", "));
-        let mut acc = "undef".to_string();
-        for (i, (ty, val)) in elem_tys.iter().zip(elem_vals.iter()).enumerate() {
-            let reg = self.next_reg();
-            self.push_instr(&format!(
-                "{reg} = insertvalue {struct_ty} {acc}, {ty} {val}, {i}"
-            ));
-            self.reg_types.insert(reg.clone(), struct_ty.clone());
-            acc = reg;
-        }
-        Ok(Some(acc))
-    }
-
     // ── List::filled(n, value) ───────────────────────────────────────────
     pub(super) fn emit_list_filled(
         &mut self,

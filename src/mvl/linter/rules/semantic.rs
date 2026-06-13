@@ -414,7 +414,7 @@ fn expr_has_while_no_decreases(expr: &Expr) -> bool {
         Expr::Select { arms, .. } => arms
             .iter()
             .any(|a| expr_has_while_no_decreases(&a.expr) || block_has_while_no_decreases(&a.body)),
-        Expr::List { elems, .. } | Expr::Set { elems, .. } | Expr::Tuple { elems, .. } => {
+        Expr::List { elems, .. } | Expr::Set { elems, .. } => {
             elems.iter().any(expr_has_while_no_decreases)
         }
         Expr::Map { pairs, .. } => pairs
@@ -506,7 +506,7 @@ fn expr_calls_fn(expr: &Expr, name: &str) -> bool {
         Expr::Select { arms, .. } => arms
             .iter()
             .any(|a| expr_calls_fn(&a.expr, name) || block_calls_fn(&a.body, name)),
-        Expr::List { elems, .. } | Expr::Set { elems, .. } | Expr::Tuple { elems, .. } => {
+        Expr::List { elems, .. } | Expr::Set { elems, .. } => {
             elems.iter().any(|e| expr_calls_fn(e, name))
         }
         Expr::Map { pairs, .. } => pairs
@@ -591,9 +591,7 @@ fn expr_has_calls(expr: &Expr) -> bool {
         Expr::Select { arms, .. } => arms
             .iter()
             .any(|a| expr_has_calls(&a.expr) || block_has_calls(&a.body)),
-        Expr::List { elems, .. } | Expr::Set { elems, .. } | Expr::Tuple { elems, .. } => {
-            elems.iter().any(expr_has_calls)
-        }
+        Expr::List { elems, .. } | Expr::Set { elems, .. } => elems.iter().any(expr_has_calls),
         Expr::Map { pairs, .. } => pairs
             .iter()
             .any(|(k, v)| expr_has_calls(k) || expr_has_calls(v)),
@@ -671,11 +669,6 @@ fn check_type_expr_ifc(ty: &TypeExpr, out: &mut Vec<LintDiag>) {
                 check_type_expr_ifc(p, out);
             }
             check_type_expr_ifc(ret, out);
-        }
-        TypeExpr::Tuple { elems, .. } => {
-            for e in elems {
-                check_type_expr_ifc(e, out);
-            }
         }
         TypeExpr::IntConst { .. } => {}
         // Session types have no IFC label — no check needed.

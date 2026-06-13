@@ -236,7 +236,7 @@ fn collect_paths_from_tir_expr_with(
                 collect_paths_from_tir_block(&arm.body, out);
             }
         }
-        TirExprKind::List { elems } | TirExprKind::Set { elems } | TirExprKind::Tuple { elems } => {
+        TirExprKind::List { elems } | TirExprKind::Set { elems } => {
             for e in elems {
                 collect_paths_from_tir_expr_with(e, out, fn_field_reads);
             }

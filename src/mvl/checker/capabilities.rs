@@ -207,7 +207,7 @@ fn collect_refs_expr(expr: &Expr, params: &[&str], out: &mut Vec<(String, Span)>
                 collect_refs_expr(e, params, out);
             }
         }
-        Expr::List { elems, .. } | Expr::Set { elems, .. } | Expr::Tuple { elems, .. } => {
+        Expr::List { elems, .. } | Expr::Set { elems, .. } => {
             for e in elems {
                 collect_refs_expr(e, params, out);
             }

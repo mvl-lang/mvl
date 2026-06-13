@@ -108,11 +108,6 @@ pub(crate) fn bind_pattern_labels(pat: &Pattern, label: &str, env: &mut HashMap<
         Pattern::Ident(name, _) => {
             env.insert(name.clone(), label.to_string());
         }
-        Pattern::Tuple { elems, .. } => {
-            for elem in elems {
-                bind_pattern_labels(elem, label, env);
-            }
-        }
         Pattern::TupleStruct { fields, .. } => {
             for field in fields {
                 bind_pattern_labels(field, label, env);
@@ -576,7 +571,6 @@ pub(crate) fn label_of_type_expr(te: &TypeExpr) -> Option<String> {
     match te {
         TypeExpr::Labeled { label, .. } => Some(label.clone()),
         TypeExpr::Refined { inner, .. } => label_of_type_expr(inner),
-        TypeExpr::Tuple { elems, .. } => elems.iter().find_map(label_of_type_expr),
         TypeExpr::Base { .. }
         | TypeExpr::Option { .. }
         | TypeExpr::Result { .. }
@@ -614,11 +608,6 @@ fn infer_label(expr: &Expr, env: &HashMap<String, String>) -> Option<String> {
                 .fold(None, join_opt);
             join_opt(recv_label, arg_label)
         }
-        // Tuple construction: join labels of all elements.
-        Expr::Tuple { elems, .. } => elems
-            .iter()
-            .map(|e| infer_label(e, env))
-            .fold(None, join_opt),
         _ => None,
     }
 }
@@ -938,7 +927,7 @@ fn check_expr_flows(
                 check_expr_flows(v, pc.clone(), env, caller_fn, effect_reach, errors);
             }
         }
-        Expr::List { elems, .. } | Expr::Set { elems, .. } | Expr::Tuple { elems, .. } => {
+        Expr::List { elems, .. } | Expr::Set { elems, .. } => {
             for e in elems {
                 check_expr_flows(e, pc.clone(), env, caller_fn, effect_reach, errors);
             }

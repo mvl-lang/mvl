@@ -347,7 +347,7 @@ pub fn count_memory_safety_sites(prog: &Program) -> MemorySafetyCounts {
                 }
             }
             Expr::Lambda { body, .. } => count_expr(body, c),
-            Expr::List { elems, .. } | Expr::Set { elems, .. } | Expr::Tuple { elems, .. } => {
+            Expr::List { elems, .. } | Expr::Set { elems, .. } => {
                 for e in elems {
                     count_expr(e, c);
                 }

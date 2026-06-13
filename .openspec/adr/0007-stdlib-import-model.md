@@ -16,7 +16,7 @@ Three-tier import model. The boundary rule: **if the compiler needs it to verify
 
 ## Core prelude contents
 
-Types: `Bool`, `Int`, `Int8`..`Int64`, `UInt8`..`UInt64`, `Float32`, `Float64`, `Byte`, `Char`, `String`, `Array[T]`, `Map[K,V]`, `Set[T]`, `Option[T]`, `Result[T,E]`, `Tuple`, `Range`.
+Types: `Bool`, `Int`, `Int8`..`Int64`, `UInt8`..`UInt64`, `Float32`, `Float64`, `Byte`, `Char`, `String`, `Array[T]`, `Map[K,V]`, `Set[T]`, `Option[T]`, `Result[T,E]`, `Range`.
 
 Traits: `Eq`, `Ord`, `Hash`, `Display`, `Debug`, `Iterator`.
 

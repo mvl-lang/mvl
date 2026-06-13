@@ -432,8 +432,6 @@ pub enum TypeExpr {
         effects: Vec<Effect>,
         span: Span,
     },
-    /// `(A, B, C)`
-    Tuple { elems: Vec<TypeExpr>, span: Span },
     /// Integer literal used as a const generic argument: `Array<T, 16>`
     IntConst { value: i64, span: Span },
     /// Session type (Honda 1993): typed communication protocol.
@@ -453,7 +451,6 @@ impl TypeExpr {
             | TypeExpr::Labeled { span, .. }
             | TypeExpr::Refined { span, .. }
             | TypeExpr::Fn { span, .. }
-            | TypeExpr::Tuple { span, .. }
             | TypeExpr::IntConst { span, .. }
             | TypeExpr::Session { span, .. } => *span,
         }
@@ -730,11 +727,6 @@ pub enum Expr {
         elems: Vec<Expr>,
         span: Span,
     },
-    /// `(e1, e2, …)` — tuple literal (two or more elements)
-    Tuple {
-        elems: Vec<Expr>,
-        span: Span,
-    },
     Consume {
         expr: Box<Expr>,
         span: Span,
@@ -821,7 +813,6 @@ impl Expr {
             | Expr::List { span, .. }
             | Expr::Map { span, .. }
             | Expr::Set { span, .. }
-            | Expr::Tuple { span, .. }
             | Expr::Consume { span, .. }
             | Expr::Relabel { span, .. }
             | Expr::Borrow { span, .. }
@@ -1005,10 +996,6 @@ pub enum Pattern {
     Wildcard(Span),
     Ident(String, Span),
     Literal(Literal, Span),
-    Tuple {
-        elems: Vec<Pattern>,
-        span: Span,
-    },
     /// `Name(p1, p2)` — tuple-struct or enum-variant with positional fields
     TupleStruct {
         name: String,
@@ -1050,8 +1037,7 @@ impl Pattern {
         match self {
             Pattern::Wildcard(s) | Pattern::None(s) => *s,
             Pattern::Ident(_, s) | Pattern::Literal(_, s) => *s,
-            Pattern::Tuple { span, .. }
-            | Pattern::TupleStruct { span, .. }
+            Pattern::TupleStruct { span, .. }
             | Pattern::Struct { span, .. }
             | Pattern::Some { span, .. }
             | Pattern::Ok { span, .. }

@@ -166,17 +166,6 @@ impl TypeChecker {
                     .define(name.clone(), VarInfo::new(ty.clone(), mutable));
             }
             Pattern::Wildcard(_) => {}
-            Pattern::Tuple { elems, .. } => {
-                if let Ty::Tuple(elem_tys) = ty.unlabeled() {
-                    for (p, t) in elems.iter().zip(elem_tys.iter()) {
-                        self.bind_pattern(p, t, mutable);
-                    }
-                } else {
-                    for p in elems {
-                        self.bind_pattern(p, &Ty::Unknown, mutable);
-                    }
-                }
-            }
             Pattern::Literal(_, _) => {}
             Pattern::Or { patterns, .. } => {
                 // Bind from the first alternative; all must bind the same names/types.
@@ -253,16 +242,6 @@ impl TypeChecker {
             Pattern::Struct { fields, .. } => {
                 for (_, p) in fields {
                     self.bind_match_pattern(p, &Ty::Unknown);
-                }
-            }
-            Pattern::Tuple { elems, .. } => {
-                let elem_tys = match scrutinee_ty.unlabeled() {
-                    Ty::Tuple(ts) => ts.clone(),
-                    _ => vec![],
-                };
-                for (i, p) in elems.iter().enumerate() {
-                    let ty = elem_tys.get(i).cloned().unwrap_or(Ty::Unknown);
-                    self.bind_match_pattern(p, &ty);
                 }
             }
             Pattern::Or { patterns, .. } => {

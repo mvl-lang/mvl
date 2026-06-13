@@ -411,10 +411,6 @@ pub fn emit_ty(ty: &Ty) -> String {
             let params_str: Vec<String> = params.iter().map(emit_ty).collect();
             format!("fn({}) -> {}", params_str.join(", "), emit_ty(ret))
         }
-        Ty::Tuple(elems) => {
-            let elems_str: Vec<String> = elems.iter().map(emit_ty).collect();
-            format!("({})", elems_str.join(", "))
-        }
         Ty::List(inner) => format!("Vec<{}>", emit_ty(inner)),
         Ty::Array(inner, size) => {
             if *size == ARRAY_SIZE_UNKNOWN {
@@ -511,10 +507,6 @@ pub fn emit_type_expr(ty: &TypeExpr) -> String {
         TypeExpr::Fn { params, ret, .. } => {
             let params_str: Vec<String> = params.iter().map(emit_type_expr).collect();
             format!("fn({}) -> {}", params_str.join(", "), emit_type_expr(ret))
-        }
-        TypeExpr::Tuple { elems, .. } => {
-            let elems_str: Vec<String> = elems.iter().map(emit_type_expr).collect();
-            format!("({})", elems_str.join(", "))
         }
         // Session types are compile-time protocol descriptors with no runtime representation.
         TypeExpr::Session { .. } => "/* session type */()".to_string(),

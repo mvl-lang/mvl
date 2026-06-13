@@ -915,14 +915,6 @@ impl<'src> Printer<'src> {
                     .join(", ");
                 format!("{{{}}}", s)
             }
-            Expr::Tuple { elems, .. } => {
-                let s = elems
-                    .iter()
-                    .map(|e| self.fmt_expr(e, indent))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("({})", s)
-            }
             Expr::Consume { expr, .. } => {
                 format!("consume({})", self.fmt_expr(expr, indent))
             }
@@ -1115,14 +1107,6 @@ impl<'src> Printer<'src> {
                 };
                 format!("fn({}) -> {}{}", ps, self.fmt_type_expr(ret), eff)
             }
-            TypeExpr::Tuple { elems, .. } => {
-                let es = elems
-                    .iter()
-                    .map(|t| self.fmt_type_expr(t))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("({})", es)
-            }
             TypeExpr::IntConst { value, .. } => value.to_string(),
             TypeExpr::Session { op, .. } => self.fmt_session_op(op),
         }
@@ -1260,14 +1244,6 @@ impl<'src> Printer<'src> {
             Pattern::Wildcard(_) => "_".to_string(),
             Pattern::Ident(name, _) => name.clone(),
             Pattern::Literal(lit, _) => self.fmt_literal(lit),
-            Pattern::Tuple { elems, .. } => {
-                let es = elems
-                    .iter()
-                    .map(|p| self.fmt_pattern(p))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("({})", es)
-            }
             Pattern::TupleStruct { name, fields, .. } => {
                 let fs = fields
                     .iter()

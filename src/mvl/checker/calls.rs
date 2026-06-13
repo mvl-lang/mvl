@@ -60,12 +60,6 @@ fn substitute_ty(ty: &Ty, subst: &HashMap<String, Ty>, type_params: &[String]) -
             Box::new(substitute_ty(base, subst, type_params)),
             pred.clone(),
         ),
-        Ty::Tuple(elems) => Ty::Tuple(
-            elems
-                .iter()
-                .map(|e| substitute_ty(e, subst, type_params))
-                .collect(),
-        ),
         Ty::Fn(params, ret, effects, totality) => Ty::Fn(
             params
                 .iter()
@@ -156,13 +150,6 @@ fn infer_type_param_pair(
                     infer_type_param_pair(type_params, p, a, subst);
                 }
                 infer_type_param_pair(type_params, ret_p, ret_a, subst);
-            }
-        }
-        Ty::Tuple(elems_p) => {
-            if let Ty::Tuple(elems_a) = arg_ty.unlabeled() {
-                for (p, a) in elems_p.iter().zip(elems_a.iter()) {
-                    infer_type_param_pair(type_params, p, a, subst);
-                }
             }
         }
         _ => {} // primitives, Unknown, Never — no type params to extract

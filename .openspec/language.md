@@ -127,7 +127,6 @@ Bool, Char, Byte, String              // primitives
 Array[T], Map[K,V], Set[T]           // collections
 Option[T]                             // absence (Some | None)
 Result[T,E]                           // fallibility (Ok | Err)
-(T, U)                                // tuple
 T where predicate                     // refinement type
 
 Public[T], Tainted[T],                // security labels

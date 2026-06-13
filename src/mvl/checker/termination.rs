@@ -246,7 +246,7 @@ fn check_expr(expr: &Expr, ctx: &TermCtx<'_>, errors: &mut Vec<CheckError>) {
                 check_expr(v, ctx, errors);
             }
         }
-        Expr::List { elems, .. } | Expr::Set { elems, .. } | Expr::Tuple { elems, .. } => {
+        Expr::List { elems, .. } | Expr::Set { elems, .. } => {
             for e in elems {
                 check_expr(e, ctx, errors);
             }
@@ -453,7 +453,6 @@ fn subterm_vars(pattern: &Pattern) -> Vec<String> {
 
         // Every field binding is a subterm of the constructor.
         Pattern::TupleStruct { fields, .. } => fields.iter().flat_map(leaf_idents).collect(),
-        Pattern::Tuple { elems, .. } => elems.iter().flat_map(leaf_idents).collect(),
         Pattern::Struct { fields, .. } => fields.iter().flat_map(|(_, p)| leaf_idents(p)).collect(),
         Pattern::Some { inner, .. } | Pattern::Ok { inner, .. } | Pattern::Err { inner, .. } => {
             leaf_idents(inner).collect()

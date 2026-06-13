@@ -203,9 +203,7 @@ impl AstLastUseTracker {
                     self.visit_block(&arm.body, in_loop);
                 }
             }
-            AstExpr::List { elems, .. }
-            | AstExpr::Set { elems, .. }
-            | AstExpr::Tuple { elems, .. } => {
+            AstExpr::List { elems, .. } | AstExpr::Set { elems, .. } => {
                 for e in elems {
                     self.visit_expr(e, in_loop);
                 }
@@ -361,9 +359,7 @@ impl LastUseTracker {
                     self.visit_block(&arm.body, in_loop);
                 }
             }
-            TirExprKind::List { elems }
-            | TirExprKind::Set { elems }
-            | TirExprKind::Tuple { elems } => {
+            TirExprKind::List { elems } | TirExprKind::Set { elems } => {
                 for e in elems {
                     self.visit_expr(e, in_loop);
                 }

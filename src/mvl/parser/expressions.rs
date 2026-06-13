@@ -416,7 +416,8 @@ impl Parser {
                 }
             },
 
-            // ── Parenthesised expression, unit `()`, or tuple literal ─────────
+            // ── Parenthesised expression or unit `()` ────────────────────────
+            // (Anonymous tuple literals removed in #1380.)
             TokenKind::LParen => {
                 let lp_span = self.peek_span();
                 self.advance();
@@ -425,30 +426,10 @@ impl Parser {
                     let span = self.span_from(lp_span);
                     return Ok(Expr::Literal(Literal::Unit, span));
                 }
-                let first = self.parse_expr()?;
-                if !self.eat(&TokenKind::Comma) {
-                    // single-element paren — just grouping, unwrap
-                    let rp = self.expect(&TokenKind::RParen);
-                    self.require(rp)?;
-                    return Ok(first);
-                }
-                // tuple literal: `(e1, e2, …)` — comma seen, parse remaining
-                let mut elems = vec![first];
-                while !matches!(self.peek_kind(), TokenKind::RParen | TokenKind::Eof) {
-                    elems.push(self.parse_expr()?);
-                    if !self.eat(&TokenKind::Comma) {
-                        break;
-                    }
-                }
+                let inner = self.parse_expr()?;
                 let rp = self.expect(&TokenKind::RParen);
                 self.require(rp)?;
-                // `(e,)` — trailing comma after a single element is treated as
-                // grouping to enforce the "two or more elements" invariant.
-                if elems.len() < 2 {
-                    return Ok(elems.into_iter().next().unwrap());
-                }
-                let span = self.span_from(start);
-                Ok(Expr::Tuple { elems, span })
+                Ok(inner)
             }
 
             // ── List literal ─────────────────────────────────────────────────

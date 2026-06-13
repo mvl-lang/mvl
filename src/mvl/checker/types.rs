@@ -36,7 +36,6 @@ pub enum Ty {
     /// `totality` is `None` unless the HOF parameter was created from a named function
     /// reference (see `infer.rs`).
     Fn(Vec<Ty>, Box<Ty>, Vec<Effect>, Option<Totality>),
-    Tuple(Vec<Ty>),
     List(Box<Ty>),
     /// Fixed-size array: element type + compile-time size constant.
     Array(Box<Ty>, u64),
@@ -170,10 +169,6 @@ impl Ty {
                     format!(" ! {e}")
                 };
                 format!("fn({params_str}) -> {}{effects_str}", ret.display())
-            }
-            Ty::Tuple(elems) => {
-                let elems_str = elems.iter().map(Ty::display).collect::<Vec<_>>().join(", ");
-                format!("({elems_str})")
             }
             Ty::List(inner) => format!("List<{}>", inner.display()),
             Ty::Array(inner, size) if *size == ARRAY_SIZE_UNKNOWN => {
@@ -390,7 +385,6 @@ pub fn resolve(expr: &TypeExpr) -> Ty {
             effects.clone(),
             None, // Totality not expressible in TypeExpr::Fn; use None (Phase 2: add parser support)
         ),
-        TypeExpr::Tuple { elems, .. } => Ty::Tuple(elems.iter().map(resolve).collect()),
         // Integer const generics are not standalone types — they only appear inside Array<T, N>
         TypeExpr::IntConst { .. } => Ty::Unknown,
         // Session types: resolve the AST SessionOp tree into a SessionTy tree.
@@ -471,13 +465,6 @@ pub fn types_compatible(a: &Ty, b: &Ty) -> bool {
         (Ty::Ref(am, ai), Ty::Ref(bm, bi)) => am == bm && types_compatible(ai, bi),
         // A plain value T is compatible where val/ref T is expected (env types are stripped).
         (Ty::Ref(_, ai), _) => types_compatible(ai, b),
-        (Ty::Tuple(aes), Ty::Tuple(bes)) => {
-            aes.len() == bes.len()
-                && aes
-                    .iter()
-                    .zip(bes.iter())
-                    .all(|(x, y)| types_compatible(x, y))
-        }
         // Positional[T] is a CLI annotation — transparent in the type system.
         // Strip it in both directions so `Positional[Int]` satisfies an `Int` slot and
         // an `Int` literal satisfies a `Positional[Int]` field (e.g. unwrap_or default).
