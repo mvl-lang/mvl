@@ -1,0 +1,81 @@
+// tests/stdlib/struct_returns_test.mvl — Tests for #1383: struct-returning stdlib methods
+//
+// Verifies List::enumerate, List::zip, Map::entries from #1383.
+// Run with:  mvl test tests/stdlib/
+
+// ── List::enumerate ─────────────────────────────────────────────────────────
+
+test fn enumerate_returns_correct_indices() -> Unit {
+    let xs: List[Int] = [10, 20, 30];
+    let result: List[Indexed[Int]] = xs.enumerate();
+    assert_eq(result.len(), 3);
+    match result.get(0) {
+        Some(item) => {
+            assert_eq(item.index, 0);
+            assert_eq(item.value, 10)
+        },
+        None => assert(false),
+    }
+}
+
+test fn enumerate_last_element() -> Unit {
+    let xs: List[Int] = [5, 6, 7];
+    let result: List[Indexed[Int]] = xs.enumerate();
+    match result.get(2) {
+        Some(item) => {
+            assert_eq(item.index, 2);
+            assert_eq(item.value, 7)
+        },
+        None => assert(false),
+    }
+}
+
+test fn enumerate_empty_list() -> Unit {
+    let xs: List[Int] = [];
+    let result: List[Indexed[Int]] = xs.enumerate();
+    assert_eq(result.len(), 0)
+}
+
+// ── List::zip ────────────────────────────────────────────────────────────────
+
+test fn zip_pairs_elements() -> Unit {
+    let names: List[String] = ["alice", "bob", "carol"];
+    let scores: List[Int] = [95, 87, 92];
+    let result: List[Pair[String, Int]] = names.zip(scores);
+    assert_eq(result.len(), 3);
+    match result.get(0) {
+        Some(p) => {
+            assert_eq(p.first, "alice");
+            assert_eq(p.second, 95)
+        },
+        None => assert(false),
+    }
+}
+
+test fn zip_stops_at_shorter() -> Unit {
+    let a: List[Int] = [1, 2, 3, 4, 5];
+    let b: List[Int] = [10, 20];
+    let result: List[Pair[Int, Int]] = a.zip(b);
+    assert_eq(result.len(), 2)
+}
+
+test fn zip_empty_list() -> Unit {
+    let a: List[Int] = [];
+    let b: List[Int] = [1, 2, 3];
+    let result: List[Pair[Int, Int]] = a.zip(b);
+    assert_eq(result.len(), 0)
+}
+
+// ── Map::entries ─────────────────────────────────────────────────────────────
+
+test fn entries_returns_all_pairs() -> Unit {
+    let m: Map[String, Int] = {"x": 10, "y": 20};
+    let result: List[Entry[String, Int]] = m.entries();
+    assert_eq(result.len(), 2)
+}
+
+test fn entries_empty_map() -> Unit {
+    let m: Map[String, Int] = Map::new();
+    let result: List[Entry[String, Int]] = m.entries();
+    assert_eq(result.len(), 0)
+}

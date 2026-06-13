@@ -811,6 +811,35 @@ impl TextEmitter {
                 Ok(Some(result))
             }
 
+            // ── Struct-returning list/map builtins (#1383) ──────────────────
+            // Shape A: simple C call returning ptr. The C function builds a new
+            // MvlArray with elem_size=16 ({i64/ptr, 8-byte}) for the output struct.
+
+            // List::enumerate() → List[Indexed[T]]
+            ("enumerate", "ptr") if args.is_empty() => {
+                Ok(Some(self.emit_c_call_simple("enumerate", &val, &[])))
+            }
+
+            // List::zip(other) → List[Pair[T, U]]
+            ("zip", "ptr") if args.len() == 1 => {
+                let other = match self.emit_expr(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                Ok(Some(self.emit_c_call_simple(
+                    "zip",
+                    &val,
+                    &[("ptr", &other)],
+                )))
+            }
+
+            // Map::entries() → List[Entry[K, V]]
+            ("entries", "ptr")
+                if args.is_empty() && matches!(self.mvl_receiver_kind(receiver), Some("Map")) =>
+            {
+                Ok(Some(self.emit_c_call_simple("entries", &val, &[])))
+            }
+
             // ── Category-D: sort / windows / chunks / partition / group_by ─
             // (#1290) All five promoted to `pub builtin fn` with C-ABI impls.
 

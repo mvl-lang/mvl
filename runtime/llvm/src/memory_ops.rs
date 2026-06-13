@@ -1401,6 +1401,99 @@ pub unsafe extern "C" fn _mvl_list_chunks(list: *mut MvlArray, n: i64) -> *mut M
     out
 }
 
+// ── Struct-returning list/map builtins (#1383) ────────────────────────────────
+
+/// `_mvl_list_enumerate(list)` — produce `List[Indexed[T]]`.
+///
+/// Each output element is a 16-byte `{ i64 index, 8-byte value }` struct,
+/// matching the LLVM layout of `%Indexed { i64, ptr/i64 }`.
+/// The value slot copies the raw 8 bytes from the input element
+/// (either an i64 scalar or an 8-byte pointer for heap types).
+///
+/// # Safety
+/// `list` must be a valid non-null `MvlArray` pointer with `elem_size <= 8`.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_list_enumerate(list: *mut MvlArray) -> *mut MvlArray {
+    let out = _mvl_array_new(16, 0);
+    if list.is_null() {
+        return out;
+    }
+    let len = (*list).len as usize;
+    let es = (*list).elem_size as usize;
+    for i in 0..len {
+        let src = (*list).ptr.add(i * es);
+        let mut buf = [0u8; 16];
+        buf[..8].copy_from_slice(&(i as i64).to_ne_bytes());
+        let copy_len = es.min(8);
+        buf[8..8 + copy_len].copy_from_slice(std::slice::from_raw_parts(src, copy_len));
+        _mvl_array_push(out, buf.as_ptr());
+    }
+    out
+}
+
+/// `_mvl_list_zip(a, b)` — produce `List[Pair[T, U]]`.
+///
+/// Each output element is a 16-byte `{ 8-byte first, 8-byte second }` struct,
+/// matching the LLVM layout of `%Pair { ptr/i64, ptr/i64 }`.
+/// Stops at the shorter of the two lists.
+///
+/// # Safety
+/// `a` and `b` must be valid non-null `MvlArray` pointers with `elem_size <= 8`.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_list_zip(a: *mut MvlArray, b: *mut MvlArray) -> *mut MvlArray {
+    let out = _mvl_array_new(16, 0);
+    if a.is_null() || b.is_null() {
+        return out;
+    }
+    let len = ((*a).len as usize).min((*b).len as usize);
+    let es_a = (*a).elem_size as usize;
+    let es_b = (*b).elem_size as usize;
+    for i in 0..len {
+        let src_a = (*a).ptr.add(i * es_a);
+        let src_b = (*b).ptr.add(i * es_b);
+        let mut buf = [0u8; 16];
+        let copy_a = es_a.min(8);
+        let copy_b = es_b.min(8);
+        buf[..copy_a].copy_from_slice(std::slice::from_raw_parts(src_a, copy_a));
+        buf[8..8 + copy_b].copy_from_slice(std::slice::from_raw_parts(src_b, copy_b));
+        _mvl_array_push(out, buf.as_ptr());
+    }
+    out
+}
+
+/// `_mvl_map_entries(map)` — produce `List[Entry[K, V]]`.
+///
+/// Each output element is a 16-byte `{ ptr key_string, 8-byte value }` struct,
+/// matching the LLVM layout of `%Entry { ptr, ptr/i64 }`.
+/// Keys become freshly-allocated `MvlString*` objects (caller owns them).
+/// Values are copied raw (up to 8 bytes) from the map slot.
+///
+/// # Safety
+/// `map` must be a valid non-null `MvlMap` pointer.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_map_entries(map: *mut MvlMap) -> *mut MvlArray {
+    let out = _mvl_array_new(16, 0);
+    if map.is_null() || (*map).cap == 0 {
+        return out;
+    }
+    let cap = (*map).cap as usize;
+    for i in 0..cap {
+        let slot = &*(*map).slots.add(i);
+        if slot.occupied == 1 {
+            let key_s = _mvl_string_new(slot.key_ptr, slot.key_len as usize);
+            let val_len = (slot.val_len as usize).min(8);
+            let mut buf = [0u8; 16];
+            buf[..8].copy_from_slice(&(key_s as usize).to_ne_bytes());
+            if val_len > 0 && !slot.val_ptr.is_null() {
+                buf[8..8 + val_len]
+                    .copy_from_slice(std::slice::from_raw_parts(slot.val_ptr, val_len));
+            }
+            _mvl_array_push(out, buf.as_ptr());
+        }
+    }
+    out
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

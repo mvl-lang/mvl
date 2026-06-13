@@ -184,6 +184,25 @@ pub fn List[T]::fold[U](self, init: U, f: fn(U, T) -> U) -> U where T: Clone, U:
 /// C-ABI: `_mvl_list_sort`. Closes #1290.
 pub builtin fn List[T]::sort(self) -> List[T]
 
+/// Pair each element with its zero-based index.
+///
+/// Returns `List[Indexed[T]]` where each element carries `index: Int` and
+/// `value: T`.  Replaces the prior `(Int, T)` tuple pattern (ADR-0002, #1380).
+///
+/// Builtin: Rust backend emits `into_iter().enumerate().map(|(i, v)| Indexed { … })`.
+/// LLVM: C-ABI `_mvl_list_enumerate`. Closes #1383.
+pub builtin fn List[T]::enumerate(self) -> List[Indexed[T]]
+
+/// Pair elements from `self` with elements from `other` by position.
+///
+/// Stops at the shorter list. Returns `List[Pair[T, U]]` where `first` is from
+/// `self` and `second` is from `other`.  Replaces the prior `(T, U)` tuple
+/// pattern (ADR-0002, #1380).
+///
+/// Builtin: Rust backend emits `into_iter().zip(…).map(|(a, b)| Pair { … })`.
+/// LLVM: C-ABI `_mvl_list_zip`. Closes #1383.
+pub builtin fn List[T]::zip[U](self, other: List[U]) -> List[Pair[T, U]]
+
 /// Split into elements satisfying `f` and those that do not.
 ///
 /// Returns `Partitioned[T]` (a struct from std.collections, ADR-0002 / #1380)
@@ -191,7 +210,7 @@ pub builtin fn List[T]::sort(self) -> List[T]
 /// the prior `(List[T], List[T])` tuple return.
 ///
 /// Builtin: Rust backend emits `into_iter().partition::<Vec<_>, _>(…)` and wraps
-/// it in a `Partitioned` record. LLVM: deferred to #436.
+/// it in a `Partitioned` record. LLVM: `_mvl_list_partition` (Shape D). Closes #1290.
 pub builtin fn List[T]::partition(self, f: fn(T) -> Bool) -> Partitioned[T]
 
 /// Retain leading elements while `f` returns true; stop at first false.

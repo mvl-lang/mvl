@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.208.0] - 2026-06-13
+
+### Added
+
+- **Struct-returning list and map methods** (#1383) — `List::enumerate() → List[Indexed[T]]`, `List::zip(other) → List[Pair[T, U]]`, and `Map::entries() → List[Entry[K, V]]` replace anonymous tuple patterns with named struct types (ADR-0002, #1380). Implements the full 4-way sync: stdlib declarations, BUILTINS registry, Rust backend iterator emission, and LLVM Shape A CCall dispatch with C runtime functions.
+
 ## [0.207.0] - 2026-06-13
 
 ### Added

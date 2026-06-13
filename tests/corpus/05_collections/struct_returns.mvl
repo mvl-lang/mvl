@@ -1,0 +1,19 @@
+// tests/corpus/05_collections/struct_returns.mvl
+// Type-check test: enumerate, zip, Map::entries (#1383)
+// Verifies the struct-typed return signatures added in #1383.
+
+fn test_enumerate() -> List[Indexed[Int]] {
+    let xs: List[Int] = [10, 20, 30];
+    xs.enumerate()
+}
+
+fn test_zip() -> List[Pair[String, Int]] {
+    let names: List[String] = ["alice", "bob"];
+    let scores: List[Int] = [95, 87];
+    names.zip(scores)
+}
+
+fn test_entries() -> List[Entry[String, Int]] {
+    let m: Map[String, Int] = {"a": 1, "b": 2};
+    m.entries()
+}
