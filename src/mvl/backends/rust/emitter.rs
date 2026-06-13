@@ -36,20 +36,24 @@ pub struct RustEmitter {
     buf: String,
     indent: usize,
     /// Names of functions declared in `extern` blocks — calls must be wrapped in `unsafe`.
-    pub extern_fns: std::collections::HashSet<String>,
+    ///
+    /// Scoped to the `rust/` sub-module: read with [`has_extern_fn`] and
+    /// mutate with [`register_extern_fn`].  External callers should not touch
+    /// the underlying `HashSet` (#1394).
+    pub(super) extern_fns: std::collections::HashSet<String>,
     /// True when the generated file uses `mvl_runtime::prelude::*`.
     ///
     /// When `true`, `ParseFromArgs`, `get_arg`, and other runtime symbols are
     /// in scope; the transpiler may emit impls that reference them.
-    pub use_mvl_runtime: bool,
+    pub(super) use_mvl_runtime: bool,
     /// Active coverage map — `Some` when transpiling with `--coverage`.
-    pub coverage: Option<CoverageMap>,
+    pub(super) coverage: Option<CoverageMap>,
     /// Active MC/DC map — `Some` when transpiling with `mvl mcdc`.
-    pub mcdc: Option<MCDCMap>,
+    pub(super) mcdc: Option<MCDCMap>,
     /// Per-function field-read sets for interprocedural MC/DC coupling analysis.
     /// Built from the current program before emission starts; empty when MC/DC
     /// instrumentation is inactive or for non-MC/DC transpilation passes.
-    pub mcdc_fn_field_reads: FnFieldReads,
+    pub(super) mcdc_fn_field_reads: FnFieldReads,
     /// Active mutation map — `Some` when transpiling with `mvl mutate`.
     pub mutation: Option<MutationMap>,
     /// Name of the function currently being transpiled (for coverage metadata).
@@ -158,6 +162,20 @@ impl RustEmitter {
     /// Finish generation and return the accumulated source string.
     pub fn finish(self) -> String {
         self.buf
+    }
+
+    /// Register `name` as an extern-block function; returns `true` if newly
+    /// inserted (matches [`HashSet::insert`] semantics).  Callers in sibling
+    /// modules (`emit_types`) use this to dedup re-emission of the same
+    /// extern across multiple prelude programs.
+    pub(super) fn register_extern_fn(&mut self, name: String) -> bool {
+        self.extern_fns.insert(name)
+    }
+
+    /// True when `name` was registered via [`register_extern_fn`] — call
+    /// sites use this to decide whether to wrap the call in `unsafe { … }`.
+    pub(super) fn has_extern_fn(&self, name: &str) -> bool {
+        self.extern_fns.contains(name)
     }
 
     /// Check if a `Ty::Named` refers to a refined alias; return the base type if so.

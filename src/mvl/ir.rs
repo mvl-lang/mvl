@@ -274,7 +274,7 @@ pub struct TirFn {
     /// Refinement predicate on the return type (`-> Int where self > 0`).
     pub return_refinement: Option<RefExpr>,
     pub effects: Vec<Effect>,
-    /// Preconditions lowered to `RefExpr` — ready for `emit_ref_expr_for_assert`.
+    /// Preconditions lowered to `RefExpr` — ready for backend assertion emission.
     pub requires: Vec<RefExpr>,
     /// Postconditions lowered to `RefExpr`.
     pub ensures: Vec<RefExpr>,

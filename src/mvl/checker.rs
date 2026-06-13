@@ -76,18 +76,31 @@ pub struct CheckResult {
     /// cross-module function calls (e.g. `execute(db, sql: Clean[String])`).
     pub has_prelude_ifc_boundary: bool,
     /// Full type environment produced by the checker — function signatures, type
-    /// declarations, and impl registrations.  Exposed for downstream consumers
+    /// declarations, and impl registrations.  Used by downstream consumers
     /// such as the call graph and interprocedural analysis passes (#829, #825).
-    pub type_env: TypeEnv,
+    ///
+    /// Scoped to the crate (#1392): external readers go through
+    /// [`CheckResult::type_env`].
+    pub(crate) type_env: TypeEnv,
     /// Whole-program call graph — function call topology for interprocedural
     /// analysis (IFC #830, refinement contract propagation #830, data race #9).
     /// Built from the AST post type-checking; edges are `FnCall` expressions only
     /// (MethodCall resolution deferred to post-monomorphization pass #838).
-    pub call_graph: CallGraph,
+    ///
+    /// Crate-internal (#1392): no external readers.  Note: the value is
+    /// currently consumed only for its side effect during construction
+    /// (driving `check_mutual_recursion`) and the stored copy is unused —
+    /// keeping the field for future interprocedural passes (see #838).
+    #[allow(dead_code)]
+    pub(crate) call_graph: CallGraph,
     /// Inferred security labels for function return types — built by the
     /// forward label propagation pass (#830/#833).  Supplements TypeEnv's
     /// explicit annotations for unannotated wrapper functions.
-    pub inferred_labels: InferredLabels,
+    ///
+    /// Crate-internal (#1392): same status as `call_graph` — populated for
+    /// future passes; the stored copy has no current reader.
+    #[allow(dead_code)]
+    pub(crate) inferred_labels: InferredLabels,
 }
 
 impl CheckResult {
@@ -96,6 +109,13 @@ impl CheckResult {
     }
     pub fn has_errors(&self) -> bool {
         !self.errors.is_empty()
+    }
+
+    /// Borrow the full type environment.  Used by downstream consumers
+    /// (call graph, interprocedural analysis, integration tests asserting
+    /// function-signature resolution).
+    pub fn type_env(&self) -> &TypeEnv {
+        &self.type_env
     }
 }
 

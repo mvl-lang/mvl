@@ -9,6 +9,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use super::BuiltinSymbolInfo;
 use crate::mvl::checker::types::Ty;
 use crate::mvl::parser::ast::{
     ActorDecl, Decl, FnDecl, Program, Stmt, TypeBody, TypeExpr, VariantFields,
@@ -24,13 +25,13 @@ use crate::mvl::parser::lexer::Span;
 pub struct LlvmTextCompiler {
     /// Target triple emitted in the module header.
     pub target_triple: String,
-    /// `builtin fn` dispatch table: MVL name → (C-ABI symbol, return TypeExpr, param TypeExprs).
+    /// `builtin fn` dispatch table: MVL name → [`BuiltinSymbolInfo`].
     ///
-    /// Populated via `with_builtins()` or set directly before calling
+    /// Populated via `with_context()` or set directly before calling
     /// `compile_to_ir_with_prelude`.  The emitter uses this to route calls to
     /// `builtin fn` declarations to their C runtime symbols instead of generating
     /// a body for the empty block.
-    pub builtin_symbols: HashMap<String, (String, TypeExpr, Vec<TypeExpr>)>,
+    pub builtin_symbols: HashMap<String, BuiltinSymbolInfo>,
     /// Checker-resolved expression types, keyed by source span.
     ///
     /// When populated (via [`crate::mvl::checker::check`] in the CLI pipeline),
@@ -53,7 +54,7 @@ impl LlvmTextCompiler {
     /// Create a compiler pre-populated with builtin dispatch table and
     /// checker-resolved expression types.
     pub fn with_context(
-        builtin_symbols: HashMap<String, (String, TypeExpr, Vec<TypeExpr>)>,
+        builtin_symbols: HashMap<String, BuiltinSymbolInfo>,
         expr_types: HashMap<Span, Ty>,
     ) -> Self {
         Self {
@@ -311,16 +312,16 @@ impl TextEmitter {
     fn new_with_builtins(
         module_name: &str,
         target_triple: &str,
-        builtin_map: &HashMap<String, (String, TypeExpr, Vec<TypeExpr>)>,
+        builtin_map: &HashMap<String, BuiltinSymbolInfo>,
     ) -> Self {
         let mut fn_ret_types: HashMap<String, TypeExpr> = HashMap::new();
         let mut fn_param_types: HashMap<String, Vec<TypeExpr>> = HashMap::new();
         let mut builtin_syms: HashMap<String, String> = HashMap::new();
 
-        for (fn_name, (c_sym, ret_ty, param_tys)) in builtin_map {
-            fn_ret_types.insert(fn_name.clone(), ret_ty.clone());
-            fn_param_types.insert(fn_name.clone(), param_tys.clone());
-            builtin_syms.insert(fn_name.clone(), c_sym.clone());
+        for (fn_name, info) in builtin_map {
+            fn_ret_types.insert(fn_name.clone(), info.ret_ty.clone());
+            fn_param_types.insert(fn_name.clone(), info.param_tys.clone());
+            builtin_syms.insert(fn_name.clone(), info.c_sym.clone());
         }
 
         Self {
