@@ -22,8 +22,10 @@
 /// - [`Dispatch::CCallBoolFromI64`] — Shape B: C call returns `i64`,
 ///   coerced to `i1` via `icmp ne i64 X, 0`.
 ///
-/// Future variants (deferred to later #1399 phases) will cover Shape C
-/// (Option-via-out-ptr), Shape D (struct assembly), and Shape E (HOF closures).
+/// - [`Dispatch::CCallOptionOutPtr`] — Shape C: C call returns `i8` discriminant + out-ptr payload.
+/// - [`Dispatch::CCallStructFromSlots`] — Shape D: C call returns ptr to N-slot array, assembled into a named struct.
+///
+/// Shape E (`CCallHof`, HOF closures) is deferred to a later #1399 phase.
 #[derive(Debug, Clone)]
 pub enum Dispatch {
     /// Simple C call producing a single return register.
@@ -264,11 +266,6 @@ pub fn lookup(name: &str) -> Option<&'static Dispatch> {
         .iter()
         .find(|(n, _)| *n == name)
         .map(|(_, d)| d)
-}
-
-/// Convenience: look up just the C-ABI symbol for a method.
-pub fn sym(name: &str) -> Option<&'static str> {
-    lookup(name).map(|d| d.sym())
 }
 
 #[cfg(test)]

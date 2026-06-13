@@ -8,6 +8,22 @@ use crate::mvl::parser::ast::{Expr, TypeExpr};
 
 use super::TextEmitter;
 
+/// Look up a dispatch entry, panicking with a drift-detection message on miss.
+fn lookup_dispatch(method: &str) -> &'static Dispatch {
+    dispatch::lookup(method).unwrap_or_else(|| {
+        panic!("LLVM_DISPATCH missing entry for '{method}' — drift between dispatch.rs and emit_method_call.rs")
+    })
+}
+
+/// Build the LLVM argument list for a C-ABI call with an opaque-pointer receiver.
+fn build_arg_list(recv_val: &str, extra_args: &[(&'static str, &str)]) -> String {
+    let mut s = format!("ptr {recv_val}");
+    for (ty, v) in extra_args {
+        s.push_str(&format!(", {ty} {v}"));
+    }
+    s
+}
+
 impl TextEmitter {
     /// Emit a Shape A builtin call: simple C-ABI runtime function with a
     /// single return register.  Reads `sym`, `signature`, and `ret_ty` from
@@ -21,11 +37,11 @@ impl TextEmitter {
     /// and inserts `{reg} -> ret_ty` into `reg_types`.  Returns the result
     /// register name; call sites typically wrap with `Ok(Some(reg))`.
     ///
-    /// Panics on a dispatch-table miss — same drift-detection contract as
-    /// [`builtin_sym`].
+    /// Panics on a dispatch-table miss — same drift-detection contract used
+    /// across all helpers in this file.
     pub(super) fn emit_c_call_simple(
         &mut self,
-        method: &'static str,
+        method: &str,
         recv_val: &str,
         extra_args: &[(&'static str, &str)],
     ) -> String {
@@ -33,21 +49,14 @@ impl TextEmitter {
             sym,
             signature,
             ret_ty,
-        } = dispatch::lookup(method).unwrap_or_else(|| {
-            panic!(
-                "LLVM_DISPATCH missing entry for '{method}' — drift between dispatch.rs and emit_method_call.rs"
-            )
-        })
+        } = lookup_dispatch(method)
         else {
             panic!(
                 "LLVM_DISPATCH entry for '{method}' is not Dispatch::CCall — use a different emit_c_call_* helper"
             );
         };
         self.ensure_extern(&format!("declare {signature}"));
-        let mut arg_list = format!("ptr {recv_val}");
-        for (ty, v) in extra_args {
-            arg_list.push_str(&format!(", {ty} {v}"));
-        }
+        let arg_list = build_arg_list(recv_val, extra_args);
         let reg = self.next_reg();
         self.push_instr(&format!("{reg} = call {ret_ty} @{sym}({arg_list})"));
         self.reg_types.insert(reg.clone(), ret_ty.to_string());
@@ -69,26 +78,17 @@ impl TextEmitter {
     /// register (the i1, not the raw i64).
     pub(super) fn emit_c_call_bool_from_i64(
         &mut self,
-        method: &'static str,
+        method: &str,
         recv_val: &str,
         extra_args: &[(&'static str, &str)],
     ) -> String {
-        let Dispatch::CCallBoolFromI64 { sym, signature } = dispatch::lookup(method)
-            .unwrap_or_else(|| {
-                panic!(
-                    "LLVM_DISPATCH missing entry for '{method}' — drift between dispatch.rs and emit_method_call.rs"
-                )
-            })
-        else {
+        let Dispatch::CCallBoolFromI64 { sym, signature } = lookup_dispatch(method) else {
             panic!(
-                "LLVM_DISPATCH entry for '{method}' is not Dispatch::CCallBoolFromI64"
+                "LLVM_DISPATCH entry for '{method}' is not Dispatch::CCallBoolFromI64 — use a different emit_c_call_* helper"
             );
         };
         self.ensure_extern(&format!("declare {signature}"));
-        let mut arg_list = format!("ptr {recv_val}");
-        for (ty, v) in extra_args {
-            arg_list.push_str(&format!(", {ty} {v}"));
-        }
+        let arg_list = build_arg_list(recv_val, extra_args);
         let raw = self.next_reg();
         self.push_instr(&format!("{raw} = call i64 @{sym}({arg_list})"));
         let reg = self.next_reg();
@@ -97,15 +97,6 @@ impl TextEmitter {
         reg
     }
 
-    /// Emit a Shape C builtin call: C call returns an `i8` discriminant and
-    /// fills an out-pointer with the payload.  Result is wrapped as
-    /// `Option[T]` via [`wrap_result_pair`].  Reads sym + signature +
-    /// payload_ty from the `LLVM_DISPATCH` row for `method` (must be
-    /// [`Dispatch::CCallOptionOutPtr`]).
-    ///
-    /// The out-pointer is alloca'd by the helper; `extra_args` should NOT
-    /// include it.  The helper appends `, ptr {out}` to the call's argument
-    /// list automatically.
     /// Emit a Shape D builtin call: C call returns a pointer to an N-slot
     /// array of pointers; emitter loads each slot and assembles a named
     /// LLVM struct via `insertvalue`.
@@ -117,7 +108,7 @@ impl TextEmitter {
     /// Returns the register holding the assembled struct value.
     pub(super) fn emit_c_call_struct_from_slots(
         &mut self,
-        method: &'static str,
+        method: &str,
         recv_val: &str,
         extra_args: &[(&'static str, &str)],
     ) -> String {
@@ -126,21 +117,18 @@ impl TextEmitter {
             signature,
             struct_name,
             slot_tys,
-        } = dispatch::lookup(method).unwrap_or_else(|| {
-            panic!(
-                "LLVM_DISPATCH missing entry for '{method}' — drift between dispatch.rs and emit_method_call.rs"
-            )
-        })
+        } = lookup_dispatch(method)
         else {
             panic!(
-                "LLVM_DISPATCH entry for '{method}' is not Dispatch::CCallStructFromSlots"
+                "LLVM_DISPATCH entry for '{method}' is not Dispatch::CCallStructFromSlots — use a different emit_c_call_* helper"
             );
         };
+        assert!(
+            !slot_tys.is_empty(),
+            "LLVM_DISPATCH entry for '{method}' has empty slot_tys — CCallStructFromSlots requires at least one slot"
+        );
         self.ensure_extern(&format!("declare {signature}"));
-        let mut arg_list = format!("ptr {recv_val}");
-        for (ty, v) in extra_args {
-            arg_list.push_str(&format!(", {ty} {v}"));
-        }
+        let arg_list = build_arg_list(recv_val, extra_args);
         let raw = self.next_reg();
         self.push_instr(&format!("{raw} = call ptr @{sym}({arg_list})"));
 
@@ -172,9 +160,18 @@ impl TextEmitter {
         last_reg
     }
 
+    /// Emit a Shape C builtin call: C call returns an `i8` discriminant and
+    /// fills an out-pointer with the payload.  Result is wrapped as
+    /// `Option[T]` via [`wrap_result_pair`].  Reads sym + signature +
+    /// payload_ty from the `LLVM_DISPATCH` row for `method` (must be
+    /// [`Dispatch::CCallOptionOutPtr`]).
+    ///
+    /// The out-pointer is alloca'd by the helper; `extra_args` should NOT
+    /// include it.  The helper appends `, ptr {out}` to the call's argument
+    /// list automatically.
     pub(super) fn emit_c_call_option_out_ptr(
         &mut self,
-        method: &'static str,
+        method: &str,
         recv_val: &str,
         extra_args: &[(&'static str, &str)],
     ) -> String {
@@ -182,23 +179,16 @@ impl TextEmitter {
             sym,
             signature,
             payload_ty,
-        } = dispatch::lookup(method).unwrap_or_else(|| {
-            panic!(
-                "LLVM_DISPATCH missing entry for '{method}' — drift between dispatch.rs and emit_method_call.rs"
-            )
-        })
+        } = lookup_dispatch(method)
         else {
             panic!(
-                "LLVM_DISPATCH entry for '{method}' is not Dispatch::CCallOptionOutPtr"
+                "LLVM_DISPATCH entry for '{method}' is not Dispatch::CCallOptionOutPtr — use a different emit_c_call_* helper"
             );
         };
         self.ensure_extern(&format!("declare {signature}"));
         let out = self.next_reg();
         self.push_instr(&format!("{out} = alloca {payload_ty}"));
-        let mut arg_list = format!("ptr {recv_val}");
-        for (ty, v) in extra_args {
-            arg_list.push_str(&format!(", {ty} {v}"));
-        }
+        let mut arg_list = build_arg_list(recv_val, extra_args);
         arg_list.push_str(&format!(", ptr {out}"));
         let tag = self.next_reg();
         self.push_instr(&format!("{tag} = call i8 @{sym}({arg_list})"));
