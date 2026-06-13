@@ -129,7 +129,7 @@ pub fn build(programs: &[&Program], type_env: &TypeEnv) -> CallGraph {
     let mut graph = CallGraph::default();
 
     // Seed nodes from every known function in the type environment.
-    for name in type_env.fns.keys() {
+    for name in type_env.fn_names() {
         graph.nodes.insert(name.clone());
     }
 

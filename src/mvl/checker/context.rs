@@ -204,9 +204,17 @@ pub struct TypeEnv {
     /// Stack of variable scopes (innermost last).
     scopes: Vec<HashMap<String, VarInfo>>,
     /// User-defined type declarations.
-    pub types: HashMap<String, TypeInfo>,
+    ///
+    /// Scoped to `checker/` (#1393): readers in `call_graph` and
+    /// `ifc_propagation` access via iter/get; mutations route through
+    /// [`define_type`].
+    pub(super) types: HashMap<String, TypeInfo>,
     /// Known function signatures.
-    pub fns: HashMap<String, FnInfo>,
+    ///
+    /// Scoped to `checker/` (#1393): mutations route through
+    /// [`define_fn`] / [`undefine_fn`].  External read-only access is
+    /// still provided via [`fns`] iterators.
+    pub(super) fns: HashMap<String, FnInfo>,
     /// Registered `From` implementations: maps target type name → set of source type names.
     /// Populated from `impl From<A> for B` declarations.
     pub from_impls: HashMap<String, HashSet<String>>,
@@ -845,6 +853,28 @@ impl TypeEnv {
 
     pub fn define_fn(&mut self, name: String, info: FnInfo) {
         self.fns.insert(name, info);
+    }
+
+    /// Remove a previously-defined function from the global table.
+    ///
+    /// Returns the removed `FnInfo`, mirroring [`HashMap::remove`].  Used by
+    /// `decls::check_actor_decl` to drop temporary private-method
+    /// registrations after type inference completes (#1393).
+    pub fn undefine_fn(&mut self, name: &str) -> Option<FnInfo> {
+        self.fns.remove(name)
+    }
+
+    /// Read-only iterator over `(name, FnInfo)` pairs in the global table.
+    ///
+    /// Exposed so callers in `checker/` can traverse the table without
+    /// touching the underlying `HashMap` directly.
+    pub fn fns(&self) -> impl Iterator<Item = (&String, &FnInfo)> {
+        self.fns.iter()
+    }
+
+    /// Read-only iterator over function names in the global table.
+    pub fn fn_names(&self) -> impl Iterator<Item = &String> {
+        self.fns.keys()
     }
 
     pub fn lookup_fn(&self, name: &str) -> Option<&FnInfo> {

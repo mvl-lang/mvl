@@ -327,7 +327,7 @@ impl TypeChecker {
 
         // Remove temporary private helper registrations from the global fn table.
         for name in &private_method_names {
-            self.env.fns.remove(name);
+            self.env.undefine_fn(name);
         }
     }
 

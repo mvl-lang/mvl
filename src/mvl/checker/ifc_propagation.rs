@@ -129,7 +129,7 @@ pub fn propagate(programs: &[&Program], type_env: &TypeEnv) -> InferredLabels {
     let mut explicit_names: HashSet<String> = HashSet::new();
 
     // Seed 1: explicit return labels from TypeEnv (covers stdlib taint sources).
-    for (name, fn_info) in &type_env.fns {
+    for (name, fn_info) in type_env.fns() {
         if let Some(label) = ifc::label_of(&fn_info.ret) {
             table.insert(name.clone(), label.to_string());
             explicit_names.insert(name.clone());
@@ -834,7 +834,7 @@ mod tests {
         use crate::mvl::checker::types::Ty;
         let mut env = TypeEnv::default();
         // Simulate: fn source() -> Tainted[String]
-        env.fns.insert(
+        env.define_fn(
             "source".into(),
             FnInfo {
                 ret: Ty::Labeled("Tainted".to_string(), Box::new(Ty::String)),
@@ -842,7 +842,7 @@ mod tests {
             },
         );
         // Simulate: fn log_it(q: Clean[String]) -> Unit
-        env.fns.insert(
+        env.define_fn(
             "log_it".into(),
             FnInfo {
                 params: vec![Ty::String],
@@ -1072,7 +1072,7 @@ mod tests {
             "fn wrapper() -> String { source() } fn caller() -> Unit { public_sink(wrapper()) }",
         );
         let mut env = env_with_taint_source();
-        env.fns.insert(
+        env.define_fn(
             "public_sink".into(),
             FnInfo {
                 params: vec![Ty::String],
@@ -1202,7 +1202,7 @@ mod tests {
              }",
         );
         let mut env = env_with_taint_source();
-        env.fns.insert(
+        env.define_fn(
             "source_iter".into(),
             FnInfo {
                 ret: Ty::Labeled("Tainted".to_string(), Box::new(Ty::String)),
