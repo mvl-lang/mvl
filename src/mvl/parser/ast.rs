@@ -730,6 +730,11 @@ pub enum Expr {
         elems: Vec<Expr>,
         span: Span,
     },
+    /// `(e1, e2, …)` — tuple literal (two or more elements)
+    Tuple {
+        elems: Vec<Expr>,
+        span: Span,
+    },
     Consume {
         expr: Box<Expr>,
         span: Span,
@@ -816,6 +821,7 @@ impl Expr {
             | Expr::List { span, .. }
             | Expr::Map { span, .. }
             | Expr::Set { span, .. }
+            | Expr::Tuple { span, .. }
             | Expr::Consume { span, .. }
             | Expr::Relabel { span, .. }
             | Expr::Borrow { span, .. }

@@ -7,8 +7,9 @@
 //! field_values[T]) are deferred to #790.
 //!
 //! Import:
-//!   use std.db.{DbValue, Row}
-//!   use std.db.{ParseError}
+//!   use std.db.{DbValue, ParseError, DbUrl, load_db_url, default_db_url}
+//!   use std.db.{row_get_int, row_get_string, row_get_bool, row_get_float,
+//!               row_get_timestamp, row_get_blob, row_is_null}
 //!
 //! Effects: none (pure types, no I/O).
 //!
@@ -25,6 +26,11 @@ use std.env.{_env_read}
 /// supplied as a compile-time default (`DB-URL-DEFAULT`).  Database connect
 /// wrappers accept `DbUrl[String]`, not raw `String`, so the compiler
 /// enforces label compatibility at call boundaries.
+///
+/// **Subsumes Secret:** Database URLs contain credentials (passwords, tokens).
+/// `DbUrl` should provide both provenance tracking AND credential protection.
+/// Pending #1376 (label hierarchy syntax), treat `DbUrl` as if it subsumes
+/// `Secret` — values cannot safely flow to unlabeled sinks.
 ///
 /// **Security model:** Capability labels are provenance-tracking tokens, not
 /// access-control tokens.  See `std.config.ConfigPath` for details.
@@ -66,8 +72,8 @@ pub fn default_db_url(fallback: String) -> DbUrl[String] {
 ///
 /// Variant discriminants (0-based) are stable and shared across all packages.
 /// All pkg.* database drivers must map to these discriminants in their
-/// C-ABI layer (llvm.rs):
-///   0 = Null, 1 = Bool, 2 = Int, 3 = Float, 4 = Text, 5 = Blob
+/// C-ABI layer:
+///   0 = Null, 1 = Bool, 2 = Int, 3 = Float, 4 = Text, 5 = Blob, 6 = Timestamp
 pub type DbValue = enum {
     Null,
     Bool(Bool),
@@ -75,6 +81,65 @@ pub type DbValue = enum {
     Float(Float),
     Text(String),
     Blob(List[Int]),
+    Timestamp(Int),  // Unix epoch seconds (UTC)
+}
+
+// ── DbValue helpers ───────────────────────────────────────────────────────────
+
+/// Extract Int from DbValue, or None.
+pub fn DbValue::as_int(self) -> Option[Int] {
+    match self {
+        DbValue::Int(v) => Some(v),
+        _ => None
+    }
+}
+
+/// Extract Float from DbValue, or None.
+pub fn DbValue::as_float(self) -> Option[Float] {
+    match self {
+        DbValue::Float(v) => Some(v),
+        _ => None
+    }
+}
+
+/// Extract String from DbValue (Text only), or None.
+pub fn DbValue::as_string(self) -> Option[String] {
+    match self {
+        DbValue::Text(v) => Some(v),
+        _ => None
+    }
+}
+
+/// Extract Bool from DbValue, or None.
+pub fn DbValue::as_bool(self) -> Option[Bool] {
+    match self {
+        DbValue::Bool(v) => Some(v),
+        _ => None
+    }
+}
+
+/// Extract Blob from DbValue, or None.
+pub fn DbValue::as_blob(self) -> Option[List[Int]] {
+    match self {
+        DbValue::Blob(v) => Some(v),
+        _ => None
+    }
+}
+
+/// Extract Timestamp (Unix epoch seconds) from DbValue, or None.
+pub fn DbValue::as_timestamp(self) -> Option[Int] {
+    match self {
+        DbValue::Timestamp(v) => Some(v),
+        _ => None
+    }
+}
+
+/// True if value is Null.
+pub fn DbValue::is_null(self) -> Bool {
+    match self {
+        DbValue::Null => true,
+        _ => false
+    }
 }
 
 // ── ParseError ────────────────────────────────────────────────────────────────
@@ -115,3 +180,62 @@ pub fn ParseError::debug_message(self) -> Secret[String] {
 // Row = Map[String, DbValue] is the intended type alias but generic type aliases
 // are not yet supported by the checker (deferred to #790).
 // Database drivers use Map[String, DbValue] directly in their public API.
+
+// ── Row helpers ───────────────────────────────────────────────────────────────
+// These operate on Map[String, DbValue] directly since type aliases are deferred.
+
+/// Get column as Int, or None if missing or wrong type.
+pub fn row_get_int(row: Map[String, DbValue], column: String) -> Option[Int] {
+    match row.get(column) {
+        Some(v) => v.as_int(),
+        None => None
+    }
+}
+
+/// Get column as Float, or None if missing or wrong type.
+pub fn row_get_float(row: Map[String, DbValue], column: String) -> Option[Float] {
+    match row.get(column) {
+        Some(v) => v.as_float(),
+        None => None
+    }
+}
+
+/// Get column as String (Text), or None if missing or wrong type.
+pub fn row_get_string(row: Map[String, DbValue], column: String) -> Option[String] {
+    match row.get(column) {
+        Some(v) => v.as_string(),
+        None => None
+    }
+}
+
+/// Get column as Bool, or None if missing or wrong type.
+pub fn row_get_bool(row: Map[String, DbValue], column: String) -> Option[Bool] {
+    match row.get(column) {
+        Some(v) => v.as_bool(),
+        None => None
+    }
+}
+
+/// Get column as Timestamp (Unix epoch), or None if missing or wrong type.
+pub fn row_get_timestamp(row: Map[String, DbValue], column: String) -> Option[Int] {
+    match row.get(column) {
+        Some(v) => v.as_timestamp(),
+        None => None
+    }
+}
+
+/// Get column as Blob, or None if missing or wrong type.
+pub fn row_get_blob(row: Map[String, DbValue], column: String) -> Option[List[Int]] {
+    match row.get(column) {
+        Some(v) => v.as_blob(),
+        None => None
+    }
+}
+
+/// Check if column value is Null (or missing).
+pub fn row_is_null(row: Map[String, DbValue], column: String) -> Bool {
+    match row.get(column) {
+        Some(v) => v.is_null(),
+        None => true
+    }
+}

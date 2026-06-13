@@ -2,7 +2,7 @@
 #
 # Demonstrates std.csv: pure parser, Tainted[String] cells, decode trust boundary.
 # Run from this directory or from the repo root.
-.PHONY: help guard-mvl check test-solver test assurance smoke run clean
+.PHONY: help guard-mvl check prove test-solver test assurance smoke run clean
 
 .DEFAULT_GOAL := help
 
@@ -18,6 +18,9 @@ guard-mvl:
 
 check: guard-mvl ## Type-check main.mvl (note: uses Tainted[String] from read_file — IFC is exercised)
 	cd $(REPO_ROOT) && $(abspath $(MVL)) check $(DIR)main.mvl
+
+prove: guard-mvl ## Prove per-call-site refinement proof layer breakdown
+	cd $(REPO_ROOT) && $(abspath $(MVL)) prove $(DIR)main.mvl
 
 test-solver: guard-mvl ## Show per-file solver statistics
 	@pass=0; fail=0; \

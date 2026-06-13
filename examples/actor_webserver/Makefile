@@ -6,7 +6,7 @@
 #
 # Packages are resolved from the XDG cache ($XDG_DATA_HOME/mvl/pkg/).
 # Run `mvl install` from the repo root to populate the cache before using this example.
-.PHONY: help guard-mvl lint check test-solver test test-llvm assurance smoke run clean
+.PHONY: help guard-mvl lint check prove test-solver test test-llvm assurance smoke run clean
 
 .DEFAULT_GOAL := help
 
@@ -30,6 +30,9 @@ lint: guard-mvl ## Lint main.mvl
 
 check: guard-mvl ## Type-check main.mvl
 	$(MVL) check $(DIR)main.mvl
+
+prove: guard-mvl ## Prove per-call-site refinement proof layer breakdown
+	$(MVL) prove $(DIR)main.mvl
 
 test-solver: guard-mvl ## Show per-file solver statistics
 	@pass=0; fail=0; \

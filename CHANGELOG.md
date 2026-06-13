@@ -2,6 +2,43 @@
 
 ## [Unreleased]
 
+## [0.206.0] - 2026-06-13
+
+### Added
+
+- **`mvl sbom snapshot`** (#636) — Saves the current SBOM as a baseline to `.mvl/sbom.baseline.json` (full CycloneDX) and `.mvl/sbom.baseline.meta` (lightweight dep list + timestamp). Enables audit trail preservation in version control.
+- **`mvl sbom diff [--baseline] [--format=json]`** (#636) — Compares the current manifest/lock state against a stored baseline, reporting added/removed/updated dependencies and source-file count changes. Computes a time-decaying trust score (default 90-day half-life) for supply-chain freshness assessment. New c-native deps reduce trust by 0.5; native by 0.3; mvl by 0.1. Exits with code 1 on regression > 0.5 points, enabling CI gates. Human-readable output by default; `--format=json` for machine parsing.
+
+## [0.205.0] - 2026-06-13
+
+### Added
+
+- **`mvl prove` caller/callee display** (#836) — Each proof site now shows `caller → callee(param)` instead of just `callee(param)`, making it clear which function contains the call. Layer format changed from `Layer N (name)` to `(N:name)`. All columns (counter, line, caller, callee, verdict) are aligned using char-count widths to handle the multi-byte `→` correctly.
+- **`mvl prove --verbose` wrapping** (#836) — In verbose mode, the predicate is fit on the same line when it fits within the terminal width (respects `COLUMNS`); otherwise it wraps to a second indented line. The callee column width is computed from the arrow only, so long predicates no longer inflate padding for every other line.
+- **`mvl prove --callee <fn>`** (#1374) — Filter proof sites to a specific callee function. Shows only sites where the named function is called. Prints a clear message when no sites match. Exits with an error if `--callee` is given without an argument.
+- **Proof site recording for return-type refinements, loop invariants, and struct/actor field-init checks** (#836) — Previously only call-site parameter checks appeared in `mvl prove` output; return-type refinements (`-> T where ...`), `invariant` checks, and field-init refinements are now included. The summary is counted from sites (not the internal solver counters) so it always matches the printed lines.
+
+### Fixed
+
+- **`std.audit`: `AuditEvent::with_details` and `AuditEvent::fail` extension methods** — Added method-call forms so handlers can write `event.with_details({...})` and `event.fail(reason)` without violating ADR-0031 (no UFCS). The free-function forms `with_details` and `fail(String, String, String, String)` remain for backward compatibility.
+- **Rust backend: prelude extension-method shadowing** — A name-based dedup in `emitter.rs` used bare method names to exclude prelude functions that clashed with user-defined names. This caused `AuditEvent::fail` to be silently dropped whenever the free function `fail` existed in scope. The filter now uses qualified keys (`Type::method`) for extension methods on user-defined types, so distinct symbols are no longer conflated.
+- **Rust backend: examples removed from repo** — `examples/crud_api` moved to the standalone `mvl-lang/examples` repository.
+
+## [0.204.0] - 2026-06-13
+
+### Added
+
+- **Tuple expression literals** (#1366) — Parser, type checker, and backends now support tuple construction syntax `(e1, e2, ...)` as first-class expressions. Type annotations `(Int, String)` and patterns `(a, b)` already worked; this completes the pipeline. Enables multi-return functions without per-shape struct wrappers, supporting self-hosted checker implementation.
+
+### Fixed
+
+- **Data race: iso aliasing via tuple packing** — Detection now catches `let t = (iso_x, other)` and `t = (iso_x, other)` which create hidden aliases, violating the single-reference isolation invariant.
+- **Data race: ref escape via tuple in spawn field** — Detection now catches `Spawn { field: (ref_x, other) }` which allows mutable refs to escape into actor initial state.
+- **IFC: tuple match scrutinee** — Tuple-valued match scrutinees now properly raise the program counter label for implicit flow analysis, preventing secret information leakage through observable side effects.
+- **Linear binding: shadow-drop detection** — Now correctly identifies references within tuple expressions when checking linear (iso) binding shadows.
+- **LLVM backend: tuple type** — Fixed `type_of_expr` to return correct type for tuple expressions instead of falling through to `i64`.
+- **Parser: single-element tuple grammar** — Trailing comma `(e,)` is now normalized to grouping syntax to enforce the two-or-more-elements invariant for `Expr::Tuple`.
+
 ## [0.203.0] - 2026-06-13
 
 ### Added

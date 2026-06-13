@@ -496,7 +496,9 @@ impl TextEmitter {
             Expr::FieldAccess { expr, field, .. } => self
                 .field_type_of(expr, field)
                 .unwrap_or_else(|| "i64".into()),
-            Expr::List { .. } | Expr::Map { .. } | Expr::Set { .. } => "ptr".into(),
+            Expr::List { .. } | Expr::Map { .. } | Expr::Set { .. } | Expr::Tuple { .. } => {
+                "ptr".into()
+            }
             Expr::Consume { expr, .. } | Expr::Relabel { expr, .. } => self.type_of_expr(expr),
             Expr::Unary {
                 op: UnaryOp::Deref,

@@ -614,6 +614,11 @@ fn infer_label(expr: &Expr, env: &HashMap<String, String>) -> Option<String> {
                 .fold(None, join_opt);
             join_opt(recv_label, arg_label)
         }
+        // Tuple construction: join labels of all elements.
+        Expr::Tuple { elems, .. } => elems
+            .iter()
+            .map(|e| infer_label(e, env))
+            .fold(None, join_opt),
         _ => None,
     }
 }
@@ -933,7 +938,7 @@ fn check_expr_flows(
                 check_expr_flows(v, pc.clone(), env, caller_fn, effect_reach, errors);
             }
         }
-        Expr::List { elems, .. } | Expr::Set { elems, .. } => {
+        Expr::List { elems, .. } | Expr::Set { elems, .. } | Expr::Tuple { elems, .. } => {
             for e in elems {
                 check_expr_flows(e, pc.clone(), env, caller_fn, effect_reach, errors);
             }

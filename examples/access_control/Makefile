@@ -1,6 +1,6 @@
 # access_control example — MVL Phase 4 security demonstration
 # Run from this directory or from the repo root.
-.PHONY: help guard-mvl build check lint format test-solver test test-llvm assurance mcdc mutate smoke run run-llvm all clean
+.PHONY: help guard-mvl build check prove lint format test-solver test test-llvm assurance mcdc mutate smoke run run-llvm all clean
 
 .DEFAULT_GOAL := help
 
@@ -28,6 +28,9 @@ check: guard-mvl ## Type-check all source files
 	$(MVL) check $(DIR)rbac.mvl
 	$(MVL) check $(DIR)audit.mvl
 	$(MVL) check $(DIR)main.mvl
+
+prove: guard-mvl ## Prove per-call-site refinement proof layer breakdown
+	$(MVL) prove $(DIR)
 
 lint: guard-mvl ## Lint all source files
 	$(MVL) lint $(DIR)

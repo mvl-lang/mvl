@@ -396,6 +396,10 @@ fn lower_expr(
             elems: lower_exprs(elems, expr_types, ty_subs),
         },
 
+        Expr::Tuple { elems, .. } => TirExprKind::Tuple {
+            elems: lower_exprs(elems, expr_types, ty_subs),
+        },
+
         Expr::Consume { expr, .. } => {
             TirExprKind::Consume(Box::new(lower_expr(expr, expr_types, ty_subs)))
         }

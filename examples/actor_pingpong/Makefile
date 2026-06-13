@@ -4,7 +4,7 @@
 # val/tag capabilities, concurrently { } structured concurrency.
 #
 # Run from this directory or from the repo root.
-.PHONY: help guard-mvl lint check test-solver test assurance smoke run clean
+.PHONY: help guard-mvl lint check prove test-solver test assurance smoke run clean
 
 .DEFAULT_GOAL := help
 
@@ -28,6 +28,9 @@ lint: guard-mvl ## Lint all source files
 
 check: guard-mvl ## Type-check main.mvl
 	$(MVL) check $(DIR)main.mvl --verbose
+
+prove: guard-mvl ## Prove per-call-site refinement proof layer breakdown
+	$(MVL) prove $(DIR)main.mvl
 
 test-solver: guard-mvl ## Show per-file solver statistics
 	@pass=0; fail=0; \

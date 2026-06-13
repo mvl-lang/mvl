@@ -206,6 +206,9 @@ pub fn check_with_two_preludes_mode(
     refinement_counts
         .proof_log
         .extend(contract_counts.proof_log);
+    // #836: Merge contract sites (requires/ensures) into the refinement sites
+    // so they show up in `mvl prove` output alongside call-site refinement checks.
+    refinement_counts.sites.extend(contract_counts.sites);
     session::check_session_types(prog, &mut checker.errors);
     contracts::check_actor_field_refinements(prog, &mut checker.errors, solver_mode);
     contracts::check_struct_field_refinements(prog, &mut checker.errors, solver_mode);
