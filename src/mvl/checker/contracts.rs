@@ -239,6 +239,7 @@ pub fn check_contracts(
         for decl in &prog.declarations {
             match decl {
                 Decl::Fn(fd) => {
+                    ctx.counts.current_fn = fd.name.clone();
                     // Phase 3: seed var_refs with parameter where-refinements so that
                     // `requires` checks on variable arguments (e.g. `f(x)` where
                     // `x: Int where self > 0`) can be resolved by the solver.
@@ -269,6 +270,7 @@ pub fn check_contracts(
                 }
                 Decl::Impl(impl_d) => {
                     for method in &impl_d.methods {
+                        ctx.counts.current_fn = method.name.clone();
                         let var_refs = build_param_var_refs(&method.params);
                         walk_stmts(&method.body, &mut ctx, &mut |expr, ctx| {
                             if let Expr::FnCall {
@@ -335,6 +337,7 @@ pub fn check_return_refinements(prog: &Program, errors: &mut Vec<CheckError>, mo
         };
         for fd in fns {
             if let Some(ret_pred) = &fd.return_refinement {
+                ctx.counts.current_fn = fd.name.clone();
                 let var_refs = build_param_var_refs(&fd.params);
                 check_return_pred_in_block(&fd.body, &fd.name, ret_pred, &var_refs, &mut ctx);
             }
@@ -432,18 +435,36 @@ fn check_return_pred_for_expr(
     var_refs: &HashMap<String, Option<RefExpr>>,
     ctx: &mut ContractCheckCtx<'_>,
 ) {
+    let layer_before = ctx.counts.by_layer;
     let outcome =
         check_arg_against_pred_counted(ret_expr, ret_pred, var_refs, ctx.fn_decls, ctx.counts);
-    if let RefResult::Failed { counterexample } = outcome {
-        ctx.errors.push(CheckError::RefinementViolated {
-            pred: format!(
-                "return value of `{fn_name}` violates return refinement `{}`",
-                display_pred(ret_pred)
-            ),
-            span: ret_span,
-            counterexample,
-        });
-    }
+    let layer = (1..6)
+        .find(|&i| ctx.counts.by_layer[i] > layer_before[i])
+        .unwrap_or(0);
+    let proof_outcome = match &outcome {
+        RefResult::Proven => ProofOutcome::Proven { layer },
+        RefResult::RuntimeCheck => ProofOutcome::RuntimeCheck,
+        RefResult::Failed { counterexample } => {
+            ctx.errors.push(CheckError::RefinementViolated {
+                pred: format!(
+                    "return value of `{fn_name}` violates return refinement `{}`",
+                    display_pred(ret_pred)
+                ),
+                span: ret_span,
+                counterexample: counterexample.clone(),
+            });
+            ProofOutcome::Failed
+        }
+    };
+    // #836: Record return-refinement proof in sites for `mvl prove`.
+    ctx.counts.sites.push(ProofSite {
+        caller_fn: ctx.counts.current_fn.clone(),
+        fn_name: fn_name.to_string(),
+        param_name: "result".to_string(),
+        predicate: format!("return {}", display_pred(ret_pred)),
+        span: ret_span,
+        outcome: proof_outcome,
+    });
 }
 
 // ── Lookup table builders ─────────────────────────────────────────────────────
@@ -550,6 +571,7 @@ fn check_requires_at_call(
                 };
                 // #836: Record requires-contract proof in sites for `mvl prove`.
                 ctx.counts.sites.push(ProofSite {
+                    caller_fn: ctx.counts.current_fn.clone(),
                     fn_name: fn_name.to_string(),
                     param_name: param_name.clone(),
                     predicate: format!("requires {}", display_pred(&req_pred)),
@@ -724,6 +746,7 @@ fn check_ensures_for_return(
         };
         // #836: Record contract proofs in sites for `mvl prove` breakdown.
         ctx.counts.sites.push(ProofSite {
+            caller_fn: ctx.counts.current_fn.clone(),
             fn_name: fn_name.to_string(),
             param_name: "result".to_string(),
             predicate: format!("ensures {}", display_pred(&ens_pred)),
@@ -1079,6 +1102,7 @@ fn check_multi_param_requires_literal(
     };
     // #836: Record multi-param requires-contract proof in sites.
     ctx.counts.sites.push(ProofSite {
+        caller_fn: ctx.counts.current_fn.clone(),
         fn_name: fn_name.to_string(),
         param_name: primary_name.clone(),
         predicate: format!("requires {}", display_pred(pred)),
@@ -1198,12 +1222,13 @@ fn check_invariant_at_entry(
         }
     }
 
-    match distinct.as_slice() {
+    let (outcome_opt, param_label) = match distinct.as_slice() {
         [] => {
             // Constant predicate (e.g., `invariant 0 >= 0` or `invariant 1 < 0`).
             // The predicate has no `self` reference; pass a dummy literal as the argument.
             // Layer 1 will const-fold the comparison directly.
             let dummy = Expr::Literal(Literal::Integer(0), loop_span);
+            let layer_before = ctx.counts.by_layer;
             let outcome = check_arg_against_pred_counted(
                 &dummy,
                 inv_pred,
@@ -1211,19 +1236,13 @@ fn check_invariant_at_entry(
                 ctx.fn_decls,
                 ctx.counts,
             );
-            if let RefResult::Failed { counterexample } = outcome {
-                ctx.errors.push(CheckError::InvariantViolated {
-                    fn_name: fn_name.to_string(),
-                    pred: display_pred(inv_pred),
-                    span: loop_span,
-                    counterexample,
-                });
-            }
+            (Some((outcome, layer_before)), "const".to_string())
         }
         [var_name] => {
             // Single free variable — normalise it to "self" and check via Ident lookup.
             let normalized = normalize_pred(inv_pred, var_name);
             let ident_expr = Expr::Ident(var_name.clone(), loop_span);
+            let layer_before = ctx.counts.by_layer;
             let outcome = check_arg_against_pred_counted(
                 &ident_expr,
                 &normalized,
@@ -1231,19 +1250,40 @@ fn check_invariant_at_entry(
                 ctx.fn_decls,
                 ctx.counts,
             );
-            if let RefResult::Failed { counterexample } = outcome {
+            (Some((outcome, layer_before)), var_name.clone())
+        }
+        _ => {
+            // Multiple variables: defer to Phase 4 (RuntimeCheck, no error).
+            (None, String::new())
+        }
+    };
+
+    if let Some((outcome, layer_before)) = outcome_opt {
+        let layer = (1..6)
+            .find(|&i| ctx.counts.by_layer[i] > layer_before[i])
+            .unwrap_or(0);
+        let proof_outcome = match &outcome {
+            RefResult::Proven => ProofOutcome::Proven { layer },
+            RefResult::RuntimeCheck => ProofOutcome::RuntimeCheck,
+            RefResult::Failed { counterexample } => {
                 ctx.errors.push(CheckError::InvariantViolated {
                     fn_name: fn_name.to_string(),
                     pred: display_pred(inv_pred),
                     span: loop_span,
-                    counterexample,
+                    counterexample: counterexample.clone(),
                 });
+                ProofOutcome::Failed
             }
-            // Proven or RuntimeCheck: silent at compile time.
-        }
-        _ => {
-            // Multiple variables: defer to Phase 4 (RuntimeCheck, no error).
-        }
+        };
+        // #836: Record invariant proof in sites for `mvl prove`.
+        ctx.counts.sites.push(ProofSite {
+            caller_fn: ctx.counts.current_fn.clone(),
+            fn_name: fn_name.to_string(),
+            param_name: param_label,
+            predicate: format!("invariant {}", display_pred(inv_pred)),
+            span: loop_span,
+            outcome: proof_outcome,
+        });
     }
 }
 
@@ -1652,6 +1692,7 @@ fn check_actor_behavior_contracts(
     ctx: &mut ContractCheckCtx<'_>,
 ) {
     for method in &ad.methods {
+        ctx.counts.current_fn = format!("{}::{}", ad.name, method.name);
         let var_refs = build_param_var_refs(&method.params);
         walk_stmts(&method.body, ctx, &mut |expr, ctx| {
             if let Expr::FnCall {
@@ -1767,6 +1808,7 @@ fn check_spawn_at_site(
     for (init_name, init_expr) in fields {
         if let Some(field_decl) = refined_fields.iter().find(|f| &f.name == init_name) {
             if let Some(pred) = &field_decl.refinement {
+                let layer_before = ctx.counts.by_layer;
                 let outcome = check_arg_against_pred_counted(
                     init_expr,
                     pred,
@@ -1774,13 +1816,30 @@ fn check_spawn_at_site(
                     ctx.fn_decls,
                     ctx.counts,
                 );
-                if let RefResult::Failed { counterexample } = outcome {
-                    ctx.errors.push(CheckError::RefinementViolated {
-                        pred: format!("{actor_type}.{init_name}: {}", display_pred(pred)),
-                        counterexample,
-                        span: *span,
-                    });
-                }
+                let layer = (1..6)
+                    .find(|&i| ctx.counts.by_layer[i] > layer_before[i])
+                    .unwrap_or(0);
+                let proof_outcome = match &outcome {
+                    RefResult::Proven => ProofOutcome::Proven { layer },
+                    RefResult::RuntimeCheck => ProofOutcome::RuntimeCheck,
+                    RefResult::Failed { counterexample } => {
+                        ctx.errors.push(CheckError::RefinementViolated {
+                            pred: format!("{actor_type}.{init_name}: {}", display_pred(pred)),
+                            counterexample: counterexample.clone(),
+                            span: *span,
+                        });
+                        ProofOutcome::Failed
+                    }
+                };
+                // #836: Record actor-field init refinement in sites.
+                ctx.counts.sites.push(ProofSite {
+                    caller_fn: ctx.counts.current_fn.clone(),
+                    fn_name: actor_type.clone(),
+                    param_name: init_name.clone(),
+                    predicate: format!("field {}", display_pred(pred)),
+                    span: *span,
+                    outcome: proof_outcome,
+                });
             }
         }
     }
@@ -1904,6 +1963,7 @@ fn check_construct_at_site(
     for (init_name, init_expr) in fields {
         if let Some(field_decl) = refined_fields.iter().find(|f| &f.name == init_name) {
             if let Some(pred) = &field_decl.refinement {
+                let layer_before = ctx.counts.by_layer;
                 let outcome = check_arg_against_pred_counted(
                     init_expr,
                     pred,
@@ -1911,13 +1971,30 @@ fn check_construct_at_site(
                     ctx.fn_decls,
                     ctx.counts,
                 );
-                if let RefResult::Failed { counterexample } = outcome {
-                    ctx.errors.push(CheckError::RefinementViolated {
-                        pred: format!("{name}.{init_name}: {}", display_pred(pred)),
-                        counterexample,
-                        span: *span,
-                    });
-                }
+                let layer = (1..6)
+                    .find(|&i| ctx.counts.by_layer[i] > layer_before[i])
+                    .unwrap_or(0);
+                let proof_outcome = match &outcome {
+                    RefResult::Proven => ProofOutcome::Proven { layer },
+                    RefResult::RuntimeCheck => ProofOutcome::RuntimeCheck,
+                    RefResult::Failed { counterexample } => {
+                        ctx.errors.push(CheckError::RefinementViolated {
+                            pred: format!("{name}.{init_name}: {}", display_pred(pred)),
+                            counterexample: counterexample.clone(),
+                            span: *span,
+                        });
+                        ProofOutcome::Failed
+                    }
+                };
+                // #836: Record struct-field init refinement in sites.
+                ctx.counts.sites.push(ProofSite {
+                    caller_fn: ctx.counts.current_fn.clone(),
+                    fn_name: name.clone(),
+                    param_name: init_name.clone(),
+                    predicate: format!("field {}", display_pred(pred)),
+                    span: *span,
+                    outcome: proof_outcome,
+                });
             }
         }
     }

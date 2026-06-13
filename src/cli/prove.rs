@@ -110,44 +110,125 @@ pub fn run(path: &str, verbose: bool, stdlib_profile: &str) {
         }
 
         println!("{file_str}: refinement proof breakdown");
-        for site in sites {
-            let loc = format!("line {:>3}", site.span.line);
-            let call = if verbose {
+        // Adaptive widths for alignment.
+        let counter_width = if sites.len() >= 100 { 3 } else { 2 };
+        let line_width = sites
+            .iter()
+            .map(|s| s.span.line)
+            .max()
+            .unwrap_or(1)
+            .to_string()
+            .len();
+        let caller_width = sites
+            .iter()
+            .map(|s| s.caller_fn.chars().count())
+            .max()
+            .unwrap_or(0);
+        // callee_width is always arrow-only (no predicate) so verbose predicates
+        // don't inflate the column for every other line.
+        let callee_width = sites
+            .iter()
+            .map(|s| {
                 format!(
-                    "{}({}) — `{}`",
-                    site.fn_name, site.param_name, site.predicate
+                    "{:<cw$} \u{2192} {}({})",
+                    s.caller_fn,
+                    s.fn_name,
+                    s.param_name,
+                    cw = caller_width
                 )
-            } else {
-                format!("{}({})", site.fn_name, site.param_name)
-            };
+                .chars()
+                .count()
+            })
+            .max()
+            .unwrap_or(40);
+        let verdict_width = sites
+            .iter()
+            .map(|s| match &s.outcome {
+                ProofOutcome::Proven { layer } => {
+                    format!("({layer}:{})", LAYER_NAMES[*layer]).chars().count()
+                }
+                ProofOutcome::RuntimeCheck => "(runtime)".len(),
+                ProofOutcome::Failed => "(FAILED)".len(),
+            })
+            .max()
+            .unwrap_or(10);
+        // Predicate indent matches the prefix "  NN:[LLL]  ".
+        let pred_indent =
+            " ".repeat(2 + counter_width + 1 + (line_width + 2) + 2 + caller_width + 4);
+        let term_width = std::env::var("COLUMNS")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(100);
+        for (idx, site) in sites.iter().enumerate() {
+            let counter = format!("{:0>width$}", idx + 1, width = counter_width);
+            let loc = format!("[{:>width$}]", site.span.line, width = line_width);
+            let arrow = format!(
+                "{:<cw$} → {}({})",
+                site.caller_fn,
+                site.fn_name,
+                site.param_name,
+                cw = caller_width
+            );
             let verdict = match &site.outcome {
                 ProofOutcome::Proven { layer } => {
-                    format!("Layer {} ({})", layer, LAYER_NAMES[*layer])
+                    format!("({layer}:{})", LAYER_NAMES[*layer])
                 }
-                ProofOutcome::RuntimeCheck => "runtime check".to_string(),
-                ProofOutcome::Failed => "FAILED (static violation)".to_string(),
+                ProofOutcome::RuntimeCheck => "(runtime)".to_string(),
+                ProofOutcome::Failed => "(FAILED)".to_string(),
             };
-            println!("  {loc}  {call:<40}  {verdict}");
+            if verbose {
+                // Try fitting everything on one line; wrap predicate below if too wide.
+                let one_line = format!(
+                    "  {counter}:{loc}  {arrow} — `{}`  {verdict}",
+                    site.predicate
+                );
+                if one_line.chars().count() <= term_width {
+                    println!("{one_line}");
+                } else {
+                    println!(
+                        "  {counter}:{loc}  {arrow:<callee_width$}  {verdict:<verdict_width$}"
+                    );
+                    println!("{pred_indent}— `{}`", site.predicate);
+                }
+            } else {
+                println!("  {counter}:{loc}  {arrow:<callee_width$}  {verdict:<verdict_width$}");
+            }
         }
 
-        let rc = &result.refinement_counts;
-        total_proven += rc.proven;
-        total_runtime += rc.runtime_checked;
-        total_failed += rc.failed;
+        // Compute summary from sites (not counts.proven/runtime/failed) so the
+        // numbers always match the lines we just printed.  counts.* still tracks
+        // the underlying solver attempts including negation-prove steps for
+        // decreases/invariant-preservation that don't correspond to user-visible sites.
+        let mut file_proven = 0usize;
+        let mut file_runtime = 0usize;
+        let mut file_failed = 0usize;
+        let mut file_by_layer = [0usize; 6];
+        for site in sites {
+            match &site.outcome {
+                ProofOutcome::Proven { layer } => {
+                    file_proven += 1;
+                    file_by_layer[*layer] += 1;
+                }
+                ProofOutcome::RuntimeCheck => file_runtime += 1,
+                ProofOutcome::Failed => file_failed += 1,
+            }
+        }
+        total_proven += file_proven;
+        total_runtime += file_runtime;
+        total_failed += file_failed;
         for (dst, src) in total_by_layer[1..=5]
             .iter_mut()
-            .zip(rc.by_layer[1..=5].iter())
+            .zip(file_by_layer[1..=5].iter())
         {
             *dst += src;
         }
 
         let layer_breakdown: String = (1..=5)
-            .map(|i| format!("L{}:{}", i, rc.by_layer[i]))
+            .map(|i| format!("L{}:{}", i, file_by_layer[i]))
             .collect::<Vec<_>>()
             .join(" ");
         println!(
-            "\n  Summary: {} proven ({}), {} runtime, {} failed\n",
-            rc.proven, layer_breakdown, rc.runtime_checked, rc.failed
+            "\n  Summary: {file_proven} proven ({layer_breakdown}), {file_runtime} runtime, {file_failed} failed\n"
         );
     }
 

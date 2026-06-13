@@ -83,6 +83,10 @@ pub struct RefinementCounts {
     /// Per-call-site proof records covering ALL outcomes (proven / runtime / failed).
     /// Populated unconditionally; consumed by `mvl prove` (#836) for the breakdown report.
     pub sites: Vec<ProofSite>,
+    /// Name of the function currently being analyzed (set by `check_refinements` before
+    /// each `analyze_block` call so `ProofSite::caller_fn` can be populated without
+    /// threading the name through every recursive helper).
+    pub current_fn: String,
 }
 
 // ── Per-call-site proof records (#836) ────────────────────────────────────────
@@ -101,7 +105,9 @@ pub enum ProofOutcome {
 /// Per-call-site record of a refinement proof attempt.
 #[derive(Debug, Clone)]
 pub struct ProofSite {
-    /// Name of the function being called.
+    /// Name of the function containing the call (caller).
+    pub caller_fn: String,
+    /// Name of the function being called (callee).
     pub fn_name: String,
     /// Name of the refined parameter whose predicate was checked.
     pub param_name: String,
@@ -146,6 +152,7 @@ pub fn check_refinements(
     for decl in &prog.declarations {
         match decl {
             Decl::Fn(fd) => {
+                counts.current_fn = fd.name.clone();
                 let mut var_refs = param_refinements(fd, &type_refs);
                 analyze_block(
                     &fd.body,
@@ -159,6 +166,7 @@ pub fn check_refinements(
             }
             Decl::Impl(impl_decl) => {
                 for method in &impl_decl.methods {
+                    counts.current_fn = method.name.clone();
                     let mut var_refs = param_refinements(method, &type_refs);
                     analyze_block(
                         &method.body,
@@ -176,6 +184,7 @@ pub fn check_refinements(
             // parameters; the same 5-layer solver applies.
             Decl::Actor(ad) => {
                 for method in &ad.methods {
+                    counts.current_fn = format!("{}::{}", ad.name, method.name);
                     let mut var_refs = params_to_var_refs(&method.params, &type_refs);
                     analyze_block(
                         &method.body,
@@ -1313,6 +1322,7 @@ fn check_call_site(
             }
         };
         counts.sites.push(ProofSite {
+            caller_fn: counts.current_fn.clone(),
             fn_name: fn_name.to_string(),
             param_name: param_name.clone(),
             predicate: display_pred(pred),
