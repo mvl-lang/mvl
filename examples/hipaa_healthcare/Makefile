@@ -1,6 +1,6 @@
 # hipaa_healthcare example — HIPAA IFC labels for Protected Health Information
 # Run from this directory or from the repo root.
-.PHONY: help guard-mvl check lint format test-solver test test-llvm assurance mcdc mutate smoke all clean
+.PHONY: help guard-mvl check prove lint format test-solver test test-llvm assurance mcdc mutate smoke all clean
 
 .DEFAULT_GOAL := help
 
@@ -23,6 +23,9 @@ check: guard-mvl ## Type-check all source files
 	$(MVL) check $(DIR)ifc.mvl
 	$(MVL) check $(DIR)patient.mvl
 	$(MVL) check $(DIR)db.mvl
+
+prove: guard-mvl ## Prove per-call-site refinement proof layer breakdown
+	$(MVL) prove $(DIR)
 
 lint: guard-mvl ## Lint all source files
 	$(MVL) lint $(DIR)

@@ -16,7 +16,7 @@
 #
 # Packages are resolved from the XDG cache ($XDG_DATA_HOME/mvl/pkg/).
 # Run `mvl install` from the repo root to populate the cache before using this example.
-.PHONY: help guard-mvl guard-pyzmq check build test test-zmq test-rust \
+.PHONY: help guard-mvl guard-pyzmq check prove build test test-zmq test-rust \
         test-pushpull test-pubsub test-all run run-zmtp clean smoke test-solver assurance
 
 .DEFAULT_GOAL := help
@@ -61,6 +61,9 @@ check: guard-mvl ## Type-check all MVL sources
 	$(MVL) check $(DIR)server_zmtp.mvl
 	$(MVL) check $(DIR)server_pull.mvl
 	$(MVL) check $(DIR)client_sub.mvl
+
+prove: guard-mvl ## Prove per-call-site refinement proof layer breakdown
+	$(MVL) prove $(DIR)
 
 test-solver: guard-mvl ## Show solver statistics
 	@pass=0; fail=0; \

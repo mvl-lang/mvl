@@ -1,6 +1,6 @@
 # log_to_file example — structured logging with IFC and refinement types.
 # Run from this directory: make check, make test, etc.
-.PHONY: help guard-mvl lint check test-solver test assurance smoke run clean
+.PHONY: help guard-mvl lint check prove test-solver test assurance smoke run clean
 
 .DEFAULT_GOAL := help
 
@@ -25,6 +25,9 @@ lint: guard-mvl ## Lint main.mvl
 
 check: guard-mvl ## Type-check all files in this directory
 	cd $(REPO_ROOT) && $(abspath $(MVL)) check $(DIR)
+
+prove: guard-mvl ## Prove per-call-site refinement proof layer breakdown
+	cd $(REPO_ROOT) && $(abspath $(MVL)) prove $(DIR)
 
 test-solver: guard-mvl ## Show solver statistics for main.mvl
 	@pass=0; fail=0; \

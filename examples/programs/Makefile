@@ -2,7 +2,7 @@
 # Run from this directory or via `make test-examples` from the repo root.
 .ONESHELL:
 SHELL := /bin/bash
-.PHONY: help check lint test-solver test assurance smoke run clean
+.PHONY: help check prove lint test-solver test assurance smoke run clean
 
 MVL := ../../target/debug/mvl
 DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
@@ -28,6 +28,9 @@ check: ## Type-check all example programs
 	else \
 		printf "  \033[31m✗  $$pass passed, $$fail failed\033[0m\n\n"; exit 1; \
 	fi
+
+prove: ## Prove per-call-site refinement proof layer breakdown
+	$(MVL) prove $(DIR)
 
 lint: ## Lint all example programs
 	$(MVL) lint $(DIR)

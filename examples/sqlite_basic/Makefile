@@ -1,5 +1,5 @@
 # examples/sqlite_basic — SQLite basic example Makefile
-.PHONY: help guard-mvl smoke run check test-solver test assurance clean
+.PHONY: help guard-mvl smoke run check prove test-solver test assurance clean
 
 .DEFAULT_GOAL := help
 
@@ -15,6 +15,9 @@ guard-mvl:
 
 check: guard-mvl ## Type-check example files (main.mvl + main_test.mvl)
 	cd $(REPO_ROOT) && $(abspath $(MVL)) check $(DIR)
+
+prove: guard-mvl ## Prove per-call-site refinement proof layer breakdown
+	cd $(REPO_ROOT) && $(abspath $(MVL)) prove $(DIR)
 
 test-solver: guard-mvl ## Show per-file solver statistics
 	@pass=0; fail=0; \

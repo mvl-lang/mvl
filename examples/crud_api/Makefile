@@ -6,7 +6,7 @@
 # Run:   make run        → start server on 127.0.0.1:8080
 # Test:  make check      → type-check all source files
 # Logs:  make assurance  → assurance report (all source files)
-.PHONY: help guard-mvl lint check test-solver test test-llvm assurance smoke run clean
+.PHONY: help guard-mvl lint check prove test-solver test test-llvm assurance smoke run clean
 
 .DEFAULT_GOAL := help
 
@@ -31,6 +31,9 @@ check: guard-mvl ## Type-check all source files
 	@for f in $(SRCS); do \
 		cd $(REPO_ROOT) && $(abspath $(MVL)) check "$$f"; \
 	done
+
+prove: guard-mvl ## Prove per-call-site refinement proof layer breakdown
+	cd $(REPO_ROOT) && $(abspath $(MVL)) prove $(DIR)
 
 test-solver: guard-mvl ## Show per-file solver statistics
 	@pass=0; fail=0; \
