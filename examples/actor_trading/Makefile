@@ -4,7 +4,7 @@
 # Scalar predicates (price > 0, quantity > 0) are proved statically by the
 # MVL layered solver.  Cross-field invariants (no-worse-than-limit, quantity
 # conservation) are proved for ALL inputs by the Z3 harness in verify.py.
-.PHONY: help guard-mvl guard-z3 lint check test test-solver test-llvm assurance verify smoke run clean
+.PHONY: help guard-mvl guard-z3 lint check prove test test-solver test-llvm assurance verify smoke run clean
 
 .DEFAULT_GOAL := help
 
@@ -39,6 +39,9 @@ lint: guard-mvl ## Lint all source files
 check: guard-mvl ## Type-check types.mvl and main.mvl
 	$(MVL) check $(DIR)types.mvl
 	$(MVL) check $(DIR)main.mvl
+
+prove: guard-mvl ## Prove per-call-site refinement proof layer breakdown
+	$(MVL) prove $(DIR)
 
 test: guard-mvl ## Run unit tests
 	$(MVL) test $(DIR)

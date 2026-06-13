@@ -1,6 +1,6 @@
 # medical_triage example — MC/DC coverage demonstration (IEC 62304)
 # Run from this directory or from the repo root.
-.PHONY: help guard-mvl check lint test-solver test test-llvm assurance mcdc mutate smoke run run-llvm all clean
+.PHONY: help guard-mvl check prove lint test-solver test test-llvm assurance mcdc mutate smoke run run-llvm all clean
 
 .DEFAULT_GOAL := help
 
@@ -23,6 +23,9 @@ check: guard-mvl ## Type-check all source files
 	$(MVL) check $(DIR)model.mvl
 	$(MVL) check $(DIR)triage.mvl
 	$(MVL) check $(DIR)main.mvl
+
+prove: guard-mvl ## Prove per-call-site refinement proof layer breakdown
+	$(MVL) prove $(DIR)
 
 lint: guard-mvl ## Lint all source files
 	$(MVL) lint $(DIR)

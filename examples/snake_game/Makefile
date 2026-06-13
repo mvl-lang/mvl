@@ -1,6 +1,6 @@
 # snake_game — terminal Snake game demonstrating pkg.tui, effects, and game loop.
 # Run from this directory or from the repo root.
-.PHONY: help guard-mvl build check test-solver test assurance smoke run clean
+.PHONY: help guard-mvl build check prove test-solver test assurance smoke run clean
 
 .DEFAULT_GOAL := help
 
@@ -27,6 +27,9 @@ check: guard-mvl ## Type-check all source files
 	$(MVL) check $(DIR)input.mvl
 	$(MVL) check $(DIR)render.mvl
 	$(MVL) check $(DIR)main.mvl
+
+prove: guard-mvl ## Prove per-call-site refinement proof layer breakdown
+	$(MVL) prove $(DIR)
 
 test-solver: guard-mvl ## Show per-file solver statistics
 	@pass=0; fail=0; \

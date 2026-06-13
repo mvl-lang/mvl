@@ -8,7 +8,7 @@
 #   LLVM                 — pure tests only (handler_test.mvl); extern stubs return defaults
 #
 # Run from this directory or from the repo root.
-.PHONY: help guard-mvl build check lint test-solver test test-llvm assurance mcdc mutate fuzz smoke run all clean
+.PHONY: help guard-mvl build check prove lint test-solver test test-llvm assurance mcdc mutate fuzz smoke run all clean
 
 .DEFAULT_GOAL := help
 
@@ -35,6 +35,9 @@ check: guard-mvl ## Type-check all source files individually
 	$(MVL) check $(DIR)handler.mvl
 	$(MVL) check $(DIR)storage.mvl
 	$(MVL) check $(DIR)main.mvl
+
+prove: guard-mvl ## Prove per-call-site refinement proof layer breakdown
+	$(MVL) prove $(DIR)
 
 lint: guard-mvl ## Lint all source files
 	$(MVL) lint $(DIR)
