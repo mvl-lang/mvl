@@ -442,6 +442,11 @@ impl Parser {
                 }
                 let rp = self.expect(&TokenKind::RParen);
                 self.require(rp)?;
+                // `(e,)` — trailing comma after a single element is treated as
+                // grouping to enforce the "two or more elements" invariant.
+                if elems.len() < 2 {
+                    return Ok(elems.into_iter().next().unwrap());
+                }
                 let span = self.span_from(start);
                 Ok(Expr::Tuple { elems, span })
             }

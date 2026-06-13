@@ -939,7 +939,7 @@ fn expr_references_name(expr: &Expr, name: &str) -> bool {
                 || arms.iter().any(|a| match_arm_references_name(a, name))
         }
         Expr::Block(b) => block_references_name(b, name),
-        Expr::List { elems, .. } | Expr::Set { elems, .. } => {
+        Expr::List { elems, .. } | Expr::Set { elems, .. } | Expr::Tuple { elems, .. } => {
             elems.iter().any(|e| expr_references_name(e, name))
         }
         Expr::Map { pairs, .. } => pairs

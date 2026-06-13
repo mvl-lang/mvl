@@ -138,6 +138,24 @@ fn check_expr_ref_escape(expr: &Expr, ref_vars: &HashSet<&str>, errors: &mut Vec
                         });
                     }
                 }
+                // `Spawn { field: (ref_x, other) }` — ref inside a tuple literal
+                // still escapes into the actor's initial state.
+                if let Expr::Tuple { elems, .. }
+                | Expr::List { elems, .. }
+                | Expr::Set { elems, .. } = val
+                {
+                    for elem in elems {
+                        if let Expr::Ident(name, _) = elem {
+                            if ref_vars.contains(name.as_str()) {
+                                errors.push(CheckError::RefEscapesToConcurrentContext {
+                                    name: name.clone(),
+                                    actor_type: actor_type.clone(),
+                                    span: *span,
+                                });
+                            }
+                        }
+                    }
+                }
                 // recurse in case of nested spawn or complex sub-expressions
                 check_expr_ref_escape(val, ref_vars, errors);
             }
@@ -400,6 +418,20 @@ fn check_stmt_iso(stmt: &Stmt, iso_vars: &mut HashSet<String>, errors: &mut Vec<
                     return;
                 }
             }
+            // `let t = (iso_x, other)` — iso inside a tuple literal creates an alias
+            // even though it's not a direct ident binding.
+            if let Expr::Tuple { elems, .. } = init {
+                for elem in elems {
+                    if let Expr::Ident(src, _) = elem {
+                        if iso_vars.contains(src.as_str()) {
+                            errors.push(CheckError::IsoAliasingViolation {
+                                name: src.clone(),
+                                span: *span,
+                            });
+                        }
+                    }
+                }
+            }
             check_expr_iso(init, iso_vars, errors);
         }
         Stmt::Assign { value, span, .. } => {
@@ -412,6 +444,19 @@ fn check_stmt_iso(stmt: &Stmt, iso_vars: &mut HashSet<String>, errors: &mut Vec<
                         span: *span,
                     });
                     return;
+                }
+            }
+            // `t = (iso_x, other)` — same as the let case.
+            if let Expr::Tuple { elems, .. } = value {
+                for elem in elems {
+                    if let Expr::Ident(src, _) = elem {
+                        if iso_vars.contains(src.as_str()) {
+                            errors.push(CheckError::IsoAliasingViolation {
+                                name: src.clone(),
+                                span: *span,
+                            });
+                        }
+                    }
                 }
             }
             check_expr_iso(value, iso_vars, errors);

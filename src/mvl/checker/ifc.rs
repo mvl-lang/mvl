@@ -614,6 +614,11 @@ fn infer_label(expr: &Expr, env: &HashMap<String, String>) -> Option<String> {
                 .fold(None, join_opt);
             join_opt(recv_label, arg_label)
         }
+        // Tuple construction: join labels of all elements.
+        Expr::Tuple { elems, .. } => elems
+            .iter()
+            .map(|e| infer_label(e, env))
+            .fold(None, join_opt),
         _ => None,
     }
 }
