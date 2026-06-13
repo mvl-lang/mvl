@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [0.205.0] - 2026-06-13
+
+### Added
+
+- **`mvl prove` caller/callee display** (#836) — Each proof site now shows `caller → callee(param)` instead of just `callee(param)`, making it clear which function contains the call. Layer format changed from `Layer N (name)` to `(N:name)`. All columns (counter, line, caller, callee, verdict) are aligned using char-count widths to handle the multi-byte `→` correctly.
+- **`mvl prove --verbose` wrapping** (#836) — In verbose mode, the predicate is fit on the same line when it fits within the terminal width (respects `COLUMNS`); otherwise it wraps to a second indented line. The callee column width is computed from the arrow only, so long predicates no longer inflate padding for every other line.
+- **`mvl prove --callee <fn>`** (#1374) — Filter proof sites to a specific callee function. Shows only sites where the named function is called. Prints a clear message when no sites match. Exits with an error if `--callee` is given without an argument.
+- **Proof site recording for return-type refinements, loop invariants, and struct/actor field-init checks** (#836) — Previously only call-site parameter checks appeared in `mvl prove` output; return-type refinements (`-> T where ...`), `invariant` checks, and field-init refinements are now included. The summary is counted from sites (not the internal solver counters) so it always matches the printed lines.
+
 ## [0.204.0] - 2026-06-13
 
 ### Added
