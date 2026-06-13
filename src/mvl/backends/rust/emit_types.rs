@@ -755,7 +755,7 @@ impl RustEmitter {
         let new_fns: Vec<_> = ed
             .fns
             .iter()
-            .filter(|f| self.extern_fns.insert(f.name.clone()))
+            .filter(|f| self.register_extern_fn(f.name.clone()))
             .collect();
         if new_fns.is_empty() {
             return;

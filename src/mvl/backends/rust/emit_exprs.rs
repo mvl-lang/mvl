@@ -816,7 +816,7 @@ impl RustEmitter {
                     self.emit_args(args);
                     self.push(")");
                 } else {
-                    let is_extern = self.extern_fns.contains(name.as_str());
+                    let is_extern = self.has_extern_fn(name.as_str());
                     if is_extern {
                         self.push("unsafe { ");
                     }
