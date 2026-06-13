@@ -1,6 +1,7 @@
-// Corpus: tuple literal expressions (#1366)
+// Corpus: tuple literal expressions and let-destructuring (#1366)
 // Parser, checker, IR, and backends support `(e1, e2, ...)` in expression position.
-// Note: `let (a, b) = ...` destructuring is a separate feature, not exercised here.
+// Let-binding tuple destructuring works with an explicit type annotation
+// (MVL requires explicit types on all `let` bindings).
 
 fn pair() -> (Int, String) {
     (42, "hello")
@@ -32,4 +33,19 @@ fn returns_pair_in_list() -> List[(Int, Int)] {
 fn grouped_paren_still_works() -> Int {
     let x: Int = (1 + 2);
     x
+}
+
+fn let_destructure_pair() -> Int {
+    let (a, b): (Int, Int) = (3, 4);
+    a + b
+}
+
+fn let_destructure_triple() -> String {
+    let (_n, s, _flag): (Int, String, Bool) = (1, "two", true);
+    s
+}
+
+fn let_destructure_from_call() -> Int {
+    let (x, y): (Int, Int) = from_locals();
+    x + y
 }
