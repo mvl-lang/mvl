@@ -109,8 +109,9 @@ extern_fn_decl = "fn" IDENT "(" [ param_list ] ")" "->" return_type
 impl_decl      = "impl" IDENT [ "[" type_list "]" ] "for" IDENT "{" { fn_decl } "}" ;
 
 (* === Type expressions === *)
+(* MVL has no anonymous tuple types — use named structs instead (ADR-0002, #1380). *)
 type_expr      = base_type | option_type | result_type | ref_type
-               | labeled_type | refined_type | fn_type | tuple_type ;
+               | labeled_type | refined_type | fn_type ;
 base_type      = IDENT [ "[" type_list "]" ] ;
 option_type    = "Option" "[" type_expr "]" ;
 result_type    = "Result" "[" type_expr "," type_expr "]" ;
@@ -119,7 +120,6 @@ labeled_type   = security_label "[" type_expr "]" ;
 security_label = "Public" | "Tainted" | "Secret" ;
 refined_type   = type_expr "where" refinement ;
 fn_type        = "fn" "(" type_list ")" "->" type_expr [ "!" effect_list ] ;
-tuple_type     = "(" type_expr "," type_list ")" ;
 type_list      = type_expr { "," type_expr } ;
 
 (* === Refinement predicates === *)

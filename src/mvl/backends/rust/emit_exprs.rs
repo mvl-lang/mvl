@@ -277,14 +277,17 @@ impl RustEmitter {
                         }
                         self.push(").map(|w| w.to_vec()).collect::<Vec<_>>()");
                     }
-                    // partition(f) — turbofish needed so Rust can infer the element type
+                    // partition(f) -> Partitioned[T]   (struct, not tuple — #1380)
                     "partition" => {
+                        self.push("{ let (__matching, __rest): (Vec<_>, Vec<_>) = ");
                         self.emit_expr(receiver);
-                        self.push(".into_iter().partition::<Vec<_>, _>(|__x| ");
+                        self.push(".into_iter().partition(|__x| ");
                         if let Some(arg) = args.first() {
                             self.emit_expr(arg);
                         }
-                        self.push("(__x.clone()))");
+                        self.push(
+                            "(__x.clone())); Partitioned { matching: __matching, rest: __rest } }",
+                        );
                     }
                     // group_by(f) — no native Rust equivalent; fold into HashMap
                     "group_by" => {

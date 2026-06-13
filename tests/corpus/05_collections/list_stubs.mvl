@@ -10,7 +10,7 @@ fn test_sort() -> List[Int] {
     xs.sort()
 }
 
-fn test_partition() -> (List[Int], List[Int]) {
+fn test_partition() -> Partitioned[Int] {
     let xs: List[Int] = [1, 2, 3, 4];
     xs.partition(is_even)
 }

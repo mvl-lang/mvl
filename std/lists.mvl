@@ -19,6 +19,41 @@
 //!
 //! See issue #992 for the planned method-desugaring fix that removes this requirement.
 
+// ── Named pair types (replace tuples — ADR-0002, #1380) ─────────────────────
+//
+// These are returned by List/Map methods that previously returned anonymous
+// tuples. Defined here in std.lists so they live in the implicit prelude and
+// are available without an explicit `use`. `Entry[K, V]` is map-shaped but
+// declared here for the same prelude-availability reason.
+
+/// An indexed element from `List.enumerate()`.
+/// Replaces `(Int, T)` — positional access doesn't say which is the index.
+pub type Indexed[T] = struct {
+    index: Int,
+    value: T,
+}
+
+/// A pair of values from `List.zip(other)`.
+/// Replaces `(T, U)` — explicit names beat positional `.0` / `.1`.
+pub type Pair[A, B] = struct {
+    first: A,
+    second: B,
+}
+
+/// Result of `List.partition(f)` — elements matching the predicate and the rest.
+/// Replaces `(List[T], List[T])` — `matching`/`rest` are unambiguous; positional access is not.
+pub type Partitioned[T] = struct {
+    matching: List[T],
+    rest: List[T],
+}
+
+/// A key-value entry from `Map.entries()`.
+/// Replaces `(K, V)` — same shape as a map record, but named.
+pub type Entry[K, V] = struct {
+    key: K,
+    value: V,
+}
+
 // ── List kernel (6 builtin methods) ─────────────────────────────────────────
 
 /// Number of elements.
@@ -151,10 +186,13 @@ pub builtin fn List[T]::sort(self) -> List[T]
 
 /// Split into elements satisfying `f` and those that do not.
 ///
-/// Builtin: MVL has no tuple-construction expression yet.
-/// Rust backend emits `into_iter().partition::<Vec<_>, _>(…)`.
-/// LLVM: deferred to #436.
-pub builtin fn List[T]::partition(self, f: fn(T) -> Bool) -> (List[T], List[T])
+/// Returns `Partitioned[T]` (a struct from std.collections, ADR-0002 / #1380)
+/// with `matching` (predicate true) and `rest` (predicate false). Replaces
+/// the prior `(List[T], List[T])` tuple return.
+///
+/// Builtin: Rust backend emits `into_iter().partition::<Vec<_>, _>(…)` and wraps
+/// it in a `Partitioned` record. LLVM: deferred to #436.
+pub builtin fn List[T]::partition(self, f: fn(T) -> Bool) -> Partitioned[T]
 
 /// Retain leading elements while `f` returns true; stop at first false.
 pub fn List[T]::take_while(self, f: fn(T) -> Bool) -> List[T] where T: Clone {

@@ -41,30 +41,30 @@ test fn sort_single_element() -> Unit {
 
 test fn partition_splits_evens_odds() -> Unit {
     let xs: List[Int] = [1, 2, 3, 4, 5, 6];
-    let (evens, odds): (List[Int], List[Int]) = xs.partition(is_even);
-    assert_eq(evens.len(), 3);
-    assert_eq(odds.len(), 3)
+    let result: Partitioned[Int] = xs.partition(is_even);
+    assert_eq(result.matching.len(), 3);
+    assert_eq(result.rest.len(), 3)
 }
 
 test fn partition_all_match() -> Unit {
     let xs: List[Int] = [2, 4, 6];
-    let (matching, rest): (List[Int], List[Int]) = xs.partition(is_even);
-    assert_eq(matching.len(), 3);
-    assert_eq(rest.len(), 0)
+    let result: Partitioned[Int] = xs.partition(is_even);
+    assert_eq(result.matching.len(), 3);
+    assert_eq(result.rest.len(), 0)
 }
 
 test fn partition_none_match() -> Unit {
     let xs: List[Int] = [1, 3, 5];
-    let (matching, rest): (List[Int], List[Int]) = xs.partition(is_even);
-    assert_eq(matching.len(), 0);
-    assert_eq(rest.len(), 3)
+    let result: Partitioned[Int] = xs.partition(is_even);
+    assert_eq(result.matching.len(), 0);
+    assert_eq(result.rest.len(), 3)
 }
 
 test fn partition_empty() -> Unit {
     let xs: List[Int] = [];
-    let (a, b): (List[Int], List[Int]) = xs.partition(is_even);
-    assert_eq(a.len(), 0);
-    assert_eq(b.len(), 0)
+    let result: Partitioned[Int] = xs.partition(is_even);
+    assert_eq(result.matching.len(), 0);
+    assert_eq(result.rest.len(), 0)
 }
 
 // ── group_by ────────────────────────────────────────────────────────────────

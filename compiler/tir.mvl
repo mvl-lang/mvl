@@ -699,6 +699,13 @@ pub type RefExpr = enum {
 
 // ── Session protocol (parser-stage) ──────────────────────────────────────────
 
+/// One labeled branch in a parser-stage internal/external choice.
+/// Replaces the `(String, SessionOp)` tuple — ADR-0002 / #1380.
+pub type SessionOpBranch = struct {
+    name: String,
+    session: SessionOp,
+}
+
 /// One step in a typed session-type protocol (Honda 1993).
 pub type SessionOp = enum {
     /// `!T. S` — send a value of type T, then continue as S.
@@ -706,14 +713,21 @@ pub type SessionOp = enum {
     /// `?T. S` — receive a value of type T, then continue as S.
     Receive { msg: Box[TypeExpr], cont: Box[SessionOp], span: Span },
     /// `+{ l1: S1, … }` — internal choice: this side selects a branch.
-    InternalChoice { branches: List[(String, SessionOp)], span: Span },
+    InternalChoice { branches: List[SessionOpBranch], span: Span },
     /// `&{ l1: S1, … }` — external choice: the other side selects.
-    ExternalChoice { branches: List[(String, SessionOp)], span: Span },
+    ExternalChoice { branches: List[SessionOpBranch], span: Span },
     /// `end` — protocol terminated.
     End { span: Span },
 }
 
 // ── Resolved session type (checker output) ────────────────────────────────────
+
+/// One labeled branch in a resolved internal/external choice.
+/// Replaces the `(String, SessionTy)` tuple — ADR-0002 / #1380.
+pub type SessionTyBranch = struct {
+    name: String,
+    session: SessionTy,
+}
 
 /// Resolved session type — checker's semantic representation of a protocol.
 pub type SessionTy = enum {
@@ -722,9 +736,9 @@ pub type SessionTy = enum {
     /// `?T. S` — receive T, then continue as S.
     Receive(Box[Ty], Box[SessionTy]),
     /// `+{ l1: S1, … }` — internal choice.
-    InternalChoice(List[(String, SessionTy)]),
+    InternalChoice(List[SessionTyBranch]),
     /// `&{ l1: S1, … }` — external choice.
-    ExternalChoice(List[(String, SessionTy)]),
+    ExternalChoice(List[SessionTyBranch]),
     /// `end` — protocol complete.
     End,
 }
@@ -753,7 +767,6 @@ pub type Ty = enum {
     Ref(Bool, Box[Ty]),
     /// Function type: params, return type, declared effects, totality.
     TyFn { params: List[Ty], ret: Box[Ty], effects: List[Effect], totality: Option[Totality] },
-    Tuple(List[Ty]),
     List(Box[Ty]),
     /// Fixed-size array: element type + compile-time size.
     Array { elem: Box[Ty], size: Int },
@@ -779,6 +792,19 @@ pub type TirExpr = struct {
     span: Span,
 }
 
+/// A named field with its typed expression.
+/// Used by `Construct` and `Spawn` — replaces `(String, TirExpr)` tuples (#1380).
+pub type TirFieldExpr = struct {
+    name: String,
+    expr: TirExpr,
+}
+
+/// A key/value pair in a map literal — replaces `(TirExpr, TirExpr)` (#1380).
+pub type TirMapPair = struct {
+    key:   TirExpr,
+    value: TirExpr,
+}
+
 /// The expression node kind (mirrors ast::ExprKind but with Ty embedded).
 pub type TirExprKind = enum {
     Literal(Literal),
@@ -797,9 +823,9 @@ pub type TirExprKind = enum {
     /// `expr?` — propagate Result/Option failure.
     Propagate(Box[TirExpr]),
     /// `Name { field: value, … }` struct / enum-variant construction.
-    Construct { name: String, fields: List[(String, TirExpr)] },
+    Construct { name: String, fields: List[TirFieldExpr] },
     ListLit { elems: List[TirExpr] },
-    MapLit { pairs: List[(TirExpr, TirExpr)] },
+    MapLit { pairs: List[TirMapPair] },
     SetLit { elems: List[TirExpr] },
     /// `consume expr` — move out of an `iso` binding.
     Consume(Box[TirExpr]),
@@ -808,7 +834,7 @@ pub type TirExprKind = enum {
     /// `val expr` / `ref expr` — expression-level borrow.
     Borrow { mutable: Bool, expr: Box[TirExpr] },
     /// `actor ActorType { … }` — actor spawn.
-    Spawn { actor_type: String, fields: List[(String, TirExpr)] },
+    Spawn { actor_type: String, fields: List[TirFieldExpr] },
     /// `select { … }` — concurrent branch selection.
     Select { arms: List[TirSelectArm] },
     /// `forall` / `exists` quantifier — specification only, erased before codegen.

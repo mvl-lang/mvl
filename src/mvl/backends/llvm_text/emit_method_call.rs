@@ -659,21 +659,43 @@ impl TextEmitter {
                 Ok(Some(reg))
             }
 
-            // List::partition(f) → (List[T], List[T])
-            // Returns ptr to a 2-slot array of MvlArray* pointers; the
-            // LLVM emitter destructures it via Pattern::Tuple in emit_stmts.
-            ("partition", "ptr") if args.len() == 1 && self.is_closure_arg(&args[0]) => {
+            // List::partition(f) → Partitioned[T]   (struct, not tuple — #1380)
+            // Runtime returns ptr to a 2-slot array of MvlArray* pointers; load
+            // the two slots and assemble a `%Partitioned = { ptr, ptr }` struct
+            // value so downstream `result.matching` / `result.rest` work as
+            // ordinary `extractvalue` field accesses.
+            ("partition", _) if args.len() == 1 && self.is_closure_arg(&args[0]) => {
                 let closure = match self.emit_as_hof_closure(&args[0], &[0])? {
                     Some(p) => p,
                     None => return Ok(None),
                 };
                 self.ensure_extern("declare ptr @_mvl_list_partition(ptr, ptr)");
-                let reg = self.next_reg();
+                let raw = self.next_reg();
                 self.push_instr(&format!(
-                    "{reg} = call ptr @_mvl_list_partition(ptr {val}, ptr {closure})"
+                    "{raw} = call ptr @_mvl_list_partition(ptr {val}, ptr {closure})"
                 ));
-                self.reg_types.insert(reg.clone(), "ptr".into());
-                Ok(Some(reg))
+                // Load slot 0 -> matching.
+                let slot0 = self.next_reg();
+                self.push_instr(&format!("{slot0} = getelementptr ptr, ptr {raw}, i64 0"));
+                let matching = self.next_reg();
+                self.push_instr(&format!("{matching} = load ptr, ptr {slot0}"));
+                // Load slot 1 -> rest.
+                let slot1 = self.next_reg();
+                self.push_instr(&format!("{slot1} = getelementptr ptr, ptr {raw}, i64 1"));
+                let rest = self.next_reg();
+                self.push_instr(&format!("{rest} = load ptr, ptr {slot1}"));
+                // Build Partitioned { matching, rest }.
+                let tmp = self.next_reg();
+                self.push_instr(&format!(
+                    "{tmp} = insertvalue %Partitioned undef, ptr {matching}, 0"
+                ));
+                let val_reg = self.next_reg();
+                self.push_instr(&format!(
+                    "{val_reg} = insertvalue %Partitioned {tmp}, ptr {rest}, 1"
+                ));
+                self.reg_types
+                    .insert(val_reg.clone(), "%Partitioned".into());
+                Ok(Some(val_reg))
             }
 
             // List::group_by(f) → Map[K, List[T]]

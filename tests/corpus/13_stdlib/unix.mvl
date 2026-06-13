@@ -95,7 +95,7 @@ fn set_and_read() -> Result[Option[Tainted[String]], String] ! Env {
     Ok(get("MY_VAR"))
 }
 
-fn list_env_vars() -> List[(Tainted[String], Tainted[String])] ! Env {
+fn list_env_vars() -> List[EnvEntry] ! Env {
     all()
 }
 

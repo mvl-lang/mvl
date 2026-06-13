@@ -242,16 +242,19 @@ impl TypeChecker {
             }
             // reduce(f: fn(T, T) -> T) -> Option<T>  — returns None for empty list
             "reduce" => Ty::Option(Box::new(elem_ty.clone())),
-            // enumerate() -> List<(Int, T)>
-            "enumerate" => Ty::List(Box::new(Ty::Tuple(vec![Ty::Int, elem_ty.clone()]))),
-            // zip(other: List<U>) -> List<(T, U)>
+            // enumerate() -> List[Indexed[T]]   (struct, not tuple — ADR-0002, #1380)
+            "enumerate" => Ty::List(Box::new(Ty::Named("Indexed".into(), vec![elem_ty.clone()]))),
+            // zip(other: List[U]) -> List[Pair[T, U]]   (struct, not tuple — #1380)
             "zip" => {
                 let u_ty = if let Some(Ty::List(u)) = arg_tys.first() {
                     *u.clone()
                 } else {
                     Ty::Unknown
                 };
-                Ty::List(Box::new(Ty::Tuple(vec![elem_ty.clone(), u_ty])))
+                Ty::List(Box::new(Ty::Named(
+                    "Pair".into(),
+                    vec![elem_ty.clone(), u_ty],
+                )))
             }
             // join(sep: String) -> String  — only meaningful for List<String>
             "join" => Ty::String,
@@ -306,11 +309,8 @@ impl TypeChecker {
                 };
                 Ty::List(Box::new(inner))
             }
-            // partition(f) — (List<T>, List<T>)
-            "partition" => Ty::Tuple(vec![
-                Ty::List(Box::new(elem_ty.clone())),
-                Ty::List(Box::new(elem_ty.clone())),
-            ]),
+            // partition(f) -> Partitioned[T]   (struct, not tuple — ADR-0002, #1380)
+            "partition" => Ty::Named("Partitioned".into(), vec![elem_ty.clone()]),
             // group_by(f: fn(T) -> K) — Map<K, List<T>>
             "group_by" => {
                 let k_ty = if let Some(Ty::Fn(_, ret, ..)) = arg_tys.first() {
@@ -343,7 +343,11 @@ impl TypeChecker {
             // Iteration views
             "keys" => Ty::List(Box::new(k_ty.clone())),
             "values" => Ty::List(Box::new(v_ty.clone())),
-            "entries" => Ty::List(Box::new(Ty::Tuple(vec![k_ty.clone(), v_ty.clone()]))),
+            // entries() -> List[Entry[K, V]]   (struct, not tuple — ADR-0002, #1380)
+            "entries" => Ty::List(Box::new(Ty::Named(
+                "Entry".into(),
+                vec![k_ty.clone(), v_ty.clone()],
+            ))),
             // ── HOFs ──
             // map_values(f: fn(V) -> U) -> Map<K, U>  — infer U from lambda return type
             "map_values" => {

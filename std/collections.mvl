@@ -8,6 +8,11 @@
 //! Static constructors (`Map::new()`, `Set::new()`) require `use std.collections.{Map}` / `{Set}`.
 //!
 //! Effects: none (all functions are pure).
+//!
+//! Named pair types `Indexed`, `Pair`, `Partitioned`, `Entry` (returned by
+//! enumerate/zip/partition/entries) live in `std.lists` because they must be
+//! available in the implicit prelude — see ADR-0002 (#1380) for the rationale
+//! behind dropping anonymous tuples.
 
 // ── Map[K, V] ──────────────────────────────────────────────────────────────
 
