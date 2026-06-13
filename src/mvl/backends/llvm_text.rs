@@ -47,3 +47,25 @@ mod emitter;
 pub mod lli;
 
 pub use emitter::LlvmTextCompiler;
+
+use crate::mvl::parser::ast::TypeExpr;
+
+/// Dispatch metadata for a single MVL `builtin fn` consumed by the LLVM-text
+/// backend.  Populated by `loader::collect_llvm_text_builtins` and stored in
+/// `LlvmTextCompiler::builtin_symbols`.
+///
+/// Replaces the legacy anonymous 3-tuple
+/// `(String, TypeExpr, Vec<TypeExpr>)` so callers read named fields instead
+/// of relying on positional unpacking.
+#[derive(Debug, Clone)]
+pub struct BuiltinSymbolInfo {
+    /// C-ABI symbol used in `declare`/`call` instructions (e.g.
+    /// `"_mvl_str_split"`).  Derived from the source module + receiver type
+    /// via [`c_symbols::derive_builtin_c_symbol`].
+    pub c_sym: String,
+    /// MVL return type of the builtin — sets the LLVM call return type.
+    pub ret_ty: TypeExpr,
+    /// MVL parameter types in declaration order (excluding the implicit
+    /// receiver).
+    pub param_tys: Vec<TypeExpr>,
+}

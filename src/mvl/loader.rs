@@ -2,6 +2,7 @@
 // Copyright 2026 Schuberg Philis
 
 use crate::mvl::backends::llvm_text::c_symbols::derive_builtin_c_symbol;
+use crate::mvl::backends::llvm_text::BuiltinSymbolInfo;
 use crate::mvl::backends::rust::{RUST_BACKED_STDLIB, RUST_RUNTIME_IMPORTS};
 use crate::mvl::packages;
 use crate::mvl::parser::ast::{Decl, Program, TypeExpr};
@@ -424,17 +425,16 @@ fn build_pkg_name_map(project_root: &Path) -> std::collections::HashMap<String, 
 }
 /// Collect `builtin fn` declarations from all stdlib modules visible to `progs`.
 ///
-/// Returns a map: MVL function name → (C-ABI symbol, return TypeExpr, param TypeExprs).
+/// Returns a map: MVL function name → [`BuiltinSymbolInfo`] (C-ABI symbol +
+/// MVL return / parameter types).
 ///
 /// Scans both:
 /// - Implicit prelude modules (`core`, `strings`, `lists`, `effects`, `io`) — always loaded.
 /// - Modules explicitly imported via `use std.X.{...}` in `progs`.
 ///
 /// Used by the llvm_text backend to dispatch `builtin fn` calls to C runtime symbols.
-pub fn collect_llvm_text_builtins(
-    progs: &[Program],
-) -> HashMap<String, (String, TypeExpr, Vec<TypeExpr>)> {
-    let mut result: HashMap<String, (String, TypeExpr, Vec<TypeExpr>)> = HashMap::new();
+pub fn collect_llvm_text_builtins(progs: &[Program]) -> HashMap<String, BuiltinSymbolInfo> {
+    let mut result: HashMap<String, BuiltinSymbolInfo> = HashMap::new();
     let mut loaded_modules: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     // Collect module names: always include implicit prelude + explicit imports.
@@ -475,7 +475,14 @@ pub fn collect_llvm_text_builtins(
                         let c_sym = derive_builtin_c_symbol(m, &fd.receiver_type, &fd.name);
                         let param_tys: Vec<TypeExpr> =
                             fd.params.iter().map(|p| p.ty.clone()).collect();
-                        result.insert(fn_key, (c_sym, fd.return_type.as_ref().clone(), param_tys));
+                        result.insert(
+                            fn_key,
+                            BuiltinSymbolInfo {
+                                c_sym,
+                                ret_ty: fd.return_type.as_ref().clone(),
+                                param_tys,
+                            },
+                        );
                     }
                 }
             }
