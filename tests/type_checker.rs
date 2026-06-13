@@ -2465,7 +2465,7 @@ fn ptr_type_resolves_in_extern_c() {
     );
     // Ptr[Void] resolves to Ty::Ptr(Ty::Unit) (Void is an alias for Unit in FFI context)
     let malloc_info = result
-        .type_env
+        .type_env()
         .lookup_fn("malloc")
         .expect("malloc should be registered");
     assert!(
@@ -2475,7 +2475,7 @@ fn ptr_type_resolves_in_extern_c() {
     );
     // strlen: Ptr[Int] param resolves to Ty::Ptr(Ty::Int)
     let strlen_info = result
-        .type_env
+        .type_env()
         .lookup_fn("strlen")
         .expect("strlen should be registered");
     assert!(
