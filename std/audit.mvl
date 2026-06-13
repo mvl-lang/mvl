@@ -142,6 +142,32 @@ pub fn with_details(event: AuditEvent, details: Map[String, String]) -> AuditEve
     }
 }
 
+// ── AuditEvent extension methods ──────────────────────────────────────────────
+
+/// Return a new event with the details map replaced — method-call form.
+pub fn AuditEvent::with_details(self: AuditEvent, details: Map[String, String]) -> AuditEvent {
+    AuditEvent {
+        principal:      self.principal,
+        action:         self.action,
+        resource:       self.resource,
+        outcome:        self.outcome,
+        details:        details,
+        correlation_id: self.correlation_id,
+    }
+}
+
+/// Return a new event with outcome set to Failure and `details["reason"]` populated.
+pub fn AuditEvent::fail(self: AuditEvent, reason: String) -> AuditEvent {
+    AuditEvent {
+        principal:      self.principal,
+        action:         self.action,
+        resource:       self.resource,
+        outcome:        AuditOutcome::Failure,
+        details:        {"reason": reason},
+        correlation_id: self.correlation_id,
+    }
+}
+
 // ── AuditLogger ───────────────────────────────────────────────────────────────
 
 /// Append-only compliance log writer.
