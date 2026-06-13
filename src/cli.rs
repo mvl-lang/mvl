@@ -14,6 +14,7 @@ pub mod meta;
 pub mod mutate;
 #[cfg(feature = "openapi")]
 pub mod openapi;
+pub mod prove;
 pub mod test;
 pub mod tir;
 
@@ -174,6 +175,12 @@ pub(super) fn dispatch(args: &[String]) {
             let masking = args.iter().any(|a| a == "--masking");
             let json = args.iter().any(|a| a == "--json");
             mcdc::run(&path, quiet, verbose, masking, json);
+        }
+        "prove" => {
+            let path = args::require_path_arg(args, "prove");
+            let verbose = args.iter().any(|a| a == "--verbose" || a == "-v");
+            let stdlib_profile = args::parse_stdlib_profile(args);
+            prove::run(&path, verbose, stdlib_profile);
         }
         "complexity" => {
             use mvl::mvl::passes::complexity;

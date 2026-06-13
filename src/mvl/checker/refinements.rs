@@ -78,7 +78,39 @@ pub struct RefinementCounts {
     /// Subset of `fn_total` where ALL refined call sites are statically proven.
     pub fully_verified_fns: usize,
     /// Detailed proof log (populated only in verbose/assurance mode).
+    /// Records ONLY successfully-proven sites — consumed by the assurance dashboard.
     pub proof_log: Vec<ProofEntry>,
+    /// Per-call-site proof records covering ALL outcomes (proven / runtime / failed).
+    /// Populated unconditionally; consumed by `mvl prove` (#836) for the breakdown report.
+    pub sites: Vec<ProofSite>,
+}
+
+// ── Per-call-site proof records (#836) ────────────────────────────────────────
+
+/// Outcome of a single call-site refinement check.
+#[derive(Debug, Clone)]
+pub enum ProofOutcome {
+    /// Proven statically at the given solver layer (1–5).
+    Proven { layer: usize },
+    /// Could not prove statically; a runtime assertion will be emitted.
+    RuntimeCheck,
+    /// Statically violated — the argument provably breaks the predicate.
+    Failed,
+}
+
+/// Per-call-site record of a refinement proof attempt.
+#[derive(Debug, Clone)]
+pub struct ProofSite {
+    /// Name of the function being called.
+    pub fn_name: String,
+    /// Name of the refined parameter whose predicate was checked.
+    pub param_name: String,
+    /// Human-readable predicate string (e.g. `"self > 0"`).
+    pub predicate: String,
+    /// Source location of the call expression.
+    pub span: Span,
+    /// What the solver determined for this site.
+    pub outcome: ProofOutcome,
 }
 
 // ── Entry points ──────────────────────────────────────────────────────────────
@@ -1246,13 +1278,13 @@ fn check_call_site(
         let Some(pred) = param_pred else { continue };
         let layer_before: [usize; 6] = counts.by_layer;
         let outcome = check_arg_against_pred_counted(arg, pred, var_refs, fn_decls, counts);
-        match outcome {
+        // Determine layer (only meaningful for Proven outcomes).
+        let layer = (1..6)
+            .find(|&i| counts.by_layer[i] > layer_before[i])
+            .unwrap_or(0);
+        let proof_outcome = match &outcome {
             RefResult::Proven => {
                 counts.proven += 1;
-                // Determine which layer proved it by diffing by_layer.
-                let layer = (1..6)
-                    .find(|&i| counts.by_layer[i] > layer_before[i])
-                    .unwrap_or(0);
                 counts.proof_log.push(ProofEntry {
                     file: String::new(), // filled by assurance aggregator
                     line: call_span.line,
@@ -1261,8 +1293,12 @@ fn check_call_site(
                     predicate: format!("{}: {}", param_name, display_pred(pred)),
                     layer,
                 });
+                ProofOutcome::Proven { layer }
             }
-            RefResult::RuntimeCheck => counts.runtime_checked += 1,
+            RefResult::RuntimeCheck => {
+                counts.runtime_checked += 1;
+                ProofOutcome::RuntimeCheck
+            }
             RefResult::Failed { counterexample } => {
                 counts.failed += 1;
                 errors.push(CheckError::RefinementViolated {
@@ -1271,10 +1307,18 @@ fn check_call_site(
                         display_pred(pred)
                     ),
                     span: call_span,
-                    counterexample,
+                    counterexample: counterexample.clone(),
                 });
+                ProofOutcome::Failed
             }
-        }
+        };
+        counts.sites.push(ProofSite {
+            fn_name: fn_name.to_string(),
+            param_name: param_name.clone(),
+            predicate: display_pred(pred),
+            span: call_span,
+            outcome: proof_outcome,
+        });
     }
 }
 

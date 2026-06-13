@@ -42,7 +42,7 @@ use std::collections::HashMap;
 
 use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::refinements::{
-    check_arg_against_pred_counted, ProofEntry, RefinementCounts,
+    check_arg_against_pred_counted, ProofEntry, ProofOutcome, ProofSite, RefinementCounts,
 };
 use crate::mvl::checker::solver::{RefResult, SolverMode};
 use crate::mvl::parser::ast::{
@@ -523,6 +523,7 @@ fn check_requires_at_call(
             Some((param_idx, param_name)) if param_idx < args.len() => {
                 let normalized = normalize_pred(&req_pred, &param_name);
                 let arg = &args[param_idx];
+                let layer_before = ctx.counts.by_layer;
                 let outcome = check_arg_against_pred_counted(
                     arg,
                     &normalized,
@@ -530,15 +531,31 @@ fn check_requires_at_call(
                     ctx.fn_decls,
                     ctx.counts,
                 );
-                if let RefResult::Failed { counterexample } = outcome {
-                    ctx.errors.push(CheckError::PreconditionViolated {
-                        fn_name: fn_name.to_string(),
-                        pred: display_pred(&req_pred),
-                        span: call_span,
-                        counterexample,
-                    });
-                }
-                // Proven or RuntimeCheck: silent at compile time.
+                // Compute layer for #836 sites entry.
+                let layer = (1..6)
+                    .find(|&i| ctx.counts.by_layer[i] > layer_before[i])
+                    .unwrap_or(0);
+                let proof_outcome = match &outcome {
+                    RefResult::Proven => ProofOutcome::Proven { layer },
+                    RefResult::RuntimeCheck => ProofOutcome::RuntimeCheck,
+                    RefResult::Failed { counterexample } => {
+                        ctx.errors.push(CheckError::PreconditionViolated {
+                            fn_name: fn_name.to_string(),
+                            pred: display_pred(&req_pred),
+                            span: call_span,
+                            counterexample: counterexample.clone(),
+                        });
+                        ProofOutcome::Failed
+                    }
+                };
+                // #836: Record requires-contract proof in sites for `mvl prove`.
+                ctx.counts.sites.push(ProofSite {
+                    fn_name: fn_name.to_string(),
+                    param_name: param_name.clone(),
+                    predicate: format!("requires {}", display_pred(&req_pred)),
+                    span: call_span,
+                    outcome: proof_outcome,
+                });
             }
             _ => {
                 // Phase 2: try multi-param substitution when all referenced args are literals.
@@ -678,27 +695,41 @@ fn check_ensures_for_return(
             ctx.fn_decls,
             ctx.counts,
         );
-        if matches!(outcome, RefResult::Proven) {
-            let layer = (1..6)
-                .find(|&i| ctx.counts.by_layer[i] > layer_before[i])
-                .unwrap_or(0);
-            ctx.counts.proof_log.push(ProofEntry {
-                file: String::new(),
-                line: ret_span.line,
-                caller: String::new(),
-                callee: fn_name.to_string(),
-                predicate: format!("ensures {}", display_pred(&ens_pred)),
-                layer,
-            });
-        }
-        if let RefResult::Failed { counterexample } = outcome {
-            ctx.errors.push(CheckError::PostconditionViolated {
-                fn_name: fn_name.to_string(),
-                pred: display_pred(&ens_pred),
-                span: ret_span,
-                counterexample,
-            });
-        }
+        // Compute layer for both proof_log (existing) and sites (#836).
+        let layer = (1..6)
+            .find(|&i| ctx.counts.by_layer[i] > layer_before[i])
+            .unwrap_or(0);
+        let proof_outcome = match &outcome {
+            RefResult::Proven => {
+                ctx.counts.proof_log.push(ProofEntry {
+                    file: String::new(),
+                    line: ret_span.line,
+                    caller: String::new(),
+                    callee: fn_name.to_string(),
+                    predicate: format!("ensures {}", display_pred(&ens_pred)),
+                    layer,
+                });
+                ProofOutcome::Proven { layer }
+            }
+            RefResult::RuntimeCheck => ProofOutcome::RuntimeCheck,
+            RefResult::Failed { counterexample } => {
+                ctx.errors.push(CheckError::PostconditionViolated {
+                    fn_name: fn_name.to_string(),
+                    pred: display_pred(&ens_pred),
+                    span: ret_span,
+                    counterexample: counterexample.clone(),
+                });
+                ProofOutcome::Failed
+            }
+        };
+        // #836: Record contract proofs in sites for `mvl prove` breakdown.
+        ctx.counts.sites.push(ProofSite {
+            fn_name: fn_name.to_string(),
+            param_name: "result".to_string(),
+            predicate: format!("ensures {}", display_pred(&ens_pred)),
+            span: ret_span,
+            outcome: proof_outcome,
+        });
     }
 }
 
@@ -1022,6 +1053,7 @@ fn check_multi_param_requires_literal(
         return;
     }
 
+    let layer_before = ctx.counts.by_layer;
     let outcome = check_arg_against_pred_counted(
         &args[*primary_idx],
         &modified_pred,
@@ -1029,14 +1061,30 @@ fn check_multi_param_requires_literal(
         ctx.fn_decls,
         ctx.counts,
     );
-    if let RefResult::Failed { counterexample } = outcome {
-        ctx.errors.push(CheckError::PreconditionViolated {
-            fn_name: fn_name.to_string(),
-            pred: display_pred(pred),
-            span: call_span,
-            counterexample,
-        });
-    }
+    let layer = (1..6)
+        .find(|&i| ctx.counts.by_layer[i] > layer_before[i])
+        .unwrap_or(0);
+    let proof_outcome = match &outcome {
+        RefResult::Proven => ProofOutcome::Proven { layer },
+        RefResult::RuntimeCheck => ProofOutcome::RuntimeCheck,
+        RefResult::Failed { counterexample } => {
+            ctx.errors.push(CheckError::PreconditionViolated {
+                fn_name: fn_name.to_string(),
+                pred: display_pred(pred),
+                span: call_span,
+                counterexample: counterexample.clone(),
+            });
+            ProofOutcome::Failed
+        }
+    };
+    // #836: Record multi-param requires-contract proof in sites.
+    ctx.counts.sites.push(ProofSite {
+        fn_name: fn_name.to_string(),
+        param_name: primary_name.clone(),
+        predicate: format!("requires {}", display_pred(pred)),
+        span: call_span,
+        outcome: proof_outcome,
+    });
 }
 
 // ── Phase 3: invariant checker ────────────────────────────────────────────────
