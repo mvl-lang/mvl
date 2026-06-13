@@ -10,9 +10,9 @@ git = "https://github.com/mvl-lang/pkg-http"
 
 [[package]]
 name = "github.com/mvl-lang/pkg-sqlite"
-version = "0.1.2"
-hash = "sha256:e55934cc144aff4868691ac16da6f90bb794189cc7a0e741d2fc623c4bc5edbd"
-commit = "4df9d7d2bc40fcccc87a3c1e09ec44b393942940"
+version = "0.1.3"
+hash = "sha256:7a78e582685beda9064ff9c9d54c3a642daf3b7ef275b0900b46bbb33d3fb7a1"
+commit = "c92cc55ab54b388d3e4897d907a5d04c0818eefa"
 git = "https://github.com/mvl-lang/pkg-sqlite"
 
 [[package]]
