@@ -3,9 +3,22 @@
 
 //! Method call dispatch for the `llvm_text` backend.
 
+use crate::mvl::backends::llvm_symbol_by_name;
 use crate::mvl::parser::ast::{Expr, TypeExpr};
 
 use super::TextEmitter;
+
+/// Look up the LLVM C-ABI symbol for a builtin method that has its
+/// `llvm_symbol` hint populated in the shared `BUILTINS` registry.
+///
+/// Panics if the symbol is missing — callers in this file only invoke this
+/// for the 13 methods explicitly tagged in `backends.rs`, so a missing entry
+/// indicates the registry and emitter have drifted.
+fn builtin_sym(name: &'static str) -> &'static str {
+    llvm_symbol_by_name(name).unwrap_or_else(|| {
+        panic!("BUILTINS missing llvm_symbol for '{name}' — drift between backends.rs and emit_method_call.rs");
+    })
+}
 
 impl TextEmitter {
     pub(super) fn emit_method_call(
@@ -622,9 +635,10 @@ impl TextEmitter {
 
             // List::sort() → List[T] — returns a new sorted copy
             ("sort", "ptr") if args.is_empty() => {
-                self.ensure_extern("declare ptr @_mvl_list_sort(ptr)");
+                let sym = builtin_sym("sort");
+                self.ensure_extern(&format!("declare ptr @{sym}(ptr)"));
                 let reg = self.next_reg();
-                self.push_instr(&format!("{reg} = call ptr @_mvl_list_sort(ptr {val})"));
+                self.push_instr(&format!("{reg} = call ptr @{sym}(ptr {val})"));
                 self.reg_types.insert(reg.clone(), "ptr".into());
                 Ok(Some(reg))
             }
@@ -635,11 +649,10 @@ impl TextEmitter {
                     Some(v) => v,
                     None => return Ok(None),
                 };
-                self.ensure_extern("declare ptr @_mvl_list_windows(ptr, i64)");
+                let sym = builtin_sym("windows");
+                self.ensure_extern(&format!("declare ptr @{sym}(ptr, i64)"));
                 let reg = self.next_reg();
-                self.push_instr(&format!(
-                    "{reg} = call ptr @_mvl_list_windows(ptr {val}, i64 {n})"
-                ));
+                self.push_instr(&format!("{reg} = call ptr @{sym}(ptr {val}, i64 {n})"));
                 self.reg_types.insert(reg.clone(), "ptr".into());
                 Ok(Some(reg))
             }
@@ -650,11 +663,10 @@ impl TextEmitter {
                     Some(v) => v,
                     None => return Ok(None),
                 };
-                self.ensure_extern("declare ptr @_mvl_list_chunks(ptr, i64)");
+                let sym = builtin_sym("chunks");
+                self.ensure_extern(&format!("declare ptr @{sym}(ptr, i64)"));
                 let reg = self.next_reg();
-                self.push_instr(&format!(
-                    "{reg} = call ptr @_mvl_list_chunks(ptr {val}, i64 {n})"
-                ));
+                self.push_instr(&format!("{reg} = call ptr @{sym}(ptr {val}, i64 {n})"));
                 self.reg_types.insert(reg.clone(), "ptr".into());
                 Ok(Some(reg))
             }
@@ -669,10 +681,11 @@ impl TextEmitter {
                     Some(p) => p,
                     None => return Ok(None),
                 };
-                self.ensure_extern("declare ptr @_mvl_list_partition(ptr, ptr)");
+                let sym = builtin_sym("partition");
+                self.ensure_extern(&format!("declare ptr @{sym}(ptr, ptr)"));
                 let raw = self.next_reg();
                 self.push_instr(&format!(
-                    "{raw} = call ptr @_mvl_list_partition(ptr {val}, ptr {closure})"
+                    "{raw} = call ptr @{sym}(ptr {val}, ptr {closure})"
                 ));
                 // Load slot 0 -> matching.
                 let slot0 = self.next_reg();
@@ -705,10 +718,11 @@ impl TextEmitter {
                     Some(p) => p,
                     None => return Ok(None),
                 };
-                self.ensure_extern("declare ptr @_mvl_list_group_by(ptr, ptr)");
+                let sym = builtin_sym("group_by");
+                self.ensure_extern(&format!("declare ptr @{sym}(ptr, ptr)"));
                 let reg = self.next_reg();
                 self.push_instr(&format!(
-                    "{reg} = call ptr @_mvl_list_group_by(ptr {val}, ptr {closure})"
+                    "{reg} = call ptr @{sym}(ptr {val}, ptr {closure})"
                 ));
                 self.reg_types.insert(reg.clone(), "ptr".into());
                 Ok(Some(reg))
@@ -773,12 +787,13 @@ impl TextEmitter {
                     },
                     None => return Ok(None),
                 };
-                self.ensure_extern("declare i8 @_mvl_str_char_at(ptr, i64, ptr)");
+                let sym = builtin_sym("char_at");
+                self.ensure_extern(&format!("declare i8 @{sym}(ptr, i64, ptr)"));
                 let out = self.next_reg();
                 self.push_instr(&format!("{out} = alloca ptr"));
                 let tag = self.next_reg();
                 self.push_instr(&format!(
-                    "{tag} = call i8 @_mvl_str_char_at(ptr {val}, i64 {idx}, ptr {out})"
+                    "{tag} = call i8 @{sym}(ptr {val}, i64 {idx}, ptr {out})"
                 ));
                 let payload = self.next_reg();
                 self.push_instr(&format!("{payload} = load ptr, ptr {out}"));
@@ -798,9 +813,10 @@ impl TextEmitter {
                     Some("List") | Some("Array") | Some("Set") | Some("Map")
                 ) =>
             {
-                self.ensure_extern("declare ptr @_mvl_string_chars(ptr)");
+                let sym = builtin_sym("chars");
+                self.ensure_extern(&format!("declare ptr @{sym}(ptr)"));
                 let reg = self.next_reg();
-                self.push_instr(&format!("{reg} = call ptr @_mvl_string_chars(ptr {val})"));
+                self.push_instr(&format!("{reg} = call ptr @{sym}(ptr {val})"));
                 self.reg_types.insert(reg.clone(), "ptr".into());
                 Ok(Some(reg))
             }
@@ -819,12 +835,13 @@ impl TextEmitter {
                     },
                     None => return Ok(None),
                 };
-                self.ensure_extern("declare i8 @_mvl_str_byte_at(ptr, i64, ptr)");
+                let sym = builtin_sym("byte_at");
+                self.ensure_extern(&format!("declare i8 @{sym}(ptr, i64, ptr)"));
                 let out = self.next_reg();
                 self.push_instr(&format!("{out} = alloca i64"));
                 let tag = self.next_reg();
                 self.push_instr(&format!(
-                    "{tag} = call i8 @_mvl_str_byte_at(ptr {val}, i64 {idx}, ptr {out})"
+                    "{tag} = call i8 @{sym}(ptr {val}, i64 {idx}, ptr {out})"
                 ));
                 let byte_val = self.next_reg();
                 self.push_instr(&format!("{byte_val} = load i64, ptr {out}"));
@@ -841,11 +858,10 @@ impl TextEmitter {
                     Some(v) => v,
                     None => return Ok(None),
                 };
-                self.ensure_extern("declare i64 @_mvl_str_find(ptr, ptr)");
+                let sym = builtin_sym("find");
+                self.ensure_extern(&format!("declare i64 @{sym}(ptr, ptr)"));
                 let reg = self.next_reg();
-                self.push_instr(&format!(
-                    "{reg} = call i64 @_mvl_str_find(ptr {val}, ptr {sub})"
-                ));
+                self.push_instr(&format!("{reg} = call i64 @{sym}(ptr {val}, ptr {sub})"));
                 self.reg_types.insert(reg.clone(), "i64".into());
                 Ok(Some(reg))
             }
@@ -864,11 +880,10 @@ impl TextEmitter {
                     },
                     None => return Ok(None),
                 };
-                self.ensure_extern("declare ptr @_mvl_str_split(ptr, ptr)");
+                let sym = builtin_sym("split");
+                self.ensure_extern(&format!("declare ptr @{sym}(ptr, ptr)"));
                 let reg = self.next_reg();
-                self.push_instr(&format!(
-                    "{reg} = call ptr @_mvl_str_split(ptr {val}, ptr {delim})"
-                ));
+                self.push_instr(&format!("{reg} = call ptr @{sym}(ptr {val}, ptr {delim})"));
                 self.reg_types.insert(reg.clone(), "ptr".into());
                 Ok(Some(reg))
             }
@@ -883,10 +898,11 @@ impl TextEmitter {
                     Some(v) => v,
                     None => return Ok(None),
                 };
-                self.ensure_extern("declare ptr @_mvl_str_substring(ptr, i64, i64)");
+                let sym = builtin_sym("substring");
+                self.ensure_extern(&format!("declare ptr @{sym}(ptr, i64, i64)"));
                 let reg = self.next_reg();
                 self.push_instr(&format!(
-                    "{reg} = call ptr @_mvl_str_substring(ptr {val}, i64 {start}, i64 {end})"
+                    "{reg} = call ptr @{sym}(ptr {val}, i64 {start}, i64 {end})"
                 ));
                 self.reg_types.insert(reg.clone(), "ptr".into());
                 Ok(Some(reg))
@@ -988,9 +1004,10 @@ impl TextEmitter {
                     Some("List") | Some("Array") | Some("Set") | Some("Map")
                 ) =>
             {
-                self.ensure_extern("declare ptr @_mvl_str_to_lower(ptr)");
+                let sym = builtin_sym("to_lower");
+                self.ensure_extern(&format!("declare ptr @{sym}(ptr)"));
                 let reg = self.next_reg();
-                self.push_instr(&format!("{reg} = call ptr @_mvl_str_to_lower(ptr {val})"));
+                self.push_instr(&format!("{reg} = call ptr @{sym}(ptr {val})"));
                 self.reg_types.insert(reg.clone(), "ptr".into());
                 Ok(Some(reg))
             }
@@ -1002,9 +1019,10 @@ impl TextEmitter {
                     Some("List") | Some("Array") | Some("Set") | Some("Map")
                 ) =>
             {
-                self.ensure_extern("declare ptr @_mvl_str_to_upper(ptr)");
+                let sym = builtin_sym("to_upper");
+                self.ensure_extern(&format!("declare ptr @{sym}(ptr)"));
                 let reg = self.next_reg();
-                self.push_instr(&format!("{reg} = call ptr @_mvl_str_to_upper(ptr {val})"));
+                self.push_instr(&format!("{reg} = call ptr @{sym}(ptr {val})"));
                 self.reg_types.insert(reg.clone(), "ptr".into());
                 Ok(Some(reg))
             }

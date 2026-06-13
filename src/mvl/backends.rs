@@ -181,6 +181,21 @@ pub fn rust_emit_by_name(name: &str) -> Option<&'static str> {
         .and_then(|d| d.rust_emit)
 }
 
+/// Look up the LLVM C-ABI symbol for a builtin method by name only.
+///
+/// Returns the literal C symbol (with the `_mvl_*` prefix) used by the
+/// LLVM-text backend in `ensure_extern` declarations and `call` instructions.
+/// Returns `None` for methods that are emitted inline or that have no LLVM
+/// runtime symbol yet.
+///
+/// The lookup is unambiguous across receiver types for all current entries.
+pub fn llvm_symbol_by_name(name: &str) -> Option<&'static str> {
+    BUILTINS
+        .iter()
+        .find(|d| d.name == name && d.llvm_symbol.is_some())
+        .and_then(|d| d.llvm_symbol)
+}
+
 /// Returns `true` if `name` is a known stdlib method on any type.
 ///
 /// Called by backend `_` dispatch arms (debug builds only) to detect missing
@@ -268,7 +283,7 @@ pub const BUILTINS: &[BuiltinDesc] = &[
         0,
         0,
         Some("str_chars"),
-        Some("mvl_string_chars"),
+        Some("_mvl_string_chars"),
     ),
     BuiltinDesc::method_with(
         "char_at",
