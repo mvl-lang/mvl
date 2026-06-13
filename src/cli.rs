@@ -180,7 +180,11 @@ pub(super) fn dispatch(args: &[String]) {
             let path = args::require_path_arg(args, "prove");
             let verbose = args.iter().any(|a| a == "--verbose" || a == "-v");
             let stdlib_profile = args::parse_stdlib_profile(args);
-            prove::run(&path, verbose, stdlib_profile);
+            let callee_filter = args
+                .windows(2)
+                .find(|w| w[0] == "--callee")
+                .map(|w| w[1].as_str());
+            prove::run(&path, verbose, stdlib_profile, callee_filter);
         }
         "complexity" => {
             use mvl::mvl::passes::complexity;

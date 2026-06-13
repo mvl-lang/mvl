@@ -23,7 +23,7 @@ use std::process;
 const LAYER_NAMES: [&str; 6] = ["", "trivial", "interval", "symbolic", "cooper", "z3"];
 
 /// Parse and run the refinement prover over a .mvl file or directory.
-pub fn run(path: &str, verbose: bool, stdlib_profile: &str) {
+pub fn run(path: &str, verbose: bool, stdlib_profile: &str, callee_filter: Option<&str>) {
     let files = loader::mvl_files(path, false);
     if files.is_empty() {
         eprintln!("No .mvl files found at: {path}");
@@ -104,8 +104,18 @@ pub fn run(path: &str, verbose: bool, stdlib_profile: &str) {
             SolverMode::Layered,
         );
 
-        let sites = &result.refinement_counts.sites;
+        let all_sites = &result.refinement_counts.sites;
+        let sites: Vec<_> = if let Some(callee) = callee_filter {
+            all_sites.iter().filter(|s| s.fn_name == callee).collect()
+        } else {
+            all_sites.iter().collect()
+        };
         if sites.is_empty() {
+            if let Some(callee) = callee_filter {
+                if !all_sites.is_empty() {
+                    println!("{file_str}: no proof sites for callee `{callee}`");
+                }
+            }
             continue;
         }
 
