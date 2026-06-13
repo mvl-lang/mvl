@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [0.206.0] - 2026-06-13
+
+### Added
+
+- **`mvl sbom snapshot`** (#636) — Saves the current SBOM as a baseline to `.mvl/sbom.baseline.json` (full CycloneDX) and `.mvl/sbom.baseline.meta` (lightweight dep list + timestamp). Enables audit trail preservation in version control.
+- **`mvl sbom diff [--baseline] [--format=json]`** (#636) — Compares the current manifest/lock state against a stored baseline, reporting added/removed/updated dependencies and source-file count changes. Computes a time-decaying trust score (default 90-day half-life) for supply-chain freshness assessment. New c-native deps reduce trust by 0.5; native by 0.3; mvl by 0.1. Exits with code 1 on regression > 0.5 points, enabling CI gates. Human-readable output by default; `--format=json` for machine parsing.
+
 ## [0.205.0] - 2026-06-13
 
 ### Added

@@ -95,9 +95,63 @@ pub(super) fn cmd_pkg_add(args: &[String]) {
 }
 
 pub(super) fn cmd_sbom(args: &[String]) {
+    // Route subcommands before flag parsing
+    match args.get(2).map(|s| s.as_str()).unwrap_or("") {
+        "snapshot" => {
+            let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            match packages::cmd_sbom_snapshot(&project_root) {
+                Ok(()) => {
+                    println!("Baseline snapshot saved to .mvl/sbom.baseline.json");
+                }
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    process::exit(1);
+                }
+            }
+            return;
+        }
+        "diff" => {
+            let baseline = args
+                .iter()
+                .skip(3)
+                .find_map(|a| a.strip_prefix("--baseline="));
+            let format = args
+                .iter()
+                .skip(3)
+                .find_map(|a| a.strip_prefix("--format="));
+            let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            match packages::cmd_sbom_diff(baseline, &project_root) {
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    process::exit(1);
+                }
+                Ok((diff, regression)) => {
+                    if format == Some("json") {
+                        print!("{}", diff.render_json());
+                    } else {
+                        print!("{}", diff.render());
+                    }
+                    if regression {
+                        process::exit(1);
+                    }
+                }
+            }
+            return;
+        }
+        _ => {}
+    }
+
     if args.iter().any(|a| a == "--help" || a == "-h") {
-        eprintln!("Usage: mvl sbom [--format=cyclonedx|spdx] [--output=<file>]");
+        eprintln!("Usage: mvl sbom [snapshot|diff] [--format=cyclonedx|spdx] [--output=<file>]");
         eprintln!("  Generate a software bill of materials from mvl.toml + mvl.lock.");
+        eprintln!();
+        eprintln!("Subcommands:");
+        eprintln!("  snapshot             save current SBOM as baseline (.mvl/sbom.baseline.json)");
+        eprintln!("  diff                 compare current state against baseline");
+        eprintln!("    --baseline=<file>  use a specific baseline file (default: .mvl/sbom.baseline.json)");
+        eprintln!("    --format=json      machine-readable JSON output for CI tools");
+        eprintln!();
+        eprintln!("  (no subcommand)      generate SBOM and write to stdout or --output");
         eprintln!("  --format=cyclonedx   CycloneDX 1.5 JSON (default)");
         eprintln!("  --format=spdx        SPDX 2.3 tag-value");
         eprintln!("  --output=<file>      write to file instead of stdout");
