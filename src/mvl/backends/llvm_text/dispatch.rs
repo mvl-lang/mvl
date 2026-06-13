@@ -19,10 +19,11 @@
 /// Variants cover the dispatch shapes catalogued in #1399:
 ///
 /// - [`Dispatch::CCall`] — Shape A: simple C-ABI runtime call.
+/// - [`Dispatch::CCallBoolFromI64`] — Shape B: C call returns `i64`,
+///   coerced to `i1` via `icmp ne i64 X, 0`.
 ///
-/// Future variants (deferred to later #1399 phases) will cover Shape B
-/// (bool-from-i64 coercion), Shape C (Option-via-out-ptr), Shape D (struct
-/// assembly), and Shape E (HOF closures).
+/// Future variants (deferred to later #1399 phases) will cover Shape C
+/// (Option-via-out-ptr), Shape D (struct assembly), and Shape E (HOF closures).
 #[derive(Debug, Clone)]
 pub enum Dispatch {
     /// Simple C call producing a single return register.
@@ -41,13 +42,28 @@ pub enum Dispatch {
         /// LLVM type of the call's result register.
         ret_ty: &'static str,
     },
+    /// Shape B: C call returns `i64`, the result is then coerced to `i1`
+    /// via `icmp ne i64 X, 0`.  The C runtime convention for predicate
+    /// builtins (returns 0/1 as i64 instead of i1 directly).
+    ///
+    /// Emits:
+    /// ```text
+    /// declare {signature}              // ensure_extern, returns i64
+    /// {raw} = call i64 @{sym}({arg_list})
+    /// {reg} = icmp ne i64 {raw}, 0
+    /// ```
+    CCallBoolFromI64 {
+        sym: &'static str,
+        signature: &'static str,
+    },
 }
 
 impl Dispatch {
-    /// Returns the C-ABI symbol if this dispatch has one.
+    /// Returns the C-ABI symbol for this dispatch.
     pub const fn sym(&self) -> &'static str {
         match self {
             Dispatch::CCall { sym, .. } => sym,
+            Dispatch::CCallBoolFromI64 { sym, .. } => sym,
         }
     }
 }
@@ -164,6 +180,28 @@ pub const LLVM_DISPATCH: &[(&str, Dispatch)] = &[
             sym: "_mvl_list_chunks",
             signature: "ptr @_mvl_list_chunks(ptr, i64)",
             ret_ty: "ptr",
+        },
+    ),
+    // ── Shape B: C call returns i64, coerced to i1 via `icmp ne` ────────
+    (
+        "contains",
+        Dispatch::CCallBoolFromI64 {
+            sym: "_mvl_str_contains",
+            signature: "i64 @_mvl_str_contains(ptr, ptr)",
+        },
+    ),
+    (
+        "starts_with",
+        Dispatch::CCallBoolFromI64 {
+            sym: "_mvl_str_starts_with",
+            signature: "i64 @_mvl_str_starts_with(ptr, ptr)",
+        },
+    ),
+    (
+        "ends_with",
+        Dispatch::CCallBoolFromI64 {
+            sym: "_mvl_str_ends_with",
+            signature: "i64 @_mvl_str_ends_with(ptr, ptr)",
         },
     ),
 ];

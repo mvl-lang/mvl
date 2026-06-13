@@ -53,7 +53,12 @@ impl TextEmitter {
             panic!(
                 "LLVM_DISPATCH missing entry for '{method}' — drift between dispatch.rs and emit_method_call.rs"
             )
-        });
+        })
+        else {
+            panic!(
+                "LLVM_DISPATCH entry for '{method}' is not Dispatch::CCall — use a different emit_c_call_* helper"
+            );
+        };
         self.ensure_extern(&format!("declare {signature}"));
         let mut arg_list = format!("ptr {recv_val}");
         for (ty, v) in extra_args {
@@ -62,6 +67,49 @@ impl TextEmitter {
         let reg = self.next_reg();
         self.push_instr(&format!("{reg} = call {ret_ty} @{sym}({arg_list})"));
         self.reg_types.insert(reg.clone(), ret_ty.to_string());
+        reg
+    }
+
+    /// Emit a Shape B builtin call: C call returns `i64`, result is coerced
+    /// to `i1` via `icmp ne i64 X, 0`.  Reads sym + signature from the
+    /// `LLVM_DISPATCH` row for `method` (must be
+    /// [`Dispatch::CCallBoolFromI64`]).
+    ///
+    /// Emits:
+    /// ```text
+    /// declare {signature}
+    /// {raw} = call i64 @{sym}(ptr {recv_val}{, extra_args})
+    /// {reg} = icmp ne i64 {raw}, 0
+    /// ```
+    /// and inserts `{reg} -> i1` into `reg_types`.  Returns the result
+    /// register (the i1, not the raw i64).
+    pub(super) fn emit_c_call_bool_from_i64(
+        &mut self,
+        method: &'static str,
+        recv_val: &str,
+        extra_args: &[(&'static str, &str)],
+    ) -> String {
+        let Dispatch::CCallBoolFromI64 { sym, signature } = dispatch::lookup(method)
+            .unwrap_or_else(|| {
+                panic!(
+                    "LLVM_DISPATCH missing entry for '{method}' — drift between dispatch.rs and emit_method_call.rs"
+                )
+            })
+        else {
+            panic!(
+                "LLVM_DISPATCH entry for '{method}' is not Dispatch::CCallBoolFromI64"
+            );
+        };
+        self.ensure_extern(&format!("declare {signature}"));
+        let mut arg_list = format!("ptr {recv_val}");
+        for (ty, v) in extra_args {
+            arg_list.push_str(&format!(", {ty} {v}"));
+        }
+        let raw = self.next_reg();
+        self.push_instr(&format!("{raw} = call i64 @{sym}({arg_list})"));
+        let reg = self.next_reg();
+        self.push_instr(&format!("{reg} = icmp ne i64 {raw}, 0"));
+        self.reg_types.insert(reg.clone(), "i1".to_string());
         reg
     }
 }
@@ -951,15 +999,11 @@ impl TextEmitter {
                     },
                     None => return Ok(None),
                 };
-                self.ensure_extern("declare i64 @_mvl_str_contains(ptr, ptr)");
-                let raw = self.next_reg();
-                self.push_instr(&format!(
-                    "{raw} = call i64 @_mvl_str_contains(ptr {val}, ptr {sub})"
-                ));
-                let reg = self.next_reg();
-                self.push_instr(&format!("{reg} = icmp ne i64 {raw}, 0"));
-                self.reg_types.insert(reg.clone(), "i1".into());
-                Ok(Some(reg))
+                Ok(Some(self.emit_c_call_bool_from_i64(
+                    "contains",
+                    &val,
+                    &[("ptr", &sub)],
+                )))
             }
 
             // starts_with(prefix) → Bool
@@ -976,15 +1020,11 @@ impl TextEmitter {
                     },
                     None => return Ok(None),
                 };
-                self.ensure_extern("declare i64 @_mvl_str_starts_with(ptr, ptr)");
-                let raw = self.next_reg();
-                self.push_instr(&format!(
-                    "{raw} = call i64 @_mvl_str_starts_with(ptr {val}, ptr {prefix})"
-                ));
-                let reg = self.next_reg();
-                self.push_instr(&format!("{reg} = icmp ne i64 {raw}, 0"));
-                self.reg_types.insert(reg.clone(), "i1".into());
-                Ok(Some(reg))
+                Ok(Some(self.emit_c_call_bool_from_i64(
+                    "starts_with",
+                    &val,
+                    &[("ptr", &prefix)],
+                )))
             }
 
             // ends_with(suffix) → Bool
@@ -1001,15 +1041,11 @@ impl TextEmitter {
                     },
                     None => return Ok(None),
                 };
-                self.ensure_extern("declare i64 @_mvl_str_ends_with(ptr, ptr)");
-                let raw = self.next_reg();
-                self.push_instr(&format!(
-                    "{raw} = call i64 @_mvl_str_ends_with(ptr {val}, ptr {suffix})"
-                ));
-                let reg = self.next_reg();
-                self.push_instr(&format!("{reg} = icmp ne i64 {raw}, 0"));
-                self.reg_types.insert(reg.clone(), "i1".into());
-                Ok(Some(reg))
+                Ok(Some(self.emit_c_call_bool_from_i64(
+                    "ends_with",
+                    &val,
+                    &[("ptr", &suffix)],
+                )))
             }
 
             // trim() → String
