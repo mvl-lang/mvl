@@ -18,6 +18,12 @@
 - **`mvl prove --callee <fn>`** (#1374) — Filter proof sites to a specific callee function. Shows only sites where the named function is called. Prints a clear message when no sites match. Exits with an error if `--callee` is given without an argument.
 - **Proof site recording for return-type refinements, loop invariants, and struct/actor field-init checks** (#836) — Previously only call-site parameter checks appeared in `mvl prove` output; return-type refinements (`-> T where ...`), `invariant` checks, and field-init refinements are now included. The summary is counted from sites (not the internal solver counters) so it always matches the printed lines.
 
+### Fixed
+
+- **`std.audit`: `AuditEvent::with_details` and `AuditEvent::fail` extension methods** — Added method-call forms so handlers can write `event.with_details({...})` and `event.fail(reason)` without violating ADR-0031 (no UFCS). The free-function forms `with_details` and `fail(String, String, String, String)` remain for backward compatibility.
+- **Rust backend: prelude extension-method shadowing** — A name-based dedup in `emitter.rs` used bare method names to exclude prelude functions that clashed with user-defined names. This caused `AuditEvent::fail` to be silently dropped whenever the free function `fail` existed in scope. The filter now uses qualified keys (`Type::method`) for extension methods on user-defined types, so distinct symbols are no longer conflated.
+- **Rust backend: examples removed from repo** — `examples/crud_api` moved to the standalone `mvl-lang/examples` repository.
+
 ## [0.204.0] - 2026-06-13
 
 ### Added
