@@ -3,31 +3,31 @@
 
 //! Method call dispatch for the `llvm_text` backend.
 
-use crate::mvl::backends::{llvm_dispatch_by_name, llvm_symbol_by_name, Dispatch};
+use crate::mvl::backends::llvm_text::dispatch::{self, Dispatch};
 use crate::mvl::parser::ast::{Expr, TypeExpr};
 
 use super::TextEmitter;
 
-/// Look up the LLVM C-ABI symbol for a builtin method that has its
-/// `Dispatch::CCall` populated in the shared `BUILTINS` registry.
+/// Look up the LLVM C-ABI symbol for a builtin method that has a row in
+/// `LLVM_DISPATCH`.
 ///
 /// Panics if the symbol is missing — callers in this file only invoke this
-/// for the methods explicitly tagged in `backends.rs`, so a missing entry
-/// indicates the registry and emitter have drifted.
+/// for the methods explicitly tagged in `dispatch::LLVM_DISPATCH`, so a
+/// missing entry indicates the dispatch table and emitter have drifted.
 ///
 /// Used by Shape C/D/E arms (char_at, byte_at, partition, group_by) where
 /// the call site still owns the call emission and just needs the symbol.
-/// Shape A arms use [`emit_c_call_simple`] instead.
+/// Shape A arms use [`TextEmitter::emit_c_call_simple`] instead.
 fn builtin_sym(name: &'static str) -> &'static str {
-    llvm_symbol_by_name(name).unwrap_or_else(|| {
-        panic!("BUILTINS missing Dispatch::CCall for '{name}' — drift between backends.rs and emit_method_call.rs");
+    dispatch::sym(name).unwrap_or_else(|| {
+        panic!("LLVM_DISPATCH missing entry for '{name}' — drift between dispatch.rs and emit_method_call.rs");
     })
 }
 
 impl TextEmitter {
     /// Emit a Shape A builtin call: simple C-ABI runtime function with a
     /// single return register.  Reads `sym`, `signature`, and `ret_ty` from
-    /// `BUILTINS[name].dispatch` (must be [`Dispatch::CCall`]).
+    /// the `LLVM_DISPATCH` row for `method` (must be [`Dispatch::CCall`]).
     ///
     /// Emits:
     /// ```text
@@ -37,7 +37,7 @@ impl TextEmitter {
     /// and inserts `{reg} -> ret_ty` into `reg_types`.  Returns the result
     /// register name; call sites typically wrap with `Ok(Some(reg))`.
     ///
-    /// Panics on a registry miss — same drift-detection contract as
+    /// Panics on a dispatch-table miss — same drift-detection contract as
     /// [`builtin_sym`].
     pub(super) fn emit_c_call_simple(
         &mut self,
@@ -45,16 +45,15 @@ impl TextEmitter {
         recv_val: &str,
         extra_args: &[(&'static str, &str)],
     ) -> String {
-        let (sym, signature, ret_ty) = match llvm_dispatch_by_name(method) {
-            Some(Dispatch::CCall {
-                sym,
-                signature,
-                ret_ty,
-            }) => (*sym, *signature, *ret_ty),
-            _ => panic!(
-                "BUILTINS missing Dispatch::CCall for '{method}' — drift between backends.rs and emit_method_call.rs"
-            ),
-        };
+        let Dispatch::CCall {
+            sym,
+            signature,
+            ret_ty,
+        } = dispatch::lookup(method).unwrap_or_else(|| {
+            panic!(
+                "LLVM_DISPATCH missing entry for '{method}' — drift between dispatch.rs and emit_method_call.rs"
+            )
+        });
         self.ensure_extern(&format!("declare {signature}"));
         let mut arg_list = format!("ptr {recv_val}");
         for (ty, v) in extra_args {

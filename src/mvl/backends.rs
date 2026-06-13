@@ -73,74 +73,17 @@ pub enum Receiver {
 ///    both backends handle every entry identically.
 ///
 /// Adding a new builtin requires:
-/// 1. One entry here (with optional `rust_emit` / `llvm_symbol` dispatch hints).
-/// 2. One emit arm in each backend's dispatcher — *unless* the method can use
-///    table-driven dispatch via `rust_emit` / `llvm_symbol` hints, in which
-///    case no hand-written match arm is needed.
+/// 1. One entry here (with optional `rust_emit` hint for the Rust backend).
+/// 2. Optionally, one row in
+///    `crate::mvl::backends::llvm_text::dispatch::LLVM_DISPATCH` if the LLVM
+///    backend can dispatch the method via table-driven C call (Shape A —
+///    see #1399).  Methods without an LLVM_DISPATCH row use a hand-written
+///    emit arm in `emit_method_call.rs` (Shapes F/G/H — intrinsics,
+///    type-dispatch, multi-block control flow).
 ///
-/// Dispatch hints allow simple methods (runtime-fn calls) to be emitted by a
-/// single generic match arm that queries [`rust_emit_by_name`] or similar.
-/// Complex methods (type-aware, higher-order, etc.) leave hints as `None` and
-/// require hand-written emit arms in each backend.
-/// How the LLVM-text backend should emit a call to a builtin method.
-///
-/// This is the registry-driven dispatch hint consumed by
-/// `emit_method_call::emit_c_call_simple` (and future variant helpers).
-/// Replaces the legacy `llvm_symbol: Option<&'static str>` field which
-/// carried only the symbol name — `Dispatch::CCall` now carries the full
-/// extern signature and return type, so the registry is self-sufficient
-/// for table-driven emission of simple C-call dispatch.
-///
-/// Shape coverage (see #1399 for the full inventory):
-/// - `Inline` — emitter owns dispatch entirely (LLVM intrinsics, type-dispatch,
-///   multi-block control flow).  Registry has no symbol to expose.
-/// - `CCall` — Shape A: simple C-ABI runtime call with one return register.
-///   Future variants (#1399 phases 2+) will cover Shape B/C/D/E
-///   (bool-from-i64 coercion, Option-via-out-ptr, struct assembly, HOF closures).
-#[derive(Debug, Clone)]
-pub enum Dispatch {
-    /// Emitter owns dispatch entirely.  The registry exposes no symbol or
-    /// signature — `emit_method_call.rs` has a hand-written arm.
-    Inline,
-    /// Simple C call producing a single return register.
-    ///
-    /// Emits:
-    /// ```text
-    /// declare {signature}      // via ensure_extern (deduped)
-    /// {reg} = call {ret_ty} @{sym}({arg_list})
-    /// ```
-    /// where `{arg_list}` is constructed by the call site from `receiver`
-    /// and `args` per the method's declared parameter types.
-    CCall {
-        /// C-ABI symbol (e.g. `"_mvl_string_chars"`) — used in both
-        /// `declare` and `call` instructions.
-        sym: &'static str,
-        /// Text emitted after `declare ` in `ensure_extern`, e.g.
-        /// `"ptr @_mvl_string_chars(ptr)"`.  Carries the LLVM signature
-        /// of the runtime symbol.
-        signature: &'static str,
-        /// LLVM type of the call's result register, inserted into
-        /// `reg_types` (e.g. `"ptr"`, `"i64"`).
-        ret_ty: &'static str,
-    },
-}
-
-impl Dispatch {
-    /// True if this dispatch is registry-driven (has a symbol the emitter
-    /// can dispatch to without a hand-written arm).
-    pub const fn is_table_driven(&self) -> bool {
-        !matches!(self, Dispatch::Inline)
-    }
-
-    /// Returns the C-ABI symbol if this dispatch has one.
-    pub const fn sym(&self) -> Option<&'static str> {
-        match self {
-            Dispatch::CCall { sym, .. } => Some(sym),
-            Dispatch::Inline => None,
-        }
-    }
-}
-
+/// Per-backend dispatch metadata is **deliberately** kept inside each
+/// backend's module — `BuiltinDesc` carries only cross-backend facts
+/// (name, receiver, arity, Rust-runtime hint).
 #[derive(Debug, Clone)]
 pub struct BuiltinDesc {
     /// Method or function name (without receiver prefix).
@@ -154,11 +97,12 @@ pub struct BuiltinDesc {
     /// Rust backend dispatch hint: the runtime function name used for
     /// `fn_name(receiver.clone().into(), args)` dispatch.
     /// `None` means the backend uses a hand-written match arm or passthrough.
+    ///
+    /// Note: only Rust-backend-relevant data lives on this struct.
+    /// LLVM-backend dispatch info lives in
+    /// `crate::mvl::backends::llvm_text::dispatch::LLVM_DISPATCH`,
+    /// keyed by method name.
     pub rust_emit: Option<&'static str>,
-    /// LLVM backend dispatch hint.  See [`Dispatch`] for variant semantics.
-    /// `Dispatch::Inline` means the backend uses a hand-written match arm or
-    /// the method is not yet implemented in the LLVM backend.
-    pub dispatch: Dispatch,
 }
 
 impl BuiltinDesc {
@@ -169,23 +113,19 @@ impl BuiltinDesc {
             min_args: min,
             max_args: max,
             rust_emit: None,
-            dispatch: Dispatch::Inline,
         }
     }
 
-    /// Method with optional Rust-backend rust_emit hint and explicit LLVM dispatch.
+    /// Method with a Rust-backend `rust_emit` dispatch hint.
     ///
-    /// Most existing entries pass `Dispatch::Inline` for the LLVM dispatch
-    /// (the LLVM backend has a hand-written arm).  Entries that drive a
-    /// table-driven C call pass `Dispatch::CCall { … }` carrying the symbol,
-    /// signature and return type — see [`Dispatch`].
+    /// LLVM-backend dispatch info is stored separately in
+    /// `crate::mvl::backends::llvm_text::dispatch::LLVM_DISPATCH`.
     pub const fn method_with(
         name: &'static str,
         ty: &'static str,
         min: usize,
         max: usize,
         rust_emit: Option<&'static str>,
-        dispatch: Dispatch,
     ) -> Self {
         Self {
             name,
@@ -193,7 +133,6 @@ impl BuiltinDesc {
             min_args: min,
             max_args: max,
             rust_emit,
-            dispatch,
         }
     }
 
@@ -204,7 +143,6 @@ impl BuiltinDesc {
             min_args: min,
             max_args: max,
             rust_emit: None,
-            dispatch: Dispatch::Inline,
         }
     }
 
@@ -248,26 +186,12 @@ pub fn rust_emit_by_name(name: &str) -> Option<&'static str> {
 
 /// Look up the LLVM C-ABI symbol for a builtin method by name only.
 ///
-/// Returns the literal C symbol (with the `_mvl_*` prefix) used by the
-/// LLVM-text backend in `ensure_extern` declarations and `call` instructions.
-/// Returns `None` for methods whose dispatch is [`Dispatch::Inline`] (no
-/// registry-driven symbol).
-///
-/// The lookup is unambiguous across receiver types for all current entries.
+/// Thin re-export of
+/// [`crate::mvl::backends::llvm_text::dispatch::sym`] so callers outside the
+/// LLVM backend (the legacy `builtin_sym` shim in `emit_method_call.rs`) can
+/// keep the import path they had before the dispatch table moved.
 pub fn llvm_symbol_by_name(name: &str) -> Option<&'static str> {
-    llvm_dispatch_by_name(name).and_then(|d| d.sym())
-}
-
-/// Look up the full LLVM [`Dispatch`] for a builtin method by name only.
-///
-/// Returns `None` when no entry exists; returns `Some(&Dispatch::Inline)`
-/// when the entry exists but is hand-emitted.  Callers driving table-based
-/// dispatch (e.g. `emit_c_call_simple`) should match the variant.
-pub fn llvm_dispatch_by_name(name: &str) -> Option<&'static Dispatch> {
-    BUILTINS
-        .iter()
-        .find(|d| d.name == name && d.dispatch.is_table_driven())
-        .map(|d| &d.dispatch)
+    crate::mvl::backends::llvm_text::dispatch::sym(name)
 }
 
 /// Returns `true` if `name` is a known stdlib method on any type.
@@ -364,130 +288,28 @@ pub(crate) const STRING_LABEL_PRESERVING_METHODS: &[&str] = &[
 pub const BUILTINS: &[BuiltinDesc] = &[
     // ── String — kernel builtins (std/strings.mvl `pub builtin fn`) ──────────
     BuiltinDesc::method("len", "String", 0, 0),
-    BuiltinDesc::method_with(
-        "chars",
-        "String",
-        0,
-        0,
-        Some("str_chars"),
-        Dispatch::CCall {
-            sym: "_mvl_string_chars",
-            signature: "ptr @_mvl_string_chars(ptr)",
-            ret_ty: "ptr",
-        },
-    ),
-    BuiltinDesc::method_with(
-        "char_at",
-        "String",
-        1,
-        1,
-        Some("str_char_at"),
-        Dispatch::CCall {
-            sym: "_mvl_str_char_at",
-            signature: "i8 @_mvl_str_char_at(ptr, i64, ptr)",
-            ret_ty: "i8",
-        },
-    ),
-    BuiltinDesc::method_with(
-        "byte_at",
-        "String",
-        1,
-        1,
-        Some("str_byte_at"),
-        Dispatch::CCall {
-            sym: "_mvl_str_byte_at",
-            signature: "i8 @_mvl_str_byte_at(ptr, i64, ptr)",
-            ret_ty: "i8",
-        },
-    ),
+    BuiltinDesc::method_with("chars", "String", 0, 0, Some("str_chars")),
+    BuiltinDesc::method_with("char_at", "String", 1, 1, Some("str_char_at")),
+    BuiltinDesc::method_with("byte_at", "String", 1, 1, Some("str_byte_at")),
     BuiltinDesc::method("concat", "String", 1, 1),
-    BuiltinDesc::method_with(
-        "find",
-        "String",
-        1,
-        1,
-        Some("str_find"),
-        Dispatch::CCall {
-            sym: "_mvl_str_find",
-            signature: "i64 @_mvl_str_find(ptr, ptr)",
-            ret_ty: "i64",
-        },
-    ),
-    BuiltinDesc::method_with(
-        "split",
-        "String",
-        1,
-        1,
-        Some("str_split"),
-        Dispatch::CCall {
-            sym: "_mvl_str_split",
-            signature: "ptr @_mvl_str_split(ptr, ptr)",
-            ret_ty: "ptr",
-        },
-    ),
-    BuiltinDesc::method_with(
-        "substring",
-        "String",
-        2,
-        2,
-        Some("str_substring"),
-        Dispatch::CCall {
-            sym: "_mvl_str_substring",
-            signature: "ptr @_mvl_str_substring(ptr, i64, i64)",
-            ret_ty: "ptr",
-        },
-    ),
-    BuiltinDesc::method_with(
-        "parse_int",
-        "String",
-        0,
-        0,
-        Some("str_parse_int"),
-        Dispatch::Inline,
-    ),
-    BuiltinDesc::method_with(
-        "parse_float",
-        "String",
-        0,
-        0,
-        Some("str_parse_float"),
-        Dispatch::Inline,
-    ),
+    BuiltinDesc::method_with("find", "String", 1, 1, Some("str_find")),
+    BuiltinDesc::method_with("split", "String", 1, 1, Some("str_split")),
+    BuiltinDesc::method_with("substring", "String", 2, 2, Some("str_substring")),
+    BuiltinDesc::method_with("parse_int", "String", 0, 0, Some("str_parse_int")),
+    BuiltinDesc::method_with("parse_float", "String", 0, 0, Some("str_parse_float")),
     // String — Unicode-aware case conversion (builtin fn, #1267)
-    BuiltinDesc::method_with(
-        "to_upper",
-        "String",
-        0,
-        0,
-        Some("str_to_upper"),
-        Dispatch::CCall {
-            sym: "_mvl_str_to_upper",
-            signature: "ptr @_mvl_str_to_upper(ptr)",
-            ret_ty: "ptr",
-        },
-    ),
-    BuiltinDesc::method_with(
-        "to_lower",
-        "String",
-        0,
-        0,
-        Some("str_to_lower"),
-        Dispatch::CCall {
-            sym: "_mvl_str_to_lower",
-            signature: "ptr @_mvl_str_to_lower(ptr)",
-            ret_ty: "ptr",
-        },
-    ),
+    BuiltinDesc::method_with("to_upper", "String", 0, 0, Some("str_to_upper")),
+    BuiltinDesc::method_with("to_lower", "String", 0, 0, Some("str_to_lower")),
     // String — compiler intrinsics (both backends emit explicitly)
     BuiltinDesc::method("contains", "String", 1, 1),
     BuiltinDesc::method("is_empty", "String", 0, 0),
     BuiltinDesc::method("to_string", "String", 0, 0),
     // ── List — kernel builtins (std/lists.mvl `pub builtin fn`) ──────────────
     BuiltinDesc::method("len", "List", 0, 0),
-    BuiltinDesc::method_with("get", "List", 1, 1, Some("list_get"), Dispatch::Inline),
+    BuiltinDesc::method_with("get", "List", 1, 1, Some("list_get")),
     BuiltinDesc::method("push", "List", 1, 1),
     BuiltinDesc::method("set", "List", 2, 2),
-    BuiltinDesc::method_with("slice", "List", 2, 2, Some("list_slice"), Dispatch::Inline),
+    BuiltinDesc::method_with("slice", "List", 2, 2, Some("list_slice")),
     BuiltinDesc::method("concat", "List", 1, 1),
     BuiltinDesc::method("contains", "List", 1, 1),
     // List — compiler intrinsics
@@ -503,66 +325,11 @@ pub const BUILTINS: &[BuiltinDesc] = &[
     BuiltinDesc::method("take_while", "List", 1, 1),
     BuiltinDesc::method("skip_while", "List", 1, 1),
     // List — category-D builtins: explicit emitter arms in both backends (#1290)
-    BuiltinDesc::method_with(
-        "sort",
-        "List",
-        0,
-        0,
-        None,
-        Dispatch::CCall {
-            sym: "_mvl_list_sort",
-            signature: "ptr @_mvl_list_sort(ptr)",
-            ret_ty: "ptr",
-        },
-    ),
-    BuiltinDesc::method_with(
-        "partition",
-        "List",
-        1,
-        1,
-        None,
-        Dispatch::CCall {
-            sym: "_mvl_list_partition",
-            signature: "ptr @_mvl_list_partition(ptr, ptr)",
-            ret_ty: "ptr",
-        },
-    ),
-    BuiltinDesc::method_with(
-        "group_by",
-        "List",
-        1,
-        1,
-        None,
-        Dispatch::CCall {
-            sym: "_mvl_list_group_by",
-            signature: "ptr @_mvl_list_group_by(ptr, ptr)",
-            ret_ty: "ptr",
-        },
-    ),
-    BuiltinDesc::method_with(
-        "windows",
-        "List",
-        1,
-        1,
-        None,
-        Dispatch::CCall {
-            sym: "_mvl_list_windows",
-            signature: "ptr @_mvl_list_windows(ptr, i64)",
-            ret_ty: "ptr",
-        },
-    ),
-    BuiltinDesc::method_with(
-        "chunks",
-        "List",
-        1,
-        1,
-        None,
-        Dispatch::CCall {
-            sym: "_mvl_list_chunks",
-            signature: "ptr @_mvl_list_chunks(ptr, i64)",
-            ret_ty: "ptr",
-        },
-    ),
+    BuiltinDesc::method("sort", "List", 0, 0),
+    BuiltinDesc::method("partition", "List", 1, 1),
+    BuiltinDesc::method("group_by", "List", 1, 1),
+    BuiltinDesc::method("windows", "List", 1, 1),
+    BuiltinDesc::method("chunks", "List", 1, 1),
     // ── Map — compiler intrinsics ─────────────────────────────────────────────
     BuiltinDesc::method("get", "Map", 1, 1),
     BuiltinDesc::method("insert", "Map", 2, 2),
@@ -806,19 +573,9 @@ mod registry_tests {
         }
     }
 
-    #[test]
-    fn llvm_dispatch_hints_are_valid_identifiers() {
-        for d in BUILTINS {
-            if let Some(sym) = d.dispatch.sym() {
-                assert!(
-                    sym.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'),
-                    "llvm dispatch sym '{}' for {} is not a valid C identifier",
-                    sym,
-                    d.name
-                );
-            }
-        }
-    }
+    // llvm dispatch identifier validation lives in
+    // `backends::llvm_text::dispatch::tests::syms_are_valid_c_identifiers`
+    // (moved out of this file when the LLVM dispatch table was extracted).
 
     #[test]
     fn rust_emit_by_name_returns_expected_values() {
