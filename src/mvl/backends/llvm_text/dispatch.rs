@@ -262,6 +262,133 @@ pub const LLVM_DISPATCH: &[(&str, Dispatch)] = &[
             ret_ty: "ptr",
         },
     ),
+    // ── Phase 5: String additional arms ─────────────────────────────────
+    (
+        "trim",
+        Dispatch::CCall {
+            sym: "_mvl_str_trim",
+            signature: "ptr @_mvl_str_trim(ptr)",
+            ret_ty: "ptr",
+        },
+    ),
+    (
+        "replace",
+        Dispatch::CCall {
+            sym: "_mvl_str_replace",
+            signature: "ptr @_mvl_str_replace(ptr, ptr, ptr)",
+            ret_ty: "ptr",
+        },
+    ),
+    (
+        "concat",
+        Dispatch::CCall {
+            sym: "_mvl_string_concat",
+            signature: "ptr @_mvl_string_concat(ptr, ptr)",
+            ret_ty: "ptr",
+        },
+    ),
+    // "list_concat" is a synthetic dispatch key (MVL method is also named "concat"
+    // but the receiver is a List/Array — the emit arm guards on receiver kind and
+    // routes to this entry to avoid calling _mvl_string_concat on list data).
+    (
+        "list_concat",
+        Dispatch::CCall {
+            sym: "_mvl_list_concat",
+            signature: "ptr @_mvl_list_concat(ptr, ptr)",
+            ret_ty: "ptr",
+        },
+    ),
+    // ── Phase 5: Map arms ────────────────────────────────────────────────
+    (
+        "keys",
+        Dispatch::CCall {
+            sym: "_mvl_map_keys",
+            signature: "ptr @_mvl_map_keys(ptr)",
+            ret_ty: "ptr",
+        },
+    ),
+    (
+        "values",
+        Dispatch::CCall {
+            sym: "_mvl_map_values",
+            signature: "ptr @_mvl_map_values(ptr)",
+            ret_ty: "ptr",
+        },
+    ),
+    // ── Phase 5: Set algebra arms ────────────────────────────────────────
+    (
+        "intersection",
+        Dispatch::CCall {
+            sym: "_mvl_set_intersection",
+            signature: "ptr @_mvl_set_intersection(ptr, ptr)",
+            ret_ty: "ptr",
+        },
+    ),
+    (
+        "difference",
+        Dispatch::CCall {
+            sym: "_mvl_set_difference",
+            signature: "ptr @_mvl_set_difference(ptr, ptr)",
+            ret_ty: "ptr",
+        },
+    ),
+    (
+        "union",
+        Dispatch::CCall {
+            sym: "_mvl_set_union",
+            signature: "ptr @_mvl_set_union(ptr, ptr)",
+            ret_ty: "ptr",
+        },
+    ),
+    // ── Phase 5: List HOF arms (closure is just a ptr arg — Shape A) ────
+    (
+        "filter",
+        Dispatch::CCall {
+            sym: "_mvl_list_filter",
+            signature: "ptr @_mvl_list_filter(ptr, ptr)",
+            ret_ty: "ptr",
+        },
+    ),
+    (
+        "map",
+        Dispatch::CCall {
+            sym: "_mvl_list_map",
+            signature: "ptr @_mvl_list_map(ptr, ptr)",
+            ret_ty: "ptr",
+        },
+    ),
+    (
+        "take_while",
+        Dispatch::CCall {
+            sym: "_mvl_list_take_while",
+            signature: "ptr @_mvl_list_take_while(ptr, ptr)",
+            ret_ty: "ptr",
+        },
+    ),
+    (
+        "skip_while",
+        Dispatch::CCall {
+            sym: "_mvl_list_skip_while",
+            signature: "ptr @_mvl_list_skip_while(ptr, ptr)",
+            ret_ty: "ptr",
+        },
+    ),
+    (
+        "any",
+        Dispatch::CCall {
+            sym: "_mvl_list_any",
+            signature: "i1 @_mvl_list_any(ptr, ptr)",
+            ret_ty: "i1",
+        },
+    ),
+    (
+        "all",
+        Dispatch::CCall {
+            sym: "_mvl_list_all",
+            signature: "i1 @_mvl_list_all(ptr, ptr)",
+            ret_ty: "i1",
+        },
+    ),
     // ── Shape B: C call returns i64, coerced to i1 via `icmp ne` ────────
     (
         "contains",

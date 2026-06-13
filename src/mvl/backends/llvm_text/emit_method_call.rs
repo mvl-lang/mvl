@@ -502,7 +502,6 @@ impl TextEmitter {
                 Ok(Some(reg))
             }
             ("concat", "ptr") => {
-                self.ensure_extern("declare ptr @_mvl_string_concat(ptr, ptr)");
                 let other = match args.first() {
                     Some(a) => match self.emit_expr(a)? {
                         Some(v) => v,
@@ -510,12 +509,21 @@ impl TextEmitter {
                     },
                     None => return Ok(None),
                 };
-                let reg = self.next_reg();
-                self.push_instr(&format!(
-                    "{reg} = call ptr @_mvl_string_concat(ptr {val}, ptr {other})"
-                ));
-                self.reg_types.insert(reg.clone(), "ptr".into());
-                Ok(Some(reg))
+                // List::concat → _mvl_list_concat; String::concat → _mvl_string_concat.
+                // Both are `builtin fn` — receiver kind determines which C symbol to use.
+                let dispatch_key = if matches!(
+                    self.mvl_receiver_kind(receiver),
+                    Some("List") | Some("Array")
+                ) {
+                    "list_concat"
+                } else {
+                    "concat"
+                };
+                Ok(Some(self.emit_c_call_simple(
+                    dispatch_key,
+                    &val,
+                    &[("ptr", &other)],
+                )))
             }
             // ── Map methods ─────────────────────────────────────────────
             ("get", "ptr") if matches!(self.mvl_receiver_kind(receiver), Some("Map")) => {
@@ -608,18 +616,10 @@ impl TextEmitter {
                 Ok(Some(val))
             }
             ("keys", "ptr") if matches!(self.mvl_receiver_kind(receiver), Some("Map")) => {
-                self.ensure_extern("declare ptr @_mvl_map_keys(ptr)");
-                let reg = self.next_reg();
-                self.push_instr(&format!("{reg} = call ptr @_mvl_map_keys(ptr {val})"));
-                self.reg_types.insert(reg.clone(), "ptr".into());
-                Ok(Some(reg))
+                Ok(Some(self.emit_c_call_simple("keys", &val, &[])))
             }
             ("values", "ptr") if matches!(self.mvl_receiver_kind(receiver), Some("Map")) => {
-                self.ensure_extern("declare ptr @_mvl_map_values(ptr)");
-                let reg = self.next_reg();
-                self.push_instr(&format!("{reg} = call ptr @_mvl_map_values(ptr {val})"));
-                self.reg_types.insert(reg.clone(), "ptr".into());
-                Ok(Some(reg))
+                Ok(Some(self.emit_c_call_simple("values", &val, &[])))
             }
             ("contains_key", "ptr") if matches!(self.mvl_receiver_kind(receiver), Some("Map")) => {
                 let key_expr = match args.first() {
@@ -674,8 +674,10 @@ impl TextEmitter {
                 self.reg_types.insert(reg.clone(), "i1".into());
                 Ok(Some(reg))
             }
-            // Set algebra — intersection / difference / union all share the same
-            // (ptr, ptr) -> ptr C-ABI shape against the i64-element array runtime.
+            // Set algebra — intersection / difference / union (#1399 phase 5)
+            // All three share the same (ptr, ptr) → ptr C-ABI shape against the
+            // i64-element array runtime; emit_c_call_simple dispatches to the
+            // correct symbol per method name via LLVM_DISPATCH.
             ("intersection" | "difference" | "union", "ptr")
                 if args.len() == 1 && matches!(self.mvl_receiver_kind(receiver), Some("Set")) =>
             {
@@ -683,17 +685,11 @@ impl TextEmitter {
                     Some(v) => v,
                     None => return Ok(None),
                 };
-                let sym = match method {
-                    "intersection" => "_mvl_set_intersection",
-                    "difference" => "_mvl_set_difference",
-                    "union" => "_mvl_set_union",
-                    _ => unreachable!(),
-                };
-                self.ensure_extern(&format!("declare ptr @{sym}(ptr, ptr)"));
-                let reg = self.next_reg();
-                self.push_instr(&format!("{reg} = call ptr @{sym}(ptr {val}, ptr {other})"));
-                self.reg_types.insert(reg.clone(), "ptr".into());
-                Ok(Some(reg))
+                Ok(Some(self.emit_c_call_simple(
+                    method,
+                    &val,
+                    &[("ptr", &other)],
+                )))
             }
             // List/Array/Set slice(start, end) / take(n) / skip(n) — all
             // lower to `_mvl_list_slice(ptr, i64, i64)`.
@@ -747,40 +743,35 @@ impl TextEmitter {
                 Ok(Some(val))
             }
 
-            // ── HOF: filter / map / any / all / find / take_while / skip_while ──
-            // Guard: only match when the argument is closure-like (Lambda or a
-            // module-level function reference).  String::find takes a plain
-            // String argument, not a closure, so it must not match this arm.
-            ("filter" | "map" | "find" | "take_while" | "skip_while", "ptr")
+            // ── HOF: filter / map / take_while / skip_while / any / all ──────
+            // Closure ptr is just another arg — LLVM_DISPATCH entries each carry
+            // the fixed symbol; emit_c_call_simple handles them identically to
+            // non-HOF calls.
+            ("filter" | "map" | "take_while" | "skip_while", "ptr")
                 if args.len() == 1 && self.is_closure_arg(&args[0]) =>
             {
-                // Runtime passes element by pointer: fn(env, elem_ptr) -> ...
                 let closure = match self.emit_as_hof_closure(&args[0], &[0])? {
                     Some(p) => p,
                     None => return Ok(None),
                 };
-                let sym = format!("_mvl_list_{method}");
-                self.ensure_extern(&format!("declare ptr @{sym}(ptr, ptr)"));
-                let reg = self.next_reg();
-                self.push_instr(&format!(
-                    "{reg} = call ptr @{sym}(ptr {val}, ptr {closure})"
-                ));
-                self.reg_types.insert(reg.clone(), "ptr".into());
-                Ok(Some(reg))
+                Ok(Some(self.emit_c_call_simple(
+                    method,
+                    &val,
+                    &[("ptr", &closure)],
+                )))
             }
-            ("any" | "all", "ptr") if args.len() == 1 => {
-                // Runtime passes element by pointer: fn(env, elem_ptr) -> i1
+            ("any" | "all", "ptr") if args.len() == 1 && self.is_closure_arg(&args[0]) => {
                 let closure = match self.emit_as_hof_closure(&args[0], &[0])? {
                     Some(p) => p,
                     None => return Ok(None),
                 };
-                let sym = format!("_mvl_list_{method}");
-                self.ensure_extern(&format!("declare i1 @{sym}(ptr, ptr)"));
-                let reg = self.next_reg();
-                self.push_instr(&format!("{reg} = call i1 @{sym}(ptr {val}, ptr {closure})"));
-                self.reg_types.insert(reg.clone(), "i1".into());
-                Ok(Some(reg))
+                Ok(Some(self.emit_c_call_simple(
+                    method,
+                    &val,
+                    &[("ptr", &closure)],
+                )))
             }
+
             ("fold", "ptr") if args.len() == 2 => {
                 let init_ty = self.type_of_expr(&args[0]);
                 let init_val = match self.emit_expr(&args[0])? {
@@ -1127,11 +1118,7 @@ impl TextEmitter {
                     Some("List") | Some("Array") | Some("Set") | Some("Map")
                 ) =>
             {
-                self.ensure_extern("declare ptr @_mvl_str_trim(ptr)");
-                let reg = self.next_reg();
-                self.push_instr(&format!("{reg} = call ptr @_mvl_str_trim(ptr {val})"));
-                self.reg_types.insert(reg.clone(), "ptr".into());
-                Ok(Some(reg))
+                Ok(Some(self.emit_c_call_simple("trim", &val, &[])))
             }
 
             // to_lower() → String
@@ -1170,13 +1157,11 @@ impl TextEmitter {
                     Some(v) => v,
                     None => return Ok(None),
                 };
-                self.ensure_extern("declare ptr @_mvl_str_replace(ptr, ptr, ptr)");
-                let reg = self.next_reg();
-                self.push_instr(&format!(
-                    "{reg} = call ptr @_mvl_str_replace(ptr {val}, ptr {old_s}, ptr {new_s})"
-                ));
-                self.reg_types.insert(reg.clone(), "ptr".into());
-                Ok(Some(reg))
+                Ok(Some(self.emit_c_call_simple(
+                    "replace",
+                    &val,
+                    &[("ptr", &old_s), ("ptr", &new_s)],
+                )))
             }
 
             // ── List.get(i) → Option[T] ─────────────────────────────────
