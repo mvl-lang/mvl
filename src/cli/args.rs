@@ -67,6 +67,11 @@ pub fn print_usage() {
         "  mvl mcdc   <file|dir> --json        — machine-readable JSON output for CI integration"
     );
     eprintln!("  mvl mcdc   <file|dir> --json -q     — JSON summary only (no per-clause detail)");
+    eprintln!("  mvl prove  <file|dir>                      — per-call-site refinement proof layer breakdown (#836)");
+    eprintln!("  mvl prove  <file|dir> --verbose           — include predicate text in each line");
+    eprintln!(
+        "  mvl prove  <file|dir> --callee <fn>       — filter sites to a specific callee function"
+    );
     eprintln!("  mvl fmt   <file|dir>               — format MVL source files in place");
     eprintln!(
         "  mvl fmt   <file|dir> --check       — exit 1 if any file is not formatted (CI gate)"

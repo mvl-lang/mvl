@@ -14,6 +14,7 @@ pub mod meta;
 pub mod mutate;
 #[cfg(feature = "openapi")]
 pub mod openapi;
+pub mod prove;
 pub mod test;
 pub mod tir;
 
@@ -174,6 +175,24 @@ pub(super) fn dispatch(args: &[String]) {
             let masking = args.iter().any(|a| a == "--masking");
             let json = args.iter().any(|a| a == "--json");
             mcdc::run(&path, quiet, verbose, masking, json);
+        }
+        "prove" => {
+            let path = args::require_path_arg(args, "prove");
+            let verbose = args.iter().any(|a| a == "--verbose" || a == "-v");
+            let stdlib_profile = args::parse_stdlib_profile(args);
+            let callee_filter = if let Some(pos) = args.iter().position(|a| a == "--callee") {
+                match args.get(pos + 1).map(|s| s.as_str()) {
+                    Some(name) if !name.starts_with("--") => Some(name),
+                    _ => {
+                        eprintln!("error: --callee requires a function name argument");
+                        eprintln!("usage: mvl prove <file|dir> --callee <fn>");
+                        process::exit(1);
+                    }
+                }
+            } else {
+                None
+            };
+            prove::run(&path, verbose, stdlib_profile, callee_filter);
         }
         "complexity" => {
             use mvl::mvl::passes::complexity;
