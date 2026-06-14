@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.209.2] - 2026-06-14
+
+### Fixed
+
+- **Type checker: qualified variant name resolution in nested enum patterns** (#1410) — The `TupleStruct` pattern handler resolved variant field types by scanning all registered types for a matching short name (e.g. `ParseError`). Multiple stdlib types share variant names (`JsonError::ParseError(String)`, `TomlError::ParseError(String)`, `CsvError::ParseError(Int, String)`), and HashMap iteration is non-deterministic, so the wrong enum could be picked first — binding pattern variables to incorrect types and causing spurious `type mismatch` errors on explicit `let` annotations. Fix: when the pattern name is qualified (e.g. `CsvError::ParseError`), look up the named type directly in `env.types` first, mirroring the disambiguation logic already used for identifier resolution.
+
 ## [0.209.1] - 2026-06-14
 
 ### Fixed

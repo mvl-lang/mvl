@@ -1,0 +1,59 @@
+// Regression test for #1410: spurious type mismatch when an explicit type
+// annotation is used on a variable bound inside a nested enum pattern match.
+//
+// Root cause: the TupleStruct pattern handler searched all types for a variant
+// by short name, hitting e.g. JsonError::ParseError(String) before
+// CsvError::ParseError(Int, String) due to non-deterministic HashMap iteration.
+// Fix: prefer the explicitly-qualified type name when resolving variant fields.
+
+pub type ParseError = enum {
+    Code(Int, String),
+    Simple(String),
+}
+
+pub type OtherError = enum {
+    Code(String),
+}
+
+pub fn classify(e: ParseError) -> String {
+    match e {
+        ParseError::Code(n, msg) => {
+            let code: Int = n;
+            let text: String = msg;
+            "code ".concat(code.to_string()).concat(": ").concat(text)
+        },
+        ParseError::Simple(msg) => {
+            let text: String = msg;
+            text
+        },
+    }
+}
+
+pub fn classify_result(r: Result[Int, ParseError]) -> String {
+    match r {
+        Ok(v) => {
+            let n: Int = v;
+            n.to_string()
+        },
+        Err(ParseError::Code(n, msg)) => {
+            let code: Int = n;
+            let text: String = msg;
+            "code ".concat(code.to_string()).concat(": ").concat(text)
+        },
+        Err(ParseError::Simple(msg)) => {
+            let text: String = msg;
+            text
+        },
+    }
+}
+
+fn main() -> Unit ! Console {
+    let a: String = classify(ParseError::Code(42, "bad"));
+    let b: String = classify(ParseError::Simple("oops"));
+    let c: String = classify_result(Err(ParseError::Code(7, "fail")));
+    let d: String = classify_result(Ok(99));
+    println(a);
+    println(b);
+    println(c);
+    println(d)
+}
