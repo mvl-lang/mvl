@@ -236,6 +236,9 @@ partial fn eff_dfs_cycle(
                         eff_dfs_cycle(parents, parent, new_path, new_stack);
                     match sub {
                         Some(chain) => {
+                            // Prepend current node so the full DFS path is preserved
+                            // for lex-min deduplication in from_decls Pass 3.
+                            cycle_chain.push(node);
                             let xi: ref Int = 0;
                             while xi < chain.len() {
                                 if let Some(s) = chain.get(xi) { cycle_chain.push(s) }

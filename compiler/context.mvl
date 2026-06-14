@@ -227,8 +227,8 @@ pub partial fn TypeEnv::new() -> TypeEnv {
     // Pre-seed standard relabel transitions from std/ifc.mvl.
     relabels.insert("classify",       RelabelInfo { from_lbl: None,               to_lbl: Some("Secret"),      audit: false });
     relabels.insert("taint",          RelabelInfo { from_lbl: None,               to_lbl: Some("Tainted"),     audit: false });
-    relabels.insert("trust",          RelabelInfo { from_lbl: Some("Tainted"),    to_lbl: None,                audit: false });
-    relabels.insert("release",        RelabelInfo { from_lbl: Some("Secret"),     to_lbl: None,                audit: false });
+    relabels.insert("trust",          RelabelInfo { from_lbl: Some("Tainted"),    to_lbl: None,                audit: true });
+    relabels.insert("release",        RelabelInfo { from_lbl: Some("Secret"),     to_lbl: None,                audit: true });
     relabels.insert("config_path",    RelabelInfo { from_lbl: None,               to_lbl: Some("ConfigPath"),  audit: false });
     relabels.insert("unconfig_path",  RelabelInfo { from_lbl: Some("ConfigPath"), to_lbl: None,                audit: false });
     relabels.insert("db_url",         RelabelInfo { from_lbl: None,               to_lbl: Some("DbUrl"),       audit: false });
@@ -236,7 +236,7 @@ pub partial fn TypeEnv::new() -> TypeEnv {
     relabels.insert("api_endpoint",   RelabelInfo { from_lbl: None,               to_lbl: Some("ApiEndpoint"), audit: false });
     relabels.insert("unapi_endpoint", RelabelInfo { from_lbl: Some("ApiEndpoint"),to_lbl: None,                audit: false });
     relabels.insert("audit_target",   RelabelInfo { from_lbl: None,               to_lbl: Some("AuditTarget"), audit: false });
-    relabels.insert("unaudit_target", RelabelInfo { from_lbl: Some("AuditTarget"),to_lbl: None,                audit: false });
+    relabels.insert("unaudit_target", RelabelInfo { from_lbl: Some("AuditTarget"),to_lbl: None,                audit: true });
 
     // ── Built-in types ────────────────────────────────────────────────────────
     let empty_struct: TypeInfo = TypeInfo {
@@ -396,7 +396,7 @@ pub total fn TypeEnv::push_scope(self) -> TypeEnv {
 }
 
 /// Pop the innermost scope and return the updated env.
-/// Note: capability release on scope exit is deferred (see Rust pop_scope).
+/// TODO: implement capability release on scope exit (#1117 phase 4b); see Rust pop_scope for Val(n)/Ref transitions.
 pub total fn TypeEnv::pop_scope(self) -> TypeEnv {
     let n: Int = self.scopes.len();
     if n <= 1 {
@@ -492,14 +492,27 @@ pub total fn TypeEnv::lookup_with_scope_index(self, name: String) -> Option[Scop
 /// Mark a variable as moved (searching scopes from innermost out, updating first match).
 pub total fn TypeEnv::mark_moved(self, name: String) -> TypeEnv {
     let n: Int = self.scopes.len();
+    // Pass 1: find the innermost scope that contains `name` (matches Rust's rev() search).
+    let target_idx: ref Int = -1;
+    for i in range(0, n).reverse() {
+        if target_idx == -1 {
+            match self.scopes.get(i) {
+                Some(scope) => match scope.get(name) {
+                    Some(_) => { target_idx = i },
+                    None    => {},
+                },
+                None => {},
+            }
+        }
+    }
+    // Pass 2: rebuild scopes in original order, marking `name` moved only in target_idx.
     let new_scopes: ref List[Map[String, VarInfo]] = [];
-    let moved_done: ref Bool = false;
     for i in range(0, n) {
         let scope: ref Map[String, VarInfo] = match self.scopes.get(i) {
             Some(s) => s,
             None    => Map::new(),
         };
-        if !moved_done {
+        if i == target_idx {
             match scope.get(name) {
                 Some(old_info) => {
                     let new_info: VarInfo = VarInfo {
@@ -512,7 +525,6 @@ pub total fn TypeEnv::mark_moved(self, name: String) -> TypeEnv {
                         ref_var:          old_info.ref_var,
                     };
                     scope.insert(name, new_info);
-                    moved_done = true
                 },
                 None => {},
             }
