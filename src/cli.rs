@@ -269,7 +269,8 @@ pub(super) fn dispatch(args: &[String]) {
         }
         "install" => {
             let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-            if let Err(e) = packages::cmd_install(&project_root) {
+            let global_only = args.iter().any(|a| a == "--global");
+            if let Err(e) = packages::cmd_install(&project_root, global_only) {
                 eprintln!("error: {e}");
                 if matches!(e, packages::PackageError::Lock(_)) {
                     eprintln!("hint: run 'mvl add <package>' to create mvl.lock");

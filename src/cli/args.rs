@@ -99,7 +99,10 @@ pub fn print_usage() {
     eprintln!("  mvl self list                      — list installed toolchain versions");
     eprintln!("  mvl self uninstall <version>       — remove an installed toolchain version");
     eprintln!("  mvl add <pkg-id> [<tag>]           — fetch package, add to mvl.toml + mvl.lock");
-    eprintln!("  mvl install                        — fetch all deps from mvl.lock, verify hashes");
+    eprintln!(
+        "  mvl install                        — fetch all deps from mvl.lock, populate .mvl/pkg/
+  mvl install --global               — fetch to global cache only, skip local .mvl/pkg/"
+    );
     eprintln!("  mvl update                         — re-resolve versions, update mvl.lock");
     eprintln!("  mvl pin [<version>]                — pin project to compiler version (writes .mvl-version)");
     eprintln!("  mvl sbom [--format=cyclonedx|spdx] — generate SBOM from mvl.lock (default: CycloneDX JSON)");
