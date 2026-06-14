@@ -1267,8 +1267,7 @@ fn method_flatten_emits_iterator_flatten() {
 
 #[test]
 fn method_partition_emits_struct_wrap() {
-    let src =
-        "fn f(xs: List[Int], p: fn(Int) -> Bool) -> Int { xs.partition(p).matching.len() }";
+    let src = "fn f(xs: List[Int], p: fn(Int) -> Bool) -> Int { xs.partition(p).matching.len() }";
     let rust = transpile_src(src);
     assert_contains(&rust, ".into_iter().partition(|__x|");
     assert_contains(&rust, "Partitioned { matching: __matching, rest: __rest }");
