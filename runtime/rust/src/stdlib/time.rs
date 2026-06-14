@@ -12,7 +12,7 @@ use std::time::{Duration as StdDuration, SystemTime, UNIX_EPOCH};
 // ── Types ──────────────────────────────────────────────────────────────────
 
 /// An opaque point in time backed by `SystemTime`.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Instant(pub SystemTime);
 
 /// A human-readable calendar date and time (UTC).
