@@ -451,33 +451,53 @@ impl Parser {
             // ── Identifier, function call, or struct construction ────────────
             TokenKind::Ident(name) => {
                 self.advance();
-                // Handle path expressions: Name::Variant, Enum::Variant(args), etc.
-                let name = if matches!(self.peek_kind(), TokenKind::ColonColon) {
+                // Check for type args before :: to support Map[K, V]::new() syntax.
+                // Must precede the :: check so Map[K,V]::new() doesn't misparse as
+                // Map followed by a generic call [K](V)::new().
+                let (name, pre_type_args) = if matches!(self.peek_kind(), TokenKind::LBracket) {
+                    self.advance(); // consume `[`
+                    let mut targs = vec![self.parse_type_expr()?];
+                    while self.eat(&TokenKind::Comma) {
+                        targs.push(self.parse_type_expr()?);
+                    }
+                    let rb = self.expect(&TokenKind::RBracket);
+                    self.require(rb)?;
+                    // Map[K, V]::method() — static method call with explicit receiver type params
+                    if matches!(self.peek_kind(), TokenKind::ColonColon) {
+                        self.advance(); // consume `::`
+                        match self.peek_kind().clone() {
+                            TokenKind::Ident(method) => {
+                                self.advance();
+                                (format!("{name}::{method}"), targs)
+                            }
+                            _ => (name, targs),
+                        }
+                    } else {
+                        (name, targs)
+                    }
+                } else if matches!(self.peek_kind(), TokenKind::ColonColon) {
+                    // Handle path expressions: Name::Variant, Enum::Variant(args), etc.
                     self.advance(); // consume `::`
                     match self.peek_kind().clone() {
                         TokenKind::Ident(variant) => {
                             self.advance();
-                            format!("{name}::{variant}")
+                            (format!("{name}::{variant}"), vec![])
                         }
-                        _ => name, // malformed path — keep first ident
+                        _ => (name, vec![]), // malformed path — keep first ident
                     }
                 } else {
-                    name
+                    (name, vec![])
                 };
-                // Generic function call: name[Type](args)
-                // Square brackets for type args (LL(1), following Go 1.18)
-                if matches!(self.peek_kind(), TokenKind::LBracket) {
-                    self.advance(); // consume `[`
-                    let type_arg = self.parse_type_expr()?;
-                    let rb = self.expect(&TokenKind::RBracket);
-                    self.require(rb)?;
+                // If type args were already parsed (from receiver or pre-call position),
+                // next token must be `(` for the call args.
+                if !pre_type_args.is_empty() {
                     let lp = self.expect(&TokenKind::LParen);
                     self.require(lp)?;
                     let args = self.parse_call_args()?;
                     let span = self.span_from(start);
                     Ok(Expr::FnCall {
                         name,
-                        type_args: vec![type_arg],
+                        type_args: pre_type_args,
                         args,
                         span,
                     })

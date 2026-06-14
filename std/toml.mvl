@@ -480,24 +480,16 @@ partial fn toml_parse_array(chars: List[String], pos: Int) -> TVPos {
 
 // ── Document parsing ──────────────────────────────────────────────────────────
 
-fn toml_empty_table() -> Map[String, TomlValue] {
-    // {} parses as an empty block in MVL, not an empty map literal.
-    // Workaround: create a sentinel entry then remove it.
-    let m: ref Map[String, TomlValue] = {"__mvl_toml_init__": TomlValue::TBool(false)};
-    m.remove("__mvl_toml_init__");
-    m
-}
-
 // Parse a full TOML document. Returns TomlValue::TTable.
 partial fn toml_parse_document(chars: List[String]) -> TVPos {
     let len: Int = chars.len();
     let cur: ref Int = toml_skip_ws_comments(chars, 0);
-    let root: ref Map[String, TomlValue] = toml_empty_table();
+    let root: ref Map[String, TomlValue] = Map::new();
 
     // Current [section] state: collect key/values into section_map, then
     // flush into root when hitting a new [header] or end of input.
     let section_name: ref String = "";
-    let section_map: ref Map[String, TomlValue] = toml_empty_table();
+    let section_map: ref Map[String, TomlValue] = Map::new();
     let in_section: ref Bool = false;
 
     let had_err: ref Bool = false;
@@ -523,7 +515,7 @@ partial fn toml_parse_document(chars: List[String]) -> TVPos {
                         } else {
                             cur = cur + 1;
                             section_name = consume(name);
-                            section_map  = toml_empty_table();
+                            section_map  = Map::new();
                             in_section   = true
                         }
                     }

@@ -71,7 +71,9 @@ let xs: List<Int> = [1, 2, 3];
 ```mvl
 // CORRECT
 let empty_list: List[Int] = [];
-let empty_map: Map[String, Int] = Map::new();   // use Map::new()
+let empty_map: Map[String, Int] = Map::new();         // let annotation drives inference
+let m = Map[String, Int]::new();                      // explicit type params — no annotation needed
+process(Map[String, Int]::new())                      // inline use, no let required
 
 // WRONG — {} is an empty block, not an empty map
 let empty_map: Map[String, Int] = {};

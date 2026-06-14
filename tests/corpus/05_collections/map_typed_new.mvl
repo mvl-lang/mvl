@@ -1,0 +1,28 @@
+// tests/corpus/05_collections/map_typed_new.mvl — Map[K, V]::new() with explicit type params
+//
+// Verifies that explicit type params on the receiver work for inline map construction
+// where no surrounding let annotation is available for inference.
+
+use std.collections.{Map}
+
+fn make_empty_str_int() -> Map[String, Int] {
+    Map[String, Int]::new()
+}
+
+fn make_empty_str_str() -> Map[String, String] {
+    Map[String, String]::new()
+}
+
+// Inline use: passed directly as an argument, no let annotation
+fn accept_map(m: Map[String, Int]) -> Int { m.len() }
+
+fn test_inline() -> Int {
+    accept_map(Map[String, Int]::new())
+}
+
+// Multiple explicit-typed new() calls in one expression
+fn test_two_maps() -> Bool {
+    let a: Map[String, Int] = Map[String, Int]::new();
+    let b: Map[String, String] = Map[String, String]::new();
+    a.len() == b.len()
+}

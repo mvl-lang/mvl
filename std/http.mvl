@@ -104,12 +104,6 @@ type ParsedHeader = enum {
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
-fn empty_str_map() -> Map[String, String] {
-    let m: ref Map[String, String] = {"__http_init__": ""};
-    m.remove("__http_init__");
-    m
-}
-
 fn parse_method_str(s: String) -> Result[Method, HttpError] {
     if      s == "GET"     { Ok(Method::GET)     }
     else if s == "POST"    { Ok(Method::POST)    }
@@ -243,7 +237,7 @@ pub partial fn parse_request(data: String) -> Result[Request, HttpError] {
     }
 
     // Parse headers until blank line.
-    let headers: ref Map[String, String] = empty_str_map();
+    let headers: ref Map[String, String] = Map::new();
     let body_start: ref Int = lines_count;
     let hi: ref Int = 1;
     let header_done: ref Bool = false;

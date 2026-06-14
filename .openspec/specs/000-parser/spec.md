@@ -185,6 +185,15 @@ The parser MUST parse all MVL expression forms: literals, identifiers, field acc
 - WHEN parsed
 - THEN AST contains IfExpr with both branches (it's an expression, not a statement)
 
+#### Scenario: Parse typed-receiver static call
+
+- GIVEN `Map[String, Int]::new()`
+- WHEN parsed
+- THEN AST contains FnCall with name="Map::new" and type_args=[String, Int]
+- AND the call is valid inline (no surrounding let annotation required)
+
+**Corpus:** `tests/corpus/05_collections/map_typed_new.mvl`
+
 **Corpus:** `tests/corpus/01_basics/expressions.mvl`
 
 ### Requirement 7: Parse Security Labels [MUST]
