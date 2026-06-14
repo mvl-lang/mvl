@@ -631,6 +631,24 @@ mod tests {
     }
 
     #[test]
+    fn generate_manifest_mvl_purl_embedded() {
+        let pkg = LockedPackage {
+            name: "github.com/mvl-lang/pkg-http".to_string(),
+            version: "0.2.0".to_string(),
+            hash: "sha256:abc".to_string(),
+            commit: None,
+            git: None,
+            license: Some("Apache-2.0".to_string()),
+            allow_license_override: None,
+        };
+        let src = generate_manifest_mvl(&base_meta(), &[pkg], &[]);
+        assert!(
+            src.contains(r#"purl: "pkg:mvl/github.com/mvl-lang/pkg-http@0.2.0""#),
+            "purl baked in as pkg:mvl/<name>@<version>"
+        );
+    }
+
+    #[test]
     fn generate_manifest_mvl_licenses_deduplicates() {
         let pkg = LockedPackage {
             name: "pkg".to_string(),
