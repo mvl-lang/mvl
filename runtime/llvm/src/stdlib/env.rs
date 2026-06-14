@@ -137,7 +137,7 @@ pub extern "C" fn _mvl_env_args_get(i: i64) -> *mut c_char {
 #[no_mangle]
 #[allow(unsafe_code)]
 pub extern "C" fn _mvl_env_args() -> *mut crate::memory::MvlArray {
-    use crate::memory::{MvlString, _mvl_array_new, _mvl_string_new};
+    use crate::memory::{_mvl_array_new, _mvl_string_new, MvlString};
     let elem_size = std::mem::size_of::<*mut MvlString>();
     let arr = unsafe { _mvl_array_new(elem_size, 0) };
     for mvl_runtime::ifc::Tainted(s) in mvl_runtime::stdlib::env::args() {
