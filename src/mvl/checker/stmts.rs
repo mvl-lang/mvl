@@ -513,12 +513,8 @@ impl TypeChecker {
                 iter,
                 invariants,
                 body,
-                span,
+                span: _,
             } => {
-                // Req 8: `for` loops are bounded (total) — reject in `partial` functions.
-                if matches!(self.fn_context().totality, Some(Totality::Partial)) {
-                    self.emit(CheckError::ForLoopInPartialFn { span: *span });
-                }
                 let iter_ty = self.infer_expr(iter);
                 for inv in invariants {
                     self.infer_expr(inv);

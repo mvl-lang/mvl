@@ -289,11 +289,6 @@ pub enum CheckError {
         ty: String,
         span: Span,
     },
-    /// `for` loop used inside a `partial` function — only `while` is allowed there.
-    ForLoopInPartialFn {
-        span: Span,
-    },
-
     // ── Generics constraint enforcement (001-type-system/Req 9) ─────────
     /// Unconstrained type parameter used with an operator that requires a trait bound.
     MissingConstraint {
@@ -563,7 +558,6 @@ impl CheckError {
             | CheckError::PartialCallInTotal { .. }
             | CheckError::UnprovenRecursion { .. }
             | CheckError::MutualRecursionInTotal { .. }
-            | CheckError::ForLoopInPartialFn { .. }
             | CheckError::DecreasesNotBounded { .. }
             | CheckError::DecreasesNotDecreasing { .. } => 8,
             // Req 9: Data Race Freedom
@@ -666,7 +660,6 @@ impl CheckError {
             | CheckError::LabeledTypeCrossesFfiBoundary { span, .. }
             | CheckError::PropagateIncompatibleError { span, .. }
             | CheckError::NotIterator { span, .. }
-            | CheckError::ForLoopInPartialFn { span }
             | CheckError::MissingConstraint { span, .. }
             | CheckError::PreconditionViolated { span, .. }
             | CheckError::PostconditionViolated { span, .. }
@@ -871,9 +864,6 @@ impl CheckError {
             CheckError::NotIterator { ty, .. } => format!(
                 "`{ty}` does not implement `Iterator` — only types with `impl Iterator<T>` can be used in `for...in`"
             ),
-            CheckError::ForLoopInPartialFn { .. } => {
-                "`for` is not permitted in `partial` functions; use `while` instead".to_string()
-            }
             CheckError::MissingConstraint {
                 type_param,
                 required_bound,
