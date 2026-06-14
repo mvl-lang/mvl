@@ -23,7 +23,7 @@
 use std::slice;
 
 use crate::abi::{LlvmEnumError, LlvmResult};
-use crate::memory::{_mvl_string_drop, _mvl_string_new, MvlString};
+use crate::memory::{MvlString, _mvl_string_drop, _mvl_string_new};
 use libc::c_void;
 use mvl_runtime::stdlib::regex as rt;
 
@@ -195,7 +195,7 @@ pub unsafe extern "C" fn _mvl_regex_find_all(
     handle: *mut c_void,
     input: *const MvlString,
 ) -> *mut crate::memory::MvlArray {
-    use crate::memory::{_mvl_array_new, MvlArray};
+    use crate::memory::{MvlArray, _mvl_array_new};
     use crate::memory_ops::_mvl_array_push;
     let arr: *mut MvlArray = _mvl_array_new(std::mem::size_of::<*mut MvlMatch>(), 0);
     if handle.is_null() {

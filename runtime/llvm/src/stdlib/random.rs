@@ -179,7 +179,7 @@ mod tests {
     #[test]
     #[allow(unsafe_code)]
     fn test_random_bytes_length() {
-        use crate::memory::{_mvl_array_drop, MvlArray};
+        use crate::memory::{MvlArray, _mvl_array_drop};
         let arr = _mvl_random_bytes(16);
         assert!(!arr.is_null());
         let len = unsafe { crate::memory_ops::_mvl_array_len(arr as *const MvlArray) };

@@ -30,7 +30,7 @@
 use std::slice;
 
 use crate::abi::LlvmEnumError;
-use crate::memory::{_mvl_string_new, MvlString};
+use crate::memory::{MvlString, _mvl_string_new};
 use libc::c_void;
 
 // ── IoError discriminants (must match variant order in std/io.mvl) ────────────
