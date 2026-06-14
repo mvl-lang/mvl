@@ -116,6 +116,17 @@ pub fn String::is_empty(self) -> Bool {
     self.len() == 0
 }
 
+/// Return true if every character in the string is a lowercase ASCII hex digit (0–9, a–f).
+/// Empty string returns true. Use for validating trace IDs, hashes, and similar tokens.
+pub fn String::is_hex(self) -> Bool {
+    let chars: List[String] = self.chars();
+    let ok: ref Bool = true;
+    for c in chars {
+        if !"0123456789abcdef".contains(c) { ok = false } else {}
+    }
+    ok
+}
+
 // ── String parsing (2 builtin methods) ──────────────────────────────────────
 
 /// Parse as a signed 64-bit integer; Err on failure.
