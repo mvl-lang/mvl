@@ -259,9 +259,10 @@ fn generate_manifest_mvl(
     for (i, pkg) in packages.iter().enumerate() {
         src.push_str(&format!(
             "    let p{i}: PackageInfo = PackageInfo {{ \
-             name: {name}, version: {ver}, license: {lic} }};\n",
+             name: {name}, version: {ver}, purl: {purl}, license: {lic} }};\n",
             name = mvl_str(&pkg.name),
             ver = mvl_str(&pkg.version),
+            purl = mvl_str(&format!("pkg:mvl/{}@{}", pkg.name, pkg.version)),
             lic = mvl_str(pkg.license.as_deref().unwrap_or("")),
         ));
     }
