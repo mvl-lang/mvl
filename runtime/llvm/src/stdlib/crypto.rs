@@ -37,7 +37,7 @@
 
 use std::slice;
 
-use crate::memory::{MvlArray, MvlString, _mvl_array_new, _mvl_string_new};
+use crate::memory::{_mvl_array_new, _mvl_string_new, MvlArray, MvlString};
 use mvl_runtime::ifc::Secret;
 
 // ── helpers ───────────────────────────────────────────────────────────────────

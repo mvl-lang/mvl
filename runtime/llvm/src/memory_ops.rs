@@ -16,8 +16,8 @@
 use std::ptr;
 
 use crate::memory::{
-    MvlArray, MvlMap, MvlMapSlot, MvlString, _mvl_alloc, _mvl_array_new, _mvl_free,
-    _mvl_string_drop, _mvl_string_new,
+    _mvl_alloc, _mvl_array_new, _mvl_free, _mvl_string_drop, _mvl_string_new, MvlArray, MvlMap,
+    MvlMapSlot, MvlString,
 };
 
 // ── format (#901) ───────────────────────────────────────────────────────────
