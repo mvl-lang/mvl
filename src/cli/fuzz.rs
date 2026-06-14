@@ -317,11 +317,9 @@ fn build_fuzz_workspace(
     }
 
     // Root Cargo.toml (lib crate).
-    let runtime_src = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("runtime")
-        .join("rust");
     let need_runtime = project_out.need_runtime;
-    let runtime_dep = if need_runtime && runtime_src.exists() {
+    let runtime_dep = if need_runtime {
+        let runtime_src = mvl::mvl::runtime_xdg::ensure_runtime_rust();
         format!(
             "mvl_runtime = {{ path = \"{}\", package = \"mvl_runtime_rust\" }}\n",
             runtime_src.display()
@@ -344,7 +342,8 @@ fn build_fuzz_workspace(
 
     // fuzz/Cargo.toml — cargo-fuzz sub-crate.
     // mvl_runtime is a direct dep so the harness can use Tainted/Clean/Secret directly.
-    let fuzz_runtime_dep = if runtime_src.exists() {
+    let fuzz_runtime_dep = if need_runtime {
+        let runtime_src = mvl::mvl::runtime_xdg::ensure_runtime_rust();
         format!(
             "[dependencies.mvl_runtime]\npath = \"{}\"\npackage = \"mvl_runtime_rust\"\n\n",
             runtime_src.display()

@@ -90,9 +90,41 @@ jobs:
           path: ${{ env.ASSET }}
           retention-days: 7
 
+  package-runtime:
+    name: Package Runtime
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      - name: Read runtime version
+        id: runtime_version
+        run: |
+          VERSION=$(grep '^version' runtime/rust/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Package runtime tarball
+        run: |
+          ASSET="mvl-runtime-${{ steps.runtime_version.outputs.version }}.tar.gz"
+          tar czf "${ASSET}" \
+            --transform 's|^runtime/rust|rust|' \
+            --transform 's|^runtime/rust-tokio|rust-tokio|' \
+            runtime/rust \
+            runtime/rust-tokio
+          echo "RUNTIME_ASSET=${ASSET}" >> "$GITHUB_ENV"
+          echo "RUNTIME_VERSION=${{ steps.runtime_version.outputs.version }}" >> "$GITHUB_ENV"
+
+      - name: Upload runtime artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: mvl-runtime-${{ steps.runtime_version.outputs.version }}
+          path: ${{ env.RUNTIME_ASSET }}
+          retention-days: 7
+
   release:
     name: Create GitHub Release
-    needs: build
+    needs: [build, package-runtime]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
 
