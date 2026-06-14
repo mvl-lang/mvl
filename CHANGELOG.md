@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [0.211.0] - 2026-06-14
+
+### Added
+
+- **Parser: `Type[K, V]::method()` syntax for typed-receiver static calls** (#1417) — The parser now accepts explicit type parameters on the receiver in static method calls. `Map[String, Int]::new()` is now valid inline (no surrounding `let` annotation required), eliminating the need for type inference to determine map key/value types. Enables removal of sentinel-and-remove helper functions from stdlib that existed solely to work around empty map construction ambiguity.
+
+### Changed
+
+- **Stdlib: replaced sentinel empty-map helpers with `Map::new()` and `Map[K,V]::new()`** (#1417) — Removed five internal helpers (`empty_config_map`, `empty_str_map`, `empty_object`, `toml_empty_table`, `kv_empty_map`) from `std/config`, `std/http`, `std/json`, `std/toml`, `std/kv/file`. Call sites now use either `Map::new()` (when type inference applies) or `Map[K,V]::new()` (inline contexts), both clearer and more idiomatic.
+
 ## [0.209.2] - 2026-06-14
 
 ### Fixed
