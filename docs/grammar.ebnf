@@ -182,7 +182,9 @@ binary_op      = "+" | "-" | "*" | "/" | "%"      (* arithmetic *)
                | "<<" | ">>" ;                    (* left / right shift *)
 borrow_expr    = ( "val" | "ref" ) expr ;           (* take shared or mutable reference *)
 propagate      = expr "?" ;                       (* Result/Option propagation *)
-fn_call        = IDENT [ "[" type_list "]" ] "(" [ arg_list ] ")" ;
+fn_call        = path_name [ "[" type_list "]" ] "(" [ arg_list ] ")" ;
+path_name      = IDENT [ "[" type_list "]" ] [ "::" IDENT ] ;
+(* Examples: foo(x)  first[T](xs)  Enum::Variant(x)  Map[K,V]::new() *)
 method_call    = expr "." IDENT "(" [ arg_list ] ")" ;
 field_access   = expr "." IDENT ;
 arg_list       = expr { "," expr } ;
@@ -209,7 +211,8 @@ literal        = INTEGER | FLOAT | STRING | CHAR | "true" | "false"
 list_literal   = "[" [ expr { "," expr } ] "]" ;
 map_literal    = "{" expr ":" expr { "," expr ":" expr } "}" ;
 set_literal    = "{" expr { "," expr } "}" ;
-(* Note: empty "{}" is ambiguous — requires type annotation: let m: Map[K,V] = {} *)
+(* Note: empty "{}" is ambiguous — use Map::new() or Map[K,V]::new() for empty maps.
+   Map[K,V]::new() is preferred when no surrounding type annotation is available. *)
 
 (* === Constants === *)
 const_decl     = "const" IDENT ":" type_expr "=" expr ";" ;

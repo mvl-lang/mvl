@@ -66,14 +66,6 @@ type KvLine = enum {
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
-// {} parses as empty block in MVL, not an empty map literal.
-// Workaround: create a sentinel entry and remove it (see also std/toml.mvl).
-fn kv_empty_map() -> Map[String, KvValue] {
-    let m: ref Map[String, KvValue] = {"__kv_init__": KvValue::Null};
-    m.remove("__kv_init__");
-    m
-}
-
 // ── Text escaping ─────────────────────────────────────────────────────────────
 
 partial fn kv_escape(s: String) -> String {
@@ -320,7 +312,7 @@ partial fn kv_parse_line(line: String) -> KvLine {
 
 partial fn kv_parse(content: String) -> Result[Map[String, KvValue], String] {
     let lines: List[String] = content.split("\n");
-    let data: ref Map[String, KvValue] = kv_empty_map();
+    let data: ref Map[String, KvValue] = Map::new();
     let n: Int = lines.len();
     let i: ref Int = 0;
     let had_err: ref Bool = false;
@@ -347,7 +339,7 @@ partial fn kv_parse(content: String) -> Result[Map[String, KvValue], String] {
 ///
 /// No filesystem access — use `kv_save` to persist, `kv_open` to reload.
 pub fn kv_new(p: String) -> FileKv {
-    FileKv { path: p, data: kv_empty_map() }
+    FileKv { path: p, data: Map[String, KvValue]::new() }
 }
 
 /// Open a file-backed KV store from path `p`.
@@ -356,7 +348,7 @@ pub fn kv_new(p: String) -> FileKv {
 /// Returns `Err` on permission or other I/O errors.
 pub partial fn kv_open(p: String) -> Result[FileKv, IoError] ! FileRead {
     match read_file(p) {
-        Err(IoError::NotFound) => Ok(FileKv { path: p, data: kv_empty_map() }),
+        Err(IoError::NotFound) => Ok(FileKv { path: p, data: Map[String, KvValue]::new() }),
         Err(e)                 => Err(e),
         Ok(raw)                => {
             let content: String = relabel trust(raw, "KV-PARSE");

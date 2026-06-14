@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Parser: `Type[K, V]::method()` syntax for typed-receiver static calls** (#1417) — The parser now accepts explicit type parameters on the receiver in static method calls. `Map[String, Int]::new()` is now valid inline (no surrounding `let` annotation required), eliminating the need for type inference to determine map key/value types. Enables removal of sentinel-and-remove helper functions from stdlib that existed solely to work around empty map construction ambiguity.
+
+### Changed
+
+- **Stdlib: replaced sentinel empty-map helpers with `Map::new()` and `Map[K,V]::new()`** (#1417) — Removed five internal helpers (`empty_config_map`, `empty_str_map`, `empty_object`, `toml_empty_table`, `kv_empty_map`) from `std/config`, `std/http`, `std/json`, `std/toml`, `std/kv/file`. Call sites now use either `Map::new()` (when type inference applies) or `Map[K,V]::new()` (inline contexts), both clearer and more idiomatic.
+
 ## [0.210.0] - 2026-06-14
 
 ### Added
@@ -10,7 +18,6 @@
   - **Lockout period (`min-age-days`)** — Project-level `[security]` table in `mvl.toml` and global `$XDG_CONFIG_HOME/mvl/config.toml` prevent `mvl update` from selecting versions published less than N days ago. Enabled by default (0 = no restriction). Bypassed when explicit version + hash pinned in `mvl.lock`.
   - **Semver range operators** — `^X.Y.Z` and `~X.Y.Z` added to `version.rs`. `^` locks to left-most non-zero digit (allows `1.x.x` changes when major ≥ 1); `~` locks to minor (allows patch-level changes). Complements existing `>=`, `>`, `<=`, `<`, `=` predicates.
   - **Version exclusion lists** — Per-dependency `exclude = ["1.2.3", "1.3.0"]` in `mvl.toml` and global `[exclusions]` table in XDG config block known-bad versions (CVE, broken releases). `mvl update` reports each skipped version with reason.
-
 ## [0.209.2] - 2026-06-14
 
 ### Fixed

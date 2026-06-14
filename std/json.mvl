@@ -507,14 +507,6 @@ partial fn parse_object_val(chars: List[String], pos: Int) -> ValuePos {
     }
 }
 
-fn empty_object() -> Map[String, Value] {
-    // {} parses as an empty block in MVL, not an empty map literal.
-    // Workaround: create a one-entry sentinel map then remove the key via method call.
-    let m: ref Map[String, Value] = {"__mvl_json_init__": Value::Null};
-    m.remove("__mvl_json_init__");
-    m
-}
-
 // Parse one "key": value pair at pos and advance past the value.
 partial fn parse_kv(chars: List[String], pos: Int) -> KVPos {
     match parse_string(chars, pos) {
@@ -560,10 +552,10 @@ partial fn parse_object(chars: List[String], pos: Int) -> ObjPos {
     match chars.get(cur) {
         None    => { return ObjPos::ObjPErr("unterminated object") },
         Some(c) => {
-            if c == "}" { return ObjPos::ObjP(empty_object(), cur + 1) } else {}
+            if c == "}" { return ObjPos::ObjP(Map[String, Value]::new(), cur + 1) } else {}
         }
     }
-    let result: ref Map[String, Value] = empty_object();
+    let result: ref Map[String, Value] = Map::new();
     let go: ref Bool = true;
     let err: ref String = "";
     let had_err: ref Bool = false;

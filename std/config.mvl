@@ -122,18 +122,6 @@ pub type ConfigValue = enum {
     Map(Map[String, ConfigValue]),
 }
 
-// ── Empty map helper ──────────────────────────────────────────────────────────
-
-// `{}` in MVL parses as an empty block expression `()`, not an empty map
-// literal.  Workaround: create a one-entry sentinel map and remove the key.
-// Identical to `empty_object()` in std.json and `toml_empty_table()` in
-// std.toml — each module carries its own typed variant.
-fn empty_config_map() -> Map[String, ConfigValue] {
-    let m: ref Map[String, ConfigValue] = {"__mvl_cfg_init__": ConfigValue::Null};
-    m.remove("__mvl_cfg_init__");
-    m
-}
-
 // ── Conversion: from std.json.Value ──────────────────────────────────────────
 
 /// Convert a parsed JSON `Value` into a `ConfigValue`.
@@ -175,7 +163,7 @@ partial fn from_json_list(arr: List[Value]) -> List[ConfigValue] {
 partial fn from_json_map(obj: Map[String, Value]) -> Map[String, ConfigValue] {
     let keys: List[String] = obj.keys();
     let len: Int = keys.len();
-    let out: ref Map[String, ConfigValue] = empty_config_map();
+    let out: ref Map[String, ConfigValue] = Map::new();
     let i: ref Int = 0;
     while i < len {
         match keys.get(i) {
@@ -227,7 +215,7 @@ partial fn from_toml_list(arr: List[TomlValue]) -> List[ConfigValue] {
 partial fn from_toml_map(tbl: Map[String, TomlValue]) -> Map[String, ConfigValue] {
     let keys: List[String] = tbl.keys();
     let len: Int = keys.len();
-    let out: ref Map[String, ConfigValue] = empty_config_map();
+    let out: ref Map[String, ConfigValue] = Map::new();
     let i: ref Int = 0;
     while i < len {
         match keys.get(i) {
@@ -480,7 +468,7 @@ partial fn build_env_overlay(
         ConfigValue::Map(m) => {
             let keys: List[String] = m.keys();
             let len: Int = keys.len();
-            let overlay: ref Map[String, ConfigValue] = empty_config_map();
+            let overlay: ref Map[String, ConfigValue] = Map::new();
             let i: ref Int = 0;
             while i < len {
                 match keys.get(i) {
@@ -525,7 +513,7 @@ partial fn build_env_overlay(
             }
             ConfigValue::Map(overlay)
         },
-        _ => ConfigValue::Map(empty_config_map()),
+        _ => ConfigValue::Map(Map::new()),
     }
 }
 
