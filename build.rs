@@ -124,7 +124,7 @@ fn main() {
 
     // Stdlib content version — independently tracked from the compiler.
     // Updated when std/*.mvl files have a meaningful release.
-    println!("cargo:rustc-env=MVL_STDLIB_VERSION=0.42.0");
+    println!("cargo:rustc-env=MVL_STDLIB_VERSION=0.53.0");
 
     // Build metadata for BuildInfo in std.runtime.
     let rustc_ver = rustc_version();
