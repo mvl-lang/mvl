@@ -3,7 +3,7 @@
 
 //! Semver parsing and version constraint checking.
 //!
-//! Handles `>=1.0.0`, `<2.0.0`, `>=1.0.0, <2.0.0` and exact version strings.
+//! Handles `>=1.0.0`, `<2.0.0`, `>=1.0.0, <2.0.0`, `^1.2.3`, `~1.2.3`, and exact version strings.
 
 /// A parsed semantic version triple.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -84,15 +84,53 @@ pub struct VersionConstraint {
 }
 
 impl VersionConstraint {
-    /// Parse a constraint string like `">=1.0.0, <2.0.0"` or `"1.2.3"`.
+    /// Parse a constraint string like `">=1.0.0, <2.0.0"`, `"^1.2.3"`, `"~1.2.3"`, or `"1.2.3"`.
+    ///
+    /// `^X.Y.Z` expands to `>=X.Y.Z, <(X+1).0.0` (or `<0.(Y+1).0` when X=0, etc.).
+    /// `~X.Y.Z` expands to `>=X.Y.Z, <X.(Y+1).0`.
     pub fn parse(s: &str) -> Option<Self> {
-        let predicates: Option<Vec<Predicate>> = s
-            .split(',')
-            .map(|part| Predicate::parse(part.trim()))
-            .collect();
-        Some(VersionConstraint {
-            predicates: predicates?,
-        })
+        let mut predicates: Vec<Predicate> = Vec::new();
+        for part in s.split(',') {
+            let part = part.trim();
+            if let Some(rest) = part.strip_prefix('^') {
+                let v = Version::parse(rest.trim())?;
+                // ^X.Y.Z: allow changes that do not modify the left-most non-zero digit
+                let upper = if v.major > 0 {
+                    Version {
+                        major: v.major + 1,
+                        minor: 0,
+                        patch: 0,
+                    }
+                } else if v.minor > 0 {
+                    Version {
+                        major: 0,
+                        minor: v.minor + 1,
+                        patch: 0,
+                    }
+                } else {
+                    Version {
+                        major: 0,
+                        minor: 0,
+                        patch: v.patch + 1,
+                    }
+                };
+                predicates.push(Predicate::Gte(v));
+                predicates.push(Predicate::Lt(upper));
+            } else if let Some(rest) = part.strip_prefix('~') {
+                let v = Version::parse(rest.trim())?;
+                // ~X.Y.Z: allow patch-level changes only
+                let upper = Version {
+                    major: v.major,
+                    minor: v.minor + 1,
+                    patch: 0,
+                };
+                predicates.push(Predicate::Gte(v));
+                predicates.push(Predicate::Lt(upper));
+            } else {
+                predicates.push(Predicate::parse(part)?);
+            }
+        }
+        Some(VersionConstraint { predicates })
     }
 
     /// Returns true if `version` satisfies all predicates.
@@ -394,5 +432,118 @@ mod tests {
     #[test]
     fn version_display_zero() {
         assert_eq!(Version::parse("0.0.0").unwrap().to_string(), "0.0.0");
+    }
+
+    // --- ^ (caret) operator ---
+
+    #[test]
+    fn caret_normal_version_allows_minor_and_patch() {
+        let c = VersionConstraint::parse("^1.2.3").unwrap();
+        assert!(
+            c.matches(&Version::parse("1.2.3").unwrap()),
+            "lower bound inclusive"
+        );
+        assert!(c.matches(&Version::parse("1.9.9").unwrap()), "within major");
+        assert!(
+            !c.matches(&Version::parse("2.0.0").unwrap()),
+            "next major excluded"
+        );
+        assert!(
+            !c.matches(&Version::parse("1.2.2").unwrap()),
+            "below lower bound"
+        );
+    }
+
+    #[test]
+    fn caret_zero_major_locks_minor() {
+        // ^0.2.3 = >=0.2.3, <0.3.0
+        let c = VersionConstraint::parse("^0.2.3").unwrap();
+        assert!(c.matches(&Version::parse("0.2.3").unwrap()));
+        assert!(c.matches(&Version::parse("0.2.9").unwrap()));
+        assert!(
+            !c.matches(&Version::parse("0.3.0").unwrap()),
+            "next minor excluded for 0.x"
+        );
+        assert!(!c.matches(&Version::parse("1.0.0").unwrap()));
+    }
+
+    #[test]
+    fn caret_zero_zero_minor_locks_patch() {
+        // ^0.0.3 = >=0.0.3, <0.0.4
+        let c = VersionConstraint::parse("^0.0.3").unwrap();
+        assert!(c.matches(&Version::parse("0.0.3").unwrap()));
+        assert!(
+            !c.matches(&Version::parse("0.0.4").unwrap()),
+            "next patch excluded for 0.0.x"
+        );
+        assert!(!c.matches(&Version::parse("0.1.0").unwrap()));
+    }
+
+    #[test]
+    fn caret_selects_maximum_within_major() {
+        let available: Vec<Version> = ["1.0.0", "1.2.3", "1.9.0", "2.0.0"]
+            .iter()
+            .map(|s| Version::parse(s).unwrap())
+            .collect();
+        let c = VersionConstraint::parse("^1.2.3").unwrap();
+        assert_eq!(select_maximum(&available, &c).unwrap().to_string(), "1.9.0");
+    }
+
+    // --- ~ (tilde) operator ---
+
+    #[test]
+    fn tilde_allows_patch_only() {
+        let c = VersionConstraint::parse("~1.2.3").unwrap();
+        assert!(
+            c.matches(&Version::parse("1.2.3").unwrap()),
+            "lower bound inclusive"
+        );
+        assert!(
+            c.matches(&Version::parse("1.2.9").unwrap()),
+            "patch bump ok"
+        );
+        assert!(
+            !c.matches(&Version::parse("1.3.0").unwrap()),
+            "minor bump excluded"
+        );
+        assert!(
+            !c.matches(&Version::parse("2.0.0").unwrap()),
+            "major bump excluded"
+        );
+        assert!(
+            !c.matches(&Version::parse("1.2.2").unwrap()),
+            "below lower bound"
+        );
+    }
+
+    #[test]
+    fn tilde_zero_major() {
+        // ~0.2.3 = >=0.2.3, <0.3.0
+        let c = VersionConstraint::parse("~0.2.3").unwrap();
+        assert!(c.matches(&Version::parse("0.2.3").unwrap()));
+        assert!(c.matches(&Version::parse("0.2.99").unwrap()));
+        assert!(!c.matches(&Version::parse("0.3.0").unwrap()));
+    }
+
+    #[test]
+    fn tilde_selects_maximum_within_minor() {
+        let available: Vec<Version> = ["1.2.3", "1.2.5", "1.3.0", "2.0.0"]
+            .iter()
+            .map(|s| Version::parse(s).unwrap())
+            .collect();
+        let c = VersionConstraint::parse("~1.2.3").unwrap();
+        assert_eq!(select_maximum(&available, &c).unwrap().to_string(), "1.2.5");
+    }
+
+    #[test]
+    fn caret_invalid_version_returns_none() {
+        assert!(VersionConstraint::parse("^not.a.version").is_none());
+        assert!(VersionConstraint::parse("^1.2").is_none());
+    }
+
+    #[test]
+    fn tilde_invalid_version_returns_none() {
+        assert!(VersionConstraint::parse("~not.a.version").is_none());
+        assert!(VersionConstraint::parse("~1.2").is_none());
     }
 }
