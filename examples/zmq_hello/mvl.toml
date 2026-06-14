@@ -1,0 +1,8 @@
+[package]
+name = "zmq_hello"
+version = "0.1.0"
+license = "Apache-2.0"
+requires-mvl = ">=0.184.0"
+
+[dependencies]
+"github.com/mvl-lang/pkg-zmq" = { git = "https://github.com/mvl-lang/pkg-zmq", tag = "v0.2.0", rationale = "ZeroMQ bindings for actor-to-actor messaging over the network" }

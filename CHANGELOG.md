@@ -2,9 +2,12 @@
 
 ## [Unreleased]
 
+## [0.211.0] - 2026-06-14
+
 ### Added
 
 - **Parser: `Type[K, V]::method()` syntax for typed-receiver static calls** (#1417) — The parser now accepts explicit type parameters on the receiver in static method calls. `Map[String, Int]::new()` is now valid inline (no surrounding `let` annotation required), eliminating the need for type inference to determine map key/value types. Enables removal of sentinel-and-remove helper functions from stdlib that existed solely to work around empty map construction ambiguity.
+- **Runtime: `purl` field on `PackageInfo`** (#1423) — `std.runtime.PackageInfo` now carries a `purl: String` field (`pkg:mvl/<name>@<version>`) baked in at compile time from `mvl.lock`. `manifest_to_logfmt` and `manifest_to_json` include PURLs in the package list, enabling direct comparison between startup logs and CycloneDX SBOM output.
 
 ### Changed
 

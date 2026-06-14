@@ -33,6 +33,7 @@ pub type StdlibProfile = enum {
 pub type PackageInfo = struct {
     name: String,
     version: String,
+    purl: String,
     license: String,
 }
 
@@ -180,7 +181,7 @@ pub fn manifest_to_logfmt(m: Manifest) -> String {
         .concat(" built=").concat(m.build.date);
     let pkg_parts: ref List[String] = [];
     for p in m.packages {
-        pkg_parts = pkg_parts.concat([p.name.concat(":").concat(p.version)])
+        pkg_parts = pkg_parts.concat([p.purl])
     }
     let ffi_parts: ref List[String] = [];
     for f in m.ffi_bridges {
@@ -216,6 +217,7 @@ pub fn manifest_to_json(m: Manifest) -> String {
     for p in m.packages {
         let entry: String = "{\"name\":".concat(json_str(p.name))
             .concat(",\"version\":").concat(json_str(p.version))
+            .concat(",\"purl\":").concat(json_str(p.purl))
             .concat(",\"license\":").concat(json_str(p.license))
             .concat("}");
         pkg_parts = pkg_parts.concat([entry])

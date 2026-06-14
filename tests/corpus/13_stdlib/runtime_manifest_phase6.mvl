@@ -13,6 +13,7 @@ fn main() -> Unit ! Console {
     let _licenses: List[String] = m.licenses;
 
     for p in m.packages {
+        let _purl: String = p.purl;
         let _lic: String = p.license;
     }
 
