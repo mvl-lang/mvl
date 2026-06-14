@@ -212,28 +212,47 @@ impl TypeChecker {
                 // Look up the enum variant to get concrete field types so that
                 // function-typed fields (e.g. `Filtered(lo, hi, pred: fn(Int)->Bool)`)
                 // are bound with the correct type and can be called as HOF.
+                //
+                // When the pattern is qualified (e.g. `CsvError::ParseError`), look up
+                // the named type directly before falling back to scanning all types.
+                // Multiple stdlib types can share a variant name (e.g. JsonError::ParseError
+                // and CsvError::ParseError both have "ParseError") and HashMap iteration
+                // order is non-deterministic, so an unanchored search can bind fields to
+                // the wrong types (#1410).
+                let lookup_variant_fields = |type_info: &TypeBodyInfo, vname: &str| {
+                    if let TypeBodyInfo::Enum(variants) = type_info {
+                        variants.iter().find(|v| v.name == vname).and_then(|v| {
+                            if let VariantFieldsInfo::Tuple(tys) = &v.fields {
+                                Some(tys.clone())
+                            } else {
+                                None
+                            }
+                        })
+                    } else {
+                        None
+                    }
+                };
                 let variant_name = name.split("::").last().unwrap_or(name.as_str());
-                let field_tys: Vec<Ty> = self
-                    .env
-                    .types
-                    .values()
-                    .find_map(|ti| {
-                        if let TypeBodyInfo::Enum(variants) = &ti.body {
-                            variants
-                                .iter()
-                                .find(|v| v.name == variant_name)
-                                .and_then(|v| {
-                                    if let VariantFieldsInfo::Tuple(tys) = &v.fields {
-                                        Some(tys.clone())
-                                    } else {
-                                        None
-                                    }
-                                })
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap_or_default();
+                let field_tys: Vec<Ty> = if let Some((type_name, _)) = name.split_once("::") {
+                    // Qualified name: prefer the explicitly-named type to avoid ambiguity.
+                    self.env
+                        .types
+                        .get(type_name)
+                        .and_then(|ti| lookup_variant_fields(&ti.body, variant_name))
+                        .or_else(|| {
+                            self.env
+                                .types
+                                .values()
+                                .find_map(|ti| lookup_variant_fields(&ti.body, variant_name))
+                        })
+                        .unwrap_or_default()
+                } else {
+                    self.env
+                        .types
+                        .values()
+                        .find_map(|ti| lookup_variant_fields(&ti.body, variant_name))
+                        .unwrap_or_default()
+                };
                 for (i, p) in fields.iter().enumerate() {
                     let ty = field_tys.get(i).cloned().unwrap_or(Ty::Unknown);
                     self.bind_match_pattern(p, &ty);
