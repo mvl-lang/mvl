@@ -67,6 +67,7 @@
 //! | `max_module_fanout`          | `15`    | Max number of distinct modules imported (0 = disabled)             |
 //! | `max_extern_ratio`           | `0.2`   | Max ratio of extern fns to total fns (0.0 = disabled)              |
 //! | `min_fns_for_extern_ratio`   | `10`    | Min total fns before extern-ratio check fires (0 = always)         |
+//! | `composition_root_depth`     | `2`     | Call-graph hops from `main` exempt from effect-width (binary only) |
 
 use std::path::{Path, PathBuf};
 use std::{env, fs};
@@ -140,6 +141,9 @@ pub struct LintConfig {
     pub max_extern_ratio: f64,
     /// Minimum total fn count before `max_extern_ratio` fires. `0` disables the guard.
     pub min_fns_for_extern_ratio: usize,
+    /// Max call-graph hops from `fn main` for `complexity-effect-width` exemption.
+    /// Binary crates only; `0` exempts only `main` itself. Default: 2.
+    pub composition_root_depth: usize,
 }
 
 impl Default for LintConfig {
@@ -175,6 +179,7 @@ impl Default for LintConfig {
             max_module_fanout: 15,
             max_extern_ratio: 0.2,
             min_fns_for_extern_ratio: 10,
+            composition_root_depth: 2,
         }
     }
 }
@@ -338,6 +343,11 @@ fn load_from(path: &Path) -> Option<LintConfig> {
             "min_fns_for_extern_ratio" => {
                 if let Ok(n) = val.parse::<usize>() {
                     cfg.min_fns_for_extern_ratio = n;
+                }
+            }
+            "composition_root_depth" => {
+                if let Ok(n) = val.parse::<usize>() {
+                    cfg.composition_root_depth = n;
                 }
             }
             _ => {} // unknown keys are silently ignored (forward-compat)
@@ -555,5 +565,17 @@ mod tests {
         std::fs::write(&rc_path, "# empty\n").expect("write");
         let found = LintConfig::config_file(dir.path());
         assert_eq!(found, Some(rc_path));
+    }
+
+    #[test]
+    fn load_from_parses_composition_root_depth() {
+        let f = write_temp_config("composition_root_depth = 5\n");
+        let cfg = load_from(f.path()).expect("load_from");
+        assert_eq!(cfg.composition_root_depth, 5);
+    }
+
+    #[test]
+    fn default_composition_root_depth_is_two() {
+        assert_eq!(LintConfig::default().composition_root_depth, 2);
     }
 }

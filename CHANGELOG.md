@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.209.1] - 2026-06-14
+
+### Fixed
+
+- **Composition root exemption for `complexity-effect-width` lint** (#1408) — Functions reachable from `fn main` within `composition_root_depth` hops (configurable, default 2) are now exempt from the effect-width lint in binary crates. Eliminates false positives on legitimate composition roots like `main`, `serve`, and setup functions that aggregate orthogonal effects from subsystems. Library crates are unaffected.
+
 ## [0.209.0] - 2026-06-14
 
 ### Added

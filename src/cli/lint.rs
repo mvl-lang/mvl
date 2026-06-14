@@ -71,6 +71,10 @@ pub fn run(path: &str, show_config: bool) {
         );
         eprintln!("  max_module_fanout          = {}", cfg.max_module_fanout);
         eprintln!("  max_extern_ratio           = {:.2}", cfg.max_extern_ratio);
+        eprintln!(
+            "  composition_root_depth     = {}",
+            cfg.composition_root_depth
+        );
         return;
     }
 

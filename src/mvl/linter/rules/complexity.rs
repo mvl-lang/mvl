@@ -3,8 +3,10 @@
 
 //! Phase-4 complexity metric rules.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
+use crate::mvl::checker::call_graph;
+use crate::mvl::checker::context::TypeEnv;
 use crate::mvl::linter::{config::LintConfig, errors::LintDiag};
 use crate::mvl::parser::ast::{BinaryOp, Block, Decl, ElseBranch, Expr, MatchBody, Program, Stmt};
 
@@ -383,14 +385,20 @@ fn max_match_depth_expr(expr: &Expr, depth: usize) -> usize {
 ///
 /// Both free functions (`fn`) and trait impl methods are checked, since
 /// `FnDecl` carries an `effects` field in both positions.
+///
+/// Composition roots (functions reachable from `fn main` within
+/// `cfg.composition_root_depth` hops, binary crates only) are exempt.
 pub fn complexity_effect_width(prog: &Program, cfg: &LintConfig, out: &mut Vec<LintDiag>) {
     if cfg.max_effect_signature_width == 0 {
         return;
     }
+    let exempt = composition_root_exempt(prog, cfg.composition_root_depth);
     for decl in &prog.declarations {
         match decl {
             Decl::Fn(f) => {
-                check_effect_width(&f.name, None, &f.effects, f.span, cfg, out);
+                if !exempt.contains(&f.name) {
+                    check_effect_width(&f.name, None, &f.effects, f.span, cfg, out);
+                }
             }
             Decl::Impl(impl_decl) => {
                 for method in &impl_decl.methods {
@@ -407,6 +415,40 @@ pub fn complexity_effect_width(prog: &Program, cfg: &LintConfig, out: &mut Vec<L
             _ => {}
         }
     }
+}
+
+/// Returns the set of function names exempt from `complexity-effect-width`.
+///
+/// Only applies in binary crates (program contains `fn main`). Walks the call
+/// graph BFS from "main" up to `depth` hops and returns all visited names.
+fn composition_root_exempt(prog: &Program, depth: usize) -> HashSet<String> {
+    let has_main = prog
+        .declarations
+        .iter()
+        .any(|d| matches!(d, Decl::Fn(f) if f.name == "main"));
+    if !has_main {
+        return HashSet::new();
+    }
+
+    let graph = call_graph::build(&[prog], &TypeEnv::default());
+
+    let mut exempt: HashSet<String> = HashSet::new();
+    let mut queue: VecDeque<(String, usize)> = VecDeque::new();
+    exempt.insert("main".to_string());
+    queue.push_back(("main".to_string(), 0));
+
+    while let Some((current, dist)) = queue.pop_front() {
+        if dist >= depth {
+            continue;
+        }
+        for edge in graph.callees(&current) {
+            if exempt.insert(edge.callee.clone()) {
+                queue.push_back((edge.callee.clone(), dist + 1));
+            }
+        }
+    }
+
+    exempt
 }
 
 fn check_effect_width(
@@ -836,6 +878,84 @@ mod tests {
                 .any(|d| d.rule == "complexity-effect-width"
                     && d.message.contains("impl Bar for Foo")),
             "impl method effect width must be flagged; got: {diags:?}"
+        );
+    }
+
+    // -- composition root exemption --
+
+    #[test]
+    fn effect_width_composition_root_main_exempt() {
+        // fn main calls fn serve; serve has 4 effects — binary crate, both exempt at depth 2
+        let src = concat!(
+            "fn main() -> Unit ! Console + DB + Net + Log { serve() }\n",
+            "fn serve() -> Unit ! Console + DB + Net + Log { () }\n",
+        );
+        let prog = parse(src);
+        let mut diags = vec![];
+        complexity_effect_width(&prog, &cfg(), &mut diags);
+        assert!(
+            diags.is_empty(),
+            "composition roots in binary crate must be exempt; got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn effect_width_leaf_beyond_depth_still_fires() {
+        // depth 2: main→serve→setup — leaf 3 hops away (beyond depth 2) still fires
+        let mut c = cfg();
+        c.composition_root_depth = 1; // only main + 1 hop
+        let src = concat!(
+            "fn main() -> Unit ! Console { serve() }\n",
+            "fn serve() -> Unit ! Console { setup() }\n",
+            "fn setup() -> Unit ! Console + DB + Net + Log { () }\n",
+        );
+        let prog = parse(src);
+        let mut diags = vec![];
+        complexity_effect_width(&prog, &c, &mut diags);
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.rule == "complexity-effect-width" && d.message.contains("`setup`")),
+            "leaf beyond depth must still fire; got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn effect_width_no_exemption_in_library_crate() {
+        // No fn main → library crate → no exemptions
+        let src = "fn serve() -> Unit ! Console + DB + Net + Log { () }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        complexity_effect_width(&prog, &cfg(), &mut diags);
+        assert!(
+            diags.iter().any(|d| d.rule == "complexity-effect-width"),
+            "library crate functions must not be exempt; got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn effect_width_depth_zero_exempts_only_main() {
+        // depth 0: only main itself is exempt; serve (1 hop) is not
+        let mut c = cfg();
+        c.composition_root_depth = 0;
+        let src = concat!(
+            "fn main() -> Unit ! Console + DB + Net + Log { serve() }\n",
+            "fn serve() -> Unit ! Console + DB + Net + Log { () }\n",
+        );
+        let prog = parse(src);
+        let mut diags = vec![];
+        complexity_effect_width(&prog, &c, &mut diags);
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.rule == "complexity-effect-width" && d.message.contains("`serve`")),
+            "serve must fire when depth=0; got: {diags:?}"
+        );
+        assert!(
+            !diags
+                .iter()
+                .any(|d| d.rule == "complexity-effect-width" && d.message.contains("`main`")),
+            "main must still be exempt at depth=0; got: {diags:?}"
         );
     }
 
