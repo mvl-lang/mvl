@@ -189,6 +189,66 @@ pub fn list_git_tags(git_url: &str) -> Result<Vec<String>, FetchError> {
     Ok(tags)
 }
 
+/// Fetch tag names with their Unix creation timestamps from a remote git repo.
+///
+/// Does a bare partial clone (`--filter=blob:none`) so only git metadata is
+/// downloaded — no source blobs.  Returns a map of `tag_name → unix_seconds`.
+/// Tags that cannot be parsed as integers are silently omitted.
+pub fn fetch_tag_dates(
+    git_url: &str,
+) -> Result<std::collections::HashMap<String, u64>, FetchError> {
+    validate_url(git_url)?;
+    let tmp =
+        tempfile::tempdir().map_err(|e| FetchError::Io("<tempdir>".to_string(), e.to_string()))?;
+    let dest = tmp.path().join("bare.git");
+
+    let clone = process::Command::new("git")
+        .args([
+            "clone",
+            "--bare",
+            "--filter=blob:none",
+            "--quiet",
+            git_url,
+            dest.to_str().unwrap_or("bare.git"),
+        ])
+        .output()
+        .map_err(|e| FetchError::GitError(format!("git clone --bare failed: {e}")))?;
+
+    if !clone.status.success() {
+        let stderr = String::from_utf8_lossy(&clone.stderr);
+        return Err(FetchError::GitError(format!(
+            "git clone --bare {git_url}: {stderr}"
+        )));
+    }
+
+    let refs = process::Command::new("git")
+        .args([
+            "for-each-ref",
+            "--format=%(refname:short) %(creatordate:unix)",
+            "refs/tags/",
+        ])
+        .current_dir(&dest)
+        .output()
+        .map_err(|e| FetchError::GitError(format!("git for-each-ref failed: {e}")))?;
+
+    if !refs.status.success() {
+        let stderr = String::from_utf8_lossy(&refs.stderr);
+        return Err(FetchError::GitError(format!("git for-each-ref: {stderr}")));
+    }
+
+    let stdout = String::from_utf8_lossy(&refs.stdout);
+    let mut dates = std::collections::HashMap::new();
+    for line in stdout.lines() {
+        let mut parts = line.splitn(2, ' ');
+        if let (Some(tag), Some(ts)) = (parts.next(), parts.next()) {
+            if let Ok(secs) = ts.trim().parse::<u64>() {
+                dates.insert(tag.to_string(), secs);
+            }
+        }
+    }
+    Ok(dates)
+}
+
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
 /// Validate a git tag/branch name before passing it to `git clone --branch`.

@@ -440,6 +440,7 @@ mod tests {
             c_native: HashMap::new(),
             dependency_policy: Default::default(),
             license_policy: Default::default(),
+            security: Default::default(),
         }
     }
 

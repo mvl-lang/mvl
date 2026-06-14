@@ -176,6 +176,8 @@ pub enum DepSpec {
         git: String,
         tag: String,
         rationale: Option<String>,
+        /// Versions to skip during `mvl update`, e.g. known-CVE releases.
+        exclude: Vec<String>,
     },
 }
 
@@ -195,6 +197,22 @@ impl DepSpec {
             DepSpec::Version(_) => None,
         }
     }
+
+    /// Return the per-dependency exclusion list, if any.
+    pub fn exclude(&self) -> &[String] {
+        match self {
+            DepSpec::Git { exclude, .. } => exclude,
+            DepSpec::Version(_) => &[],
+        }
+    }
+}
+
+/// Security policy from `[security]` in `mvl.toml` or XDG global config.
+#[derive(Debug, Clone, Default)]
+pub struct SecurityPolicy {
+    /// Minimum number of days a git tag must be published before `mvl update`
+    /// will select it. `0` means no restriction (default).
+    pub min_age_days: u64,
 }
 
 /// Dependency policy configuration from `[dependency-policy]`.
@@ -229,6 +247,8 @@ pub struct Manifest {
     pub dependency_policy: DependencyPolicy,
     /// `[license-policy]` — License enforcement settings (#635).
     pub license_policy: LicensePolicy,
+    /// `[security]` — Supply-chain security settings (lockout period, etc.).
+    pub security: SecurityPolicy,
 }
 
 impl Manifest {
@@ -279,6 +299,7 @@ impl Manifest {
         let c_native = parse_c_native_section(table.get("c-native"))?;
         let dependency_policy = parse_dependency_policy(table.get("dependency-policy"))?;
         let license_policy = parse_license_policy(table.get("license-policy"))?;
+        let security = parse_security_policy(table.get("security"))?;
 
         Ok(Manifest {
             package: PackageInfo {
@@ -293,6 +314,7 @@ impl Manifest {
             c_native,
             dependency_policy,
             license_policy,
+            security,
         })
     }
 
@@ -401,22 +423,25 @@ impl Manifest {
                         git,
                         tag,
                         rationale,
+                        exclude,
                     } => {
-                        let base = format!(
+                        let mut parts = format!(
                             "git = \"{}\", tag = \"{}\"",
                             toml_escape(git),
                             toml_escape(tag)
                         );
                         if let Some(ref r) = rationale {
-                            out.push_str(&format!(
-                                "\"{}\" = {{ {}, rationale = \"{}\" }}\n",
-                                name,
-                                base,
-                                toml_escape(r)
-                            ));
-                        } else {
-                            out.push_str(&format!("\"{}\" = {{ {} }}\n", name, base));
+                            parts.push_str(&format!(", rationale = \"{}\"", toml_escape(r)));
                         }
+                        if !exclude.is_empty() {
+                            let list = exclude
+                                .iter()
+                                .map(|v| format!("\"{}\"", toml_escape(v)))
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            parts.push_str(&format!(", exclude = [{list}]"));
+                        }
+                        out.push_str(&format!("\"{}\" = {{ {} }}\n", name, parts));
                     }
                 }
             }
@@ -499,6 +524,11 @@ impl Manifest {
             }
         }
 
+        if self.security.min_age_days > 0 {
+            out.push_str("\n[security]\n");
+            out.push_str(&format!("min-age-days = {}\n", self.security.min_age_days));
+        }
+
         out
     }
 
@@ -517,6 +547,7 @@ impl Manifest {
             c_native: HashMap::new(),
             dependency_policy: DependencyPolicy::default(),
             license_policy: LicensePolicy::default(),
+            security: SecurityPolicy::default(),
         }
     }
 }
@@ -764,6 +795,7 @@ fn split_on_comma(s: &str) -> Vec<String> {
     let mut current = String::new();
     let mut in_str = false;
     let mut escaped = false;
+    let mut bracket_depth: u32 = 0;
     for c in s.chars() {
         if escaped {
             current.push(c);
@@ -780,10 +812,22 @@ fn split_on_comma(s: &str) -> Vec<String> {
             current.push(c);
             continue;
         }
-        if c == ',' && !in_str {
-            parts.push(current.clone());
-            current.clear();
-            continue;
+        if !in_str {
+            if c == '[' {
+                bracket_depth += 1;
+                current.push(c);
+                continue;
+            }
+            if c == ']' {
+                bracket_depth = bracket_depth.saturating_sub(1);
+                current.push(c);
+                continue;
+            }
+            if c == ',' && bracket_depth == 0 {
+                parts.push(current.clone());
+                current.clear();
+                continue;
+            }
         }
         current.push(c);
     }
@@ -853,10 +897,16 @@ fn parse_dependencies(
                     .get("rationale")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
+                let exclude = t
+                    .get("exclude")
+                    .and_then(|v| v.as_string_array())
+                    .map(|a| a.to_vec())
+                    .unwrap_or_default();
                 DepSpec::Git {
                     git,
                     tag,
                     rationale,
+                    exclude,
                 }
             }
             _ => {
@@ -891,6 +941,28 @@ fn parse_dependency_policy(value: Option<&TomlValue>) -> Result<DependencyPolicy
                 "dependency-policy: rationale-required must be a boolean".to_string(),
             )
         })?;
+    }
+    Ok(policy)
+}
+
+fn parse_security_policy(value: Option<&TomlValue>) -> Result<SecurityPolicy, ManifestError> {
+    let mut policy = SecurityPolicy::default();
+    let tbl = match value {
+        None => return Ok(policy),
+        Some(v) => v
+            .as_table()
+            .ok_or_else(|| ManifestError::ParseError("[security] must be a table".to_string()))?,
+    };
+    if let Some(v) = tbl.get("min-age-days") {
+        let n = v.as_integer().ok_or_else(|| {
+            ManifestError::ParseError("security: min-age-days must be an integer".to_string())
+        })?;
+        if n < 0 {
+            return Err(ManifestError::ParseError(
+                "security: min-age-days must be >= 0".to_string(),
+            ));
+        }
+        policy.min_age_days = n as u64;
     }
     Ok(policy)
 }
@@ -1205,6 +1277,7 @@ bar = { git = "https://example.com/bar" }
             git: "https://example.com/pkg".to_string(),
             tag: "v1.2.3".to_string(),
             rationale: None,
+            exclude: vec![],
         };
         assert_eq!(spec.version_str(), "v1.2.3");
     }
@@ -1363,6 +1436,127 @@ ring = { git = "https://github.com/briansmith/ring", tag = "v0.17.8", rationale 
     fn version_dep_rationale_is_none() {
         let spec = DepSpec::Version(">=1.0.0".to_string());
         assert!(spec.rationale().is_none());
+    }
+
+    // --- exclude field (#1416) ---
+
+    #[test]
+    fn parse_dep_with_exclude_list() {
+        let content = r#"
+[package]
+name = "my-app"
+version = "0.1.0"
+license = "MIT"
+requires-mvl = ">=0.1.0"
+
+[dependencies]
+ring = { git = "https://github.com/briansmith/ring", tag = "v0.17.8", exclude = ["0.16.0", "0.16.1"] }
+"#;
+        let m = Manifest::parse(content).unwrap();
+        let dep = m.dependencies.get("ring").unwrap();
+        assert_eq!(dep.exclude(), &["0.16.0", "0.16.1"]);
+    }
+
+    #[test]
+    fn parse_dep_without_exclude_returns_empty() {
+        let m = Manifest::parse(WITH_DEPS).unwrap();
+        let dep = m.dependencies.get("tls").unwrap();
+        assert!(dep.exclude().is_empty());
+    }
+
+    #[test]
+    fn exclude_roundtrip() {
+        let content = r#"
+[package]
+name = "my-app"
+version = "0.1.0"
+license = "MIT"
+requires-mvl = ">=0.1.0"
+
+[dependencies]
+ring = { git = "https://github.com/briansmith/ring", tag = "v0.17.8", exclude = ["0.16.0", "0.17.0"] }
+"#;
+        let m = Manifest::parse(content).unwrap();
+        let toml = m.to_toml();
+        let m2 = Manifest::parse(&toml).unwrap();
+        assert_eq!(
+            m2.dependencies.get("ring").unwrap().exclude(),
+            &["0.16.0", "0.17.0"]
+        );
+    }
+
+    #[test]
+    fn version_dep_exclude_is_empty() {
+        let spec = DepSpec::Version(">=1.0.0".to_string());
+        assert!(spec.exclude().is_empty());
+    }
+
+    // --- security policy (#1414) ---
+
+    #[test]
+    fn parse_default_security_policy() {
+        let m = Manifest::parse(MINIMAL).unwrap();
+        assert_eq!(m.security.min_age_days, 0);
+    }
+
+    #[test]
+    fn parse_security_min_age_days() {
+        let content = r#"
+[package]
+name = "my-app"
+version = "0.1.0"
+license = "MIT"
+requires-mvl = ">=0.1.0"
+
+[security]
+min-age-days = 7
+"#;
+        let m = Manifest::parse(content).unwrap();
+        assert_eq!(m.security.min_age_days, 7);
+    }
+
+    #[test]
+    fn security_roundtrip() {
+        let content = r#"
+[package]
+name = "my-app"
+version = "0.1.0"
+license = "MIT"
+requires-mvl = ">=0.1.0"
+
+[security]
+min-age-days = 14
+"#;
+        let m = Manifest::parse(content).unwrap();
+        let toml = m.to_toml();
+        let m2 = Manifest::parse(&toml).unwrap();
+        assert_eq!(m2.security.min_age_days, 14);
+    }
+
+    #[test]
+    fn security_zero_not_serialized() {
+        // min_age_days = 0 (default) should not emit a [security] section
+        let m = Manifest::parse(MINIMAL).unwrap();
+        let toml = m.to_toml();
+        assert!(
+            !toml.contains("[security]"),
+            "default security should not be emitted"
+        );
+    }
+
+    #[test]
+    fn security_negative_value_returns_error() {
+        let content = r#"
+[package]
+name = "my-app"
+version = "0.1.0"
+license = "MIT"
+requires-mvl = ">=0.1.0"
+
+[security]
+min-age-days = -1
+"#;
+        assert!(Manifest::parse(content).is_err());
     }
 
     // --- dependency policy (#637) ---
