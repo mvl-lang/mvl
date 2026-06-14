@@ -21,7 +21,7 @@
 
 use std::io::{Read, Write};
 
-use crate::memory::{_mvl_string_new, MvlString};
+use crate::memory::{MvlString, _mvl_string_new};
 use libc::c_void;
 
 use super::io::LlvmResult;
