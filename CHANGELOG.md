@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.209.0] - 2026-06-14
+
+### Added
+
+- **Self-hosted type checker: EffectHierarchy + TypeEnv foundation** (#1404, #1117) — Ports `src/mvl/checker/effects.rs` and `src/mvl/checker/context.rs` (Phase 4a of the self-hosting epic). Includes EffectHierarchy with three-pass construction (register names, validate parents, DFS cycle detection) and BFS subsumption queries; TypeEnv with three lookup tables (scopes, types, fns) and ~35 pre-registered stdlib builtins. Fixes critical bugs in cycle deduplication and shadowed-variable handling. Security audit: declassification transitions (`trust`, `release`, `unaudit_target`) now require audit trail annotation. All 12 compiler files pass type check (9/11 requirements proven); all 98 Rust unit tests and 162 corpus tests passing.
+
 ## [0.208.0] - 2026-06-13
 
 ### Added
