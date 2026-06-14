@@ -201,9 +201,7 @@ pub fn run(path: &str, quiet: bool, gen_boundary: bool, limit: Option<usize>) {
         process::exit(1);
     });
     if need_mvl_runtime {
-        let runtime_src = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("runtime")
-            .join("rust");
+        let runtime_src = mvl::mvl::runtime_embed::ensure_runtime_rust();
         let runtime_dst = tmp_dir.join("mvl_runtime");
         super::copy_dir_recursive(&runtime_src, &runtime_dst).unwrap_or_else(|e| {
             eprintln!("error: cannot copy mvl_runtime: {e}");

@@ -357,17 +357,8 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
     // Write Cargo.toml for the test runner, pointing mvl_runtime at its absolute
     // source path so no per-invocation copy is needed (and the shared target dir
     // caches the compiled crate across runs).
-    let runtime_src = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("runtime")
-        .join("rust");
     let mvl_runtime_dep = if need_mvl_runtime {
-        if !runtime_src.exists() {
-            eprintln!(
-                "error: mvl_runtime not found at {} — cannot build test crate with stdlib/extern",
-                runtime_src.display()
-            );
-            process::exit(1);
-        }
+        let runtime_src = mvl::mvl::runtime_embed::ensure_runtime_rust();
         format!(
             "mvl_runtime = {{ path = \"{}\", package = \"mvl_runtime_rust\" }}  # MVL security labels and prelude\n",
             runtime_src.display()

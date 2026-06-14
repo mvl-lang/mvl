@@ -295,9 +295,7 @@ pub fn run(
     if needs_cargo_patch {
         let tokio_runtime_path: Option<String> = if target == "tokio" {
             Some(
-                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("runtime")
-                    .join("rust-tokio")
+                mvl::mvl::runtime_embed::ensure_runtime_tokio()
                     .to_string_lossy()
                     .into_owned(),
             )
@@ -387,27 +385,12 @@ pub fn run(
     //   via an absolute path (ADR-0027 §"--target selects the runtime"), so no copy
     //   is needed. We just verify the source exists.
     if out.use_mvl_runtime {
-        let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         if target == "tokio" {
-            let tokio_src = manifest_dir.join("runtime").join("rust-tokio");
-            if !tokio_src.exists() {
-                eprintln!(
-                    "error: tokio runtime not found at {} — ensure runtime/rust-tokio is present",
-                    tokio_src.display()
-                );
-                process::exit(1);
-            }
-            // No copy — Cargo.toml references tokio runtime via absolute path.
+            // No copy — Cargo.toml references tokio runtime via absolute path
+            // (already resolved by ensure_runtime_tokio() above).
         } else {
-            let runtime_src = manifest_dir.join("runtime").join("rust");
+            let runtime_src = mvl::mvl::runtime_embed::ensure_runtime_rust();
             let runtime_dst = tmp_dir.join("mvl_runtime");
-            if !runtime_src.exists() {
-                eprintln!(
-                    "error: mvl_runtime not found at {} — cannot build extern bridge",
-                    runtime_src.display()
-                );
-                process::exit(1);
-            }
             super::copy_dir_recursive(&runtime_src, &runtime_dst).unwrap_or_else(|e| {
                 eprintln!("error: failed to copy mvl_runtime: {e}");
                 process::exit(1);

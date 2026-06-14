@@ -13,5 +13,6 @@ pub mod passes;
 pub mod pipeline;
 pub mod printer;
 pub mod resolver;
+pub mod runtime_embed;
 pub mod stdlib;
 pub mod toolchain;
