@@ -29,7 +29,7 @@ The lexer MUST tokenize MVL source into a stream of typed tokens. Each token MUS
 - WHEN the lexer tokenizes it
 - THEN it MUST produce 12 keyword tokens with correct types
 
-**Corpus:** `tests/corpus/01_basics/keywords.mvl`
+**Corpus:** `tests/corpus/01_syntax/keywords.mvl`
 
 #### Scenario: Tokenize operators
 
@@ -55,7 +55,7 @@ The lexer MUST tokenize MVL source into a stream of typed tokens. Each token MUS
 - WHEN tokenized
 - THEN every token MUST carry correct line and column numbers
 
-**Corpus:** `tests/corpus/01_basics/literals.mvl`
+**Corpus:** `tests/corpus/01_syntax/literals.mvl`
 
 ### Requirement 2: AST Data Structures [MUST]
 
@@ -101,7 +101,7 @@ The parser MUST parse struct, enum, type alias, and refinement type declarations
 - WHEN parsed
 - THEN AST contains AliasDecl with refinement predicate `self > 0`
 
-**Corpus:** `tests/corpus/02_types/structs.mvl`, `tests/corpus/02_types/enums.mvl`, `tests/corpus/02_types/refinements.mvl`
+**Corpus:** `tests/corpus/03_types/structs.mvl`, `tests/corpus/03_types/enums.mvl`, `tests/corpus/03_types/refinements.mvl`
 
 ### Requirement 4: Parse Function Declarations [MUST]
 
@@ -129,7 +129,7 @@ The parser MUST parse function declarations including totality annotation, param
 - WHEN parsed
 - THEN params have correct security labels, return has Public label
 
-**Corpus:** `tests/corpus/01_basics/functions.mvl`, `tests/corpus/04_effects/declarations.mvl`
+**Corpus:** `tests/corpus/02_functions/functions.mvl`, `tests/corpus/07_effects/declarations.mvl`
 
 ### Requirement 5: Parse Statements [MUST]
 
@@ -157,7 +157,7 @@ The parser MUST parse all MVL statement forms: let bindings (with mandatory type
 - WHEN parsed
 - THEN AST contains MatchExpr with two arms covering Some and None
 
-**Corpus:** `tests/corpus/01_basics/statements.mvl`
+**Corpus:** `tests/corpus/01_syntax/statements.mvl`
 
 ### Requirement 6: Parse Expressions [MUST]
 
@@ -194,7 +194,7 @@ The parser MUST parse all MVL expression forms: literals, identifiers, field acc
 
 **Corpus:** `tests/corpus/05_collections/map_typed_new.mvl`
 
-**Corpus:** `tests/corpus/01_basics/expressions.mvl`
+**Corpus:** `tests/corpus/01_syntax/expressions.mvl`
 
 ### Requirement 7: Parse Security Labels [MUST]
 
@@ -216,7 +216,7 @@ The parser MUST parse security-labeled types (`Public[T]`, `Tainted[T]`, `Secret
 - WHEN parsed
 - THEN AST contains nested LabeledType → OptionType → LabeledType
 
-**Corpus:** `tests/corpus/05_ifc/labels.mvl`
+**Corpus:** `tests/corpus/08_ifc/labels.mvl`
 
 ### Requirement 8-SH: Self-Hosted Parser — Alternative Implementation [MUST]
 

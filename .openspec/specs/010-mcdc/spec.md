@@ -29,7 +29,7 @@ This enables direct use in CI pipelines as a hard quality gate.
 
 **Implementation:** `src/main.rs::cmd_mcdc`
 
-**Tests:** `tests/corpus/10_verification/`, `src/cli/mcdc.rs` (module tests)
+**Tests:** `tests/corpus/15_verification/`, `src/cli/mcdc.rs` (module tests)
 
 #### Scenario: exit 0 on full coverage
 
@@ -204,6 +204,10 @@ file is written.
 **Implementation:** `src/mvl/backends/rust/mcdc_emit.rs::emit_mcdc_preamble`,
 `src/mvl/backends/rust/mcdc_emit.rs::emit_mcdc_report_test`
 
+**Tests:** `src/mvl/backends/rust/mcdc_emit.rs::tests::emit_preamble_has_record_fn`,
+`src/mvl/backends/rust/mcdc_emit.rs::tests::emit_preamble_empty_when_zero`,
+`src/mvl/backends/rust/mcdc_emit.rs::tests::emit_report_test_has_report_fn`
+
 ---
 
 ### Requirement 5: Independence Analysis — Unique-Cause MC/DC [MUST]
@@ -283,3 +287,5 @@ Each row shows: file stem, line, kind (if/while), clause count, per-clause
 pass/fail markers, and COVERED/MISSED status.
 
 **Implementation:** `src/main.rs::cmd_mcdc`
+
+**Tests:** `src/mvl/backends/rust/mcdc_emit.rs::tests::emit_report_test_has_report_fn` (verifies the generated `zzz_mvl_mcdc_report` test that drives the report path), and `tests/transpiler.rs` exercises the end-to-end transpile+run pipeline that feeds `cmd_mcdc`.

@@ -165,7 +165,7 @@ analysis performed by `src/mvl/backends/rust/capability_params.rs::build_capabil
 
 **Tests:** `tests/compile_and_run.rs::struct_value_semantics` (#193)
 
-**Corpus:** `tests/corpus/11_programs/struct_value_semantics.mvl` (#193)
+**Corpus:** `examples/programs/struct_value_semantics.mvl` (#193)
 
 ### Requirement 3: Control Flow Emission [MUST]
 

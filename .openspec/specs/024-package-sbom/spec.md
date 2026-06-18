@@ -45,6 +45,10 @@ error (non-zero exit, no partial install).
 
 **Implementation:** `src/mvl/packages/fetch.rs`, `src/mvl/packages/hash.rs`, `src/mvl/packages.rs::cmd_install`
 
+**Tests:** `src/mvl/packages/fetch.rs::tests::verify_hash_passes_on_match`,
+`src/mvl/packages/fetch.rs::tests::verify_hash_fails_on_mismatch`,
+`src/mvl/packages.rs::tests::cmd_install_missing_lockfile_returns_error`.
+
 #### Scenario: Hash mismatch on install
 
 - GIVEN `mvl.lock` records `hash = "sha256:abc..."` for a package
@@ -60,6 +64,10 @@ error (non-zero exit, no partial install).
 dependency, ensuring reproducible installs across machines and CI runs.
 
 **Implementation:** `src/mvl/packages.rs::cmd_add`, `src/mvl/packages.rs::cmd_update`
+
+**Tests:** `src/mvl/packages.rs::tests::cmd_add_rejects_http_url`,
+`src/mvl/packages.rs::tests::cmd_update_no_deps_returns_early`,
+`src/mvl/packages.rs::tests::cmd_update_version_only_dep_skips_without_network`.
 
 ---
 
@@ -131,6 +139,8 @@ stdout, and SHOULD print a confirmation message to stdout.
 
 **Implementation:** `src/cli/meta.rs::cmd_sbom`
 
+**Tests:** `tests/meta_commands.rs::mvl_sbom_writes_to_output_file`.
+
 #### Scenario: Write to file
 
 - GIVEN `mvl sbom --output=sbom.json`
@@ -146,6 +156,9 @@ stdout, and SHOULD print a confirmation message to stdout.
 If `mvl.toml` already exists, it MUST exit with a non-zero code and a descriptive error.
 
 **Implementation:** `src/cli/meta.rs::cmd_init`
+
+**Tests:** `tests/meta_commands.rs::mvl_init_creates_skeleton`,
+`tests/meta_commands.rs::mvl_init_rejects_existing_mvl_toml`.
 
 #### Scenario: Fresh init
 
@@ -175,6 +188,8 @@ without overwriting the project's `mvl.toml`. This MUST be separate from `mvl in
 
 **Implementation:** `src/cli/meta.rs::cmd_self_init`, `src/mvl/stdlib.rs`
 
+**Tests:** `tests/stdlib.rs::fresh_extraction_creates_files_and_stamp` (validates `ensure_stdlib()` — the function `cmd_self_init` wraps — writes files plus the `.version` stamp at the XDG toolchain path).
+
 #### Scenario: Stdlib not yet extracted
 
 - GIVEN the toolchain stdlib directory does not exist
@@ -190,6 +205,8 @@ without overwriting the project's `mvl.toml`. This MUST be separate from `mvl in
 the `--output` option, then exit with code 0 (no error).
 
 **Implementation:** `src/cli/meta.rs::cmd_sbom`
+
+**Tests:** `tests/meta_commands.rs::mvl_sbom_help_exits_zero`.
 
 ---
 

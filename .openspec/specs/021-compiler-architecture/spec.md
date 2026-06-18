@@ -142,6 +142,8 @@ dedicated `src/cli/` module hierarchy.
 
 **Implementation:** `src/cli/` (new directory)
 
+**Tests:** `tests/compile_and_run.rs` — the full integration suite exercises every CLI subcommand (`check`, `run`, `build`) through the extracted `src/cli/{check,build,run,...}.rs` modules; failure here would indicate a regression in the extraction.
+
 #### Scenario: Command dispatch
 
 - GIVEN a CLI invocation `mvl check path`
@@ -187,6 +189,10 @@ A dedicated monomorphization pass MAY be added to unify the handling of
 generic functions across backends.
 
 **Implementation:** `src/mvl/passes/mono.rs`
+
+**Tests:** `src/mvl/passes/mono.rs::tests::substitute_direct_type_param`,
+`src/mvl/passes/mono.rs::tests::substitute_generic_arg`,
+`src/mvl/passes/mono.rs::tests::substitute_option_inner` (plus the broader `mono.rs::tests` suite covering specialization of generic functions across backends).
 
 #### Scenario: Generic function specialization
 

@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+## [0.212.0] - 2026-06-18
+
+### Added
+
+- **Assurance: `(planned)` marker convention** (#1435) — `tools/assurance.py` now detects an optional `(planned)` annotation after the Implementation backtick on a requirement and excludes such requirements from the Completeness, Coverage, and Assurance metrics. Aspirational requirements (e.g. `007-toolchain` R1, `008-packages` R2–R9) are still listed but no longer distort the dashboard.
+- **Grammar: `test fn`, session types, const generics, `Type[T]::method`** (#1436) — `docs/grammar.ebnf` now documents four parser features that lagged the canonical grammar: the `test` prefix on `fn_decl`, the session-type production family (`!T. S`, `?T. S`, `+{…}`, `&{…}`, `end`), the `const N: Int` alternative in `type_params`, and the receiver-type prefix `fn List[T]::flatten(…)` via a new `fn_name` non-terminal.
+- **Test coverage backfill** (#1430, #1431, #1432) — 25 requirements across 8 specs gained `Tests:` evidence links. New tests: `tests/error_messages.rs::json_format_emits_structured_object_on_failure` (spec 025 R6 — JSON output mode does not use the source-context renderer) and a new `tests/meta_commands.rs` file with four CLI integration tests for `mvl init` and `mvl sbom --output`/`--help` (spec 024 R6, R7, R9).
+
+### Fixed
+
+- **Spec corpus references** (#1434) — five specs referenced `tests/corpus/` directories that had been renamed (`01_basics` → `01_syntax`, `04_effects` → `07_effects`, `05_ifc`/`06_ifc` → `08_ifc`, `09_concurrency` → `12_actors`, `10_verification` → `15_verification`, etc.). The files exist; only the spec paths were stale. The assurance dashboard now reports 22/22 corpus files present (was 3/22).
+
+### Changed
+
+Closes epic #1437. Final assurance metrics: Completeness 157/157 (100%), Coverage 157/157 (100%), Assurance 157/157 (100%), Corpus 22/22.
+
 ## [0.211.2] - 2026-06-18
 
 ### Fixed

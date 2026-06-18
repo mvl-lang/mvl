@@ -148,6 +148,8 @@ first customer.
 
 **Implementation:** `compiler/` (MVL sources: parser, checker, linter in MVL)
 
+**Tests:** `compiler/parser_test.mvl`, `compiler/lexer_test.mvl` (via `make test-mvl` — exercises the self-hosted MVL-in-MVL compiler modules).
+
 #### Scenario: Self-hosted parser
 
 - GIVEN `compiler/parser.mvl`
@@ -177,6 +179,8 @@ where MVL achieves its 11/11 requirement coverage at runtime.
 
 **Implementation:** `src/mvl/checker/data_race.rs` (foundation), planned actor/model-checker modules
 
+**Tests:** `tests/requirements.rs::req09_data_race_freedom_proven`, `tests/parser/actors.rs`, `tests/stdlib/actors_test.mvl` (data-race freedom foundation + actor syntax and runtime tests; model-checking work tracked under the issues listed below).
+
 #### Scenario: Actor isolation
 
 - GIVEN two MVL actors communicating via typed channels
@@ -203,6 +207,8 @@ ecosystem with formally verified foundations.
 
 **Implementation:** `src/mvl/packages/`, `etc/registry/` (planned), `mvl_metatheory` companion repo
 
+**Tests:** `src/mvl/packages/sbom.rs` (inline unit tests for the packaging pillar — registry signing and metatheory proof obligations remain post-1.0 work).
+
 #### Scenario: Package distribution
 
 - GIVEN a package authored in MVL
@@ -226,6 +232,8 @@ phase model defined in this spec. The README MUST link to this spec for the
 detailed pillar mapping.
 
 **Implementation:** `README.md` (top-level)
+
+**Tests:** `README.md` lines 49–64 contain the "Roadmap — Eight Pillars, Nine Phases" section with the per-phase table and a link to this spec.
 
 #### Scenario: README reflects the model
 

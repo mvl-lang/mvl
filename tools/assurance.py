@@ -46,10 +46,11 @@ def parse_specs():
             num, title, level = m.group(1), m.group(2), m.group(3)
 
             # Check for Implementation link
-            impl_match = re.search(r"\*\*Implementation:\*\*\s*`(.+?)`", block)
+            impl_match = re.search(r"\*\*Implementation:\*\*\s*`(.+?)`(\s*\(planned[^)]*\))?", block)
             impl_path = impl_match.group(1) if impl_match else None
+            planned = bool(impl_match and impl_match.group(2))
             impl_file = impl_path.split("::")[0].strip() if impl_path else None
-            if impl_file:
+            if impl_file and not planned:
                 _resolved = (SRC_DIR.parent / impl_file).resolve()
                 _repo_root = SRC_DIR.parent.resolve()
                 impl_exists = _resolved.is_relative_to(_repo_root) and _resolved.exists()
@@ -77,6 +78,7 @@ def parse_specs():
                     "level": level,
                     "impl_path": impl_path,
                     "impl_exists": impl_exists,
+                    "planned": planned,
                     "tests_path": tests_path,
                     "tests_linked": tests_path is not None,
                     "corpus_files": corpus_files,
@@ -136,27 +138,34 @@ def _get_test_coverage():
 
 
 def report(requirements, verbose=False):
-    """Print assurance dashboard."""
-    total = len(requirements)
+    """Print assurance dashboard.
+
+    Planned requirements (marked `(planned)` after the Implementation backtick)
+    are excluded from totals — they describe aspirational architecture, not
+    current behaviour, and double-counting them as missing distorts the metric.
+    """
+    planned_count = sum(1 for r in requirements if r["planned"])
+    active = [r for r in requirements if not r["planned"]]
+    total = len(active)
     if total == 0:
         print("No requirements found in .openspec/specs/")
         return 0.0, 0.0, 1.0
 
-    impl_linked = sum(1 for r in requirements if r["impl_path"])
-    impl_exists = sum(1 for r in requirements if r["impl_exists"])
-    tests_linked = sum(1 for r in requirements if r["tests_linked"])
+    impl_linked = sum(1 for r in active if r["impl_path"])
+    impl_exists = sum(1 for r in active if r["impl_exists"])
+    tests_linked = sum(1 for r in active if r["tests_linked"])
     corpus_present = sum(
-        1 for r in requirements if r["corpus_files"] and r["corpus_present"]
+        1 for r in active if r["corpus_files"] and r["corpus_present"]
     )
-    corpus_total = sum(1 for r in requirements if r["corpus_files"])
-    total_scenarios = sum(r["scenarios"] for r in requirements)
+    corpus_total = sum(1 for r in active if r["corpus_files"])
+    total_scenarios = sum(r["scenarios"] for r in active)
 
     completeness = impl_exists / total if total else 0
     coverage = tests_linked / total if total else 0
 
     # Assurance = of the implemented requirements, how many have evidence (tests)?
     assured = sum(
-        1 for r in requirements if r["impl_exists"] and r["tests_linked"]
+        1 for r in active if r["impl_exists"] and r["tests_linked"]
     )
     assurance = assured / impl_exists if impl_exists else 1.0  # no impl = nothing to assure = 100%
 
@@ -166,7 +175,7 @@ def report(requirements, verbose=False):
     print("=" * 60)
     print("MVL Assurance Dashboard (ISPE)")
     print("=" * 60)
-    print(f"Requirements:     {total}")
+    print(f"Requirements:     {total}" + (f" ({planned_count} planned excluded)" if planned_count else ""))
     print(f"Scenarios:        {total_scenarios}")
     print()
     print(f"Completeness (S->P):  {impl_exists}/{total} spec -> implementation  ({completeness:.0%})")
@@ -186,12 +195,15 @@ def report(requirements, verbose=False):
     if verbose:
         print()
         print("  Legend: [impl][tests][corpus]")
-        print("    impl:   ✓=exists  ○=linked/missing  ✗=not linked")
+        print("    impl:   ✓=exists  ○=linked/missing  P=planned  ✗=not linked")
         print("    tests:  T=linked  -=none")
         print("    corpus: C=present c=linked/missing  -=none")
         print()
         for r in requirements:
-            status = "✓" if r["impl_exists"] else "○" if r["impl_path"] else "✗"
+            if r["planned"]:
+                status = "P"
+            else:
+                status = "✓" if r["impl_exists"] else "○" if r["impl_path"] else "✗"
             test_status = "T" if r["tests_linked"] else "-"
             corpus_status = (
                 "C"

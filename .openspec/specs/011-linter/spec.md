@@ -92,7 +92,7 @@ The hint message MUST read:
 
 #### Scenario: IFC corpus file retains Public[T] without lint failure
 
-- GIVEN `tests/corpus/06_ifc/declassification.mvl` contains `-> Public[Token]`
+- GIVEN `tests/corpus/08_ifc/declassification.mvl` contains `-> Public[Token]`
 - WHEN `make mvl-lint` runs
 - THEN no warning is reported for that file; a hint MAY appear
 
@@ -199,7 +199,7 @@ demonstrates complexity rule violations and is permitted to carry warnings.
 
 **Implementation:** `Makefile::mvl-lint`
 
-**Tests:** `Makefile::mvl-lint` (CI gate), `tests/corpus/03_linting/`
+**Tests:** `Makefile::mvl-lint` (CI gate), `tests/corpus/14_linting/`
 
 #### Scenario: Clean corpus
 

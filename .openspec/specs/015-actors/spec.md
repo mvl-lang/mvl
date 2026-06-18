@@ -149,7 +149,7 @@ The `actor` keyword is a hard-reserved keyword and is used for both declaration 
 **Tests:** `tests/corpus/12_actors/basic_actor.mvl`,
 `tests/corpus/negative/req09_data_race/actor_syntax_errors.mvl`
 
-**Corpus:** `tests/corpus/09_concurrency/actors.mvl`, `examples/programs/actor_spawn.mvl`
+**Corpus:** `tests/corpus/12_actors/actors.mvl`, `examples/programs/actor_spawn.mvl`
 
 #### Scenario: Actor type parses correctly
 
@@ -186,7 +186,7 @@ A behavior (`pub fn` inside an actor) is an asynchronous message handler.  The c
 **Tests:** `tests/corpus/12_actors/behaviors.mvl`,
 `tests/corpus/negative/req09_data_race/behavior_ref_param.mvl`
 
-**Corpus:** `tests/corpus/09_concurrency/actors.mvl`, `examples/programs/actor_send.mvl`
+**Corpus:** `tests/corpus/12_actors/actors.mvl`, `examples/programs/actor_send.mvl`
 
 #### Scenario: Behavior with ref parameter rejected
 
@@ -280,7 +280,7 @@ The compiler MUST reject a behavior call that passes an `iso` value without cons
 **Tests:** `tests/corpus/12_actors/message_send.mvl`,
 `tests/corpus/negative/req09_data_race/iso_send_without_consume.mvl`
 
-**Corpus:** `tests/corpus/09_concurrency/actors.mvl`, `examples/programs/actor_send.mvl`
+**Corpus:** `tests/corpus/12_actors/actors.mvl`, `examples/programs/actor_send.mvl`
 
 #### Scenario: iso message send requires consume
 
@@ -395,7 +395,7 @@ The only permitted interaction with an actor from the outside is sending a messa
 
 **Tests:** `tests/corpus/12_actors/actor_ref.mvl`
 
-**Corpus:** `tests/corpus/09_concurrency/actor_ref.mvl`
+**Corpus:** `tests/corpus/12_actors/actor_ref.mvl`
 
 #### Scenario: ActorRef is tag-sendable
 
@@ -482,7 +482,7 @@ The `select` expression:
 **Tests:** `tests/corpus/12_actors/select.mvl`,
 `tests/corpus/negative/req09_data_race/select_no_timeout.mvl`
 
-**Corpus:** `tests/corpus/09_concurrency/select.mvl`
+**Corpus:** `tests/corpus/12_actors/select.mvl`
 
 #### Scenario: Select fires first ready branch
 
