@@ -20,6 +20,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::mvl::ir::visit::{walk_tir_block, walk_tir_expr, Visit as TirVisit};
 use crate::mvl::parser::ast::{Block, Decl, ElseBranch, Expr, MatchBody, Program, Stmt};
 
 /// Maps function name → per-parameter field-path sets.
@@ -93,55 +94,8 @@ pub fn build_fn_field_reads_tir(tir: &crate::mvl::ir::TirProgram) -> FnFieldRead
 }
 
 fn collect_paths_from_tir_block(block: &crate::mvl::ir::TirBlock, out: &mut Vec<String>) {
-    for stmt in &block.stmts {
-        collect_paths_from_tir_stmt(stmt, out);
-    }
-}
-
-fn collect_paths_from_tir_stmt(stmt: &crate::mvl::ir::TirStmt, out: &mut Vec<String>) {
-    use crate::mvl::ir::{TirElseBranch, TirMatchBody, TirStmt};
-    match stmt {
-        TirStmt::Let { init, .. } => collect_paths_from_tir_expr(init, out),
-        TirStmt::Assign { value, .. } => collect_paths_from_tir_expr(value, out),
-        TirStmt::Return { value: Some(e), .. } => collect_paths_from_tir_expr(e, out),
-        TirStmt::Return { value: None, .. } => {}
-        TirStmt::Expr { expr, .. } => collect_paths_from_tir_expr(expr, out),
-        TirStmt::If {
-            cond, then, else_, ..
-        } => {
-            collect_paths_from_tir_expr(cond, out);
-            collect_paths_from_tir_block(then, out);
-            if let Some(eb) = else_ {
-                match eb {
-                    TirElseBranch::Block(b) => collect_paths_from_tir_block(b, out),
-                    TirElseBranch::If(s) => collect_paths_from_tir_stmt(s, out),
-                }
-            }
-        }
-        TirStmt::Match {
-            scrutinee, arms, ..
-        } => {
-            collect_paths_from_tir_expr(scrutinee, out);
-            for arm in arms {
-                match &arm.body {
-                    TirMatchBody::Block(b) => collect_paths_from_tir_block(b, out),
-                    TirMatchBody::Expr(e) => collect_paths_from_tir_expr(e, out),
-                }
-            }
-        }
-        TirStmt::For { iter, body, .. } => {
-            collect_paths_from_tir_expr(iter, out);
-            collect_paths_from_tir_block(body, out);
-        }
-        TirStmt::While { cond, body, .. } => {
-            collect_paths_from_tir_expr(cond, out);
-            collect_paths_from_tir_block(body, out);
-        }
-    }
-}
-
-fn collect_paths_from_tir_expr(expr: &crate::mvl::ir::TirExpr, out: &mut Vec<String>) {
-    collect_paths_from_tir_expr_with(expr, out, None)
+    let mut v = CollectTirPaths { out, fn_field_reads: None };
+    walk_tir_block(&mut v, block);
 }
 
 fn collect_paths_from_tir_expr_with(
@@ -149,24 +103,25 @@ fn collect_paths_from_tir_expr_with(
     out: &mut Vec<String>,
     fn_field_reads: Option<&FnFieldReads>,
 ) {
-    use crate::mvl::ir::TirExprKind;
-    if let Some(path) = tir_expr_to_path(expr) {
-        out.push(path);
-        return;
-    }
-    match &expr.kind {
-        TirExprKind::MethodCall { receiver, args, .. } => {
-            collect_paths_from_tir_expr_with(receiver, out, fn_field_reads);
-            for a in args {
-                collect_paths_from_tir_expr_with(a, out, fn_field_reads);
-            }
+    CollectTirPaths { out, fn_field_reads }.visit_tir_expr(expr);
+}
+
+struct CollectTirPaths<'a> {
+    out: &'a mut Vec<String>,
+    fn_field_reads: Option<&'a FnFieldReads>,
+}
+
+impl<'ast> TirVisit<'ast> for CollectTirPaths<'_> {
+    fn visit_tir_expr(&mut self, e: &'ast crate::mvl::ir::TirExpr) {
+        use crate::mvl::ir::TirExprKind;
+        // Short-circuit: capture pure ident/field-access chains without descending.
+        if let Some(path) = tir_expr_to_path(e) {
+            self.out.push(path);
+            return;
         }
-        TirExprKind::FnCall { name, args, .. } => {
-            // Interprocedural resolution mirrors the AST path (see
-            // `collect_access_paths`): when the callee is in our compilation
-            // unit and accesses params exclusively via field selectors,
-            // substitute the field paths against the caller's argument path.
-            if let Some(param_reads) = fn_field_reads.and_then(|m| m.get(name.as_str())) {
+        // Interprocedural resolution for FnCall when the callee's field reads are known.
+        if let TirExprKind::FnCall { name, args, .. } = &e.kind {
+            if let Some(param_reads) = self.fn_field_reads.and_then(|m| m.get(name.as_str())) {
                 if args.len() == param_reads.len() {
                     for (i, arg) in args.iter().enumerate() {
                         let fields = &param_reads[i];
@@ -174,84 +129,20 @@ fn collect_paths_from_tir_expr_with(
                             if !fields.is_empty() && fields.iter().all(|p| p.contains('.')) {
                                 for field_path in fields {
                                     let dot = field_path.find('.').unwrap();
-                                    out.push(format!("{}{}", arg_path, &field_path[dot..]));
+                                    self.out.push(format!("{}{}", arg_path, &field_path[dot..]));
                                 }
                             } else {
-                                out.push(arg_path);
+                                self.out.push(arg_path);
                             }
                         } else {
-                            collect_paths_from_tir_expr_with(arg, out, fn_field_reads);
+                            self.visit_tir_expr(arg);
                         }
                     }
                     return;
                 }
             }
-            for a in args {
-                collect_paths_from_tir_expr_with(a, out, fn_field_reads);
-            }
         }
-        TirExprKind::Binary { left, right, .. } => {
-            collect_paths_from_tir_expr_with(left, out, fn_field_reads);
-            collect_paths_from_tir_expr_with(right, out, fn_field_reads);
-        }
-        TirExprKind::Unary { expr: inner, .. }
-        | TirExprKind::Propagate(inner)
-        | TirExprKind::Consume(inner)
-        | TirExprKind::Relabel { expr: inner, .. }
-        | TirExprKind::Borrow { expr: inner, .. } => {
-            collect_paths_from_tir_expr_with(inner, out, fn_field_reads);
-        }
-        TirExprKind::If {
-            cond, then, else_, ..
-        } => {
-            collect_paths_from_tir_expr_with(cond, out, fn_field_reads);
-            collect_paths_from_tir_block(then, out);
-            if let Some(e) = else_ {
-                collect_paths_from_tir_expr_with(e, out, fn_field_reads);
-            }
-        }
-        TirExprKind::Match {
-            scrutinee, arms, ..
-        } => {
-            collect_paths_from_tir_expr_with(scrutinee, out, fn_field_reads);
-            for arm in arms {
-                use crate::mvl::ir::TirMatchBody;
-                match &arm.body {
-                    TirMatchBody::Block(b) => collect_paths_from_tir_block(b, out),
-                    TirMatchBody::Expr(e) => {
-                        collect_paths_from_tir_expr_with(e, out, fn_field_reads)
-                    }
-                }
-            }
-        }
-        TirExprKind::Block(b) => collect_paths_from_tir_block(b, out),
-        TirExprKind::Construct { fields, .. } | TirExprKind::Spawn { fields, .. } => {
-            for (_, e) in fields {
-                collect_paths_from_tir_expr_with(e, out, fn_field_reads);
-            }
-        }
-        TirExprKind::Select { arms, .. } => {
-            for arm in arms {
-                collect_paths_from_tir_expr_with(&arm.expr, out, fn_field_reads);
-                collect_paths_from_tir_block(&arm.body, out);
-            }
-        }
-        TirExprKind::List { elems } | TirExprKind::Set { elems } => {
-            for e in elems {
-                collect_paths_from_tir_expr_with(e, out, fn_field_reads);
-            }
-        }
-        TirExprKind::Map { pairs } => {
-            for (k, v) in pairs {
-                collect_paths_from_tir_expr_with(k, out, fn_field_reads);
-                collect_paths_from_tir_expr_with(v, out, fn_field_reads);
-            }
-        }
-        TirExprKind::Lambda { .. }
-        | TirExprKind::Var(_)
-        | TirExprKind::Literal(_)
-        | TirExprKind::Quantifier(_)
-        | TirExprKind::FieldAccess { .. } => {}
+        walk_tir_expr(self, e);
     }
 }
 

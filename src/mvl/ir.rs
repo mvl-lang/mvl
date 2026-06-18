@@ -27,6 +27,7 @@
 //! issue #1096.
 
 pub mod lower;
+pub mod visit;
 
 /// Re-exported so backends and passes import `Ty` from `ir`, not from `checker::types`.
 /// This keeps the checker boundary clean: backends depend on `ir`, not on `checker` internals.
