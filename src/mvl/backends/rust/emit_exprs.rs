@@ -15,7 +15,7 @@ use crate::mvl::passes::coverage::BranchKind;
 use crate::mvl::passes::mcdc::analysis::count_clauses_ref;
 
 use crate::mvl::backends::{
-    is_stdlib_ufcs_method, rust_emit_by_name, STRING_LABEL_PRESERVING_METHODS,
+    is_stdlib_method, is_stdlib_ufcs_method, rust_emit_by_name, STRING_LABEL_PRESERVING_METHODS,
 };
 
 impl RustEmitter {
@@ -742,28 +742,60 @@ impl RustEmitter {
 
                     // ── Generic Rust method fallthrough ───────────────────────────────
                     _ => {
-                        let is_fn_typed_field =
-                            if let Ty::Named(type_name, type_args) = &receiver.ty {
-                                type_args.is_empty()
-                                    && self
-                                        .fn_typed_struct_fields
-                                        .contains(&(type_name.clone(), method.clone()))
-                            } else {
-                                false
-                            };
-                        if is_fn_typed_field {
+                        // #992 / #1433: Pure MVL extension methods on builtin types are
+                        // transpiled as top-level free functions and must be called via UFCS
+                        // (`method(receiver.clone().into(), args)`), not as native Rust
+                        // methods. Detect this case by checking the receiver type is a
+                        // builtin AND the method is not a registered kernel builtin.
+                        let is_builtin_receiver = matches!(
+                            receiver.ty.unlabeled(),
+                            Ty::String
+                                | Ty::Int
+                                | Ty::Float
+                                | Ty::Bool
+                                | Ty::Byte
+                                | Ty::UByte
+                                | Ty::UInt
+                                | Ty::List(_)
+                                | Ty::Map(_, _)
+                                | Ty::Set(_)
+                                | Ty::Option(_)
+                                | Ty::Result(_, _)
+                        );
+                        if is_builtin_receiver && !is_stdlib_method(method.as_str()) {
+                            self.push(method);
                             self.push("(");
-                        }
-                        self.emit_expr(receiver);
-                        self.push(".");
-                        self.push(method);
-                        if is_fn_typed_field {
-                            self.push(")(");
+                            self.emit_expr(receiver);
+                            self.push(".clone().into()");
+                            if !args.is_empty() {
+                                self.push(", ");
+                                self.emit_args(args);
+                            }
+                            self.push(")");
                         } else {
-                            self.push("(");
+                            let is_fn_typed_field =
+                                if let Ty::Named(type_name, type_args) = &receiver.ty {
+                                    type_args.is_empty()
+                                        && self
+                                            .fn_typed_struct_fields
+                                            .contains(&(type_name.clone(), method.clone()))
+                                } else {
+                                    false
+                                };
+                            if is_fn_typed_field {
+                                self.push("(");
+                            }
+                            self.emit_expr(receiver);
+                            self.push(".");
+                            self.push(method);
+                            if is_fn_typed_field {
+                                self.push(")(");
+                            } else {
+                                self.push("(");
+                            }
+                            self.emit_args(args);
+                            self.push(")");
                         }
-                        self.emit_args(args);
-                        self.push(")");
                     }
                 }
             }

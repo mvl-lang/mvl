@@ -647,6 +647,96 @@ impl TypeChecker {
             }
             _ => Ty::Unknown,
         };
+        // #992 / #1433: For builtin types, if static dispatch returned Unknown,
+        // check method_table for pure MVL extension methods declared in std/*.mvl.
+        // This removes the 4-way sync requirement for pure MVL extension methods.
+        let result = if matches!(result, Ty::Unknown) {
+            let builtin_name: &str = match base {
+                Ty::String => "String",
+                Ty::Int => "Int",
+                Ty::Float => "Float",
+                Ty::Bool => "Bool",
+                Ty::Byte => "Byte",
+                Ty::UByte => "UByte",
+                Ty::UInt => "UInt",
+                Ty::List(_) => "List",
+                Ty::Map(_, _) => "Map",
+                Ty::Set(_) => "Set",
+                Ty::Option(_) => "Option",
+                Ty::Result(_, _) => "Result",
+                _ => "",
+            };
+            if !builtin_name.is_empty() {
+                if let Some(mi) = self
+                    .method_table
+                    .get(builtin_name)
+                    .and_then(|m| m.get(method))
+                    .cloned()
+                {
+                    let expected_args = mi.params.len().saturating_sub(1);
+                    if expected_args != arg_tys.len() {
+                        self.emit(CheckError::WrongArgCount {
+                            name: format!("{builtin_name}.{method}"),
+                            expected: expected_args,
+                            found: arg_tys.len(),
+                            span,
+                        });
+                        return mi.ret;
+                    }
+                    for (expected, found) in mi.params[1..].iter().zip(arg_tys.iter()) {
+                        if !self.types_compatible_resolved(expected, found) {
+                            self.emit(CheckError::TypeMismatch {
+                                expected: expected.display(),
+                                found: found.display(),
+                                span,
+                            });
+                        }
+                    }
+                    let effects = mi.effects.clone();
+                    for required in &effects {
+                        let covered = self
+                            .fn_context()
+                            .effects
+                            .iter()
+                            .any(|declared| self.effect_satisfies(declared, required));
+                        if !covered {
+                            if self.fn_context().effects.is_empty() {
+                                self.emit(CheckError::UndeclaredEffect {
+                                    callee: format!("{builtin_name}.{method}"),
+                                    effect: required.to_string(),
+                                    span,
+                                });
+                            } else {
+                                self.emit(CheckError::MissingEffect {
+                                    caller: self.fn_context().fn_name.clone(),
+                                    callee: format!("{builtin_name}.{method}"),
+                                    effect: required.to_string(),
+                                    span,
+                                });
+                            }
+                        }
+                    }
+                    if let Some(acc) = self.lambda_body_effects.last_mut() {
+                        acc.extend(effects.iter().cloned());
+                    }
+                    if matches!(mi.totality, Some(Totality::Partial))
+                        && !matches!(self.fn_context().totality, Some(Totality::Partial))
+                    {
+                        self.emit(CheckError::PartialCallInTotal {
+                            callee: format!("{builtin_name}.{method}"),
+                            span,
+                        });
+                    }
+                    mi.ret
+                } else {
+                    Ty::Unknown
+                }
+            } else {
+                Ty::Unknown
+            }
+        } else {
+            result
+        };
         // #985: For closed builtin types, Ty::Unknown from the method dispatch means
         // "method not found" — emit a diagnostic instead of silently propagating Unknown.
         if matches!(result, Ty::Unknown)

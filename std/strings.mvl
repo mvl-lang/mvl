@@ -8,14 +8,19 @@
 //!
 //! Effects: none (all functions are pure).
 //!
-//! # 4-way sync (#992)
+//! # Adding pure MVL methods (#992)
 //!
-//! Adding a new method here requires **synchronized changes** in three other places:
-//!   1. `checker/method_types.rs` — add the return type mapping
-//!   2. `backends/rust/emit_exprs.rs` — add STDLIB_UFCS_METHODS or a match arm
-//!   3. `backends/llvm/exprs.rs` — add the LLVM emission arm
+//! Pure MVL extension methods (`pub fn String::foo(self)` with a body) no longer
+//! require backend registration. The checker falls back to the method_table, and
+//! the Rust backend auto-detects builtin-receiver UFCS dispatch.
 //!
-//! See issue #992 for the planned method-desugaring fix that removes this requirement.
+//! Kernel builtins (`pub builtin fn`) still require 4-way sync:
+//!   1. `checker/method_types.rs` — return type mapping
+//!   2. `backends/rust/emit_exprs.rs` — match arm or `rust_emit` hint
+//!   3. `backends/llvm/emit_method_call.rs` — LLVM emission arm
+//!   4. `runtime/rust/src/stdlib/primitives.rs` — Rust runtime function
+//!
+//! LLVM support for pure MVL extension methods is not yet automatic (#992).
 
 // ── String kernel (10 builtin methods) ──────────────────────────────────────
 
@@ -116,13 +121,40 @@ pub fn String::is_empty(self) -> Bool {
     self.len() == 0
 }
 
-/// Return true if every character in the string is a lowercase ASCII hex digit (0–9, a–f).
+/// Convert a single ASCII hex character to its numeric value (0–15).
+/// Returns None if the character is not a valid hex digit (0–9, a–f, A–F).
+pub total fn String::hex_char_value(self) -> Option[Int] {
+    if      self == "0" { Some(0) }
+    else if self == "1" { Some(1) }
+    else if self == "2" { Some(2) }
+    else if self == "3" { Some(3) }
+    else if self == "4" { Some(4) }
+    else if self == "5" { Some(5) }
+    else if self == "6" { Some(6) }
+    else if self == "7" { Some(7) }
+    else if self == "8" { Some(8) }
+    else if self == "9" { Some(9) }
+    else if self == "a" || self == "A" { Some(10) }
+    else if self == "b" || self == "B" { Some(11) }
+    else if self == "c" || self == "C" { Some(12) }
+    else if self == "d" || self == "D" { Some(13) }
+    else if self == "e" || self == "E" { Some(14) }
+    else if self == "f" || self == "F" { Some(15) }
+    else { None }
+}
+
+/// True if `self` is a single ASCII hex digit: 0–9, a–f, or A–F.
+pub total fn String::is_hex_char(self) -> Bool {
+    self.hex_char_value().is_some()
+}
+
+/// Return true if every character in the string is an ASCII hex digit (0–9, a–f, A–F).
 /// Empty string returns true. Use for validating trace IDs, hashes, and similar tokens.
 pub fn String::is_hex(self) -> Bool {
     let chars: List[String] = self.chars();
     let ok: ref Bool = true;
     for c in chars {
-        if !"0123456789abcdef".contains(c) { ok = false } else {}
+        if !c.is_hex_char() { ok = false } else {}
     }
     ok
 }
