@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [0.213.0] - 2026-06-18
+
+### Added
+
+- **`String::hex_char_value` and `String::is_hex_char`** (#1433) — two new pure MVL `total fn` string utilities: `hex_char_value(self) -> Option[Int]` maps a single ASCII hex digit (0–9, a–f, A–F) to its nibble value 0–15, returning `None` for non-hex input; `is_hex_char(self) -> Bool` is the corresponding predicate. `String::is_hex` is updated to delegate to `is_hex_char`, removing the previous lowercase-only restriction.
+
+### Fixed
+
+- **Pure MVL extension methods on builtin types no longer require 4-way sync** (#992) — the type checker now falls back to the `method_table` when static dispatch returns `Unknown` for builtin receiver types (`String`, `List`, `Int`, etc.). The Rust backend auto-detects builtin-receiver UFCS dispatch in the generic fallthrough. New pure MVL stdlib methods (`pub fn String::foo(self)`) need only a single entry in `std/*.mvl`; no changes to `method_types.rs` or `STDLIB_UFCS_METHODS` required. LLVM backend auto-dispatch is not yet implemented.
+
 ## [0.212.0] - 2026-06-18
 
 ### Added
