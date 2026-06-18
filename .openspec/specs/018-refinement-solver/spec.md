@@ -77,7 +77,7 @@ tautology, and contradiction cases in O(1) without deeper analysis.
 
 **Issue:** #589
 
-**Tests:** `tests/type_checker.rs::refinement_literal_zero_to_nonzero_param_rejected`, `tests/corpus/07_refinements/`
+**Tests:** `tests/type_checker.rs::refinement_literal_zero_to_nonzero_param_rejected`, `tests/corpus/09_refinements/`
 
 #### Scenario: Literal argument
 

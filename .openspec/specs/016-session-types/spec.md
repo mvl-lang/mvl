@@ -74,7 +74,7 @@ Supported forms:
 `src/mvl/parser/ast.rs::SessionOp`,
 `src/mvl/parser/types.rs::parse_session_op`
 
-**Corpus:** `tests/corpus/09_concurrency/session_types.mvl`
+**Corpus:** `tests/corpus/12_actors/session_types.mvl`
 
 #### Scenario: Simple send/receive protocol
 
@@ -111,7 +111,7 @@ resolved to checker `Ty` values.
 `src/mvl/checker/types.rs::SessionTy`,
 `src/mvl/checker/types.rs::resolve_session_op`
 
-**Corpus:** `tests/corpus/09_concurrency/session_types.mvl`
+**Corpus:** `tests/corpus/12_actors/session_types.mvl`
 
 #### Scenario: Resolve send/receive protocol
 
@@ -137,7 +137,7 @@ Rules:
 **Implementation:** `src/mvl/checker/types.rs::SessionTy::dual`,
 `src/mvl/checker/session.rs::check_dual`
 
-**Corpus:** `tests/corpus/09_concurrency/session_types.mvl`
+**Corpus:** `tests/corpus/12_actors/session_types.mvl`
 
 #### Scenario: Duality of send is receive
 
@@ -172,7 +172,7 @@ choice block MUST be rejected as they produce unreachable states.
 `tests/type_checker.rs::session_duplicate_label_in_external_choice_is_rejected`,
 `tests/type_checker.rs::session_unique_labels_accepted`
 
-**Corpus:** `tests/corpus/09_concurrency/session_types.mvl`,
+**Corpus:** `tests/corpus/12_actors/session_types.mvl`,
 `tests/negative/req01/session_duplicate_label.mvl`
 
 #### Scenario: Duplicate branch label rejected
@@ -216,7 +216,7 @@ The following error variants MUST exist:
 `tests/type_checker.rs::session_mutual_blocking_detected_by_check_dual`,
 `tests/type_checker.rs::session_deadlock_in_choice_branch_detected`
 
-**Corpus:** `tests/corpus/09_concurrency/session_types.mvl`
+**Corpus:** `tests/corpus/12_actors/session_types.mvl`
 
 #### Scenario: Deadlock detected as structured error
 
