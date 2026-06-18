@@ -75,6 +75,8 @@ For a two-digit line number (width = 2):
 
 **Implementation:** `src/cli.rs::render_diagnostic` (`line_pad`, `gutter` variables)
 
+**Tests:** `tests/error_messages.rs::req1_type_mismatch_reports_expected_and_found_types` (and the full `tests/error_messages.rs` suite — every test asserts the `-->`/gutter/caret layout via the source-context renderer)
+
 ### Requirement 3: Error Code Casing [MUST]
 
 Error codes in the header SHALL use uppercase `REQ` prefix: `error[REQ10]`.
@@ -82,6 +84,8 @@ The format is `error[REQ{N}]` where `{N}` is the bare requirement number
 (no zero-padding).
 
 **Implementation:** `src/cli.rs::render_diagnostic`
+
+**Tests:** `tests/error_messages.rs` — every test asserts the `error[REQ{N}]` header form with uppercase prefix and bare requirement number (e.g. `req1_type_mismatch_reports_expected_and_found_types` asserts `error[REQ1]`).
 
 ### Requirement 4: Message Split Convention [SHOULD]
 
@@ -98,6 +102,8 @@ add additional backtick wrapping.
 
 **Implementation:** `src/cli.rs::render_diagnostic`, `src/mvl/checker/errors.rs`
 
+**Tests:** `tests/error_messages.rs::req1_unknown_field_names_the_field_and_type`, `tests/error_messages.rs::req1_missing_field_names_the_field_and_type` (each asserts both the header title and the detail annotation derived from a `": "` split).
+
 ### Requirement 5: Caret Span Accuracy [SHOULD]
 
 The caret underline SHOULD span the token or expression identified by the
@@ -110,6 +116,8 @@ for this specification.
 
 **Implementation:** `src/cli.rs::render_diagnostic` (`caret_len` variable)
 
+**Tests:** `tests/error_messages.rs::req1_undefined_function_names_the_function`, `tests/error_messages.rs::req1_undefined_variable_names_the_variable` (caret span surrounds the named identifier in each rendered diagnostic).
+
 ### Requirement 6: JSON Format Unchanged [MUST]
 
 When `mvl check --format=json` is used, errors SHALL continue to be emitted as
@@ -117,6 +125,8 @@ structured JSON objects and SHALL NOT use the source-context format.  The JSON
 format is a separate output mode.
 
 **Implementation:** `src/cli/check.rs` (json branch, lines ~269–291)
+
+**Tests:** `tests/error_messages.rs::json_format_emits_structured_object_on_failure`
 
 ## Known Limitations
 

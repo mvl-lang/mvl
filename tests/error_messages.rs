@@ -433,6 +433,29 @@ fn refinement_stats_respects_solver_mode_label() {
 }
 
 #[test]
+fn json_format_emits_structured_object_on_failure() {
+    // Spec 025 R6: `mvl check --format=json` must emit JSON, not the
+    // source-context renderer used for human output.
+    let out = Command::new(mvl_bin())
+        .args(["check", "--format=json", &fixture("req1_type_mismatch.mvl")])
+        .output()
+        .expect("run mvl check --format=json");
+    assert!(!out.status.success(), "check should fail on broken fixture");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    for fragment in ["\"errors\":", "\"code\": \"E", "\"requirement\":", "\"location\":", "\"summary\":"] {
+        assert!(
+            stdout.contains(fragment),
+            "expected JSON fragment {fragment:?} in stdout:\n{stdout}"
+        );
+    }
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("-->") && !stderr.contains("|\n"),
+        "JSON mode must not emit source-context renderer on stderr:\n{stderr}"
+    );
+}
+
+#[test]
 fn refinement_stats_no_layer_lines_when_zero_proven() {
     // A file with no refinement call sites should print stats but no layer lines.
     let stderr = check_ok_with_args(
