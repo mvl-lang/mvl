@@ -32,7 +32,10 @@ module_path    = IDENT { ( "." | "::" ) IDENT } [ "." "{" IDENT { "," IDENT } "}
 
 (* === Type declarations === *)
 type_decl      = "type" IDENT [ type_params ] "=" type_body ;
-type_params    = "[" IDENT { "," IDENT } "]" ;
+type_params    = "[" type_param { "," type_param } "]" ;
+(* Const generics (#928) — value-level parameters, e.g. `[T, const N: Int]`.   *)
+(* The const-param type must be a simple type identifier (no nested generics). *)
+type_param     = IDENT | "const" IDENT ":" IDENT ;
 type_body      = struct_body | enum_body | alias_type ;
 struct_body    = "struct" "{" { field_decl } "}" [ "with" "invariant" refinement ] ;
                  (* "with invariant" adds a cross-field predicate checked at construction and mutation — Phase 6, #654 *)
@@ -43,11 +46,16 @@ field_list     = field_decl { "," field_decl } ;
 alias_type     = type_expr ;
 
 (* === Function declarations === *)
-fn_decl        = [ totality ] [ "builtin" ] [ security ] "fn" IDENT [ type_params ]
+(* `test` (#587) marks a unit-test entry point: `test fn name() -> Unit { … }`. *)
+(*   Orthogonal to totality; mutually exclusive with `builtin`; `pub` forbidden. *)
+(* `fn_name` allows a receiver-type prefix (#928) for extension methods:        *)
+(*   `fn List[T]::flatten(self)`, `fn Option[T]::is_some(self)`.                 *)
+fn_decl        = [ "test" ] [ totality ] [ "builtin" ] [ security ] "fn" fn_name [ type_params ]
                  "(" [ param_list ] ")" "->" return_type
                  [ "!" effect_list ] [ "where" constraints ]
                  { fn_contract }
                  ( block | (* empty — builtin only *) ) ;
+fn_name        = [ IDENT [ "[" type_list "]" ] "::" ] IDENT ;
 fn_contract    = ( "requires" | "ensures" ) refinement      (* Phase 1, #621 *)
                | "ghost" "let" IDENT "=" ref_expr ";" ;    (* Phase 4, #627 — erased before codegen *)
 (* tree-sitter splits fn_contract into two named rules: *)
@@ -111,7 +119,7 @@ impl_decl      = "impl" IDENT [ "[" type_list "]" ] "for" IDENT "{" { fn_decl } 
 (* === Type expressions === *)
 (* MVL has no anonymous tuple types — use named structs instead (ADR-0002, #1380). *)
 type_expr      = base_type | option_type | result_type | ref_type
-               | labeled_type | refined_type | fn_type ;
+               | labeled_type | refined_type | fn_type | session_type ;
 base_type      = IDENT [ "[" type_list "]" ] ;
 option_type    = "Option" "[" type_expr "]" ;
 result_type    = "Result" "[" type_expr "," type_expr "]" ;
@@ -121,6 +129,20 @@ security_label = "Public" | "Tainted" | "Secret" ;
 refined_type   = type_expr "where" refinement ;
 fn_type        = "fn" "(" type_list ")" "->" type_expr [ "!" effect_list ] ;
 type_list      = type_expr { "," type_expr } ;
+
+(* === Session types (Honda 1993, spec 016) === *)
+(* Type-level protocols.  `!T. S` send, `?T. S` receive, `+{ l: S, … }` internal *)
+(* choice (this side selects), `&{ l: S, … }` external choice (other side selects), *)
+(* `end` protocol termination.  The grammar is right-recursive to encode           *)
+(* left-to-right sequencing.  `&T` (Rust-style borrow) is rejected with a hint    *)
+(* — see `ref T` / `val T` for borrows; the `&{` two-token lookahead disambiguates. *)
+session_type   = session_op ;
+session_op     = "!" type_expr "." session_op
+               | "?" type_expr "." session_op
+               | "+" "{" session_branches "}"
+               | "&" "{" session_branches "}"
+               | "end" ;
+session_branches = IDENT ":" session_op { "," IDENT ":" session_op } ;
 
 (* === Refinement predicates === *)
 refinement     = ref_expr ;
@@ -230,8 +252,8 @@ DOC_COMMENT    = "///" { ANY_CHAR } NEWLINE ;    (* doc comment — convention, 
 (* identifiers.  User-defined names that conflict must be renamed.               *)
 (*                                                                               *)
 (* Declaration:     fn  type  const  use  pub  extern  impl  builtin            *)
-(*                  struct  enum  actor  effect                                   *)
-(* Totality:        total  partial  test                                         *)
+(*                  struct  enum  actor  effect  test                            *)
+(* Totality:        total  partial                                               *)
 (* Cast:            as                                                            *)
 (* Control flow:    if  else  for  in  while  match  return  select               *)
 (* Let binding:     let  ghost                                                    *)
