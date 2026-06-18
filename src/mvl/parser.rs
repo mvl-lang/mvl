@@ -11,6 +11,7 @@ pub mod functions;
 pub mod lexer;
 pub mod statements;
 pub mod types;
+pub mod visit;
 
 use crate::mvl::parser::lexer::{LexError, Lexer, Span, Token, TokenKind};
 use std::collections::HashSet;
