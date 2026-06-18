@@ -8,6 +8,7 @@ use crate::mvl::parser::ast::{
     Block, Decl, ElseBranch, Expr, MatchArm, MatchBody, Pattern, Program, Stmt, TypeBody, TypeExpr,
     VariantFields,
 };
+use crate::mvl::parser::visit::{walk_block, walk_expr, walk_stmt, Visit};
 
 /// Flag statements that are unreachable because they follow a `return` in the
 /// same block.
@@ -329,272 +330,91 @@ pub fn missing_totality(prog: &Program, cfg: &LintConfig, out: &mut Vec<LintDiag
 /// Return `true` if `block` (or any nested block/expression) contains a
 /// `while` loop that has no `decreases` variant.
 fn block_has_while_no_decreases(block: &Block) -> bool {
-    block.stmts.iter().any(stmt_has_while_no_decreases)
+    let mut v = WhileNoDecreases { found: false };
+    walk_block(&mut v, block);
+    v.found
 }
 
-fn stmt_has_while_no_decreases(stmt: &Stmt) -> bool {
-    match stmt {
-        Stmt::While {
-            decreases, body, ..
-        } => decreases.is_none() || block_has_while_no_decreases(body),
-        Stmt::Let { init, .. } => expr_has_while_no_decreases(init),
-        Stmt::Assign { value, .. } => expr_has_while_no_decreases(value),
-        Stmt::Return { value: Some(e), .. } => expr_has_while_no_decreases(e),
-        Stmt::Return { value: None, .. } => false,
-        Stmt::Expr { expr, .. } => expr_has_while_no_decreases(expr),
-        Stmt::If {
-            cond, then, else_, ..
-        } => {
-            expr_has_while_no_decreases(cond)
-                || block_has_while_no_decreases(then)
-                || else_
-                    .as_ref()
-                    .map(|e| match e {
-                        ElseBranch::Block(b) => block_has_while_no_decreases(b),
-                        ElseBranch::If(s) => stmt_has_while_no_decreases(s),
-                    })
-                    .unwrap_or(false)
+struct WhileNoDecreases {
+    found: bool,
+}
+
+impl<'a> Visit<'a> for WhileNoDecreases {
+    fn visit_stmt(&mut self, s: &'a Stmt) {
+        if self.found {
+            return;
         }
-        Stmt::Match {
-            scrutinee, arms, ..
-        } => {
-            expr_has_while_no_decreases(scrutinee)
-                || arms.iter().any(|arm| match &arm.body {
-                    MatchBody::Expr(e) => expr_has_while_no_decreases(e),
-                    MatchBody::Block(b) => block_has_while_no_decreases(b),
-                })
-        }
-        Stmt::For { iter, body, .. } => {
-            expr_has_while_no_decreases(iter) || block_has_while_no_decreases(body)
+        match s {
+            Stmt::While { decreases, .. } if decreases.is_none() => self.found = true,
+            _ => walk_stmt(self, s),
         }
     }
-}
-
-fn expr_has_while_no_decreases(expr: &Expr) -> bool {
-    match expr {
-        Expr::Block(b) => block_has_while_no_decreases(b),
-        Expr::If {
-            cond, then, else_, ..
-        } => {
-            expr_has_while_no_decreases(cond)
-                || block_has_while_no_decreases(then)
-                || else_
-                    .as_ref()
-                    .map(|e| expr_has_while_no_decreases(e))
-                    .unwrap_or(false)
+    fn visit_expr(&mut self, e: &'a Expr) {
+        if !self.found {
+            walk_expr(self, e);
         }
-        Expr::Match {
-            scrutinee, arms, ..
-        } => {
-            expr_has_while_no_decreases(scrutinee)
-                || arms.iter().any(|arm| match &arm.body {
-                    MatchBody::Expr(e) => expr_has_while_no_decreases(e),
-                    MatchBody::Block(b) => block_has_while_no_decreases(b),
-                })
-        }
-        Expr::Lambda { body, .. } => expr_has_while_no_decreases(body),
-        Expr::Binary { left, right, .. } => {
-            expr_has_while_no_decreases(left) || expr_has_while_no_decreases(right)
-        }
-        Expr::Unary { expr: e, .. }
-        | Expr::FieldAccess { expr: e, .. }
-        | Expr::Propagate { expr: e, .. }
-        | Expr::Consume { expr: e, .. }
-        | Expr::Relabel { expr: e, .. }
-        | Expr::Borrow { expr: e, .. }
-        | Expr::As { expr: e, .. } => expr_has_while_no_decreases(e),
-        Expr::FnCall { args, .. } => args.iter().any(expr_has_while_no_decreases),
-        Expr::MethodCall { receiver, args, .. } => {
-            expr_has_while_no_decreases(receiver) || args.iter().any(expr_has_while_no_decreases)
-        }
-        Expr::Construct { fields, .. } => {
-            fields.iter().any(|(_, e)| expr_has_while_no_decreases(e))
-        }
-        Expr::Spawn { fields, .. } => fields.iter().any(|(_, e)| expr_has_while_no_decreases(e)),
-        Expr::Select { arms, .. } => arms
-            .iter()
-            .any(|a| expr_has_while_no_decreases(&a.expr) || block_has_while_no_decreases(&a.body)),
-        Expr::List { elems, .. } | Expr::Set { elems, .. } => {
-            elems.iter().any(expr_has_while_no_decreases)
-        }
-        Expr::Map { pairs, .. } => pairs
-            .iter()
-            .any(|(k, v)| expr_has_while_no_decreases(k) || expr_has_while_no_decreases(v)),
-        Expr::Literal(..) | Expr::Ident(..) | Expr::Quantifier(..) => false,
     }
 }
 
 /// Return `true` if `block` (or any nested block/expression) contains a
 /// direct call to the function named `name` (used for recursion detection).
 fn block_calls_fn(block: &Block, name: &str) -> bool {
-    block.stmts.iter().any(|s| stmt_calls_fn(s, name))
+    let mut v = CallsFn { name, found: false };
+    walk_block(&mut v, block);
+    v.found
 }
 
-fn stmt_calls_fn(stmt: &Stmt, name: &str) -> bool {
-    match stmt {
-        Stmt::Let { init, .. } => expr_calls_fn(init, name),
-        Stmt::Assign { value, .. } => expr_calls_fn(value, name),
-        Stmt::Return { value: Some(e), .. } => expr_calls_fn(e, name),
-        Stmt::Return { value: None, .. } => false,
-        Stmt::Expr { expr, .. } => expr_calls_fn(expr, name),
-        Stmt::If {
-            cond, then, else_, ..
-        } => {
-            expr_calls_fn(cond, name)
-                || block_calls_fn(then, name)
-                || else_
-                    .as_ref()
-                    .map(|e| match e {
-                        ElseBranch::Block(b) => block_calls_fn(b, name),
-                        ElseBranch::If(s) => stmt_calls_fn(s, name),
-                    })
-                    .unwrap_or(false)
+struct CallsFn<'n> {
+    name: &'n str,
+    found: bool,
+}
+
+impl<'a> Visit<'a> for CallsFn<'_> {
+    fn visit_stmt(&mut self, s: &'a Stmt) {
+        if !self.found {
+            walk_stmt(self, s);
         }
-        Stmt::Match {
-            scrutinee, arms, ..
-        } => {
-            expr_calls_fn(scrutinee, name)
-                || arms.iter().any(|arm| match &arm.body {
-                    MatchBody::Expr(e) => expr_calls_fn(e, name),
-                    MatchBody::Block(b) => block_calls_fn(b, name),
-                })
-        }
-        Stmt::For { iter, body, .. } => expr_calls_fn(iter, name) || block_calls_fn(body, name),
-        Stmt::While { cond, body, .. } => expr_calls_fn(cond, name) || block_calls_fn(body, name),
     }
-}
-
-fn expr_calls_fn(expr: &Expr, name: &str) -> bool {
-    match expr {
-        Expr::FnCall { name: n, args, .. } => {
-            n == name || args.iter().any(|a| expr_calls_fn(a, name))
+    fn visit_expr(&mut self, e: &'a Expr) {
+        if self.found {
+            return;
         }
-        Expr::MethodCall { receiver, args, .. } => {
-            expr_calls_fn(receiver, name) || args.iter().any(|a| expr_calls_fn(a, name))
+        if let Expr::FnCall { name, .. } = e {
+            if *name == self.name {
+                self.found = true;
+                return;
+            }
         }
-        Expr::Binary { left, right, .. } => expr_calls_fn(left, name) || expr_calls_fn(right, name),
-        Expr::Unary { expr: e, .. }
-        | Expr::FieldAccess { expr: e, .. }
-        | Expr::Propagate { expr: e, .. }
-        | Expr::Consume { expr: e, .. }
-        | Expr::Relabel { expr: e, .. }
-        | Expr::Borrow { expr: e, .. }
-        | Expr::As { expr: e, .. } => expr_calls_fn(e, name),
-        Expr::Block(b) => block_calls_fn(b, name),
-        Expr::If {
-            cond, then, else_, ..
-        } => {
-            expr_calls_fn(cond, name)
-                || block_calls_fn(then, name)
-                || else_
-                    .as_ref()
-                    .map(|e| expr_calls_fn(e, name))
-                    .unwrap_or(false)
-        }
-        Expr::Match {
-            scrutinee, arms, ..
-        } => {
-            expr_calls_fn(scrutinee, name)
-                || arms.iter().any(|arm| match &arm.body {
-                    MatchBody::Expr(e) => expr_calls_fn(e, name),
-                    MatchBody::Block(b) => block_calls_fn(b, name),
-                })
-        }
-        Expr::Lambda { body, .. } => expr_calls_fn(body, name),
-        Expr::Construct { fields, .. } => fields.iter().any(|(_, e)| expr_calls_fn(e, name)),
-        Expr::Spawn { fields, .. } => fields.iter().any(|(_, e)| expr_calls_fn(e, name)),
-        Expr::Select { arms, .. } => arms
-            .iter()
-            .any(|a| expr_calls_fn(&a.expr, name) || block_calls_fn(&a.body, name)),
-        Expr::List { elems, .. } | Expr::Set { elems, .. } => {
-            elems.iter().any(|e| expr_calls_fn(e, name))
-        }
-        Expr::Map { pairs, .. } => pairs
-            .iter()
-            .any(|(k, v)| expr_calls_fn(k, name) || expr_calls_fn(v, name)),
-        Expr::Literal(..) | Expr::Ident(..) | Expr::Quantifier(..) => false,
+        walk_expr(self, e);
     }
 }
 
 /// Return `true` if `block` (or any nested block/expression) contains at
 /// least one function or method call.
 fn block_has_calls(block: &Block) -> bool {
-    block.stmts.iter().any(stmt_has_calls)
+    let mut v = HasCalls { found: false };
+    walk_block(&mut v, block);
+    v.found
 }
 
-fn stmt_has_calls(stmt: &Stmt) -> bool {
-    match stmt {
-        Stmt::Let { init, .. } => expr_has_calls(init),
-        Stmt::Assign { value, .. } => expr_has_calls(value),
-        Stmt::Return { value: Some(e), .. } => expr_has_calls(e),
-        Stmt::Return { value: None, .. } => false,
-        Stmt::Expr { expr, .. } => expr_has_calls(expr),
-        Stmt::If {
-            cond, then, else_, ..
-        } => {
-            expr_has_calls(cond)
-                || block_has_calls(then)
-                || else_
-                    .as_ref()
-                    .map(|e| match e {
-                        crate::mvl::parser::ast::ElseBranch::Block(b) => block_has_calls(b),
-                        crate::mvl::parser::ast::ElseBranch::If(s) => stmt_has_calls(s),
-                    })
-                    .unwrap_or(false)
+struct HasCalls {
+    found: bool,
+}
+
+impl<'a> Visit<'a> for HasCalls {
+    fn visit_stmt(&mut self, s: &'a Stmt) {
+        if !self.found {
+            walk_stmt(self, s);
         }
-        Stmt::Match {
-            scrutinee, arms, ..
-        } => {
-            expr_has_calls(scrutinee)
-                || arms.iter().any(|arm| match &arm.body {
-                    MatchBody::Expr(e) => expr_has_calls(e),
-                    MatchBody::Block(b) => block_has_calls(b),
-                })
-        }
-        Stmt::For { iter, body, .. } => expr_has_calls(iter) || block_has_calls(body),
-        Stmt::While { cond, body, .. } => expr_has_calls(cond) || block_has_calls(body),
     }
-}
-
-fn expr_has_calls(expr: &Expr) -> bool {
-    match expr {
-        Expr::FnCall { .. } | Expr::MethodCall { .. } => true,
-        Expr::Literal(..) | Expr::Ident(..) | Expr::Quantifier(..) => false,
-        Expr::FieldAccess { expr: e, .. } => expr_has_calls(e),
-        Expr::Unary { expr: e, .. } => expr_has_calls(e),
-        Expr::Binary { left, right, .. } => expr_has_calls(left) || expr_has_calls(right),
-        Expr::If {
-            cond, then, else_, ..
-        } => {
-            expr_has_calls(cond)
-                || block_has_calls(then)
-                || else_.as_ref().map(|e| expr_has_calls(e)).unwrap_or(false)
+    fn visit_expr(&mut self, e: &'a Expr) {
+        if self.found {
+            return;
         }
-        Expr::Match {
-            scrutinee, arms, ..
-        } => {
-            expr_has_calls(scrutinee)
-                || arms.iter().any(|arm| match &arm.body {
-                    MatchBody::Expr(e) => expr_has_calls(e),
-                    MatchBody::Block(b) => block_has_calls(b),
-                })
+        match e {
+            Expr::FnCall { .. } | Expr::MethodCall { .. } => self.found = true,
+            _ => walk_expr(self, e),
         }
-        Expr::Block(b) => block_has_calls(b),
-        Expr::Lambda { body, .. } => expr_has_calls(body),
-        Expr::Propagate { expr: e, .. }
-        | Expr::Consume { expr: e, .. }
-        | Expr::Relabel { expr: e, .. }
-        | Expr::Borrow { expr: e, .. }
-        | Expr::As { expr: e, .. } => expr_has_calls(e),
-        Expr::Construct { fields, .. } => fields.iter().any(|(_, e)| expr_has_calls(e)),
-        Expr::Spawn { fields, .. } => fields.iter().any(|(_, e)| expr_has_calls(e)),
-        Expr::Select { arms, .. } => arms
-            .iter()
-            .any(|a| expr_has_calls(&a.expr) || block_has_calls(&a.body)),
-        Expr::List { elems, .. } | Expr::Set { elems, .. } => elems.iter().any(expr_has_calls),
-        Expr::Map { pairs, .. } => pairs
-            .iter()
-            .any(|(k, v)| expr_has_calls(k) || expr_has_calls(v)),
     }
 }
 
