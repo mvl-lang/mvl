@@ -442,7 +442,13 @@ fn json_format_emits_structured_object_on_failure() {
         .expect("run mvl check --format=json");
     assert!(!out.status.success(), "check should fail on broken fixture");
     let stdout = String::from_utf8_lossy(&out.stdout);
-    for fragment in ["\"errors\":", "\"code\": \"E", "\"requirement\":", "\"location\":", "\"summary\":"] {
+    for fragment in [
+        "\"errors\":",
+        "\"code\": \"E",
+        "\"requirement\":",
+        "\"location\":",
+        "\"summary\":",
+    ] {
         assert!(
             stdout.contains(fragment),
             "expected JSON fragment {fragment:?} in stdout:\n{stdout}"

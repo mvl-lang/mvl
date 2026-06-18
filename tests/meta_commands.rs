@@ -43,10 +43,19 @@ fn mvl_init_creates_skeleton() {
         .expect("run mvl init");
     assert!(out.status.success(), "mvl init failed: {:?}", out);
     assert!(tmp.0.join("mvl.toml").is_file(), "mvl.toml not created");
-    assert!(tmp.0.join("src").join("main.mvl").is_file(), "src/main.mvl not created");
+    assert!(
+        tmp.0.join("src").join("main.mvl").is_file(),
+        "src/main.mvl not created"
+    );
     let toml = std::fs::read_to_string(tmp.0.join("mvl.toml")).expect("read mvl.toml");
-    assert!(toml.contains("name ="), "mvl.toml missing name field:\n{toml}");
-    assert!(toml.contains("version ="), "mvl.toml missing version field:\n{toml}");
+    assert!(
+        toml.contains("name ="),
+        "mvl.toml missing name field:\n{toml}"
+    );
+    assert!(
+        toml.contains("version ="),
+        "mvl.toml missing version field:\n{toml}"
+    );
 }
 
 #[test]
@@ -59,9 +68,16 @@ fn mvl_init_rejects_existing_mvl_toml() {
         .current_dir(&tmp.0)
         .output()
         .expect("run mvl init");
-    assert!(!out.status.success(), "expected exit non-zero, got: {:?}", out);
+    assert!(
+        !out.status.success(),
+        "expected exit non-zero, got: {:?}",
+        out
+    );
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("already exists"), "expected hint in stderr:\n{stderr}");
+    assert!(
+        stderr.contains("already exists"),
+        "expected hint in stderr:\n{stderr}"
+    );
 }
 
 #[test]
@@ -77,7 +93,10 @@ fn mvl_sbom_help_exits_zero() {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
-    assert!(combined.contains("sbom"), "expected 'sbom' in help output:\n{combined}");
+    assert!(
+        combined.contains("sbom"),
+        "expected 'sbom' in help output:\n{combined}"
+    );
     assert!(
         combined.contains("--format") || combined.contains("--output"),
         "expected flag documentation in help output:\n{combined}"
@@ -103,7 +122,11 @@ fn mvl_sbom_writes_to_output_file() {
         .output()
         .expect("run mvl sbom --output=…");
     assert!(out.status.success(), "mvl sbom --output failed: {:?}", out);
-    assert!(sbom_path.is_file(), "SBOM file not written at {}", sbom_path.display());
+    assert!(
+        sbom_path.is_file(),
+        "SBOM file not written at {}",
+        sbom_path.display()
+    );
     let contents = std::fs::read_to_string(&sbom_path).expect("read SBOM file");
     assert!(
         contents.contains("bomFormat") || contents.contains("CycloneDX"),
