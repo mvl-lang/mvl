@@ -402,14 +402,24 @@ fn type_uses_opaque(ty: &crate::mvl::parser::ast::TypeExpr, opaque: &[&str]) -> 
 /// Build a map from package short name (e.g. `"http"`) to its source directory
 /// in the XDG cache (e.g. `~/.local/share/mvl/pkg/github.com_mvl-lang_pkg-http/0.2.0`).
 ///
-/// Resolution order per package:
-///   1. Read `mvl.lock` from `project_root` to enumerate locked packages.
-///   2. For each entry, look up the XDG cache dir and read its `mvl.toml` for the short name.
+/// Resolution order:
+///   1. Self-package: if `project_root/mvl.toml` names a package, map it to `project_root`
+///      so a package's own smoke tests can `use pkg.<name>` without a published release.
+///   2. Locked packages: read `mvl.lock` from `project_root`, look up each entry in the
+///      XDG cache, and insert its short name from the cached `mvl.toml`.
 ///
 /// Returns an empty map if no lock file exists or the cache is empty.
 fn build_pkg_name_map(project_root: &Path) -> std::collections::HashMap<String, PathBuf> {
     let lockfile = packages::lock::LockFile::load_or_empty(project_root);
     let mut map = std::collections::HashMap::new();
+
+    // Self-package: if project_root IS a package, make it importable by its own smoke tests.
+    if let Ok(content) = fs::read_to_string(project_root.join("mvl.toml")) {
+        if let Ok(manifest) = packages::manifest::Manifest::parse(&content) {
+            map.insert(manifest.package.name, project_root.to_path_buf());
+        }
+    }
+
     for pkg in &lockfile.packages {
         let cache_dir = packages::fetch::pkg_cache_dir(&pkg.name, &pkg.version);
         if !cache_dir.exists() {
