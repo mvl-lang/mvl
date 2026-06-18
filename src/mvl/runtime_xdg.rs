@@ -95,7 +95,10 @@ pub fn install_runtime(version: &str) {
     let dest = mvl_data_home().join("runtime").join(version);
 
     if dest.join("rust").join("Cargo.toml").exists() {
-        println!("MVL runtime {version} is already installed at {}", dest.display());
+        println!(
+            "MVL runtime {version} is already installed at {}",
+            dest.display()
+        );
         return;
     }
 
