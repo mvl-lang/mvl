@@ -4,7 +4,7 @@ exclude = ["fuzz", "tests/spikes/003-gzip/bench"]
 
 [package]
 name = "mvl"
-version = "0.211.1"
+version = "0.211.2"
 edition = "2021"
 description = "MVL — Maximum Verifiable Language compiler"
 license = "Apache-2.0"
@@ -22,6 +22,8 @@ openapi = []
 [dependencies]
 ureq = "2"
 tempfile = "3"
+tar = "0.4"
+flate2 = "1"
 z3 = { version = "0.12", optional = true }
 
 [target.'cfg(unix)'.dependencies]

@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.211.2] - 2026-06-18
+
+### Fixed
+
+- **Runtime resolution: XDG-based lookup instead of source-tree path** (#1422) — The `mvl` binary no longer hardcodes the absolute source-tree path at compile time. All `mvl run`, `mvl test`, `mvl fuzz`, `mvl mutate`, `mvl mcdc`, and tokio-target commands now resolve the runtime from `~/.local/share/mvl/runtime/{version}/`. The runtime is downloaded by `mvl self install` as a separate release artifact (`mvl-runtime-{version}.tar.gz`). CI jobs set up symlinks to the source-tree runtime for local development. `MVL_HOME` overrides the XDG base for testing and offline environments.
+
 ## [0.211.1] - 2026-06-18
 
 ### Fixed

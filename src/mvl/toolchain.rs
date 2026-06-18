@@ -214,6 +214,9 @@ pub fn cmd_self_install(version: &str) {
     println!("Initialising stdlib for v{version}...");
     run_init(&bin_path, version);
 
+    // Download and install the runtime artifact.
+    super::runtime_xdg::install_runtime(version);
+
     // Create versioned symlink: `~/.local/bin/mvl@{version}`.
     let link = version_symlink(version);
     fs::create_dir_all(local_bin_dir()).unwrap_or_else(|e| {
