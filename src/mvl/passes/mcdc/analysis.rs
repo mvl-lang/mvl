@@ -30,6 +30,7 @@
 use crate::mvl::parser::ast::{
     BinaryOp, Block, Decl, ElseBranch, Expr, LogicOp, MatchBody, Program, RefExpr, Stmt,
 };
+use crate::mvl::parser::visit::{walk_block, walk_stmt, Visit};
 
 /// Identifies the kind of decision point.
 #[derive(Debug, Clone, PartialEq)]
@@ -115,245 +116,134 @@ fn collect_from_block(
     decisions: &mut Vec<DecisionInfo>,
     next_id: &mut usize,
 ) {
-    for stmt in &block.stmts {
-        collect_from_stmt(stmt, fn_name, file, decisions, next_id);
+    let mut v = DecisionCollector { decisions, next_id, fn_name, file };
+    walk_block(&mut v, block);
+}
+
+struct DecisionCollector<'n> {
+    decisions: &'n mut Vec<DecisionInfo>,
+    next_id: &'n mut usize,
+    fn_name: &'n str,
+    file: &'n str,
+}
+
+impl<'n> DecisionCollector<'n> {
+    fn push_decision(&mut self, line: u32, kind: DecisionKind, clause_count: usize) {
+        self.decisions.push(DecisionInfo {
+            id: *self.next_id,
+            fn_name: self.fn_name.to_string(),
+            file: self.file.to_string(),
+            line,
+            kind,
+            clause_count,
+            is_effectful: false,
+        });
+        *self.next_id += 1;
     }
 }
 
-fn collect_from_stmt(
-    stmt: &Stmt,
-    fn_name: &str,
-    file: &str,
-    decisions: &mut Vec<DecisionInfo>,
-    next_id: &mut usize,
-) {
-    match stmt {
-        Stmt::If {
-            cond,
-            then,
-            else_,
-            span,
-        } => {
-            let clause_count = count_clauses(cond);
-            if clause_count > 1 {
-                decisions.push(DecisionInfo {
-                    id: *next_id,
-                    fn_name: fn_name.to_string(),
-                    file: file.to_string(),
-                    line: span.line,
-                    kind: DecisionKind::If,
-                    clause_count,
-                    is_effectful: false,
-                });
-                *next_id += 1;
-            }
-            collect_from_block(then, fn_name, file, decisions, next_id);
-            if let Some(else_branch) = else_ {
-                match else_branch {
-                    ElseBranch::Block(b) => {
-                        collect_from_block(b, fn_name, file, decisions, next_id);
-                    }
-                    ElseBranch::If(s) => {
-                        collect_from_stmt(s, fn_name, file, decisions, next_id);
+impl<'ast> Visit<'ast> for DecisionCollector<'_> {
+    fn visit_stmt(&mut self, s: &'ast Stmt) {
+        match s {
+            Stmt::If { cond, then, else_, span } => {
+                let clause_count = count_clauses(cond);
+                if clause_count > 1 {
+                    self.push_decision(span.line, DecisionKind::If, clause_count);
+                }
+                self.visit_block(then);
+                if let Some(else_branch) = else_ {
+                    match else_branch {
+                        ElseBranch::Block(b) => self.visit_block(b),
+                        ElseBranch::If(s) => self.visit_stmt(s),
                     }
                 }
             }
-        }
-        Stmt::While {
-            cond, body, span, ..
-        } => {
-            let clause_count = count_clauses(cond);
-            if clause_count > 1 {
-                decisions.push(DecisionInfo {
-                    id: *next_id,
-                    fn_name: fn_name.to_string(),
-                    file: file.to_string(),
-                    line: span.line,
-                    kind: DecisionKind::While,
-                    clause_count,
-                    is_effectful: false,
-                });
-                *next_id += 1;
+            Stmt::While { cond, body, span, .. } => {
+                let clause_count = count_clauses(cond);
+                if clause_count > 1 {
+                    self.push_decision(span.line, DecisionKind::While, clause_count);
+                }
+                self.visit_block(body);
             }
-            collect_from_block(body, fn_name, file, decisions, next_id);
-        }
-        Stmt::Match {
-            scrutinee,
-            arms,
-            span,
-        } => {
-            // Recurse into scrutinee first (mirrors transpiler emission order).
-            collect_from_expr(scrutinee, fn_name, file, decisions, next_id);
-            // Register match arm coverage decision (each arm is an outcome).
-            if arms.len() >= 2 {
-                decisions.push(DecisionInfo {
-                    id: *next_id,
-                    fn_name: fn_name.to_string(),
-                    file: file.to_string(),
-                    line: span.line,
-                    kind: DecisionKind::Match,
-                    clause_count: arms.len(),
-                    is_effectful: false,
-                });
-                *next_id += 1;
-            }
-            // Register MatchGuard decisions for compound guards (all arms, in order,
-            // before recursing into bodies — mirrors transpiler pre-allocation order).
-            for arm in arms.iter() {
-                if let Some(guard) = &arm.guard {
-                    let n = count_clauses_ref(guard);
-                    if n >= 2 {
-                        decisions.push(DecisionInfo {
-                            id: *next_id,
-                            fn_name: fn_name.to_string(),
-                            file: file.to_string(),
-                            line: arm.span.line,
-                            kind: DecisionKind::MatchGuard,
-                            clause_count: n,
-                            is_effectful: false,
-                        });
-                        *next_id += 1;
+            Stmt::Match { scrutinee, arms, span } => {
+                // Ordering mirrors transpiler emission: scrutinee → match decision →
+                // all guard decisions → arm bodies.
+                self.visit_expr(scrutinee);
+                if arms.len() >= 2 {
+                    self.push_decision(span.line, DecisionKind::Match, arms.len());
+                }
+                for arm in arms.iter() {
+                    if let Some(guard) = &arm.guard {
+                        let n = count_clauses_ref(guard);
+                        if n >= 2 {
+                            self.push_decision(arm.span.line, DecisionKind::MatchGuard, n);
+                        }
+                    }
+                }
+                for arm in arms {
+                    match &arm.body {
+                        MatchBody::Block(b) => self.visit_block(b),
+                        MatchBody::Expr(e) => self.visit_expr(e),
                     }
                 }
             }
-            // Recurse into arm bodies.
-            for arm in arms {
-                match &arm.body {
-                    MatchBody::Block(b) => {
-                        collect_from_block(b, fn_name, file, decisions, next_id);
-                    }
-                    MatchBody::Expr(e) => {
-                        collect_from_expr(e, fn_name, file, decisions, next_id);
-                    }
-                }
-            }
+            Stmt::For { body, .. } => self.visit_block(body),
+            _ => walk_stmt(self, s),
         }
-        Stmt::For { body, .. } => {
-            collect_from_block(body, fn_name, file, decisions, next_id);
-        }
-        Stmt::Let { init, .. } => {
-            collect_from_expr(init, fn_name, file, decisions, next_id);
-        }
-        Stmt::Assign { value, .. } => {
-            collect_from_expr(value, fn_name, file, decisions, next_id);
-        }
-        Stmt::Expr { expr, .. } => {
-            collect_from_expr(expr, fn_name, file, decisions, next_id);
-        }
-        Stmt::Return { value: Some(e), .. } => {
-            collect_from_expr(e, fn_name, file, decisions, next_id);
-        }
-        Stmt::Return { value: None, .. } => {}
     }
-}
 
-fn collect_from_expr(
-    expr: &Expr,
-    fn_name: &str,
-    file: &str,
-    decisions: &mut Vec<DecisionInfo>,
-    next_id: &mut usize,
-) {
-    match expr {
-        Expr::If {
-            cond,
-            then,
-            else_,
-            span,
-        } => {
-            let clause_count = count_clauses(cond);
-            if clause_count > 1 {
-                decisions.push(DecisionInfo {
-                    id: *next_id,
-                    fn_name: fn_name.to_string(),
-                    file: file.to_string(),
-                    line: span.line,
-                    kind: DecisionKind::If,
-                    clause_count,
-                    is_effectful: false,
-                });
-                *next_id += 1;
+    fn visit_expr(&mut self, e: &'ast Expr) {
+        match e {
+            Expr::If { cond, then, else_, span } => {
+                let clause_count = count_clauses(cond);
+                if clause_count > 1 {
+                    self.push_decision(span.line, DecisionKind::If, clause_count);
+                }
+                self.visit_block(then);
+                if let Some(e) = else_ {
+                    self.visit_expr(e);
+                }
             }
-            collect_from_block(then, fn_name, file, decisions, next_id);
-            if let Some(e) = else_ {
-                collect_from_expr(e, fn_name, file, decisions, next_id);
-            }
-        }
-        Expr::Binary { left, right, .. } => {
-            collect_from_expr(left, fn_name, file, decisions, next_id);
-            collect_from_expr(right, fn_name, file, decisions, next_id);
-        }
-        Expr::Unary { expr: e, .. } | Expr::Borrow { expr: e, .. } => {
-            collect_from_expr(e, fn_name, file, decisions, next_id);
-        }
-        Expr::FnCall { args, .. } => {
-            for arg in args {
-                collect_from_expr(arg, fn_name, file, decisions, next_id);
-            }
-        }
-        Expr::MethodCall { receiver, args, .. } => {
-            collect_from_expr(receiver, fn_name, file, decisions, next_id);
-            for arg in args {
-                collect_from_expr(arg, fn_name, file, decisions, next_id);
-            }
-        }
-        Expr::Match {
-            scrutinee,
-            arms,
-            span,
-            ..
-        } => {
-            collect_from_expr(scrutinee, fn_name, file, decisions, next_id);
-            // Register match arm coverage decision.
-            if arms.len() >= 2 {
-                decisions.push(DecisionInfo {
-                    id: *next_id,
-                    fn_name: fn_name.to_string(),
-                    file: file.to_string(),
-                    line: span.line,
-                    kind: DecisionKind::Match,
-                    clause_count: arms.len(),
-                    is_effectful: false,
-                });
-                *next_id += 1;
-            }
-            // Register MatchGuard decisions for compound guards (all, before bodies).
-            for arm in arms.iter() {
-                if let Some(guard) = &arm.guard {
-                    let n = count_clauses_ref(guard);
-                    if n >= 2 {
-                        decisions.push(DecisionInfo {
-                            id: *next_id,
-                            fn_name: fn_name.to_string(),
-                            file: file.to_string(),
-                            line: arm.span.line,
-                            kind: DecisionKind::MatchGuard,
-                            clause_count: n,
-                            is_effectful: false,
-                        });
-                        *next_id += 1;
+            Expr::Match { scrutinee, arms, span, .. } => {
+                self.visit_expr(scrutinee);
+                if arms.len() >= 2 {
+                    self.push_decision(span.line, DecisionKind::Match, arms.len());
+                }
+                for arm in arms.iter() {
+                    if let Some(guard) = &arm.guard {
+                        let n = count_clauses_ref(guard);
+                        if n >= 2 {
+                            self.push_decision(arm.span.line, DecisionKind::MatchGuard, n);
+                        }
+                    }
+                }
+                for arm in arms {
+                    match &arm.body {
+                        MatchBody::Block(b) => self.visit_block(b),
+                        MatchBody::Expr(e) => self.visit_expr(e),
                     }
                 }
             }
-            // Recurse into arm bodies.
-            for arm in arms {
-                match &arm.body {
-                    MatchBody::Block(b) => {
-                        collect_from_block(b, fn_name, file, decisions, next_id);
-                    }
-                    MatchBody::Expr(e) => {
-                        collect_from_expr(e, fn_name, file, decisions, next_id);
-                    }
+            Expr::Binary { left, right, .. } => {
+                self.visit_expr(left);
+                self.visit_expr(right);
+            }
+            Expr::Unary { expr, .. } | Expr::Borrow { expr, .. } => self.visit_expr(expr),
+            Expr::FnCall { args, .. } => {
+                for a in args {
+                    self.visit_expr(a);
                 }
             }
+            Expr::MethodCall { receiver, args, .. } => {
+                self.visit_expr(receiver);
+                for a in args {
+                    self.visit_expr(a);
+                }
+            }
+            Expr::FieldAccess { expr, .. } => self.visit_expr(expr),
+            Expr::Literal(..) | Expr::Ident(..) => {}
+            _ => {} // Intentionally: MC/DC only needs if/while/match decisions
         }
-        Expr::FieldAccess { expr: e, .. } => {
-            collect_from_expr(e, fn_name, file, decisions, next_id);
-        }
-        Expr::Literal(..) | Expr::Ident(..) => {}
-        // Catch-all for any future expression variants
-        #[allow(unreachable_patterns)]
-        _ => {}
     }
 }
 

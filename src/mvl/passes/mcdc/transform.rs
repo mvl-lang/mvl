@@ -21,7 +21,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::mvl::ir::visit::{walk_tir_block, walk_tir_expr, Visit as TirVisit};
-use crate::mvl::parser::ast::{Block, Decl, ElseBranch, Expr, MatchBody, Program, Stmt};
+use crate::mvl::parser::ast::{Block, Decl, Expr, MatchBody, Program, Stmt};
+use crate::mvl::parser::visit::{walk_block, walk_stmt, Visit as AstVisit};
 
 /// Maps function name → per-parameter field-path sets.
 ///
@@ -158,120 +159,82 @@ fn tir_expr_to_path(expr: &crate::mvl::ir::TirExpr) -> Option<String> {
 }
 
 fn collect_paths_from_block(block: &Block, out: &mut Vec<String>) {
-    for stmt in &block.stmts {
-        collect_paths_from_stmt(stmt, out);
-    }
+    let mut v = CollectPaths { out };
+    walk_block(&mut v, block);
 }
 
-fn collect_paths_from_stmt(stmt: &Stmt, out: &mut Vec<String>) {
-    match stmt {
-        Stmt::Let { init, .. } => collect_paths_from_expr(init, out),
-        Stmt::Assign { value, .. } => collect_paths_from_expr(value, out),
-        Stmt::Return { value: Some(e), .. } => collect_paths_from_expr(e, out),
-        Stmt::Return { value: None, .. } => {}
-        Stmt::Expr { expr, .. } => collect_paths_from_expr(expr, out),
-        Stmt::If {
-            cond, then, else_, ..
-        } => {
-            collect_paths_from_expr(cond, out);
-            collect_paths_from_block(then, out);
-            if let Some(eb) = else_ {
-                match eb {
-                    ElseBranch::Block(b) => collect_paths_from_block(b, out),
-                    ElseBranch::If(s) => collect_paths_from_stmt(s, out),
-                }
-            }
-        }
-        Stmt::Match {
-            scrutinee, arms, ..
-        } => {
-            collect_paths_from_expr(scrutinee, out);
-            for arm in arms {
-                match &arm.body {
-                    MatchBody::Block(b) => collect_paths_from_block(b, out),
-                    MatchBody::Expr(e) => collect_paths_from_expr(e, out),
-                }
-            }
-        }
-        Stmt::For { iter, body, .. } => {
-            collect_paths_from_expr(iter, out);
-            collect_paths_from_block(body, out);
-        }
-        Stmt::While { cond, body, .. } => {
-            collect_paths_from_expr(cond, out);
-            collect_paths_from_block(body, out);
-        }
-    }
+struct CollectPaths<'a> {
+    out: &'a mut Vec<String>,
 }
 
-fn collect_paths_from_expr(expr: &Expr, out: &mut Vec<String>) {
-    // `expr_to_path` extracts the full dotted path for pure ident / field-access chains.
-    // Return early — don't recurse further so sub-paths aren't double-counted.
-    if let Some(path) = expr_to_path(expr) {
-        out.push(path);
-        return;
-    }
-    match expr {
-        Expr::Binary { left, right, .. } => {
-            collect_paths_from_expr(left, out);
-            collect_paths_from_expr(right, out);
+impl<'ast> AstVisit<'ast> for CollectPaths<'_> {
+    fn visit_expr(&mut self, e: &'ast Expr) {
+        // Short-circuit: capture pure ident/field-access chains without sub-path double-counting.
+        if let Some(path) = expr_to_path(e) {
+            self.out.push(path);
+            return;
         }
-        Expr::Unary { expr: e, .. }
-        | Expr::Borrow { expr: e, .. }
-        | Expr::Propagate { expr: e, .. }
-        | Expr::Consume { expr: e, .. }
-        | Expr::Relabel { expr: e, .. } => collect_paths_from_expr(e, out),
-        Expr::FnCall { args, .. } => {
-            for a in args {
-                collect_paths_from_expr(a, out);
+        match e {
+            Expr::Binary { left, right, .. } => {
+                self.visit_expr(left);
+                self.visit_expr(right);
             }
-        }
-        Expr::MethodCall { receiver, args, .. } => {
-            collect_paths_from_expr(receiver, out);
-            for a in args {
-                collect_paths_from_expr(a, out);
-            }
-        }
-        Expr::If {
-            cond, then, else_, ..
-        } => {
-            collect_paths_from_expr(cond, out);
-            collect_paths_from_block(then, out);
-            if let Some(e) = else_ {
-                collect_paths_from_expr(e, out);
-            }
-        }
-        Expr::Match {
-            scrutinee, arms, ..
-        } => {
-            collect_paths_from_expr(scrutinee, out);
-            for arm in arms {
-                match &arm.body {
-                    MatchBody::Block(b) => collect_paths_from_block(b, out),
-                    MatchBody::Expr(e) => collect_paths_from_expr(e, out),
+            Expr::Unary { expr, .. }
+            | Expr::Borrow { expr, .. }
+            | Expr::Propagate { expr, .. }
+            | Expr::Consume { expr, .. }
+            | Expr::Relabel { expr, .. } => self.visit_expr(expr),
+            Expr::FnCall { args, .. } => {
+                for a in args {
+                    self.visit_expr(a);
                 }
             }
-        }
-        Expr::Construct { fields, .. } => {
-            for (_, e) in fields {
-                collect_paths_from_expr(e, out);
+            Expr::MethodCall { receiver, args, .. } => {
+                self.visit_expr(receiver);
+                for a in args {
+                    self.visit_expr(a);
+                }
             }
-        }
-        Expr::Lambda { body, .. } => collect_paths_from_expr(body, out),
-        Expr::Block(block) => collect_paths_from_block(block, out),
-        Expr::List { elems, .. } | Expr::Set { elems, .. } => {
-            for e in elems {
-                collect_paths_from_expr(e, out);
+            Expr::If { cond, then, else_, .. } => {
+                self.visit_expr(cond);
+                self.visit_block(then);
+                if let Some(e) = else_ {
+                    self.visit_expr(e);
+                }
             }
-        }
-        Expr::Map { pairs, .. } => {
-            for (k, v) in pairs {
-                collect_paths_from_expr(k, out);
-                collect_paths_from_expr(v, out);
+            Expr::Match { scrutinee, arms, .. } => {
+                self.visit_expr(scrutinee);
+                for arm in arms {
+                    match &arm.body {
+                        MatchBody::Block(b) => self.visit_block(b),
+                        MatchBody::Expr(e) => self.visit_expr(e),
+                    }
+                }
             }
+            Expr::Construct { fields, .. } => {
+                for (_, e) in fields {
+                    self.visit_expr(e);
+                }
+            }
+            Expr::Lambda { body, .. } => self.visit_expr(body),
+            Expr::Block(b) => self.visit_block(b),
+            Expr::List { elems, .. } | Expr::Set { elems, .. } => {
+                for e in elems {
+                    self.visit_expr(e);
+                }
+            }
+            Expr::Map { pairs, .. } => {
+                for (k, v) in pairs {
+                    self.visit_expr(k);
+                    self.visit_expr(v);
+                }
+            }
+            // FieldAccess with non-path base, Literal, Ident, Spawn, Select, Quantifier, As
+            _ => {}
         }
-        // Literal, Ident already handled by expr_to_path above.
-        _ => {}
+    }
+    fn visit_stmt(&mut self, s: &'ast Stmt) {
+        walk_stmt(self, s);
     }
 }
 
