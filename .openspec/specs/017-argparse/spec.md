@@ -238,6 +238,11 @@ and `str_parse_float`.  Coercion failure MUST trigger Requirement 4 (exit).
 
 **Implementation:** `std/args.mvl::coerce_arg`
 
+**Tests:** `tests/stdlib/args_test.mvl::args_get_int_returns_value_when_present`,
+`tests/stdlib/args_test.mvl::args_get_float_returns_value_when_present`
+(unit-level coercion of Int and Float through the `ArgValue` variants);
+`tests/integration/compile_and_run/args.sh` (`--threshold -0.5` succeeds, `--threshold abc` exits 1 — end-to-end coercion via `parse_args`).
+
 #### Scenario: Int coercion
 
 - GIVEN schema `[required("port", ArgType::Int)]`

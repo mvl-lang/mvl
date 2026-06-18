@@ -241,6 +241,11 @@ exhausted.
 
 **Issue:** #594
 
+**Tests:** `tests/error_messages.rs::refinement_stats_prints_header_and_layer_for_proven_file`,
+`tests/error_messages.rs::refinement_stats_respects_solver_mode_label`
+(end-to-end CLI dispatch through `--refinement-solver=…` and `--refinement-stats`);
+`tests/requirements.rs::req10_refinements_proven` (layered solver dispatch over the proven corpus).
+
 #### Scenario: End-to-end dispatch
 
 - GIVEN a refinement predicate at a call site
@@ -271,6 +276,11 @@ involving `len`, `concat`, `push`, and other standard operations.
 
 **Issue:** #596
 
+**Tests:** `src/mvl/checker/solver/rewrite.rs::tests::string_len_hello`,
+`src/mvl/checker/solver/rewrite.rs::tests::string_len_empty`,
+`src/mvl/checker/solver/rewrite.rs::tests::string_is_empty_true`
+(rewrite rules for builtin string and option operations).
+
 #### Scenario: String length rewrite
 
 - GIVEN predicate `len(concat(a, b)) == len(a) + len(b)`
@@ -300,6 +310,11 @@ the Z3 context, enabling proofs that require universally quantified properties.
 
 **Issue:** #597
 
+**Tests:** `src/mvl/checker/solver/layer5.rs::tests::z3_axiom_string_literal_len_lt_bound`,
+`src/mvl/checker/solver/layer5.rs::tests::z3_axiom_string_literal_len_nonneg`,
+`src/mvl/checker/solver/layer5.rs::tests::z3_axiom_variable_len_hypothesis_implies_nonneg`
+(Z3 proofs that succeed because of the loaded `len` axioms).
+
 #### Scenario: String length axiom
 
 - GIVEN Z3 context with string axioms loaded
@@ -322,6 +337,10 @@ performance hypothesis.
 **Implementation:** `benches/refinement_solver.rs`
 
 **Issue:** #595
+
+**Tests:** `benches/refinement_solver.rs::bench_layers`,
+`benches/refinement_solver.rs::bench_modes`,
+`benches/refinement_solver.rs::bench_corpus` (Criterion benchmarks: per-layer micro-benchmark, mode comparison, full-corpus wall-clock).
 
 #### Scenario: Corpus benchmark
 
