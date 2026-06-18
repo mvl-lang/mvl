@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.211.1] - 2026-06-18
+
+### Fixed
+
+- **Type checker: allow `for` loops in `partial fn`** (#1426) — `for` loops iterate over finite collections and always terminate, so they should be allowed in `partial fn` alongside `while`. Removed the inverted-logic guard that was incorrectly rejecting them.
+
 ## [0.211.0] - 2026-06-14
 
 ### Added
