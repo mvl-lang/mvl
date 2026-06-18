@@ -211,7 +211,7 @@ In Phase 4, the compiler SHOULD support `.mvlo` precompiled modules containing L
 
 `mvl audit` SHOULD report the trust composition of the final binary: percentage of MVL-verified code vs extern vs foreign.
 
-**Implementation:** `src/cli/audit.rs::audit_trust` — deferred to Phase 7 (trust reporting not yet implemented)
+**Implementation:** `src/cli/audit.rs::audit_trust` (planned — deferred to Phase 7)
 
 #### Scenario: Audit a project with mixed trust levels
 
