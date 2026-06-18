@@ -80,7 +80,6 @@ pub type CheckError = enum {
     PartialCallInTotal    { callee: String, span: SourceLoc },
     UnprovenRecursion     { fn_name: String, span: SourceLoc },
     MutualRecursionInTotal { fn_name: String, cycle_with: String, span: SourceLoc },
-    ForLoopInPartialFn    { span: SourceLoc },
     DecreasesNotBounded   { fn_name: String, measure: String, span: SourceLoc },
     DecreasesNotDecreasing { fn_name: String, measure: String, span: SourceLoc },
     // ── Req 9: Data race freedom ──────────────────────────────────────────
