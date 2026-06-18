@@ -188,3 +188,81 @@ test fn from_bytes_empty() -> Unit {
     let bytes: List[Byte] = [];
     assert_eq(String::from_bytes(bytes), "")
 }
+
+// ── hex_char_value ────────────────────────────────────────────────────────────
+
+test fn hex_char_value_digits() -> Unit {
+    assert_eq("0".hex_char_value().unwrap_or(-1), 0);
+    assert_eq("9".hex_char_value().unwrap_or(-1), 9);
+}
+
+test fn hex_char_value_lowercase() -> Unit {
+    assert_eq("a".hex_char_value().unwrap_or(-1), 10);
+    assert_eq("f".hex_char_value().unwrap_or(-1), 15);
+}
+
+test fn hex_char_value_uppercase() -> Unit {
+    assert_eq("A".hex_char_value().unwrap_or(-1), 10);
+    assert_eq("F".hex_char_value().unwrap_or(-1), 15);
+}
+
+test fn hex_char_value_non_hex_is_none() -> Unit {
+    assert_eq("g".hex_char_value().is_none(), true);
+    assert_eq("G".hex_char_value().is_none(), true);
+    assert_eq(" ".hex_char_value().is_none(), true);
+}
+
+test fn hex_char_value_case_insensitive() -> Unit {
+    assert_eq("b".hex_char_value().unwrap_or(-1), 11);
+    assert_eq("B".hex_char_value().unwrap_or(-1), 11);
+    assert_eq("e".hex_char_value().unwrap_or(-1), 14);
+    assert_eq("E".hex_char_value().unwrap_or(-1), 14);
+}
+
+// ── is_hex_char ───────────────────────────────────────────────────────────────
+
+test fn is_hex_char_digits() -> Unit {
+    assert_eq("0".is_hex_char(), true);
+    assert_eq("9".is_hex_char(), true);
+}
+
+test fn is_hex_char_lowercase() -> Unit {
+    assert_eq("a".is_hex_char(), true);
+    assert_eq("f".is_hex_char(), true);
+}
+
+test fn is_hex_char_uppercase() -> Unit {
+    assert_eq("A".is_hex_char(), true);
+    assert_eq("F".is_hex_char(), true);
+}
+
+test fn is_hex_char_non_hex() -> Unit {
+    assert_eq("g".is_hex_char(), false);
+    assert_eq("G".is_hex_char(), false);
+    assert_eq(" ".is_hex_char(), false);
+}
+
+// ── is_hex ────────────────────────────────────────────────────────────────────
+
+test fn is_hex_lowercase() -> Unit {
+    assert_eq("deadbeef".is_hex(), true);
+    assert_eq("0123456789abcdef".is_hex(), true);
+}
+
+test fn is_hex_uppercase() -> Unit {
+    assert_eq("DEADBEEF".is_hex(), true);
+    assert_eq("ABCDEF".is_hex(), true);
+}
+
+test fn is_hex_mixed_case() -> Unit {
+    assert_eq("DeAdBeEf".is_hex(), true);
+}
+
+test fn is_hex_empty() -> Unit {
+    assert_eq("".is_hex(), true);
+}
+
+test fn is_hex_invalid() -> Unit {
+    assert_eq("xyz".is_hex(), false);
+    assert_eq("0xdeadbeef".is_hex(), false);
+}
