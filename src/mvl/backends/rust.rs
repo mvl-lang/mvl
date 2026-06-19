@@ -33,6 +33,7 @@ pub mod emit_actors;
 pub mod emit_exprs;
 pub mod emit_functions;
 pub mod emit_impls;
+pub mod emit_method_call;
 pub mod emit_stmts;
 pub mod emit_types;
 pub mod emitter;
