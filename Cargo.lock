@@ -710,7 +710,7 @@ dependencies = [
 
 [[package]]
 name = "mvl"
-version = "0.211.2"
+version = "0.213.1"
 dependencies = [
  "criterion",
  "flate2",

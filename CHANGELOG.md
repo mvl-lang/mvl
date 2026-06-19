@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [0.213.1] - 2026-06-19
+
+### Fixed
+
+- **`into_inner()` / `as_inner()` on IFC label wrapper types** — the Rust backend incorrectly emitted `v.into_inner()` (where `v: Tainted[String]`) as a free function call `into_inner(v)` because labeled receiver types matched the UFCS fallthrough. Fixed by adding an early match arm in `emit_method_call.rs`; the type checker's `infer_method_call` now also resolves these methods to their inner type (`Tainted[T].into_inner()` → `T`). Regression test: `tests/corpus/08_ifc/label_into_inner.mvl`.
+- **`tcp_read_request` now reads request body** — the runtime stopped reading at the blank line separator between headers and body, leaving POST/PUT/PATCH bodies empty (`body_json` returned "unexpected end of input"). Fixed by parsing the `Content-Length` header after reading headers and reading exactly that many additional bytes from the socket.
+
 ## [0.213.0] - 2026-06-18
 
 ### Added
