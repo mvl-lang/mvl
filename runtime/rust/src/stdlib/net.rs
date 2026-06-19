@@ -180,13 +180,11 @@ pub fn _tcp_read_request(stream: TcpStream) -> Result<String, NetError> {
     }
     // Parse Content-Length header to read the body.
     let header_str: String = header_buf.iter().map(|&b| b as char).collect();
-    let content_length: Option<usize> = header_str
-        .lines()
-        .find_map(|line| {
-            let lower = line.to_ascii_lowercase();
-            let rest = lower.strip_prefix("content-length:")?;
-            rest.trim().parse::<usize>().ok()
-        });
+    let content_length: Option<usize> = header_str.lines().find_map(|line| {
+        let lower = line.to_ascii_lowercase();
+        let rest = lower.strip_prefix("content-length:")?;
+        rest.trim().parse::<usize>().ok()
+    });
     if let Some(body_len) = content_length {
         if body_len > 0 {
             let mut body_buf = vec![0u8; body_len];

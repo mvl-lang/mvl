@@ -15,12 +15,7 @@ impl RustEmitter {
     ///
     /// Dispatches on the method name with type-aware selection for higher-order
     /// collection methods, type coercions, stdlib integration, and generic fallthrough.
-    pub(super) fn emit_method_call(
-        &mut self,
-        receiver: &TirExpr,
-        method: &str,
-        args: &[TirExpr],
-    ) {
+    pub(super) fn emit_method_call(&mut self, receiver: &TirExpr, method: &str, args: &[TirExpr]) {
         // Methods that don't map directly to a Rust method of the same name.
         //
         // Phase 4 note: string and list methods that have pure MVL implementations
@@ -95,9 +90,7 @@ impl RustEmitter {
                     self.emit_expr(receiver);
                     self.push(".clone().into_iter().filter(|(_k, __v)| (");
                     self.emit_expr(&args[0]);
-                    self.push(
-                        ")(__v.clone())).collect::<std::collections::HashMap<_, _>>()",
-                    );
+                    self.push(")(__v.clone())).collect::<std::collections::HashMap<_, _>>()");
                 } else if is_set {
                     // Set.filter(f: fn(T) -> Bool): same as List but collect HashSet.
                     self.emit_expr(receiver);
@@ -182,19 +175,18 @@ impl RustEmitter {
                     self.push(")(acc, __v))");
                 } else {
                     // List, Set, and other types iterate elements directly.
-                    let (borrow_acc, borrow_elem) =
-                        if let TirExprKind::Var(name) = &args[1].kind {
-                            let borrows = self
-                                .capability_params_map
-                                .get(name.as_str())
-                                .cloned()
-                                .unwrap_or_default();
-                            let b0 = borrows.first().copied().flatten().is_some();
-                            let b1 = borrows.get(1).copied().flatten().is_some();
-                            (b0, b1)
-                        } else {
-                            (false, false)
-                        };
+                    let (borrow_acc, borrow_elem) = if let TirExprKind::Var(name) = &args[1].kind {
+                        let borrows = self
+                            .capability_params_map
+                            .get(name.as_str())
+                            .cloned()
+                            .unwrap_or_default();
+                        let b0 = borrows.first().copied().flatten().is_some();
+                        let b1 = borrows.get(1).copied().flatten().is_some();
+                        (b0, b1)
+                    } else {
+                        (false, false)
+                    };
                     self.emit_expr(receiver);
                     self.push(".clone().into_iter().fold(");
                     self.emit_expr_as_arg(&args[0]);
@@ -244,9 +236,7 @@ impl RustEmitter {
                 if let Some(arg) = args.first() {
                     self.emit_expr(arg);
                 }
-                self.push(
-                    "(__x.clone())); Partitioned { matching: __matching, rest: __rest } }",
-                );
+                self.push("(__x.clone())); Partitioned { matching: __matching, rest: __rest } }");
             }
             // group_by(f) — no native Rust equivalent; fold into HashMap
             "group_by" => {
@@ -562,9 +552,7 @@ impl RustEmitter {
                 self.emit_expr(b);
                 self.push(".clone(); ");
                 self.emit_expr(receiver);
-                self.push(
-                    ".union(&__b).cloned().collect::<std::collections::HashSet<_>>() }",
-                );
+                self.push(".union(&__b).cloned().collect::<std::collections::HashSet<_>>() }");
             }
             "difference" if args.len() == 1 && matches!(receiver.ty, Ty::Set(_)) => {
                 let b = &args[0];
@@ -572,9 +560,7 @@ impl RustEmitter {
                 self.emit_expr(b);
                 self.push(".clone(); ");
                 self.emit_expr(receiver);
-                self.push(
-                    ".difference(&__b).cloned().collect::<std::collections::HashSet<_>>() }",
-                );
+                self.push(".difference(&__b).cloned().collect::<std::collections::HashSet<_>>() }");
             }
 
             // set(i, value) — in-place index assignment.
@@ -631,23 +617,22 @@ impl RustEmitter {
             // ── UFCS dispatch for pure MVL stdlib methods ─────────────────────
             m if is_stdlib_ufcs_method(m) => {
                 // Check whether we must re-wrap the result in a label newtype.
-                let wrap_label: Option<String> =
-                    if STRING_LABEL_PRESERVING_METHODS.contains(&m) {
-                        {
-                            let ty = &receiver.ty;
-                            if let Ty::Labeled(label, inner) = ty {
-                                if matches!(inner.as_ref(), Ty::String) {
-                                    Some(emit_label(label.as_str()).to_string())
-                                } else {
-                                    None
-                                }
+                let wrap_label: Option<String> = if STRING_LABEL_PRESERVING_METHODS.contains(&m) {
+                    {
+                        let ty = &receiver.ty;
+                        if let Ty::Labeled(label, inner) = ty {
+                            if matches!(inner.as_ref(), Ty::String) {
+                                Some(emit_label(label.as_str()).to_string())
                             } else {
                                 None
                             }
+                        } else {
+                            None
                         }
-                    } else {
-                        None
-                    };
+                    }
+                } else {
+                    None
+                };
                 if let Some(ref lname) = wrap_label {
                     self.push(&format!("{lname}::new("));
                 }
@@ -670,20 +655,19 @@ impl RustEmitter {
             // as `runtime_fn(receiver.clone().into(), args)`.
             m if rust_emit_by_name(m).is_some() => {
                 // Label-preserving methods on String need re-wrapping (#1267).
-                let wrap_label: Option<String> =
-                    if STRING_LABEL_PRESERVING_METHODS.contains(&m) {
-                        if let Ty::Labeled(label, inner) = &receiver.ty {
-                            if matches!(inner.as_ref(), Ty::String) {
-                                Some(emit_label(label.as_str()).to_string())
-                            } else {
-                                None
-                            }
+                let wrap_label: Option<String> = if STRING_LABEL_PRESERVING_METHODS.contains(&m) {
+                    if let Ty::Labeled(label, inner) = &receiver.ty {
+                        if matches!(inner.as_ref(), Ty::String) {
+                            Some(emit_label(label.as_str()).to_string())
                         } else {
                             None
                         }
                     } else {
                         None
-                    };
+                    }
+                } else {
+                    None
+                };
                 if let Some(ref lname) = wrap_label {
                     self.push(&format!("{lname}::new("));
                 }
@@ -734,15 +718,14 @@ impl RustEmitter {
                     }
                     self.push(")");
                 } else {
-                    let is_fn_typed_field =
-                        if let Ty::Named(type_name, type_args) = &receiver.ty {
-                            type_args.is_empty()
-                                && self
-                                    .fn_typed_struct_fields
-                                    .contains(&(type_name.clone(), method.to_owned()))
-                        } else {
-                            false
-                        };
+                    let is_fn_typed_field = if let Ty::Named(type_name, type_args) = &receiver.ty {
+                        type_args.is_empty()
+                            && self
+                                .fn_typed_struct_fields
+                                .contains(&(type_name.clone(), method.to_owned()))
+                    } else {
+                        false
+                    };
                     if is_fn_typed_field {
                         self.push("(");
                     }
