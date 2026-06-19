@@ -9,6 +9,7 @@ use crate::mvl::linter::{config::LintConfig, errors::LintDiag};
 use crate::mvl::parser::ast::{
     BinaryOp, Block, Decl, Expr, LValue, Literal, MatchArm, MatchBody, Pattern, Program, Stmt,
 };
+use crate::mvl::parser::visit::Visit;
 
 /// Error on the `while / .get(i) / match / None => ()` anti-pattern (#705).
 ///
@@ -48,37 +49,42 @@ pub fn for_iter_antipattern(prog: &Program, cfg: &LintConfig, out: &mut Vec<Lint
 }
 
 fn check_block_for_iter_antipattern(block: &Block, out: &mut Vec<LintDiag>) {
-    for stmt in &block.stmts {
-        match stmt {
-            Stmt::While { body, span, .. } => {
-                // Check direct children of the while body for the anti-pattern.
-                for inner in &body.stmts {
-                    if let Stmt::Match {
-                        scrutinee,
-                        arms,
-                        span: match_span,
-                    } = inner
-                    {
-                        if is_get_call(scrutinee) && has_none_unit_arm(arms) {
-                            out.push(LintDiag::error(
-                                "for-iter-antipattern",
-                                "use `for x in list { }` for List[T] iteration; \
-                                 `while/.get(i)/match/None=>()` is not allowed",
-                                span.line,
-                                span.col,
-                            ));
-                            let _ = match_span; // span reported at while header
-                            break;
+    ForIterAntipattern { out }.visit_block(block);
+}
+
+struct ForIterAntipattern<'a> {
+    out: &'a mut Vec<LintDiag>,
+}
+
+impl<'ast> Visit<'ast> for ForIterAntipattern<'_> {
+    fn visit_block(&mut self, b: &'ast Block) {
+        // Intentional: walks stmts directly to match only direct children of while bodies.
+        // Default walk_block would lose the "direct child" constraint needed for the pattern.
+        for stmt in &b.stmts {
+            match stmt {
+                Stmt::While { body, span, .. } => {
+                    // Check direct children of the while body for the anti-pattern.
+                    for inner in &body.stmts {
+                        if let Stmt::Match { scrutinee, arms, .. } = inner {
+                            if is_get_call(scrutinee) && has_none_unit_arm(arms) {
+                                self.out.push(LintDiag::error(
+                                    "for-iter-antipattern",
+                                    "use `for x in list { }` for List[T] iteration; \
+                                     `while/.get(i)/match/None=>()` is not allowed",
+                                    span.line,
+                                    span.col,
+                                ));
+                                break;
+                            }
                         }
                     }
+                    self.visit_block(body);
                 }
-                // Recurse to catch nested whiles.
-                check_block_for_iter_antipattern(body, out);
+                Stmt::For { body, .. } | Stmt::If { then: body, .. } => {
+                    self.visit_block(body);
+                }
+                _ => {}
             }
-            Stmt::For { body, .. } | Stmt::If { then: body, .. } => {
-                check_block_for_iter_antipattern(body, out);
-            }
-            _ => {}
         }
     }
 }
@@ -125,49 +131,60 @@ pub fn while_to_for_range(prog: &Program, cfg: &LintConfig, out: &mut Vec<LintDi
 }
 
 fn check_block_for_while_range(block: &Block, out: &mut Vec<LintDiag>) {
-    // Track let-bound variable initial values seen so far in this block.
-    let mut let_inits: HashMap<String, String> = HashMap::new();
+    WhileToForRange { out }.visit_block(block);
+}
 
-    for stmt in &block.stmts {
-        match stmt {
-            Stmt::Let {
-                pattern: Pattern::Ident(name, _),
-                init,
-                ..
-            } => {
-                let_inits.insert(name.clone(), simple_expr_str(init));
-            }
-            Stmt::While {
-                cond,
-                decreases,
-                body,
-                span,
-                ..
-            } => {
-                if decreases.is_none() {
-                    if let Some((var, end)) = counter_lt_cond(cond) {
-                        if is_counter_increment(body, &var) {
-                            let start = let_inits.get(&var).map(String::as_str).unwrap_or("0");
-                            out.push(LintDiag::warning(
-                                "while-to-for-range",
-                                format!(
-                                    "`while {var} < {end}` counter loop — use \
-                                     `for {var} in range({start}, {end})` for a \
-                                     provably-terminating loop",
-                                ),
-                                span.line,
-                                span.col,
-                            ));
+struct WhileToForRange<'a> {
+    out: &'a mut Vec<LintDiag>,
+}
+
+impl<'ast> Visit<'ast> for WhileToForRange<'_> {
+    fn visit_block(&mut self, b: &'ast Block) {
+        // Intentional: walks stmts directly to maintain a per-scope let_inits map.
+        // Default walk_block discards block boundaries, losing the scoping needed here.
+        // Fresh let-init map per block scope — mirrors the original per-call HashMap.
+        let mut let_inits: HashMap<String, String> = HashMap::new();
+        for stmt in &b.stmts {
+            match stmt {
+                Stmt::Let {
+                    pattern: Pattern::Ident(name, _),
+                    init,
+                    ..
+                } => {
+                    let_inits.insert(name.clone(), simple_expr_str(init));
+                }
+                Stmt::While {
+                    cond,
+                    decreases,
+                    body,
+                    span,
+                    ..
+                } => {
+                    if decreases.is_none() {
+                        if let Some((var, end)) = counter_lt_cond(cond) {
+                            if is_counter_increment(body, &var) {
+                                let start =
+                                    let_inits.get(&var).map(String::as_str).unwrap_or("0");
+                                self.out.push(LintDiag::warning(
+                                    "while-to-for-range",
+                                    format!(
+                                        "`while {var} < {end}` counter loop — use \
+                                         `for {var} in range({start}, {end})` for a \
+                                         provably-terminating loop",
+                                    ),
+                                    span.line,
+                                    span.col,
+                                ));
+                            }
                         }
                     }
+                    self.visit_block(body);
                 }
-                // Recurse to catch nested patterns.
-                check_block_for_while_range(body, out);
+                Stmt::For { body, .. } | Stmt::If { then: body, .. } => {
+                    self.visit_block(body);
+                }
+                _ => {}
             }
-            Stmt::For { body, .. } | Stmt::If { then: body, .. } => {
-                check_block_for_while_range(body, out);
-            }
-            _ => {}
         }
     }
 }
