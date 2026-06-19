@@ -1,0 +1,37 @@
+// Corpus: into_inner() method call on IFC label wrapper types.
+// Regression test for backend bug where `v.into_inner()` on a labeled
+// receiver (e.g. Tainted[String]) was emitted as a free function call
+// `into_inner(v)` instead of a method call `v.into_inner()`.
+
+fn unwrap_tainted(s: Tainted[String]) -> String {
+    s.into_inner()
+}
+
+fn unwrap_secret(n: Secret[Int]) -> Int {
+    n.into_inner()
+}
+
+fn unwrap_and_concat(s: Tainted[String]) -> String {
+    s.into_inner().concat("_clean")
+}
+
+// into_inner() in a match arm — the common pattern from std.config
+fn first_or_default(opt: Option[Tainted[String]]) -> String {
+    match opt {
+        Some(v) => v.into_inner(),
+        None    => "default",
+    }
+}
+
+// Verify into_inner() on labeled types type-checks and the results have the
+// correct inner type — Int/String not the labeled wrapper.
+fn check_types() -> Int {
+    let n: Secret[Int] = relabel classify(42, "TEST");
+    let i: Int = unwrap_secret(n);
+    i + 1   // Int arithmetic proves the return type is bare Int
+}
+
+fn main() -> Unit ! Console {
+    let result: Int = check_types();
+    println(result.to_string())
+}

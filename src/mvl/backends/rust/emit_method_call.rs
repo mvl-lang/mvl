@@ -614,6 +614,20 @@ impl RustEmitter {
                 self.push(")");
             }
 
+            // into_inner() / as_inner() on IFC label wrapper types.
+            // These are generated as methods on the label newtype struct by emit_types.rs.
+            // Without this case, labeled receivers hit the `is_builtin_receiver` UFCS branch
+            // (since e.g. `Tainted<String>.unlabeled()` is String) and are incorrectly
+            // emitted as free function calls: `into_inner(v)` instead of `v.into_inner()`.
+            "into_inner" | "as_inner"
+                if args.is_empty() && matches!(receiver.ty, Ty::Labeled(..)) =>
+            {
+                self.emit_expr(receiver);
+                self.push(".");
+                self.push(method);
+                self.push("()");
+            }
+
             // ── UFCS dispatch for pure MVL stdlib methods ─────────────────────
             m if is_stdlib_ufcs_method(m) => {
                 // Check whether we must re-wrap the result in a label newtype.
