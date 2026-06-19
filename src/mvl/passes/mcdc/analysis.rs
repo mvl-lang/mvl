@@ -120,14 +120,14 @@ fn collect_from_block(
     walk_block(&mut v, block);
 }
 
-struct DecisionCollector<'n> {
-    decisions: &'n mut Vec<DecisionInfo>,
-    next_id: &'n mut usize,
-    fn_name: &'n str,
-    file: &'n str,
+struct DecisionCollector<'out, 'ctx> {
+    decisions: &'out mut Vec<DecisionInfo>,
+    next_id: &'out mut usize,
+    fn_name: &'ctx str,
+    file: &'ctx str,
 }
 
-impl<'n> DecisionCollector<'n> {
+impl<'out, 'ctx> DecisionCollector<'out, 'ctx> {
     fn push_decision(&mut self, line: u32, kind: DecisionKind, clause_count: usize) {
         self.decisions.push(DecisionInfo {
             id: *self.next_id,
@@ -142,7 +142,7 @@ impl<'n> DecisionCollector<'n> {
     }
 }
 
-impl<'ast> Visit<'ast> for DecisionCollector<'_> {
+impl<'ast> Visit<'ast> for DecisionCollector<'_, '_> {
     fn visit_stmt(&mut self, s: &'ast Stmt) {
         match s {
             Stmt::If { cond, then, else_, span } => {
@@ -536,6 +536,19 @@ mod tests {
             .collect();
         assert_eq!(guards.len(), 1);
         assert_eq!(guards[0].clause_count, 3);
+    }
+
+    // ── Expr::If (inline expression form) ────────────────────────────────
+
+    #[test]
+    fn inline_if_expr_compound_condition_tracked() {
+        // `if` used as an expression (not a statement) with a compound condition.
+        let decisions = decisions_for(
+            "fn f(a: Bool, b: Bool) -> Int { let x: Int = if a && b { 1 } else { 0 }; x }",
+        );
+        assert_eq!(decisions.len(), 1);
+        assert_eq!(decisions[0].kind, DecisionKind::If);
+        assert_eq!(decisions[0].clause_count, 2);
     }
 
     // ── count_clauses_ref unit tests ────────────────────────────────────

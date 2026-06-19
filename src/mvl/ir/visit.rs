@@ -176,13 +176,36 @@ mod tests {
         let block = empty_block();
         let mut counter = NodeCounter::default();
         walk_tir_block(&mut counter, &block);
+        assert_eq!(counter.blocks, 0);
         assert_eq!(counter.stmts, 0);
         assert_eq!(counter.exprs, 0);
     }
 
     #[test]
     fn visit_short_circuit_stops_descent() {
-        // A visitor that counts only top-level expr calls (no recursion)
+        use crate::mvl::ir::{BinaryOp, Literal, TirExpr, TirExprKind, Ty};
+        use crate::mvl::parser::lexer::Span;
+
+        let span = Span::default();
+        let lit = TirExpr {
+            kind: TirExprKind::Literal(Literal::Integer(1)),
+            ty: Ty::Int,
+            span,
+        };
+        let binary = TirExpr {
+            kind: TirExprKind::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(lit.clone()),
+                right: Box::new(lit),
+            },
+            ty: Ty::Int,
+            span,
+        };
+        let block = TirBlock {
+            stmts: vec![TirStmt::Expr { expr: binary, span }],
+            span,
+        };
+
         struct TopOnly(usize);
         impl<'a> Visit<'a> for TopOnly {
             fn visit_tir_expr(&mut self, _e: &'a TirExpr) {
@@ -191,9 +214,8 @@ mod tests {
             }
         }
 
-        let block = empty_block();
         let mut v = TopOnly(0);
         walk_tir_block(&mut v, &block);
-        assert_eq!(v.0, 0);
+        assert_eq!(v.0, 1, "short-circuit must see only the top-level binary expr, not its children");
     }
 }

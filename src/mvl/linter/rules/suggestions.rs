@@ -58,6 +58,8 @@ struct ForIterAntipattern<'a> {
 
 impl<'ast> Visit<'ast> for ForIterAntipattern<'_> {
     fn visit_block(&mut self, b: &'ast Block) {
+        // Intentional: walks stmts directly to match only direct children of while bodies.
+        // Default walk_block would lose the "direct child" constraint needed for the pattern.
         for stmt in &b.stmts {
             match stmt {
                 Stmt::While { body, span, .. } => {
@@ -138,6 +140,8 @@ struct WhileToForRange<'a> {
 
 impl<'ast> Visit<'ast> for WhileToForRange<'_> {
     fn visit_block(&mut self, b: &'ast Block) {
+        // Intentional: walks stmts directly to maintain a per-scope let_inits map.
+        // Default walk_block discards block boundaries, losing the scoping needed here.
         // Fresh let-init map per block scope — mirrors the original per-call HashMap.
         let mut let_inits: HashMap<String, String> = HashMap::new();
         for stmt in &b.stmts {

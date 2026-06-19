@@ -1029,4 +1029,51 @@ mod tests {
         complexity_extern_ratio(&prog, &cfg(), &mut diags);
         assert!(diags.is_empty(), "no fns → ratio undefined → no diagnostic");
     }
+
+    // -- Expr::Select cyclomatic complexity --
+
+    #[test]
+    fn cyclomatic_select_arms_each_contribute() {
+        // select with 3 arms: CC = 1 (base) + 3 (arms) = 4; threshold=3 fires
+        let src = concat!(
+            "fn f(a: Channel, b: Channel, c: Channel) -> Unit {\n",
+            "    select {\n",
+            "        a.recv() => { }\n",
+            "        b.recv() => { }\n",
+            "        c.recv() => { }\n",
+            "    }\n",
+            "}\n",
+        );
+        let prog = parse(src);
+        let mut diags = vec![];
+        let mut c = cfg();
+        c.max_cyclomatic_complexity = 3;
+        complexity_cyclomatic(&prog, &c, &mut diags);
+        assert!(
+            diags.iter().any(|d| d.rule == "complexity-cyclomatic"),
+            "3-arm select contributes CC=3, total=4, exceeding threshold=3; got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn cyclomatic_select_two_arms_below_threshold() {
+        // select with 2 arms: CC = 1 (base) + 2 (arms) = 3; threshold=4 must not fire
+        let src = concat!(
+            "fn f(a: Channel, b: Channel) -> Unit {\n",
+            "    select {\n",
+            "        a.recv() => { }\n",
+            "        b.recv() => { }\n",
+            "    }\n",
+            "}\n",
+        );
+        let prog = parse(src);
+        let mut diags = vec![];
+        let mut c = cfg();
+        c.max_cyclomatic_complexity = 4;
+        complexity_cyclomatic(&prog, &c, &mut diags);
+        assert!(
+            diags.is_empty(),
+            "2-arm select gives CC=3, must not exceed threshold=4; got: {diags:?}"
+        );
+    }
 }

@@ -107,12 +107,12 @@ fn collect_paths_from_tir_expr_with(
     CollectTirPaths { out, fn_field_reads }.visit_tir_expr(expr);
 }
 
-struct CollectTirPaths<'a> {
-    out: &'a mut Vec<String>,
-    fn_field_reads: Option<&'a FnFieldReads>,
+struct CollectTirPaths<'out, 'map> {
+    out: &'out mut Vec<String>,
+    fn_field_reads: Option<&'map FnFieldReads>,
 }
 
-impl<'ast> TirVisit<'ast> for CollectTirPaths<'_> {
+impl<'ast> TirVisit<'ast> for CollectTirPaths<'_, '_> {
     fn visit_tir_expr(&mut self, e: &'ast crate::mvl::ir::TirExpr) {
         use crate::mvl::ir::TirExprKind;
         // Short-circuit: capture pure ident/field-access chains without descending.

@@ -339,8 +339,8 @@ struct WhileNoDecreases {
     found: bool,
 }
 
-impl<'a> Visit<'a> for WhileNoDecreases {
-    fn visit_stmt(&mut self, s: &'a Stmt) {
+impl<'ast> Visit<'ast> for WhileNoDecreases {
+    fn visit_stmt(&mut self, s: &'ast Stmt) {
         if self.found {
             return;
         }
@@ -349,10 +349,11 @@ impl<'a> Visit<'a> for WhileNoDecreases {
             _ => walk_stmt(self, s),
         }
     }
-    fn visit_expr(&mut self, e: &'a Expr) {
-        if !self.found {
-            walk_expr(self, e);
+    fn visit_expr(&mut self, e: &'ast Expr) {
+        if self.found {
+            return;
         }
+        walk_expr(self, e);
     }
 }
 
@@ -369,13 +370,13 @@ struct CallsFn<'n> {
     found: bool,
 }
 
-impl<'a> Visit<'a> for CallsFn<'_> {
-    fn visit_stmt(&mut self, s: &'a Stmt) {
+impl<'ast> Visit<'ast> for CallsFn<'_> {
+    fn visit_stmt(&mut self, s: &'ast Stmt) {
         if !self.found {
             walk_stmt(self, s);
         }
     }
-    fn visit_expr(&mut self, e: &'a Expr) {
+    fn visit_expr(&mut self, e: &'ast Expr) {
         if self.found {
             return;
         }
@@ -401,13 +402,13 @@ struct HasCalls {
     found: bool,
 }
 
-impl<'a> Visit<'a> for HasCalls {
-    fn visit_stmt(&mut self, s: &'a Stmt) {
+impl<'ast> Visit<'ast> for HasCalls {
+    fn visit_stmt(&mut self, s: &'ast Stmt) {
         if !self.found {
             walk_stmt(self, s);
         }
     }
-    fn visit_expr(&mut self, e: &'a Expr) {
+    fn visit_expr(&mut self, e: &'ast Expr) {
         if self.found {
             return;
         }
