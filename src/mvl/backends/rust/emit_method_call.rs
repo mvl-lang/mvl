@@ -605,11 +605,15 @@ impl RustEmitter {
             // Without this case, labeled receivers hit the `is_builtin_receiver` UFCS branch
             // (since e.g. `Tainted<String>.unlabeled()` is String) and are incorrectly
             // emitted as free function calls: `into_inner(v)` instead of `v.into_inner()`.
+            //
+            // into_inner() takes ownership (self), so we must clone the receiver first
+            // when it's behind a reference. Since MVL uses clone-on-read semantics
+            // everywhere, always emitting .clone() is safe and consistent. (#1453)
             "into_inner" | "as_inner"
                 if args.is_empty() && matches!(receiver.ty, Ty::Labeled(..)) =>
             {
                 self.emit_expr(receiver);
-                self.push(".");
+                self.push(".clone().");
                 self.push(method);
                 self.push("()");
             }
