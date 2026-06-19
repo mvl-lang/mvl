@@ -14,7 +14,6 @@ use crate::mvl::ir::{
 use crate::mvl::passes::coverage::BranchKind;
 use crate::mvl::passes::mcdc::analysis::count_clauses_ref;
 
-
 impl RustEmitter {
     /// Emit an expression into the code buffer (no trailing newline).
     pub fn emit_expr(&mut self, expr: &TirExpr) {

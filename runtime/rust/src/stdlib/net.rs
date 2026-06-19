@@ -157,26 +157,50 @@ pub fn tcp_read(stream: TcpStream) -> Result<Tainted<String>, NetError> {
 ///
 /// Module-private in MVL — callers use `tcp_read_request`.
 /// Uses Latin-1 encoding for consistency with `_tcp_read`.
+///
+/// Reads headers until `\r\n\r\n`, then reads the body if `Content-Length` is present.
 pub fn _tcp_read_request(stream: TcpStream) -> Result<String, NetError> {
     let arc = lookup_stream(stream.0)?;
-    let mut buf = Vec::new();
+    let mut header_buf = Vec::new();
     let mut one = [0u8; 1];
     loop {
         match (&*arc).read(&mut one) {
             Ok(0) => break,
             Ok(_) => {
-                buf.push(one[0]);
-                if buf.ends_with(b"\r\n\r\n") || buf.ends_with(b"\n\n") {
+                header_buf.push(one[0]);
+                if header_buf.ends_with(b"\r\n\r\n") || header_buf.ends_with(b"\n\n") {
                     break;
                 }
-                if buf.len() >= 8192 {
+                if header_buf.len() >= 8192 {
                     break;
                 }
             }
             Err(e) => return Err(sanitize_net_error(&e)),
         }
     }
-    Ok(buf.iter().map(|&b| b as char).collect())
+    // Parse Content-Length header to read the body.
+    let header_str: String = header_buf.iter().map(|&b| b as char).collect();
+    let content_length: Option<usize> = header_str.lines().find_map(|line| {
+        let lower = line.to_ascii_lowercase();
+        let rest = lower.strip_prefix("content-length:")?;
+        rest.trim().parse::<usize>().ok()
+    });
+    if let Some(body_len) = content_length {
+        if body_len > 0 {
+            let mut body_buf = vec![0u8; body_len];
+            let mut filled = 0;
+            while filled < body_len {
+                match (&*arc).read(&mut body_buf[filled..]) {
+                    Ok(0) => break,
+                    Ok(k) => filled += k,
+                    Err(e) => return Err(sanitize_net_error(&e)),
+                }
+            }
+            let body_str: String = body_buf[..filled].iter().map(|&b| b as char).collect();
+            return Ok(header_str + &body_str);
+        }
+    }
+    Ok(header_str)
 }
 
 /// Read one HTTP request from `stream` — returns after the blank-line terminator.
