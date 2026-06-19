@@ -63,6 +63,16 @@ EBNF_KNOWN_ABSENT = {
     "guard_expr": "inlined into match_arm as optional(seq(\"if\", $.expr))",
     # label_ref = IDENT | "_" — inlined into relabel_decl as $.identifier
     "label_ref": "inlined into relabel_decl as $.identifier",
+    # fn_name = [IDENT [TypeList] "::"] IDENT — receiver-type methods (#1436)
+    # tree-sitter's fn_decl uses $.identifier; receiver-prefix form not yet supported
+    "fn_name": "tree-sitter fn_decl uses $.identifier; receiver-prefix form not yet supported",
+    # path_name = IDENT [TypeList] ["::" IDENT] — covered by path_expr in tree-sitter
+    "path_name": "covered by path_expr in tree-sitter (#1417)",
+    # session_type = session_op — pure alias, tree-sitter inlines directly to session_op
+    "session_type": "inlined: tree-sitter uses session_op directly",
+    # type_param = IDENT | "const" IDENT ":" IDENT — const generics not yet in tree-sitter
+    # tree-sitter's type_params uses $.identifier only
+    "type_param": "inlined as $.identifier in type_params; const generics not yet supported (#1436)",
     # Uppercase EBNF terminals map to regex patterns, not named rules
     "COMMENT": "terminal — mapped to line_comment regex",
     "DOC_COMMENT": "terminal — mapped to line_comment regex (prefix ///)",
@@ -131,6 +141,10 @@ TS_KNOWN_EXTENSIONS = {
     "session_send_type",
     # Structured concurrency scope (Phase 8, #69) — EBNF to follow
     "concurrently_expr",
+    # Anonymous tuple type `(T, U, ...)` from tree-sitter's original grammar (#35).
+    # MVL has no tuple types per ADR-0002 / #1380 — EBNF intentionally omits it.
+    # Kept in tree-sitter for now; remove when grammar is realigned with ADR-0002.
+    "tuple_type",
 }
 
 
