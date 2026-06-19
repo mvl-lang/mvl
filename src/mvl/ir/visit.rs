@@ -38,7 +38,9 @@ pub fn walk_tir_stmt<'a, V: Visit<'a> + ?Sized>(v: &mut V, s: &'a TirStmt) {
         TirStmt::Assign { value, .. } => v.visit_tir_expr(value),
         TirStmt::Return { value: Some(e), .. } => v.visit_tir_expr(e),
         TirStmt::Return { value: None, .. } => {}
-        TirStmt::If { cond, then, else_, .. } => {
+        TirStmt::If {
+            cond, then, else_, ..
+        } => {
             v.visit_tir_expr(cond);
             v.visit_tir_block(then);
             match else_ {
@@ -47,7 +49,9 @@ pub fn walk_tir_stmt<'a, V: Visit<'a> + ?Sized>(v: &mut V, s: &'a TirStmt) {
                 None => {}
             }
         }
-        TirStmt::Match { scrutinee, arms, .. } => {
+        TirStmt::Match {
+            scrutinee, arms, ..
+        } => {
             v.visit_tir_expr(scrutinee);
             for arm in arms {
                 match &arm.body {
@@ -83,14 +87,18 @@ pub fn walk_tir_expr<'a, V: Visit<'a> + ?Sized>(v: &mut V, e: &'a TirExpr) {
             v.visit_tir_expr(left);
             v.visit_tir_expr(right);
         }
-        TirExprKind::If { cond, then, else_, .. } => {
+        TirExprKind::If {
+            cond, then, else_, ..
+        } => {
             v.visit_tir_expr(cond);
             v.visit_tir_block(then);
             if let Some(e) = else_ {
                 v.visit_tir_expr(e);
             }
         }
-        TirExprKind::Match { scrutinee, arms, .. } => {
+        TirExprKind::Match {
+            scrutinee, arms, ..
+        } => {
             v.visit_tir_expr(scrutinee);
             for arm in arms {
                 match &arm.body {
@@ -216,6 +224,9 @@ mod tests {
 
         let mut v = TopOnly(0);
         walk_tir_block(&mut v, &block);
-        assert_eq!(v.0, 1, "short-circuit must see only the top-level binary expr, not its children");
+        assert_eq!(
+            v.0, 1,
+            "short-circuit must see only the top-level binary expr, not its children"
+        );
     }
 }

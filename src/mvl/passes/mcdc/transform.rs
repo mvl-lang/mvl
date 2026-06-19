@@ -95,7 +95,10 @@ pub fn build_fn_field_reads_tir(tir: &crate::mvl::ir::TirProgram) -> FnFieldRead
 }
 
 fn collect_paths_from_tir_block(block: &crate::mvl::ir::TirBlock, out: &mut Vec<String>) {
-    let mut v = CollectTirPaths { out, fn_field_reads: None };
+    let mut v = CollectTirPaths {
+        out,
+        fn_field_reads: None,
+    };
     walk_tir_block(&mut v, block);
 }
 
@@ -104,7 +107,11 @@ fn collect_paths_from_tir_expr_with(
     out: &mut Vec<String>,
     fn_field_reads: Option<&FnFieldReads>,
 ) {
-    CollectTirPaths { out, fn_field_reads }.visit_tir_expr(expr);
+    CollectTirPaths {
+        out,
+        fn_field_reads,
+    }
+    .visit_tir_expr(expr);
 }
 
 struct CollectTirPaths<'out, 'map> {
@@ -195,14 +202,18 @@ impl<'ast> AstVisit<'ast> for CollectPaths<'_> {
                     self.visit_expr(a);
                 }
             }
-            Expr::If { cond, then, else_, .. } => {
+            Expr::If {
+                cond, then, else_, ..
+            } => {
                 self.visit_expr(cond);
                 self.visit_block(then);
                 if let Some(e) = else_ {
                     self.visit_expr(e);
                 }
             }
-            Expr::Match { scrutinee, arms, .. } => {
+            Expr::Match {
+                scrutinee, arms, ..
+            } => {
                 self.visit_expr(scrutinee);
                 for arm in arms {
                     match &arm.body {

@@ -39,7 +39,9 @@ pub fn walk_stmt<'a, V: Visit<'a> + ?Sized>(v: &mut V, s: &'a Stmt) {
         Stmt::Assign { value, .. } => v.visit_expr(value),
         Stmt::Return { value: Some(e), .. } => v.visit_expr(e),
         Stmt::Return { value: None, .. } => {}
-        Stmt::If { cond, then, else_, .. } => {
+        Stmt::If {
+            cond, then, else_, ..
+        } => {
             v.visit_expr(cond);
             v.visit_block(then);
             match else_ {
@@ -48,7 +50,9 @@ pub fn walk_stmt<'a, V: Visit<'a> + ?Sized>(v: &mut V, s: &'a Stmt) {
                 None => {}
             }
         }
-        Stmt::Match { scrutinee, arms, .. } => {
+        Stmt::Match {
+            scrutinee, arms, ..
+        } => {
             v.visit_expr(scrutinee);
             for arm in arms {
                 match &arm.body {
@@ -83,14 +87,18 @@ pub fn walk_expr<'a, V: Visit<'a> + ?Sized>(v: &mut V, e: &'a Expr) {
             v.visit_expr(left);
             v.visit_expr(right);
         }
-        Expr::If { cond, then, else_, .. } => {
+        Expr::If {
+            cond, then, else_, ..
+        } => {
             v.visit_expr(cond);
             v.visit_block(then);
             if let Some(e) = else_ {
                 v.visit_expr(e);
             }
         }
-        Expr::Match { scrutinee, arms, .. } => {
+        Expr::Match {
+            scrutinee, arms, ..
+        } => {
             v.visit_expr(scrutinee);
             for arm in arms {
                 match &arm.body {
@@ -199,6 +207,9 @@ mod tests {
         let block = parse_block("let x: Int = 1 + 2;");
         let mut v = TopLevelExprs(0);
         walk_block(&mut v, &block);
-        assert_eq!(v.0, 1, "should see only the top-level init expr, not sub-exprs");
+        assert_eq!(
+            v.0, 1,
+            "should see only the top-level init expr, not sub-exprs"
+        );
     }
 }

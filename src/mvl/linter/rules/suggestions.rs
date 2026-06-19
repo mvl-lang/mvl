@@ -65,7 +65,10 @@ impl<'ast> Visit<'ast> for ForIterAntipattern<'_> {
                 Stmt::While { body, span, .. } => {
                     // Check direct children of the while body for the anti-pattern.
                     for inner in &body.stmts {
-                        if let Stmt::Match { scrutinee, arms, .. } = inner {
+                        if let Stmt::Match {
+                            scrutinee, arms, ..
+                        } = inner
+                        {
                             if is_get_call(scrutinee) && has_none_unit_arm(arms) {
                                 self.out.push(LintDiag::error(
                                     "for-iter-antipattern",
@@ -163,8 +166,7 @@ impl<'ast> Visit<'ast> for WhileToForRange<'_> {
                     if decreases.is_none() {
                         if let Some((var, end)) = counter_lt_cond(cond) {
                             if is_counter_increment(body, &var) {
-                                let start =
-                                    let_inits.get(&var).map(String::as_str).unwrap_or("0");
+                                let start = let_inits.get(&var).map(String::as_str).unwrap_or("0");
                                 self.out.push(LintDiag::warning(
                                     "while-to-for-range",
                                     format!(

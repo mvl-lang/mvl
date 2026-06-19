@@ -116,7 +116,12 @@ fn collect_from_block(
     decisions: &mut Vec<DecisionInfo>,
     next_id: &mut usize,
 ) {
-    let mut v = DecisionCollector { decisions, next_id, fn_name, file };
+    let mut v = DecisionCollector {
+        decisions,
+        next_id,
+        fn_name,
+        file,
+    };
     walk_block(&mut v, block);
 }
 
@@ -145,7 +150,12 @@ impl<'out, 'ctx> DecisionCollector<'out, 'ctx> {
 impl<'ast> Visit<'ast> for DecisionCollector<'_, '_> {
     fn visit_stmt(&mut self, s: &'ast Stmt) {
         match s {
-            Stmt::If { cond, then, else_, span } => {
+            Stmt::If {
+                cond,
+                then,
+                else_,
+                span,
+            } => {
                 let clause_count = count_clauses(cond);
                 if clause_count > 1 {
                     self.push_decision(span.line, DecisionKind::If, clause_count);
@@ -158,14 +168,20 @@ impl<'ast> Visit<'ast> for DecisionCollector<'_, '_> {
                     }
                 }
             }
-            Stmt::While { cond, body, span, .. } => {
+            Stmt::While {
+                cond, body, span, ..
+            } => {
                 let clause_count = count_clauses(cond);
                 if clause_count > 1 {
                     self.push_decision(span.line, DecisionKind::While, clause_count);
                 }
                 self.visit_block(body);
             }
-            Stmt::Match { scrutinee, arms, span } => {
+            Stmt::Match {
+                scrutinee,
+                arms,
+                span,
+            } => {
                 // Ordering mirrors transpiler emission: scrutinee → match decision →
                 // all guard decisions → arm bodies.
                 self.visit_expr(scrutinee);
@@ -194,7 +210,12 @@ impl<'ast> Visit<'ast> for DecisionCollector<'_, '_> {
 
     fn visit_expr(&mut self, e: &'ast Expr) {
         match e {
-            Expr::If { cond, then, else_, span } => {
+            Expr::If {
+                cond,
+                then,
+                else_,
+                span,
+            } => {
                 let clause_count = count_clauses(cond);
                 if clause_count > 1 {
                     self.push_decision(span.line, DecisionKind::If, clause_count);
@@ -204,7 +225,12 @@ impl<'ast> Visit<'ast> for DecisionCollector<'_, '_> {
                     self.visit_expr(e);
                 }
             }
-            Expr::Match { scrutinee, arms, span, .. } => {
+            Expr::Match {
+                scrutinee,
+                arms,
+                span,
+                ..
+            } => {
                 self.visit_expr(scrutinee);
                 if arms.len() >= 2 {
                     self.push_decision(span.line, DecisionKind::Match, arms.len());
