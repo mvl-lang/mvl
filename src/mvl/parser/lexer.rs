@@ -1408,7 +1408,10 @@ mod tests {
     fn unicode_escape_error_invalid_codepoint() {
         // U+110000 exceeds the Unicode scalar range
         let (_, errors) = lex_all(r#""\u{110000}""#);
-        assert!(!errors.is_empty(), "expected a lex error for out-of-range codepoint");
+        assert!(
+            !errors.is_empty(),
+            "expected a lex error for out-of-range codepoint"
+        );
     }
 
     // ── Number literal formats (issue #65) ────────────────────────────────
