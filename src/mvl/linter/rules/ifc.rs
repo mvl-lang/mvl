@@ -53,7 +53,10 @@ pub fn relabel_tag_hygiene(prog: &Program, cfg: &LintConfig, out: &mut Vec<LintD
     // Pass 2: flag tags that appear at 3 or more distinct call sites.
     let mut tag_locations: HashMap<&str, Vec<(u32, u32)>> = HashMap::new();
     for (tag, line, col) in &sites {
-        tag_locations.entry(tag.as_str()).or_default().push((*line, *col));
+        tag_locations
+            .entry(tag.as_str())
+            .or_default()
+            .push((*line, *col));
     }
     for (tag, locations) in &tag_locations {
         if locations.len() >= 3 && !is_boilerplate_tag(tag) {

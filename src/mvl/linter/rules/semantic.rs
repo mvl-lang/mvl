@@ -8,8 +8,8 @@ use crate::mvl::parser::ast::{
     Block, Decl, ElseBranch, Expr, Literal, MatchArm, MatchBody, Pattern, Program, Stmt, TypeBody,
     TypeExpr, VariantFields,
 };
-use std::collections::{HashMap, HashSet};
 use crate::mvl::parser::visit::{walk_block, walk_expr, walk_stmt, Visit};
+use std::collections::{HashMap, HashSet};
 
 /// Flag statements that are unreachable because they follow a `return` in the
 /// same block.
@@ -588,7 +588,9 @@ pub fn unused_functions(prog: &Program, cfg: &LintConfig, out: &mut Vec<LintDiag
     let mut called: HashSet<String> = HashSet::new();
     for decl in &prog.declarations {
         if let Decl::Fn(f) = decl {
-            let mut v = CollectCalls { called: &mut called };
+            let mut v = CollectCalls {
+                called: &mut called,
+            };
             walk_block(&mut v, &f.body);
         }
     }
@@ -691,7 +693,12 @@ fn check_block_result_discard<'a>(
             // Pattern 2: statement-position call that returns Result (trailing semicolon discards)
             Stmt::Expr { expr, span } => {
                 if let Some(msg) = detect_result_discard_expr(expr, ret_types) {
-                    out.push(LintDiag::warning("silent-result-discard", msg, span.line, span.col));
+                    out.push(LintDiag::warning(
+                        "silent-result-discard",
+                        msg,
+                        span.line,
+                        span.col,
+                    ));
                 }
                 // Recurse into nested blocks (e.g. block expressions)
                 if let Expr::Block(b) = expr {
@@ -700,7 +707,11 @@ fn check_block_result_discard<'a>(
             }
             // Pattern 4: if let Ok(v) = res { ... } with no else
             // Desugared by the parser into a 2-arm match where the second arm has a unit body.
-            Stmt::Match { scrutinee: _, arms, span } => {
+            Stmt::Match {
+                scrutinee: _,
+                arms,
+                span,
+            } => {
                 if is_if_let_ok_no_else(arms) {
                     out.push(LintDiag::warning(
                         "silent-result-discard",
@@ -754,7 +765,9 @@ fn detect_result_discard_expr<'a>(
             "return value of `{name}()` (which returns `Result`) is silently discarded"
         )),
         // Pattern 3 & 5: method call on a result-returning expression
-        Expr::MethodCall { receiver, method, .. } => {
+        Expr::MethodCall {
+            receiver, method, ..
+        } => {
             match method.as_str() {
                 "unwrap_or" | "unwrap_or_else" | "unwrap_or_default" => {
                     if receiver_is_result(receiver, ret_types) {
@@ -805,7 +818,10 @@ fn is_if_let_ok_no_else(arms: &[MatchArm]) -> bool {
     }
     let first_is_ok = matches!(&arms[0].pattern, Pattern::Ok { .. });
     let second_is_wildcard_unit = matches!(&arms[1].pattern, Pattern::Wildcard(_))
-        && matches!(&arms[1].body, MatchBody::Expr(Expr::Literal(Literal::Unit, _)));
+        && matches!(
+            &arms[1].body,
+            MatchBody::Expr(Expr::Literal(Literal::Unit, _))
+        );
     first_is_ok && second_is_wildcard_unit
 }
 
@@ -1260,7 +1276,9 @@ mod tests {
         let mut diags = vec![];
         unused_functions(&prog, &cfg(), &mut diags);
         assert!(
-            diags.iter().any(|d| d.rule == "unused-function" && d.message.contains("dead")),
+            diags
+                .iter()
+                .any(|d| d.rule == "unused-function" && d.message.contains("dead")),
             "expected unused-function for `dead`; got: {diags:?}"
         );
     }
