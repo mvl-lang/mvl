@@ -776,13 +776,11 @@ fn detect_result_discard_expr<'a>(
                         ));
                     }
                 }
-                "ok" => {
-                    if receiver_is_result(receiver, ret_types) {
-                        return Some(
-                            "`.ok()` discards the `Err` variant by converting `Result` to `Option`"
-                                .into(),
-                        );
-                    }
+                "ok" if receiver_is_result(receiver, ret_types) => {
+                    return Some(
+                        "`.ok()` discards the `Err` variant by converting `Result` to `Option`"
+                            .into(),
+                    );
                 }
                 _ => {}
             }
@@ -793,15 +791,15 @@ fn detect_result_discard_expr<'a>(
 }
 
 /// True if the expression is a call to a function declared with `Result` return type.
-fn receiver_is_result<'a>(expr: &'a Expr, ret_types: &HashMap<&str, &'a TypeExpr>) -> bool {
+fn receiver_is_result(expr: &Expr, ret_types: &HashMap<&str, &TypeExpr>) -> bool {
     match expr {
         Expr::FnCall { name, .. } => call_returns_result(name, ret_types),
         _ => false,
     }
 }
 
-fn call_returns_result<'a>(name: &str, ret_types: &HashMap<&str, &'a TypeExpr>) -> bool {
-    ret_types.get(name).map_or(false, |ty| is_result_type(ty))
+fn call_returns_result(name: &str, ret_types: &HashMap<&str, &TypeExpr>) -> bool {
+    ret_types.get(name).is_some_and(|ty| is_result_type(ty))
 }
 
 fn is_result_type(ty: &TypeExpr) -> bool {
