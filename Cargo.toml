@@ -4,7 +4,7 @@ exclude = ["fuzz", "tests/spikes/003-gzip/bench"]
 
 [package]
 name = "mvl"
-version = "0.214.1"
+version = "0.215.0"
 edition = "2021"
 description = "MVL — Maximum Verifiable Language compiler"
 license = "Apache-2.0"

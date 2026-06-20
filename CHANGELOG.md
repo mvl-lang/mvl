@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [0.215.0] - 2026-06-20
+
+### Added
+
+- **Assurance: quantitative evidence for Req 4/5/6** — the assurance report now shows actual counts alongside violation counters, giving auditors a denominator for the "0 violations" claim:
+  - Req 4 (Null elimination): Option type sites, Some/None pattern matches, `?` propagate sites.
+  - Req 5 (Error visibility): Result type sites, Ok/Err pattern matches, `?` propagate sites.
+  - Req 6 (Ownership): immutable bindings, ref bindings, reassignment statements.
+  - Counts also surface in the JSON `verification_activity` block (`option_types`, `result_types`, `some_patterns`, `none_patterns`, `ok_patterns`, `err_patterns`, `propagate_sites`, `assign_sites`).
+
+## [0.214.1] - 2026-06-20
+
 ### Added
 
 - **`\u{NNNN}` Unicode escape sequences in string and char literals** (#1468) — the lexer now accepts `\u{NNNN}` (1–6 hex digits, case-insensitive) in regular strings, multiline strings, and char literals. Invalid codepoints (e.g. surrogates, out-of-range values) and missing braces produce a lex error and emit U+FFFD. This unblocks direct string-literal comparisons for non-ASCII expected values in tests.
