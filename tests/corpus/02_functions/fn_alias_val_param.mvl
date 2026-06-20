@@ -1,0 +1,27 @@
+// fn_alias_val_param.mvl — Function-pointer alias with `val T` param (#1467)
+//
+// Verifies that calling a function pointer whose alias declares a `val T`
+// (struct) parameter does not emit a spurious `.into()` coercion at the
+// call site. Issue #960 covered direct `ref T` HOF params; this exercises
+// the alias-resolution path for `val T`.
+//
+// Expected stdout:
+//   Hello /home
+
+type Request = struct { path: String }
+type Response = struct { body: String }
+type Dispatcher = fn(val Request) -> Response
+
+fn my_handler(req: val Request) -> Response {
+    Response { body: "Hello ".concat(req.path) }
+}
+
+fn call_dispatcher(d: Dispatcher, req: val Request) -> Response {
+    d(req)
+}
+
+fn main() -> Unit ! Console {
+    let r: Request = Request { path: "/home" };
+    let resp: Response = call_dispatcher(my_handler, r);
+    println(resp.body)
+}
