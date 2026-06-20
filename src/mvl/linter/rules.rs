@@ -12,6 +12,7 @@
 
 pub mod complexity;
 pub mod documentation;
+pub mod ifc;
 pub mod naming;
 pub mod semantic;
 pub mod style;
@@ -19,6 +20,7 @@ pub mod suggestions;
 
 pub use complexity::*;
 pub use documentation::*;
+pub use ifc::*;
 pub use naming::*;
 pub use semantic::*;
 pub use style::*;

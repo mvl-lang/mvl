@@ -130,6 +130,43 @@ fn lint_naming_conventions_clean() {
     );
 }
 
+// ── New semantic rules (#1373, #1465, #1466) ─────────────────────────────────
+
+#[test]
+fn lint_unused_function() {
+    let src = include_str!("corpus/14_linting/unused_function.mvl");
+    assert_lint_has_rule(src, "unused-function", "unused_function.mvl");
+}
+
+#[test]
+fn lint_silent_result_discard() {
+    let src = include_str!("corpus/14_linting/silent_result_discard.mvl");
+    assert_lint_has_rule(src, "silent-result-discard", "silent_result_discard.mvl");
+}
+
+#[test]
+fn lint_relabel_tag_hygiene() {
+    let src = include_str!("corpus/14_linting/relabel_tag_hygiene.mvl");
+    assert_lint_has_rule(src, "relabel-tag-hygiene", "relabel_tag_hygiene.mvl");
+}
+
+#[test]
+fn lint_allow_comment_suppresses_rule() {
+    // A `// allow: <rule-id> <reason>` comment on the preceding line suppresses the diagnostic.
+    let src = concat!(
+        "fn parse(s: String) -> Result[Int, String] { Ok(0) }\n",
+        "fn main() -> Unit {\n",
+        "    // allow: silent-result-discard background fire-and-forget\n",
+        "    parse(\"hello\");\n",
+        "}\n",
+    );
+    let rules = lint_file(src);
+    assert!(
+        rules.iter().all(|r| r != "silent-result-discard"),
+        "allow comment must suppress silent-result-discard; got: {rules:?}"
+    );
+}
+
 // ── Pipeline validation: parse errors prevent linting ────────────────────────
 
 #[test]
@@ -155,6 +192,18 @@ fn lint_all_corpus_files_parse_cleanly() {
         (
             "naming_conventions",
             include_str!("corpus/14_linting/naming_conventions.mvl"),
+        ),
+        (
+            "unused_function",
+            include_str!("corpus/14_linting/unused_function.mvl"),
+        ),
+        (
+            "silent_result_discard",
+            include_str!("corpus/14_linting/silent_result_discard.mvl"),
+        ),
+        (
+            "relabel_tag_hygiene",
+            include_str!("corpus/14_linting/relabel_tag_hygiene.mvl"),
         ),
         (
             "redundant_effects",

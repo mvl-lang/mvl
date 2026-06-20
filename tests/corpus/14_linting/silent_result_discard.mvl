@@ -1,0 +1,13 @@
+// Corpus: Linting — silent-result-discard rule
+// lint:expect silent-result-discard
+
+fn parse(s: String) -> Result[Int, String] {
+    Ok(0)
+}
+
+fn main() -> Unit {
+    // Pattern 4: if let Ok without else — Err silently no-ops.
+    if let Ok(v) = parse("hello") {
+        let _: Int = v;
+    }
+}

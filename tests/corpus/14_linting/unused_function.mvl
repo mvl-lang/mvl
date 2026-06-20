@@ -1,0 +1,11 @@
+// Corpus: Linting — unused-function rule
+// lint:expect unused-function
+
+// `helper` is never called from anywhere in this file.
+fn helper() -> Int {
+    42
+}
+
+fn main() -> Unit {
+    // helper is not called here — lint fires
+}

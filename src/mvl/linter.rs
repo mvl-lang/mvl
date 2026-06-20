@@ -98,6 +98,9 @@ pub fn lint(prog: &Program, src: &str, cfg: &LintConfig) -> LintResult {
     rules::for_iter_antipattern(prog, cfg, &mut diags);
     rules::while_to_for_range(prog, cfg, &mut diags);
     rules::deprecated_extern_rust(prog, cfg, &mut diags);
+    rules::unused_functions(prog, cfg, &mut diags);
+    rules::silent_result_discard(prog, cfg, &mut diags);
+    rules::relabel_tag_hygiene(prog, cfg, &mut diags);
 
     // Phase 3: LLM corpus quality rules
     rules::consistent_comment_style(src, cfg, &mut diags);
@@ -112,10 +115,28 @@ pub fn lint(prog: &Program, src: &str, cfg: &LintConfig) -> LintResult {
     rules::complexity_module_fanout(prog, cfg, &mut diags);
     rules::complexity_extern_ratio(prog, cfg, &mut diags);
 
+    // Remove diagnostics suppressed by an `// allow: <rule-id> <reason>` comment on the
+    // line immediately preceding the diagnostic.  Reason text is required (the pattern
+    // demands at least one non-space character after the rule id).
+    diags.retain(|d| !is_allow_suppressed(d, src));
+
     // Sort by line then col for consistent output
     diags.sort_by_key(|d| (d.span.line, d.span.col));
 
     LintResult { diags }
+}
+
+/// Returns `true` if the line immediately before `diag` contains an allow comment for its rule.
+///
+/// Format: `// allow: <rule-id> <reason>` where `<reason>` must be non-empty.
+fn is_allow_suppressed(diag: &LintDiag, src: &str) -> bool {
+    if diag.span.line <= 1 {
+        return false;
+    }
+    let prev_line_idx = (diag.span.line - 2) as usize;
+    let prev = src.lines().nth(prev_line_idx).unwrap_or("").trim();
+    let prefix = format!("// allow: {} ", diag.rule);
+    prev.starts_with(&prefix) && prev.len() > prefix.len()
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────

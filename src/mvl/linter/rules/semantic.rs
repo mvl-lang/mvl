@@ -5,10 +5,11 @@
 
 use crate::mvl::linter::{config::LintConfig, errors::LintDiag};
 use crate::mvl::parser::ast::{
-    Block, Decl, ElseBranch, Expr, MatchArm, MatchBody, Pattern, Program, Stmt, TypeBody, TypeExpr,
-    VariantFields,
+    Block, Decl, ElseBranch, Expr, Literal, MatchArm, MatchBody, Pattern, Program, Stmt, TypeBody,
+    TypeExpr, VariantFields,
 };
 use crate::mvl::parser::visit::{walk_block, walk_expr, walk_stmt, Visit};
+use std::collections::{HashMap, HashSet};
 
 /// Flag statements that are unreachable because they follow a `return` in the
 /// same block.
@@ -547,6 +548,281 @@ pub fn deprecated_extern_rust(prog: &Program, cfg: &LintConfig, out: &mut Vec<Li
     }
 }
 
+/// Flag non-`pub`, non-`main` functions that are never called within the program.
+///
+/// Rule id: `unused-function`
+///
+/// A function that is never invoked is dead code. This rule performs a whole-file
+/// call-set diff: declared names minus called names. `pub fn`, `fn main`, test
+/// functions, builtins, and extension methods are excluded.
+pub fn unused_functions(prog: &Program, cfg: &LintConfig, out: &mut Vec<LintDiag>) {
+    if !cfg.unused_functions {
+        return;
+    }
+
+    // Collect candidate declared functions (non-pub, non-main, non-test, non-builtin,
+    // non-extension-method).
+    let candidates: Vec<(&str, u32, u32)> = prog
+        .declarations
+        .iter()
+        .filter_map(|decl| {
+            if let Decl::Fn(f) = decl {
+                if !f.visible
+                    && !f.is_test
+                    && !f.is_builtin
+                    && f.receiver_type.is_none()
+                    && f.name != "main"
+                {
+                    return Some((f.name.as_str(), f.span.line, f.span.col));
+                }
+            }
+            None
+        })
+        .collect();
+
+    if candidates.is_empty() {
+        return;
+    }
+
+    // Collect all called function and method names across all declarations.
+    let mut called: HashSet<String> = HashSet::new();
+    for decl in &prog.declarations {
+        if let Decl::Fn(f) = decl {
+            let mut v = CollectCalls {
+                called: &mut called,
+            };
+            walk_block(&mut v, &f.body);
+        }
+    }
+
+    // Flag any candidate not in the call set.
+    for (name, line, col) in candidates {
+        if !called.contains(name) {
+            out.push(LintDiag::warning(
+                "unused-function",
+                format!("function `{name}` is never called — remove it or make it `pub`"),
+                line,
+                col,
+            ));
+        }
+    }
+}
+
+struct CollectCalls<'a> {
+    called: &'a mut HashSet<String>,
+}
+
+impl<'ast> Visit<'ast> for CollectCalls<'_> {
+    fn visit_stmt(&mut self, s: &'ast Stmt) {
+        walk_stmt(self, s);
+    }
+    fn visit_expr(&mut self, e: &'ast Expr) {
+        match e {
+            Expr::FnCall { name, .. } => {
+                self.called.insert(name.clone());
+            }
+            Expr::MethodCall { method, .. } => {
+                self.called.insert(method.clone());
+            }
+            _ => {}
+        }
+        walk_expr(self, e);
+    }
+}
+
+/// Flag `Result` values that are silently discarded without inspecting the `Err` variant.
+///
+/// Rule id: `silent-result-discard`
+///
+/// Detects five patterns:
+/// 1. `let _: Result[_, _] = expr;` — wildcard binding with explicit Result type annotation.
+/// 2. `fn_returning_result();` — statement-position call where the declared return type is
+///    `Result` (limited to functions declared in the same program).
+/// 3. `.unwrap_or(...)`, `.unwrap_or_else(...)`, `.unwrap_or_default()` on a call expression
+///    whose declared return type is `Result`.
+/// 4. `if let Ok(v) = res { ... }` with no else — the `Err` branch silently no-ops.
+/// 5. `.ok()` on a call expression whose declared return type is `Result`.
+///
+/// Per-site suppression: `// allow: silent-result-discard <reason>` on the preceding line.
+pub fn silent_result_discard(prog: &Program, cfg: &LintConfig, out: &mut Vec<LintDiag>) {
+    if !cfg.silent_result_discard {
+        return;
+    }
+
+    // Build a map from function name → return TypeExpr.
+    let ret_types: HashMap<&str, &TypeExpr> = prog
+        .declarations
+        .iter()
+        .filter_map(|d| {
+            if let Decl::Fn(f) = d {
+                Some((f.name.as_str(), f.return_type.as_ref()))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    for decl in &prog.declarations {
+        if let Decl::Fn(f) = decl {
+            check_block_result_discard(&f.body, &ret_types, out);
+        }
+    }
+}
+
+fn check_block_result_discard<'a>(
+    block: &'a Block,
+    ret_types: &HashMap<&str, &'a TypeExpr>,
+    out: &mut Vec<LintDiag>,
+) {
+    for stmt in &block.stmts {
+        match stmt {
+            // Pattern 1: let _: Result[_, _] = expr;
+            Stmt::Let {
+                pattern: Pattern::Wildcard(_),
+                ty,
+                span,
+                ..
+            } if is_result_type(ty) => {
+                out.push(LintDiag::warning(
+                    "silent-result-discard",
+                    "Result value bound to `_` — handle the `Err` variant or add an allow comment",
+                    span.line,
+                    span.col,
+                ));
+            }
+            // Pattern 2: statement-position call that returns Result (trailing semicolon discards)
+            Stmt::Expr { expr, span } => {
+                if let Some(msg) = detect_result_discard_expr(expr, ret_types) {
+                    out.push(LintDiag::warning(
+                        "silent-result-discard",
+                        msg,
+                        span.line,
+                        span.col,
+                    ));
+                }
+                // Recurse into nested blocks (e.g. block expressions)
+                if let Expr::Block(b) = expr {
+                    check_block_result_discard(b, ret_types, out);
+                }
+            }
+            // Pattern 4: if let Ok(v) = res { ... } with no else
+            // Desugared by the parser into a 2-arm match where the second arm has a unit body.
+            Stmt::Match {
+                scrutinee: _,
+                arms,
+                span,
+            } => {
+                if is_if_let_ok_no_else(arms) {
+                    out.push(LintDiag::warning(
+                        "silent-result-discard",
+                        "`if let Ok(…)` with no `else` silently ignores the `Err` variant",
+                        span.line,
+                        span.col,
+                    ));
+                }
+                // Recurse into arm bodies
+                for arm in arms {
+                    if let MatchBody::Block(b) = &arm.body {
+                        check_block_result_discard(b, ret_types, out);
+                    }
+                }
+            }
+            Stmt::If { then, else_, .. } => {
+                check_block_result_discard(then, ret_types, out);
+                match else_ {
+                    Some(ElseBranch::Block(eb)) => {
+                        check_block_result_discard(eb, ret_types, out);
+                    }
+                    Some(ElseBranch::If(inner)) => {
+                        check_block_result_discard(
+                            &Block {
+                                stmts: vec![*inner.clone()],
+                                span: inner.span(),
+                            },
+                            ret_types,
+                            out,
+                        );
+                    }
+                    None => {}
+                }
+            }
+            Stmt::For { body, .. } | Stmt::While { body, .. } => {
+                check_block_result_discard(body, ret_types, out);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Detect patterns 2, 3, 5 in an expression used in statement position or as a method receiver.
+fn detect_result_discard_expr<'a>(
+    expr: &'a Expr,
+    ret_types: &HashMap<&str, &'a TypeExpr>,
+) -> Option<String> {
+    match expr {
+        // Pattern 2: bare fn call at statement level that returns Result
+        Expr::FnCall { name, .. } if call_returns_result(name, ret_types) => Some(format!(
+            "return value of `{name}()` (which returns `Result`) is silently discarded"
+        )),
+        // Pattern 3 & 5: method call on a result-returning expression
+        Expr::MethodCall {
+            receiver, method, ..
+        } => {
+            match method.as_str() {
+                "unwrap_or" | "unwrap_or_else" | "unwrap_or_default" => {
+                    if receiver_is_result(receiver, ret_types) {
+                        return Some(format!(
+                            "`.{method}()` silently replaces the `Err` variant — handle the error explicitly"
+                        ));
+                    }
+                }
+                "ok" if receiver_is_result(receiver, ret_types) => {
+                    return Some(
+                        "`.ok()` discards the `Err` variant by converting `Result` to `Option`"
+                            .into(),
+                    );
+                }
+                _ => {}
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+/// True if the expression is a call to a function declared with `Result` return type.
+fn receiver_is_result(expr: &Expr, ret_types: &HashMap<&str, &TypeExpr>) -> bool {
+    match expr {
+        Expr::FnCall { name, .. } => call_returns_result(name, ret_types),
+        _ => false,
+    }
+}
+
+fn call_returns_result(name: &str, ret_types: &HashMap<&str, &TypeExpr>) -> bool {
+    ret_types.get(name).is_some_and(|ty| is_result_type(ty))
+}
+
+fn is_result_type(ty: &TypeExpr) -> bool {
+    matches!(ty, TypeExpr::Result { .. })
+}
+
+/// True if `arms` represents an `if let Ok(…) = expr { … }` with no else clause.
+///
+/// The parser desugars this into a 2-arm match: first arm carries the `Ok(…)` pattern,
+/// second arm is a wildcard that evaluates to `()`.
+fn is_if_let_ok_no_else(arms: &[MatchArm]) -> bool {
+    if arms.len() != 2 {
+        return false;
+    }
+    let first_is_ok = matches!(&arms[0].pattern, Pattern::Ok { .. });
+    let second_is_wildcard_unit = matches!(&arms[1].pattern, Pattern::Wildcard(_))
+        && matches!(
+            &arms[1].body,
+            MatchBody::Expr(Expr::Literal(Literal::Unit, _))
+        );
+    first_is_ok && second_is_wildcard_unit
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -987,5 +1263,182 @@ mod tests {
             diags.iter().all(|d| d.rule != "deprecated-extern-rust"),
             "rule must be silent when disabled; got: {diags:?}"
         );
+    }
+
+    // -- unused_functions --
+
+    #[test]
+    fn unused_fn_detected() {
+        let src = "fn dead() -> Int { 0 }\nfn main() -> Unit { }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        unused_functions(&prog, &cfg(), &mut diags);
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.rule == "unused-function" && d.message.contains("dead")),
+            "expected unused-function for `dead`; got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn called_fn_not_flagged() {
+        let src = "fn helper() -> Int { 0 }\nfn main() -> Unit { let x: Int = helper(); }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        unused_functions(&prog, &cfg(), &mut diags);
+        assert!(
+            diags.iter().all(|d| d.rule != "unused-function"),
+            "called fn must not be flagged; got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn pub_fn_not_flagged_even_if_uncalled() {
+        let src = "pub fn api() -> Int { 0 }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        unused_functions(&prog, &cfg(), &mut diags);
+        assert!(
+            diags.iter().all(|d| d.rule != "unused-function"),
+            "pub fn must never be flagged; got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn main_fn_not_flagged() {
+        let src = "fn main() -> Unit { }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        unused_functions(&prog, &cfg(), &mut diags);
+        assert!(
+            diags.iter().all(|d| d.rule != "unused-function"),
+            "fn main must not be flagged; got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn unused_functions_disabled() {
+        let src = "fn dead() -> Int { 0 }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        let cfg_off = LintConfig {
+            unused_functions: false,
+            ..LintConfig::default()
+        };
+        unused_functions(&prog, &cfg_off, &mut diags);
+        assert!(diags.is_empty(), "rule must be silent when disabled");
+    }
+
+    // -- silent_result_discard --
+
+    #[test]
+    fn pattern1_let_wildcard_result_detected() {
+        let src = concat!(
+            "fn try_parse(s: String) -> Result[Int, String] { Ok(0) }\n",
+            "fn main() -> Unit {\n",
+            "    let _: Result[Int, String] = try_parse(\"x\");\n",
+            "}\n",
+        );
+        let prog = parse(src);
+        let mut diags = vec![];
+        silent_result_discard(&prog, &cfg(), &mut diags);
+        assert!(
+            diags.iter().any(|d| d.rule == "silent-result-discard"),
+            "expected silent-result-discard for let _ pattern; got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn pattern2_statement_position_result_call_detected() {
+        let src = concat!(
+            "fn do_thing() -> Result[Unit, String] { Ok(()) }\n",
+            "fn main() -> Unit {\n",
+            "    do_thing();\n",
+            "}\n",
+        );
+        let prog = parse(src);
+        let mut diags = vec![];
+        silent_result_discard(&prog, &cfg(), &mut diags);
+        assert!(
+            diags.iter().any(|d| d.rule == "silent-result-discard"),
+            "expected silent-result-discard for statement-position Result call; got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn pattern4_if_let_ok_no_else_detected() {
+        let src = concat!(
+            "fn try_parse(s: String) -> Result[Int, String] { Ok(0) }\n",
+            "fn main() -> Unit {\n",
+            "    if let Ok(v) = try_parse(\"x\") {\n",
+            "        let _: Int = v;\n",
+            "    }\n",
+            "}\n",
+        );
+        let prog = parse(src);
+        let mut diags = vec![];
+        silent_result_discard(&prog, &cfg(), &mut diags);
+        assert!(
+            diags.iter().any(|d| d.rule == "silent-result-discard"),
+            "expected silent-result-discard for if let Ok with no else; got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn if_let_ok_with_else_clean() {
+        let src = concat!(
+            "fn try_parse(s: String) -> Result[Int, String] { Ok(0) }\n",
+            "fn main() -> Unit {\n",
+            "    if let Ok(v) = try_parse(\"x\") {\n",
+            "        let _: Int = v;\n",
+            "    } else {\n",
+            "        let _: Unit = ();\n",
+            "    }\n",
+            "}\n",
+        );
+        let prog = parse(src);
+        let mut diags = vec![];
+        silent_result_discard(&prog, &cfg(), &mut diags);
+        assert!(
+            diags.iter().all(|d| d.rule != "silent-result-discard"),
+            "if let Ok with else must not warn; got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn option_unwrap_or_clean() {
+        // Option::unwrap_or is explicitly excluded — must not fire
+        let src = concat!(
+            "fn find(xs: List[Int]) -> Option[Int] { None }\n",
+            "fn main() -> Unit {\n",
+            "    let x: Int = find([1, 2, 3]).unwrap_or(0);\n",
+            "}\n",
+        );
+        let prog = parse(src);
+        let mut diags = vec![];
+        silent_result_discard(&prog, &cfg(), &mut diags);
+        assert!(
+            diags.iter().all(|d| d.rule != "silent-result-discard"),
+            "Option::unwrap_or must not warn; got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn silent_result_discard_disabled() {
+        let src = concat!(
+            "fn do_thing() -> Result[Unit, String] { Ok(()) }\n",
+            "fn main() -> Unit {\n",
+            "    do_thing();\n",
+            "}\n",
+        );
+        let prog = parse(src);
+        let mut diags = vec![];
+        let cfg_off = LintConfig {
+            silent_result_discard: false,
+            ..LintConfig::default()
+        };
+        silent_result_discard(&prog, &cfg_off, &mut diags);
+        assert!(diags.is_empty(), "rule must be silent when disabled");
     }
 }
