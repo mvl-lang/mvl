@@ -189,6 +189,18 @@ test fn from_bytes_empty() -> Unit {
     assert_eq(String::from_bytes(bytes), "")
 }
 
+test fn from_bytes_utf8_multibyte() -> Unit {
+    // 0xC3 0xA9 is the two-byte UTF-8 encoding of U+00E9 é
+    let bytes: List[Byte] = [from_int(0xC3), from_int(0xA9)];
+    assert_eq(String::from_bytes(bytes), "é")
+}
+
+test fn from_bytes_utf8_cafe() -> Unit {
+    // "café" = 0x63 0x61 0x66 0xC3 0xA9
+    let bytes: List[Byte] = [from_int(0x63), from_int(0x61), from_int(0x66), from_int(0xC3), from_int(0xA9)];
+    assert_eq(String::from_bytes(bytes), "café")
+}
+
 // ── hex_char_value ────────────────────────────────────────────────────────────
 
 test fn hex_char_value_digits() -> Unit {

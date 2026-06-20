@@ -62,12 +62,11 @@ pub fn str_byte_at(s: String, i: i64) -> Option<u8> {
     })
 }
 
-/// Reconstruct a `String` from a list of byte values (Latin-1 encoding).
+/// Reconstruct a `String` from a UTF-8 byte sequence (lossy).
 ///
-/// Each byte value 0–255 maps to the Unicode codepoint with the same value.
-/// This preserves binary data: `from_bytes([0xFF]).byte_at(0) == 0xFF`.
+/// Invalid UTF-8 byte sequences are replaced with U+FFFD.
 pub fn str_from_bytes(bytes: Vec<u8>) -> String {
-    bytes.iter().map(|&b| b as char).collect()
+    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 /// Concatenate two strings. `str_concat(a, b)` == `a + b`.

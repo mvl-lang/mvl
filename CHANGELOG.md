@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.213.2] - 2026-06-20
+
+### Fixed
+
+- **`String::from_bytes` now decodes UTF-8 instead of Latin-1** (#1429) — the Rust runtime was mapping each byte to the Unicode code point with the same value (Latin-1), so multi-byte UTF-8 sequences such as `[0xC3, 0xA9]` produced `"Ã©"` instead of `"é"`. Fixed by switching to `String::from_utf8_lossy`, matching the documented "UTF-8, lossy" contract in `std/strings.mvl` and the existing LLVM backend implementation. Regression tests: `from_bytes_utf8_multibyte` and `from_bytes_utf8_cafe` in `tests/stdlib/strings_test.mvl`.
+
 ## [0.213.1] - 2026-06-19
 
 ### Fixed
