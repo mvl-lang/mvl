@@ -1,0 +1,7 @@
+// Corpus: Linting — relabel-tag-hygiene rule
+// lint:expect relabel-tag-hygiene
+
+fn handle_a(input: Tainted[String]) -> String {
+    // Boilerplate "TODO" tag — no audit value.
+    relabel trust(input, "TODO")
+}

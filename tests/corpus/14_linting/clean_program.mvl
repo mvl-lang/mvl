@@ -19,3 +19,7 @@ fn color_value(c: Color) -> Int {
 fn add(a: Int, b: Int) -> Int {
     a + b
 }
+
+fn main() -> Unit {
+    let _: Int = add(color_value(Color::Red), 1);
+}

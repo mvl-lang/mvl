@@ -47,6 +47,9 @@
 //! | `require_explicit_totality` | `false` | Warn on non-test fns missing explicit `total`/`partial` keyword (opt-in) |
 //! | `for_iter_antipattern`      | `true`  | Error on `while/.get(i)/match/None=>()` list-iteration anti-pattern (#705) |
 //! | `deprecated_extern_rust`    | `true`  | Warn on `extern "rust"` — deprecated; use `extern "C"` instead (#561)      |
+//! | `unused_functions`          | `true`  | Flag non-pub, non-main functions with no call sites (#1373)                 |
+//! | `silent_result_discard`     | `true`  | Flag silently-discarded `Result` values (#1465)                             |
+//! | `relabel_tag_hygiene`       | `true`  | Flag reused or boilerplate audit tags on `relabel` expressions (#1466)      |
 //!
 //! ### Phase 3 — LLM corpus quality rules
 //!
@@ -117,6 +120,12 @@ pub struct LintConfig {
     pub while_to_for_range: bool,
     /// Warn on `extern "rust"` blocks — deprecated in favour of `extern "C"` (#561).
     pub deprecated_extern_rust: bool,
+    /// Flag non-pub, non-main functions that are never called within the program (#1373).
+    pub unused_functions: bool,
+    /// Flag `Result` values that are silently discarded without inspecting the `Err` (#1465).
+    pub silent_result_discard: bool,
+    /// Flag reused or boilerplate audit tags on `relabel trust` / `relabel classify` (#1466).
+    pub relabel_tag_hygiene: bool,
 
     // ── Phase 3: LLM corpus quality rules ────────────────────────────────
     /// Flag block comments `/* */`; only `//` line comments are allowed.
@@ -169,6 +178,9 @@ impl Default for LintConfig {
             for_iter_antipattern: true,
             while_to_for_range: true,
             deprecated_extern_rust: true,
+            unused_functions: true,
+            silent_result_discard: true,
+            relabel_tag_hygiene: true,
             consistent_comment_style: false,
             require_doc_comments: true,
             doc_comment_examples: false,
@@ -303,6 +315,9 @@ fn load_from(path: &Path) -> Option<LintConfig> {
             "for_iter_antipattern" => cfg.for_iter_antipattern = parse_bool(val),
             "while_to_for_range" => cfg.while_to_for_range = parse_bool(val),
             "deprecated_extern_rust" => cfg.deprecated_extern_rust = parse_bool(val),
+            "unused_functions" => cfg.unused_functions = parse_bool(val),
+            "silent_result_discard" => cfg.silent_result_discard = parse_bool(val),
+            "relabel_tag_hygiene" => cfg.relabel_tag_hygiene = parse_bool(val),
             "consistent_comment_style" => cfg.consistent_comment_style = parse_bool(val),
             "require_doc_comments" => cfg.require_doc_comments = parse_bool(val),
             "doc_comment_examples" => cfg.doc_comment_examples = parse_bool(val),
