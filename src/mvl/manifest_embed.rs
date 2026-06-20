@@ -607,6 +607,7 @@ mod tests {
                 git: None,
                 license: Some("MIT".to_string()),
                 allow_license_override: None,
+                last_checked: None,
             },
             LockedPackage {
                 name: "pkg-b".to_string(),
@@ -616,6 +617,7 @@ mod tests {
                 git: None,
                 license: Some("Apache-2.0".to_string()),
                 allow_license_override: None,
+                last_checked: None,
             },
         ];
         let src = generate_manifest_mvl(&base_meta(), &pkgs, &[]);
@@ -640,6 +642,7 @@ mod tests {
             git: None,
             license: Some("Apache-2.0".to_string()),
             allow_license_override: None,
+            last_checked: None,
         };
         let src = generate_manifest_mvl(&base_meta(), &[pkg], &[]);
         assert!(
@@ -658,6 +661,7 @@ mod tests {
             git: None,
             license: Some("MIT".to_string()),
             allow_license_override: None,
+            last_checked: None,
         };
         let src = generate_manifest_mvl(&base_meta(), &[pkg.clone(), pkg], &[]);
         // Only one "MIT" in the licenses list
@@ -679,6 +683,7 @@ mod tests {
             git: None,
             license: None,
             allow_license_override: None,
+            last_checked: None,
         };
         let src = generate_manifest_mvl(&base_meta(), &[pkg], &[]);
         assert!(src.contains("licenses:  [],"), "None license → empty list");
@@ -804,6 +809,7 @@ mod tests {
             git: None,
             license: None,
             allow_license_override: None,
+            last_checked: None,
         }];
         let bridges = vec![FfiBridgeData {
             abi: "rust".to_string(),

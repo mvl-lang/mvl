@@ -22,7 +22,7 @@ pub mod sbom;
 pub mod sbom_diff;
 pub mod version;
 
-use fetch::{fetch_package, pkg_cache_dir, resolve_pkg_dir, verify_hash};
+use fetch::{fetch_package, fetch_package_opts, pkg_cache_dir, resolve_pkg_dir, verify_hash};
 use lock::LockFile;
 use manifest::{DepSpec, Manifest};
 use std::path::{Path, PathBuf};
@@ -146,6 +146,12 @@ pub fn cmd_add(
     println!("Fetching {pkg_name} @ {resolved_tag}...");
 
     let mut locked = fetch_package(&pkg_name, &git_url, &resolved_tag)?;
+
+    // Record when we validated this entry against the remote (#1460).
+    locked.last_checked = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .ok();
 
     // Read the fetched package's license from its mvl.toml (#635)
     let pkg_license = read_package_license(&pkg_name, &version_str);
@@ -356,6 +362,33 @@ fn install_local(src: &Path, dst: &Path) -> Result<(), PackageError> {
     Ok(())
 }
 
+/// Options for `mvl update` (#1456).
+#[derive(Debug, Default, Clone)]
+pub struct UpdateOptions {
+    /// Re-clone cached packages instead of trusting on-disk content (#1455).
+    pub force: bool,
+    /// Skip all network calls; report cache-vs-lock state only.
+    pub offline: bool,
+    /// Compute the update plan but do not write mvl.lock or mvl.toml.
+    pub dry_run: bool,
+    /// Restrict the update to a single dependency name.
+    pub only: Option<String>,
+}
+
+/// Outcome of attempting to update a single dependency.
+enum DepOutcome {
+    /// Lock file was updated (version or commit SHA changed).
+    Updated,
+    /// Already at the latest published version and content matches the remote.
+    UpToDate,
+    /// User excluded all candidate versions (or none had a semver tag).
+    NoEligible,
+    /// Network or git failure — caller should warn and continue (#1458).
+    Skipped(String),
+    /// Plan-only mode (dry-run / offline): no mutation performed.
+    Planned,
+}
+
 /// `mvl update`
 ///
 /// Re-resolves versions for all git dependencies, fetches any newer tags,
@@ -365,7 +398,9 @@ fn install_local(src: &Path, dst: &Path) -> Result<(), PackageError> {
 /// - `[security] min-age-days` in `mvl.toml` or global XDG config
 /// - `exclude = [...]` per-dependency in `mvl.toml`
 /// - `[exclusions]` global table in `$XDG_CONFIG_HOME/mvl/config.toml`
-pub fn cmd_update(project_root: &Path) -> Result<(), PackageError> {
+///
+/// Behavioral flags live on `UpdateOptions` (#1456).
+pub fn cmd_update(project_root: &Path, opts: &UpdateOptions) -> Result<(), PackageError> {
     let manifest = Manifest::load(project_root)?;
 
     if manifest.dependencies.is_empty() {
@@ -375,7 +410,6 @@ pub fn cmd_update(project_root: &Path) -> Result<(), PackageError> {
 
     let global = GlobalConfig::load();
 
-    // Project-level setting wins; fall back to global config.
     let min_age_days = if manifest.security.min_age_days > 0 {
         manifest.security.min_age_days
     } else {
@@ -389,99 +423,377 @@ pub fn cmd_update(project_root: &Path) -> Result<(), PackageError> {
     let min_age_secs = min_age_days * 86_400;
 
     let mut lockfile = LockFile::load_or_empty(project_root);
+    let mut manifest_tag_updates: Vec<(String, String)> = Vec::new();
+
     let mut updated = 0usize;
+    let mut up_to_date = 0usize;
+    let mut skipped = 0usize;
+    let mut planned = 0usize;
+    let mut total = 0usize;
 
     for (name, spec) in &manifest.dependencies {
-        let (git_url, local_exclude) = match spec {
-            DepSpec::Git { git, exclude, .. } => (git.clone(), exclude.as_slice()),
-            DepSpec::Version(constraint) => {
-                eprintln!(
-                    "warning: cannot update '{name}' (version constraint '{constraint}' has no git URL)"
-                );
+        if let Some(ref only) = opts.only {
+            if only != name {
                 continue;
             }
-        };
-
-        // Merge local and global exclusion lists for this dep.
-        let global_exclude = global
-            .exclusions
-            .get(&git_url)
-            .map(Vec::as_slice)
-            .unwrap_or(&[]);
-
-        println!("Checking {name}...");
-
-        // Fetch tag dates only when a lockout period is configured.
-        let tag_dates: std::collections::HashMap<String, u64> = if min_age_secs > 0 {
-            fetch::fetch_tag_dates(&git_url).unwrap_or_default()
-        } else {
-            std::collections::HashMap::new()
-        };
-
-        let tags = fetch::list_git_tags(&git_url)?;
-
-        // Filter tags: skip excluded versions and those that are too new.
-        let eligible: Vec<String> = tags
-            .into_iter()
-            .filter(|tag| {
-                let vstr = tag.strip_prefix('v').unwrap_or(tag);
-                if local_exclude.iter().any(|e| e == vstr || e == tag.as_str()) {
-                    println!("  skipped {name}@{vstr} (excluded in mvl.toml)");
-                    return false;
-                }
-                if global_exclude.iter().any(|e| e == vstr || e == tag.as_str()) {
-                    println!("  skipped {name}@{vstr} (excluded in global config)");
-                    return false;
-                }
-                if min_age_secs > 0 {
-                    if let Some(&published) = tag_dates.get(tag.as_str()) {
-                        let age_secs = now_secs.saturating_sub(published);
-                        let age_days = age_secs / 86_400;
-                        if age_secs < min_age_secs {
-                            println!(
-                                "  skipped {name}@{vstr} (published {age_days} day(s) ago, min_age_days={min_age_days})"
-                            );
-                            return false;
-                        }
-                    }
-                }
-                true
-            })
-            .collect();
-
-        let latest = match latest_semver_tag(&eligible) {
-            Some(t) => t,
-            None => {
-                println!("  {name}: no eligible versions available (all filtered)");
-                continue;
-            }
-        };
-
-        let current_version = lockfile
-            .get(name)
-            .map(|p| p.version.as_str())
-            .unwrap_or("0.0.0");
-        let latest_version = latest.strip_prefix('v').unwrap_or(&latest);
-
-        if latest_version == current_version {
-            println!("  {name} is up to date ({current_version})");
-            continue;
         }
+        total += 1;
 
-        println!("  {name}: {current_version} → {latest_version}");
-        let locked = fetch_package(name, &git_url, &latest)?;
-        lockfile.upsert(locked);
-        updated += 1;
+        let outcome = update_one_dep(
+            name,
+            spec,
+            &mut lockfile,
+            &mut manifest_tag_updates,
+            &global,
+            min_age_secs,
+            min_age_days,
+            now_secs,
+            opts,
+        );
+        match outcome {
+            DepOutcome::Updated => updated += 1,
+            DepOutcome::UpToDate => up_to_date += 1,
+            DepOutcome::NoEligible => skipped += 1,
+            DepOutcome::Skipped(reason) => {
+                skipped += 1;
+                eprintln!("warning: {name}: {reason}");
+            }
+            DepOutcome::Planned => planned += 1,
+        }
     }
 
+    if opts.only.is_some() && total == 0 {
+        return Err(PackageError::InvalidInput(format!(
+            "no dependency named '{}' in mvl.toml",
+            opts.only.as_deref().unwrap_or("")
+        )));
+    }
+
+    if opts.dry_run || opts.offline {
+        println!(
+            "(dry-run) Would update {updated} package(s), {up_to_date} unchanged, {skipped} skipped, {planned} planned.",
+        );
+        return Ok(());
+    }
+
+    // Persist mvl.lock (mvl.toml tag sync is handled below, #1459).
     lockfile.write(project_root)?;
 
-    if updated > 0 {
-        println!("Updated {updated} package(s).");
+    if !manifest_tag_updates.is_empty() {
+        match sync_manifest_tags(project_root, &manifest_tag_updates) {
+            Ok(()) => {}
+            Err(e) => {
+                eprintln!("warning: could not sync mvl.toml tags: {e}");
+                for (n, v) in &manifest_tag_updates {
+                    eprintln!("  hint: bump '{n}' tag in mvl.toml to v{v}");
+                }
+            }
+        }
+    }
+
+    if total == 0 {
+        println!("No dependencies matched (filter active).");
+    } else if updated > 0 || skipped > 0 {
+        println!("Updated {updated} package(s), {up_to_date} unchanged, {skipped} skipped.",);
     } else {
         println!("All packages are up to date.");
     }
+
+    // Exit non-zero only when *every* dep failed (#1458).
+    if total > 0 && skipped == total {
+        return Err(PackageError::NoVersion(format!(
+            "all {total} dependencies failed to update — see warnings above"
+        )));
+    }
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn update_one_dep(
+    name: &str,
+    spec: &DepSpec,
+    lockfile: &mut LockFile,
+    manifest_tag_updates: &mut Vec<(String, String)>,
+    global: &GlobalConfig,
+    min_age_secs: u64,
+    min_age_days: u64,
+    now_secs: u64,
+    opts: &UpdateOptions,
+) -> DepOutcome {
+    let (git_url, local_exclude) = match spec {
+        DepSpec::Git { git, exclude, .. } => (git.clone(), exclude.as_slice()),
+        DepSpec::Version(constraint) => {
+            eprintln!(
+                "warning: cannot update '{name}' (version constraint '{constraint}' has no git URL)"
+            );
+            return DepOutcome::Skipped("no git URL".to_string());
+        }
+    };
+
+    let global_exclude = global
+        .exclusions
+        .get(&git_url)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+
+    println!("Checking {name}...");
+
+    // Offline mode (#1456): use whatever the lockfile already has, warn on age.
+    if opts.offline {
+        let entry = lockfile.get(name);
+        match entry {
+            Some(p) => {
+                if let Some(last) = p.last_checked {
+                    let age_days = now_secs.saturating_sub(last) / 86_400;
+                    println!(
+                        "  {name}: locked at {} (last checked {} day(s) ago — offline mode, not refreshing)",
+                        p.version, age_days
+                    );
+                } else {
+                    println!(
+                        "  {name}: locked at {} (no last-checked timestamp — offline mode)",
+                        p.version
+                    );
+                }
+                return DepOutcome::Planned;
+            }
+            None => return DepOutcome::Skipped("not in lockfile (offline)".to_string()),
+        }
+    }
+
+    // Optionally fetch tag publish dates for the min-age-days policy.
+    let tag_dates: std::collections::HashMap<String, u64> = if min_age_secs > 0 {
+        match fetch::fetch_tag_dates(&git_url) {
+            Ok(d) => d,
+            Err(e) if e.is_recoverable() => {
+                eprintln!(
+                    "  warning: could not fetch tag dates for {name}: {e} — proceeding without age filter"
+                );
+                std::collections::HashMap::new()
+            }
+            Err(e) => return DepOutcome::Skipped(e.to_string()),
+        }
+    } else {
+        std::collections::HashMap::new()
+    };
+
+    let tags = match fetch::list_git_tags(&git_url) {
+        Ok(t) => t,
+        Err(e) if e.is_recoverable() => return DepOutcome::Skipped(e.to_string()),
+        Err(e) => return DepOutcome::Skipped(e.to_string()),
+    };
+
+    let eligible: Vec<String> = tags
+        .into_iter()
+        .filter(|tag| {
+            let vstr = tag.strip_prefix('v').unwrap_or(tag);
+            if local_exclude.iter().any(|e| e == vstr || e == tag.as_str()) {
+                println!("  skipped {name}@{vstr} (excluded in mvl.toml)");
+                return false;
+            }
+            if global_exclude.iter().any(|e| e == vstr || e == tag.as_str()) {
+                println!("  skipped {name}@{vstr} (excluded in global config)");
+                return false;
+            }
+            if min_age_secs > 0 {
+                if let Some(&published) = tag_dates.get(tag.as_str()) {
+                    let age_secs = now_secs.saturating_sub(published);
+                    let age_days = age_secs / 86_400;
+                    if age_secs < min_age_secs {
+                        println!(
+                            "  skipped {name}@{vstr} (published {age_days} day(s) ago, min_age_days={min_age_days})"
+                        );
+                        return false;
+                    }
+                }
+            }
+            true
+        })
+        .collect();
+
+    let latest = match latest_semver_tag(&eligible) {
+        Some(t) => t,
+        None => {
+            println!("  {name}: no eligible versions available (all filtered)");
+            return DepOutcome::NoEligible;
+        }
+    };
+
+    let current_version = lockfile
+        .get(name)
+        .map(|p| p.version.clone())
+        .unwrap_or_else(|| "0.0.0".to_string());
+    let latest_version = latest.strip_prefix('v').unwrap_or(&latest).to_string();
+
+    if latest_version == current_version {
+        // #1461: even on "up to date", cross-check remote tag SHA against locked commit.
+        if let Some(locked) = lockfile.get(name).cloned() {
+            match fetch::ls_remote_tag_sha(&git_url, &latest) {
+                Ok(Some(remote_sha)) => {
+                    if let Some(ref locked_sha) = locked.commit {
+                        if !shas_equal(locked_sha, &remote_sha) {
+                            eprintln!(
+                                "warning: {name}@{current_version} remote commit ({remote_sha}) differs from locked ({locked_sha})"
+                            );
+                            eprintln!(
+                                "  hint: re-run with --force to refresh cache, or investigate upstream tag manipulation"
+                            );
+                            if opts.force {
+                                return refresh_locked(
+                                    name,
+                                    &git_url,
+                                    &latest,
+                                    lockfile,
+                                    manifest_tag_updates,
+                                    &current_version,
+                                    &latest_version,
+                                    now_secs,
+                                    opts,
+                                );
+                            }
+                        }
+                    }
+                }
+                Ok(None) => {
+                    eprintln!(
+                        "warning: {name}: remote tag {latest} not found (may have been deleted)"
+                    );
+                }
+                Err(e) if e.is_recoverable() => {
+                    eprintln!("  warning: could not cross-check remote SHA for {name}: {e}");
+                }
+                Err(e) => return DepOutcome::Skipped(e.to_string()),
+            }
+        }
+        println!("  {name} is up to date ({current_version})");
+        // Refresh last-checked even when version unchanged.
+        if !opts.dry_run {
+            if let Some(existing) = lockfile.get(name).cloned() {
+                let mut refreshed = existing;
+                refreshed.last_checked = Some(now_secs);
+                lockfile.upsert(refreshed);
+            }
+        }
+        return DepOutcome::UpToDate;
+    }
+
+    println!("  {name}: {current_version} → {latest_version}");
+    refresh_locked(
+        name,
+        &git_url,
+        &latest,
+        lockfile,
+        manifest_tag_updates,
+        &current_version,
+        &latest_version,
+        now_secs,
+        opts,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn refresh_locked(
+    name: &str,
+    git_url: &str,
+    latest_tag: &str,
+    lockfile: &mut LockFile,
+    manifest_tag_updates: &mut Vec<(String, String)>,
+    current_version: &str,
+    latest_version: &str,
+    now_secs: u64,
+    opts: &UpdateOptions,
+) -> DepOutcome {
+    if opts.dry_run {
+        println!("  (would update) {name}: {current_version} → {latest_version}");
+        return DepOutcome::Planned;
+    }
+    let mut locked = match fetch_package_opts(name, git_url, latest_tag, opts.force) {
+        Ok(p) => p,
+        Err(e) if e.is_recoverable() => return DepOutcome::Skipped(e.to_string()),
+        Err(e) => return DepOutcome::Skipped(e.to_string()),
+    };
+    locked.last_checked = Some(now_secs);
+    lockfile.upsert(locked);
+    if current_version != latest_version {
+        manifest_tag_updates.push((name.to_string(), latest_version.to_string()));
+    }
+    DepOutcome::Updated
+}
+
+/// Best-effort comparison between two git SHAs of possibly-different lengths
+/// (e.g. abbreviated vs full). Matches when one is a prefix of the other.
+fn shas_equal(a: &str, b: &str) -> bool {
+    let a = a.trim();
+    let b = b.trim();
+    if a.is_empty() || b.is_empty() {
+        return false;
+    }
+    a.starts_with(b) || b.starts_with(a)
+}
+
+/// Rewrite the `tag = "..."` field for each updated dep in `mvl.toml` (#1459).
+///
+/// Uses a line-surgical edit (not a full to_toml roundtrip) so comments and
+/// formatting in the user's manifest are preserved.
+fn sync_manifest_tags(
+    project_root: &Path,
+    updates: &[(String, String)],
+) -> Result<(), PackageError> {
+    let path = project_root.join("mvl.toml");
+    let content = std::fs::read_to_string(&path)
+        .map_err(|e| PackageError::Io(path.display().to_string(), e.to_string()))?;
+
+    let mut out = String::with_capacity(content.len());
+    for line in content.lines() {
+        let mut replaced = line.to_string();
+        let trimmed = line.trim_start();
+        // Match lines that begin with `"<dep-name>" = { ... }` and contain a
+        // `tag = "..."` entry.
+        if let Some(after_quote) = trimmed.strip_prefix('"') {
+            if let Some(close_quote) = after_quote.find('"') {
+                let dep_name = &after_quote[..close_quote];
+                if let Some((_, new_ver)) = updates.iter().find(|(n, _)| n == dep_name) {
+                    replaced = rewrite_tag_in_line(line, new_ver);
+                }
+            }
+        }
+        out.push_str(&replaced);
+        out.push('\n');
+    }
+    // Preserve original trailing newline behavior — only strip the one we added
+    // if the original didn't end with a newline.
+    if !content.ends_with('\n') {
+        out.pop();
+    }
+    std::fs::write(&path, out)
+        .map_err(|e| PackageError::Io(path.display().to_string(), e.to_string()))?;
+    Ok(())
+}
+
+/// Replace a `tag = "vX.Y.Z"` substring in `line` with the new version,
+/// preserving an existing `v` prefix if present.
+fn rewrite_tag_in_line(line: &str, new_version: &str) -> String {
+    let needle = "tag = \"";
+    let start = match line.find(needle) {
+        Some(i) => i + needle.len(),
+        None => return line.to_string(),
+    };
+    let rest = &line[start..];
+    let end_off = match rest.find('"') {
+        Some(i) => i,
+        None => return line.to_string(),
+    };
+    let current_tag = &rest[..end_off];
+    let new_tag = if current_tag.starts_with('v') {
+        format!("v{new_version}")
+    } else {
+        new_version.to_string()
+    };
+    let mut out = String::with_capacity(line.len());
+    out.push_str(&line[..start]);
+    out.push_str(&new_tag);
+    out.push_str(&line[start + end_off..]);
+    out
 }
 
 /// `mvl sbom [--format=<fmt>]`
@@ -1471,7 +1783,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let manifest = "[package]\nname = \"proj\"\nversion = \"1.0.0\"\nlicense = \"Apache-2.0\"\nrequires-mvl = \">=0.1.0\"\n";
         std::fs::write(tmp.path().join("mvl.toml"), manifest).unwrap();
-        cmd_update(tmp.path()).unwrap();
+        cmd_update(tmp.path(), &UpdateOptions::default()).unwrap();
     }
 
     #[test]
@@ -1479,17 +1791,128 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let manifest = "[package]\nname = \"proj\"\nversion = \"1.0.0\"\nlicense = \"Apache-2.0\"\nrequires-mvl = \">=0.1.0\"\n\n[dependencies]\n\"some-pkg\" = \">=1.0.0\"\n";
         std::fs::write(tmp.path().join("mvl.toml"), manifest).unwrap();
-        // Version-only dep has no git URL → emits warning and skips; writes mvl.lock
-        cmd_update(tmp.path()).unwrap();
-        assert!(tmp.path().join("mvl.lock").exists());
+        // Version-only dep has no git URL → warn-and-skip path (#1458). With only one
+        // dep and it failing, the run is "all skipped" which is an error.
+        let err = cmd_update(tmp.path(), &UpdateOptions::default()).unwrap_err();
+        assert!(matches!(err, PackageError::NoVersion(_)));
     }
 
     #[test]
     fn cmd_update_missing_manifest_returns_error() {
         let tmp = tempfile::tempdir().unwrap();
         // No mvl.toml → should return Err, not panic
-        let result = cmd_update(tmp.path());
+        let result = cmd_update(tmp.path(), &UpdateOptions::default());
         assert!(result.is_err());
+    }
+
+    // --- cmd_update flag/behavior tests (#1456 / #1458 / #1459) ---
+
+    #[test]
+    fn cmd_update_offline_does_not_write_lockfile() {
+        let tmp = tempfile::tempdir().unwrap();
+        let manifest = "[package]\nname = \"proj\"\nversion = \"1.0.0\"\nlicense = \"Apache-2.0\"\nrequires-mvl = \">=0.1.0\"\n\n[dependencies]\n\"x\" = { git = \"https://example.invalid/x\", tag = \"v1.0.0\" }\n";
+        std::fs::write(tmp.path().join("mvl.toml"), manifest).unwrap();
+        let opts = UpdateOptions {
+            offline: true,
+            ..Default::default()
+        };
+        // Offline mode prints the plan and exits without writing mvl.lock.
+        let res = cmd_update(tmp.path(), &opts);
+        assert!(res.is_ok());
+        assert!(!tmp.path().join("mvl.lock").exists());
+    }
+
+    #[test]
+    fn cmd_update_dry_run_does_not_write_lockfile() {
+        let tmp = tempfile::tempdir().unwrap();
+        let manifest = "[package]\nname = \"proj\"\nversion = \"1.0.0\"\nlicense = \"Apache-2.0\"\nrequires-mvl = \">=0.1.0\"\n";
+        std::fs::write(tmp.path().join("mvl.toml"), manifest).unwrap();
+        let opts = UpdateOptions {
+            dry_run: true,
+            ..Default::default()
+        };
+        cmd_update(tmp.path(), &opts).unwrap();
+        assert!(!tmp.path().join("mvl.lock").exists());
+    }
+
+    #[test]
+    fn cmd_update_package_filter_unknown_returns_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let manifest = "[package]\nname = \"proj\"\nversion = \"1.0.0\"\nlicense = \"Apache-2.0\"\nrequires-mvl = \">=0.1.0\"\n\n[dependencies]\n\"some-pkg\" = \">=1.0.0\"\n";
+        std::fs::write(tmp.path().join("mvl.toml"), manifest).unwrap();
+        let opts = UpdateOptions {
+            only: Some("does-not-exist".to_string()),
+            ..Default::default()
+        };
+        let err = cmd_update(tmp.path(), &opts).unwrap_err();
+        assert!(matches!(err, PackageError::InvalidInput(_)));
+    }
+
+    // --- rewrite_tag_in_line / sync_manifest_tags (#1459) ---
+
+    #[test]
+    fn rewrite_tag_preserves_v_prefix() {
+        let line = "\"pkg\" = { git = \"https://e.x/p\", tag = \"v0.2.3\" }";
+        let out = rewrite_tag_in_line(line, "0.3.0");
+        assert!(out.contains("tag = \"v0.3.0\""), "got: {out}");
+    }
+
+    #[test]
+    fn rewrite_tag_no_v_prefix_kept() {
+        let line = "\"pkg\" = { git = \"https://e.x/p\", tag = \"0.2.3\" }";
+        let out = rewrite_tag_in_line(line, "0.3.0");
+        assert!(out.contains("tag = \"0.3.0\""), "got: {out}");
+        assert!(!out.contains("v0.3.0"));
+    }
+
+    #[test]
+    fn rewrite_tag_preserves_rest_of_line() {
+        let line = "\"pkg\" = { git = \"https://e.x/p\", tag = \"v0.2.3\", rationale = \"x\" }";
+        let out = rewrite_tag_in_line(line, "0.3.0");
+        assert!(out.contains("rationale = \"x\""), "got: {out}");
+    }
+
+    #[test]
+    fn rewrite_tag_no_match_returns_unchanged() {
+        let line = "\"pkg\" = \">=1.0.0\"";
+        let out = rewrite_tag_in_line(line, "2.0.0");
+        assert_eq!(out, line);
+    }
+
+    #[test]
+    fn sync_manifest_tags_rewrites_only_matching_dep() {
+        let tmp = tempfile::tempdir().unwrap();
+        let original = "[package]\nname = \"p\"\nversion = \"1.0.0\"\nlicense = \"MIT\"\nrequires-mvl = \">=0.1.0\"\n\n[dependencies]\n\"foo\" = { git = \"https://e.x/foo\", tag = \"v0.1.0\" }\n\"bar\" = { git = \"https://e.x/bar\", tag = \"v0.5.0\" }\n";
+        std::fs::write(tmp.path().join("mvl.toml"), original).unwrap();
+        let updates = vec![("foo".to_string(), "0.2.0".to_string())];
+        sync_manifest_tags(tmp.path(), &updates).unwrap();
+        let result = std::fs::read_to_string(tmp.path().join("mvl.toml")).unwrap();
+        assert!(result.contains("\"foo\" = { git = \"https://e.x/foo\", tag = \"v0.2.0\" }"));
+        assert!(result.contains("\"bar\" = { git = \"https://e.x/bar\", tag = \"v0.5.0\" }"));
+    }
+
+    // --- shas_equal ---
+
+    #[test]
+    fn shas_equal_full_match() {
+        assert!(shas_equal("abc123def456", "abc123def456"));
+    }
+
+    #[test]
+    fn shas_equal_prefix_match() {
+        assert!(shas_equal("abc123", "abc123def456"));
+        assert!(shas_equal("abc123def456", "abc123"));
+    }
+
+    #[test]
+    fn shas_equal_no_match() {
+        assert!(!shas_equal("abc123", "def456"));
+    }
+
+    #[test]
+    fn shas_equal_empty_strings_never_match() {
+        assert!(!shas_equal("", "abc"));
+        assert!(!shas_equal("abc", ""));
     }
 
     // --- cmd_add error cases ---

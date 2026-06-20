@@ -33,6 +33,10 @@ pub struct LockedPackage {
     pub license: Option<String>,
     /// Audit trail when `--allow-license` was used to override policy (#635).
     pub allow_license_override: Option<String>,
+    /// Unix seconds: when this entry was last validated against the remote
+    /// (#1460). Set by `mvl add` and `mvl update`. Older lockfiles without
+    /// this field parse as `None` for backward compatibility.
+    pub last_checked: Option<u64>,
 }
 
 /// The full lock file: an ordered list of locked packages.
@@ -79,6 +83,9 @@ impl LockFile {
                     if raw_val.starts_with('"') && raw_val.ends_with('"') && raw_val.len() >= 2 {
                         let val = raw_val[1..raw_val.len() - 1].to_string();
                         map.insert(key, val);
+                    } else if raw_val.chars().all(|c| c.is_ascii_digit()) && !raw_val.is_empty() {
+                        // Unquoted integer literal (e.g. last-checked = 1718870400)
+                        map.insert(key, raw_val.to_string());
                     }
                 }
             }
@@ -113,6 +120,9 @@ impl LockFile {
                     "allow-license-override = \"{}\"\n",
                     toml_escape(reason)
                 ));
+            }
+            if let Some(ts) = pkg.last_checked {
+                out.push_str(&format!("last-checked = {ts}\n"));
             }
         }
         out
@@ -185,6 +195,9 @@ fn locked_from_map(mut map: HashMap<String, String>) -> Result<LockedPackage, Lo
     let git = map.remove("git");
     let license = map.remove("license");
     let allow_license_override = map.remove("allow-license-override");
+    let last_checked = map
+        .remove("last-checked")
+        .and_then(|s| s.parse::<u64>().ok());
     Ok(LockedPackage {
         name,
         version,
@@ -193,6 +206,7 @@ fn locked_from_map(mut map: HashMap<String, String>) -> Result<LockedPackage, Lo
         git,
         license,
         allow_license_override,
+        last_checked,
     })
 }
 
@@ -264,6 +278,7 @@ hash = "sha256:aaabbbccc"
             git: None,
             license: None,
             allow_license_override: None,
+            last_checked: None,
         });
         assert_eq!(lf.packages.len(), 2); // still 2
         assert_eq!(lf.get("tls").unwrap().version, "0.5.0");
@@ -280,6 +295,7 @@ hash = "sha256:aaabbbccc"
             git: None,
             license: None,
             allow_license_override: None,
+            last_checked: None,
         });
         assert_eq!(lf.packages.len(), 1);
     }
@@ -423,6 +439,7 @@ hash = "sha256:aaabbbccc"
             git: None,
             license: None,
             allow_license_override: None,
+            last_checked: None,
         });
         let toml = lf.to_toml();
         assert!(!toml.contains("commit ="), "commit should be absent");
@@ -440,6 +457,7 @@ hash = "sha256:aaabbbccc"
             git: Some("https://example.com/pkg".to_string()),
             license: None,
             allow_license_override: None,
+            last_checked: None,
         });
         let toml = lf.to_toml();
         assert!(toml.contains("commit = \"cafebabe\""));
@@ -491,6 +509,7 @@ hash = "sha256:aaabbbccc"
             git: Some("https://example.com/mypkg".to_string()),
             license: None,
             allow_license_override: None,
+            last_checked: None,
         });
         lf.write(tmp.path()).unwrap();
 

@@ -280,7 +280,37 @@ pub(super) fn dispatch(args: &[String]) {
         }
         "update" => {
             let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-            if let Err(e) = packages::cmd_update(&project_root) {
+            let mut opts = packages::UpdateOptions::default();
+            let mut iter = args.iter().skip(2);
+            while let Some(arg) = iter.next() {
+                match arg.as_str() {
+                    "--force" => opts.force = true,
+                    "--offline" => opts.offline = true,
+                    "--dry-run" => opts.dry_run = true,
+                    "--package" => match iter.next() {
+                        Some(name) => opts.only = Some(name.clone()),
+                        None => {
+                            eprintln!("error: --package requires a value");
+                            process::exit(2);
+                        }
+                    },
+                    other if other.starts_with("--package=") => {
+                        opts.only = Some(other.trim_start_matches("--package=").to_string());
+                    }
+                    other => {
+                        eprintln!("error: unknown flag for 'mvl update': {other}");
+                        eprintln!(
+                            "usage: mvl update [--force] [--offline] [--dry-run] [--package <name>]"
+                        );
+                        process::exit(2);
+                    }
+                }
+            }
+            if opts.force && opts.offline {
+                eprintln!("error: --force and --offline are mutually exclusive");
+                process::exit(2);
+            }
+            if let Err(e) = packages::cmd_update(&project_root, &opts) {
                 eprintln!("error: {e}");
                 process::exit(1);
             }

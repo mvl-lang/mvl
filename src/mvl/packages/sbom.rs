@@ -455,6 +455,7 @@ mod tests {
                     git: Some("https://github.com/lab271/mvl-stdlib".to_string()),
                     license: None,
                     allow_license_override: None,
+                    last_checked: None,
                 },
                 LockedPackage {
                     name: "tls".to_string(),
@@ -464,6 +465,7 @@ mod tests {
                     git: None,
                     license: None,
                     allow_license_override: None,
+                    last_checked: None,
                 },
             ],
         }
@@ -646,6 +648,7 @@ mod tests {
                 git: None,
                 license: None,
                 allow_license_override: None,
+                last_checked: None,
             }],
         };
         let mut manifest = sample_manifest();
