@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [0.214.0] - 2026-06-20
+
+### Added
+
+- **`mvl update` hardening: timeouts, flags, cache cross-checks** (#1455–#1461) — comprehensive update to address stale cache references and network hangs:
+  - Subprocess timeouts: All git operations (`ls-remote`, `clone`) now enforce timeouts (defaults: 30s, 120s) with `MVL_GIT_TIMEOUT` override and `FetchError::Timeout` on expiry (#1457).
+  - Warn-and-continue: `mvl update` now catches per-dependency network failures and emits warnings instead of aborting; exits non-zero only when **every** dependency fails (#1458).
+  - CLI flags: Add `--force` (re-clone cached packages), `--offline` (skip network, report cache vs. lock state), `--dry-run` (preview without writing), `--package <name>` (update single dep) to `mvl update` (#1456).
+  - Last-checked timestamp: New optional `last_checked: Option<u64>` field in `mvl.lock` records when each package was last validated against the remote. Set by `mvl add` and `mvl update`. Backward-compatible parsing for older lockfiles (#1460).
+  - Remote SHA cross-check: `fetch_package_opts(force)` allows forced re-clone on cache hit. New `fetch::ls_remote_tag_sha` helper cross-checks remote commit SHA even on the "up to date" path in `cmd_update`; mismatches warn and suggest `--force` (#1455, #1461).
+  - Manifest sync: `mvl update` now rewrites `tag = "vX.Y.Z"` entries in `mvl.toml` in lockstep with `mvl.lock` bumps, stopping the manifest from lagging behind after updates (#1459).
+
 ## [0.213.1] - 2026-06-19
 
 ### Fixed
