@@ -763,7 +763,9 @@ impl RustEmitter {
                 }
             }
             // coerce only: `Option`/`Result` — no blanket `Into` impl available.
-            TirExprKind::Var(_) if coerce && matches!(expr.ty, Ty::Option(_) | Ty::Result(_, _)) => {
+            TirExprKind::Var(_)
+                if coerce && matches!(expr.ty, Ty::Option(_) | Ty::Result(_, _)) =>
+            {
                 self.emit_expr(expr);
                 if !self.last_uses.contains(&expr.span) {
                     self.push(".clone()");
@@ -786,7 +788,11 @@ impl RustEmitter {
             // Field accesses: conservatively clone (partial moves are complex in Rust).
             TirExprKind::FieldAccess { .. } => {
                 self.emit_expr(expr);
-                self.push(if coerce { ".clone().into()" } else { ".clone()" });
+                self.push(if coerce {
+                    ".clone().into()"
+                } else {
+                    ".clone()"
+                });
             }
             _ => {
                 self.emit_expr(expr);
