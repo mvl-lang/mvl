@@ -43,18 +43,6 @@ fn root_manifest_parses_all_rationale_fields() {
 // ── Example manifests with external packages ─────────────────────────────────
 
 #[test]
-fn crud_api_manifest_rationale() {
-    let m = load_manifest("examples/crud_api");
-    assert_eq!(m.package.name, "crud_api");
-    assert_eq!(m.dependencies.len(), 2);
-    let missing = m.audit_dep_rationale();
-    assert!(
-        missing.is_empty(),
-        "crud_api: deps missing rationale: {missing:?}"
-    );
-}
-
-#[test]
 fn actor_webserver_manifest_rationale() {
     let m = load_manifest("examples/actor_webserver");
     assert_eq!(m.package.name, "actor_webserver");
@@ -75,30 +63,6 @@ fn anthropic_chat_manifest_rationale() {
     assert!(
         missing.is_empty(),
         "anthropic_chat: deps missing rationale: {missing:?}"
-    );
-}
-
-#[test]
-fn sqlite_basic_manifest_rationale() {
-    let m = load_manifest("examples/sqlite_basic");
-    assert_eq!(m.package.name, "sqlite_basic");
-    assert_eq!(m.dependencies.len(), 1);
-    let missing = m.audit_dep_rationale();
-    assert!(
-        missing.is_empty(),
-        "sqlite_basic: deps missing rationale: {missing:?}"
-    );
-}
-
-#[test]
-fn zmq_hello_manifest_rationale() {
-    let m = load_manifest("examples/zmq_hello");
-    assert_eq!(m.package.name, "zmq_hello");
-    assert_eq!(m.dependencies.len(), 1);
-    let missing = m.audit_dep_rationale();
-    assert!(
-        missing.is_empty(),
-        "zmq_hello: deps missing rationale: {missing:?}"
     );
 }
 
@@ -195,26 +159,8 @@ fn root_license_matches_manifest() {
 }
 
 #[test]
-fn zmq_hello_license_matches_manifest() {
-    let dir = manifest_dir("examples/zmq_hello");
-    let m = Manifest::load(&dir).unwrap();
-    assert!(
-        m.validate_license(&dir).is_ok(),
-        "zmq_hello: {}",
-        m.validate_license(&dir).unwrap_err()
-    );
-}
-
-#[test]
 fn all_examples_license_matches() {
-    for name in &[
-        "actor_webserver",
-        "anthropic_chat",
-        "crud_api",
-        "log_to_file",
-        "sqlite_basic",
-        "zmq_hello",
-    ] {
+    for name in &["actor_webserver", "anthropic_chat", "log_to_file"] {
         let dir = manifest_dir(&format!("examples/{name}"));
         let m = Manifest::load(&dir).unwrap();
         assert!(

@@ -249,14 +249,7 @@ impl RustEmitter {
                     // overflow behaviour (trap on overflow rather than wrapping).
                     // Div/Rem: checked_div/checked_rem catch division-by-zero and
                     // i64::MIN / -1 overflow (#1266).
-                    let is_int_arith = matches!(
-                        op,
-                        BinaryOp::Add
-                            | BinaryOp::Sub
-                            | BinaryOp::Mul
-                            | BinaryOp::Div
-                            | BinaryOp::Rem
-                    ) && matches!(expr.ty, Ty::Int);
+                    let is_int_arith = op.is_arithmetic() && matches!(expr.ty, Ty::Int);
                     if is_int_arith {
                         let (method, msg) = match op {
                             BinaryOp::Add => ("checked_add", "integer overflow"),

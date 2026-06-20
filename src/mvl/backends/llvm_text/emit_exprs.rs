@@ -353,11 +353,12 @@ impl TextEmitter {
         left: &Expr,
         right: &Expr,
     ) -> Result<Option<String>, String> {
-        if matches!(op, BinaryOp::And) {
-            return self.emit_short_circuit_and(left, right);
-        }
-        if matches!(op, BinaryOp::Or) {
-            return self.emit_short_circuit_or(left, right);
+        if op.is_short_circuit() {
+            return match op {
+                BinaryOp::And => self.emit_short_circuit_and(left, right),
+                BinaryOp::Or => self.emit_short_circuit_or(left, right),
+                _ => unreachable!("is_short_circuit but not And or Or"),
+            };
         }
 
         let lv = match self.emit_expr(left)? {
@@ -398,20 +399,12 @@ impl TextEmitter {
         self.push_instr(&format!("{reg} = {instr}"));
 
         // Track type: comparison ops → i1, others → i64/double
-        let result_ty = match op {
-            BinaryOp::Eq
-            | BinaryOp::Ne
-            | BinaryOp::Lt
-            | BinaryOp::Gt
-            | BinaryOp::Le
-            | BinaryOp::Ge => "i1",
-            _ => {
-                if is_float {
-                    "double"
-                } else {
-                    "i64"
-                }
-            }
+        let result_ty = if op.is_comparison() {
+            "i1"
+        } else if is_float {
+            "double"
+        } else {
+            "i64"
         };
         self.reg_types.insert(reg.clone(), result_ty.into());
         Ok(Some(reg))
