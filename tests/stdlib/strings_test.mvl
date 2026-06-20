@@ -201,6 +201,40 @@ test fn from_bytes_utf8_cafe() -> Unit {
     assert_eq(String::from_bytes(bytes), "café")
 }
 
+test fn from_bytes_invalid_utf8_replaced() -> Unit {
+    // 0xFF is not valid UTF-8; from_utf8_lossy produces one U+FFFD replacement.
+    // Indirect check via len/byte_at because \u{FFFD} literal support is pending
+    // (#1468 / PR #1470). Once merged, replace with: assert_eq(s, "\u{FFFD}")
+    let bytes: List[Byte] = [from_int(0xFF)];
+    let s: String = String::from_bytes(bytes);
+    assert_eq(s.len(), 1);
+    assert_eq(s.byte_at(0).is_none(), true)
+}
+
+test fn from_bytes_utf8_three_byte_euro() -> Unit {
+    // U+20AC EURO SIGN: 0xE2 0x82 0xAC
+    let bytes: List[Byte] = [from_int(0xE2), from_int(0x82), from_int(0xAC)];
+    assert_eq(String::from_bytes(bytes), "€")
+}
+
+test fn from_bytes_utf8_four_byte_emoji() -> Unit {
+    // U+1F600 GRINNING FACE: 0xF0 0x9F 0x98 0x80
+    let bytes: List[Byte] = [from_int(0xF0), from_int(0x9F), from_int(0x98), from_int(0x80)];
+    assert_eq(String::from_bytes(bytes), "😀")
+}
+
+test fn from_bytes_null_byte_does_not_truncate() -> Unit {
+    // NULL (0x00) is valid UTF-8; must not truncate like a C string
+    let bytes: List[Byte] = [from_int(0x41), from_int(0x00), from_int(0x42)];
+    assert_eq(String::from_bytes(bytes).len(), 3)
+}
+
+test fn from_bytes_overlong_not_slash() -> Unit {
+    // 0xC0 0xAF is an overlong encoding of U+002F '/'; must NOT decode as "/"
+    let bytes: List[Byte] = [from_int(0xC0), from_int(0xAF)];
+    assert_eq(String::from_bytes(bytes).contains("/"), false)
+}
+
 // ── hex_char_value ────────────────────────────────────────────────────────────
 
 test fn hex_char_value_digits() -> Unit {
