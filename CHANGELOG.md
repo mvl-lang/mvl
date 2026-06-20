@@ -18,6 +18,9 @@
 
 - **`\u{NNNN}` Unicode escape sequences in string and char literals** (#1468) — the lexer now accepts `\u{NNNN}` (1–6 hex digits, case-insensitive) in regular strings, multiline strings, and char literals. Invalid codepoints (e.g. surrogates, out-of-range values) and missing braces produce a lex error and emit U+FFFD. This unblocks direct string-literal comparisons for non-ASCII expected values in tests.
 
+### Fixed
+
+- **fn-alias `val T` param spurious `.into()` (#1467)** — Calling a function pointer through a named `fn(val T) -> U` alias no longer emits `.into()` at the call site (`d(req.clone().into())`). Adds fn-alias resolution to the #960 HOF cap-propagation so the inner `val/ref` flags are visible through the alias, and treats Named fn-aliases as `Copy` so the alias param itself stays an owned fn pointer (no spurious `&Dispatcher`).
 ## [0.214.0] - 2026-06-20
 
 ### Added

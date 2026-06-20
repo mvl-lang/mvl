@@ -227,9 +227,12 @@ impl RustEmitter {
 
         // #960: for HOF params (fn-typed parameters), temporarily insert their inner
         // parameter borrow flags into capability_params_map.
+        // #1467: also resolve named fn-type aliases (`type Dispatcher = fn(val T) -> U`)
+        // so the HOF param's inner signature is visible through the alias.
         let mut hof_param_entries: Vec<(String, Option<Vec<Option<bool>>>)> = Vec::new();
         for param in &fd.params {
-            if let Ty::Fn(fn_params, _, _, _) = &param.ty {
+            let resolved = self.resolve_fn_alias(&param.ty).unwrap_or(&param.ty);
+            if let Ty::Fn(fn_params, _, _, _) = resolved {
                 let flags: Vec<Option<bool>> = fn_params
                     .iter()
                     .map(|p| {
