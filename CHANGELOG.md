@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [0.216.0] - 2026-06-20
+
+### Added
+
+- **`unused-function` linter rule** (#1373) — flags non-`pub`, non-`main`, non-test functions that are never called within the program. Configurable via `unused_functions = false` in `.mvllintrc`.
+- **`silent-result-discard` linter rule** (#1465) — flags `Result` values silently discarded without inspecting the `Err` variant. Detects four patterns: `let _: Result = …`, statement-position calls, `if let Ok` with no else branch, and `.unwrap_or*`/`.ok()` on known-Result-returning calls. Configurable via `silent_result_discard = false`.
+- **`relabel-tag-hygiene` linter rule** (#1466) — flags boilerplate audit tags (`"TODO"`, `"FIXME"`, `""`, single-char) and tags reused at 3+ call sites on `relabel trust`/`relabel classify` expressions. New `ifc` rules module. Configurable via `relabel_tag_hygiene = false`.
+- **Per-site lint suppression** — any rule can be silenced with `// allow: <rule-id> <reason>` on the immediately preceding line (reason text required).
+
 ## [0.215.0] - 2026-06-20
 
 ### Added
