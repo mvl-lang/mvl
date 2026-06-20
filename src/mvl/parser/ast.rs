@@ -869,6 +869,53 @@ pub enum BinaryOp {
     Shr,    // >>
 }
 
+/// Broad classification of a [`BinaryOp`] by evaluation semantics.
+///
+/// Adding a new [`BinaryOp`] variant forces an update to the exhaustive `match` in
+/// [`BinaryOp::category`], which then propagates correct classification to all call
+/// sites that use `is_*` helpers — the compiler enforces no site is forgotten.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BinOpCategory {
+    Arithmetic,   // Add, Sub, Mul, Div, Rem
+    Comparison,   // Eq, Ne, Lt, Gt, Le, Ge
+    Bitwise,      // BitAnd, BitOr, BitXor, Shl, Shr
+    ShortCircuit, // And, Or — short-circuit boolean evaluation
+}
+
+impl BinaryOp {
+    pub fn category(self) -> BinOpCategory {
+        match self {
+            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem => {
+                BinOpCategory::Arithmetic
+            }
+            BinaryOp::Eq
+            | BinaryOp::Ne
+            | BinaryOp::Lt
+            | BinaryOp::Gt
+            | BinaryOp::Le
+            | BinaryOp::Ge => BinOpCategory::Comparison,
+            BinaryOp::BitAnd
+            | BinaryOp::BitOr
+            | BinaryOp::BitXor
+            | BinaryOp::Shl
+            | BinaryOp::Shr => BinOpCategory::Bitwise,
+            BinaryOp::And | BinaryOp::Or => BinOpCategory::ShortCircuit,
+        }
+    }
+
+    pub fn is_short_circuit(self) -> bool {
+        matches!(self.category(), BinOpCategory::ShortCircuit)
+    }
+
+    pub fn is_comparison(self) -> bool {
+        matches!(self.category(), BinOpCategory::Comparison)
+    }
+
+    pub fn is_arithmetic(self) -> bool {
+        matches!(self.category(), BinOpCategory::Arithmetic)
+    }
+}
+
 // ── Statements ─────────────────────────────────────────────────────────────
 
 /// Binding kind for `let` statements.
