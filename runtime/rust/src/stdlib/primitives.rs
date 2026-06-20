@@ -48,6 +48,11 @@ pub fn str_from_chars(chars: Vec<String>) -> String {
 ///
 /// Returns `None` if out of range or if the character's codepoint > 255
 /// (cannot be represented as a single Byte).
+///
+/// Note: `str_byte_at(str_from_bytes(bs), i)` is NOT a lossless round-trip
+/// for non-ASCII bytes. `str_from_bytes` decodes the sequence as UTF-8 and
+/// multi-byte codepoints (including U+FFFD replacements for invalid bytes)
+/// have codepoints > 255, so `byte_at` returns `None` for them.
 pub fn str_byte_at(s: String, i: i64) -> Option<u8> {
     if i < 0 {
         return None;
@@ -62,12 +67,11 @@ pub fn str_byte_at(s: String, i: i64) -> Option<u8> {
     })
 }
 
-/// Reconstruct a `String` from a list of byte values (Latin-1 encoding).
+/// Reconstruct a `String` from a UTF-8 byte sequence (lossy).
 ///
-/// Each byte value 0–255 maps to the Unicode codepoint with the same value.
-/// This preserves binary data: `from_bytes([0xFF]).byte_at(0) == 0xFF`.
+/// Invalid UTF-8 byte sequences are replaced with U+FFFD.
 pub fn str_from_bytes(bytes: Vec<u8>) -> String {
-    bytes.iter().map(|&b| b as char).collect()
+    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 /// Concatenate two strings. `str_concat(a, b)` == `a + b`.
