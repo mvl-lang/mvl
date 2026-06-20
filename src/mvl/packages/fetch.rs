@@ -20,8 +20,120 @@
 //! Local project overrides (`.mvl/pkg/<name>/`) take precedence over cache.
 
 use crate::mvl::packages::lock::LockedPackage;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process;
+use std::time::{Duration, Instant};
+
+// ── Timeout configuration ────────────────────────────────────────────────────
+
+/// Default timeout for `git ls-remote` in seconds.
+const DEFAULT_LS_REMOTE_TIMEOUT_SECS: u64 = 30;
+/// Default timeout for `git clone` operations in seconds.
+const DEFAULT_CLONE_TIMEOUT_SECS: u64 = 120;
+
+/// Read `MVL_GIT_TIMEOUT` (seconds) and fall back to `default_secs` if unset
+/// or unparseable. `0` disables the timeout.
+fn git_timeout(default_secs: u64) -> Option<Duration> {
+    let secs = std::env::var("MVL_GIT_TIMEOUT")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(default_secs);
+    if secs == 0 {
+        None
+    } else {
+        Some(Duration::from_secs(secs))
+    }
+}
+
+/// Captured output from a subprocess.
+struct CapturedOutput {
+    status: process::ExitStatus,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+/// Spawn a `git` command, capture its stdout/stderr, and enforce `timeout`.
+///
+/// On timeout, kills the child and returns `FetchError::Timeout`. On other I/O
+/// errors returns `FetchError::GitError`. The arguments are passed verbatim;
+/// the caller is responsible for validation.
+fn run_git_with_timeout(
+    args: &[&str],
+    cwd: Option<&Path>,
+    timeout: Option<Duration>,
+) -> Result<CapturedOutput, FetchError> {
+    let mut cmd = process::Command::new("git");
+    cmd.args(args);
+    if let Some(dir) = cwd {
+        cmd.current_dir(dir);
+    }
+    cmd.stdout(process::Stdio::piped())
+        .stderr(process::Stdio::piped());
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| FetchError::GitError(format!("failed to spawn git: {e}")))?;
+
+    // Take pipe handles so the child won't block on full pipe buffers.
+    let mut stdout = child.stdout.take();
+    let mut stderr = child.stderr.take();
+
+    let stdout_thread = stdout.take().map(|mut s| {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = s.read_to_end(&mut buf);
+            buf
+        })
+    });
+    let stderr_thread = stderr.take().map(|mut s| {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = s.read_to_end(&mut buf);
+            buf
+        })
+    });
+
+    let start = Instant::now();
+    let status = loop {
+        match child
+            .try_wait()
+            .map_err(|e| FetchError::GitError(format!("git wait failed: {e}")))?
+        {
+            Some(status) => break status,
+            None => {
+                if let Some(t) = timeout {
+                    if start.elapsed() >= t {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        let cmdline = std::iter::once("git")
+                            .chain(args.iter().copied())
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        return Err(FetchError::Timeout {
+                            command: cmdline,
+                            secs: t.as_secs(),
+                        });
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+    };
+
+    let stdout_buf = stdout_thread
+        .and_then(|h| h.join().ok())
+        .unwrap_or_default();
+    let stderr_buf = stderr_thread
+        .and_then(|h| h.join().ok())
+        .unwrap_or_default();
+
+    Ok(CapturedOutput {
+        status,
+        stdout: stdout_buf,
+        stderr: stderr_buf,
+    })
+}
 
 // ── Path helpers ─────────────────────────────────────────────────────────────
 
@@ -85,6 +197,21 @@ pub fn resolve_pkg_dir(project_root: &Path, name: &str, version: &str) -> Option
 ///
 /// Uses the system `git` binary (avoids a heavy git2 dependency).
 pub fn fetch_package(name: &str, git_url: &str, tag: &str) -> Result<LockedPackage, FetchError> {
+    fetch_package_opts(name, git_url, tag, false)
+}
+
+/// Fetch a package, with control over the cache behavior.
+///
+/// When `force = true`, an existing cache entry for `<name>/<version>` is
+/// removed before cloning — the remote is re-cloned and re-hashed. This is
+/// required to recover from a poisoned cache or to refresh after a tag was
+/// force-pushed upstream.
+pub fn fetch_package_opts(
+    name: &str,
+    git_url: &str,
+    tag: &str,
+    force: bool,
+) -> Result<LockedPackage, FetchError> {
     let cache_dir = pkg_cache_root();
     std::fs::create_dir_all(&cache_dir)
         .map_err(|e| FetchError::Io(cache_dir.display().to_string(), e.to_string()))?;
@@ -93,19 +220,24 @@ pub fn fetch_package(name: &str, git_url: &str, tag: &str) -> Result<LockedPacka
     let version = tag.strip_prefix('v').unwrap_or(tag).to_string();
     let dest = pkg_cache_dir(name, &version);
 
-    // Skip if already cached
     if dest.exists() {
-        let hash = hash_source_tree(&dest)?;
-        let commit = read_git_head(&dest);
-        return Ok(LockedPackage {
-            name: name.to_string(),
-            version,
-            hash,
-            commit,
-            git: Some(git_url.to_string()),
-            license: None,
-            allow_license_override: None,
-        });
+        if force {
+            std::fs::remove_dir_all(&dest)
+                .map_err(|e| FetchError::Io(dest.display().to_string(), e.to_string()))?;
+        } else {
+            let hash = hash_source_tree(&dest)?;
+            let commit = read_git_head(&dest);
+            return Ok(LockedPackage {
+                name: name.to_string(),
+                version,
+                hash,
+                commit,
+                git: Some(git_url.to_string()),
+                license: None,
+                allow_license_override: None,
+                last_checked: None,
+            });
+        }
     }
 
     // Clone at the specific tag into a temp location, then move to cache
@@ -141,6 +273,7 @@ pub fn fetch_package(name: &str, git_url: &str, tag: &str) -> Result<LockedPacka
         git: Some(git_url.to_string()),
         license: None,
         allow_license_override: None,
+        last_checked: None,
     })
 }
 
@@ -162,10 +295,11 @@ pub fn verify_hash(dir: &Path, expected: &str) -> Result<(), FetchError> {
 /// List available semver tags for a git repo (requires network access).
 pub fn list_git_tags(git_url: &str) -> Result<Vec<String>, FetchError> {
     validate_url(git_url)?;
-    let output = process::Command::new("git")
-        .args(["ls-remote", "--tags", "--refs", "--", git_url])
-        .output()
-        .map_err(|e| FetchError::GitError(format!("git ls-remote failed: {e}")))?;
+    let output = run_git_with_timeout(
+        &["ls-remote", "--tags", "--refs", "--", git_url],
+        None,
+        git_timeout(DEFAULT_LS_REMOTE_TIMEOUT_SECS),
+    )?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -189,6 +323,52 @@ pub fn list_git_tags(git_url: &str) -> Result<Vec<String>, FetchError> {
     Ok(tags)
 }
 
+/// Look up the commit SHA for a specific tag at the remote.
+///
+/// Returns `Ok(Some(sha))` if the tag exists, `Ok(None)` if not, or `Err` on
+/// network/git errors. Used by cache-validation paths to detect tag re-publish.
+pub fn ls_remote_tag_sha(git_url: &str, tag: &str) -> Result<Option<String>, FetchError> {
+    validate_url(git_url)?;
+    validate_tag(tag)?;
+    let ref_path = format!("refs/tags/{tag}");
+    let output = run_git_with_timeout(
+        &["ls-remote", "--tags", "--", git_url, &ref_path],
+        None,
+        git_timeout(DEFAULT_LS_REMOTE_TIMEOUT_SECS),
+    )?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(FetchError::GitError(format!(
+            "git ls-remote {git_url} {ref_path}: {stderr}"
+        )));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Format: "<hash>\trefs/tags/<tag>"
+    // Prefer the peeled ref (`refs/tags/<tag>^{}`) when present — that points to
+    // the commit, not the tag object.
+    let mut commit_sha: Option<String> = None;
+    let mut tag_sha: Option<String> = None;
+    for line in stdout.lines() {
+        let mut parts = line.split('\t');
+        let sha = match parts.next() {
+            Some(s) => s.trim(),
+            None => continue,
+        };
+        let refname = match parts.next() {
+            Some(r) => r.trim(),
+            None => continue,
+        };
+        if refname == format!("{ref_path}^{{}}") {
+            commit_sha = Some(sha.to_string());
+        } else if refname == ref_path {
+            tag_sha = Some(sha.to_string());
+        }
+    }
+    Ok(commit_sha.or(tag_sha))
+}
+
 /// Fetch tag names with their Unix creation timestamps from a remote git repo.
 ///
 /// Does a bare partial clone (`--filter=blob:none`) so only git metadata is
@@ -202,17 +382,19 @@ pub fn fetch_tag_dates(
         tempfile::tempdir().map_err(|e| FetchError::Io("<tempdir>".to_string(), e.to_string()))?;
     let dest = tmp.path().join("bare.git");
 
-    let clone = process::Command::new("git")
-        .args([
+    let dest_str = dest.to_str().unwrap_or("bare.git").to_string();
+    let clone = run_git_with_timeout(
+        &[
             "clone",
             "--bare",
             "--filter=blob:none",
             "--quiet",
             git_url,
-            dest.to_str().unwrap_or("bare.git"),
-        ])
-        .output()
-        .map_err(|e| FetchError::GitError(format!("git clone --bare failed: {e}")))?;
+            &dest_str,
+        ],
+        None,
+        git_timeout(DEFAULT_CLONE_TIMEOUT_SECS),
+    )?;
 
     if !clone.status.success() {
         let stderr = String::from_utf8_lossy(&clone.stderr);
@@ -221,15 +403,15 @@ pub fn fetch_tag_dates(
         )));
     }
 
-    let refs = process::Command::new("git")
-        .args([
+    let refs = run_git_with_timeout(
+        &[
             "for-each-ref",
             "--format=%(refname:short) %(creatordate:unix)",
             "refs/tags/",
-        ])
-        .current_dir(&dest)
-        .output()
-        .map_err(|e| FetchError::GitError(format!("git for-each-ref failed: {e}")))?;
+        ],
+        Some(&dest),
+        git_timeout(DEFAULT_LS_REMOTE_TIMEOUT_SECS),
+    )?;
 
     if !refs.status.success() {
         let stderr = String::from_utf8_lossy(&refs.stderr);
@@ -302,24 +484,22 @@ fn git_clone(url: &str, tag: &str, dest: &Path) -> Result<(), FetchError> {
     validate_url(url)?;
     validate_tag(tag)?;
 
-    let status = process::Command::new("git")
-        .args([
-            "clone",
-            "--depth",
-            "1",
-            "--branch",
-            tag,
+    let dest_str = dest.display().to_string();
+    let output = run_git_with_timeout(
+        &[
+            "clone", "--depth", "1", "--branch", tag,
             "--", // end of options; prevents url/dest being parsed as flags
-            url,
-            &dest.display().to_string(),
-        ])
-        .status()
-        .map_err(|e| FetchError::GitError(format!("git clone failed: {e}")))?;
+            url, &dest_str,
+        ],
+        None,
+        git_timeout(DEFAULT_CLONE_TIMEOUT_SECS),
+    )?;
 
-    if !status.success() {
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(FetchError::GitError(format!(
-            "git clone {url} at tag {tag} failed with exit code {:?}",
-            status.code()
+            "git clone {url} at tag {tag} failed with exit code {:?}: {stderr}",
+            output.status.code()
         )));
     }
     Ok(())
@@ -448,6 +628,20 @@ pub enum FetchError {
         expected: String,
         actual: String,
     },
+    /// A `git` subprocess exceeded its timeout and was killed.
+    Timeout {
+        command: String,
+        secs: u64,
+    },
+}
+
+impl FetchError {
+    /// True if this error is recoverable on a per-dependency basis — i.e. the
+    /// caller should warn and continue with the next dependency rather than
+    /// aborting the whole operation.
+    pub fn is_recoverable(&self) -> bool {
+        matches!(self, FetchError::GitError(_) | FetchError::Timeout { .. })
+    }
 }
 
 impl std::fmt::Display for FetchError {
@@ -462,6 +656,10 @@ impl std::fmt::Display for FetchError {
             } => write!(
                 f,
                 "hash mismatch at {path}:\n  expected: {expected}\n  actual:   {actual}"
+            ),
+            FetchError::Timeout { command, secs } => write!(
+                f,
+                "timeout: '{command}' exceeded {secs}s (override with MVL_GIT_TIMEOUT)"
             ),
         }
     }
