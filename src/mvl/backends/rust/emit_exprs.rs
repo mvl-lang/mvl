@@ -718,19 +718,23 @@ impl RustEmitter {
         }
     }
 
-    /// Emit an expression in function-argument position.
+    /// Emit an expression in argument position.
     ///
-    /// MVL has value semantics: passing a value to a function is a copy, not a
-    /// move.  In Rust, non-Copy types (structs, enums, Vec, String) are moved by
-    /// default.  We insert `.clone()` for identifiers and field accesses so the
-    /// caller retains ownership after the call, matching MVL semantics.
+    /// MVL has value semantics: passing a value to a function is a copy, not a move.
+    /// We insert `.clone()` for identifiers and field accesses so the caller retains
+    /// ownership, matching MVL semantics.
+    ///
+    /// `coerce` — when `true`, appends `.into()` so unlabeled (`Public`) values coerce
+    /// into labeled parameters (e.g. `String` → `Clean<String>`) via the `From<T> for
+    /// Label<T>` impls in `mvl_runtime::ifc`.  When `false`, value semantics only (no
+    /// label coercion).
     ///
     /// # Phase A: last-use move elision (Spec 009 Req 2)
     ///
-    /// When an `TirExprKind::Var`'s span appears in [`RustEmitter::last_uses`], the variable
-    /// is used for the last time in this function.  Emitting a Rust move (no
-    /// `.clone()`) is sound: the caller's binding is consumed but never read again.
-    pub(super) fn emit_expr_as_arg(&mut self, expr: &TirExpr) {
+    /// When a `TirExprKind::Var`'s span appears in [`RustEmitter::last_uses`] the
+    /// variable is used for the last time.  Emitting a Rust move (no `.clone()`) is
+    /// sound: the caller's binding is consumed but never read again.
+    fn emit_expr_as_value_arg(&mut self, expr: &TirExpr, coerce: bool) {
         match &expr.kind {
             TirExprKind::Literal(Literal::Str(s)) => {
                 self.push(&format!("\"{}\".to_string().into()", escape_str(s)));
@@ -742,17 +746,53 @@ impl RustEmitter {
                     "{ty} {{ _sender: self._self_ref.as_ref().unwrap().upgrade().unwrap(), _id: self._self_id }}"
                 ));
             }
-            // Identifiers: check if this is the last use — if so, move instead of clone.
-            TirExprKind::Var(_) => {
+            // coerce only: `self` receiver in a type-attached method cannot be moved.
+            TirExprKind::Var(name)
+                if coerce
+                    && name == "self"
+                    && self.actor_self_type.is_empty()
+                    && !self.self_as_free_param =>
+            {
+                self.push("self.clone().into()");
+            }
+            // coerce only: Rust function items do not implement `Into<_>` generically.
+            TirExprKind::Var(_) if coerce && matches!(expr.ty, Ty::Fn(..)) => {
                 self.emit_expr(expr);
                 if !self.last_uses.contains(&expr.span) {
+                    self.push(".clone()");
+                }
+            }
+            // coerce only: `Option`/`Result` — no blanket `Into` impl available.
+            TirExprKind::Var(_)
+                if coerce && matches!(expr.ty, Ty::Option(_) | Ty::Result(_, _)) =>
+            {
+                self.emit_expr(expr);
+                if !self.last_uses.contains(&expr.span) {
+                    self.push(".clone()");
+                }
+            }
+            TirExprKind::Var(name) => {
+                self.emit_expr(expr);
+                if coerce {
+                    if !self.last_uses.contains(&expr.span)
+                        || self.capability_param_names.contains(name.as_str())
+                    {
+                        self.push(".clone().into()");
+                    } else {
+                        self.push(".into()");
+                    }
+                } else if !self.last_uses.contains(&expr.span) {
                     self.push(".clone()");
                 }
             }
             // Field accesses: conservatively clone (partial moves are complex in Rust).
             TirExprKind::FieldAccess { .. } => {
                 self.emit_expr(expr);
-                self.push(".clone()");
+                self.push(if coerce {
+                    ".clone().into()"
+                } else {
+                    ".clone()"
+                });
             }
             _ => {
                 self.emit_expr(expr);
@@ -760,66 +800,14 @@ impl RustEmitter {
         }
     }
 
-    /// Emit an expression as an argument to a regular function call (not a macro).
-    ///
-    /// Adds `.into()` so that unlabeled (Public) values coerce to labeled parameters
-    /// (e.g. `String` → `Clean<String>`) via `From<T> for Label<T>` in mvl_runtime::ifc.
+    /// Value semantics, no IFC label coercion. See [`Self::emit_expr_as_value_arg`].
+    pub(super) fn emit_expr_as_arg(&mut self, expr: &TirExpr) {
+        self.emit_expr_as_value_arg(expr, false);
+    }
+
+    /// Value semantics with IFC label coercion (`.into()`). See [`Self::emit_expr_as_value_arg`].
     pub(super) fn emit_expr_as_fn_arg(&mut self, expr: &TirExpr) {
-        match &expr.kind {
-            TirExprKind::Literal(Literal::Str(s)) => {
-                self.push(&format!("\"{}\".to_string().into()", escape_str(s)));
-            }
-            // Phase 8: `self` used as a tag argument inside an actor behavior.
-            TirExprKind::Var(name) if name == "self" && !self.actor_self_type.is_empty() => {
-                let ty = self.actor_self_type.clone();
-                self.push(&format!(
-                    "{ty} {{ _sender: self._self_ref.as_ref().unwrap().upgrade().unwrap(), _id: self._self_id }}"
-                ));
-            }
-            // `self` in a type-attached method (`&self` receiver) cannot be moved — always
-            // clone first so `self.clone().into()` works for any `T: Clone` type.
-            TirExprKind::Var(name)
-                if name == "self"
-                    && self.actor_self_type.is_empty()
-                    && !self.self_as_free_param =>
-            {
-                self.push("self.clone().into()");
-            }
-            // Function-typed identifiers (callbacks, named function references) must NOT
-            // get `.into()` — Rust function items do not implement `Into<_>` generically.
-            TirExprKind::Var(_) if matches!(expr.ty, Ty::Fn(..)) => {
-                self.emit_expr(expr);
-                if !self.last_uses.contains(&expr.span) {
-                    self.push(".clone()");
-                }
-            }
-            // Option/Result identifiers must NOT get `.into()`
-            TirExprKind::Var(_) if matches!(expr.ty, Ty::Option(_) | Ty::Result(_, _)) => {
-                self.emit_expr(expr);
-                if !self.last_uses.contains(&expr.span) {
-                    self.push(".clone()");
-                }
-            }
-            // Value identifiers: `.into()` allows unlabeled (Public) values to coerce into
-            // labeled parameters.
-            TirExprKind::Var(name) => {
-                self.emit_expr(expr);
-                if !self.last_uses.contains(&expr.span)
-                    || self.capability_param_names.contains(name.as_str())
-                {
-                    self.push(".clone().into()");
-                } else {
-                    self.push(".into()");
-                }
-            }
-            TirExprKind::FieldAccess { .. } => {
-                self.emit_expr(expr);
-                self.push(".clone().into()");
-            }
-            _ => {
-                self.emit_expr(expr);
-            }
-        }
+        self.emit_expr_as_value_arg(expr, true);
     }
 
     /// Emit arguments for Rust macros like `println!` where the first argument
