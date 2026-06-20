@@ -33,7 +33,7 @@
 //! or refined wrappers) are never inferred as borrows — cloning them is free
 //! in Rust so there is no performance benefit.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::mvl::parser::ast::{Capability, Param, TypeExpr};
 
@@ -66,6 +66,10 @@ pub fn build_capability_params_map_tir(
 ) -> HashMap<String, Vec<Option<bool>>> {
     let mut map = HashMap::new();
 
+    // Collect names of `type X = fn(..) -> ..` aliases — these are Copy fn pointers
+    // and should not be inferred as borrowed (#1467).
+    let fn_alias_names = collect_fn_alias_names_tir(tir, prelude_tirs);
+
     // Prelude functions (stdlib) — explicit annotations only (no body analysis),
     // mirroring the old AST path which used explicit_borrow_flags(&fd.params).
     // Body analysis on stdlib is incorrect: it would mark `default` in
@@ -81,13 +85,36 @@ pub fn build_capability_params_map_tir(
 
     // User functions from TIR — explicit + inferred.
     for f in &tir.fns {
-        let flags = capability_params_for_tir_fn(f);
+        let flags = capability_params_for_tir_fn(f, &fn_alias_names);
         if flags.iter().any(|b| b.is_some()) {
             map.insert(f.name.clone(), flags);
         }
     }
 
     map
+}
+
+/// Collect the names of all `TirTypeBody::Alias(Ty::Fn(..))` declarations,
+/// across user code and prelude (#1467).
+fn collect_fn_alias_names_tir(
+    tir: &crate::mvl::ir::TirProgram,
+    prelude_tirs: &[crate::mvl::ir::TirProgram],
+) -> HashSet<String> {
+    use crate::mvl::ir::{TirTypeBody, Ty};
+    let mut names = HashSet::new();
+    for td in &tir.types {
+        if let TirTypeBody::Alias(Ty::Fn(..)) = &td.body {
+            names.insert(td.name.clone());
+        }
+    }
+    for pt in prelude_tirs {
+        for td in &pt.types {
+            if let TirTypeBody::Alias(Ty::Fn(..)) = &td.body {
+                names.insert(td.name.clone());
+            }
+        }
+    }
+    names
 }
 
 /// Explicit-only borrow flags for a TIR function (no body analysis).
@@ -106,7 +133,10 @@ fn explicit_borrow_flags_tir(fd: &crate::mvl::ir::TirFn) -> Vec<Option<bool>> {
 }
 
 /// Borrow kinds for a single TIR function.
-pub fn capability_params_for_tir_fn(fd: &crate::mvl::ir::TirFn) -> Vec<Option<bool>> {
+pub fn capability_params_for_tir_fn(
+    fd: &crate::mvl::ir::TirFn,
+    fn_alias_names: &HashSet<String>,
+) -> Vec<Option<bool>> {
     fd.params
         .iter()
         .map(|p| {
@@ -115,7 +145,7 @@ pub fn capability_params_for_tir_fn(fd: &crate::mvl::ir::TirFn) -> Vec<Option<bo
                 return Some(*mutable);
             }
             // No benefit to borrowing Copy types.
-            if is_copy_ty(&p.ty) {
+            if is_copy_ty(&p.ty, fn_alias_names) {
                 return None;
             }
             // `val` capability suppresses inferred borrow — keep owned.
@@ -132,7 +162,7 @@ pub fn capability_params_for_tir_fn(fd: &crate::mvl::ir::TirFn) -> Vec<Option<bo
         .collect()
 }
 
-fn is_copy_ty(ty: &crate::mvl::ir::Ty) -> bool {
+fn is_copy_ty(ty: &crate::mvl::ir::Ty, fn_alias_names: &HashSet<String>) -> bool {
     use crate::mvl::ir::Ty;
     match ty {
         Ty::Int
@@ -145,7 +175,9 @@ fn is_copy_ty(ty: &crate::mvl::ir::Ty) -> bool {
         | Ty::Unit
         | Ty::Ref(..)
         | Ty::Fn(..) => true,
-        Ty::Labeled(_, inner) | Ty::Refined(inner, _) => is_copy_ty(inner),
+        // Named aliases for `fn(..) -> ..` are Copy fn pointers (#1467).
+        Ty::Named(name, _) if fn_alias_names.contains(name.as_str()) => true,
+        Ty::Labeled(_, inner) | Ty::Refined(inner, _) => is_copy_ty(inner, fn_alias_names),
         _ => false,
     }
 }
@@ -517,32 +549,47 @@ mod tests {
     #[test]
     fn explicit_ref_param_is_shared_borrow() {
         let fd = empty_fn(vec![tir_param("x", Ty::Ref(false, Box::new(Ty::Int)))]);
-        assert_eq!(capability_params_for_tir_fn(&fd), vec![Some(false)]);
+        assert_eq!(
+            capability_params_for_tir_fn(&fd, &HashSet::new()),
+            vec![Some(false)]
+        );
     }
 
     #[test]
     fn explicit_mut_ref_param_is_mutable_borrow() {
         let fd = empty_fn(vec![tir_param("x", Ty::Ref(true, Box::new(Ty::Int)))]);
-        assert_eq!(capability_params_for_tir_fn(&fd), vec![Some(true)]);
+        assert_eq!(
+            capability_params_for_tir_fn(&fd, &HashSet::new()),
+            vec![Some(true)]
+        );
     }
 
     #[test]
     fn copy_param_is_not_borrow() {
         let fd = empty_fn(vec![tir_param("x", Ty::Int)]);
-        assert_eq!(capability_params_for_tir_fn(&fd), vec![None]);
+        assert_eq!(
+            capability_params_for_tir_fn(&fd, &HashSet::new()),
+            vec![None]
+        );
     }
 
     #[test]
     fn non_copy_empty_body_inferred_as_borrow() {
         // String is non-Copy; empty body → no disqualifying uses → inferred &T.
         let fd = empty_fn(vec![tir_param("s", Ty::String)]);
-        assert_eq!(capability_params_for_tir_fn(&fd), vec![Some(false)]);
+        assert_eq!(
+            capability_params_for_tir_fn(&fd, &HashSet::new()),
+            vec![Some(false)]
+        );
     }
 
     #[test]
     fn val_capability_suppresses_inferred_borrow() {
         let fd = empty_fn(vec![tir_param_cap("s", Ty::String, Capability::Val)]);
-        assert_eq!(capability_params_for_tir_fn(&fd), vec![None]);
+        assert_eq!(
+            capability_params_for_tir_fn(&fd, &HashSet::new()),
+            vec![None]
+        );
     }
 
     #[test]
@@ -552,7 +599,10 @@ mod tests {
             span: sp(),
         };
         let fd = fn_with_stmts(vec![tir_param("s", Ty::String)], vec![ret]);
-        assert_eq!(capability_params_for_tir_fn(&fd), vec![None]);
+        assert_eq!(
+            capability_params_for_tir_fn(&fd, &HashSet::new()),
+            vec![None]
+        );
     }
 
     #[test]
@@ -574,13 +624,16 @@ mod tests {
                 span: sp(),
             }],
         );
-        assert_eq!(capability_params_for_tir_fn(&fd), vec![None]);
+        assert_eq!(
+            capability_params_for_tir_fn(&fd, &HashSet::new()),
+            vec![None]
+        );
     }
 
     #[test]
     fn no_params_returns_empty() {
         let fd = empty_fn(vec![]);
-        assert!(capability_params_for_tir_fn(&fd).is_empty());
+        assert!(capability_params_for_tir_fn(&fd, &HashSet::new()).is_empty());
     }
 
     #[test]

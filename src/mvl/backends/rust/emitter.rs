@@ -152,6 +152,12 @@ pub struct RustEmitter {
     /// Built from `TirProgram.fns` at the start of emission. Used to detect when a
     /// call-site argument needs refined alias wrapping (#1326).
     pub fn_param_types: std::collections::HashMap<String, Vec<crate::mvl::ir::Ty>>,
+    /// Fn-type alias name → resolved `Ty::Fn(..)`.
+    ///
+    /// Populated from `TirProgram.types` where `body == TirTypeBody::Alias(Ty::Fn(..))`.
+    /// Used so HOF parameter borrow-flag propagation (#960) also fires when the param
+    /// type is a named fn-type alias such as `type Dispatcher = fn(val T) -> U` (#1467).
+    pub fn_aliases: std::collections::HashMap<String, crate::mvl::ir::Ty>,
 }
 
 impl RustEmitter {
@@ -182,6 +188,19 @@ impl RustEmitter {
     pub fn refined_alias_base(&self, ty: &crate::mvl::ir::Ty) -> Option<&crate::mvl::ir::Ty> {
         if let crate::mvl::ir::Ty::Named(name, _) = ty {
             self.refined_aliases.get(name.as_str())
+        } else {
+            None
+        }
+    }
+
+    /// If `ty` is a named alias for a `Ty::Fn(..)`, return the resolved Fn type (#1467).
+    /// Returns `None` for non-alias types or aliases to non-Fn types.
+    pub fn resolve_fn_alias<'a>(
+        &'a self,
+        ty: &'a crate::mvl::ir::Ty,
+    ) -> Option<&'a crate::mvl::ir::Ty> {
+        if let crate::mvl::ir::Ty::Named(name, _) = ty {
+            self.fn_aliases.get(name.as_str())
         } else {
             None
         }
@@ -444,6 +463,25 @@ impl RustEmitter {
                 {
                     self.refined_aliases
                         .insert(td.name.clone(), inner.as_ref().clone());
+                }
+            }
+        }
+
+        // Populate fn-alias registry (#1467).
+        // Maps alias name → resolved `Ty::Fn(..)` so HOF cap-propagation (#960) sees
+        // through aliases like `type Dispatcher = fn(val T) -> U`.
+        for td in &tir.types {
+            if let crate::mvl::ir::TirTypeBody::Alias(fn_ty @ crate::mvl::ir::Ty::Fn(..)) = &td.body
+            {
+                self.fn_aliases.insert(td.name.clone(), fn_ty.clone());
+            }
+        }
+        for pt in prelude_tirs {
+            for td in &pt.types {
+                if let crate::mvl::ir::TirTypeBody::Alias(fn_ty @ crate::mvl::ir::Ty::Fn(..)) =
+                    &td.body
+                {
+                    self.fn_aliases.insert(td.name.clone(), fn_ty.clone());
                 }
             }
         }
