@@ -4,7 +4,8 @@
 use mvl::mvl::checker;
 use mvl::mvl::checker::ifc;
 use mvl::mvl::checker::passes::{
-    aggregate_verdicts, count_memory_safety_sites, source_hash, PassRegistry, Verdict, VerdictCache,
+    aggregate_verdicts, count_handling_sites, count_memory_safety_sites, source_hash,
+    HandlingCounts, PassRegistry, Verdict, VerdictCache,
 };
 use mvl::mvl::loader;
 use mvl::mvl::parser::ast::{Decl, Program, Totality, TypeBody};
@@ -57,6 +58,7 @@ pub fn run(path: &str, json: bool, verbose: bool) {
     let mut total_let_bindings: usize = 0;
     let mut total_ref_bindings: usize = 0;
     let mut total_consume_sites: usize = 0;
+    let mut handling = HandlingCounts::default();
     let mut total_relabel_ops: usize = 0;
     let mut total_audit_relabels: usize = 0;
     let mut total_labeled_params: usize = 0;
@@ -169,6 +171,15 @@ pub fn run(path: &str, json: bool, verbose: bool) {
         total_let_bindings += mc.let_bindings;
         total_ref_bindings += mc.ref_bindings;
         total_consume_sites += mc.consume_sites;
+        let hc = count_handling_sites(prog);
+        handling.option_types += hc.option_types;
+        handling.result_types += hc.result_types;
+        handling.some_patterns += hc.some_patterns;
+        handling.none_patterns += hc.none_patterns;
+        handling.ok_patterns += hc.ok_patterns;
+        handling.err_patterns += hc.err_patterns;
+        handling.propagate_sites += hc.propagate_sites;
+        handling.assign_sites += hc.assign_sites;
         total_relabel_ops += ifc::count_relabels(prog);
         total_audit_relabels += ifc::count_audit_relabels(prog);
         total_labeled_params += ifc::count_labeled_params(prog);
@@ -248,6 +259,14 @@ pub fn run(path: &str, json: bool, verbose: bool) {
     }
 
     if json {
+        let assign_sites = handling.assign_sites;
+        let option_types = handling.option_types;
+        let result_types = handling.result_types;
+        let some_patterns = handling.some_patterns;
+        let none_patterns = handling.none_patterns;
+        let ok_patterns = handling.ok_patterns;
+        let err_patterns = handling.err_patterns;
+        let propagate_sites = handling.propagate_sites;
         // NOTE(#96): "pub" is always 0 until the module resolver is merged.
         let req_json: String = (1..=11)
             .map(|i| format!("    \"{i}\": {}", req_errors[i]))
@@ -288,6 +307,14 @@ pub fn run(path: &str, json: bool, verbose: bool) {
     "let_bindings": {total_let_bindings},
     "ref_bindings": {total_ref_bindings},
     "consume_sites": {total_consume_sites},
+    "assign_sites": {assign_sites},
+    "option_types": {option_types},
+    "result_types": {result_types},
+    "some_patterns": {some_patterns},
+    "none_patterns": {none_patterns},
+    "ok_patterns": {ok_patterns},
+    "err_patterns": {err_patterns},
+    "propagate_sites": {propagate_sites},
     "refinement_proven": {agg_ref_proven},
     "refinement_runtime": {agg_ref_runtime},
     "relabel_operations": {total_relabel_ops},
@@ -436,26 +463,61 @@ pub fn run(path: &str, json: bool, verbose: bool) {
                 total_verified, req_errors[3]
             ),
         );
+        let option_matches = handling.some_patterns + handling.none_patterns;
+        let result_matches = handling.ok_patterns + handling.err_patterns;
+        let req4_detail = if req_errors[4] > 0 {
+            format!("{} direct Option access", req_errors[4])
+        } else {
+            format!(
+                "{} Option types, {} matches ({} Some + {} None), {} ? propagations, 0 direct access",
+                handling.option_types,
+                option_matches,
+                handling.some_patterns,
+                handling.none_patterns,
+                handling.propagate_sites,
+            )
+        };
         print_req_row(
             4,
             "Null elimination",
             &req_errors,
             project_verdicts[4].is_proven(),
-            &format!("{} direct Option access", req_errors[4]),
+            &req4_detail,
         );
+        let req5_detail = if req_errors[5] > 0 {
+            format!("{} unhandled Result", req_errors[5])
+        } else {
+            format!(
+                "{} Result types, {} matches ({} Ok + {} Err), {} ? propagations, 0 unhandled",
+                handling.result_types,
+                result_matches,
+                handling.ok_patterns,
+                handling.err_patterns,
+                handling.propagate_sites,
+            )
+        };
         print_req_row(
             5,
             "Error visibility",
             &req_errors,
             project_verdicts[5].is_proven(),
-            &format!("{} unhandled Result", req_errors[5]),
+            &req5_detail,
         );
+        let immutable_bindings = total_let_bindings.saturating_sub(total_ref_bindings);
+        let req6_detail = if req_errors[6] > 0 {
+            format!("{} immutability violations", req_errors[6])
+        } else {
+            format!(
+                "{} immutable + {} ref bindings, {} reassignments, 0 violations",
+                immutable_bindings, total_ref_bindings, handling.assign_sites,
+            )
+        };
         print_req_row(
             6,
             "Ownership",
             &req_errors,
             project_verdicts[6].is_proven(),
-            &format!("{} immutability violations", req_errors[6]),
+            &req6_detail,
         );
         print_req_row(
             7,
