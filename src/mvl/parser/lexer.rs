@@ -618,6 +618,65 @@ impl<'src> Lexer<'src> {
 
     // ── Literal helpers ───────────────────────────────────────────────────
 
+    /// Parse `{NNNN}` after a `\u` escape has been consumed.
+    ///
+    /// Accepts 1–6 hex digits. Returns the corresponding `char`, or U+FFFD
+    /// on any syntax error (missing braces, invalid codepoint, too many digits).
+    fn lex_unicode_escape(&mut self) -> char {
+        if self.peek_char() != Some('{') {
+            self.errors.push(LexError {
+                message: r"expected `{` after `\u` in string escape".into(),
+                span: Span::new(self.line, self.col, self.peek_offset() as u32, 1),
+            });
+            return '\u{FFFD}';
+        }
+        self.advance(); // consume '{'
+        let mut hex = String::new();
+        loop {
+            match self.peek_char() {
+                Some('}') => break,
+                Some(c) if c.is_ascii_hexdigit() && hex.len() < 6 => {
+                    hex.push(c);
+                    self.advance();
+                }
+                Some(c) => {
+                    self.errors.push(LexError {
+                        message: format!(
+                            "invalid character `{c}` in `\\u{{...}}` escape; expected hex digit or `}}`"
+                        ),
+                        span: Span::new(self.line, self.col, self.peek_offset() as u32, 1),
+                    });
+                    return '\u{FFFD}';
+                }
+                None => {
+                    self.errors.push(LexError {
+                        message: "unterminated `\\u{...}` escape: expected `}`".into(),
+                        span: Span::new(self.line, self.col, self.peek_offset() as u32, 1),
+                    });
+                    return '\u{FFFD}';
+                }
+            }
+        }
+        self.advance(); // consume '}'
+        if hex.is_empty() {
+            self.errors.push(LexError {
+                message: "`\\u{}` escape requires at least one hex digit".into(),
+                span: Span::new(self.line, self.col, self.peek_offset() as u32, 1),
+            });
+            return '\u{FFFD}';
+        }
+        let codepoint = u32::from_str_radix(&hex, 16).unwrap_or(0xFFFF_FFFF);
+        char::from_u32(codepoint).unwrap_or_else(|| {
+            self.errors.push(LexError {
+                message: format!(
+                    "`\\u{{{hex}}}` is not a valid Unicode scalar (U+{codepoint:04X})"
+                ),
+                span: Span::new(self.line, self.col, self.peek_offset() as u32, 1),
+            });
+            '\u{FFFD}'
+        })
+    }
+
     fn lex_string(&mut self, start_line: u32, start_col: u32, start_offset: usize) -> TokenKind {
         let mut s = String::new();
         loop {
@@ -637,6 +696,7 @@ impl<'src> Lexer<'src> {
                     Some('\\') => s.push('\\'),
                     Some('"') => s.push('"'),
                     Some('0') => s.push('\0'),
+                    Some('u') => s.push(self.lex_unicode_escape()),
                     Some(c) => s.push(c),
                     None => break,
                 },
@@ -684,6 +744,7 @@ impl<'src> Lexer<'src> {
                     Some('\\') => s.push('\\'),
                     Some('"') => s.push('"'),
                     Some('0') => s.push('\0'),
+                    Some('u') => s.push(self.lex_unicode_escape()),
                     Some(c) => s.push(c),
                     None => break,
                 },
@@ -764,6 +825,7 @@ impl<'src> Lexer<'src> {
                 Some('\\') => '\\',
                 Some('\'') => '\'',
                 Some('0') => '\0',
+                Some('u') => self.lex_unicode_escape(),
                 Some(c) => c,
                 None => '\0',
             },
@@ -993,6 +1055,11 @@ mod tests {
         assert_eq!(kinds.last(), Some(&TokenKind::Eof));
         kinds.pop();
         kinds
+    }
+
+    fn lex_all(src: &str) -> (Vec<TokenKind>, Vec<LexError>) {
+        let (tokens, errors) = Lexer::new(src).tokenize();
+        (tokens.into_iter().map(|t| t.kind).collect(), errors)
     }
 
     // ── Requirement 1 / Scenario: Tokenize keywords ───────────────────────
@@ -1278,6 +1345,73 @@ mod tests {
     fn string_escape_sequences() {
         let kinds = lex_kinds_no_eof(r#""\n\t\\\"" "#);
         assert_eq!(kinds, vec![TokenKind::Str("\n\t\\\"".into())]);
+    }
+
+    #[test]
+    fn unicode_escape_two_byte() {
+        // \u{E9} = U+00E9 LATIN SMALL LETTER E WITH ACUTE (é)
+        let kinds = lex_kinds_no_eof(r#""\u{E9}""#);
+        assert_eq!(kinds, vec![TokenKind::Str("é".into())]);
+    }
+
+    #[test]
+    fn unicode_escape_four_digit() {
+        // \u{20AC} = U+20AC EURO SIGN (€)
+        let kinds = lex_kinds_no_eof(r#""\u{20AC}""#);
+        assert_eq!(kinds, vec![TokenKind::Str("€".into())]);
+    }
+
+    #[test]
+    fn unicode_escape_six_digit_emoji() {
+        // \u{1F600} = U+1F600 GRINNING FACE (😀)
+        let kinds = lex_kinds_no_eof(r#""\u{1F600}""#);
+        assert_eq!(kinds, vec![TokenKind::Str("😀".into())]);
+    }
+
+    #[test]
+    fn unicode_escape_replacement_char() {
+        // \u{FFFD} = U+FFFD REPLACEMENT CHARACTER
+        let kinds = lex_kinds_no_eof(r#""\u{FFFD}""#);
+        assert_eq!(kinds, vec![TokenKind::Str("\u{FFFD}".into())]);
+    }
+
+    #[test]
+    fn unicode_escape_null() {
+        // \u{0} = U+0000 NULL (same as \0)
+        let kinds = lex_kinds_no_eof(r#""\u{0}""#);
+        assert_eq!(kinds, vec![TokenKind::Str("\0".into())]);
+    }
+
+    #[test]
+    fn unicode_escape_in_multiline_string() {
+        let kinds = lex_kinds_no_eof(r#""""euro: \u{20AC}""""#);
+        assert_eq!(kinds, vec![TokenKind::MultilineStr("euro: €".into())]);
+    }
+
+    #[test]
+    fn unicode_escape_lowercase_hex() {
+        // lowercase hex digits must also work
+        let kinds = lex_kinds_no_eof(r#""\u{1f600}""#);
+        assert_eq!(kinds, vec![TokenKind::Str("😀".into())]);
+    }
+
+    #[test]
+    fn unicode_escape_error_missing_brace() {
+        // \uXXXX without braces is a lex error; produces U+FFFD + remaining chars
+        let (kinds, errors) = lex_all(r#""\uE9""#);
+        assert!(!errors.is_empty(), "expected a lex error");
+        // The E and 9 fall through as regular chars after the error
+        let _ = kinds; // token still produced, just garbled
+    }
+
+    #[test]
+    fn unicode_escape_error_invalid_codepoint() {
+        // U+110000 exceeds the Unicode scalar range
+        let (_, errors) = lex_all(r#""\u{110000}""#);
+        assert!(
+            !errors.is_empty(),
+            "expected a lex error for out-of-range codepoint"
+        );
     }
 
     // ── Number literal formats (issue #65) ────────────────────────────────

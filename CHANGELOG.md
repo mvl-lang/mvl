@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.214.1] - 2026-06-20
+
+### Added
+
+- **`\u{NNNN}` Unicode escape sequences in string and char literals** (#1468) — the lexer now accepts `\u{NNNN}` (1–6 hex digits, case-insensitive) in regular strings, multiline strings, and char literals. Invalid codepoints (e.g. surrogates, out-of-range values) and missing braces produce a lex error and emit U+FFFD. This unblocks direct string-literal comparisons for non-ASCII expected values in tests.
+
 ## [0.214.0] - 2026-06-20
 
 ### Added
