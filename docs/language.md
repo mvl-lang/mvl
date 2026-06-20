@@ -67,6 +67,7 @@ partial fn name(params) -> ReturnType { }      // may not terminate
 use module::Item;                     // import (one item per line, at top of file)
 pub fn name(...) -> T { }            // export (private by default)
 pub type Name = ...                   // export a type
+                                      // no re-exports — every symbol traces to its source
 
 const NAME: Type = expr;              // compile-time constant
 
