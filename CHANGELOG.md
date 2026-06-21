@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.216.1] - 2026-06-21
+
+### Fixed
+
+- **Transitive package dependencies not loaded** (#1477) — `check` and `test` commands now use a frontier loop to load all transitive package dependencies, matching the behaviour of `build`. Previously, if package A depended on package B, importing A in a `check` or `test` run would fail to load B's types, causing spurious "type not found" errors.
+
 ## [0.216.0] - 2026-06-20
 
 ### Added
