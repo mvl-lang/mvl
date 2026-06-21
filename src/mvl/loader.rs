@@ -407,9 +407,21 @@ fn type_uses_opaque(ty: &crate::mvl::parser::ast::TypeExpr, opaque: &[&str]) -> 
 ///      so a package's own smoke tests can `use pkg.<name>` without a published release.
 ///   2. Locked packages: read `mvl.lock` from `project_root`, look up each entry in the
 ///      XDG cache, and insert its short name from the cached `mvl.toml`.
+///   3. Transitive packages: for each mapped package, read its `mvl.toml` and add any
+///      declared dependency that exists in the XDG cache but is not yet in the map.
+///      This repeats until no new packages are found (#1477).
 ///
 /// Returns an empty map if no lock file exists or the cache is empty.
 fn build_pkg_name_map(project_root: &Path) -> std::collections::HashMap<String, PathBuf> {
+    build_pkg_name_map_with_cache(project_root, &packages::fetch::pkg_cache_root())
+}
+
+/// Inner implementation of [`build_pkg_name_map`] with an explicit `cache_root` so tests
+/// can pass a temporary directory without touching environment variables.
+fn build_pkg_name_map_with_cache(
+    project_root: &Path,
+    cache_root: &Path,
+) -> std::collections::HashMap<String, PathBuf> {
     let lockfile = packages::lock::LockFile::load_or_empty(project_root);
     let mut map = std::collections::HashMap::new();
 
@@ -421,7 +433,7 @@ fn build_pkg_name_map(project_root: &Path) -> std::collections::HashMap<String, 
     }
 
     for pkg in &lockfile.packages {
-        let cache_dir = packages::fetch::pkg_cache_dir(&pkg.name, &pkg.version);
+        let cache_dir = pkg_cache_dir_in(cache_root, &pkg.name, &pkg.version);
         if !cache_dir.exists() {
             continue;
         }
@@ -431,7 +443,70 @@ fn build_pkg_name_map(project_root: &Path) -> std::collections::HashMap<String, 
             }
         }
     }
+
+    // Transitively expand: for each mapped package, read its manifest and add any
+    // dependencies that are present in the XDG cache but not yet in the map.
+    // This handles the common pattern where a downstream project only declares a
+    // direct dependency (e.g. pkg-health) but that package uses types from another
+    // package (e.g. pkg-http) — without this expansion the transitive types would
+    // be invisible to the compiler (#1477).
+    let mut seen_dirs: std::collections::HashSet<PathBuf> = map.values().cloned().collect();
+    let mut frontier: Vec<PathBuf> = map.values().cloned().collect();
+    while !frontier.is_empty() {
+        let mut next_frontier = Vec::new();
+        for pkg_dir in &frontier {
+            let Ok(content) = fs::read_to_string(pkg_dir.join("mvl.toml")) else {
+                continue;
+            };
+            let Ok(manifest) = packages::manifest::Manifest::parse(&content) else {
+                continue;
+            };
+            for (dep_id, dep_spec) in &manifest.dependencies {
+                let tag = dep_spec.version_str();
+                let version = tag.strip_prefix('v').unwrap_or(tag);
+                let dep_dir = pkg_cache_dir_in(cache_root, dep_id, version);
+                if !dep_dir.exists() || !seen_dirs.insert(dep_dir.clone()) {
+                    continue;
+                }
+                if let Ok(dep_content) = fs::read_to_string(dep_dir.join("mvl.toml")) {
+                    if let Ok(dep_manifest) = packages::manifest::Manifest::parse(&dep_content) {
+                        map.insert(dep_manifest.package.name, dep_dir.clone());
+                        next_frontier.push(dep_dir);
+                    }
+                }
+            }
+        }
+        frontier = next_frontier;
+    }
+
     map
+}
+
+/// Compute the cache directory for a package using an explicit `cache_root` instead of the
+/// XDG default.  Mirrors [`packages::fetch::pkg_cache_dir`] but without the global env lookup.
+fn pkg_cache_dir_in(cache_root: &Path, name: &str, version: &str) -> PathBuf {
+    cache_root.join(sanitize_pkg_name(name)).join(version)
+}
+
+/// Replace path-unsafe characters in a package ID with underscores so it can be used as a
+/// directory component.  Mirrors the `sanitize` function in `packages::fetch`:
+/// `/`, `:`, `\`, `\0` → `_`; `.` and `..` components are removed.
+fn sanitize_pkg_name(name: &str) -> String {
+    let replaced: String = name
+        .chars()
+        .map(|c| {
+            if c == '/' || c == ':' || c == '\\' || c == '\0' {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    let cleaned: Vec<&str> = replaced
+        .split('_')
+        .filter(|c| *c != "." && *c != "..")
+        .collect();
+    cleaned.join("_")
 }
 /// Collect `builtin fn` declarations from all stdlib modules visible to `progs`.
 ///
@@ -765,6 +840,132 @@ mod tests {
         let prog = p.parse_program();
         let names = collect_imported_module_names(&prog);
         assert!(names.is_empty());
+    }
+
+    // ── build_pkg_name_map_with_cache: transitive expansion (#1477) ──────────
+
+    /// Write a minimal `mvl.toml` with just a `[package]` section and optional deps.
+    fn write_pkg_manifest(dir: &std::path::Path, name: &str, deps: &[(&str, &str, &str)]) {
+        let mut toml = format!(
+            "[package]\nname = \"{name}\"\nversion = \"1.0.0\"\nlicense = \"Apache-2.0\"\nrequires-mvl = \">=0.1.0\"\n"
+        );
+        if !deps.is_empty() {
+            toml.push_str("\n[dependencies]\n");
+            for (dep_id, git_url, tag) in deps {
+                toml.push_str(&format!(
+                    "\"{dep_id}\" = {{ git = \"{git_url}\", tag = \"{tag}\" }}\n"
+                ));
+            }
+        }
+        fs::write(dir.join("mvl.toml"), toml).unwrap();
+    }
+
+    /// Write a minimal `mvl.lock` with a single package entry.
+    fn write_lockfile(dir: &std::path::Path, name: &str, version: &str) {
+        let content = format!(
+            "[[package]]\nname = \"{name}\"\nversion = \"{version}\"\nhash = \"sha256:00\"\n"
+        );
+        fs::write(dir.join("mvl.lock"), content).unwrap();
+    }
+
+    #[test]
+    fn build_pkg_name_map_includes_direct_dep_from_lockfile() {
+        let cache = tmpdir();
+        let project = tmpdir();
+
+        // cache/github.com_mvl-lang_pkg-http/1.0.0/ with mvl.toml declaring name = "http"
+        let http_dir = cache
+            .path()
+            .join("github.com_mvl-lang_pkg-http")
+            .join("1.0.0");
+        fs::create_dir_all(&http_dir).unwrap();
+        write_pkg_manifest(&http_dir, "http", &[]);
+
+        // Lock file lists pkg-http directly
+        write_lockfile(project.path(), "github.com/mvl-lang/pkg-http", "1.0.0");
+
+        let map = build_pkg_name_map_with_cache(project.path(), cache.path());
+        assert!(
+            map.contains_key("http"),
+            "direct dep from lockfile must be in map; got: {map:?}"
+        );
+    }
+
+    #[test]
+    fn build_pkg_name_map_expands_transitive_dep() {
+        let cache = tmpdir();
+        let project = tmpdir();
+
+        // pkg-http: name = "http", no deps
+        let http_dir = cache
+            .path()
+            .join("github.com_mvl-lang_pkg-http")
+            .join("1.0.0");
+        fs::create_dir_all(&http_dir).unwrap();
+        write_pkg_manifest(&http_dir, "http", &[]);
+
+        // pkg-health: name = "health", depends on pkg-http @ v1.0.0
+        let health_dir = cache
+            .path()
+            .join("github.com_mvl-lang_pkg-health")
+            .join("1.0.0");
+        fs::create_dir_all(&health_dir).unwrap();
+        write_pkg_manifest(
+            &health_dir,
+            "health",
+            &[(
+                "github.com/mvl-lang/pkg-http",
+                "https://github.com/mvl-lang/pkg-http",
+                "v1.0.0",
+            )],
+        );
+
+        // Downstream project: lock file only lists pkg-health (NOT pkg-http)
+        write_lockfile(project.path(), "github.com/mvl-lang/pkg-health", "1.0.0");
+
+        let map = build_pkg_name_map_with_cache(project.path(), cache.path());
+        assert!(
+            map.contains_key("health"),
+            "direct dep must be in map; got: {map:?}"
+        );
+        assert!(
+            map.contains_key("http"),
+            "transitive dep (pkg-http via pkg-health) must be expanded into map; got: {map:?}"
+        );
+    }
+
+    #[test]
+    fn build_pkg_name_map_transitive_dep_absent_from_cache_is_skipped() {
+        let cache = tmpdir();
+        let project = tmpdir();
+
+        // pkg-health depends on pkg-http, but pkg-http is NOT in the cache
+        let health_dir = cache
+            .path()
+            .join("github.com_mvl-lang_pkg-health")
+            .join("1.0.0");
+        fs::create_dir_all(&health_dir).unwrap();
+        write_pkg_manifest(
+            &health_dir,
+            "health",
+            &[(
+                "github.com/mvl-lang/pkg-http",
+                "https://github.com/mvl-lang/pkg-http",
+                "v1.0.0",
+            )],
+        );
+
+        write_lockfile(project.path(), "github.com/mvl-lang/pkg-health", "1.0.0");
+
+        let map = build_pkg_name_map_with_cache(project.path(), cache.path());
+        assert!(
+            map.contains_key("health"),
+            "direct dep must be present; got: {map:?}"
+        );
+        assert!(
+            !map.contains_key("http"),
+            "absent transitive dep must not appear in map; got: {map:?}"
+        );
     }
 }
 

@@ -191,14 +191,23 @@ pub fn run(path: &str, req_filter: Option<u8>, opts: CheckOptions) {
 
     // Load any `pkg.*` package modules referenced by the user programs so the
     // checker can resolve their types and functions (mirrors build behaviour).
+    // Uses the same frontier loop as `mvl build` to include transitive package
+    // dependencies (e.g. pkg-health depends on pkg-http, #1477).
     let all_parsed_progs: Vec<Program> = parsed.iter().map(|(_, p, _)| p.clone()).collect();
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let project_root = super::find_project_root(&cwd);
-    stdlib_prelude.extend(loader::load_pkg_modules(
-        &all_parsed_progs,
-        &project_root,
-        &mut std::collections::HashSet::new(),
-    ));
+    {
+        let mut seen_pkgs = std::collections::HashSet::new();
+        let mut frontier = all_parsed_progs.clone();
+        loop {
+            let new_pkgs = loader::load_pkg_modules(&frontier, &project_root, &mut seen_pkgs);
+            if new_pkgs.is_empty() {
+                break;
+            }
+            frontier = new_pkgs.clone();
+            stdlib_prelude.extend(new_pkgs);
+        }
+    }
 
     // Snapshot all parsed user programs for cross-module prelude building.
     // Intentionally includes resolver-only siblings (auto-loaded to satisfy imports,

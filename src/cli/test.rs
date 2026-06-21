@@ -92,11 +92,21 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
             .collect();
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let project_root = super::find_project_root(&cwd);
-        stdlib_prelude_progs.extend(loader::load_pkg_modules(
-            &all_test_progs,
-            &project_root,
-            &mut std::collections::HashSet::new(),
-        ));
+        // Use a frontier loop (mirroring build.rs) to load transitive package
+        // dependencies — e.g. if a test file imports pkg-health which uses pkg-http,
+        // pkg-http's types must be in the prelude (#1477).
+        {
+            let mut seen_pkgs = std::collections::HashSet::new();
+            let mut frontier = all_test_progs.clone();
+            loop {
+                let new_pkgs = loader::load_pkg_modules(&frontier, &project_root, &mut seen_pkgs);
+                if new_pkgs.is_empty() {
+                    break;
+                }
+                frontier = new_pkgs.clone();
+                stdlib_prelude_progs.extend(new_pkgs);
+            }
+        }
 
         // Pre-compute which module names are explicitly imported by test files so
         // that pure-function sibling modules (no types/extern blocks) are also
