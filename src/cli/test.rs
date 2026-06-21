@@ -191,6 +191,16 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
         stdlib_prelude_progs.extend(loader::load_mvl_native_stdlib_extras(&all_for_extras));
     }
 
+    // Collect native Cargo deps and bridge.rs from the full pkg.* closure so
+    // that the test crate's Cargo.toml mirrors what `mvl build` would emit (#1481).
+    // The frontier loop above loaded all transitive packages into stdlib_prelude_progs.
+    let project_root = {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        super::find_project_root(&cwd)
+    };
+    let native_dep_lines = loader::collect_pkg_native_dep_lines(&stdlib_prelude_progs, &project_root);
+    let pkg_bridge = loader::find_pkg_bridge(&stdlib_prelude_progs, &project_root);
+
     // Build a combined Rust test file from all test modules.
     // Each entry: (module_name, display_label, content)
     let mut modules: Vec<(String, String, String)> = Vec::new();
@@ -376,14 +386,54 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
     } else {
         String::new()
     };
+    // Native Cargo deps from any `pkg.*` package's `[native]` section (#1481).
+    let native_deps_block = if native_dep_lines.is_empty() {
+        String::new()
+    } else {
+        let mut s = String::new();
+        for line in &native_dep_lines {
+            s.push_str(line);
+            s.push('\n');
+        }
+        s
+    };
     let cargo_toml = format!(
-        "[package]\nname = \"{crate_name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\n{mvl_runtime_dep}"
+        "[package]\nname = \"{crate_name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\n{mvl_runtime_dep}{native_deps_block}"
     );
 
     fs::write(tmp_dir.join("Cargo.toml"), &cargo_toml).unwrap_or_else(|e| {
         eprintln!("Cannot write Cargo.toml: {e}");
         process::exit(1);
     });
+
+    // If a `pkg.*` package supplies a bridge.rs (Rust implementations of
+    // extern "rust" fns), copy it into src/ and inject `mod bridge;` so the
+    // test crate links the symbols — same wiring `mvl build` performs (#1481).
+    // The declaration must come AFTER any inner attributes (`#![...]`), so we
+    // insert it on the first blank line following the file-level allow.
+    if let Some(ref bp) = pkg_bridge {
+        fs::copy(bp, src_dir.join("bridge.rs")).unwrap_or_else(|e| {
+            eprintln!("Cannot copy bridge.rs: {e}");
+            process::exit(1);
+        });
+        let mut injected = String::with_capacity(combined_rs.len() + 16);
+        let mut done = false;
+        for line in combined_rs.lines() {
+            injected.push_str(line);
+            injected.push('\n');
+            if !done && line.trim_start().starts_with("#![allow(") {
+                injected.push_str("\nmod bridge;\n");
+                done = true;
+            }
+        }
+        if !done {
+            // No inner-attribute line found — fall back to prepending after the
+            // header comments by simply appending at the start.
+            injected = format!("mod bridge;\n{combined_rs}");
+        }
+        combined_rs = injected;
+    }
+
     let lib_rs_path = src_dir.join("lib.rs");
     fs::write(&lib_rs_path, &combined_rs).unwrap_or_else(|e| {
         eprintln!("Cannot write lib.rs: {e}");
