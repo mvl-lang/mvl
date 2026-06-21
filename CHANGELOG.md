@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **`mvl test` propagates `[native]` deps and `bridge.rs` from `pkg.*` packages** (#1481) — when a test pulls in source files that transitively depend on a package with `[native]` Cargo deps, those deps are now added to the generated test crate's `Cargo.toml` (mirroring `mvl build`). `pkg.*` modules are also discovered transitively across test files **and** sibling library files, and a package-provided `bridge.rs` is copied into the test crate with `mod bridge;` injected so extern "rust" symbols link.
+
 ## [0.216.0] - 2026-06-20
 
 ### Added

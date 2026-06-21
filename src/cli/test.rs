@@ -85,101 +85,122 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
     // Pre-scan all test files to discover pure-MVL stdlib imports (e.g. json) and
     // extend the prelude so their types/functions are available during transpilation.
     // Also load any pkg.* package modules referenced by the test files.
-    {
-        let all_test_progs: Vec<_> = test_files
-            .iter()
-            .map(|f| super::parse_or_exit(&f.display().to_string()).0)
-            .collect();
-        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let project_root = super::find_project_root(&cwd);
-        stdlib_prelude_progs.extend(loader::load_pkg_modules(
-            &all_test_progs,
-            &project_root,
-            &mut std::collections::HashSet::new(),
-        ));
+    let all_test_progs: Vec<_> = test_files
+        .iter()
+        .map(|f| super::parse_or_exit(&f.display().to_string()).0)
+        .collect();
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let project_root = super::find_project_root(&cwd);
 
-        // Pre-compute which module names are explicitly imported by test files so
-        // that pure-function sibling modules (no types/extern blocks) are also
-        // loaded into the prelude when a test file uses `use module::fn`.
-        // This fixes the cross-module import limitation tracked in issue #96.
-        let imported_by_test_files: std::collections::HashSet<String> = all_test_progs
-            .iter()
-            .flat_map(loader::collect_imported_module_names)
-            .collect();
+    // Pre-compute which module names are explicitly imported by test files so
+    // that pure-function sibling modules (no types/extern blocks) are also
+    // loaded into the prelude when a test file uses `use module::fn`.
+    // This fixes the cross-module import limitation tracked in issue #96.
+    let imported_by_test_files: std::collections::HashSet<String> = all_test_progs
+        .iter()
+        .flat_map(loader::collect_imported_module_names)
+        .collect();
 
-        // For packages tested from their own src/ directory, also load sibling
-        // .mvl files (non-test, including internal/) so types and extern
-        // declarations are in scope during transpilation.
-        // Track already-loaded paths so that multiple test files in the same
-        // directory don't add the same library file multiple times.
-        let mut loaded_prelude_paths: std::collections::HashSet<std::path::PathBuf> =
-            std::collections::HashSet::new();
-        let mut sibling_progs: Vec<mvl::mvl::parser::ast::Program> = Vec::new();
-        for f in &test_files {
-            let dir = f.parent().unwrap_or_else(|| std::path::Path::new("."));
-            // Scan src/ and src/internal/ (package convention per ADR-0012).
-            let dirs_to_scan: Vec<std::path::PathBuf> =
-                vec![dir.to_path_buf(), dir.join("internal")];
-            for scan_dir in dirs_to_scan {
-                if let Ok(entries) = fs::read_dir(&scan_dir) {
-                    // Symlink escape guard (#715): canonicalize the scan root once so
-                    // that symlinks pointing outside the directory are silently skipped.
-                    let canon_scan_dir = fs::canonicalize(&scan_dir).ok();
-                    for entry in entries.flatten() {
-                        let p = entry.path();
-                        // Skip entries that resolve outside the scanned directory.
-                        if let Some(ref canon_root) = canon_scan_dir {
-                            match fs::canonicalize(&p) {
-                                Ok(canon_p) if canon_p.starts_with(canon_root) => {}
-                                _ => continue,
-                            }
+    // For packages tested from their own src/ directory, also load sibling
+    // .mvl files (non-test, including internal/) so types and extern
+    // declarations are in scope during transpilation.
+    // Track already-loaded paths so that multiple test files in the same
+    // directory don't add the same library file multiple times.
+    let mut loaded_prelude_paths: std::collections::HashSet<std::path::PathBuf> =
+        std::collections::HashSet::new();
+    let mut sibling_progs: Vec<mvl::mvl::parser::ast::Program> = Vec::new();
+    for f in &test_files {
+        let dir = f.parent().unwrap_or_else(|| std::path::Path::new("."));
+        // Scan src/ and src/internal/ (package convention per ADR-0012).
+        let dirs_to_scan: Vec<std::path::PathBuf> =
+            vec![dir.to_path_buf(), dir.join("internal")];
+        for scan_dir in dirs_to_scan {
+            if let Ok(entries) = fs::read_dir(&scan_dir) {
+                // Symlink escape guard (#715): canonicalize the scan root once so
+                // that symlinks pointing outside the directory are silently skipped.
+                let canon_scan_dir = fs::canonicalize(&scan_dir).ok();
+                for entry in entries.flatten() {
+                    let p = entry.path();
+                    // Skip entries that resolve outside the scanned directory.
+                    if let Some(ref canon_root) = canon_scan_dir {
+                        match fs::canonicalize(&p) {
+                            Ok(canon_p) if canon_p.starts_with(canon_root) => {}
+                            _ => continue,
                         }
-                        let fname = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                        if p.extension().map(|e| e == "mvl").unwrap_or(false)
-                            && !fname.contains("_test")
-                            && p != **f
-                            && loaded_prelude_paths.insert(p.clone())
-                        {
-                            if let Ok(src) = fs::read_to_string(&p) {
-                                let (mut pp, _) = Parser::new(&src);
-                                let parsed = pp.parse_program();
-                                // Skip entry-point files (those defining `main`) — they are
-                                // programs, not library modules.  Including them in the prelude
-                                // causes duplicate type/function definitions when combined with
-                                // test-local re-declarations.
-                                //
-                                // Load files that have extern blocks or type declarations.
-                                // Also load pure-function files (no types/extern) only when a
-                                // test file explicitly imports them via `use module::fn` — this
-                                // resolves cross-module imports without risking shadowing of
-                                // runtime primitives by unreferenced helpers (fix for #96).
-                                let file_stem = p
-                                    .file_stem()
-                                    .and_then(|s| s.to_str())
-                                    .unwrap_or("")
-                                    .to_owned();
-                                if !transpiler::has_main_fn(&parsed)
-                                    && (transpiler::has_extern_or_type_decls(&parsed)
-                                        || imported_by_test_files.contains(&file_stem))
-                                {
-                                    sibling_progs.push(parsed.clone());
-                                    stdlib_prelude_progs.push(parsed);
-                                }
+                    }
+                    let fname = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                    if p.extension().map(|e| e == "mvl").unwrap_or(false)
+                        && !fname.contains("_test")
+                        && p != **f
+                        && loaded_prelude_paths.insert(p.clone())
+                    {
+                        if let Ok(src) = fs::read_to_string(&p) {
+                            let (mut pp, _) = Parser::new(&src);
+                            let parsed = pp.parse_program();
+                            // Skip entry-point files (those defining `main`) — they are
+                            // programs, not library modules.  Including them in the prelude
+                            // causes duplicate type/function definitions when combined with
+                            // test-local re-declarations.
+                            //
+                            // Load files that have extern blocks or type declarations.
+                            // Also load pure-function files (no types/extern) only when a
+                            // test file explicitly imports them via `use module::fn` — this
+                            // resolves cross-module imports without risking shadowing of
+                            // runtime primitives by unreferenced helpers (fix for #96).
+                            let file_stem = p
+                                .file_stem()
+                                .and_then(|s| s.to_str())
+                                .unwrap_or("")
+                                .to_owned();
+                            if !transpiler::has_main_fn(&parsed)
+                                && (transpiler::has_extern_or_type_decls(&parsed)
+                                    || imported_by_test_files.contains(&file_stem))
+                            {
+                                sibling_progs.push(parsed.clone());
+                                stdlib_prelude_progs.push(parsed);
                             }
                         }
                     }
                 }
             }
         }
-        // Single pass over all programs (test files + sibling library files) mirrors
-        // cli/build.rs and ensures transitive stdlib deps are discovered together (#865).
-        let all_for_extras: Vec<_> = all_test_progs
-            .iter()
-            .chain(sibling_progs.iter())
-            .cloned()
-            .collect();
-        stdlib_prelude_progs.extend(loader::load_mvl_native_stdlib_extras(&all_for_extras));
     }
+
+    // Load pkg.* packages transitively from BOTH test files and sibling library
+    // files — packages depend on packages, and a sibling library may pull in
+    // native-backed packages that the test file itself does not reference (#1481).
+    // Mirrors the loop in cli/build.rs.
+    let user_progs_for_pkgs: Vec<_> = all_test_progs
+        .iter()
+        .chain(sibling_progs.iter())
+        .cloned()
+        .collect();
+    let mut seen_pkgs = std::collections::HashSet::<String>::new();
+    let mut pkg_progs: Vec<mvl::mvl::parser::ast::Program> = Vec::new();
+    let mut frontier: Vec<_> = user_progs_for_pkgs.clone();
+    loop {
+        let new_pkgs = loader::load_pkg_modules(&frontier, &project_root, &mut seen_pkgs);
+        if new_pkgs.is_empty() {
+            break;
+        }
+        frontier = new_pkgs.clone();
+        pkg_progs.extend(new_pkgs);
+    }
+    stdlib_prelude_progs.extend(pkg_progs.clone());
+
+    // Collect native Cargo deps and a bridge.rs from the full pkg.* closure so
+    // that the test crate's Cargo.toml mirrors what `mvl build` would emit (#1481).
+    let all_with_pkgs: Vec<_> = user_progs_for_pkgs
+        .iter()
+        .chain(pkg_progs.iter())
+        .cloned()
+        .collect();
+    let native_dep_lines = loader::collect_pkg_native_dep_lines(&all_with_pkgs, &project_root);
+    let pkg_bridge = loader::find_pkg_bridge(&all_with_pkgs, &project_root);
+
+    // Single pass over all programs (test files + sibling library files + packages)
+    // mirrors cli/build.rs and ensures transitive stdlib deps are discovered (#865).
+    stdlib_prelude_progs.extend(loader::load_mvl_native_stdlib_extras(&all_with_pkgs));
 
     // Build a combined Rust test file from all test modules.
     // Each entry: (module_name, display_label, content)
@@ -366,14 +387,54 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
     } else {
         String::new()
     };
+    // Native Cargo deps from any `pkg.*` package's `[native]` section (#1481).
+    let native_deps_block = if native_dep_lines.is_empty() {
+        String::new()
+    } else {
+        let mut s = String::new();
+        for line in &native_dep_lines {
+            s.push_str(line);
+            s.push('\n');
+        }
+        s
+    };
     let cargo_toml = format!(
-        "[package]\nname = \"{crate_name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\n{mvl_runtime_dep}"
+        "[package]\nname = \"{crate_name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\n{mvl_runtime_dep}{native_deps_block}"
     );
 
     fs::write(tmp_dir.join("Cargo.toml"), &cargo_toml).unwrap_or_else(|e| {
         eprintln!("Cannot write Cargo.toml: {e}");
         process::exit(1);
     });
+
+    // If a `pkg.*` package supplies a bridge.rs (Rust implementations of
+    // extern "rust" fns), copy it into src/ and inject `mod bridge;` so the
+    // test crate links the symbols — same wiring `mvl build` performs (#1481).
+    // The declaration must come AFTER any inner attributes (`#![...]`), so we
+    // insert it on the first blank line following the file-level allow.
+    if let Some(ref bp) = pkg_bridge {
+        fs::copy(bp, src_dir.join("bridge.rs")).unwrap_or_else(|e| {
+            eprintln!("Cannot copy bridge.rs: {e}");
+            process::exit(1);
+        });
+        let mut injected = String::with_capacity(combined_rs.len() + 16);
+        let mut done = false;
+        for line in combined_rs.lines() {
+            injected.push_str(line);
+            injected.push('\n');
+            if !done && line.trim_start().starts_with("#![allow(") {
+                injected.push_str("\nmod bridge;\n");
+                done = true;
+            }
+        }
+        if !done {
+            // No inner-attribute line found — fall back to prepending after the
+            // header comments by simply appending at the start.
+            injected = format!("mod bridge;\n{combined_rs}");
+        }
+        combined_rs = injected;
+    }
+
     let lib_rs_path = src_dir.join("lib.rs");
     fs::write(&lib_rs_path, &combined_rs).unwrap_or_else(|e| {
         eprintln!("Cannot write lib.rs: {e}");
