@@ -172,5 +172,4 @@ All 4 properties proved.  Compilation artifact: invariants hold for ALL inputs.
 - Capabilities spec: `.openspec/specs/014-data-race-freedom/spec.md`
 - Actor spec: `.openspec/specs/015-actors/spec.md`
 - Basic actor example: [actor_pingpong](../actor_pingpong/)
-- Practical actor example: [actor_webserver](../actor_webserver/)
 - Actor runtime: [#695](https://github.com/LAB271/mvl_language/issues/695), [#696](https://github.com/LAB271/mvl_language/issues/696)
