@@ -323,31 +323,14 @@ pub fn list_git_tags(git_url: &str) -> Result<Vec<String>, FetchError> {
     Ok(tags)
 }
 
-/// Look up the commit SHA for a specific tag at the remote.
+/// Parse the stdout of `git ls-remote --tags` for a specific ref, returning
+/// the commit hash the tag resolves to.
 ///
-/// Returns `Ok(Some(sha))` if the tag exists, `Ok(None)` if not, or `Err` on
-/// network/git errors. Used by cache-validation paths to detect tag re-publish.
-pub fn ls_remote_tag_sha(git_url: &str, tag: &str) -> Result<Option<String>, FetchError> {
-    validate_url(git_url)?;
-    validate_tag(tag)?;
-    let ref_path = format!("refs/tags/{tag}");
-    let output = run_git_with_timeout(
-        &["ls-remote", "--tags", "--", git_url, &ref_path],
-        None,
-        git_timeout(DEFAULT_LS_REMOTE_TIMEOUT_SECS),
-    )?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(FetchError::GitError(format!(
-            "git ls-remote {git_url} {ref_path}: {stderr}"
-        )));
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    // Format: "<hash>\trefs/tags/<tag>"
-    // Prefer the peeled ref (`refs/tags/<tag>^{}`) when present — that points to
-    // the commit, not the tag object.
+/// Prefers the peeled ref (`refs/tags/<tag>^{}`) when present — for annotated
+/// tags that line carries the commit hash rather than the tag object hash.
+/// Falls back to the plain ref for lightweight tags.
+fn parse_ls_remote_tag_sha(stdout: &str, ref_path: &str) -> Option<String> {
+    let peeled = format!("{ref_path}^{{}}");
     let mut commit_sha: Option<String> = None;
     let mut tag_sha: Option<String> = None;
     for line in stdout.lines() {
@@ -360,13 +343,41 @@ pub fn ls_remote_tag_sha(git_url: &str, tag: &str) -> Result<Option<String>, Fet
             Some(r) => r.trim(),
             None => continue,
         };
-        if refname == format!("{ref_path}^{{}}") {
+        if refname == peeled {
             commit_sha = Some(sha.to_string());
         } else if refname == ref_path {
             tag_sha = Some(sha.to_string());
         }
     }
-    Ok(commit_sha.or(tag_sha))
+    commit_sha.or(tag_sha)
+}
+
+/// Look up the commit SHA for a specific tag at the remote.
+///
+/// Returns `Ok(Some(sha))` if the tag exists, `Ok(None)` if not, or `Err` on
+/// network/git errors. Used by cache-validation paths to detect tag re-publish.
+pub fn ls_remote_tag_sha(git_url: &str, tag: &str) -> Result<Option<String>, FetchError> {
+    validate_url(git_url)?;
+    validate_tag(tag)?;
+    let ref_path = format!("refs/tags/{tag}");
+    // Also request the peeled ref so annotated tags resolve to their commit hash.
+    // Without this, git only returns the tag object hash for annotated tags.
+    let peeled_ref = format!("{ref_path}^{{}}");
+    let output = run_git_with_timeout(
+        &["ls-remote", "--tags", "--", git_url, &ref_path, &peeled_ref],
+        None,
+        git_timeout(DEFAULT_LS_REMOTE_TIMEOUT_SECS),
+    )?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(FetchError::GitError(format!(
+            "git ls-remote {git_url} {ref_path}: {stderr}"
+        )));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(parse_ls_remote_tag_sha(&stdout, &ref_path))
 }
 
 /// Fetch tag names with their Unix creation timestamps from a remote git repo.
@@ -1086,5 +1097,52 @@ mod tests {
         let h2 = hex_encode(&s2.finalize());
 
         assert_eq!(h1, h2);
+    }
+
+    // --- parse_ls_remote_tag_sha ---
+
+    #[test]
+    fn parse_ls_remote_annotated_tag_prefers_peeled_commit_hash() {
+        // Annotated tags produce two lines: tag object hash and peeled commit hash.
+        // We must return the commit hash (^{} line), not the tag object hash.
+        let stdout = "7e0a2bc0eb7068d024572e7fe0b9b2e6b1c18e6a\trefs/tags/v0.4.0\n\
+                      9113df617a3d0241c31189e74fa45c1bb64e250d\trefs/tags/v0.4.0^{}\n";
+        let result = parse_ls_remote_tag_sha(stdout, "refs/tags/v0.4.0");
+        assert_eq!(
+            result,
+            Some("9113df617a3d0241c31189e74fa45c1bb64e250d".to_string()),
+            "must return the commit hash, not the tag object hash"
+        );
+    }
+
+    #[test]
+    fn parse_ls_remote_lightweight_tag_returns_commit_hash_directly() {
+        // Lightweight tags point directly to a commit — only one line, no ^{}.
+        let stdout = "9113df617a3d0241c31189e74fa45c1bb64e250d\trefs/tags/v1.0.0\n";
+        let result = parse_ls_remote_tag_sha(stdout, "refs/tags/v1.0.0");
+        assert_eq!(
+            result,
+            Some("9113df617a3d0241c31189e74fa45c1bb64e250d".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_ls_remote_missing_tag_returns_none() {
+        let result = parse_ls_remote_tag_sha("", "refs/tags/v2.0.0");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn parse_ls_remote_ignores_unrelated_refs() {
+        // Unrelated refs in the output must not affect the result.
+        let stdout = "aaaa0000\trefs/tags/v0.3.0\n\
+                      bbbb0000\trefs/tags/v0.3.0^{}\n\
+                      9113df617a3d0241c31189e74fa45c1bb64e250d\trefs/tags/v0.4.0\n\
+                      7e0a2bc0eb7068d024572e7fe0b9b2e6b1c18e6a\trefs/tags/v0.4.0^{}\n";
+        let result = parse_ls_remote_tag_sha(stdout, "refs/tags/v0.4.0");
+        assert_eq!(
+            result,
+            Some("7e0a2bc0eb7068d024572e7fe0b9b2e6b1c18e6a".to_string())
+        );
     }
 }
