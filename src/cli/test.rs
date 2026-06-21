@@ -198,7 +198,8 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         super::find_project_root(&cwd)
     };
-    let native_dep_lines = loader::collect_pkg_native_dep_lines(&stdlib_prelude_progs, &project_root);
+    let native_dep_lines =
+        loader::collect_pkg_native_dep_lines(&stdlib_prelude_progs, &project_root);
     let pkg_bridge = loader::find_pkg_bridge(&stdlib_prelude_progs, &project_root);
 
     // Build a combined Rust test file from all test modules.

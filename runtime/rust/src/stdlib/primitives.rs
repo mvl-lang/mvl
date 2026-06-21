@@ -49,10 +49,9 @@ pub fn str_from_chars(chars: Vec<String>) -> String {
 /// Returns `None` if out of range or if the character's codepoint > 255
 /// (cannot be represented as a single Byte).
 ///
-/// Note: `str_byte_at(str_from_bytes(bs), i)` is NOT a lossless round-trip
-/// for non-ASCII bytes. `str_from_bytes` decodes the sequence as UTF-8 and
-/// multi-byte codepoints (including U+FFFD replacements for invalid bytes)
-/// have codepoints > 255, so `byte_at` returns `None` for them.
+/// `str_byte_at(str_from_bytes(bs), i)` is a lossless round-trip for every
+/// byte in 0..=255 because `str_from_bytes` maps each byte to the codepoint
+/// of the same numeric value (Latin-1 / ISO-8859-1).
 pub fn str_byte_at(s: String, i: i64) -> Option<u8> {
     if i < 0 {
         return None;
@@ -67,11 +66,17 @@ pub fn str_byte_at(s: String, i: i64) -> Option<u8> {
     })
 }
 
-/// Reconstruct a `String` from a UTF-8 byte sequence (lossy).
+/// Reconstruct a `String` from a raw byte sequence (Latin-1 / ISO-8859-1).
 ///
-/// Invalid UTF-8 byte sequences are replaced with U+FFFD.
+/// Each input byte 0..=255 maps to the Unicode codepoint of the same numeric
+/// value, producing one MVL character per byte. This guarantees a lossless
+/// round-trip with `str_byte_at` for every byte value, making `String` usable
+/// as a transparent carrier for binary data (network protocols, hashes, etc.).
+///
+/// Note: this is NOT a UTF-8 decode. To interpret the bytes as UTF-8 text,
+/// decode externally before constructing the `String`.
 pub fn str_from_bytes(bytes: Vec<u8>) -> String {
-    String::from_utf8_lossy(&bytes).into_owned()
+    bytes.into_iter().map(|b| b as char).collect()
 }
 
 /// Concatenate two strings. `str_concat(a, b)` == `a + b`.
