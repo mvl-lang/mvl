@@ -874,7 +874,10 @@ mod tests {
         let project = tmpdir();
 
         // cache/github.com_mvl-lang_pkg-http/1.0.0/ with mvl.toml declaring name = "http"
-        let http_dir = cache.path().join("github.com_mvl-lang_pkg-http").join("1.0.0");
+        let http_dir = cache
+            .path()
+            .join("github.com_mvl-lang_pkg-http")
+            .join("1.0.0");
         fs::create_dir_all(&http_dir).unwrap();
         write_pkg_manifest(&http_dir, "http", &[]);
 
@@ -894,7 +897,10 @@ mod tests {
         let project = tmpdir();
 
         // pkg-http: name = "http", no deps
-        let http_dir = cache.path().join("github.com_mvl-lang_pkg-http").join("1.0.0");
+        let http_dir = cache
+            .path()
+            .join("github.com_mvl-lang_pkg-http")
+            .join("1.0.0");
         fs::create_dir_all(&http_dir).unwrap();
         write_pkg_manifest(&http_dir, "http", &[]);
 

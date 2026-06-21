@@ -99,8 +99,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
             let mut seen_pkgs = std::collections::HashSet::new();
             let mut frontier = all_test_progs.clone();
             loop {
-                let new_pkgs =
-                    loader::load_pkg_modules(&frontier, &project_root, &mut seen_pkgs);
+                let new_pkgs = loader::load_pkg_modules(&frontier, &project_root, &mut seen_pkgs);
                 if new_pkgs.is_empty() {
                     break;
                 }
