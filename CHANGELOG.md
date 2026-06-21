@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- **Annotated tag false positives in `mvl update`** (#1476) — `mvl update` was comparing the tag object hash against the commit hash stored in the lock file for annotated tags, producing spurious divergence warnings. The `ls_remote_tag_sha` helper now requests both `refs/tags/{tag}` and `refs/tags/{tag}^{}` patterns so git returns the peeled ref (commit hash) for annotated tags.
 - **`mvl test` propagates `[native]` deps and `bridge.rs` from `pkg.*` packages** (#1481) — when a test pulls in source files that transitively depend on a package with `[native]` Cargo deps, those deps are now added to the generated test crate's `Cargo.toml` (mirroring `mvl build`). A package-provided `bridge.rs` is copied into the test crate with `mod bridge;` injected so extern "rust" symbols link.
 
 ## [0.216.1] - 2026-06-21
