@@ -82,6 +82,12 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
 
     // Load the implicit stdlib prelude (core + Phase 4 stdlib files).
     let mut stdlib_prelude_progs = loader::load_implicit_prelude();
+    // Parallel array tracking each prelude entry's source file stem.  Library
+    // files (`Some(stem)`) feed per-file coverage routing; stdlib/internal
+    // entries stay `None`.  Used to instrument paired sibling files (#1489).
+    let mut prelude_stems: Vec<Option<String>> = vec![None; stdlib_prelude_progs.len()];
+    // Stems of sibling library files discovered next to test files.
+    let mut sibling_stems: Vec<String> = Vec::new();
     // Pre-scan all test files to discover pure-MVL stdlib imports (e.g. json) and
     // extend the prelude so their types/functions are available during transpilation.
     // Also load any pkg.* package modules referenced by the test files.
@@ -104,7 +110,9 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
                     break;
                 }
                 frontier = new_pkgs.clone();
+                let n = new_pkgs.len();
                 stdlib_prelude_progs.extend(new_pkgs);
+                prelude_stems.extend(std::iter::repeat_n(None, n));
             }
         }
 
@@ -112,10 +120,52 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
         // that pure-function sibling modules (no types/extern blocks) are also
         // loaded into the prelude when a test file uses `use module::fn`.
         // This fixes the cross-module import limitation tracked in issue #96.
-        let imported_by_test_files: std::collections::HashSet<String> = all_test_progs
+        //
+        // Also fold in imports from entry-point files (those with `fn main`) sitting
+        // next to the test files — they're loaded as siblings further down so their
+        // pure-function dependencies must come along for the test crate to link
+        // (#1489).
+        let mut imported_by_test_files: std::collections::HashSet<String> = all_test_progs
             .iter()
             .flat_map(loader::collect_imported_module_names)
             .collect();
+        // Function and type names declared in test files — entry-point files whose
+        // symbols overlap with these are using a #96 workaround re-declaration and
+        // must not be pulled into the prelude (it would cause type/signature conflicts).
+        let test_decl_names: std::collections::HashSet<String> = all_test_progs
+            .iter()
+            .flat_map(|p| p.declarations.iter())
+            .filter_map(|d| match d {
+                Decl::Fn(f) => Some(f.name.clone()),
+                Decl::Type(t) => Some(t.name.clone()),
+                _ => None,
+            })
+            .collect();
+        for f in &test_files {
+            let dir = f.parent().unwrap_or_else(|| std::path::Path::new("."));
+            for scan_dir in [dir.to_path_buf(), dir.join("internal")] {
+                let entries = match fs::read_dir(&scan_dir) {
+                    Ok(e) => e,
+                    Err(_) => continue,
+                };
+                for entry in entries.flatten() {
+                    let p = entry.path();
+                    let fname = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                    if p.extension().map(|e| e == "mvl").unwrap_or(false)
+                        && !fname.contains("_test")
+                    {
+                        if let Ok(src) = fs::read_to_string(&p) {
+                            let (mut pp, _) = Parser::new(&src);
+                            let parsed = pp.parse_program();
+                            let imports = loader::collect_imported_module_names(&parsed);
+                            if transpiler::has_main_fn(&parsed) && !imports.is_empty() {
+                                imported_by_test_files.extend(imports);
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         // For packages tested from their own src/ directory, also load sibling
         // .mvl files (non-test, including internal/) so types and extern
@@ -153,27 +203,48 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
                             if let Ok(src) = fs::read_to_string(&p) {
                                 let (mut pp, _) = Parser::new(&src);
                                 let parsed = pp.parse_program();
-                                // Skip entry-point files (those defining `main`) — they are
-                                // programs, not library modules.  Including them in the prelude
-                                // causes duplicate type/function definitions when combined with
-                                // test-local re-declarations.
-                                //
                                 // Load files that have extern blocks or type declarations.
                                 // Also load pure-function files (no types/extern) only when a
                                 // test file explicitly imports them via `use module::fn` — this
                                 // resolves cross-module imports without risking shadowing of
                                 // runtime primitives by unreferenced helpers (fix for #96).
+                                //
+                                // Entry-point files (those defining `fn main`) join the prelude
+                                // when they `use` at least one non-stdlib module — i.e. the
+                                // entry point is integrated with sibling library modules and
+                                // not a standalone demo.  This makes complex `main.mvl` helpers
+                                // visible in coverage (#1489) while keeping isolated demos
+                                // (e.g. `access_smoke.mvl`, which has zero cross-module imports
+                                // and re-declares the project's types) out of the test crate,
+                                // where they'd collide with the integrated module's types.
                                 let file_stem = p
                                     .file_stem()
                                     .and_then(|s| s.to_str())
                                     .unwrap_or("")
                                     .to_owned();
-                                if !transpiler::has_main_fn(&parsed)
+                                let is_entry_point = transpiler::has_main_fn(&parsed);
+                                let entry_point_ok = !is_entry_point || {
+                                    // Include an entry-point file only when it is integrated
+                                    // (imports non-stdlib modules) AND its symbols don't
+                                    // overlap with test-file re-declarations (#96 workaround).
+                                    !loader::collect_imported_module_names(&parsed).is_empty()
+                                        && !parsed.declarations.iter().any(|d| match d {
+                                            Decl::Fn(f) if f.name != "main" => {
+                                                test_decl_names.contains(&f.name)
+                                            }
+                                            Decl::Type(t) => test_decl_names.contains(&t.name),
+                                            _ => false,
+                                        })
+                                };
+                                if entry_point_ok
                                     && (transpiler::has_extern_or_type_decls(&parsed)
                                         || imported_by_test_files.contains(&file_stem))
                                 {
+                                    let stem = file_stem.replace('-', "_");
                                     sibling_progs.push(parsed.clone());
+                                    sibling_stems.push(stem.clone());
                                     stdlib_prelude_progs.push(parsed);
+                                    prelude_stems.push(Some(stem));
                                 }
                             }
                         }
@@ -188,7 +259,10 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
             .chain(sibling_progs.iter())
             .cloned()
             .collect();
-        stdlib_prelude_progs.extend(loader::load_mvl_native_stdlib_extras(&all_for_extras));
+        let extras = loader::load_mvl_native_stdlib_extras(&all_for_extras);
+        let n_extras = extras.len();
+        stdlib_prelude_progs.extend(extras);
+        prelude_stems.extend(std::iter::repeat_n(None, n_extras));
     }
 
     // Collect native Cargo deps and bridge.rs from the full pkg.* closure so
@@ -201,6 +275,37 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
     let native_dep_lines =
         loader::collect_pkg_native_dep_lines(&stdlib_prelude_progs, &project_root);
     let pkg_bridge = loader::find_pkg_bridge(&stdlib_prelude_progs, &project_root);
+
+    // Coverage routing for sibling library files (#1489).
+    //
+    // Library code is emitted into each test module's prelude.  By default it
+    // carries no branch probes, hiding all `if`/`match` arms from the report.
+    // To fix this, mark each library stem for instrumentation in exactly one
+    // test module's transpile:
+    //   * Paired siblings (`json.mvl` ↔ `json_test.mvl`) — instrument in the
+    //     paired test module so coverage reflects its own test suite.
+    //   * Unpaired helpers (`testing.mvl` with no `_test.mvl` partner) —
+    //     instrument in the first test module's transpile; subsequent modules
+    //     re-emit them uninstrumented (call hits land on the instrumented copy
+    //     only when the first module's tests exercise them).
+    let sibling_stems_set: std::collections::HashSet<String> =
+        sibling_stems.iter().cloned().collect();
+    let paired_test_stems: std::collections::HashSet<String> = test_files
+        .iter()
+        .map(|f| {
+            let file_str = f.display().to_string();
+            let s = loader::stem(&file_str);
+            s.strip_suffix("_test").unwrap_or(&s).replace('-', "_")
+        })
+        .collect();
+    let unpaired_sibling_stems: Vec<String> = sibling_stems
+        .iter()
+        .filter(|s| !paired_test_stems.contains(*s))
+        .cloned()
+        .collect();
+    let mut instrumented_stems: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+    let mut unpaired_emitted = false;
 
     // Build a combined Rust test file from all test modules.
     // Each entry: (module_name, display_label, content)
@@ -233,6 +338,26 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
         let all_fns = mvl::mvl::passes::mono::collect_fns([&prog]);
         let mono = mvl::mvl::passes::mono::monomorphize(&prog, &all_fns, &expr_types);
         let tir = mvl::mvl::ir::lower::lower(&prog, &mono, &expr_types);
+        // Decide which sibling library stems to instrument in this test file's
+        // transpile (#1489).  Each stem is marked at most once across the run.
+        let mut instrument_this: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        if coverage {
+            if sibling_stems_set.contains(&module_name)
+                && instrumented_stems.insert(module_name.clone())
+            {
+                instrument_this.insert(module_name.clone());
+            }
+            if !unpaired_emitted {
+                for s in &unpaired_sibling_stems {
+                    if instrumented_stems.insert(s.clone()) {
+                        instrument_this.insert(s.clone());
+                        file_stems.push(s.clone());
+                    }
+                }
+                unpaired_emitted = true;
+            }
+        }
         let (out, branches) = if coverage {
             {
                 let r = transpiler::transpile(
@@ -240,6 +365,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
                     transpiler::TranspileConfig::new(&module_name)
                         .with_file_stem(&module_name)
                         .with_prelude(stdlib_prelude_progs.clone())
+                        .with_coverage_prelude(prelude_stems.clone(), instrument_this)
                         .with_coverage(next_branch_id)
                         .for_test_crate(),
                 );

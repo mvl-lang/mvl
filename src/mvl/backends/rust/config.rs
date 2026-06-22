@@ -42,6 +42,15 @@ pub struct TranspileConfig {
     pub(crate) file_stem: String,
     /// Prelude programs prepended before type-checking and emission.
     pub(crate) prelude_progs: Vec<Program>,
+    /// Optional file stems for each prelude program (parallel to `prelude_progs`).
+    /// `Some(stem)` enables per-program coverage metadata routing; `None` falls back
+    /// to the primary `file_stem`. When empty, treated as all-`None` (#1489).
+    pub(crate) prelude_stems: Vec<Option<String>>,
+    /// File stems among `prelude_stems` whose functions should receive coverage
+    /// instrumentation. Used so sibling library files (e.g. `json.mvl` paired with
+    /// `json_test.mvl`) get branch probes rather than being emitted as silent
+    /// uninstrumented prelude (#1489).
+    pub(crate) coverage_instrument_prelude: std::collections::HashSet<String>,
     /// Coverage instrumentation start counter ID, if enabled.
     pub(crate) coverage_start_id: Option<usize>,
     /// MC/DC instrumentation start counter ID, if enabled.
@@ -66,6 +75,8 @@ impl TranspileConfig {
             crate_name: crate_name.into(),
             file_stem: String::new(),
             prelude_progs: Vec::new(),
+            prelude_stems: Vec::new(),
+            coverage_instrument_prelude: std::collections::HashSet::new(),
             coverage_start_id: None,
             mcdc_start_id: None,
             mutation: false,
@@ -78,6 +89,22 @@ impl TranspileConfig {
     /// Set the prelude programs (stdlib, implicit prelude, package modules).
     pub fn with_prelude(mut self, progs: Vec<Program>) -> Self {
         self.prelude_progs = progs;
+        self
+    }
+
+    /// Set per-prelude file stems and the subset of stems to instrument with coverage.
+    ///
+    /// `stems` is parallel to `prelude_progs` (set via [`with_prelude`]); `Some(stem)`
+    /// enables file-aware coverage metadata for that prelude entry. `instrument` is the
+    /// subset of stems whose functions should receive branch probes — used so sibling
+    /// library files paired with test files appear in the coverage report (#1489).
+    pub fn with_coverage_prelude(
+        mut self,
+        stems: Vec<Option<String>>,
+        instrument: std::collections::HashSet<String>,
+    ) -> Self {
+        self.prelude_stems = stems;
+        self.coverage_instrument_prelude = instrument;
         self
     }
 
