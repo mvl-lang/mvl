@@ -112,7 +112,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
                 frontier = new_pkgs.clone();
                 let n = new_pkgs.len();
                 stdlib_prelude_progs.extend(new_pkgs);
-                prelude_stems.extend(std::iter::repeat(None).take(n));
+                prelude_stems.extend(std::iter::repeat_n(None, n));
             }
         }
 
@@ -128,6 +128,18 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
         let mut imported_by_test_files: std::collections::HashSet<String> = all_test_progs
             .iter()
             .flat_map(loader::collect_imported_module_names)
+            .collect();
+        // Function and type names declared in test files — entry-point files whose
+        // symbols overlap with these are using a #96 workaround re-declaration and
+        // must not be pulled into the prelude (it would cause type/signature conflicts).
+        let test_decl_names: std::collections::HashSet<String> = all_test_progs
+            .iter()
+            .flat_map(|p| p.declarations.iter())
+            .filter_map(|d| match d {
+                Decl::Fn(f) => Some(f.name.clone()),
+                Decl::Type(t) => Some(t.name.clone()),
+                _ => None,
+            })
             .collect();
         for f in &test_files {
             let dir = f.parent().unwrap_or_else(|| std::path::Path::new("."));
@@ -211,9 +223,20 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
                                     .unwrap_or("")
                                     .to_owned();
                                 let is_entry_point = transpiler::has_main_fn(&parsed);
-                                let entry_point_integrates = is_entry_point
-                                    && !loader::collect_imported_module_names(&parsed).is_empty();
-                                if (!is_entry_point || entry_point_integrates)
+                                let entry_point_ok = !is_entry_point || {
+                                    // Include an entry-point file only when it is integrated
+                                    // (imports non-stdlib modules) AND its symbols don't
+                                    // overlap with test-file re-declarations (#96 workaround).
+                                    !loader::collect_imported_module_names(&parsed).is_empty()
+                                        && !parsed.declarations.iter().any(|d| match d {
+                                            Decl::Fn(f) if f.name != "main" => {
+                                                test_decl_names.contains(&f.name)
+                                            }
+                                            Decl::Type(t) => test_decl_names.contains(&t.name),
+                                            _ => false,
+                                        })
+                                };
+                                if entry_point_ok
                                     && (transpiler::has_extern_or_type_decls(&parsed)
                                         || imported_by_test_files.contains(&file_stem))
                                 {
@@ -239,7 +262,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
         let extras = loader::load_mvl_native_stdlib_extras(&all_for_extras);
         let n_extras = extras.len();
         stdlib_prelude_progs.extend(extras);
-        prelude_stems.extend(std::iter::repeat(None).take(n_extras));
+        prelude_stems.extend(std::iter::repeat_n(None, n_extras));
     }
 
     // Collect native Cargo deps and bridge.rs from the full pkg.* closure so
