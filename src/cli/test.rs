@@ -120,10 +120,40 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
         // that pure-function sibling modules (no types/extern blocks) are also
         // loaded into the prelude when a test file uses `use module::fn`.
         // This fixes the cross-module import limitation tracked in issue #96.
-        let imported_by_test_files: std::collections::HashSet<String> = all_test_progs
+        //
+        // Also fold in imports from entry-point files (those with `fn main`) sitting
+        // next to the test files — they're loaded as siblings further down so their
+        // pure-function dependencies must come along for the test crate to link
+        // (#1489).
+        let mut imported_by_test_files: std::collections::HashSet<String> = all_test_progs
             .iter()
             .flat_map(loader::collect_imported_module_names)
             .collect();
+        for f in &test_files {
+            let dir = f.parent().unwrap_or_else(|| std::path::Path::new("."));
+            for scan_dir in [dir.to_path_buf(), dir.join("internal")] {
+                let entries = match fs::read_dir(&scan_dir) {
+                    Ok(e) => e,
+                    Err(_) => continue,
+                };
+                for entry in entries.flatten() {
+                    let p = entry.path();
+                    let fname = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                    if p.extension().map(|e| e == "mvl").unwrap_or(false)
+                        && !fname.contains("_test")
+                    {
+                        if let Ok(src) = fs::read_to_string(&p) {
+                            let (mut pp, _) = Parser::new(&src);
+                            let parsed = pp.parse_program();
+                            let imports = loader::collect_imported_module_names(&parsed);
+                            if transpiler::has_main_fn(&parsed) && !imports.is_empty() {
+                                imported_by_test_files.extend(imports);
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         // For packages tested from their own src/ directory, also load sibling
         // .mvl files (non-test, including internal/) so types and extern
@@ -161,22 +191,29 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
                             if let Ok(src) = fs::read_to_string(&p) {
                                 let (mut pp, _) = Parser::new(&src);
                                 let parsed = pp.parse_program();
-                                // Skip entry-point files (those defining `main`) — they are
-                                // programs, not library modules.  Including them in the prelude
-                                // causes duplicate type/function definitions when combined with
-                                // test-local re-declarations.
-                                //
                                 // Load files that have extern blocks or type declarations.
                                 // Also load pure-function files (no types/extern) only when a
                                 // test file explicitly imports them via `use module::fn` — this
                                 // resolves cross-module imports without risking shadowing of
                                 // runtime primitives by unreferenced helpers (fix for #96).
+                                //
+                                // Entry-point files (those defining `fn main`) join the prelude
+                                // when they `use` at least one non-stdlib module — i.e. the
+                                // entry point is integrated with sibling library modules and
+                                // not a standalone demo.  This makes complex `main.mvl` helpers
+                                // visible in coverage (#1489) while keeping isolated demos
+                                // (e.g. `access_smoke.mvl`, which has zero cross-module imports
+                                // and re-declares the project's types) out of the test crate,
+                                // where they'd collide with the integrated module's types.
                                 let file_stem = p
                                     .file_stem()
                                     .and_then(|s| s.to_str())
                                     .unwrap_or("")
                                     .to_owned();
-                                if !transpiler::has_main_fn(&parsed)
+                                let is_entry_point = transpiler::has_main_fn(&parsed);
+                                let entry_point_integrates = is_entry_point
+                                    && !loader::collect_imported_module_names(&parsed).is_empty();
+                                if (!is_entry_point || entry_point_integrates)
                                     && (transpiler::has_extern_or_type_decls(&parsed)
                                         || imported_by_test_files.contains(&file_stem))
                                 {

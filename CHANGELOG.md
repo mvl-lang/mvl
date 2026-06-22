@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- **`mvl test --coverage` skipped sibling library files** (#1489) — only the test file's own body was getting branch probes, while paired library code (e.g. `json.mvl` next to `json_test.mvl`) was emitted as silent prelude. Coverage reports showed near-zero branches even when library functions had dozens of `if`/`match` arms. The transpiler now routes per-file coverage metadata for prelude entries and instruments each sibling library file exactly once across a test run — paired siblings in their matching test module, unpaired helpers in the first test module's transpile.
+- **`mvl test --coverage` skipped sibling library files** (#1489) — only the test file's own body was getting branch probes, while paired library code (e.g. `json.mvl` next to `json_test.mvl`) was emitted as silent prelude. Coverage reports showed near-zero branches even when library functions had dozens of `if`/`match` arms. The transpiler now routes per-file coverage metadata for prelude entries and instruments each sibling library file exactly once across a test run — paired siblings in their matching test module, unpaired helpers in the first test module's transpile. Entry-point files (`fn main`) that import sibling modules also join the prelude so their helpers appear in the report — and their transitive pure-function dependencies are auto-loaded so the test crate still links. Standalone demos that re-declare project types stay excluded.
 
 ## [0.216.2] - 2026-06-22
 
