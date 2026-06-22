@@ -521,9 +521,11 @@ pub unsafe extern "C" fn _mvl_str_byte_at(s: *const MvlString, i: i64, out: *mut
     }
 }
 
-/// Reconstruct a `MvlString` from a `MvlArray*` of i64 byte values (UTF-8, lossy).
+/// Reconstruct a `MvlString` from a `MvlArray*` of i64 byte values (Latin-1).
 ///
-/// Each element in the array is an i64 representing one byte (0–255).
+/// Each element in the array is an i64 representing one byte (0–255). Each
+/// byte maps to the Unicode codepoint of the same numeric value, giving a
+/// lossless round-trip with `_mvl_str_byte_at` for every byte 0..=255.
 ///
 /// # Safety
 /// `arr` must be a valid `MvlArray*` or null.  Each element is an i64.
@@ -534,12 +536,12 @@ pub unsafe extern "C" fn _mvl_str_from_bytes(arr: *const MvlArray) -> *mut MvlSt
     }
     let len = (*arr).len as usize;
     let es = (*arr).elem_size as usize;
-    let mut bytes: Vec<u8> = Vec::with_capacity(len);
+    let mut s = String::with_capacity(len);
     for i in 0..len {
         let elem_ptr = (*arr).ptr.add(i * es) as *const i64;
-        bytes.push((*elem_ptr & 0xFF) as u8);
+        let b = (*elem_ptr & 0xFF) as u8;
+        s.push(b as char);
     }
-    let s = String::from_utf8_lossy(&bytes).into_owned();
     str_to_mvl(&s)
 }
 

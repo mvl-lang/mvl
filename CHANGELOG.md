@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.216.2] - 2026-06-22
+
+### Changed
+
+- **`String::from_bytes` now uses Latin-1 semantics, not UTF-8 lossy** (#1487) — bytes 128-255 are preserved as Unicode codepoints of the same numeric value instead of being collapsed to U+FFFD by `String::from_utf8_lossy`. This makes `s.byte_at(i)` a lossless round-trip for every byte 0..=255 and unblocks binary protocols (ZMTP greetings, HTTP bodies, hash digests) that need to carry raw bytes through `String`. **Breaking:** callers that were relying on UTF-8 decoding of `from_bytes` input must now decode externally; the previous behaviour was documented but is no longer reachable.
+
 ### Fixed
 
 - **Annotated tag false positives in `mvl update`** (#1476) — `mvl update` was comparing the tag object hash against the commit hash stored in the lock file for annotated tags, producing spurious divergence warnings. The `ls_remote_tag_sha` helper now requests both `refs/tags/{tag}` and `refs/tags/{tag}^{}` patterns so git returns the peeled ref (commit hash) for annotated tags.

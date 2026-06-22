@@ -39,7 +39,11 @@ pub builtin fn String::from_chars(chars: List[String]) -> String
 /// Raw byte at char-index `i`. Returns `None` if out of range or codepoint > 255.
 pub builtin fn String::byte_at(self, i: Int) -> Option[Byte]
 
-/// Reconstruct a String from a list of bytes (UTF-8, lossy).
+/// Reconstruct a String from a list of bytes (Latin-1 / ISO-8859-1).
+///
+/// Each byte 0..=255 maps to one character with the same codepoint, so
+/// `s.byte_at(i)` roundtrips every byte. This is NOT a UTF-8 decode — decode
+/// externally if the bytes represent UTF-8 text.
 pub builtin fn String::from_bytes(bytes: List[Byte]) -> String
 
 /// Concatenate two strings.
