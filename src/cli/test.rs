@@ -82,6 +82,12 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
 
     // Load the implicit stdlib prelude (core + Phase 4 stdlib files).
     let mut stdlib_prelude_progs = loader::load_implicit_prelude();
+    // Parallel array tracking each prelude entry's source file stem.  Library
+    // files (`Some(stem)`) feed per-file coverage routing; stdlib/internal
+    // entries stay `None`.  Used to instrument paired sibling files (#1489).
+    let mut prelude_stems: Vec<Option<String>> = vec![None; stdlib_prelude_progs.len()];
+    // Stems of sibling library files discovered next to test files.
+    let mut sibling_stems: Vec<String> = Vec::new();
     // Pre-scan all test files to discover pure-MVL stdlib imports (e.g. json) and
     // extend the prelude so their types/functions are available during transpilation.
     // Also load any pkg.* package modules referenced by the test files.
@@ -104,7 +110,9 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
                     break;
                 }
                 frontier = new_pkgs.clone();
+                let n = new_pkgs.len();
                 stdlib_prelude_progs.extend(new_pkgs);
+                prelude_stems.extend(std::iter::repeat(None).take(n));
             }
         }
 
@@ -172,8 +180,11 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
                                     && (transpiler::has_extern_or_type_decls(&parsed)
                                         || imported_by_test_files.contains(&file_stem))
                                 {
+                                    let stem = file_stem.replace('-', "_");
                                     sibling_progs.push(parsed.clone());
+                                    sibling_stems.push(stem.clone());
                                     stdlib_prelude_progs.push(parsed);
+                                    prelude_stems.push(Some(stem));
                                 }
                             }
                         }
@@ -188,7 +199,10 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
             .chain(sibling_progs.iter())
             .cloned()
             .collect();
-        stdlib_prelude_progs.extend(loader::load_mvl_native_stdlib_extras(&all_for_extras));
+        let extras = loader::load_mvl_native_stdlib_extras(&all_for_extras);
+        let n_extras = extras.len();
+        stdlib_prelude_progs.extend(extras);
+        prelude_stems.extend(std::iter::repeat(None).take(n_extras));
     }
 
     // Collect native Cargo deps and bridge.rs from the full pkg.* closure so
@@ -201,6 +215,37 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
     let native_dep_lines =
         loader::collect_pkg_native_dep_lines(&stdlib_prelude_progs, &project_root);
     let pkg_bridge = loader::find_pkg_bridge(&stdlib_prelude_progs, &project_root);
+
+    // Coverage routing for sibling library files (#1489).
+    //
+    // Library code is emitted into each test module's prelude.  By default it
+    // carries no branch probes, hiding all `if`/`match` arms from the report.
+    // To fix this, mark each library stem for instrumentation in exactly one
+    // test module's transpile:
+    //   * Paired siblings (`json.mvl` ↔ `json_test.mvl`) — instrument in the
+    //     paired test module so coverage reflects its own test suite.
+    //   * Unpaired helpers (`testing.mvl` with no `_test.mvl` partner) —
+    //     instrument in the first test module's transpile; subsequent modules
+    //     re-emit them uninstrumented (call hits land on the instrumented copy
+    //     only when the first module's tests exercise them).
+    let sibling_stems_set: std::collections::HashSet<String> =
+        sibling_stems.iter().cloned().collect();
+    let paired_test_stems: std::collections::HashSet<String> = test_files
+        .iter()
+        .map(|f| {
+            let file_str = f.display().to_string();
+            let s = loader::stem(&file_str);
+            s.strip_suffix("_test").unwrap_or(&s).replace('-', "_")
+        })
+        .collect();
+    let unpaired_sibling_stems: Vec<String> = sibling_stems
+        .iter()
+        .filter(|s| !paired_test_stems.contains(*s))
+        .cloned()
+        .collect();
+    let mut instrumented_stems: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+    let mut unpaired_emitted = false;
 
     // Build a combined Rust test file from all test modules.
     // Each entry: (module_name, display_label, content)
@@ -233,6 +278,26 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
         let all_fns = mvl::mvl::passes::mono::collect_fns([&prog]);
         let mono = mvl::mvl::passes::mono::monomorphize(&prog, &all_fns, &expr_types);
         let tir = mvl::mvl::ir::lower::lower(&prog, &mono, &expr_types);
+        // Decide which sibling library stems to instrument in this test file's
+        // transpile (#1489).  Each stem is marked at most once across the run.
+        let mut instrument_this: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        if coverage {
+            if sibling_stems_set.contains(&module_name)
+                && instrumented_stems.insert(module_name.clone())
+            {
+                instrument_this.insert(module_name.clone());
+            }
+            if !unpaired_emitted {
+                for s in &unpaired_sibling_stems {
+                    if instrumented_stems.insert(s.clone()) {
+                        instrument_this.insert(s.clone());
+                        file_stems.push(s.clone());
+                    }
+                }
+                unpaired_emitted = true;
+            }
+        }
         let (out, branches) = if coverage {
             {
                 let r = transpiler::transpile(
@@ -240,6 +305,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
                     transpiler::TranspileConfig::new(&module_name)
                         .with_file_stem(&module_name)
                         .with_prelude(stdlib_prelude_progs.clone())
+                        .with_coverage_prelude(prelude_stems.clone(), instrument_this)
                         .with_coverage(next_branch_id)
                         .for_test_crate(),
                 );

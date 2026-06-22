@@ -158,6 +158,14 @@ pub struct RustEmitter {
     /// Used so HOF parameter borrow-flag propagation (#960) also fires when the param
     /// type is a named fn-type alias such as `type Dispatcher = fn(val T) -> U` (#1467).
     pub fn_aliases: std::collections::HashMap<String, crate::mvl::ir::Ty>,
+    /// Per-prelude file stems, parallel to the `prelude_tirs` slice passed to
+    /// `emit_program_core`. `Some(stem)` enables file-aware coverage metadata for
+    /// that prelude entry; `None` falls back to `current_file` (#1489).
+    pub prelude_stems: Vec<Option<String>>,
+    /// Subset of `prelude_stems` whose functions should be emitted with branch
+    /// probes — used so sibling library files paired with test files appear in
+    /// the coverage report (#1489).
+    pub coverage_instrument_prelude: std::collections::HashSet<String>,
 }
 
 impl RustEmitter {
@@ -608,14 +616,17 @@ impl RustEmitter {
 
         let mut seen_prelude_fns: std::collections::HashSet<String> =
             std::collections::HashSet::new();
-        let prelude_fns: Vec<&crate::mvl::ir::TirFn> = prelude_tirs
+        // Pair each prelude fn with the index of the TIR it came from so we can
+        // route per-file coverage state below (#1489).
+        let prelude_fns: Vec<(usize, &crate::mvl::ir::TirFn)> = prelude_tirs
             .iter()
-            .flat_map(|t| t.fns.iter())
-            .filter(|f| !f.is_builtin)
-            .filter(|f| !f.body.stmts.is_empty())
-            .filter(|f| !f.is_test)
-            .filter(|f| !user_fn_keys.contains(&fn_key(f)))
-            .filter(|f| seen_prelude_fns.insert(fn_key(f)))
+            .enumerate()
+            .flat_map(|(idx, t)| t.fns.iter().map(move |f| (idx, f)))
+            .filter(|(_, f)| !f.is_builtin)
+            .filter(|(_, f)| !f.body.stmts.is_empty())
+            .filter(|(_, f)| !f.is_test)
+            .filter(|(_, f)| !user_fn_keys.contains(&fn_key(f)))
+            .filter(|(_, f)| seen_prelude_fns.insert(fn_key(f)))
             .collect();
 
         let mut seen_prelude_types: std::collections::HashSet<&str> =
@@ -672,9 +683,12 @@ impl RustEmitter {
             self.line(
                 "// ── stdlib prelude (transpiled from MVL source) ──────────────────────────",
             );
-            let saved_coverage = self.coverage.take();
-            let saved_mutation = self.mutation.take();
-            let saved_mcdc = self.mcdc.take();
+            // Move instrumentation state out by default; per-fn loop below
+            // re-enables it for prelude entries marked for coverage (#1489).
+            let mut coverage_holder = self.coverage.take();
+            let mut mutation_holder = self.mutation.take();
+            let mut mcdc_holder = self.mcdc.take();
+            let saved_current_file = self.current_file.clone();
             for ed in prelude_externs {
                 self.emit_tir_extern_decl(ed);
                 self.blank();
@@ -694,18 +708,46 @@ impl RustEmitter {
                 }
                 self.blank();
             }
-            for fd in prelude_fns {
+            for (tir_idx, fd) in prelude_fns {
                 if let Some(rty) = &fd.receiver_type {
                     if reexported_type_names.contains(rty.as_str()) {
                         continue;
                     }
                 }
-                self.emit_fn_decl(fd);
-                self.blank();
+                let stem = self
+                    .prelude_stems
+                    .get(tir_idx)
+                    .and_then(|s| s.as_deref())
+                    .map(|s| s.to_owned());
+                let instrument = stem
+                    .as_deref()
+                    .map(|s| self.coverage_instrument_prelude.contains(s))
+                    .unwrap_or(false);
+                if instrument {
+                    // Restore instrumentation state and route metadata to the
+                    // library file stem so probes are reported under e.g.
+                    // `json.mvl` rather than the enclosing test crate stem.
+                    self.coverage = coverage_holder.take();
+                    self.mutation = mutation_holder.take();
+                    self.mcdc = mcdc_holder.take();
+                    if let Some(s) = &stem {
+                        self.current_file = s.clone();
+                    }
+                    self.emit_fn_decl(fd);
+                    self.blank();
+                    coverage_holder = self.coverage.take();
+                    mutation_holder = self.mutation.take();
+                    mcdc_holder = self.mcdc.take();
+                    self.current_file = saved_current_file.clone();
+                } else {
+                    self.emit_fn_decl(fd);
+                    self.blank();
+                }
             }
-            self.coverage = saved_coverage;
-            self.mutation = saved_mutation;
-            self.mcdc = saved_mcdc;
+            self.coverage = coverage_holder;
+            self.mutation = mutation_holder;
+            self.mcdc = mcdc_holder;
+            self.current_file = saved_current_file;
         }
 
         // Actor runtime preamble

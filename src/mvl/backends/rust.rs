@@ -419,6 +419,14 @@ pub fn transpile(tir: &crate::mvl::ir::TirProgram, config: TranspileConfig) -> T
     cg.test_extern_stubs =
         config.test_extern_stubs || prelude_tirs.iter().any(|t| !t.externs.is_empty());
     cg.current_file_is_test = config.is_test_file;
+    // Per-prelude file stems and coverage-instrumentation set (#1489).
+    // Trimmed/padded to `prelude_tirs` length so the emitter can index safely.
+    cg.prelude_stems = {
+        let mut v = config.prelude_stems.clone();
+        v.resize(prelude_tirs.len(), None);
+        v
+    };
+    cg.coverage_instrument_prelude = config.coverage_instrument_prelude.clone();
 
     if let Some(start_id) = config.coverage_start_id {
         cg.coverage = Some(CoverageMap::new(start_id));
