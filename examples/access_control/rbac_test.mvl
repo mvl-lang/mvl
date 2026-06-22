@@ -265,3 +265,279 @@ test fn guest_can_read_user_profile() -> Unit {
     };
     assert_eq(ok, 1)
 }
+
+// ── Additional check_permission branch coverage ────────────────────────────
+// These fill the 7 branches not reached by the scenario tests above:
+//   Moderator × UserProfile × {Read, Write}
+//   User     × UserProfile × Read, Post × Read
+//   Guest    × UserProfile × {Write, Delete}, Post × Delete
+
+test fn check_permission_moderator_user_profile_read() -> Unit {
+    let d: Permission = check_permission(Role::Moderator, Resource::UserProfile, Action::Read);
+    let ok: Int = match d {
+        Permission::Allow => 1,
+        Permission::Deny => 0,
+    };
+    assert_eq(ok, 1)
+}
+
+test fn check_permission_moderator_user_profile_write() -> Unit {
+    let d: Permission = check_permission(Role::Moderator, Resource::UserProfile, Action::Write);
+    let ok: Int = match d {
+        Permission::Allow => 1,
+        Permission::Deny => 0,
+    };
+    assert_eq(ok, 1)
+}
+
+test fn check_permission_user_user_profile_read() -> Unit {
+    let d: Permission = check_permission(Role::User, Resource::UserProfile, Action::Read);
+    let ok: Int = match d {
+        Permission::Allow => 1,
+        Permission::Deny => 0,
+    };
+    assert_eq(ok, 1)
+}
+
+test fn check_permission_user_post_read() -> Unit {
+    let d: Permission = check_permission(Role::User, Resource::Post, Action::Read);
+    let ok: Int = match d {
+        Permission::Allow => 1,
+        Permission::Deny => 0,
+    };
+    assert_eq(ok, 1)
+}
+
+test fn check_permission_guest_user_profile_write() -> Unit {
+    let d: Permission = check_permission(Role::Guest, Resource::UserProfile, Action::Write);
+    let ok: Int = match d {
+        Permission::Allow => 0,
+        Permission::Deny => 1,
+    };
+    assert_eq(ok, 1)
+}
+
+test fn check_permission_guest_user_profile_delete() -> Unit {
+    let d: Permission = check_permission(Role::Guest, Resource::UserProfile, Action::Delete);
+    let ok: Int = match d {
+        Permission::Allow => 0,
+        Permission::Deny => 1,
+    };
+    assert_eq(ok, 1)
+}
+
+test fn check_permission_guest_post_delete() -> Unit {
+    let d: Permission = check_permission(Role::Guest, Resource::Post, Action::Delete);
+    let ok: Int = match d {
+        Permission::Allow => 0,
+        Permission::Deny => 1,
+    };
+    assert_eq(ok, 1)
+}
+
+// ── Direct tests for moderator_permission helper ───────────────────────────
+// moderator_permission is a pure helper in rbac.mvl that is not re-declared
+// here — it lives in the prelude and is called directly to get its branches
+// into the coverage report.
+
+test fn moderator_permission_denies_admin_panel() -> Unit {
+    let d: Permission = moderator_permission(Resource::AdminPanel, Action::Read);
+    let ok: Int = match d {
+        Permission::Allow => 0,
+        Permission::Deny => 1,
+    };
+    assert_eq(ok, 1)
+}
+
+test fn moderator_permission_allows_audit_log() -> Unit {
+    let d: Permission = moderator_permission(Resource::AuditLog, Action::Read);
+    let ok: Int = match d {
+        Permission::Allow => 1,
+        Permission::Deny => 0,
+    };
+    assert_eq(ok, 1)
+}
+
+test fn moderator_permission_allows_user_profile_read() -> Unit {
+    let d: Permission = moderator_permission(Resource::UserProfile, Action::Read);
+    let ok: Int = match d {
+        Permission::Allow => 1,
+        Permission::Deny => 0,
+    };
+    assert_eq(ok, 1)
+}
+
+test fn moderator_permission_allows_user_profile_write() -> Unit {
+    let d: Permission = moderator_permission(Resource::UserProfile, Action::Write);
+    let ok: Int = match d {
+        Permission::Allow => 1,
+        Permission::Deny => 0,
+    };
+    assert_eq(ok, 1)
+}
+
+test fn moderator_permission_denies_user_profile_delete() -> Unit {
+    let d: Permission = moderator_permission(Resource::UserProfile, Action::Delete);
+    let ok: Int = match d {
+        Permission::Allow => 0,
+        Permission::Deny => 1,
+    };
+    assert_eq(ok, 1)
+}
+
+test fn moderator_permission_allows_post() -> Unit {
+    let d: Permission = moderator_permission(Resource::Post, Action::Write);
+    let ok: Int = match d {
+        Permission::Allow => 1,
+        Permission::Deny => 0,
+    };
+    assert_eq(ok, 1)
+}
+
+// ── Direct tests for user_permission helper ────────────────────────────────
+
+test fn user_permission_denies_admin_panel() -> Unit {
+    let d: Permission = user_permission(Resource::AdminPanel, Action::Read);
+    let ok: Int = match d {
+        Permission::Allow => 0,
+        Permission::Deny => 1,
+    };
+    assert_eq(ok, 1)
+}
+
+test fn user_permission_denies_audit_log() -> Unit {
+    let d: Permission = user_permission(Resource::AuditLog, Action::Read);
+    let ok: Int = match d {
+        Permission::Allow => 0,
+        Permission::Deny => 1,
+    };
+    assert_eq(ok, 1)
+}
+
+test fn user_permission_allows_user_profile_read() -> Unit {
+    let d: Permission = user_permission(Resource::UserProfile, Action::Read);
+    let ok: Int = match d {
+        Permission::Allow => 1,
+        Permission::Deny => 0,
+    };
+    assert_eq(ok, 1)
+}
+
+test fn user_permission_allows_user_profile_write() -> Unit {
+    let d: Permission = user_permission(Resource::UserProfile, Action::Write);
+    let ok: Int = match d {
+        Permission::Allow => 1,
+        Permission::Deny => 0,
+    };
+    assert_eq(ok, 1)
+}
+
+test fn user_permission_denies_user_profile_delete() -> Unit {
+    let d: Permission = user_permission(Resource::UserProfile, Action::Delete);
+    let ok: Int = match d {
+        Permission::Allow => 0,
+        Permission::Deny => 1,
+    };
+    assert_eq(ok, 1)
+}
+
+test fn user_permission_allows_post_read() -> Unit {
+    let d: Permission = user_permission(Resource::Post, Action::Read);
+    let ok: Int = match d {
+        Permission::Allow => 1,
+        Permission::Deny => 0,
+    };
+    assert_eq(ok, 1)
+}
+
+test fn user_permission_allows_post_write() -> Unit {
+    let d: Permission = user_permission(Resource::Post, Action::Write);
+    let ok: Int = match d {
+        Permission::Allow => 1,
+        Permission::Deny => 0,
+    };
+    assert_eq(ok, 1)
+}
+
+test fn user_permission_denies_post_delete() -> Unit {
+    let d: Permission = user_permission(Resource::Post, Action::Delete);
+    let ok: Int = match d {
+        Permission::Allow => 0,
+        Permission::Deny => 1,
+    };
+    assert_eq(ok, 1)
+}
+
+// ── Direct tests for guest_permission helper ───────────────────────────────
+
+test fn guest_permission_denies_admin_panel() -> Unit {
+    let d: Permission = guest_permission(Resource::AdminPanel, Action::Read);
+    let ok: Int = match d {
+        Permission::Allow => 0,
+        Permission::Deny => 1,
+    };
+    assert_eq(ok, 1)
+}
+
+test fn guest_permission_denies_audit_log() -> Unit {
+    let d: Permission = guest_permission(Resource::AuditLog, Action::Read);
+    let ok: Int = match d {
+        Permission::Allow => 0,
+        Permission::Deny => 1,
+    };
+    assert_eq(ok, 1)
+}
+
+test fn guest_permission_allows_user_profile_read() -> Unit {
+    let d: Permission = guest_permission(Resource::UserProfile, Action::Read);
+    let ok: Int = match d {
+        Permission::Allow => 1,
+        Permission::Deny => 0,
+    };
+    assert_eq(ok, 1)
+}
+
+test fn guest_permission_denies_user_profile_write() -> Unit {
+    let d: Permission = guest_permission(Resource::UserProfile, Action::Write);
+    let ok: Int = match d {
+        Permission::Allow => 0,
+        Permission::Deny => 1,
+    };
+    assert_eq(ok, 1)
+}
+
+test fn guest_permission_denies_user_profile_delete() -> Unit {
+    let d: Permission = guest_permission(Resource::UserProfile, Action::Delete);
+    let ok: Int = match d {
+        Permission::Allow => 0,
+        Permission::Deny => 1,
+    };
+    assert_eq(ok, 1)
+}
+
+test fn guest_permission_allows_post_read() -> Unit {
+    let d: Permission = guest_permission(Resource::Post, Action::Read);
+    let ok: Int = match d {
+        Permission::Allow => 1,
+        Permission::Deny => 0,
+    };
+    assert_eq(ok, 1)
+}
+
+test fn guest_permission_denies_post_write() -> Unit {
+    let d: Permission = guest_permission(Resource::Post, Action::Write);
+    let ok: Int = match d {
+        Permission::Allow => 0,
+        Permission::Deny => 1,
+    };
+    assert_eq(ok, 1)
+}
+
+test fn guest_permission_denies_post_delete() -> Unit {
+    let d: Permission = guest_permission(Resource::Post, Action::Delete);
+    let ok: Int = match d {
+        Permission::Allow => 0,
+        Permission::Deny => 1,
+    };
+    assert_eq(ok, 1)
+}
