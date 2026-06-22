@@ -1,0 +1,181 @@
+// huffman_test.mvl — Unit tests for huffman.mvl (Huffman entropy coding).
+//
+// Calls prelude functions directly so coverage probes are attributed to
+// huffman.mvl (the module name "huffman" matches the library file stem).
+//
+// Covers: tree_weight (Leaf/Node), build_tree (empty/single/multi),
+// encode_symbol (found/missing), find_code → try_match branches,
+// and the full build loop (min_weight_idx, build_merge, prepend_bit_for).
+
+use huffman::build_tree;
+use huffman::encode_symbol;
+use huffman::find_code;
+use huffman::tree_weight;
+use huffman::count_freqs;
+
+// ── tree_weight ─────────────────────────────────────────────────────────────
+
+test fn huf_tree_weight_leaf() -> Unit {
+    let t: HuffmanTree = HuffmanTree::Leaf(65, 10);
+    assert_eq(tree_weight(t), 10)
+}
+
+test fn huf_tree_weight_node() -> Unit {
+    let left: HuffmanTree  = HuffmanTree::Leaf(65, 3);
+    let right: HuffmanTree = HuffmanTree::Leaf(66, 7);
+    let node: HuffmanTree  = HuffmanTree::Node(10, Box::new(left), Box::new(right));
+    assert_eq(tree_weight(node), 10)
+}
+
+// ── build_tree ───────────────────────────────────────────────────────────────
+
+test fn huf_build_tree_empty_freqs_returns_none() -> Unit {
+    let freqs: List[Int] = range(0, 256).map(zero_int);
+    let result: Option[BuildResult] = build_tree(freqs);
+    let is_none: Bool = match result {
+        None    => true,
+        Some(_) => false,
+    };
+    assert_eq(is_none, true)
+}
+
+test fn huf_build_tree_single_symbol() -> Unit {
+    let freqs: ref List[Int] = range(0, 256).map(zero_int);
+    freqs = int_list_set(freqs, 65, 5);
+    let result: Option[BuildResult] = build_tree(freqs);
+    let is_some: Bool = match result {
+        None    => false,
+        Some(_) => true,
+    };
+    assert_eq(is_some, true)
+}
+
+test fn huf_build_tree_two_symbols() -> Unit {
+    let freqs: ref List[Int] = range(0, 256).map(zero_int);
+    freqs = int_list_set(freqs, 65, 3);
+    freqs = int_list_set(freqs, 66, 7);
+    let result: Option[BuildResult] = build_tree(freqs);
+    let is_some: Bool = match result {
+        None    => false,
+        Some(_) => true,
+    };
+    assert_eq(is_some, true)
+}
+
+test fn huf_build_tree_three_symbols() -> Unit {
+    let freqs: ref List[Int] = range(0, 256).map(zero_int);
+    freqs = int_list_set(freqs, 65, 1);
+    freqs = int_list_set(freqs, 66, 2);
+    freqs = int_list_set(freqs, 67, 4);
+    let result: Option[BuildResult] = build_tree(freqs);
+    let is_some: Bool = match result {
+        None    => false,
+        Some(_) => true,
+    };
+    assert_eq(is_some, true)
+}
+
+// ── encode_symbol ────────────────────────────────────────────────────────────
+
+test fn huf_encode_symbol_found() -> Unit {
+    let freqs: ref List[Int] = range(0, 256).map(zero_int);
+    freqs = int_list_set(freqs, 65, 3);
+    freqs = int_list_set(freqs, 66, 7);
+    let result_opt: Option[BuildResult] = build_tree(freqs);
+    let found: Bool = match result_opt {
+        None         => false,
+        Some(result) => {
+            let bits: Option[List[Int]] = encode_symbol(result.codes, 65);
+            match bits {
+                None    => false,
+                Some(_) => true,
+            }
+        },
+    };
+    assert_eq(found, true)
+}
+
+test fn huf_encode_symbol_missing_returns_none() -> Unit {
+    let freqs: ref List[Int] = range(0, 256).map(zero_int);
+    freqs = int_list_set(freqs, 65, 3);
+    freqs = int_list_set(freqs, 66, 7);
+    let result_opt: Option[BuildResult] = build_tree(freqs);
+    let missing: Bool = match result_opt {
+        None         => false,
+        Some(result) => {
+            // sym 67 was not in the tree (freq = 0)
+            let bits: Option[List[Int]] = encode_symbol(result.codes, 67);
+            match bits {
+                None    => true,
+                Some(_) => false,
+            }
+        },
+    };
+    assert_eq(missing, true)
+}
+
+// ── find_code / try_match ─────────────────────────────────────────────────────
+
+test fn huf_find_code_round_trips() -> Unit {
+    let freqs: ref List[Int] = range(0, 256).map(zero_int);
+    freqs = int_list_set(freqs, 65, 3);
+    freqs = int_list_set(freqs, 66, 7);
+    let result_opt: Option[BuildResult] = build_tree(freqs);
+    let ok: Bool = match result_opt {
+        None         => false,
+        Some(result) => {
+            let bits_opt: Option[List[Int]] = encode_symbol(result.codes, 65);
+            match bits_opt {
+                None       => false,
+                Some(bits) => {
+                    let found: Int = find_code(result.codes, bits);
+                    found == 65
+                },
+            }
+        },
+    };
+    assert_eq(ok, true)
+}
+
+test fn huf_find_code_not_found_returns_negative() -> Unit {
+    let freqs: ref List[Int] = range(0, 256).map(zero_int);
+    freqs = int_list_set(freqs, 65, 3);
+    freqs = int_list_set(freqs, 66, 7);
+    let result_opt: Option[BuildResult] = build_tree(freqs);
+    let ok: Bool = match result_opt {
+        None         => false,
+        Some(result) => {
+            // [1,0,1] is not a valid code for any symbol in this tree
+            let found: Int = find_code(result.codes, [1, 0, 1]);
+            found < 0
+        },
+    };
+    assert_eq(ok, true)
+}
+
+// ── count_freqs ───────────────────────────────────────────────────────────────
+
+test fn huf_count_freqs_single_symbol() -> Unit {
+    let data: List[Int] = [65, 65, 65, 66];
+    let freqs: List[Int] = count_freqs(data);
+    assert_eq(freqs.get(65).unwrap_or(0), 3);
+    assert_eq(freqs.get(66).unwrap_or(0), 1);
+    assert_eq(freqs.get(67).unwrap_or(0), 0)
+}
+
+// ── min_weight_idx: exercises the update branch ───────────────────────────────
+
+test fn huf_build_tree_minimum_not_at_index_zero() -> Unit {
+    // Ensure a symbol with lower weight than sym 65 is present so that
+    // min_weight_idx must scan past index 0 to find the true minimum.
+    let freqs: ref List[Int] = range(0, 256).map(zero_int);
+    freqs = int_list_set(freqs, 65, 10);
+    freqs = int_list_set(freqs, 66, 1);   // lower weight — will be picked first
+    freqs = int_list_set(freqs, 67, 5);
+    let result: Option[BuildResult] = build_tree(freqs);
+    let is_some: Bool = match result {
+        None    => false,
+        Some(_) => true,
+    };
+    assert_eq(is_some, true)
+}

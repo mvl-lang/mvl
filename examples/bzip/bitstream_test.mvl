@@ -1,0 +1,129 @@
+// bitstream_test.mvl — Unit tests for bitstream.mvl (bit-stream packing).
+//
+// Calls prelude functions directly so coverage probes are attributed to
+// bitstream.mvl (module name "bitstream" matches the library file stem).
+//
+// Covers: flush_writer (full byte / partial byte), write_bits_loop
+// (byte-boundary cross / no cross), read_bits_loop (normal / past end /
+// no boundary cross), write_code, crc32_step, bit_field.
+
+use bitstream::new_writer;
+use bitstream::write_bits;
+use bitstream::flush_writer;
+use bitstream::new_reader;
+use bitstream::read_bits;
+use bitstream::write_code;
+use bitstream::crc32_step;
+use bitstream::bit_field;
+
+// ── flush_writer: full byte (bit_pos == 0) ───────────────────────────────────
+
+test fn bs_write_8_bits_then_flush() -> Unit {
+    let w0: BitWriter = new_writer();
+    let w1: BitWriter = write_bits(w0, 0xA5, 8);
+    let packed: List[Byte] = flush_writer(w1);
+    assert_eq(packed.len(), 1)
+}
+
+// ── flush_writer: partial byte (bit_pos != 0) ────────────────────────────────
+
+test fn bs_flush_partial_byte_adds_padding() -> Unit {
+    let w0: BitWriter = new_writer();
+    let w1: BitWriter = write_bits(w0, 5, 3);   // writes 3 bits → bit_pos = 3
+    let packed: List[Byte] = flush_writer(w1);
+    assert_eq(packed.len(), 1)
+}
+
+// ── write_bits_loop: crosses byte boundary ───────────────────────────────────
+
+test fn bs_write_bits_crosses_byte_boundary() -> Unit {
+    let w0: BitWriter = new_writer();
+    let w1: BitWriter = write_bits(w0, 3, 4);   // 4 bits into first byte
+    let w2: BitWriter = write_bits(w1, 12, 4);  // 4 more bits → fills first byte
+    let packed: List[Byte] = flush_writer(w2);
+    assert_eq(packed.len(), 1)
+}
+
+// ── write_bits_loop: does NOT cross boundary ─────────────────────────────────
+
+test fn bs_write_3_bits_no_boundary_cross() -> Unit {
+    let w0: BitWriter = new_writer();
+    let w1: BitWriter = write_bits(w0, 7, 3);   // 3 bits, bit_pos goes 1,2,3 — never ==8
+    let packed: List[Byte] = flush_writer(w1);
+    assert_eq(packed.len(), 1)
+}
+
+// ── read_bits_loop: normal read ───────────────────────────────────────────────
+
+test fn bs_read_write_roundtrip_8bits() -> Unit {
+    let w0: BitWriter = new_writer();
+    let w1: BitWriter = write_bits(w0, 0xA5, 8);
+    let packed: List[Byte] = flush_writer(w1);
+    let r0: BitReader = new_reader(packed);
+    let res: ReadResult = read_bits(r0, 8);
+    assert_eq(res.rval, 0xA5)
+}
+
+// ── read_bits_loop: read spans byte boundary ─────────────────────────────────
+
+test fn bs_read_across_byte_boundary() -> Unit {
+    let w0: BitWriter = new_writer();
+    let w1: BitWriter = write_bits(w0, 3, 4);
+    let w2: BitWriter = write_bits(w1, 12, 4);
+    let packed: List[Byte] = flush_writer(w2);
+    let r0: BitReader = new_reader(packed);
+    let res1: ReadResult = read_bits(r0, 4);
+    assert_eq(res1.rval, 3);
+    let res2: ReadResult = read_bits(res1.reader, 4);
+    assert_eq(res2.rval, 12)
+}
+
+// ── read_bits_loop: read beyond end of stream (pos >= bytes.len) ─────────────
+
+test fn bs_read_beyond_end_returns_partial() -> Unit {
+    // Write 8 bits, then try to read 16 — second byte is past the end
+    let w0: BitWriter = new_writer();
+    let w1: BitWriter = write_bits(w0, 0xFF, 8);
+    let packed: List[Byte] = flush_writer(w1);
+    let r0: BitReader = new_reader(packed);
+    // Reading 16 bits from a 1-byte stream: first 8 succeed, next 8 hit pos>=len
+    let res: ReadResult = read_bits(r0, 16);
+    assert_eq(res.rval, 0xFF)   // upper 8 bits are 0 (no data), lower 8 = 0xFF
+}
+
+// ── write_code ───────────────────────────────────────────────────────────────
+
+test fn bs_write_code_then_read() -> Unit {
+    let w0: BitWriter = new_writer();
+    let w1: BitWriter = write_code(w0, [1, 0, 1]);   // 3 bits: 1,0,1
+    let w2: BitWriter = write_code(w1, [0, 0, 0, 0, 0]);  // 5 more bits to fill byte
+    let packed: List[Byte] = flush_writer(w2);
+    assert_eq(packed.len(), 1)
+}
+
+// ── crc32_step ───────────────────────────────────────────────────────────────
+
+test fn bs_crc32_step_is_deterministic() -> Unit {
+    let a: Int = crc32_step(0xFFFFFFFF, 72);
+    let b: Int = crc32_step(0xFFFFFFFF, 72);
+    assert_eq(a, b)
+}
+
+test fn bs_crc32_step_different_inputs_differ() -> Unit {
+    let a: Int = crc32_step(0xFFFFFFFF, 72);
+    let b: Int = crc32_step(0xFFFFFFFF, 73);
+    let differ: Bool = a != b;
+    assert_eq(differ, true)
+}
+
+// ── bit_field ────────────────────────────────────────────────────────────────
+
+test fn bs_bit_field_extracts_single_bit() -> Unit {
+    // 180 = 0b10110100; bit 2 = 1
+    assert_eq(bit_field(180, 2, 1), 1)
+}
+
+test fn bs_bit_field_extracts_nibble() -> Unit {
+    // 0xAB = 0b10101011; bits [0,4) = 0b1011 = 11
+    assert_eq(bit_field(0xAB, 0, 4), 11)
+}

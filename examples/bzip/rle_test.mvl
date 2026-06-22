@@ -1,0 +1,87 @@
+// rle_test.mvl — Unit tests for rle.mvl (Run-Length Encoding).
+//
+// Paired with rle.mvl so coverage probes are instrumented in this module's
+// transpile and fire when the tests call the prelude functions.
+//
+// Covers: rle_enc_step (skip / emit-byte / emit-run), count_run (both
+// branches), rle_dec_step (all 6 branches including the "4+ bytes, not a
+// run" case that the roundtrip tests never reach).
+
+use rle::rle_encode;
+use rle::rle_decode;
+
+// Local helper — attributed to rle.mvl (module name "rle").
+fn b(xs: List[Int]) -> List[Byte] {
+    xs.map(|v: Int| -> Byte { from_int(v) })
+}
+
+// ── rle_encode: no runs ───────────────────────────────────────────────────────
+
+test fn rle_encode_no_run_passthrough() -> Unit {
+    let data: List[Byte] = b([1, 2, 3, 4, 5]);
+    let encoded: List[Byte] = rle_encode(data);
+    assert_eq(encoded.len(), 5)
+}
+
+// ── rle_encode: run of exactly 4 ─────────────────────────────────────────────
+
+test fn rle_encode_run_of_four() -> Unit {
+    let data: List[Byte] = b([7, 7, 7, 7, 9]);
+    let encoded: List[Byte] = rle_encode(data);
+    // [7,7,7,7] → [7,7,7,7,0] (extra=0), then [9] → total 6 bytes
+    assert_eq(encoded.len(), 6)
+}
+
+// ── rle_encode: run of 8 ─────────────────────────────────────────────────────
+
+test fn rle_encode_run_of_eight() -> Unit {
+    let data: List[Byte] = b([3, 3, 3, 3, 3, 3, 3, 3]);
+    let encoded: List[Byte] = rle_encode(data);
+    // 8 identical bytes → [3,3,3,3,4] (extra=4) = 5 bytes
+    assert_eq(encoded.len(), 5)
+}
+
+// ── count_run: both branches ──────────────────────────────────────────────────
+
+test fn rle_encode_mixed_covers_count_run_false_branch() -> Unit {
+    // [65,66] → at idx=0, count_run: j=0 true (count=1), j=1 false (66≠65)
+    let data: List[Byte] = b([65, 66]);
+    let encoded: List[Byte] = rle_encode(data);
+    assert_eq(encoded.len(), 2)
+}
+
+// ── rle_dec_step: "4+ bytes available but not a run" branch ──────────────────
+
+test fn rle_decode_non_run_input() -> Unit {
+    // idx=0: idx+4=4 < 5=n, b0=1 ≠ b1=2 → not a run → rle_dec_byte
+    let data: List[Byte] = b([1, 2, 3, 4, 5]);
+    let decoded: List[Byte] = rle_decode(data);
+    assert_eq(decoded.len(), 5)
+}
+
+// ── rle_dec_step: "skip" and "expand run" branches ───────────────────────────
+
+test fn rle_decode_run_covers_skip_and_expand() -> Unit {
+    // Encoding then decoding hits: skip (idx in 1..4), expand run (idx=0)
+    let data: List[Byte] = b([65, 65, 65, 65, 66]);
+    let encoded: List[Byte] = rle_encode(data);
+    let decoded: List[Byte] = rle_decode(encoded);
+    assert_eq(decoded, data)
+}
+
+// ── rle_dec_step: tail bytes (idx+4 >= n) ────────────────────────────────────
+
+test fn rle_decode_short_input_hits_tail_branch() -> Unit {
+    // [66,67,68] → n=3, idx=0: 0+4=4 NOT < 3 → tail branch
+    let data: List[Byte] = b([66, 67, 68]);
+    let decoded: List[Byte] = rle_decode(data);
+    assert_eq(decoded.len(), 3)
+}
+
+// ── roundtrip ─────────────────────────────────────────────────────────────────
+
+test fn rle_roundtrip_mixed_run_and_non_run() -> Unit {
+    let data: List[Byte] = b([70, 70, 70, 70, 70, 71, 72, 73]);
+    let decoded: List[Byte] = rle_decode(rle_encode(data));
+    assert_eq(decoded, data)
+}
