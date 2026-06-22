@@ -1,0 +1,68 @@
+// mtf_test.mvl — Unit tests for mtf.mvl (Move-to-Front Transform).
+//
+// Paired with mtf.mvl so coverage probes are instrumented in this module's
+// transpile and fire when the tests call the prelude functions.
+
+use mtf::mtf_encode;
+use mtf::mtf_decode;
+
+// Local helper — attributed to mtf.mvl (module name "mtf").
+fn b(xs: List[Int]) -> List[Byte] {
+    xs.map(|v: Int| -> Byte { from_int(v) })
+}
+
+// ── mtf_encode ────────────────────────────────────────────────────────────────
+
+test fn mtf_encode_single_byte() -> Unit {
+    let data: List[Byte] = b([65]);
+    let encoded: List[Int] = mtf_encode(data);
+    // 65 is at position 65 in the initial [0,1,2,...,255] alphabet
+    assert_eq(encoded.get(0).unwrap_or(0), 65)
+}
+
+test fn mtf_encode_repeated_gives_zeros() -> Unit {
+    let data: List[Byte] = b([65, 65, 65]);
+    let encoded: List[Int] = mtf_encode(data);
+    // First 65 is at pos 65; each repeat is at pos 0 (just moved to front)
+    assert_eq(encoded.get(0).unwrap_or(0), 65);
+    assert_eq(encoded.get(1).unwrap_or(0), 0);
+    assert_eq(encoded.get(2).unwrap_or(0), 0)
+}
+
+test fn mtf_encode_two_symbols() -> Unit {
+    let data: List[Byte] = b([65, 66, 65]);
+    let encoded: List[Int] = mtf_encode(data);
+    // [65→pos65, 66→pos66 (65 now at front), 65→pos1 (66 at front, 65 at 1)]
+    assert_eq(encoded.len(), 3)
+}
+
+// ── mtf_decode ───────────────────────────────────────────────────────────────
+
+test fn mtf_decode_single() -> Unit {
+    let encoded: List[Int] = [65];
+    let decoded: List[Byte] = mtf_decode(encoded);
+    assert_eq(decoded.get(0).unwrap_or(from_int(0)), from_int(65))
+}
+
+// ── roundtrip ─────────────────────────────────────────────────────────────────
+
+test fn mtf_roundtrip_hello() -> Unit {
+    let data: List[Byte] = b([72, 101, 108, 108, 111]);
+    let encoded: List[Int] = mtf_encode(data);
+    let decoded: List[Byte] = mtf_decode(encoded);
+    assert_eq(decoded, data)
+}
+
+test fn mtf_roundtrip_all_distinct() -> Unit {
+    let data: List[Byte] = b([65, 66, 67, 68, 69]);
+    let encoded: List[Int] = mtf_encode(data);
+    let decoded: List[Byte] = mtf_decode(encoded);
+    assert_eq(decoded, data)
+}
+
+test fn mtf_roundtrip_mixed() -> Unit {
+    let data: List[Byte] = b([65, 66, 67, 65]);
+    let encoded: List[Int] = mtf_encode(data);
+    let decoded: List[Byte] = mtf_decode(encoded);
+    assert_eq(decoded, data)
+}

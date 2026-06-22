@@ -1,0 +1,64 @@
+// bwt_test.mvl — Unit tests for bwt.mvl (Burrows-Wheeler Transform).
+//
+// Calls prelude functions directly so coverage probes are attributed to
+// bwt.mvl (module name "bwt" matches the library file stem).
+//
+// Covers: bwt_encode/bwt_decode roundtrip, primary index correctness,
+// build_first_occ both branches (first-seen vs already-seen bytes).
+
+use bwt::bwt_encode;
+use bwt::bwt_decode;
+
+fn bwt_b(xs: List[Int]) -> List[Byte] {
+    xs.map(|v: Int| -> Byte { from_int(v) })
+}
+
+// ── bwt_encode: primary index ────────────────────────────────────────────────
+
+test fn bwt_known_primary_index() -> Unit {
+    // "banana" = [98,97,110,97,110,97]; BWT primary index is 3
+    let input: List[Byte] = bwt_b([98, 97, 110, 97, 110, 97]);
+    let result: BwtResult = bwt_encode(input);
+    assert_eq(result.primary, 3)
+}
+
+// ── bwt roundtrip ─────────────────────────────────────────────────────────────
+
+test fn bwt_roundtrip_hello() -> Unit {
+    let input: List[Byte] = bwt_b([104, 101, 108, 108, 111]);
+    let encoded: BwtResult = bwt_encode(input);
+    let decoded: List[Byte] = bwt_decode(encoded);
+    assert_eq(decoded, input)
+}
+
+test fn bwt_roundtrip_repeated_bytes() -> Unit {
+    // AAABBA — repeated bytes cluster, exercises build_first_occ both branches
+    // (first occurrence of A sets index; second and third A skip the set)
+    let input: List[Byte] = bwt_b([65, 65, 65, 66, 66, 65]);
+    let encoded: BwtResult = bwt_encode(input);
+    let decoded: List[Byte] = bwt_decode(encoded);
+    assert_eq(decoded, input)
+}
+
+test fn bwt_roundtrip_single_byte() -> Unit {
+    let input: List[Byte] = bwt_b([42]);
+    let encoded: BwtResult = bwt_encode(input);
+    let decoded: List[Byte] = bwt_decode(encoded);
+    assert_eq(decoded, input)
+}
+
+test fn bwt_roundtrip_all_distinct() -> Unit {
+    let input: List[Byte] = bwt_b([10, 20, 30, 40, 50]);
+    let encoded: BwtResult = bwt_encode(input);
+    let decoded: List[Byte] = bwt_decode(encoded);
+    assert_eq(decoded, input)
+}
+
+// ── bwt_encode: rot != original branch ──────────────────────────────────────
+
+test fn bwt_output_length_equals_input() -> Unit {
+    // Any input: the BWT output length must equal the input length
+    let input: List[Byte] = bwt_b([72, 101, 108, 108, 111, 33]);
+    let result: BwtResult = bwt_encode(input);
+    assert_eq(result.data.len(), input.len())
+}
