@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.217.0] - 2026-06-22
+
+### Added
+
+- **`access_control` example now has 97% branch coverage** — improved from 36% (31/85) to 97% (83/85) by adding 50 unit tests across `audit_test.mvl`, `auth_test.mvl`, `rbac_test.mvl`, and a new `main_test.mvl`. Tests cover all reachable branches in `audit.mvl`, `auth.mvl`, `rbac.mvl`, and the pure helpers in `main.mvl`. The remaining 2 uncovered branches (demo_auth `None`/`Err` paths) require the real Rust runtime backend to exercise.
+
 ## [0.216.3] - 2026-06-22
 
 ### Fixed
