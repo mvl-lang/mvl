@@ -638,6 +638,19 @@ impl RustEmitter {
             .filter(|t| seen_prelude_types.insert(t.name.as_str()))
             .collect();
 
+        // Prelude actors — actors defined in library files loaded as preludes.
+        // Not deduplicated against entry-TIR actors: actor names must be globally unique.
+        let entry_actor_names: std::collections::HashSet<&str> =
+            tir.actors.iter().map(|a| a.name.as_str()).collect();
+        let mut seen_prelude_actors: std::collections::HashSet<&str> =
+            std::collections::HashSet::new();
+        let prelude_actors: Vec<&crate::mvl::ir::TirActorDecl> = prelude_tirs
+            .iter()
+            .flat_map(|t| t.actors.iter())
+            .filter(|a| !entry_actor_names.contains(a.name.as_str()))
+            .filter(|a| seen_prelude_actors.insert(a.name.as_str()))
+            .collect();
+
         // Phase B: capability params map from TIR
         self.capability_params_map = build_capability_params_map_tir(tir, prelude_tirs);
 
@@ -750,8 +763,8 @@ impl RustEmitter {
             self.current_file = saved_current_file;
         }
 
-        // Actor runtime preamble
-        if !tir.actors.is_empty() {
+        // Actor runtime preamble — needed for both entry-TIR and prelude actors.
+        if !tir.actors.is_empty() || !prelude_actors.is_empty() {
             self.has_actors = true;
             self.emit_actor_runtime_preamble();
             self.blank();
@@ -781,6 +794,10 @@ impl RustEmitter {
                     self.line(&format!("use crate::{}::*;", mod_name));
                 }
             }
+        }
+        for ad in prelude_actors {
+            self.emit_actor_decl(ad);
+            self.blank();
         }
         for ad in &tir.actors {
             self.emit_actor_decl(ad);
