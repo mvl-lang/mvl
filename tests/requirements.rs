@@ -277,6 +277,19 @@ fn req10_refinements_failed() {
     );
 }
 
+/// `ensures` contracts on functions with no `where` params → Proven (#1498).
+#[test]
+fn req10_ensures_contracts_proven() {
+    let v = run(
+        include_str!("corpus/09_refinements/ensures_contracts_proven.mvl"),
+        10,
+    );
+    assert!(
+        v.is_proven(),
+        "Req 10 must be Proven when ensures contracts are discharged, got: {v:?}"
+    );
+}
+
 // ── Req 10 gap coverage (#1067) ───────────────────────────────────────────────
 
 /// Gap 1: Struct field `where` refinement violated at construction site → Failed.

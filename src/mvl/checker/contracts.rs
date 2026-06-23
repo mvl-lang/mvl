@@ -240,6 +240,7 @@ pub fn check_contracts(
             match decl {
                 Decl::Fn(fd) => {
                     ctx.counts.current_fn = fd.name.clone();
+                    let sites_before = ctx.counts.sites.len();
                     // Phase 3: seed var_refs with parameter where-refinements so that
                     // `requires` checks on variable arguments (e.g. `f(x)` where
                     // `x: Int where self > 0`) can be resolved by the solver.
@@ -267,10 +268,21 @@ pub fn check_contracts(
                     }
                     // Phase 3: check loop invariants.
                     check_invariants_in_block(&fd.body, &fd.name, &var_refs, &mut ctx);
+                    // Update fn_total/fully_verified_fns for Req 10 (#1498).
+                    if ctx.counts.sites.len() > sites_before {
+                        ctx.counts.fn_total += 1;
+                        if ctx.counts.sites[sites_before..]
+                            .iter()
+                            .all(|s| matches!(s.outcome, ProofOutcome::Proven { .. }))
+                        {
+                            ctx.counts.fully_verified_fns += 1;
+                        }
+                    }
                 }
                 Decl::Impl(impl_d) => {
                     for method in &impl_d.methods {
                         ctx.counts.current_fn = method.name.clone();
+                        let sites_before = ctx.counts.sites.len();
                         let var_refs = build_param_var_refs(&method.params);
                         walk_stmts(&method.body, &mut ctx, &mut |expr, ctx| {
                             if let Expr::FnCall {
@@ -295,6 +307,16 @@ pub fn check_contracts(
                         }
                         // Phase 3: check loop invariants.
                         check_invariants_in_block(&method.body, &method.name, &var_refs, &mut ctx);
+                        // Update fn_total/fully_verified_fns for Req 10 (#1498).
+                        if ctx.counts.sites.len() > sites_before {
+                            ctx.counts.fn_total += 1;
+                            if ctx.counts.sites[sites_before..]
+                                .iter()
+                                .all(|s| matches!(s.outcome, ProofOutcome::Proven { .. }))
+                            {
+                                ctx.counts.fully_verified_fns += 1;
+                            }
+                        }
                     }
                 }
                 // D2 (Phase 8, #37): Actor behavior bodies must satisfy the same contract
