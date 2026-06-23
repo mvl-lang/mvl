@@ -131,3 +131,7 @@ pub fn seconds(n: Int) -> Duration { Duration { secs: n, nanos: 0 } }
 
 /// Constructs a Duration from whole milliseconds.
 pub fn millis(n: Int) -> Duration { Duration { secs: 0, nanos: n * 1_000_000 } }
+
+/// Returns the number of whole milliseconds elapsed from `start` to `end`.
+/// Returns 0 if `end` is before `start`.
+pub builtin fn elapsed_ms(start: Instant, end: Instant) -> Int
