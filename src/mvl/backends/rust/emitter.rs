@@ -613,6 +613,8 @@ impl RustEmitter {
         let user_fn_keys: std::collections::HashSet<String> = tir.fns.iter().map(fn_key).collect();
         let user_type_names: std::collections::HashSet<&str> =
             tir.types.iter().map(|t| t.name.as_str()).collect();
+        let user_actor_names: std::collections::HashSet<&str> =
+            tir.actors.iter().map(|a| a.name.as_str()).collect();
 
         let mut seen_prelude_fns: std::collections::HashSet<String> =
             std::collections::HashSet::new();
@@ -636,6 +638,19 @@ impl RustEmitter {
             .flat_map(|t| t.types.iter())
             .filter(|t| !user_type_names.contains(t.name.as_str()))
             .filter(|t| seen_prelude_types.insert(t.name.as_str()))
+            .collect();
+
+        // Prelude actors — actors defined in library files loaded as preludes.
+        // Entry-TIR actors take precedence: if the same actor appears in both, the
+        // entry-TIR copy is used and the prelude copy is skipped. Matches the
+        // dedup behaviour of prelude_fns and prelude_types.
+        let mut seen_prelude_actors: std::collections::HashSet<&str> =
+            std::collections::HashSet::new();
+        let prelude_actors: Vec<&crate::mvl::ir::TirActorDecl> = prelude_tirs
+            .iter()
+            .flat_map(|t| t.actors.iter())
+            .filter(|a| !user_actor_names.contains(a.name.as_str()))
+            .filter(|a| seen_prelude_actors.insert(a.name.as_str()))
             .collect();
 
         // Phase B: capability params map from TIR
@@ -679,7 +694,11 @@ impl RustEmitter {
         let prelude_externs: Vec<&crate::mvl::ir::TirExternDecl> =
             prelude_tirs.iter().flat_map(|t| t.externs.iter()).collect();
 
-        if !prelude_types.is_empty() || !prelude_fns.is_empty() || !prelude_externs.is_empty() {
+        if !prelude_types.is_empty()
+            || !prelude_fns.is_empty()
+            || !prelude_externs.is_empty()
+            || !prelude_actors.is_empty()
+        {
             self.line(
                 "// ── stdlib prelude (transpiled from MVL source) ──────────────────────────",
             );
@@ -750,8 +769,8 @@ impl RustEmitter {
             self.current_file = saved_current_file;
         }
 
-        // Actor runtime preamble
-        if !tir.actors.is_empty() {
+        // Actor runtime preamble — needed for both entry-TIR and prelude actors.
+        if !tir.actors.is_empty() || !prelude_actors.is_empty() {
             self.has_actors = true;
             self.emit_actor_runtime_preamble();
             self.blank();
@@ -781,6 +800,12 @@ impl RustEmitter {
                     self.line(&format!("use crate::{}::*;", mod_name));
                 }
             }
+        }
+        // Actor bodies carry no coverage/mutation probes, so no per-file
+        // instrumentation routing is needed here (unlike prelude_fns).
+        for ad in prelude_actors {
+            self.emit_actor_decl(ad);
+            self.blank();
         }
         for ad in &tir.actors {
             self.emit_actor_decl(ad);

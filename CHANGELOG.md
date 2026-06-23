@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.217.1] - 2026-06-23
+
+### Fixed
+
+- **Prelude actors not emitted in test crate codegen** (#1496) — `emit_program_with_mods` collected `prelude_fns` and `prelude_types` from library files loaded as preludes but silently dropped `prelude_actors`. Any `pub actor` defined in a prelude would have its entire Rust infrastructure (State struct, Mailbox enum, handle struct, dispatch fn, `_start_*` fn) dropped from the generated code, causing `E0425`/`E0422` compile errors in entry-TIR functions that referenced the actor type. Fixed by collecting prelude actors, extending the actor runtime preamble guard, and emitting prelude actors before entry-TIR actors. Also fixed misleading comments and added comprehensive regression test.
+
 ## [0.217.0] - 2026-06-22
 
 ### Added
