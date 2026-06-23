@@ -1,0 +1,16 @@
+// Corpus: ensures/requires contracts — no where-clause parameters.
+// Req 10 must report Proven when ensures clauses are present and discharged.
+// Regression test for #1498.
+
+total fn make_pair(a: Int, b: Int) -> Int
+    ensures result == a + b
+{
+    a + b
+}
+
+total fn increment(n: Int) -> Int
+    ensures result == n + 1
+    ensures result > n
+{
+    n + 1
+}

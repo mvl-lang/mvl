@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.217.2] - 2026-06-23
+
+### Fixed
+
+- **`mvl prove`/`mvl assurance` reports `~` for Req 10 when only `ensures`/`requires` contracts are present** (#1498) — `check_contracts` populated `by_layer`, `sites`, and `proof_log` in `RefinementCounts` but never set `fn_total` or `fully_verified_fns`. When `checker` merged contract counts, those fields stayed at 0, causing `RefinementsPass` to always emit "no refined types used in this file". Fixed by tracking `fn_total`/`fully_verified_fns` per-function in `check_contracts` via site-count snapshots, then merging them in `checker`.
+
 ## [0.217.1] - 2026-06-23
 
 ### Fixed

@@ -550,14 +550,18 @@ pub fn run(path: &str, json: bool, verbose: bool) {
         } else {
             project_verdicts[9].detail().to_string()
         };
+        // Req 9–11: "Requirements verified" shows numerical detail from the prover
+        // (v.detail()); "Prover verdicts" shows the qualitative summary.
+        // Qualitative summaries are computed here and used in the verdicts loop below.
         print_req_row(
             9,
             "Data race freedom",
             &req_errors,
             project_verdicts[9].is_proven(),
-            &req9_detail,
+            project_verdicts[9].detail(),
         );
-        let req10_detail = if project_verdicts[10].is_proven() {
+        let req9_verdict = req9_detail;
+        let req10_verdict = if project_verdicts[10].is_proven() {
             let total = agg_ref_proven + agg_ref_runtime;
             if agg_ref_runtime == 0 {
                 format!("{total} call site(s) — all statically proven")
@@ -578,9 +582,9 @@ pub fn run(path: &str, json: bool, verbose: bool) {
             "Refinements",
             &req_errors,
             project_verdicts[10].is_proven(),
-            &req10_detail,
+            project_verdicts[10].detail(),
         );
-        let req11_detail = if project_verdicts[11].is_proven() {
+        let req11_verdict = if project_verdicts[11].is_proven() {
             if total_relabel_ops > 0 || total_labeled_params > 0 {
                 format!(
                     "opaque labels enforced; {} relabel point(s) auditable",
@@ -599,19 +603,25 @@ pub fn run(path: &str, json: bool, verbose: bool) {
             "IFC",
             &req_errors,
             project_verdicts[11].is_proven(),
-            &req11_detail,
+            project_verdicts[11].detail(),
         );
         println!();
         println!("Prover verdicts:");
         for req in 1u8..=11 {
             let v = &project_verdicts[req as usize];
             let name = registry.pass_name(req).unwrap_or("unknown");
+            let detail: &str = match req {
+                9 => &req9_verdict,
+                10 => &req10_verdict,
+                11 => &req11_verdict,
+                _ => v.detail(),
+            };
             println!(
                 "  Req {:>2}  {:<20} {}  {}",
                 req,
                 name,
                 v.status_char(),
-                v.detail()
+                detail
             );
         }
         println!();
