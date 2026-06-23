@@ -1153,6 +1153,52 @@ fn empty_prelude_progs_emits_no_prelude_section() {
     );
 }
 
+/// Regression: prelude actors are emitted in the test crate codegen.
+///
+/// Before the fix, `emit_program_with_mods` collected `prelude_fns` and
+/// `prelude_types` but silently dropped `prelude_actors`, causing `E0425`/`E0422`
+/// in generated Rust when entry-TIR functions referenced the actor type.
+#[test]
+fn prelude_actor_is_emitted_in_test_crate() {
+    let prelude_src = r#"
+pub actor Counter {
+    count: Int
+
+    pub fn increment(val n: Int) { }
+    pub fn reset() { }
+}
+"#;
+    let user_src = "fn main() -> Unit { }";
+    let prelude = vec![parse_prog(prelude_src)];
+    let user_prog = parse_prog(user_src);
+
+    let expr_types = mvl::mvl::pipeline::assemble_expr_types(&user_prog, &prelude);
+    let out = transpile_project(
+        "crate",
+        &user_prog,
+        &[],
+        &prelude,
+        expr_types,
+        vec![],
+        Default::default(),
+    );
+    assert!(
+        out.main_rs.contains("// ── stdlib prelude"),
+        "prelude section header must appear for actor-only prelude:\n{}",
+        out.main_rs
+    );
+    assert!(
+        out.main_rs.contains("use mvl_runtime::actors::*"),
+        "actor runtime preamble must be emitted:\n{}",
+        out.main_rs
+    );
+    assert!(
+        out.main_rs.contains("struct CounterState"),
+        "CounterState must be emitted from prelude actor:\n{}",
+        out.main_rs
+    );
+}
+
 /// User-defined function shadows the prelude — no duplicate definitions.
 #[test]
 fn user_fn_shadows_prelude_fn_no_duplicate() {
