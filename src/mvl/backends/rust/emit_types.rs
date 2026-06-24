@@ -780,6 +780,7 @@ impl RustEmitter {
                 return;
             }
         };
+        self.line("#[allow(improper_ctypes)]");
         self.line(&format!("extern \"{rust_abi}\" {{"));
         self.push_indent();
         for f in &new_fns {
