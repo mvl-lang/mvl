@@ -242,7 +242,16 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
                                 {
                                     let stem = file_stem.replace('-', "_");
                                     sibling_progs.push(parsed.clone());
-                                    sibling_stems.push(stem.clone());
+                                    // Package files (.mvl/pkg/) are tested independently and
+                                    // must not appear in this project's coverage report (#1513).
+                                    // Exclude their stems from instrumentation routing, but keep
+                                    // the programs in sibling_progs so native bridge discovery
+                                    // (load_mvl_native_stdlib_extras) still finds extern blocks.
+                                    let under_dot_mvl =
+                                        f.components().any(|c| c.as_os_str() == ".mvl");
+                                    if !under_dot_mvl {
+                                        sibling_stems.push(stem.clone());
+                                    }
                                     stdlib_prelude_progs.push(parsed);
                                     prelude_stems.push(Some(stem));
                                 }
@@ -388,7 +397,12 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
         }
         next_branch_id += branches.len();
         all_branches.extend(branches);
-        file_stems.push(module_name.clone());
+        // Package test files (.mvl/pkg/) must not appear in this project's coverage
+        // report — their source is tracked by the packages themselves (#1513).
+        let under_dot_mvl = test_file.components().any(|c| c.as_os_str() == ".mvl");
+        if !under_dot_mvl {
+            file_stems.push(module_name.clone());
+        }
         // Strip per-file inner #![allow] — they're invalid inside mod blocks and
         // we already have the file-level allow at the top.
         let module_content: String = out
