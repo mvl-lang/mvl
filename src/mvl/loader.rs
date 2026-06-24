@@ -69,6 +69,12 @@ fn collect_mvl_files_recursive(dir: &Path, test_only: bool, out: &mut Vec<PathBu
         let path = entry.path();
         let is_dir = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
         if is_dir {
+            // Skip `.mvl/` — the package install directory (analogous to node_modules).
+            // Package files are loaded from the XDG cache via load_pkg_modules; including
+            // them here would double-load them as user programs and corrupt the prelude.
+            if path.file_name().and_then(|n| n.to_str()) == Some(".mvl") {
+                continue;
+            }
             collect_mvl_files_recursive(&path, test_only, out);
         } else if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
             if name.ends_with(".mvl") {
@@ -98,6 +104,9 @@ pub fn mvl_files_all(path: &str) -> Vec<PathBuf> {
         for entry in entries.flatten() {
             let p = entry.path();
             if p.is_dir() {
+                if p.file_name().and_then(|n| n.to_str()) == Some(".mvl") {
+                    continue;
+                }
                 walk(&p, out);
             } else if p.extension().map(|e| e == "mvl").unwrap_or(false) {
                 out.push(p);
