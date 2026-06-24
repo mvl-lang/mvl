@@ -1,6 +1,6 @@
 # ADR-0039: Repository-less Package Distribution and Supply Chain Security
 
-**Status:** Accepted
+**Status:** Superseded by ADR-0047
 **Date:** 2026-05-29
 **Issues:** #252, #56, #1120, #1129, #1131, #1135, #1245
 **Related:** ADR-0009 (toolchain layout), ADR-0012 (extended package model)

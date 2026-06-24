@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.221.0] - 2026-06-24
+
+### Added
+
+- **Transitive dependency resolution in `mvl update`** (#1511) — `mvl update` now resolves the full transitive closure of the dependency tree, not just direct dependencies. After resolving all packages in `mvl.toml`, a BFS phase reads each resolved package's own `mvl.toml` and locks its dependencies recursively. Diamond dependencies are handled naturally via a `queued` set. Documented in ADR-0047 (package management system), which consolidates and supersedes ADR-0012, ADR-0039, and ADR-0046.
+
 ## [0.220.2] - 2026-06-24
 
 ### Fixed

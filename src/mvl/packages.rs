@@ -476,6 +476,67 @@ pub fn cmd_update(project_root: &Path, opts: &UpdateOptions) -> Result<(), Packa
         return Ok(());
     }
 
+    // ── Phase 2: transitive dependency resolution ─────────────────────────────
+    //
+    // BFS over each resolved package's own mvl.toml to discover and lock
+    // their transitive dependencies.  Packages already in the lockfile are
+    // in `queued` from the start and are not re-fetched.
+    {
+        use std::collections::{HashSet, VecDeque};
+
+        let mut transitive_added = 0usize;
+        let mut queued: HashSet<String> =
+            lockfile.packages.iter().map(|p| p.name.clone()).collect();
+        let mut work_queue: VecDeque<String> = queued.iter().cloned().collect();
+        let mut dummy_tag_updates: Vec<(String, String)> = Vec::new();
+
+        while let Some(pkg_name) = work_queue.pop_front() {
+            let (cached_name, cached_version) = match lockfile.get(&pkg_name) {
+                Some(p) => (p.name.clone(), p.version.clone()),
+                None => continue,
+            };
+            let cache_dir = pkg_cache_dir(&cached_name, &cached_version);
+            let pkg_manifest = match Manifest::load(&cache_dir) {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+            for (dep_name, dep_spec) in &pkg_manifest.dependencies {
+                if queued.contains(dep_name) {
+                    continue;
+                }
+                queued.insert(dep_name.clone());
+                let outcome = update_one_dep(
+                    dep_name,
+                    dep_spec,
+                    &mut lockfile,
+                    &mut dummy_tag_updates,
+                    &global,
+                    min_age_secs,
+                    min_age_days,
+                    now_secs,
+                    opts,
+                );
+                match outcome {
+                    DepOutcome::Updated => {
+                        transitive_added += 1;
+                        work_queue.push_back(dep_name.clone());
+                    }
+                    DepOutcome::UpToDate | DepOutcome::NoEligible | DepOutcome::Planned => {
+                        work_queue.push_back(dep_name.clone());
+                    }
+                    DepOutcome::Skipped(reason) => {
+                        eprintln!("  warning: transitive dep {dep_name}: {reason}");
+                    }
+                }
+            }
+        }
+
+        if transitive_added > 0 {
+            println!("Resolved {transitive_added} transitive package(s).");
+            updated += transitive_added;
+        }
+    }
+
     // Persist mvl.lock (mvl.toml tag sync is handled below, #1459).
     lockfile.write(project_root)?;
 
