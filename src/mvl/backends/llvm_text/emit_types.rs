@@ -202,11 +202,9 @@ impl TextEmitter {
                 "Unit" => "void".to_string(),
                 _ => "ptr".to_string(),
             },
-            TypeExpr::Ref {
-                mutable: true,
-                inner,
-                ..
-            } => Self::llvm_ty(inner),
+            // Both `val T` and `ref T` lower to the underlying type's IR
+            // representation — capability is enforced at the checker, not in codegen.
+            TypeExpr::Ref { inner, .. } => Self::llvm_ty(inner),
             TypeExpr::Labeled { inner, .. } | TypeExpr::Refined { inner, .. } => {
                 Self::llvm_ty(inner)
             }
@@ -245,11 +243,8 @@ impl TextEmitter {
                 }
                 Self::llvm_ty(ty)
             }
-            TypeExpr::Ref {
-                mutable: true,
-                inner,
-                ..
-            } => self.llvm_ty_ctx(inner),
+            // Both `val T` and `ref T` lower to T's IR representation.
+            TypeExpr::Ref { inner, .. } => self.llvm_ty_ctx(inner),
             TypeExpr::Labeled { inner, .. } | TypeExpr::Refined { inner, .. } => {
                 self.llvm_ty_ctx(inner)
             }
@@ -361,20 +356,8 @@ impl TextEmitter {
                 if let Some(loc) = self.ref_locals.get(name) {
                     return self.llvm_ty_ctx(&loc.elem_ty);
                 }
-                if let Some(TypeExpr::Base { name: tn, .. }) = self.local_mvl_types.get(name) {
-                    let tn = tn.clone();
-                    if self.struct_fields.contains_key(&tn) {
-                        return format!("%{tn}");
-                    }
-                    if self.enum_variants.contains_key(&tn) {
-                        if self.enum_has_payloads(&tn) {
-                            return RESULT_LLVM_TY.into();
-                        }
-                        return "i64".into();
-                    }
-                }
                 if let Some(mvl_ty) = self.local_mvl_types.get(name) {
-                    return Self::llvm_ty(mvl_ty);
+                    return self.llvm_ty_ctx(mvl_ty);
                 }
                 if let Some(ssa) = self.locals.get(name) {
                     if let Some(ty) = self.reg_types.get(ssa) {
@@ -557,8 +540,40 @@ impl TextEmitter {
     }
 
     /// Look up the struct type name (e.g. "Point") of an expression, if known.
+    /// Resolve a possibly-aliased fn type to its underlying `TypeExpr::Fn`.
+    ///
+    /// Peels `val`/`ref`/`Labeled`/`Refined` wrappers and follows named
+    /// aliases (e.g. `type Dispatcher = fn(val Request) -> Response`).
+    /// Returns `None` if the type isn't a fn-alias or direct fn type.
+    pub(super) fn resolve_fn_alias(&self, ty: &TypeExpr) -> Option<TypeExpr> {
+        let mut cur = ty.clone();
+        loop {
+            match cur {
+                TypeExpr::Fn { .. } => return Some(cur),
+                TypeExpr::Ref { inner, .. }
+                | TypeExpr::Labeled { inner, .. }
+                | TypeExpr::Refined { inner, .. } => cur = *inner,
+                TypeExpr::Base { ref name, .. } => {
+                    let aliased = self.fn_aliases.get(name)?;
+                    cur = aliased.clone();
+                }
+                _ => return None,
+            }
+        }
+    }
+
     pub(super) fn struct_name_of_expr(&self, expr: &Expr) -> Option<String> {
-        let mvl_ty = self.mvl_type_of_expr(expr);
+        // Peel `val`/`ref`/`Labeled`/`Refined` wrappers — they don't change the
+        // underlying struct identity for field-access purposes.
+        let mut mvl_ty = self.mvl_type_of_expr(expr);
+        loop {
+            match mvl_ty {
+                TypeExpr::Ref { inner, .. }
+                | TypeExpr::Labeled { inner, .. }
+                | TypeExpr::Refined { inner, .. } => mvl_ty = *inner,
+                _ => break,
+            }
+        }
         if let TypeExpr::Base { name: tn, .. } = &mvl_ty {
             if self.struct_fields.contains_key(tn) {
                 return Some(tn.clone());
@@ -585,15 +600,18 @@ impl TextEmitter {
             Expr::Literal(Literal::Str(_), _) => Some("String"),
             Expr::Ident(name, _) => {
                 let mvl_ty = self.local_mvl_types.get(name.as_str())?;
-                match mvl_ty {
-                    TypeExpr::Base { name: tn, .. } => Some(tn.as_str()),
-                    TypeExpr::Labeled { inner, .. } | TypeExpr::Refined { inner, .. } => {
-                        if let TypeExpr::Base { name: tn, .. } = inner.as_ref() {
-                            Some(tn.as_str())
-                        } else {
-                            None
-                        }
+                // Peel `val`/`ref`/`Labeled`/`Refined` wrappers to reach the base name.
+                let mut cur: &TypeExpr = mvl_ty;
+                loop {
+                    match cur {
+                        TypeExpr::Ref { inner, .. }
+                        | TypeExpr::Labeled { inner, .. }
+                        | TypeExpr::Refined { inner, .. } => cur = inner.as_ref(),
+                        _ => break,
                     }
+                }
+                match cur {
+                    TypeExpr::Base { name: tn, .. } => Some(tn.as_str()),
                     _ => None,
                 }
             }
