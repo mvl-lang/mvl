@@ -167,7 +167,9 @@ impl RustEmitter {
             // would shadow the runtime's `ExitReason` (= i64 alias), causing a type
             // mismatch in the register_actor_controls closures.
             self.line("_Shutdown,");
-            self.line("_ExitSignal { _from_id: ActorId, _reason: mvl_runtime::actors::ExitReason },");
+            self.line(
+                "_ExitSignal { _from_id: ActorId, _reason: mvl_runtime::actors::ExitReason },",
+            );
             self.line(
                 "_DownSignal { _from_id: ActorId, _reason: mvl_runtime::actors::ExitReason, _monitor_id: MonitorId },",
             );

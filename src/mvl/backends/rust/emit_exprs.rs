@@ -142,7 +142,11 @@ impl RustEmitter {
                     // `link`/`unlink` conflict with Rust's built-in `link` attribute.
                     // The runtime exports them as `mvl_link`/`mvl_unlink` (u64 args);
                     // MVL passes `Int` (i64), so cast each argument explicitly.
-                    let runtime_fn = if name.as_str() == "link" { "mvl_link" } else { "mvl_unlink" };
+                    let runtime_fn = if name.as_str() == "link" {
+                        "mvl_link"
+                    } else {
+                        "mvl_unlink"
+                    };
                     self.push(&format!("{runtime_fn}("));
                     for (i, arg) in args.iter().enumerate() {
                         if i > 0 {
