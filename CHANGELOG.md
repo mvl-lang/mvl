@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.220.0] - 2026-06-24
+
+### Added
+
+- **`pub test fn` on actors — synchronous actor state assertions** (#1506) — Actor declarations now support `pub test fn` methods that run synchronously on the actor thread, return non-Unit values, and are stripped in production builds (emitted as `#[cfg(test)]`). Enables synchronous state reads in test contexts while preserving fire-and-forget semantics for regular `pub fn` behaviors. FIFO mailbox ordering guarantees all prior async sends are processed before the `pub test fn` call executes, enabling causal consistency without explicit mailbox flush. Implementation includes parser, AST, TIR, checker, and Rust backend changes; all test methods use `std::sync::mpsc` channels for request-reply over the mailbox.
+
+### Changed
+
+- **Spec 004-testing updated to v0.4.0** — Requirement 6 (effect annotations on test fn) updated to reference the new Req 8; Requirement 7 expanded to document `std/testing.mvl` (now live); new Requirement 8 added with full documentation of `pub test fn` syntax, FIFO guarantee, generated Rust pattern, and test scenarios.
+
+### Testing
+
+- Added transpiler tests: `actor_pub_test_fn_emits_cfg_test_infrastructure`, `actor_pub_test_fn_with_params_emits_fields_in_variant`
+- Added checker test: `actor_pub_test_fn_non_unit_return_accepted`
+- Added stdlib runtime tests: `pub_test_fn_initial_state_is_zero`, `pub_test_fn_sees_state_after_increments`, `pub_test_fn_sees_state_after_reset`, `pub_test_fn_multiple_reads_are_consistent`
+
 ## [0.219.0] - 2026-06-24
 
 ### Added

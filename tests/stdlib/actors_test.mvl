@@ -174,3 +174,49 @@ test fn actor_clone_handle() -> Unit ! Spawn + Send {
     c2.increment(42);
     assert(true)
 }
+
+// ── pub test fn — synchronous state assertions (#1506) ───────────────────────
+// pub test fn runs synchronously on the actor thread and returns a value.
+// FIFO mailbox ordering guarantees all prior async sends are processed first.
+
+actor StateCounter {
+    count: Int
+
+    pub fn increment(val n: Int) {
+        self.count = self.count + n
+    }
+
+    pub fn reset() {
+        self.count = 0
+    }
+
+    pub test fn get_count() -> Int {
+        self.count
+    }
+}
+
+test fn pub_test_fn_initial_state_is_zero() -> Unit ! Spawn + Send {
+    let c: StateCounter = actor StateCounter { count: 0 };
+    assert_eq(c.get_count(), 0)
+}
+
+test fn pub_test_fn_sees_state_after_increments() -> Unit ! Spawn + Send {
+    let c: StateCounter = actor StateCounter { count: 0 };
+    c.increment(5);
+    c.increment(3);
+    assert_eq(c.get_count(), 8)
+}
+
+test fn pub_test_fn_sees_state_after_reset() -> Unit ! Spawn + Send {
+    let c: StateCounter = actor StateCounter { count: 0 };
+    c.increment(10);
+    c.reset();
+    assert_eq(c.get_count(), 0)
+}
+
+test fn pub_test_fn_multiple_reads_are_consistent() -> Unit ! Spawn + Send {
+    let c: StateCounter = actor StateCounter { count: 0 };
+    c.increment(7);
+    assert_eq(c.get_count(), 7);
+    assert_eq(c.get_count(), 7)
+}

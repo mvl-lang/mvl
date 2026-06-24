@@ -379,8 +379,10 @@ pub struct ActorDecl {
 /// - `fn name(params) -> T { … }` — private synchronous helper (no async).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ActorMethod {
-    /// `true` for `pub fn` (async behavior), `false` for `fn` (private helper).
+    /// `true` for `pub fn` / `pub test fn`, `false` for `fn` (private helper).
     pub is_public: bool,
+    /// `true` for `pub test fn` — test-only, synchronous, can return non-Unit.
+    pub is_test: bool,
     pub name: String,
     pub params: Vec<Param>,
     pub return_type: Box<TypeExpr>,

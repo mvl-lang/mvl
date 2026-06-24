@@ -355,8 +355,10 @@ pub struct TirExternDecl {
 /// A method inside an actor declaration, with a fully-typed body.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TirActorMethod {
-    /// `true` = public async behavior, `false` = private sync helper.
+    /// `true` = public async behavior or `pub test fn`, `false` = private sync helper.
     pub is_public: bool,
+    /// `true` = `pub test fn` — test-only synchronous, non-Unit return allowed (#1506).
+    pub is_test: bool,
     pub name: String,
     pub params: Vec<TirParam>,
     pub ret_ty: Ty,

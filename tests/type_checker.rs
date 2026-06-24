@@ -8062,6 +8062,29 @@ fn actor_pub_fn_non_unit_return_rejected() {
     );
 }
 
+/// GIVEN: actor pub test fn with non-Unit return type (#1506)
+/// WHEN: type-checked
+/// THEN: no error — pub test fn is exempt from fire-and-forget Unit restriction
+#[test]
+fn actor_pub_test_fn_non_unit_return_accepted() {
+    let errors = errors_for(
+        r#"
+        actor Counter {
+            count: Int
+            pub fn increment(val n: Int) { }
+            pub test fn get_count() -> Int { 0 }
+            pub test fn get_as_string() -> String { "0" }
+        }
+        "#,
+    );
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::NonUnitBehaviorReturn { .. })),
+        "pub test fn should not trigger NonUnitBehaviorReturn, got: {errors:?}"
+    );
+}
+
 /// GIVEN: actor with valid pub fn (Unit return, no duplicates)
 /// WHEN: type-checked
 /// THEN: no errors

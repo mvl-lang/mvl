@@ -563,6 +563,7 @@ fn lower_actor_method(
 ) -> TirActorMethod {
     TirActorMethod {
         is_public: m.is_public,
+        is_test: m.is_test,
         name: m.name.clone(),
         params: m.params.iter().map(|p| lower_param(p, ty_subs)).collect(),
         ret_ty: typeexpr_to_ty_sub(&m.return_type, ty_subs),
