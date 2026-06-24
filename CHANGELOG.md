@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.220.1] - 2026-06-24
+
+### Fixed
+
+- **Rust backend: suppress `improper_ctypes` lint on generated extern blocks** (#1509) — MVL extern blocks use `String` in FFI signatures because the MVL runtime ships its own ABI (not C ABI). The `improper_ctypes` lint fired on every generated extern block, producing dozens of identical warnings. Now emit `#[allow(improper_ctypes)]` immediately before each extern block to suppress the noise while preserving real signal.
+
 ## [0.220.0] - 2026-06-24
 
 ### Added
