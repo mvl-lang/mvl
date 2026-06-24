@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.220.4] - 2026-06-24
+
+### Fixed
+
+- **Rust codegen: clone `self.field` in `let` bindings inside actor methods** — `let x: ref T = self.field` in actor methods generated a bare move (`let mut x = self.field`) which Rust rejects (E0507 — cannot move out of `&mut self`). The existing `needs_clone` guard was extended to also fire when the field-access receiver is `self` inside an actor method body. Fixes `Pusher::add_worker` and `Publisher::subscribe` in `pkg.zmq`.
+
+- **Clippy: rewrite `loop { match _ => break }` as `while let` in LLVM emit_types** — Two `loop { match }` patterns in `llvm_text/emit_types.rs` triggered `clippy::while_let_loop` on newer Clippy versions. Rewritten as `while let` loops.  No behaviour change.
+
 ## [0.220.3] - 2026-06-24
 
 ### Added
