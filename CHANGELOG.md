@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.218.1] - 2026-06-24
+
+### Fixed
+
+- **Actor method coverage branches attributed to last prelude function name** (#1501) — `emit_actor_decl` emitted method bodies via `emit_block_stmts` without updating `self.current_fn`, so all coverage probes inside actor methods inherited the function name from the last non-actor function processed by `emit_fn_decl`. In pkg-metrics, `histogram_observe` match arms appeared as `union 0/2` in coverage reports. Fixed by setting `current_fn = m.name` at the start of each actor method body.
+
+### Changed
+
+- **Spec 004-testing updated with Req 6 (effect annotations on test fn) and Req 7 (std/testing stdlib)** — Documents the `test fn ! Spawn + Send` pattern for testing actors, the two-call technique for covering both None/Some arms, and introduces a placeholder for `std/testing.mvl` helpers.
+
 ## [0.218.0] - 2026-06-24
 
 ### Added
