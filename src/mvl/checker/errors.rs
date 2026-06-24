@@ -276,6 +276,12 @@ pub enum CheckError {
         found: String,
         span: Span,
     },
+    /// User-program actor shadows a prelude actor with the same name (#1497).
+    /// Silent replacement would break security-enforcing prelude actors.
+    ActorNameConflict {
+        name: String,
+        span: Span,
+    },
     /// Shadowing a live linear binding without consuming it first (#1068 Gap 2).
     LinearShadowDrop {
         name: String,
@@ -566,7 +572,8 @@ impl CheckError {
             | CheckError::RefEscapesToConcurrentContext { .. }
             | CheckError::DuplicateActorField { .. }
             | CheckError::DuplicateActorMethod { .. }
-            | CheckError::NonUnitBehaviorReturn { .. } => 9,
+            | CheckError::NonUnitBehaviorReturn { .. }
+            | CheckError::ActorNameConflict { .. } => 9,
             // Req 10: Refinement Types & Contracts
             CheckError::RefinementViolated { .. }
             | CheckError::PreconditionViolated { .. }
@@ -648,6 +655,7 @@ impl CheckError {
             | CheckError::DuplicateActorField { span, .. }
             | CheckError::DuplicateActorMethod { span, .. }
             | CheckError::NonUnitBehaviorReturn { span, .. }
+            | CheckError::ActorNameConflict { span, .. }
             | CheckError::LinearShadowDrop { span, .. }
             | CheckError::InvalidRelabel { span, .. }
             | CheckError::UnknownRelabel { span, .. }
@@ -830,6 +838,9 @@ impl CheckError {
             ),
             CheckError::NonUnitBehaviorReturn { actor, method, found, .. } => format!(
                 "actor `{actor}` behavior `{method}` must return `Unit` (fire-and-forget), found `{found}`"
+            ),
+            CheckError::ActorNameConflict { name, .. } => format!(
+                "actor `{name}` shadows a prelude actor — choose a different name to avoid replacing security-enforcing behavior"
             ),
             CheckError::LinearShadowDrop { name, ty, .. } => format!(
                 "linear type `{ty}` in binding `{name}` is silently dropped by shadowing — use `consume({name})` before rebinding"

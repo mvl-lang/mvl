@@ -75,6 +75,13 @@ impl TypeChecker {
     }
 
     fn register_actor(&mut self, ad: &ActorDecl) {
+        if self.prelude_actor_names.contains(&ad.name) {
+            self.emit(CheckError::ActorNameConflict {
+                name: ad.name.clone(),
+                span: ad.span,
+            });
+            return;
+        }
         // Actor fields are always mutable state — use actor_field_infos so that
         // `self.field = …` assignments inside method bodies pass the req6 check.
         self.env.define_type(

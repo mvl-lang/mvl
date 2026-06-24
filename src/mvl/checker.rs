@@ -186,6 +186,20 @@ pub fn check_with_two_preludes_mode(
     for p in prelude_a.iter().chain(prelude_b.iter().copied()) {
         checker.collect_declarations(&p.declarations);
     }
+    // Seal the prelude: build the set of actor names declared in the prelude so
+    // that register_actor can detect user-program shadowing (#1497).
+    checker.prelude_actor_names = prelude_a
+        .iter()
+        .chain(prelude_b.iter().copied())
+        .flat_map(|p| p.declarations.iter())
+        .filter_map(|d| {
+            if let Decl::Actor(ad) = d {
+                Some(ad.name.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
     checker.check_program(prog);
     // Build the whole-program program slice — used by IFC cross-function analysis,
     // the call graph, and the interprocedural label propagation pass.
@@ -358,6 +372,9 @@ struct TypeChecker {
     method_table: HashMap<String, HashMap<String, FnInfo>>,
     /// Names of all declared actor types — used to enforce Spawn/Send effects (#1126).
     actor_type_names: HashSet<String>,
+    /// Names of actors declared in the prelude — populated after prelude collection,
+    /// before user-program checking, to detect shadowing (#1497).
+    prelude_actor_names: HashSet<String>,
     /// Inferred type for every expression, keyed by span. Populated during
     /// `infer_expr` and surfaced in [`CheckResult::expr_types`] for the
     /// transpiler to use when emitting type-specific Rust code (#554).
@@ -389,6 +406,7 @@ impl TypeChecker {
             iterator_impls: HashMap::new(),
             method_table: HashMap::new(),
             actor_type_names: HashSet::new(),
+            prelude_actor_names: HashSet::new(),
             expr_types: HashMap::new(),
             effect_hierarchy: hierarchy,
             module_aliases: HashMap::new(),

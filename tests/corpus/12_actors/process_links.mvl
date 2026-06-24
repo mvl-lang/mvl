@@ -18,7 +18,7 @@ actor Worker {
 
 // ── Actor that traps exit signals instead of dying ───────────────────────
 
-actor Supervisor traps_exit {
+actor ProcessMonitor traps_exit {
     child_count: Int
 
     pub fn notify(val actor_id: Int, val reason: Int) { }
