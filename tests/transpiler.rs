@@ -2337,6 +2337,48 @@ fn transpile_coverage_and_mutation_compose() {
     assert!(!r.mutants.is_empty(), "mutations should be populated");
 }
 
+/// Actor method branches must be attributed to the method name, not the last
+/// prelude function name (#1501).  A match inside `handle` must produce
+/// BranchInfo entries with fn_name="handle", not some unrelated prelude fn.
+#[test]
+fn coverage_actor_branches_attributed_to_method_name() {
+    let src = r#"
+actor Counter {
+    value: Int
+    pub fn handle(val n: Int) {
+        match n {
+            0 => {},
+            _ => {},
+        }
+    }
+}
+pub total fn new_counter() -> Counter ! Spawn {
+    actor Counter { value: 0 }
+}
+"#;
+    let prog = parse_prog(src);
+    let r = do_transpile(
+        &prog,
+        TranspileConfig::new("my_crate")
+            .with_file_stem("counter")
+            .with_coverage(0),
+    );
+    // All decision branches inside actor methods must be attributed to the
+    // method, not to the last prelude function emitted before the actor.
+    let actor_branches: Vec<_> = r.branches.iter().filter(|b| b.kind.is_decision()).collect();
+    assert!(
+        !actor_branches.is_empty(),
+        "expected decision branches from actor match"
+    );
+    for b in &actor_branches {
+        assert_eq!(
+            b.fn_name, "handle",
+            "actor match branch must be attributed to 'handle', got '{}'",
+            b.fn_name
+        );
+    }
+}
+
 /// All three flags together: coverage + MC/DC + mutation.
 #[test]
 fn transpile_all_instrumentation_flags_compose() {
