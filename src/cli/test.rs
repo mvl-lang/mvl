@@ -242,7 +242,16 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
                                 {
                                     let stem = file_stem.replace('-', "_");
                                     sibling_progs.push(parsed.clone());
-                                    sibling_stems.push(stem.clone());
+                                    // Package files (.mvl/pkg/) are tested independently and
+                                    // must not appear in this project's coverage report (#1513).
+                                    // Exclude their stems from instrumentation routing, but keep
+                                    // the programs in sibling_progs so native bridge discovery
+                                    // (load_mvl_native_stdlib_extras) still finds extern blocks.
+                                    let under_dot_mvl =
+                                        f.components().any(|c| c.as_os_str() == ".mvl");
+                                    if !under_dot_mvl {
+                                        sibling_stems.push(stem.clone());
+                                    }
                                     stdlib_prelude_progs.push(parsed);
                                     prelude_stems.push(Some(stem));
                                 }
@@ -388,7 +397,12 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
         }
         next_branch_id += branches.len();
         all_branches.extend(branches);
-        file_stems.push(module_name.clone());
+        // Package test files (.mvl/pkg/) must not appear in this project's coverage
+        // report — their source is tracked by the packages themselves (#1513).
+        let under_dot_mvl = test_file.components().any(|c| c.as_os_str() == ".mvl");
+        if !under_dot_mvl {
+            file_stems.push(module_name.clone());
+        }
         // Strip per-file inner #![allow] — they're invalid inside mod blocks and
         // we already have the file-level allow at the top.
         let module_content: String = out
@@ -404,7 +418,14 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
     // Also include source .mvl files that contain `test fn` declarations but
     // have no corresponding `*_test.mvl` counterpart.  This lets inline tests
     // (e.g. in `main.mvl`) run and appear in the coverage report.
-    let covered_stems: std::collections::HashSet<String> = file_stems.iter().cloned().collect();
+    //
+    // Build the dedup set from the emitted modules (not `file_stems`) — pkg.*
+    // test files are excluded from `file_stems` for coverage reasons (#1513),
+    // but their module names still occupy the test crate's namespace, so a
+    // sibling `core.mvl` with inline tests must not be re-emitted as a second
+    // `mod core` (which would collide on the Rust side).
+    let covered_stems: std::collections::HashSet<String> =
+        modules.iter().map(|(m, _, _)| m.clone()).collect();
     let source_files = loader::mvl_files(path, false); // non-test files
     for src_file in &source_files {
         let file_str = src_file.display().to_string();
@@ -538,25 +559,83 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
     // test crate links the symbols — same wiring `mvl build` performs (#1481).
     // The declaration must come AFTER any inner attributes (`#![...]`), so we
     // insert it on the first blank line following the file-level allow.
+    //
+    // `mvl test` wraps each test file's transpiled output in `#[cfg(test)] mod
+    // <name> { ... }`, so pkg.* types like `Terminal` end up at
+    // `crate::<mod>::Terminal` — not at the crate root where `mvl build` puts
+    // them.  A pkg-provided bridge.rs that imports `use crate::Terminal;` (the
+    // documented pattern) would fail to resolve.  Re-export public type
+    // declarations from the pkg.* closure at the crate root via the first test
+    // module so those imports resolve.  Both `mod bridge;` and the re-export
+    // are gated with `#[cfg(test)]` to match the test mods' gating — the test
+    // crate is only ever `cargo test`'d, so this loses no functionality.
     if let Some(ref bp) = pkg_bridge {
         fs::copy(bp, src_dir.join("bridge.rs")).unwrap_or_else(|e| {
             eprintln!("Cannot copy bridge.rs: {e}");
             process::exit(1);
         });
-        let mut injected = String::with_capacity(combined_rs.len() + 16);
+
+        // Collect public type names from the bridge-owning package by parsing
+        // its `src/` and `src/internal/` .mvl files.  We start from the bridge
+        // path (its parent is the package root) rather than `pkg_progs` because
+        // the frontier loop's seed (`all_test_progs`) only catches packages
+        // imported directly by `*_test.mvl` files — a package imported via a
+        // sibling source file (e.g. `input.mvl`) is loaded into the prelude
+        // through a different code path and would be missed here.
+        let pkg_type_names: Vec<String> = {
+            let pkg_root = bp.parent().map(std::path::Path::to_path_buf);
+            let mut names: Vec<String> = Vec::new();
+            if let Some(pkg_root) = pkg_root {
+                for sub in &["src", "src/internal"] {
+                    let dir = pkg_root.join(sub);
+                    if let Ok(entries) = fs::read_dir(&dir) {
+                        for entry in entries.flatten() {
+                            let path = entry.path();
+                            if path.extension().map(|e| e == "mvl").unwrap_or(false) {
+                                if let Ok(src) = fs::read_to_string(&path) {
+                                    let (mut p, _) = Parser::new(&src);
+                                    let parsed = p.parse_program();
+                                    for decl in &parsed.declarations {
+                                        if let Decl::Type(t) = decl {
+                                            if t.visible {
+                                                names.push(t.name.clone());
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            names.sort();
+            names.dedup();
+            names
+        };
+        let first_mod_name = modules.first().map(|(m, _, _)| m.clone());
+        let reexport_line = match (first_mod_name, pkg_type_names.is_empty()) {
+            (Some(m), false) => {
+                let joined = pkg_type_names.join(", ");
+                format!("#[cfg(test)] pub use {m}::{{{joined}}};\n")
+            }
+            _ => String::new(),
+        };
+
+        let mut injected = String::with_capacity(combined_rs.len() + 64);
         let mut done = false;
         for line in combined_rs.lines() {
             injected.push_str(line);
             injected.push('\n');
             if !done && line.trim_start().starts_with("#![allow(") {
-                injected.push_str("\nmod bridge;\n");
+                injected.push_str("\n#[cfg(test)] mod bridge;\n");
+                injected.push_str(&reexport_line);
                 done = true;
             }
         }
         if !done {
             // No inner-attribute line found — fall back to prepending after the
             // header comments by simply appending at the start.
-            injected = format!("mod bridge;\n{combined_rs}");
+            injected = format!("#[cfg(test)] mod bridge;\n{reexport_line}{combined_rs}");
         }
         combined_rs = injected;
     }

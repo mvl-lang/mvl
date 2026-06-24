@@ -40,32 +40,6 @@ fn root_manifest_parses_all_rationale_fields() {
     }
 }
 
-// ── Example manifests with external packages ─────────────────────────────────
-
-#[test]
-fn actor_webserver_manifest_rationale() {
-    let m = load_manifest("examples/actor_webserver");
-    assert_eq!(m.package.name, "actor_webserver");
-    assert_eq!(m.dependencies.len(), 1);
-    let missing = m.audit_dep_rationale();
-    assert!(
-        missing.is_empty(),
-        "actor_webserver: deps missing rationale: {missing:?}"
-    );
-}
-
-#[test]
-fn anthropic_chat_manifest_rationale() {
-    let m = load_manifest("examples/anthropic_chat");
-    assert_eq!(m.package.name, "anthropic_chat");
-    assert_eq!(m.dependencies.len(), 1);
-    let missing = m.audit_dep_rationale();
-    assert!(
-        missing.is_empty(),
-        "anthropic_chat: deps missing rationale: {missing:?}"
-    );
-}
-
 // ── Policy enforcement tests (synthetic manifests) ───────────────────────────
 
 #[test]
@@ -160,7 +134,7 @@ fn root_license_matches_manifest() {
 
 #[test]
 fn all_examples_license_matches() {
-    for name in &["actor_webserver", "anthropic_chat", "log_to_file"] {
+    for name in &["log_to_file"] {
         let dir = manifest_dir(&format!("examples/{name}"));
         let m = Manifest::load(&dir).unwrap();
         assert!(

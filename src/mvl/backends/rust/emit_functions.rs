@@ -17,7 +17,7 @@ use super::emitter::RustEmitter;
 use crate::mvl::backends::rust::emit_types::{emit_label, emit_ref_expr_for_assert, emit_ty};
 use crate::mvl::backends::rust::last_use::compute_last_uses;
 use crate::mvl::ir::{
-    Capability, Constraint, GenericParam, TirBlock, TirExprKind, TirFn, TirParam, TirStmt,
+    Capability, Constraint, GenericParam, Literal, TirBlock, TirExprKind, TirFn, TirParam, TirStmt,
     Totality, Ty,
 };
 use crate::mvl::passes::coverage::BranchKind;
@@ -278,35 +278,63 @@ impl RustEmitter {
             }
         } else {
             let (head, tail) = stmts.split_at(stmts.len() - 1);
-            self.emit_block_stmts(head);
 
-            let last = &tail[0];
-            let is_unit = matches!(fd.ret_ty, Ty::Unit);
-            let has_ensures = !fd.ensures.is_empty() && !is_unit;
-            match last {
-                TirStmt::Expr { expr, .. } => {
-                    if !self.emit_mcdc_return_expr(expr, &fd.ret_ty, expr.span.line) {
-                        if has_ensures {
-                            self.indent();
-                            self.push("let _result = ");
-                            self.emit_expr_tail_with_return_type_tir(expr, &fd.ret_ty, &fd.params);
-                            self.push(";");
-                            self.nl();
-                            for ens_pred in &fd.ensures {
-                                let pred_str = emit_ref_expr_for_assert(ens_pred, "_result");
-                                let msg = pred_str.replace('{', "{{").replace('}', "}}");
-                                self.line(&format!("assert!({pred_str}, \"ensures: {msg}\");"));
+            // MVL has no `break` keyword, so a `while true { ... }` loop is
+            // unconditionally divergent — the only ways out are `return` or
+            // panic.  When the immediately preceding statement is such a loop
+            // and the tail is a value expression, that tail is unreachable.
+            // Drop it: the loop emits as Rust `loop { ... }` which has type `!`
+            // and satisfies any return type without a fallback expression.
+            // This is the canonical MVL idiom (CLAUDE.md "while true + return")
+            // and Rust's `unreachable_code` lint would otherwise warn on every
+            // such function.
+            let tail_is_unreachable = matches!(
+                (head.last(), &tail[0]),
+                (
+                    Some(TirStmt::While { cond, .. }),
+                    TirStmt::Expr { .. },
+                ) if matches!(&cond.kind, TirExprKind::Literal(Literal::Bool(true)))
+            );
+
+            if tail_is_unreachable {
+                // Emit only `head` — the `while true { ... }` loop becomes
+                // Rust `loop { ... }` (type `!`) and is the function's tail.
+                self.emit_block_stmts(head);
+            } else {
+                self.emit_block_stmts(head);
+
+                let last = &tail[0];
+                let is_unit = matches!(fd.ret_ty, Ty::Unit);
+                let has_ensures = !fd.ensures.is_empty() && !is_unit;
+                match last {
+                    TirStmt::Expr { expr, .. } => {
+                        if !self.emit_mcdc_return_expr(expr, &fd.ret_ty, expr.span.line) {
+                            if has_ensures {
+                                self.indent();
+                                self.push("let _result = ");
+                                self.emit_expr_tail_with_return_type_tir(
+                                    expr, &fd.ret_ty, &fd.params,
+                                );
+                                self.push(";");
+                                self.nl();
+                                for ens_pred in &fd.ensures {
+                                    let pred_str = emit_ref_expr_for_assert(ens_pred, "_result");
+                                    let msg = pred_str.replace('{', "{{").replace('}', "}}");
+                                    self.line(&format!("assert!({pred_str}, \"ensures: {msg}\");"));
+                                }
+                                self.line("_result");
+                            } else {
+                                self.indent();
+                                self.emit_expr_tail_with_return_type_tir(
+                                    expr, &fd.ret_ty, &fd.params,
+                                );
+                                self.nl();
                             }
-                            self.line("_result");
-                        } else {
-                            self.indent();
-                            self.emit_expr_tail_with_return_type_tir(expr, &fd.ret_ty, &fd.params);
-                            self.nl();
                         }
                     }
-                }
-                other => {
-                    self.emit_block_stmts(std::slice::from_ref(other));
+                    other => {
+                        self.emit_block_stmts(std::slice::from_ref(other));
+                    }
                 }
             }
         }

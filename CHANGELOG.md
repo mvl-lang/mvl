@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.220.5] - 2026-06-24
+
+### Fixed
+
+- **Loader: skip `.mvl/` directory in recursive file scans** (#1520) — `mvl_files` and `mvl_files_all` recursively entered `.mvl/pkg/`, the package install directory (analogous to `node_modules`), treating installed package files as user programs. Since `load_pkg_modules` simultaneously loaded the same files from the XDG cache into `stdlib_prelude`, this caused double-loading and false errors: REQ9 "actor shadows prelude" (pkg actor names appeared in both prelude and user programs) and REQ7 "missing effect" (stale `.mvl/pkg/` copies with old APIs broke effect subsumption). Fix: skip any directory named `.mvl` during recursive walks — packages reach the checker exclusively via `load_pkg_modules` (lockfile-pinned). All examples now pass `mvl check --stdlib=proven`.
+
 ## [0.220.4] - 2026-06-24
 
 ### Fixed
