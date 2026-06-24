@@ -1,6 +1,6 @@
 ---
 domain: language
-version: 0.3.0
+version: 0.4.0
 status: draft
 date: 2026-06-24
 ---
@@ -203,14 +203,13 @@ test fn histogram_record_ms_sends() -> Unit ! Spawn + Send {
 | Send a behavior | `! Send` | No panic; message enqueued |
 | Both `None` and `Some` arms of actor-internal match | `! Spawn + Send` | Send to new key (None arm), then same key again (Some arm) |
 
-**What requires `pub test fn` (#1500):**
+**What requires `pub test fn` (now available — see Req 8):**
 
 Actor behaviors are fire-and-forget — `pub fn` on an actor returns `Unit`, so
-internal state cannot be read back. Asserting _that_ a counter was incremented
-or a histogram was updated requires `pub test fn` (#1506), a future feature that
-exposes synchronous state access on the actor thread for the duration of a test.
+internal state cannot be read back with `! Spawn + Send` alone. `pub test fn`
+(Req 8, #1506) provides synchronous state access and is now implemented.
 
-**Two-call pattern for covering both match arms:**
+**Two-call pattern for covering both match arms (still useful without pub test fn):**
 
 When an actor initialises state on first use (a `match self.map.get(key)` with
 `None =>` create and `Some(h) =>` update), covering both branches requires two
@@ -244,13 +243,108 @@ test fn covers_both_arms() -> Unit ! Spawn + Send {
 
 ---
 
-### Requirement 7: Testing Standard Library [SHOULD]
+### Requirement 7: Testing Standard Library [MUST]
 
-A `std/testing.mvl` module SHOULD provide helpers beyond the three core
-assertions (`assert`, `assert_eq`, `assert_ne`) for common test patterns.
-Tracked in #1505.
+`std/testing.mvl` provides assertion helpers beyond the three core builtins
+(`assert`, `assert_eq`, `assert_ne`) from `std/core.mvl`.
 
-Until `std/testing.mvl` exists, tests rely on `assert_eq` / `assert` from
-`std/core.mvl` (always in scope) and inline helpers.
+```mvl
+use std.testing.{assert_contains, assert_len, assert_empty, assert_some, assert_none}
 
-**Implementation:** `std/testing.mvl` (planned)
+test fn example() -> Unit {
+    assert_contains("hello world", "world");
+    assert_len([1, 2, 3], 3);
+    assert_some(Some(42));
+    assert_none(None as Option[Int]);
+}
+```
+
+| Function | Signature | Asserts |
+|----------|-----------|---------|
+| `assert_contains` | `(String, String) -> Unit` | Substring present |
+| `assert_len[T]` | `(List[T], Int) -> Unit` | List length equals expected |
+| `assert_empty[T]` | `(List[T]) -> Unit` | List is empty |
+| `assert_some[T]` | `(Option[T]) -> Unit` | Option is `Some(_)` |
+| `assert_none[T]` | `(Option[T]) -> Unit` | Option is `None` |
+
+**Implementation:** `std/testing.mvl`
+
+**Tests:** `tests/stdlib/testing_test.mvl`
+
+---
+
+### Requirement 8: pub test fn — Synchronous Actor State Assertions [MUST]
+
+`pub test fn` declarations inside actor bodies run synchronously on the actor
+thread and return a value. They are only callable from `#[cfg(test)]` contexts
+and are stripped from production builds.
+
+```mvl
+actor Counter {
+    count: Int
+
+    pub fn increment(val n: Int) { self.count = self.count + n }
+
+    pub test fn get_count() -> Int { self.count }
+}
+
+test fn state_is_correct() -> Unit ! Spawn + Send {
+    let c: Counter = actor Counter { count: 0 };
+    c.increment(5);
+    c.increment(3);
+    assert_eq(c.get_count(), 8)   // synchronous; sees state after both sends
+}
+```
+
+**Key properties:**
+
+- `pub test fn` may return any type (unlike `pub fn`, which must return `Unit`)
+- FIFO mailbox ordering guarantees causal consistency: all prior `pub fn` sends
+  are processed before the `pub test fn` call executes
+- Emitted as `#[cfg(test)]` mailbox variant + `std::sync::mpsc` reply channel;
+  no overhead in production builds
+- Parameters follow the same rules as `pub fn` (sendable types)
+
+**Generated Rust pattern (request-reply over mailbox):**
+
+```rust
+// Mailbox variant (cfg(test) only)
+#[cfg(test)]
+_TestGetCount { _reply: std::sync::mpsc::Sender<i64> },
+
+// Handle method (cfg(test) only) — blocks until actor replies
+#[cfg(test)]
+pub fn get_count(&self) -> i64 {
+    let (_tx, _rx) = std::sync::mpsc::channel();
+    self._sender.send(CounterMailbox::_TestGetCount { _reply: _tx });
+    _rx.recv().expect("actor thread died")
+}
+```
+
+**Implementation:** `src/mvl/parser/actors.rs`, `src/mvl/parser/ast.rs`,
+`src/mvl/ir.rs`, `src/mvl/ir/lower.rs`, `src/mvl/checker/decls.rs`,
+`src/mvl/backends/rust/emit_actors.rs`
+
+#### Scenario: pub test fn returns initial actor state
+
+- GIVEN an actor with `pub test fn get_count() -> Int { self.count }`
+- WHEN spawned with `count: 0` and `get_count()` called
+- THEN returns `0`
+
+#### Scenario: pub test fn sees state after async sends
+
+- GIVEN a Counter actor with `pub fn increment(val n: Int)` and `pub test fn get_count() -> Int`
+- WHEN `increment(5)` and `increment(3)` are sent, then `get_count()` is called
+- THEN returns `8` (FIFO ordering guarantees causal consistency)
+
+#### Scenario: pub fn with non-Unit return is still rejected
+
+- GIVEN `pub fn get_x() -> Int` on an actor (no `test` keyword)
+- WHEN type-checked
+- THEN `NonUnitBehaviorReturn` error is emitted
+
+**Tests:** `tests/corpus/12_actors/actor_pub_test_fn.mvl`,
+`tests/stdlib/actors_test.mvl::pub_test_fn_*`,
+`tests/transpiler.rs::actor_pub_test_fn_emits_cfg_test_infrastructure`,
+`tests/transpiler.rs::actor_pub_test_fn_with_params_emits_fields_in_variant`,
+`tests/type_checker.rs::actor_pub_test_fn_non_unit_return_accepted`

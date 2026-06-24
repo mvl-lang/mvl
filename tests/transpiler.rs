@@ -3292,6 +3292,55 @@ fn concurrently_block_emits_body_and_drain() {
     assert_contains(&rust, "f.go()");
 }
 
+// ── #1506: pub test fn code generation ───────────────────────────────────────
+
+/// `pub test fn` emits a `#[cfg(test)]` mailbox variant with an mpsc reply channel,
+/// a `#[cfg(test)]` state impl method, a `#[cfg(test)]` blocking handle method, and
+/// a `#[cfg(test)]` dispatch arm that calls the method and sends the result back (#1506).
+#[test]
+fn actor_pub_test_fn_emits_cfg_test_infrastructure() {
+    let src = r#"
+actor Counter {
+    count: Int,
+    pub fn increment(val n: Int) { }
+    pub test fn get_count() -> Int { 0 }
+}
+"#;
+    let rust = transpile_src(src);
+    // Mailbox variant: #[cfg(test)] + reply channel carrying the return type
+    assert_contains(&rust, "#[cfg(test)]");
+    assert_contains(&rust, "_TestGetCount {");
+    assert_contains(&rust, "std::sync::mpsc::Sender<i64>");
+    // State impl: method is gated so unused-code warnings don't fire in prod
+    assert_contains(&rust, "fn get_count(&mut self) -> i64");
+    // Handle impl: blocking test accessor
+    assert_contains(&rust, "pub fn get_count(&self) -> i64");
+    assert_contains(&rust, "_rx.recv().expect(\"actor thread died\")");
+    // Dispatch arm sends result back through reply channel
+    assert_contains(&rust, "_TestGetCount { _reply }");
+    assert_contains(&rust, "_reply.send(actor.get_count())");
+    // Regular behavior is still emitted normally (no #[cfg(test)] on its variant)
+    assert_contains(&rust, "Increment { n: i64 },");
+    assert_contains(&rust, "pub fn increment(&self, n: i64)");
+}
+
+/// `pub test fn` with parameters passes them through the mailbox variant (#1506).
+#[test]
+fn actor_pub_test_fn_with_params_emits_fields_in_variant() {
+    let src = r#"
+actor Store {
+    data: Map[String, Int],
+    pub test fn lookup(key: String) -> Int { 0 }
+}
+"#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "_TestLookup {");
+    assert_contains(&rust, "key: String");
+    assert_contains(&rust, "std::sync::mpsc::Sender<i64>");
+    assert_contains(&rust, "_TestLookup { key, _reply }");
+    assert_contains(&rust, "actor.lookup(key)");
+}
+
 // ── #703: LLVM actor IR structural tests ─────────────────────────────────────
 
 /// Actor declaration emits a per-behavior function and a dispatch function in LLVM IR.
