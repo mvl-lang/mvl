@@ -17,8 +17,8 @@ use super::emitter::RustEmitter;
 use crate::mvl::backends::rust::emit_types::{emit_label, emit_ref_expr_for_assert, emit_ty};
 use crate::mvl::backends::rust::last_use::compute_last_uses;
 use crate::mvl::ir::{
-    Capability, Constraint, GenericParam, Literal, TirBlock, TirExprKind, TirFn, TirParam,
-    TirStmt, Totality, Ty,
+    Capability, Constraint, GenericParam, Literal, TirBlock, TirExprKind, TirFn, TirParam, TirStmt,
+    Totality, Ty,
 };
 use crate::mvl::passes::coverage::BranchKind;
 
@@ -313,26 +313,20 @@ impl RustEmitter {
                                 self.indent();
                                 self.push("let _result = ");
                                 self.emit_expr_tail_with_return_type_tir(
-                                    expr,
-                                    &fd.ret_ty,
-                                    &fd.params,
+                                    expr, &fd.ret_ty, &fd.params,
                                 );
                                 self.push(";");
                                 self.nl();
                                 for ens_pred in &fd.ensures {
                                     let pred_str = emit_ref_expr_for_assert(ens_pred, "_result");
                                     let msg = pred_str.replace('{', "{{").replace('}', "}}");
-                                    self.line(&format!(
-                                        "assert!({pred_str}, \"ensures: {msg}\");"
-                                    ));
+                                    self.line(&format!("assert!({pred_str}, \"ensures: {msg}\");"));
                                 }
                                 self.line("_result");
                             } else {
                                 self.indent();
                                 self.emit_expr_tail_with_return_type_tir(
-                                    expr,
-                                    &fd.ret_ty,
-                                    &fd.params,
+                                    expr, &fd.ret_ty, &fd.params,
                                 );
                                 self.nl();
                             }
