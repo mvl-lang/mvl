@@ -47,3 +47,4 @@
 | [0043](0043-no-broken-crypto-in-stdlib.md) | No broken crypto in stdlib — algorithm allow-list and deprecation path | Accepted |
 | [0044](0044-self-hosting-tir-first-strategy.md) | Self-hosting strategy — TIR-first phase plan and `compiler/tir.mvl` unified types | Accepted |
 | [0045](0045-self-hosting-phase3-parser-type-resolution.md) | Self-hosting Phase 3 — parser recursive type resolution (`List[T]` indirection, struct literal disambiguation) | Accepted |
+| [0046](0046-transitive-dependency-resolution.md) | Transitive dependency resolution — BFS over package manifests in `mvl update` | Accepted |
