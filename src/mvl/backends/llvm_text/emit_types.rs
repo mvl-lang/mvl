@@ -567,8 +567,8 @@ impl TextEmitter {
         // underlying struct identity for field-access purposes.
         let mut mvl_ty = self.mvl_type_of_expr(expr);
         while let TypeExpr::Ref { inner, .. }
-            | TypeExpr::Labeled { inner, .. }
-            | TypeExpr::Refined { inner, .. } = mvl_ty
+        | TypeExpr::Labeled { inner, .. }
+        | TypeExpr::Refined { inner, .. } = mvl_ty
         {
             mvl_ty = *inner;
         }
@@ -601,8 +601,8 @@ impl TextEmitter {
                 // Peel `val`/`ref`/`Labeled`/`Refined` wrappers to reach the base name.
                 let mut cur: &TypeExpr = mvl_ty;
                 while let TypeExpr::Ref { inner, .. }
-                    | TypeExpr::Labeled { inner, .. }
-                    | TypeExpr::Refined { inner, .. } = cur
+                | TypeExpr::Labeled { inner, .. }
+                | TypeExpr::Refined { inner, .. } = cur
                 {
                     cur = inner.as_ref();
                 }
