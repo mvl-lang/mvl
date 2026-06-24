@@ -399,8 +399,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
         all_branches.extend(branches);
         // Package test files (.mvl/pkg/) must not appear in this project's coverage
         // report — their source is tracked by the packages themselves (#1513).
-        let under_dot_mvl =
-            test_file.components().any(|c| c.as_os_str() == ".mvl");
+        let under_dot_mvl = test_file.components().any(|c| c.as_os_str() == ".mvl");
         if !under_dot_mvl {
             file_stems.push(module_name.clone());
         }
