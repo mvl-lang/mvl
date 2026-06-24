@@ -1,10 +1,17 @@
 # Changelog
 
+## [0.220.2] - 2026-06-24
+
+### Fixed
+
+- **Emit `ActorNameConflict` when user actor shadows prelude** (#1497) — Silent shadowing of prelude actors could allow user programs to replace security-enforcing actors (e.g., IFC boundary supervisors) with no feedback. Now emits `CheckError::ActorNameConflict` at check time instead of silently overwriting the prelude definition. Includes timing-based guard (`prelude_actor_names` populated after prelude collection but before user-program checking) to prevent false positives during pre-pass and prelude re-registration.
+
 ## [0.220.1] - 2026-06-24
 
 ### Fixed
 
 - **Rust backend: suppress `improper_ctypes` lint on generated extern blocks** (#1509) — MVL extern blocks use `String` in FFI signatures because the MVL runtime ships its own ABI (not C ABI). The `improper_ctypes` lint fired on every generated extern block, producing dozens of identical warnings. Now emit `#[allow(improper_ctypes)]` immediately before each extern block to suppress the noise while preserving real signal.
+
 
 ## [0.220.0] - 2026-06-24
 
