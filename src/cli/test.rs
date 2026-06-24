@@ -421,6 +421,11 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
     let covered_stems: std::collections::HashSet<String> = file_stems.iter().cloned().collect();
     let source_files = loader::mvl_files(path, false); // non-test files
     for src_file in &source_files {
+        // Skip package files — they belong to their own packages (#1513).
+        let under_dot_mvl = src_file.components().any(|c| c.as_os_str() == ".mvl");
+        if under_dot_mvl {
+            continue;
+        }
         let file_str = src_file.display().to_string();
         let s = loader::stem(&file_str);
         let module_name = s.replace('-', "_");
@@ -557,20 +562,37 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
             eprintln!("Cannot copy bridge.rs: {e}");
             process::exit(1);
         });
-        let mut injected = String::with_capacity(combined_rs.len() + 16);
+        // In `mvl build`, prelude types (e.g. `Terminal` from pkg-tui) are emitted
+        // flat at the crate root, so `bridge.rs` can do `use crate::Terminal;`.
+        // In `mvl test`, each file becomes a `#[cfg(test)] mod` submodule, so
+        // prelude types land at `crate::{module}::Terminal` instead.  Re-exporting
+        // from the first test module restores the flat visibility bridge.rs expects.
+        let bridge_reexport = modules.first().map(|(mod_name, _, _)| {
+            format!(
+                "#[cfg(test)]\n#[allow(unused_imports)]\npub use self::{mod_name}::*;\n"
+            )
+        });
+        let mut injected = String::with_capacity(combined_rs.len() + 64);
         let mut done = false;
         for line in combined_rs.lines() {
             injected.push_str(line);
             injected.push('\n');
             if !done && line.trim_start().starts_with("#![allow(") {
                 injected.push_str("\nmod bridge;\n");
+                if let Some(ref reexport) = bridge_reexport {
+                    injected.push_str(reexport);
+                }
                 done = true;
             }
         }
         if !done {
             // No inner-attribute line found — fall back to prepending after the
             // header comments by simply appending at the start.
-            injected = format!("mod bridge;\n{combined_rs}");
+            let prefix = match bridge_reexport {
+                Some(ref r) => format!("mod bridge;\n{r}"),
+                None => "mod bridge;\n".to_string(),
+            };
+            injected = format!("{prefix}{combined_rs}");
         }
         combined_rs = injected;
     }
