@@ -8085,6 +8085,39 @@ fn actor_pub_test_fn_non_unit_return_accepted() {
     );
 }
 
+/// GIVEN: user-program actor with the same name as a prelude actor (#1497)
+/// WHEN: type-checked with that prelude
+/// THEN: ActorNameConflict error emitted
+#[test]
+fn actor_name_shadows_prelude_rejected() {
+    let prelude_src = r#"
+        actor Logger {
+            pub fn log(val msg: String) { }
+        }
+    "#;
+    let (mut pp, _) = Parser::new(prelude_src);
+    let prelude = pp.parse_program();
+
+    let src = r#"
+        actor Logger {
+            count: Int
+            pub fn tick() { }
+        }
+    "#;
+    let (mut p, _) = Parser::new(src);
+    let prog = p.parse_program();
+
+    let result = check_with_prelude(&[prelude], &prog);
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| matches!(e, CheckError::ActorNameConflict { name, .. } if name == "Logger")),
+        "expected ActorNameConflict for 'Logger', got: {:?}",
+        result.errors
+    );
+}
+
 /// GIVEN: actor with valid pub fn (Unit return, no duplicates)
 /// WHEN: type-checked
 /// THEN: no errors
