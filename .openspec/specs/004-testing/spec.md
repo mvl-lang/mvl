@@ -207,8 +207,8 @@ test fn histogram_record_ms_sends() -> Unit ! Spawn + Send {
 
 Actor behaviors are fire-and-forget — `pub fn` on an actor returns `Unit`, so
 internal state cannot be read back. Asserting _that_ a counter was incremented
-or a histogram was updated requires `pub test fn`, a future feature that exposes
-synchronous state access on the actor thread for the duration of a test.
+or a histogram was updated requires `pub test fn` (#1506), a future feature that
+exposes synchronous state access on the actor thread for the duration of a test.
 
 **Two-call pattern for covering both match arms:**
 
