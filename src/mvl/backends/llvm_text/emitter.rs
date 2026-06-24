@@ -239,6 +239,12 @@ struct TextEmitter {
     /// True once `%__closure_type = type { ptr, ptr }` has been emitted.
     closure_type_emitted: bool,
 
+    /// Named fn-type aliases: `type Dispatcher = fn(val Request) -> Response`
+    /// maps `"Dispatcher"` → `TypeExpr::Fn { .. }` so call sites can resolve
+    /// indirect calls through aliases (#1497-followup, mirror of PR #1467
+    /// for the Rust backend).
+    fn_aliases: HashMap<String, TypeExpr>,
+
     // ── Actor state (#1149) ───────────────────────────────────────────────
     /// Actor declarations keyed by actor type name (populated in first pass).
     actor_decls: HashMap<String, ActorDecl>,
@@ -358,6 +364,7 @@ impl TextEmitter {
             has_str_false: false,
             lambda_counter: 0,
             closure_type_emitted: false,
+            fn_aliases: HashMap::new(),
             actor_decls: HashMap::new(),
             actor_runtime_declared: false,
             yield_check_declared: false,
@@ -549,7 +556,14 @@ impl TextEmitter {
                     }
                     // Enums already registered in pre-pass above.
                     TypeBody::Enum(_) => {}
-                    TypeBody::Alias(_) => {}
+                    TypeBody::Alias(inner) => {
+                        // Register fn-type aliases so indirect calls through
+                        // an aliased type (e.g. `d: Dispatcher`) can resolve
+                        // to their underlying `Fn` signature (#1467 LLVM port).
+                        if matches!(inner.as_ref(), TypeExpr::Fn { .. }) {
+                            self.fn_aliases.insert(td.name.clone(), (**inner).clone());
+                        }
+                    }
                 },
                 Decl::Actor(ad) => {
                     let state_name = format!("{}State", ad.name);

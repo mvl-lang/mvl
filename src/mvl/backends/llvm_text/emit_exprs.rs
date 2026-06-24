@@ -265,6 +265,12 @@ impl TextEmitter {
                 if let Some(val) = self.locals.get(name).cloned() {
                     return Ok(Some(val));
                 }
+                // Bare reference to a top-level function (e.g. `my_handler`
+                // passed as an argument) — emit as the function symbol so it
+                // can be used as a function pointer (#1467 LLVM port).
+                if self.fn_ret_types.contains_key(name) {
+                    return Ok(Some(format!("@{name}")));
+                }
                 Ok(None)
             }
 
@@ -877,6 +883,46 @@ impl TextEmitter {
         // ── Generic function monomorphization ───────────────────────────
         if self.generic_fns.contains_key(name) {
             return self.emit_monomorphized_call(name, args);
+        }
+
+        // ── Indirect call through a fn-type alias ──────────────────────
+        // If `name` is a local binding whose type is a named fn-alias
+        // (e.g. `d: Dispatcher` where `Dispatcher = fn(val Request) -> Response`),
+        // emit a direct indirect call through the pointer — no closure env
+        // (#1467 LLVM port). Distinguish from in-scope closures: closures
+        // have a direct `TypeExpr::Fn` annotation; aliases have a `Base`
+        // annotation that resolves via `fn_aliases` to `Fn`.
+        let local_ty = self.local_mvl_types.get(name).cloned();
+        let is_alias = matches!(&local_ty, Some(t) if !matches!(t, TypeExpr::Fn { .. }))
+            && local_ty
+                .as_ref()
+                .and_then(|t| self.resolve_fn_alias(t))
+                .is_some();
+        if is_alias {
+            if let Some(fn_ptr) = self.locals.get(name).cloned() {
+                let alias_fn_ty = local_ty.as_ref().and_then(|t| self.resolve_fn_alias(t));
+                if let Some(TypeExpr::Fn { ret, .. }) = alias_fn_ty {
+                    let mut call_args: Vec<String> = Vec::new();
+                    for arg in args {
+                        let ty = self.type_of_expr(arg);
+                        if let Some(v) = self.emit_expr(arg)? {
+                            call_args.push(format!("{ty} {v}"));
+                        }
+                    }
+                    let args_str = call_args.join(", ");
+                    let llvm_ret = self.llvm_ty_ctx(&ret);
+                    let is_void = Self::is_void(&ret);
+                    if is_void {
+                        self.push_instr(&format!("call void {fn_ptr}({args_str})"));
+                        return Ok(None);
+                    } else {
+                        let reg = self.next_reg();
+                        self.push_instr(&format!("{reg} = call {llvm_ret} {fn_ptr}({args_str})"));
+                        self.reg_types.insert(reg.clone(), llvm_ret);
+                        return Ok(Some(reg));
+                    }
+                }
+            }
         }
 
         // ── Local closure call (closure-over-closure capture) ─────────
