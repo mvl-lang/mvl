@@ -80,12 +80,15 @@ impl RustEmitter {
                     self.push("move ");
                 }
                 self.emit_expr(init);
-                // When the init is a field access on a borrowed parameter (e.g.
-                // `acc.items` where `acc: &ParseAcc`), the field is behind a reference
-                // and cannot be moved — `.clone()` produces an owned copy.
+                // When the init is a field access on a borrowed receiver — either a
+                // capability parameter (`acc.items` where `acc: &ParseAcc`) or the
+                // implicit `self` in an actor method (`self.workers` where self is
+                // `&mut ActorState`) — the field is behind a reference and cannot be
+                // moved.  `.clone()` produces an owned copy for mutation + reassign.
                 let needs_clone = if let TirExprKind::FieldAccess { expr: inner, .. } = &init.kind {
                     if let TirExprKind::Var(name) = &inner.kind {
                         self.capability_param_names.contains(name.as_str())
+                            || (name == "self" && !self.actor_self_type.is_empty())
                     } else {
                         false
                     }

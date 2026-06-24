@@ -566,13 +566,11 @@ impl TextEmitter {
         // Peel `val`/`ref`/`Labeled`/`Refined` wrappers — they don't change the
         // underlying struct identity for field-access purposes.
         let mut mvl_ty = self.mvl_type_of_expr(expr);
-        loop {
-            match mvl_ty {
-                TypeExpr::Ref { inner, .. }
-                | TypeExpr::Labeled { inner, .. }
-                | TypeExpr::Refined { inner, .. } => mvl_ty = *inner,
-                _ => break,
-            }
+        while let TypeExpr::Ref { inner, .. }
+        | TypeExpr::Labeled { inner, .. }
+        | TypeExpr::Refined { inner, .. } = mvl_ty
+        {
+            mvl_ty = *inner;
         }
         if let TypeExpr::Base { name: tn, .. } = &mvl_ty {
             if self.struct_fields.contains_key(tn) {
@@ -602,13 +600,11 @@ impl TextEmitter {
                 let mvl_ty = self.local_mvl_types.get(name.as_str())?;
                 // Peel `val`/`ref`/`Labeled`/`Refined` wrappers to reach the base name.
                 let mut cur: &TypeExpr = mvl_ty;
-                loop {
-                    match cur {
-                        TypeExpr::Ref { inner, .. }
-                        | TypeExpr::Labeled { inner, .. }
-                        | TypeExpr::Refined { inner, .. } => cur = inner.as_ref(),
-                        _ => break,
-                    }
+                while let TypeExpr::Ref { inner, .. }
+                | TypeExpr::Labeled { inner, .. }
+                | TypeExpr::Refined { inner, .. } = cur
+                {
+                    cur = inner.as_ref();
                 }
                 match cur {
                     TypeExpr::Base { name: tn, .. } => Some(tn.as_str()),
