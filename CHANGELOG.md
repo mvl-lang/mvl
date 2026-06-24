@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.218.0] - 2026-06-24
+
+### Added
+
+- **Effects annotations on `test fn` declarations** (#1500) — `test fn` now accepts `! Effect` syntax (e.g., `test fn foo() -> Unit ! Spawn + Send`). Effect annotations are parsed, type-checked, and emitted in doc comments; the test runner must satisfy them. Actors can be spawned and have behaviors called from test fn in the same process. Enables unit testing of actor-backed libraries like `pkg-metrics`.
+
+### Fixed
+
+- **`link`/`unlink` conflict with Rust's built-in `link` attribute** — calls like `link(a, b)` were emitted as bare function names, causing `E0423` in generated Rust code (Rust treats `link` as a reserved keyword in some contexts). Now emitted as `mvl_link`/`mvl_unlink` with explicit `as u64` casts to match the runtime's u64 signature (MVL passes i64).
+- **`ExitReason` type shadowing in actor mailbox enums** — when an actor imported `std/actors.mvl`, the compiled `ExitReason` enum shadowed the runtime's `ExitReason = i64` alias, causing `E0308` mismatched-types errors in `register_actor_controls` closures. Now the mailbox uses the fully-qualified `mvl_runtime::actors::ExitReason` to disambiguate.
+- **Supervisor's `new_order` missing `ref` annotation** — four instances of `let new_order: List[String] = []` in `std/actors.mvl` were marked immutable in the MVL source, generating non-`mut` Rust variables. Subsequent `.push()` calls failed to compile. Fixed by adding `ref` annotation: `let new_order: ref List[String] = []`.
+
 ## [0.217.2] - 2026-06-23
 
 ### Fixed

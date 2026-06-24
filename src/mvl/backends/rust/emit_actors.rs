@@ -162,10 +162,16 @@ impl RustEmitter {
                 }
             }
             // System variants for link/monitor infrastructure (Phase 9, #1177).
+            // Use the fully-qualified runtime type for _reason to avoid a shadowing
+            // clash: when std/actors.mvl is in scope its compiled `ExitReason` enum
+            // would shadow the runtime's `ExitReason` (= i64 alias), causing a type
+            // mismatch in the register_actor_controls closures.
             self.line("_Shutdown,");
-            self.line("_ExitSignal { _from_id: ActorId, _reason: ExitReason },");
             self.line(
-                "_DownSignal { _from_id: ActorId, _reason: ExitReason, _monitor_id: MonitorId },",
+                "_ExitSignal { _from_id: ActorId, _reason: mvl_runtime::actors::ExitReason },",
+            );
+            self.line(
+                "_DownSignal { _from_id: ActorId, _reason: mvl_runtime::actors::ExitReason, _monitor_id: MonitorId },",
             );
             self.pop_indent();
             self.line("}");
@@ -315,7 +321,7 @@ impl RustEmitter {
                 m.params.len()
             );
             self.line(&format!(
-                "{msg_name}::_ExitSignal {{ _from_id, _reason }} => actor.on_exit(_from_id as i64, _reason as i64),"
+                "{msg_name}::_ExitSignal {{ _from_id, _reason }} => actor.on_exit(_from_id as i64, _reason),"
             ));
         } else {
             self.line(&format!(
@@ -335,7 +341,7 @@ impl RustEmitter {
                 m.params.len()
             );
             self.line(&format!(
-                "{msg_name}::_DownSignal {{ _from_id, _reason, _monitor_id }} => actor.on_down(_from_id as i64, _reason as i64, _monitor_id as i64),"
+                "{msg_name}::_DownSignal {{ _from_id, _reason, _monitor_id }} => actor.on_down(_from_id as i64, _reason, _monitor_id as i64),"
             ));
         } else {
             self.line(&format!(
