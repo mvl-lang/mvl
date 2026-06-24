@@ -1,6 +1,6 @@
 # ADR-0046: Transitive Dependency Resolution in `mvl update`
 
-**Status:** Accepted
+**Status:** Superseded by ADR-0047
 **Date:** 2026-06-24
 **Issues:** #1510, #1511
 **Related:** ADR-0012 (extended package model), ADR-0039 (package distribution)

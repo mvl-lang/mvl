@@ -1,6 +1,6 @@
 # ADR-0012: Extended Package Model — Extern Inside, Verified API Outside
 
-**Status:** Accepted
+**Status:** Superseded by ADR-0047
 **Date:** 2026-04-15
 **Context:** MVL needs a package ecosystem for third-party libraries. Every extended package wraps native Rust code (via `extern "rust"`) behind a fully-verified MVL API. This ADR answers the six design questions from issue #57 and formalises the package model that ADR-0007 and ADR-0009 already reference as `use pkg.*`.
 

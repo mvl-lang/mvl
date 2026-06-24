@@ -13,7 +13,7 @@
 | [0009](0009-toolchain-layout.md) | Toolchain layout — XDG, versioning, linking, caches | Accepted |
 | [0010](0010-corpus-test-structure.md) | Corpus test structure — progressive complexity ramp | Accepted |
 | ~~0011~~ | ~~Generational toolchain~~ | Merged into 0009 |
-| [0012](0012-extended-package-model.md) | Extended package model — extern inside, verified API outside | Accepted |
+| [0012](0012-extended-package-model.md) | Extended package model — extern inside, verified API outside | Superseded by ADR-0047 |
 | [0013](0013-transpiler-mediated-codegen.md) | Transpiler-mediated type-directed code generation — no macros, no reflection | Accepted |
 | [0014](0014-mutation-testing-execution-model.md) | Mutation testing execution model — single compile, parallel runs | Accepted |
 | [0015](0015-mcdc-coverage-execution-model.md) | MC/DC coverage execution model — eager evaluation, Unique-Cause, u32 encoding | Accepted |
@@ -40,11 +40,12 @@
 | [0036](0036-ifc-simplification-drop-transparent-sink.md) | IFC simplification — drop transparent/sink labels, unify around Tainted/Secret | Accepted |
 | [0037](0037-main-as-actor.md) | Main-as-actor — drop `concurrently` keyword, implicit actor lifecycle | Accepted |
 | [0038](0038-typed-ir.md) | Typed Intermediate Representation (TIR) — post-checker typed expression layer | Accepted |
-| [0039](0039-package-distribution-sbom.md) | Repository-less package distribution and supply chain security (SBOM, Phase A) | Accepted |
+| [0039](0039-package-distribution-sbom.md) | Repository-less package distribution and supply chain security (SBOM, Phase A) | Superseded by ADR-0047 |
 | [0040](0040-remove-inkwell.md) | Remove inkwell / llvm-sys dependency | Accepted |
 | [0041](0041-stdlib-method-dispatch.md) | Stdlib method dispatch — eliminate emitter special-casing | Accepted |
 | [0042](0042-pkg-llvm-backend-convention.md) | Per-package LLVM backend convention — `llvm.rs` + `extern "c"` ABI | Accepted |
 | [0043](0043-no-broken-crypto-in-stdlib.md) | No broken crypto in stdlib — algorithm allow-list and deprecation path | Accepted |
 | [0044](0044-self-hosting-tir-first-strategy.md) | Self-hosting strategy — TIR-first phase plan and `compiler/tir.mvl` unified types | Accepted |
 | [0045](0045-self-hosting-phase3-parser-type-resolution.md) | Self-hosting Phase 3 — parser recursive type resolution (`List[T]` indirection, struct literal disambiguation) | Accepted |
-| [0046](0046-transitive-dependency-resolution.md) | Transitive dependency resolution — BFS over package manifests in `mvl update` | Accepted |
+| [0046](0046-transitive-dependency-resolution.md) | Transitive dependency resolution — BFS over package manifests in `mvl update` | Superseded by ADR-0047 |
+| [0047](0047-package-management-system.md) | Package management system — format, identity, lock file, transitive resolution, supply chain | Accepted |
