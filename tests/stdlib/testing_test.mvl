@@ -1,0 +1,81 @@
+// tests/stdlib/testing_test.mvl — std.testing assertion helpers
+//
+// Verifies runtime behaviour of the five helpers from std/testing.mvl.
+// Run with:  mvl test tests/stdlib/
+
+use std.testing.{assert_contains, assert_len, assert_empty, assert_some, assert_none}
+
+// ── assert_contains ───────────────────────────────────────────────────────────
+
+test fn assert_contains_substring_present() -> Unit {
+    assert_contains("hello world", "world")
+}
+
+test fn assert_contains_full_string() -> Unit {
+    assert_contains("abc", "abc")
+}
+
+test fn assert_contains_single_char() -> Unit {
+    assert_contains("testing", "t")
+}
+
+// ── assert_len ────────────────────────────────────────────────────────────────
+
+test fn assert_len_empty_list() -> Unit {
+    let xs: List[Int] = [];
+    assert_len(xs, 0)
+}
+
+test fn assert_len_single_element() -> Unit {
+    assert_len([42], 1)
+}
+
+test fn assert_len_multiple_elements() -> Unit {
+    assert_len([1, 2, 3], 3)
+}
+
+// ── assert_empty ──────────────────────────────────────────────────────────────
+
+test fn assert_empty_int_list() -> Unit {
+    let xs: List[Int] = [];
+    assert_empty(xs)
+}
+
+test fn assert_empty_string_list() -> Unit {
+    let xs: List[String] = [];
+    assert_empty(xs)
+}
+
+// ── assert_some ───────────────────────────────────────────────────────────────
+
+test fn assert_some_int() -> Unit {
+    let opt: Option[Int] = Some(42);
+    assert_some(opt)
+}
+
+test fn assert_some_string() -> Unit {
+    let opt: Option[String] = Some("hi");
+    assert_some(opt)
+}
+
+test fn assert_some_from_list_get() -> Unit {
+    let xs: List[Int] = [1, 2, 3];
+    assert_some(xs.get(0))
+}
+
+// ── assert_none ───────────────────────────────────────────────────────────────
+
+test fn assert_none_explicit() -> Unit {
+    let opt: Option[Int] = None;
+    assert_none(opt)
+}
+
+test fn assert_none_from_empty_list_get() -> Unit {
+    let xs: List[Int] = [];
+    assert_none(xs.get(0))
+}
+
+test fn assert_none_out_of_bounds() -> Unit {
+    let xs: List[String] = ["a", "b"];
+    assert_none(xs.get(5))
+}

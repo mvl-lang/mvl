@@ -1,0 +1,42 @@
+//! std.testing — assertion helpers for unit tests.
+//!
+//! Supplements the three core builtins (`assert`, `assert_eq`, `assert_ne`)
+//! with higher-level helpers for common test patterns: string membership,
+//! list length, list emptiness, and Option variant checks.
+//!
+//! Import:
+//!   use std.testing.{assert_contains, assert_len, assert_empty,
+//!                    assert_some, assert_none}
+//!
+//! Effects: none (all functions are pure; panics on assertion failure).
+
+// ── String assertions ─────────────────────────────────────────────────────────
+
+/// Assert that `haystack` contains `needle`; panic if not.
+pub total fn assert_contains(haystack: String, needle: String) -> Unit {
+    assert(haystack.contains(needle))
+}
+
+// ── List assertions ───────────────────────────────────────────────────────────
+
+/// Assert that `xs` has exactly `expected` elements; panic if not.
+pub total fn assert_len[T](xs: List[T], expected: Int) -> Unit {
+    assert_eq(xs.len(), expected)
+}
+
+/// Assert that `xs` is empty; panic if not.
+pub total fn assert_empty[T](xs: List[T]) -> Unit {
+    assert(xs.is_empty())
+}
+
+// ── Option assertions ─────────────────────────────────────────────────────────
+
+/// Assert that `opt` is `Some(_)`; panic if `None`.
+pub total fn assert_some[T](opt: Option[T]) -> Unit {
+    assert(opt.is_some())
+}
+
+/// Assert that `opt` is `None`; panic if `Some(_)`.
+pub total fn assert_none[T](opt: Option[T]) -> Unit {
+    assert(opt.is_none())
+}

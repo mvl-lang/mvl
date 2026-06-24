@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.219.0] - 2026-06-24
+
+### Added
+
+- **`std/testing.mvl` — test assertion helpers** — Five pure MVL functions supplement the three core builtins (`assert`, `assert_eq`, `assert_ne`) with common test patterns: `assert_contains` (String membership), `assert_len[T]` (List length), `assert_empty[T]` (List emptiness), `assert_some[T]` (Option is Some), `assert_none[T]` (Option is None). All are `total fn`, require explicit import, and delegate to existing primitives.
+
 ## [0.218.1] - 2026-06-24
 
 ### Fixed
