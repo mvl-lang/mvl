@@ -2365,11 +2365,7 @@ pub total fn new_counter() -> Counter ! Spawn {
     );
     // All decision branches inside actor methods must be attributed to the
     // method, not to the last prelude function emitted before the actor.
-    let actor_branches: Vec<_> = r
-        .branches
-        .iter()
-        .filter(|b| b.kind.is_decision())
-        .collect();
+    let actor_branches: Vec<_> = r.branches.iter().filter(|b| b.kind.is_decision()).collect();
     assert!(
         !actor_branches.is_empty(),
         "expected decision branches from actor match"
