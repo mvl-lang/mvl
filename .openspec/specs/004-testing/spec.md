@@ -1,8 +1,8 @@
 ---
 domain: language
-version: 0.2.0
+version: 0.3.0
 status: draft
-date: 2026-04-15
+date: 2026-06-24
 ---
 
 # 004 — Testing
@@ -25,11 +25,13 @@ test fn check_add() -> Unit {
 }
 ```
 
-**Syntax:** `test fn <name>(<params>) -> <return_type> { <body> }`
+**Syntax:** `test fn <name>(<params>) -> <return_type> [! <effects>] { <body> }`
 
 - `test` is a keyword prefix (like `total` / `partial`).
 - Test functions MUST NOT be `pub` — they are development artefacts.
 - Test functions MAY be combined with `total` / `partial`: `test total fn …`.
+- Test functions MAY declare effects: `test fn name() -> Unit ! Spawn + Send { … }`.
+  This is required to test actor-backed code (see Requirement 6).
 - Regeneration (Article 4): internal tests are regenerated with the module.
   External tests (`_test.mvl` files) are permanent evidence (E layer) and
   survive regeneration.
@@ -170,3 +172,85 @@ test fn scenario_adding_two_numbers() -> Unit {
 - THEN a `BDD scenarios:` block is printed listing each scenario as `Scenario: <name> ... ok`
 
 **Tests:** `tests/compile_and_run.rs::bdd_scenarios_run_and_pass`, `tests/compile_and_run.rs::bdd_report_emits_gherkin_scenarios`
+
+---
+
+### Requirement 6: Effect Annotations on Test Functions [MUST]
+
+`test fn` declarations MUST accept effect annotations so that effectful code —
+in particular actor-backed libraries — can be unit-tested.
+
+```mvl
+// Spawn an actor
+test fn new_metrics_spawns() -> Unit ! Spawn {
+    let _m: Metrics = new_metrics();
+    assert(true)
+}
+
+// Send behaviors (fire-and-forget)
+test fn histogram_record_ms_sends() -> Unit ! Spawn + Send {
+    let m: Metrics = new_metrics();
+    histogram_record_ms(m, "latency_ms", 42, Map::new());
+    assert(true)
+}
+```
+
+**What is testable with `! Spawn + Send`:**
+
+| Operation | Effect needed | What you can assert |
+|-----------|--------------|---------------------|
+| Spawn actor | `! Spawn` | No panic; handle is valid |
+| Send a behavior | `! Send` | No panic; message enqueued |
+| Both `None` and `Some` arms of actor-internal match | `! Spawn + Send` | Send to new key (None arm), then same key again (Some arm) |
+
+**What requires `pub test fn` (#1500):**
+
+Actor behaviors are fire-and-forget — `pub fn` on an actor returns `Unit`, so
+internal state cannot be read back. Asserting _that_ a counter was incremented
+or a histogram was updated requires `pub test fn`, a future feature that exposes
+synchronous state access on the actor thread for the duration of a test.
+
+**Two-call pattern for covering both match arms:**
+
+When an actor initialises state on first use (a `match self.map.get(key)` with
+`None =>` create and `Some(h) =>` update), covering both branches requires two
+sends to the same key:
+
+```mvl
+test fn covers_both_arms() -> Unit ! Spawn + Send {
+    let m: Metrics = new_metrics();
+    histogram_record_ms(m, "req_ms", 10, Map::new());  // None arm: fresh key
+    histogram_record_ms(m, "req_ms", 20, Map::new());  // Some arm: existing key
+    assert(true)
+}
+```
+
+**Implementation:** `src/mvl/parser/ast.rs` (FnDecl.effects), `src/mvl/checker/effects.rs`,
+`src/mvl/backends/rust/emit_functions.rs`
+
+#### Scenario: test fn with ! Spawn compiles and runs
+
+- GIVEN `test fn spawn_test() -> Unit ! Spawn { let _: Counter = actor Counter { count: 0 }; assert(true) }`
+- WHEN compiled and run via `mvl test`
+- THEN the test passes
+
+**Tests:** `tests/corpus/12_actors/actor_test_fn.mvl`
+
+#### Scenario: test fn without effect annotation cannot call Spawn functions
+
+- GIVEN a `test fn` without `! Spawn` that calls a function returning `T ! Spawn`
+- WHEN type-checked
+- THEN a missing-effect error is reported
+
+---
+
+### Requirement 7: Testing Standard Library [SHOULD]
+
+A `std/testing.mvl` module SHOULD provide helpers beyond the three core
+assertions (`assert`, `assert_eq`, `assert_ne`) for common test patterns.
+Tracked in #1505.
+
+Until `std/testing.mvl` exists, tests rely on `assert_eq` / `assert` from
+`std/core.mvl` (always in scope) and inline helpers.
+
+**Implementation:** `std/testing.mvl` (planned)
