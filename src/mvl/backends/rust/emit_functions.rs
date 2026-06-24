@@ -70,6 +70,17 @@ impl RustEmitter {
         let mutated_params = collect_mutated_map_params_tir(&fd.body, &self.capability_params_map);
 
         if fd.is_test {
+            if !fd.effects.is_empty() {
+                self.line(&format!(
+                    "/// # Effects: {}",
+                    fd.effects
+                        .iter()
+                        .map(|e| e.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+                self.line("/// MVL effect annotations — informational in Phase 1.");
+            }
             self.line("#[test]");
             let generics = emit_generics_with_tir_params(
                 &fd.type_params,

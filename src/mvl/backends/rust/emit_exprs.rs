@@ -138,6 +138,21 @@ impl RustEmitter {
                     self.push("str_from_bytes(");
                     self.emit_args(args);
                     self.push(")");
+                } else if matches!(name.as_str(), "link" | "unlink") {
+                    // `link`/`unlink` conflict with Rust's built-in `link` attribute.
+                    // The runtime exports them as `mvl_link`/`mvl_unlink` (u64 args);
+                    // MVL passes `Int` (i64), so cast each argument explicitly.
+                    let runtime_fn = if name.as_str() == "link" { "mvl_link" } else { "mvl_unlink" };
+                    self.push(&format!("{runtime_fn}("));
+                    for (i, arg) in args.iter().enumerate() {
+                        if i > 0 {
+                            self.push(", ");
+                        }
+                        self.push("(");
+                        self.emit_expr(arg);
+                        self.push(") as u64");
+                    }
+                    self.push(")");
                 } else {
                     let is_extern = self.has_extern_fn(name.as_str());
                     if is_extern {

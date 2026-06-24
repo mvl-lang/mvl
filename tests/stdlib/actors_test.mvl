@@ -1,8 +1,17 @@
 // tests/stdlib/actors_test.mvl — actor system primitives
 //
-// Verifies types and enums from std/actors.mvl.
-// Note: actual actor runtime tests require Phase 9 (#1177).
-// These tests verify the type definitions compile and match correctly.
+// Verifies types and enums from std/actors.mvl, plus actor spawn/send
+// behaviour from test fn declarations with effect annotations (#1500).
+//
+// What is testable now:
+//   - Actor type definitions (ExitReason, ExitSignal, DownSignal, RestartStrategy)
+//   - Spawning actors from test fn ! Spawn
+//   - Calling pub fn behaviors from test fn ! Spawn + Send
+//
+// What requires follow-up (#1500 — pub test fn):
+//   - Asserting on actor state after behaviors execute
+//     (actors expose a sender-only handle; state is private to the actor thread)
+//
 // Run with:  mvl test tests/stdlib/
 
 use std.actors.{ExitReason, ExitSignal, DownSignal, RestartStrategy}
@@ -134,4 +143,34 @@ test fn restart_strategy_exhaustive() -> Unit {
 
 // ── Supervisor ──────────────────────────────────────────────────────────────
 // Supervisor is an actor (not a struct), so it cannot be constructed with a
-// struct literal.  Actual supervisor tests require Phase 9 (#1177).
+// struct literal.  Supervisor lifecycle tests require Phase 9 (#1177).
+
+// ── Actor spawn and send from test fn ───────────────────────────────────────
+// test fn accepts ! Spawn and ! Send effect annotations (#1500).
+// Behavior calls are fire-and-forget; state assertion requires pub test fn.
+
+actor TestCounter {
+    count: Int
+    pub fn increment(val n: Int) { }
+    pub fn reset() { }
+}
+
+test fn actor_spawn_from_test_fn() -> Unit ! Spawn {
+    let _c: TestCounter = actor TestCounter { count: 0 };
+    assert(true)
+}
+
+test fn actor_send_behavior_from_test_fn() -> Unit ! Spawn + Send {
+    let c: TestCounter = actor TestCounter { count: 0 };
+    c.increment(1);
+    c.increment(2);
+    c.reset();
+    assert(true)
+}
+
+test fn actor_clone_handle() -> Unit ! Spawn + Send {
+    let c: TestCounter = actor TestCounter { count: 0 };
+    let c2: TestCounter = c;
+    c2.increment(42);
+    assert(true)
+}

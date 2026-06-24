@@ -162,7 +162,7 @@ pub actor Supervisor traps_exit {
             i = i + 1;
         }
         // Remove from spawn order tracking.
-        let new_order: List[String] = [];
+        let new_order: ref List[String] = [];
         let j: ref Int = 0;
         while j < self.order.len() decreases self.order.len() - j {
             let entry: String = self.order.get(j).unwrap_or("");
@@ -188,7 +188,7 @@ pub actor Supervisor traps_exit {
                 let _: Option[Int] = self.counts.remove(name);
                 let _: Option[Int] = self.max_r.remove(name);
                 // Remove from spawn order.
-                let new_order: List[String] = [];
+                let new_order: ref List[String] = [];
                 let oi: ref Int = 0;
                 while oi < self.order.len() decreases self.order.len() - oi {
                     let entry: String = self.order.get(oi).unwrap_or("");
@@ -207,7 +207,7 @@ pub actor Supervisor traps_exit {
                     let _: Option[Int] = self.counts.remove(name);
                     let _: Option[Int] = self.max_r.remove(name);
                     // Remove from spawn order.
-                    let new_order: List[String] = [];
+                    let new_order: ref List[String] = [];
                     let oi: ref Int = 0;
                     while oi < self.order.len() decreases self.order.len() - oi {
                         let entry: String = self.order.get(oi).unwrap_or("");
@@ -228,7 +228,7 @@ pub actor Supervisor traps_exit {
                                     let _: Option[Int] = self.counts.remove(name);
                                     let _: Option[Int] = self.max_r.remove(name);
                                     // Remove from spawn order.
-                                    let new_order: List[String] = [];
+                                    let new_order: ref List[String] = [];
                                     let oi: ref Int = 0;
                                     while oi < self.order.len() decreases self.order.len() - oi {
                                         let entry: String = self.order.get(oi).unwrap_or("");
