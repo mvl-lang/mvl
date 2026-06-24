@@ -209,6 +209,10 @@ impl RustEmitter {
                     m.name
                 ));
                 self.push_indent();
+                // Update current_fn so coverage probes emitted for this method's body
+                // are attributed to the correct function name (#1501).
+                self.current_fn = m.name.clone();
+                self.current_fn_is_test = false;
                 self.last_uses = compute_last_uses(&m.body);
                 let stmts = &m.body.stmts;
                 if stmts.is_empty() {
