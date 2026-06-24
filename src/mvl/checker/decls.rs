@@ -277,9 +277,10 @@ impl TypeChecker {
 
         for method in &ad.methods {
             if method.is_public {
-                // pub fn = behavior — return type must be Unit (fire-and-forget).
+                // pub fn = async behavior — return type must be Unit (fire-and-forget).
+                // pub test fn = synchronous test accessor — any return type is allowed (#1506).
                 let ret_ty = resolve(&method.return_type);
-                if !matches!(ret_ty, crate::mvl::checker::types::Ty::Unit) {
+                if !method.is_test && !matches!(ret_ty, crate::mvl::checker::types::Ty::Unit) {
                     self.emit(CheckError::NonUnitBehaviorReturn {
                         actor: ad.name.clone(),
                         method: method.name.clone(),

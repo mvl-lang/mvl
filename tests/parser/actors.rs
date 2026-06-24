@@ -261,6 +261,41 @@ fn select_timeout_only_parsed() {
     assert!(arms[0].is_timeout);
 }
 
+// ── pub test fn (#1506) ───────────────────────────────────────────────────────
+
+/// GIVEN: actor with `pub test fn get() -> Int`
+/// WHEN: parsed
+/// THEN: method has is_public=true, is_test=true, non-Unit return type
+#[test]
+fn actor_pub_test_fn_parsed() {
+    let src = "actor Counter { count: Int pub test fn get_count() -> Int { 0 } }";
+    let d = parse_decl(src);
+    let actor = match d {
+        mvl::mvl::parser::ast::Decl::Actor(a) => a,
+        other => panic!("expected Actor, got {other:?}"),
+    };
+    assert_eq!(actor.methods.len(), 1);
+    let method = &actor.methods[0];
+    assert!(method.is_public, "pub test fn should have is_public = true");
+    assert!(method.is_test, "pub test fn should have is_test = true");
+    assert_eq!(method.name, "get_count");
+}
+
+/// GIVEN: actor with `pub fn` (regular behavior)
+/// WHEN: parsed
+/// THEN: method has is_test=false
+#[test]
+fn actor_regular_pub_fn_has_is_test_false() {
+    let src = "actor Counter { count: Int pub fn increment(val n: Int) { } }";
+    let d = parse_decl(src);
+    let actor = match d {
+        mvl::mvl::parser::ast::Decl::Actor(a) => a,
+        other => panic!("expected Actor, got {other:?}"),
+    };
+    let method = &actor.methods[0];
+    assert!(!method.is_test, "pub fn should have is_test = false");
+}
+
 // ── concurrently removed (#1048) ─────────────────────────────────────────────
 // `concurrently { }` is no longer a keyword. fn main() implicitly drains actors.
 

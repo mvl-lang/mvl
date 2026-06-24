@@ -32,11 +32,16 @@ impl Parser {
         while !matches!(self.peek_kind(), TokenKind::RBrace | TokenKind::Eof) {
             match self.peek_kind() {
                 // `pub fn` — public async behavior
+                // `pub test fn` — test-only synchronous method (#1506)
                 TokenKind::Pub => {
                     self.advance(); // consume `pub`
+                    let is_test = matches!(self.peek_kind(), TokenKind::Test);
+                    if is_test {
+                        self.advance(); // consume `test`
+                    }
                     let fn_tok = self.expect(&TokenKind::Fn);
                     self.require(fn_tok)?;
-                    match self.parse_actor_method(true) {
+                    match self.parse_actor_method(true, is_test) {
                         Ok(m) => methods.push(m),
                         Err(()) => break,
                     }
@@ -44,7 +49,7 @@ impl Parser {
                 // `fn` — private synchronous helper
                 TokenKind::Fn => {
                     self.advance(); // consume `fn`
-                    match self.parse_actor_method(false) {
+                    match self.parse_actor_method(false, false) {
                         Ok(m) => methods.push(m),
                         Err(()) => break,
                     }
@@ -171,7 +176,7 @@ impl Parser {
     /// `name(params) [-> ReturnType] [! Effects] { body }`.
     ///
     /// Return type defaults to `Unit` when the `->` arrow is absent.
-    fn parse_actor_method(&mut self, is_public: bool) -> Result<ActorMethod, ()> {
+    fn parse_actor_method(&mut self, is_public: bool, is_test: bool) -> Result<ActorMethod, ()> {
         let start = self.peek_span();
 
         let ident_result = self.expect_ident();
@@ -198,6 +203,7 @@ impl Parser {
         let span = self.span_from(start);
         Ok(ActorMethod {
             is_public,
+            is_test,
             name,
             params,
             return_type: Box::new(return_type),

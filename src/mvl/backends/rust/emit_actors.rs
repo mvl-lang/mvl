@@ -122,6 +122,11 @@ impl RustEmitter {
         let start_fn = format!("_start_{}", actor_name_to_snake(name));
 
         let pub_methods: Vec<_> = ad.methods.iter().filter(|m| m.is_public).collect();
+        let test_methods: Vec<_> = ad
+            .methods
+            .iter()
+            .filter(|m| m.is_public && m.is_test)
+            .collect();
 
         // ── 1. State struct ────────────────────────────────────────────────────
         self.line(&format!("struct {state_name} {{"));
@@ -148,7 +153,7 @@ impl RustEmitter {
         if !pub_methods.is_empty() {
             self.line(&format!("enum {msg_name} {{"));
             self.push_indent();
-            for m in &pub_methods {
+            for m in pub_methods.iter().filter(|m| !m.is_test) {
                 let variant = snake_to_pascal(&m.name);
                 if m.params.is_empty() {
                     self.line(&format!("{variant},"));
@@ -160,6 +165,24 @@ impl RustEmitter {
                         .collect();
                     self.line(&format!("{variant} {{ {} }},", field_strs.join(", ")));
                 }
+            }
+            // Test-only variants carry a reply channel so the call can be synchronous (#1506).
+            for m in &test_methods {
+                let variant = format!("_Test{}", snake_to_pascal(&m.name));
+                let ret_str = emit_ty(&m.ret_ty);
+                let field_strs: Vec<String> = m
+                    .params
+                    .iter()
+                    .map(|p| format!("{}: {}", p.name, emit_ty(&p.ty)))
+                    .collect();
+                let reply_field = format!("_reply: std::sync::mpsc::Sender<{ret_str}>");
+                let fields = if field_strs.is_empty() {
+                    reply_field
+                } else {
+                    format!("{}, {reply_field}", field_strs.join(", "))
+                };
+                self.line("#[cfg(test)]");
+                self.line(&format!("{variant} {{ {fields} }},"));
             }
             // System variants for link/monitor infrastructure (Phase 9, #1177).
             // Use the fully-qualified runtime type for _reason to avoid a shadowing
@@ -204,6 +227,10 @@ impl RustEmitter {
                 } else {
                     format!(" -> {ret_str}")
                 };
+                // pub test fn methods are only called from #[cfg(test)] dispatch arms (#1506).
+                if m.is_public && m.is_test {
+                    self.line("#[cfg(test)]");
+                }
                 self.line(&format!(
                     "fn {}(&mut self{params_sig}){ret_part} {{",
                     m.name
@@ -212,7 +239,7 @@ impl RustEmitter {
                 // Update current_fn so coverage probes emitted for this method's body
                 // are attributed to the correct function name (#1501).
                 self.current_fn = m.name.clone();
-                self.current_fn_is_test = false;
+                self.current_fn_is_test = m.is_test;
                 self.last_uses = compute_last_uses(&m.body);
                 let stmts = &m.body.stmts;
                 if stmts.is_empty() {
@@ -268,11 +295,12 @@ impl RustEmitter {
         self.blank();
 
         // 5. Handle impl: actor_id() accessor + one fire-and-forget wrapper per public behavior.
+        //    #[cfg(test)] synchronous methods for pub test fn (#1506).
         self.line(&format!("impl {name} {{"));
         self.push_indent();
         // Pure sync accessor — no mailbox send, no Send effect required.
         self.line("pub fn actor_id(&self) -> i64 { self._id as i64 }");
-        for m in &pub_methods {
+        for m in pub_methods.iter().filter(|m| !m.is_test) {
             let variant = snake_to_pascal(&m.name);
             let param_strs: Vec<String> = m
                 .params
@@ -293,6 +321,41 @@ impl RustEmitter {
                 format!("{msg_name}::{variant} {{ {} }}", fields.join(", "))
             };
             self.line(&format!("self._sender.send({msg_expr});"));
+            self.pop_indent();
+            self.line("}");
+        }
+        // Synchronous test accessors — send a request with a reply channel and block (#1506).
+        for m in &test_methods {
+            let variant = format!("_Test{}", snake_to_pascal(&m.name));
+            let ret_str = emit_ty(&m.ret_ty);
+            let param_strs: Vec<String> = m
+                .params
+                .iter()
+                .map(|p| format!("{}: {}", p.name, emit_ty(&p.ty)))
+                .collect();
+            let params_sig = if param_strs.is_empty() {
+                String::new()
+            } else {
+                format!(", {}", param_strs.join(", "))
+            };
+            self.line("#[cfg(test)]");
+            self.line(&format!(
+                "pub fn {}(&self{params_sig}) -> {ret_str} {{",
+                m.name
+            ));
+            self.push_indent();
+            self.line("let (_tx, _rx) = std::sync::mpsc::channel();");
+            let fields: Vec<String> = m.params.iter().map(|p| p.name.clone()).collect();
+            let msg_expr = if fields.is_empty() {
+                format!("{msg_name}::{variant} {{ _reply: _tx }}")
+            } else {
+                format!(
+                    "{msg_name}::{variant} {{ {}, _reply: _tx }}",
+                    fields.join(", ")
+                )
+            };
+            self.line(&format!("self._sender.send({msg_expr});"));
+            self.line("_rx.recv().expect(\"actor thread died\")");
             self.pop_indent();
             self.line("}");
         }
@@ -353,7 +416,7 @@ impl RustEmitter {
             ));
         }
         // User behavior variants.
-        for m in &pub_methods {
+        for m in pub_methods.iter().filter(|m| !m.is_test) {
             let variant = snake_to_pascal(&m.name);
             if m.params.is_empty() {
                 self.line(&format!("{msg_name}::{variant} => actor.{}(),", m.name));
@@ -365,6 +428,24 @@ impl RustEmitter {
                     m.name
                 ));
             }
+        }
+        // Test accessor variants — call the method synchronously and send the result back (#1506).
+        for m in &test_methods {
+            let variant = format!("_Test{}", snake_to_pascal(&m.name));
+            let fields: Vec<String> = m.params.iter().map(|p| p.name.clone()).collect();
+            let args = fields.join(", ");
+            let call = if fields.is_empty() {
+                format!("actor.{}()", m.name)
+            } else {
+                format!("actor.{}({args})", m.name)
+            };
+            let pattern = if fields.is_empty() {
+                format!("{msg_name}::{variant} {{ _reply }}")
+            } else {
+                format!("{msg_name}::{variant} {{ {args}, _reply }}")
+            };
+            self.line("#[cfg(test)]");
+            self.line(&format!("{pattern} => {{ let _ = _reply.send({call}); }},"));
         }
         self.pop_indent();
         self.line("}");

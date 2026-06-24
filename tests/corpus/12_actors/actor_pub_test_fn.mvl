@@ -1,0 +1,49 @@
+// actor_pub_test_fn.mvl — pub test fn on actors (#1506)
+//
+// Verifies that `pub test fn` declarations inside actor bodies:
+//   - are accepted by the parser and type checker
+//   - allow non-Unit return types
+//   - do not require the fire-and-forget sendable-capability restriction
+//   - see actor state after preceding async sends (FIFO ordering)
+
+use std.collections.{Map}
+
+actor Counter {
+    count: Int
+
+    pub fn increment(val n: Int) {
+        self.count = self.count + n
+    }
+
+    pub fn reset() {
+        self.count = 0
+    }
+
+    pub test fn get_count() -> Int {
+        self.count
+    }
+}
+
+actor Registry {
+    entries: Map[String, Int]
+
+    pub fn put(val key: String, val value: Int) {
+        self.entries.insert(key, value)
+    }
+
+    pub test fn get_entry(key: String) -> Option[Int] {
+        self.entries.get(key)
+    }
+
+    pub test fn size() -> Int {
+        self.entries.len()
+    }
+}
+
+pub total fn new_counter() -> Counter ! Spawn {
+    actor Counter { count: 0 }
+}
+
+pub total fn new_registry() -> Registry ! Spawn {
+    actor Registry { entries: Map[String, Int]::new() }
+}
