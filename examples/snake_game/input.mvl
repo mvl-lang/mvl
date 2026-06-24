@@ -1,7 +1,5 @@
 // input.mvl — pure key-string → Direction mapping.
 //
-// Converts the string key encoding from the tui bridge (same convention as
-// pkg.tui/src/internal/ffi.mvl) to the game's Direction type.
 // No effects, no extern — a pure transform.
 //
 // Key encoding: "Up" | "Down" | "Left" | "Right" | "Escape" | "q" | "" (timeout) | ...
