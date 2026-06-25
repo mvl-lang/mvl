@@ -483,7 +483,13 @@ pub fn detect_violations(
     type_env: &TypeEnv,
     inferred: &InferredLabels,
 ) -> Vec<CheckError> {
-    let mut errors = Vec::new();
+    let mut collector = ViolationCollector {
+        caller: "",
+        env: HashMap::new(),
+        type_env,
+        inferred,
+        errors: Vec::new(),
+    };
     for decl in &prog.declarations {
         // Check top-level fns, impl methods, and actor methods.
         let fns: Vec<(&str, &[crate::mvl::parser::ast::Param], &Block)> = match decl {
@@ -501,230 +507,168 @@ pub fn detect_violations(
             _ => continue,
         };
         for (name, params, body) in fns {
-            let mut param_env: HashMap<String, String> = HashMap::new();
+            collector.caller = name;
+            collector.env.clear();
             for param in params {
                 if let Some(l) = label_of_type_expr(&param.ty) {
-                    param_env.insert(param.name.clone(), l);
+                    collector.env.insert(param.name.clone(), l);
                 }
             }
-            collect_violations_in_block(body, name, &param_env, type_env, inferred, &mut errors);
+            crate::mvl::parser::visit::Visit::visit_block(&mut collector, body);
         }
     }
-    errors
+    collector.errors
 }
 
-fn collect_violations_in_block(
-    block: &Block,
-    caller: &str,
-    env: &HashMap<String, String>,
-    type_env: &TypeEnv,
-    inferred: &InferredLabels,
-    errors: &mut Vec<CheckError>,
-) {
-    let mut local_env = env.clone();
-    for stmt in &block.stmts {
-        collect_violations_in_stmt(stmt, caller, &mut local_env, type_env, inferred, errors);
+/// Per-function violation collector — owns the label-binding environment and
+/// the accumulating error vec.  Implements [`Visit`] so AST traversal is shared
+/// with the rest of the checker (#1522, #1526).
+///
+/// **Scope handling.**  The pre-#1526 walkers cloned the environment at every
+/// scope boundary (block entry, match arm, lambda body, for-loop body, else-if
+/// branch).  This visitor preserves that semantics via explicit save/restore in
+/// the overrides below.  `visit_block` is the centralised entry point: it
+/// snapshots `env` at block entry and restores it on exit, so any `let` binding
+/// is automatically scoped to its enclosing block.
+struct ViolationCollector<'a> {
+    caller: &'a str,
+    env: HashMap<String, String>,
+    type_env: &'a TypeEnv,
+    inferred: &'a InferredLabels,
+    errors: Vec<CheckError>,
+}
+
+impl<'a, 'ast> crate::mvl::parser::visit::Visit<'ast> for ViolationCollector<'a> {
+    fn visit_block(&mut self, b: &'ast Block) {
+        // Block-local scope: `let` bindings inside this block die at block exit.
+        let saved = self.env.clone();
+        crate::mvl::parser::visit::walk_block(self, b);
+        self.env = saved;
     }
-}
 
-fn collect_violations_in_stmt(
-    stmt: &Stmt,
-    caller: &str,
-    env: &mut HashMap<String, String>,
-    type_env: &TypeEnv,
-    inferred: &InferredLabels,
-    errors: &mut Vec<CheckError>,
-) {
-    match stmt {
-        Stmt::Let {
-            pattern, init, ty, ..
-        } => {
-            collect_violations_in_expr(init, caller, env, type_env, inferred, errors);
-            // Track let-bound variable labels for subsequent stmts in this block.
-            // Use split tables: explicit labels are authoritative; inferred labels join
-            // with arg labels for context sensitivity (#849).
-            // Fix #850: handle destructuring patterns — conservatively assign the
-            // full initialiser label to every bound name.
-            // Prefer the declared type annotation over the inferred init label, matching
-            // ifc.rs behaviour: `label_of_type_expr(ty).or_else(|| infer_label(init, env))`.
-            // This prevents false positives for validated bindings like:
-            //   let clean: Clean[String] = validate_input(tainted)?  → clean is Clean, not Tainted
-            let init_label =
-                infer_label_extended(init, env, &inferred.explicit, &inferred.inferred);
-            let effective_label = label_of_type_expr(ty).or(init_label);
-            // Fix #858 nested destructuring: use recursive helper to bind all names.
-            if let Some(l) = effective_label {
-                ifc::bind_pattern_labels(pattern, &l, env);
-            }
-        }
-        Stmt::Assign { value, .. } => {
-            collect_violations_in_expr(value, caller, env, type_env, inferred, errors);
-        }
-        Stmt::Return { value: Some(e), .. } => {
-            collect_violations_in_expr(e, caller, env, type_env, inferred, errors);
-        }
-        Stmt::Return { value: None, .. } => {}
-        Stmt::Expr { expr, .. } => {
-            collect_violations_in_expr(expr, caller, env, type_env, inferred, errors);
-        }
-        Stmt::If {
-            cond, then, else_, ..
-        } => {
-            collect_violations_in_expr(cond, caller, env, type_env, inferred, errors);
-            collect_violations_in_block(then, caller, env, type_env, inferred, errors);
-            match else_ {
-                Some(ElseBranch::Block(b)) => {
-                    collect_violations_in_block(b, caller, env, type_env, inferred, errors);
+    fn visit_stmt(&mut self, s: &'ast Stmt) {
+        match s {
+            Stmt::Let {
+                pattern, init, ty, ..
+            } => {
+                self.visit_expr(init);
+                // Prefer declared label over inferred init label so validated
+                // bindings (`let clean: Clean[T] = validate(tainted)?`) keep
+                // their declared label.  See #849, #850, #858.
+                let init_label = infer_label_extended(
+                    init,
+                    &self.env,
+                    &self.inferred.explicit,
+                    &self.inferred.inferred,
+                );
+                let effective_label = label_of_type_expr(ty).or(init_label);
+                if let Some(l) = effective_label {
+                    ifc::bind_pattern_labels(pattern, &l, &mut self.env);
                 }
-                Some(ElseBranch::If(s)) => {
-                    let mut else_env = env.clone();
-                    collect_violations_in_stmt(
-                        s,
-                        caller,
-                        &mut else_env,
-                        type_env,
-                        inferred,
-                        errors,
-                    );
-                }
-                None => {}
             }
-        }
-        Stmt::Match {
-            scrutinee, arms, ..
-        } => {
-            collect_violations_in_expr(scrutinee, caller, env, type_env, inferred, errors);
-            for arm in arms {
-                let arm_env = env.clone();
-                match &arm.body {
-                    MatchBody::Expr(e) => {
-                        collect_violations_in_expr(e, caller, &arm_env, type_env, inferred, errors)
-                    }
-                    MatchBody::Block(b) => {
-                        collect_violations_in_block(b, caller, &arm_env, type_env, inferred, errors)
+            Stmt::Match {
+                scrutinee, arms, ..
+            } => {
+                self.visit_expr(scrutinee);
+                // Per-arm scope: every arm starts from the env at match entry.
+                let saved = self.env.clone();
+                for arm in arms {
+                    self.env = saved.clone();
+                    match &arm.body {
+                        MatchBody::Expr(e) => self.visit_expr(e),
+                        MatchBody::Block(b) => self.visit_block(b),
                     }
                 }
+                self.env = saved;
             }
-        }
-        Stmt::While { cond, body, .. } => {
-            collect_violations_in_expr(cond, caller, env, type_env, inferred, errors);
-            collect_violations_in_block(body, caller, env, type_env, inferred, errors);
-        }
-        // Fix #858: bind the for-loop pattern variable to the iterator's taint label
-        // so that uses of the loop variable inside the body are correctly tracked.
-        Stmt::For {
-            pattern,
-            iter,
-            body,
-            ..
-        } => {
-            collect_violations_in_expr(iter, caller, env, type_env, inferred, errors);
-            let iter_label =
-                infer_label_extended(iter, env, &inferred.explicit, &inferred.inferred);
-            let mut body_env = env.clone();
-            if let Some(l) = iter_label {
-                ifc::bind_pattern_labels(pattern, &l, &mut body_env);
+            Stmt::For {
+                pattern,
+                iter,
+                body,
+                ..
+            } => {
+                self.visit_expr(iter);
+                // Bind the loop variable to the iterator's label inside the
+                // body only (#858).
+                let iter_label = infer_label_extended(
+                    iter,
+                    &self.env,
+                    &self.inferred.explicit,
+                    &self.inferred.inferred,
+                );
+                let saved = self.env.clone();
+                if let Some(l) = iter_label {
+                    ifc::bind_pattern_labels(pattern, &l, &mut self.env);
+                }
+                self.visit_block(body);
+                self.env = saved;
             }
-            collect_violations_in_block(body, caller, &body_env, type_env, inferred, errors);
+            Stmt::If {
+                cond, then, else_, ..
+            } => {
+                self.visit_expr(cond);
+                self.visit_block(then);
+                match else_ {
+                    Some(ElseBranch::Block(b)) => self.visit_block(b),
+                    Some(ElseBranch::If(s)) => {
+                        // Else-if branch sees env at if entry, not after-then.
+                        let saved = self.env.clone();
+                        self.visit_stmt(s);
+                        self.env = saved;
+                    }
+                    None => {}
+                }
+            }
+            _ => crate::mvl::parser::visit::walk_stmt(self, s),
         }
     }
-}
 
-fn collect_violations_in_expr(
-    expr: &Expr,
-    caller: &str,
-    env: &HashMap<String, String>,
-    type_env: &TypeEnv,
-    inferred: &InferredLabels,
-    errors: &mut Vec<CheckError>,
-) {
-    match expr {
-        Expr::FnCall {
-            name, args, span, ..
-        } => {
-            check_call_violations(name, args, *span, caller, env, type_env, inferred, errors);
-            for arg in args {
-                collect_violations_in_expr(arg, caller, env, type_env, inferred, errors);
-            }
-        }
-        Expr::MethodCall { receiver, args, .. } => {
-            collect_violations_in_expr(receiver, caller, env, type_env, inferred, errors);
-            for arg in args {
-                collect_violations_in_expr(arg, caller, env, type_env, inferred, errors);
-            }
-        }
-        Expr::Binary { left, right, .. } => {
-            collect_violations_in_expr(left, caller, env, type_env, inferred, errors);
-            collect_violations_in_expr(right, caller, env, type_env, inferred, errors);
-        }
-        Expr::Unary { expr, .. }
-        | Expr::Propagate { expr, .. }
-        | Expr::Consume { expr, .. }
-        | Expr::Relabel { expr, .. }
-        | Expr::Borrow { expr, .. }
-        | Expr::FieldAccess { expr, .. }
-        | Expr::As { expr, .. } => {
-            collect_violations_in_expr(expr, caller, env, type_env, inferred, errors);
-        }
-        Expr::If {
-            cond, then, else_, ..
-        } => {
-            collect_violations_in_expr(cond, caller, env, type_env, inferred, errors);
-            collect_violations_in_block(then, caller, env, type_env, inferred, errors);
-            if let Some(e) = else_ {
-                collect_violations_in_expr(e, caller, env, type_env, inferred, errors);
-            }
-        }
-        Expr::Match {
-            scrutinee, arms, ..
-        } => {
-            collect_violations_in_expr(scrutinee, caller, env, type_env, inferred, errors);
-            for arm in arms {
-                let arm_env = env.clone();
-                match &arm.body {
-                    MatchBody::Expr(e) => {
-                        collect_violations_in_expr(e, caller, &arm_env, type_env, inferred, errors)
-                    }
-                    MatchBody::Block(b) => {
-                        collect_violations_in_block(b, caller, &arm_env, type_env, inferred, errors)
-                    }
+    fn visit_expr(&mut self, e: &'ast Expr) {
+        match e {
+            Expr::FnCall {
+                name, args, span, ..
+            } => {
+                check_call_violations(
+                    name,
+                    args,
+                    *span,
+                    self.caller,
+                    &self.env,
+                    self.type_env,
+                    self.inferred,
+                    &mut self.errors,
+                );
+                for arg in args {
+                    self.visit_expr(arg);
                 }
             }
-        }
-        Expr::Block(b) => collect_violations_in_block(b, caller, env, type_env, inferred, errors),
-        // Fix #851: build lambda-local env with param labels before recursing.
-        Expr::Lambda { params, body, .. } => {
-            let mut lambda_env = env.clone();
-            for param in params {
-                if let Some(l) = label_of_type_expr(&param.ty) {
-                    lambda_env.insert(param.name.clone(), l);
+            Expr::Match {
+                scrutinee, arms, ..
+            } => {
+                self.visit_expr(scrutinee);
+                let saved = self.env.clone();
+                for arm in arms {
+                    self.env = saved.clone();
+                    match &arm.body {
+                        MatchBody::Expr(e) => self.visit_expr(e),
+                        MatchBody::Block(b) => self.visit_block(b),
+                    }
                 }
+                self.env = saved;
             }
-            collect_violations_in_expr(body, caller, &lambda_env, type_env, inferred, errors)
-        }
-        Expr::Construct { fields, .. } | Expr::Spawn { fields, .. } => {
-            for (_, e) in fields {
-                collect_violations_in_expr(e, caller, env, type_env, inferred, errors);
+            // Fix #851: build lambda-local env with param labels before recursing.
+            Expr::Lambda { params, body, .. } => {
+                let saved = self.env.clone();
+                for param in params {
+                    if let Some(l) = label_of_type_expr(&param.ty) {
+                        self.env.insert(param.name.clone(), l);
+                    }
+                }
+                self.visit_expr(body);
+                self.env = saved;
             }
+            _ => crate::mvl::parser::visit::walk_expr(self, e),
         }
-        Expr::List { elems, .. } | Expr::Set { elems, .. } => {
-            for e in elems {
-                collect_violations_in_expr(e, caller, env, type_env, inferred, errors);
-            }
-        }
-        Expr::Map { pairs, .. } => {
-            for (k, v) in pairs {
-                collect_violations_in_expr(k, caller, env, type_env, inferred, errors);
-                collect_violations_in_expr(v, caller, env, type_env, inferred, errors);
-            }
-        }
-        Expr::Select { arms, .. } => {
-            for arm in arms {
-                collect_violations_in_expr(&arm.expr, caller, env, type_env, inferred, errors);
-                collect_violations_in_block(&arm.body, caller, env, type_env, inferred, errors);
-            }
-        }
-        Expr::Literal(..) | Expr::Ident(..) | Expr::Quantifier(..) => {}
     }
 }
 
