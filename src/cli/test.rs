@@ -101,8 +101,13 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
         // Use a frontier loop (mirroring build.rs) to load transitive package
         // dependencies — e.g. if a test file imports pkg-health which uses pkg-http,
         // pkg-http's types must be in the prelude (#1477).
+        //
+        // `seen_pkgs` is shared with the post-sibling-discovery pass below so that a
+        // package referenced by both a test file and a sibling library file is only
+        // loaded once.
+        let mut seen_pkgs = std::collections::HashSet::new();
+        let mut pkg_progs: Vec<mvl::mvl::parser::ast::Program> = Vec::new();
         {
-            let mut seen_pkgs = std::collections::HashSet::new();
             let mut frontier = all_test_progs.clone();
             loop {
                 let new_pkgs = loader::load_pkg_modules(&frontier, &project_root, &mut seen_pkgs);
@@ -111,8 +116,9 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
                 }
                 frontier = new_pkgs.clone();
                 let n = new_pkgs.len();
-                stdlib_prelude_progs.extend(new_pkgs);
+                stdlib_prelude_progs.extend(new_pkgs.clone());
                 prelude_stems.extend(std::iter::repeat_n(None, n));
+                pkg_progs.extend(new_pkgs);
             }
         }
 
@@ -261,11 +267,36 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
                 }
             }
         }
-        // Single pass over all programs (test files + sibling library files) mirrors
-        // cli/build.rs and ensures transitive stdlib deps are discovered together (#865).
+        // Second pkg.* frontier pass: load packages imported by sibling library
+        // files (e.g. `db.mvl` imports `pkg.sqlite` but `db_test.mvl` does not).
+        // Before #1520 these files were picked up incidentally from `.mvl/pkg/`
+        // via recursive scans; with that path closed off, package source must
+        // reach the test crate through `load_pkg_modules` for every import site,
+        // not just the test files.
+        {
+            let mut frontier = sibling_progs.clone();
+            loop {
+                let new_pkgs = loader::load_pkg_modules(&frontier, &project_root, &mut seen_pkgs);
+                if new_pkgs.is_empty() {
+                    break;
+                }
+                frontier = new_pkgs.clone();
+                let n = new_pkgs.len();
+                stdlib_prelude_progs.extend(new_pkgs.clone());
+                prelude_stems.extend(std::iter::repeat_n(None, n));
+                pkg_progs.extend(new_pkgs);
+            }
+        }
+
+        // Single pass over all programs (test files + sibling library files +
+        // loaded pkg.* modules) mirrors cli/build.rs and ensures transitive
+        // stdlib deps are discovered together (#865). pkg_progs must be
+        // included so pure-MVL stdlib imports inside packages (e.g. pkg-trace's
+        // `use std.crypto.{uuid_v4}`) reach the extras loader.
         let all_for_extras: Vec<_> = all_test_progs
             .iter()
             .chain(sibling_progs.iter())
+            .chain(pkg_progs.iter())
             .cloned()
             .collect();
         let extras = loader::load_mvl_native_stdlib_extras(&all_for_extras);

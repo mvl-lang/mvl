@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.220.6] - 2026-06-25
+
+### Fixed
+
+- **`mvl test`: load pkg.* modules imported by sibling library files** (#1521) — `load_pkg_modules` was only seeded with `*_test.mvl` files, so packages imported solely by sibling source files (e.g. `db.mvl` importing `pkg.sqlite` in a project whose `db_test.mvl` does not) failed to reach the test crate. Before #1520 this was masked by recursive `.mvl/pkg/` walks; with that path closed, calls like `execute(...)` / `query_scalar(...)` went unresolved in the generated test `lib.rs`. Added a second `load_pkg_modules` frontier pass seeded with discovered sibling programs (sharing `seen_pkgs` with the test-file pass), and included loaded pkg programs in the `load_mvl_native_stdlib_extras` seed so transitive pure-MVL stdlib imports inside packages (e.g. pkg-trace's `use std.crypto.{uuid_v4}`) also resolve.
+
 ## [0.220.5] - 2026-06-24
 
 ### Fixed
