@@ -49,3 +49,4 @@
 | [0045](0045-self-hosting-phase3-parser-type-resolution.md) | Self-hosting Phase 3 — parser recursive type resolution (`List[T]` indirection, struct literal disambiguation) | Accepted |
 | [0046](0046-transitive-dependency-resolution.md) | Transitive dependency resolution — BFS over package manifests in `mvl update` | Superseded by ADR-0047 |
 | [0047](0047-package-management-system.md) | Package management system — format, identity, lock file, transitive resolution, supply chain | Accepted |
+| [0048](0048-ast-visit-trait-exhaustive-walkers.md) | AST Visit trait and exhaustive walkers — single canonical traversal, no `..` in walker bodies, contracts in scope | Accepted |
