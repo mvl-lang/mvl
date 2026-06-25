@@ -214,177 +214,85 @@ pub struct MemorySafetyCounts {
 }
 
 pub fn count_memory_safety_sites(prog: &Program) -> MemorySafetyCounts {
-    use crate::mvl::parser::ast::{Block, Decl, ElseBranch, Expr, MatchBody, Stmt, TypeExpr};
+    use crate::mvl::parser::ast::{Decl, Expr, Stmt, TypeExpr};
+    use crate::mvl::parser::visit::{walk_expr, walk_stmt, Visit};
+
+    struct MemorySafetyVisitor<'a> {
+        counts: &'a mut MemorySafetyCounts,
+    }
+
+    impl<'a, 'ast> Visit<'ast> for MemorySafetyVisitor<'a> {
+        fn visit_stmt(&mut self, s: &'ast Stmt) {
+            match s {
+                Stmt::Let { ty, .. } => {
+                    self.counts.let_bindings += 1;
+                    if matches!(ty, TypeExpr::Ref { mutable: true, .. }) {
+                        self.counts.ref_bindings += 1;
+                    }
+                    walk_stmt(self, s);
+                }
+                // Default `walk_stmt` skips While/For `invariants` and `decreases`.
+                // Walk them explicitly so consume sites in loop variants are counted.
+                Stmt::While {
+                    cond,
+                    invariants,
+                    decreases,
+                    body,
+                    ..
+                } => {
+                    self.visit_expr(cond);
+                    for inv in invariants {
+                        self.visit_expr(inv);
+                    }
+                    if let Some(dec) = decreases {
+                        self.visit_expr(dec);
+                    }
+                    self.visit_block(body);
+                }
+                Stmt::For {
+                    iter,
+                    invariants,
+                    body,
+                    ..
+                } => {
+                    self.visit_expr(iter);
+                    for inv in invariants {
+                        self.visit_expr(inv);
+                    }
+                    self.visit_block(body);
+                }
+                _ => walk_stmt(self, s),
+            }
+        }
+
+        fn visit_expr(&mut self, e: &'ast Expr) {
+            if let Expr::Consume { .. } = e {
+                self.counts.consume_sites += 1;
+            }
+            walk_expr(self, e);
+        }
+    }
+
     let mut counts = MemorySafetyCounts {
         let_bindings: 0,
         ref_bindings: 0,
         consume_sites: 0,
     };
+    let mut v = MemorySafetyVisitor {
+        counts: &mut counts,
+    };
     for decl in &prog.declarations {
         match decl {
-            Decl::Fn(fd) => count_block(&fd.body, &mut counts),
+            Decl::Fn(fd) => v.visit_block(&fd.body),
             Decl::Actor(ad) => {
                 for method in &ad.methods {
-                    count_block(&method.body, &mut counts);
+                    v.visit_block(&method.body);
                 }
             }
             _ => {}
         }
     }
-    return counts;
-
-    fn count_block(block: &Block, c: &mut MemorySafetyCounts) {
-        for stmt in &block.stmts {
-            count_stmt(stmt, c);
-        }
-    }
-
-    fn count_stmt(stmt: &Stmt, c: &mut MemorySafetyCounts) {
-        match stmt {
-            Stmt::Let { ty, init, .. } => {
-                c.let_bindings += 1;
-                if matches!(ty, TypeExpr::Ref { mutable: true, .. }) {
-                    c.ref_bindings += 1;
-                }
-                count_expr(init, c);
-            }
-            Stmt::Assign { value, .. } => count_expr(value, c),
-            Stmt::Expr { expr, .. } => count_expr(expr, c),
-            Stmt::Return {
-                value: Some(expr), ..
-            } => count_expr(expr, c),
-            Stmt::Return { value: None, .. } => {}
-            Stmt::If {
-                cond, then, else_, ..
-            } => {
-                count_expr(cond, c);
-                count_block(then, c);
-                if let Some(eb) = else_ {
-                    match eb {
-                        ElseBranch::If(stmt) => count_stmt(stmt, c),
-                        ElseBranch::Block(block) => count_block(block, c),
-                    }
-                }
-            }
-            Stmt::Match {
-                scrutinee, arms, ..
-            } => {
-                count_expr(scrutinee, c);
-                for arm in arms {
-                    match &arm.body {
-                        MatchBody::Expr(expr) => count_expr(expr, c),
-                        MatchBody::Block(block) => count_block(block, c),
-                    }
-                }
-            }
-            Stmt::While {
-                cond,
-                invariants,
-                decreases,
-                body,
-                ..
-            } => {
-                count_expr(cond, c);
-                for inv in invariants {
-                    count_expr(inv, c);
-                }
-                if let Some(dec) = decreases {
-                    count_expr(dec, c);
-                }
-                count_block(body, c);
-            }
-            Stmt::For {
-                iter,
-                invariants,
-                body,
-                ..
-            } => {
-                count_expr(iter, c);
-                for inv in invariants {
-                    count_expr(inv, c);
-                }
-                count_block(body, c);
-            }
-        }
-    }
-
-    fn count_expr(expr: &Expr, c: &mut MemorySafetyCounts) {
-        match expr {
-            Expr::Consume { expr, .. } => {
-                c.consume_sites += 1;
-                count_expr(expr, c);
-            }
-            Expr::FnCall { args, .. } => {
-                for arg in args {
-                    count_expr(arg, c);
-                }
-            }
-            Expr::MethodCall { receiver, args, .. } => {
-                count_expr(receiver, c);
-                for arg in args {
-                    count_expr(arg, c);
-                }
-            }
-            Expr::Block(block) => count_block(block, c),
-            Expr::If {
-                cond, then, else_, ..
-            } => {
-                count_expr(cond, c);
-                count_block(then, c);
-                if let Some(eb) = else_ {
-                    count_expr(eb, c);
-                }
-            }
-            Expr::Match {
-                scrutinee, arms, ..
-            } => {
-                count_expr(scrutinee, c);
-                for arm in arms {
-                    match &arm.body {
-                        MatchBody::Expr(expr) => count_expr(expr, c),
-                        MatchBody::Block(block) => count_block(block, c),
-                    }
-                }
-            }
-            Expr::Lambda { body, .. } => count_expr(body, c),
-            Expr::List { elems, .. } | Expr::Set { elems, .. } => {
-                for e in elems {
-                    count_expr(e, c);
-                }
-            }
-            Expr::Construct { fields, .. } | Expr::Spawn { fields, .. } => {
-                for (_, expr) in fields {
-                    count_expr(expr, c);
-                }
-            }
-            Expr::Map { pairs, .. } => {
-                for (k, v) in pairs {
-                    count_expr(k, c);
-                    count_expr(v, c);
-                }
-            }
-            Expr::Unary { expr, .. }
-            | Expr::Propagate { expr, .. }
-            | Expr::Borrow { expr, .. }
-            | Expr::As { expr, .. } => {
-                count_expr(expr, c);
-            }
-            Expr::Binary { left, right, .. } => {
-                count_expr(left, c);
-                count_expr(right, c);
-            }
-            Expr::FieldAccess { expr, .. } => count_expr(expr, c),
-            Expr::Relabel { expr, .. } => count_expr(expr, c),
-            Expr::Select { arms, .. } => {
-                for arm in arms {
-                    count_expr(&arm.expr, c);
-                    count_block(&arm.body, c);
-                }
-            }
-            // Leaf expressions — no sub-expressions to traverse.
-            Expr::Literal(..) | Expr::Ident(..) | Expr::Quantifier(..) => {}
-        }
-    }
+    counts
 }
 
 // ── Option/Result/assignment evidence counters (Req 4, 5, 6) ────────────────
@@ -420,47 +328,112 @@ pub struct HandlingCounts {
 /// Walk the program and tally evidence for Req 4 (Null elimination),
 /// Req 5 (Error visibility) and Req 6 (Ownership).
 pub fn count_handling_sites(prog: &Program) -> HandlingCounts {
-    use crate::mvl::parser::ast::{
-        Block, Decl, ElseBranch, Expr, MatchBody, Pattern, Stmt, TypeExpr,
-    };
+    use crate::mvl::parser::ast::{Decl, Expr, Pattern, Stmt, TypeExpr};
+    use crate::mvl::parser::visit::{walk_expr, walk_stmt, Visit};
+
+    struct HandlingVisitor<'a> {
+        counts: &'a mut HandlingCounts,
+    }
+
+    impl<'a, 'ast> Visit<'ast> for HandlingVisitor<'a> {
+        fn visit_stmt(&mut self, s: &'ast Stmt) {
+            match s {
+                Stmt::Let { pattern, ty, .. } => {
+                    count_pattern(pattern, self.counts);
+                    count_type(ty, self.counts);
+                    walk_stmt(self, s);
+                }
+                Stmt::Assign { .. } => {
+                    self.counts.assign_sites += 1;
+                    walk_stmt(self, s);
+                }
+                Stmt::Match { arms, .. } => {
+                    for arm in arms {
+                        count_pattern(&arm.pattern, self.counts);
+                    }
+                    walk_stmt(self, s);
+                }
+                // Default `walk_stmt` skips While `decreases`; walk it explicitly.
+                Stmt::While {
+                    cond,
+                    body,
+                    decreases,
+                    ..
+                } => {
+                    self.visit_expr(cond);
+                    if let Some(d) = decreases {
+                        self.visit_expr(d);
+                    }
+                    self.visit_block(body);
+                }
+                Stmt::For { pattern, .. } => {
+                    count_pattern(pattern, self.counts);
+                    walk_stmt(self, s);
+                }
+                _ => walk_stmt(self, s),
+            }
+        }
+
+        fn visit_expr(&mut self, e: &'ast Expr) {
+            match e {
+                Expr::Propagate { .. } => {
+                    self.counts.propagate_sites += 1;
+                }
+                Expr::Match { arms, .. } => {
+                    for arm in arms {
+                        count_pattern(&arm.pattern, self.counts);
+                    }
+                }
+                Expr::As { target, .. } => {
+                    count_type(target, self.counts);
+                }
+                _ => {}
+            }
+            walk_expr(self, e);
+        }
+    }
+
     let mut c = HandlingCounts::default();
-    for decl in &prog.declarations {
-        match decl {
-            Decl::Fn(fd) => {
-                for p in &fd.params {
-                    count_type(&p.ty, &mut c);
-                }
-                count_type(&fd.return_type, &mut c);
-                count_block(&fd.body, &mut c);
-            }
-            Decl::Extern(ed) => {
-                for ef in &ed.fns {
-                    for p in &ef.params {
-                        count_type(&p.ty, &mut c);
+    {
+        let mut v = HandlingVisitor { counts: &mut c };
+        for decl in &prog.declarations {
+            match decl {
+                Decl::Fn(fd) => {
+                    for p in &fd.params {
+                        count_type(&p.ty, v.counts);
                     }
-                    count_type(&ef.return_type, &mut c);
+                    count_type(&fd.return_type, v.counts);
+                    v.visit_block(&fd.body);
                 }
-            }
-            Decl::Actor(ad) => {
-                for f in &ad.fields {
-                    count_type(&f.ty, &mut c);
-                }
-                for method in &ad.methods {
-                    for p in &method.params {
-                        count_type(&p.ty, &mut c);
-                    }
-                    count_type(&method.return_type, &mut c);
-                    count_block(&method.body, &mut c);
-                }
-            }
-            Decl::Type(td) => {
-                if let crate::mvl::parser::ast::TypeBody::Struct { fields, .. } = &td.body {
-                    for f in fields {
-                        count_type(&f.ty, &mut c);
+                Decl::Extern(ed) => {
+                    for ef in &ed.fns {
+                        for p in &ef.params {
+                            count_type(&p.ty, v.counts);
+                        }
+                        count_type(&ef.return_type, v.counts);
                     }
                 }
+                Decl::Actor(ad) => {
+                    for f in &ad.fields {
+                        count_type(&f.ty, v.counts);
+                    }
+                    for method in &ad.methods {
+                        for p in &method.params {
+                            count_type(&p.ty, v.counts);
+                        }
+                        count_type(&method.return_type, v.counts);
+                        v.visit_block(&method.body);
+                    }
+                }
+                Decl::Type(td) => {
+                    if let crate::mvl::parser::ast::TypeBody::Struct { fields, .. } = &td.body {
+                        for f in fields {
+                            count_type(&f.ty, v.counts);
+                        }
+                    }
+                }
+                _ => {}
             }
-            _ => {}
         }
     }
     return c;
@@ -525,159 +498,6 @@ pub fn count_handling_sites(prog: &Program) -> HandlingCounts {
                 }
             }
             Pattern::Wildcard(_) | Pattern::Ident(_, _) | Pattern::Literal(_, _) => {}
-        }
-    }
-
-    fn count_block(block: &Block, c: &mut HandlingCounts) {
-        for stmt in &block.stmts {
-            count_stmt(stmt, c);
-        }
-    }
-
-    fn count_stmt(stmt: &Stmt, c: &mut HandlingCounts) {
-        match stmt {
-            Stmt::Let {
-                pattern, ty, init, ..
-            } => {
-                count_pattern(pattern, c);
-                count_type(ty, c);
-                count_expr(init, c);
-            }
-            Stmt::Assign { value, .. } => {
-                c.assign_sites += 1;
-                count_expr(value, c);
-            }
-            Stmt::Return { value, .. } => {
-                if let Some(e) = value {
-                    count_expr(e, c);
-                }
-            }
-            Stmt::Expr { expr, .. } => count_expr(expr, c),
-            Stmt::If {
-                cond, then, else_, ..
-            } => {
-                count_expr(cond, c);
-                count_block(then, c);
-                if let Some(eb) = else_ {
-                    match eb {
-                        ElseBranch::If(s) => count_stmt(s, c),
-                        ElseBranch::Block(b) => count_block(b, c),
-                    }
-                }
-            }
-            Stmt::Match {
-                scrutinee, arms, ..
-            } => {
-                count_expr(scrutinee, c);
-                for arm in arms {
-                    count_pattern(&arm.pattern, c);
-                    match &arm.body {
-                        MatchBody::Expr(e) => count_expr(e, c),
-                        MatchBody::Block(b) => count_block(b, c),
-                    }
-                }
-            }
-            Stmt::While {
-                cond,
-                body,
-                decreases,
-                ..
-            } => {
-                count_expr(cond, c);
-                if let Some(d) = decreases {
-                    count_expr(d, c);
-                }
-                count_block(body, c);
-            }
-            Stmt::For {
-                pattern,
-                iter,
-                body,
-                ..
-            } => {
-                count_pattern(pattern, c);
-                count_expr(iter, c);
-                count_block(body, c);
-            }
-        }
-    }
-
-    fn count_expr(expr: &Expr, c: &mut HandlingCounts) {
-        match expr {
-            Expr::Propagate { expr, .. } => {
-                c.propagate_sites += 1;
-                count_expr(expr, c);
-            }
-            Expr::Match {
-                scrutinee, arms, ..
-            } => {
-                count_expr(scrutinee, c);
-                for arm in arms {
-                    count_pattern(&arm.pattern, c);
-                    match &arm.body {
-                        MatchBody::Expr(e) => count_expr(e, c),
-                        MatchBody::Block(b) => count_block(b, c),
-                    }
-                }
-            }
-            Expr::FnCall { args, .. } => {
-                for a in args {
-                    count_expr(a, c);
-                }
-            }
-            Expr::MethodCall { receiver, args, .. } => {
-                count_expr(receiver, c);
-                for a in args {
-                    count_expr(a, c);
-                }
-            }
-            Expr::Block(b) => count_block(b, c),
-            Expr::If {
-                cond, then, else_, ..
-            } => {
-                count_expr(cond, c);
-                count_block(then, c);
-                if let Some(e) = else_ {
-                    count_expr(e, c);
-                }
-            }
-            Expr::Lambda { body, .. } => count_expr(body, c),
-            Expr::List { elems, .. } | Expr::Set { elems, .. } => {
-                for e in elems {
-                    count_expr(e, c);
-                }
-            }
-            Expr::Construct { fields, .. } | Expr::Spawn { fields, .. } => {
-                for (_, e) in fields {
-                    count_expr(e, c);
-                }
-            }
-            Expr::Map { pairs, .. } => {
-                for (k, v) in pairs {
-                    count_expr(k, c);
-                    count_expr(v, c);
-                }
-            }
-            Expr::Unary { expr, .. }
-            | Expr::Borrow { expr, .. }
-            | Expr::Consume { expr, .. }
-            | Expr::Relabel { expr, .. } => count_expr(expr, c),
-            Expr::As { expr, target, .. } => {
-                count_expr(expr, c);
-                count_type(target, c);
-            }
-            Expr::Binary { left, right, .. } => {
-                count_expr(left, c);
-                count_expr(right, c);
-            }
-            Expr::FieldAccess { expr, .. } => count_expr(expr, c),
-            Expr::Select { arms, .. } => {
-                for arm in arms {
-                    count_expr(&arm.expr, c);
-                    count_block(&arm.body, c);
-                }
-            }
-            Expr::Literal(..) | Expr::Ident(..) | Expr::Quantifier(..) => {}
         }
     }
 }
