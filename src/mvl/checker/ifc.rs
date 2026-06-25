@@ -460,98 +460,98 @@ pub fn count_flow_check_sites(prog: &Program) -> usize {
 }
 
 fn count_flow_sites_in_block(block: &Block, labeled: &HashSet<String>) -> usize {
-    let mut count = 0;
-    for stmt in &block.stmts {
-        count += count_flow_sites_in_stmt(stmt, labeled);
-    }
-    count
-}
+    use crate::mvl::parser::visit::Visit;
 
-fn count_flow_sites_in_stmt(stmt: &Stmt, labeled: &HashSet<String>) -> usize {
-    match stmt {
-        Stmt::Expr { expr, .. } => count_flow_sites_in_expr(expr, labeled),
-        Stmt::Return { value: Some(e), .. } => count_flow_sites_in_expr(e, labeled),
-        Stmt::Return { value: None, .. } => 0,
-        Stmt::Let { init, .. } => count_flow_sites_in_expr(init, labeled),
-        Stmt::Assign { value, .. } => count_flow_sites_in_expr(value, labeled),
-        Stmt::If {
-            cond, then, else_, ..
-        } => {
-            let mut c = if expr_uses_labeled(cond, labeled) {
-                1
-            } else {
-                0
-            };
-            c += count_flow_sites_in_block(then, labeled);
-            if let Some(eb) = else_ {
-                match eb {
-                    ElseBranch::Block(b) => c += count_flow_sites_in_block(b, labeled),
-                    ElseBranch::If(s) => c += count_flow_sites_in_stmt(s, labeled),
-                }
-            }
-            c
-        }
-        Stmt::Match {
-            scrutinee, arms, ..
-        } => {
-            let mut c = if expr_uses_labeled(scrutinee, labeled) {
-                1
-            } else {
-                0
-            };
-            for arm in arms {
-                match &arm.body {
-                    MatchBody::Block(b) => c += count_flow_sites_in_block(b, labeled),
-                    MatchBody::Expr(e) => c += count_flow_sites_in_expr(e, labeled),
-                }
-            }
-            c
-        }
-        Stmt::For { body, .. } | Stmt::While { body, .. } => {
-            count_flow_sites_in_block(body, labeled)
-        }
+    struct FlowSiteVisitor<'a> {
+        count: usize,
+        labeled: &'a HashSet<String>,
     }
-}
 
-fn count_flow_sites_in_expr(expr: &Expr, labeled: &HashSet<String>) -> usize {
-    match expr {
-        Expr::If {
-            cond, then, else_, ..
-        } => {
-            let mut c = if expr_uses_labeled(cond, labeled) {
-                1
-            } else {
-                0
-            };
-            c += count_flow_sites_in_block(then, labeled);
-            if let Some(eb) = else_ {
-                c += count_flow_sites_in_expr(eb, labeled);
-            }
-            c
-        }
-        Expr::Match {
-            scrutinee, arms, ..
-        } => {
-            let mut c = if expr_uses_labeled(scrutinee, labeled) {
-                1
-            } else {
-                0
-            };
-            for arm in arms {
-                match &arm.body {
-                    MatchBody::Block(b) => c += count_flow_sites_in_block(b, labeled),
-                    MatchBody::Expr(e) => c += count_flow_sites_in_expr(e, labeled),
+    impl<'a, 'ast> Visit<'ast> for FlowSiteVisitor<'a> {
+        // Selective: only counts `if`/`match` decision points whose
+        // cond/scrutinee references a labeled variable, plus fn-call args.
+        // Does NOT recurse into unrelated expression variants (Binary,
+        // MethodCall, …) — preserves narrow scope of the original walker.
+        fn visit_stmt(&mut self, s: &'ast Stmt) {
+            match s {
+                Stmt::If {
+                    cond, then, else_, ..
+                } => {
+                    if expr_uses_labeled(cond, self.labeled) {
+                        self.count += 1;
+                    }
+                    self.visit_block(then);
+                    if let Some(eb) = else_ {
+                        match eb {
+                            ElseBranch::Block(b) => self.visit_block(b),
+                            ElseBranch::If(s) => self.visit_stmt(s),
+                        }
+                    }
                 }
+                Stmt::Match {
+                    scrutinee, arms, ..
+                } => {
+                    if expr_uses_labeled(scrutinee, self.labeled) {
+                        self.count += 1;
+                    }
+                    for arm in arms {
+                        match &arm.body {
+                            MatchBody::Block(b) => self.visit_block(b),
+                            MatchBody::Expr(e) => self.visit_expr(e),
+                        }
+                    }
+                }
+                Stmt::While { body, .. } | Stmt::For { body, .. } => self.visit_block(body),
+                Stmt::Expr { expr, .. } => self.visit_expr(expr),
+                Stmt::Return { value: Some(e), .. } => self.visit_expr(e),
+                Stmt::Return { value: None, .. } => {}
+                Stmt::Let { init, .. } => self.visit_expr(init),
+                Stmt::Assign { value, .. } => self.visit_expr(value),
             }
-            c
         }
-        Expr::Block(b) => count_flow_sites_in_block(b, labeled),
-        Expr::FnCall { args, .. } => args
-            .iter()
-            .filter(|a| expr_uses_labeled(a, labeled))
-            .count(),
-        _ => 0,
+
+        fn visit_expr(&mut self, e: &'ast Expr) {
+            match e {
+                Expr::If {
+                    cond, then, else_, ..
+                } => {
+                    if expr_uses_labeled(cond, self.labeled) {
+                        self.count += 1;
+                    }
+                    self.visit_block(then);
+                    if let Some(else_e) = else_ {
+                        self.visit_expr(else_e);
+                    }
+                }
+                Expr::Match {
+                    scrutinee, arms, ..
+                } => {
+                    if expr_uses_labeled(scrutinee, self.labeled) {
+                        self.count += 1;
+                    }
+                    for arm in arms {
+                        match &arm.body {
+                            MatchBody::Block(b) => self.visit_block(b),
+                            MatchBody::Expr(e) => self.visit_expr(e),
+                        }
+                    }
+                }
+                Expr::Block(b) => self.visit_block(b),
+                Expr::FnCall { args, .. } => {
+                    for arg in args {
+                        if expr_uses_labeled(arg, self.labeled) {
+                            self.count += 1;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
     }
+
+    let mut v = FlowSiteVisitor { count: 0, labeled };
+    v.visit_block(block);
+    v.count
 }
 
 fn expr_uses_labeled(expr: &Expr, labeled: &HashSet<String>) -> bool {

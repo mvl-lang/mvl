@@ -51,6 +51,7 @@ use crate::mvl::parser::ast::{
     UnaryOp, VariantFields,
 };
 use crate::mvl::parser::lexer::Span;
+use crate::mvl::parser::visit::{walk_expr as ast_walk_expr, Visit};
 
 // ── Shared checker context ────────────────────────────────────────────────────
 
@@ -66,152 +67,34 @@ struct ContractCheckCtx<'a> {
     counts: &'a mut RefinementCounts,
 }
 
-// ── Generic AST walkers ───────────────────────────────────────────────────────
+// ── Generic AST walker (post-order, context-threaded) ────────────────────────
 
-/// Visit every `Expr` in `block`, calling `f` on each one.
+/// Visit every `Expr` in `block`, calling `f` on each one in **post-order**:
+/// sub-expressions are visited before the expression that contains them, so
+/// inner call sites are checked before outer ones.
 ///
-/// Traversal is post-order: sub-expressions are visited before the expression
-/// that contains them, so inner call sites are checked before outer ones.
-/// This matches the previous per-walker behaviour.
+/// Built on top of [`crate::mvl::parser::visit::Visit`] — recursion is handled
+/// by the shared `walk_expr`, this helper only re-orders the visitor callback
+/// to fire after descent.
 fn walk_stmts<F>(block: &Block, ctx: &mut ContractCheckCtx<'_>, f: &mut F)
 where
     F: FnMut(&Expr, &mut ContractCheckCtx<'_>),
 {
-    for stmt in &block.stmts {
-        walk_stmt_exprs(stmt, ctx, f);
+    struct PostOrderVisitor<'v, 'cx, 'f, F> {
+        ctx: &'v mut ContractCheckCtx<'cx>,
+        f: &'f mut F,
     }
-}
-
-fn walk_stmt_exprs<F>(stmt: &Stmt, ctx: &mut ContractCheckCtx<'_>, f: &mut F)
-where
-    F: FnMut(&Expr, &mut ContractCheckCtx<'_>),
-{
-    match stmt {
-        Stmt::Let { init, .. } => walk_expr(init, ctx, f),
-        Stmt::Assign { value, .. } => walk_expr(value, ctx, f),
-        Stmt::Return { value: Some(e), .. } => walk_expr(e, ctx, f),
-        Stmt::Return { value: None, .. } => {}
-        Stmt::Expr { expr, .. } => walk_expr(expr, ctx, f),
-        Stmt::If {
-            cond, then, else_, ..
-        } => {
-            walk_expr(cond, ctx, f);
-            walk_stmts(then, ctx, f);
-            match else_ {
-                None => {}
-                Some(ElseBranch::Block(b)) => walk_stmts(b, ctx, f),
-                Some(ElseBranch::If(s)) => walk_stmt_exprs(s, ctx, f),
-            }
-        }
-        Stmt::While { cond, body, .. } => {
-            walk_expr(cond, ctx, f);
-            walk_stmts(body, ctx, f);
-        }
-        Stmt::For { iter, body, .. } => {
-            walk_expr(iter, ctx, f);
-            walk_stmts(body, ctx, f);
-        }
-        Stmt::Match {
-            scrutinee, arms, ..
-        } => {
-            walk_expr(scrutinee, ctx, f);
-            for arm in arms {
-                match &arm.body {
-                    MatchBody::Expr(e) => walk_expr(e, ctx, f),
-                    MatchBody::Block(b) => walk_stmts(b, ctx, f),
-                }
-            }
+    impl<'ast, 'v, 'cx, 'f, F> Visit<'ast> for PostOrderVisitor<'v, 'cx, 'f, F>
+    where
+        F: FnMut(&Expr, &mut ContractCheckCtx<'cx>),
+    {
+        fn visit_expr(&mut self, e: &'ast Expr) {
+            ast_walk_expr(self, e);
+            (self.f)(e, self.ctx);
         }
     }
-}
-
-fn walk_expr<F>(expr: &Expr, ctx: &mut ContractCheckCtx<'_>, f: &mut F)
-where
-    F: FnMut(&Expr, &mut ContractCheckCtx<'_>),
-{
-    // Post-order: recurse into sub-expressions first, then call the visitor.
-    match expr {
-        Expr::FnCall { args, .. } => {
-            for a in args {
-                walk_expr(a, ctx, f);
-            }
-        }
-        Expr::MethodCall { receiver, args, .. } => {
-            walk_expr(receiver, ctx, f);
-            for a in args {
-                walk_expr(a, ctx, f);
-            }
-        }
-        Expr::Block(b) => {
-            walk_stmts(b, ctx, f);
-        }
-        Expr::If {
-            cond, then, else_, ..
-        } => {
-            walk_expr(cond, ctx, f);
-            walk_stmts(then, ctx, f);
-            if let Some(e) = else_ {
-                walk_expr(e, ctx, f);
-            }
-        }
-        Expr::Binary { left, right, .. } => {
-            walk_expr(left, ctx, f);
-            walk_expr(right, ctx, f);
-        }
-        Expr::Borrow { expr, .. }
-        | Expr::Unary { expr, .. }
-        | Expr::Consume { expr, .. }
-        | Expr::Relabel { expr, .. }
-        | Expr::Propagate { expr, .. }
-        | Expr::FieldAccess { expr, .. }
-        | Expr::As { expr, .. } => {
-            walk_expr(expr, ctx, f);
-        }
-        Expr::Construct { fields, .. } => {
-            for (_, e) in fields {
-                walk_expr(e, ctx, f);
-            }
-        }
-        Expr::List { elems, .. } | Expr::Set { elems, .. } => {
-            for e in elems {
-                walk_expr(e, ctx, f);
-            }
-        }
-        Expr::Map { pairs, .. } => {
-            for (k, v) in pairs {
-                walk_expr(k, ctx, f);
-                walk_expr(v, ctx, f);
-            }
-        }
-        Expr::Match {
-            scrutinee, arms, ..
-        } => {
-            walk_expr(scrutinee, ctx, f);
-            for arm in arms {
-                match &arm.body {
-                    MatchBody::Expr(e) => walk_expr(e, ctx, f),
-                    MatchBody::Block(b) => walk_stmts(b, ctx, f),
-                }
-            }
-        }
-        Expr::Lambda { body, .. } => {
-            walk_expr(body, ctx, f);
-        }
-        Expr::Spawn { fields, .. } => {
-            for (_, v) in fields {
-                walk_expr(v, ctx, f);
-            }
-        }
-        Expr::Select { arms, .. } => {
-            for arm in arms {
-                walk_expr(&arm.expr, ctx, f);
-                walk_stmts(&arm.body, ctx, f);
-            }
-        }
-        // Leaves — no sub-expressions to walk.
-        Expr::Literal(..) | Expr::Ident(..) | Expr::Quantifier(..) => {}
-    }
-    f(expr, ctx);
+    let mut v = PostOrderVisitor { ctx, f };
+    v.visit_block(block);
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
