@@ -19,12 +19,16 @@ impl TextEmitter {
         self.push_instr(&format!(
             "{r0} = insertvalue {RESULT_LLVM_TY} zeroinitializer, i8 {disc}, 0"
         ));
-        self.reg_types.insert(r0.clone(), RESULT_LLVM_TY.into());
+        self.fn_ctx
+            .reg_types
+            .insert(r0.clone(), RESULT_LLVM_TY.into());
         let r1 = self.next_reg();
         self.push_instr(&format!(
             "{r1} = insertvalue {RESULT_LLVM_TY} {r0}, ptr {slot}, 1"
         ));
-        self.reg_types.insert(r1.clone(), RESULT_LLVM_TY.into());
+        self.fn_ctx
+            .reg_types
+            .insert(r1.clone(), RESULT_LLVM_TY.into());
         r1
     }
 
@@ -159,15 +163,15 @@ impl TextEmitter {
     ) -> Result<Option<String>, String> {
         // Determine the inner MVL and LLVM types from the scrutinee's MVL type.
         let mvl_ty = match scrutinee {
-            Expr::Ident(name, _) => self.local_mvl_types.get(name.as_str()).cloned(),
-            Expr::FnCall { name, .. } => self.fn_ret_types.get(name.as_str()).cloned(),
+            Expr::Ident(name, _) => self.fn_ctx.local_mvl_types.get(name.as_str()).cloned(),
+            Expr::FnCall { name, .. } => self.module.fn_ret_types.get(name.as_str()).cloned(),
             // MethodCall: infer Option[T] from receiver's element type for get/first/last.
             Expr::MethodCall {
                 receiver, method, ..
             } => {
                 if let Expr::Ident(rname, _) = receiver.as_ref() {
                     if let Some(TypeExpr::Base { args, .. }) =
-                        self.local_mvl_types.get(rname.as_str())
+                        self.fn_ctx.local_mvl_types.get(rname.as_str())
                     {
                         if let Some(inner) = args.first() {
                             match method.as_str() {
@@ -201,10 +205,10 @@ impl TextEmitter {
         self.push_instr(&format!(
             "{disc_reg} = extractvalue {RESULT_LLVM_TY} {scrut_val}, 0"
         ));
-        self.reg_types.insert(disc_reg.clone(), "i8".into());
+        self.fn_ctx.reg_types.insert(disc_reg.clone(), "i8".into());
 
-        let n = self.bb;
-        self.bb += arms.len() + 2;
+        let n = self.fn_ctx.bb;
+        self.fn_ctx.bb += arms.len() + 2;
         let default_bb = format!("match_default_{n}");
         let merge_bb = format!("match_merge_{}", n + arms.len() + 1);
         let arm_bbs: Vec<String> = (0..arms.len())
@@ -244,9 +248,9 @@ impl TextEmitter {
             }
 
             let arm_bb = &arm_bbs[idx];
-            self.fn_buf.push(format!("{arm_bb}:"));
-            self.current_bb = arm_bb.clone();
-            self.terminated = false;
+            self.fn_ctx.fn_buf.push(format!("{arm_bb}:"));
+            self.fn_ctx.current_bb = arm_bb.clone();
+            self.fn_ctx.terminated = false;
 
             let mut bound_var: Option<String> = None;
 
@@ -258,13 +262,18 @@ impl TextEmitter {
                     ));
                     let some_val = self.next_reg();
                     self.push_instr(&format!("{some_val} = load {inner_load_ty}, ptr {pp}"));
-                    self.reg_types
+                    self.fn_ctx
+                        .reg_types
                         .insert(some_val.clone(), inner_load_ty.clone());
                     if let Pattern::Ident(var_name, _) = inner.as_ref() {
                         if var_name != "_" {
-                            self.locals.insert(var_name.clone(), some_val.clone());
+                            self.fn_ctx
+                                .locals
+                                .insert(var_name.clone(), some_val.clone());
                             if let Some(ref imty) = inner_mvl_ty {
-                                self.local_mvl_types.insert(var_name.clone(), imty.clone());
+                                self.fn_ctx
+                                    .local_mvl_types
+                                    .insert(var_name.clone(), imty.clone());
                             }
                             bound_var = Some(var_name.clone());
                         }
@@ -280,8 +289,8 @@ impl TextEmitter {
                 MatchBody::Expr(e) => self.emit_expr(e)?,
                 MatchBody::Block(b) => self.emit_block(b)?,
             };
-            let end_bb = self.current_bb.clone();
-            if !self.terminated {
+            let end_bb = self.fn_ctx.current_bb.clone();
+            if !self.fn_ctx.terminated {
                 self.push_instr(&format!("br label %{merge_bb}"));
                 if let Some(v) = arm_val {
                     let ty = self.infer_val_type(&v);
@@ -292,29 +301,31 @@ impl TextEmitter {
             }
 
             if let Some(ref var_name) = bound_var {
-                self.locals.remove(var_name);
-                self.local_mvl_types.remove(var_name);
+                self.fn_ctx.locals.remove(var_name);
+                self.fn_ctx.local_mvl_types.remove(var_name);
             }
         }
 
         // Default block — either jumps to wildcard arm body or traps.
-        self.fn_buf.push(format!("{default_bb}:"));
-        self.current_bb = default_bb.clone();
-        self.terminated = false;
+        self.fn_ctx.fn_buf.push(format!("{default_bb}:"));
+        self.fn_ctx.current_bb = default_bb.clone();
+        self.fn_ctx.terminated = false;
         if let Some(wild_idx) = wildcard_arm {
             // Emit the wildcard arm body inline in the default block.
             let wild_arm = &arms[wild_idx];
             let mut bound_var: Option<String> = None;
             if let Pattern::Ident(name, _) = &wild_arm.pattern {
-                self.locals.insert(name.clone(), scrut_val.to_string());
+                self.fn_ctx
+                    .locals
+                    .insert(name.clone(), scrut_val.to_string());
                 bound_var = Some(name.clone());
             }
             let arm_val = match &wild_arm.body {
                 MatchBody::Expr(e) => self.emit_expr(e)?,
                 MatchBody::Block(b) => self.emit_block(b)?,
             };
-            let end_bb = self.current_bb.clone();
-            if !self.terminated {
+            let end_bb = self.fn_ctx.current_bb.clone();
+            if !self.fn_ctx.terminated {
                 self.push_instr(&format!("br label %{merge_bb}"));
                 if let Some(v) = arm_val {
                     let ty = self.infer_val_type(&v);
@@ -324,32 +335,32 @@ impl TextEmitter {
                 }
             }
             if let Some(ref var_name) = bound_var {
-                self.locals.remove(var_name);
-                self.local_mvl_types.remove(var_name);
+                self.fn_ctx.locals.remove(var_name);
+                self.fn_ctx.local_mvl_types.remove(var_name);
             }
         } else {
             self.ensure_extern("declare void @llvm.trap()");
             self.push_instr("call void @llvm.trap()");
             self.push_instr("unreachable");
-            self.terminated = true;
+            self.fn_ctx.terminated = true;
         }
 
         // Merge block + phi.
         let total_incoming = phi_entries.len() + no_val_arms.len();
         if total_incoming == 0 {
             // All arms terminated (e.g. all `return`) — no merge block needed.
-            self.fn_buf.push(format!("{merge_bb}:"));
-            self.current_bb = merge_bb.clone();
-            self.terminated = false;
+            self.fn_ctx.fn_buf.push(format!("{merge_bb}:"));
+            self.fn_ctx.current_bb = merge_bb.clone();
+            self.fn_ctx.terminated = false;
             self.ensure_extern("declare void @llvm.trap()");
             self.push_instr("call void @llvm.trap()");
             self.push_instr("unreachable");
-            self.terminated = true;
+            self.fn_ctx.terminated = true;
             return Ok(None);
         }
-        self.fn_buf.push(format!("{merge_bb}:"));
-        self.current_bb = merge_bb.clone();
-        self.terminated = false;
+        self.fn_ctx.fn_buf.push(format!("{merge_bb}:"));
+        self.fn_ctx.current_bb = merge_bb.clone();
+        self.fn_ctx.terminated = false;
         if total_incoming >= 2 && !phi_entries.is_empty() {
             let phi_ty = phi_entries[0].1.clone();
             let mut parts: Vec<String> = phi_entries
@@ -361,7 +372,7 @@ impl TextEmitter {
             }
             let result = self.next_reg();
             self.push_instr(&format!("{result} = phi {phi_ty} {}", parts.join(", ")));
-            self.reg_types.insert(result.clone(), phi_ty);
+            self.fn_ctx.reg_types.insert(result.clone(), phi_ty);
             Ok(Some(result))
         } else if phi_entries.len() == 1 && no_val_arms.is_empty() {
             Ok(Some(phi_entries.remove(0).0))
@@ -377,8 +388,8 @@ impl TextEmitter {
     /// scrutinees (those go through the legacy i64-switch path).
     pub(super) fn scrutinee_payload_enum(&self, scrutinee: &Expr) -> Option<String> {
         let mvl_ty = match scrutinee {
-            Expr::Ident(name, _) => self.local_mvl_types.get(name.as_str()).cloned()?,
-            Expr::FnCall { name, .. } => self.fn_ret_types.get(name.as_str()).cloned()?,
+            Expr::Ident(name, _) => self.fn_ctx.local_mvl_types.get(name.as_str()).cloned()?,
+            Expr::FnCall { name, .. } => self.module.fn_ret_types.get(name.as_str()).cloned()?,
             _ => return None,
         };
         // Unwrap label/refinement wrappers.
@@ -390,7 +401,7 @@ impl TextEmitter {
             cur = inner.as_ref();
         }
         if let TypeExpr::Base { name, .. } = cur {
-            if self.enum_variants.contains_key(name) && self.enum_has_payloads(name) {
+            if self.module.enum_variants.contains_key(name) && self.enum_has_payloads(name) {
                 return Some(name.clone());
             }
         }
@@ -413,10 +424,10 @@ impl TextEmitter {
         self.push_instr(&format!(
             "{disc_reg} = extractvalue {RESULT_LLVM_TY} {scrut_val}, 0"
         ));
-        self.reg_types.insert(disc_reg.clone(), "i8".into());
+        self.fn_ctx.reg_types.insert(disc_reg.clone(), "i8".into());
 
-        let n = self.bb;
-        self.bb += arms.len() + 2;
+        let n = self.fn_ctx.bb;
+        self.fn_ctx.bb += arms.len() + 2;
         let default_bb = format!("match_default_{n}");
         let merge_bb = format!("match_merge_{}", n + arms.len() + 1);
         let arm_bbs: Vec<String> = (0..arms.len())
@@ -453,9 +464,9 @@ impl TextEmitter {
                 continue;
             }
             let arm_bb = &arm_bbs[idx];
-            self.fn_buf.push(format!("{arm_bb}:"));
-            self.current_bb = arm_bb.clone();
-            self.terminated = false;
+            self.fn_ctx.fn_buf.push(format!("{arm_bb}:"));
+            self.fn_ctx.current_bb = arm_bb.clone();
+            self.fn_ctx.terminated = false;
 
             let mut bound_vars: Vec<String> = Vec::new();
 
@@ -469,7 +480,9 @@ impl TextEmitter {
                     self.push_instr(&format!(
                         "{payload_ptr} = extractvalue {RESULT_LLVM_TY} {scrut_val}, 1"
                     ));
-                    self.reg_types.insert(payload_ptr.clone(), "ptr".into());
+                    self.fn_ctx
+                        .reg_types
+                        .insert(payload_ptr.clone(), "ptr".into());
                     let n_slots = field_tys.len();
                     for (i, inner_pat) in fields.iter().enumerate() {
                         let Some(field_ty_expr) = field_tys.get(i) else {
@@ -482,11 +495,12 @@ impl TextEmitter {
                         ));
                         let val = self.next_reg();
                         self.push_instr(&format!("{val} = load {field_llvm}, ptr {slot}"));
-                        self.reg_types.insert(val.clone(), field_llvm);
+                        self.fn_ctx.reg_types.insert(val.clone(), field_llvm);
                         if let Pattern::Ident(var_name, _) = inner_pat {
                             if var_name != "_" {
-                                self.locals.insert(var_name.clone(), val.clone());
-                                self.local_mvl_types
+                                self.fn_ctx.locals.insert(var_name.clone(), val.clone());
+                                self.fn_ctx
+                                    .local_mvl_types
                                     .insert(var_name.clone(), field_ty_expr.clone());
                                 bound_vars.push(var_name.clone());
                             }
@@ -499,8 +513,8 @@ impl TextEmitter {
                 MatchBody::Expr(e) => self.emit_expr(e)?,
                 MatchBody::Block(b) => self.emit_block(b)?,
             };
-            let end_bb = self.current_bb.clone();
-            if !self.terminated {
+            let end_bb = self.fn_ctx.current_bb.clone();
+            if !self.fn_ctx.terminated {
                 self.push_instr(&format!("br label %{merge_bb}"));
                 if let Some(v) = arm_val {
                     let ty = self.infer_val_type(&v);
@@ -510,21 +524,23 @@ impl TextEmitter {
                 }
             }
             for var_name in &bound_vars {
-                self.locals.remove(var_name);
-                self.local_mvl_types.remove(var_name);
+                self.fn_ctx.locals.remove(var_name);
+                self.fn_ctx.local_mvl_types.remove(var_name);
             }
         }
 
         // Default block — either jumps to wildcard arm body or traps.
-        self.fn_buf.push(format!("{default_bb}:"));
-        self.current_bb = default_bb.clone();
-        self.terminated = false;
+        self.fn_ctx.fn_buf.push(format!("{default_bb}:"));
+        self.fn_ctx.current_bb = default_bb.clone();
+        self.fn_ctx.terminated = false;
         if let Some(wild_idx) = wildcard_arm {
             let wild_arm = &arms[wild_idx];
             let mut bound_var: Option<String> = None;
             if let Pattern::Ident(name, _) = &wild_arm.pattern {
                 if !name.contains("::") {
-                    self.locals.insert(name.clone(), scrut_val.to_string());
+                    self.fn_ctx
+                        .locals
+                        .insert(name.clone(), scrut_val.to_string());
                     bound_var = Some(name.clone());
                 }
             }
@@ -532,8 +548,8 @@ impl TextEmitter {
                 MatchBody::Expr(e) => self.emit_expr(e)?,
                 MatchBody::Block(b) => self.emit_block(b)?,
             };
-            let end_bb = self.current_bb.clone();
-            if !self.terminated {
+            let end_bb = self.fn_ctx.current_bb.clone();
+            if !self.fn_ctx.terminated {
                 self.push_instr(&format!("br label %{merge_bb}"));
                 if let Some(v) = arm_val {
                     let ty = self.infer_val_type(&v);
@@ -543,31 +559,31 @@ impl TextEmitter {
                 }
             }
             if let Some(ref var_name) = bound_var {
-                self.locals.remove(var_name);
+                self.fn_ctx.locals.remove(var_name);
             }
         } else {
             self.ensure_extern("declare void @llvm.trap()");
             self.push_instr("call void @llvm.trap()");
             self.push_instr("unreachable");
-            self.terminated = true;
+            self.fn_ctx.terminated = true;
         }
 
         let _ = enum_name; // currently only used implicitly via pattern_discriminant
                            // Merge block + phi.
         let total_incoming = phi_entries.len() + no_val_arms.len();
         if total_incoming == 0 {
-            self.fn_buf.push(format!("{merge_bb}:"));
-            self.current_bb = merge_bb.clone();
-            self.terminated = false;
+            self.fn_ctx.fn_buf.push(format!("{merge_bb}:"));
+            self.fn_ctx.current_bb = merge_bb.clone();
+            self.fn_ctx.terminated = false;
             self.ensure_extern("declare void @llvm.trap()");
             self.push_instr("call void @llvm.trap()");
             self.push_instr("unreachable");
-            self.terminated = true;
+            self.fn_ctx.terminated = true;
             return Ok(None);
         }
-        self.fn_buf.push(format!("{merge_bb}:"));
-        self.current_bb = merge_bb.clone();
-        self.terminated = false;
+        self.fn_ctx.fn_buf.push(format!("{merge_bb}:"));
+        self.fn_ctx.current_bb = merge_bb.clone();
+        self.fn_ctx.terminated = false;
         if total_incoming >= 2 && !phi_entries.is_empty() {
             let phi_ty = phi_entries[0].1.clone();
             let mut parts: Vec<String> = phi_entries
@@ -579,7 +595,7 @@ impl TextEmitter {
             }
             let result = self.next_reg();
             self.push_instr(&format!("{result} = phi {phi_ty} {}", parts.join(", ")));
-            self.reg_types.insert(result.clone(), phi_ty);
+            self.fn_ctx.reg_types.insert(result.clone(), phi_ty);
             Ok(Some(result))
         } else if phi_entries.len() == 1 && no_val_arms.is_empty() {
             Ok(Some(phi_entries.remove(0).0))
@@ -595,10 +611,11 @@ impl TextEmitter {
     ) -> Result<Option<String>, String> {
         // Named-field enum variant construction: "Type::Variant { field: val }" (#1357)
         if let Some((type_name, _)) = name.split_once("::") {
-            if self.enum_variants.contains_key(type_name) {
+            if self.module.enum_variants.contains_key(type_name) {
                 let disc = self.pattern_discriminant(name).unwrap_or(0);
                 // Look up declaration-order field names for this struct variant.
                 let ordered_names = self
+                    .module
                     .enum_struct_variant_field_names
                     .get(name)
                     .cloned()
@@ -624,7 +641,7 @@ impl TextEmitter {
             }
         }
 
-        let field_defs = match self.struct_fields.get(name).cloned() {
+        let field_defs = match self.module.struct_fields.get(name).cloned() {
             Some(f) => f,
             None => return Ok(None),
         };
@@ -648,7 +665,7 @@ impl TextEmitter {
             self.push_instr(&format!(
                 "{reg} = insertvalue {struct_ty} {acc}, {field_ty} {val}, {i}"
             ));
-            self.reg_types.insert(reg.clone(), struct_ty.clone());
+            self.fn_ctx.reg_types.insert(reg.clone(), struct_ty.clone());
             acc = reg;
         }
         Ok(Some(acc))
@@ -664,11 +681,11 @@ impl TextEmitter {
         // In actor method bodies, `self.field` maps to a ref_local GEP pointer.
         // Check this before falling through to extractvalue-based struct access.
         if matches!(expr, Expr::Ident(name, _) if name == "self") {
-            if let Some(loc) = self.ref_locals.get(field).cloned() {
+            if let Some(loc) = self.fn_ctx.ref_locals.get(field).cloned() {
                 let ty_str = self.llvm_ty_ctx(&loc.elem_ty);
                 let reg = self.next_reg();
                 self.push_instr(&format!("{reg} = load {ty_str}, ptr {}", loc.ptr));
-                self.reg_types.insert(reg.clone(), ty_str);
+                self.fn_ctx.reg_types.insert(reg.clone(), ty_str);
                 return Ok(Some(reg));
             }
         }
@@ -680,12 +697,12 @@ impl TextEmitter {
         };
 
         if let Some(sn) = struct_name {
-            if let Some(fields) = self.struct_fields.get(&sn).cloned() {
+            if let Some(fields) = self.module.struct_fields.get(&sn).cloned() {
                 if let Some(idx) = fields.iter().position(|(f, _)| f == field) {
                     let field_ty = self.llvm_ty_ctx(&fields[idx].1.clone());
                     let reg = self.next_reg();
                     self.push_instr(&format!("{reg} = extractvalue %{sn} {base_val}, {idx}"));
-                    self.reg_types.insert(reg.clone(), field_ty);
+                    self.fn_ctx.reg_types.insert(reg.clone(), field_ty);
                     return Ok(Some(reg));
                 }
             }
@@ -717,7 +734,7 @@ impl TextEmitter {
         self.push_instr(&format!(
             "{arr} = call ptr @_mvl_array_new(i64 {elem_size}, i64 {n})"
         ));
-        self.reg_types.insert(arr.clone(), "ptr".into());
+        self.fn_ctx.reg_types.insert(arr.clone(), "ptr".into());
 
         for v in &elem_vals {
             let slot = self.next_reg();
@@ -755,7 +772,7 @@ impl TextEmitter {
         self.push_instr(&format!(
             "{arr} = call ptr @_mvl_array_filled(i64 {elem_size}, i64 {n_val}, ptr {item_slot})"
         ));
-        self.reg_types.insert(arr.clone(), "ptr".into());
+        self.fn_ctx.reg_types.insert(arr.clone(), "ptr".into());
         Ok(Some(arr))
     }
 
@@ -773,7 +790,7 @@ impl TextEmitter {
 
         let map = self.next_reg();
         self.push_instr(&format!("{map} = call ptr @_mvl_map_new(i64 {n})"));
-        self.reg_types.insert(map.clone(), "ptr".into());
+        self.fn_ctx.reg_types.insert(map.clone(), "ptr".into());
 
         for (key_expr, val_expr) in pairs {
             // Emit key (expected to be a String → ptr)

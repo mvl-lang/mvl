@@ -145,8 +145,7 @@ pub fn run(
     let mut seen_pkgs = std::collections::HashSet::<String>::new();
     let mut frontier: Vec<_> = all_progs.clone();
     loop {
-        let new_pkgs =
-            loader::load_pkg_modules_tagged(&frontier, &project_root, &mut seen_pkgs);
+        let new_pkgs = loader::load_pkg_modules_tagged(&frontier, &project_root, &mut seen_pkgs);
         if new_pkgs.is_empty() {
             break;
         }

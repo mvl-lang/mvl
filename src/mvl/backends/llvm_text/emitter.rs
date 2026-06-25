@@ -7,13 +7,12 @@
 //! struct construction/field access, unit enums, match expressions,
 //! method calls (to_string/len/concat), and for-range loops.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
+use super::context::{FnCtx, ModuleCtx, MonoQueue};
 use super::BuiltinSymbolInfo;
 use crate::mvl::checker::types::Ty;
-use crate::mvl::parser::ast::{
-    ActorDecl, Decl, FnDecl, Program, Stmt, TypeBody, TypeExpr, VariantFields,
-};
+use crate::mvl::parser::ast::{Decl, FnDecl, Program, Stmt, TypeBody, TypeExpr, VariantFields};
 use crate::mvl::parser::lexer::Span;
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -87,7 +86,7 @@ impl LlvmTextCompiler {
     ) -> Result<String, String> {
         let mut emitter =
             TextEmitter::new_with_builtins(module_name, &self.target_triple, &self.builtin_symbols);
-        emitter.expr_types = self.expr_types.clone();
+        emitter.set_expr_types(self.expr_types.clone());
         for p in prelude {
             let stripped = strip_prelude_extension_methods(p);
             emitter.emit_program(&stripped)?;
@@ -182,126 +181,33 @@ const RESULT_LLVM_TY: &str = "{ i8, ptr }";
 /// LLVM return instruction for the C-ABI `main` entry point.
 const MAIN_RET: &str = "ret i32 0";
 
-struct TextEmitter {
-    module_name: String,
-    target_triple: String,
-
-    // ── Module-level output sections ──────────────────────────────────────
-    fn_bodies: Vec<String>,
-    str_counter: usize,
-    str_globals: Vec<String>,
-    type_defs: Vec<String>,
-    extern_decls: Vec<String>,
-
-    // ── Type registries (populated during first pass) ─────────────────────
-    /// struct name → ordered list of (field_name, field_TypeExpr)
-    struct_fields: HashMap<String, Vec<(String, TypeExpr)>>,
-    /// enum name → ordered list of variant names (index = discriminant)
-    enum_variants: HashMap<String, Vec<String>>,
-    /// enum name → ordered list of variant payload field type lists (#1200).
-    ///
-    /// Parallel to `enum_variants`: index = discriminant. Each entry is the
-    /// list of `TypeExpr`s for the variant's tuple-struct fields. Unit variants
-    /// have an empty `Vec`. An enum is a "payload enum" if any variant has a
-    /// non-empty field list — payload enums lower to `{ i8, ptr }` instead of
-    /// a bare `i64` discriminant.
-    enum_variant_fields: HashMap<String, Vec<Vec<TypeExpr>>>,
-    /// "EnumType::VariantName" → ordered field names for struct variants (#1357).
-    /// Only populated for `VariantFields::Struct` variants.
-    enum_struct_variant_field_names: HashMap<String, Vec<String>>,
-
-    // ── Per-function state (reset on every new function) ──────────────────
-    fn_buf: Vec<String>,
-    current_bb: String,
-    terminated: bool,
-    reg: usize,
-    bb: usize,
-    locals: HashMap<String, String>,
-    ref_locals: HashMap<String, RefLocal>,
-    current_ret_ty: TypeExpr,
-    fn_ret_types: HashMap<String, TypeExpr>,
-    /// Function name → ordered parameter types (for named-fn closure trampolines).
-    fn_param_types: HashMap<String, Vec<TypeExpr>>,
-    /// SSA register → LLVM type string (for phi type inference)
-    reg_types: HashMap<String, String>,
-    /// MVL variable name → TypeExpr (for struct field access)
-    local_mvl_types: HashMap<String, TypeExpr>,
-
-    // ── Helper-global presence flags ──────────────────────────────────────
-    has_println_fmt: bool,
-    has_int_fmt: bool,
-    has_str_true: bool,
-    has_str_false: bool,
-
-    // ── Closure / lambda state (#1148) ────────────────────────────────────
-    /// Monotonic counter for generating unique lambda function names.
-    lambda_counter: usize,
-    /// True once `%__closure_type = type { ptr, ptr }` has been emitted.
-    closure_type_emitted: bool,
-
-    /// Named fn-type aliases: `type Dispatcher = fn(val Request) -> Response`
-    /// maps `"Dispatcher"` → `TypeExpr::Fn { .. }` so call sites can resolve
-    /// indirect calls through aliases (#1497-followup, mirror of PR #1467
-    /// for the Rust backend).
-    fn_aliases: HashMap<String, TypeExpr>,
-
-    // ── Actor state (#1149) ───────────────────────────────────────────────
-    /// Actor declarations keyed by actor type name (populated in first pass).
-    actor_decls: HashMap<String, ActorDecl>,
-    /// True once actor runtime externs have been emitted.
-    actor_runtime_declared: bool,
-    /// True once `declare void @_mvl_yield_check()` has been emitted (#1181).
-    yield_check_declared: bool,
-
-    // ── Builtin fn dispatch (#1160) ────────────────────────────────────────
-    /// Maps MVL builtin function name → C-ABI symbol (e.g. `bytes` → `_mvl_random_bytes`).
-    /// Populated from `LlvmTextCompiler::builtin_symbols` at construction time.
-    builtin_syms: HashMap<String, String>,
-
-    // ── Per-function flags ────────────────────────────────────────────────
-    /// True while emitting the `main` function (affects `ret` instruction type).
-    current_fn_is_main: bool,
-    /// SSA registers of actor handles spawned in the current function.
-    /// Emitted as `mvl_actor_drop` calls before `mvl_actor_join_all` in `main`.
-    spawned_actor_handles: Vec<String>,
-
-    // ── Generic monomorphization (#1156) ──────────────────────────────────
-    /// Generic function declarations (type_params non-empty), keyed by name.
-    generic_fns: HashMap<String, FnDecl>,
-    /// Active type-parameter → concrete-type mapping during monomorphized emission.
-    type_param_map: HashMap<String, TypeExpr>,
-    /// Mangled names of monomorphized copies already emitted (avoid duplicates).
-    mono_emitted: HashSet<String>,
-    /// Queue of monomorphized functions to emit: (mangled_name, concrete_types).
-    mono_queue: Vec<(String, String, Vec<TypeExpr>)>,
-
-    // ── Heap drop tracking (#1185) ───────────────────────────────────────
-    /// Heap-allocated locals in the current function.  Entries are emitted
-    /// as `mvl_*_drop` calls before every `ret` instruction.
-    /// Heap-allocated locals: (ssa_or_alloca, kind, is_ref).
-    /// When `is_ref` is true, the SSA is a stack alloca that must be loaded
-    /// before the drop call (the alloca holds the heap object pointer).
-    heap_locals: Vec<(String, HeapKind, bool)>,
-
-    // ── Checker-resolved types (#1302) ───────────────────────────────────
-    /// Checker-resolved expression types, keyed by source span.
-    /// When non-empty, `type_of_expr` consults this map first for accurate
-    /// type information before falling back to AST-based inference.
-    expr_types: HashMap<Span, Ty>,
+/// LLVM IR emitter (#1523).
+///
+/// State is split into three composable parts:
+/// - [`ModuleCtx`] — module-global state (output buffers, type registries,
+///   helper flags). Lives for the whole compilation unit.
+/// - [`FnCtx`] — per-function state (SSA bookkeeping, locals). Replaced
+///   wholesale at the start of every [`emit_fn`](Self::emit_fn) — this
+///   eliminates the error-prone manual `reset_fn_state` method.
+/// - [`MonoQueue`] — generic-function discovery + emission queue.
+pub(super) struct TextEmitter {
+    pub(super) module: ModuleCtx,
+    pub(super) fn_ctx: FnCtx,
+    pub(super) mono: MonoQueue,
 }
 
 /// Tracks heap-allocated value types for automatic drop emission.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum HeapKind {
+pub(super) enum HeapKind {
     String,
     Array,
     Map,
 }
 
 #[derive(Clone)]
-struct RefLocal {
-    ptr: String,
-    elem_ty: TypeExpr,
+pub(super) struct RefLocal {
+    pub ptr: String,
+    pub elem_ty: TypeExpr,
 }
 
 impl TextEmitter {
@@ -315,91 +221,45 @@ impl TextEmitter {
     /// `builtin_map` entries are pre-loaded into `fn_ret_types` / `fn_param_types`
     /// so call sites see the correct LLVM types even when the prelude doesn't
     /// include `builtin fn` declarations (e.g. RUST_BACKED_STDLIB modules strip them).
-    fn new_with_builtins(
+    pub(super) fn new_with_builtins(
         module_name: &str,
         target_triple: &str,
         builtin_map: &HashMap<String, BuiltinSymbolInfo>,
     ) -> Self {
-        let mut fn_ret_types: HashMap<String, TypeExpr> = HashMap::new();
-        let mut fn_param_types: HashMap<String, Vec<TypeExpr>> = HashMap::new();
-        let mut builtin_syms: HashMap<String, String> = HashMap::new();
-
-        for (fn_name, info) in builtin_map {
-            fn_ret_types.insert(fn_name.clone(), info.ret_ty.clone());
-            fn_param_types.insert(fn_name.clone(), info.param_tys.clone());
-            builtin_syms.insert(fn_name.clone(), info.c_sym.clone());
-        }
-
         Self {
-            module_name: module_name.to_string(),
-            target_triple: target_triple.to_string(),
-            fn_bodies: Vec::new(),
-            str_counter: 0,
-            str_globals: Vec::new(),
-            type_defs: Vec::new(),
-            extern_decls: Vec::new(),
-            struct_fields: HashMap::new(),
-            enum_variants: HashMap::new(),
-            enum_variant_fields: HashMap::new(),
-            enum_struct_variant_field_names: HashMap::new(),
-            fn_buf: Vec::new(),
-            current_bb: String::new(),
-            terminated: false,
-            reg: 0,
-            bb: 0,
-            locals: HashMap::new(),
-            ref_locals: HashMap::new(),
-            current_ret_ty: TypeExpr::Base {
-                name: "Unit".into(),
-                args: vec![],
-                span: Default::default(),
-            },
-            fn_ret_types,
-            fn_param_types,
-            reg_types: HashMap::new(),
-            local_mvl_types: HashMap::new(),
-            has_println_fmt: false,
-            has_int_fmt: false,
-            has_str_true: false,
-            has_str_false: false,
-            lambda_counter: 0,
-            closure_type_emitted: false,
-            fn_aliases: HashMap::new(),
-            actor_decls: HashMap::new(),
-            actor_runtime_declared: false,
-            yield_check_declared: false,
-            builtin_syms,
-            current_fn_is_main: false,
-            spawned_actor_handles: Vec::new(),
-            generic_fns: HashMap::new(),
-            type_param_map: HashMap::new(),
-            mono_emitted: HashSet::new(),
-            mono_queue: Vec::new(),
-            heap_locals: Vec::new(),
-            expr_types: HashMap::new(),
+            module: ModuleCtx::new(module_name, target_triple, builtin_map),
+            fn_ctx: FnCtx::initial(),
+            mono: MonoQueue::new(),
         }
+    }
+
+    /// Mutator used by [`LlvmTextCompiler::compile_to_ir_with_prelude`] to
+    /// install checker-resolved expression types after construction.
+    pub(super) fn set_expr_types(&mut self, expr_types: HashMap<Span, Ty>) {
+        self.module.expr_types = expr_types;
     }
 
     // ── Finalise ──────────────────────────────────────────────────────────
 
     fn finish(self) -> String {
+        let m = &self.module;
         let mut out = String::new();
-        out.push_str(&format!("; ModuleID = '{}'\n", self.module_name));
-        out.push_str(&format!("source_filename = \"{}\"\n", self.module_name));
-        out.push_str(&format!("target triple = \"{}\"\n", self.target_triple));
-        for td in &self.type_defs {
+        out.push_str(&format!("; ModuleID = '{}'\n", m.module_name));
+        out.push_str(&format!("source_filename = \"{}\"\n", m.module_name));
+        out.push_str(&format!("target triple = \"{}\"\n", m.target_triple));
+        for td in &m.type_defs {
             out.push('\n');
             out.push_str(td);
         }
-        for sg in &self.str_globals {
+        for sg in &m.str_globals {
             out.push('\n');
             out.push_str(sg);
         }
-        for body in &self.fn_bodies {
+        for body in &m.fn_bodies {
             out.push('\n');
             out.push_str(body);
         }
-        for ext in &self.extern_decls {
+        for ext in &m.extern_decls {
             out.push('\n');
             out.push_str(ext);
         }
@@ -408,57 +268,39 @@ impl TextEmitter {
 
     // ── Counter helpers ───────────────────────────────────────────────────
 
-    fn next_reg(&mut self) -> String {
-        let n = self.reg;
-        self.reg += 1;
+    pub(super) fn next_reg(&mut self) -> String {
+        let n = self.fn_ctx.reg;
+        self.fn_ctx.reg += 1;
         format!("%t{n}")
     }
 
-    fn next_bb(&mut self, prefix: &str) -> String {
-        let n = self.bb;
-        self.bb += 1;
+    pub(super) fn next_bb(&mut self, prefix: &str) -> String {
+        let n = self.fn_ctx.bb;
+        self.fn_ctx.bb += 1;
         format!("{prefix}_{n}")
     }
 
     // ── Instruction helpers ───────────────────────────────────────────────
 
-    fn push_line(&mut self, line: &str) {
-        self.fn_buf.push(line.to_string());
+    pub(super) fn push_line(&mut self, line: &str) {
+        self.fn_ctx.fn_buf.push(line.to_string());
     }
 
-    fn push_instr(&mut self, instr: &str) {
-        self.fn_buf.push(format!("  {instr}"));
+    pub(super) fn push_instr(&mut self, instr: &str) {
+        self.fn_ctx.fn_buf.push(format!("  {instr}"));
     }
 
-    fn start_bb(&mut self, label: &str) {
-        self.fn_buf.push(format!("{label}:"));
-        self.current_bb = label.to_string();
-        self.terminated = false;
-    }
-
-    // ── Per-function state reset ──────────────────────────────────────────
-
-    fn reset_fn_state(&mut self, ret_ty: TypeExpr) {
-        self.fn_buf.clear();
-        self.current_bb = "entry".to_string();
-        self.terminated = false;
-        self.reg = 0;
-        self.bb = 0;
-        self.locals.clear();
-        self.ref_locals.clear();
-        self.reg_types.clear();
-        self.local_mvl_types.clear();
-        self.current_ret_ty = ret_ty;
-        self.current_fn_is_main = false;
-        self.spawned_actor_handles.clear();
-        self.heap_locals.clear();
+    pub(super) fn start_bb(&mut self, label: &str) {
+        self.fn_ctx.fn_buf.push(format!("{label}:"));
+        self.fn_ctx.current_bb = label.to_string();
+        self.fn_ctx.terminated = false;
     }
 
     // ── Extern declaration helpers ────────────────────────────────────────
 
-    fn ensure_extern(&mut self, decl: &str) {
-        if !self.extern_decls.iter().any(|d| d == decl) {
-            self.extern_decls.push(decl.to_string());
+    pub(super) fn ensure_extern(&mut self, decl: &str) {
+        if !self.module.extern_decls.iter().any(|d| d == decl) {
+            self.module.extern_decls.push(decl.to_string());
         }
     }
 
@@ -467,9 +309,9 @@ impl TextEmitter {
     /// Called at every loop back-edge insertion point. The flag avoids repeated
     /// linear scans through `extern_decls`.
     pub(super) fn ensure_yield_check_extern(&mut self) {
-        if !self.yield_check_declared {
+        if !self.module.yield_check_declared {
             self.ensure_extern("declare void @_mvl_yield_check()");
-            self.yield_check_declared = true;
+            self.module.yield_check_declared = true;
         }
     }
 
@@ -500,11 +342,16 @@ impl TextEmitter {
                             let qname = format!("{}::{}", td.name, v.name);
                             let names: Vec<String> =
                                 fields.iter().map(|f| f.name.clone()).collect();
-                            self.enum_struct_variant_field_names.insert(qname, names);
+                            self.module
+                                .enum_struct_variant_field_names
+                                .insert(qname, names);
                         }
                     }
-                    self.enum_variants.insert(td.name.clone(), variant_names);
-                    self.enum_variant_fields
+                    self.module
+                        .enum_variants
+                        .insert(td.name.clone(), variant_names);
+                    self.module
+                        .enum_variant_fields
                         .insert(td.name.clone(), variant_fields);
                 }
             }
@@ -517,15 +364,21 @@ impl TextEmitter {
                     let ret = fd.return_type.as_ref().clone();
                     let params: Vec<TypeExpr> = fd.params.iter().map(|p| p.ty.clone()).collect();
                     // Register under the short name (e.g. `from_chars`)
-                    self.fn_ret_types.insert(fd.name.clone(), ret.clone());
-                    self.fn_param_types.insert(fd.name.clone(), params.clone());
+                    self.module
+                        .fn_ret_types
+                        .insert(fd.name.clone(), ret.clone());
+                    self.module
+                        .fn_param_types
+                        .insert(fd.name.clone(), params.clone());
                     // Also register under the qualified name (e.g. `String::from_chars`)
                     // so that static call-site lookups like `fn_ret_types["String::from_chars"]`
                     // resolve correctly.
                     if let Some(recv) = &fd.receiver_type {
                         let qualified = format!("{}::{}", recv, fd.name);
-                        self.fn_ret_types.insert(qualified.clone(), ret.clone());
-                        self.fn_param_types.insert(qualified, params);
+                        self.module
+                            .fn_ret_types
+                            .insert(qualified.clone(), ret.clone());
+                        self.module.fn_param_types.insert(qualified, params);
                     }
                 }
                 Decl::Type(td) => match &td.body {
@@ -546,12 +399,14 @@ impl TextEmitter {
                                 .iter()
                                 .map(|(_, ty)| self.llvm_ty_ctx(ty))
                                 .collect();
-                            self.type_defs.push(format!(
+                            self.module.type_defs.push(format!(
                                 "%{} = type {{ {} }}",
                                 td.name,
                                 field_types.join(", ")
                             ));
-                            self.struct_fields.insert(td.name.clone(), field_list);
+                            self.module
+                                .struct_fields
+                                .insert(td.name.clone(), field_list);
                         }
                     }
                     // Enums already registered in pre-pass above.
@@ -561,7 +416,9 @@ impl TextEmitter {
                         // an aliased type (e.g. `d: Dispatcher`) can resolve
                         // to their underlying `Fn` signature (#1467 LLVM port).
                         if matches!(inner.as_ref(), TypeExpr::Fn { .. }) {
-                            self.fn_aliases.insert(td.name.clone(), (**inner).clone());
+                            self.module
+                                .fn_aliases
+                                .insert(td.name.clone(), (**inner).clone());
                         }
                     }
                 },
@@ -576,12 +433,12 @@ impl TextEmitter {
                         .iter()
                         .map(|(_, ty)| self.llvm_ty_ctx(ty))
                         .collect();
-                    self.type_defs.push(format!(
+                    self.module.type_defs.push(format!(
                         "%{state_name} = type {{ {} }}",
                         field_types.join(", ")
                     ));
-                    self.struct_fields.insert(state_name, field_list);
-                    self.actor_decls.insert(ad.name.clone(), ad.clone());
+                    self.module.struct_fields.insert(state_name, field_list);
+                    self.module.actor_decls.insert(ad.name.clone(), ad.clone());
                 }
                 Decl::Extern(ed) if ed.abi == "c" => {
                     // Emit LLVM `declare` for each extern "c" function (#811).
@@ -598,9 +455,10 @@ impl TextEmitter {
                             format!("declare {} @{}({})", ret_ty, ef.name, param_tys.join(", "));
                         self.ensure_extern(&decl);
                         // Register return type and param types so call emission works.
-                        self.fn_ret_types
+                        self.module
+                            .fn_ret_types
                             .insert(ef.name.clone(), ef.return_type.as_ref().clone());
-                        self.fn_param_types.insert(
+                        self.module.fn_param_types.insert(
                             ef.name.clone(),
                             ef.params.iter().map(|p| p.ty.clone()).collect(),
                         );
@@ -611,11 +469,11 @@ impl TextEmitter {
         }
 
         // Actor pass: emit behavior functions + dispatch for each actor.
-        if !self.actor_decls.is_empty() {
+        if !self.module.actor_decls.is_empty() {
             self.ensure_actor_runtime_externs();
-            let actor_names: Vec<String> = self.actor_decls.keys().cloned().collect();
+            let actor_names: Vec<String> = self.module.actor_decls.keys().cloned().collect();
             for name in actor_names {
-                let ad = self.actor_decls[&name].clone();
+                let ad = self.module.actor_decls[&name].clone();
                 self.emit_actor_decl(&ad)?;
             }
         }
@@ -624,7 +482,7 @@ impl TextEmitter {
         for decl in &prog.declarations {
             if let Decl::Fn(fd) = decl {
                 if !fd.type_params.is_empty() {
-                    self.generic_fns.insert(fd.name.clone(), fd.clone());
+                    self.mono.generic_fns.insert(fd.name.clone(), fd.clone());
                 }
             }
         }
@@ -644,22 +502,23 @@ impl TextEmitter {
         // Loop because a monomorphized body may itself call another generic fn.
         const MONO_LIMIT: usize = 10_000;
         let mut mono_iterations = 0usize;
-        while !self.mono_queue.is_empty() {
+        while !self.mono.mono_queue.is_empty() {
             mono_iterations += 1;
             if mono_iterations > MONO_LIMIT {
                 return Err(
                     "monomorphization limit exceeded — possible infinite instantiation".into(),
                 );
             }
-            let queue = std::mem::take(&mut self.mono_queue);
+            let queue = std::mem::take(&mut self.mono.mono_queue);
             for (mangled, orig_name, concrete_types) in queue {
-                let gfd = match self.generic_fns.get(&orig_name) {
+                let gfd = match self.mono.generic_fns.get(&orig_name) {
                     Some(fd) => fd.clone(),
                     None => continue,
                 };
                 // Set up type parameter → concrete type mapping.
                 for (tp, ct) in gfd.type_params.iter().zip(concrete_types.iter()) {
-                    self.type_param_map
+                    self.mono
+                        .type_param_map
                         .insert(tp.name().to_string(), ct.clone());
                 }
                 // Emit the function under its mangled name.
@@ -667,7 +526,7 @@ impl TextEmitter {
                 fd.name = mangled;
                 fd.type_params.clear();
                 self.emit_fn(&fd)?;
-                self.type_param_map.clear();
+                self.mono.type_param_map.clear();
             }
         }
 
@@ -676,10 +535,12 @@ impl TextEmitter {
 
     // ── Function emission ─────────────────────────────────────────────────
 
-    fn emit_fn(&mut self, fd: &FnDecl) -> Result<(), String> {
+    pub(super) fn emit_fn(&mut self, fd: &FnDecl) -> Result<(), String> {
         let ret_ty = fd.return_type.as_ref();
-        self.reset_fn_state(ret_ty.clone());
-        self.current_fn_is_main = fd.name == "main";
+        // Replace the per-fn context wholesale — the old state is dropped here,
+        // making it impossible to forget resetting a field (#1523).
+        self.fn_ctx = FnCtx::new(ret_ty.clone());
+        self.fn_ctx.current_fn_is_main = fd.name == "main";
 
         let params: Vec<String> = fd
             .params
@@ -697,7 +558,7 @@ impl TextEmitter {
 
         let llvm_ret = self.llvm_ty_ctx(ret_ty);
 
-        let sig = if self.current_fn_is_main {
+        let sig = if self.fn_ctx.current_fn_is_main {
             "define i32 @main()".to_string()
         } else {
             format!(
@@ -715,26 +576,28 @@ impl TextEmitter {
             let ty_str = self.llvm_ty_ctx(&p.ty);
             if ty_str != "void" {
                 let ssa = format!("%{}", p.name);
-                self.locals.insert(p.name.clone(), ssa.clone());
-                self.reg_types.insert(ssa, ty_str);
-                self.local_mvl_types.insert(p.name.clone(), p.ty.clone());
+                self.fn_ctx.locals.insert(p.name.clone(), ssa.clone());
+                self.fn_ctx.reg_types.insert(ssa, ty_str);
+                self.fn_ctx
+                    .local_mvl_types
+                    .insert(p.name.clone(), p.ty.clone());
             }
         }
 
         let body_val = self.emit_block(&fd.body)?;
 
-        if !self.terminated {
+        if !self.fn_ctx.terminated {
             // If the function returns a heap-allocated local, exclude it from
             // drops — ownership transfers to the caller (move semantics).
             if let Some(Stmt::Expr { expr, .. }) = fd.body.stmts.last() {
                 self.exclude_returned_value(expr);
             }
             self.emit_heap_drops();
-            if self.current_fn_is_main {
-                if !self.actor_decls.is_empty() {
+            if self.fn_ctx.current_fn_is_main {
+                if !self.module.actor_decls.is_empty() {
                     // Drop each handle to close the sender — this signals the
                     // actor thread's recv loop to exit.
-                    for handle in std::mem::take(&mut self.spawned_actor_handles) {
+                    for handle in std::mem::take(&mut self.fn_ctx.spawned_actor_handles) {
                         self.push_instr(&format!("call void @_mvl_actor_drop(ptr {handle})"));
                     }
                     self.push_instr("call void @_mvl_actor_join_all()");
@@ -750,8 +613,8 @@ impl TextEmitter {
         }
 
         self.push_line("}");
-        let body_text = self.fn_buf.join("\n");
-        self.fn_bodies.push(body_text);
+        let body_text = self.fn_ctx.fn_buf.join("\n");
+        self.module.fn_bodies.push(body_text);
         Ok(())
     }
 }

@@ -2943,8 +2943,7 @@ pub partial fn status_reason(healthy: Bool) -> Bool {
 
     let prelude = vec![parse_prog(pkg_http_src), parse_prog(pkg_health_src)];
     let user_prog = parse_prog(user_src);
-    let pkg_names: Vec<Option<String>> =
-        vec![Some("http".to_string()), Some("health".to_string())];
+    let pkg_names: Vec<Option<String>> = vec![Some("http".to_string()), Some("health".to_string())];
     // Assemble expression types for the prelude so TIR lowering can resolve literals.
     let expr_types = mvl::mvl::checker::collect_prelude_expr_types(&prelude);
 
