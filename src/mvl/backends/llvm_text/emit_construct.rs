@@ -19,12 +19,16 @@ impl TextEmitter {
         self.push_instr(&format!(
             "{r0} = insertvalue {RESULT_LLVM_TY} zeroinitializer, i8 {disc}, 0"
         ));
-        self.fn_ctx.reg_types.insert(r0.clone(), RESULT_LLVM_TY.into());
+        self.fn_ctx
+            .reg_types
+            .insert(r0.clone(), RESULT_LLVM_TY.into());
         let r1 = self.next_reg();
         self.push_instr(&format!(
             "{r1} = insertvalue {RESULT_LLVM_TY} {r0}, ptr {slot}, 1"
         ));
-        self.fn_ctx.reg_types.insert(r1.clone(), RESULT_LLVM_TY.into());
+        self.fn_ctx
+            .reg_types
+            .insert(r1.clone(), RESULT_LLVM_TY.into());
         r1
     }
 
@@ -258,13 +262,18 @@ impl TextEmitter {
                     ));
                     let some_val = self.next_reg();
                     self.push_instr(&format!("{some_val} = load {inner_load_ty}, ptr {pp}"));
-                    self.fn_ctx.reg_types
+                    self.fn_ctx
+                        .reg_types
                         .insert(some_val.clone(), inner_load_ty.clone());
                     if let Pattern::Ident(var_name, _) = inner.as_ref() {
                         if var_name != "_" {
-                            self.fn_ctx.locals.insert(var_name.clone(), some_val.clone());
+                            self.fn_ctx
+                                .locals
+                                .insert(var_name.clone(), some_val.clone());
                             if let Some(ref imty) = inner_mvl_ty {
-                                self.fn_ctx.local_mvl_types.insert(var_name.clone(), imty.clone());
+                                self.fn_ctx
+                                    .local_mvl_types
+                                    .insert(var_name.clone(), imty.clone());
                             }
                             bound_var = Some(var_name.clone());
                         }
@@ -306,7 +315,9 @@ impl TextEmitter {
             let wild_arm = &arms[wild_idx];
             let mut bound_var: Option<String> = None;
             if let Pattern::Ident(name, _) = &wild_arm.pattern {
-                self.fn_ctx.locals.insert(name.clone(), scrut_val.to_string());
+                self.fn_ctx
+                    .locals
+                    .insert(name.clone(), scrut_val.to_string());
                 bound_var = Some(name.clone());
             }
             let arm_val = match &wild_arm.body {
@@ -469,7 +480,9 @@ impl TextEmitter {
                     self.push_instr(&format!(
                         "{payload_ptr} = extractvalue {RESULT_LLVM_TY} {scrut_val}, 1"
                     ));
-                    self.fn_ctx.reg_types.insert(payload_ptr.clone(), "ptr".into());
+                    self.fn_ctx
+                        .reg_types
+                        .insert(payload_ptr.clone(), "ptr".into());
                     let n_slots = field_tys.len();
                     for (i, inner_pat) in fields.iter().enumerate() {
                         let Some(field_ty_expr) = field_tys.get(i) else {
@@ -486,7 +499,8 @@ impl TextEmitter {
                         if let Pattern::Ident(var_name, _) = inner_pat {
                             if var_name != "_" {
                                 self.fn_ctx.locals.insert(var_name.clone(), val.clone());
-                                self.fn_ctx.local_mvl_types
+                                self.fn_ctx
+                                    .local_mvl_types
                                     .insert(var_name.clone(), field_ty_expr.clone());
                                 bound_vars.push(var_name.clone());
                             }
@@ -524,7 +538,9 @@ impl TextEmitter {
             let mut bound_var: Option<String> = None;
             if let Pattern::Ident(name, _) = &wild_arm.pattern {
                 if !name.contains("::") {
-                    self.fn_ctx.locals.insert(name.clone(), scrut_val.to_string());
+                    self.fn_ctx
+                        .locals
+                        .insert(name.clone(), scrut_val.to_string());
                     bound_var = Some(name.clone());
                 }
             }
@@ -599,7 +615,8 @@ impl TextEmitter {
                 let disc = self.pattern_discriminant(name).unwrap_or(0);
                 // Look up declaration-order field names for this struct variant.
                 let ordered_names = self
-                    .module.enum_struct_variant_field_names
+                    .module
+                    .enum_struct_variant_field_names
                     .get(name)
                     .cloned()
                     .unwrap_or_default();

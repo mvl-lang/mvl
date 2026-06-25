@@ -25,19 +25,19 @@
 //!   [`sbom`], [`sbom_diff`], [`version`] — supporting libraries
 
 pub mod audit;
-pub mod cmd_add;
-pub mod cmd_audit;
-pub mod cmd_install;
-pub mod cmd_sbom;
-pub mod cmd_update;
-pub mod config;
-pub mod error;
+pub(crate) mod cmd_add;
+pub(crate) mod cmd_audit;
+pub(crate) mod cmd_install;
+pub(crate) mod cmd_sbom;
+pub(crate) mod cmd_update;
+pub(crate) mod config;
+pub(crate) mod error;
 pub mod fetch;
 pub mod hash;
 pub mod lock;
 pub mod manifest;
 pub mod mvs;
-pub mod resolver;
+pub(crate) mod resolver;
 pub mod sbom;
 pub mod sbom_diff;
 pub mod version;
@@ -46,12 +46,12 @@ pub mod version;
 
 pub use cmd_add::cmd_add;
 pub use cmd_audit::{
-    LicenseAudit, LicenseEntry, LicenseStatus, ParadoxAudit, ParadoxEntry, cmd_audit_license,
-    cmd_audit_paradox, cmd_audit_supply_chain,
+    cmd_audit_license, cmd_audit_paradox, cmd_audit_supply_chain, LicenseAudit, LicenseEntry,
+    LicenseStatus, ParadoxAudit, ParadoxEntry,
 };
 pub use cmd_install::cmd_install;
 pub use cmd_sbom::{cmd_sbom, cmd_sbom_diff, cmd_sbom_snapshot};
-pub use cmd_update::{UpdateOptions, cmd_update};
+pub use cmd_update::{cmd_update, UpdateOptions};
 pub use error::PackageError;
 pub use fetch::{local_override_dir, pkg_cache_root};
 pub use resolver::ensure_dependencies;

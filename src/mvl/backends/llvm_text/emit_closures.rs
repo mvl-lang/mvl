@@ -13,7 +13,8 @@ impl TextEmitter {
     /// Emit `%__closure_type = type { ptr, ptr }` exactly once.
     pub(super) fn ensure_closure_type(&mut self) {
         if !self.module.closure_type_emitted {
-            self.module.type_defs
+            self.module
+                .type_defs
                 .push("%__closure_type = type { ptr, ptr }".into());
             self.module.closure_type_emitted = true;
         }
@@ -44,13 +45,15 @@ impl TextEmitter {
             Expr::Ident(name, _)
                 if !exclude.contains(name)
                     && !seen.contains(name)
-                    && (self.fn_ctx.locals.contains_key(name) || self.fn_ctx.ref_locals.contains_key(name)) =>
+                    && (self.fn_ctx.locals.contains_key(name)
+                        || self.fn_ctx.ref_locals.contains_key(name)) =>
             {
-                let ty_opt = self
-                    .fn_ctx.local_mvl_types
-                    .get(name)
-                    .cloned()
-                    .or_else(|| self.fn_ctx.ref_locals.get(name).map(|rl| rl.elem_ty.clone()));
+                let ty_opt = self.fn_ctx.local_mvl_types.get(name).cloned().or_else(|| {
+                    self.fn_ctx
+                        .ref_locals
+                        .get(name)
+                        .map(|rl| rl.elem_ty.clone())
+                });
                 if let Some(ty) = ty_opt {
                     seen.insert(name.clone());
                     caps.push((name.clone(), ty));
@@ -74,14 +77,15 @@ impl TextEmitter {
                 // If the callee is a local closure binding, capture it too.
                 if !exclude.contains(name)
                     && !seen.contains(name)
-                    && (self.fn_ctx.locals.contains_key(name) || self.fn_ctx.ref_locals.contains_key(name))
+                    && (self.fn_ctx.locals.contains_key(name)
+                        || self.fn_ctx.ref_locals.contains_key(name))
                 {
-                    if let Some(ty) = self
-                        .fn_ctx.local_mvl_types
-                        .get(name)
-                        .cloned()
-                        .or_else(|| self.fn_ctx.ref_locals.get(name).map(|rl| rl.elem_ty.clone()))
-                    {
+                    if let Some(ty) = self.fn_ctx.local_mvl_types.get(name).cloned().or_else(|| {
+                        self.fn_ctx
+                            .ref_locals
+                            .get(name)
+                            .map(|rl| rl.elem_ty.clone())
+                    }) {
                         seen.insert(name.clone());
                         caps.push((name.clone(), ty));
                     }
@@ -303,11 +307,14 @@ impl TextEmitter {
 
             let env_alloca = self.next_reg();
             self.push_instr(&format!("{env_alloca} = alloca %{env_ty_name}"));
-            self.fn_ctx.reg_types.insert(env_alloca.clone(), "ptr".into());
+            self.fn_ctx
+                .reg_types
+                .insert(env_alloca.clone(), "ptr".into());
 
             for (i, (cap_name, cap_ty)) in captures.iter().enumerate() {
                 // Ref locals: load current value from the alloca before capturing.
-                let store_val = if let Some(ref_loc) = self.fn_ctx.ref_locals.get(cap_name).cloned() {
+                let store_val = if let Some(ref_loc) = self.fn_ctx.ref_locals.get(cap_name).cloned()
+                {
                     let ty_str = self.llvm_ty_ctx(&ref_loc.elem_ty);
                     let loaded = self.next_reg();
                     self.push_instr(&format!("{loaded} = load {ty_str}, ptr {}", ref_loc.ptr));
@@ -371,7 +378,8 @@ impl TextEmitter {
         } else {
             llvm_ret.clone()
         };
-        self.fn_ctx.fn_buf
+        self.fn_ctx
+            .fn_buf
             .push(format!("define {define_ret} @{lambda_name}({params_str})"));
         self.fn_ctx.fn_buf.push("{".into());
         self.fn_ctx.fn_buf.push("entry:".into());
@@ -391,7 +399,9 @@ impl TextEmitter {
                     self.fn_ctx.locals.insert(p.name.clone(), ssa.clone());
                     self.fn_ctx.reg_types.insert(ssa, ty_str);
                 }
-                self.fn_ctx.local_mvl_types.insert(p.name.clone(), p.ty.clone());
+                self.fn_ctx
+                    .local_mvl_types
+                    .insert(p.name.clone(), p.ty.clone());
             }
         }
 
@@ -407,7 +417,8 @@ impl TextEmitter {
                 self.push_instr(&format!("{val} = load {field_llvm_ty}, ptr {field_ptr}"));
                 self.fn_ctx.reg_types.insert(val.clone(), field_llvm_ty);
                 self.fn_ctx.locals.insert(cap_name.clone(), val.clone());
-                self.fn_ctx.local_mvl_types
+                self.fn_ctx
+                    .local_mvl_types
                     .insert(cap_name.clone(), cap_ty.clone());
             }
         }
@@ -464,7 +475,9 @@ impl TextEmitter {
         // ── Build closure struct in outer function ────────────────────────
         let closure_alloca = self.next_reg();
         self.push_instr(&format!("{closure_alloca} = alloca %__closure_type"));
-        self.fn_ctx.reg_types.insert(closure_alloca.clone(), "ptr".into());
+        self.fn_ctx
+            .reg_types
+            .insert(closure_alloca.clone(), "ptr".into());
 
         let fn_field = self.next_reg();
         self.push_instr(&format!(
@@ -528,7 +541,12 @@ impl TextEmitter {
 
             // Build typed trampoline: (ptr %__env, ty0 %__arg0, ty1 %__arg1, …)
             // For HOF params (in ptr_param_indices), accept ptr and load inside.
-            let orig_params = self.module.fn_param_types.get(name).cloned().unwrap_or_default();
+            let orig_params = self
+                .module
+                .fn_param_types
+                .get(name)
+                .cloned()
+                .unwrap_or_default();
             let mut wrapper_param_parts = vec!["ptr %__env".to_string()];
             let mut forward_arg_parts: Vec<String> = Vec::new();
             let mut loads: Vec<String> = Vec::new();
@@ -605,13 +623,17 @@ impl TextEmitter {
             self.fn_ctx.current_bb = saved_current_bb;
 
             // Record wrapper so we don't emit it twice.
-            self.module.fn_ret_types.insert(wrapper_name.clone(), orig_ret);
+            self.module
+                .fn_ret_types
+                .insert(wrapper_name.clone(), orig_ret);
         }
 
         // Build `{ &wrapper, null }` closure struct.
         let closure_alloca = self.next_reg();
         self.push_instr(&format!("{closure_alloca} = alloca %__closure_type"));
-        self.fn_ctx.reg_types.insert(closure_alloca.clone(), "ptr".into());
+        self.fn_ctx
+            .reg_types
+            .insert(closure_alloca.clone(), "ptr".into());
 
         let fn_field = self.next_reg();
         self.push_instr(&format!(

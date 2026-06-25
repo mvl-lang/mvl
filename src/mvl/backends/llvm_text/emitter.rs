@@ -9,8 +9,8 @@
 
 use std::collections::HashMap;
 
-use super::BuiltinSymbolInfo;
 use super::context::{FnCtx, ModuleCtx, MonoQueue};
+use super::BuiltinSymbolInfo;
 use crate::mvl::checker::types::Ty;
 use crate::mvl::parser::ast::{Decl, FnDecl, Program, Stmt, TypeBody, TypeExpr, VariantFields};
 use crate::mvl::parser::lexer::Span;
@@ -342,11 +342,16 @@ impl TextEmitter {
                             let qname = format!("{}::{}", td.name, v.name);
                             let names: Vec<String> =
                                 fields.iter().map(|f| f.name.clone()).collect();
-                            self.module.enum_struct_variant_field_names.insert(qname, names);
+                            self.module
+                                .enum_struct_variant_field_names
+                                .insert(qname, names);
                         }
                     }
-                    self.module.enum_variants.insert(td.name.clone(), variant_names);
-                    self.module.enum_variant_fields
+                    self.module
+                        .enum_variants
+                        .insert(td.name.clone(), variant_names);
+                    self.module
+                        .enum_variant_fields
                         .insert(td.name.clone(), variant_fields);
                 }
             }
@@ -359,14 +364,20 @@ impl TextEmitter {
                     let ret = fd.return_type.as_ref().clone();
                     let params: Vec<TypeExpr> = fd.params.iter().map(|p| p.ty.clone()).collect();
                     // Register under the short name (e.g. `from_chars`)
-                    self.module.fn_ret_types.insert(fd.name.clone(), ret.clone());
-                    self.module.fn_param_types.insert(fd.name.clone(), params.clone());
+                    self.module
+                        .fn_ret_types
+                        .insert(fd.name.clone(), ret.clone());
+                    self.module
+                        .fn_param_types
+                        .insert(fd.name.clone(), params.clone());
                     // Also register under the qualified name (e.g. `String::from_chars`)
                     // so that static call-site lookups like `fn_ret_types["String::from_chars"]`
                     // resolve correctly.
                     if let Some(recv) = &fd.receiver_type {
                         let qualified = format!("{}::{}", recv, fd.name);
-                        self.module.fn_ret_types.insert(qualified.clone(), ret.clone());
+                        self.module
+                            .fn_ret_types
+                            .insert(qualified.clone(), ret.clone());
                         self.module.fn_param_types.insert(qualified, params);
                     }
                 }
@@ -393,7 +404,9 @@ impl TextEmitter {
                                 td.name,
                                 field_types.join(", ")
                             ));
-                            self.module.struct_fields.insert(td.name.clone(), field_list);
+                            self.module
+                                .struct_fields
+                                .insert(td.name.clone(), field_list);
                         }
                     }
                     // Enums already registered in pre-pass above.
@@ -403,7 +416,9 @@ impl TextEmitter {
                         // an aliased type (e.g. `d: Dispatcher`) can resolve
                         // to their underlying `Fn` signature (#1467 LLVM port).
                         if matches!(inner.as_ref(), TypeExpr::Fn { .. }) {
-                            self.module.fn_aliases.insert(td.name.clone(), (**inner).clone());
+                            self.module
+                                .fn_aliases
+                                .insert(td.name.clone(), (**inner).clone());
                         }
                     }
                 },
@@ -440,7 +455,8 @@ impl TextEmitter {
                             format!("declare {} @{}({})", ret_ty, ef.name, param_tys.join(", "));
                         self.ensure_extern(&decl);
                         // Register return type and param types so call emission works.
-                        self.module.fn_ret_types
+                        self.module
+                            .fn_ret_types
                             .insert(ef.name.clone(), ef.return_type.as_ref().clone());
                         self.module.fn_param_types.insert(
                             ef.name.clone(),
@@ -501,7 +517,8 @@ impl TextEmitter {
                 };
                 // Set up type parameter → concrete type mapping.
                 for (tp, ct) in gfd.type_params.iter().zip(concrete_types.iter()) {
-                    self.mono.type_param_map
+                    self.mono
+                        .type_param_map
                         .insert(tp.name().to_string(), ct.clone());
                 }
                 // Emit the function under its mangled name.
@@ -561,7 +578,9 @@ impl TextEmitter {
                 let ssa = format!("%{}", p.name);
                 self.fn_ctx.locals.insert(p.name.clone(), ssa.clone());
                 self.fn_ctx.reg_types.insert(ssa, ty_str);
-                self.fn_ctx.local_mvl_types.insert(p.name.clone(), p.ty.clone());
+                self.fn_ctx
+                    .local_mvl_types
+                    .insert(p.name.clone(), p.ty.clone());
             }
         }
 

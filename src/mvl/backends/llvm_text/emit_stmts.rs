@@ -300,7 +300,10 @@ impl TextEmitter {
         self.start_bb(&body_bb);
 
         // Bind loop variable (immutable, read-only inside body)
-        let old = self.fn_ctx.locals.insert(var_name.to_string(), cur_i.clone());
+        let old = self
+            .fn_ctx
+            .locals
+            .insert(var_name.to_string(), cur_i.clone());
         self.fn_ctx.reg_types.insert(cur_i.clone(), "i64".into());
         self.emit_block(body)?;
 

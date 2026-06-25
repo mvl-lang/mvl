@@ -114,7 +114,8 @@ impl TextEmitter {
             self.fn_ctx.terminated = false;
             self.fn_ctx.current_fn_is_main = false; // actor methods are never main
 
-            self.fn_ctx.fn_buf
+            self.fn_ctx
+                .fn_buf
                 .push(format!("define {define_ret} @{fn_name}({params_str})"));
             self.fn_ctx.fn_buf.push("{".into());
             self.fn_ctx.fn_buf.push("entry:".into());
@@ -122,7 +123,8 @@ impl TextEmitter {
             // Register state fields as ref-locals (GEP into %self) so that reads
             // load and writes store through the state pointer automatically.
             let field_defs = self
-                .module.struct_fields
+                .module
+                .struct_fields
                 .get(&state_name)
                 .cloned()
                 .unwrap_or_default();
@@ -143,7 +145,8 @@ impl TextEmitter {
                         elem_ty: field_ty.clone(),
                     },
                 );
-                self.fn_ctx.local_mvl_types
+                self.fn_ctx
+                    .local_mvl_types
                     .insert(field_name.clone(), field_ty.clone());
             }
 
@@ -154,7 +157,9 @@ impl TextEmitter {
                     let ssa = format!("%{}", p.name);
                     self.fn_ctx.locals.insert(p.name.clone(), ssa.clone());
                     self.fn_ctx.reg_types.insert(ssa, ty_str);
-                    self.fn_ctx.local_mvl_types.insert(p.name.clone(), p.ty.clone());
+                    self.fn_ctx
+                        .local_mvl_types
+                        .insert(p.name.clone(), p.ty.clone());
                 }
             }
 
@@ -321,11 +326,14 @@ impl TextEmitter {
         // Alloca the state struct.
         let state_alloca = self.next_reg();
         self.push_instr(&format!("{state_alloca} = alloca %{state_name}"));
-        self.fn_ctx.reg_types.insert(state_alloca.clone(), "ptr".into());
+        self.fn_ctx
+            .reg_types
+            .insert(state_alloca.clone(), "ptr".into());
 
         // Store each field initializer via GEP.
         let field_defs = self
-            .module.struct_fields
+            .module
+            .struct_fields
             .get(&state_name)
             .cloned()
             .unwrap_or_default();
@@ -351,7 +359,8 @@ impl TextEmitter {
 
         // Resolve mailbox config from the actor declaration.
         let mailbox = self
-            .module.actor_decls
+            .module
+            .actor_decls
             .get(actor_type)
             .and_then(|ad| ad.mailbox.as_ref())
             .cloned();
@@ -406,7 +415,8 @@ impl TextEmitter {
             }
             _ => return None,
         };
-        self.module.actor_decls
+        self.module
+            .actor_decls
             .contains_key(type_name.as_str())
             .then_some(type_name)
     }
@@ -445,7 +455,9 @@ impl TextEmitter {
         let args_ptr = if argc > 0 {
             let arr_alloca = self.next_reg();
             self.push_instr(&format!("{arr_alloca} = alloca [{argc} x i64]"));
-            self.fn_ctx.reg_types.insert(arr_alloca.clone(), "ptr".into());
+            self.fn_ctx
+                .reg_types
+                .insert(arr_alloca.clone(), "ptr".into());
 
             for (j, arg_expr) in args.iter().enumerate() {
                 let val = match self.emit_expr(arg_expr)? {

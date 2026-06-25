@@ -72,7 +72,8 @@ impl TextEmitter {
 
     pub(super) fn ensure_int_fmt(&mut self) -> &'static str {
         if !self.module.has_int_fmt {
-            self.module.str_globals
+            self.module
+                .str_globals
                 .push("@int_fmt = private unnamed_addr constant [5 x i8] c\"%lld\\00\"".into());
             self.module.has_int_fmt = true;
         }
@@ -81,12 +82,14 @@ impl TextEmitter {
 
     pub(super) fn ensure_bool_str_globals(&mut self) -> (&'static str, &'static str) {
         if !self.module.has_str_true {
-            self.module.str_globals
+            self.module
+                .str_globals
                 .push("@str_true = private unnamed_addr constant [5 x i8] c\"true\\00\"".into());
             self.module.has_str_true = true;
         }
         if !self.module.has_str_false {
-            self.module.str_globals
+            self.module
+                .str_globals
                 .push("@str_false = private unnamed_addr constant [6 x i8] c\"false\\00\"".into());
             self.module.has_str_false = true;
         }
@@ -526,7 +529,8 @@ impl TextEmitter {
     /// Infer the LLVM type from an already-emitted SSA value string.
     pub(super) fn infer_val_type(&self, val: &str) -> String {
         if val.starts_with('%') {
-            self.fn_ctx.reg_types
+            self.fn_ctx
+                .reg_types
                 .get(val)
                 .cloned()
                 .unwrap_or_else(|| "i64".into())
