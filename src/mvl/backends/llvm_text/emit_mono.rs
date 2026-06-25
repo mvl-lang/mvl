@@ -41,12 +41,14 @@ impl TextEmitter {
                 _ => default_int(),
             },
             Expr::Ident(name, _) => self
-                .fn_ctx.local_mvl_types
+                .fn_ctx
+                .local_mvl_types
                 .get(name.as_str())
                 .cloned()
                 .unwrap_or_else(default_int),
             Expr::FnCall { name, .. } => self
-                .module.fn_ret_types
+                .module
+                .fn_ret_types
                 .get(name.as_str())
                 .cloned()
                 .unwrap_or_else(default_int),
@@ -166,13 +168,16 @@ impl TextEmitter {
         // Enqueue monomorphized copy if not already emitted.
         if !self.mono.mono_emitted.contains(&mangled) {
             self.mono.mono_emitted.insert(mangled.clone());
-            self.mono.mono_queue
+            self.mono
+                .mono_queue
                 .push((mangled.clone(), name.to_string(), concrete_types.clone()));
 
             // Register the return type for the mangled function.
             // Resolve any type params in the return type.
             let resolved_ret = mono::substitute_type(&gfd.return_type, &tp_map);
-            self.module.fn_ret_types.insert(mangled.clone(), resolved_ret);
+            self.module
+                .fn_ret_types
+                .insert(mangled.clone(), resolved_ret);
         }
 
         // Emit the call.
@@ -190,7 +195,8 @@ impl TextEmitter {
             .join(", ");
 
         let ret_ty = self
-            .module.fn_ret_types
+            .module
+            .fn_ret_types
             .get(&mangled)
             .cloned()
             .unwrap_or_else(|| TypeExpr::Base {
@@ -251,7 +257,9 @@ impl TextEmitter {
         // Select the correct payload pointer based on discriminant.
         let disc_is_ok = self.next_reg();
         self.push_instr(&format!("{disc_is_ok} = icmp eq i8 {disc}, 0"));
-        self.fn_ctx.reg_types.insert(disc_is_ok.clone(), "i1".into());
+        self.fn_ctx
+            .reg_types
+            .insert(disc_is_ok.clone(), "i1".into());
         let payload = self.next_reg();
         self.push_instr(&format!(
             "{payload} = select i1 {disc_is_ok}, ptr {ok_slot}, ptr {err_slot}"
@@ -337,7 +345,9 @@ impl TextEmitter {
                     self.push_instr(&format!("{pp} = extractvalue {{ i8, ptr }} {scrut_val}, 1"));
                     let ok_val = self.next_reg();
                     self.push_instr(&format!("{ok_val} = load {ok_load_ty}, ptr {pp}"));
-                    self.fn_ctx.reg_types.insert(ok_val.clone(), ok_load_ty.clone());
+                    self.fn_ctx
+                        .reg_types
+                        .insert(ok_val.clone(), ok_load_ty.clone());
                     if let Pattern::Ident(var_name, _) = inner.as_ref() {
                         if var_name != "_" {
                             self.fn_ctx.locals.insert(var_name.clone(), ok_val.clone());
@@ -351,7 +361,9 @@ impl TextEmitter {
                     self.push_instr(&format!("{pp} = extractvalue {{ i8, ptr }} {scrut_val}, 1"));
                     let err_val = self.next_reg();
                     self.push_instr(&format!("{err_val} = load {err_load_ty}, ptr {pp}"));
-                    self.fn_ctx.reg_types.insert(err_val.clone(), err_load_ty.clone());
+                    self.fn_ctx
+                        .reg_types
+                        .insert(err_val.clone(), err_load_ty.clone());
                     if let Pattern::Ident(var_name, _) = inner.as_ref() {
                         if var_name != "_" {
                             self.fn_ctx.locals.insert(var_name.clone(), err_val.clone());
@@ -361,7 +373,9 @@ impl TextEmitter {
                 }
                 Pattern::Wildcard(_) | Pattern::Ident(_, _) => {
                     if let Pattern::Ident(name, _) = &arm.pattern {
-                        self.fn_ctx.locals.insert(name.clone(), scrut_val.to_string());
+                        self.fn_ctx
+                            .locals
+                            .insert(name.clone(), scrut_val.to_string());
                         bound_var = Some(name.clone());
                     }
                 }
@@ -484,7 +498,9 @@ impl TextEmitter {
     pub(super) fn result_ok_llvm_ty(&self, expr: &Expr) -> String {
         match expr {
             Expr::FnCall { name, .. } => {
-                if let Some(TypeExpr::Result { ok, .. }) = self.module.fn_ret_types.get(name.as_str()) {
+                if let Some(TypeExpr::Result { ok, .. }) =
+                    self.module.fn_ret_types.get(name.as_str())
+                {
                     return Self::llvm_ty(ok);
                 }
                 "i64".into()

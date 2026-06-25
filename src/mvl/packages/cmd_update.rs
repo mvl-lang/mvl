@@ -8,7 +8,7 @@
 //!   Unit-testable without touching the network or filesystem.
 //! - [`update_one_dep`] / [`refresh_locked`] — IO layer that executes the plan.
 
-use super::config::{GlobalConfig, latest_semver_tag};
+use super::config::{latest_semver_tag, GlobalConfig};
 use super::error::PackageError;
 use super::fetch::{self, fetch_package_opts, pkg_cache_dir};
 use super::lock::LockFile;
@@ -56,12 +56,9 @@ pub(super) enum ExcludeReason {
 /// This separates the "what should we do?" question from the "do it" step.
 #[derive(Debug)]
 pub(super) struct DepUpdatePlan {
-    /// Tags eligible after filtering (kept in original list order).
-    #[allow(dead_code)] // kept for diagnostic inspection; latest_tag is the chosen value
-    pub eligible: Vec<String>,
     /// Tags filtered out, with the reason (for user-facing prints).
     pub excluded: Vec<(String, ExcludeReason)>,
-    /// Chosen tag (highest semver among `eligible`), or `None` if none qualify.
+    /// Chosen tag (highest semver among the eligible tags), or `None` if none qualify.
     pub latest_tag: Option<String>,
     /// `latest_tag` with the optional `v` prefix stripped.
     pub latest_version: Option<String>,
@@ -119,7 +116,6 @@ impl DepUpdatePlan {
             .map(|t| t.strip_prefix('v').unwrap_or(t).to_string());
 
         Self {
-            eligible,
             excluded,
             latest_tag,
             latest_version,
@@ -207,9 +203,15 @@ pub fn cmd_update(project_root: &Path, opts: &UpdateOptions) -> Result<(), Packa
         )));
     }
 
-    if opts.dry_run || opts.offline {
+    if opts.dry_run {
         println!(
             "(dry-run) Would update {updated} package(s), {up_to_date} unchanged, {skipped} skipped, {planned} planned.",
+        );
+        return Ok(());
+    }
+    if opts.offline {
+        println!(
+            "(offline) {updated} package(s) would change, {up_to_date} unchanged, {skipped} skipped, {planned} reported from lockfile.",
         );
         return Ok(());
     }
@@ -236,7 +238,12 @@ pub fn cmd_update(project_root: &Path, opts: &UpdateOptions) -> Result<(), Packa
             let cache_dir = pkg_cache_dir(&cached_name, &cached_version);
             let pkg_manifest = match Manifest::load(&cache_dir) {
                 Ok(m) => m,
-                Err(_) => continue,
+                Err(e) => {
+                    eprintln!(
+                        "  warning: could not read transitive manifest for {cached_name}@{cached_version}: {e}"
+                    );
+                    continue;
+                }
             };
             for (dep_name, dep_spec) in &pkg_manifest.dependencies {
                 if queued.contains(dep_name) {
@@ -378,7 +385,6 @@ fn update_one_dep(
 
     let tags = match fetch::list_git_tags(&git_url) {
         Ok(t) => t,
-        Err(e) if e.is_recoverable() => return DepOutcome::Skipped(e.to_string()),
         Err(e) => return DepOutcome::Skipped(e.to_string()),
     };
 
@@ -507,7 +513,6 @@ fn refresh_locked(
     }
     let mut locked = match fetch_package_opts(name, git_url, latest_tag, opts.force) {
         Ok(p) => p,
-        Err(e) if e.is_recoverable() => return DepOutcome::Skipped(e.to_string()),
         Err(e) => return DepOutcome::Skipped(e.to_string()),
     };
     locked.last_checked = Some(now_secs);
@@ -519,14 +524,25 @@ fn refresh_locked(
 }
 
 /// Best-effort comparison between two git SHAs of possibly-different lengths
-/// (e.g. abbreviated vs full). Matches when one is a prefix of the other.
+/// (e.g. abbreviated vs full). Matches when one is a prefix of the other,
+/// provided the shorter SHA is at least a meaningful git abbreviation.
+///
+/// A floor of 7 characters prevents trivial prefix collisions: a force-pushed
+/// tag whose new commit shares a short hex prefix with the locked SHA would
+/// otherwise silently bypass the tag-repush detection in `update_one_dep`.
 fn shas_equal(a: &str, b: &str) -> bool {
+    /// Git's standard `--abbrev=N` default; refuse to match below this length.
+    const MIN_ABBREV: usize = 7;
     let a = a.trim();
     let b = b.trim();
     if a.is_empty() || b.is_empty() {
         return false;
     }
-    a.starts_with(b) || b.starts_with(a)
+    let (short, long) = if a.len() <= b.len() { (a, b) } else { (b, a) };
+    if short.len() < MIN_ABBREV {
+        return false;
+    }
+    long.starts_with(short)
 }
 
 #[cfg(test)]
@@ -613,19 +629,29 @@ mod tests {
 
     #[test]
     fn shas_equal_prefix_match() {
-        assert!(shas_equal("abc123", "abc123def456"));
-        assert!(shas_equal("abc123def456", "abc123"));
+        // Abbreviated SHAs of at least 7 chars match a longer full SHA.
+        assert!(shas_equal("abc123d", "abc123def456"));
+        assert!(shas_equal("abc123def456", "abc123d"));
+    }
+
+    #[test]
+    fn shas_equal_rejects_short_prefix_below_min_abbrev() {
+        // A 6-char prefix is below git's standard `--abbrev=7` floor and
+        // must not match — protects against trivial prefix-collision attacks
+        // on the tag-repush detector.
+        assert!(!shas_equal("abc123", "abc123def456"));
+        assert!(!shas_equal("abc123def456", "abc123"));
     }
 
     #[test]
     fn shas_equal_no_match() {
-        assert!(!shas_equal("abc123", "def456"));
+        assert!(!shas_equal("abc1234", "def4567"));
     }
 
     #[test]
     fn shas_equal_empty_strings_never_match() {
-        assert!(!shas_equal("", "abc"));
-        assert!(!shas_equal("abc", ""));
+        assert!(!shas_equal("", "abc1234"));
+        assert!(!shas_equal("abc1234", ""));
     }
 
     // --- DepUpdatePlan pure-compute tests ---
@@ -696,11 +722,10 @@ mod tests {
         );
         // v0.2.0 too young → v0.1.0 wins
         assert_eq!(plan.latest_tag.as_deref(), Some("v0.1.0"));
-        assert!(
-            plan.excluded
-                .iter()
-                .any(|(t, r)| t == "v0.2.0" && matches!(r, ExcludeReason::MinAge { .. }))
-        );
+        assert!(plan
+            .excluded
+            .iter()
+            .any(|(t, r)| t == "v0.2.0" && matches!(r, ExcludeReason::MinAge { .. })));
     }
 
     #[test]

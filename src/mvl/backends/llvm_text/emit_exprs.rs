@@ -104,7 +104,9 @@ impl TextEmitter {
                 if !name.contains("::") {
                     let bound = self.next_reg();
                     // For enum scrutinee: the bound value is the scrutinee itself
-                    self.fn_ctx.reg_types.insert(bound.clone(), scrut_ty.clone());
+                    self.fn_ctx
+                        .reg_types
+                        .insert(bound.clone(), scrut_ty.clone());
                     self.fn_ctx.locals.insert(name.clone(), scrut_val.clone());
                     Some(name.clone())
                 } else {
@@ -198,7 +200,8 @@ impl TextEmitter {
     ///
     /// Payload enums lower to `{ i8, ptr }`; pure unit enums stay as `i64` discriminants.
     pub(super) fn enum_has_payloads(&self, enum_name: &str) -> bool {
-        self.module.enum_variant_fields
+        self.module
+            .enum_variant_fields
             .get(enum_name)
             .is_some_and(|vs| vs.iter().any(|f| !f.is_empty()))
     }
@@ -931,7 +934,8 @@ impl TextEmitter {
         // passing its env_ptr as the first argument.
         if let Some(closure_ptr) = self.fn_ctx.locals.get(name).cloned() {
             if self
-                .fn_ctx.local_mvl_types
+                .fn_ctx
+                .local_mvl_types
                 .get(name)
                 .is_some_and(|t| matches!(t, TypeExpr::Fn { .. }))
             {
@@ -990,7 +994,8 @@ impl TextEmitter {
             }
         }
         let ret_ty = self
-            .module.fn_ret_types
+            .module
+            .fn_ret_types
             .get(name)
             .cloned()
             .unwrap_or_else(|| TypeExpr::Base {
@@ -1069,7 +1074,9 @@ impl TextEmitter {
                 self.push_instr(&format!(
                     "{raw_payload} = extractvalue {RESULT_LLVM_TY} {reg}, 1"
                 ));
-                self.fn_ctx.reg_types.insert(raw_payload.clone(), "ptr".into());
+                self.fn_ctx
+                    .reg_types
+                    .insert(raw_payload.clone(), "ptr".into());
                 let slot = self.next_reg();
                 self.push_instr(&format!("{slot} = alloca ptr"));
                 self.push_instr(&format!("store ptr {raw_payload}, ptr {slot}"));
@@ -1194,7 +1201,9 @@ impl TextEmitter {
         // Allocate a result slot shared by both branches.
         let result_slot = self.next_reg();
         self.push_instr(&format!("{result_slot} = alloca {RESULT_LLVM_TY}"));
-        self.fn_ctx.reg_types.insert(result_slot.clone(), "ptr".into());
+        self.fn_ctx
+            .reg_types
+            .insert(result_slot.clone(), "ptr".into());
 
         self.push_instr(&format!(
             "br i1 {is_none}, label %{none_bb}, label %{some_bb}"
@@ -1206,13 +1215,15 @@ impl TextEmitter {
         self.push_instr(&format!(
             "{none_r0} = insertvalue {RESULT_LLVM_TY} zeroinitializer, i8 1, 0"
         ));
-        self.fn_ctx.reg_types
+        self.fn_ctx
+            .reg_types
             .insert(none_r0.clone(), RESULT_LLVM_TY.into());
         let none_r1 = self.next_reg();
         self.push_instr(&format!(
             "{none_r1} = insertvalue {RESULT_LLVM_TY} {none_r0}, ptr null, 1"
         ));
-        self.fn_ctx.reg_types
+        self.fn_ctx
+            .reg_types
             .insert(none_r1.clone(), RESULT_LLVM_TY.into());
         self.push_instr(&format!(
             "store {RESULT_LLVM_TY} {none_r1}, ptr {result_slot}"
@@ -1230,7 +1241,8 @@ impl TextEmitter {
         self.fn_ctx.reg_types.insert(elem_ptr.clone(), "ptr".into());
         let elem_val = self.next_reg();
         self.push_instr(&format!("{elem_val} = load {elem_llvm_ty}, ptr {elem_ptr}"));
-        self.fn_ctx.reg_types
+        self.fn_ctx
+            .reg_types
             .insert(elem_val.clone(), elem_llvm_ty.clone());
         let elem_slot = self.next_reg();
         self.push_instr(&format!("{elem_slot} = alloca {elem_llvm_ty}"));
@@ -1239,13 +1251,15 @@ impl TextEmitter {
         self.push_instr(&format!(
             "{some_r0} = insertvalue {RESULT_LLVM_TY} zeroinitializer, i8 0, 0"
         ));
-        self.fn_ctx.reg_types
+        self.fn_ctx
+            .reg_types
             .insert(some_r0.clone(), RESULT_LLVM_TY.into());
         let some_r1 = self.next_reg();
         self.push_instr(&format!(
             "{some_r1} = insertvalue {RESULT_LLVM_TY} {some_r0}, ptr {elem_slot}, 1"
         ));
-        self.fn_ctx.reg_types
+        self.fn_ctx
+            .reg_types
             .insert(some_r1.clone(), RESULT_LLVM_TY.into());
         self.push_instr(&format!(
             "store {RESULT_LLVM_TY} {some_r1}, ptr {result_slot}"
@@ -1259,7 +1273,9 @@ impl TextEmitter {
         self.push_instr(&format!(
             "{result} = load {RESULT_LLVM_TY}, ptr {result_slot}"
         ));
-        self.fn_ctx.reg_types.insert(result.clone(), RESULT_LLVM_TY.into());
+        self.fn_ctx
+            .reg_types
+            .insert(result.clone(), RESULT_LLVM_TY.into());
         Ok(Some(result))
     }
 }

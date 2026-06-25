@@ -7,6 +7,7 @@
 use super::version;
 
 /// Global config loaded from `$XDG_CONFIG_HOME/mvl/config.toml`.
+#[derive(Default)]
 pub(super) struct GlobalConfig {
     /// Global `min-age-days` default (overridden by project-level `[security]`).
     pub(super) min_age_days: u64,
@@ -69,13 +70,6 @@ impl GlobalConfig {
         Self {
             min_age_days,
             exclusions,
-        }
-    }
-
-    pub(super) fn default() -> Self {
-        Self {
-            min_age_days: 0,
-            exclusions: std::collections::HashMap::new(),
         }
     }
 }

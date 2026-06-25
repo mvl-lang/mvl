@@ -59,7 +59,9 @@ impl TextEmitter {
         let arg_list = build_arg_list(recv_val, extra_args);
         let reg = self.next_reg();
         self.push_instr(&format!("{reg} = call {ret_ty} @{sym}({arg_list})"));
-        self.fn_ctx.reg_types.insert(reg.clone(), ret_ty.to_string());
+        self.fn_ctx
+            .reg_types
+            .insert(reg.clone(), ret_ty.to_string());
         reg
     }
 
@@ -155,7 +157,8 @@ impl TextEmitter {
             prev = format!("{struct_name} {next}");
             last_reg = next;
         }
-        self.fn_ctx.reg_types
+        self.fn_ctx
+            .reg_types
             .insert(last_reg.clone(), struct_name.to_string());
         last_reg
     }
@@ -583,7 +586,9 @@ impl TextEmitter {
                 self.push_instr(&format!(
                     "{result} = phi {{ i8, ptr }} [ {opt_some}, %{some_end} ], [ {{ i8 1, ptr null }}, %{none_end} ]"
                 ));
-                self.fn_ctx.reg_types.insert(result.clone(), "{ i8, ptr }".into());
+                self.fn_ctx
+                    .reg_types
+                    .insert(result.clone(), "{ i8, ptr }".into());
                 Ok(Some(result))
             }
             ("insert", "ptr") if matches!(self.mvl_receiver_kind(receiver), Some("Map")) => {
@@ -1253,7 +1258,9 @@ impl TextEmitter {
                 self.start_bb(&merge_bb);
                 let result = self.next_reg();
                 self.push_instr(&format!("{result} = load {{ i8, ptr }}, ptr {result_slot}"));
-                self.fn_ctx.reg_types.insert(result.clone(), "{ i8, ptr }".into());
+                self.fn_ctx
+                    .reg_types
+                    .insert(result.clone(), "{ i8, ptr }".into());
                 Ok(Some(result))
             }
 
@@ -1335,7 +1342,9 @@ impl TextEmitter {
                 self.start_bb(&merge_bb);
                 let result = self.next_reg();
                 self.push_instr(&format!("{result} = load {{ i8, ptr }}, ptr {result_slot}"));
-                self.fn_ctx.reg_types.insert(result.clone(), "{ i8, ptr }".into());
+                self.fn_ctx
+                    .reg_types
+                    .insert(result.clone(), "{ i8, ptr }".into());
                 Ok(Some(result))
             }
 

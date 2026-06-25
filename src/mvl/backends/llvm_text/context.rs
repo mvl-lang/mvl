@@ -19,8 +19,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::BuiltinSymbolInfo;
 use super::emitter::{HeapKind, RefLocal};
+use super::BuiltinSymbolInfo;
 use crate::mvl::checker::types::Ty;
 use crate::mvl::parser::ast::{ActorDecl, FnDecl, TypeExpr};
 use crate::mvl::parser::lexer::Span;

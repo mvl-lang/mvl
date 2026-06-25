@@ -31,6 +31,10 @@ pub fn cmd_add(
         ));
     }
 
+    // Reject pkg_ids containing characters that would corrupt mvl.toml when
+    // used as a manifest key (the key is written verbatim by `Manifest::to_toml`).
+    validate_pkg_id(pkg_id)?;
+
     // Derive the git URL from the pkg-id (strip optional leading scheme)
     let git_url = if pkg_id.starts_with("https://") || pkg_id.starts_with("git@") {
         pkg_id.to_string()
@@ -133,6 +137,27 @@ pub fn cmd_add(
     Ok(())
 }
 
+/// Reject `pkg_id` strings that would corrupt `mvl.toml` if used verbatim as a
+/// dependency key. The allowed alphabet covers everything found in legitimate
+/// git URLs / package identifiers; anything else is rejected as TOML-unsafe.
+fn validate_pkg_id(pkg_id: &str) -> Result<(), PackageError> {
+    if pkg_id.is_empty() {
+        return Err(PackageError::InvalidInput(
+            "package id must not be empty".to_string(),
+        ));
+    }
+    for c in pkg_id.chars() {
+        let ok =
+            c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '/' | ':' | '@' | '+' | '~');
+        if !ok {
+            return Err(PackageError::InvalidInput(format!(
+                "package id contains disallowed character {c:?}; allowed: [A-Za-z0-9.-_/:@+~]"
+            )));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -144,5 +169,30 @@ mod tests {
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("http://"), "error should mention the protocol");
+    }
+
+    #[test]
+    fn cmd_add_rejects_toml_injection() {
+        let tmp = tempfile::tempdir().unwrap();
+        for bad in [
+            "github.com/u/r\n[evil]",
+            "github.com/u/r=evil",
+            "github.com/u/r\"evil\"",
+            "github.com/u/r[evil]",
+            "github.com/u/r evil",
+        ] {
+            let result = cmd_add(bad, None, None, None, tmp.path());
+            assert!(
+                result.is_err(),
+                "expected rejection for malicious pkg_id: {bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_pkg_id_accepts_normal_ids() {
+        assert!(validate_pkg_id("github.com/user/repo").is_ok());
+        assert!(validate_pkg_id("https://gitlab.com/group/sub/repo.git").is_ok());
+        assert!(validate_pkg_id("git@github.com:user/repo.git").is_ok());
     }
 }
