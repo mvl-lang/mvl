@@ -445,6 +445,7 @@ fn transpile_project(files: &[PathBuf]) -> FuzzLibOutput {
         &sibling_expr_types,
         mvl::mvl::backends::AssertMode::Assume, // don't panic on refinement violations in fuzz
         true, // extern_stubs: extern "rust" → todo!() so the harness links without bridges
+        &[],
     );
 
     // The entry `main_rs` may be a binary stub when the first file has `fn main`.

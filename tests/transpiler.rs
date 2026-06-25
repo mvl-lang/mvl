@@ -2919,6 +2919,104 @@ fn prelude_builtin_fn_does_not_produce_todo_stub() {
     );
 }
 
+// ── Cross-package function name collision (#1475) ─────────────────────────────
+
+/// Two packages exporting the same function name must each be emitted with a
+/// package-prefixed Rust name so there is no symbol collision (#1475).
+#[test]
+fn cross_package_fn_name_collision_emits_prefixed_names() {
+    use mvl::mvl::backends::rust::transpile_project_with_pkg_names;
+
+    // Simulate two packages each exporting `status_reason` with different signatures.
+    // Use simple integer-literal bodies so the test doesn't need a full checker run.
+    let pkg_http_src = r#"
+pub partial fn status_reason(code: Int) -> Int {
+    1
+}
+"#;
+    let pkg_health_src = r#"
+pub partial fn status_reason(healthy: Bool) -> Bool {
+    true
+}
+"#;
+    let user_src = "fn main() -> Unit { }";
+
+    let prelude = vec![parse_prog(pkg_http_src), parse_prog(pkg_health_src)];
+    let user_prog = parse_prog(user_src);
+    let pkg_names: Vec<Option<String>> =
+        vec![Some("http".to_string()), Some("health".to_string())];
+    // Assemble expression types for the prelude so TIR lowering can resolve literals.
+    let expr_types = mvl::mvl::checker::collect_prelude_expr_types(&prelude);
+
+    let out = transpile_project_with_pkg_names(
+        "crate",
+        &user_prog,
+        &[],
+        &prelude,
+        expr_types,
+        vec![],
+        Default::default(),
+        &pkg_names,
+    );
+
+    assert!(
+        out.main_rs.contains("fn http__status_reason("),
+        "http__status_reason must be emitted:\n{}",
+        out.main_rs
+    );
+    assert!(
+        out.main_rs.contains("fn health__status_reason("),
+        "health__status_reason must be emitted:\n{}",
+        out.main_rs
+    );
+    assert!(
+        !out.main_rs.contains("pub fn status_reason("),
+        "bare status_reason must not appear (would be a Rust duplicate):\n{}",
+        out.main_rs
+    );
+}
+
+/// When only one package exports a function name, it keeps its original name
+/// (no unnecessary renaming).
+#[test]
+fn single_package_fn_name_keeps_original() {
+    use mvl::mvl::backends::rust::transpile_project_with_pkg_names;
+
+    let pkg_src = r#"
+pub partial fn greet(n: Int) -> Int {
+    n
+}
+"#;
+    let user_src = "fn main() -> Unit { }";
+
+    let prelude = vec![parse_prog(pkg_src)];
+    let user_prog = parse_prog(user_src);
+    let pkg_names: Vec<Option<String>> = vec![Some("mylib".to_string())];
+    let expr_types = mvl::mvl::checker::collect_prelude_expr_types(&prelude);
+
+    let out = transpile_project_with_pkg_names(
+        "crate",
+        &user_prog,
+        &[],
+        &prelude,
+        expr_types,
+        vec![],
+        Default::default(),
+        &pkg_names,
+    );
+
+    assert!(
+        out.main_rs.contains("fn greet("),
+        "greet must keep its original name when there is no collision:\n{}",
+        out.main_rs
+    );
+    assert!(
+        !out.main_rs.contains("mylib__greet"),
+        "no pkg prefix when there is no collision:\n{}",
+        out.main_rs
+    );
+}
+
 // ── Phase 4 (#627): contracts cross-backend transpilation ────────────────────
 
 /// Phase 4: `basic_contracts.mvl` transpiles without panic or error.

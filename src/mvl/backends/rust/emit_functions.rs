@@ -53,6 +53,21 @@ fn emit_fn_param_ty(ty: &Ty) -> String {
 }
 
 impl RustEmitter {
+    /// Resolve the Rust function name for `fd`, applying a package prefix when this
+    /// function is involved in a cross-package name collision (#1475).
+    ///
+    /// Returns `fd.name` unchanged when there is no collision.
+    fn pkg_fn_rust_name(&self, fd: &TirFn) -> String {
+        if fd.pkg_name.is_none() {
+            return fd.name.clone();
+        }
+        let ret_key = emit_ty(&fd.ret_ty);
+        self.pkg_fn_dispatch
+            .get(&(fd.original_name.clone(), ret_key))
+            .cloned()
+            .unwrap_or_else(|| fd.name.clone())
+    }
+
     /// Emit a TIR function declaration.
     pub fn emit_fn_decl(&mut self, fd: &TirFn) {
         // Track current function name and test status for coverage metadata.
@@ -198,9 +213,10 @@ impl RustEmitter {
         }
 
         let params_str = emit_tir_params(&fd.params, &borrows, &mutated_params);
+        let rust_name = self.pkg_fn_rust_name(fd);
         self.line(&format!(
             "pub fn {}{generics}({params_str}) -> {ret_str} {{",
-            fd.name
+            rust_name
         ));
         self.push_indent();
         if let Some(id) = self.alloc_branch(fd.span.line, BranchKind::FnEntry) {

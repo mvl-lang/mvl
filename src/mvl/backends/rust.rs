@@ -118,6 +118,22 @@ pub fn prelude_requires_runtime(prelude_progs: &[Program]) -> bool {
     })
 }
 
+/// Annotate TirFns in each prelude TIR with their source package name (#1475).
+/// `pkg_names` is parallel to `prelude_tirs`; `Some("http")` marks all functions
+/// in that TIR as coming from `pkg.http` so the emitter can prefix colliding names.
+fn annotate_prelude_pkg_names(
+    prelude_tirs: &mut [crate::mvl::ir::TirProgram],
+    pkg_names: &[Option<String>],
+) {
+    for (tir, pkg_name) in prelude_tirs.iter_mut().zip(pkg_names.iter()) {
+        if let Some(name) = pkg_name {
+            for f in &mut tir.fns {
+                f.pkg_name = Some(name.clone());
+            }
+        }
+    }
+}
+
 /// Returns true if the program declares at least one `extern "rust"` block.
 pub fn has_extern_rust_decls(prog: &Program) -> bool {
     prog.declarations
@@ -269,6 +285,36 @@ pub fn transpile_project(
         &sibling_expr_types,
         assert_mode,
         false,
+        &[],
+    )
+}
+
+/// Like [`transpile_project`] but with package-name tracking for cross-package
+/// symbol collision avoidance (#1475).  `prelude_pkg_names` is parallel to
+/// `prelude_progs`: `Some("http")` for programs from `pkg.http`, `None` for stdlib.
+#[allow(clippy::too_many_arguments)]
+pub fn transpile_project_with_pkg_names(
+    entry_name: &str,
+    entry_prog: &Program,
+    siblings: &[(String, Program)],
+    prelude_progs: &[Program],
+    expr_types: std::collections::HashMap<crate::mvl::parser::lexer::Span, crate::mvl::ir::Ty>,
+    sibling_expr_types: Vec<
+        std::collections::HashMap<crate::mvl::parser::lexer::Span, crate::mvl::ir::Ty>,
+    >,
+    assert_mode: crate::mvl::backends::AssertMode,
+    prelude_pkg_names: &[Option<String>],
+) -> ProjectOutput {
+    transpile_project_with_options(
+        entry_name,
+        entry_prog,
+        siblings,
+        prelude_progs,
+        expr_types,
+        &sibling_expr_types,
+        assert_mode,
+        false,
+        prelude_pkg_names,
     )
 }
 
@@ -292,6 +338,7 @@ pub fn transpile_project_with_options(
     >],
     assert_mode: crate::mvl::backends::AssertMode,
     extern_stubs: bool,
+    prelude_pkg_names: &[Option<String>],
 ) -> ProjectOutput {
     let has_main = has_main_fn(entry_prog);
     let extern_count = count_extern_decls(entry_prog);
@@ -315,8 +362,8 @@ pub fn transpile_project_with_options(
         crate::mvl::passes::mono::monomorphize(entry_prog, &entry_all_fns, &expr_types);
     let entry_tir = crate::mvl::ir::lower::lower(entry_prog, &entry_mono, &expr_types);
 
-    // Lower prelude programs to TIR.
-    let prelude_tirs: Vec<crate::mvl::ir::TirProgram> = prelude_progs
+    // Lower prelude programs to TIR and annotate package origin (#1475).
+    let mut prelude_tirs: Vec<crate::mvl::ir::TirProgram> = prelude_progs
         .iter()
         .map(|p| {
             let all_fns = crate::mvl::passes::mono::collect_fns([p]);
@@ -324,6 +371,7 @@ pub fn transpile_project_with_options(
             crate::mvl::ir::lower::lower(p, &m, &expr_types)
         })
         .collect();
+    annotate_prelude_pkg_names(&mut prelude_tirs, prelude_pkg_names);
 
     let mut cg = RustEmitter::new();
     cg.assert_mode = assert_mode;
@@ -400,7 +448,7 @@ pub fn transpile(tir: &crate::mvl::ir::TirProgram, config: TranspileConfig) -> T
     // Types are read inline from TirExpr.ty for the main program; preludes only
     // need their own checker-inferred types (spans never overlap with main).
     let prelude_expr_types = crate::mvl::checker::collect_prelude_expr_types(&config.prelude_progs);
-    let prelude_tirs: Vec<crate::mvl::ir::TirProgram> = config
+    let mut prelude_tirs: Vec<crate::mvl::ir::TirProgram> = config
         .prelude_progs
         .iter()
         .map(|p| {
@@ -409,6 +457,7 @@ pub fn transpile(tir: &crate::mvl::ir::TirProgram, config: TranspileConfig) -> T
             crate::mvl::ir::lower::lower(p, &m, &prelude_expr_types)
         })
         .collect();
+    annotate_prelude_pkg_names(&mut prelude_tirs, &config.prelude_pkg_names);
 
     let mut cg = RustEmitter::new();
     cg.assert_mode = config.assert_mode;

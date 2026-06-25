@@ -519,6 +519,7 @@ mod tests {
         TirFn {
             name: "f".to_string(),
             original_name: "f".to_string(),
+            pkg_name: None,
             visible: false,
             is_test: false,
             is_builtin: false,
