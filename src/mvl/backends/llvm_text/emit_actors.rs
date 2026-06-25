@@ -42,7 +42,7 @@ impl TextEmitter {
 
     /// Emit all actor runtime extern declarations exactly once.
     pub(super) fn ensure_actor_runtime_externs(&mut self) {
-        if self.actor_runtime_declared {
+        if self.module.actor_runtime_declared {
             return;
         }
         self.ensure_extern("declare ptr @_mvl_actor_spawn(ptr, ptr, i64, i64, i64)");
@@ -57,7 +57,7 @@ impl TextEmitter {
         self.ensure_extern("declare i64 @_mvl_monitor(ptr, ptr)");
         self.ensure_extern("declare void @_mvl_demonitor(i64)");
         self.ensure_extern("declare void @_mvl_set_trap_exit(ptr)");
-        self.actor_runtime_declared = true;
+        self.module.actor_runtime_declared = true;
     }
 
     // ── Actor declaration emission ────────────────────────────────────────
@@ -96,33 +96,33 @@ impl TextEmitter {
             };
 
             // Save outer function context.
-            let saved_fn_buf = std::mem::take(&mut self.fn_buf);
-            let saved_locals = std::mem::take(&mut self.locals);
-            let saved_ref_locals = std::mem::take(&mut self.ref_locals);
-            let saved_reg = self.reg;
-            let saved_bb = self.bb;
-            let saved_reg_types = std::mem::take(&mut self.reg_types);
-            let saved_mvl_types = std::mem::take(&mut self.local_mvl_types);
-            let saved_ret_ty = std::mem::replace(&mut self.current_ret_ty, ret_ty.clone());
-            let saved_terminated = self.terminated;
-            let saved_current_bb = std::mem::replace(&mut self.current_bb, "entry".into());
-            let saved_is_main = self.current_fn_is_main;
+            let saved_fn_buf = std::mem::take(&mut self.fn_ctx.fn_buf);
+            let saved_locals = std::mem::take(&mut self.fn_ctx.locals);
+            let saved_ref_locals = std::mem::take(&mut self.fn_ctx.ref_locals);
+            let saved_reg = self.fn_ctx.reg;
+            let saved_bb = self.fn_ctx.bb;
+            let saved_reg_types = std::mem::take(&mut self.fn_ctx.reg_types);
+            let saved_mvl_types = std::mem::take(&mut self.fn_ctx.local_mvl_types);
+            let saved_ret_ty = std::mem::replace(&mut self.fn_ctx.current_ret_ty, ret_ty.clone());
+            let saved_terminated = self.fn_ctx.terminated;
+            let saved_current_bb = std::mem::replace(&mut self.fn_ctx.current_bb, "entry".into());
+            let saved_is_main = self.fn_ctx.current_fn_is_main;
             // lambda_counter is intentionally NOT saved — monotonically global.
 
-            self.reg = 0;
-            self.bb = 0;
-            self.terminated = false;
-            self.current_fn_is_main = false; // actor methods are never main
+            self.fn_ctx.reg = 0;
+            self.fn_ctx.bb = 0;
+            self.fn_ctx.terminated = false;
+            self.fn_ctx.current_fn_is_main = false; // actor methods are never main
 
-            self.fn_buf
+            self.fn_ctx.fn_buf
                 .push(format!("define {define_ret} @{fn_name}({params_str})"));
-            self.fn_buf.push("{".into());
-            self.fn_buf.push("entry:".into());
+            self.fn_ctx.fn_buf.push("{".into());
+            self.fn_ctx.fn_buf.push("entry:".into());
 
             // Register state fields as ref-locals (GEP into %self) so that reads
             // load and writes store through the state pointer automatically.
             let field_defs = self
-                .struct_fields
+                .module.struct_fields
                 .get(&state_name)
                 .cloned()
                 .unwrap_or_default();
@@ -135,15 +135,15 @@ impl TextEmitter {
                 self.push_instr(&format!(
                     "{gep_reg} = getelementptr %{state_name}, ptr %self, i32 0, i32 {i}"
                 ));
-                self.reg_types.insert(gep_reg.clone(), "ptr".into());
-                self.ref_locals.insert(
+                self.fn_ctx.reg_types.insert(gep_reg.clone(), "ptr".into());
+                self.fn_ctx.ref_locals.insert(
                     field_name.clone(),
                     RefLocal {
                         ptr: gep_reg,
                         elem_ty: field_ty.clone(),
                     },
                 );
-                self.local_mvl_types
+                self.fn_ctx.local_mvl_types
                     .insert(field_name.clone(), field_ty.clone());
             }
 
@@ -152,9 +152,9 @@ impl TextEmitter {
                 let ty_str = self.llvm_ty_ctx(&p.ty);
                 if ty_str != "void" {
                     let ssa = format!("%{}", p.name);
-                    self.locals.insert(p.name.clone(), ssa.clone());
-                    self.reg_types.insert(ssa, ty_str);
-                    self.local_mvl_types.insert(p.name.clone(), p.ty.clone());
+                    self.fn_ctx.locals.insert(p.name.clone(), ssa.clone());
+                    self.fn_ctx.reg_types.insert(ssa, ty_str);
+                    self.fn_ctx.local_mvl_types.insert(p.name.clone(), p.ty.clone());
                 }
             }
 
@@ -165,22 +165,22 @@ impl TextEmitter {
                 Ok(v) => v,
                 Err(e) => {
                     // Restore state before propagating error.
-                    self.fn_buf = saved_fn_buf;
-                    self.locals = saved_locals;
-                    self.ref_locals = saved_ref_locals;
-                    self.reg = saved_reg;
-                    self.bb = saved_bb;
-                    self.reg_types = saved_reg_types;
-                    self.local_mvl_types = saved_mvl_types;
-                    self.current_ret_ty = saved_ret_ty;
-                    self.terminated = saved_terminated;
-                    self.current_bb = saved_current_bb;
-                    self.current_fn_is_main = saved_is_main;
+                    self.fn_ctx.fn_buf = saved_fn_buf;
+                    self.fn_ctx.locals = saved_locals;
+                    self.fn_ctx.ref_locals = saved_ref_locals;
+                    self.fn_ctx.reg = saved_reg;
+                    self.fn_ctx.bb = saved_bb;
+                    self.fn_ctx.reg_types = saved_reg_types;
+                    self.fn_ctx.local_mvl_types = saved_mvl_types;
+                    self.fn_ctx.current_ret_ty = saved_ret_ty;
+                    self.fn_ctx.terminated = saved_terminated;
+                    self.fn_ctx.current_bb = saved_current_bb;
+                    self.fn_ctx.current_fn_is_main = saved_is_main;
                     return Err(e);
                 }
             };
 
-            if !self.terminated {
+            if !self.fn_ctx.terminated {
                 let llvm_ret = self.llvm_ty_ctx(&ret_ty);
                 if is_void {
                     self.push_instr("ret void");
@@ -191,22 +191,22 @@ impl TextEmitter {
                 }
             }
 
-            self.fn_buf.push("}".into());
-            let fn_text = self.fn_buf.join("\n");
-            self.fn_bodies.push(fn_text);
+            self.fn_ctx.fn_buf.push("}".into());
+            let fn_text = self.fn_ctx.fn_buf.join("\n");
+            self.module.fn_bodies.push(fn_text);
 
             // Restore outer function context.
-            self.fn_buf = saved_fn_buf;
-            self.locals = saved_locals;
-            self.ref_locals = saved_ref_locals;
-            self.reg = saved_reg;
-            self.bb = saved_bb;
-            self.reg_types = saved_reg_types;
-            self.local_mvl_types = saved_mvl_types;
-            self.current_ret_ty = saved_ret_ty;
-            self.terminated = saved_terminated;
-            self.current_bb = saved_current_bb;
-            self.current_fn_is_main = saved_is_main;
+            self.fn_ctx.fn_buf = saved_fn_buf;
+            self.fn_ctx.locals = saved_locals;
+            self.fn_ctx.ref_locals = saved_ref_locals;
+            self.fn_ctx.reg = saved_reg;
+            self.fn_ctx.bb = saved_bb;
+            self.fn_ctx.reg_types = saved_reg_types;
+            self.fn_ctx.local_mvl_types = saved_mvl_types;
+            self.fn_ctx.current_ret_ty = saved_ret_ty;
+            self.fn_ctx.terminated = saved_terminated;
+            self.fn_ctx.current_bb = saved_current_bb;
+            self.fn_ctx.current_fn_is_main = saved_is_main;
         }
 
         // ── 2. Dispatch function ───────────────────────────────────────────
@@ -214,21 +214,21 @@ impl TextEmitter {
         let dispatch_name = format!("{actor_snake}_dispatch");
         let pub_methods: Vec<_> = ad.methods.iter().filter(|m| m.is_public).collect();
 
-        let saved_fn_buf = std::mem::take(&mut self.fn_buf);
-        let saved_reg = self.reg;
-        let saved_bb = self.bb;
-        let saved_terminated = self.terminated;
-        let saved_current_bb = std::mem::replace(&mut self.current_bb, "entry".into());
+        let saved_fn_buf = std::mem::take(&mut self.fn_ctx.fn_buf);
+        let saved_reg = self.fn_ctx.reg;
+        let saved_bb = self.fn_ctx.bb;
+        let saved_terminated = self.fn_ctx.terminated;
+        let saved_current_bb = std::mem::replace(&mut self.fn_ctx.current_bb, "entry".into());
 
-        self.reg = 0;
-        self.bb = 0;
-        self.terminated = false;
+        self.fn_ctx.reg = 0;
+        self.fn_ctx.bb = 0;
+        self.fn_ctx.terminated = false;
 
-        self.fn_buf.push(format!(
+        self.fn_ctx.fn_buf.push(format!(
             "define void @{dispatch_name}(ptr %state, i64 %disc, ptr %args)"
         ));
-        self.fn_buf.push("{".into());
-        self.fn_buf.push("entry:".into());
+        self.fn_ctx.fn_buf.push("{".into());
+        self.fn_ctx.fn_buf.push("entry:".into());
 
         if pub_methods.is_empty() {
             self.push_instr("ret void");
@@ -243,13 +243,13 @@ impl TextEmitter {
             self.push_instr(&format!("switch i64 %disc, label %default [ {cases} ]"));
 
             // default: just return
-            self.fn_buf.push("default:".into());
+            self.fn_ctx.fn_buf.push("default:".into());
             self.push_instr("ret void");
 
             // Each case BB: load typed args from flat i64 array, call behavior.
             for (disc, method) in pub_methods.iter().enumerate() {
                 let fn_name = format!("{actor_snake}_{}", method.name);
-                self.fn_buf.push(format!("behavior_{disc}:"));
+                self.fn_ctx.fn_buf.push(format!("behavior_{disc}:"));
 
                 let mut call_parts = vec!["ptr %state".to_string()];
                 for (j, p) in method.params.iter().enumerate() {
@@ -287,16 +287,16 @@ impl TextEmitter {
             }
         }
 
-        self.fn_buf.push("}".into());
-        let dispatch_text = self.fn_buf.join("\n");
-        self.fn_bodies.push(dispatch_text);
+        self.fn_ctx.fn_buf.push("}".into());
+        let dispatch_text = self.fn_ctx.fn_buf.join("\n");
+        self.module.fn_bodies.push(dispatch_text);
 
         // Restore dispatch context.
-        self.fn_buf = saved_fn_buf;
-        self.reg = saved_reg;
-        self.bb = saved_bb;
-        self.terminated = saved_terminated;
-        self.current_bb = saved_current_bb;
+        self.fn_ctx.fn_buf = saved_fn_buf;
+        self.fn_ctx.reg = saved_reg;
+        self.fn_ctx.bb = saved_bb;
+        self.fn_ctx.terminated = saved_terminated;
+        self.fn_ctx.current_bb = saved_current_bb;
 
         Ok(())
     }
@@ -321,11 +321,11 @@ impl TextEmitter {
         // Alloca the state struct.
         let state_alloca = self.next_reg();
         self.push_instr(&format!("{state_alloca} = alloca %{state_name}"));
-        self.reg_types.insert(state_alloca.clone(), "ptr".into());
+        self.fn_ctx.reg_types.insert(state_alloca.clone(), "ptr".into());
 
         // Store each field initializer via GEP.
         let field_defs = self
-            .struct_fields
+            .module.struct_fields
             .get(&state_name)
             .cloned()
             .unwrap_or_default();
@@ -351,7 +351,7 @@ impl TextEmitter {
 
         // Resolve mailbox config from the actor declaration.
         let mailbox = self
-            .actor_decls
+            .module.actor_decls
             .get(actor_type)
             .and_then(|ad| ad.mailbox.as_ref())
             .cloned();
@@ -372,10 +372,10 @@ impl TextEmitter {
         self.push_instr(&format!(
             "{handle} = call ptr @_mvl_actor_spawn(ptr @{dispatch_name}, ptr {state_alloca}, i64 {state_size}, i64 {capacity}, i64 {policy})"
         ));
-        self.reg_types.insert(handle.clone(), "ptr".into());
+        self.fn_ctx.reg_types.insert(handle.clone(), "ptr".into());
         // Track for drop before mvl_actor_join_all (closes the sender so the
         // actor thread's recv loop terminates).
-        self.spawned_actor_handles.push(handle.clone());
+        self.fn_ctx.spawned_actor_handles.push(handle.clone());
 
         Ok(Some(handle))
     }
@@ -389,7 +389,7 @@ impl TextEmitter {
     pub(super) fn resolve_actor_type_name(&self, receiver: &Expr) -> Option<String> {
         let type_name = match receiver {
             Expr::Ident(name, _) => {
-                let ty = self.local_mvl_types.get(name.as_str())?;
+                let ty = self.fn_ctx.local_mvl_types.get(name.as_str())?;
                 if let crate::mvl::parser::ast::TypeExpr::Base { name: tn, .. } = ty {
                     tn.clone()
                 } else {
@@ -397,7 +397,7 @@ impl TextEmitter {
                 }
             }
             Expr::FieldAccess { field, .. } => {
-                let ty = self.local_mvl_types.get(field.as_str())?;
+                let ty = self.fn_ctx.local_mvl_types.get(field.as_str())?;
                 if let crate::mvl::parser::ast::TypeExpr::Base { name: tn, .. } = ty {
                     tn.clone()
                 } else {
@@ -406,7 +406,7 @@ impl TextEmitter {
             }
             _ => return None,
         };
-        self.actor_decls
+        self.module.actor_decls
             .contains_key(type_name.as_str())
             .then_some(type_name)
     }
@@ -423,7 +423,7 @@ impl TextEmitter {
         method: &str,
         args: &[Expr],
     ) -> Result<Option<String>, String> {
-        let ad = match self.actor_decls.get(actor_name).cloned() {
+        let ad = match self.module.actor_decls.get(actor_name).cloned() {
             Some(a) => a,
             None => return Ok(None),
         };
@@ -445,7 +445,7 @@ impl TextEmitter {
         let args_ptr = if argc > 0 {
             let arr_alloca = self.next_reg();
             self.push_instr(&format!("{arr_alloca} = alloca [{argc} x i64]"));
-            self.reg_types.insert(arr_alloca.clone(), "ptr".into());
+            self.fn_ctx.reg_types.insert(arr_alloca.clone(), "ptr".into());
 
             for (j, arg_expr) in args.iter().enumerate() {
                 let val = match self.emit_expr(arg_expr)? {

@@ -17,15 +17,15 @@ impl TextEmitter {
         match expr {
             Expr::Ident(name, _) => {
                 // Check ref locals first — the alloca ptr is tracked in heap_locals.
-                if let Some(loc) = self.ref_locals.get(name) {
+                if let Some(loc) = self.fn_ctx.ref_locals.get(name) {
                     let ptr = loc.ptr.clone();
-                    self.heap_locals.retain(|(s, _, _)| *s != ptr);
+                    self.fn_ctx.heap_locals.retain(|(s, _, _)| *s != ptr);
                     return;
                 }
                 // Check regular (non-ref) locals — the SSA itself is tracked.
-                if let Some(ssa) = self.locals.get(name) {
+                if let Some(ssa) = self.fn_ctx.locals.get(name) {
                     let ssa = ssa.clone();
-                    self.heap_locals.retain(|(s, _, _)| *s != ssa);
+                    self.fn_ctx.heap_locals.retain(|(s, _, _)| *s != ssa);
                 }
             }
             // Consume / Relabel are transparent wrappers — recurse.
@@ -39,7 +39,7 @@ impl TextEmitter {
     /// Emit `mvl_*_drop` calls for all tracked heap locals.
     /// Called before every `ret` instruction to clean up owned allocations.
     pub(super) fn emit_heap_drops(&mut self) {
-        for (ssa, kind, is_ref) in self.heap_locals.clone() {
+        for (ssa, kind, is_ref) in self.fn_ctx.heap_locals.clone() {
             let sym = match kind {
                 HeapKind::String => "_mvl_string_drop",
                 HeapKind::Array => "_mvl_array_drop",
@@ -61,34 +61,34 @@ impl TextEmitter {
     // ── Helper-global emitters ────────────────────────────────────────────
 
     pub(super) fn ensure_println_fmt(&mut self) -> &'static str {
-        if !self.has_println_fmt {
-            self.str_globals.push(
+        if !self.module.has_println_fmt {
+            self.module.str_globals.push(
                 "@println_fmt = private unnamed_addr constant [4 x i8] c\"%s\\0a\\00\"".into(),
             );
-            self.has_println_fmt = true;
+            self.module.has_println_fmt = true;
         }
         "println_fmt"
     }
 
     pub(super) fn ensure_int_fmt(&mut self) -> &'static str {
-        if !self.has_int_fmt {
-            self.str_globals
+        if !self.module.has_int_fmt {
+            self.module.str_globals
                 .push("@int_fmt = private unnamed_addr constant [5 x i8] c\"%lld\\00\"".into());
-            self.has_int_fmt = true;
+            self.module.has_int_fmt = true;
         }
         "int_fmt"
     }
 
     pub(super) fn ensure_bool_str_globals(&mut self) -> (&'static str, &'static str) {
-        if !self.has_str_true {
-            self.str_globals
+        if !self.module.has_str_true {
+            self.module.str_globals
                 .push("@str_true = private unnamed_addr constant [5 x i8] c\"true\\00\"".into());
-            self.has_str_true = true;
+            self.module.has_str_true = true;
         }
-        if !self.has_str_false {
-            self.str_globals
+        if !self.module.has_str_false {
+            self.module.str_globals
                 .push("@str_false = private unnamed_addr constant [6 x i8] c\"false\\00\"".into());
-            self.has_str_false = true;
+            self.module.has_str_false = true;
         }
         ("str_true", "str_false")
     }
@@ -96,8 +96,8 @@ impl TextEmitter {
     /// Create a module-level string constant from raw bytes.
     /// Returns the global name (without `@`).
     pub(super) fn emit_str_global(&mut self, s: &str) -> String {
-        let name = format!("str.{}", self.str_counter);
-        self.str_counter += 1;
+        let name = format!("str.{}", self.module.str_counter);
+        self.module.str_counter += 1;
         let mut escaped = String::new();
         for byte in s.bytes() {
             match byte {
@@ -111,7 +111,7 @@ impl TextEmitter {
             }
         }
         let total_len = s.len() + 1; // +1 for null terminator
-        self.str_globals.push(format!(
+        self.module.str_globals.push(format!(
             "@{name} = private unnamed_addr constant [{total_len} x i8] c\"{escaped}\\00\""
         ));
         name
@@ -127,7 +127,7 @@ impl TextEmitter {
         self.push_instr(&format!(
             "{reg} = call ptr @_mvl_string_new(ptr @{global}, i64 {len})"
         ));
-        self.reg_types.insert(reg.clone(), "ptr".into());
+        self.fn_ctx.reg_types.insert(reg.clone(), "ptr".into());
         reg
     }
 
@@ -160,19 +160,19 @@ impl TextEmitter {
     pub(super) fn ty_to_llvm_ctx(&self, ty: &Ty) -> String {
         match ty {
             Ty::Named(name, _) => {
-                if self.struct_fields.contains_key(name) {
-                    if self.actor_decls.contains_key(name.as_str()) {
+                if self.module.struct_fields.contains_key(name) {
+                    if self.module.actor_decls.contains_key(name.as_str()) {
                         return "ptr".into();
                     }
                     return format!("%{name}");
                 }
-                if self.enum_variants.contains_key(name) {
+                if self.module.enum_variants.contains_key(name) {
                     if self.enum_has_payloads(name) {
                         return RESULT_LLVM_TY.into();
                     }
                     return "i64".into();
                 }
-                if self.actor_decls.contains_key(name.as_str()) {
+                if self.module.actor_decls.contains_key(name.as_str()) {
                     return "ptr".into();
                 }
                 Self::ty_to_llvm(ty)
@@ -219,18 +219,18 @@ impl TextEmitter {
         match ty {
             TypeExpr::Base { name, .. } => {
                 // Resolve generic type parameters (active during monomorphized emission).
-                if let Some(concrete) = self.type_param_map.get(name.as_str()) {
+                if let Some(concrete) = self.mono.type_param_map.get(name.as_str()) {
                     return self.llvm_ty_ctx(concrete);
                 }
-                if self.struct_fields.contains_key(name) {
+                if self.module.struct_fields.contains_key(name) {
                     // Actor state structs are always accessed via pointer — the
                     // actor handle is an opaque ptr, not an inline struct value.
-                    if self.actor_decls.contains_key(name.as_str()) {
+                    if self.module.actor_decls.contains_key(name.as_str()) {
                         return "ptr".to_string();
                     }
                     return format!("%{name}");
                 }
-                if self.enum_variants.contains_key(name) {
+                if self.module.enum_variants.contains_key(name) {
                     // Payload enums lower to `{ i8, ptr }`; pure unit enums stay i64 (#1200).
                     if self.enum_has_payloads(name) {
                         return RESULT_LLVM_TY.to_string();
@@ -238,7 +238,7 @@ impl TextEmitter {
                     return "i64".to_string();
                 }
                 // Actor type without registered state struct (e.g. handle as field).
-                if self.actor_decls.contains_key(name.as_str()) {
+                if self.module.actor_decls.contains_key(name.as_str()) {
                     return "ptr".to_string();
                 }
                 Self::llvm_ty(ty)
@@ -328,7 +328,7 @@ impl TextEmitter {
     /// AST-based inference.
     pub(super) fn type_of_expr(&self, expr: &Expr) -> String {
         // Try checker-resolved type first (available when checker ran in the pipeline).
-        if let Some(ty) = self.expr_types.get(&expr.span()) {
+        if let Some(ty) = self.module.expr_types.get(&expr.span()) {
             return self.ty_to_llvm_ctx(ty);
         }
         match expr {
@@ -345,7 +345,7 @@ impl TextEmitter {
                 if name.contains("::") {
                     if let Some(pos) = name.find("::") {
                         let type_name = &name[..pos];
-                        if self.enum_variants.contains_key(type_name) {
+                        if self.module.enum_variants.contains_key(type_name) {
                             if self.enum_has_payloads(type_name) {
                                 return RESULT_LLVM_TY.into();
                             }
@@ -353,14 +353,14 @@ impl TextEmitter {
                         }
                     }
                 }
-                if let Some(loc) = self.ref_locals.get(name) {
+                if let Some(loc) = self.fn_ctx.ref_locals.get(name) {
                     return self.llvm_ty_ctx(&loc.elem_ty);
                 }
-                if let Some(mvl_ty) = self.local_mvl_types.get(name) {
+                if let Some(mvl_ty) = self.fn_ctx.local_mvl_types.get(name) {
                     return self.llvm_ty_ctx(mvl_ty);
                 }
-                if let Some(ssa) = self.locals.get(name) {
-                    if let Some(ty) = self.reg_types.get(ssa) {
+                if let Some(ssa) = self.fn_ctx.locals.get(name) {
+                    if let Some(ty) = self.fn_ctx.reg_types.get(ssa) {
                         return ty.clone();
                     }
                 }
@@ -387,7 +387,7 @@ impl TextEmitter {
                 if name.contains("::") {
                     if let Some(pos) = name.find("::") {
                         let type_name = &name[..pos];
-                        if self.enum_variants.contains_key(type_name) {
+                        if self.module.enum_variants.contains_key(type_name) {
                             if self.enum_has_payloads(type_name) {
                                 return RESULT_LLVM_TY.into();
                             }
@@ -405,7 +405,7 @@ impl TextEmitter {
                         "ptr".into()
                     }
                     _ => {
-                        if let Some(ret) = self.fn_ret_types.get(name) {
+                        if let Some(ret) = self.module.fn_ret_types.get(name) {
                             self.llvm_ty_ctx(ret)
                         } else {
                             "i64".into()
@@ -470,7 +470,7 @@ impl TextEmitter {
                 }
             }
             Expr::Construct { name, .. } => {
-                if self.struct_fields.contains_key(name) {
+                if self.module.struct_fields.contains_key(name) {
                     format!("%{name}")
                 } else {
                     "ptr".into()
@@ -526,7 +526,7 @@ impl TextEmitter {
     /// Infer the LLVM type from an already-emitted SSA value string.
     pub(super) fn infer_val_type(&self, val: &str) -> String {
         if val.starts_with('%') {
-            self.reg_types
+            self.fn_ctx.reg_types
                 .get(val)
                 .cloned()
                 .unwrap_or_else(|| "i64".into())
@@ -554,7 +554,7 @@ impl TextEmitter {
                 | TypeExpr::Labeled { inner, .. }
                 | TypeExpr::Refined { inner, .. } => cur = *inner,
                 TypeExpr::Base { ref name, .. } => {
-                    let aliased = self.fn_aliases.get(name)?;
+                    let aliased = self.module.fn_aliases.get(name)?;
                     cur = aliased.clone();
                 }
                 _ => return None,
@@ -573,7 +573,7 @@ impl TextEmitter {
             mvl_ty = *inner;
         }
         if let TypeExpr::Base { name: tn, .. } = &mvl_ty {
-            if self.struct_fields.contains_key(tn) {
+            if self.module.struct_fields.contains_key(tn) {
                 return Some(tn.clone());
             }
         }
@@ -583,7 +583,7 @@ impl TextEmitter {
     /// Resolve the LLVM type of a struct field access without emitting code.
     fn field_type_of(&self, receiver: &Expr, field: &str) -> Option<String> {
         let sn = self.struct_name_of_expr(receiver)?;
-        let fields = self.struct_fields.get(&sn)?;
+        let fields = self.module.struct_fields.get(&sn)?;
         let (_, field_ty) = fields.iter().find(|(f, _)| f == field)?;
         Some(self.llvm_ty_ctx(field_ty))
     }
@@ -597,7 +597,7 @@ impl TextEmitter {
         match expr {
             Expr::Literal(Literal::Str(_), _) => Some("String"),
             Expr::Ident(name, _) => {
-                let mvl_ty = self.local_mvl_types.get(name.as_str())?;
+                let mvl_ty = self.fn_ctx.local_mvl_types.get(name.as_str())?;
                 // Peel `val`/`ref`/`Labeled`/`Refined` wrappers to reach the base name.
                 let mut cur: &TypeExpr = mvl_ty;
                 while let TypeExpr::Ref { inner, .. }
@@ -636,7 +636,7 @@ impl TextEmitter {
         self.push_instr(&format!(
             "{reg} = call ptr @_mvl_list_slice(ptr {val}, i64 {start}, i64 {end})"
         ));
-        self.reg_types.insert(reg.clone(), "ptr".into());
+        self.fn_ctx.reg_types.insert(reg.clone(), "ptr".into());
         reg
     }
 
@@ -644,16 +644,16 @@ impl TextEmitter {
     /// Used to emit `load T, ptr %box` when emitting `*box` deref (#1154).
     pub(super) fn box_inner_llvm_ty(&self, expr: &Expr) -> Option<String> {
         let mvl_ty: TypeExpr = match expr {
-            Expr::Ident(name, _) => self.local_mvl_types.get(name.as_str()).cloned()?,
+            Expr::Ident(name, _) => self.fn_ctx.local_mvl_types.get(name.as_str()).cloned()?,
             Expr::FieldAccess {
                 expr: receiver,
                 field,
                 ..
             } => {
                 if let Expr::Ident(name, _) = receiver.as_ref() {
-                    let recv_ty = self.local_mvl_types.get(name.as_str())?;
+                    let recv_ty = self.fn_ctx.local_mvl_types.get(name.as_str())?;
                     if let TypeExpr::Base { name: tn, .. } = recv_ty {
-                        let fields = self.struct_fields.get(tn)?;
+                        let fields = self.module.struct_fields.get(tn)?;
                         fields
                             .iter()
                             .find(|(fname, _)| fname == field)
@@ -693,7 +693,7 @@ impl TextEmitter {
         self.push_instr(&format!(
             "{str_reg} = call ptr @_mvl_string_new(ptr {buf}, i64 {len})"
         ));
-        self.reg_types.insert(str_reg.clone(), "ptr".into());
+        self.fn_ctx.reg_types.insert(str_reg.clone(), "ptr".into());
         str_reg
     }
 
@@ -708,7 +708,7 @@ impl TextEmitter {
         self.push_instr(&format!(
             "{str_reg} = call ptr @_mvl_string_new(ptr {cptr}, i64 {clen})"
         ));
-        self.reg_types.insert(str_reg.clone(), "ptr".into());
+        self.fn_ctx.reg_types.insert(str_reg.clone(), "ptr".into());
         str_reg
     }
 }

@@ -69,15 +69,15 @@ impl TextEmitter {
 
                     self.start_bb(&then_bb);
                     let then_val = self.emit_block(then)?;
-                    let then_end = self.current_bb.clone();
-                    if !self.terminated {
+                    let then_end = self.fn_ctx.current_bb.clone();
+                    if !self.fn_ctx.terminated {
                         self.push_instr(&format!("br label %{merge_bb}"));
                     }
 
                     self.start_bb(&else_bb);
                     let else_val = self.emit_if_stmt_chain(ncond, nthen, nelse.as_ref())?;
-                    let else_end = self.current_bb.clone();
-                    if !self.terminated {
+                    let else_end = self.fn_ctx.current_bb.clone();
+                    if !self.fn_ctx.terminated {
                         self.push_instr(&format!("br label %{merge_bb}"));
                     }
 
@@ -89,7 +89,7 @@ impl TextEmitter {
                             self.push_instr(&format!(
                                 "{result} = phi {phi_ty} [ {tv}, %{then_end} ], [ {ev}, %{else_end} ]"
                             ));
-                            self.reg_types.insert(result.clone(), phi_ty);
+                            self.fn_ctx.reg_types.insert(result.clone(), phi_ty);
                             Ok(Some(result))
                         }
                         _ => Ok(None),
@@ -131,9 +131,9 @@ impl TextEmitter {
                     if let Pattern::Ident(name, _) = pattern {
                         // Track heap-allocated ref locals for drop at function exit.
                         if let Some(hk) = Self::heap_kind(&elem_ty) {
-                            self.heap_locals.push((ptr.clone(), hk, true));
+                            self.fn_ctx.heap_locals.push((ptr.clone(), hk, true));
                         }
-                        self.ref_locals.insert(
+                        self.fn_ctx.ref_locals.insert(
                             name.clone(),
                             RefLocal {
                                 ptr,
@@ -148,26 +148,26 @@ impl TextEmitter {
                     // LLVM-level type; the MVL-derived type from `llvm_ty_ctx`
                     // may disagree (e.g. `%Child` vs the actual `ptr` from a
                     // C-ABI Result extraction).
-                    if !self.reg_types.contains_key(&v) {
+                    if !self.fn_ctx.reg_types.contains_key(&v) {
                         let ty_str = self.llvm_ty_ctx(&elem_ty);
-                        self.reg_types.insert(v.clone(), ty_str);
+                        self.fn_ctx.reg_types.insert(v.clone(), ty_str);
                     }
                     // If this name shadows a previous heap-allocated binding,
                     // remove the old SSA from heap_locals to prevent double-drop.
-                    if let Some(old_ssa) = self.locals.get(name) {
+                    if let Some(old_ssa) = self.fn_ctx.locals.get(name) {
                         let old_ssa = old_ssa.clone();
-                        self.heap_locals.retain(|(s, _, _)| *s != old_ssa);
+                        self.fn_ctx.heap_locals.retain(|(s, _, _)| *s != old_ssa);
                     }
-                    self.locals.insert(name.clone(), v.clone());
+                    self.fn_ctx.locals.insert(name.clone(), v.clone());
                     // Track heap-allocated locals for automatic drop at function exit.
                     // Skip if this SSA is already tracked (consume/move reuses the
                     // source's SSA — adding it again would double-drop).
                     if let Some(hk) = Self::heap_kind(&elem_ty) {
-                        if !self.heap_locals.iter().any(|(s, _, _)| s == &v) {
-                            self.heap_locals.push((v, hk, false));
+                        if !self.fn_ctx.heap_locals.iter().any(|(s, _, _)| s == &v) {
+                            self.fn_ctx.heap_locals.push((v, hk, false));
                         }
                     }
-                    self.local_mvl_types.insert(name.clone(), elem_ty);
+                    self.fn_ctx.local_mvl_types.insert(name.clone(), elem_ty);
                 }
                 Ok(())
             }
@@ -175,7 +175,7 @@ impl TextEmitter {
             Stmt::Assign { target, value, .. } => {
                 let val = self.emit_expr(value)?;
                 if let LValue::Ident(name, _) = target {
-                    if let Some(loc) = self.ref_locals.get(name).cloned() {
+                    if let Some(loc) = self.fn_ctx.ref_locals.get(name).cloned() {
                         if let Some(v) = val {
                             let ty_str = self.llvm_ty_ctx(&loc.elem_ty);
                             self.push_instr(&format!("store {ty_str} {v}, ptr {}", loc.ptr));
@@ -186,7 +186,7 @@ impl TextEmitter {
             }
 
             Stmt::Return { value, .. } => {
-                let ret_ty = self.current_ret_ty.clone();
+                let ret_ty = self.fn_ctx.current_ret_ty.clone();
                 // Evaluate return expression first (if any), then drop once.
                 let ret_val = if let Some(expr) = value {
                     self.emit_expr(expr)?
@@ -199,7 +199,7 @@ impl TextEmitter {
                 }
                 self.emit_heap_drops();
                 if Self::is_void(&ret_ty) {
-                    if self.current_fn_is_main {
+                    if self.fn_ctx.current_fn_is_main {
                         self.push_instr(MAIN_RET);
                     } else {
                         self.push_instr("ret void");
@@ -207,12 +207,12 @@ impl TextEmitter {
                 } else if let Some(v) = ret_val {
                     let ty = self.llvm_ty_ctx(&ret_ty);
                     self.push_instr(&format!("ret {ty} {v}"));
-                } else if self.current_fn_is_main {
+                } else if self.fn_ctx.current_fn_is_main {
                     self.push_instr(MAIN_RET);
                 } else {
                     self.push_instr("ret void");
                 }
-                self.terminated = true;
+                self.fn_ctx.terminated = true;
                 Ok(())
             }
 
@@ -300,18 +300,18 @@ impl TextEmitter {
         self.start_bb(&body_bb);
 
         // Bind loop variable (immutable, read-only inside body)
-        let old = self.locals.insert(var_name.to_string(), cur_i.clone());
-        self.reg_types.insert(cur_i.clone(), "i64".into());
+        let old = self.fn_ctx.locals.insert(var_name.to_string(), cur_i.clone());
+        self.fn_ctx.reg_types.insert(cur_i.clone(), "i64".into());
         self.emit_block(body)?;
 
         // Restore locals
         if let Some(prev) = old {
-            self.locals.insert(var_name.to_string(), prev);
+            self.fn_ctx.locals.insert(var_name.to_string(), prev);
         } else {
-            self.locals.remove(var_name);
+            self.fn_ctx.locals.remove(var_name);
         }
 
-        if !self.terminated {
+        if !self.fn_ctx.terminated {
             let next_i = self.next_reg();
             self.push_instr(&format!("{next_i} = add i64 {cur_i}, 1"));
             self.push_instr(&format!("store i64 {next_i}, ptr {i_ptr}"));
@@ -343,7 +343,7 @@ impl TextEmitter {
 
         self.start_bb(&body_bb);
         self.emit_block(body)?;
-        if !self.terminated {
+        if !self.fn_ctx.terminated {
             self.ensure_yield_check_extern();
             self.push_instr("call void @_mvl_yield_check()");
             self.push_instr(&format!("br label %{loop_bb}"));
@@ -375,7 +375,7 @@ impl TextEmitter {
 
         self.start_bb(&then_bb);
         self.emit_block(then)?;
-        if !self.terminated {
+        if !self.fn_ctx.terminated {
             self.push_instr(&format!("br label %{merge_bb}"));
         }
 
@@ -390,7 +390,7 @@ impl TextEmitter {
                 }
             }
         }
-        if !self.terminated {
+        if !self.fn_ctx.terminated {
             self.push_instr(&format!("br label %{merge_bb}"));
         }
 

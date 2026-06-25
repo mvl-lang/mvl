@@ -1095,6 +1095,74 @@ fn parse_license_policy(value: Option<&TomlValue>) -> Result<LicensePolicy, Mani
     Ok(policy)
 }
 
+// ── In-place tag sync (#1459) ────────────────────────────────────────────────
+
+/// Rewrite the `tag = "..."` field for each updated dep in `mvl.toml` (#1459).
+///
+/// Uses a line-surgical edit (not a full to_toml roundtrip) so comments and
+/// formatting in the user's manifest are preserved.
+pub(super) fn sync_manifest_tags(
+    project_root: &Path,
+    updates: &[(String, String)],
+) -> Result<(), super::error::PackageError> {
+    use super::error::PackageError;
+    let path = project_root.join("mvl.toml");
+    let content = std::fs::read_to_string(&path)
+        .map_err(|e| PackageError::Io(path.display().to_string(), e.to_string()))?;
+
+    let mut out = String::with_capacity(content.len());
+    for line in content.lines() {
+        let mut replaced = line.to_string();
+        let trimmed = line.trim_start();
+        // Match lines that begin with `"<dep-name>" = { ... }` and contain a
+        // `tag = "..."` entry.
+        if let Some(after_quote) = trimmed.strip_prefix('"') {
+            if let Some(close_quote) = after_quote.find('"') {
+                let dep_name = &after_quote[..close_quote];
+                if let Some((_, new_ver)) = updates.iter().find(|(n, _)| n == dep_name) {
+                    replaced = rewrite_tag_in_line(line, new_ver);
+                }
+            }
+        }
+        out.push_str(&replaced);
+        out.push('\n');
+    }
+    // Preserve original trailing newline behavior — only strip the one we added
+    // if the original didn't end with a newline.
+    if !content.ends_with('\n') {
+        out.pop();
+    }
+    std::fs::write(&path, out)
+        .map_err(|e| PackageError::Io(path.display().to_string(), e.to_string()))?;
+    Ok(())
+}
+
+/// Replace a `tag = "vX.Y.Z"` substring in `line` with the new version,
+/// preserving an existing `v` prefix if present.
+pub(super) fn rewrite_tag_in_line(line: &str, new_version: &str) -> String {
+    let needle = "tag = \"";
+    let start = match line.find(needle) {
+        Some(i) => i + needle.len(),
+        None => return line.to_string(),
+    };
+    let rest = &line[start..];
+    let end_off = match rest.find('"') {
+        Some(i) => i,
+        None => return line.to_string(),
+    };
+    let current_tag = &rest[..end_off];
+    let new_tag = if current_tag.starts_with('v') {
+        format!("v{new_version}")
+    } else {
+        new_version.to_string()
+    };
+    let mut out = String::with_capacity(line.len());
+    out.push_str(&line[..start]);
+    out.push_str(&new_tag);
+    out.push_str(&line[start + end_off..]);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2094,5 +2162,48 @@ rationale-required = false
         .unwrap();
         let m = Manifest::load(tmp.path()).unwrap();
         assert!(m.validate_license(tmp.path()).is_ok());
+    }
+
+    // ── sync_manifest_tags / rewrite_tag_in_line (#1459) ─────────────────
+
+    #[test]
+    fn rewrite_tag_preserves_v_prefix() {
+        let line = "\"pkg\" = { git = \"https://e.x/p\", tag = \"v0.2.3\" }";
+        let out = rewrite_tag_in_line(line, "0.3.0");
+        assert!(out.contains("tag = \"v0.3.0\""), "got: {out}");
+    }
+
+    #[test]
+    fn rewrite_tag_no_v_prefix_kept() {
+        let line = "\"pkg\" = { git = \"https://e.x/p\", tag = \"0.2.3\" }";
+        let out = rewrite_tag_in_line(line, "0.3.0");
+        assert!(out.contains("tag = \"0.3.0\""), "got: {out}");
+        assert!(!out.contains("v0.3.0"));
+    }
+
+    #[test]
+    fn rewrite_tag_preserves_rest_of_line() {
+        let line = "\"pkg\" = { git = \"https://e.x/p\", tag = \"v0.2.3\", rationale = \"x\" }";
+        let out = rewrite_tag_in_line(line, "0.3.0");
+        assert!(out.contains("rationale = \"x\""), "got: {out}");
+    }
+
+    #[test]
+    fn rewrite_tag_no_match_returns_unchanged() {
+        let line = "\"pkg\" = \">=1.0.0\"";
+        let out = rewrite_tag_in_line(line, "2.0.0");
+        assert_eq!(out, line);
+    }
+
+    #[test]
+    fn sync_manifest_tags_rewrites_only_matching_dep() {
+        let tmp = tempfile::tempdir().unwrap();
+        let original = "[package]\nname = \"p\"\nversion = \"1.0.0\"\nlicense = \"MIT\"\nrequires-mvl = \">=0.1.0\"\n\n[dependencies]\n\"foo\" = { git = \"https://e.x/foo\", tag = \"v0.1.0\" }\n\"bar\" = { git = \"https://e.x/bar\", tag = \"v0.5.0\" }\n";
+        std::fs::write(tmp.path().join("mvl.toml"), original).unwrap();
+        let updates = vec![("foo".to_string(), "0.2.0".to_string())];
+        sync_manifest_tags(tmp.path(), &updates).unwrap();
+        let result = std::fs::read_to_string(tmp.path().join("mvl.toml")).unwrap();
+        assert!(result.contains("\"foo\" = { git = \"https://e.x/foo\", tag = \"v0.2.0\" }"));
+        assert!(result.contains("\"bar\" = { git = \"https://e.x/bar\", tag = \"v0.5.0\" }"));
     }
 }

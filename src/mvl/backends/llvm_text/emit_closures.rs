@@ -12,14 +12,14 @@ impl TextEmitter {
 
     /// Emit `%__closure_type = type { ptr, ptr }` exactly once.
     pub(super) fn ensure_closure_type(&mut self) {
-        if !self.closure_type_emitted {
-            self.type_defs
+        if !self.module.closure_type_emitted {
+            self.module.type_defs
                 .push("%__closure_type = type { ptr, ptr }".into());
-            self.closure_type_emitted = true;
+            self.module.closure_type_emitted = true;
         }
     }
 
-    /// Collect free variables referenced in `body` that exist in `self.locals`
+    /// Collect free variables referenced in `body` that exist in `self.fn_ctx.locals`
     /// and are not in `exclude` (the lambda's own parameters).
     /// Returns `(name, TypeExpr)` pairs in stable order.
     pub(super) fn collect_lambda_captures(
@@ -44,13 +44,13 @@ impl TextEmitter {
             Expr::Ident(name, _)
                 if !exclude.contains(name)
                     && !seen.contains(name)
-                    && (self.locals.contains_key(name) || self.ref_locals.contains_key(name)) =>
+                    && (self.fn_ctx.locals.contains_key(name) || self.fn_ctx.ref_locals.contains_key(name)) =>
             {
                 let ty_opt = self
-                    .local_mvl_types
+                    .fn_ctx.local_mvl_types
                     .get(name)
                     .cloned()
-                    .or_else(|| self.ref_locals.get(name).map(|rl| rl.elem_ty.clone()));
+                    .or_else(|| self.fn_ctx.ref_locals.get(name).map(|rl| rl.elem_ty.clone()));
                 if let Some(ty) = ty_opt {
                     seen.insert(name.clone());
                     caps.push((name.clone(), ty));
@@ -74,13 +74,13 @@ impl TextEmitter {
                 // If the callee is a local closure binding, capture it too.
                 if !exclude.contains(name)
                     && !seen.contains(name)
-                    && (self.locals.contains_key(name) || self.ref_locals.contains_key(name))
+                    && (self.fn_ctx.locals.contains_key(name) || self.fn_ctx.ref_locals.contains_key(name))
                 {
                     if let Some(ty) = self
-                        .local_mvl_types
+                        .fn_ctx.local_mvl_types
                         .get(name)
                         .cloned()
-                        .or_else(|| self.ref_locals.get(name).map(|rl| rl.elem_ty.clone()))
+                        .or_else(|| self.fn_ctx.ref_locals.get(name).map(|rl| rl.elem_ty.clone()))
                     {
                         seen.insert(name.clone());
                         caps.push((name.clone(), ty));
@@ -257,8 +257,8 @@ impl TextEmitter {
         body: &Expr,
         ptr_param_indices: &[usize],
     ) -> Result<Option<String>, String> {
-        let lambda_name = format!("__lambda_{}", self.lambda_counter);
-        self.lambda_counter += 1;
+        let lambda_name = format!("__lambda_{}", self.module.lambda_counter);
+        self.module.lambda_counter += 1;
 
         let ret_ty = match ret_type {
             Some(t) => t.clone(),
@@ -296,24 +296,24 @@ impl TextEmitter {
                 .iter()
                 .map(|(_, ty)| self.llvm_ty_ctx(ty))
                 .collect();
-            self.type_defs.push(format!(
+            self.module.type_defs.push(format!(
                 "%{env_ty_name} = type {{ {} }}",
                 field_types.join(", ")
             ));
 
             let env_alloca = self.next_reg();
             self.push_instr(&format!("{env_alloca} = alloca %{env_ty_name}"));
-            self.reg_types.insert(env_alloca.clone(), "ptr".into());
+            self.fn_ctx.reg_types.insert(env_alloca.clone(), "ptr".into());
 
             for (i, (cap_name, cap_ty)) in captures.iter().enumerate() {
                 // Ref locals: load current value from the alloca before capturing.
-                let store_val = if let Some(ref_loc) = self.ref_locals.get(cap_name).cloned() {
+                let store_val = if let Some(ref_loc) = self.fn_ctx.ref_locals.get(cap_name).cloned() {
                     let ty_str = self.llvm_ty_ctx(&ref_loc.elem_ty);
                     let loaded = self.next_reg();
                     self.push_instr(&format!("{loaded} = load {ty_str}, ptr {}", ref_loc.ptr));
-                    self.reg_types.insert(loaded.clone(), ty_str);
+                    self.fn_ctx.reg_types.insert(loaded.clone(), ty_str);
                     loaded
-                } else if let Some(cap_val) = self.locals.get(cap_name).cloned() {
+                } else if let Some(cap_val) = self.fn_ctx.locals.get(cap_name).cloned() {
                     cap_val
                 } else {
                     continue; // not in scope (shouldn't happen after collect_lambda_captures)
@@ -331,22 +331,22 @@ impl TextEmitter {
         };
 
         // ── Save outer function state ────────────────────────────────────
-        let saved_fn_buf = std::mem::take(&mut self.fn_buf);
-        let saved_locals = std::mem::take(&mut self.locals);
-        let saved_ref_locals = std::mem::take(&mut self.ref_locals);
-        let saved_reg = self.reg;
-        let saved_bb = self.bb;
-        let saved_reg_types = std::mem::take(&mut self.reg_types);
-        let saved_mvl_types = std::mem::take(&mut self.local_mvl_types);
-        let saved_ret_ty = std::mem::replace(&mut self.current_ret_ty, ret_ty.clone());
-        let saved_terminated = self.terminated;
-        let saved_current_bb = std::mem::replace(&mut self.current_bb, "entry".into());
-        let saved_is_main = self.current_fn_is_main;
+        let saved_fn_buf = std::mem::take(&mut self.fn_ctx.fn_buf);
+        let saved_locals = std::mem::take(&mut self.fn_ctx.locals);
+        let saved_ref_locals = std::mem::take(&mut self.fn_ctx.ref_locals);
+        let saved_reg = self.fn_ctx.reg;
+        let saved_bb = self.fn_ctx.bb;
+        let saved_reg_types = std::mem::take(&mut self.fn_ctx.reg_types);
+        let saved_mvl_types = std::mem::take(&mut self.fn_ctx.local_mvl_types);
+        let saved_ret_ty = std::mem::replace(&mut self.fn_ctx.current_ret_ty, ret_ty.clone());
+        let saved_terminated = self.fn_ctx.terminated;
+        let saved_current_bb = std::mem::replace(&mut self.fn_ctx.current_bb, "entry".into());
+        let saved_is_main = self.fn_ctx.current_fn_is_main;
 
-        self.reg = 0;
-        self.bb = 0;
-        self.terminated = false;
-        self.current_fn_is_main = false; // lambdas are never main
+        self.fn_ctx.reg = 0;
+        self.fn_ctx.bb = 0;
+        self.fn_ctx.terminated = false;
+        self.fn_ctx.current_fn_is_main = false; // lambdas are never main
 
         // ── Emit lambda function header ──────────────────────────────────
         let llvm_ret = self.llvm_ty_ctx(&ret_ty);
@@ -371,10 +371,10 @@ impl TextEmitter {
         } else {
             llvm_ret.clone()
         };
-        self.fn_buf
+        self.fn_ctx.fn_buf
             .push(format!("define {define_ret} @{lambda_name}({params_str})"));
-        self.fn_buf.push("{".into());
-        self.fn_buf.push("entry:".into());
+        self.fn_ctx.fn_buf.push("{".into());
+        self.fn_ctx.fn_buf.push("entry:".into());
 
         // Bind user parameters as locals.
         for (i, p) in params.iter().enumerate() {
@@ -384,14 +384,14 @@ impl TextEmitter {
                     // Load the real type from the pointer the runtime passed us.
                     let loaded = self.next_reg();
                     self.push_instr(&format!("{loaded} = load {ty_str}, ptr %__raw_{}", p.name));
-                    self.locals.insert(p.name.clone(), loaded.clone());
-                    self.reg_types.insert(loaded, ty_str);
+                    self.fn_ctx.locals.insert(p.name.clone(), loaded.clone());
+                    self.fn_ctx.reg_types.insert(loaded, ty_str);
                 } else {
                     let ssa = format!("%{}", p.name);
-                    self.locals.insert(p.name.clone(), ssa.clone());
-                    self.reg_types.insert(ssa, ty_str);
+                    self.fn_ctx.locals.insert(p.name.clone(), ssa.clone());
+                    self.fn_ctx.reg_types.insert(ssa, ty_str);
                 }
-                self.local_mvl_types.insert(p.name.clone(), p.ty.clone());
+                self.fn_ctx.local_mvl_types.insert(p.name.clone(), p.ty.clone());
             }
         }
 
@@ -405,9 +405,9 @@ impl TextEmitter {
                 ));
                 let val = self.next_reg();
                 self.push_instr(&format!("{val} = load {field_llvm_ty}, ptr {field_ptr}"));
-                self.reg_types.insert(val.clone(), field_llvm_ty);
-                self.locals.insert(cap_name.clone(), val.clone());
-                self.local_mvl_types
+                self.fn_ctx.reg_types.insert(val.clone(), field_llvm_ty);
+                self.fn_ctx.locals.insert(cap_name.clone(), val.clone());
+                self.fn_ctx.local_mvl_types
                     .insert(cap_name.clone(), cap_ty.clone());
             }
         }
@@ -419,22 +419,22 @@ impl TextEmitter {
             Ok(v) => v,
             Err(e) => {
                 // Restore outer state before propagating the error.
-                self.fn_buf = saved_fn_buf;
-                self.locals = saved_locals;
-                self.ref_locals = saved_ref_locals;
-                self.reg = saved_reg;
-                self.bb = saved_bb;
-                self.reg_types = saved_reg_types;
-                self.local_mvl_types = saved_mvl_types;
-                self.current_ret_ty = saved_ret_ty;
-                self.terminated = saved_terminated;
-                self.current_bb = saved_current_bb;
-                self.current_fn_is_main = saved_is_main;
+                self.fn_ctx.fn_buf = saved_fn_buf;
+                self.fn_ctx.locals = saved_locals;
+                self.fn_ctx.ref_locals = saved_ref_locals;
+                self.fn_ctx.reg = saved_reg;
+                self.fn_ctx.bb = saved_bb;
+                self.fn_ctx.reg_types = saved_reg_types;
+                self.fn_ctx.local_mvl_types = saved_mvl_types;
+                self.fn_ctx.current_ret_ty = saved_ret_ty;
+                self.fn_ctx.terminated = saved_terminated;
+                self.fn_ctx.current_bb = saved_current_bb;
+                self.fn_ctx.current_fn_is_main = saved_is_main;
                 return Err(e);
             }
         };
 
-        if !self.terminated {
+        if !self.fn_ctx.terminated {
             if is_void {
                 self.push_instr("ret void");
             } else if let Some(v) = body_val {
@@ -444,27 +444,27 @@ impl TextEmitter {
             }
         }
 
-        self.fn_buf.push("}".into());
-        let lambda_body = self.fn_buf.join("\n");
-        self.fn_bodies.push(lambda_body);
+        self.fn_ctx.fn_buf.push("}".into());
+        let lambda_body = self.fn_ctx.fn_buf.join("\n");
+        self.module.fn_bodies.push(lambda_body);
 
         // ── Restore outer function state ─────────────────────────────────
-        self.fn_buf = saved_fn_buf;
-        self.locals = saved_locals;
-        self.ref_locals = saved_ref_locals;
-        self.reg = saved_reg;
-        self.bb = saved_bb;
-        self.reg_types = saved_reg_types;
-        self.local_mvl_types = saved_mvl_types;
-        self.current_ret_ty = saved_ret_ty;
-        self.terminated = saved_terminated;
-        self.current_bb = saved_current_bb;
-        self.current_fn_is_main = saved_is_main;
+        self.fn_ctx.fn_buf = saved_fn_buf;
+        self.fn_ctx.locals = saved_locals;
+        self.fn_ctx.ref_locals = saved_ref_locals;
+        self.fn_ctx.reg = saved_reg;
+        self.fn_ctx.bb = saved_bb;
+        self.fn_ctx.reg_types = saved_reg_types;
+        self.fn_ctx.local_mvl_types = saved_mvl_types;
+        self.fn_ctx.current_ret_ty = saved_ret_ty;
+        self.fn_ctx.terminated = saved_terminated;
+        self.fn_ctx.current_bb = saved_current_bb;
+        self.fn_ctx.current_fn_is_main = saved_is_main;
 
         // ── Build closure struct in outer function ────────────────────────
         let closure_alloca = self.next_reg();
         self.push_instr(&format!("{closure_alloca} = alloca %__closure_type"));
-        self.reg_types.insert(closure_alloca.clone(), "ptr".into());
+        self.fn_ctx.reg_types.insert(closure_alloca.clone(), "ptr".into());
 
         let fn_field = self.next_reg();
         self.push_instr(&format!(
@@ -512,8 +512,8 @@ impl TextEmitter {
         self.ensure_closure_type();
 
         // Emit the wrapper function once.
-        if !self.fn_ret_types.contains_key(&wrapper_name) {
-            let orig_ret = match self.fn_ret_types.get(name).cloned() {
+        if !self.module.fn_ret_types.contains_key(&wrapper_name) {
+            let orig_ret = match self.module.fn_ret_types.get(name).cloned() {
                 Some(t) => t,
                 None => return Ok(None),
             };
@@ -528,7 +528,7 @@ impl TextEmitter {
 
             // Build typed trampoline: (ptr %__env, ty0 %__arg0, ty1 %__arg1, …)
             // For HOF params (in ptr_param_indices), accept ptr and load inside.
-            let orig_params = self.fn_param_types.get(name).cloned().unwrap_or_default();
+            let orig_params = self.module.fn_param_types.get(name).cloned().unwrap_or_default();
             let mut wrapper_param_parts = vec!["ptr %__env".to_string()];
             let mut forward_arg_parts: Vec<String> = Vec::new();
             let mut loads: Vec<String> = Vec::new();
@@ -551,30 +551,30 @@ impl TextEmitter {
             let forward_args_str = forward_arg_parts.join(", ");
 
             // Save context.
-            let saved_fn_buf = std::mem::take(&mut self.fn_buf);
-            let saved_locals = std::mem::take(&mut self.locals);
-            let saved_ref_locals = std::mem::take(&mut self.ref_locals);
-            let saved_reg = self.reg;
-            let saved_bb = self.bb;
-            let saved_reg_types = std::mem::take(&mut self.reg_types);
-            let saved_mvl_types = std::mem::take(&mut self.local_mvl_types);
-            let saved_ret_ty = std::mem::replace(&mut self.current_ret_ty, orig_ret.clone());
-            let saved_terminated = self.terminated;
-            let saved_current_bb = std::mem::replace(&mut self.current_bb, "entry".into());
+            let saved_fn_buf = std::mem::take(&mut self.fn_ctx.fn_buf);
+            let saved_locals = std::mem::take(&mut self.fn_ctx.locals);
+            let saved_ref_locals = std::mem::take(&mut self.fn_ctx.ref_locals);
+            let saved_reg = self.fn_ctx.reg;
+            let saved_bb = self.fn_ctx.bb;
+            let saved_reg_types = std::mem::take(&mut self.fn_ctx.reg_types);
+            let saved_mvl_types = std::mem::take(&mut self.fn_ctx.local_mvl_types);
+            let saved_ret_ty = std::mem::replace(&mut self.fn_ctx.current_ret_ty, orig_ret.clone());
+            let saved_terminated = self.fn_ctx.terminated;
+            let saved_current_bb = std::mem::replace(&mut self.fn_ctx.current_bb, "entry".into());
 
-            self.reg = 0;
-            self.bb = 0;
-            self.terminated = false;
+            self.fn_ctx.reg = 0;
+            self.fn_ctx.bb = 0;
+            self.fn_ctx.terminated = false;
 
-            self.fn_buf.push(format!(
+            self.fn_ctx.fn_buf.push(format!(
                 "define {define_ret} @{wrapper_name}({wrapper_params_str})"
             ));
-            self.fn_buf.push("{".into());
-            self.fn_buf.push("entry:".into());
+            self.fn_ctx.fn_buf.push("{".into());
+            self.fn_ctx.fn_buf.push("entry:".into());
 
             // Emit loads for by-pointer HOF params.
             for load in &loads {
-                self.fn_buf.push(load.clone());
+                self.fn_ctx.fn_buf.push(load.clone());
             }
 
             if is_void {
@@ -588,30 +588,30 @@ impl TextEmitter {
                 self.push_instr(&format!("ret {llvm_ret} {reg}"));
             }
 
-            self.fn_buf.push("}".into());
-            let wrapper_body = self.fn_buf.join("\n");
-            self.fn_bodies.push(wrapper_body);
+            self.fn_ctx.fn_buf.push("}".into());
+            let wrapper_body = self.fn_ctx.fn_buf.join("\n");
+            self.module.fn_bodies.push(wrapper_body);
 
             // Restore context.
-            self.fn_buf = saved_fn_buf;
-            self.locals = saved_locals;
-            self.ref_locals = saved_ref_locals;
-            self.reg = saved_reg;
-            self.bb = saved_bb;
-            self.reg_types = saved_reg_types;
-            self.local_mvl_types = saved_mvl_types;
-            self.current_ret_ty = saved_ret_ty;
-            self.terminated = saved_terminated;
-            self.current_bb = saved_current_bb;
+            self.fn_ctx.fn_buf = saved_fn_buf;
+            self.fn_ctx.locals = saved_locals;
+            self.fn_ctx.ref_locals = saved_ref_locals;
+            self.fn_ctx.reg = saved_reg;
+            self.fn_ctx.bb = saved_bb;
+            self.fn_ctx.reg_types = saved_reg_types;
+            self.fn_ctx.local_mvl_types = saved_mvl_types;
+            self.fn_ctx.current_ret_ty = saved_ret_ty;
+            self.fn_ctx.terminated = saved_terminated;
+            self.fn_ctx.current_bb = saved_current_bb;
 
             // Record wrapper so we don't emit it twice.
-            self.fn_ret_types.insert(wrapper_name.clone(), orig_ret);
+            self.module.fn_ret_types.insert(wrapper_name.clone(), orig_ret);
         }
 
         // Build `{ &wrapper, null }` closure struct.
         let closure_alloca = self.next_reg();
         self.push_instr(&format!("{closure_alloca} = alloca %__closure_type"));
-        self.reg_types.insert(closure_alloca.clone(), "ptr".into());
+        self.fn_ctx.reg_types.insert(closure_alloca.clone(), "ptr".into());
 
         let fn_field = self.next_reg();
         self.push_instr(&format!(
@@ -655,8 +655,8 @@ impl TextEmitter {
             } => self.emit_hof_lambda(params, ret_type.as_deref(), body, ptr_param_indices),
             Expr::Ident(name, _) => {
                 // Module-level function reference (not in locals).
-                if !self.locals.contains_key(name.as_str())
-                    && self.fn_ret_types.contains_key(name.as_str())
+                if !self.fn_ctx.locals.contains_key(name.as_str())
+                    && self.module.fn_ret_types.contains_key(name.as_str())
                 {
                     self.make_named_fn_closure_hof(name, ptr_param_indices)
                 } else {
@@ -675,8 +675,8 @@ impl TextEmitter {
         match expr {
             Expr::Lambda { .. } => true,
             Expr::Ident(name, _) => {
-                !self.locals.contains_key(name.as_str())
-                    && self.fn_ret_types.contains_key(name.as_str())
+                !self.fn_ctx.locals.contains_key(name.as_str())
+                    && self.module.fn_ret_types.contains_key(name.as_str())
             }
             _ => false,
         }
