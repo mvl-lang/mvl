@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.220.7] - 2026-06-25
+
+### Fixed
+
+- **Rust transpiler: emit pkg-prefixed names for cross-package function collisions** (#1475) — When two packages exported functions with the same name (e.g. `status_reason` from both `pkg.http` and `pkg.health`), the Rust transpiler's prelude deduplication would drop one and leave the surviving definition with an incorrect type at call sites, causing Rust compilation to fail. Fixed by: adding `pkg_name` tracking to `TirFn`; threading package names from the loader through the build pipeline; building a `pkg_fn_dispatch` table to emit collision-avoiding Rust names (`http__status_reason`, `health__status_reason`); and resolving call sites using the checker-inferred return type. Functions without collisions keep their original names. Unblocks projects that import packages sharing function names (e.g. `crud_api` example).
+
 ## [0.220.6] - 2026-06-25
 
 ### Fixed
