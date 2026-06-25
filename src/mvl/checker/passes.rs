@@ -223,46 +223,13 @@ pub fn count_memory_safety_sites(prog: &Program) -> MemorySafetyCounts {
 
     impl<'a, 'ast> Visit<'ast> for MemorySafetyVisitor<'a> {
         fn visit_stmt(&mut self, s: &'ast Stmt) {
-            match s {
-                Stmt::Let { ty, .. } => {
-                    self.counts.let_bindings += 1;
-                    if matches!(ty, TypeExpr::Ref { mutable: true, .. }) {
-                        self.counts.ref_bindings += 1;
-                    }
-                    walk_stmt(self, s);
+            if let Stmt::Let { ty, .. } = s {
+                self.counts.let_bindings += 1;
+                if matches!(ty, TypeExpr::Ref { mutable: true, .. }) {
+                    self.counts.ref_bindings += 1;
                 }
-                // Default `walk_stmt` skips While/For `invariants` and `decreases`.
-                // Walk them explicitly so consume sites in loop variants are counted.
-                Stmt::While {
-                    cond,
-                    invariants,
-                    decreases,
-                    body,
-                    ..
-                } => {
-                    self.visit_expr(cond);
-                    for inv in invariants {
-                        self.visit_expr(inv);
-                    }
-                    if let Some(dec) = decreases {
-                        self.visit_expr(dec);
-                    }
-                    self.visit_block(body);
-                }
-                Stmt::For {
-                    iter,
-                    invariants,
-                    body,
-                    ..
-                } => {
-                    self.visit_expr(iter);
-                    for inv in invariants {
-                        self.visit_expr(inv);
-                    }
-                    self.visit_block(body);
-                }
-                _ => walk_stmt(self, s),
             }
+            walk_stmt(self, s);
         }
 
         fn visit_expr(&mut self, e: &'ast Expr) {
@@ -341,37 +308,21 @@ pub fn count_handling_sites(prog: &Program) -> HandlingCounts {
                 Stmt::Let { pattern, ty, .. } => {
                     count_pattern(pattern, self.counts);
                     count_type(ty, self.counts);
-                    walk_stmt(self, s);
                 }
                 Stmt::Assign { .. } => {
                     self.counts.assign_sites += 1;
-                    walk_stmt(self, s);
                 }
                 Stmt::Match { arms, .. } => {
                     for arm in arms {
                         count_pattern(&arm.pattern, self.counts);
                     }
-                    walk_stmt(self, s);
-                }
-                // Default `walk_stmt` skips While `decreases`; walk it explicitly.
-                Stmt::While {
-                    cond,
-                    body,
-                    decreases,
-                    ..
-                } => {
-                    self.visit_expr(cond);
-                    if let Some(d) = decreases {
-                        self.visit_expr(d);
-                    }
-                    self.visit_block(body);
                 }
                 Stmt::For { pattern, .. } => {
                     count_pattern(pattern, self.counts);
-                    walk_stmt(self, s);
                 }
-                _ => walk_stmt(self, s),
+                _ => {}
             }
+            walk_stmt(self, s);
         }
 
         fn visit_expr(&mut self, e: &'ast Expr) {
