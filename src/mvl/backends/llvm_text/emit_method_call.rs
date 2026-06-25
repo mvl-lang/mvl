@@ -59,7 +59,7 @@ impl TextEmitter {
         let arg_list = build_arg_list(recv_val, extra_args);
         let reg = self.next_reg();
         self.push_instr(&format!("{reg} = call {ret_ty} @{sym}({arg_list})"));
-        self.reg_types.insert(reg.clone(), ret_ty.to_string());
+        self.fn_ctx.reg_types.insert(reg.clone(), ret_ty.to_string());
         reg
     }
 
@@ -93,7 +93,7 @@ impl TextEmitter {
         self.push_instr(&format!("{raw} = call i64 @{sym}({arg_list})"));
         let reg = self.next_reg();
         self.push_instr(&format!("{reg} = icmp ne i64 {raw}, 0"));
-        self.reg_types.insert(reg.clone(), "i1".to_string());
+        self.fn_ctx.reg_types.insert(reg.clone(), "i1".to_string());
         reg
     }
 
@@ -155,7 +155,7 @@ impl TextEmitter {
             prev = format!("{struct_name} {next}");
             last_reg = next;
         }
-        self.reg_types
+        self.fn_ctx.reg_types
             .insert(last_reg.clone(), struct_name.to_string());
         last_reg
     }
@@ -238,12 +238,12 @@ impl TextEmitter {
                 self.push_instr(&format!(
                     "{reg} = call ptr @_mvl_float_to_string(double {val})"
                 ));
-                self.reg_types.insert(reg.clone(), "ptr".into());
+                self.fn_ctx.reg_types.insert(reg.clone(), "ptr".into());
                 Ok(Some(reg))
             }
             ("to_string", _) => {
                 // String.to_string() is identity
-                self.reg_types.insert(val.clone(), "ptr".into());
+                self.fn_ctx.reg_types.insert(val.clone(), "ptr".into());
                 Ok(Some(val))
             }
 
@@ -251,31 +251,31 @@ impl TextEmitter {
             ("abs", "i64") => {
                 let reg = self.next_reg();
                 self.push_instr(&format!("{reg} = call i64 @llvm.abs.i64(i64 {val}, i1 0)"));
-                self.reg_types.insert(reg.clone(), "i64".into());
+                self.fn_ctx.reg_types.insert(reg.clone(), "i64".into());
                 Ok(Some(reg))
             }
             ("is_positive", "i64") => {
                 let reg = self.next_reg();
                 self.push_instr(&format!("{reg} = icmp sgt i64 {val}, 0"));
-                self.reg_types.insert(reg.clone(), "i1".into());
+                self.fn_ctx.reg_types.insert(reg.clone(), "i1".into());
                 Ok(Some(reg))
             }
             ("is_negative", "i64") => {
                 let reg = self.next_reg();
                 self.push_instr(&format!("{reg} = icmp slt i64 {val}, 0"));
-                self.reg_types.insert(reg.clone(), "i1".into());
+                self.fn_ctx.reg_types.insert(reg.clone(), "i1".into());
                 Ok(Some(reg))
             }
             ("is_zero", "i64") => {
                 let reg = self.next_reg();
                 self.push_instr(&format!("{reg} = icmp eq i64 {val}, 0"));
-                self.reg_types.insert(reg.clone(), "i1".into());
+                self.fn_ctx.reg_types.insert(reg.clone(), "i1".into());
                 Ok(Some(reg))
             }
             ("to_float", "i64") => {
                 let reg = self.next_reg();
                 self.push_instr(&format!("{reg} = sitofp i64 {val} to double"));
-                self.reg_types.insert(reg.clone(), "double".into());
+                self.fn_ctx.reg_types.insert(reg.clone(), "double".into());
                 Ok(Some(reg))
             }
             ("min", "i64") if args.len() == 1 => {
@@ -287,7 +287,7 @@ impl TextEmitter {
                 self.push_instr(&format!(
                     "{reg} = call i64 @llvm.smin.i64(i64 {val}, i64 {other})"
                 ));
-                self.reg_types.insert(reg.clone(), "i64".into());
+                self.fn_ctx.reg_types.insert(reg.clone(), "i64".into());
                 Ok(Some(reg))
             }
             ("max", "i64") if args.len() == 1 => {
@@ -299,7 +299,7 @@ impl TextEmitter {
                 self.push_instr(&format!(
                     "{reg} = call i64 @llvm.smax.i64(i64 {val}, i64 {other})"
                 ));
-                self.reg_types.insert(reg.clone(), "i64".into());
+                self.fn_ctx.reg_types.insert(reg.clone(), "i64".into());
                 Ok(Some(reg))
             }
             ("clamp", "i64") if args.len() == 2 => {
@@ -319,7 +319,7 @@ impl TextEmitter {
                 self.push_instr(&format!(
                     "{reg} = call i64 @llvm.smin.i64(i64 {clamped_lo}, i64 {hi})"
                 ));
-                self.reg_types.insert(reg.clone(), "i64".into());
+                self.fn_ctx.reg_types.insert(reg.clone(), "i64".into());
                 Ok(Some(reg))
             }
             ("pow", "i64") if args.len() == 1 => {
@@ -332,7 +332,7 @@ impl TextEmitter {
                 self.push_instr(&format!(
                     "{reg} = call i64 @_mvl_int_pow(i64 {val}, i64 {exp})"
                 ));
-                self.reg_types.insert(reg.clone(), "i64".into());
+                self.fn_ctx.reg_types.insert(reg.clone(), "i64".into());
                 Ok(Some(reg))
             }
 
@@ -340,13 +340,13 @@ impl TextEmitter {
             ("abs", "double") => {
                 let reg = self.next_reg();
                 self.push_instr(&format!("{reg} = call double @llvm.fabs.f64(double {val})"));
-                self.reg_types.insert(reg.clone(), "double".into());
+                self.fn_ctx.reg_types.insert(reg.clone(), "double".into());
                 Ok(Some(reg))
             }
             ("ceil", "double") => {
                 let reg = self.next_reg();
                 self.push_instr(&format!("{reg} = call double @llvm.ceil.f64(double {val})"));
-                self.reg_types.insert(reg.clone(), "double".into());
+                self.fn_ctx.reg_types.insert(reg.clone(), "double".into());
                 Ok(Some(reg))
             }
             ("floor", "double") => {
@@ -354,7 +354,7 @@ impl TextEmitter {
                 self.push_instr(&format!(
                     "{reg} = call double @llvm.floor.f64(double {val})"
                 ));
-                self.reg_types.insert(reg.clone(), "double".into());
+                self.fn_ctx.reg_types.insert(reg.clone(), "double".into());
                 Ok(Some(reg))
             }
             ("round", "double") => {
@@ -362,26 +362,26 @@ impl TextEmitter {
                 self.push_instr(&format!(
                     "{reg} = call double @llvm.round.f64(double {val})"
                 ));
-                self.reg_types.insert(reg.clone(), "double".into());
+                self.fn_ctx.reg_types.insert(reg.clone(), "double".into());
                 Ok(Some(reg))
             }
             ("sqrt", "double") => {
                 let reg = self.next_reg();
                 self.push_instr(&format!("{reg} = call double @llvm.sqrt.f64(double {val})"));
-                self.reg_types.insert(reg.clone(), "double".into());
+                self.fn_ctx.reg_types.insert(reg.clone(), "double".into());
                 Ok(Some(reg))
             }
             ("to_int", "double") => {
                 let reg = self.next_reg();
                 self.push_instr(&format!("{reg} = fptosi double {val} to i64"));
-                self.reg_types.insert(reg.clone(), "i64".into());
+                self.fn_ctx.reg_types.insert(reg.clone(), "i64".into());
                 Ok(Some(reg))
             }
             ("is_nan", "double") => {
                 // fcmp uno: true if either operand is a NaN
                 let reg = self.next_reg();
                 self.push_instr(&format!("{reg} = fcmp uno double {val}, 0.0"));
-                self.reg_types.insert(reg.clone(), "i1".into());
+                self.fn_ctx.reg_types.insert(reg.clone(), "i1".into());
                 Ok(Some(reg))
             }
             ("is_finite", "double") => {
@@ -398,7 +398,7 @@ impl TextEmitter {
                 ));
                 let reg = self.next_reg();
                 self.push_instr(&format!("{reg} = and i1 {not_nan}, {not_inf}"));
-                self.reg_types.insert(reg.clone(), "i1".into());
+                self.fn_ctx.reg_types.insert(reg.clone(), "i1".into());
                 Ok(Some(reg))
             }
             ("is_infinite", "double") => {
@@ -411,19 +411,19 @@ impl TextEmitter {
                 self.push_instr(&format!(
                     "{reg} = fcmp oeq double {abs_reg}, 0x7FF0000000000000"
                 ));
-                self.reg_types.insert(reg.clone(), "i1".into());
+                self.fn_ctx.reg_types.insert(reg.clone(), "i1".into());
                 Ok(Some(reg))
             }
             ("is_positive", "double") => {
                 let reg = self.next_reg();
                 self.push_instr(&format!("{reg} = fcmp ogt double {val}, 0.0"));
-                self.reg_types.insert(reg.clone(), "i1".into());
+                self.fn_ctx.reg_types.insert(reg.clone(), "i1".into());
                 Ok(Some(reg))
             }
             ("is_negative", "double") => {
                 let reg = self.next_reg();
                 self.push_instr(&format!("{reg} = fcmp olt double {val}, 0.0"));
-                self.reg_types.insert(reg.clone(), "i1".into());
+                self.fn_ctx.reg_types.insert(reg.clone(), "i1".into());
                 Ok(Some(reg))
             }
             ("min", "double") if args.len() == 1 => {
@@ -435,7 +435,7 @@ impl TextEmitter {
                 self.push_instr(&format!(
                     "{reg} = call double @llvm.minnum.f64(double {val}, double {other})"
                 ));
-                self.reg_types.insert(reg.clone(), "double".into());
+                self.fn_ctx.reg_types.insert(reg.clone(), "double".into());
                 Ok(Some(reg))
             }
             ("max", "double") if args.len() == 1 => {
@@ -447,7 +447,7 @@ impl TextEmitter {
                 self.push_instr(&format!(
                     "{reg} = call double @llvm.maxnum.f64(double {val}, double {other})"
                 ));
-                self.reg_types.insert(reg.clone(), "double".into());
+                self.fn_ctx.reg_types.insert(reg.clone(), "double".into());
                 Ok(Some(reg))
             }
             ("clamp", "double") if args.len() == 2 => {
@@ -467,7 +467,7 @@ impl TextEmitter {
                 self.push_instr(&format!(
                     "{reg} = call double @llvm.minnum.f64(double {clamped_lo}, double {hi})"
                 ));
-                self.reg_types.insert(reg.clone(), "double".into());
+                self.fn_ctx.reg_types.insert(reg.clone(), "double".into());
                 Ok(Some(reg))
             }
             ("pow", "double") if args.len() == 1 => {
@@ -479,7 +479,7 @@ impl TextEmitter {
                 self.push_instr(&format!(
                     "{reg} = call double @llvm.pow.f64(double {val}, double {exp})"
                 ));
-                self.reg_types.insert(reg.clone(), "double".into());
+                self.fn_ctx.reg_types.insert(reg.clone(), "double".into());
                 Ok(Some(reg))
             }
 
@@ -498,7 +498,7 @@ impl TextEmitter {
                     self.ensure_extern("declare i64 @_mvl_str_len(ptr)");
                     self.push_instr(&format!("{reg} = call i64 @_mvl_str_len(ptr {val})"));
                 }
-                self.reg_types.insert(reg.clone(), "i64".into());
+                self.fn_ctx.reg_types.insert(reg.clone(), "i64".into());
                 Ok(Some(reg))
             }
             ("concat", "ptr") => {
@@ -574,16 +574,16 @@ impl TextEmitter {
                     "{opt_some} = insertvalue {{ i8, ptr }} {{ i8 0, ptr null }}, ptr {raw}, 1"
                 ));
                 self.push_instr(&format!("br label %{merge_bb}"));
-                let some_end = self.current_bb.clone();
+                let some_end = self.fn_ctx.current_bb.clone();
                 self.start_bb(&none_bb);
                 self.push_instr(&format!("br label %{merge_bb}"));
-                let none_end = self.current_bb.clone();
+                let none_end = self.fn_ctx.current_bb.clone();
                 self.start_bb(&merge_bb);
                 let result = self.next_reg();
                 self.push_instr(&format!(
                     "{result} = phi {{ i8, ptr }} [ {opt_some}, %{some_end} ], [ {{ i8 1, ptr null }}, %{none_end} ]"
                 ));
-                self.reg_types.insert(result.clone(), "{ i8, ptr }".into());
+                self.fn_ctx.reg_types.insert(result.clone(), "{ i8, ptr }".into());
                 Ok(Some(result))
             }
             ("insert", "ptr") if matches!(self.mvl_receiver_kind(receiver), Some("Map")) => {
@@ -655,7 +655,7 @@ impl TextEmitter {
                 // null → false, non-null → true
                 let reg = self.next_reg();
                 self.push_instr(&format!("{reg} = icmp ne ptr {raw}, null"));
-                self.reg_types.insert(reg.clone(), "i1".into());
+                self.fn_ctx.reg_types.insert(reg.clone(), "i1".into());
                 Ok(Some(reg))
             }
             ("contains", "ptr") if matches!(self.mvl_receiver_kind(receiver), Some("Set")) => {
@@ -671,7 +671,7 @@ impl TextEmitter {
                 self.push_instr(&format!(
                     "{reg} = call i1 @_mvl_set_contains_i64(ptr {val}, i64 {needle})"
                 ));
-                self.reg_types.insert(reg.clone(), "i1".into());
+                self.fn_ctx.reg_types.insert(reg.clone(), "i1".into());
                 Ok(Some(reg))
             }
             // Set algebra — intersection / difference / union (#1399 phase 5)
@@ -794,11 +794,11 @@ impl TextEmitter {
                 self.push_instr(&format!(
                     "{reg} = call ptr @_mvl_list_fold(ptr {val}, ptr {slot}, ptr {closure})"
                 ));
-                self.reg_types.insert(reg.clone(), "ptr".into());
+                self.fn_ctx.reg_types.insert(reg.clone(), "ptr".into());
                 // Load the result back out as the init type.
                 let result = self.next_reg();
                 self.push_instr(&format!("{result} = load {init_ty}, ptr {reg}"));
-                self.reg_types.insert(result.clone(), init_ty);
+                self.fn_ctx.reg_types.insert(result.clone(), init_ty);
                 Ok(Some(result))
             }
 
@@ -918,7 +918,7 @@ impl TextEmitter {
                     "call void @_mvl_array_push(ptr {val}, ptr {item_slot})"
                 ));
                 // push returns the array (modified in place — same pointer).
-                self.reg_types.insert(val.clone(), "ptr".into());
+                self.fn_ctx.reg_types.insert(val.clone(), "ptr".into());
                 Ok(Some(val))
             }
 
@@ -1177,7 +1177,7 @@ impl TextEmitter {
                 // Determine element LLVM type from MVL type annotation.
                 let elem_llvm_ty = if let Some(Expr::Ident(name, _)) = Some(receiver) {
                     if let Some(TypeExpr::Base { args, .. }) =
-                        self.local_mvl_types.get(name.as_str())
+                        self.fn_ctx.local_mvl_types.get(name.as_str())
                     {
                         if let Some(inner) = args.first() {
                             self.llvm_ty_ctx(inner)
@@ -1223,7 +1223,7 @@ impl TextEmitter {
                 ));
                 self.push_instr(&format!("store {{ i8, ptr }} {none_r1}, ptr {result_slot}"));
                 self.push_instr(&format!("br label %{merge_bb}"));
-                self.terminated = true;
+                self.fn_ctx.terminated = true;
 
                 // Some branch.
                 self.start_bb(&some_bb);
@@ -1247,13 +1247,13 @@ impl TextEmitter {
                 ));
                 self.push_instr(&format!("store {{ i8, ptr }} {some_r1}, ptr {result_slot}"));
                 self.push_instr(&format!("br label %{merge_bb}"));
-                self.terminated = true;
+                self.fn_ctx.terminated = true;
 
                 // Merge — load result.
                 self.start_bb(&merge_bb);
                 let result = self.next_reg();
                 self.push_instr(&format!("{result} = load {{ i8, ptr }}, ptr {result_slot}"));
-                self.reg_types.insert(result.clone(), "{ i8, ptr }".into());
+                self.fn_ctx.reg_types.insert(result.clone(), "{ i8, ptr }".into());
                 Ok(Some(result))
             }
 
@@ -1262,7 +1262,7 @@ impl TextEmitter {
                 // Equivalent to List.get(0)
                 let elem_llvm_ty = if let Some(Expr::Ident(name, _)) = Some(receiver) {
                     if let Some(TypeExpr::Base { args, .. }) =
-                        self.local_mvl_types.get(name.as_str())
+                        self.fn_ctx.local_mvl_types.get(name.as_str())
                     {
                         if let Some(inner) = args.first() {
                             self.llvm_ty_ctx(inner)
@@ -1305,7 +1305,7 @@ impl TextEmitter {
                 ));
                 self.push_instr(&format!("store {{ i8, ptr }} {none_r1}, ptr {result_slot}"));
                 self.push_instr(&format!("br label %{merge_bb}"));
-                self.terminated = true;
+                self.fn_ctx.terminated = true;
 
                 // Some.
                 self.start_bb(&some_bb);
@@ -1329,13 +1329,13 @@ impl TextEmitter {
                 ));
                 self.push_instr(&format!("store {{ i8, ptr }} {some_r1}, ptr {result_slot}"));
                 self.push_instr(&format!("br label %{merge_bb}"));
-                self.terminated = true;
+                self.fn_ctx.terminated = true;
 
                 // Merge.
                 self.start_bb(&merge_bb);
                 let result = self.next_reg();
                 self.push_instr(&format!("{result} = load {{ i8, ptr }}, ptr {result_slot}"));
-                self.reg_types.insert(result.clone(), "{ i8, ptr }".into());
+                self.fn_ctx.reg_types.insert(result.clone(), "{ i8, ptr }".into());
                 Ok(Some(result))
             }
 
@@ -1374,12 +1374,12 @@ impl TextEmitter {
                     "{some_val} = load {default_ty}, ptr {payload_ptr}"
                 ));
                 self.push_instr(&format!("br label %{merge_bb}"));
-                let some_end = self.current_bb.clone();
+                let some_end = self.fn_ctx.current_bb.clone();
 
                 // None branch — use default.
                 self.start_bb(&none_bb);
                 self.push_instr(&format!("br label %{merge_bb}"));
-                let none_end = self.current_bb.clone();
+                let none_end = self.fn_ctx.current_bb.clone();
 
                 // Merge with phi.
                 self.start_bb(&merge_bb);
@@ -1387,7 +1387,7 @@ impl TextEmitter {
                 self.push_instr(&format!(
                     "{result} = phi {default_ty} [ {some_val}, %{some_end} ], [ {default_val}, %{none_end} ]"
                 ));
-                self.reg_types.insert(result.clone(), default_ty);
+                self.fn_ctx.reg_types.insert(result.clone(), default_ty);
                 Ok(Some(result))
             }
 
@@ -1397,7 +1397,7 @@ impl TextEmitter {
                 self.push_instr(&format!("{disc} = extractvalue {{ i8, ptr }} {val}, 0"));
                 let result = self.next_reg();
                 self.push_instr(&format!("{result} = icmp eq i8 {disc}, 0"));
-                self.reg_types.insert(result.clone(), "i1".into());
+                self.fn_ctx.reg_types.insert(result.clone(), "i1".into());
                 Ok(Some(result))
             }
             ("is_none", "{ i8, ptr }") => {
@@ -1405,7 +1405,7 @@ impl TextEmitter {
                 self.push_instr(&format!("{disc} = extractvalue {{ i8, ptr }} {val}, 0"));
                 let result = self.next_reg();
                 self.push_instr(&format!("{result} = icmp eq i8 {disc}, 1"));
-                self.reg_types.insert(result.clone(), "i1".into());
+                self.fn_ctx.reg_types.insert(result.clone(), "i1".into());
                 Ok(Some(result))
             }
 
