@@ -141,22 +141,38 @@ pub fn run(
         super::find_project_root(&abs)
     };
     let mut pkg_progs: Vec<_> = Vec::new();
+    let mut pkg_progs_names: Vec<String> = Vec::new();
     let mut seen_pkgs = std::collections::HashSet::<String>::new();
     let mut frontier: Vec<_> = all_progs.clone();
     loop {
-        let new_pkgs = loader::load_pkg_modules(&frontier, &project_root, &mut seen_pkgs);
+        let new_pkgs =
+            loader::load_pkg_modules_tagged(&frontier, &project_root, &mut seen_pkgs);
         if new_pkgs.is_empty() {
             break;
         }
-        frontier = new_pkgs.clone();
-        pkg_progs.extend(new_pkgs);
+        let new_frontier: Vec<_> = new_pkgs.iter().map(|(_, p)| p.clone()).collect();
+        pkg_progs_names.extend(new_pkgs.iter().map(|(n, _)| n.clone()));
+        pkg_progs.extend(new_pkgs.into_iter().map(|(_, p)| p));
+        frontier = new_frontier;
     }
 
     // Extend with any pure-MVL stdlib modules imported by this program OR by any
     // loaded package (e.g. pkg.anthropic imports std.json → json.mvl must be in prelude).
     let all_with_pkgs: Vec<_> = all_progs.iter().chain(pkg_progs.iter()).cloned().collect();
-    stdlib_prelude_progs.extend(loader::load_mvl_native_stdlib_extras(&all_with_pkgs));
+    let stdlib_extras = loader::load_mvl_native_stdlib_extras(&all_with_pkgs);
+    let stdlib_extras_len = stdlib_extras.len();
+    stdlib_prelude_progs.extend(stdlib_extras);
     stdlib_prelude_progs.extend(pkg_progs.clone());
+
+    // Build a parallel pkg-name vector so the transpiler can prefix colliding
+    // cross-package function names in the generated Rust (#1475).
+    // Entries are None for stdlib (load_implicit_prelude + stdlib_extras) and
+    // Some(pkg_name) for each program loaded from a `pkg.*` package.
+    let stdlib_only_len = stdlib_prelude_progs.len() - pkg_progs.len();
+    let _ = stdlib_extras_len; // used above to track, now consumed
+    let prelude_pkg_names: Vec<Option<String>> = std::iter::repeat_n(None, stdlib_only_len)
+        .chain(pkg_progs_names.into_iter().map(Some))
+        .collect();
 
     // Phase 2+3 (#803): embed real manifest data when the program uses std.runtime.
     // A synthetic manifest() override is prepended so it wins the "first wins"
@@ -212,7 +228,7 @@ pub fn run(
             t
         })
         .collect();
-    let out = transpiler::transpile_project(
+    let out = transpiler::transpile_project_with_pkg_names(
         &crate_name,
         &prog,
         &sibling_modules,
@@ -220,6 +236,7 @@ pub fn run(
         all_expr_types,
         sibling_expr_types,
         assert_mode,
+        &prelude_pkg_names,
     );
 
     // Write to a per-crate, per-version workspace so each compiler release gets

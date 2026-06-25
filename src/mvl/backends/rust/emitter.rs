@@ -166,6 +166,16 @@ pub struct RustEmitter {
     /// probes — used so sibling library files paired with test files appear in
     /// the coverage report (#1489).
     pub coverage_instrument_prelude: std::collections::HashSet<String>,
+    /// Dispatch table for cross-package function name collisions (#1475).
+    ///
+    /// When two packages export a function with the same name (e.g. `status_reason`
+    /// from both `pkg.http` and `pkg.health`), their Rust functions are emitted with
+    /// package-prefixed names (`http__status_reason`, `health__status_reason`).
+    ///
+    /// Key: `(original_fn_name, return_ty_rust_str)` — the return type string
+    /// uniquely identifies which variant the checker resolved a given call to.
+    /// Value: the Rust function name to emit (`"http__status_reason"`).
+    pub pkg_fn_dispatch: std::collections::HashMap<(String, String), String>,
 }
 
 impl RustEmitter {
@@ -603,11 +613,17 @@ impl RustEmitter {
             "Option", "Result",
         ];
         let fn_key = |f: &crate::mvl::ir::TirFn| -> String {
-            match &f.receiver_type {
+            let base = match &f.receiver_type {
                 Some(r) if !BUILTIN_RECEIVER_TYPES.contains(&r.as_str()) => {
                     format!("{}::{}", r, f.original_name)
                 }
                 _ => f.original_name.clone(),
+            };
+            // Include package name so colliding functions from different packages
+            // are treated as distinct entries and both get emitted (#1475).
+            match &f.pkg_name {
+                Some(pkg) => format!("{}/{}", pkg, base),
+                None => base,
             }
         };
         let user_fn_keys: std::collections::HashSet<String> = tir.fns.iter().map(fn_key).collect();
@@ -630,6 +646,36 @@ impl RustEmitter {
             .filter(|(_, f)| !user_fn_keys.contains(&fn_key(f)))
             .filter(|(_, f)| seen_prelude_fns.insert(fn_key(f)))
             .collect();
+
+        // Build dispatch table for cross-package function name collisions (#1475).
+        // For each function name that appears in 2+ packages, map
+        // (original_name, return_ty_rust) → pkg_prefixed_rust_name.
+        self.pkg_fn_dispatch.clear();
+        {
+            use crate::mvl::backends::rust::emit_types::emit_ty;
+            let mut name_to_variants: std::collections::HashMap<
+                &str,
+                Vec<(&str, &crate::mvl::ir::TirFn)>,
+            > = std::collections::HashMap::new();
+            for (_, f) in &prelude_fns {
+                if let Some(ref pkg) = f.pkg_name {
+                    name_to_variants
+                        .entry(f.original_name.as_str())
+                        .or_default()
+                        .push((pkg.as_str(), f));
+                }
+            }
+            for (name, variants) in &name_to_variants {
+                if variants.len() > 1 {
+                    for (pkg, f) in variants {
+                        let ret_key = emit_ty(&f.ret_ty);
+                        let prefixed = format!("{}__{}", pkg, name);
+                        self.pkg_fn_dispatch
+                            .insert((name.to_string(), ret_key), prefixed);
+                    }
+                }
+            }
+        }
 
         let mut seen_prelude_types: std::collections::HashSet<&str> =
             std::collections::HashSet::new();

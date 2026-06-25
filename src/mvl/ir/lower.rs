@@ -113,6 +113,7 @@ fn lower_fn_decl(
     TirFn {
         name: fd.name.clone(),
         original_name: fd.name.clone(),
+        pkg_name: None,
         visible: fd.visible,
         is_test: fd.is_test,
         is_builtin: fd.is_builtin,
@@ -606,6 +607,7 @@ fn lower_impl_method(
     TirFn {
         name: fd.name.clone(),
         original_name: fd.name.clone(),
+        pkg_name: None,
         visible: fd.visible,
         is_test: fd.is_test,
         is_builtin: fd.is_builtin,

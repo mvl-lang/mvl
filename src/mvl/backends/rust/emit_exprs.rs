@@ -168,7 +168,18 @@ impl RustEmitter {
                     if let Some(qualified) = self.stdlib_fn_qualified.get(name.as_str()).cloned() {
                         self.push(&qualified);
                     } else {
-                        self.push(&map_fn_name(name));
+                        // If this function name has a cross-package collision, resolve to the
+                        // pkg-prefixed name using the call expression's return type (#1475).
+                        let ret_key = crate::mvl::backends::rust::emit_types::emit_ty(&expr.ty);
+                        if let Some(prefixed) = self
+                            .pkg_fn_dispatch
+                            .get(&(name.to_string(), ret_key))
+                            .cloned()
+                        {
+                            self.push(&prefixed);
+                        } else {
+                            self.push(&map_fn_name(name));
+                        }
                     }
                     if !type_args.is_empty() {
                         self.push("::<");

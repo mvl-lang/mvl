@@ -256,6 +256,9 @@ pub struct TirFn {
     pub name: String,
     /// Original unmangled name.
     pub original_name: String,
+    /// Source package name (e.g. `"http"` for `pkg.http`), `None` for user code and stdlib.
+    /// Set by the Rust backend after TIR lowering to drive cross-package deduplication.
+    pub pkg_name: Option<String>,
     /// Whether the item is exported from this module (`pub`).
     pub visible: bool,
     /// Whether the function is a test (`test fn`).

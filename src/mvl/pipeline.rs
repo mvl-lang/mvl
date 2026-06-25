@@ -164,6 +164,7 @@ impl Pipeline {
             &sibling_expr_types,
             self.assert_mode,
             false,
+            &[],
         )
     }
 }

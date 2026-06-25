@@ -46,6 +46,11 @@ pub struct TranspileConfig {
     /// `Some(stem)` enables per-program coverage metadata routing; `None` falls back
     /// to the primary `file_stem`. When empty, treated as all-`None` (#1489).
     pub(crate) prelude_stems: Vec<Option<String>>,
+    /// Package name for each prelude program (parallel to `prelude_progs`).
+    /// `Some("http")` for programs from `pkg.http`; `None` for stdlib entries.
+    /// When present, functions from different packages with the same name are emitted
+    /// with package-prefixed Rust names to avoid symbol collisions (#1475).
+    pub(crate) prelude_pkg_names: Vec<Option<String>>,
     /// File stems among `prelude_stems` whose functions should receive coverage
     /// instrumentation. Used so sibling library files (e.g. `json.mvl` paired with
     /// `json_test.mvl`) get branch probes rather than being emitted as silent
@@ -76,6 +81,7 @@ impl TranspileConfig {
             file_stem: String::new(),
             prelude_progs: Vec::new(),
             prelude_stems: Vec::new(),
+            prelude_pkg_names: Vec::new(),
             coverage_instrument_prelude: std::collections::HashSet::new(),
             coverage_start_id: None,
             mcdc_start_id: None,
@@ -89,6 +95,14 @@ impl TranspileConfig {
     /// Set the prelude programs (stdlib, implicit prelude, package modules).
     pub fn with_prelude(mut self, progs: Vec<Program>) -> Self {
         self.prelude_progs = progs;
+        self
+    }
+
+    /// Set package names for each prelude program (parallel to `prelude_progs`).
+    /// `Some("http")` for programs from `pkg.http`; `None` for stdlib entries.
+    /// Drives cross-package deduplication to avoid symbol collisions (#1475).
+    pub fn with_prelude_pkg_names(mut self, names: Vec<Option<String>>) -> Self {
+        self.prelude_pkg_names = names;
         self
     }
 

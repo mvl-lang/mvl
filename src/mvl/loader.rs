@@ -634,6 +634,54 @@ pub fn load_pkg_modules(
     result
 }
 
+/// Like [`load_pkg_modules`] but returns `(pkg_name, Program)` pairs so callers
+/// can track which package each source file came from (used by the Rust backend
+/// to emit collision-free names when two packages export the same function).
+pub fn load_pkg_modules_tagged(
+    progs: &[Program],
+    project_root: &Path,
+    seen: &mut std::collections::HashSet<String>,
+) -> Vec<(String, Program)> {
+    let pkg_map = build_pkg_name_map(project_root);
+    let mut result: Vec<(String, Program)> = Vec::new();
+
+    for prog in progs {
+        for decl in &prog.declarations {
+            if let Decl::Use(ud) = decl {
+                if ud.path.first().map(|s| s == "pkg").unwrap_or(false) {
+                    if let Some(pkg_name) = ud.path.get(1) {
+                        if !seen.insert(pkg_name.clone()) {
+                            continue;
+                        }
+                        let Some(pkg_dir) = pkg_map.get(pkg_name.as_str()) else {
+                            continue;
+                        };
+                        for sub in &["src", "src/internal"] {
+                            let dir = pkg_dir.join(sub);
+                            if let Ok(entries) = fs::read_dir(&dir) {
+                                for entry in entries.flatten() {
+                                    if entry.file_type().map(|ft| ft.is_symlink()).unwrap_or(false)
+                                    {
+                                        continue;
+                                    }
+                                    let path = entry.path();
+                                    if path.extension().map(|e| e == "mvl").unwrap_or(false) {
+                                        if let Ok(src) = fs::read_to_string(&path) {
+                                            let (mut p, _) = Parser::new(&src);
+                                            result.push((pkg_name.clone(), p.parse_program()));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    result
+}
+
 /// Find a `bridge.rs` from a `pkg.*` package used by `progs`.
 /// Returns the path to the first valid package bridge found, or `None`.
 ///
