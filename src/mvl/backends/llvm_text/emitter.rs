@@ -239,6 +239,26 @@ impl TextEmitter {
         self.module.expr_types = expr_types;
     }
 
+    /// Emit a nested top-level function (actor method, dispatch fn, lambda,
+    /// closure trampoline) with a fresh [`FnCtx`]. The outer [`FnCtx`] is
+    /// swapped out via [`std::mem::replace`] and restored on both success and
+    /// error paths, so per-function state cannot leak between the outer and
+    /// nested emission contexts (#1535).
+    ///
+    /// The closure is responsible for pushing the completed IR text to
+    /// `self.module.fn_bodies` before returning — only the [`FnCtx`] is
+    /// scoped by this helper, not the module-level output.
+    pub(super) fn with_fresh_fn_ctx<R, E>(
+        &mut self,
+        ret_ty: TypeExpr,
+        f: impl FnOnce(&mut Self) -> Result<R, E>,
+    ) -> Result<R, E> {
+        let saved = std::mem::replace(&mut self.fn_ctx, FnCtx::new(ret_ty));
+        let result = f(self);
+        self.fn_ctx = saved;
+        result
+    }
+
     // ── Finalise ──────────────────────────────────────────────────────────
 
     fn finish(self) -> String {

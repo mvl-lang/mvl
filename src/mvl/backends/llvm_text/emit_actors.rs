@@ -30,7 +30,7 @@
 //! - `mvl_actor_self() -> ptr`
 //! - `mvl_actor_join_all() -> void`
 
-use crate::mvl::parser::ast::{ActorDecl, Expr, MailboxConfig, MailboxPolicy};
+use crate::mvl::parser::ast::{ActorDecl, Expr, MailboxConfig, MailboxPolicy, TypeExpr};
 
 use super::{RefLocal, TextEmitter};
 
@@ -95,123 +95,78 @@ impl TextEmitter {
                 self.llvm_ty_ctx(&ret_ty)
             };
 
-            // Save outer function context.
-            let saved_fn_buf = std::mem::take(&mut self.fn_ctx.fn_buf);
-            let saved_locals = std::mem::take(&mut self.fn_ctx.locals);
-            let saved_ref_locals = std::mem::take(&mut self.fn_ctx.ref_locals);
-            let saved_reg = self.fn_ctx.reg;
-            let saved_bb = self.fn_ctx.bb;
-            let saved_reg_types = std::mem::take(&mut self.fn_ctx.reg_types);
-            let saved_mvl_types = std::mem::take(&mut self.fn_ctx.local_mvl_types);
-            let saved_ret_ty = std::mem::replace(&mut self.fn_ctx.current_ret_ty, ret_ty.clone());
-            let saved_terminated = self.fn_ctx.terminated;
-            let saved_current_bb = std::mem::replace(&mut self.fn_ctx.current_bb, "entry".into());
-            let saved_is_main = self.fn_ctx.current_fn_is_main;
-            // lambda_counter is intentionally NOT saved — monotonically global.
+            // Emit the actor method as a separate top-level function with a
+            // fresh FnCtx — see TextEmitter::with_fresh_fn_ctx (#1535).
+            let state_name = state_name.clone();
+            let method = method.clone();
+            self.with_fresh_fn_ctx(ret_ty.clone(), |this| -> Result<(), String> {
+                this.fn_ctx
+                    .fn_buf
+                    .push(format!("define {define_ret} @{fn_name}({params_str})"));
+                this.fn_ctx.fn_buf.push("{".into());
+                this.fn_ctx.fn_buf.push("entry:".into());
 
-            self.fn_ctx.reg = 0;
-            self.fn_ctx.bb = 0;
-            self.fn_ctx.terminated = false;
-            self.fn_ctx.current_fn_is_main = false; // actor methods are never main
-
-            self.fn_ctx
-                .fn_buf
-                .push(format!("define {define_ret} @{fn_name}({params_str})"));
-            self.fn_ctx.fn_buf.push("{".into());
-            self.fn_ctx.fn_buf.push("entry:".into());
-
-            // Register state fields as ref-locals (GEP into %self) so that reads
-            // load and writes store through the state pointer automatically.
-            let field_defs = self
-                .module
-                .struct_fields
-                .get(&state_name)
-                .cloned()
-                .unwrap_or_default();
-            for (i, (field_name, field_ty)) in field_defs.iter().enumerate() {
-                let field_llvm_ty = self.llvm_ty_ctx(field_ty);
-                if field_llvm_ty == "void" {
-                    continue;
-                }
-                let gep_reg = self.next_reg();
-                self.push_instr(&format!(
-                    "{gep_reg} = getelementptr %{state_name}, ptr %self, i32 0, i32 {i}"
-                ));
-                self.fn_ctx.reg_types.insert(gep_reg.clone(), "ptr".into());
-                self.fn_ctx.ref_locals.insert(
-                    field_name.clone(),
-                    RefLocal {
-                        ptr: gep_reg,
-                        elem_ty: field_ty.clone(),
-                    },
-                );
-                self.fn_ctx
-                    .local_mvl_types
-                    .insert(field_name.clone(), field_ty.clone());
-            }
-
-            // Register user parameters as SSA locals.
-            for p in &method.params {
-                let ty_str = self.llvm_ty_ctx(&p.ty);
-                if ty_str != "void" {
-                    let ssa = format!("%{}", p.name);
-                    self.fn_ctx.locals.insert(p.name.clone(), ssa.clone());
-                    self.fn_ctx.reg_types.insert(ssa, ty_str);
-                    self.fn_ctx
+                // Register state fields as ref-locals (GEP into %self) so that
+                // reads load and writes store through the state pointer.
+                let field_defs = this
+                    .module
+                    .struct_fields
+                    .get(&state_name)
+                    .cloned()
+                    .unwrap_or_default();
+                for (i, (field_name, field_ty)) in field_defs.iter().enumerate() {
+                    let field_llvm_ty = this.llvm_ty_ctx(field_ty);
+                    if field_llvm_ty == "void" {
+                        continue;
+                    }
+                    let gep_reg = this.next_reg();
+                    this.push_instr(&format!(
+                        "{gep_reg} = getelementptr %{state_name}, ptr %self, i32 0, i32 {i}"
+                    ));
+                    this.fn_ctx.reg_types.insert(gep_reg.clone(), "ptr".into());
+                    this.fn_ctx.ref_locals.insert(
+                        field_name.clone(),
+                        RefLocal {
+                            ptr: gep_reg,
+                            elem_ty: field_ty.clone(),
+                        },
+                    );
+                    this.fn_ctx
                         .local_mvl_types
-                        .insert(p.name.clone(), p.ty.clone());
+                        .insert(field_name.clone(), field_ty.clone());
                 }
-            }
 
-            // Emit method body.
-            let body_result = self.emit_block(&method.body);
-
-            let body_val = match body_result {
-                Ok(v) => v,
-                Err(e) => {
-                    // Restore state before propagating error.
-                    self.fn_ctx.fn_buf = saved_fn_buf;
-                    self.fn_ctx.locals = saved_locals;
-                    self.fn_ctx.ref_locals = saved_ref_locals;
-                    self.fn_ctx.reg = saved_reg;
-                    self.fn_ctx.bb = saved_bb;
-                    self.fn_ctx.reg_types = saved_reg_types;
-                    self.fn_ctx.local_mvl_types = saved_mvl_types;
-                    self.fn_ctx.current_ret_ty = saved_ret_ty;
-                    self.fn_ctx.terminated = saved_terminated;
-                    self.fn_ctx.current_bb = saved_current_bb;
-                    self.fn_ctx.current_fn_is_main = saved_is_main;
-                    return Err(e);
+                // Register user parameters as SSA locals.
+                for p in &method.params {
+                    let ty_str = this.llvm_ty_ctx(&p.ty);
+                    if ty_str != "void" {
+                        let ssa = format!("%{}", p.name);
+                        this.fn_ctx.locals.insert(p.name.clone(), ssa.clone());
+                        this.fn_ctx.reg_types.insert(ssa, ty_str);
+                        this.fn_ctx
+                            .local_mvl_types
+                            .insert(p.name.clone(), p.ty.clone());
+                    }
                 }
-            };
 
-            if !self.fn_ctx.terminated {
-                let llvm_ret = self.llvm_ty_ctx(&ret_ty);
-                if is_void {
-                    self.push_instr("ret void");
-                } else if let Some(v) = body_val {
-                    self.push_instr(&format!("ret {llvm_ret} {v}"));
-                } else {
-                    self.push_instr(&format!("ret {llvm_ret} undef"));
+                let body_val = this.emit_block(&method.body)?;
+
+                if !this.fn_ctx.terminated {
+                    let llvm_ret = this.llvm_ty_ctx(&ret_ty);
+                    if is_void {
+                        this.push_instr("ret void");
+                    } else if let Some(v) = body_val {
+                        this.push_instr(&format!("ret {llvm_ret} {v}"));
+                    } else {
+                        this.push_instr(&format!("ret {llvm_ret} undef"));
+                    }
                 }
-            }
 
-            self.fn_ctx.fn_buf.push("}".into());
-            let fn_text = self.fn_ctx.fn_buf.join("\n");
-            self.module.fn_bodies.push(fn_text);
-
-            // Restore outer function context.
-            self.fn_ctx.fn_buf = saved_fn_buf;
-            self.fn_ctx.locals = saved_locals;
-            self.fn_ctx.ref_locals = saved_ref_locals;
-            self.fn_ctx.reg = saved_reg;
-            self.fn_ctx.bb = saved_bb;
-            self.fn_ctx.reg_types = saved_reg_types;
-            self.fn_ctx.local_mvl_types = saved_mvl_types;
-            self.fn_ctx.current_ret_ty = saved_ret_ty;
-            self.fn_ctx.terminated = saved_terminated;
-            self.fn_ctx.current_bb = saved_current_bb;
-            self.fn_ctx.current_fn_is_main = saved_is_main;
+                this.fn_ctx.fn_buf.push("}".into());
+                let fn_text = this.fn_ctx.fn_buf.join("\n");
+                this.module.fn_bodies.push(fn_text);
+                Ok(())
+            })?;
         }
 
         // ── 2. Dispatch function ───────────────────────────────────────────
@@ -219,91 +174,86 @@ impl TextEmitter {
         let dispatch_name = format!("{actor_snake}_dispatch");
         let pub_methods: Vec<_> = ad.methods.iter().filter(|m| m.is_public).collect();
 
-        let saved_fn_buf = std::mem::take(&mut self.fn_ctx.fn_buf);
-        let saved_reg = self.fn_ctx.reg;
-        let saved_bb = self.fn_ctx.bb;
-        let saved_terminated = self.fn_ctx.terminated;
-        let saved_current_bb = std::mem::replace(&mut self.fn_ctx.current_bb, "entry".into());
+        // Dispatch fn emitted with a fresh FnCtx (#1535). Return type is Unit
+        // (the function always emits `ret void`) so the inner current_ret_ty
+        // is unused.
+        let pub_methods: Vec<_> = pub_methods.into_iter().cloned().collect();
+        let unit_ret = TypeExpr::Base {
+            name: "Unit".into(),
+            args: vec![],
+            span: Default::default(),
+        };
+        self.with_fresh_fn_ctx(unit_ret, |this| -> Result<(), String> {
+            this.fn_ctx.fn_buf.push(format!(
+                "define void @{dispatch_name}(ptr %state, i64 %disc, ptr %args)"
+            ));
+            this.fn_ctx.fn_buf.push("{".into());
+            this.fn_ctx.fn_buf.push("entry:".into());
 
-        self.fn_ctx.reg = 0;
-        self.fn_ctx.bb = 0;
-        self.fn_ctx.terminated = false;
+            if pub_methods.is_empty() {
+                this.push_instr("ret void");
+            } else {
+                // switch i64 %disc, label %default [ i64 0, label %behavior_0 ... ]
+                let cases: String = pub_methods
+                    .iter()
+                    .enumerate()
+                    .map(|(i, _)| format!("i64 {i}, label %behavior_{i}"))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                this.push_instr(&format!("switch i64 %disc, label %default [ {cases} ]"));
 
-        self.fn_ctx.fn_buf.push(format!(
-            "define void @{dispatch_name}(ptr %state, i64 %disc, ptr %args)"
-        ));
-        self.fn_ctx.fn_buf.push("{".into());
-        self.fn_ctx.fn_buf.push("entry:".into());
+                // default: just return
+                this.fn_ctx.fn_buf.push("default:".into());
+                this.push_instr("ret void");
 
-        if pub_methods.is_empty() {
-            self.push_instr("ret void");
-        } else {
-            // switch i64 %disc, label %default [ i64 0, label %behavior_0 ... ]
-            let cases: String = pub_methods
-                .iter()
-                .enumerate()
-                .map(|(i, _)| format!("i64 {i}, label %behavior_{i}"))
-                .collect::<Vec<_>>()
-                .join(" ");
-            self.push_instr(&format!("switch i64 %disc, label %default [ {cases} ]"));
+                // Each case BB: load typed args from flat i64 array, call behavior.
+                for (disc, method) in pub_methods.iter().enumerate() {
+                    let fn_name = format!("{actor_snake}_{}", method.name);
+                    this.fn_ctx.fn_buf.push(format!("behavior_{disc}:"));
 
-            // default: just return
-            self.fn_ctx.fn_buf.push("default:".into());
-            self.push_instr("ret void");
+                    let mut call_parts = vec!["ptr %state".to_string()];
+                    for (j, p) in method.params.iter().enumerate() {
+                        let ty_str = this.llvm_ty_ctx(&p.ty);
+                        if ty_str == "void" {
+                            continue;
+                        }
+                        let gep = this.next_reg();
+                        this.push_instr(&format!(
+                            "{gep} = getelementptr i64, ptr %args, i64 {j}"
+                        ));
+                        let raw = this.next_reg();
+                        this.push_instr(&format!("{raw} = load i64, ptr {gep}"));
 
-            // Each case BB: load typed args from flat i64 array, call behavior.
-            for (disc, method) in pub_methods.iter().enumerate() {
-                let fn_name = format!("{actor_snake}_{}", method.name);
-                self.fn_ctx.fn_buf.push(format!("behavior_{disc}:"));
-
-                let mut call_parts = vec!["ptr %state".to_string()];
-                for (j, p) in method.params.iter().enumerate() {
-                    let ty_str = self.llvm_ty_ctx(&p.ty);
-                    if ty_str == "void" {
-                        continue;
+                        // Rehydrate: ptr args were stored as i64 (ptrtoint).
+                        if ty_str == "ptr" {
+                            let coerced = this.next_reg();
+                            this.push_instr(&format!(
+                                "{coerced} = inttoptr i64 {raw} to ptr"
+                            ));
+                            call_parts.push(format!("ptr {coerced}"));
+                        } else if ty_str == "i1" {
+                            // Bool was zero-extended to i64; truncate back.
+                            let truncated = this.next_reg();
+                            this.push_instr(&format!(
+                                "{truncated} = trunc i64 {raw} to i1"
+                            ));
+                            call_parts.push(format!("i1 {truncated}"));
+                        } else {
+                            call_parts.push(format!("{ty_str} {raw}"));
+                        }
                     }
-                    let gep = self.next_reg();
-                    self.push_instr(&format!("{gep} = getelementptr i64, ptr %args, i64 {j}"));
-                    let raw = self.next_reg();
-                    self.push_instr(&format!("{raw} = load i64, ptr {gep}"));
 
-                    // Rehydrate: ptr args were stored as i64 (ptrtoint).
-                    let final_val = if ty_str == "ptr" {
-                        let coerced = self.next_reg();
-                        self.push_instr(&format!("{coerced} = inttoptr i64 {raw} to ptr"));
-                        call_parts.push(format!("ptr {coerced}"));
-                        coerced
-                    } else if ty_str == "i1" {
-                        // Bool was zero-extended to i64; truncate back.
-                        let truncated = self.next_reg();
-                        self.push_instr(&format!("{truncated} = trunc i64 {raw} to i1"));
-                        call_parts.push(format!("i1 {truncated}"));
-                        truncated
-                    } else {
-                        call_parts.push(format!("{ty_str} {raw}"));
-                        raw
-                    };
-                    let _ = final_val; // used only for call_parts building above
+                    let call_args_str = call_parts.join(", ");
+                    this.push_instr(&format!("call void @{fn_name}({call_args_str})"));
+                    this.push_instr("ret void");
                 }
-
-                let call_args_str = call_parts.join(", ");
-                self.push_instr(&format!("call void @{fn_name}({call_args_str})"));
-                self.push_instr("ret void");
             }
-        }
 
-        self.fn_ctx.fn_buf.push("}".into());
-        let dispatch_text = self.fn_ctx.fn_buf.join("\n");
-        self.module.fn_bodies.push(dispatch_text);
-
-        // Restore dispatch context.
-        self.fn_ctx.fn_buf = saved_fn_buf;
-        self.fn_ctx.reg = saved_reg;
-        self.fn_ctx.bb = saved_bb;
-        self.fn_ctx.terminated = saved_terminated;
-        self.fn_ctx.current_bb = saved_current_bb;
-
-        Ok(())
+            this.fn_ctx.fn_buf.push("}".into());
+            let dispatch_text = this.fn_ctx.fn_buf.join("\n");
+            this.module.fn_bodies.push(dispatch_text);
+            Ok(())
+        })
     }
 
     // ── Spawn expression emission ─────────────────────────────────────────
