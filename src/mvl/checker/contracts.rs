@@ -781,7 +781,10 @@ fn normalize_pred(pred: &RefExpr, old_name: &str) -> RefExpr {
             span: *span,
         },
         // Leaves unchanged.
-        RefExpr::Integer { .. } | RefExpr::Float { .. } | RefExpr::Len { .. } => pred.clone(),
+        RefExpr::Integer { .. }
+        | RefExpr::Float { .. }
+        | RefExpr::Bool { .. }
+        | RefExpr::Len { .. } => pred.clone(),
     }
 }
 
@@ -899,7 +902,10 @@ fn subst_pred_ident(pred: &RefExpr, old_name: &str, new_val: &RefExpr) -> RefExp
             field: field.clone(),
             span: *span,
         },
-        RefExpr::Integer { .. } | RefExpr::Float { .. } | RefExpr::Len { .. } => pred.clone(),
+        RefExpr::Integer { .. }
+        | RefExpr::Float { .. }
+        | RefExpr::Bool { .. }
+        | RefExpr::Len { .. } => pred.clone(),
     }
 }
 
@@ -1219,7 +1225,7 @@ fn collect_idents_inner(pred: &RefExpr, names: &mut Vec<String>) {
             collect_idents_inner(body, names);
         }
         RefExpr::Len { ident, .. } => names.push(ident.clone()),
-        RefExpr::Integer { .. } | RefExpr::Float { .. } => {}
+        RefExpr::Integer { .. } | RefExpr::Float { .. } | RefExpr::Bool { .. } => {}
         // Field access: collect idents from the object (e.g. `self` in `self.size`).
         RefExpr::FieldAccess { object, .. } => collect_idents_inner(object, names),
     }
@@ -1231,6 +1237,7 @@ fn display_pred(pred: &RefExpr) -> String {
         RefExpr::Ident { name, .. } => name.clone(),
         RefExpr::Integer { value, .. } => value.to_string(),
         RefExpr::Float { value, .. } => value.to_string(),
+        RefExpr::Bool { value, .. } => value.to_string(),
         RefExpr::Compare {
             op, left, right, ..
         } => {

@@ -582,6 +582,11 @@ pub enum RefExpr {
         value: f64,
         span: Span,
     },
+    /// Boolean literal in a predicate, e.g. `result.alive == true` (#1540).
+    Bool {
+        value: bool,
+        span: Span,
+    },
     Len {
         ident: String,
         span: Span,
@@ -1111,6 +1116,11 @@ pub(crate) fn expr_to_ref_expr_ext(expr: &Expr, fallback_span: Span) -> Option<R
         }),
         Expr::Literal(Literal::Float(f), span) => Some(RefExpr::Float {
             value: *f,
+            span: *span,
+        }),
+        // Bool literal — enables `result.alive == true` to convert to a RefExpr (#1540).
+        Expr::Literal(Literal::Bool(b), span) => Some(RefExpr::Bool {
+            value: *b,
             span: *span,
         }),
         Expr::Ident(name, span) => Some(RefExpr::Ident {
