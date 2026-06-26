@@ -576,9 +576,10 @@ fn eval_bool_struct(fields: &[(String, Expr)], pred: &RefExpr) -> Option<bool> {
             op, left, right, ..
         } => {
             // Try a bool-domain comparison first (covers `self.alive == true`).
-            if let (Some(l), Some(r)) =
-                (eval_bool_value_struct(fields, left), eval_bool_value_struct(fields, right))
-            {
+            if let (Some(l), Some(r)) = (
+                eval_bool_value_struct(fields, left),
+                eval_bool_value_struct(fields, right),
+            ) {
                 return Some(match op {
                     CmpOp::Eq => l == r,
                     CmpOp::Ne => l != r,
