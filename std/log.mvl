@@ -167,16 +167,6 @@ fn sanitize_log(s: String) -> String {
     s3.replace("\0", "\\0")
 }
 
-/// Escape a string for embedding in a JSON value (escapes \, ", and control chars).
-fn json_escape(s: String) -> String {
-    let s1: String = s.replace("\\", "\\\\");
-    let s2: String = s1.replace("\"", "\\\"");
-    let s3: String = s2.replace("\n", "\\n");
-    let s4: String = s3.replace("\r", "\\r");
-    let s5: String = s4.replace("\t", "\\t");
-    s5.replace("\0", "\\u0000")
-}
-
 /// Pad a level name to 5 characters for plain-format column alignment.
 fn pad_level(level: String) -> String {
     if level.len() < 5 { level.concat(" ") } else { level }

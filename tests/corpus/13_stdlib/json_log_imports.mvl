@@ -1,0 +1,21 @@
+// Corpus: import both std.json and std.log to exercise stdlib-name-collision
+// fix from #1551.
+//
+// Before #1551, std/json.mvl and std/log.mvl each defined their own
+// `json_escape` alongside std/strings.mvl (implicit prelude).  Loading both
+// produced two `define ptr @json_escape` records in the LLVM IR, which lli
+// rejected with `error: invalid redefinition of function 'json_escape'`.
+//
+// This file imports both modules to ensure the redefinition does not return.
+// Used by: tests/cross_backend.rs::cross_backend_json_log_no_redefinition
+
+use std.json.{Value}
+use std.log.{Logger}
+
+fn main() -> Unit ! Console {
+    let v: Value = Value::String("ok");
+    match v {
+        Value::String(s) => println(s),
+        _                => println("?"),
+    }
+}

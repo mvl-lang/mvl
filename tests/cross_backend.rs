@@ -480,11 +480,12 @@ fn cross_backend_random_shuffle() {
 /// Both backends must emit identical log records to stderr.
 ///
 /// The transpiler backend uses pure-MVL log formatters (ADR-0024).
-/// The LLVM half remains skipped: #1546 closed the `for`-over-list gap, but
-/// the log path now hits a duplicate-`@json_escape` redefinition because two
-/// stdlib modules (`std.log` and `std.strings`) define functions with the
-/// same name. Tracked separately as #1551 — once that lands, drop this skip
-/// and assert backends agree.
+/// The LLVM backend is skipped: the `json_escape` redefinition (#1551) is fixed,
+/// but `_log_timestamp` still hits a transitive-builtin dispatch bug — `now()`
+/// is declared in `std/time.mvl` but `collect_llvm_text_builtins` only scans
+/// top-level user imports, so transitive `use std.time` from `std/log.mvl`
+/// is not registered.  Plus pure-MVL log formatting depends on `str_replace`,
+/// `str_len`, `for` loops, and `.sort()` — all stubs/missing in the LLVM backend.
 #[test]
 fn cross_backend_log_stderr() {
     let file = corpus_13_stdlib("log_output.mvl");
@@ -509,6 +510,32 @@ fn cross_backend_log_stderr() {
 
     // LLVM backend: still skipped — blocked on #1551 (duplicate @json_escape).
     eprintln!("SKIP cross_backend_log_stderr LLVM half: blocked on #1551");
+}
+
+/// Regression for #1551: importing both `std.json` and `std.log` must not
+/// produce an `invalid redefinition of function 'json_escape'` error from lli.
+///
+/// Narrow assertion: we don't require the program to run successfully (other
+/// pre-existing LLVM backend bugs may surface for `std.log` / `std.json`).
+/// We only assert that the specific redefinition error does *not* appear on
+/// stderr, so a future regression that re-adds a duplicate `json_escape`
+/// will fail this test loudly.
+#[test]
+fn cross_backend_json_log_no_redefinition() {
+    if mvl::mvl::backends::llvm_text::lli::find_lli().is_none() {
+        eprintln!("SKIP cross_backend_json_log_no_redefinition: lli not available");
+        return;
+    }
+    let file = corpus_13_stdlib("json_log_imports.mvl");
+    let out = Command::new(mvl_bin())
+        .args(["run", &file, "--backend=llvm"])
+        .output()
+        .expect("failed to run mvl run --backend=llvm");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("redefinition of function 'json_escape'"),
+        "regression of #1551: lli reported json_escape redefinition:\n{stderr}"
+    );
 }
 
 // ── #779: std.net — both backends ────────────────────────────────────────────

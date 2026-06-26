@@ -118,28 +118,6 @@ fn encode_number(n: Float) -> String {
     n.to_string()
 }
 
-pub total fn json_escape(s: String) -> String {
-    let chars: List[String] = s.chars();
-    let len: Int = chars.len();
-    let out: ref String = "";
-    let i: ref Int = 0;
-    while i < len decreases (len - i) {
-        match chars.get(i) {
-            None    => {},
-            Some(c) => {
-                if      c == "\"" { out = out.concat("\\\"") }
-                else if c == "\\" { out = out.concat("\\\\") }
-                else if c == "\n" { out = out.concat("\\n")  }
-                else if c == "\r" { out = out.concat("\\r")  }
-                else if c == "\t" { out = out.concat("\\t")  }
-                else              { out = out.concat(c)      }
-            }
-        }
-        i = i + 1
-    }
-    out
-}
-
 partial fn encode_array(arr: List[Value]) -> String {
     let len: Int = arr.len();
     if len == 0 {
