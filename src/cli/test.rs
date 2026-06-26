@@ -686,6 +686,29 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
 
     let cov_out_path = tmp_dir.join("mvl_cov.txt");
 
+    // Clean stale native-dep OUT_DIR artifacts before running cargo.
+    //
+    // The `cargo_target_dir` is shared across runs (keyed on input path hash)
+    // so that compiled crates are cached for faster subsequent runs.  However,
+    // if a previous build partially succeeded — e.g. the C library compiled but
+    // the Rust FFI bindings (bindgen.rs / bindings.rs) were never written — the
+    // OUT_DIR inside `debug/build/` persists with an incomplete artifact set.
+    // On the next run cargo finds the matching artifact hash, skips recompilation,
+    // and fails with a cryptic error like `couldn't read .../out/bindgen.rs`.
+    //
+    // Removing `debug/build/` forces cargo to re-run all build scripts cleanly
+    // while keeping every already-compiled `.rlib` / `.rmeta` in `debug/deps/`
+    // so dependency compilation is still cached.
+    let stale_build_dir = cargo_target_dir.join("debug").join("build");
+    if stale_build_dir.exists() {
+        fs::remove_dir_all(&stale_build_dir).unwrap_or_else(|e| {
+            eprintln!(
+                "warning: could not clean stale build cache {}: {e}",
+                stale_build_dir.display()
+            );
+        });
+    }
+
     let mut cmd = process::Command::new("cargo");
     cmd.arg("test")
         .arg("--lib")
