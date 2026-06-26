@@ -512,6 +512,32 @@ fn cross_backend_log_stderr() {
     eprintln!("SKIP cross_backend_log_stderr LLVM half: blocked on #1551");
 }
 
+/// Regression for #1551: importing both `std.json` and `std.log` must not
+/// produce an `invalid redefinition of function 'json_escape'` error from lli.
+///
+/// Narrow assertion: we don't require the program to run successfully (other
+/// pre-existing LLVM backend bugs may surface for `std.log` / `std.json`).
+/// We only assert that the specific redefinition error does *not* appear on
+/// stderr, so a future regression that re-adds a duplicate `json_escape`
+/// will fail this test loudly.
+#[test]
+fn cross_backend_json_log_no_redefinition() {
+    if mvl::mvl::backends::llvm_text::lli::find_lli().is_none() {
+        eprintln!("SKIP cross_backend_json_log_no_redefinition: lli not available");
+        return;
+    }
+    let file = corpus_13_stdlib("json_log_imports.mvl");
+    let out = Command::new(mvl_bin())
+        .args(["run", &file, "--backend=llvm"])
+        .output()
+        .expect("failed to run mvl run --backend=llvm");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("redefinition of function 'json_escape'"),
+        "regression of #1551: lli reported json_escape redefinition:\n{stderr}"
+    );
+}
+
 // ── #779: std.net — both backends ────────────────────────────────────────────
 
 /// Actor connects to listener, writes "net ok", main reads and prints it.
