@@ -480,9 +480,11 @@ fn cross_backend_random_shuffle() {
 /// Both backends must emit identical log records to stderr.
 ///
 /// The transpiler backend uses pure-MVL log formatters (ADR-0024).
-/// The LLVM backend is skipped: pure-MVL log formatting depends on `str_replace`,
-/// `str_len`, `for` loops, and `.sort()` — all of which are stubs/missing in the
-/// LLVM backend.  Tracked as a pre-existing LLVM limitation.
+/// The LLVM half remains skipped: #1546 closed the `for`-over-list gap, but
+/// the log path now hits a duplicate-`@json_escape` redefinition because two
+/// stdlib modules (`std.log` and `std.strings`) define functions with the
+/// same name. Tracked separately as #1551 — once that lands, drop this skip
+/// and assert backends agree.
 #[test]
 fn cross_backend_log_stderr() {
     let file = corpus_13_stdlib("log_output.mvl");
@@ -505,11 +507,8 @@ fn cross_backend_log_stderr() {
         );
     }
 
-    // LLVM backend: skip — pure-MVL log formatters need str_replace, for-loops,
-    // and list sort, which are not yet implemented in the LLVM backend.
-    eprintln!(
-        "SKIP cross_backend_log_stderr LLVM half: pure-MVL log needs LLVM string/loop support"
-    );
+    // LLVM backend: still skipped — blocked on #1551 (duplicate @json_escape).
+    eprintln!("SKIP cross_backend_log_stderr LLVM half: blocked on #1551");
 }
 
 // ── #779: std.net — both backends ────────────────────────────────────────────
@@ -1087,6 +1086,25 @@ fn cross_backend_env_identity() {
         assert_eq!(
             llvm_out, transpiler_out,
             "env_identity_llvm.mvl: backends must agree"
+        );
+    }
+}
+
+// ── #1546: for-in-List support on LLVM ───────────────────────────────────────
+
+/// `for x in <list-expr> { … }` must compile to a working loop on LLVM
+/// (previously silently emitted no body). Exercises:
+/// - plain `List[Int]` iteration accumulating into `ref Int`,
+/// - sort-then-iterate, where the iterable is a fresh `.sort()` result,
+/// - `m.keys().sort()` iteration — the pattern std.log uses internally.
+#[test]
+fn cross_backend_for_in_list() {
+    let file = corpus_collections("for_in_list.mvl");
+    let transpiler_out = run_transpiler(&file);
+    if let Some(llvm_out) = run_llvm_text(&file) {
+        assert_eq!(
+            llvm_out, transpiler_out,
+            "for_in_list.mvl: backends must agree"
         );
     }
 }

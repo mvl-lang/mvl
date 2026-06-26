@@ -522,17 +522,19 @@ fn sanitize_pkg_name(name: &str) -> String {
 /// Returns a map: MVL function name → [`BuiltinSymbolInfo`] (C-ABI symbol +
 /// MVL return / parameter types).
 ///
-/// Scans both:
+/// Scans transitively:
 /// - Implicit prelude modules (`core`, `strings`, `lists`, `effects`, `io`) — always loaded.
 /// - Modules explicitly imported via `use std.X.{...}` in `progs`.
+/// - Modules transitively imported by any of the above (e.g. `std.log` uses
+///   `std.time`, so `now`/`format_instant` must also be registered).
 ///
 /// Used by the llvm_text backend to dispatch `builtin fn` calls to C runtime symbols.
 pub fn collect_llvm_text_builtins(progs: &[Program]) -> HashMap<String, BuiltinSymbolInfo> {
     let mut result: HashMap<String, BuiltinSymbolInfo> = HashMap::new();
     let mut loaded_modules: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-    // Collect module names: always include implicit prelude + explicit imports.
-    let mut module_names: Vec<String> = IMPLICIT_PRELUDE_STEMS
+    // Worklist: implicit prelude + direct user imports + (discovered transitively below).
+    let mut worklist: Vec<String> = IMPLICIT_PRELUDE_STEMS
         .iter()
         .map(|s| s.to_string())
         .collect();
@@ -541,44 +543,55 @@ pub fn collect_llvm_text_builtins(progs: &[Program]) -> HashMap<String, BuiltinS
             if let Decl::Use(ud) = decl {
                 if ud.path.first().map(|s| s == "std").unwrap_or(false) {
                     if let Some(module) = ud.path.get(1) {
-                        module_names.push(module.clone());
+                        worklist.push(module.clone());
                     }
                 }
             }
         }
     }
 
-    for m in &module_names {
+    while let Some(m) = worklist.pop() {
         if !loaded_modules.insert(m.clone()) {
             continue;
         }
         let filename = format!("{m}.mvl");
-        if let Some(content) = stdlib::stdlib_content(&filename) {
-            let (mut p, _) = Parser::new(content);
-            let mod_prog = p.parse_program();
-            for mod_decl in &mod_prog.declarations {
-                if let Decl::Fn(fd) = mod_decl {
-                    if fd.is_builtin {
-                        // Derive C-ABI symbol.  For extension methods (receiver_type is Some),
-                        // the MVL call site uses `Type::method` syntax so we register both
-                        // the short name and the qualified name.
-                        let fn_key = match &fd.receiver_type {
-                            Some(recv) => format!("{recv}::{}", fd.name),
-                            None => fd.name.clone(),
-                        };
-                        let c_sym = derive_builtin_c_symbol(m, &fd.receiver_type, &fd.name);
-                        let param_tys: Vec<TypeExpr> =
-                            fd.params.iter().map(|p| p.ty.clone()).collect();
-                        result.insert(
-                            fn_key,
-                            BuiltinSymbolInfo {
-                                c_sym,
-                                ret_ty: fd.return_type.as_ref().clone(),
-                                param_tys,
-                            },
-                        );
+        let Some(content) = stdlib::stdlib_content(&filename) else {
+            continue;
+        };
+        let (mut p, _) = Parser::new(content);
+        let mod_prog = p.parse_program();
+        for mod_decl in &mod_prog.declarations {
+            match mod_decl {
+                Decl::Fn(fd) if fd.is_builtin => {
+                    // Derive C-ABI symbol.  For extension methods (receiver_type is Some),
+                    // the MVL call site uses `Type::method` syntax so we register both
+                    // the short name and the qualified name.
+                    let fn_key = match &fd.receiver_type {
+                        Some(recv) => format!("{recv}::{}", fd.name),
+                        None => fd.name.clone(),
+                    };
+                    let c_sym = derive_builtin_c_symbol(&m, &fd.receiver_type, &fd.name);
+                    let param_tys: Vec<TypeExpr> =
+                        fd.params.iter().map(|p| p.ty.clone()).collect();
+                    result.insert(
+                        fn_key,
+                        BuiltinSymbolInfo {
+                            c_sym,
+                            ret_ty: fd.return_type.as_ref().clone(),
+                            param_tys,
+                        },
+                    );
+                }
+                // Follow transitive std.* imports so dependent stdlib modules
+                // (e.g. std.log → std.time) contribute their builtins too.
+                Decl::Use(ud) if ud.path.first().map(|s| s == "std").unwrap_or(false) => {
+                    if let Some(dep) = ud.path.get(1) {
+                        if !loaded_modules.contains(dep) {
+                            worklist.push(dep.clone());
+                        }
                     }
                 }
+                _ => {}
             }
         }
     }
