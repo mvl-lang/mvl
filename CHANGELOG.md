@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- **`make audit-panics`: split metric into PROD vs TEST counts** (#1549) — The old gate counted every `unreachable!()`/`panic!()` site equally, conflating real compiler crash surface (production code) with test failure messages (`panic!("expected Struct body")` inside `#[cfg(test)]`). Replaced the inline `grep | wc -l` with `tools/audit_panics.py`, a brace-aware classifier that reports two counts against two budgets (`PANIC_BUDGET_PROD=30`, `PANIC_BUDGET_TEST=100`). Initial counts: 22 PROD / 75 TEST.
+
+### Refactored
+
+- **Remove 5 unreachable!()/panic!() sites in production code** (#1549) — Parser: collapsed inner `_ => unreachable!()` dead arms in `parser/ast.rs::expr_to_ref_expr_ext` (binary-op lowering) and `parser/externs.rs::parse_extern_decl` (ABI string consumption). Packages: replaced `LicensePolicyMode::Any => unreachable!()` in `manifest.rs::check` with defensive accept-and-break behaviour (still dominated by the function's early return for `Any`, but resilient if that branch is ever removed). Annotated 5 LLVM dispatch-drift detectors in `backends/llvm_text/emit_method_call.rs` with `// AUDIT: drift detector` markers for future audits.
+
 ## [0.220.9] - 2026-06-26
 
 ### Fixed
