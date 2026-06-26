@@ -5,9 +5,9 @@
 
 use super::audit;
 use super::error::PackageError;
-use super::fetch::{self, resolve_pkg_dir};
+use super::fetch::resolve_pkg_dir;
 use super::lock::LockFile;
-use super::manifest::{DepSpec, Manifest};
+use super::manifest::{load_cached_manifest, DepSpec, Manifest};
 use std::path::Path;
 
 /// `mvl audit --supply-chain`
@@ -161,9 +161,8 @@ pub fn cmd_audit_license(project_root: &Path) -> Result<LicenseAudit, PackageErr
             (Some(lic), None) => lic.clone(),
             (None, _) => {
                 // Try reading from cached package mvl.toml
-                let cached_license = read_package_license(&lp.name, &lp.version);
-                match cached_license {
-                    Some(lic) => lic,
+                match load_cached_manifest(&lp.name, &lp.version) {
+                    Some(m) => m.package.license,
                     None => {
                         entries.push(LicenseEntry {
                             name: lp.name.clone(),
@@ -219,15 +218,6 @@ pub fn cmd_audit_license(project_root: &Path) -> Result<LicenseAudit, PackageErr
         entries,
         policy_mode: policy.mode_str().to_string(),
     })
-}
-
-/// Read the license field from a cached package's `mvl.toml`.
-pub(super) fn read_package_license(name: &str, version: &str) -> Option<String> {
-    let cache_dir = fetch::pkg_cache_dir(name, version);
-    let toml_path = cache_dir.join("mvl.toml");
-    let content = std::fs::read_to_string(toml_path).ok()?;
-    let pkg_manifest = Manifest::parse(&content).ok()?;
-    Some(pkg_manifest.package.license)
 }
 
 // ── Dependency Paradox audit (#637) ──────────────────────────────────────────

@@ -257,6 +257,19 @@ pub struct Manifest {
     pub security: SecurityPolicy,
 }
 
+/// Load and parse a cached package's `mvl.toml`.
+///
+/// Resolves the global package cache directory for `name`/`version` and
+/// returns the parsed `Manifest`, or `None` if the directory or file is
+/// missing or unparseable. Use this when you need to inspect metadata of a
+/// transitively cached package (license, deps, etc.) without caring about
+/// the specific I/O or parse failure mode — those callers all collapse the
+/// error to "skip this entry" anyway. See #1537.
+pub fn load_cached_manifest(name: &str, version: &str) -> Option<Manifest> {
+    let dir = super::fetch::pkg_cache_dir(name, version);
+    Manifest::load(&dir).ok()
+}
+
 impl Manifest {
     /// Load and parse `mvl.toml` from the given directory.
     pub fn load(dir: &Path) -> Result<Self, ManifestError> {

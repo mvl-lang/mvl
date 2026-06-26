@@ -4,9 +4,8 @@
 //! `mvl sbom` — generate CycloneDX/SPDX SBOMs, snapshot baselines, and diff.
 
 use super::error::PackageError;
-use super::fetch::pkg_cache_dir;
 use super::lock::LockFile;
-use super::manifest::Manifest;
+use super::manifest::{load_cached_manifest, Manifest};
 use super::{hash, sbom, sbom_diff};
 use std::path::Path;
 
@@ -62,11 +61,8 @@ pub fn cmd_sbom(format: Option<&str>, project_root: &Path) -> Result<String, Pac
     // Build license map: read each cached package's mvl.toml for its license field.
     let mut licenses = sbom::LicenseMap::new();
     for lp in &lock.packages {
-        let cache_dir = pkg_cache_dir(&lp.name, &lp.version);
-        if let Ok(content) = std::fs::read_to_string(cache_dir.join("mvl.toml")) {
-            if let Ok(pkg_manifest) = Manifest::parse(&content) {
-                licenses.insert(lp.name.clone(), pkg_manifest.package.license);
-            }
+        if let Some(pkg_manifest) = load_cached_manifest(&lp.name, &lp.version) {
+            licenses.insert(lp.name.clone(), pkg_manifest.package.license);
         }
     }
 
