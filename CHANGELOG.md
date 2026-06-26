@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.221.1] - 2026-06-26
+
+### Fixed
+
+- **`packages`: treat unknown licenses as audit violations** (#1536) — `LicenseAudit::has_violations()` flagged only rejected licenses, silently passing packages with no declared license at all. Under the default permissive policy a supply-chain attacker could bypass the gate by shipping a package without an `mvl.toml` license field. Unknown licenses now fail the audit unless policy mode is `any`, which explicitly disables enforcement.
+
+### Hardened
+
+- **`packages`: tighten `validate_tag` to a strict allowlist** (#1538) — `validate_tag` only rejected leading `-` and embedded null bytes; shell metacharacters (`$`, backtick, `;`, `|`, `&`, `>`, whitespace, quotes, backslash) were accepted. Inert today because `git` is invoked via `process::Command` without a shell, but the previous check gave a false sense of security and would fail if a future code path interpolated the tag into a log or generated script without quoting. Tightened to ASCII alphanumerics plus `.`, `-`, `_`, `+`, `/` — a subset of git's ref-name rules that covers every legitimate semver/branch tag.
+
+### Refactored
+
+- **`packages`: extract `load_cached_manifest` helper** (#1537) — After the `packages.rs` split (#1524) the "load `mvl.toml` from a cached package dir" pattern lived in five places, and `cmd_add` depended on `cmd_audit` for what was really a generic cache utility. Added `packages::manifest::load_cached_manifest(name, version) -> Option<Manifest>`; collapsed `cmd_audit::read_package_license` into the helper then deleted it; switched `cmd_sbom`'s inline read+parse to the helper; replaced `loader.rs`'s inline `read_to_string + Manifest::parse` with the existing `Manifest::load`. No behavior change.
+
 ## [0.221.0] - 2026-06-26
 
 ### Changed
