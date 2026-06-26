@@ -4,6 +4,7 @@
 pub mod backends;
 pub mod checker;
 pub mod ir;
+pub mod json_util;
 pub mod linter;
 pub mod loader;
 pub mod manifest_embed;

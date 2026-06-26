@@ -13,6 +13,7 @@
 
 use super::lock::{LockFile, LockedPackage};
 use super::manifest::Manifest;
+use crate::mvl::json_util::json_escape;
 
 /// A source file included in the SBOM: relative path + `sha256:<hex>` digest.
 ///
@@ -395,24 +396,6 @@ fn spdx_id_for(name: &str, idx: usize) -> String {
     format!("{slug}-{idx}")
 }
 
-// ── JSON escaping ─────────────────────────────────────────────────────────────
-
-/// Escape a string for use inside a JSON double-quoted value.
-fn json_escape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c => out.push(c),
-        }
-    }
-    out
-}
-
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -757,20 +740,6 @@ mod tests {
     #[test]
     fn format_from_str_unknown_returns_none() {
         assert!(SbomFormat::parse("unknown").is_none());
-    }
-
-    // ── json_escape ───────────────────────────────────────────────────────────
-
-    #[test]
-    fn json_escape_quotes_and_backslashes() {
-        assert_eq!(json_escape(r#"say "hi""#), r#"say \"hi\""#);
-        assert_eq!(json_escape(r"back\slash"), r"back\\slash");
-    }
-
-    #[test]
-    fn json_escape_control_chars() {
-        assert_eq!(json_escape("a\nb"), r"a\nb");
-        assert_eq!(json_escape("a\tb"), r"a\tb");
     }
 
     // ── source file components ─────────────────────────────────────────────────
