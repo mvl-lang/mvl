@@ -1090,6 +1090,29 @@ fn cross_backend_env_identity() {
     }
 }
 
+// ── #1547 / ADR-0049: IFC label round-trip parity ────────────────────────────
+
+/// `Tainted[T]` and `Secret[T]` wrappers, `relabel classify(...)`, and
+/// `.into_inner()` must produce identical output on both backends.
+///
+/// Per ADR-0049: IFC enforcement happens in the checker; both backends pass
+/// the inner value through unchanged at runtime. This pins that invariant.
+#[test]
+fn cross_backend_ifc_label_round_trip() {
+    let file = format!(
+        "{}/tests/corpus/08_ifc/label_into_inner.mvl",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let transpiler_out = run_transpiler(&file);
+    assert_eq!(transpiler_out.trim(), "43", "transpiler must print 43");
+    if let Some(llvm_out) = run_llvm_text(&file) {
+        assert_eq!(
+            llvm_out, transpiler_out,
+            "label_into_inner.mvl: backends must agree on IFC round-trip"
+        );
+    }
+}
+
 // ── #1546: for-in-List support on LLVM ───────────────────────────────────────
 
 /// `for x in <list-expr> { … }` must compile to a working loop on LLVM
