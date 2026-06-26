@@ -480,11 +480,12 @@ fn cross_backend_random_shuffle() {
 /// Both backends must emit identical log records to stderr.
 ///
 /// The transpiler backend uses pure-MVL log formatters (ADR-0024).
-/// The LLVM half remains skipped: #1546 closed the `for`-over-list gap, but
-/// the log path now hits a duplicate-`@json_escape` redefinition because two
-/// stdlib modules (`std.log` and `std.strings`) define functions with the
-/// same name. Tracked separately as #1551 — once that lands, drop this skip
-/// and assert backends agree.
+/// The LLVM backend is skipped: the `json_escape` redefinition (#1551) is fixed,
+/// but `_log_timestamp` still hits a transitive-builtin dispatch bug — `now()`
+/// is declared in `std/time.mvl` but `collect_llvm_text_builtins` only scans
+/// top-level user imports, so transitive `use std.time` from `std/log.mvl`
+/// is not registered.  Plus pure-MVL log formatting depends on `str_replace`,
+/// `str_len`, `for` loops, and `.sort()` — all stubs/missing in the LLVM backend.
 #[test]
 fn cross_backend_log_stderr() {
     let file = corpus_13_stdlib("log_output.mvl");

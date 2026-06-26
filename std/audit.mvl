@@ -27,7 +27,6 @@
 
 use std.env.{_env_read}
 use std.io.{append, Path, IoError, path}
-use std.json.{json_escape}
 use std.time.{now, format_instant}
 
 // ── AuditOutcome ──────────────────────────────────────────────────────────────
