@@ -169,6 +169,9 @@ fn run_llvm_text(file: &str) -> Option<String> {
 ///
 /// Use this only for tests that pre-date a known-broken feature. New tests
 /// should call [`run_llvm_text`] so backend regressions surface immediately.
+///
+/// Retained as a future escape hatch per #1548; currently unused.
+#[allow(dead_code)]
 fn run_llvm_text_or_skip(file: &str) -> Option<String> {
     run_llvm_text_inner(file, LlvmFailure::SoftSkip)
 }
@@ -1109,7 +1112,7 @@ fn corpus_contracts(name: &str) -> String {
 fn cross_backend_basic_contracts() {
     let file = corpus_contracts("basic_contracts.mvl");
     let transpiler_out = run_transpiler(&file);
-    if let Some(llvm_out) = run_llvm_text_or_skip(&file) {
+    if let Some(llvm_out) = run_llvm_text(&file) {
         assert_eq!(
             llvm_out, transpiler_out,
             "basic_contracts.mvl: backends must agree"
@@ -1122,7 +1125,7 @@ fn cross_backend_basic_contracts() {
 fn cross_backend_ghost_old_contracts() {
     let file = corpus_contracts("ghost_old_contracts.mvl");
     let transpiler_out = run_transpiler(&file);
-    if let Some(llvm_out) = run_llvm_text_or_skip(&file) {
+    if let Some(llvm_out) = run_llvm_text(&file) {
         assert_eq!(
             llvm_out, transpiler_out,
             "ghost_old_contracts.mvl: backends must agree"
@@ -1144,7 +1147,7 @@ fn corpus_concurrency(name: &str) -> String {
 fn cross_backend_structured_concurrency() {
     let file = corpus_concurrency("structured_concurrency.mvl");
     let transpiler_out = run_transpiler(&file);
-    if let Some(llvm_out) = run_llvm_text_or_skip(&file) {
+    if let Some(llvm_out) = run_llvm_text(&file) {
         assert_eq!(
             llvm_out, transpiler_out,
             "structured_concurrency.mvl: backends must agree"
