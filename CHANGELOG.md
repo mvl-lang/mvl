@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.220.9] - 2026-06-26
+
+### Fixed
+
+- **`mvl test`: clean stale native-dep build cache before each test run** (#1533) — `mvl test` reuses a per-project temp directory keyed by a content hash. If a previous build partially succeeded (C library compiled but Rust FFI bindings not generated), the stale `OUT_DIR` persisted and caused subsequent runs to fail with `couldn't read .../out/bindgen.rs`. Fix: remove `<test_target>/debug/build/` before invoking `cargo test`, forcing build scripts to re-run cleanly while preserving other compiled artifacts for faster incremental rebuilds. Closes #1532.
+
 ## [0.220.8] - 2026-06-26
 
 ### Fixed
