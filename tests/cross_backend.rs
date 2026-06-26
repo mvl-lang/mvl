@@ -169,6 +169,9 @@ fn run_llvm_text(file: &str) -> Option<String> {
 ///
 /// Use this only for tests that pre-date a known-broken feature. New tests
 /// should call [`run_llvm_text`] so backend regressions surface immediately.
+///
+/// Retained as a future escape hatch per #1548; currently unused.
+#[allow(dead_code)]
 fn run_llvm_text_or_skip(file: &str) -> Option<String> {
     run_llvm_text_inner(file, LlvmFailure::SoftSkip)
 }
@@ -477,9 +480,11 @@ fn cross_backend_random_shuffle() {
 /// Both backends must emit identical log records to stderr.
 ///
 /// The transpiler backend uses pure-MVL log formatters (ADR-0024).
-/// The LLVM backend is skipped: pure-MVL log formatting depends on `str_replace`,
-/// `str_len`, `for` loops, and `.sort()` — all of which are stubs/missing in the
-/// LLVM backend.  Tracked as a pre-existing LLVM limitation.
+/// The LLVM half remains skipped: #1546 closed the `for`-over-list gap, but
+/// the log path now hits a duplicate-`@json_escape` redefinition because two
+/// stdlib modules (`std.log` and `std.strings`) define functions with the
+/// same name. Tracked separately as #1551 — once that lands, drop this skip
+/// and assert backends agree.
 #[test]
 fn cross_backend_log_stderr() {
     let file = corpus_13_stdlib("log_output.mvl");
@@ -502,11 +507,8 @@ fn cross_backend_log_stderr() {
         );
     }
 
-    // LLVM backend: skip — pure-MVL log formatters need str_replace, for-loops,
-    // and list sort, which are not yet implemented in the LLVM backend.
-    eprintln!(
-        "SKIP cross_backend_log_stderr LLVM half: pure-MVL log needs LLVM string/loop support"
-    );
+    // LLVM backend: still skipped — blocked on #1551 (duplicate @json_escape).
+    eprintln!("SKIP cross_backend_log_stderr LLVM half: blocked on #1551");
 }
 
 // ── #779: std.net — both backends ────────────────────────────────────────────
@@ -1088,6 +1090,48 @@ fn cross_backend_env_identity() {
     }
 }
 
+// ── #1547 / ADR-0049: IFC label round-trip parity ────────────────────────────
+
+/// `Tainted[T]` and `Secret[T]` wrappers, `relabel classify(...)`, and
+/// `.into_inner()` must produce identical output on both backends.
+///
+/// Per ADR-0049: IFC enforcement happens in the checker; both backends pass
+/// the inner value through unchanged at runtime. This pins that invariant.
+#[test]
+fn cross_backend_ifc_label_round_trip() {
+    let file = format!(
+        "{}/tests/corpus/08_ifc/label_into_inner.mvl",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let transpiler_out = run_transpiler(&file);
+    assert_eq!(transpiler_out.trim(), "43", "transpiler must print 43");
+    if let Some(llvm_out) = run_llvm_text(&file) {
+        assert_eq!(
+            llvm_out, transpiler_out,
+            "label_into_inner.mvl: backends must agree on IFC round-trip"
+        );
+    }
+}
+
+// ── #1546: for-in-List support on LLVM ───────────────────────────────────────
+
+/// `for x in <list-expr> { … }` must compile to a working loop on LLVM
+/// (previously silently emitted no body). Exercises:
+/// - plain `List[Int]` iteration accumulating into `ref Int`,
+/// - sort-then-iterate, where the iterable is a fresh `.sort()` result,
+/// - `m.keys().sort()` iteration — the pattern std.log uses internally.
+#[test]
+fn cross_backend_for_in_list() {
+    let file = corpus_collections("for_in_list.mvl");
+    let transpiler_out = run_transpiler(&file);
+    if let Some(llvm_out) = run_llvm_text(&file) {
+        assert_eq!(
+            llvm_out, transpiler_out,
+            "for_in_list.mvl: backends must agree"
+        );
+    }
+}
+
 // ── #1234: Expanded parity — stdlib tests ────────────────────────────────────
 
 #[test]
@@ -1109,7 +1153,7 @@ fn corpus_contracts(name: &str) -> String {
 fn cross_backend_basic_contracts() {
     let file = corpus_contracts("basic_contracts.mvl");
     let transpiler_out = run_transpiler(&file);
-    if let Some(llvm_out) = run_llvm_text_or_skip(&file) {
+    if let Some(llvm_out) = run_llvm_text(&file) {
         assert_eq!(
             llvm_out, transpiler_out,
             "basic_contracts.mvl: backends must agree"
@@ -1122,7 +1166,7 @@ fn cross_backend_basic_contracts() {
 fn cross_backend_ghost_old_contracts() {
     let file = corpus_contracts("ghost_old_contracts.mvl");
     let transpiler_out = run_transpiler(&file);
-    if let Some(llvm_out) = run_llvm_text_or_skip(&file) {
+    if let Some(llvm_out) = run_llvm_text(&file) {
         assert_eq!(
             llvm_out, transpiler_out,
             "ghost_old_contracts.mvl: backends must agree"
@@ -1144,7 +1188,7 @@ fn corpus_concurrency(name: &str) -> String {
 fn cross_backend_structured_concurrency() {
     let file = corpus_concurrency("structured_concurrency.mvl");
     let transpiler_out = run_transpiler(&file);
-    if let Some(llvm_out) = run_llvm_text_or_skip(&file) {
+    if let Some(llvm_out) = run_llvm_text(&file) {
         assert_eq!(
             llvm_out, transpiler_out,
             "structured_concurrency.mvl: backends must agree"

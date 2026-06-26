@@ -3,9 +3,58 @@
 
 //! Statement emission for the `llvm_text` backend.
 
-use crate::mvl::parser::ast::{Block, ElseBranch, Expr, LValue, LetKind, MatchArm, Pattern, Stmt};
+use crate::mvl::parser::ast::{Block, ElseBranch, Expr, LValue, LetKind, MatchArm, Pattern, Stmt, TypeExpr};
+use crate::mvl::parser::lexer::Span;
 
 use super::{RefLocal, TextEmitter, MAIN_RET};
+
+/// Synthesize a `TypeExpr` from a checker-resolved `Ty` so loop variables
+/// land in `local_mvl_types` and method dispatch can find the right kind.
+///
+/// Returns `None` for compound types we don't yet need to round-trip
+/// (e.g. `Ty::Fn`, `Ty::Session`).
+fn ty_to_type_expr(ty: &crate::mvl::checker::types::Ty) -> Option<TypeExpr> {
+    use crate::mvl::checker::types::Ty;
+    let base = |name: &str, args: Vec<TypeExpr>| TypeExpr::Base {
+        name: name.into(),
+        args,
+        span: Span::default(),
+    };
+    Some(match ty {
+        Ty::Int => base("Int", vec![]),
+        Ty::UInt => base("UInt", vec![]),
+        Ty::Float => base("Float", vec![]),
+        Ty::Bool => base("Bool", vec![]),
+        Ty::Byte => base("Byte", vec![]),
+        Ty::UByte => base("UByte", vec![]),
+        Ty::Char => base("Char", vec![]),
+        Ty::Unit => base("Unit", vec![]),
+        Ty::String => base("String", vec![]),
+        Ty::List(inner) => base("List", vec![ty_to_type_expr(inner)?]),
+        Ty::Array(inner, _) => base("Array", vec![ty_to_type_expr(inner)?]),
+        Ty::Set(inner) => base("Set", vec![ty_to_type_expr(inner)?]),
+        Ty::Map(k, v) => base("Map", vec![ty_to_type_expr(k)?, ty_to_type_expr(v)?]),
+        Ty::Option(inner) => TypeExpr::Option {
+            inner: Box::new(ty_to_type_expr(inner)?),
+            span: Span::default(),
+        },
+        Ty::Result(ok, err) => TypeExpr::Result {
+            ok: Box::new(ty_to_type_expr(ok)?),
+            err: Box::new(ty_to_type_expr(err)?),
+            span: Span::default(),
+        },
+        Ty::Ref(mutable, inner) => TypeExpr::Ref {
+            mutable: *mutable,
+            inner: Box::new(ty_to_type_expr(inner)?),
+            span: Span::default(),
+        },
+        Ty::Named(name, args) => base(
+            name,
+            args.iter().filter_map(ty_to_type_expr).collect(),
+        ),
+        _ => return None,
+    })
+}
 
 impl TextEmitter {
     // ── Block emission ────────────────────────────────────────────────────
@@ -240,7 +289,7 @@ impl TextEmitter {
         }
     }
 
-    // ── For loop (range only) ─────────────────────────────────────────────
+    // ── For loop (range and List) ─────────────────────────────────────────
 
     pub(super) fn emit_for_stmt(
         &mut self,
@@ -248,7 +297,7 @@ impl TextEmitter {
         iter: &Expr,
         body: &Block,
     ) -> Result<(), String> {
-        // Only handle `for var in range(lo, hi)` for Phase 2.
+        // `for var in range(lo, hi)` — integer range loop.
         if let Expr::FnCall { name, args, .. } = iter {
             if name == "range" && args.len() == 2 {
                 let var_name = match pattern {
@@ -258,6 +307,126 @@ impl TextEmitter {
                 return self.emit_for_range(&var_name, &args[0], &args[1], body);
             }
         }
+        // `for var in <list-expr>` — list / array / set iteration (#1546).
+        let var_name = match pattern {
+            Pattern::Ident(n, _) => n.clone(),
+            _ => "_".into(),
+        };
+        self.emit_for_list(&var_name, iter, body)
+    }
+
+    /// Emit a `for x in <list-expr> { body }` loop.
+    ///
+    /// The iterable must lower to a `ptr` to a runtime `MvlArray`; this covers
+    /// `List[T]`, `Array[T, N]`, and `Set[T]`. Element type is taken from the
+    /// checker-resolved `expr_types` map and defaults to `i64` when unavailable.
+    pub(super) fn emit_for_list(
+        &mut self,
+        var_name: &str,
+        iter: &Expr,
+        body: &Block,
+    ) -> Result<(), String> {
+        use crate::mvl::checker::types::Ty;
+
+        let arr = match self.emit_expr(iter)? {
+            Some(v) => v,
+            None => return Ok(()),
+        };
+
+        // Resolve the element type — Ty::List | Ty::Array | Ty::Set | Ty::Ref(_, inner).
+        let (elem_ty_opt, elem_llvm_ty): (Option<Ty>, String) =
+            match self.module.expr_types.get(&iter.span()) {
+                Some(ty) => {
+                    let inner = match ty {
+                        Ty::Ref(_, t) => t.as_ref(),
+                        other => other,
+                    };
+                    match inner {
+                        Ty::List(e) | Ty::Array(e, _) | Ty::Set(e) => {
+                            (Some((**e).clone()), self.ty_to_llvm_ctx(e))
+                        }
+                        _ => (None, "i64".into()),
+                    }
+                }
+                None => (None, "i64".into()),
+            };
+
+        self.ensure_extern("declare i64 @_mvl_array_len(ptr)");
+        self.ensure_extern("declare ptr @_mvl_array_get(ptr, i64)");
+
+        let len_reg = self.next_reg();
+        self.push_instr(&format!("{len_reg} = call i64 @_mvl_array_len(ptr {arr})"));
+
+        let i_ptr = self.next_reg();
+        self.push_instr(&format!("{i_ptr} = alloca i64"));
+        self.push_instr(&format!("store i64 0, ptr {i_ptr}"));
+
+        let cond_bb = self.next_bb("for_list_cond");
+        let body_bb = self.next_bb("for_list_body");
+        let end_bb = self.next_bb("for_list_end");
+
+        self.push_instr(&format!("br label %{cond_bb}"));
+        self.start_bb(&cond_bb);
+
+        let cur_i = self.next_reg();
+        self.push_instr(&format!("{cur_i} = load i64, ptr {i_ptr}"));
+        let cond_reg = self.next_reg();
+        self.push_instr(&format!("{cond_reg} = icmp slt i64 {cur_i}, {len_reg}"));
+        self.push_instr(&format!(
+            "br i1 {cond_reg}, label %{body_bb}, label %{end_bb}"
+        ));
+
+        self.start_bb(&body_bb);
+
+        // Load element at index cur_i.
+        let elem_ptr = self.next_reg();
+        self.push_instr(&format!(
+            "{elem_ptr} = call ptr @_mvl_array_get(ptr {arr}, i64 {cur_i})"
+        ));
+        let elem_val = self.next_reg();
+        self.push_instr(&format!("{elem_val} = load {elem_llvm_ty}, ptr {elem_ptr}"));
+        self.fn_ctx
+            .reg_types
+            .insert(elem_val.clone(), elem_llvm_ty.clone());
+
+        // Bind loop variable (immutable).
+        let old_local = self
+            .fn_ctx
+            .locals
+            .insert(var_name.to_string(), elem_val.clone());
+        let old_mvl_ty = elem_ty_opt
+            .as_ref()
+            .and_then(|t| ty_to_type_expr(t))
+            .and_then(|te| {
+                self.fn_ctx
+                    .local_mvl_types
+                    .insert(var_name.to_string(), te)
+            });
+
+        self.emit_block(body)?;
+
+        // Restore locals.
+        if let Some(prev) = old_local {
+            self.fn_ctx.locals.insert(var_name.to_string(), prev);
+        } else {
+            self.fn_ctx.locals.remove(var_name);
+        }
+        if let Some(prev) = old_mvl_ty {
+            self.fn_ctx.local_mvl_types.insert(var_name.to_string(), prev);
+        } else {
+            self.fn_ctx.local_mvl_types.remove(var_name);
+        }
+
+        if !self.fn_ctx.terminated {
+            let next_i = self.next_reg();
+            self.push_instr(&format!("{next_i} = add i64 {cur_i}, 1"));
+            self.push_instr(&format!("store i64 {next_i}, ptr {i_ptr}"));
+            self.ensure_yield_check_extern();
+            self.push_instr("call void @_mvl_yield_check()");
+            self.push_instr(&format!("br label %{cond_bb}"));
+        }
+
+        self.start_bb(&end_bb);
         Ok(())
     }
 
