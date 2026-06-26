@@ -26,8 +26,8 @@ guard-mvl: ## Validate MVL binary is present and working
 lint: guard-mvl ## Lint all source files
 	$(MVL) lint $(DIR)main.mvl
 
-check: guard-mvl ## Type-check main.mvl
-	$(MVL) check $(DIR)main.mvl --verbose
+check: guard-mvl ## Type-check all source files
+	$(MVL) check $(DIR) --verbose
 
 prove: guard-mvl ## Prove per-call-site refinement proof layer breakdown
 	$(MVL) prove $(DIR)main.mvl

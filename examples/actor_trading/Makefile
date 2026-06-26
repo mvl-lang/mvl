@@ -36,9 +36,8 @@ lint: guard-mvl ## Lint all source files
 	$(MVL) lint $(DIR)types.mvl
 	$(MVL) lint $(DIR)main.mvl
 
-check: guard-mvl ## Type-check types.mvl and main.mvl
-	$(MVL) check $(DIR)types.mvl
-	$(MVL) check $(DIR)main.mvl
+check: guard-mvl ## Type-check all source files
+	$(MVL) check $(DIR)
 
 prove: guard-mvl ## Prove per-call-site refinement proof layer breakdown
 	$(MVL) prove $(DIR)
