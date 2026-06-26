@@ -5,9 +5,9 @@
 
 use super::audit;
 use super::error::PackageError;
-use super::fetch::{self, resolve_pkg_dir};
+use super::fetch::resolve_pkg_dir;
 use super::lock::LockFile;
-use super::manifest::{DepSpec, Manifest};
+use super::manifest::{load_cached_manifest, DepSpec, Manifest};
 use std::path::Path;
 
 /// `mvl audit --supply-chain`
@@ -75,8 +75,17 @@ impl LicenseAudit {
     }
 
     /// True when the audit should fail as a CI gate.
+    ///
+    /// Rejected licenses always fail. Unknown (undeclared) licenses also fail
+    /// unless the policy mode is `"any"` — a package with no declared license
+    /// is more uncertain than one with a known incompatible license, and a
+    /// CI gate that ignores it can be bypassed by shipping a package without
+    /// an `mvl.toml` license field.
     pub fn has_violations(&self) -> bool {
-        self.rejected_count() > 0
+        if self.rejected_count() > 0 {
+            return true;
+        }
+        self.policy_mode != "any" && self.unknown_count() > 0
     }
 
     /// Render the audit report to a string.
@@ -152,9 +161,8 @@ pub fn cmd_audit_license(project_root: &Path) -> Result<LicenseAudit, PackageErr
             (Some(lic), None) => lic.clone(),
             (None, _) => {
                 // Try reading from cached package mvl.toml
-                let cached_license = read_package_license(&lp.name, &lp.version);
-                match cached_license {
-                    Some(lic) => lic,
+                match load_cached_manifest(&lp.name, &lp.version) {
+                    Some(m) => m.package.license,
                     None => {
                         entries.push(LicenseEntry {
                             name: lp.name.clone(),
@@ -210,15 +218,6 @@ pub fn cmd_audit_license(project_root: &Path) -> Result<LicenseAudit, PackageErr
         entries,
         policy_mode: policy.mode_str().to_string(),
     })
-}
-
-/// Read the license field from a cached package's `mvl.toml`.
-pub(super) fn read_package_license(name: &str, version: &str) -> Option<String> {
-    let cache_dir = fetch::pkg_cache_dir(name, version);
-    let toml_path = cache_dir.join("mvl.toml");
-    let content = std::fs::read_to_string(toml_path).ok()?;
-    let pkg_manifest = Manifest::parse(&content).ok()?;
-    Some(pkg_manifest.package.license)
 }
 
 // ── Dependency Paradox audit (#637) ──────────────────────────────────────────
@@ -407,6 +406,63 @@ mod tests {
         );
         std::fs::write(root.join("mvl.toml"), content).unwrap();
     }
+
+    // ── License audit ────────────────────────────────────────────────────────
+
+    fn license_entry(name: &str, status: LicenseStatus) -> LicenseEntry {
+        LicenseEntry {
+            name: name.to_string(),
+            section: "dependency".to_string(),
+            license: "unknown".to_string(),
+            status,
+        }
+    }
+
+    #[test]
+    fn has_violations_flags_unknown_under_permissive_policy() {
+        // A package with no declared license must fail the audit under the
+        // default permissive policy — otherwise a supply-chain attacker can
+        // bypass the gate by omitting the license field. See #1536.
+        let audit = LicenseAudit {
+            entries: vec![license_entry("ghost", LicenseStatus::Unknown)],
+            policy_mode: "permissive".to_string(),
+        };
+        assert!(audit.has_violations());
+    }
+
+    #[test]
+    fn has_violations_ignores_unknown_under_any_policy() {
+        // The `any` policy explicitly disables license enforcement, so an
+        // unknown license is not a violation.
+        let audit = LicenseAudit {
+            entries: vec![license_entry("ghost", LicenseStatus::Unknown)],
+            policy_mode: "any".to_string(),
+        };
+        assert!(!audit.has_violations());
+    }
+
+    #[test]
+    fn has_violations_flags_rejected_regardless_of_policy() {
+        let audit = LicenseAudit {
+            entries: vec![license_entry(
+                "bad",
+                LicenseStatus::Rejected("not permissive".to_string()),
+            )],
+            policy_mode: "any".to_string(),
+        };
+        assert!(audit.has_violations());
+    }
+
+    #[test]
+    fn has_violations_clean_audit_passes() {
+        let audit = LicenseAudit {
+            entries: vec![license_entry("ok", LicenseStatus::Compatible)],
+            policy_mode: "permissive".to_string(),
+        };
+        assert!(!audit.has_violations());
+    }
+
+    // ── Paradox audit ────────────────────────────────────────────────────────
 
     #[test]
     fn audit_paradox_no_deps() {

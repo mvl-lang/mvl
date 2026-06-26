@@ -444,10 +444,22 @@ pub fn fetch_tag_dates(
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
-/// Validate a git tag/branch name before passing it to `git clone --branch`.
+/// Validate a git tag/branch name before passing it to `git`.
 ///
-/// Rejects strings that start with `-` (would be interpreted as git options)
-/// or contain null bytes.  Allows the characters that are valid in git refs.
+/// Threat model: `git` is invoked via `process::Command::new("git").args(...)`,
+/// so the tag never reaches a shell and metacharacters cannot inject commands
+/// *today*. The strict allowlist below is defence in depth — if a future code
+/// path interpolates the tag into a log message, error message, or generated
+/// script without quoting, only inert characters can survive this gate.
+///
+/// Allowed: ASCII alphanumerics plus `.`, `-`, `_`, `+`, `/` — a subset of
+/// git's [ref name rules](https://git-scm.com/docs/git-check-ref-format)
+/// that covers every legitimate semver-style tag (`v1.2.3`, `v1.2.3-rc.1`,
+/// `v1.2.3+build.4`, `feature/foo`) while rejecting `$`, backtick, `(`, `)`,
+/// `;`, `|`, `&`, `>`, etc.
+///
+/// Leading `-` is rejected even though `-` is otherwise allowed, because git
+/// would interpret it as an option flag.
 fn validate_tag(tag: &str) -> Result<(), FetchError> {
     if tag.is_empty() {
         return Err(FetchError::GitError("empty tag".to_string()));
@@ -457,10 +469,14 @@ fn validate_tag(tag: &str) -> Result<(), FetchError> {
             "tag {tag:?} looks like a git option; rejecting to prevent option injection"
         )));
     }
-    if tag.contains('\0') {
-        return Err(FetchError::GitError(format!(
-            "tag {tag:?} contains a null byte"
-        )));
+    for c in tag.chars() {
+        let ok = c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '+' | '/');
+        if !ok {
+            return Err(FetchError::GitError(format!(
+                "tag {tag:?} contains disallowed character {c:?}; \
+                 allowed: ASCII alphanumerics and . - _ + /"
+            )));
+        }
     }
     Ok(())
 }
@@ -1130,6 +1146,60 @@ mod tests {
     fn parse_ls_remote_missing_tag_returns_none() {
         let result = parse_ls_remote_tag_sha("", "refs/tags/v2.0.0");
         assert!(result.is_none());
+    }
+
+    // --- validate_tag ---
+
+    #[test]
+    fn validate_tag_accepts_legitimate_tags() {
+        // Every shape we expect to see in the corpus: bare semver, prereleases,
+        // build metadata, branch-style refs with slashes.
+        for tag in &[
+            "v1.2.3",
+            "v1.2.3-rc.1",
+            "v1.2.3+build.4",
+            "1.0.0",
+            "feature/foo",
+            "release/2026.01",
+            "v0.4.0",
+            "v1",
+        ] {
+            assert!(validate_tag(tag).is_ok(), "legitimate tag {tag:?} rejected");
+        }
+    }
+
+    #[test]
+    fn validate_tag_rejects_empty() {
+        assert!(validate_tag("").is_err());
+    }
+
+    #[test]
+    fn validate_tag_rejects_leading_dash() {
+        // Would be interpreted as a git option flag.
+        assert!(validate_tag("-upload-pack=evil").is_err());
+        assert!(validate_tag("--exec=evil").is_err());
+    }
+
+    #[test]
+    fn validate_tag_rejects_shell_metacharacters() {
+        // Defence in depth — git is invoked without a shell today, but a future
+        // log/error-string interpolation must not be able to smuggle these.
+        for tag in &[
+            "$(rm -rf /)",
+            "`whoami`",
+            "v1.0.0;rm -rf /",
+            "v1.0.0|cat /etc/passwd",
+            "v1.0.0&evil",
+            "v1.0.0>out",
+            "v1.0.0\nsecond",
+            "v1.0.0 with space",
+            "v1.0.0\0",
+            "v1.0.0\"quote",
+            "v1.0.0'quote",
+            "v1.0.0\\backslash",
+        ] {
+            assert!(validate_tag(tag).is_err(), "malicious tag {tag:?} accepted");
+        }
     }
 
     #[test]

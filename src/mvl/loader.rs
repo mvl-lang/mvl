@@ -435,10 +435,8 @@ fn build_pkg_name_map_with_cache(
     let mut map = std::collections::HashMap::new();
 
     // Self-package: if project_root IS a package, make it importable by its own smoke tests.
-    if let Ok(content) = fs::read_to_string(project_root.join("mvl.toml")) {
-        if let Ok(manifest) = packages::manifest::Manifest::parse(&content) {
-            map.insert(manifest.package.name, project_root.to_path_buf());
-        }
+    if let Ok(manifest) = packages::manifest::Manifest::load(project_root) {
+        map.insert(manifest.package.name, project_root.to_path_buf());
     }
 
     for pkg in &lockfile.packages {
@@ -446,10 +444,8 @@ fn build_pkg_name_map_with_cache(
         if !cache_dir.exists() {
             continue;
         }
-        if let Ok(content) = fs::read_to_string(cache_dir.join("mvl.toml")) {
-            if let Ok(manifest) = packages::manifest::Manifest::parse(&content) {
-                map.insert(manifest.package.name, cache_dir);
-            }
+        if let Ok(manifest) = packages::manifest::Manifest::load(&cache_dir) {
+            map.insert(manifest.package.name, cache_dir);
         }
     }
 
@@ -464,10 +460,7 @@ fn build_pkg_name_map_with_cache(
     while !frontier.is_empty() {
         let mut next_frontier = Vec::new();
         for pkg_dir in &frontier {
-            let Ok(content) = fs::read_to_string(pkg_dir.join("mvl.toml")) else {
-                continue;
-            };
-            let Ok(manifest) = packages::manifest::Manifest::parse(&content) else {
+            let Ok(manifest) = packages::manifest::Manifest::load(pkg_dir) else {
                 continue;
             };
             for (dep_id, dep_spec) in &manifest.dependencies {
@@ -477,11 +470,9 @@ fn build_pkg_name_map_with_cache(
                 if !dep_dir.exists() || !seen_dirs.insert(dep_dir.clone()) {
                     continue;
                 }
-                if let Ok(dep_content) = fs::read_to_string(dep_dir.join("mvl.toml")) {
-                    if let Ok(dep_manifest) = packages::manifest::Manifest::parse(&dep_content) {
-                        map.insert(dep_manifest.package.name, dep_dir.clone());
-                        next_frontier.push(dep_dir);
-                    }
+                if let Ok(dep_manifest) = packages::manifest::Manifest::load(&dep_dir) {
+                    map.insert(dep_manifest.package.name, dep_dir.clone());
+                    next_frontier.push(dep_dir);
                 }
             }
         }

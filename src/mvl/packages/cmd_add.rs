@@ -3,12 +3,11 @@
 
 //! `mvl add` — fetch a package, add to mvl.toml + mvl.lock.
 
-use super::cmd_audit::read_package_license;
 use super::config::latest_semver_tag;
 use super::error::PackageError;
 use super::fetch::{self, fetch_package};
 use super::lock::LockFile;
-use super::manifest::{DepSpec, Manifest};
+use super::manifest::{load_cached_manifest, DepSpec, Manifest};
 use std::path::Path;
 
 /// `mvl add <git-url-or-pkg-id> [<tag>] [--rationale "..."] [--allow-license]`
@@ -72,7 +71,7 @@ pub fn cmd_add(
         .ok();
 
     // Read the fetched package's license from its mvl.toml (#635)
-    let pkg_license = read_package_license(&pkg_name, &version_str);
+    let pkg_license = load_cached_manifest(&pkg_name, &version_str).map(|m| m.package.license);
     if let Some(ref lic) = pkg_license {
         locked.license = Some(lic.clone());
     }

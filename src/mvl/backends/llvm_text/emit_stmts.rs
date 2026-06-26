@@ -3,7 +3,9 @@
 
 //! Statement emission for the `llvm_text` backend.
 
-use crate::mvl::parser::ast::{Block, ElseBranch, Expr, LValue, LetKind, MatchArm, Pattern, Stmt, TypeExpr};
+use crate::mvl::parser::ast::{
+    Block, ElseBranch, Expr, LValue, LetKind, MatchArm, Pattern, Stmt, TypeExpr,
+};
 use crate::mvl::parser::lexer::Span;
 
 use super::{RefLocal, TextEmitter, MAIN_RET};
@@ -48,10 +50,7 @@ fn ty_to_type_expr(ty: &crate::mvl::checker::types::Ty) -> Option<TypeExpr> {
             inner: Box::new(ty_to_type_expr(inner)?),
             span: Span::default(),
         },
-        Ty::Named(name, args) => base(
-            name,
-            args.iter().filter_map(ty_to_type_expr).collect(),
-        ),
+        Ty::Named(name, args) => base(name, args.iter().filter_map(ty_to_type_expr).collect()),
         _ => return None,
     })
 }
@@ -396,12 +395,8 @@ impl TextEmitter {
             .insert(var_name.to_string(), elem_val.clone());
         let old_mvl_ty = elem_ty_opt
             .as_ref()
-            .and_then(|t| ty_to_type_expr(t))
-            .and_then(|te| {
-                self.fn_ctx
-                    .local_mvl_types
-                    .insert(var_name.to_string(), te)
-            });
+            .and_then(ty_to_type_expr)
+            .and_then(|te| self.fn_ctx.local_mvl_types.insert(var_name.to_string(), te));
 
         self.emit_block(body)?;
 
@@ -412,7 +407,9 @@ impl TextEmitter {
             self.fn_ctx.locals.remove(var_name);
         }
         if let Some(prev) = old_mvl_ty {
-            self.fn_ctx.local_mvl_types.insert(var_name.to_string(), prev);
+            self.fn_ctx
+                .local_mvl_types
+                .insert(var_name.to_string(), prev);
         } else {
             self.fn_ctx.local_mvl_types.remove(var_name);
         }
