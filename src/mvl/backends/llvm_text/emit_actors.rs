@@ -218,25 +218,19 @@ impl TextEmitter {
                             continue;
                         }
                         let gep = this.next_reg();
-                        this.push_instr(&format!(
-                            "{gep} = getelementptr i64, ptr %args, i64 {j}"
-                        ));
+                        this.push_instr(&format!("{gep} = getelementptr i64, ptr %args, i64 {j}"));
                         let raw = this.next_reg();
                         this.push_instr(&format!("{raw} = load i64, ptr {gep}"));
 
                         // Rehydrate: ptr args were stored as i64 (ptrtoint).
                         if ty_str == "ptr" {
                             let coerced = this.next_reg();
-                            this.push_instr(&format!(
-                                "{coerced} = inttoptr i64 {raw} to ptr"
-                            ));
+                            this.push_instr(&format!("{coerced} = inttoptr i64 {raw} to ptr"));
                             call_parts.push(format!("ptr {coerced}"));
                         } else if ty_str == "i1" {
                             // Bool was zero-extended to i64; truncate back.
                             let truncated = this.next_reg();
-                            this.push_instr(&format!(
-                                "{truncated} = trunc i64 {raw} to i1"
-                            ));
+                            this.push_instr(&format!("{truncated} = trunc i64 {raw} to i1"));
                             call_parts.push(format!("i1 {truncated}"));
                         } else {
                             call_parts.push(format!("{ty_str} {raw}"));
