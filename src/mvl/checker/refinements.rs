@@ -1380,6 +1380,7 @@ fn display_pred(pred: &RefExpr) -> String {
         RefExpr::Ident { name, .. } => name.clone(),
         RefExpr::Integer { value, .. } => value.to_string(),
         RefExpr::Float { value, .. } => value.to_string(),
+        RefExpr::Bool { value, .. } => value.to_string(),
         RefExpr::Compare {
             op, left, right, ..
         } => {

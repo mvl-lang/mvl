@@ -307,7 +307,7 @@ impl TypeChecker {
                     });
                 }
             }
-            RefExpr::Integer { .. } | RefExpr::Float { .. } => {}
+            RefExpr::Integer { .. } | RefExpr::Float { .. } | RefExpr::Bool { .. } => {}
             RefExpr::Forall { body, .. } | RefExpr::Exists { body, .. } => {
                 self.check_guard_ref_expr(body);
             }

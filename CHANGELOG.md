@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.220.8] - 2026-06-26
+
+### Fixed
+
+- **Prover: support `result.field` projection in `ensures` clauses on struct-returning functions** (#1540) — Postconditions like `ensures result.score == 0` and `ensures result.alive == true` on functions whose body is a struct literal were silently dropped (bool comparisons, which had no `RefExpr` counterpart) or deferred to runtime (int comparisons, which hit Layer 1's `_ => None` fallback for `Expr::Construct`). Added a `RefExpr::Bool` variant so bool-literal predicates survive `expr_to_ref_expr_ext`, and extended `try_trivial` with an `Expr::Construct` arm that resolves `self.field` against the struct literal's init expressions. Violations (e.g. `Game { score: 5 }` against `ensures result.score == 0`) are now reported at compile time.
+
 ## [0.220.7] - 2026-06-25
 
 ### Fixed
