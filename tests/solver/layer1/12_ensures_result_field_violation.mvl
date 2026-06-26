@@ -1,0 +1,24 @@
+// Solver Layer 1: `ensures result.field` violations.
+// solver:expect-fail
+//
+// When a function returns a struct literal but the field value doesn't
+// satisfy the ensures predicate, Layer 1 reports a compile-time error.
+//
+// Regression test for #1540.
+
+pub type Game = struct {
+    score: Int,
+    alive: Bool,
+}
+
+total fn bad_score() -> Game
+    ensures result.score == 0
+{
+    Game { score: 5, alive: true }
+}
+
+total fn bad_alive() -> Game
+    ensures result.alive == true
+{
+    Game { score: 0, alive: false }
+}

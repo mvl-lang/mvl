@@ -1,0 +1,40 @@
+// Solver Layer 1: `ensures result.field` postconditions on struct-returning fns.
+//
+// When a function returns a struct literal, Layer 1 resolves
+// `result.field == literal` (and bool field projection) by reading the
+// init expressions of the struct literal directly. All ensures in this
+// file are PROVEN by Layer 1.
+//
+// Regression test for #1540.
+
+pub type Game = struct {
+    score: Int,
+    alive: Bool,
+}
+
+total fn new_game() -> Game
+    ensures result.score == 0
+    ensures result.alive == true
+{
+    Game { score: 0, alive: true }
+}
+
+total fn fresh_score(n: Int) -> Game
+    ensures result.score == 0
+    ensures !result.alive == false
+{
+    Game { score: 0, alive: true }
+}
+
+total fn dead_game() -> Game
+    ensures result.alive == false
+    ensures result.score == 0 || result.alive
+{
+    Game { score: 0, alive: false }
+}
+
+total fn arith_field() -> Game
+    ensures result.score == 1 + 2
+{
+    Game { score: 3, alive: true }
+}

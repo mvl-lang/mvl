@@ -96,6 +96,11 @@ pub(super) fn try_trivial(
         // Enables static proof of e.g. `validate_log_path("app.log")` where pred is `len(p) > 0`.
         Expr::Literal(Literal::Str(s), _) => Some(eval_pred_str_len(s.len() as i64, pred)),
 
+        // Struct literal as return value (#1540): resolve `self.field` against the
+        // construct's field exprs. Enables `ensures result.field == literal` to be
+        // proven statically when the function body is a struct literal.
+        Expr::Construct { fields, .. } => Some(eval_pred_struct(fields, pred)),
+
         // Everything else: Layer 1 cannot decide.
         _ => None,
     }
@@ -541,6 +546,182 @@ fn eval_num_float(self_val: f64, expr: &RefExpr) -> Option<f64> {
             }
         }
         RefExpr::Grouped { inner, .. } => eval_num_float(self_val, inner),
+        _ => None,
+    }
+}
+
+// ── Struct-literal field projection (#1540) ──────────────────────────────────
+
+/// Evaluate a predicate against a struct literal's field expressions.
+///
+/// Resolves `self.field` references in the predicate by looking up `field`
+/// in the struct's init expressions and using its literal value. Returns
+/// `RuntimeCheck` when any field referenced by the predicate has a non-literal
+/// init expression.
+pub(super) fn eval_pred_struct(fields: &[(String, Expr)], pred: &RefExpr) -> RefResult {
+    match eval_bool_struct(fields, pred) {
+        Some(true) => RefResult::Proven,
+        Some(false) => RefResult::Failed {
+            counterexample: None,
+        },
+        None => RefResult::RuntimeCheck,
+    }
+}
+
+/// Evaluate a boolean predicate where `self.field` references resolve to
+/// literal field values from the struct construction `fields`.
+fn eval_bool_struct(fields: &[(String, Expr)], pred: &RefExpr) -> Option<bool> {
+    match pred {
+        RefExpr::Compare {
+            op, left, right, ..
+        } => {
+            // Try a bool-domain comparison first (covers `self.alive == true`).
+            if let (Some(l), Some(r)) =
+                (eval_bool_value_struct(fields, left), eval_bool_value_struct(fields, right))
+            {
+                return Some(match op {
+                    CmpOp::Eq => l == r,
+                    CmpOp::Ne => l != r,
+                    // Bool ordering is not defined for the other ops; bail out.
+                    _ => return None,
+                });
+            }
+            // Fall back to the integer domain.
+            let l = eval_num_int_struct(fields, left)?;
+            let r = eval_num_int_struct(fields, right)?;
+            Some(match op {
+                CmpOp::Eq => l == r,
+                CmpOp::Ne => l != r,
+                CmpOp::Lt => l < r,
+                CmpOp::Gt => l > r,
+                CmpOp::Le => l <= r,
+                CmpOp::Ge => l >= r,
+            })
+        }
+        RefExpr::LogicOp {
+            op, left, right, ..
+        } => match op {
+            LogicOp::And => {
+                let l = eval_bool_struct(fields, left);
+                if l == Some(false) {
+                    return Some(false);
+                }
+                let r = eval_bool_struct(fields, right);
+                match (l, r) {
+                    (Some(a), Some(b)) => Some(a && b),
+                    _ => None,
+                }
+            }
+            LogicOp::Or => {
+                let l = eval_bool_struct(fields, left);
+                if l == Some(true) {
+                    return Some(true);
+                }
+                let r = eval_bool_struct(fields, right);
+                match (l, r) {
+                    (Some(a), Some(b)) => Some(a || b),
+                    _ => None,
+                }
+            }
+        },
+        RefExpr::Not { inner, .. } => Some(!eval_bool_struct(fields, inner)?),
+        RefExpr::Grouped { inner, .. } => eval_bool_struct(fields, inner),
+        // A bare `self.field` of bool type in a predicate context (e.g. an
+        // ensures clause that's just `result.alive`) is treated as the field's
+        // boolean value, if it resolves to a bool literal.
+        RefExpr::FieldAccess { .. } => eval_bool_value_struct(fields, pred),
+        RefExpr::Bool { value, .. } => Some(*value),
+        _ => None,
+    }
+}
+
+/// Resolve a numeric sub-expression to an integer using struct field values.
+fn eval_num_int_struct(fields: &[(String, Expr)], expr: &RefExpr) -> Option<i64> {
+    match expr {
+        RefExpr::Integer { value, .. } => Some(*value),
+        RefExpr::FieldAccess { object, field, .. } => {
+            if let RefExpr::Ident { name, .. } = object.as_ref() {
+                if is_self_like(name) {
+                    let init = fields.iter().find(|(n, _)| n == field).map(|(_, e)| e)?;
+                    return extract_int_from_expr(init);
+                }
+            }
+            None
+        }
+        RefExpr::ArithOp {
+            op, left, right, ..
+        } => {
+            let l = eval_num_int_struct(fields, left)?;
+            let r = eval_num_int_struct(fields, right)?;
+            match op {
+                ArithOp::Add => l.checked_add(r),
+                ArithOp::Sub => l.checked_sub(r),
+                ArithOp::Mul => l.checked_mul(r),
+                ArithOp::Div => {
+                    if r == 0 {
+                        None
+                    } else {
+                        Some(l / r)
+                    }
+                }
+                ArithOp::Rem => {
+                    if r == 0 {
+                        None
+                    } else {
+                        Some(l % r)
+                    }
+                }
+            }
+        }
+        RefExpr::Grouped { inner, .. } => eval_num_int_struct(fields, inner),
+        _ => None,
+    }
+}
+
+/// Resolve a sub-expression to a boolean value using struct field values.
+/// Handles `self.field` where the field's init is a `Literal::Bool`, and
+/// bare `Bool` literals in the predicate.
+fn eval_bool_value_struct(fields: &[(String, Expr)], expr: &RefExpr) -> Option<bool> {
+    match expr {
+        RefExpr::Bool { value, .. } => Some(*value),
+        RefExpr::FieldAccess { object, field, .. } => {
+            if let RefExpr::Ident { name, .. } = object.as_ref() {
+                if is_self_like(name) {
+                    let init = fields.iter().find(|(n, _)| n == field).map(|(_, e)| e)?;
+                    return extract_bool_from_expr(init);
+                }
+            }
+            None
+        }
+        RefExpr::Grouped { inner, .. } => eval_bool_value_struct(fields, inner),
+        RefExpr::Not { inner, .. } => Some(!eval_bool_value_struct(fields, inner)?),
+        _ => None,
+    }
+}
+
+/// Extract a literal integer from a struct field's init expression.
+fn extract_int_from_expr(expr: &Expr) -> Option<i64> {
+    match expr {
+        Expr::Literal(Literal::Integer(n), _) => Some(*n),
+        Expr::Unary {
+            op: UnaryOp::Neg,
+            expr: inner,
+            ..
+        } => {
+            if let Expr::Literal(Literal::Integer(n), _) = inner.as_ref() {
+                n.checked_neg()
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Extract a literal boolean from a struct field's init expression.
+fn extract_bool_from_expr(expr: &Expr) -> Option<bool> {
+    match expr {
+        Expr::Literal(Literal::Bool(b), _) => Some(*b),
         _ => None,
     }
 }

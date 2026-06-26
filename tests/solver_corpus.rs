@@ -101,6 +101,16 @@ solver_test!(
     "layer1",
     "10_violations_equality.mvl"
 );
+solver_test!(
+    solver_l1_11_ensures_result_field,
+    "layer1",
+    "11_ensures_result_field.mvl"
+);
+solver_test!(
+    solver_l1_12_ensures_result_field_violation,
+    "layer1",
+    "12_ensures_result_field_violation.mvl"
+);
 
 // ── Layer 2: Interval analysis ───────────────────────────────────────────────
 

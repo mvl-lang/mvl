@@ -1215,6 +1215,7 @@ impl<'src> Printer<'src> {
                     format!("{}.0", s)
                 }
             }
+            RefExpr::Bool { value, .. } => value.to_string(),
             RefExpr::Len { ident, .. } => format!("len({})", ident),
             RefExpr::Grouped { inner, .. } => format!("({})", self.fmt_ref_expr(inner)),
             RefExpr::Old { inner, .. } => format!("old({})", self.fmt_ref_expr(inner)),

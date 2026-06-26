@@ -890,6 +890,7 @@ fn emit_ref_expr(pred: &RefExpr, binding: &str) -> String {
                 format!("{s}.0")
             }
         }
+        RefExpr::Bool { value, .. } => value.to_string(),
         RefExpr::Len { ident, .. } => {
             if ident == "self" || ident == "result" {
                 format!("{binding}.len()")
