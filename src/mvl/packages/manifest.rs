@@ -144,7 +144,13 @@ impl LicensePolicy {
                     // In custom mode, only explicitly allowed licenses pass
                     all_denied_reason = format!("{alt} is not in the allow list");
                 }
-                LicensePolicyMode::Any => unreachable!(),
+                LicensePolicyMode::Any => {
+                    // Any-mode is handled by the early return at the top of
+                    // this fn. Defensive arm: if that branch is ever removed,
+                    // accept here too instead of panicking.
+                    any_allowed = true;
+                    break;
+                }
             }
         }
 

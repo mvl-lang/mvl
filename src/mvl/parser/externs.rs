@@ -13,25 +13,24 @@ impl Parser {
         self.advance(); // consume `extern`
 
         // ABI string: e.g. `"rust"`, `"c"`, or `"C"` (normalized to lowercase).
-        let abi = match self.peek_kind() {
-            TokenKind::Str(_) => {
-                let tok = self.advance();
-                match tok.kind {
-                    TokenKind::Str(s) => s.to_ascii_lowercase(),
-                    _ => unreachable!(),
-                }
-            }
-            _ => {
-                let err = ParseError {
-                    message: format!(
-                        "expected ABI string after `extern`, found `{}`",
-                        self.peek_kind()
-                    ),
-                    span: self.peek_span(),
-                };
-                self.push_recover(err);
+        let abi = if matches!(self.peek_kind(), TokenKind::Str(_)) {
+            // peek guaranteed Str(_) above; let-else's else branch is therefore
+            // dead. Bail gracefully instead of panicking if the invariant ever
+            // breaks (e.g. someone introduces a buffered/lookahead change).
+            let TokenKind::Str(s) = self.advance().kind else {
                 return Err(());
-            }
+            };
+            s.to_ascii_lowercase()
+        } else {
+            let err = ParseError {
+                message: format!(
+                    "expected ABI string after `extern`, found `{}`",
+                    self.peek_kind()
+                ),
+                span: self.peek_span(),
+            };
+            self.push_recover(err);
+            return Err(());
         };
 
         // Optional `link("lib1", "lib2")` — library names to link against.

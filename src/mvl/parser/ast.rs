@@ -1160,66 +1160,56 @@ pub(crate) fn expr_to_ref_expr_ext(expr: &Expr, fallback_span: Span) -> Option<R
             left,
             right,
             span,
-        } => match op {
-            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem => {
+        } => {
+            // Map each BinaryOp directly to its RefExpr variant; the wildcard
+            // tail covers operators that have no refinement-language form.
+            let arith = |aop: ArithOp| -> Option<RefExpr> {
                 let l = expr_to_ref_expr_ext(left, *span)?;
                 let r = expr_to_ref_expr_ext(right, *span)?;
-                let aop = match op {
-                    BinaryOp::Add => ArithOp::Add,
-                    BinaryOp::Sub => ArithOp::Sub,
-                    BinaryOp::Mul => ArithOp::Mul,
-                    BinaryOp::Div => ArithOp::Div,
-                    BinaryOp::Rem => ArithOp::Rem,
-                    _ => unreachable!(),
-                };
                 Some(RefExpr::ArithOp {
                     op: aop,
                     left: Box::new(l),
                     right: Box::new(r),
                     span: *span,
                 })
-            }
-            BinaryOp::Eq
-            | BinaryOp::Ne
-            | BinaryOp::Lt
-            | BinaryOp::Gt
-            | BinaryOp::Le
-            | BinaryOp::Ge => {
+            };
+            let cmp = |cop: CmpOp| -> Option<RefExpr> {
                 let l = expr_to_ref_expr_ext(left, *span)?;
                 let r = expr_to_ref_expr_ext(right, *span)?;
-                let cop = match op {
-                    BinaryOp::Eq => CmpOp::Eq,
-                    BinaryOp::Ne => CmpOp::Ne,
-                    BinaryOp::Lt => CmpOp::Lt,
-                    BinaryOp::Gt => CmpOp::Gt,
-                    BinaryOp::Le => CmpOp::Le,
-                    BinaryOp::Ge => CmpOp::Ge,
-                    _ => unreachable!(),
-                };
                 Some(RefExpr::Compare {
                     op: cop,
                     left: Box::new(l),
                     right: Box::new(r),
                     span: *span,
                 })
-            }
-            BinaryOp::And | BinaryOp::Or => {
+            };
+            let logic = |lop: LogicOp| -> Option<RefExpr> {
                 let l = expr_to_ref_expr_ext(left, *span)?;
                 let r = expr_to_ref_expr_ext(right, *span)?;
-                let lop = match op {
-                    BinaryOp::And => LogicOp::And,
-                    BinaryOp::Or => LogicOp::Or,
-                    _ => unreachable!(),
-                };
                 Some(RefExpr::LogicOp {
                     op: lop,
                     left: Box::new(l),
                     right: Box::new(r),
                     span: *span,
                 })
+            };
+            match op {
+                BinaryOp::Add => arith(ArithOp::Add),
+                BinaryOp::Sub => arith(ArithOp::Sub),
+                BinaryOp::Mul => arith(ArithOp::Mul),
+                BinaryOp::Div => arith(ArithOp::Div),
+                BinaryOp::Rem => arith(ArithOp::Rem),
+                BinaryOp::Eq => cmp(CmpOp::Eq),
+                BinaryOp::Ne => cmp(CmpOp::Ne),
+                BinaryOp::Lt => cmp(CmpOp::Lt),
+                BinaryOp::Gt => cmp(CmpOp::Gt),
+                BinaryOp::Le => cmp(CmpOp::Le),
+                BinaryOp::Ge => cmp(CmpOp::Ge),
+                BinaryOp::And => logic(LogicOp::And),
+                BinaryOp::Or => logic(LogicOp::Or),
+                _ => None,
             }
-            _ => None,
-        },
+        }
         Expr::Unary {
             op: UnaryOp::Neg,
             expr: inner,

@@ -11,6 +11,7 @@ use super::TextEmitter;
 /// Look up a dispatch entry, panicking with a drift-detection message on miss.
 fn lookup_dispatch(method: &str) -> &'static Dispatch {
     dispatch::lookup(method).unwrap_or_else(|| {
+        // AUDIT: drift detector — dispatch.rs ↔ emit_method_call.rs (see #1549)
         panic!("LLVM_DISPATCH missing entry for '{method}' — drift between dispatch.rs and emit_method_call.rs")
     })
 }
@@ -51,6 +52,7 @@ impl TextEmitter {
             ret_ty,
         } = lookup_dispatch(method)
         else {
+            // AUDIT: drift detector — dispatch.rs ↔ emit_method_call.rs (see #1549)
             panic!(
                 "LLVM_DISPATCH entry for '{method}' is not Dispatch::CCall — use a different emit_c_call_* helper"
             );
@@ -85,6 +87,7 @@ impl TextEmitter {
         extra_args: &[(&'static str, &str)],
     ) -> String {
         let Dispatch::CCallBoolFromI64 { sym, signature } = lookup_dispatch(method) else {
+            // AUDIT: drift detector — dispatch.rs ↔ emit_method_call.rs (see #1549)
             panic!(
                 "LLVM_DISPATCH entry for '{method}' is not Dispatch::CCallBoolFromI64 — use a different emit_c_call_* helper"
             );
@@ -121,6 +124,7 @@ impl TextEmitter {
             slot_tys,
         } = lookup_dispatch(method)
         else {
+            // AUDIT: drift detector — dispatch.rs ↔ emit_method_call.rs (see #1549)
             panic!(
                 "LLVM_DISPATCH entry for '{method}' is not Dispatch::CCallStructFromSlots — use a different emit_c_call_* helper"
             );
@@ -184,6 +188,7 @@ impl TextEmitter {
             payload_ty,
         } = lookup_dispatch(method)
         else {
+            // AUDIT: drift detector — dispatch.rs ↔ emit_method_call.rs (see #1549)
             panic!(
                 "LLVM_DISPATCH entry for '{method}' is not Dispatch::CCallOptionOutPtr — use a different emit_c_call_* helper"
             );
