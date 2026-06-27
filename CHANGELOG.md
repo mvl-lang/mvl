@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.221.3] - 2026-06-27
+
+### Refactored
+
+- **`parser`: split `lexer.rs` (1511 lines) into focused submodules** (#1563) — The single 654-line `impl<'src> Lexer<'src>` block interleaved cursor primitives, string-literal handling, number parsing, and the dispatch loop. Split into `lexer/{mod,cursor,strings,numbers}.rs` with `pub(super)` on the cross-module method visibility. Public API (Lexer::new, tokenize, next_token, Span, Token, TokenKind, LexError) unchanged.
+- **`checker`: split `contracts.rs` (2035 lines) into focused submodules** (#1561) — Two-way split into `contracts/{mod,loop_and_field}.rs`: top-level entry points (`check_contracts`, `check_return_refinements`), requires/ensures checking, and the shared pure predicate helpers stay in `mod.rs`; invariant checking + actor/struct field-refinement checks (which share helpers like `check_standalone_pred`, `apply_effects_to_pred`, `extract_simple_assignments`) live in `loop_and_field.rs`. Both files now under the epic's 1500-line advisory; finer four-way split deferred. Public API unchanged.
+- **`packages`: split `manifest.rs` (2228 lines) into focused submodules** (#1562) — After the `packages.rs` god-object split (#1523/#1524), `manifest.rs` was the largest remaining file in `src/mvl/packages/` with the same shape of internal coupling. Split into `manifest/{mod,toml,sections}.rs`: data model + Manifest impl stay in `mod.rs`; hand-rolled TOML lexer/parser primitives in `toml.rs`; six per-section parsers in `sections.rs`. Public API unchanged.
+
 ## [0.221.2] - 2026-06-27
 
 ### Fixed

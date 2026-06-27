@@ -7,7 +7,7 @@
 #   1. docs/grammar.ebnf          — formal grammar (Reserved Keywords section)
 #   2. etc/tree-sitter-mvl/grammar.js — tree-sitter grammar
 #   3. compiler/lexer.mvl         — self-hosted MVL lexer
-#   4. src/mvl/parser/lexer.rs    — Rust reference lexer
+#   4. src/mvl/parser/lexer/mod.rs — Rust reference lexer
 #
 # Usage:
 #   python3 tools/validate_keywords.py
@@ -84,7 +84,7 @@ def keywords_from_mvl_lexer(path: Path) -> set[str]:
 
 
 def keywords_from_rust_lexer(path: Path) -> set[str]:
-    """Extract keywords from src/mvl/parser/lexer.rs keyword mapping.
+    """Extract keywords from src/mvl/parser/lexer/mod.rs keyword mapping.
 
     Format:  "kw" => TokenKind::Xxx,
     Only in the keyword-dispatch section (exclude Display impl etc.).
@@ -99,7 +99,7 @@ def main() -> int:
     ebnf_path = REPO_ROOT / "docs" / "grammar.ebnf"
     ts_path   = REPO_ROOT / "etc" / "tree-sitter-mvl" / "grammar.js"
     mvl_path  = REPO_ROOT / "compiler" / "lexer.mvl"
-    rust_path = REPO_ROOT / "src" / "mvl" / "parser" / "lexer.rs"
+    rust_path = REPO_ROOT / "src" / "mvl" / "parser" / "lexer" / "mod.rs"
 
     ebnf = keywords_from_ebnf(ebnf_path)
     ts   = keywords_from_grammar_js(ts_path)
@@ -148,7 +148,7 @@ def main() -> int:
         for e in errors:
             print(f"  {e}")
         print(
-            "\nFix: update the diverging files to match src/mvl/parser/lexer.rs."
+            "\nFix: update the diverging files to match src/mvl/parser/lexer/mod.rs."
         )
         return 1
 
