@@ -1243,6 +1243,13 @@ fn check_call_site(
 
 // ── Argument checking ─────────────────────────────────────────────────────────
 
+fn record(n: usize, r: RefResult, counts: &mut RefinementCounts) -> RefResult {
+    if matches!(r, RefResult::Proven) {
+        counts.by_layer[n] += 1;
+    }
+    r
+}
+
 /// Mode-aware dispatch used by `check_call_site` and `check_arg_against_pred`.
 ///
 /// Records which layer resolved the check in `counts.by_layer[n]`.
@@ -1253,30 +1260,36 @@ pub(crate) fn check_arg_against_pred_counted(
     fn_decls: &HashMap<String, FnDecl>,
     counts: &mut RefinementCounts,
 ) -> RefResult {
-    macro_rules! try_layer {
-        ($n:expr, $call:expr) => {
-            if let Some(r) = $call {
-                if matches!(r, RefResult::Proven) {
-                    counts.by_layer[$n] += 1;
-                }
-                return r;
-            }
-        };
-    }
     match counts.mode {
         SolverMode::Z3Only => {
-            try_layer!(5, try_z3(pred, arg, var_refs));
+            if let Some(r) = try_z3(pred, arg, var_refs) {
+                return record(5, r, counts);
+            }
         }
         SolverMode::FastOnly => {
-            try_layer!(1, try_trivial(pred, arg, var_refs, fn_decls));
-            try_layer!(2, try_interval(pred, arg, var_refs));
+            if let Some(r) = try_trivial(pred, arg, var_refs, fn_decls) {
+                return record(1, r, counts);
+            }
+            if let Some(r) = try_interval(pred, arg, var_refs) {
+                return record(2, r, counts);
+            }
         }
         SolverMode::Layered => {
-            try_layer!(1, try_trivial(pred, arg, var_refs, fn_decls));
-            try_layer!(2, try_interval(pred, arg, var_refs));
-            try_layer!(3, try_symbolic(pred, arg, var_refs, fn_decls));
-            try_layer!(4, try_cooper(pred, arg, var_refs));
-            try_layer!(5, try_z3(pred, arg, var_refs));
+            if let Some(r) = try_trivial(pred, arg, var_refs, fn_decls) {
+                return record(1, r, counts);
+            }
+            if let Some(r) = try_interval(pred, arg, var_refs) {
+                return record(2, r, counts);
+            }
+            if let Some(r) = try_symbolic(pred, arg, var_refs, fn_decls) {
+                return record(3, r, counts);
+            }
+            if let Some(r) = try_cooper(pred, arg, var_refs) {
+                return record(4, r, counts);
+            }
+            if let Some(r) = try_z3(pred, arg, var_refs) {
+                return record(5, r, counts);
+            }
         }
     }
     RefResult::RuntimeCheck
