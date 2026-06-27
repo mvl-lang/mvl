@@ -685,8 +685,14 @@ pub fn scan_all(
     } else {
         std::time::Duration::from_millis(12_000) // ~5 req/min
     };
-    // Scan [c-native] — query both NVD and OSV
-    for (idx, (name, spec)) in c_native.iter().enumerate() {
+    // Scan [c-native] — query both NVD and OSV.  Sorted iteration via
+    // `render::iter_c_native_sorted` (#1564) so the audit report and any
+    // downstream caller sees a stable order across runs (HashMap iteration
+    // was previously nondeterministic).
+    for (idx, (name, spec)) in super::render::iter_c_native_sorted(c_native)
+        .into_iter()
+        .enumerate()
+    {
         let version = &spec.version;
         let mut findings = Vec::new();
 
@@ -713,15 +719,16 @@ pub fn scan_all(
         }
 
         results.push(DepAuditResult {
-            name: name.clone(),
+            name: name.to_string(),
             version: version.clone(),
             section: "c-native".to_string(),
             findings,
         });
     }
 
-    // Scan [native] — query OSV with ecosystem "crates.io"
-    for (name, version) in native {
+    // Scan [native] — query OSV with ecosystem "crates.io".  Sorted via
+    // `render::iter_native_sorted` (#1564) for output stability.
+    for (name, version) in super::render::iter_native_sorted(native) {
         let mut findings = Vec::new();
 
         match query_osv(name, version, Some("crates.io")) {
@@ -730,8 +737,8 @@ pub fn scan_all(
         }
 
         results.push(DepAuditResult {
-            name: name.clone(),
-            version: version.clone(),
+            name: name.to_string(),
+            version: version.to_string(),
             section: "native".to_string(),
             findings,
         });

@@ -37,6 +37,7 @@ pub mod hash;
 pub mod lock;
 pub mod manifest;
 pub mod mvs;
+pub(crate) mod render;
 pub(crate) mod resolver;
 pub mod sbom;
 pub mod sbom_diff;
