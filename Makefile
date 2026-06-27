@@ -2,7 +2,7 @@
 .ONESHELL:
 SHELL := /bin/bash
 
-.PHONY: help version build build-llvm-runtime build-release test test-unit test-integration test-requirements test-error-messages test-fmt-roundtrip test-corpus test-solver test-stdlib check-compiler assure-compiler test-mvl test-bdd test-backend-rust test-backend-llvm test-cross-backend test-tree-sitter test-grammar-coverage test-examples test-examples-rust test-examples-llvm coverage validate-keywords lint mvl-lint format format-check format-mvl format-mvl-check assurance assurance-gate check-adr docs docs-serve tree-sitter-build install install-nvim setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
+.PHONY: help version build build-llvm-runtime build-release test test-unit test-integration test-requirements test-error-messages test-fmt-roundtrip test-corpus test-solver test-stdlib check-compiler assure-compiler test-mvl test-bdd test-backend-rust test-backend-llvm test-cross-backend test-tree-sitter test-grammar-coverage test-examples test-examples-rust test-examples-llvm coverage validate-keywords lint mvl-lint format format-check format-mvl format-mvl-check assurance assurance-gate audit-backend-ast check-adr docs docs-serve tree-sitter-build install install-nvim setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
 
 .DEFAULT_GOAL := help
 
@@ -337,6 +337,9 @@ audit-panics: ## Count unreachable!/panic! in src/mvl — split PROD vs TEST, fa
 	@python3 tools/audit_panics.py \
 	    --prod-budget $(PANIC_BUDGET_PROD) \
 	    --test-budget $(PANIC_BUDGET_TEST)
+
+audit-backend-ast: ## Guard against new parser::ast imports in backends — target 0 (#1594, ADR-0050)
+	@python3 tools/audit_backend_ast.py
 
 check-adr: ## Check ADR structure (required sections, no duplicate numbers)
 	@python3 tools/check_adr.py --verbose
