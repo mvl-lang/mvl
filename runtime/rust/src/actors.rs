@@ -205,7 +205,10 @@ pub fn mvl_register_actor(h: MvlJoinHandle) {
 pub fn mvl_join_actors() {
     let kill_fns: Vec<KillFn> = {
         let reg = global_registry().lock().unwrap_or_else(|p| p.into_inner());
-        reg.controls.values().map(|c| Arc::clone(&c.kill_fn)).collect()
+        reg.controls
+            .values()
+            .map(|c| Arc::clone(&c.kill_fn))
+            .collect()
     };
     for kf in &kill_fns {
         kf();
