@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.222.1] - 2026-06-27
+
+### Fixed
+
+- **`loader`: skip `*_test.mvl` files when loading package sources** (#1586) — `load_pkg_modules` and `load_pkg_modules_tagged` iterated every `.mvl` file under a package's `src/` and `src/internal/` directories, including `*_test.mvl` test helpers. When a package's test file redefined a helper from the production source (with a different signature, as is common in unit tests), both versions were emitted into the generated Rust crate, causing rustc E0428 "defined multiple times" errors. Now match the user-side `mvl_files` behavior and exclude `*_test.mvl` from package loading; package test files are only relevant to their own package's `mvl test` runs.
+- **`std.runtime`: rename private `json_str` helper to avoid collision with `pkg.rest`** (#1586) — `std/runtime.mvl` defined `fn json_str` as a module-internal JSON-quoting helper. Because the Rust transpiler concatenates all prelude functions into a single Rust file, the name collided with `pkg.rest.json::json_str` whenever a program imported both `std.runtime` and `pkg.rest`. Renamed the private helper to `rt_json_quote`; no public API change.
+
 ## [0.222.0] - 2026-06-27
 
 ### Added

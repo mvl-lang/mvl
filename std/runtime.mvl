@@ -139,7 +139,7 @@ fn stdlib_profile_name(p: StdlibProfile) -> String {
 /// Wrap a string in JSON double-quotes with escaping.
 ///
 /// Uses `json_escape` from the implicit prelude (std/strings.mvl).
-fn json_str(s: String) -> String {
+fn rt_json_quote(s: String) -> String {
     "\"".concat(json_escape(s)).concat("\"")
 }
 
@@ -215,42 +215,42 @@ pub fn manifest_to_json(m: Manifest) -> String {
     let profile: String = stdlib_profile_name(m.stdlib_profile);
     let pkg_parts: ref List[String] = [];
     for p in m.packages {
-        let entry: String = "{\"name\":".concat(json_str(p.name))
-            .concat(",\"version\":").concat(json_str(p.version))
-            .concat(",\"purl\":").concat(json_str(p.purl))
-            .concat(",\"license\":").concat(json_str(p.license))
+        let entry: String = "{\"name\":".concat(rt_json_quote(p.name))
+            .concat(",\"version\":").concat(rt_json_quote(p.version))
+            .concat(",\"purl\":").concat(rt_json_quote(p.purl))
+            .concat(",\"license\":").concat(rt_json_quote(p.license))
             .concat("}");
         pkg_parts = pkg_parts.concat([entry])
     }
     let ffi_parts: ref List[String] = [];
     for f in m.ffi_bridges {
-        let entry: String = "{\"abi\":".concat(json_str(f.abi))
-            .concat(",\"name\":").concat(json_str(f.bridge_name))
-            .concat(",\"version\":").concat(json_str(f.bridge_version))
+        let entry: String = "{\"abi\":".concat(rt_json_quote(f.abi))
+            .concat(",\"name\":").concat(rt_json_quote(f.bridge_name))
+            .concat(",\"version\":").concat(rt_json_quote(f.bridge_version))
             .concat("}");
         ffi_parts = ffi_parts.concat([entry])
     }
     let rustc: String = match m.build.rustc_version {
-        Some(v) => json_str(v),
+        Some(v) => rt_json_quote(v),
         None    => "null",
     };
     let llvm: String = match m.build.llvm_version {
-        Some(v) => json_str(v),
+        Some(v) => rt_json_quote(v),
         None    => "null",
     };
-    "{\"app\":".concat(json_str(m.app_name))
-        .concat(",\"app_version\":").concat(json_str(m.app_version))
-        .concat(",\"mvl\":").concat(json_str(m.mvl_version))
-        .concat(",\"runtime\":").concat(json_str(m.runtime_version))
-        .concat(",\"stdlib\":").concat(json_str(m.stdlib_version))
-        .concat(",\"stdlib_profile\":").concat(json_str(profile))
-        .concat(",\"backend\":").concat(json_str(m.build.backend))
-        .concat(",\"built\":").concat(json_str(m.build.date))
+    "{\"app\":".concat(rt_json_quote(m.app_name))
+        .concat(",\"app_version\":").concat(rt_json_quote(m.app_version))
+        .concat(",\"mvl\":").concat(rt_json_quote(m.mvl_version))
+        .concat(",\"runtime\":").concat(rt_json_quote(m.runtime_version))
+        .concat(",\"stdlib\":").concat(rt_json_quote(m.stdlib_version))
+        .concat(",\"stdlib_profile\":").concat(rt_json_quote(profile))
+        .concat(",\"backend\":").concat(rt_json_quote(m.build.backend))
+        .concat(",\"built\":").concat(rt_json_quote(m.build.date))
         .concat(",\"rustc\":").concat(rustc)
         .concat(",\"llvm\":").concat(llvm)
         .concat(",\"packages\":[").concat(join_list(pkg_parts, ",")).concat("]")
         .concat(",\"ffi\":[").concat(join_list(ffi_parts, ",")).concat("]")
-        .concat(",\"source_digest\":").concat(json_str(m.source_digest))
+        .concat(",\"source_digest\":").concat(rt_json_quote(m.source_digest))
         .concat("}")
 }
 
