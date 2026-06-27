@@ -30,6 +30,12 @@ const LINE_WIDTH: usize = 100;
 /// `source` whose non-whitespace content starts with `//`.
 /// Blank lines are NOT included — the formatter inserts its own structural
 /// blank lines between declarations.
+///
+/// MVL-port note (#1581): `BTreeMap` is used here for [`std::collections::BTreeMap::range`]
+/// queries in [`Printer::flush_comments`].  MVL `Map[K, V]` is unordered AND has
+/// no range query — the port should store comments as a sorted `List[(Int, String)]`
+/// (insertion order is already sorted because we iterate `source.lines()`) and
+/// scan with a cursor.
 fn extract_comments(source: &str) -> BTreeMap<u32, String> {
     let mut map = BTreeMap::new();
     for (i, line) in source.lines().enumerate() {
@@ -46,6 +52,8 @@ fn extract_comments(source: &str) -> BTreeMap<u32, String> {
 pub struct Printer<'src> {
     out: String,
     indent: usize,
+    /// MVL-port note (#1581): `BTreeMap` used for range queries — see
+    /// [`extract_comments`] for the porting strategy.
     comments: BTreeMap<u32, String>,
     last_line: u32,
     source: &'src str,
