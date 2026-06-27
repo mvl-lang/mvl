@@ -252,29 +252,25 @@ fn process_one_message(cell: Arc<ActorCell>, local: &Worker<Arc<ActorCell>>) {
         return;
     }
 
-    // ExitSignal / DownSignal: consumed but not dispatched to user code (#1177 TODO).
-    // The LLVM backend has no user-visible signal-handling mechanism yet.
-    // Note: on bounded mailboxes these signals may be silently lost when push_msg
-    // returns false (mailbox full) — this is a known limitation.
-
-    if msg.disc >= 0 {
-        // ── User message: call the actor's dispatch function ──────────────
-        // Safety: `state` is only accessed here, and only one worker holds the
-        // `scheduled = true` token, so there is no concurrent access.
-        let state_ptr = unsafe { (*cell.state.get()).as_mut_ptr() };
-        let result = catch_unwind(AssertUnwindSafe(|| {
-            unsafe { (cell.dispatch)(state_ptr, msg.disc, msg.args.as_ptr()) };
-        }));
-        if result.is_err() {
-            // Actor panicked: drain and exit.
-            cell.mailbox
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .clear();
-            cell.scheduled.store(false, Ordering::Release);
-            process_actor_exit(cell.actor_id, 1); // Panic
-            return;
-        }
+    // Route all non-shutdown messages through the actor's dispatch function.
+    // The generated dispatch switch handles user behaviors (disc >= 0) and signal
+    // handlers (disc=-2 ExitSignal, disc=-3 DownSignal) via named BBs; unknown
+    // discriminants fall to `default: ret void` (#1597).
+    // Safety: `state` is only accessed here, and only one worker holds the
+    // `scheduled = true` token, so there is no concurrent access.
+    let state_ptr = unsafe { (*cell.state.get()).as_mut_ptr() };
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        unsafe { (cell.dispatch)(state_ptr, msg.disc, msg.args.as_ptr()) };
+    }));
+    if result.is_err() {
+        // Actor panicked: drain and exit.
+        cell.mailbox
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clear();
+        cell.scheduled.store(false, Ordering::Release);
+        process_actor_exit(cell.actor_id, 1); // Panic
+        return;
     }
 
     // ── Re-schedule or go idle ────────────────────────────────────────────
