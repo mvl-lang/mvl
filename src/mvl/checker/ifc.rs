@@ -39,8 +39,7 @@ use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::types::Ty;
 use crate::mvl::checker::walk::walk_block;
 use crate::mvl::parser::ast::{
-    Block, Decl, ElseBranch, Expr, MatchArm, MatchBody, Pattern, Program, SelectArm, Stmt,
-    TypeExpr,
+    Block, Decl, ElseBranch, Expr, MatchArm, MatchBody, Pattern, Program, SelectArm, Stmt, TypeExpr,
 };
 use crate::mvl::parser::lexer::Span;
 use crate::mvl::parser::visit::{walk_expr, walk_stmt, Visit};
@@ -743,12 +742,7 @@ impl<'a, 'ast> IfcFlowAnalyzer<'a, 'ast> {
         }
     }
 
-    fn visit_if_flow(
-        &mut self,
-        cond: &'ast Expr,
-        then: &'ast Block,
-        else_: Option<&'ast Expr>,
-    ) {
+    fn visit_if_flow(&mut self, cond: &'ast Expr, then: &'ast Block, else_: Option<&'ast Expr>) {
         let cond_label = infer_label(cond, &self.env);
         let body_pc = join_opt(self.pc.clone(), cond_label);
         self.visit_expr(cond);
