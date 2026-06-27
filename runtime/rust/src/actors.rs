@@ -21,8 +21,9 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{mpsc, Arc, Mutex, OnceLock};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{mpsc, Arc, Mutex, OnceLock, Weak};
+use std::time::Duration;
 use std::thread;
 
 type KillFn = Arc<dyn Fn() + Send + Sync>;
@@ -67,16 +68,70 @@ enum SenderInner<M: Send + 'static> {
     Unbounded(mpsc::Sender<M>),
 }
 
+// ── Per-channel cascade-quiescence accounting ─────────────────────────────
+//
+// Because actors hold a strong `_self_ref` to their own mailbox (so behaviors
+// can pass `self` as a tag argument without racing shutdown), channels no
+// longer auto-close from "all senders dropped".  Shutdown is therefore driven
+// by `_Shutdown` messages, but to preserve cascade ordering we must not send
+// `_Shutdown` until all in-flight cross-actor messages have been processed.
+//
+// Each channel owns an `Arc<ChannelMeta>` shared by its sender and receiver:
+//   - `send()`             increments `pending`
+//   - the dispatch loop    decrements `pending` after each message
+//
+// Counters are per-channel, not global — different actor pairs do not
+// contend on the same cache line.  `mvl_join_actors` polls every live
+// channel through a weak registry before sending `_Shutdown`.
+pub(crate) struct ChannelMeta {
+    pending: AtomicUsize,
+}
+
+fn channel_metas() -> &'static Mutex<Vec<Weak<ChannelMeta>>> {
+    static REG: OnceLock<Mutex<Vec<Weak<ChannelMeta>>>> = OnceLock::new();
+    REG.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn register_channel_meta(meta: &Arc<ChannelMeta>) {
+    let mut reg = channel_metas().lock().unwrap_or_else(|p| p.into_inner());
+    reg.push(Arc::downgrade(meta));
+}
+
+fn pending_total() -> usize {
+    let mut reg = channel_metas().lock().unwrap_or_else(|p| p.into_inner());
+    let mut total = 0usize;
+    reg.retain(|w| w.strong_count() > 0);
+    for w in reg.iter() {
+        if let Some(m) = w.upgrade() {
+            total += m.pending.load(Ordering::Acquire);
+        }
+    }
+    total
+}
+
+fn wait_cascade_quiescence() {
+    // Poll-based: cheap (only during shutdown), no per-send signal wakeups.
+    while pending_total() > 0 {
+        thread::sleep(Duration::from_millis(1));
+    }
+}
+
 // ── Public types ────────────────────────────────────────────────────────────
 
 /// Cloneable actor handle — cheap to share across threads.
 ///
 /// Created by [`mvl_channel`]; stored as the `_sender` field of every actor
 /// handle struct emitted by the Rust backend.
-pub struct MvlSender<M: Send + 'static>(Arc<SenderInner<M>>);
+pub struct MvlSender<M: Send + 'static> {
+    inner: Arc<SenderInner<M>>,
+    meta: Arc<ChannelMeta>,
+}
 
 /// Receiving end of an actor mailbox — owned by the actor thread.
-pub struct MvlReceiver<M: Send + 'static>(mpsc::Receiver<M>);
+pub struct MvlReceiver<M: Send + 'static> {
+    rx: mpsc::Receiver<M>,
+    meta: Arc<ChannelMeta>,
+}
 
 /// Opaque join handle — returned by [`mvl_spawn`], consumed by [`mvl_register_actor`].
 pub struct MvlJoinHandle(thread::JoinHandle<()>);
@@ -90,23 +145,28 @@ impl<M: Send + 'static> MvlSender<M> {
     /// - `BoundedBlock`: blocks the caller until space is available.
     /// - `Unbounded`: never blocks; queue grows without bound.
     pub fn send(&self, msg: M) {
-        match self.0.as_ref() {
-            SenderInner::BoundedDrop(tx) => {
-                let _ = tx.try_send(msg);
-            }
-            SenderInner::BoundedBlock(tx) => {
-                let _ = tx.send(msg);
-            }
-            SenderInner::Unbounded(tx) => {
-                let _ = tx.send(msg);
-            }
+        // Track in-flight before enqueue so a cascade quiescence probe sees the
+        // message immediately.  Decrement only after the receiver processes it.
+        self.meta.pending.fetch_add(1, Ordering::Release);
+        let delivered = match self.inner.as_ref() {
+            SenderInner::BoundedDrop(tx) => tx.try_send(msg).is_ok(),
+            SenderInner::BoundedBlock(tx) => tx.send(msg).is_ok(),
+            SenderInner::Unbounded(tx) => tx.send(msg).is_ok(),
+        };
+        if !delivered {
+            // Queue full (BoundedDrop) or receiver dead — message will never be
+            // dispatched, so the in-flight counter must roll back.
+            self.meta.pending.fetch_sub(1, Ordering::Release);
         }
     }
 }
 
 impl<M: Send + 'static> Clone for MvlSender<M> {
     fn clone(&self) -> Self {
-        MvlSender(Arc::clone(&self.0))
+        MvlSender {
+            inner: Arc::clone(&self.inner),
+            meta: Arc::clone(&self.meta),
+        }
     }
 }
 
@@ -114,7 +174,10 @@ impl<M: Send + 'static> MvlSender<M> {
     /// Create a weak reference to this sender.  The weak ref does not prevent
     /// the channel from closing when all strong (`MvlSender`) clones are dropped.
     pub fn downgrade(&self) -> MvlWeakSender<M> {
-        MvlWeakSender(Arc::downgrade(&self.0))
+        MvlWeakSender {
+            inner: Arc::downgrade(&self.inner),
+            meta: Arc::clone(&self.meta),
+        }
     }
 }
 
@@ -122,18 +185,27 @@ impl<M: Send + 'static> MvlSender<M> {
 /// behaviors can pass `self` as a tag argument without keeping the channel open.
 /// When all external `MvlSender` handles are dropped the channel disconnects
 /// and `MvlReceiver::recv()` returns `None` regardless of any live weak refs.
-pub struct MvlWeakSender<M: Send + 'static>(std::sync::Weak<SenderInner<M>>);
+pub struct MvlWeakSender<M: Send + 'static> {
+    inner: Weak<SenderInner<M>>,
+    meta: Arc<ChannelMeta>,
+}
 
 impl<M: Send + 'static> Clone for MvlWeakSender<M> {
     fn clone(&self) -> Self {
-        MvlWeakSender(self.0.clone())
+        MvlWeakSender {
+            inner: self.inner.clone(),
+            meta: Arc::clone(&self.meta),
+        }
     }
 }
 
 impl<M: Send + 'static> MvlWeakSender<M> {
     /// Upgrade to a strong sender, or `None` if all external handles are gone.
     pub fn upgrade(&self) -> Option<MvlSender<M>> {
-        self.0.upgrade().map(MvlSender)
+        self.inner.upgrade().map(|inner| MvlSender {
+            inner,
+            meta: Arc::clone(&self.meta),
+        })
     }
 }
 
@@ -143,7 +215,13 @@ impl<M: Send + 'static> MvlReceiver<M> {
     /// Block until the next message arrives, or return `None` when all senders
     /// have been dropped (actor shutdown signal).
     pub fn recv(&self) -> Option<M> {
-        self.0.recv().ok()
+        self.rx.recv().ok()
+    }
+
+    /// Decrement the in-flight counter — called by the dispatch loop after the
+    /// behavior for a message has returned.
+    pub fn ack(&self) {
+        self.meta.pending.fetch_sub(1, Ordering::Release);
     }
 }
 
@@ -160,12 +238,13 @@ pub fn mvl_channel<M: Send + 'static>(
     capacity: i64,
     policy: i64,
 ) -> (MvlSender<M>, MvlReceiver<M>) {
-    if capacity <= 0 {
+    let meta = Arc::new(ChannelMeta {
+        pending: AtomicUsize::new(0),
+    });
+    register_channel_meta(&meta);
+    let (inner, rx) = if capacity <= 0 {
         let (tx, rx) = mpsc::channel();
-        (
-            MvlSender(Arc::new(SenderInner::Unbounded(tx))),
-            MvlReceiver(rx),
-        )
+        (Arc::new(SenderInner::Unbounded(tx)), rx)
     } else {
         let (tx, rx) = mpsc::sync_channel(capacity as usize);
         let inner = if policy == 1 {
@@ -173,8 +252,15 @@ pub fn mvl_channel<M: Send + 'static>(
         } else {
             SenderInner::BoundedDrop(tx)
         };
-        (MvlSender(Arc::new(inner)), MvlReceiver(rx))
-    }
+        (Arc::new(inner), rx)
+    };
+    (
+        MvlSender {
+            inner,
+            meta: Arc::clone(&meta),
+        },
+        MvlReceiver { rx, meta },
+    )
 }
 
 // ── Spawn and lifecycle ────────────────────────────────────────────────────
@@ -203,6 +289,11 @@ pub fn mvl_register_actor(h: MvlJoinHandle) {
 /// 2. Clear the registry to release kill/exit/down sender clones.
 /// 3. Join every actor thread.
 pub fn mvl_join_actors() {
+    // Cascade-quiescence wait: actors hold strong `_self_ref` clones, so we
+    // cannot rely on "all senders dropped" to close channels.  Instead, wait
+    // until every channel reports zero in-flight messages — only then is
+    // `_Shutdown` guaranteed to land FIFO-after any pending user work.
+    wait_cascade_quiescence();
     let kill_fns: Vec<KillFn> = {
         let reg = global_registry().lock().unwrap_or_else(|p| p.into_inner());
         reg.controls
@@ -261,7 +352,9 @@ where
             // Linked actor: catch panics, process exit signals.
             let result = catch_unwind(AssertUnwindSafe(|| {
                 while let Some(msg) = rx.recv() {
-                    if !dispatch(&mut actor, msg) {
+                    let cont = dispatch(&mut actor, msg);
+                    rx.ack();
+                    if !cont {
                         return false; // shutdown requested (_self_ref nulled by handler)
                     }
                 }
@@ -276,7 +369,9 @@ where
         } else {
             // Legacy path (actor_id == 0): no link/monitor support.
             while let Some(msg) = rx.recv() {
-                if !dispatch(&mut actor, msg) {
+                let cont = dispatch(&mut actor, msg);
+                rx.ack();
+                if !cont {
                     break;
                 }
             }
