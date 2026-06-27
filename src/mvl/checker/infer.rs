@@ -351,6 +351,18 @@ impl TypeChecker {
                     });
                     return Ty::Unknown;
                 }
+                // #1588: `?` requires the enclosing fn to return Result/Option, matching
+                // Rust's FromResidual rule — otherwise the transpiler emits invalid Rust.
+                if let Some(ret_ty) = self.fn_context().return_ty.clone() {
+                    let ret_base = ret_ty.unlabeled();
+                    if !ret_base.is_propagatable() && !matches!(ret_base, Ty::Unknown) {
+                        self.emit(CheckError::PropagateInNonResultFn {
+                            ret_ty: ret_ty.display(),
+                            span: *span,
+                        });
+                        return ty.propagate_inner();
+                    }
+                }
                 // If both the expression and enclosing function return Result types,
                 // verify error types are compatible — either identical or convertible via From.
                 if let (Ty::Result(_, expr_err), Some(Ty::Result(_, ret_err))) = (

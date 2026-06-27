@@ -329,6 +329,24 @@ fn propagate_on_non_result_rejected() {
     );
 }
 
+#[test]
+fn propagate_in_unit_returning_fn_rejected() {
+    // #1588: `?` is invalid when the enclosing fn does not return Result/Option.
+    // GIVEN: a Result-returning callee and an enclosing fn returning Unit
+    // THEN: PropagateInNonResultFn reported (mirrors Rust's FromResidual rule).
+    let src = "\
+fn parse(s: String) -> Result[Int, String] { Ok(42) }
+fn caller() -> Unit { let _v: Int = parse(\"hi\")?; }
+";
+    let errors = errors_for(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CheckError::PropagateInNonResultFn { .. })),
+        "expected PropagateInNonResultFn, got: {errors:?}"
+    );
+}
+
 // ── #17: Immutability enforcement (Requirement 6) ────────────────────────────
 
 #[test]
