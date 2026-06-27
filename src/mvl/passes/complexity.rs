@@ -356,4 +356,3 @@ pub fn print_json(reports: &[ComplexityReport]) {
     }
     println!("]");
 }
-

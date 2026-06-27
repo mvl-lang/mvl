@@ -33,6 +33,7 @@
 //! This replaces the previous `sink` keyword approach (#1007).
 
 use std::collections::{HashMap, HashSet};
+use std::marker::PhantomData;
 
 use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::types::Ty;
@@ -40,6 +41,8 @@ use crate::mvl::checker::walk::walk_block;
 use crate::mvl::parser::ast::{
     Block, Decl, ElseBranch, Expr, MatchBody, Pattern, Program, Stmt, TypeExpr,
 };
+use crate::mvl::parser::lexer::Span;
+use crate::mvl::parser::visit::{walk_expr, walk_stmt, Visit};
 
 /// Extract the outermost security label from a type, if any.
 /// Looks through Refined wrappers to find the label.
@@ -289,7 +292,7 @@ pub fn check_implicit_flows(
                         env.insert(param.name.clone(), label);
                     }
                 }
-                check_block_flows(&fd.body, None, &mut env, &fd.name, &effect_reach, errors);
+                IfcFlowAnalyzer::new(env, &fd.name, &effect_reach, errors).visit_block(&fd.body);
             }
             Decl::Impl(id) => {
                 for m in &id.methods {
@@ -300,7 +303,7 @@ pub fn check_implicit_flows(
                         }
                     }
                     let fn_name = format!("{}::{}", id.type_name, m.name);
-                    check_block_flows(&m.body, None, &mut env, &fn_name, &effect_reach, errors);
+                    IfcFlowAnalyzer::new(env, &fn_name, &effect_reach, errors).visit_block(&m.body);
                 }
             }
             Decl::Actor(ad) => {
@@ -312,7 +315,7 @@ pub fn check_implicit_flows(
                         }
                     }
                     let fn_name = format!("{}::{}", ad.name, m.name);
-                    check_block_flows(&m.body, None, &mut env, &fn_name, &effect_reach, errors);
+                    IfcFlowAnalyzer::new(env, &fn_name, &effect_reach, errors).visit_block(&m.body);
                 }
             }
             _ => {}
@@ -618,341 +621,247 @@ fn is_high_opt(label: &Option<String>) -> bool {
     label.is_some()
 }
 
-/// Walk a block, tracking the current PC label and the label env.
-/// Let bindings extend the env sequentially within the block.
-fn check_block_flows(
-    block: &Block,
+/// Per-function IFC flow analyzer.  Tracks the program-counter (PC) label and
+/// the label environment as it walks the AST, reporting implicit-flow violations
+/// into a shared error vector.
+///
+/// Replaces three previously hand-rolled walkers (`check_block_flows`,
+/// `check_stmt_flows`, `check_expr_flows`) so that new AST variants force a
+/// deliberate include/exclude decision at the visitor level rather than a silent
+/// skip (see [`crate::mvl::parser::visit`]).
+struct IfcFlowAnalyzer<'a, 'ast> {
     pc: Option<String>,
-    env: &mut HashMap<String, String>,
-    caller_fn: &str,
-    effect_reach: &HashMap<String, String>,
-    errors: &mut Vec<CheckError>,
-) {
-    for stmt in &block.stmts {
-        check_stmt_flows(stmt, pc.clone(), env, caller_fn, effect_reach, errors);
-    }
+    env: HashMap<String, String>,
+    caller_fn: &'a str,
+    effect_reach: &'a HashMap<String, String>,
+    errors: &'a mut Vec<CheckError>,
+    _marker: PhantomData<&'ast ()>,
 }
 
-fn check_stmt_flows(
-    stmt: &Stmt,
-    pc: Option<String>,
-    env: &mut HashMap<String, String>,
-    caller_fn: &str,
-    effect_reach: &HashMap<String, String>,
-    errors: &mut Vec<CheckError>,
-) {
-    match stmt {
-        Stmt::Let {
-            pattern, ty, init, ..
-        } => {
-            // Walk the RHS under the current PC label.
-            check_expr_flows(init, pc, env, caller_fn, effect_reach, errors);
-            // Extend the label env; use recursive helper so nested patterns
-            // like `(Some(a), b)` are fully bound.
-            let label = label_of_type_expr(ty).or_else(|| infer_label(init, env));
-            if let Some(l) = label {
-                bind_pattern_labels(pattern, &l, env);
-            }
+impl<'a, 'ast> IfcFlowAnalyzer<'a, 'ast> {
+    fn new(
+        env: HashMap<String, String>,
+        caller_fn: &'a str,
+        effect_reach: &'a HashMap<String, String>,
+        errors: &'a mut Vec<CheckError>,
+    ) -> Self {
+        Self {
+            pc: None,
+            env,
+            caller_fn,
+            effect_reach,
+            errors,
+            _marker: PhantomData,
         }
-        Stmt::Assign { value, .. } => {
-            check_expr_flows(value, pc, env, caller_fn, effect_reach, errors);
-        }
-        Stmt::Return { value: Some(e), .. } => {
-            check_expr_flows(e, pc, env, caller_fn, effect_reach, errors);
-        }
-        Stmt::Return { value: None, .. } => {}
-        Stmt::Expr { expr, .. } => {
-            check_expr_flows(expr, pc, env, caller_fn, effect_reach, errors);
-        }
-        Stmt::If {
-            cond, then, else_, ..
-        } => {
-            let cond_label = infer_label(cond, env);
-            let body_pc = join_opt(pc.clone(), cond_label);
-            check_expr_flows(cond, pc.clone(), env, caller_fn, effect_reach, errors);
-            let mut then_env = env.clone();
-            check_block_flows(
-                then,
-                body_pc.clone(),
-                &mut then_env,
-                caller_fn,
-                effect_reach,
-                errors,
-            );
-            match else_ {
-                Some(ElseBranch::Block(blk)) => {
-                    let mut else_env = env.clone();
-                    check_block_flows(blk, body_pc, &mut else_env, caller_fn, effect_reach, errors);
-                }
-                Some(ElseBranch::If(nested)) => {
-                    let mut else_env = env.clone();
-                    check_stmt_flows(
-                        nested,
-                        body_pc,
-                        &mut else_env,
-                        caller_fn,
-                        effect_reach,
-                        errors,
-                    );
-                }
-                None => {}
-            }
-        }
-        Stmt::Match {
-            scrutinee, arms, ..
-        } => {
-            let scr_label = infer_label(scrutinee, env);
-            let body_pc = join_opt(pc.clone(), scr_label);
-            check_expr_flows(scrutinee, pc, env, caller_fn, effect_reach, errors);
-            for arm in arms {
-                let mut arm_env = env.clone();
-                match &arm.body {
-                    MatchBody::Expr(expr) => check_expr_flows(
-                        expr,
-                        body_pc.clone(),
-                        &mut arm_env,
-                        caller_fn,
-                        effect_reach,
-                        errors,
-                    ),
-                    MatchBody::Block(blk) => check_block_flows(
-                        blk,
-                        body_pc.clone(),
-                        &mut arm_env,
-                        caller_fn,
-                        effect_reach,
-                        errors,
-                    ),
-                }
-            }
-        }
-        Stmt::While { cond, body, .. } => {
-            let cond_label = infer_label(cond, env);
-            let body_pc = join_opt(pc.clone(), cond_label);
-            check_expr_flows(cond, pc, env, caller_fn, effect_reach, errors);
-            let mut body_env = env.clone();
-            check_block_flows(
-                body,
-                body_pc,
-                &mut body_env,
-                caller_fn,
-                effect_reach,
-                errors,
-            );
-        }
-        // Fix #858: bind the for-loop pattern variable to the iterator label so
-        // that uses inside the body see the correct security label.
-        Stmt::For {
-            pattern,
-            iter,
-            body,
-            ..
-        } => {
-            let iter_label = infer_label(iter, env);
-            let body_pc = join_opt(pc.clone(), iter_label.clone());
-            check_expr_flows(iter, pc, env, caller_fn, effect_reach, errors);
-            let mut body_env = env.clone();
-            if let Some(l) = iter_label {
-                bind_pattern_labels(pattern, &l, &mut body_env);
-            }
-            check_block_flows(
-                body,
-                body_pc,
-                &mut body_env,
-                caller_fn,
-                effect_reach,
-                errors,
-            );
+    }
+
+    /// Save `pc` and `env`, swap in `new_pc`, run `f`, then restore both.
+    /// Used for `if`/`match`/loop branches: each branch sees a forked env and
+    /// pc but cannot leak bindings or pc state back to the caller.
+    fn in_branch<F: FnOnce(&mut Self)>(&mut self, new_pc: Option<String>, f: F) {
+        let saved_env = self.env.clone();
+        let saved_pc = std::mem::replace(&mut self.pc, new_pc);
+        f(self);
+        self.env = saved_env;
+        self.pc = saved_pc;
+    }
+
+    /// Save `pc`, swap in `new_pc`, run `f`, restore.  Lambda bodies reset
+    /// `pc` to `None` because they execute later, decoupled from the surrounding
+    /// control-flow context.
+    fn in_pc<F: FnOnce(&mut Self)>(&mut self, new_pc: Option<String>, f: F) {
+        let saved = std::mem::replace(&mut self.pc, new_pc);
+        f(self);
+        self.pc = saved;
+    }
+
+    fn report_implicit_flow(&mut self, callee: &str, observable: &str, span: Span) {
+        let pc_label = self.pc.as_deref().unwrap_or("labeled").to_string();
+        if observable == callee {
+            self.errors.push(CheckError::ImplicitFlowViolation {
+                pc_label,
+                observable_fn: callee.to_string(),
+                span,
+            });
+        } else {
+            self.errors
+                .push(CheckError::CrossFunctionImplicitFlowViolation {
+                    pc_label,
+                    caller: self.caller_fn.to_string(),
+                    callee: callee.to_string(),
+                    observable_fn: observable.to_string(),
+                    span,
+                });
         }
     }
 }
 
-fn check_expr_flows(
-    expr: &Expr,
-    pc: Option<String>,
-    env: &mut HashMap<String, String>,
-    caller_fn: &str,
-    effect_reach: &HashMap<String, String>,
-    errors: &mut Vec<CheckError>,
-) {
-    match expr {
-        Expr::FnCall {
-            name, args, span, ..
-        } => {
-            if is_high_opt(&pc) {
-                if let Some(observable) = effect_reach.get(name.as_str()) {
-                    if observable == name {
-                        // Direct observable (effectful) fn under high PC — implicit flow.
-                        errors.push(CheckError::ImplicitFlowViolation {
-                            pc_label: pc.as_deref().unwrap_or("labeled").to_string(),
-                            observable_fn: name.clone(),
-                            span: *span,
-                        });
-                    } else {
-                        // Callee transitively reaches an observable fn — cross-function implicit flow.
-                        errors.push(CheckError::CrossFunctionImplicitFlowViolation {
-                            pc_label: pc.as_deref().unwrap_or("labeled").to_string(),
-                            caller: caller_fn.to_string(),
-                            callee: name.clone(),
-                            observable_fn: observable.clone(),
-                            span: *span,
-                        });
+impl<'a, 'ast> Visit<'ast> for IfcFlowAnalyzer<'a, 'ast> {
+    fn visit_stmt(&mut self, s: &'ast Stmt) {
+        match s {
+            Stmt::Let {
+                pattern, ty, init, ..
+            } => {
+                self.visit_expr(init);
+                let label = label_of_type_expr(ty).or_else(|| infer_label(init, &self.env));
+                if let Some(l) = label {
+                    bind_pattern_labels(pattern, &l, &mut self.env);
+                }
+            }
+            Stmt::If {
+                cond, then, else_, ..
+            } => {
+                let cond_label = infer_label(cond, &self.env);
+                let body_pc = join_opt(self.pc.clone(), cond_label);
+                self.visit_expr(cond);
+                self.in_branch(body_pc.clone(), |a| a.visit_block(then));
+                match else_ {
+                    Some(ElseBranch::Block(blk)) => {
+                        self.in_branch(body_pc, |a| a.visit_block(blk));
+                    }
+                    Some(ElseBranch::If(nested)) => {
+                        self.in_branch(body_pc, |a| a.visit_stmt(nested));
+                    }
+                    None => {}
+                }
+            }
+            Stmt::Match {
+                scrutinee, arms, ..
+            } => {
+                let scr_label = infer_label(scrutinee, &self.env);
+                let body_pc = join_opt(self.pc.clone(), scr_label);
+                self.visit_expr(scrutinee);
+                for arm in arms {
+                    self.in_branch(body_pc.clone(), |a| match &arm.body {
+                        MatchBody::Expr(expr) => a.visit_expr(expr),
+                        MatchBody::Block(blk) => a.visit_block(blk),
+                    });
+                }
+            }
+            Stmt::While { cond, body, .. } => {
+                let cond_label = infer_label(cond, &self.env);
+                let body_pc = join_opt(self.pc.clone(), cond_label);
+                self.visit_expr(cond);
+                self.in_branch(body_pc, |a| a.visit_block(body));
+            }
+            Stmt::For {
+                pattern,
+                iter,
+                body,
+                ..
+            } => {
+                let iter_label = infer_label(iter, &self.env);
+                let body_pc = join_opt(self.pc.clone(), iter_label.clone());
+                self.visit_expr(iter);
+                self.in_branch(body_pc, |a| {
+                    if let Some(l) = iter_label {
+                        bind_pattern_labels(pattern, &l, &mut a.env);
+                    }
+                    a.visit_block(body);
+                });
+            }
+            // Assign / Return / Expr — no scoped state changes; the default
+            // walker handles inner-expr recursion under the current pc and env.
+            _ => walk_stmt(self, s),
+        }
+    }
+
+    fn visit_expr(&mut self, e: &'ast Expr) {
+        match e {
+            Expr::FnCall {
+                name, args, span, ..
+            } => {
+                if is_high_opt(&self.pc) {
+                    if let Some(observable) = self.effect_reach.get(name.as_str()).cloned() {
+                        self.report_implicit_flow(name, &observable, *span);
                     }
                 }
-            }
-            for arg in args {
-                check_expr_flows(arg, pc.clone(), env, caller_fn, effect_reach, errors);
-            }
-        }
-        Expr::If {
-            cond, then, else_, ..
-        } => {
-            let cond_label = infer_label(cond, env);
-            let body_pc = join_opt(pc.clone(), cond_label);
-            check_expr_flows(cond, pc, env, caller_fn, effect_reach, errors);
-            let mut then_env = env.clone();
-            check_block_flows(
-                then,
-                body_pc.clone(),
-                &mut then_env,
-                caller_fn,
-                effect_reach,
-                errors,
-            );
-            if let Some(e) = else_ {
-                let mut else_env = env.clone();
-                check_expr_flows(e, body_pc, &mut else_env, caller_fn, effect_reach, errors);
-            }
-        }
-        Expr::Match {
-            scrutinee, arms, ..
-        } => {
-            let scr_label = infer_label(scrutinee, env);
-            let body_pc = join_opt(pc.clone(), scr_label);
-            check_expr_flows(scrutinee, pc, env, caller_fn, effect_reach, errors);
-            for arm in arms {
-                let mut arm_env = env.clone();
-                match &arm.body {
-                    MatchBody::Expr(e) => check_expr_flows(
-                        e,
-                        body_pc.clone(),
-                        &mut arm_env,
-                        caller_fn,
-                        effect_reach,
-                        errors,
-                    ),
-                    MatchBody::Block(blk) => check_block_flows(
-                        blk,
-                        body_pc.clone(),
-                        &mut arm_env,
-                        caller_fn,
-                        effect_reach,
-                        errors,
-                    ),
+                for arg in args {
+                    self.visit_expr(arg);
                 }
             }
-        }
-        Expr::Binary { left, right, .. } => {
-            check_expr_flows(left, pc.clone(), env, caller_fn, effect_reach, errors);
-            check_expr_flows(right, pc, env, caller_fn, effect_reach, errors);
-        }
-        Expr::Unary { expr, .. }
-        | Expr::Relabel { expr, .. }
-        | Expr::Consume { expr, .. }
-        | Expr::Propagate { expr, .. }
-        | Expr::FieldAccess { expr, .. }
-        | Expr::Borrow { expr, .. }
-        | Expr::As { expr, .. } => {
-            check_expr_flows(expr, pc, env, caller_fn, effect_reach, errors);
-        }
-        Expr::MethodCall {
-            receiver,
-            method,
-            args,
-            span,
-            ..
-        } => {
-            // Method calls: check for implicit flow using qualified name in effect_reach (#1007).
-            if is_high_opt(&pc) {
-                // Build candidate qualified names matching collect_calls_in_expr / collect_effectful_names.
-                let mut qualified_names: Vec<String> = vec![method.clone()];
-                if let Expr::Ident(recv_name, _) = receiver.as_ref() {
-                    qualified_names.push(format!("{recv_name}::{method}"));
-                }
-                // Also match Type::method keys where the method name matches,
-                // since the receiver is a variable name but observable fns are registered
-                // by type name (e.g. "Logger::info" vs "logger.info()").
-                let method_suffix = format!("::{method}");
-                for key in effect_reach.keys() {
-                    if key.ends_with(&method_suffix) && !qualified_names.contains(key) {
-                        qualified_names.push(key.clone());
+            Expr::MethodCall {
+                receiver,
+                method,
+                args,
+                span,
+                ..
+            } => {
+                // Method calls: check for implicit flow using qualified name in
+                // effect_reach (#1007).  Build candidate qualified names matching
+                // collect_calls_in_expr / collect_effectful_names: bare method,
+                // recv-as-ident qualifier, and any Type::method key whose suffix
+                // matches the method name.
+                if is_high_opt(&self.pc) {
+                    let mut qualified_names: Vec<String> = vec![method.clone()];
+                    if let Expr::Ident(recv_name, _) = receiver.as_ref() {
+                        qualified_names.push(format!("{recv_name}::{method}"));
                     }
-                }
-                for qn in &qualified_names {
-                    if let Some(observable) = effect_reach.get(qn.as_str()) {
-                        if observable == qn {
-                            errors.push(CheckError::ImplicitFlowViolation {
-                                pc_label: pc.as_deref().unwrap_or("labeled").to_string(),
-                                observable_fn: qn.clone(),
-                                span: *span,
-                            });
-                        } else {
-                            errors.push(CheckError::CrossFunctionImplicitFlowViolation {
-                                pc_label: pc.as_deref().unwrap_or("labeled").to_string(),
-                                caller: caller_fn.to_string(),
-                                callee: qn.clone(),
-                                observable_fn: observable.clone(),
-                                span: *span,
-                            });
+                    let method_suffix = format!("::{method}");
+                    for key in self.effect_reach.keys() {
+                        if key.ends_with(&method_suffix) && !qualified_names.contains(key) {
+                            qualified_names.push(key.clone());
                         }
-                        break;
+                    }
+                    for qn in &qualified_names {
+                        if let Some(observable) = self.effect_reach.get(qn.as_str()).cloned() {
+                            self.report_implicit_flow(qn, &observable, *span);
+                            break;
+                        }
+                    }
+                }
+                self.visit_expr(receiver);
+                for arg in args {
+                    self.visit_expr(arg);
+                }
+            }
+            Expr::If {
+                cond, then, else_, ..
+            } => {
+                let cond_label = infer_label(cond, &self.env);
+                let body_pc = join_opt(self.pc.clone(), cond_label);
+                self.visit_expr(cond);
+                self.in_branch(body_pc.clone(), |a| a.visit_block(then));
+                if let Some(e) = else_ {
+                    self.in_branch(body_pc, |a| a.visit_expr(e));
+                }
+            }
+            Expr::Match {
+                scrutinee, arms, ..
+            } => {
+                let scr_label = infer_label(scrutinee, &self.env);
+                let body_pc = join_opt(self.pc.clone(), scr_label);
+                self.visit_expr(scrutinee);
+                for arm in arms {
+                    self.in_branch(body_pc.clone(), |a| match &arm.body {
+                        MatchBody::Expr(e) => a.visit_expr(e),
+                        MatchBody::Block(blk) => a.visit_block(blk),
+                    });
+                }
+            }
+            Expr::Lambda { body, .. } => {
+                // Lambdas capture the outer env but reset pc (they are called later).
+                self.in_pc(None, |a| a.visit_expr(body));
+            }
+            Expr::Block(blk) => {
+                // Block opens a new variable scope: clone env, walk, drop the clone.
+                let saved_env = self.env.clone();
+                self.visit_block(blk);
+                self.env = saved_env;
+            }
+            Expr::Select { arms, .. } => {
+                for arm in arms {
+                    self.visit_expr(&arm.expr);
+                    for stmt in &arm.body.stmts {
+                        self.visit_stmt(stmt);
                     }
                 }
             }
-            check_expr_flows(receiver, pc.clone(), env, caller_fn, effect_reach, errors);
-            for arg in args {
-                check_expr_flows(arg, pc.clone(), env, caller_fn, effect_reach, errors);
-            }
+            // Leaves and structural cases (Binary, Unary, Field/As/Borrow/Relabel,
+            // Propagate, Consume, Construct, List, Set, Map, Spawn, Literal, Ident,
+            // Quantifier) — the default walker recurses under the current pc/env.
+            _ => walk_expr(self, e),
         }
-        Expr::Block(blk) => {
-            let mut blk_env = env.clone();
-            check_block_flows(blk, pc, &mut blk_env, caller_fn, effect_reach, errors);
-        }
-        Expr::Lambda { body, .. } => {
-            // Lambdas capture the outer env but reset pc (they are called later).
-            check_expr_flows(body, None, env, caller_fn, effect_reach, errors);
-        }
-        Expr::Construct { fields, .. } => {
-            for (_, v) in fields {
-                check_expr_flows(v, pc.clone(), env, caller_fn, effect_reach, errors);
-            }
-        }
-        Expr::List { elems, .. } | Expr::Set { elems, .. } => {
-            for e in elems {
-                check_expr_flows(e, pc.clone(), env, caller_fn, effect_reach, errors);
-            }
-        }
-        Expr::Map { pairs, .. } => {
-            for (k, v) in pairs {
-                check_expr_flows(k, pc.clone(), env, caller_fn, effect_reach, errors);
-                check_expr_flows(v, pc.clone(), env, caller_fn, effect_reach, errors);
-            }
-        }
-        Expr::Spawn { fields, .. } => {
-            for (_, v) in fields {
-                check_expr_flows(v, pc.clone(), env, caller_fn, effect_reach, errors);
-            }
-        }
-        Expr::Select { arms, .. } => {
-            for arm in arms {
-                check_expr_flows(&arm.expr, pc.clone(), env, caller_fn, effect_reach, errors);
-                for stmt in &arm.body.stmts {
-                    check_stmt_flows(stmt, pc.clone(), env, caller_fn, effect_reach, errors);
-                }
-            }
-        }
-        // Leaves — no sub-expressions to walk.
-        Expr::Literal(..) | Expr::Ident(..) | Expr::Quantifier(..) => {}
     }
 }
 
