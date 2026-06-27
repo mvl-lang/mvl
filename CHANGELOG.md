@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.221.5] - 2026-06-27
+
+### Refactored
+
+- **`checker`: extract per-Expr handlers from `IfcFlowAnalyzer::visit_expr`** (#1565) — The `visit_expr` arm of the IFC flow analyzer was 97 lines with effective nesting depth 8, with the `MethodCall` arm alone occupying ~35 lines. Extracted seven per-variant handler methods (`visit_fn_call_flow`, `visit_method_call_flow`, `visit_if_flow`, `visit_match_flow`, `visit_lambda_flow`, `visit_block_flow`, `visit_select_flow`); top-level `visit_expr` is now a 27-line flat dispatch. Max nesting depth in any helper is now 4. Pure refactor — no behavior changes.
+
 ## [0.221.4] - 2026-06-27
 
 ### Fixed

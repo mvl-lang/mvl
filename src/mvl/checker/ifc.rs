@@ -39,7 +39,7 @@ use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::types::Ty;
 use crate::mvl::checker::walk::walk_block;
 use crate::mvl::parser::ast::{
-    Block, Decl, ElseBranch, Expr, MatchBody, Pattern, Program, Stmt, TypeExpr,
+    Block, Decl, ElseBranch, Expr, MatchArm, MatchBody, Pattern, Program, SelectArm, Stmt, TypeExpr,
 };
 use crate::mvl::parser::lexer::Span;
 use crate::mvl::parser::visit::{walk_expr, walk_stmt, Visit};
@@ -694,6 +694,96 @@ impl<'a, 'ast> IfcFlowAnalyzer<'a, 'ast> {
                 });
         }
     }
+
+    fn visit_fn_call_flow(&mut self, name: &str, args: &'ast [Expr], span: Span) {
+        if is_high_opt(&self.pc) {
+            if let Some(observable) = self.effect_reach.get(name).cloned() {
+                self.report_implicit_flow(name, &observable, span);
+            }
+        }
+        for arg in args {
+            self.visit_expr(arg);
+        }
+    }
+
+    fn visit_method_call_flow(
+        &mut self,
+        receiver: &'ast Expr,
+        method: &str,
+        args: &'ast [Expr],
+        span: Span,
+    ) {
+        // Method calls: check for implicit flow using qualified name in
+        // effect_reach (#1007).  Build candidate qualified names matching
+        // collect_calls_in_expr / collect_effectful_names: bare method,
+        // recv-as-ident qualifier, and any Type::method key whose suffix
+        // matches the method name.
+        if is_high_opt(&self.pc) {
+            let mut qualified_names: Vec<String> = vec![method.to_string()];
+            if let Expr::Ident(recv_name, _) = receiver {
+                qualified_names.push(format!("{recv_name}::{method}"));
+            }
+            let method_suffix = format!("::{method}");
+            for key in self.effect_reach.keys() {
+                if key.ends_with(&method_suffix) && !qualified_names.contains(key) {
+                    qualified_names.push(key.clone());
+                }
+            }
+            for qn in &qualified_names {
+                if let Some(observable) = self.effect_reach.get(qn.as_str()).cloned() {
+                    self.report_implicit_flow(qn, &observable, span);
+                    break;
+                }
+            }
+        }
+        self.visit_expr(receiver);
+        for arg in args {
+            self.visit_expr(arg);
+        }
+    }
+
+    fn visit_if_flow(&mut self, cond: &'ast Expr, then: &'ast Block, else_: Option<&'ast Expr>) {
+        let cond_label = infer_label(cond, &self.env);
+        let body_pc = join_opt(self.pc.clone(), cond_label);
+        self.visit_expr(cond);
+        self.in_branch(body_pc.clone(), |a| a.visit_block(then));
+        if let Some(e) = else_ {
+            self.in_branch(body_pc, |a| a.visit_expr(e));
+        }
+    }
+
+    fn visit_match_flow(&mut self, scrutinee: &'ast Expr, arms: &'ast [MatchArm]) {
+        let scr_label = infer_label(scrutinee, &self.env);
+        let body_pc = join_opt(self.pc.clone(), scr_label);
+        self.visit_expr(scrutinee);
+        for arm in arms {
+            self.in_branch(body_pc.clone(), |a| match &arm.body {
+                MatchBody::Expr(e) => a.visit_expr(e),
+                MatchBody::Block(blk) => a.visit_block(blk),
+            });
+        }
+    }
+
+    fn visit_lambda_flow(&mut self, body: &'ast Expr) {
+        // Lambdas capture the outer env but reset pc (they are called later).
+        self.in_pc(None, |a| a.visit_expr(body));
+    }
+
+    fn visit_block_flow(&mut self, blk: &'ast Block) {
+        // Block opens a new variable scope: clone env, walk, drop the clone.
+        let saved_env = self.env.clone();
+        self.visit_block(blk);
+        self.env = saved_env;
+    }
+
+    fn visit_select_flow(&mut self, arms: &'ast [SelectArm]) {
+        for arm in arms {
+            self.visit_expr(&arm.expr);
+            for stmt in &arm.body.stmts {
+                self.visit_stmt(stmt);
+            }
+        }
+    }
 }
 
 impl<'a, 'ast> Visit<'ast> for IfcFlowAnalyzer<'a, 'ast> {
@@ -770,93 +860,23 @@ impl<'a, 'ast> Visit<'ast> for IfcFlowAnalyzer<'a, 'ast> {
         match e {
             Expr::FnCall {
                 name, args, span, ..
-            } => {
-                if is_high_opt(&self.pc) {
-                    if let Some(observable) = self.effect_reach.get(name.as_str()).cloned() {
-                        self.report_implicit_flow(name, &observable, *span);
-                    }
-                }
-                for arg in args {
-                    self.visit_expr(arg);
-                }
-            }
+            } => self.visit_fn_call_flow(name, args, *span),
             Expr::MethodCall {
                 receiver,
                 method,
                 args,
                 span,
                 ..
-            } => {
-                // Method calls: check for implicit flow using qualified name in
-                // effect_reach (#1007).  Build candidate qualified names matching
-                // collect_calls_in_expr / collect_effectful_names: bare method,
-                // recv-as-ident qualifier, and any Type::method key whose suffix
-                // matches the method name.
-                if is_high_opt(&self.pc) {
-                    let mut qualified_names: Vec<String> = vec![method.clone()];
-                    if let Expr::Ident(recv_name, _) = receiver.as_ref() {
-                        qualified_names.push(format!("{recv_name}::{method}"));
-                    }
-                    let method_suffix = format!("::{method}");
-                    for key in self.effect_reach.keys() {
-                        if key.ends_with(&method_suffix) && !qualified_names.contains(key) {
-                            qualified_names.push(key.clone());
-                        }
-                    }
-                    for qn in &qualified_names {
-                        if let Some(observable) = self.effect_reach.get(qn.as_str()).cloned() {
-                            self.report_implicit_flow(qn, &observable, *span);
-                            break;
-                        }
-                    }
-                }
-                self.visit_expr(receiver);
-                for arg in args {
-                    self.visit_expr(arg);
-                }
-            }
+            } => self.visit_method_call_flow(receiver, method, args, *span),
             Expr::If {
                 cond, then, else_, ..
-            } => {
-                let cond_label = infer_label(cond, &self.env);
-                let body_pc = join_opt(self.pc.clone(), cond_label);
-                self.visit_expr(cond);
-                self.in_branch(body_pc.clone(), |a| a.visit_block(then));
-                if let Some(e) = else_ {
-                    self.in_branch(body_pc, |a| a.visit_expr(e));
-                }
-            }
+            } => self.visit_if_flow(cond, then, else_.as_deref()),
             Expr::Match {
                 scrutinee, arms, ..
-            } => {
-                let scr_label = infer_label(scrutinee, &self.env);
-                let body_pc = join_opt(self.pc.clone(), scr_label);
-                self.visit_expr(scrutinee);
-                for arm in arms {
-                    self.in_branch(body_pc.clone(), |a| match &arm.body {
-                        MatchBody::Expr(e) => a.visit_expr(e),
-                        MatchBody::Block(blk) => a.visit_block(blk),
-                    });
-                }
-            }
-            Expr::Lambda { body, .. } => {
-                // Lambdas capture the outer env but reset pc (they are called later).
-                self.in_pc(None, |a| a.visit_expr(body));
-            }
-            Expr::Block(blk) => {
-                // Block opens a new variable scope: clone env, walk, drop the clone.
-                let saved_env = self.env.clone();
-                self.visit_block(blk);
-                self.env = saved_env;
-            }
-            Expr::Select { arms, .. } => {
-                for arm in arms {
-                    self.visit_expr(&arm.expr);
-                    for stmt in &arm.body.stmts {
-                        self.visit_stmt(stmt);
-                    }
-                }
-            }
+            } => self.visit_match_flow(scrutinee, arms),
+            Expr::Lambda { body, .. } => self.visit_lambda_flow(body),
+            Expr::Block(blk) => self.visit_block_flow(blk),
+            Expr::Select { arms, .. } => self.visit_select_flow(arms),
             // Leaves and structural cases (Binary, Unary, Field/As/Borrow/Relabel,
             // Propagate, Consume, Construct, List, Set, Map, Spawn, Literal, Ident,
             // Quantifier) — the default walker recurses under the current pc/env.
