@@ -50,13 +50,10 @@ impl TextEmitter {
         self.ensure_extern("declare void @_mvl_actor_drop(ptr)");
         self.ensure_extern("declare ptr @_mvl_actor_self()");
         self.ensure_extern("declare void @_mvl_actor_join_all()");
-        // Link/monitor C-ABI functions (Phase 9, #1177).
         self.ensure_extern("declare i64 @_mvl_actor_get_id(ptr)");
-        self.ensure_extern("declare void @_mvl_link(ptr, ptr)");
-        self.ensure_extern("declare void @_mvl_unlink(ptr, ptr)");
-        self.ensure_extern("declare i64 @_mvl_monitor(ptr, ptr)");
-        self.ensure_extern("declare void @_mvl_demonitor(i64)");
-        self.ensure_extern("declare void @_mvl_set_trap_exit(ptr)");
+        // Link/monitor externs (#1599): ID-based C-ABI matching the MVL surface
+        // (`std.actors.{link, unlink, monitor, demonitor}`). Declared via the
+        // standard `c_symbols` builtin path; nothing else to declare here.
         self.module.actor_runtime_declared = true;
     }
 
@@ -391,6 +388,26 @@ impl TextEmitter {
         // Track for drop before mvl_actor_join_all (closes the sender so the
         // actor thread's recv loop terminates).
         self.fn_ctx.spawned_actor_handles.push(handle.clone());
+
+        // Wire `traps_exit` flag from the actor declaration (#1599). When set,
+        // a linked actor's death delivers ExitSignal to this actor's on_exit
+        // handler instead of cascading the kill.
+        let traps_exit = self
+            .module
+            .actor_decls
+            .get(actor_type)
+            .map(|ad| ad.traps_exit)
+            .unwrap_or(false);
+        if traps_exit {
+            let id_reg = self.next_reg();
+            self.push_instr(&format!(
+                "{id_reg} = call i64 @_mvl_actor_get_id(ptr {handle})"
+            ));
+            self.push_instr(&format!(
+                "call void @_mvl_actors_set_trap_exit(i64 {id_reg})"
+            ));
+            self.ensure_extern("declare void @_mvl_actors_set_trap_exit(i64)");
+        }
 
         Ok(Some(handle))
     }
