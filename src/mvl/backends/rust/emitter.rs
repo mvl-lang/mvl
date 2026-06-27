@@ -647,12 +647,21 @@ impl RustEmitter {
             .filter(|(_, f)| seen_prelude_fns.insert(fn_key(f)))
             .collect();
 
-        // Build dispatch table for cross-package function name collisions (#1475).
-        // For each function name that appears in 2+ packages, map
-        // (original_name, return_ty_rust) → pkg_prefixed_rust_name.
+        // Build dispatch table for function name collisions.
+        // For each function name that appears in 2+ packages (#1475) OR is
+        // shadowed by a user-defined function (#1587), map
+        // (original_name, return_ty_rust) → pkg_prefixed_rust_name so the
+        // pkg variant emits and is called via its prefixed name while the
+        // user (or sole-pkg) variant keeps the bare name.
         self.pkg_fn_dispatch.clear();
         {
             use crate::mvl::backends::rust::emit_types::emit_ty;
+            let user_fn_names: std::collections::HashSet<&str> = tir
+                .fns
+                .iter()
+                .filter(|f| f.pkg_name.is_none())
+                .map(|f| f.original_name.as_str())
+                .collect();
             let mut name_to_variants: std::collections::HashMap<
                 &str,
                 Vec<(&str, &crate::mvl::ir::TirFn)>,
@@ -666,7 +675,8 @@ impl RustEmitter {
                 }
             }
             for (name, variants) in &name_to_variants {
-                if variants.len() > 1 {
+                let shadowed_by_user = user_fn_names.contains(name);
+                if variants.len() > 1 || shadowed_by_user {
                     for (pkg, f) in variants {
                         let ret_key = emit_ty(&f.ret_ty);
                         let prefixed = format!("{}__{}", pkg, name);
