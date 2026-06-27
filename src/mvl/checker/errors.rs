@@ -109,6 +109,10 @@ pub enum CheckError {
         into_ty: String,
         span: Span,
     },
+    PropagateInNonResultFn {
+        ret_ty: String,
+        span: Span,
+    },
 
     // ── Immutability enforcement (#17) ───────────────────────────────────
     AssignToImmutable {
@@ -547,7 +551,8 @@ impl CheckError {
             // Req 5: Error Visibility
             CheckError::ResultIgnored { .. }
             | CheckError::PropagateNotResult { .. }
-            | CheckError::PropagateIncompatibleError { .. } => 5,
+            | CheckError::PropagateIncompatibleError { .. }
+            | CheckError::PropagateInNonResultFn { .. } => 5,
             // Req 6: Ownership (immutability / linearity)
             CheckError::AssignToImmutable { .. }
             | CheckError::MutateImmutableField { .. }
@@ -667,6 +672,7 @@ impl CheckError {
             | CheckError::InvalidLinkLibName { span, .. }
             | CheckError::LabeledTypeCrossesFfiBoundary { span, .. }
             | CheckError::PropagateIncompatibleError { span, .. }
+            | CheckError::PropagateInNonResultFn { span, .. }
             | CheckError::NotIterator { span, .. }
             | CheckError::MissingConstraint { span, .. }
             | CheckError::PreconditionViolated { span, .. }
@@ -747,6 +753,11 @@ impl CheckError {
             CheckError::PropagateIncompatibleError { from_ty, into_ty, .. } => {
                 format!(
                     "`?` cannot convert error `{from_ty}` into `{into_ty}` — implement `From<{from_ty}> for {into_ty}`"
+                )
+            }
+            CheckError::PropagateInNonResultFn { ret_ty, .. } => {
+                format!(
+                    "`?` cannot be used in a function returning `{ret_ty}` — the enclosing function must return `Result` or `Option`"
                 )
             }
             CheckError::CaptureMutabilityViolation { name, .. } => format!(

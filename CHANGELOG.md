@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.221.6] - 2026-06-27
+
+### Fixed
+
+- **`checker`: reject `?` in functions not returning Result/Option** (#1588) — A function whose return type was not `Result` or `Option` could still use `?` propagation inside its body; `mvl check` passed, but the transpiler emitted invalid Rust `fn f(...) -> ()` with `?` inside, which rustc rejected (E0277). Now emit `PropagateInNonResultFn` error to require the enclosing function to return a propagatable type, matching Rust's `FromResidual` rule.
+
 ## [0.221.5] - 2026-06-27
 
 ### Refactored
