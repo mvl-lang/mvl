@@ -736,6 +736,14 @@ impl RustEmitter {
         match &expr.kind {
             // Fix 3: already a borrow expression — emit as-is, no extra & needed
             TirExprKind::Borrow { .. } => self.emit_expr(expr),
+            // #1569: a `Var` naming a capability parameter is already a Rust
+            // reference (`&T` for `val`, `&mut T` for `ref`). Emit it bare so
+            // Rust's auto-reborrow handles the call. Adding `&mut` here would
+            // try to reborrow a binding that isn't declared `mut`, which Rust
+            // rejects (E0596).
+            TirExprKind::Var(name) if self.capability_param_names.contains(name.as_str()) => {
+                self.emit_expr(expr);
+            }
             TirExprKind::Var(_) | TirExprKind::FieldAccess { .. } => {
                 self.push(if mutable { "&mut " } else { "&" });
                 self.emit_expr(expr);

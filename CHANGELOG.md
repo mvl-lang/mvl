@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- **`transpiler`: emit bare ref param when forwarding to ref param** (#1569) — When passing a `ref T` parameter to another function expecting `ref T`, the transpiler emitted `&mut param` instead of bare `param`. The parameter is already `&mut T` in Rust, and the binding is not declared `mut`, causing E0596. Now emits the bare parameter name so Rust's implicit reborrow handles the forwarding transparently.
 - **`sbom`: escape C0 control characters in JSON output** (#1567) — `packages::sbom::json_escape` only handled `"`, `\`, `\n`, `\r`, `\t`. Descriptions or names containing C0 control characters (`\x00`–`\x1F` minus the four named ones) produced invalid JSON. Now routed through the canonical helper which `\u00XX`-encodes all C0 controls plus `U+2028` / `U+2029`.
 
 ### Refactored
