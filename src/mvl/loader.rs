@@ -621,6 +621,14 @@ pub fn load_pkg_modules(
                                     }
                                     let path = entry.path();
                                     if path.extension().map(|e| e == "mvl").unwrap_or(false) {
+                                        if path
+                                            .file_name()
+                                            .and_then(|n| n.to_str())
+                                            .map(|n| n.ends_with("_test.mvl"))
+                                            .unwrap_or(false)
+                                        {
+                                            continue;
+                                        }
                                         if let Ok(src) = fs::read_to_string(&path) {
                                             let (mut p, _) = Parser::new(&src);
                                             result.push(p.parse_program());
@@ -669,6 +677,14 @@ pub fn load_pkg_modules_tagged(
                                     }
                                     let path = entry.path();
                                     if path.extension().map(|e| e == "mvl").unwrap_or(false) {
+                                        if path
+                                            .file_name()
+                                            .and_then(|n| n.to_str())
+                                            .map(|n| n.ends_with("_test.mvl"))
+                                            .unwrap_or(false)
+                                        {
+                                            continue;
+                                        }
                                         if let Ok(src) = fs::read_to_string(&path) {
                                             let (mut p, _) = Parser::new(&src);
                                             result.push((pkg_name.clone(), p.parse_program()));
