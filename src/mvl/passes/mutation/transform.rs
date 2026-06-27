@@ -163,7 +163,15 @@ pub fn format_mutation_report(
 ) -> String {
     use std::collections::BTreeMap;
 
-    // Group mutants by file → fn_name → Vec<MutantInfo>
+    // Group mutants by file → fn_name → Vec<MutantInfo>.
+    //
+    // MVL-port note (#1581):
+    // - Outer map is only accessed via `.get(file)` below (no iteration), so the
+    //   port may use `Map[String, Map[...]]` directly — order doesn't matter.
+    // - Inner map IS iterated for the per-function report (line ~200) and the
+    //   `fn_name` order is human-visible.  The reader below sorts explicitly,
+    //   so the port can use unordered `Map[String, List[MutantInfo]]` and copy
+    //   the sort step verbatim.
     let mut by_file: BTreeMap<&str, BTreeMap<&str, Vec<&MutantInfo>>> = BTreeMap::new();
     for m in mutants {
         by_file
@@ -195,7 +203,12 @@ pub fn format_mutation_report(
         let mut file_killed = 0usize;
         let mut file_total = 0usize;
 
-        for (fn_name, fn_mutants) in fns {
+        // Explicit sort for MVL-port one-to-one translation (#1581) — the
+        // `fn_name` ordering appears in user-visible report output.  Same
+        // sequence the `BTreeMap` iterator would have produced.
+        let mut fn_entries: Vec<_> = fns.iter().collect();
+        fn_entries.sort_by_key(|(name, _)| **name);
+        for (fn_name, fn_mutants) in fn_entries {
             out.push_str(&format!("  {fn_name}\n"));
             for m in fn_mutants {
                 let killed = results.get(&m.id).copied().unwrap_or(false);

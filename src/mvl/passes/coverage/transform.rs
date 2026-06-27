@@ -118,6 +118,12 @@ pub fn format_report(branches: &[BranchInfo], hits: &[u64], all_files: &[&str]) 
     use std::collections::BTreeMap;
 
     // Accumulate per-function decision-branch coverage and fn-entry hits.
+    //
+    // MVL-port note (#1581): both maps below are iterated for human-visible
+    // report output; the readers (below) sort their entries explicitly, so the
+    // port can use unordered `Map[(String, String), ...]` and copy the sort
+    // verbatim.
+    //
     // file → fn_name → (branches_hit, total_decision_branches)
     let mut fn_decision: BTreeMap<(&str, &str), (usize, usize)> = BTreeMap::new();
     // file+fn → was the fn entry probe hit (true = called at least once)?
@@ -147,17 +153,32 @@ pub fn format_report(branches: &[BranchInfo], hits: &[u64], all_files: &[&str]) 
     // Build per-file function list.
     // Functions with decision branches: report their branch hit ratio.
     // Functions with no decision branches but an fn-entry probe: report 1/1 or 0/1.
+    //
+    // MVL-port note (#1581): `by_file` is only consumed via `.get(file)` below
+    // (no iteration), so the port may use unordered `Map[String, List[...]]`.
     let mut by_file: BTreeMap<&str, Vec<(&str, usize, usize)>> = BTreeMap::new();
-    for ((file, fn_name), (hit, total)) in &fn_decision {
+    // Explicit sort for MVL-port one-to-one translation (#1581) — (file, fn_name)
+    // ordering propagates into the per-file Vec, controlling user-visible
+    // report ordering.  Same sequence the `BTreeMap` iterator would produce.
+    let mut decision_entries: Vec<_> = fn_decision.iter().collect();
+    decision_entries.sort_by_key(|(k, _)| **k);
+    for ((file, fn_name), (hit, total)) in decision_entries {
         by_file
-            .entry(file)
+            .entry(*file)
             .or_default()
-            .push((fn_name, *hit, *total));
+            .push((*fn_name, *hit, *total));
     }
-    for ((file, fn_name), &called) in &fn_entry_hit {
+    // Same reasoning for `fn_entry_hit` — explicit sort makes the order
+    // requirement visible at the reader.
+    let mut entry_hit_entries: Vec<_> = fn_entry_hit.iter().collect();
+    entry_hit_entries.sort_by_key(|(k, _)| **k);
+    for ((file, fn_name), &called) in entry_hit_entries {
         if !fn_decision.contains_key(&(*file, *fn_name)) {
             let covered = if called { 1 } else { 0 };
-            by_file.entry(file).or_default().push((fn_name, covered, 1));
+            by_file
+                .entry(*file)
+                .or_default()
+                .push((*fn_name, covered, 1));
         }
     }
 
