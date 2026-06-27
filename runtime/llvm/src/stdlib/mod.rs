@@ -8,6 +8,7 @@
 //! `_mvl_*` export here that is callable from LLVM-generated code.
 
 pub mod args;
+pub mod audit;
 pub mod crypto;
 pub mod env;
 pub mod io;

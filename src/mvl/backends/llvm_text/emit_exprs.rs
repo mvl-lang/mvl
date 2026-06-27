@@ -312,9 +312,15 @@ impl TextEmitter {
 
             Expr::Map { pairs, .. } => self.emit_map_literal(pairs),
 
-            Expr::Consume { expr, .. } | Expr::Relabel { expr, .. } | Expr::As { expr, .. } => {
-                self.emit_expr(expr)
-            }
+            Expr::Consume { expr, .. } | Expr::As { expr, .. } => self.emit_expr(expr),
+
+            Expr::Relabel {
+                name,
+                expr,
+                tag,
+                audit,
+                ..
+            } => self.emit_relabel(name, expr, tag, *audit),
 
             Expr::Propagate { expr, .. } => self.emit_propagate(expr),
 
@@ -331,6 +337,74 @@ impl TextEmitter {
 
             _ => Ok(None),
         }
+    }
+
+    // ── Relabel (IFC) ─────────────────────────────────────────────────────
+
+    /// Emit an IFC `relabel` expression (#894, #896, #1554).
+    ///
+    /// The LLVM type system strips label wrappers (`Ty::Labeled` → inner), so
+    /// the relabel itself lowers to the inner expression unchanged. When the
+    /// expression carries `audit` OR the relabel declaration is `audit`-marked,
+    /// a `call void @_mvl_audit_emit_relabel(...)` is emitted before the inner
+    /// value is returned, mirroring the Rust backend
+    /// (`src/mvl/backends/rust/emit_exprs.rs::TirExprKind::Relabel`).
+    pub(super) fn emit_relabel(
+        &mut self,
+        name: &str,
+        expr: &Expr,
+        tag: &str,
+        audit: bool,
+    ) -> Result<Option<String>, String> {
+        let inner = self.emit_expr(expr)?;
+        let needs_audit = audit || self.module.audit_relabels.contains_key(name);
+        if needs_audit {
+            let (from_lbl, to_lbl) = self.relabel_label_strings(name);
+            // Location is intentionally left empty to match the Rust
+            // backend's behavior under `mvl run`, where `TranspileConfig::new`
+            // leaves `file_stem` empty and `emit_relabel_event` therefore
+            // receives "" as the `location` field. Tracked separately from
+            // #1554 — both backends should one day plumb the source file.
+            let r_name = self.emit_string_literal(name);
+            let r_from = self.emit_string_literal(&from_lbl);
+            let r_to = self.emit_string_literal(&to_lbl);
+            let r_tag = self.emit_string_literal(tag);
+            let r_loc = self.emit_string_literal("");
+            self.ensure_extern("declare void @_mvl_audit_emit_relabel(ptr, ptr, ptr, ptr, ptr)");
+            self.push_instr(&format!(
+                "call void @_mvl_audit_emit_relabel(ptr {r_name}, ptr {r_from}, ptr {r_to}, ptr {r_tag}, ptr {r_loc})"
+            ));
+        }
+        Ok(inner)
+    }
+
+    /// Return (from_label, to_label) display strings for a relabel transition,
+    /// used as audit JSONL fields. Mirrors the Rust emitter's
+    /// `relabel_label_strings` (`src/mvl/backends/rust/emitter.rs`). Built-in
+    /// transitions are hardcoded; user-defined ones are looked up from
+    /// `audit_relabels`.
+    fn relabel_label_strings(&self, name: &str) -> (String, String) {
+        if let Some((from, to)) = self.module.audit_relabels.get(name) {
+            let f = from.as_deref().unwrap_or("_").to_string();
+            let t = to.as_deref().unwrap_or("_").to_string();
+            return (f, t);
+        }
+        let (f, t) = match name {
+            "classify" => ("_", "Secret"),
+            "taint" => ("_", "Tainted"),
+            "trust" => ("Tainted", "_"),
+            "release" => ("Secret", "_"),
+            "config_path" => ("_", "ConfigPath"),
+            "unconfig_path" => ("ConfigPath", "_"),
+            "db_url" => ("_", "DbUrl"),
+            "undb_url" => ("DbUrl", "_"),
+            "api_endpoint" => ("_", "ApiEndpoint"),
+            "unapi_endpoint" => ("ApiEndpoint", "_"),
+            "audit_target" => ("_", "AuditTarget"),
+            "unaudit_target" => ("AuditTarget", "_"),
+            _ => ("_", "_"),
+        };
+        (f.to_string(), t.to_string())
     }
 
     // ── Literal emission ──────────────────────────────────────────────────

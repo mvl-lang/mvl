@@ -1513,3 +1513,76 @@ fn cross_backend_process_echo_parity() {
         "spawn_ok=true\nwait_ok=true",
     );
 }
+
+// ── #1554: IFC relabel audit trail parity ────────────────────────────────────
+
+/// Strip the timestamp field from a single JSONL audit line so two backends
+/// emitting events at different wall-clock seconds compare equal. The line
+/// shape is the verbatim format from `mvl_runtime::stdlib::audit`.
+fn strip_audit_timestamp(line: &str) -> String {
+    let prefix = r#"{"timestamp":""#;
+    let Some(rest) = line.strip_prefix(prefix) else {
+        return line.to_string();
+    };
+    match rest.find("\",\"") {
+        Some(idx) => format!("{{\"timestamp\":\"<TS>\",{}", &rest[idx + 3..]),
+        None => line.to_string(),
+    }
+}
+
+/// Both backends must produce identical `MVL_AUDIT_SINK` JSONL output (modulo
+/// the timestamp) for `relabel ... audit` (#1554, ADR-0049). The corpus uses
+/// inline expression composition so the previously transparent LLVM `Relabel`
+/// arm has nowhere to hide.
+#[test]
+fn cross_backend_audit_relabel_sink_parity() {
+    if mvl::mvl::backends::llvm_text::lli::find_lli().is_none() {
+        return; // environment skip
+    }
+    let file = corpus_ifc("audit_relabel_runnable.mvl");
+
+    let rust_sink = tempfile::NamedTempFile::new().expect("tempfile rust");
+    let llvm_sink = tempfile::NamedTempFile::new().expect("tempfile llvm");
+    let _ = std::fs::remove_file(rust_sink.path());
+    let _ = std::fs::remove_file(llvm_sink.path());
+
+    let rust_out = Command::new(mvl_bin())
+        .args(["run", &file])
+        .env("MVL_AUDIT_SINK", rust_sink.path())
+        .output()
+        .expect("failed to run mvl run");
+    assert!(
+        rust_out.status.success(),
+        "rust backend failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&rust_out.stdout),
+        String::from_utf8_lossy(&rust_out.stderr),
+    );
+
+    let llvm_out = Command::new(mvl_bin())
+        .args(["run", &file, "--backend=llvm"])
+        .env("MVL_AUDIT_SINK", llvm_sink.path())
+        .output()
+        .expect("failed to run mvl run --backend=llvm");
+    assert!(
+        llvm_out.status.success(),
+        "llvm backend failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&llvm_out.stdout),
+        String::from_utf8_lossy(&llvm_out.stderr),
+    );
+
+    let rust_jsonl =
+        std::fs::read_to_string(rust_sink.path()).expect("rust MVL_AUDIT_SINK file missing");
+    let llvm_jsonl =
+        std::fs::read_to_string(llvm_sink.path()).expect("llvm MVL_AUDIT_SINK file missing");
+
+    let rust_lines: Vec<String> = rust_jsonl.lines().map(strip_audit_timestamp).collect();
+    let llvm_lines: Vec<String> = llvm_jsonl.lines().map(strip_audit_timestamp).collect();
+
+    // The corpus emits three `audit`-marked relabels in main; the silent
+    // relabel must not appear in either backend's sink.
+    assert_eq!(rust_lines.len(), 3, "rust audit line count");
+    assert_eq!(
+        rust_lines, llvm_lines,
+        "llvm_text audit JSONL differs from rust transpiler"
+    );
+}
