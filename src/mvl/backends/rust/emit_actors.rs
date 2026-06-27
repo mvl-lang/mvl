@@ -136,11 +136,10 @@ impl RustEmitter {
             self.line(&format!("{}: {ty_str},", field.name));
         }
         if !pub_methods.is_empty() {
-            // `_self_ref` holds a *weak* sender so that behaviors can pass `self`
-            // as a `tag` argument without keeping the mailbox channel alive.
-            // When all external handles are dropped the channel disconnects and
-            // `rx.recv()` returns `None` even though this weak ref still exists.
-            self.line(&format!("_self_ref: Option<MvlWeakSender<{msg_name}>>,"));
+            // Strong sender so behaviors can always clone `self` as a tag without
+            // racing shutdown.  Nulled by the `_Shutdown` dispatch arm so the
+            // channel closes naturally once the actor exits its dispatch loop.
+            self.line(&format!("_self_ref: Option<MvlSender<{msg_name}>>,"));
             // `_self_id` mirrors the handle's `_id` so self-ref handle construction
             // can set the `_id` field (#1128).
             self.line("_self_id: ActorId,");
@@ -374,7 +373,15 @@ impl RustEmitter {
         self.line("match msg {");
         self.push_indent();
         // System variants (#1177, #1128).
-        self.line(&format!("{msg_name}::_Shutdown => return false,"));
+        // Null _self_ref on shutdown so the actor drops its own strong sender
+        // clone, allowing the channel to close naturally after the loop exits.
+        if !pub_methods.is_empty() {
+            self.line(&format!(
+                "{msg_name}::_Shutdown => {{ actor._self_ref = None; return false; }},"
+            ));
+        } else {
+            self.line(&format!("{msg_name}::_Shutdown => return false,"));
+        }
         // Wire _ExitSignal → on_exit(from_id, reason) if the actor defines that method.
         let on_exit_method = ad
             .methods
@@ -456,8 +463,8 @@ impl RustEmitter {
 
         // 7. Start function: spawn actor thread via `mvl_actor_run`, return handle.
         //    Takes `mut state` so we can inject `_self_ref` after creating the
-        //    channel — the actor needs a weak sender to pass `self`
-        //    as a `tag` argument inside behaviors.
+        //    channel — the actor holds a strong clone so it can hand out `self`
+        //    as a tag argument inside behaviors; nulled on `_Shutdown`.
         //
         //    Assigns a unique ActorId and registers type-erased controls in the
         //    global link/monitor registry (#1177).
@@ -486,7 +493,7 @@ impl RustEmitter {
         };
         self.line(&channel_line);
         self.line("state._self_id = __actor_id;");
-        self.line("state._self_ref = Some(tx.downgrade());");
+        self.line("state._self_ref = Some(tx.clone());");
         // Register type-erased actor controls for link/monitor (#1177).
         // Each closure captures a sender clone and constructs the typed system message.
         self.line("{");

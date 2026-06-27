@@ -195,18 +195,22 @@ pub fn mvl_register_actor(h: MvlJoinHandle) {
 
 /// Block until every registered actor has exited.
 ///
-/// Called once at the end of `fn main()`.  All actor handles (`MvlSender`s)
-/// must have been dropped before this call so that `MvlReceiver::recv()`
-/// returns `None` and each actor thread exits naturally.
+/// Called once at the end of `fn main()`.  Shutdown protocol:
 ///
-/// The link/monitor registry (#1177) holds cloned senders for each actor
-/// (kill/exit/down notification closures). These must be dropped before
-/// joining, otherwise the channels remain open and actor threads block
-/// forever on `recv()`.
+/// 1. Send `_Shutdown` to every registered actor.  The dispatch handler for
+///    `_Shutdown` nulls `actor._self_ref` before returning `false`, dropping
+///    the actor's own strong sender clone so the channel can close naturally.
+/// 2. Clear the registry to release kill/exit/down sender clones.
+/// 3. Join every actor thread.
 pub fn mvl_join_actors() {
-    // Clear all actor entries from the link registry — this drops the
-    // cloned senders held by kill/exit/down closures, allowing channels
-    // to close so actor threads can exit.
+    let kill_fns: Vec<KillFn> = {
+        let reg = global_registry().lock().unwrap_or_else(|p| p.into_inner());
+        reg.controls.values().map(|c| Arc::clone(&c.kill_fn)).collect()
+    };
+    for kf in &kill_fns {
+        kf();
+    }
+    drop(kill_fns);
     {
         let mut reg = global_registry().lock().unwrap_or_else(|p| p.into_inner());
         reg.controls.clear();
@@ -217,7 +221,7 @@ pub fn mvl_join_actors() {
     MVL_ACTOR_HANDLES.with(|v| {
         for h in v.borrow_mut().drain(..) {
             if h.0.join().is_err() {
-                eprintln!("[mvl runtime] actor thread panicked");
+                eprintln!("mvl: actor thread panicked");
             }
         }
     });
@@ -255,7 +259,7 @@ where
             let result = catch_unwind(AssertUnwindSafe(|| {
                 while let Some(msg) = rx.recv() {
                     if !dispatch(&mut actor, msg) {
-                        return false; // shutdown requested
+                        return false; // shutdown requested (_self_ref nulled by handler)
                     }
                 }
                 true // normal exit (channel closed)
