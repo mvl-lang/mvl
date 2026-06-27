@@ -1,0 +1,14 @@
+// Spike 006 — WASM Backend — source program
+//
+// The simplest non-trivial MVL program: a pure function returning Int.
+// We hand-translate this to WebAssembly Text (WAT) in `add.wat`.
+//
+// Expected: add(2, 3) == 5
+
+fn add(a: Int, b: Int) -> Int {
+    a + b
+}
+
+fn main() -> Int {
+    add(2, 3)
+}

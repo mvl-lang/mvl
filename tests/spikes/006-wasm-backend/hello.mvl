@@ -1,0 +1,19 @@
+// Spike 006 — WASM Backend — WASI hello world source
+//
+// This is the *conceptual* MVL source for the WASI variant. The hand-
+// translated `hello.wat` corresponds to this program. We do **not**
+// implement the full Int-to-String + stdout path here — that requires
+// runtime support not yet ported to WASM. Instead the WAT emits a fixed
+// literal "5\n" through WASI's `fd_write`, which is the same syscall
+// `println` would lower to once the runtime exists.
+//
+// This file exists to anchor the spike's target shape — what the
+// eventual TIR→WASM emitter needs to produce.
+
+fn add(a: Int, b: Int) -> Int {
+    a + b
+}
+
+fn main() -> Unit ! Console {
+    println(add(2, 3).to_string())
+}
