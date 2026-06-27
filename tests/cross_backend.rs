@@ -648,17 +648,19 @@ fn cross_backend_crypto_sha256_transpiler() {
     assert_eq!(lines[2], SHA512_EMPTY, "sha512(\"\") mismatch");
 }
 
-/// sha256/sha512 cross-backend parity — LLVM backend vs Rust transpiler.
+/// sha256/sha512 cross-backend parity — LLVM backend vs NIST test vectors.
 ///
 /// Verifies that the LLVM path (via _mvl_crypto_sha256 / _mvl_crypto_sha512 in
 /// libmvl_runtime_c) produces the same NIST vectors as the Rust transpiler path.
+/// Uses hardcoded constants rather than calling run_transpiler to avoid a parallel
+/// cargo build race when both sha256 tests run concurrently on the same temp dir.
 #[test]
 fn cross_backend_crypto_sha256_llvm() {
     let file = corpus_13_stdlib("crypto_sha256.mvl");
-    let transpiler_out = run_transpiler(&file);
+    let expected = format!("{SHA256_EMPTY}\n{SHA256_ABC}\n{SHA512_EMPTY}\n");
     if let Some(llvm_out) = run_llvm_text(&file) {
         assert_eq!(
-            llvm_out, transpiler_out,
+            llvm_out, expected,
             "crypto_sha256.mvl: LLVM and transpiler backends must produce identical output"
         );
     }
