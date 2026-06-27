@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.222.2] - 2026-06-27
+
+### Fixed
+
+- **`cross_backend`: eliminate sha256 transpiler test race under parallel cargo builds** — `cross_backend_crypto_sha256_llvm` called `run_transpiler` on the same file as `cross_backend_crypto_sha256_transpiler`, causing both tests to race on the shared temp directory when running in parallel. The LLVM parity test now compares against hardcoded NIST constants (`SHA256_EMPTY`, `SHA256_ABC`, `SHA512_EMPTY`) instead of spawning a second transpiler build.
+
 ## [0.222.1] - 2026-06-27
 
 ### Fixed
