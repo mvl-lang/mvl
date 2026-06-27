@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.223.2] - 2026-06-28
+
+### Fixed
+
+- **`llvm`: declare `%__closure_type` when calling a fn-typed parameter** (#1604) — The LLVM backend's "local closure call" path GEPs into `%__closure_type` to extract `fn_ptr`/`env_ptr`, but only `emit_lambda` and `make_named_fn_closure_hof` called `ensure_closure_type()`. A function-typed parameter passed in from a caller (e.g. `start: fn() -> Int` in `Supervisor::add_child`) never touched either path, so the GEP referenced an undeclared opaque type and lli verification failed with "base element of getelementptr must be sized". One-line fix in the call dispatch.
+
 ## [0.223.1] - 2026-06-28
 
 ### Fixed

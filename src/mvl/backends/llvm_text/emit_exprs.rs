@@ -1013,6 +1013,12 @@ impl TextEmitter {
                 .get(name)
                 .is_some_and(|t| matches!(t, TypeExpr::Fn { .. }))
             {
+                // Ensure %__closure_type is declared. `emit_lambda` and
+                // `make_named_fn_closure_hof` declare it on their own paths,
+                // but a fn-typed parameter passed in from a caller never
+                // touches either — GEPs below would dangle on an unsized type
+                // (#1604).
+                self.ensure_closure_type();
                 // Load fn_ptr (field 0) and env_ptr (field 1).
                 let fn_field = self.next_reg();
                 self.push_instr(&format!(
