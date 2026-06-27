@@ -710,11 +710,59 @@ pub const PASS_ORDER: &[u8] = &[1, 4, 5, 3, 6, 7, 8, 2, 9, 10, 11];
 
 // ── PassRegistry ──────────────────────────────────────────────────────────────
 
+/// Closed-set verification-pass dispatch.
+///
+/// Storage for [`PassRegistry`] — one variant per `impl VerificationPass` in
+/// this file.  Enum dispatch replaces trait-object dispatch so the set of
+/// passes is fixed at compile time.
+///
+/// Self-hosting prep (#1582): MVL has no trait-object dispatch, so the
+/// eventual Rust→MVL port translates this enum + `match self` one-to-one.
+enum VerificationPassKind {
+    Basic(BasicCheckPass),
+    MemorySafety,
+    DataRaceFreedom,
+    Refinements,
+    Ifc,
+}
+
+impl VerificationPassKind {
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Basic(p) => VerificationPass::name(p),
+            Self::MemorySafety => VerificationPass::name(&MemorySafetyPass),
+            Self::DataRaceFreedom => VerificationPass::name(&DataRaceFreedomPass),
+            Self::Refinements => VerificationPass::name(&RefinementsPass),
+            Self::Ifc => VerificationPass::name(&IFCPass),
+        }
+    }
+
+    fn requirement(&self) -> u8 {
+        match self {
+            Self::Basic(p) => VerificationPass::requirement(p),
+            Self::MemorySafety => VerificationPass::requirement(&MemorySafetyPass),
+            Self::DataRaceFreedom => VerificationPass::requirement(&DataRaceFreedomPass),
+            Self::Refinements => VerificationPass::requirement(&RefinementsPass),
+            Self::Ifc => VerificationPass::requirement(&IFCPass),
+        }
+    }
+
+    fn run(&self, prog: &Program, result: &CheckResult) -> Verdict {
+        match self {
+            Self::Basic(p) => VerificationPass::run(p, prog, result),
+            Self::MemorySafety => VerificationPass::run(&MemorySafetyPass, prog, result),
+            Self::DataRaceFreedom => VerificationPass::run(&DataRaceFreedomPass, prog, result),
+            Self::Refinements => VerificationPass::run(&RefinementsPass, prog, result),
+            Self::Ifc => VerificationPass::run(&IFCPass, prog, result),
+        }
+    }
+}
+
 /// Registry of all verification passes in execution order.
 ///
 /// Use [`PassRegistry::default_registry`] to get the standard set of passes.
 pub struct PassRegistry {
-    passes: Vec<Box<dyn VerificationPass>>,
+    passes: Vec<VerificationPassKind>,
 }
 
 impl PassRegistry {
@@ -727,48 +775,48 @@ impl PassRegistry {
     /// `Proven` when the 5-layer solver confirms no violations; `Unchecked`
     /// when the solver runs but the module has no applicable call sites.
     pub fn default_registry() -> Self {
-        let passes: Vec<Box<dyn VerificationPass>> = vec![
+        let passes: Vec<VerificationPassKind> = vec![
             // ── Phase 1 complete ────────────────────────────────────────────
-            Box::new(BasicCheckPass {
+            VerificationPassKind::Basic(BasicCheckPass {
                 req: 1,
                 pass_name: "Type Safety",
                 ok_evidence: "all type constraints satisfied",
             }),
-            Box::new(BasicCheckPass {
+            VerificationPassKind::Basic(BasicCheckPass {
                 req: 4,
                 pass_name: "Null Elimination",
                 ok_evidence: "no direct Option access",
             }),
-            Box::new(BasicCheckPass {
+            VerificationPassKind::Basic(BasicCheckPass {
                 req: 5,
                 pass_name: "Error Visibility",
                 ok_evidence: "all Result values handled",
             }),
-            Box::new(BasicCheckPass {
+            VerificationPassKind::Basic(BasicCheckPass {
                 req: 3,
                 pass_name: "Totality",
                 ok_evidence: "all matches exhaustive, no partial calls in total fns",
             }),
-            Box::new(BasicCheckPass {
+            VerificationPassKind::Basic(BasicCheckPass {
                 req: 6,
                 pass_name: "Ownership",
                 ok_evidence: "no immutability or linear-type consumption violations",
             }),
-            Box::new(BasicCheckPass {
+            VerificationPassKind::Basic(BasicCheckPass {
                 req: 7,
                 pass_name: "Effects",
                 ok_evidence: "all effects declared and propagated",
             }),
-            Box::new(BasicCheckPass {
+            VerificationPassKind::Basic(BasicCheckPass {
                 req: 8,
                 pass_name: "Termination",
                 ok_evidence: "no unbounded loops or unproven recursive calls in total functions",
             }),
             // ── SMT-backed passes (Req 2, 9, 10, 11) ───────────────────────
-            Box::new(MemorySafetyPass),
-            Box::new(DataRaceFreedomPass),
-            Box::new(RefinementsPass),
-            Box::new(IFCPass),
+            VerificationPassKind::MemorySafety,
+            VerificationPassKind::DataRaceFreedom,
+            VerificationPassKind::Refinements,
+            VerificationPassKind::Ifc,
         ];
         PassRegistry { passes }
     }
