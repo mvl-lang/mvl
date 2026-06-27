@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.222.0] - 2026-06-27
+
+### Added
+
+- **`llvm`: port audit-trail builtin so `relabel ... audit` emits records on LLVM** (#1554, ADR-0049) — The Rust backend emitted a real call to `mvl_runtime::stdlib::audit::emit_relabel_event(...)` for every relabel marked `audit`, but the LLVM backend ignored the flag and produced no audit records — the one runtime divergence identified by the IFC/refine/audit audit (#1547). New C-ABI wrapper `_mvl_audit_emit_relabel` in `runtime/llvm/src/stdlib/audit.rs` takes five `*const MvlString` args and delegates to the existing runtime emit; `ModuleCtx::audit_relabels` tracks declaration-level `audit` keywords; the LLVM `Expr::Relabel` arm now emits the C-ABI call before the transparent unwrap when either the expression or the declaration is audit-marked. Cross-backend test verifies both backends produce identical `MVL_AUDIT_SINK` JSONL output (modulo timestamp).
+
 ## [0.221.7] - 2026-06-27
 
 ### Fixed
