@@ -25,13 +25,8 @@ guard-mvl:
 build: guard-mvl ## Compile the example to a native binary
 	$(MVL) build $(DIR)main.mvl
 
-check: guard-mvl ## Type-check self-contained source modules
-	$(MVL) check $(DIR)rle.mvl
-	$(MVL) check $(DIR)bwt.mvl
-	$(MVL) check $(DIR)mtf.mvl
-	$(MVL) check $(DIR)huffman.mvl
-	$(MVL) check $(DIR)bitstream.mvl
-	$(MVL) check $(DIR)main.mvl
+check: guard-mvl ## Type-check all source files
+	$(MVL) check $(DIR)
 
 prove: guard-mvl ## Prove per-call-site refinement proof layer breakdown
 	$(MVL) prove $(DIR)

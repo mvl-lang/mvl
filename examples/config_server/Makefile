@@ -30,11 +30,8 @@ guard-mvl: ## Validate MVL binary is present (does NOT recompile)
 build: guard-mvl ## Compile the example to a native binary (requires bridge.rs)
 	$(MVL) build $(DIR)main.mvl
 
-check: guard-mvl ## Type-check all source files individually
-	$(MVL) check $(DIR)config.mvl
-	$(MVL) check $(DIR)handler.mvl
-	$(MVL) check $(DIR)storage.mvl
-	$(MVL) check $(DIR)main.mvl
+check: guard-mvl ## Type-check all source files
+	$(MVL) check $(DIR)
 
 prove: guard-mvl ## Prove per-call-site refinement proof layer breakdown
 	$(MVL) prove $(DIR)

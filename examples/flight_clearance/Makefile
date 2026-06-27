@@ -20,9 +20,7 @@ guard-mvl: ## Validate MVL binary is present and working (does NOT recompile)
 	}
 
 check: guard-mvl ## Type-check all source files
-	$(MVL) check $(DIR)model.mvl
-	$(MVL) check $(DIR)clearance.mvl
-	$(MVL) check $(DIR)main.mvl
+	$(MVL) check $(DIR)
 
 prove: guard-mvl ## Prove per-call-site refinement proof layer breakdown
 	$(MVL) prove $(DIR)

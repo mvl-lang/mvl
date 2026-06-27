@@ -23,11 +23,7 @@ build: guard-mvl ## Compile the example to a native binary (requires bridge.rs)
 	$(MVL) build $(DIR)main.mvl
 
 check: guard-mvl ## Type-check all source files
-	$(MVL) check $(DIR)model.mvl
-	$(MVL) check $(DIR)auth.mvl
-	$(MVL) check $(DIR)rbac.mvl
-	$(MVL) check $(DIR)audit.mvl
-	$(MVL) check $(DIR)main.mvl
+	$(MVL) check $(DIR)
 
 prove: guard-mvl ## Prove per-call-site refinement proof layer breakdown
 	$(MVL) prove $(DIR)
