@@ -1,10 +1,10 @@
 # Changelog
 
-## [0.222.2] - 2026-06-27
+## [0.222.3] - 2026-06-27
 
 ### Fixed
 
-- **`cross_backend`: eliminate sha256 transpiler test race under parallel cargo builds** — `cross_backend_crypto_sha256_llvm` called `run_transpiler` on the same file as `cross_backend_crypto_sha256_transpiler`, causing both tests to race on the shared temp directory when running in parallel. The LLVM parity test now compares against hardcoded NIST constants (`SHA256_EMPTY`, `SHA256_ABC`, `SHA512_EMPTY`) instead of spawning a second transpiler build.
+- **`llvm`: dispatch ExitSignal/DownSignal to on_exit/on_down handlers** (#1597) — The LLVM backend was correctly injecting `ExitSignal` (disc=-2) and `DownSignal` (disc=-3) into actor mailboxes as part of the link/monitor exit cascade, but then silently discarding them because the runtime filtered out negative discriminants and the dispatch switch only covered user behaviors. Extended the LLVM codegen to emit switch cases for system signals wired to `on_exit(from_id, reason)` and `on_down(from_id, reason, monitor_id)` private methods when defined; updated the runtime to route all non-shutdown messages through dispatch. Brings LLVM to parity with Rust backend on supervisor signal handling.
 
 ## [0.222.1] - 2026-06-27
 

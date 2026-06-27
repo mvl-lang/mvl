@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Schuberg Philis
 
-//! Actor runtime interface — `tokio` target implementation (Phase 9 Stage 2).
+//! Actor runtime interface — `tokio` target implementation.
 //!
 //! Provides the same named interface as `runtime/rust/src/actors.rs` but runs
 //! actor dispatch loops as tokio tasks instead of OS threads.  A global
@@ -17,10 +17,9 @@
 //!
 //! # Limitation: synchronous behaviors
 //!
-//! Behavior bodies are still emitted as synchronous Rust — a behavior that
-//! calls a blocking syscall will stall a tokio worker thread.  Full async
-//! behavior emission is deferred to Phase 9 Stage 3.  Until then, avoid
-//! long-blocking calls in actor behaviors when using `--target=tokio`.
+//! Behavior bodies are emitted as synchronous Rust — a behavior that calls a
+//! blocking syscall will stall a tokio worker thread.  Avoid long-blocking
+//! calls in actor behaviors when using `--target=tokio`.
 //!
 //! ADR-0027 §"Actor runtime interface".
 

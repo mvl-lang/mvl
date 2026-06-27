@@ -172,6 +172,17 @@ impl TextEmitter {
         // ── 2. Dispatch function ───────────────────────────────────────────
         // void @{snake}_dispatch(ptr %state, i64 %disc, ptr %args)
         let dispatch_name = format!("{actor_snake}_dispatch");
+        // Signal handlers: private on_exit / on_down methods routed via disc -2/-3 (#1597).
+        let on_exit = ad
+            .methods
+            .iter()
+            .find(|m| !m.is_public && m.name == "on_exit")
+            .cloned();
+        let on_down = ad
+            .methods
+            .iter()
+            .find(|m| !m.is_public && m.name == "on_down")
+            .cloned();
         let pub_methods: Vec<_> = ad.methods.iter().filter(|m| m.is_public).collect();
 
         // Dispatch fn emitted with a fresh FnCtx (#1535). Return type is Unit
@@ -190,17 +201,28 @@ impl TextEmitter {
             this.fn_ctx.fn_buf.push("{".into());
             this.fn_ctx.fn_buf.push("entry:".into());
 
-            if pub_methods.is_empty() {
+            let has_any_case =
+                !pub_methods.is_empty() || on_exit.is_some() || on_down.is_some();
+
+            if !has_any_case {
                 this.push_instr("ret void");
             } else {
                 // switch i64 %disc, label %default [ i64 0, label %behavior_0 ... ]
-                let cases: String = pub_methods
+                let mut cases: Vec<String> = pub_methods
                     .iter()
                     .enumerate()
                     .map(|(i, _)| format!("i64 {i}, label %behavior_{i}"))
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                this.push_instr(&format!("switch i64 %disc, label %default [ {cases} ]"));
+                    .collect();
+                if on_exit.is_some() {
+                    cases.push("i64 -2, label %sys_exit_signal".to_string());
+                }
+                if on_down.is_some() {
+                    cases.push("i64 -3, label %sys_down_signal".to_string());
+                }
+                this.push_instr(&format!(
+                    "switch i64 %disc, label %default [ {} ]",
+                    cases.join(" ")
+                ));
 
                 // default: just return
                 this.fn_ctx.fn_buf.push("default:".into());
@@ -239,6 +261,46 @@ impl TextEmitter {
 
                     let call_args_str = call_parts.join(", ");
                     this.push_instr(&format!("call void @{fn_name}({call_args_str})"));
+                    this.push_instr("ret void");
+                }
+
+                // ExitSignal block: disc=-2, args=[from_id, reason] (#1597).
+                if let Some(m) = &on_exit {
+                    let fn_name = format!("{actor_snake}_{}", m.name);
+                    this.fn_ctx.fn_buf.push("sys_exit_signal:".into());
+                    let gep0 = this.next_reg();
+                    this.push_instr(&format!("{gep0} = getelementptr i64, ptr %args, i64 0"));
+                    let from_id = this.next_reg();
+                    this.push_instr(&format!("{from_id} = load i64, ptr {gep0}"));
+                    let gep1 = this.next_reg();
+                    this.push_instr(&format!("{gep1} = getelementptr i64, ptr %args, i64 1"));
+                    let reason = this.next_reg();
+                    this.push_instr(&format!("{reason} = load i64, ptr {gep1}"));
+                    this.push_instr(&format!(
+                        "call void @{fn_name}(ptr %state, i64 {from_id}, i64 {reason})"
+                    ));
+                    this.push_instr("ret void");
+                }
+
+                // DownSignal block: disc=-3, args=[from_id, reason, monitor_id] (#1597).
+                if let Some(m) = &on_down {
+                    let fn_name = format!("{actor_snake}_{}", m.name);
+                    this.fn_ctx.fn_buf.push("sys_down_signal:".into());
+                    let gep0 = this.next_reg();
+                    this.push_instr(&format!("{gep0} = getelementptr i64, ptr %args, i64 0"));
+                    let from_id = this.next_reg();
+                    this.push_instr(&format!("{from_id} = load i64, ptr {gep0}"));
+                    let gep1 = this.next_reg();
+                    this.push_instr(&format!("{gep1} = getelementptr i64, ptr %args, i64 1"));
+                    let reason = this.next_reg();
+                    this.push_instr(&format!("{reason} = load i64, ptr {gep1}"));
+                    let gep2 = this.next_reg();
+                    this.push_instr(&format!("{gep2} = getelementptr i64, ptr %args, i64 2"));
+                    let monitor_id = this.next_reg();
+                    this.push_instr(&format!("{monitor_id} = load i64, ptr {gep2}"));
+                    this.push_instr(&format!(
+                        "call void @{fn_name}(ptr %state, i64 {from_id}, i64 {reason}, i64 {monitor_id})"
+                    ));
                     this.push_instr("ret void");
                 }
             }
