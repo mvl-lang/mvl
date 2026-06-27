@@ -484,6 +484,14 @@ impl TextEmitter {
                         );
                     }
                 }
+                Decl::Relabel(rd) if rd.audit => {
+                    // Track declaration-level `audit` relabels so call sites of
+                    // these transitions emit a runtime audit event even when the
+                    // expression itself does not carry `audit` (#896, #1554).
+                    self.module
+                        .audit_relabels
+                        .insert(rd.name.clone(), (rd.from.clone(), rd.to.clone()));
+                }
                 _ => {}
             }
         }

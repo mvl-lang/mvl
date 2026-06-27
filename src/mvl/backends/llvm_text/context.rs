@@ -86,6 +86,13 @@ pub(super) struct ModuleCtx {
     // ── Checker-resolved types (#1302) ───────────────────────────────────
     /// Checker-resolved expression types, keyed by source span.
     pub expr_types: HashMap<Span, Ty>,
+
+    // ── Audit-marked relabel declarations (#896, #1554) ──────────────────
+    /// Map from relabel transition name → (from_label, to_label) for every
+    /// `relabel` declaration carrying the `audit` keyword. Populated during
+    /// the first pass; consulted by the `Expr::Relabel` emit arm to decide
+    /// whether every call site of the transition needs a runtime audit call.
+    pub audit_relabels: HashMap<String, (Option<String>, Option<String>)>,
 }
 
 impl ModuleCtx {
@@ -130,6 +137,7 @@ impl ModuleCtx {
             yield_check_declared: false,
             builtin_syms,
             expr_types: HashMap::new(),
+            audit_relabels: HashMap::new(),
         }
     }
 }
