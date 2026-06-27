@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.223.1] - 2026-06-28
+
+### Fixed
+
+- **`runtime/llvm`: wire link/monitor/set_trap_exit to ID-based C-ABI** (#1599) — LLVM codegen emitted `@_mvl_actors_link(i64, i64)` (matching `_mvl_{module}_{fn}` and the MVL surface `std.actors.link(a: Int, b: Int)`), but the runtime exported `_mvl_link(*mut u8, *mut u8)` — wrong name and wrong signature, so any program using `link()` on `--target=llvm` failed at link time with an undefined symbol. Renamed and adapted the entry points to ID-based signatures (`_mvl_actors_link/unlink/monitor/demonitor/set_trap_exit`), looking up `ActorCell`s via the existing `global_link_registry`. Wired the `traps_exit` actor-decl flag at spawn time. Added `process_links_llvm.mvl` smoke test exercising the runtime symbols end-to-end.
+
 ## [0.223.0] - 2026-06-27
 
 ### Added

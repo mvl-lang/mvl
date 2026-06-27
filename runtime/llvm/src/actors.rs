@@ -442,7 +442,7 @@ thread_local! {
 ///
 /// The LLVM backend stores this as a `ptr` (opaque pointer) in LLVM IR.
 /// Only pass to [`_mvl_actor_send`], [`_mvl_actor_drop`], [`_mvl_actor_get_id`],
-/// [`_mvl_link`], [`_mvl_unlink`], [`_mvl_monitor`], [`_mvl_set_trap_exit`].
+/// [`_mvl_actors_link`], [`_mvl_actors_unlink`], [`_mvl_actors_monitor`], [`_mvl_actors_set_trap_exit`].
 pub struct MvlActorHandle {
     cell: Arc<ActorCell>,
     actor_id: u64,
@@ -703,81 +703,61 @@ pub extern "C" fn _mvl_yield_check() {
 
 /// Create a bidirectional link between two actors (#1177).
 ///
-/// # Safety
-///
-/// Both handles must be valid pointers returned by [`_mvl_actor_spawn`].
+/// Matches the MVL surface API: `std.actors.link(a: Int, b: Int)`. IDs are
+/// looked up via [`global_link_registry`]; unknown IDs are silently ignored
+/// (the actor may have already exited).
 #[no_mangle]
-pub unsafe extern "C" fn _mvl_link(handle_a: *mut u8, handle_b: *mut u8) {
-    if handle_a.is_null() || handle_b.is_null() {
-        return;
-    }
-    let a = &*(handle_a as *const MvlActorHandle);
-    let b = &*(handle_b as *const MvlActorHandle);
+pub extern "C" fn _mvl_actors_link(a_id: i64, b_id: i64) {
     // Guard against self-links: a reflexively-linked actor that dies would
     // send DISC_SHUTDOWN to itself repeatedly, causing an infinite cascade
     // and hanging _mvl_actor_join_all.
-    if a.actor_id == b.actor_id {
+    if a_id == b_id {
         return;
     }
+    let a = a_id as u64;
+    let b = b_id as u64;
     let mut reg = global_link_registry()
         .lock()
         .unwrap_or_else(|p| p.into_inner());
-    reg.links.entry(a.actor_id).or_default().insert(b.actor_id);
-    reg.links.entry(b.actor_id).or_default().insert(a.actor_id);
+    reg.links.entry(a).or_default().insert(b);
+    reg.links.entry(b).or_default().insert(a);
 }
 
-/// Remove a bidirectional link between two actors.
-///
-/// # Safety
-///
-/// Both handles must be valid pointers returned by [`_mvl_actor_spawn`].
+/// Remove a bidirectional link between two actors (by ID).
 #[no_mangle]
-pub unsafe extern "C" fn _mvl_unlink(handle_a: *mut u8, handle_b: *mut u8) {
-    if handle_a.is_null() || handle_b.is_null() {
-        return;
-    }
-    let a = &*(handle_a as *const MvlActorHandle);
-    let b = &*(handle_b as *const MvlActorHandle);
+pub extern "C" fn _mvl_actors_unlink(a_id: i64, b_id: i64) {
+    let a = a_id as u64;
+    let b = b_id as u64;
     let mut reg = global_link_registry()
         .lock()
         .unwrap_or_else(|p| p.into_inner());
-    if let Some(set) = reg.links.get_mut(&a.actor_id) {
-        set.remove(&b.actor_id);
+    if let Some(set) = reg.links.get_mut(&a) {
+        set.remove(&b);
     }
-    if let Some(set) = reg.links.get_mut(&b.actor_id) {
-        set.remove(&a.actor_id);
+    if let Some(set) = reg.links.get_mut(&b) {
+        set.remove(&a);
     }
 }
 
 /// Create a one-way monitor: `watcher` is notified when `target` dies.
 ///
-/// Returns a monitor ID for use with [`_mvl_demonitor`].
-///
-/// # Safety
-///
-/// Both handles must be valid pointers returned by [`_mvl_actor_spawn`].
+/// Returns a monitor ID for use with [`_mvl_actors_demonitor`].
 #[no_mangle]
-pub unsafe extern "C" fn _mvl_monitor(watcher: *mut u8, target: *mut u8) -> i64 {
-    if watcher.is_null() || target.is_null() {
-        return 0;
-    }
-    let w = &*(watcher as *const MvlActorHandle);
-    let t = &*(target as *const MvlActorHandle);
+pub extern "C" fn _mvl_actors_monitor(watcher_id: i64, target_id: i64) -> i64 {
+    let w = watcher_id as u64;
+    let t = target_id as u64;
     let mid = NEXT_MONITOR_ID.fetch_add(1, Ordering::Relaxed);
     let mut reg = global_link_registry()
         .lock()
         .unwrap_or_else(|p| p.into_inner());
-    reg.monitors
-        .entry(t.actor_id)
-        .or_default()
-        .push((mid, w.actor_id));
-    reg.monitor_targets.insert(mid, t.actor_id);
+    reg.monitors.entry(t).or_default().push((mid, w));
+    reg.monitor_targets.insert(mid, t);
     mid as i64
 }
 
 /// Remove a monitor by ID.
 #[no_mangle]
-pub extern "C" fn _mvl_demonitor(monitor_id: i64) {
+pub extern "C" fn _mvl_actors_demonitor(monitor_id: i64) {
     let mid = monitor_id as u64;
     let mut reg = global_link_registry()
         .lock()
@@ -789,24 +769,17 @@ pub extern "C" fn _mvl_demonitor(monitor_id: i64) {
     }
 }
 
-/// Enable exit-signal trapping for an actor.
+/// Enable exit-signal trapping for an actor (by ID).
 ///
 /// When a linked actor dies, this actor receives an `ExitSignal` message
 /// instead of being killed.
-///
-/// # Safety
-///
-/// `handle` must be a valid pointer returned by [`_mvl_actor_spawn`].
 #[no_mangle]
-pub unsafe extern "C" fn _mvl_set_trap_exit(handle: *mut u8) {
-    if handle.is_null() {
-        return;
-    }
-    let actor = &*(handle as *const MvlActorHandle);
+pub extern "C" fn _mvl_actors_set_trap_exit(actor_id: i64) {
+    let id = actor_id as u64;
     let mut reg = global_link_registry()
         .lock()
         .unwrap_or_else(|p| p.into_inner());
-    if let Some(entry) = reg.actors.get_mut(&actor.actor_id) {
+    if let Some(entry) = reg.actors.get_mut(&id) {
         entry.traps_exit = true;
     }
 }
