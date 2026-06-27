@@ -778,10 +778,14 @@ impl RustEmitter {
                 self.push(&format!("\"{}\".to_string().into()", escape_str(s)));
             }
             // Phase 8: `self` used as a tag argument inside an actor behavior.
+            // `_self_ref` is a strong `MvlSender` clone; we just clone it again
+            // to hand out a fresh handle.  No upgrade needed — the runtime keeps
+            // mailboxes alive until cascade quiescence + `_Shutdown` (see
+            // `runtime/rust/src/actors.rs`).
             TirExprKind::Var(name) if name == "self" && !self.actor_self_type.is_empty() => {
                 let ty = self.actor_self_type.clone();
                 self.push(&format!(
-                    "{ty} {{ _sender: self._self_ref.as_ref().unwrap().upgrade().unwrap(), _id: self._self_id }}"
+                    "{ty} {{ _sender: self._self_ref.as_ref().unwrap().clone(), _id: self._self_id }}"
                 ));
             }
             // coerce only: `self` receiver in a type-attached method cannot be moved.

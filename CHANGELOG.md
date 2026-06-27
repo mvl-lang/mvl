@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.222.4] - 2026-06-27
+
+### Fixed
+
+- **`actors`: simplify shutdown via `_self_ref` nulling instead of `IN_FLIGHT`** (#1601) — The previous shutdown protocol used a global `IN_FLIGHT` atomic counter to detect cascade quiescence before sending `_Shutdown`. This introduced cache-line bouncing on every send/recv and a mandatory drain loop in each actor. Simplified: actors now null `_self_ref` (a strong sender clone) when processing `_Shutdown`, allowing channels to close naturally without global synchronization. Fixes actor_pingpong hang and eliminates the global interpreter lock pattern on messages.
+
 ## [0.222.3] - 2026-06-27
 
 ### Fixed
