@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.223.0] - 2026-06-27
+
+### Added
+
+- **`adr,tools`: ADR-0050 backend AST import audit + CI regression guard** (#1594) — Phase 1 of the TIR-first backend migration: categorised all 18 `parser::ast` use-imports across LLVM and Rust backends into (a) import-path switch, (b) TIR struct field, or (c) erase-legacy-path. Key finding: Phase 2 is a no-op — all TIR equivalents already exist; self-hosting LOC estimate revised from ~10 K to ~6 K. `tools/audit_backend_ast.py` enforces a budget that must be lowered toward 0 as Phase 3 lands.
+
 ## [0.222.4] - 2026-06-27
 
 ### Fixed
