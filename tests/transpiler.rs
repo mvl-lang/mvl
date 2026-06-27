@@ -2482,6 +2482,21 @@ fn mut_ref_param_fn_call_emits_ampersand_mut() {
     assert_contains(&rust, "x: &mut i64");
 }
 
+/// #1569: forwarding a `ref` parameter to another `ref` parameter must NOT
+/// emit `&mut y` — `y` is already `&mut T` in Rust and the binding is not
+/// declared `mut`, so the reborrow is rejected (E0596). Rust's auto-reborrow
+/// handles `inner(y)` directly.
+#[test]
+fn ref_param_forwarded_to_ref_param_emits_bare_name() {
+    let src = "fn f(x: ref Int) -> Unit { }  fn g(y: ref Int) -> Unit { f(y) }";
+    let rust = transpile_src(src);
+    assert_contains(&rust, "f(y)");
+    assert!(
+        !rust.contains("f(&mut y)"),
+        "ref→ref forwarding must not double-borrow: {rust}"
+    );
+}
+
 /// Mixed params: only the val-annotated argument gets `&`; owned stays as-is.
 #[test]
 fn mixed_params_selective_borrow_emission() {
