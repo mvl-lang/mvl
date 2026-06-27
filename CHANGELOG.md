@@ -1,22 +1,14 @@
 # Changelog
 
-## [0.223.2] - 2026-06-28
+## [0.222.5] - 2026-06-28
 
 ### Fixed
 
-- **`llvm`: declare `%__closure_type` when calling a fn-typed parameter** (#1604) — The LLVM backend's "local closure call" path GEPs into `%__closure_type` to extract `fn_ptr`/`env_ptr`, but only `emit_lambda` and `make_named_fn_closure_hof` called `ensure_closure_type()`. A function-typed parameter passed in from a caller (e.g. `start: fn() -> Int` in `Supervisor::add_child`) never touched either path, so the GEP referenced an undeclared opaque type and lli verification failed with "base element of getelementptr must be sized". One-line fix in the call dispatch.
+- **`actors`: cascade quiescence wait restores per-actor ping-pong rounds** (#1601 follow-up) — The previous shutdown fix nulled `_self_ref` on `_Shutdown` so channels could close naturally, but without a quiescence wait the `_Shutdown` poison pill raced past user messages: `actor_pingpong` would print one round and exit instead of all five. Restored cascade quiescence detection using *per-channel* `Arc<ChannelMeta>` counters (incremented on send, decremented after dispatch) — no global hot spot. `mvl_join_actors` polls every live channel until in-flight = 0 before sending `_Shutdown`. Each channel's counter only contends between its own producer/consumer threads, so unrelated actor pairs do not share cache lines.
 
-## [0.223.1] - 2026-06-28
+### Changed
 
-### Fixed
-
-- **`runtime/llvm`: wire link/monitor/set_trap_exit to ID-based C-ABI** (#1599) — LLVM codegen emitted `@_mvl_actors_link(i64, i64)` (matching `_mvl_{module}_{fn}` and the MVL surface `std.actors.link(a: Int, b: Int)`), but the runtime exported `_mvl_link(*mut u8, *mut u8)` — wrong name and wrong signature, so any program using `link()` on `--target=llvm` failed at link time with an undefined symbol. Renamed and adapted the entry points to ID-based signatures (`_mvl_actors_link/unlink/monitor/demonitor/set_trap_exit`), looking up `ActorCell`s via the existing `global_link_registry`. Wired the `traps_exit` actor-decl flag at spawn time. Added `process_links_llvm.mvl` smoke test exercising the runtime symbols end-to-end.
-
-## [0.223.0] - 2026-06-27
-
-### Added
-
-- **`adr,tools`: ADR-0050 backend AST import audit + CI regression guard** (#1594) — Phase 1 of the TIR-first backend migration: categorised all 18 `parser::ast` use-imports across LLVM and Rust backends into (a) import-path switch, (b) TIR struct field, or (c) erase-legacy-path. Key finding: Phase 2 is a no-op — all TIR equivalents already exist; self-hosting LOC estimate revised from ~10 K to ~6 K. `tools/audit_backend_ast.py` enforces a budget that must be lowered toward 0 as Phase 3 lands.
+- **`runtime`: bump to v0.197.0** — `MvlSender`/`MvlReceiver`/`MvlWeakSender` carry `Arc<ChannelMeta>` for cascade quiescence accounting. Run `mvl self install` to refresh the on-disk runtime.
 
 ## [0.222.4] - 2026-06-27
 
