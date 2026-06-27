@@ -14,10 +14,8 @@
 use super::emitter::RustEmitter;
 use crate::mvl::checker::types::ARRAY_SIZE_UNKNOWN;
 use crate::mvl::ir::{
-    TirExternDecl, TirFieldDecl, TirTypeBody, TirTypeDecl, TirVariant, TirVariantFields, Ty,
-};
-use crate::mvl::parser::ast::{
-    FieldDecl, GenericParam, RefExpr, TypeBody, TypeDecl, TypeExpr, Variant, VariantFields,
+    GenericParam, RefExpr, TirExternDecl, TirFieldDecl, TirTypeBody, TirTypeDecl, TirVariant,
+    TirVariantFields, Ty, TypeExpr,
 };
 
 // ── Security label preamble ───────────────────────────────────────────────
@@ -128,104 +126,6 @@ impl RustEmitter {
         self.pop_indent();
         self.line("}");
     }
-
-    // ── TypeDecl ─────────────────────────────────────────────────────────────
-
-    pub fn emit_type_decl(&mut self, td: &TypeDecl) {
-        match &td.body {
-            TypeBody::Struct { fields, invariant } => {
-                self.emit_struct(&td.name, &td.params, fields, invariant.as_ref());
-            }
-            TypeBody::Enum(variants) => self.emit_enum(&td.name, &td.params, variants),
-            TypeBody::Alias(ty) => self.emit_alias(&td.name, &td.params, ty),
-        }
-    }
-
-    // ── Struct ────────────────────────────────────────────────────────────────
-
-    fn emit_struct(
-        &mut self,
-        name: &str,
-        params: &[GenericParam],
-        fields: &[FieldDecl],
-        invariant: Option<&RefExpr>,
-    ) {
-        self.emit_derive(&["Debug", "Clone", "PartialEq"]);
-        self.line(&format!("pub struct {}{} {{", name, generic_params(params)));
-        self.push_indent();
-        for field in fields {
-            let ty_str = emit_type_expr(&field.ty);
-            self.line(&format!("pub {}: {},", field.name, ty_str));
-        }
-        self.pop_indent();
-        self.line("}");
-
-        // Emit a constructor if any field has a refinement predicate or a struct invariant exists
-        let refined_fields: Vec<_> = fields.iter().filter(|f| f.refinement.is_some()).collect();
-        if !refined_fields.is_empty() || invariant.is_some() {
-            self.blank();
-            self.line(&format!(
-                "impl{} {}{} {{",
-                generic_params(params),
-                name,
-                generic_params(params)
-            ));
-            self.push_indent();
-            self.line(&format!(
-                "/// Construct `{}`, validating all refinement predicates.",
-                name
-            ));
-            let param_list: Vec<String> = fields
-                .iter()
-                .map(|f| format!("{}: {}", f.name, emit_type_expr(&f.ty)))
-                .collect();
-            self.line(&format!("pub fn new({}) -> Self {{", param_list.join(", ")));
-            self.push_indent();
-            for field in &refined_fields {
-                if let Some(pred) = &field.refinement {
-                    let pred_str = emit_ref_expr_for_assert(pred, &field.name);
-                    self.line(&format!(
-                        "assert!({pred_str}, \"refinement violated: {} {{}}\", {});",
-                        field.name, field.name
-                    ));
-                }
-            }
-            let field_inits: Vec<String> = fields.iter().map(|f| f.name.clone()).collect();
-            if let Some(inv) = invariant {
-                // Build struct first, then assert the invariant using field access on the value.
-                self.line(&format!(
-                    "let _mvl_val = Self {{ {} }};",
-                    field_inits.join(", ")
-                ));
-                let inv_str = emit_ref_expr_for_assert(inv, "_mvl_val");
-                // Enforce invariant according to the active AssertMode (#662).
-                let inv_stmt = match self.assert_mode {
-                    crate::mvl::backends::AssertMode::Always => {
-                        format!("assert!({inv_str}, \"struct invariant violated for `{name}`\");")
-                    }
-                    crate::mvl::backends::AssertMode::DebugOnly => {
-                        format!(
-                            "debug_assert!({inv_str}, \"struct invariant violated for `{name}`\");"
-                        )
-                    }
-                    crate::mvl::backends::AssertMode::Assume => {
-                        // Assume mode: omit runtime check entirely.
-                        String::new()
-                    }
-                };
-                if !inv_stmt.is_empty() {
-                    self.line(&inv_stmt);
-                }
-                self.line("_mvl_val");
-            } else {
-                self.line(&format!("Self {{ {} }}", field_inits.join(", ")));
-            }
-            self.pop_indent();
-            self.line("}");
-            self.pop_indent();
-            self.line("}");
-        }
-    }
 }
 
 /// Assert that `name` is a safe Rust identifier before interpolating it into
@@ -253,112 +153,7 @@ fn unwrap_refined_ty(ty: &TypeExpr) -> &TypeExpr {
     }
 }
 
-// ── Enum ──────────────────────────────────────────────────────────────────
-
-impl RustEmitter {
-    fn emit_enum(&mut self, name: &str, params: &[GenericParam], variants: &[Variant]) {
-        self.emit_derive(&["Debug", "Clone", "PartialEq"]);
-        self.line(&format!("pub enum {}{} {{", name, generic_params(params)));
-        self.push_indent();
-        for v in variants {
-            match &v.fields {
-                VariantFields::Unit => self.line(&format!("{},", v.name)),
-                VariantFields::Tuple(tys) => {
-                    let tys_str: Vec<String> = tys.iter().map(emit_type_expr).collect();
-                    self.line(&format!("{}({}),", v.name, tys_str.join(", ")));
-                }
-                VariantFields::Struct(fields) => {
-                    self.line(&format!("{} {{", v.name));
-                    self.push_indent();
-                    for f in fields {
-                        let ty_str = emit_type_expr(&f.ty);
-                        self.line(&format!("{}: {},", f.name, ty_str));
-                    }
-                    self.pop_indent();
-                    self.line("},");
-                }
-            }
-        }
-        self.pop_indent();
-        self.line("}");
-    }
-
-    // ── Type alias / refined alias ────────────────────────────────────────────
-
-    fn emit_alias(&mut self, name: &str, params: &[GenericParam], ty: &TypeExpr) {
-        match ty {
-            TypeExpr::Refined { inner, pred, .. } => {
-                // Refined alias becomes a newtype with constructor validation
-                let inner_str = emit_type_expr(inner);
-                // Add Copy when the inner type is a primitive (i64, f64, bool, char, u8)
-                if is_copy_primitive(inner) {
-                    self.emit_derive(&["Debug", "Clone", "Copy", "PartialEq", "PartialOrd"]);
-                } else {
-                    self.emit_derive(&["Debug", "Clone", "PartialEq", "PartialOrd"]);
-                }
-                self.line(&format!(
-                    "pub struct {}{}(pub {});",
-                    name,
-                    generic_params(params),
-                    inner_str
-                ));
-                self.blank();
-                self.line(&format!("impl {} {{", name));
-                self.push_indent();
-                self.line(&format!(
-                    "/// Construct `{name}` — panics if the refinement is violated."
-                ));
-                self.line(&format!("pub fn new(v: {inner_str}) -> Self {{"));
-                self.push_indent();
-                let pred_str = emit_ref_expr_for_assert(pred, "v");
-                self.line(&format!(
-                    "assert!({pred_str}, \"refinement violated: {name}({{}})\", v);"
-                ));
-                self.line("Self(v)");
-                self.pop_indent();
-                self.line("}");
-                self.pop_indent();
-                self.line("}");
-                // Generate From<Alias> for BaseType so `.into()` unwraps correctly (#1328)
-                self.blank();
-                self.line(&format!("impl From<{name}> for {inner_str} {{"));
-                self.push_indent();
-                self.line(&format!("fn from(v: {name}) -> {inner_str} {{"));
-                self.push_indent();
-                self.line("v.0");
-                self.pop_indent();
-                self.line("}");
-                self.pop_indent();
-                self.line("}");
-            }
-            _ => {
-                // Plain alias
-                let ty_str = emit_type_expr(ty);
-                if params.is_empty() {
-                    self.line(&format!("pub type {name} = {ty_str};"));
-                } else {
-                    self.line(&format!(
-                        "pub type {}{} = {ty_str};",
-                        name,
-                        generic_params(params)
-                    ));
-                }
-            }
-        }
-    }
-}
-
 // ── Helpers ───────────────────────────────────────────────────────────────
-
-/// Returns true when the MVL type maps to a Rust `Copy` primitive.
-fn is_copy_primitive(ty: &TypeExpr) -> bool {
-    match ty {
-        TypeExpr::Base { name, args, .. } if args.is_empty() => {
-            matches!(name.as_str(), "Int" | "Float" | "Bool" | "Char" | "Byte")
-        }
-        _ => false,
-    }
-}
 
 impl RustEmitter {
     fn emit_derive(&mut self, traits: &[&str]) {
