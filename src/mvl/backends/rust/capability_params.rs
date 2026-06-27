@@ -35,7 +35,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::mvl::parser::ast::{Capability, Param, TypeExpr};
+use crate::mvl::ir::{Capability, TypeExpr};
+use crate::mvl::parser::ast::Param;
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
@@ -482,7 +483,7 @@ fn lvalue_is_param_tir(lv: &crate::mvl::ir::LValue, param: &str) -> bool {
 mod tests {
     use super::*;
     use crate::mvl::ir::{TirBlock, TirExpr, TirExprKind, TirFn, TirParam, TirStmt, Ty};
-    use crate::mvl::parser::ast::Capability;
+    use crate::mvl::ir::Capability;
     use crate::mvl::parser::lexer::Span;
 
     fn sp() -> Span {
