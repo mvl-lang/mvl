@@ -2990,6 +2990,55 @@ pub partial fn status_reason(healthy: Bool) -> Bool {
     );
 }
 
+/// A user-defined function that shadows a pkg-exported function with the same
+/// name must cause the pkg variant to emit with a package prefix, so there is
+/// no `pub fn` collision in the Rust output (#1587).
+#[test]
+fn user_fn_shadowing_pkg_fn_prefixes_pkg_variant() {
+    use mvl::mvl::backends::rust::transpile_project_with_pkg_names;
+
+    let pkg_http_src = r#"
+pub partial fn serve(code: Int) -> Int {
+    code
+}
+"#;
+    // User defines a `serve` returning Unit — different signature, same name.
+    let user_src = r#"
+fn serve(x: Int) -> Unit { }
+fn main() -> Unit { }
+"#;
+
+    let prelude = vec![parse_prog(pkg_http_src)];
+    let user_prog = parse_prog(user_src);
+    let pkg_names: Vec<Option<String>> = vec![Some("http".to_string())];
+    let expr_types = mvl::mvl::checker::collect_prelude_expr_types(&prelude);
+
+    let out = transpile_project_with_pkg_names(
+        "crate",
+        &user_prog,
+        &[],
+        &prelude,
+        expr_types,
+        vec![],
+        Default::default(),
+        &pkg_names,
+    );
+
+    assert!(
+        out.main_rs.contains("fn http__serve("),
+        "pkg variant must be emitted as http__serve:\n{}",
+        out.main_rs
+    );
+    // Exactly one bare `pub fn serve(` — the user's. Counting prevents the dup
+    // case where both the pkg and user variant are emitted under the same name.
+    let bare_count = out.main_rs.matches("pub fn serve(").count();
+    assert_eq!(
+        bare_count, 1,
+        "expected exactly one bare `pub fn serve(` (user's), got {bare_count}:\n{}",
+        out.main_rs
+    );
+}
+
 /// When only one package exports a function name, it keeps its original name
 /// (no unnecessary renaming).
 #[test]

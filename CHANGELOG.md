@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.221.7] - 2026-06-27
+
+### Fixed
+
+- **`transpiler`: prefix pkg fn when shadowed by user fn** (#1587) — When a user-defined function shared its name with a function from an imported `pkg.*` module (e.g. user defines `serve(...)` while importing from `pkg.http` which also exports `serve(...)`), both were emitted as `pub fn <name>(...)` at the crate root, producing E0428 (defined multiple times) and binding call sites to the wrong overload. The cross-package dispatch table (`pkg_fn_dispatch`) only namespaced functions when 2+ packages collided (#1475); now it also prefixes the pkg variant whenever a user function shadows it. The call-site lookup keys on (name, ret_ty), so user calls keep the bare name and pkg-internal calls route to the prefixed name.
+
 ## [0.221.6] - 2026-06-27
 
 ### Fixed
