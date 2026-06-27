@@ -482,8 +482,8 @@ fn lvalue_is_param_tir(lv: &crate::mvl::ir::LValue, param: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mvl::ir::{TirBlock, TirExpr, TirExprKind, TirFn, TirParam, TirStmt, Ty};
     use crate::mvl::ir::Capability;
+    use crate::mvl::ir::{TirBlock, TirExpr, TirExprKind, TirFn, TirParam, TirStmt, Ty};
     use crate::mvl::parser::lexer::Span;
 
     fn sp() -> Span {
