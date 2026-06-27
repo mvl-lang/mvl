@@ -125,14 +125,10 @@ fn cyclonedx(
             licenses.get(&lp.name).map(|s| s.as_str()),
         ));
     }
-    let mut native: Vec<(&String, &String)> = manifest.native.iter().collect();
-    native.sort_by_key(|(k, _)| *k);
-    for (name, version) in &native {
+    for (name, version) in super::render::iter_native_sorted(&manifest.native) {
         entries.push(cargo_component_json(name, version));
     }
-    let mut sorted_sources: Vec<&SourceFile> = sources.iter().collect();
-    sorted_sources.sort_by_key(|s| s.rel_path.as_str());
-    for sf in sorted_sources {
+    for sf in super::render::iter_source_files_sorted(sources) {
         entries.push(source_file_component_json(sf));
     }
 
@@ -285,9 +281,10 @@ fn spdx(
     }
 
     // Native (Rust) dependencies
-    let mut native: Vec<(&String, &String)> = manifest.native.iter().collect();
-    native.sort_by_key(|(k, _)| *k);
-    for (i, (name, version)) in native.iter().enumerate() {
+    for (i, (name, version)) in super::render::iter_native_sorted(&manifest.native)
+        .iter()
+        .enumerate()
+    {
         let spdx_id = format!("SPDXRef-native-{}", spdx_id_for(name, i));
         out += &format!("PackageName: {name}\n");
         out += &format!("SPDXID: {spdx_id}\n");
@@ -304,9 +301,7 @@ fn spdx(
     }
 
     // Source files
-    let mut sorted_sources: Vec<&SourceFile> = sources.iter().collect();
-    sorted_sources.sort_by_key(|s| s.rel_path.as_str());
-    for sf in sorted_sources {
+    for sf in super::render::iter_source_files_sorted(sources) {
         let spdx_id = format!(
             "SPDXRef-file-{}",
             sf.rel_path
