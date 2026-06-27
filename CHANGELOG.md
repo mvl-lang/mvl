@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.221.4] - 2026-06-27
+
+### Fixed
+
+- **`audit`: deterministic ordering of supply-chain scan output** (#1564) — `audit::scan_all` iterated `manifest.native` and `manifest.c_native` (both `HashMap`s) in arbitrary order, so `mvl audit --supply-chain` produced findings in a different sequence across runs even for the same input.  Sorting helpers in the new `packages/render.rs` now enforce alphabetical iteration; SBOM emitters were already sorted and remain byte-identical.
+
+### Refactored
+
+- **`packages`: extract sorted-iter helpers to `render.rs`** (#1564) — Three small helpers (`iter_native_sorted`, `iter_c_native_sorted`, `iter_source_files_sorted`) replace four copies of `sort_by_key(|(k, _)| *k)` boilerplate across `audit.rs` and the two SBOM emitters.  Note: AC #2 (dedupe `json_escape` between audit and sbom) was already closed by #1567.  A `DepEntry` struct unifying lock + native + c-native was considered and rejected — audit and SBOM have genuinely different domain needs.
+
 ## [0.221.3] - 2026-06-27
 
 ### Refactored
