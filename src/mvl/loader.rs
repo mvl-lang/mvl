@@ -562,8 +562,7 @@ pub fn collect_llvm_text_builtins(progs: &[Program]) -> HashMap<String, BuiltinS
                         None => fd.name.clone(),
                     };
                     let c_sym = derive_builtin_c_symbol(&m, &fd.receiver_type, &fd.name);
-                    let param_tys: Vec<TypeExpr> =
-                        fd.params.iter().map(|p| p.ty.clone()).collect();
+                    let param_tys: Vec<TypeExpr> = fd.params.iter().map(|p| p.ty.clone()).collect();
                     result.insert(
                         fn_key,
                         BuiltinSymbolInfo {

@@ -21,6 +21,7 @@
 //! - Trait fan-out per trait: number of types implementing each trait.
 //! - Extern function count / total function count → extern ratio.
 
+use crate::mvl::json_util::json_escape;
 use crate::mvl::parser::ast::{Block, Decl, ElseBranch, Expr, FnDecl, MatchBody, Program, Stmt};
 
 // ── Per-function metrics ──────────────────────────────────────────────────
@@ -354,20 +355,4 @@ pub fn print_json(reports: &[ComplexityReport]) {
         println!("  }}{comma}");
     }
     println!("]");
-}
-
-fn json_escape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
-            c => out.push(c),
-        }
-    }
-    out
 }

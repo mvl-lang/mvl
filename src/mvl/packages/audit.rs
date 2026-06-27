@@ -10,6 +10,7 @@
 //! Also scans `[native]` (Rust crates) against OSV for ecosystem `"crates.io"`.
 
 use super::manifest::CNativeSpec;
+use crate::mvl::json_util::json_escape;
 use std::collections::HashMap;
 
 // ── CVE severity ─────────────────────────────────────────────────────────────
@@ -648,27 +649,6 @@ fn extract_description(json: &str) -> Option<String> {
     let en_pos = block.find("\"en\"")?;
     let after_en = &block[en_pos..];
     extract_string_field(after_en, "\"value\"")
-}
-
-// ── JSON string escaping ────────────────────────────────────────────────────
-
-/// Escape a string for safe inclusion in a JSON string value.
-fn json_escape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => {
-                out.push_str(&format!("\\u{:04x}", c as u32));
-            }
-            c => out.push(c),
-        }
-    }
-    out
 }
 
 // ── URL encoding ────────────────────────────────────────────────────────────
@@ -1637,32 +1617,6 @@ mod tests {
         // find_map picks the first CWE that maps to a requirement
         assert_eq!(findings[0].cwes, vec![476, 787]);
         assert_eq!(findings[0].requirement, Some(MvlRequirement::NullSafety));
-    }
-
-    // ── json_escape ─────────────────────────────────────────────────────────
-
-    #[test]
-    fn json_escape_quotes_and_backslashes() {
-        assert_eq!(json_escape(r#"a"b\c"#), r#"a\"b\\c"#);
-    }
-
-    #[test]
-    fn json_escape_control_characters() {
-        assert_eq!(json_escape("a\nb\tc"), "a\\nb\\tc");
-        assert_eq!(json_escape("x\r\n"), "x\\r\\n");
-    }
-
-    #[test]
-    fn json_escape_low_control_codes() {
-        // ASCII 0x01 should be \u0001
-        let input = String::from("\x01");
-        assert_eq!(json_escape(&input), "\\u0001");
-    }
-
-    #[test]
-    fn json_escape_safe_string_unchanged() {
-        assert_eq!(json_escape("openssl"), "openssl");
-        assert_eq!(json_escape("1.3.0"), "1.3.0");
     }
 
     // ── truncate UTF-8 safety ───────────────────────────────────────────────

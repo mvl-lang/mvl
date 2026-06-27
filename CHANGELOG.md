@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.221.2] - 2026-06-27
+
+### Fixed
+
+- **`sbom`: escape C0 control characters in JSON output** (#1567) — `packages::sbom::json_escape` only handled `"`, `\`, `\n`, `\r`, `\t`. Descriptions or names containing C0 control characters (`\x00`–`\x1F` minus the four named ones) produced invalid JSON. Now routed through the canonical helper which `\u00XX`-encodes all C0 controls plus `U+2028` / `U+2029`.
+
+### Refactored
+
+- **`compiler`: dedupe `json_escape` across the crate** (#1559 / #1567) — four near-identical copies lived in `src/cli.rs`, `src/mvl/passes/complexity.rs`, `src/mvl/packages/audit.rs`, and `src/mvl/packages/sbom.rs` — each with slightly different escape coverage (see Fixed above). Promoted a single canonical implementation to `src/mvl/json_util.rs` and routed all four call sites through it; `cli.rs` keeps a `pub(super) use` re-export so the sibling cli modules continue to work unchanged.
+- **`checker`: migrate ifc/refinements walkers to ADR-0048 `Visit` trait** (#1560 / #1567) — `ifc.rs` and `refinements.rs` both hand-rolled exhaustive `Block`/`Stmt`/`Expr` recursion (the trio survived even after #1526 introduced `Visit`). Replaced with `IfcFlowAnalyzer` and `RefinementAnalyzer` structs implementing `Visit`; small scope helpers (`in_branch`, `in_pc`, `with_narrowed`) save/restore cloned env/pc/var_refs at branch points. Adding a new `Expr` or `Stmt` variant now fails to compile in `parser/visit.rs` first, forcing a deliberate decision in every walker. Behaviour byte-identical (174/174 corpus, 1440/1440 lib tests, 38/38 stdlib).
+
 ## [0.221.1] - 2026-06-26
 
 ### Fixed
