@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.223.3] - 2026-06-28
+
+### Fixed
+
+- **`llvm`: dedupe actor decl emission across `emit_program` calls** (#1610) — The LLVM actor pass ran once per `emit_program` invocation (once per prelude program plus once for the user program). `actor_decls` is a HashMap that accumulates across calls, but the pass naively re-emitted every entry every time — producing 5× duplicate definitions of std.actors' Supervisor and DeadLetterHandler and fatal lli "invalid redefinition" errors on any program that did `use std.actors`. Fix: track emitted actor names in a new `Module.actor_emitted: HashSet<String>` field; the pass skips names already in the set. User-defined actors are unaffected (they only appear in one program).
+
 ## [0.223.2] - 2026-06-28
 
 ### Fixed
