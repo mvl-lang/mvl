@@ -32,3 +32,17 @@ fn process_and_forward(ref local: Buffer, channel: Channel, val result: Report) 
     let _n: Int = local.size();
     channel.send(result)
 }
+
+// Generic touch[T] — bridges fn-pointer's loss of capability/ref modifiers.
+fn touch[T](_x: T) -> Unit { }
+
+// ── Test: reference each declaration so the linter records it as used ─────────
+
+test fn capabilities_typecheck() -> Unit {
+    touch(send_owned);
+    touch(broadcast);
+    touch(get_length);
+    touch(transfer_iso);
+    touch(share_val);
+    touch(process_and_forward);
+}

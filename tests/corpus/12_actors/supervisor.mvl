@@ -142,3 +142,17 @@ fn worker_id(w: Worker) -> Int {
 fn counter_id(c: Counter) -> Int {
     c.actor_id()
 }
+
+// ── Test: reference each declaration so the linter records it as used ─────────
+
+test fn supervisor_typecheck() -> Unit {
+    let _: fn() -> Unit ! Spawn + Send = start_supervised_system;
+    let _: fn() -> Unit ! Spawn + Send = start_one_for_all_system;
+    let _: fn() -> Unit ! Spawn + Send = start_rest_for_one_system;
+    let _: RestartStrategy = one_for_one();
+    let _: RestartStrategy = one_for_all();
+    let _: RestartStrategy = rest_for_one();
+    let _: fn(RestartStrategy) -> String = describe_strategy;
+    let _: fn(Worker) -> Int = worker_id;
+    let _: fn(Counter) -> Int = counter_id;
+}
