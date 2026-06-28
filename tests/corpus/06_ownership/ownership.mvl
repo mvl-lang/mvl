@@ -13,11 +13,13 @@ fn consume_buffer(b: Buffer) -> Int {
 }
 
 // Transfer ownership via consume() into a function call
-fn transfer(b: Buffer) -> Int {
-    consume_buffer(consume(b))
+test fn transfer() -> Unit {
+    let b: Buffer = Buffer { data: "x", size: 1 };
+    let _: Int = consume_buffer(consume(b));
 }
 
 // Immutable reference access — does not consume
-fn read_size(b: Buffer) -> Int {
-    b.size
+test fn read_size() -> Unit {
+    let b: Buffer = Buffer { data: "x", size: 1 };
+    let _: Int = b.size;
 }

@@ -13,21 +13,25 @@ fn take_resource(r: Resource) -> Int {
 }
 
 // Explicit consume transfers ownership
-fn transfer_resource(r: Resource) -> Int {
-    take_resource(consume(r))
+test fn transfer_resource() -> Unit {
+    let r: Resource = Resource { handle: 1, name: "r" };
+    let _: Int = take_resource(consume(r));
 }
 
 // consume in a let binding
-fn rebind_resource(r: Resource) -> Resource {
+test fn rebind_resource() -> Unit {
+    let r: Resource = Resource { handle: 1, name: "r" };
     let moved: Resource = consume(r);
-    moved
+    let _: Resource = moved;
 }
 
 // consume inside a conditional
-fn maybe_consume(flag: Bool, r: Resource) -> Int {
-    if flag {
+test fn maybe_consume() -> Unit {
+    let flag: Bool = true;
+    let r: Resource = Resource { handle: 1, name: "r" };
+    let _: Int = if flag {
         take_resource(consume(r))
     } else {
         0
-    }
+    };
 }

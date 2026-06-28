@@ -17,3 +17,12 @@ fn use_after_consume(t: Token) -> String {
     let _moved: Token = consume(t);
     t.value
 }
+
+// ── Test: reference each declaration so the linter records it as used ─────────
+// File remains corpus:expect-fail; the UseAfterMove error lives in
+// use_after_consume.
+
+test fn use_after_move_typecheck() -> Unit {
+    let _: fn(Token) -> String = accept;
+    let _: fn(Token) -> String = use_after_consume;
+}

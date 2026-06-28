@@ -3,22 +3,26 @@
 // After iterating over a collection, the collection must still be
 // usable (value semantics — iteration clones or borrows).
 
-partial fn process_and_count(items: List[Int]) -> Int {
+test fn process_and_count() -> Unit {
+    let items: List[Int] = [1, 2, 3];
     let i: ref Int = 0;
-    while i < items.len() {
+    for _x in range(0, items.len()) {
         i = i + 1;
     }
+    let _: Int = i;
     // items still usable after the loop
-    items.len()
+    let _: Int = items.len();
 }
 
-fn first_or_default(items: List[Int]) -> Int {
-    items.get(0).unwrap_or(0)
+test fn first_or_default() -> Unit {
+    let items: List[Int] = [1, 2, 3];
+    let _: Int = items.get(0).unwrap_or(0);
 }
 
 // Map used after multiple lookups
-fn lookup_twice(m: Map[String, Int]) -> Int {
+test fn lookup_twice() -> Unit {
+    let m: Map[String, Int] = {"x": 1, "y": 2};
     let a: Int = m.get("x").unwrap_or(0);
     let b: Int = m.get("y").unwrap_or(0);
-    a + b
+    let _: Int = a + b;
 }

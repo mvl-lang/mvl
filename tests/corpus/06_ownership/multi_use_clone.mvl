@@ -18,20 +18,23 @@ fn distance_y(p: Point) -> Int {
 }
 
 // p is used twice — clone required at first call site
-fn total_distance(p: Point) -> Int {
+test fn total_distance() -> Unit {
+    let p: Point = Point { x: 1, y: 2 };
     let dx: Int = distance_x(p);
     let dy: Int = distance_y(p);
-    dx + dy
+    let _: Int = dx + dy;
 }
 
 // List used in two function calls
-fn sum_and_len(items: List[Int]) -> Int {
+test fn sum_and_len() -> Unit {
+    let items: List[Int] = [1, 2, 3];
     let s: Int = items.len();
     let t: Int = items.len();
-    s + t
+    let _: Int = s + t;
 }
 
 // Int used in multiple expressions (value type, trivial copy)
-fn triple(x: Int) -> Int {
-    x + x + x
+test fn triple() -> Unit {
+    let x: Int = 5;
+    let _: Int = x + x + x;
 }
