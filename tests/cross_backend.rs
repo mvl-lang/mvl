@@ -1632,3 +1632,88 @@ fn llvm_std_actors_import_no_duplicate_decls() {
         );
     }
 }
+
+// ── #1615: byte_* helpers must emit valid IR ────────────────────────────────
+
+/// std.math.byte_* helpers previously emitted invalid/undef IR on the LLVM
+/// backend — `byte_to_string` returned `ret ptr %b` where %b was i8 (an LLVM
+/// IR verification error), and `byte_to_int` / bitwise / shift / wrapping
+/// helpers returned `ret undef`. This test compiles a program that pulls in
+/// `std.math` (transitively, via `use std.actors.{link}`) and checks the
+/// emitted IR has well-formed bodies for every byte_* stub.
+#[test]
+fn llvm_byte_methods_emit_valid_ir() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let src = dir.path().join("byte_helpers.mvl");
+    std::fs::write(&src, "use std.actors.{link}\nfn main() -> Unit { }\n").expect("write source");
+
+    let out = Command::new(mvl_bin())
+        .args(["build", src.to_str().unwrap(), "--backend=llvm"])
+        .current_dir(dir.path())
+        .output()
+        .expect("mvl build");
+    assert!(
+        out.status.success(),
+        "mvl build --backend=llvm failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+
+    let ll = dir.path().join("byte_helpers.ll");
+    let ir = std::fs::read_to_string(&ll).expect("read emitted IR");
+
+    // Slice out each byte_* function body (from `define ... @byte_X` to the
+    // matching closing `}`) and assert no `ret undef` and that the byte_to_string
+    // body returns a real ptr — not `ret ptr %b` where %b is i8.
+    let expected: &[(&str, &str)] = &[
+        ("@byte_to_string", "_mvl_string_new"),
+        ("@byte_to_int", "zext i8"),
+        ("@byte_bit_and", "and i8"),
+        ("@byte_bit_or", "or i8"),
+        ("@byte_bit_xor", "xor i8"),
+        ("@byte_bit_not", "xor i8"),
+        ("@byte_shift_left", "shl i8"),
+        ("@byte_shift_right", "lshr i8"),
+        ("@byte_wrapping_add", "add i8"),
+        ("@byte_wrapping_sub", "sub i8"),
+        ("@byte_wrapping_mul", "mul i8"),
+    ];
+
+    for (sym, needle) in expected {
+        let header = format!(
+            "define {} ",
+            if sym.contains("to_string") {
+                "ptr"
+            } else if sym.contains("to_int") {
+                "i64"
+            } else {
+                "i8"
+            }
+        );
+        let start_pat = format!("{header}{sym}(");
+        let start = ir
+            .find(&start_pat)
+            .unwrap_or_else(|| panic!("missing definition for {sym} (looked for `{start_pat}`)"));
+        // Find the matching `}` of the function body.
+        let after_open = ir[start..]
+            .find("\n{\n")
+            .map(|i| start + i + 3)
+            .unwrap_or_else(|| panic!("malformed body for {sym}"));
+        let end = ir[after_open..]
+            .find("\n}")
+            .map(|i| after_open + i)
+            .unwrap_or_else(|| panic!("unterminated body for {sym}"));
+        let body = &ir[after_open..end];
+
+        assert!(
+            body.contains(needle),
+            "{sym} body missing `{needle}`:\n{body}",
+        );
+        assert!(
+            !body.contains("ret i8 undef")
+                && !body.contains("ret i64 undef")
+                && !body.contains("ret ptr undef"),
+            "{sym} still returns undef:\n{body}",
+        );
+    }
+}
