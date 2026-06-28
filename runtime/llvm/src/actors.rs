@@ -242,13 +242,16 @@ fn process_one_message(cell: Arc<ActorCell>, local: &Worker<Arc<ActorCell>>) {
     // ── System discriminants ──────────────────────────────────────────────
 
     if msg.disc == DISC_SHUTDOWN {
-        // Drain mailbox, release token, notify links/monitors.
+        // Drain mailbox, notify links/monitors, then release token.
+        // Order matters: keep `scheduled = true` across process_actor_exit so
+        // _mvl_actor_join_all's spin-wait observes this cell as busy until the
+        // exit cascade finishes (#1602).
         cell.mailbox
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .clear();
-        cell.scheduled.store(false, Ordering::Release);
         process_actor_exit(cell.actor_id, 2); // Killed
+        cell.scheduled.store(false, Ordering::Release);
         return;
     }
 
@@ -263,13 +266,16 @@ fn process_one_message(cell: Arc<ActorCell>, local: &Worker<Arc<ActorCell>>) {
         unsafe { (cell.dispatch)(state_ptr, msg.disc, msg.args.as_ptr()) };
     }));
     if result.is_err() {
-        // Actor panicked: drain and exit.
+        // Actor panicked: drain, notify links/monitors, then release token.
+        // Order matters: keep `scheduled = true` across process_actor_exit so
+        // _mvl_actor_join_all's spin-wait observes this cell as busy until the
+        // exit cascade finishes (#1602).
         cell.mailbox
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .clear();
-        cell.scheduled.store(false, Ordering::Release);
         process_actor_exit(cell.actor_id, 1); // Panic
+        cell.scheduled.store(false, Ordering::Release);
         return;
     }
 
@@ -616,24 +622,22 @@ pub unsafe extern "C" fn _mvl_actor_drop(handle: *mut u8) {
 ///
 /// Emitted at the end of `fn main()` by the LLVM backend (#1124).
 ///
-/// 1. Clear the link/monitor registry — drops `Arc<ActorCell>` refs held there.
-/// 2. Drain the actor registry — send `DISC_SHUTDOWN` to every live cell.
-/// 3. Spin-wait until every cell is idle (`scheduled = false`).
-/// 4. Set `shutdown = true` and join all worker threads.
+/// 1. Drain the actor registry; collect all cells.
+/// 2. Fire the exit cascade for each cell up-front via `process_actor_exit`.
+///    This pushes `EXIT_SIGNAL`/`DOWN_SIGNAL` to linked/monitored peers
+///    BEFORE any `DISC_SHUTDOWN` is queued — otherwise `DISC_SHUTDOWN` would
+///    drain a peer's mailbox and the cascade would be silently lost (#1602).
+/// 3. Spin-wait until peers finish dispatching `on_exit`/`on_down` handlers.
+/// 4. Push `DISC_SHUTDOWN` to every cell to terminate the dispatch loop.
+///    `process_actor_exit` invoked again from the worker becomes a no-op
+///    because the registry was already drained in step 2.
+/// 5. Spin-wait until every cell is idle.
+/// 6. Clear the link/monitor registry (now empty, but releases any residual
+///    `Arc<ActorCell>` refs).
+/// 7. Set `shutdown = true` and join all worker threads.
 #[no_mangle]
 pub extern "C" fn _mvl_actor_join_all() {
-    // 1. Clear link/monitor registry.
-    {
-        let mut reg = global_link_registry()
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
-        reg.actors.clear();
-        reg.links.clear();
-        reg.monitors.clear();
-        reg.monitor_targets.clear();
-    }
-
-    // 2. Drain actor registry; collect all cells and drop live handles.
+    // 1. Drain actor registry; collect all cells and drop live handles.
     let cells: Vec<Arc<ActorCell>> = global_actor_registry()
         .lock()
         .unwrap_or_else(|p| p.into_inner())
@@ -647,7 +651,29 @@ pub extern "C" fn _mvl_actor_join_all() {
         })
         .collect();
 
-    // 3. Push DISC_SHUTDOWN to every live actor cell.
+    // 2. Fire the exit cascade for every live actor up-front. This injects
+    //    EXIT_SIGNAL / DOWN_SIGNAL into peer mailboxes BEFORE DISC_SHUTDOWN is
+    //    queued, so peers see the cascade and dispatch their on_exit/on_down
+    //    handlers. Reason = 2 (Killed) matches the Rust runtime convention for
+    //    shutdown-initiated termination. Idempotent: a second call on the same
+    //    actor (from the worker's DISC_SHUTDOWN handler) finds empty links and
+    //    is a no-op.
+    for cell in &cells {
+        process_actor_exit(cell.actor_id, 2);
+    }
+
+    // 3. Wait for peers to dispatch their on_exit/on_down handlers. Each
+    //    EXIT_SIGNAL/DOWN_SIGNAL push schedules the peer, so this loop blocks
+    //    until those handlers complete and cells go idle.
+    loop {
+        let all_idle = cells.iter().all(|c| !c.scheduled.load(Ordering::Acquire));
+        if all_idle {
+            break;
+        }
+        thread::sleep(std::time::Duration::from_millis(1));
+    }
+
+    // 4. Push DISC_SHUTDOWN to every cell to terminate the dispatch loop.
     for cell in &cells {
         cell.mailbox
             .lock()
@@ -659,9 +685,7 @@ pub extern "C" fn _mvl_actor_join_all() {
         cell.schedule();
     }
 
-    // 4. Spin-wait until all cells are idle (DISC_SHUTDOWN has been processed).
-    // Sleep 1ms per iteration rather than yield_now to avoid burning CPU and
-    // to give workers time to run on single-core hosts.
+    // 5. Spin-wait until all cells finish DISC_SHUTDOWN.
     loop {
         let all_idle = cells.iter().all(|c| !c.scheduled.load(Ordering::Acquire));
         if all_idle {
@@ -670,7 +694,18 @@ pub extern "C" fn _mvl_actor_join_all() {
         thread::sleep(std::time::Duration::from_millis(1));
     }
 
-    // 5. Signal workers to stop, then join them.
+    // 6. Clear link/monitor registry.
+    {
+        let mut reg = global_link_registry()
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        reg.actors.clear();
+        reg.links.clear();
+        reg.monitors.clear();
+        reg.monitor_targets.clear();
+    }
+
+    // 7. Signal workers to stop, then join them.
     if let Some(sched) = GLOBAL_SCHED.get() {
         sched.shutdown.store(true, Ordering::Release);
         let mut handles = sched.workers.lock().unwrap_or_else(|p| p.into_inner());
