@@ -34,46 +34,16 @@ pub fn lower_to_tir(prog: &Program) -> (TirProgram, LlvmTextCompiler) {
 
 /// Assert IR parity between AST and TIR walker paths for `src`.
 ///
-/// During the migration period (#1612), this helper is *lenient* — it accepts
-/// either:
-/// - byte-identical IR (full parity, the goal), or
-/// - a "not yet implemented" / "not yet ported" error from the TIR walker
-///   (the variant is still on the TODO list).
+/// **Strict** as of the completion of the variant-by-variant port (#1612):
+/// the TIR walker must succeed AND emit byte-identical IR to the AST walker.
+/// Any "not yet implemented" / "not yet ported" error is treated as a
+/// regression (the walker has been ported variant-by-variant — see commits
+/// ffabb145..76bfbbf0 — so unimplemented messages should no longer reach
+/// the test target).
 ///
-/// It only *fails* on:
-/// - TIR walker succeeds with diverged IR (a real bug like the #1612 extern
-///   regression we caught), or
-/// - TIR walker errors with an unexpected message (not a known placeholder).
-///
-/// As variants are ported, individual tests automatically transition from
-/// "errored cleanly" to "real parity check" with no test edit needed.
-/// When the TIR walker covers every variant, `assert_tir_strict_parity`
-/// (without the unimplemented escape hatch) becomes the entry point —
-/// at which point PR 2 of #1612 can flip the CLI default.
+/// Tests that exercise the one known migration gap (mono pipeline in the
+/// standalone test environment) are individually marked `#[ignore]`.
 pub fn assert_tir_parity(src: &str) {
-    let prog = parse(src);
-    let (tir, compiler) = lower_to_tir(&prog);
-    let ast_ir = compiler.compile_to_ir(&prog, "test").expect("AST path failed");
-    match compiler.compile_to_ir_tir(&tir, "test") {
-        Ok(tir_ir) => {
-            assert_eq!(
-                ast_ir, tir_ir,
-                "TIR walker output diverged from AST walker"
-            );
-        }
-        Err(msg)
-            if msg.contains("not yet implemented") || msg.contains("not yet ported") =>
-        {
-            // Expected during migration; will tighten to strict parity in PR 2.
-        }
-        Err(msg) => panic!("unexpected error from TIR walker: {msg}"),
-    }
-}
-
-/// Strict parity — used by tests that already pass full parity and want to
-/// regress-guard against unimplemented errors creeping back in.
-#[allow(dead_code)]
-pub fn assert_tir_strict_parity(src: &str) {
     let prog = parse(src);
     let (tir, compiler) = lower_to_tir(&prog);
     let ast_ir = compiler.compile_to_ir(&prog, "test").expect("AST path failed");
