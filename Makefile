@@ -2,7 +2,7 @@
 .ONESHELL:
 SHELL := /bin/bash
 
-.PHONY: help version build build-llvm-runtime build-release test test-unit test-integration test-requirements test-error-messages test-fmt-roundtrip test-corpus test-solver test-stdlib check-compiler assure-compiler test-mvl test-bdd test-backend-rust test-backend-llvm test-cross-backend test-tree-sitter test-grammar-coverage test-examples test-examples-rust test-examples-llvm coverage validate-keywords lint mvl-lint format format-check format-mvl format-mvl-check assurance assurance-gate audit-backend-ast check-adr docs docs-serve tree-sitter-build install install-nvim setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
+.PHONY: help version build build-llvm-runtime build-release test test-full test-unit test-integration test-requirements test-error-messages test-fmt-roundtrip test-corpus test-solver test-stdlib check-compiler assure-compiler test-mvl test-bdd test-backend-rust test-backend-llvm test-cross-backend test-tree-sitter test-grammar-coverage test-examples test-examples-rust test-examples-llvm coverage validate-keywords lint mvl-lint format format-check format-mvl format-mvl-check assurance assurance-gate audit-backend-ast check-adr docs docs-serve tree-sitter-build install install-nvim setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
 
 .DEFAULT_GOAL := help
 
@@ -75,7 +75,36 @@ build-release: ## Build release binary
 
 MVL ?= ./target/debug/mvl
 
-test: build build-llvm-runtime ## Run all test suites and print a one-line PASS/FAIL summary for each
+# Suite list for `make test` (fast pre-PR gate) and `make test-full` (full pre-merge gate).
+# Format: "label|target" — keep alignment by padding the label.
+#
+# `test` covers parse/typecheck/lint correctness and small e2e — the inner loop
+# you want to fail fast on every commit. The heavy e2e/backend/parity/examples
+# suites live in `test-full` and run in CI on push-to-main.
+TEST_FAST_SUITES := \
+	"Unit tests        |test-unit" \
+	"Type checker      |test-type-checker" \
+	"Requirements      |test-requirements" \
+	"Error messages    |test-error-messages" \
+	"Fmt roundtrip     |test-fmt-roundtrip" \
+	"Corpus            |test-corpus" \
+	"Solver            |test-solver" \
+	"Tree-sitter       |test-tree-sitter" \
+	"Grammar coverage  |test-grammar-coverage" \
+	"MVL compiler      |test-mvl"
+
+TEST_FULL_EXTRA_SUITES := \
+	"Stdlib            |test-stdlib" \
+	"BDD               |test-bdd" \
+	"Backend (Rust)    |test-backend-rust" \
+	"LLVM backend      |test-backend-llvm" \
+	"Cross-backend     |test-cross-backend" \
+	"Examples (Rust)   |test-examples-rust" \
+	"Examples (LLVM)   |test-examples-llvm"
+
+# $(call run_test_suites,SUITES) — accepts a $(...)-expanded suite list and
+# emits a per-suite PASS/FAIL summary, exiting non-zero if any suite failed.
+define run_test_suites
 	@pass=0; fail=0; \
 	run_suite() { \
 		label="$$1"; target="$$2"; \
@@ -90,23 +119,10 @@ test: build build-llvm-runtime ## Run all test suites and print a one-line PASS/
 		fi; \
 	}; \
 	echo ""; \
-	run_suite "Unit tests"        test-unit; \
-	run_suite "Type checker"      test-type-checker; \
-	run_suite "Requirements"      test-requirements; \
-	run_suite "Error messages"    test-error-messages; \
-	run_suite "Fmt roundtrip"     test-fmt-roundtrip; \
-	run_suite "Corpus"            test-corpus; \
-	run_suite "Solver"            test-solver; \
-	run_suite "Stdlib"            test-stdlib; \
-	run_suite "BDD"               test-bdd; \
-	run_suite "Backend (Rust)"    test-backend-rust; \
-	run_suite "LLVM backend"      test-backend-llvm; \
-	run_suite "Cross-backend"     test-cross-backend; \
-	run_suite "Examples (Rust)"   test-examples-rust; \
-	run_suite "Examples (LLVM)"   test-examples-llvm; \
-	run_suite "Tree-sitter"       test-tree-sitter; \
-	run_suite "Grammar coverage"  test-grammar-coverage; \
-	run_suite "MVL compiler"      test-mvl; \
+	for entry in $(1); do \
+		label=$${entry%%|*}; target=$${entry##*|}; \
+		run_suite "$$label" "$$target"; \
+	done; \
 	echo ""; \
 	if [ $$fail -eq 0 ]; then \
 		printf "  \033[32m✓  All $$((pass)) suites passed\033[0m\n\n"; \
@@ -114,6 +130,13 @@ test: build build-llvm-runtime ## Run all test suites and print a one-line PASS/
 		printf "  \033[31m✗  $$fail of $$((pass + fail)) suites failed\033[0m\n\n"; \
 		exit 1; \
 	fi
+endef
+
+test: build build-llvm-runtime ## Fast pre-PR gate: unit, type checker, corpus/solver checks, grammar, MVL compiler (~1–2 min)
+	$(call run_test_suites,$(TEST_FAST_SUITES))
+
+test-full: build build-llvm-runtime ## Full pre-merge gate: everything in `test` plus stdlib, BDD, backends, parity, examples (~10–20 min)
+	$(call run_test_suites,$(TEST_FAST_SUITES) $(TEST_FULL_EXTRA_SUITES))
 
 test-unit: ## Run unit tests only
 	cargo test --lib
@@ -135,21 +158,21 @@ test-fmt-roundtrip: ## Run fmt roundtrip tests — verify check(fmt(src)) == che
 	cargo test --test fmt_roundtrip
 
 test-corpus: build ## Validate corpus examples parse and type-check
-	@cargo run --quiet -- init --stdlib 2>/dev/null || true
+	@$(MVL) init --stdlib 2>/dev/null || true
 	@pass=0; fail=0; \
 	OK="\033[32m✓\033[0m"; FAIL="\033[31m✗\033[0m"; \
 	while IFS= read -r f; do \
 		short=$${f#tests/corpus/}; \
 		[[ "$$f" == *_test.mvl ]] && continue; \
 		if grep -q "corpus:expect-fail" "$$f" 2>/dev/null; then \
-			cargo run --quiet -- check "$$f" >/dev/null 2>&1; rc=$$?; \
+			$(MVL) check "$$f" >/dev/null 2>&1; rc=$$?; \
 			if [ $$rc -ne 0 ]; then \
 				printf "  $$OK  %s\n" "$$short"; pass=$$((pass + 1)); \
 			else \
 				printf "  $$FAIL  %s  (expected violations but checker reported none)\n" "$$short"; fail=$$((fail + 1)); \
 			fi; \
 		else \
-			out=$$(cargo run --quiet -- check "$$f" 2>&1); rc=$$?; \
+			out=$$($(MVL) check "$$f" 2>&1); rc=$$?; \
 			if [ $$rc -ne 0 ]; then \
 				printf "  $$FAIL  %s\n" "$$short"; printf "%s\n" "$$out" | sed 's/^/         /'; fail=$$((fail + 1)); \
 			else \
@@ -170,14 +193,14 @@ test-solver: build ## Run solver layer programs — real MVL programs of progres
 	for f in tests/solver/**/*.mvl; do \
 		short=$${f#tests/solver/}; \
 		if grep -q "solver:expect-fail" "$$f" 2>/dev/null; then \
-			cargo run --quiet -- check "$$f" >/dev/null 2>&1; rc=$$?; \
+			$(MVL) check "$$f" >/dev/null 2>&1; rc=$$?; \
 			if [ $$rc -ne 0 ]; then \
 				printf "  $$OK  %s  (violations detected)\n" "$$short"; pass=$$((pass + 1)); \
 			else \
 				printf "  $$FAIL  %s  (expected violations but checker reported none)\n" "$$short"; fail=$$((fail + 1)); \
 			fi; \
 		else \
-			out=$$(cargo run --quiet -- check "$$f" 2>&1); rc=$$?; \
+			out=$$($(MVL) check "$$f" 2>&1); rc=$$?; \
 			if [ $$rc -eq 0 ]; then \
 				printf "  $$OK  %s\n" "$$short"; pass=$$((pass + 1)); \
 			else \
@@ -292,7 +315,7 @@ mvl-lint: build ## Run MVL linter on corpus and examples
 	for f in tests/corpus/**/*.mvl examples/**/*.mvl; do \
 		[ -f "$$f" ] || continue; \
 		case "$$f" in tests/corpus/14_linting/*) continue;; esac; \
-		out=$$(cargo run --quiet -- lint "$$f" 2>&1); \
+		out=$$($(MVL) lint "$$f" 2>&1); \
 		if [ -n "$$out" ] && echo "$$out" | grep -q "warning\|error"; then \
 			echo "$$out"; failed=1; \
 		fi; \
