@@ -23,8 +23,8 @@ use std::collections::{HashMap, HashSet};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock, Weak};
-use std::time::Duration;
 use std::thread;
+use std::time::Duration;
 
 type KillFn = Arc<dyn Fn() + Send + Sync>;
 type ExitNotifyFn = Arc<dyn Fn(ActorId, ExitReason) + Send + Sync>;
