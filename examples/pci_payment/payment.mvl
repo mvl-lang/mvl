@@ -72,7 +72,12 @@ fn main() -> Unit ! Log {
 
     // 3. Tokenize: PCI -> bare String (audited)
     let token: String = process_payment(card);
-    logger.info("payment processed", {"token": token})
+    logger.info("payment processed", {"token": token});
+
+    // 3b. Alternative: expression-level audit form (separate audit tag).
+    let refund_card: PCI[String] = read_card(relabel taint("4111-1111-1111-1111", "FORM-INPUT-REFUND"));
+    let refund_token: String = process_with_extra_audit(refund_card);
+    logger.info("refund processed", {"token": refund_token})
 
     // ── Compile errors (if uncommented) ─────────────────────────────────
     //

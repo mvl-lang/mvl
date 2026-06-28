@@ -77,6 +77,11 @@ fn main() -> Unit ! Log {
     let released: String = share_with_insurer(record);
     logger.info("shared with insurer", {"patient": released});
 
+    // 2b. Separate release path with its own audit tag for appointment workflow.
+    let appointment_record: PHI[String] = load_patient("Jane Doe");
+    let appt_released: String = release_for_appointment(appointment_record);
+    logger.info("appointment confirmed", {"patient": appt_released});
+
     // 3. Database pattern: Tainted -> validated -> PHI
     let db_record: PHI[String] = load_from_db();
     let db_released: String = relabel hipaa_release(db_record, "AUDIT-REVIEW");

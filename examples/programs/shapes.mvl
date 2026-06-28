@@ -48,8 +48,16 @@ fn shape_name(s: Shape) -> String {
     }
 }
 
+fn describe(s: Shape) -> String {
+    format("{} has {} sides and is {}", [
+        shape_name(s),
+        sides(s).to_string(),
+        surface_name(surface(s)),
+    ])
+}
+
 fn main() -> Unit ! Console {
-    println(format("circle has {} sides and is {}", [sides(Shape::Circle).to_string(), surface_name(surface(Shape::Circle))]));
-    println(format("rectangle has {} sides and is {}", [sides(Shape::Rectangle).to_string(), surface_name(surface(Shape::Rectangle))]));
-    println(format("triangle has {} sides and is {}", [sides(Shape::Triangle).to_string(), surface_name(surface(Shape::Triangle))]));
+    println(describe(Shape::Circle));
+    println(describe(Shape::Rectangle));
+    println(describe(Shape::Triangle));
 }

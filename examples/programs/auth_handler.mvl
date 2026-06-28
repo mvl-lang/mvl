@@ -22,9 +22,6 @@ type UserStore = struct {}
 fn verify_hash(pwd: String, stored: Secret[String]) -> Bool { true }
 fn generate_token(id: UserId) -> Secret[String] { relabel classify("token", "GEN-TOKEN") }
 fn now_plus(secs: Int) -> Int { 0 }
-// clean_input wraps sanitize; universal label propagation requires relabel trust(, "VALIDATED") at call sites.
-fn clean_input(s: Tainted[String]) -> String { relabel trust(s, "VALIDATED") }
-
 type AuthError = enum {
     NotFound,
     InvalidPassword,
@@ -37,7 +34,8 @@ type Session = struct {
     expires_at: Int,
 }
 
-total fn authenticate(
+/// Reference Example 1 entry point — see file header for the 11 requirements covered.
+pub total fn authenticate(
     iso store: val UserStore,
     input_password: Tainted[String],
     user_id: UserId,

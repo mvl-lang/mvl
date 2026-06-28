@@ -24,7 +24,7 @@ fn validate_user(raw: Tainted[String]) -> String {
 }
 
 /// Query and validate in one step — common pattern for DB reads.
-fn get_validated_user() -> String {
+pub total fn get_validated_user() -> String {
     let raw: Tainted[String] = query_user_name();
     validate_user(raw)
 }
@@ -56,7 +56,7 @@ fn load_credential(name: String) -> Secret[String] {
 
 /// Full round-trip: load a Secret credential, store it encrypted,
 /// then reload it as Secret again.
-fn credential_round_trip() -> Secret[String] {
+pub total fn credential_round_trip() -> Secret[String] {
     let key: Secret[String] = load_credential("admin-key");
     let _stored: String = store_encrypted_key(key);
     // Reload from DB — still classified as Secret
