@@ -46,6 +46,7 @@ fn lower_to_tir(prog: &Program) -> (TirProgram, LlvmTextCompiler) {
 
 /// Assert the TIR walker is *wired up* and reports its unimplemented state
 /// (used while the walker is being built leaf-first).
+#[allow(dead_code)] // call sites land as the walker is built out
 fn assert_tir_unimplemented(src: &str) {
     let prog = parse(src);
     let (tir, compiler) = lower_to_tir(&prog);
@@ -82,13 +83,63 @@ fn assert_tir_parity(src: &str) {
 // ── Wiring smoke tests ────────────────────────────────────────────────────────
 
 #[test]
-fn tir_walker_is_wired_up_minimal() {
-    // Smallest program that lowers to TIR cleanly. Verifies the CLI plumbing
-    // (mono → monomorphize → lower → compile_to_ir_tir) doesn't panic.
-    assert_tir_unimplemented("fn main() -> Int { 42 }");
+fn tir_walker_empty_program() {
+    // Smallest program: empty top-level. TIR walker should produce identical
+    // IR to the AST walker (just the module header).
+    assert_tir_parity("");
 }
 
 #[test]
-fn tir_walker_is_wired_up_empty_prog() {
-    assert_tir_unimplemented("");
+fn tir_walker_main_returns_int_literal() {
+    assert_tir_parity("fn main() -> Int { 42 }");
+}
+
+#[test]
+fn tir_walker_main_returns_bool_literal() {
+    assert_tir_parity("fn main() -> Bool { true }");
+}
+
+#[test]
+fn tir_walker_fn_with_int_param() {
+    assert_tir_parity("fn id(x: Int) -> Int { x }");
+}
+
+#[test]
+fn tir_walker_fn_with_two_params() {
+    assert_tir_parity("fn add(a: Int, b: Int) -> Int { a + b }");
+}
+
+#[test]
+fn tir_walker_unit_return() {
+    assert_tir_parity("fn nothing() -> Unit { }");
+}
+
+#[test]
+fn tir_walker_unary_neg() {
+    assert_tir_parity("fn negate(x: Int) -> Int { -x }");
+}
+
+#[test]
+fn tir_walker_unary_not() {
+    assert_tir_parity("fn flip(x: Bool) -> Bool { !x }");
+}
+
+#[test]
+fn tir_walker_float_arith() {
+    assert_tir_parity("fn fadd(a: Float, b: Float) -> Float { a + b }");
+}
+
+#[test]
+fn tir_walker_comparison() {
+    assert_tir_parity("fn lt(a: Int, b: Int) -> Bool { a < b }");
+}
+
+#[test]
+fn tir_walker_short_circuit_and() {
+    assert_tir_parity("fn both(a: Bool, b: Bool) -> Bool { a && b }");
+}
+
+#[test]
+fn tir_walker_short_circuit_or() {
+    assert_tir_parity("fn either(a: Bool, b: Bool) -> Bool { a || b }");
 }

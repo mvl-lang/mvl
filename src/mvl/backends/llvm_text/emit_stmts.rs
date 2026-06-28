@@ -15,7 +15,10 @@ use super::{RefLocal, TextEmitter, MAIN_RET};
 ///
 /// Returns `None` for compound types we don't yet need to round-trip
 /// (e.g. `Ty::Fn`, `Ty::Session`).
-fn ty_to_type_expr(ty: &crate::mvl::checker::types::Ty) -> Option<TypeExpr> {
+///
+/// `pub(super)` so the parallel TIR walker (#1612) can reuse this at the
+/// Ty → TypeExpr boundary without duplicating the conversion.
+pub(super) fn ty_to_type_expr(ty: &crate::mvl::checker::types::Ty) -> Option<TypeExpr> {
     use crate::mvl::checker::types::Ty;
     let base = |name: &str, args: Vec<TypeExpr>| TypeExpr::Base {
         name: name.into(),
