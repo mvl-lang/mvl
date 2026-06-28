@@ -1,72 +1,62 @@
 // Corpus: MVL literals
 // Demonstrates all literal forms the lexer must recognize.
 
-fn integer_literals() -> Int {
-    let zero: Int = 0;
-    let small: Int = 42;
-    let large: Int = 1000000;
-    large
+test fn integer_literals() -> Unit {
+    let _zero: Int = 0;
+    let _small: Int = 42;
+    let _large: Int = 1000000;
 }
 
-fn float_literals() -> Float {
-    let pi: Float = 3.14159;
-    let e: Float = 2.71828;
-    let half: Float = 0.5;
-    pi
+test fn float_literals() -> Unit {
+    let _pi: Float = 3.14159;
+    let _e: Float = 2.71828;
+    let _half: Float = 0.5;
 }
 
-fn bool_literals() -> Bool {
-    let yes: Bool = true;
-    let no: Bool = false;
-    yes
+test fn bool_literals() -> Unit {
+    let _yes: Bool = true;
+    let _no: Bool = false;
 }
 
-fn string_literals() -> String {
-    let greeting: String = "hello, world";
-    let escaped: String = "tab:\there\nnewline";
-    greeting
+test fn string_literals() -> Unit {
+    let _greeting: String = "hello, world";
+    let _escaped: String = "tab:\there\nnewline";
 }
 
-fn char_literals() -> Char {
-    let letter: Char = 'a';
-    let digit: Char = '9';
-    letter
+test fn char_literals() -> Unit {
+    let _letter: Char = 'a';
+    let _digit: Char = '9';
 }
 
-fn list_literals() -> List[Int] {
-    let nums: List[Int] = [1, 2, 3, 42];
-    nums
+test fn list_literals() -> Unit {
+    let _nums: List[Int] = [1, 2, 3, 42];
 }
 
-fn demo_literals() -> Int {
-    let x: Int = 10;
-    let y: Float = 3.14;
-    let s: String = "example";
-    let c: Char = 'z';
-    let b: Bool = true;
-    x
+test fn demo_literals() -> Unit {
+    let _x: Int = 10;
+    let _y: Float = 3.14;
+    let _s: String = "example";
+    let _c: Char = 'z';
+    let _b: Bool = true;
 }
 
-fn multiline_string_literals() -> String {
-    let doc: String = """
+test fn multiline_string_literals() -> Unit {
+    let _doc: String = """
 Line 1
 Line 2 with "embedded quotes"
 Line 3
 """;
-    doc
 }
 
-fn raw_string_literals() -> String {
-    let path: String = r"C:\Users\name\file.txt";
-    let regex: String = r"^\d{3}-\d{4}$";
-    path
+test fn raw_string_literals() -> Unit {
+    let _path: String = r"C:\Users\name\file.txt";
+    let _regex: String = r"^\d{3}-\d{4}$";
 }
 
-fn raw_multiline_string_literals() -> String {
-    let sql: String = r"""
+test fn raw_multiline_string_literals() -> Unit {
+    let _sql: String = r"""
 SELECT *
 FROM users
 WHERE id > 0
 """;
-    sql
 }
