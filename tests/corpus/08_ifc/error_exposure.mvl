@@ -47,3 +47,14 @@ fn demo_error_methods() -> String {
     let _detail: Secret[String] = e.debug_message();
     safe
 }
+
+// ── Test: reference each declaration so the linter records it as used ─────────
+
+test fn error_exposure_typecheck() -> Unit {
+    let _: fn(IoError) -> String = safe_error_response;
+    let _: fn(NetError) -> String = safe_net_response;
+    let _: fn(IoError) -> Secret[String] = get_debug_info;
+    let _: fn(IoError) -> String = release_for_audit;
+    let _: fn(IoError) -> String = handle_io_error;
+    let _: String = demo_error_methods();
+}

@@ -42,3 +42,13 @@ fn secret_roundtrip(s: String) -> String {
     let enc: Secret[String] = relabel classify(s, "WRAP-001");
     relabel release(enc, "UNWRAP-001")
 }
+
+// ── Test: reference each declaration so the linter records it as used ─────────
+
+test fn audit_relabel_typecheck() -> Unit {
+    let _: fn(String) -> Sensitive[String] = wrap_sensitive;
+    let _: fn(Sensitive[String]) -> String = unwrap_sensitive;
+    let _: fn(Tainted[String]) -> String = trust_with_audit;
+    let _: fn(Tainted[String]) -> String = trust_without_audit;
+    let _: fn(String) -> String = secret_roundtrip;
+}

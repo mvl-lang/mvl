@@ -4,26 +4,36 @@
 // ── relabel trust(, "VALIDATED"): Tainted[T] → T ────────────────────────────────────
 
 fn sanitize_string(input: Tainted[String]) -> String {
-    relabel trust(input, "VALIDATED")
+    relabel trust(input, "VALIDATED-DECLASS-STR-001")
 }
 
 fn sanitize_int(input: Tainted[Int]) -> Int {
-    relabel trust(input, "VALIDATED")
+    relabel trust(input, "VALIDATED-DECLASS-INT-001")
 }
 
 // ── relabel release(, "AUTHORIZED"): Secret[T] → T ──────────────────────────────────
 
 fn declassify_token(secret: Secret[Token]) -> Token {
-    relabel release(secret, "AUTHORIZED")
+    relabel release(secret, "AUTHORIZED-DECLASS-TOKEN-001")
 }
 
 fn declassify_int(secret: Secret[Int]) -> Int {
-    relabel release(secret, "AUTHORIZED")
+    relabel release(secret, "AUTHORIZED-DECLASS-INT-001")
 }
 
 // ── Chained: sanitize then use ────────────────────────────────────────────
 
 fn process_input(raw: Tainted[String]) -> String {
-    let clean: String = relabel trust(raw, "VALIDATED");
+    let clean: String = relabel trust(raw, "VALIDATED-DECLASS-PROCESS-001");
     clean
+}
+
+// ── Test: reference each declaration so the linter records it as used ─────────
+
+test fn declassification_typecheck() -> Unit {
+    let _: fn(Tainted[String]) -> String = sanitize_string;
+    let _: fn(Tainted[Int]) -> Int = sanitize_int;
+    let _: fn(Secret[Token]) -> Token = declassify_token;
+    let _: fn(Secret[Int]) -> Int = declassify_int;
+    let _: fn(Tainted[String]) -> String = process_input;
 }
