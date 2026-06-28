@@ -8,9 +8,7 @@
 //
 // Phase 1: stub manifest only; compile-time embedding in Phase 2+.
 
-use std.runtime.{manifest, manifest_to_logfmt, manifest_to_json, manifest_to_block,
-                  Manifest, StdlibProfile, PackageInfo, FfiBridge, BuildInfo, AssuranceInfo}
-
+use std.runtime.{manifest, manifest_to_logfmt, manifest_to_json, manifest_to_block, Manifest}
 fn main() -> Unit ! Console {
     let m: Manifest = manifest();
     let logfmt: String = manifest_to_logfmt(m);

@@ -3,8 +3,7 @@
 // Uses a deterministic digit pattern. Both backends must produce identical output.
 //
 // Used by: tests/cross_backend.rs::cross_backend_regex_find_all
-use std.regex.{Regex, Match, compile, find_all}
-
+use std.regex.{Match, compile, find_all}
 fn main() -> Unit ! Console {
     // Three matches: "1", "22", "333"
     match compile(r"\d+") {

@@ -18,8 +18,7 @@
 // Sanitization correctness (newline/NUL/JSON escaping) from the deleted
 // runtime/rust/src/stdlib/log.rs tests is not yet covered here.
 
-use std.log.{Logger, LogLevel, LogFormat, default_logger}
-
+use std.log.{Logger, default_logger}
 // ── Helper: wrap each log level, return observable Bool ──────────────────
 
 fn call_log_debug(logger: val Logger, msg: String) -> Bool ! Log {

@@ -5,16 +5,11 @@
 // conversions.
 
 use std.config.{
-    ConfigValue, ConfigError,
-    merge, get_path,
-    as_int, as_string, as_bool, as_float, as_list, as_map,
-    from_json, from_toml,
-    with_env, xdg_config_home,
+    ConfigValue, merge, get_path, as_int, as_string, as_bool, as_float, from_json, from_toml, with_env, xdg_config_home
 }
-use std.json.{Value, decode}
+use std.json.{Value}
 use std.toml.{TomlValue}
 use std.env.{set, remove_var}
-
 // ── merge: scalar overlay ─────────────────────────────────────────────────────
 
 test fn config_merge_scalar_overlay_wins() -> Unit {

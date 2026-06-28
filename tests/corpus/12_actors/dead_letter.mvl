@@ -8,8 +8,7 @@
 // - describe_reason helper via pattern match
 
 use std.actors.{DeadLetterReason, DeadLetter, DeadLetterHandler}
-use std.log.{Logger, default_logger}
-
+use std.log.{default_logger}
 // ── Custom dead-letter sink (metrics only, no logging) ────────────────────
 
 actor MetricsDeadLetterHandler {

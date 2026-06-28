@@ -10,7 +10,6 @@
 // Used by: tests/cross_backend.rs::cross_backend_json_log_no_redefinition
 
 use std.json.{Value}
-use std.log.{Logger}
 
 fn main() -> Unit ! Console {
     let v: Value = Value::String("ok");

@@ -5,18 +5,11 @@
 // All declarations are valid: effect annotations match actual usage.
 
 use std.process.{
-    Child, ChildStdin, ChildStdout, ChildStderr,
-    ExitStatus, ProcessOutput, ProcessError, Stdio,
-    spawn, stdin_write, stdout_read, stderr_read,
-    wait, kill, is_success, exit_code,
+    Child, ChildStdin, ExitStatus, ProcessOutput, ProcessError, Stdio, spawn, stdin_write, wait, kill, is_success, exit_code
 }
 use std.env.{
-    Signal, sigint, sigterm, sighup,
-    get, set, remove_var, all, args,
-    exit, current_dir, chdir, getuid, getgid,
-    signal_on, signal_reset, signal_ignore,
+    Signal, sigint, sigterm, sighup, get, set, remove_var, all, args, exit, current_dir, chdir, getuid, getgid, signal_on, signal_reset, signal_ignore
 }
-
 // ── Pure helpers (no effects) ─────────────────────────────────────────────
 
 total fn succeeded(status: ExitStatus) -> Bool {

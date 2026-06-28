@@ -5,9 +5,8 @@
 // signature must be rejected by the compiler.  This locks in the guarantee:
 // "a function without ! Audit in its signature provably never emits audit records."
 
-use std.audit.{AuditLogger, AuditEvent, access, file_audit_logger}
-use std.io.{path, IoError}
-
+use std.audit.{AuditLogger, AuditEvent, access}
+use std.io.{IoError}
 // VIOLATION: emit requires ! Audit; this function declares no effects.
 // Expected: effect-missing error (Audit not declared).
 fn log_without_audit_effect(logger: AuditLogger, user_id: String) -> Unit {

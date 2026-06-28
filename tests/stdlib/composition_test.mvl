@@ -13,8 +13,7 @@
 // Run with:  mvl test tests/stdlib/
 
 use std.env.{env_var, args}
-use std.io.{Path, path, join, to_string, IoError, read_to_string, read_file}
-
+use std.io.{Path, path, to_string, IoError, read_to_string, read_file}
 // ── Cross-module import: both modules usable in same file ─────────────────
 
 test fn composition_env_and_io_both_compile_in_same_scope() -> Unit ! Console + Env {

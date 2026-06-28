@@ -3,10 +3,9 @@
 // Verifies the native-MVL CSV implementation: encode_rows produces well-formed
 // CSV strings; parse_rows round-trips them back; error cases return Err.
 
-use std.csv.{CsvError, CsvOptions, CsvWithHeaders, default_options,
-              parse_rows, parse_rows_with, parse_with_headers,
-              encode_rows, encode_rows_with, encode_with_headers}
-
+use std.csv.{
+    CsvError, CsvOptions, parse_rows, parse_rows_with, parse_with_headers, encode_rows, encode_rows_with, encode_with_headers
+}
 // ── encode: basic ─────────────────────────────────────────────────────────────
 
 test fn encode_empty_rows() -> Unit {

@@ -6,15 +6,8 @@
 // Updated in #976: Fd unifies stdout/stderr/file handles.
 
 use std.io.{
-    Fd, Path, DirEntry, Metadata, IoError,
-    path, join, to_string, path_exists, is_file, is_dir,
-    open, close, read_to_string, write_file, append,
-    read_line, write,
-    create_dir_all, remove, read_dir, metadata, chmod,
-    create_symlink, read_link,
-    stdin,
+    Fd, Path, DirEntry, Metadata, IoError, path, join, to_string, path_exists, is_file, open, close, read_to_string, write_file, append, read_line, write, create_dir_all, remove, read_dir, metadata, chmod, create_symlink, read_link, stdin
 }
-
 // ── Pure path construction (no effects) ───────────────────────────────────
 
 total fn config_path() -> Path {

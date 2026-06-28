@@ -1,8 +1,7 @@
 // Spike 002-08: Secret → Logger.info MUST be rejected (#872)
 // Logger methods reject Secret[T] and Tainted[T] at compile time.
 
-use std.log.{Logger, default_logger}
-
+use std.log.{Logger}
 fn leak_to_log(logger: val Logger, key: Secret[String]) -> Unit ! Log {
     logger.info(key, {"_": "_"})
 }

@@ -9,11 +9,10 @@
 //   - ! Audit is distinct from ! Log: audit trails are compliance records,
 //     not operational logs.
 
-use std.audit.{AuditLogger, AuditEvent, AuditOutcome,
-               access, modify, deny, fail, with_correlation, with_details,
-               file_audit_logger}
-use std.io.{path, IoError}
-
+use std.audit.{
+    AuditLogger, AuditEvent, access, modify, deny, fail, with_correlation, with_details
+}
+use std.io.{IoError}
 // ── Pure: constructors have no effects ───────────────────────────────────────
 
 total fn build_access_event(user_id: String) -> AuditEvent {

@@ -3,8 +3,7 @@
 // Scenario: function calls read_line but does not declare ! Console in its signature.
 // Triggers: CheckError::UndeclaredEffect (req7)
 
-use std.io.{Fd, stdin, read_line, IoError}
-
+use std.io.{stdin, read_line, IoError}
 fn read_input() -> Result[Tainted[String], IoError] {
     // BUG: `read_line` requires `! Console` but the signature declares no effects.
     read_line(stdin())

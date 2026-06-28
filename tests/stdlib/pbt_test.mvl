@@ -3,9 +3,9 @@
 // Verifies generator types and combinators from std/pbt.mvl.
 // Run with:  mvl test tests/stdlib/
 
-use std.pbt.{IntGen, FloatGen, BoolGen, StringGen, FuzzConfig,
-              gen_int, gen_float, gen_bool, gen_string, fuzz_default_config}
-
+use std.pbt.{
+    IntGen, FloatGen, BoolGen, StringGen, FuzzConfig, gen_int, gen_float, gen_bool, gen_string
+}
 // ── IntGen construction ──────────────────────────────────────────────────────
 
 test fn gen_int_creates_range() -> Unit {

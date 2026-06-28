@@ -6,9 +6,9 @@
 //
 // Run with:  mvl test tests/stdlib/
 
-use std.net.{TcpListener, NetError, tcp_listen, tcp_listener_port, tcp_close_listener,
-             TcpStream, tcp_connect, tcp_close_stream}
-
+use std.net.{
+    TcpListener, NetError, tcp_listen, tcp_listener_port, tcp_close_listener, tcp_connect, tcp_close_stream
+}
 // ── happy path ────────────────────────────────────────────────────────────
 
 test fn net_listen_binds_and_returns_port() -> Unit ! Net {

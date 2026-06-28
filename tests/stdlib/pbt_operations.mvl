@@ -5,18 +5,8 @@
 // All functions require ! Random — enforced by the effect system.
 
 use std.pbt.{
-    gen_int, gen_float, gen_bool, gen_string, gen_list_int,
-    gen_filter_int, gen_one_of_int, gen_weighted_int, gen_boundary_int,
-    gen_raw_bytes, gen_raw_string, fuzz_default_config,
-    property_check_int, property_check_bool, property_check_float,
-    property_check_string, property_check_list_int,
-    fuzz_check_bytes, fuzz_check_string,
-    mutate_int, mutate_float, mutate_string, mutate_list_int,
-    property_check_targeted_int, property_check_with_mutation_int,
-    IntGen, BoolGen, FloatGen, StringGen, ListIntGen,
-    BytesGen, RawStringGen, FuzzConfig,
+    gen_int, gen_float, gen_bool, gen_string, gen_list_int, gen_filter_int, gen_one_of_int, gen_weighted_int, gen_boundary_int, gen_raw_bytes, gen_raw_string, fuzz_default_config, property_check_int, property_check_bool, property_check_float, property_check_string, property_check_list_int, fuzz_check_bytes, fuzz_check_string, mutate_int, mutate_float, mutate_string, mutate_list_int, property_check_targeted_int, property_check_with_mutation_int, IntGen
 }
-
 // ── Phase A: basic property checks ────────────────────────────────────────────
 
 // Property: dividing 100 by any positive Int never fails.
