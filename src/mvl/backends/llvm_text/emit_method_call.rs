@@ -249,6 +249,13 @@ impl TextEmitter {
                 self.fn_ctx.reg_types.insert(reg.clone(), "ptr".into());
                 Ok(Some(reg))
             }
+            ("to_string", "i8") => {
+                // Byte → decimal string via zext + int_to_string (#1615).
+                let widened = self.next_reg();
+                self.push_instr(&format!("{widened} = zext i8 {val} to i64"));
+                self.fn_ctx.reg_types.insert(widened.clone(), "i64".into());
+                Ok(Some(self.emit_int_to_string(&widened)))
+            }
             ("to_string", _) => {
                 // String.to_string() is identity
                 self.fn_ctx.reg_types.insert(val.clone(), "ptr".into());
@@ -341,6 +348,66 @@ impl TextEmitter {
                     "{reg} = call i64 @_mvl_int_pow(i64 {val}, i64 {exp})"
                 ));
                 self.fn_ctx.reg_types.insert(reg.clone(), "i64".into());
+                Ok(Some(reg))
+            }
+
+            // ── Byte (i8) primitive methods (#1615) ──────────────────────────
+            // Before #1615 the catch-all `to_string` arm dropped through and
+            // returned the i8 register typed as ptr (invalid IR); other byte
+            // methods fell through and emitted `ret i8 undef`. Now each
+            // primitive op lowers directly.
+            ("to_int", "i8") => {
+                let reg = self.next_reg();
+                self.push_instr(&format!("{reg} = zext i8 {val} to i64"));
+                self.fn_ctx.reg_types.insert(reg.clone(), "i64".into());
+                Ok(Some(reg))
+            }
+            ("bit_and", "i8")
+            | ("bit_or", "i8")
+            | ("bit_xor", "i8")
+            | ("wrapping_add", "i8")
+            | ("wrapping_sub", "i8")
+            | ("wrapping_mul", "i8")
+                if args.len() == 1 =>
+            {
+                let other = match self.emit_expr(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                // i8 arithmetic naturally wraps; bit ops are bit ops.
+                let op = match method {
+                    "bit_and" => "and",
+                    "bit_or" => "or",
+                    "bit_xor" => "xor",
+                    "wrapping_add" => "add",
+                    "wrapping_sub" => "sub",
+                    "wrapping_mul" => "mul",
+                    _ => unreachable!(),
+                };
+                let reg = self.next_reg();
+                self.push_instr(&format!("{reg} = {op} i8 {val}, {other}"));
+                self.fn_ctx.reg_types.insert(reg.clone(), "i8".into());
+                Ok(Some(reg))
+            }
+            ("bit_not", "i8") => {
+                let reg = self.next_reg();
+                self.push_instr(&format!("{reg} = xor i8 {val}, -1"));
+                self.fn_ctx.reg_types.insert(reg.clone(), "i8".into());
+                Ok(Some(reg))
+            }
+            ("shift_left", "i8") | ("shift_right", "i8") if args.len() == 1 => {
+                let amount = match self.emit_expr(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                let op = if method == "shift_left" {
+                    "shl"
+                } else {
+                    "lshr"
+                };
+                let reg = self.next_reg();
+                self.push_instr(&format!("{reg} = {op} i8 {val}, {amount}"));
+                self.fn_ctx.reg_types.insert(reg.clone(), "i8".into());
                 Ok(Some(reg))
             }
 
