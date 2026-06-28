@@ -2,18 +2,18 @@
 // Type-check test: enumerate, zip, Map::entries (#1383)
 // Verifies the struct-typed return signatures added in #1383.
 
-fn test_enumerate() -> List[Indexed[Int]] {
+test fn test_enumerate() -> Unit {
     let xs: List[Int] = [10, 20, 30];
-    xs.enumerate()
+    let _: List[Indexed[Int]] = xs.enumerate();
 }
 
-fn test_zip() -> List[Pair[String, Int]] {
+test fn test_zip() -> Unit {
     let names: List[String] = ["alice", "bob"];
     let scores: List[Int] = [95, 87];
-    names.zip(scores)
+    let _: List[Pair[String, Int]] = names.zip(scores);
 }
 
-fn test_entries() -> List[Entry[String, Int]] {
+test fn test_entries() -> Unit {
     let m: Map[String, Int] = {"a": 1, "b": 2};
-    m.entries()
+    let _: List[Entry[String, Int]] = m.entries();
 }

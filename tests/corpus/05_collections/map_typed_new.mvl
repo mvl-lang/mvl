@@ -5,24 +5,24 @@
 
 use std.collections.{Map}
 
-fn make_empty_str_int() -> Map[String, Int] {
-    Map[String, Int]::new()
+test fn make_empty_str_int() -> Unit {
+    let _: Map[String, Int] = Map[String, Int]::new();
 }
 
-fn make_empty_str_str() -> Map[String, String] {
-    Map[String, String]::new()
+test fn make_empty_str_str() -> Unit {
+    let _: Map[String, String] = Map[String, String]::new();
 }
 
 // Inline use: passed directly as an argument, no let annotation
 fn accept_map(m: Map[String, Int]) -> Int { m.len() }
 
-fn test_inline() -> Int {
-    accept_map(Map[String, Int]::new())
+test fn test_inline() -> Unit {
+    let _: Int = accept_map(Map[String, Int]::new());
 }
 
 // Multiple explicit-typed new() calls in one expression
-fn test_two_maps() -> Bool {
+test fn test_two_maps() -> Unit {
     let a: Map[String, Int] = Map[String, Int]::new();
     let b: Map[String, String] = Map[String, String]::new();
-    a.len() == b.len()
+    let _: Bool = a.len() == b.len();
 }
