@@ -118,6 +118,10 @@ impl TextEmitter {
 
             TirExprKind::Lambda { params, body } => self.emit_lambda_tir(params, body),
 
+            TirExprKind::Spawn { actor_type, fields } => {
+                self.emit_actor_spawn_tir(actor_type, fields)
+            }
+
             TirExprKind::Relabel {
                 name,
                 expr: inner,
@@ -135,12 +139,6 @@ impl TextEmitter {
 
             // Borrow is a capability marker — lowers to the inner value.
             TirExprKind::Borrow { expr: inner, .. } => self.emit_expr_tir(inner),
-
-            // Unimplemented variants — build out leaf-first in subsequent commits (#1612).
-            _ => Err(format!(
-                "emit_expr_tir: variant not yet implemented: {:?}",
-                std::mem::discriminant(&expr.kind)
-            )),
         }
     }
 
@@ -1761,14 +1759,18 @@ impl TextEmitter {
         method: &str,
         args: &[TirExpr],
     ) -> Result<Option<String>, String> {
-        // Actor method call — fire-and-forget send. Not yet ported (deferred
-        // alongside the broader actor port).
-        if let Ty::Named(name, _) = unwrap_labels(&receiver.ty) {
-            if self.module.actor_decls.contains_key(name.as_str()) {
-                return Err(format!(
-                    "emit_method_call_tir: actor send `{name}.{method}` not yet ported"
-                ));
-            }
+        // Actor method call — fire-and-forget send.
+        if let Some(actor_name) = self.resolve_actor_type_name_tir(receiver) {
+            let handle_val = match self.emit_expr_tir(receiver)? {
+                Some(v) => v,
+                None => return Ok(None),
+            };
+            return self.emit_actor_method_call_tir(
+                &handle_val,
+                &actor_name.clone(),
+                method,
+                args,
+            );
         }
 
         let recv_ty = self.ty_to_llvm_ctx(&receiver.ty);

@@ -124,11 +124,42 @@ impl TextEmitter {
             }
         }
 
-        // Actor pass — not yet wired up for the TIR path.
+        // Actor pre-pass: register state struct types + tir_actor_decls.
+        for ad in &prog.actors {
+            let state_name = format!("{}State", ad.name);
+            let field_list: Vec<(String, TypeExpr)> = ad
+                .fields
+                .iter()
+                .map(|f| (f.name.clone(), ty_to_type_expr_or_unit(&f.ty)))
+                .collect();
+            let field_types: Vec<String> = field_list
+                .iter()
+                .map(|(_, ty)| self.llvm_ty_ctx(ty))
+                .collect();
+            self.module.type_defs.push(format!(
+                "%{state_name} = type {{ {} }}",
+                field_types.join(", ")
+            ));
+            self.module.struct_fields.insert(state_name, field_list);
+            self.module
+                .tir_actor_decls
+                .insert(ad.name.clone(), ad.clone());
+        }
+
+        // Actor pass: emit behavior + dispatch functions.
         if !prog.actors.is_empty() {
-            return Err(
-                "emit_program_tir: actors not yet implemented (#1612 in progress)".into(),
-            );
+            self.ensure_actor_runtime_externs();
+            let actor_names: Vec<String> =
+                self.module.tir_actor_decls.keys().cloned().collect();
+            for name in actor_names {
+                // Avoid re-emitting the same actor across multiple emit_program_tir
+                // calls (prelude + entry) — #1610.
+                if !self.module.actor_emitted.insert(name.clone()) {
+                    continue;
+                }
+                let ad = self.module.tir_actor_decls[&name].clone();
+                self.emit_actor_decl_tir(&ad)?;
+            }
         }
 
         // Emit each non-test, non-builtin function body. No generic collection
@@ -254,7 +285,9 @@ impl TextEmitter {
         if !self.fn_ctx.terminated {
             self.emit_heap_drops();
             if self.fn_ctx.current_fn_is_main {
-                if !self.module.actor_decls.is_empty() {
+                let has_actors = !self.module.actor_decls.is_empty()
+                    || !self.module.tir_actor_decls.is_empty();
+                if has_actors {
                     for handle in std::mem::take(&mut self.fn_ctx.spawned_actor_handles) {
                         self.push_instr(&format!("call void @_mvl_actor_drop(ptr {handle})"));
                     }

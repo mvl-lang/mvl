@@ -770,6 +770,9 @@ mod emit_stmts_tir;
 #[path = "emit_closures_tir.rs"]
 mod emit_closures_tir;
 
+#[path = "emit_actors_tir.rs"]
+mod emit_actors_tir;
+
 // ── Target triple ─────────────────────────────────────────────────────────────
 
 fn default_target_triple() -> String {

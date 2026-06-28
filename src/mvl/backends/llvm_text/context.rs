@@ -74,6 +74,13 @@ pub(super) struct ModuleCtx {
     // ── Actor state (#1149) ───────────────────────────────────────────────
     /// Actor declarations keyed by actor type name (populated in first pass).
     pub actor_decls: HashMap<String, ActorDecl>,
+    /// TIR-side actor declarations (parallel to `actor_decls`, #1612).
+    ///
+    /// Populated by `emit_program_tir` from `TirProgram::actors`. Replaces
+    /// `actor_decls` on the TIR path; both fields coexist during the
+    /// parallel-tree migration. When PR 2 lands and the AST walker is
+    /// deleted, `actor_decls` retires and this field becomes the only one.
+    pub tir_actor_decls: HashMap<String, crate::mvl::ir::TirActorDecl>,
     /// True once actor runtime externs have been emitted.
     pub actor_runtime_declared: bool,
     /// Names of actors whose behavior + dispatch functions have already been
@@ -137,6 +144,7 @@ impl ModuleCtx {
             closure_type_emitted: false,
             fn_aliases: HashMap::new(),
             actor_decls: HashMap::new(),
+            tir_actor_decls: HashMap::new(),
             actor_runtime_declared: false,
             actor_emitted: HashSet::new(),
             yield_check_declared: false,
