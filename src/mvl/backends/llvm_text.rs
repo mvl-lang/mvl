@@ -50,7 +50,7 @@ pub mod lli;
 
 pub use emitter::LlvmTextCompiler;
 
-use crate::mvl::parser::ast::TypeExpr;
+use crate::mvl::ir::TypeExpr;
 
 /// Dispatch metadata for a single MVL `builtin fn` consumed by the LLVM-text
 /// backend.  Populated by `loader::collect_llvm_text_builtins` and stored in

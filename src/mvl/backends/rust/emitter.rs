@@ -9,8 +9,8 @@
 use crate::mvl::backends::rust::capability_params::{
     build_capability_params_map_tir, explicit_borrow_flags_pub,
 };
-use crate::mvl::ir::{TirFn, TirProgram};
-use crate::mvl::parser::ast::{BinaryOp, Decl};
+use crate::mvl::ir::{BinaryOp, TirFn, TirProgram};
+use crate::mvl::parser::ast::Decl;
 use crate::mvl::parser::lexer::Span;
 use crate::mvl::passes::coverage::{BranchKind, CoverageMap};
 use crate::mvl::passes::mcdc::transform::{DecisionKind, FnFieldReads, MCDCMap};
