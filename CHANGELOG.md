@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.223.2] - 2026-06-28
+
+### Fixed
+
+- **`runtime/llvm`: fire exit cascade before DISC_SHUTDOWN at process exit** (#1602) — The LLVM runtime's `_mvl_actor_join_all` cleared the link/monitor registry BEFORE dispatching DISC_SHUTDOWN to actors, so `process_actor_exit` ran against an empty registry and the `on_exit`/`on_down` handlers wired by #1597 were silently unreachable during normal program termination. Reorder: call `process_actor_exit` for every live actor first (injecting EXIT/DOWN signals into peer mailboxes while the registry is intact), wait for peers to dispatch their handlers, then queue DISC_SHUTDOWN to terminate. Also move `scheduled.store(false)` to AFTER `process_actor_exit` in the dispatch loop's DISC_SHUTDOWN and panic paths so the spin-wait observes the cell as busy through the cascade. Brings LLVM behavior to parity with the Rust runtime.
+
 ## [0.223.1] - 2026-06-28
 
 ### Fixed

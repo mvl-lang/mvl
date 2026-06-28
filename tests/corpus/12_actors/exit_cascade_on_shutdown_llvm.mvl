@@ -1,0 +1,52 @@
+// exit_cascade_on_shutdown_llvm.mvl -- on_exit fires during program shutdown (#1602)
+//
+// Verifies that linked actors' `on_exit` handlers run when actors die during
+// `_mvl_actor_join_all` at program termination, not just on mid-execution panic.
+//
+// Setup: Worker (id=1) linked to Watcher (id=2, traps_exit).
+// At shutdown, `_mvl_actor_join_all` fires the exit cascade up-front (before
+// queueing DISC_SHUTDOWN) so Watcher's mailbox sees EXIT_SIGNAL with from_id=1
+// and reason=2 (Killed). Watcher dispatches `on_exit`, which prints the
+// observed values.
+//
+// Before #1602 the link/monitor registry was cleared BEFORE DISC_SHUTDOWN was
+// dispatched, so the cascade never fired and `on_exit` was silently skipped.
+//
+// expect: main_done
+// expect: on_exit_from_1_reason_killed
+
+extern "C" {
+    fn _mvl_actors_link(a: Int, b: Int) -> Unit ! Actor;
+}
+
+actor Worker {
+    pub fn ping() { }
+}
+
+actor Watcher traps_exit {
+    fn on_exit(from_id: Int, reason: Int) ! Console {
+        if from_id == 1 {
+            if reason == 2 {
+                println("on_exit_from_1_reason_killed")
+            } else {
+                println("on_exit_from_1_reason_other")
+            }
+        } else {
+            println("on_exit_unexpected_from")
+        }
+    }
+}
+
+fn main() -> Unit ! Console + Actor {
+    let w: Worker = actor Worker {};        // actor_id = 1
+    let v: Watcher = actor Watcher {};      // actor_id = 2
+
+    _mvl_actors_link(1, 2);
+    w.ping();
+
+    println("main_done")
+    // Implicit _mvl_actor_join_all here:
+    //   1. Cascade fires for Worker (id=1) → EXIT_SIGNAL pushed to Watcher
+    //   2. Watcher dispatches on_exit(1, 2) — prints expected line
+    //   3. DISC_SHUTDOWN drains both actors
+}
