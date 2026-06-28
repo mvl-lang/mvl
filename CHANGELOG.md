@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.223.0] - 2026-06-28
+
+### Changed
+
+- **`backends`: Phase 3a of TIR-first migration — remove dead AST code, fix import paths** (#1594) — Removed 377 lines of dead AST-walking code from the Rust backend (`compute_last_uses_ast` in `last_use.rs`, and `emit_type_decl`/`emit_struct`/`emit_enum`/`emit_alias`/`is_copy_primitive` in `emit_types.rs` — all dead since the TIR equivalents replaced them). Migrated 4 backend import lines (`BinaryOp`, `Capability`, `TypeExpr`, `RefExpr`, `GenericParam`) from `parser::ast` to their re-exports in `crate::mvl::ir`. Lowered `audit-backend-ast` budget from 18 → 14. Phase 3b (LLVM emitter functional migration, ~7,650 LOC) filed as separate ticket #1612.
+
 ## [0.222.5] - 2026-06-28
 
 ### Fixed
