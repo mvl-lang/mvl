@@ -1,6 +1,11 @@
 // Corpus: unsigned integer types UByte and UInt (#481)
 // Demonstrates parsing, type-checking and arithmetic on the unsigned types.
 // All examples must parse and type-check without errors.
+//
+// Note: there is no in-source constructor for UByte/UInt; the helpers below
+// are kept as plain fns and referenced by name from a `test fn` so the linter
+// records them as used. Type casting requires an explicit conversion function,
+// not `as` syntax (MVL does not have `as` casts — see issue #481 for future work).
 
 fn ubyte_add(a: UByte, b: UByte) -> UByte {
     a + b
@@ -14,5 +19,8 @@ fn uint_compare(a: UInt, b: UInt) -> Bool {
     a < b
 }
 
-// Note: type casting (e.g. UByte -> Int) requires an explicit conversion function,
-// not `as` syntax (MVL does not have `as` casts — see issue #481 for future work).
+test fn unsigned_types_typecheck() -> Unit {
+    let _: fn(UByte, UByte) -> UByte = ubyte_add;
+    let _: fn(UInt, UInt) -> UInt = uint_mul;
+    let _: fn(UInt, UInt) -> Bool = uint_compare;
+}
