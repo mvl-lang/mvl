@@ -8,74 +8,84 @@
 //   Req 7  — effect propagation through generic callee
 //   Req 11 — IFC labels preserved through generic identity
 
-// ── Req 1: argument types are checked against instantiated params ────────────
+// ── Generic helpers (declaration shapes under test) ──────────────────────────
 
 fn identity[T](x: T) -> T { x }
 
-fn use_int() -> Int {
-    identity(42)
-}
-
-fn use_string() -> String {
-    identity("hello")
-}
-
-fn use_bool() -> Bool {
-    identity(true)
-}
-
-// ── Req 4: Option[T] wrapper preserved ──────────────────────────────────────
-
 fn wrap_option[T](x: T) -> Option[T] { Some(x) }
-
-fn option_int() -> Option[Int] {
-    wrap_option(1)
-}
-
-fn roundtrip_option(opt: Option[Int]) -> Option[Int] {
-    identity(opt)
-}
-
-// ── Req 7: effectful generic caller propagates effects ───────────────────────
 
 fn with_console[T](x: T) -> T ! Console {
     println("side effect");
     x
 }
 
-fn caller_needs_console(s: String) -> String ! Console {
-    with_console(s)
-}
+fn pair_first[A, B](a: A, b: B) -> A { a }
+fn pair_second[A, B](a: A, b: B) -> B { b }
 
-// ── Req 11: IFC labels preserved through generic identity ────────────────────
-
-fn secret_through_generic(s: Secret[String]) -> Secret[String] {
-    identity(s)
-}
-
+// Tainted has no user constructor — kept as helper, referenced by name in
+// `tainted_through_generic` below.
 fn tainted_through_generic(t: Tainted[String]) -> Tainted[String] {
     identity(t)
 }
 
-// ── Multiple type params ─────────────────────────────────────────────────────
+// ── Req 1: argument types are checked against instantiated params ────────────
 
-fn pair_first[A, B](a: A, b: B) -> A { a }
-fn pair_second[A, B](a: A, b: B) -> B { b }
-
-fn first_of_int_string() -> Int {
-    pair_first(42, "hello")
+test fn use_int() -> Unit {
+    let _: Int = identity(42);
 }
 
-fn second_of_int_string() -> String {
-    pair_second(42, "hello")
+test fn use_string() -> Unit {
+    let _: String = identity("hello");
+}
+
+test fn use_bool() -> Unit {
+    let _: Bool = identity(true);
+}
+
+// ── Req 4: Option[T] wrapper preserved ───────────────────────────────────────
+
+test fn option_int() -> Unit {
+    let _: Option[Int] = wrap_option(1);
+}
+
+test fn roundtrip_option() -> Unit {
+    let opt: Option[Int] = Some(7);
+    let _: Option[Int] = identity(opt);
+}
+
+// ── Req 7: effectful generic caller propagates effects ───────────────────────
+
+test fn caller_needs_console() -> Unit ! Console {
+    let _: String = with_console("s");
+}
+
+// ── Req 11: IFC labels preserved through generic identity ────────────────────
+
+test fn secret_through_generic() -> Unit {
+    let s: Secret[String] = relabel classify("pii", "CLASSIFY-GEN-001");
+    let _: Secret[String] = identity(s);
+}
+
+test fn tainted_through_generic_ref() -> Unit {
+    let _: fn(Tainted[String]) -> Tainted[String] = tainted_through_generic;
+}
+
+// ── Multiple type params ─────────────────────────────────────────────────────
+
+test fn first_of_int_string() -> Unit {
+    let _: Int = pair_first(42, "hello");
+}
+
+test fn second_of_int_string() -> Unit {
+    let _: String = pair_second(42, "hello");
 }
 
 // ── Explicit type arguments ──────────────────────────────────────────────────
 
-fn explicit_int() -> Int {
-    identity[Int](99)
+test fn explicit_int() -> Unit {
+    let _: Int = identity[Int](99);
 }
 
-fn explicit_string() -> String {
-    identity[String]("world")
+test fn explicit_string() -> Unit {
+    let _: String = identity[String]("world");
 }
