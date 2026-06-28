@@ -1,5 +1,16 @@
 // Corpus: MVL keywords
 // Demonstrates all keyword tokens the lexer must recognize.
+//
+// Each helper `fn` below exists to show one keyword form in its natural
+// declaration shape (return, total, partial, iso/val/ref/tag, where,
+// while, requires/ensures, ghost, invariant/decreases, forall/exists).
+// The `test fn` items at the bottom call (or reference) each helper so
+// the linter records the helpers as used.
+
+// Supporting opaque type referenced by `iso_fn` below.
+type DbConn = struct {
+    host: String,
+}
 
 // Declaration keywords
 fn total_add(a: Int, b: Int) -> Int {
@@ -39,11 +50,11 @@ fn tag_fn(tag x: Int) -> Int { 0 }
 
 // IFC keywords: Tainted, Clean, Secret, Public
 fn check_tainted(input: Tainted[String]) -> String {
-    relabel trust(input, "VALIDATED")
+    relabel trust(input, "VALIDATED-KW-001")
 }
 
 fn reveal(s: Secret[String]) -> String {
-    relabel release(s, "AUTHORIZED")
+    relabel release(s, "AUTHORIZED-KW-001")
 }
 
 // where keyword in refinement
@@ -83,4 +94,56 @@ fn quantified(n: Int where self >= 0) -> Int
     ensures exists k: Int, k >= 0
 {
     n
+}
+
+// ── Tests — each test fn references one keyword-form helper above ─────────────
+
+test fn fn_and_return_keywords() -> Unit {
+    let _: Int = total_add(1, 2);
+}
+
+// `partial test fn` — `may_loop` is partial, and total fns can't call partial.
+test partial fn totality_keywords() -> Unit {
+    let _: Int = always_terminates(1);
+    let _: Int = may_loop(1);
+}
+
+test fn control_flow_keywords() -> Unit {
+    let _: Int = demo(5);
+}
+
+test fn ownership_capability_keywords() -> Unit {
+    let _: Int = val_fn(1);
+    let _: Int = tag_fn(1);
+    // ref/iso parameters are referenced by name; their capability shape
+    // is part of the function's declared signature.
+    let _: fn(Int) -> Int = ref_fn;
+    let _: fn(val DbConn) -> Int = iso_fn;
+}
+
+test fn ifc_keywords() -> Unit {
+    let _: fn(Tainted[String]) -> String = check_tainted;
+    let _: fn(Secret[String]) -> String = reveal;
+}
+
+test fn where_keyword() -> Unit {
+    let _: Int = positive(1);
+}
+
+test partial fn while_keyword() -> Unit {
+    let n: ref Int = 3;
+    let _: Int = countdown(n);
+}
+
+test fn contract_keywords() -> Unit {
+    let _: Int = non_negative(0);
+}
+
+test partial fn loop_contract_keywords() -> Unit {
+    let n: ref Int = 3;
+    let _: Int = loop_contracts(n);
+}
+
+test fn quantifier_keywords() -> Unit {
+    let _: Int = quantified(0);
 }
