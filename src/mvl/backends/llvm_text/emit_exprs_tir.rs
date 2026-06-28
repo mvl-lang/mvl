@@ -90,8 +90,17 @@ impl TextEmitter {
 
             TirExprKind::FnCall { name, args, .. } => self.emit_fn_call_tir(name, args),
 
+            TirExprKind::Construct { name, fields } => self.emit_construct_tir(name, fields),
+
+            TirExprKind::FieldAccess { expr: inner, field } => {
+                self.emit_field_access_tir(inner, field)
+            }
+
             // Consume is a move marker — lowers to the inner value unchanged.
             TirExprKind::Consume(inner) => self.emit_expr_tir(inner),
+
+            // Borrow is a capability marker — lowers to the inner value.
+            TirExprKind::Borrow { expr: inner, .. } => self.emit_expr_tir(inner),
 
             // Unimplemented variants — build out leaf-first in subsequent commits (#1612).
             _ => Err(format!(
@@ -459,6 +468,104 @@ impl TextEmitter {
             }
         }
         Ok(Some(reg))
+    }
+
+    /// TIR variant of [`Self::emit_construct`].
+    fn emit_construct_tir(
+        &mut self,
+        name: &str,
+        fields: &[(String, TirExpr)],
+    ) -> Result<Option<String>, String> {
+        // Named-field enum variant construction handled in a subsequent commit
+        // (needs emit_enum_variant_constructor_tir).
+        if let Some((type_name, _)) = name.split_once("::") {
+            if self.module.enum_variants.contains_key(type_name) {
+                return Err(format!(
+                    "emit_construct_tir: enum variant `{name}` not yet ported"
+                ));
+            }
+        }
+
+        let field_defs = match self.module.struct_fields.get(name).cloned() {
+            Some(f) => f,
+            None => return Ok(None),
+        };
+
+        let mut field_vals: Vec<(String, String)> = Vec::new();
+        for (field_name, field_ty) in &field_defs {
+            let llvm_t = self.llvm_ty_ctx(field_ty);
+            let val = fields
+                .iter()
+                .find(|(n, _)| n == field_name)
+                .and_then(|(_, e)| self.emit_expr_tir(e).ok().flatten())
+                .unwrap_or_else(|| "undef".into());
+            field_vals.push((llvm_t, val));
+        }
+
+        let struct_ty = format!("%{name}");
+        let mut acc = "undef".to_string();
+        for (i, (field_ty, val)) in field_vals.iter().enumerate() {
+            let reg = self.next_reg();
+            self.push_instr(&format!(
+                "{reg} = insertvalue {struct_ty} {acc}, {field_ty} {val}, {i}"
+            ));
+            self.fn_ctx.reg_types.insert(reg.clone(), struct_ty.clone());
+            acc = reg;
+        }
+        Ok(Some(acc))
+    }
+
+    /// TIR variant of [`Self::emit_field_access`].
+    ///
+    /// Uses the receiver's `expr.ty` directly to find the struct name —
+    /// no AST `struct_name_of_expr` walk needed.
+    fn emit_field_access_tir(
+        &mut self,
+        expr: &TirExpr,
+        field: &str,
+    ) -> Result<Option<String>, String> {
+        // In actor method bodies, `self.field` maps to a ref_local GEP pointer.
+        if let TirExprKind::Var(name) = &expr.kind {
+            if name == "self" {
+                if let Some(loc) = self.fn_ctx.ref_locals.get(field).cloned() {
+                    let ty_str = self.llvm_ty_ctx(&loc.elem_ty);
+                    let reg = self.next_reg();
+                    self.push_instr(&format!("{reg} = load {ty_str}, ptr {}", loc.ptr));
+                    self.fn_ctx.reg_types.insert(reg.clone(), ty_str);
+                    return Ok(Some(reg));
+                }
+            }
+        }
+
+        // Determine the struct name from the receiver's resolved type.
+        let struct_name = match &expr.ty {
+            Ty::Named(n, _) => Some(n.clone()),
+            Ty::Ref(_, inner) => match inner.as_ref() {
+                Ty::Named(n, _) => Some(n.clone()),
+                _ => None,
+            },
+            _ => None,
+        };
+
+        let base_val = match self.emit_expr_tir(expr)? {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+
+        if let Some(sn) = struct_name {
+            if let Some(fields) = self.module.struct_fields.get(&sn).cloned() {
+                if let Some(idx) = fields.iter().position(|(f, _)| f == field) {
+                    let field_ty = self.llvm_ty_ctx(&fields[idx].1.clone());
+                    let reg = self.next_reg();
+                    self.push_instr(&format!(
+                        "{reg} = extractvalue %{sn} {base_val}, {idx}"
+                    ));
+                    self.fn_ctx.reg_types.insert(reg.clone(), field_ty);
+                    return Ok(Some(reg));
+                }
+            }
+        }
+        Ok(None)
     }
 }
 

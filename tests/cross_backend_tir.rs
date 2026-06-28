@@ -268,3 +268,21 @@ fn tir_walker_recursive_fn() {
         }",
     );
 }
+
+#[test]
+fn tir_walker_struct_construct_and_field() {
+    assert_tir_parity(
+        "type Point = struct { x: Int, y: Int }
+         fn make() -> Point { Point { x: 3, y: 4 } }
+         fn first(p: Point) -> Int { p.x }",
+    );
+}
+
+#[test]
+fn tir_walker_nested_struct_access() {
+    assert_tir_parity(
+        "type Inner = struct { v: Int }
+         type Outer = struct { inner: Inner }
+         fn extract(o: Outer) -> Int { o.inner.v }",
+    );
+}
