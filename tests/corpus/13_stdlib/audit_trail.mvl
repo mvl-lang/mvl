@@ -46,11 +46,13 @@ total fn failure_event(service: String) -> AuditEvent {
 
 fn log_access(logger: AuditLogger, user_id: String) -> Unit ! Audit {
     let event: AuditEvent = access("user:".concat(user_id), "patient_record:42");
+    // allow: silent-result-discard fixture demonstrates emit signature; failure handling out of scope
     let _: Result[Unit, IoError] = logger.emit(event);
 }
 
 fn log_deny(logger: AuditLogger, user_id: String) -> Unit ! Audit {
     let event: AuditEvent = deny("user:".concat(user_id), "admin_panel", "no_role");
+    // allow: silent-result-discard fixture demonstrates emit signature; failure handling out of scope
     let _: Result[Unit, IoError] = logger.emit(event);
 }
 
@@ -60,6 +62,7 @@ fn log_modify(logger: AuditLogger, service: String, order_id: String) -> Unit ! 
         "order:".concat(order_id),
         "update.status",
     );
+    // allow: silent-result-discard fixture demonstrates emit signature; failure handling out of scope
     let _: Result[Unit, IoError] = logger.emit(event);
 }
 
@@ -68,6 +71,7 @@ fn log_modify(logger: AuditLogger, service: String, order_id: String) -> Unit ! 
 fn log_traced_access(logger: AuditLogger, user_id: String, trace_id: String) -> Unit ! Audit {
     let event: AuditEvent = access("user:".concat(user_id), "patient_record:42");
     let traced: AuditEvent = with_correlation(event, trace_id);
+    // allow: silent-result-discard fixture demonstrates emit signature; failure handling out of scope
     let _: Result[Unit, IoError] = logger.emit(traced);
 }
 
@@ -85,7 +89,27 @@ fn process_request(logger: AuditLogger, user_id: String, authorised: Bool) -> Un
 
 fn audit_login_and_access(logger: AuditLogger, user_id: String) -> Unit ! Audit {
     let login_ev: AuditEvent = access("user:".concat(user_id), "auth:session");
+    // allow: silent-result-discard fixture demonstrates emit signature; failure handling out of scope
     let _: Result[Unit, IoError] = logger.emit(login_ev);
     let read_ev: AuditEvent = access("user:".concat(user_id), "dashboard");
+    // allow: silent-result-discard fixture demonstrates emit signature; failure handling out of scope
     let _: Result[Unit, IoError] = logger.emit(read_ev);
+}
+
+// ── Test: reference each declaration so the linter records it as used ─────────
+
+test fn audit_trail_helpers_typecheck() -> Unit {
+    // Pure builders — direct call (fn-pointer would strip `total`).
+    let ev: AuditEvent = build_access_event("alice");
+    let _: AuditEvent = build_deny_event("alice");
+    let _: AuditEvent = build_modify_event("orders");
+    let _: AuditEvent = enrich_with_trace(ev, "trace-1");
+    let _: AuditEvent = enrich_with_extra_fields(ev);
+    let _: AuditEvent = failure_event("orders");
+
+    // Effectful loggers
+    let _: fn(AuditLogger, String, String) -> Unit ! Audit = log_modify;
+    let _: fn(AuditLogger, String, String) -> Unit ! Audit = log_traced_access;
+    let _: fn(AuditLogger, String, Bool) -> Unit ! Audit = process_request;
+    let _: fn(AuditLogger, String) -> Unit ! Audit = audit_login_and_access;
 }
