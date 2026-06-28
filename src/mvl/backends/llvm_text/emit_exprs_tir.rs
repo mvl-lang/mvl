@@ -530,7 +530,7 @@ impl TextEmitter {
     /// Three delegate paths — Option, Result, payload-enum — handled by
     /// dedicated TIR helpers below. Falls through to the generic unit-enum +
     /// wildcard case for everything else.
-    fn emit_match_expr_tir(
+    pub(super) fn emit_match_expr_tir(
         &mut self,
         scrutinee: &TirExpr,
         arms: &[TirMatchArm],

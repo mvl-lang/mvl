@@ -31,7 +31,9 @@ impl TextEmitter {
             TirStmt::If {
                 cond, then, else_, ..
             } => self.emit_if_stmt_chain_tir(cond, then, else_.as_ref()),
-            // Match at tail: ported in a subsequent commit.
+            TirStmt::Match {
+                scrutinee, arms, ..
+            } => self.emit_match_expr_tir(scrutinee, arms),
             other => {
                 self.emit_stmt_tir(other)?;
                 Ok(None)
@@ -298,11 +300,16 @@ impl TextEmitter {
                 cond, body, ..
             } => self.emit_while_tir(cond, body),
 
-            // Unimplemented: Match, For — built out in subsequent commits.
-            _ => Err(format!(
-                "emit_stmt_tir: variant not yet implemented: {:?}",
-                std::mem::discriminant(stmt)
-            )),
+            TirStmt::For {
+                pattern, iter, body, ..
+            } => self.emit_for_stmt_tir(pattern, iter, body),
+
+            TirStmt::Match {
+                scrutinee, arms, ..
+            } => {
+                self.emit_match_expr_tir(scrutinee, arms)?;
+                Ok(())
+            }
         }
     }
 
@@ -348,6 +355,215 @@ impl TextEmitter {
         }
 
         self.start_bb(&merge_bb);
+        Ok(())
+    }
+
+    /// TIR variant of [`Self::emit_for_stmt`].
+    ///
+    /// Dispatches to `emit_for_range_tir` when the iterator is a `range(lo, hi)`
+    /// FnCall; otherwise delegates to `emit_for_list_tir`. Receiver/iter type
+    /// reads use `iter.ty` directly — no expr_types lookup needed.
+    fn emit_for_stmt_tir(
+        &mut self,
+        pattern: &Pattern,
+        iter: &TirExpr,
+        body: &TirBlock,
+    ) -> Result<(), String> {
+        // `for var in range(lo, hi)` — integer range loop.
+        if let crate::mvl::ir::TirExprKind::FnCall { name, args, .. } = &iter.kind {
+            if name == "range" && args.len() == 2 {
+                let var_name = match pattern {
+                    Pattern::Ident(n, _) => n.clone(),
+                    _ => "_".into(),
+                };
+                return self.emit_for_range_tir(&var_name, &args[0], &args[1], body);
+            }
+        }
+        // `for var in <list-expr>` — list / array / set iteration (#1546).
+        let var_name = match pattern {
+            Pattern::Ident(n, _) => n.clone(),
+            _ => "_".into(),
+        };
+        self.emit_for_list_tir(&var_name, iter, body)
+    }
+
+    /// TIR variant of [`Self::emit_for_range`].
+    fn emit_for_range_tir(
+        &mut self,
+        var_name: &str,
+        lo: &TirExpr,
+        hi: &TirExpr,
+        body: &TirBlock,
+    ) -> Result<(), String> {
+        let lo_val = match self.emit_expr_tir(lo)? {
+            Some(v) => v,
+            None => return Ok(()),
+        };
+        let hi_val = match self.emit_expr_tir(hi)? {
+            Some(v) => v,
+            None => return Ok(()),
+        };
+
+        let i_ptr = self.next_reg();
+        self.push_instr(&format!("{i_ptr} = alloca i64"));
+        self.push_instr(&format!("store i64 {lo_val}, ptr {i_ptr}"));
+
+        let cond_bb = self.next_bb("for_cond");
+        let body_bb = self.next_bb("for_body");
+        let end_bb = self.next_bb("for_end");
+
+        self.push_instr(&format!("br label %{cond_bb}"));
+        self.start_bb(&cond_bb);
+
+        let cur_i = self.next_reg();
+        self.push_instr(&format!("{cur_i} = load i64, ptr {i_ptr}"));
+
+        let cond_reg = self.next_reg();
+        self.push_instr(&format!("{cond_reg} = icmp slt i64 {cur_i}, {hi_val}"));
+        self.push_instr(&format!(
+            "br i1 {cond_reg}, label %{body_bb}, label %{end_bb}"
+        ));
+
+        self.start_bb(&body_bb);
+
+        let old = self
+            .fn_ctx
+            .locals
+            .insert(var_name.to_string(), cur_i.clone());
+        self.fn_ctx.reg_types.insert(cur_i.clone(), "i64".into());
+        let heap_locals_snapshot = self.fn_ctx.heap_locals.len();
+        self.emit_block_tir(body)?;
+
+        if let Some(prev) = old {
+            self.fn_ctx.locals.insert(var_name.to_string(), prev);
+        } else {
+            self.fn_ctx.locals.remove(var_name);
+        }
+
+        if !self.fn_ctx.terminated {
+            self.drop_loop_body_locals(heap_locals_snapshot);
+            let next_i = self.next_reg();
+            self.push_instr(&format!("{next_i} = add i64 {cur_i}, 1"));
+            self.push_instr(&format!("store i64 {next_i}, ptr {i_ptr}"));
+            self.ensure_yield_check_extern();
+            self.push_instr("call void @_mvl_yield_check()");
+            self.push_instr(&format!("br label %{cond_bb}"));
+        } else {
+            self.fn_ctx.heap_locals.truncate(heap_locals_snapshot);
+        }
+
+        self.start_bb(&end_bb);
+        Ok(())
+    }
+
+    /// TIR variant of [`Self::emit_for_list`].
+    ///
+    /// Element type comes from `iter.ty` (unwrapping `Ref` / `Labeled` /
+    /// `Refined` then matching `Ty::List(e)` / `Array(e, _)` / `Set(e)`),
+    /// instead of the AST `expr_types.get(iter.span())` lookup.
+    fn emit_for_list_tir(
+        &mut self,
+        var_name: &str,
+        iter: &TirExpr,
+        body: &TirBlock,
+    ) -> Result<(), String> {
+        use crate::mvl::ir::Ty;
+
+        let arr = match self.emit_expr_tir(iter)? {
+            Some(v) => v,
+            None => return Ok(()),
+        };
+
+        // Unwrap label/refinement/ref wrappers, then match List/Array/Set.
+        let mut cur = &iter.ty;
+        while let Ty::Ref(_, inner) | Ty::Labeled(_, inner) | Ty::Refined(inner, _) = cur {
+            cur = inner;
+        }
+        let (elem_ty_opt, elem_llvm_ty): (Option<Ty>, String) = match cur {
+            Ty::List(e) | Ty::Array(e, _) | Ty::Set(e) => {
+                ((**e).clone().into(), self.ty_to_llvm_ctx(e))
+            }
+            _ => (None, "i64".into()),
+        };
+
+        self.ensure_extern("declare i64 @_mvl_array_len(ptr)");
+        self.ensure_extern("declare ptr @_mvl_array_get(ptr, i64)");
+
+        let len_reg = self.next_reg();
+        self.push_instr(&format!("{len_reg} = call i64 @_mvl_array_len(ptr {arr})"));
+
+        let i_ptr = self.next_reg();
+        self.push_instr(&format!("{i_ptr} = alloca i64"));
+        self.push_instr(&format!("store i64 0, ptr {i_ptr}"));
+
+        let cond_bb = self.next_bb("for_list_cond");
+        let body_bb = self.next_bb("for_list_body");
+        let end_bb = self.next_bb("for_list_end");
+
+        self.push_instr(&format!("br label %{cond_bb}"));
+        self.start_bb(&cond_bb);
+
+        let cur_i = self.next_reg();
+        self.push_instr(&format!("{cur_i} = load i64, ptr {i_ptr}"));
+        let cond_reg = self.next_reg();
+        self.push_instr(&format!("{cond_reg} = icmp slt i64 {cur_i}, {len_reg}"));
+        self.push_instr(&format!(
+            "br i1 {cond_reg}, label %{body_bb}, label %{end_bb}"
+        ));
+
+        self.start_bb(&body_bb);
+
+        let elem_ptr = self.next_reg();
+        self.push_instr(&format!(
+            "{elem_ptr} = call ptr @_mvl_array_get(ptr {arr}, i64 {cur_i})"
+        ));
+        let elem_val = self.next_reg();
+        self.push_instr(&format!(
+            "{elem_val} = load {elem_llvm_ty}, ptr {elem_ptr}"
+        ));
+        self.fn_ctx
+            .reg_types
+            .insert(elem_val.clone(), elem_llvm_ty.clone());
+
+        let old_local = self
+            .fn_ctx
+            .locals
+            .insert(var_name.to_string(), elem_val.clone());
+        let old_mvl_ty = elem_ty_opt
+            .as_ref()
+            .and_then(ty_to_type_expr)
+            .and_then(|te| self.fn_ctx.local_mvl_types.insert(var_name.to_string(), te));
+
+        let heap_locals_snapshot = self.fn_ctx.heap_locals.len();
+
+        self.emit_block_tir(body)?;
+
+        if let Some(prev) = old_local {
+            self.fn_ctx.locals.insert(var_name.to_string(), prev);
+        } else {
+            self.fn_ctx.locals.remove(var_name);
+        }
+        if let Some(prev) = old_mvl_ty {
+            self.fn_ctx
+                .local_mvl_types
+                .insert(var_name.to_string(), prev);
+        } else {
+            self.fn_ctx.local_mvl_types.remove(var_name);
+        }
+
+        if !self.fn_ctx.terminated {
+            self.drop_loop_body_locals(heap_locals_snapshot);
+            let next_i = self.next_reg();
+            self.push_instr(&format!("{next_i} = add i64 {cur_i}, 1"));
+            self.push_instr(&format!("store i64 {next_i}, ptr {i_ptr}"));
+            self.ensure_yield_check_extern();
+            self.push_instr("call void @_mvl_yield_check()");
+            self.push_instr(&format!("br label %{cond_bb}"));
+        } else {
+            self.fn_ctx.heap_locals.truncate(heap_locals_snapshot);
+        }
+
+        self.start_bb(&end_bb);
         Ok(())
     }
 
