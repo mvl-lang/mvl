@@ -497,10 +497,16 @@ impl TextEmitter {
         }
 
         // Actor pass: emit behavior functions + dispatch for each actor.
+        // Dedupe across `emit_program` calls — the pass runs once per program
+        // (prelude + user) and `actor_decls` accumulates, so without
+        // `actor_emitted` std.actors actors would be emitted N times (#1610).
         if !self.module.actor_decls.is_empty() {
             self.ensure_actor_runtime_externs();
             let actor_names: Vec<String> = self.module.actor_decls.keys().cloned().collect();
             for name in actor_names {
+                if !self.module.actor_emitted.insert(name.clone()) {
+                    continue;
+                }
                 let ad = self.module.actor_decls[&name].clone();
                 self.emit_actor_decl(&ad)?;
             }
