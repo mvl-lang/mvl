@@ -5,78 +5,102 @@
 
 // ── Int bitwise ───────────────────────────────────────────────────────────────
 
-fn int_bit_and(a: Int, b: Int) -> Int {
-    a.bit_and(b)
+test fn int_bit_and() -> Unit {
+    let a: Int = 12;
+    let b: Int = 10;
+    let _: Int = a.bit_and(b);
 }
 
-fn int_bit_or(a: Int, b: Int) -> Int {
-    a.bit_or(b)
+test fn int_bit_or() -> Unit {
+    let a: Int = 12;
+    let b: Int = 10;
+    let _: Int = a.bit_or(b);
 }
 
-fn int_bit_xor(a: Int, b: Int) -> Int {
-    a.bit_xor(b)
+test fn int_bit_xor() -> Unit {
+    let a: Int = 12;
+    let b: Int = 10;
+    let _: Int = a.bit_xor(b);
 }
 
-fn int_bit_not(a: Int) -> Int {
-    a.bit_not()
+test fn int_bit_not() -> Unit {
+    let a: Int = 12;
+    let _: Int = a.bit_not();
 }
 
-fn int_shift_left(a: Int, n: Int) -> Int {
-    a.shift_left(n)
+test fn int_shift_left() -> Unit {
+    let a: Int = 1;
+    let _: Int = a.shift_left(3);
 }
 
-fn int_shift_right(a: Int, n: Int) -> Int {
-    a.shift_right(n)
+test fn int_shift_right() -> Unit {
+    let a: Int = 16;
+    let _: Int = a.shift_right(2);
 }
 
 // Composition: mask the lower 8 bits
-fn lower_byte(n: Int) -> Int {
-    n.bit_and(255)
+test fn lower_byte() -> Unit {
+    let n: Int = 0xFF00;
+    let _: Int = n.bit_and(255);
 }
 
 // ── Byte bitwise ──────────────────────────────────────────────────────────────
 
-fn byte_bit_and(a: Byte, b: Byte) -> Byte {
-    a.bit_and(b)
+test fn byte_bit_and() -> Unit {
+    let a: Byte = from_int(12);
+    let b: Byte = from_int(10);
+    let _: Byte = a.bit_and(b);
 }
 
-fn byte_bit_or(a: Byte, b: Byte) -> Byte {
-    a.bit_or(b)
+test fn byte_bit_or() -> Unit {
+    let a: Byte = from_int(12);
+    let b: Byte = from_int(10);
+    let _: Byte = a.bit_or(b);
 }
 
-fn byte_bit_xor(a: Byte, b: Byte) -> Byte {
-    a.bit_xor(b)
+test fn byte_bit_xor() -> Unit {
+    let a: Byte = from_int(12);
+    let b: Byte = from_int(10);
+    let _: Byte = a.bit_xor(b);
 }
 
-fn byte_bit_not(a: Byte) -> Byte {
-    a.bit_not()
+test fn byte_bit_not() -> Unit {
+    let a: Byte = from_int(12);
+    let _: Byte = a.bit_not();
 }
 
-fn byte_shift_left(a: Byte, n: Byte) -> Byte {
-    a.shift_left(n)
+test fn byte_shift_left() -> Unit {
+    let a: Byte = from_int(1);
+    let n: Byte = from_int(3);
+    let _: Byte = a.shift_left(n);
 }
 
-fn byte_shift_right(a: Byte, n: Byte) -> Byte {
-    a.shift_right(n)
+test fn byte_shift_right() -> Unit {
+    let a: Byte = from_int(16);
+    let n: Byte = from_int(2);
+    let _: Byte = a.shift_right(n);
 }
 
 // ── Conversions ───────────────────────────────────────────────────────────────
 
-fn byte_to_int(b: Byte) -> Int {
-    b.to_int()
+test fn byte_to_int() -> Unit {
+    let b: Byte = from_int(42);
+    let _: Int = b.to_int();
 }
 
-fn int_to_byte(n: Int) -> Byte {
-    from_int(n)
+test fn int_to_byte() -> Unit {
+    let _: Byte = from_int(42);
 }
 
 // ── CRC32 building block: XOR table lookup ────────────────────────────────────
 
 // Demonstrates bitwise ops composed for a typical algorithm step:
 // poly XOR with a shifted accumulator.
-fn crc_step(acc: Int, poly: Int) -> Int {
+test fn crc_step() -> Unit {
+    let acc: Int = 0xABCD;
+    let poly: Int = 0xEDB88320;
     let shifted: Int = acc.shift_right(1);
     let bit: Int = acc.bit_and(1);
     let mask: Int = bit.bit_xor(1).bit_not().bit_and(poly);
-    shifted.bit_xor(mask)
+    let _: Int = shifted.bit_xor(mask);
 }
