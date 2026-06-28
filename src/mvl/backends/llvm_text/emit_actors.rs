@@ -37,6 +37,21 @@ use super::{RefLocal, TextEmitter};
 /// Maximum behavior parameter count — must match `MAX_ARGS` in `runtime/llvm/src/actors.rs`.
 const MAX_ACTOR_ARGS: usize = 8;
 
+/// `true` if `ty` is an LLVM aggregate type that doesn't round-trip via i64:
+/// named structs (`%Foo`) or anonymous struct literals (`{ ... }`).
+///
+/// Triggers the heap-allocate-on-send / load-and-free-on-receive path used for
+/// struct-typed actor behavior parameters (#1607).
+fn is_aggregate_llvm_ty(ty: &str) -> bool {
+    ty.starts_with('%') || ty.starts_with('{')
+}
+
+/// Emit an LLVM constant expression that evaluates to `sizeof(ty)` in bytes,
+/// using the standard `getelementptr null, 1` idiom.
+fn sizeof_llvm_ty_expr(ty: &str) -> String {
+    format!("ptrtoint (ptr getelementptr ({ty}, ptr null, i32 1) to i64)")
+}
+
 impl TextEmitter {
     // ── Runtime extern declarations ───────────────────────────────────────
 
@@ -226,11 +241,13 @@ impl TextEmitter {
                 this.push_instr("ret void");
 
                 // Each case BB: load typed args from flat i64 array, call behavior.
+                let mut struct_used = false;
                 for (disc, method) in pub_methods.iter().enumerate() {
                     let fn_name = format!("{actor_snake}_{}", method.name);
                     this.fn_ctx.fn_buf.push(format!("behavior_{disc}:"));
 
                     let mut call_parts = vec!["ptr %state".to_string()];
+                    let mut struct_frees: Vec<(String, String)> = Vec::new();
                     for (j, p) in method.params.iter().enumerate() {
                         let ty_str = this.llvm_ty_ctx(&p.ty);
                         if ty_str == "void" {
@@ -251,6 +268,18 @@ impl TextEmitter {
                             let truncated = this.next_reg();
                             this.push_instr(&format!("{truncated} = trunc i64 {raw} to i1"));
                             call_parts.push(format!("i1 {truncated}"));
+                        } else if is_aggregate_llvm_ty(&ty_str) {
+                            // Struct-by-value arg: sender heap-allocated, stored
+                            // pointer as i64 (#1607). Load via ptr, then free.
+                            struct_used = true;
+                            let hp = this.next_reg();
+                            this.push_instr(&format!("{hp} = inttoptr i64 {raw} to ptr"));
+                            let loaded = this.next_reg();
+                            this.push_instr(&format!("{loaded} = load {ty_str}, ptr {hp}"));
+                            call_parts.push(format!("{ty_str} {loaded}"));
+                            // Free after the behavior call.
+                            let sz = sizeof_llvm_ty_expr(&ty_str);
+                            struct_frees.push((hp, sz));
                         } else {
                             call_parts.push(format!("{ty_str} {raw}"));
                         }
@@ -258,7 +287,13 @@ impl TextEmitter {
 
                     let call_args_str = call_parts.join(", ");
                     this.push_instr(&format!("call void @{fn_name}({call_args_str})"));
+                    for (hp, sz) in struct_frees {
+                        this.push_instr(&format!("call void @_mvl_free(ptr {hp}, i64 {sz})"));
+                    }
                     this.push_instr("ret void");
+                }
+                if struct_used {
+                    this.ensure_extern("declare void @_mvl_free(ptr, i64)");
                 }
 
                 // ExitSignal block: disc=-2, args=[from_id, reason] (#1597).
@@ -482,12 +517,14 @@ impl TextEmitter {
                 .reg_types
                 .insert(arr_alloca.clone(), "ptr".into());
 
+            let mut struct_used = false;
             for (j, arg_expr) in args.iter().enumerate() {
                 let val = match self.emit_expr(arg_expr)? {
                     Some(v) => v,
                     None => continue,
                 };
-                // Coerce to i64: ptr → ptrtoint, i1 → zext, i64 → identity.
+                // Coerce to i64: ptr → ptrtoint, i1 → zext, i64 → identity,
+                // struct → heap-alloc + store + ptrtoint (#1607).
                 let arg_ty = self.type_of_expr(arg_expr);
                 let i64_val = match arg_ty.as_str() {
                     "ptr" => {
@@ -500,6 +537,19 @@ impl TextEmitter {
                         self.push_instr(&format!("{coerced} = zext i1 {val} to i64"));
                         coerced
                     }
+                    s if is_aggregate_llvm_ty(s) => {
+                        // Struct-by-value: heap-allocate so the value outlives
+                        // the send (cross-thread copy of args[] preserves the
+                        // pointer; dispatch loads and frees on the other side).
+                        struct_used = true;
+                        let sz = sizeof_llvm_ty_expr(&arg_ty);
+                        let hp = self.next_reg();
+                        self.push_instr(&format!("{hp} = call ptr @_mvl_alloc(i64 {sz})"));
+                        self.push_instr(&format!("store {arg_ty} {val}, ptr {hp}"));
+                        let coerced = self.next_reg();
+                        self.push_instr(&format!("{coerced} = ptrtoint ptr {hp} to i64"));
+                        coerced
+                    }
                     _ => val,
                 };
 
@@ -508,6 +558,9 @@ impl TextEmitter {
                     "{gep} = getelementptr i64, ptr {arr_alloca}, i64 {j}"
                 ));
                 self.push_instr(&format!("store i64 {i64_val}, ptr {gep}"));
+            }
+            if struct_used {
+                self.ensure_extern("declare ptr @_mvl_alloc(i64)");
             }
             arr_alloca
         } else {

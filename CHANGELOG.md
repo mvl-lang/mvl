@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.223.1] - 2026-06-28
+
+### Fixed
+
+- **`llvm`: heap-allocate struct-typed actor behavior arguments** (#1607) — The actor-message ABI flattens behavior args into a fixed `[8 x i64]` array. Primitives round-trip via integer coercion (ptrtoint/zext), but struct values cannot be coerced to i64 — the dispatch function passed a raw i64 to a function expecting `%Struct`, producing invalid IR ("type 'i64' but expected '%DeadLetter ...'"). Fix: sender heap-allocates the struct via `_mvl_alloc`, packs the pointer as i64; receiver inttoptr-loads-frees on the dispatch side before calling the behavior. Detects both named structs (`%Foo`) and anonymous struct literals (`{...}`, used for Option/Result). Uses the standard `getelementptr null, 1` idiom for sizeof.
+
 ## [0.223.0] - 2026-06-28
 
 ### Changed
