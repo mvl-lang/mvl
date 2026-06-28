@@ -13,9 +13,11 @@
 //! is needed. The `Expr::As` variant has been erased by lowering; the inner
 //! expression's `.ty` carries the cast destination type.
 
-use crate::mvl::ir::{BinaryOp, TirExpr, TirExprKind, Ty, UnaryOp};
+use crate::mvl::ir::{
+    BinaryOp, Pattern, TirExpr, TirExprKind, TirMatchArm, TirMatchBody, Ty, UnaryOp,
+};
 
-use super::TextEmitter;
+use super::{TextEmitter, RESULT_LLVM_TY};
 
 /// Recursively check if a TIR expression's static type is `Float`.
 ///
@@ -103,6 +105,8 @@ impl TextEmitter {
             }
 
             TirExprKind::Map { pairs } => self.emit_map_literal_tir(pairs),
+
+            TirExprKind::Match { scrutinee, arms } => self.emit_match_expr_tir(scrutinee, arms),
 
             // Consume is a move marker — lowers to the inner value unchanged.
             TirExprKind::Consume(inner) => self.emit_expr_tir(inner),
@@ -501,6 +505,433 @@ impl TextEmitter {
         Ok(Some(reg))
     }
 
+    /// TIR variant of [`Self::emit_match_expr`].
+    ///
+    /// Three delegate paths — Option, Result, payload-enum — handled by
+    /// dedicated TIR helpers below. Falls through to the generic unit-enum +
+    /// wildcard case for everything else.
+    fn emit_match_expr_tir(
+        &mut self,
+        scrutinee: &TirExpr,
+        arms: &[TirMatchArm],
+    ) -> Result<Option<String>, String> {
+        let scrut_val = match self.emit_expr_tir(scrutinee)? {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+
+        let has_ok_err = arms
+            .iter()
+            .any(|a| matches!(&a.pattern, Pattern::Ok { .. } | Pattern::Err { .. }));
+        if has_ok_err {
+            return self.emit_result_match_tir(scrutinee, &scrut_val, arms);
+        }
+
+        let has_some_none = arms
+            .iter()
+            .any(|a| matches!(&a.pattern, Pattern::Some { .. } | Pattern::None(_)));
+        if has_some_none {
+            return self.emit_option_match_tir(scrutinee, &scrut_val, arms);
+        }
+
+        if let Some(enum_name) = self.scrutinee_payload_enum_tir(scrutinee) {
+            return self.emit_payload_enum_match_tir(&enum_name, &scrut_val, arms);
+        }
+
+        // Generic unit-enum / scalar match.
+        let scrut_ty = self.ty_to_llvm_ctx(&scrutinee.ty);
+
+        let n = self.fn_ctx.bb;
+        self.fn_ctx.bb += arms.len() + 2;
+        let default_bb = format!("match_default_{n}");
+        let merge_bb = format!("match_merge_{}", n + arms.len() + 1);
+
+        let arm_bbs: Vec<String> = (0..arms.len())
+            .map(|i| format!("match_arm_{}", n + i))
+            .collect();
+
+        let mut switch_arms: Vec<(i64, usize)> = Vec::new();
+        let mut wildcard_arm: Option<usize> = None;
+
+        for (idx, arm) in arms.iter().enumerate() {
+            if self.collect_or_discriminants_tir(
+                &arm.pattern,
+                idx,
+                &mut switch_arms,
+                &mut wildcard_arm,
+            ) {
+                continue;
+            }
+            wildcard_arm = Some(idx);
+        }
+
+        let use_switch = !switch_arms.is_empty();
+        if use_switch {
+            let mut switch_str = format!("switch {scrut_ty} {scrut_val}, label %{default_bb} [\n");
+            for (disc, arm_idx) in &switch_arms {
+                switch_str.push_str(&format!(
+                    "    {scrut_ty} {disc}, label %{}\n",
+                    arm_bbs[*arm_idx]
+                ));
+            }
+            switch_str.push_str("  ]");
+            self.push_instr(&switch_str);
+        } else {
+            self.push_instr(&format!("br label %{default_bb}"));
+        }
+
+        let mut phi_entries: Vec<(String, String, String)> = Vec::new();
+        let mut no_val_arms: Vec<String> = Vec::new();
+
+        for (idx, arm) in arms.iter().enumerate() {
+            let arm_bb = &arm_bbs[idx];
+            self.fn_ctx.fn_buf.push(format!("{arm_bb}:"));
+            self.fn_ctx.current_bb = arm_bb.clone();
+            self.fn_ctx.terminated = false;
+
+            if let Pattern::Ident(name, _) = &arm.pattern {
+                if !name.contains("::") {
+                    self.fn_ctx.locals.insert(name.clone(), scrut_val.clone());
+                }
+            }
+
+            let arm_val = self.emit_match_arm_body_tir(&arm.body)?;
+
+            let end_bb = self.fn_ctx.current_bb.clone();
+            if !self.fn_ctx.terminated {
+                self.push_instr(&format!("br label %{merge_bb}"));
+                if let Some(v) = arm_val {
+                    let ty = self.infer_val_type(&v);
+                    phi_entries.push((v, ty, end_bb));
+                } else {
+                    no_val_arms.push(end_bb);
+                }
+            }
+
+            if let Pattern::Ident(name, _) = &arm.pattern {
+                if !name.contains("::") {
+                    self.fn_ctx.locals.remove(name);
+                }
+            }
+        }
+
+        self.fn_ctx.fn_buf.push(format!("{default_bb}:"));
+        self.fn_ctx.current_bb = default_bb.clone();
+        self.fn_ctx.terminated = false;
+
+        if let Some(wild_idx) = wildcard_arm {
+            self.push_instr(&format!("br label %{}", arm_bbs[wild_idx]));
+        } else {
+            self.ensure_extern("declare void @llvm.trap()");
+            self.push_instr("call void @llvm.trap()");
+            self.push_instr("unreachable");
+            self.fn_ctx.terminated = true;
+        }
+
+        self.fn_ctx.fn_buf.push(format!("{merge_bb}:"));
+        self.fn_ctx.current_bb = merge_bb.clone();
+        self.fn_ctx.terminated = false;
+
+        let total_incoming = phi_entries.len() + no_val_arms.len();
+        if total_incoming >= 2 && !phi_entries.is_empty() {
+            let phi_ty = phi_entries
+                .iter()
+                .find(|(_, ty, _)| ty != "i64")
+                .map(|(_, ty, _)| ty.clone())
+                .unwrap_or_else(|| phi_entries[0].1.clone());
+            let mut parts: Vec<String> = phi_entries
+                .iter()
+                .map(|(v, _, from)| format!("[ {v}, %{from} ]"))
+                .collect();
+            for from in &no_val_arms {
+                parts.push(format!("[ undef, %{from} ]"));
+            }
+            let result = self.next_reg();
+            self.push_instr(&format!("{result} = phi {phi_ty} {}", parts.join(", ")));
+            self.fn_ctx.reg_types.insert(result.clone(), phi_ty);
+            Ok(Some(result))
+        } else if phi_entries.len() == 1 && no_val_arms.is_empty() {
+            Ok(Some(phi_entries.remove(0).0))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Identify whether `scrutinee` is a payload-enum expression — TIR-side.
+    ///
+    /// Uses `scrutinee.ty` directly (no AST walk needed) — cleaner than the
+    /// AST equivalent which threads through `local_mvl_types` / `fn_ret_types`.
+    fn scrutinee_payload_enum_tir(&self, scrutinee: &TirExpr) -> Option<String> {
+        let mut cur = &scrutinee.ty;
+        loop {
+            match cur {
+                Ty::Ref(_, inner) | Ty::Labeled(_, inner) | Ty::Refined(inner, _) => {
+                    cur = inner;
+                }
+                Ty::Named(name, _) => {
+                    if self.module.enum_variants.contains_key(name)
+                        && self.enum_has_payloads(name)
+                    {
+                        return Some(name.clone());
+                    }
+                    return None;
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    /// Helper: emit a [`TirMatchBody`] and return its value.
+    fn emit_match_arm_body_tir(
+        &mut self,
+        body: &TirMatchBody,
+    ) -> Result<Option<String>, String> {
+        match body {
+            TirMatchBody::Expr(e) => self.emit_expr_tir(e),
+            TirMatchBody::Block(b) => self.emit_block_tir(b),
+        }
+    }
+
+    /// TIR variant of [`collect_or_discriminants`] — collects discriminant values
+    /// from a (possibly Or-flattened) pattern. Returns `true` if all sub-patterns
+    /// matched as concrete discriminants; `false` if any sub-pattern was a
+    /// wildcard or unsupported variant.
+    fn collect_or_discriminants_tir(
+        &self,
+        pattern: &Pattern,
+        arm_idx: usize,
+        switch_arms: &mut Vec<(i64, usize)>,
+        wildcard_arm: &mut Option<usize>,
+    ) -> bool {
+        match pattern {
+            Pattern::Ident(name, _) if name.contains("::") => {
+                if let Some(disc) = self.pattern_discriminant(name) {
+                    switch_arms.push((disc, arm_idx));
+                    true
+                } else {
+                    false
+                }
+            }
+            Pattern::Literal(crate::mvl::ir::Literal::Integer(n), _) => {
+                switch_arms.push((*n, arm_idx));
+                true
+            }
+            Pattern::Wildcard(_) | Pattern::Ident(_, _) => {
+                *wildcard_arm = Some(arm_idx);
+                true
+            }
+            Pattern::Or { patterns: alts, .. } => {
+                for alt in alts {
+                    if !self.collect_or_discriminants_tir(
+                        alt,
+                        arm_idx,
+                        switch_arms,
+                        wildcard_arm,
+                    ) {
+                        return false;
+                    }
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// TIR variant of [`Self::emit_option_match`].
+    fn emit_option_match_tir(
+        &mut self,
+        scrutinee: &TirExpr,
+        scrut_val: &str,
+        arms: &[TirMatchArm],
+    ) -> Result<Option<String>, String> {
+        // Inner type of Option[T] — read directly from scrutinee.ty.
+        let inner_ty: Option<Ty> = match unwrap_labels(&scrutinee.ty) {
+            Ty::Option(inner) => Some((**inner).clone()),
+            _ => None,
+        };
+        let inner_load_ty = inner_ty
+            .as_ref()
+            .map(|t| self.ty_to_llvm_ctx(t))
+            .unwrap_or_else(|| "ptr".into());
+
+        // Extract discriminant byte from { i8, ptr }.
+        let disc_reg = self.next_reg();
+        self.push_instr(&format!(
+            "{disc_reg} = extractvalue {RESULT_LLVM_TY} {scrut_val}, 0"
+        ));
+        self.fn_ctx.reg_types.insert(disc_reg.clone(), "i8".into());
+
+        let n = self.fn_ctx.bb;
+        self.fn_ctx.bb += arms.len() + 2;
+        let default_bb = format!("match_default_{n}");
+        let merge_bb = format!("match_merge_{}", n + arms.len() + 1);
+        let arm_bbs: Vec<String> = (0..arms.len())
+            .map(|i| format!("match_arm_{}", n + i))
+            .collect();
+
+        let mut switch_str = format!("switch i8 {disc_reg}, label %{default_bb} [\n");
+        let mut wildcard_arm: Option<usize> = None;
+        for (idx, arm) in arms.iter().enumerate() {
+            match &arm.pattern {
+                Pattern::Some { .. } => {
+                    switch_str.push_str(&format!("    i8 0, label %{}\n", arm_bbs[idx]));
+                }
+                Pattern::None(_) => {
+                    switch_str.push_str(&format!("    i8 1, label %{}\n", arm_bbs[idx]));
+                }
+                _ => {
+                    wildcard_arm = Some(idx);
+                }
+            }
+        }
+        switch_str.push_str("  ]");
+        self.push_instr(&switch_str);
+
+        let mut phi_entries: Vec<(String, String, String)> = Vec::new();
+        let mut no_val_arms: Vec<String> = Vec::new();
+
+        for (idx, arm) in arms.iter().enumerate() {
+            if Some(idx) == wildcard_arm {
+                continue;
+            }
+            let arm_bb = &arm_bbs[idx];
+            self.fn_ctx.fn_buf.push(format!("{arm_bb}:"));
+            self.fn_ctx.current_bb = arm_bb.clone();
+            self.fn_ctx.terminated = false;
+
+            let mut bound_var: Option<String> = None;
+            if let Pattern::Some { inner, .. } = &arm.pattern {
+                let pp = self.next_reg();
+                self.push_instr(&format!(
+                    "{pp} = extractvalue {RESULT_LLVM_TY} {scrut_val}, 1"
+                ));
+                let some_val = self.next_reg();
+                self.push_instr(&format!("{some_val} = load {inner_load_ty}, ptr {pp}"));
+                self.fn_ctx
+                    .reg_types
+                    .insert(some_val.clone(), inner_load_ty.clone());
+                if let Pattern::Ident(var_name, _) = inner.as_ref() {
+                    if var_name != "_" {
+                        self.fn_ctx
+                            .locals
+                            .insert(var_name.clone(), some_val.clone());
+                        if let Some(ref imty) = inner_ty {
+                            if let Some(te) = super::emit_stmts::ty_to_type_expr(imty) {
+                                self.fn_ctx
+                                    .local_mvl_types
+                                    .insert(var_name.clone(), te);
+                            }
+                        }
+                        bound_var = Some(var_name.clone());
+                    }
+                }
+            }
+
+            let arm_val = self.emit_match_arm_body_tir(&arm.body)?;
+            let end_bb = self.fn_ctx.current_bb.clone();
+            if !self.fn_ctx.terminated {
+                self.push_instr(&format!("br label %{merge_bb}"));
+                if let Some(v) = arm_val {
+                    let ty = self.infer_val_type(&v);
+                    phi_entries.push((v, ty, end_bb));
+                } else {
+                    no_val_arms.push(end_bb);
+                }
+            }
+            if let Some(ref var_name) = bound_var {
+                self.fn_ctx.locals.remove(var_name);
+                self.fn_ctx.local_mvl_types.remove(var_name);
+            }
+        }
+
+        self.fn_ctx.fn_buf.push(format!("{default_bb}:"));
+        self.fn_ctx.current_bb = default_bb.clone();
+        self.fn_ctx.terminated = false;
+        if let Some(wild_idx) = wildcard_arm {
+            let wild_arm = &arms[wild_idx];
+            let mut bound_var: Option<String> = None;
+            if let Pattern::Ident(name, _) = &wild_arm.pattern {
+                self.fn_ctx
+                    .locals
+                    .insert(name.clone(), scrut_val.to_string());
+                bound_var = Some(name.clone());
+            }
+            let arm_val = self.emit_match_arm_body_tir(&wild_arm.body)?;
+            let end_bb = self.fn_ctx.current_bb.clone();
+            if !self.fn_ctx.terminated {
+                self.push_instr(&format!("br label %{merge_bb}"));
+                if let Some(v) = arm_val {
+                    let ty = self.infer_val_type(&v);
+                    phi_entries.push((v, ty, end_bb));
+                } else {
+                    no_val_arms.push(end_bb);
+                }
+            }
+            if let Some(ref var_name) = bound_var {
+                self.fn_ctx.locals.remove(var_name);
+                self.fn_ctx.local_mvl_types.remove(var_name);
+            }
+        } else {
+            self.ensure_extern("declare void @llvm.trap()");
+            self.push_instr("call void @llvm.trap()");
+            self.push_instr("unreachable");
+            self.fn_ctx.terminated = true;
+        }
+
+        let total_incoming = phi_entries.len() + no_val_arms.len();
+        if total_incoming == 0 {
+            self.fn_ctx.fn_buf.push(format!("{merge_bb}:"));
+            self.fn_ctx.current_bb = merge_bb.clone();
+            self.fn_ctx.terminated = false;
+            self.ensure_extern("declare void @llvm.trap()");
+            self.push_instr("call void @llvm.trap()");
+            self.push_instr("unreachable");
+            self.fn_ctx.terminated = true;
+            return Ok(None);
+        }
+        self.fn_ctx.fn_buf.push(format!("{merge_bb}:"));
+        self.fn_ctx.current_bb = merge_bb.clone();
+        self.fn_ctx.terminated = false;
+        if total_incoming >= 2 && !phi_entries.is_empty() {
+            let phi_ty = phi_entries[0].1.clone();
+            let mut parts: Vec<String> = phi_entries
+                .iter()
+                .map(|(v, _, from)| format!("[ {v}, %{from} ]"))
+                .collect();
+            for from in &no_val_arms {
+                parts.push(format!("[ undef, %{from} ]"));
+            }
+            let result = self.next_reg();
+            self.push_instr(&format!("{result} = phi {phi_ty} {}", parts.join(", ")));
+            self.fn_ctx.reg_types.insert(result.clone(), phi_ty);
+            Ok(Some(result))
+        } else if phi_entries.len() == 1 && no_val_arms.is_empty() {
+            Ok(Some(phi_entries.remove(0).0))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// TIR variant of [`Self::emit_result_match`]. Not yet ported.
+    fn emit_result_match_tir(
+        &mut self,
+        _scrutinee: &TirExpr,
+        _scrut_val: &str,
+        _arms: &[TirMatchArm],
+    ) -> Result<Option<String>, String> {
+        Err("emit_match_expr_tir: Result match not yet ported".into())
+    }
+
+    /// TIR variant of [`Self::emit_payload_enum_match`]. Not yet ported.
+    fn emit_payload_enum_match_tir(
+        &mut self,
+        _enum_name: &str,
+        _scrut_val: &str,
+        _arms: &[TirMatchArm],
+    ) -> Result<Option<String>, String> {
+        Err("emit_match_expr_tir: payload-enum match not yet ported".into())
+    }
+
     /// TIR variant of [`Self::emit_list_literal`].
     fn emit_list_literal_tir(
         &mut self,
@@ -855,3 +1286,10 @@ impl TextEmitter {
     }
 }
 
+fn unwrap_labels(ty: &Ty) -> &Ty {
+    let mut cur = ty;
+    while let Ty::Labeled(_, inner) | Ty::Refined(inner, _) | Ty::Ref(_, inner) = cur {
+        cur = inner;
+    }
+    cur
+}
