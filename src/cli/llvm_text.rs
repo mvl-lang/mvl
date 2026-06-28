@@ -4,6 +4,7 @@
 use mvl::mvl::backends::llvm_text::lli;
 use mvl::mvl::backends::llvm_text::LlvmTextCompiler;
 use mvl::mvl::checker;
+use mvl::mvl::ir::TirProgram;
 use mvl::mvl::loader;
 use mvl::mvl::parser::ast::Program;
 use mvl::mvl::parser::Parser;
@@ -47,6 +48,43 @@ fn prepare_llvm_text(prog: &Program) -> (Vec<Program>, LlvmTextCompiler) {
 
     let compiler = LlvmTextCompiler::with_context(builtins, expr_types);
     (prelude, compiler)
+}
+
+/// Lower an entry program and its prelude to TIR for the TIR-walking emitter
+/// path (#1612, Phase 3b PR 1).
+///
+/// Mirrors what `src/mvl/backends/rust.rs::transpile_project_with_options` does
+/// before invoking the Rust backend: run `mono::collect_fns` + `monomorphize`,
+/// then `ir::lower::lower` for the entry program and each prelude module.
+///
+/// Returns `(prelude_tirs, entry_tir, compiler)`.  The compiler shares its
+/// `builtin_symbols` and `expr_types` with the AST path so call-site dispatch
+/// remains identical.
+#[allow(dead_code)] // wired into the cross_backend_tir test target in a follow-up
+pub(super) fn prepare_llvm_text_tir(
+    prog: &Program,
+) -> (Vec<TirProgram>, TirProgram, LlvmTextCompiler) {
+    let (prelude, compiler) = prepare_llvm_text(prog);
+
+    // Lower entry program to TIR.
+    let entry_all_fns = mvl::mvl::passes::mono::collect_fns(
+        std::iter::once(prog).chain(prelude.iter()),
+    );
+    let entry_mono =
+        mvl::mvl::passes::mono::monomorphize(prog, &entry_all_fns, &compiler.expr_types);
+    let entry_tir = mvl::mvl::ir::lower::lower(prog, &entry_mono, &compiler.expr_types);
+
+    // Lower each prelude program independently (matches Rust backend usage).
+    let prelude_tirs: Vec<TirProgram> = prelude
+        .iter()
+        .map(|p| {
+            let all_fns = mvl::mvl::passes::mono::collect_fns([p]);
+            let m = mvl::mvl::passes::mono::monomorphize(p, &all_fns, &compiler.expr_types);
+            mvl::mvl::ir::lower::lower(p, &m, &compiler.expr_types)
+        })
+        .collect();
+
+    (prelude_tirs, entry_tir, compiler)
 }
 
 /// Compile an MVL file to LLVM IR text and write the `.ll` file.
