@@ -76,6 +76,10 @@ pub(super) struct ModuleCtx {
     pub actor_decls: HashMap<String, ActorDecl>,
     /// True once actor runtime externs have been emitted.
     pub actor_runtime_declared: bool,
+    /// Names of actors whose behavior + dispatch functions have already been
+    /// emitted. The emitter runs the actor pass once per `emit_program` call;
+    /// without dedupe, std.actors actors get emitted N times (#1610).
+    pub actor_emitted: HashSet<String>,
     /// True once `declare void @_mvl_yield_check()` has been emitted (#1181).
     pub yield_check_declared: bool,
 
@@ -134,6 +138,7 @@ impl ModuleCtx {
             fn_aliases: HashMap::new(),
             actor_decls: HashMap::new(),
             actor_runtime_declared: false,
+            actor_emitted: HashSet::new(),
             yield_check_declared: false,
             builtin_syms,
             expr_types: HashMap::new(),

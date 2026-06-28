@@ -1588,3 +1588,47 @@ fn cross_backend_audit_relabel_sink_parity() {
         "llvm_text audit JSONL differs from rust transpiler"
     );
 }
+
+// ── #1610: `use std.actors` must not duplicate actor definitions in IR ────────
+
+/// Importing `std.actors` previously caused Supervisor and DeadLetterHandler
+/// to be emitted once per `emit_program` call (~5× each), producing IR with
+/// invalid redefinitions. The fix tracks already-emitted actor names in
+/// `module.actor_emitted`. This test asserts the IR contains exactly one
+/// definition of each std.actors dispatch function.
+#[test]
+fn llvm_std_actors_import_no_duplicate_decls() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let src = dir.path().join("import_std_actors.mvl");
+    std::fs::write(&src, "use std.actors.{link}\nfn main() -> Unit { }\n").expect("write source");
+
+    let out = Command::new(mvl_bin())
+        .args(["build", src.to_str().unwrap(), "--backend=llvm"])
+        .current_dir(dir.path())
+        .output()
+        .expect("mvl build");
+    assert!(
+        out.status.success(),
+        "mvl build --backend=llvm failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+
+    let ll = dir.path().join("import_std_actors.ll");
+    let ir = std::fs::read_to_string(&ll).expect("read emitted IR");
+
+    for sym in &[
+        "@supervisor_dispatch",
+        "@supervisor_init",
+        "@supervisor_add_child",
+        "@dead_letter_handler_dispatch",
+        "@dead_letter_handler_undeliverable",
+    ] {
+        let needle = format!("define void {sym}(");
+        let count = ir.matches(needle.as_str()).count();
+        assert_eq!(
+            count, 1,
+            "expected exactly one definition of {sym}, found {count}",
+        );
+    }
+}
