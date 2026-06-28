@@ -184,3 +184,87 @@ fn tir_walker_let_chain() {
         }",
     );
 }
+
+#[test]
+fn tir_walker_if_expression() {
+    assert_tir_parity(
+        "fn max(a: Int, b: Int) -> Int {
+            if a > b { a } else { b }
+        }",
+    );
+}
+
+#[test]
+fn tir_walker_if_else_chain() {
+    assert_tir_parity(
+        "fn sign(x: Int) -> Int {
+            if x > 0 { 1 } else if x < 0 { -1 } else { 0 }
+        }",
+    );
+}
+
+#[test]
+fn tir_walker_user_fn_call() {
+    assert_tir_parity(
+        "fn double(x: Int) -> Int { x + x }
+         fn quad(x: Int) -> Int { double(double(x)) }",
+    );
+}
+
+#[test]
+fn tir_walker_void_fn_call() {
+    assert_tir_parity(
+        "fn noop() -> Unit { }
+         fn main() -> Int { noop(); 0 }",
+    );
+}
+
+#[test]
+fn tir_walker_nested_let_and_if() {
+    assert_tir_parity(
+        "fn classify(x: Int) -> Int {
+            let doubled: Int = x + x;
+            if doubled > 10 {
+                doubled
+            } else {
+                0
+            }
+        }",
+    );
+}
+
+#[test]
+fn tir_walker_if_stmt_void() {
+    assert_tir_parity(
+        "fn maybe_set(flag: Bool) -> Int {
+            let result: ref Int = 0;
+            if flag {
+                result = 42;
+            }
+            result
+        }",
+    );
+}
+
+#[test]
+fn tir_walker_while_loop() {
+    assert_tir_parity(
+        "fn count_down(n: Int) -> Int {
+            let i: ref Int = n;
+            while i > 0 {
+                i = i - 1;
+            }
+            i
+        }",
+    );
+}
+
+#[test]
+fn tir_walker_recursive_fn() {
+    // Note: still requires the user-fn call path, which works.
+    assert_tir_parity(
+        "fn fact(n: Int) -> Int {
+            if n <= 1 { 1 } else { n * fact(n - 1) }
+        }",
+    );
+}

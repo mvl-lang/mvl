@@ -82,11 +82,209 @@ impl TextEmitter {
 
             TirExprKind::Unary { op, expr: inner } => self.emit_unary_tir(op, inner),
 
+            TirExprKind::Block(block) => self.emit_block_tir(block),
+
+            TirExprKind::If { cond, then, else_ } => {
+                self.emit_if_expr_tir(cond, then, else_.as_deref())
+            }
+
+            TirExprKind::FnCall { name, args, .. } => self.emit_fn_call_tir(name, args),
+
+            // Consume is a move marker — lowers to the inner value unchanged.
+            TirExprKind::Consume(inner) => self.emit_expr_tir(inner),
+
             // Unimplemented variants — build out leaf-first in subsequent commits (#1612).
             _ => Err(format!(
                 "emit_expr_tir: variant not yet implemented: {:?}",
                 std::mem::discriminant(&expr.kind)
             )),
+        }
+    }
+
+    /// TIR variant of [`Self::emit_if_expr`].
+    fn emit_if_expr_tir(
+        &mut self,
+        cond: &TirExpr,
+        then: &crate::mvl::ir::TirBlock,
+        else_: Option<&TirExpr>,
+    ) -> Result<Option<String>, String> {
+        match else_ {
+            Some(e) => match &e.kind {
+                TirExprKind::Block(b) => self.emit_if_phi_tir_from_blocks(cond, then, Some(b)),
+                TirExprKind::If { .. } => {
+                    let cond_val = match self.emit_expr_tir(cond)? {
+                        Some(v) => v,
+                        None => return Ok(None),
+                    };
+                    let then_bb = self.next_bb("then");
+                    let else_bb = self.next_bb("else");
+                    let merge_bb = self.next_bb("merge");
+                    self.push_instr(&format!(
+                        "br i1 {cond_val}, label %{then_bb}, label %{else_bb}"
+                    ));
+                    self.start_bb(&then_bb);
+                    let then_val = self.emit_block_tir(then)?;
+                    let then_end = self.fn_ctx.current_bb.clone();
+                    if !self.fn_ctx.terminated {
+                        self.push_instr(&format!("br label %{merge_bb}"));
+                    }
+                    self.start_bb(&else_bb);
+                    let else_val = self.emit_expr_tir(e)?;
+                    let else_end = self.fn_ctx.current_bb.clone();
+                    if !self.fn_ctx.terminated {
+                        self.push_instr(&format!("br label %{merge_bb}"));
+                    }
+                    self.start_bb(&merge_bb);
+                    match (then_val, else_val) {
+                        (Some(tv), Some(ev)) => {
+                            let phi_ty = self.infer_val_type(&tv);
+                            let result = self.next_reg();
+                            self.push_instr(&format!(
+                                "{result} = phi {phi_ty} [ {tv}, %{then_end} ], [ {ev}, %{else_end} ]"
+                            ));
+                            self.fn_ctx.reg_types.insert(result.clone(), phi_ty);
+                            Ok(Some(result))
+                        }
+                        _ => Ok(None),
+                    }
+                }
+                _ => self.emit_if_phi_tir_from_blocks(cond, then, None),
+            },
+            None => self.emit_if_phi_tir_from_blocks(cond, then, None),
+        }
+    }
+
+    /// TIR variant of [`Self::emit_fn_call`] — minimum-viable port.
+    ///
+    /// Handles direct user-defined function calls (the most common case).
+    /// Builtins (assert/println/format/Ok/Err/Some/None), enum variant
+    /// constructors, Box::new, stdlib C-ABI dispatch, generics, fn-alias
+    /// indirect calls, and local closure calls fall through to errors and
+    /// will be ported in subsequent commits.
+    fn emit_fn_call_tir(
+        &mut self,
+        name: &str,
+        args: &[TirExpr],
+    ) -> Result<Option<String>, String> {
+        use crate::mvl::ir::TypeExpr;
+
+        // Reject the special cases we haven't ported yet — keeps the TIR walker
+        // safe to invoke against any program (returns Err instead of producing
+        // divergent IR that would silently fail at lli runtime).
+        match name {
+            "assert" | "println" | "print" | "eprintln" | "format" | "Ok" | "Err" | "Some"
+            | "None" | "Box::new" | "path" | "format_datetime" | "format_instant" | "find_all"
+            | "replace" | "choice" | "List::filled" | "float_checked_to_int" => {
+                return Err(format!(
+                    "emit_fn_call_tir: builtin `{name}` not yet ported"
+                ));
+            }
+            _ => {}
+        }
+        if name.contains("::") && self.pattern_discriminant(name).is_some() {
+            return Err(format!(
+                "emit_fn_call_tir: enum variant constructor `{name}` not yet ported"
+            ));
+        }
+        if self.mono.generic_fns.contains_key(name) {
+            return Err(format!(
+                "emit_fn_call_tir: generic call `{name}` not yet ported"
+            ));
+        }
+
+        // User-defined function call.
+        let mut arg_vals: Vec<(String, String)> = Vec::new();
+        for arg in args {
+            let ty = self.ty_to_llvm_ctx(&arg.ty);
+            if let Some(v) = self.emit_expr_tir(arg)? {
+                arg_vals.push((ty, v));
+            }
+        }
+        let ret_ty = self
+            .module
+            .fn_ret_types
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| TypeExpr::Base {
+                name: "Int".into(),
+                args: vec![],
+                span: Default::default(),
+            });
+
+        let llvm_ret = self.llvm_ty_ctx(&ret_ty);
+        let is_void = Self::is_void(&ret_ty);
+
+        // Builtin C-ABI dispatch (e.g. `mvl_str_split`) — same rewrite rules as
+        // the AST path: opaque-handle struct args become `ptr`.
+        let (effective_name, is_c_builtin, args_str): (String, bool, String) =
+            if let Some(c_sym) = self.module.builtin_syms.get(name).cloned() {
+                let c_abi_args: Vec<(String, &str)> = arg_vals
+                    .iter()
+                    .map(|(ty, v)| {
+                        let actual_ty = self.fn_ctx.reg_types.get(v).cloned();
+                        let abi_ty =
+                            if ty.starts_with('%') && actual_ty.as_deref() == Some("ptr") {
+                                "ptr".to_string()
+                            } else {
+                                ty.clone()
+                            };
+                        (abi_ty, v.as_str())
+                    })
+                    .collect();
+                let param_tys = c_abi_args
+                    .iter()
+                    .map(|(ty, _)| ty.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                self.ensure_extern(&format!("declare {llvm_ret} @{c_sym}({param_tys})"));
+                let abi_args_str = c_abi_args
+                    .iter()
+                    .map(|(ty, v)| format!("{ty} {v}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                (c_sym, true, abi_args_str)
+            } else {
+                let args_str = arg_vals
+                    .iter()
+                    .map(|(ty, v)| format!("{ty} {v}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                (name.to_string(), false, args_str)
+            };
+
+        if is_void {
+            self.push_instr(&format!("call void @{effective_name}({args_str})"));
+            Ok(None)
+        } else {
+            let reg = self.next_reg();
+            self.push_instr(&format!(
+                "{reg} = call {llvm_ret} @{effective_name}({args_str})"
+            ));
+            self.fn_ctx.reg_types.insert(reg.clone(), llvm_ret.clone());
+
+            if is_c_builtin && llvm_ret == super::RESULT_LLVM_TY {
+                let disc = self.next_reg();
+                self.push_instr(&format!(
+                    "{disc} = extractvalue {} {reg}, 0",
+                    super::RESULT_LLVM_TY
+                ));
+                self.fn_ctx.reg_types.insert(disc.clone(), "i8".into());
+                let raw_payload = self.next_reg();
+                self.push_instr(&format!(
+                    "{raw_payload} = extractvalue {} {reg}, 1",
+                    super::RESULT_LLVM_TY
+                ));
+                self.fn_ctx
+                    .reg_types
+                    .insert(raw_payload.clone(), "ptr".into());
+                let slot = self.next_reg();
+                self.push_instr(&format!("{slot} = alloca ptr"));
+                self.push_instr(&format!("store ptr {raw_payload}, ptr {slot}"));
+                let r1 = self.wrap_result_pair(&disc, &slot);
+                return Ok(Some(r1));
+            }
+
+            Ok(Some(reg))
         }
     }
 

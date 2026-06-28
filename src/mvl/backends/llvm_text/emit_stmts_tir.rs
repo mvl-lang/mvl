@@ -9,7 +9,7 @@
 //! also carry the fully-resolved declared `Ty` so the emitter doesn't need to
 //! re-infer types from initializers.
 
-use crate::mvl::ir::{LetKind, LValue, Pattern, TirBlock, TirStmt};
+use crate::mvl::ir::{LetKind, LValue, Pattern, TirBlock, TirElseBranch, TirExpr, TirStmt};
 
 use super::emit_stmts::ty_to_type_expr;
 use super::{RefLocal, TextEmitter, MAIN_RET};
@@ -17,7 +17,6 @@ use super::{RefLocal, TextEmitter, MAIN_RET};
 impl TextEmitter {
     /// Walk a [`TirBlock`] and emit the trailing expression's SSA register
     /// (mirrors `emit_block(&Block)` semantics).
-    #[allow(dead_code)] // wired up via emit_program_tir once that's implemented
     pub(super) fn emit_block_tir(&mut self, block: &TirBlock) -> Result<Option<String>, String> {
         let stmts = &block.stmts;
         if stmts.is_empty() {
@@ -29,12 +28,139 @@ impl TextEmitter {
         }
         match &tail[0] {
             TirStmt::Expr { expr, .. } => self.emit_expr_tir(expr),
-            // If/Match-as-statement at block tail: subsequent commits will
-            // mirror `emit_if_stmt_chain` and `emit_match_expr` for TIR.
+            TirStmt::If {
+                cond, then, else_, ..
+            } => self.emit_if_stmt_chain_tir(cond, then, else_.as_ref()),
+            // Match at tail: ported in a subsequent commit.
             other => {
                 self.emit_stmt_tir(other)?;
                 Ok(None)
             }
+        }
+    }
+
+    /// TIR variant of [`Self::emit_if_stmt_chain`].
+    ///
+    /// Emits an `if`-statement that, at block-tail position, returns a phi value.
+    /// Recursively follows `TirElseBranch::If` chains so deep `else if` trees
+    /// emit correct IR.
+    fn emit_if_stmt_chain_tir(
+        &mut self,
+        cond: &TirExpr,
+        then: &TirBlock,
+        else_: Option<&TirElseBranch>,
+    ) -> Result<Option<String>, String> {
+        match else_ {
+            None => self.emit_if_phi_tir_from_blocks(cond, then, None),
+            Some(TirElseBranch::Block(b)) => {
+                self.emit_if_phi_tir_from_blocks(cond, then, Some(b))
+            }
+            Some(TirElseBranch::If(nested)) => {
+                if let TirStmt::If {
+                    cond: ncond,
+                    then: nthen,
+                    else_: nelse,
+                    ..
+                } = nested.as_ref()
+                {
+                    let cond_val = match self.emit_expr_tir(cond)? {
+                        Some(v) => v,
+                        None => return Ok(None),
+                    };
+                    let then_bb = self.next_bb("then");
+                    let else_bb = self.next_bb("else");
+                    let merge_bb = self.next_bb("merge");
+                    self.push_instr(&format!(
+                        "br i1 {cond_val}, label %{then_bb}, label %{else_bb}"
+                    ));
+
+                    self.start_bb(&then_bb);
+                    let then_val = self.emit_block_tir(then)?;
+                    let then_end = self.fn_ctx.current_bb.clone();
+                    if !self.fn_ctx.terminated {
+                        self.push_instr(&format!("br label %{merge_bb}"));
+                    }
+
+                    self.start_bb(&else_bb);
+                    let else_val =
+                        self.emit_if_stmt_chain_tir(ncond, nthen, nelse.as_ref())?;
+                    let else_end = self.fn_ctx.current_bb.clone();
+                    if !self.fn_ctx.terminated {
+                        self.push_instr(&format!("br label %{merge_bb}"));
+                    }
+
+                    self.start_bb(&merge_bb);
+                    match (then_val, else_val) {
+                        (Some(tv), Some(ev)) => {
+                            let phi_ty = self.infer_val_type(&tv);
+                            let result = self.next_reg();
+                            self.push_instr(&format!(
+                                "{result} = phi {phi_ty} [ {tv}, %{then_end} ], [ {ev}, %{else_end} ]"
+                            ));
+                            self.fn_ctx.reg_types.insert(result.clone(), phi_ty);
+                            Ok(Some(result))
+                        }
+                        _ => Ok(None),
+                    }
+                } else {
+                    Ok(None)
+                }
+            }
+        }
+    }
+
+    /// Shared helper: emit if/else with phi merging when both branches yield a
+    /// value. Used by both block-tail If statements and If expressions.
+    pub(super) fn emit_if_phi_tir_from_blocks(
+        &mut self,
+        cond: &TirExpr,
+        then: &TirBlock,
+        else_: Option<&TirBlock>,
+    ) -> Result<Option<String>, String> {
+        let cond_val = match self.emit_expr_tir(cond)? {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+
+        let then_bb = self.next_bb("then");
+        let else_bb = self.next_bb("else");
+        let merge_bb = self.next_bb("merge");
+
+        self.push_instr(&format!(
+            "br i1 {cond_val}, label %{then_bb}, label %{else_bb}"
+        ));
+
+        self.start_bb(&then_bb);
+        let then_val = self.emit_block_tir(then)?;
+        let then_end = self.fn_ctx.current_bb.clone();
+        if !self.fn_ctx.terminated {
+            self.push_instr(&format!("br label %{merge_bb}"));
+        }
+
+        self.start_bb(&else_bb);
+        let else_val = if let Some(b) = else_ {
+            self.emit_block_tir(b)?
+        } else {
+            None
+        };
+        let else_end = self.fn_ctx.current_bb.clone();
+        if !self.fn_ctx.terminated {
+            self.push_instr(&format!("br label %{merge_bb}"));
+        }
+
+        self.start_bb(&merge_bb);
+
+        match (then_val, else_val) {
+            (Some(tv), Some(ev)) => {
+                let phi_ty = self.infer_val_type(&tv).clone();
+                let result = self.next_reg();
+                self.push_instr(&format!(
+                    "{result} = phi {phi_ty} [ {tv}, %{then_end} ], [ {ev}, %{else_end} ]"
+                ));
+                self.fn_ctx.reg_types.insert(result.clone(), phi_ty);
+                Ok(Some(result))
+            }
+            _ => Ok(None),
         }
     }
 
@@ -161,11 +287,95 @@ impl TextEmitter {
                 Ok(())
             }
 
-            // Unimplemented: If, Match, For, While — built out in subsequent commits.
+            TirStmt::If {
+                cond, then, else_, ..
+            } => {
+                self.emit_if_stmt_void_tir(cond, then, else_.as_ref())?;
+                Ok(())
+            }
+
+            TirStmt::While {
+                cond, body, ..
+            } => self.emit_while_tir(cond, body),
+
+            // Unimplemented: Match, For — built out in subsequent commits.
             _ => Err(format!(
                 "emit_stmt_tir: variant not yet implemented: {:?}",
                 std::mem::discriminant(stmt)
             )),
         }
+    }
+
+    /// TIR variant of [`Self::emit_if_stmt`] — if-as-statement at non-tail
+    /// position (no value returned, no phi).
+    fn emit_if_stmt_void_tir(
+        &mut self,
+        cond: &TirExpr,
+        then: &TirBlock,
+        else_: Option<&TirElseBranch>,
+    ) -> Result<(), String> {
+        let then_bb = self.next_bb("then");
+        let else_bb = self.next_bb("else");
+        let merge_bb = self.next_bb("merge");
+
+        let cond_val = match self.emit_expr_tir(cond)? {
+            Some(v) => v,
+            None => return Ok(()),
+        };
+        self.push_instr(&format!(
+            "br i1 {cond_val}, label %{then_bb}, label %{else_bb}"
+        ));
+
+        self.start_bb(&then_bb);
+        self.emit_block_tir(then)?;
+        if !self.fn_ctx.terminated {
+            self.push_instr(&format!("br label %{merge_bb}"));
+        }
+
+        self.start_bb(&else_bb);
+        if let Some(e) = else_ {
+            match e {
+                TirElseBranch::Block(b) => {
+                    self.emit_block_tir(b)?;
+                }
+                TirElseBranch::If(nested) => {
+                    self.emit_stmt_tir(nested)?;
+                }
+            }
+        }
+        if !self.fn_ctx.terminated {
+            self.push_instr(&format!("br label %{merge_bb}"));
+        }
+
+        self.start_bb(&merge_bb);
+        Ok(())
+    }
+
+    /// TIR variant of [`Self::emit_while`].
+    fn emit_while_tir(&mut self, cond: &TirExpr, body: &TirBlock) -> Result<(), String> {
+        let loop_bb = self.next_bb("loop");
+        let body_bb = self.next_bb("loop_body");
+        let end_bb = self.next_bb("loop_end");
+
+        self.push_instr(&format!("br label %{loop_bb}"));
+        self.start_bb(&loop_bb);
+
+        let cond_val = self.emit_expr_tir(cond)?;
+        if let Some(cv) = cond_val {
+            self.push_instr(&format!("br i1 {cv}, label %{body_bb}, label %{end_bb}"));
+        } else {
+            self.push_instr(&format!("br label %{end_bb}"));
+        }
+
+        self.start_bb(&body_bb);
+        self.emit_block_tir(body)?;
+        if !self.fn_ctx.terminated {
+            self.ensure_yield_check_extern();
+            self.push_instr("call void @_mvl_yield_check()");
+            self.push_instr(&format!("br label %{loop_bb}"));
+        }
+
+        self.start_bb(&end_bb);
+        Ok(())
     }
 }
