@@ -912,14 +912,163 @@ impl TextEmitter {
         }
     }
 
-    /// TIR variant of [`Self::emit_result_match`]. Not yet ported.
+    /// TIR variant of [`Self::emit_result_match`].
     fn emit_result_match_tir(
         &mut self,
-        _scrutinee: &TirExpr,
-        _scrut_val: &str,
-        _arms: &[TirMatchArm],
+        scrutinee: &TirExpr,
+        scrut_val: &str,
+        arms: &[TirMatchArm],
     ) -> Result<Option<String>, String> {
-        Err("emit_match_expr_tir: Result match not yet ported".into())
+        let (ok_load_ty, err_load_ty) = match unwrap_labels(&scrutinee.ty) {
+            Ty::Result(ok, err) => (self.ty_to_llvm_ctx(ok), self.ty_to_llvm_ctx(err)),
+            _ => ("i64".to_string(), "ptr".to_string()),
+        };
+
+        let disc_reg = self.next_reg();
+        self.push_instr(&format!(
+            "{disc_reg} = extractvalue {{ i8, ptr }} {scrut_val}, 0"
+        ));
+        self.fn_ctx.reg_types.insert(disc_reg.clone(), "i8".into());
+
+        let n = self.fn_ctx.bb;
+        self.fn_ctx.bb += arms.len() + 2;
+        let default_bb = format!("match_default_{n}");
+        let merge_bb = format!("match_merge_{}", n + arms.len() + 1);
+        let arm_bbs: Vec<String> = (0..arms.len())
+            .map(|i| format!("match_arm_{}", n + i))
+            .collect();
+
+        let mut switch_str = format!("switch i8 {disc_reg}, label %{default_bb} [\n");
+        let mut wildcard_arm: Option<usize> = None;
+        for (idx, arm) in arms.iter().enumerate() {
+            match &arm.pattern {
+                Pattern::Ok { .. } => {
+                    switch_str.push_str(&format!("    i8 0, label %{}\n", arm_bbs[idx]));
+                }
+                Pattern::Err { .. } => {
+                    switch_str.push_str(&format!("    i8 1, label %{}\n", arm_bbs[idx]));
+                }
+                Pattern::Wildcard(_) | Pattern::Ident(_, _) => {
+                    wildcard_arm = Some(idx);
+                }
+                _ => {
+                    wildcard_arm = Some(idx);
+                }
+            }
+        }
+        switch_str.push_str("  ]");
+        self.push_instr(&switch_str);
+
+        let mut phi_entries: Vec<(String, String, String)> = Vec::new();
+        let mut no_val_arms: Vec<String> = Vec::new();
+
+        for (idx, arm) in arms.iter().enumerate() {
+            let arm_bb = &arm_bbs[idx];
+            self.fn_ctx.fn_buf.push(format!("{arm_bb}:"));
+            self.fn_ctx.current_bb = arm_bb.clone();
+            self.fn_ctx.terminated = false;
+
+            let mut bound_var: Option<String> = None;
+
+            match &arm.pattern {
+                Pattern::Ok { inner, .. } if ok_load_ty != "void" => {
+                    let pp = self.next_reg();
+                    self.push_instr(&format!("{pp} = extractvalue {{ i8, ptr }} {scrut_val}, 1"));
+                    let ok_val = self.next_reg();
+                    self.push_instr(&format!("{ok_val} = load {ok_load_ty}, ptr {pp}"));
+                    self.fn_ctx
+                        .reg_types
+                        .insert(ok_val.clone(), ok_load_ty.clone());
+                    if let Pattern::Ident(var_name, _) = inner.as_ref() {
+                        if var_name != "_" {
+                            self.fn_ctx.locals.insert(var_name.clone(), ok_val.clone());
+                            bound_var = Some(var_name.clone());
+                        }
+                    }
+                }
+                Pattern::Ok { .. } => {}
+                Pattern::Err { inner, .. } => {
+                    let pp = self.next_reg();
+                    self.push_instr(&format!("{pp} = extractvalue {{ i8, ptr }} {scrut_val}, 1"));
+                    let err_val = self.next_reg();
+                    self.push_instr(&format!("{err_val} = load {err_load_ty}, ptr {pp}"));
+                    self.fn_ctx
+                        .reg_types
+                        .insert(err_val.clone(), err_load_ty.clone());
+                    if let Pattern::Ident(var_name, _) = inner.as_ref() {
+                        if var_name != "_" {
+                            self.fn_ctx.locals.insert(var_name.clone(), err_val.clone());
+                            bound_var = Some(var_name.clone());
+                        }
+                    }
+                }
+                Pattern::Wildcard(_) | Pattern::Ident(_, _) => {
+                    if let Pattern::Ident(name, _) = &arm.pattern {
+                        self.fn_ctx
+                            .locals
+                            .insert(name.clone(), scrut_val.to_string());
+                        bound_var = Some(name.clone());
+                    }
+                }
+                _ => {}
+            }
+
+            let arm_val = self.emit_match_arm_body_tir(&arm.body)?;
+            let end_bb = self.fn_ctx.current_bb.clone();
+            if !self.fn_ctx.terminated {
+                self.push_instr(&format!("br label %{merge_bb}"));
+                if let Some(v) = arm_val {
+                    let ty = self.infer_val_type(&v);
+                    phi_entries.push((v, ty, end_bb));
+                } else {
+                    no_val_arms.push(end_bb);
+                }
+            }
+
+            if let Some(var_name) = bound_var {
+                self.fn_ctx.locals.remove(&var_name);
+            }
+        }
+
+        self.fn_ctx.fn_buf.push(format!("{default_bb}:"));
+        self.fn_ctx.current_bb = default_bb.clone();
+        self.fn_ctx.terminated = false;
+        if let Some(wild_idx) = wildcard_arm {
+            let arm_bb = &arm_bbs[wild_idx];
+            self.push_instr(&format!("br label %{arm_bb}"));
+        } else {
+            self.ensure_extern("declare void @llvm.trap()");
+            self.push_instr("call void @llvm.trap()");
+            self.push_instr("unreachable");
+            self.fn_ctx.terminated = true;
+        }
+
+        self.fn_ctx.fn_buf.push(format!("{merge_bb}:"));
+        self.fn_ctx.current_bb = merge_bb.clone();
+        self.fn_ctx.terminated = false;
+        let total_incoming = phi_entries.len() + no_val_arms.len();
+        if total_incoming >= 2 && !phi_entries.is_empty() {
+            let phi_ty = phi_entries
+                .iter()
+                .find(|(_, ty, _)| ty != "i64")
+                .map(|(_, ty, _)| ty.clone())
+                .unwrap_or_else(|| phi_entries[0].1.clone());
+            let mut parts: Vec<String> = phi_entries
+                .iter()
+                .map(|(v, _, from)| format!("[ {v}, %{from} ]"))
+                .collect();
+            for from in &no_val_arms {
+                parts.push(format!("[ undef, %{from} ]"));
+            }
+            let result = self.next_reg();
+            self.push_instr(&format!("{result} = phi {phi_ty} {}", parts.join(", ")));
+            self.fn_ctx.reg_types.insert(result.clone(), phi_ty);
+            Ok(Some(result))
+        } else if phi_entries.len() == 1 && no_val_arms.is_empty() {
+            Ok(Some(phi_entries.remove(0).0))
+        } else {
+            Ok(None)
+        }
     }
 
     /// TIR variant of [`Self::emit_payload_enum_match`]. Not yet ported.
