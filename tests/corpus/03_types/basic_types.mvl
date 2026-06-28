@@ -2,56 +2,64 @@
 // All examples must parse and type-check without errors.
 
 // Arithmetic with integers
-fn add(a: Int, b: Int) -> Int {
-    a + b
+test fn add() -> Unit {
+    let _: Int = 1 + 2;
 }
 
-fn subtract(a: Int, b: Int) -> Int {
-    a - b
+test fn subtract() -> Unit {
+    let _: Int = 3 - 1;
 }
 
-fn multiply(a: Int, b: Int) -> Int {
-    a * b
+test fn multiply() -> Unit {
+    let _: Int = 2 * 3;
 }
 
 // Floating-point arithmetic
-fn average(x: Float, y: Float) -> Float {
-    (x + y) / 2.0
+test fn average() -> Unit {
+    let x: Float = 1.0;
+    let y: Float = 3.0;
+    let _: Float = (x + y) / 2.0;
 }
 
 // Boolean operations
-fn both(a: Bool, b: Bool) -> Bool {
-    a && b
+test fn both() -> Unit {
+    let _: Bool = true && false;
 }
 
-fn either(a: Bool, b: Bool) -> Bool {
-    a || b
+test fn either() -> Unit {
+    let _: Bool = true || false;
 }
 
-fn negate(b: Bool) -> Bool {
-    !b
+test fn negate() -> Unit {
+    let _: Bool = !true;
 }
 
 // Comparison (returns Bool)
-fn is_positive(n: Int) -> Bool {
-    n > 0
+test fn is_positive() -> Unit {
+    let n: Int = 5;
+    let _: Bool = n > 0;
 }
 
-fn equal_strings(a: String, b: String) -> Bool {
-    a == b
+test fn equal_strings() -> Unit {
+    let a: String = "x";
+    let b: String = "y";
+    let _: Bool = a == b;
 }
 
 // String passthrough
-fn identity_str(s: String) -> String {
-    s
+test fn identity_str() -> Unit {
+    let s: String = "hello";
+    let _: String = s;
 }
 
 // Char passthrough
-fn identity_char(c: Char) -> Char {
-    c
+test fn identity_char() -> Unit {
+    let c: Char = 'x';
+    let _: Char = c;
 }
 
 // Nested arithmetic
-fn quadratic(a: Int, b: Int, c: Int, x: Int) -> Int {
-    a * x * x + b * x + c
+test fn quadratic() -> Unit {
+    let a: Int = 1; let b: Int = 2; let c: Int = 3; let x: Int = 4;
+    let _: Int = a * x * x + b * x + c;
 }
