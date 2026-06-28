@@ -83,16 +83,28 @@ pub fn mvl_next_actor_id() -> ActorId {
     MVL_ACTOR_COUNTER.fetch_add(1, Ordering::Relaxed)
 }
 
-/// Register type-erased actor controls for link/monitor support (stub).
+/// Kill closures registered by spawned actors — invoked by [`mvl_join_actors`]
+/// to send `_Shutdown` to every actor before awaiting handles. Required by the
+/// strong-`_self_ref` shutdown protocol (default runtime commit bf6b4e07): each
+/// actor holds a strong sender to its own mailbox, so simply dropping the
+/// external handle is not enough to close the channel — `_Shutdown` must be
+/// delivered explicitly, which nulls `_self_ref` and lets the dispatch loop exit.
+static MVL_KILL_FNS: std::sync::Mutex<Vec<Box<dyn FnOnce() + Send>>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// Register type-erased actor controls for link/monitor support.
 ///
-/// No-op until the supervisor runtime (#1177) is implemented.
+/// Currently captures the kill closure so [`mvl_join_actors`] can drive the
+/// `_Shutdown` cascade. Exit/down notifications are no-ops until the full
+/// supervisor runtime (#1177) is implemented for the tokio target.
 pub fn mvl_register_actor_controls(
     _id: ActorId,
-    _kill: Box<dyn FnOnce() + Send>,
+    kill: Box<dyn FnOnce() + Send>,
     _exit: Box<dyn Fn(ActorId, ExitReason) + Send>,
     _down: Box<dyn Fn(ActorId, ExitReason, MonitorId) + Send>,
     _traps_exit: bool,
 ) {
+    MVL_KILL_FNS.lock().unwrap().push(kill);
 }
 
 // ── Public types ────────────────────────────────────────────────────────────
@@ -236,10 +248,23 @@ pub fn mvl_register_actor(h: MvlJoinHandle) {
 
 /// Await every registered actor task, then return.
 ///
-/// Called once at the end of `fn main()`.  All actor handles (`MvlSender`s)
-/// must have been dropped before this call so that the async recv loop exits
-/// and each task completes naturally.
+/// Called once at the end of `fn main()`. Shutdown protocol:
+///
+/// 1. Drain the registered kill closures and call each one, sending
+///    `_Shutdown` to every actor. The dispatch handler nulls `_self_ref` and
+///    returns `false`, dropping the actor's own strong sender clone so the
+///    channel can close naturally.
+/// 2. Await every registered actor task.
+///
+/// Actors hold a strong `_self_ref` to their own mailbox (so behaviors can
+/// pass `self` as a tag capability), which means "all external handles
+/// dropped" no longer closes the channel — the `_Shutdown` cascade is what
+/// allows tasks to exit.
 pub fn mvl_join_actors() {
+    let kills: Vec<_> = MVL_KILL_FNS.lock().unwrap().drain(..).collect();
+    for k in kills {
+        k();
+    }
     let handles: Vec<_> = MVL_ACTOR_HANDLES.lock().unwrap().drain(..).collect();
     runtime().block_on(async move {
         for h in handles {
