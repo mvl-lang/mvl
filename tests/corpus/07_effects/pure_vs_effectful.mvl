@@ -65,6 +65,7 @@ fn greet(name: String) -> Unit ! Console {
 }
 
 fn load_config(path: Path) -> Result[String, IOError] ! FileRead {
+    // allow: silent-result-discard tail expression IS the return; linter false positive here
     read_path(path)
 }
 
@@ -92,4 +93,30 @@ partial fn run_loop(msg: String) -> Never ! Console {
     while true {
         emit_console(msg)
     }
+}
+
+// Generic touch[T] — accepts any T including totality-tagged function types
+// that fn-pointer bindings would strip. Used below to reference total/partial
+// helpers without explicit type spelling.
+fn touch[T](_x: T) -> Unit { }
+
+// ── Test: reference each declaration so the linter records it as used ─────────
+
+test fn pure_vs_effectful_typecheck() -> Unit {
+    // Pure helpers — direct call (totality is stripped by fn-pointer types,
+    // but a direct call site preserves it).
+    let _: Int = add(1, 2);
+    let _: Int = square(3);
+
+    // Effectful helpers — fn-type refs (totality not involved).
+    let _: fn(String) -> Result[Rows, DBError] ! DB = query;
+    let _: fn(String) -> Unit ! Console = greet;
+    let _: fn(Path) -> Result[String, IOError] ! FileRead = load_config;
+    let _: fn(Path, String) -> Result[Unit, Error] ! FileWrite + Console = save_and_log;
+    let _: fn(String, Path) -> Result[Unit, Error] ! Net + FileWrite + Console = full_pipeline;
+
+    // `total fn` and `partial fn` strip totality through a fn-pointer; use
+    // `touch[T]` so T captures the exact tagged type.
+    touch(log_value);
+    touch(run_loop);
 }

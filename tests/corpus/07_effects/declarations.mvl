@@ -28,3 +28,20 @@ partial fn poll_until_ready() -> Unit ! Console {
         println("waiting");
     }
 }
+
+// Generic touch[T] — bridges fn-pointer's loss of totality.
+fn touch[T](_x: T) -> Unit { }
+
+// ── Test: reference each declaration so the linter records it as used ─────────
+
+test fn declarations_typecheck() -> Unit {
+    let _: fn(String) -> Unit ! Console = print_line;
+    let _: fn(String) -> Unit ! DB + Console = log_and_store;
+
+    // total / partial fns — touch[T] captures the totality-tagged type that
+    // a fn-pointer binding would strip.
+    touch(pure_add);
+    touch(pure_map);
+    touch(log_count);
+    touch(poll_until_ready);
+}
