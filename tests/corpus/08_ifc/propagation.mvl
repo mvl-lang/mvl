@@ -28,3 +28,14 @@ fn compare_secrets(a: Secret[Int], b: Secret[Int]) -> Bool {
 fn compare_tainted(a: Tainted[Int], b: Tainted[Int]) -> Bool {
     a < b
 }
+
+// ── Test: reference each declaration so the linter records it as used ─────────
+
+test fn propagation_typecheck() -> Unit {
+    let _: fn(Secret[Int], Secret[Int]) -> Secret[Int] = add_secrets;
+    let _: fn(Int, Secret[Int]) -> Secret[Int] = add_public_to_secret;
+    let _: fn(Tainted[Int], Tainted[Int]) -> Tainted[Int] = add_tainted_to_tainted;
+    let _: fn(Int, Int) -> Int = mix_clean_and_public;
+    let _: fn(Secret[Int], Secret[Int]) -> Bool = compare_secrets;
+    let _: fn(Tainted[Int], Tainted[Int]) -> Bool = compare_tainted;
+}

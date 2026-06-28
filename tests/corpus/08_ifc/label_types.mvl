@@ -42,3 +42,17 @@ fn wrap_option(x: Option[Secret[Int]]) -> Option[Secret[Int]] {
 fn wrap_result(res: Result[Tainted[String], Error]) -> Result[Tainted[String], Error] {
     res
 }
+
+// ── Test: reference each declaration so the linter records it as used ─────────
+
+test fn label_types_typecheck() -> Unit {
+    let _: fn(String) -> String = echo_public;
+    let _: fn(Tainted[String]) -> Tainted[String] = echo_tainted;
+    let _: fn(Secret[Int]) -> Secret[Int] = echo_secret;
+    let _: fn(String) -> String = echo_clean;
+    let _: fn(String) -> Secret[String] = wrap_as_secret;
+    let _: fn(String) -> Tainted[String] = wrap_as_tainted;
+    let _: fn(String) -> String = keep_bare;
+    let _: fn(Option[Secret[Int]]) -> Option[Secret[Int]] = wrap_option;
+    let _: fn(Result[Tainted[String], Error]) -> Result[Tainted[String], Error] = wrap_result;
+}
