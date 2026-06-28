@@ -674,11 +674,18 @@ impl TextEmitter {
             "br i1 {cond_val}, label %{then_bb}, label %{else_bb}"
         ));
 
+        // Branch heap_locals must not leak past merge_bb — see #1617 and
+        // drop_scope_locals doc-comment.
+        let heap_locals_snapshot = self.fn_ctx.heap_locals.len();
+
         self.start_bb(&then_bb);
         let then_val = self.emit_block(then)?;
         let then_end = self.fn_ctx.current_bb.clone();
         if !self.fn_ctx.terminated {
+            self.drop_scope_locals(heap_locals_snapshot, then_val.as_deref());
             self.push_instr(&format!("br label %{merge_bb}"));
+        } else {
+            self.fn_ctx.heap_locals.truncate(heap_locals_snapshot);
         }
 
         self.start_bb(&else_bb);
@@ -689,7 +696,10 @@ impl TextEmitter {
         };
         let else_end = self.fn_ctx.current_bb.clone();
         if !self.fn_ctx.terminated {
+            self.drop_scope_locals(heap_locals_snapshot, else_val.as_deref());
             self.push_instr(&format!("br label %{merge_bb}"));
+        } else {
+            self.fn_ctx.heap_locals.truncate(heap_locals_snapshot);
         }
 
         self.start_bb(&merge_bb);
@@ -727,17 +737,24 @@ impl TextEmitter {
                 self.push_instr(&format!(
                     "br i1 {cond_val}, label %{then_bb}, label %{else_bb}"
                 ));
+                let heap_locals_snapshot = self.fn_ctx.heap_locals.len();
                 self.start_bb(&then_bb);
                 let then_val = self.emit_block(then)?;
                 let then_end = self.fn_ctx.current_bb.clone();
                 if !self.fn_ctx.terminated {
+                    self.drop_scope_locals(heap_locals_snapshot, then_val.as_deref());
                     self.push_instr(&format!("br label %{merge_bb}"));
+                } else {
+                    self.fn_ctx.heap_locals.truncate(heap_locals_snapshot);
                 }
                 self.start_bb(&else_bb);
                 let else_val = self.emit_expr(nested_if)?;
                 let else_end = self.fn_ctx.current_bb.clone();
                 if !self.fn_ctx.terminated {
+                    self.drop_scope_locals(heap_locals_snapshot, else_val.as_deref());
                     self.push_instr(&format!("br label %{merge_bb}"));
+                } else {
+                    self.fn_ctx.heap_locals.truncate(heap_locals_snapshot);
                 }
                 self.start_bb(&merge_bb);
                 match (then_val, else_val) {
