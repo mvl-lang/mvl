@@ -24,3 +24,11 @@ total fn refined_call(n: Int where n != 0) -> Int {
 total fn composed(p: Int where p > 0, q: Int where q > 0) -> Int {
     add_positives(p, q)
 }
+
+fn touch[T](_x: T) -> Unit { }
+
+test fn refinements_fully_proven_typecheck() -> Unit {
+    touch(literal_call);
+    touch(refined_call);
+    touch(composed);
+}

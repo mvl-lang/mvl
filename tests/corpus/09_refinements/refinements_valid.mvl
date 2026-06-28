@@ -39,3 +39,10 @@ type Range = struct {
     lo: Int,
     hi: Int,
 } with invariant self.lo <= self.hi
+
+fn touch[T](_x: T) -> Unit { }
+
+test fn refinements_valid_typecheck() -> Unit {
+    touch(safe_divide);
+    touch(positive_sum);
+}

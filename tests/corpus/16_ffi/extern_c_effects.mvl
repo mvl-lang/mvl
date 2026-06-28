@@ -15,3 +15,8 @@ fn log_config() -> Unit ! Console + FileRead {
 fn only_reads() -> String ! FileRead {
     read_config()
 }
+
+test fn extern_c_effects_typecheck() -> Unit {
+    let _: fn() -> Unit ! Console + FileRead = log_config;
+    let _: fn() -> String ! FileRead = only_reads;
+}

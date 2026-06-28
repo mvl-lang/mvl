@@ -14,3 +14,8 @@ fn compute_hypotenuse(a: Float, b: Float) -> Float {
 fn positive(x: Int) -> Int {
     abs_int(x)
 }
+
+test fn extern_c_basic_typecheck() -> Unit {
+    let _: Float = compute_hypotenuse(3.0, 4.0);
+    let _: Int = positive(-5);
+}
