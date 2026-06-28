@@ -116,6 +116,8 @@ impl TextEmitter {
 
             TirExprKind::Propagate(inner) => self.emit_propagate_tir(inner),
 
+            TirExprKind::Lambda { params, body } => self.emit_lambda_tir(params, body),
+
             TirExprKind::Relabel {
                 name,
                 expr: inner,
@@ -2371,6 +2373,236 @@ impl TextEmitter {
                 ));
                 self.fn_ctx.reg_types.insert(result.clone(), default_ty);
                 Ok(Some(result))
+            }
+
+            // ── HOF: filter / map / take_while / skip_while / any / all ───
+            ("filter" | "map" | "take_while" | "skip_while", "ptr")
+                if args.len() == 1 && self.is_closure_arg_tir(&args[0]) =>
+            {
+                let closure = match self.emit_as_hof_closure_tir(&args[0], &[0])? {
+                    Some(p) => p,
+                    None => return Ok(None),
+                };
+                Ok(Some(self.emit_c_call_simple(
+                    method,
+                    &val,
+                    &[("ptr", &closure)],
+                )))
+            }
+            ("any" | "all", "ptr") if args.len() == 1 && self.is_closure_arg_tir(&args[0]) => {
+                let closure = match self.emit_as_hof_closure_tir(&args[0], &[0])? {
+                    Some(p) => p,
+                    None => return Ok(None),
+                };
+                Ok(Some(self.emit_c_call_simple(
+                    method,
+                    &val,
+                    &[("ptr", &closure)],
+                )))
+            }
+            ("fold", "ptr") if args.len() == 2 => {
+                let init_ty = self.ty_to_llvm_ctx(&args[0].ty);
+                let init_val = match self.emit_expr_tir(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                // Fold closure: fn(env, acc_val, elem_ptr) -> acc_val
+                // param 0 (acc) by-value, param 1 (elem) by-pointer.
+                let closure = match self.emit_as_hof_closure_tir(&args[1], &[1])? {
+                    Some(p) => p,
+                    None => return Ok(None),
+                };
+                let slot = self.next_reg();
+                self.push_instr(&format!("{slot} = alloca {init_ty}"));
+                self.push_instr(&format!("store {init_ty} {init_val}, ptr {slot}"));
+                self.ensure_extern("declare ptr @_mvl_list_fold(ptr, ptr, ptr)");
+                let reg = self.next_reg();
+                self.push_instr(&format!(
+                    "{reg} = call ptr @_mvl_list_fold(ptr {val}, ptr {slot}, ptr {closure})"
+                ));
+                self.fn_ctx.reg_types.insert(reg.clone(), "ptr".into());
+                let result = self.next_reg();
+                self.push_instr(&format!("{result} = load {init_ty}, ptr {reg}"));
+                self.fn_ctx.reg_types.insert(result.clone(), init_ty);
+                Ok(Some(result))
+            }
+
+            // ── List/Array/Set non-HOF methods ────────────────────────────
+            ("push", "ptr") if args.len() == 1 => {
+                let elem = match self.emit_expr_tir(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                let elem_ty = self.ty_to_llvm_ctx(&args[0].ty);
+                self.ensure_extern("declare void @_mvl_array_push(ptr, ptr)");
+                let slot = self.next_reg();
+                self.push_instr(&format!("{slot} = alloca {elem_ty}"));
+                self.push_instr(&format!("store {elem_ty} {elem}, ptr {slot}"));
+                self.push_instr(&format!(
+                    "call void @_mvl_array_push(ptr {val}, ptr {slot})"
+                ));
+                Ok(Some(val))
+            }
+            ("get", "ptr")
+                if matches!(unwrap_labels(&receiver.ty), Ty::List(_) | Ty::Array(_, _))
+                    && args.len() == 1 =>
+            {
+                let idx = match self.emit_expr_tir(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                // Element type from receiver
+                let elem_ty = match unwrap_labels(&receiver.ty) {
+                    Ty::List(e) | Ty::Array(e, _) => self.ty_to_llvm_ctx(e),
+                    _ => "i64".to_string(),
+                };
+                self.ensure_extern("declare ptr @_mvl_array_get(ptr, i64)");
+                let elem_ptr = self.next_reg();
+                self.push_instr(&format!(
+                    "{elem_ptr} = call ptr @_mvl_array_get(ptr {val}, i64 {idx})"
+                ));
+                let is_null = self.next_reg();
+                self.push_instr(&format!("{is_null} = icmp eq ptr {elem_ptr}, null"));
+                let some_bb = self.next_bb("list_get_some");
+                let none_bb = self.next_bb("list_get_none");
+                let merge_bb = self.next_bb("list_get_merge");
+                self.push_instr(&format!(
+                    "br i1 {is_null}, label %{none_bb}, label %{some_bb}"
+                ));
+                self.start_bb(&some_bb);
+                let loaded = self.next_reg();
+                self.push_instr(&format!("{loaded} = load {elem_ty}, ptr {elem_ptr}"));
+                let payload_slot = self.next_reg();
+                self.push_instr(&format!("{payload_slot} = alloca {elem_ty}"));
+                self.push_instr(&format!(
+                    "store {elem_ty} {loaded}, ptr {payload_slot}"
+                ));
+                let opt_some = self.next_reg();
+                self.push_instr(&format!(
+                    "{opt_some} = insertvalue {{ i8, ptr }} {{ i8 0, ptr null }}, ptr {payload_slot}, 1"
+                ));
+                self.push_instr(&format!("br label %{merge_bb}"));
+                let some_end = self.fn_ctx.current_bb.clone();
+                self.start_bb(&none_bb);
+                self.push_instr(&format!("br label %{merge_bb}"));
+                let none_end = self.fn_ctx.current_bb.clone();
+                self.start_bb(&merge_bb);
+                let result = self.next_reg();
+                self.push_instr(&format!(
+                    "{result} = phi {{ i8, ptr }} [ {opt_some}, %{some_end} ], [ {{ i8 1, ptr null }}, %{none_end} ]"
+                ));
+                self.fn_ctx
+                    .reg_types
+                    .insert(result.clone(), "{ i8, ptr }".into());
+                Ok(Some(result))
+            }
+            ("contains", "ptr")
+                if matches!(unwrap_labels(&receiver.ty), Ty::List(_) | Ty::Array(_, _) | Ty::Set(_))
+                    && args.len() == 1 =>
+            {
+                let needle = match self.emit_expr_tir(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                let needle_ty = self.ty_to_llvm_ctx(&args[0].ty);
+                let slot = self.next_reg();
+                self.push_instr(&format!("{slot} = alloca {needle_ty}"));
+                self.push_instr(&format!("store {needle_ty} {needle}, ptr {slot}"));
+                self.ensure_extern("declare i1 @_mvl_array_contains(ptr, ptr)");
+                let reg = self.next_reg();
+                self.push_instr(&format!(
+                    "{reg} = call i1 @_mvl_array_contains(ptr {val}, ptr {slot})"
+                ));
+                self.fn_ctx.reg_types.insert(reg.clone(), "i1".into());
+                Ok(Some(reg))
+            }
+            ("sort", "ptr") if args.is_empty() => {
+                Ok(Some(self.emit_c_call_simple("sort", &val, &[])))
+            }
+            ("reverse", "ptr") if args.is_empty() => {
+                Ok(Some(self.emit_c_call_simple("reverse", &val, &[])))
+            }
+            ("enumerate", "ptr") if args.is_empty() => {
+                Ok(Some(self.emit_c_call_simple("enumerate", &val, &[])))
+            }
+            ("entries", "ptr")
+                if args.is_empty() && matches!(unwrap_labels(&receiver.ty), Ty::Map(_, _)) =>
+            {
+                Ok(Some(self.emit_c_call_simple("entries", &val, &[])))
+            }
+            ("zip", "ptr") if args.len() == 1 => {
+                let other = match self.emit_expr_tir(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                Ok(Some(self.emit_c_call_simple(
+                    "zip",
+                    &val,
+                    &[("ptr", &other)],
+                )))
+            }
+            ("windows", "ptr") if args.len() == 1 => {
+                let n = match self.emit_expr_tir(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                Ok(Some(self.emit_c_call_simple(
+                    "windows",
+                    &val,
+                    &[("i64", &n)],
+                )))
+            }
+            ("chunks", "ptr") if args.len() == 1 => {
+                let n = match self.emit_expr_tir(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                Ok(Some(self.emit_c_call_simple(
+                    "chunks",
+                    &val,
+                    &[("i64", &n)],
+                )))
+            }
+            ("slice", "ptr")
+                if args.len() == 2
+                    && matches!(
+                        unwrap_labels(&receiver.ty),
+                        Ty::List(_) | Ty::Array(_, _) | Ty::Set(_)
+                    ) =>
+            {
+                let start = match self.emit_expr_tir(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                let end = match self.emit_expr_tir(&args[1])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                Ok(Some(self.emit_c_call_simple(
+                    "slice",
+                    &val,
+                    &[("i64", &start), ("i64", &end)],
+                )))
+            }
+            ("concat", "ptr") if args.len() == 1 => {
+                let other = match self.emit_expr_tir(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                // List::concat → list_concat; String::concat → concat.
+                let dispatch_key = if matches!(
+                    unwrap_labels(&receiver.ty),
+                    Ty::List(_) | Ty::Array(_, _)
+                ) {
+                    "list_concat"
+                } else {
+                    "concat"
+                };
+                Ok(Some(self.emit_c_call_simple(
+                    dispatch_key,
+                    &val,
+                    &[("ptr", &other)],
+                )))
             }
 
             // ── Option.is_some / is_none ──────────────────────────────────
