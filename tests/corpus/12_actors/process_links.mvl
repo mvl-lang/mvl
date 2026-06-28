@@ -76,3 +76,13 @@ fn make_exit_signal() -> ExitSignal {
 fn make_down_signal() -> DownSignal {
     DownSignal { actor_id: 42, reason: ExitReason::Panic, monitor_ref: 1 }
 }
+
+// ── Test: reference each declaration so the linter records it as used ─────────
+
+test fn process_links_typecheck() -> Unit {
+    let _: fn() -> Unit ! Spawn = setup_linked_workers;
+    let _: fn() -> Int ! Spawn = setup_monitored_worker;
+    let _: fn(ExitReason) -> String = handle_exit_reason;
+    let _: ExitSignal = make_exit_signal();
+    let _: DownSignal = make_down_signal();
+}

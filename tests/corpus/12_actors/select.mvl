@@ -31,3 +31,9 @@ fn wait_and_capture(ch: Channel) -> Unit {
         msg = ch.recv() => { }
     }
 }
+
+test fn select_typecheck() -> Unit {
+    let _: fn(Channel) -> Unit = wait_with_timeout;
+    let _: fn(Channel, Channel) -> Unit = wait_multiple;
+    let _: fn(Channel) -> Unit = wait_and_capture;
+}

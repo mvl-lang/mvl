@@ -62,3 +62,8 @@ fn start_with_dead_letter_handler() -> Unit ! Spawn + Send {
     metrics.undeliverable(anon)
 }
 
+test fn dead_letter_typecheck() -> Unit {
+    let _: fn(DeadLetterReason) -> String = describe_reason;
+    let _: fn() -> Unit ! Spawn + Send = start_with_dead_letter_handler;
+}
+

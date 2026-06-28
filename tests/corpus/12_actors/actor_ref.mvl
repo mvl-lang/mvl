@@ -30,3 +30,7 @@ fn start_system() -> Unit ! Spawn + Send {
     worker.set_logger(logger);
     worker.run("task-1")
 }
+
+test fn actor_ref_typecheck() -> Unit {
+    let _: fn() -> Unit ! Spawn + Send = start_system;
+}
