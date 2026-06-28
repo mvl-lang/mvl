@@ -114,6 +114,20 @@ impl TextEmitter {
                 args,
             } => self.emit_method_call_tir(receiver, method, args),
 
+            TirExprKind::Propagate(inner) => self.emit_propagate_tir(inner),
+
+            TirExprKind::Relabel {
+                name,
+                expr: inner,
+                tag,
+                audit,
+            } => self.emit_relabel_tir(name, inner, tag, *audit),
+
+            // Select and Quantifier have no LLVM lowering — Select is spec-only
+            // for the LLVM backend (concurrent dispatch lives in the runtime),
+            // Quantifier is erased. Both yield None like the AST path's catch-all.
+            TirExprKind::Select { .. } | TirExprKind::Quantifier(_) => Ok(None),
+
             // Consume is a move marker — lowers to the inner value unchanged.
             TirExprKind::Consume(inner) => self.emit_expr_tir(inner),
 
@@ -1613,6 +1627,122 @@ impl TextEmitter {
 }
 
 impl TextEmitter {
+    /// TIR variant of [`Self::emit_relabel`].
+    ///
+    /// IFC relabel transitions lower to the inner expression unchanged
+    /// (the LLVM type system strips label wrappers via ty_to_llvm), with
+    /// an optional `_mvl_audit_emit_relabel` audit-event call when the
+    /// expression carries `audit` or the declaration is `audit`-marked.
+    pub(super) fn emit_relabel_tir(
+        &mut self,
+        name: &str,
+        expr: &TirExpr,
+        tag: &str,
+        audit: bool,
+    ) -> Result<Option<String>, String> {
+        let inner = self.emit_expr_tir(expr)?;
+        let needs_audit = audit || self.module.audit_relabels.contains_key(name);
+        if needs_audit {
+            let (from_lbl, to_lbl) = self.relabel_label_strings_tir(name);
+            let r_name = self.emit_string_literal(name);
+            let r_from = self.emit_string_literal(&from_lbl);
+            let r_to = self.emit_string_literal(&to_lbl);
+            let r_tag = self.emit_string_literal(tag);
+            let r_loc = self.emit_string_literal("");
+            self.ensure_extern(
+                "declare void @_mvl_audit_emit_relabel(ptr, ptr, ptr, ptr, ptr)",
+            );
+            self.push_instr(&format!(
+                "call void @_mvl_audit_emit_relabel(ptr {r_name}, ptr {r_from}, ptr {r_to}, ptr {r_tag}, ptr {r_loc})"
+            ));
+        }
+        Ok(inner)
+    }
+
+    /// (from_label, to_label) display strings for a relabel transition.
+    /// Mirrors `relabel_label_strings` in `emit_exprs.rs`.
+    fn relabel_label_strings_tir(&self, name: &str) -> (String, String) {
+        if let Some((from, to)) = self.module.audit_relabels.get(name) {
+            let f = from.as_deref().unwrap_or("_").to_string();
+            let t = to.as_deref().unwrap_or("_").to_string();
+            return (f, t);
+        }
+        let (f, t) = match name {
+            "classify" => ("_", "Secret"),
+            "taint" => ("_", "Tainted"),
+            "trust" => ("Tainted", "_"),
+            "release" => ("Secret", "_"),
+            "config_path" => ("_", "ConfigPath"),
+            "unconfig_path" => ("ConfigPath", "_"),
+            "db_url" => ("_", "DbUrl"),
+            "undb_url" => ("DbUrl", "_"),
+            "api_endpoint" => ("_", "ApiEndpoint"),
+            "unapi_endpoint" => ("ApiEndpoint", "_"),
+            "audit_target" => ("_", "AuditTarget"),
+            "unaudit_target" => ("AuditTarget", "_"),
+            _ => ("_", "_"),
+        };
+        (f.to_string(), t.to_string())
+    }
+
+    /// TIR variant of [`Self::emit_propagate`].
+    ///
+    /// Cleaner than the AST version: the inner expression's `.ty` directly
+    /// carries the Result type, so the Ok-payload LLVM type comes from a
+    /// single `Ty::Result(ok, _)` match — no `result_ok_llvm_ty` lookup
+    /// through fn_ret_types or per-method special cases.
+    pub(super) fn emit_propagate_tir(
+        &mut self,
+        inner: &TirExpr,
+    ) -> Result<Option<String>, String> {
+        let result_val = match self.emit_expr_tir(inner)? {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+
+        let disc = self.next_reg();
+        self.push_instr(&format!(
+            "{disc} = extractvalue {{ i8, ptr }} {result_val}, 0"
+        ));
+        self.fn_ctx.reg_types.insert(disc.clone(), "i8".into());
+
+        let is_ok = self.next_reg();
+        self.push_instr(&format!("{is_ok} = icmp eq i8 {disc}, 0"));
+        self.fn_ctx.reg_types.insert(is_ok.clone(), "i1".into());
+
+        let ok_bb = self.next_bb("prop_ok");
+        let err_bb = self.next_bb("prop_err");
+        self.push_instr(&format!("br i1 {is_ok}, label %{ok_bb}, label %{err_bb}"));
+
+        // Err path: propagate the Result upwards.
+        self.start_bb(&err_bb);
+        self.emit_heap_drops();
+        let ret_ty = self.fn_ctx.current_ret_ty.clone();
+        let llvm_ret = self.llvm_ty_ctx(&ret_ty);
+        self.push_instr(&format!("ret {llvm_ret} {result_val}"));
+        self.fn_ctx.terminated = true;
+
+        // Ok path: extract and load the success payload.
+        self.start_bb(&ok_bb);
+        let ok_load_ty = match unwrap_labels(&inner.ty) {
+            Ty::Result(ok, _) => self.ty_to_llvm_ctx(ok),
+            _ => "i64".to_string(),
+        };
+        if ok_load_ty == "void" {
+            return Ok(None);
+        }
+        let payload_ptr = self.next_reg();
+        self.push_instr(&format!(
+            "{payload_ptr} = extractvalue {{ i8, ptr }} {result_val}, 1"
+        ));
+        let ok_val = self.next_reg();
+        self.push_instr(&format!(
+            "{ok_val} = load {ok_load_ty}, ptr {payload_ptr}"
+        ));
+        self.fn_ctx.reg_types.insert(ok_val.clone(), ok_load_ty);
+        Ok(Some(ok_val))
+    }
+
     /// TIR variant of [`Self::emit_method_call`].
     ///
     /// Mirrors the AST dispatcher: actor send fast-path, then receiver type
