@@ -114,19 +114,26 @@ impl TextEmitter {
                     self.push_instr(&format!(
                         "br i1 {cond_val}, label %{then_bb}, label %{else_bb}"
                     ));
+                    let heap_locals_snapshot = self.fn_ctx.heap_locals.len();
 
                     self.start_bb(&then_bb);
                     let then_val = self.emit_block(then)?;
                     let then_end = self.fn_ctx.current_bb.clone();
                     if !self.fn_ctx.terminated {
+                        self.drop_scope_locals(heap_locals_snapshot, then_val.as_deref());
                         self.push_instr(&format!("br label %{merge_bb}"));
+                    } else {
+                        self.fn_ctx.heap_locals.truncate(heap_locals_snapshot);
                     }
 
                     self.start_bb(&else_bb);
                     let else_val = self.emit_if_stmt_chain(ncond, nthen, nelse.as_ref())?;
                     let else_end = self.fn_ctx.current_bb.clone();
                     if !self.fn_ctx.terminated {
+                        self.drop_scope_locals(heap_locals_snapshot, else_val.as_deref());
                         self.push_instr(&format!("br label %{merge_bb}"));
+                    } else {
+                        self.fn_ctx.heap_locals.truncate(heap_locals_snapshot);
                     }
 
                     self.start_bb(&merge_bb);
@@ -398,6 +405,12 @@ impl TextEmitter {
             .and_then(ty_to_type_expr)
             .and_then(|te| self.fn_ctx.local_mvl_types.insert(var_name.to_string(), te));
 
+        // Snapshot heap_locals: anything pushed during the body lives only
+        // for one iteration. Drop them at the loop tail and truncate back to
+        // the snapshot so the function-end drop pass doesn't try to drop
+        // SSAs from a block that may not have executed (#1617).
+        let heap_locals_snapshot = self.fn_ctx.heap_locals.len();
+
         self.emit_block(body)?;
 
         // Restore locals.
@@ -415,12 +428,18 @@ impl TextEmitter {
         }
 
         if !self.fn_ctx.terminated {
+            self.drop_loop_body_locals(heap_locals_snapshot);
             let next_i = self.next_reg();
             self.push_instr(&format!("{next_i} = add i64 {cur_i}, 1"));
             self.push_instr(&format!("store i64 {next_i}, ptr {i_ptr}"));
             self.ensure_yield_check_extern();
             self.push_instr("call void @_mvl_yield_check()");
             self.push_instr(&format!("br label %{cond_bb}"));
+        } else {
+            // Body terminated (e.g. early return) — its emit_heap_drops will
+            // already have emitted drops; just discard the entries so the
+            // outer function-end pass doesn't double-drop.
+            self.fn_ctx.heap_locals.truncate(heap_locals_snapshot);
         }
 
         self.start_bb(&end_bb);
@@ -471,6 +490,7 @@ impl TextEmitter {
             .locals
             .insert(var_name.to_string(), cur_i.clone());
         self.fn_ctx.reg_types.insert(cur_i.clone(), "i64".into());
+        let heap_locals_snapshot = self.fn_ctx.heap_locals.len();
         self.emit_block(body)?;
 
         // Restore locals
@@ -481,12 +501,15 @@ impl TextEmitter {
         }
 
         if !self.fn_ctx.terminated {
+            self.drop_loop_body_locals(heap_locals_snapshot);
             let next_i = self.next_reg();
             self.push_instr(&format!("{next_i} = add i64 {cur_i}, 1"));
             self.push_instr(&format!("store i64 {next_i}, ptr {i_ptr}"));
             self.ensure_yield_check_extern();
             self.push_instr("call void @_mvl_yield_check()");
             self.push_instr(&format!("br label %{cond_bb}"));
+        } else {
+            self.fn_ctx.heap_locals.truncate(heap_locals_snapshot);
         }
 
         self.start_bb(&end_bb);
@@ -511,11 +534,15 @@ impl TextEmitter {
         }
 
         self.start_bb(&body_bb);
+        let heap_locals_snapshot = self.fn_ctx.heap_locals.len();
         self.emit_block(body)?;
         if !self.fn_ctx.terminated {
+            self.drop_loop_body_locals(heap_locals_snapshot);
             self.ensure_yield_check_extern();
             self.push_instr("call void @_mvl_yield_check()");
             self.push_instr(&format!("br label %{loop_bb}"));
+        } else {
+            self.fn_ctx.heap_locals.truncate(heap_locals_snapshot);
         }
 
         self.start_bb(&end_bb);
@@ -542,10 +569,19 @@ impl TextEmitter {
             "br i1 {cond_val}, label %{then_bb}, label %{else_bb}"
         ));
 
+        // Snapshot heap_locals so branch-local lets get dropped at the end of
+        // their branch instead of leaking into the function-end drop pass —
+        // where they would be dropped from blocks that may not have executed
+        // (#1617).
+        let heap_locals_snapshot = self.fn_ctx.heap_locals.len();
+
         self.start_bb(&then_bb);
         self.emit_block(then)?;
         if !self.fn_ctx.terminated {
+            self.drop_scope_locals(heap_locals_snapshot, None);
             self.push_instr(&format!("br label %{merge_bb}"));
+        } else {
+            self.fn_ctx.heap_locals.truncate(heap_locals_snapshot);
         }
 
         self.start_bb(&else_bb);
@@ -560,7 +596,10 @@ impl TextEmitter {
             }
         }
         if !self.fn_ctx.terminated {
+            self.drop_scope_locals(heap_locals_snapshot, None);
             self.push_instr(&format!("br label %{merge_bb}"));
+        } else {
+            self.fn_ctx.heap_locals.truncate(heap_locals_snapshot);
         }
 
         self.start_bb(&merge_bb);

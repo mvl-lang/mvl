@@ -1717,3 +1717,42 @@ fn llvm_byte_methods_emit_valid_ir() {
         );
     }
 }
+
+// ── #1617: per-iteration / per-branch heap_locals must be dropped before the
+// branch joins, not at function-end ──────────────────────────────────────────
+
+/// Before #1617 the LLVM emitter pushed every `let s: String = ...` SSA into a
+/// flat function-wide `heap_locals` list and emitted drop calls for the whole
+/// list at function-end, even for SSAs defined only inside a branch or loop
+/// body. When the branch wasn't taken (or the loop body never entered) those
+/// SSAs were undefined where the drop tried to use them — SSA dominance
+/// violation, lli rejection.
+///
+/// Repro: `use std.actors.{link}` + empty main pulls in std.log and std.json,
+/// both of which have for-loops with String lets and if-statements with
+/// branch-only lets. With the fix the resulting IR runs to completion on lli.
+#[test]
+fn llvm_branch_and_loop_local_drops_dominate() {
+    if mvl::mvl::backends::llvm_text::lli::find_lli().is_none() {
+        return; // env skip — no lli available
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    let src = dir.path().join("std_actors_runs.mvl");
+    std::fs::write(&src, "use std.actors.{link}\nfn main() -> Unit { }\n").expect("write source");
+
+    let out = Command::new(mvl_bin())
+        .args(["run", src.to_str().unwrap(), "--backend=llvm"])
+        .output()
+        .expect("mvl run");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "mvl run --backend=llvm failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        stderr,
+    );
+    assert!(
+        !stderr.contains("Instruction does not dominate all uses"),
+        "lli reported SSA dominance violation:\n{stderr}",
+    );
+}

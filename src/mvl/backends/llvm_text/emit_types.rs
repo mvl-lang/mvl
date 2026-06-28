@@ -36,6 +36,42 @@ impl TextEmitter {
         }
     }
 
+    /// Drop heap locals registered after `snapshot_len` (i.e. inside the
+    /// current loop body / branch) and truncate `heap_locals` back to that
+    /// length, skipping `escape` if provided (#1617).
+    ///
+    /// Loops pass `escape = None` — every per-iteration temporary must be
+    /// dropped. Branches of an if-expression pass `escape = Some(<return ssa>)`
+    /// so the branch's return value isn't freed before the phi consumes it.
+    /// The escape ssa is removed from heap_locals (the phi result that
+    /// dominates the join becomes the new owner via the surrounding let).
+    pub(super) fn drop_loop_body_locals(&mut self, snapshot_len: usize) {
+        self.drop_scope_locals(snapshot_len, None);
+    }
+
+    pub(super) fn drop_scope_locals(&mut self, snapshot_len: usize, escape: Option<&str>) {
+        let extras: Vec<_> = self.fn_ctx.heap_locals.drain(snapshot_len..).collect();
+        for (ssa, kind, is_ref) in extras {
+            if escape.map(|e| e == ssa).unwrap_or(false) {
+                // Branch return value — consumed by the surrounding phi.
+                continue;
+            }
+            let sym = match kind {
+                HeapKind::String => "_mvl_string_drop",
+                HeapKind::Array => "_mvl_array_drop",
+                HeapKind::Map => "_mvl_map_drop",
+            };
+            self.ensure_extern(&format!("declare void @{sym}(ptr)"));
+            if is_ref {
+                let loaded = self.next_reg();
+                self.push_instr(&format!("{loaded} = load ptr, ptr {ssa}"));
+                self.push_instr(&format!("call void @{sym}(ptr {loaded})"));
+            } else {
+                self.push_instr(&format!("call void @{sym}(ptr {ssa})"));
+            }
+        }
+    }
+
     /// Emit `mvl_*_drop` calls for all tracked heap locals.
     /// Called before every `ret` instruction to clean up owned allocations.
     pub(super) fn emit_heap_drops(&mut self) {
