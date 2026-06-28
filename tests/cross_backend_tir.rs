@@ -143,3 +143,44 @@ fn tir_walker_short_circuit_and() {
 fn tir_walker_short_circuit_or() {
     assert_tir_parity("fn either(a: Bool, b: Bool) -> Bool { a || b }");
 }
+
+#[test]
+fn tir_walker_let_immutable() {
+    assert_tir_parity(
+        "fn add_one(x: Int) -> Int {
+            let y: Int = x + 1;
+            y
+        }",
+    );
+}
+
+#[test]
+fn tir_walker_let_ref_mutable() {
+    assert_tir_parity(
+        "fn count() -> Int {
+            let c: ref Int = 0;
+            c = c + 1;
+            c
+        }",
+    );
+}
+
+#[test]
+fn tir_walker_explicit_return() {
+    assert_tir_parity(
+        "fn early(x: Int) -> Int {
+            return x;
+        }",
+    );
+}
+
+#[test]
+fn tir_walker_let_chain() {
+    assert_tir_parity(
+        "fn sum_three(a: Int, b: Int, c: Int) -> Int {
+            let ab: Int = a + b;
+            let sum: Int = ab + c;
+            sum
+        }",
+    );
+}
