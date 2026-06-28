@@ -13,33 +13,35 @@ fn process(b: Buffer) -> Int {
 }
 
 // Single use of b — move, no clone
-fn single_use(b: Buffer) -> Int {
-    process(b)
+test fn single_use() -> Unit {
+    let b: Buffer = Buffer { data: "x", size: 1 };
+    let _: Int = process(b);
 }
 
 // Variable used once in a return expression
-fn pass_through(s: String) -> String {
-    s
+test fn pass_through() -> Unit {
+    let s: String = "x";
+    let _: String = s;
 }
 
 // Variable used once inside a match
-fn check_option(opt: Option[Int]) -> Int {
-    match opt {
+test fn check_option() -> Unit {
+    let opt: Option[Int] = Some(5);
+    let _: Int = match opt {
         Some(v) => v,
         None => 0,
-    }
+    };
 }
 
 // Variable used once as argument to a constructor
-fn wrap_in_option(x: Int) -> Option[Int] {
-    Some(x)
+test fn wrap_in_option() -> Unit {
+    let x: Int = 5;
+    let _: Option[Int] = Some(x);
 }
 
 // Last use in one branch of if/else
-fn conditional_use(flag: Bool, s: String) -> String {
-    if flag {
-        s
-    } else {
-        "default"
-    }
+test fn conditional_use() -> Unit {
+    let flag: Bool = true;
+    let s: String = "v";
+    let _: String = if flag { s } else { "default" };
 }
