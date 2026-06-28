@@ -96,6 +96,14 @@ impl TextEmitter {
                 self.emit_field_access_tir(inner, field)
             }
 
+            // Set lowers to a List in this backend (sets are arrays at the IR level;
+            // dedup is the runtime's responsibility).
+            TirExprKind::List { elems } | TirExprKind::Set { elems } => {
+                self.emit_list_literal_tir(elems)
+            }
+
+            TirExprKind::Map { pairs } => self.emit_map_literal_tir(pairs),
+
             // Consume is a move marker — lowers to the inner value unchanged.
             TirExprKind::Consume(inner) => self.emit_expr_tir(inner),
 
@@ -491,6 +499,92 @@ impl TextEmitter {
             }
         }
         Ok(Some(reg))
+    }
+
+    /// TIR variant of [`Self::emit_list_literal`].
+    fn emit_list_literal_tir(
+        &mut self,
+        elems: &[TirExpr],
+    ) -> Result<Option<String>, String> {
+        let elem_ty = elems
+            .first()
+            .map(|e| self.ty_to_llvm_ctx(&e.ty))
+            .unwrap_or_else(|| "ptr".into());
+
+        let mut elem_vals: Vec<String> = Vec::new();
+        for e in elems {
+            if let Some(v) = self.emit_expr_tir(e)? {
+                elem_vals.push(v);
+            }
+        }
+
+        let n = elem_vals.len().max(4) as i64;
+        self.ensure_extern("declare ptr @_mvl_array_new(i64, i64)");
+        self.ensure_extern("declare void @_mvl_array_push(ptr, ptr)");
+
+        let arr = self.next_reg();
+        let elem_size = Self::llvm_type_size(&elem_ty);
+        self.push_instr(&format!(
+            "{arr} = call ptr @_mvl_array_new(i64 {elem_size}, i64 {n})"
+        ));
+        self.fn_ctx.reg_types.insert(arr.clone(), "ptr".into());
+
+        for v in &elem_vals {
+            let slot = self.next_reg();
+            self.push_instr(&format!("{slot} = alloca {elem_ty}"));
+            self.push_instr(&format!("store {elem_ty} {v}, ptr {slot}"));
+            self.push_instr(&format!(
+                "call void @_mvl_array_push(ptr {arr}, ptr {slot})"
+            ));
+        }
+
+        Ok(Some(arr))
+    }
+
+    /// TIR variant of [`Self::emit_map_literal`].
+    fn emit_map_literal_tir(
+        &mut self,
+        pairs: &[(TirExpr, TirExpr)],
+    ) -> Result<Option<String>, String> {
+        let n = pairs.len().max(4) as i64;
+        self.ensure_extern("declare ptr @_mvl_map_new(i64)");
+        self.ensure_extern("declare void @_mvl_map_insert(ptr, ptr, i64, ptr, i64)");
+        self.ensure_extern("declare ptr @_mvl_string_ptr(ptr)");
+        self.ensure_extern("declare i64 @_mvl_str_len(ptr)");
+
+        let map = self.next_reg();
+        self.push_instr(&format!("{map} = call ptr @_mvl_map_new(i64 {n})"));
+        self.fn_ctx.reg_types.insert(map.clone(), "ptr".into());
+
+        for (key_expr, val_expr) in pairs {
+            let key_val = match self.emit_expr_tir(key_expr)? {
+                Some(v) => v,
+                None => continue,
+            };
+            let key_ptr = self.next_reg();
+            self.push_instr(&format!(
+                "{key_ptr} = call ptr @_mvl_string_ptr(ptr {key_val})"
+            ));
+            let key_len = self.next_reg();
+            self.push_instr(&format!(
+                "{key_len} = call i64 @_mvl_str_len(ptr {key_val})"
+            ));
+
+            let val_val = match self.emit_expr_tir(val_expr)? {
+                Some(v) => v,
+                None => continue,
+            };
+            let val_ty = self.infer_val_type(&val_val);
+            let val_slot = self.next_reg();
+            self.push_instr(&format!("{val_slot} = alloca {val_ty}"));
+            self.push_instr(&format!("store {val_ty} {val_val}, ptr {val_slot}"));
+
+            self.push_instr(&format!(
+                "call void @_mvl_map_insert(ptr {map}, ptr {key_ptr}, i64 {key_len}, ptr {val_slot}, i64 8)"
+            ));
+        }
+
+        Ok(Some(map))
     }
 
     /// TIR variant of [`Self::emit_result_constructor`] (Ok/Err).
