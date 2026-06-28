@@ -19,3 +19,10 @@ fn check_admin_access(admin: Secret[Bool]) -> Unit ! Console {
         write_audit_log()
     }
 }
+
+// ── Test: reference the helper so the linter records it as used ───────────────
+// File remains corpus:expect-fail; the IFC violation lives in check_admin_access.
+
+test fn call_chain_error_message_typecheck() -> Unit {
+    let _: fn(Secret[Bool]) -> Unit ! Console = check_admin_access;
+}

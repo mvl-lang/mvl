@@ -21,3 +21,9 @@ fn process_secret_flag(flag: Secret[Bool], n: Int) -> Unit {
         record_metric(n)
     }
 }
+
+// ── Test: reference the helper so the linter records it as used ───────────────
+
+test fn return_label_inference_typecheck() -> Unit {
+    let _: fn(Secret[Bool], Int) -> Unit = process_secret_flag;
+}

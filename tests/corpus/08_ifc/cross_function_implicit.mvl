@@ -21,3 +21,10 @@ fn check_secret_flag(flag: Secret[Bool]) -> Unit ! Console {
         log_access_granted()
     }
 }
+
+// ── Test: reference the helper so the linter records it as used ───────────────
+// File remains corpus:expect-fail; the IFC violation lives in check_secret_flag.
+
+test fn cross_function_implicit_typecheck() -> Unit {
+    let _: fn(Secret[Bool]) -> Unit ! Console = check_secret_flag;
+}

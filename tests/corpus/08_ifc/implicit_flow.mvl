@@ -45,3 +45,14 @@ fn check_else_leak(secret: Secret[Bool]) -> Unit ! Console {
         println("access denied");
     }
 }
+
+// ── Test: reference each declaration so the linter records it as used ─────────
+// The file itself remains `corpus:expect-fail`: each fn above contains an
+// expected IFC violation. The references here typecheck cleanly; the violations
+// fire when the bodies above are analysed.
+
+test fn implicit_flow_typecheck() -> Unit {
+    let _: fn(Secret[Bool]) -> Unit ! Console = check_secret_flag;
+    let _: fn(Tainted[Bool]) -> Unit ! Console = check_tainted_input;
+    let _: fn(Secret[Bool]) -> Unit ! Console = check_else_leak;
+}

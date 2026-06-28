@@ -25,3 +25,10 @@ fn route_user_request(input: Tainted[Bool]) -> Unit ! Console {
         record_decision()
     }
 }
+
+// ── Test: reference the helper so the linter records it as used ───────────────
+// File remains corpus:expect-fail; the IFC violation lives in route_user_request.
+
+test fn interprocedural_taint_typecheck() -> Unit {
+    let _: fn(Tainted[Bool]) -> Unit ! Console = route_user_request;
+}

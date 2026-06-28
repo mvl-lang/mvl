@@ -20,3 +20,9 @@ fn send_status() -> Unit ! Console {
     // is None (no Tainted/Secret condition controls this call site).
     announce_result("status: ok")
 }
+
+// ── Test: reference the helper so the linter records it as used ───────────────
+
+test fn interprocedural_clean_typecheck() -> Unit {
+    let _: fn() -> Unit ! Console = send_status;
+}

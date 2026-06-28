@@ -35,3 +35,11 @@ fn main() -> Unit ! Console {
     let result: Int = check_types();
     println(result.to_string())
 }
+
+// ── Test: reference each declaration so the linter records it as used ─────────
+
+test fn label_into_inner_typecheck() -> Unit {
+    let _: fn(Tainted[String]) -> String = unwrap_tainted;
+    let _: fn(Tainted[String]) -> String = unwrap_and_concat;
+    let _: fn(Option[Tainted[String]]) -> String = first_or_default;
+}
