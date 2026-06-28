@@ -77,3 +77,14 @@ fn flags_schema() -> List[FieldSpec] {
 fn any_flag_set(args: Map[String, ArgValue]) -> Bool {
     get_flag(args, "verbose") || get_flag(args, "debug") || get_flag(args, "dry_run")
 }
+
+// ── Test: reference each declaration so the linter records it as used ─────────
+
+test fn args_helpers_typecheck() -> Unit {
+    let _: fn() -> List[FieldSpec] = example_schema;
+    let _: fn() -> List[FieldSpec] = positional_schema;
+    let _: fn() -> List[FieldSpec] = flags_schema;
+    let _: fn(Map[String, ArgValue]) -> Int = effective_count;
+    let _: fn(Map[String, ArgValue]) -> Bool = is_verbose;
+    let _: fn(Map[String, ArgValue]) -> Bool = any_flag_set;
+}

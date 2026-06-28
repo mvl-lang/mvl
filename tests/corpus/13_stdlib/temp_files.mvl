@@ -55,3 +55,25 @@ fn get_temp_path(tf: ref TempFile) -> Tainted[String] {
 fn get_temp_dir_path(td: ref TempDir) -> Tainted[String] {
     temp_dir_path(td)
 }
+
+// `ref` parameters don't compose through `fn(...) -> ...` bindings, so the
+// path-access helpers are exercised through this wrapper rather than referenced
+// directly from the test below.
+fn exercise_ref_helpers() -> Result[Unit, IoError] ! FileWrite + FileDelete {
+    let tf: ref TempFile = temp_file()?;
+    let _p1: Tainted[String] = get_temp_path(tf);
+    delete_temp(consume(tf))?;
+    let td: ref TempDir = temp_dir()?;
+    let _p2: Tainted[String] = get_temp_dir_path(td);
+    delete_temp_dir(consume(td))
+}
+
+// ── Test: reference each declaration so the linter records it as used ─────────
+
+test fn temp_files_helpers_typecheck() -> Unit {
+    let _: fn() -> Result[Unit, IoError] ! FileWrite + FileRead + FileDelete = create_write_delete;
+    let _: fn(Path) -> Result[Unit, IoError] ! FileWrite + FileDelete = create_and_persist;
+    let _: fn() -> Result[Unit, IoError] ! FileWrite + FileDelete = create_temp_dir;
+    let _: fn(Path) -> Result[Unit, IoError] ! FileWrite + FileDelete = create_in_dir;
+    let _: fn() -> Result[Unit, IoError] ! FileWrite + FileDelete = exercise_ref_helpers;
+}
