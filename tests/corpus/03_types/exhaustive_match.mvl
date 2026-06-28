@@ -9,34 +9,38 @@ type MaybeInt = enum {
 }
 
 // All variants covered — exhaustive
-fn color_name(c: Color) -> String {
-    match c {
+test fn color_name() -> Unit {
+    let c: Color = Color::Red;
+    let _: String = match c {
         Red   => "red",
         Green => "green",
         Blue  => "blue",
-    }
+    };
 }
 
 // Wildcard covers all remaining variants
-fn is_red(c: Color) -> Bool {
-    match c {
+test fn is_red() -> Unit {
+    let c: Color = Color::Red;
+    let _: Bool = match c {
         Red => true,
         _   => false,
-    }
+    };
 }
 
 // Option exhaustive match
-fn unwrap_or_zero(x: Option[Int]) -> Int {
-    match x {
+test fn unwrap_or_zero() -> Unit {
+    let x: Option[Int] = Some(5);
+    let _: Int = match x {
         Some(v) => v,
         None    => 0,
-    }
+    };
 }
 
 // Result exhaustive match
-fn unwrap_result(r: Result[Int, String]) -> Int {
-    match r {
+test fn unwrap_result() -> Unit {
+    let r: Result[Int, String] = Ok(5);
+    let _: Int = match r {
         Ok(v)  => v,
         Err(_) => -1,
-    }
+    };
 }
