@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.223.4] - 2026-06-28
+
+### Fixed
+
+- **`llvm`: drop branch/loop-local heap allocations before the join** (#1617) — The LLVM emitter pushed every `let s: String = ...` (and List / Map) onto a flat function-wide `heap_locals` list, then dropped the whole list at function-end. For lets inside a loop body or one branch of an if, the SSA was only defined when control passed through that block — when it didn't, `_mvl_string_drop` tried to use an undefined value (SSA dominance violation, lli rejection). Fix: snapshot `heap_locals.len()` before each scope (loop body / if-then / if-else), drop everything pushed since the snapshot at the scope's tail, truncate back to the snapshot length. For if-as-expression, the branch's return SSA is passed as `escape` — that one entry is removed without a drop (the merge phi becomes the new owner). Applied to `emit_for_list`, `emit_for_range`, `emit_while`, `emit_if_phi`, `emit_if_expr`, `emit_if_stmt_chain`, and `emit_if_stmt`. With this fix `use std.actors` finally compiles and runs end-to-end on LLVM — the final blocker after #1604, #1607, #1610, and #1615.
+
 ## [0.223.3] - 2026-06-28
 
 ### Fixed
