@@ -177,13 +177,21 @@ impl TextEmitter {
     ) -> Result<Option<String>, String> {
         use crate::mvl::ir::TypeExpr;
 
+        // Builtins ported so far.
+        match name {
+            "assert" => return self.emit_assert_builtin_tir(args),
+            "println" | "print" | "eprintln" => {
+                return self.emit_println_builtin_tir(name, args)
+            }
+            _ => {}
+        }
         // Reject the special cases we haven't ported yet — keeps the TIR walker
         // safe to invoke against any program (returns Err instead of producing
         // divergent IR that would silently fail at lli runtime).
         match name {
-            "assert" | "println" | "print" | "eprintln" | "format" | "Ok" | "Err" | "Some"
-            | "None" | "Box::new" | "path" | "format_datetime" | "format_instant" | "find_all"
-            | "replace" | "choice" | "List::filled" | "float_checked_to_int" => {
+            "format" | "Ok" | "Err" | "Some" | "None" | "Box::new" | "path"
+            | "format_datetime" | "format_instant" | "find_all" | "replace" | "choice"
+            | "List::filled" | "float_checked_to_int" => {
                 return Err(format!(
                     "emit_fn_call_tir: builtin `{name}` not yet ported"
                 ));
@@ -468,6 +476,75 @@ impl TextEmitter {
             }
         }
         Ok(Some(reg))
+    }
+
+    /// TIR variant of [`Self::emit_assert_builtin`].
+    fn emit_assert_builtin_tir(
+        &mut self,
+        args: &[TirExpr],
+    ) -> Result<Option<String>, String> {
+        let cond = match args.first() {
+            Some(a) => a,
+            None => return Ok(None),
+        };
+        let cond_val = match self.emit_expr_tir(cond)? {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+        let ok_bb = self.next_bb("assert_ok");
+        let fail_bb = self.next_bb("assert_fail");
+        self.push_instr(&format!(
+            "br i1 {cond_val}, label %{ok_bb}, label %{fail_bb}"
+        ));
+        self.fn_ctx.fn_buf.push(format!("{fail_bb}:"));
+        self.fn_ctx.current_bb = fail_bb.clone();
+        self.fn_ctx.terminated = false;
+        self.ensure_extern("declare void @llvm.trap()");
+        self.push_instr("call void @llvm.trap()");
+        self.push_instr("unreachable");
+        self.fn_ctx.terminated = true;
+        self.fn_ctx.fn_buf.push(format!("{ok_bb}:"));
+        self.fn_ctx.current_bb = ok_bb;
+        self.fn_ctx.terminated = false;
+        Ok(None)
+    }
+
+    /// TIR variant of [`Self::emit_println_builtin`].
+    fn emit_println_builtin_tir(
+        &mut self,
+        name: &str,
+        args: &[TirExpr],
+    ) -> Result<Option<String>, String> {
+        let fd = if name == "eprintln" { 2i32 } else { 1i32 };
+        if args.is_empty() {
+            let fmt = self.ensure_println_fmt();
+            self.ensure_extern("declare i32 @dprintf(i32, ptr, ...)");
+            let empty_g = self.emit_str_global("");
+            let reg = self.next_reg();
+            self.push_instr(&format!(
+                "{reg} = call ptr @_mvl_string_new(ptr @{empty_g}, i64 0)"
+            ));
+            self.ensure_extern("declare ptr @_mvl_string_ptr(ptr)");
+            let raw = self.next_reg();
+            self.push_instr(&format!("{raw} = call ptr @_mvl_string_ptr(ptr {reg})"));
+            self.push_instr(&format!(
+                "call i32 (i32, ptr, ...) @dprintf(i32 {fd}, ptr @{fmt}, ptr {raw})"
+            ));
+            return Ok(None);
+        }
+        let val = match self.emit_expr_tir(&args[0])? {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+        let fmt = self.ensure_println_fmt();
+        self.ensure_extern("declare ptr @_mvl_string_ptr(ptr)");
+        self.ensure_extern("declare i32 @dprintf(i32, ptr, ...)");
+        let raw = self.next_reg();
+        self.push_instr(&format!("{raw} = call ptr @_mvl_string_ptr(ptr {val})"));
+        self.push_instr(&format!(
+            "call i32 (i32, ptr, ...) @dprintf(i32 {fd}, ptr @{fmt}, ptr {raw})"
+        ));
+        Ok(None)
     }
 
     /// TIR variant of [`Self::emit_construct`].

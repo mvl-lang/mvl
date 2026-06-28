@@ -286,3 +286,27 @@ fn tir_walker_nested_struct_access() {
          fn extract(o: Outer) -> Int { o.inner.v }",
     );
 }
+
+#[test]
+fn tir_walker_assert() {
+    assert_tir_parity(
+        "fn check(x: Int) -> Int {
+            assert(x > 0);
+            x
+        }",
+    );
+}
+
+#[test]
+fn tir_walker_println_string_literal() {
+    assert_tir_parity(
+        r#"fn main() -> Int { println("hello"); 0 }"#,
+    );
+}
+
+#[test]
+fn tir_walker_print_empty() {
+    assert_tir_parity(
+        "fn main() -> Int { println(); 0 }",
+    );
+}
