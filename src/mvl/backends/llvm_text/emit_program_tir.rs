@@ -86,6 +86,44 @@ impl TextEmitter {
             self.register_type_decl_tir(td);
         }
 
+        // Extern blocks: emit `declare` for each `extern "c"` fn (#811).
+        // Mirrors `emitter.rs::emit_program::Decl::Extern` handling.
+        for ed in &prog.externs {
+            if ed.abi != "c" {
+                continue;
+            }
+            for lib in &ed.link_libs {
+                self.ensure_extern(&format!("; link: {lib}"));
+            }
+            for ef in &ed.fns {
+                let ret_te = ty_to_type_expr_or_unit(&ef.ret_ty);
+                let ret_str = Self::llvm_ty(&ret_te);
+                let param_tys: Vec<String> = ef
+                    .params
+                    .iter()
+                    .map(|p| Self::llvm_ty(&ty_to_type_expr_or_unit(&p.ty)))
+                    .collect();
+                let decl = format!(
+                    "declare {} @{}({})",
+                    ret_str,
+                    ef.name,
+                    param_tys.join(", ")
+                );
+                self.ensure_extern(&decl);
+                // Register return + param types so call emission works.
+                self.module
+                    .fn_ret_types
+                    .insert(ef.name.clone(), ret_te.clone());
+                self.module.fn_param_types.insert(
+                    ef.name.clone(),
+                    ef.params
+                        .iter()
+                        .map(|p| ty_to_type_expr_or_unit(&p.ty))
+                        .collect(),
+                );
+            }
+        }
+
         // Actor pass — not yet wired up for the TIR path.
         if !prog.actors.is_empty() {
             return Err(

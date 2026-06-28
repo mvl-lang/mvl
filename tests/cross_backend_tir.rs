@@ -310,3 +310,69 @@ fn tir_walker_print_empty() {
         "fn main() -> Int { println(); 0 }",
     );
 }
+
+// ── Validation: verbatim inputs from original emitter_tests.rs (#1612) ───────
+//
+// These mirror the program-level tests that exercise emit_program / emit_fn
+// on the AST side. The hand-copied versions in the segmentation work used
+// different inputs and would have masked any bug in emit_program_tir that
+// only triggers on the original patterns. Restoring the verbatim inputs as
+// parity assertions hardens emit_program_tir against the same corner cases
+// the AST emitter tests cover.
+
+#[test]
+fn tir_walker_orig_unit_function_emits_ret_void() {
+    // Original: emitter_tests.rs::unit_function_emits_ret_void
+    assert_tir_parity("fn noop() -> Unit { }");
+}
+
+#[test]
+fn tir_walker_orig_main_emits_i32_return() {
+    // Original: emitter_tests.rs::main_emits_i32_return
+    // Exercises the special-case main-as-Unit → i32 return wrap.
+    assert_tir_parity("fn main() -> Unit { }");
+}
+
+#[test]
+fn tir_walker_orig_main_explicit_return_emits_ret_i32_0() {
+    // Original: emitter_tests.rs::main_explicit_return_emits_ret_i32_0
+    // Exercises heap-drop emission + explicit-return + main-as-Unit wrap.
+    assert_tir_parity("fn main() -> Unit { return; }");
+}
+
+#[test]
+fn tir_walker_orig_module_header_present() {
+    // Original: emitter_tests.rs::module_header_present
+    // Uses a non-main, non-Unit fn — exercises emit_program for an arbitrary fn name.
+    assert_tir_parity("fn f() -> Int { 0 }");
+}
+
+#[test]
+fn tir_walker_orig_extern_c_emits_declare() {
+    // Original: emitter_tests.rs::extern_c_emits_declare
+    // Exercises Decl::Extern handling inside emit_program.
+    assert_tir_parity(
+        "extern \"c\" {\n\
+         fn sqlite_open(path: String) -> Int\n\
+         fn sqlite_close(db: Int) -> Unit\n\
+         }",
+    );
+}
+
+#[test]
+fn tir_walker_orig_extern_rust_not_emitted_by_llvm() {
+    // Original: emitter_tests.rs::extern_rust_not_emitted_by_llvm
+    // Verifies extern "rust" blocks are skipped by the LLVM-text backend.
+    assert_tir_parity(
+        "extern \"rust\" {\n\
+         fn bridge_fn(x: Int) -> Int\n\
+         }",
+    );
+}
+
+#[test]
+fn tir_walker_orig_unit_function_with_assertions() {
+    // Re-targets assert_emits_conditional_trap input — explicit Unit main with
+    // builtin call at non-tail position.
+    assert_tir_parity("fn main() -> Unit { assert(1 == 1) }");
+}
