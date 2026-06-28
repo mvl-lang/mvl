@@ -183,15 +183,30 @@ impl TextEmitter {
             "println" | "print" | "eprintln" => {
                 return self.emit_println_builtin_tir(name, args)
             }
+            "Ok" | "Err" => return self.emit_result_constructor_tir(name, args),
+            "Some" => return self.emit_option_constructor_tir(args),
+            "None" => return self.emit_none_constructor(),
             _ => {}
         }
+
+        // Enum variant constructors: "Shape::Circle" or "LinkedList::Cons(...)".
+        if name.contains("::") {
+            if let Some(disc) = self.pattern_discriminant(name) {
+                let (type_name, _variant_name) = Self::split_qualified(name)
+                    .ok_or_else(|| format!("malformed qualified name: {name}"))?;
+                if self.enum_has_payloads(type_name) {
+                    return self.emit_enum_variant_constructor_tir(name, disc, args);
+                }
+                return Ok(Some(format!("{disc}")));
+            }
+        }
+
         // Reject the special cases we haven't ported yet — keeps the TIR walker
         // safe to invoke against any program (returns Err instead of producing
         // divergent IR that would silently fail at lli runtime).
         match name {
-            "format" | "Ok" | "Err" | "Some" | "None" | "Box::new" | "path"
-            | "format_datetime" | "format_instant" | "find_all" | "replace" | "choice"
-            | "List::filled" | "float_checked_to_int" => {
+            "format" | "Box::new" | "path" | "format_datetime" | "format_instant"
+            | "find_all" | "replace" | "choice" | "List::filled" | "float_checked_to_int" => {
                 return Err(format!(
                     "emit_fn_call_tir: builtin `{name}` not yet ported"
                 ));
@@ -476,6 +491,106 @@ impl TextEmitter {
             }
         }
         Ok(Some(reg))
+    }
+
+    /// TIR variant of [`Self::emit_result_constructor`] (Ok/Err).
+    fn emit_result_constructor_tir(
+        &mut self,
+        name: &str,
+        args: &[TirExpr],
+    ) -> Result<Option<String>, String> {
+        let disc: i64 = if name == "Ok" { 0 } else { 1 };
+        let arg_ty;
+        let slot;
+        if let Some(arg) = args.first() {
+            let inferred_ty = self.ty_to_llvm_ctx(&arg.ty);
+            if inferred_ty == "void" {
+                let _ = self.emit_expr_tir(arg)?;
+                arg_ty = "i8".to_string();
+                slot = self.next_reg();
+                self.push_instr(&format!("{slot} = alloca i8"));
+            } else {
+                arg_ty = inferred_ty;
+                let arg_val = match self.emit_expr_tir(arg)? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                slot = self.next_reg();
+                self.push_instr(&format!("{slot} = alloca {arg_ty}"));
+                self.push_instr(&format!("store {arg_ty} {arg_val}, ptr {slot}"));
+            }
+        } else {
+            arg_ty = "i8".to_string();
+            slot = self.next_reg();
+            self.push_instr(&format!("{slot} = alloca i8"));
+        };
+        let r1 = self.wrap_result_pair(&disc.to_string(), &slot);
+        let _ = arg_ty;
+        Ok(Some(r1))
+    }
+
+    /// TIR variant of [`Self::emit_option_constructor`] (Some).
+    fn emit_option_constructor_tir(
+        &mut self,
+        args: &[TirExpr],
+    ) -> Result<Option<String>, String> {
+        let arg = match args.first() {
+            Some(a) => a,
+            None => return self.emit_none_constructor(),
+        };
+        let arg_ty = self.ty_to_llvm_ctx(&arg.ty);
+        let arg_val = match self.emit_expr_tir(arg)? {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+        let slot = self.next_reg();
+        self.push_instr(&format!("{slot} = alloca {arg_ty}"));
+        self.push_instr(&format!("store {arg_ty} {arg_val}, ptr {slot}"));
+        let r1 = self.wrap_result_pair("0", &slot);
+        Ok(Some(r1))
+    }
+
+    /// TIR variant of [`Self::emit_enum_variant_constructor`] (payload enums).
+    fn emit_enum_variant_constructor_tir(
+        &mut self,
+        qualified_name: &str,
+        disc: i64,
+        args: &[TirExpr],
+    ) -> Result<Option<String>, String> {
+        let field_tys: Vec<crate::mvl::ir::TypeExpr> = self
+            .variant_payload_types(qualified_name)
+            .map(|s| s.to_vec())
+            .unwrap_or_default();
+
+        let payload_ptr: String = if field_tys.is_empty() {
+            "null".to_string()
+        } else {
+            if args.len() != field_tys.len() {
+                return Err(format!(
+                    "variant {qualified_name}: expected {} fields, got {}",
+                    field_tys.len(),
+                    args.len()
+                ));
+            }
+            let n = field_tys.len();
+            let base = self.next_reg();
+            self.push_instr(&format!("{base} = alloca [{n} x i64]"));
+            for (i, (ty_expr, arg)) in field_tys.iter().zip(args.iter()).enumerate() {
+                let field_llvm = self.llvm_ty_ctx(ty_expr);
+                let arg_val = match self.emit_expr_tir(arg)? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                let slot = self.next_reg();
+                self.push_instr(&format!(
+                    "{slot} = getelementptr [{n} x i64], ptr {base}, i32 0, i32 {i}"
+                ));
+                self.push_instr(&format!("store {field_llvm} {arg_val}, ptr {slot}"));
+            }
+            base
+        };
+        let r1 = self.wrap_result_pair(&disc.to_string(), &payload_ptr);
+        Ok(Some(r1))
     }
 
     /// TIR variant of [`Self::emit_assert_builtin`].
