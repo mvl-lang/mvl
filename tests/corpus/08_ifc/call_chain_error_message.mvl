@@ -5,8 +5,8 @@
 // sink it reaches (println). This corpus is used to verify error message quality.
 
 // Declare println/print with effects so IFC checker works without stdlib prelude.
-pub fn println(msg: String) -> Unit ! Console { }
-pub fn print(msg: String) -> Unit ! Console { }
+pub total fn println(msg: String) -> Unit ! Console { }
+pub total fn print(msg: String) -> Unit ! Console { }
 
 fn write_audit_log() -> Unit ! Console {
     println("audit: event recorded")

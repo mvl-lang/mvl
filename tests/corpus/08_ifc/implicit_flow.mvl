@@ -15,8 +15,8 @@
 // ── Secret condition → implicit flow through println ─────────────────────────
 
 // Declare println/print with effects so IFC checker works without stdlib prelude.
-pub fn println(msg: String) -> Unit ! Console { }
-pub fn print(msg: String) -> Unit ! Console { }
+pub total fn println(msg: String) -> Unit ! Console { }
+pub total fn print(msg: String) -> Unit ! Console { }
 
 fn check_secret_flag(flag: Secret[Bool]) -> Unit ! Console {
     // VIOLATION: println inside a Secret-controlled branch leaks whether

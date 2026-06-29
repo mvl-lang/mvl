@@ -7,8 +7,8 @@
 // no high-security condition controls whether the call fires.
 
 // Declare println/print with effects so IFC checker works without stdlib prelude.
-pub fn println(msg: String) -> Unit ! Console { }
-pub fn print(msg: String) -> Unit ! Console { }
+pub total fn println(msg: String) -> Unit ! Console { }
+pub total fn print(msg: String) -> Unit ! Console { }
 
 fn announce_result(msg: String) -> Unit ! Console {
     // Directly reaches a public sink.

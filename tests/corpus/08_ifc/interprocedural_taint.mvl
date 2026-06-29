@@ -5,8 +5,8 @@
 // inside a Tainted-controlled branch is a cross-function implicit flow violation.
 
 // Declare println/print with effects so IFC checker works without stdlib prelude.
-pub fn println(msg: String) -> Unit ! Console { }
-pub fn print(msg: String) -> Unit ! Console { }
+pub total fn println(msg: String) -> Unit ! Console { }
+pub total fn print(msg: String) -> Unit ! Console { }
 
 fn emit_log_line() -> Unit ! Console {
     println("tainted path taken")

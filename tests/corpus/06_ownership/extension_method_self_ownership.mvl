@@ -9,12 +9,12 @@ type Wrapper = struct {
 }
 
 // Consuming: moves self, returns inner value — must emit `self` in Rust
-pub fn Wrapper::unwrap(self) -> Int {
+pub total fn Wrapper::unwrap(self) -> Int {
     self.value
 }
 
 // Read-only: body only reads self — borrow analysis infers &self
-pub fn Wrapper::peek(self) -> Int {
+pub total fn Wrapper::peek(self) -> Int {
     self.value
 }
 
