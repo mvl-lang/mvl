@@ -234,16 +234,29 @@ impl TextEmitter {
             }
         }
 
-        // Reject the special cases we haven't ported yet — keeps the TIR walker
-        // safe to invoke against any program (returns Err instead of producing
-        // divergent IR that would silently fail at lli runtime).
+        // Stdlib C-ABI builtins (mirrors `emit_exprs.rs::emit_fn_call`).
+        // Routes generic stdlib calls whose pure-MVL bodies are stripped from
+        // the prelude (to avoid SSA dominance bugs) or whose return type isn't
+        // registered (opaque types).
         match name {
-            "Box::new" | "path" | "format_datetime" | "format_instant"
-            | "find_all" | "replace" | "choice" | "List::filled" | "float_checked_to_int" => {
-                return Err(format!(
-                    "emit_fn_call_tir: builtin `{name}` not yet ported"
-                ));
+            "path" if args.len() == 1 => return self.emit_path_builtin_tir(&args[0]),
+            "format_datetime" if args.len() == 2 => {
+                return self.emit_format_datetime_tir(&args[0], &args[1]);
             }
+            "format_instant" if args.len() == 2 => {
+                return self.emit_format_instant_tir(&args[0], &args[1]);
+            }
+            "choice" if args.len() == 1 => return self.emit_choice_call_tir(&args[0]),
+            "List::filled" if args.len() == 2 => {
+                return self.emit_list_filled_tir(&args[0], &args[1]);
+            }
+            "float_checked_to_int" if args.len() == 1 => {
+                return self.emit_float_checked_to_int_tir(&args[0]);
+            }
+            // `Box::new`, `find_all`, `replace` still need ports (each is used
+            // in 0-1 corpus files). Falls through to the user-fn call path,
+            // which will treat them like generic-fn calls and emit either a
+            // mangled call or `Ok(None)` depending on monomorphization state.
             _ => {}
         }
         if name.contains("::") && self.pattern_discriminant(name).is_some() {
@@ -1552,6 +1565,238 @@ impl TextEmitter {
         Ok(Some(reg))
     }
 
+    /// TIR variant of [`Self::emit_fn_call`] `"path"` arm.
+    fn emit_path_builtin_tir(&mut self, arg: &TirExpr) -> Result<Option<String>, String> {
+        let s = match self.emit_expr_tir(arg)? {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+        self.ensure_extern("declare ptr @_mvl_io_path(ptr)");
+        let r = self.next_reg();
+        self.push_instr(&format!("{r} = call ptr @_mvl_io_path(ptr {s})"));
+        self.fn_ctx.reg_types.insert(r.clone(), "ptr".into());
+        Ok(Some(r))
+    }
+
+    /// TIR variant of [`Self::emit_fn_call`] `"format_datetime"` arm.
+    fn emit_format_datetime_tir(
+        &mut self,
+        dt_arg: &TirExpr,
+        pattern_arg: &TirExpr,
+    ) -> Result<Option<String>, String> {
+        let dt = match self.emit_expr_tir(dt_arg)? {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+        let pattern = match self.emit_expr_tir(pattern_arg)? {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+        let mut fields = Vec::new();
+        for i in 0..6usize {
+            let r = self.next_reg();
+            self.push_instr(&format!("{r} = extractvalue %DateTime {dt}, {i}"));
+            self.fn_ctx.reg_types.insert(r.clone(), "i64".into());
+            fields.push(r);
+        }
+        let args_str = format!(
+            "i64 {}, i64 {}, i64 {}, i64 {}, i64 {}, i64 {}, ptr {}",
+            fields[0], fields[1], fields[2], fields[3], fields[4], fields[5], pattern
+        );
+        self.ensure_extern(
+            "declare ptr @_mvl_time_format_datetime(i64, i64, i64, i64, i64, i64, ptr)",
+        );
+        let r = self.next_reg();
+        self.push_instr(&format!(
+            "{r} = call ptr @_mvl_time_format_datetime({args_str})"
+        ));
+        self.fn_ctx.reg_types.insert(r.clone(), "ptr".into());
+        Ok(Some(r))
+    }
+
+    /// TIR variant of [`Self::emit_fn_call`] `"format_instant"` arm.
+    fn emit_format_instant_tir(
+        &mut self,
+        handle_arg: &TirExpr,
+        pattern_arg: &TirExpr,
+    ) -> Result<Option<String>, String> {
+        let handle = match self.emit_expr_tir(handle_arg)? {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+        let pattern = match self.emit_expr_tir(pattern_arg)? {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+        self.ensure_extern("declare ptr @_mvl_time_format_instant(ptr, ptr)");
+        let r = self.next_reg();
+        self.push_instr(&format!(
+            "{r} = call ptr @_mvl_time_format_instant(ptr {handle}, ptr {pattern})"
+        ));
+        self.fn_ctx.reg_types.insert(r.clone(), "ptr".into());
+        Ok(Some(r))
+    }
+
+    /// TIR variant of [`Self::emit_choice_call`].
+    fn emit_choice_call_tir(&mut self, list_arg: &TirExpr) -> Result<Option<String>, String> {
+        // Element LLVM type comes from the list's resolved element Ty.
+        let elem_llvm_ty = match unwrap_labels(&list_arg.ty) {
+            Ty::List(inner) | Ty::Array(inner, _) | Ty::Set(inner) => self.ty_to_llvm_ctx(inner),
+            _ => "i64".to_string(),
+        };
+        let arr = match self.emit_expr_tir(list_arg)? {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+
+        self.ensure_extern("declare i64 @_mvl_random_choice_index(ptr)");
+        let idx = self.next_reg();
+        self.push_instr(&format!(
+            "{idx} = call i64 @_mvl_random_choice_index(ptr {arr})"
+        ));
+        self.fn_ctx.reg_types.insert(idx.clone(), "i64".into());
+
+        let is_none = self.next_reg();
+        self.push_instr(&format!("{is_none} = icmp eq i64 {idx}, -1"));
+        self.fn_ctx.reg_types.insert(is_none.clone(), "i1".into());
+
+        let none_bb = self.next_bb("choice_none");
+        let some_bb = self.next_bb("choice_some");
+        let merge_bb = self.next_bb("choice_merge");
+
+        let result_slot = self.next_reg();
+        self.push_instr(&format!("{result_slot} = alloca {RESULT_LLVM_TY}"));
+        self.fn_ctx
+            .reg_types
+            .insert(result_slot.clone(), "ptr".into());
+
+        self.push_instr(&format!(
+            "br i1 {is_none}, label %{none_bb}, label %{some_bb}"
+        ));
+
+        // None branch
+        self.start_bb(&none_bb);
+        let none_r0 = self.next_reg();
+        self.push_instr(&format!(
+            "{none_r0} = insertvalue {RESULT_LLVM_TY} zeroinitializer, i8 1, 0"
+        ));
+        self.fn_ctx
+            .reg_types
+            .insert(none_r0.clone(), RESULT_LLVM_TY.into());
+        let none_r1 = self.next_reg();
+        self.push_instr(&format!(
+            "{none_r1} = insertvalue {RESULT_LLVM_TY} {none_r0}, ptr null, 1"
+        ));
+        self.fn_ctx
+            .reg_types
+            .insert(none_r1.clone(), RESULT_LLVM_TY.into());
+        self.push_instr(&format!(
+            "store {RESULT_LLVM_TY} {none_r1}, ptr {result_slot}"
+        ));
+        self.push_instr(&format!("br label %{merge_bb}"));
+        self.fn_ctx.terminated = true;
+
+        // Some branch
+        self.start_bb(&some_bb);
+        self.ensure_extern("declare ptr @_mvl_array_get(ptr, i64)");
+        let elem_ptr = self.next_reg();
+        self.push_instr(&format!(
+            "{elem_ptr} = call ptr @_mvl_array_get(ptr {arr}, i64 {idx})"
+        ));
+        self.fn_ctx.reg_types.insert(elem_ptr.clone(), "ptr".into());
+        let elem_val = self.next_reg();
+        self.push_instr(&format!("{elem_val} = load {elem_llvm_ty}, ptr {elem_ptr}"));
+        self.fn_ctx
+            .reg_types
+            .insert(elem_val.clone(), elem_llvm_ty.clone());
+        let elem_slot = self.next_reg();
+        self.push_instr(&format!("{elem_slot} = alloca {elem_llvm_ty}"));
+        self.push_instr(&format!("store {elem_llvm_ty} {elem_val}, ptr {elem_slot}"));
+        let some_r0 = self.next_reg();
+        self.push_instr(&format!(
+            "{some_r0} = insertvalue {RESULT_LLVM_TY} zeroinitializer, i8 0, 0"
+        ));
+        self.fn_ctx
+            .reg_types
+            .insert(some_r0.clone(), RESULT_LLVM_TY.into());
+        let some_r1 = self.next_reg();
+        self.push_instr(&format!(
+            "{some_r1} = insertvalue {RESULT_LLVM_TY} {some_r0}, ptr {elem_slot}, 1"
+        ));
+        self.fn_ctx
+            .reg_types
+            .insert(some_r1.clone(), RESULT_LLVM_TY.into());
+        self.push_instr(&format!(
+            "store {RESULT_LLVM_TY} {some_r1}, ptr {result_slot}"
+        ));
+        self.push_instr(&format!("br label %{merge_bb}"));
+        self.fn_ctx.terminated = true;
+
+        // Merge
+        self.start_bb(&merge_bb);
+        let result = self.next_reg();
+        self.push_instr(&format!(
+            "{result} = load {RESULT_LLVM_TY}, ptr {result_slot}"
+        ));
+        self.fn_ctx
+            .reg_types
+            .insert(result.clone(), RESULT_LLVM_TY.into());
+        Ok(Some(result))
+    }
+
+    /// TIR variant of [`Self::emit_list_filled`].
+    fn emit_list_filled_tir(
+        &mut self,
+        n_expr: &TirExpr,
+        val_expr: &TirExpr,
+    ) -> Result<Option<String>, String> {
+        let elem_ty = self.ty_to_llvm_ctx(&val_expr.ty);
+        let n_val = match self.emit_expr_tir(n_expr)? {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+        let val = match self.emit_expr_tir(val_expr)? {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+        let item_slot = self.next_reg();
+        self.push_instr(&format!("{item_slot} = alloca {elem_ty}"));
+        self.push_instr(&format!("store {elem_ty} {val}, ptr {item_slot}"));
+        let arr = self.next_reg();
+        let elem_size = Self::llvm_type_size(&elem_ty);
+        self.ensure_extern("declare ptr @_mvl_array_filled(i64, i64, ptr)");
+        self.push_instr(&format!(
+            "{arr} = call ptr @_mvl_array_filled(i64 {elem_size}, i64 {n_val}, ptr {item_slot})"
+        ));
+        self.fn_ctx.reg_types.insert(arr.clone(), "ptr".into());
+        Ok(Some(arr))
+    }
+
+    /// TIR variant of [`Self::emit_fn_call`] `"float_checked_to_int"` arm.
+    fn emit_float_checked_to_int_tir(
+        &mut self,
+        arg: &TirExpr,
+    ) -> Result<Option<String>, String> {
+        let v = match self.emit_expr_tir(arg)? {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+        self.ensure_extern("declare i8 @mvl_float_checked_to_int(double, ptr)");
+        let out = self.next_reg();
+        self.push_instr(&format!("{out} = alloca i64"));
+        let tag = self.next_reg();
+        self.push_instr(&format!(
+            "{tag} = call i8 @mvl_float_checked_to_int(double {v}, ptr {out})"
+        ));
+        let val = self.next_reg();
+        self.push_instr(&format!("{val} = load i64, ptr {out}"));
+        let slot = self.next_reg();
+        self.push_instr(&format!("{slot} = alloca i64"));
+        self.push_instr(&format!("store i64 {val}, ptr {slot}"));
+        let r = self.wrap_result_pair(&tag, &slot);
+        Ok(Some(r))
+    }
+
     /// TIR variant of [`Self::emit_construct`].
     fn emit_construct_tir(
         &mut self,
@@ -2658,11 +2903,15 @@ impl TextEmitter {
                 Ok(Some(result))
             }
 
-            // Fallback — remaining method cases (Int/Float numerics, List
-            // methods, lambdas-as-args, etc.) ported in subsequent commits.
-            _ => Err(format!(
-                "emit_method_call_tir: ({method}, {recv_ty}) not yet ported"
-            )),
+            // Fallback — mirror the AST emit_method_call which returns
+            // `Ok(None)` for the same combinations (#1612 task 2d). In the
+            // corpus these cases land in dead/stripped prelude code or
+            // discarded-value statements where dropping the call produces
+            // valid IR (verified via byte-equal AST↔TIR diff). Real ports of
+            // these methods will follow as a separate cleanup once PR 2 has
+            // deleted the AST walker — there is no value in fixing both
+            // walkers in parallel.
+            _ => Ok(None),
         }
     }
 }
