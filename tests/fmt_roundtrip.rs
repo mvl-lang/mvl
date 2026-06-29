@@ -17,25 +17,35 @@ use mvl::mvl::checker::check;
 use mvl::mvl::parser::Parser;
 use mvl::mvl::printer::format_source;
 
-/// Parse and check a source string; return `(total_errors, req_errors)`.
-fn check_src(src: &str) -> (usize, [usize; 12]) {
+/// Parse and check a source string; return `(parse_errs, total_errors, req_errors)`.
+///
+/// Parse errors are surfaced separately so the formatter cannot silently change
+/// a clean source into an unparseable one (the parser recovers and the checker
+/// then sees a default-typed declaration, masking the regression).
+fn check_src(src: &str) -> (usize, usize, [usize; 12]) {
     let (mut p, _) = Parser::new(src);
     let prog = p.parse_program();
+    let parse_errs = p.errors().len();
     let result = check(&prog);
-    (result.errors.len(), result.req_errors)
+    (parse_errs, result.errors.len(), result.req_errors)
 }
 
-/// Assert that formatting `src` does not change the checker results.
+/// Assert that formatting `src` does not change the parser/checker results.
 ///
-/// Compares total error count and per-requirement error counts so that the test
-/// is independent of span positions (which legitimately change after formatting).
+/// Compares parse-error count, checker total, and per-requirement counts.
+/// Spans are deliberately excluded — formatting legitimately changes them.
 fn assert_fmt_preserves_check(src: &str, label: &str) {
     let formatted =
         format_source(src).unwrap_or_else(|e| panic!("{label}: format_source failed: {e}"));
 
-    let (orig_count, orig_req) = check_src(src);
-    let (fmt_count, fmt_req) = check_src(&formatted);
+    let (orig_parse, orig_count, orig_req) = check_src(src);
+    let (fmt_parse, fmt_count, fmt_req) = check_src(&formatted);
 
+    assert_eq!(
+        orig_parse, fmt_parse,
+        "{label}: parse error count changed after formatting ({orig_parse} → {fmt_parse}) — \
+         the formatter produced unparseable source"
+    );
     assert_eq!(
         orig_count, fmt_count,
         "{label}: total error count changed after formatting ({orig_count} → {fmt_count})"

@@ -233,6 +233,15 @@ impl<'src> Printer<'src> {
         if d.visible {
             s.push_str("pub ");
         }
+        // Order must match the parser grammar: `[test] [total|partial|builtin] fn …`
+        // (see src/mvl/parser/functions.rs::parse_fn_decl). Emitting totality
+        // before `test` produces an unparseable signature — the parser drops
+        // the totality marker on recovery, silently turning `test partial fn`
+        // into a default-total test fn and creating spurious PartialCallInTotal
+        // errors on round-trip.
+        if d.is_test {
+            s.push_str("test ");
+        }
         if let Some(tot) = &d.totality {
             match tot {
                 Totality::Total => s.push_str("total "),
@@ -241,9 +250,6 @@ impl<'src> Printer<'src> {
         }
         if d.is_builtin {
             s.push_str("builtin ");
-        }
-        if d.is_test {
-            s.push_str("test ");
         }
         s.push_str("fn ");
         if let Some(recv) = &d.receiver_type {
