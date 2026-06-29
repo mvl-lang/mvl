@@ -575,7 +575,13 @@ impl TextEmitter {
         // `actor_emitted` std.actors actors would be emitted N times (#1610).
         if !self.module.actor_decls.is_empty() {
             self.ensure_actor_runtime_externs();
-            let actor_names: Vec<String> = self.module.actor_decls.keys().cloned().collect();
+            // Sort keys for deterministic emission order — HashMap iteration
+            // order differs per HashMap instance/seed, which surfaced as a
+            // false-positive divergence in the corpus IR-parity harness
+            // (#1612 task 2d).
+            let mut actor_names: Vec<String> =
+                self.module.actor_decls.keys().cloned().collect();
+            actor_names.sort();
             for name in actor_names {
                 if !self.module.actor_emitted.insert(name.clone()) {
                     continue;

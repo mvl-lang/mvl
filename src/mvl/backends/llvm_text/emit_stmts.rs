@@ -198,6 +198,15 @@ impl TextEmitter {
                                 elem_ty: elem_ty.clone(),
                             },
                         );
+                        // Mirror the non-ref arm: populate local_mvl_types so
+                        // dispatch helpers like `mvl_receiver_kind` can resolve
+                        // `pkg_parts.concat(...)` to List::concat instead of
+                        // silently falling through to String::concat (#1612
+                        // task 2d, Kind A). Surfaced by the corpus IR-parity
+                        // harness on runtime_manifest_* / process_links_llvm.
+                        self.fn_ctx
+                            .local_mvl_types
+                            .insert(name.clone(), elem_ty.clone());
                     }
                 } else if let (Some(v), Pattern::Ident(name, _)) = (val, pattern) {
                     // Only set reg_types if the register doesn't already have

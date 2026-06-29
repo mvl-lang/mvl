@@ -157,8 +157,11 @@ impl TextEmitter {
         // Actor pass: emit behavior + dispatch functions.
         if !prog.actors.is_empty() {
             self.ensure_actor_runtime_externs();
-            let actor_names: Vec<String> =
+            // Sort keys for deterministic emission order — see the matching
+            // sort in `emitter.rs::emit_program`.
+            let mut actor_names: Vec<String> =
                 self.module.tir_actor_decls.keys().cloned().collect();
+            actor_names.sort();
             for name in actor_names {
                 // Avoid re-emitting the same actor across multiple emit_program_tir
                 // calls (prelude + entry) — #1610.

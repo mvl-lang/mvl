@@ -183,6 +183,11 @@ fn check_file(file: &std::path::Path) -> Option<ParityFailure> {
     if ast_ir == tir_ir {
         return None;
     }
+    if std::env::var("MVL_PARITY_DUMP").is_ok() {
+        let stem = file.file_stem().unwrap_or_default().to_string_lossy();
+        let _ = std::fs::write(format!("/tmp/parity_{stem}_ast.ll"), &ast_ir);
+        let _ = std::fs::write(format!("/tmp/parity_{stem}_tir.ll"), &tir_ir);
+    }
     Some(ParityFailure {
         file: file.to_path_buf(),
         kind: format!("diff(AST={}B, TIR={}B)", ast_ir.len(), tir_ir.len()),
