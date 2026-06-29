@@ -227,6 +227,14 @@ pub fn redundant_effects(prog: &Program, cfg: &LintConfig, out: &mut Vec<LintDia
             if f.effects.is_empty() {
                 continue;
             }
+            // An empty body is a declaration-form sink stub (e.g.
+            // `pub fn println(msg: String) -> Unit ! Console { }`) where the
+            // declared effect *is* the contract — the IFC checker uses it to
+            // classify call sites. The rule's "no calls → dead annotation"
+            // premise assumes a written body, so skip empty ones. (#1636)
+            if f.body.stmts.is_empty() {
+                continue;
+            }
             if !block_has_calls(&f.body) {
                 out.push(LintDiag::warning(
                     "redundant-effects",
@@ -414,7 +422,14 @@ impl<'ast> Visit<'ast> for HasCalls {
             return;
         }
         match e {
-            Expr::FnCall { .. } | Expr::MethodCall { .. } => self.found = true,
+            // FnCall/MethodCall are the obvious call sites. Spawn (`actor X { … }`)
+            // and Select (`select { … }`) are language-level effect primitives —
+            // they trigger Spawn/Recv respectively, so a function whose body uses
+            // them is not effect-dead. (#1636)
+            Expr::FnCall { .. }
+            | Expr::MethodCall { .. }
+            | Expr::Spawn { .. }
+            | Expr::Select { .. } => self.found = true,
             _ => walk_expr(self, e),
         }
     }
@@ -945,6 +960,34 @@ mod tests {
         let mut diags = vec![];
         redundant_effects(&prog, &cfg(), &mut diags);
         assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn effects_on_actor_spawn_clean() {
+        // Regression for #1636 — `actor X { … }` (Expr::Spawn) IS a Spawn use,
+        // so the declared `! Spawn` is not dead.
+        let src = "actor C { x: Int }\nfn make() -> C ! Spawn { actor C { x: 0 } }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        redundant_effects(&prog, &cfg(), &mut diags);
+        assert!(
+            diags.is_empty(),
+            "actor spawn must count as a Spawn use; got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn effects_on_empty_body_stub_clean() {
+        // Regression for #1636 — empty body is a sink declaration (the effect
+        // *is* the contract), not a dead annotation.
+        let src = "fn println(msg: String) -> Unit ! Console { }\n";
+        let prog = parse(src);
+        let mut diags = vec![];
+        redundant_effects(&prog, &cfg(), &mut diags);
+        assert!(
+            diags.is_empty(),
+            "empty-body stub must not be flagged; got: {diags:?}"
+        );
     }
 
     // -- redundant_ifc_labels --
