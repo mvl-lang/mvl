@@ -4,20 +4,20 @@
 // must be cloned on every iteration because the backend cannot know
 // which iteration is the last.
 
-partial fn repeat_greeting(name: String, count: Int) -> Unit ! Console {
-    let i: ref Int = 0;
-    while i < count {
+test fn repeat_greeting() -> Unit ! Console {
+    let name: String = "hello";
+    let count: Int = 3;
+    for _i in range(0, count) {
         println(name);
-        i = i + 1;
     }
 }
 
-partial fn sum_with_offset(items: List[Int], offset: Int) -> Int {
+test fn sum_with_offset() -> Unit {
+    let items: List[Int] = [1, 2, 3];
+    let offset: Int = 10;
     let result: ref Int = 0;
-    let i: ref Int = 0;
-    while i < items.len() {
+    for _i in range(0, items.len()) {
         result = result + offset;
-        i = i + 1;
     }
-    result
+    let _: Int = result;
 }

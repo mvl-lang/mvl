@@ -5,12 +5,19 @@
 // signature must be rejected by the compiler.  This locks in the guarantee:
 // "a function without ! Audit in its signature provably never emits audit records."
 
-use std.audit.{AuditLogger, AuditEvent, access, file_audit_logger}
-use std.io.{path, IoError}
-
+use std.audit.{AuditLogger, AuditEvent, access}
+use std.io.{IoError}
 // VIOLATION: emit requires ! Audit; this function declares no effects.
 // Expected: effect-missing error (Audit not declared).
 fn log_without_audit_effect(logger: AuditLogger, user_id: String) -> Unit {
     let event: AuditEvent = access("user:".concat(user_id), "resource:x");
+    // allow: silent-result-discard fixture demonstrates missing ! Audit, not failure handling
     let _: Result[Unit, IoError] = logger.emit(event);
+}
+
+// ── Test: reference the helper so the linter records it as used ───────────────
+// File remains corpus:expect-fail; the effect-missing error still fires.
+
+test fn audit_effect_missing_typecheck() -> Unit {
+    let _: fn(AuditLogger, String) -> Unit = log_without_audit_effect;
 }

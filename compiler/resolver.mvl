@@ -15,10 +15,9 @@
 //   partial fn — recursive or calls partial; uses while loops
 
 use std.collections.{Map}
-use tir::ConstDecl;
-use tir::FnDecl;
+
 use tir::Program;
-use tir::TypeDecl;
+
 use tir::UseDecl;
 
 // ── Input / output types ──────────────────────────────────────────────────────

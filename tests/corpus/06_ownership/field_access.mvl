@@ -9,15 +9,17 @@ type Config = struct {
     max_retries: Int,
 }
 
-fn get_port(cfg: Config) -> Int {
-    cfg.port
+test fn get_port() -> Unit {
+    let cfg: Config = Config { host: "h", port: 8080, max_retries: 3 };
+    let _: Int = cfg.port;
 }
 
 // Multiple field accesses from same struct — struct not consumed
-fn validate(cfg: Config) -> Bool {
+test fn validate() -> Unit {
+    let cfg: Config = Config { host: "h", port: 8080, max_retries: 3 };
     let port_ok: Bool = cfg.port > 0;
     let retries_ok: Bool = cfg.max_retries >= 0;
-    port_ok && retries_ok
+    let _: Bool = port_ok && retries_ok;
 }
 
 // Nested struct field access
@@ -26,10 +28,18 @@ type Server = struct {
     name: String,
 }
 
-fn server_port(s: Server) -> Int {
-    s.config.port
+test fn server_port() -> Unit {
+    let s: Server = Server {
+        config: Config { host: "h", port: 8080, max_retries: 3 },
+        name: "srv",
+    };
+    let _: Int = s.config.port;
 }
 
-fn server_name(s: Server) -> String {
-    s.name
+test fn server_name() -> Unit {
+    let s: Server = Server {
+        config: Config { host: "h", port: 8080, max_retries: 3 },
+        name: "srv",
+    };
+    let _: String = s.name;
 }

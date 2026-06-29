@@ -12,18 +12,19 @@ type Outcome[T, E] = enum {
     Failure { error: E },
 }
 
-fn area(s: Shape) -> Float {
-    match s {
+test fn area() -> Unit {
+    let s: Shape = Shape::Circle { radius: 2.0 };
+    let _: Float = match s {
         Shape::Circle { radius: r } => r,
-        Shape::Rect { width: w, height: h } => w,
-    }
+        Shape::Rect { width: w, height: _h } => w,
+    };
 }
 
 fn main() -> Unit {
     // Non-generic named-field variant construction
-    let c: Shape = Shape::Circle { radius: 1.5 };
-    let r: Shape = Shape::Rect { width: 3.0, height: 4.0 };
+    let _c: Shape = Shape::Circle { radius: 1.5 };
+    let _r: Shape = Shape::Rect { width: 3.0, height: 4.0 };
 
     // Generic named-field variant construction
-    let ok: Outcome[Int, String] = Outcome::Success { value: 42 };
+    let _ok: Outcome[Int, String] = Outcome::Success { value: 42 };
 }

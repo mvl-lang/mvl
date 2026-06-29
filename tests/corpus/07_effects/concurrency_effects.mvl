@@ -17,3 +17,7 @@ fn actor_fn() -> Unit ! Actor {
     send_msg()
     recv_msg()
 }
+
+test fn concurrency_effects_typecheck() -> Unit {
+    let _: fn() -> Unit ! Actor = actor_fn;
+}

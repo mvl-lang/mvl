@@ -36,3 +36,7 @@ actor Broadcaster {
 fn add(a: Int, b: Int) -> Int {
     a + b
 }
+
+test fn actors_typecheck() -> Unit {
+    let _: Int = add(1, 2);
+}

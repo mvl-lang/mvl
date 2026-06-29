@@ -8,65 +8,70 @@ fn is_positive(x: Int) -> Bool { x > 0 }
 fn double(x: Int) -> Int { x * 2 }
 
 // Map HOFs
-fn test_map_map_values() -> Map[String, Int] {
+test fn test_map_map_values() -> Unit {
     let m: Map[String, Int] = {"a": 1, "b": 2};
-    m.map_values(|v: Int| v * 2)
+    let _: Map[String, Int] = m.map_values(|v: Int| v * 2);
 }
 
-fn test_map_filter() -> Map[String, Int] {
+test fn test_map_filter() -> Unit {
     let m: Map[String, Int] = {"a": 1, "b": -2};
-    m.filter(|v: Int| v > 0)
+    let _: Map[String, Int] = m.filter(|v: Int| v > 0);
 }
 
-fn test_map_fold() -> Int {
+test fn test_map_fold() -> Unit {
     let m: Map[String, Int] = {"a": 1, "b": 2};
-    m.fold(0, |acc: Int, v: Int| acc + v)
+    let _: Int = m.fold(0, |acc: Int, v: Int| acc + v);
 }
 
-fn test_map_any() -> Bool {
+test fn test_map_any() -> Unit {
     let m: Map[String, Int] = {"a": 1, "b": -2};
-    m.any(is_positive)
+    let _: Bool = m.any(is_positive);
 }
 
-fn test_map_all() -> Bool {
+test fn test_map_all() -> Unit {
     let m: Map[String, Int] = {"a": 1, "b": 2};
-    m.all(is_positive)
+    let _: Bool = m.all(is_positive);
 }
 
 // Set HOFs
-fn test_set_map() -> Set[Int] {
+test fn test_set_map() -> Unit {
     let s: Set[Int] = {1, 2, 3};
-    s.map(|x: Int| x * 2)
+    let _: Set[Int] = s.map(|x: Int| x * 2);
 }
 
-fn test_set_filter() -> Set[Int] {
+test fn test_set_filter() -> Unit {
     let s: Set[Int] = {1, -2, 3};
-    s.filter(|x: Int| x > 0)
+    let _: Set[Int] = s.filter(|x: Int| x > 0);
 }
 
-fn test_set_fold() -> Int {
+test fn test_set_fold() -> Unit {
     let s: Set[Int] = {1, 2, 3};
-    s.fold(0, |acc: Int, x: Int| acc + x)
+    let _: Int = s.fold(0, |acc: Int, x: Int| acc + x);
 }
 
-fn test_set_any() -> Bool {
+test fn test_set_any() -> Unit {
     let s: Set[Int] = {1, -2, 3};
-    s.any(is_positive)
+    let _: Bool = s.any(is_positive);
 }
 
-fn test_set_all() -> Bool {
+test fn test_set_all() -> Unit {
     let s: Set[Int] = {1, 2, 3};
-    s.all(is_positive)
+    let _: Bool = s.all(is_positive);
 }
 
 // Map.map_values type change
-fn test_map_values_type_change() -> Map[String, String] {
+test fn test_map_values_type_change() -> Unit {
     let m: Map[String, Int] = {"a": 1, "b": 2};
-    m.map_values(|v: Int| v.to_string())
+    let _: Map[String, String] = m.map_values(|v: Int| v.to_string());
 }
 
 // Set.map type change
-fn test_set_map_type_change() -> Set[String] {
+test fn test_set_map_type_change() -> Unit {
     let s: Set[Int] = {1, 2, 3};
-    s.map(|x: Int| x.to_string())
+    let _: Set[String] = s.map(|x: Int| x.to_string());
+}
+
+// Reference `double` so the linter records it (declared for HOF use but not called above).
+test fn double_typecheck() -> Unit {
+    let _: Int = double(5);
 }

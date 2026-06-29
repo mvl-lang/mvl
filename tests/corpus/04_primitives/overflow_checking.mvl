@@ -2,22 +2,32 @@
 // Demonstrates checked_add/sub/mul on Int and Byte types.
 // All examples must parse and type-check without errors.
 
-fn int_checked_add(a: Int, b: Int) -> Option[Int] {
-    a.checked_add(b)
+test fn int_checked_add() -> Unit {
+    let a: Int = 1;
+    let b: Int = 2;
+    let _: Option[Int] = a.checked_add(b);
 }
 
-fn int_checked_sub(a: Int, b: Int) -> Option[Int] {
-    a.checked_sub(b)
+test fn int_checked_sub() -> Unit {
+    let a: Int = 3;
+    let b: Int = 1;
+    let _: Option[Int] = a.checked_sub(b);
 }
 
-fn int_checked_mul(a: Int, b: Int) -> Option[Int] {
-    a.checked_mul(b)
+test fn int_checked_mul() -> Unit {
+    let a: Int = 2;
+    let b: Int = 3;
+    let _: Option[Int] = a.checked_mul(b);
 }
 
-fn byte_checked_add(a: Byte, b: Byte) -> Option[Byte] {
-    a.checked_add(b)
+test fn byte_checked_add() -> Unit {
+    let a: Byte = from_int(1);
+    let b: Byte = from_int(2);
+    let _: Option[Byte] = a.checked_add(b);
 }
 
-fn int_wrapping_add(a: Int, b: Int) -> Int {
-    a.wrapping_add(b)
+test fn int_wrapping_add() -> Unit {
+    let a: Int = 1;
+    let b: Int = 2;
+    let _: Int = a.wrapping_add(b);
 }

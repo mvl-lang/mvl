@@ -61,3 +61,19 @@ fn save_and_log(logger: val Logger, user_id: String) -> Unit ! Log {
 fn log_public_metric(logger: val Logger, name: String, value: Int) -> Unit ! Log {
     logger.info("metric recorded", {"name": name, "value": format("{}", [value.to_string()])})
 }
+
+// ── Test: reference each declaration so the linter records it as used ─────────
+
+test fn logging_helpers_typecheck() -> Unit {
+    // Pure helper — direct call (fn-pointer strips `total`).
+    let _: Int = compute_discount(100, 20);
+
+    // Effectful loggers — fn-type bindings with `val Logger` capability.
+    let _: fn(val Logger, String) -> Unit ! Log = handle_request;
+    let _: fn(val Logger, String, Int) -> Unit ! Log = process_order;
+    let _: fn(val Logger, String, Int) -> Unit ! Log = check_quota;
+    let _: fn(val Logger, String, String) -> Unit ! Log = report_failure;
+    let _: fn(val Logger, String, Bool) -> Unit ! Log = audit_login;
+    let _: fn(val Logger, String) -> Unit ! Log = save_and_log;
+    let _: fn(val Logger, String, Int) -> Unit ! Log = log_public_metric;
+}

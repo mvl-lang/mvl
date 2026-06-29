@@ -15,3 +15,10 @@ total fn caller_unproven(x: Int, y: Int) -> Int {
 total fn caller_proven(x: Int, y: Int where y != 0) -> Int {
     safe_divide(x, y)  // y has matching refinement — proven
 }
+
+fn touch[T](_x: T) -> Unit { }
+
+test fn refinements_violations_typecheck() -> Unit {
+    touch(caller_unproven);
+    touch(caller_proven);
+}

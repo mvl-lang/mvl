@@ -20,6 +20,42 @@
 
 use std.log.{Logger, LogLevel, LogFormat, default_logger}
 
+// ── LogLevel / LogFormat enum coverage ────────────────────────────────────
+
+/// Match-arm helper used to assert that the LogLevel enum exposes its four
+/// variants. If a variant is renamed, removed, or reordered, the match here
+/// stops compiling — that's the contract we want for a public enum.
+fn log_level_rank(l: LogLevel) -> Int {
+    match l {
+        LogLevel::Debug => 0,
+        LogLevel::Info  => 1,
+        LogLevel::Warn  => 2,
+        LogLevel::Error => 3,
+    }
+}
+
+test fn log_level_variants_are_ordered_debug_info_warn_error() -> Unit {
+    assert_eq(log_level_rank(LogLevel::Debug), 0);
+    assert_eq(log_level_rank(LogLevel::Info),  1);
+    assert_eq(log_level_rank(LogLevel::Warn),  2);
+    assert_eq(log_level_rank(LogLevel::Error), 3);
+}
+
+/// Same shape for LogFormat — public enum, three variants documented.
+fn log_format_id(f: LogFormat) -> Int {
+    match f {
+        LogFormat::Plain  => 0,
+        LogFormat::Logfmt => 1,
+        LogFormat::Json   => 2,
+    }
+}
+
+test fn log_format_variants_are_plain_logfmt_json() -> Unit {
+    assert_eq(log_format_id(LogFormat::Plain),  0);
+    assert_eq(log_format_id(LogFormat::Logfmt), 1);
+    assert_eq(log_format_id(LogFormat::Json),   2);
+}
+
 // ── Helper: wrap each log level, return observable Bool ──────────────────
 
 fn call_log_debug(logger: val Logger, msg: String) -> Bool ! Log {

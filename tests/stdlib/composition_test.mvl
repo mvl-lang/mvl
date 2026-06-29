@@ -15,6 +15,18 @@
 use std.env.{env_var, args}
 use std.io.{Path, path, join, to_string, IoError, read_to_string, read_file}
 
+// ── std.io::join concatenates path segments ───────────────────────────────
+
+test fn io_join_concatenates_segments() -> Unit {
+    let base: Path = path("/etc/app");
+    let full: Path = join(base, "config.toml");
+    // Verify the joined path renders as expected — exact form ("/etc/app/config.toml")
+    // is platform-dependent; we just assert the segment is present.
+    let s: String = to_string(full);
+    assert_eq(s.contains("config.toml"), true);
+    assert_eq(s.contains("etc/app"), true);
+}
+
 // ── Cross-module import: both modules usable in same file ─────────────────
 
 test fn composition_env_and_io_both_compile_in_same_scope() -> Unit ! Console + Env {

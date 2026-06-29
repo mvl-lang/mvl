@@ -8,8 +8,7 @@
 // - describe_reason helper via pattern match
 
 use std.actors.{DeadLetterReason, DeadLetter, DeadLetterHandler}
-use std.log.{Logger, default_logger}
-
+use std.log.{default_logger}
 // ── Custom dead-letter sink (metrics only, no logging) ────────────────────
 
 actor MetricsDeadLetterHandler {
@@ -60,5 +59,10 @@ fn start_with_dead_letter_handler() -> Unit ! Spawn + Send {
     let metrics: MetricsDeadLetterHandler = actor MetricsDeadLetterHandler { count: 0 };
     let anon: DeadLetter = make_anonymous_dead_letter(99, DeadLetterReason::MailboxFull);
     metrics.undeliverable(anon)
+}
+
+test fn dead_letter_typecheck() -> Unit {
+    let _: fn(DeadLetterReason) -> String = describe_reason;
+    let _: fn() -> Unit ! Spawn + Send = start_with_dead_letter_handler;
 }
 

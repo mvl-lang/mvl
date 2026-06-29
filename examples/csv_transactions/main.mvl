@@ -1,70 +1,18 @@
-// examples/csv_transactions — std.csv IFC-aware encode/decode demonstration
+// examples/csv_transactions — std.csv IFC-aware parse/encode demonstration
 //
 // Demonstrates:
 //   - Reading a CSV file with IFC taint tracking (read_file → Tainted[String])
 //   - Trusting own-data files with relabel trust (explicit audit point)
-//   - Pure parse/encode API: parse_with_headers, encode_with_headers
-//   - Decode function: receives Tainted[String] cells, validates, returns clean struct
-//   - Encode function: clean struct → plain List[String]
+//   - Pure parse/encode API: parse_with_headers (returns clean rows after the
+//     trust boundary) + encode_with_headers (round-trips the cleaned data)
 //
 // Run:  mvl run examples/csv_transactions/main.mvl -- --input examples/csv_transactions/sample.csv
 // Test: make test
 
-use std.csv.{CsvError, CsvWithHeaders, parse_with_headers, encode_with_headers}
+use std.csv.{parse_with_headers, encode_with_headers}
 use std.io.{read_file, println}
 use std.ifc.{Tainted, trust}
 use std.args.{parse_args, required, get_str, ArgType, ArgValue}
-
-// ── Domain type ───────────────────────────────────────────────────────────────
-
-type Transaction = struct {
-    date: String,
-    description: String,
-    amount_cents: Int,
-}
-
-// ── Decode: Tainted[String] cells → clean Transaction ─────────────────────────
-//
-// The decode function is the trust boundary. It receives one row of tainted
-// strings (from a CSV file) and is responsible for validation and label removal.
-// Each relabel trust(v, "TAG") call is an explicit audit point.
-
-partial fn decode_transaction(row: List[Tainted[String]]) -> Result[Transaction, CsvError] {
-    if row.len() != 3 {
-        Err(CsvError::WrongColumnCount(3, row.len()))
-    } else {
-        let cell0: Option[Tainted[String]] = row.get(0);
-        let cell1: Option[Tainted[String]] = row.get(1);
-        let cell2: Option[Tainted[String]] = row.get(2);
-        if let Some(raw_date) = cell0 {
-            if let Some(raw_desc) = cell1 {
-                if let Some(raw_amt) = cell2 {
-                    let date: String    = relabel trust(raw_date, "CSV-TX-DATE");
-                    let desc: String    = relabel trust(raw_desc, "CSV-TX-DESC");
-                    let amt_str: String = relabel trust(raw_amt, "CSV-TX-AMT");
-                    let n_result: Result[Int, String] = amt_str.parse_int();
-                    if let Ok(n) = n_result {
-                        Ok(Transaction { date: date, description: desc, amount_cents: n })
-                    } else {
-                        Err(CsvError::InvalidField(2, "amount must be an integer"))
-                    }
-                } else {
-                    Err(CsvError::InvalidField(2, "missing amount"))
-                }
-            } else {
-                Err(CsvError::InvalidField(1, "missing description"))
-            }
-        } else {
-            Err(CsvError::InvalidField(0, "missing date"))
-        }
-    }
-}
-
-// ── Encode: clean Transaction → List[String] ──────────────────────────────────
-
-fn encode_transaction(tx: Transaction) -> List[String] {
-    [tx.date, tx.description, tx.amount_cents.to_string()]
-}
 
 // ── Pipeline ──────────────────────────────────────────────────────────────────
 

@@ -22,3 +22,12 @@ fn now() -> Unit ! Clock { }
 fn log_msg() -> Unit ! Log { }
 fn io_fn() -> Unit ! IO { }
 fn charge() -> Unit ! Billing { }
+
+// ── Test: reference each declaration so the linter records it as used ─────────
+
+test fn effect_decl_typecheck() -> Unit {
+    let _: fn() -> Unit ! Clock = now;
+    let _: fn() -> Unit ! Log = log_msg;
+    let _: fn() -> Unit ! IO = io_fn;
+    let _: fn() -> Unit ! Billing = charge;
+}

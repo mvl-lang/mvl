@@ -3,9 +3,22 @@
 // Verifies generator types and combinators from std/pbt.mvl.
 // Run with:  mvl test tests/stdlib/
 
-use std.pbt.{IntGen, FloatGen, BoolGen, StringGen, FuzzConfig,
-              gen_int, gen_float, gen_bool, gen_string, fuzz_default_config}
+use std.pbt.{
+    IntGen, FloatGen, BoolGen, StringGen, FuzzConfig,
+    gen_int, gen_float, gen_bool, gen_string, fuzz_default_config,
+}
 
+// ── fuzz_default_config exposes sensible defaults ───────────────────────────
+
+test fn fuzz_default_config_returns_sensible_defaults() -> Unit {
+    let cfg: FuzzConfig = fuzz_default_config();
+    // max_cases / timeout_ms / memory_limit_bytes must be positive; the exact
+    // values are documented (max_cases=1000, timeout_ms=100, memory_limit_bytes=10485760)
+    // and form the public contract.
+    assert_eq(cfg.max_cases, 1000);
+    assert_eq(cfg.timeout_ms, 100);
+    assert_eq(cfg.memory_limit_bytes, 10485760);
+}
 // ── IntGen construction ──────────────────────────────────────────────────────
 
 test fn gen_int_creates_range() -> Unit {

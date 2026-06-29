@@ -3,23 +3,34 @@
 // Lambdas that capture variables from their enclosing scope must
 // clone captured values (value semantics). The checker accepts these.
 
-fn is_positive(x: Int) -> Bool { x > 0 }
-
-fn apply_offset(items: List[Int], offset: Int) -> List[Int] {
-    items.map(|x: Int| x + offset)
+test fn is_positive() -> Unit {
+    let x: Int = 5;
+    let _: Bool = x > 0;
 }
 
-fn filter_above(items: List[Int], threshold: Int) -> List[Int] {
-    items.filter(|x: Int| x > threshold)
+test fn apply_offset() -> Unit {
+    let items: List[Int] = [1, 2, 3];
+    let offset: Int = 10;
+    let _: List[Int] = items.map(|x: Int| x + offset);
+}
+
+test fn filter_above() -> Unit {
+    let items: List[Int] = [1, 2, 3];
+    let threshold: Int = 1;
+    let _: List[Int] = items.filter(|x: Int| x > threshold);
 }
 
 // Capture used multiple times across lambda invocations
-fn count_above_threshold(items: List[Int], threshold: Int) -> Int {
+test fn count_above_threshold() -> Unit {
+    let items: List[Int] = [1, 2, 3];
+    let threshold: Int = 1;
     let matches: List[Int] = items.filter(|x: Int| x > threshold);
-    matches.len()
+    let _: Int = matches.len();
 }
 
 // Nested capture — lambda captures from surrounding scope
-fn fold_with_base(items: List[Int], base: Int) -> Int {
-    items.fold(0, |acc: Int, x: Int| acc + x + base)
+test fn fold_with_base() -> Unit {
+    let items: List[Int] = [1, 2, 3];
+    let base: Int = 10;
+    let _: Int = items.fold(0, |acc: Int, x: Int| acc + x + base);
 }

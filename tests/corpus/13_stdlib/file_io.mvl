@@ -6,15 +6,8 @@
 // Updated in #976: Fd unifies stdout/stderr/file handles.
 
 use std.io.{
-    Fd, Path, DirEntry, Metadata, IoError,
-    path, join, to_string, path_exists, is_file, is_dir,
-    open, close, read_to_string, write_file, append,
-    read_line, write,
-    create_dir_all, remove, read_dir, metadata, chmod,
-    create_symlink, read_link,
-    stdin,
+    Fd, Path, DirEntry, Metadata, IoError, path, join, to_string, path_exists, is_file, open, close, read_to_string, write_file, append, read_line, write, create_dir_all, remove, read_dir, metadata, chmod, create_symlink, read_link, stdin
 }
-
 // ── Pure path construction (no effects) ───────────────────────────────────
 
 total fn config_path() -> Path {
@@ -158,4 +151,49 @@ fn interactive_save(output_path: Path) -> Result[Unit, IoError] ! Console + File
     let _: Tainted[String] = read(fd, 65536)?;
     // Write user input to a known, trusted output_path (not derived from stdin input).
     write_file(output_path, "received input")
+}
+
+// ── Test: reference each declaration so the linter records it as used ─────────
+
+test fn file_io_helpers_typecheck() -> Unit {
+    // Pure path helpers — direct invocation (totality stripped by fn-pointer).
+    let _: Path = config_path();
+    let _: Path = log_dir();
+    let _: String = path_as_string();
+
+    // File read
+    let _: fn() -> Result[Tainted[String], IoError] ! FileRead = load_config;
+    let _: fn(Path) -> Result[Tainted[String], IoError] ! Console + FileRead = first_line_of;
+
+    // File write
+    let _: fn(Path, String) -> Result[Unit, IoError] ! FileWrite = save_report;
+    let _: fn(Path, String) -> Result[Unit, IoError] ! FileWrite = append_log_line;
+    let _: fn(Path) -> Result[Unit, IoError] ! Console = write_lines;
+
+    // Filesystem ops
+    let _: fn() -> Result[Unit, IoError] ! FileWrite = ensure_log_dir;
+    let _: fn(Path) -> Result[Unit, IoError] ! FileDelete = cleanup;
+    let _: fn(Path) -> Result[List[DirEntry], IoError] ! FileRead = list_configs;
+    let _: fn(Path) -> Result[Int, IoError] ! FileRead = file_size;
+    let _: fn(Path) -> Result[Unit, IoError] ! FileWrite = make_executable;
+    let _: fn(Path, Path) -> Result[Unit, IoError] ! FileWrite = link_config;
+    let _: fn(Path) -> Result[Tainted[String], IoError] ! FileRead = resolve_link;
+
+    // Mixed effects
+    let _: fn(Path, Path, String) -> Result[Unit, IoError] ! FileRead + FileWrite + FileDelete = rotate_log;
+
+    // Path queries
+    let _: fn(Path) -> Bool ! FileRead = check_exists;
+    let _: fn(Path) -> Bool ! FileRead = check_regular_file;
+
+    // IFC
+    let _: fn(Tainted[String]) -> Result[Path, String] = sanitize_path;
+    let _: fn(Path) -> Result[Bool, IoError] ! FileRead = read_and_process;
+
+    // Stdin
+    let _: fn(String) -> Result[Tainted[String], IoError] ! Console = prompt;
+    let _: fn() -> Result[Tainted[String], IoError] ! Console = read_all_stdin;
+
+    // Combined
+    let _: fn(Path) -> Result[Unit, IoError] ! Console + FileWrite = interactive_save;
 }

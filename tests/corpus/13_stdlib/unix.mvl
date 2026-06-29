@@ -5,18 +5,11 @@
 // All declarations are valid: effect annotations match actual usage.
 
 use std.process.{
-    Child, ChildStdin, ChildStdout, ChildStderr,
-    ExitStatus, ProcessOutput, ProcessError, Stdio,
-    spawn, stdin_write, stdout_read, stderr_read,
-    wait, kill, is_success, exit_code,
+    Child, ChildStdin, ExitStatus, ProcessOutput, ProcessError, Stdio, spawn, stdin_write, wait, kill, is_success, exit_code
 }
 use std.env.{
-    Signal, sigint, sigterm, sighup,
-    get, set, remove_var, all, args,
-    exit, current_dir, chdir, getuid, getgid,
-    signal_on, signal_reset, signal_ignore,
+    Signal, sigint, sigterm, sighup, get, set, remove_var, all, args, exit, current_dir, chdir, getuid, getgid, signal_on, signal_reset, signal_ignore
 }
-
 // ── Pure helpers (no effects) ─────────────────────────────────────────────
 
 total fn succeeded(status: ExitStatus) -> Bool {
@@ -149,6 +142,7 @@ fn ignore_sighup() -> Unit ! Env {
 // ── Mixed effects: process + env ──────────────────────────────────────────
 
 fn run_with_env_override() -> Result[Tainted[String], ProcessError] ! ProcessSpawn + Env {
+    // allow: silent-result-discard set may fail but is not the assertion under test
     let _: Result[Unit, String] = set("GREETING", relabel taint("hello", "override"));
     let child: Child = spawn("env", [], Stdio::Devnull, Stdio::Capture, Stdio::Devnull)?;
     let out: ProcessOutput = wait(child)?;
@@ -176,4 +170,42 @@ fn process_env_value(key: String) -> Bool ! Env {
         None => false,
         Some(_) => true,
     }
+}
+
+// ── Test: reference each declaration so the linter records it as used ─────────
+
+test fn unix_helpers_typecheck() -> Unit {
+    // Pure helpers — direct invocation (the fn-type binding doesn't carry
+    // `total`, so a fn-pointer would refuse to unify).
+    let s: ExitStatus = ExitStatus::Success;
+    let _: Bool = succeeded(s);
+    let _: Int = code_of(s);
+
+    // Process helpers
+    let _: fn() -> Result[Tainted[String], ProcessError] ! ProcessSpawn = run_echo;
+    let _: fn() -> Result[ExitStatus, ProcessError] ! ProcessSpawn = run_with_stdin_pipe;
+    let _: fn(ChildStdin, Child) -> Result[ExitStatus, ProcessError] ! ProcessSpawn = write_stdin;
+    let _: fn() -> Result[Tainted[String], ProcessError] ! ProcessSpawn = run_and_capture_stderr;
+    let _: fn() -> Result[Unit, ProcessError] ! ProcessSpawn = run_and_kill;
+
+    // Env helpers
+    let _: fn() -> Option[Tainted[String]] ! Env = read_home;
+    let _: fn() -> Result[Option[Tainted[String]], String] ! Env = set_and_read;
+    let _: fn() -> List[EnvEntry] ! Env = list_env_vars;
+    let _: fn() -> Unit ! Env = remove_temp_var;
+    let _: fn() -> List[Tainted[String]] ! Env = get_all_args;
+    let _: fn() -> Result[Tainted[String], String] ! Env = where_am_i;
+    let _: fn() -> Result[Unit, String] ! Env = move_to_tmp;
+    let _: fn() -> Int ! Env = current_uid;
+    let _: fn() -> Int ! Env = current_gid;
+
+    // Signal handlers
+    let _: fn() -> Unit ! Env = install_sigint_handler;
+    let _: fn() -> Unit ! Env = restore_sigterm;
+    let _: fn() -> Unit ! Env = ignore_sighup;
+
+    // Mixed effects
+    let _: fn() -> Result[Tainted[String], ProcessError] ! ProcessSpawn + Env = run_with_env_override;
+    let _: fn(String) -> Result[Bool, ProcessError] ! ProcessSpawn = capture_output_safely;
+    let _: fn(String) -> Bool ! Env = process_env_value;
 }

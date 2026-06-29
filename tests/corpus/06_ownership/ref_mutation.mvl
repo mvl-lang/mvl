@@ -3,22 +3,21 @@
 // ref bindings are mutable. Reassignment does not consume the old value
 // (it is overwritten). The checker allows re-reading after reassignment.
 
-fn counting() -> Int {
+test fn counting() -> Unit {
     let x: ref Int = 0;
     x = x + 1;
     x = x + 1;
     x = x + 1;
-    x
+    let _: Int = x;
 }
 
-partial fn accumulate(items: List[Int]) -> Int {
+test fn accumulate() -> Unit {
+    let items: List[Int] = [1, 2, 3];
     let sum: ref Int = 0;
-    let i: ref Int = 0;
-    while i < items.len() {
+    for _i in range(0, items.len()) {
         sum = sum + 1;
-        i = i + 1;
     }
-    sum
+    let _: Int = sum;
 }
 
 // ref with struct type
@@ -26,9 +25,9 @@ type Counter = struct {
     value: Int,
 }
 
-fn make_counter() -> Counter {
+test fn make_counter() -> Unit {
     let c: ref Counter = Counter { value: 0 };
     c = Counter { value: c.value + 1 };
     c = Counter { value: c.value + 1 };
-    c
+    let _: Counter = c;
 }

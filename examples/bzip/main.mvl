@@ -24,7 +24,7 @@ use huffman::count_freqs;
 use huffman::build_tree;
 use huffman::encode_symbol;
 use huffman::HuffmanTree;
-use huffman::BuildResult;
+
 use bitstream::BitWriter;
 use bitstream::BitReader;
 use bitstream::ReadResult;

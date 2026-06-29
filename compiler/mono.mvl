@@ -18,7 +18,6 @@
 //   total fn — non-recursive, finite iteration; must use for loops
 //   partial fn — recursive on TypeExpr/Ty trees; must use while when iterating
 
-use tir::Effect;
 use tir::FnDecl;
 use tir::GenericParam;
 use tir::Param;

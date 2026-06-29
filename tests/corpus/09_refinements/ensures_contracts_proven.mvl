@@ -14,3 +14,10 @@ total fn increment(n: Int) -> Int
 {
     n + 1
 }
+
+fn touch[T](_x: T) -> Unit { }
+
+test fn ensures_contracts_proven_typecheck() -> Unit {
+    touch(make_pair);
+    touch(increment);
+}

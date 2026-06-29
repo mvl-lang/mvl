@@ -38,3 +38,15 @@ total fn sum_array(arr: Array[Int]) -> Int {
 fn read_config(path: String) -> String {
     path
 }
+
+// Generic touch[T] — bridges fn-pointer's loss of totality/capabilities.
+fn touch[T](_x: T) -> Unit { }
+
+test fn ownership_effects_interaction_typecheck() -> Unit {
+    let _: fn(Int) -> Unit ! Console = consume_and_log;
+    let _: fn(Int) -> Unit ! Console + DB = mutate_and_log;
+    touch(move_prevention);
+    let _: fn(String) -> Unit ! Console + DB = log_and_store;
+    touch(sum_array);
+    let _: String = read_config("path");
+}

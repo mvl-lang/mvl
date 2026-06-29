@@ -1,32 +1,41 @@
 // Corpus: Immutability enforcement (Req 6)
-// All bindings are immutable by default; mutation requires `mut`.
+// All bindings are immutable by default; mutation requires `ref`.
 
 type Counter = struct {
     count: ref Int,
     ifc_label: String,
 }
 
-// Immutable let — no assignment
-fn compute(x: Int) -> Int {
-    let result: Int = x * 2;
-    result
-}
-
-// Mutable let — reassignment allowed
-fn count_up(n: Int) -> Int {
-    let i: ref Int = 0;
-    i = i + 1;
-    i = i + n;
-    i
-}
-
-// Mutable struct field — mutation allowed
+// `ref` parameters don't compose through `fn(...) -> ...` bindings; keep
+// `increment` as a plain-fn helper and call it from the test below.
 fn increment(ref c: Counter) -> Counter {
     c.count = c.count + 1;
     c
 }
 
+// Immutable let — no assignment
+test fn immutable_let() -> Unit {
+    let x: Int = 5;
+    let _result: Int = x * 2;
+}
+
+// Mutable let — reassignment allowed
+test fn mutable_let() -> Unit {
+    let n: Int = 3;
+    let i: ref Int = 0;
+    i = i + 1;
+    i = i + n;
+    let _: Int = i;
+}
+
+// Mutable struct field — mutation allowed
+test fn mutable_struct_field() -> Unit {
+    let c: ref Counter = Counter { count: 0, ifc_label: "demo" };
+    let _: Counter = increment(c);
+}
+
 // Read immutable field — always allowed
-fn get_label(c: Counter) -> String {
-    c.ifc_label
+test fn read_immutable_field() -> Unit {
+    let c: Counter = Counter { count: 0, ifc_label: "demo" };
+    let _: String = c.ifc_label;
 }

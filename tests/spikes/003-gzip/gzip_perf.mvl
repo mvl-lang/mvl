@@ -6,20 +6,10 @@
 // Timing is done externally by the benchmark harness (Makefile).
 
 use std.args.{parse_args, required, ArgType, ArgValue}
-
 // All transitive imports must be listed — mvl run only resolves direct imports.
-use bitstream::crc32_step;
-use huffman_fixed::lit_len_code;
-use huffman_fixed::encode_length;
-use huffman_fixed::encode_distance;
-use huffman_fixed::dist_code;
-use lz77::lz77_encode;
-use lz77::Lz77Token;
-use deflate::deflate_compress;
-use deflate::deflate_decompress;
+
 use gzip::gzip_compress;
 use gzip::gzip_decompress;
-use gzip::compute_crc32;
 
 fn make_payload() -> List[Byte] {
     // 512 bytes: "Hello World!" repeated, cycling pattern at the end

@@ -8,3 +8,7 @@ effect IO > Log
 fn now() -> Unit ! Clock { }
 fn logger() -> Unit ! Log { now() }       // Log > Clock: satisfied
 fn main_fn() -> Unit ! IO { logger() }   // IO > Log > Clock: transitively satisfied
+
+test fn subsumption_typecheck() -> Unit {
+    let _: fn() -> Unit ! IO = main_fn;
+}

@@ -15,8 +15,11 @@
 // ── Secret condition → implicit flow through println ─────────────────────────
 
 // Declare println/print with effects so IFC checker works without stdlib prelude.
-pub fn println(msg: String) -> Unit ! Console { }
-pub fn print(msg: String) -> Unit ! Console { }
+/// Stub Console sink — declared so the IFC checker classifies callers correctly.
+/// Body is empty: the declaration itself IS the contract for this fixture.
+pub total fn println(msg: String) -> Unit ! Console { }
+/// Stub Console sink — see println above.
+pub total fn print(msg: String) -> Unit ! Console { }
 
 fn check_secret_flag(flag: Secret[Bool]) -> Unit ! Console {
     // VIOLATION: println inside a Secret-controlled branch leaks whether
@@ -44,4 +47,15 @@ fn check_else_leak(secret: Secret[Bool]) -> Unit ! Console {
     } else {
         println("access denied");
     }
+}
+
+// ── Test: reference each declaration so the linter records it as used ─────────
+// The file itself remains `corpus:expect-fail`: each fn above contains an
+// expected IFC violation. The references here typecheck cleanly; the violations
+// fire when the bodies above are analysed.
+
+test fn implicit_flow_typecheck() -> Unit {
+    let _: fn(Secret[Bool]) -> Unit ! Console = check_secret_flag;
+    let _: fn(Tainted[Bool]) -> Unit ! Console = check_tainted_input;
+    let _: fn(Secret[Bool]) -> Unit ! Console = check_else_leak;
 }

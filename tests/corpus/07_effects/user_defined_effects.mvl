@@ -13,3 +13,7 @@ fn charge() -> Unit ! Billing {
     db_insert()
     log_debug()
 }
+
+test fn user_defined_effects_typecheck() -> Unit {
+    let _: fn() -> Unit ! Billing = charge;
+}

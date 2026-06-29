@@ -65,3 +65,15 @@ total fn sum_of_squares(a: Int, b: Int) -> Int {
     let sq_b: Int = multiply(b, b);
     sq_a + sq_b
 }
+
+// Generic touch[T] — bridges fn-pointer's loss of totality.
+fn touch[T](_x: T) -> Unit { }
+
+// ── Test: reference each declaration so the linter records it as used ─────────
+
+test fn propagation_typecheck() -> Unit {
+    let _: fn(Path) -> Result[Unit, Error] ! FileRead + Console = bootstrap;
+    let _: fn(String, Path) -> Result[Unit, Error] ! Net + FileWrite = fetch_and_write;
+    touch(double);
+    touch(sum_of_squares);
+}

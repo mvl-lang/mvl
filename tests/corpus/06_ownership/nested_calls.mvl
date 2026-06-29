@@ -7,13 +7,15 @@ fn add(a: Int, b: Int) -> Int { a + b }
 fn mul(a: Int, b: Int) -> Int { a * b }
 
 // x used in both arguments to add — clone needed
-fn double(x: Int) -> Int {
-    add(x, x)
+test fn double() -> Unit {
+    let x: Int = 5;
+    let _: Int = add(x, x);
 }
 
 // x used in nested calls
-fn square_plus(x: Int) -> Int {
-    add(mul(x, x), x)
+test fn square_plus() -> Unit {
+    let x: Int = 3;
+    let _: Int = add(mul(x, x), x);
 }
 
 // Struct passed to multiple functions
@@ -30,8 +32,9 @@ fn max_pair(p: Pair) -> Int {
     if p.first > p.second { p.first } else { p.second }
 }
 
-fn sum_and_max(p: Pair) -> Int {
+test fn sum_and_max() -> Unit {
+    let p: Pair = Pair { first: 1, second: 2 };
     let s: Int = sum_pair(p);
     let m: Int = max_pair(p);
-    s + m
+    let _: Int = s + m;
 }

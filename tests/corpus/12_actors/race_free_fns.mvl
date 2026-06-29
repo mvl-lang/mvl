@@ -25,3 +25,15 @@ fn broadcast_message(ch1: Channel, ch2: Channel, val msg: Message) -> Unit {
 fn configure(channel: Channel, val cfg: Config) -> Unit {
     channel.send(cfg)
 }
+
+// Generic touch[T] — bridges fn-pointer's loss of capability/totality.
+fn touch[T](_x: T) -> Unit { }
+
+// ── Test: reference each declaration so the linter records it as used ─────────
+
+test fn race_free_fns_typecheck() -> Unit {
+    touch(add);
+    touch(send_payload);
+    touch(broadcast_message);
+    touch(configure);
+}

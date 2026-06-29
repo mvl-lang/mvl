@@ -17,9 +17,8 @@
 //! TODO (#40): gen_pair, gen_struct_of — deferred until generic closures land.
 //! TODO (#617): fuzz_check timeout/OOM detection — requires OS process control.
 
-use std.random.{int, float, bytes, choice}
+use std.random.{int, float, bytes}
 use std.io.{Path, path, create_dir_all, append}
-
 // ── Generator types ────────────────────────────────────────────────────────
 
 /// Generator for integers: uniform range, filtered range, fixed choices, or

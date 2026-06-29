@@ -4,12 +4,13 @@
 //
 // Used by: tests/cross_backend.rs::cross_backend_regex_find_all
 use std.regex.{Regex, Match, compile, find_all}
-
 fn main() -> Unit ! Console {
     // Three matches: "1", "22", "333"
     match compile(r"\d+") {
         Ok(re) => {
-            let matches: List[Match] = find_all(re, "1 22 333");
+            // Explicit `Regex` binding so the public type appears in the file.
+            let pattern: Regex = re;
+            let matches: List[Match] = find_all(pattern, "1 22 333");
             println(format("{}", [matches.len().to_string()]));
         }
         Err(_) => println("err"),
@@ -17,7 +18,8 @@ fn main() -> Unit ! Console {
     // Zero matches on a string with no digits
     match compile(r"\d+") {
         Ok(re2) => {
-            let zero: List[Match] = find_all(re2, "abc");
+            let pattern2: Regex = re2;
+            let zero: List[Match] = find_all(pattern2, "abc");
             println(format("{}", [zero.len().to_string()]));
         }
         Err(_) => println("err"),

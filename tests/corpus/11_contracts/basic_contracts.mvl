@@ -78,3 +78,10 @@ fn main() -> Unit ! Console {
     let _: Int = inc(7);
     let _: Int = nonneg_id(5);
 }
+
+fn touch[T](_x: T) -> Unit { }
+
+test fn basic_contracts_typecheck() -> Unit {
+    touch(count_down);
+    touch(bounded_loop);
+}

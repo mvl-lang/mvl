@@ -64,3 +64,13 @@ partial fn run_forever(flag: Bool) -> Never ! Console {
 partial fn outer(flag: Bool) -> Never ! Console {
     run_forever(flag)
 }
+
+fn touch[T](_x: T) -> Unit { }
+
+test fn total_vs_partial_typecheck() -> Unit {
+    touch(count);
+    touch(sum_and_product);
+    touch(count_with_effect);
+    touch(drain_until_empty);
+    touch(outer);
+}

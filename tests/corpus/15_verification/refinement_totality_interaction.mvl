@@ -39,3 +39,12 @@ partial fn poll_until_ready() -> Unit ! Console {
         println("waiting")
     }
 }
+
+fn touch[T](_x: T) -> Unit { }
+
+test fn refinement_totality_interaction_typecheck() -> Unit {
+    touch(positive_sum);
+    touch(clamp_positive);
+    touch(bounded_sum);
+    touch(poll_until_ready);
+}

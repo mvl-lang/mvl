@@ -5,8 +5,11 @@
 // sink it reaches (println). This corpus is used to verify error message quality.
 
 // Declare println/print with effects so IFC checker works without stdlib prelude.
-pub fn println(msg: String) -> Unit ! Console { }
-pub fn print(msg: String) -> Unit ! Console { }
+/// Stub Console sink — declared so the IFC checker classifies callers correctly.
+/// Body is empty: the declaration itself IS the contract for this fixture.
+pub total fn println(msg: String) -> Unit ! Console { }
+/// Stub Console sink — see println above.
+pub total fn print(msg: String) -> Unit ! Console { }
 
 fn write_audit_log() -> Unit ! Console {
     println("audit: event recorded")
@@ -18,4 +21,11 @@ fn check_admin_access(admin: Secret[Bool]) -> Unit ! Console {
     if admin {
         write_audit_log()
     }
+}
+
+// ── Test: reference the helper so the linter records it as used ───────────────
+// File remains corpus:expect-fail; the IFC violation lives in check_admin_access.
+
+test fn call_chain_error_message_typecheck() -> Unit {
+    let _: fn(Secret[Bool]) -> Unit ! Console = check_admin_access;
 }

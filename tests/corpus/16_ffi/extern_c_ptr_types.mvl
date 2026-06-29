@@ -16,3 +16,8 @@ fn allocate_buffer(size: Int) -> Ptr[Void] {
 fn release_buffer(ptr: Ptr[Void]) -> Unit {
     free(ptr)
 }
+
+test fn extern_c_ptr_types_typecheck() -> Unit {
+    let buf: Ptr[Void] = allocate_buffer(64);
+    release_buffer(buf);
+}

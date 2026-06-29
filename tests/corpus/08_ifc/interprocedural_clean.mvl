@@ -7,8 +7,11 @@
 // no high-security condition controls whether the call fires.
 
 // Declare println/print with effects so IFC checker works without stdlib prelude.
-pub fn println(msg: String) -> Unit ! Console { }
-pub fn print(msg: String) -> Unit ! Console { }
+/// Stub Console sink — declared so the IFC checker classifies callers correctly.
+/// Body is empty: the declaration itself IS the contract for this fixture.
+pub total fn println(msg: String) -> Unit ! Console { }
+/// Stub Console sink — see println above.
+pub total fn print(msg: String) -> Unit ! Console { }
 
 fn announce_result(msg: String) -> Unit ! Console {
     // Directly reaches a public sink.
@@ -19,4 +22,10 @@ fn send_status() -> Unit ! Console {
     // SAFE: announce_result is called unconditionally; the program counter label
     // is None (no Tainted/Secret condition controls this call site).
     announce_result("status: ok")
+}
+
+// ── Test: reference the helper so the linter records it as used ───────────────
+
+test fn interprocedural_clean_typecheck() -> Unit {
+    let _: fn() -> Unit ! Console = send_status;
 }

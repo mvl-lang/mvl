@@ -8,13 +8,68 @@ use std.config.{
     ConfigValue, ConfigError,
     merge, get_path,
     as_int, as_string, as_bool, as_float, as_list, as_map,
-    from_json, from_toml,
-    with_env, xdg_config_home,
+    from_json, from_toml, with_env, xdg_config_home,
 }
 use std.json.{Value, decode}
 use std.toml.{TomlValue}
 use std.env.{set, remove_var}
 
+// ── ConfigError variants ──────────────────────────────────────────────────────
+//
+// Public enum — every variant must continue to compile and carry its String.
+
+fn config_error_tag(e: ConfigError) -> String {
+    match e {
+        ConfigError::MissingKey(_)   => "MissingKey",
+        ConfigError::TypeMismatch(_) => "TypeMismatch",
+        ConfigError::EnvError(_)     => "EnvError",
+    }
+}
+
+test fn config_error_variants_exhaustive() -> Unit {
+    assert_eq(config_error_tag(ConfigError::MissingKey("k")),   "MissingKey");
+    assert_eq(config_error_tag(ConfigError::TypeMismatch("t")), "TypeMismatch");
+    assert_eq(config_error_tag(ConfigError::EnvError("e")),     "EnvError");
+}
+
+// ── as_list / as_map: extract List / Map from ConfigValue ─────────────────────
+
+test fn config_as_list_from_list_returns_ok() -> Unit {
+    let cfg: ConfigValue = ConfigValue::List([ConfigValue::Int(1), ConfigValue::Int(2)]);
+    let result: Result[List[ConfigValue], ConfigError] = as_list(cfg);
+    match result {
+        Ok(xs) => assert_eq(xs.len(), 2),
+        Err(_) => assert(false),
+    }
+}
+
+test fn config_as_list_from_int_is_err() -> Unit {
+    let result: Result[List[ConfigValue], ConfigError] = as_list(ConfigValue::Int(42));
+    assert_eq(result.is_err(), true);
+}
+
+test fn config_as_map_from_map_returns_ok() -> Unit {
+    let m: Map[String, ConfigValue] = {"port": ConfigValue::Int(8080)};
+    let result: Result[Map[String, ConfigValue], ConfigError] = as_map(ConfigValue::Map(m));
+    match result {
+        Ok(got) => assert_eq(got.len(), 1),
+        Err(_)  => assert(false),
+    }
+}
+
+// ── json.decode: parse a JSON string into Value ──────────────────────────────
+
+test fn json_decode_parses_simple_object() -> Unit {
+    match decode("{\"port\": 8080}") {
+        Ok(Value::Object(fields)) => {
+            match fields.get("port") {
+                Some(Value::Number(n)) => assert_eq(n, 8080.0),
+                _                      => assert(false),
+            }
+        },
+        _ => assert(false),
+    }
+}
 // ── merge: scalar overlay ─────────────────────────────────────────────────────
 
 test fn config_merge_scalar_overlay_wins() -> Unit {

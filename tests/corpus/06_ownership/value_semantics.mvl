@@ -9,29 +9,33 @@ type Pair = struct {
 }
 
 // Struct can be used multiple times — each use clones
-fn independent_copies(p: Pair) -> Int {
+test fn independent_copies() -> Unit {
+    let p: Pair = Pair { first: 1, second: 2 };
     let a: Pair = p;
     let b: Pair = p;
-    a.first + b.second
+    let _: Int = a.first + b.second;
 }
 
 // Passing to multiple functions — each gets its own copy
-fn use_in_two_fns(p: Pair) -> Int {
+test fn use_in_two_fns() -> Unit {
+    let p: Pair = Pair { first: 1, second: 2 };
     let x: Int = p.first;
     let y: Int = p.second;
-    x + y
+    let _: Int = x + y;
 }
 
 // Int is a value type — no move semantics
-fn int_copies(x: Int) -> Int {
+test fn int_copies() -> Unit {
+    let x: Int = 5;
     let a: Int = x;
     let b: Int = x;
-    a + b
+    let _: Int = a + b;
 }
 
 // Bool is a value type
-fn bool_copies(b: Bool) -> Bool {
+test fn bool_copies() -> Unit {
+    let b: Bool = true;
     let x: Bool = b;
     let y: Bool = b;
-    x && y
+    let _: Bool = x && y;
 }

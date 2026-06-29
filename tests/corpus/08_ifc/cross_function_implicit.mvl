@@ -7,8 +7,11 @@
 
 // Helper that wraps println — transitively reaches a public sink.
 // Declare println/print with effects so IFC checker works without stdlib prelude.
-pub fn println(msg: String) -> Unit ! Console { }
-pub fn print(msg: String) -> Unit ! Console { }
+/// Stub Console sink — declared so the IFC checker classifies callers correctly.
+/// Body is empty: the declaration itself IS the contract for this fixture.
+pub total fn println(msg: String) -> Unit ! Console { }
+/// Stub Console sink — see println above.
+pub total fn print(msg: String) -> Unit ! Console { }
 
 fn log_access_granted() -> Unit ! Console {
     println("access granted")
@@ -20,4 +23,11 @@ fn check_secret_flag(flag: Secret[Bool]) -> Unit ! Console {
     if flag {
         log_access_granted()
     }
+}
+
+// ── Test: reference the helper so the linter records it as used ───────────────
+// File remains corpus:expect-fail; the IFC violation lives in check_secret_flag.
+
+test fn cross_function_implicit_typecheck() -> Unit {
+    let _: fn(Secret[Bool]) -> Unit ! Console = check_secret_flag;
 }

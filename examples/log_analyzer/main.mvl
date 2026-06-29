@@ -20,20 +20,11 @@
 //
 // Assurance note: 1 extern block (1 trust-boundary function — domain pipeline only).
 
-use parser::parse_line;
-use parser::report_to_json;
-use parser::build_report;
-use parser::LogEntry;
-use parser::Report;
-use utils::clamp_display;
-use utils::is_positive;
-
 // ── Standard library imports ────────────────────────────────────────────────
 
 use std.args.{parse_args, required, optional, get_str, get_str_opt, ArgType, ArgValue}
 use std.io.{read_file}
 use std.log.{Logger, default_logger}
-
 // ── Trust boundary: domain-specific pipeline logic ──────────────────────────
 
 extern "rust" {

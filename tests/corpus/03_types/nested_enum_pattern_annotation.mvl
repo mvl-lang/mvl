@@ -6,16 +6,21 @@
 // CsvError::ParseError(Int, String) due to non-deterministic HashMap iteration.
 // Fix: prefer the explicitly-qualified type name when resolving variant fields.
 
+/// Parse error variants — exercises short-name variant resolution where
+/// `Code(...)` could refer to either this type or `OtherError::Code`.
 pub type ParseError = enum {
     Code(Int, String),
     Simple(String),
 }
 
+/// Companion enum with a same-short-name variant (`Code`) — the
+/// disambiguation regression test pins this collision down.
 pub type OtherError = enum {
     Code(String),
 }
 
-pub fn classify(e: ParseError) -> String {
+/// Render a `ParseError` as a human-readable string.
+pub total fn classify(e: ParseError) -> String {
     match e {
         ParseError::Code(n, msg) => {
             let code: Int = n;
@@ -29,7 +34,10 @@ pub fn classify(e: ParseError) -> String {
     }
 }
 
-pub fn classify_result(r: Result[Int, ParseError]) -> String {
+/// Render a `Result[Int, ParseError]` — exercises nested-pattern variant
+/// resolution: the `Err(ParseError::Code(n, msg))` arm must resolve to
+/// `ParseError::Code`, not `OtherError::Code`.
+pub total fn classify_result(r: Result[Int, ParseError]) -> String {
     match r {
         Ok(v) => {
             let n: Int = v;

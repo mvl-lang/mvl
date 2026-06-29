@@ -4,7 +4,7 @@
 
 // Tainted: untrusted external input that must be sanitized before use
 fn use_tainted(input: Tainted[String]) -> String {
-    relabel trust(input, "VALIDATED")
+    relabel trust(input, "VALIDATED-LABELS-USE-001")
 }
 
 // Secret: confidential data that must be declassified explicitly
@@ -18,7 +18,7 @@ fn use_secret(data: Secret[String]) -> String {
 fn tainted_result(res: Result[Tainted[String], String]) -> String {
     match res {
         Ok(raw) => {
-            let clean: String = relabel trust(raw, "VALIDATED");
+            let clean: String = relabel trust(raw, "VALIDATED-LABELS-TAINTED-RESULT-001");
             "ok"
         },
         Err(e) => "error",
@@ -44,5 +44,24 @@ fn release_report(report: Secret[String]) -> String {
 // ── Capability combined with security label ───────────────────────────────
 
 fn iso_tainted(iso db: val DbConn, raw: Tainted[String]) -> String {
-    relabel trust(raw, "VALIDATED")
+    relabel trust(raw, "VALIDATED-LABELS-ISO-001")
+}
+
+// `authenticate` is `total fn` with a Tainted parameter — fn-pointer
+// strips totality and Tainted has no in-source constructor. Bridge via a
+// non-total wrapper that calls it directly; the wrapper is then referenced
+// from the test below.
+fn authenticate_wrapper(db: val DbConn, password: Tainted[String], user_id: Int) -> Int {
+    authenticate(db, password, user_id)
+}
+
+// ── Test: reference each declaration so the linter records it as used ─────────
+
+test fn labels_typecheck() -> Unit {
+    let _: fn(Tainted[String]) -> String = use_tainted;
+    let _: fn(Secret[String]) -> String = use_secret;
+    let _: fn(Result[Tainted[String], String]) -> String = tainted_result;
+    let _: fn(val DbConn, Tainted[String], Int) -> Int = authenticate_wrapper;
+    let _: fn(Secret[String]) -> String = release_report;
+    let _: fn(val DbConn, Tainted[String]) -> String = iso_tainted;
 }

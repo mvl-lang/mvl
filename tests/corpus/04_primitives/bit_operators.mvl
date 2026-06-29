@@ -2,28 +2,37 @@
 // Demonstrates &, |, ^, ~, <<, >> on Int types.
 // All examples must parse and type-check without errors.
 
-fn bitwise_and(a: Int, b: Int) -> Int {
-    a & b
+test fn bitwise_and() -> Unit {
+    let a: Int = 12;
+    let b: Int = 10;
+    let _: Int = a & b;
 }
 
-fn bitwise_or(a: Int, b: Int) -> Int {
-    a | b
+test fn bitwise_or() -> Unit {
+    let a: Int = 12;
+    let b: Int = 10;
+    let _: Int = a | b;
 }
 
-fn bitwise_xor(a: Int, b: Int) -> Int {
-    a ^ b
+test fn bitwise_xor() -> Unit {
+    let a: Int = 12;
+    let b: Int = 10;
+    let _: Int = a ^ b;
 }
 
-fn bitwise_not(a: Int) -> Int {
-    ~a
+test fn bitwise_not() -> Unit {
+    let a: Int = 12;
+    let _: Int = ~a;
 }
 
-fn shift_left(a: Int, n: Int) -> Int {
-    a << n
+test fn shift_left() -> Unit {
+    let a: Int = 1;
+    let _: Int = a << 3;
 }
 
-fn shift_right(a: Int, n: Int) -> Int {
-    a >> n
+test fn shift_right() -> Unit {
+    let a: Int = 16;
+    let _: Int = a >> 2;
 }
 
 // NOTE: The LLVM backend currently emits arithmetic right-shift (ashr) for all
@@ -32,10 +41,11 @@ fn shift_right(a: Int, n: Int) -> Int {
 // (logical/zero-extending for u8/u64). Unsigned right-shift divergence is a
 // known follow-up tracked in ADR-0021 and issue #484.
 
-fn flags_demo(flags: Int) -> Bool {
+test fn flags_demo() -> Unit {
+    let flags: Int = 6;
     let read_bit: Int = 4;
     let write_bit: Int = 2;
     let has_read: Int = flags & read_bit;
     let has_write: Int = flags & write_bit;
-    has_read > 0 && has_write > 0
+    let _: Bool = has_read > 0 && has_write > 0;
 }

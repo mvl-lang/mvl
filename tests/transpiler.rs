@@ -1021,8 +1021,12 @@ fn corpus_bitwise_transpiles() {
     assert_contains(&rust, " as i64)");
     // from_int — cast to u8
     assert_contains(&rust, " as u8)");
-    // Byte functions use u8 types
-    assert_contains(&rust, "pub fn byte_bit_and(a: u8, b: u8) -> u8");
+    // Byte functions use u8 types. The corpus file declares each Byte op as
+    // a parameterless `test fn` that materializes values inline, so the byte
+    // typing surfaces in the let bindings rather than a top-level signature.
+    assert_contains(&rust, "fn byte_bit_and()");
+    assert_contains(&rust, "let a: u8 =");
+    assert_contains(&rust, "let _: u8 = (a & b);");
 }
 
 // ── Prelude emission (issue #229, Phase 4) ────────────────────────────────
@@ -3213,8 +3217,12 @@ fn actor_decl_emits_runtime_infrastructure() {
         &rust,
         "fn counter_dispatch(actor: &mut CounterState, msg: CounterMailbox) -> bool {",
     );
-    // System variants (#1177).
-    assert_contains(&rust, "CounterMailbox::_Shutdown => return false,");
+    // System variants (#1177). Shutdown nulls _self_ref before returning false
+    // (the strong-ref-nulling shutdown protocol — bf6b4e07).
+    assert_contains(
+        &rust,
+        "CounterMailbox::_Shutdown => { actor._self_ref = None; return false; },",
+    );
     assert_contains(
         &rust,
         "CounterMailbox::Increment { n } => actor.increment(n),",
@@ -3263,7 +3271,10 @@ fn actor_traps_exit_emits_true_in_register() {
     assert_contains(&rust, "mvl_register_actor_controls(");
     assert_contains(&rust, "true,");
     // System variants present in mailbox enum.
-    assert_contains(&rust, "SupervisorMailbox::_Shutdown => return false,");
+    assert_contains(
+        &rust,
+        "SupervisorMailbox::_Shutdown => { actor._self_ref = None; return false; },",
+    );
     assert_contains(
         &rust,
         "SupervisorMailbox::_ExitSignal { _from_id: _, _reason: _ } => {}",
@@ -3369,7 +3380,9 @@ fn actor_state_has_self_ref_field() {
     "#;
     let rust = transpile_src(src);
     assert_contains(&rust, "struct FooState {");
-    assert_contains(&rust, "_self_ref: Option<MvlWeakSender<FooMailbox>>,");
+    // Strong-ref shutdown protocol (bf6b4e07): _self_ref is a strong MvlSender
+    // nulled on _Shutdown, not the prior MvlWeakSender + IN_FLIGHT counter.
+    assert_contains(&rust, "_self_ref: Option<MvlSender<FooMailbox>>,");
 }
 
 /// The `_self_ref: None` sentinel is appended to every actor spawn call so the
@@ -3412,6 +3425,8 @@ fn actor_behavior_prefixes_helper_call_with_self() {
 
 /// `self` appearing as an argument inside a behavior is replaced with
 /// `self._self_ref.as_ref().unwrap().clone()` — the actor's own tag handle. (#580)
+/// Strong-ref shutdown protocol (bf6b4e07): clones the strong MvlSender rather
+/// than upgrading from a weak one.
 #[test]
 fn actor_self_arg_becomes_self_ref_clone() {
     let src = r#"
@@ -3428,7 +3443,7 @@ fn actor_self_arg_becomes_self_ref_clone() {
         }
     "#;
     let rust = transpile_src(src);
-    assert_contains(&rust, "self._self_ref.as_ref().unwrap().upgrade()");
+    assert_contains(&rust, "self._self_ref.as_ref().unwrap().clone()");
 }
 
 /// `concurrently { }` emits the body statements (spawn + message sends). (#580)

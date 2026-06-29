@@ -64,7 +64,7 @@ use tir::Program;
 use tir::AstLiteral;
 use tir::StructField;
 use tir::MapEntry;
-use tir::PatField;
+
 use tir::AstBinaryExpr;
 use tir::AstUnaryExpr;
 use tir::AstFieldExpr;
@@ -74,7 +74,7 @@ use tir::AstMethodExpr;
 use tir::AstIfExpr;
 use tir::AstMatchExpr;
 use tir::AstStructLit;
-use tir::AstMapLit;
+
 use tir::AstCastExpr;
 use tir::AstRelabelExpr;
 use tir::TuplePattern;

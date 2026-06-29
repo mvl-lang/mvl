@@ -27,7 +27,8 @@ total fn safe_divide(
     numerator / denominator
 }
 
-total fn calculate_share(
+/// Reference Example 2 entry point — see file header for requirements covered.
+pub total fn calculate_share(
     iso account: Secret[AccountId],
     total_amount: Float,
     num_parties: Int where self > 0,
