@@ -50,6 +50,28 @@ fn prepare_llvm_text(prog: &Program) -> (Vec<Program>, LlvmTextCompiler) {
     (prelude, compiler)
 }
 
+/// `true` if the `MVL_LLVM_BACKEND=tir` env var selects the TIR walker over
+/// the AST walker (#1612, task 2b). Off by default — the TIR walker is opt-in
+/// until corpus IR parity is validated and PR 2 of #1612 flips the default.
+fn use_tir_emitter() -> bool {
+    std::env::var("MVL_LLVM_BACKEND")
+        .map(|v| v == "tir")
+        .unwrap_or(false)
+}
+
+/// Compile `prog` to LLVM IR text, routing through either the AST or the TIR
+/// walker depending on `MVL_LLVM_BACKEND`. Single dispatch point for the three
+/// CLI entry points (`build`, `run`, `test`) so they stay in lock-step.
+fn compile_ir(prog: &Program, module_name: &str) -> Result<String, String> {
+    if use_tir_emitter() {
+        let (prelude_tirs, entry_tir, compiler) = prepare_llvm_text_tir(prog);
+        compiler.compile_to_ir_with_prelude_tir(&prelude_tirs, &entry_tir, module_name)
+    } else {
+        let (prelude, compiler) = prepare_llvm_text(prog);
+        compiler.compile_to_ir_with_prelude(&prelude, prog, module_name)
+    }
+}
+
 /// Lower an entry program and its prelude to TIR for the TIR-walking emitter
 /// path (#1612, Phase 3b PR 1).
 ///
@@ -60,7 +82,6 @@ fn prepare_llvm_text(prog: &Program) -> (Vec<Program>, LlvmTextCompiler) {
 /// Returns `(prelude_tirs, entry_tir, compiler)`.  The compiler shares its
 /// `builtin_symbols` and `expr_types` with the AST path so call-site dispatch
 /// remains identical.
-#[allow(dead_code)] // wired into the cross_backend_tir test target in a follow-up
 pub(super) fn prepare_llvm_text_tir(
     prog: &Program,
 ) -> (Vec<TirProgram>, TirProgram, LlvmTextCompiler) {
@@ -92,8 +113,7 @@ pub(super) fn prepare_llvm_text_tir(
 pub(super) fn build_project_llvm_text(path: &str) {
     let (prog, _src) = super::parse_or_exit(path);
     let module_name = loader::stem(path);
-    let (prelude, compiler) = prepare_llvm_text(&prog);
-    match compiler.compile_to_ir_with_prelude(&prelude, &prog, &module_name) {
+    match compile_ir(&prog, &module_name) {
         Ok(ir) => {
             let out_path = format!("{module_name}.ll");
             fs::write(&out_path, &ir).unwrap_or_else(|e| {
@@ -155,8 +175,7 @@ fn compile_llvm_bridge(llvm_rs: &Path) -> Option<PathBuf> {
 pub(super) fn run_project_llvm_text(path: &str) {
     let (prog, _src) = super::parse_or_exit(path);
     let module_name = loader::stem(path);
-    let (prelude, compiler) = prepare_llvm_text(&prog);
-    let ir = match compiler.compile_to_ir_with_prelude(&prelude, &prog, &module_name) {
+    let ir = match compile_ir(&prog, &module_name) {
         Ok(ir) => ir,
         Err(e) => {
             eprintln!("error: llvm codegen failed: {e}");
@@ -272,8 +291,7 @@ pub(super) fn cmd_test_llvm_text(path: &str, quiet: bool, verbose: bool) {
             continue;
         }
 
-        let (prelude, compiler) = prepare_llvm_text(&prog);
-        let ir = match compiler.compile_to_ir_with_prelude(&prelude, &prog, &module_name) {
+        let ir = match compile_ir(&prog, &module_name) {
             Ok(ir) => ir,
             Err(e) => {
                 eprintln!("  FAIL (codegen): {file_str}: {e}");
