@@ -54,10 +54,18 @@ MVL uses a **three-layer failure model**:
 "Let it crash" applies only to what the compiler cannot verify.  Crashing for something
 the compiler should have caught is a design failure, not runtime recovery work.
 
-**Mailbox overflow (Phase 8):** When a mailbox is full, `try_send` **drops the message
-silently**.  This is fire-and-forget semantics — callers MUST NOT rely on message delivery
-under load.  Mailbox capacity is fixed at **256 messages** per actor in both backends.
-Configurable capacity and backpressure are deferred to Phase 9.
+**Mailbox configuration (since #1127):** Actors declare mailbox capacity and
+overflow policy via the `with mailbox(...)` clause on the actor type declaration:
+
+- `with mailbox(N)` — bounded, default policy (`drop_newest` on full)
+- `with mailbox(N, block)` — bounded, sender blocks until space is available
+- `with mailbox(N, drop_newest)` — bounded, explicitly drop newest on full
+- `with mailbox(unbounded)` — unbounded, never drops
+
+When omitted, the actor defaults to **bounded `mailbox(256, drop_newest)`** in
+both backends. Additional overflow policies (`DropOldest`, `Sample(rate)`,
+`Block(deadline_ms)`) and an observable drop counter are tracked under
+the Actors v2 epic (#1621).
 
 **Actor failure handling (Phase 8):** If a behavior panics, the actor thread terminates.
 No automatic restart occurs.  Supervision tree support via `std.actors.Supervisor` is
@@ -274,6 +282,11 @@ For `iso` arguments, the call MUST consume the sender's binding via `consume()`.
 The compiler MUST reject a behavior call that passes an `iso` value without consuming it
 (this would alias the isolated reference across the actor boundary).
 
+Mailbox capacity and overflow behavior at the send site are governed by the
+receiving actor's `with mailbox(...)` configuration (see *Mailbox configuration*
+above). The default is bounded `mailbox(256, drop_newest)`; sends to a full
+bounded mailbox apply the actor's declared overflow policy.
+
 **Implementation:** `src/mvl/checker/capabilities.rs::check_send_capability`,
 `src/mvl/checker.rs::TypeChecker::check_behavior_call`
 
@@ -307,11 +320,14 @@ The compiler MUST reject a behavior call that passes an `iso` value without cons
 
 **Tests:** `tests/corpus/12_actors/message_send.mvl`
 
-#### Scenario: Mailbox full — message is dropped silently
+#### Scenario: Mailbox full — message is dropped or sender blocks per policy
 
-- GIVEN an actor with a full mailbox (256 pending messages)
-- WHEN a behavior call is made via `try_send`
-- THEN the message IS dropped — no error is raised, no blocking occurs
+- GIVEN an actor declared `with mailbox(N)` (or default `mailbox(256)`)
+- WHEN the mailbox is full and a behavior call is made via `try_send`
+- THEN the runtime applies the configured overflow policy:
+  - default / `drop_newest`: the message IS dropped, no error, no blocking
+  - `block`: the sender blocks until mailbox space is available
+- AND `with mailbox(unbounded)` actors never drop and never block
 
 **Tests:** `tests/corpus/12_actors/mailbox_overflow.mvl`
 
@@ -537,7 +553,13 @@ These limitations are accepted for Phase 8 and tracked as follow-up work:
 - **L5**: one-way monitors — Phase 8 supports only bidirectional links (passing `tag ActorRef`
   references for reply/notification patterns). Erlang-style one-way monitors (observe failure
   without coupling fate) are deferred to Phase 9.
-- **L6**: mailbox capacity — fixed at 256 messages per actor; overflow silently drops
-  messages. Configurable capacity, blocking send, and backpressure are Phase 9 features.
-- **L7**: graceful shutdown ordering — main drain is guaranteed on normal exit but not on
-  actor panic or external stop. Ordered shutdown via `Supervisor.stop()` is deferred to Phase 9.
+- **L6**: mailbox overflow policies — configurable capacity and the
+  `drop_newest` / `block` / `unbounded` policies ship today (`with mailbox(...)`,
+  #1127). Additional policies (`DropOldest`, `Sample(rate)`, `Block(deadline_ms)`)
+  and an observable drop counter API are tracked under the Actors v2 epic (#1621,
+  with sub-ticket #1495).
+- **L7**: graceful shutdown ordering — `fn main()` drain is guaranteed on normal
+  exit. On actor panic or external stop the surviving actors are still joined
+  (the runtime's exit cascade fires before `DISC_SHUTDOWN`, #1602), but ordering
+  guarantees beyond "no pending messages after main returns" are not promised.
+  Stronger ordered shutdown via `Supervisor.stop()` is tracked under #1621.
