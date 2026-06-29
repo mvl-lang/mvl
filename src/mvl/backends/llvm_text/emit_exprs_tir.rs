@@ -218,6 +218,7 @@ impl TextEmitter {
             "Ok" | "Err" => return self.emit_result_constructor_tir(name, args),
             "Some" => return self.emit_option_constructor_tir(args),
             "None" => return self.emit_none_constructor(),
+            "format" => return self.emit_format_builtin_tir(args),
             _ => {}
         }
 
@@ -237,7 +238,7 @@ impl TextEmitter {
         // safe to invoke against any program (returns Err instead of producing
         // divergent IR that would silently fail at lli runtime).
         match name {
-            "format" | "Box::new" | "path" | "format_datetime" | "format_instant"
+            "Box::new" | "path" | "format_datetime" | "format_instant"
             | "find_all" | "replace" | "choice" | "List::filled" | "float_checked_to_int" => {
                 return Err(format!(
                     "emit_fn_call_tir: builtin `{name}` not yet ported"
@@ -1527,6 +1528,31 @@ impl TextEmitter {
         Ok(None)
     }
 
+    /// TIR variant of [`Self::emit_format_builtin`].
+    fn emit_format_builtin_tir(
+        &mut self,
+        args: &[TirExpr],
+    ) -> Result<Option<String>, String> {
+        if args.len() < 2 {
+            return Ok(None);
+        }
+        let template = match self.emit_expr_tir(&args[0])? {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+        let list = match self.emit_expr_tir(&args[1])? {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+        self.ensure_extern("declare ptr @_mvl_format(ptr, ptr)");
+        let reg = self.next_reg();
+        self.push_instr(&format!(
+            "{reg} = call ptr @_mvl_format(ptr {template}, ptr {list})"
+        ));
+        self.fn_ctx.reg_types.insert(reg.clone(), "ptr".into());
+        Ok(Some(reg))
+    }
+
     /// TIR variant of [`Self::emit_construct`].
     fn emit_construct_tir(
         &mut self,
@@ -1908,7 +1934,15 @@ impl TextEmitter {
                 // Distinguish by receiver's TIR type — String uses _mvl_str_len,
                 // List/Array/Set use _mvl_array_len, Map uses _mvl_map_len.
                 match unwrap_labels(&receiver.ty) {
-                    Ty::String => Ok(Some(self.emit_c_call_simple("len", &val, &[]))),
+                    Ty::String => {
+                        self.ensure_extern("declare i64 @_mvl_str_len(ptr)");
+                        let reg = self.next_reg();
+                        self.push_instr(&format!(
+                            "{reg} = call i64 @_mvl_str_len(ptr {val})"
+                        ));
+                        self.fn_ctx.reg_types.insert(reg.clone(), "i64".into());
+                        Ok(Some(reg))
+                    }
                     Ty::List(_) | Ty::Array(_, _) | Ty::Set(_) => {
                         self.ensure_extern("declare i64 @_mvl_array_len(ptr)");
                         let reg = self.next_reg();

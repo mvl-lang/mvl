@@ -9,12 +9,39 @@
 //! also carry the fully-resolved declared `Ty` so the emitter doesn't need to
 //! re-infer types from initializers.
 
-use crate::mvl::ir::{LetKind, LValue, Pattern, TirBlock, TirElseBranch, TirExpr, TirStmt};
+use crate::mvl::ir::{LetKind, LValue, Pattern, TirBlock, TirElseBranch, TirExpr, TirExprKind, TirStmt};
 
 use super::emit_stmts::ty_to_type_expr;
 use super::{RefLocal, TextEmitter, MAIN_RET};
 
 impl TextEmitter {
+    /// TIR variant of [`Self::exclude_returned_value`] — walks a `TirExpr`.
+    ///
+    /// Removes the heap-local entry for a value about to be returned (moved
+    /// out of the function), so the subsequent `emit_heap_drops` does not
+    /// free what now belongs to the caller. Matches the AST-side rules in
+    /// `emit_types.rs::exclude_returned_value`: only `Var` is the canonical
+    /// owning expression; `Consume` / `Relabel` are transparent wrappers.
+    pub(super) fn exclude_returned_value_tir(&mut self, expr: &TirExpr) {
+        match &expr.kind {
+            TirExprKind::Var(name) => {
+                if let Some(loc) = self.fn_ctx.ref_locals.get(name) {
+                    let ptr = loc.ptr.clone();
+                    self.fn_ctx.heap_locals.retain(|(s, _, _)| *s != ptr);
+                    return;
+                }
+                if let Some(ssa) = self.fn_ctx.locals.get(name) {
+                    let ssa = ssa.clone();
+                    self.fn_ctx.heap_locals.retain(|(s, _, _)| *s != ssa);
+                }
+            }
+            TirExprKind::Consume(inner) | TirExprKind::Relabel { expr: inner, .. } => {
+                self.exclude_returned_value_tir(inner);
+            }
+            _ => {}
+        }
+    }
+
     /// Walk a [`TirBlock`] and emit the trailing expression's SSA register
     /// (mirrors `emit_block(&Block)` semantics).
     pub(super) fn emit_block_tir(&mut self, block: &TirBlock) -> Result<Option<String>, String> {
@@ -266,10 +293,9 @@ impl TextEmitter {
                 } else {
                     None
                 };
-                // Heap-drop exclusion needs an AST `Expr`; TIR-side equivalent
-                // is built out alongside the heap-drop tracker. Until then, skip
-                // exclusion — this is conservative (extra drops are runtime no-ops
-                // on already-dropped slots in the AST path's drop ordering).
+                if let Some(expr) = value {
+                    self.exclude_returned_value_tir(expr);
+                }
                 self.emit_heap_drops();
                 if Self::is_void(&ret_ty) {
                     if self.fn_ctx.current_fn_is_main {

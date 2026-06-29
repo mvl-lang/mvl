@@ -283,6 +283,9 @@ impl TextEmitter {
         let body_val = self.emit_block_tir(&f.body)?;
 
         if !self.fn_ctx.terminated {
+            if let Some(crate::mvl::ir::TirStmt::Expr { expr, .. }) = f.body.stmts.last() {
+                self.exclude_returned_value_tir(expr);
+            }
             self.emit_heap_drops();
             if self.fn_ctx.current_fn_is_main {
                 let has_actors = !self.module.actor_decls.is_empty()
