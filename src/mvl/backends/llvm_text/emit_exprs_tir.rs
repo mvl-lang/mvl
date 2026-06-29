@@ -251,10 +251,9 @@ impl TextEmitter {
                 "emit_fn_call_tir: enum variant constructor `{name}` not yet ported"
             ));
         }
-        if self.mono.generic_fns.contains_key(name) {
-            return Err(format!(
-                "emit_fn_call_tir: generic call `{name}` not yet ported"
-            ));
+        // Generic function call — route through the TIR mono path (#1612, Bug 4).
+        if self.mono.tir_generic_fns.contains_key(name) {
+            return self.emit_monomorphized_call_tir(name, args);
         }
 
         // User-defined function call.

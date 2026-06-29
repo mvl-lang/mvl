@@ -11,17 +11,13 @@
 
 use super::common::assert_tir_parity;
 
-// KNOWN MIGRATION GAP (#1612): the TIR walker's lower() pipeline doesn't
-// produce monomorphized TirFn copies in the standalone-test environment
-// (no prelude, no full pipeline). The walker succeeds but emits a single
-// generic-typed definition + mismatched call sites, instead of the two
-// mangled copies the AST emit_mono path produces on-the-fly via its
-// legacy mono_queue. Tracked as part of the broader emit_mono.rs deletion
-// in #1612 — the AST path runs the same logic inline during emission;
-// the TIR path will get its monomorphization from the upstream pipeline
-// once that's wired through prepare_llvm_text_tir.
+// TIR walker has its own MonoQueue parallel to the AST emitter (#1612, Bug 4).
+// Pre-pass collects generic TirFns into `MonoQueue::tir_generic_fns`; call
+// sites mangle and enqueue; a drain pass at the tail of `emit_program_tir`
+// substitutes `Ty` in cloned bodies and emits one mangled copy per concrete
+// instantiation. Mangled symbols agree with the AST path because both routes
+// share `Self::mangle_generic` operating on `TypeExpr`.
 #[test]
-#[ignore = "#1612: TIR walker mono pipeline not yet wired in standalone tests"]
 fn generic_fn_monomorphized_per_concrete_type() {
     assert_tir_parity("fn identity[T](x: T) -> T { x }\n\
          fn main() -> Unit {\n\

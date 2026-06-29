@@ -25,7 +25,7 @@ use super::{TextEmitter, MAIN_RET};
 /// Falls back to `Unit` for `Ty` variants that don't have a clean `TypeExpr`
 /// representation — these only appear in positions where the existing
 /// emitter logic also treats them as opaque (e.g. `Ty::Session`).
-fn ty_to_type_expr_or_unit(ty: &Ty) -> TypeExpr {
+pub(super) fn ty_to_type_expr_or_unit(ty: &Ty) -> TypeExpr {
     ty_to_type_expr(ty).unwrap_or(TypeExpr::Base {
         name: "Unit".into(),
         args: Vec::new(),
@@ -79,7 +79,15 @@ impl TextEmitter {
         }
 
         // First pass: register fn signatures and emit struct/alias type defs.
+        // Generic fns are stashed in `tir_generic_fns` and registered per
+        // mangled instantiation when a call site enqueues them (#1612, Bug 4).
         for f in &prog.fns {
+            if !f.type_params.is_empty() {
+                self.mono
+                    .tir_generic_fns
+                    .insert(f.name.clone(), f.clone());
+                continue;
+            }
             self.register_fn_tir_sig(f);
         }
         for td in &prog.types {
@@ -162,11 +170,44 @@ impl TextEmitter {
             }
         }
 
-        // Emit each non-test, non-builtin function body. No generic collection
-        // needed — `ir::lower::lower` already produced monomorphized copies.
+        // Emit each non-test, non-builtin, non-generic function body. Generics
+        // are emitted via the drain loop below, one mangled copy per concrete
+        // instantiation (mirror of the AST emit_program path).
         for f in &prog.fns {
-            if !f.is_test && !f.is_builtin {
+            if !f.is_test && !f.is_builtin && f.type_params.is_empty() {
                 self.emit_fn_tir(f)?;
+            }
+        }
+
+        // Drain the monomorphization queue. Each iteration may enqueue more
+        // instantiations (a mangled body can call another generic fn), so loop
+        // until the queue stabilizes. Limit guards against pathological
+        // mutually-recursive generic chains.
+        const TIR_MONO_LIMIT: usize = 10_000;
+        let mut iters = 0usize;
+        while !self.mono.tir_mono_queue.is_empty() {
+            iters += 1;
+            if iters > TIR_MONO_LIMIT {
+                return Err(
+                    "TIR monomorphization limit exceeded — possible infinite instantiation"
+                        .into(),
+                );
+            }
+            let queue = std::mem::take(&mut self.mono.tir_mono_queue);
+            for (mangled, orig_name, concrete_tys) in queue {
+                let gf = match self.mono.tir_generic_fns.get(&orig_name) {
+                    Some(f) => f.clone(),
+                    None => continue,
+                };
+                let mut subs: std::collections::HashMap<String, Ty> =
+                    std::collections::HashMap::new();
+                for (tp, ct) in gf.type_params.iter().zip(concrete_tys.iter()) {
+                    subs.insert(tp.name().to_string(), ct.clone());
+                }
+                let mut mangled_fn = self.substitute_tir_fn(&gf, &subs);
+                mangled_fn.name = mangled;
+                mangled_fn.type_params.clear();
+                self.emit_fn_tir(&mangled_fn)?;
             }
         }
 

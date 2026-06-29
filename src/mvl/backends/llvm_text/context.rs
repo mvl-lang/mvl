@@ -22,6 +22,7 @@ use std::collections::{HashMap, HashSet};
 use super::emitter::{HeapKind, RefLocal};
 use super::BuiltinSymbolInfo;
 use crate::mvl::checker::types::Ty;
+use crate::mvl::ir::TirFn;
 use crate::mvl::parser::ast::{ActorDecl, FnDecl, TypeExpr};
 use crate::mvl::parser::lexer::Span;
 
@@ -234,6 +235,13 @@ pub(super) struct MonoQueue {
     pub mono_emitted: HashSet<String>,
     /// Queue of monomorphized functions to emit: (mangled, orig_name, concrete_types).
     pub mono_queue: Vec<(String, String, Vec<TypeExpr>)>,
+    // ── TIR-side parallels (#1612, Bug 4) ────────────────────────────────
+    /// Generic TIR fn declarations (type_params non-empty), keyed by name.
+    pub tir_generic_fns: HashMap<String, TirFn>,
+    /// Mangled names of monomorphized TIR copies already emitted.
+    pub tir_mono_emitted: HashSet<String>,
+    /// Queue of monomorphized TIR fns to emit: (mangled, orig_name, concrete_types).
+    pub tir_mono_queue: Vec<(String, String, Vec<Ty>)>,
 }
 
 impl MonoQueue {
@@ -243,6 +251,9 @@ impl MonoQueue {
             type_param_map: HashMap::new(),
             mono_emitted: HashSet::new(),
             mono_queue: Vec::new(),
+            tir_generic_fns: HashMap::new(),
+            tir_mono_emitted: HashSet::new(),
+            tir_mono_queue: Vec::new(),
         }
     }
 }

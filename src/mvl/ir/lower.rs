@@ -742,7 +742,7 @@ fn typeexpr_to_ty(te: &TypeExpr) -> Ty {
 ///
 /// `subs` maps type-parameter names to their concrete [`Ty`] (e.g. `"T" → Ty::Int`).
 /// `Ty::Named(name, [])` is treated as a type parameter reference when `name` is in `subs`.
-fn substitute_ty(ty: &Ty, subs: &HashMap<String, Ty>) -> Ty {
+pub fn substitute_ty(ty: &Ty, subs: &HashMap<String, Ty>) -> Ty {
     if subs.is_empty() {
         return ty.clone();
     }
