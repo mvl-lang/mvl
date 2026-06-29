@@ -624,6 +624,13 @@ impl<'ast> Visit<'ast> for CollectCalls<'_> {
             Expr::MethodCall { method, .. } => {
                 self.called.insert(method.clone());
             }
+            // Functions passed by name to higher-order calls (e.g. `xs.filter(is_even)`)
+            // parse as `Expr::Ident`, not `FnCall`. Treat any identifier reference as a
+            // possible function use. Worst case: a local variable shadowing a function
+            // name suppresses the lint — acceptable for a "remove this code" warning.
+            Expr::Ident(name, _) => {
+                self.called.insert(name.clone());
+            }
             _ => {}
         }
         walk_expr(self, e);
@@ -1314,6 +1321,26 @@ mod tests {
         assert!(
             diags.iter().all(|d| d.rule != "unused-function"),
             "fn main must not be flagged; got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn fn_passed_by_name_to_hof_not_flagged() {
+        // Regression: callbacks like `is_even` in `xs.filter(is_even)` parse as
+        // `Expr::Ident`, not `FnCall`. They must not trip unused-function.
+        let src = concat!(
+            "fn is_even(x: Int) -> Bool { x % 2 == 0 }\n",
+            "fn main() -> Unit {\n",
+            "    let xs: List[Int] = [1, 2, 3];\n",
+            "    let _ys: List[Int] = xs.filter(is_even);\n",
+            "}\n",
+        );
+        let prog = parse(src);
+        let mut diags = vec![];
+        unused_functions(&prog, &cfg(), &mut diags);
+        assert!(
+            diags.iter().all(|d| d.rule != "unused-function"),
+            "fn passed by name to HOF must not be flagged; got: {diags:?}"
         );
     }
 

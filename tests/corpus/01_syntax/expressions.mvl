@@ -1,122 +1,175 @@
 // Corpus: MVL expression forms
+//
+// Each `test fn` exercises one expression form. Values are materialized inline
+// so the file is self-contained and the linter classifies the items as tests
+// (exempt from `unused-function`, `missing-doc-comment`, `missing-totality`).
 
-// Supporting type used by field_access and struct_construction examples below.
+// Supporting types used by field_access, nested_access, and struct_construction.
 type Point = struct {
     x: Int,
     y: Int,
 }
 
-// Literals
-fn literals() -> Unit {
-    let a: Int    = 42;
-    let b: Float  = 3.14;
-    let c: String = "hello";
-    let d: Char   = 'x';
-    let e: Bool   = true;
-    let f: Bool   = false;
+type DbConfig = struct {
+    host: String,
 }
 
-// Identifiers and field access
-fn field_access(point: Point) -> Int {
-    point.x
+type DbConn = struct {
+    config: DbConfig,
 }
 
-// Method calls
-fn method_call(xs: List[Int]) -> Int {
-    xs.len()
-}
-
-fn chained_method(s: String) -> String {
-    s.trim().to_upper()
-}
-
-// Function calls
-fn fn_call(n: Int) -> Int {
-    abs(n)
-}
-
-fn fn_call_multi(a: Int, b: Int) -> Int {
-    max(a, b)
-}
-
-// Binary operators
-fn binary_ops(a: Int, b: Int) -> Int {
-    let sum: Int  = a + b;
-    let diff: Int = a - b;
-    let prod: Int = a * b;
-    let quot: Int = a / b;
-    let rem: Int  = a % b;
-    sum
-}
-
-fn comparison_ops(a: Int, b: Int) -> Bool {
-    let eq: Bool = a == b;
-    let ne: Bool = a != b;
-    let lt: Bool = a < b;
-    let gt: Bool = a > b;
-    let le: Bool = a <= b;
-    let ge: Bool = a >= b;
-    lt
-}
-
-fn logical_ops(p: Bool, q: Bool) -> Bool {
-    let and: Bool = p && q;
-    let or: Bool  = p || q;
-    and
-}
-
-// Unary operators
-fn unary_ops(n: Int, flag: Bool) -> Unit {
-    let neg: Int      = -n;
-    let not_flag: Bool = !flag;
-}
-
-// Operator precedence: a + b * c → a + (b * c)
-fn precedence(a: Int, b: Int, c: Int) -> Int {
-    a + b * c
-}
-
-// ? propagation
-fn propagation(input: String) -> Result[Int, String] {
+// Helper used by `propagation` — `?` requires an enclosing `Result`-returning fn.
+fn propagation_impl(input: String) -> Result[Int, String] {
     let n: Int = parse_int(input)?;
     Ok(n)
 }
 
-// If-expression (as expression, not statement)
-fn if_expr(n: Int) -> String {
-    let name: String = if n > 0 { "positive" } else { "non-positive" };
-    name
+// Helper used by `security_ops` — Tainted[T] has no user-side constructor,
+// so we reference this fn by name and rely on its signature for the assertion.
+fn security_ops_impl(raw: Tainted[String]) -> String {
+    relabel trust(raw, "VALIDATED-EXPR-001")
 }
 
-// Match expression
-fn match_expr(opt: Option[Int]) -> Int {
-    match opt {
+// ── Literals ──────────────────────────────────────────────────────────────────
+
+test fn literals() -> Unit {
+    let _a: Int    = 42;
+    let _b: Float  = 3.14;
+    let _c: String = "hello";
+    let _d: Char   = 'x';
+    let _e: Bool   = true;
+    let _f: Bool   = false;
+}
+
+// ── Identifiers and field access ──────────────────────────────────────────────
+
+test fn field_access() -> Unit {
+    let point: Point = Point { x: 1, y: 2 };
+    let _: Int = point.x;
+}
+
+// ── Method calls ──────────────────────────────────────────────────────────────
+
+test fn method_call() -> Unit {
+    let xs: List[Int] = [1, 2, 3];
+    let _: Int = xs.len();
+}
+
+test fn chained_method() -> Unit {
+    let s: String = "  hello  ";
+    let _: String = s.trim().to_upper();
+}
+
+// ── Function calls ────────────────────────────────────────────────────────────
+
+test fn fn_call() -> Unit {
+    let _: Int = abs(-5);
+}
+
+test fn fn_call_multi() -> Unit {
+    let _: Int = max(1, 2);
+}
+
+// ── Binary operators ──────────────────────────────────────────────────────────
+
+test fn binary_ops() -> Unit {
+    let a: Int = 10;
+    let b: Int = 3;
+    let _sum: Int  = a + b;
+    let _diff: Int = a - b;
+    let _prod: Int = a * b;
+    let _quot: Int = a / b;
+    let _rem: Int  = a % b;
+}
+
+test fn comparison_ops() -> Unit {
+    let a: Int = 1;
+    let b: Int = 2;
+    let _eq: Bool = a == b;
+    let _ne: Bool = a != b;
+    let _lt: Bool = a < b;
+    let _gt: Bool = a > b;
+    let _le: Bool = a <= b;
+    let _ge: Bool = a >= b;
+}
+
+test fn logical_ops() -> Unit {
+    let p: Bool = true;
+    let q: Bool = false;
+    let _and: Bool = p && q;
+    let _or: Bool  = p || q;
+}
+
+// ── Unary operators ───────────────────────────────────────────────────────────
+
+test fn unary_ops() -> Unit {
+    let n: Int = 5;
+    let flag: Bool = true;
+    let _neg: Int       = -n;
+    let _not_flag: Bool = !flag;
+}
+
+// ── Operator precedence: a + b * c → a + (b * c) ──────────────────────────────
+
+test fn precedence() -> Unit {
+    let a: Int = 1;
+    let b: Int = 2;
+    let c: Int = 3;
+    let _: Int = a + b * c;
+}
+
+// ── `?` propagation (exercised via helper) ────────────────────────────────────
+
+test fn propagation() -> Unit {
+    // allow: silent-result-discard fixture asserts `?` typechecks, not its runtime outcome
+    let _: Result[Int, String] = propagation_impl("42");
+}
+
+// ── If-expression (as expression, not statement) ──────────────────────────────
+
+test fn if_expr() -> Unit {
+    let n: Int = 5;
+    let _: String = if n > 0 { "positive" } else { "non-positive" };
+}
+
+// ── Match expression ──────────────────────────────────────────────────────────
+
+test fn match_expr() -> Unit {
+    let opt: Option[Int] = Some(42);
+    let _: Int = match opt {
         Some(v) => v,
         None => 0,
-    }
+    };
 }
 
-// Nested field access
-fn nested_access(conn: DbConn) -> String {
-    conn.config.host
+// ── Nested field access ───────────────────────────────────────────────────────
+
+test fn nested_access() -> Unit {
+    let conn: DbConn = DbConn { config: DbConfig { host: "localhost" } };
+    let _: String = conn.config.host;
 }
 
-// List literal
-fn list_literal() -> List[Int] {
-    [1, 2, 3, 4, 5]
+// ── List literal ──────────────────────────────────────────────────────────────
+
+test fn list_literal() -> Unit {
+    let _: List[Int] = [1, 2, 3, 4, 5];
 }
 
-// Struct construction
-fn struct_construction() -> Point {
-    Point { x: 1, y: 2 }
+// ── Struct construction ───────────────────────────────────────────────────────
+
+test fn struct_construction() -> Unit {
+    let _: Point = Point { x: 1, y: 2 };
 }
 
-// Security-flow operations
-fn security_ops(raw: Tainted[String]) -> String {
-    let clean: String = relabel trust(raw, "VALIDATED");
-    clean
+// ── Security-flow operations ──────────────────────────────────────────────────
+
+test fn security_ops() -> Unit {
+    // Tainted[T] has no user constructor; assert the helper's signature instead.
+    let _: fn(Tainted[String]) -> String = security_ops_impl;
 }
 
-fn declassify_op(secret: Secret[Data]) -> Data {
-    relabel release(secret, "AUTHORIZED")
+test fn declassify_op() -> Unit {
+    // Secret[T] can be constructed in-source via `relabel classify`.
+    let secret: Secret[Int] = relabel classify(42, "CLASSIFY-EXPR-001");
+    let _: Int = relabel release(secret, "AUTHORIZED-EXPR-001");
 }

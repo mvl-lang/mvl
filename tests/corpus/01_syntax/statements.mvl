@@ -1,76 +1,79 @@
 // Corpus: MVL statement forms
 
-fn example_let() -> Int {
-    let x: Int     = 42;
-    let count: ref Int = 0;
-    let y: Int     = 99;
-    return x;
+test fn example_let() -> Unit {
+    let _x: Int        = 42;
+    let _count: ref Int = 0;
+    let _y: Int        = 99;
 }
 
-fn example_assign() -> Int {
+test fn example_assign() -> Unit {
     let n: ref Int = 0;
     n = 5;
-    return n;
+    let _: Int = n;
 }
 
-fn example_if_else(flag: Bool) -> Int {
-    if flag {
-        return 1;
-    } else {
-        return 0;
-    }
+test fn example_if_else() -> Unit {
+    let flag: Bool = true;
+    let _: Int = if flag { 1 } else { 0 };
 }
 
-fn example_if_else_if(n: Int) -> String {
-    if n > 0 {
-        return "positive";
+test fn example_if_else_if() -> Unit {
+    let n: Int = 5;
+    let _: String = if n > 0 {
+        "positive"
     } else if n < 0 {
-        return "negative";
+        "negative"
     } else {
-        return "zero";
-    }
+        "zero"
+    };
 }
 
-fn example_match_option(opt: Option[Int]) -> Int {
-    match opt {
+test fn example_match_option() -> Unit {
+    let opt: Option[Int] = Some(42);
+    let _: Int = match opt {
         Some(v) => v,
         None => 0,
-    }
+    };
 }
 
-fn example_match_result(res: Result[Int, String]) -> Int {
-    match res {
+test fn example_match_result() -> Unit {
+    let res: Result[Int, String] = Ok(42);
+    let _: Int = match res {
         Ok(v) => v,
-        Err(e) => -1,
-    }
+        Err(_e) => -1,
+    };
 }
 
-fn example_match_literal(n: Int) -> Bool {
-    match n {
+test fn example_match_literal() -> Unit {
+    let n: Int = 0;
+    let _: Bool = match n {
         0 => false,
         _ => true,
-    }
+    };
 }
 
-fn example_for(items: List[Int]) -> Int {
+test fn example_for() -> Unit {
+    let items: List[Int] = [1, 2, 3];
     let sum: ref Int = 0;
     for item in items {
         sum = sum + item;
     }
-    return sum;
+    let _: Int = sum;
 }
 
-partial fn example_while(ref n: Int) -> Int {
+test partial fn example_while() -> Unit {
+    let n: ref Int = 3;
     while n > 0 {
         n = n - 1;
     }
-    return n;
+    let _: Int = n;
 }
 
-fn example_return_unit() -> Unit {
+test fn example_return_unit() -> Unit {
     return;
 }
 
-fn example_expr_stmt(n: Int) -> Unit ! Console {
+test fn example_expr_stmt() -> Unit ! Console {
+    let n: Int = 5;
     println(format("{}", [n.to_string()]));
 }
