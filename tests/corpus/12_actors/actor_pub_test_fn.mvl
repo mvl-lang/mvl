@@ -40,10 +40,13 @@ actor Registry {
     }
 }
 
+/// Spawn a fresh Counter actor — exercises the `actor X { }` constructor
+/// as a Spawn primitive (see issue #1636).
 pub total fn new_counter() -> Counter ! Spawn {
     actor Counter { count: 0 }
 }
 
+/// Spawn a fresh Registry actor.
 pub total fn new_registry() -> Registry ! Spawn {
     actor Registry { entries: Map[String, Int]::new() }
 }

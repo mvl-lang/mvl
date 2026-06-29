@@ -15,7 +15,10 @@
 // ── Secret condition → implicit flow through println ─────────────────────────
 
 // Declare println/print with effects so IFC checker works without stdlib prelude.
+/// Stub Console sink — declared so the IFC checker classifies callers correctly.
+/// Body is empty: the declaration itself IS the contract for this fixture.
 pub total fn println(msg: String) -> Unit ! Console { }
+/// Stub Console sink — see println above.
 pub total fn print(msg: String) -> Unit ! Console { }
 
 fn check_secret_flag(flag: Secret[Bool]) -> Unit ! Console {
