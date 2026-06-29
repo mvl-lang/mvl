@@ -1,8 +1,14 @@
-use std.regex.{Regex, RegexError, compile, find}
+use std.regex.{Regex, Match, RegexError, compile, find}
+
+/// Returns the first digit run via an explicit `Match` binding — proves that
+/// the result of `find` can be named with its public type.
 fn first_digit_run(input: String) -> Result[String, RegexError] {
     let re: Regex = compile(r"\d+")?;
     match find(re, input) {
-        Some(m) => Ok(m.text),
+        Some(m) => {
+            let hit: Match = m;
+            Ok(hit.text)
+        },
         None => Ok("(none)"),
     }
 }

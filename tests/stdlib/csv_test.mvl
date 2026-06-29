@@ -4,8 +4,35 @@
 // CSV strings; parse_rows round-trips them back; error cases return Err.
 
 use std.csv.{
-    CsvError, CsvOptions, parse_rows, parse_rows_with, parse_with_headers, encode_rows, encode_rows_with, encode_with_headers
+    CsvError, CsvOptions, CsvWithHeaders, default_options,
+    parse_rows, parse_rows_with, parse_with_headers,
+    encode_rows, encode_rows_with, encode_with_headers,
 }
+
+// ── default_options exposes RFC-4180-style defaults ───────────────────────────
+
+test fn default_options_uses_comma_quote_and_header() -> Unit {
+    let opts: CsvOptions = default_options();
+    assert_eq(opts.delimiter, ",");
+    assert_eq(opts.quote, "\"");
+    assert_eq(opts.has_header, true);
+}
+
+// ── parse_with_headers returns a typed CsvWithHeaders struct ──────────────────
+
+test fn parse_with_headers_returns_typed_struct() -> Unit {
+    // Bind explicitly as CsvWithHeaders so the public struct shape (headers +
+    // rows) is exercised by name, not just inferred at the call site.
+    let result: Result[CsvWithHeaders, CsvError] = parse_with_headers("a,b\n1,2\n3,4\n");
+    match result {
+        Ok(parsed) => {
+            assert_eq(parsed.headers.len(), 2);
+            assert_eq(parsed.rows.len(), 2);
+        },
+        Err(_) => assert_eq(true, false),
+    }
+}
+
 // ── encode: basic ─────────────────────────────────────────────────────────────
 
 test fn encode_empty_rows() -> Unit {

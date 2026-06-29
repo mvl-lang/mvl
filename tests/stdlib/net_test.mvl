@@ -7,7 +7,36 @@
 // Run with:  mvl test tests/stdlib/
 
 use std.net.{
-    TcpListener, NetError, tcp_listen, tcp_listener_port, tcp_close_listener, tcp_connect, tcp_close_stream
+    TcpListener, TcpStream, NetError,
+    tcp_listen, tcp_listener_port, tcp_close_listener, tcp_connect, tcp_close_stream,
+}
+
+// ── tcp_connect returns a typed TcpStream on success ──────────────────────
+//
+// Exercises the `TcpStream` public type by binding it explicitly. Same shape
+// as the other tests but with an Ok-path connect to a live listener.
+
+test fn tcp_connect_to_live_listener_returns_typed_stream() -> Unit ! Net {
+    let l: TcpListener = match tcp_listen("127.0.0.1", 0) {
+        Ok(li) => li,
+        Err(_) => { assert(false); return },
+    };
+    let port: Int = match tcp_listener_port(l) {
+        Ok(p) => p,
+        Err(_) => { tcp_close_listener(l); assert(false); return },
+    };
+    match tcp_connect("127.0.0.1", port) {
+        Ok(s) => {
+            let stream: TcpStream = s;
+            tcp_close_stream(stream);
+            tcp_close_listener(l);
+            assert(true)
+        },
+        Err(_) => {
+            tcp_close_listener(l);
+            assert(false)
+        },
+    }
 }
 // ── happy path ────────────────────────────────────────────────────────────
 
