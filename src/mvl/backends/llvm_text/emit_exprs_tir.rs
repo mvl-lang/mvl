@@ -1897,13 +1897,38 @@ impl TextEmitter {
         name: &str,
         fields: &[(String, TirExpr)],
     ) -> Result<Option<String>, String> {
-        // Named-field enum variant construction handled in a subsequent commit
-        // (needs emit_enum_variant_constructor_tir).
+        // Named-field enum variant construction: `Shape::Circle { radius: 2.0 }`
+        // (#1357). Mirror of `emit_construct` — reorder the named fields into
+        // declaration order, then delegate to `emit_enum_variant_constructor_tir`
+        // which handles the discriminant + payload-slot allocation.
         if let Some((type_name, _)) = name.split_once("::") {
             if self.module.enum_variants.contains_key(type_name) {
-                return Err(format!(
-                    "emit_construct_tir: enum variant `{name}` not yet ported"
-                ));
+                let disc = self.pattern_discriminant(name).unwrap_or(0);
+                let ordered_names = self
+                    .module
+                    .enum_struct_variant_field_names
+                    .get(name)
+                    .cloned()
+                    .unwrap_or_default();
+                let args: Vec<TirExpr> = if ordered_names.is_empty() {
+                    fields.iter().map(|(_, e)| e.clone()).collect()
+                } else {
+                    ordered_names
+                        .iter()
+                        .map(|fname| {
+                            fields
+                                .iter()
+                                .find(|(n, _)| n == fname)
+                                .map(|(_, e)| e.clone())
+                                .unwrap_or_else(|| TirExpr {
+                                    kind: TirExprKind::Var("undef".to_string()),
+                                    ty: crate::mvl::checker::types::Ty::Unknown,
+                                    span: crate::mvl::parser::lexer::Span::default(),
+                                })
+                        })
+                        .collect()
+                };
+                return self.emit_enum_variant_constructor_tir(name, disc, &args);
             }
         }
 
