@@ -3017,11 +3017,41 @@ impl TextEmitter {
                     Some(v) => v,
                     None => return Ok(None),
                 };
-                Ok(Some(self.emit_c_call_simple(
-                    "slice",
-                    &val,
-                    &[("i64", &start), ("i64", &end)],
-                )))
+                // `slice` has no `LLVM_DISPATCH` row — emit `_mvl_list_slice`
+                // inline via the shared helper (matches the AST emit_method_call
+                // path used by `slice` / `take` / `skip`).
+                Ok(Some(self.emit_list_slice_call(&val, &start, &end)))
+            }
+            ("take", "ptr")
+                if args.len() == 1
+                    && matches!(
+                        unwrap_labels(&receiver.ty),
+                        Ty::List(_) | Ty::Array(_, _) | Ty::Set(_)
+                    ) =>
+            {
+                let n = match self.emit_expr_tir(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                Ok(Some(self.emit_list_slice_call(&val, "0", &n)))
+            }
+            ("skip", "ptr")
+                if args.len() == 1
+                    && matches!(
+                        unwrap_labels(&receiver.ty),
+                        Ty::List(_) | Ty::Array(_, _) | Ty::Set(_)
+                    ) =>
+            {
+                let n = match self.emit_expr_tir(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                self.ensure_extern("declare i64 @_mvl_array_len(ptr)");
+                let len_reg = self.next_reg();
+                self.push_instr(&format!(
+                    "{len_reg} = call i64 @_mvl_array_len(ptr {val})"
+                ));
+                Ok(Some(self.emit_list_slice_call(&val, &n, &len_reg)))
             }
             ("concat", "ptr") if args.len() == 1 => {
                 let other = match self.emit_expr_tir(&args[0])? {
