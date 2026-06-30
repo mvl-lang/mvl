@@ -196,44 +196,8 @@ impl TextEmitter {
         }
     }
 
-    /// Returns true if any variant of `enum_name` has tuple payload fields (#1200).
-    ///
-    /// Payload enums lower to `{ i8, ptr }`; pure unit enums stay as `i64` discriminants.
-    pub(super) fn enum_has_payloads(&self, enum_name: &str) -> bool {
-        self.module
-            .enum_variant_fields
-            .get(enum_name)
-            .is_some_and(|vs| vs.iter().any(|f| !f.is_empty()))
-    }
-
-    /// Split a qualified variant name `"Type::Variant"` into `(type, variant)`.
-    pub(super) fn split_qualified(name: &str) -> Option<(&str, &str)> {
-        let pos = name.find("::")?;
-        Some((&name[..pos], &name[pos + 2..]))
-    }
-
-    /// Look up the tuple payload types for `Type::Variant` (#1200).
-    pub(super) fn variant_payload_types(&self, qualified_name: &str) -> Option<&[TypeExpr]> {
-        let (type_name, variant_name) = Self::split_qualified(qualified_name)?;
-        let names = self.module.enum_variants.get(type_name)?;
-        let idx = names.iter().position(|n| n == variant_name)?;
-        let fields = self.module.enum_variant_fields.get(type_name)?;
-        fields.get(idx).map(|v| v.as_slice())
-    }
-
-    /// Resolve a pattern name like "Shape::Circle" to its discriminant i64.
-    pub(super) fn pattern_discriminant(&self, name: &str) -> Option<i64> {
-        if let Some(pos) = name.find("::") {
-            let type_name = &name[..pos];
-            let variant_name = &name[pos + 2..];
-            if let Some(variants) = self.module.enum_variants.get(type_name) {
-                if let Some(idx) = variants.iter().position(|v| v == variant_name) {
-                    return Some(idx as i64);
-                }
-            }
-        }
-        None
-    }
+    // `enum_has_payloads`, `split_qualified`, `variant_payload_types`,
+    // `pattern_discriminant` live in `emit_helpers.rs` (#1612 PR 2 prep).
 
     // ── Expression emission ───────────────────────────────────────────────
 
@@ -407,26 +371,7 @@ impl TextEmitter {
         (f.to_string(), t.to_string())
     }
 
-    // ── Literal emission ──────────────────────────────────────────────────
-
-    pub(super) fn emit_literal(&mut self, lit: &Literal) -> Result<Option<String>, String> {
-        match lit {
-            Literal::Integer(n) => Ok(Some(format!("{n}"))),
-            Literal::Float(f) => Ok(Some(if f.fract() == 0.0 {
-                format!("{f:.1}")
-            } else {
-                format!("{f}")
-            })),
-            Literal::Bool(b) => Ok(Some(if *b {
-                "true".to_string()
-            } else {
-                "false".to_string()
-            })),
-            Literal::Str(s) => Ok(Some(self.emit_string_literal(s))),
-            Literal::Unit => Ok(None),
-            Literal::Char(c) => Ok(Some(format!("{}", *c as u32))),
-        }
-    }
+    // `emit_literal` lives in `emit_helpers.rs` (#1612 PR 2 prep).
 
     // ── Binary operators ──────────────────────────────────────────────────
 

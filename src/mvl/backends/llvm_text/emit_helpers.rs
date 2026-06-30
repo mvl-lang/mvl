@@ -11,7 +11,7 @@
 //! are AST-shape-agnostic and survive the deletion.
 
 use crate::mvl::checker::types::Ty;
-use crate::mvl::parser::ast::TypeExpr;
+use crate::mvl::parser::ast::{Literal, TypeExpr};
 
 use super::{HeapKind, TextEmitter, RESULT_LLVM_TY};
 
@@ -600,5 +600,163 @@ impl TextEmitter {
         self.push_instr(&format!("store ptr null, ptr {env_field}"));
 
         Ok(Some(closure_alloca))
+    }
+
+    // ── Enum variant lookup helpers (#1200) ────────────────────────────────
+
+    /// Returns true if any variant of `enum_name` has tuple payload fields.
+    ///
+    /// Payload enums lower to `{ i8, ptr }`; pure unit enums stay as `i64`
+    /// discriminants.
+    pub(super) fn enum_has_payloads(&self, enum_name: &str) -> bool {
+        self.module
+            .enum_variant_fields
+            .get(enum_name)
+            .is_some_and(|vs| vs.iter().any(|f| !f.is_empty()))
+    }
+
+    /// Split a qualified variant name `"Type::Variant"` into `(type, variant)`.
+    pub(super) fn split_qualified(name: &str) -> Option<(&str, &str)> {
+        let pos = name.find("::")?;
+        Some((&name[..pos], &name[pos + 2..]))
+    }
+
+    /// Look up the tuple payload types for `Type::Variant` (#1200).
+    pub(super) fn variant_payload_types(&self, qualified_name: &str) -> Option<&[TypeExpr]> {
+        let (type_name, variant_name) = Self::split_qualified(qualified_name)?;
+        let names = self.module.enum_variants.get(type_name)?;
+        let idx = names.iter().position(|n| n == variant_name)?;
+        let fields = self.module.enum_variant_fields.get(type_name)?;
+        fields.get(idx).map(|v| v.as_slice())
+    }
+
+    /// Resolve a pattern name like "Shape::Circle" to its discriminant i64.
+    pub(super) fn pattern_discriminant(&self, name: &str) -> Option<i64> {
+        if let Some(pos) = name.find("::") {
+            let type_name = &name[..pos];
+            let variant_name = &name[pos + 2..];
+            if let Some(variants) = self.module.enum_variants.get(type_name) {
+                if let Some(idx) = variants.iter().position(|v| v == variant_name) {
+                    return Some(idx as i64);
+                }
+            }
+        }
+        None
+    }
+
+    // ── Literal emission ───────────────────────────────────────────────────
+
+    /// Emit an MVL literal — returns the SSA value (or `None` for `Unit`).
+    /// `Literal` is shared between AST and TIR.
+    pub(super) fn emit_literal(&mut self, lit: &Literal) -> Result<Option<String>, String> {
+        match lit {
+            Literal::Integer(n) => Ok(Some(format!("{n}"))),
+            Literal::Float(f) => Ok(Some(if f.fract() == 0.0 {
+                format!("{f:.1}")
+            } else {
+                format!("{f}")
+            })),
+            Literal::Bool(b) => Ok(Some(if *b {
+                "true".to_string()
+            } else {
+                "false".to_string()
+            })),
+            Literal::Str(s) => Ok(Some(self.emit_string_literal(s))),
+            Literal::Unit => Ok(None),
+            Literal::Char(c) => Ok(Some(format!("{}", *c as u32))),
+        }
+    }
+
+    // ── Mangling helpers ───────────────────────────────────────────────────
+
+    /// Sanitize a string segment for use in LLVM IR identifiers.
+    pub(super) fn mangle_segment(s: &str) -> String {
+        s.chars()
+            .map(|c| {
+                if c.is_alphanumeric() || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect()
+    }
+
+    /// Mangle a generic function name with concrete types: `identity` + [Int] → `identity__Int`.
+    pub(super) fn mangle_generic(name: &str, concrete: &[TypeExpr]) -> String {
+        let suffix: Vec<String> = concrete
+            .iter()
+            .map(|ty| match ty {
+                TypeExpr::Base { name, .. } => Self::mangle_segment(name),
+                TypeExpr::Option { inner, .. } => {
+                    format!(
+                        "Option_{}",
+                        Self::mangle_segment(&Self::mangle_type_name(inner))
+                    )
+                }
+                TypeExpr::Result { ok, err, .. } => {
+                    format!(
+                        "Result_{}_{}",
+                        Self::mangle_segment(&Self::mangle_type_name(ok)),
+                        Self::mangle_segment(&Self::mangle_type_name(err))
+                    )
+                }
+                _ => "T".into(),
+            })
+            .collect();
+        format!("{}__{}", Self::mangle_segment(name), suffix.join("_"))
+    }
+
+    /// Extract a human-readable type name for mangling purposes.
+    pub(super) fn mangle_type_name(ty: &TypeExpr) -> String {
+        match ty {
+            TypeExpr::Base { name, .. } => name.clone(),
+            TypeExpr::Option { inner, .. } => format!("Option_{}", Self::mangle_type_name(inner)),
+            TypeExpr::Result { ok, err, .. } => {
+                format!(
+                    "Result_{}_{}",
+                    Self::mangle_type_name(ok),
+                    Self::mangle_type_name(err)
+                )
+            }
+            _ => "T".into(),
+        }
+    }
+
+    // ── String → numeric parse (Result-wrapped) ────────────────────────────
+
+    /// Emit `s.parse_int()` or `s.parse_float()` — calls the C-ABI parser and
+    /// wraps the result in a `{ i8, ptr }` Result.
+    ///
+    /// `ok_llvm_ty` is the LLVM type of the success value (`"i64"` or `"double"`).
+    pub(super) fn emit_str_parse(
+        &mut self,
+        val: &str,
+        ok_llvm_ty: &str,
+        c_sym: &str,
+    ) -> Result<Option<String>, String> {
+        let ok_slot = self.next_reg();
+        self.push_instr(&format!("{ok_slot} = alloca {ok_llvm_ty}"));
+        let err_slot = self.next_reg();
+        self.push_instr(&format!("{err_slot} = alloca ptr"));
+        self.ensure_extern(&format!("declare i8 @{c_sym}(ptr, ptr, ptr)"));
+        let disc = self.next_reg();
+        self.push_instr(&format!(
+            "{disc} = call i8 @{c_sym}(ptr {val}, ptr {ok_slot}, ptr {err_slot})"
+        ));
+        self.fn_ctx.reg_types.insert(disc.clone(), "i8".into());
+        // Select the correct payload pointer based on discriminant.
+        let disc_is_ok = self.next_reg();
+        self.push_instr(&format!("{disc_is_ok} = icmp eq i8 {disc}, 0"));
+        self.fn_ctx
+            .reg_types
+            .insert(disc_is_ok.clone(), "i1".into());
+        let payload = self.next_reg();
+        self.push_instr(&format!(
+            "{payload} = select i1 {disc_is_ok}, ptr {ok_slot}, ptr {err_slot}"
+        ));
+        self.fn_ctx.reg_types.insert(payload.clone(), "ptr".into());
+        let r1 = self.wrap_result_pair(&disc, &payload);
+        Ok(Some(r1))
     }
 }

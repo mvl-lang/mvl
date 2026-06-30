@@ -79,59 +79,8 @@ impl TextEmitter {
         }
     }
 
-    /// Sanitize a string segment for use in LLVM IR identifiers.
-    pub(super) fn mangle_segment(s: &str) -> String {
-        s.chars()
-            .map(|c| {
-                if c.is_alphanumeric() || c == '_' {
-                    c
-                } else {
-                    '_'
-                }
-            })
-            .collect()
-    }
-
-    /// Mangle a generic function name with concrete types: `identity` + [Int] → `identity__Int`.
-    pub(super) fn mangle_generic(name: &str, concrete: &[TypeExpr]) -> String {
-        let suffix: Vec<String> = concrete
-            .iter()
-            .map(|ty| match ty {
-                TypeExpr::Base { name, .. } => Self::mangle_segment(name),
-                TypeExpr::Option { inner, .. } => {
-                    format!(
-                        "Option_{}",
-                        Self::mangle_segment(&Self::mangle_type_name(inner))
-                    )
-                }
-                TypeExpr::Result { ok, err, .. } => {
-                    format!(
-                        "Result_{}_{}",
-                        Self::mangle_segment(&Self::mangle_type_name(ok)),
-                        Self::mangle_segment(&Self::mangle_type_name(err))
-                    )
-                }
-                _ => "T".into(),
-            })
-            .collect();
-        format!("{}__{}", Self::mangle_segment(name), suffix.join("_"))
-    }
-
-    /// Extract a human-readable type name for mangling purposes.
-    pub(super) fn mangle_type_name(ty: &TypeExpr) -> String {
-        match ty {
-            TypeExpr::Base { name, .. } => name.clone(),
-            TypeExpr::Option { inner, .. } => format!("Option_{}", Self::mangle_type_name(inner)),
-            TypeExpr::Result { ok, err, .. } => {
-                format!(
-                    "Result_{}_{}",
-                    Self::mangle_type_name(ok),
-                    Self::mangle_type_name(err)
-                )
-            }
-            _ => "T".into(),
-        }
-    }
+    // `mangle_segment`, `mangle_generic`, `mangle_type_name` live in
+    // `emit_helpers.rs` (#1612 PR 2 prep).
 
     /// Emit a call to a generic function, enqueuing the monomorphized version.
     pub(super) fn emit_monomorphized_call(
@@ -237,37 +186,7 @@ impl TextEmitter {
     /// Emit `s.parse_int()` or `s.parse_float()` — calls the C-ABI parser and
     /// wraps the result in a `{ i8, ptr }` Result.
     ///
-    /// `ok_llvm_ty` is the LLVM type of the success value (`"i64"` or `"double"`).
-    pub(super) fn emit_str_parse(
-        &mut self,
-        val: &str,
-        ok_llvm_ty: &str,
-        c_sym: &str,
-    ) -> Result<Option<String>, String> {
-        let ok_slot = self.next_reg();
-        self.push_instr(&format!("{ok_slot} = alloca {ok_llvm_ty}"));
-        let err_slot = self.next_reg();
-        self.push_instr(&format!("{err_slot} = alloca ptr"));
-        self.ensure_extern(&format!("declare i8 @{c_sym}(ptr, ptr, ptr)"));
-        let disc = self.next_reg();
-        self.push_instr(&format!(
-            "{disc} = call i8 @{c_sym}(ptr {val}, ptr {ok_slot}, ptr {err_slot})"
-        ));
-        self.fn_ctx.reg_types.insert(disc.clone(), "i8".into());
-        // Select the correct payload pointer based on discriminant.
-        let disc_is_ok = self.next_reg();
-        self.push_instr(&format!("{disc_is_ok} = icmp eq i8 {disc}, 0"));
-        self.fn_ctx
-            .reg_types
-            .insert(disc_is_ok.clone(), "i1".into());
-        let payload = self.next_reg();
-        self.push_instr(&format!(
-            "{payload} = select i1 {disc_is_ok}, ptr {ok_slot}, ptr {err_slot}"
-        ));
-        self.fn_ctx.reg_types.insert(payload.clone(), "ptr".into());
-        let r1 = self.wrap_result_pair(&disc, &payload);
-        Ok(Some(r1))
-    }
+    // `emit_str_parse` lives in `emit_helpers.rs` (#1612 PR 2 prep).
 
     /// Emit a `match` where at least one arm has `Pattern::Ok` / `Pattern::Err`.
     pub(super) fn emit_result_match(
