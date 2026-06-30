@@ -15,7 +15,10 @@ use super::{RefLocal, TextEmitter, MAIN_RET};
 ///
 /// Returns `None` for compound types we don't yet need to round-trip
 /// (e.g. `Ty::Fn`, `Ty::Session`).
-fn ty_to_type_expr(ty: &crate::mvl::checker::types::Ty) -> Option<TypeExpr> {
+///
+/// `pub(super)` so the parallel TIR walker (#1612) can reuse this at the
+/// Ty → TypeExpr boundary without duplicating the conversion.
+pub(super) fn ty_to_type_expr(ty: &crate::mvl::checker::types::Ty) -> Option<TypeExpr> {
     use crate::mvl::checker::types::Ty;
     let base = |name: &str, args: Vec<TypeExpr>| TypeExpr::Base {
         name: name.into(),
@@ -51,6 +54,32 @@ fn ty_to_type_expr(ty: &crate::mvl::checker::types::Ty) -> Option<TypeExpr> {
             span: Span::default(),
         },
         Ty::Named(name, args) => base(name, args.iter().filter_map(ty_to_type_expr).collect()),
+        // IFC labels (`Secret[T]`, `Tainted[T]`, user-declared labels). The label
+        // is erased at codegen; only the underlying `T` matters for LLVM
+        // emission. Missing this arm before #1612 task 2d caused builtins
+        // returning `Secret[List[Int]]` (e.g. `crypto_random_bytes`) to be
+        // registered with TypeExpr::Unit → emitted as `call void` with the
+        // result lost.
+        Ty::Labeled(label, inner) => TypeExpr::Labeled {
+            label: label.clone(),
+            inner: Box::new(ty_to_type_expr(inner)?),
+            span: Span::default(),
+        },
+        // Refinements are spec-only and erased before codegen — drop the
+        // predicate and surface the underlying type so callers see the
+        // correct LLVM shape.
+        Ty::Refined(inner, _pred) => ty_to_type_expr(inner)?,
+        Ty::Ptr(inner) => base("Ptr", vec![ty_to_type_expr(inner)?]),
+        // Fn types — required for `type Dispatcher = fn(...) -> ...` aliases
+        // to be registered in `module.fn_aliases`, which is how the emitter
+        // dispatches `d(req)` to an indirect call through a fn-pointer local
+        // instead of a direct named call (#1467 / #1612 task 2d).
+        Ty::Fn(params, ret, effects, _totality) => TypeExpr::Fn {
+            params: params.iter().filter_map(ty_to_type_expr).collect(),
+            ret: Box::new(ty_to_type_expr(ret)?),
+            effects: effects.clone(),
+            span: Span::default(),
+        },
         _ => return None,
     })
 }
@@ -195,6 +224,15 @@ impl TextEmitter {
                                 elem_ty: elem_ty.clone(),
                             },
                         );
+                        // Mirror the non-ref arm: populate local_mvl_types so
+                        // dispatch helpers like `mvl_receiver_kind` can resolve
+                        // `pkg_parts.concat(...)` to List::concat instead of
+                        // silently falling through to String::concat (#1612
+                        // task 2d, Kind A). Surfaced by the corpus IR-parity
+                        // harness on runtime_manifest_* / process_links_llvm.
+                        self.fn_ctx
+                            .local_mvl_types
+                            .insert(name.clone(), elem_ty.clone());
                     }
                 } else if let (Some(v), Pattern::Ident(name, _)) = (val, pattern) {
                     // Only set reg_types if the register doesn't already have

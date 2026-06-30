@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use super::context::{FnCtx, ModuleCtx, MonoQueue};
 use super::BuiltinSymbolInfo;
 use crate::mvl::checker::types::Ty;
+use crate::mvl::ir::TirProgram;
 use crate::mvl::parser::ast::{Decl, FnDecl, Program, Stmt, TypeBody, TypeExpr, VariantFields};
 use crate::mvl::parser::lexer::Span;
 
@@ -94,6 +95,41 @@ impl LlvmTextCompiler {
         emitter.emit_program(prog)?;
         Ok(emitter.finish())
     }
+
+    /// TIR-walking entry point (#1612, Phase 3b PR 1).
+    ///
+    /// Parallel to [`Self::compile_to_ir_with_prelude`] but consumes already-lowered
+    /// [`TirProgram`]s. This is the destination implementation for the MVL self-hosting
+    /// port — the emitter does not need to walk AST at all.
+    ///
+    /// During the parallel-tree migration, this path is used by the
+    /// `cross_backend_tir` test target to diff its output against the AST path
+    /// across the corpus.
+    pub fn compile_to_ir_tir(
+        &self,
+        prog: &TirProgram,
+        module_name: &str,
+    ) -> Result<String, String> {
+        self.compile_to_ir_with_prelude_tir(&[], prog, module_name)
+    }
+
+    /// Like [`Self::compile_to_ir_with_prelude`] but consumes [`TirProgram`]s.
+    pub fn compile_to_ir_with_prelude_tir(
+        &self,
+        prelude: &[TirProgram],
+        prog: &TirProgram,
+        module_name: &str,
+    ) -> Result<String, String> {
+        let mut emitter =
+            TextEmitter::new_with_builtins(module_name, &self.target_triple, &self.builtin_symbols);
+        emitter.set_expr_types(self.expr_types.clone());
+        for p in prelude {
+            let stripped = strip_prelude_extension_methods_tir(p);
+            emitter.emit_program_tir(&stripped)?;
+        }
+        emitter.emit_program_tir(prog)?;
+        Ok(emitter.finish())
+    }
 }
 
 impl Default for LlvmTextCompiler {
@@ -158,6 +194,43 @@ fn strip_prelude_extension_methods(prog: &Program) -> Program {
         true
     });
     out
+}
+
+/// TIR variant of [`strip_prelude_extension_methods`] — walks `TirFn`s.
+///
+/// Mirrors the filtering rules of the AST version: drops non-builtin extension
+/// methods, stdlib functions replaced by C-ABI dispatch, and non-builtin prelude
+/// functions returning `Option`/`Result`.
+fn strip_prelude_extension_methods_tir(prog: &TirProgram) -> TirProgram {
+    let mut out = prog.clone();
+    out.fns.retain(|f| {
+        if f.is_builtin {
+            return true;
+        }
+        if f.receiver_type.is_some() {
+            return false;
+        }
+        if STDLIB_REPLACED_BY_DISPATCH.contains(&f.original_name.as_str()) {
+            return false;
+        }
+        if return_type_needs_option_abi_ty(&f.ret_ty) {
+            return false;
+        }
+        true
+    });
+    out
+}
+
+/// Return `true` if `ty` is `Option[_]` or `Result[_, _]` (TIR-side variant
+/// of [`return_type_needs_option_abi`]).
+fn return_type_needs_option_abi_ty(ty: &Ty) -> bool {
+    match ty {
+        Ty::Option(_) | Ty::Result(_, _) => true,
+        Ty::Ref(_, inner) | Ty::Labeled(_, inner) | Ty::Refined(inner, _) => {
+            return_type_needs_option_abi_ty(inner)
+        }
+        _ => false,
+    }
 }
 
 /// Return `true` if `ty` is `Option[_]` or `Result[_, _]` (possibly wrapped
@@ -502,7 +575,12 @@ impl TextEmitter {
         // `actor_emitted` std.actors actors would be emitted N times (#1610).
         if !self.module.actor_decls.is_empty() {
             self.ensure_actor_runtime_externs();
-            let actor_names: Vec<String> = self.module.actor_decls.keys().cloned().collect();
+            // Sort keys for deterministic emission order — HashMap iteration
+            // order differs per HashMap instance/seed, which surfaced as a
+            // false-positive divergence in the corpus IR-parity harness
+            // (#1612 task 2d).
+            let mut actor_names: Vec<String> = self.module.actor_decls.keys().cloned().collect();
+            actor_names.sort();
             for name in actor_names {
                 if !self.module.actor_emitted.insert(name.clone()) {
                     continue;
@@ -678,6 +756,30 @@ mod emit_method_call;
 
 #[path = "emit_closures.rs"]
 mod emit_closures;
+
+// ── TIR-walking parallel implementation (#1612, Phase 3b PR 1) ────────────────
+//
+// These submodules implement a parallel emitter that walks [`TirProgram`] instead
+// of [`Program`]. Built leaf-first (see ADR-0050) so each commit compiles. When
+// IR parity is reached across the corpus, the AST modules above will be deleted.
+
+#[path = "emit_program_tir.rs"]
+mod emit_program_tir;
+
+#[path = "emit_exprs_tir.rs"]
+mod emit_exprs_tir;
+
+#[path = "emit_stmts_tir.rs"]
+mod emit_stmts_tir;
+
+#[path = "emit_closures_tir.rs"]
+mod emit_closures_tir;
+
+#[path = "emit_actors_tir.rs"]
+mod emit_actors_tir;
+
+#[path = "emit_mono_tir.rs"]
+mod emit_mono_tir;
 
 // ── Target triple ─────────────────────────────────────────────────────────────
 
