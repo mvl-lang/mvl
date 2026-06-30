@@ -579,8 +579,7 @@ impl TextEmitter {
             // order differs per HashMap instance/seed, which surfaced as a
             // false-positive divergence in the corpus IR-parity harness
             // (#1612 task 2d).
-            let mut actor_names: Vec<String> =
-                self.module.actor_decls.keys().cloned().collect();
+            let mut actor_names: Vec<String> = self.module.actor_decls.keys().cloned().collect();
             actor_names.sort();
             for name in actor_names {
                 if !self.module.actor_emitted.insert(name.clone()) {

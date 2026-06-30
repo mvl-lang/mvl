@@ -117,9 +117,7 @@ impl TextEmitter {
                         let ssa = format!("%{}", p.name);
                         this.fn_ctx.locals.insert(p.name.clone(), ssa.clone());
                         this.fn_ctx.reg_types.insert(ssa, ty_str);
-                        this.fn_ctx
-                            .local_mvl_types
-                            .insert(p.name.clone(), p_te);
+                        this.fn_ctx.local_mvl_types.insert(p.name.clone(), p_te);
                     }
                 }
 
@@ -155,12 +153,7 @@ impl TextEmitter {
             .iter()
             .find(|m| !m.is_public && m.name == "on_down")
             .cloned();
-        let pub_methods: Vec<_> = ad
-            .methods
-            .iter()
-            .filter(|m| m.is_public)
-            .cloned()
-            .collect();
+        let pub_methods: Vec<_> = ad.methods.iter().filter(|m| m.is_public).cloned().collect();
 
         let unit_ret = TypeExpr::Base {
             name: "Unit".into(),
@@ -351,9 +344,7 @@ impl TextEmitter {
                     self.push_instr(&format!(
                         "{field_ptr} = getelementptr %{state_name}, ptr {state_alloca}, i32 0, i32 {i}"
                     ));
-                    self.push_instr(&format!(
-                        "store {field_llvm_ty} {val}, ptr {field_ptr}"
-                    ));
+                    self.push_instr(&format!("store {field_llvm_ty} {val}, ptr {field_ptr}"));
                 }
             }
         }
@@ -434,12 +425,7 @@ impl TextEmitter {
             None => return Ok(None),
         };
 
-        let pub_methods: Vec<_> = ad
-            .methods
-            .iter()
-            .filter(|m| m.is_public)
-            .cloned()
-            .collect();
+        let pub_methods: Vec<_> = ad.methods.iter().filter(|m| m.is_public).cloned().collect();
         let disc = match pub_methods.iter().position(|m| m.name == method) {
             Some(d) => d,
             None => return Ok(None),
@@ -469,9 +455,7 @@ impl TextEmitter {
                 let i64_val = match arg_ty.as_str() {
                     "ptr" => {
                         let coerced = self.next_reg();
-                        self.push_instr(&format!(
-                            "{coerced} = ptrtoint ptr {val} to i64"
-                        ));
+                        self.push_instr(&format!("{coerced} = ptrtoint ptr {val} to i64"));
                         coerced
                     }
                     "i1" => {

@@ -88,9 +88,8 @@ pub(super) fn prepare_llvm_text_tir(
     let (prelude, compiler) = prepare_llvm_text(prog);
 
     // Lower entry program to TIR.
-    let entry_all_fns = mvl::mvl::passes::mono::collect_fns(
-        std::iter::once(prog).chain(prelude.iter()),
-    );
+    let entry_all_fns =
+        mvl::mvl::passes::mono::collect_fns(std::iter::once(prog).chain(prelude.iter()));
     let entry_mono =
         mvl::mvl::passes::mono::monomorphize(prog, &entry_all_fns, &compiler.expr_types);
     let entry_tir = mvl::mvl::ir::lower::lower(prog, &entry_mono, &compiler.expr_types);

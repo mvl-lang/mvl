@@ -23,24 +23,30 @@ fn none_constructor_emits_tagged_union() {
 
 #[test]
 fn option_match_emits_switch_on_discriminant() {
-    assert_tir_parity("fn unwrap_or(opt: Option[Int], default: Int) -> Int {\n\
+    assert_tir_parity(
+        "fn unwrap_or(opt: Option[Int], default: Int) -> Int {\n\
              match opt {\n\
                  Some(v) => v,\n\
                  None => default,\n\
              }\n\
-         }");
+         }",
+    );
 }
 
 #[test]
 fn map_literal_emits_map_new_and_insert() {
-    assert_tir_parity("fn main() -> Unit {\n\
+    assert_tir_parity(
+        "fn main() -> Unit {\n\
          let m: Map[String, Int] = {\"a\": 1, \"b\": 2};\n\
-         }");
+         }",
+    );
 }
 
 #[test]
 fn empty_map_emits_map_new_only() {
-    assert_tir_parity("fn main() -> Unit {\n\
+    assert_tir_parity(
+        "fn main() -> Unit {\n\
          let m: Map[String, Int] = Map::new();\n\
-         }");
+         }",
+    );
 }

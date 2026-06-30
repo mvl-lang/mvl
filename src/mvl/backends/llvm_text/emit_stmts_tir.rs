@@ -9,7 +9,9 @@
 //! also carry the fully-resolved declared `Ty` so the emitter doesn't need to
 //! re-infer types from initializers.
 
-use crate::mvl::ir::{LetKind, LValue, Pattern, TirBlock, TirElseBranch, TirExpr, TirExprKind, TirStmt};
+use crate::mvl::ir::{
+    LValue, LetKind, Pattern, TirBlock, TirElseBranch, TirExpr, TirExprKind, TirStmt,
+};
 
 use super::emit_stmts::ty_to_type_expr;
 use super::{RefLocal, TextEmitter, MAIN_RET};
@@ -81,9 +83,7 @@ impl TextEmitter {
     ) -> Result<Option<String>, String> {
         match else_ {
             None => self.emit_if_phi_tir_from_blocks(cond, then, None),
-            Some(TirElseBranch::Block(b)) => {
-                self.emit_if_phi_tir_from_blocks(cond, then, Some(b))
-            }
+            Some(TirElseBranch::Block(b)) => self.emit_if_phi_tir_from_blocks(cond, then, Some(b)),
             Some(TirElseBranch::If(nested)) => {
                 if let TirStmt::If {
                     cond: ncond,
@@ -109,24 +109,17 @@ impl TextEmitter {
                     let then_val = self.emit_block_tir(then)?;
                     let then_end = self.fn_ctx.current_bb.clone();
                     if !self.fn_ctx.terminated {
-                        self.drop_scope_locals(
-                            heap_locals_snapshot,
-                            then_val.as_deref(),
-                        );
+                        self.drop_scope_locals(heap_locals_snapshot, then_val.as_deref());
                         self.push_instr(&format!("br label %{merge_bb}"));
                     } else {
                         self.fn_ctx.heap_locals.truncate(heap_locals_snapshot);
                     }
 
                     self.start_bb(&else_bb);
-                    let else_val =
-                        self.emit_if_stmt_chain_tir(ncond, nthen, nelse.as_ref())?;
+                    let else_val = self.emit_if_stmt_chain_tir(ncond, nthen, nelse.as_ref())?;
                     let else_end = self.fn_ctx.current_bb.clone();
                     if !self.fn_ctx.terminated {
-                        self.drop_scope_locals(
-                            heap_locals_snapshot,
-                            else_val.as_deref(),
-                        );
+                        self.drop_scope_locals(heap_locals_snapshot, else_val.as_deref());
                         self.push_instr(&format!("br label %{merge_bb}"));
                     } else {
                         self.fn_ctx.heap_locals.truncate(heap_locals_snapshot);
@@ -299,10 +292,7 @@ impl TextEmitter {
                     if let Some(loc) = self.fn_ctx.ref_locals.get(name).cloned() {
                         if let Some(v) = val {
                             let ty_str = self.llvm_ty_ctx(&loc.elem_ty);
-                            self.push_instr(&format!(
-                                "store {ty_str} {v}, ptr {}",
-                                loc.ptr
-                            ));
+                            self.push_instr(&format!("store {ty_str} {v}, ptr {}", loc.ptr));
                         }
                     }
                 }
@@ -345,12 +335,13 @@ impl TextEmitter {
                 Ok(())
             }
 
-            TirStmt::While {
-                cond, body, ..
-            } => self.emit_while_tir(cond, body),
+            TirStmt::While { cond, body, .. } => self.emit_while_tir(cond, body),
 
             TirStmt::For {
-                pattern, iter, body, ..
+                pattern,
+                iter,
+                body,
+                ..
             } => self.emit_for_stmt_tir(pattern, iter, body),
 
             TirStmt::Match {
@@ -580,9 +571,7 @@ impl TextEmitter {
             "{elem_ptr} = call ptr @_mvl_array_get(ptr {arr}, i64 {cur_i})"
         ));
         let elem_val = self.next_reg();
-        self.push_instr(&format!(
-            "{elem_val} = load {elem_llvm_ty}, ptr {elem_ptr}"
-        ));
+        self.push_instr(&format!("{elem_val} = load {elem_llvm_ty}, ptr {elem_ptr}"));
         self.fn_ctx
             .reg_types
             .insert(elem_val.clone(), elem_llvm_ty.clone());

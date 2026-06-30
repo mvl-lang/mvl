@@ -46,10 +46,11 @@ pub fn lower_to_tir(prog: &Program) -> (TirProgram, LlvmTextCompiler) {
 pub fn assert_tir_parity(src: &str) {
     let prog = parse(src);
     let (tir, compiler) = lower_to_tir(&prog);
-    let ast_ir = compiler.compile_to_ir(&prog, "test").expect("AST path failed");
+    let ast_ir = compiler
+        .compile_to_ir(&prog, "test")
+        .expect("AST path failed");
     let tir_ir = compiler
         .compile_to_ir_tir(&tir, "test")
         .expect("TIR path failed");
     assert_eq!(ast_ir, tir_ir, "TIR walker output diverged from AST walker");
 }
-

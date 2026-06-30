@@ -201,19 +201,13 @@ impl TextEmitter {
     /// constructors, Box::new, stdlib C-ABI dispatch, generics, fn-alias
     /// indirect calls, and local closure calls fall through to errors and
     /// will be ported in subsequent commits.
-    fn emit_fn_call_tir(
-        &mut self,
-        name: &str,
-        args: &[TirExpr],
-    ) -> Result<Option<String>, String> {
+    fn emit_fn_call_tir(&mut self, name: &str, args: &[TirExpr]) -> Result<Option<String>, String> {
         use crate::mvl::ir::TypeExpr;
 
         // Builtins ported so far.
         match name {
             "assert" => return self.emit_assert_builtin_tir(args),
-            "println" | "print" | "eprintln" => {
-                return self.emit_println_builtin_tir(name, args)
-            }
+            "println" | "print" | "eprintln" => return self.emit_println_builtin_tir(name, args),
             "Ok" | "Err" => return self.emit_result_constructor_tir(name, args),
             "Some" => return self.emit_option_constructor_tir(args),
             "None" => return self.emit_none_constructor(),
@@ -300,9 +294,7 @@ impl TextEmitter {
                         return Ok(None);
                     } else {
                         let reg = self.next_reg();
-                        self.push_instr(&format!(
-                            "{reg} = call {llvm_ret} {fn_ptr}({args_str})"
-                        ));
+                        self.push_instr(&format!("{reg} = call {llvm_ret} {fn_ptr}({args_str})"));
                         self.fn_ctx.reg_types.insert(reg.clone(), llvm_ret);
                         return Ok(Some(reg));
                     }
@@ -353,9 +345,7 @@ impl TextEmitter {
                     return Ok(None);
                 } else {
                     let reg = self.next_reg();
-                    self.push_instr(&format!(
-                        "{reg} = call {llvm_ret} {fn_ptr}({args_str})"
-                    ));
+                    self.push_instr(&format!("{reg} = call {llvm_ret} {fn_ptr}({args_str})"));
                     self.fn_ctx.reg_types.insert(reg.clone(), llvm_ret);
                     return Ok(Some(reg));
                 }
@@ -392,12 +382,11 @@ impl TextEmitter {
                     .iter()
                     .map(|(ty, v)| {
                         let actual_ty = self.fn_ctx.reg_types.get(v).cloned();
-                        let abi_ty =
-                            if ty.starts_with('%') && actual_ty.as_deref() == Some("ptr") {
-                                "ptr".to_string()
-                            } else {
-                                ty.clone()
-                            };
+                        let abi_ty = if ty.starts_with('%') && actual_ty.as_deref() == Some("ptr") {
+                            "ptr".to_string()
+                        } else {
+                            ty.clone()
+                        };
                         (abi_ty, v.as_str())
                     })
                     .collect();
@@ -583,11 +572,7 @@ impl TextEmitter {
     }
 
     /// TIR variant of [`Self::emit_unary`].
-    fn emit_unary_tir(
-        &mut self,
-        op: &UnaryOp,
-        expr: &TirExpr,
-    ) -> Result<Option<String>, String> {
+    fn emit_unary_tir(&mut self, op: &UnaryOp, expr: &TirExpr) -> Result<Option<String>, String> {
         let val = match self.emit_expr_tir(expr)? {
             Some(v) => v,
             None => return Ok(None),
@@ -795,8 +780,7 @@ impl TextEmitter {
                     cur = inner;
                 }
                 Ty::Named(name, _) => {
-                    if self.module.enum_variants.contains_key(name)
-                        && self.enum_has_payloads(name)
+                    if self.module.enum_variants.contains_key(name) && self.enum_has_payloads(name)
                     {
                         return Some(name.clone());
                     }
@@ -808,10 +792,7 @@ impl TextEmitter {
     }
 
     /// Helper: emit a [`TirMatchBody`] and return its value.
-    fn emit_match_arm_body_tir(
-        &mut self,
-        body: &TirMatchBody,
-    ) -> Result<Option<String>, String> {
+    fn emit_match_arm_body_tir(&mut self, body: &TirMatchBody) -> Result<Option<String>, String> {
         match body {
             TirMatchBody::Expr(e) => self.emit_expr_tir(e),
             TirMatchBody::Block(b) => self.emit_block_tir(b),
@@ -848,12 +829,7 @@ impl TextEmitter {
             }
             Pattern::Or { patterns: alts, .. } => {
                 for alt in alts {
-                    if !self.collect_or_discriminants_tir(
-                        alt,
-                        arm_idx,
-                        switch_arms,
-                        wildcard_arm,
-                    ) {
+                    if !self.collect_or_discriminants_tir(alt, arm_idx, switch_arms, wildcard_arm) {
                         return false;
                     }
                 }
@@ -943,9 +919,7 @@ impl TextEmitter {
                             .insert(var_name.clone(), some_val.clone());
                         if let Some(ref imty) = inner_ty {
                             if let Some(te) = super::emit_stmts::ty_to_type_expr(imty) {
-                                self.fn_ctx
-                                    .local_mvl_types
-                                    .insert(var_name.clone(), te);
+                                self.fn_ctx.local_mvl_types.insert(var_name.clone(), te);
                             }
                         }
                         bound_var = Some(var_name.clone());
@@ -1096,7 +1070,9 @@ impl TextEmitter {
             match &arm.pattern {
                 Pattern::Ok { inner, .. } if ok_load_ty != "void" => {
                     let pp = self.next_reg();
-                    self.push_instr(&format!("{pp} = extractvalue {RESULT_LLVM_TY} {scrut_val}, 1"));
+                    self.push_instr(&format!(
+                        "{pp} = extractvalue {RESULT_LLVM_TY} {scrut_val}, 1"
+                    ));
                     let ok_val = self.next_reg();
                     self.push_instr(&format!("{ok_val} = load {ok_load_ty}, ptr {pp}"));
                     self.fn_ctx
@@ -1112,7 +1088,9 @@ impl TextEmitter {
                 Pattern::Ok { .. } => {}
                 Pattern::Err { inner, .. } => {
                     let pp = self.next_reg();
-                    self.push_instr(&format!("{pp} = extractvalue {RESULT_LLVM_TY} {scrut_val}, 1"));
+                    self.push_instr(&format!(
+                        "{pp} = extractvalue {RESULT_LLVM_TY} {scrut_val}, 1"
+                    ));
                     let err_val = self.next_reg();
                     self.push_instr(&format!("{err_val} = load {err_load_ty}, ptr {pp}"));
                     self.fn_ctx
@@ -1375,10 +1353,7 @@ impl TextEmitter {
     }
 
     /// TIR variant of [`Self::emit_list_literal`].
-    fn emit_list_literal_tir(
-        &mut self,
-        elems: &[TirExpr],
-    ) -> Result<Option<String>, String> {
+    fn emit_list_literal_tir(&mut self, elems: &[TirExpr]) -> Result<Option<String>, String> {
         let elem_ty = elems
             .first()
             .map(|e| self.ty_to_llvm_ctx(&e.ty))
@@ -1492,10 +1467,7 @@ impl TextEmitter {
     }
 
     /// TIR variant of [`Self::emit_option_constructor`] (Some).
-    fn emit_option_constructor_tir(
-        &mut self,
-        args: &[TirExpr],
-    ) -> Result<Option<String>, String> {
+    fn emit_option_constructor_tir(&mut self, args: &[TirExpr]) -> Result<Option<String>, String> {
         let arg = match args.first() {
             Some(a) => a,
             None => return self.emit_none_constructor(),
@@ -1556,10 +1528,7 @@ impl TextEmitter {
     }
 
     /// TIR variant of [`Self::emit_assert_builtin`].
-    fn emit_assert_builtin_tir(
-        &mut self,
-        args: &[TirExpr],
-    ) -> Result<Option<String>, String> {
+    fn emit_assert_builtin_tir(&mut self, args: &[TirExpr]) -> Result<Option<String>, String> {
         let cond = match args.first() {
             Some(a) => a,
             None => return Ok(None),
@@ -1625,10 +1594,7 @@ impl TextEmitter {
     }
 
     /// TIR variant of [`Self::emit_format_builtin`].
-    fn emit_format_builtin_tir(
-        &mut self,
-        args: &[TirExpr],
-    ) -> Result<Option<String>, String> {
+    fn emit_format_builtin_tir(&mut self, args: &[TirExpr]) -> Result<Option<String>, String> {
         if args.len() < 2 {
             return Ok(None);
         }
@@ -1857,10 +1823,7 @@ impl TextEmitter {
     }
 
     /// TIR variant of [`Self::emit_fn_call`] `"float_checked_to_int"` arm.
-    fn emit_float_checked_to_int_tir(
-        &mut self,
-        arg: &TirExpr,
-    ) -> Result<Option<String>, String> {
+    fn emit_float_checked_to_int_tir(&mut self, arg: &TirExpr) -> Result<Option<String>, String> {
         let v = match self.emit_expr_tir(arg)? {
             Some(v) => v,
             None => return Ok(None),
@@ -1992,9 +1955,7 @@ impl TextEmitter {
                 if let Some(idx) = fields.iter().position(|(f, _)| f == field) {
                     let field_ty = self.llvm_ty_ctx(&fields[idx].1.clone());
                     let reg = self.next_reg();
-                    self.push_instr(&format!(
-                        "{reg} = extractvalue %{sn} {base_val}, {idx}"
-                    ));
+                    self.push_instr(&format!("{reg} = extractvalue %{sn} {base_val}, {idx}"));
                     self.fn_ctx.reg_types.insert(reg.clone(), field_ty);
                     return Ok(Some(reg));
                 }
@@ -2027,9 +1988,7 @@ impl TextEmitter {
             let r_to = self.emit_string_literal(&to_lbl);
             let r_tag = self.emit_string_literal(tag);
             let r_loc = self.emit_string_literal("");
-            self.ensure_extern(
-                "declare void @_mvl_audit_emit_relabel(ptr, ptr, ptr, ptr, ptr)",
-            );
+            self.ensure_extern("declare void @_mvl_audit_emit_relabel(ptr, ptr, ptr, ptr, ptr)");
             self.push_instr(&format!(
                 "call void @_mvl_audit_emit_relabel(ptr {r_name}, ptr {r_from}, ptr {r_to}, ptr {r_tag}, ptr {r_loc})"
             ));
@@ -2069,10 +2028,7 @@ impl TextEmitter {
     /// carries the Result type, so the Ok-payload LLVM type comes from a
     /// single `Ty::Result(ok, _)` match — no `result_ok_llvm_ty` lookup
     /// through fn_ret_types or per-method special cases.
-    pub(super) fn emit_propagate_tir(
-        &mut self,
-        inner: &TirExpr,
-    ) -> Result<Option<String>, String> {
+    pub(super) fn emit_propagate_tir(&mut self, inner: &TirExpr) -> Result<Option<String>, String> {
         let result_val = match self.emit_expr_tir(inner)? {
             Some(v) => v,
             None => return Ok(None),
@@ -2133,9 +2089,7 @@ impl TextEmitter {
             "{payload_ptr} = extractvalue {RESULT_LLVM_TY} {result_val}, 1"
         ));
         let ok_val = self.next_reg();
-        self.push_instr(&format!(
-            "{ok_val} = load {ok_load_ty}, ptr {payload_ptr}"
-        ));
+        self.push_instr(&format!("{ok_val} = load {ok_load_ty}, ptr {payload_ptr}"));
         self.fn_ctx.reg_types.insert(ok_val.clone(), ok_load_ty);
         Ok(Some(ok_val))
     }
@@ -2162,12 +2116,7 @@ impl TextEmitter {
                 Some(v) => v,
                 None => return Ok(None),
             };
-            return self.emit_actor_method_call_tir(
-                &handle_val,
-                &actor_name.clone(),
-                method,
-                args,
-            );
+            return self.emit_actor_method_call_tir(&handle_val, &actor_name.clone(), method, args);
         }
 
         let recv_ty = self.ty_to_llvm_ctx(&receiver.ty);
@@ -2216,7 +2165,11 @@ impl TextEmitter {
                     Some(v) => v,
                     None => return Ok(None),
                 };
-                Ok(Some(self.emit_c_call_simple("find", &val, &[("ptr", &needle)])))
+                Ok(Some(self.emit_c_call_simple(
+                    "find",
+                    &val,
+                    &[("ptr", &needle)],
+                )))
             }
             ("contains", "ptr") if args.len() == 1 => {
                 let needle = match self.emit_expr_tir(&args[0])? {
@@ -2256,7 +2209,11 @@ impl TextEmitter {
                     Some(v) => v,
                     None => return Ok(None),
                 };
-                Ok(Some(self.emit_c_call_simple("split", &val, &[("ptr", &delim)])))
+                Ok(Some(self.emit_c_call_simple(
+                    "split",
+                    &val,
+                    &[("ptr", &delim)],
+                )))
             }
             ("substring", "ptr") if args.len() == 2 => {
                 let start = match self.emit_expr_tir(&args[0])? {
@@ -2308,27 +2265,21 @@ impl TextEmitter {
                     Ty::String => {
                         self.ensure_extern("declare i64 @_mvl_str_len(ptr)");
                         let reg = self.next_reg();
-                        self.push_instr(&format!(
-                            "{reg} = call i64 @_mvl_str_len(ptr {val})"
-                        ));
+                        self.push_instr(&format!("{reg} = call i64 @_mvl_str_len(ptr {val})"));
                         self.fn_ctx.reg_types.insert(reg.clone(), "i64".into());
                         Ok(Some(reg))
                     }
                     Ty::List(_) | Ty::Array(_, _) | Ty::Set(_) => {
                         self.ensure_extern("declare i64 @_mvl_array_len(ptr)");
                         let reg = self.next_reg();
-                        self.push_instr(&format!(
-                            "{reg} = call i64 @_mvl_array_len(ptr {val})"
-                        ));
+                        self.push_instr(&format!("{reg} = call i64 @_mvl_array_len(ptr {val})"));
                         self.fn_ctx.reg_types.insert(reg.clone(), "i64".into());
                         Ok(Some(reg))
                     }
                     Ty::Map(_, _) => {
                         self.ensure_extern("declare i64 @_mvl_map_len(ptr)");
                         let reg = self.next_reg();
-                        self.push_instr(&format!(
-                            "{reg} = call i64 @_mvl_map_len(ptr {val})"
-                        ));
+                        self.push_instr(&format!("{reg} = call i64 @_mvl_map_len(ptr {val})"));
                         self.fn_ctx.reg_types.insert(reg.clone(), "i64".into());
                         Ok(Some(reg))
                     }
@@ -2366,13 +2317,9 @@ impl TextEmitter {
                     self.ensure_extern("declare ptr @_mvl_string_ptr(ptr)");
                     self.ensure_extern("declare i64 @_mvl_str_len(ptr)");
                     let kp = self.next_reg();
-                    self.push_instr(&format!(
-                        "{kp} = call ptr @_mvl_string_ptr(ptr {key_arg})"
-                    ));
+                    self.push_instr(&format!("{kp} = call ptr @_mvl_string_ptr(ptr {key_arg})"));
                     let kl_reg = self.next_reg();
-                    self.push_instr(&format!(
-                        "{kl_reg} = call i64 @_mvl_str_len(ptr {key_arg})"
-                    ));
+                    self.push_instr(&format!("{kl_reg} = call i64 @_mvl_str_len(ptr {key_arg})"));
                     (kp, kl_reg)
                 };
                 let raw = self.next_reg();
@@ -2404,13 +2351,9 @@ impl TextEmitter {
                     self.ensure_extern("declare ptr @_mvl_string_ptr(ptr)");
                     self.ensure_extern("declare i64 @_mvl_str_len(ptr)");
                     let kp = self.next_reg();
-                    self.push_instr(&format!(
-                        "{kp} = call ptr @_mvl_string_ptr(ptr {key_arg})"
-                    ));
+                    self.push_instr(&format!("{kp} = call ptr @_mvl_string_ptr(ptr {key_arg})"));
                     let kl_reg = self.next_reg();
-                    self.push_instr(&format!(
-                        "{kl_reg} = call i64 @_mvl_str_len(ptr {key_arg})"
-                    ));
+                    self.push_instr(&format!("{kl_reg} = call i64 @_mvl_str_len(ptr {key_arg})"));
                     (kp, kl_reg)
                 };
                 let raw = self.next_reg();
@@ -2579,7 +2522,11 @@ impl TextEmitter {
                     Some(v) => v,
                     None => return Ok(None),
                 };
-                let op = if method == "shift_left" { "shl" } else { "lshr" };
+                let op = if method == "shift_left" {
+                    "shl"
+                } else {
+                    "lshr"
+                };
                 let reg = self.next_reg();
                 self.push_instr(&format!("{reg} = {op} i8 {val}, {amount}"));
                 self.fn_ctx.reg_types.insert(reg.clone(), "i8".into());
@@ -2589,17 +2536,13 @@ impl TextEmitter {
             // ── Float (double) numeric methods ────────────────────────────
             ("abs", "double") => {
                 let reg = self.next_reg();
-                self.push_instr(&format!(
-                    "{reg} = call double @llvm.fabs.f64(double {val})"
-                ));
+                self.push_instr(&format!("{reg} = call double @llvm.fabs.f64(double {val})"));
                 self.fn_ctx.reg_types.insert(reg.clone(), "double".into());
                 Ok(Some(reg))
             }
             ("ceil", "double") => {
                 let reg = self.next_reg();
-                self.push_instr(&format!(
-                    "{reg} = call double @llvm.ceil.f64(double {val})"
-                ));
+                self.push_instr(&format!("{reg} = call double @llvm.ceil.f64(double {val})"));
                 self.fn_ctx.reg_types.insert(reg.clone(), "double".into());
                 Ok(Some(reg))
             }
@@ -2621,9 +2564,7 @@ impl TextEmitter {
             }
             ("sqrt", "double") => {
                 let reg = self.next_reg();
-                self.push_instr(&format!(
-                    "{reg} = call double @llvm.sqrt.f64(double {val})"
-                ));
+                self.push_instr(&format!("{reg} = call double @llvm.sqrt.f64(double {val})"));
                 self.fn_ctx.reg_types.insert(reg.clone(), "double".into());
                 Ok(Some(reg))
             }
@@ -2870,9 +2811,7 @@ impl TextEmitter {
                 let len = self.next_reg();
                 self.push_instr(&format!("{len} = call i64 @_mvl_array_len(ptr {val})"));
                 let in_bounds = self.next_reg();
-                self.push_instr(&format!(
-                    "{in_bounds} = icmp slt i64 {idx_val}, {len}"
-                ));
+                self.push_instr(&format!("{in_bounds} = icmp slt i64 {idx_val}, {len}"));
                 let non_neg = self.next_reg();
                 self.push_instr(&format!("{non_neg} = icmp sge i64 {idx_val}, 0"));
                 let ok = self.next_reg();
@@ -2885,9 +2824,7 @@ impl TextEmitter {
                 let result_slot = self.next_reg();
                 self.push_instr(&format!("{result_slot} = alloca {{ i8, ptr }}"));
 
-                self.push_instr(&format!(
-                    "br i1 {ok}, label %{some_bb}, label %{none_bb}"
-                ));
+                self.push_instr(&format!("br i1 {ok}, label %{some_bb}, label %{none_bb}"));
 
                 self.start_bb(&none_bb);
                 let none_r0 = self.next_reg();
@@ -2898,9 +2835,7 @@ impl TextEmitter {
                 self.push_instr(&format!(
                     "{none_r1} = insertvalue {{ i8, ptr }} {none_r0}, ptr null, 1"
                 ));
-                self.push_instr(&format!(
-                    "store {{ i8, ptr }} {none_r1}, ptr {result_slot}"
-                ));
+                self.push_instr(&format!("store {{ i8, ptr }} {none_r1}, ptr {result_slot}"));
                 self.push_instr(&format!("br label %{merge_bb}"));
                 self.fn_ctx.terminated = true;
 
@@ -2911,14 +2846,10 @@ impl TextEmitter {
                     "{elem_ptr} = call ptr @_mvl_array_get(ptr {val}, i64 {idx_val})"
                 ));
                 let elem_val = self.next_reg();
-                self.push_instr(&format!(
-                    "{elem_val} = load {elem_llvm_ty}, ptr {elem_ptr}"
-                ));
+                self.push_instr(&format!("{elem_val} = load {elem_llvm_ty}, ptr {elem_ptr}"));
                 let elem_slot = self.next_reg();
                 self.push_instr(&format!("{elem_slot} = alloca {elem_llvm_ty}"));
-                self.push_instr(&format!(
-                    "store {elem_llvm_ty} {elem_val}, ptr {elem_slot}"
-                ));
+                self.push_instr(&format!("store {elem_llvm_ty} {elem_val}, ptr {elem_slot}"));
                 let some_r0 = self.next_reg();
                 self.push_instr(&format!(
                     "{some_r0} = insertvalue {{ i8, ptr }} zeroinitializer, i8 0, 0"
@@ -2927,25 +2858,23 @@ impl TextEmitter {
                 self.push_instr(&format!(
                     "{some_r1} = insertvalue {{ i8, ptr }} {some_r0}, ptr {elem_slot}, 1"
                 ));
-                self.push_instr(&format!(
-                    "store {{ i8, ptr }} {some_r1}, ptr {result_slot}"
-                ));
+                self.push_instr(&format!("store {{ i8, ptr }} {some_r1}, ptr {result_slot}"));
                 self.push_instr(&format!("br label %{merge_bb}"));
                 self.fn_ctx.terminated = true;
 
                 self.start_bb(&merge_bb);
                 let result = self.next_reg();
-                self.push_instr(&format!(
-                    "{result} = load {{ i8, ptr }}, ptr {result_slot}"
-                ));
+                self.push_instr(&format!("{result} = load {{ i8, ptr }}, ptr {result_slot}"));
                 self.fn_ctx
                     .reg_types
                     .insert(result.clone(), "{ i8, ptr }".into());
                 Ok(Some(result))
             }
             ("contains", "ptr")
-                if matches!(unwrap_labels(&receiver.ty), Ty::List(_) | Ty::Array(_, _) | Ty::Set(_))
-                    && args.len() == 1 =>
+                if matches!(
+                    unwrap_labels(&receiver.ty),
+                    Ty::List(_) | Ty::Array(_, _) | Ty::Set(_)
+                ) && args.len() == 1 =>
             {
                 let needle = match self.emit_expr_tir(&args[0])? {
                     Some(v) => v,
@@ -3011,10 +2940,7 @@ impl TextEmitter {
                 )))
             }
             ("first", "ptr")
-                if matches!(
-                    unwrap_labels(&receiver.ty),
-                    Ty::List(_) | Ty::Array(_, _)
-                ) =>
+                if matches!(unwrap_labels(&receiver.ty), Ty::List(_) | Ty::Array(_, _)) =>
             {
                 let elem_llvm_ty = match unwrap_labels(&receiver.ty) {
                     Ty::List(e) | Ty::Array(e, _) => self.ty_to_llvm_ctx(e),
@@ -3047,9 +2973,7 @@ impl TextEmitter {
                 self.push_instr(&format!(
                     "{none_r1} = insertvalue {{ i8, ptr }} {none_r0}, ptr null, 1"
                 ));
-                self.push_instr(&format!(
-                    "store {{ i8, ptr }} {none_r1}, ptr {result_slot}"
-                ));
+                self.push_instr(&format!("store {{ i8, ptr }} {none_r1}, ptr {result_slot}"));
                 self.push_instr(&format!("br label %{merge_bb}"));
                 self.fn_ctx.terminated = true;
 
@@ -3060,14 +2984,10 @@ impl TextEmitter {
                     "{elem_ptr} = call ptr @_mvl_array_get(ptr {val}, i64 0)"
                 ));
                 let elem_val = self.next_reg();
-                self.push_instr(&format!(
-                    "{elem_val} = load {elem_llvm_ty}, ptr {elem_ptr}"
-                ));
+                self.push_instr(&format!("{elem_val} = load {elem_llvm_ty}, ptr {elem_ptr}"));
                 let elem_slot = self.next_reg();
                 self.push_instr(&format!("{elem_slot} = alloca {elem_llvm_ty}"));
-                self.push_instr(&format!(
-                    "store {elem_llvm_ty} {elem_val}, ptr {elem_slot}"
-                ));
+                self.push_instr(&format!("store {elem_llvm_ty} {elem_val}, ptr {elem_slot}"));
                 let some_r0 = self.next_reg();
                 self.push_instr(&format!(
                     "{some_r0} = insertvalue {{ i8, ptr }} zeroinitializer, i8 0, 0"
@@ -3076,17 +2996,13 @@ impl TextEmitter {
                 self.push_instr(&format!(
                     "{some_r1} = insertvalue {{ i8, ptr }} {some_r0}, ptr {elem_slot}, 1"
                 ));
-                self.push_instr(&format!(
-                    "store {{ i8, ptr }} {some_r1}, ptr {result_slot}"
-                ));
+                self.push_instr(&format!("store {{ i8, ptr }} {some_r1}, ptr {result_slot}"));
                 self.push_instr(&format!("br label %{merge_bb}"));
                 self.fn_ctx.terminated = true;
 
                 self.start_bb(&merge_bb);
                 let result = self.next_reg();
-                self.push_instr(&format!(
-                    "{result} = load {{ i8, ptr }}, ptr {result_slot}"
-                ));
+                self.push_instr(&format!("{result} = load {{ i8, ptr }}, ptr {result_slot}"));
                 self.fn_ctx
                     .reg_types
                     .insert(result.clone(), "{ i8, ptr }".into());
@@ -3119,9 +3035,7 @@ impl TextEmitter {
                 };
                 let item_slot = self.next_reg();
                 self.push_instr(&format!("{item_slot} = alloca {item_ty}"));
-                self.push_instr(&format!(
-                    "store {item_ty} {item_val}, ptr {item_slot}"
-                ));
+                self.push_instr(&format!("store {item_ty} {item_val}, ptr {item_slot}"));
                 self.ensure_extern("declare void @_mvl_array_set(ptr, i64, ptr)");
                 self.push_instr(&format!(
                     "call void @_mvl_array_set(ptr {val}, i64 {idx}, ptr {item_slot})"
@@ -3174,9 +3088,7 @@ impl TextEmitter {
                 };
                 self.ensure_extern("declare i64 @_mvl_array_len(ptr)");
                 let len_reg = self.next_reg();
-                self.push_instr(&format!(
-                    "{len_reg} = call i64 @_mvl_array_len(ptr {val})"
-                ));
+                self.push_instr(&format!("{len_reg} = call i64 @_mvl_array_len(ptr {val})"));
                 Ok(Some(self.emit_list_slice_call(&val, &n, &len_reg)))
             }
             ("concat", "ptr") if args.len() == 1 => {
@@ -3185,14 +3097,12 @@ impl TextEmitter {
                     None => return Ok(None),
                 };
                 // List::concat → list_concat; String::concat → concat.
-                let dispatch_key = if matches!(
-                    unwrap_labels(&receiver.ty),
-                    Ty::List(_) | Ty::Array(_, _)
-                ) {
-                    "list_concat"
-                } else {
-                    "concat"
-                };
+                let dispatch_key =
+                    if matches!(unwrap_labels(&receiver.ty), Ty::List(_) | Ty::Array(_, _)) {
+                        "list_concat"
+                    } else {
+                        "concat"
+                    };
                 Ok(Some(self.emit_c_call_simple(
                     dispatch_key,
                     &val,

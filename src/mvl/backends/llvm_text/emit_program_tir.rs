@@ -12,9 +12,7 @@
 //! `Pattern`) re-exported via `crate::mvl::ir`. At the `Ty → TypeExpr`
 //! boundary the helper [`super::emit_stmts::ty_to_type_expr`] is reused.
 
-use crate::mvl::ir::{
-    Ty, TirFn, TirProgram, TirTypeBody, TirTypeDecl, TirVariantFields, TypeExpr,
-};
+use crate::mvl::ir::{TirFn, TirProgram, TirTypeBody, TirTypeDecl, TirVariantFields, Ty, TypeExpr};
 use crate::mvl::parser::lexer::Span;
 
 use super::emit_stmts::ty_to_type_expr;
@@ -44,8 +42,7 @@ impl TextEmitter {
         // `ty_to_llvm_ctx` can see enum types regardless of declaration order.
         for td in &prog.types {
             if let TirTypeBody::Enum(variants) = &td.body {
-                let variant_names: Vec<String> =
-                    variants.iter().map(|v| v.name.clone()).collect();
+                let variant_names: Vec<String> = variants.iter().map(|v| v.name.clone()).collect();
                 let variant_fields: Vec<Vec<TypeExpr>> = variants
                     .iter()
                     .map(|v| match &v.fields {
@@ -62,8 +59,7 @@ impl TextEmitter {
                 for v in variants {
                     if let TirVariantFields::Struct(fields) = &v.fields {
                         let qname = format!("{}::{}", td.name, v.name);
-                        let names: Vec<String> =
-                            fields.iter().map(|f| f.name.clone()).collect();
+                        let names: Vec<String> = fields.iter().map(|f| f.name.clone()).collect();
                         self.module
                             .enum_struct_variant_field_names
                             .insert(qname, names);
@@ -83,9 +79,7 @@ impl TextEmitter {
         // mangled instantiation when a call site enqueues them (#1612, Bug 4).
         for f in &prog.fns {
             if !f.type_params.is_empty() {
-                self.mono
-                    .tir_generic_fns
-                    .insert(f.name.clone(), f.clone());
+                self.mono.tir_generic_fns.insert(f.name.clone(), f.clone());
                 continue;
             }
             self.register_fn_tir_sig(f);
@@ -111,12 +105,7 @@ impl TextEmitter {
                     .iter()
                     .map(|p| Self::llvm_ty(&ty_to_type_expr_or_unit(&p.ty)))
                     .collect();
-                let decl = format!(
-                    "declare {} @{}({})",
-                    ret_str,
-                    ef.name,
-                    param_tys.join(", ")
-                );
+                let decl = format!("declare {} @{}({})", ret_str, ef.name, param_tys.join(", "));
                 self.ensure_extern(&decl);
                 // Register return + param types so call emission works.
                 self.module
@@ -192,8 +181,7 @@ impl TextEmitter {
             iters += 1;
             if iters > TIR_MONO_LIMIT {
                 return Err(
-                    "TIR monomorphization limit exceeded — possible infinite instantiation"
-                        .into(),
+                    "TIR monomorphization limit exceeded — possible infinite instantiation".into(),
                 );
             }
             let queue = std::mem::take(&mut self.mono.tir_mono_queue);
@@ -334,8 +322,8 @@ impl TextEmitter {
             if self.fn_ctx.current_fn_is_main {
                 // TODO(#1612 PR 2): drop `actor_decls` fallback once the AST walker
                 // is deleted — only `tir_actor_decls` will be populated on the TIR path.
-                let has_actors = !self.module.actor_decls.is_empty()
-                    || !self.module.tir_actor_decls.is_empty();
+                let has_actors =
+                    !self.module.actor_decls.is_empty() || !self.module.tir_actor_decls.is_empty();
                 if has_actors {
                     for handle in std::mem::take(&mut self.fn_ctx.spawned_actor_handles) {
                         self.push_instr(&format!("call void @_mvl_actor_drop(ptr {handle})"));

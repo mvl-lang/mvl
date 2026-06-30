@@ -18,11 +18,11 @@
 use std::collections::HashMap;
 
 use crate::mvl::checker::types::Ty;
+use crate::mvl::ir::lower::substitute_ty;
 use crate::mvl::ir::{
     TirBlock, TirElseBranch, TirExpr, TirExprKind, TirFn, TirMatchArm, TirMatchBody, TirParam,
     TirStmt,
 };
-use crate::mvl::ir::lower::substitute_ty;
 use crate::mvl::parser::ast::TypeExpr;
 
 use super::emit_program_tir::ty_to_type_expr_or_unit;
@@ -40,11 +40,14 @@ impl TextEmitter {
         name: &str,
         args: &[TirExpr],
     ) -> Result<Option<String>, String> {
-        let gf = self.mono.tir_generic_fns.get(name).cloned().ok_or_else(|| {
-            format!(
-                "ICE: generic TIR fn '{name}' missing from monomorphization table"
-            )
-        })?;
+        let gf = self
+            .mono
+            .tir_generic_fns
+            .get(name)
+            .cloned()
+            .ok_or_else(|| {
+                format!("ICE: generic TIR fn '{name}' missing from monomorphization table")
+            })?;
 
         // Infer concrete `Ty` for each type parameter by matching declared
         // parameter shape against the runtime arg type.
@@ -61,8 +64,7 @@ impl TextEmitter {
         // Reuse the AST mangling helper (it operates on `TypeExpr`). The Ty →
         // TypeExpr conversion is lossy for some edge cases but matches what the
         // AST walker does at the same boundary, so call-site symbols agree.
-        let concrete_te: Vec<TypeExpr> =
-            concrete_tys.iter().map(ty_to_type_expr_or_unit).collect();
+        let concrete_te: Vec<TypeExpr> = concrete_tys.iter().map(ty_to_type_expr_or_unit).collect();
         let mangled = Self::mangle_generic(name, &concrete_te);
 
         if self.mono.tir_mono_emitted.insert(mangled.clone()) {
@@ -143,11 +145,7 @@ impl TextEmitter {
     /// Called from the drain loop in `emit_program_tir` once per mangled
     /// instantiation. The returned `TirFn` is then walked by
     /// [`Self::emit_fn_tir`] as if it were an ordinary non-generic function.
-    pub(super) fn substitute_tir_fn(
-        &self,
-        gf: &TirFn,
-        subs: &HashMap<String, Ty>,
-    ) -> TirFn {
+    pub(super) fn substitute_tir_fn(&self, gf: &TirFn, subs: &HashMap<String, Ty>) -> TirFn {
         let mut out = gf.clone();
         out.params = out
             .params

@@ -13,12 +13,16 @@ use super::common::assert_tir_parity;
 
 #[test]
 fn struct_type_emits_type_def() {
-    assert_tir_parity("type Point = struct { x: Int, y: Int }\n\
-         fn get_x(p: Point) -> Int { p.x }");
+    assert_tir_parity(
+        "type Point = struct { x: Int, y: Int }\n\
+         fn get_x(p: Point) -> Int { p.x }",
+    );
 }
 
 #[test]
 fn enum_variant_emits_discriminant() {
-    assert_tir_parity("type Shape = enum { Circle, Square }\n\
-         fn circle() -> Shape { Shape::Circle }");
+    assert_tir_parity(
+        "type Shape = enum { Circle, Square }\n\
+         fn circle() -> Shape { Shape::Circle }",
+    );
 }

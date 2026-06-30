@@ -19,9 +19,11 @@ use super::common::assert_tir_parity;
 // share `Self::mangle_generic` operating on `TypeExpr`.
 #[test]
 fn generic_fn_monomorphized_per_concrete_type() {
-    assert_tir_parity("fn identity[T](x: T) -> T { x }\n\
+    assert_tir_parity(
+        "fn identity[T](x: T) -> T { x }\n\
          fn main() -> Unit {\n\
            let n: Int = identity(42);\n\
            let s: String = identity(\"hi\");\n\
-         }");
+         }",
+    );
 }

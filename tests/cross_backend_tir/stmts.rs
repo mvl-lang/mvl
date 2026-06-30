@@ -18,71 +18,89 @@ fn let_binding_aliases_ssa_value() {
 
 #[test]
 fn mutable_ref_uses_alloca_store_load() {
-    assert_tir_parity("partial fn counter(n: Int) -> Int {\
+    assert_tir_parity(
+        "partial fn counter(n: Int) -> Int {\
          let c: ref Int = 0;\
          while c < n {\
            c = c + 1;\
          }\
          c\
-         }");
+         }",
+    );
 }
 
 #[test]
 fn string_local_emits_drop_before_ret() {
-    assert_tir_parity("fn greet() -> Unit {\n\
+    assert_tir_parity(
+        "fn greet() -> Unit {\n\
          let s: String = \"hello\";\n\
-         }");
+         }",
+    );
 }
 
 #[test]
 fn list_local_emits_drop_before_ret() {
-    assert_tir_parity("fn nums() -> Unit {\n\
+    assert_tir_parity(
+        "fn nums() -> Unit {\n\
          let xs: List[Int] = [1, 2, 3];\n\
-         }");
+         }",
+    );
 }
 
 #[test]
 fn map_local_emits_drop_before_ret() {
-    assert_tir_parity("fn maps() -> Unit {\n\
+    assert_tir_parity(
+        "fn maps() -> Unit {\n\
          let m: Map[String, Int] = {\"a\": 1};\n\
-         }");
+         }",
+    );
 }
 
 #[test]
 fn multiple_heap_locals_all_dropped() {
-    assert_tir_parity("fn multi() -> Unit {\n\
+    assert_tir_parity(
+        "fn multi() -> Unit {\n\
          let s: String = \"hello\";\n\
          let xs: List[Int] = [1, 2];\n\
-         }");
+         }",
+    );
 }
 
 #[test]
 fn primitive_locals_no_drop() {
-    assert_tir_parity("fn prims() -> Unit {\n\
+    assert_tir_parity(
+        "fn prims() -> Unit {\n\
          let x: Int = 42;\n\
          let b: Bool = true;\n\
-         }");
+         }",
+    );
 }
 
 #[test]
 fn explicit_return_emits_drops() {
-    assert_tir_parity("fn early() -> Int {\n\
+    assert_tir_parity(
+        "fn early() -> Int {\n\
          let s: String = \"hello\";\n\
          return 42;\n\
-         }");
+         }",
+    );
 }
 
 #[test]
 fn shadowed_string_local_no_double_drop() {
-    assert_tir_parity("fn f() -> Unit {\n\
+    assert_tir_parity(
+        "fn f() -> Unit {\n\
          let s: String = \"first\";\n\
          let s: String = \"second\";\n\
-         }");
+         }",
+    );
 }
 
 #[test]
 fn ref_string_local_emits_load_then_drop() {
-    assert_tir_parity("fn f() -> Unit {\n\
+    assert_tir_parity(
+        "fn f() -> Unit {\n\
          let s: ref String = \"hello\";\n\
-         }");
+         }",
+    );
 }

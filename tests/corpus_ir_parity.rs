@@ -59,12 +59,14 @@ fn parse(src: &str) -> Program {
     prog
 }
 
-fn prepare(
-    prog: &Program,
-) -> (Vec<Program>, Vec<TirProgram>, TirProgram, LlvmTextCompiler) {
+fn prepare(prog: &Program) -> (Vec<Program>, Vec<TirProgram>, TirProgram, LlvmTextCompiler) {
     let mut prelude = loader::load_implicit_prelude();
-    prelude.extend(loader::load_mvl_native_stdlib_extras(std::slice::from_ref(prog)));
-    prelude.extend(loader::load_rust_backed_stdlib_fns(std::slice::from_ref(prog)));
+    prelude.extend(loader::load_mvl_native_stdlib_extras(std::slice::from_ref(
+        prog,
+    )));
+    prelude.extend(loader::load_rust_backed_stdlib_fns(std::slice::from_ref(
+        prog,
+    )));
     let builtins = loader::collect_llvm_text_builtins(std::slice::from_ref(prog));
 
     let mut expr_types = checker::collect_prelude_expr_types(&prelude);
@@ -73,10 +75,8 @@ fn prepare(
 
     let compiler = LlvmTextCompiler::with_context(builtins, expr_types);
 
-    let entry_all_fns =
-        mono::collect_fns(std::iter::once(prog).chain(prelude.iter()));
-    let entry_mono =
-        mono::monomorphize(prog, &entry_all_fns, &compiler.expr_types);
+    let entry_all_fns = mono::collect_fns(std::iter::once(prog).chain(prelude.iter()));
+    let entry_mono = mono::monomorphize(prog, &entry_all_fns, &compiler.expr_types);
     let entry_tir = lower::lower(prog, &entry_mono, &compiler.expr_types);
 
     let prelude_tirs: Vec<TirProgram> = prelude
@@ -183,20 +183,17 @@ fn check_file(file: &std::path::Path) -> Option<ParityFailure> {
             })
         }
     };
-    let tir_ir = match compiler.compile_to_ir_with_prelude_tir(
-        &prelude_tirs,
-        &entry_tir,
-        &module_name,
-    ) {
-        Ok(ir) => ir,
-        Err(e) => {
-            return Some(ParityFailure {
-                file: file.to_path_buf(),
-                kind: "tir-compile".into(),
-                detail: e,
-            })
-        }
-    };
+    let tir_ir =
+        match compiler.compile_to_ir_with_prelude_tir(&prelude_tirs, &entry_tir, &module_name) {
+            Ok(ir) => ir,
+            Err(e) => {
+                return Some(ParityFailure {
+                    file: file.to_path_buf(),
+                    kind: "tir-compile".into(),
+                    detail: e,
+                })
+            }
+        };
 
     if ast_ir == tir_ir {
         return None;
@@ -228,7 +225,9 @@ fn corpus_ir_parity_ast_vs_tir() {
     let mut failures: Vec<ParityFailure> = Vec::new();
     let mut skipped: Vec<PathBuf> = Vec::new();
     for file in &files {
-        let rel = file.strip_prefix(env!("CARGO_MANIFEST_DIR")).unwrap_or(file);
+        let rel = file
+            .strip_prefix(env!("CARGO_MANIFEST_DIR"))
+            .unwrap_or(file);
         let rel_str = rel.to_string_lossy().into_owned();
         if allow.contains(rel_str.as_str()) {
             skipped.push(file.clone());

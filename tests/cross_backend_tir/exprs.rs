@@ -48,11 +48,13 @@ fn if_else_emits_phi() {
 
 #[test]
 fn else_if_chain_emits_phi_for_all_branches() {
-    assert_tir_parity("fn classify(n: Int) -> Int {\n\
+    assert_tir_parity(
+        "fn classify(n: Int) -> Int {\n\
              if n > 0 { 1 }\n\
              else if n < 0 { -1 }\n\
              else { 0 }\n\
-         }");
+         }",
+    );
 }
 
 #[test]
@@ -62,8 +64,10 @@ fn logical_not_emits_xor() {
 
 #[test]
 fn multiple_functions_and_call() {
-    assert_tir_parity("fn add(a: Int, b: Int) -> Int { a + b }\n\
-         fn double(n: Int) -> Int { add(n, n) }");
+    assert_tir_parity(
+        "fn add(a: Int, b: Int) -> Int { a + b }\n\
+         fn double(n: Int) -> Int { add(n, n) }",
+    );
 }
 
 #[test]

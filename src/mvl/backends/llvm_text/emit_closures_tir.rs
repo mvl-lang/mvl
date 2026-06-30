@@ -456,9 +456,7 @@ impl TextEmitter {
                         "{field_ptr} = getelementptr %{env_ty_name}, ptr %__env, i32 0, i32 {i}"
                     ));
                     let val = this.next_reg();
-                    this.push_instr(&format!(
-                        "{val} = load {field_llvm_ty}, ptr {field_ptr}"
-                    ));
+                    this.push_instr(&format!("{val} = load {field_llvm_ty}, ptr {field_ptr}"));
                     this.fn_ctx.reg_types.insert(val.clone(), field_llvm_ty);
                     this.fn_ctx.locals.insert(cap_name.clone(), val.clone());
                     this.fn_ctx

@@ -33,15 +33,19 @@ fn module_header_present() {
 
 #[test]
 fn extern_c_emits_declare() {
-    assert_tir_parity("extern \"c\" {\n\
+    assert_tir_parity(
+        "extern \"c\" {\n\
          fn sqlite_open(path: String) -> Int\n\
          fn sqlite_close(db: Int) -> Unit\n\
-         }");
+         }",
+    );
 }
 
 #[test]
 fn extern_rust_not_emitted_by_llvm() {
-    assert_tir_parity("extern \"rust\" {\n\
+    assert_tir_parity(
+        "extern \"rust\" {\n\
          fn bridge_fn(x: Int) -> Int\n\
-         }");
+         }",
+    );
 }
