@@ -54,6 +54,22 @@ pub(super) fn ty_to_type_expr(ty: &crate::mvl::checker::types::Ty) -> Option<Typ
             span: Span::default(),
         },
         Ty::Named(name, args) => base(name, args.iter().filter_map(ty_to_type_expr).collect()),
+        // IFC labels (`Secret[T]`, `Tainted[T]`, user-declared labels). The label
+        // is erased at codegen; only the underlying `T` matters for LLVM
+        // emission. Missing this arm before #1612 task 2d caused builtins
+        // returning `Secret[List[Int]]` (e.g. `crypto_random_bytes`) to be
+        // registered with TypeExpr::Unit → emitted as `call void` with the
+        // result lost.
+        Ty::Labeled(label, inner) => TypeExpr::Labeled {
+            label: label.clone(),
+            inner: Box::new(ty_to_type_expr(inner)?),
+            span: Span::default(),
+        },
+        // Refinements are spec-only and erased before codegen — drop the
+        // predicate and surface the underlying type so callers see the
+        // correct LLVM shape.
+        Ty::Refined(inner, _pred) => ty_to_type_expr(inner)?,
+        Ty::Ptr(inner) => base("Ptr", vec![ty_to_type_expr(inner)?]),
         _ => return None,
     })
 }

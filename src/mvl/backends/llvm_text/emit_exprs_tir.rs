@@ -2727,49 +2727,89 @@ impl TextEmitter {
                 if matches!(unwrap_labels(&receiver.ty), Ty::List(_) | Ty::Array(_, _))
                     && args.len() == 1 =>
             {
-                let idx = match self.emit_expr_tir(&args[0])? {
+                let idx_val = match self.emit_expr_tir(&args[0])? {
                     Some(v) => v,
                     None => return Ok(None),
                 };
-                // Element type from receiver
-                let elem_ty = match unwrap_labels(&receiver.ty) {
+                let elem_llvm_ty = match unwrap_labels(&receiver.ty) {
                     Ty::List(e) | Ty::Array(e, _) => self.ty_to_llvm_ctx(e),
                     _ => "i64".to_string(),
                 };
-                self.ensure_extern("declare ptr @_mvl_array_get(ptr, i64)");
-                let elem_ptr = self.next_reg();
+
+                // Bounds check: 0 <= index < len. Mirror of AST emit_method_call's
+                // ("get", "ptr") arm — alloca + store + load shape (not the
+                // null-check + phi shape) so corpus IR diffs stay byte-equal.
+                self.ensure_extern("declare i64 @_mvl_array_len(ptr)");
+                let len = self.next_reg();
+                self.push_instr(&format!("{len} = call i64 @_mvl_array_len(ptr {val})"));
+                let in_bounds = self.next_reg();
                 self.push_instr(&format!(
-                    "{elem_ptr} = call ptr @_mvl_array_get(ptr {val}, i64 {idx})"
+                    "{in_bounds} = icmp slt i64 {idx_val}, {len}"
                 ));
-                let is_null = self.next_reg();
-                self.push_instr(&format!("{is_null} = icmp eq ptr {elem_ptr}, null"));
+                let non_neg = self.next_reg();
+                self.push_instr(&format!("{non_neg} = icmp sge i64 {idx_val}, 0"));
+                let ok = self.next_reg();
+                self.push_instr(&format!("{ok} = and i1 {in_bounds}, {non_neg}"));
+
                 let some_bb = self.next_bb("list_get_some");
                 let none_bb = self.next_bb("list_get_none");
                 let merge_bb = self.next_bb("list_get_merge");
+
+                let result_slot = self.next_reg();
+                self.push_instr(&format!("{result_slot} = alloca {{ i8, ptr }}"));
+
                 self.push_instr(&format!(
-                    "br i1 {is_null}, label %{none_bb}, label %{some_bb}"
+                    "br i1 {ok}, label %{some_bb}, label %{none_bb}"
                 ));
-                self.start_bb(&some_bb);
-                let loaded = self.next_reg();
-                self.push_instr(&format!("{loaded} = load {elem_ty}, ptr {elem_ptr}"));
-                let payload_slot = self.next_reg();
-                self.push_instr(&format!("{payload_slot} = alloca {elem_ty}"));
-                self.push_instr(&format!(
-                    "store {elem_ty} {loaded}, ptr {payload_slot}"
-                ));
-                let opt_some = self.next_reg();
-                self.push_instr(&format!(
-                    "{opt_some} = insertvalue {{ i8, ptr }} {{ i8 0, ptr null }}, ptr {payload_slot}, 1"
-                ));
-                self.push_instr(&format!("br label %{merge_bb}"));
-                let some_end = self.fn_ctx.current_bb.clone();
+
                 self.start_bb(&none_bb);
+                let none_r0 = self.next_reg();
+                self.push_instr(&format!(
+                    "{none_r0} = insertvalue {{ i8, ptr }} zeroinitializer, i8 1, 0"
+                ));
+                let none_r1 = self.next_reg();
+                self.push_instr(&format!(
+                    "{none_r1} = insertvalue {{ i8, ptr }} {none_r0}, ptr null, 1"
+                ));
+                self.push_instr(&format!(
+                    "store {{ i8, ptr }} {none_r1}, ptr {result_slot}"
+                ));
                 self.push_instr(&format!("br label %{merge_bb}"));
-                let none_end = self.fn_ctx.current_bb.clone();
+                self.fn_ctx.terminated = true;
+
+                self.start_bb(&some_bb);
+                self.ensure_extern("declare ptr @_mvl_array_get(ptr, i64)");
+                let elem_ptr = self.next_reg();
+                self.push_instr(&format!(
+                    "{elem_ptr} = call ptr @_mvl_array_get(ptr {val}, i64 {idx_val})"
+                ));
+                let elem_val = self.next_reg();
+                self.push_instr(&format!(
+                    "{elem_val} = load {elem_llvm_ty}, ptr {elem_ptr}"
+                ));
+                let elem_slot = self.next_reg();
+                self.push_instr(&format!("{elem_slot} = alloca {elem_llvm_ty}"));
+                self.push_instr(&format!(
+                    "store {elem_llvm_ty} {elem_val}, ptr {elem_slot}"
+                ));
+                let some_r0 = self.next_reg();
+                self.push_instr(&format!(
+                    "{some_r0} = insertvalue {{ i8, ptr }} zeroinitializer, i8 0, 0"
+                ));
+                let some_r1 = self.next_reg();
+                self.push_instr(&format!(
+                    "{some_r1} = insertvalue {{ i8, ptr }} {some_r0}, ptr {elem_slot}, 1"
+                ));
+                self.push_instr(&format!(
+                    "store {{ i8, ptr }} {some_r1}, ptr {result_slot}"
+                ));
+                self.push_instr(&format!("br label %{merge_bb}"));
+                self.fn_ctx.terminated = true;
+
                 self.start_bb(&merge_bb);
                 let result = self.next_reg();
                 self.push_instr(&format!(
-                    "{result} = phi {{ i8, ptr }} [ {opt_some}, %{some_end} ], [ {{ i8 1, ptr null }}, %{none_end} ]"
+                    "{result} = load {{ i8, ptr }}, ptr {result_slot}"
                 ));
                 self.fn_ctx
                     .reg_types
