@@ -45,9 +45,6 @@ const ALLOWLIST: &[&str] = &[
     "tests/corpus/03_types/nested_enum_pattern_annotation.mvl",
     "tests/corpus/13_stdlib/process_echo.mvl",
     "tests/corpus/13_stdlib/io_basic.mvl",
-    // json_log_imports also has a drop-ordering divergence (two _mvl_string_drop
-    // calls placed in different basic blocks) on top of the same enum-load
-    // shape mismatch. Both surface together; both resolve with the AST delete.
     "tests/corpus/13_stdlib/json_log_imports.mvl",
 ];
 
