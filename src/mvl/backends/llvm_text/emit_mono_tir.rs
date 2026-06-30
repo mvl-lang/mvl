@@ -214,10 +214,9 @@ fn substitute_block(b: &mut TirBlock, subs: &HashMap<String, Ty>) {
 
 fn substitute_stmt(s: &mut TirStmt, subs: &HashMap<String, Ty>) {
     match s {
-        TirStmt::Let { kind, ty, init, .. } => {
+        TirStmt::Let { ty, init, .. } => {
             *ty = substitute_ty(ty, subs);
             substitute_expr(init, subs);
-            let _ = kind;
         }
         TirStmt::Assign { value, .. } => substitute_expr(value, subs),
         TirStmt::Return { value, .. } => {
@@ -245,13 +244,11 @@ fn substitute_stmt(s: &mut TirStmt, subs: &HashMap<String, Ty>) {
             }
         }
         TirStmt::For {
-            pattern,
             iter,
             invariants,
             body,
             ..
         } => {
-            let _ = pattern;
             substitute_expr(iter, subs);
             for inv in invariants {
                 substitute_expr(inv, subs);

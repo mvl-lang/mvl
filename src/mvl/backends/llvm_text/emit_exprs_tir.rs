@@ -39,7 +39,6 @@ impl TextEmitter {
     /// TIR-walking counterpart of `emit_expr(&Expr)`. Built incrementally —
     /// unimplemented variants return an error so the `cross_backend_tir` test
     /// target surfaces gaps.
-    #[allow(dead_code)] // wired up via emit_program_tir once that's implemented
     pub(super) fn emit_expr_tir(&mut self, expr: &TirExpr) -> Result<Option<String>, String> {
         match &expr.kind {
             TirExprKind::Literal(lit) => self.emit_literal(lit),
@@ -661,8 +660,8 @@ impl TextEmitter {
             return self.emit_option_match_tir(scrutinee, &scrut_val, arms);
         }
 
-        if let Some(enum_name) = self.scrutinee_payload_enum_tir(scrutinee) {
-            return self.emit_payload_enum_match_tir(&enum_name, &scrut_val, arms);
+        if self.scrutinee_payload_enum_tir(scrutinee).is_some() {
+            return self.emit_payload_enum_match_tir(&scrut_val, arms);
         }
 
         // Generic unit-enum / scalar match.
@@ -1053,7 +1052,7 @@ impl TextEmitter {
 
         let disc_reg = self.next_reg();
         self.push_instr(&format!(
-            "{disc_reg} = extractvalue {{ i8, ptr }} {scrut_val}, 0"
+            "{disc_reg} = extractvalue {RESULT_LLVM_TY} {scrut_val}, 0"
         ));
         self.fn_ctx.reg_types.insert(disc_reg.clone(), "i8".into());
 
@@ -1074,9 +1073,6 @@ impl TextEmitter {
                 }
                 Pattern::Err { .. } => {
                     switch_str.push_str(&format!("    i8 1, label %{}\n", arm_bbs[idx]));
-                }
-                Pattern::Wildcard(_) | Pattern::Ident(_, _) => {
-                    wildcard_arm = Some(idx);
                 }
                 _ => {
                     wildcard_arm = Some(idx);
@@ -1100,7 +1096,7 @@ impl TextEmitter {
             match &arm.pattern {
                 Pattern::Ok { inner, .. } if ok_load_ty != "void" => {
                     let pp = self.next_reg();
-                    self.push_instr(&format!("{pp} = extractvalue {{ i8, ptr }} {scrut_val}, 1"));
+                    self.push_instr(&format!("{pp} = extractvalue {RESULT_LLVM_TY} {scrut_val}, 1"));
                     let ok_val = self.next_reg();
                     self.push_instr(&format!("{ok_val} = load {ok_load_ty}, ptr {pp}"));
                     self.fn_ctx
@@ -1116,7 +1112,7 @@ impl TextEmitter {
                 Pattern::Ok { .. } => {}
                 Pattern::Err { inner, .. } => {
                     let pp = self.next_reg();
-                    self.push_instr(&format!("{pp} = extractvalue {{ i8, ptr }} {scrut_val}, 1"));
+                    self.push_instr(&format!("{pp} = extractvalue {RESULT_LLVM_TY} {scrut_val}, 1"));
                     let err_val = self.next_reg();
                     self.push_instr(&format!("{err_val} = load {err_load_ty}, ptr {pp}"));
                     self.fn_ctx
@@ -1201,7 +1197,6 @@ impl TextEmitter {
     /// TIR variant of [`Self::emit_payload_enum_match`].
     fn emit_payload_enum_match_tir(
         &mut self,
-        _enum_name: &str,
         scrut_val: &str,
         arms: &[TirMatchArm],
     ) -> Result<Option<String>, String> {
@@ -1472,32 +1467,27 @@ impl TextEmitter {
         args: &[TirExpr],
     ) -> Result<Option<String>, String> {
         let disc: i64 = if name == "Ok" { 0 } else { 1 };
-        let arg_ty;
         let slot;
         if let Some(arg) = args.first() {
             let inferred_ty = self.ty_to_llvm_ctx(&arg.ty);
             if inferred_ty == "void" {
                 let _ = self.emit_expr_tir(arg)?;
-                arg_ty = "i8".to_string();
                 slot = self.next_reg();
                 self.push_instr(&format!("{slot} = alloca i8"));
             } else {
-                arg_ty = inferred_ty;
                 let arg_val = match self.emit_expr_tir(arg)? {
                     Some(v) => v,
                     None => return Ok(None),
                 };
                 slot = self.next_reg();
-                self.push_instr(&format!("{slot} = alloca {arg_ty}"));
-                self.push_instr(&format!("store {arg_ty} {arg_val}, ptr {slot}"));
+                self.push_instr(&format!("{slot} = alloca {inferred_ty}"));
+                self.push_instr(&format!("store {inferred_ty} {arg_val}, ptr {slot}"));
             }
         } else {
-            arg_ty = "i8".to_string();
             slot = self.next_reg();
             self.push_instr(&format!("{slot} = alloca i8"));
         };
         let r1 = self.wrap_result_pair(&disc.to_string(), &slot);
-        let _ = arg_ty;
         Ok(Some(r1))
     }
 
@@ -1940,11 +1930,10 @@ impl TextEmitter {
         let mut field_vals: Vec<(String, String)> = Vec::new();
         for (field_name, field_ty) in &field_defs {
             let llvm_t = self.llvm_ty_ctx(field_ty);
-            let val = fields
-                .iter()
-                .find(|(n, _)| n == field_name)
-                .and_then(|(_, e)| self.emit_expr_tir(e).ok().flatten())
-                .unwrap_or_else(|| "undef".into());
+            let val = match fields.iter().find(|(n, _)| n == field_name) {
+                Some((_, e)) => self.emit_expr_tir(e)?.unwrap_or_else(|| "undef".into()),
+                None => "undef".into(),
+            };
             field_vals.push((llvm_t, val));
         }
 
@@ -2091,7 +2080,7 @@ impl TextEmitter {
 
         let disc = self.next_reg();
         self.push_instr(&format!(
-            "{disc} = extractvalue {{ i8, ptr }} {result_val}, 0"
+            "{disc} = extractvalue {RESULT_LLVM_TY} {result_val}, 0"
         ));
         self.fn_ctx.reg_types.insert(disc.clone(), "i8".into());
 
@@ -2141,7 +2130,7 @@ impl TextEmitter {
         }
         let payload_ptr = self.next_reg();
         self.push_instr(&format!(
-            "{payload_ptr} = extractvalue {{ i8, ptr }} {result_val}, 1"
+            "{payload_ptr} = extractvalue {RESULT_LLVM_TY} {result_val}, 1"
         ));
         let ok_val = self.next_reg();
         self.push_instr(&format!(
@@ -2439,7 +2428,7 @@ impl TextEmitter {
                 self.start_bb(&some_bb);
                 let opt_some = self.next_reg();
                 self.push_instr(&format!(
-                    "{opt_some} = insertvalue {{ i8, ptr }} {{ i8 0, ptr null }}, ptr {raw}, 1"
+                    "{opt_some} = insertvalue {RESULT_LLVM_TY} {{ i8 0, ptr null }}, ptr {raw}, 1"
                 ));
                 self.push_instr(&format!("br label %{merge_bb}"));
                 let some_end = self.fn_ctx.current_bb.clone();
@@ -2449,7 +2438,7 @@ impl TextEmitter {
                 self.start_bb(&merge_bb);
                 let result = self.next_reg();
                 self.push_instr(&format!(
-                    "{result} = phi {{ i8, ptr }} [ {opt_some}, %{some_end} ], [ {{ i8 1, ptr null }}, %{none_end} ]"
+                    "{result} = phi {RESULT_LLVM_TY} [ {opt_some}, %{some_end} ], [ {{ i8 1, ptr null }}, %{none_end} ]"
                 ));
                 self.fn_ctx
                     .reg_types

@@ -27,7 +27,7 @@
 use std::collections::HashSet;
 
 use crate::mvl::ir::{
-    TirBlock, TirElseBranch, TirExpr, TirExprKind, TirMatchBody, TirParam, TirStmt, Ty, TypeExpr,
+    TirBlock, TirElseBranch, TirExpr, TirExprKind, TirMatchBody, TirParam, TirStmt, TypeExpr,
 };
 use crate::mvl::parser::lexer::Span;
 
@@ -507,10 +507,6 @@ impl TextEmitter {
         } else {
             self.push_instr(&format!("store ptr {env_ptr}, ptr {env_field}"));
         }
-
-        // Suppress unused warnings — `Ty` import is needed transitively when
-        // chaining ty_to_type_expr but rust thinks otherwise.
-        let _ = std::marker::PhantomData::<Ty>;
 
         Ok(Some(closure_alloca))
     }

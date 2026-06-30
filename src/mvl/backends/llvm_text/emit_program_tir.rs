@@ -332,6 +332,8 @@ impl TextEmitter {
             }
             self.emit_heap_drops();
             if self.fn_ctx.current_fn_is_main {
+                // TODO(#1612 PR 2): drop `actor_decls` fallback once the AST walker
+                // is deleted — only `tir_actor_decls` will be populated on the TIR path.
                 let has_actors = !self.module.actor_decls.is_empty()
                     || !self.module.tir_actor_decls.is_empty();
                 if has_actors {

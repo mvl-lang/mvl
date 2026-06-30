@@ -9,7 +9,7 @@
 //! corpus, PR 2 of #1612 flips the CLI to use the TIR path and deletes the
 //! AST walker — at which point these tests become the primary coverage.
 
-use super::common::{assert_tir_parity, assert_tir_unimplemented};
+use super::common::assert_tir_parity;
 
 #[test]
 fn closure_type_emitted_once() {

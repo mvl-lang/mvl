@@ -53,16 +53,3 @@ pub fn assert_tir_parity(src: &str) {
     assert_eq!(ast_ir, tir_ir, "TIR walker output diverged from AST walker");
 }
 
-/// Assert the TIR walker reports unimplemented-variant error for `src`.
-/// Used for inputs that exercise variants not yet ported.
-#[allow(dead_code)]
-pub fn assert_tir_unimplemented(src: &str) {
-    let prog = parse(src);
-    let (tir, compiler) = lower_to_tir(&prog);
-    let result = compiler.compile_to_ir_tir(&tir, "test");
-    match result {
-        Err(msg) if msg.contains("not yet implemented") || msg.contains("not yet ported") => {}
-        Err(msg) => panic!("unexpected error from TIR walker: {msg}"),
-        Ok(_) => panic!("TIR walker unexpectedly succeeded — promote to assert_tir_parity"),
-    }
-}

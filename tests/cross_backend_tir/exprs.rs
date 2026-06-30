@@ -9,7 +9,7 @@
 //! corpus, PR 2 of #1612 flips the CLI to use the TIR path and deletes the
 //! AST walker — at which point these tests become the primary coverage.
 
-use super::common::{assert_tir_parity, assert_tir_unimplemented};
+use super::common::assert_tir_parity;
 
 #[test]
 fn simple_add_function() {
@@ -89,4 +89,26 @@ fn string_literal_emits_global_and_string_new() {
 #[test]
 fn assert_emits_conditional_trap() {
     assert_tir_parity("fn main() -> Unit { assert(1 == 1) }");
+}
+
+#[test]
+fn propagate_in_result_returning_fn() {
+    assert_tir_parity(
+        "fn div(a: Int, b: Int) -> Result[Int, String] {\n\
+         if b == 0 { Err(\"zero\") } else { Ok(a / b) }\n\
+         }\n\
+         fn caller(x: Int) -> Result[Int, String] {\n\
+         let v: Int = div(x, 2)?;\n\
+         Ok(v + 1)\n\
+         }",
+    );
+}
+
+#[test]
+fn relabel_trust_unwraps_tainted() {
+    assert_tir_parity(
+        "fn sanitize(raw: Tainted[String]) -> String {\n\
+         relabel trust(raw, \"TEST-001\")\n\
+         }",
+    );
 }
