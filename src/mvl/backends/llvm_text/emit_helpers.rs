@@ -460,4 +460,145 @@ impl TextEmitter {
         let r1 = self.wrap_result_pair("1", &slot);
         Ok(Some(r1))
     }
+
+    // ── Closure infrastructure (#1148) ────────────────────────────────────
+
+    /// Emit `%__closure_type = type { ptr, ptr }` exactly once.
+    pub(super) fn ensure_closure_type(&mut self) {
+        if !self.module.closure_type_emitted {
+            self.module
+                .type_defs
+                .push("%__closure_type = type { ptr, ptr }".into());
+            self.module.closure_type_emitted = true;
+        }
+    }
+
+    /// Wrap a named module-level function in a `{ wrapper_ptr, null }` closure struct.
+    ///
+    /// Lazily generates `__closure_wrap_NAME(ptr env, params…) → ret` that ignores
+    /// `env` and forwards to the original function.
+    pub(super) fn make_named_fn_closure_hof(
+        &mut self,
+        name: &str,
+        ptr_param_indices: &[usize],
+    ) -> Result<Option<String>, String> {
+        // Include ptr_param_indices in the wrapper name so we get distinct
+        // wrappers for HOF vs non-HOF uses of the same named function.
+        let suffix = if ptr_param_indices.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "_hof{}",
+                ptr_param_indices
+                    .iter()
+                    .map(|i| i.to_string())
+                    .collect::<Vec<_>>()
+                    .join("_")
+            )
+        };
+        let wrapper_name = format!("__closure_wrap_{name}{suffix}");
+        self.ensure_closure_type();
+
+        // Emit the wrapper function once.
+        if !self.module.fn_ret_types.contains_key(&wrapper_name) {
+            let orig_ret = match self.module.fn_ret_types.get(name).cloned() {
+                Some(t) => t,
+                None => return Ok(None),
+            };
+
+            let llvm_ret = self.llvm_ty_ctx(&orig_ret);
+            let is_void = Self::is_void(&orig_ret);
+            let define_ret = if is_void {
+                "void".into()
+            } else {
+                llvm_ret.clone()
+            };
+
+            // Build typed trampoline: (ptr %__env, ty0 %__arg0, ty1 %__arg1, …)
+            // For HOF params (in ptr_param_indices), accept ptr and load inside.
+            let orig_params = self
+                .module
+                .fn_param_types
+                .get(name)
+                .cloned()
+                .unwrap_or_default();
+            let mut wrapper_param_parts = vec!["ptr %__env".to_string()];
+            let mut forward_arg_parts: Vec<String> = Vec::new();
+            let mut loads: Vec<String> = Vec::new();
+            for (i, p_ty) in orig_params.iter().enumerate() {
+                let ty_str = self.llvm_ty_ctx(p_ty);
+                if ty_str != "void" {
+                    if ptr_param_indices.contains(&i) {
+                        // Runtime passes element by pointer.
+                        wrapper_param_parts.push(format!("ptr %__raw_arg{i}"));
+                        let loaded = format!("%__loaded_arg{i}");
+                        loads.push(format!("  {loaded} = load {ty_str}, ptr %__raw_arg{i}"));
+                        forward_arg_parts.push(format!("{ty_str} {loaded}"));
+                    } else {
+                        wrapper_param_parts.push(format!("{ty_str} %__arg{i}"));
+                        forward_arg_parts.push(format!("{ty_str} %__arg{i}"));
+                    }
+                }
+            }
+            let wrapper_params_str = wrapper_param_parts.join(", ");
+            let forward_args_str = forward_arg_parts.join(", ");
+
+            // Emit the trampoline as a separate top-level function with a
+            // fresh FnCtx (#1535).
+            self.with_fresh_fn_ctx(orig_ret.clone(), |this| -> Result<(), String> {
+                this.fn_ctx.fn_buf.push(format!(
+                    "define {define_ret} @{wrapper_name}({wrapper_params_str})"
+                ));
+                this.fn_ctx.fn_buf.push("{".into());
+                this.fn_ctx.fn_buf.push("entry:".into());
+
+                // Emit loads for by-pointer HOF params.
+                for load in &loads {
+                    this.fn_ctx.fn_buf.push(load.clone());
+                }
+
+                if is_void {
+                    this.push_instr(&format!("call void @{name}({forward_args_str})"));
+                    this.push_instr("ret void");
+                } else {
+                    let reg = this.next_reg();
+                    this.push_instr(&format!(
+                        "{reg} = call {llvm_ret} @{name}({forward_args_str})"
+                    ));
+                    this.push_instr(&format!("ret {llvm_ret} {reg}"));
+                }
+
+                this.fn_ctx.fn_buf.push("}".into());
+                let wrapper_body = this.fn_ctx.fn_buf.join("\n");
+                this.module.fn_bodies.push(wrapper_body);
+                Ok(())
+            })?;
+
+            // Record wrapper so we don't emit it twice.
+            self.module
+                .fn_ret_types
+                .insert(wrapper_name.clone(), orig_ret);
+        }
+
+        // Build `{ &wrapper, null }` closure struct.
+        let closure_alloca = self.next_reg();
+        self.push_instr(&format!("{closure_alloca} = alloca %__closure_type"));
+        self.fn_ctx
+            .reg_types
+            .insert(closure_alloca.clone(), "ptr".into());
+
+        let fn_field = self.next_reg();
+        self.push_instr(&format!(
+            "{fn_field} = getelementptr %__closure_type, ptr {closure_alloca}, i32 0, i32 0"
+        ));
+        self.push_instr(&format!("store ptr @{wrapper_name}, ptr {fn_field}"));
+
+        let env_field = self.next_reg();
+        self.push_instr(&format!(
+            "{env_field} = getelementptr %__closure_type, ptr {closure_alloca}, i32 0, i32 1"
+        ));
+        self.push_instr(&format!("store ptr null, ptr {env_field}"));
+
+        Ok(Some(closure_alloca))
+    }
 }
