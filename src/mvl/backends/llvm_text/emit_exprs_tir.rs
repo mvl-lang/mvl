@@ -54,7 +54,7 @@ impl TextEmitter {
                     if let Some(disc) = self.pattern_discriminant(name) {
                         if let Some((type_name, _)) = Self::split_qualified(name) {
                             if self.enum_has_payloads(type_name) {
-                                return self.emit_enum_variant_constructor(name, disc, &[]);
+                                return self.emit_enum_variant_constructor_tir(name, disc, &[]);
                             }
                         }
                         return Ok(Some(format!("{disc}")));

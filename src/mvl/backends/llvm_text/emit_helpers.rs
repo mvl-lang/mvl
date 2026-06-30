@@ -425,4 +425,39 @@ impl TextEmitter {
         self.fn_ctx.reg_types.insert(str_reg.clone(), "ptr".into());
         str_reg
     }
+
+    // ── Result/Option aggregate builders ──────────────────────────────────
+
+    /// Build a `{ i8, ptr }` Result aggregate from a discriminant byte and a
+    /// payload slot pointer.
+    ///
+    /// Both fields are immediately overwritten, so `zeroinitializer` is used
+    /// as the base (safe if the struct ever gains padding fields, unlike
+    /// `undef`).
+    pub(super) fn wrap_result_pair(&mut self, disc: &str, slot: &str) -> String {
+        let r0 = self.next_reg();
+        self.push_instr(&format!(
+            "{r0} = insertvalue {RESULT_LLVM_TY} zeroinitializer, i8 {disc}, 0"
+        ));
+        self.fn_ctx
+            .reg_types
+            .insert(r0.clone(), RESULT_LLVM_TY.into());
+        let r1 = self.next_reg();
+        self.push_instr(&format!(
+            "{r1} = insertvalue {RESULT_LLVM_TY} {r0}, ptr {slot}, 1"
+        ));
+        self.fn_ctx
+            .reg_types
+            .insert(r1.clone(), RESULT_LLVM_TY.into());
+        r1
+    }
+
+    /// Emit `None` — builds a `{ i8, ptr }` tagged union with disc=1 and
+    /// null payload.
+    pub(super) fn emit_none_constructor(&mut self) -> Result<Option<String>, String> {
+        let slot = self.next_reg();
+        self.push_instr(&format!("{slot} = alloca i8"));
+        let r1 = self.wrap_result_pair("1", &slot);
+        Ok(Some(r1))
+    }
 }
