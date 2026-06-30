@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.224.1] - 2026-06-30
+
+### Fixed
+
+- **`llvm_text`: port `Map::insert` / `Map::remove` / `String::char_at` / `List::group_by` dispatch to TIR walker** (#1612, PR 2 prep) — Four method dispatches handled by the AST `emit_method_call` were silently swallowed by TIR's `_ => Ok(None)` catch-all, producing zero-instruction emissions instead of the AST's 3–5-instruction `_mvl_*` C-ABI calls. Most visible: `std/json.mvl::parse_object_step::r.insert(key, jv)` emitted 5 instructions through AST but nothing through TIR, shifting SSA register numbering downstream and causing the apparent "drop-ordering" symptom in `tests/corpus/13_stdlib/json_log_imports.mvl`. With the four arms ported, the TIR walker now produces byte-identical IR to AST for every corpus file that uses these methods. De-risks the upcoming AST-walker deletion (Phase 3b PR 2 of #1612): without this fix, deleting AST would have left `r.insert(...)` calls silently compiling to no-ops.
+
 ## [0.224.0] - 2026-06-30
 
 ### Added

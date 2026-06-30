@@ -2291,6 +2291,35 @@ impl TextEmitter {
             }
 
             // ── Map methods ───────────────────────────────────────────────
+            ("insert", "ptr") if matches!(unwrap_labels(&receiver.ty), Ty::Map(_, _)) => {
+                if args.len() < 2 {
+                    return Ok(None);
+                }
+                let key_arg = match self.emit_expr_tir(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                let val_arg = match self.emit_expr_tir(&args[1])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                self.ensure_extern("declare ptr @_mvl_string_ptr(ptr)");
+                self.ensure_extern("declare i64 @_mvl_str_len(ptr)");
+                self.ensure_extern("declare void @_mvl_map_insert(ptr, ptr, i64, ptr, i64)");
+                let kp = self.next_reg();
+                self.push_instr(&format!("{kp} = call ptr @_mvl_string_ptr(ptr {key_arg})"));
+                let kl = self.next_reg();
+                self.push_instr(&format!("{kl} = call i64 @_mvl_str_len(ptr {key_arg})"));
+                let val_ty = self.infer_val_type(&val_arg);
+                let vs = self.next_reg();
+                self.push_instr(&format!("{vs} = alloca {val_ty}"));
+                self.push_instr(&format!("store {val_ty} {val_arg}, ptr {vs}"));
+                self.push_instr(&format!(
+                    "call void @_mvl_map_insert(ptr {val}, ptr {kp}, i64 {kl}, ptr {vs}, i64 8)"
+                ));
+                // insert returns the map (modified in place)
+                Ok(Some(val))
+            }
             ("keys", "ptr") if matches!(unwrap_labels(&receiver.ty), Ty::Map(_, _)) => {
                 Ok(Some(self.emit_c_call_simple("keys", &val, &[])))
             }
@@ -2387,6 +2416,27 @@ impl TextEmitter {
                     .reg_types
                     .insert(result.clone(), "{ i8, ptr }".into());
                 Ok(Some(result))
+            }
+            ("remove", "ptr") if matches!(unwrap_labels(&receiver.ty), Ty::Map(_, _)) => {
+                let key_arg = match args.first() {
+                    Some(a) => match self.emit_expr_tir(a)? {
+                        Some(v) => v,
+                        None => return Ok(None),
+                    },
+                    None => return Ok(None),
+                };
+                self.ensure_extern("declare ptr @_mvl_string_ptr(ptr)");
+                self.ensure_extern("declare i64 @_mvl_str_len(ptr)");
+                self.ensure_extern("declare void @_mvl_map_remove(ptr, ptr, i64)");
+                let kp = self.next_reg();
+                self.push_instr(&format!("{kp} = call ptr @_mvl_string_ptr(ptr {key_arg})"));
+                let kl = self.next_reg();
+                self.push_instr(&format!("{kl} = call i64 @_mvl_str_len(ptr {key_arg})"));
+                self.push_instr(&format!(
+                    "call void @_mvl_map_remove(ptr {val}, ptr {kp}, i64 {kl})"
+                ));
+                // remove returns the map (modified in place)
+                Ok(Some(val))
             }
 
             // ── Int (i64) numeric methods ─────────────────────────────────
@@ -2748,6 +2798,17 @@ impl TextEmitter {
                     &[("ptr", &closure)],
                 )))
             }
+            ("group_by", "ptr") if args.len() == 1 && self.is_closure_arg_tir(&args[0]) => {
+                let closure = match self.emit_as_hof_closure_tir(&args[0], &[0])? {
+                    Some(p) => p,
+                    None => return Ok(None),
+                };
+                Ok(Some(self.emit_c_call_simple(
+                    "group_by",
+                    &val,
+                    &[("ptr", &closure)],
+                )))
+            }
             ("fold", "ptr") if args.len() == 2 => {
                 let init_ty = self.ty_to_llvm_ctx(&args[0].ty);
                 let init_val = match self.emit_expr_tir(&args[0])? {
@@ -3017,6 +3078,22 @@ impl TextEmitter {
                 self.emit_str_parse(&val, "double", "_mvl_str_parse_float")
             }
 
+            // ── String::char_at(i) → Option[String] ──────────────────────
+            ("char_at", "ptr") => {
+                let idx = match args.first() {
+                    Some(a) => match self.emit_expr_tir(a)? {
+                        Some(v) => v,
+                        None => return Ok(None),
+                    },
+                    None => return Ok(None),
+                };
+                Ok(Some(self.emit_c_call_option_out_ptr(
+                    "char_at",
+                    &val,
+                    &[("i64", &idx)],
+                )))
+            }
+
             ("set", "ptr")
                 if args.len() == 2
                     && matches!(
@@ -3128,14 +3205,9 @@ impl TextEmitter {
                 Ok(Some(result))
             }
 
-            // Fallback — mirror the AST emit_method_call which returns
-            // `Ok(None)` for the same combinations (#1612 task 2d). In the
-            // corpus these cases land in dead/stripped prelude code or
-            // discarded-value statements where dropping the call produces
-            // valid IR (verified via byte-equal AST↔TIR diff). Real ports of
-            // these methods will follow as a separate cleanup once PR 2 has
-            // deleted the AST walker — there is no value in fixing both
-            // walkers in parallel.
+            // Fallback matches AST behavior — see #1612 follow-up tracking
+            // the pre-existing silent-drop on user-defined extension methods
+            // (Map::is_empty, Wrapper::peek, etc.) that affects BOTH walkers.
             _ => Ok(None),
         }
     }
