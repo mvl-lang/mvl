@@ -102,12 +102,20 @@ impl TextEmitter {
                     self.push_instr(&format!(
                         "br i1 {cond_val}, label %{then_bb}, label %{else_bb}"
                     ));
+                    // Branch heap_locals must not leak past merge_bb (#1617).
+                    let heap_locals_snapshot = self.fn_ctx.heap_locals.len();
 
                     self.start_bb(&then_bb);
                     let then_val = self.emit_block_tir(then)?;
                     let then_end = self.fn_ctx.current_bb.clone();
                     if !self.fn_ctx.terminated {
+                        self.drop_scope_locals(
+                            heap_locals_snapshot,
+                            then_val.as_deref(),
+                        );
                         self.push_instr(&format!("br label %{merge_bb}"));
+                    } else {
+                        self.fn_ctx.heap_locals.truncate(heap_locals_snapshot);
                     }
 
                     self.start_bb(&else_bb);
@@ -115,7 +123,13 @@ impl TextEmitter {
                         self.emit_if_stmt_chain_tir(ncond, nthen, nelse.as_ref())?;
                     let else_end = self.fn_ctx.current_bb.clone();
                     if !self.fn_ctx.terminated {
+                        self.drop_scope_locals(
+                            heap_locals_snapshot,
+                            else_val.as_deref(),
+                        );
                         self.push_instr(&format!("br label %{merge_bb}"));
+                    } else {
+                        self.fn_ctx.heap_locals.truncate(heap_locals_snapshot);
                     }
 
                     self.start_bb(&merge_bb);
@@ -159,11 +173,17 @@ impl TextEmitter {
             "br i1 {cond_val}, label %{then_bb}, label %{else_bb}"
         ));
 
+        // Branch heap_locals must not leak past merge_bb (#1617).
+        let heap_locals_snapshot = self.fn_ctx.heap_locals.len();
+
         self.start_bb(&then_bb);
         let then_val = self.emit_block_tir(then)?;
         let then_end = self.fn_ctx.current_bb.clone();
         if !self.fn_ctx.terminated {
+            self.drop_scope_locals(heap_locals_snapshot, then_val.as_deref());
             self.push_instr(&format!("br label %{merge_bb}"));
+        } else {
+            self.fn_ctx.heap_locals.truncate(heap_locals_snapshot);
         }
 
         self.start_bb(&else_bb);
@@ -174,7 +194,10 @@ impl TextEmitter {
         };
         let else_end = self.fn_ctx.current_bb.clone();
         if !self.fn_ctx.terminated {
+            self.drop_scope_locals(heap_locals_snapshot, else_val.as_deref());
             self.push_instr(&format!("br label %{merge_bb}"));
+        } else {
+            self.fn_ctx.heap_locals.truncate(heap_locals_snapshot);
         }
 
         self.start_bb(&merge_bb);
@@ -359,10 +382,20 @@ impl TextEmitter {
             "br i1 {cond_val}, label %{then_bb}, label %{else_bb}"
         ));
 
+        // Branch heap_locals must not leak past merge_bb — see emit_stmts.rs
+        // (`emit_if_stmt`) and #1617. Without the snapshot/drop discipline the
+        // function-end drop pass would emit `_mvl_string_drop(%v)` against an
+        // SSA value that is only defined in the then-block, violating LLVM
+        // dominance when the else-branch reaches the merge.
+        let heap_locals_snapshot = self.fn_ctx.heap_locals.len();
+
         self.start_bb(&then_bb);
         self.emit_block_tir(then)?;
         if !self.fn_ctx.terminated {
+            self.drop_scope_locals(heap_locals_snapshot, None);
             self.push_instr(&format!("br label %{merge_bb}"));
+        } else {
+            self.fn_ctx.heap_locals.truncate(heap_locals_snapshot);
         }
 
         self.start_bb(&else_bb);
@@ -377,7 +410,10 @@ impl TextEmitter {
             }
         }
         if !self.fn_ctx.terminated {
+            self.drop_scope_locals(heap_locals_snapshot, None);
             self.push_instr(&format!("br label %{merge_bb}"));
+        } else {
+            self.fn_ctx.heap_locals.truncate(heap_locals_snapshot);
         }
 
         self.start_bb(&merge_bb);
