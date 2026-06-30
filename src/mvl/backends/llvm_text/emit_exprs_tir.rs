@@ -269,6 +269,100 @@ impl TextEmitter {
             return self.emit_monomorphized_call_tir(name, args);
         }
 
+        // Indirect call through a fn-type alias local. Mirror of the AST path
+        // at `emit_exprs.rs::emit_fn_call`: a binding `d: Dispatcher` where
+        // `Dispatcher = fn(...) -> ...` resolves to a `Base` annotation that
+        // `fn_aliases` maps to `Fn`. Emits a `%reg = call <ret> <fn_ptr>(...)`
+        // through the loaded pointer, no closure environment. Closures (fn-typed
+        // params with a direct `TypeExpr::Fn` annotation) are handled by the
+        // arm below.
+        let local_ty = self.fn_ctx.local_mvl_types.get(name).cloned();
+        let is_alias = matches!(&local_ty, Some(t) if !matches!(t, TypeExpr::Fn { .. }))
+            && local_ty
+                .as_ref()
+                .and_then(|t| self.resolve_fn_alias(t))
+                .is_some();
+        if is_alias {
+            if let Some(fn_ptr) = self.fn_ctx.locals.get(name).cloned() {
+                let alias_fn_ty = local_ty.as_ref().and_then(|t| self.resolve_fn_alias(t));
+                if let Some(TypeExpr::Fn { ret, .. }) = alias_fn_ty {
+                    let mut call_args: Vec<String> = Vec::new();
+                    for arg in args {
+                        let ty = self.ty_to_llvm_ctx(&arg.ty);
+                        if let Some(v) = self.emit_expr_tir(arg)? {
+                            call_args.push(format!("{ty} {v}"));
+                        }
+                    }
+                    let args_str = call_args.join(", ");
+                    let llvm_ret = self.llvm_ty_ctx(&ret);
+                    let is_void = Self::is_void(&ret);
+                    if is_void {
+                        self.push_instr(&format!("call void {fn_ptr}({args_str})"));
+                        return Ok(None);
+                    } else {
+                        let reg = self.next_reg();
+                        self.push_instr(&format!(
+                            "{reg} = call {llvm_ret} {fn_ptr}({args_str})"
+                        ));
+                        self.fn_ctx.reg_types.insert(reg.clone(), llvm_ret);
+                        return Ok(Some(reg));
+                    }
+                }
+            }
+        }
+
+        // Local closure call (closure-over-closure / fn-typed parameter).
+        // Mirror of AST: load fn_ptr + env_ptr from the `%__closure_type` slot
+        // and call indirectly with the env as the first argument.
+        if let Some(closure_ptr) = self.fn_ctx.locals.get(name).cloned() {
+            if local_ty
+                .as_ref()
+                .is_some_and(|t| matches!(t, TypeExpr::Fn { .. }))
+            {
+                self.ensure_closure_type();
+                let fn_field = self.next_reg();
+                self.push_instr(&format!(
+                    "{fn_field} = getelementptr %__closure_type, ptr {closure_ptr}, i32 0, i32 0"
+                ));
+                let fn_ptr = self.next_reg();
+                self.push_instr(&format!("{fn_ptr} = load ptr, ptr {fn_field}"));
+                let env_field = self.next_reg();
+                self.push_instr(&format!(
+                    "{env_field} = getelementptr %__closure_type, ptr {closure_ptr}, i32 0, i32 1"
+                ));
+                let env_ptr = self.next_reg();
+                self.push_instr(&format!("{env_ptr} = load ptr, ptr {env_field}"));
+
+                let mut call_args = vec![format!("ptr {env_ptr}")];
+                for arg in args {
+                    let ty = self.ty_to_llvm_ctx(&arg.ty);
+                    if let Some(v) = self.emit_expr_tir(arg)? {
+                        call_args.push(format!("{ty} {v}"));
+                    }
+                }
+                let args_str = call_args.join(", ");
+
+                let (llvm_ret, is_void) = if let Some(TypeExpr::Fn { ret, .. }) = local_ty.as_ref()
+                {
+                    (self.llvm_ty_ctx(ret), Self::is_void(ret))
+                } else {
+                    ("i64".into(), false)
+                };
+
+                if is_void {
+                    self.push_instr(&format!("call void {fn_ptr}({args_str})"));
+                    return Ok(None);
+                } else {
+                    let reg = self.next_reg();
+                    self.push_instr(&format!(
+                        "{reg} = call {llvm_ret} {fn_ptr}({args_str})"
+                    ));
+                    self.fn_ctx.reg_types.insert(reg.clone(), llvm_ret);
+                    return Ok(Some(reg));
+                }
+            }
+        }
+
         // User-defined function call.
         let mut arg_vals: Vec<(String, String)> = Vec::new();
         for arg in args {

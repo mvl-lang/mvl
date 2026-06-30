@@ -70,6 +70,16 @@ pub(super) fn ty_to_type_expr(ty: &crate::mvl::checker::types::Ty) -> Option<Typ
         // correct LLVM shape.
         Ty::Refined(inner, _pred) => ty_to_type_expr(inner)?,
         Ty::Ptr(inner) => base("Ptr", vec![ty_to_type_expr(inner)?]),
+        // Fn types — required for `type Dispatcher = fn(...) -> ...` aliases
+        // to be registered in `module.fn_aliases`, which is how the emitter
+        // dispatches `d(req)` to an indirect call through a fn-pointer local
+        // instead of a direct named call (#1467 / #1612 task 2d).
+        Ty::Fn(params, ret, effects, _totality) => TypeExpr::Fn {
+            params: params.iter().filter_map(ty_to_type_expr).collect(),
+            ret: Box::new(ty_to_type_expr(ret)?),
+            effects: effects.clone(),
+            span: Span::default(),
+        },
         _ => return None,
     })
 }

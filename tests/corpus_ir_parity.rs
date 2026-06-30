@@ -29,9 +29,21 @@ use mvl::mvl::parser::Parser;
 use mvl::mvl::passes::mono;
 
 /// Files whose AST/TIR walker outputs are known to diverge for a documented
-/// reason. Empty as of #1612 task 2c — populated only if a real, accepted gap
-/// surfaces that we choose not to fix before PR 2.
-const ALLOWLIST: &[&str] = &[];
+/// reason. Populated only when an investigated divergence is judged not worth
+/// fixing before PR 2 deletes the AST walker.
+const ALLOWLIST: &[&str] = &[
+    // Nested `Err(ParseError::Code(n, msg))` match arm: AST emits
+    // `load ptr, ptr %t7` for the err payload because its static `llvm_ty`
+    // doesn't consult enum_variants and falls through to "ptr" for
+    // `TypeExpr::Base { name: "ParseError" }`. TIR correctly emits
+    // `load { i8, ptr }, ptr %t7` via `llvm_ty_ctx` which does consult the
+    // payload-enum registry. The loaded value is dead code in both walkers
+    // (the arm body uses an undef-from-other-arm SSA already — pre-existing
+    // structural bug). 16-byte diff per file, no runtime effect. Resolution
+    // lands when PR 2 deletes the AST emitter — TIR's behavior becomes the
+    // canonical one and the divergence disappears.
+    "tests/corpus/03_types/nested_enum_pattern_annotation.mvl",
+];
 
 fn parse(src: &str) -> Program {
     let (mut p, errs) = Parser::new(src);
