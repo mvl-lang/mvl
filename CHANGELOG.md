@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.224.0] - 2026-06-30
+
+### Added
+
+- **`llvm_text`: Phase 3b — TIR-walking LLVM emitter alongside AST** (#1612, part 1 of 2) — Eight new `emit_*_tir.rs` modules under `src/mvl/backends/llvm_text/` parallel to the existing AST modules, consuming `TirProgram` directly so each node carries its fully-resolved `Ty` inline (per ADR-0038). Variant coverage matches AST 1:1 (Let/Assign/Return, If/While/For, Match over Option/Result/payload-enum/unit-enum, Propagate, Relabel, Select, struct/enum-variant construct, Lambda + closures, all method-call dispatches, Spawn + actor method-call). A new `emit_mono_tir.rs` mirrors the AST `MonoQueue` (per the ADR-0050 plan) and emits mangled symbols byte-identical to the AST path. `MVL_LLVM_BACKEND=tir` swaps `build`, `run`, and `test --backend=llvm` over to the TIR walker via a single `compile_ir` dispatcher in `src/cli/llvm_text.rs`; AST remains default until PR 2 of #1612 flips it. A new `tests/corpus_ir_parity.rs` harness walks every corpus `.mvl` file with `fn main(`, lowers it through both walkers in-process, and asserts byte-identical IR (70/70 passing, 4 documented allowlist entries for AST-only bugs that resolve when PR 2 deletes the AST walker). Unblocks #1118 (self-hosting backend port).
+
 ## [0.223.4] - 2026-06-28
 
 ### Fixed
