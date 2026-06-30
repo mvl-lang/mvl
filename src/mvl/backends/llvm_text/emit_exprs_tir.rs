@@ -3021,6 +3021,124 @@ impl TextEmitter {
                     &[("i64", &n)],
                 )))
             }
+            ("first", "ptr")
+                if matches!(
+                    unwrap_labels(&receiver.ty),
+                    Ty::List(_) | Ty::Array(_, _)
+                ) =>
+            {
+                let elem_llvm_ty = match unwrap_labels(&receiver.ty) {
+                    Ty::List(e) | Ty::Array(e, _) => self.ty_to_llvm_ctx(e),
+                    _ => "i64".to_string(),
+                };
+
+                self.ensure_extern("declare i64 @_mvl_array_len(ptr)");
+                let len = self.next_reg();
+                self.push_instr(&format!("{len} = call i64 @_mvl_array_len(ptr {val})"));
+                let not_empty = self.next_reg();
+                self.push_instr(&format!("{not_empty} = icmp sgt i64 {len}, 0"));
+
+                let some_bb = self.next_bb("first_some");
+                let none_bb = self.next_bb("first_none");
+                let merge_bb = self.next_bb("first_merge");
+
+                let result_slot = self.next_reg();
+                self.push_instr(&format!("{result_slot} = alloca {{ i8, ptr }}"));
+
+                self.push_instr(&format!(
+                    "br i1 {not_empty}, label %{some_bb}, label %{none_bb}"
+                ));
+
+                self.start_bb(&none_bb);
+                let none_r0 = self.next_reg();
+                self.push_instr(&format!(
+                    "{none_r0} = insertvalue {{ i8, ptr }} zeroinitializer, i8 1, 0"
+                ));
+                let none_r1 = self.next_reg();
+                self.push_instr(&format!(
+                    "{none_r1} = insertvalue {{ i8, ptr }} {none_r0}, ptr null, 1"
+                ));
+                self.push_instr(&format!(
+                    "store {{ i8, ptr }} {none_r1}, ptr {result_slot}"
+                ));
+                self.push_instr(&format!("br label %{merge_bb}"));
+                self.fn_ctx.terminated = true;
+
+                self.start_bb(&some_bb);
+                self.ensure_extern("declare ptr @_mvl_array_get(ptr, i64)");
+                let elem_ptr = self.next_reg();
+                self.push_instr(&format!(
+                    "{elem_ptr} = call ptr @_mvl_array_get(ptr {val}, i64 0)"
+                ));
+                let elem_val = self.next_reg();
+                self.push_instr(&format!(
+                    "{elem_val} = load {elem_llvm_ty}, ptr {elem_ptr}"
+                ));
+                let elem_slot = self.next_reg();
+                self.push_instr(&format!("{elem_slot} = alloca {elem_llvm_ty}"));
+                self.push_instr(&format!(
+                    "store {elem_llvm_ty} {elem_val}, ptr {elem_slot}"
+                ));
+                let some_r0 = self.next_reg();
+                self.push_instr(&format!(
+                    "{some_r0} = insertvalue {{ i8, ptr }} zeroinitializer, i8 0, 0"
+                ));
+                let some_r1 = self.next_reg();
+                self.push_instr(&format!(
+                    "{some_r1} = insertvalue {{ i8, ptr }} {some_r0}, ptr {elem_slot}, 1"
+                ));
+                self.push_instr(&format!(
+                    "store {{ i8, ptr }} {some_r1}, ptr {result_slot}"
+                ));
+                self.push_instr(&format!("br label %{merge_bb}"));
+                self.fn_ctx.terminated = true;
+
+                self.start_bb(&merge_bb);
+                let result = self.next_reg();
+                self.push_instr(&format!(
+                    "{result} = load {{ i8, ptr }}, ptr {result_slot}"
+                ));
+                self.fn_ctx
+                    .reg_types
+                    .insert(result.clone(), "{ i8, ptr }".into());
+                Ok(Some(result))
+            }
+
+            // ── String::parse_int / parse_float → Result[T, String] ───────
+            ("parse_int", "ptr") if matches!(unwrap_labels(&receiver.ty), Ty::String) => {
+                self.emit_str_parse(&val, "i64", "_mvl_str_parse_int")
+            }
+            ("parse_float", "ptr") if matches!(unwrap_labels(&receiver.ty), Ty::String) => {
+                self.emit_str_parse(&val, "double", "_mvl_str_parse_float")
+            }
+
+            ("set", "ptr")
+                if args.len() == 2
+                    && matches!(
+                        unwrap_labels(&receiver.ty),
+                        Ty::List(_) | Ty::Array(_, _) | Ty::Set(_)
+                    ) =>
+            {
+                let idx = match self.emit_expr_tir(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                let item_ty = self.ty_to_llvm_ctx(&args[1].ty);
+                let item_val = match self.emit_expr_tir(&args[1])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                let item_slot = self.next_reg();
+                self.push_instr(&format!("{item_slot} = alloca {item_ty}"));
+                self.push_instr(&format!(
+                    "store {item_ty} {item_val}, ptr {item_slot}"
+                ));
+                self.ensure_extern("declare void @_mvl_array_set(ptr, i64, ptr)");
+                self.push_instr(&format!(
+                    "call void @_mvl_array_set(ptr {val}, i64 {idx}, ptr {item_slot})"
+                ));
+                Ok(None)
+            }
             ("slice", "ptr")
                 if args.len() == 2
                     && matches!(

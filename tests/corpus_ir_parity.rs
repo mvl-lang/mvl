@@ -213,12 +213,10 @@ fn check_file(file: &std::path::Path) -> Option<ParityFailure> {
     })
 }
 
-// Task 2c landed the harness; task 2d drains the inventory of TIR-walker gaps
-// it surfaces (35 / 74 files on first run — unimplemented method arms, missing
-// builtins, and a handful of byte-diff divergences). Once that backlog clears,
-// drop the `#[ignore]` so the harness becomes the strict regression gate.
+// Task 2d cleared the original 35-file gap to zero (#1612). 4 files remain in
+// ALLOWLIST for documented AST-side limitations that PR 2's AST-walker delete
+// resolves automatically. Strict regression gate from here on.
 #[test]
-#[ignore = "#1612 task 2d: TIR walker has 35 corpus gaps to drain before strict parity"]
 fn corpus_ir_parity_ast_vs_tir() {
     let files = corpus_main_files();
     assert!(
