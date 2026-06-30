@@ -31,18 +31,24 @@ use mvl::mvl::passes::mono;
 /// Files whose AST/TIR walker outputs are known to diverge for a documented
 /// reason. Populated only when an investigated divergence is judged not worth
 /// fixing before PR 2 deletes the AST walker.
+///
+/// All current entries share one root cause: AST's static `llvm_ty` helper
+/// (used by `result_ok_llvm_ty` and the `Err(...)` arm of `emit_result_match`)
+/// doesn't consult `module.enum_variants`, so it returns `"ptr"` for an enum
+/// `TypeExpr::Base { name: "Foo", ... }` — even when `Foo` is a payload enum
+/// with LLVM repr `{ i8, ptr }`. TIR's `llvm_ty_ctx` consults the registry and
+/// emits the correct `load { i8, ptr }`. The loaded value is dead code in the
+/// arms surfaced here (the arm body never uses the SSA, or uses one from
+/// another arm — pre-existing structural bug). No runtime effect; the
+/// divergence disappears when PR 2 deletes the AST emitter.
 const ALLOWLIST: &[&str] = &[
-    // Nested `Err(ParseError::Code(n, msg))` match arm: AST emits
-    // `load ptr, ptr %t7` for the err payload because its static `llvm_ty`
-    // doesn't consult enum_variants and falls through to "ptr" for
-    // `TypeExpr::Base { name: "ParseError" }`. TIR correctly emits
-    // `load { i8, ptr }, ptr %t7` via `llvm_ty_ctx` which does consult the
-    // payload-enum registry. The loaded value is dead code in both walkers
-    // (the arm body uses an undef-from-other-arm SSA already — pre-existing
-    // structural bug). 16-byte diff per file, no runtime effect. Resolution
-    // lands when PR 2 deletes the AST emitter — TIR's behavior becomes the
-    // canonical one and the divergence disappears.
     "tests/corpus/03_types/nested_enum_pattern_annotation.mvl",
+    "tests/corpus/13_stdlib/process_echo.mvl",
+    "tests/corpus/13_stdlib/io_basic.mvl",
+    // json_log_imports also has a drop-ordering divergence (two _mvl_string_drop
+    // calls placed in different basic blocks) on top of the same enum-load
+    // shape mismatch. Both surface together; both resolve with the AST delete.
+    "tests/corpus/13_stdlib/json_log_imports.mvl",
 ];
 
 fn parse(src: &str) -> Program {

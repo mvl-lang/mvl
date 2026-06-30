@@ -2115,7 +2115,26 @@ impl TextEmitter {
         self.start_bb(&ok_bb);
         let ok_load_ty = match unwrap_labels(&inner.ty) {
             Ty::Result(ok, _) => self.ty_to_llvm_ctx(ok),
-            _ => "i64".to_string(),
+            _ => {
+                // Fallback: when the checker didn't resolve `inner.ty` to
+                // `Ty::Result` (common for stdlib FnCalls whose return type
+                // lives in `module.fn_ret_types` rather than the
+                // checker-derived `expr_types` map), look up the FnCall's
+                // declared return type and use its `Ok` payload's static
+                // LLVM type — same fallback the AST `result_ok_llvm_ty`
+                // helper uses.
+                if let TirExprKind::FnCall { name, .. } = &inner.kind {
+                    if let Some(crate::mvl::ir::TypeExpr::Result { ok, .. }) =
+                        self.module.fn_ret_types.get(name)
+                    {
+                        Self::llvm_ty(ok)
+                    } else {
+                        "i64".to_string()
+                    }
+                } else {
+                    "i64".to_string()
+                }
+            }
         };
         if ok_load_ty == "void" {
             return Ok(None);
