@@ -759,6 +759,11 @@ mod emit_method_call;
 #[path = "c_call.rs"]
 mod c_call;
 
+// Shared low-level emit helpers (type mapping, heap drops, string globals,
+// value conversion) — extracted from emit_types.rs in PR 2 of #1612 prep.
+#[path = "emit_helpers.rs"]
+mod emit_helpers;
+
 #[path = "emit_closures.rs"]
 mod emit_closures;
 
