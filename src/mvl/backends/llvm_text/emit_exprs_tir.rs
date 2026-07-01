@@ -2840,6 +2840,21 @@ impl TextEmitter {
                     &[("ptr", &closure)],
                 )))
             }
+            // List::partition(f) → { matching: List[T], rest: List[T] }
+            // Shape D: runtime returns a pointer to a 2-slot array of ptrs;
+            // emit_c_call_struct_from_slots loads each slot and assembles an
+            // anonymous struct so downstream field access works.
+            ("partition", _) if args.len() == 1 && self.is_closure_arg_tir(&args[0]) => {
+                let closure = match self.emit_as_hof_closure_tir(&args[0], &[0])? {
+                    Some(p) => p,
+                    None => return Ok(None),
+                };
+                Ok(Some(self.emit_c_call_struct_from_slots(
+                    "partition",
+                    &val,
+                    &[("ptr", &closure)],
+                )))
+            }
             ("fold", "ptr") if args.len() == 2 => {
                 let init_ty = self.ty_to_llvm_ctx(&args[0].ty);
                 let init_val = match self.emit_expr_tir(&args[0])? {
@@ -2962,11 +2977,43 @@ impl TextEmitter {
                     .insert(result.clone(), "{ i8, ptr }".into());
                 Ok(Some(result))
             }
+            // Set algebra — intersection / difference / union (#1399 phase 5).
+            // All three share the same (ptr, ptr) → ptr C-ABI shape against
+            // the i64-element array runtime; emit_c_call_simple dispatches
+            // to the correct symbol per method name via LLVM_DISPATCH.
+            ("intersection" | "difference" | "union", "ptr")
+                if args.len() == 1 && matches!(unwrap_labels(&receiver.ty), Ty::Set(_)) =>
+            {
+                let other = match self.emit_expr_tir(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                Ok(Some(self.emit_c_call_simple(
+                    method,
+                    &val,
+                    &[("ptr", &other)],
+                )))
+            }
+            // Set[Int]::contains — dispatches to the specialised i64-element
+            // runtime (mirrors AST's Set::contains arm).
             ("contains", "ptr")
-                if matches!(
-                    unwrap_labels(&receiver.ty),
-                    Ty::List(_) | Ty::Array(_, _) | Ty::Set(_)
-                ) && args.len() == 1 =>
+                if args.len() == 1 && matches!(unwrap_labels(&receiver.ty), Ty::Set(_)) =>
+            {
+                let needle = match self.emit_expr_tir(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                self.ensure_extern("declare i1 @_mvl_set_contains_i64(ptr, i64)");
+                let reg = self.next_reg();
+                self.push_instr(&format!(
+                    "{reg} = call i1 @_mvl_set_contains_i64(ptr {val}, i64 {needle})"
+                ));
+                self.fn_ctx.reg_types.insert(reg.clone(), "i1".into());
+                Ok(Some(reg))
+            }
+            ("contains", "ptr")
+                if matches!(unwrap_labels(&receiver.ty), Ty::List(_) | Ty::Array(_, _))
+                    && args.len() == 1 =>
             {
                 let needle = match self.emit_expr_tir(&args[0])? {
                     Some(v) => v,

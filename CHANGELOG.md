@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.225.1] - 2026-07-01
+
+### Fixed
+
+- **`llvm_text`: port `partition` + set-algebra + `Set::contains` dispatch to TIR walker** (#1612, PR 2 prep) — Three more method dispatches handled by the AST `emit_method_call` that were silently swallowed by TIR's catch-all: `List::partition` (filters list into two, used in sort implementations), `Set` algebra ops (`union`, `intersection`, `difference`), and `Set::contains` (dispatch was present but receiver type matched too broadly, firing for any generic). Each dispatch was missing 2–8 instructions in TIR, producing zero-instruction emissions instead of the AST's C-ABI calls. Fixes parity between walkers for stdlib set operations and list-splitting logic, critical before AST deletion in Phase 3b PR 2.
+
 ## [0.225.0] - 2026-07-01
 
 ### Changed
