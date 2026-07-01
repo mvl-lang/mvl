@@ -183,9 +183,6 @@ impl TextEmitter {
         }
     }
 
-    /// Emit `s.parse_int()` or `s.parse_float()` — calls the C-ABI parser and
-    /// wraps the result in a `{ i8, ptr }` Result.
-    ///
     // `emit_str_parse` lives in `emit_helpers.rs` (#1612 PR 2 prep).
 
     /// Emit a `match` where at least one arm has `Pattern::Ok` / `Pattern::Err`.
