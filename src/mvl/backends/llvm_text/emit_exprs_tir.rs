@@ -54,7 +54,7 @@ impl TextEmitter {
                     if let Some(disc) = self.pattern_discriminant(name) {
                         if let Some((type_name, _)) = Self::split_qualified(name) {
                             if self.enum_has_payloads(type_name) {
-                                return self.emit_enum_variant_constructor(name, disc, &[]);
+                                return self.emit_enum_variant_constructor_tir(name, disc, &[]);
                             }
                         }
                         return Ok(Some(format!("{disc}")));
@@ -246,7 +246,36 @@ impl TextEmitter {
             "float_checked_to_int" if args.len() == 1 => {
                 return self.emit_float_checked_to_int_tir(&args[0]);
             }
-            // `Box::new`, `find_all`, `replace` still need ports (each is used
+            "Box::new" if args.len() == 1 => {
+                // Heap-allocate and store x, return ptr. Supports primitive
+                // payloads (i64/ptr/double = 8B, i32 = 4B, i8/i1 = 1B) and the
+                // payload-enum tagged union `{ i8, ptr }` (16B on 64-bit).
+                let arg_ty = self.ty_to_llvm_ctx(&args[0].ty);
+                let size: i64 = match arg_ty.as_str() {
+                    "i64" | "ptr" | "double" => 8,
+                    "i32" => 4,
+                    "i8" | "i1" => 1,
+                    t if t == RESULT_LLVM_TY => 16,
+                    other => {
+                        return Err(format!(
+                            "Box::new: unsupported payload type `{other}` — only primitive \
+                             types are supported by llvm_text. Aggregate types need real \
+                             sizeof support (#1154 follow-up)."
+                        ));
+                    }
+                };
+                let val = match self.emit_expr_tir(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                self.ensure_extern("declare ptr @_mvl_box_new(i64)");
+                let ptr = self.next_reg();
+                self.push_instr(&format!("{ptr} = call ptr @_mvl_box_new(i64 {size})"));
+                self.push_instr(&format!("store {arg_ty} {val}, ptr {ptr}"));
+                self.fn_ctx.reg_types.insert(ptr.clone(), "ptr".into());
+                return Ok(Some(ptr));
+            }
+            // `find_all`, `replace` still need ports (each is used
             // in 0-1 corpus files). Falls through to the user-fn call path,
             // which will treat them like generic-fn calls and emit either a
             // mangled call or `Ok(None)` depending on monomorphization state.
@@ -2171,7 +2200,9 @@ impl TextEmitter {
                     &[("ptr", &needle)],
                 )))
             }
-            ("contains", "ptr") if args.len() == 1 => {
+            ("contains", "ptr")
+                if args.len() == 1 && matches!(unwrap_labels(&receiver.ty), Ty::String) =>
+            {
                 let needle = match self.emit_expr_tir(&args[0])? {
                     Some(v) => v,
                     None => return Ok(None),

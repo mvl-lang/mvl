@@ -754,6 +754,16 @@ mod emit_mono;
 #[path = "emit_method_call.rs"]
 mod emit_method_call;
 
+// Shared C-ABI dispatch helpers — used by both AST and TIR walkers.
+// Extracted from emit_method_call.rs in PR 2 of #1612 prep.
+#[path = "c_call.rs"]
+mod c_call;
+
+// Shared low-level emit helpers (type mapping, heap drops, string globals,
+// value conversion) — extracted from emit_types.rs in PR 2 of #1612 prep.
+#[path = "emit_helpers.rs"]
+mod emit_helpers;
+
 #[path = "emit_closures.rs"]
 mod emit_closures;
 

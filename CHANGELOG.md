@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.225.0] - 2026-07-01
+
+### Changed
+
+- **`llvm_text`: extract shared helpers from AST modules to `c_call.rs` + `emit_helpers.rs`** (#1612, PR 2 prep) — 40+ helper functions (C-ABI dispatch shapes, heap-drop tracking, type mapping, string globals, closure infrastructure, enum lookup, mangling, literal emission, string→numeric parse) move out of the soon-to-be-deleted AST `emit_*.rs` modules into two shared modules above the AST/TIR boundary. Pure relocation with zero behavior change; every helper is moved verbatim and the TIR walker already called each via `self.*` / `Self::*` paths. Sets the stage for the AST emitter deletion in a follow-up PR — every helper TIR depends on now lives outside the AST modules.
+
+### Fixed
+
+- **`llvm_text`: port `Box::new` to TIR walker + guard String::contains dispatch** (#1612) — Two latent TIR-walker bugs surfaced during PR 2 prep. (1) `Box::new(x)` fell through to the user-fn path and emitted invalid `call i64 @Box::new(...)` (LLVM rejects `::` in symbol names); ported the AST inline handler verbatim, supporting primitive payloads and the `{ i8, ptr }` tagged union. (2) The `("contains", "ptr")` arm had no receiver-type guard, so it fired for `List::contains` too, routing through `_mvl_str_contains` and passing the i64 needle as `ptr N` (invalid); added `matches!(unwrap_labels(&receiver.ty), Ty::String)` so List/Array/Set dispatch reaches its own arm. Fixes: `cross_backend_box_field_deref`, `cross_backend_linked_list` (partial for `collections_basic`, `core_types_demo` — surfaces `_mvl_array_contains` runtime symbol gap as follow-up).
+
 ## [0.224.1] - 2026-06-30
 
 ### Fixed
