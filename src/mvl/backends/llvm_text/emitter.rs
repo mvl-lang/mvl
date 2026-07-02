@@ -367,7 +367,6 @@ impl TextEmitter {
             self.module.yield_check_declared = true;
         }
     }
-
 }
 
 // ── Submodules ────────────────────────────────────────────────────────────────

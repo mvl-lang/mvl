@@ -20,8 +20,7 @@ pub fn compile(src: &str) -> String {
     let mut expr_types = crate::mvl::checker::collect_prelude_expr_types(&[]);
     let cr = crate::mvl::checker::check(&prog);
     expr_types.extend(cr.expr_types);
-    let compiler =
-        LlvmTextCompiler::with_context(std::collections::HashMap::new(), expr_types);
+    let compiler = LlvmTextCompiler::with_context(std::collections::HashMap::new(), expr_types);
     compiler
         .compile_to_ir(&prog, "test")
         .expect("compile_to_ir failed")

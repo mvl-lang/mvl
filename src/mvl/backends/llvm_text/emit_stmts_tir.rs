@@ -261,7 +261,9 @@ impl TextEmitter {
                     if bb == "entry" || in_loop_body {
                         self.push_instr(&format!("{ptr} = alloca {ty_str}"));
                     } else {
-                        self.fn_ctx.pre_allocas.push(format!("  {ptr} = alloca {ty_str}"));
+                        self.fn_ctx
+                            .pre_allocas
+                            .push(format!("  {ptr} = alloca {ty_str}"));
                     }
                     if let Some(v) = val {
                         self.push_instr(&format!("store {ty_str} {v}, ptr {ptr}"));

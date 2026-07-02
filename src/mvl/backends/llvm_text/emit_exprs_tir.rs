@@ -536,7 +536,7 @@ impl TextEmitter {
                     cloned.and_then(|ret_te| {
                         let inner_te: Option<TypeExpr> = match ret_te {
                             TypeExpr::Option { inner, .. } => Some(*inner),
-                            _ => None,  // Result: always use alloca-ptr for opaque handles
+                            _ => None, // Result: always use alloca-ptr for opaque handles
                         };
                         inner_te.and_then(|te| {
                             let ty_str = self.llvm_ty_ctx(&te);
@@ -550,13 +550,22 @@ impl TextEmitter {
                             // `Child { stdin: Option[ChildStdin], ... }` whose fields
                             // lower to aggregate types `{ i8, ptr }`.
                             let struct_name = &ty_str[1..]; // strip '%'
-                            let all_primitive = self.module.struct_fields.get(struct_name)
-                                .map(|fields| fields.iter().all(|(_, fte)| {
-                                    let f = self.llvm_ty_ctx(fte);
-                                    !f.starts_with('%') && !f.starts_with('{')
-                                }))
+                            let all_primitive = self
+                                .module
+                                .struct_fields
+                                .get(struct_name)
+                                .map(|fields| {
+                                    fields.iter().all(|(_, fte)| {
+                                        let f = self.llvm_ty_ctx(fte);
+                                        !f.starts_with('%') && !f.starts_with('{')
+                                    })
+                                })
                                 .unwrap_or(false);
-                            if all_primitive { Some(ty_str) } else { None }
+                            if all_primitive {
+                                Some(ty_str)
+                            } else {
+                                None
+                            }
                         })
                     })
                 };

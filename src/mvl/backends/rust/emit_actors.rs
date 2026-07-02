@@ -131,7 +131,10 @@ impl RustEmitter {
         // even with no public behaviors (#1645) — they need to receive system signals.
         let needs_spawnable = !pub_methods.is_empty()
             || ad.traps_exit
-            || ad.methods.iter().any(|m| m.name == "on_exit" || m.name == "on_down");
+            || ad
+                .methods
+                .iter()
+                .any(|m| m.name == "on_exit" || m.name == "on_down");
 
         // ── 1. State struct ────────────────────────────────────────────────────
         self.line(&format!("struct {state_name} {{"));
