@@ -499,40 +499,6 @@ pub fn mvl_demonitor(id: MonitorId) {
     }
 }
 
-// ── C-ABI wrappers for the LLVM backend and `extern "C"` corpus tests ────────
-//
-// The LLVM runtime exports `_mvl_actors_link`, `_mvl_actors_unlink`, etc. as
-// C symbols (no-mangle). The Rust runtime provides the same names so that
-// corpus files using `extern "C"` declarations compile with both backends.
-// (#1645)
-/// C-ABI: bidirectional link — see [`mvl_link`].
-#[allow(unsafe_code)]
-#[no_mangle]
-pub extern "C" fn _mvl_actors_link(a: ActorId, b: ActorId) {
-    mvl_link(a, b);
-}
-
-/// C-ABI: remove bidirectional link — see [`mvl_unlink`].
-#[allow(unsafe_code)]
-#[no_mangle]
-pub extern "C" fn _mvl_actors_unlink(a: ActorId, b: ActorId) {
-    mvl_unlink(a, b);
-}
-
-/// C-ABI: create monitor — see [`mvl_monitor`].
-#[allow(unsafe_code)]
-#[no_mangle]
-pub extern "C" fn _mvl_actors_monitor(watcher: ActorId, target: ActorId) -> MonitorId {
-    mvl_monitor(watcher, target)
-}
-
-/// C-ABI: remove monitor — see [`mvl_demonitor`].
-#[allow(unsafe_code)]
-#[no_mangle]
-pub extern "C" fn _mvl_actors_demonitor(id: MonitorId) {
-    mvl_demonitor(id);
-}
-
 /// Mark an actor as trapping exit signals.
 ///
 /// When a linked actor dies, this actor receives an exit notification
