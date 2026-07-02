@@ -275,10 +275,44 @@ impl TextEmitter {
                 self.fn_ctx.reg_types.insert(ptr.clone(), "ptr".into());
                 return Ok(Some(ptr));
             }
-            // `find_all`, `replace` still need ports (each is used
-            // in 0-1 corpus files). Falls through to the user-fn call path,
-            // which will treat them like generic-fn calls and emit either a
-            // mangled call or `Ok(None)` depending on monomorphization state.
+            "find_all" if args.len() == 2 => {
+                let re = match self.emit_expr_tir(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                let s = match self.emit_expr_tir(&args[1])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                self.ensure_extern("declare ptr @_mvl_regex_find_all(ptr, ptr)");
+                let r = self.next_reg();
+                self.push_instr(&format!(
+                    "{r} = call ptr @_mvl_regex_find_all(ptr {re}, ptr {s})"
+                ));
+                self.fn_ctx.reg_types.insert(r.clone(), "ptr".into());
+                return Ok(Some(r));
+            }
+            "replace" if args.len() == 3 => {
+                let re = match self.emit_expr_tir(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                let s = match self.emit_expr_tir(&args[1])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                let repl = match self.emit_expr_tir(&args[2])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                self.ensure_extern("declare ptr @_mvl_regex_replace(ptr, ptr, ptr)");
+                let r = self.next_reg();
+                self.push_instr(&format!(
+                    "{r} = call ptr @_mvl_regex_replace(ptr {re}, ptr {s}, ptr {repl})"
+                ));
+                self.fn_ctx.reg_types.insert(r.clone(), "ptr".into());
+                return Ok(Some(r));
+            }
             _ => {}
         }
         if name.contains("::") && self.pattern_discriminant(name).is_some() {
@@ -407,6 +441,17 @@ impl TextEmitter {
         // the AST path: opaque-handle struct args become `ptr`.
         let (effective_name, is_c_builtin, args_str): (String, bool, String) =
             if let Some(c_sym) = self.module.builtin_syms.get(name).cloned() {
+                // _mvl_map_new requires an explicit initial capacity (i64 4).
+                // `Map[K, V]::new()` is a no-arg builtin but the C function takes
+                // a capacity — emitting it without args produces a conflicting
+                // declaration when the map-literal path declares `(i64)` (#1645).
+                if c_sym == "_mvl_map_new" && arg_vals.is_empty() {
+                    self.ensure_extern("declare ptr @_mvl_map_new(i64)");
+                    let reg = self.next_reg();
+                    self.push_instr(&format!("{reg} = call ptr @_mvl_map_new(i64 4)"));
+                    self.fn_ctx.reg_types.insert(reg.clone(), "ptr".into());
+                    return Ok(Some(reg));
+                }
                 let c_abi_args: Vec<(String, &str)> = arg_vals
                     .iter()
                     .map(|(ty, v)| {
@@ -735,10 +780,12 @@ impl TextEmitter {
                 }
             }
 
+            let heap_snapshot = self.fn_ctx.heap_locals.len();
             let arm_val = self.emit_match_arm_body_tir(&arm.body)?;
 
             let end_bb = self.fn_ctx.current_bb.clone();
             if !self.fn_ctx.terminated {
+                self.drop_scope_locals(heap_snapshot, arm_val.as_deref());
                 self.push_instr(&format!("br label %{merge_bb}"));
                 if let Some(v) = arm_val {
                     let ty = self.infer_val_type(&v);
@@ -746,6 +793,8 @@ impl TextEmitter {
                 } else {
                     no_val_arms.push(end_bb);
                 }
+            } else {
+                self.fn_ctx.heap_locals.truncate(heap_snapshot);
             }
 
             if let Pattern::Ident(name, _) = &arm.pattern {
@@ -1050,7 +1099,25 @@ impl TextEmitter {
     ) -> Result<Option<String>, String> {
         let (ok_load_ty, err_load_ty) = match unwrap_labels(&scrutinee.ty) {
             Ty::Result(ok, err) => (self.ty_to_llvm_ctx(ok), self.ty_to_llvm_ctx(err)),
-            _ => ("i64".to_string(), "ptr".to_string()),
+            _ => {
+                // scrutinee.ty is Unknown (checker couldn't type the function call,
+                // e.g. stdlib builtins the checker warns about as UndefinedFunction).
+                // Try to recover from fn_ret_types when the scrutinee is a FnCall
+                // so pointer-typed Ok payloads (TcpListener, Regex, …) don't fall
+                // back to "i64" and break downstream C-ABI calls (#1645).
+                let recovered = if let TirExprKind::FnCall { name, .. } = &scrutinee.kind {
+                    self.module.fn_ret_types.get(name.as_str()).and_then(|ret| {
+                        if let crate::mvl::ir::TypeExpr::Result { ok, err, .. } = ret {
+                            Some((self.llvm_ty_ctx(ok), self.llvm_ty_ctx(err)))
+                        } else {
+                            None
+                        }
+                    })
+                } else {
+                    None
+                };
+                recovered.unwrap_or_else(|| ("i64".into(), "ptr".into()))
+            }
         };
 
         let disc_reg = self.next_reg();
@@ -1143,9 +1210,13 @@ impl TextEmitter {
                 _ => {}
             }
 
+            // Snapshot heap_locals so that variables defined inside this arm
+            // are dropped at the arm's exit, not at the function exit (#1645).
+            let heap_snapshot = self.fn_ctx.heap_locals.len();
             let arm_val = self.emit_match_arm_body_tir(&arm.body)?;
             let end_bb = self.fn_ctx.current_bb.clone();
             if !self.fn_ctx.terminated {
+                self.drop_scope_locals(heap_snapshot, arm_val.as_deref());
                 self.push_instr(&format!("br label %{merge_bb}"));
                 if let Some(v) = arm_val {
                     let ty = self.infer_val_type(&v);
@@ -1153,6 +1224,8 @@ impl TextEmitter {
                 } else {
                     no_val_arms.push(end_bb);
                 }
+            } else {
+                self.fn_ctx.heap_locals.truncate(heap_snapshot);
             }
 
             if let Some(var_name) = bound_var {
@@ -2334,13 +2407,39 @@ impl TextEmitter {
                     Some(v) => v,
                     None => return Ok(None),
                 };
-                self.ensure_extern("declare ptr @_mvl_string_ptr(ptr)");
-                self.ensure_extern("declare i64 @_mvl_str_len(ptr)");
                 self.ensure_extern("declare void @_mvl_map_insert(ptr, ptr, i64, ptr, i64)");
-                let kp = self.next_reg();
-                self.push_instr(&format!("{kp} = call ptr @_mvl_string_ptr(ptr {key_arg})"));
-                let kl = self.next_reg();
-                self.push_instr(&format!("{kl} = call i64 @_mvl_str_len(ptr {key_arg})"));
+                // Key encoding depends on key type.  String keys use the string's raw
+                // UTF-8 bytes (via _mvl_string_ptr/_mvl_str_len); primitive keys (Int,
+                // Bool, …) are stored raw in a stack slot (#1645).
+                let key_map_ty = if let Ty::Map(kt, _) = unwrap_labels(&receiver.ty) {
+                    self.ty_to_llvm_ctx(kt)
+                } else {
+                    "ptr".into()
+                };
+                let (kp, kl) = if key_map_ty == "ptr" {
+                    // String key (or any pointer-sized key): use the string ABI.
+                    self.ensure_extern("declare ptr @_mvl_string_ptr(ptr)");
+                    self.ensure_extern("declare i64 @_mvl_str_len(ptr)");
+                    let kp = self.next_reg();
+                    self.push_instr(&format!("{kp} = call ptr @_mvl_string_ptr(ptr {key_arg})"));
+                    let kl = self.next_reg();
+                    self.push_instr(&format!("{kl} = call i64 @_mvl_str_len(ptr {key_arg})"));
+                    (kp, kl)
+                } else {
+                    // Primitive key (e.g. Int=i64, Bool=i1, Char=i32): store in a
+                    // stack slot and pass the slot pointer + sizeof(key).
+                    let byte_size = match key_map_ty.as_str() {
+                        "i64" | "double" => "8",
+                        "i32" => "4",
+                        "i8" => "1",
+                        "i1" => "1",
+                        _ => "8",
+                    };
+                    let slot = self.next_reg();
+                    self.push_instr(&format!("{slot} = alloca {key_map_ty}"));
+                    self.push_instr(&format!("store {key_map_ty} {key_arg}, ptr {slot}"));
+                    (slot, byte_size.to_string())
+                };
                 let val_ty = self.infer_val_type(&val_arg);
                 let vs = self.next_reg();
                 self.push_instr(&format!("{vs} = alloca {val_ty}"));
@@ -2449,20 +2548,30 @@ impl TextEmitter {
                 Ok(Some(result))
             }
             ("remove", "ptr") if matches!(unwrap_labels(&receiver.ty), Ty::Map(_, _)) => {
-                let key_arg = match args.first() {
-                    Some(a) => match self.emit_expr_tir(a)? {
-                        Some(v) => v,
-                        None => return Ok(None),
-                    },
+                let key_expr = match args.first() {
+                    Some(a) => a,
                     None => return Ok(None),
                 };
-                self.ensure_extern("declare ptr @_mvl_string_ptr(ptr)");
-                self.ensure_extern("declare i64 @_mvl_str_len(ptr)");
+                let key_ty = self.ty_to_llvm_ctx(&key_expr.ty);
+                let key_arg = match self.emit_expr_tir(key_expr)? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
                 self.ensure_extern("declare void @_mvl_map_remove(ptr, ptr, i64)");
-                let kp = self.next_reg();
-                self.push_instr(&format!("{kp} = call ptr @_mvl_string_ptr(ptr {key_arg})"));
-                let kl = self.next_reg();
-                self.push_instr(&format!("{kl} = call i64 @_mvl_str_len(ptr {key_arg})"));
+                let (kp, kl) = if key_ty == "i64" {
+                    let slot = self.next_reg();
+                    self.push_instr(&format!("{slot} = alloca i64"));
+                    self.push_instr(&format!("store i64 {key_arg}, ptr {slot}"));
+                    (slot, "8".to_string())
+                } else {
+                    self.ensure_extern("declare ptr @_mvl_string_ptr(ptr)");
+                    self.ensure_extern("declare i64 @_mvl_str_len(ptr)");
+                    let kp = self.next_reg();
+                    self.push_instr(&format!("{kp} = call ptr @_mvl_string_ptr(ptr {key_arg})"));
+                    let kl_reg = self.next_reg();
+                    self.push_instr(&format!("{kl_reg} = call i64 @_mvl_str_len(ptr {key_arg})"));
+                    (kp, kl_reg)
+                };
                 self.push_instr(&format!(
                     "call void @_mvl_map_remove(ptr {val}, ptr {kp}, i64 {kl})"
                 ));

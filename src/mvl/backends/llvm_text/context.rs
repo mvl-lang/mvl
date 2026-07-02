@@ -187,6 +187,11 @@ pub(super) struct FnCtx {
     // ── Heap drop tracking (#1185) ──────────────────────────────────────
     /// Heap-allocated locals: (ssa_or_alloca, kind, is_ref).
     pub heap_locals: Vec<(String, HeapKind, bool)>,
+
+    // ── Entry-block alloca hoisting ──────────────────────────────────────
+    /// Alloca instructions for `ref` locals that must live in the entry block
+    /// so they dominate all uses, even when the binding is inside a branch (#1645).
+    pub pre_allocas: Vec<String>,
 }
 
 impl FnCtx {
@@ -208,6 +213,7 @@ impl FnCtx {
             current_fn_is_main: false,
             spawned_actor_handles: Vec::new(),
             heap_locals: Vec::new(),
+            pre_allocas: Vec::new(),
         }
     }
 

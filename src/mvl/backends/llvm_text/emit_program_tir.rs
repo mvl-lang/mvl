@@ -206,7 +206,7 @@ impl TextEmitter {
     }
 
     /// Register a [`TirFn`]'s signature into the module-level dispatch tables.
-    fn register_fn_tir_sig(&mut self, f: &TirFn) {
+    pub(super) fn register_fn_tir_sig(&mut self, f: &TirFn) {
         let ret = ty_to_type_expr_or_unit(&f.ret_ty);
         let params: Vec<TypeExpr> = f
             .params
@@ -341,8 +341,32 @@ impl TextEmitter {
         }
 
         self.push_line("}");
-        let body_text = self.fn_ctx.fn_buf.join("\n");
+        let body_text = self.finish_fn_body();
         self.module.fn_bodies.push(body_text);
         Ok(())
+    }
+
+    /// Flush `fn_ctx.fn_buf` into a single string, injecting any deferred
+    /// `pre_allocas` right after the `entry:` label so they dominate all uses
+    /// even when the binding is inside a branch (#1645).
+    pub(super) fn finish_fn_body(&mut self) -> String {
+        let pre = std::mem::take(&mut self.fn_ctx.pre_allocas);
+        if pre.is_empty() {
+            return self.fn_ctx.fn_buf.join("\n");
+        }
+        // fn_buf layout: ["define ...", "{", "entry:", ...instructions...]
+        // Insert pre_allocas right after the "entry:" label.
+        let entry_idx = self
+            .fn_ctx
+            .fn_buf
+            .iter()
+            .position(|l| l == "entry:")
+            .map(|i| i + 1)
+            .unwrap_or(self.fn_ctx.fn_buf.len());
+        let mut buf = Vec::with_capacity(self.fn_ctx.fn_buf.len() + pre.len());
+        buf.extend_from_slice(&self.fn_ctx.fn_buf[..entry_idx]);
+        buf.extend(pre);
+        buf.extend_from_slice(&self.fn_ctx.fn_buf[entry_idx..]);
+        buf.join("\n")
     }
 }

@@ -250,7 +250,19 @@ impl TextEmitter {
                         return Ok(());
                     }
                     let ptr = self.next_reg();
-                    self.push_instr(&format!("{ptr} = alloca {ty_str}"));
+                    // Hoist to entry block when the binding is inside a branch BB
+                    // so the alloca dominates all uses including cross-arm drops (#1645).
+                    // Loop bodies manage their own heap scope via heap_locals snapshots
+                    // so their allocas don't need hoisting — emit inline instead.
+                    let bb = &self.fn_ctx.current_bb;
+                    let in_loop_body = bb.starts_with("loop_body")
+                        || bb.starts_with("for_body")
+                        || bb.starts_with("for_list_body");
+                    if bb == "entry" || in_loop_body {
+                        self.push_instr(&format!("{ptr} = alloca {ty_str}"));
+                    } else {
+                        self.fn_ctx.pre_allocas.push(format!("  {ptr} = alloca {ty_str}"));
+                    }
                     if let Some(v) = val {
                         self.push_instr(&format!("store {ty_str} {v}, ptr {ptr}"));
                     }
@@ -634,12 +646,18 @@ impl TextEmitter {
             self.push_instr(&format!("br label %{end_bb}"));
         }
 
+        // Snapshot heap_locals before the body so any lets inside the loop are
+        // dropped at the back-edge, matching the AST fix for #1617 (#1645).
+        let heap_locals_snapshot = self.fn_ctx.heap_locals.len();
         self.start_bb(&body_bb);
         self.emit_block_tir(body)?;
         if !self.fn_ctx.terminated {
+            self.drop_loop_body_locals(heap_locals_snapshot);
             self.ensure_yield_check_extern();
             self.push_instr("call void @_mvl_yield_check()");
             self.push_instr(&format!("br label %{loop_bb}"));
+        } else {
+            self.fn_ctx.heap_locals.truncate(heap_locals_snapshot);
         }
 
         self.start_bb(&end_bb);

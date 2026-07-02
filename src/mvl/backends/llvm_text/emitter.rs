@@ -125,6 +125,16 @@ impl LlvmTextCompiler {
         emitter.set_expr_types(self.expr_types.clone());
         for p in prelude {
             let stripped = strip_prelude_extension_methods_tir(p);
+            // Stripped functions (e.g. find_all, replace) are absent from the
+            // stripped program's `fns` list, so `emit_program_tir` never calls
+            // `register_fn_tir_sig` for them.  Without an entry in `fn_ret_types`,
+            // call sites default to `i64` return — wrong for ptr-returning fns.
+            // Fix: register stripped signatures before body emission (#1645).
+            for f in &p.fns {
+                if stripped.fns.iter().all(|sf| sf.name != f.name) && f.type_params.is_empty() {
+                    emitter.register_fn_tir_sig(f);
+                }
+            }
             emitter.emit_program_tir(&stripped)?;
         }
         emitter.emit_program_tir(prog)?;
