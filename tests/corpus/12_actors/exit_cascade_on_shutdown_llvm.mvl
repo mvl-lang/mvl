@@ -12,6 +12,8 @@
 // Before #1602 the link/monitor registry was cleared BEFORE DISC_SHUTDOWN was
 // dispatched, so the cascade never fired and `on_exit` was silently skipped.
 //
+// corpus:llvm -- Rust runtime sends _Shutdown before cascade, so on_exit fires
+//               only during mid-execution actor death, not at join_all shutdown.
 // expect: main_done
 // expect: on_exit_from_1_reason_killed
 

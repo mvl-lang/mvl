@@ -127,6 +127,11 @@ impl RustEmitter {
             .iter()
             .filter(|m| m.is_public && m.is_test)
             .collect();
+        // Actors with traps_exit or on_exit/on_down hooks must still be spawnable
+        // even with no public behaviors (#1645) — they need to receive system signals.
+        let needs_spawnable = !pub_methods.is_empty()
+            || ad.traps_exit
+            || ad.methods.iter().any(|m| m.name == "on_exit" || m.name == "on_down");
 
         // ── 1. State struct ────────────────────────────────────────────────────
         self.line(&format!("struct {state_name} {{"));
@@ -135,7 +140,7 @@ impl RustEmitter {
             let ty_str = emit_ty(&field.ty);
             self.line(&format!("{}: {ty_str},", field.name));
         }
-        if !pub_methods.is_empty() {
+        if needs_spawnable {
             // Strong sender so behaviors can always clone `self` as a tag without
             // racing shutdown.  Nulled by the `_Shutdown` dispatch arm so the
             // channel closes naturally once the actor exits its dispatch loop.
@@ -149,7 +154,7 @@ impl RustEmitter {
         self.blank();
 
         // ── 2. Message enum (one variant per public behavior + system variants) ─
-        if !pub_methods.is_empty() {
+        if needs_spawnable {
             self.line(&format!("enum {msg_name} {{"));
             self.push_indent();
             for m in pub_methods.iter().filter(|m| !m.is_test) {
@@ -272,9 +277,10 @@ impl RustEmitter {
         }
 
         // ── 4, 5, 6, 7: actor handle, dispatch impl, dispatch fn, start fn ────
-        // Only emitted when there are public behaviors (otherwise there is nothing
-        // to send and no point in spawning a thread).
-        if pub_methods.is_empty() {
+        // Emitted when there are public behaviors OR when the actor needs to be
+        // spawnable (traps_exit / has on_exit / has on_down) so it can receive
+        // system signals even with no user-facing behaviors (#1645).
+        if !needs_spawnable {
             self.line(&format!(
                 "// actor {name}: no public behaviors — actor handle omitted"
             ));
@@ -375,13 +381,9 @@ impl RustEmitter {
         // System variants (#1177, #1128).
         // Null _self_ref on shutdown so the actor drops its own strong sender
         // clone, allowing the channel to close naturally after the loop exits.
-        if !pub_methods.is_empty() {
-            self.line(&format!(
-                "{msg_name}::_Shutdown => {{ actor._self_ref = None; return false; }},"
-            ));
-        } else {
-            self.line(&format!("{msg_name}::_Shutdown => return false,"));
-        }
+        self.line(&format!(
+            "{msg_name}::_Shutdown => {{ actor._self_ref = None; return false; }},"
+        ));
         // Wire _ExitSignal → on_exit(from_id, reason) if the actor defines that method.
         let on_exit_method = ad
             .methods

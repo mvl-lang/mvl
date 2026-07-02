@@ -31,7 +31,7 @@ use crate::mvl::ir::{
 };
 use crate::mvl::parser::lexer::Span;
 
-use super::emit_stmts::ty_to_type_expr;
+use super::emit_helpers::ty_to_type_expr;
 use super::TextEmitter;
 
 impl TextEmitter {

@@ -2,18 +2,83 @@
 // Copyright 2026 Schuberg Philis
 
 //! Shared low-level emit helpers — type mapping, heap-drop tracking,
-//! string globals, and value-conversion routines used by both the
-//! (soon-to-be-deleted) AST walker and the TIR walker.
+//! string globals, and value-conversion routines used by the TIR walker.
 //!
-//! Extracted from `emit_types.rs` in #1612 Phase 3b PR 2 prep. The
-//! AST-walking functions that take `&Expr` / `&Stmt` stay in
-//! `emit_types.rs` (which PR 2 deletes wholesale); the helpers here
-//! are AST-shape-agnostic and survive the deletion.
+//! Consolidated from the AST emit_*.rs modules (which #1612 Phase 3b PR 2
+//! deleted). All helpers here are AST-shape-agnostic and live above the
+//! TIR vs AST boundary.
 
 use crate::mvl::checker::types::Ty;
-use crate::mvl::parser::ast::{Literal, TypeExpr};
+use crate::mvl::parser::ast::{BinaryOp, Literal, TypeExpr};
+use crate::mvl::parser::lexer::Span;
 
 use super::{HeapKind, TextEmitter, RESULT_LLVM_TY};
+
+/// Synthesize a `TypeExpr` from a checker-resolved `Ty` so loop variables
+/// land in `local_mvl_types` and method dispatch can find the right kind.
+///
+/// Returns `None` for compound types we don't yet need to round-trip
+/// (e.g. `Ty::Session`).
+pub(super) fn ty_to_type_expr(ty: &Ty) -> Option<TypeExpr> {
+    let base = |name: &str, args: Vec<TypeExpr>| TypeExpr::Base {
+        name: name.into(),
+        args,
+        span: Span::default(),
+    };
+    Some(match ty {
+        Ty::Int => base("Int", vec![]),
+        Ty::UInt => base("UInt", vec![]),
+        Ty::Float => base("Float", vec![]),
+        Ty::Bool => base("Bool", vec![]),
+        Ty::Byte => base("Byte", vec![]),
+        Ty::UByte => base("UByte", vec![]),
+        Ty::Char => base("Char", vec![]),
+        Ty::Unit => base("Unit", vec![]),
+        Ty::String => base("String", vec![]),
+        Ty::List(inner) => base("List", vec![ty_to_type_expr(inner)?]),
+        Ty::Array(inner, _) => base("Array", vec![ty_to_type_expr(inner)?]),
+        Ty::Set(inner) => base("Set", vec![ty_to_type_expr(inner)?]),
+        Ty::Map(k, v) => base("Map", vec![ty_to_type_expr(k)?, ty_to_type_expr(v)?]),
+        Ty::Option(inner) => TypeExpr::Option {
+            inner: Box::new(ty_to_type_expr(inner)?),
+            span: Span::default(),
+        },
+        Ty::Result(ok, err) => TypeExpr::Result {
+            ok: Box::new(ty_to_type_expr(ok)?),
+            err: Box::new(ty_to_type_expr(err)?),
+            span: Span::default(),
+        },
+        Ty::Ref(mutable, inner) => TypeExpr::Ref {
+            mutable: *mutable,
+            inner: Box::new(ty_to_type_expr(inner)?),
+            span: Span::default(),
+        },
+        Ty::Named(name, args) => base(name, args.iter().filter_map(ty_to_type_expr).collect()),
+        // IFC labels (`Secret[T]`, `Tainted[T]`, user-declared labels). The label
+        // is erased at codegen; only the underlying `T` matters for LLVM
+        // emission.
+        Ty::Labeled(label, inner) => TypeExpr::Labeled {
+            label: label.clone(),
+            inner: Box::new(ty_to_type_expr(inner)?),
+            span: Span::default(),
+        },
+        // Refinements are spec-only and erased before codegen — drop the
+        // predicate and surface the underlying type.
+        Ty::Refined(inner, _pred) => ty_to_type_expr(inner)?,
+        Ty::Ptr(inner) => base("Ptr", vec![ty_to_type_expr(inner)?]),
+        // Fn types — required for `type Dispatcher = fn(...) -> ...` aliases
+        // to be registered in `module.fn_aliases`, which is how the emitter
+        // dispatches `d(req)` to an indirect call through a fn-pointer local
+        // instead of a direct named call (#1467 / #1612 task 2d).
+        Ty::Fn(params, ret, effects, _totality) => TypeExpr::Fn {
+            params: params.iter().filter_map(ty_to_type_expr).collect(),
+            ret: Box::new(ty_to_type_expr(ret)?),
+            effects: effects.clone(),
+            span: Span::default(),
+        },
+        _ => return None,
+    })
+}
 
 impl TextEmitter {
     // ── Heap drop emission (#1185) ────────────────────────────────────────
@@ -721,6 +786,71 @@ impl TextEmitter {
             }
             _ => "T".into(),
         }
+    }
+
+    // ── Binary operator → LLVM instruction string ─────────────────────────
+
+    /// Emit the LLVM IR for a binary op given operand types and SSA values.
+    /// `BinaryOp` is shared between AST and TIR via `crate::mvl::ir`.
+    pub(super) fn binary_instr(
+        op: &BinaryOp,
+        is_float: bool,
+        lhs_ty: &str,
+        lv: &str,
+        rv: &str,
+    ) -> String {
+        let is_bool = lhs_ty == "i1";
+        match op {
+            BinaryOp::Add if is_float => format!("fadd double {lv}, {rv}"),
+            BinaryOp::Sub if is_float => format!("fsub double {lv}, {rv}"),
+            BinaryOp::Mul if is_float => format!("fmul double {lv}, {rv}"),
+            BinaryOp::Div if is_float => format!("fdiv double {lv}, {rv}"),
+            BinaryOp::Add => format!("add i64 {lv}, {rv}"),
+            BinaryOp::Sub => format!("sub i64 {lv}, {rv}"),
+            BinaryOp::Mul => format!("mul i64 {lv}, {rv}"),
+            BinaryOp::Div => format!("sdiv i64 {lv}, {rv}"),
+            BinaryOp::Rem => format!("srem i64 {lv}, {rv}"),
+            BinaryOp::Eq if is_float => format!("fcmp oeq double {lv}, {rv}"),
+            BinaryOp::Ne if is_float => format!("fcmp one double {lv}, {rv}"),
+            BinaryOp::Lt if is_float => format!("fcmp olt double {lv}, {rv}"),
+            BinaryOp::Gt if is_float => format!("fcmp ogt double {lv}, {rv}"),
+            BinaryOp::Le if is_float => format!("fcmp ole double {lv}, {rv}"),
+            BinaryOp::Ge if is_float => format!("fcmp oge double {lv}, {rv}"),
+            BinaryOp::Eq if is_bool => format!("icmp eq i1 {lv}, {rv}"),
+            BinaryOp::Ne if is_bool => format!("icmp ne i1 {lv}, {rv}"),
+            BinaryOp::Eq => format!("icmp eq i64 {lv}, {rv}"),
+            BinaryOp::Ne => format!("icmp ne i64 {lv}, {rv}"),
+            BinaryOp::Lt => format!("icmp slt i64 {lv}, {rv}"),
+            BinaryOp::Gt => format!("icmp sgt i64 {lv}, {rv}"),
+            BinaryOp::Le => format!("icmp sle i64 {lv}, {rv}"),
+            BinaryOp::Ge => format!("icmp sge i64 {lv}, {rv}"),
+            BinaryOp::BitAnd => format!("and i64 {lv}, {rv}"),
+            BinaryOp::BitOr => format!("or i64 {lv}, {rv}"),
+            BinaryOp::BitXor => format!("xor i64 {lv}, {rv}"),
+            BinaryOp::Shl => format!("shl i64 {lv}, {rv}"),
+            BinaryOp::Shr => format!("ashr i64 {lv}, {rv}"),
+            BinaryOp::And | BinaryOp::Or => unreachable!("handled before binary_instr"),
+        }
+    }
+
+    // ── Actor runtime externs (#1149) ──────────────────────────────────────
+
+    /// Emit `declare` statements for actor runtime C-ABI functions, once per
+    /// module. Idempotent via `module.actor_runtime_declared`.
+    pub(super) fn ensure_actor_runtime_externs(&mut self) {
+        if self.module.actor_runtime_declared {
+            return;
+        }
+        self.ensure_extern("declare ptr @_mvl_actor_spawn(ptr, ptr, i64, i64, i64)");
+        self.ensure_extern("declare void @_mvl_actor_send(ptr, i64, i64, ptr)");
+        self.ensure_extern("declare void @_mvl_actor_drop(ptr)");
+        self.ensure_extern("declare ptr @_mvl_actor_self()");
+        self.ensure_extern("declare void @_mvl_actor_join_all()");
+        self.ensure_extern("declare i64 @_mvl_actor_get_id(ptr)");
+        // Link/monitor externs (#1599): ID-based C-ABI matching the MVL surface
+        // (`std.actors.{link, unlink, monitor, demonitor}`). Declared via the
+        // standard `c_symbols` builtin path; nothing else to declare here.
+        self.module.actor_runtime_declared = true;
     }
 
     // ── String → numeric parse (Result-wrapped) ────────────────────────────

@@ -15,7 +15,7 @@
 use crate::mvl::ir::{TirFn, TirProgram, TirTypeBody, TirTypeDecl, TirVariantFields, Ty, TypeExpr};
 use crate::mvl::parser::lexer::Span;
 
-use super::emit_stmts::ty_to_type_expr;
+use super::emit_helpers::ty_to_type_expr;
 use super::{TextEmitter, MAIN_RET};
 
 /// Convert a [`Ty`] back to a [`TypeExpr`] for use by AST-shaped helpers.
@@ -213,10 +213,17 @@ impl TextEmitter {
             .iter()
             .map(|p| ty_to_type_expr_or_unit(&p.ty))
             .collect();
-        self.module.fn_ret_types.insert(f.name.clone(), ret.clone());
-        self.module
-            .fn_param_types
-            .insert(f.name.clone(), params.clone());
+        // Only register the short name for free functions (no receiver).
+        // Extension methods register ONLY their qualified name to avoid
+        // clobbering unrelated free functions with the same short name
+        // (e.g. String::find returning Option[Int] must not overwrite
+        // the regex free-function find returning Option[Match]).
+        if f.receiver_type.is_none() {
+            self.module.fn_ret_types.insert(f.name.clone(), ret.clone());
+            self.module
+                .fn_param_types
+                .insert(f.name.clone(), params.clone());
+        }
         if let Some(recv) = &f.receiver_type {
             let qualified = format!("{}::{}", recv, f.name);
             self.module.fn_ret_types.insert(qualified.clone(), ret);

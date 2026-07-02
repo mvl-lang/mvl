@@ -510,10 +510,66 @@ impl TextEmitter {
                 self.fn_ctx
                     .reg_types
                     .insert(raw_payload.clone(), "ptr".into());
-                let slot = self.next_reg();
-                self.push_instr(&format!("{slot} = alloca ptr"));
-                self.push_instr(&format!("store ptr {raw_payload}, ptr {slot}"));
-                let r1 = self.wrap_result_pair(&disc, &slot);
+
+                // Determine the payload inner type.  When the inner type is a named
+                // struct (e.g. `Option[Match]` from `_mvl_regex_find`), the C-ABI
+                // returns a heap pointer to the struct rather than an inline value.
+                // Copy the struct into a properly-sized alloca so `emit_option_match_tir`
+                // can use the uniform `load %T, ptr alloca` convention (#1645).
+                // For ptr-typed payloads (String, List, Regex, etc.) keep the existing
+                // `alloca ptr; store ptr raw_payload` pattern.
+                // For struct-typed Option payloads whose fields are all non-opaque
+                // (e.g. `Option[Match]` from `_mvl_regex_find`), the C-ABI returns
+                // `*mut T` where T's fields are directly accessible.  Skip the extra
+                // alloca-ptr wrapping so `load %T, ptr (*mut T)` in the match arm
+                // reads T from the heap, matching `load %T, ptr (alloca %T)` for
+                // MVL-constructed options (#1645).
+                // For opaque handles (e.g. `Result[Child, ...]`) the C-ABI also
+                // returns `*mut T` but the LLVM struct doesn't match the runtime
+                // layout — keep the alloca-ptr indirection so the result is used
+                // as an opaque ptr, not a dereferenced struct.
+                // Heuristic: a struct is a "value struct" (fields accessible) only
+                // when ALL of its fields resolve to non-ptr types (no opaque fields).
+                let struct_ty_for_slot: Option<String> = {
+                    use crate::mvl::ir::TypeExpr;
+                    let cloned = self.module.fn_ret_types.get(name).cloned();
+                    cloned.and_then(|ret_te| {
+                        let inner_te: Option<TypeExpr> = match ret_te {
+                            TypeExpr::Option { inner, .. } => Some(*inner),
+                            _ => None,  // Result: always use alloca-ptr for opaque handles
+                        };
+                        inner_te.and_then(|te| {
+                            let ty_str = self.llvm_ty_ctx(&te);
+                            if !ty_str.starts_with('%') {
+                                return None; // scalar/ptr inner type — use alloca ptr
+                            }
+                            // Check all struct fields are primitive LLVM types (no
+                            // nested struct/aggregate fields).  This distinguishes
+                            // value structs like `Match { text: String, start: Int }`
+                            // (fields = ptr, i64, i64) from opaque handles like
+                            // `Child { stdin: Option[ChildStdin], ... }` whose fields
+                            // lower to aggregate types `{ i8, ptr }`.
+                            let struct_name = &ty_str[1..]; // strip '%'
+                            let all_primitive = self.module.struct_fields.get(struct_name)
+                                .map(|fields| fields.iter().all(|(_, fte)| {
+                                    let f = self.llvm_ty_ctx(fte);
+                                    !f.starts_with('%') && !f.starts_with('{')
+                                }))
+                                .unwrap_or(false);
+                            if all_primitive { Some(ty_str) } else { None }
+                        })
+                    })
+                };
+                let r1 = if struct_ty_for_slot.is_some() {
+                    // Value-struct payload: *mut T is the right pointer for
+                    // `load %T, ptr payload` in the match arm.
+                    self.wrap_result_pair(&disc, &raw_payload)
+                } else {
+                    let slot = self.next_reg();
+                    self.push_instr(&format!("{slot} = alloca ptr"));
+                    self.push_instr(&format!("store ptr {raw_payload}, ptr {slot}"));
+                    self.wrap_result_pair(&disc, &slot)
+                };
                 return Ok(Some(r1));
             }
 
@@ -996,7 +1052,7 @@ impl TextEmitter {
                             .locals
                             .insert(var_name.clone(), some_val.clone());
                         if let Some(ref imty) = inner_ty {
-                            if let Some(te) = super::emit_stmts::ty_to_type_expr(imty) {
+                            if let Some(te) = super::emit_helpers::ty_to_type_expr(imty) {
                                 self.fn_ctx.local_mvl_types.insert(var_name.clone(), te);
                             }
                         }

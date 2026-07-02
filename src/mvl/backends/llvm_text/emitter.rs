@@ -13,7 +13,7 @@ use super::context::{FnCtx, ModuleCtx, MonoQueue};
 use super::BuiltinSymbolInfo;
 use crate::mvl::checker::types::Ty;
 use crate::mvl::ir::TirProgram;
-use crate::mvl::parser::ast::{Decl, FnDecl, Program, Stmt, TypeBody, TypeExpr, VariantFields};
+use crate::mvl::parser::ast::{Program, TypeExpr};
 use crate::mvl::parser::lexer::Span;
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -71,29 +71,34 @@ impl LlvmTextCompiler {
 
     /// Compile prelude programs merged with `prog` into a single LLVM IR module.
     ///
-    /// Prelude programs are emitted first (stdlib bodies), then `prog`.
-    /// `builtin_symbols` is pre-populated into the emitter so that calls to
-    /// `builtin fn` names are routed to their C-ABI symbols automatically.
-    ///
-    /// Non-builtin extension methods in prelude programs (e.g. `String::contains`,
-    /// `String::starts_with`) are stripped before emission — they are handled
-    /// via hardcoded C-ABI dispatch in `emit_method_call` and must not be
-    /// emitted as MVL bodies (they reference unsupported stdlib constructs).
+    /// Internally lowers `prog` and each prelude to TIR (`mono::collect_fns` +
+    /// `mono::monomorphize` + `ir::lower::lower`), then delegates to
+    /// [`Self::compile_to_ir_with_prelude_tir`]. The legacy AST walker was
+    /// deleted in #1612 Phase 3b PR 2 — this entry point survives only as an
+    /// AST-input convenience for callers (CLI, tests) that haven't migrated.
     pub fn compile_to_ir_with_prelude(
         &self,
         prelude: &[Program],
         prog: &Program,
         module_name: &str,
     ) -> Result<String, String> {
-        let mut emitter =
-            TextEmitter::new_with_builtins(module_name, &self.target_triple, &self.builtin_symbols);
-        emitter.set_expr_types(self.expr_types.clone());
-        for p in prelude {
-            let stripped = strip_prelude_extension_methods(p);
-            emitter.emit_program(&stripped)?;
-        }
-        emitter.emit_program(prog)?;
-        Ok(emitter.finish())
+        use crate::mvl::ir::lower;
+        use crate::mvl::passes::mono;
+
+        let entry_all_fns = mono::collect_fns(std::iter::once(prog).chain(prelude.iter()));
+        let entry_mono = mono::monomorphize(prog, &entry_all_fns, &self.expr_types);
+        let entry_tir = lower::lower(prog, &entry_mono, &self.expr_types);
+
+        let prelude_tirs: Vec<TirProgram> = prelude
+            .iter()
+            .map(|p| {
+                let fns = mono::collect_fns([p]);
+                let m = mono::monomorphize(p, &fns, &self.expr_types);
+                lower::lower(p, &m, &self.expr_types)
+            })
+            .collect();
+
+        self.compile_to_ir_with_prelude_tir(&prelude_tirs, &entry_tir, module_name)
     }
 
     /// TIR-walking entry point (#1612, Phase 3b PR 1).
@@ -165,48 +170,7 @@ const STDLIB_REPLACED_BY_DISPATCH: &[&str] = &[
     "replace",
 ];
 
-/// Remove prelude function bodies that the llvm_text emitter cannot handle.
-///
-/// Strips non-builtin functions that fall into either category:
-///
-/// 1. **Extension methods** (`receiver_type.is_some()`) — e.g. `String::contains`,
-///    `List::is_empty`.  These call other String/List kernel methods via patterns
-///    the emitter cannot yet fully lower (e.g. `self.find(sub).is_some()`).
-///    Method calls on these types are handled via hardcoded C-ABI dispatch in
-///    `emit_method_call` instead.
-///
-/// 2. **Option/Result return types** — prelude functions like `env.get_secret` or
-///    `env.env_var` that return `Option[T]` or `Result[T, E]` may call runtime
-///    symbols not available in the lli runtime.  User-defined functions with
-///    Option/Result are handled correctly by the emitter — this filter only
-///    applies to prelude functions.
-fn strip_prelude_extension_methods(prog: &Program) -> Program {
-    let mut out = prog.clone();
-    out.declarations.retain(|d| {
-        if let Decl::Fn(fd) = d {
-            if fd.is_builtin {
-                return true; // keep builtin declarations
-            }
-            // Drop non-builtin extension methods.
-            if fd.receiver_type.is_some() {
-                return false;
-            }
-            // Drop stdlib functions replaced by direct C-ABI dispatch (#1202).
-            if STDLIB_REPLACED_BY_DISPATCH.contains(&fd.name.as_str()) {
-                return false;
-            }
-            // Drop non-builtin prelude functions whose return type is Option or
-            // Result — they may call runtime symbols not available in lli.
-            if return_type_needs_option_abi(&fd.return_type) {
-                return false;
-            }
-        }
-        true
-    });
-    out
-}
-
-/// TIR variant of [`strip_prelude_extension_methods`] — walks `TirFn`s.
+/// TIR variant of strip_prelude_extension_methods — walks `TirFn`s.
 ///
 /// Mirrors the filtering rules of the AST version: drops non-builtin extension
 /// methods, stdlib functions replaced by C-ABI dispatch, and non-builtin prelude
@@ -239,20 +203,6 @@ fn return_type_needs_option_abi_ty(ty: &Ty) -> bool {
         Ty::Ref(_, inner) | Ty::Labeled(_, inner) | Ty::Refined(inner, _) => {
             return_type_needs_option_abi_ty(inner)
         }
-        _ => false,
-    }
-}
-
-/// Return `true` if `ty` is `Option[_]` or `Result[_, _]` (possibly wrapped
-/// in `Labeled` or `Refined`).  Used to skip prelude functions that may
-/// reference runtime symbols unavailable in the lli runtime.
-fn return_type_needs_option_abi(ty: &TypeExpr) -> bool {
-    match ty {
-        TypeExpr::Option { .. } | TypeExpr::Result { .. } => true,
-        TypeExpr::Labeled { inner, .. } | TypeExpr::Refined { inner, .. } => {
-            return_type_needs_option_abi(inner)
-        }
-        TypeExpr::Ref { inner, .. } => return_type_needs_option_abi(inner),
         _ => false,
     }
 }
@@ -418,370 +368,28 @@ impl TextEmitter {
         }
     }
 
-    // ── Program emission ──────────────────────────────────────────────────
-
-    fn emit_program(&mut self, prog: &Program) -> Result<(), String> {
-        // Pre-pass: register all enums so that struct field type resolution
-        // via `llvm_ty_ctx` can see enum types regardless of declaration order.
-        for decl in &prog.declarations {
-            if let Decl::Type(td) = decl {
-                if let TypeBody::Enum(variants) = &td.body {
-                    let variant_names: Vec<String> =
-                        variants.iter().map(|v| v.name.clone()).collect();
-                    let variant_fields: Vec<Vec<TypeExpr>> = variants
-                        .iter()
-                        .map(|v| match &v.fields {
-                            VariantFields::Tuple(tys) => tys.clone(),
-                            VariantFields::Struct(fields) => {
-                                fields.iter().map(|f| f.ty.clone()).collect()
-                            }
-                            VariantFields::Unit => Vec::new(),
-                        })
-                        .collect();
-                    // Register field names for struct variants so emit_construct
-                    // can reorder named fields to declaration order (#1357).
-                    for v in variants {
-                        if let VariantFields::Struct(fields) = &v.fields {
-                            let qname = format!("{}::{}", td.name, v.name);
-                            let names: Vec<String> =
-                                fields.iter().map(|f| f.name.clone()).collect();
-                            self.module
-                                .enum_struct_variant_field_names
-                                .insert(qname, names);
-                        }
-                    }
-                    self.module
-                        .enum_variants
-                        .insert(td.name.clone(), variant_names);
-                    self.module
-                        .enum_variant_fields
-                        .insert(td.name.clone(), variant_fields);
-                }
-            }
-        }
-
-        // First pass: register all function return types and type declarations.
-        for decl in &prog.declarations {
-            match decl {
-                Decl::Fn(fd) => {
-                    let ret = fd.return_type.as_ref().clone();
-                    let params: Vec<TypeExpr> = fd.params.iter().map(|p| p.ty.clone()).collect();
-                    // Register under the short name (e.g. `from_chars`)
-                    self.module
-                        .fn_ret_types
-                        .insert(fd.name.clone(), ret.clone());
-                    self.module
-                        .fn_param_types
-                        .insert(fd.name.clone(), params.clone());
-                    // Also register under the qualified name (e.g. `String::from_chars`)
-                    // so that static call-site lookups like `fn_ret_types["String::from_chars"]`
-                    // resolve correctly.
-                    if let Some(recv) = &fd.receiver_type {
-                        let qualified = format!("{}::{}", recv, fd.name);
-                        self.module
-                            .fn_ret_types
-                            .insert(qualified.clone(), ret.clone());
-                        self.module.fn_param_types.insert(qualified, params);
-                    }
-                }
-                Decl::Type(td) => match &td.body {
-                    TypeBody::Struct { fields, .. } => {
-                        // Zero-field structs are opaque handles (e.g. `Instant = struct {}`).
-                        // Treat them as `ptr` instead of registering a named struct type so
-                        // that C-ABI functions returning `*mut c_void` are typed correctly.
-                        if fields.is_empty() {
-                            // Don't register — llvm_ty_ctx falls back to "ptr" for unknown names.
-                        } else {
-                            let field_list: Vec<(String, TypeExpr)> = fields
-                                .iter()
-                                .map(|f| (f.name.clone(), f.ty.clone()))
-                                .collect();
-                            // Emit type definition: %Name = type { ty0, ty1, ... }
-                            // Use llvm_ty_ctx to resolve enum/struct field types correctly.
-                            let field_types: Vec<String> = field_list
-                                .iter()
-                                .map(|(_, ty)| self.llvm_ty_ctx(ty))
-                                .collect();
-                            self.module.type_defs.push(format!(
-                                "%{} = type {{ {} }}",
-                                td.name,
-                                field_types.join(", ")
-                            ));
-                            self.module
-                                .struct_fields
-                                .insert(td.name.clone(), field_list);
-                        }
-                    }
-                    // Enums already registered in pre-pass above.
-                    TypeBody::Enum(_) => {}
-                    TypeBody::Alias(inner) => {
-                        // Register fn-type aliases so indirect calls through
-                        // an aliased type (e.g. `d: Dispatcher`) can resolve
-                        // to their underlying `Fn` signature (#1467 LLVM port).
-                        if matches!(inner.as_ref(), TypeExpr::Fn { .. }) {
-                            self.module
-                                .fn_aliases
-                                .insert(td.name.clone(), (**inner).clone());
-                        }
-                    }
-                },
-                Decl::Actor(ad) => {
-                    let state_name = format!("{}State", ad.name);
-                    let field_list: Vec<(String, TypeExpr)> = ad
-                        .fields
-                        .iter()
-                        .map(|f| (f.name.clone(), f.ty.clone()))
-                        .collect();
-                    let field_types: Vec<String> = field_list
-                        .iter()
-                        .map(|(_, ty)| self.llvm_ty_ctx(ty))
-                        .collect();
-                    self.module.type_defs.push(format!(
-                        "%{state_name} = type {{ {} }}",
-                        field_types.join(", ")
-                    ));
-                    self.module.struct_fields.insert(state_name, field_list);
-                    self.module.actor_decls.insert(ad.name.clone(), ad.clone());
-                }
-                Decl::Extern(ed) if ed.abi == "c" => {
-                    // Emit LLVM `declare` for each extern "c" function (#811).
-                    // These are resolved at link time from a loaded shared library
-                    // (e.g. `lli --load=libpkg_foo.{dylib,so}`).
-                    for lib in &ed.link_libs {
-                        self.ensure_extern(&format!("; link: {lib}"));
-                    }
-                    for ef in &ed.fns {
-                        let ret_ty = Self::llvm_ty(&ef.return_type);
-                        let param_tys: Vec<String> =
-                            ef.params.iter().map(|p| Self::llvm_ty(&p.ty)).collect();
-                        let decl =
-                            format!("declare {} @{}({})", ret_ty, ef.name, param_tys.join(", "));
-                        self.ensure_extern(&decl);
-                        // Register return type and param types so call emission works.
-                        self.module
-                            .fn_ret_types
-                            .insert(ef.name.clone(), ef.return_type.as_ref().clone());
-                        self.module.fn_param_types.insert(
-                            ef.name.clone(),
-                            ef.params.iter().map(|p| p.ty.clone()).collect(),
-                        );
-                    }
-                }
-                Decl::Relabel(rd) if rd.audit => {
-                    // Track declaration-level `audit` relabels so call sites of
-                    // these transitions emit a runtime audit event even when the
-                    // expression itself does not carry `audit` (#896, #1554).
-                    self.module
-                        .audit_relabels
-                        .insert(rd.name.clone(), (rd.from.clone(), rd.to.clone()));
-                }
-                _ => {}
-            }
-        }
-
-        // Actor pass: emit behavior functions + dispatch for each actor.
-        // Dedupe across `emit_program` calls — the pass runs once per program
-        // (prelude + user) and `actor_decls` accumulates, so without
-        // `actor_emitted` std.actors actors would be emitted N times (#1610).
-        if !self.module.actor_decls.is_empty() {
-            self.ensure_actor_runtime_externs();
-            // Sort keys for deterministic emission order — HashMap iteration
-            // order differs per HashMap instance/seed, which surfaced as a
-            // false-positive divergence in the corpus IR-parity harness
-            // (#1612 task 2d).
-            let mut actor_names: Vec<String> = self.module.actor_decls.keys().cloned().collect();
-            actor_names.sort();
-            for name in actor_names {
-                if !self.module.actor_emitted.insert(name.clone()) {
-                    continue;
-                }
-                let ad = self.module.actor_decls[&name].clone();
-                self.emit_actor_decl(&ad)?;
-            }
-        }
-
-        // Collect generic function declarations for on-demand monomorphization.
-        for decl in &prog.declarations {
-            if let Decl::Fn(fd) = decl {
-                if !fd.type_params.is_empty() {
-                    self.mono.generic_fns.insert(fd.name.clone(), fd.clone());
-                }
-            }
-        }
-
-        // Second pass: emit each non-generic function body.
-        // Skip: test fns, builtin fns (no MVL body — dispatched via C-ABI),
-        //        and generic fns (monomorphized lazily when called).
-        for decl in &prog.declarations {
-            if let Decl::Fn(fd) = decl {
-                if !fd.is_test && !fd.is_builtin && fd.type_params.is_empty() {
-                    self.emit_fn(fd)?;
-                }
-            }
-        }
-
-        // Third pass: emit monomorphized copies queued during call emission.
-        // Loop because a monomorphized body may itself call another generic fn.
-        const MONO_LIMIT: usize = 10_000;
-        let mut mono_iterations = 0usize;
-        while !self.mono.mono_queue.is_empty() {
-            mono_iterations += 1;
-            if mono_iterations > MONO_LIMIT {
-                return Err(
-                    "monomorphization limit exceeded — possible infinite instantiation".into(),
-                );
-            }
-            let queue = std::mem::take(&mut self.mono.mono_queue);
-            for (mangled, orig_name, concrete_types) in queue {
-                let gfd = match self.mono.generic_fns.get(&orig_name) {
-                    Some(fd) => fd.clone(),
-                    None => continue,
-                };
-                // Set up type parameter → concrete type mapping.
-                for (tp, ct) in gfd.type_params.iter().zip(concrete_types.iter()) {
-                    self.mono
-                        .type_param_map
-                        .insert(tp.name().to_string(), ct.clone());
-                }
-                // Emit the function under its mangled name.
-                let mut fd = gfd;
-                fd.name = mangled;
-                fd.type_params.clear();
-                self.emit_fn(&fd)?;
-                self.mono.type_param_map.clear();
-            }
-        }
-
-        Ok(())
-    }
-
-    // ── Function emission ─────────────────────────────────────────────────
-
-    pub(super) fn emit_fn(&mut self, fd: &FnDecl) -> Result<(), String> {
-        let ret_ty = fd.return_type.as_ref();
-        // Replace the per-fn context wholesale — the old state is dropped here,
-        // making it impossible to forget resetting a field (#1523).
-        self.fn_ctx = FnCtx::new(ret_ty.clone());
-        self.fn_ctx.current_fn_is_main = fd.name == "main";
-
-        let params: Vec<String> = fd
-            .params
-            .iter()
-            .filter_map(|p| {
-                let ty_str = self.llvm_ty_ctx(&p.ty);
-                if ty_str == "void" {
-                    None
-                } else {
-                    Some(format!("{ty_str} %{}", p.name))
-                }
-            })
-            .collect();
-        let params_str = params.join(", ");
-
-        let llvm_ret = self.llvm_ty_ctx(ret_ty);
-
-        let sig = if self.fn_ctx.current_fn_is_main {
-            "define i32 @main()".to_string()
-        } else {
-            format!(
-                "define {llvm_ret} @{fn_name}({params_str})",
-                fn_name = fd.name
-            )
-        };
-
-        self.push_line(&sig);
-        self.push_line("{");
-        self.push_line("entry:");
-
-        // Bind parameters as SSA locals, track MVL types for struct access
-        for p in &fd.params {
-            let ty_str = self.llvm_ty_ctx(&p.ty);
-            if ty_str != "void" {
-                let ssa = format!("%{}", p.name);
-                self.fn_ctx.locals.insert(p.name.clone(), ssa.clone());
-                self.fn_ctx.reg_types.insert(ssa, ty_str);
-                self.fn_ctx
-                    .local_mvl_types
-                    .insert(p.name.clone(), p.ty.clone());
-            }
-        }
-
-        let body_val = self.emit_block(&fd.body)?;
-
-        if !self.fn_ctx.terminated {
-            // If the function returns a heap-allocated local, exclude it from
-            // drops — ownership transfers to the caller (move semantics).
-            if let Some(Stmt::Expr { expr, .. }) = fd.body.stmts.last() {
-                self.exclude_returned_value(expr);
-            }
-            self.emit_heap_drops();
-            if self.fn_ctx.current_fn_is_main {
-                if !self.module.actor_decls.is_empty() {
-                    // Drop each handle to close the sender — this signals the
-                    // actor thread's recv loop to exit.
-                    for handle in std::mem::take(&mut self.fn_ctx.spawned_actor_handles) {
-                        self.push_instr(&format!("call void @_mvl_actor_drop(ptr {handle})"));
-                    }
-                    self.push_instr("call void @_mvl_actor_join_all()");
-                }
-                self.push_instr(MAIN_RET);
-            } else if Self::is_void(ret_ty) {
-                self.push_instr("ret void");
-            } else if let Some(val) = body_val {
-                self.push_instr(&format!("ret {llvm_ret} {val}"));
-            } else {
-                self.push_instr(&format!("ret {llvm_ret} undef"));
-            }
-        }
-
-        self.push_line("}");
-        let body_text = self.fn_ctx.fn_buf.join("\n");
-        self.module.fn_bodies.push(body_text);
-        Ok(())
-    }
 }
 
-// ── Submodules (split from monolithic emitter.rs) ─────────────────────────────
+// ── Submodules ────────────────────────────────────────────────────────────────
 //
 // Each submodule uses `#[path]` to remain a child of this module, giving
 // access to `TextEmitter`'s private fields without any visibility changes.
 
-#[path = "emit_types.rs"]
-mod emit_types;
-
-#[path = "emit_stmts.rs"]
-mod emit_stmts;
-
-#[path = "emit_exprs.rs"]
-mod emit_exprs;
-
-#[path = "emit_construct.rs"]
-mod emit_construct;
-
-#[path = "emit_mono.rs"]
-mod emit_mono;
-
-#[path = "emit_method_call.rs"]
-mod emit_method_call;
-
-// Shared C-ABI dispatch helpers — used by both AST and TIR walkers.
-// Extracted from emit_method_call.rs in PR 2 of #1612 prep.
+// Shared C-ABI dispatch helpers.
 #[path = "c_call.rs"]
 mod c_call;
 
-// Shared low-level emit helpers (type mapping, heap drops, string globals,
-// value conversion) — extracted from emit_types.rs in PR 2 of #1612 prep.
+// Shared low-level emit helpers — type mapping, heap-drop tracking, string
+// globals, value conversion, closure infra, enum lookup, mangling, literals.
 #[path = "emit_helpers.rs"]
 mod emit_helpers;
 
-#[path = "emit_closures.rs"]
-mod emit_closures;
-
-// ── TIR-walking parallel implementation (#1612, Phase 3b PR 1) ────────────────
+// ── TIR-walking emitter (#1612, Phase 3b PR 2) ────────────────────────────────
 //
-// These submodules implement a parallel emitter that walks [`TirProgram`] instead
-// of [`Program`]. Built leaf-first (see ADR-0050) so each commit compiles. When
-// IR parity is reached across the corpus, the AST modules above will be deleted.
+// These submodules walk [`TirProgram`] and are the only emitter path. The
+// AST-walking emit_*.rs modules were deleted in #1612 PR 2; the public AST
+// entry point [`LlvmTextCompiler::compile_to_ir_with_prelude`] lowers AST →
+// TIR internally and delegates to the TIR walker.
 
 #[path = "emit_program_tir.rs"]
 mod emit_program_tir;
@@ -815,15 +423,6 @@ fn default_target_triple() -> String {
     #[allow(unreachable_code)]
     "x86_64-pc-linux-gnu".to_string()
 }
-
-// ── Actor emission submodule ──────────────────────────────────────────────────
-
-// `emit_actors.rs` lives in the same directory as `emitter.rs`.  Using
-// `#[path]` keeps it a child of `emitter` so that the private types
-// `TextEmitter` and `RefLocal` (and their private fields) remain accessible
-// without any visibility changes.
-#[path = "emit_actors.rs"]
-mod emit_actors;
 
 // ── Unit tests ────────────────────────────────────────────────────────────────
 

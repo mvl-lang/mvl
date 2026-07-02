@@ -13,7 +13,7 @@ use crate::mvl::ir::{
     LValue, LetKind, Pattern, TirBlock, TirElseBranch, TirExpr, TirExprKind, TirStmt,
 };
 
-use super::emit_stmts::ty_to_type_expr;
+use super::emit_helpers::ty_to_type_expr;
 use super::{RefLocal, TextEmitter, MAIN_RET};
 
 impl TextEmitter {
