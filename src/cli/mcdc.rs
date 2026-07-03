@@ -9,6 +9,7 @@ use mvl::mvl::checker;
 use mvl::mvl::loader;
 use mvl::mvl::parser::ast::Decl;
 use mvl::mvl::passes::mcdc::analysis::{analyze_mcdc, DecisionInfo};
+use mvl::mvl::pipeline::lower_prelude;
 use mvl::mvl::stdlib;
 use std::collections::HashSet;
 use std::fs;
@@ -135,7 +136,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
             &tir,
             TranspileConfig::new(&module_name)
                 .with_file_stem(&module_name)
-                .with_prelude(stdlib_prelude_progs.clone())
+                .with_prelude(lower_prelude(&stdlib_prelude_progs))
                 .with_mcdc(start_id),
         );
         let out = result.output;
@@ -184,7 +185,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
             &tir,
             TranspileConfig::new(&module_name)
                 .with_file_stem(&module_name)
-                .with_prelude(stdlib_prelude_progs.clone())
+                .with_prelude(lower_prelude(&stdlib_prelude_progs))
                 .with_mcdc(start_id)
                 .for_test_crate(),
         );

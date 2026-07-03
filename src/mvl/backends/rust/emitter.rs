@@ -7,10 +7,9 @@
 //! All other `emit_*` modules take `&mut RustEmitter` and append to it.
 
 use crate::mvl::backends::rust::capability_params::{
-    build_capability_params_map_tir, explicit_borrow_flags_pub,
+    build_capability_params_map_tir, explicit_borrow_flags_tir,
 };
 use crate::mvl::ir::{BinaryOp, TirFn, TirProgram};
-use crate::mvl::parser::ast::Decl;
 use crate::mvl::parser::lexer::Span;
 use crate::mvl::passes::coverage::{BranchKind, CoverageMap};
 use crate::mvl::passes::mcdc::transform::{DecisionKind, FnFieldReads, MCDCMap};
@@ -726,14 +725,22 @@ impl RustEmitter {
                         if let Some(content) = stdlib::stdlib_content(&filename) {
                             let (mut p, _) = Parser::new(content);
                             let loaded = p.parse_program();
-                            for d in &loaded.declarations {
-                                if let Decl::Fn(fd) = d {
-                                    if !self.capability_params_map.contains_key(&fd.name) {
-                                        let flags = explicit_borrow_flags_pub(&fd.params);
-                                        if flags.iter().any(|b| b.is_some()) {
-                                            self.capability_params_map
-                                                .insert(fd.name.clone(), flags);
-                                        }
+                            // Use the checker to obtain expr_types before lowering, so the
+                            // lowerer has type info for any function calls in stdlib bodies.
+                            let expr_types = crate::mvl::checker::check(&loaded).expr_types;
+                            let all_fns = crate::mvl::passes::mono::collect_fns([&loaded]);
+                            let mono = crate::mvl::passes::mono::monomorphize(
+                                &loaded,
+                                &all_fns,
+                                &expr_types,
+                            );
+                            let stdlib_tir =
+                                crate::mvl::ir::lower::lower(&loaded, &mono, &expr_types);
+                            for f in &stdlib_tir.fns {
+                                if !self.capability_params_map.contains_key(&f.name) {
+                                    let flags = explicit_borrow_flags_tir(f);
+                                    if flags.iter().any(|b| b.is_some()) {
+                                        self.capability_params_map.insert(f.name.clone(), flags);
                                     }
                                 }
                             }
@@ -976,7 +983,8 @@ fn collect_undefined_types_tir(tir: &TirProgram, prelude_tirs: &[TirProgram]) ->
         }
     }
 
-    // Types from Rust-backed stdlib modules
+    // Types from Rust-backed stdlib modules — extract type names directly from AST
+    // to avoid running the full lowering pipeline on files with unresolved references.
     for ud in &tir.uses {
         if ud.path.first().map(|s| s == "std").unwrap_or(false) && ud.path.len() >= 2 {
             let module = &ud.path[1];
@@ -985,7 +993,7 @@ fn collect_undefined_types_tir(tir: &TirProgram, prelude_tirs: &[TirProgram]) ->
                 let (mut p, _) = crate::mvl::parser::Parser::new(content);
                 let stdlib_prog = p.parse_program();
                 for d in &stdlib_prog.declarations {
-                    if let Decl::Type(td) = d {
+                    if let crate::mvl::parser::ast::Decl::Type(td) = d {
                         defined.insert(td.name.clone());
                     }
                 }

@@ -49,8 +49,8 @@ def main() -> int:
     ap.add_argument(
         "--budget",
         type=int,
-        default=4,
-        help="Max allowed parser::ast use-imports in backends (default: 4, target: 0)",
+        default=0,
+        help="Max allowed parser::ast use-imports in backends (default: 0, target: 0)",
     )
     ap.add_argument(
         "--verbose",
@@ -82,7 +82,7 @@ def main() -> int:
         )
         return 1
 
-    print("✓ OK (budget not exceeded; reduce toward 0 in Phase 3)")
+    print("✓ OK (budget not exceeded)")
     return 0
 
 

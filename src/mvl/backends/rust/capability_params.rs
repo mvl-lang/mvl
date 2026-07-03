@@ -35,29 +35,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::mvl::ir::{Capability, TypeExpr};
-use crate::mvl::parser::ast::Param;
+use crate::mvl::ir::Capability;
 
 // ── Public API ────────────────────────────────────────────────────────────────
-
-// ── Explicit-annotation helpers ───────────────────────────────────────────────
-
-/// Returns the borrow kind for an explicitly annotated reference type.
-fn explicit_ref_mutability(ty: &TypeExpr) -> Option<bool> {
-    match ty {
-        TypeExpr::Ref { mutable, .. } => Some(*mutable),
-        _ => None,
-    }
-}
-
-/// Explicit borrow flags for a parameter list (no body analysis).
-/// Used by the emitter to register borrow annotations from builtin/stdlib functions.
-pub fn explicit_borrow_flags_pub(params: &[Param]) -> Vec<Option<bool>> {
-    params
-        .iter()
-        .map(|p| explicit_ref_mutability(&p.ty))
-        .collect()
-}
 
 // ── TIR-based capability analysis ────────────────────────────────────────────
 
@@ -120,7 +100,7 @@ fn collect_fn_alias_names_tir(
 
 /// Explicit-only borrow flags for a TIR function (no body analysis).
 /// Used for prelude/stdlib functions where body analysis is incorrect.
-fn explicit_borrow_flags_tir(fd: &crate::mvl::ir::TirFn) -> Vec<Option<bool>> {
+pub(crate) fn explicit_borrow_flags_tir(fd: &crate::mvl::ir::TirFn) -> Vec<Option<bool>> {
     fd.params
         .iter()
         .map(|p| {

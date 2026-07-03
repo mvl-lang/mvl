@@ -5,6 +5,7 @@ use mvl::mvl::backends::rust as transpiler;
 use mvl::mvl::checker;
 use mvl::mvl::loader;
 use mvl::mvl::parser::ast::Decl;
+use mvl::mvl::pipeline::lower_prelude;
 use std::fs;
 use std::path::PathBuf;
 use std::process;
@@ -76,7 +77,7 @@ pub fn run(path: &str, quiet: bool, gen_boundary: bool, limit: Option<usize>) {
             &tir,
             transpiler::TranspileConfig::new(&module_name)
                 .with_file_stem(&module_name)
-                .with_prelude(stdlib_prelude_progs.clone())
+                .with_prelude(lower_prelude(&stdlib_prelude_progs))
                 .with_mutation()
                 .for_test_file(),
         );
@@ -126,7 +127,7 @@ pub fn run(path: &str, quiet: bool, gen_boundary: bool, limit: Option<usize>) {
             &tir,
             transpiler::TranspileConfig::new(&module_name)
                 .with_file_stem(&module_name)
-                .with_prelude(stdlib_prelude_progs.clone())
+                .with_prelude(lower_prelude(&stdlib_prelude_progs))
                 .with_mutation()
                 .for_test_crate(),
         );
