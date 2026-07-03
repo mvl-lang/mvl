@@ -425,11 +425,11 @@ impl TextEmitter {
         Ok(())
     }
 
-    /// TIR variant of [`Self::emit_for_stmt`].
+    /// Emit a `for` loop.
     ///
-    /// Dispatches to `emit_for_range_tir` when the iterator is a `range(lo, hi)`
-    /// FnCall; otherwise delegates to `emit_for_list_tir`. Receiver/iter type
-    /// reads use `iter.ty` directly — no expr_types lookup needed.
+    /// Dispatches to [`Self::emit_for_range_tir`] when the iterator is a
+    /// `range(lo, hi)` FnCall; otherwise delegates to [`Self::emit_for_list_tir`].
+    /// Receiver/iter types come from `iter.ty` directly.
     fn emit_for_stmt_tir(
         &mut self,
         pattern: &Pattern,
@@ -523,11 +523,10 @@ impl TextEmitter {
         Ok(())
     }
 
-    /// TIR variant of [`Self::emit_for_list`].
+    /// Emit an over-list `for` loop.
     ///
     /// Element type comes from `iter.ty` (unwrapping `Ref` / `Labeled` /
-    /// `Refined` then matching `Ty::List(e)` / `Array(e, _)` / `Set(e)`),
-    /// instead of the AST `expr_types.get(iter.span())` lookup.
+    /// `Refined` then matching `Ty::List(e)` / `Array(e, _)` / `Set(e)`).
     fn emit_for_list_tir(
         &mut self,
         var_name: &str,

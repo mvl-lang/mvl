@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Schuberg Philis
 
-//! Expression emission for the TIR-walking path (#1612, Phase 3b PR 1).
+//! Expression emission for the TIR-walking LLVM emitter (#1612 Phase 3b).
 //!
-//! Parallel to `emit_exprs.rs`. Built leaf-first:
-//! 1. `Literal`, `Var` (this commit — minimal leaves)
-//! 2. `Unary`, `Binary`, `FieldAccess`
-//! 3. `If`, `Match`, `Block`, `FnCall`, `Lambda`, …
-//! 4. Composite walkers (`MethodCall`, `Construct`, `Spawn`, …)
+//! Covers all `TirExprKind` variants:
+//! - Leaves: `Literal`, `Var`
+//! - Operators: `Unary`, `Binary`, `FieldAccess`
+//! - Control flow: `If`, `Match`, `Block`, `FnCall`, `Lambda`
+//! - Composites: `MethodCall`, `Construct`, `Spawn`, and friends
 //!
-//! TIR nodes embed `.ty: Ty` directly — no `module.expr_types.get(span)` lookup
-//! is needed. The `Expr::As` variant has been erased by lowering; the inner
-//! expression's `.ty` carries the cast destination type.
+//! TIR nodes embed `.ty: Ty` directly, so no span-keyed type lookup is needed
+//! at emit time. AST-only variants (e.g. `Expr::As`) are erased by lowering;
+//! the inner expression's `.ty` carries the cast destination type.
 
 use crate::mvl::ir::{
     BinaryOp, Pattern, TirExpr, TirExprKind, TirMatchArm, TirMatchBody, Ty, UnaryOp,

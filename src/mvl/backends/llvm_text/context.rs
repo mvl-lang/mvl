@@ -23,7 +23,6 @@ use super::emitter::{HeapKind, RefLocal};
 use super::BuiltinSymbolInfo;
 use crate::mvl::checker::types::Ty;
 use crate::mvl::ir::{TirFn, TypeExpr};
-use crate::mvl::parser::lexer::Span;
 
 // ── Module-global state ──────────────────────────────────────────────────────
 
@@ -87,10 +86,6 @@ pub(super) struct ModuleCtx {
     /// Maps MVL builtin function name → C-ABI symbol (e.g. `bytes` → `_mvl_random_bytes`).
     pub builtin_syms: HashMap<String, String>,
 
-    // ── Checker-resolved types (#1302) ───────────────────────────────────
-    /// Checker-resolved expression types, keyed by source span.
-    pub expr_types: HashMap<Span, Ty>,
-
     // ── Audit-marked relabel declarations (#896, #1554) ──────────────────
     /// Map from relabel transition name → (from_label, to_label) for every
     /// `relabel` declaration carrying the `audit` keyword. Populated during
@@ -141,7 +136,6 @@ impl ModuleCtx {
             actor_emitted: HashSet::new(),
             yield_check_declared: false,
             builtin_syms,
-            expr_types: HashMap::new(),
             audit_relabels: HashMap::new(),
         }
     }

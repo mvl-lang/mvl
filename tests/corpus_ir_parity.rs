@@ -82,17 +82,17 @@ fn corpus_ir_parity_ast_vs_tir() {
         let mut expr_types = checker::collect_prelude_expr_types(&prelude);
         let cr = checker::check_with_prelude(&prelude, &prog);
         expr_types.extend(cr.expr_types);
-        let compiler = LlvmTextCompiler::with_context(builtins, expr_types);
+        let compiler = LlvmTextCompiler::with_context(builtins);
 
         let entry_all_fns = mono::collect_fns(std::iter::once(&prog).chain(prelude.iter()));
-        let entry_mono = mono::monomorphize(&prog, &entry_all_fns, &compiler.expr_types);
-        let entry_tir = lower::lower(&prog, &entry_mono, &compiler.expr_types);
+        let entry_mono = mono::monomorphize(&prog, &entry_all_fns, &expr_types);
+        let entry_tir = lower::lower(&prog, &entry_mono, &expr_types);
         let prelude_tirs = prelude
             .iter()
             .map(|p| {
                 let all = mono::collect_fns([p]);
-                let m = mono::monomorphize(p, &all, &compiler.expr_types);
-                lower::lower(p, &m, &compiler.expr_types)
+                let m = mono::monomorphize(p, &all, &expr_types);
+                lower::lower(p, &m, &expr_types)
             })
             .collect::<Vec<_>>();
 

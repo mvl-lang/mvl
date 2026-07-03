@@ -98,7 +98,7 @@ inline emission for the same inputs.
 Existing `emit_stmts.rs`/`emit_exprs.rs` inline instrumentation SHOULD be
 replaced file-by-file using the visitor interface.
 
-**Implementation:** `src/mvl/backends/rust/visitor.rs` — migration in progress (#773)
+**Implementation:** `src/mvl/backends/rust/visitor.rs` (migration completed via #773)
 
 **Tests:** `src/mvl/backends/rust/visitor.rs::tests::coverage_preserves_base_structure`, `src/mvl/backends/rust/visitor.rs::tests::coverage_cfg_test_gated` (validate that visitor-driven emission produces output equivalent to the legacy inline path, demonstrating the migration foundation is sound).
 

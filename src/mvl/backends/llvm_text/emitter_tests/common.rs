@@ -18,10 +18,10 @@ pub fn compile(src: &str) -> String {
     let mut expr_types = crate::mvl::checker::collect_prelude_expr_types(&[]);
     let cr = crate::mvl::checker::check(&prog);
     expr_types.extend(cr.expr_types);
-    let compiler = LlvmTextCompiler::with_context(std::collections::HashMap::new(), expr_types);
+    let compiler = LlvmTextCompiler::with_context(std::collections::HashMap::new());
     let all_fns = crate::mvl::passes::mono::collect_fns([&prog]);
-    let mono = crate::mvl::passes::mono::monomorphize(&prog, &all_fns, &compiler.expr_types);
-    let tir = crate::mvl::ir::lower::lower(&prog, &mono, &compiler.expr_types);
+    let mono = crate::mvl::passes::mono::monomorphize(&prog, &all_fns, &expr_types);
+    let tir = crate::mvl::ir::lower::lower(&prog, &mono, &expr_types);
     compiler
         .compile_to_ir_tir(&tir, "test")
         .expect("compile_to_ir_tir failed")

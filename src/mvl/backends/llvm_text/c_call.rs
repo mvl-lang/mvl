@@ -3,10 +3,10 @@
 
 //! C-ABI dispatch helpers shared by all method-call emit sites.
 //!
-//! Extracted from `emit_method_call.rs` (#1612 Phase 3b PR 2 prep) so the
-//! TIR-walking emitter can keep using them after the AST walker is deleted.
-//! Each `emit_c_call_*` helper consults the [`LLVM_DISPATCH`] table for the
-//! C-ABI symbol + signature; see `dispatch.rs` for the table itself.
+//! Extracted from the pre-TIR `emit_method_call.rs` during #1612 Phase 3b so
+//! they could be reused by the TIR-walking emitter. Each `emit_c_call_*` helper
+//! consults the [`LLVM_DISPATCH`] table for the C-ABI symbol + signature; see
+//! `dispatch.rs` for the table itself.
 
 use crate::mvl::backends::llvm_text::dispatch::{self, Dispatch};
 

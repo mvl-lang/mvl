@@ -13,7 +13,6 @@ use super::context::{FnCtx, ModuleCtx, MonoQueue};
 use super::BuiltinSymbolInfo;
 use crate::mvl::checker::types::Ty;
 use crate::mvl::ir::{TirProgram, TypeExpr};
-use crate::mvl::parser::lexer::Span;
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
@@ -27,17 +26,10 @@ pub struct LlvmTextCompiler {
     /// `builtin fn` dispatch table: MVL name → [`BuiltinSymbolInfo`].
     ///
     /// Populated via `with_context()` or set directly before calling
-    /// `compile_to_ir_with_prelude`.  The emitter uses this to route calls to
-    /// `builtin fn` declarations to their C runtime symbols instead of generating
-    /// a body for the empty block.
+    /// `compile_to_ir_with_prelude_tir`.  The emitter uses this to route calls
+    /// to `builtin fn` declarations to their C runtime symbols instead of
+    /// generating a body for the empty block.
     pub builtin_symbols: HashMap<String, BuiltinSymbolInfo>,
-    /// Checker-resolved expression types, keyed by source span.
-    ///
-    /// When populated (via [`crate::mvl::checker::check`] in the CLI pipeline),
-    /// the emitter can look up accurate types for any expression by span instead
-    /// of relying on AST-based type inference.  This enables type-dependent
-    /// dispatch (IFC labels, generic resolution, method dispatch).
-    pub expr_types: HashMap<Span, Ty>,
 }
 
 impl LlvmTextCompiler {
@@ -46,20 +38,14 @@ impl LlvmTextCompiler {
         Self {
             target_triple: default_target_triple(),
             builtin_symbols: HashMap::new(),
-            expr_types: HashMap::new(),
         }
     }
 
-    /// Create a compiler pre-populated with builtin dispatch table and
-    /// checker-resolved expression types.
-    pub fn with_context(
-        builtin_symbols: HashMap<String, BuiltinSymbolInfo>,
-        expr_types: HashMap<Span, Ty>,
-    ) -> Self {
+    /// Create a compiler pre-populated with the builtin dispatch table.
+    pub fn with_context(builtin_symbols: HashMap<String, BuiltinSymbolInfo>) -> Self {
         Self {
             target_triple: default_target_triple(),
             builtin_symbols,
-            expr_types,
         }
     }
 
@@ -81,7 +67,6 @@ impl LlvmTextCompiler {
     ) -> Result<String, String> {
         let mut emitter =
             TextEmitter::new_with_builtins(module_name, &self.target_triple, &self.builtin_symbols);
-        emitter.set_expr_types(self.expr_types.clone());
         for p in prelude {
             let stripped = strip_prelude_extension_methods_tir(p);
             // Stripped functions (e.g. find_all, replace) are absent from the
@@ -218,11 +203,6 @@ impl TextEmitter {
             fn_ctx: FnCtx::initial(),
             mono: MonoQueue::new(),
         }
-    }
-
-    /// Install checker-resolved expression types after construction.
-    pub(super) fn set_expr_types(&mut self, expr_types: HashMap<Span, Ty>) {
-        self.module.expr_types = expr_types;
     }
 
     /// Emit a nested top-level function (actor method, dispatch fn, lambda,

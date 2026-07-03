@@ -3536,8 +3536,8 @@ fn main() -> Unit { }
     let all_fns = mvl::mvl::passes::mono::collect_fns([&prog]);
     let mono = mvl::mvl::passes::mono::monomorphize(&prog, &all_fns, &expr_types);
     let tir = mvl::mvl::ir::lower::lower(&prog, &mono, &expr_types);
-    let mut compiler = mvl::mvl::backends::llvm_text::LlvmTextCompiler::new();
-    compiler.expr_types = expr_types;
+    let _ = expr_types;
+    let compiler = mvl::mvl::backends::llvm_text::LlvmTextCompiler::new();
     let ir = compiler
         .compile_to_ir_tir(&tir, "test_actor_dispatch")
         .expect("IR generation failed");
@@ -3577,8 +3577,8 @@ fn main() -> Unit {
     let all_fns = mvl::mvl::passes::mono::collect_fns([&prog]);
     let mono = mvl::mvl::passes::mono::monomorphize(&prog, &all_fns, &expr_types);
     let tir = mvl::mvl::ir::lower::lower(&prog, &mono, &expr_types);
-    let mut compiler = mvl::mvl::backends::llvm_text::LlvmTextCompiler::new();
-    compiler.expr_types = expr_types;
+    let _ = expr_types;
+    let compiler = mvl::mvl::backends::llvm_text::LlvmTextCompiler::new();
     let ir = compiler
         .compile_to_ir_tir(&tir, "test_actor_spawn")
         .expect("IR generation failed");
@@ -3646,8 +3646,8 @@ fn main() -> Unit {
     let all_fns = mvl::mvl::passes::mono::collect_fns([&prog]);
     let mono = mvl::mvl::passes::mono::monomorphize(&prog, &all_fns, &expr_types);
     let tir = mvl::mvl::ir::lower::lower(&prog, &mono, &expr_types);
-    let mut compiler = mvl::mvl::backends::llvm_text::LlvmTextCompiler::new();
-    compiler.expr_types = expr_types;
+    let _ = expr_types;
+    let compiler = mvl::mvl::backends::llvm_text::LlvmTextCompiler::new();
     let ir = compiler
         .compile_to_ir_tir(&tir, "test_actor_send")
         .expect("IR generation failed");
