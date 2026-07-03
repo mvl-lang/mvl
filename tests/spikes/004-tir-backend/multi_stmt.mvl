@@ -1,0 +1,12 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// Spike 004 — A1b test: multi-stmt body with sequenced lets.
+// Expected stdout = "30" — (2 + 3) * 6.
+
+fn main() -> Int {
+    let a: Int = 2;
+    let b: Int = 3;
+    let sum: Int = a + b;
+    sum * 6
+}

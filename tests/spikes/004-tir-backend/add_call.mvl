@@ -1,0 +1,12 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// Spike 004 — A1b test: function call. Expected stdout = "5".
+
+fn add(a: Int, b: Int) -> Int {
+    a + b
+}
+
+fn main() -> Int {
+    add(2, 3)
+}

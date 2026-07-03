@@ -4,12 +4,18 @@
 // compiler/backends/llvm/backend_llvm.mvl — MVL-hosted LLVM IR emitter driver
 // (issue #1118).
 //
-// Phase A1a scope: integer literals and integer arithmetic
-// (`+ - * / %`). Single-fn programs shaped `fn main() -> Int { <expr> }`.
-// The returned Int is printed to stdout via a libc `printf` call so tests
-// can assert output; the C-level `main` always returns 0 (matches the
-// existing Rust LLVM backend's exit-code convention). Real `println`
-// integration + multi-fn / control-flow programs are deferred to A1b-e.
+// Phase A1b scope: integer arithmetic (from A1a) plus function calls,
+// let-bound locals, and multi-statement bodies. Programs remain single-Int
+// return types; each `fn` becomes an LLVM `define`. The MVL `main`'s return
+// value is printed via libc `printf` and the C-ABI `@main` returns 0 (matches
+// the Rust backend's exit-code convention).
+//
+// Supported TIR kinds:
+//   Expr:  Literal(Integer) | Var | Binary(+ - * / %) | FnCall
+//   Stmt:  Let(Ident, Regular) | Expr
+//
+// Deferred to later phases: if/while/match, comparisons + Bool literals,
+// non-Int types, ref-let/alloca-store, closures, actors, real println.
 //
 // Usage:
 //   mvl tir foo.mvl | mvl run compiler/backends/llvm/backend_llvm.mvl > foo.ll
@@ -17,6 +23,7 @@
 //
 // See tests/spikes/004-tir-backend/Makefile target `llvm` for the full pipeline.
 
+use std.collections.{Map}
 use std.io.{read, stdin}
 use std.json.{decode, Value}
 
@@ -45,17 +52,35 @@ total fn jget(v: Value, key: String) -> Value {
 
 total fn jtag(v: Value) -> String { jstr(v, "tag") }
 
-// ── Emission result ───────────────────────────────────────────────────────────
+// ── Emitter state ─────────────────────────────────────────────────────────────
 //
-// Every `emit_expr` call yields an Emitted: the LLVM operand text (either an
-// immediate like `"5"` or an SSA register like `"%t3"`), the next free SSA
-// counter value, and the list of instructions produced (in order) that must
-// be spliced into the enclosing function body before the operand is used.
+// `EmitCtx` threads through emit_expr / emit_stmt. `locals` maps MVL binding
+// names to the LLVM operand text that holds them (an SSA `%tN`, a param
+// `%name`, or an immediate literal like `"5"`). `next_reg` is the SSA
+// counter for the enclosing function.
+//
+// Expressions read `locals` but never mutate it; only `Let` stmts extend it.
 
+type EmitCtx = struct {
+    next_reg: Int,
+    locals: Map[String, String],
+}
+
+// Result of emitting an expression: the operand holding the value plus
+// any instructions that must be spliced into the enclosing fn body.
 type Emitted = struct {
     reg: String,
     next_reg: Int,
     instrs: List[String],
+}
+
+// Result of emitting a statement: updated ctx (potentially with new
+// bindings from a Let), plus instructions, plus the value the stmt
+// contributes if it is a trailing Expr (empty string otherwise).
+type StmtOut = struct {
+    ctx: EmitCtx,
+    instrs: List[String],
+    tail_reg: String,
 }
 
 total fn emitted_imm(value: String, next: Int) -> Emitted {
@@ -63,9 +88,6 @@ total fn emitted_imm(value: String, next: Int) -> Emitted {
 }
 
 // ── Operator mapping ──────────────────────────────────────────────────────────
-//
-// A1a covers integer arithmetic only. Comparisons, boolean ops, and
-// floating-point are deferred to later phases.
 
 total fn emit_binop_llvm(op: String) -> String {
     match op {
@@ -80,7 +102,7 @@ total fn emit_binop_llvm(op: String) -> String {
 
 // ── Expression emission ───────────────────────────────────────────────────────
 
-partial fn emit_expr(expr: Value, next: Int) -> Emitted {
+partial fn emit_expr(expr: Value, ctx: EmitCtx) -> Emitted {
     let kind: Value = jget(expr, "kind");
     let t: String = jtag(kind);
     match t {
@@ -88,59 +110,182 @@ partial fn emit_expr(expr: Value, next: Int) -> Emitted {
             let lit: Value = jget(kind, "lit");
             let lit_tag: String = jtag(lit);
             if lit_tag == "Integer" {
-                emitted_imm(jstr(lit, "value"), next)
+                emitted_imm(jstr(lit, "value"), ctx.next_reg)
             } else {
-                emitted_imm("0", next)
+                emitted_imm("0", ctx.next_reg)
+            }
+        },
+        "Var" => {
+            let name: String = jstr(kind, "name");
+            match ctx.locals.get(name) {
+                Some(op) => emitted_imm(op, ctx.next_reg),
+                None     => emitted_imm(format("%{}", [name]), ctx.next_reg),
             }
         },
         "Binary" => {
-            let l: Emitted = emit_expr(jget(kind, "left"), next);
-            let r: Emitted = emit_expr(jget(kind, "right"), l.next_reg);
+            let l: Emitted = emit_expr(jget(kind, "left"), ctx);
+            let r_ctx: EmitCtx = EmitCtx { next_reg: l.next_reg, locals: ctx.locals };
+            let r: Emitted = emit_expr(jget(kind, "right"), r_ctx);
             let opname: String = emit_binop_llvm(jstr(kind, "op"));
             let reg: String = format("%t{}", [r.next_reg.to_string()]);
             let line: String = format("  {} = {} i64 {}, {}", [reg, opname, l.reg, r.reg]);
             let all_instrs: List[String] = l.instrs.concat(r.instrs).concat([line]);
             Emitted { reg: reg, next_reg: r.next_reg + 1, instrs: all_instrs }
         },
-        _ => emitted_imm("0", next),
+        "FnCall" => {
+            let name: String = jstr(kind, "name");
+            let args: List[Value] = jarr(kind, "args");
+            emit_fn_call(name, args, ctx)
+        },
+        _ => emitted_imm("0", ctx.next_reg),
     }
 }
 
-// ── Function body emission ────────────────────────────────────────────────────
-//
-// A1a assumes a single `Expr` statement whose value is both returned by MVL
-// `main` and printed via `printf` before the C-ABI `main` exits with code 0.
+// Emit args left-to-right, threading the SSA counter, then emit the call.
+// Every arg is assumed i64 (A1b restriction — only Int is supported).
+partial fn emit_fn_call(name: String, args: List[Value], ctx: EmitCtx) -> Emitted {
+    let accum_regs: ref List[String] = [];
+    let accum_instrs: ref List[String] = [];
+    let cur: ref Int = ctx.next_reg;
+    for a in args {
+        let sub_ctx: EmitCtx = EmitCtx { next_reg: cur, locals: ctx.locals };
+        let e: Emitted = emit_expr(a, sub_ctx);
+        cur = e.next_reg;
+        for line in e.instrs { accum_instrs.push(line) }
+        accum_regs.push(e.reg);
+    }
+    let arg_str: String = accum_regs
+        .map(|r: String| format("i64 {}", [r]))
+        .join(", ");
+    let call_reg: String = format("%t{}", [cur.to_string()]);
+    let call_line: String = format(
+        "  {} = call i64 @{}({})",
+        [call_reg, name, arg_str]
+    );
+    accum_instrs.push(call_line);
+    Emitted { reg: call_reg, next_reg: cur + 1, instrs: accum_instrs }
+}
 
-partial fn emit_main_body(body: Value) -> String {
-    let stmts: List[Value] = jarr(body, "stmts");
-    match stmts.get(0) {
-        None => "  ret i32 0\n",
-        Some(s) => match jtag(s) {
-            "Expr" => {
-                let e: Emitted = emit_expr(jget(s, "expr"), 0);
-                let instr_block: String = e.instrs.join("\n");
-                let call_line: String = format(
-                    "  call i32 (ptr, ...) @printf(ptr @.fmt_int, i64 {})",
-                    [e.reg]
-                );
-                let ret_line: String = "  ret i32 0";
-                if instr_block == "" {
-                    call_line.concat("\n").concat(ret_line).concat("\n")
-                } else {
-                    instr_block.concat("\n")
-                        .concat(call_line).concat("\n")
-                        .concat(ret_line).concat("\n")
-                }
-            },
-            _ => "  ret i32 0\n",
+// Clone `base` into a fresh Map and add the new binding.  MVL's `Map::put`
+// isn't type-inferring cleanly through struct-field access here, so we
+// rebuild the map by hand (the fn body is small so O(n) copies are fine).
+partial fn extend_locals(base: Map[String, String], key: String, value: String) -> Map[String, String] {
+    let m: ref Map[String, String] = Map::new();
+    for k in base.keys() {
+        match base.get(k) {
+            Some(v) => m.insert(k, v),
+            None    => {},
         }
     }
+    m.insert(key, value);
+    m
+}
+
+// ── Statement emission ────────────────────────────────────────────────────────
+
+partial fn emit_stmt(stmt: Value, ctx: EmitCtx) -> StmtOut {
+    let t: String = jtag(stmt);
+    match t {
+        "Expr" => {
+            let e: Emitted = emit_expr(jget(stmt, "expr"), ctx);
+            StmtOut {
+                ctx: EmitCtx { next_reg: e.next_reg, locals: ctx.locals },
+                instrs: e.instrs,
+                tail_reg: e.reg,
+            }
+        },
+        "Let" => {
+            let pat: Value = jget(stmt, "pattern");
+            let name: String = jstr(pat, "name");
+            let init: Emitted = emit_expr(jget(stmt, "init"), ctx);
+            let new_locals: Map[String, String] = extend_locals(ctx.locals, name, init.reg);
+            StmtOut {
+                ctx: EmitCtx { next_reg: init.next_reg, locals: new_locals },
+                instrs: init.instrs,
+                tail_reg: "",
+            }
+        },
+        _ => StmtOut { ctx: ctx, instrs: [], tail_reg: "" },
+    }
+}
+
+// ── Function emission ─────────────────────────────────────────────────────────
+
+// Fold statements, accumulating instructions and threading ctx. The final
+// `tail_reg` (from the last Expr stmt) is the fn's return value; if the
+// body ends on a non-Expr stmt tail_reg is "" and callers use "0" as the
+// stand-in.
+partial fn emit_body(body: Value, initial: EmitCtx) -> StmtOut {
+    let stmts: List[Value] = jarr(body, "stmts");
+    let cur_ctx: ref EmitCtx = initial;
+    let accum: ref List[String] = [];
+    let last: ref String = "";
+    for s in stmts {
+        let out: StmtOut = emit_stmt(s, cur_ctx);
+        for line in out.instrs { accum.push(line) }
+        cur_ctx = out.ctx;
+        last = out.tail_reg;
+    }
+    StmtOut { ctx: cur_ctx, instrs: accum, tail_reg: last }
+}
+
+// Build the initial ctx for a fn: bind each TIR Param.name to `%name`.
+partial fn initial_ctx_from_params(params: List[Value]) -> EmitCtx {
+    let m: ref Map[String, String] = Map::new();
+    for p in params {
+        let n: String = jstr(p, "name");
+        m.insert(n, format("%{}", [n]))
+    }
+    EmitCtx { next_reg: 0, locals: m }
+}
+
+// Emit a `define i64 @name(i64 %a, ...) { ... ret i64 <val> }` block for
+// a non-main fn. Assumes Int params + Int return (A1b restriction).
+partial fn emit_fn_def(f: Value) -> String {
+    let name: String = jstr(f, "name");
+    // NOTE: jarr called twice on purpose — the MVL→Rust transpiler moves
+    // List values on `.map()`, so a single named binding used twice is
+    // rejected downstream. Re-reading the JSON is cheap and avoids a clone.
+    let param_str: String = jarr(f, "params")
+        .map(|p: Value| format("i64 %{}", [jstr(p, "name")]))
+        .join(", ");
+    let ctx: EmitCtx = initial_ctx_from_params(jarr(f, "params"));
+    let out: StmtOut = emit_body(jget(f, "body"), ctx);
+    let body_instrs: String = out.instrs.join("\n");
+    let ret_val: String = if out.tail_reg == "" { "0" } else { out.tail_reg };
+    let ret_line: String = format("  ret i64 {}", [ret_val]);
+    let body: String = if body_instrs == "" {
+        ret_line
+    } else {
+        body_instrs.concat("\n").concat(ret_line)
+    };
+    format("define i64 @{}({}) {}\n{}\n{}\n",
+        [name, param_str, lbrace(), body, rbrace()])
+}
+
+// Emit `define i32 @main() { ... printf(...); ret i32 0 }` for the entry.
+// Ignores main's params (MVL main has none in A1b) and its declared return.
+partial fn emit_main_def(f: Value) -> String {
+    let no_params: List[Value] = [];
+    let ctx: EmitCtx = initial_ctx_from_params(no_params);
+    let out: StmtOut = emit_body(jget(f, "body"), ctx);
+    let body_instrs: String = out.instrs.join("\n");
+    let ret_val: String = if out.tail_reg == "" { "0" } else { out.tail_reg };
+    let call_line: String = format(
+        "  call i32 (ptr, ...) @printf(ptr @.fmt_int, i64 {})",
+        [ret_val]
+    );
+    let ret_line: String = "  ret i32 0";
+    let body: String = if body_instrs == "" {
+        call_line.concat("\n").concat(ret_line)
+    } else {
+        body_instrs.concat("\n").concat(call_line).concat("\n").concat(ret_line)
+    };
+    format("define i32 @main() {}\n{}\n{}\n",
+        [lbrace(), body, rbrace()])
 }
 
 // ── Program emission ──────────────────────────────────────────────────────────
-//
-// A1a: exactly one `main` function, no params, `Int` return. Later phases
-// iterate `tir.fns` and lift each to its own `define`.
 
 total fn default_target_triple() -> String {
     "arm64-apple-darwin"
@@ -157,14 +302,16 @@ partial fn emit_program(tir: Value) -> String {
     let printf_fmt: String = "\n@.fmt_int = private unnamed_addr constant [5 x i8] c\"%ld\\0A\\00\"\n";
     let printf_decl: String = "\ndeclare i32 @printf(ptr, ...)\n";
     let fns: List[Value] = jarr(tir, "fns");
-    let body: String = match fns.get(0) {
-        None => "\ndefine i32 @main() {\n  ret i32 0\n}\n",
-        Some(f) => {
-            let body_str: String = emit_main_body(jget(f, "body"));
-            format("\ndefine i32 @main() {}\n{}{}\n",
-                [lbrace(), body_str, rbrace()])
+    let parts: ref List[String] = [];
+    for f in fns {
+        let fname: String = jstr(f, "name");
+        if fname == "main" {
+            parts.push(emit_main_def(f))
+        } else {
+            parts.push(emit_fn_def(f))
         }
-    };
+    }
+    let body: String = "\n".concat(parts.join("\n"));
     header.concat(printf_fmt).concat(printf_decl).concat(body)
 }
 
