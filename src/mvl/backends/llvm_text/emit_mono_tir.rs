@@ -1,19 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Schuberg Philis
 
-//! Generic-function monomorphization for the TIR-walking emitter path
-//! (#1612, Bug 4).
+//! Generic-function monomorphization for the TIR-walking emitter (#1612, Bug 4).
 //!
-//! Parallel to `emit_mono.rs` (AST). The AST walker keeps generic `FnDecl`s in
-//! `MonoQueue::generic_fns`, mangles call sites on the fly, queues mangled
-//! copies, and drains the queue at the tail of `emit_program`. This module is
-//! the TIR mirror: `MonoQueue::tir_generic_fns` holds the originals,
+//! `MonoQueue::tir_generic_fns` holds the generic TIR originals.
 //! [`Self::emit_monomorphized_call_tir`] is the call-site enqueue, and the
 //! drain loop lives in [`emit_program_tir`].
 //!
-//! Type inference at call sites is easier than the AST path: every `TirExpr`
-//! carries its fully resolved `Ty` inline, so concretion comes straight from
-//! `arg.ty` without re-deriving from local-type tables.
+//! Concretion at call sites is straightforward: every `TirExpr` carries its
+//! fully resolved `Ty` inline, so type-parameter bindings come from `arg.ty`
+//! directly.
 
 use std::collections::HashMap;
 
@@ -61,9 +57,9 @@ impl TextEmitter {
             .map(|tp| tp_map.get(tp.name()).cloned().unwrap_or(Ty::Int))
             .collect();
 
-        // Reuse the AST mangling helper (it operates on `TypeExpr`). The Ty →
-        // TypeExpr conversion is lossy for some edge cases but matches what the
-        // AST walker does at the same boundary, so call-site symbols agree.
+        // Mangling operates on `TypeExpr`. The Ty → TypeExpr conversion is
+        // lossy for some edge cases but is consistent with the type-lowering
+        // helper used elsewhere, so call-site symbols agree across the pipeline.
         let concrete_te: Vec<TypeExpr> = concrete_tys.iter().map(ty_to_type_expr_or_unit).collect();
         let mangled = Self::mangle_generic(name, &concrete_te);
 

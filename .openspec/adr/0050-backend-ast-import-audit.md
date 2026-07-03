@@ -1,6 +1,6 @@
 # ADR-0050: Backend AST Import Audit — TIR-First Migration Gap Analysis
 
-**Status:** Accepted
+**Status:** Accepted — Migration complete (2026-07-03)
 **Date:** 2026-06-27
 **Issues:** #1594 (audit), #1118 (backends Phase A), #1113 (self-hosting epic)
 **Related:** ADR-0044 (TIR-first strategy), ADR-0038 (Typed IR), ADR-0027 (multi-backend)
@@ -154,14 +154,14 @@ pub fn transpile_project(prog: &Program, config: TranspileConfig) -> ...        
 
 ## Phase plan
 
-| Phase | Scope | Estimated effort |
-|-------|-------|-----------------|
-| **1 (this ADR)** | Audit — categorise all imports, set CI baseline | ✅ Done |
-| **2** | Extend TIR and lowering if any gaps found | S (none found — all TIR equivalents exist) |
-| **3a** | LLVM backend: switch to TIR entry point, replace functional AST types (`Expr/Stmt/Block/…`) | M (~1 week) |
-| **3b** | LLVM backend: remove metadata-only AST imports (`FnDecl`, `ActorDecl`, `Program`, `Decl`) | S |
-| **3c** | Rust backend: delete legacy entry points, remove AST fallback in `last_use.rs` | S |
-| **CI gate** | `grep -r 'parser::ast' src/mvl/backends/ | wc -l` returns 0 | on merge of 3c |
+| Phase | Scope | Status |
+|-------|-------|--------|
+| **1 (this ADR)** | Audit — categorise all imports, set CI baseline | ✅ Done (2026-06-27) |
+| **2** | Extend TIR and lowering if any gaps found | ✅ No-op (all TIR equivalents already existed) |
+| **3a** | LLVM backend: dead code + path fixes (#1606) | ✅ Done |
+| **3b** | LLVM backend: rewrite emitter to walk TIR (#1612 → #1648) | ✅ Done (2026-07-03) |
+| **3c** | Rust backend: purge remaining AST imports (#1612 → #1649, #1650) | ✅ Done (2026-07-03) |
+| **CI gate** | `python3 tools/audit_backend_ast.py` returns 0 (budget=0, matches inline paths + use imports) | ✅ Enforced |
 
 ### Key insight from audit
 
@@ -177,10 +177,26 @@ residual AST coupling.
 
 ## Acceptance criteria (from #1594)
 
-- [ ] `src/mvl/backends/` imports nothing from `crate::mvl::parser::ast` (CI grep guard: count = 0)
-- [ ] Both emitters' entry points accept `&TirProgram` — no AST threaded through
-- [ ] Cross-backend test matrix (Rust ↔ LLVM, 110 tests) still green
-- [ ] Self-hosting LOC estimate re-baselined in ADR-0044 (TIR-only surface: ~6 K LOC)
+- [x] `src/mvl/backends/` references nothing from `crate::mvl::parser::ast` (CI guard: count = 0, including inline qualified paths)
+- [x] Both emitters' entry points accept `&TirProgram` — no AST threaded through
+- [x] Cross-backend test matrix (Rust ↔ LLVM) still green — all 1446 unit tests, 179 corpus tests, 38 stdlib tests pass
+- [ ] Self-hosting LOC estimate re-baselined in ADR-0044 (deferred; see #1118)
+
+### Final state (2026-07-03)
+
+```
+$ python3 tools/audit_backend_ast.py
+Backend parser::ast references:   0 / budget 0 (target 0)
+✓ OK (budget not exceeded)
+```
+
+Both emitters now consume TIR exclusively. AST-level orchestration lives in
+`src/mvl/pipeline.rs` (checker → mono → lower); backends receive the fully-lowered
+`TirProgram` from callers. The `TranspileConfig.prelude_progs` field holds
+`Vec<TirProgram>` — no AST program crosses the backend boundary.
+
+The audit script (`tools/audit_backend_ast.py`) enforces zero references — both
+`use` imports and inline qualified paths — via `make ci`.
 
 ---
 
@@ -211,16 +227,24 @@ documents the ground truth for the #1118 self-hosting backend port scope.
 
 ## Consequences
 
-**Positive:**
+**Positive (delivered):**
 
 - **Self-hosting estimate corrected:** Phase A (#1118) surface is ~6 K LOC, not ~10 K.
-- **No hidden TIR gaps:** All functional AST types have TIR equivalents; no new IR
-  nodes required before Phase 3 can begin.
-- **CI baseline prevents regression:** `make audit-backend-ast` will fail if a new
-  AST import is added to backends, making the migration monotonically forward.
+- **No hidden TIR gaps:** All functional AST types had TIR equivalents; no new IR
+  nodes were required.
+- **CI baseline prevents regression:** `python3 tools/audit_backend_ast.py` fails if any
+  new `parser::ast` reference (import or inline path) is added to backends. The
+  Rust script parses non-commented lines and matches both `use` statements and
+  inline qualified paths.
+- **Clean layering:** AST-level orchestration (checker, mono, lower) lives in
+  `src/mvl/pipeline.rs`. Backends receive `TirProgram` and produce output strings
+  with zero AST awareness.
 
-**Negative / trade-offs:**
+**Trade-offs encountered during migration:**
 
-- Phase 3a (LLVM backend functional migration) is the largest single chunk (~4 K LOC
-  of pattern-match rewrites).  It must be done atomically on the LLVM emitter to
-  avoid a partially-broken intermediate state; plan for a feature branch.
+- Phase 3b (LLVM emitter rewrite) was ~7.5 K LOC changed atomically across 11 files,
+  as anticipated. Split into pre-work (#1606) + main migration (#1648) with bug-fix
+  follow-ups (#1646, #1647).
+- Phase 3c (Rust backend) required moving AST-level helpers from `src/mvl/backends/rust.rs`
+  to `src/mvl/pipeline.rs` — the natural home for AST-consuming orchestration code.
+  Public API compatibility preserved via `pub use` re-exports.

@@ -19,10 +19,16 @@ use std::process;
 /// instead of the inkwell StdlibSig dispatch table.
 ///
 /// Runs the type checker on the program with prelude context so that
-/// `expr_types` are available for accurate type dispatch in the emitter (#1302).
+/// `expr_types` are available for TIR lowering (#1302).
 /// Exits the process if the checker reports errors — type-incorrect programs
 /// must not proceed to LLVM codegen.
-fn prepare_llvm_text(prog: &Program) -> (Vec<Program>, LlvmTextCompiler) {
+fn prepare_llvm_text(
+    prog: &Program,
+) -> (
+    Vec<Program>,
+    LlvmTextCompiler,
+    std::collections::HashMap<mvl::mvl::parser::lexer::Span, mvl::mvl::checker::types::Ty>,
+) {
     let mut prelude = loader::load_implicit_prelude();
     prelude.extend(loader::load_mvl_native_stdlib_extras(std::slice::from_ref(
         prog,
@@ -32,11 +38,11 @@ fn prepare_llvm_text(prog: &Program) -> (Vec<Program>, LlvmTextCompiler) {
     )));
     let builtins = loader::collect_llvm_text_builtins(std::slice::from_ref(prog));
 
-    // Run checker to get expression types for the LLVM emitter (#1302).
+    // Run checker to get expression types for the TIR lowering pass (#1302).
     // Checker errors are logged as warnings rather than halting compilation:
     // the checker does not yet have full stdlib coverage, so some valid programs
     // produce false-positive errors (UndefinedFunction, MissingEffect).
-    // The emitter falls back to AST inference for spans with missing types.
+    // Missing types propagate as `Ty::Unknown` through TIR lowering.
     let mut expr_types = checker::collect_prelude_expr_types(&prelude);
     let check_result = checker::check_with_prelude(&prelude, prog);
     if check_result.has_errors() {
@@ -46,8 +52,8 @@ fn prepare_llvm_text(prog: &Program) -> (Vec<Program>, LlvmTextCompiler) {
     }
     expr_types.extend(check_result.expr_types);
 
-    let compiler = LlvmTextCompiler::with_context(builtins, expr_types);
-    (prelude, compiler)
+    let compiler = LlvmTextCompiler::with_context(builtins);
+    (prelude, compiler, expr_types)
 }
 
 /// Compile `prog` to LLVM IR text via the TIR-walking emitter (#1612 Phase 3b).
@@ -57,34 +63,32 @@ fn compile_ir(prog: &Program, module_name: &str) -> Result<String, String> {
 }
 
 /// Lower an entry program and its prelude to TIR for the TIR-walking emitter
-/// path (#1612, Phase 3b PR 1).
+/// (#1612 Phase 3b).
 ///
-/// Mirrors what `src/mvl/backends/rust.rs::transpile_project_with_options` does
-/// before invoking the Rust backend: run `mono::collect_fns` + `monomorphize`,
-/// then `ir::lower::lower` for the entry program and each prelude module.
+/// Mirrors what `src/mvl/pipeline::transpile_project_with_options` does before
+/// invoking the Rust backend: run `mono::collect_fns` + `monomorphize`, then
+/// `ir::lower::lower` for the entry program and each prelude module.
 ///
-/// Returns `(prelude_tirs, entry_tir, compiler)`.  The compiler shares its
-/// `builtin_symbols` and `expr_types` with the AST path so call-site dispatch
-/// remains identical.
+/// Returns `(prelude_tirs, entry_tir, compiler)`. Callers hand `compiler` to
+/// `compile_to_ir_with_prelude_tir`; `expr_types` is a lowering-time input only.
 pub(super) fn prepare_llvm_text_tir(
     prog: &Program,
 ) -> (Vec<TirProgram>, TirProgram, LlvmTextCompiler) {
-    let (prelude, compiler) = prepare_llvm_text(prog);
+    let (prelude, compiler, expr_types) = prepare_llvm_text(prog);
 
     // Lower entry program to TIR.
     let entry_all_fns =
         mvl::mvl::passes::mono::collect_fns(std::iter::once(prog).chain(prelude.iter()));
-    let entry_mono =
-        mvl::mvl::passes::mono::monomorphize(prog, &entry_all_fns, &compiler.expr_types);
-    let entry_tir = mvl::mvl::ir::lower::lower(prog, &entry_mono, &compiler.expr_types);
+    let entry_mono = mvl::mvl::passes::mono::monomorphize(prog, &entry_all_fns, &expr_types);
+    let entry_tir = mvl::mvl::ir::lower::lower(prog, &entry_mono, &expr_types);
 
     // Lower each prelude program independently (matches Rust backend usage).
     let prelude_tirs: Vec<TirProgram> = prelude
         .iter()
         .map(|p| {
             let all_fns = mvl::mvl::passes::mono::collect_fns([p]);
-            let m = mvl::mvl::passes::mono::monomorphize(p, &all_fns, &compiler.expr_types);
-            mvl::mvl::ir::lower::lower(p, &m, &compiler.expr_types)
+            let m = mvl::mvl::passes::mono::monomorphize(p, &all_fns, &expr_types);
+            mvl::mvl::ir::lower::lower(p, &m, &expr_types)
         })
         .collect();
 

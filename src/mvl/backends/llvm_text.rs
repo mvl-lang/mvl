@@ -45,8 +45,7 @@
 //! let all_fns = mono::collect_fns([&prog]);
 //! let m = mono::monomorphize(&prog, &all_fns, &expr_types);
 //! let tir = lower::lower(&prog, &m, &expr_types);
-//! let mut compiler = LlvmTextCompiler::new();
-//! compiler.expr_types = expr_types;
+//! let compiler = LlvmTextCompiler::new();
 //! let ir = compiler.compile_to_ir_tir(&tir, "test").unwrap();
 //! assert!(ir.contains("define i64 @add"));
 //! ```

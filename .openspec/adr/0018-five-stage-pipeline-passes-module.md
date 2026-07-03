@@ -50,7 +50,8 @@ resolver  → whole-project:   ASTs → module graph           (sequential)
 checker   → per-program:     graph → CheckResult           (semantic checking)
              └─ CheckResult exposes: errors, type_env, call_graph, expr_types
 passes    → per-program:     CheckResult → Verdict[]       (verification, optional)
-backends  → per-program:     AST → Rust source / LLVM IR   (codegen)
+lower     → per-program:     AST + expr_types → TirProgram (monomorphize + type resolution)
+backends  → per-program:     TIR → Rust source / LLVM IR   (codegen)
 ```
 
 **`CheckResult` (checker output) now includes (#829, ADR-0034):**
@@ -68,10 +69,13 @@ backends  → per-program:     AST → Rust source / LLVM IR   (codegen)
 parser → resolver → checker(TypeCheck + CallGraph) → passes → backends
 ```
 
-**Target pipeline (post #838):**
+**Current pipeline (post ADR-0038 TIR + ADR-0050 backend migration):**
 ```
-parser → resolver → TypeCheck → Monomorphize → [CallGraph, passes] → backends
+parser → resolver → TypeCheck → Monomorphize → [CallGraph, passes] → TIR lower → backends
 ```
+
+The `lower` stage (`src/mvl/ir/lower.rs`) is now an explicit named pass. Backends
+consume `TirProgram` only — see ADR-0038 and ADR-0050.
 
 The `transpiler/` and `codegen/` modules are now both backends in this model.
 `passes/` is the backend-agnostic instrumentation layer between them and the
