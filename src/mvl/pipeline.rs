@@ -18,9 +18,7 @@
 //! // let result = Pipeline::new().check(&prelude, &[prog]);
 //! ```
 
-use crate::mvl::backends::rust::{
-    transpile, ProjectOutput, TranspileConfig, TranspileResult,
-};
+use crate::mvl::backends::rust::{transpile, ProjectOutput, TranspileConfig, TranspileResult};
 use crate::mvl::backends::AssertMode;
 use crate::mvl::checker::{self, CheckResult};
 use crate::mvl::parser::ast::{Decl, Program};
@@ -128,9 +126,8 @@ impl Pipeline {
             config = config.with_mutation();
         }
         config = config.with_assert_mode(self.assert_mode);
-        let all_fns = crate::mvl::passes::mono::collect_fns(
-            std::iter::once(prog).chain(prelude.iter()),
-        );
+        let all_fns =
+            crate::mvl::passes::mono::collect_fns(std::iter::once(prog).chain(prelude.iter()));
         let mono = crate::mvl::passes::mono::monomorphize(prog, &all_fns, &expr_types);
         let tir = crate::mvl::ir::lower::lower(prog, &mono, &expr_types);
         transpile(&tir, config)
@@ -358,10 +355,7 @@ pub fn transpile_project_with_options(
     extern_stubs: bool,
     prelude_pkg_names: &[Option<String>],
 ) -> ProjectOutput {
-    use crate::mvl::backends::rust::{
-        annotate_prelude_pkg_names, cargo,
-        emitter::RustEmitter,
-    };
+    use crate::mvl::backends::rust::{annotate_prelude_pkg_names, cargo, emitter::RustEmitter};
     let has_main = has_main_fn(entry_prog);
     let extern_count = count_extern_decls(entry_prog);
     let has_extern_rust =

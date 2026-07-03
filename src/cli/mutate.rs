@@ -3,9 +3,9 @@
 
 use mvl::mvl::backends::rust as transpiler;
 use mvl::mvl::checker;
-use mvl::mvl::pipeline::lower_prelude;
 use mvl::mvl::loader;
 use mvl::mvl::parser::ast::Decl;
+use mvl::mvl::pipeline::lower_prelude;
 use std::fs;
 use std::path::PathBuf;
 use std::process;

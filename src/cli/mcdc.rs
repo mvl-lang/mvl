@@ -5,11 +5,11 @@ use mvl::mvl::backends::rust as transpiler;
 use mvl::mvl::backends::rust::{
     emit_mcdc_preamble, emit_mcdc_report_test, MCDCDecision, TranspileConfig,
 };
-use mvl::mvl::pipeline::lower_prelude;
 use mvl::mvl::checker;
 use mvl::mvl::loader;
 use mvl::mvl::parser::ast::Decl;
 use mvl::mvl::passes::mcdc::analysis::{analyze_mcdc, DecisionInfo};
+use mvl::mvl::pipeline::lower_prelude;
 use mvl::mvl::stdlib;
 use std::collections::HashSet;
 use std::fs;
