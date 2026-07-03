@@ -1,0 +1,16 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// compiler/backends/llvm/emit_stmts.mvl — statement emission
+// (issue #1118, Phase A0 scaffold).
+//
+// Corresponds to src/mvl/backends/llvm_text/emit_stmts_tir.rs in the Rust
+// compiler (~667 LOC).
+//
+// A0 status: placeholder. Let, Assign, Return, If, While, For, Match land in A1.
+
+// Emit LLVM IR for a TIR statement; returns the emitted instruction text
+// (empty string in the A0 scaffold).
+partial fn emit_stmt(kind_tag: String) -> String {
+    ""
+}

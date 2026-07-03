@@ -1,0 +1,16 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// compiler/backends/llvm/emit_exprs.mvl — expression emission
+// (issue #1118, Phase A0 scaffold).
+//
+// Corresponds to src/mvl/backends/llvm_text/emit_exprs_tir.rs in the Rust
+// compiler (~3,474 LOC). This is the single largest module in the port.
+//
+// A0 status: placeholder. Literals, binops, calls, if, match land in A1.
+
+// Emit LLVM IR for a TIR expression; returns the SSA register holding the
+// result (empty string in the A0 scaffold).
+partial fn emit_expr(kind_tag: String) -> String {
+    ""
+}

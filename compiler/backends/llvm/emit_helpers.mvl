@@ -1,0 +1,29 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// compiler/backends/llvm/emit_helpers.mvl — shared low-level emit helpers
+// (issue #1118, Phase A0 scaffold).
+//
+// Corresponds to src/mvl/backends/llvm_text/emit_helpers.rs in the Rust compiler.
+//
+// A0 status: placeholder stubs. Real helpers (type mapping, heap-drop tracking,
+// string globals, value conversion, mangling, literals) land in A1+.
+
+// Return the LLVM IR type mnemonic for an MVL scalar name.
+// A0: only Int → i64 is populated; every other case falls through to "i64" so
+// downstream emission stays type-consistent until A1 introduces a real mapping.
+partial fn llvm_ty_of(mvl_ty: String) -> String {
+    match mvl_ty {
+        "Int"  => "i64",
+        "Bool" => "i1",
+        "Unit" => "void",
+        _      => "i64",
+    }
+}
+
+// Host target triple for the emitted module header.
+// A0: hard-coded to arm64-apple-darwin. A1 will source this from the CLI /
+// build environment like `default_target_triple()` in emitter.rs does.
+total fn default_target_triple() -> String {
+    "arm64-apple-darwin"
+}

@@ -1,0 +1,10 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// Spike 004 — TIR Backend Stage A0 (LLVM): minimal test program.
+// The MVL-LLVM emitter ignores the body in A0 and emits a canned exit-0
+// module; the file just needs to type-check so `mvl tir` produces valid JSON.
+
+fn main() -> Int {
+    0
+}

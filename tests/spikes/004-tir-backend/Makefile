@@ -18,7 +18,18 @@ TIR   := /tmp/spike004_tir.json
 RS    := /tmp/spike004_out.rs
 BIN   := /tmp/spike004_bin
 
-.PHONY: help build guard-mvl tir emit compile run test check all clean
+# LLVM path (A0 — issue #1118).  Uses empty.mvl (fn main -> Int { 0 }) with
+# a canned exit-0 module emitted by the MVL-hosted backend under
+# compiler/backends/llvm/.
+SRC_LL  := $(SPIKE)/empty.mvl
+EMIT_LL := $(ROOT)/compiler/backends/llvm/backend_llvm.mvl
+TIR_LL  := /tmp/spike004_tir_llvm.json
+LL      := /tmp/spike004_out.ll
+ASM_LL  := /tmp/spike004_out.s
+BIN_LL  := /tmp/spike004_bin_llvm
+
+.PHONY: help build guard-mvl tir emit compile run test check all clean \
+        tir-llvm emit-llvm compile-llvm run-llvm test-llvm llvm
 
 .DEFAULT_GOAL := help
 
@@ -71,4 +82,39 @@ test: run ## Full pipeline test — check output == "5"
 all: test ## Run the complete pipeline and verify output
 
 clean: ## Remove generated files
-	rm -f $(TIR) $(RS) $(BIN)
+	rm -f $(TIR) $(RS) $(BIN) $(TIR_LL) $(LL) $(ASM_LL) $(BIN_LL)
+
+# ── LLVM pipeline (A0 scaffold — issue #1118) ────────────────────────────────
+
+tir-llvm: guard-mvl ## LLVM step 1 — emit TirProgram JSON from empty.mvl
+	@echo "→ mvl tir empty.mvl"
+	cd "$(ROOT)" && $(MVL) tir $(SRC_LL) > $(TIR_LL)
+	@echo "  written: $(TIR_LL)"
+
+emit-llvm: tir-llvm ## LLVM step 2 — run MVL LLVM emitter on TIR JSON
+	@echo "→ mvl run backend_llvm.mvl < tir.json"
+	cd "$(ROOT)" && $(MVL) run $(EMIT_LL) < $(TIR_LL) 2>/dev/null \
+	  | grep -v "^Transpiled to:\|^Running: cargo" > $(LL)
+	@echo "  written: $(LL)"
+	@cat $(LL)
+
+compile-llvm: emit-llvm ## LLVM step 3 — llc + cc → binary
+	@echo "→ llc $(LL)"
+	llc $(LL) -o $(ASM_LL)
+	@echo "→ cc $(ASM_LL)"
+	cc $(ASM_LL) -o $(BIN_LL)
+	@echo "  binary: $(BIN_LL)"
+
+run-llvm: compile-llvm ## LLVM step 4 — run compiled binary
+	@echo "→ $(BIN_LL)"
+	@$(BIN_LL); echo "  exit=$$?"
+
+test-llvm: compile-llvm ## Full LLVM pipeline test — check exit code == 0
+	@$(BIN_LL); RC=$$?; \
+	  if [ "$$RC" = "0" ]; then \
+	    echo "  ✓  binary exited with code 0 as expected"; \
+	  else \
+	    echo "  ✗  expected exit 0, got $$RC"; exit 1; \
+	  fi
+
+llvm: test-llvm ## Alias for test-llvm (A0 canned-emission smoke test)

@@ -1,0 +1,23 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// compiler/backends/llvm/emit_program.mvl — top-level program emission
+// (issue #1118, Phase A0 scaffold).
+//
+// Corresponds to src/mvl/backends/llvm_text/emit_program_tir.rs in the Rust
+// compiler (~376 LOC).
+//
+// A0 status: emits a fixed module header + a canned `main` returning 0.
+// A1 will iterate `tir.types`, `tir.actors`, `tir.fns` and dispatch to the
+// per-kind emit_* modules.
+
+// Compose the module header lines shared by every emitted .ll file.
+total fn emit_module_header(module_name: String, target_triple: String) -> String {
+    format("; ModuleID = '{}'\nsource_filename = \"{}\"\ntarget triple = \"{}\"\n",
+        [module_name, module_name, target_triple])
+}
+
+// Canned main body for A0.  A1 replaces this with real fn iteration.
+total fn emit_canned_main() -> String {
+    "\ndefine i32 @main() {\n  ret i32 0\n}\n"
+}
