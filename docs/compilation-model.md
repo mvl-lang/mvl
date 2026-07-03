@@ -20,6 +20,9 @@ Every MVL program passes through exactly five stages before any code is emitted:
 │       │                                                             │
 │  4. Passes   coverage · MC/DC · mutation testing · linting         │
 │       │                                                             │
+│       │  (monomorphize + lower AST → TIR — resolved types          │
+│       │   embedded in every expression node; ADR-0038)             │
+│       ▼                                                             │
 │  5. Emit     ──► Rust source  (backend 1, production today)        │
 │              └─► LLVM IR      (backend 2, strategic target)        │
 └─────────────────────────────────────────────────────────────────────┘
@@ -29,6 +32,11 @@ Stages 1–4 are backend-agnostic.  The MVL compiler is the sole proof gate —
 all eleven requirements are fully verified before emit touches a single byte
 of target code.  `mvl check` stops after stage 3; `mvl lint` through stage 4;
 `mvl build` runs all five.
+
+Between the last verification pass and code emission, the compiler runs an
+explicit lowering step that monomorphizes generics and rewrites the AST into
+the Typed IR (TIR).  Backends consume `TirProgram` only — no AST types
+cross the emit boundary (ADR-0050).
 
 ## Two Backends — Why Both Exist
 

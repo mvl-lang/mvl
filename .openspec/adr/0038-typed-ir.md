@@ -1,9 +1,9 @@
 # ADR-0038: Typed Intermediate Representation (TIR)
 
-**Status:** Accepted
+**Status:** Accepted — Backend migration complete (2026-07-03)
 **Date:** 2026-05-28
-**Issues:** #1096
-**Related:** ADR-0018 (five-stage pipeline), ADR-0027 (multi-backend architecture), ADR-0034 (monomorphization pass)
+**Issues:** #1096; migration finished via #1594 (ADR-0050)
+**Related:** ADR-0018 (five-stage pipeline), ADR-0027 (multi-backend architecture), ADR-0034 (monomorphization pass), ADR-0050 (backend AST-import audit)
 
 ---
 
@@ -157,16 +157,20 @@ It is not embedded in either.
 
 ### 5. Backend migration is incremental
 
-Existing backends are **not** changed in this ADR. Both the Rust and LLVM backends
-continue to consume `ast::Program + CheckResult` directly.  The migration to TIR
-consumption is tracked in #1096 as follow-up work:
+Existing backends were **not** changed in this ADR. At the time this ADR landed, both
+the Rust and LLVM backends still consumed `ast::Program + CheckResult` directly. The
+migration to TIR consumption was tracked in #1096, then finished by the follow-up work
+in #1594 (ADR-0050) across two phases:
 
-- Rust backend: replace 11 `expr_types.get()` call sites with `TirExpr::ty()`.
-- LLVM backend: replace 2 `expr_types.get()` call sites.
-- Remove `use crate::mvl::checker::types::Ty` from both backends once migration completes.
+- **Phase 3b (#1648):** LLVM backend rewritten to walk TIR; AST fallback (`type_of_expr`,
+  `expr_types.get()` call sites) deleted.
+- **Phase 3c (#1649, #1650):** Rust backend switched to TIR entry point; all
+  `use parser::ast` imports and inline qualified paths removed. `TranspileConfig` now
+  holds `Vec<TirProgram>` for the prelude.
 
-The incremental strategy lets backends be migrated one at a time without breaking the
-existing pipeline.
+The incremental strategy let backends be migrated one at a time without breaking the
+existing pipeline. **Migration complete** as of 2026-07-03 — see ADR-0050 for the
+completion audit.
 
 ---
 
@@ -187,9 +191,11 @@ existing pipeline.
 
 **Negative / trade-offs:**
 
-- **Parallel maintenance during migration:** Until all backends are migrated, the compiler
-  maintains both `ast::Program + CheckResult` and `TirProgram` as parallel representations.
-  Any change to `ast::Expr` must be reflected in `TirExprKind`.
+- **Parallel maintenance during migration (resolved 2026-07-03):** Until backends were
+  migrated, the compiler maintained both `ast::Program + CheckResult` and `TirProgram`
+  as parallel representations. This trade-off ended with the completion of ADR-0050
+  (Phases 3b + 3c). One structural mirror remains as a static invariant: any new
+  `ast::Expr` variant must be reflected in `TirExprKind` (the lowering pass must map it).
 - **Session type fallback:** `typeexpr_to_ty` returns `Ty::Unknown` for `TypeExpr::Session`
   because the checker's `SessionTy` and the parser's `SessionOp` are structurally different.
   Session-typed expressions are resolved via `expr_types` lookups (the normal path), so the
@@ -255,5 +261,5 @@ semantics. No user-visible behavior changes.
 ### Specifications
 
 No existing specs are affected. TIR is a compiler-internal concern; no MVL surface language
-semantics change. The compilation model diagram in `docs/compilation-model.md` should be
-updated to show the TIR lowering step when the backends are migrated (follow-up to #1096).
+semantics change. The compilation model diagram in `docs/compilation-model.md` shows the
+TIR lowering step as an explicit stage between the checker/passes and code emission.
