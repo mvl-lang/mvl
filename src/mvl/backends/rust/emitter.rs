@@ -727,8 +727,7 @@ impl RustEmitter {
                             let loaded = p.parse_program();
                             // Use the checker to obtain expr_types before lowering, so the
                             // lowerer has type info for any function calls in stdlib bodies.
-                            let expr_types =
-                                crate::mvl::checker::check(&loaded).expr_types;
+                            let expr_types = crate::mvl::checker::check(&loaded).expr_types;
                             let all_fns = crate::mvl::passes::mono::collect_fns([&loaded]);
                             let mono = crate::mvl::passes::mono::monomorphize(
                                 &loaded,
@@ -741,8 +740,7 @@ impl RustEmitter {
                                 if !self.capability_params_map.contains_key(&f.name) {
                                     let flags = explicit_borrow_flags_tir(f);
                                     if flags.iter().any(|b| b.is_some()) {
-                                        self.capability_params_map
-                                            .insert(f.name.clone(), flags);
+                                        self.capability_params_map.insert(f.name.clone(), flags);
                                     }
                                 }
                             }
