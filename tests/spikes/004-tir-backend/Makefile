@@ -18,18 +18,21 @@ TIR   := /tmp/spike004_tir.json
 RS    := /tmp/spike004_out.rs
 BIN   := /tmp/spike004_bin
 
-# LLVM path (A0 — issue #1118).  Uses empty.mvl (fn main -> Int { 0 }) with
-# a canned exit-0 module emitted by the MVL-hosted backend under
-# compiler/backends/llvm/.
-SRC_LL  := $(SPIKE)/empty.mvl
+# LLVM path (issue #1118).  MVL-hosted backend under compiler/backends/llvm/.
+# A0: canned exit-0 emission (empty.mvl).
+# A1a: integer literals + arithmetic; stdout carries the printed result.
 EMIT_LL := $(ROOT)/compiler/backends/llvm/backend_llvm.mvl
+SRC_LL  := $(SPIKE)/empty.mvl
 TIR_LL  := /tmp/spike004_tir_llvm.json
 LL      := /tmp/spike004_out.ll
 ASM_LL  := /tmp/spike004_out.s
 BIN_LL  := /tmp/spike004_bin_llvm
 
+# A1a arithmetic cases: "src.mvl:expected_stdout".
+LL_CASES := empty.mvl:0 two_plus_three.mvl:5 six_times_seven.mvl:42 nested_arith.mvl:20
+
 .PHONY: help build guard-mvl tir emit compile run test check all clean \
-        tir-llvm emit-llvm compile-llvm run-llvm test-llvm llvm
+        tir-llvm emit-llvm compile-llvm run-llvm test-llvm llvm test-llvm-arith
 
 .DEFAULT_GOAL := help
 
@@ -109,12 +112,29 @@ run-llvm: compile-llvm ## LLVM step 4 — run compiled binary
 	@echo "→ $(BIN_LL)"
 	@$(BIN_LL); echo "  exit=$$?"
 
-test-llvm: compile-llvm ## Full LLVM pipeline test — check exit code == 0
-	@$(BIN_LL); RC=$$?; \
-	  if [ "$$RC" = "0" ]; then \
-	    echo "  ✓  binary exited with code 0 as expected"; \
-	  else \
-	    echo "  ✗  expected exit 0, got $$RC"; exit 1; \
-	  fi
+test-llvm: compile-llvm ## Full LLVM pipeline test — check stdout matches expected
+	@ACTUAL=$$($(BIN_LL)); RC=$$?; \
+	  if [ "$$RC" != "0" ]; then \
+	    echo "  ✗  non-zero exit: $$RC"; exit 1; \
+	  fi; \
+	  echo "  stdout: $$ACTUAL"
 
-llvm: test-llvm ## Alias for test-llvm (A0 canned-emission smoke test)
+test-llvm-arith: guard-mvl ## Run all A1a arithmetic cases; assert stdout per case
+	@set -e; \
+	for case in $(LL_CASES); do \
+	  src="$${case%%:*}"; expected="$${case##*:}"; \
+	  echo "→ $$src (expected: $$expected)"; \
+	  cd "$(ROOT)" && $(MVL) tir $(SPIKE)/$$src > $(TIR_LL); \
+	  $(MVL) run $(EMIT_LL) < $(TIR_LL) 2>/dev/null \
+	    | grep -v "^Transpiled to:\|^Running: cargo" > $(LL); \
+	  llc $(LL) -o $(ASM_LL); \
+	  cc $(ASM_LL) -o $(BIN_LL); \
+	  actual=$$($(BIN_LL)); \
+	  if [ "$$actual" = "$$expected" ]; then \
+	    echo "  ✓  $$actual"; \
+	  else \
+	    echo "  ✗  expected '$$expected', got '$$actual'"; exit 1; \
+	  fi; \
+	done
+
+llvm: test-llvm-arith ## A1a arithmetic corpus (defaults to arith cases)
