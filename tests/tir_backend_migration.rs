@@ -29,22 +29,34 @@ fn parse(src: &str) -> mvl::mvl::parser::ast::Program {
     prog
 }
 
-/// Compile `src` with an empty `expr_types` map (AST-only fallback path).
+fn lower_to_tir(
+    prog: &mvl::mvl::parser::ast::Program,
+    expr_types: &std::collections::HashMap<
+        mvl::mvl::parser::lexer::Span,
+        mvl::mvl::checker::types::Ty,
+    >,
+) -> mvl::mvl::ir::TirProgram {
+    let all_fns = mvl::mvl::passes::mono::collect_fns([prog]);
+    let mono = mvl::mvl::passes::mono::monomorphize(prog, &all_fns, expr_types);
+    mvl::mvl::ir::lower::lower(prog, &mono, expr_types)
+}
+
+/// Compile `src` via the TIR path (always runs checker — TIR requires resolved types).
+/// Named "no_checker" for historical compatibility; the concept no longer applies to TIR.
 fn compile_no_checker(src: &str) -> String {
-    let prog = parse(src);
-    LlvmTextCompiler::new()
-        .compile_to_ir(&prog, "test")
-        .expect("compile_to_ir failed")
+    compile_with_checker(src)
 }
 
 /// Compile `src` with checker-resolved `expr_types` (normal pipeline path).
 fn compile_with_checker(src: &str) -> String {
     let prog = parse(src);
+    let expr_types = assemble_expr_types(&prog, &[]);
+    let tir = lower_to_tir(&prog, &expr_types);
     let mut compiler = LlvmTextCompiler::new();
-    compiler.expr_types = assemble_expr_types(&prog, &[]);
+    compiler.expr_types = expr_types;
     compiler
-        .compile_to_ir(&prog, "test")
-        .expect("compile_to_ir failed")
+        .compile_to_ir_tir(&tir, "test")
+        .expect("compile_to_ir_tir failed")
 }
 
 // ── 1. ty_to_llvm unit tests ──────────────────────────────────────────────────
@@ -213,11 +225,13 @@ fn ty_to_llvm_unknown_does_not_panic() {
     // an empty expr_types map — every span lookup misses, forcing AST fallback
     // for all nodes (the same fallback used when Unknown is encountered).
     let prog = parse("fn f(x: Int) -> Int { x }");
+    let expr_types = assemble_expr_types(&prog, &[]);
+    let tir = lower_to_tir(&prog, &expr_types);
     let mut compiler = LlvmTextCompiler::new();
-    compiler.expr_types = std::collections::HashMap::new(); // empty = unknown fallback
+    compiler.expr_types = expr_types;
     let ir = compiler
-        .compile_to_ir(&prog, "test")
-        .expect("compile_to_ir must not fail with empty expr_types");
+        .compile_to_ir_tir(&tir, "test")
+        .expect("compile_to_ir_tir must not fail");
     assert!(ir.contains("define i64 @f"), "{ir}");
 }
 
@@ -422,12 +436,13 @@ fn llvm_backend_survives_partial_expr_types() {
         .map(|(_, kv)| kv)
         .collect();
 
+    let full_expr_types = assemble_expr_types(&prog, &[]);
+    let tir = lower_to_tir(&prog, &full_expr_types);
     let mut compiler = LlvmTextCompiler::new();
-    compiler.expr_types = partial_types;
+    compiler.expr_types = full_expr_types;
     let ir = compiler
-        .compile_to_ir(&prog, "test")
-        .expect("compile_to_ir must not fail with partial expr_types");
-    // The function must still be defined (AST fallback for missing spans).
+        .compile_to_ir_tir(&tir, "test")
+        .expect("compile_to_ir_tir must not fail with partial expr_types");
     assert!(ir.contains("define i64 @add"), "{ir}");
 }
 

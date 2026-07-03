@@ -32,25 +32,14 @@ pub fn lower_to_tir(prog: &Program) -> (TirProgram, LlvmTextCompiler) {
     (tir, compiler)
 }
 
-/// Assert IR parity between AST and TIR walker paths for `src`.
-///
-/// **Strict** as of the completion of the variant-by-variant port (#1612):
-/// the TIR walker must succeed AND emit byte-identical IR to the AST walker.
-/// Any "not yet implemented" / "not yet ported" error is treated as a
-/// regression (the walker has been ported variant-by-variant — see commits
-/// ffabb145..76bfbbf0 — so unimplemented messages should no longer reach
-/// the test target).
-///
-/// Tests that exercise the one known migration gap (mono pipeline in the
-/// standalone test environment) are individually marked `#[ignore]`.
+/// Compile `src` via the TIR walker and return the IR string.
+/// The AST walker was deleted in #1612 Phase 3b — this function now just
+/// verifies the TIR path succeeds and returns non-empty IR.
 pub fn assert_tir_parity(src: &str) {
     let prog = parse(src);
     let (tir, compiler) = lower_to_tir(&prog);
-    let ast_ir = compiler
-        .compile_to_ir(&prog, "test")
-        .expect("AST path failed");
-    let tir_ir = compiler
+    let ir = compiler
         .compile_to_ir_tir(&tir, "test")
         .expect("TIR path failed");
-    assert_eq!(ast_ir, tir_ir, "TIR walker output diverged from AST walker");
+    assert!(!ir.is_empty(), "TIR walker emitted empty IR for:\n{src}");
 }

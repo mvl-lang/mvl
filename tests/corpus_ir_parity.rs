@@ -1,66 +1,22 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Schuberg Philis
 
-//! Bulk corpus IR-parity oracle for #1612 task 2c.
+//! Corpus TIR compilation smoke-test (#1612 Phase 3b).
 //!
 //! Walks every `.mvl` file under `tests/corpus/` that has a `fn main(` entry
-//! point, lowers it through both the AST walker and the TIR walker (via
-//! `LlvmTextCompiler::compile_to_ir_with_prelude` and
-//! `compile_to_ir_with_prelude_tir`), and asserts byte-identical IR.
-//!
-//! A single divergence fails the test. The harness mirrors the production
-//! prelude/checker/mono wiring from `src/cli/llvm_text.rs::prepare_llvm_text`
-//! and `prepare_llvm_text_tir` so the IR matches what `mvl run --backend=llvm`
-//! emits at the CLI.
-//!
-//! If individual corpus files are intentionally divergent (e.g. they exercise
-//! a TIR-walker gap that is documented and accepted), add them to
-//! [`ALLOWLIST`] with a comment naming the gap.
+//! point and verifies it compiles without error via the TIR-walking LLVM emitter.
+//! This replaced the AST/TIR parity test once the AST walker was deleted in
+//! #1612 Phase 3b.
 
-use std::collections::HashSet;
 use std::path::PathBuf;
 
 use mvl::mvl::backends::llvm_text::LlvmTextCompiler;
 use mvl::mvl::checker;
-use mvl::mvl::ir::{lower, TirProgram};
+use mvl::mvl::ir::lower;
 use mvl::mvl::loader;
 use mvl::mvl::parser::ast::Program;
 use mvl::mvl::parser::Parser;
 use mvl::mvl::passes::mono;
-
-/// Files whose AST/TIR walker outputs are known to diverge for a documented
-/// reason. Populated only when an investigated divergence is judged not worth
-/// fixing before PR 2 deletes the AST walker.
-///
-/// All current entries share one root cause: AST's static `llvm_ty` helper
-/// (used by `result_ok_llvm_ty` and the `Err(...)` arm of `emit_result_match`)
-/// doesn't consult `module.enum_variants`, so it returns `"ptr"` for an enum
-/// `TypeExpr::Base { name: "Foo", ... }` — even when `Foo` is a payload enum
-/// with LLVM repr `{ i8, ptr }`. TIR's `llvm_ty_ctx` consults the registry and
-/// emits the correct `load { i8, ptr }`. The loaded value is dead code in the
-/// arms surfaced here (the arm body never uses the SSA, or uses one from
-/// another arm — pre-existing structural bug). No runtime effect; the
-/// divergence disappears when PR 2 deletes the AST emitter.
-const ALLOWLIST: &[&str] = &[
-    "tests/corpus/03_types/nested_enum_pattern_annotation.mvl",
-    "tests/corpus/13_stdlib/process_echo.mvl",
-    "tests/corpus/13_stdlib/io_basic.mvl",
-    "tests/corpus/13_stdlib/json_log_imports.mvl",
-    // TIR hoists ref-local allocas from non-loop-body branch BBs to the entry
-    // block so they dominate all uses (SSA dominance fix, #1645). This changes
-    // register ordering vs the AST path, which emits allocas inline.
-    "tests/corpus/03_types/user_type_shared_method_name.mvl",
-    "tests/corpus/05_collections/for_in_list.mvl",
-    "tests/corpus/05_effects/runtime_manifest_phase4.mvl",
-    "tests/corpus/05_effects/runtime_manifest_phase7.mvl",
-    "tests/corpus/13_stdlib/log_output.mvl",
-    "tests/corpus/13_stdlib/runtime_manifest.mvl",
-    "tests/corpus/13_stdlib/runtime_manifest_phase2.mvl",
-    "tests/corpus/13_stdlib/runtime_manifest_phase3.mvl",
-    "tests/corpus/13_stdlib/runtime_manifest_phase5.mvl",
-    "tests/corpus/13_stdlib/runtime_manifest_phase6.mvl",
-    "tests/corpus/13_stdlib/runtime_manifest_source_digest.mvl",
-];
 
 fn parse(src: &str) -> Program {
     let (mut p, errs) = Parser::new(src);
@@ -70,42 +26,6 @@ fn parse(src: &str) -> Program {
     prog
 }
 
-fn prepare(prog: &Program) -> (Vec<Program>, Vec<TirProgram>, TirProgram, LlvmTextCompiler) {
-    let mut prelude = loader::load_implicit_prelude();
-    prelude.extend(loader::load_mvl_native_stdlib_extras(std::slice::from_ref(
-        prog,
-    )));
-    prelude.extend(loader::load_rust_backed_stdlib_fns(std::slice::from_ref(
-        prog,
-    )));
-    let builtins = loader::collect_llvm_text_builtins(std::slice::from_ref(prog));
-
-    let mut expr_types = checker::collect_prelude_expr_types(&prelude);
-    let check_result = checker::check_with_prelude(&prelude, prog);
-    expr_types.extend(check_result.expr_types);
-
-    let compiler = LlvmTextCompiler::with_context(builtins, expr_types);
-
-    let entry_all_fns = mono::collect_fns(std::iter::once(prog).chain(prelude.iter()));
-    let entry_mono = mono::monomorphize(prog, &entry_all_fns, &compiler.expr_types);
-    let entry_tir = lower::lower(prog, &entry_mono, &compiler.expr_types);
-
-    let prelude_tirs: Vec<TirProgram> = prelude
-        .iter()
-        .map(|p| {
-            let all = mono::collect_fns([p]);
-            let m = mono::monomorphize(p, &all, &compiler.expr_types);
-            lower::lower(p, &m, &compiler.expr_types)
-        })
-        .collect();
-
-    (prelude, prelude_tirs, entry_tir, compiler)
-}
-
-/// Walk `tests/corpus/` and return every `.mvl` file whose source contains a
-/// `fn main(` entry point — these are the files that actually produce IR for
-/// `main`. Test-fn-only fixtures are excluded (they compile to fns but not to
-/// a runnable module, and the AST/TIR walker outputs converge trivially).
 fn corpus_main_files() -> Vec<PathBuf> {
     let manifest = env!("CARGO_MANIFEST_DIR");
     let root = std::path::Path::new(manifest).join("tests/corpus");
@@ -133,97 +53,6 @@ fn walk(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-fn first_diff_excerpt(a: &str, b: &str) -> String {
-    let a_lines: Vec<&str> = a.lines().collect();
-    let b_lines: Vec<&str> = b.lines().collect();
-    let max = a_lines.len().max(b_lines.len());
-    for i in 0..max {
-        let ai = a_lines.get(i).copied().unwrap_or("<missing>");
-        let bi = b_lines.get(i).copied().unwrap_or("<missing>");
-        if ai != bi {
-            let start = i.saturating_sub(2);
-            let end = (i + 4).min(max);
-            let mut out = String::new();
-            for j in start..end {
-                let marker = if j == i { ">> " } else { "   " };
-                out.push_str(&format!(
-                    "{marker}line {j}\n  AST: {}\n  TIR: {}\n",
-                    a_lines.get(j).copied().unwrap_or(""),
-                    b_lines.get(j).copied().unwrap_or(""),
-                ));
-            }
-            return out;
-        }
-    }
-    format!(
-        "lines all match but lengths differ (AST={} lines, TIR={} lines)",
-        a_lines.len(),
-        b_lines.len()
-    )
-}
-
-#[derive(Debug)]
-struct ParityFailure {
-    file: PathBuf,
-    kind: String,
-    detail: String,
-}
-
-fn check_file(file: &std::path::Path) -> Option<ParityFailure> {
-    let src = match std::fs::read_to_string(file) {
-        Ok(s) => s,
-        Err(e) => {
-            return Some(ParityFailure {
-                file: file.to_path_buf(),
-                kind: "read".into(),
-                detail: e.to_string(),
-            })
-        }
-    };
-    let prog = parse(&src);
-    let (prelude, prelude_tirs, entry_tir, compiler) = prepare(&prog);
-    let module_name = loader::stem(&file.to_string_lossy());
-
-    let ast_ir = match compiler.compile_to_ir_with_prelude(&prelude, &prog, &module_name) {
-        Ok(ir) => ir,
-        Err(e) => {
-            return Some(ParityFailure {
-                file: file.to_path_buf(),
-                kind: "ast-compile".into(),
-                detail: e,
-            })
-        }
-    };
-    let tir_ir =
-        match compiler.compile_to_ir_with_prelude_tir(&prelude_tirs, &entry_tir, &module_name) {
-            Ok(ir) => ir,
-            Err(e) => {
-                return Some(ParityFailure {
-                    file: file.to_path_buf(),
-                    kind: "tir-compile".into(),
-                    detail: e,
-                })
-            }
-        };
-
-    if ast_ir == tir_ir {
-        return None;
-    }
-    if std::env::var("MVL_PARITY_DUMP").is_ok() {
-        let stem = file.file_stem().unwrap_or_default().to_string_lossy();
-        let _ = std::fs::write(format!("/tmp/parity_{stem}_ast.ll"), &ast_ir);
-        let _ = std::fs::write(format!("/tmp/parity_{stem}_tir.ll"), &tir_ir);
-    }
-    Some(ParityFailure {
-        file: file.to_path_buf(),
-        kind: format!("diff(AST={}B, TIR={}B)", ast_ir.len(), tir_ir.len()),
-        detail: first_diff_excerpt(&ast_ir, &tir_ir),
-    })
-}
-
-// Task 2d cleared the original 35-file gap to zero (#1612). 4 files remain in
-// ALLOWLIST for documented AST-side limitations that PR 2's AST-walker delete
-// resolves automatically. Strict regression gate from here on.
 #[test]
 fn corpus_ir_parity_ast_vs_tir() {
     let files = corpus_main_files();
@@ -232,59 +61,65 @@ fn corpus_ir_parity_ast_vs_tir() {
         "no corpus files with `fn main(` were discovered — wrong working directory?"
     );
 
-    let allow: HashSet<&str> = ALLOWLIST.iter().copied().collect();
-    let mut failures: Vec<ParityFailure> = Vec::new();
-    let mut skipped: Vec<PathBuf> = Vec::new();
+    let mut failures: Vec<(PathBuf, String)> = Vec::new();
     for file in &files {
-        let rel = file
-            .strip_prefix(env!("CARGO_MANIFEST_DIR"))
-            .unwrap_or(file);
-        let rel_str = rel.to_string_lossy().into_owned();
-        if allow.contains(rel_str.as_str()) {
-            skipped.push(file.clone());
-            continue;
-        }
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| check_file(file)));
-        match result {
-            Ok(None) => {}
-            Ok(Some(f)) => failures.push(f),
-            Err(payload) => {
-                let msg = if let Some(s) = payload.downcast_ref::<String>() {
-                    s.clone()
-                } else if let Some(s) = payload.downcast_ref::<&str>() {
-                    s.to_string()
-                } else {
-                    "<unknown panic payload>".into()
-                };
-                failures.push(ParityFailure {
-                    file: file.clone(),
-                    kind: "panic".into(),
-                    detail: msg,
-                });
+        let src = match std::fs::read_to_string(file) {
+            Ok(s) => s,
+            Err(e) => {
+                failures.push((file.clone(), format!("read error: {e}")));
+                continue;
             }
+        };
+        let prog = parse(&src);
+        let mut prelude = loader::load_implicit_prelude();
+        prelude.extend(loader::load_mvl_native_stdlib_extras(std::slice::from_ref(
+            &prog,
+        )));
+        prelude.extend(loader::load_rust_backed_stdlib_fns(std::slice::from_ref(
+            &prog,
+        )));
+        let builtins = loader::collect_llvm_text_builtins(std::slice::from_ref(&prog));
+        let mut expr_types = checker::collect_prelude_expr_types(&prelude);
+        let cr = checker::check_with_prelude(&prelude, &prog);
+        expr_types.extend(cr.expr_types);
+        let compiler = LlvmTextCompiler::with_context(builtins, expr_types);
+
+        let entry_all_fns = mono::collect_fns(std::iter::once(&prog).chain(prelude.iter()));
+        let entry_mono = mono::monomorphize(&prog, &entry_all_fns, &compiler.expr_types);
+        let entry_tir = lower::lower(&prog, &entry_mono, &compiler.expr_types);
+        let prelude_tirs = prelude
+            .iter()
+            .map(|p| {
+                let all = mono::collect_fns([p]);
+                let m = mono::monomorphize(p, &all, &compiler.expr_types);
+                lower::lower(p, &m, &compiler.expr_types)
+            })
+            .collect::<Vec<_>>();
+
+        let module_name = loader::stem(&file.to_string_lossy());
+        if let Err(e) =
+            compiler.compile_to_ir_with_prelude_tir(&prelude_tirs, &entry_tir, &module_name)
+        {
+            failures.push((file.clone(), e));
         }
     }
 
     eprintln!(
-        "Corpus IR parity: scanned {} files (skipped {} via ALLOWLIST), {} failures",
-        files.len() - skipped.len(),
-        skipped.len(),
+        "Corpus TIR compilation: scanned {} files, {} failures",
+        files.len(),
         failures.len()
     );
 
     if !failures.is_empty() {
         let mut report = String::new();
-        for f in &failures {
-            let rel = f
-                .file
+        for (file, err) in &failures {
+            let rel = file
                 .strip_prefix(env!("CARGO_MANIFEST_DIR"))
-                .unwrap_or(&f.file);
-            report.push_str(&format!("\n--- {} [{}] ---\n", rel.display(), f.kind));
-            report.push_str(&f.detail);
-            report.push('\n');
+                .unwrap_or(file);
+            report.push_str(&format!("\n--- {} ---\n{err}\n", rel.display()));
         }
         panic!(
-            "{} corpus file(s) diverge between AST and TIR walkers:{report}",
+            "{} corpus file(s) failed TIR compilation:{report}",
             failures.len()
         );
     }

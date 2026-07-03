@@ -9,7 +9,7 @@
 //! TIR vs AST boundary.
 
 use crate::mvl::checker::types::Ty;
-use crate::mvl::parser::ast::{BinaryOp, Literal, TypeExpr};
+use crate::mvl::ir::{BinaryOp, Literal, TypeExpr};
 use crate::mvl::parser::lexer::Span;
 
 use super::{HeapKind, TextEmitter, RESULT_LLVM_TY};
@@ -247,7 +247,7 @@ impl TextEmitter {
         match ty {
             Ty::Named(name, _) => {
                 if self.module.struct_fields.contains_key(name) {
-                    if self.module.actor_decls.contains_key(name.as_str()) {
+                    if self.module.tir_actor_decls.contains_key(name.as_str()) {
                         return "ptr".into();
                     }
                     return format!("%{name}");
@@ -258,7 +258,7 @@ impl TextEmitter {
                     }
                     return "i64".into();
                 }
-                if self.module.actor_decls.contains_key(name.as_str()) {
+                if self.module.tir_actor_decls.contains_key(name.as_str()) {
                     return "ptr".into();
                 }
                 Self::ty_to_llvm(ty)
@@ -307,7 +307,7 @@ impl TextEmitter {
                 if self.module.struct_fields.contains_key(name) {
                     // Actor state structs are always accessed via pointer — the
                     // actor handle is an opaque ptr, not an inline struct value.
-                    if self.module.actor_decls.contains_key(name.as_str()) {
+                    if self.module.tir_actor_decls.contains_key(name.as_str()) {
                         return "ptr".to_string();
                     }
                     return format!("%{name}");
@@ -320,7 +320,7 @@ impl TextEmitter {
                     return "i64".to_string();
                 }
                 // Actor type without registered state struct (e.g. handle as field).
-                if self.module.actor_decls.contains_key(name.as_str()) {
+                if self.module.tir_actor_decls.contains_key(name.as_str()) {
                     return "ptr".to_string();
                 }
                 Self::llvm_ty(ty)

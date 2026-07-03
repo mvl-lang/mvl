@@ -22,8 +22,7 @@ use std::collections::{HashMap, HashSet};
 use super::emitter::{HeapKind, RefLocal};
 use super::BuiltinSymbolInfo;
 use crate::mvl::checker::types::Ty;
-use crate::mvl::ir::TirFn;
-use crate::mvl::parser::ast::{ActorDecl, FnDecl, TypeExpr};
+use crate::mvl::ir::{TirFn, TypeExpr};
 use crate::mvl::parser::lexer::Span;
 
 // ── Module-global state ──────────────────────────────────────────────────────
@@ -74,13 +73,6 @@ pub(super) struct ModuleCtx {
 
     // ── Actor state (#1149) ───────────────────────────────────────────────
     /// Actor declarations keyed by actor type name (populated in first pass).
-    pub actor_decls: HashMap<String, ActorDecl>,
-    /// TIR-side actor declarations (parallel to `actor_decls`, #1612).
-    ///
-    /// Populated by `emit_program_tir` from `TirProgram::actors`. Replaces
-    /// `actor_decls` on the TIR path; both fields coexist during the
-    /// parallel-tree migration. When PR 2 lands and the AST walker is
-    /// deleted, `actor_decls` retires and this field becomes the only one.
     pub tir_actor_decls: HashMap<String, crate::mvl::ir::TirActorDecl>,
     /// True once actor runtime externs have been emitted.
     pub actor_runtime_declared: bool,
@@ -144,7 +136,6 @@ impl ModuleCtx {
             lambda_counter: 0,
             closure_type_emitted: false,
             fn_aliases: HashMap::new(),
-            actor_decls: HashMap::new(),
             tir_actor_decls: HashMap::new(),
             actor_runtime_declared: false,
             actor_emitted: HashSet::new(),
@@ -232,19 +223,9 @@ impl FnCtx {
 
 /// Generic-function discovery + emission queue (#1156, #1523).
 pub(super) struct MonoQueue {
-    /// Generic function declarations (type_params non-empty), keyed by name.
-    #[allow(dead_code)]
-    pub generic_fns: HashMap<String, FnDecl>,
     /// Active type-parameter → concrete-type mapping during a monomorphized
     /// function's emission.
     pub type_param_map: HashMap<String, TypeExpr>,
-    /// Mangled names of monomorphized copies already emitted (avoid duplicates).
-    #[allow(dead_code)]
-    pub mono_emitted: HashSet<String>,
-    /// Queue of monomorphized functions to emit: (mangled, orig_name, concrete_types).
-    #[allow(dead_code)]
-    pub mono_queue: Vec<(String, String, Vec<TypeExpr>)>,
-    // ── TIR-side parallels (#1612, Bug 4) ────────────────────────────────
     /// Generic TIR fn declarations (type_params non-empty), keyed by name.
     pub tir_generic_fns: HashMap<String, TirFn>,
     /// Mangled names of monomorphized TIR copies already emitted.
@@ -256,10 +237,7 @@ pub(super) struct MonoQueue {
 impl MonoQueue {
     pub(super) fn new() -> Self {
         Self {
-            generic_fns: HashMap::new(),
             type_param_map: HashMap::new(),
-            mono_emitted: HashSet::new(),
-            mono_queue: Vec::new(),
             tir_generic_fns: HashMap::new(),
             tir_mono_emitted: HashSet::new(),
             tir_mono_queue: Vec::new(),

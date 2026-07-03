@@ -15,13 +15,14 @@ pub fn compile(src: &str) -> String {
     assert!(errs.is_empty(), "lex errors: {errs:?}");
     let prog = p.parse_program();
     assert!(p.errors().is_empty(), "parse errors: {:?}", p.errors());
-    // The TIR walker requires checker-resolved types — run the checker so
-    // `compile_to_ir` (which lowers AST → TIR internally) can find them.
     let mut expr_types = crate::mvl::checker::collect_prelude_expr_types(&[]);
     let cr = crate::mvl::checker::check(&prog);
     expr_types.extend(cr.expr_types);
     let compiler = LlvmTextCompiler::with_context(std::collections::HashMap::new(), expr_types);
+    let all_fns = crate::mvl::passes::mono::collect_fns([&prog]);
+    let mono = crate::mvl::passes::mono::monomorphize(&prog, &all_fns, &compiler.expr_types);
+    let tir = crate::mvl::ir::lower::lower(&prog, &mono, &compiler.expr_types);
     compiler
-        .compile_to_ir(&prog, "test")
-        .expect("compile_to_ir failed")
+        .compile_to_ir_tir(&tir, "test")
+        .expect("compile_to_ir_tir failed")
 }
