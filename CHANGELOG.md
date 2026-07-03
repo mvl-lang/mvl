@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.225.2] - 2026-07-03
+
+### Fixed
+
+- **`llvm_text`: resolve dominance violations in TIR walker** (#1645) — Four TIR-walker bugs blocked Phase 3b PR 2 (AST deletion). (1) Missing regex dispatch: `_mvl_regex_find` returns `Option[Match]` where `Match` is a value struct; C-ABI payload is `*mut MvlMatch` (heap ptr), but normalization wrapped it in `alloca ptr` (8 bytes), then match-arm `load %Match` tried to read 24 bytes from an 8-byte alloca (UB/garbage). Fixed: detect value-struct inner types (all primitive LLVM fields, e.g. `Match{String, Int, Int}`), skip the alloca-ptr indirection, pass `*mut T` directly to match arm. Also fixed: `fn_ret_types` short-name overwrite — extension methods now only register their qualified name, preventing `String::find` from clobbering regex `find`. (2) Ref-local dominance: ref-local allocas inside branches didn't dominate all uses; fixed: hoist to entry block (pre_allocas list), inject after "entry:" label in `finish_fn_body()`. (3) Loop-scoped heap drops: drops were function-wide; fixed: snapshot heap_locals before each loop body, drop at back-edge, truncate. (4) Opaque-handle payloads: `Result[Child, ...]` with nested Option fields should use alloca-ptr indirection to keep the opaque ptr, not dereference the struct. Rust runtime actors with `traps_exit` / `on_exit` / `on_down` hooks now generate spawn infrastructure even without public behaviors. Test results: 113/113 cross-backend, 179/179 corpus, 31/31 backend-rust all pass. Linker duplicates removed from Rust runtime (LLVM provides C-ABI wrappers).
+
 ## [0.225.1] - 2026-07-01
 
 ### Fixed

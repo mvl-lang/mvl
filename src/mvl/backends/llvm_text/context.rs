@@ -187,6 +187,11 @@ pub(super) struct FnCtx {
     // ── Heap drop tracking (#1185) ──────────────────────────────────────
     /// Heap-allocated locals: (ssa_or_alloca, kind, is_ref).
     pub heap_locals: Vec<(String, HeapKind, bool)>,
+
+    // ── Entry-block alloca hoisting ──────────────────────────────────────
+    /// Alloca instructions for `ref` locals that must live in the entry block
+    /// so they dominate all uses, even when the binding is inside a branch (#1645).
+    pub pre_allocas: Vec<String>,
 }
 
 impl FnCtx {
@@ -208,6 +213,7 @@ impl FnCtx {
             current_fn_is_main: false,
             spawned_actor_handles: Vec::new(),
             heap_locals: Vec::new(),
+            pre_allocas: Vec::new(),
         }
     }
 
@@ -227,13 +233,16 @@ impl FnCtx {
 /// Generic-function discovery + emission queue (#1156, #1523).
 pub(super) struct MonoQueue {
     /// Generic function declarations (type_params non-empty), keyed by name.
+    #[allow(dead_code)]
     pub generic_fns: HashMap<String, FnDecl>,
     /// Active type-parameter → concrete-type mapping during a monomorphized
     /// function's emission.
     pub type_param_map: HashMap<String, TypeExpr>,
     /// Mangled names of monomorphized copies already emitted (avoid duplicates).
+    #[allow(dead_code)]
     pub mono_emitted: HashSet<String>,
     /// Queue of monomorphized functions to emit: (mangled, orig_name, concrete_types).
+    #[allow(dead_code)]
     pub mono_queue: Vec<(String, String, Vec<TypeExpr>)>,
     // ── TIR-side parallels (#1612, Bug 4) ────────────────────────────────
     /// Generic TIR fn declarations (type_params non-empty), keyed by name.

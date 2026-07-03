@@ -20,7 +20,7 @@
 use crate::mvl::ir::{MailboxConfig, MailboxPolicy, TirActorDecl, TirExpr, Ty, TypeExpr};
 use crate::mvl::parser::lexer::Span;
 
-use super::emit_stmts::ty_to_type_expr;
+use super::emit_helpers::ty_to_type_expr;
 use super::{RefLocal, TextEmitter};
 
 const MAX_ACTOR_ARGS: usize = 8;
@@ -135,7 +135,7 @@ impl TextEmitter {
                 }
 
                 this.fn_ctx.fn_buf.push("}".into());
-                let fn_text = this.fn_ctx.fn_buf.join("\n");
+                let fn_text = this.finish_fn_body();
                 this.module.fn_bodies.push(fn_text);
                 Ok(())
             })?;

@@ -46,6 +46,20 @@ const ALLOWLIST: &[&str] = &[
     "tests/corpus/13_stdlib/process_echo.mvl",
     "tests/corpus/13_stdlib/io_basic.mvl",
     "tests/corpus/13_stdlib/json_log_imports.mvl",
+    // TIR hoists ref-local allocas from non-loop-body branch BBs to the entry
+    // block so they dominate all uses (SSA dominance fix, #1645). This changes
+    // register ordering vs the AST path, which emits allocas inline.
+    "tests/corpus/03_types/user_type_shared_method_name.mvl",
+    "tests/corpus/05_collections/for_in_list.mvl",
+    "tests/corpus/05_effects/runtime_manifest_phase4.mvl",
+    "tests/corpus/05_effects/runtime_manifest_phase7.mvl",
+    "tests/corpus/13_stdlib/log_output.mvl",
+    "tests/corpus/13_stdlib/runtime_manifest.mvl",
+    "tests/corpus/13_stdlib/runtime_manifest_phase2.mvl",
+    "tests/corpus/13_stdlib/runtime_manifest_phase3.mvl",
+    "tests/corpus/13_stdlib/runtime_manifest_phase5.mvl",
+    "tests/corpus/13_stdlib/runtime_manifest_phase6.mvl",
+    "tests/corpus/13_stdlib/runtime_manifest_source_digest.mvl",
 ];
 
 fn parse(src: &str) -> Program {
