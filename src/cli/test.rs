@@ -4,6 +4,7 @@
 use mvl::mvl::backends::llvm_text::lli;
 use mvl::mvl::backends::rust as transpiler;
 use mvl::mvl::checker;
+use mvl::mvl::pipeline::lower_prelude;
 use mvl::mvl::loader;
 use mvl::mvl::parser::ast::Decl;
 use mvl::mvl::parser::Parser;
@@ -404,7 +405,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
                     &tir,
                     transpiler::TranspileConfig::new(&module_name)
                         .with_file_stem(&module_name)
-                        .with_prelude(stdlib_prelude_progs.clone())
+                        .with_prelude(lower_prelude(&stdlib_prelude_progs))
                         .with_coverage_prelude(prelude_stems.clone(), instrument_this)
                         .with_coverage(next_branch_id)
                         .for_test_crate(),
@@ -416,7 +417,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
                 transpiler::transpile(
                     &tir,
                     transpiler::TranspileConfig::new(&module_name)
-                        .with_prelude(stdlib_prelude_progs.clone())
+                        .with_prelude(lower_prelude(&stdlib_prelude_progs))
                         .for_test_crate(),
                 )
                 .output,
@@ -491,7 +492,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
                     &tir,
                     transpiler::TranspileConfig::new(&module_name)
                         .with_file_stem(&module_name)
-                        .with_prelude(stdlib_prelude_progs.clone())
+                        .with_prelude(lower_prelude(&stdlib_prelude_progs))
                         .with_coverage(next_branch_id)
                         .for_test_crate(),
                 );
@@ -502,7 +503,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
                 transpiler::transpile(
                     &tir,
                     transpiler::TranspileConfig::new(&module_name)
-                        .with_prelude(stdlib_prelude_progs.clone())
+                        .with_prelude(lower_prelude(&stdlib_prelude_progs))
                         .for_test_crate(),
                 )
                 .output,

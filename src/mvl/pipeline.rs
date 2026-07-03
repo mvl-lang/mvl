@@ -19,11 +19,11 @@
 //! ```
 
 use crate::mvl::backends::rust::{
-    transpile, transpile_project_with_options, TranspileConfig, TranspileResult,
+    transpile, ProjectOutput, TranspileConfig, TranspileResult,
 };
 use crate::mvl::backends::AssertMode;
 use crate::mvl::checker::{self, CheckResult};
-use crate::mvl::parser::ast::Program;
+use crate::mvl::parser::ast::{Decl, Program};
 
 /// Compilation pipeline with composable instrumentation.
 ///
@@ -116,7 +116,8 @@ impl Pipeline {
         prelude: Vec<Program>,
     ) -> TranspileResult {
         let expr_types = assemble_expr_types(prog, &prelude);
-        let mut config = TranspileConfig::new(crate_name).with_prelude(prelude);
+        let prelude_tirs = lower_prelude(&prelude);
+        let mut config = TranspileConfig::new(crate_name).with_prelude(prelude_tirs);
         if self.coverage {
             config = config.with_coverage(0);
         }
@@ -128,7 +129,7 @@ impl Pipeline {
         }
         config = config.with_assert_mode(self.assert_mode);
         let all_fns = crate::mvl::passes::mono::collect_fns(
-            std::iter::once(prog).chain(config.prelude_progs.iter()),
+            std::iter::once(prog).chain(prelude.iter()),
         );
         let mono = crate::mvl::passes::mono::monomorphize(prog, &all_fns, &expr_types);
         let tir = crate::mvl::ir::lower::lower(prog, &mono, &expr_types);
@@ -137,7 +138,7 @@ impl Pipeline {
 
     /// Transpile a multi-file project using this pipeline's settings.
     ///
-    /// Delegates to [`transpile_project`] with the pipeline's assert mode.
+    /// Delegates to [`transpile_project_with_options`] with the pipeline's assert mode.
     /// Instrumentation (coverage, MC/DC, mutation) is not supported for
     /// multi-file project builds — use [`build`](Self::build) per file instead.
     pub fn build_project(
@@ -150,7 +151,7 @@ impl Pipeline {
             crate::mvl::parser::lexer::Span,
             crate::mvl::checker::types::Ty,
         >,
-    ) -> crate::mvl::backends::rust::ProjectOutput {
+    ) -> ProjectOutput {
         let sibling_expr_types: Vec<_> = siblings
             .iter()
             .map(|(_, prog)| assemble_expr_types(prog, prelude))
@@ -193,4 +194,246 @@ pub fn assemble_expr_types(
     };
     types.extend(result.expr_types);
     types
+}
+
+/// Lower a slice of AST programs to TIR (checker + mono + lower in one step).
+///
+/// Callers that have a `Vec<Program>` prelude and need to pass it to
+/// [`TranspileConfig::with_prelude`] should call this first.
+pub fn lower_prelude(progs: &[Program]) -> Vec<crate::mvl::ir::TirProgram> {
+    let expr_types = checker::collect_prelude_expr_types(progs);
+    progs
+        .iter()
+        .map(|p| {
+            let all_fns = crate::mvl::passes::mono::collect_fns([p]);
+            let m = crate::mvl::passes::mono::monomorphize(p, &all_fns, &expr_types);
+            crate::mvl::ir::lower::lower(p, &m, &expr_types)
+        })
+        .collect()
+}
+
+// ── AST program inspector helpers (moved from backends/rust.rs) ───────────────
+
+/// Returns true if the program declares a top-level `fn main`.
+pub fn has_main_fn(prog: &Program) -> bool {
+    prog.declarations.iter().any(|d| {
+        if let Decl::Fn(fd) = d {
+            fd.name == "main"
+        } else {
+            false
+        }
+    })
+}
+
+/// Count extern declarations in a program.
+pub fn count_extern_decls(prog: &Program) -> usize {
+    prog.declarations
+        .iter()
+        .filter(|d| matches!(d, Decl::Extern(_)))
+        .count()
+}
+
+/// True when any prelude program has `extern "rust"` or `pub builtin fn` declarations.
+pub fn prelude_requires_runtime(prelude_progs: &[Program]) -> bool {
+    prelude_progs.iter().any(|p| {
+        p.declarations.iter().any(|d| match d {
+            Decl::Extern(_) => true,
+            Decl::Fn(fd) => fd.is_builtin,
+            _ => false,
+        })
+    })
+}
+
+/// Returns true if the program declares at least one `extern "rust"` block.
+pub fn has_extern_rust_decls(prog: &Program) -> bool {
+    prog.declarations
+        .iter()
+        .any(|d| matches!(d, Decl::Extern(ed) if ed.abi == "rust"))
+}
+
+/// Returns true if the program contains extern blocks or type declarations.
+pub fn has_extern_or_type_decls(prog: &Program) -> bool {
+    prog.declarations
+        .iter()
+        .any(|d| matches!(d, Decl::Extern(_) | Decl::Type(_)))
+}
+
+/// Returns true if the program imports any `use std.*` stdlib modules.
+pub fn has_std_imports(prog: &Program) -> bool {
+    prog.declarations.iter().any(|d| {
+        if let Decl::Use(ud) = d {
+            ud.path.first().map(|s| s == "std").unwrap_or(false)
+        } else {
+            false
+        }
+    })
+}
+
+/// Returns the deduplicated list of `std.*` sub-module names used in this program
+/// that have a Rust implementation in `mvl_runtime::stdlib`.
+pub fn collect_stdlib_modules(prog: &Program) -> Vec<String> {
+    use crate::mvl::backends::rust::RUST_RUNTIME_IMPORTS;
+    let mut modules: Vec<String> = Vec::new();
+    for decl in &prog.declarations {
+        if let Decl::Use(ud) = decl {
+            if ud.path.first().map(|s| s == "std").unwrap_or(false) && ud.path.len() >= 2 {
+                let module = ud.path[1].as_str();
+                if RUST_RUNTIME_IMPORTS.contains(&module) && !modules.contains(&module.to_string())
+                {
+                    modules.push(module.to_string());
+                }
+            }
+        }
+    }
+    modules
+}
+
+// ── Multi-file project transpilation (moved from backends/rust.rs) ────────────
+
+/// Transpile a multi-file project to Rust source.
+pub fn transpile_project(
+    entry_name: &str,
+    entry_prog: &Program,
+    siblings: &[(String, Program)],
+    prelude_progs: &[Program],
+    expr_types: std::collections::HashMap<crate::mvl::parser::lexer::Span, crate::mvl::ir::Ty>,
+    sibling_expr_types: Vec<
+        std::collections::HashMap<crate::mvl::parser::lexer::Span, crate::mvl::ir::Ty>,
+    >,
+    assert_mode: AssertMode,
+) -> ProjectOutput {
+    transpile_project_with_options(
+        entry_name,
+        entry_prog,
+        siblings,
+        prelude_progs,
+        expr_types,
+        &sibling_expr_types,
+        assert_mode,
+        false,
+        &[],
+    )
+}
+
+/// Like [`transpile_project`] but with package-name tracking (#1475).
+#[allow(clippy::too_many_arguments)]
+pub fn transpile_project_with_pkg_names(
+    entry_name: &str,
+    entry_prog: &Program,
+    siblings: &[(String, Program)],
+    prelude_progs: &[Program],
+    expr_types: std::collections::HashMap<crate::mvl::parser::lexer::Span, crate::mvl::ir::Ty>,
+    sibling_expr_types: Vec<
+        std::collections::HashMap<crate::mvl::parser::lexer::Span, crate::mvl::ir::Ty>,
+    >,
+    assert_mode: AssertMode,
+    prelude_pkg_names: &[Option<String>],
+) -> ProjectOutput {
+    transpile_project_with_options(
+        entry_name,
+        entry_prog,
+        siblings,
+        prelude_progs,
+        expr_types,
+        &sibling_expr_types,
+        assert_mode,
+        false,
+        prelude_pkg_names,
+    )
+}
+
+/// Full multi-file project transpilation with all options.
+#[allow(clippy::too_many_arguments)]
+pub fn transpile_project_with_options(
+    entry_name: &str,
+    entry_prog: &Program,
+    siblings: &[(String, Program)],
+    prelude_progs: &[Program],
+    expr_types: std::collections::HashMap<crate::mvl::parser::lexer::Span, crate::mvl::ir::Ty>,
+    sibling_expr_types: &[std::collections::HashMap<
+        crate::mvl::parser::lexer::Span,
+        crate::mvl::ir::Ty,
+    >],
+    assert_mode: AssertMode,
+    extern_stubs: bool,
+    prelude_pkg_names: &[Option<String>],
+) -> ProjectOutput {
+    use crate::mvl::backends::rust::{
+        annotate_prelude_pkg_names, cargo,
+        emitter::RustEmitter,
+    };
+    let has_main = has_main_fn(entry_prog);
+    let extern_count = count_extern_decls(entry_prog);
+    let has_extern_rust =
+        has_extern_rust_decls(entry_prog) || prelude_progs.iter().any(has_extern_rust_decls);
+    let use_runtime = extern_count > 0
+        || has_std_imports(entry_prog)
+        || siblings.iter().any(|(_, p)| has_std_imports(p))
+        || prelude_requires_runtime(prelude_progs);
+
+    let sibling_names: Vec<&str> = siblings.iter().map(|(n, _)| n.as_str()).collect();
+
+    // Lower entry program to TIR.
+    let entry_all_fns = crate::mvl::passes::mono::collect_fns(
+        std::iter::once(entry_prog).chain(prelude_progs.iter()),
+    );
+    let entry_mono =
+        crate::mvl::passes::mono::monomorphize(entry_prog, &entry_all_fns, &expr_types);
+    let entry_tir = crate::mvl::ir::lower::lower(entry_prog, &entry_mono, &expr_types);
+
+    // Lower prelude programs to TIR.
+    let mut prelude_tirs = lower_prelude(prelude_progs);
+    annotate_prelude_pkg_names(&mut prelude_tirs, prelude_pkg_names);
+
+    let mut cg = RustEmitter::new();
+    cg.assert_mode = assert_mode;
+    cg.test_extern_stubs = extern_stubs;
+    cg.emit_program_with_mods(&entry_tir, &sibling_names, &prelude_tirs);
+    let main_rs = cg.finish();
+
+    let entry_uses_runtime = use_runtime;
+    let module_files: Vec<(String, String)> = siblings
+        .iter()
+        .enumerate()
+        .map(|(idx, (name, prog))| {
+            let sib_et = sibling_expr_types.get(idx).cloned().unwrap_or_default();
+            let sib_all_fns = crate::mvl::passes::mono::collect_fns([prog]);
+            let sib_mono = crate::mvl::passes::mono::monomorphize(prog, &sib_all_fns, &sib_et);
+            let sib_tir = crate::mvl::ir::lower::lower(prog, &sib_mono, &sib_et);
+
+            let mut cg = RustEmitter::new();
+            cg.assert_mode = assert_mode;
+            cg.test_extern_stubs = extern_stubs;
+            if entry_uses_runtime {
+                cg.emit_sibling_module(&sib_tir, &prelude_tirs);
+            } else {
+                cg.emit_program(&sib_tir);
+            }
+            (name.clone(), cg.finish())
+        })
+        .collect();
+
+    let opts = cargo::CargoOptions {
+        crate_name: entry_name,
+        use_mvl_runtime: use_runtime,
+        extern_crates: Vec::new(),
+        native_dep_lines: Vec::new(),
+        mvl_runtime_path: None,
+        use_tokio: false,
+    };
+    let cargo_toml = if has_main {
+        cargo::emit_cargo_toml_binary_opts(&opts)
+    } else {
+        cargo::emit_cargo_toml_library_opts(&opts)
+    };
+
+    ProjectOutput {
+        main_rs,
+        module_files,
+        cargo_toml,
+        has_main,
+        extern_count,
+        has_extern_rust,
+        use_mvl_runtime: use_runtime,
+    }
 }

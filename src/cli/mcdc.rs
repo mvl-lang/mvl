@@ -5,6 +5,7 @@ use mvl::mvl::backends::rust as transpiler;
 use mvl::mvl::backends::rust::{
     emit_mcdc_preamble, emit_mcdc_report_test, MCDCDecision, TranspileConfig,
 };
+use mvl::mvl::pipeline::lower_prelude;
 use mvl::mvl::checker;
 use mvl::mvl::loader;
 use mvl::mvl::parser::ast::Decl;
@@ -135,7 +136,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
             &tir,
             TranspileConfig::new(&module_name)
                 .with_file_stem(&module_name)
-                .with_prelude(stdlib_prelude_progs.clone())
+                .with_prelude(lower_prelude(&stdlib_prelude_progs))
                 .with_mcdc(start_id),
         );
         let out = result.output;
@@ -184,7 +185,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
             &tir,
             TranspileConfig::new(&module_name)
                 .with_file_stem(&module_name)
-                .with_prelude(stdlib_prelude_progs.clone())
+                .with_prelude(lower_prelude(&stdlib_prelude_progs))
                 .with_mcdc(start_id)
                 .for_test_crate(),
         );

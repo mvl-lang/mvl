@@ -30,7 +30,7 @@
 //! ```
 
 use crate::mvl::backends::AssertMode;
-use crate::mvl::parser::ast::Program;
+use crate::mvl::ir::TirProgram;
 
 /// Configuration for a single transpilation pass.
 ///
@@ -40,8 +40,8 @@ pub struct TranspileConfig {
     pub(crate) crate_name: String,
     /// File stem for instrumentation reports (coverage, mutation, MC/DC).
     pub(crate) file_stem: String,
-    /// Prelude programs prepended before type-checking and emission.
-    pub(crate) prelude_progs: Vec<Program>,
+    /// Prelude programs (pre-lowered to TIR) prepended before emission.
+    pub(crate) prelude_progs: Vec<TirProgram>,
     /// Optional file stems for each prelude program (parallel to `prelude_progs`).
     /// `Some(stem)` enables per-program coverage metadata routing; `None` falls back
     /// to the primary `file_stem`. When empty, treated as all-`None` (#1489).
@@ -92,8 +92,8 @@ impl TranspileConfig {
         }
     }
 
-    /// Set the prelude programs (stdlib, implicit prelude, package modules).
-    pub fn with_prelude(mut self, progs: Vec<Program>) -> Self {
+    /// Set the prelude programs (already lowered to TIR).
+    pub fn with_prelude(mut self, progs: Vec<TirProgram>) -> Self {
         self.prelude_progs = progs;
         self
     }

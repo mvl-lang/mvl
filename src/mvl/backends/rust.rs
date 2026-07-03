@@ -42,17 +42,22 @@ pub mod mcdc_emit;
 pub mod mutation_emit;
 pub mod visitor;
 
-use crate::mvl::parser::ast::{Decl, Program};
 pub use crate::mvl::passes::coverage::{format_report, BranchInfo, CoverageMap};
 use crate::mvl::passes::mcdc::transform as mcdc_instr;
 pub use crate::mvl::passes::mcdc::transform::{detect_coupled_pairs, FnFieldReads, MCDCDecision};
 pub use crate::mvl::passes::mutation::{format_mutation_report, MutantInfo, MutationMap};
 pub use boundary_gen::format_boundary_report;
-use cargo::CargoOptions;
 pub use config::TranspileConfig;
 pub use coverage_emit::{emit_cov_preamble, emit_cov_report_test};
 use emitter::RustEmitter;
 pub use mcdc_emit::{emit_mcdc_preamble, emit_mcdc_report_test};
+
+// Re-export AST inspector helpers and project functions (now live in pipeline).
+pub use crate::mvl::pipeline::{
+    collect_stdlib_modules, count_extern_decls, has_extern_or_type_decls, has_extern_rust_decls,
+    has_main_fn, has_std_imports, prelude_requires_runtime, transpile_project,
+    transpile_project_with_options, transpile_project_with_pkg_names,
+};
 
 /// Combined result of a transpilation pass.
 ///
@@ -83,45 +88,17 @@ pub struct TranspileOutput {
     pub has_extern_rust: bool,
 }
 
-/// Returns true if the program declares a top-level `fn main`.
-pub fn has_main_fn(prog: &Program) -> bool {
-    prog.declarations.iter().any(|d| {
-        if let Decl::Fn(fd) = d {
-            fd.name == "main"
-        } else {
-            false
-        }
-    })
-}
-
-/// Count extern declarations in a program.
-pub fn count_extern_decls(prog: &Program) -> usize {
-    prog.declarations
+/// True when any prelude TIR has extern blocks or builtin functions.
+fn prelude_requires_runtime_tir(prelude_tirs: &[crate::mvl::ir::TirProgram]) -> bool {
+    prelude_tirs
         .iter()
-        .filter(|d| matches!(d, Decl::Extern(_)))
-        .count()
-}
-
-/// True when any prelude program has `extern "rust"` or `pub builtin fn` declarations.
-///
-/// The string/list kernel is declared as `pub builtin fn` in std/strings.mvl and
-/// std/lists.mvl. These are implemented in `mvl_runtime::stdlib::primitives` and
-/// re-exported via `mvl_runtime::prelude::*`, so any program loading the implicit
-/// prelude needs `mvl_runtime` as a Cargo dependency.
-pub fn prelude_requires_runtime(prelude_progs: &[Program]) -> bool {
-    prelude_progs.iter().any(|p| {
-        p.declarations.iter().any(|d| match d {
-            Decl::Extern(_) => true,
-            Decl::Fn(fd) => fd.is_builtin,
-            _ => false,
-        })
-    })
+        .any(|t| !t.externs.is_empty() || t.fns.iter().any(|f| f.is_builtin))
 }
 
 /// Annotate TirFns in each prelude TIR with their source package name (#1475).
 /// `pkg_names` is parallel to `prelude_tirs`; `Some("http")` marks all functions
 /// in that TIR as coming from `pkg.http` so the emitter can prefix colliding names.
-fn annotate_prelude_pkg_names(
+pub(crate) fn annotate_prelude_pkg_names(
     prelude_tirs: &mut [crate::mvl::ir::TirProgram],
     pkg_names: &[Option<String>],
 ) {
@@ -134,36 +111,19 @@ fn annotate_prelude_pkg_names(
     }
 }
 
-/// Returns true if the program declares at least one `extern "rust"` block.
-pub fn has_extern_rust_decls(prog: &Program) -> bool {
-    prog.declarations
-        .iter()
-        .any(|d| matches!(d, Decl::Extern(ed) if ed.abi == "rust"))
-}
-
-/// Returns true if the program contains extern blocks or type declarations.
-/// Used to exclude pure-function demo/helper files from the stdlib-prelude
-/// when running `mvl test`, so that demo functions cannot shadow runtime
-/// primitives.  Note: only checks Extern/Type decls — not builtin fn decls.
-pub fn has_extern_or_type_decls(prog: &Program) -> bool {
-    prog.declarations
-        .iter()
-        .any(|d| matches!(d, Decl::Extern(_) | Decl::Type(_)))
-}
-
-/// Returns true if the program imports any `use std.*` stdlib modules.
-///
-/// When a program uses stdlib functions (e.g. `use std.io.{read_file}`), the
-/// generated code needs explicit `use mvl_runtime::stdlib::X::*` imports (#488/#489),
-/// so `mvl_runtime` must be linked even when no `extern "rust"` block is present.
-pub fn has_std_imports(prog: &Program) -> bool {
-    prog.declarations.iter().any(|d| {
-        if let Decl::Use(ud) = d {
-            ud.path.first().map(|s| s == "std").unwrap_or(false)
-        } else {
-            false
+/// Returns the deduplicated list of `std.*` sub-module names used in this TIR
+/// that have a Rust implementation in `mvl_runtime::stdlib`.
+pub fn collect_stdlib_modules_tir(tir: &crate::mvl::ir::TirProgram) -> Vec<String> {
+    let mut modules: Vec<String> = Vec::new();
+    for ud in &tir.uses {
+        if ud.path.first().map(|s| s == "std").unwrap_or(false) && ud.path.len() >= 2 {
+            let module = ud.path[1].as_str();
+            if RUST_RUNTIME_IMPORTS.contains(&module) && !modules.contains(&module.to_string()) {
+                modules.push(module.to_string());
+            }
         }
-    })
+    }
+    modules
 }
 
 /// Modules **fully** backed by Rust — their `.mvl` files are NOT loaded as prelude.
@@ -193,29 +153,6 @@ pub const RUST_BACKED_STDLIB: &[&str] = &[
 pub const RUST_RUNTIME_IMPORTS: &[&str] = &[
     "crypto", "env", "io", "net", "process", "random", "regex", "time",
 ];
-
-/// Returns the deduplicated list of `std.*` sub-module names used in this program
-/// that have a Rust implementation in `mvl_runtime::stdlib`.
-///
-/// For example, `use std.io.*;` and `use std.env.*;` produce `["io", "env"]`.
-/// Used by the emitter to emit `use mvl_runtime::stdlib::X::*;` for each module.
-/// Pure-MVL stdlib modules (json, collections, …) are excluded — their symbols
-/// reach the generated code via the prelude, not via `mvl_runtime::stdlib`.
-pub fn collect_stdlib_modules(prog: &Program) -> Vec<String> {
-    let mut modules: Vec<String> = Vec::new();
-    for decl in &prog.declarations {
-        if let Decl::Use(ud) = decl {
-            if ud.path.first().map(|s| s == "std").unwrap_or(false) && ud.path.len() >= 2 {
-                let module = ud.path[1].as_str();
-                if RUST_RUNTIME_IMPORTS.contains(&module) && !modules.contains(&module.to_string())
-                {
-                    modules.push(module.to_string());
-                }
-            }
-        }
-    }
-    modules
-}
 
 // ── TIR-based helper predicates ───────────────────────────────────────────────
 
@@ -257,206 +194,23 @@ pub struct ProjectOutput {
     pub use_mvl_runtime: bool,
 }
 
-/// Transpile a multi-file project to Rust source.
-///
-/// `entry_name` is the crate/module name for the entry program.
-/// `siblings` is a list of `(module_name, Program)` pairs for all other modules
-/// reachable from the entry point (e.g. sibling `.mvl` files).
-///
-/// The entry module's output includes `pub mod name;` declarations for each sibling,
-/// so the Rust compiler can resolve cross-module items.
-pub fn transpile_project(
-    entry_name: &str,
-    entry_prog: &Program,
-    siblings: &[(String, Program)],
-    prelude_progs: &[Program],
-    expr_types: std::collections::HashMap<crate::mvl::parser::lexer::Span, crate::mvl::ir::Ty>,
-    sibling_expr_types: Vec<
-        std::collections::HashMap<crate::mvl::parser::lexer::Span, crate::mvl::ir::Ty>,
-    >,
-    assert_mode: crate::mvl::backends::AssertMode,
-) -> ProjectOutput {
-    transpile_project_with_options(
-        entry_name,
-        entry_prog,
-        siblings,
-        prelude_progs,
-        expr_types,
-        &sibling_expr_types,
-        assert_mode,
-        false,
-        &[],
-    )
-}
-
-/// Like [`transpile_project`] but with package-name tracking for cross-package
-/// symbol collision avoidance (#1475).  `prelude_pkg_names` is parallel to
-/// `prelude_progs`: `Some("http")` for programs from `pkg.http`, `None` for stdlib.
-#[allow(clippy::too_many_arguments)]
-pub fn transpile_project_with_pkg_names(
-    entry_name: &str,
-    entry_prog: &Program,
-    siblings: &[(String, Program)],
-    prelude_progs: &[Program],
-    expr_types: std::collections::HashMap<crate::mvl::parser::lexer::Span, crate::mvl::ir::Ty>,
-    sibling_expr_types: Vec<
-        std::collections::HashMap<crate::mvl::parser::lexer::Span, crate::mvl::ir::Ty>,
-    >,
-    assert_mode: crate::mvl::backends::AssertMode,
-    prelude_pkg_names: &[Option<String>],
-) -> ProjectOutput {
-    transpile_project_with_options(
-        entry_name,
-        entry_prog,
-        siblings,
-        prelude_progs,
-        expr_types,
-        &sibling_expr_types,
-        assert_mode,
-        false,
-        prelude_pkg_names,
-    )
-}
-
-/// Like [`transpile_project`], but with an `extern_stubs` flag controlling whether
-/// `extern "rust"` blocks are emitted as real extern declarations (default) or replaced
-/// with `todo!()` stubs (used by `mvl fuzz` so the harness links without bridges).
-///
-/// `sibling_expr_types` must have the same length as `siblings` and hold pre-checked,
-/// prelude-merged expression type maps for each sibling (assembled by the caller via
-/// [`crate::mvl::checker::check_with_prelude`] + [`crate::mvl::checker::collect_prelude_expr_types`]).
-#[allow(clippy::too_many_arguments)]
-pub fn transpile_project_with_options(
-    entry_name: &str,
-    entry_prog: &Program,
-    siblings: &[(String, Program)],
-    prelude_progs: &[Program],
-    expr_types: std::collections::HashMap<crate::mvl::parser::lexer::Span, crate::mvl::ir::Ty>,
-    sibling_expr_types: &[std::collections::HashMap<
-        crate::mvl::parser::lexer::Span,
-        crate::mvl::ir::Ty,
-    >],
-    assert_mode: crate::mvl::backends::AssertMode,
-    extern_stubs: bool,
-    prelude_pkg_names: &[Option<String>],
-) -> ProjectOutput {
-    let has_main = has_main_fn(entry_prog);
-    let extern_count = count_extern_decls(entry_prog);
-    let has_extern_rust =
-        has_extern_rust_decls(entry_prog) || prelude_progs.iter().any(has_extern_rust_decls);
-    // Link mvl_runtime when extern "rust" is used OR when stdlib is imported.
-    // Stdlib functions (e.g. read_file, get_arg) are re-exported from
-    // mvl_runtime::prelude::* and require the runtime crate to be present.
-    let use_runtime = extern_count > 0
-        || has_std_imports(entry_prog)
-        || siblings.iter().any(|(_, p)| has_std_imports(p))
-        || prelude_requires_runtime(prelude_progs);
-
-    let sibling_names: Vec<&str> = siblings.iter().map(|(n, _)| n.as_str()).collect();
-
-    // Lower entry program to TIR for the TIR-based emitter path.
-    let entry_all_fns = crate::mvl::passes::mono::collect_fns(
-        std::iter::once(entry_prog).chain(prelude_progs.iter()),
-    );
-    let entry_mono =
-        crate::mvl::passes::mono::monomorphize(entry_prog, &entry_all_fns, &expr_types);
-    let entry_tir = crate::mvl::ir::lower::lower(entry_prog, &entry_mono, &expr_types);
-
-    // Lower prelude programs to TIR and annotate package origin (#1475).
-    let mut prelude_tirs: Vec<crate::mvl::ir::TirProgram> = prelude_progs
-        .iter()
-        .map(|p| {
-            let all_fns = crate::mvl::passes::mono::collect_fns([p]);
-            let m = crate::mvl::passes::mono::monomorphize(p, &all_fns, &expr_types);
-            crate::mvl::ir::lower::lower(p, &m, &expr_types)
-        })
-        .collect();
-    annotate_prelude_pkg_names(&mut prelude_tirs, prelude_pkg_names);
-
-    let mut cg = RustEmitter::new();
-    cg.assert_mode = assert_mode;
-    cg.test_extern_stubs = extern_stubs;
-    cg.emit_program_with_mods(&entry_tir, &sibling_names, &prelude_tirs);
-    let main_rs = cg.finish();
-
-    // Sibling modules share the runtime prelude with the entry point so type
-    // definitions don't conflict (e.g. `Tainted` from mvl_runtime vs inline).
-    let entry_uses_runtime = use_runtime;
-    let module_files: Vec<(String, String)> = siblings
-        .iter()
-        .enumerate()
-        .map(|(idx, (name, prog))| {
-            let sib_et = sibling_expr_types.get(idx).cloned().unwrap_or_default();
-            // Lower sibling to TIR (used for both the runtime and non-runtime paths).
-            let sib_all_fns = crate::mvl::passes::mono::collect_fns([prog]);
-            let sib_mono = crate::mvl::passes::mono::monomorphize(prog, &sib_all_fns, &sib_et);
-            let sib_tir = crate::mvl::ir::lower::lower(prog, &sib_mono, &sib_et);
-
-            let mut cg = RustEmitter::new();
-            cg.assert_mode = assert_mode;
-            cg.test_extern_stubs = extern_stubs;
-            if entry_uses_runtime {
-                cg.emit_sibling_module(&sib_tir, &prelude_tirs);
-            } else {
-                cg.emit_program(&sib_tir);
-            }
-            (name.clone(), cg.finish())
-        })
-        .collect();
-
-    let opts = CargoOptions {
-        crate_name: entry_name,
-        use_mvl_runtime: use_runtime,
-        extern_crates: Vec::new(),
-        native_dep_lines: Vec::new(),
-        mvl_runtime_path: None,
-        use_tokio: false,
-    };
-    let cargo_toml = if has_main {
-        cargo::emit_cargo_toml_binary_opts(&opts)
-    } else {
-        cargo::emit_cargo_toml_library_opts(&opts)
-    };
-
-    ProjectOutput {
-        main_rs,
-        module_files,
-        cargo_toml,
-        has_main,
-        extern_count,
-        has_extern_rust,
-        use_mvl_runtime: use_runtime,
-    }
-}
-
 /// Transpile a [`TirProgram`] to Rust source using the given configuration.
 ///
 /// The caller (e.g. [`crate::mvl::pipeline::Pipeline::build`]) is responsible for
-/// running the checker, monomorphizer, and TIR lowering pass before calling this
-/// function.  The backend receives a fully-typed, monomorphized TIR and does not
+/// running the checker, monomorphizer, TIR lowering, and prelude lowering before
+/// calling this function.  The backend receives fully-typed, monomorphized TIR
+/// (including pre-lowered TIR prelude in `config.prelude_progs`) and does not
 /// re-invoke any earlier pipeline stage.
 pub fn transpile(tir: &crate::mvl::ir::TirProgram, config: TranspileConfig) -> TranspileResult {
     let has_main = has_main_fn_tir(tir);
     let extern_count = count_extern_decls_tir(tir);
     let has_extern_rust = has_extern_rust_decls_tir(tir);
-    let has_prelude = !config.prelude_progs.is_empty();
+    let mut prelude_tirs = config.prelude_progs;
+    let has_prelude = !prelude_tirs.is_empty();
     let use_runtime = extern_count > 0
         || has_std_imports_tir(tir)
-        || (has_prelude && prelude_requires_runtime(&config.prelude_progs));
+        || (has_prelude && prelude_requires_runtime_tir(&prelude_tirs));
 
-    // Lower prelude programs to TIR using the prelude's own checker types.
-    // Types are read inline from TirExpr.ty for the main program; preludes only
-    // need their own checker-inferred types (spans never overlap with main).
-    let prelude_expr_types = crate::mvl::checker::collect_prelude_expr_types(&config.prelude_progs);
-    let mut prelude_tirs: Vec<crate::mvl::ir::TirProgram> = config
-        .prelude_progs
-        .iter()
-        .map(|p| {
-            let all_fns = crate::mvl::passes::mono::collect_fns([p]);
-            let m = crate::mvl::passes::mono::monomorphize(p, &all_fns, &prelude_expr_types);
-            crate::mvl::ir::lower::lower(p, &m, &prelude_expr_types)
-        })
-        .collect();
     annotate_prelude_pkg_names(&mut prelude_tirs, &config.prelude_pkg_names);
 
     let mut cg = RustEmitter::new();
@@ -499,7 +253,7 @@ pub fn transpile(tir: &crate::mvl::ir::TirProgram, config: TranspileConfig) -> T
     let decisions = cg.mcdc.take().map(|m| m.decisions).unwrap_or_default();
     let lib_rs = cg.finish();
 
-    let opts = CargoOptions {
+    let opts = cargo::CargoOptions {
         crate_name: &config.crate_name,
         use_mvl_runtime: use_runtime,
         extern_crates: Vec::new(),
@@ -533,6 +287,8 @@ pub fn transpile(tir: &crate::mvl::ir::TirProgram, config: TranspileConfig) -> T
 mod tests {
     use super::*;
     use crate::mvl::parser::Parser;
+    // Program is available via `crate::mvl::parser::ast::Program` without a use import
+    type Program = crate::mvl::parser::ast::Program;
 
     fn parse(src: &str) -> Program {
         let (mut p, _) = Parser::new(src);
