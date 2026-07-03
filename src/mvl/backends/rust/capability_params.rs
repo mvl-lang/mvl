@@ -280,7 +280,7 @@ fn expr_has_disqualifying_use_tir(param: &str, expr: &crate::mvl::ir::TirExpr) -
             op, expr: inner, ..
         } => {
             // Direct `*param` dereference consumes the value (e.g., Box[T]::unwrap).
-            if matches!(op, crate::mvl::parser::ast::UnaryOp::Deref)
+            if matches!(op, crate::mvl::ir::UnaryOp::Deref)
                 && matches!(&inner.kind, TirExprKind::Var(n) if n == param)
             {
                 return true;

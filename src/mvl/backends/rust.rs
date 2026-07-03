@@ -17,11 +17,11 @@
 //!
 //! ```
 //! use mvl::mvl::backends::rust::transpile;
-//! use mvl::mvl::parser::ast::Program;
+//! use mvl::mvl::ir::TirProgram;
 //!
-//! // let prog: Program = …;
-//! // let out = transpile(&prog, "my_crate");
-//! // println!("{}", out.lib_rs);
+//! // let tir: TirProgram = …;
+//! // let out = transpile(&tir, config);
+//! // println!("{}", out.output.lib_rs);
 //! ```
 
 pub mod boundary_gen;
@@ -287,8 +287,7 @@ pub fn transpile(tir: &crate::mvl::ir::TirProgram, config: TranspileConfig) -> T
 mod tests {
     use super::*;
     use crate::mvl::parser::Parser;
-    // Program is available via `crate::mvl::parser::ast::Program` without a use import
-    type Program = crate::mvl::parser::ast::Program;
+    use crate::mvl::pipeline::Program;
 
     fn parse(src: &str) -> Program {
         let (mut p, _) = Parser::new(src);

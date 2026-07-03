@@ -21,7 +21,8 @@
 use crate::mvl::backends::rust::{transpile, ProjectOutput, TranspileConfig, TranspileResult};
 use crate::mvl::backends::AssertMode;
 use crate::mvl::checker::{self, CheckResult};
-use crate::mvl::parser::ast::{Decl, Program};
+use crate::mvl::parser::ast::Decl;
+pub use crate::mvl::parser::ast::Program;
 
 /// Compilation pipeline with composable instrumentation.
 ///

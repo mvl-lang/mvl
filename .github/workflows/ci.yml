@@ -195,6 +195,10 @@ jobs:
         if: needs.changes.outputs.rust == 'true'
         run: cargo clippy -- -D warnings
 
+      - name: Audit backend parser::ast references (ADR-0050)
+        if: needs.changes.outputs.rust == 'true'
+        run: python3 tools/audit_backend_ast.py
+
       - name: Build
         run: cargo build
 

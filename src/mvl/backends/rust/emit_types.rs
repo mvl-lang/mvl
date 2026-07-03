@@ -14,8 +14,8 @@
 use super::emitter::RustEmitter;
 use crate::mvl::checker::types::ARRAY_SIZE_UNKNOWN;
 use crate::mvl::ir::{
-    GenericParam, RefExpr, TirExternDecl, TirFieldDecl, TirTypeBody, TirTypeDecl, TirVariant,
-    TirVariantFields, Ty, TypeExpr,
+    ArithOp, CmpOp, GenericParam, LogicOp, RefExpr, TirExternDecl, TirFieldDecl, TirTypeBody,
+    TirTypeDecl, TirVariant, TirVariantFields, Ty, TypeExpr,
 };
 
 // ── Security label preamble ───────────────────────────────────────────────
@@ -622,8 +622,8 @@ fn emit_ref_expr(pred: &RefExpr, binding: &str) -> String {
             op, left, right, ..
         } => {
             let op_str = match op {
-                crate::mvl::parser::ast::LogicOp::And => "&&",
-                crate::mvl::parser::ast::LogicOp::Or => "||",
+                LogicOp::And => "&&",
+                LogicOp::Or => "||",
             };
             format!(
                 "({} {op_str} {})",
@@ -635,12 +635,12 @@ fn emit_ref_expr(pred: &RefExpr, binding: &str) -> String {
             op, left, right, ..
         } => {
             let op_str = match op {
-                crate::mvl::parser::ast::CmpOp::Eq => "==",
-                crate::mvl::parser::ast::CmpOp::Ne => "!=",
-                crate::mvl::parser::ast::CmpOp::Lt => "<",
-                crate::mvl::parser::ast::CmpOp::Gt => ">",
-                crate::mvl::parser::ast::CmpOp::Le => "<=",
-                crate::mvl::parser::ast::CmpOp::Ge => ">=",
+                CmpOp::Eq => "==",
+                CmpOp::Ne => "!=",
+                CmpOp::Lt => "<",
+                CmpOp::Gt => ">",
+                CmpOp::Le => "<=",
+                CmpOp::Ge => ">=",
             };
             format!(
                 "({} {op_str} {})",
@@ -652,11 +652,11 @@ fn emit_ref_expr(pred: &RefExpr, binding: &str) -> String {
             op, left, right, ..
         } => {
             let op_str = match op {
-                crate::mvl::parser::ast::ArithOp::Add => "+",
-                crate::mvl::parser::ast::ArithOp::Sub => "-",
-                crate::mvl::parser::ast::ArithOp::Mul => "*",
-                crate::mvl::parser::ast::ArithOp::Div => "/",
-                crate::mvl::parser::ast::ArithOp::Rem => "%",
+                ArithOp::Add => "+",
+                ArithOp::Sub => "-",
+                ArithOp::Mul => "*",
+                ArithOp::Div => "/",
+                ArithOp::Rem => "%",
             };
             format!(
                 "({} {op_str} {})",

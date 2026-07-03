@@ -714,7 +714,6 @@ impl RustEmitter {
         // Rust-backed stdlib modules — scan for capability params
         {
             use crate::mvl::backends::rust::RUST_BACKED_STDLIB;
-            use crate::mvl::parser::Parser;
             use crate::mvl::stdlib;
             let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
             for ud in &tir.uses {
@@ -723,19 +722,7 @@ impl RustEmitter {
                     if RUST_BACKED_STDLIB.contains(&m) && seen.insert(m.to_string()) {
                         let filename = format!("{m}.mvl");
                         if let Some(content) = stdlib::stdlib_content(&filename) {
-                            let (mut p, _) = Parser::new(content);
-                            let loaded = p.parse_program();
-                            // Use the checker to obtain expr_types before lowering, so the
-                            // lowerer has type info for any function calls in stdlib bodies.
-                            let expr_types = crate::mvl::checker::check(&loaded).expr_types;
-                            let all_fns = crate::mvl::passes::mono::collect_fns([&loaded]);
-                            let mono = crate::mvl::passes::mono::monomorphize(
-                                &loaded,
-                                &all_fns,
-                                &expr_types,
-                            );
-                            let stdlib_tir =
-                                crate::mvl::ir::lower::lower(&loaded, &mono, &expr_types);
+                            let stdlib_tir = load_stdlib_tir(content);
                             for f in &stdlib_tir.fns {
                                 if !self.capability_params_map.contains_key(&f.name) {
                                     let flags = explicit_borrow_flags_tir(f);
@@ -983,19 +970,16 @@ fn collect_undefined_types_tir(tir: &TirProgram, prelude_tirs: &[TirProgram]) ->
         }
     }
 
-    // Types from Rust-backed stdlib modules — extract type names directly from AST
-    // to avoid running the full lowering pipeline on files with unresolved references.
+    // Types from Rust-backed stdlib modules — load, check, and lower to TIR so
+    // this pass consumes only TIR (matches the capability-params scan above).
     for ud in &tir.uses {
         if ud.path.first().map(|s| s == "std").unwrap_or(false) && ud.path.len() >= 2 {
             let module = &ud.path[1];
             let filename = format!("{module}.mvl");
             if let Some(content) = crate::mvl::stdlib::stdlib_content(&filename) {
-                let (mut p, _) = crate::mvl::parser::Parser::new(content);
-                let stdlib_prog = p.parse_program();
-                for d in &stdlib_prog.declarations {
-                    if let crate::mvl::parser::ast::Decl::Type(td) = d {
-                        defined.insert(td.name.clone());
-                    }
+                let stdlib_tir = load_stdlib_tir(content);
+                for td in &stdlib_tir.types {
+                    defined.insert(td.name.clone());
                 }
             }
         }
@@ -1064,4 +1048,17 @@ fn collect_fn_typed_struct_fields_tir(
         }
     }
     out
+}
+
+/// Parse, check, and lower a stdlib module source to TIR.
+///
+/// Used by the emitter to extract capability annotations and type declarations
+/// from Rust-backed stdlib files that are not part of the user's prelude.
+fn load_stdlib_tir(content: &str) -> TirProgram {
+    let (mut p, _) = crate::mvl::parser::Parser::new(content);
+    let loaded = p.parse_program();
+    let expr_types = crate::mvl::checker::check(&loaded).expr_types;
+    let all_fns = crate::mvl::passes::mono::collect_fns([&loaded]);
+    let mono = crate::mvl::passes::mono::monomorphize(&loaded, &all_fns, &expr_types);
+    crate::mvl::ir::lower::lower(&loaded, &mono, &expr_types)
 }
