@@ -19,11 +19,11 @@ use std::collections::HashMap;
 
 use crate::mvl::checker::types::Ty;
 use crate::mvl::ir::lower::substitute_ty;
+use crate::mvl::ir::TypeExpr;
 use crate::mvl::ir::{
     TirBlock, TirElseBranch, TirExpr, TirExprKind, TirFn, TirMatchArm, TirMatchBody, TirParam,
     TirStmt,
 };
-use crate::mvl::parser::ast::TypeExpr;
 
 use super::emit_program_tir::ty_to_type_expr_or_unit;
 use super::TextEmitter;

@@ -12,8 +12,7 @@ use std::collections::HashMap;
 use super::context::{FnCtx, ModuleCtx, MonoQueue};
 use super::BuiltinSymbolInfo;
 use crate::mvl::checker::types::Ty;
-use crate::mvl::ir::TirProgram;
-use crate::mvl::parser::ast::{Program, TypeExpr};
+use crate::mvl::ir::{TirProgram, TypeExpr};
 use crate::mvl::parser::lexer::Span;
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -64,52 +63,7 @@ impl LlvmTextCompiler {
         }
     }
 
-    /// Compile a MVL [`Program`] to LLVM IR text (no prelude, no builtin dispatch).
-    pub fn compile_to_ir(&self, prog: &Program, module_name: &str) -> Result<String, String> {
-        self.compile_to_ir_with_prelude(&[], prog, module_name)
-    }
-
-    /// Compile prelude programs merged with `prog` into a single LLVM IR module.
-    ///
-    /// Internally lowers `prog` and each prelude to TIR (`mono::collect_fns` +
-    /// `mono::monomorphize` + `ir::lower::lower`), then delegates to
-    /// [`Self::compile_to_ir_with_prelude_tir`]. The legacy AST walker was
-    /// deleted in #1612 Phase 3b PR 2 — this entry point survives only as an
-    /// AST-input convenience for callers (CLI, tests) that haven't migrated.
-    pub fn compile_to_ir_with_prelude(
-        &self,
-        prelude: &[Program],
-        prog: &Program,
-        module_name: &str,
-    ) -> Result<String, String> {
-        use crate::mvl::ir::lower;
-        use crate::mvl::passes::mono;
-
-        let entry_all_fns = mono::collect_fns(std::iter::once(prog).chain(prelude.iter()));
-        let entry_mono = mono::monomorphize(prog, &entry_all_fns, &self.expr_types);
-        let entry_tir = lower::lower(prog, &entry_mono, &self.expr_types);
-
-        let prelude_tirs: Vec<TirProgram> = prelude
-            .iter()
-            .map(|p| {
-                let fns = mono::collect_fns([p]);
-                let m = mono::monomorphize(p, &fns, &self.expr_types);
-                lower::lower(p, &m, &self.expr_types)
-            })
-            .collect();
-
-        self.compile_to_ir_with_prelude_tir(&prelude_tirs, &entry_tir, module_name)
-    }
-
-    /// TIR-walking entry point (#1612, Phase 3b PR 1).
-    ///
-    /// Parallel to [`Self::compile_to_ir_with_prelude`] but consumes already-lowered
-    /// [`TirProgram`]s. This is the destination implementation for the MVL self-hosting
-    /// port — the emitter does not need to walk AST at all.
-    ///
-    /// During the parallel-tree migration, this path is used by the
-    /// `cross_backend_tir` test target to diff its output against the AST path
-    /// across the corpus.
+    /// Compile a [`TirProgram`] to LLVM IR text (no prelude, no builtin dispatch).
     pub fn compile_to_ir_tir(
         &self,
         prog: &TirProgram,
@@ -118,7 +72,7 @@ impl LlvmTextCompiler {
         self.compile_to_ir_with_prelude_tir(&[], prog, module_name)
     }
 
-    /// Like [`Self::compile_to_ir_with_prelude`] but consumes [`TirProgram`]s.
+    /// Compile prelude + entry [`TirProgram`]s into a single LLVM IR module.
     pub fn compile_to_ir_with_prelude_tir(
         &self,
         prelude: &[TirProgram],
@@ -266,8 +220,7 @@ impl TextEmitter {
         }
     }
 
-    /// Mutator used by [`LlvmTextCompiler::compile_to_ir_with_prelude`] to
-    /// install checker-resolved expression types after construction.
+    /// Install checker-resolved expression types after construction.
     pub(super) fn set_expr_types(&mut self, expr_types: HashMap<Span, Ty>) {
         self.module.expr_types = expr_types;
     }
@@ -383,12 +336,10 @@ mod c_call;
 #[path = "emit_helpers.rs"]
 mod emit_helpers;
 
-// ── TIR-walking emitter (#1612, Phase 3b PR 2) ────────────────────────────────
+// ── TIR-walking emitter (#1612, Phase 3b) ─────────────────────────────────────
 //
-// These submodules walk [`TirProgram`] and are the only emitter path. The
-// AST-walking emit_*.rs modules were deleted in #1612 PR 2; the public AST
-// entry point [`LlvmTextCompiler::compile_to_ir_with_prelude`] lowers AST →
-// TIR internally and delegates to the TIR walker.
+// These submodules walk [`TirProgram`] and are the only emitter path.
+// The AST-walking emit_*.rs modules were deleted in #1612 Phase 3b.
 
 #[path = "emit_program_tir.rs"]
 mod emit_program_tir;

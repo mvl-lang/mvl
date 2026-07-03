@@ -33,12 +33,21 @@
 //!
 //! ```
 //! use mvl::mvl::backends::llvm_text::LlvmTextCompiler;
+//! use mvl::mvl::ir::lower;
 //! use mvl::mvl::parser::Parser;
+//! use mvl::mvl::passes::mono;
+//! use mvl::mvl::pipeline::assemble_expr_types;
 //!
 //! let src = "fn add(a: Int, b: Int) -> Int { a + b }";
 //! let (mut p, _) = Parser::new(src);
 //! let prog = p.parse_program();
-//! let ir = LlvmTextCompiler::new().compile_to_ir(&prog, "test").unwrap();
+//! let expr_types = assemble_expr_types(&prog, &[]);
+//! let all_fns = mono::collect_fns([&prog]);
+//! let m = mono::monomorphize(&prog, &all_fns, &expr_types);
+//! let tir = lower::lower(&prog, &m, &expr_types);
+//! let mut compiler = LlvmTextCompiler::new();
+//! compiler.expr_types = expr_types;
+//! let ir = compiler.compile_to_ir_tir(&tir, "test").unwrap();
 //! assert!(ir.contains("define i64 @add"));
 //! ```
 

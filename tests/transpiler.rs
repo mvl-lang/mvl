@@ -3532,9 +3532,14 @@ actor Counter {
 fn main() -> Unit { }
 "#;
     let prog = parse_prog(src);
-    let compiler = mvl::mvl::backends::llvm_text::LlvmTextCompiler::new();
+    let expr_types = mvl::mvl::pipeline::assemble_expr_types(&prog, &[]);
+    let all_fns = mvl::mvl::passes::mono::collect_fns([&prog]);
+    let mono = mvl::mvl::passes::mono::monomorphize(&prog, &all_fns, &expr_types);
+    let tir = mvl::mvl::ir::lower::lower(&prog, &mono, &expr_types);
+    let mut compiler = mvl::mvl::backends::llvm_text::LlvmTextCompiler::new();
+    compiler.expr_types = expr_types;
     let ir = compiler
-        .compile_to_ir(&prog, "test_actor_dispatch")
+        .compile_to_ir_tir(&tir, "test_actor_dispatch")
         .expect("IR generation failed");
     assert!(
         ir.contains("counter_increment") || ir.contains("Counter_increment"),
@@ -3568,9 +3573,14 @@ fn main() -> Unit {
 }
 "#;
     let prog = parse_prog(src);
-    let compiler = mvl::mvl::backends::llvm_text::LlvmTextCompiler::new();
+    let expr_types = mvl::mvl::pipeline::assemble_expr_types(&prog, &[]);
+    let all_fns = mvl::mvl::passes::mono::collect_fns([&prog]);
+    let mono = mvl::mvl::passes::mono::monomorphize(&prog, &all_fns, &expr_types);
+    let tir = mvl::mvl::ir::lower::lower(&prog, &mono, &expr_types);
+    let mut compiler = mvl::mvl::backends::llvm_text::LlvmTextCompiler::new();
+    compiler.expr_types = expr_types;
     let ir = compiler
-        .compile_to_ir(&prog, "test_actor_spawn")
+        .compile_to_ir_tir(&tir, "test_actor_spawn")
         .expect("IR generation failed");
     assert!(
         ir.contains("_mvl_actor_spawn"),
@@ -3632,9 +3642,14 @@ fn main() -> Unit {
 }
 "#;
     let prog = parse_prog(src);
-    let compiler = mvl::mvl::backends::llvm_text::LlvmTextCompiler::new();
+    let expr_types = mvl::mvl::pipeline::assemble_expr_types(&prog, &[]);
+    let all_fns = mvl::mvl::passes::mono::collect_fns([&prog]);
+    let mono = mvl::mvl::passes::mono::monomorphize(&prog, &all_fns, &expr_types);
+    let tir = mvl::mvl::ir::lower::lower(&prog, &mono, &expr_types);
+    let mut compiler = mvl::mvl::backends::llvm_text::LlvmTextCompiler::new();
+    compiler.expr_types = expr_types;
     let ir = compiler
-        .compile_to_ir(&prog, "test_actor_send")
+        .compile_to_ir_tir(&tir, "test_actor_send")
         .expect("IR generation failed");
     assert!(
         ir.contains("_mvl_actor_send"),
