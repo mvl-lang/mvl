@@ -1,0 +1,9 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// Spike 004 — A1a test: nested arithmetic exercising SSA register threading
+// across sub-expressions. Expected stdout = "20" ((2 + 3) * (10 - 6)).
+
+fn main() -> Int {
+    (2 + 3) * (10 - 6)
+}

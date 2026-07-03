@@ -1,0 +1,8 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// Spike 004 — A1a test: single binary op, exit code = 5.
+
+fn main() -> Int {
+    2 + 3
+}

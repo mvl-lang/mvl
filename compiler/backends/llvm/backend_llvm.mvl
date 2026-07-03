@@ -2,26 +2,25 @@
 // Copyright 2026 Schuberg Philis
 //
 // compiler/backends/llvm/backend_llvm.mvl — MVL-hosted LLVM IR emitter driver
-// (issue #1118, Phase A0).
+// (issue #1118).
 //
-// Reads a TirProgram JSON document from stdin (produced by `mvl tir <file>`)
-// and prints LLVM IR text to stdout. In A0 the emission is a canned exit-0
-// module: the JSON is consumed but its contents are ignored. Subsequent
-// phases (A1: expressions, A2: types, A3: closures, A4: actors) replace the
-// stub with a real TIR walk.
+// Phase A1a scope: integer literals and integer arithmetic
+// (`+ - * / %`). Single-fn programs shaped `fn main() -> Int { <expr> }`.
+// The returned Int is printed to stdout via a libc `printf` call so tests
+// can assert output; the C-level `main` always returns 0 (matches the
+// existing Rust LLVM backend's exit-code convention). Real `println`
+// integration + multi-fn / control-flow programs are deferred to A1b-e.
 //
 // Usage:
 //   mvl tir foo.mvl | mvl run compiler/backends/llvm/backend_llvm.mvl > foo.ll
-//   llc foo.ll -o foo.s
-//   cc foo.s -o foo
-//   ./foo
+//   llc foo.ll -o foo.s && cc foo.s -o foo && ./foo
 //
 // See tests/spikes/004-tir-backend/Makefile target `llvm` for the full pipeline.
 
 use std.io.{read, stdin}
 use std.json.{decode, Value}
 
-// ── JSON helpers (mirrored from spike 004 backend_rust.mvl) ───────────────────
+// ── JSON helpers ──────────────────────────────────────────────────────────────
 
 total fn jstr(v: Value, key: String) -> String {
     match v {
@@ -30,18 +29,124 @@ total fn jstr(v: Value, key: String) -> String {
     }
 }
 
-// ── Emission (A0 stub) ────────────────────────────────────────────────────────
+total fn jarr(v: Value, key: String) -> List[Value] {
+    match v {
+        Value::Object(m) => match m.get(key) { Some(Value::Array(a)) => a, _ => [] },
+        _ => [],
+    }
+}
+
+total fn jget(v: Value, key: String) -> Value {
+    match v {
+        Value::Object(m) => match m.get(key) { Some(inner) => inner, None => Value::Null },
+        _ => Value::Null,
+    }
+}
+
+total fn jtag(v: Value) -> String { jstr(v, "tag") }
+
+// ── Emission result ───────────────────────────────────────────────────────────
 //
-// The real port will thread ModuleCtx through emit_program / emit_exprs /
-// emit_stmts / emit_types. For A0 we emit a fixed exit-0 module.
+// Every `emit_expr` call yields an Emitted: the LLVM operand text (either an
+// immediate like `"5"` or an SSA register like `"%t3"`), the next free SSA
+// counter value, and the list of instructions produced (in order) that must
+// be spliced into the enclosing function body before the operand is used.
+
+type Emitted = struct {
+    reg: String,
+    next_reg: Int,
+    instrs: List[String],
+}
+
+total fn emitted_imm(value: String, next: Int) -> Emitted {
+    Emitted { reg: value, next_reg: next, instrs: [] }
+}
+
+// ── Operator mapping ──────────────────────────────────────────────────────────
+//
+// A1a covers integer arithmetic only. Comparisons, boolean ops, and
+// floating-point are deferred to later phases.
+
+total fn emit_binop_llvm(op: String) -> String {
+    match op {
+        "Add" => "add",
+        "Sub" => "sub",
+        "Mul" => "mul",
+        "Div" => "sdiv",
+        "Rem" => "srem",
+        _     => "add",
+    }
+}
+
+// ── Expression emission ───────────────────────────────────────────────────────
+
+partial fn emit_expr(expr: Value, next: Int) -> Emitted {
+    let kind: Value = jget(expr, "kind");
+    let t: String = jtag(kind);
+    match t {
+        "Literal" => {
+            let lit: Value = jget(kind, "lit");
+            let lit_tag: String = jtag(lit);
+            if lit_tag == "Integer" {
+                emitted_imm(jstr(lit, "value"), next)
+            } else {
+                emitted_imm("0", next)
+            }
+        },
+        "Binary" => {
+            let l: Emitted = emit_expr(jget(kind, "left"), next);
+            let r: Emitted = emit_expr(jget(kind, "right"), l.next_reg);
+            let opname: String = emit_binop_llvm(jstr(kind, "op"));
+            let reg: String = format("%t{}", [r.next_reg.to_string()]);
+            let line: String = format("  {} = {} i64 {}, {}", [reg, opname, l.reg, r.reg]);
+            let all_instrs: List[String] = l.instrs.concat(r.instrs).concat([line]);
+            Emitted { reg: reg, next_reg: r.next_reg + 1, instrs: all_instrs }
+        },
+        _ => emitted_imm("0", next),
+    }
+}
+
+// ── Function body emission ────────────────────────────────────────────────────
+//
+// A1a assumes a single `Expr` statement whose value is both returned by MVL
+// `main` and printed via `printf` before the C-ABI `main` exits with code 0.
+
+partial fn emit_main_body(body: Value) -> String {
+    let stmts: List[Value] = jarr(body, "stmts");
+    match stmts.get(0) {
+        None => "  ret i32 0\n",
+        Some(s) => match jtag(s) {
+            "Expr" => {
+                let e: Emitted = emit_expr(jget(s, "expr"), 0);
+                let instr_block: String = e.instrs.join("\n");
+                let call_line: String = format(
+                    "  call i32 (ptr, ...) @printf(ptr @.fmt_int, i64 {})",
+                    [e.reg]
+                );
+                let ret_line: String = "  ret i32 0";
+                if instr_block == "" {
+                    call_line.concat("\n").concat(ret_line).concat("\n")
+                } else {
+                    instr_block.concat("\n")
+                        .concat(call_line).concat("\n")
+                        .concat(ret_line).concat("\n")
+                }
+            },
+            _ => "  ret i32 0\n",
+        }
+    }
+}
+
+// ── Program emission ──────────────────────────────────────────────────────────
+//
+// A1a: exactly one `main` function, no params, `Int` return. Later phases
+// iterate `tir.fns` and lift each to its own `define`.
 
 total fn default_target_triple() -> String {
     "arm64-apple-darwin"
 }
 
-// Assemble module header + canned main. Any TIR JSON is accepted; module
-// name is taken from the JSON's `name` field when present, else "mvl_module".
-total fn emit_canned_module(tir: Value) -> String {
+partial fn emit_program(tir: Value) -> String {
     let name_raw: String = jstr(tir, "name");
     let module_name: String = if name_raw == "" { "mvl_module" } else { name_raw };
     let triple: String = default_target_triple();
@@ -49,9 +154,24 @@ total fn emit_canned_module(tir: Value) -> String {
         "; ModuleID = '{}'\nsource_filename = \"{}\"\ntarget triple = \"{}\"\n",
         [module_name, module_name, triple]
     );
-    let body: String = "\ndefine i32 @main() {\n  ret i32 0\n}\n";
-    header.concat(body)
+    let printf_fmt: String = "\n@.fmt_int = private unnamed_addr constant [5 x i8] c\"%ld\\0A\\00\"\n";
+    let printf_decl: String = "\ndeclare i32 @printf(ptr, ...)\n";
+    let fns: List[Value] = jarr(tir, "fns");
+    let body: String = match fns.get(0) {
+        None => "\ndefine i32 @main() {\n  ret i32 0\n}\n",
+        Some(f) => {
+            let body_str: String = emit_main_body(jget(f, "body"));
+            format("\ndefine i32 @main() {}\n{}{}\n",
+                [lbrace(), body_str, rbrace()])
+        }
+    };
+    header.concat(printf_fmt).concat(printf_decl).concat(body)
 }
+
+// MVL format() does not escape `{{` — helpers keep braces out of the
+// interpolation grammar.
+total fn lbrace() -> String { "{" }
+total fn rbrace() -> String { "}" }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
@@ -62,7 +182,7 @@ partial fn main() -> Unit ! Console {
             let src: String = relabel trust(raw, "TIR_INPUT");
             match decode(src) {
                 Err(e)  => println(format("error: {}", [e.user_message()])),
-                Ok(tir) => println(emit_canned_module(tir)),
+                Ok(tir) => println(emit_program(tir)),
             }
         }
     }
