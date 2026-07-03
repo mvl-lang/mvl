@@ -1,0 +1,69 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// compiler/backends/llvm/backend_llvm.mvl — MVL-hosted LLVM IR emitter driver
+// (issue #1118, Phase A0).
+//
+// Reads a TirProgram JSON document from stdin (produced by `mvl tir <file>`)
+// and prints LLVM IR text to stdout. In A0 the emission is a canned exit-0
+// module: the JSON is consumed but its contents are ignored. Subsequent
+// phases (A1: expressions, A2: types, A3: closures, A4: actors) replace the
+// stub with a real TIR walk.
+//
+// Usage:
+//   mvl tir foo.mvl | mvl run compiler/backends/llvm/backend_llvm.mvl > foo.ll
+//   llc foo.ll -o foo.s
+//   cc foo.s -o foo
+//   ./foo
+//
+// See tests/spikes/004-tir-backend/Makefile target `llvm` for the full pipeline.
+
+use std.io.{read, stdin}
+use std.json.{decode, Value}
+
+// ── JSON helpers (mirrored from spike 004 backend_rust.mvl) ───────────────────
+
+total fn jstr(v: Value, key: String) -> String {
+    match v {
+        Value::Object(m) => match m.get(key) { Some(Value::String(s)) => s, _ => "" },
+        _ => "",
+    }
+}
+
+// ── Emission (A0 stub) ────────────────────────────────────────────────────────
+//
+// The real port will thread ModuleCtx through emit_program / emit_exprs /
+// emit_stmts / emit_types. For A0 we emit a fixed exit-0 module.
+
+total fn default_target_triple() -> String {
+    "arm64-apple-darwin"
+}
+
+// Assemble module header + canned main. Any TIR JSON is accepted; module
+// name is taken from the JSON's `name` field when present, else "mvl_module".
+total fn emit_canned_module(tir: Value) -> String {
+    let name_raw: String = jstr(tir, "name");
+    let module_name: String = if name_raw == "" { "mvl_module" } else { name_raw };
+    let triple: String = default_target_triple();
+    let header: String = format(
+        "; ModuleID = '{}'\nsource_filename = \"{}\"\ntarget triple = \"{}\"\n",
+        [module_name, module_name, triple]
+    );
+    let body: String = "\ndefine i32 @main() {\n  ret i32 0\n}\n";
+    header.concat(body)
+}
+
+// ── Entry point ───────────────────────────────────────────────────────────────
+
+partial fn main() -> Unit ! Console {
+    match read(stdin(), 100000000) {
+        Err(_)  => println("error: could not read stdin"),
+        Ok(raw) => {
+            let src: String = relabel trust(raw, "TIR_INPUT");
+            match decode(src) {
+                Err(e)  => println(format("error: {}", [e.user_message()])),
+                Ok(tir) => println(emit_canned_module(tir)),
+            }
+        }
+    }
+}

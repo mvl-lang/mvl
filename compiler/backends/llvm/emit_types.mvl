@@ -1,0 +1,16 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// compiler/backends/llvm/emit_types.mvl — struct + enum type emission
+// (issue #1118, Phase A0 scaffold).
+//
+// Corresponds to src/mvl/backends/llvm_text/emit_types.rs in the Rust compiler.
+//
+// A0 status: placeholder. Real type layout (refcount headers, tagged unions,
+// closure envs) lands in A2.
+
+// Emit the LLVM `%struct.Name = type { ... }` declaration for a TIR type decl.
+// A0: returns "" so the module header is unaffected by type declarations.
+partial fn emit_type_decl(name: String) -> String {
+    ""
+}
