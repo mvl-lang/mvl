@@ -16,7 +16,9 @@
 use super::emitter::RustEmitter;
 use crate::mvl::backends::rust::emit_types::{emit_label, emit_ref_expr_for_assert, emit_ty};
 use crate::mvl::backends::rust::last_use::compute_last_uses;
-use crate::mvl::backends::rust::mut_analysis::compute_readonly_names;
+use crate::mvl::backends::rust::mut_analysis::{
+    compute_readonly_names, compute_readonly_param_names,
+};
 use crate::mvl::ir::{
     Capability, Constraint, GenericParam, Literal, TirBlock, TirExprKind, TirFn, TirParam, TirStmt,
     Totality, Ty,
@@ -84,6 +86,7 @@ impl RustEmitter {
             .unwrap_or_default();
 
         let mutated_params = collect_mutated_map_params_tir(&fd.body, &self.capability_params_map);
+        let readonly_params = compute_readonly_param_names(&fd.body, &fd.params);
 
         if fd.is_test {
             if !fd.effects.is_empty() {
@@ -104,7 +107,8 @@ impl RustEmitter {
                 &fd.params,
                 &fd.ret_ty,
             );
-            let params_str = emit_tir_params(&fd.params, &borrows, &mutated_params);
+            let params_str =
+                emit_tir_params(&fd.params, &borrows, &mutated_params, &readonly_params);
             let ret_str = emit_fn_return_ty(&fd.ret_ty);
             self.line(&format!(
                 "fn {}{generics}({params_str}) -> {ret_str} {{",
@@ -177,6 +181,7 @@ impl RustEmitter {
                     fd.params.get(param_start..).unwrap_or(&[]),
                     borrows.get(param_start..).unwrap_or(&[]),
                     &mutated_params,
+                    &readonly_params,
                 );
                 let params_str = match (self_prefix.is_empty(), rest_params.is_empty()) {
                     (true, true) => String::new(),
@@ -213,7 +218,7 @@ impl RustEmitter {
             self.self_as_free_param = true;
         }
 
-        let params_str = emit_tir_params(&fd.params, &borrows, &mutated_params);
+        let params_str = emit_tir_params(&fd.params, &borrows, &mutated_params, &readonly_params);
         let rust_name = self.pkg_fn_rust_name(fd);
         self.line(&format!(
             "pub fn {}{generics}({params_str}) -> {ret_str} {{",
@@ -388,10 +393,16 @@ impl RustEmitter {
 }
 
 /// Emit TIR function parameters.
+///
+/// `readonly_params` is the set of parameter names that the body-analysis
+/// (`compute_readonly_param_names`) proved are never mutated — they suppress
+/// the `mut` prefix that MVL `ref`/`iso` capabilities would otherwise force,
+/// avoiding a Rust `unused_mut` warning (#1654).
 fn emit_tir_params(
     params: &[TirParam],
     borrows: &[Option<bool>],
     mutated_params: &std::collections::HashSet<String>,
+    readonly_params: &std::collections::HashSet<String>,
 ) -> String {
     params
         .iter()
@@ -417,7 +428,8 @@ fn emit_tir_params(
             let needs_mut_for_body =
                 borrows.get(i).copied().flatten().is_none() && mutated_params.contains(&p.name);
             let has_ref_cap = matches!(p.capability, Some(Capability::Ref) | Some(Capability::Iso));
-            let mut_prefix = if has_ref_cap || needs_mut_for_body {
+            let is_readonly = readonly_params.contains(&p.name);
+            let mut_prefix = if (has_ref_cap && !is_readonly) || needs_mut_for_body {
                 "mut "
             } else {
                 ""

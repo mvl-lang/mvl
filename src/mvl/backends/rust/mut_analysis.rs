@@ -47,7 +47,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::mvl::ir::{
-    LValue, Pattern, TirBlock, TirElseBranch, TirExpr, TirExprKind, TirMatchBody, TirStmt,
+    LValue, Pattern, TirBlock, TirElseBranch, TirExpr, TirExprKind, TirMatchBody, TirParam, TirStmt,
 };
 use crate::mvl::parser::lexer::Span;
 
@@ -64,6 +64,42 @@ pub fn compute_readonly_names(body: &TirBlock) -> HashSet<Span> {
         .into_iter()
         .filter(|b| !b.mutated)
         .map(|b| b.span)
+        .collect()
+}
+
+/// Return the set of parameter names that are only *read* within `body` —
+/// never assigned, never used as a method-call receiver, and never captured
+/// inside a lambda.  Parameters are seeded into the outer lexical scope so
+/// inner `let` shadowing is handled correctly.
+///
+/// [`emit_functions::emit_tir_params`] uses this to decide whether a `ref`
+/// parameter needs a Rust `mut` prefix in the emitted signature.  Skipping
+/// `mut` on parameters that are never mutated removes the `unused_mut`
+/// warnings that previously required a crate-level `#![allow]` (#1654).
+pub fn compute_readonly_param_names(body: &TirBlock, params: &[TirParam]) -> HashSet<String> {
+    let mut tracker = MutTracker::default();
+    // Seed params into an outer scope so the body walk's inner scopes can
+    // shadow them without losing the parameter binding.
+    tracker.enter_scope();
+    let mut param_indices: Vec<(String, usize)> = Vec::with_capacity(params.len());
+    for p in params {
+        let idx = tracker.bindings.len();
+        tracker.bindings.push(BindingInfo {
+            span: p.span,
+            mutated: false,
+        });
+        if let Some(top) = tracker.scopes.last_mut() {
+            top.insert(p.name.clone(), idx);
+        }
+        param_indices.push((p.name.clone(), idx));
+    }
+    tracker.visit_block(body);
+    tracker.exit_scope();
+
+    param_indices
+        .into_iter()
+        .filter(|(_, idx)| !tracker.bindings[*idx].mutated)
+        .map(|(name, _)| name)
         .collect()
 }
 
