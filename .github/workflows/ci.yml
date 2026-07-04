@@ -261,9 +261,6 @@ jobs:
           cargo build --no-default-features
           cargo build -p mvl_runtime_llvm
 
-      - name: Install MVL packages
-        run: ./target/debug/mvl install
-
       - name: Set up runtime for CI (dev fallback)
         run: |
           # For dev/CI: link the source runtime to the XDG location so mvl run can find it.
