@@ -79,6 +79,16 @@ pub struct RustEmitter {
     /// emitted.  [`emit_expr_as_arg`] suppresses `.clone()` when the argument's
     /// span appears here — emitting a Rust move instead.
     pub last_uses: std::collections::HashSet<Span>,
+    /// Spans of `Pattern::Ident` bindings from `let name: ref T = ...`
+    /// declarations that are only ever read in the current function body.
+    /// Populated by [`mut_analysis::compute_readonly_names`] before each
+    /// function body is emitted.  When a binding's pattern span appears
+    /// here, [`emit_stmts`] emits `let name` instead of `let mut name` even
+    /// though the MVL type is `Ty::Ref(true, _)` — this suppresses spurious
+    /// `unused_mut` warnings from `rustc` on the generated code.  Span
+    /// keying (rather than by name) is deliberate: shadowed bindings that
+    /// share a name are analysed independently.
+    pub readonly_names: std::collections::HashSet<Span>,
     /// Per-function borrow kinds (Phase B, Spec 009 Req 2).
     ///
     /// Maps function name → `Vec<Option<bool>>` where:

@@ -16,6 +16,7 @@
 use super::emitter::RustEmitter;
 use crate::mvl::backends::rust::emit_types::{emit_label, emit_ref_expr_for_assert, emit_ty};
 use crate::mvl::backends::rust::last_use::compute_last_uses;
+use crate::mvl::backends::rust::mut_analysis::compute_readonly_names;
 use crate::mvl::ir::{
     Capability, Constraint, GenericParam, Literal, TirBlock, TirExprKind, TirFn, TirParam, TirStmt,
     Totality, Ty,
@@ -239,6 +240,7 @@ impl RustEmitter {
     /// Emit the statements and return-refinement check for a TIR function body.
     fn emit_fn_body_tir(&mut self, fd: &TirFn) {
         self.last_uses = compute_last_uses(&fd.body);
+        self.readonly_names = compute_readonly_names(&fd.body);
 
         self.capability_param_names.clear();
         let borrows = self

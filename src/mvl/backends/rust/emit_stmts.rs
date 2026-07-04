@@ -20,8 +20,8 @@ use crate::mvl::backends::rust::emit_exprs::arms_have_str_pattern;
 use crate::mvl::backends::rust::emit_types::{emit_ref_expr_for_assert, emit_ty};
 use crate::mvl::backends::rust::mcdc_instr::DecisionKind;
 use crate::mvl::ir::{
-    BinaryOp, LValue, LetKind, Literal, LogicOp, RefExpr, TirBlock, TirElseBranch, TirExpr,
-    TirExprKind, TirMatchBody, TirStmt, Ty,
+    BinaryOp, LValue, LetKind, Literal, LogicOp, Pattern, RefExpr, TirBlock, TirElseBranch,
+    TirExpr, TirExprKind, TirMatchBody, TirStmt, Ty,
 };
 use crate::mvl::passes::coverage::BranchKind;
 use crate::mvl::passes::mcdc::analysis::count_clauses_ref;
@@ -49,7 +49,14 @@ impl RustEmitter {
                 } else {
                     (false, ty)
                 };
-                if is_mutable {
+                // Suppress `mut` when the analysis in `mut_analysis` proved that
+                // this `ref` binding is only read within the function body — no
+                // assignments, no method-call receivers.  Rust would emit an
+                // `unused_mut` warning for these otherwise.  Keyed by pattern
+                // span so shadowed bindings are analysed independently.
+                let is_readonly = matches!(pattern, Pattern::Ident(_, span)
+                    if self.readonly_names.contains(span));
+                if is_mutable && !is_readonly {
                     self.push("let mut ");
                 } else {
                     self.push("let ");

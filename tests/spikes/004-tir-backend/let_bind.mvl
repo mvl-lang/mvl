@@ -1,0 +1,9 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// Spike 004 — A1b test: let binding + Var lookup. Expected stdout = "10".
+
+fn main() -> Int {
+    let x: Int = 5;
+    x * 2
+}
