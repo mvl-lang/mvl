@@ -1,0 +1,14 @@
+// A1j: for i in range(lo, hi) — inclusive-lower, exclusive-upper.
+// Sums 1..10 → 45.
+
+fn sum_range(lo: Int, hi: Int) -> Int {
+    let acc: ref Int = 0;
+    for i in range(lo, hi) {
+        acc = acc + i;
+    }
+    acc
+}
+
+fn main() -> Int {
+    sum_range(1, 10)
+}
