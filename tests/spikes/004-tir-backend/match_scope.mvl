@@ -1,0 +1,14 @@
+// A1f: arm body reads outer fn params (blocked in A1e, works in A1f).
+// Expected stdout: 15
+
+fn compute(n: Int, bonus: Int) -> Int {
+    match n {
+        0 => bonus,
+        1 => n + bonus,
+        _ => n + bonus + 1,
+    }
+}
+
+fn main() -> Int {
+    compute(9, 5)
+}
