@@ -1,0 +1,16 @@
+// A1l: 4-variant enum with wildcard fallback.
+// Expected stdout: 1  (East is horizontal)
+
+type Direction = enum { North, South, East, West }
+
+fn is_horizontal(d: Direction) -> Int {
+    match d {
+        Direction::East => 1,
+        Direction::West => 1,
+        _ => 0,
+    }
+}
+
+fn main() -> Int {
+    is_horizontal(Direction::East)
+}

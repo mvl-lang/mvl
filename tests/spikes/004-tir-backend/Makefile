@@ -38,7 +38,9 @@ LL_CASES := empty.mvl:0 two_plus_three.mvl:5 six_times_seven.mvl:42 nested_arith
             match_option_some.mvl:43 match_option_none.mvl:99 match_option_flow.mvl:100 \
             match_result_ok.mvl:7 match_result_err.mvl:42 \
             fn_ret_option.mvl:21 fn_ret_result.mvl:100 \
-            for_sum.mvl:45 for_count.mvl:5
+            for_sum.mvl:45 for_count.mvl:5 \
+            enum_unit.mvl:2 enum_direction.mvl:1 \
+            list_sum.mvl:15 list_filter.mvl:12
 
 .PHONY: help build guard-mvl tir emit compile run test check all clean \
         tir-llvm emit-llvm compile-llvm run-llvm test-llvm llvm test-llvm-arith

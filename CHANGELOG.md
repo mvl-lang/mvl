@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.235.0] - 2026-07-04
+
+### Added
+
+- **`rust_backend`: MVL-hosted LLVM user enums + List[Int] iteration** (#1118, Phases A1k+A1l) — Two major features in one PR. A1l adds user-defined unit-variant enums: `type Color = enum { Red, Green, Blue }` lowers to `i8` (variant tag), variant references (`Color::Green`) emit i8 constants from a registry, variant patterns dispatch via `icmp eq i8`. A1k adds List[Int] literals and iteration: `[1, 2, 3]` lowers to stack-allocated `[N x i64]` wrapped in `{i64, ptr}` (len + data), `for x in xs` iterates by index via alloca'd counter with GEP+load per element. Changes: `EmitCtx` gains `enums: Map[String, Int]` (threaded through ~20 sites), `build_enum_registry` walks TIR types once per program, `tir_ty_to_llvm` extended (Named → i8, List → {i64, ptr}), new `emit_for_list` helper for list iteration, `emit_expr` ListLit case for literals, registry lookup in Var for enum construction, `emit_match` detects user-variant Ident patterns via registry key lookup and dispatches on i8 tag (distinct from binding fallbacks). `range(lo, hi)` preserved as special-case counter-only loop (avoids intermediate list alloc). 4 new spike tests: `enum_unit` (3-variant Color, match dispatch), `enum_direction` (4-variant with wildcard), `list_sum` (iterate [1..5], sum), `list_filter` (list iter + if-in-body). Full corpus 35/35 passing. `make test-mvl` clean (98 tests). Emitter grew 1351 → 1662 LOC (+311).
+
 ## [0.234.0] - 2026-07-04
 
 ### Added

@@ -1,0 +1,17 @@
+// A1k: iterate + conditionally accumulate — mixes list iteration
+// with an if-inside-body.
+// Expected stdout: 9  (sum of evens in [1,2,3,4,5,6] = 2+4+6)
+
+fn sum_evens(xs: List[Int]) -> Int {
+    let acc: ref Int = 0;
+    for x in xs {
+        if x % 2 == 0 {
+            acc = acc + x;
+        }
+    }
+    acc
+}
+
+fn main() -> Int {
+    sum_evens([1, 2, 3, 4, 5, 6])
+}
