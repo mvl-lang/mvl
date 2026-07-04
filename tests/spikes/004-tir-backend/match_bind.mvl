@@ -1,0 +1,13 @@
+// A1f: Ident pattern binds the scrutinee value in the arm body.
+// Expected stdout: 43
+
+fn describe(n: Int) -> Int {
+    match n {
+        0 => 100,
+        x => x + 1,
+    }
+}
+
+fn main() -> Int {
+    describe(42)
+}

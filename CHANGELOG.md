@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.230.0] - 2026-07-04
+
+### Added
+
+- **`rust_backend`: MVL-hosted LLVM match arm-locals + Ident bindings** (#1118, Phase A1f) — Completes A1e: arm bodies now see the enclosing fn's `locals` (params + outer let-bindings) AND Ident patterns bind the scrutinee value in the arm's scope. Root cause of A1e limitation was the Rust transpiler's move analysis rejecting cross-iteration `ctx.locals` reuse. Workaround (spike-verified on 2026-07-04): capture locals in a `ref` variable BEFORE the loop, then call `clone_locals(ref_var)` per iteration — transpiler emits `alloca`-load + `.clone()`, giving each arm a fresh Map without consuming the original. 2 new spike tests (`match_bind` = Ident pattern binding, `match_scope` = reading fn params in arm exprs) demonstrate the fix. Full corpus 22/22 passing. `make test-mvl` clean (98 tests). Emitter 1004 LOC (net +29 from A1e: `clone_locals` helper + revised `emit_match` logic).
+
 ## [0.229.0] - 2026-07-04
 
 ### Added

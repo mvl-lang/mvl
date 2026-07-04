@@ -418,20 +418,27 @@ partial fn emit_if_blocks(
 // ── Match emission ────────────────────────────────────────────────────────────
 //
 // Lower `match scrutinee { p1 => e1, p2 => e2, _ => eN }` to a chain of
-// icmp+br tests, with a phi merging arm results at the join block.  Supports
-// the pattern shapes needed for Int/Bool scrutinees:
+// icmp+br tests, with a phi merging arm results at the join block.
+// Supports the pattern shapes needed for Int/Bool scrutinees:
 //
 //   - Literal(Integer|Bool) — equality test via `icmp eq`.
-//   - Wildcard              — always matches; treated as the final fallback.
-//   - Ident(name)           — currently treated like Wildcard (name binding
-//     is DEFERRED — the transpiler's cross-iteration move analysis rejects
-//     `extend_locals(ctx.locals, ...)` inside a for-loop, and the workaround
-//     paths add too much complexity for A1e's scope).  MVL's checker still
-//     enforces exhaustiveness, so an Ident-arm at the tail behaves as
-//     expected — its body just cannot reference the pattern name.
+//   - Wildcard              — always matches; final fallback.
+//   - Ident(name)           — always matches; binds `name` to the scrutinee
+//     value in the arm's scope (as a non-ref local).
 //
 // Enum patterns / tuple patterns / range patterns are deferred (they need
-// tag-load + destructuring shapes not exercised by the A1e corpus).
+// tag-load + destructuring shapes not exercised by the current corpus).
+//
+// # Cross-iteration locals
+//
+// Arm bodies must see the enclosing fn's `locals` (so `match n { 0 => x + 1,
+// _ => 0 }` can read `x` from the outer scope).  The Rust transpiler moves
+// values by default, so a naive `... ctx.locals ...` inside a for-loop is a
+// cross-iteration move error.  Workaround: capture `ctx.locals` into a
+// `ref` variable BEFORE the loop; each iteration calls `clone_locals` on
+// the ref-var, which the transpiler translates as an alloca-load followed
+// by `.clone()` (verified via a spike probe on 2026-07-04).  Each arm gets
+// a fresh locals map, optionally extended with an Ident-pattern binding.
 partial fn emit_match(
     scrutinee: Value, arms: List[Value], ctx: EmitCtx
 ) -> Emitted {
@@ -447,16 +454,10 @@ partial fn emit_match(
     let scrut_ty: String = s.ty;
     let saw_fallback: ref Bool = false;
 
-    // LIMITATION (A1e): arm bodies receive an EMPTY locals map, not the
-    // enclosing fn's locals.  The Rust transpiler's move analysis rejects
-    // `ctx.locals` reuse across for-loop iterations (no per-iteration
-    // clone insertion), and the workarounds add too much complexity for
-    // this phase.  Consequence: arm expressions can only reference values
-    // introduced INSIDE the arm body (literals, computations) — they can't
-    // read the fn's params or outer let-bindings.  Passes the A1e corpus
-    // (all arm bodies are literals or self-contained exprs).  Full-locals
-    // arm scope lands in a later phase alongside a proper `clone_locals`
-    // fix.
+    // Capture outer locals in a `ref` so per-iteration `clone_locals` calls
+    // survive the for-loop's move semantics (see docstring above).
+    let outer_locals: ref Map[String, LocalRef] = ctx.locals;
+
     for arm in arms {
         if saw_fallback {
             // Exhaustiveness fallback already handled — remaining arms are
@@ -487,9 +488,21 @@ partial fn emit_match(
             }
 
             instrs.push(format("{}:", [arm_lbl]));
+
+            // Build this arm's locals: a clone of the outer scope, plus an
+            // Ident-pattern binding for the scrutinee value if applicable.
+            let arm_locals: Map[String, LocalRef] = if pat_tag == "Ident" {
+                extend_locals(
+                    clone_locals(outer_locals),
+                    jstr(pat, "name"),
+                    LocalRef { reg: scrut_reg, ty: scrut_ty, is_ref: false },
+                )
+            } else {
+                clone_locals(outer_locals)
+            };
             let arm_ctx: EmitCtx = EmitCtx {
                 next_reg: cur_reg,
-                locals: Map::new(),
+                locals: arm_locals,
             };
             let arm_body: Value = jget(arm, "body");
             let arm_out: MatchArmOut = emit_match_body(arm_body, arm_ctx);
@@ -628,6 +641,22 @@ partial fn extend_locals(
         }
     }
     m.insert(key, value);
+    m
+}
+
+// Deep-copy a locals Map into a fresh Map.  Used inside for-loop bodies to
+// obtain a per-iteration clone from a `ref` variable — the Rust transpiler
+// correctly inserts `.clone()` when a `ref`-var value is passed to a fn
+// inside a loop (verified via a spike probe).  Structural counterpart of
+// `extend_locals` without the extra binding.
+partial fn clone_locals(base: Map[String, LocalRef]) -> Map[String, LocalRef] {
+    let m: ref Map[String, LocalRef] = Map::new();
+    for k in base.keys() {
+        match base.get(k) {
+            Some(v) => m.insert(k, v),
+            None    => {},
+        }
+    }
     m
 }
 
