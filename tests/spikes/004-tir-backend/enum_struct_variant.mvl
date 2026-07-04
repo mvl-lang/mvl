@@ -1,0 +1,18 @@
+// A1q: enum with struct-variant.
+// Expected stdout: 15  (locked.attempts + locked.window)
+
+type Session = enum {
+    Open,
+    Locked { attempts: Int, window: Int },
+}
+
+fn describe(s: Session) -> Int {
+    match s {
+        Session::Open => 0,
+        Session::Locked { attempts: a, window: w } => a + w,
+    }
+}
+
+fn main() -> Int {
+    describe(Session::Locked { attempts: 5, window: 10 })
+}
