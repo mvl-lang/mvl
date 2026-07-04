@@ -68,6 +68,25 @@ pub type AssuranceInfo = struct {
     requirements_proven: Int,
 }
 
+/// Which manifest section a native dependency came from.
+///
+/// `Rust` — declared under `[native]` in `mvl.toml` (`pkg:cargo/...`).
+/// `C`    — declared under `[c-native]` in `mvl.toml` (`pkg:generic/...`).
+pub type NativeKind = enum { Rust, C }
+
+/// A native (non-MVL) dependency in the full supply chain.
+///
+/// `introduced_by` is empty when the project itself declares the dep;
+/// otherwise it lists the MVL packages that pulled it in transitively.
+/// Populated in Phase 7 (#1661) — mirrors `mvl sbom` transitive output.
+pub type NativeDep = struct {
+    name:          String,
+    version:       String,
+    kind:          NativeKind,
+    purl:          String,
+    introduced_by: List[String],
+}
+
 // ── Manifest ────────────────────────────────────────────────────────────────
 
 /// Compile-time SBOM: all metadata embedded into the binary at build time.
@@ -89,6 +108,7 @@ pub type Manifest = struct {
     licenses:       List[String],
     assurance:      AssuranceInfo,
     source_digest:  String,
+    native_deps:    List[NativeDep],
 }
 
 // ── Constructor ─────────────────────────────────────────────────────────────
@@ -124,6 +144,7 @@ pub fn manifest() -> Manifest {
             requirements_proven: 0,
         },
         source_digest: "",
+        native_deps: [],
     }
 }
 

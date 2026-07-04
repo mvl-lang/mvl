@@ -80,10 +80,63 @@ impl ComponentType {
     }
 }
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// License map: package name → SPDX license identifier (e.g. "Apache-2.0").
 pub type LicenseMap = HashMap<String, String>;
+
+/// Build the transitive native-dep list from a set of package manifests.
+///
+/// Each entry in `pkg_manifests` is `(pkg_name, manifest)` for a package
+/// pulled in from `mvl.lock`. The function walks their `[native]` and
+/// `[c-native]` sections, deduplicates by `(name, version, kind)`, and drops
+/// any entry whose `(name, version)` matches a project-direct declaration in
+/// `project.native` / `project.c_native` (the project row is emitted
+/// separately without provenance).
+///
+/// Used by both `mvl sbom` (CLI SBOM emission, #1655) and
+/// `manifest_embed::generate_manifest_mvl` (embedded `std.runtime.Manifest`,
+/// #1661) so the two views agree on the native supply chain.
+pub fn collect_transitive_native(
+    project: &Manifest,
+    pkg_manifests: &[(String, Manifest)],
+) -> Vec<TransitiveNativeDep> {
+    let mut index: BTreeMap<(String, String, TransitiveKind), Vec<String>> = BTreeMap::new();
+    for (pkg_name, pkg_manifest) in pkg_manifests {
+        for (n, v) in &pkg_manifest.native {
+            index
+                .entry((n.clone(), v.clone(), TransitiveKind::Native))
+                .or_default()
+                .push(pkg_name.clone());
+        }
+        for (n, spec) in &pkg_manifest.c_native {
+            index
+                .entry((n.clone(), spec.version.clone(), TransitiveKind::CNative))
+                .or_default()
+                .push(pkg_name.clone());
+        }
+    }
+    index
+        .into_iter()
+        .filter(|((n, v, kind), _)| match kind {
+            TransitiveKind::Native => project.native.get(n).is_none_or(|proj_v| proj_v != v),
+            TransitiveKind::CNative => project
+                .c_native
+                .get(n)
+                .is_none_or(|proj_spec| &proj_spec.version != v),
+        })
+        .map(|((name, version, kind), mut introducers)| {
+            introducers.sort();
+            introducers.dedup();
+            TransitiveNativeDep {
+                name,
+                version,
+                kind,
+                introduced_by: introducers,
+            }
+        })
+        .collect()
+}
 
 pub fn generate(
     manifest: &Manifest,
@@ -1123,5 +1176,125 @@ mod tests {
             &[],
         );
         assert!(!out.contains("\"description\":"));
+    }
+
+    // ── collect_transitive_native (moved from cmd_sbom.rs #1661) ─────────────
+
+    use crate::mvl::packages::manifest::{CNativeSpec, Manifest as PkgManifest};
+
+    fn mk_pkg_manifest(
+        name: &str,
+        native: Vec<(&str, &str)>,
+        c_native: Vec<(&str, &str)>,
+    ) -> PkgManifest {
+        PkgManifest {
+            package: PackageInfo {
+                name: name.to_string(),
+                version: "1.0.0".to_string(),
+                license: "MIT".to_string(),
+                requires_mvl: ">=0.60.0".to_string(),
+                extern_rationale: None,
+            },
+            dependencies: HashMap::new(),
+            native: native
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            c_native: c_native
+                .into_iter()
+                .map(|(k, v)| {
+                    (
+                        k.to_string(),
+                        CNativeSpec {
+                            version: v.to_string(),
+                            license: None,
+                        },
+                    )
+                })
+                .collect(),
+            dependency_policy: Default::default(),
+            license_policy: Default::default(),
+            security: Default::default(),
+        }
+    }
+
+    #[test]
+    fn collect_transitive_harvests_native_and_cnative() {
+        let project = mk_pkg_manifest("proj", vec![], vec![]);
+        let pkgs = vec![(
+            "pkg-sqlite".to_string(),
+            mk_pkg_manifest(
+                "pkg-sqlite",
+                vec![("rusqlite", "0.31")],
+                vec![("libssl", "3.0")],
+            ),
+        )];
+        let out = collect_transitive_native(&project, &pkgs);
+        assert_eq!(out.len(), 2);
+        let names: Vec<&str> = out.iter().map(|d| d.name.as_str()).collect();
+        assert!(names.contains(&"rusqlite"));
+        assert!(names.contains(&"libssl"));
+    }
+
+    #[test]
+    fn collect_transitive_dedups_by_name_and_version() {
+        let project = mk_pkg_manifest("proj", vec![], vec![]);
+        let pkgs = vec![
+            (
+                "pkg-a".to_string(),
+                mk_pkg_manifest("pkg-a", vec![("rusqlite", "0.31")], vec![]),
+            ),
+            (
+                "pkg-b".to_string(),
+                mk_pkg_manifest("pkg-b", vec![("rusqlite", "0.31")], vec![]),
+            ),
+        ];
+        let out = collect_transitive_native(&project, &pkgs);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].name, "rusqlite");
+        assert_eq!(out[0].introduced_by, vec!["pkg-a", "pkg-b"]);
+    }
+
+    #[test]
+    fn collect_transitive_different_versions_kept_separate() {
+        let project = mk_pkg_manifest("proj", vec![], vec![]);
+        let pkgs = vec![
+            (
+                "pkg-a".to_string(),
+                mk_pkg_manifest("pkg-a", vec![("rusqlite", "0.31")], vec![]),
+            ),
+            (
+                "pkg-b".to_string(),
+                mk_pkg_manifest("pkg-b", vec![("rusqlite", "0.32")], vec![]),
+            ),
+        ];
+        let out = collect_transitive_native(&project, &pkgs);
+        assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    fn collect_transitive_filters_out_project_shadowed_deps() {
+        let project = mk_pkg_manifest("proj", vec![("rusqlite", "0.31")], vec![]);
+        let pkgs = vec![(
+            "pkg-sqlite".to_string(),
+            mk_pkg_manifest("pkg-sqlite", vec![("rusqlite", "0.31")], vec![]),
+        )];
+        let out = collect_transitive_native(&project, &pkgs);
+        assert!(
+            out.is_empty(),
+            "project-direct (name, version) must shadow transitive"
+        );
+    }
+
+    #[test]
+    fn collect_transitive_project_different_version_does_not_shadow() {
+        let project = mk_pkg_manifest("proj", vec![("rusqlite", "0.31")], vec![]);
+        let pkgs = vec![(
+            "pkg-sqlite".to_string(),
+            mk_pkg_manifest("pkg-sqlite", vec![("rusqlite", "0.32")], vec![]),
+        )];
+        let out = collect_transitive_native(&project, &pkgs);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].version, "0.32");
     }
 }
