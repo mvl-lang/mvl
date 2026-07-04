@@ -666,14 +666,25 @@ partial fn emit_expr(expr: Value, ctx: EmitCtx) -> Emitted {
                 }
             }
             if recv_ty_tag == "List" && method == "get" {
-                // `xs.get(i)` → build `{i8, i64}` Option[Int]:
-                //   %data = extractvalue ..., 1
-                //   %ep   = getelementptr i64, ptr %data, i64 %i
-                //   %v    = load i64, ptr %ep
-                //   %o0   = insertvalue {i8, i64} undef, i8 1, 0
-                //   %o1   = insertvalue {i8, i64} %o0, i64 %v, 1
-                // MVP: no bounds check — OOB reads garbage.  Callers
-                // should stay in-bounds; A1p tests use in-bounds indices.
+                // A1t: bounds-checked `xs.get(i)` — returns Some(v) when
+                // 0 ≤ i < len, else None.  Lowered to a branch+phi in
+                // expression position:
+                //
+                //   %len = extractvalue {i64, ptr} %xs, 0
+                //   %data = extractvalue {i64, ptr} %xs, 1
+                //   %ok = icmp ult i64 %i, %len
+                //   br i1 %ok, label %some, label %none
+                // some:
+                //   %ep = getelementptr i64, ptr %data, i64 %i
+                //   %v  = load i64, ptr %ep
+                //   %s0 = insertvalue {i8, i64} undef, i8 1, 0
+                //   %s1 = insertvalue {i8, i64} %s0, i64 %v, 1
+                //   br label %join
+                // none:
+                //   %n0 = insertvalue {i8, i64} undef, i8 0, 0
+                //   br label %join
+                // join:
+                //   %r = phi {i8, i64} [ %s1, %some ], [ %n0, %none ]
                 let args: List[Value] = jarr(kind, "args");
                 let arg0: Value = args.get(0).unwrap_or(Value::Null);
                 let arg_ctx: EmitCtx = EmitCtx {
@@ -684,41 +695,87 @@ partial fn emit_expr(expr: Value, ctx: EmitCtx) -> Emitted {
                     structs: ctx.structs,
                     enum_types: ctx.enum_types,
                     variant_payloads: ctx.variant_payloads,
-                variant_slots: ctx.variant_slots,
-                variant_slot_types: ctx.variant_slot_types,
+                    variant_slots: ctx.variant_slots,
+                    variant_slot_types: ctx.variant_slot_types,
                 };
                 let idx: Emitted = emit_expr(arg0, arg_ctx);
                 let n0: Int = idx.next_reg;
-                let data_reg: String = format("%t{}", [n0.to_string()]);
-                let ep_reg: String = format("%t{}", [(n0 + 1).to_string()]);
-                let val_reg: String = format("%t{}", [(n0 + 2).to_string()]);
-                let o0_reg: String = format("%t{}", [(n0 + 3).to_string()]);
-                let o1_reg: String = format("%t{}", [(n0 + 4).to_string()]);
+                let len_reg: String = format("%t{}", [n0.to_string()]);
+                let data_reg: String = format("%t{}", [(n0 + 1).to_string()]);
+                let ok_reg: String = format("%t{}", [(n0 + 2).to_string()]);
+                let n1: Int = n0 + 3;
+                let lbl_some: String = format("get_some_{}", [n0.to_string()]);
+                let lbl_none: String = format("get_none_{}", [n0.to_string()]);
+                let lbl_join: String = format("get_join_{}", [n0.to_string()]);
+                let ep_reg: String = format("%t{}", [n1.to_string()]);
+                let val_reg: String = format("%t{}", [(n1 + 1).to_string()]);
+                let s0_reg: String = format("%t{}", [(n1 + 2).to_string()]);
+                let s1_reg: String = format("%t{}", [(n1 + 3).to_string()]);
+                let n2: Int = n1 + 4;
+                let n0_reg: String = format("%t{}", [n2.to_string()]);
+                let n3: Int = n2 + 1;
+                let out_reg: String = format("%t{}", [n3.to_string()]);
+                let extract_len: String = format(
+                    "  {} = extractvalue {i64, ptr} {}, 0",
+                    [len_reg.concat(""), recv_e.reg]
+                );
                 let extract_data: String = format(
                     "  {} = extractvalue {i64, ptr} {}, 1",
-                    [data_reg, recv_e.reg]
+                    [data_reg.concat(""), recv_e.reg]
                 );
+                let cmp: String = format(
+                    "  {} = icmp ult i64 {}, {}",
+                    [ok_reg.concat(""), idx.reg, len_reg]
+                );
+                let br_ok: String = format(
+                    "  br i1 {}, label %{}, label %{}",
+                    [ok_reg, lbl_some.concat(""), lbl_none.concat("")]
+                );
+                let some_label: String = format("{}:", [lbl_some.concat("")]);
                 let gep: String = format(
                     "  {} = getelementptr i64, ptr {}, i64 {}",
-                    [ep_reg, data_reg, idx.reg]
+                    [ep_reg.concat(""), data_reg, idx.reg]
                 );
-                let ld: String = format("  {} = load i64, ptr {}", [val_reg, ep_reg]);
-                let mk_tag: String = format(
+                let ld: String = format(
+                    "  {} = load i64, ptr {}", [val_reg.concat(""), ep_reg]
+                );
+                let mk_tag_s: String = format(
                     "  {} = insertvalue {i8, i64} undef, i8 1, 0",
-                    [o0_reg]
+                    [s0_reg.concat("")]
                 );
-                let mk_val: String = format(
+                let mk_val_s: String = format(
                     "  {} = insertvalue {i8, i64} {}, i64 {}, 1",
-                    [o1_reg, o0_reg, val_reg]
+                    [s1_reg.concat(""), s0_reg, val_reg]
+                );
+                let br_join_s: String = format(
+                    "  br label %{}", [lbl_join.concat("")]
+                );
+                let none_label: String = format("{}:", [lbl_none.concat("")]);
+                let mk_tag_n: String = format(
+                    "  {} = insertvalue {i8, i64} undef, i8 0, 0",
+                    [n0_reg.concat("")]
+                );
+                let br_join_n: String = format(
+                    "  br label %{}", [lbl_join.concat("")]
+                );
+                let join_label: String = format("{}:", [lbl_join.concat("")]);
+                let phi: String = format(
+                    "  {} = phi {i8, i64} [ {}, %{} ], [ {}, %{} ]",
+                    [out_reg.concat(""), s1_reg, lbl_some, n0_reg, lbl_none]
                 );
                 return Emitted {
-                    reg: o1_reg,
+                    reg: out_reg,
                     ty: "{i8, i64}",
-                    next_reg: n0 + 5,
+                    next_reg: n3 + 1,
                     instrs: recv_e.instrs
                         .concat(idx.instrs)
-                        .concat([extract_data, gep, ld, mk_tag, mk_val]),
-                    last_label: "",
+                        .concat([
+                            extract_len, extract_data, cmp, br_ok,
+                            some_label, gep, ld, mk_tag_s, mk_val_s, br_join_s,
+                            none_label, mk_tag_n, br_join_n,
+                            join_label, phi,
+                        ]),
+                    last_label: lbl_join,
                 }
             }
             if recv_ty_tag == "Float" && method == "to_int" {
