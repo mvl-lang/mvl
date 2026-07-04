@@ -264,6 +264,9 @@ partial fn emit_expr(expr: Value, ctx: EmitCtx) -> Emitted {
             let else_block: Value = extract_else_block(jget(kind, "else_br"));
             emit_if_blocks(jget(kind, "cond"), then_block, else_block, ctx)
         },
+        "Match" => {
+            emit_match(jget(kind, "scrutinee"), jarr(kind, "arms"), ctx)
+        },
         "Block" => {
             // Block expression — used in the else_br of an if-expression.
             let block: Value = jget(kind, "block");
@@ -412,6 +415,174 @@ partial fn emit_if_blocks(
     }
 }
 
+// ── Match emission ────────────────────────────────────────────────────────────
+//
+// Lower `match scrutinee { p1 => e1, p2 => e2, _ => eN }` to a chain of
+// icmp+br tests, with a phi merging arm results at the join block.  Supports
+// the pattern shapes needed for Int/Bool scrutinees:
+//
+//   - Literal(Integer|Bool) — equality test via `icmp eq`.
+//   - Wildcard              — always matches; treated as the final fallback.
+//   - Ident(name)           — currently treated like Wildcard (name binding
+//     is DEFERRED — the transpiler's cross-iteration move analysis rejects
+//     `extend_locals(ctx.locals, ...)` inside a for-loop, and the workaround
+//     paths add too much complexity for A1e's scope).  MVL's checker still
+//     enforces exhaustiveness, so an Ident-arm at the tail behaves as
+//     expected — its body just cannot reference the pattern name.
+//
+// Enum patterns / tuple patterns / range patterns are deferred (they need
+// tag-load + destructuring shapes not exercised by the A1e corpus).
+partial fn emit_match(
+    scrutinee: Value, arms: List[Value], ctx: EmitCtx
+) -> Emitted {
+    let s: Emitted = emit_expr(scrutinee, ctx);
+    let n: Int = s.next_reg;
+    let join_lbl: String = format("match_join_{}", [n.to_string()]);
+
+    let instrs: ref List[String] = s.instrs;
+    let phi_pairs: ref List[String] = [];
+    let cur_reg: ref Int = n;
+    let arm_idx: ref Int = 0;
+    let scrut_reg: String = s.reg;
+    let scrut_ty: String = s.ty;
+    let saw_fallback: ref Bool = false;
+
+    // LIMITATION (A1e): arm bodies receive an EMPTY locals map, not the
+    // enclosing fn's locals.  The Rust transpiler's move analysis rejects
+    // `ctx.locals` reuse across for-loop iterations (no per-iteration
+    // clone insertion), and the workarounds add too much complexity for
+    // this phase.  Consequence: arm expressions can only reference values
+    // introduced INSIDE the arm body (literals, computations) — they can't
+    // read the fn's params or outer let-bindings.  Passes the A1e corpus
+    // (all arm bodies are literals or self-contained exprs).  Full-locals
+    // arm scope lands in a later phase alongside a proper `clone_locals`
+    // fix.
+    for arm in arms {
+        if saw_fallback {
+            // Exhaustiveness fallback already handled — remaining arms are
+            // unreachable dead code.
+        } else {
+            let pat: Value = jget(arm, "pattern");
+            let pat_tag: String = jtag(pat);
+            let idx: Int = arm_idx;
+            let arm_lbl: String = format("match_arm_{}_{}", [n.to_string(), idx.to_string()]);
+            let next_lbl: String = format("match_next_{}_{}", [n.to_string(), idx.to_string()]);
+
+            let is_fallback: Bool = pat_tag == "Wildcard" || pat_tag == "Ident";
+            if is_fallback {
+                instrs.push(format("  br label %{}", [arm_lbl]));
+                saw_fallback = true;
+            } else {
+                let lit_val: String = literal_pattern_value(pat);
+                let cmp_reg: String = format("%t{}", [cur_reg.to_string()]);
+                instrs.push(format(
+                    "  {} = icmp eq {} {}, {}",
+                    [cmp_reg, scrut_ty, scrut_reg, lit_val]
+                ));
+                instrs.push(format(
+                    "  br i1 {}, label %{}, label %{}",
+                    [cmp_reg, arm_lbl, next_lbl]
+                ));
+                cur_reg = cur_reg + 1;
+            }
+
+            instrs.push(format("{}:", [arm_lbl]));
+            let arm_ctx: EmitCtx = EmitCtx {
+                next_reg: cur_reg,
+                locals: Map::new(),
+            };
+            let arm_body: Value = jget(arm, "body");
+            let arm_out: MatchArmOut = emit_match_body(arm_body, arm_ctx);
+            for line in arm_out.instrs { instrs.push(line) }
+            instrs.push(format("  br label %{}", [join_lbl]));
+
+            let pred_lbl: String = if arm_out.last_label == "" {
+                format("match_arm_{}_{}", [n.to_string(), idx.to_string()])
+            } else {
+                arm_out.last_label
+            };
+            phi_pairs.push(format("[ {}, %{} ]", [arm_out.reg, pred_lbl]));
+
+            cur_reg = arm_out.next_reg;
+
+            if !is_fallback {
+                instrs.push(format("{}:", [next_lbl]));
+            }
+            arm_idx = arm_idx + 1;
+        }
+    }
+
+    // If no fallback arm was seen (e.g. exhaustive Bool match on `true`
+    // and `false`), the final `match_next_N` block has no terminator.
+    // MVL's checker proves exhaustiveness, but LLVM's verifier can't see
+    // that — emit `unreachable` to satisfy it.  Reached execution here
+    // would be a type-system violation.
+    if !saw_fallback {
+        instrs.push("  unreachable");
+    }
+    // Join block + phi merge.
+    instrs.push(format("{}:", [join_lbl]));
+    let phi_reg: String = format("%t{}", [cur_reg.to_string()]);
+    let phi_body: String = phi_pairs.join(", ");
+    instrs.push(format("  {} = phi i64 {}", [phi_reg, phi_body]));
+
+    Emitted {
+        reg: phi_reg,
+        ty: "i64",
+        next_reg: cur_reg + 1,
+        instrs: instrs,
+        last_label: join_lbl,
+    }
+}
+
+// Extract the literal LLVM operand for a Literal(Integer|Bool) pattern.
+total fn literal_pattern_value(pat: Value) -> String {
+    let lit: Value = jget(pat, "lit");
+    let lit_kind: String = jtag(lit);
+    if lit_kind == "Integer" {
+        jstr(lit, "value")
+    } else {
+        if lit_kind == "Bool" {
+            if jbool(lit, "value") { "1" } else { "0" }
+        } else {
+            "0"
+        }
+    }
+}
+
+// Match-arm body: `{tag: "Expr", expr: TirExpr}` or `{tag: "Block", block:
+// TirBlock}`.  Returns the arm's SSA operand + instruction stream + the
+// label control resides in after emission (for phi predecessor tracking).
+type MatchArmOut = struct {
+    reg: String,
+    next_reg: Int,
+    instrs: List[String],
+    last_label: String,
+}
+
+partial fn emit_match_body(body: Value, ctx: EmitCtx) -> MatchArmOut {
+    let body_tag: String = jtag(body);
+    if body_tag == "Expr" {
+        let e: Emitted = emit_expr(jget(body, "expr"), ctx);
+        MatchArmOut {
+            reg: e.reg,
+            next_reg: e.next_reg,
+            instrs: e.instrs,
+            last_label: e.last_label,
+        }
+    } else {
+        // Block arm — walk it as a body and use its trailing tail_reg.
+        let out: StmtOut = emit_body(jget(body, "block"), ctx);
+        let reg: String = if out.tail_reg == "" { "0" } else { out.tail_reg };
+        MatchArmOut {
+            reg: reg,
+            next_reg: out.ctx.next_reg,
+            instrs: out.instrs,
+            last_label: out.last_label,
+        }
+    }
+}
+
 // Emit args left-to-right, threading the SSA counter, then emit the call.
 // Every arg is assumed i64 (A1b restriction — only Int is supported).
 partial fn emit_fn_call(name: String, args: List[Value], ctx: EmitCtx) -> Emitted {
@@ -485,6 +656,21 @@ partial fn emit_stmt(stmt: Value, ctx: EmitCtx) -> StmtOut {
                 jget(stmt, "cond"),
                 jget(stmt, "then"),
                 else_block,
+                ctx,
+            );
+            StmtOut {
+                ctx: EmitCtx { next_reg: e.next_reg, locals: ctx.locals },
+                instrs: e.instrs,
+                tail_reg: e.reg,
+                last_label: e.last_label,
+            }
+        },
+        "Match" => {
+            // Stmt-form match. Same shape as expr-form; result flows out
+            // as the fn's return value when the match is the trailing stmt.
+            let e: Emitted = emit_match(
+                jget(stmt, "scrutinee"),
+                jarr(stmt, "arms"),
                 ctx,
             );
             StmtOut {
