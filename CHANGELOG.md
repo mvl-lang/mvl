@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.226.0] - 2026-07-04
+
+### Added
+
+- **`rust_backend`: MVL-hosted LLVM function calls + lets** (#1118, Phase A1b) — Rust transpiler now emits multi-function TIR programs with proper call sequences. Handles all call variants: zero-arg, polymorphic multi-arg (Int, Bool, String, List, Map), struct/enum field access, method calls on values. Let binding analysis (scope-aware, span-keyed) eliminates spurious `unused_mut` warnings on read-only `ref` bindings. All 98 self-hosted parser tests pass; MVL-hosted LLVM backend spike (A0 scaffold + A1a arith + A1b calls) fully operational with 7/7 arith corpus tests green.
+
+### Fixed
+
+- **`rust_backend`: suppress `unused_mut` via scope-aware read-only analysis** — MVL `let x: ref T = ...` unconditionally lowered to `let mut x` in Rust, producing 12 `unused_mut` warnings on bindings declared `ref` but never reassigned. New `mut_analysis.rs` pass walks TIR with a scope stack; each `let` registers a binding by its pattern span; `Assign` / method-call receivers flip the innermost matching binding to mutated. Span-keyed (not name-based) correctly handles shadowed bindings across different match arms. Lambda captures are conservatively escalated. Result: **12 warnings → 0** with all tests passing.
+
 ## [0.225.2] - 2026-07-03
 
 ### Fixed
