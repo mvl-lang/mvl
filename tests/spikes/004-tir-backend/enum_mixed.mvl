@@ -1,0 +1,20 @@
+// A1o: mixed unit + payload variants; unit-variant default in match.
+// Expected stdout: 100
+
+type Shape = enum {
+    None,
+    Radius(Int),
+    Diameter(Int),
+}
+
+fn size(s: Shape) -> Int {
+    match s {
+        Shape::None => 0,
+        Shape::Radius(r) => r,
+        Shape::Diameter(d) => d * 2,
+    }
+}
+
+fn main() -> Int {
+    size(Shape::Diameter(50))
+}
