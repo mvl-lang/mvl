@@ -161,6 +161,26 @@ total fn is_cmp_op(op: String) -> Bool {
     op == "Eq" || op == "Ne" || op == "Lt" || op == "Le" || op == "Gt" || op == "Ge"
 }
 
+// ── Type mapping (TIR → LLVM) ────────────────────────────────────────────────
+//
+// A1g: Option[Int] lowers to a `{i8, i64}` tagged-union struct — first byte
+// is the variant tag (0 = None, 1 = Some), second word is the Int payload
+// (uninitialized for None).  Other Option[T] and general enums are deferred.
+partial fn tir_ty_to_llvm(ty: Value) -> String {
+    let ty_tag: String = jtag(ty);
+    match ty_tag {
+        "Bool"   => "i1",
+        "Option" => "{i8, i64}",
+        _        => "i64",
+    }
+}
+
+// True if `ty` is an aggregate/struct-shaped LLVM type (i.e. starts with `{`).
+// Distinguishes enum scrutinees from scalar Int/Bool inside `emit_match`.
+total fn is_aggregate_ty(ty: String) -> Bool {
+    ty.len() > 0 && ty.starts_with("{")
+}
+
 // ── Expression emission ───────────────────────────────────────────────────────
 
 partial fn emit_expr(expr: Value, ctx: EmitCtx) -> Emitted {
@@ -186,6 +206,22 @@ partial fn emit_expr(expr: Value, ctx: EmitCtx) -> Emitted {
         },
         "Var" => {
             let name: String = jstr(kind, "name");
+            // A1g: bare `None` — no args, appears as Var (not FnCall).  Emit
+            // the same enum construction as `emit_fn_call("None", [], ...)`.
+            if name == "None" {
+                let tag_reg: String = format("%t{}", [ctx.next_reg.to_string()]);
+                let mk_tag: String = format(
+                    "  {} = insertvalue {i8, i64} undef, i8 0, 0",
+                    [tag_reg]
+                );
+                return Emitted {
+                    reg: tag_reg,
+                    ty: "{i8, i64}",
+                    next_reg: ctx.next_reg + 1,
+                    instrs: [mk_tag],
+                    last_label: "",
+                }
+            }
             match ctx.locals.get(name) {
                 Some(op) => {
                     if op.is_ref {
@@ -453,6 +489,20 @@ partial fn emit_match(
     let scrut_reg: String = s.reg;
     let scrut_ty: String = s.ty;
     let saw_fallback: ref Bool = false;
+    let is_enum: Bool = is_aggregate_ty(scrut_ty);
+
+    // For enum scrutinees, extract the variant tag once up front — each arm
+    // then dispatches on this shared i8 value rather than re-extracting.
+    let tag_reg: ref String = "";
+    if is_enum {
+        let extract_reg: String = format("%t{}", [cur_reg.to_string()]);
+        instrs.push(format(
+            "  {} = extractvalue {} {}, 0",
+            [extract_reg, scrut_ty, scrut_reg]
+        ));
+        tag_reg = extract_reg;
+        cur_reg = cur_reg + 1;
+    }
 
     // Capture outer locals in a `ref` so per-iteration `clone_locals` calls
     // survive the for-loop's move semantics (see docstring above).
@@ -470,27 +520,49 @@ partial fn emit_match(
             let next_lbl: String = format("match_next_{}_{}", [n.to_string(), idx.to_string()]);
 
             let is_fallback: Bool = pat_tag == "Wildcard" || pat_tag == "Ident";
+            let is_enum_variant: Bool = pat_tag == "Some" || pat_tag == "None";
+
             if is_fallback {
                 instrs.push(format("  br label %{}", [arm_lbl]));
                 saw_fallback = true;
             } else {
-                let lit_val: String = literal_pattern_value(pat);
-                let cmp_reg: String = format("%t{}", [cur_reg.to_string()]);
-                instrs.push(format(
-                    "  {} = icmp eq {} {}, {}",
-                    [cmp_reg, scrut_ty, scrut_reg, lit_val]
-                ));
-                instrs.push(format(
-                    "  br i1 {}, label %{}, label %{}",
-                    [cmp_reg, arm_lbl, next_lbl]
-                ));
-                cur_reg = cur_reg + 1;
+                if is_enum_variant {
+                    // Enum tag dispatch: compare against the variant's tag byte.
+                    let variant_tag: String = if pat_tag == "Some" { "1" } else { "0" };
+                    let cmp_reg: String = format("%t{}", [cur_reg.to_string()]);
+                    instrs.push(format(
+                        "  {} = icmp eq i8 {}, {}",
+                        [cmp_reg, tag_reg, variant_tag]
+                    ));
+                    instrs.push(format(
+                        "  br i1 {}, label %{}, label %{}",
+                        [cmp_reg, arm_lbl, next_lbl]
+                    ));
+                    cur_reg = cur_reg + 1;
+                } else {
+                    // Scalar Literal(Integer|Bool) pattern.
+                    let lit_val: String = literal_pattern_value(pat);
+                    let cmp_reg: String = format("%t{}", [cur_reg.to_string()]);
+                    instrs.push(format(
+                        "  {} = icmp eq {} {}, {}",
+                        [cmp_reg, scrut_ty, scrut_reg, lit_val]
+                    ));
+                    instrs.push(format(
+                        "  br i1 {}, label %{}, label %{}",
+                        [cmp_reg, arm_lbl, next_lbl]
+                    ));
+                    cur_reg = cur_reg + 1;
+                }
             }
 
             instrs.push(format("{}:", [arm_lbl]));
 
-            // Build this arm's locals: a clone of the outer scope, plus an
-            // Ident-pattern binding for the scrutinee value if applicable.
+            // Build this arm's locals.  Three shapes:
+            //   - Ident pattern: bind the scrutinee value to the pattern name.
+            //   - Some(Ident(name)): extract payload via `extractvalue ..., 1`
+            //     and bind `name` to it.
+            //   - Everything else (Wildcard, None, Literal, Some(Wildcard)):
+            //     no additional binding, just clone outer scope.
             let arm_locals: Map[String, LocalRef] = if pat_tag == "Ident" {
                 extend_locals(
                     clone_locals(outer_locals),
@@ -498,7 +570,27 @@ partial fn emit_match(
                     LocalRef { reg: scrut_reg, ty: scrut_ty, is_ref: false },
                 )
             } else {
-                clone_locals(outer_locals)
+                if pat_tag == "Some" {
+                    let inner: Value = jget(pat, "inner");
+                    let inner_tag: String = jtag(inner);
+                    if inner_tag == "Ident" {
+                        let payload_reg: String = format("%t{}", [cur_reg.to_string()]);
+                        instrs.push(format(
+                            "  {} = extractvalue {} {}, 1",
+                            [payload_reg, scrut_ty, scrut_reg]
+                        ));
+                        cur_reg = cur_reg + 1;
+                        extend_locals(
+                            clone_locals(outer_locals),
+                            jstr(inner, "name"),
+                            LocalRef { reg: payload_reg, ty: "i64", is_ref: false },
+                        )
+                    } else {
+                        clone_locals(outer_locals)
+                    }
+                } else {
+                    clone_locals(outer_locals)
+                }
             };
             let arm_ctx: EmitCtx = EmitCtx {
                 next_reg: cur_reg,
@@ -599,7 +691,50 @@ partial fn emit_match_body(body: Value, ctx: EmitCtx) -> MatchArmOut {
 // Emit args left-to-right, threading the SSA counter, then emit the call.
 // Every arg is assumed i64 (A1b restriction — only Int is supported).
 partial fn emit_fn_call(name: String, args: List[Value], ctx: EmitCtx) -> Emitted {
+    // A1g: `Some(x)` / `None` — Option[Int] enum constructors.  Lower to a
+    // `{i8, i64}` aggregate via `insertvalue`: tag byte first, then payload
+    // (0 sentinel for None).  Detected by the constructor name (MVL parses
+    // them as FnCall in the TIR).
+    if name == "Some" && args.len() == 1 {
+        let payload_ctx: EmitCtx = EmitCtx { next_reg: ctx.next_reg, locals: ctx.locals };
+        let payload: Emitted = emit_expr(args.get(0).unwrap_or(Value::Null), payload_ctx);
+        let tag_reg: String = format("%t{}", [payload.next_reg.to_string()]);
+        let val_reg: String = format("%t{}", [(payload.next_reg + 1).to_string()]);
+        let mk_tag: String = format(
+            "  {} = insertvalue {i8, i64} undef, i8 1, 0",
+            [tag_reg]
+        );
+        let mk_val: String = format(
+            "  {} = insertvalue {i8, i64} {}, i64 {}, 1",
+            [val_reg, tag_reg, payload.reg]
+        );
+        return Emitted {
+            reg: val_reg,
+            ty: "{i8, i64}",
+            next_reg: payload.next_reg + 2,
+            instrs: payload.instrs.concat([mk_tag, mk_val]),
+            last_label: "",
+        }
+    }
+    if name == "None" && args.len() == 0 {
+        let tag_reg: String = format("%t{}", [ctx.next_reg.to_string()]);
+        let mk_tag: String = format(
+            "  {} = insertvalue {i8, i64} undef, i8 0, 0",
+            [tag_reg]
+        );
+        return Emitted {
+            reg: tag_reg,
+            ty: "{i8, i64}",
+            next_reg: ctx.next_reg + 1,
+            instrs: [mk_tag],
+            last_label: "",
+        }
+    }
+
+    // Regular fn call: emit each arg using its own emitted type so
+    // Option-typed args pass as `{i8, i64} %r` rather than `i64 %r`.
     let accum_regs: ref List[String] = [];
+    let accum_tys: ref List[String] = [];
     let accum_instrs: ref List[String] = [];
     let cur: ref Int = ctx.next_reg;
     for a in args {
@@ -608,10 +743,19 @@ partial fn emit_fn_call(name: String, args: List[Value], ctx: EmitCtx) -> Emitte
         cur = e.next_reg;
         for line in e.instrs { accum_instrs.push(line) }
         accum_regs.push(e.reg);
+        accum_tys.push(e.ty);
     }
-    let arg_str: String = accum_regs
-        .map(|r: String| format("i64 {}", [r]))
-        .join(", ");
+    let arg_parts: ref List[String] = [];
+    let n_args: Int = accum_regs.len();
+    let ai: ref Int = 0;
+    while ai < n_args {
+        let idx: Int = ai;
+        let r: String = accum_regs.get(idx).unwrap_or("");
+        let t: String = accum_tys.get(idx).unwrap_or("i64");
+        arg_parts.push(format("{} {}", [t, r]));
+        ai = ai + 1;
+    }
+    let arg_str: String = arg_parts.join(", ");
     let call_reg: String = format("%t{}", [cur.to_string()]);
     let call_line: String = format(
         "  {} = call i64 @{}({})",
@@ -902,7 +1046,8 @@ partial fn initial_ctx_from_params(params: List[Value]) -> EmitCtx {
     for p in params {
         let n: String = jstr(p, "name");
         let reg: String = format("%{}", [n]);
-        m.insert(n, LocalRef { reg: reg, ty: "i64", is_ref: false })
+        let ty: String = tir_ty_to_llvm(jget(p, "ty"));
+        m.insert(n, LocalRef { reg: reg, ty: ty, is_ref: false })
     }
     EmitCtx { next_reg: 0, locals: m }
 }
@@ -915,7 +1060,10 @@ partial fn emit_fn_def(f: Value) -> String {
     // List values on `.map()`, so a single named binding used twice is
     // rejected downstream. Re-reading the JSON is cheap and avoids a clone.
     let param_str: String = jarr(f, "params")
-        .map(|p: Value| format("i64 %{}", [jstr(p, "name")]))
+        .map(|p: Value| format(
+            "{} %{}",
+            [tir_ty_to_llvm(jget(p, "ty")), jstr(p, "name")]
+        ))
         .join(", ");
     let ctx: EmitCtx = initial_ctx_from_params(jarr(f, "params"));
     let out: StmtOut = emit_body(jget(f, "body"), ctx);

@@ -1,0 +1,13 @@
+// A1g: match on Option[Int] — Some variant with payload binding.
+// Expected stdout: 43
+
+fn describe(o: Option[Int]) -> Int {
+    match o {
+        Some(x) => x + 1,
+        None => 0,
+    }
+}
+
+fn main() -> Int {
+    describe(Some(42))
+}

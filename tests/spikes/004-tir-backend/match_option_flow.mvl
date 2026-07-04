@@ -1,0 +1,14 @@
+// A1g: Option flows through multiple fns; caller-constructed None
+// takes the None arm, Ident-outer param `bonus` reads from arm scope.
+// Expected stdout: 100
+
+fn score(o: Option[Int], bonus: Int) -> Int {
+    match o {
+        Some(v) => v + bonus,
+        None => bonus,
+    }
+}
+
+fn main() -> Int {
+    score(None, 100)
+}

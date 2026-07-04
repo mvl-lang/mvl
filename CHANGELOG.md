@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.231.0] - 2026-07-04
+
+### Added
+
+- **`rust_backend`: MVL-hosted LLVM Option[Int] match + Some/None constructors** (#1118, Phase A1g) — Option[Int] now works end-to-end: lowered to `{i8, i64}` tagged struct (tag byte + payload word). `Some(x)` and `None` construct via `insertvalue` (tag-set + payload-set, or tag-set-only). Match dispatch extracts tag once, branches per arm, extracts payload for `Some(name)` pattern and binds in arm-locals. Enables fn params/args of type Option[Int]; arms can read outer scope + payload simultaneously. Changes: `tir_ty_to_llvm` (TIR ty → LLVM ty), `is_aggregate_ty` (enum discriminator), revised `emit_fn_call` (per-arg type tracking), revised `emit_expr` Var branch (bare `None` as FnCall-less constructor), revised `emit_match` (tag extraction, variant-tag dispatch, payload `extractvalue`). 3 new spike tests (`match_option_some` = payload binding, `match_option_none` = None arm, `match_option_flow` = Option + outer param). Full corpus 25/25 passing. `make test-mvl` clean (98 tests). Emitter grew 1004 → 1152 LOC (+148).
+
 ## [0.230.0] - 2026-07-04
 
 ### Added

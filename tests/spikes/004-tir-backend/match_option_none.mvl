@@ -1,0 +1,13 @@
+// A1g: match on Option[Int] — None variant.
+// Expected stdout: 99
+
+fn describe(o: Option[Int]) -> Int {
+    match o {
+        Some(x) => x,
+        None => 99,
+    }
+}
+
+fn main() -> Int {
+    describe(None)
+}
