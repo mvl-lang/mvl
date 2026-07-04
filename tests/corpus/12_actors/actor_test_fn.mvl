@@ -1,4 +1,5 @@
 // actor_test_fn.mvl — effect annotations on test fn (#1500)
+// corpus:expect-warnings — actor state struct visibility mismatch with pub constructor; tracked in #1674
 //
 // Verifies that test fn declarations accept ! Effect annotations and that
 // the effect propagation checker enforces them correctly.
