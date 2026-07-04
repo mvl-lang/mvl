@@ -533,9 +533,11 @@ impl RustEmitter {
         // `unused_imports` is scoped per-line on the wildcard prelude imports
         // below (rather than crate-wide) so real unused `use` statements in
         // user code still produce a warning (#1657).
-        self.line(
-            "#![allow(dead_code, unused_parens, unpredictable_function_pointer_comparisons)]",
-        );
+        // `unpredictable_function_pointer_comparisons` removed as part of
+        // ADR-0051 (#1660) — the checker now rejects `==` / `!=` on any
+        // value type that transitively contains a function-typed field,
+        // so no comparison that would trip the lint can reach codegen.
+        self.line("#![allow(dead_code, unused_parens)]");
         self.blank();
 
         let prelude_has_extern = prelude_tirs
