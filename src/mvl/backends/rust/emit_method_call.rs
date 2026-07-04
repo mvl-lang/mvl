@@ -4,6 +4,7 @@
 //! Emit Rust method calls from MVL [`TirExprKind::MethodCall`] nodes.
 
 use super::emitter::RustEmitter;
+use crate::mvl::backends::rust::emit_exprs::Prec;
 use crate::mvl::backends::rust::emit_types::emit_label;
 use crate::mvl::backends::{
     is_stdlib_method, is_stdlib_ufcs_method, rust_emit_by_name, STRING_LABEL_PRESERVING_METHODS,
@@ -348,13 +349,18 @@ impl RustEmitter {
                 self.emit_expr(receiver);
                 self.push(" == 0)");
             }
-            // to_int() on Byte (u8→i64) or Float (f64→i64, truncating)
+            // to_int() on Byte (u8→i64) or Float (f64→i64, truncating).
+            // Outer wrap is structurally required — Rust interprets
+            // `X as i64 < n` as `X as i64<n>` (generic args), not a
+            // comparison (#1684).
             "to_int" if args.is_empty() => {
                 self.push("(");
-                self.emit_expr(receiver);
+                self.emit_operand_left(receiver, Prec::As);
                 self.push(" as i64)");
             }
-            // to_float() on Int (i64→f64); i64::from() unwraps IFC labels transparently
+            // to_float() on Int (i64→f64); i64::from() unwraps IFC labels
+            // transparently.  Outer wrap kept for the same `<` ambiguity
+            // reason as `to_int` above.
             "to_float" if args.is_empty() => {
                 self.push("(i64::from(");
                 self.emit_expr(receiver);
@@ -749,11 +755,18 @@ impl RustEmitter {
     }
 
     /// Emit `receiver.len()` as direct Rust using the receiver's checker type (#554).
+    ///
+    /// The outer `(...)` wraps around each `EXPR as i64` are structurally
+    /// required, not redundant: without them, MVL code like
+    /// `while s.len() < n` transpiles to `... as i64 < n`, which Rust
+    /// interprets as `... as i64<n>` (generic arguments) rather than a
+    /// comparison.  Keep the wrap; see #1684 for the analysis attempt
+    /// that discovered this.
     fn emit_len_direct(&mut self, receiver: &TirExpr, ty: Option<&Ty>) {
         match ty {
             Some(Ty::String) => {
                 self.push("(");
-                self.emit_expr(receiver);
+                self.emit_operand_left(receiver, Prec::Suffix);
                 self.push(".chars().count() as i64)");
             }
             Some(Ty::Labeled(label, inner)) => {
@@ -762,13 +775,19 @@ impl RustEmitter {
                     Ty::String => ".chars().count()",
                     _ => ".len()",
                 };
+                // `Label((&(receiver)).0<method> as i64)` — the outer
+                // `(&(receiver))` wrap is structurally required: without
+                // it, `.0<method>` would bind to the receiver rather
+                // than the borrowed reference (Rust's `.` binds tighter
+                // than `&`).  Not a candidate for #1684's redundant-paren
+                // pass.
                 self.push(&format!("{label_name}((&("));
                 self.emit_expr(receiver);
                 self.push(&format!(")).0{method} as i64)"));
             }
             _ => {
                 self.push("(");
-                self.emit_expr(receiver);
+                self.emit_operand_left(receiver, Prec::Suffix);
                 self.push(".len() as i64)");
             }
         }
