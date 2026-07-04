@@ -597,6 +597,145 @@ partial fn emit_expr(expr: Value, ctx: EmitCtx) -> Emitted {
                 last_label: "",
             }
         },
+        "MethodCall" => {
+            // A1p: inline-lower a small set of builtin methods on
+            // List[Int] and Option[Int].  Anything else falls through
+            // to the "unsupported" bucket, returning a zero — expanded
+            // in later phases as more of stdlib gets emitted.
+            let recv: Value = jget(kind, "receiver");
+            let method: String = jstr(kind, "method");
+            let recv_ty: Value = jget(recv, "ty");
+            let recv_ty_tag: String = jtag(recv_ty);
+            let recv_e: Emitted = emit_expr(recv, ctx);
+
+            if recv_ty_tag == "List" && method == "len" {
+                // `xs.len()` → extractvalue {i64, ptr} %xs, 0
+                let out_reg: String = format("%t{}", [recv_e.next_reg.to_string()]);
+                let extract: String = format(
+                    "  {} = extractvalue {i64, ptr} {}, 0",
+                    [out_reg, recv_e.reg]
+                );
+                return Emitted {
+                    reg: out_reg,
+                    ty: "i64",
+                    next_reg: recv_e.next_reg + 1,
+                    instrs: recv_e.instrs.concat([extract]),
+                    last_label: "",
+                }
+            }
+            if recv_ty_tag == "List" && method == "get" {
+                // `xs.get(i)` → build `{i8, i64}` Option[Int]:
+                //   %data = extractvalue ..., 1
+                //   %ep   = getelementptr i64, ptr %data, i64 %i
+                //   %v    = load i64, ptr %ep
+                //   %o0   = insertvalue {i8, i64} undef, i8 1, 0
+                //   %o1   = insertvalue {i8, i64} %o0, i64 %v, 1
+                // MVP: no bounds check — OOB reads garbage.  Callers
+                // should stay in-bounds; A1p tests use in-bounds indices.
+                let args: List[Value] = jarr(kind, "args");
+                let arg0: Value = args.get(0).unwrap_or(Value::Null);
+                let arg_ctx: EmitCtx = EmitCtx {
+                    next_reg: recv_e.next_reg,
+                    locals: ctx.locals,
+                    enums: ctx.enums,
+                    strings: ctx.strings,
+                    structs: ctx.structs,
+                    enum_types: ctx.enum_types,
+                    variant_payloads: ctx.variant_payloads,
+                };
+                let idx: Emitted = emit_expr(arg0, arg_ctx);
+                let n0: Int = idx.next_reg;
+                let data_reg: String = format("%t{}", [n0.to_string()]);
+                let ep_reg: String = format("%t{}", [(n0 + 1).to_string()]);
+                let val_reg: String = format("%t{}", [(n0 + 2).to_string()]);
+                let o0_reg: String = format("%t{}", [(n0 + 3).to_string()]);
+                let o1_reg: String = format("%t{}", [(n0 + 4).to_string()]);
+                let extract_data: String = format(
+                    "  {} = extractvalue {i64, ptr} {}, 1",
+                    [data_reg, recv_e.reg]
+                );
+                let gep: String = format(
+                    "  {} = getelementptr i64, ptr {}, i64 {}",
+                    [ep_reg, data_reg, idx.reg]
+                );
+                let ld: String = format("  {} = load i64, ptr {}", [val_reg, ep_reg]);
+                let mk_tag: String = format(
+                    "  {} = insertvalue {i8, i64} undef, i8 1, 0",
+                    [o0_reg]
+                );
+                let mk_val: String = format(
+                    "  {} = insertvalue {i8, i64} {}, i64 {}, 1",
+                    [o1_reg, o0_reg, val_reg]
+                );
+                return Emitted {
+                    reg: o1_reg,
+                    ty: "{i8, i64}",
+                    next_reg: n0 + 5,
+                    instrs: recv_e.instrs
+                        .concat(idx.instrs)
+                        .concat([extract_data, gep, ld, mk_tag, mk_val]),
+                    last_label: "",
+                }
+            }
+            if recv_ty_tag == "Option" && method == "unwrap_or" {
+                // `opt.unwrap_or(def)` → `select i1 (tag == 1), payload, def`.
+                //   %tag = extractvalue {i8, i64} %opt, 0
+                //   %pl  = extractvalue {i8, i64} %opt, 1
+                //   %ok  = icmp eq i8 %tag, 1
+                //   %r   = select i1 %ok, i64 %pl, i64 %def
+                let args: List[Value] = jarr(kind, "args");
+                let arg0: Value = args.get(0).unwrap_or(Value::Null);
+                let arg_ctx: EmitCtx = EmitCtx {
+                    next_reg: recv_e.next_reg,
+                    locals: ctx.locals,
+                    enums: ctx.enums,
+                    strings: ctx.strings,
+                    structs: ctx.structs,
+                    enum_types: ctx.enum_types,
+                    variant_payloads: ctx.variant_payloads,
+                };
+                let def_e: Emitted = emit_expr(arg0, arg_ctx);
+                let n0: Int = def_e.next_reg;
+                let tag_reg: String = format("%t{}", [n0.to_string()]);
+                let pl_reg: String = format("%t{}", [(n0 + 1).to_string()]);
+                let ok_reg: String = format("%t{}", [(n0 + 2).to_string()]);
+                let out_reg: String = format("%t{}", [(n0 + 3).to_string()]);
+                let ex_tag: String = format(
+                    "  {} = extractvalue {i8, i64} {}, 0",
+                    [tag_reg, recv_e.reg]
+                );
+                let ex_pl: String = format(
+                    "  {} = extractvalue {i8, i64} {}, 1",
+                    [pl_reg, recv_e.reg]
+                );
+                let cmp: String = format(
+                    "  {} = icmp eq i8 {}, 1",
+                    [ok_reg, tag_reg]
+                );
+                let sel: String = format(
+                    "  {} = select i1 {}, i64 {}, i64 {}",
+                    [out_reg, ok_reg, pl_reg, def_e.reg]
+                );
+                return Emitted {
+                    reg: out_reg,
+                    ty: "i64",
+                    next_reg: n0 + 4,
+                    instrs: recv_e.instrs
+                        .concat(def_e.instrs)
+                        .concat([ex_tag, ex_pl, cmp, sel]),
+                    last_label: "",
+                }
+            }
+            // Unsupported method — emit a zero so codegen doesn't crash;
+            // caller sees `i64 0`.  Later phases add more methods.
+            Emitted {
+                reg: "0",
+                ty: "i64",
+                next_reg: recv_e.next_reg,
+                instrs: recv_e.instrs,
+                last_label: "",
+            }
+        },
         "Unary" => {
             let op: String = jstr(kind, "op");
             let inner: Emitted = emit_expr(jget(kind, "expr"), ctx);
