@@ -1,4 +1,5 @@
 // Corpus: select on behaviors with timeout (Spec 015 Req 9)
+// corpus:expect-warnings — unused `let` bindings; tracked in #1678
 //
 // The `select` expression waits for the first of several pending actor
 // messages or a timeout to fire. It evaluates to Unit.

@@ -55,6 +55,7 @@
 use super::emitter::RustEmitter;
 use crate::mvl::backends::rust::emit_types::emit_ty;
 use crate::mvl::backends::rust::last_use::compute_last_uses;
+use crate::mvl::backends::rust::mut_analysis::compute_unused_param_names;
 use crate::mvl::ir::{MailboxConfig, MailboxPolicy, TirActorDecl, TirStmt};
 
 /// Convert a `snake_case` name to `PascalCase` for Rust enum variant names.
@@ -218,10 +219,23 @@ impl RustEmitter {
             self.line(&format!("impl {state_name} {{"));
             self.push_indent();
             for m in &ad.methods {
+                // Prefix unused actor-method parameters with `_` — Rust idiom
+                // for "documented but unused", suppresses `unused_variables`
+                // warnings without needing a crate-level `#![allow]` (#1658).
+                // Actor methods don't carry `requires`/`ensures`, so pass
+                // empty slices.
+                let unused_params = compute_unused_param_names(&m.body, &m.params, &[], &[]);
                 let param_strs: Vec<String> = m
                     .params
                     .iter()
-                    .map(|p| format!("{}: {}", p.name, emit_ty(&p.ty)))
+                    .map(|p| {
+                        let name = if unused_params.contains(&p.name) && !p.name.starts_with('_') {
+                            format!("_{}", p.name)
+                        } else {
+                            p.name.clone()
+                        };
+                        format!("{}: {}", name, emit_ty(&p.ty))
+                    })
                     .collect();
                 let params_sig = if param_strs.is_empty() {
                     String::new()
