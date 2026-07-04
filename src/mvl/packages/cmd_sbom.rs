@@ -239,7 +239,11 @@ fn collect_transitive_native(
         }
         for (n, spec) in &pkg_manifest.c_native {
             index
-                .entry((n.clone(), spec.version.clone(), sbom::TransitiveKind::CNative))
+                .entry((
+                    n.clone(),
+                    spec.version.clone(),
+                    sbom::TransitiveKind::CNative,
+                ))
                 .or_default()
                 .push(pkg_name.clone());
         }
@@ -247,9 +251,7 @@ fn collect_transitive_native(
     index
         .into_iter()
         .filter(|((n, v, kind), _)| match kind {
-            sbom::TransitiveKind::Native => {
-                manifest.native.get(n).is_none_or(|proj_v| proj_v != v)
-            }
+            sbom::TransitiveKind::Native => manifest.native.get(n).is_none_or(|proj_v| proj_v != v),
             sbom::TransitiveKind::CNative => manifest
                 .c_native
                 .get(n)
@@ -316,11 +318,7 @@ mod tests {
     use crate::mvl::packages::manifest::{CNativeSpec, PackageInfo};
     use std::collections::HashMap;
 
-    fn mk_manifest(
-        name: &str,
-        native: Vec<(&str, &str)>,
-        c_native: Vec<(&str, &str)>,
-    ) -> Manifest {
+    fn mk_manifest(name: &str, native: Vec<(&str, &str)>, c_native: Vec<(&str, &str)>) -> Manifest {
         Manifest {
             package: PackageInfo {
                 name: name.to_string(),
@@ -357,7 +355,11 @@ mod tests {
         let project = mk_manifest("proj", vec![], vec![]);
         let pkgs = vec![(
             "pkg-sqlite".to_string(),
-            mk_manifest("pkg-sqlite", vec![("rusqlite", "0.31")], vec![("libssl", "3.0")]),
+            mk_manifest(
+                "pkg-sqlite",
+                vec![("rusqlite", "0.31")],
+                vec![("libssl", "3.0")],
+            ),
         )];
         let out = collect_transitive_native(&project, &pkgs);
         assert_eq!(out.len(), 2);
@@ -370,8 +372,14 @@ mod tests {
     fn collect_transitive_dedups_by_name_and_version() {
         let project = mk_manifest("proj", vec![], vec![]);
         let pkgs = vec![
-            ("pkg-a".to_string(), mk_manifest("pkg-a", vec![("rusqlite", "0.31")], vec![])),
-            ("pkg-b".to_string(), mk_manifest("pkg-b", vec![("rusqlite", "0.31")], vec![])),
+            (
+                "pkg-a".to_string(),
+                mk_manifest("pkg-a", vec![("rusqlite", "0.31")], vec![]),
+            ),
+            (
+                "pkg-b".to_string(),
+                mk_manifest("pkg-b", vec![("rusqlite", "0.31")], vec![]),
+            ),
         ];
         let out = collect_transitive_native(&project, &pkgs);
         assert_eq!(out.len(), 1);
@@ -383,8 +391,14 @@ mod tests {
     fn collect_transitive_different_versions_kept_separate() {
         let project = mk_manifest("proj", vec![], vec![]);
         let pkgs = vec![
-            ("pkg-a".to_string(), mk_manifest("pkg-a", vec![("rusqlite", "0.31")], vec![])),
-            ("pkg-b".to_string(), mk_manifest("pkg-b", vec![("rusqlite", "0.32")], vec![])),
+            (
+                "pkg-a".to_string(),
+                mk_manifest("pkg-a", vec![("rusqlite", "0.31")], vec![]),
+            ),
+            (
+                "pkg-b".to_string(),
+                mk_manifest("pkg-b", vec![("rusqlite", "0.32")], vec![]),
+            ),
         ];
         let out = collect_transitive_native(&project, &pkgs);
         assert_eq!(out.len(), 2);

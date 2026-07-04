@@ -95,10 +95,22 @@ pub fn generate(
     transitive: &[TransitiveNativeDep],
 ) -> String {
     match format {
-        SbomFormat::CycloneDx => {
-            cyclonedx(manifest, lock, component_type, licenses, sources, transitive)
-        }
-        SbomFormat::Spdx => spdx(manifest, lock, component_type, licenses, sources, transitive),
+        SbomFormat::CycloneDx => cyclonedx(
+            manifest,
+            lock,
+            component_type,
+            licenses,
+            sources,
+            transitive,
+        ),
+        SbomFormat::Spdx => spdx(
+            manifest,
+            lock,
+            component_type,
+            licenses,
+            sources,
+            transitive,
+        ),
     }
 }
 
