@@ -1,5 +1,4 @@
 // actor_pub_test_fn.mvl — pub test fn on actors (#1506)
-// corpus:expect-warnings — actor state struct visibility mismatch with pub constructor; tracked in #1674
 //
 // Verifies that `pub test fn` declarations inside actor bodies:
 //   - are accepted by the parser and type checker

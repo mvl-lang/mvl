@@ -1,5 +1,4 @@
 // Corpus: Supervisor actor with restart strategies (Phase 9, #1128, #1221)
-// corpus:expect-warnings — actor state struct visibility mismatch with pub constructor; tracked in #1674
 //
 // Demonstrates:
 // - Supervisor actor with traps_exit + on_exit wiring
