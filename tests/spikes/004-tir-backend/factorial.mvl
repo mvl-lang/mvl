@@ -1,0 +1,16 @@
+// A1d: iterative factorial using while + ref.
+// Expected stdout: 120
+
+fn factorial(n: Int) -> Int {
+    let result: ref Int = 1;
+    let i: ref Int = 2;
+    while i <= n decreases (n - i) {
+        result = result * i;
+        i = i + 1;
+    }
+    result
+}
+
+fn main() -> Int {
+    factorial(5)
+}

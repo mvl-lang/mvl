@@ -1,0 +1,15 @@
+// A1d: if-statement inside while body. Sums even numbers 0..10.
+// Expected stdout: 20
+
+fn main() -> Int {
+    let sum: ref Int = 0;
+    let i: ref Int = 0;
+    while i < 10 decreases (10 - i) {
+        if i % 2 == 0 {
+            sum = sum + i;
+        } else {
+        }
+        i = i + 1;
+    }
+    sum
+}

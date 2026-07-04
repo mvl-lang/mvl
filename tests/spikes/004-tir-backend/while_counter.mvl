@@ -1,0 +1,13 @@
+// A1d: while loop with ref-mutable counter.
+// Sums 0..10 = 45.
+// Expected stdout: 45
+
+fn main() -> Int {
+    let sum: ref Int = 0;
+    let i: ref Int = 0;
+    while i < 10 decreases (10 - i) {
+        sum = sum + i;
+        i = i + 1;
+    }
+    sum
+}

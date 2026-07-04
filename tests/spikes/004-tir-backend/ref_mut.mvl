@@ -1,0 +1,8 @@
+// A1d: ref-mutable local + assign.
+// Expected stdout: 42
+
+fn main() -> Int {
+    let x: ref Int = 0;
+    x = 42;
+    x
+}
