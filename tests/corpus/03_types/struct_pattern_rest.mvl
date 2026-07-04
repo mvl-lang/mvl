@@ -1,5 +1,4 @@
 // Corpus: struct pattern rest (..) — ignore remaining fields (#1356)
-// corpus:expect-warnings — emitter emits `let Point { x: x, .. } = ..` instead of `let Point { x, .. } = ..`; tracked in #1673
 
 type Point = struct {
     x: Int,
