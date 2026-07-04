@@ -1,0 +1,13 @@
+// A1h: match on Result[Int, Int] — Ok variant with payload binding.
+// Expected stdout: 7
+
+fn check(r: Result[Int, Int]) -> Int {
+    match r {
+        Ok(x) => x + 1,
+        Err(e) => e,
+    }
+}
+
+fn main() -> Int {
+    check(Ok(6))
+}
