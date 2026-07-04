@@ -139,6 +139,47 @@ structs; the checker guarantees no such comparison ever reaches Rust.
 3. Remove `unpredictable_function_pointer_comparisons` from the
    `#![allow(...)]` header in `src/mvl/backends/rust/emitter.rs`.
 
+## Relation to language definition
+
+### Eleven Requirements (ADR-0001)
+
+- **Req 1 (Type Safety) — strengthens.**  Adds a new type-checker rule
+  that rejects a class of comparison whose result would be
+  implementation-defined at runtime.  The rule extends the existing
+  "operator requires trait bound" machinery (`Eq` constraint on type
+  parameters) to concrete struct types that transitively hold fn
+  values.
+- **Req 3 (Totality) — consistent with.**  Total functions were
+  already forbidden from depending on non-total operations; adding
+  a "cannot compare" case for fn-field structs sits naturally
+  alongside that.
+- All other requirements — unchanged.
+
+### Design Principles (README / CLAUDE.md)
+
+- **Explicit over implicit — strengthens.**  Function-pointer equality
+  is implementation-defined in Rust; MVL now surfaces that ambiguity
+  at check time with a source-level diagnostic rather than hiding it
+  behind a crate-level allow.
+- **One way to do it — consistent with.**  There is no MVL syntax
+  that will silently produce a fn-pointer comparison after this
+  decision.  Users who want value-identity semantics for
+  callback-holding structs must build them explicitly (e.g. by
+  storing an identifier alongside the callback).
+- **The signature IS the threat model — strengthens.**  A struct
+  containing a callback advertises "identity depends on the
+  callback" — the checker now agrees.
+- Other principles — consistent with.
+
+### Specifications
+
+No spec files under `.openspec/specs/` are affected.  The behaviour
+change is confined to the type checker's binary-operator rules
+(001-type-system Req 9 machinery) and does not add or modify any
+external requirement.
+
+---
+
 ## References
 
 - Umbrella audit: #1656
