@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.234.0] - 2026-07-04
+
+### Added
+
+- **`rust_backend`: MVL-hosted LLVM for-in-range loops** (#1118, Phase A1j) — Adds `for i in range(lo, hi) { body }` lowering. Range is inclusive-lower, exclusive-upper. Lowered to a while-loop shape with an alloca'd counter that reuses the ref-local infrastructure from A1d: loop var is alloca'd, body reads auto-emit `load`, increment stores back. New `"For"` case in `emit_stmt` detects `iter` shape (FnCall named `range` with 2 args), emits alloca+init-store, binds loop var as a ref-local in body ctx, and produces the head/body/exit block structure with `slt` comparison. Pivoted from A1j-guards (checker-only `RefExpr`, not in TIR runtime dispatch). 2 new spike tests (`for_sum` = `sum_range(1, 10)` → 45, `for_count` = count odd i in [0, 10) → 5). Full corpus 31/31 passing. `make test-mvl` clean (98 tests). Emitter grew 1230 → 1351 LOC (+121).
+
 ## [0.233.0] - 2026-07-04
 
 ### Added
