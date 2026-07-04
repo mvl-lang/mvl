@@ -1,0 +1,7 @@
+// A1p: List[Int]::get(i) — Option[T] result.
+// Expected stdout: 30  (xs.get(2) = Some(30))
+
+fn main() -> Int {
+    let xs: List[Int] = [10, 20, 30, 40];
+    xs.get(2).unwrap_or(0)
+}
