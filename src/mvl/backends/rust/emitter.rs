@@ -533,7 +533,9 @@ impl RustEmitter {
         // `unused_imports` is scoped per-line on the wildcard prelude imports
         // below (rather than crate-wide) so real unused `use` statements in
         // user code still produce a warning (#1657).
-        self.line("#![allow(dead_code, unused_variables, unused_parens, unpredictable_function_pointer_comparisons)]");
+        self.line(
+            "#![allow(dead_code, unused_parens, unpredictable_function_pointer_comparisons)]",
+        );
         self.blank();
 
         let prelude_has_extern = prelude_tirs

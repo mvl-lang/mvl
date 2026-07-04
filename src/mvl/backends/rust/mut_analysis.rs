@@ -47,7 +47,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::mvl::ir::{
-    LValue, Pattern, TirBlock, TirElseBranch, TirExpr, TirExprKind, TirMatchBody, TirParam, TirStmt,
+    LValue, Pattern, RefExpr, TirBlock, TirElseBranch, TirExpr, TirExprKind, TirMatchBody,
+    TirParam, TirStmt,
 };
 use crate::mvl::parser::lexer::Span;
 
@@ -87,6 +88,7 @@ pub fn compute_readonly_param_names(body: &TirBlock, params: &[TirParam]) -> Has
         tracker.bindings.push(BindingInfo {
             span: p.span,
             mutated: false,
+            referenced: false,
         });
         if let Some(top) = tracker.scopes.last_mut() {
             top.insert(p.name.clone(), idx);
@@ -103,12 +105,66 @@ pub fn compute_readonly_param_names(body: &TirBlock, params: &[TirParam]) -> Has
         .collect()
 }
 
+/// Return the set of parameter names that are never *referenced* within
+/// `body`, `requires`, or `ensures` — i.e. neither read nor written nor
+/// mentioned in any pre/post condition.  Used by
+/// [`emit_functions::emit_tir_params`] to prefix unreferenced parameter
+/// names with `_` in emitted Rust (Rust idiom for "documented but unused"),
+/// removing the `unused_variables` warnings that previously required a
+/// crate-level `#![allow]` (#1658).
+///
+/// Requires/ensures are walked as reads because they are emitted as
+/// `assert!` calls in the generated body — a param mentioned only in a
+/// contract is still referenced from the emitted Rust's point of view.
+pub fn compute_unused_param_names(
+    body: &TirBlock,
+    params: &[TirParam],
+    requires: &[RefExpr],
+    ensures: &[RefExpr],
+) -> HashSet<String> {
+    let mut tracker = MutTracker::default();
+    tracker.enter_scope();
+    let mut param_indices: Vec<(String, usize)> = Vec::with_capacity(params.len());
+    for p in params {
+        let idx = tracker.bindings.len();
+        tracker.bindings.push(BindingInfo {
+            span: p.span,
+            mutated: false,
+            referenced: false,
+        });
+        if let Some(top) = tracker.scopes.last_mut() {
+            top.insert(p.name.clone(), idx);
+        }
+        param_indices.push((p.name.clone(), idx));
+    }
+    tracker.visit_block(body);
+    for pred in requires {
+        tracker.visit_refexpr(pred);
+    }
+    for pred in ensures {
+        tracker.visit_refexpr(pred);
+    }
+    tracker.exit_scope();
+
+    param_indices
+        .into_iter()
+        .filter(|(_, idx)| !tracker.bindings[*idx].referenced)
+        .map(|(name, _)| name)
+        .collect()
+}
+
 // ── Internal tracker ─────────────────────────────────────────────────────────
 
 #[derive(Debug)]
 struct BindingInfo {
     span: Span,
     mutated: bool,
+    /// True when the name has been read, written, method-called, captured
+    /// in a lambda, or referenced in a pre/post condition — anything that
+    /// makes the corresponding Rust parameter *used* from `rustc`'s point
+    /// of view.  Distinct from `mutated`: every mutation is a reference,
+    /// but not every reference is a mutation.
+    referenced: bool,
 }
 
 #[derive(Default)]
@@ -142,6 +198,7 @@ impl MutTracker {
             self.bindings.push(BindingInfo {
                 span: *span,
                 mutated: false,
+                referenced: false,
             });
             if let Some(top) = self.scopes.last_mut() {
                 top.insert(name.clone(), idx);
@@ -161,7 +218,17 @@ impl MutTracker {
 
     fn mark_mutated(&mut self, name: &str) {
         if let Some(idx) = self.resolve(name) {
+            // Mutation implies reference.
             self.bindings[idx].mutated = true;
+            self.bindings[idx].referenced = true;
+        }
+    }
+
+    /// Mark `name` as referenced (read, method-called, captured, or
+    /// mentioned in a pre/post condition).  Does not affect `mutated`.
+    fn mark_referenced(&mut self, name: &str) {
+        if let Some(idx) = self.resolve(name) {
+            self.bindings[idx].referenced = true;
         }
     }
 
@@ -241,6 +308,35 @@ impl MutTracker {
         }
     }
 
+    /// Walk a refinement/contract predicate (`requires` or `ensures`),
+    /// marking any resolved `Ident` reference as *referenced* (not
+    /// mutated).  Emitted `assert!` calls preserve these references in
+    /// the generated body, so a param mentioned only in a contract must
+    /// not be `_`-prefixed in the emitted signature (#1658).
+    fn visit_refexpr(&mut self, expr: &RefExpr) {
+        match expr {
+            RefExpr::Ident { name, .. } => self.mark_referenced(name),
+            RefExpr::Len { ident, .. } => self.mark_referenced(ident),
+            RefExpr::LogicOp { left, right, .. }
+            | RefExpr::Compare { left, right, .. }
+            | RefExpr::ArithOp { left, right, .. } => {
+                self.visit_refexpr(left);
+                self.visit_refexpr(right);
+            }
+            RefExpr::Not { inner, .. }
+            | RefExpr::Grouped { inner, .. }
+            | RefExpr::Old { inner, .. } => self.visit_refexpr(inner),
+            RefExpr::FieldAccess { object, .. } => self.visit_refexpr(object),
+            RefExpr::Forall { body, .. } | RefExpr::Exists { body, .. } => {
+                // Quantifier body may reference outer names (the quantified
+                // variable itself is out of the tracker's scope, so
+                // `resolve` will simply miss it — no false positive).
+                self.visit_refexpr(body);
+            }
+            RefExpr::Integer { .. } | RefExpr::Float { .. } | RefExpr::Bool { .. } => {}
+        }
+    }
+
     /// Both `Ident` and `Field { base: Ident(name), ... }` writes count as a
     /// mutation of the outermost binding name.
     fn visit_lvalue_as_target(&mut self, lv: &LValue) {
@@ -252,8 +348,10 @@ impl MutTracker {
 
     fn visit_expr(&mut self, expr: &TirExpr) {
         match &expr.kind {
-            TirExprKind::Var(_) => {
-                // A pure read; not a mutation, no scope work needed.
+            TirExprKind::Var(name) => {
+                // Pure read: not a mutation, but is a reference — needed
+                // for `compute_unused_param_names` (#1658).
+                self.mark_referenced(name);
             }
             TirExprKind::MethodCall { receiver, args, .. } => {
                 // The receiver is treated as a potential mutation site: MVL
@@ -269,7 +367,12 @@ impl MutTracker {
                 }
             }
             TirExprKind::FieldAccess { expr, .. } => self.visit_expr(expr),
-            TirExprKind::FnCall { args, .. } => {
+            TirExprKind::FnCall { name, args, .. } => {
+                // `name` may resolve to a fn-typed parameter (e.g. `f(x)`
+                // where `f: fn(T) -> U` is a parameter).  `mark_referenced`
+                // is a no-op when `name` isn't a local binding — global
+                // function names simply miss the resolver.
+                self.mark_referenced(name);
                 for a in args {
                     self.visit_expr(a);
                 }
@@ -334,8 +437,19 @@ struct NameCollector {
 
 impl<'a> crate::mvl::ir::visit::Visit<'a> for NameCollector {
     fn visit_tir_expr(&mut self, e: &'a TirExpr) {
-        if let TirExprKind::Var(name) = &e.kind {
-            self.names.insert(name.clone());
+        match &e.kind {
+            TirExprKind::Var(name) => {
+                self.names.insert(name.clone());
+            }
+            // The shared `walk_tir_expr` treats `FieldAccess` as a leaf
+            // (see `ir/visit.rs:79`) — recurse manually so `obj.field`
+            // inside a lambda body still marks the outer `obj` binding
+            // as captured (#1658, snake_game regression).
+            TirExprKind::FieldAccess { expr, .. } => {
+                self.visit_tir_expr(expr);
+                return;
+            }
+            _ => {}
         }
         crate::mvl::ir::visit::walk_tir_expr(self, e);
     }
