@@ -15,13 +15,15 @@
 //! | 3     | `ffi_bridges` — extracted from `extern "rust"` / `extern "c"` blocks |
 //! | 5     | `assurance.extern_count`, `total_functions`, `extern_ratio`, `requirements_proven` |
 //! | 6     | `licenses` — deduplicated from `mvl.lock` package metadata |
+//! | 7     | `native_deps` — project `[native]`/`[c-native]` + transitive deps from locked packages (#1661) |
 //!
 //! The override is prepended to `stdlib_prelude_progs` before transpilation.
 //! The emitter's "first wins" prelude deduplication makes it shadow the stub
 //! from `std/runtime.mvl` transparently — no emitter changes required.
 
 use crate::mvl::packages::lock::{LockFile, LockedPackage};
-use crate::mvl::packages::manifest::Manifest as PkgManifest;
+use crate::mvl::packages::manifest::{load_cached_manifest_required, Manifest as PkgManifest};
+use crate::mvl::packages::sbom::{self, TransitiveKind, TransitiveNativeDep};
 use crate::mvl::parser::ast::{Decl, Program};
 use crate::mvl::parser::Parser;
 use std::path::Path;
@@ -69,6 +71,7 @@ pub fn load_and_generate(
     let lockfile = LockFile::load_or_empty(project_root);
     let bridges = collect_ffi_bridges(all_progs);
     let (extern_count, total_functions) = collect_fn_counts(all_progs);
+    let native_deps = collect_native_deps(&pkg_manifest, &lockfile.packages)?;
 
     let mvl_version = env!("CARGO_PKG_VERSION");
     let runtime_version = env!("MVL_RUNTIME_VERSION");
@@ -96,7 +99,7 @@ pub fn load_and_generate(
         total_functions,
         requirements_proven,
     };
-    let src = generate_manifest_mvl(&meta, &lockfile.packages, &bridges);
+    let src = generate_manifest_mvl(&meta, &lockfile.packages, &bridges, &native_deps);
 
     let (mut parser, _) = Parser::new(&src);
     let prog = parser.parse_program();
@@ -164,6 +167,65 @@ pub fn collect_fn_counts(progs: &[Program]) -> (usize, usize) {
     (extern_count, fn_count + extern_count)
 }
 
+/// Collect the full flat native-dep list for the embedded Manifest (Phase 7).
+///
+/// Combines the project's own `[native]` / `[c-native]` entries (with empty
+/// `introduced_by`) and the transitive entries harvested from each locked
+/// package's cached `mvl.toml` (via [`sbom::collect_transitive_native`]).
+///
+/// Returns `None` when a locked package isn't in the local cache — the caller
+/// falls back to the Phase 1 stub. A loud stderr message alerts the user to
+/// run `mvl fetch`; compilation almost certainly fails downstream anyway
+/// because the same missing cache breaks source resolution.
+fn collect_native_deps(
+    project: &PkgManifest,
+    locked: &[LockedPackage],
+) -> Option<Vec<TransitiveNativeDep>> {
+    // Load every locked package's cached manifest — hard-fail if any is
+    // missing (consistent with #1655's SBOM policy).
+    let mut pkg_manifests: Vec<(String, PkgManifest)> = Vec::with_capacity(locked.len());
+    for lp in locked {
+        match load_cached_manifest_required(&lp.name, &lp.version) {
+            Ok(m) => pkg_manifests.push((lp.name.clone(), m)),
+            Err(e) => {
+                eprintln!(
+                    "warning: manifest_embed: cannot populate native_deps — {e}. \
+                     Falling back to Phase 1 stub."
+                );
+                return None;
+            }
+        }
+    }
+
+    let mut out: Vec<TransitiveNativeDep> = Vec::new();
+
+    // Project-direct entries — sorted by name for determinism, empty introducers.
+    let mut direct_native: Vec<(&String, &String)> = project.native.iter().collect();
+    direct_native.sort_by_key(|(k, _)| k.as_str());
+    for (name, version) in direct_native {
+        out.push(TransitiveNativeDep {
+            name: name.clone(),
+            version: version.clone(),
+            kind: TransitiveKind::Native,
+            introduced_by: Vec::new(),
+        });
+    }
+    let mut direct_cnative: Vec<(&String, _)> = project.c_native.iter().collect();
+    direct_cnative.sort_by_key(|(k, _)| k.as_str());
+    for (name, spec) in direct_cnative {
+        out.push(TransitiveNativeDep {
+            name: name.clone(),
+            version: spec.version.clone(),
+            kind: TransitiveKind::CNative,
+            introduced_by: Vec::new(),
+        });
+    }
+
+    // Transitive entries — already sorted, already dedups against project-direct.
+    out.extend(sbom::collect_transitive_native(project, &pkg_manifests));
+    Some(out)
+}
+
 /// Return true if any program in `progs` imports `use std.runtime.*`.
 pub fn any_uses_std_runtime(progs: &[Program]) -> bool {
     progs.iter().any(|p| {
@@ -214,6 +276,7 @@ fn generate_manifest_mvl(
     meta: &ManifestMeta<'_>,
     packages: &[LockedPackage],
     bridges: &[FfiBridgeData],
+    native_deps: &[TransitiveNativeDep],
 ) -> String {
     let ManifestMeta {
         app_name,
@@ -290,6 +353,36 @@ fn generate_manifest_mvl(
     let ffi_list = make_list(bridges.len(), "b");
     src.push_str(&format!("    let ffis: List[FfiBridge] = {ffi_list};\n"));
 
+    // Phase 7: per-native-dep let bindings, then the list.
+    for (i, dep) in native_deps.iter().enumerate() {
+        let kind_variant = match dep.kind {
+            TransitiveKind::Native => "Rust",
+            TransitiveKind::CNative => "C",
+        };
+        let purl = match dep.kind {
+            TransitiveKind::Native => format!("pkg:cargo/{}@{}", dep.name, dep.version),
+            TransitiveKind::CNative => format!("pkg:generic/{}@{}", dep.name, dep.version),
+        };
+        let introducers: Vec<String> = dep.introduced_by.iter().map(|s| mvl_str(s)).collect();
+        let intros_list = if introducers.is_empty() {
+            "[]".to_string()
+        } else {
+            format!("[{}]", introducers.join(", "))
+        };
+        src.push_str(&format!(
+            "    let n{i}: NativeDep = NativeDep {{ \
+             name: {name}, version: {version}, kind: NativeKind::{kind_variant}, \
+             purl: {purl}, introduced_by: {intros_list} }};\n",
+            name = mvl_str(&dep.name),
+            version = mvl_str(&dep.version),
+            purl = mvl_str(&purl),
+        ));
+    }
+    let native_list = make_list(native_deps.len(), "n");
+    src.push_str(&format!(
+        "    let native_deps: List[NativeDep] = {native_list};\n"
+    ));
+
     // Return expression: Manifest struct literal.
     let lines: &[&str] = &[
         "    Manifest {",
@@ -326,6 +419,7 @@ fn generate_manifest_mvl(
         &format!("            requirements_proven: {},", requirements_proven),
         "        },",
         &format!("        source_digest:  {},", mvl_str(source_digest)),
+        "        native_deps:    native_deps,",
         "    }",
         "}",
     ];
@@ -581,7 +675,7 @@ mod tests {
         meta.extern_count = 2;
         meta.total_functions = 5;
         meta.requirements_proven = 3;
-        let src = generate_manifest_mvl(&meta, &[], &[]);
+        let src = generate_manifest_mvl(&meta, &[], &[], &[]);
         assert!(src.contains("extern_count:        2"));
         assert!(src.contains("total_functions:     5"));
         assert!(src.contains("requirements_proven: 3"));
@@ -592,7 +686,7 @@ mod tests {
 
     #[test]
     fn generate_manifest_mvl_zero_total_functions_gives_zero_ratio() {
-        let src = generate_manifest_mvl(&base_meta(), &[], &[]);
+        let src = generate_manifest_mvl(&base_meta(), &[], &[], &[]);
         assert!(src.contains("extern_ratio:        0.0"));
     }
 
@@ -620,7 +714,7 @@ mod tests {
                 last_checked: None,
             },
         ];
-        let src = generate_manifest_mvl(&base_meta(), &pkgs, &[]);
+        let src = generate_manifest_mvl(&base_meta(), &pkgs, &[], &[]);
         assert!(
             src.contains(r#"licenses:  ["Apache-2.0", "MIT"]"#),
             "sorted dedup licenses"
@@ -644,7 +738,7 @@ mod tests {
             allow_license_override: None,
             last_checked: None,
         };
-        let src = generate_manifest_mvl(&base_meta(), &[pkg], &[]);
+        let src = generate_manifest_mvl(&base_meta(), &[pkg], &[], &[]);
         assert!(
             src.contains(r#"purl: "pkg:mvl/github.com/mvl-lang/pkg-http@0.2.0""#),
             "purl baked in as pkg:mvl/<name>@<version>"
@@ -663,7 +757,7 @@ mod tests {
             allow_license_override: None,
             last_checked: None,
         };
-        let src = generate_manifest_mvl(&base_meta(), &[pkg.clone(), pkg], &[]);
+        let src = generate_manifest_mvl(&base_meta(), &[pkg.clone(), pkg], &[], &[]);
         // Only one "MIT" in the licenses list
         let count = src.matches(r#""MIT""#).count();
         // 2 per-package bindings + 1 in licenses list = 3 occurrences
@@ -685,7 +779,7 @@ mod tests {
             allow_license_override: None,
             last_checked: None,
         };
-        let src = generate_manifest_mvl(&base_meta(), &[pkg], &[]);
+        let src = generate_manifest_mvl(&base_meta(), &[pkg], &[], &[]);
         assert!(src.contains("licenses:  [],"), "None license → empty list");
     }
 
@@ -722,7 +816,7 @@ mod tests {
             total_functions: 0,
             requirements_proven: 0,
         };
-        let src = generate_manifest_mvl(&meta, &[], &[]);
+        let src = generate_manifest_mvl(&meta, &[], &[], &[]);
         assert!(src.contains("pub fn manifest() -> Manifest"));
         assert!(src.contains(r#"app_name:        "my_app""#));
         assert!(src.contains(r#"app_version:     "1.0.0""#));
@@ -763,7 +857,7 @@ mod tests {
             total_functions: 0,
             requirements_proven: 0,
         };
-        let src = generate_manifest_mvl(&meta, &[], &bridges);
+        let src = generate_manifest_mvl(&meta, &[], &bridges, &[]);
         assert!(src.contains(r#"let b0: FfiBridge = FfiBridge { abi: "rust", bridge_name: "fetch_url", bridge_version: "" };"#));
         assert!(src.contains("let ffis: List[FfiBridge] = [b0];"));
     }
@@ -789,7 +883,7 @@ mod tests {
             total_functions: 0,
             requirements_proven: 0,
         };
-        let src = generate_manifest_mvl(&meta, &[], &[]);
+        let src = generate_manifest_mvl(&meta, &[], &[], &[]);
         let (mut parser, _) = Parser::new(&src);
         let _prog = parser.parse_program();
         assert!(
@@ -833,7 +927,7 @@ mod tests {
             total_functions: 0,
             requirements_proven: 0,
         };
-        let src = generate_manifest_mvl(&meta, &pkgs, &bridges);
+        let src = generate_manifest_mvl(&meta, &pkgs, &bridges, &[]);
         let (mut parser, _) = Parser::new(&src);
         let _prog = parser.parse_program();
         assert!(
@@ -919,7 +1013,7 @@ mod tests {
             total_functions: 0,
             requirements_proven: 0,
         };
-        let src = generate_manifest_mvl(&meta, &[], &bridges);
+        let src = generate_manifest_mvl(&meta, &[], &bridges, &[]);
         assert!(
             src.contains("b0") && src.contains("my_bridge"),
             "bridge binding not found in generated source:\n{src}"
@@ -950,7 +1044,7 @@ mod tests {
 
     #[test]
     fn source_digest_empty_emits_empty_string() {
-        let src = generate_manifest_mvl(&base_meta(), &[], &[]);
+        let src = generate_manifest_mvl(&base_meta(), &[], &[], &[]);
         assert!(
             src.contains(r#"source_digest:  """#),
             "empty digest must emit empty string literal"
@@ -962,7 +1056,7 @@ mod tests {
         let digest = "sha256:3a7bd3e2360a3d29b8b9e8cc5a1da3e63a0b8e3d";
         let mut meta = base_meta();
         meta.source_digest = digest;
-        let src = generate_manifest_mvl(&meta, &[], &[]);
+        let src = generate_manifest_mvl(&meta, &[], &[], &[]);
         assert!(
             src.contains(&format!(r#"source_digest:  "{digest}""#)),
             "non-empty digest must be embedded as string literal"
@@ -974,7 +1068,7 @@ mod tests {
         let digest = "sha256:abc123def456";
         let mut meta = base_meta();
         meta.source_digest = digest;
-        let src = generate_manifest_mvl(&meta, &[], &[]);
+        let src = generate_manifest_mvl(&meta, &[], &[], &[]);
         let (mut parser, _) = Parser::new(&src);
         let _prog = parser.parse_program();
         assert!(
@@ -1032,5 +1126,116 @@ mod tests {
         std::fs::write(tmp.path().join(".git").join("hook.mvl"), b"secret").unwrap();
         let after = compute_source_digest(tmp.path());
         assert_eq!(base, after, "hidden dirs must be skipped");
+    }
+
+    // --- native_deps emission (Phase 7, #1661) ------------------------------
+
+    fn sample_native_deps() -> Vec<TransitiveNativeDep> {
+        vec![
+            TransitiveNativeDep {
+                name: "hyper".to_string(),
+                version: "1.0".to_string(),
+                kind: TransitiveKind::Native,
+                introduced_by: Vec::new(), // project-direct
+            },
+            TransitiveNativeDep {
+                name: "rusqlite".to_string(),
+                version: "0.31".to_string(),
+                kind: TransitiveKind::Native,
+                introduced_by: vec!["pkg-sqlite".to_string()],
+            },
+            TransitiveNativeDep {
+                name: "libssl".to_string(),
+                version: "3.0".to_string(),
+                kind: TransitiveKind::CNative,
+                introduced_by: vec!["pkg-tls".to_string()],
+            },
+        ]
+    }
+
+    #[test]
+    fn native_deps_empty_emits_empty_list() {
+        let src = generate_manifest_mvl(&base_meta(), &[], &[], &[]);
+        assert!(
+            src.contains("let native_deps: List[NativeDep] = [];"),
+            "empty native_deps must emit []\nSource:\n{src}"
+        );
+        assert!(src.contains("native_deps:    native_deps,"));
+    }
+
+    #[test]
+    fn native_deps_emits_bindings_and_field() {
+        let deps = sample_native_deps();
+        let src = generate_manifest_mvl(&base_meta(), &[], &[], &deps);
+        assert!(src.contains("let n0: NativeDep = NativeDep {"));
+        assert!(src.contains("let n1: NativeDep = NativeDep {"));
+        assert!(src.contains("let n2: NativeDep = NativeDep {"));
+        assert!(src.contains("let native_deps: List[NativeDep] = [n0, n1, n2];"));
+    }
+
+    #[test]
+    fn native_deps_rust_kind_uses_cargo_purl() {
+        let deps = vec![TransitiveNativeDep {
+            name: "hyper".to_string(),
+            version: "1.0".to_string(),
+            kind: TransitiveKind::Native,
+            introduced_by: Vec::new(),
+        }];
+        let src = generate_manifest_mvl(&base_meta(), &[], &[], &deps);
+        assert!(src.contains("kind: NativeKind::Rust"));
+        assert!(src.contains(r#"purl: "pkg:cargo/hyper@1.0""#));
+    }
+
+    #[test]
+    fn native_deps_c_kind_uses_generic_purl() {
+        let deps = vec![TransitiveNativeDep {
+            name: "libssl".to_string(),
+            version: "3.0".to_string(),
+            kind: TransitiveKind::CNative,
+            introduced_by: vec!["pkg-tls".to_string()],
+        }];
+        let src = generate_manifest_mvl(&base_meta(), &[], &[], &deps);
+        assert!(src.contains("kind: NativeKind::C"));
+        assert!(src.contains(r#"purl: "pkg:generic/libssl@3.0""#));
+    }
+
+    #[test]
+    fn native_deps_project_direct_has_empty_introducers() {
+        let deps = vec![TransitiveNativeDep {
+            name: "hyper".to_string(),
+            version: "1.0".to_string(),
+            kind: TransitiveKind::Native,
+            introduced_by: Vec::new(),
+        }];
+        let src = generate_manifest_mvl(&base_meta(), &[], &[], &deps);
+        assert!(
+            src.contains("introduced_by: []"),
+            "project-direct dep must serialize as introduced_by: []\nSource:\n{src}"
+        );
+    }
+
+    #[test]
+    fn native_deps_transitive_lists_introducers() {
+        let deps = vec![TransitiveNativeDep {
+            name: "rusqlite".to_string(),
+            version: "0.31".to_string(),
+            kind: TransitiveKind::Native,
+            introduced_by: vec!["pkg-a".to_string(), "pkg-sqlite".to_string()],
+        }];
+        let src = generate_manifest_mvl(&base_meta(), &[], &[], &deps);
+        assert!(src.contains(r#"introduced_by: ["pkg-a", "pkg-sqlite"]"#));
+    }
+
+    #[test]
+    fn native_deps_generated_source_parses_cleanly() {
+        let deps = sample_native_deps();
+        let src = generate_manifest_mvl(&base_meta(), &[], &[], &deps);
+        let (mut parser, _) = Parser::new(&src);
+        let _prog = parser.parse_program();
+        assert!(
+            parser.errors().is_empty(),
+            "generated MVL with native_deps must parse cleanly\nSource:\n{src}\nErrors: {:?}",
+            parser.errors()
+        );
     }
 }

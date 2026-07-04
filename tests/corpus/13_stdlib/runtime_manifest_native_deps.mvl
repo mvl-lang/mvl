@@ -1,0 +1,28 @@
+// Corpus: std.runtime Phase 7 — native_deps field on Manifest (#1661).
+//
+// Verifies that:
+//   - NativeDep is importable from std.runtime and type-checks correctly
+//   - NativeKind enum has Rust and C variants
+//   - The native_deps field is accessible on the Manifest struct
+//   - Introducer list is List[String]
+
+use std.runtime.{manifest, Manifest, NativeDep, NativeKind}
+
+fn main() -> Unit ! Console {
+    let m: Manifest = manifest();
+
+    let _deps: List[NativeDep] = m.native_deps;
+
+    for d in m.native_deps {
+        let _name: String = d.name;
+        let _version: String = d.version;
+        let _purl: String = d.purl;
+        let _intros: List[String] = d.introduced_by;
+        let _kind_ok: Bool = match d.kind {
+            NativeKind::Rust => true,
+            NativeKind::C    => true,
+        };
+    }
+
+    println("native_deps ok")
+}
