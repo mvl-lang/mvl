@@ -1,0 +1,7 @@
+// A1c: if used as expression bound to a let.
+// Expected stdout: 7
+
+fn main() -> Int {
+    let x: Int = if 3 == 3 { 7 } else { 42 };
+    x
+}

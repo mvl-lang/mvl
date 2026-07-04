@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.227.0] - 2026-07-04
+
+### Added
+
+- **`rust_backend`: MVL-hosted LLVM if/else + comparisons + Bool** (#1118, Phase A1c) — Emitter extends to support all comparison operators (`==`, `!=`, `<`, `<=`, `>`, `>=`), Bool literals (`true`/`false`), and if/else in both expression and statement positions. If-expressions lower to `br i1 %cond` + `phi i64` at the join label; Bool-typed locals correctly thread their i1 type through uses to prevent type mismatches. 5 new spike test cases (`cmp_lt`, `if_expr`, `bool_lit`, `max`, `if_eq`) all green; full corpus 12/12 passing. `Emitted` struct grows `ty` field to track LLVM type (i64|i1); `locals` map becomes `Map[String, LocalRef]` for per-binding type tracking.
+
 ## [0.226.0] - 2026-07-04
 
 ### Added

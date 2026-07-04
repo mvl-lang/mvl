@@ -1,0 +1,10 @@
+// A1c: if inside a callee returning Int.
+// Expected stdout: 9
+
+fn max(a: Int, b: Int) -> Int {
+    if a > b { a } else { b }
+}
+
+fn main() -> Int {
+    max(4, 9)
+}

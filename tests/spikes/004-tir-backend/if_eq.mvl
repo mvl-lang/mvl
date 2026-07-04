@@ -1,0 +1,9 @@
+// A1c: equality comparison threading through let.
+// Expected stdout: 100
+
+fn main() -> Int {
+    let a: Int = 5;
+    let b: Int = 5;
+    let flag: Bool = a == b;
+    if flag { 100 } else { 200 }
+}
