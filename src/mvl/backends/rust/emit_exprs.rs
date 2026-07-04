@@ -14,7 +14,112 @@ use crate::mvl::ir::{
 use crate::mvl::passes::coverage::BranchKind;
 use crate::mvl::passes::mcdc::analysis::count_clauses_ref;
 
+/// Rust operator precedence — used to gate parenthesization of emitted
+/// sub-expressions so we don't emit `while (x < y)` where `while x < y`
+/// is unambiguous (#1659).  Ordering matches the Rust reference:
+/// higher = binds tighter.  Variants beyond `Prefix`/`Suffix` are used
+/// via `expr_own_prec` matching and by future callers; suppressing the
+/// dead-code warning until #1659's cast-wrap follow-up wires them in.
+#[allow(dead_code)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum Prec {
+    /// Statement position, condition of `while`/`if`, scrutinee of `match`,
+    /// call argument, block tail — anywhere the outer grammar already
+    /// terminates the expression unambiguously.  No expression needs
+    /// outer parens against this context.
+    Lowest,
+    Assign,
+    LazyOr,
+    LazyAnd,
+    Compare,
+    BitOr,
+    BitXor,
+    BitAnd,
+    Shift,
+    Add,
+    Mul,
+    As,
+    Prefix,
+    /// Method calls, field access, indexing, `?`, path expressions —
+    /// bind tighter than any prefix or infix operator; effectively
+    /// atomic from a parenthesization perspective.
+    Suffix,
+    Atom,
+}
+
+/// The precedence class of a whole `TirExpr` — used to decide whether
+/// it needs parenthesization when placed in a Rust operator context.
+///
+/// Variants that self-delimit in Rust (`Block`, `If`, `Match`, `Lambda`)
+/// still need wrapping in *operator* positions because Rust rejects
+/// `1 + if x { 2 } else { 3 }` — treat them as `Prefix`-precedent so the
+/// wrap helpers add parens whenever they're used as an operand.
+fn expr_own_prec(e: &TirExpr) -> Prec {
+    match &e.kind {
+        TirExprKind::Binary { op, .. } => binary_own_prec(*op),
+        TirExprKind::Unary { .. } => Prec::Prefix,
+        // Self-delimiting expressions still need wrapping in Rust
+        // operator positions (`1 + if x { 2 } else { 3 }` is rejected),
+        // so treat them as prefix-precedent.
+        TirExprKind::If { .. }
+        | TirExprKind::Match { .. }
+        | TirExprKind::Block(_)
+        | TirExprKind::Lambda { .. } => Prec::Prefix,
+        // Everything else — literals, variables, method chains, field
+        // access, function/method calls, construct, propagate, borrow,
+        // relabel, consume — is Suffix or Atom and never needs outer
+        // parens.
+        _ => Prec::Suffix,
+    }
+}
+
+/// Own precedence class of a Rust binary operator — used to decide
+/// whether a Binary sub-expression needs parens against an outer
+/// context.  Non-listed variants have Rust equivalents at these levels.
+fn binary_own_prec(op: BinaryOp) -> Prec {
+    match op {
+        BinaryOp::Or => Prec::LazyOr,
+        BinaryOp::And => Prec::LazyAnd,
+        BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => {
+            Prec::Compare
+        }
+        BinaryOp::BitOr => Prec::BitOr,
+        BinaryOp::BitXor => Prec::BitXor,
+        BinaryOp::BitAnd => Prec::BitAnd,
+        BinaryOp::Shl | BinaryOp::Shr => Prec::Shift,
+        BinaryOp::Add | BinaryOp::Sub => Prec::Add,
+        BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem => Prec::Mul,
+    }
+}
+
 impl RustEmitter {
+    /// Emit `sub` with outer parens iff its own precedence is lower than
+    /// `parent_prec` (the strict-less version, for left operands and
+    /// unary/prefix contexts).
+    pub(super) fn emit_operand_left(&mut self, sub: &TirExpr, parent_prec: Prec) {
+        if expr_own_prec(sub) < parent_prec {
+            self.push("(");
+            self.emit_expr(sub);
+            self.push(")");
+        } else {
+            self.emit_expr(sub);
+        }
+    }
+
+    /// Emit `sub` as the right operand of a left-associative binary op:
+    /// wrap iff own precedence is *less than or equal to* `parent_prec`.
+    /// This keeps `a - (b - c)` from parsing as `(a - b) - c` when the
+    /// source TIR groups the subtraction to the right.
+    pub(super) fn emit_operand_right(&mut self, sub: &TirExpr, parent_prec: Prec) {
+        if expr_own_prec(sub) <= parent_prec {
+            self.push("(");
+            self.emit_expr(sub);
+            self.push(")");
+        } else {
+            self.emit_expr(sub);
+        }
+    }
+
     /// Emit an expression into the code buffer (no trailing newline).
     pub fn emit_expr(&mut self, expr: &TirExpr) {
         let span = expr.span;
@@ -223,26 +328,18 @@ impl RustEmitter {
                     self.push(")");
                 }
             }
-            TirExprKind::Unary { op, expr: inner } => match op {
-                UnaryOp::Neg => {
-                    self.push("-");
-                    self.emit_expr(inner);
-                }
-                UnaryOp::Not => {
-                    self.push("(!");
-                    self.emit_expr(inner);
-                    self.push(")");
-                }
-                UnaryOp::Deref => {
-                    self.push("*(");
-                    self.emit_expr(inner);
-                    self.push(")");
-                }
-                UnaryOp::BitNot => {
-                    self.push("!");
-                    self.emit_expr(inner);
-                }
-            },
+            TirExprKind::Unary { op, expr: inner } => {
+                let op_str = match op {
+                    UnaryOp::Neg => "-",
+                    UnaryOp::Not | UnaryOp::BitNot => "!",
+                    UnaryOp::Deref => "*",
+                };
+                self.push(op_str);
+                // Prefix operators bind tighter than any binary op, so
+                // Binary/If/Match sub-expressions need parens; leaf
+                // expressions don't (#1659).
+                self.emit_operand_left(inner, Prec::Prefix);
+            }
             TirExprKind::Binary { op, left, right } => {
                 // Mutation mode: inject env-var dispatch for behavioral operator alternatives.
                 // String concatenation (`+` on string-literal-rooted chains) is excluded from
@@ -289,25 +386,34 @@ impl RustEmitter {
                             BinaryOp::Rem => ("checked_rem", "remainder by zero or overflow"),
                             _ => unreachable!(),
                         };
-                        self.push("(<i64>::clone(&(");
+                        // Emit as a method chain — Suffix precedence, no outer wrap
+                        // needed against any operator context (#1659).  The inner
+                        // `&(...)` parens delimit the borrow expression and are
+                        // required for correctness when the operand is a Binary.
+                        self.push("<i64>::clone(&(");
                         self.emit_expr(left);
                         self.push(&format!(")).{method}(<i64>::clone(&("));
                         self.emit_expr(right);
-                        self.push(&format!("))).expect(\"{msg}\"))"));
+                        self.push(&format!("))).expect(\"{msg}\")"));
                     } else {
-                        self.push("(");
-                        self.emit_expr(left);
+                        // Precedence-aware operand wrapping (#1659) — outer parens
+                        // are elided; the caller's context (all top-level via
+                        // `emit_expr`) never requires them, and Binary-nested
+                        // operands wrap only when their own precedence demands it.
+                        let my_prec = binary_own_prec(*op);
+                        self.emit_operand_left(left, my_prec);
                         self.push(" ");
                         self.push(emit_binary_op(*op));
                         self.push(" ");
                         if *op == BinaryOp::Add && is_string_add_chain(left) {
+                            // `&(rhs)` — borrow syntax; inner parens are literal,
+                            // not the operator wrap.
                             self.push("&(");
                             self.emit_expr(right);
                             self.push(")");
                         } else {
-                            self.emit_expr(right);
+                            self.emit_operand_right(right, my_prec);
                         }
-                        self.push(")");
                     }
                 }
             }
