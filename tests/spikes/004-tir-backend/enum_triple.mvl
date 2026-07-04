@@ -1,0 +1,22 @@
+// A1s: 3-slot tuple variant with mixed Int/Float payloads.
+// Expected stdout: 100  (Cube(3, 4.5, 5) → 3 * 4.5.to_int() * 5 = 3*4*5 = 60. wait: recheck)
+// Sum instead: 3 + 4.5.to_int() + 5 = 3 + 4 + 5 = 12.  Hmm let me set a
+// clear formula: 10*width + depth = 10*3 + 5 = 35.  Change expected.
+// Actually: width*10 + height.to_int() + depth = 3*10 + 4 + 5 = 39.
+// Set expected: 39.
+
+type Box = enum {
+    Empty,
+    Cube(Int, Float, Int),
+}
+
+fn box_metric(b: Box) -> Int {
+    match b {
+        Box::Empty => 0,
+        Box::Cube(w, h, d) => w * 10 + h.to_int() + d,
+    }
+}
+
+fn main() -> Int {
+    box_metric(Box::Cube(3, 4.5, 5))
+}
