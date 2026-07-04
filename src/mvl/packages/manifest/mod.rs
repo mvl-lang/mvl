@@ -270,6 +270,27 @@ pub fn load_cached_manifest(name: &str, version: &str) -> Option<Manifest> {
     Manifest::load(&dir).ok()
 }
 
+/// Load a cached package's `mvl.toml`, failing hard if it isn't present.
+///
+/// Unlike `load_cached_manifest`, this returns a `PackageError` when the
+/// package cache directory or its manifest is missing or unparseable. Use
+/// this from callers where a missing cached manifest indicates a broken
+/// state (e.g. SBOM generation, where silently dropping a package would
+/// produce an incomplete supply-chain document).
+pub fn load_cached_manifest_required(
+    name: &str,
+    version: &str,
+) -> Result<Manifest, super::error::PackageError> {
+    let dir = super::fetch::pkg_cache_dir(name, version);
+    if !dir.exists() {
+        return Err(super::error::PackageError::InvalidInput(format!(
+            "package '{name}@{version}' not in cache at {} — run 'mvl fetch' first",
+            dir.display()
+        )));
+    }
+    Manifest::load(&dir).map_err(Into::into)
+}
+
 impl Manifest {
     /// Load and parse `mvl.toml` from the given directory.
     pub fn load(dir: &Path) -> Result<Self, ManifestError> {

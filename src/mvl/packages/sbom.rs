@@ -26,6 +26,27 @@ pub struct SourceFile {
     pub digest: String,
 }
 
+/// A native dependency introduced transitively by one or more MVL packages.
+///
+/// Distinct from `manifest.native` entries which are project-direct. Each
+/// entry carries the list of MVL packages that pulled it in, so the SBOM can
+/// record provenance ("native dependency of pkg-sqlite"). See #1655.
+pub struct TransitiveNativeDep {
+    pub name: String,
+    pub version: String,
+    pub kind: TransitiveKind,
+    pub introduced_by: Vec<String>,
+}
+
+/// Which manifest section a transitive dep came from.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum TransitiveKind {
+    /// `[native]` — Rust crate (`pkg:cargo/...`).
+    Native,
+    /// `[c-native]` — C library (`pkg:generic/...`).
+    CNative,
+}
+
 /// Output format for `mvl sbom`.
 pub enum SbomFormat {
     CycloneDx,
@@ -71,10 +92,13 @@ pub fn generate(
     component_type: ComponentType,
     licenses: &LicenseMap,
     sources: &[SourceFile],
+    transitive: &[TransitiveNativeDep],
 ) -> String {
     match format {
-        SbomFormat::CycloneDx => cyclonedx(manifest, lock, component_type, licenses, sources),
-        SbomFormat::Spdx => spdx(manifest, lock, component_type, licenses, sources),
+        SbomFormat::CycloneDx => {
+            cyclonedx(manifest, lock, component_type, licenses, sources, transitive)
+        }
+        SbomFormat::Spdx => spdx(manifest, lock, component_type, licenses, sources, transitive),
     }
 }
 
@@ -86,6 +110,7 @@ fn cyclonedx(
     component_type: ComponentType,
     licenses: &LicenseMap,
     sources: &[SourceFile],
+    transitive: &[TransitiveNativeDep],
 ) -> String {
     let pkg = &manifest.package;
     let serial = make_serial(&pkg.name, &pkg.version);
@@ -127,6 +152,9 @@ fn cyclonedx(
     }
     for (name, version) in super::render::iter_native_sorted(&manifest.native) {
         entries.push(cargo_component_json(name, version));
+    }
+    for dep in super::render::iter_transitive_sorted(transitive) {
+        entries.push(transitive_component_json(dep));
     }
     for sf in super::render::iter_source_files_sorted(sources) {
         entries.push(source_file_component_json(sf));
@@ -189,6 +217,26 @@ fn cargo_component_json(name: &str, version: &str) -> String {
     format!("{indent}{{\n{}\n{indent}}}", fields.join(",\n"))
 }
 
+fn transitive_component_json(dep: &TransitiveNativeDep) -> String {
+    let indent = "    ";
+    let purl = match dep.kind {
+        TransitiveKind::Native => cargo_purl(&dep.name, &dep.version),
+        TransitiveKind::CNative => generic_purl(&dep.name, &dep.version),
+    };
+    let introducers = dep.introduced_by.join(", ");
+    let fields = [
+        format!("{indent}  \"type\": \"library\""),
+        format!("{indent}  \"name\": \"{}\"", json_escape(&dep.name)),
+        format!("{indent}  \"version\": \"{}\"", json_escape(&dep.version)),
+        format!("{indent}  \"purl\": \"{}\"", json_escape(&purl)),
+        format!(
+            "{indent}  \"description\": \"Native dependency of {}\"",
+            json_escape(&introducers)
+        ),
+    ];
+    format!("{indent}{{\n{}\n{indent}}}", fields.join(",\n"))
+}
+
 fn source_file_component_json(sf: &SourceFile) -> String {
     let indent = "    ";
     let mut fields: Vec<String> = Vec::new();
@@ -214,6 +262,7 @@ fn spdx(
     component_type: ComponentType,
     licenses: &LicenseMap,
     sources: &[SourceFile],
+    transitive: &[TransitiveNativeDep],
 ) -> String {
     let pkg = &manifest.package;
     let mvl_ver = env!("CARGO_PKG_VERSION");
@@ -300,6 +349,35 @@ fn spdx(
         out += "\n";
     }
 
+    // Transitive native / c-native dependencies
+    for (i, dep) in super::render::iter_transitive_sorted(transitive)
+        .iter()
+        .enumerate()
+    {
+        let spdx_id = format!("SPDXRef-transitive-{}", spdx_id_for(&dep.name, i));
+        let purl = match dep.kind {
+            TransitiveKind::Native => cargo_purl(&dep.name, &dep.version),
+            TransitiveKind::CNative => generic_purl(&dep.name, &dep.version),
+        };
+        let download = match dep.kind {
+            TransitiveKind::Native => "https://crates.io",
+            TransitiveKind::CNative => "NOASSERTION",
+        };
+        out += &format!("PackageName: {}\n", dep.name);
+        out += &format!("SPDXID: {spdx_id}\n");
+        out += &format!("PackageVersion: {}\n", dep.version);
+        out += &format!("PackageDownloadLocation: {download}\n");
+        out += "FilesAnalyzed: false\n";
+        out += &format!(
+            "PackageComment: <text>Native dependency of {}</text>\n",
+            dep.introduced_by.join(", ")
+        );
+        out += &format!("ExternalRef: PACKAGE-MANAGER purl {purl}\n");
+        out += "\n";
+        out += &format!("Relationship: SPDXRef-Package DEPENDS_ON {spdx_id}\n");
+        out += "\n";
+    }
+
     // Source files
     for sf in super::render::iter_source_files_sorted(sources) {
         let spdx_id = format!(
@@ -337,6 +415,11 @@ fn mvl_purl(name: &str, version: &str) -> String {
 /// Package URL for a Cargo (Rust) crate: `pkg:cargo/<name>@<version>`.
 fn cargo_purl(name: &str, version: &str) -> String {
     format!("pkg:cargo/{}@{}", name, version)
+}
+
+/// Package URL for a C library dependency: `pkg:generic/<name>@<version>`.
+fn generic_purl(name: &str, version: &str) -> String {
+    format!("pkg:generic/{}@{}", name, version)
 }
 
 // ── identifier helpers ────────────────────────────────────────────────────────
@@ -460,6 +543,7 @@ mod tests {
             ComponentType::Library,
             &LicenseMap::new(),
             &[],
+            &[],
         );
         assert!(out.starts_with('{'), "must start with {{");
         assert!(out.trim_end().ends_with('}'), "must end with }}");
@@ -476,6 +560,7 @@ mod tests {
             ComponentType::Library,
             &LicenseMap::new(),
             &[],
+            &[],
         );
         assert!(out.contains("github.com/lab271/my-app"));
         assert!(out.contains("\"version\": \"1.0.0\""));
@@ -490,6 +575,7 @@ mod tests {
             SbomFormat::CycloneDx,
             ComponentType::Application,
             &LicenseMap::new(),
+            &[],
             &[],
         );
         assert!(
@@ -507,6 +593,7 @@ mod tests {
             ComponentType::Library,
             &LicenseMap::new(),
             &[],
+            &[],
         );
         assert!(
             out.contains("\"type\": \"library\""),
@@ -523,6 +610,7 @@ mod tests {
             ComponentType::Application,
             &LicenseMap::new(),
             &[],
+            &[],
         );
         assert!(out.contains("PrimaryPackagePurpose: APPLICATION"));
     }
@@ -536,6 +624,7 @@ mod tests {
             ComponentType::Library,
             &LicenseMap::new(),
             &[],
+            &[],
         );
         assert!(out.contains("PrimaryPackagePurpose: LIBRARY"));
     }
@@ -548,6 +637,7 @@ mod tests {
             SbomFormat::CycloneDx,
             ComponentType::Library,
             &LicenseMap::new(),
+            &[],
             &[],
         );
         assert!(out.contains("github.com/lab271/mvl-stdlib"));
@@ -565,6 +655,7 @@ mod tests {
             ComponentType::Library,
             &LicenseMap::new(),
             &[],
+            &[],
         );
         assert!(out.contains("\"name\": \"hyper\""));
         assert!(out.contains("pkg:cargo/hyper@1.0"));
@@ -578,6 +669,7 @@ mod tests {
             SbomFormat::CycloneDx,
             ComponentType::Library,
             &LicenseMap::new(),
+            &[],
             &[],
         );
         assert!(out.contains("pkg:mvl/github.com/lab271/mvl-stdlib@1.2.0"));
@@ -610,6 +702,7 @@ mod tests {
             ComponentType::Library,
             &LicenseMap::new(),
             &[],
+            &[],
         );
         assert!(out.contains("\"components\": [\n  ]"));
     }
@@ -638,6 +731,7 @@ mod tests {
             ComponentType::Library,
             &LicenseMap::new(),
             &[],
+            &[],
         );
         // git URL absent → no externalReferences
         assert!(!out.contains("externalReferences"));
@@ -654,6 +748,7 @@ mod tests {
             ComponentType::Library,
             &LicenseMap::new(),
             &[],
+            &[],
         );
         assert!(out.starts_with("SPDXVersion: SPDX-2.3\n"));
     }
@@ -666,6 +761,7 @@ mod tests {
             SbomFormat::Spdx,
             ComponentType::Library,
             &LicenseMap::new(),
+            &[],
             &[],
         );
         assert!(out.contains("PackageName: github.com/lab271/my-app"));
@@ -682,6 +778,7 @@ mod tests {
             ComponentType::Library,
             &LicenseMap::new(),
             &[],
+            &[],
         );
         assert!(out.contains("Relationship: SPDXRef-Package DEPENDS_ON"));
     }
@@ -695,6 +792,7 @@ mod tests {
             ComponentType::Library,
             &LicenseMap::new(),
             &[],
+            &[],
         );
         assert!(out.contains("PackageChecksum: SHA256: abc123def456"));
     }
@@ -707,6 +805,7 @@ mod tests {
             SbomFormat::Spdx,
             ComponentType::Library,
             &LicenseMap::new(),
+            &[],
             &[],
         );
         assert!(out.contains("https://crates.io"));
@@ -764,6 +863,7 @@ mod tests {
             ComponentType::Application,
             &LicenseMap::new(),
             &sources,
+            &[],
         );
         assert!(
             out.contains("\"type\": \"file\""),
@@ -794,6 +894,7 @@ mod tests {
             ComponentType::Application,
             &LicenseMap::new(),
             &sources,
+            &[],
         );
         let pos_lib = out.find("lib/util.mvl").unwrap();
         let pos_src = out.find("src/main.mvl").unwrap();
@@ -812,6 +913,7 @@ mod tests {
             ComponentType::Library,
             &LicenseMap::new(),
             &[],
+            &[],
         );
         assert!(!out.contains("\"type\": \"file\""));
     }
@@ -826,6 +928,7 @@ mod tests {
             ComponentType::Application,
             &LicenseMap::new(),
             &sources,
+            &[],
         );
         assert!(out.contains("FileName: ./src/main.mvl"));
         assert!(out.contains("FileName: ./lib/util.mvl"));
@@ -841,6 +944,7 @@ mod tests {
             SbomFormat::Spdx,
             ComponentType::Library,
             &LicenseMap::new(),
+            &[],
             &[],
         );
         assert!(!out.contains("FileName:"));
@@ -863,11 +967,149 @@ mod tests {
             ComponentType::Application,
             &LicenseMap::new(),
             &sources,
+            &[],
         );
         assert!(out.contains("main.mvl"));
         assert!(
             !out.contains("\"hashes\""),
             "non-sha256 prefix must not emit hashes field"
         );
+    }
+
+    // ── transitive native deps (#1655) ───────────────────────────────────────
+
+    fn sample_transitive() -> Vec<TransitiveNativeDep> {
+        vec![
+            TransitiveNativeDep {
+                name: "rusqlite".to_string(),
+                version: "0.31".to_string(),
+                kind: TransitiveKind::Native,
+                introduced_by: vec!["pkg-sqlite".to_string()],
+            },
+            TransitiveNativeDep {
+                name: "rustls".to_string(),
+                version: "0.23".to_string(),
+                kind: TransitiveKind::Native,
+                introduced_by: vec!["pkg-tls".to_string()],
+            },
+        ]
+    }
+
+    #[test]
+    fn cyclonedx_transitive_renders_with_description() {
+        let out = generate(
+            &sample_manifest(),
+            &sample_lock(),
+            SbomFormat::CycloneDx,
+            ComponentType::Library,
+            &LicenseMap::new(),
+            &[],
+            &sample_transitive(),
+        );
+        assert!(out.contains("\"name\": \"rusqlite\""));
+        assert!(out.contains("pkg:cargo/rusqlite@0.31"));
+        assert!(out.contains("\"description\": \"Native dependency of pkg-sqlite\""));
+        assert!(out.contains("\"description\": \"Native dependency of pkg-tls\""));
+    }
+
+    #[test]
+    fn cyclonedx_transitive_multiple_introducers_joined() {
+        let deps = vec![TransitiveNativeDep {
+            name: "rusqlite".to_string(),
+            version: "0.31".to_string(),
+            kind: TransitiveKind::Native,
+            introduced_by: vec!["pkg-other".to_string(), "pkg-sqlite".to_string()],
+        }];
+        let out = generate(
+            &sample_manifest(),
+            &sample_lock(),
+            SbomFormat::CycloneDx,
+            ComponentType::Library,
+            &LicenseMap::new(),
+            &[],
+            &deps,
+        );
+        assert!(out.contains("\"description\": \"Native dependency of pkg-other, pkg-sqlite\""));
+    }
+
+    #[test]
+    fn cyclonedx_transitive_cnative_uses_generic_purl() {
+        let deps = vec![TransitiveNativeDep {
+            name: "libssl".to_string(),
+            version: "3.0".to_string(),
+            kind: TransitiveKind::CNative,
+            introduced_by: vec!["pkg-tls".to_string()],
+        }];
+        let out = generate(
+            &sample_manifest(),
+            &sample_lock(),
+            SbomFormat::CycloneDx,
+            ComponentType::Library,
+            &LicenseMap::new(),
+            &[],
+            &deps,
+        );
+        assert!(out.contains("pkg:generic/libssl@3.0"));
+        assert!(!out.contains("pkg:cargo/libssl"));
+    }
+
+    #[test]
+    fn cyclonedx_transitive_sorted_by_name() {
+        let deps = vec![
+            TransitiveNativeDep {
+                name: "zlib".to_string(),
+                version: "1.0".to_string(),
+                kind: TransitiveKind::Native,
+                introduced_by: vec!["pkg-a".to_string()],
+            },
+            TransitiveNativeDep {
+                name: "aaaa".to_string(),
+                version: "1.0".to_string(),
+                kind: TransitiveKind::Native,
+                introduced_by: vec!["pkg-b".to_string()],
+            },
+        ];
+        let out = generate(
+            &sample_manifest(),
+            &sample_lock(),
+            SbomFormat::CycloneDx,
+            ComponentType::Library,
+            &LicenseMap::new(),
+            &[],
+            &deps,
+        );
+        let pos_aaaa = out.find("\"name\": \"aaaa\"").unwrap();
+        let pos_zlib = out.find("\"name\": \"zlib\"").unwrap();
+        assert!(pos_aaaa < pos_zlib, "aaaa must sort before zlib");
+    }
+
+    #[test]
+    fn spdx_transitive_renders_with_package_comment() {
+        let out = generate(
+            &sample_manifest(),
+            &sample_lock(),
+            SbomFormat::Spdx,
+            ComponentType::Library,
+            &LicenseMap::new(),
+            &[],
+            &sample_transitive(),
+        );
+        assert!(out.contains("PackageName: rusqlite"));
+        assert!(out.contains("pkg:cargo/rusqlite@0.31"));
+        assert!(out.contains("PackageComment: <text>Native dependency of pkg-sqlite</text>"));
+    }
+
+    #[test]
+    fn no_transitive_produces_no_description_field() {
+        let out = generate(
+            &sample_manifest(),
+            &sample_lock(),
+            SbomFormat::CycloneDx,
+            ComponentType::Library,
+            &LicenseMap::new(),
+            &[],
+            &[],
+        );
+        assert!(!out.contains("\"description\":"));
     }
 }
