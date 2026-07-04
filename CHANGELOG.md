@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.232.0] - 2026-07-04
+
+### Added
+
+- **`rust_backend`: MVL-hosted LLVM Result[Int, Int] match + Ok/Err constructors** (#1118, Phase A1h) — Result[Int, Int] works end-to-end using the same `{i8, i64}` tagged-struct lowering as Option (tag 0 = Ok, 1 = Err). Extends `tir_ty_to_llvm` (Result → {i8, i64}), `emit_fn_call` (Ok/Err ctors alongside Some/None), and `emit_match` (Ok/Err variant tags). 2 new spike tests (`match_result_ok` = Ok payload binding, `match_result_err` = Err arm + binding). Full corpus 27/27 passing. `make test-mvl` clean (98 tests). Emitter grew 1152 → 1183 LOC (+31).
+
 ## [0.231.0] - 2026-07-04
 
 ### Added
