@@ -28,9 +28,10 @@ LL      := /tmp/spike004_out.ll
 ASM_LL  := /tmp/spike004_out.s
 BIN_LL  := /tmp/spike004_bin_llvm
 
-# A1a+A1b cases: "src.mvl:expected_stdout".
+# A1a+A1b+A1c cases: "src.mvl:expected_stdout".
 LL_CASES := empty.mvl:0 two_plus_three.mvl:5 six_times_seven.mvl:42 nested_arith.mvl:20 \
-            add_call.mvl:5 let_bind.mvl:10 multi_stmt.mvl:30
+            add_call.mvl:5 let_bind.mvl:10 multi_stmt.mvl:30 \
+            cmp_lt.mvl:1 if_expr.mvl:7 bool_lit.mvl:42 max.mvl:9 if_eq.mvl:100
 
 .PHONY: help build guard-mvl tir emit compile run test check all clean \
         tir-llvm emit-llvm compile-llvm run-llvm test-llvm llvm test-llvm-arith
