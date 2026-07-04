@@ -862,6 +862,13 @@ impl RustEmitter {
                 let is_std = mod_name == "std";
                 let is_pkg = mod_name == "pkg";
                 if !is_std && !is_pkg && !self.test_extern_stubs {
+                    // MVL `use foo` becomes a Rust wildcard `use crate::foo::*;`.
+                    // Rust's `unused_imports` check is name-level, but the MVL
+                    // intent is module-level — so the wildcard can look unused
+                    // to `rustc` even when the user legitimately depends on the
+                    // module.  Scope the allow to this line so real unused
+                    // *specific* imports elsewhere still warn (#1657 follow-up).
+                    self.line("#[allow(unused_imports)]");
                     self.line(&format!("use crate::{}::*;", mod_name));
                 }
             }
