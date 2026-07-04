@@ -34,7 +34,8 @@ LL_CASES := empty.mvl:0 two_plus_three.mvl:5 six_times_seven.mvl:42 nested_arith
             cmp_lt.mvl:1 if_expr.mvl:7 bool_lit.mvl:42 max.mvl:9 if_eq.mvl:100 \
             ref_mut.mvl:42 while_counter.mvl:45 factorial.mvl:120 while_if.mvl:20 \
             else_if.mvl:20 match_int.mvl:20 match_bool.mvl:7 match_expr.mvl:300 \
-            match_bind.mvl:43 match_scope.mvl:15
+            match_bind.mvl:43 match_scope.mvl:15 \
+            match_option_some.mvl:43 match_option_none.mvl:99 match_option_flow.mvl:100
 
 .PHONY: help build guard-mvl tir emit compile run test check all clean \
         tir-llvm emit-llvm compile-llvm run-llvm test-llvm llvm test-llvm-arith
