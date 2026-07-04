@@ -1,0 +1,16 @@
+// A1n: 3-field struct + mixed field types (Int × Int × Int).
+// Expected stdout: 60  (age + 20 + height/2)
+
+type Person = struct {
+    age: Int,
+    weight: Int,
+    height: Int,
+}
+
+fn compute(p: Person) -> Int {
+    p.age + 20 + (p.height / 2)
+}
+
+fn main() -> Int {
+    compute(Person { age: 10, weight: 70, height: 60 })
+}
