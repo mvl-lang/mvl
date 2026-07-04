@@ -1,0 +1,14 @@
+// A1k: iterate a List[Int] literal, sum elements.
+// Expected stdout: 15  (1+2+3+4+5)
+
+fn sum_list(xs: List[Int]) -> Int {
+    let acc: ref Int = 0;
+    for x in xs {
+        acc = acc + x;
+    }
+    acc
+}
+
+fn main() -> Int {
+    sum_list([1, 2, 3, 4, 5])
+}

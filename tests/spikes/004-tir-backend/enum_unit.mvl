@@ -1,0 +1,16 @@
+// A1l: user-defined unit-variant enum, matched on.
+// Expected stdout: 2
+
+type Color = enum { Red, Green, Blue }
+
+fn color_code(c: Color) -> Int {
+    match c {
+        Color::Red => 1,
+        Color::Green => 2,
+        Color::Blue => 3,
+    }
+}
+
+fn main() -> Int {
+    color_code(Color::Green)
+}
