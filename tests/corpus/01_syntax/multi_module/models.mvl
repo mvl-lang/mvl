@@ -1,0 +1,14 @@
+// Corpus: sibling module for `use foo` bare-module import test.
+//
+// Referenced by main.mvl via `use models;` — the bare form
+// (single path segment, no dot/`::`, no brace group) that triggers the
+// emitter's `use crate::foo::*;` wildcard path (#1671).
+
+pub type User = struct {
+    id: Int,
+    name: String,
+}
+
+pub fn greet(u: User) -> String {
+    "hello, ".concat(u.name)
+}

@@ -217,6 +217,16 @@ jobs:
         if: needs.changes.outputs.rust == 'true' && github.event_name == 'push'
         run: cargo test --test compile_and_run --test cross_backend --test stdlib
 
+      # Regression net for emitter-emission bugs like #1671.  Every corpus
+      # file that builds successfully must produce warning-free Rust.
+      # Files with pre-existing legitimate warnings (e.g. linter negative
+      # tests) or known unfixed emitter smells are opted out with a
+      # `corpus:expect-warnings` marker + follow-up ticket reference.
+      # Slow (~6 min at full corpus), so gated on Rust changes only.
+      - name: Test corpus emits warning-free Rust
+        if: needs.changes.outputs.rust == 'true'
+        run: make test-corpus-warnings
+
       - name: MVL check compiler
         if: needs.changes.outputs.compiler == 'true'
         run: make check-compiler

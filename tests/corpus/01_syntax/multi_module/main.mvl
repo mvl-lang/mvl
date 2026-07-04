@@ -1,0 +1,20 @@
+// Corpus: `use foo` bare-module import — regression net for #1671.
+//
+// When the parser sees a single-segment `use foo;` (no `.`, no `::`, no
+// brace group), the Rust emitter produces a wildcard `use crate::foo::*;`
+// at line 865 of `emitter.rs`.  #1657 initially left that line without a
+// per-line `#[allow(unused_imports)]`, causing spurious
+// `warning: unused import: `crate::foo::*``  in transpiled Rust — even
+// when the module was genuinely referenced (name-level Rust check vs.
+// module-level MVL intent).  #1671 fixed the allow.
+//
+// This test locks in the parse + type-check side.  For warning-free
+// emission the widened `test-corpus` (mvl build + grep warning:) is the
+// real regression net.
+
+use models;
+
+fn main() -> Unit {
+    let u: User = User { id: 1, name: "alice" };
+    let _: String = greet(u);
+}

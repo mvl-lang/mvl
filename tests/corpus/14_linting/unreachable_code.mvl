@@ -1,5 +1,6 @@
 // Corpus: Linting — unreachable code detection
 // lint:expect unreachable-code
+// corpus:expect-warnings — emitted Rust legitimately contains unreachable statements
 //
 // Code after a return statement is unreachable.
 
