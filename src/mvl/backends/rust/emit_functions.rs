@@ -17,7 +17,7 @@ use super::emitter::RustEmitter;
 use crate::mvl::backends::rust::emit_types::{emit_label, emit_ref_expr_for_assert, emit_ty};
 use crate::mvl::backends::rust::last_use::compute_last_uses;
 use crate::mvl::backends::rust::mut_analysis::{
-    compute_readonly_names, compute_readonly_param_names,
+    compute_readonly_names, compute_readonly_param_names, compute_unused_param_names,
 };
 use crate::mvl::ir::{
     Capability, Constraint, GenericParam, Literal, TirBlock, TirExprKind, TirFn, TirParam, TirStmt,
@@ -87,6 +87,8 @@ impl RustEmitter {
 
         let mutated_params = collect_mutated_map_params_tir(&fd.body, &self.capability_params_map);
         let readonly_params = compute_readonly_param_names(&fd.body, &fd.params);
+        let unused_params =
+            compute_unused_param_names(&fd.body, &fd.params, &fd.requires, &fd.ensures);
 
         if fd.is_test {
             if !fd.effects.is_empty() {
@@ -107,8 +109,13 @@ impl RustEmitter {
                 &fd.params,
                 &fd.ret_ty,
             );
-            let params_str =
-                emit_tir_params(&fd.params, &borrows, &mutated_params, &readonly_params);
+            let params_str = emit_tir_params(
+                &fd.params,
+                &borrows,
+                &mutated_params,
+                &readonly_params,
+                &unused_params,
+            );
             let ret_str = emit_fn_return_ty(&fd.ret_ty);
             self.line(&format!(
                 "fn {}{generics}({params_str}) -> {ret_str} {{",
@@ -182,6 +189,7 @@ impl RustEmitter {
                     borrows.get(param_start..).unwrap_or(&[]),
                     &mutated_params,
                     &readonly_params,
+                    &unused_params,
                 );
                 let params_str = match (self_prefix.is_empty(), rest_params.is_empty()) {
                     (true, true) => String::new(),
@@ -218,7 +226,13 @@ impl RustEmitter {
             self.self_as_free_param = true;
         }
 
-        let params_str = emit_tir_params(&fd.params, &borrows, &mutated_params, &readonly_params);
+        let params_str = emit_tir_params(
+            &fd.params,
+            &borrows,
+            &mutated_params,
+            &readonly_params,
+            &unused_params,
+        );
         let rust_name = self.pkg_fn_rust_name(fd);
         self.line(&format!(
             "pub fn {}{generics}({params_str}) -> {ret_str} {{",
@@ -394,15 +408,18 @@ impl RustEmitter {
 
 /// Emit TIR function parameters.
 ///
-/// `readonly_params` is the set of parameter names that the body-analysis
-/// (`compute_readonly_param_names`) proved are never mutated — they suppress
-/// the `mut` prefix that MVL `ref`/`iso` capabilities would otherwise force,
-/// avoiding a Rust `unused_mut` warning (#1654).
+/// - `readonly_params` — parameter names the body-analysis proved are
+///   never mutated.  Suppress the `mut` prefix that `ref`/`iso`
+///   capabilities would otherwise force (#1654).
+/// - `unused_params` — parameter names never referenced in the body,
+///   requires, or ensures.  Prefix the emitted name with `_` (Rust's
+///   idiom for "documented but unused") so `rustc` doesn't warn (#1658).
 fn emit_tir_params(
     params: &[TirParam],
     borrows: &[Option<bool>],
     mutated_params: &std::collections::HashSet<String>,
     readonly_params: &std::collections::HashSet<String>,
+    unused_params: &std::collections::HashSet<String>,
 ) -> String {
     params
         .iter()
@@ -434,10 +451,21 @@ fn emit_tir_params(
             } else {
                 ""
             };
-            let param_name = if p.name == "self" {
+            let base_name = if p.name == "self" {
                 "self_"
             } else {
                 p.name.as_str()
+            };
+            // Rust idiom: prefix unused parameters with `_` so `rustc`
+            // treats them as "documented but unused".  `self` is
+            // already remapped to `self_`; extend to `_self_` when it
+            // happens to be unused.
+            let owned_underscored: String;
+            let param_name = if unused_params.contains(&p.name) && !base_name.starts_with('_') {
+                owned_underscored = format!("_{base_name}");
+                owned_underscored.as_str()
+            } else {
+                base_name
             };
             format!("{cap_comment}{mut_prefix}{param_name}: {ty_str}")
         })

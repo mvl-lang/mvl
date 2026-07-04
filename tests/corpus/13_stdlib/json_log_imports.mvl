@@ -1,5 +1,6 @@
 // Corpus: import both std.json and std.log to exercise stdlib-name-collision
 // fix from #1551.
+// corpus:expect-warnings — unused `let` bindings; tracked in #1678
 //
 // Before #1551, std/json.mvl and std/log.mvl each defined their own
 // `json_escape` alongside std/strings.mvl (implicit prelude).  Loading both

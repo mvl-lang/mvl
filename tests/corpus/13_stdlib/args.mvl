@@ -1,4 +1,5 @@
 // Corpus: std.args.parse_args() — schema-driven CLI argument parsing (#844)
+// corpus:expect-warnings — unused `let` bindings; tracked in #1678
 //
 // Demonstrates the MVL design principle: the schema IS the argument spec.
 // A plain List[FieldSpec] value drives the parser — no struct introspection,

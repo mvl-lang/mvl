@@ -1,4 +1,5 @@
 // exit_cascade_on_shutdown_llvm.mvl -- on_exit fires during program shutdown (#1602)
+// corpus:expect-warnings — unused `let` binding; tracked in #1678
 //
 // Verifies that linked actors' `on_exit` handlers run when actors die during
 // `_mvl_actor_join_all` at program termination, not just on mid-execution panic.
