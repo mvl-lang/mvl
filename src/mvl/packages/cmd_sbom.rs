@@ -5,8 +5,9 @@
 
 use super::error::PackageError;
 use super::lock::LockFile;
-use super::manifest::{load_cached_manifest, Manifest};
+use super::manifest::{load_cached_manifest_required, Manifest};
 use super::{hash, sbom, sbom_diff};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 const BASELINE_SBOM_FILE: &str = ".mvl/sbom.baseline.json";
@@ -58,13 +59,16 @@ pub fn cmd_sbom(format: Option<&str>, project_root: &Path) -> Result<String, Pac
         sbom::ComponentType::Library
     };
 
-    // Build license map: read each cached package's mvl.toml for its license field.
+    // Walk each locked package's cached mvl.toml. Fail hard if a cache entry
+    // is missing: an incomplete SBOM is a supply-chain footgun, not a warning.
     let mut licenses = sbom::LicenseMap::new();
+    let mut pkg_manifests: Vec<(String, Manifest)> = Vec::new();
     for lp in &lock.packages {
-        if let Some(pkg_manifest) = load_cached_manifest(&lp.name, &lp.version) {
-            licenses.insert(lp.name.clone(), pkg_manifest.package.license);
-        }
+        let pkg_manifest = load_cached_manifest_required(&lp.name, &lp.version)?;
+        licenses.insert(lp.name.clone(), pkg_manifest.package.license.clone());
+        pkg_manifests.push((lp.name.clone(), pkg_manifest));
     }
+    let transitive = collect_transitive_native(&manifest, &pkg_manifests);
 
     // Collect source files: walk project root for .mvl files and hash each one.
     let sources = collect_source_files(project_root);
@@ -76,6 +80,7 @@ pub fn cmd_sbom(format: Option<&str>, project_root: &Path) -> Result<String, Pac
         component_type,
         &licenses,
         &sources,
+        &transitive,
     ))
 }
 
@@ -216,6 +221,55 @@ pub fn cmd_sbom_diff(
     Ok((diff, regression))
 }
 
+/// Build the transitive native-dep list from each locked package's cached
+/// manifest. Entries whose (name, version) match a project-direct declaration
+/// in `manifest.native` / `manifest.c_native` are dropped — the project-direct
+/// components are already emitted separately without provenance.
+fn collect_transitive_native(
+    manifest: &Manifest,
+    pkg_manifests: &[(String, Manifest)],
+) -> Vec<sbom::TransitiveNativeDep> {
+    let mut index: BTreeMap<(String, String, sbom::TransitiveKind), Vec<String>> = BTreeMap::new();
+    for (pkg_name, pkg_manifest) in pkg_manifests {
+        for (n, v) in &pkg_manifest.native {
+            index
+                .entry((n.clone(), v.clone(), sbom::TransitiveKind::Native))
+                .or_default()
+                .push(pkg_name.clone());
+        }
+        for (n, spec) in &pkg_manifest.c_native {
+            index
+                .entry((
+                    n.clone(),
+                    spec.version.clone(),
+                    sbom::TransitiveKind::CNative,
+                ))
+                .or_default()
+                .push(pkg_name.clone());
+        }
+    }
+    index
+        .into_iter()
+        .filter(|((n, v, kind), _)| match kind {
+            sbom::TransitiveKind::Native => manifest.native.get(n).is_none_or(|proj_v| proj_v != v),
+            sbom::TransitiveKind::CNative => manifest
+                .c_native
+                .get(n)
+                .is_none_or(|proj_spec| &proj_spec.version != v),
+        })
+        .map(|((name, version, kind), mut introducers)| {
+            introducers.sort();
+            introducers.dedup();
+            sbom::TransitiveNativeDep {
+                name,
+                version,
+                kind,
+                introduced_by: introducers,
+            }
+        })
+        .collect()
+}
+
 /// Walk `root` recursively for `.mvl` files and return a sorted list of
 /// `SourceFile` entries with canonical relative paths and SHA-256 digests.
 fn collect_source_files(root: &Path) -> Vec<sbom::SourceFile> {
@@ -255,5 +309,128 @@ fn collect_mvl_files_recursive(root: &Path, dir: &Path, out: &mut Vec<sbom::Sour
                 });
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mvl::packages::manifest::{CNativeSpec, PackageInfo};
+    use std::collections::HashMap;
+
+    fn mk_manifest(name: &str, native: Vec<(&str, &str)>, c_native: Vec<(&str, &str)>) -> Manifest {
+        Manifest {
+            package: PackageInfo {
+                name: name.to_string(),
+                version: "1.0.0".to_string(),
+                license: "MIT".to_string(),
+                requires_mvl: ">=0.60.0".to_string(),
+                extern_rationale: None,
+            },
+            dependencies: HashMap::new(),
+            native: native
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            c_native: c_native
+                .into_iter()
+                .map(|(k, v)| {
+                    (
+                        k.to_string(),
+                        CNativeSpec {
+                            version: v.to_string(),
+                            license: None,
+                        },
+                    )
+                })
+                .collect(),
+            dependency_policy: Default::default(),
+            license_policy: Default::default(),
+            security: Default::default(),
+        }
+    }
+
+    #[test]
+    fn collect_transitive_harvests_native_and_cnative() {
+        let project = mk_manifest("proj", vec![], vec![]);
+        let pkgs = vec![(
+            "pkg-sqlite".to_string(),
+            mk_manifest(
+                "pkg-sqlite",
+                vec![("rusqlite", "0.31")],
+                vec![("libssl", "3.0")],
+            ),
+        )];
+        let out = collect_transitive_native(&project, &pkgs);
+        assert_eq!(out.len(), 2);
+        let names: Vec<&str> = out.iter().map(|d| d.name.as_str()).collect();
+        assert!(names.contains(&"rusqlite"));
+        assert!(names.contains(&"libssl"));
+    }
+
+    #[test]
+    fn collect_transitive_dedups_by_name_and_version() {
+        let project = mk_manifest("proj", vec![], vec![]);
+        let pkgs = vec![
+            (
+                "pkg-a".to_string(),
+                mk_manifest("pkg-a", vec![("rusqlite", "0.31")], vec![]),
+            ),
+            (
+                "pkg-b".to_string(),
+                mk_manifest("pkg-b", vec![("rusqlite", "0.31")], vec![]),
+            ),
+        ];
+        let out = collect_transitive_native(&project, &pkgs);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].name, "rusqlite");
+        assert_eq!(out[0].introduced_by, vec!["pkg-a", "pkg-b"]);
+    }
+
+    #[test]
+    fn collect_transitive_different_versions_kept_separate() {
+        let project = mk_manifest("proj", vec![], vec![]);
+        let pkgs = vec![
+            (
+                "pkg-a".to_string(),
+                mk_manifest("pkg-a", vec![("rusqlite", "0.31")], vec![]),
+            ),
+            (
+                "pkg-b".to_string(),
+                mk_manifest("pkg-b", vec![("rusqlite", "0.32")], vec![]),
+            ),
+        ];
+        let out = collect_transitive_native(&project, &pkgs);
+        assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    fn collect_transitive_filters_out_project_shadowed_deps() {
+        // Project directly depends on rusqlite@0.31 — transitive entry for the
+        // same (name, version) must be dropped to avoid double-emission.
+        let project = mk_manifest("proj", vec![("rusqlite", "0.31")], vec![]);
+        let pkgs = vec![(
+            "pkg-sqlite".to_string(),
+            mk_manifest("pkg-sqlite", vec![("rusqlite", "0.31")], vec![]),
+        )];
+        let out = collect_transitive_native(&project, &pkgs);
+        assert!(
+            out.is_empty(),
+            "project-direct (name, version) must shadow transitive"
+        );
+    }
+
+    #[test]
+    fn collect_transitive_project_different_version_does_not_shadow() {
+        // Project depends on rusqlite@0.31 but pkg-sqlite pulls in 0.32 —
+        // both must appear (project as direct, pkg's as transitive).
+        let project = mk_manifest("proj", vec![("rusqlite", "0.31")], vec![]);
+        let pkgs = vec![(
+            "pkg-sqlite".to_string(),
+            mk_manifest("pkg-sqlite", vec![("rusqlite", "0.32")], vec![]),
+        )];
+        let out = collect_transitive_native(&project, &pkgs);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].version, "0.32");
     }
 }

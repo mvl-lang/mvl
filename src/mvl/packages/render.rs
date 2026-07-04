@@ -17,7 +17,7 @@
 use std::collections::HashMap;
 
 use super::manifest::CNativeSpec;
-use super::sbom::SourceFile;
+use super::sbom::{SourceFile, TransitiveNativeDep};
 
 /// Iterate `[native]` Rust crate dependencies sorted by name.
 ///
@@ -48,6 +48,13 @@ pub fn iter_c_native_sorted(c_native: &HashMap<String, CNativeSpec>) -> Vec<(&st
 pub fn iter_source_files_sorted(sources: &[SourceFile]) -> Vec<&SourceFile> {
     let mut sorted: Vec<&SourceFile> = sources.iter().collect();
     sorted.sort_by_key(|s| s.rel_path.as_str());
+    sorted
+}
+
+/// Sort transitive native deps by (name, version) for deterministic SBOM output.
+pub fn iter_transitive_sorted(deps: &[TransitiveNativeDep]) -> Vec<&TransitiveNativeDep> {
+    let mut sorted: Vec<&TransitiveNativeDep> = deps.iter().collect();
+    sorted.sort_by(|a, b| (a.name.as_str(), a.version.as_str()).cmp(&(&b.name, &b.version)));
     sorted
 }
 
