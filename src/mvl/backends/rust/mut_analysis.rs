@@ -47,9 +47,9 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::mvl::ir::{
-    LValue, Pattern, TirBlock, TirElseBranch, TirExpr, TirExprKind, TirMatchBody, TirParam, TirStmt,
+    LValue, Pattern, RefExpr, TirBlock, TirElseBranch, TirExpr, TirExprKind, TirMatchBody,
+    TirParam, TirStmt,
 };
-use crate::mvl::parser::ast::RefExpr;
 use crate::mvl::parser::lexer::Span;
 
 /// Return the set of pattern spans belonging to `let` bindings that are
@@ -437,8 +437,19 @@ struct NameCollector {
 
 impl<'a> crate::mvl::ir::visit::Visit<'a> for NameCollector {
     fn visit_tir_expr(&mut self, e: &'a TirExpr) {
-        if let TirExprKind::Var(name) = &e.kind {
-            self.names.insert(name.clone());
+        match &e.kind {
+            TirExprKind::Var(name) => {
+                self.names.insert(name.clone());
+            }
+            // The shared `walk_tir_expr` treats `FieldAccess` as a leaf
+            // (see `ir/visit.rs:79`) — recurse manually so `obj.field`
+            // inside a lambda body still marks the outer `obj` binding
+            // as captured (#1658, snake_game regression).
+            TirExprKind::FieldAccess { expr, .. } => {
+                self.visit_tir_expr(expr);
+                return;
+            }
+            _ => {}
         }
         crate::mvl::ir::visit::walk_tir_expr(self, e);
     }
