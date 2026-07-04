@@ -306,9 +306,15 @@ impl RustEmitter {
 
         // 4. Actor handle struct (tag capability: sender channel + unique actor ID).
         //    `_id` enables `actor_id()` — used by link/monitor callers (#1128).
-        let vis = if ad.visible { "pub " } else { "" };
+        //
+        // The handle is emitted as `pub struct` unconditionally.  Every
+        // user function is emitted as `pub fn` (see `emit_functions.rs`)
+        // and regular user structs / enums are always emitted as
+        // `pub struct` / `pub enum` (see `emit_types.rs`).  A private
+        // actor handle would trip Rust's `private_interfaces` warning
+        // as soon as any user function returned the actor type (#1674).
         self.line("#[derive(Clone)]");
-        self.line(&format!("{vis}struct {name} {{"));
+        self.line(&format!("pub struct {name} {{"));
         self.push_indent();
         self.line(&format!("_sender: MvlSender<{msg_name}>,"));
         self.line("_id: ActorId,");
