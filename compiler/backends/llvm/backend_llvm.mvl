@@ -458,12 +458,19 @@ partial fn emit_expr(expr: Value, ctx: EmitCtx) -> Emitted {
             emit_fn_call(name, args, ret_ty, ctx)
         },
         "ListLit" => {
-            // A1k: `[e1, e2, ..., eN]` for List[Int].  Lower to a stack
-            // allocation of `[N x i64]`, per-element store via GEP, then
-            // wrap into a `{i64, ptr}` (length + data ptr) aggregate.
-            // Non-Int payloads and empty lists are deferred.
+            // A1k/A1u: `[e1, e2, ..., eN]` for `List[T]`.  Lower to a
+            // stack allocation of `[N x <elem_ty>]`, per-element store
+            // via GEP, then wrap into a `{i64, ptr}` (length + data ptr)
+            // aggregate.  Empty lists are deferred.
+            //
+            // A1u: element type derived from the expression's declared
+            // TIR type (`expr.ty.inner`) — extends A1k's hardcoded i64
+            // to any type that fits in a fixed number of bytes
+            // (`i64`, `{i64, ptr}` for String, `%Point` for structs).
             let elems: List[Value] = jarr(kind, "elems");
             let n_elems: Int = elems.len();
+            let elem_ty_tir: Value = jget(jget(expr, "ty"), "inner");
+            let elem_ty_llvm: String = tir_ty_to_llvm_full(elem_ty_tir, ctx.structs, ctx.enum_types);
             let elem_ctx: EmitCtx = EmitCtx {
                 next_reg: ctx.next_reg,
                 locals: ctx.locals,
@@ -494,9 +501,11 @@ partial fn emit_expr(expr: Value, ctx: EmitCtx) -> Emitted {
                 for line in emit_e.instrs { elem_instrs.push(line) }
                 elem_regs.push(emit_e.reg);
             }
-            // Alloca [N x i64], then GEP+store each element.
+            // Alloca [N x <elem_ty>], then GEP+store each element.
             let arr_reg: String = format("%arr{}", [cur.to_string()]);
-            let arr_ty: String = format("[{} x i64]", [n_elems.to_string()]);
+            let arr_ty: String = format(
+                "[{} x {}]", [n_elems.to_string(), elem_ty_llvm.concat("")]
+            );
             let alloca_line: String = format(
                 "  {} = alloca {}",
                 [arr_reg, arr_ty]
@@ -509,13 +518,15 @@ partial fn emit_expr(expr: Value, ctx: EmitCtx) -> Emitted {
                 let idx: Int = ei;
                 let gep_reg: String = format("%t{}", [store_cur.to_string()]);
                 let elem_val: String = elem_regs.get(idx).unwrap_or("0");
+                let arr_ty_snap: String = arr_ty.concat("");
+                let elem_ty_snap: String = elem_ty_llvm.concat("");
                 store_instrs.push(format(
                     "  {} = getelementptr {}, ptr {}, i64 0, i64 {}",
-                    [gep_reg, arr_ty, arr_reg, idx.to_string()]
+                    [gep_reg.concat(""), arr_ty_snap, arr_reg.concat(""), idx.to_string()]
                 ));
                 store_instrs.push(format(
-                    "  store i64 {}, ptr {}",
-                    [elem_val, gep_reg]
+                    "  store {} {}, ptr {}",
+                    [elem_ty_snap, elem_val, gep_reg]
                 ));
                 store_cur = store_cur + 1;
                 ei = ei + 1;
@@ -998,7 +1009,14 @@ partial fn emit_if_blocks(
     // A1i: preserve the arm's LLVM type so aggregate return values
     // (Option/Result) get a `phi {i8, i64}`, not `phi i64`.  Both arms
     // must have the same ty (checker-enforced); we take the then arm's.
-    let phi_ty: String = if then_out.tail_ty == "" { "i64" } else { then_out.tail_ty };
+    // A1u: void-typed arms (Unit result from `println`) must not emit
+    // a phi — LLVM rejects `phi void`.  Downgrade to i64 sentinel; the
+    // enclosing statement position discards the reg anyway.
+    let phi_ty: String = if then_out.tail_ty == "" || then_out.tail_ty == "void" {
+        "i64"
+    } else {
+        then_out.tail_ty
+    };
     let then_ctx: EmitCtx = EmitCtx { next_reg: then_out.ctx.next_reg, locals: ctx.locals, enums: ctx.enums, strings: ctx.strings, structs: ctx.structs, enum_types: ctx.enum_types, variant_payloads: ctx.variant_payloads, variant_slots: ctx.variant_slots, variant_slot_types: ctx.variant_slot_types };
 
     let else_out: StmtOut = emit_body(else_block, then_ctx);
@@ -1749,6 +1767,9 @@ partial fn emit_for_list(
         variant_slot_types: ctx.variant_slot_types,
     };
     let list: Emitted = emit_expr(iter, iter_ctx);
+    // A1u: element type from iter's TIR ty.inner — was hardcoded i64.
+    let elem_ty_tir: Value = jget(jget(iter, "ty"), "inner");
+    let elem_ty_llvm: String = tir_ty_to_llvm_full(elem_ty_tir, ctx.structs, ctx.enum_types);
     let n0: Int = list.next_reg;
     let len_reg: String = format("%t{}", [n0.to_string()]);
     let data_reg: String = format("%t{}", [(n0 + 1).to_string()]);
@@ -1790,15 +1811,18 @@ partial fn emit_for_list(
     let body_load_idx: String = format(
         "  {} = load i64, ptr {}", [body_idx, idx_addr]
     );
+    let elem_ty_snap: String = elem_ty_llvm.concat("");
+    let elem_ty_snap2: String = elem_ty_llvm.concat("");
+    let elem_ty_snap3: String = elem_ty_llvm.concat("");
     let body_gep: String = format(
-        "  {} = getelementptr i64, ptr {}, i64 {}",
-        [elem_ptr, data_reg, body_idx]
+        "  {} = getelementptr {}, ptr {}, i64 {}",
+        [elem_ptr.concat(""), elem_ty_snap, data_reg, body_idx]
     );
     let body_load_elem: String = format(
-        "  {} = load i64, ptr {}", [elem_val, elem_ptr]
+        "  {} = load {}, ptr {}", [elem_val.concat(""), elem_ty_snap2, elem_ptr]
     );
     let loop_entry: LocalRef = LocalRef {
-        reg: elem_val, ty: "i64", is_ref: false,
+        reg: elem_val, ty: elem_ty_snap3, is_ref: false,
     };
     let body_locals: Map[String, LocalRef] =
         extend_locals(ctx.locals, loop_var, loop_entry);

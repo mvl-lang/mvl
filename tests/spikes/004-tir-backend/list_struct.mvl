@@ -1,0 +1,23 @@
+// A1u: List[Point] — list of struct values.
+// Expected stdout: 60  (sum of x+y across three points)
+
+type Point = struct {
+    x: Int,
+    y: Int,
+}
+
+fn sum_coords(ps: List[Point]) -> Int {
+    let sum: ref Int = 0;
+    for p in ps {
+        sum = sum + p.x + p.y;
+    }
+    sum
+}
+
+fn main() -> Int {
+    sum_coords([
+        Point { x: 3, y: 12 },
+        Point { x: 5, y: 15 },
+        Point { x: 10, y: 15 },
+    ])
+}

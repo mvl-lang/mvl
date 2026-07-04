@@ -1,0 +1,14 @@
+// A1u: List[String] — iterate and print only the first element via a
+// counter, avoiding multi-line stdout (Makefile compares by exact match).
+// Expected stdout: alpha
+
+fn main() -> Unit ! Console {
+    let names: List[String] = ["alpha", "beta", "gamma"];
+    let i: ref Int = 0;
+    for n in names {
+        if i == 0 {
+            println(n);
+        }
+        i = i + 1;
+    }
+}
