@@ -1110,6 +1110,15 @@ impl RustEmitter {
                     if i > 0 {
                         self.push(", ");
                     }
+                    // Rust shorthand: emit `{ x }` instead of `{ x: x }`
+                    // when the field pattern is an ident that matches the
+                    // field name (#1673).
+                    if let Pattern::Ident(bname, _) = fpat {
+                        if bname == fname {
+                            self.push(fname);
+                            continue;
+                        }
+                    }
                     self.push(fname);
                     self.push(": ");
                     self.emit_pattern(fpat);
