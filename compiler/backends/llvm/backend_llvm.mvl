@@ -1069,6 +1069,127 @@ partial fn emit_stmt(stmt: Value, ctx: EmitCtx) -> StmtOut {
                 last_label: exit_lbl,
             }
         },
+        "For" => {
+            // A1j: lower `for i in range(lo, hi) { body }` to a while-loop
+            // with an alloca'd counter — inclusive lo, exclusive hi.  Only
+            // the two-arg `range(lo, hi)` iterator is supported; other
+            // iterators (List, Map keys) are deferred.
+            let pattern: Value = jget(stmt, "pattern");
+            let loop_var: String = jstr(pattern, "name");
+            let iter: Value = jget(stmt, "iter");
+            let iter_kind: Value = jget(iter, "kind");
+            let iter_name: String = jstr(iter_kind, "name");
+            if jtag(iter_kind) != "FnCall" || iter_name != "range" {
+                // Unsupported iterator shape — swallow silently for now.
+                return StmtOut {
+                    ctx: ctx,
+                    instrs: [],
+                    tail_reg: "",
+                    tail_ty: "",
+                    last_label: "",
+                }
+            }
+            let range_args: List[Value] = jarr(iter_kind, "args");
+            let ctx0: EmitCtx = EmitCtx { next_reg: ctx.next_reg, locals: ctx.locals };
+            let lo: Emitted = emit_expr(range_args.get(0).unwrap_or(Value::Null), ctx0);
+            let ctx1: EmitCtx = EmitCtx { next_reg: lo.next_reg, locals: ctx.locals };
+            let hi: Emitted = emit_expr(range_args.get(1).unwrap_or(Value::Null), ctx1);
+
+            let n: Int = hi.next_reg;
+            let head_lbl: String = format("for_head_{}", [n.to_string()]);
+            let body_lbl: String = format("for_body_{}", [n.to_string()]);
+            let exit_lbl: String = format("for_exit_{}", [n.to_string()]);
+            let addr_reg: String = format("%{}.addr", [loop_var]);
+            let alloca_line: String = format("  {} = alloca i64", [addr_reg]);
+            let init_store: String = format(
+                "  store i64 {}, ptr {}",
+                [lo.reg, addr_reg]
+            );
+
+            // Head block: load counter, compare to hi, branch.
+            let head_val: String = format("%t{}", [n.to_string()]);
+            let head_cmp: String = format("%t{}", [(n + 1).to_string()]);
+            let head_load: String = format(
+                "  {} = load i64, ptr {}",
+                [head_val, addr_reg]
+            );
+            let head_cmp_line: String = format(
+                "  {} = icmp slt i64 {}, {}",
+                [head_cmp, head_val, hi.reg]
+            );
+            let head_br: String = format(
+                "  br i1 {}, label %{}, label %{}",
+                [head_cmp, body_lbl, exit_lbl]
+            );
+
+            // Body ctx: bind loop_var as a ref-local so body reads see it
+            // via load, and the post-body increment stores back.
+            let loop_entry: LocalRef = LocalRef {
+                reg: addr_reg,
+                ty: "i64",
+                is_ref: true,
+            };
+            let body_locals: Map[String, LocalRef] =
+                extend_locals(ctx.locals, loop_var, loop_entry);
+            let ctx_body: EmitCtx = EmitCtx {
+                next_reg: n + 2,
+                locals: body_locals,
+            };
+            let body_block: Value = jget(stmt, "body");
+            let body_out: StmtOut = emit_body(body_block, ctx_body);
+
+            // Post-body: load, increment, store, jump to head.
+            let inc_load: String = format(
+                "%t{}", [body_out.ctx.next_reg.to_string()]
+            );
+            let inc_val: String = format(
+                "%t{}", [(body_out.ctx.next_reg + 1).to_string()]
+            );
+            let inc_load_line: String = format(
+                "  {} = load i64, ptr {}",
+                [inc_load, addr_reg]
+            );
+            let inc_add: String = format(
+                "  {} = add i64 {}, 1",
+                [inc_val, inc_load]
+            );
+            let inc_store: String = format(
+                "  store i64 {}, ptr {}",
+                [inc_val, addr_reg]
+            );
+
+            let all_instrs: List[String] = lo.instrs
+                .concat(hi.instrs)
+                .concat([
+                    alloca_line,
+                    init_store,
+                    format("  br label %{}", [head_lbl]),
+                    format("{}:", [head_lbl]),
+                    head_load,
+                    head_cmp_line,
+                    head_br,
+                    format("{}:", [body_lbl]),
+                ])
+                .concat(body_out.instrs)
+                .concat([
+                    inc_load_line,
+                    inc_add,
+                    inc_store,
+                    format("  br label %{}", [head_lbl]),
+                    format("{}:", [exit_lbl]),
+                ]);
+
+            StmtOut {
+                ctx: EmitCtx {
+                    next_reg: body_out.ctx.next_reg + 2,
+                    locals: ctx.locals,
+                },
+                instrs: all_instrs,
+                tail_reg: "",
+                tail_ty: "",
+                last_label: exit_lbl,
+            }
+        },
         _ => StmtOut {
             ctx: ctx,
             instrs: [],
