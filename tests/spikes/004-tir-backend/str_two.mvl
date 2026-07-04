@@ -1,0 +1,8 @@
+// A1m: same string literal used twice — global deduplication.
+// Expected stdout: alpha
+
+fn say(msg: String) -> Unit ! Console { println(msg) }
+
+fn main() -> Unit ! Console {
+    say("alpha")
+}

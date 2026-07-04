@@ -98,6 +98,12 @@ type EmitCtx = struct {
     // Empty for programs that don't declare any enums.  Populated once
     // by [`emit_program`] and threaded through every EmitCtx clone.
     enums: Map[String, Int],
+    // A1m: literal string value → global-symbol name (`@.str.N`).
+    // Populated once by [`emit_program`] via [`build_string_registry`].
+    // Emit sites look up the global by exact string content; the length
+    // is the value's byte length.  Empty for programs with no string
+    // literals.
+    strings: Map[String, String],
 }
 
 // Result of emitting an expression: the operand holding the value, its LLVM
@@ -189,6 +195,12 @@ partial fn tir_ty_to_llvm(ty: Value) -> String {
         // A1k: `List[Int]` lowers to `{i64, ptr}` — length + data ptr
         // to a private constant array (`ListLit` emits the storage).
         "List"   => "{i64, ptr}",
+        // A1m: String lowers to `{i64, ptr}` — length + data ptr to a
+        // private constant `[N x i8]` global (`Literal.Str` emits it).
+        "Str"    => "{i64, ptr}",
+        // A1m: Unit-typed exprs / stmts have no runtime value; use
+        // `void` so callers can decide to elide the store/reg.
+        "Unit"   => "void",
         _        => "i64",
     }
 }
@@ -210,16 +222,38 @@ partial fn emit_expr(expr: Value, ctx: EmitCtx) -> Emitted {
             let lit_tag: String = jtag(lit);
             if lit_tag == "Integer" {
                 emitted_imm(jstr(lit, "value"), ctx.next_reg)
-            } else {
-                if lit_tag == "Bool" {
-                    // MVL Bool → LLVM i1; true=1, false=0.  Value is a JSON
-                    // boolean (not "true"/"false" strings), so read via jbool.
-                    let b: Bool = jbool(lit, "value");
-                    let one_or_zero: String = if b { "1" } else { "0" };
-                    emitted_bool(one_or_zero, ctx.next_reg)
-                } else {
-                    emitted_imm("0", ctx.next_reg)
+            } else if lit_tag == "Bool" {
+                // MVL Bool → LLVM i1; true=1, false=0.  Value is a JSON
+                // boolean (not "true"/"false" strings), so read via jbool.
+                let b: Bool = jbool(lit, "value");
+                let one_or_zero: String = if b { "1" } else { "0" };
+                emitted_bool(one_or_zero, ctx.next_reg)
+            } else if lit_tag == "Str" {
+                // A1m: String literal → `{i64, ptr}` aggregate built via two
+                // insertvalue instructions.  The pointer field targets the
+                // module-level `@.str.N` global registered in EmitCtx.strings.
+                let s: String = jstr(lit, "value");
+                let g: String = ctx.strings.get(s).unwrap_or("@.str.missing");
+                let n: Int = s.len();
+                let tmp_reg: String = format("%t{}", [ctx.next_reg.to_string()]);
+                let out_reg: String = format("%t{}", [(ctx.next_reg + 1).to_string()]);
+                let mk_len: String = format(
+                    "  {} = insertvalue {i64, ptr} undef, i64 {}, 0",
+                    [tmp_reg, n.to_string()]
+                );
+                let mk_ptr: String = format(
+                    "  {} = insertvalue {i64, ptr} {}, ptr {}, 1",
+                    [out_reg, tmp_reg, g]
+                );
+                Emitted {
+                    reg: out_reg,
+                    ty: "{i64, ptr}",
+                    next_reg: ctx.next_reg + 2,
+                    instrs: [mk_len, mk_ptr],
+                    last_label: "",
                 }
+            } else {
+                emitted_imm("0", ctx.next_reg)
             }
         },
         "Var" => {
@@ -287,7 +321,7 @@ partial fn emit_expr(expr: Value, ctx: EmitCtx) -> Emitted {
         "Binary" => {
             let op: String = jstr(kind, "op");
             let l: Emitted = emit_expr(jget(kind, "left"), ctx);
-            let r_ctx: EmitCtx = EmitCtx { next_reg: l.next_reg, locals: ctx.locals, enums: ctx.enums };
+            let r_ctx: EmitCtx = EmitCtx { next_reg: l.next_reg, locals: ctx.locals, enums: ctx.enums, strings: ctx.strings };
             let r: Emitted = emit_expr(jget(kind, "right"), r_ctx);
             let opname: String = emit_binop_llvm(op);
             let reg: String = format("%t{}", [r.next_reg.to_string()]);
@@ -323,6 +357,7 @@ partial fn emit_expr(expr: Value, ctx: EmitCtx) -> Emitted {
                 next_reg: ctx.next_reg,
                 locals: ctx.locals,
                 enums: ctx.enums,
+                strings: ctx.strings,
             };
             // First, emit each element expression, collecting their SSA regs.
             let elem_regs: ref List[String] = [];
@@ -331,6 +366,7 @@ partial fn emit_expr(expr: Value, ctx: EmitCtx) -> Emitted {
             for e in elems {
                 let sub: EmitCtx = EmitCtx {
                     next_reg: cur, locals: ctx.locals, enums: ctx.enums,
+                    strings: ctx.strings,
                 };
                 let emit_e: Emitted = emit_expr(e, sub);
                 cur = emit_e.next_reg;
@@ -507,7 +543,7 @@ partial fn emit_if_blocks(
         "  br i1 {}, label %{}, label %{}",
         [cond_i1_reg, then_lbl, else_lbl]
     );
-    let ctx_bodies: EmitCtx = EmitCtx { next_reg: n + 1, locals: ctx.locals, enums: ctx.enums };
+    let ctx_bodies: EmitCtx = EmitCtx { next_reg: n + 1, locals: ctx.locals, enums: ctx.enums, strings: ctx.strings };
 
     // Emit then/else bodies. Each returns a StmtOut whose tail_reg is the
     // value produced by the last Expr statement in that block.  If the arm
@@ -528,7 +564,7 @@ partial fn emit_if_blocks(
     // (Option/Result) get a `phi {i8, i64}`, not `phi i64`.  Both arms
     // must have the same ty (checker-enforced); we take the then arm's.
     let phi_ty: String = if then_out.tail_ty == "" { "i64" } else { then_out.tail_ty };
-    let then_ctx: EmitCtx = EmitCtx { next_reg: then_out.ctx.next_reg, locals: ctx.locals, enums: ctx.enums };
+    let then_ctx: EmitCtx = EmitCtx { next_reg: then_out.ctx.next_reg, locals: ctx.locals, enums: ctx.enums, strings: ctx.strings };
 
     let else_out: StmtOut = emit_body(else_block, then_ctx);
     let else_reg: String = if else_out.tail_reg == "" { "0" } else { else_out.tail_reg };
@@ -743,6 +779,7 @@ partial fn emit_match(
                 next_reg: cur_reg,
                 locals: arm_locals,
                 enums: ctx.enums,
+                strings: ctx.strings,
             };
             let arm_body: Value = jget(arm, "body");
             let arm_out: MatchArmOut = emit_match_body(arm_body, arm_ctx);
@@ -853,7 +890,7 @@ partial fn emit_fn_call(
     // All lower to `{i8, i64}` aggregate via `insertvalue`: tag byte
     // (0/1 for Some/None or Ok/Err), then payload.
     if (name == "Some" || name == "Ok") && args.len() == 1 {
-        let payload_ctx: EmitCtx = EmitCtx { next_reg: ctx.next_reg, locals: ctx.locals, enums: ctx.enums };
+        let payload_ctx: EmitCtx = EmitCtx { next_reg: ctx.next_reg, locals: ctx.locals, enums: ctx.enums, strings: ctx.strings };
         let payload: Emitted = emit_expr(args.get(0).unwrap_or(Value::Null), payload_ctx);
         let tag_reg: String = format("%t{}", [payload.next_reg.to_string()]);
         let val_reg: String = format("%t{}", [(payload.next_reg + 1).to_string()]);
@@ -876,7 +913,7 @@ partial fn emit_fn_call(
     }
     if (name == "None" && args.len() == 0) || (name == "Err" && args.len() == 1) {
         if name == "Err" {
-            let payload_ctx: EmitCtx = EmitCtx { next_reg: ctx.next_reg, locals: ctx.locals, enums: ctx.enums };
+            let payload_ctx: EmitCtx = EmitCtx { next_reg: ctx.next_reg, locals: ctx.locals, enums: ctx.enums, strings: ctx.strings };
             let payload: Emitted = emit_expr(args.get(0).unwrap_or(Value::Null), payload_ctx);
             let tag_reg: String = format("%t{}", [payload.next_reg.to_string()]);
             let val_reg: String = format("%t{}", [(payload.next_reg + 1).to_string()]);
@@ -911,6 +948,50 @@ partial fn emit_fn_call(
         }
     }
 
+    // A1m: `println(x)` — MVL Console-effect builtin.  Lowered to a
+    // libc `printf` call.  Two arg types supported:
+    //   - String → `printf("%s\n", data_ptr)` via `@.fmt_str`
+    //   - Int    → `printf("%ld\n", val)` via `@.fmt_int`
+    // The returned Emitted has ty `void` and reg `""` — callers in
+    // statement position discard it; expression-position use is not
+    // supported (Console-effect calls should be Stmt-Expr'd).
+    if name == "println" && args.len() == 1 {
+        let arg_ctx: EmitCtx = EmitCtx {
+            next_reg: ctx.next_reg,
+            locals: ctx.locals,
+            enums: ctx.enums,
+            strings: ctx.strings,
+        };
+        let arg: Emitted = emit_expr(args.get(0).unwrap_or(Value::Null), arg_ctx);
+        let is_str: Bool = arg.ty == "{i64, ptr}";
+        let call_instr: String = if is_str {
+            // Extract data ptr from {i64, ptr}, pass to printf.
+            let data_reg: String = format("%t{}", [arg.next_reg.to_string()]);
+            let extract: String = format(
+                "  {} = extractvalue {i64, ptr} {}, 1",
+                [data_reg, arg.reg]
+            );
+            let call: String = format(
+                "  call i32 (ptr, ...) @printf(ptr @.fmt_str, ptr {})",
+                [data_reg]
+            );
+            extract.concat("\n").concat(call)
+        } else {
+            format(
+                "  call i32 (ptr, ...) @printf(ptr @.fmt_int, i64 {})",
+                [arg.reg]
+            )
+        };
+        let extra_regs: Int = if is_str { 1 } else { 0 };
+        return Emitted {
+            reg: "",
+            ty: "void",
+            next_reg: arg.next_reg + extra_regs,
+            instrs: arg.instrs.concat([call_instr]),
+            last_label: "",
+        }
+    }
+
     // Regular fn call: emit each arg using its own emitted type so
     // Option-typed args pass as `{i8, i64} %r` rather than `i64 %r`.
     let accum_regs: ref List[String] = [];
@@ -918,7 +999,7 @@ partial fn emit_fn_call(
     let accum_instrs: ref List[String] = [];
     let cur: ref Int = ctx.next_reg;
     for a in args {
-        let sub_ctx: EmitCtx = EmitCtx { next_reg: cur, locals: ctx.locals, enums: ctx.enums };
+        let sub_ctx: EmitCtx = EmitCtx { next_reg: cur, locals: ctx.locals, enums: ctx.enums, strings: ctx.strings };
         let e: Emitted = emit_expr(a, sub_ctx);
         cur = e.next_reg;
         for line in e.instrs { accum_instrs.push(line) }
@@ -936,16 +1017,28 @@ partial fn emit_fn_call(
         ai = ai + 1;
     }
     let arg_str: String = arg_parts.join(", ");
-    let call_reg: String = format("%t{}", [cur.to_string()]);
-    let call_line: String = format(
-        "  {} = call {} @{}({})",
-        [call_reg, ret_ty, name, arg_str]
-    );
+    // A1m: `void` calls can't be name-assigned in LLVM.  Emit
+    // `call void @fn(...)` with no reg; caller ignores the result reg
+    // because ty=="void" flags the value as non-existent.
+    let is_void: Bool = ret_ty == "void";
+    let call_reg: String = if is_void {
+        ""
+    } else {
+        format("%t{}", [cur.to_string()])
+    };
+    let call_line: String = if is_void {
+        format("  call void @{}({})", [name, arg_str])
+    } else {
+        format(
+            "  {} = call {} @{}({})",
+            [call_reg, ret_ty, name, arg_str]
+        )
+    };
     accum_instrs.push(call_line);
     Emitted {
         reg: call_reg,
         ty: ret_ty,
-        next_reg: cur + 1,
+        next_reg: if is_void { cur } else { cur + 1 },
         instrs: accum_instrs,
         last_label: "",
     }
@@ -996,6 +1089,7 @@ partial fn emit_for_list(
 ) -> StmtOut {
     let iter_ctx: EmitCtx = EmitCtx {
         next_reg: ctx.next_reg, locals: ctx.locals, enums: ctx.enums,
+        strings: ctx.strings,
     };
     let list: Emitted = emit_expr(iter, iter_ctx);
     let n0: Int = list.next_reg;
@@ -1055,6 +1149,7 @@ partial fn emit_for_list(
         next_reg: n0 + 7,
         locals: body_locals,
         enums: ctx.enums,
+        strings: ctx.strings,
     };
     let body_block: Value = jget(stmt, "body");
     let body_out: StmtOut = emit_body(body_block, ctx_body);
@@ -1102,6 +1197,7 @@ partial fn emit_for_list(
             next_reg: body_out.ctx.next_reg + 2,
             locals: ctx.locals,
             enums: ctx.enums,
+            strings: ctx.strings,
         },
         instrs: all_instrs,
         tail_reg: "",
@@ -1118,7 +1214,7 @@ partial fn emit_stmt(stmt: Value, ctx: EmitCtx) -> StmtOut {
         "Expr" => {
             let e: Emitted = emit_expr(jget(stmt, "expr"), ctx);
             StmtOut {
-                ctx: EmitCtx { next_reg: e.next_reg, locals: ctx.locals, enums: ctx.enums },
+                ctx: EmitCtx { next_reg: e.next_reg, locals: ctx.locals, enums: ctx.enums, strings: ctx.strings },
                 instrs: e.instrs,
                 tail_reg: e.reg,
                 tail_ty: e.ty,
@@ -1139,7 +1235,7 @@ partial fn emit_stmt(stmt: Value, ctx: EmitCtx) -> StmtOut {
                 ctx,
             );
             StmtOut {
-                ctx: EmitCtx { next_reg: e.next_reg, locals: ctx.locals, enums: ctx.enums },
+                ctx: EmitCtx { next_reg: e.next_reg, locals: ctx.locals, enums: ctx.enums, strings: ctx.strings },
                 instrs: e.instrs,
                 tail_reg: e.reg,
                 tail_ty: e.ty,
@@ -1155,7 +1251,7 @@ partial fn emit_stmt(stmt: Value, ctx: EmitCtx) -> StmtOut {
                 ctx,
             );
             StmtOut {
-                ctx: EmitCtx { next_reg: e.next_reg, locals: ctx.locals, enums: ctx.enums },
+                ctx: EmitCtx { next_reg: e.next_reg, locals: ctx.locals, enums: ctx.enums, strings: ctx.strings },
                 instrs: e.instrs,
                 tail_reg: e.reg,
                 tail_ty: e.ty,
@@ -1185,7 +1281,7 @@ partial fn emit_stmt(stmt: Value, ctx: EmitCtx) -> StmtOut {
                 let new_locals: Map[String, LocalRef] =
                     extend_locals(ctx.locals, name, entry);
                 StmtOut {
-                    ctx: EmitCtx { next_reg: init.next_reg, locals: new_locals, enums: ctx.enums },
+                    ctx: EmitCtx { next_reg: init.next_reg, locals: new_locals, enums: ctx.enums, strings: ctx.strings },
                     instrs: init.instrs.concat([alloca_line, store_line]),
                     tail_reg: "",
                     tail_ty: "",
@@ -1200,7 +1296,7 @@ partial fn emit_stmt(stmt: Value, ctx: EmitCtx) -> StmtOut {
                 let new_locals: Map[String, LocalRef] =
                     extend_locals(ctx.locals, name, entry);
                 StmtOut {
-                    ctx: EmitCtx { next_reg: init.next_reg, locals: new_locals, enums: ctx.enums },
+                    ctx: EmitCtx { next_reg: init.next_reg, locals: new_locals, enums: ctx.enums, strings: ctx.strings },
                     instrs: init.instrs,
                     tail_reg: "",
                     tail_ty: "",
@@ -1227,6 +1323,7 @@ partial fn emit_stmt(stmt: Value, ctx: EmitCtx) -> StmtOut {
                                 next_reg: rhs.next_reg,
                                 locals: ctx.locals,
                 enums: ctx.enums,
+                strings: ctx.strings,
                             },
                             instrs: rhs.instrs.concat([store_line]),
                             tail_reg: "",
@@ -1235,7 +1332,7 @@ partial fn emit_stmt(stmt: Value, ctx: EmitCtx) -> StmtOut {
                         }
                     },
                     None => StmtOut {
-                        ctx: EmitCtx { next_reg: rhs.next_reg, locals: ctx.locals, enums: ctx.enums },
+                        ctx: EmitCtx { next_reg: rhs.next_reg, locals: ctx.locals, enums: ctx.enums, strings: ctx.strings },
                         instrs: rhs.instrs,
                         tail_reg: "",
                         tail_ty: "",
@@ -1246,7 +1343,7 @@ partial fn emit_stmt(stmt: Value, ctx: EmitCtx) -> StmtOut {
                 // Unsupported LValue shape (e.g. Field) — swallow the value
                 // instructions and continue.
                 StmtOut {
-                    ctx: EmitCtx { next_reg: rhs.next_reg, locals: ctx.locals, enums: ctx.enums },
+                    ctx: EmitCtx { next_reg: rhs.next_reg, locals: ctx.locals, enums: ctx.enums, strings: ctx.strings },
                     instrs: rhs.instrs,
                     tail_reg: "",
                     tail_ty: "",
@@ -1274,7 +1371,7 @@ partial fn emit_stmt(stmt: Value, ctx: EmitCtx) -> StmtOut {
             let body_lbl: String = format("while_body_{}", [n.to_string()]);
             let exit_lbl: String = format("while_exit_{}", [n.to_string()]);
 
-            let ctx_head: EmitCtx = EmitCtx { next_reg: n, locals: ctx.locals, enums: ctx.enums };
+            let ctx_head: EmitCtx = EmitCtx { next_reg: n, locals: ctx.locals, enums: ctx.enums, strings: ctx.strings };
             let c: Emitted = emit_expr(cond_expr, ctx_head);
             let cond_i1_reg: String = format("%t{}", [c.next_reg.to_string()]);
             let coerce_instr: String = format(
@@ -1286,6 +1383,7 @@ partial fn emit_stmt(stmt: Value, ctx: EmitCtx) -> StmtOut {
                 next_reg: c.next_reg + 1,
                 locals: ctx.locals,
                 enums: ctx.enums,
+                strings: ctx.strings,
             };
             let body_out: StmtOut = emit_body(body_block, ctx_body);
 
@@ -1313,6 +1411,7 @@ partial fn emit_stmt(stmt: Value, ctx: EmitCtx) -> StmtOut {
                     next_reg: body_out.ctx.next_reg,
                     locals: ctx.locals,
                 enums: ctx.enums,
+                strings: ctx.strings,
                 },
                 instrs: all_instrs,
                 tail_reg: "",
@@ -1356,9 +1455,9 @@ partial fn emit_stmt(stmt: Value, ctx: EmitCtx) -> StmtOut {
                 return emit_for_list(stmt, iter, loop_var, ctx)
             }
             let range_args: List[Value] = jarr(iter_kind, "args");
-            let ctx0: EmitCtx = EmitCtx { next_reg: ctx.next_reg, locals: ctx.locals, enums: ctx.enums };
+            let ctx0: EmitCtx = EmitCtx { next_reg: ctx.next_reg, locals: ctx.locals, enums: ctx.enums, strings: ctx.strings };
             let lo: Emitted = emit_expr(range_args.get(0).unwrap_or(Value::Null), ctx0);
-            let ctx1: EmitCtx = EmitCtx { next_reg: lo.next_reg, locals: ctx.locals, enums: ctx.enums };
+            let ctx1: EmitCtx = EmitCtx { next_reg: lo.next_reg, locals: ctx.locals, enums: ctx.enums, strings: ctx.strings };
             let hi: Emitted = emit_expr(range_args.get(1).unwrap_or(Value::Null), ctx1);
 
             let n: Int = hi.next_reg;
@@ -1401,6 +1500,7 @@ partial fn emit_stmt(stmt: Value, ctx: EmitCtx) -> StmtOut {
                 next_reg: n + 2,
                 locals: body_locals,
                 enums: ctx.enums,
+                strings: ctx.strings,
             };
             let body_block: Value = jget(stmt, "body");
             let body_out: StmtOut = emit_body(body_block, ctx_body);
@@ -1451,6 +1551,7 @@ partial fn emit_stmt(stmt: Value, ctx: EmitCtx) -> StmtOut {
                     next_reg: body_out.ctx.next_reg + 2,
                     locals: ctx.locals,
                 enums: ctx.enums,
+                strings: ctx.strings,
                 },
                 instrs: all_instrs,
                 tail_reg: "",
@@ -1507,7 +1608,9 @@ partial fn emit_body(body: Value, initial: EmitCtx) -> StmtOut {
 // Build the initial ctx for a fn: bind each TIR Param.name to `%name` with
 // type i64 (A1c restriction — no Bool-typed params in the corpus yet).
 partial fn initial_ctx_from_params(
-    params: List[Value], enums: Map[String, Int]
+    params: List[Value],
+    enums: Map[String, Int],
+    strings: Map[String, String],
 ) -> EmitCtx {
     let m: ref Map[String, LocalRef] = Map::new();
     for p in params {
@@ -1516,13 +1619,17 @@ partial fn initial_ctx_from_params(
         let ty: String = tir_ty_to_llvm(jget(p, "ty"));
         m.insert(n, LocalRef { reg: reg, ty: ty, is_ref: false })
     }
-    EmitCtx { next_reg: 0, locals: m, enums: enums }
+    EmitCtx { next_reg: 0, locals: m, enums: enums, strings: strings }
 }
 
 // Emit a `define <ret_ty> @name(<pty> %a, ...) { ... ret <ret_ty> <val> }`
 // block for a non-main fn.  Return type comes from `f.ret_ty` (TIR),
 // mapped via [`tir_ty_to_llvm`] — Option/Result return as `{i8, i64}`.
-partial fn emit_fn_def(f: Value, enums: Map[String, Int]) -> String {
+partial fn emit_fn_def(
+    f: Value,
+    enums: Map[String, Int],
+    strings: Map[String, String],
+) -> String {
     let name: String = jstr(f, "name");
     // NOTE: jarr called twice on purpose — the MVL→Rust transpiler moves
     // List values on `.map()`, so a single named binding used twice is
@@ -1534,11 +1641,16 @@ partial fn emit_fn_def(f: Value, enums: Map[String, Int]) -> String {
         ))
         .join(", ");
     let ret_ty: String = tir_ty_to_llvm(jget(f, "ret_ty"));
-    let ctx: EmitCtx = initial_ctx_from_params(jarr(f, "params"), enums);
+    let ctx: EmitCtx = initial_ctx_from_params(jarr(f, "params"), enums, strings);
     let out: StmtOut = emit_body(jget(f, "body"), ctx);
     let body_instrs: String = out.instrs.join("\n");
     let ret_val: String = if out.tail_reg == "" { "0" } else { out.tail_reg };
-    let ret_line: String = format("  ret {} {}", [ret_ty, ret_val]);
+    // A1m: `void` returns are argument-free (`ret void`, not `ret void 0`).
+    let ret_line: String = if ret_ty == "void" {
+        "  ret void"
+    } else {
+        format("  ret {} {}", [ret_ty, ret_val])
+    };
     let body: String = if body_instrs == "" {
         ret_line
     } else {
@@ -1549,22 +1661,39 @@ partial fn emit_fn_def(f: Value, enums: Map[String, Int]) -> String {
 }
 
 // Emit `define i32 @main() { ... printf(...); ret i32 0 }` for the entry.
-// Ignores main's params (MVL main has none in A1b) and its declared return.
-partial fn emit_main_def(f: Value, enums: Map[String, Int]) -> String {
+// Behavior depends on `main`'s declared return type:
+//   - Int/Bool/…  → print the tail value with `%ld`, then `ret i32 0`.
+//   - Unit         → skip the terminal printf (the body already ran
+//                    its own println side-effects) and just `ret i32 0`.
+partial fn emit_main_def(
+    f: Value,
+    enums: Map[String, Int],
+    strings: Map[String, String],
+) -> String {
     let no_params: List[Value] = [];
-    let ctx: EmitCtx = initial_ctx_from_params(no_params, enums);
+    let ctx: EmitCtx = initial_ctx_from_params(no_params, enums, strings);
     let out: StmtOut = emit_body(jget(f, "body"), ctx);
     let body_instrs: String = out.instrs.join("\n");
     let ret_val: String = if out.tail_reg == "" { "0" } else { out.tail_reg };
-    let call_line: String = format(
-        "  call i32 (ptr, ...) @printf(ptr @.fmt_int, i64 {})",
-        [ret_val]
-    );
+    let ret_ty_tag: String = jtag(jget(f, "ret_ty"));
+    let is_unit_main: Bool = ret_ty_tag == "Unit";
+    let call_line: String = if is_unit_main {
+        ""
+    } else {
+        format(
+            "  call i32 (ptr, ...) @printf(ptr @.fmt_int, i64 {})",
+            [ret_val]
+        )
+    };
     let ret_line: String = "  ret i32 0";
     let body: String = if body_instrs == "" {
-        call_line.concat("\n").concat(ret_line)
+        if is_unit_main { ret_line } else { call_line.concat("\n").concat(ret_line) }
     } else {
-        body_instrs.concat("\n").concat(call_line).concat("\n").concat(ret_line)
+        if is_unit_main {
+            body_instrs.concat("\n").concat(ret_line)
+        } else {
+            body_instrs.concat("\n").concat(call_line).concat("\n").concat(ret_line)
+        }
     };
     format("define i32 @main() {}\n{}\n{}\n",
         [lbrace(), body, rbrace()])
@@ -1600,6 +1729,133 @@ partial fn build_enum_registry(types: List[Value]) -> Map[String, Int] {
     m
 }
 
+// A1m: walk all fn bodies once, collecting every string literal in
+// source order.  Duplicates are preserved by the walk; deduplication
+// happens in [`build_string_registry`] via a Map.  Each collector
+// returns a fresh List which callers concat — no shared-ref mutation
+// (Rust transpiler ergonomics; ref-param passing is not currently
+// supported cleanly across recursive calls).
+partial fn build_string_registry(fns: List[Value]) -> Map[String, String] {
+    let all: ref List[String] = [];
+    for f in fns {
+        let body: Value = jget(f, "body");
+        for s in collect_strings_in_block(body) { all.push(s) }
+    }
+    // Dedupe: first-seen assignment order.
+    let m: ref Map[String, String] = Map::new();
+    let counter: ref Int = 0;
+    for s in all {
+        if !m.contains_key(s) {
+            let n: Int = counter;
+            let sym: String = format("@.str.{}", [n.to_string()]);
+            m.insert(s, sym);
+            counter = counter + 1;
+        }
+    }
+    m
+}
+
+partial fn collect_strings_in_block(block: Value) -> List[String] {
+    let out: ref List[String] = [];
+    let stmts: List[Value] = jarr(block, "stmts");
+    for stmt in stmts {
+        for s in collect_strings_in_stmt(stmt) { out.push(s) }
+    }
+    out
+}
+
+partial fn collect_strings_in_stmt(stmt: Value) -> List[String] {
+    let t: String = jtag(stmt);
+    if t == "Expr" || t == "Return" {
+        collect_strings_in_expr(jget(stmt, "expr"))
+    } else if t == "Let" {
+        collect_strings_in_expr(jget(stmt, "init"))
+    } else if t == "Assign" {
+        collect_strings_in_expr(jget(stmt, "value"))
+    } else if t == "While" {
+        collect_strings_in_expr(jget(stmt, "cond"))
+            .concat(collect_strings_in_block(jget(stmt, "body")))
+    } else if t == "For" {
+        collect_strings_in_expr(jget(stmt, "iter"))
+            .concat(collect_strings_in_block(jget(stmt, "body")))
+    } else {
+        []
+    }
+}
+
+partial fn collect_strings_in_expr(expr: Value) -> List[String] {
+    let kind: Value = jget(expr, "kind");
+    let t: String = jtag(kind);
+    if t == "Literal" {
+        let lit: Value = jget(kind, "lit");
+        if jtag(lit) == "Str" {
+            [jstr(lit, "value")]
+        } else { [] }
+    } else if t == "FnCall" {
+        let out: ref List[String] = [];
+        for a in jarr(kind, "args") {
+            for s in collect_strings_in_expr(a) { out.push(s) }
+        }
+        out
+    } else if t == "Binary" {
+        collect_strings_in_expr(jget(kind, "lhs"))
+            .concat(collect_strings_in_expr(jget(kind, "rhs")))
+    } else if t == "Unary" {
+        collect_strings_in_expr(jget(kind, "expr"))
+    } else if t == "If" {
+        let cond_ss: List[String] = collect_strings_in_expr(jget(kind, "cond"));
+        let then_ss: List[String] = collect_strings_in_block(jget(kind, "then_block"));
+        let else_val: Value = jget(kind, "else_block");
+        let else_ss: List[String] = if jtag(else_val) != "Null" {
+            collect_strings_in_block(else_val)
+        } else { [] };
+        cond_ss.concat(then_ss).concat(else_ss)
+    } else if t == "Match" {
+        let out: ref List[String] = [];
+        for s in collect_strings_in_expr(jget(kind, "scrutinee")) { out.push(s) }
+        for arm in jarr(kind, "arms") {
+            for s in collect_strings_in_block(jget(arm, "body")) { out.push(s) }
+        }
+        out
+    } else if t == "Block" {
+        collect_strings_in_block(kind)
+    } else if t == "ListLit" {
+        let out: ref List[String] = [];
+        for e in jarr(kind, "elems") {
+            for s in collect_strings_in_expr(e) { out.push(s) }
+        }
+        out
+    } else {
+        []
+    }
+}
+
+// Escape a string for LLVM's `c"..."` constant syntax.  Most printable
+// ASCII passes through unchanged; only `"`, `\`, `\n`, `\t`, `\r` need
+// the `\NN` hex-byte form.  Non-ASCII and other control chars fall
+// through to a `?` placeholder in this MVP (corpus programs are pure
+// ASCII).
+partial fn escape_llvm_string(s: String) -> String {
+    let out: ref String = "";
+    let chars: List[String] = s.chars();
+    for c in chars {
+        if c == "\"" {
+            out = out.concat("\\22");
+        } else if c == "\\" {
+            out = out.concat("\\5C");
+        } else if c == "\n" {
+            out = out.concat("\\0A");
+        } else if c == "\t" {
+            out = out.concat("\\09");
+        } else if c == "\r" {
+            out = out.concat("\\0D");
+        } else {
+            out = out.concat(c);
+        }
+    }
+    out
+}
+
 partial fn emit_program(tir: Value) -> String {
     let name_raw: String = jstr(tir, "name");
     let module_name: String = if name_raw == "" { "mvl_module" } else { name_raw };
@@ -1608,23 +1864,65 @@ partial fn emit_program(tir: Value) -> String {
         "; ModuleID = '{}'\nsource_filename = \"{}\"\ntarget triple = \"{}\"\n",
         [module_name, module_name, triple]
     );
-    let printf_fmt: String = "\n@.fmt_int = private unnamed_addr constant [5 x i8] c\"%ld\\0A\\00\"\n";
+    let printf_fmt_int: String = "\n@.fmt_int = private unnamed_addr constant [5 x i8] c\"%ld\\0A\\00\"\n";
+    let printf_fmt_str: String = "@.fmt_str = private unnamed_addr constant [4 x i8] c\"%s\\0A\\00\"\n";
     let printf_decl: String = "\ndeclare i32 @printf(ptr, ...)\n";
     let enums: Map[String, Int] = build_enum_registry(jarr(tir, "types"));
     let fns: List[Value] = jarr(tir, "fns");
+    let strings: Map[String, String] = build_string_registry(fns);
+    // Emit @.str.N globals — one per distinct literal.  Length is
+    // len(value)+1 to account for the trailing NUL byte C-string
+    // constants require.
+    let string_globals: ref List[String] = [];
+    for k in strings.keys() {
+        match strings.get(k) {
+            Some(sym) => {
+                let esc: String = escape_llvm_string(k);
+                let n: Int = k.len() + 1;
+                string_globals.push(format(
+                    "{} = private unnamed_addr constant [{} x i8] c\"{}\\00\"",
+                    [sym, n.to_string(), esc]
+                ));
+            },
+            None => {},
+        }
+    }
+    let str_globals_block: String = if string_globals.is_empty() {
+        ""
+    } else {
+        "\n".concat(string_globals.join("\n")).concat("\n")
+    };
     let parts: ref List[String] = [];
     let enums_ref: ref Map[String, Int] = enums;
+    let strings_ref: ref Map[String, String] = strings;
     for f in fns {
         let fname: String = jstr(f, "name");
         let enums_iter: Map[String, Int] = clone_enums(enums_ref);
+        let strings_iter: Map[String, String] = clone_strings(strings_ref);
         if fname == "main" {
-            parts.push(emit_main_def(f, enums_iter))
+            parts.push(emit_main_def(f, enums_iter, strings_iter))
         } else {
-            parts.push(emit_fn_def(f, enums_iter))
+            parts.push(emit_fn_def(f, enums_iter, strings_iter))
         }
     }
     let body: String = "\n".concat(parts.join("\n"));
-    header.concat(printf_fmt).concat(printf_decl).concat(body)
+    header
+        .concat(printf_fmt_int)
+        .concat(printf_fmt_str)
+        .concat(printf_decl)
+        .concat(str_globals_block)
+        .concat(body)
+}
+
+partial fn clone_strings(base: Map[String, String]) -> Map[String, String] {
+    let m: ref Map[String, String] = Map::new();
+    for k in base.keys() {
+        match base.get(k) {
+            Some(v) => m.insert(k, v),
+            None    => {},
+        }
+    }
+    m
 }
 
 // Deep-copy the enum registry so per-fn calls in the emit loop each get
