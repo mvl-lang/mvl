@@ -120,10 +120,16 @@ type Emitted = struct {
 // Result of emitting a statement.  `last_label` follows the same
 // convention as in [`Emitted`] — empty for straight-line stmts, the
 // exit label of any nested control flow otherwise.
+//
+// `tail_ty` carries the LLVM type of `tail_reg` when it holds a real
+// value ("i64"/"i1"/"{i8, i64}"), or "" when the stmt produced no
+// value.  Needed so if/match phi merges over aggregate return types
+// (A1i: `fn foo() -> Option[Int]`) emit the correct phi ty.
 type StmtOut = struct {
     ctx: EmitCtx,
     instrs: List[String],
     tail_reg: String,
+    tail_ty: String,
     last_label: String,
 }
 
@@ -273,7 +279,12 @@ partial fn emit_expr(expr: Value, ctx: EmitCtx) -> Emitted {
         "FnCall" => {
             let name: String = jstr(kind, "name");
             let args: List[Value] = jarr(kind, "args");
-            emit_fn_call(name, args, ctx)
+            // A1i: TIR carries the resolved return type on the FnCall
+            // expression itself (not inside `kind`), so `expr.ty` is the
+            // callee's return type — needed to emit `call <ret_ty> @fn`
+            // when the callee returns Option/Result.
+            let ret_ty: String = tir_ty_to_llvm(jget(expr, "ty"));
+            emit_fn_call(name, args, ret_ty, ctx)
         },
         "Unary" => {
             let op: String = jstr(kind, "op");
@@ -415,6 +426,10 @@ partial fn emit_if_blocks(
     } else {
         then_out.last_label
     };
+    // A1i: preserve the arm's LLVM type so aggregate return values
+    // (Option/Result) get a `phi {i8, i64}`, not `phi i64`.  Both arms
+    // must have the same ty (checker-enforced); we take the then arm's.
+    let phi_ty: String = if then_out.tail_ty == "" { "i64" } else { then_out.tail_ty };
     let then_ctx: EmitCtx = EmitCtx { next_reg: then_out.ctx.next_reg, locals: ctx.locals };
 
     let else_out: StmtOut = emit_body(else_block, then_ctx);
@@ -427,8 +442,8 @@ partial fn emit_if_blocks(
 
     let phi_reg: String = format("%t{}", [else_out.ctx.next_reg.to_string()]);
     let phi_line: String = format(
-        "  {} = phi i64 [ {}, %{} ], [ {}, %{} ]",
-        [phi_reg, then_reg, then_pred, else_reg, else_pred]
+        "  {} = phi {} [ {}, %{} ], [ {}, %{} ]",
+        [phi_reg, phi_ty, then_reg, then_pred, else_reg, else_pred]
     );
 
     let all_instrs: List[String] = c.instrs
@@ -445,7 +460,7 @@ partial fn emit_if_blocks(
 
     Emitted {
         reg: phi_reg,
-        ty: "i64",
+        ty: phi_ty,
         next_reg: else_out.ctx.next_reg + 1,
         instrs: all_instrs,
         last_label: join_lbl,
@@ -491,6 +506,9 @@ partial fn emit_match(
     let scrut_ty: String = s.ty;
     let saw_fallback: ref Bool = false;
     let is_enum: Bool = is_aggregate_ty(scrut_ty);
+    // A1i: track arm result type for the join-block phi.  All arms must
+    // have the same ty (checker-enforced); we capture the last one.
+    let result_ty: ref String = "i64";
 
     // For enum scrutinees, extract the variant tag once up front — each arm
     // then dispatches on this shared i8 value rather than re-extracting.
@@ -615,6 +633,7 @@ partial fn emit_match(
                 arm_out.last_label
             };
             phi_pairs.push(format("[ {}, %{} ]", [arm_out.reg, pred_lbl]));
+            result_ty = arm_out.ty;
 
             cur_reg = arm_out.next_reg;
 
@@ -633,15 +652,17 @@ partial fn emit_match(
     if !saw_fallback {
         instrs.push("  unreachable");
     }
-    // Join block + phi merge.
+    // Join block + phi merge.  Phi ty comes from the arm results (all
+    // arms must have the same ty per the checker; we use the last one).
     instrs.push(format("{}:", [join_lbl]));
     let phi_reg: String = format("%t{}", [cur_reg.to_string()]);
     let phi_body: String = phi_pairs.join(", ");
-    instrs.push(format("  {} = phi i64 {}", [phi_reg, phi_body]));
+    let final_ty: String = result_ty;
+    instrs.push(format("  {} = phi {} {}", [phi_reg, final_ty, phi_body]));
 
     Emitted {
         reg: phi_reg,
-        ty: "i64",
+        ty: final_ty,
         next_reg: cur_reg + 1,
         instrs: instrs,
         last_label: join_lbl,
@@ -668,6 +689,7 @@ total fn literal_pattern_value(pat: Value) -> String {
 // label control resides in after emission (for phi predecessor tracking).
 type MatchArmOut = struct {
     reg: String,
+    ty: String,
     next_reg: Int,
     instrs: List[String],
     last_label: String,
@@ -679,6 +701,7 @@ partial fn emit_match_body(body: Value, ctx: EmitCtx) -> MatchArmOut {
         let e: Emitted = emit_expr(jget(body, "expr"), ctx);
         MatchArmOut {
             reg: e.reg,
+            ty: e.ty,
             next_reg: e.next_reg,
             instrs: e.instrs,
             last_label: e.last_label,
@@ -687,8 +710,10 @@ partial fn emit_match_body(body: Value, ctx: EmitCtx) -> MatchArmOut {
         // Block arm — walk it as a body and use its trailing tail_reg.
         let out: StmtOut = emit_body(jget(body, "block"), ctx);
         let reg: String = if out.tail_reg == "" { "0" } else { out.tail_reg };
+        let ty: String = if out.tail_ty == "" { "i64" } else { out.tail_ty };
         MatchArmOut {
             reg: reg,
+            ty: ty,
             next_reg: out.ctx.next_reg,
             instrs: out.instrs,
             last_label: out.last_label,
@@ -698,7 +723,9 @@ partial fn emit_match_body(body: Value, ctx: EmitCtx) -> MatchArmOut {
 
 // Emit args left-to-right, threading the SSA counter, then emit the call.
 // Every arg is assumed i64 (A1b restriction — only Int is supported).
-partial fn emit_fn_call(name: String, args: List[Value], ctx: EmitCtx) -> Emitted {
+partial fn emit_fn_call(
+    name: String, args: List[Value], ret_ty: String, ctx: EmitCtx
+) -> Emitted {
     // A1g: `Some(x)` / `None` — Option[Int] enum constructors.
     // A1h: `Ok(x)` / `Err(x)` — Result[Int, Int] enum constructors.
     // All lower to `{i8, i64}` aggregate via `insertvalue`: tag byte
@@ -789,13 +816,13 @@ partial fn emit_fn_call(name: String, args: List[Value], ctx: EmitCtx) -> Emitte
     let arg_str: String = arg_parts.join(", ");
     let call_reg: String = format("%t{}", [cur.to_string()]);
     let call_line: String = format(
-        "  {} = call i64 @{}({})",
-        [call_reg, name, arg_str]
+        "  {} = call {} @{}({})",
+        [call_reg, ret_ty, name, arg_str]
     );
     accum_instrs.push(call_line);
     Emitted {
         reg: call_reg,
-        ty: "i64",
+        ty: ret_ty,
         next_reg: cur + 1,
         instrs: accum_instrs,
         last_label: "",
@@ -846,6 +873,7 @@ partial fn emit_stmt(stmt: Value, ctx: EmitCtx) -> StmtOut {
                 ctx: EmitCtx { next_reg: e.next_reg, locals: ctx.locals },
                 instrs: e.instrs,
                 tail_reg: e.reg,
+                tail_ty: e.ty,
                 last_label: e.last_label,
             }
         },
@@ -866,6 +894,7 @@ partial fn emit_stmt(stmt: Value, ctx: EmitCtx) -> StmtOut {
                 ctx: EmitCtx { next_reg: e.next_reg, locals: ctx.locals },
                 instrs: e.instrs,
                 tail_reg: e.reg,
+                tail_ty: e.ty,
                 last_label: e.last_label,
             }
         },
@@ -881,6 +910,7 @@ partial fn emit_stmt(stmt: Value, ctx: EmitCtx) -> StmtOut {
                 ctx: EmitCtx { next_reg: e.next_reg, locals: ctx.locals },
                 instrs: e.instrs,
                 tail_reg: e.reg,
+                tail_ty: e.ty,
                 last_label: e.last_label,
             }
         },
@@ -910,6 +940,7 @@ partial fn emit_stmt(stmt: Value, ctx: EmitCtx) -> StmtOut {
                     ctx: EmitCtx { next_reg: init.next_reg, locals: new_locals },
                     instrs: init.instrs.concat([alloca_line, store_line]),
                     tail_reg: "",
+                    tail_ty: "",
                     last_label: init.last_label,
                 }
             } else {
@@ -924,6 +955,7 @@ partial fn emit_stmt(stmt: Value, ctx: EmitCtx) -> StmtOut {
                     ctx: EmitCtx { next_reg: init.next_reg, locals: new_locals },
                     instrs: init.instrs,
                     tail_reg: "",
+                    tail_ty: "",
                     last_label: init.last_label,
                 }
             }
@@ -949,6 +981,7 @@ partial fn emit_stmt(stmt: Value, ctx: EmitCtx) -> StmtOut {
                             },
                             instrs: rhs.instrs.concat([store_line]),
                             tail_reg: "",
+                            tail_ty: "",
                             last_label: rhs_last,
                         }
                     },
@@ -956,6 +989,7 @@ partial fn emit_stmt(stmt: Value, ctx: EmitCtx) -> StmtOut {
                         ctx: EmitCtx { next_reg: rhs.next_reg, locals: ctx.locals },
                         instrs: rhs.instrs,
                         tail_reg: "",
+                        tail_ty: "",
                         last_label: rhs_last,
                     },
                 }
@@ -966,6 +1000,7 @@ partial fn emit_stmt(stmt: Value, ctx: EmitCtx) -> StmtOut {
                     ctx: EmitCtx { next_reg: rhs.next_reg, locals: ctx.locals },
                     instrs: rhs.instrs,
                     tail_reg: "",
+                    tail_ty: "",
                     last_label: rhs_last,
                 }
             }
@@ -1030,6 +1065,7 @@ partial fn emit_stmt(stmt: Value, ctx: EmitCtx) -> StmtOut {
                 },
                 instrs: all_instrs,
                 tail_reg: "",
+                tail_ty: "",
                 last_label: exit_lbl,
             }
         },
@@ -1037,6 +1073,7 @@ partial fn emit_stmt(stmt: Value, ctx: EmitCtx) -> StmtOut {
             ctx: ctx,
             instrs: [],
             tail_reg: "",
+            tail_ty: "",
             last_label: "",
         },
     }
@@ -1053,6 +1090,7 @@ partial fn emit_body(body: Value, initial: EmitCtx) -> StmtOut {
     let cur_ctx: ref EmitCtx = initial;
     let accum: ref List[String] = [];
     let last: ref String = "";
+    let last_ty: ref String = "";
     // Track the innermost basic block currently in scope.  Each statement
     // that introduces control flow reports back the label of its exit
     // block; straight-line stmts leave it unchanged.  A trailing phi in the
@@ -1063,11 +1101,18 @@ partial fn emit_body(body: Value, initial: EmitCtx) -> StmtOut {
         for line in out.instrs { accum.push(line) }
         cur_ctx = out.ctx;
         last = out.tail_reg;
+        last_ty = out.tail_ty;
         if out.last_label != "" {
             cur_label = out.last_label;
         }
     }
-    StmtOut { ctx: cur_ctx, instrs: accum, tail_reg: last, last_label: cur_label }
+    StmtOut {
+        ctx: cur_ctx,
+        instrs: accum,
+        tail_reg: last,
+        tail_ty: last_ty,
+        last_label: cur_label,
+    }
 }
 
 // Build the initial ctx for a fn: bind each TIR Param.name to `%name` with
@@ -1083,8 +1128,9 @@ partial fn initial_ctx_from_params(params: List[Value]) -> EmitCtx {
     EmitCtx { next_reg: 0, locals: m }
 }
 
-// Emit a `define i64 @name(i64 %a, ...) { ... ret i64 <val> }` block for
-// a non-main fn. Assumes Int params + Int return (A1b restriction).
+// Emit a `define <ret_ty> @name(<pty> %a, ...) { ... ret <ret_ty> <val> }`
+// block for a non-main fn.  Return type comes from `f.ret_ty` (TIR),
+// mapped via [`tir_ty_to_llvm`] — Option/Result return as `{i8, i64}`.
 partial fn emit_fn_def(f: Value) -> String {
     let name: String = jstr(f, "name");
     // NOTE: jarr called twice on purpose — the MVL→Rust transpiler moves
@@ -1096,18 +1142,19 @@ partial fn emit_fn_def(f: Value) -> String {
             [tir_ty_to_llvm(jget(p, "ty")), jstr(p, "name")]
         ))
         .join(", ");
+    let ret_ty: String = tir_ty_to_llvm(jget(f, "ret_ty"));
     let ctx: EmitCtx = initial_ctx_from_params(jarr(f, "params"));
     let out: StmtOut = emit_body(jget(f, "body"), ctx);
     let body_instrs: String = out.instrs.join("\n");
     let ret_val: String = if out.tail_reg == "" { "0" } else { out.tail_reg };
-    let ret_line: String = format("  ret i64 {}", [ret_val]);
+    let ret_line: String = format("  ret {} {}", [ret_ty, ret_val]);
     let body: String = if body_instrs == "" {
         ret_line
     } else {
         body_instrs.concat("\n").concat(ret_line)
     };
-    format("define i64 @{}({}) {}\n{}\n{}\n",
-        [name, param_str, lbrace(), body, rbrace()])
+    format("define {} @{}({}) {}\n{}\n{}\n",
+        [ret_ty, name, param_str, lbrace(), body, rbrace()])
 }
 
 // Emit `define i32 @main() { ... printf(...); ret i32 0 }` for the entry.

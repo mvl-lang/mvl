@@ -1,0 +1,17 @@
+// A1i: fn returns Option[Int]; caller pattern-matches the result.
+// Expected stdout: 21
+
+fn maybe_double(n: Int) -> Option[Int] {
+    if n > 0 {
+        Some(n * 2)
+    } else {
+        None
+    }
+}
+
+fn main() -> Int {
+    match maybe_double(10) {
+        Some(x) => x + 1,
+        None => 0,
+    }
+}
