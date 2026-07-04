@@ -73,13 +73,21 @@ total fn jbool(v: Value, key: String) -> Bool {
 //
 // Expressions read `locals` but never mutate it; only `Let` stmts extend it.
 
-// Per-local binding info: the LLVM operand text (SSA reg / param / literal)
-// plus its LLVM type ("i64" or "i1").  A1c introduces Bool locals, whose
-// operand is an `i1` from an `icmp` — later uses (e.g. as an if-cond) must
-// pick the right type for coerce/reuse.
+// Per-local binding info.  Two flavors:
+//
+// - Non-ref (`is_ref = false`): `reg` is the SSA operand text (e.g. `%t3`,
+//   `%name`, or a literal like `"42"`) holding the value directly.  A read
+//   of the local simply reuses `reg`.
+//
+// - Ref (`is_ref = true`, introduced in A1d): `reg` is an alloca pointer
+//   name (`%name.addr`); the underlying value lives in memory and every
+//   `Var` read materializes it via `load <ty>, ptr <reg>`.  Assign stmts
+//   write via `store <ty> <val>, ptr <reg>` — the addr never changes, so
+//   the map entry stays stable across mutations.
 type LocalRef = struct {
     reg: String,
     ty: String,
+    is_ref: Bool,
 }
 
 type EmitCtx = struct {
@@ -90,30 +98,41 @@ type EmitCtx = struct {
 // Result of emitting an expression: the operand holding the value, its LLVM
 // type ("i64" for Int-valued exprs, "i1" for comparison + Bool literal
 // results), and any instructions that must be spliced into the enclosing fn
-// body.  Callers that need to branch on a Bool inspect `ty == "i1"` to skip
-// the icmp round-trip.
+// body.
+//
+// `last_label` records the basic block currently in scope AFTER emission.
+// It is the empty string when this expression introduces no control flow
+// (arithmetic, calls, loads), meaning control is still at whatever block
+// was current before the expression.  For control-flow-shaped expressions
+// (If, while, Block-with-inner-control-flow) it is the label of the block
+// terminating the sequence — required so a surrounding `phi` can name the
+// correct predecessor.  A nested `if / else if / else` chain returns the
+// innermost `if_join_N` here, not the outer `if_else_M` label that started
+// the arm.
 type Emitted = struct {
     reg: String,
     ty: String,
     next_reg: Int,
     instrs: List[String],
+    last_label: String,
 }
 
-// Result of emitting a statement: updated ctx (potentially with new
-// bindings from a Let), plus instructions, plus the value the stmt
-// contributes if it is a trailing Expr (empty string otherwise).
+// Result of emitting a statement.  `last_label` follows the same
+// convention as in [`Emitted`] — empty for straight-line stmts, the
+// exit label of any nested control flow otherwise.
 type StmtOut = struct {
     ctx: EmitCtx,
     instrs: List[String],
     tail_reg: String,
+    last_label: String,
 }
 
 total fn emitted_imm(value: String, next: Int) -> Emitted {
-    Emitted { reg: value, ty: "i64", next_reg: next, instrs: [] }
+    Emitted { reg: value, ty: "i64", next_reg: next, instrs: [], last_label: "" }
 }
 
 total fn emitted_bool(value: String, next: Int) -> Emitted {
-    Emitted { reg: value, ty: "i1", next_reg: next, instrs: [] }
+    Emitted { reg: value, ty: "i1", next_reg: next, instrs: [], last_label: "" }
 }
 
 // ── Operator mapping ──────────────────────────────────────────────────────────
@@ -168,11 +187,30 @@ partial fn emit_expr(expr: Value, ctx: EmitCtx) -> Emitted {
         "Var" => {
             let name: String = jstr(kind, "name");
             match ctx.locals.get(name) {
-                Some(op) => Emitted {
-                    reg: op.reg,
-                    ty: op.ty,
-                    next_reg: ctx.next_reg,
-                    instrs: [],
+                Some(op) => {
+                    if op.is_ref {
+                        // A ref-local — materialize by loading from the alloca ptr.
+                        let load_reg: String = format("%t{}", [ctx.next_reg.to_string()]);
+                        let load_line: String = format(
+                            "  {} = load {}, ptr {}",
+                            [load_reg, op.ty, op.reg]
+                        );
+                        Emitted {
+                            reg: load_reg,
+                            ty: op.ty,
+                            next_reg: ctx.next_reg + 1,
+                            instrs: [load_line],
+                            last_label: "",
+                        }
+                    } else {
+                        Emitted {
+                            reg: op.reg,
+                            ty: op.ty,
+                            next_reg: ctx.next_reg,
+                            instrs: [],
+                            last_label: "",
+                        }
+                    }
                 },
                 None => emitted_imm(format("%{}", [name]), ctx.next_reg),
             }
@@ -187,12 +225,38 @@ partial fn emit_expr(expr: Value, ctx: EmitCtx) -> Emitted {
             let line: String = format("  {} = {} i64 {}, {}", [reg, opname, l.reg, r.reg]);
             let all_instrs: List[String] = l.instrs.concat(r.instrs).concat([line]);
             let result_ty: String = if is_cmp_op(op) { "i1" } else { "i64" };
-            Emitted { reg: reg, ty: result_ty, next_reg: r.next_reg + 1, instrs: all_instrs }
+            Emitted {
+                reg: reg,
+                ty: result_ty,
+                next_reg: r.next_reg + 1,
+                instrs: all_instrs,
+                last_label: "",
+            }
         },
         "FnCall" => {
             let name: String = jstr(kind, "name");
             let args: List[Value] = jarr(kind, "args");
             emit_fn_call(name, args, ctx)
+        },
+        "Unary" => {
+            let op: String = jstr(kind, "op");
+            let inner: Emitted = emit_expr(jget(kind, "expr"), ctx);
+            let result_reg: String = format("%t{}", [inner.next_reg.to_string()]);
+            // `-x`  → `sub i64 0, x`
+            // `!b`  → `xor i1 b, 1`   (Bool negation)
+            let line: String = if op == "Neg" {
+                format("  {} = sub i64 0, {}", [result_reg, inner.reg])
+            } else {
+                format("  {} = xor i1 {}, 1", [result_reg, inner.reg])
+            };
+            let out_ty: String = if op == "Neg" { "i64" } else { "i1" };
+            Emitted {
+                reg: result_reg,
+                ty: out_ty,
+                next_reg: inner.next_reg + 1,
+                instrs: inner.instrs.concat([line]),
+                last_label: "",
+            }
         },
         "If" => {
             // Expression-form if: emits br/phi merging both arms as i64.
@@ -205,27 +269,66 @@ partial fn emit_expr(expr: Value, ctx: EmitCtx) -> Emitted {
             let block: Value = jget(kind, "block");
             let out: StmtOut = emit_body(block, ctx);
             let reg: String = if out.tail_reg == "" { "0" } else { out.tail_reg };
-            Emitted { reg: reg, ty: "i64", next_reg: out.ctx.next_reg, instrs: out.instrs }
+            Emitted {
+                reg: reg,
+                ty: "i64",
+                next_reg: out.ctx.next_reg,
+                instrs: out.instrs,
+                last_label: out.last_label,
+            }
         },
         _ => emitted_imm("0", ctx.next_reg),
     }
 }
 
-// Extract the actual TirBlock from either an expr-form else_br (a TirExpr
-// wrapping a `Block` kind) or a stmt-form else_br (`{tag: "Block", block}`).
-// Nested else-if chains (`tag: "If"`) are deferred to A1d.
+// Extract the TirBlock (or a synthesized single-stmt block) for the else
+// branch of an if.  Handles four shapes:
+//
+//   - Expr-form Block: `else_br` is a TirExpr with `kind.tag == "Block"` —
+//     return `kind.block`.
+//   - Expr-form else-if: `else_br` is a TirExpr with `kind.tag == "If"` —
+//     wrap the entire TirExpr as a single Expr-stmt so `emit_body` recurses
+//     back through `emit_expr` and hits the "If" case.
+//   - Stmt-form Block: `{tag: "Block", block}` — return `block`.
+//   - Stmt-form else-if: `{tag: "If", stmt: <TirStmt::If>}` — wrap the
+//     nested If-stmt as a single-stmt block so `emit_body` recurses through
+//     the "If" case of `emit_stmt`.
 partial fn extract_else_block(else_br: Value) -> Value {
-    // Expr-form: TirExpr with kind.tag == "Block".
     let inner_kind: Value = jget(else_br, "kind");
-    if jtag(inner_kind) == "Block" {
+    let inner_tag: String = jtag(inner_kind);
+    if inner_tag == "Block" {
         return jget(inner_kind, "block");
     }
-    // Stmt-form: flat {tag, block}.
+    if inner_tag == "If" {
+        // Wrap the whole else_br TirExpr as an Expr statement.
+        return wrap_stmts_as_block([make_expr_stmt(else_br)]);
+    }
     if jtag(else_br) == "Block" {
         return jget(else_br, "block");
     }
-    // Fallback empty block — A1c does not support else-if chains.
-    Value::Null
+    if jtag(else_br) == "If" {
+        // Wrap the nested If-stmt as a single-stmt block.
+        return wrap_stmts_as_block([jget(else_br, "stmt")]);
+    }
+    // Missing else — synthesize an empty block so emit_if_blocks phi'd
+    // else-arm still has somewhere to go.
+    wrap_stmts_as_block([])
+}
+
+// Build a synthetic TirBlock JSON containing `stmts` verbatim.  Used when
+// wrapping a nested else-if into a shape emit_body can walk.
+partial fn wrap_stmts_as_block(stmts: List[Value]) -> Value {
+    let m: ref Map[String, Value] = Map::new();
+    m.insert("stmts", Value::Array(stmts));
+    Value::Object(m)
+}
+
+// Build a synthetic `{tag: "Expr", expr: <e>}` statement wrapping a TirExpr.
+partial fn make_expr_stmt(e: Value) -> Value {
+    let m: ref Map[String, Value] = Map::new();
+    m.insert("tag", Value::String("Expr"));
+    m.insert("expr", e);
+    Value::Object(m)
 }
 
 // Emit `if <cond> { <then> } else { <else> }` producing a phi-merged i64.
@@ -258,18 +361,34 @@ partial fn emit_if_blocks(
     let ctx_bodies: EmitCtx = EmitCtx { next_reg: n + 1, locals: ctx.locals };
 
     // Emit then/else bodies. Each returns a StmtOut whose tail_reg is the
-    // value produced by the last Expr statement in that block.
+    // value produced by the last Expr statement in that block.  If the arm
+    // contained inner control flow (else-if chain, nested while), the
+    // arm's actual terminator block is `last_label`, NOT the arm's entry
+    // label — the phi must name that block or LLVM rejects it.
     let then_out: StmtOut = emit_body(then_block, ctx_bodies);
     let then_reg: String = if then_out.tail_reg == "" { "0" } else { then_out.tail_reg };
+    // Rebuild the arm-entry label to compute the phi predecessor rather
+    // than reusing `then_lbl` — Rust's move analysis rejects a 3rd use of
+    // the same String even though every use is read-only in intent.
+    let then_pred: String = if then_out.last_label == "" {
+        format("if_then_{}", [n.to_string()])
+    } else {
+        then_out.last_label
+    };
     let then_ctx: EmitCtx = EmitCtx { next_reg: then_out.ctx.next_reg, locals: ctx.locals };
 
     let else_out: StmtOut = emit_body(else_block, then_ctx);
     let else_reg: String = if else_out.tail_reg == "" { "0" } else { else_out.tail_reg };
+    let else_pred: String = if else_out.last_label == "" {
+        format("if_else_{}", [n.to_string()])
+    } else {
+        else_out.last_label
+    };
 
     let phi_reg: String = format("%t{}", [else_out.ctx.next_reg.to_string()]);
     let phi_line: String = format(
         "  {} = phi i64 [ {}, %{} ], [ {}, %{} ]",
-        [phi_reg, then_reg, then_lbl, else_reg, else_lbl]
+        [phi_reg, then_reg, then_pred, else_reg, else_pred]
     );
 
     let all_instrs: List[String] = c.instrs
@@ -289,6 +408,7 @@ partial fn emit_if_blocks(
         ty: "i64",
         next_reg: else_out.ctx.next_reg + 1,
         instrs: all_instrs,
+        last_label: join_lbl,
     }
 }
 
@@ -314,7 +434,13 @@ partial fn emit_fn_call(name: String, args: List[Value], ctx: EmitCtx) -> Emitte
         [call_reg, name, arg_str]
     );
     accum_instrs.push(call_line);
-    Emitted { reg: call_reg, ty: "i64", next_reg: cur + 1, instrs: accum_instrs }
+    Emitted {
+        reg: call_reg,
+        ty: "i64",
+        next_reg: cur + 1,
+        instrs: accum_instrs,
+        last_label: "",
+    }
 }
 
 // Clone `base` into a fresh Map and add the new binding.  MVL's `Map::put`
@@ -345,6 +471,7 @@ partial fn emit_stmt(stmt: Value, ctx: EmitCtx) -> StmtOut {
                 ctx: EmitCtx { next_reg: e.next_reg, locals: ctx.locals },
                 instrs: e.instrs,
                 tail_reg: e.reg,
+                last_label: e.last_label,
             }
         },
         "If" => {
@@ -364,22 +491,164 @@ partial fn emit_stmt(stmt: Value, ctx: EmitCtx) -> StmtOut {
                 ctx: EmitCtx { next_reg: e.next_reg, locals: ctx.locals },
                 instrs: e.instrs,
                 tail_reg: e.reg,
+                last_label: e.last_label,
             }
         },
         "Let" => {
             let pat: Value = jget(stmt, "pattern");
             let name: String = jstr(pat, "name");
             let init: Emitted = emit_expr(jget(stmt, "init"), ctx);
-            let entry: LocalRef = LocalRef { reg: init.reg, ty: init.ty };
-            let new_locals: Map[String, LocalRef] =
-                extend_locals(ctx.locals, name, entry);
-            StmtOut {
-                ctx: EmitCtx { next_reg: init.next_reg, locals: new_locals },
-                instrs: init.instrs,
-                tail_reg: "",
+            // Ref-typed lets (`let x: ref T = ...`) map to an alloca ptr so
+            // later Assign stmts can `store` into the same address without
+            // rewriting every subsequent Var read.
+            let is_ref_ty: Bool = jtag(jget(stmt, "ty")) == "Ref";
+            if is_ref_ty {
+                let addr_reg: String = format("%{}.addr", [name]);
+                let alloca_line: String = format("  {} = alloca {}", [addr_reg, init.ty]);
+                let store_line: String = format(
+                    "  store {} {}, ptr {}",
+                    [init.ty, init.reg, addr_reg]
+                );
+                let entry: LocalRef = LocalRef {
+                    reg: addr_reg,
+                    ty: init.ty,
+                    is_ref: true,
+                };
+                let new_locals: Map[String, LocalRef] =
+                    extend_locals(ctx.locals, name, entry);
+                StmtOut {
+                    ctx: EmitCtx { next_reg: init.next_reg, locals: new_locals },
+                    instrs: init.instrs.concat([alloca_line, store_line]),
+                    tail_reg: "",
+                    last_label: init.last_label,
+                }
+            } else {
+                let entry: LocalRef = LocalRef {
+                    reg: init.reg,
+                    ty: init.ty,
+                    is_ref: false,
+                };
+                let new_locals: Map[String, LocalRef] =
+                    extend_locals(ctx.locals, name, entry);
+                StmtOut {
+                    ctx: EmitCtx { next_reg: init.next_reg, locals: new_locals },
+                    instrs: init.instrs,
+                    tail_reg: "",
+                    last_label: init.last_label,
+                }
             }
         },
-        _ => StmtOut { ctx: ctx, instrs: [], tail_reg: "" },
+        "Assign" => {
+            // Only Ident targets in A1d — field/index assigns come later.
+            let target: Value = jget(stmt, "target");
+            let target_tag: String = jtag(target);
+            let rhs: Emitted = emit_expr(jget(stmt, "value"), ctx);
+            let rhs_last: String = rhs.last_label;
+            if target_tag == "Ident" {
+                let name: String = jstr(target, "name");
+                match ctx.locals.get(name) {
+                    Some(op) => {
+                        let store_line: String = format(
+                            "  store {} {}, ptr {}",
+                            [rhs.ty, rhs.reg, op.reg]
+                        );
+                        StmtOut {
+                            ctx: EmitCtx {
+                                next_reg: rhs.next_reg,
+                                locals: ctx.locals,
+                            },
+                            instrs: rhs.instrs.concat([store_line]),
+                            tail_reg: "",
+                            last_label: rhs_last,
+                        }
+                    },
+                    None => StmtOut {
+                        ctx: EmitCtx { next_reg: rhs.next_reg, locals: ctx.locals },
+                        instrs: rhs.instrs,
+                        tail_reg: "",
+                        last_label: rhs_last,
+                    },
+                }
+            } else {
+                // Unsupported LValue shape (e.g. Field) — swallow the value
+                // instructions and continue.
+                StmtOut {
+                    ctx: EmitCtx { next_reg: rhs.next_reg, locals: ctx.locals },
+                    instrs: rhs.instrs,
+                    tail_reg: "",
+                    last_label: rhs_last,
+                }
+            }
+        },
+        "While" => {
+            // Lower `while cond { body }` to:
+            //     br label %head
+            //   head:
+            //     <cond>
+            //     %c_i1 = icmp ne <ty> <cond.reg>, 0
+            //     br i1 %c_i1, label %body, label %exit
+            //   body:
+            //     <body>
+            //     br label %head
+            //   exit:
+            // The MVL `decreases` clause is a termination proof consumed by
+            // the checker; it has no runtime effect and is ignored here.
+            let cond_expr: Value = jget(stmt, "cond");
+            let body_block: Value = jget(stmt, "body");
+            let n: Int = ctx.next_reg;
+            let head_lbl: String = format("while_head_{}", [n.to_string()]);
+            let body_lbl: String = format("while_body_{}", [n.to_string()]);
+            let exit_lbl: String = format("while_exit_{}", [n.to_string()]);
+
+            let ctx_head: EmitCtx = EmitCtx { next_reg: n, locals: ctx.locals };
+            let c: Emitted = emit_expr(cond_expr, ctx_head);
+            let cond_i1_reg: String = format("%t{}", [c.next_reg.to_string()]);
+            let coerce_instr: String = format(
+                "  {} = icmp ne {} {}, 0",
+                [cond_i1_reg, c.ty, c.reg]
+            );
+
+            let ctx_body: EmitCtx = EmitCtx {
+                next_reg: c.next_reg + 1,
+                locals: ctx.locals,
+            };
+            let body_out: StmtOut = emit_body(body_block, ctx_body);
+
+            let all_instrs: List[String] = [
+                format("  br label %{}", [head_lbl]),
+                format("{}:", [head_lbl]),
+            ]
+                .concat(c.instrs)
+                .concat([
+                    coerce_instr,
+                    format(
+                        "  br i1 {}, label %{}, label %{}",
+                        [cond_i1_reg, body_lbl, exit_lbl]
+                    ),
+                    format("{}:", [body_lbl]),
+                ])
+                .concat(body_out.instrs)
+                .concat([
+                    format("  br label %{}", [head_lbl]),
+                    format("{}:", [exit_lbl]),
+                ]);
+
+            StmtOut {
+                ctx: EmitCtx {
+                    next_reg: body_out.ctx.next_reg,
+                    locals: ctx.locals,
+                },
+                instrs: all_instrs,
+                tail_reg: "",
+                last_label: exit_lbl,
+            }
+        },
+        _ => StmtOut {
+            ctx: ctx,
+            instrs: [],
+            tail_reg: "",
+            last_label: "",
+        },
     }
 }
 
@@ -394,13 +663,21 @@ partial fn emit_body(body: Value, initial: EmitCtx) -> StmtOut {
     let cur_ctx: ref EmitCtx = initial;
     let accum: ref List[String] = [];
     let last: ref String = "";
+    // Track the innermost basic block currently in scope.  Each statement
+    // that introduces control flow reports back the label of its exit
+    // block; straight-line stmts leave it unchanged.  A trailing phi in the
+    // enclosing if needs this to name the correct predecessor.
+    let cur_label: ref String = "";
     for s in stmts {
         let out: StmtOut = emit_stmt(s, cur_ctx);
         for line in out.instrs { accum.push(line) }
         cur_ctx = out.ctx;
         last = out.tail_reg;
+        if out.last_label != "" {
+            cur_label = out.last_label;
+        }
     }
-    StmtOut { ctx: cur_ctx, instrs: accum, tail_reg: last }
+    StmtOut { ctx: cur_ctx, instrs: accum, tail_reg: last, last_label: cur_label }
 }
 
 // Build the initial ctx for a fn: bind each TIR Param.name to `%name` with
@@ -410,7 +687,7 @@ partial fn initial_ctx_from_params(params: List[Value]) -> EmitCtx {
     for p in params {
         let n: String = jstr(p, "name");
         let reg: String = format("%{}", [n]);
-        m.insert(n, LocalRef { reg: reg, ty: "i64" })
+        m.insert(n, LocalRef { reg: reg, ty: "i64", is_ref: false })
     }
     EmitCtx { next_reg: 0, locals: m }
 }

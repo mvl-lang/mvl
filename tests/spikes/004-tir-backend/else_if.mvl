@@ -1,0 +1,13 @@
+// A1d: else-if chain.
+// Expected stdout: 20
+
+fn classify(n: Int) -> Int {
+    if n < 0 { -1 }
+    else if n == 0 { 0 }
+    else if n < 10 { 10 }
+    else { 20 }
+}
+
+fn main() -> Int {
+    classify(42)
+}

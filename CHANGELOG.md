@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.228.0] - 2026-07-04
+
+### Added
+
+- **`rust_backend`: MVL-hosted LLVM while loops + ref-mutation + else-if chains + unary** (#1118, Phase A1d) — Emitter extends to support iterative programs. Ref-mutable locals (`let x: ref Int = 0;`) lower to `alloca` + `store` at declaration; subsequent reads auto-emit `load`. `Assign` statements write via `store`. While-loops emit the classic 3-block shape (`while_head_N` / `while_body_N` / `while_exit_N`) with back-edge; `decreases` clause (termination proof) is checker-only. Else-if chains work via synthetic block-wrapping of nested ifs. Unary `Neg` → `sub i64 0, <val>`; `Not` → `xor i1 <val>, 1`. Critical fix: `last_label` threading ensures phi predecessors are correct when if-arms contain nested control flow (else-if chains, while loops). 5 new spike tests (`ref_mut`, `while_counter`, `factorial`, `while_if`, `else_if`) all green. Full corpus 17/17 passing. Emitter grew 512 → 789 LOC.
+
 ## [0.227.0] - 2026-07-04
 
 ### Added
