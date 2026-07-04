@@ -1,0 +1,18 @@
+// A1r: Float payload in an enum variant, bit-cast to/from i64 slot.
+// Expected stdout: 7   (int-part of Circle radius 7.5)
+
+type Shape = enum {
+    Point,
+    Circle(Float),
+}
+
+fn radius_int(s: Shape) -> Int {
+    match s {
+        Shape::Point => 0,
+        Shape::Circle(r) => r.to_int(),
+    }
+}
+
+fn main() -> Int {
+    radius_int(Shape::Circle(7.5))
+}
