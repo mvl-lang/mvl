@@ -42,7 +42,8 @@ LL_CASES := empty.mvl:0 two_plus_three.mvl:5 six_times_seven.mvl:42 nested_arith
             enum_unit.mvl:2 enum_direction.mvl:1 \
             list_sum.mvl:15 list_filter.mvl:12 \
             str_hello.mvl:hello str_greet.mvl:greetings str_two.mvl:alpha \
-            struct_point.mvl:15 struct_person.mvl:60
+            struct_point.mvl:15 struct_person.mvl:60 \
+            enum_payload.mvl:42 enum_mixed.mvl:100
 
 .PHONY: help build guard-mvl tir emit compile run test check all clean \
         tir-llvm emit-llvm compile-llvm run-llvm test-llvm llvm test-llvm-arith
