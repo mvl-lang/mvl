@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.229.0] - 2026-07-04
+
+### Added
+
+- **`rust_backend`: MVL-hosted LLVM match on Int/Bool** (#1118, Phase A1e) — Emitter extends to support `match` scrutinee on Int/Bool types. Lowers to a linear chain of icmp+br tests followed by a phi merge at join block. Supports Literal(Integer|Bool), Wildcard, and Ident patterns (Ident currently treated as Wildcard due to transpiler cross-iteration move limitation). Emits `unreachable` terminator after final `match_next_N` block when no fallback arm seen (e.g. exhaustive Bool match on `true`/`false`). Known limitation: arm bodies see empty locals — can't reference fn params or outer lets. Passes A1e corpus (all arm bodies are literals). Full fix (arm-scope locals + Ident bindings) lands in A1f via `clone_locals` workaround. 3 new spike tests (`match_int`, `match_bool`, `match_expr`) all green. Full corpus 20/20 passing. Emitter grew 789 → 975 LOC.
+
 ## [0.228.0] - 2026-07-04
 
 ### Added
