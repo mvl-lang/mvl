@@ -1,0 +1,15 @@
+// A1e: match on Int with literal patterns + wildcard.
+// Expected stdout: 20
+
+fn classify(n: Int) -> Int {
+    match n {
+        0  => 100,
+        1  => 200,
+        42 => 20,
+        _  => 999,
+    }
+}
+
+fn main() -> Int {
+    classify(42)
+}

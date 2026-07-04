@@ -1,0 +1,15 @@
+// A1e: match used as expression, bound to a let.
+// Expected stdout: 300
+
+fn score(grade: Int) -> Int {
+    let base: Int = match grade {
+        1 => 100,
+        2 => 200,
+        _ => 300,
+    };
+    base
+}
+
+fn main() -> Int {
+    score(9)
+}

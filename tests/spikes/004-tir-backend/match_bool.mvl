@@ -1,0 +1,10 @@
+// A1e: match on Bool.
+// Expected stdout: 7
+
+fn main() -> Int {
+    let flag: Bool = 3 < 5;
+    match flag {
+        true  => 7,
+        false => 42,
+    }
+}
