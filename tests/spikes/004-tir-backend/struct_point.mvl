@@ -1,0 +1,16 @@
+// A1n: struct declaration + construction + field access.
+// Expected stdout: 15  (3 + 12 via struct fields)
+
+type Point = struct {
+    x: Int,
+    y: Int,
+}
+
+fn sum_point(p: Point) -> Int {
+    p.x + p.y
+}
+
+fn main() -> Int {
+    let p: Point = Point { x: 3, y: 12 };
+    sum_point(p)
+}
