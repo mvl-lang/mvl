@@ -187,6 +187,47 @@ test-corpus: build ## Validate corpus examples parse and type-check
 		printf "  \033[31m✗  $$pass passed, $$fail failed\033[0m\n\n"; exit 1; \
 	fi
 
+# Verify emitted Rust from every buildable corpus file compiles without
+# any `rustc` warnings.  A regression net for emitter-emission bugs like
+# #1671 (spurious `unused_imports` on user-module wildcards) that
+# `test-corpus` cannot catch because it only runs `mvl check`, not
+# `mvl build`.  Files that fail to build for unrelated reasons are
+# reported as skipped and do not fail the target — this target is
+# strictly about *warnings from successful builds*.  Full run is slow
+# (~2 s per file, ~6 min for the full corpus at time of writing); this
+# is a CI/validation target, not a dev-inner-loop target — do NOT wire
+# into `test-corpus`.
+test-corpus-warnings: build ## Verify emitted Rust from corpus builds warning-free (slow — CI only)
+	@$(MVL) init --stdlib 2>/dev/null || true
+	@pass=0; fail=0; skip=0; expected=0; \
+	OK="\033[32m✓\033[0m"; FAIL="\033[31m✗\033[0m"; SKIP="\033[33m·\033[0m"; EXP="\033[33m~\033[0m"; \
+	while IFS= read -r f; do \
+		short=$${f#tests/corpus/}; \
+		[[ "$$f" == *_test.mvl ]] && continue; \
+		grep -q "corpus:expect-fail" "$$f" 2>/dev/null && continue; \
+		grep -q "corpus:expect-warnings" "$$f" 2>/dev/null && { \
+			printf "  $$EXP  %s  (expected warnings — skipped)\n" "$$short"; expected=$$((expected + 1)); \
+			continue; \
+		}; \
+		out=$$($(MVL) build "$$f" 2>&1); rc=$$?; \
+		if [ $$rc -ne 0 ]; then \
+			printf "  $$SKIP  %s  (build failed — unrelated)\n" "$$short"; skip=$$((skip + 1)); \
+			continue; \
+		fi; \
+		warnings=$$(printf "%s\n" "$$out" | grep -E "^warning:" || true); \
+		if [ -n "$$warnings" ]; then \
+			printf "  $$FAIL  %s\n" "$$short"; printf "%s\n" "$$warnings" | sed 's/^/         /'; fail=$$((fail + 1)); \
+		else \
+			printf "  $$OK  %s\n" "$$short"; pass=$$((pass + 1)); \
+		fi; \
+	done < <(find tests/corpus -name "*.mvl" | sort); \
+	echo ""; \
+	if [ $$fail -eq 0 ]; then \
+		printf "  \033[32m✓  $$pass warning-free, $$expected expected-warnings, $$skip build-skipped, 0 failed\033[0m\n\n"; \
+	else \
+		printf "  \033[31m✗  $$pass warning-free, $$expected expected-warnings, $$skip build-skipped, $$fail failed\033[0m\n\n"; exit 1; \
+	fi
+
 test-solver: build ## Run solver layer programs — real MVL programs of progressing complexity
 	@pass=0; fail=0; \
 	OK="\033[32m✓\033[0m"; FAIL="\033[31m✗\033[0m"; \
