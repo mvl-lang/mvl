@@ -373,9 +373,12 @@ fn caller(xs: List[Int]) -> Int { process(xs) }
     let rust = transpile_src(src);
     // process: xs is the direct for-loop iterable → disqualified.
     // caller: single use of xs → moved (Phase A last-use move).
-    // `.into()` is emitted for all value args to allow IFC-label coercions.
+    // #1692: List args no longer receive `.into()` coercion (no blanket
+    // `Into` impl on `Vec` for arbitrary target types).  The arg is passed
+    // as-is; owning/borrowing decisions are made at the fn signature.
     assert_not_contains(&rust, "process(&xs)");
-    assert_contains(&rust, "process(xs.into())");
+    assert_contains(&rust, "process(xs)");
+    assert_not_contains(&rust, "process(xs.into())");
 }
 
 // ── Fix: callee signature emits &T for inferred-borrow params (AC #1) ─────────

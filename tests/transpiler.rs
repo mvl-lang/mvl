@@ -1738,6 +1738,51 @@ fn method_call_on_arithmetic_wraps_receiver_in_parens() {
     );
 }
 
+/// Regression #1692: passing a `Map[K, V]` (or List/Set) as a fn argument
+/// must NOT emit `.into()` at the call site.  `HashMap`/`HashSet`/`Vec`
+/// don't implement blanket `Into<_>` for arbitrary target types, so the
+/// coercion trips `E0277: trait bound not satisfied`.  Follows the existing
+/// exclusion for Option/Result on line ~914 of emit_exprs.rs.
+#[test]
+fn map_argument_does_not_get_into_coerce() {
+    let src = r#"
+        pub fn use_map(val m: Map[String, Int]) -> Int { 0 }
+        fn caller(m: Map[String, Int]) -> Int { use_map(m) }
+    "#;
+    let rust = transpile_src(src);
+    assert!(
+        !rust.contains("m.into()") && !rust.contains("m.clone().into()"),
+        "Map argument must not be `.into()`-coerced:\n{rust}"
+    );
+}
+
+#[test]
+fn list_argument_does_not_get_into_coerce() {
+    let src = r#"
+        pub fn use_list(val xs: List[Int]) -> Int { 0 }
+        fn caller(xs: List[Int]) -> Int { use_list(xs) }
+    "#;
+    let rust = transpile_src(src);
+    assert!(
+        !rust.contains("xs.into()") && !rust.contains("xs.clone().into()"),
+        "List argument must not be `.into()`-coerced:\n{rust}"
+    );
+}
+
+#[test]
+fn set_argument_does_not_get_into_coerce() {
+    let src = r#"
+        use std.collections.{Set}
+        pub fn use_set(val s: Set[Int]) -> Int { 0 }
+        fn caller(s: Set[Int]) -> Int { use_set(s) }
+    "#;
+    let rust = transpile_src(src);
+    assert!(
+        !rust.contains("s.into()") && !rust.contains("s.clone().into()"),
+        "Set argument must not be `.into()`-coerced:\n{rust}"
+    );
+}
+
 #[test]
 fn method_len_string_emits_chars_count() {
     // String.len() emits .chars().count() as i64 for Unicode correctness (#554)

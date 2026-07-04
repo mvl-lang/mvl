@@ -927,9 +927,21 @@ impl RustEmitter {
                     self.push(".clone()");
                 }
             }
-            // coerce only: `Option`/`Result` — no blanket `Into` impl available.
+            // coerce only: containers without a blanket `Into<T>` impl —
+            // `Option`/`Result`/`Map`/`Set`/`List`.  Adding `.into()` here
+            // fails to type-check because `HashMap<K, V>`, `HashSet<T>`,
+            // `Vec<T>` don't implement `Into<_>` for arbitrary targets, and
+            // `Option`/`Result` need the payload type to convert first.
+            // The runtime's `From<T> for Label<T>` impls (see
+            // `mvl_runtime::ifc`) don't cover generic containers with
+            // user-defined element types either, so any coercion attempt
+            // trips `E0277: trait bound not satisfied` — bug #1692.
             TirExprKind::Var(_)
-                if coerce && matches!(expr.ty, Ty::Option(_) | Ty::Result(_, _)) =>
+                if coerce
+                    && matches!(
+                        expr.ty,
+                        Ty::Option(_) | Ty::Result(_, _) | Ty::Map(_, _) | Ty::Set(_) | Ty::List(_)
+                    ) =>
             {
                 self.emit_expr(expr);
                 if !self.last_uses.contains(&expr.span) {
