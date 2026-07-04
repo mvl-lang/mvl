@@ -307,6 +307,21 @@ pub enum CheckError {
         span: Span,
     },
 
+    /// `==` / `!=` used on a value whose type transitively contains a
+    /// function-typed field.  Function-pointer equality is
+    /// implementation-defined; MVL rejects it at check time rather than
+    /// allowing an implementation-defined comparison to reach codegen
+    /// (ADR-0051, #1660).
+    FnFieldEqualityDenied {
+        /// Display form of the operand type (e.g. `Handler`).
+        ty: String,
+        /// Chain of field names + type from the top-level operand down
+        /// to the offending function-typed field
+        /// (e.g. `"Handler.on_click: fn(Event) -> Unit"`).
+        offending_path: String,
+        span: Span,
+    },
+
     // ── Trait impl completeness (#990) ───────────────────────────────────
     /// A trait `impl` block is missing a required method.
     ///
@@ -610,6 +625,9 @@ impl CheckError {
             CheckError::NotIterator { .. } => 1,
             // Req 9: Generics — constraint enforcement
             CheckError::MissingConstraint { .. } => 9,
+            // Req 1: Type Safety — fn-field equality is implementation-defined
+            // (ADR-0051)
+            CheckError::FnFieldEqualityDenied { .. } => 1,
             // Req 1: Type Safety — trait impl completeness (#990)
             CheckError::MissingTraitMethod { .. } => 1,
         }
@@ -675,6 +693,7 @@ impl CheckError {
             | CheckError::PropagateInNonResultFn { span, .. }
             | CheckError::NotIterator { span, .. }
             | CheckError::MissingConstraint { span, .. }
+            | CheckError::FnFieldEqualityDenied { span, .. }
             | CheckError::PreconditionViolated { span, .. }
             | CheckError::PostconditionViolated { span, .. }
             | CheckError::InvariantViolated { span, .. }
@@ -892,6 +911,9 @@ impl CheckError {
                 ..
             } => format!(
                 "type parameter `{type_param}` does not implement `{required_bound}` — add `where {type_param}: {required_bound}` to the function signature"
+            ),
+            CheckError::FnFieldEqualityDenied { ty, offending_path, .. } => format!(
+                "cannot compare values of type `{ty}` with `==` / `!=` — it transitively contains a function-typed field ({offending_path}); function-pointer equality is implementation-defined (ADR-0051)"
             ),
             CheckError::PreconditionViolated { fn_name, pred, counterexample, .. } => {
                 let cx = counterexample.as_deref().map(|c| format!(" (counterexample: {c})")).unwrap_or_default();

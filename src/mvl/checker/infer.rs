@@ -6,7 +6,9 @@
 //! Contains `infer_expr`, `infer_literal`, `infer_binary`, `infer_unary`,
 //! and the enum-variant lookup helper.
 
-use crate::mvl::checker::context::{CapabilityState, TypeBodyInfo, VarInfo};
+use std::collections::HashSet;
+
+use crate::mvl::checker::context::{CapabilityState, TypeBodyInfo, VarInfo, VariantFieldsInfo};
 use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::ifc;
 use crate::mvl::checker::types::{resolve, types_compatible, Ty};
@@ -685,6 +687,25 @@ impl TypeChecker {
                         }
                     }
                 }
+                // ADR-0051: reject `==` / `!=` on values whose type
+                // transitively contains a function-typed field.  Rust's
+                // fn-pointer equality is implementation-defined; MVL
+                // rejects it at check time rather than let it reach
+                // codegen with an `#[allow]`.  Only Eq/Ne trigger the
+                // rule — ordering (`<`, `>`, `<=`, `>=`) is already
+                // rejected earlier for non-Ord types.
+                if matches!(op, BinaryOp::Eq | BinaryOp::Ne) {
+                    for operand_ty in [&lt, &rt] {
+                        if let Some(path) = self.type_transitively_contains_fn(operand_ty) {
+                            self.emit(CheckError::FnFieldEqualityDenied {
+                                ty: operand_ty.display(),
+                                offending_path: path,
+                                span,
+                            });
+                            break;
+                        }
+                    }
+                }
                 if !matches!(lt, Ty::Unknown)
                     && !matches!(rt, Ty::Unknown)
                     && !types_compatible(&lt, &rt)
@@ -823,5 +844,99 @@ impl TypeChecker {
             }
         }
         None
+    }
+
+    /// ADR-0051: check whether `ty` transitively contains a
+    /// function-typed field / element.  Returns `Some(path)` where
+    /// `path` is a human-readable trail from `ty` down to the offending
+    /// `fn(...)` (e.g. `"Handler.on_click: fn(Event) -> Unit"`); `None`
+    /// if no such field exists.
+    ///
+    /// Traversal recurses into struct fields, enum variant payloads,
+    /// generic arguments, and container element types.  A `visited`
+    /// set prevents infinite loops on recursive types.
+    pub(super) fn type_transitively_contains_fn(&self, ty: &Ty) -> Option<String> {
+        let mut visited: HashSet<String> = HashSet::new();
+        self.type_contains_fn_walk(ty, "self", &mut visited)
+    }
+
+    fn type_contains_fn_walk(
+        &self,
+        ty: &Ty,
+        path: &str,
+        visited: &mut HashSet<String>,
+    ) -> Option<String> {
+        match ty {
+            Ty::Fn(..) => Some(format!("{path}: {}", ty.display())),
+            Ty::List(inner)
+            | Ty::Set(inner)
+            | Ty::Option(inner)
+            | Ty::Ref(_, inner)
+            | Ty::Ptr(inner)
+            | Ty::Labeled(_, inner)
+            | Ty::Refined(inner, _) => self.type_contains_fn_walk(inner, path, visited),
+            Ty::Array(inner, _) => self.type_contains_fn_walk(inner, path, visited),
+            Ty::Map(k, v) => self
+                .type_contains_fn_walk(k, path, visited)
+                .or_else(|| self.type_contains_fn_walk(v, path, visited)),
+            Ty::Result(ok, err) => self
+                .type_contains_fn_walk(ok, path, visited)
+                .or_else(|| self.type_contains_fn_walk(err, path, visited)),
+            Ty::Named(name, args) => {
+                for arg in args {
+                    if let Some(p) = self.type_contains_fn_walk(arg, path, visited) {
+                        return Some(p);
+                    }
+                }
+                if !visited.insert(name.clone()) {
+                    return None;
+                }
+                let info = self.env.lookup_type(name)?;
+                match &info.body {
+                    TypeBodyInfo::Struct { fields, .. } => {
+                        for f in fields {
+                            let sub_path = format!("{name}.{}", f.name);
+                            if let Some(p) = self.type_contains_fn_walk(&f.ty, &sub_path, visited) {
+                                return Some(p);
+                            }
+                        }
+                        None
+                    }
+                    TypeBodyInfo::Enum(variants) => {
+                        for v in variants {
+                            match &v.fields {
+                                VariantFieldsInfo::Unit => {}
+                                VariantFieldsInfo::Tuple(tys) => {
+                                    for (i, t) in tys.iter().enumerate() {
+                                        let sub_path = format!("{name}::{}.{i}", v.name);
+                                        if let Some(p) =
+                                            self.type_contains_fn_walk(t, &sub_path, visited)
+                                        {
+                                            return Some(p);
+                                        }
+                                    }
+                                }
+                                VariantFieldsInfo::Struct(fields) => {
+                                    for f in fields {
+                                        let sub_path = format!("{name}::{}.{}", v.name, f.name);
+                                        if let Some(p) =
+                                            self.type_contains_fn_walk(&f.ty, &sub_path, visited)
+                                        {
+                                            return Some(p);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        None
+                    }
+                    TypeBodyInfo::Alias(target) => {
+                        self.type_contains_fn_walk(target, path, visited)
+                    }
+                }
+            }
+            // Primitives, Session, Unknown — no fn field possible.
+            _ => None,
+        }
     }
 }
