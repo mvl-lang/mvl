@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.233.0] - 2026-07-04
+
+### Added
+
+- **`rust_backend`: MVL-hosted LLVM fn returning Option/Result** (#1118, Phase A1i) — Fns can now RETURN Option[Int] and Result[Int, Int], not just accept them as parameters. Completes the enum round-trip started in A1g/A1h. Changes: `emit_fn_def` uses `tir_ty_to_llvm(f.ret_ty)` for `define <ty> @` and `ret <ty>` (was hardcoded `i64`); `emit_fn_call` takes a `ret_ty` param derived from FnCall's TIR ty (was hardcoded `i64`); `StmtOut` gains `tail_ty` field, `MatchArmOut` gains `ty` field — both propagate LLVM type up so `emit_if_blocks` and `emit_match` emit `phi {i8, i64}` instead of `phi i64` when merging aggregate results. 2 new spike tests (`fn_ret_option` = fn returns Option; caller matches, `fn_ret_result` = fn returns Result; caller matches). Full corpus 29/29 passing. `make test-mvl` clean (98 tests). Emitter grew 1183 → 1230 LOC (+47).
+
 ## [0.232.0] - 2026-07-04
 
 ### Added
