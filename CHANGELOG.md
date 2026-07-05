@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.237.1] - 2026-07-05
+
+### Fixed
+
+- **`packages`: `mvl audit --license` misses transitive `[native]`/`[c-native]`** (#1701) — Follow-up to #1698. The license audit previously walked only the project's own `[c-native]` and the top-level `license` of each MVL dep (from `mvl.lock`). It did NOT roll up the `[native]` / `[c-native]` sections of each transitive MVL dep. Consequence: a project depending on `pkg-sqlite` never saw `sqlite3 (blessing)` in the audit even though pkg-sqlite v0.2.2 declares it. Fix: `cmd_audit_license` now walks each cached dep's `mvl.toml` and emits entries tagged with `introduced_by` (the MVL package that pulled them in). Direct entries win over transitive when the same name is declared in both (no double-reporting). Also enforces project-direct `[native]` licenses stored via the new `native_licenses` map introduced in #1698. Report format gains `(via pkg-name)` on the transitive rows. Refactored: `cmd_audit_license` now delegates to a pure `audit_licenses(&manifest, &lockfile, load_fn)` for testability without touching the global package cache — 5 new tests cover the rollup, unknown transitive entries, and direct-wins-over-transitive dedup.
+
 ## [0.237.0] - 2026-07-05
 
 ### Added
@@ -22,7 +28,6 @@ Emitter: 1662 → 2983 LOC (+1321). Full spike corpus 51/51 pass end-to-end (TIR
 
 - **#1693** — split `backend_llvm.mvl` monolith into modular files (blocked on #1692 [fixed by #1694] + #1695).
 - **#1695** — cross-module capability param inference for user-defined fns.
-
 ## [0.236.0] - 2026-07-05
 
 ### Added

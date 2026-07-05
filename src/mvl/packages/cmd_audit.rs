@@ -35,6 +35,9 @@ pub struct LicenseEntry {
     pub license: String,
     /// Policy check result.
     pub status: LicenseStatus,
+    /// Name of the MVL package that introduced this entry, if transitive.
+    /// `None` for project-direct entries (#1701).
+    pub introduced_by: Option<String>,
 }
 
 /// License compliance status for a single dependency.
@@ -103,9 +106,13 @@ impl LicenseAudit {
                 LicenseStatus::Overridden(reason) => format!("overridden ({reason})"),
                 LicenseStatus::Unknown => "UNKNOWN".to_string(),
             };
+            let name_col = match &e.introduced_by {
+                Some(pkg) => format!("{} (via {})", e.name, pkg),
+                None => e.name.clone(),
+            };
             out.push_str(&format!(
                 "  [{:<10}] {:<40} {:<20} {}\n",
-                e.section, e.name, e.license, status_str
+                e.section, name_col, e.license, status_str
             ));
         }
         out.push('\n');
@@ -136,12 +143,27 @@ impl LicenseAudit {
 /// `mvl audit --license`
 ///
 /// Checks all dependency licenses against the project's license policy (#635).
-/// - MVL deps: reads license from `mvl.lock` (set by `mvl add`)
-/// - C-native: reads license from `[c-native]` inline table
-/// - Native (Rust): not enforced yet (would need Cargo metadata)
+/// - MVL deps: reads license from `mvl.lock` (set by `mvl add`).
+/// - Project-direct `[native]` and `[c-native]`: reads license from the
+///   manifest's inline table.
+/// - Transitive `[native]` and `[c-native]` (#1701): reads each cached MVL
+///   dep's `mvl.toml` and rolls those declarations up, tagging each entry
+///   with the MVL package that introduced it.
 pub fn cmd_audit_license(project_root: &Path) -> Result<LicenseAudit, PackageError> {
     let manifest = Manifest::load(project_root)?;
     let lockfile = LockFile::load_or_empty(project_root);
+    Ok(audit_licenses(&manifest, &lockfile, &load_cached_manifest))
+}
+
+/// Pure form of `cmd_audit_license` with the cached-manifest loader injected.
+///
+/// Kept public within the crate so tests can supply an in-memory loader
+/// instead of touching the on-disk global package cache.
+pub(crate) fn audit_licenses(
+    manifest: &Manifest,
+    lockfile: &LockFile,
+    load_dep_manifest: &dyn Fn(&str, &str) -> Option<Manifest>,
+) -> LicenseAudit {
     let policy = &manifest.license_policy;
 
     let mut entries = Vec::new();
@@ -155,13 +177,14 @@ pub fn cmd_audit_license(project_root: &Path) -> Result<LicenseAudit, PackageErr
                     section: "dependency".to_string(),
                     license: lic.clone(),
                     status: LicenseStatus::Overridden(reason.clone()),
+                    introduced_by: None,
                 });
                 continue;
             }
             (Some(lic), None) => lic.clone(),
             (None, _) => {
                 // Try reading from cached package mvl.toml
-                match load_cached_manifest(&lp.name, &lp.version) {
+                match load_dep_manifest(&lp.name, &lp.version) {
                     Some(m) => m.package.license,
                     None => {
                         entries.push(LicenseEntry {
@@ -169,6 +192,7 @@ pub fn cmd_audit_license(project_root: &Path) -> Result<LicenseAudit, PackageErr
                             section: "dependency".to_string(),
                             license: "unknown".to_string(),
                             status: LicenseStatus::Unknown,
+                            introduced_by: None,
                         });
                         continue;
                     }
@@ -185,39 +209,131 @@ pub fn cmd_audit_license(project_root: &Path) -> Result<LicenseAudit, PackageErr
             section: "dependency".to_string(),
             license: license_str,
             status,
+            introduced_by: None,
         });
     }
 
-    // Check C-native dependencies
+    // Project-direct [native] license declarations (#1698).
+    for name in manifest.native.keys() {
+        entries.push(native_entry(
+            name,
+            manifest.native_licenses.get(name).map(|s| s.as_str()),
+            policy,
+            None,
+        ));
+    }
+
+    // Project-direct [c-native] declarations.
     for (name, spec) in &manifest.c_native {
-        match &spec.license {
-            Some(lic) => {
-                let status = match policy.check(lic) {
-                    Ok(()) => LicenseStatus::Compatible,
-                    Err(reason) => LicenseStatus::Rejected(reason),
-                };
-                entries.push(LicenseEntry {
-                    name: name.clone(),
-                    section: "c-native".to_string(),
-                    license: lic.clone(),
-                    status,
-                });
+        entries.push(cnative_entry(name, spec.license.as_deref(), policy, None));
+    }
+
+    // Transitive [native] / [c-native] from each cached MVL dep (#1701).
+    // Sorted iteration keeps output deterministic across HashMap iteration order.
+    let mut sorted_deps: Vec<&super::lock::LockedPackage> = lockfile.packages.iter().collect();
+    sorted_deps.sort_by(|a, b| a.name.cmp(&b.name));
+    for lp in sorted_deps {
+        let dep_manifest = match load_dep_manifest(&lp.name, &lp.version) {
+            Some(m) => m,
+            None => continue, // dep not in cache; already flagged above as unknown
+        };
+
+        let mut nat_names: Vec<&String> = dep_manifest.native.keys().collect();
+        nat_names.sort();
+        for name in nat_names {
+            // Skip names the project already declares directly to avoid
+            // double-reporting; the direct entry wins.
+            if manifest.native.contains_key(name) {
+                continue;
             }
-            None => {
-                entries.push(LicenseEntry {
-                    name: name.clone(),
-                    section: "c-native".to_string(),
-                    license: "unknown".to_string(),
-                    status: LicenseStatus::Unknown,
-                });
+            entries.push(native_entry(
+                name,
+                dep_manifest.native_licenses.get(name).map(|s| s.as_str()),
+                policy,
+                Some(&lp.name),
+            ));
+        }
+
+        let mut cnat_names: Vec<&String> = dep_manifest.c_native.keys().collect();
+        cnat_names.sort();
+        for name in cnat_names {
+            if manifest.c_native.contains_key(name) {
+                continue;
             }
+            let spec = &dep_manifest.c_native[name];
+            entries.push(cnative_entry(
+                name,
+                spec.license.as_deref(),
+                policy,
+                Some(&lp.name),
+            ));
         }
     }
 
-    Ok(LicenseAudit {
+    LicenseAudit {
         entries,
         policy_mode: policy.mode_str().to_string(),
-    })
+    }
+}
+
+fn native_entry(
+    name: &str,
+    license: Option<&str>,
+    policy: &super::manifest::LicensePolicy,
+    introduced_by: Option<&str>,
+) -> LicenseEntry {
+    match license {
+        Some(lic) => {
+            let status = match policy.check(lic) {
+                Ok(()) => LicenseStatus::Compatible,
+                Err(reason) => LicenseStatus::Rejected(reason),
+            };
+            LicenseEntry {
+                name: name.to_string(),
+                section: "native".to_string(),
+                license: lic.to_string(),
+                status,
+                introduced_by: introduced_by.map(str::to_string),
+            }
+        }
+        None => LicenseEntry {
+            name: name.to_string(),
+            section: "native".to_string(),
+            license: "unknown".to_string(),
+            status: LicenseStatus::Unknown,
+            introduced_by: introduced_by.map(str::to_string),
+        },
+    }
+}
+
+fn cnative_entry(
+    name: &str,
+    license: Option<&str>,
+    policy: &super::manifest::LicensePolicy,
+    introduced_by: Option<&str>,
+) -> LicenseEntry {
+    match license {
+        Some(lic) => {
+            let status = match policy.check(lic) {
+                Ok(()) => LicenseStatus::Compatible,
+                Err(reason) => LicenseStatus::Rejected(reason),
+            };
+            LicenseEntry {
+                name: name.to_string(),
+                section: "c-native".to_string(),
+                license: lic.to_string(),
+                status,
+                introduced_by: introduced_by.map(str::to_string),
+            }
+        }
+        None => LicenseEntry {
+            name: name.to_string(),
+            section: "c-native".to_string(),
+            license: "unknown".to_string(),
+            status: LicenseStatus::Unknown,
+            introduced_by: introduced_by.map(str::to_string),
+        },
+    }
 }
 
 // ── Dependency Paradox audit (#637) ──────────────────────────────────────────
@@ -415,6 +531,7 @@ mod tests {
             section: "dependency".to_string(),
             license: "unknown".to_string(),
             status,
+            introduced_by: None,
         }
     }
 
@@ -460,6 +577,211 @@ mod tests {
             policy_mode: "permissive".to_string(),
         };
         assert!(!audit.has_violations());
+    }
+
+    // ── License audit — transitive rollup (#1701) ────────────────────────────
+
+    use super::super::lock::LockedPackage;
+    use std::collections::HashMap;
+
+    fn parse_manifest(content: &str) -> Manifest {
+        Manifest::parse(content).unwrap()
+    }
+
+    /// Empty project manifest with an optional `[license-policy]` section.
+    fn empty_project_manifest() -> Manifest {
+        parse_manifest(
+            r#"
+[package]
+name = "app"
+version = "0.1.0"
+license = "MIT"
+requires-mvl = ">=0.1.0"
+"#,
+        )
+    }
+
+    /// Build a lockfile with one MVL dep, license set (so the top-level dep
+    /// audit doesn't error out on unknown).
+    fn single_dep_lockfile(name: &str, version: &str) -> LockFile {
+        LockFile {
+            packages: vec![LockedPackage {
+                name: name.to_string(),
+                version: version.to_string(),
+                hash: "sha256:test".to_string(),
+                commit: None,
+                git: None,
+                license: Some("Apache-2.0".to_string()),
+                allow_license_override: None,
+                last_checked: None,
+            }],
+        }
+    }
+
+    fn find_entry<'a>(audit: &'a LicenseAudit, name: &str) -> Option<&'a LicenseEntry> {
+        audit.entries.iter().find(|e| e.name == name)
+    }
+
+    #[test]
+    fn transitive_c_native_license_rolled_up_with_introducer() {
+        // Simulates the #1701 motivating example: a project depends on pkg-sqlite,
+        // which declares sqlite3 (blessing) in its [c-native]. That entry must
+        // appear in the project's audit with `introduced_by = "pkg-sqlite"`.
+        let project = empty_project_manifest();
+        let lockfile = single_dep_lockfile("pkg-sqlite", "0.2.2");
+
+        let dep_manifest = parse_manifest(
+            r#"
+[package]
+name = "pkg-sqlite"
+version = "0.2.2"
+license = "Apache-2.0"
+requires-mvl = ">=0.1.0"
+extern-rationale = "wraps rusqlite"
+
+[c-native]
+sqlite3 = { version = "3.44", license = "blessing" }
+"#,
+        );
+        let mut cache: HashMap<String, Manifest> = HashMap::new();
+        cache.insert("pkg-sqlite@0.2.2".to_string(), dep_manifest);
+
+        let audit = audit_licenses(&project, &lockfile, &|name, version| {
+            cache.get(&format!("{name}@{version}")).cloned()
+        });
+
+        let sqlite = find_entry(&audit, "sqlite3").expect("sqlite3 rolled up");
+        assert_eq!(sqlite.section, "c-native");
+        assert_eq!(sqlite.license, "blessing");
+        assert_eq!(sqlite.introduced_by.as_deref(), Some("pkg-sqlite"));
+        assert!(matches!(sqlite.status, LicenseStatus::Compatible));
+    }
+
+    #[test]
+    fn transitive_native_license_rolled_up() {
+        let project = empty_project_manifest();
+        let lockfile = single_dep_lockfile("pkg-sqlite", "0.2.2");
+
+        let dep_manifest = parse_manifest(
+            r#"
+[package]
+name = "pkg-sqlite"
+version = "0.2.2"
+license = "Apache-2.0"
+requires-mvl = ">=0.1.0"
+
+[native]
+rusqlite = { version = "0.31", license = "MIT" }
+"#,
+        );
+        let mut cache: HashMap<String, Manifest> = HashMap::new();
+        cache.insert("pkg-sqlite@0.2.2".to_string(), dep_manifest);
+
+        let audit = audit_licenses(&project, &lockfile, &|name, version| {
+            cache.get(&format!("{name}@{version}")).cloned()
+        });
+
+        let rusqlite = find_entry(&audit, "rusqlite").expect("rusqlite rolled up");
+        assert_eq!(rusqlite.section, "native");
+        assert_eq!(rusqlite.license, "MIT");
+        assert_eq!(rusqlite.introduced_by.as_deref(), Some("pkg-sqlite"));
+    }
+
+    #[test]
+    fn transitive_entry_without_license_is_unknown() {
+        let project = empty_project_manifest();
+        let lockfile = single_dep_lockfile("pkg-sqlite", "0.2.2");
+
+        let dep_manifest = parse_manifest(
+            r#"
+[package]
+name = "pkg-sqlite"
+version = "0.2.2"
+license = "Apache-2.0"
+requires-mvl = ">=0.1.0"
+
+[native]
+rusqlite = "0.31"
+"#,
+        );
+        let mut cache: HashMap<String, Manifest> = HashMap::new();
+        cache.insert("pkg-sqlite@0.2.2".to_string(), dep_manifest);
+
+        let audit = audit_licenses(&project, &lockfile, &|name, version| {
+            cache.get(&format!("{name}@{version}")).cloned()
+        });
+
+        let rusqlite = find_entry(&audit, "rusqlite").expect("rusqlite emitted");
+        assert!(matches!(rusqlite.status, LicenseStatus::Unknown));
+    }
+
+    #[test]
+    fn direct_native_wins_over_transitive() {
+        // If the project declares a [native] entry with the same name as a
+        // transitive dep, the direct entry is emitted and the transitive one
+        // is dropped — no double-reporting.
+        let project = parse_manifest(
+            r#"
+[package]
+name = "app"
+version = "0.1.0"
+license = "MIT"
+requires-mvl = ">=0.1.0"
+
+[native]
+rusqlite = { version = "0.31", license = "MIT" }
+"#,
+        );
+        let lockfile = single_dep_lockfile("pkg-sqlite", "0.2.2");
+
+        let dep_manifest = parse_manifest(
+            r#"
+[package]
+name = "pkg-sqlite"
+version = "0.2.2"
+license = "Apache-2.0"
+requires-mvl = ">=0.1.0"
+
+[native]
+rusqlite = { version = "0.31", license = "MIT" }
+"#,
+        );
+        let mut cache: HashMap<String, Manifest> = HashMap::new();
+        cache.insert("pkg-sqlite@0.2.2".to_string(), dep_manifest);
+
+        let audit = audit_licenses(&project, &lockfile, &|name, version| {
+            cache.get(&format!("{name}@{version}")).cloned()
+        });
+
+        let rusqlite_entries: Vec<&LicenseEntry> = audit
+            .entries
+            .iter()
+            .filter(|e| e.name == "rusqlite")
+            .collect();
+        assert_eq!(rusqlite_entries.len(), 1, "no double-reporting");
+        assert!(
+            rusqlite_entries[0].introduced_by.is_none(),
+            "direct entry has no introducer"
+        );
+    }
+
+    #[test]
+    fn render_shows_introducer_in_name_column() {
+        let audit = LicenseAudit {
+            entries: vec![LicenseEntry {
+                name: "sqlite3".to_string(),
+                section: "c-native".to_string(),
+                license: "blessing".to_string(),
+                status: LicenseStatus::Compatible,
+                introduced_by: Some("pkg-sqlite".to_string()),
+            }],
+            policy_mode: "permissive".to_string(),
+        };
+        let out = audit.render();
+        assert!(
+            out.contains("sqlite3 (via pkg-sqlite)"),
+            "expected provenance in render, got:\n{out}"
+        );
     }
 
     // ── Paradox audit ────────────────────────────────────────────────────────
