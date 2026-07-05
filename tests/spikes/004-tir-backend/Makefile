@@ -21,7 +21,7 @@ BIN   := /tmp/spike004_bin
 # LLVM path (issue #1118).  MVL-hosted backend under compiler/backends/llvm/.
 # A0: canned exit-0 emission (empty.mvl).
 # A1a: integer literals + arithmetic; stdout carries the printed result.
-EMIT_LL := $(ROOT)/compiler/backends/llvm/backend_llvm.mvl
+EMIT_LL := $(ROOT)/compiler/backends/llvm/emitter.mvl
 SRC_LL  := $(SPIKE)/empty.mvl
 TIR_LL  := /tmp/spike004_tir_llvm.json
 LL      := /tmp/spike004_out.ll

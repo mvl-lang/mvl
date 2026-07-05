@@ -1,0 +1,146 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// compiler/backends/llvm/emit_program_test.mvl — MVL unit tests for
+// compiler/backends/llvm/emit_program.mvl (#1693).
+//
+// `mvl test` inlines every sibling module in the same directory into one
+// compilation unit, so `emit_program`, `build_string_registry`, etc. are
+// in scope here without explicit `use` imports of their names.
+//
+// Tests build small TIR JSON snippets, decode them, hand off to the
+// module's public entry points, and assert on either registry contents
+// or emitted LLVM IR substrings.  Golden IR use substring inclusion —
+// trivial whitespace / SSA register-number differences don't break the
+// tests.
+//
+// Run with:  mvl test compiler/
+//            make test-mvl
+
+use std.collections.{Map}
+use std.json.{decode, Value}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+partial fn tir(src: String) -> Value {
+    match decode(src) {
+        Ok(v)  => v,
+        Err(_) => Value::Null,
+    }
+}
+
+partial fn contains(ir: String, needle: String) -> Bool {
+    ir.contains(needle)
+}
+
+// ── build_string_registry ────────────────────────────────────────────────────
+
+test fn distinct_string_literals_get_own_globals() -> Unit {
+    // A1m: two distinct literals → @.str.0 and @.str.1 (order of first-seen).
+    let fns: List[Value] = jarr(tir(
+        "{\"fns\":[{\"name\":\"main\",\"body\":{\"stmts\":[{\"tag\":\"Expr\",\"expr\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Str\",\"value\":\"alpha\"}}}},{\"tag\":\"Expr\",\"expr\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Str\",\"value\":\"beta\"}}}}]}}]}"
+    ), "fns");
+    let m: Map[String, String] = build_string_registry(fns);
+    assert_eq(m.get("alpha").unwrap_or(""), "@.str.0");
+    assert_eq(m.get("beta").unwrap_or(""),  "@.str.1")
+}
+
+test fn duplicate_string_literals_share_one_global() -> Unit {
+    // A1m: same literal used twice → single global.  Registry size = 1.
+    let fns: List[Value] = jarr(tir(
+        "{\"fns\":[{\"name\":\"main\",\"body\":{\"stmts\":[{\"tag\":\"Expr\",\"expr\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Str\",\"value\":\"alpha\"}}}},{\"tag\":\"Expr\",\"expr\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Str\",\"value\":\"alpha\"}}}}]}}]}"
+    ), "fns");
+    let m: Map[String, String] = build_string_registry(fns);
+    assert_eq(m.len(), 1);
+    assert_eq(m.get("alpha").unwrap_or(""), "@.str.0")
+}
+
+test fn empty_fn_list_has_empty_registry() -> Unit {
+    let fns: List[Value] = jarr(tir("{\"fns\":[]}"), "fns");
+    let m: Map[String, String] = build_string_registry(fns);
+    assert_eq(m.len(), 0)
+}
+
+// ── emit_program: module preamble ────────────────────────────────────────────
+
+test fn emit_program_carries_module_header() -> Unit {
+    // Every emitted module carries the ModuleID / triple preamble + printf.
+    let ir: String = emit_program(tir(
+        "{\"name\":\"m\",\"types\":[],\"fns\":[]}"
+    ));
+    assert_eq(contains(ir, "ModuleID = 'm'"),          true);
+    assert_eq(contains(ir, "target triple ="),         true);
+    assert_eq(contains(ir, "declare i32 @printf"),     true);
+    // fmt_int + fmt_str globals present regardless of program content —
+    // needed by println builtin.
+    assert_eq(contains(ir, "@.fmt_int"),               true);
+    assert_eq(contains(ir, "@.fmt_str"),               true)
+}
+
+test fn emit_program_uses_default_module_name_when_absent() -> Unit {
+    let ir: String = emit_program(tir("{\"types\":[],\"fns\":[]}"));
+    assert_eq(contains(ir, "ModuleID = 'mvl_module'"), true)
+}
+
+// ── emit_program: Int-returning main ────────────────────────────────────────
+
+test fn emit_program_int_main_prints_via_fmt_int() -> Unit {
+    // Int-returning main triggers the trailing printf on the return value
+    // with the %ld formatter — see emit_main_def.
+    let ir: String = emit_program(tir(
+        "{\"types\":[],\"fns\":[{\"name\":\"main\",\"params\":[],\"ret_ty\":{\"tag\":\"Int\"},\"body\":{\"stmts\":[{\"tag\":\"Expr\",\"expr\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"42\"}},\"ty\":{\"tag\":\"Int\"}}}]}}]}"
+    ));
+    assert_eq(contains(ir, "define i32 @main()"),           true);
+    assert_eq(contains(ir, "@.fmt_int"),                     true);
+    assert_eq(contains(ir, "i64 42"),                        true);
+    assert_eq(contains(ir, "ret i32 0"),                     true)
+}
+
+test fn emit_program_unit_main_skips_terminal_printf() -> Unit {
+    // Unit-returning main runs its own println side-effects and returns i32 0
+    // without a final printf on a scalar value.
+    let ir: String = emit_program(tir(
+        "{\"types\":[],\"fns\":[{\"name\":\"main\",\"params\":[],\"ret_ty\":{\"tag\":\"Unit\"},\"body\":{\"stmts\":[]}}]}"
+    ));
+    assert_eq(contains(ir, "define i32 @main()"), true);
+    assert_eq(contains(ir, "ret i32 0"),          true);
+    // No trailing printf on ret_val for a Unit main — the emit_main_def
+    // branch skips the call.
+    assert_eq(contains(ir, "call i32 (ptr, ...) @printf(ptr @.fmt_int"), false)
+}
+
+// ── emit_program: struct declarations ────────────────────────────────────────
+
+test fn emit_program_declares_struct_types() -> Unit {
+    // A1n: struct types get a `%Name = type { ... }` decl at module top.
+    let ir: String = emit_program(tir(
+        "{\"types\":[{\"name\":\"Point\",\"body\":{\"tag\":\"Struct\",\"fields\":[{\"name\":\"x\",\"ty\":{\"tag\":\"Int\"}},{\"name\":\"y\",\"ty\":{\"tag\":\"Int\"}}]}}],\"fns\":[]}"
+    ));
+    assert_eq(contains(ir, "%Point = type {i64, i64}"), true)
+}
+
+// ── emit_program: string globals ─────────────────────────────────────────────
+
+test fn emit_program_emits_string_globals() -> Unit {
+    // A1m: string literals materialize as @.str.N private globals with
+    // NUL-terminated byte contents.
+    let ir: String = emit_program(tir(
+        "{\"types\":[],\"fns\":[{\"name\":\"main\",\"params\":[],\"ret_ty\":{\"tag\":\"Unit\"},\"effects\":[{\"name\":\"Console\"}],\"body\":{\"stmts\":[{\"tag\":\"Expr\",\"expr\":{\"kind\":{\"tag\":\"FnCall\",\"name\":\"println\",\"args\":[{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Str\",\"value\":\"hi\"}},\"ty\":{\"tag\":\"Str\"}}]},\"ty\":{\"tag\":\"Unit\"}}}]}}]}"
+    ));
+    assert_eq(contains(ir, "@.str.0"),                       true);
+    assert_eq(contains(ir, "c\"hi\\00\""),                   true);
+    assert_eq(contains(ir, "@.fmt_str"),                     true);
+    assert_eq(contains(ir, "call i32 (ptr, ...) @printf(ptr @.fmt_str"), true)
+}
+
+// ── initial_ctx_from_params ──────────────────────────────────────────────────
+
+test fn initial_ctx_binds_params_as_ssa_refs() -> Unit {
+    // Every param becomes a LocalRef with reg=`%<name>`, ty from the TIR ty,
+    // is_ref=false.  Verify by round-trip: fn with two Int params should
+    // emit `define ... @f(i64 %x, i64 %y)` in emit_program's output.
+    let ir: String = emit_program(tir(
+        "{\"types\":[],\"fns\":[{\"name\":\"f\",\"params\":[{\"name\":\"x\",\"ty\":{\"tag\":\"Int\"}},{\"name\":\"y\",\"ty\":{\"tag\":\"Int\"}}],\"ret_ty\":{\"tag\":\"Int\"},\"body\":{\"stmts\":[{\"tag\":\"Expr\",\"expr\":{\"kind\":{\"tag\":\"Var\",\"name\":\"x\"},\"ty\":{\"tag\":\"Int\"}}}]}}]}"
+    ));
+    assert_eq(contains(ir, "define i64 @f(i64 %x, i64 %y)"), true)
+}

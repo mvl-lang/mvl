@@ -34,28 +34,28 @@ use std.json.{decode, Value}
 
 // ── JSON helpers ──────────────────────────────────────────────────────────────
 
-total fn jstr(v: Value, key: String) -> String {
+pub fn jstr(v: Value, key: String) -> String {
     match v {
         Value::Object(m) => match m.get(key) { Some(Value::String(s)) => s, _ => "" },
         _ => "",
     }
 }
 
-total fn jarr(v: Value, key: String) -> List[Value] {
+pub fn jarr(v: Value, key: String) -> List[Value] {
     match v {
         Value::Object(m) => match m.get(key) { Some(Value::Array(a)) => a, _ => [] },
         _ => [],
     }
 }
 
-total fn jget(v: Value, key: String) -> Value {
+pub fn jget(v: Value, key: String) -> Value {
     match v {
         Value::Object(m) => match m.get(key) { Some(inner) => inner, None => Value::Null },
         _ => Value::Null,
     }
 }
 
-total fn jtag(v: Value) -> String { jstr(v, "tag") }
+pub fn jtag(v: Value) -> String { jstr(v, "tag") }
 
 total fn jbool(v: Value, key: String) -> Bool {
     match v {
@@ -84,13 +84,13 @@ total fn jbool(v: Value, key: String) -> Bool {
 //   `Var` read materializes it via `load <ty>, ptr <reg>`.  Assign stmts
 //   write via `store <ty> <val>, ptr <reg>` — the addr never changes, so
 //   the map entry stays stable across mutations.
-type LocalRef = struct {
+pub type LocalRef = struct {
     reg: String,
     ty: String,
     is_ref: Bool,
 }
 
-type EmitCtx = struct {
+pub type EmitCtx = struct {
     next_reg: Int,
     locals: Map[String, LocalRef],
     // A1l: variant-name → i8 tag value for user-defined enums.
@@ -134,7 +134,7 @@ type EmitCtx = struct {
     variant_slot_types: Map[String, List[String]],
 }
 
-type StructInfo = struct {
+pub type StructInfo = struct {
     // Field name → declaration order.  Position determines `getelementptr`
     // and `extractvalue` indices when accessing fields.
     field_index: Map[String, Int],
@@ -158,7 +158,7 @@ type StructInfo = struct {
 // correct predecessor.  A nested `if / else if / else` chain returns the
 // innermost `if_join_N` here, not the outer `if_else_M` label that started
 // the arm.
-type Emitted = struct {
+pub type Emitted = struct {
     reg: String,
     ty: String,
     next_reg: Int,
@@ -174,7 +174,7 @@ type Emitted = struct {
 // value ("i64"/"i1"/"{i8, i64}"), or "" when the stmt produced no
 // value.  Needed so if/match phi merges over aggregate return types
 // (A1i: `fn foo() -> Option[Int]`) emit the correct phi ty.
-type StmtOut = struct {
+pub type StmtOut = struct {
     ctx: EmitCtx,
     instrs: List[String],
     tail_reg: String,
@@ -249,7 +249,7 @@ partial fn tir_ty_to_llvm_ctx(
 // (`i8` for unit-only enums, `{i8, i64}` for payload enums).  Struct
 // registry lookup takes precedence — a Named that's a struct always
 // wins.
-partial fn tir_ty_to_llvm_full(
+pub partial fn tir_ty_to_llvm_full(
     ty: Value,
     structs: Map[String, StructInfo],
     enum_types: Map[String, String],
@@ -1406,7 +1406,7 @@ total fn literal_pattern_value(pat: Value) -> String {
 // Match-arm body: `{tag: "Expr", expr: TirExpr}` or `{tag: "Block", block:
 // TirBlock}`.  Returns the arm's SSA operand + instruction stream + the
 // label control resides in after emission (for phi predecessor tracking).
-type MatchArmOut = struct {
+pub type MatchArmOut = struct {
     reg: String,
     ty: String,
     next_reg: Int,
@@ -2291,7 +2291,7 @@ partial fn emit_stmt(stmt: Value, ctx: EmitCtx) -> StmtOut {
 // `tail_reg` (from the last Expr stmt) is the fn's return value; if the
 // body ends on a non-Expr stmt tail_reg is "" and callers use "0" as the
 // stand-in.
-partial fn emit_body(body: Value, initial: EmitCtx) -> StmtOut {
+pub partial fn emit_body(body: Value, initial: EmitCtx) -> StmtOut {
     let stmts: List[Value] = jarr(body, "stmts");
     let cur_ctx: ref EmitCtx = initial;
     let accum: ref List[String] = [];
@@ -2321,134 +2321,10 @@ partial fn emit_body(body: Value, initial: EmitCtx) -> StmtOut {
     }
 }
 
-// Build the initial ctx for a fn: bind each TIR Param.name to `%name` with
-// type i64 (A1c restriction — no Bool-typed params in the corpus yet).
-partial fn initial_ctx_from_params(
-    params: List[Value],
-    enums: Map[String, Int],
-    strings: Map[String, String],
-    structs: Map[String, StructInfo],
-    enum_types: Map[String, String],
-    variant_payloads: Map[String, Int],
-    variant_slots: Map[String, Map[String, Int]],
-    variant_slot_types: Map[String, List[String]],
-) -> EmitCtx {
-    let m: ref Map[String, LocalRef] = Map::new();
-    // A1o: param types depend on both struct and enum_types registries
-    // (enum-type-name → i8 / {i8, i64}).  Threaded via helper.
-    for p in params {
-        let n: String = jstr(p, "name");
-        let reg: String = format("%{}", [n]);
-        let ty: String = tir_ty_to_llvm_full(jget(p, "ty"), structs, enum_types);
-        m.insert(n, LocalRef { reg: reg, ty: ty, is_ref: false })
-    }
-    EmitCtx {
-        next_reg: 0,
-        locals: m,
-        enums: enums,
-        strings: strings,
-        structs: structs,
-        enum_types: enum_types,
-        variant_payloads: variant_payloads,
-        variant_slots: variant_slots,
-        variant_slot_types: variant_slot_types,
-    }
-}
-
-// Emit a `define <ret_ty> @name(<pty> %a, ...) { ... ret <ret_ty> <val> }`
-// block for a non-main fn.  Return type comes from `f.ret_ty` (TIR),
-// mapped via [`tir_ty_to_llvm`] — Option/Result return as `{i8, i64}`.
-partial fn emit_fn_def(
-    f: Value,
-    enums: Map[String, Int],
-    strings: Map[String, String],
-    structs: Map[String, StructInfo],
-    enum_types: Map[String, String],
-    variant_payloads: Map[String, Int],
-    variant_slots: Map[String, Map[String, Int]],
-    variant_slot_types: Map[String, List[String]],
-) -> String {
-    let name: String = jstr(f, "name");
-    // A1n/A1o: build param string using struct AND enum-type-aware
-    // lowering so a payload enum parameter renders as `{i8, i64} %v`
-    // (not `i8 %v`) and a Point parameter as `%Point %p` (not `i8 %p`).
-    let s1: Map[String, StructInfo] = clone_structs(structs);
-    let s2: Map[String, StructInfo] = clone_structs(structs);
-    let e1: Map[String, String] = clone_strings(enum_types);
-    let e2: Map[String, String] = clone_strings(enum_types);
-    let param_str: String = jarr(f, "params")
-        .map(|p: Value| format(
-            "{} %{}",
-            [tir_ty_to_llvm_full(jget(p, "ty"), clone_structs(s2), clone_strings(e2)), jstr(p, "name")]
-        ))
-        .join(", ");
-    let ret_ty: String = tir_ty_to_llvm_full(jget(f, "ret_ty"), s1, e1);
-    let ctx: EmitCtx = initial_ctx_from_params(jarr(f, "params"), enums, strings, structs, enum_types, variant_payloads, variant_slots, variant_slot_types);
-    let out: StmtOut = emit_body(jget(f, "body"), ctx);
-    let body_instrs: String = out.instrs.join("\n");
-    let ret_val: String = if out.tail_reg == "" { "0" } else { out.tail_reg };
-    // A1m: `void` returns are argument-free (`ret void`, not `ret void 0`).
-    let ret_line: String = if ret_ty == "void" {
-        "  ret void"
-    } else {
-        format("  ret {} {}", [ret_ty, ret_val])
-    };
-    let body: String = if body_instrs == "" {
-        ret_line
-    } else {
-        body_instrs.concat("\n").concat(ret_line)
-    };
-    format("define {} @{}({}) {}\n{}\n{}\n",
-        [ret_ty, name, param_str, lbrace(), body, rbrace()])
-}
-
-// Emit `define i32 @main() { ... printf(...); ret i32 0 }` for the entry.
-// Behavior depends on `main`'s declared return type:
-//   - Int/Bool/…  → print the tail value with `%ld`, then `ret i32 0`.
-//   - Unit         → skip the terminal printf (the body already ran
-//                    its own println side-effects) and just `ret i32 0`.
-partial fn emit_main_def(
-    f: Value,
-    enums: Map[String, Int],
-    strings: Map[String, String],
-    structs: Map[String, StructInfo],
-    enum_types: Map[String, String],
-    variant_payloads: Map[String, Int],
-    variant_slots: Map[String, Map[String, Int]],
-    variant_slot_types: Map[String, List[String]],
-) -> String {
-    let no_params: List[Value] = [];
-    let ctx: EmitCtx = initial_ctx_from_params(no_params, enums, strings, structs, enum_types, variant_payloads, variant_slots, variant_slot_types);
-    let out: StmtOut = emit_body(jget(f, "body"), ctx);
-    let body_instrs: String = out.instrs.join("\n");
-    let ret_val: String = if out.tail_reg == "" { "0" } else { out.tail_reg };
-    let ret_ty_tag: String = jtag(jget(f, "ret_ty"));
-    let is_unit_main: Bool = ret_ty_tag == "Unit";
-    let call_line: String = if is_unit_main {
-        ""
-    } else {
-        format(
-            "  call i32 (ptr, ...) @printf(ptr @.fmt_int, i64 {})",
-            [ret_val]
-        )
-    };
-    let ret_line: String = "  ret i32 0";
-    let body: String = if body_instrs == "" {
-        if is_unit_main { ret_line } else { call_line.concat("\n").concat(ret_line) }
-    } else {
-        if is_unit_main {
-            body_instrs.concat("\n").concat(ret_line)
-        } else {
-            body_instrs.concat("\n").concat(call_line).concat("\n").concat(ret_line)
-        }
-    };
-    format("define i32 @main() {}\n{}\n{}\n",
-        [lbrace(), body, rbrace()])
-}
 
 // ── Program emission ──────────────────────────────────────────────────────────
 
-total fn default_target_triple() -> String {
+pub fn default_target_triple() -> String {
     "arm64-apple-darwin"
 }
 
@@ -2461,7 +2337,7 @@ total fn default_target_triple() -> String {
 // registry — so `type Line = struct { a: Point, b: Point }` is resolved
 // AFTER `Point` is registered (declaration order matters; MVL parser
 // enforces topological ordering).
-partial fn build_struct_registry(types: List[Value]) -> Map[String, StructInfo] {
+pub partial fn build_struct_registry(types: List[Value]) -> Map[String, StructInfo] {
     let m: ref Map[String, StructInfo] = Map::new();
     for t in types {
         let body: Value = jget(t, "body");
@@ -2492,7 +2368,7 @@ partial fn build_struct_registry(types: List[Value]) -> Map[String, StructInfo] 
 // Deep-copy the struct registry to sidestep the transpiler's
 // cross-iteration move analysis (same rationale as `clone_locals`
 // and `clone_enums`).
-partial fn clone_structs(base: Map[String, StructInfo]) -> Map[String, StructInfo] {
+pub partial fn clone_structs(base: Map[String, StructInfo]) -> Map[String, StructInfo] {
     let m: ref Map[String, StructInfo] = Map::new();
     for k in base.keys() {
         match base.get(k) {
@@ -2507,7 +2383,7 @@ partial fn clone_structs(base: Map[String, StructInfo]) -> Map[String, StructInf
 // Assigns tags by declaration order — `type Color = enum { Red, Green,
 // Blue }` produces {"Color::Red": 0, "Color::Green": 1, "Color::Blue": 2}.
 // Non-enum types (structs, aliases) are ignored.
-partial fn build_enum_registry(types: List[Value]) -> Map[String, Int] {
+pub partial fn build_enum_registry(types: List[Value]) -> Map[String, Int] {
     let m: ref Map[String, Int] = Map::new();
     for t in types {
         let tname: String = jstr(t, "name");
@@ -2532,7 +2408,7 @@ partial fn build_enum_registry(types: List[Value]) -> Map[String, Int] {
 //   - Any single-slot payload enum  → `{i8, i64}` (A1o)
 //   - Multi-slot payload enum       → `{i8, i64, i64, ...}` where the
 //     count of `i64` slots equals the widest variant's field count (A1q)
-partial fn build_enum_types(types: List[Value]) -> Map[String, String] {
+pub partial fn build_enum_types(types: List[Value]) -> Map[String, String] {
     let m: ref Map[String, String] = Map::new();
     for t in types {
         let body: Value = jget(t, "body");
@@ -2577,7 +2453,7 @@ partial fn build_enum_types(types: List[Value]) -> Map[String, String] {
 // `["i64", "i64"]`.  Used by construction (bitcast non-i64 to i64
 // before insertvalue) and pattern extraction (bitcast i64 back to
 // original type).  Unit variants map to an empty list.
-partial fn build_variant_slot_types(types: List[Value]) -> Map[String, List[String]] {
+pub partial fn build_variant_slot_types(types: List[Value]) -> Map[String, List[String]] {
     let m: ref Map[String, List[String]] = Map::new();
     for t in types {
         let body: Value = jget(t, "body");
@@ -2606,7 +2482,7 @@ partial fn build_variant_slot_types(types: List[Value]) -> Map[String, List[Stri
     m
 }
 
-partial fn clone_variant_slot_types(
+pub partial fn clone_variant_slot_types(
     base: Map[String, List[String]]
 ) -> Map[String, List[String]] {
     let m: ref Map[String, List[String]] = Map::new();
@@ -2629,7 +2505,7 @@ partial fn clone_variant_slot_types(
 // names.  Unit variants get an empty map.  Used by both construction
 // (map declared fields to slot positions) and pattern matching
 // (`Struct { name: ..., fields: [(name, pat)] }` lookups).
-partial fn build_variant_slot_maps(types: List[Value]) -> Map[String, Map[String, Int]] {
+pub partial fn build_variant_slot_maps(types: List[Value]) -> Map[String, Map[String, Int]] {
     let m: ref Map[String, Map[String, Int]] = Map::new();
     for t in types {
         let body: Value = jget(t, "body");
@@ -2668,7 +2544,7 @@ partial fn build_variant_slot_maps(types: List[Value]) -> Map[String, Map[String
     m
 }
 
-partial fn build_variant_payloads(types: List[Value]) -> Map[String, Int] {
+pub partial fn build_variant_payloads(types: List[Value]) -> Map[String, Int] {
     let m: ref Map[String, Int] = Map::new();
     for t in types {
         let body: Value = jget(t, "body");
@@ -2696,114 +2572,7 @@ partial fn build_variant_payloads(types: List[Value]) -> Map[String, Int] {
     }
     m
 }
-
-// A1m: walk all fn bodies once, collecting every string literal in
-// source order.  Duplicates are preserved by the walk; deduplication
-// happens in [`build_string_registry`] via a Map.  Each collector
-// returns a fresh List which callers concat — no shared-ref mutation
-// (Rust transpiler ergonomics; ref-param passing is not currently
-// supported cleanly across recursive calls).
-partial fn build_string_registry(fns: List[Value]) -> Map[String, String] {
-    let all: ref List[String] = [];
-    for f in fns {
-        let body: Value = jget(f, "body");
-        for s in collect_strings_in_block(body) { all.push(s) }
-    }
-    // Dedupe: first-seen assignment order.
-    let m: ref Map[String, String] = Map::new();
-    let counter: ref Int = 0;
-    for s in all {
-        if !m.contains_key(s) {
-            let n: Int = counter;
-            let sym: String = format("@.str.{}", [n.to_string()]);
-            m.insert(s, sym);
-            counter = counter + 1;
-        }
-    }
-    m
-}
-
-partial fn collect_strings_in_block(block: Value) -> List[String] {
-    let out: ref List[String] = [];
-    let stmts: List[Value] = jarr(block, "stmts");
-    for stmt in stmts {
-        for s in collect_strings_in_stmt(stmt) { out.push(s) }
-    }
-    out
-}
-
-partial fn collect_strings_in_stmt(stmt: Value) -> List[String] {
-    let t: String = jtag(stmt);
-    if t == "Expr" || t == "Return" {
-        collect_strings_in_expr(jget(stmt, "expr"))
-    } else if t == "Let" {
-        collect_strings_in_expr(jget(stmt, "init"))
-    } else if t == "Assign" {
-        collect_strings_in_expr(jget(stmt, "value"))
-    } else if t == "While" {
-        collect_strings_in_expr(jget(stmt, "cond"))
-            .concat(collect_strings_in_block(jget(stmt, "body")))
-    } else if t == "For" {
-        collect_strings_in_expr(jget(stmt, "iter"))
-            .concat(collect_strings_in_block(jget(stmt, "body")))
-    } else {
-        []
-    }
-}
-
-partial fn collect_strings_in_expr(expr: Value) -> List[String] {
-    let kind: Value = jget(expr, "kind");
-    let t: String = jtag(kind);
-    if t == "Literal" {
-        let lit: Value = jget(kind, "lit");
-        if jtag(lit) == "Str" {
-            [jstr(lit, "value")]
-        } else { [] }
-    } else if t == "FnCall" {
-        let out: ref List[String] = [];
-        for a in jarr(kind, "args") {
-            for s in collect_strings_in_expr(a) { out.push(s) }
-        }
-        out
-    } else if t == "Binary" {
-        collect_strings_in_expr(jget(kind, "lhs"))
-            .concat(collect_strings_in_expr(jget(kind, "rhs")))
-    } else if t == "Unary" {
-        collect_strings_in_expr(jget(kind, "expr"))
-    } else if t == "If" {
-        let cond_ss: List[String] = collect_strings_in_expr(jget(kind, "cond"));
-        let then_ss: List[String] = collect_strings_in_block(jget(kind, "then_block"));
-        let else_val: Value = jget(kind, "else_block");
-        let else_ss: List[String] = if jtag(else_val) != "Null" {
-            collect_strings_in_block(else_val)
-        } else { [] };
-        cond_ss.concat(then_ss).concat(else_ss)
-    } else if t == "Match" {
-        let out: ref List[String] = [];
-        for s in collect_strings_in_expr(jget(kind, "scrutinee")) { out.push(s) }
-        for arm in jarr(kind, "arms") {
-            for s in collect_strings_in_block(jget(arm, "body")) { out.push(s) }
-        }
-        out
-    } else if t == "Block" {
-        collect_strings_in_block(kind)
-    } else if t == "ListLit" {
-        let out: ref List[String] = [];
-        for e in jarr(kind, "elems") {
-            for s in collect_strings_in_expr(e) { out.push(s) }
-        }
-        out
-    } else {
-        []
-    }
-}
-
-// Escape a string for LLVM's `c"..."` constant syntax.  Most printable
-// ASCII passes through unchanged; only `"`, `\`, `\n`, `\t`, `\r` need
-// the `\NN` hex-byte form.  Non-ASCII and other control chars fall
-// through to a `?` placeholder in this MVP (corpus programs are pure
-// ASCII).
-partial fn escape_llvm_string(s: String) -> String {
+pub partial fn escape_llvm_string(s: String) -> String {
     let out: ref String = "";
     let chars: List[String] = s.chars();
     for c in chars {
@@ -2824,103 +2593,8 @@ partial fn escape_llvm_string(s: String) -> String {
     out
 }
 
-partial fn emit_program(tir: Value) -> String {
-    let name_raw: String = jstr(tir, "name");
-    let module_name: String = if name_raw == "" { "mvl_module" } else { name_raw };
-    let triple: String = default_target_triple();
-    let header: String = format(
-        "; ModuleID = '{}'\nsource_filename = \"{}\"\ntarget triple = \"{}\"\n",
-        [module_name, module_name, triple]
-    );
-    let printf_fmt_int: String = "\n@.fmt_int = private unnamed_addr constant [5 x i8] c\"%ld\\0A\\00\"\n";
-    let printf_fmt_str: String = "@.fmt_str = private unnamed_addr constant [4 x i8] c\"%s\\0A\\00\"\n";
-    let printf_decl: String = "\ndeclare i32 @printf(ptr, ...)\n";
-    let enums: Map[String, Int] = build_enum_registry(jarr(tir, "types"));
-    let structs: Map[String, StructInfo] = build_struct_registry(jarr(tir, "types"));
-    let enum_types: Map[String, String] = build_enum_types(jarr(tir, "types"));
-    let variant_payloads: Map[String, Int] = build_variant_payloads(jarr(tir, "types"));
-    let fns: List[Value] = jarr(tir, "fns");
-    let strings: Map[String, String] = build_string_registry(fns);
-    // A1n: emit `%StructName = type { <fields> }` declarations for
-    // every registered struct.  Ordered iteration matters if any
-    // struct references another; MVL parser enforces topological
-    // order so `for k in structs.keys()` follows the declaration order.
-    let struct_decls: ref List[String] = [];
-    for k in structs.keys() {
-        match structs.get(k) {
-            Some(info) => {
-                let body_ty: String = "{".concat(info.field_types.join(", ")).concat("}");
-                struct_decls.push(format(
-                    "%{} = type {}",
-                    [k, body_ty]
-                ));
-            },
-            None => {},
-        }
-    }
-    let struct_decls_block: String = if struct_decls.is_empty() {
-        ""
-    } else {
-        "\n".concat(struct_decls.join("\n")).concat("\n")
-    };
-    // Emit @.str.N globals — one per distinct literal.  Length is
-    // len(value)+1 to account for the trailing NUL byte C-string
-    // constants require.
-    let string_globals: ref List[String] = [];
-    for k in strings.keys() {
-        match strings.get(k) {
-            Some(sym) => {
-                let esc: String = escape_llvm_string(k);
-                let n: Int = k.len() + 1;
-                string_globals.push(format(
-                    "{} = private unnamed_addr constant [{} x i8] c\"{}\\00\"",
-                    [sym, n.to_string(), esc]
-                ));
-            },
-            None => {},
-        }
-    }
-    let str_globals_block: String = if string_globals.is_empty() {
-        ""
-    } else {
-        "\n".concat(string_globals.join("\n")).concat("\n")
-    };
-    let variant_slots: Map[String, Map[String, Int]] = build_variant_slot_maps(jarr(tir, "types"));
-    let variant_slot_types: Map[String, List[String]] = build_variant_slot_types(jarr(tir, "types"));
-    let parts: ref List[String] = [];
-    let enums_ref: ref Map[String, Int] = enums;
-    let strings_ref: ref Map[String, String] = strings;
-    let structs_ref: ref Map[String, StructInfo] = structs;
-    let enum_types_ref: ref Map[String, String] = enum_types;
-    let variant_payloads_ref: ref Map[String, Int] = variant_payloads;
-    let variant_slots_ref: ref Map[String, Map[String, Int]] = variant_slots;
-    let variant_slot_types_ref: ref Map[String, List[String]] = variant_slot_types;
-    for f in fns {
-        let fname: String = jstr(f, "name");
-        let enums_iter: Map[String, Int] = clone_enums(enums_ref);
-        let strings_iter: Map[String, String] = clone_strings(strings_ref);
-        let structs_iter: Map[String, StructInfo] = clone_structs(structs_ref);
-        let enum_types_iter: Map[String, String] = clone_strings(enum_types_ref);
-        let variant_payloads_iter: Map[String, Int] = clone_enums(variant_payloads_ref);
-        let variant_slots_iter: Map[String, Map[String, Int]] = clone_variant_slots(variant_slots_ref);
-        let variant_slot_types_iter: Map[String, List[String]] = clone_variant_slot_types(variant_slot_types_ref);
-        if fname == "main" {
-            parts.push(emit_main_def(f, enums_iter, strings_iter, structs_iter, enum_types_iter, variant_payloads_iter, variant_slots_iter, variant_slot_types_iter))
-        } else {
-            parts.push(emit_fn_def(f, enums_iter, strings_iter, structs_iter, enum_types_iter, variant_payloads_iter, variant_slots_iter, variant_slot_types_iter))
-        }
-    }
-    let body: String = "\n".concat(parts.join("\n"));
-    header
-        .concat(printf_fmt_int)
-        .concat(printf_fmt_str)
-        .concat(printf_decl)
-        .concat(str_globals_block)
-        .concat(struct_decls_block)
-        .concat(body)
-}
 
-partial fn clone_strings(base: Map[String, String]) -> Map[String, String] {
+pub partial fn clone_strings(base: Map[String, String]) -> Map[String, String] {
     let m: ref Map[String, String] = Map::new();
     for k in base.keys() {
         match base.get(k) {
@@ -2934,7 +2608,7 @@ partial fn clone_strings(base: Map[String, String]) -> Map[String, String] {
 // Deep-copy the enum registry so per-fn calls in the emit loop each get
 // a fresh Map (transpiler cross-iteration move rule; same pattern as
 // [`clone_locals`]).
-partial fn clone_enums(base: Map[String, Int]) -> Map[String, Int] {
+pub partial fn clone_enums(base: Map[String, Int]) -> Map[String, Int] {
     let m: ref Map[String, Int] = Map::new();
     for k in base.keys() {
         match base.get(k) {
@@ -2946,7 +2620,7 @@ partial fn clone_enums(base: Map[String, Int]) -> Map[String, Int] {
 }
 
 // A1q: deep-copy the nested variant_slots map.
-partial fn clone_variant_slots(
+pub partial fn clone_variant_slots(
     base: Map[String, Map[String, Int]]
 ) -> Map[String, Map[String, Int]] {
     let m: ref Map[String, Map[String, Int]] = Map::new();
@@ -2964,20 +2638,5 @@ partial fn clone_variant_slots(
 
 // MVL format() does not escape `{{` — helpers keep braces out of the
 // interpolation grammar.
-total fn lbrace() -> String { "{" }
-total fn rbrace() -> String { "}" }
-
-// ── Entry point ───────────────────────────────────────────────────────────────
-
-partial fn main() -> Unit ! Console {
-    match read(stdin(), 100000000) {
-        Err(_)  => println("error: could not read stdin"),
-        Ok(raw) => {
-            let src: String = relabel trust(raw, "TIR_INPUT");
-            match decode(src) {
-                Err(e)  => println(format("error: {}", [e.user_message()])),
-                Ok(tir) => println(emit_program(tir)),
-            }
-        }
-    }
-}
+pub fn lbrace() -> String { "{" }
+pub fn rbrace() -> String { "}" }
