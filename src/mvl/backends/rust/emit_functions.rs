@@ -14,7 +14,9 @@
 //! - Return refinement → `assert!` at end of body
 
 use super::emitter::RustEmitter;
-use crate::mvl::backends::rust::emit_types::{emit_label, emit_ref_expr_for_assert, emit_ty};
+use crate::mvl::backends::rust::emit_types::{
+    emit_label, emit_ref_expr_for_assert, emit_ty, is_runtime_checkable,
+};
 use crate::mvl::backends::rust::last_use::compute_last_uses;
 use crate::mvl::backends::rust::mut_analysis::{
     compute_readonly_names, compute_readonly_param_names, compute_unused_param_names,
@@ -207,7 +209,7 @@ impl RustEmitter {
                 if let Some(id) = self.alloc_branch(fd.span.line, BranchKind::FnEntry) {
                     self.emit_cov_hit(id);
                 }
-                for req_pred in &fd.requires {
+                for req_pred in fd.requires.iter().filter(|p| is_runtime_checkable(p)) {
                     let pred_str = emit_ref_expr_for_assert(req_pred, "self");
                     let msg = pred_str.replace('{', "{{").replace('}', "}}");
                     self.line(&format!("assert!({pred_str}, \"requires: {msg}\");"));
@@ -242,7 +244,7 @@ impl RustEmitter {
         if let Some(id) = self.alloc_branch(fd.span.line, BranchKind::FnEntry) {
             self.emit_cov_hit(id);
         }
-        for req_pred in &fd.requires {
+        for req_pred in fd.requires.iter().filter(|p| is_runtime_checkable(p)) {
             let pred_str = emit_ref_expr_for_assert(req_pred, "self");
             let msg = pred_str.replace('{', "{{").replace('}', "}}");
             self.line(&format!("assert!({pred_str}, \"requires: {msg}\");"));
@@ -342,7 +344,7 @@ impl RustEmitter {
 
                 let last = &tail[0];
                 let is_unit = matches!(fd.ret_ty, Ty::Unit);
-                let has_ensures = !fd.ensures.is_empty() && !is_unit;
+                let has_ensures = fd.ensures.iter().any(is_runtime_checkable) && !is_unit;
                 match last {
                     TirStmt::Expr { expr, .. } => {
                         if !self.emit_mcdc_return_expr(expr, &fd.ret_ty, expr.span.line) {
@@ -354,7 +356,9 @@ impl RustEmitter {
                                 );
                                 self.push(";");
                                 self.nl();
-                                for ens_pred in &fd.ensures {
+                                for ens_pred in
+                                    fd.ensures.iter().filter(|p| is_runtime_checkable(p))
+                                {
                                     let pred_str = emit_ref_expr_for_assert(ens_pred, "_result");
                                     let msg = pred_str.replace('{', "{{").replace('}', "}}");
                                     self.line(&format!("assert!({pred_str}, \"ensures: {msg}\");"));

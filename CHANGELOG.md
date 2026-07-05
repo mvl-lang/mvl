@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.237.3] - 2026-07-05
+
+### Performance
+
+- **`mvl test --backend=llvm`: parallelize test runner** (#1699) — `cmd_test_llvm_text` in `src/cli/llvm_text.rs` iterated fixtures sequentially, so each `lli` fork stacked back-to-back. Rewrite to run test cases across a worker pool sized by `std::thread::available_parallelism()`, mirroring the pattern in `src/cli/mutate.rs`. Each worker parses, lowers, and runs its assigned files under `lli` independently; output is collected and printed in deterministic file order after all workers finish, so `--verbose` PASS/FAIL reporting stays stable. Also hoists `lli::find_mvl_runtime_llvm_lib()` out of the per-file loop (was doing a filesystem probe for every test). Measured on macOS, 10-core M-series, warm cache: `make test-backend-llvm` 2.13-2.52s → 1.00-1.14s (~2.1x); `mvl test tests/corpus/ --backend=llvm` 2.11s → 0.16s (~13x). Ticket originally framed the LLVM path as "3 forks per file × 200 files" (llc + cc + binary); current backend actually uses `lli` — 1 fork per file, 38 executed fixtures across corpus + intrinsics + stdlib. Correction posted on the issue.
+
+### Fixed
+
+- **`rust_backend`: quantifier contracts panicked codegen** — `emit_ref_expr_for_assert` in `src/mvl/backends/rust/emit_types.rs` panicked with `unreachable!("quantifiers are ghost-only and must not appear in codegen")` on any function whose contract used `requires forall …` / `ensures exists …`. The comment was correct (quantifiers cannot be checked at runtime) but nothing was filtering them out at the four emit sites in `emit_functions.rs`. Consequence: `mvl test tests/corpus/` crashed on `tests/corpus/01_syntax/keywords.mvl` before running any test. Fix: add `is_runtime_checkable(&RefExpr)` which walks the predicate tree and returns `false` iff any subtree is a quantifier; filter `fd.requires` / `fd.ensures` through it at each `emit_ref_expr_for_assert` call. `has_ensures` gating on the `_result` binding uses the same predicate so pure-ghost `ensures` don't leave dead bindings. Verification uses of `forall` / `exists` remain intact — this only affects runtime assertion emission, not the checker or prover.
+
+- **`rust_backend`: user-defined labels + relabel transitions crashed codegen (#990)** — Two hardcoded match blocks in `src/mvl/backends/rust/emit_exprs.rs::TirExprKind::Relabel` (audit + non-audit) enumerated only built-in transition names (`trust`, `release`, `classify`, `taint`, `db_url`, `config_path`, `api_endpoint`, `audit_target`, and their un-versions). Any user-declared `pub label Foo` / `pub relabel foo: A -> B` fell through to `_ => unreachable!("relabel '<name>': unknown transition — blocked by checker (#990)")`. Consequence: `tests/corpus/08_ifc/audit_relabel.mvl` (which declares `pub label Sensitive` and `pub relabel classify_audited: _ -> Sensitive audit`) panicked codegen even though the checker and standalone `mvl build` accepted it. Fix: add `RelabelKind` enum (`Wrap(String)` / `Unwrap` / `Transform(String)` / `Unknown`) and `relabel_kind(name)` on `RustEmitter` which classifies built-ins first, then falls back to a new `user_relabels: HashMap<String, (Option<String>, Option<String>)>` populated from ALL `tir.relabel_decls` (both entry and prelude, not just audit-flagged). Both audit and non-audit arms now consume the same `RelabelKind`, collapsing 60+ lines of duplicated matches. Additionally emit `#[repr(transparent)] pub struct <Name><T>(pub T);` for each user `LabelDecl` alongside `emit_tir_type_decl` — gated by `is_builtin_label()` so we don't collide with the runtime's `Secret` / `Tainted` / `DbUrl` / etc. re-exports.
+
+### Follow-up
+
+- **#1705** — `test-corpus` fast CI gate only runs `mvl check` (no codegen). Both `unreachable!`s fixed above were invisible to CI; they only surfaced when running `mvl test tests/corpus/` locally. Filed with 4 remediation options.
+
 ## [0.237.2] - 2026-07-05
 
 ### Fixed

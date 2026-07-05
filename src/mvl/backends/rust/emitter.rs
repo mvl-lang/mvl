@@ -29,6 +29,19 @@ const STDLIB_CONFLICTS: &[(&str, &[&str])] = &[
     ("io", &["join", "to_string"]),
 ];
 
+/// Direction of an IFC relabel transition, used to pick the codegen shape.
+#[derive(Debug)]
+pub enum RelabelKind {
+    /// `_ -> Label`: wrap into the newtype `Label((expr))`.
+    Wrap(String),
+    /// `Label -> _`: unwrap via `(expr).0.clone()`.
+    Unwrap,
+    /// `A -> B`: unwrap then wrap: `B((expr).0.clone())`.
+    Transform(String),
+    /// Name is neither built-in nor a known user declaration.
+    Unknown,
+}
+
 ///// Code-generation context: accumulates Rust source text.
 #[derive(Default)]
 pub struct RustEmitter {
@@ -150,6 +163,11 @@ pub struct RustEmitter {
     /// Maps transition name → (from_label, to_label) where `None` = bare `_`.
     /// Populated from `TirProgram.relabel_decls` at the start of `emit_program_core`.
     pub audit_relabels: std::collections::HashMap<String, (Option<String>, Option<String>)>,
+    /// All user-defined relabel transitions, keyed by name → (from_label, to_label).
+    /// Superset of `audit_relabels` (includes non-audit user decls). Used by
+    /// codegen to look up wrap/unwrap direction for names outside the built-in
+    /// set (e.g. `relabel classify_audited: _ -> Sensitive`).
+    pub user_relabels: std::collections::HashMap<String, (Option<String>, Option<String>)>,
     /// Refined type alias names → base type (e.g., `"Port" → Ty::Int`).
     ///
     /// Populated from `TirProgram.types` where `body == TirTypeBody::Alias(Ty::Refined(..))`.
@@ -230,6 +248,34 @@ impl RustEmitter {
             self.fn_aliases.get(name.as_str())
         } else {
             None
+        }
+    }
+
+    /// Classify a relabel transition by direction for codegen (#896, #990).
+    ///
+    /// Returns:
+    /// - `RelabelKind::Wrap(label)` when transition goes `_ -> Label` (emit `Label((expr))`)
+    /// - `RelabelKind::Unwrap` when transition goes `Label -> _` (emit `(expr).0.clone()`)
+    /// - `RelabelKind::Transform(label)` when transition goes `A -> B` (emit `B((expr).0.clone())`)
+    /// - `RelabelKind::Unknown` when the name is neither built-in nor in `user_relabels`
+    ///   (the caller should keep its existing `unreachable!` for defence in depth)
+    pub fn relabel_kind(&self, name: &str) -> RelabelKind {
+        match name {
+            "trust" | "release" | "undb_url" | "unconfig_path" | "unapi_endpoint"
+            | "unaudit_target" => return RelabelKind::Unwrap,
+            "classify" => return RelabelKind::Wrap("Secret".to_string()),
+            "taint" => return RelabelKind::Wrap("Tainted".to_string()),
+            "db_url" => return RelabelKind::Wrap("DbUrl".to_string()),
+            "config_path" => return RelabelKind::Wrap("ConfigPath".to_string()),
+            "api_endpoint" => return RelabelKind::Wrap("ApiEndpoint".to_string()),
+            "audit_target" => return RelabelKind::Wrap("AuditTarget".to_string()),
+            _ => {}
+        }
+        match self.user_relabels.get(name) {
+            Some((Some(_), None)) => RelabelKind::Unwrap,
+            Some((None, Some(to))) => RelabelKind::Wrap(to.clone()),
+            Some((Some(_), Some(to))) => RelabelKind::Transform(to.clone()),
+            _ => RelabelKind::Unknown,
         }
     }
 
@@ -496,6 +542,21 @@ impl RustEmitter {
             .filter(|rd| rd.audit)
             .map(|rd| (rd.name.clone(), (rd.from.clone(), rd.to.clone())))
             .collect();
+
+        // Populate user_relabels from ALL relabel declarations so codegen can
+        // wrap/unwrap user-defined transitions the built-in match doesn't cover.
+        self.user_relabels = tir
+            .relabel_decls
+            .iter()
+            .map(|rd| (rd.name.clone(), (rd.from.clone(), rd.to.clone())))
+            .collect();
+        for pt in prelude_tirs {
+            for rd in &pt.relabel_decls {
+                self.user_relabels
+                    .entry(rd.name.clone())
+                    .or_insert_with(|| (rd.from.clone(), rd.to.clone()));
+            }
+        }
 
         // Populate refined alias registry (#1326).
         // Maps alias name → base type for refined aliases (emitted as newtypes).
@@ -875,6 +936,23 @@ impl RustEmitter {
             self.emit_tir_type_decl(td);
             self.blank();
         }
+        // User-defined label newtypes.  Built-in labels (Secret, Tainted, Public,
+        // Clean, DbUrl, ConfigPath, ApiEndpoint, AuditTarget) come from
+        // `mvl_runtime`; user-declared `pub label Foo` becomes a Rust newtype
+        // `pub struct Foo<T>(pub T);` so `Ty::Labeled` types compile (#990).
+        for ld in tir
+            .label_decls
+            .iter()
+            .chain(prelude_tirs.iter().flat_map(|p| p.label_decls.iter()))
+        {
+            if is_builtin_label(&ld.name) {
+                continue;
+            }
+            self.line("#[derive(Debug, Clone, PartialEq)]");
+            self.line("#[repr(transparent)]");
+            self.line(&format!("pub struct {}<T>(pub T);", ld.name));
+            self.blank();
+        }
         for ed in &tir.externs {
             self.emit_tir_extern_decl(ed);
             self.blank();
@@ -957,6 +1035,23 @@ impl RustEmitter {
 
 /// Collect the names of all base types referenced in the program that are
 /// TIR-based version: collect undefined types from [`TirProgram`] function signatures.
+/// Return `true` iff `name` is a built-in IFC label already provided by
+/// `mvl_runtime` (see `runtime/rust/src/ifc.rs`, `capability.rs`). Emitting
+/// a newtype for these would collide with the runtime re-exports.
+fn is_builtin_label(name: &str) -> bool {
+    matches!(
+        name,
+        "Secret"
+            | "Tainted"
+            | "Public"
+            | "Clean"
+            | "DbUrl"
+            | "ConfigPath"
+            | "ApiEndpoint"
+            | "AuditTarget"
+    )
+}
+
 fn collect_undefined_types_tir(tir: &TirProgram, prelude_tirs: &[TirProgram]) -> Vec<String> {
     use crate::mvl::ir::Ty;
 

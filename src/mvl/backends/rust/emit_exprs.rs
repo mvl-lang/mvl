@@ -570,7 +570,8 @@ impl RustEmitter {
                 tag,
                 audit,
             } => {
-                // Emit runtime audit event if expression-level or declaration-level `audit` (#896).
+                use crate::mvl::backends::rust::emitter::RelabelKind;
+                let kind = self.relabel_kind(name);
                 let needs_audit = *audit || self.audit_relabels.contains_key(name.as_str());
                 if needs_audit {
                     let (from_lbl, to_lbl) = self.relabel_label_strings(name);
@@ -581,64 +582,36 @@ impl RustEmitter {
                     self.push(&format!(
                         "mvl_runtime::stdlib::audit::emit_relabel_event({name:?}.to_string(), {from_lbl:?}.to_string(), {to_lbl:?}.to_string(), {tag:?}.to_string(), {loc:?}.to_string());"
                     ));
-                    match name.as_str() {
-                        "trust" | "release" | "undb_url" | "unconfig_path" | "unapi_endpoint"
-                        | "unaudit_target" => self.push("(_mvl_rv).0.clone() }"),
-                        "classify" => self.push("Secret((_mvl_rv)) }"),
-                        "taint" => self.push("Tainted((_mvl_rv)) }"),
-                        "db_url" => self.push("DbUrl((_mvl_rv)) }"),
-                        "config_path" => self.push("ConfigPath((_mvl_rv)) }"),
-                        "api_endpoint" => self.push("ApiEndpoint((_mvl_rv)) }"),
-                        "audit_target" => self.push("AuditTarget((_mvl_rv)) }"),
-                        _ => unreachable!(
+                    match kind {
+                        RelabelKind::Unwrap => self.push("(_mvl_rv).0.clone() }"),
+                        RelabelKind::Wrap(lbl) => self.push(&format!("{lbl}((_mvl_rv)) }}")),
+                        RelabelKind::Transform(lbl) => {
+                            self.push(&format!("{lbl}((_mvl_rv).0.clone()) }}"))
+                        }
+                        RelabelKind::Unknown => unreachable!(
                             "relabel '{name}': unknown transition — blocked by checker (#990)"
                         ),
                     }
                 } else {
-                    match name.as_str() {
-                        // Unwrap: strip the label newtype to get the inner value.
-                        "trust" | "release" | "undb_url" | "unconfig_path" | "unapi_endpoint"
-                        | "unaudit_target" => {
+                    match kind {
+                        RelabelKind::Unwrap => {
                             self.push("(");
                             self.emit_expr(inner);
                             self.push(").0.clone()");
                         }
-                        // Wrap: construct the label newtype around the value.
-                        "classify" => {
-                            self.push("Secret((");
+                        RelabelKind::Wrap(lbl) => {
+                            self.push(&format!("{lbl}(("));
                             self.emit_expr(inner);
                             self.push("))");
                         }
-                        "taint" => {
-                            self.push("Tainted((");
+                        RelabelKind::Transform(lbl) => {
+                            self.push(&format!("{lbl}(("));
                             self.emit_expr(inner);
-                            self.push("))");
+                            self.push(").0.clone())");
                         }
-                        "db_url" => {
-                            self.push("DbUrl((");
-                            self.emit_expr(inner);
-                            self.push("))");
-                        }
-                        "config_path" => {
-                            self.push("ConfigPath((");
-                            self.emit_expr(inner);
-                            self.push("))");
-                        }
-                        "api_endpoint" => {
-                            self.push("ApiEndpoint((");
-                            self.emit_expr(inner);
-                            self.push("))");
-                        }
-                        "audit_target" => {
-                            self.push("AuditTarget((");
-                            self.emit_expr(inner);
-                            self.push("))");
-                        }
-                        _ => {
-                            unreachable!(
-                                "relabel '{name}': unknown transition — blocked by checker (#990)"
-                            );
-                        }
+                        RelabelKind::Unknown => unreachable!(
+                            "relabel '{name}': unknown transition — blocked by checker (#990)"
+                        ),
                     }
                 }
             }
