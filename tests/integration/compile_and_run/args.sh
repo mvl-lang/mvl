@@ -18,7 +18,7 @@
 # Those are covered at the unit level in tests/stdlib/args_test.mvl.
 #
 # Run standalone: bash tests/integration/compile_and_run/args.sh
-# Run via make:   make test-integration
+# Run via make:   make test-rust-integration (or make test-full)
 
 set -uo pipefail
 
