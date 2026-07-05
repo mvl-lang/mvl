@@ -40,19 +40,19 @@ impl RustEmitter {
                     .as_ref()
                     .is_some_and(|t| matches!(t.unlabeled(), Ty::Set(_)));
                 if is_opt_or_result {
-                    self.emit_expr(receiver);
+                    self.emit_method_receiver(receiver);
                     self.push(".map(|__x| (");
                     self.emit_expr(&args[0]);
                     self.push(")(__x.clone()))");
                 } else if is_set {
                     // Set.map: into_iter + collect into HashSet.
-                    self.emit_expr(receiver);
+                    self.emit_method_receiver(receiver);
                     self.push(".into_iter().map(|__x| (");
                     self.emit_expr(&args[0]);
                     self.push(")(__x.clone())).collect::<std::collections::HashSet<_>>()");
                 } else {
                     // List (and unknown types) use into_iter().collect().
-                    self.emit_expr(receiver);
+                    self.emit_method_receiver(receiver);
                     self.push(".into_iter().map(|__x| (");
                     self.emit_expr(&args[0]);
                     self.push(")(__x.clone())).collect::<Vec<_>>()");
@@ -60,7 +60,7 @@ impl RustEmitter {
             }
             // map_values(f) — Map only: transform values, keep keys.
             "map_values" if args.len() == 1 => {
-                self.emit_expr(receiver);
+                self.emit_method_receiver(receiver);
                 self.push(".clone().into_iter().map(|(__k, __v)| (__k, (");
                 self.emit_expr(&args[0]);
                 self.push(")(__v.clone()))).collect::<std::collections::HashMap<_, _>>()");
@@ -88,13 +88,13 @@ impl RustEmitter {
                         .is_some_and(|t| matches!(t.unlabeled(), Ty::Set(_)));
                 if is_map {
                     // Map.filter(f: fn(V) -> Bool): destructure entry, test value.
-                    self.emit_expr(receiver);
+                    self.emit_method_receiver(receiver);
                     self.push(".clone().into_iter().filter(|(_k, __v)| (");
                     self.emit_expr(&args[0]);
                     self.push(")(__v.clone())).collect::<std::collections::HashMap<_, _>>()");
                 } else if is_set {
                     // Set.filter(f: fn(T) -> Bool): same as List but collect HashSet.
-                    self.emit_expr(receiver);
+                    self.emit_method_receiver(receiver);
                     self.push(".clone().into_iter().filter(|__x| (");
                     self.emit_expr(&args[0]);
                     self.push(")(__x.clone())).collect::<std::collections::HashSet<_>>()");
@@ -108,7 +108,7 @@ impl RustEmitter {
                     } else {
                         false
                     };
-                    self.emit_expr(receiver);
+                    self.emit_method_receiver(receiver);
                     self.push(".clone().into_iter().");
                     self.push(method);
                     self.push("(|__x| (");
@@ -128,7 +128,7 @@ impl RustEmitter {
                     .is_some_and(|t| matches!(t.unlabeled(), Ty::Map(_, _)));
                 if is_map {
                     // Map.any/all(f: fn(V) -> Bool): destructure entry, test value.
-                    self.emit_expr(receiver);
+                    self.emit_method_receiver(receiver);
                     self.push(".clone().into_iter().");
                     self.push(method);
                     self.push("(|(_k, __v)| (");
@@ -145,7 +145,7 @@ impl RustEmitter {
                     } else {
                         false
                     };
-                    self.emit_expr(receiver);
+                    self.emit_method_receiver(receiver);
                     self.push(".clone().into_iter().");
                     self.push(method);
                     self.push("(|__x| (");
@@ -168,7 +168,7 @@ impl RustEmitter {
                     .is_some_and(|t| matches!(t.unlabeled(), Ty::Map(_, _)));
                 if is_map {
                     // Map.fold(init, f: fn(U, V) -> U): destructure entry, fold over values.
-                    self.emit_expr(receiver);
+                    self.emit_method_receiver(receiver);
                     self.push(".clone().into_iter().fold(");
                     self.emit_expr_as_arg(&args[0]);
                     self.push(", |acc, (_k, __v)| (");
@@ -188,7 +188,7 @@ impl RustEmitter {
                     } else {
                         (false, false)
                     };
-                    self.emit_expr(receiver);
+                    self.emit_method_receiver(receiver);
                     self.push(".clone().into_iter().fold(");
                     self.emit_expr_as_arg(&args[0]);
                     self.push(", |acc, __x| (");
@@ -207,7 +207,7 @@ impl RustEmitter {
             // windows(n)/chunks(n) — Rust returns &[T] slices; collect into Vec<Vec<T>>.
             // MVL passes n as Int (i64); Rust requires usize, so cast.
             "windows" | "chunks" => {
-                self.emit_expr(receiver);
+                self.emit_method_receiver(receiver);
                 self.push(".");
                 self.push(method);
                 self.push("(");
@@ -219,12 +219,12 @@ impl RustEmitter {
             }
             // enumerate() -> List[Indexed[T]]   (struct, not tuple — #1383)
             "enumerate" if args.is_empty() => {
-                self.emit_expr(receiver);
+                self.emit_method_receiver(receiver);
                 self.push(".into_iter().enumerate().map(|(__i, __v)| Indexed { index: __i as i64, value: __v }).collect::<Vec<_>>()");
             }
             // zip(other) -> List[Pair[T, U]]   (struct, not tuple — #1383)
             "zip" if args.len() == 1 => {
-                self.emit_expr(receiver);
+                self.emit_method_receiver(receiver);
                 self.push(".into_iter().zip(");
                 self.emit_expr(&args[0]);
                 self.push(".into_iter()).map(|(__a, __b)| Pair { first: __a, second: __b }).collect::<Vec<_>>()");
@@ -232,7 +232,7 @@ impl RustEmitter {
             // partition(f) -> Partitioned[T]   (struct, not tuple — #1380)
             "partition" => {
                 self.push("{ let (__matching, __rest): (Vec<_>, Vec<_>) = ");
-                self.emit_expr(receiver);
+                self.emit_method_receiver(receiver);
                 self.push(".into_iter().partition(|__x| ");
                 if let Some(arg) = args.first() {
                     self.emit_expr(arg);
@@ -242,7 +242,7 @@ impl RustEmitter {
             // group_by(f) — no native Rust equivalent; fold into HashMap
             "group_by" => {
                 self.push("{ let mut __m = std::collections::HashMap::new(); for __v in ");
-                self.emit_expr(receiver);
+                self.emit_method_receiver(receiver);
                 self.push(".into_iter() { __m.entry(");
                 if let Some(arg) = args.first() {
                     // Phase B: if the key function takes a reference for its first
@@ -269,7 +269,7 @@ impl RustEmitter {
             }
             // and_then(f) — Option<T> and Result<T,E>
             "and_then" if args.len() == 1 => {
-                self.emit_expr(receiver);
+                self.emit_method_receiver(receiver);
                 self.push(".and_then(|__x| (");
                 self.emit_expr(&args[0]);
                 self.push(")(__x.clone()))");
@@ -277,22 +277,22 @@ impl RustEmitter {
             // sort() — sort_by with partial_cmp for numeric stability
             "sort" if args.is_empty() => {
                 self.push("{let mut __v=(");
-                self.emit_expr(receiver);
+                self.emit_method_receiver(receiver);
                 self.push(");__v.sort_by(|__a,__b|__a.partial_cmp(__b).unwrap_or(std::cmp::Ordering::Equal));__v}");
             }
             // min() — smallest element via partial_cmp
             "min" if args.is_empty() => {
-                self.emit_expr(receiver);
+                self.emit_method_receiver(receiver);
                 self.push(".into_iter().min_by(|__a,__b|__a.partial_cmp(__b).unwrap_or(std::cmp::Ordering::Equal))");
             }
             // max() — largest element via partial_cmp
             "max" if args.is_empty() => {
-                self.emit_expr(receiver);
+                self.emit_method_receiver(receiver);
                 self.push(".into_iter().max_by(|__a,__b|__a.partial_cmp(__b).unwrap_or(std::cmp::Ordering::Equal))");
             }
             // join(sep) — join strings with separator
             "join" if args.len() == 1 => {
-                self.emit_expr(receiver);
+                self.emit_method_receiver(receiver);
                 self.push(".join(&");
                 self.emit_expr(&args[0]);
                 self.push(")");
@@ -304,41 +304,41 @@ impl RustEmitter {
             // visibility and future intrinsic optimisation.
             "bit_and" if args.len() == 1 => {
                 self.push("(");
-                self.emit_expr(receiver);
+                self.emit_method_receiver(receiver);
                 self.push(" & ");
                 self.emit_expr(&args[0]);
                 self.push(")");
             }
             "bit_or" if args.len() == 1 => {
                 self.push("(");
-                self.emit_expr(receiver);
+                self.emit_method_receiver(receiver);
                 self.push(" | ");
                 self.emit_expr(&args[0]);
                 self.push(")");
             }
             "bit_xor" if args.len() == 1 => {
                 self.push("(");
-                self.emit_expr(receiver);
+                self.emit_method_receiver(receiver);
                 self.push(" ^ ");
                 self.emit_expr(&args[0]);
                 self.push(")");
             }
             "bit_not" if args.is_empty() => {
                 self.push("(!");
-                self.emit_expr(receiver);
+                self.emit_method_receiver(receiver);
                 self.push(")");
             }
             // wrapping_shl/shr avoids debug-mode panic for out-of-range shift counts
             "shift_left" if args.len() == 1 => {
                 self.push("(");
-                self.emit_expr(receiver);
+                self.emit_method_receiver(receiver);
                 self.push(".wrapping_shl(");
                 self.emit_expr(&args[0]);
                 self.push(" as u32))");
             }
             "shift_right" if args.len() == 1 => {
                 self.push("(");
-                self.emit_expr(receiver);
+                self.emit_method_receiver(receiver);
                 self.push(".wrapping_shr(");
                 self.emit_expr(&args[0]);
                 self.push(" as u32))");
@@ -346,7 +346,7 @@ impl RustEmitter {
             // is_zero() — i64 has no is_zero(); emit comparison
             "is_zero" if args.is_empty() => {
                 self.push("(");
-                self.emit_expr(receiver);
+                self.emit_method_receiver(receiver);
                 self.push(" == 0)");
             }
             // to_int() on Byte (u8→i64) or Float (f64→i64, truncating).
@@ -363,14 +363,14 @@ impl RustEmitter {
             // reason as `to_int` above.
             "to_float" if args.is_empty() => {
                 self.push("(i64::from(");
-                self.emit_expr(receiver);
+                self.emit_method_receiver(receiver);
                 self.push(".clone()) as f64)");
             }
             // pow(e) — direct Rust using checker type info (#554).
             // i64: .pow(e as u32); f64: .powf(e).
             "pow" if args.len() == 1 => {
                 let receiver_ty = Some(receiver.ty.clone());
-                self.emit_expr(receiver);
+                self.emit_method_receiver(receiver);
                 match receiver_ty.as_ref() {
                     Some(Ty::Float) => {
                         self.push(".powf(");
@@ -392,7 +392,7 @@ impl RustEmitter {
             // String: .contains(arg.as_str()); List/Set: .contains(&arg).
             "contains" if args.len() == 1 => {
                 let receiver_ty = Some(receiver.ty.clone());
-                self.emit_expr(receiver);
+                self.emit_method_receiver(receiver);
                 match receiver_ty.as_ref() {
                     Some(Ty::String) => {
                         // emit_args_no_into avoids .into() before .as_str().
@@ -419,7 +419,7 @@ impl RustEmitter {
                 };
                 self.push(rust_fn);
                 self.push("(");
-                self.emit_expr(receiver);
+                self.emit_method_receiver(receiver);
                 self.push(".clone().into()");
                 self.push(", ");
                 self.emit_args(args);
@@ -434,7 +434,7 @@ impl RustEmitter {
                 let receiver_ty = Some(receiver.ty.clone());
                 match receiver_ty.as_ref() {
                     Some(Ty::Map(_, _)) => {
-                        self.emit_expr(receiver);
+                        self.emit_method_receiver(receiver);
                         self.push(".get(&(");
                         self.emit_expr(&args[0]);
                         self.push(").clone()).cloned()");
@@ -443,7 +443,7 @@ impl RustEmitter {
                         self.push("{ let __mvl_i = (");
                         self.emit_expr(&args[0]);
                         self.push("); if __mvl_i < 0 { None } else { (");
-                        self.emit_expr(receiver);
+                        self.emit_method_receiver(receiver);
                         self.push(").get(__mvl_i as usize).cloned() } }");
                     }
                 }
@@ -460,7 +460,7 @@ impl RustEmitter {
             // insert(k, v) — Map: emit HashMap::insert (returns Option, discarded).
             "insert" if args.len() == 2 => {
                 self.push("{ let _ = ");
-                self.emit_expr(receiver);
+                self.emit_method_receiver(receiver);
                 self.push(".insert(");
                 self.emit_expr_as_arg(&args[0]);
                 self.push(", ");
@@ -471,7 +471,7 @@ impl RustEmitter {
             // insert(x) — Set: emit HashSet::insert (returns bool, discarded).
             "insert" if args.len() == 1 => {
                 self.push("{ let _ = ");
-                self.emit_expr(receiver);
+                self.emit_method_receiver(receiver);
                 self.push(".insert(");
                 self.emit_expr_as_arg(&args[0]);
                 self.push("); }");
@@ -480,7 +480,7 @@ impl RustEmitter {
             // put(key, value) — Map: insert + return updated map (MVL value semantics).
             "put" if args.len() == 2 => {
                 self.push("{ let mut __m = ");
-                self.emit_expr(receiver);
+                self.emit_method_receiver(receiver);
                 self.push(".clone(); __m.insert(");
                 self.emit_expr_as_arg(&args[0]);
                 self.push(", ");
@@ -491,7 +491,7 @@ impl RustEmitter {
             // without(key) — Map: remove key + return updated map (MVL value semantics).
             "without" if args.len() == 1 => {
                 self.push("{ let mut __m = ");
-                self.emit_expr(receiver);
+                self.emit_method_receiver(receiver);
                 self.push(".clone(); __m.remove(&(");
                 self.emit_expr(&args[0]);
                 self.push(").clone()); __m }");
@@ -500,7 +500,7 @@ impl RustEmitter {
             // remove(key) — Map: HashMap::remove returns Option<V> (correct for MVL).
             //               Set: HashSet::remove returns bool (discarded as stmt).
             "remove" if args.len() == 1 => {
-                self.emit_expr(receiver);
+                self.emit_method_receiver(receiver);
                 self.push(".remove(&(");
                 self.emit_expr(&args[0]);
                 self.push(").clone())");
@@ -508,7 +508,7 @@ impl RustEmitter {
 
             // contains_key(k) — Map-only. Borrows key for HashMap::contains_key.
             "contains_key" if args.len() == 1 => {
-                self.emit_expr(receiver);
+                self.emit_method_receiver(receiver);
                 self.push(".contains_key(&(");
                 self.emit_expr(&args[0]);
                 self.push(").clone())");
@@ -516,25 +516,25 @@ impl RustEmitter {
 
             // keys() — Map: collect HashMap::keys() iterator into Vec.
             "keys" if args.is_empty() => {
-                self.emit_expr(receiver);
+                self.emit_method_receiver(receiver);
                 self.push(".keys().cloned().collect::<Vec<_>>()");
             }
 
             // values() — Map: collect HashMap::values() iterator into Vec.
             "values" if args.is_empty() => {
-                self.emit_expr(receiver);
+                self.emit_method_receiver(receiver);
                 self.push(".values().cloned().collect::<Vec<_>>()");
             }
 
             // entries() -> List[Entry[K, V]]   (struct, not tuple — #1383)
             "entries" if args.is_empty() => {
-                self.emit_expr(receiver);
+                self.emit_method_receiver(receiver);
                 self.push(".into_iter().map(|(__k, __v)| Entry { key: __k, value: __v }).collect::<Vec<_>>()");
             }
 
             // to_list() — Set: collect HashSet::iter() into Vec.
             "to_list" if args.is_empty() => {
-                self.emit_expr(receiver);
+                self.emit_method_receiver(receiver);
                 self.push(".iter().cloned().collect::<Vec<_>>()");
             }
 
@@ -547,7 +547,7 @@ impl RustEmitter {
                 self.push("{ let __b = ");
                 self.emit_expr(b);
                 self.push(".clone(); ");
-                self.emit_expr(receiver);
+                self.emit_method_receiver(receiver);
                 self.push(
                     ".intersection(&__b).cloned().collect::<std::collections::HashSet<_>>() }",
                 );
@@ -557,7 +557,7 @@ impl RustEmitter {
                 self.push("{ let __b = ");
                 self.emit_expr(b);
                 self.push(".clone(); ");
-                self.emit_expr(receiver);
+                self.emit_method_receiver(receiver);
                 self.push(".union(&__b).cloned().collect::<std::collections::HashSet<_>>() }");
             }
             "difference" if args.len() == 1 && matches!(receiver.ty, Ty::Set(_)) => {
@@ -565,7 +565,7 @@ impl RustEmitter {
                 self.push("{ let __b = ");
                 self.emit_expr(b);
                 self.push(".clone(); ");
-                self.emit_expr(receiver);
+                self.emit_method_receiver(receiver);
                 self.push(".difference(&__b).cloned().collect::<std::collections::HashSet<_>>() }");
             }
 
@@ -574,7 +574,7 @@ impl RustEmitter {
                 self.push("{ let __mvl_i = (");
                 self.emit_expr(&args[0]);
                 self.push("); (");
-                self.emit_expr(receiver);
+                self.emit_method_receiver(receiver);
                 self.push(")[__mvl_i as usize] = ");
                 self.emit_expr_as_arg(&args[1]);
                 self.push("; }");
@@ -583,7 +583,7 @@ impl RustEmitter {
             // push(elem) / extend(iter) / append(other) — collection mutators.
             "push" if args.len() == 1 => {
                 let elem_is_labeled = matches!(&receiver.ty, Ty::List(inner) if matches!(inner.as_ref(), Ty::Labeled(..)));
-                self.emit_expr(receiver);
+                self.emit_method_receiver(receiver);
                 self.push(".push(");
                 if elem_is_labeled {
                     self.emit_expr_as_fn_arg(&args[0]);
@@ -594,7 +594,7 @@ impl RustEmitter {
             }
             "extend" | "append" if args.len() == 1 => {
                 let elem_is_labeled = matches!(&receiver.ty, Ty::List(inner) if matches!(inner.as_ref(), Ty::Labeled(..)));
-                self.emit_expr(receiver);
+                self.emit_method_receiver(receiver);
                 self.push(".");
                 self.push(method);
                 self.push("(");
@@ -618,7 +618,7 @@ impl RustEmitter {
             "into_inner" | "as_inner"
                 if args.is_empty() && matches!(receiver.ty, Ty::Labeled(..)) =>
             {
-                self.emit_expr(receiver);
+                self.emit_method_receiver(receiver);
                 self.push(".clone().");
                 self.push(method);
                 self.push("()");
@@ -648,7 +648,7 @@ impl RustEmitter {
                 }
                 self.push(method);
                 self.push("(");
-                self.emit_expr(receiver);
+                self.emit_method_receiver(receiver);
                 self.push(".clone().into()");
                 if !args.is_empty() {
                     self.push(", ");
@@ -683,7 +683,7 @@ impl RustEmitter {
                 }
                 self.push(rust_emit_by_name(m).unwrap());
                 self.push("(");
-                self.emit_expr(receiver);
+                self.emit_method_receiver(receiver);
                 self.push(".clone().into()");
                 if !args.is_empty() {
                     self.push(", ");
@@ -720,7 +720,7 @@ impl RustEmitter {
                 if is_builtin_receiver && !is_stdlib_method(method) {
                     self.push(method);
                     self.push("(");
-                    self.emit_expr(receiver);
+                    self.emit_method_receiver(receiver);
                     self.push(".clone().into()");
                     if !args.is_empty() {
                         self.push(", ");
@@ -739,7 +739,7 @@ impl RustEmitter {
                     if is_fn_typed_field {
                         self.push("(");
                     }
-                    self.emit_expr(receiver);
+                    self.emit_method_receiver(receiver);
                     self.push(".");
                     self.push(method);
                     if is_fn_typed_field {
@@ -782,7 +782,7 @@ impl RustEmitter {
                 // than `&`).  Not a candidate for #1684's redundant-paren
                 // pass.
                 self.push(&format!("{label_name}((&("));
-                self.emit_expr(receiver);
+                self.emit_method_receiver(receiver);
                 self.push(&format!(")).0{method} as i64)"));
             }
             _ => {
@@ -796,7 +796,7 @@ impl RustEmitter {
     /// Emit `n.clamp(low, high)` as a safe Rust block expression.
     fn emit_safe_clamp(&mut self, receiver: &TirExpr, low: &TirExpr, high: &TirExpr) {
         self.push("{let _mvl_n=(");
-        self.emit_expr(receiver);
+        self.emit_method_receiver(receiver);
         self.push(");let _mvl_lo=(");
         self.emit_expr(low);
         self.push(");let _mvl_hi=(");

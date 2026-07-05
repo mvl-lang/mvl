@@ -1678,6 +1678,66 @@ fn method_get_list_emits_bounds_check() {
     assert_contains(&rust, ".get(__mvl_i as usize).cloned()");
 }
 
+/// Regression #1697: method call on a Binary receiver must wrap the
+/// receiver in parens.  `(b1 && b2).to_string()` in MVL must transpile
+/// to `(b1 && b2).to_string()` in Rust — without the parens, Rust's
+/// operator precedence parses `b1 && b2.to_string()` as
+/// `b1 && (b2.to_string())` and rejects the type mismatch.
+#[test]
+fn method_call_on_binary_and_wraps_receiver_in_parens() {
+    let src = r#"
+        fn f(b1: Bool, b2: Bool) -> String { (b1 && b2).to_string() }
+    "#;
+    let rust = transpile_src(src);
+    assert!(
+        rust.contains("(b1 && b2)"),
+        "Binary receiver of `.to_string()` must be parenthesized:\n{rust}"
+    );
+    // Guard against the un-parenthesized form as well.
+    assert!(
+        !rust.contains("b1 && b2.to_string()"),
+        "Bug #1697: un-parenthesized Binary receiver:\n{rust}"
+    );
+}
+
+#[test]
+fn method_call_on_binary_or_wraps_receiver_in_parens() {
+    let src = r#"
+        fn f(b1: Bool, b2: Bool) -> String { (b1 || b2).to_string() }
+    "#;
+    let rust = transpile_src(src);
+    assert!(
+        rust.contains("(b1 || b2)"),
+        "Binary Or receiver must be parenthesized:\n{rust}"
+    );
+}
+
+#[test]
+fn method_call_on_unary_not_wraps_receiver_in_parens() {
+    let src = r#"
+        fn f(b: Bool) -> String { (!b).to_string() }
+    "#;
+    let rust = transpile_src(src);
+    // Rust's `!b.to_string()` parses as `!(b.to_string())` and fails
+    // (`!` on String is undefined), so the parens are load-bearing.
+    assert!(
+        rust.contains("(!b)") || rust.contains("(! b)"),
+        "Unary Not receiver must be parenthesized:\n{rust}"
+    );
+}
+
+#[test]
+fn method_call_on_arithmetic_wraps_receiver_in_parens() {
+    let src = r#"
+        fn f(x: Int, y: Int) -> String { (x + y).to_string() }
+    "#;
+    let rust = transpile_src(src);
+    assert!(
+        rust.contains("(") && rust.contains(").to_string()"),
+        "Arithmetic receiver must be parenthesized:\n{rust}"
+    );
+}
+
 #[test]
 fn method_len_string_emits_chars_count() {
     // String.len() emits .chars().count() as i64 for Unicode correctness (#554)
