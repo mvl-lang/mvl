@@ -122,31 +122,38 @@ pub(super) fn parse_security_policy(
     Ok(policy)
 }
 
+#[allow(clippy::type_complexity)]
 pub(super) fn parse_native(
     value: Option<&TomlValue>,
     section: &str,
-) -> Result<HashMap<String, String>, ManifestError> {
+) -> Result<(HashMap<String, String>, HashMap<String, String>), ManifestError> {
     let mut native = HashMap::new();
+    let mut licenses = HashMap::new();
     let tbl = match value {
-        None => return Ok(native),
+        None => return Ok((native, licenses)),
         Some(v) => v
             .as_table()
             .ok_or_else(|| ManifestError::ParseError(format!("[{section}] must be a table")))?,
     };
     for (name, val) in tbl {
         // Accept either a plain string ("0.31") or a table with a `version` key
-        // ({ version = "0.31", features = [...] }).
+        // ({ version = "0.31", features = [...], license = "MIT" }).
         let version = if let Some(s) = val.as_str() {
             s.to_string()
         } else if let Some(t) = val.as_table() {
-            t.get("version")
+            let ver = t
+                .get("version")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| {
                     ManifestError::ParseError(format!(
                         "{section} dep '{name}' table must have a 'version' string"
                     ))
                 })?
-                .to_string()
+                .to_string();
+            if let Some(lic) = t.get("license").and_then(|v| v.as_str()) {
+                licenses.insert(name.clone(), lic.to_string());
+            }
+            ver
         } else {
             return Err(ManifestError::ParseError(format!(
                 "{section} dep '{name}' must be a string or table with 'version'"
@@ -154,7 +161,7 @@ pub(super) fn parse_native(
         };
         native.insert(name.clone(), version);
     }
-    Ok(native)
+    Ok((native, licenses))
 }
 
 /// Parse `[c-native]` section into `CNativeSpec` entries (#635).

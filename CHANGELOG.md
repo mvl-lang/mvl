@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.236.0] - 2026-07-05
+
+### Added
+
+- **`packages`: `mvl package check` + `license` on `[native]`** (#1698) — Closes the compliance gap where `mvl audit --supply-chain` sees external Rust crates (e.g. `rusqlite 0.31`) but `mvl audit --license` silently reports nothing. `[native]` entries now accept an inline-table form with a `license` field: `rusqlite = { version = "0.31", license = "MIT" }`; stored on the `Manifest` as a parallel `native_licenses` map so existing consumers stay unchanged. New `mvl package check` walks `[native]` and `[c-native]` — the same entries `--supply-chain` already knows about — and errors on missing `license`, unrecognized SPDX id, or a name declared in both sections. `mvl audit` with no flags now runs `--supply-chain` + `--license` + `--paradox` together (individual flags remain for CI granularity). SPDX list gains `blessing` (SQLite's public-domain-style license). Backfill for external `pkg-*` repos is a per-repo follow-up.
+
 ## [0.235.2] - 2026-07-05
 
 ### Fixed
@@ -24,7 +30,6 @@
 ### Fixed (test infra)
 
 - **`cross_backend_tir/common.rs`: drop stale `compiler.expr_types` refs** — `LlvmTextCompiler` no longer exposes an `expr_types` field (hoisted to pipeline-local state in an earlier refactor). The test helper still referenced it, causing `cargo test --tests` (and thus `make test-integration`) to fail with three `E0609` errors before any test ran. Bind `expr_types` as a local; thread through `mono` / `lower` directly. No behavioral change.
-
 ## [0.235.0] - 2026-07-04
 
 ### Added

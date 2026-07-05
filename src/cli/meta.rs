@@ -189,52 +189,17 @@ pub(super) fn cmd_audit(args: &[String]) {
     let supply_chain = args.iter().any(|a| a == "--supply-chain");
     let license = args.iter().any(|a| a == "--license");
 
-    let flag_count = [paradox, supply_chain, license]
-        .iter()
-        .filter(|&&f| f)
-        .count();
-
-    if flag_count > 1 {
-        eprintln!("error: --paradox, --supply-chain, and --license are mutually exclusive");
-        process::exit(1);
-    }
-
-    if flag_count == 0 {
-        eprintln!("Usage: mvl audit <--paradox | --supply-chain | --license>");
-        eprintln!("  --paradox:       audit dependencies for the Dependency Paradox policy");
-        eprintln!("                   exits with code 1 if any dep below complexity threshold lacks rationale");
-        eprintln!(
-            "  --supply-chain:  scan [native] and [c-native] deps against NVD/OSV for CVEs (#633)"
-        );
-        eprintln!("                   exits with code 1 if any vulnerability is found");
-        eprintln!("  --license:       check dependency licenses against project policy (#635)");
-        eprintln!(
-            "                   exits with code 1 if any license is rejected; warns on unknown"
-        );
-        eprintln!();
-        eprintln!("Environment variables:");
-        eprintln!("  NVD_API_KEY      NVD API key for higher rate limits (60 req/min vs 5/min)");
-        process::exit(1);
-    }
+    // No flag = run all three (#1698). Individual flags remain for CI granularity.
+    let (run_paradox, run_supply_chain, run_license) = if !paradox && !supply_chain && !license {
+        (true, true, true)
+    } else {
+        (paradox, supply_chain, license)
+    };
 
     let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let mut any_violation = false;
 
-    if paradox {
-        match packages::cmd_audit_paradox(&project_root) {
-            Err(e) => {
-                eprintln!("error: {e}");
-                process::exit(1);
-            }
-            Ok(audit) => {
-                print!("{}", audit.render());
-                if audit.has_violations() {
-                    process::exit(1);
-                }
-            }
-        }
-    }
-
-    if supply_chain {
+    if run_supply_chain {
         match packages::cmd_audit_supply_chain(&project_root) {
             Err(e) => {
                 eprintln!("error: {e}");
@@ -243,13 +208,13 @@ pub(super) fn cmd_audit(args: &[String]) {
             Ok(audit) => {
                 print!("{}", audit.render());
                 if audit.has_vulnerabilities() {
-                    process::exit(1);
+                    any_violation = true;
                 }
             }
         }
     }
 
-    if license {
+    if run_license {
         match packages::cmd_audit_license(&project_root) {
             Err(e) => {
                 eprintln!("error: {e}");
@@ -258,9 +223,61 @@ pub(super) fn cmd_audit(args: &[String]) {
             Ok(audit) => {
                 print!("{}", audit.render());
                 if audit.has_violations() {
-                    process::exit(1);
+                    any_violation = true;
                 }
             }
+        }
+    }
+
+    if run_paradox {
+        match packages::cmd_audit_paradox(&project_root) {
+            Err(e) => {
+                eprintln!("error: {e}");
+                process::exit(1);
+            }
+            Ok(audit) => {
+                print!("{}", audit.render());
+                if audit.has_violations() {
+                    any_violation = true;
+                }
+            }
+        }
+    }
+
+    if any_violation {
+        process::exit(1);
+    }
+}
+
+/// `mvl package <subcmd>` — package-level commands (#1698).
+pub(super) fn cmd_package(args: &[String]) {
+    let subcmd = args.get(2).map(|s| s.as_str()).unwrap_or("");
+    match subcmd {
+        "check" => {
+            let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            match packages::cmd_package_check(&project_root) {
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    process::exit(1);
+                }
+                Ok(report) => {
+                    print!("{}", report.render());
+                    if !report.is_clean() {
+                        process::exit(1);
+                    }
+                }
+            }
+        }
+        "" => {
+            eprintln!("Usage: mvl package <subcmd>");
+            eprintln!("  check    validate mvl.toml — every [native]/[c-native] entry must");
+            eprintln!("           declare a valid SPDX 'license'");
+            process::exit(1);
+        }
+        other => {
+            eprintln!("error: unknown 'mvl package' subcommand: {other}");
+            eprintln!("Usage: mvl package <check>");
+            process::exit(1);
         }
     }
 }
