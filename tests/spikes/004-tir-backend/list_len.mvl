@@ -1,0 +1,7 @@
+// A1p: `.len()` method — extractvalue tag 0.
+// Expected stdout: 5
+
+fn main() -> Int {
+    let xs: List[Int] = [1, 2, 3, 4, 5];
+    xs.len()
+}

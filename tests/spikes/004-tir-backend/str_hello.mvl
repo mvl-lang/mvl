@@ -1,0 +1,6 @@
+// A1m: string literal + println.  Simplest possible test.
+// Expected stdout: hello
+
+fn main() -> Unit ! Console {
+    println("hello")
+}

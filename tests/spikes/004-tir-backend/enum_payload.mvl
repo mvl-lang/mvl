@@ -1,0 +1,18 @@
+// A1o: enum variant with a data payload.
+// Expected stdout: 42
+
+type Value = enum {
+    Zero,
+    Num(Int),
+}
+
+fn get_int(v: Value) -> Int {
+    match v {
+        Value::Zero => 0,
+        Value::Num(n) => n,
+    }
+}
+
+fn main() -> Int {
+    get_int(Value::Num(42))
+}

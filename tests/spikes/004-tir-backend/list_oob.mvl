@@ -1,0 +1,7 @@
+// A1t: bounds-checked .get() returns None for out-of-range access.
+// Expected stdout: 999  (index 20 is OOB; unwrap_or(999) fires)
+
+fn main() -> Int {
+    let xs: List[Int] = [10, 20, 30];
+    xs.get(20).unwrap_or(999)
+}

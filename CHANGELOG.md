@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.237.0] - 2026-07-05
+
+### Added
+
+- **`rust_backend`: MVL-hosted LLVM strings + println** (#1118, Phase A1m) — `String` type end-to-end: literals, params, returns, plus the `println(String)` builtin lowered to libc printf. String → `{i64, ptr}` in LLVM (length + data ptr).  Each distinct literal → private `@.str.N` global with C-string bytes, deduped via first-seen registry. `void` returns emit `ret void` (no operand); `Unit` main skips the terminal printf. `EmitCtx` gains `strings: Map[String, String]`, threaded through all construction sites. 3 new spike tests. Corpus 35 → 38.
+- **`rust_backend`: MVL-hosted LLVM structs** (#1118, Phase A1n) — `type T = struct { … }` declaration → `%<Name> = type { … }`, construction via chained `insertvalue`, field access via `extractvalue`.  New struct registry + `tir_ty_to_llvm_ctx` (struct-aware). 2 new spike tests. Corpus 38 → 40.
+- **`rust_backend`: MVL-hosted LLVM enum payloads** (#1118, Phase A1o) — user enums extend to data variants: `type Value = enum { Zero, Num(Int) }` lowers to `{i8, i64}` when any variant carries payload. `TupleStruct` patterns dispatch on extracted tag and bind payload via extractvalue. New `enum_types` + `variant_payloads` registries. 2 new spike tests. Corpus 40 → 42.
+- **`rust_backend`: MVL-hosted LLVM list ops + method dispatch** (#1118, Phase A1p) — new `MethodCall` branch. `xs.len()` → extractvalue index 0. `xs.get(i)` → GEP+load+Some (no bounds check in this phase — see A1t). `opt.unwrap_or(d)` → `select i1` on tag. Unlocks `xs.get(i).unwrap_or(default)`. 2 new spike tests. Corpus 42 → 44.
+- **`rust_backend`: MVL-hosted LLVM struct-variant enums + multi-payload** (#1118, Phase A1q) — `type Session = enum { Open, Locked { attempts: Int, window: Int } }`. Enum LLVM shape widens to `{i8, i64, i64, …}` sized to the widest variant. `Struct` patterns dispatch on tag + extract each named field per slot registry lookup. `EmitCtx.variant_slots: Map[String, Map[String, Int]]`. `Session::Locked { … }` construction reuses shared `emit_variant_construction`. 1 new spike test. Corpus 44 → 45.
+- **`rust_backend`: MVL-hosted LLVM Float payloads via bitcast** (#1118, Phase A1r) — `Float` → LLVM `double`, `f.to_int()` → `fptosi`. Enum payload slots stay `i64`; non-i64 payloads (currently `double`) bitcast to/from i64 at construction/extraction. `variant_slot_types` registry drives the bitcast decision. 1 new spike test. Corpus 45 → 46.
+- **`rust_backend`: MVL-hosted LLVM multi-payload tuple variants** (#1118, Phase A1s) — `Rect(Int, Int)`, `Cube(Int, Float, Int)` work via the A1q infrastructure — no emitter changes, just coverage. 2 new spike tests. Corpus 46 → 48.
+- **`rust_backend`: MVL-hosted LLVM bounds-checked .get()** (#1118, Phase A1t) — real Option semantics for OOB access: branch+phi in expression position. `icmp ult` for negative-index safety; None branch skips the load entirely. 1 new spike test. Corpus 48 → 49.
+- **`rust_backend`: MVL-hosted LLVM nested list types** (#1118, Phase A1u) — `List[String]`, `List[Point]`, `List[<enum>]` — element type from `iter.ty.inner` drives ListLit storage + for-loop element load. Bonus fix: `emit_if_blocks` no longer emits `phi void` for Unit-typed arms. 2 new spike tests. Corpus 49 → **51**.
+
+### Backend surface after A1m-A1u
+
+Emitter: 1662 → 2983 LOC (+1321). Full spike corpus 51/51 pass end-to-end (TIR → IR → llc → cc → binary → assert stdout). `make test-mvl` clean throughout.
+
+### Deferred (filed as follow-ups)
+
+- **#1693** — split `backend_llvm.mvl` monolith into modular files (blocked on #1692 [fixed by #1694] + #1695).
+- **#1695** — cross-module capability param inference for user-defined fns.
+
 ## [0.236.0] - 2026-07-05
 
 ### Added

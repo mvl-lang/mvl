@@ -40,7 +40,14 @@ LL_CASES := empty.mvl:0 two_plus_three.mvl:5 six_times_seven.mvl:42 nested_arith
             fn_ret_option.mvl:21 fn_ret_result.mvl:100 \
             for_sum.mvl:45 for_count.mvl:5 \
             enum_unit.mvl:2 enum_direction.mvl:1 \
-            list_sum.mvl:15 list_filter.mvl:12
+            list_sum.mvl:15 list_filter.mvl:12 \
+            str_hello.mvl:hello str_greet.mvl:greetings str_two.mvl:alpha \
+            struct_point.mvl:15 struct_person.mvl:60 \
+            enum_payload.mvl:42 enum_mixed.mvl:100 \
+            list_index.mvl:30 list_len.mvl:5 \
+            enum_struct_variant.mvl:15 enum_float_payload.mvl:7 \
+            enum_multi_payload.mvl:12 enum_triple.mvl:39 \
+            list_oob.mvl:999 list_string.mvl:alpha list_struct.mvl:60
 
 .PHONY: help build guard-mvl tir emit compile run test check all clean \
         tir-llvm emit-llvm compile-llvm run-llvm test-llvm llvm test-llvm-arith

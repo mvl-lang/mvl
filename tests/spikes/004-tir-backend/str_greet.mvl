@@ -1,0 +1,10 @@
+// A1m: string as fn param.
+// Expected stdout: greetings
+
+fn greet(name: String) -> Unit ! Console {
+    println("greetings")
+}
+
+fn main() -> Unit ! Console {
+    greet("ignored")
+}

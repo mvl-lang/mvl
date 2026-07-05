@@ -1,0 +1,18 @@
+// A1s: tuple variant with multiple payload fields.
+// Expected stdout: 12  (Rect(3, 4) → 3*4)
+
+type Shape = enum {
+    Point,
+    Rect(Int, Int),
+}
+
+fn area(s: Shape) -> Int {
+    match s {
+        Shape::Point => 0,
+        Shape::Rect(w, h) => w * h,
+    }
+}
+
+fn main() -> Int {
+    area(Shape::Rect(3, 4))
+}
