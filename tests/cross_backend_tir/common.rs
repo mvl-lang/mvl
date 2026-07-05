@@ -24,11 +24,13 @@ pub fn parse(src: &str) -> Program {
 }
 
 pub fn lower_to_tir(prog: &Program) -> (TirProgram, LlvmTextCompiler) {
-    let mut compiler = LlvmTextCompiler::new();
-    compiler.expr_types = assemble_expr_types(prog, &[]);
+    // `expr_types` was hoisted off `LlvmTextCompiler` in an earlier refactor —
+    // now a pipeline-local product, threaded through `mono` and `lower` only.
+    let compiler = LlvmTextCompiler::new();
+    let expr_types = assemble_expr_types(prog, &[]);
     let all_fns = mono::collect_fns([prog]);
-    let m = mono::monomorphize(prog, &all_fns, &compiler.expr_types);
-    let tir = lower::lower(prog, &m, &compiler.expr_types);
+    let m = mono::monomorphize(prog, &all_fns, &expr_types);
+    let tir = lower::lower(prog, &m, &expr_types);
     (tir, compiler)
 }
 

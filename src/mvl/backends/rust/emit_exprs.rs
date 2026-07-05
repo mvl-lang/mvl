@@ -106,6 +106,23 @@ impl RustEmitter {
         }
     }
 
+    /// Emit `receiver` at the left of `.method(...)` / `.field` — wrap
+    /// in parens iff its own precedence is lower than `Prec::Suffix`.
+    ///
+    /// Without this, `(b1 && b2).to_string()` (MVL source) transpiles to
+    /// `b1 && b2.to_string()` (Rust) which parses as `b1 && (b2.to_string())`
+    /// under Rust's precedence — bug #1697.  The wrapper mirrors
+    /// `emit_operand_left` for the method-call-receiver context.
+    pub(super) fn emit_method_receiver(&mut self, receiver: &TirExpr) {
+        if expr_own_prec(receiver) < Prec::Suffix {
+            self.push("(");
+            self.emit_expr(receiver);
+            self.push(")");
+        } else {
+            self.emit_expr(receiver);
+        }
+    }
+
     /// Emit `sub` as the right operand of a left-associative binary op:
     /// wrap iff own precedence is *less than or equal to* `parent_prec`.
     /// This keeps `a - (b - c)` from parsing as `(a - b) - c` when the

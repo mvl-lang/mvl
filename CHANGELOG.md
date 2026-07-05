@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.235.1] - 2026-07-05
+
+### Fixed
+
+- **`rust_backend`: method-call receiver parenthesization** (#1697) — MVL source `(b1 && b2).to_string()` was transpiling to Rust `b1 && b2.to_string()`, which parses as `b1 && (b2.to_string())` under Rust's operator precedence and trips `E0308: expected bool, found String`. Same failure mode for `.to_string()` on any Binary/Unary/If/Match/Lambda receiver. Fix: new `emit_method_receiver(receiver)` helper in `emit_exprs.rs` mirroring the existing `emit_operand_left` — wraps in parens iff `expr_own_prec(receiver) < Prec::Suffix`. All 57 `self.emit_expr(receiver)` call sites in `emit_method_call.rs` migrated to the wrapper. Precedence infrastructure (`Prec`, `expr_own_prec`) already existed, so this reuses the same table that governs binary-op sub-expression parenthesization. 4 new regression tests in `tests/transpiler.rs`.
+
+### Changed
+
+- **`build`: fold `test-integration` into `test-full` via `test-rust-integration`** — `test-integration` was a dev-convenience target running `cargo test --tests` but NOT included in `test-full`. Nine test binaries had zero coverage in the pre-merge gate: `transpiler`, `assurance`, `corpus_ir_parity`, `cross_backend_tir`, `linter_integration`, `manifest_rationale`, `meta_commands`, `module_resolver`, `toolchain`. `test-integration` deleted; equivalent `test-rust-integration` target added to `TEST_FULL_EXTRA_SUITES`. Overlap with `test-backend-rust`/`test-cross-backend` accepted (cargo caches).
+
+- **`tests/integration/`: cleanup** — Delete stale `.gitkeep` in `error_messages/` (dir has 27 fixtures now); update `args.sh` docstring to reference `test-rust-integration` instead of the removed `test-integration`.
+
+### Fixed (test infra)
+
+- **`cross_backend_tir/common.rs`: drop stale `compiler.expr_types` refs** — `LlvmTextCompiler` no longer exposes an `expr_types` field (hoisted to pipeline-local state in an earlier refactor). The test helper still referenced it, causing `cargo test --tests` (and thus `make test-integration`) to fail with three `E0609` errors before any test ran. Bind `expr_types` as a local; thread through `mono` / `lower` directly. No behavioral change.
+
 ## [0.235.0] - 2026-07-04
 
 ### Added
