@@ -7,7 +7,7 @@
 //! All other `emit_*` modules take `&mut RustEmitter` and append to it.
 
 use crate::mvl::backends::rust::capability_params::{
-    build_capability_params_map_tir, explicit_borrow_flags_tir,
+    build_capability_params_map_tir_with_siblings, explicit_borrow_flags_tir,
 };
 use crate::mvl::ir::{BinaryOp, TirFn, TirProgram};
 use crate::mvl::parser::lexer::Span;
@@ -432,20 +432,43 @@ impl RustEmitter {
 
     /// Emit a complete Rust file from a [`TirProgram`].
     pub fn emit_program(&mut self, tir: &TirProgram) {
-        self.emit_program_core(tir, &[], false, &[]);
+        self.emit_program_core(tir, &[], false, &[], &[]);
     }
 
     /// Emit a complete Rust file from a [`TirProgram`], prepending `pub mod` declarations
     /// for each sibling module name in `sibling_mods` (used by multi-file project builds).
     /// `prelude_progs` are stdlib programs whose non-stub functions are emitted before
     /// the user program's declarations so they are available at the call site.
+    ///
+    /// Legacy no-siblings entry point — delegates to `emit_program_with_mods_and_siblings`
+    /// with an empty sibling_tirs slice.  Callers that have sibling TIRs to hand
+    /// (multi-file projects) should use the newer entry point instead so
+    /// cross-module borrow inference works — see #1695.
     pub fn emit_program_with_mods(
         &mut self,
         tir: &TirProgram,
         sibling_mods: &[&str],
         prelude_tirs: &[TirProgram],
     ) {
-        self.emit_program_core(tir, sibling_mods, false, prelude_tirs);
+        self.emit_program_with_mods_and_siblings(tir, sibling_mods, &[], prelude_tirs);
+    }
+
+    /// Emit a complete Rust file with cross-module capability-param info (#1695).
+    ///
+    /// `sibling_tirs` are the pre-lowered TIRs for every sibling module in the
+    /// current project.  They're fed to `build_capability_params_map_tir_with_siblings`
+    /// so the entry emitter sees inferred-borrow flags for functions defined in
+    /// sibling modules — otherwise a call like `use_map(mb)` where `use_map`'s
+    /// param is inferred as borrowed emits an owned value at the call site while
+    /// the sibling's Rust signature reads `&HashMap<K, V>`.
+    pub fn emit_program_with_mods_and_siblings(
+        &mut self,
+        tir: &TirProgram,
+        sibling_mods: &[&str],
+        sibling_tirs: &[TirProgram],
+        prelude_tirs: &[TirProgram],
+    ) {
+        self.emit_program_core(tir, sibling_mods, false, sibling_tirs, prelude_tirs);
     }
 
     /// Emit a sibling module file using the TIR-based path.
@@ -455,7 +478,7 @@ impl RustEmitter {
     /// `prelude_tirs` are the prelude programs pre-lowered to TIR, so that stdlib functions
     /// (e.g. `to_lower`, `range`) are available in sibling modules too.
     pub fn emit_sibling_module(&mut self, tir: &TirProgram, prelude_tirs: &[TirProgram]) {
-        self.emit_program_core(tir, &[], true, prelude_tirs);
+        self.emit_program_core(tir, &[], true, &[], prelude_tirs);
     }
 
     fn emit_program_core(
@@ -463,6 +486,7 @@ impl RustEmitter {
         tir: &TirProgram,
         sibling_mods: &[&str],
         force_runtime: bool,
+        sibling_tirs: &[TirProgram],
         prelude_tirs: &[TirProgram],
     ) {
         // Populate audit_relabels from declaration-level `audit` keywords (#896).
@@ -728,7 +752,8 @@ impl RustEmitter {
             .collect();
 
         // Phase B: capability params map from TIR
-        self.capability_params_map = build_capability_params_map_tir(tir, prelude_tirs);
+        self.capability_params_map =
+            build_capability_params_map_tir_with_siblings(tir, sibling_tirs, prelude_tirs);
 
         // Rust-backed stdlib modules — scan for capability params
         {

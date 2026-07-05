@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.237.2] - 2026-07-05
+
+### Fixed
+
+- **`rust_backend`: cross-module capability param inference** (#1695) — Read-only borrow inference (`capability_params_for_tir_fn`) was module-local: `build_capability_params_map_tir` only saw the entry TIR + preludes, never sibling module TIRs. Consequence: a sibling fn like `use_map(m: Map[K, V])` that MVL's inference decided should be borrowed emitted `fn use_map(m: &HashMap<K, V>)` in the sibling's Rust file, but the entry emitter passed `use_map(mb)` (owned) — Rust rejected with `E0308: expected \`&HashMap<K, V>\`, found \`HashMap<K, V>\``. Fix threads sibling TIRs through `emit_program_with_mods_and_siblings` into a new `build_capability_params_map_tir_with_siblings`, which gives sibling fns the same "explicit + inferred" treatment as the entry TIR (entry wins on name collisions). Sibling TIRs are lowered upfront in `pipeline.rs::transpile_project_with_options` and reused by both the entry emitter and the per-sibling emit loop — zero extra monomorphization cost. Also sweeps sibling fn-type aliases into the alias set so cross-module Copy fn pointers aren't incorrectly borrow-inferred. New regression test `cross_module_map_arg_uses_borrow_at_call_site` in `tests/transpiler.rs`.
+
+### Unblocked
+
+- **#1693** — with #1692 (fixed in 0.235.2) and #1695 (this) both landed, the two transpiler-side prerequisites for splitting `backend_llvm.mvl` (2983 LOC monolith) into modular files are complete.
+
 ## [0.237.1] - 2026-07-05
 
 ### Fixed

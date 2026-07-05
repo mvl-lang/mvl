@@ -380,29 +380,45 @@ pub fn transpile_project_with_options(
     let mut prelude_tirs = lower_prelude(prelude_progs);
     annotate_prelude_pkg_names(&mut prelude_tirs, prelude_pkg_names);
 
+    // #1695: lower all sibling TIRs upfront so the entry emitter sees
+    // cross-module capability-param inference (used by
+    // `build_capability_params_map_tir_with_siblings`).  Previously siblings
+    // were lowered lazily inside the per-sibling map below, which meant the
+    // entry emitter had no visibility into sibling fn signatures.
+    let sibling_tirs: Vec<crate::mvl::ir::TirProgram> = siblings
+        .iter()
+        .enumerate()
+        .map(|(idx, (_name, prog))| {
+            let sib_et = sibling_expr_types.get(idx).cloned().unwrap_or_default();
+            let sib_all_fns = crate::mvl::passes::mono::collect_fns([prog]);
+            let sib_mono = crate::mvl::passes::mono::monomorphize(prog, &sib_all_fns, &sib_et);
+            crate::mvl::ir::lower::lower(prog, &sib_mono, &sib_et)
+        })
+        .collect();
+
     let mut cg = RustEmitter::new();
     cg.assert_mode = assert_mode;
     cg.test_extern_stubs = extern_stubs;
-    cg.emit_program_with_mods(&entry_tir, &sibling_names, &prelude_tirs);
+    cg.emit_program_with_mods_and_siblings(
+        &entry_tir,
+        &sibling_names,
+        &sibling_tirs,
+        &prelude_tirs,
+    );
     let main_rs = cg.finish();
 
     let entry_uses_runtime = use_runtime;
     let module_files: Vec<(String, String)> = siblings
         .iter()
-        .enumerate()
-        .map(|(idx, (name, prog))| {
-            let sib_et = sibling_expr_types.get(idx).cloned().unwrap_or_default();
-            let sib_all_fns = crate::mvl::passes::mono::collect_fns([prog]);
-            let sib_mono = crate::mvl::passes::mono::monomorphize(prog, &sib_all_fns, &sib_et);
-            let sib_tir = crate::mvl::ir::lower::lower(prog, &sib_mono, &sib_et);
-
+        .zip(sibling_tirs.iter())
+        .map(|((name, _prog), sib_tir)| {
             let mut cg = RustEmitter::new();
             cg.assert_mode = assert_mode;
             cg.test_extern_stubs = extern_stubs;
             if entry_uses_runtime {
-                cg.emit_sibling_module(&sib_tir, &prelude_tirs);
+                cg.emit_sibling_module(sib_tir, &prelude_tirs);
             } else {
-                cg.emit_program(&sib_tir);
+                cg.emit_program(sib_tir);
             }
             (name.clone(), cg.finish())
         })

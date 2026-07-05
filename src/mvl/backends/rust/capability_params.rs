@@ -45,11 +45,37 @@ pub fn build_capability_params_map_tir(
     tir: &crate::mvl::ir::TirProgram,
     prelude_tirs: &[crate::mvl::ir::TirProgram],
 ) -> HashMap<String, Vec<Option<bool>>> {
+    build_capability_params_map_tir_with_siblings(tir, &[], prelude_tirs)
+}
+
+/// Capability params map with sibling-module TIRs merged in (#1695).
+///
+/// In a multi-file project, the entry emitter needs to know borrow-inference
+/// results for functions declared in sibling modules — otherwise a call
+/// like `use_map(mb)` where `use_map: Map[K, V]` was inferred as `&Map[K, V]`
+/// in the sibling emits an owned `mb` at the call site while the sibling's
+/// Rust signature reads `&HashMap<K, V>` — mismatch.
+///
+/// Sibling fns get the same "explicit + inferred" treatment as `tir.fns`;
+/// prelude fns stay explicit-only (see docstring above `for pt in prelude_tirs`).
+pub fn build_capability_params_map_tir_with_siblings(
+    tir: &crate::mvl::ir::TirProgram,
+    sibling_tirs: &[crate::mvl::ir::TirProgram],
+    prelude_tirs: &[crate::mvl::ir::TirProgram],
+) -> HashMap<String, Vec<Option<bool>>> {
     let mut map = HashMap::new();
 
     // Collect names of `type X = fn(..) -> ..` aliases — these are Copy fn pointers
-    // and should not be inferred as borrowed (#1467).
-    let fn_alias_names = collect_fn_alias_names_tir(tir, prelude_tirs);
+    // and should not be inferred as borrowed (#1467).  Siblings included so
+    // aliases declared cross-module don't get incorrectly borrow-inferred.
+    let mut fn_alias_names = collect_fn_alias_names_tir(tir, prelude_tirs);
+    for st in sibling_tirs {
+        for td in &st.types {
+            if let crate::mvl::ir::TirTypeBody::Alias(crate::mvl::ir::Ty::Fn(..)) = &td.body {
+                fn_alias_names.insert(td.name.clone());
+            }
+        }
+    }
 
     // Prelude functions (stdlib) — explicit annotations only (no body analysis),
     // mirroring the old AST path which used explicit_borrow_flags(&fd.params).
@@ -64,11 +90,27 @@ pub fn build_capability_params_map_tir(
         }
     }
 
-    // User functions from TIR — explicit + inferred.
+    // User functions from THIS TIR — explicit + inferred.
     for f in &tir.fns {
         let flags = capability_params_for_tir_fn(f, &fn_alias_names);
         if flags.iter().any(|b| b.is_some()) {
             map.insert(f.name.clone(), flags);
+        }
+    }
+
+    // #1695: sibling module fns — same treatment as entry TIR.  Without this,
+    // cross-module callers pass owned values while the sibling's Rust signature
+    // expects a borrow.  Only insert if not already present (entry wins over
+    // siblings for name collisions).
+    for st in sibling_tirs {
+        for f in &st.fns {
+            if map.contains_key(&f.name) {
+                continue;
+            }
+            let flags = capability_params_for_tir_fn(f, &fn_alias_names);
+            if flags.iter().any(|b| b.is_some()) {
+                map.insert(f.name.clone(), flags);
+            }
         }
     }
 
