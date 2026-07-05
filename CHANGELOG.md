@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.235.2] - 2026-07-05
+
+### Fixed
+
+- **`rust_backend`: cross-module Map/Set/List coercion** (#1692) — Two related transpiler surface defects that made splitting the LLVM emitter monolith (#1693) impossible.
+  - **Variant 1 (`.get()` on labeled Map)**: `emit_method_call.rs::get` matched `Ty::Map(_, _)` directly, missing `Ty::Labeled(Ty::Map(...))` values (e.g. `Tainted<Map<K, V>>`). Those fell through to the List branch and emitted list-index code for a HashMap receiver — trips `E0308: expected String, found integer`. Fix: apply `.unlabeled()` before pattern matching, following the same pattern used by `filter`/`any`/`all` a few lines above.
+  - **Variant 2 (`.into()` on Map/Set/List args)**: `emit_expr_as_value_arg` excluded `Option`/`Result` from the `.into()` coercion (no blanket `From<T> for Label<T>`) but Map/Set/List still went through it. Passing a `Map[String, StructInfo]` across a `use` boundary emitted `m.clone().into()` — `HashMap<String, StructInfo>: Into<_>` isn't satisfied. Fix: extend the exclusion list to include `Ty::Map`, `Ty::Set`, `Ty::List`. These clone in place instead of coercing.
+- 3 new regression tests in `tests/transpiler.rs` covering Map/Set/List argument passing.
+
 ## [0.235.1] - 2026-07-05
 
 ### Fixed
