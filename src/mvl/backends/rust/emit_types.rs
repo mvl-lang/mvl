@@ -609,9 +609,36 @@ impl RustEmitter {
 
 // ── Refinement predicate → Rust assert expression ─────────────────────────
 
+/// Return `true` iff `pred` can be evaluated at runtime — i.e. contains no
+/// `forall`/`exists` quantifiers anywhere in its subtree.  Quantifiers are
+/// ghost-only (verification input only) and must be filtered out before any
+/// call to `emit_ref_expr_for_assert`.
+pub fn is_runtime_checkable(pred: &RefExpr) -> bool {
+    match pred {
+        RefExpr::Forall { .. } | RefExpr::Exists { .. } => false,
+        RefExpr::LogicOp { left, right, .. }
+        | RefExpr::Compare { left, right, .. }
+        | RefExpr::ArithOp { left, right, .. } => {
+            is_runtime_checkable(left) && is_runtime_checkable(right)
+        }
+        RefExpr::Not { inner, .. }
+        | RefExpr::Grouped { inner, .. }
+        | RefExpr::Old { inner, .. } => is_runtime_checkable(inner),
+        RefExpr::FieldAccess { object, .. } => is_runtime_checkable(object),
+        RefExpr::Ident { .. }
+        | RefExpr::Integer { .. }
+        | RefExpr::Float { .. }
+        | RefExpr::Bool { .. }
+        | RefExpr::Len { .. } => true,
+    }
+}
+
 /// Emit a refinement predicate as a Rust boolean expression suitable for
 /// use inside `assert!(…)`.  The binding name `self` is replaced with
 /// `binding`.
+///
+/// Caller must ensure `pred` is runtime-checkable (see
+/// [`is_runtime_checkable`]); passing a quantifier will panic.
 pub fn emit_ref_expr_for_assert(pred: &RefExpr, binding: &str) -> String {
     emit_ref_expr(pred, binding)
 }
