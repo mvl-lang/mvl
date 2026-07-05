@@ -1783,6 +1783,62 @@ fn set_argument_does_not_get_into_coerce() {
     );
 }
 
+/// Regression #1695: cross-module capability param inference.  When a
+/// sibling module's fn takes a `Map[K, V]` (read-only inferred as `&T`),
+/// the entry emitter must know that and emit `&mb` at the call site —
+/// without the fix, entry emits owned `mb` while the sibling's Rust
+/// signature reads `&HashMap<K, V>` (E0308).
+#[test]
+fn cross_module_map_arg_uses_borrow_at_call_site() {
+    let sibling_src = r#"
+        pub type Bar = struct { x: Int, y: Int }
+        pub fn use_map(m: Map[String, Bar]) -> Int {
+            match m.get("origin") {
+                Some(b) => b.x + b.y,
+                None => -1,
+            }
+        }
+    "#;
+    let entry_src = r#"
+        use types::Bar;
+        use types::use_map;
+        partial fn main() -> Unit ! Console {
+            let mb: ref Map[String, Bar] = Map::new();
+            mb.insert("origin", Bar { x: 3, y: 5 });
+            println(use_map(mb).to_string())
+        }
+    "#;
+    let entry_prog = parse_prog(entry_src);
+    let sibling_prog = parse_prog(sibling_src);
+
+    // Real multi-file pipelines resolve types via `assemble_expr_types` per
+    // module.  Do the same here so TIR lowering has the info it needs.
+    let sibling_expr_types = mvl::mvl::pipeline::assemble_expr_types(&sibling_prog, &[]);
+    let siblings = vec![("types".to_string(), sibling_prog)];
+    let expr_types = mvl::mvl::pipeline::assemble_expr_types(&entry_prog, &[]);
+
+    let out = transpile_project(
+        "crate",
+        &entry_prog,
+        &siblings,
+        &[],
+        expr_types,
+        vec![sibling_expr_types],
+        Default::default(),
+    );
+    assert!(
+        out.main_rs.contains("use_map(&mb)"),
+        "cross-module fn with inferred-borrow param must be called with &mb:\n{}",
+        out.main_rs
+    );
+    assert!(
+        !out.main_rs.contains("use_map(mb.into())")
+            && !out.main_rs.contains("use_map(mb.clone().into())"),
+        "no `.into()` coercion on Map arg:\n{}",
+        out.main_rs
+    );
+}
+
 #[test]
 fn method_len_string_emits_chars_count() {
     // String.len() emits .chars().count() as i64 for Unicode correctness (#554)
