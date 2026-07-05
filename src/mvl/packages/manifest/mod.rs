@@ -62,6 +62,8 @@ const PERMISSIVE_LICENSES: &[&str] = &[
     "Unlicense",
     "CC0-1.0",
     "BSL-1.0",
+    // SQLite's public-domain-style license. Permissive in effect.
+    "blessing",
 ];
 
 /// Additional copyleft licenses accepted by the `CopyleftOk` policy.
@@ -161,6 +163,16 @@ impl LicensePolicy {
         }
     }
 
+    /// Return true when `id` is a recognized SPDX identifier the compiler
+    /// knows about (either permissive or copyleft). Used by `mvl package
+    /// check` to reject typos and unknown IDs (#1698).
+    ///
+    /// This is a whitelist, not a full SPDX parser — good enough for
+    /// declared licenses on external dependencies.
+    pub fn is_known_spdx(id: &str) -> bool {
+        PERMISSIVE_LICENSES.contains(&id) || COPYLEFT_LICENSES.contains(&id)
+    }
+
     /// Human-readable policy name for display.
     pub fn mode_str(&self) -> &'static str {
         match self.mode {
@@ -247,6 +259,12 @@ pub struct Manifest {
     pub dependencies: HashMap<String, DepSpec>,
     /// `[native]` — Rust crates used in `bridge.rs` (for SBOM).
     pub native: HashMap<String, String>,
+    /// Optional SPDX license per `[native]` entry (#1698).
+    ///
+    /// Kept as a parallel map so existing consumers of `native` stay
+    /// unchanged. Populated when the inline-table form is used:
+    /// `rusqlite = { version = "0.31", license = "MIT" }`.
+    pub native_licenses: HashMap<String, String>,
     /// `[c-native]` — C libraries linked via `extern "c"` blocks (#633/#635).
     pub c_native: HashMap<String, CNativeSpec>,
     /// `[dependency-policy]` — Dependency Paradox enforcement settings.
@@ -335,7 +353,7 @@ impl Manifest {
             .map(|s| s.to_string());
 
         let dependencies = parse_dependencies(table.get("dependencies"))?;
-        let native = parse_native(table.get("native"), "native")?;
+        let (native, native_licenses) = parse_native(table.get("native"), "native")?;
         let c_native = parse_c_native_section(table.get("c-native"))?;
         let dependency_policy = parse_dependency_policy(table.get("dependency-policy"))?;
         let license_policy = parse_license_policy(table.get("license-policy"))?;
@@ -351,6 +369,7 @@ impl Manifest {
             },
             dependencies,
             native,
+            native_licenses,
             c_native,
             dependency_policy,
             license_policy,
@@ -512,7 +531,16 @@ impl Manifest {
             let mut native: Vec<(&String, &String)> = self.native.iter().collect();
             native.sort_by_key(|(k, _)| *k);
             for (name, version) in native {
-                out.push_str(&format!("{} = \"{}\"\n", name, toml_escape(version)));
+                if let Some(lic) = self.native_licenses.get(name) {
+                    out.push_str(&format!(
+                        "{} = {{ version = \"{}\", license = \"{}\" }}\n",
+                        name,
+                        toml_escape(version),
+                        toml_escape(lic)
+                    ));
+                } else {
+                    out.push_str(&format!("{} = \"{}\"\n", name, toml_escape(version)));
+                }
             }
         }
 
@@ -584,6 +612,7 @@ impl Manifest {
             },
             dependencies: HashMap::new(),
             native: HashMap::new(),
+            native_licenses: HashMap::new(),
             c_native: HashMap::new(),
             dependency_policy: DependencyPolicy::default(),
             license_policy: LicensePolicy::default(),
@@ -1365,6 +1394,90 @@ libc = "0.2"
     fn new_project_has_empty_c_native() {
         let m = Manifest::new_project("app", "1.0.0");
         assert!(m.c_native.is_empty());
+    }
+
+    // --- [native] license (#1698) ---
+
+    #[test]
+    fn native_shorthand_has_no_license() {
+        let content = r#"
+[package]
+name = "app"
+version = "0.1.0"
+license = "MIT"
+requires-mvl = ">=0.1.0"
+
+[native]
+rusqlite = "0.31"
+"#;
+        let m = Manifest::parse(content).unwrap();
+        assert_eq!(m.native.get("rusqlite").map(String::as_str), Some("0.31"));
+        assert!(m.native_licenses.get("rusqlite").is_none());
+    }
+
+    #[test]
+    fn native_inline_table_with_license_is_captured() {
+        let content = r#"
+[package]
+name = "app"
+version = "0.1.0"
+license = "MIT"
+requires-mvl = ">=0.1.0"
+
+[native]
+rusqlite = { version = "0.31", license = "MIT" }
+"#;
+        let m = Manifest::parse(content).unwrap();
+        assert_eq!(m.native.get("rusqlite").map(String::as_str), Some("0.31"));
+        assert_eq!(
+            m.native_licenses.get("rusqlite").map(String::as_str),
+            Some("MIT")
+        );
+    }
+
+    #[test]
+    fn native_license_roundtrip() {
+        let content = r#"
+[package]
+name = "app"
+version = "0.1.0"
+license = "MIT"
+requires-mvl = ">=0.1.0"
+
+[native]
+rusqlite = { version = "0.31", license = "MIT" }
+serde = "1.0"
+"#;
+        let m = Manifest::parse(content).unwrap();
+        let toml = m.to_toml();
+        assert!(toml.contains("license = \"MIT\""));
+        let m2 = Manifest::parse(&toml).unwrap();
+        assert_eq!(
+            m2.native_licenses.get("rusqlite").map(String::as_str),
+            Some("MIT")
+        );
+        // Shorthand entry has no license — stays a bare string on roundtrip.
+        assert!(m2.native_licenses.get("serde").is_none());
+    }
+
+    #[test]
+    fn is_known_spdx_recognizes_permissive() {
+        assert!(LicensePolicy::is_known_spdx("MIT"));
+        assert!(LicensePolicy::is_known_spdx("Apache-2.0"));
+        assert!(LicensePolicy::is_known_spdx("blessing"));
+    }
+
+    #[test]
+    fn is_known_spdx_recognizes_copyleft() {
+        assert!(LicensePolicy::is_known_spdx("GPL-3.0-only"));
+        assert!(LicensePolicy::is_known_spdx("MPL-2.0"));
+    }
+
+    #[test]
+    fn is_known_spdx_rejects_typos() {
+        assert!(!LicensePolicy::is_known_spdx("MIT-Typo"));
+        assert!(!LicensePolicy::is_known_spdx("apache-2.0")); // wrong case
+        assert!(!LicensePolicy::is_known_spdx(""));
     }
 
     // --- license policy (#635) ---

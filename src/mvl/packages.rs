@@ -27,6 +27,7 @@
 pub mod audit;
 pub(crate) mod cmd_add;
 pub(crate) mod cmd_audit;
+pub(crate) mod cmd_check;
 pub(crate) mod cmd_install;
 pub(crate) mod cmd_sbom;
 pub(crate) mod cmd_update;
@@ -50,6 +51,7 @@ pub use cmd_audit::{
     cmd_audit_license, cmd_audit_paradox, cmd_audit_supply_chain, LicenseAudit, LicenseEntry,
     LicenseStatus, ParadoxAudit, ParadoxEntry,
 };
+pub use cmd_check::{cmd_package_check, CheckIssue, CheckReport};
 pub use cmd_install::cmd_install;
 pub use cmd_sbom::{cmd_sbom, cmd_sbom_diff, cmd_sbom_snapshot};
 pub use cmd_update::{cmd_update, UpdateOptions};

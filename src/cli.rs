@@ -326,6 +326,9 @@ pub(super) fn dispatch(args: &[String]) {
         "audit" => {
             meta::cmd_audit(args);
         }
+        "package" => {
+            meta::cmd_package(args);
+        }
         other => {
             eprintln!("Unknown command: {other}");
             args::print_usage();

@@ -563,6 +563,7 @@ mod tests {
                 m.insert("hyper".to_string(), "1.0".to_string());
                 m
             },
+            native_licenses: HashMap::new(),
             c_native: HashMap::new(),
             dependency_policy: Default::default(),
             license_policy: Default::default(),
@@ -1200,6 +1201,7 @@ mod tests {
                 .into_iter()
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect(),
+            native_licenses: HashMap::new(),
             c_native: c_native
                 .into_iter()
                 .map(|(k, v)| {
