@@ -430,22 +430,23 @@ impl RustEmitter {
 
             // get(key) — direct Rust using checker type info (#554).
             // Map: .get(&key).cloned(); List: bounds-checked index.
+            // Strip label wrappers before dispatch so `Tainted<Map<K,V>>`
+            // and other labeled Map values take the map-lookup branch
+            // instead of falling into the list-index default — bug #1692
+            // variant 1.  Same pattern used by `filter`/`any`/`all` above.
             "get" if args.len() == 1 => {
-                let receiver_ty = Some(receiver.ty.clone());
-                match receiver_ty.as_ref() {
-                    Some(Ty::Map(_, _)) => {
-                        self.emit_method_receiver(receiver);
-                        self.push(".get(&(");
-                        self.emit_expr(&args[0]);
-                        self.push(").clone()).cloned()");
-                    }
-                    _ => {
-                        self.push("{ let __mvl_i = (");
-                        self.emit_expr(&args[0]);
-                        self.push("); if __mvl_i < 0 { None } else { (");
-                        self.emit_method_receiver(receiver);
-                        self.push(").get(__mvl_i as usize).cloned() } }");
-                    }
+                let is_map = matches!(receiver.ty.unlabeled(), Ty::Map(_, _));
+                if is_map {
+                    self.emit_method_receiver(receiver);
+                    self.push(".get(&(");
+                    self.emit_expr(&args[0]);
+                    self.push(").clone()).cloned()");
+                } else {
+                    self.push("{ let __mvl_i = (");
+                    self.emit_expr(&args[0]);
+                    self.push("); if __mvl_i < 0 { None } else { (");
+                    self.emit_method_receiver(receiver);
+                    self.push(").get(__mvl_i as usize).cloned() } }");
                 }
             }
 
