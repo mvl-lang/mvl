@@ -2,7 +2,7 @@
 .ONESHELL:
 SHELL := /bin/bash
 
-.PHONY: help version build build-llvm-runtime build-release test test-full test-unit test-integration test-requirements test-error-messages test-fmt-roundtrip test-corpus test-solver test-stdlib check-compiler assure-compiler test-mvl test-bdd test-backend-rust test-backend-llvm test-cross-backend test-tree-sitter test-grammar-coverage test-examples test-examples-rust test-examples-llvm coverage validate-keywords lint mvl-lint format format-check format-mvl format-mvl-check assurance assurance-gate audit-backend-ast check-adr docs docs-serve tree-sitter-build install install-nvim setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
+.PHONY: help version build build-llvm-runtime build-release test test-full test-unit test-rust-integration test-requirements test-error-messages test-fmt-roundtrip test-corpus test-solver test-stdlib check-compiler assure-compiler test-mvl test-bdd test-backend-rust test-backend-llvm test-cross-backend test-tree-sitter test-grammar-coverage test-examples test-examples-rust test-examples-llvm coverage validate-keywords lint mvl-lint format format-check format-mvl format-mvl-check assurance assurance-gate audit-backend-ast check-adr docs docs-serve tree-sitter-build install install-nvim setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
 
 .DEFAULT_GOAL := help
 
@@ -96,6 +96,7 @@ TEST_FAST_SUITES := \
 TEST_FULL_EXTRA_SUITES := \
 	"Stdlib            |test-stdlib" \
 	"BDD               |test-bdd" \
+	"Rust integration  |test-rust-integration" \
 	"Backend (Rust)    |test-backend-rust" \
 	"LLVM backend      |test-backend-llvm" \
 	"Cross-backend     |test-cross-backend" \
@@ -144,7 +145,7 @@ test-unit: ## Run unit tests only
 test-type-checker: ## Run type checker integration tests (IFC, effects, labels, format)
 	cargo test --test type_checker
 
-test-integration: ## Dev convenience: run all integration test binaries at once (may overlap with named targets in make test)
+test-rust-integration: build ## Run every Rust integration test binary (`cargo test --tests`) + CLI arg tests. Included in `test-full`; catches binaries like `transpiler`, `assurance`, `corpus_ir_parity`, `cross_backend_tir`, `linter_integration`, `manifest_rationale`, `meta_commands`, `module_resolver`, `toolchain` that no per-suite target exercises.
 	cargo test --tests
 	@bash tests/integration/compile_and_run/args.sh
 
