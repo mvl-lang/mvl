@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.237.4] - 2026-07-05
+
+### Fixed
+
+- **`test-runner`: module name collision in bundled tests** (#1707 phase 1) — `mvl test <dir>` concatenates transpiled code from multiple corpus files into a single Rust crate, wrapping each file in `#[cfg(test)] mod <name> { ... }`. The module name was derived from the filename stem only (e.g., `propagation.mvl` → `propagation`), so files with identical names in different directories collided (`07_effects/propagation.mvl` and `08_ifc/propagation.mvl` both became `mod propagation`). Rust rejected with E0428: duplicate module definition. Fix: qualify module names by full path segment — replace `/`, `\`, `-`, `.` with `_`, strip trailing `_test`, and prefix `_` if the first character is non-alphabetic. Measured: 221 rustc errors → 220 (E0428 eliminated; Phases 3–4 address remaining structural issues). Includes 5 new unit tests for path-to-module-name derivation.
+
 ## [0.237.3] - 2026-07-05
 
 ### Performance
