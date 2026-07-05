@@ -344,7 +344,7 @@ impl RustEmitter {
 
                 let last = &tail[0];
                 let is_unit = matches!(fd.ret_ty, Ty::Unit);
-                let has_ensures = fd.ensures.iter().any(|p| is_runtime_checkable(p)) && !is_unit;
+                let has_ensures = fd.ensures.iter().any(is_runtime_checkable) && !is_unit;
                 match last {
                     TirStmt::Expr { expr, .. } => {
                         if !self.emit_mcdc_return_expr(expr, &fd.ret_ty, expr.span.line) {
