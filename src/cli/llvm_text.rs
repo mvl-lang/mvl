@@ -210,6 +210,146 @@ pub(super) fn run_project_llvm_text(path: &str) {
     }
 }
 
+/// Result of running one LLVM text test case, with any output pre-formatted
+/// so the caller can print in deterministic order after parallel workers finish.
+struct CaseResult {
+    passed: bool,
+    output: String,
+    err_output: String,
+}
+
+/// Run one LLVM text test case: parse, lower, emit IR, run under `lli`, compare.
+fn run_one_case(
+    file: &Path,
+    expected: &str,
+    is_pattern: bool,
+    lli_bin: &Path,
+    runtime_lib: Option<&Path>,
+    quiet: bool,
+    verbose: bool,
+) -> CaseResult {
+    let file_str = file.display().to_string();
+    let module_name = loader::stem(&file_str);
+
+    let src = match fs::read_to_string(file) {
+        Ok(s) => s,
+        Err(e) => {
+            return CaseResult {
+                passed: false,
+                output: String::new(),
+                err_output: format!("  FAIL (read): {file_str}: {e}\n"),
+            }
+        }
+    };
+    let (mut parser, lex_errs) = Parser::new(&src);
+    if !lex_errs.is_empty() {
+        return CaseResult {
+            passed: false,
+            output: String::new(),
+            err_output: format!("  FAIL (lex): {file_str}\n"),
+        };
+    }
+    let prog = parser.parse_program();
+    if !parser.errors().is_empty() {
+        return CaseResult {
+            passed: false,
+            output: String::new(),
+            err_output: format!("  FAIL (parse): {file_str}\n"),
+        };
+    }
+
+    let ir = match compile_ir(&prog, &module_name) {
+        Ok(ir) => ir,
+        Err(e) => {
+            return CaseResult {
+                passed: false,
+                output: String::new(),
+                err_output: format!("  FAIL (codegen): {file_str}: {e}\n"),
+            }
+        }
+    };
+
+    let tmp = match tempfile::NamedTempFile::with_suffix(".ll") {
+        Ok(t) => t,
+        Err(e) => {
+            return CaseResult {
+                passed: false,
+                output: String::new(),
+                err_output: format!("  FAIL (tempfile): {file_str}: {e}\n"),
+            }
+        }
+    };
+    if let Err(e) = fs::write(tmp.path(), &ir) {
+        return CaseResult {
+            passed: false,
+            output: String::new(),
+            err_output: format!("  FAIL (write IR): {file_str}: {e}\n"),
+        };
+    }
+
+    let mut lli_cmd = process::Command::new(lli_bin);
+    if let Some(lib) = runtime_lib {
+        lli_cmd.arg(format!("--load={}", lib.display()));
+    }
+    let output = match lli_cmd.arg(tmp.path()).output() {
+        Ok(o) => o,
+        Err(e) => {
+            return CaseResult {
+                passed: false,
+                output: String::new(),
+                err_output: format!("  FAIL (lli): {file_str}: {e}\n"),
+            }
+        }
+    };
+
+    let actual = String::from_utf8_lossy(&output.stdout);
+    let actual_trimmed = actual.trim_end_matches('\n');
+    let expected_trimmed = expected.trim_end_matches('\n');
+
+    let matched = if is_pattern {
+        lli::glob_match(expected_trimmed, actual_trimmed)
+    } else {
+        actual_trimmed == expected_trimmed
+    };
+
+    if matched {
+        let out = if verbose {
+            format!("  PASS: {file_str}\n")
+        } else if !quiet {
+            ".".to_string()
+        } else {
+            String::new()
+        };
+        CaseResult {
+            passed: true,
+            output: out,
+            err_output: String::new(),
+        }
+    } else {
+        let mut out = String::new();
+        if !quiet {
+            out.push_str(&format!("\n  FAIL: {file_str}\n"));
+            if is_pattern {
+                out.push_str(&format!("    pattern:  {expected_trimmed:?}\n"));
+            } else {
+                out.push_str(&format!("    expected: {expected_trimmed:?}\n"));
+            }
+            out.push_str(&format!("    got:      {actual_trimmed:?}\n"));
+            if verbose && !ir.is_empty() {
+                out.push_str("    --- IR ---\n");
+                for line in ir.lines().take(40) {
+                    out.push_str(&format!("    {line}\n"));
+                }
+            }
+        }
+        CaseResult {
+            passed: false,
+            output: out,
+            err_output: String::new(),
+        }
+    }
+}
+
 /// Run LLVM text backend tests: discover `.mvl` files with `// expect:` annotations,
 /// compile via `LlvmTextCompiler`, execute via `lli`, and compare output.
 /// `mvl test <path> --backend=llvm`
@@ -218,6 +358,7 @@ pub(super) fn cmd_test_llvm_text(path: &str, quiet: bool, verbose: bool) {
         eprintln!("error: `lli` not found — install LLVM (brew install llvm)");
         process::exit(1);
     });
+    let runtime_lib = lli::find_mvl_runtime_llvm_lib();
 
     let all_mvl = loader::mvl_files_all(path);
     let mut test_cases: Vec<(PathBuf, String, bool)> = Vec::new();
@@ -246,113 +387,61 @@ pub(super) fn cmd_test_llvm_text(path: &str, quiet: bool, verbose: bool) {
         return;
     }
 
+    let parallelism = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .min(test_cases.len());
+    let chunk_size = test_cases.len().div_ceil(parallelism).max(1);
+
     if !quiet {
-        println!("LLVM text backend: {} test file(s)", test_cases.len());
+        println!(
+            "LLVM text backend: {} test file(s) across {} worker(s)",
+            test_cases.len(),
+            parallelism
+        );
     }
+
+    let lli_bin_ref: &Path = &lli_bin;
+    let runtime_lib_ref: Option<&Path> = runtime_lib.as_deref();
+
+    let results: Vec<CaseResult> = std::thread::scope(|scope| {
+        let handles: Vec<_> = test_cases
+            .chunks(chunk_size)
+            .map(|chunk| {
+                scope.spawn(move || {
+                    chunk
+                        .iter()
+                        .map(|(f, e, p)| {
+                            run_one_case(f, e, *p, lli_bin_ref, runtime_lib_ref, quiet, verbose)
+                        })
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|h| h.join().expect("llvm test worker panicked"))
+            .collect()
+    });
 
     let mut passed = 0usize;
     let mut failed = 0usize;
-
-    for (file, expected, is_pattern) in &test_cases {
-        let file_str = file.display().to_string();
-        let module_name = loader::stem(&file_str);
-
-        let src = match fs::read_to_string(file) {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("  FAIL (read): {file_str}: {e}");
-                failed += 1;
-                continue;
-            }
-        };
-        let (mut parser, lex_errs) = Parser::new(&src);
-        if !lex_errs.is_empty() {
-            eprintln!("  FAIL (lex): {file_str}");
-            failed += 1;
-            continue;
-        }
-        let prog = parser.parse_program();
-        if !parser.errors().is_empty() {
-            eprintln!("  FAIL (parse): {file_str}");
-            failed += 1;
-            continue;
-        }
-
-        let ir = match compile_ir(&prog, &module_name) {
-            Ok(ir) => ir,
-            Err(e) => {
-                eprintln!("  FAIL (codegen): {file_str}: {e}");
-                failed += 1;
-                continue;
-            }
-        };
-
-        let tmp = match tempfile::NamedTempFile::with_suffix(".ll") {
-            Ok(t) => t,
-            Err(e) => {
-                eprintln!("  FAIL (tempfile): {file_str}: {e}");
-                failed += 1;
-                continue;
-            }
-        };
-        if let Err(e) = fs::write(tmp.path(), &ir) {
-            eprintln!("  FAIL (write IR): {file_str}: {e}");
-            failed += 1;
-            continue;
-        }
-
-        let mut lli_cmd = process::Command::new(&lli_bin);
-        if let Some(lib) = lli::find_mvl_runtime_llvm_lib() {
-            lli_cmd.arg(format!("--load={}", lib.display()));
-        }
-        let output = match lli_cmd.arg(tmp.path()).output() {
-            Ok(o) => o,
-            Err(e) => {
-                eprintln!("  FAIL (lli): {file_str}: {e}");
-                failed += 1;
-                continue;
-            }
-        };
-
-        let actual = String::from_utf8_lossy(&output.stdout);
-        let actual_trimmed = actual.trim_end_matches('\n');
-        let expected_trimmed = expected.trim_end_matches('\n');
-
-        let matched = if *is_pattern {
-            lli::glob_match(expected_trimmed, actual_trimmed)
-        } else {
-            actual_trimmed == expected_trimmed
-        };
-
-        if matched {
-            if verbose {
-                println!("  PASS: {file_str}");
-            } else if !quiet {
-                print!(".");
-                let _ = std::io::Write::flush(&mut std::io::stdout());
-            }
+    for r in &results {
+        if r.passed {
             passed += 1;
         } else {
-            if !quiet {
-                println!("\n  FAIL: {file_str}");
-                if *is_pattern {
-                    println!("    pattern:  {expected_trimmed:?}");
-                } else {
-                    println!("    expected: {expected_trimmed:?}");
-                }
-                println!("    got:      {actual_trimmed:?}");
-                if verbose && !ir.is_empty() {
-                    println!("    --- IR ---");
-                    for line in ir.lines().take(40) {
-                        println!("    {line}");
-                    }
-                }
-            }
             failed += 1;
         }
+        if !r.err_output.is_empty() {
+            eprint!("{}", r.err_output);
+        }
+        if !r.output.is_empty() {
+            print!("{}", r.output);
+        }
     }
-
     if !quiet && !verbose {
+        // Newline after progress dots.
+        let _ = std::io::Write::flush(&mut std::io::stdout());
         println!();
     }
     println!("{} passed, {} failed", passed, failed);
