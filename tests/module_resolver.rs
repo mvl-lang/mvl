@@ -310,10 +310,7 @@ fn cross_file_method_dispatch_no_cycle() {
     let mod_b = parse("pub type Ctx = struct { x: Int }\npub fn Ctx::method_b(self, n: Int) -> Int { self.x + n }");
     let mod_a = parse("use mod_b::Ctx;\npub fn Ctx::method_a(self, n: Int) -> Int { self.x + n }");
     let result = resolve_project(
-        vec![
-            ("mod_b".to_string(), mod_b),
-            ("mod_a".to_string(), mod_a),
-        ],
+        vec![("mod_b".to_string(), mod_b), ("mod_a".to_string(), mod_a)],
         None,
     );
     assert!(

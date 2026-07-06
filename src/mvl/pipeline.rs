@@ -408,15 +408,32 @@ pub fn transpile_project_with_options(
     let main_rs = cg.finish();
 
     let entry_uses_runtime = use_runtime;
+    // Peer names/TIRs for each sibling = all OTHER siblings + entry program.
+    // Passed to emit_sibling_module so extension-method imports from peer
+    // sibling modules are suppressed in the generated Rust (#1706).
     let module_files: Vec<(String, String)> = siblings
         .iter()
         .zip(sibling_tirs.iter())
-        .map(|((name, _prog), sib_tir)| {
+        .enumerate()
+        .map(|(i, ((name, _prog), sib_tir))| {
+            let (before, after_with_self) = sibling_tirs.split_at(i);
+            let after = &after_with_self[1..];
+            let peer_tirs: Vec<crate::mvl::ir::TirProgram> = std::iter::once(&entry_tir)
+                .chain(before.iter())
+                .chain(after.iter())
+                .cloned()
+                .collect();
+            let (before_names, after_with_self_names) = sibling_names.split_at(i);
+            let after_names = &after_with_self_names[1..];
+            let peer_names_vec: Vec<&str> = std::iter::once(entry_name)
+                .chain(before_names.iter().copied())
+                .chain(after_names.iter().copied())
+                .collect();
             let mut cg = RustEmitter::new();
             cg.assert_mode = assert_mode;
             cg.test_extern_stubs = extern_stubs;
             if entry_uses_runtime {
-                cg.emit_sibling_module(sib_tir, &prelude_tirs);
+                cg.emit_sibling_module(sib_tir, &peer_names_vec, &peer_tirs, &prelude_tirs);
             } else {
                 cg.emit_program(sib_tir);
             }

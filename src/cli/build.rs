@@ -228,11 +228,10 @@ pub fn run(
         .map(|(i, (_, sibling))| {
             let (before, after_with_self) = sibling_modules.split_at(i);
             let after = &after_with_self[1..];
-            let sibling_prelude: Vec<&mvl::mvl::parser::ast::Program> =
-                std::iter::once(&prog)
-                    .chain(before.iter().map(|(_, p)| p))
-                    .chain(after.iter().map(|(_, p)| p))
-                    .collect();
+            let sibling_prelude: Vec<&mvl::mvl::parser::ast::Program> = std::iter::once(&prog)
+                .chain(before.iter().map(|(_, p)| p))
+                .chain(after.iter().map(|(_, p)| p))
+                .collect();
             let mut t = checker::collect_prelude_expr_types(&stdlib_prelude_progs);
             t.extend(
                 checker::check_with_two_preludes(&checker_stdlib, &sibling_prelude, sibling)
