@@ -48,6 +48,12 @@ fn qualified_module_name(path: &str) -> String {
     {
         name.insert(0, '_');
     }
+    // Rust `mod` identifiers must be snake_case — dev-on-macOS paths
+    // contain `/Users/…` which would otherwise trigger `non_snake_case`
+    // warnings on every generated module.  Case doesn't discriminate
+    // between MVL source files (they're path-unique already), so
+    // collapsing to lowercase is safe.
+    name.make_ascii_lowercase();
     name
 }
 
@@ -1340,6 +1346,16 @@ mod qualified_module_name_tests {
     fn leading_dot_slash_is_stripped() {
         let n = qualified_module_name("./tests/foo.mvl");
         assert_eq!(n, "tests_foo");
+    }
+
+    #[test]
+    fn absolute_path_with_uppercase_dirs_lowercased() {
+        // Dev-on-macOS: paths like `/Users/xyz/...` would otherwise leak
+        // uppercase letters into the generated `mod` name and trigger
+        // `warning: module `_Users_...` should have a snake case name`
+        // on every test run.
+        let n = qualified_module_name("/Users/dev/wc/foo/bar.mvl");
+        assert_eq!(n, "_users_dev_wc_foo_bar");
     }
 }
 
