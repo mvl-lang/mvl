@@ -550,6 +550,7 @@ impl RustEmitter {
         self.emit_program_core(tir, &[], true, &[], peer_names, peer_tirs, prelude_tirs);
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn emit_program_core(
         &mut self,
         tir: &TirProgram,
