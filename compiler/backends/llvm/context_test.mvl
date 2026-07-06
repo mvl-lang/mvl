@@ -47,7 +47,7 @@ test fn string_global_of_returns_registered_symbol() -> Unit {
     s.insert("alpha", "@.str.0");
     s.insert("beta",  "@.str.1");
     let ctx: EmitCtx = ctx_with_strings(s);
-    assert_eq(string_global_of(ctx, "alpha"), "@.str.0")
+    assert_eq(ctx.string_global_of("alpha"), "@.str.0")
 }
 
 test fn string_global_of_returns_second_symbol() -> Unit {
@@ -55,7 +55,7 @@ test fn string_global_of_returns_second_symbol() -> Unit {
     s.insert("alpha", "@.str.0");
     s.insert("beta",  "@.str.1");
     let ctx: EmitCtx = ctx_with_strings(s);
-    assert_eq(string_global_of(ctx, "beta"), "@.str.1")
+    assert_eq(ctx.string_global_of("beta"), "@.str.1")
 }
 
 test fn string_global_of_missing_returns_sentinel() -> Unit {
@@ -65,11 +65,26 @@ test fn string_global_of_missing_returns_sentinel() -> Unit {
     let s: ref Map[String, String] = Map::new();
     s.insert("alpha", "@.str.0");
     let ctx: EmitCtx = ctx_with_strings(s);
-    assert_eq(string_global_of(ctx, "beta"), "@.str.missing")
+    assert_eq(ctx.string_global_of("beta"), "@.str.missing")
 }
 
 test fn string_global_of_empty_registry_returns_sentinel() -> Unit {
     // Empty program (no string literals) — every lookup misses.
     let ctx: EmitCtx = ctx_with_strings(Map[String, String]::new());
-    assert_eq(string_global_of(ctx, "anything"), "@.str.missing")
+    assert_eq(ctx.string_global_of("anything"), "@.str.missing")
+}
+
+test fn string_global_of_multi_use_on_same_ctx() -> Unit {
+    // Regression: EmitCtx accessor method called multiple times on the
+    // same ctx binding.  Before ADR-0052 landed, MVL emitted bare
+    // `ctx.method(...)` at each call site, move-consuming ctx after the
+    // first call.  Now each non-last-use call emits `ctx.clone().method(...)`.
+    let s: ref Map[String, String] = Map::new();
+    s.insert("alpha", "@.str.0");
+    s.insert("beta",  "@.str.1");
+    s.insert("gamma", "@.str.2");
+    let ctx: EmitCtx = ctx_with_strings(s);
+    assert_eq(ctx.string_global_of("alpha"), "@.str.0");
+    assert_eq(ctx.string_global_of("beta"),  "@.str.1");
+    assert_eq(ctx.string_global_of("gamma"), "@.str.2")
 }

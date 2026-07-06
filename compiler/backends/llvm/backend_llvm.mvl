@@ -204,14 +204,11 @@ total fn emitted_bool(value: String, next: Int) -> Emitted {
 // `build_string_registry`, so an unexpected miss surfaces as an invalid IR
 // symbol at link time instead of a silent empty.
 //
-// Free function (not `EmitCtx::method`) because MVL's transpiler doesn't
-// currently insert `&self` for user-defined methods that only read — every
-// `ctx.method(...)` call moves ctx by value, which breaks subsequent uses.
-// MVL's stdlib methods (`Map::get`, `String::len`, etc.) have special-case
-// borrow handling; user methods don't yet.  Free fns with a plain `ctx:
-// EmitCtx` param get proper `&EmitCtx` borrow inference (#1695).
-pub partial fn string_global_of(ctx: EmitCtx, key: String) -> String {
-    ctx.strings.get(key).unwrap_or("@.str.missing")
+// Now that ADR-0052 (method receiver clone semantics) landed, user methods
+// on non-last-use receivers correctly clone.  See ADR-0052 for the full
+// dispatch-path rules.
+pub fn EmitCtx::string_global_of(self, key: String) -> String {
+    self.strings.get(key).unwrap_or("@.str.missing")
 }
 
 // ── Operator mapping ──────────────────────────────────────────────────────────
@@ -348,7 +345,7 @@ partial fn emit_expr(expr: Value, ctx: EmitCtx) -> Emitted {
                 // insertvalue instructions.  The pointer field targets the
                 // module-level `@.str.N` global registered in EmitCtx.strings.
                 let s: String = jstr(lit, "value");
-                let g: String = string_global_of(ctx, s);
+                let g: String = ctx.string_global_of(s);
                 let n: Int = s.len();
                 let tmp_reg: String = format("%t{}", [ctx.next_reg.to_string()]);
                 let out_reg: String = format("%t{}", [(ctx.next_reg + 1).to_string()]);
