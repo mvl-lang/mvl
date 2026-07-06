@@ -203,6 +203,16 @@ pub struct RustEmitter {
     /// uniquely identifies which variant the checker resolved a given call to.
     /// Value: the Rust function name to emit (`"http__status_reason"`).
     pub pkg_fn_dispatch: std::collections::HashMap<(String, String), String>,
+    /// Enum name → set of its unit-variant names.
+    ///
+    /// Populated from `TirTypeBody::Enum` during `emit_program_core`.  Used to
+    /// qualify match-arm patterns: `match dir { North => … }` — where `North`
+    /// is a unit variant of `Direction` — must emit as `Direction::North`, or
+    /// rustc rejects with E0170 (pattern binding shadows variant name).  See
+    /// [`emit_pattern`] and [`emit_match_arm`] in `emit_exprs.rs` (#1707
+    /// phase 5).
+    pub unit_variants_per_enum:
+        std::collections::HashMap<String, std::collections::HashSet<String>>,
 }
 
 impl RustEmitter {
@@ -606,6 +616,29 @@ impl RustEmitter {
                         .insert(td.name.clone(), inner.as_ref().clone());
                 }
             }
+        }
+
+        // Populate unit-variant registry for pattern qualification (#1707 phase 5).
+        // Enum name → set of its Unit-fielded variants.  Used by emit_pattern to
+        // qualify `Pattern::Ident("North")` as `Direction::North` when matched
+        // against a `Direction` scrutinee, avoiding E0170.
+        let register_unit_variants =
+            |acc: &mut std::collections::HashMap<String, std::collections::HashSet<String>>,
+             types: &[crate::mvl::ir::TirTypeDecl]| {
+                for td in types {
+                    if let crate::mvl::ir::TirTypeBody::Enum(variants) = &td.body {
+                        let entry = acc.entry(td.name.clone()).or_default();
+                        for v in variants {
+                            if matches!(v.fields, crate::mvl::ir::TirVariantFields::Unit) {
+                                entry.insert(v.name.clone());
+                            }
+                        }
+                    }
+                }
+            };
+        register_unit_variants(&mut self.unit_variants_per_enum, &tir.types);
+        for pt in prelude_tirs {
+            register_unit_variants(&mut self.unit_variants_per_enum, &pt.types);
         }
 
         // Populate fn-alias registry (#1467).

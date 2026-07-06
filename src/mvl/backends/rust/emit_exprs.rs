@@ -450,6 +450,18 @@ impl RustEmitter {
                 }
             }
             TirExprKind::Match { scrutinee, arms } => {
+                // Resolve the scrutinee's enum name (if any) so unit-variant
+                // patterns can be qualified (#1707 phase 5).
+                let scrutinee_enum: Option<String> = match scrutinee.ty.unlabeled() {
+                    Ty::Named(name, _) => {
+                        if self.unit_variants_per_enum.contains_key(name.as_str()) {
+                            Some(name.clone())
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                };
                 // Allocate branch coverage IDs for each arm up-front.
                 let arm_ids: Vec<Option<usize>> = (0..arms.len())
                     .map(|i| self.alloc_branch(span.line, BranchKind::MatchArm(i)))
@@ -503,7 +515,14 @@ impl RustEmitter {
                     .enumerate()
                     .zip(arm_ids.iter().zip(guard_mcdc_ids.iter()))
                 {
-                    self.emit_match_arm(arm, arm_idx, *cov_id, match_mcdc_id, *guard_mcdc_id);
+                    self.emit_match_arm(
+                        arm,
+                        arm_idx,
+                        *cov_id,
+                        match_mcdc_id,
+                        *guard_mcdc_id,
+                        scrutinee_enum.as_deref(),
+                    );
                 }
                 self.pop_indent();
                 self.indent();
@@ -1034,9 +1053,10 @@ impl RustEmitter {
         cov_id: Option<usize>,
         match_mcdc_id: Option<usize>,
         guard_mcdc_id: Option<usize>,
+        scrutinee_enum: Option<&str>,
     ) {
         self.indent();
-        self.emit_pattern(&arm.pattern);
+        self.emit_pattern_with_enum(&arm.pattern, scrutinee_enum);
         if let Some(guard) = &arm.guard {
             self.push(" if ");
             if let Some(gid) = guard_mcdc_id {
@@ -1088,9 +1108,33 @@ impl RustEmitter {
     // ── Patterns ─────────────────────────────────────────────────────────────
 
     pub fn emit_pattern(&mut self, pat: &Pattern) {
+        self.emit_pattern_with_enum(pat, None);
+    }
+
+    /// Emit a pattern, qualifying bare identifiers that name a unit variant
+    /// of `enum_name` as `EnumName::VariantName`.  Callers dispatching on a
+    /// match scrutinee pass the scrutinee's enum name so unit-variant arms
+    /// like `North => …` become `Direction::North => …` — otherwise rustc
+    /// treats the bare ident as a fresh binding and errors with E0170
+    /// (#1707 phase 5).
+    pub fn emit_pattern_with_enum(&mut self, pat: &Pattern, enum_name: Option<&str>) {
         match pat {
             Pattern::Wildcard(_) => self.push("_"),
-            Pattern::Ident(name, _) => self.push(&map_ident(name)),
+            Pattern::Ident(name, _) => {
+                if let Some(en) = enum_name {
+                    if self
+                        .unit_variants_per_enum
+                        .get(en)
+                        .is_some_and(|vs| vs.contains(name))
+                    {
+                        self.push(en);
+                        self.push("::");
+                        self.push(name);
+                        return;
+                    }
+                }
+                self.push(&map_ident(name));
+            }
             Pattern::Literal(lit, _) => self.emit_literal_in_pattern(lit),
             Pattern::TupleStruct { name, fields, .. } => {
                 self.push(name);
@@ -1154,7 +1198,7 @@ impl RustEmitter {
                     if i > 0 {
                         self.push(" | ");
                     }
-                    self.emit_pattern(p);
+                    self.emit_pattern_with_enum(p, enum_name);
                 }
             }
         }
