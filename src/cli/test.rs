@@ -12,6 +12,45 @@ use std::fs;
 use std::path::PathBuf;
 use std::process;
 
+/// Derive a Rust-identifier-safe module name from a test-file path (#1707).
+///
+/// The corpus contains files that share a stem in different directories
+/// (e.g. `07_effects/propagation.mvl` + `08_ifc/propagation.mvl`).  A
+/// stem-only derivation collides both onto `mod propagation`, so the
+/// bundled crate rejects with E0428.  Qualifying by path segment makes
+/// each fixture unique.
+///
+/// Rules:
+///   - Strip a leading `./` if present.
+///   - Strip the trailing `.mvl` extension.
+///   - Replace `/`, `\`, `-`, `.` with `_` so the result is a valid Rust ident.
+///   - Strip a trailing `_test` so `foo_test.mvl` and `foo.mvl` still collapse
+///     onto the same module (deliberate — see the covered_stems dedup in
+///     `run()`).
+///   - If the first character is not a letter/underscore, prefix with `_`.
+fn qualified_module_name(path: &str) -> String {
+    let stem = path.strip_suffix(".mvl").unwrap_or(path);
+    let stem = stem.strip_prefix("./").unwrap_or(stem);
+    let mut name: String = stem
+        .chars()
+        .map(|c| match c {
+            '/' | '\\' | '-' | '.' => '_',
+            other => other,
+        })
+        .collect();
+    if let Some(base) = name.strip_suffix("_test") {
+        name = base.to_string();
+    }
+    if !name
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+    {
+        name.insert(0, '_');
+    }
+    name
+}
+
 pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
     if quiet && verbose {
         eprintln!(
@@ -37,8 +76,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
     let mut seen: std::collections::HashMap<String, PathBuf> = std::collections::HashMap::new();
     for test_file in &test_files {
         let file_str = test_file.display().to_string();
-        let s = loader::stem(&file_str);
-        let module_name = s.strip_suffix("_test").unwrap_or(&s).replace('-', "_");
+        let module_name = qualified_module_name(&file_str);
         if let Some(prev) = seen.get(&module_name) {
             eprintln!(
                 "error: duplicate test module name `{module_name}` from:\n  {}\n  {}",
@@ -363,8 +401,14 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
     for test_file in &test_files {
         let file_str = test_file.display().to_string();
         let (prog, _src) = super::parse_or_exit(&file_str);
+        let module_name = qualified_module_name(&file_str);
+        // Bare stem (with `_test` stripped) — used only to intersect with
+        // `sibling_stems_set` for coverage instrumentation routing.  The
+        // qualified `module_name` above is the Rust identifier under which
+        // this file will be emitted; the bare stem exists purely to pair a
+        // `foo_test.mvl` with its sibling library `foo.mvl` (#1489).
         let s = loader::stem(&file_str);
-        let module_name = s.strip_suffix("_test").unwrap_or(&s).replace('-', "_");
+        let bare_stem = s.strip_suffix("_test").unwrap_or(&s).replace('-', "_");
         if bdd {
             for decl in &prog.declarations {
                 if let Decl::Fn(fd) = decl {
@@ -384,10 +428,10 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
         let mut instrument_this: std::collections::HashSet<String> =
             std::collections::HashSet::new();
         if coverage {
-            if sibling_stems_set.contains(&module_name)
-                && instrumented_stems.insert(module_name.clone())
+            if sibling_stems_set.contains(&bare_stem)
+                && instrumented_stems.insert(bare_stem.clone())
             {
-                instrument_this.insert(module_name.clone());
+                instrument_this.insert(bare_stem.clone());
             }
             if !unpaired_emitted {
                 for s in &unpaired_sibling_stems {
@@ -461,8 +505,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
     let source_files = loader::mvl_files(path, false); // non-test files
     for src_file in &source_files {
         let file_str = src_file.display().to_string();
-        let s = loader::stem(&file_str);
-        let module_name = s.replace('-', "_");
+        let module_name = qualified_module_name(&file_str);
         if covered_stems.contains(&module_name) {
             continue; // already covered by a *_test.mvl file
         }
@@ -999,6 +1042,53 @@ pub(super) fn find_test_binary_from_cargo_output(output: &[u8]) -> Option<std::p
         }
     }
     None
+}
+
+#[cfg(test)]
+mod qualified_module_name_tests {
+    use super::qualified_module_name;
+
+    #[test]
+    fn same_stem_different_dirs_are_distinct() {
+        // The bug fixed here (#1707 phase 1): two corpus files with the same
+        // filename in different subdirs used to collapse onto one `mod` name.
+        let a = qualified_module_name("tests/corpus/07_effects/propagation.mvl");
+        let b = qualified_module_name("tests/corpus/08_ifc/propagation.mvl");
+        assert_ne!(a, b);
+        assert_eq!(a, "tests_corpus_07_effects_propagation");
+        assert_eq!(b, "tests_corpus_08_ifc_propagation");
+    }
+
+    #[test]
+    fn foo_test_and_foo_still_collapse() {
+        // Deliberate: covered_stems dedup treats foo_test.mvl and foo.mvl as
+        // the same module (#96 workaround — the sibling library file is
+        // re-declared inside the test file). Preserving that behaviour.
+        let a = qualified_module_name("tests/mymod/foo_test.mvl");
+        let b = qualified_module_name("tests/mymod/foo.mvl");
+        assert_eq!(a, b);
+        assert_eq!(a, "tests_mymod_foo");
+    }
+
+    #[test]
+    fn leading_digit_dir_gets_underscore_prefix() {
+        // If cwd is inside tests/corpus, paths look like `07_effects/...`.
+        let n = qualified_module_name("07_effects/propagation.mvl");
+        assert!(n.starts_with('_'), "must be a valid Rust ident");
+        assert_eq!(n, "_07_effects_propagation");
+    }
+
+    #[test]
+    fn hyphens_and_dots_become_underscores() {
+        let n = qualified_module_name("dir/some-file.name.mvl");
+        assert_eq!(n, "dir_some_file_name");
+    }
+
+    #[test]
+    fn leading_dot_slash_is_stripped() {
+        let n = qualified_module_name("./tests/foo.mvl");
+        assert_eq!(n, "tests_foo");
+    }
 }
 
 #[cfg(test)]
