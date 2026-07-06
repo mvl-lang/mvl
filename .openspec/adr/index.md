@@ -55,3 +55,4 @@
 | [0051](0051-fn-field-equality.md) | Function field equality | Accepted |
 | [0052](0052-qualified-module-paths.md) | Qualified module paths for nested files — dot-separated names derived from relative paths | Accepted |
 | [0053](0053-no-rustc-concepts-in-mvl.md) | No rustc concepts in MVL grammar — reject trailing `where T: Trait` fn-signature bounds | Accepted |
+| [0054](0054-method-receiver-clone-semantics.md) | Method receiver clone semantics — per-dispatch-path clone insertion for user vs stdlib methods | Accepted |
