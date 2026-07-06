@@ -1,0 +1,9 @@
+/// Display extension method on Point — calls sum() defined in point_arith.mvl.
+/// This file does not import point_arith; the method resolves via type dispatch
+/// because both files are siblings in the same directory (#1706).
+use point::Point;
+
+pub fn Point::describe(self) -> String {
+    let s: Int = self.sum();
+    format("sum={}", [s.to_string()])
+}

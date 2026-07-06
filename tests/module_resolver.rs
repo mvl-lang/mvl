@@ -297,6 +297,32 @@ fn diamond_dependency_ok() {
     );
 }
 
+// ── Cross-file method dispatch (Go model, #1706) ──────────────────────────
+
+#[test]
+fn cross_file_method_dispatch_no_cycle() {
+    // Sibling files that each define methods on the same type must NOT require
+    // cyclic `use` imports.  The type owner (mod_b) exports the type; mod_a
+    // imports only the type and defines additional methods on it.  Neither file
+    // imports the other's *methods* — dispatch goes through the type.
+    //
+    // Import graph:  mod_a → mod_b  (no edge mod_b → mod_a) — acyclic.
+    let mod_b = parse("pub type Ctx = struct { x: Int }\npub fn Ctx::method_b(self, n: Int) -> Int { self.x + n }");
+    let mod_a = parse("use mod_b::Ctx;\npub fn Ctx::method_a(self, n: Int) -> Int { self.x + n }");
+    let result = resolve_project(
+        vec![
+            ("mod_b".to_string(), mod_b),
+            ("mod_a".to_string(), mod_a),
+        ],
+        None,
+    );
+    assert!(
+        result.is_ok(),
+        "cross-file method dispatch must not produce a cycle: {:?}",
+        result.errors
+    );
+}
+
 // ── Requirement 6: Standard library module ────────────────────────────────
 
 #[test]

@@ -957,12 +957,35 @@ impl RustEmitter {
             self.emit_tir_extern_decl(ed);
             self.blank();
         }
+        // Build a set of (module_name, fn_name) for extension methods declared in
+        // sibling modules.  Extension methods are transpiled as Rust struct methods,
+        // not as standalone functions, so importing them with `use crate::mod::name`
+        // would fail at the Rust level.  We suppress those imports here and rely on
+        // method dispatch through the type instead (#1706).
+        let sibling_ext_methods: std::collections::HashSet<(String, String)> = sibling_mods
+            .iter()
+            .zip(sibling_tirs.iter())
+            .flat_map(|(mod_name, sib_tir)| {
+                sib_tir
+                    .fns
+                    .iter()
+                    .filter(|f| f.receiver_type.is_some())
+                    .map(move |f| (mod_name.to_string(), f.name.clone()))
+            })
+            .collect();
+
         for ud in &tir.uses {
             if ud.path.len() > 1 {
                 let is_std = ud.path.first().map(|s| s == "std").unwrap_or(false);
                 let is_pkg = ud.path.first().map(|s| s == "pkg").unwrap_or(false);
                 if !is_std && !is_pkg && !self.test_extern_stubs {
-                    self.line(&format!("use crate::{};", ud.path.join("::")));
+                    // Skip `use crate::mod::name` when `name` is an extension method in
+                    // a sibling — the method is accessible through the type's impl block.
+                    let mod_part = ud.path[..ud.path.len() - 1].join("::");
+                    let item_name = ud.path.last().cloned().unwrap_or_default();
+                    if !sibling_ext_methods.contains(&(mod_part, item_name)) {
+                        self.line(&format!("use crate::{};", ud.path.join("::")));
+                    }
                 }
             } else if ud.path.len() == 1 {
                 let mod_name = &ud.path[0];
