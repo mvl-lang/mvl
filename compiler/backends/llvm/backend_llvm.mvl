@@ -190,6 +190,30 @@ total fn emitted_bool(value: String, next: Int) -> Emitted {
     Emitted { reg: value, ty: "i1", next_reg: next, instrs: [], last_label: "" }
 }
 
+// ── EmitCtx accessors ────────────────────────────────────────────────────────
+//
+// Encapsulate registry lookups behind methods so callers don't do
+// `ctx.<field>.get(k)` directly.  Once these methods migrate to context.mvl
+// alongside EmitCtx (#1693), the Map field types stay resolved inside the
+// module that owns them — sidestepping MVL's cross-module field-type erasure
+// (see #1706).  Method dispatch across sibling modules is supported and
+// carries the receiver type end-to-end.
+
+// A1m: look up a string literal's `@.str.N` global symbol.
+// Returns "@.str.missing" for absent entries — a marker never produced by
+// `build_string_registry`, so an unexpected miss surfaces as an invalid IR
+// symbol at link time instead of a silent empty.
+//
+// Free function (not `EmitCtx::method`) because MVL's transpiler doesn't
+// currently insert `&self` for user-defined methods that only read — every
+// `ctx.method(...)` call moves ctx by value, which breaks subsequent uses.
+// MVL's stdlib methods (`Map::get`, `String::len`, etc.) have special-case
+// borrow handling; user methods don't yet.  Free fns with a plain `ctx:
+// EmitCtx` param get proper `&EmitCtx` borrow inference (#1695).
+pub partial fn string_global_of(ctx: EmitCtx, key: String) -> String {
+    ctx.strings.get(key).unwrap_or("@.str.missing")
+}
+
 // ── Operator mapping ──────────────────────────────────────────────────────────
 
 // Returns `(mnemonic, result_ty)`.  Comparison ops emit an `icmp <pred>`
@@ -324,7 +348,7 @@ partial fn emit_expr(expr: Value, ctx: EmitCtx) -> Emitted {
                 // insertvalue instructions.  The pointer field targets the
                 // module-level `@.str.N` global registered in EmitCtx.strings.
                 let s: String = jstr(lit, "value");
-                let g: String = ctx.strings.get(s).unwrap_or("@.str.missing");
+                let g: String = string_global_of(ctx, s);
                 let n: Int = s.len();
                 let tmp_reg: String = format("%t{}", [ctx.next_reg.to_string()]);
                 let out_reg: String = format("%t{}", [(ctx.next_reg + 1).to_string()]);

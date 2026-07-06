@@ -1,0 +1,75 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// compiler/backends/llvm/context_test.mvl — MVL unit tests for EmitCtx
+// accessor methods (#1693).
+//
+// `mvl test` inlines every sibling module in this directory into one
+// compilation unit, so `EmitCtx`, `LocalRef`, `StructInfo`, etc. and
+// their `EmitCtx::*` methods are in scope regardless of which file
+// they currently live in (backend_llvm.mvl today → context.mvl once
+// the extraction lands).
+//
+// Tests build an EmitCtx directly with the fields under test populated,
+// call the accessor, and assert the return value.  Small, targeted,
+// independent of the LLVM emission pipeline.
+//
+// Run with:  mvl test compiler/
+//            make -C compiler test
+//            make test-mvl
+
+use std.collections.{Map}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+// Build an EmitCtx with only `strings` populated; other fields empty.  Trims
+// the boilerplate of writing out every field for a test that only exercises
+// one registry.
+partial fn ctx_with_strings(strings: Map[String, String]) -> EmitCtx {
+    EmitCtx {
+        next_reg: 0,
+        locals: Map[String, LocalRef]::new(),
+        enums: Map[String, Int]::new(),
+        strings: strings,
+        structs: Map[String, StructInfo]::new(),
+        enum_types: Map[String, String]::new(),
+        variant_payloads: Map[String, Int]::new(),
+        variant_slots: Map[String, Map[String, Int]]::new(),
+        variant_slot_types: Map[String, List[String]]::new(),
+    }
+}
+
+// ── EmitCtx::string_global_of ────────────────────────────────────────────────
+
+test fn string_global_of_returns_registered_symbol() -> Unit {
+    // A registered literal returns its `@.str.N` symbol.
+    let s: ref Map[String, String] = Map::new();
+    s.insert("alpha", "@.str.0");
+    s.insert("beta",  "@.str.1");
+    let ctx: EmitCtx = ctx_with_strings(s);
+    assert_eq(string_global_of(ctx, "alpha"), "@.str.0")
+}
+
+test fn string_global_of_returns_second_symbol() -> Unit {
+    let s: ref Map[String, String] = Map::new();
+    s.insert("alpha", "@.str.0");
+    s.insert("beta",  "@.str.1");
+    let ctx: EmitCtx = ctx_with_strings(s);
+    assert_eq(string_global_of(ctx, "beta"), "@.str.1")
+}
+
+test fn string_global_of_missing_returns_sentinel() -> Unit {
+    // An unregistered literal returns "@.str.missing" — never emitted by
+    // `build_string_registry`, so a miss surfaces as an invalid IR symbol
+    // at link time instead of a silent empty string.
+    let s: ref Map[String, String] = Map::new();
+    s.insert("alpha", "@.str.0");
+    let ctx: EmitCtx = ctx_with_strings(s);
+    assert_eq(string_global_of(ctx, "beta"), "@.str.missing")
+}
+
+test fn string_global_of_empty_registry_returns_sentinel() -> Unit {
+    // Empty program (no string literals) — every lookup misses.
+    let ctx: EmitCtx = ctx_with_strings(Map[String, String]::new());
+    assert_eq(string_global_of(ctx, "anything"), "@.str.missing")
+}
