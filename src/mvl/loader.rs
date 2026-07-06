@@ -203,6 +203,31 @@ pub fn stem(path: &str) -> String {
     }
 }
 
+/// Return paths to all non-test `.mvl` files in `dir` (non-recursive).
+///
+/// Used to discover ambient sibling modules in a directory: all files in the same
+/// directory form a single module scope (Go model — #1706) and can call each other's
+/// extension methods via type dispatch without explicit `use` imports.
+pub fn sibling_module_files(dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return vec![];
+    };
+    let mut files: Vec<PathBuf> = entries
+        .flatten()
+        .filter_map(|e| {
+            let path = e.path();
+            let name = path.file_name()?.to_str()?;
+            if path.is_file() && name.ends_with(".mvl") && !name.ends_with("_test.mvl") {
+                Some(path)
+            } else {
+                None
+            }
+        })
+        .collect();
+    files.sort();
+    files
+}
+
 /// Locate the `.mvl` source file for a module named `mod_name` relative to `entry_dir`.
 ///
 /// Resolution order (Rust 2018 style, Spec 005):

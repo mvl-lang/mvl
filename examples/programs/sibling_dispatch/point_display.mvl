@@ -1,0 +1,13 @@
+/// Display extension method on Point — calls sum() defined in point_arith.mvl.
+///
+/// `use point_arith::sum` is required for standalone `mvl check` so that
+/// Point::sum is in scope.  In `mvl build` mode, the sibling pre-check
+/// already includes point_arith in the prelude and the import is optional
+/// (the method resolves through type dispatch).  See #1706.
+use point::Point;
+use point_arith::sum;
+
+pub fn Point::describe(self) -> String {
+    let s: Int = self.sum();
+    format("sum={}", [s.to_string()])
+}

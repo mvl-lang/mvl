@@ -28,6 +28,10 @@ fn corpus(name: &str) -> String {
     format!("{}/examples/programs/{name}", env!("CARGO_MANIFEST_DIR"))
 }
 
+fn example(name: &str) -> String {
+    format!("{}/examples/{name}", env!("CARGO_MANIFEST_DIR"))
+}
+
 // ── helpers ───────────────────────────────────────────────────────────────
 
 fn run_check(file: &str) -> std::process::Output {
@@ -852,5 +856,32 @@ fn actor_send_tokio_target_matches_default_output() {
         String::from_utf8_lossy(&default_out.stdout),
         String::from_utf8_lossy(&tokio_out.stdout),
         "--target=tokio output must match default backend"
+    );
+}
+
+// ── Sibling method dispatch (#1706) ───────────────────────────────────────
+
+/// Cross-file extension-method dispatch (Go model): `point_display.mvl` calls
+/// `self.sum()` defined in `point_arith.mvl` without importing it.  Both files
+/// are siblings in `examples/programs/sibling_dispatch/`; the entry `main.mvl`
+/// imports them explicitly so they are compiled together.
+#[test]
+fn sibling_method_dispatch_runs_and_produces_expected_output() {
+    let main_mvl = corpus("sibling_dispatch/main.mvl");
+    let out = run_mvl_run(&main_mvl);
+    assert!(
+        out.status.success(),
+        "sibling_dispatch: mvl run failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("sum=7"),
+        "expected 'sum=7' in output:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("product=12"),
+        "expected 'product=12' in output:\n{stdout}"
     );
 }

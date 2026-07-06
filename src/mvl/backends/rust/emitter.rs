@@ -478,7 +478,7 @@ impl RustEmitter {
 
     /// Emit a complete Rust file from a [`TirProgram`].
     pub fn emit_program(&mut self, tir: &TirProgram) {
-        self.emit_program_core(tir, &[], false, &[], &[]);
+        self.emit_program_core(tir, &[], false, &[], &[], &[], &[]);
     }
 
     /// Emit a complete Rust file from a [`TirProgram`], prepending `pub mod` declarations
@@ -514,7 +514,17 @@ impl RustEmitter {
         sibling_tirs: &[TirProgram],
         prelude_tirs: &[TirProgram],
     ) {
-        self.emit_program_core(tir, sibling_mods, false, sibling_tirs, prelude_tirs);
+        // For entry module: sibling_mods/sibling_tirs serve as both capability inference
+        // and suppress sources (they're the same set).
+        self.emit_program_core(
+            tir,
+            sibling_mods,
+            false,
+            sibling_tirs,
+            sibling_mods,
+            sibling_tirs,
+            prelude_tirs,
+        );
     }
 
     /// Emit a sibling module file using the TIR-based path.
@@ -523,16 +533,35 @@ impl RustEmitter {
     /// runtime types (`Tainted`, `Clean`, etc.) to avoid duplicate-definition conflicts.
     /// `prelude_tirs` are the prelude programs pre-lowered to TIR, so that stdlib functions
     /// (e.g. `to_lower`, `range`) are available in sibling modules too.
-    pub fn emit_sibling_module(&mut self, tir: &TirProgram, prelude_tirs: &[TirProgram]) {
-        self.emit_program_core(tir, &[], true, &[], prelude_tirs);
+    /// Emit a sibling `.rs` file.  `peer_names` and `peer_tirs` are the other
+    /// sibling modules in the same project; they are used to suppress invalid
+    /// `use crate::mod::name` imports for extension methods defined across siblings
+    /// (#1706) but do NOT cause `pub mod X;` declarations to be emitted (those
+    /// live in main.rs only).
+    pub fn emit_sibling_module(
+        &mut self,
+        tir: &TirProgram,
+        peer_names: &[&str],
+        peer_tirs: &[TirProgram],
+        prelude_tirs: &[TirProgram],
+    ) {
+        // sibling_tirs is empty (capability inference not needed for sibling files);
+        // suppress_names/suppress_tirs carry peer info for ext-method suppression only.
+        self.emit_program_core(tir, &[], true, &[], peer_names, peer_tirs, prelude_tirs);
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn emit_program_core(
         &mut self,
         tir: &TirProgram,
         sibling_mods: &[&str],
         force_runtime: bool,
         sibling_tirs: &[TirProgram],
+        // Additional peer names/TIRs used ONLY for extension-method import suppression
+        // (#1706).  For the entry module these equal sibling_mods/sibling_tirs; for
+        // sibling modules they carry peer info without causing `pub mod X;` emission.
+        suppress_names: &[&str],
+        suppress_tirs: &[TirProgram],
         prelude_tirs: &[TirProgram],
     ) {
         // Populate audit_relabels from declaration-level `audit` keywords (#896).
@@ -957,12 +986,38 @@ impl RustEmitter {
             self.emit_tir_extern_decl(ed);
             self.blank();
         }
+        // Build a set of (module_name, fn_name) for extension methods declared in
+        // sibling modules.  Extension methods are transpiled as Rust struct methods,
+        // not as standalone functions, so importing them with `use crate::mod::name`
+        // would fail at the Rust level.  We suppress those imports here and rely on
+        // method dispatch through the type instead (#1706).
+        // Combines `sibling_mods`/`sibling_tirs` (entry module) with
+        // `suppress_names`/`suppress_tirs` (peer info for sibling modules).
+        let sibling_ext_methods: std::collections::HashSet<(String, String)> = sibling_mods
+            .iter()
+            .zip(sibling_tirs.iter())
+            .chain(suppress_names.iter().zip(suppress_tirs.iter()))
+            .flat_map(|(mod_name, peer_tir)| {
+                peer_tir
+                    .fns
+                    .iter()
+                    .filter(|f| f.receiver_type.is_some())
+                    .map(move |f| (mod_name.to_string(), f.name.clone()))
+            })
+            .collect();
+
         for ud in &tir.uses {
             if ud.path.len() > 1 {
                 let is_std = ud.path.first().map(|s| s == "std").unwrap_or(false);
                 let is_pkg = ud.path.first().map(|s| s == "pkg").unwrap_or(false);
                 if !is_std && !is_pkg && !self.test_extern_stubs {
-                    self.line(&format!("use crate::{};", ud.path.join("::")));
+                    // Skip `use crate::mod::name` when `name` is an extension method in
+                    // a sibling — the method is accessible through the type's impl block.
+                    let mod_part = ud.path[..ud.path.len() - 1].join("::");
+                    let item_name = ud.path.last().cloned().unwrap_or_default();
+                    if !sibling_ext_methods.contains(&(mod_part, item_name)) {
+                        self.line(&format!("use crate::{};", ud.path.join("::")));
+                    }
                 }
             } else if ud.path.len() == 1 {
                 let mod_name = &ud.path[0];

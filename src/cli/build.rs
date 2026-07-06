@@ -219,11 +219,24 @@ pub fn run(
     }
     all_expr_types.extend(check_result.expr_types);
     // Pre-check each sibling so the backend receives ready-made expr_types (#1110).
+    // Include prog + all OTHER siblings as prelude so cross-sibling method dispatch
+    // resolves: Go-model — files in the same directory share method declarations
+    // without explicit `use` imports (#1706).
     let sibling_expr_types: Vec<_> = sibling_modules
         .iter()
-        .map(|(_, sibling)| {
+        .enumerate()
+        .map(|(i, (_, sibling))| {
+            let (before, after_with_self) = sibling_modules.split_at(i);
+            let after = &after_with_self[1..];
+            let sibling_prelude: Vec<&mvl::mvl::parser::ast::Program> = std::iter::once(&prog)
+                .chain(before.iter().map(|(_, p)| p))
+                .chain(after.iter().map(|(_, p)| p))
+                .collect();
             let mut t = checker::collect_prelude_expr_types(&stdlib_prelude_progs);
-            t.extend(checker::check_with_prelude(&stdlib_prelude_progs, sibling).expr_types);
+            t.extend(
+                checker::check_with_two_preludes(&checker_stdlib, &sibling_prelude, sibling)
+                    .expr_types,
+            );
             t
         })
         .collect();
