@@ -211,6 +211,64 @@ pub fn EmitCtx::string_global_of(self, key: String) -> String {
     self.strings.get(key).unwrap_or("@.str.missing")
 }
 
+// A1l: is `name` a registered user-defined enum variant?
+// `name` is fully-qualified ("Color::Red", "Direction::North").
+pub fn EmitCtx::has_enum_variant(self, name: String) -> Bool {
+    self.enums.contains_key(name)
+}
+
+// A1l: look up the i8 tag byte for a fully-qualified variant.
+// Returns 0 for absent variants — safe fallback since 0 is the tag of
+// the first variant of any enum; callers typically guard with
+// `has_enum_variant` before reading.
+pub fn EmitCtx::enum_tag_of(self, name: String) -> Int {
+    self.enums.get(name).unwrap_or(0)
+}
+
+// A1o: look up an enum's LLVM aggregate type.  Returns `Option[String]`
+// because two callers want different fallbacks:
+//   - `i8`         (Var case, all-unit enum default)
+//   - `{i8, i64}`  (variant construction, single-slot payload default)
+// Callers `.unwrap_or(...)` with their site-specific default.
+pub fn EmitCtx::enum_type_of(self, name: String) -> Option[String] {
+    self.enum_types.get(name)
+}
+
+// A1n: look up a struct's field-layout info.  Returns `Option` because
+// callers pattern-match to extract the field index and default to 0 if
+// the struct isn't in the registry.
+pub fn EmitCtx::struct_info_of(self, name: String) -> Option[StructInfo] {
+    self.structs.get(name)
+}
+
+// A1q: how many payload slots a variant occupies.  Unit variants map
+// to 0, tuple variants (`Num(Int)`) to 1, struct variants to their
+// field count.
+pub fn EmitCtx::variant_payload_count(self, name: String) -> Int {
+    self.variant_payloads.get(name).unwrap_or(0)
+}
+
+// A1r: per-variant ordered slot LLVM types.  Empty list for unit
+// variants (or missing variants — callers typically iterate).
+pub fn EmitCtx::variant_slot_types_of(self, name: String) -> List[String] {
+    self.variant_slot_types.get(name).unwrap_or([])
+}
+
+// A1q: per-variant field-name → slot-index map.  Returns `Option`
+// so absent variants surface distinctly from a variant with an
+// empty slot map (unit).
+pub fn EmitCtx::variant_slot_map(self, name: String) -> Option[Map[String, Int]] {
+    self.variant_slots.get(name)
+}
+
+// A1c/A1d: look up a locally-bound value (fn param or `let` binding).
+// Returns `Option` because callers pattern-match to distinguish
+// bound (ref-load vs. direct-reg) from unbound (fall through to
+// the SSA global naming convention).
+pub fn EmitCtx::local_of(self, name: String) -> Option[LocalRef] {
+    self.locals.get(name)
+}
+
 // ── Operator mapping ──────────────────────────────────────────────────────────
 
 // Returns `(mnemonic, result_ty)`.  Comparison ops emit an `icmp <pred>`
@@ -375,14 +433,14 @@ partial fn emit_expr(expr: Value, ctx: EmitCtx) -> Emitted {
             // Lower to an `i8` constant taken from the registry populated
             // in `emit_program`.  The tag mnemonic (unit variants only in
             // A1l) is a plain immediate — no aggregate wrapper needed.
-            if ctx.enums.contains_key(name) {
-                let tv: Int = ctx.enums.get(name).unwrap_or(0);
+            if ctx.has_enum_variant(name) {
+                let tv: Int = ctx.enum_tag_of(name);
                 // A1o: distinguish unit variant of an all-unit enum
                 // (lowers to plain `i8` immediate) from unit variant
                 // of a payload enum (must wrap into `{i8, i64}` so
                 // param passing / return types match).
                 let enum_name: String = enum_name_of_variant(name);
-                let enum_ty: String = ctx.enum_types.get(enum_name).unwrap_or("i8");
+                let enum_ty: String = ctx.enum_type_of(enum_name).unwrap_or("i8");
                 if enum_ty == "i8" {
                     return Emitted {
                         reg: tv.to_string(),
@@ -421,7 +479,7 @@ partial fn emit_expr(expr: Value, ctx: EmitCtx) -> Emitted {
                     last_label: "",
                 }
             }
-            match ctx.locals.get(name) {
+            match ctx.local_of(name) {
                 Some(op) => {
                     if op.is_ref {
                         // A ref-local — materialize by loading from the alloca ptr.
@@ -585,7 +643,7 @@ partial fn emit_expr(expr: Value, ctx: EmitCtx) -> Emitted {
             // the same lowering as tuple-variant construction.  The
             // shared `emit_variant_construction` takes positional args,
             // so unwrap the {name, expr} field records to their exprs.
-            if ctx.enums.contains_key(type_name) {
+            if ctx.has_enum_variant(type_name) {
                 let just_exprs: ref List[Value] = [];
                 for f in fields { just_exprs.push(jget(f, "expr")) }
                 return emit_variant_construction(type_name, just_exprs, ctx)
@@ -654,7 +712,7 @@ partial fn emit_expr(expr: Value, ctx: EmitCtx) -> Emitted {
             let base_ty: Value = jget(base, "ty");
             let struct_name: String = jstr(base_ty, "name");
             let field_ty: String = tir_ty_to_llvm_ctx(jget(expr, "ty"), ctx.structs);
-            let idx: Int = match ctx.structs.get(struct_name) {
+            let idx: Int = match ctx.struct_info_of(struct_name) {
                 Some(info) => info.field_index.get(field_name).unwrap_or(0),
                 None => 0,
             };
@@ -1133,7 +1191,10 @@ partial fn emit_match(
 
     // Capture outer locals in a `ref` so per-iteration `clone_locals` calls
     // survive the for-loop's move semantics (see docstring above).
-    let outer_locals: ref Map[String, LocalRef] = ctx.locals;
+    // Clone rather than move ctx.locals — later ctx.method(...) calls in
+    // the loop body need ctx intact (ADR-0052).  Direct field access
+    // moves the field out and leaves ctx partially initialized.
+    let outer_locals: ref Map[String, LocalRef] = clone_locals(ctx.locals);
 
     for arm in arms {
         if saw_fallback {
@@ -1159,12 +1220,12 @@ partial fn emit_match(
             } else if pat_tag == "Struct" {
                 jstr(pat, "name")
             } else { "" };
-            let is_user_variant_ident: Bool = pat_tag == "Ident" && ctx.enums.contains_key(pat_name);
-            let is_user_variant_tuple: Bool = pat_tag == "TupleStruct" && ctx.enums.contains_key(pat_name);
+            let is_user_variant_ident: Bool = pat_tag == "Ident" && ctx.has_enum_variant(pat_name);
+            let is_user_variant_tuple: Bool = pat_tag == "TupleStruct" && ctx.has_enum_variant(pat_name);
             // A1q: `Session::Locked { attempts: a, window: w }` — struct-
             // variant pattern.  Dispatch mirrors TupleStruct, binding
             // mirrors struct field access.
-            let is_user_variant_struct: Bool = pat_tag == "Struct" && ctx.enums.contains_key(pat_name);
+            let is_user_variant_struct: Bool = pat_tag == "Struct" && ctx.has_enum_variant(pat_name);
             let is_user_variant: Bool = is_user_variant_ident || is_user_variant_tuple || is_user_variant_struct;
             let is_fallback: Bool = pat_tag == "Wildcard" || (pat_tag == "Ident" && !is_user_variant);
             let is_enum_variant: Bool = pat_tag == "Some" || pat_tag == "None" || pat_tag == "Ok" || pat_tag == "Err";
@@ -1184,7 +1245,7 @@ partial fn emit_match(
                     } else {
                         scrut_reg.concat("")
                     };
-                    let variant_tag: Int = ctx.enums.get(pat_name).unwrap_or(0);
+                    let variant_tag: Int = ctx.enum_tag_of(pat_name);
                     let cmp_reg: String = format("%t{}", [cur_reg.to_string()]);
                     instrs.push(format(
                         "  {} = icmp eq i8 {}, {}",
@@ -1255,10 +1316,7 @@ partial fn emit_match(
                 // native type isn't i64 (A1r: Float→double), bitcast on
                 // the way out so the binding sees the correct type.
                 let ts_fields: List[Value] = jarr(pat, "fields");
-                let vt: List[String] = match ctx.variant_slot_types.get(pat_name) {
-                    Some(ts) => ts,
-                    None => [],
-                };
+                let vt: List[String] = ctx.variant_slot_types_of(pat_name);
                 let extend_start: Map[String, LocalRef] = clone_locals(outer_locals);
                 let arm_locals_ref: ref Map[String, LocalRef] = extend_start;
                 let pos: ref Int = 0;
@@ -1303,7 +1361,7 @@ partial fn emit_match(
                 let sf: List[Value] = jarr(pat, "fields");
                 let extend_start: Map[String, LocalRef] = clone_locals(outer_locals);
                 let arm_locals_ref: ref Map[String, LocalRef] = extend_start;
-                let slot_lookup: Map[String, Int] = match ctx.variant_slots.get(pat_name) {
+                let slot_lookup: Map[String, Int] = match ctx.variant_slot_map(pat_name) {
                     Some(sm) => sm,
                     None => Map[String, Int]::new(),
                 };
@@ -1475,17 +1533,14 @@ partial fn emit_match_body(body: Value, ctx: EmitCtx) -> MatchArmOut {
 partial fn emit_variant_construction(
     variant_name: String, args: List[Value], ctx: EmitCtx
 ) -> Emitted {
-    let variant_tag: Int = ctx.enums.get(variant_name).unwrap_or(0);
+    let variant_tag: Int = ctx.enum_tag_of(variant_name);
     let enum_name: String = enum_name_of_variant(variant_name);
-    let enum_ty: String = ctx.enum_types.get(enum_name).unwrap_or("{i8, i64}");
+    let enum_ty: String = ctx.enum_type_of(enum_name).unwrap_or("{i8, i64}");
 
-    let n_slots: Int = ctx.variant_payloads.get(variant_name).unwrap_or(0);
+    let n_slots: Int = ctx.variant_payload_count(variant_name);
 
     // Look up slot types for bitcasts (A1r).  Absent → all-i64.
-    let slot_tys: List[String] = match ctx.variant_slot_types.get(variant_name) {
-        Some(ts) => ts,
-        None => [],
-    };
+    let slot_tys: List[String] = ctx.variant_slot_types_of(variant_name);
 
     // Emit each arg expression, threading next_reg.
     let arg_regs: ref List[String] = [];
@@ -1569,7 +1624,7 @@ partial fn emit_fn_call(
     // Detected by presence in `ctx.enums` (the variant tag registry).
     // Lowered to `insertvalue {i8, i64}` — tag at index 0, single i64
     // payload at index 1 (multi-payload deferred).
-    if ctx.enums.contains_key(name) && args.len() >= 1 {
+    if ctx.has_enum_variant(name) && args.len() >= 1 {
         return emit_variant_construction(name, args, ctx)
     }
 
@@ -2024,7 +2079,7 @@ partial fn emit_stmt(stmt: Value, ctx: EmitCtx) -> StmtOut {
             let rhs_last: String = rhs.last_label;
             if target_tag == "Ident" {
                 let name: String = jstr(target, "name");
-                match ctx.locals.get(name) {
+                match ctx.local_of(name) {
                     Some(op) => {
                         let store_line: String = format(
                             "  store {} {}, ptr {}",
