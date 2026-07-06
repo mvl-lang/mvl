@@ -123,6 +123,28 @@ impl RustEmitter {
         }
     }
 
+    /// Emit a method call receiver for a **user-defined** method (a
+    /// generic fallthrough call where MVL doesn't have a special-case
+    /// stdlib dispatch).  Adds `.clone()` on non-last-use `Var` receivers
+    /// so the caller's binding stays alive across the call — Rust E0382
+    /// would trip otherwise when the method sig is `self` (consuming).
+    ///
+    /// Skipped for stdlib fast-path calls (`.push`, `.map`, `.get`, …)
+    /// because those either take `&mut self` (auto-refs owned locals)
+    /// or already emit their own `.clone()` in the pushed suffix.
+    /// Sharing `emit_method_receiver` with those paths and unconditionally
+    /// cloning here would double-clone or, worse, snapshot mutable ref
+    /// locals like `result: ref List[Int]` and drop the write (breaks
+    /// `range()` and similar in-place builders).
+    pub(super) fn emit_user_method_receiver(&mut self, receiver: &TirExpr) {
+        self.emit_method_receiver(receiver);
+        if matches!(&receiver.kind, TirExprKind::Var(_))
+            && !self.last_uses.contains(&receiver.span)
+        {
+            self.push(".clone()");
+        }
+    }
+
     /// Emit `sub` as the right operand of a left-associative binary op:
     /// wrap iff own precedence is *less than or equal to* `parent_prec`.
     /// This keeps `a - (b - c)` from parsing as `(a - b) - c` when the
