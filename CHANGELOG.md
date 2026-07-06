@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.238.0] - 2026-07-06
+
+### Added
+
+- **Go-model sibling method dispatch** (#1706) — Extension methods on the same type can now be split across sibling `.mvl` files in the same directory without cyclic `use` imports. Files in the same build unit share extension method declarations through the type system: `point_display.mvl` may call `self.sum()` (defined in `point_arith.mvl`) as long as both are compiled together via the entry module. Mirrors Go's package model: within a directory, type methods are ambient; between directories, explicit `use` imports are required and cycles are still rejected. Three changes: (1) sibling pre-check now includes all peer siblings in each sibling's prelude so cross-sibling method calls type-check correctly; (2) transpiler suppresses `use crate::mod::name` for extension method imports from sibling modules (they are Rust struct methods, not standalone functions); (3) the suppression is applied in all emission paths — both entry module and sibling module files. Includes a four-file runnable example (`examples/programs/sibling_dispatch/`) and corpus tests (`tests/corpus/18_modules/`).
+
 ## [0.237.4] - 2026-07-05
 
 ### Fixed
