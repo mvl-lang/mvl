@@ -1,0 +1,339 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// compiler/backends/llvm/emit_context.mvl — emitter state types + accessors (#1118, #1693)
+//
+// Corresponds to the state struct + core value types in
+// src/mvl/backends/llvm_text/context.rs and the LocalRef/Emitted/
+// StmtOut/MatchArmOut helpers scattered across emit_*_tir.rs.
+//
+// This module is a LEAF — imports only std, exports the core types and
+// accessor methods consumed by every other emit_* module.
+
+use std.collections.{Map}
+
+// Per-local binding info.  Two flavors:
+//
+// - Non-ref (`is_ref = false`): `reg` is the SSA operand text (e.g. `%t3`,
+//   `%name`, or a literal like `"42"`) holding the value directly.  A read
+//   of the local simply reuses `reg`.
+//
+// - Ref (`is_ref = true`, introduced in A1d): `reg` is an alloca pointer
+//   name (`%name.addr`); the underlying value lives in memory and every
+//   `Var` read materializes it via `load <ty>, ptr <reg>`.  Assign stmts
+//   write via `store <ty> <val>, ptr <reg>` — the addr never changes, so
+//   the map entry stays stable across mutations.
+pub type LocalRef = struct {
+    reg: String,
+    ty: String,
+    is_ref: Bool,
+}
+
+pub type EmitCtx = struct {
+    next_reg: Int,
+    locals: Map[String, LocalRef],
+    // A1l: variant-name → i8 tag value for user-defined enums.
+    // Keys are fully-qualified like "Color::Red", "Direction::North".
+    // Empty for programs that don't declare any enums.  Populated once
+    // by [`emit_program`] and threaded through every EmitCtx clone.
+    enums: Map[String, Int],
+    // A1m: literal string value → global-symbol name (`@.str.N`).
+    // Populated once by [`emit_program`] via [`build_string_registry`].
+    // Emit sites look up the global by exact string content; the length
+    // is the value's byte length.  Empty for programs with no string
+    // literals.
+    strings: Map[String, String],
+    // A1n: user-defined struct types.  Maps struct-name (e.g. "Point")
+    // to a `StructInfo` capturing its ordered field list.  Populated
+    // once by [`emit_program`] via [`build_struct_registry`].  A Named
+    // type not present here is assumed to be an enum (A1l — lowers to
+    // `i8`).
+    structs: Map[String, StructInfo],
+    // A1o: enum-name → LLVM type string.  An enum with ONLY unit
+    // variants lowers to `i8` (A1l).  An enum with ANY tuple / struct
+    // variant lowers to `{i8, i64}` — tag byte + single i64 payload
+    // slot (MVP restriction: single-Int payload only).  Populated
+    // once by [`emit_program`] via [`build_enum_registry`].
+    enum_types: Map[String, String],
+    // A1o/A1q: variant-name → payload count.  Unit variants map to 0,
+    // tuple variants (`Num(Int)`) to 1, tuple with multiple to N,
+    // struct variants to their field count.
+    variant_payloads: Map[String, Int],
+    // A1q: variant-name → { field-name → slot-index }.  Field-name is
+    // positional ("0", "1", …) for tuple variants and the actual field
+    // name for struct variants.  Empty for unit variants.  Slot indices
+    // are 0-based into the payload area (LLVM index = slot + 1, since
+    // slot 0 is reserved for the tag byte).
+    variant_slots: Map[String, Map[String, Int]],
+    // A1r: variant-name → ordered LLVM slot type per payload position.
+    // Payloads are always stored as `i64` inside the aggregate; when a
+    // slot's declared type is something else (e.g. `double` for
+    // `Circle(Float)`), the emitter bitcasts to/from i64 at
+    // construction and extraction time.  Empty for unit variants.
+    variant_slot_types: Map[String, List[String]],
+}
+
+pub type StructInfo = struct {
+    // Field name → declaration order.  Position determines `getelementptr`
+    // and `extractvalue` indices when accessing fields.
+    field_index: Map[String, Int],
+    // Ordered LLVM types for each field.  Length matches `field_index`.
+    // Used by `tir_ty_to_llvm_named` and `emit_program` when declaring
+    // `%Name = type { ... }`.
+    field_types: List[String],
+}
+
+// Result of emitting an expression: the operand holding the value, its LLVM
+// type ("i64" for Int-valued exprs, "i1" for comparison + Bool literal
+// results), and any instructions that must be spliced into the enclosing fn
+// body.
+//
+// `last_label` records the basic block currently in scope AFTER emission.
+// It is the empty string when this expression introduces no control flow
+// (arithmetic, calls, loads), meaning control is still at whatever block
+// was current before the expression.  For control-flow-shaped expressions
+// (If, while, Block-with-inner-control-flow) it is the label of the block
+// terminating the sequence — required so a surrounding `phi` can name the
+// correct predecessor.  A nested `if / else if / else` chain returns the
+// innermost `if_join_N` here, not the outer `if_else_M` label that started
+// the arm.
+pub type Emitted = struct {
+    reg: String,
+    ty: String,
+    next_reg: Int,
+    instrs: List[String],
+    last_label: String,
+}
+
+// Result of emitting a statement.  `last_label` follows the same
+// convention as in [`Emitted`] — empty for straight-line stmts, the
+// exit label of any nested control flow otherwise.
+//
+// `tail_ty` carries the LLVM type of `tail_reg` when it holds a real
+// value ("i64"/"i1"/"{i8, i64}"), or "" when the stmt produced no
+// value.  Needed so if/match phi merges over aggregate return types
+// (A1i: `fn foo() -> Option[Int]`) emit the correct phi ty.
+pub type StmtOut = struct {
+    ctx: EmitCtx,
+    instrs: List[String],
+    tail_reg: String,
+    tail_ty: String,
+    last_label: String,
+}
+
+pub fn emitted_imm(value: String, next: Int) -> Emitted {
+    Emitted { reg: value, ty: "i64", next_reg: next, instrs: [], last_label: "" }
+}
+
+pub fn emitted_bool(value: String, next: Int) -> Emitted {
+    Emitted { reg: value, ty: "i1", next_reg: next, instrs: [], last_label: "" }
+}
+
+
+// ── EmitCtx accessors ────────────────────────────────────────────────────────
+
+// `ctx.<field>.get(k)` directly.  Once these methods migrate to context.mvl
+// alongside EmitCtx (#1693), the Map field types stay resolved inside the
+// module that owns them — sidestepping MVL's cross-module field-type erasure
+// (see #1706).  Method dispatch across sibling modules is supported and
+// carries the receiver type end-to-end.
+
+// A1m: look up a string literal's `@.str.N` global symbol.
+// Returns "@.str.missing" for absent entries — a marker never produced by
+// `build_string_registry`, so an unexpected miss surfaces as an invalid IR
+// symbol at link time instead of a silent empty.
+//
+// Now that ADR-0052 (method receiver clone semantics) landed, user methods
+// on non-last-use receivers correctly clone.  See ADR-0052 for the full
+// dispatch-path rules.
+pub fn EmitCtx::string_global_of(self, key: String) -> String {
+    self.strings.get(key).unwrap_or("@.str.missing")
+}
+
+// A1l: is `name` a registered user-defined enum variant?
+// `name` is fully-qualified ("Color::Red", "Direction::North").
+pub fn EmitCtx::has_enum_variant(self, name: String) -> Bool {
+    self.enums.contains_key(name)
+}
+
+// A1l: look up the i8 tag byte for a fully-qualified variant.
+// Returns 0 for absent variants — safe fallback since 0 is the tag of
+// the first variant of any enum; callers typically guard with
+// `has_enum_variant` before reading.
+pub fn EmitCtx::enum_tag_of(self, name: String) -> Int {
+    self.enums.get(name).unwrap_or(0)
+}
+
+// A1o: look up an enum's LLVM aggregate type.  Returns `Option[String]`
+// because two callers want different fallbacks:
+//   - `i8`         (Var case, all-unit enum default)
+//   - `{i8, i64}`  (variant construction, single-slot payload default)
+// Callers `.unwrap_or(...)` with their site-specific default.
+pub fn EmitCtx::enum_type_of(self, name: String) -> Option[String] {
+    self.enum_types.get(name)
+}
+
+// A1n: look up a struct's field-layout info.  Returns `Option` because
+// callers pattern-match to extract the field index and default to 0 if
+// the struct isn't in the registry.
+pub fn EmitCtx::struct_info_of(self, name: String) -> Option[StructInfo] {
+    self.structs.get(name)
+}
+
+// A1q: how many payload slots a variant occupies.  Unit variants map
+// to 0, tuple variants (`Num(Int)`) to 1, struct variants to their
+// field count.
+pub fn EmitCtx::variant_payload_count(self, name: String) -> Int {
+    self.variant_payloads.get(name).unwrap_or(0)
+}
+
+// A1r: per-variant ordered slot LLVM types.  Empty list for unit
+// variants (or missing variants — callers typically iterate).
+pub fn EmitCtx::variant_slot_types_of(self, name: String) -> List[String] {
+    self.variant_slot_types.get(name).unwrap_or([])
+}
+
+// A1q: per-variant field-name → slot-index map.  Returns `Option`
+// so absent variants surface distinctly from a variant with an
+// empty slot map (unit).
+pub fn EmitCtx::variant_slot_map(self, name: String) -> Option[Map[String, Int]] {
+    self.variant_slots.get(name)
+}
+
+// A1c/A1d: look up a locally-bound value (fn param or `let` binding).
+// Returns `Option` because callers pattern-match to distinguish
+// bound (ref-load vs. direct-reg) from unbound (fall through to
+// the SSA global naming convention).
+pub fn EmitCtx::local_of(self, name: String) -> Option[LocalRef] {
+    self.locals.get(name)
+}
+
+// ── Operator mapping ──────────────────────────────────────────────────────────
+
+// ── MatchArmOut ──────────────────────────────────────────────────────────────
+
+// Match-arm body: `{tag: "Expr", expr: TirExpr}` or `{tag: "Block", block:
+// TirBlock}`.  Returns the arm's SSA operand + instruction stream + the
+// label control resides in after emission (for phi predecessor tracking).
+pub type MatchArmOut = struct {
+    reg: String,
+    ty: String,
+    next_reg: Int,
+    instrs: List[String],
+    last_label: String,
+}
+
+// ── Locals helpers ──────────────────────────────────────────────────────────
+
+// Clone `base` into a fresh Map and add the new binding.  MVL's `Map::put`
+// isn't type-inferring cleanly through struct-field access here, so we
+// rebuild the map by hand (the fn body is small so O(n) copies are fine).
+pub partial fn extend_locals(
+    base: Map[String, LocalRef], key: String, value: LocalRef
+) -> Map[String, LocalRef] {
+    let m: ref Map[String, LocalRef] = Map::new();
+    for k in base.keys() {
+        match base.get(k) {
+            Some(v) => m.insert(k, v),
+            None    => {},
+        }
+    }
+    m.insert(key, value);
+    m
+}
+
+// Deep-copy a locals Map into a fresh Map.  Used inside for-loop bodies to
+// obtain a per-iteration clone from a `ref` variable — the Rust transpiler
+// correctly inserts `.clone()` when a `ref`-var value is passed to a fn
+// inside a loop (verified via a spike probe).  Structural counterpart of
+// `extend_locals` without the extra binding.
+pub partial fn clone_locals(base: Map[String, LocalRef]) -> Map[String, LocalRef] {
+    let m: ref Map[String, LocalRef] = Map::new();
+    for k in base.keys() {
+        match base.get(k) {
+            Some(v) => m.insert(k, v),
+            None    => {},
+        }
+    }
+    m
+}
+
+// ── Registry cloners ─────────────────────────────────────────────────────────
+
+// Deep-copy the struct registry to sidestep the transpiler's
+// cross-iteration move analysis (same rationale as `clone_locals`
+// and `clone_enums`).
+pub partial fn clone_structs(base: Map[String, StructInfo]) -> Map[String, StructInfo] {
+    let m: ref Map[String, StructInfo] = Map::new();
+    for k in base.keys() {
+        match base.get(k) {
+            Some(v) => m.insert(k, v),
+            None    => {},
+        }
+    }
+    m
+}
+
+// Walk TIR `types` list, extracting variant tags for enum declarations.
+// Assigns tags by declaration order — `type Color = enum { Red, Green,
+
+pub partial fn clone_variant_slot_types(
+    base: Map[String, List[String]]
+) -> Map[String, List[String]] {
+    let m: ref Map[String, List[String]] = Map::new();
+    for k in base.keys() {
+        match base.get(k) {
+            Some(v) => {
+                // Clone the inner list via re-push (transpiler safety).
+                let inner_clone: ref List[String] = [];
+                for s in v { inner_clone.push(s) }
+                m.insert(k, inner_clone)
+            },
+            None => {},
+        }
+    }
+    m
+}
+
+
+pub partial fn clone_strings(base: Map[String, String]) -> Map[String, String] {
+    let m: ref Map[String, String] = Map::new();
+    for k in base.keys() {
+        match base.get(k) {
+            Some(v) => m.insert(k, v),
+            None    => {},
+        }
+    }
+    m
+}
+
+// Deep-copy the enum registry so per-fn calls in the emit loop each get
+// a fresh Map (transpiler cross-iteration move rule; same pattern as
+// [`clone_locals`]).
+pub partial fn clone_enums(base: Map[String, Int]) -> Map[String, Int] {
+    let m: ref Map[String, Int] = Map::new();
+    for k in base.keys() {
+        match base.get(k) {
+            Some(v) => m.insert(k, v),
+            None    => {},
+        }
+    }
+    m
+}
+
+// A1q: deep-copy the nested variant_slots map.
+pub partial fn clone_variant_slots(
+    base: Map[String, Map[String, Int]]
+) -> Map[String, Map[String, Int]] {
+    let m: ref Map[String, Map[String, Int]] = Map::new();
+    for k in base.keys() {
+        match base.get(k) {
+            Some(inner) => {
+                let inner_clone: Map[String, Int] = clone_enums(inner);
+                m.insert(k, inner_clone)
+            },
+            None => {},
+        }
+    }
+    m
+}

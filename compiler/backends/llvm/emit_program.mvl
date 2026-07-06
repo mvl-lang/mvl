@@ -24,17 +24,17 @@
 
 use std.collections.{Map}
 use std.json.{Value}
-use backend_llvm::LocalRef;
-use backend_llvm::StructInfo;
-use backend_llvm::EmitCtx;
-use backend_llvm::StmtOut;
+use emit_context::LocalRef;
+use emit_context::StructInfo;
+use emit_context::EmitCtx;
+use emit_context::StmtOut;
+use emit_context::clone_enums;
+use emit_context::clone_strings;
+use emit_context::clone_structs;
+use emit_context::clone_variant_slots;
 use backend_llvm::emit_body;
 use backend_llvm::tir_ty_to_llvm_full;
-use backend_llvm::clone_enums;
-use backend_llvm::clone_strings;
-use backend_llvm::clone_structs;
-use backend_llvm::clone_variant_slots;
-use backend_llvm::clone_variant_slot_types;
+use emit_context::clone_variant_slot_types;
 use backend_llvm::jstr;
 use backend_llvm::jarr;
 use backend_llvm::jget;
