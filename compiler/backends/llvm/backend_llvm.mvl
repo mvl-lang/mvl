@@ -106,7 +106,8 @@ partial fn enum_name_of_variant(s: String) -> String {
 
 // ── Expression emission ───────────────────────────────────────────────────────
 
-partial fn emit_expr(expr: Value, ctx: EmitCtx) -> Emitted {
+pub partial fn EmitCtx::emit_expr(self, expr: Value) -> Emitted {
+    let ctx: EmitCtx = self;
     let kind: Value = jget(expr, "kind");
     let t: String = jtag(kind);
     match t {
@@ -199,7 +200,7 @@ partial fn emit_expr(expr: Value, ctx: EmitCtx) -> Emitted {
                 }
             }
             // A1g: bare `None` — no args, appears as Var (not FnCall).  Emit
-            // the same enum construction as `emit_fn_call("None", [], ...)`.
+            // the same enum construction as `....emit_fn_call("None", [])`.
             if name == "None" {
                 let tag_reg: String = format("%t{}", [ctx.next_reg.to_string()]);
                 let mk_tag: String = format(
@@ -245,9 +246,9 @@ partial fn emit_expr(expr: Value, ctx: EmitCtx) -> Emitted {
         },
         "Binary" => {
             let op: String = jstr(kind, "op");
-            let l: Emitted = emit_expr(jget(kind, "left"), ctx);
+            let l: Emitted = ctx.emit_expr(jget(kind, "left"));
             let r_ctx: EmitCtx = EmitCtx { next_reg: l.next_reg, locals: ctx.locals, enums: ctx.enums, strings: ctx.strings, structs: ctx.structs, enum_types: ctx.enum_types, variant_payloads: ctx.variant_payloads, variant_slots: ctx.variant_slots, variant_slot_types: ctx.variant_slot_types };
-            let r: Emitted = emit_expr(jget(kind, "right"), r_ctx);
+            let r: Emitted = r_ctx.emit_expr(jget(kind, "right"));
             let opname: String = emit_binop_llvm(op);
             let reg: String = format("%t{}", [r.next_reg.to_string()]);
             let line: String = format("  {} = {} i64 {}, {}", [reg, opname, l.reg, r.reg]);
@@ -269,7 +270,7 @@ partial fn emit_expr(expr: Value, ctx: EmitCtx) -> Emitted {
             // callee's return type — needed to emit `call <ret_ty> @fn`
             // when the callee returns Option/Result.
             let ret_ty: String = tir_ty_to_llvm(jget(expr, "ty"));
-            emit_fn_call(name, args, ret_ty, ctx)
+            ctx.emit_fn_call(name, args, ret_ty)
         },
         "ListLit" => {
             // A1k/A1u: `[e1, e2, ..., eN]` for `List[T]`.  Lower to a
@@ -310,7 +311,7 @@ partial fn emit_expr(expr: Value, ctx: EmitCtx) -> Emitted {
                 variant_slots: ctx.variant_slots,
                 variant_slot_types: ctx.variant_slot_types,
                 };
-                let emit_e: Emitted = emit_expr(e, sub);
+                let emit_e: Emitted = sub.emit_expr(e);
                 cur = emit_e.next_reg;
                 for line in emit_e.instrs { elem_instrs.push(line) }
                 elem_regs.push(emit_e.reg);
@@ -381,7 +382,7 @@ partial fn emit_expr(expr: Value, ctx: EmitCtx) -> Emitted {
             if ctx.has_enum_variant(type_name) {
                 let just_exprs: ref List[Value] = [];
                 for f in fields { just_exprs.push(jget(f, "expr")) }
-                return emit_variant_construction(type_name, just_exprs, ctx)
+                return ctx.emit_variant_construction(type_name, just_exprs)
             }
             let llvm_ty: String = format("%{}", [type_name]);
 
@@ -399,7 +400,7 @@ partial fn emit_expr(expr: Value, ctx: EmitCtx) -> Emitted {
                 variant_slots: ctx.variant_slots,
                 variant_slot_types: ctx.variant_slot_types,
                 };
-                let fexpr: Emitted = emit_expr(jget(f, "expr"), sub_ctx);
+                let fexpr: Emitted = sub_ctx.emit_expr(jget(f, "expr"));
                 cur = fexpr.next_reg;
                 for line in fexpr.instrs { all_instrs.push(line) }
                 elem_regs.push(fexpr.reg);
@@ -441,7 +442,7 @@ partial fn emit_expr(expr: Value, ctx: EmitCtx) -> Emitted {
             // index.  Resolved via the struct registry.
             let base: Value = jget(kind, "expr");
             let field_name: String = jstr(kind, "field");
-            let base_e: Emitted = emit_expr(base, ctx);
+            let base_e: Emitted = ctx.emit_expr(base);
             // Look up the struct name from the base's TIR ty
             // (`{ tag: "Named", name: "Point" }`).
             let base_ty: Value = jget(base, "ty");
@@ -473,7 +474,7 @@ partial fn emit_expr(expr: Value, ctx: EmitCtx) -> Emitted {
             let method: String = jstr(kind, "method");
             let recv_ty: Value = jget(recv, "ty");
             let recv_ty_tag: String = jtag(recv_ty);
-            let recv_e: Emitted = emit_expr(recv, ctx);
+            let recv_e: Emitted = ctx.emit_expr(recv);
 
             if recv_ty_tag == "List" && method == "len" {
                 // `xs.len()` → extractvalue {i64, ptr} %xs, 0
@@ -523,7 +524,7 @@ partial fn emit_expr(expr: Value, ctx: EmitCtx) -> Emitted {
                     variant_slots: ctx.variant_slots,
                     variant_slot_types: ctx.variant_slot_types,
                 };
-                let idx: Emitted = emit_expr(arg0, arg_ctx);
+                let idx: Emitted = arg_ctx.emit_expr(arg0);
                 let n0: Int = idx.next_reg;
                 let len_reg: String = format("%t{}", [n0.to_string()]);
                 let data_reg: String = format("%t{}", [(n0 + 1).to_string()]);
@@ -638,7 +639,7 @@ partial fn emit_expr(expr: Value, ctx: EmitCtx) -> Emitted {
                 variant_slots: ctx.variant_slots,
                 variant_slot_types: ctx.variant_slot_types,
                 };
-                let def_e: Emitted = emit_expr(arg0, arg_ctx);
+                let def_e: Emitted = arg_ctx.emit_expr(arg0);
                 let n0: Int = def_e.next_reg;
                 let tag_reg: String = format("%t{}", [n0.to_string()]);
                 let pl_reg: String = format("%t{}", [(n0 + 1).to_string()]);
@@ -682,7 +683,7 @@ partial fn emit_expr(expr: Value, ctx: EmitCtx) -> Emitted {
         },
         "Unary" => {
             let op: String = jstr(kind, "op");
-            let inner: Emitted = emit_expr(jget(kind, "expr"), ctx);
+            let inner: Emitted = ctx.emit_expr(jget(kind, "expr"));
             let result_reg: String = format("%t{}", [inner.next_reg.to_string()]);
             // `-x`  → `sub i64 0, x`
             // `!b`  → `xor i1 b, 1`   (Bool negation)
@@ -704,15 +705,15 @@ partial fn emit_expr(expr: Value, ctx: EmitCtx) -> Emitted {
             // Expression-form if: emits br/phi merging both arms as i64.
             let then_block: Value = jget(kind, "then");
             let else_block: Value = extract_else_block(jget(kind, "else_br"));
-            emit_if_blocks(jget(kind, "cond"), then_block, else_block, ctx)
+            ctx.emit_if_blocks(jget(kind, "cond"), then_block, else_block)
         },
         "Match" => {
-            emit_match(jget(kind, "scrutinee"), jarr(kind, "arms"), ctx)
+            ctx.emit_match(jget(kind, "scrutinee"), jarr(kind, "arms"))
         },
         "Block" => {
             // Block expression — used in the else_br of an if-expression.
             let block: Value = jget(kind, "block");
-            let out: StmtOut = emit_body(block, ctx);
+            let out: StmtOut = ctx.emit_body(block);
             let reg: String = if out.tail_reg == "" { "0" } else { out.tail_reg };
             Emitted {
                 reg: reg,
@@ -778,10 +779,9 @@ partial fn make_expr_stmt(e: Value) -> Value {
 
 // Emit `if <cond> { <then> } else { <else> }` producing a phi-merged i64.
 // Uses `next_reg` as the label-name counter to keep them unique.
-partial fn emit_if_blocks(
-    cond_expr: Value, then_block: Value, else_block: Value, ctx: EmitCtx
-) -> Emitted {
-    let c: Emitted = emit_expr(cond_expr, ctx);
+pub partial fn EmitCtx::emit_if_blocks(self, cond_expr: Value, then_block: Value, else_block: Value) -> Emitted {
+    let ctx: EmitCtx = self;
+    let c: Emitted = ctx.emit_expr(cond_expr);
     // Always coerce the condition to a fresh i1 via `icmp ne <ty> %r, 0` —
     // uniform for both i1 (comparison / Bool literal) and i64 (arbitrary
     // arithmetic result).  For i1 the coercion is a redundant "compare to
@@ -810,7 +810,7 @@ partial fn emit_if_blocks(
     // contained inner control flow (else-if chain, nested while), the
     // arm's actual terminator block is `last_label`, NOT the arm's entry
     // label — the phi must name that block or LLVM rejects it.
-    let then_out: StmtOut = emit_body(then_block, ctx_bodies);
+    let then_out: StmtOut = ctx_bodies.emit_body(then_block);
     let then_reg: String = if then_out.tail_reg == "" { "0" } else { then_out.tail_reg };
     // Rebuild the arm-entry label to compute the phi predecessor rather
     // than reusing `then_lbl` — Rust's move analysis rejects a 3rd use of
@@ -833,7 +833,7 @@ partial fn emit_if_blocks(
     };
     let then_ctx: EmitCtx = EmitCtx { next_reg: then_out.ctx.next_reg, locals: ctx.locals, enums: ctx.enums, strings: ctx.strings, structs: ctx.structs, enum_types: ctx.enum_types, variant_payloads: ctx.variant_payloads, variant_slots: ctx.variant_slots, variant_slot_types: ctx.variant_slot_types };
 
-    let else_out: StmtOut = emit_body(else_block, then_ctx);
+    let else_out: StmtOut = then_ctx.emit_body(else_block);
     let else_reg: String = if else_out.tail_reg == "" { "0" } else { else_out.tail_reg };
     let else_pred: String = if else_out.last_label == "" {
         format("if_else_{}", [n.to_string()])
@@ -892,10 +892,9 @@ partial fn emit_if_blocks(
 // the ref-var, which the transpiler translates as an alloca-load followed
 // by `.clone()` (verified via a spike probe on 2026-07-04).  Each arm gets
 // a fresh locals map, optionally extended with an Ident-pattern binding.
-partial fn emit_match(
-    scrutinee: Value, arms: List[Value], ctx: EmitCtx
-) -> Emitted {
-    let s: Emitted = emit_expr(scrutinee, ctx);
+pub partial fn EmitCtx::emit_match(self, scrutinee: Value, arms: List[Value]) -> Emitted {
+    let ctx: EmitCtx = self;
+    let s: Emitted = ctx.emit_expr(scrutinee);
     let n: Int = s.next_reg;
     let join_lbl: String = format("match_join_{}", [n.to_string()]);
 
@@ -1156,7 +1155,7 @@ partial fn emit_match(
                 variant_slot_types: ctx.variant_slot_types,
             };
             let arm_body: Value = jget(arm, "body");
-            let arm_out: MatchArmOut = emit_match_body(arm_body, arm_ctx);
+            let arm_out: MatchArmOut = arm_ctx.emit_match_body(arm_body);
             for line in arm_out.instrs { instrs.push(line) }
             instrs.push(format("  br label %{}", [join_lbl]));
 
@@ -1217,10 +1216,11 @@ total fn literal_pattern_value(pat: Value) -> String {
     }
 }
 
-partial fn emit_match_body(body: Value, ctx: EmitCtx) -> MatchArmOut {
+pub partial fn EmitCtx::emit_match_body(self, body: Value) -> MatchArmOut {
+    let ctx: EmitCtx = self;
     let body_tag: String = jtag(body);
     if body_tag == "Expr" {
-        let e: Emitted = emit_expr(jget(body, "expr"), ctx);
+        let e: Emitted = ctx.emit_expr(jget(body, "expr"));
         MatchArmOut {
             reg: e.reg,
             ty: e.ty,
@@ -1230,7 +1230,7 @@ partial fn emit_match_body(body: Value, ctx: EmitCtx) -> MatchArmOut {
         }
     } else {
         // Block arm — walk it as a body and use its trailing tail_reg.
-        let out: StmtOut = emit_body(jget(body, "block"), ctx);
+        let out: StmtOut = ctx.emit_body(jget(body, "block"));
         let reg: String = if out.tail_reg == "" { "0" } else { out.tail_reg };
         let ty: String = if out.tail_ty == "" { "i64" } else { out.tail_ty };
         MatchArmOut {
@@ -1254,9 +1254,8 @@ partial fn emit_match_body(body: Value, ctx: EmitCtx) -> MatchArmOut {
 // The enum's LLVM shape comes from `ctx.enum_types` — for a single-slot
 // enum it's `{i8, i64}` (A1o), for multi-slot it's `{i8, i64, i64, ...}`
 // (A1q).  Unused slots stay `undef`.
-partial fn emit_variant_construction(
-    variant_name: String, args: List[Value], ctx: EmitCtx
-) -> Emitted {
+pub partial fn EmitCtx::emit_variant_construction(self, variant_name: String, args: List[Value]) -> Emitted {
+    let ctx: EmitCtx = self;
     let variant_tag: Int = ctx.enum_tag_of(variant_name);
     let enum_name: String = enum_name_of_variant(variant_name);
     let enum_ty: String = ctx.enum_type_of(enum_name).unwrap_or("{i8, i64}");
@@ -1279,7 +1278,7 @@ partial fn emit_variant_construction(
             variant_slots: ctx.variant_slots,
             variant_slot_types: ctx.variant_slot_types,
         };
-        let ae: Emitted = emit_expr(a, sub);
+        let ae: Emitted = sub.emit_expr(a);
         cur = ae.next_reg;
         for line in ae.instrs { all_instrs.push(line) }
         // A1r: if payload's native type differs from i64, bitcast it
@@ -1341,15 +1340,14 @@ partial fn emit_variant_construction(
     }
 }
 
-partial fn emit_fn_call(
-    name: String, args: List[Value], ret_ty: String, ctx: EmitCtx
-) -> Emitted {
+pub partial fn EmitCtx::emit_fn_call(self, name: String, args: List[Value], ret_ty: String) -> Emitted {
+    let ctx: EmitCtx = self;
     // A1o: user-defined payload variant construction (`Value::Num(42)`).
     // Detected by presence in `ctx.enums` (the variant tag registry).
     // Lowered to `insertvalue {i8, i64}` — tag at index 0, single i64
     // payload at index 1 (multi-payload deferred).
     if ctx.has_enum_variant(name) && args.len() >= 1 {
-        return emit_variant_construction(name, args, ctx)
+        return ctx.emit_variant_construction(name, args)
     }
 
     // A1g: `Some(x)` / `None` — Option[Int] enum constructors.
@@ -1358,7 +1356,7 @@ partial fn emit_fn_call(
     // (0/1 for Some/None or Ok/Err), then payload.
     if (name == "Some" || name == "Ok") && args.len() == 1 {
         let payload_ctx: EmitCtx = EmitCtx { next_reg: ctx.next_reg, locals: ctx.locals, enums: ctx.enums, strings: ctx.strings, structs: ctx.structs, enum_types: ctx.enum_types, variant_payloads: ctx.variant_payloads, variant_slots: ctx.variant_slots, variant_slot_types: ctx.variant_slot_types };
-        let payload: Emitted = emit_expr(args.get(0).unwrap_or(Value::Null), payload_ctx);
+        let payload: Emitted = payload_ctx.emit_expr(args.get(0).unwrap_or(Value::Null));
         let tag_reg: String = format("%t{}", [payload.next_reg.to_string()]);
         let val_reg: String = format("%t{}", [(payload.next_reg + 1).to_string()]);
         let tag_val: String = if name == "Some" { "1" } else { "0" };
@@ -1381,7 +1379,7 @@ partial fn emit_fn_call(
     if (name == "None" && args.len() == 0) || (name == "Err" && args.len() == 1) {
         if name == "Err" {
             let payload_ctx: EmitCtx = EmitCtx { next_reg: ctx.next_reg, locals: ctx.locals, enums: ctx.enums, strings: ctx.strings, structs: ctx.structs, enum_types: ctx.enum_types, variant_payloads: ctx.variant_payloads, variant_slots: ctx.variant_slots, variant_slot_types: ctx.variant_slot_types };
-            let payload: Emitted = emit_expr(args.get(0).unwrap_or(Value::Null), payload_ctx);
+            let payload: Emitted = payload_ctx.emit_expr(args.get(0).unwrap_or(Value::Null));
             let tag_reg: String = format("%t{}", [payload.next_reg.to_string()]);
             let val_reg: String = format("%t{}", [(payload.next_reg + 1).to_string()]);
             let mk_tag: String = format(
@@ -1434,7 +1432,7 @@ partial fn emit_fn_call(
             variant_slots: ctx.variant_slots,
             variant_slot_types: ctx.variant_slot_types,
         };
-        let arg: Emitted = emit_expr(args.get(0).unwrap_or(Value::Null), arg_ctx);
+        let arg: Emitted = arg_ctx.emit_expr(args.get(0).unwrap_or(Value::Null));
         let is_str: Bool = arg.ty == "{i64, ptr}";
         let call_instr: String = if is_str {
             // Extract data ptr from {i64, ptr}, pass to printf.
@@ -1472,7 +1470,7 @@ partial fn emit_fn_call(
     let cur: ref Int = ctx.next_reg;
     for a in args {
         let sub_ctx: EmitCtx = EmitCtx { next_reg: cur, locals: ctx.locals, enums: ctx.enums, strings: ctx.strings, structs: ctx.structs, enum_types: ctx.enum_types, variant_payloads: ctx.variant_payloads, variant_slots: ctx.variant_slots, variant_slot_types: ctx.variant_slot_types };
-        let e: Emitted = emit_expr(a, sub_ctx);
+        let e: Emitted = sub_ctx.emit_expr(a);
         cur = e.next_reg;
         for line in e.instrs { accum_instrs.push(line) }
         accum_regs.push(e.reg);
@@ -1524,9 +1522,8 @@ partial fn emit_fn_call(
 // each element into a fresh SSA reg.  The loop variable is bound as a
 // NON-ref local pointing at that fresh reg — reads inside the body
 // see the current iteration's value without an alloca of their own.
-partial fn emit_for_list(
-    stmt: Value, iter: Value, loop_var: String, ctx: EmitCtx
-) -> StmtOut {
+pub partial fn EmitCtx::emit_for_list(self, stmt: Value, iter: Value, loop_var: String) -> StmtOut {
+    let ctx: EmitCtx = self;
     let iter_ctx: EmitCtx = EmitCtx {
         next_reg: ctx.next_reg, locals: ctx.locals, enums: ctx.enums,
         strings: ctx.strings, structs: ctx.structs,
@@ -1534,7 +1531,7 @@ partial fn emit_for_list(
         variant_slots: ctx.variant_slots,
         variant_slot_types: ctx.variant_slot_types,
     };
-    let list: Emitted = emit_expr(iter, iter_ctx);
+    let list: Emitted = iter_ctx.emit_expr(iter);
     // A1u: element type from iter's TIR ty.inner — was hardcoded i64.
     let elem_ty_tir: Value = jget(jget(iter, "ty"), "inner");
     let elem_ty_llvm: String = tir_ty_to_llvm_full(elem_ty_tir, ctx.structs, ctx.enum_types);
@@ -1606,7 +1603,7 @@ partial fn emit_for_list(
         variant_slot_types: ctx.variant_slot_types,
     };
     let body_block: Value = jget(stmt, "body");
-    let body_out: StmtOut = emit_body(body_block, ctx_body);
+    let body_out: StmtOut = ctx_body.emit_body(body_block);
 
     // Post-body: reload idx, increment, store, jump to head.
     let inc_load_reg: String = format("%t{}", [body_out.ctx.next_reg.to_string()]);
@@ -1667,11 +1664,12 @@ partial fn emit_for_list(
 
 // ── Statement emission ────────────────────────────────────────────────────────
 
-partial fn emit_stmt(stmt: Value, ctx: EmitCtx) -> StmtOut {
+pub partial fn EmitCtx::emit_stmt(self, stmt: Value) -> StmtOut {
+    let ctx: EmitCtx = self;
     let t: String = jtag(stmt);
     match t {
         "Expr" => {
-            let e: Emitted = emit_expr(jget(stmt, "expr"), ctx);
+            let e: Emitted = ctx.emit_expr(jget(stmt, "expr"));
             StmtOut {
                 ctx: EmitCtx { next_reg: e.next_reg, locals: ctx.locals, enums: ctx.enums, strings: ctx.strings, structs: ctx.structs, enum_types: ctx.enum_types, variant_payloads: ctx.variant_payloads, variant_slots: ctx.variant_slots, variant_slot_types: ctx.variant_slot_types },
                 instrs: e.instrs,
@@ -1687,12 +1685,7 @@ partial fn emit_stmt(stmt: Value, ctx: EmitCtx) -> StmtOut {
             // if cond { a } else { b } }` where the trailing If IS the return
             // expression.
             let else_block: Value = extract_else_block(jget(stmt, "else_br"));
-            let e: Emitted = emit_if_blocks(
-                jget(stmt, "cond"),
-                jget(stmt, "then"),
-                else_block,
-                ctx,
-            );
+            let e: Emitted = ctx.emit_if_blocks(jget(stmt, "cond"), jget(stmt, "then"), else_block);
             StmtOut {
                 ctx: EmitCtx { next_reg: e.next_reg, locals: ctx.locals, enums: ctx.enums, strings: ctx.strings, structs: ctx.structs, enum_types: ctx.enum_types, variant_payloads: ctx.variant_payloads, variant_slots: ctx.variant_slots, variant_slot_types: ctx.variant_slot_types },
                 instrs: e.instrs,
@@ -1704,11 +1697,7 @@ partial fn emit_stmt(stmt: Value, ctx: EmitCtx) -> StmtOut {
         "Match" => {
             // Stmt-form match. Same shape as expr-form; result flows out
             // as the fn's return value when the match is the trailing stmt.
-            let e: Emitted = emit_match(
-                jget(stmt, "scrutinee"),
-                jarr(stmt, "arms"),
-                ctx,
-            );
+            let e: Emitted = ctx.emit_match(jget(stmt, "scrutinee"), jarr(stmt, "arms"));
             StmtOut {
                 ctx: EmitCtx { next_reg: e.next_reg, locals: ctx.locals, enums: ctx.enums, strings: ctx.strings, structs: ctx.structs, enum_types: ctx.enum_types, variant_payloads: ctx.variant_payloads, variant_slots: ctx.variant_slots, variant_slot_types: ctx.variant_slot_types },
                 instrs: e.instrs,
@@ -1720,7 +1709,7 @@ partial fn emit_stmt(stmt: Value, ctx: EmitCtx) -> StmtOut {
         "Let" => {
             let pat: Value = jget(stmt, "pattern");
             let name: String = jstr(pat, "name");
-            let init: Emitted = emit_expr(jget(stmt, "init"), ctx);
+            let init: Emitted = ctx.emit_expr(jget(stmt, "init"));
             // Ref-typed lets (`let x: ref T = ...`) map to an alloca ptr so
             // later Assign stmts can `store` into the same address without
             // rewriting every subsequent Var read.
@@ -1767,7 +1756,7 @@ partial fn emit_stmt(stmt: Value, ctx: EmitCtx) -> StmtOut {
             // Only Ident targets in A1d — field/index assigns come later.
             let target: Value = jget(stmt, "target");
             let target_tag: String = jtag(target);
-            let rhs: Emitted = emit_expr(jget(stmt, "value"), ctx);
+            let rhs: Emitted = ctx.emit_expr(jget(stmt, "value"));
             let rhs_last: String = rhs.last_label;
             if target_tag == "Ident" {
                 let name: String = jstr(target, "name");
@@ -1836,7 +1825,7 @@ partial fn emit_stmt(stmt: Value, ctx: EmitCtx) -> StmtOut {
             let exit_lbl: String = format("while_exit_{}", [n.to_string()]);
 
             let ctx_head: EmitCtx = EmitCtx { next_reg: n, locals: ctx.locals, enums: ctx.enums, strings: ctx.strings, structs: ctx.structs, enum_types: ctx.enum_types, variant_payloads: ctx.variant_payloads, variant_slots: ctx.variant_slots, variant_slot_types: ctx.variant_slot_types };
-            let c: Emitted = emit_expr(cond_expr, ctx_head);
+            let c: Emitted = ctx_head.emit_expr(cond_expr);
             let cond_i1_reg: String = format("%t{}", [c.next_reg.to_string()]);
             let coerce_instr: String = format(
                 "  {} = icmp ne {} {}, 0",
@@ -1854,7 +1843,7 @@ partial fn emit_stmt(stmt: Value, ctx: EmitCtx) -> StmtOut {
                 variant_slots: ctx.variant_slots,
                 variant_slot_types: ctx.variant_slot_types,
             };
-            let body_out: StmtOut = emit_body(body_block, ctx_body);
+            let body_out: StmtOut = ctx_body.emit_body(body_block);
 
             let all_instrs: List[String] = [
                 format("  br label %{}", [head_lbl]),
@@ -1926,13 +1915,13 @@ partial fn emit_stmt(stmt: Value, ctx: EmitCtx) -> StmtOut {
                 }
             }
             if is_list_iter {
-                return emit_for_list(stmt, iter, loop_var, ctx)
+                return ctx.emit_for_list(stmt, iter, loop_var)
             }
             let range_args: List[Value] = jarr(iter_kind, "args");
             let ctx0: EmitCtx = EmitCtx { next_reg: ctx.next_reg, locals: ctx.locals, enums: ctx.enums, strings: ctx.strings, structs: ctx.structs, enum_types: ctx.enum_types, variant_payloads: ctx.variant_payloads, variant_slots: ctx.variant_slots, variant_slot_types: ctx.variant_slot_types };
-            let lo: Emitted = emit_expr(range_args.get(0).unwrap_or(Value::Null), ctx0);
+            let lo: Emitted = ctx0.emit_expr(range_args.get(0).unwrap_or(Value::Null));
             let ctx1: EmitCtx = EmitCtx { next_reg: lo.next_reg, locals: ctx.locals, enums: ctx.enums, strings: ctx.strings, structs: ctx.structs, enum_types: ctx.enum_types, variant_payloads: ctx.variant_payloads, variant_slots: ctx.variant_slots, variant_slot_types: ctx.variant_slot_types };
-            let hi: Emitted = emit_expr(range_args.get(1).unwrap_or(Value::Null), ctx1);
+            let hi: Emitted = ctx1.emit_expr(range_args.get(1).unwrap_or(Value::Null));
 
             let n: Int = hi.next_reg;
             let head_lbl: String = format("for_head_{}", [n.to_string()]);
@@ -1982,7 +1971,7 @@ partial fn emit_stmt(stmt: Value, ctx: EmitCtx) -> StmtOut {
                 variant_slot_types: ctx.variant_slot_types,
             };
             let body_block: Value = jget(stmt, "body");
-            let body_out: StmtOut = emit_body(body_block, ctx_body);
+            let body_out: StmtOut = ctx_body.emit_body(body_block);
 
             // Post-body: load, increment, store, jump to head.
             let inc_load: String = format(
@@ -2059,9 +2048,10 @@ partial fn emit_stmt(stmt: Value, ctx: EmitCtx) -> StmtOut {
 // `tail_reg` (from the last Expr stmt) is the fn's return value; if the
 // body ends on a non-Expr stmt tail_reg is "" and callers use "0" as the
 // stand-in.
-pub partial fn emit_body(body: Value, initial: EmitCtx) -> StmtOut {
+pub partial fn EmitCtx::emit_body(self, body: Value) -> StmtOut {
+    let ctx: EmitCtx = self;
     let stmts: List[Value] = jarr(body, "stmts");
-    let cur_ctx: ref EmitCtx = initial;
+    let cur_ctx: ref EmitCtx = ctx;
     let accum: ref List[String] = [];
     let last: ref String = "";
     let last_ty: ref String = "";
@@ -2071,7 +2061,7 @@ pub partial fn emit_body(body: Value, initial: EmitCtx) -> StmtOut {
     // enclosing if needs this to name the correct predecessor.
     let cur_label: ref String = "";
     for s in stmts {
-        let out: StmtOut = emit_stmt(s, cur_ctx);
+        let out: StmtOut = cur_ctx.emit_stmt(s);
         for line in out.instrs { accum.push(line) }
         cur_ctx = out.ctx;
         last = out.tail_reg;

@@ -115,7 +115,7 @@ partial fn emit_fn_def(
         .join(", ");
     let ret_ty: String = tir_ty_to_llvm_full(jget(f, "ret_ty"), s1, e1);
     let ctx: EmitCtx = initial_ctx_from_params(jarr(f, "params"), enums, strings, structs, enum_types, variant_payloads, variant_slots, variant_slot_types);
-    let out: StmtOut = emit_body(jget(f, "body"), ctx);
+    let out: StmtOut = ctx.emit_body(jget(f, "body"));
     let body_instrs: String = out.instrs.join("\n");
     let ret_val: String = if out.tail_reg == "" { "0" } else { out.tail_reg };
     // A1m: `void` returns are argument-free (`ret void`, not `ret void 0`).
@@ -150,7 +150,7 @@ partial fn emit_main_def(
 ) -> String {
     let no_params: List[Value] = [];
     let ctx: EmitCtx = initial_ctx_from_params(no_params, enums, strings, structs, enum_types, variant_payloads, variant_slots, variant_slot_types);
-    let out: StmtOut = emit_body(jget(f, "body"), ctx);
+    let out: StmtOut = ctx.emit_body(jget(f, "body"));
     let body_instrs: String = out.instrs.join("\n");
     let ret_val: String = if out.tail_reg == "" { "0" } else { out.tail_reg };
     let ret_ty_tag: String = jtag(jget(f, "ret_ty"));
