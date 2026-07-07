@@ -18,8 +18,11 @@
 use std.io.{read, stdin}
 use std.json.{decode, Value}
 use emit_context::EmitCtx;
-use backend_llvm::emit_body;
+use emit_stmts::emit_body;
+use emit_exprs::emit_expr;
+use emit_match::emit_match;
 use emit_helpers::jstr;
+use backend_llvm::default_target_triple;
 use emit_program::emit_program;
 
 partial fn main() -> Unit ! Console {

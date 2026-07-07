@@ -1,16 +1,600 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Schuberg Philis
 //
-// compiler/backends/llvm/emit_stmts.mvl — statement emission
-// (issue #1118, Phase A0 scaffold).
+// compiler/backends/llvm/emit_stmts.mvl — TIR statement → LLVM IR
+// emission (#1118, #1693 step 4b).
 //
-// Corresponds to src/mvl/backends/llvm_text/emit_stmts_tir.rs in the Rust
-// compiler (~667 LOC).
-//
-// A0 status: placeholder. Let, Assign, Return, If, While, For, Match land in A1.
+// Corresponds to src/mvl/backends/llvm_text/emit_stmts_tir.rs in the
+// Rust backend.  Contains the StmtOut-returning methods on EmitCtx:
+//   - EmitCtx::emit_for_list — for-in-list lowering
+//   - EmitCtx::emit_stmt     — dispatch on TIR StmtKind
+//   - EmitCtx::emit_body     — public entry: emit each stmt in order
 
-// Emit LLVM IR for a TIR statement; returns the emitted instruction text
-// (empty string in the A0 scaffold).
-partial fn emit_stmt(kind_tag: String) -> String {
-    ""
+use std.collections.{Map}
+use std.json.{Value}
+use emit_context::LocalRef;
+use emit_context::StructInfo;
+use emit_context::EmitCtx;
+use emit_context::Emitted;
+use emit_context::StmtOut;
+use emit_context::emitted_imm;
+use emit_context::extend_locals;
+use emit_context::clone_locals;
+use emit_context::clone_enums;
+use emit_context::clone_strings;
+use emit_context::clone_structs;
+use emit_context::clone_variant_slots;
+use emit_context::clone_variant_slot_types;
+use emit_types::tir_ty_to_llvm;
+use emit_types::tir_ty_to_llvm_ctx;
+use emit_types::tir_ty_to_llvm_full;
+use emit_types::is_aggregate_ty;
+use emit_helpers::jstr;
+use emit_helpers::jarr;
+use emit_helpers::jget;
+use emit_helpers::jtag;
+use emit_helpers::jbool;
+use emit_helpers::lbrace;
+use emit_helpers::rbrace;
+use emit_helpers::extract_else_block;
+
+// A1k: emit `for x in xs { body }` where xs has TIR type `List[Int]`.
+//
+// Extracts the length and data pointer once from the `{i64, ptr}`
+// aggregate, then iterates via an alloca'd i64 counter that GEP+loads
+// each element into a fresh SSA reg.  The loop variable is bound as a
+// NON-ref local pointing at that fresh reg — reads inside the body
+// see the current iteration's value without an alloca of their own.
+pub partial fn EmitCtx::emit_for_list(self, stmt: Value, iter: Value, loop_var: String) -> StmtOut {
+    let ctx: EmitCtx = self;
+    let iter_ctx: EmitCtx = EmitCtx {
+        next_reg: ctx.next_reg, locals: ctx.locals, enums: ctx.enums,
+        strings: ctx.strings, structs: ctx.structs,
+        enum_types: ctx.enum_types, variant_payloads: ctx.variant_payloads,
+        variant_slots: ctx.variant_slots,
+        variant_slot_types: ctx.variant_slot_types,
+    };
+    let list: Emitted = iter_ctx.emit_expr(iter);
+    // A1u: element type from iter's TIR ty.inner — was hardcoded i64.
+    let elem_ty_tir: Value = jget(jget(iter, "ty"), "inner");
+    let elem_ty_llvm: String = tir_ty_to_llvm_full(elem_ty_tir, ctx.structs, ctx.enum_types);
+    let n0: Int = list.next_reg;
+    let len_reg: String = format("%t{}", [n0.to_string()]);
+    let data_reg: String = format("%t{}", [(n0 + 1).to_string()]);
+    let idx_addr: String = format("%{}.i.addr", [loop_var]);
+    let head_lbl: String = format("for_head_{}", [n0.to_string()]);
+    let body_lbl: String = format("for_body_{}", [n0.to_string()]);
+    let exit_lbl: String = format("for_exit_{}", [n0.to_string()]);
+
+    let extract_len: String = format(
+        "  {} = extractvalue {i64, ptr} {}, 0",
+        [len_reg, list.reg]
+    );
+    let extract_data: String = format(
+        "  {} = extractvalue {i64, ptr} {}, 1",
+        [data_reg, list.reg]
+    );
+    let alloca_idx: String = format("  {} = alloca i64", [idx_addr]);
+    let init_idx: String = format("  store i64 0, ptr {}", [idx_addr]);
+
+    // Head: load idx, compare against len, branch.
+    let idx_val: String = format("%t{}", [(n0 + 2).to_string()]);
+    let cmp_reg: String = format("%t{}", [(n0 + 3).to_string()]);
+    let head_load: String = format(
+        "  {} = load i64, ptr {}", [idx_val, idx_addr]
+    );
+    let head_cmp: String = format(
+        "  {} = icmp slt i64 {}, {}", [cmp_reg, idx_val, len_reg]
+    );
+    let head_br: String = format(
+        "  br i1 {}, label %{}, label %{}", [cmp_reg, body_lbl, exit_lbl]
+    );
+
+    // Body: reload idx (SSA reg from head is not visible after br),
+    // GEP + load element, then run body.  Bind loop_var to the loaded
+    // element as a non-ref scalar so body reads reuse the SSA reg.
+    let body_idx: String = format("%t{}", [(n0 + 4).to_string()]);
+    let elem_ptr: String = format("%t{}", [(n0 + 5).to_string()]);
+    let elem_val: String = format("%t{}", [(n0 + 6).to_string()]);
+    let body_load_idx: String = format(
+        "  {} = load i64, ptr {}", [body_idx, idx_addr]
+    );
+    let elem_ty_snap: String = elem_ty_llvm.concat("");
+    let elem_ty_snap2: String = elem_ty_llvm.concat("");
+    let elem_ty_snap3: String = elem_ty_llvm.concat("");
+    let body_gep: String = format(
+        "  {} = getelementptr {}, ptr {}, i64 {}",
+        [elem_ptr.concat(""), elem_ty_snap, data_reg, body_idx]
+    );
+    let body_load_elem: String = format(
+        "  {} = load {}, ptr {}", [elem_val.concat(""), elem_ty_snap2, elem_ptr]
+    );
+    let loop_entry: LocalRef = LocalRef {
+        reg: elem_val, ty: elem_ty_snap3, is_ref: false,
+    };
+    let body_locals: Map[String, LocalRef] =
+        extend_locals(ctx.locals, loop_var, loop_entry);
+    let ctx_body: EmitCtx = EmitCtx {
+        next_reg: n0 + 7,
+        locals: body_locals,
+        enums: ctx.enums,
+        strings: ctx.strings,
+        structs: ctx.structs,
+        enum_types: ctx.enum_types,
+        variant_payloads: ctx.variant_payloads,
+        variant_slots: ctx.variant_slots,
+        variant_slot_types: ctx.variant_slot_types,
+    };
+    let body_block: Value = jget(stmt, "body");
+    let body_out: StmtOut = ctx_body.emit_body(body_block);
+
+    // Post-body: reload idx, increment, store, jump to head.
+    let inc_load_reg: String = format("%t{}", [body_out.ctx.next_reg.to_string()]);
+    let inc_val: String = format("%t{}", [(body_out.ctx.next_reg + 1).to_string()]);
+    let inc_load_line: String = format(
+        "  {} = load i64, ptr {}", [inc_load_reg, idx_addr]
+    );
+    let inc_add: String = format(
+        "  {} = add i64 {}, 1", [inc_val, inc_load_reg]
+    );
+    let inc_store: String = format(
+        "  store i64 {}, ptr {}", [inc_val, idx_addr]
+    );
+
+    let all_instrs: List[String] = list.instrs
+        .concat([
+            extract_len,
+            extract_data,
+            alloca_idx,
+            init_idx,
+            format("  br label %{}", [head_lbl]),
+            format("{}:", [head_lbl]),
+            head_load,
+            head_cmp,
+            head_br,
+            format("{}:", [body_lbl]),
+            body_load_idx,
+            body_gep,
+            body_load_elem,
+        ])
+        .concat(body_out.instrs)
+        .concat([
+            inc_load_line,
+            inc_add,
+            inc_store,
+            format("  br label %{}", [head_lbl]),
+            format("{}:", [exit_lbl]),
+        ]);
+
+    StmtOut {
+        ctx: EmitCtx {
+            next_reg: body_out.ctx.next_reg + 2,
+            locals: ctx.locals,
+            enums: ctx.enums,
+            strings: ctx.strings,
+            structs: ctx.structs,
+            enum_types: ctx.enum_types,
+            variant_payloads: ctx.variant_payloads,
+            variant_slots: ctx.variant_slots,
+            variant_slot_types: ctx.variant_slot_types,
+        },
+        instrs: all_instrs,
+        tail_reg: "",
+        tail_ty: "",
+        last_label: exit_lbl,
+    }
 }
+
+pub partial fn EmitCtx::emit_stmt(self, stmt: Value) -> StmtOut {
+    let ctx: EmitCtx = self;
+    let t: String = jtag(stmt);
+    match t {
+        "Expr" => {
+            let e: Emitted = ctx.emit_expr(jget(stmt, "expr"));
+            StmtOut {
+                ctx: EmitCtx { next_reg: e.next_reg, locals: ctx.locals, enums: ctx.enums, strings: ctx.strings, structs: ctx.structs, enum_types: ctx.enum_types, variant_payloads: ctx.variant_payloads, variant_slots: ctx.variant_slots, variant_slot_types: ctx.variant_slot_types },
+                instrs: e.instrs,
+                tail_reg: e.reg,
+                tail_ty: e.ty,
+                last_label: e.last_label,
+            }
+        },
+        "If" => {
+            // Stmt-form if. Both arms are TirBlocks (else_br is flat, not a
+            // TirExpr). Delegates to emit_if_blocks so the trailing value of
+            // each branch flows out via the phi — supports `fn f() -> Int { ...
+            // if cond { a } else { b } }` where the trailing If IS the return
+            // expression.
+            let else_block: Value = extract_else_block(jget(stmt, "else_br"));
+            let e: Emitted = ctx.emit_if_blocks(jget(stmt, "cond"), jget(stmt, "then"), else_block);
+            StmtOut {
+                ctx: EmitCtx { next_reg: e.next_reg, locals: ctx.locals, enums: ctx.enums, strings: ctx.strings, structs: ctx.structs, enum_types: ctx.enum_types, variant_payloads: ctx.variant_payloads, variant_slots: ctx.variant_slots, variant_slot_types: ctx.variant_slot_types },
+                instrs: e.instrs,
+                tail_reg: e.reg,
+                tail_ty: e.ty,
+                last_label: e.last_label,
+            }
+        },
+        "Match" => {
+            // Stmt-form match. Same shape as expr-form; result flows out
+            // as the fn's return value when the match is the trailing stmt.
+            let e: Emitted = ctx.emit_match(jget(stmt, "scrutinee"), jarr(stmt, "arms"));
+            StmtOut {
+                ctx: EmitCtx { next_reg: e.next_reg, locals: ctx.locals, enums: ctx.enums, strings: ctx.strings, structs: ctx.structs, enum_types: ctx.enum_types, variant_payloads: ctx.variant_payloads, variant_slots: ctx.variant_slots, variant_slot_types: ctx.variant_slot_types },
+                instrs: e.instrs,
+                tail_reg: e.reg,
+                tail_ty: e.ty,
+                last_label: e.last_label,
+            }
+        },
+        "Let" => {
+            let pat: Value = jget(stmt, "pattern");
+            let name: String = jstr(pat, "name");
+            let init: Emitted = ctx.emit_expr(jget(stmt, "init"));
+            // Ref-typed lets (`let x: ref T = ...`) map to an alloca ptr so
+            // later Assign stmts can `store` into the same address without
+            // rewriting every subsequent Var read.
+            let is_ref_ty: Bool = jtag(jget(stmt, "ty")) == "Ref";
+            if is_ref_ty {
+                let addr_reg: String = format("%{}.addr", [name]);
+                let alloca_line: String = format("  {} = alloca {}", [addr_reg, init.ty]);
+                let store_line: String = format(
+                    "  store {} {}, ptr {}",
+                    [init.ty, init.reg, addr_reg]
+                );
+                let entry: LocalRef = LocalRef {
+                    reg: addr_reg,
+                    ty: init.ty,
+                    is_ref: true,
+                };
+                let new_locals: Map[String, LocalRef] =
+                    extend_locals(ctx.locals, name, entry);
+                StmtOut {
+                    ctx: EmitCtx { next_reg: init.next_reg, locals: new_locals, enums: ctx.enums, strings: ctx.strings, structs: ctx.structs, enum_types: ctx.enum_types, variant_payloads: ctx.variant_payloads, variant_slots: ctx.variant_slots, variant_slot_types: ctx.variant_slot_types },
+                    instrs: init.instrs.concat([alloca_line, store_line]),
+                    tail_reg: "",
+                    tail_ty: "",
+                    last_label: init.last_label,
+                }
+            } else {
+                let entry: LocalRef = LocalRef {
+                    reg: init.reg,
+                    ty: init.ty,
+                    is_ref: false,
+                };
+                let new_locals: Map[String, LocalRef] =
+                    extend_locals(ctx.locals, name, entry);
+                StmtOut {
+                    ctx: EmitCtx { next_reg: init.next_reg, locals: new_locals, enums: ctx.enums, strings: ctx.strings, structs: ctx.structs, enum_types: ctx.enum_types, variant_payloads: ctx.variant_payloads, variant_slots: ctx.variant_slots, variant_slot_types: ctx.variant_slot_types },
+                    instrs: init.instrs,
+                    tail_reg: "",
+                    tail_ty: "",
+                    last_label: init.last_label,
+                }
+            }
+        },
+        "Assign" => {
+            // Only Ident targets in A1d — field/index assigns come later.
+            let target: Value = jget(stmt, "target");
+            let target_tag: String = jtag(target);
+            let rhs: Emitted = ctx.emit_expr(jget(stmt, "value"));
+            let rhs_last: String = rhs.last_label;
+            if target_tag == "Ident" {
+                let name: String = jstr(target, "name");
+                match ctx.local_of(name) {
+                    Some(op) => {
+                        let store_line: String = format(
+                            "  store {} {}, ptr {}",
+                            [rhs.ty, rhs.reg, op.reg]
+                        );
+                        StmtOut {
+                            ctx: EmitCtx {
+                                next_reg: rhs.next_reg,
+                                locals: ctx.locals,
+                enums: ctx.enums,
+                strings: ctx.strings,
+                structs: ctx.structs,
+                enum_types: ctx.enum_types,
+                variant_payloads: ctx.variant_payloads,
+                variant_slots: ctx.variant_slots,
+                variant_slot_types: ctx.variant_slot_types,
+                            },
+                            instrs: rhs.instrs.concat([store_line]),
+                            tail_reg: "",
+                            tail_ty: "",
+                            last_label: rhs_last,
+                        }
+                    },
+                    None => StmtOut {
+                        ctx: EmitCtx { next_reg: rhs.next_reg, locals: ctx.locals, enums: ctx.enums, strings: ctx.strings, structs: ctx.structs, enum_types: ctx.enum_types, variant_payloads: ctx.variant_payloads, variant_slots: ctx.variant_slots, variant_slot_types: ctx.variant_slot_types },
+                        instrs: rhs.instrs,
+                        tail_reg: "",
+                        tail_ty: "",
+                        last_label: rhs_last,
+                    },
+                }
+            } else {
+                // Unsupported LValue shape (e.g. Field) — swallow the value
+                // instructions and continue.
+                StmtOut {
+                    ctx: EmitCtx { next_reg: rhs.next_reg, locals: ctx.locals, enums: ctx.enums, strings: ctx.strings, structs: ctx.structs, enum_types: ctx.enum_types, variant_payloads: ctx.variant_payloads, variant_slots: ctx.variant_slots, variant_slot_types: ctx.variant_slot_types },
+                    instrs: rhs.instrs,
+                    tail_reg: "",
+                    tail_ty: "",
+                    last_label: rhs_last,
+                }
+            }
+        },
+        "While" => {
+            // Lower `while cond { body }` to:
+            //     br label %head
+            //   head:
+            //     <cond>
+            //     %c_i1 = icmp ne <ty> <cond.reg>, 0
+            //     br i1 %c_i1, label %body, label %exit
+            //   body:
+            //     <body>
+            //     br label %head
+            //   exit:
+            // The MVL `decreases` clause is a termination proof consumed by
+            // the checker; it has no runtime effect and is ignored here.
+            let cond_expr: Value = jget(stmt, "cond");
+            let body_block: Value = jget(stmt, "body");
+            let n: Int = ctx.next_reg;
+            let head_lbl: String = format("while_head_{}", [n.to_string()]);
+            let body_lbl: String = format("while_body_{}", [n.to_string()]);
+            let exit_lbl: String = format("while_exit_{}", [n.to_string()]);
+
+            let ctx_head: EmitCtx = EmitCtx { next_reg: n, locals: ctx.locals, enums: ctx.enums, strings: ctx.strings, structs: ctx.structs, enum_types: ctx.enum_types, variant_payloads: ctx.variant_payloads, variant_slots: ctx.variant_slots, variant_slot_types: ctx.variant_slot_types };
+            let c: Emitted = ctx_head.emit_expr(cond_expr);
+            let cond_i1_reg: String = format("%t{}", [c.next_reg.to_string()]);
+            let coerce_instr: String = format(
+                "  {} = icmp ne {} {}, 0",
+                [cond_i1_reg, c.ty, c.reg]
+            );
+
+            let ctx_body: EmitCtx = EmitCtx {
+                next_reg: c.next_reg + 1,
+                locals: ctx.locals,
+                enums: ctx.enums,
+                strings: ctx.strings,
+                structs: ctx.structs,
+                enum_types: ctx.enum_types,
+                variant_payloads: ctx.variant_payloads,
+                variant_slots: ctx.variant_slots,
+                variant_slot_types: ctx.variant_slot_types,
+            };
+            let body_out: StmtOut = ctx_body.emit_body(body_block);
+
+            let all_instrs: List[String] = [
+                format("  br label %{}", [head_lbl]),
+                format("{}:", [head_lbl]),
+            ]
+                .concat(c.instrs)
+                .concat([
+                    coerce_instr,
+                    format(
+                        "  br i1 {}, label %{}, label %{}",
+                        [cond_i1_reg, body_lbl, exit_lbl]
+                    ),
+                    format("{}:", [body_lbl]),
+                ])
+                .concat(body_out.instrs)
+                .concat([
+                    format("  br label %{}", [head_lbl]),
+                    format("{}:", [exit_lbl]),
+                ]);
+
+            StmtOut {
+                ctx: EmitCtx {
+                    next_reg: body_out.ctx.next_reg,
+                    locals: ctx.locals,
+                enums: ctx.enums,
+                strings: ctx.strings,
+                structs: ctx.structs,
+                enum_types: ctx.enum_types,
+                variant_payloads: ctx.variant_payloads,
+                variant_slots: ctx.variant_slots,
+                variant_slot_types: ctx.variant_slot_types,
+                },
+                instrs: all_instrs,
+                tail_reg: "",
+                tail_ty: "",
+                last_label: exit_lbl,
+            }
+        },
+        "For" => {
+            // A1j/A1k: `for <p> in <iter> { body }` supports two iterator
+            // shapes:
+            //   - `range(lo, hi)` — an inclusive-lower, exclusive-upper
+            //     integer range.  Loop var alloca'd; head compares against
+            //     the loaded counter, body increments-and-stores.
+            //   - `xs: List[Int]` — index into a `{i64, ptr}` aggregate.
+            //     Length extracted once, data ptr extracted once, GEP+load
+            //     per iteration.  Loop var is a NON-ref scalar (loaded
+            //     fresh each iteration).
+            let pattern: Value = jget(stmt, "pattern");
+            let loop_var: String = jstr(pattern, "name");
+            let iter: Value = jget(stmt, "iter");
+            let iter_kind: Value = jget(iter, "kind");
+            let iter_name: String = jstr(iter_kind, "name");
+            let iter_ty_tag: String = jtag(jget(iter, "ty"));
+            // `range(lo, hi)` is TIR-typed as List[Int] but has a well-known
+            // shape — special-case it into a counter-based loop that avoids
+            // allocating the intermediate list.  Any other `List[Int]`-typed
+            // iterator uses the general list-iteration path.
+            let is_range: Bool = jtag(iter_kind) == "FnCall" && iter_name == "range";
+            let is_list_iter: Bool = !is_range && iter_ty_tag == "List";
+            if !is_range && !is_list_iter {
+                // Unsupported iterator shape — swallow silently for now.
+                return StmtOut {
+                    ctx: ctx,
+                    instrs: [],
+                    tail_reg: "",
+                    tail_ty: "",
+                    last_label: "",
+                }
+            }
+            if is_list_iter {
+                return ctx.emit_for_list(stmt, iter, loop_var)
+            }
+            let range_args: List[Value] = jarr(iter_kind, "args");
+            let ctx0: EmitCtx = EmitCtx { next_reg: ctx.next_reg, locals: ctx.locals, enums: ctx.enums, strings: ctx.strings, structs: ctx.structs, enum_types: ctx.enum_types, variant_payloads: ctx.variant_payloads, variant_slots: ctx.variant_slots, variant_slot_types: ctx.variant_slot_types };
+            let lo: Emitted = ctx0.emit_expr(range_args.get(0).unwrap_or(Value::Null));
+            let ctx1: EmitCtx = EmitCtx { next_reg: lo.next_reg, locals: ctx.locals, enums: ctx.enums, strings: ctx.strings, structs: ctx.structs, enum_types: ctx.enum_types, variant_payloads: ctx.variant_payloads, variant_slots: ctx.variant_slots, variant_slot_types: ctx.variant_slot_types };
+            let hi: Emitted = ctx1.emit_expr(range_args.get(1).unwrap_or(Value::Null));
+
+            let n: Int = hi.next_reg;
+            let head_lbl: String = format("for_head_{}", [n.to_string()]);
+            let body_lbl: String = format("for_body_{}", [n.to_string()]);
+            let exit_lbl: String = format("for_exit_{}", [n.to_string()]);
+            let addr_reg: String = format("%{}.addr", [loop_var]);
+            let alloca_line: String = format("  {} = alloca i64", [addr_reg]);
+            let init_store: String = format(
+                "  store i64 {}, ptr {}",
+                [lo.reg, addr_reg]
+            );
+
+            // Head block: load counter, compare to hi, branch.
+            let head_val: String = format("%t{}", [n.to_string()]);
+            let head_cmp: String = format("%t{}", [(n + 1).to_string()]);
+            let head_load: String = format(
+                "  {} = load i64, ptr {}",
+                [head_val, addr_reg]
+            );
+            let head_cmp_line: String = format(
+                "  {} = icmp slt i64 {}, {}",
+                [head_cmp, head_val, hi.reg]
+            );
+            let head_br: String = format(
+                "  br i1 {}, label %{}, label %{}",
+                [head_cmp, body_lbl, exit_lbl]
+            );
+
+            // Body ctx: bind loop_var as a ref-local so body reads see it
+            // via load, and the post-body increment stores back.
+            let loop_entry: LocalRef = LocalRef {
+                reg: addr_reg,
+                ty: "i64",
+                is_ref: true,
+            };
+            let body_locals: Map[String, LocalRef] =
+                extend_locals(ctx.locals, loop_var, loop_entry);
+            let ctx_body: EmitCtx = EmitCtx {
+                next_reg: n + 2,
+                locals: body_locals,
+                enums: ctx.enums,
+                strings: ctx.strings,
+                structs: ctx.structs,
+                enum_types: ctx.enum_types,
+                variant_payloads: ctx.variant_payloads,
+                variant_slots: ctx.variant_slots,
+                variant_slot_types: ctx.variant_slot_types,
+            };
+            let body_block: Value = jget(stmt, "body");
+            let body_out: StmtOut = ctx_body.emit_body(body_block);
+
+            // Post-body: load, increment, store, jump to head.
+            let inc_load: String = format(
+                "%t{}", [body_out.ctx.next_reg.to_string()]
+            );
+            let inc_val: String = format(
+                "%t{}", [(body_out.ctx.next_reg + 1).to_string()]
+            );
+            let inc_load_line: String = format(
+                "  {} = load i64, ptr {}",
+                [inc_load, addr_reg]
+            );
+            let inc_add: String = format(
+                "  {} = add i64 {}, 1",
+                [inc_val, inc_load]
+            );
+            let inc_store: String = format(
+                "  store i64 {}, ptr {}",
+                [inc_val, addr_reg]
+            );
+
+            let all_instrs: List[String] = lo.instrs
+                .concat(hi.instrs)
+                .concat([
+                    alloca_line,
+                    init_store,
+                    format("  br label %{}", [head_lbl]),
+                    format("{}:", [head_lbl]),
+                    head_load,
+                    head_cmp_line,
+                    head_br,
+                    format("{}:", [body_lbl]),
+                ])
+                .concat(body_out.instrs)
+                .concat([
+                    inc_load_line,
+                    inc_add,
+                    inc_store,
+                    format("  br label %{}", [head_lbl]),
+                    format("{}:", [exit_lbl]),
+                ]);
+
+            StmtOut {
+                ctx: EmitCtx {
+                    next_reg: body_out.ctx.next_reg + 2,
+                    locals: ctx.locals,
+                enums: ctx.enums,
+                strings: ctx.strings,
+                structs: ctx.structs,
+                enum_types: ctx.enum_types,
+                variant_payloads: ctx.variant_payloads,
+                variant_slots: ctx.variant_slots,
+                variant_slot_types: ctx.variant_slot_types,
+                },
+                instrs: all_instrs,
+                tail_reg: "",
+                tail_ty: "",
+                last_label: exit_lbl,
+            }
+        },
+        _ => StmtOut {
+            ctx: ctx,
+            instrs: [],
+            tail_reg: "",
+            tail_ty: "",
+            last_label: "",
+        },
+    }
+}
+
+// Fold statements, accumulating instructions and threading ctx. The final
+// `tail_reg` (from the last Expr stmt) is the fn's return value; if the
+// body ends on a non-Expr stmt tail_reg is "" and callers use "0" as the
+// stand-in.
+pub partial fn EmitCtx::emit_body(self, body: Value) -> StmtOut {
+    let ctx: EmitCtx = self;
+    let stmts: List[Value] = jarr(body, "stmts");
+    let cur_ctx: ref EmitCtx = ctx;
+    let accum: ref List[String] = [];
+    let last: ref String = "";
+    let last_ty: ref String = "";
+    // Track the innermost basic block currently in scope.  Each statement
+    // that introduces control flow reports back the label of its exit
+    // block; straight-line stmts leave it unchanged.  A trailing phi in the
+    // enclosing if needs this to name the correct predecessor.
+    let cur_label: ref String = "";
+    for s in stmts {
+        let out: StmtOut = cur_ctx.emit_stmt(s);
+        for line in out.instrs { accum.push(line) }
+        cur_ctx = out.ctx;
+        last = out.tail_reg;
+        last_ty = out.tail_ty;
+        if out.last_label != "" {
+            cur_label = out.last_label;
+        }
+    }
+    StmtOut {
+        ctx: cur_ctx,
+        instrs: accum,
+        tail_reg: last,
+        tail_ty: last_ty,
+        last_label: cur_label,
+    }
+}
+

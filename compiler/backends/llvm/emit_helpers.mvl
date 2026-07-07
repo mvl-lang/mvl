@@ -62,3 +62,68 @@ pub partial fn llvm_ty_of(mvl_ty: String) -> String {
         _      => "i64",
     }
 }
+
+//
+// A1g: Option[Int] lowers to a `{i8, i64}` tagged-union struct — first byte
+// is the variant tag (0 = None, 1 = Some), second word is the Int payload
+// (uninitialized for None).  Other Option[T] and general enums are deferred.
+// A1o: split "Enum::Variant" → "Enum".  Returns the empty string
+// if `s` has no "::" (e.g. bare `None`).
+pub partial fn enum_name_of_variant(s: String) -> String {
+    let parts: List[String] = s.split("::");
+    match parts.get(0) {
+        Some(p) => p,
+        None => "",
+    }
+}
+
+// Extract the TirBlock (or a synthesized single-stmt block) for the else
+// branch of an if.  Handles four shapes:
+//
+//   - Expr-form Block: `else_br` is a TirExpr with `kind.tag == "Block"` —
+//     return `kind.block`.
+//   - Expr-form else-if: `else_br` is a TirExpr with `kind.tag == "If"` —
+//     wrap the entire TirExpr as a single Expr-stmt so `emit_body` recurses
+//     back through `emit_expr` and hits the "If" case.
+//   - Stmt-form Block: `{tag: "Block", block}` — return `block`.
+//   - Stmt-form else-if: `{tag: "If", stmt: <TirStmt::If>}` — wrap the
+//     nested If-stmt as a single-stmt block so `emit_body` recurses through
+//     the "If" case of `emit_stmt`.
+pub partial fn extract_else_block(else_br: Value) -> Value {
+    let inner_kind: Value = jget(else_br, "kind");
+    let inner_tag: String = jtag(inner_kind);
+    if inner_tag == "Block" {
+        return jget(inner_kind, "block");
+    }
+    if inner_tag == "If" {
+        // Wrap the whole else_br TirExpr as an Expr statement.
+        return wrap_stmts_as_block([make_expr_stmt(else_br)]);
+    }
+    if jtag(else_br) == "Block" {
+        return jget(else_br, "block");
+    }
+    if jtag(else_br) == "If" {
+        // Wrap the nested If-stmt as a single-stmt block.
+        return wrap_stmts_as_block([jget(else_br, "stmt")]);
+    }
+    // Missing else — synthesize an empty block so emit_if_blocks phi'd
+    // else-arm still has somewhere to go.
+    wrap_stmts_as_block([])
+}
+
+// Build a synthetic TirBlock JSON containing `stmts` verbatim.  Used when
+// wrapping a nested else-if into a shape emit_body can walk.
+pub partial fn wrap_stmts_as_block(stmts: List[Value]) -> Value {
+    let m: ref Map[String, Value] = Map::new();
+    m.insert("stmts", Value::Array(stmts));
+    Value::Object(m)
+}
+
+// Build a synthetic `{tag: "Expr", expr: <e>}` statement wrapping a TirExpr.
+pub partial fn make_expr_stmt(e: Value) -> Value {
+    let m: ref Map[String, Value] = Map::new();
+    m.insert("tag", Value::String("Expr"));
+    m.insert("expr", e);
+    Value::Object(m)
+}
+
