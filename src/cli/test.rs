@@ -65,6 +65,54 @@ fn is_expect_fail(path: &std::path::Path) -> bool {
         .unwrap_or(false)
 }
 
+/// Returns true if every `test fn` in the file is a typecheck-only fixture —
+/// name ends with `_typecheck` OR the entire body is a sequence of `touch(...)`
+/// calls (the MVL corpus convention for a smoke test that verifies the
+/// declarations parse and type-check but never runs).
+///
+/// `mvl test` transpiles fully to a Rust crate and links against the runtime.
+/// Corpus files that reference undeclared types (`Channel`, `Buffer`,
+/// `monitor`, etc.), rely on non-emitted stdlib methods (`IoError::user_message`),
+/// or otherwise cannot round-trip to a runnable Rust program still parse and
+/// type-check cleanly under MVL's own rules — that's what `make test-corpus`
+/// exercises.  Trying to *compile* them as part of the shared test crate
+/// produces cascading rustc errors from code that was never meant to run.
+///
+/// A body of only `touch(x)` (or `touch(&x); touch(&y);`) is the MVL idiom for
+/// "reference this identifier so the linter records it as used; no runtime
+/// behaviour intended."  Skipping such files is safe: `mvl check` (and thus
+/// `make test-corpus`) still validates their contents (#1707 phase 8).
+fn is_typecheck_only(prog: &mvl::mvl::parser::ast::Program) -> bool {
+    use mvl::mvl::parser::ast::{Expr, Stmt};
+    let mut saw_test = false;
+    for decl in &prog.declarations {
+        if let Decl::Fn(fd) = decl {
+            if !fd.is_test {
+                continue;
+            }
+            saw_test = true;
+            if fd.name.ends_with("_typecheck") {
+                continue;
+            }
+            // Fall back to a body-shape check: every statement is a `touch(...)` call.
+            let all_touches = fd.body.stmts.iter().all(|stmt| {
+                if let Stmt::Expr { expr, .. } = stmt {
+                    matches!(
+                        expr,
+                        Expr::FnCall { name, .. } if name == "touch"
+                    )
+                } else {
+                    false
+                }
+            });
+            if !all_touches {
+                return false;
+            }
+        }
+    }
+    saw_test
+}
+
 pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
     if quiet && verbose {
         eprintln!(
@@ -367,7 +415,10 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
                         .declarations
                         .iter()
                         .any(|d| matches!(d, Decl::Fn(fd) if fd.is_test));
-                    has_test.then_some(prog)
+                    if !has_test || is_typecheck_only(&prog) {
+                        return None;
+                    }
+                    Some(prog)
                 })
                 .collect();
 
@@ -598,6 +649,14 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
             }
         });
         if !has_tests {
+            continue;
+        }
+        // Skip files whose test fns are purely typecheck-only — see
+        // `is_typecheck_only` (#1707 phase 8).  `make test-corpus` still
+        // validates them via `mvl check`; bundling them into the shared test
+        // crate only surfaces spurious rustc errors from code that MVL
+        // considers valid but references undeclared / runtime-only symbols.
+        if is_typecheck_only(&prog) {
             continue;
         }
         if !quiet {
