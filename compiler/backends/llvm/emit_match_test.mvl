@@ -1,0 +1,151 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// compiler/backends/llvm/emit_match_test.mvl — MVL unit tests for
+// EmitCtx::emit_match and EmitCtx::emit_match_body (#1693).
+//
+// Direct method-level coverage of the match lowering.  Small TIR JSON
+// snippets, minimal ctx, assertion on the emitted IR.  Enum-variant
+// dispatch (Some/None/Ok/Err + user variants) needs pre-populated
+// registries and is exercised via emit_program_test.mvl's end-to-end
+// pipeline instead.
+
+use std.collections.{Map}
+use std.json.{decode, Value}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+partial fn parse(src: String) -> Value {
+    match decode(src) {
+        Ok(v)  => v,
+        Err(_) => Value::Null,
+    }
+}
+
+partial fn empty_ctx() -> EmitCtx {
+    EmitCtx {
+        next_reg: 0,
+        locals: Map[String, LocalRef]::new(),
+        enums: Map[String, Int]::new(),
+        strings: Map[String, String]::new(),
+        structs: Map[String, StructInfo]::new(),
+        enum_types: Map[String, String]::new(),
+        variant_payloads: Map[String, Int]::new(),
+        variant_slots: Map[String, Map[String, Int]]::new(),
+        variant_slot_types: Map[String, List[String]]::new(),
+    }
+}
+
+partial fn contains_ir(instrs: List[String], needle: String) -> Bool {
+    instrs.join("\n").contains(needle)
+}
+
+// ── Literal Integer arms + Wildcard fallback ────────────────────────────────
+
+test fn match_int_literal_emits_icmp_eq() -> Unit {
+    // `match 42 { 42 => 100, _ => 999 }`.  The scrutinee is a Literal
+    // Integer immediate, so no scrutinee instrs; the arm dispatch is
+    // `icmp eq i64 42, 42` + branch, and the fallback arm is an
+    // unconditional `br label %match_arm_...`.
+    let scrutinee: Value = parse(
+        "{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"42\"}},\"ty\":{\"tag\":\"Int\"}}"
+    );
+    let arms: List[Value] = [
+        parse(
+            "{\"pattern\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"42\"}},"
+            .concat("\"body\":{\"tag\":\"Expr\",\"expr\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"100\"}},\"ty\":{\"tag\":\"Int\"}}}}")
+        ),
+        parse(
+            "{\"pattern\":{\"tag\":\"Wildcard\"},"
+            .concat("\"body\":{\"tag\":\"Expr\",\"expr\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"999\"}},\"ty\":{\"tag\":\"Int\"}}}}")
+        ),
+    ];
+    let e: Emitted = empty_ctx().emit_match(scrutinee, arms);
+    assert_eq(contains_ir(e.instrs, "icmp eq i64 42, 42"), true);
+    assert_eq(contains_ir(e.instrs, "match_arm_"), true);
+    assert_eq(contains_ir(e.instrs, "match_join_"), true);
+    // Two arms → phi merge over the return int.
+    assert_eq(contains_ir(e.instrs, "phi i64"), true)
+}
+
+// ── Multi-arm dispatch ───────────────────────────────────────────────────────
+
+test fn match_multiple_literal_arms_emit_cascaded_cmps() -> Unit {
+    // Three arms: 0, 1, wildcard.  Each literal arm emits its own icmp,
+    // and the fallback is one unconditional br.
+    let scrutinee: Value = parse(
+        "{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"1\"}},\"ty\":{\"tag\":\"Int\"}}"
+    );
+    let arms: List[Value] = [
+        parse(
+            "{\"pattern\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"0\"}},"
+            .concat("\"body\":{\"tag\":\"Expr\",\"expr\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"10\"}},\"ty\":{\"tag\":\"Int\"}}}}")
+        ),
+        parse(
+            "{\"pattern\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"1\"}},"
+            .concat("\"body\":{\"tag\":\"Expr\",\"expr\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"20\"}},\"ty\":{\"tag\":\"Int\"}}}}")
+        ),
+        parse(
+            "{\"pattern\":{\"tag\":\"Wildcard\"},"
+            .concat("\"body\":{\"tag\":\"Expr\",\"expr\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"99\"}},\"ty\":{\"tag\":\"Int\"}}}}")
+        ),
+    ];
+    let e: Emitted = empty_ctx().emit_match(scrutinee, arms);
+    // Both literal arms dispatch via `icmp eq i64 <scrut>, <pat>`.
+    assert_eq(contains_ir(e.instrs, "icmp eq i64 1, 0"), true);
+    assert_eq(contains_ir(e.instrs, "icmp eq i64 1, 1"), true);
+    // Fallback jumps unconditionally.
+    assert_eq(contains_ir(e.instrs, "br label %match_arm_"), true)
+}
+
+// ── Ident-binding fallback ──────────────────────────────────────────────────
+
+test fn match_ident_binding_is_fallback_and_reads_scrutinee() -> Unit {
+    // `match 7 { x => x }` — Ident pattern with no enum-variant name is
+    // treated as an unconditional fallback that binds `x` to the
+    // scrutinee reg (here the immediate "7").
+    let scrutinee: Value = parse(
+        "{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"7\"}},\"ty\":{\"tag\":\"Int\"}}"
+    );
+    let arms: List[Value] = [
+        parse(
+            "{\"pattern\":{\"tag\":\"Ident\",\"name\":\"x\"},"
+            .concat("\"body\":{\"tag\":\"Expr\",\"expr\":{\"kind\":{\"tag\":\"Var\",\"name\":\"x\"},\"ty\":{\"tag\":\"Int\"}}}}")
+        ),
+    ];
+    let e: Emitted = empty_ctx().emit_match(scrutinee, arms);
+    // Single-arm fallback → unconditional br + phi joining a single
+    // predecessor over the scrutinee value.
+    assert_eq(contains_ir(e.instrs, "br label %match_arm_"), true);
+    assert_eq(contains_ir(e.instrs, "phi i64"), true);
+    // The Var `x` bound to "7" flows through phi's operand list.
+    assert_eq(e.ty, "i64")
+}
+
+// ── emit_match_body: Expr body ──────────────────────────────────────────────
+
+test fn match_body_expr_forwards_reg() -> Unit {
+    // `{tag: "Expr", expr: <lit>}` — the body's tail reg is the expr's reg.
+    let body: Value = parse(
+        "{\"tag\":\"Expr\",\"expr\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"5\"}},\"ty\":{\"tag\":\"Int\"}}}"
+    );
+    let out: MatchArmOut = empty_ctx().emit_match_body(body);
+    assert_eq(out.reg, "5");
+    assert_eq(out.ty, "i64");
+    assert_eq(out.instrs.len(), 0)
+}
+
+// ── emit_match_body: Block body ─────────────────────────────────────────────
+
+test fn match_body_block_evaluates_stmts() -> Unit {
+    // `{tag: "Block", block: {stmts: [...]}}` — walk stmts via emit_body,
+    // surface tail_reg as the arm's reg.
+    let body: Value = parse(
+        "{\"tag\":\"Block\",\"block\":{\"stmts\":["
+        .concat("{\"tag\":\"Expr\",\"expr\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"11\"}},\"ty\":{\"tag\":\"Int\"}}}")
+        .concat("]}}")
+    );
+    let out: MatchArmOut = empty_ctx().emit_match_body(body);
+    assert_eq(out.reg, "11");
+    assert_eq(out.ty, "i64")
+}

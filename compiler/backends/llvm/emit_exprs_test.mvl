@@ -1,0 +1,193 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// compiler/backends/llvm/emit_exprs_test.mvl — MVL unit tests for
+// EmitCtx::emit_expr and its Emitted-returning peers (#1693).
+//
+// Focuses on the direct method-dispatch surface: build a small TIR
+// expression JSON, decode, hand it to `ctx.emit_expr(...)`, assert on
+// the Emitted output (reg / ty / next_reg / instrs).  Full-pipeline
+// end-to-end coverage lives in emit_program_test.mvl.
+//
+// Run with:  mvl test compiler/
+//            make -C compiler test-llvm-backend
+
+use std.collections.{Map}
+use std.json.{decode, Value}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+partial fn parse(src: String) -> Value {
+    match decode(src) {
+        Ok(v)  => v,
+        Err(_) => Value::Null,
+    }
+}
+
+// Freshly-built empty EmitCtx.  Each test constructs its own so `self`
+// consumption via method dispatch doesn't cross tests.
+partial fn empty_ctx() -> EmitCtx {
+    EmitCtx {
+        next_reg: 0,
+        locals: Map[String, LocalRef]::new(),
+        enums: Map[String, Int]::new(),
+        strings: Map[String, String]::new(),
+        structs: Map[String, StructInfo]::new(),
+        enum_types: Map[String, String]::new(),
+        variant_payloads: Map[String, Int]::new(),
+        variant_slots: Map[String, Map[String, Int]]::new(),
+        variant_slot_types: Map[String, List[String]]::new(),
+    }
+}
+
+partial fn contains_ir(instrs: List[String], needle: String) -> Bool {
+    instrs.join("\n").contains(needle)
+}
+
+// ── Literal Integer ─────────────────────────────────────────────────────────
+
+test fn integer_literal_returns_immediate_reg() -> Unit {
+    // Integer literals lower to an immediate string in `reg` — no icmp,
+    // no add, no allocations.  The `next_reg` counter is unchanged.
+    let expr: Value = parse(
+        "{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"42\"}},\"ty\":{\"tag\":\"Int\"}}"
+    );
+    let e: Emitted = empty_ctx().emit_expr(expr);
+    assert_eq(e.reg, "42");
+    assert_eq(e.ty, "i64");
+    assert_eq(e.instrs.len(), 0)
+}
+
+// ── Literal Bool ────────────────────────────────────────────────────────────
+
+test fn bool_literal_true_is_i1_one() -> Unit {
+    let expr: Value = parse(
+        "{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Bool\",\"value\":true}},\"ty\":{\"tag\":\"Bool\"}}"
+    );
+    let e: Emitted = empty_ctx().emit_expr(expr);
+    assert_eq(e.reg, "1");
+    assert_eq(e.ty, "i1")
+}
+
+test fn bool_literal_false_is_i1_zero() -> Unit {
+    let expr: Value = parse(
+        "{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Bool\",\"value\":false}},\"ty\":{\"tag\":\"Bool\"}}"
+    );
+    let e: Emitted = empty_ctx().emit_expr(expr);
+    assert_eq(e.reg, "0");
+    assert_eq(e.ty, "i1")
+}
+
+// ── Var lookup ──────────────────────────────────────────────────────────────
+
+test fn var_reads_local_reg() -> Unit {
+    // Var TIR reads back the LocalRef.reg — no instrs, no counter change.
+    let locals: ref Map[String, LocalRef] = Map::new();
+    locals.insert("x", LocalRef { reg: "%x", ty: "i64", is_ref: false });
+    let ctx: EmitCtx = EmitCtx {
+        next_reg: 3,
+        locals: locals,
+        enums: Map[String, Int]::new(),
+        strings: Map[String, String]::new(),
+        structs: Map[String, StructInfo]::new(),
+        enum_types: Map[String, String]::new(),
+        variant_payloads: Map[String, Int]::new(),
+        variant_slots: Map[String, Map[String, Int]]::new(),
+        variant_slot_types: Map[String, List[String]]::new(),
+    };
+    let expr: Value = parse(
+        "{\"kind\":{\"tag\":\"Var\",\"name\":\"x\"},\"ty\":{\"tag\":\"Int\"}}"
+    );
+    let e: Emitted = ctx.emit_expr(expr);
+    assert_eq(e.reg, "%x");
+    assert_eq(e.ty, "i64");
+    assert_eq(e.next_reg, 3)
+}
+
+// ── Binary arithmetic ───────────────────────────────────────────────────────
+
+test fn binary_add_emits_add_i64() -> Unit {
+    // `1 + 2` → `%t0 = add i64 1, 2`.  Both operands lower to immediates,
+    // the result lands in `%t{next_reg}` and `next_reg` is bumped once.
+    let expr: Value = parse(
+        "{\"kind\":{\"tag\":\"Binary\",\"op\":\"Add\","
+        .concat("\"left\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"1\"}},\"ty\":{\"tag\":\"Int\"}},")
+        .concat("\"right\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"2\"}},\"ty\":{\"tag\":\"Int\"}}")
+        .concat("},\"ty\":{\"tag\":\"Int\"}}")
+    );
+    let e: Emitted = empty_ctx().emit_expr(expr);
+    assert_eq(e.ty, "i64");
+    assert_eq(contains_ir(e.instrs, "= add i64 1, 2"), true);
+    // `%t0` is the first fresh SSA register from an empty ctx.
+    assert_eq(e.reg, "%t0")
+}
+
+test fn binary_sub_emits_sub_i64() -> Unit {
+    let expr: Value = parse(
+        "{\"kind\":{\"tag\":\"Binary\",\"op\":\"Sub\","
+        .concat("\"left\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"10\"}},\"ty\":{\"tag\":\"Int\"}},")
+        .concat("\"right\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"3\"}},\"ty\":{\"tag\":\"Int\"}}")
+        .concat("},\"ty\":{\"tag\":\"Int\"}}")
+    );
+    let e: Emitted = empty_ctx().emit_expr(expr);
+    assert_eq(contains_ir(e.instrs, "= sub i64 10, 3"), true)
+}
+
+test fn binary_mul_emits_mul_i64() -> Unit {
+    let expr: Value = parse(
+        "{\"kind\":{\"tag\":\"Binary\",\"op\":\"Mul\","
+        .concat("\"left\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"7\"}},\"ty\":{\"tag\":\"Int\"}},")
+        .concat("\"right\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"6\"}},\"ty\":{\"tag\":\"Int\"}}")
+        .concat("},\"ty\":{\"tag\":\"Int\"}}")
+    );
+    let e: Emitted = empty_ctx().emit_expr(expr);
+    assert_eq(contains_ir(e.instrs, "= mul i64 7, 6"), true)
+}
+
+// ── Binary comparisons ──────────────────────────────────────────────────────
+
+test fn binary_eq_emits_icmp_eq_and_returns_i1() -> Unit {
+    // A1c: comparison operators produce `i1`.  The result reg is a `%t`
+    // and the emitted instruction is `icmp eq`.
+    let expr: Value = parse(
+        "{\"kind\":{\"tag\":\"Binary\",\"op\":\"Eq\","
+        .concat("\"left\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"1\"}},\"ty\":{\"tag\":\"Int\"}},")
+        .concat("\"right\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"1\"}},\"ty\":{\"tag\":\"Int\"}}")
+        .concat("},\"ty\":{\"tag\":\"Bool\"}}")
+    );
+    let e: Emitted = empty_ctx().emit_expr(expr);
+    assert_eq(e.ty, "i1");
+    assert_eq(contains_ir(e.instrs, "icmp eq i64 1, 1"), true)
+}
+
+test fn binary_lt_emits_icmp_slt() -> Unit {
+    let expr: Value = parse(
+        "{\"kind\":{\"tag\":\"Binary\",\"op\":\"Lt\","
+        .concat("\"left\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"1\"}},\"ty\":{\"tag\":\"Int\"}},")
+        .concat("\"right\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"2\"}},\"ty\":{\"tag\":\"Int\"}}")
+        .concat("},\"ty\":{\"tag\":\"Bool\"}}")
+    );
+    let e: Emitted = empty_ctx().emit_expr(expr);
+    assert_eq(e.ty, "i1");
+    assert_eq(contains_ir(e.instrs, "icmp slt i64 1, 2"), true)
+}
+
+// ── If expression: branch + phi ─────────────────────────────────────────────
+
+test fn if_expr_emits_branch_and_phi_merge() -> Unit {
+    // `if true { 10 } else { 20 }` → br i1 + two labels + phi merging
+    // both arms into a single i64 register.
+    let expr: Value = parse(
+        "{\"kind\":{\"tag\":\"If\","
+        .concat("\"cond\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Bool\",\"value\":true}},\"ty\":{\"tag\":\"Bool\"}},")
+        .concat("\"then\":{\"kind\":{\"tag\":\"Block\",\"block\":{\"stmts\":[{\"tag\":\"Expr\",\"expr\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"10\"}},\"ty\":{\"tag\":\"Int\"}}}]}},\"ty\":{\"tag\":\"Int\"}},")
+        .concat("\"else_br\":{\"kind\":{\"tag\":\"Block\",\"block\":{\"stmts\":[{\"tag\":\"Expr\",\"expr\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"20\"}},\"ty\":{\"tag\":\"Int\"}}}]}},\"ty\":{\"tag\":\"Int\"}}")
+        .concat("},\"ty\":{\"tag\":\"Int\"}}")
+    );
+    let e: Emitted = empty_ctx().emit_expr(expr);
+    // Cond → i1, br → then/else, phi joins on int.
+    assert_eq(contains_ir(e.instrs, "br i1"), true);
+    assert_eq(contains_ir(e.instrs, "if_then_"), true);
+    assert_eq(contains_ir(e.instrs, "if_else_"), true);
+    assert_eq(contains_ir(e.instrs, "phi i64"), true)
+}
