@@ -261,7 +261,7 @@ impl RustEmitter {
     /// Emit the statements and return-refinement check for a TIR function body.
     fn emit_fn_body_tir(&mut self, fd: &TirFn) {
         self.last_uses = compute_last_uses(&fd.body);
-        self.readonly_names = compute_readonly_names(&fd.body);
+        self.readonly_names = compute_readonly_names(&fd.body, &self.capability_params_map);
 
         self.capability_param_names.clear();
         let borrows = self
