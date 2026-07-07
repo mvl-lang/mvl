@@ -191,3 +191,245 @@ test fn if_expr_emits_branch_and_phi_merge() -> Unit {
     assert_eq(contains_ir(e.instrs, "if_else_"), true);
     assert_eq(contains_ir(e.instrs, "phi i64"), true)
 }
+
+// ── Float and Str literals ──────────────────────────────────────────────────
+
+test fn float_literal_returns_double_imm() -> Unit {
+    // A1r: Float literals lower to LLVM double immediates verbatim.
+    let expr: Value = parse(
+        "{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Float\",\"value\":\"7.5\"}},\"ty\":{\"tag\":\"Float\"}}"
+    );
+    let e: Emitted = empty_ctx().emit_expr(expr);
+    assert_eq(e.reg, "7.5");
+    assert_eq(e.ty, "double");
+    assert_eq(e.instrs.len(), 0)
+}
+
+test fn str_literal_builds_i64_ptr_aggregate() -> Unit {
+    // A1m: String literal → `{i64, ptr}` via two insertvalue instrs.
+    // The ptr operand comes from ctx.strings via string_global_of; if
+    // unregistered we get "@.str.missing" (still a valid IR ptr).
+    let strings: ref Map[String, String] = Map::new();
+    strings.insert("hi", "@.str.0");
+    let ctx: EmitCtx = EmitCtx {
+        next_reg: 0, locals: Map[String, LocalRef]::new(),
+        enums: Map[String, Int]::new(), strings: strings,
+        structs: Map[String, StructInfo]::new(),
+        enum_types: Map[String, String]::new(),
+        variant_payloads: Map[String, Int]::new(),
+        variant_slots: Map[String, Map[String, Int]]::new(),
+        variant_slot_types: Map[String, List[String]]::new(),
+    };
+    let expr: Value = parse(
+        "{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Str\",\"value\":\"hi\"}},\"ty\":{\"tag\":\"Str\"}}"
+    );
+    let e: Emitted = ctx.emit_expr(expr);
+    assert_eq(e.ty, "{i64, ptr}");
+    // Length insertvalue with the string byte length (2).
+    assert_eq(contains_ir(e.instrs, "insertvalue {i64, ptr} undef, i64 2, 0"), true);
+    // Data-ptr insertvalue pointing at the registered global.
+    assert_eq(contains_ir(e.instrs, "ptr @.str.0, 1"), true)
+}
+
+// ── Remaining Binary ops ────────────────────────────────────────────────────
+
+test fn binary_div_emits_sdiv_i64() -> Unit {
+    let expr: Value = parse(
+        "{\"kind\":{\"tag\":\"Binary\",\"op\":\"Div\","
+        .concat("\"left\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"10\"}},\"ty\":{\"tag\":\"Int\"}},")
+        .concat("\"right\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"2\"}},\"ty\":{\"tag\":\"Int\"}}")
+        .concat("},\"ty\":{\"tag\":\"Int\"}}")
+    );
+    let e: Emitted = empty_ctx().emit_expr(expr);
+    assert_eq(contains_ir(e.instrs, "= sdiv i64 10, 2"), true)
+}
+
+test fn binary_rem_emits_srem_i64() -> Unit {
+    let expr: Value = parse(
+        "{\"kind\":{\"tag\":\"Binary\",\"op\":\"Rem\","
+        .concat("\"left\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"10\"}},\"ty\":{\"tag\":\"Int\"}},")
+        .concat("\"right\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"3\"}},\"ty\":{\"tag\":\"Int\"}}")
+        .concat("},\"ty\":{\"tag\":\"Int\"}}")
+    );
+    let e: Emitted = empty_ctx().emit_expr(expr);
+    assert_eq(contains_ir(e.instrs, "= srem i64 10, 3"), true)
+}
+
+test fn binary_ne_emits_icmp_ne_i1_result() -> Unit {
+    let expr: Value = parse(
+        "{\"kind\":{\"tag\":\"Binary\",\"op\":\"Ne\","
+        .concat("\"left\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"1\"}},\"ty\":{\"tag\":\"Int\"}},")
+        .concat("\"right\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"2\"}},\"ty\":{\"tag\":\"Int\"}}")
+        .concat("},\"ty\":{\"tag\":\"Bool\"}}")
+    );
+    let e: Emitted = empty_ctx().emit_expr(expr);
+    assert_eq(e.ty, "i1");
+    assert_eq(contains_ir(e.instrs, "icmp ne i64 1, 2"), true)
+}
+
+test fn binary_le_emits_icmp_sle_i1_result() -> Unit {
+    let expr: Value = parse(
+        "{\"kind\":{\"tag\":\"Binary\",\"op\":\"Le\","
+        .concat("\"left\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"1\"}},\"ty\":{\"tag\":\"Int\"}},")
+        .concat("\"right\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"1\"}},\"ty\":{\"tag\":\"Int\"}}")
+        .concat("},\"ty\":{\"tag\":\"Bool\"}}")
+    );
+    let e: Emitted = empty_ctx().emit_expr(expr);
+    assert_eq(e.ty, "i1");
+    assert_eq(contains_ir(e.instrs, "icmp sle i64 1, 1"), true)
+}
+
+test fn binary_gt_emits_icmp_sgt_i1_result() -> Unit {
+    let expr: Value = parse(
+        "{\"kind\":{\"tag\":\"Binary\",\"op\":\"Gt\","
+        .concat("\"left\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"3\"}},\"ty\":{\"tag\":\"Int\"}},")
+        .concat("\"right\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"1\"}},\"ty\":{\"tag\":\"Int\"}}")
+        .concat("},\"ty\":{\"tag\":\"Bool\"}}")
+    );
+    let e: Emitted = empty_ctx().emit_expr(expr);
+    assert_eq(contains_ir(e.instrs, "icmp sgt i64 3, 1"), true)
+}
+
+test fn binary_ge_emits_icmp_sge_i1_result() -> Unit {
+    let expr: Value = parse(
+        "{\"kind\":{\"tag\":\"Binary\",\"op\":\"Ge\","
+        .concat("\"left\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"2\"}},\"ty\":{\"tag\":\"Int\"}},")
+        .concat("\"right\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"2\"}},\"ty\":{\"tag\":\"Int\"}}")
+        .concat("},\"ty\":{\"tag\":\"Bool\"}}")
+    );
+    let e: Emitted = empty_ctx().emit_expr(expr);
+    assert_eq(contains_ir(e.instrs, "icmp sge i64 2, 2"), true)
+}
+
+// ── Unary ───────────────────────────────────────────────────────────────────
+
+test fn unary_neg_emits_sub_i64_zero() -> Unit {
+    // `-x` lowers to `sub i64 0, x`.
+    let expr: Value = parse(
+        "{\"kind\":{\"tag\":\"Unary\",\"op\":\"Neg\","
+        .concat("\"expr\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"7\"}},\"ty\":{\"tag\":\"Int\"}}")
+        .concat("},\"ty\":{\"tag\":\"Int\"}}")
+    );
+    let e: Emitted = empty_ctx().emit_expr(expr);
+    assert_eq(e.ty, "i64");
+    assert_eq(contains_ir(e.instrs, "= sub i64 0, 7"), true)
+}
+
+test fn unary_not_emits_xor_i1_one() -> Unit {
+    // `!b` lowers to `xor i1 b, 1`.
+    let expr: Value = parse(
+        "{\"kind\":{\"tag\":\"Unary\",\"op\":\"Not\","
+        .concat("\"expr\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Bool\",\"value\":true}},\"ty\":{\"tag\":\"Bool\"}}")
+        .concat("},\"ty\":{\"tag\":\"Bool\"}}")
+    );
+    let e: Emitted = empty_ctx().emit_expr(expr);
+    assert_eq(e.ty, "i1");
+    assert_eq(contains_ir(e.instrs, "= xor i1 1, 1"), true)
+}
+
+// ── Block expression ────────────────────────────────────────────────────────
+
+test fn block_expr_forwards_tail_reg() -> Unit {
+    // `{ 9 }` lowers to emit_body on the inner block; tail_reg surfaces
+    // as the Block expr's reg.
+    let expr: Value = parse(
+        "{\"kind\":{\"tag\":\"Block\",\"block\":{\"stmts\":["
+        .concat("{\"tag\":\"Expr\",\"expr\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"9\"}},\"ty\":{\"tag\":\"Int\"}}}")
+        .concat("]}},\"ty\":{\"tag\":\"Int\"}}")
+    );
+    let e: Emitted = empty_ctx().emit_expr(expr);
+    assert_eq(e.reg, "9");
+    assert_eq(e.ty, "i64")
+}
+
+test fn block_expr_empty_body_falls_back_to_zero() -> Unit {
+    // Empty block → tail_reg is "" → Block wrapper coerces to "0".
+    let expr: Value = parse(
+        "{\"kind\":{\"tag\":\"Block\",\"block\":{\"stmts\":[]}},\"ty\":{\"tag\":\"Int\"}}"
+    );
+    let e: Emitted = empty_ctx().emit_expr(expr);
+    assert_eq(e.reg, "0")
+}
+
+// ── FnCall: None / Some / Ok / Err ──────────────────────────────────────────
+
+test fn fn_call_none_builds_zero_tagged_aggregate() -> Unit {
+    // `None` → `{i8, i64}` with tag=0, single insertvalue (no payload).
+    let expr: Value = parse(
+        "{\"kind\":{\"tag\":\"FnCall\",\"name\":\"None\",\"args\":[]},\"ty\":{\"tag\":\"Option\"}}"
+    );
+    let e: Emitted = empty_ctx().emit_expr(expr);
+    assert_eq(e.ty, "{i8, i64}");
+    assert_eq(contains_ir(e.instrs, "insertvalue {i8, i64} undef, i8 0, 0"), true)
+}
+
+test fn fn_call_some_builds_one_tagged_aggregate_with_payload() -> Unit {
+    // `Some(42)` → two insertvalue: tag=1 at [0], payload=42 at [1].
+    let expr: Value = parse(
+        "{\"kind\":{\"tag\":\"FnCall\",\"name\":\"Some\",\"args\":["
+        .concat("{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"42\"}},\"ty\":{\"tag\":\"Int\"}}")
+        .concat("]},\"ty\":{\"tag\":\"Option\"}}")
+    );
+    let e: Emitted = empty_ctx().emit_expr(expr);
+    assert_eq(e.ty, "{i8, i64}");
+    assert_eq(contains_ir(e.instrs, "insertvalue {i8, i64} undef, i8 1, 0"), true);
+    assert_eq(contains_ir(e.instrs, "i64 42, 1"), true)
+}
+
+test fn fn_call_ok_uses_tag_zero() -> Unit {
+    // `Ok(x)` = tag 0 (unlike Some which is tag 1).
+    let expr: Value = parse(
+        "{\"kind\":{\"tag\":\"FnCall\",\"name\":\"Ok\",\"args\":["
+        .concat("{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"7\"}},\"ty\":{\"tag\":\"Int\"}}")
+        .concat("]},\"ty\":{\"tag\":\"Result\"}}")
+    );
+    let e: Emitted = empty_ctx().emit_expr(expr);
+    assert_eq(contains_ir(e.instrs, "insertvalue {i8, i64} undef, i8 0, 0"), true);
+    assert_eq(contains_ir(e.instrs, "i64 7, 1"), true)
+}
+
+test fn fn_call_err_uses_tag_one() -> Unit {
+    let expr: Value = parse(
+        "{\"kind\":{\"tag\":\"FnCall\",\"name\":\"Err\",\"args\":["
+        .concat("{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"3\"}},\"ty\":{\"tag\":\"Int\"}}")
+        .concat("]},\"ty\":{\"tag\":\"Result\"}}")
+    );
+    let e: Emitted = empty_ctx().emit_expr(expr);
+    assert_eq(contains_ir(e.instrs, "insertvalue {i8, i64} undef, i8 1, 0"), true)
+}
+
+// ── FnCall: println ─────────────────────────────────────────────────────────
+
+test fn fn_call_println_int_uses_fmt_int() -> Unit {
+    // `println(5)` — Int arg → `printf(@.fmt_int, i64 5)`.
+    let expr: Value = parse(
+        "{\"kind\":{\"tag\":\"FnCall\",\"name\":\"println\",\"args\":["
+        .concat("{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"5\"}},\"ty\":{\"tag\":\"Int\"}}")
+        .concat("]},\"ty\":{\"tag\":\"Unit\"}}")
+    );
+    let e: Emitted = empty_ctx().emit_expr(expr);
+    assert_eq(contains_ir(e.instrs, "call i32 (ptr, ...) @printf(ptr @.fmt_int, i64 5)"), true)
+}
+
+test fn fn_call_println_str_uses_fmt_str_and_extracts_ptr() -> Unit {
+    // `println("hi")` — Str arg → extractvalue then printf(@.fmt_str, ptr).
+    let strings: ref Map[String, String] = Map::new();
+    strings.insert("hi", "@.str.0");
+    let ctx: EmitCtx = EmitCtx {
+        next_reg: 0, locals: Map[String, LocalRef]::new(),
+        enums: Map[String, Int]::new(), strings: strings,
+        structs: Map[String, StructInfo]::new(),
+        enum_types: Map[String, String]::new(),
+        variant_payloads: Map[String, Int]::new(),
+        variant_slots: Map[String, Map[String, Int]]::new(),
+        variant_slot_types: Map[String, List[String]]::new(),
+    };
+    let expr: Value = parse(
+        "{\"kind\":{\"tag\":\"FnCall\",\"name\":\"println\",\"args\":["
+        .concat("{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Str\",\"value\":\"hi\"}},\"ty\":{\"tag\":\"Str\"}}")
+        .concat("]},\"ty\":{\"tag\":\"Unit\"}}")
+    );
+    let e: Emitted = ctx.emit_expr(expr);
+    assert_eq(contains_ir(e.instrs, "extractvalue {i64, ptr}"), true);
+    assert_eq(contains_ir(e.instrs, "@.fmt_str"), true)
+}

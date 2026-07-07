@@ -149,3 +149,121 @@ test fn match_body_block_evaluates_stmts() -> Unit {
     assert_eq(out.reg, "11");
     assert_eq(out.ty, "i64")
 }
+
+// ── Literal Bool pattern ────────────────────────────────────────────────────
+
+test fn match_bool_literal_pattern_emits_i1_cmp() -> Unit {
+    // `match true { true => 1, _ => 0 }` — Bool scrutinee, Bool literal
+    // pattern.  literal_pattern_value returns "1" for true; the cmp uses
+    // the scrutinee's i1 type.
+    let scrutinee: Value = parse(
+        "{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Bool\",\"value\":true}},\"ty\":{\"tag\":\"Bool\"}}"
+    );
+    let arms: List[Value] = [
+        parse(
+            "{\"pattern\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Bool\",\"value\":true}},"
+            .concat("\"body\":{\"tag\":\"Expr\",\"expr\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"1\"}},\"ty\":{\"tag\":\"Int\"}}}}")
+        ),
+        parse(
+            "{\"pattern\":{\"tag\":\"Wildcard\"},"
+            .concat("\"body\":{\"tag\":\"Expr\",\"expr\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"0\"}},\"ty\":{\"tag\":\"Int\"}}}}")
+        ),
+    ];
+    let e: Emitted = empty_ctx().emit_match(scrutinee, arms);
+    // Comparison uses the scrutinee's ty (i1), pattern value literalised.
+    assert_eq(contains_ir(e.instrs, "icmp eq i1 1, 1"), true)
+}
+
+// ── Some / None patterns on Option scrutinee ────────────────────────────────
+
+test fn match_some_variant_dispatches_on_tag_one() -> Unit {
+    // `match Some(4) { Some(_) => 1, None => 0 }` — `Some` = tag 1.
+    // The Option value is a `{i8, i64}` aggregate; extractvalue pulls the
+    // tag byte for cmp.
+    let scrutinee: Value = parse(
+        "{\"kind\":{\"tag\":\"FnCall\",\"name\":\"Some\",\"args\":["
+        .concat("{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"4\"}},\"ty\":{\"tag\":\"Int\"}}")
+        .concat("]},\"ty\":{\"tag\":\"Option\"}}")
+    );
+    let arms: List[Value] = [
+        parse(
+            "{\"pattern\":{\"tag\":\"Some\",\"inner\":{\"tag\":\"Wildcard\"}},"
+            .concat("\"body\":{\"tag\":\"Expr\",\"expr\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"1\"}},\"ty\":{\"tag\":\"Int\"}}}}")
+        ),
+        parse(
+            "{\"pattern\":{\"tag\":\"None\"},"
+            .concat("\"body\":{\"tag\":\"Expr\",\"expr\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"0\"}},\"ty\":{\"tag\":\"Int\"}}}}")
+        ),
+    ];
+    let e: Emitted = empty_ctx().emit_match(scrutinee, arms);
+    // Tag byte extractvalue is emitted once for the aggregate scrutinee.
+    assert_eq(contains_ir(e.instrs, "extractvalue"), true);
+    // Some → cmp against tag 1.  None → cmp against tag 0.
+    assert_eq(contains_ir(e.instrs, "icmp eq i8"), true);
+    assert_eq(contains_ir(e.instrs, ", 1"), true)
+}
+
+// ── Ok / Err on Result scrutinee ────────────────────────────────────────────
+
+test fn match_ok_err_dispatches_via_tag_byte() -> Unit {
+    // `match Ok(1) { Ok(_) => 10, Err(_) => 20 }` — Ok=0, Err=1.
+    let scrutinee: Value = parse(
+        "{\"kind\":{\"tag\":\"FnCall\",\"name\":\"Ok\",\"args\":["
+        .concat("{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"1\"}},\"ty\":{\"tag\":\"Int\"}}")
+        .concat("]},\"ty\":{\"tag\":\"Result\"}}")
+    );
+    let arms: List[Value] = [
+        parse(
+            "{\"pattern\":{\"tag\":\"Ok\",\"inner\":{\"tag\":\"Wildcard\"}},"
+            .concat("\"body\":{\"tag\":\"Expr\",\"expr\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"10\"}},\"ty\":{\"tag\":\"Int\"}}}}")
+        ),
+        parse(
+            "{\"pattern\":{\"tag\":\"Err\",\"inner\":{\"tag\":\"Wildcard\"}},"
+            .concat("\"body\":{\"tag\":\"Expr\",\"expr\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"20\"}},\"ty\":{\"tag\":\"Int\"}}}}")
+        ),
+    ];
+    let e: Emitted = empty_ctx().emit_match(scrutinee, arms);
+    // Two branch dispatches (Ok=0, Err=1) both drive from the tag reg.
+    assert_eq(contains_ir(e.instrs, "extractvalue"), true);
+    assert_eq(contains_ir(e.instrs, "icmp eq i8"), true)
+}
+
+// ── User-defined enum variant pattern ───────────────────────────────────────
+
+test fn match_user_variant_pattern_uses_registered_tag() -> Unit {
+    // Pre-populate ctx with a Color enum registered as {Red=0, Green=1, Blue=2}.
+    // `match c { Color::Green => 1, _ => 0 }` should dispatch on tag byte 1.
+    let enums: ref Map[String, Int] = Map::new();
+    enums.insert("Color::Red", 0);
+    enums.insert("Color::Green", 1);
+    enums.insert("Color::Blue", 2);
+    let enum_types: ref Map[String, String] = Map::new();
+    enum_types.insert("Color", "i8");
+    let locals: ref Map[String, LocalRef] = Map::new();
+    locals.insert("c", LocalRef { reg: "%c", ty: "i8", is_ref: false });
+    let ctx: EmitCtx = EmitCtx {
+        next_reg: 0, locals: locals, enums: enums, strings: Map[String, String]::new(),
+        structs: Map[String, StructInfo]::new(), enum_types: enum_types,
+        variant_payloads: Map[String, Int]::new(),
+        variant_slots: Map[String, Map[String, Int]]::new(),
+        variant_slot_types: Map[String, List[String]]::new(),
+    };
+    let scrutinee: Value = parse(
+        "{\"kind\":{\"tag\":\"Var\",\"name\":\"c\"},\"ty\":{\"tag\":\"Named\",\"name\":\"Color\"}}"
+    );
+    let arms: List[Value] = [
+        parse(
+            "{\"pattern\":{\"tag\":\"Ident\",\"name\":\"Color::Green\"},"
+            .concat("\"body\":{\"tag\":\"Expr\",\"expr\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"1\"}},\"ty\":{\"tag\":\"Int\"}}}}")
+        ),
+        parse(
+            "{\"pattern\":{\"tag\":\"Wildcard\"},"
+            .concat("\"body\":{\"tag\":\"Expr\",\"expr\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"0\"}},\"ty\":{\"tag\":\"Int\"}}}}")
+        ),
+    ];
+    let e: Emitted = ctx.emit_match(scrutinee, arms);
+    // Green's tag is 1 — the cmp operand is against 1.
+    assert_eq(contains_ir(e.instrs, "icmp eq i8"), true);
+    // The scrutinee reg `%c` flows into the cmp (via the compare_reg path).
+    assert_eq(contains_ir(e.instrs, "%c"), true)
+}

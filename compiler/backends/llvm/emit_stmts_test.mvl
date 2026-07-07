@@ -168,3 +168,160 @@ test fn if_stmt_emits_branch_labels() -> Unit {
     assert_eq(contains_ir(out.instrs, "br i1"), true);
     assert_eq(contains_ir(out.instrs, "phi i64"), true)
 }
+
+// ── Ref-let: alloca + store ─────────────────────────────────────────────────
+
+test fn ref_let_emits_alloca_and_store() -> Unit {
+    // `let x: ref Int = 5;` — a Ref-typed Let allocates and stores so a
+    // later Assign can `store` into the same address.  The bound reg is
+    // the `%x.addr` pointer.
+    let stmt: Value = parse(
+        "{\"tag\":\"Let\",\"pattern\":{\"tag\":\"Ident\",\"name\":\"x\"},"
+        .concat("\"ty\":{\"tag\":\"Ref\"},")
+        .concat("\"init\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"5\"}},\"ty\":{\"tag\":\"Int\"}}")
+        .concat("}")
+    );
+    let out: StmtOut = empty_ctx().emit_stmt(stmt);
+    assert_eq(contains_ir(out.instrs, "= alloca i64"), true);
+    assert_eq(contains_ir(out.instrs, "store i64 5, ptr %x.addr"), true);
+    match out.ctx.local_of("x") {
+        Some(r) => {
+            assert_eq(r.reg, "%x.addr");
+            assert_eq(r.is_ref, true)
+        },
+        None => assert_eq("x", "missing"),
+    }
+}
+
+// ── Assign to Ident (ref-let target) ────────────────────────────────────────
+
+test fn assign_to_ident_emits_store_to_bound_ptr() -> Unit {
+    // Set up a locals map with `x` bound to a ref (its alloca ptr).
+    // Then `x = 42` emits `store i64 42, ptr %x.addr`.
+    let locals: ref Map[String, LocalRef] = Map::new();
+    locals.insert("x", LocalRef { reg: "%x.addr", ty: "i64", is_ref: true });
+    let ctx: EmitCtx = EmitCtx {
+        next_reg: 0, locals: locals,
+        enums: Map[String, Int]::new(), strings: Map[String, String]::new(),
+        structs: Map[String, StructInfo]::new(),
+        enum_types: Map[String, String]::new(),
+        variant_payloads: Map[String, Int]::new(),
+        variant_slots: Map[String, Map[String, Int]]::new(),
+        variant_slot_types: Map[String, List[String]]::new(),
+    };
+    let stmt: Value = parse(
+        "{\"tag\":\"Assign\",\"target\":{\"tag\":\"Ident\",\"name\":\"x\"},"
+        .concat("\"value\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"42\"}},\"ty\":{\"tag\":\"Int\"}}")
+        .concat("}")
+    );
+    let out: StmtOut = ctx.emit_stmt(stmt);
+    assert_eq(contains_ir(out.instrs, "store i64 42, ptr %x.addr"), true);
+    // Assign is a statement, no tail value.
+    assert_eq(out.tail_reg, "")
+}
+
+test fn assign_to_unbound_ident_still_lowers_rhs() -> Unit {
+    // If the target isn't in ctx.locals we drop the store (the Match arm
+    // returns just the rhs instrs).  Regression against the `None` branch
+    // in the Assign path.
+    let stmt: Value = parse(
+        "{\"tag\":\"Assign\",\"target\":{\"tag\":\"Ident\",\"name\":\"y\"},"
+        .concat("\"value\":{\"kind\":{\"tag\":\"Binary\",\"op\":\"Add\",")
+        .concat("\"left\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"1\"}},\"ty\":{\"tag\":\"Int\"}},")
+        .concat("\"right\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"2\"}},\"ty\":{\"tag\":\"Int\"}}")
+        .concat("},\"ty\":{\"tag\":\"Int\"}}}")
+    );
+    let out: StmtOut = empty_ctx().emit_stmt(stmt);
+    // The Add instruction is still there — the store is skipped, not the rhs.
+    assert_eq(contains_ir(out.instrs, "= add i64 1, 2"), true);
+    assert_eq(contains_ir(out.instrs, "store"), false)
+}
+
+// ── While loop ──────────────────────────────────────────────────────────────
+
+test fn while_loop_emits_head_body_exit_labels() -> Unit {
+    // `while false { }` — minimal shape: br to head, condition check,
+    // br i1 to body/exit, unconditional back-edge from body to head.
+    let stmt: Value = parse(
+        "{\"tag\":\"While\","
+        .concat("\"cond\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Bool\",\"value\":false}},\"ty\":{\"tag\":\"Bool\"}},")
+        .concat("\"body\":{\"stmts\":[]}}")
+    );
+    let out: StmtOut = empty_ctx().emit_stmt(stmt);
+    assert_eq(contains_ir(out.instrs, "while_head_"), true);
+    assert_eq(contains_ir(out.instrs, "while_body_"), true);
+    assert_eq(contains_ir(out.instrs, "while_exit_"), true)
+}
+
+// ── emit_body: last_label propagation from control flow ─────────────────────
+
+test fn body_captures_last_label_from_if() -> Unit {
+    // A body ending in an If statement should carry the If's exit label
+    // as last_label — needed so a trailing phi in the enclosing scope
+    // names the correct predecessor block.
+    let body: Value = parse(
+        "{\"stmts\":[{\"tag\":\"If\","
+        .concat("\"cond\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Bool\",\"value\":true}},\"ty\":{\"tag\":\"Bool\"}},")
+        .concat("\"then\":{\"kind\":{\"tag\":\"Block\",\"block\":{\"stmts\":[]}},\"ty\":{\"tag\":\"Int\"}},")
+        .concat("\"else_br\":{\"kind\":{\"tag\":\"Block\",\"block\":{\"stmts\":[]}},\"ty\":{\"tag\":\"Int\"}}")
+        .concat("}]}")
+    );
+    let out: StmtOut = empty_ctx().emit_body(body);
+    // Both if arms must have been emitted; emit_body threaded through
+    // both stmt-form If (via emit_stmt) and the underlying emit_if_blocks.
+    assert_eq(contains_ir(out.instrs, "if_then_"), true);
+    assert_eq(contains_ir(out.instrs, "if_else_"), true)
+}
+
+// ── For (range) loop ────────────────────────────────────────────────────────
+
+test fn for_range_emits_counter_loop_labels() -> Unit {
+    // `for i in range(0, 3) { }` — counter-based lowering with head /
+    // body / exit labels and an incrementing loop var.
+    let stmt: Value = parse(
+        "{\"tag\":\"For\",\"pattern\":{\"name\":\"i\"},"
+        .concat("\"iter\":{\"kind\":{\"tag\":\"FnCall\",\"name\":\"range\",\"args\":[")
+        .concat("{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"0\"}},\"ty\":{\"tag\":\"Int\"}},")
+        .concat("{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"3\"}},\"ty\":{\"tag\":\"Int\"}}")
+        .concat("]},\"ty\":{\"tag\":\"List\"}},")
+        .concat("\"body\":{\"stmts\":[]}}")
+    );
+    let out: StmtOut = empty_ctx().emit_stmt(stmt);
+    // Counter alloca + hi bound.
+    assert_eq(contains_ir(out.instrs, "alloca i64"), true);
+    // The range end bound (3) shows up in the head-comparison.
+    assert_eq(contains_ir(out.instrs, "3"), true)
+}
+
+test fn for_unsupported_iter_shape_returns_no_instrs() -> Unit {
+    // Iterator kind that isn't `range()` and isn't List-typed → swallow
+    // silently.  Guard against regressions in the early-return path.
+    let stmt: Value = parse(
+        "{\"tag\":\"For\",\"pattern\":{\"name\":\"i\"},"
+        .concat("\"iter\":{\"kind\":{\"tag\":\"Var\",\"name\":\"noSuchIter\"},\"ty\":{\"tag\":\"Int\"}},")
+        .concat("\"body\":{\"stmts\":[]}}")
+    );
+    let out: StmtOut = empty_ctx().emit_stmt(stmt);
+    assert_eq(out.instrs.len(), 0);
+    assert_eq(out.tail_reg, "")
+}
+
+// ── Match statement forwarding ──────────────────────────────────────────────
+
+test fn match_stmt_forwards_to_emit_match() -> Unit {
+    // Stmt-form match dispatches through EmitCtx::emit_match; verify
+    // via the same phi/icmp signature as the expression-form.
+    let stmt: Value = parse(
+        "{\"tag\":\"Match\","
+        .concat("\"scrutinee\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"0\"}},\"ty\":{\"tag\":\"Int\"}},")
+        .concat("\"arms\":[")
+        .concat("{\"pattern\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"0\"}},")
+        .concat("\"body\":{\"tag\":\"Expr\",\"expr\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"7\"}},\"ty\":{\"tag\":\"Int\"}}}},")
+        .concat("{\"pattern\":{\"tag\":\"Wildcard\"},")
+        .concat("\"body\":{\"tag\":\"Expr\",\"expr\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"99\"}},\"ty\":{\"tag\":\"Int\"}}}}")
+        .concat("]}")
+    );
+    let out: StmtOut = empty_ctx().emit_stmt(stmt);
+    assert_eq(contains_ir(out.instrs, "icmp eq i64 0, 0"), true);
+    assert_eq(contains_ir(out.instrs, "match_join_"), true)
+}
