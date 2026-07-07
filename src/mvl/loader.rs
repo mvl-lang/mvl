@@ -1039,8 +1039,14 @@ mod tests {
     #[test]
     fn qualified_stem_direct_child() {
         let base = std::path::Path::new("src");
-        assert_eq!(qualified_stem(base, std::path::Path::new("src/context.mvl")), "context");
-        assert_eq!(qualified_stem(base, std::path::Path::new("src/main.mvl")), "main");
+        assert_eq!(
+            qualified_stem(base, std::path::Path::new("src/context.mvl")),
+            "context"
+        );
+        assert_eq!(
+            qualified_stem(base, std::path::Path::new("src/main.mvl")),
+            "main"
+        );
     }
 
     // qualified_stem: nested file → dot-separated path.
@@ -1048,7 +1054,10 @@ mod tests {
     fn qualified_stem_nested() {
         let base = std::path::Path::new("compiler");
         assert_eq!(
-            qualified_stem(base, std::path::Path::new("compiler/backends/llvm/context.mvl")),
+            qualified_stem(
+                base,
+                std::path::Path::new("compiler/backends/llvm/context.mvl")
+            ),
             "backends.llvm.context"
         );
     }
@@ -1058,7 +1067,10 @@ mod tests {
     fn qualified_stem_no_collision_for_same_basename() {
         let base = std::path::Path::new("compiler");
         let a = qualified_stem(base, std::path::Path::new("compiler/context.mvl"));
-        let b = qualified_stem(base, std::path::Path::new("compiler/backends/llvm/context.mvl"));
+        let b = qualified_stem(
+            base,
+            std::path::Path::new("compiler/backends/llvm/context.mvl"),
+        );
         assert_eq!(a, "context");
         assert_eq!(b, "backends.llvm.context");
         assert_ne!(a, b);
@@ -1213,7 +1225,6 @@ mod tests {
             "absent transitive dep must not appear in map; got: {map:?}"
         );
     }
-
 }
 
 /// Load stdlib prelude files for all `use std.X` declarations found in `progs`.

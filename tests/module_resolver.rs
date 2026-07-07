@@ -465,7 +465,11 @@ fn bare_and_qualified_names_coexist() {
     let main = parse("use context::TypeEnv;\nuse backends.llvm.context::EmitCtx;");
     let result = resolve_project(
         vec![
-            ("context".to_string(), "compiler/context.mvl".to_string(), ctx_top),
+            (
+                "context".to_string(),
+                "compiler/context.mvl".to_string(),
+                ctx_top,
+            ),
             (
                 "backends.llvm.context".to_string(),
                 "compiler/backends/llvm/context.mvl".to_string(),
@@ -481,4 +485,3 @@ fn bare_and_qualified_names_coexist() {
         result.errors
     );
 }
-

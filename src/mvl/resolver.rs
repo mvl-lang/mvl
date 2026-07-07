@@ -660,8 +660,10 @@ mod tests {
     #[test]
     fn file_module_correspondence() {
         let prog = parse("pub fn greet() -> Int { 0 }");
-        let result =
-            resolve_project(vec![("greet_module".to_string(), "".to_string(), prog)], None);
+        let result = resolve_project(
+            vec![("greet_module".to_string(), "".to_string(), prog)],
+            None,
+        );
         assert!(result.modules.contains_key("greet_module"));
     }
 
