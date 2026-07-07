@@ -3817,3 +3817,41 @@ fn main() -> Unit {
         "actor behavior call must emit mvl_actor_send.\nIR:\n{ir}"
     );
 }
+
+/// Regression test for #1717: actor recursive self-call in a non-last-use
+/// single-expression match arm must emit `self.run()`, not `self.clone().run()`.
+///
+/// Actor state structs do not derive `Clone`, so emitting `self.clone().run()`
+/// produces invalid Rust that fails to compile.
+#[test]
+fn actor_recursive_self_call_no_clone_in_match_arm() {
+    let src = r#"
+        partial fn maybe_err() -> Result[Int, String] { Ok(0) }
+
+        actor Worker {
+            data: Int
+            pub fn handle() -> Unit ! Send { }
+        }
+
+        actor Loop {
+            router: Int
+
+            pub fn run() -> Unit ! Send {
+                match maybe_err() {
+                    Err(_) => self.run(),
+                    Ok(_) => {
+                        let w: Worker = actor Worker { data: self.router };
+                        w.handle();
+                        self.run()
+                    },
+                }
+            }
+        }
+    "#;
+    let rust = transpile_src(src);
+    assert!(
+        !rust.contains("self.clone().run()"),
+        "actor recursive self-call must not insert .clone(); actor state has no Clone impl.\nGot:\n{rust}"
+    );
+    assert_contains(&rust, "self.run()");
+}
