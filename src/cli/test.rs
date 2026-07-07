@@ -459,10 +459,15 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
         let tir = mvl::mvl::ir::lower::lower(&prog, &mono, &expr_types);
         // Build a per-file prelude: always include the universal entries
         // (implicit + pkg + siblings) but scope stdlib extras to only the
-        // modules THIS file transitively imports.  This keeps stdlib types
-        // out of files that never `use std.X` — critical when a file declares
-        // its own type with a stdlib-conflicting name (#1707 phase 3).
-        let file_extras = loader::load_mvl_native_stdlib_extras(std::slice::from_ref(&prog));
+        // modules THIS file — plus its siblings — transitively imports.
+        // Including siblings is essential: sibling library code emitted into
+        // the same mod may reference stdlib types (`Logger`, `IoError`, …)
+        // even when the primary file doesn't `use std.X` directly.  Without
+        // that, examples like `access_control/audit_test.mvl` fail with E0425
+        // for `Logger` in `audit.mvl`'s emitted code (#1707 phase 3).
+        let mut extras_scope: Vec<_> = stdlib_prelude_progs[..n_universal_prelude].to_vec();
+        extras_scope.push(prog.clone());
+        let file_extras = loader::load_mvl_native_stdlib_extras(&extras_scope);
         let file_prelude_progs: Vec<_> = stdlib_prelude_progs[..n_universal_prelude]
             .iter()
             .cloned()
@@ -584,7 +589,9 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
         let tir = mvl::mvl::ir::lower::lower(&prog, &mono, &expr_types);
         // Per-file prelude filtering — see the main test-file loop above for
         // rationale (#1707 phase 3).
-        let file_extras = loader::load_mvl_native_stdlib_extras(std::slice::from_ref(&prog));
+        let mut extras_scope: Vec<_> = stdlib_prelude_progs[..n_universal_prelude].to_vec();
+        extras_scope.push(prog.clone());
+        let file_extras = loader::load_mvl_native_stdlib_extras(&extras_scope);
         let file_prelude_progs: Vec<_> = stdlib_prelude_progs[..n_universal_prelude]
             .iter()
             .cloned()
