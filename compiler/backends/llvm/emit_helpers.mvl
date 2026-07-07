@@ -127,3 +127,36 @@ pub partial fn make_expr_stmt(e: Value) -> Value {
     Value::Object(m)
 }
 
+// ── LLVM module-level constants ──────────────────────────────────────────────
+
+// Host target triple for the emitted module header.  Hard-coded for arm64
+// macOS; a future CLI/env-based override will replace this call site.
+pub fn default_target_triple() -> String {
+    "arm64-apple-darwin"
+}
+
+// Escape a raw MVL string for LLVM IR's `c"..."` literal syntax.  Handles
+// the five characters LLVM's textual IR reader requires escaping — the
+// double-quote closes the literal, backslash is the escape leader itself,
+// and \n/\t/\r are non-printable.  Every other byte passes through.
+pub partial fn escape_llvm_string(s: String) -> String {
+    let out: ref String = "";
+    let chars: List[String] = s.chars();
+    for c in chars {
+        if c == "\"" {
+            out = out.concat("\\22");
+        } else if c == "\\" {
+            out = out.concat("\\5C");
+        } else if c == "\n" {
+            out = out.concat("\\0A");
+        } else if c == "\t" {
+            out = out.concat("\\09");
+        } else if c == "\r" {
+            out = out.concat("\\0D");
+        } else {
+            out = out.concat(c);
+        }
+    }
+    out
+}
+
