@@ -149,3 +149,153 @@ test fn llvm_ty_of_unknown_falls_through_to_i64() -> Unit {
     assert_eq(llvm_ty_of("Float"), "i64");
     assert_eq(llvm_ty_of(""), "i64")
 }
+
+// ── escape_llvm_string ──────────────────────────────────────────────────────
+
+test fn escape_llvm_string_passthrough_ascii() -> Unit {
+    // No escapable chars → identity.
+    assert_eq(escape_llvm_string("hello"), "hello");
+    assert_eq(escape_llvm_string(""), "")
+}
+
+test fn escape_llvm_string_escapes_double_quote() -> Unit {
+    // `"` closes the c"..." literal → must render as \22.
+    assert_eq(escape_llvm_string("a\"b"), "a\\22b")
+}
+
+test fn escape_llvm_string_escapes_backslash() -> Unit {
+    // Backslash is the escape leader itself → \5C.
+    assert_eq(escape_llvm_string("a\\b"), "a\\5Cb")
+}
+
+test fn escape_llvm_string_escapes_newline() -> Unit {
+    assert_eq(escape_llvm_string("a\nb"), "a\\0Ab")
+}
+
+test fn escape_llvm_string_escapes_tab() -> Unit {
+    assert_eq(escape_llvm_string("a\tb"), "a\\09b")
+}
+
+test fn escape_llvm_string_escapes_carriage_return() -> Unit {
+    assert_eq(escape_llvm_string("a\rb"), "a\\0Db")
+}
+
+test fn escape_llvm_string_mixed_escapes() -> Unit {
+    // All five specials in one string, plus passthrough chars in between.
+    assert_eq(
+        escape_llvm_string("\"\\\n\t\rok"),
+        "\\22\\5C\\0A\\09\\0Dok"
+    )
+}
+
+// ── default_target_triple ───────────────────────────────────────────────────
+
+test fn default_target_triple_is_arm64_darwin() -> Unit {
+    assert_eq(default_target_triple(), "arm64-apple-darwin")
+}
+
+// ── enum_name_of_variant ────────────────────────────────────────────────────
+
+test fn enum_name_of_variant_splits_at_double_colon() -> Unit {
+    assert_eq(enum_name_of_variant("Color::Red"), "Color");
+    assert_eq(enum_name_of_variant("Direction::North"), "Direction")
+}
+
+test fn enum_name_of_variant_no_separator_returns_input() -> Unit {
+    // `split("::")` on a string without "::" yields a single-element list;
+    // caller reads element 0.  A bare `None` (no `::`) round-trips.
+    assert_eq(enum_name_of_variant("None"), "None");
+    assert_eq(enum_name_of_variant(""), "")
+}
+
+// ── extract_else_block: four shapes ─────────────────────────────────────────
+
+test fn extract_else_block_expr_block_returns_inner_block() -> Unit {
+    // Expr-form Block: `else_br.kind.tag == "Block"` → return `kind.block`.
+    let else_br: Value = parse(
+        "{\"kind\":{\"tag\":\"Block\",\"block\":{\"stmts\":[]}}}"
+    );
+    let out: Value = extract_else_block(else_br);
+    // The extracted block should still contain a `stmts` field (empty here).
+    assert_eq(jarr(out, "stmts").len(), 0)
+}
+
+test fn extract_else_block_stmt_block_returns_inner_block() -> Unit {
+    // Stmt-form Block: outer `tag == "Block"` → return `block`.
+    let else_br: Value = parse(
+        "{\"tag\":\"Block\",\"block\":{\"stmts\":[]}}"
+    );
+    let out: Value = extract_else_block(else_br);
+    assert_eq(jarr(out, "stmts").len(), 0)
+}
+
+test fn extract_else_block_expr_if_wraps_as_singleton() -> Unit {
+    // Expr-form nested If: wrap the whole expr as `{tag: "Expr", expr: <it>}`
+    // then wrap that into a `{stmts: [...]}` block.
+    let else_br: Value = parse(
+        "{\"kind\":{\"tag\":\"If\",\"cond\":{},\"then\":{},\"else_br\":{}}}"
+    );
+    let out: Value = extract_else_block(else_br);
+    let stmts: List[Value] = jarr(out, "stmts");
+    assert_eq(stmts.len(), 1);
+    // The wrapper stmt has tag "Expr".
+    match stmts.get(0) {
+        Some(s) => assert_eq(jstr(s, "tag"), "Expr"),
+        None    => assert_eq("stmts[0]", "missing"),
+    }
+}
+
+test fn extract_else_block_stmt_if_wraps_as_singleton() -> Unit {
+    // Stmt-form nested If: `{tag: "If", stmt: <TirStmt::If>}` → wrap the
+    // nested stmt into a `{stmts: [...]}` block.
+    let else_br: Value = parse(
+        "{\"tag\":\"If\",\"stmt\":{\"tag\":\"If\",\"cond\":{},\"then\":{},\"else_br\":{}}}"
+    );
+    let out: Value = extract_else_block(else_br);
+    let stmts: List[Value] = jarr(out, "stmts");
+    assert_eq(stmts.len(), 1)
+}
+
+test fn extract_else_block_missing_else_returns_empty_block() -> Unit {
+    // Absent-else shape (no matching tag) → synthesized empty block so
+    // emit_if_blocks' phi still has an else-arm to jump to.
+    let else_br: Value = parse("{\"kind\":{\"tag\":\"Other\"}}");
+    let out: Value = extract_else_block(else_br);
+    assert_eq(jarr(out, "stmts").len(), 0)
+}
+
+// ── wrap_stmts_as_block ─────────────────────────────────────────────────────
+
+test fn wrap_stmts_as_block_produces_valid_block_object() -> Unit {
+    let s: Value = parse("{\"tag\":\"Expr\",\"expr\":{\"kind\":{\"tag\":\"Literal\"}}}");
+    let out: Value = wrap_stmts_as_block([s]);
+    let stmts: List[Value] = jarr(out, "stmts");
+    assert_eq(stmts.len(), 1)
+}
+
+test fn wrap_stmts_as_block_empty_list_still_produces_block() -> Unit {
+    let out: Value = wrap_stmts_as_block([]);
+    assert_eq(jarr(out, "stmts").len(), 0)
+}
+
+// ── make_expr_stmt ──────────────────────────────────────────────────────────
+
+test fn make_expr_stmt_wraps_expr_with_tag_expr() -> Unit {
+    let e: Value = parse(
+        "{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"7\"}}}"
+    );
+    let out: Value = make_expr_stmt(e);
+    assert_eq(jstr(out, "tag"), "Expr");
+    // `expr` field carries the original.
+    let inner: Value = jget(out, "expr");
+    assert_eq(jstr(jget(inner, "kind"), "tag"), "Literal")
+}
+
+// ── parse (helper) error path ───────────────────────────────────────────────
+
+test fn parse_helper_returns_null_on_bad_json() -> Unit {
+    // The `parse` helper folds Err → Value::Null.  Assert via jtag("") on
+    // Null-input jstr yielding "" — an oblique but stable check.
+    let bad: Value = parse("this is not json {");
+    assert_eq(jstr(bad, "anything"), "")
+}
