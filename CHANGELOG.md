@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.238.3] - 2026-07-07
+
+### Fixed
+
+- **`test-runner`: scope stdlib prelude per-file in bundle mode** (#1707 phase 3) — Two coupled fixes for `mvl test`'s bundling path in `src/cli/test.rs`. (A) Inline-test corpus files (`.mvl` with `test fn`, not `_test.mvl`) never reached the prelude pre-scan, so their `use std.X` imports never triggered stdlib loading — 100+ E0433/E0425 errors on `RestartStrategy`, `AuditEvent`, `Logger`, etc. Pre-scan now folds inline-test source files into `all_for_extras`. (B) With `std.log` now in the shared prelude, the stdlib `pub struct Logger` was injected into every mod, colliding with corpus files declaring their own `actor Logger` (E0428). Fixed by splitting `stdlib_prelude_progs` at `n_universal_prelude_outer`: below is universal (implicit + siblings + pkg), above is filtered per-file via `load_mvl_native_stdlib_extras(&[prog, ...sibling_progs])`. Cut 220 → 83 rustc errors on `mvl test tests/corpus/` (62% reduction).
+
 ## [0.238.1] - 2026-07-07
 
 ### Fixed
