@@ -26,7 +26,7 @@ fn parse(src: &str) -> Program {
 fn file_module_correspondence() {
     // Each file maps to a module by name
     let prog = parse("pub fn greet() -> Int { 0 }");
-    let result = resolve_project(vec![("greet".to_string(), prog)], None);
+    let result = resolve_project(vec![("greet".to_string(), "".to_string(), prog)], None);
     assert!(
         result.is_ok(),
         "single module should resolve: {:?}",
@@ -46,7 +46,10 @@ fn private_item_rejected() {
     let a = parse("fn secret() -> Int { 0 }"); // private
     let b = parse("use mod_a::secret;"); // imports private item
     let result = resolve_project(
-        vec![("mod_a".to_string(), a), ("mod_b".to_string(), b)],
+        vec![
+            ("mod_a".to_string(), "".to_string(), a),
+            ("mod_b".to_string(), "".to_string(), b),
+        ],
         None,
     );
     assert!(
@@ -65,7 +68,10 @@ fn pub_item_accessible() {
     let a = parse("pub fn greet() -> Int { 42 }");
     let b = parse("use mod_a::greet;");
     let result = resolve_project(
-        vec![("mod_a".to_string(), a), ("mod_b".to_string(), b)],
+        vec![
+            ("mod_a".to_string(), "".to_string(), a),
+            ("mod_b".to_string(), "".to_string(), b),
+        ],
         None,
     );
     assert!(
@@ -82,7 +88,10 @@ fn struct_fields_accessible() {
     let a = parse("pub type Point = struct { x: Int, y: Int }");
     let b = parse("use mod_a::Point;");
     let result = resolve_project(
-        vec![("mod_a".to_string(), a), ("mod_b".to_string(), b)],
+        vec![
+            ("mod_a".to_string(), "".to_string(), a),
+            ("mod_b".to_string(), "".to_string(), b),
+        ],
         None,
     );
     assert!(
@@ -100,7 +109,10 @@ fn use_at_top() {
     let a = parse("pub fn foo() -> Int { 0 }");
     let b = parse("use mod_a::foo;\nfn bar() -> Int { 0 }");
     let result = resolve_project(
-        vec![("mod_a".to_string(), a), ("mod_b".to_string(), b)],
+        vec![
+            ("mod_a".to_string(), "".to_string(), a),
+            ("mod_b".to_string(), "".to_string(), b),
+        ],
         None,
     );
     assert!(
@@ -116,7 +128,10 @@ fn use_after_declaration_rejected() {
     let a = parse("pub fn foo() -> Int { 0 }");
     let b = parse("fn bar() -> Int { 0 }\nuse mod_a::foo;"); // use after fn
     let result = resolve_project(
-        vec![("mod_a".to_string(), a), ("mod_b".to_string(), b)],
+        vec![
+            ("mod_a".to_string(), "".to_string(), a),
+            ("mod_b".to_string(), "".to_string(), b),
+        ],
         None,
     );
     assert!(
@@ -149,7 +164,10 @@ fn name_collision_rejected() {
     let a = parse("pub type Foo = struct { x: Int }");
     let b = parse("use mod_a::Foo;\nuse mod_a::Foo;"); // same name twice
     let result = resolve_project(
-        vec![("mod_a".to_string(), a), ("mod_b".to_string(), b)],
+        vec![
+            ("mod_a".to_string(), "".to_string(), a),
+            ("mod_b".to_string(), "".to_string(), b),
+        ],
         None,
     );
     assert!(
@@ -166,7 +184,7 @@ fn name_collision_rejected() {
 fn missing_module_rejected() {
     // Importing from a non-existent module must be rejected
     let a = parse("use does_not_exist::Foo;");
-    let result = resolve_project(vec![("mod_a".to_string(), a)], None);
+    let result = resolve_project(vec![("mod_a".to_string(), "".to_string(), a)], None);
     assert!(
         result
             .errors
@@ -185,7 +203,10 @@ fn reexport_public() {
     let a = parse("pub type Foo = struct { x: Int }");
     let b = parse("pub fn bar() -> Int { 0 }"); // no use, just a clean module
     let result = resolve_project(
-        vec![("mod_a".to_string(), a), ("mod_b".to_string(), b)],
+        vec![
+            ("mod_a".to_string(), "".to_string(), a),
+            ("mod_b".to_string(), "".to_string(), b),
+        ],
         None,
     );
     assert!(
@@ -216,7 +237,10 @@ fn reexport_private_rejected() {
 
     let a = parse("fn secret() -> Int { 0 }"); // private
     let result = resolve_project(
-        vec![("mod_a".to_string(), a), ("mod_b".to_string(), prog_b)],
+        vec![
+            ("mod_a".to_string(), "".to_string(), a),
+            ("mod_b".to_string(), "".to_string(), prog_b),
+        ],
         None,
     );
     assert!(
@@ -237,7 +261,10 @@ fn circular_import_rejected() {
     let a = parse("use mod_b::Bar;\npub type Foo = struct { x: Int }");
     let b = parse("use mod_a::Foo;\npub type Bar = struct { y: Int }");
     let result = resolve_project(
-        vec![("mod_a".to_string(), a), ("mod_b".to_string(), b)],
+        vec![
+            ("mod_a".to_string(), "".to_string(), a),
+            ("mod_b".to_string(), "".to_string(), b),
+        ],
         None,
     );
     assert!(
@@ -258,9 +285,9 @@ fn transitive_cycle_rejected() {
     let c = parse("use mod_b::B;\npub type C = struct { x: Int }");
     let result = resolve_project(
         vec![
-            ("mod_a".to_string(), a),
-            ("mod_b".to_string(), b),
-            ("mod_c".to_string(), c),
+            ("mod_a".to_string(), "".to_string(), a),
+            ("mod_b".to_string(), "".to_string(), b),
+            ("mod_c".to_string(), "".to_string(), c),
         ],
         None,
     );
@@ -283,10 +310,10 @@ fn diamond_dependency_ok() {
     let a = parse("use mod_b::B;\nuse mod_c::C;\npub type A = struct { x: Int }");
     let result = resolve_project(
         vec![
-            ("mod_d".to_string(), d),
-            ("mod_b".to_string(), b),
-            ("mod_c".to_string(), c),
-            ("mod_a".to_string(), a),
+            ("mod_d".to_string(), "".to_string(), d),
+            ("mod_b".to_string(), "".to_string(), b),
+            ("mod_c".to_string(), "".to_string(), c),
+            ("mod_a".to_string(), "".to_string(), a),
         ],
         None,
     );
@@ -310,7 +337,10 @@ fn cross_file_method_dispatch_no_cycle() {
     let mod_b = parse("pub type Ctx = struct { x: Int }\npub fn Ctx::method_b(self, n: Int) -> Int { self.x + n }");
     let mod_a = parse("use mod_b::Ctx;\npub fn Ctx::method_a(self, n: Int) -> Int { self.x + n }");
     let result = resolve_project(
-        vec![("mod_b".to_string(), mod_b), ("mod_a".to_string(), mod_a)],
+        vec![
+            ("mod_b".to_string(), "".to_string(), mod_b),
+            ("mod_a".to_string(), "".to_string(), mod_a),
+        ],
         None,
     );
     assert!(
@@ -344,7 +374,10 @@ fn stdlib_from_filesystem_resolves_use_std() {
     fs::write(tmp.path().join("core.mvl"), core_src).expect("write core.mvl");
 
     let prog = parse("use std::println;");
-    let result = resolve_project(vec![("main".to_string(), prog)], Some(tmp.path()));
+    let result = resolve_project(
+        vec![("main".to_string(), "".to_string(), prog)],
+        Some(tmp.path()),
+    );
     assert!(
         result.is_ok(),
         "use std::println should resolve against filesystem stdlib: {:?}",
@@ -360,10 +393,74 @@ fn stdlib_from_filesystem_missing_file_falls_back_to_stub() {
 
     // The stub exports println, so this should still resolve.
     let prog = parse("use std::println;");
-    let result = resolve_project(vec![("main".to_string(), prog)], Some(tmp.path()));
+    let result = resolve_project(
+        vec![("main".to_string(), "".to_string(), prog)],
+        Some(tmp.path()),
+    );
     assert!(
         result.is_ok(),
         "missing core.mvl should fall back to stub: {:?}",
         result.errors
+    );
+}
+
+// ── Duplicate module name collision (issue #1714) ─────────────────────────
+
+#[test]
+fn duplicate_module_name_rejected() {
+    // Two files sharing the same basename must produce a load-time error, not
+    // a silent wrong-module bind.
+    let a = parse("pub fn a_fn() -> Int { 0 }");
+    let b = parse("pub fn b_fn() -> Int { 0 }");
+    let result = resolve_project(
+        vec![
+            (
+                "context".to_string(),
+                "compiler/context.mvl".to_string(),
+                a,
+            ),
+            (
+                "context".to_string(),
+                "compiler/backends/llvm/context.mvl".to_string(),
+                b,
+            ),
+        ],
+        None,
+    );
+    let has_dup = result.errors.iter().any(|e| {
+        matches!(e, ResolveError::DuplicateModule { name, .. } if name == "context")
+    });
+    assert!(
+        has_dup,
+        "two modules sharing a stem must be rejected: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn duplicate_module_error_cites_both_paths() {
+    // The error message must name both conflicting file paths.
+    let a = parse("pub fn x() -> Int { 0 }");
+    let b = parse("pub fn y() -> Int { 0 }");
+    let result = resolve_project(
+        vec![
+            ("math".to_string(), "src/math.mvl".to_string(), a),
+            ("math".to_string(), "utils/math.mvl".to_string(), b),
+        ],
+        None,
+    );
+    let error_msg = result
+        .errors
+        .iter()
+        .find(|e| matches!(e, ResolveError::DuplicateModule { .. }))
+        .map(|e| e.to_string())
+        .unwrap_or_default();
+    assert!(
+        error_msg.contains("src/math.mvl"),
+        "error must cite first path: {error_msg}"
+    );
+    assert!(
+        error_msg.contains("utils/math.mvl"),
+        "error must cite second path: {error_msg}"
     );
 }

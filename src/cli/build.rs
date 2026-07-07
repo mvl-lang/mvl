@@ -88,18 +88,20 @@ pub fn run(
         .parent()
         .unwrap_or_else(|| Path::new("."));
     let imported_mod_names = loader::collect_imported_module_names(&prog);
-    let mut sibling_modules: Vec<(String, mvl::mvl::parser::ast::Program)> = imported_mod_names
-        .into_iter()
-        .filter_map(|mod_name| {
-            let mod_path = loader::find_module_file(entry_dir, &mod_name)?;
-            let (sib_prog, _) = super::parse_or_exit(&mod_path.display().to_string());
-            Some((mod_name, sib_prog))
-        })
-        .collect();
-    sibling_modules.sort_by(|(a, _), (b, _)| a.cmp(b));
+    let mut sibling_modules: Vec<(String, String, mvl::mvl::parser::ast::Program)> =
+        imported_mod_names
+            .into_iter()
+            .filter_map(|mod_name| {
+                let mod_path = loader::find_module_file(entry_dir, &mod_name)?;
+                let mod_str = mod_path.display().to_string();
+                let (sib_prog, _) = super::parse_or_exit(&mod_str);
+                Some((mod_name, mod_str, sib_prog))
+            })
+            .collect();
+    sibling_modules.sort_by(|(a, _, _), (b, _, _)| a.cmp(b));
 
     // Run module resolver to validate `use` imports across all modules.
-    let mut all_modules = vec![(crate_name.clone(), prog.clone())];
+    let mut all_modules = vec![(crate_name.clone(), file_path.clone(), prog.clone())];
     all_modules.extend(sibling_modules.iter().cloned());
     let resolve_result = resolver::resolve_project(all_modules, Some(&stdlib_dir));
     if !resolve_result.is_ok() {
@@ -116,7 +118,7 @@ pub fn run(
     let mut stdlib_prelude_progs = loader::load_implicit_prelude();
 
     let all_progs: Vec<_> = std::iter::once(&prog)
-        .chain(sibling_modules.iter().map(|(_, p)| p))
+        .chain(sibling_modules.iter().map(|(_, _, p)| p))
         .cloned()
         .collect();
 
@@ -200,7 +202,7 @@ pub fn run(
     // which handles Rust-backed modules via direct Rust emission rather than MVL bodies.
     // This mirrors what `mvl check` does via load_stdlib_prelude.
     let user_progs_for_stdlib =
-        std::iter::once(&prog).chain(sibling_modules.iter().map(|(_, p)| p));
+        std::iter::once(&prog).chain(sibling_modules.iter().map(|(_, _, p)| p));
     let mut checker_stdlib = loader::load_implicit_prelude();
     checker_stdlib.extend(loader::load_stdlib_prelude(
         user_progs_for_stdlib,
@@ -209,7 +211,7 @@ pub fn run(
     checker_stdlib.extend(pkg_progs.iter().cloned());
 
     let sibling_refs: Vec<&mvl::mvl::parser::ast::Program> =
-        sibling_modules.iter().map(|(_, p)| p).collect();
+        sibling_modules.iter().map(|(_, _, p)| p).collect();
     let check_result = checker::check_with_two_preludes(&checker_stdlib, &sibling_refs, &prog);
     if check_result.has_errors() {
         for err in &check_result.errors {
@@ -225,12 +227,12 @@ pub fn run(
     let sibling_expr_types: Vec<_> = sibling_modules
         .iter()
         .enumerate()
-        .map(|(i, (_, sibling))| {
+        .map(|(i, (_, _, sibling))| {
             let (before, after_with_self) = sibling_modules.split_at(i);
             let after = &after_with_self[1..];
             let sibling_prelude: Vec<&mvl::mvl::parser::ast::Program> = std::iter::once(&prog)
-                .chain(before.iter().map(|(_, p)| p))
-                .chain(after.iter().map(|(_, p)| p))
+                .chain(before.iter().map(|(_, _, p)| p))
+                .chain(after.iter().map(|(_, _, p)| p))
                 .collect();
             let mut t = checker::collect_prelude_expr_types(&stdlib_prelude_progs);
             t.extend(
@@ -240,10 +242,14 @@ pub fn run(
             t
         })
         .collect();
+    let sibling_name_progs: Vec<(String, mvl::mvl::parser::ast::Program)> = sibling_modules
+        .iter()
+        .map(|(name, _, prog)| (name.clone(), prog.clone()))
+        .collect();
     let out = transpiler::transpile_project_with_pkg_names(
         &crate_name,
         &prog,
-        &sibling_modules,
+        &sibling_name_progs,
         &stdlib_prelude_progs,
         all_expr_types,
         sibling_expr_types,

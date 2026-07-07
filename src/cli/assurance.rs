@@ -25,12 +25,12 @@ pub fn run(path: &str, json: bool, verbose: bool) {
     let excluded_count = all_mvl_count - files.len();
 
     // Run the module resolver to surface `use` errors before reporting.
-    let modules: Vec<(String, Program)> = files
+    let modules: Vec<(String, String, Program)> = files
         .iter()
         .map(|f| {
             let file_str = f.display().to_string();
             let (prog, _) = super::parse_or_exit(&file_str);
-            (loader::stem(&file_str), prog)
+            (loader::stem(&file_str), file_str.clone(), prog)
         })
         .collect();
     let resolve_result = resolver::resolve_project(modules, Some(&stdlib_dir));

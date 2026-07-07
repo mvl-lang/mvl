@@ -65,9 +65,9 @@ pub fn run(path: &str, verbose: bool, stdlib_profile: &str, callee_filter: Optio
     }
 
     // Run resolver so cross-module references work the same as `mvl check`.
-    let modules: Vec<(String, Program)> = parsed
+    let modules: Vec<(String, String, Program)> = parsed
         .iter()
-        .map(|(file_str, prog)| (loader::stem(file_str), prog.clone()))
+        .map(|(file_str, prog)| (loader::stem(file_str), file_str.clone(), prog.clone()))
         .collect();
     let _ = resolver::resolve_project(modules, Some(&stdlib_dir));
 

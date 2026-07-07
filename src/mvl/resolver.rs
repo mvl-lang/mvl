@@ -33,6 +33,8 @@ pub type ModulePath = Vec<String>;
 pub struct ResolvedModule {
     /// The module's own path (derived from its file path).
     pub name: Vec<String>,
+    /// The source `.mvl` file path, if known.
+    pub source_file: String,
     /// Items exported from this module (by the `pub` modifier).
     pub exports: HashSet<String>,
     /// Imports brought into scope via `use` declarations.
@@ -66,11 +68,19 @@ pub enum ResolveError {
         module: String,
         missing_path: Vec<String>,
     },
+    /// Two loaded modules share the same derived name (basename collision).
+    DuplicateModule {
+        name: String,
+        path1: String,
+        path2: String,
+    },
     /// The imported item is not exported from its source module.
     NotExported {
         module: String,
         item: String,
         source: Vec<String>,
+        /// Source file path, if known — cited in the diagnostic.
+        source_file: String,
     },
     /// A `pub use` re-exports an item that is private in its source module.
     ReexportOfPrivate {
@@ -108,16 +118,32 @@ impl std::fmt::Display for ResolveError {
             } => {
                 write!(f, "{module}: unknown module `{}`", missing_path.join("::"))
             }
+            ResolveError::DuplicateModule { name, path1, path2 } => {
+                write!(
+                    f,
+                    "duplicate module name `{name}`: {path1} and {path2} share the same stem (rename one)"
+                )
+            }
             ResolveError::NotExported {
                 module,
                 item,
                 source,
+                source_file,
             } => {
-                write!(
-                    f,
-                    "{module}: `{item}` is not exported from `{}`",
-                    source.join("::")
-                )
+                if source_file.is_empty() {
+                    write!(
+                        f,
+                        "{module}: `{item}` is not exported from `{}`",
+                        source.join("::")
+                    )
+                } else {
+                    write!(
+                        f,
+                        "{module}: `{item}` is not exported from `{}` ({})",
+                        source.join("::"),
+                        source_file
+                    )
+                }
             }
             ResolveError::ReexportOfPrivate {
                 module,
@@ -171,10 +197,10 @@ impl ResolveResult {
 /// ```ignore
 /// use mvl::mvl::resolver::resolve_project;
 /// // Parse each .mvl file into a Program, then resolve:
-/// // let result = resolve_project(vec![("mylib".to_string(), prog)], None);
+/// // let result = resolve_project(vec![("mylib".to_string(), "mylib.mvl".to_string(), prog)], None);
 /// ```
 pub fn resolve_project(
-    modules: Vec<(String, Program)>,
+    modules: Vec<(String, String, Program)>,
     stdlib_dir: Option<&Path>,
 ) -> ResolveResult {
     let stdlib = stdlib_dir
@@ -224,6 +250,7 @@ fn load_stdlib_module(stdlib_dir: &Path) -> Option<ResolvedModule> {
     }
     Some(ResolvedModule {
         name: vec!["std".to_string()],
+        source_file: String::new(),
         exports,
         imports: Vec::new(),
     })
@@ -232,14 +259,14 @@ fn load_stdlib_module(stdlib_dir: &Path) -> Option<ResolvedModule> {
 // ── Internal resolver ──────────────────────────────────────────────────────
 
 struct Resolver {
-    /// The parsed programs keyed by module name.
-    programs: Vec<(String, Program)>,
+    /// The parsed programs: (module_name, source_file, program).
+    programs: Vec<(String, String, Program)>,
     /// The stdlib module injected under the `"std"` key.
     stdlib: ResolvedModule,
 }
 
 impl Resolver {
-    fn new(programs: Vec<(String, Program)>, stdlib: ResolvedModule) -> Self {
+    fn new(programs: Vec<(String, String, Program)>, stdlib: ResolvedModule) -> Self {
         Resolver { programs, stdlib }
     }
 
@@ -251,12 +278,25 @@ impl Resolver {
         modules.insert("std".to_string(), self.stdlib.clone());
 
         // Pass 1: collect exported names for each module.
-        for (name, prog) in &self.programs {
+        // Also detect basename collisions: two files with the same stem silently
+        // picked whichever was enumerated first — now we hard-error instead.
+        let mut registered_paths: HashMap<String, String> = HashMap::new(); // name → source_file
+        for (name, source_file, prog) in &self.programs {
+            if let Some(prev_path) = registered_paths.get(name.as_str()) {
+                errors.push(ResolveError::DuplicateModule {
+                    name: name.clone(),
+                    path1: prev_path.clone(),
+                    path2: source_file.clone(),
+                });
+                continue;
+            }
+            registered_paths.insert(name.clone(), source_file.clone());
             let exports = collect_exports(prog);
             modules.insert(
                 name.clone(),
                 ResolvedModule {
                     name: vec![name.clone()],
+                    source_file: source_file.clone(),
                     exports,
                     imports: Vec::new(),
                 },
@@ -264,7 +304,7 @@ impl Resolver {
         }
 
         // Pass 2: resolve `use` declarations in each module.
-        for (name, prog) in &self.programs {
+        for (name, _, prog) in &self.programs {
             let use_decls = collect_use_decls(prog);
             let mut seen_names: HashSet<String> = HashSet::new();
             let mut imports = Vec::new();
@@ -319,6 +359,7 @@ impl Resolver {
                                 module: name.clone(),
                                 item: item.clone(),
                                 source: source_module.clone(),
+                                source_file: src_mod.source_file.clone(),
                             });
                             continue;
                         }
@@ -450,6 +491,7 @@ pub fn stdlib_module() -> ResolvedModule {
     }
     ResolvedModule {
         name: vec!["std".to_string()],
+        source_file: String::new(),
         exports,
         imports: Vec::new(),
     }
@@ -511,7 +553,10 @@ mod tests {
         let a = parse("pub type Foo = struct { x: Int }");
         let b = parse("use mod_a::Foo;\nuse mod_a::Foo;"); // duplicate import
         let result = resolve_project(
-            vec![("mod_a".to_string(), a), ("mod_b".to_string(), b)],
+            vec![
+                ("mod_a".to_string(), "".to_string(), a),
+                ("mod_b".to_string(), "".to_string(), b),
+            ],
             None,
         );
         let has_collision = result
@@ -529,7 +574,7 @@ mod tests {
     #[test]
     fn missing_module_rejected() {
         let a = parse("use does_not_exist::Foo;");
-        let result = resolve_project(vec![("mod_a".to_string(), a)], None);
+        let result = resolve_project(vec![("mod_a".to_string(), "".to_string(), a)], None);
         let has_missing = result
             .errors
             .iter()
@@ -547,7 +592,10 @@ mod tests {
         let a = parse("fn secret() -> Int { 0 }"); // private
         let b = parse("use mod_a::secret;"); // tries to import private item
         let result = resolve_project(
-            vec![("mod_a".to_string(), a), ("mod_b".to_string(), b)],
+            vec![
+                ("mod_a".to_string(), "".to_string(), a),
+                ("mod_b".to_string(), "".to_string(), b),
+            ],
             None,
         );
         let has_not_exported = result
@@ -567,7 +615,10 @@ mod tests {
         let a = parse("pub type Foo = struct { x: Int }");
         let b = parse("pub fn bar() -> Int { 0 }");
         let result = resolve_project(
-            vec![("mod_a".to_string(), a), ("mod_b".to_string(), b)],
+            vec![
+                ("mod_a".to_string(), "".to_string(), a),
+                ("mod_b".to_string(), "".to_string(), b),
+            ],
             None,
         );
         assert!(
@@ -584,7 +635,10 @@ mod tests {
         let a = parse("use mod_b::Bar;\npub type Foo = struct { x: Int }");
         let b = parse("use mod_a::Foo;\npub type Bar = struct { y: Int }");
         let result = resolve_project(
-            vec![("mod_a".to_string(), a), ("mod_b".to_string(), b)],
+            vec![
+                ("mod_a".to_string(), "".to_string(), a),
+                ("mod_b".to_string(), "".to_string(), b),
+            ],
             None,
         );
         let has_cycle = result
@@ -598,11 +652,42 @@ mod tests {
         );
     }
 
+    // Req 1: duplicate module name rejected — two files sharing the same stem must error.
+    #[test]
+    fn duplicate_module_name_rejected() {
+        let a = parse("pub fn a_fn() -> Int { 0 }");
+        let b = parse("pub fn b_fn() -> Int { 0 }");
+        let result = resolve_project(
+            vec![
+                (
+                    "context".to_string(),
+                    "compiler/context.mvl".to_string(),
+                    a,
+                ),
+                (
+                    "context".to_string(),
+                    "compiler/backends/llvm/context.mvl".to_string(),
+                    b,
+                ),
+            ],
+            None,
+        );
+        let has_dup = result.errors.iter().any(|e| {
+            matches!(e, ResolveError::DuplicateModule { name, .. } if name == "context")
+        });
+        assert!(
+            has_dup,
+            "two modules sharing a stem must be rejected: {:?}",
+            result.errors
+        );
+    }
+
     // Req 1: file-module correspondence (module name from filename).
     #[test]
     fn file_module_correspondence() {
         let prog = parse("pub fn greet() -> Int { 0 }");
-        let result = resolve_project(vec![("greet_module".to_string(), prog)], None);
+        let result =
+            resolve_project(vec![("greet_module".to_string(), "".to_string(), prog)], None);
         assert!(result.modules.contains_key("greet_module"));
     }
 

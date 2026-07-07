@@ -1068,6 +1068,14 @@ mod tests {
             "absent transitive dep must not appear in map; got: {map:?}"
         );
     }
+
+    // stem: two files in different directories sharing a basename both yield
+    // the same module name — documenting the root cause of #1714.
+    #[test]
+    fn stem_collision_same_basename_different_dirs() {
+        assert_eq!(stem("compiler/context.mvl"), "context");
+        assert_eq!(stem("compiler/backends/llvm/context.mvl"), "context");
+    }
 }
 
 /// Load stdlib prelude files for all `use std.X` declarations found in `progs`.

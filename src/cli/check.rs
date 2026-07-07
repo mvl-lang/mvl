@@ -165,9 +165,9 @@ pub fn run(path: &str, req_filter: Option<u8>, opts: CheckOptions) {
     }
 
     // Run the module resolver across all files, wiring in the extracted stdlib.
-    let modules: Vec<(String, Program)> = parsed
+    let modules: Vec<(String, String, Program)> = parsed
         .iter()
-        .map(|(file_str, prog, _)| (loader::stem(file_str), prog.clone()))
+        .map(|(file_str, prog, _)| (loader::stem(file_str), file_str.clone(), prog.clone()))
         .collect();
     let resolve_result = resolver::resolve_project(modules, Some(&stdlib_dir));
     let mut had_errors = !resolve_result.is_ok() || stdlib_proven_failed;
@@ -449,7 +449,7 @@ pub fn run_stdin(req_filter: Option<u8>, opts: CheckOptions) {
 
     // No sibling user modules — resolve against an empty set.
     let resolve_result = resolver::resolve_project(
-        vec![(filename.to_string(), prog.clone())],
+        vec![(filename.to_string(), filename.to_string(), prog.clone())],
         Some(&stdlib_dir),
     );
     let mut had_errors = !resolve_result.is_ok();
