@@ -149,3 +149,121 @@ test fn initial_ctx_binds_params_as_ssa_refs() -> Unit {
     ));
     assert_eq(contains(ir, "define i64 @f(i64 %x, i64 %y)"), true)
 }
+
+// ── collect_strings_in_stmt / collect_strings_in_expr coverage ──────────────
+//
+// These aren't part of the public API but drive @.str.N globals emission.
+// Each shape below hits a distinct branch in the collectors, verified
+// via the presence of the string literal in the emitted module header.
+
+test fn string_lit_in_let_init_gets_globalised() -> Unit {
+    // `let s: String = "let-init"` — collect_strings_in_stmt.Let branch.
+    let ir: String = emit_program(tir(
+        "{\"types\":[],\"fns\":[{\"name\":\"main\",\"params\":[],\"ret_ty\":{\"tag\":\"Int\"},\"body\":{\"stmts\":["
+        .concat("{\"tag\":\"Let\",\"pattern\":{\"tag\":\"Ident\",\"name\":\"s\"},")
+        .concat("\"init\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Str\",\"value\":\"let-init\"}},\"ty\":{\"tag\":\"Str\"}}}")
+        .concat("]}}]}")
+    ));
+    assert_eq(contains(ir, "let-init"), true);
+    assert_eq(contains(ir, "@.str."), true)
+}
+
+test fn string_lit_in_assign_rhs_gets_globalised() -> Unit {
+    // Assign branch of collect_strings_in_stmt.
+    let ir: String = emit_program(tir(
+        "{\"types\":[],\"fns\":[{\"name\":\"main\",\"params\":[],\"ret_ty\":{\"tag\":\"Int\"},\"body\":{\"stmts\":["
+        .concat("{\"tag\":\"Assign\",\"target\":{\"tag\":\"Ident\",\"name\":\"z\"},")
+        .concat("\"value\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Str\",\"value\":\"assign-rhs\"}},\"ty\":{\"tag\":\"Str\"}}}")
+        .concat("]}}]}")
+    ));
+    assert_eq(contains(ir, "assign-rhs"), true)
+}
+
+test fn string_lit_in_while_body_gets_globalised() -> Unit {
+    // While branch: cond + body get walked.
+    let ir: String = emit_program(tir(
+        "{\"types\":[],\"fns\":[{\"name\":\"main\",\"params\":[],\"ret_ty\":{\"tag\":\"Int\"},\"body\":{\"stmts\":["
+        .concat("{\"tag\":\"While\",")
+        .concat("\"cond\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Bool\",\"value\":false}},\"ty\":{\"tag\":\"Bool\"}},")
+        .concat("\"body\":{\"stmts\":[{\"tag\":\"Expr\",\"expr\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Str\",\"value\":\"while-body\"}},\"ty\":{\"tag\":\"Str\"}}}]}}")
+        .concat("]}}]}")
+    ));
+    assert_eq(contains(ir, "while-body"), true)
+}
+
+test fn string_lit_in_for_iter_gets_globalised() -> Unit {
+    // For branch: iter is walked (body too, but iter is the interesting arm).
+    // Iter is a ListLit containing a Str literal.
+    let ir: String = emit_program(tir(
+        "{\"types\":[],\"fns\":[{\"name\":\"main\",\"params\":[],\"ret_ty\":{\"tag\":\"Int\"},\"body\":{\"stmts\":["
+        .concat("{\"tag\":\"For\",\"pattern\":{\"name\":\"s\"},")
+        .concat("\"iter\":{\"kind\":{\"tag\":\"ListLit\",\"elems\":[")
+        .concat("{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Str\",\"value\":\"for-iter\"}},\"ty\":{\"tag\":\"Str\"}}")
+        .concat("]},\"ty\":{\"tag\":\"List\",\"inner\":{\"tag\":\"Str\"}}},")
+        .concat("\"body\":{\"stmts\":[]}}")
+        .concat("]}}]}")
+    ));
+    assert_eq(contains(ir, "for-iter"), true)
+}
+
+test fn string_lit_in_return_gets_globalised() -> Unit {
+    // Return branch (falls through to Expr in collect_strings_in_stmt).
+    let ir: String = emit_program(tir(
+        "{\"types\":[],\"fns\":[{\"name\":\"main\",\"params\":[],\"ret_ty\":{\"tag\":\"Str\"},\"body\":{\"stmts\":["
+        .concat("{\"tag\":\"Return\",\"expr\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Str\",\"value\":\"returned\"}},\"ty\":{\"tag\":\"Str\"}}}")
+        .concat("]}}]}")
+    ));
+    assert_eq(contains(ir, "returned"), true)
+}
+
+test fn string_lit_inside_binary_lhs_or_rhs_gets_globalised() -> Unit {
+    // collect_strings_in_expr.Binary walks lhs and rhs.
+    let ir: String = emit_program(tir(
+        "{\"types\":[],\"fns\":[{\"name\":\"main\",\"params\":[],\"ret_ty\":{\"tag\":\"Int\"},\"body\":{\"stmts\":["
+        .concat("{\"tag\":\"Expr\",\"expr\":{\"kind\":{\"tag\":\"Binary\",\"op\":\"Add\",")
+        .concat("\"left\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Str\",\"value\":\"bin-lhs\"}},\"ty\":{\"tag\":\"Str\"}},")
+        .concat("\"right\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"0\"}},\"ty\":{\"tag\":\"Int\"}}")
+        .concat("},\"ty\":{\"tag\":\"Int\"}}}")
+        .concat("]}}]}")
+    ));
+    assert_eq(contains(ir, "bin-lhs"), true)
+}
+
+test fn string_lit_inside_unary_gets_globalised() -> Unit {
+    // collect_strings_in_expr.Unary walks the inner expr.
+    let ir: String = emit_program(tir(
+        "{\"types\":[],\"fns\":[{\"name\":\"main\",\"params\":[],\"ret_ty\":{\"tag\":\"Int\"},\"body\":{\"stmts\":["
+        .concat("{\"tag\":\"Expr\",\"expr\":{\"kind\":{\"tag\":\"Unary\",\"op\":\"Neg\",")
+        .concat("\"expr\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Str\",\"value\":\"unary-inner\"}},\"ty\":{\"tag\":\"Str\"}}")
+        .concat("},\"ty\":{\"tag\":\"Int\"}}}")
+        .concat("]}}]}")
+    ));
+    assert_eq(contains(ir, "unary-inner"), true)
+}
+
+test fn string_lit_inside_match_arm_gets_globalised() -> Unit {
+    // collect_strings_in_expr.Match walks the scrutinee and each arm body.
+    let ir: String = emit_program(tir(
+        "{\"types\":[],\"fns\":[{\"name\":\"main\",\"params\":[],\"ret_ty\":{\"tag\":\"Int\"},\"body\":{\"stmts\":["
+        .concat("{\"tag\":\"Expr\",\"expr\":{\"kind\":{\"tag\":\"Match\",")
+        .concat("\"scrutinee\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"0\"}},\"ty\":{\"tag\":\"Int\"}},")
+        .concat("\"arms\":[")
+        .concat("{\"pattern\":{\"tag\":\"Wildcard\"},")
+        .concat("\"body\":{\"stmts\":[{\"tag\":\"Expr\",\"expr\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Str\",\"value\":\"match-arm-str\"}},\"ty\":{\"tag\":\"Str\"}}}]}}")
+        .concat("]},\"ty\":{\"tag\":\"Int\"}}}")
+        .concat("]}}]}")
+    ));
+    assert_eq(contains(ir, "match-arm-str"), true)
+}
+
+test fn string_lit_in_list_lit_element_gets_globalised() -> Unit {
+    // collect_strings_in_expr.ListLit walks each element expr.
+    let ir: String = emit_program(tir(
+        "{\"types\":[],\"fns\":[{\"name\":\"main\",\"params\":[],\"ret_ty\":{\"tag\":\"Int\"},\"body\":{\"stmts\":["
+        .concat("{\"tag\":\"Expr\",\"expr\":{\"kind\":{\"tag\":\"ListLit\",\"elems\":[")
+        .concat("{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Str\",\"value\":\"list-elem-str\"}},\"ty\":{\"tag\":\"Str\"}}")
+        .concat("]},\"ty\":{\"tag\":\"List\",\"inner\":{\"tag\":\"Str\"}}}}")
+        .concat("]}}]}")
+    ));
+    assert_eq(contains(ir, "list-elem-str"), true)
+}

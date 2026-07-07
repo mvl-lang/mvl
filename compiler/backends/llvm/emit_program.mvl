@@ -250,8 +250,11 @@ partial fn collect_strings_in_expr(expr: Value) -> List[String] {
         }
         out
     } else if t == "Binary" {
-        collect_strings_in_expr(jget(kind, "lhs"))
-            .concat(collect_strings_in_expr(jget(kind, "rhs")))
+        // TIR emits Binary operand fields as `left` / `right`; the older
+        // `lhs` / `rhs` names never resolved and silently dropped string
+        // literals nested inside binary expressions.
+        collect_strings_in_expr(jget(kind, "left"))
+            .concat(collect_strings_in_expr(jget(kind, "right")))
     } else if t == "Unary" {
         collect_strings_in_expr(jget(kind, "expr"))
     } else if t == "If" {

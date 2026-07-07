@@ -433,3 +433,180 @@ test fn fn_call_println_str_uses_fmt_str_and_extracts_ptr() -> Unit {
     assert_eq(contains_ir(e.instrs, "extractvalue {i64, ptr}"), true);
     assert_eq(contains_ir(e.instrs, "@.fmt_str"), true)
 }
+
+// ── Helpers: ctx with a `Point { x: Int, y: Int }` struct registered ───────
+
+partial fn ctx_with_point() -> EmitCtx {
+    // Struct registry: `Point` has two i64 fields (x → 0, y → 1).
+    let idx: ref Map[String, Int] = Map::new();
+    idx.insert("x", 0);
+    idx.insert("y", 1);
+    let structs: ref Map[String, StructInfo] = Map::new();
+    structs.insert("Point", StructInfo {
+        field_index: idx,
+        field_types: ["i64", "i64"],
+    });
+    EmitCtx {
+        next_reg: 0, locals: Map[String, LocalRef]::new(),
+        enums: Map[String, Int]::new(), strings: Map[String, String]::new(),
+        structs: structs,
+        enum_types: Map[String, String]::new(),
+        variant_payloads: Map[String, Int]::new(),
+        variant_slots: Map[String, Map[String, Int]]::new(),
+        variant_slot_types: Map[String, List[String]]::new(),
+    }
+}
+
+// ── Construct: struct aggregate ─────────────────────────────────────────────
+
+test fn construct_struct_emits_insertvalue_chain() -> Unit {
+    // `Point { x: 3, y: 12 }` → two chained insertvalue's into `%Point`.
+    let expr: Value = parse(
+        "{\"kind\":{\"tag\":\"Construct\",\"name\":\"Point\",\"fields\":["
+        .concat("{\"name\":\"x\",\"expr\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"3\"}},\"ty\":{\"tag\":\"Int\"}}},")
+        .concat("{\"name\":\"y\",\"expr\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"12\"}},\"ty\":{\"tag\":\"Int\"}}}")
+        .concat("]},\"ty\":{\"tag\":\"Named\",\"name\":\"Point\"}}")
+    );
+    let e: Emitted = ctx_with_point().emit_expr(expr);
+    assert_eq(e.ty, "%Point");
+    // Field 0 inserted from undef, field 1 chained.
+    assert_eq(contains_ir(e.instrs, "insertvalue %Point undef, i64 3, 0"), true);
+    assert_eq(contains_ir(e.instrs, "i64 12, 1"), true)
+}
+
+// ── FieldAccess ─────────────────────────────────────────────────────────────
+
+test fn field_access_emits_extractvalue_at_declared_index() -> Unit {
+    // `p.y` on a bound `%p: %Point` → extractvalue %Point %p, 1.
+    let locals: ref Map[String, LocalRef] = Map::new();
+    locals.insert("p", LocalRef { reg: "%p", ty: "%Point", is_ref: false });
+    // Reuse the ctx_with_point structs registry via a local rebuild.
+    let idx: ref Map[String, Int] = Map::new();
+    idx.insert("x", 0);
+    idx.insert("y", 1);
+    let structs: ref Map[String, StructInfo] = Map::new();
+    structs.insert("Point", StructInfo {
+        field_index: idx,
+        field_types: ["i64", "i64"],
+    });
+    let ctx: EmitCtx = EmitCtx {
+        next_reg: 0, locals: locals, enums: Map[String, Int]::new(),
+        strings: Map[String, String]::new(), structs: structs,
+        enum_types: Map[String, String]::new(),
+        variant_payloads: Map[String, Int]::new(),
+        variant_slots: Map[String, Map[String, Int]]::new(),
+        variant_slot_types: Map[String, List[String]]::new(),
+    };
+    let expr: Value = parse(
+        "{\"kind\":{\"tag\":\"FieldAccess\",\"field\":\"y\","
+        .concat("\"expr\":{\"kind\":{\"tag\":\"Var\",\"name\":\"p\"},\"ty\":{\"tag\":\"Named\",\"name\":\"Point\"}}")
+        .concat("},\"ty\":{\"tag\":\"Int\"}}")
+    );
+    let e: Emitted = ctx.emit_expr(expr);
+    assert_eq(e.ty, "i64");
+    // y is field index 1 in the registry.
+    assert_eq(contains_ir(e.instrs, "extractvalue %Point %p, 1"), true)
+}
+
+// ── ListLit ─────────────────────────────────────────────────────────────────
+
+test fn list_lit_allocates_array_and_wraps_in_i64_ptr() -> Unit {
+    // `[1, 2, 3]` — alloca [3 x i64], three GEP+store, then two
+    // insertvalue's wrapping length + data ptr into `{i64, ptr}`.
+    let expr: Value = parse(
+        "{\"kind\":{\"tag\":\"ListLit\",\"elems\":["
+        .concat("{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"1\"}},\"ty\":{\"tag\":\"Int\"}},")
+        .concat("{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"2\"}},\"ty\":{\"tag\":\"Int\"}},")
+        .concat("{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"3\"}},\"ty\":{\"tag\":\"Int\"}}")
+        .concat("]},\"ty\":{\"tag\":\"List\",\"inner\":{\"tag\":\"Int\"}}}")
+    );
+    let e: Emitted = empty_ctx().emit_expr(expr);
+    assert_eq(e.ty, "{i64, ptr}");
+    // A1k: fixed-size alloca of `[N x i64]` — 3 elements here.
+    assert_eq(contains_ir(e.instrs, "alloca [3 x i64]"), true);
+    // Length stored into the wrapper.
+    assert_eq(contains_ir(e.instrs, "insertvalue {i64, ptr} undef, i64 3, 0"), true);
+    // Two of three getelementptr's is enough to prove the loop ran.
+    assert_eq(contains_ir(e.instrs, "getelementptr [3 x i64]"), true)
+}
+
+// ── Var: user-defined enum variant reference ────────────────────────────────
+
+test fn var_referring_to_enum_variant_returns_i8_tag() -> Unit {
+    // `Color::Red` when Red is registered as tag 0 → lowered as an
+    // `i8 0` immediate (no instrs).
+    let enums: ref Map[String, Int] = Map::new();
+    enums.insert("Color::Red", 0);
+    enums.insert("Color::Green", 1);
+    let enum_types: ref Map[String, String] = Map::new();
+    enum_types.insert("Color", "i8");
+    let ctx: EmitCtx = EmitCtx {
+        next_reg: 0, locals: Map[String, LocalRef]::new(),
+        enums: enums, strings: Map[String, String]::new(),
+        structs: Map[String, StructInfo]::new(),
+        enum_types: enum_types,
+        variant_payloads: Map[String, Int]::new(),
+        variant_slots: Map[String, Map[String, Int]]::new(),
+        variant_slot_types: Map[String, List[String]]::new(),
+    };
+    let expr: Value = parse(
+        "{\"kind\":{\"tag\":\"Var\",\"name\":\"Color::Green\"},\"ty\":{\"tag\":\"Named\",\"name\":\"Color\"}}"
+    );
+    let e: Emitted = ctx.emit_expr(expr);
+    // Green's tag is 1; Var evaluates to the immediate — no instrs.
+    assert_eq(e.reg, "1")
+}
+
+// ── MethodCall: list.len ────────────────────────────────────────────────────
+
+test fn method_call_list_len_emits_extractvalue_at_zero() -> Unit {
+    // `xs.len()` on List[Int] → extractvalue {i64, ptr} <xs>, 0.
+    // The recv reg is the tail of the ListLit lowering.
+    let expr: Value = parse(
+        "{\"kind\":{\"tag\":\"MethodCall\",\"method\":\"len\","
+        .concat("\"receiver\":{\"kind\":{\"tag\":\"ListLit\",\"elems\":[")
+        .concat("{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"1\"}},\"ty\":{\"tag\":\"Int\"}}")
+        .concat("]},\"ty\":{\"tag\":\"List\",\"inner\":{\"tag\":\"Int\"}}}")
+        .concat("},\"ty\":{\"tag\":\"Int\"}}")
+    );
+    let e: Emitted = empty_ctx().emit_expr(expr);
+    assert_eq(e.ty, "i64");
+    // len extracts field 0 of the {i64, ptr}.
+    assert_eq(contains_ir(e.instrs, "extractvalue {i64, ptr}"), true);
+    assert_eq(contains_ir(e.instrs, ", 0"), true)
+}
+
+// ── emit_variant_construction directly ──────────────────────────────────────
+
+test fn variant_construction_builds_i8_i64_aggregate_with_tag() -> Unit {
+    // Pre-populate ctx with a single-slot variant registry:
+    //   Value::Num  → tag 0, one i64 slot.
+    let enums: ref Map[String, Int] = Map::new();
+    enums.insert("Value::Num", 0);
+    let enum_types: ref Map[String, String] = Map::new();
+    enum_types.insert("Value", "{i8, i64}");
+    let payloads: ref Map[String, Int] = Map::new();
+    payloads.insert("Value::Num", 1);
+    let slot_types: ref Map[String, List[String]] = Map::new();
+    slot_types.insert("Value::Num", ["i64"]);
+    let ctx: EmitCtx = EmitCtx {
+        next_reg: 0, locals: Map[String, LocalRef]::new(),
+        enums: enums, strings: Map[String, String]::new(),
+        structs: Map[String, StructInfo]::new(),
+        enum_types: enum_types,
+        variant_payloads: payloads,
+        variant_slots: Map[String, Map[String, Int]]::new(),
+        variant_slot_types: slot_types,
+    };
+    // Payload arg: an Integer literal `42`.
+    let payload: Value = parse(
+        "{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"42\"}},\"ty\":{\"tag\":\"Int\"}}"
+    );
+    let e: Emitted = ctx.emit_variant_construction("Value::Num", [payload]);
+    // Aggregate ty comes from ctx.enum_types["Value"].
+    assert_eq(e.ty, "{i8, i64}");
+    // Tag byte insertvalue at index 0.
+    assert_eq(contains_ir(e.instrs, "insertvalue {i8, i64} undef, i8 0, 0"), true);
+    // Payload insertvalue with i64 42 at index 1.
+    assert_eq(contains_ir(e.instrs, "i64 42, 1"), true)
+}
