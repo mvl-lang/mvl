@@ -147,17 +147,42 @@ pub fn parse_file(path: &str) -> Result<(Program, String), String> {
 /// Handles both forms:
 /// - `use mod::item;`           → path = ["mod", "item"]  (len 2)
 /// - `use mod::{A, B, C}`      → path = ["mod"]           (len 1, brace group)
+/// Collect the unique module paths referenced in `use` declarations.
+///
+/// Returns dot-joined module paths for non-stdlib, non-pkg imports.
+/// For `use backends.llvm.context::X` → `"backends.llvm.context"`.
+/// For `use context::{A, B}` → `"context"`.
+/// `std.*` and `pkg.*` are excluded (handled separately).
 pub fn collect_imported_module_names(prog: &Program) -> Vec<String> {
     use std::collections::HashSet;
     let mut seen: HashSet<String> = HashSet::new();
     let mut names: Vec<String> = Vec::new();
     for decl in &prog.declarations {
         if let Decl::Use(ud) = decl {
-            if !ud.path.is_empty() {
-                let mod_name = &ud.path[0];
-                if mod_name != "std" && seen.insert(mod_name.clone()) {
-                    names.push(mod_name.clone());
+            // Determine the module path segments (all but the item).
+            // Bare-style  `use mod;`       — path IS the module name.
+            // Brace-style `use mod::{A, B}` — path IS the module path.
+            // Item-style  `use mod::Item`  — module is path[..len-1].
+            let module_segs: &[String] = if ud.items.is_empty() {
+                if ud.path.len() < 2 {
+                    // Bare module import `use models;` — entire path is module.
+                    &ud.path[..]
+                } else {
+                    &ud.path[..ud.path.len() - 1]
                 }
+            } else {
+                &ud.path[..]
+            };
+            if module_segs.is_empty() {
+                continue;
+            }
+            let first = module_segs[0].as_str();
+            if first == "std" || first == "pkg" {
+                continue;
+            }
+            let mod_name = module_segs.join(".");
+            if seen.insert(mod_name.clone()) {
+                names.push(mod_name);
             }
         }
     }
@@ -203,6 +228,43 @@ pub fn stem(path: &str) -> String {
     }
 }
 
+/// Derive a dot-separated module name from `file_path` relative to `base_dir`.
+///
+/// `base_dir` is the directory passed to the CLI command (e.g. `mvl check src/`).
+/// Files directly under `base_dir` get a bare name; files in subdirectories get
+/// a dot-qualified name matching their relative path.
+///
+/// Examples (base_dir = "src/"):
+/// - `src/context.mvl`              → `"context"`
+/// - `src/backends/llvm/context.mvl` → `"backends.llvm.context"`
+/// - `src/foo/mod.mvl`              → `"foo"` (mod.mvl is transparent)
+pub fn qualified_stem(base_dir: &Path, file_path: &Path) -> String {
+    let rel = file_path.strip_prefix(base_dir).unwrap_or(file_path);
+    let no_ext = rel.with_extension("");
+    let parts: Vec<&str> = no_ext
+        .components()
+        .filter_map(|c| match c {
+            std::path::Component::Normal(s) => s.to_str(),
+            _ => None,
+        })
+        .collect();
+    // Transparent mod.mvl: foo/mod.mvl → ["foo", "mod"] → drop "mod" → ["foo"]
+    let parts = if parts.last() == Some(&"mod") {
+        &parts[..parts.len() - 1]
+    } else {
+        &parts[..]
+    };
+    if parts.is_empty() {
+        return "mvl_program".to_string();
+    }
+    let raw = parts.join(".");
+    if raw.starts_with(|c: char| c.is_ascii_digit()) {
+        format!("mvl_{raw}")
+    } else {
+        raw
+    }
+}
+
 /// Return paths to all non-test `.mvl` files in `dir` (non-recursive).
 ///
 /// Used to discover ambient sibling modules in a directory: all files in the same
@@ -230,23 +292,32 @@ pub fn sibling_module_files(dir: &Path) -> Vec<PathBuf> {
 
 /// Locate the `.mvl` source file for a module named `mod_name` relative to `entry_dir`.
 ///
+/// `mod_name` may be a dot-qualified path (e.g. `"backends.llvm.context"`) or a
+/// bare single-segment name (e.g. `"context"`). Dots are treated as path separators,
+/// so `"backends.llvm.context"` resolves to `entry_dir/backends/llvm/context.mvl`.
+///
 /// Resolution order (Rust 2018 style, Spec 005):
-/// 1. `{entry_dir}/{mod_name}.mvl`        — preferred (sibling file)
-/// 2. `{entry_dir}/{mod_name}/mod.mvl`    — deprecated; emits a warning and still works
+/// 1. `{entry_dir}/{mod/path}.mvl`        — preferred
+/// 2. `{entry_dir}/{mod_name}/mod.mvl`    — single-segment only, deprecated
 ///
 /// Returns `None` if neither path exists.
 pub fn find_module_file(entry_dir: &Path, mod_name: &str) -> Option<PathBuf> {
-    let sibling = entry_dir.join(format!("{mod_name}.mvl"));
+    // Convert dot-path to filesystem path: "backends.llvm.context" → "backends/llvm/context"
+    let rel_path: PathBuf = mod_name.split('.').collect::<Vec<_>>().join("/").into();
+    let sibling = entry_dir.join(format!("{}.mvl", rel_path.display()));
     if sibling.exists() {
         return Some(sibling);
     }
-    let legacy = entry_dir.join(mod_name).join("mod.mvl");
-    if legacy.exists() {
-        eprintln!(
-            "warning: `{mod_name}/mod.mvl` is deprecated; \
-             rename to `{mod_name}.mvl` alongside the `{mod_name}/` directory"
-        );
-        return Some(legacy);
+    // Legacy mod.mvl form: only valid for single-segment names.
+    if !mod_name.contains('.') {
+        let legacy = entry_dir.join(mod_name).join("mod.mvl");
+        if legacy.exists() {
+            eprintln!(
+                "warning: `{mod_name}/mod.mvl` is deprecated; \
+                 rename to `{mod_name}.mvl` alongside the `{mod_name}/` directory"
+            );
+            return Some(legacy);
+        }
     }
     None
 }
@@ -933,6 +1004,27 @@ mod tests {
         assert_eq!(names, vec!["parser".to_string()]);
     }
 
+    // collect_imported_module_names: bare `use models;` (no item, no braces) is collected.
+    #[test]
+    fn collect_imported_module_names_bare_import() {
+        let src = "use models;";
+        let (mut p, _) = crate::mvl::parser::Parser::new(src);
+        let prog = p.parse_program();
+        let names = collect_imported_module_names(&prog);
+        assert_eq!(names, vec!["models".to_string()]);
+    }
+
+    // collect_imported_module_names: qualified path `use backends.llvm.context::X`
+    // returns the full dot-joined module name.
+    #[test]
+    fn collect_imported_module_names_qualified_path() {
+        let src = "use backends.llvm.context::EmitCtx;";
+        let (mut p, _) = crate::mvl::parser::Parser::new(src);
+        let prog = p.parse_program();
+        let names = collect_imported_module_names(&prog);
+        assert_eq!(names, vec!["backends.llvm.context".to_string()]);
+    }
+
     // collect_imported_module_names: `use std.io.{...}` must NOT appear in sibling list.
     #[test]
     fn collect_imported_module_names_excludes_std() {
@@ -941,6 +1033,59 @@ mod tests {
         let prog = p.parse_program();
         let names = collect_imported_module_names(&prog);
         assert!(names.is_empty());
+    }
+
+    // qualified_stem: direct child → bare name.
+    #[test]
+    fn qualified_stem_direct_child() {
+        let base = std::path::Path::new("src");
+        assert_eq!(qualified_stem(base, std::path::Path::new("src/context.mvl")), "context");
+        assert_eq!(qualified_stem(base, std::path::Path::new("src/main.mvl")), "main");
+    }
+
+    // qualified_stem: nested file → dot-separated path.
+    #[test]
+    fn qualified_stem_nested() {
+        let base = std::path::Path::new("compiler");
+        assert_eq!(
+            qualified_stem(base, std::path::Path::new("compiler/backends/llvm/context.mvl")),
+            "backends.llvm.context"
+        );
+    }
+
+    // qualified_stem: two files sharing a basename get distinct qualified names.
+    #[test]
+    fn qualified_stem_no_collision_for_same_basename() {
+        let base = std::path::Path::new("compiler");
+        let a = qualified_stem(base, std::path::Path::new("compiler/context.mvl"));
+        let b = qualified_stem(base, std::path::Path::new("compiler/backends/llvm/context.mvl"));
+        assert_eq!(a, "context");
+        assert_eq!(b, "backends.llvm.context");
+        assert_ne!(a, b);
+    }
+
+    // qualified_stem: mod.mvl is transparent.
+    #[test]
+    fn qualified_stem_mod_mvl_transparent() {
+        let base = std::path::Path::new("src");
+        assert_eq!(
+            qualified_stem(base, std::path::Path::new("src/math/mod.mvl")),
+            "math"
+        );
+    }
+
+    // find_module_file: qualified dot-path resolves to nested file.
+    #[test]
+    fn find_module_file_qualified_dot_path() {
+        let dir = tmpdir();
+        let nested = dir.path().join("backends").join("llvm");
+        fs::create_dir_all(&nested).unwrap();
+        let file = nested.join("context.mvl");
+        fs::write(&file, "").unwrap();
+
+        let found = find_module_file(dir.path(), "backends.llvm.context")
+            .expect("should find nested file via dot-path");
+        assert_eq!(found, file);
     }
 
     // ── build_pkg_name_map_with_cache: transitive expansion (#1477) ──────────
@@ -1069,13 +1214,6 @@ mod tests {
         );
     }
 
-    // stem: two files in different directories sharing a basename both yield
-    // the same module name — documenting the root cause of #1714.
-    #[test]
-    fn stem_collision_same_basename_different_dirs() {
-        assert_eq!(stem("compiler/context.mvl"), "context");
-        assert_eq!(stem("compiler/backends/llvm/context.mvl"), "context");
-    }
 }
 
 /// Load stdlib prelude files for all `use std.X` declarations found in `progs`.

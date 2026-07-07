@@ -68,12 +68,6 @@ pub enum ResolveError {
         module: String,
         missing_path: Vec<String>,
     },
-    /// Two loaded modules share the same derived name (basename collision).
-    DuplicateModule {
-        name: String,
-        path1: String,
-        path2: String,
-    },
     /// The imported item is not exported from its source module.
     NotExported {
         module: String,
@@ -117,12 +111,6 @@ impl std::fmt::Display for ResolveError {
                 missing_path,
             } => {
                 write!(f, "{module}: unknown module `{}`", missing_path.join("::"))
-            }
-            ResolveError::DuplicateModule { name, path1, path2 } => {
-                write!(
-                    f,
-                    "duplicate module name `{name}`: {path1} and {path2} share the same stem (rename one)"
-                )
             }
             ResolveError::NotExported {
                 module,
@@ -278,19 +266,7 @@ impl Resolver {
         modules.insert("std".to_string(), self.stdlib.clone());
 
         // Pass 1: collect exported names for each module.
-        // Also detect basename collisions: two files with the same stem silently
-        // picked whichever was enumerated first — now we hard-error instead.
-        let mut registered_paths: HashMap<String, String> = HashMap::new(); // name → source_file
         for (name, source_file, prog) in &self.programs {
-            if let Some(prev_path) = registered_paths.get(name.as_str()) {
-                errors.push(ResolveError::DuplicateModule {
-                    name: name.clone(),
-                    path1: prev_path.clone(),
-                    path2: source_file.clone(),
-                });
-                continue;
-            }
-            registered_paths.insert(name.clone(), source_file.clone());
             let exports = collect_exports(prog);
             modules.insert(
                 name.clone(),
@@ -343,7 +319,9 @@ impl Resolver {
                         });
                         continue;
                     }
-                    let source_key = source_module.join("::");
+                    // Module keys use dot-separated paths: "backends.llvm.context"
+                    // matches `use backends.llvm.context::X` → source_module = ["backends","llvm","context"]
+                    let source_key = source_module.join(".");
                     if !modules.contains_key(&source_key) {
                         errors.push(ResolveError::MissingModule {
                             module: name.clone(),
@@ -448,7 +426,7 @@ fn build_import_graph(modules: &HashMap<String, ResolvedModule>) -> HashMap<Stri
         let mut deps = Vec::new();
         for import in &module.imports {
             if import.source_path.len() > 1 {
-                let dep = import.source_path[..import.source_path.len() - 1].join("::");
+                let dep = import.source_path[..import.source_path.len() - 1].join(".");
                 if modules.contains_key(&dep) && !deps.contains(&dep) {
                     deps.push(dep);
                 }
@@ -652,34 +630,30 @@ mod tests {
         );
     }
 
-    // Req 1: duplicate module name rejected — two files sharing the same stem must error.
+    // Req 1: qualified module names allow same basename in different subdirectories.
     #[test]
-    fn duplicate_module_name_rejected() {
+    fn qualified_module_names_no_collision() {
         let a = parse("pub fn a_fn() -> Int { 0 }");
         let b = parse("pub fn b_fn() -> Int { 0 }");
+        // "context" and "backends.llvm.context" are distinct keys — no collision.
         let result = resolve_project(
             vec![
+                ("context".to_string(), "compiler/context.mvl".to_string(), a),
                 (
-                    "context".to_string(),
-                    "compiler/context.mvl".to_string(),
-                    a,
-                ),
-                (
-                    "context".to_string(),
+                    "backends.llvm.context".to_string(),
                     "compiler/backends/llvm/context.mvl".to_string(),
                     b,
                 ),
             ],
             None,
         );
-        let has_dup = result.errors.iter().any(|e| {
-            matches!(e, ResolveError::DuplicateModule { name, .. } if name == "context")
-        });
         assert!(
-            has_dup,
-            "two modules sharing a stem must be rejected: {:?}",
+            result.is_ok(),
+            "qualified names must not collide: {:?}",
             result.errors
         );
+        assert!(result.modules.contains_key("context"));
+        assert!(result.modules.contains_key("backends.llvm.context"));
     }
 
     // Req 1: file-module correspondence (module name from filename).

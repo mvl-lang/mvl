@@ -25,12 +25,21 @@ pub fn run(path: &str, json: bool, verbose: bool) {
     let excluded_count = all_mvl_count - files.len();
 
     // Run the module resolver to surface `use` errors before reporting.
+    let base_dir: std::path::PathBuf = if std::path::Path::new(path).is_dir() {
+        std::path::Path::new(path).to_path_buf()
+    } else {
+        std::path::Path::new(path)
+            .parent()
+            .unwrap_or(std::path::Path::new("."))
+            .to_path_buf()
+    };
     let modules: Vec<(String, String, Program)> = files
         .iter()
         .map(|f| {
             let file_str = f.display().to_string();
             let (prog, _) = super::parse_or_exit(&file_str);
-            (loader::stem(&file_str), file_str.clone(), prog)
+            let qname = loader::qualified_stem(&base_dir, f.as_path());
+            (qname, file_str.clone(), prog)
         })
         .collect();
     let resolve_result = resolver::resolve_project(modules, Some(&stdlib_dir));

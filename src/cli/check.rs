@@ -131,6 +131,17 @@ pub fn run(path: &str, req_filter: Option<u8>, opts: CheckOptions) {
         }
     }
 
+    // Base directory for computing qualified module names: the directory passed to
+    // the command (or the parent dir of the file, for single-file checks).
+    let base_dir: std::path::PathBuf = if Path::new(path).is_dir() {
+        Path::new(path).to_path_buf()
+    } else {
+        Path::new(path)
+            .parent()
+            .unwrap_or(Path::new("."))
+            .to_path_buf()
+    };
+
     // Parse all files once so we can pass them to both the resolver and the checker.
     let mut parsed: Vec<(String, Program, String)> = files
         .iter()
@@ -146,8 +157,10 @@ pub fn run(path: &str, req_filter: Option<u8>, opts: CheckOptions) {
     // Track how many entries are "requested" vs "resolver-only" siblings.
     let check_count = parsed.len();
     if Path::new(path).is_file() {
-        let already_loaded: std::collections::HashSet<String> =
-            parsed.iter().map(|(f, _, _)| loader::stem(f)).collect();
+        let already_loaded: std::collections::HashSet<String> = parsed
+            .iter()
+            .map(|(f, _, _)| loader::qualified_stem(&base_dir, Path::new(f)))
+            .collect();
         let entry_dir = Path::new(path).parent().unwrap_or_else(|| Path::new("."));
         if let Some((_, entry_prog, _)) = parsed.first() {
             let extra_mods = loader::collect_imported_module_names(entry_prog);
@@ -167,7 +180,10 @@ pub fn run(path: &str, req_filter: Option<u8>, opts: CheckOptions) {
     // Run the module resolver across all files, wiring in the extracted stdlib.
     let modules: Vec<(String, String, Program)> = parsed
         .iter()
-        .map(|(file_str, prog, _)| (loader::stem(file_str), file_str.clone(), prog.clone()))
+        .map(|(file_str, prog, _)| {
+            let qname = loader::qualified_stem(&base_dir, Path::new(file_str));
+            (qname, file_str.clone(), prog.clone())
+        })
         .collect();
     let resolve_result = resolver::resolve_project(modules, Some(&stdlib_dir));
     let mut had_errors = !resolve_result.is_ok() || stdlib_proven_failed;

@@ -45,10 +45,21 @@ pub fn run(path: &str, verbose: bool, stdlib_profile: &str, callee_filter: Optio
 
     let check_count = parsed.len();
 
+    let base_dir: std::path::PathBuf = if Path::new(path).is_dir() {
+        Path::new(path).to_path_buf()
+    } else {
+        Path::new(path)
+            .parent()
+            .unwrap_or(Path::new("."))
+            .to_path_buf()
+    };
+
     // Auto-load imported sibling modules (mirrors check behaviour).
     if Path::new(path).is_file() {
-        let already_loaded: std::collections::HashSet<String> =
-            parsed.iter().map(|(f, _)| loader::stem(f)).collect();
+        let already_loaded: std::collections::HashSet<String> = parsed
+            .iter()
+            .map(|(f, _)| loader::qualified_stem(&base_dir, Path::new(f)))
+            .collect();
         let entry_dir = Path::new(path).parent().unwrap_or_else(|| Path::new("."));
         if let Some((_, entry_prog)) = parsed.first() {
             for mod_name in loader::collect_imported_module_names(entry_prog) {
@@ -67,7 +78,10 @@ pub fn run(path: &str, verbose: bool, stdlib_profile: &str, callee_filter: Optio
     // Run resolver so cross-module references work the same as `mvl check`.
     let modules: Vec<(String, String, Program)> = parsed
         .iter()
-        .map(|(file_str, prog)| (loader::stem(file_str), file_str.clone(), prog.clone()))
+        .map(|(file_str, prog)| {
+            let qname = loader::qualified_stem(&base_dir, Path::new(file_str));
+            (qname, file_str.clone(), prog.clone())
+        })
         .collect();
     let _ = resolver::resolve_project(modules, Some(&stdlib_dir));
 

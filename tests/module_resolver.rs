@@ -404,63 +404,81 @@ fn stdlib_from_filesystem_missing_file_falls_back_to_stub() {
     );
 }
 
-// ── Duplicate module name collision (issue #1714) ─────────────────────────
+// ── Qualified module paths (issue #1714) ──────────────────────────────────
 
 #[test]
-fn duplicate_module_name_rejected() {
-    // Two files sharing the same basename must produce a load-time error, not
-    // a silent wrong-module bind.
+fn qualified_module_path_no_collision() {
+    // Two files that share a basename but live in different directories get
+    // distinct qualified keys: "context" vs "backends.llvm.context".
     let a = parse("pub fn a_fn() -> Int { 0 }");
     let b = parse("pub fn b_fn() -> Int { 0 }");
     let result = resolve_project(
         vec![
+            ("context".to_string(), "compiler/context.mvl".to_string(), a),
             (
-                "context".to_string(),
-                "compiler/context.mvl".to_string(),
-                a,
-            ),
-            (
-                "context".to_string(),
+                "backends.llvm.context".to_string(),
                 "compiler/backends/llvm/context.mvl".to_string(),
                 b,
             ),
         ],
         None,
     );
-    let has_dup = result.errors.iter().any(|e| {
-        matches!(e, ResolveError::DuplicateModule { name, .. } if name == "context")
-    });
     assert!(
-        has_dup,
-        "two modules sharing a stem must be rejected: {:?}",
+        result.is_ok(),
+        "qualified keys must not collide: {:?}",
+        result.errors
+    );
+    assert!(result.modules.contains_key("context"));
+    assert!(result.modules.contains_key("backends.llvm.context"));
+}
+
+#[test]
+fn qualified_module_import_resolves() {
+    // `use backends.llvm.context::EmitCtx` must resolve when the module is
+    // registered under its qualified key.
+    let ctx = parse("pub type EmitCtx = struct { x: Int }");
+    let main = parse("use backends.llvm.context::EmitCtx;");
+    let result = resolve_project(
+        vec![
+            (
+                "backends.llvm.context".to_string(),
+                "compiler/backends/llvm/context.mvl".to_string(),
+                ctx,
+            ),
+            ("main".to_string(), "compiler/main.mvl".to_string(), main),
+        ],
+        None,
+    );
+    assert!(
+        result.is_ok(),
+        "qualified import must resolve: {:?}",
         result.errors
     );
 }
 
 #[test]
-fn duplicate_module_error_cites_both_paths() {
-    // The error message must name both conflicting file paths.
-    let a = parse("pub fn x() -> Int { 0 }");
-    let b = parse("pub fn y() -> Int { 0 }");
+fn bare_and_qualified_names_coexist() {
+    // A module at the root ("context") and a same-named module in a subdir
+    // ("backends.llvm.context") can coexist and be imported independently.
+    let ctx_top = parse("pub type TypeEnv = struct { x: Int }");
+    let ctx_llvm = parse("pub type EmitCtx = struct { x: Int }");
+    let main = parse("use context::TypeEnv;\nuse backends.llvm.context::EmitCtx;");
     let result = resolve_project(
         vec![
-            ("math".to_string(), "src/math.mvl".to_string(), a),
-            ("math".to_string(), "utils/math.mvl".to_string(), b),
+            ("context".to_string(), "compiler/context.mvl".to_string(), ctx_top),
+            (
+                "backends.llvm.context".to_string(),
+                "compiler/backends/llvm/context.mvl".to_string(),
+                ctx_llvm,
+            ),
+            ("main".to_string(), "compiler/main.mvl".to_string(), main),
         ],
         None,
     );
-    let error_msg = result
-        .errors
-        .iter()
-        .find(|e| matches!(e, ResolveError::DuplicateModule { .. }))
-        .map(|e| e.to_string())
-        .unwrap_or_default();
     assert!(
-        error_msg.contains("src/math.mvl"),
-        "error must cite first path: {error_msg}"
-    );
-    assert!(
-        error_msg.contains("utils/math.mvl"),
-        "error must cite second path: {error_msg}"
+        result.is_ok(),
+        "bare and qualified names must coexist: {:?}",
+        result.errors
     );
 }
+
