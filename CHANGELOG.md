@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.238.1] - 2026-07-07
+
+### Fixed
+
+- **Module resolver: qualified module paths for same-basename files** (#1714) — Two `.mvl` files in different directories that share a basename (e.g. `compiler/context.mvl` and `compiler/backends/llvm/context.mvl`) previously collided silently: the resolver's HashMap registered whichever was enumerated first and discarded the other. Imports bound to the wrong module, producing misleading diagnostics like "`LocalRef` is not exported from `context`" when it actually lived in `backends/llvm/context.mvl`. Fix: derive module names from the file's path relative to the CLI base directory, replacing path separators with dots. Files now register under distinct qualified names (`"context"` vs. `"backends.llvm.context"`), and imports use the full dot-qualified path: `use backends.llvm.context::EmitCtx`. Same-basename files in different subdirectories can now coexist without renaming or collision. Includes: (1) `qualified_stem(base_dir, file)` function; (2) updated `collect_imported_module_names` to return dot-joined module paths; (3) updated `find_module_file` to resolve dot-paths to filesystem paths; (4) resolver lookup changes from `join("::")` to `join(".")` for key matching; (5) all CLI entry points (check, build, assurance, prove) updated to use qualified names. Three new integration tests, six new loader unit tests, spec 005 Requirement 1 and 3 updated, and ADR-0052 added.
+
 ## [0.238.0] - 2026-07-06
 
 ### Added
