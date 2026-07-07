@@ -17,6 +17,20 @@
 
 use std.collections.{Map}
 use std.json.{decode, Value}
+use backends.llvm.emit_helpers::jstr;
+use backends.llvm.emit_helpers::default_target_triple;
+use backends.llvm.emit_helpers::enum_name_of_variant;
+use backends.llvm.emit_helpers::escape_llvm_string;
+use backends.llvm.emit_helpers::extract_else_block;
+use backends.llvm.emit_helpers::jarr;
+use backends.llvm.emit_helpers::jbool;
+use backends.llvm.emit_helpers::jget;
+use backends.llvm.emit_helpers::jtag;
+use backends.llvm.emit_helpers::lbrace;
+use backends.llvm.emit_helpers::llvm_ty_of;
+use backends.llvm.emit_helpers::make_expr_stmt;
+use backends.llvm.emit_helpers::rbrace;
+use backends.llvm.emit_helpers::wrap_stmts_as_block;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 

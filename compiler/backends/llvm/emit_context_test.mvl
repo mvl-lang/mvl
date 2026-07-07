@@ -19,6 +19,17 @@
 //            make test-mvl
 
 use std.collections.{Map}
+use backends.llvm.emit_context::EmitCtx;
+use backends.llvm.emit_helpers::llvm_ty_of;
+use backends.llvm.emit_context::clone_enums;
+use backends.llvm.emit_context::clone_locals;
+use backends.llvm.emit_context::clone_strings;
+use backends.llvm.emit_context::clone_structs;
+use backends.llvm.emit_context::clone_variant_slot_types;
+use backends.llvm.emit_context::clone_variant_slots;
+use backends.llvm.emit_context::emitted_bool;
+use backends.llvm.emit_context::emitted_imm;
+use backends.llvm.emit_context::extend_locals;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -145,7 +156,7 @@ test fn string_global_of_empty_registry_returns_sentinel() -> Unit {
 
 test fn string_global_of_multi_use_on_same_ctx() -> Unit {
     // Regression: EmitCtx accessor method called multiple times on the
-    // same ctx binding.  Before ADR-0052 landed, MVL emitted bare
+    // same ctx binding.  Before ADR-0054 landed, MVL emitted bare
     // `ctx.method(...)` at each call site, move-consuming ctx after the
     // first call.  Now each non-last-use call emits `ctx.clone().method(...)`.
     let s: ref Map[String, String] = Map::new();

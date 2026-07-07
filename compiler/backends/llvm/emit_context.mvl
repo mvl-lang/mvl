@@ -143,8 +143,8 @@ pub fn emitted_bool(value: String, next: Int) -> Emitted {
 // `build_string_registry`, so an unexpected miss surfaces as an invalid IR
 // symbol at link time instead of a silent empty.
 //
-// Now that ADR-0052 (method receiver clone semantics) landed, user methods
-// on non-last-use receivers correctly clone.  See ADR-0052 for the full
+// Now that ADR-0054 (method receiver clone semantics) landed, user methods
+// on non-last-use receivers correctly clone.  See ADR-0054 for the full
 // dispatch-path rules.
 pub fn EmitCtx::string_global_of(self, key: String) -> String {
     self.strings.get(key).unwrap_or("@.str.missing")

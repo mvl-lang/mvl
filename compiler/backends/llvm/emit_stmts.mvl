@@ -12,31 +12,31 @@
 
 use std.collections.{Map}
 use std.json.{Value}
-use emit_context::LocalRef;
-use emit_context::StructInfo;
-use emit_context::EmitCtx;
-use emit_context::Emitted;
-use emit_context::StmtOut;
-use emit_context::emitted_imm;
-use emit_context::extend_locals;
-use emit_context::clone_locals;
-use emit_context::clone_enums;
-use emit_context::clone_strings;
-use emit_context::clone_structs;
-use emit_context::clone_variant_slots;
-use emit_context::clone_variant_slot_types;
-use emit_types::tir_ty_to_llvm;
-use emit_types::tir_ty_to_llvm_ctx;
-use emit_types::tir_ty_to_llvm_full;
-use emit_types::is_aggregate_ty;
-use emit_helpers::jstr;
-use emit_helpers::jarr;
-use emit_helpers::jget;
-use emit_helpers::jtag;
-use emit_helpers::jbool;
-use emit_helpers::lbrace;
-use emit_helpers::rbrace;
-use emit_helpers::extract_else_block;
+use backends.llvm.emit_context::LocalRef;
+use backends.llvm.emit_context::StructInfo;
+use backends.llvm.emit_context::EmitCtx;
+use backends.llvm.emit_context::Emitted;
+use backends.llvm.emit_context::StmtOut;
+use backends.llvm.emit_context::emitted_imm;
+use backends.llvm.emit_context::extend_locals;
+use backends.llvm.emit_context::clone_locals;
+use backends.llvm.emit_context::clone_enums;
+use backends.llvm.emit_context::clone_strings;
+use backends.llvm.emit_context::clone_structs;
+use backends.llvm.emit_context::clone_variant_slots;
+use backends.llvm.emit_context::clone_variant_slot_types;
+use backends.llvm.emit_types::tir_ty_to_llvm;
+use backends.llvm.emit_types::tir_ty_to_llvm_ctx;
+use backends.llvm.emit_types::tir_ty_to_llvm_full;
+use backends.llvm.emit_types::is_aggregate_ty;
+use backends.llvm.emit_helpers::jstr;
+use backends.llvm.emit_helpers::jarr;
+use backends.llvm.emit_helpers::jget;
+use backends.llvm.emit_helpers::jtag;
+use backends.llvm.emit_helpers::jbool;
+use backends.llvm.emit_helpers::lbrace;
+use backends.llvm.emit_helpers::rbrace;
+use backends.llvm.emit_helpers::extract_else_block;
 
 // A1k: emit `for x in xs { body }` where xs has TIR type `List[Int]`.
 //

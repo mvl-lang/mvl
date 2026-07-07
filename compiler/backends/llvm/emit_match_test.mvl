@@ -12,6 +12,11 @@
 
 use std.collections.{Map}
 use std.json.{decode, Value}
+use backends.llvm.emit_context::EmitCtx;
+use backends.llvm.emit_exprs::emit_expr;
+use backends.llvm.emit_match::emit_match;
+use backends.llvm.emit_stmts::emit_body;
+use backends.llvm.emit_helpers::jstr;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 

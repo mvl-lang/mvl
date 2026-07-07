@@ -25,12 +25,12 @@
 
 use std.collections.{Map}
 use std.json.{Value}
-use emit_context::StructInfo;
-use emit_helpers::jget;
-use emit_helpers::jstr;
-use emit_helpers::jarr;
-use emit_helpers::jtag;
-use emit_context::clone_structs;
+use backends.llvm.emit_context::StructInfo;
+use backends.llvm.emit_helpers::jget;
+use backends.llvm.emit_helpers::jstr;
+use backends.llvm.emit_helpers::jarr;
+use backends.llvm.emit_helpers::jtag;
+use backends.llvm.emit_context::clone_structs;
 
 // Legacy wrapper: preserved for call sites that don't need to
 // distinguish struct-Named from enum-Named (Named → "i8").  A1n

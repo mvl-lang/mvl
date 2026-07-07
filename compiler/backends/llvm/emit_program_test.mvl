@@ -23,7 +23,14 @@ use std.json.{decode, Value}
 // builders + tir_ty_to_llvm_full internally, but the `mvl test` sibling
 // scan only pulls in modules explicitly imported by a test or an entry
 // point.  Import a marker symbol so emit_types.mvl joins the prelude.
-use emit_types::build_struct_registry;
+use backends.llvm.emit_types::build_struct_registry;
+use backends.llvm.emit_context::EmitCtx;
+use backends.llvm.emit_program::emit_program;
+use backends.llvm.emit_helpers::jstr;
+use backends.llvm.emit_stmts::emit_body;
+use backends.llvm.emit_program::build_string_registry;
+use backends.llvm.emit_helpers::jarr;
+use backends.llvm.emitter::main;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 

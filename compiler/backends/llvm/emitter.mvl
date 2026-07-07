@@ -17,12 +17,12 @@
 
 use std.io.{read, stdin}
 use std.json.{decode, Value}
-use emit_context::EmitCtx;
-use emit_stmts::emit_body;
-use emit_exprs::emit_expr;
-use emit_match::emit_match;
-use emit_helpers::jstr;
-use emit_program::emit_program;
+use backends.llvm.emit_context::EmitCtx;
+use backends.llvm.emit_stmts::emit_body;
+use backends.llvm.emit_exprs::emit_expr;
+use backends.llvm.emit_match::emit_match;
+use backends.llvm.emit_helpers::jstr;
+use backends.llvm.emit_program::emit_program;
 
 partial fn main() -> Unit ! Console {
     match read(stdin(), 100000000) {
