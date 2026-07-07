@@ -141,12 +141,6 @@ pub fn parse_file(path: &str) -> Result<(Program, String), String> {
     Ok((prog, src))
 }
 
-/// Collect unique top-level module names referenced by `use` declarations in `prog`,
-/// excluding `std` (which is provided by the runtime, not sibling files).
-///
-/// Handles both forms:
-/// - `use mod::item;`           → path = ["mod", "item"]  (len 2)
-/// - `use mod::{A, B, C}`      → path = ["mod"]           (len 1, brace group)
 /// Collect the unique module paths referenced in `use` declarations.
 ///
 /// Returns dot-joined module paths for non-stdlib, non-pkg imports.

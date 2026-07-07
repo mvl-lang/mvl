@@ -127,6 +127,10 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
     let mut prelude_stems: Vec<Option<String>> = vec![None; stdlib_prelude_progs.len()];
     // Stems of sibling library files discovered next to test files.
     let mut sibling_stems: Vec<String> = Vec::new();
+    // Split index between universal prelude entries (always emitted into every
+    // file's transpile) and stdlib extras (per-file filtered).  Set inside the
+    // pre-scan block below.
+    let n_universal_prelude_outer: usize;
     // Pre-scan all test files to discover pure-MVL stdlib imports (e.g. json) and
     // extend the prelude so their types/functions are available during transpilation.
     // Also load any pkg.* package modules referenced by the test files.
@@ -327,22 +331,52 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
             }
         }
 
+        // Inline-test source files (regular `.mvl` with `test fn` decls) are
+        // transpiled further down without appearing in `test_files`.  Their
+        // `use std.X` imports must still reach `load_mvl_native_stdlib_extras`
+        // below — otherwise pure-MVL stdlib modules referenced only by inline
+        // tests (e.g. `std.actors`, `std.audit`, `std.log` used by the
+        // `12_actors/` and `13_stdlib/` corpus) are never loaded into the
+        // prelude, and the bundled test crate fails to compile with E0433 on
+        // types like `RestartStrategy`, `AuditEvent`, `DeadLetter` (#1707
+        // phase 3).
+        let inline_test_source_progs: Vec<mvl::mvl::parser::ast::Program> =
+            loader::mvl_files(path, false)
+                .into_iter()
+                .filter_map(|f| {
+                    let (prog, _) = super::parse_or_exit(&f.display().to_string());
+                    let has_test = prog
+                        .declarations
+                        .iter()
+                        .any(|d| matches!(d, Decl::Fn(fd) if fd.is_test));
+                    has_test.then_some(prog)
+                })
+                .collect();
+
         // Single pass over all programs (test files + sibling library files +
-        // loaded pkg.* modules) mirrors cli/build.rs and ensures transitive
-        // stdlib deps are discovered together (#865). pkg_progs must be
-        // included so pure-MVL stdlib imports inside packages (e.g. pkg-trace's
-        // `use std.crypto.{uuid_v4}`) reach the extras loader.
+        // loaded pkg.* modules + inline-test source files) mirrors cli/build.rs
+        // and ensures transitive stdlib deps are discovered together (#865).
+        // pkg_progs must be included so pure-MVL stdlib imports inside packages
+        // (e.g. pkg-trace's `use std.crypto.{uuid_v4}`) reach the extras loader.
         let all_for_extras: Vec<_> = all_test_progs
             .iter()
             .chain(sibling_progs.iter())
             .chain(pkg_progs.iter())
+            .chain(inline_test_source_progs.iter())
             .cloned()
             .collect();
         let extras = loader::load_mvl_native_stdlib_extras(&all_for_extras);
         let n_extras = extras.len();
         stdlib_prelude_progs.extend(extras);
         prelude_stems.extend(std::iter::repeat_n(None, n_extras));
+        n_universal_prelude_outer = stdlib_prelude_progs.len() - n_extras;
     }
+    // Universal prelude = implicit + pkg + siblings. Everything at indices
+    // >= n_universal_prelude is a stdlib extra, filtered per-file below so a
+    // file that doesn't `use std.log` doesn't get `Logger` injected into its
+    // mod (which would collide with a user-declared `actor Logger`, #1707
+    // phase 3).
+    let n_universal_prelude = n_universal_prelude_outer;
 
     // Collect native Cargo deps and bridge.rs from the full pkg.* closure so
     // that the test crate's Cargo.toml mirrors what `mvl build` would emit (#1481).
@@ -423,6 +457,30 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
         let all_fns = mvl::mvl::passes::mono::collect_fns([&prog]);
         let mono = mvl::mvl::passes::mono::monomorphize(&prog, &all_fns, &expr_types);
         let tir = mvl::mvl::ir::lower::lower(&prog, &mono, &expr_types);
+        // Build a per-file prelude: always include the universal entries
+        // (implicit + pkg + siblings) but scope stdlib extras to only the
+        // modules THIS file — plus its siblings — transitively imports.
+        // Including siblings is essential: sibling library code emitted into
+        // the same mod may reference stdlib types (`Logger`, `IoError`, …)
+        // even when the primary file doesn't `use std.X` directly.  Without
+        // that, examples like `access_control/audit_test.mvl` fail with E0425
+        // for `Logger` in `audit.mvl`'s emitted code (#1707 phase 3).
+        let mut extras_scope: Vec<_> = stdlib_prelude_progs[..n_universal_prelude].to_vec();
+        extras_scope.push(prog.clone());
+        let file_extras = loader::load_mvl_native_stdlib_extras(&extras_scope);
+        let file_prelude_progs: Vec<_> = stdlib_prelude_progs[..n_universal_prelude]
+            .iter()
+            .cloned()
+            .chain(file_extras)
+            .collect();
+        let file_prelude_stems: Vec<Option<String>> = prelude_stems[..n_universal_prelude]
+            .iter()
+            .cloned()
+            .chain(std::iter::repeat_n(
+                None,
+                file_prelude_progs.len() - n_universal_prelude,
+            ))
+            .collect();
         // Decide which sibling library stems to instrument in this test file's
         // transpile (#1489).  Each stem is marked at most once across the run.
         let mut instrument_this: std::collections::HashSet<String> =
@@ -449,8 +507,8 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
                     &tir,
                     transpiler::TranspileConfig::new(&module_name)
                         .with_file_stem(&module_name)
-                        .with_prelude(lower_prelude(&stdlib_prelude_progs))
-                        .with_coverage_prelude(prelude_stems.clone(), instrument_this)
+                        .with_prelude(lower_prelude(&file_prelude_progs))
+                        .with_coverage_prelude(file_prelude_stems, instrument_this)
                         .with_coverage(next_branch_id)
                         .for_test_crate(),
                 );
@@ -461,7 +519,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
                 transpiler::transpile(
                     &tir,
                     transpiler::TranspileConfig::new(&module_name)
-                        .with_prelude(lower_prelude(&stdlib_prelude_progs))
+                        .with_prelude(lower_prelude(&file_prelude_progs))
                         .for_test_crate(),
                 )
                 .output,
@@ -529,13 +587,23 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
         let all_fns = mvl::mvl::passes::mono::collect_fns([&prog]);
         let mono = mvl::mvl::passes::mono::monomorphize(&prog, &all_fns, &expr_types);
         let tir = mvl::mvl::ir::lower::lower(&prog, &mono, &expr_types);
+        // Per-file prelude filtering — see the main test-file loop above for
+        // rationale (#1707 phase 3).
+        let mut extras_scope: Vec<_> = stdlib_prelude_progs[..n_universal_prelude].to_vec();
+        extras_scope.push(prog.clone());
+        let file_extras = loader::load_mvl_native_stdlib_extras(&extras_scope);
+        let file_prelude_progs: Vec<_> = stdlib_prelude_progs[..n_universal_prelude]
+            .iter()
+            .cloned()
+            .chain(file_extras)
+            .collect();
         let (out, branches) = if coverage {
             {
                 let r = transpiler::transpile(
                     &tir,
                     transpiler::TranspileConfig::new(&module_name)
                         .with_file_stem(&module_name)
-                        .with_prelude(lower_prelude(&stdlib_prelude_progs))
+                        .with_prelude(lower_prelude(&file_prelude_progs))
                         .with_coverage(next_branch_id)
                         .for_test_crate(),
                 );
@@ -546,7 +614,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
                 transpiler::transpile(
                     &tir,
                     transpiler::TranspileConfig::new(&module_name)
-                        .with_prelude(lower_prelude(&stdlib_prelude_progs))
+                        .with_prelude(lower_prelude(&file_prelude_progs))
                         .for_test_crate(),
                 )
                 .output,
