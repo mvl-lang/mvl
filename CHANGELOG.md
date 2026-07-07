@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.238.4] - 2026-07-07
+
+### Fixed
+
+- **`test-runner`: skip corpus:expect-fail files in mvl test** (#1707 phase 4) — Files annotated `// corpus:expect-fail` are negative test cases for `mvl check` — they intentionally contain IFC/ownership/type violations that MUST cause the checker to reject them. `make test-corpus` handles them via the Makefile annotation. `mvl test` was bundling them into the shared test crate anyway, then transpiling code that MVL itself declared invalid (e.g. `if secret_bool` in `08_ifc/implicit_flow.mvl`). Fix: add `is_expect_fail(path)` in `src/cli/test.rs` and filter both `test_files` and inline-test `source_files` through it. Cut 83 → 75 rustc errors on `mvl test tests/corpus/` (cumulative 66% reduction).
+
 ## [0.238.3] - 2026-07-07
 
 ### Fixed
