@@ -19,6 +19,11 @@
 
 use std.collections.{Map}
 use std.json.{decode, Value}
+// Pin emit_types into the test crate — emit_program calls its registry
+// builders + tir_ty_to_llvm_full internally, but the `mvl test` sibling
+// scan only pulls in modules explicitly imported by a test or an entry
+// point.  Import a marker symbol so emit_types.mvl joins the prelude.
+use emit_types::build_struct_registry;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 

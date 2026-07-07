@@ -19,7 +19,7 @@ use std.io.{read, stdin}
 use std.json.{decode, Value}
 use emit_context::EmitCtx;
 use backend_llvm::emit_body;
-use backend_llvm::jstr;
+use emit_helpers::jstr;
 use emit_program::emit_program;
 
 partial fn main() -> Unit ! Console {

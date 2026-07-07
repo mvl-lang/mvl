@@ -1,16 +1,303 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Schuberg Philis
 //
-// compiler/backends/llvm/emit_types.mvl — struct + enum type emission
-// (issue #1118, Phase A0 scaffold).
+// compiler/backends/llvm/emit_types.mvl — TIR type lowering + registry
+// builders (#1118, #1693).
 //
-// Corresponds to src/mvl/backends/llvm_text/emit_types.rs in the Rust compiler.
+// Corresponds to the type-lowering pass in the Rust backend
+// (src/mvl/backends/llvm_text/emit_types_tir.rs + parts of
+// context.rs).  Split out of backend_llvm.mvl in #1693 step 3/N.
 //
-// A0 status: placeholder. Real type layout (refcount headers, tagged unions,
-// closure envs) lands in A2.
+// Contents:
+//   - tir_ty_to_llvm{_ctx,_full}       — TIR → LLVM type string lowering
+//   - is_aggregate_ty                  — `{...}` predicate for scrutinees
+//   - build_struct_registry            — types[] → Map[Name, StructInfo]
+//   - build_enum_registry              — types[] → Map[Enum::Variant, tag Int]
+//   - build_enum_types                 — types[] → Map[Enum, LLVM shape]
+//   - build_variant_slot_types         — types[] → Map[Enum::Variant, [slot LLVM]]
+//   - build_variant_slot_maps          — types[] → Map[Enum::Variant, Map[field, idx]]
+//   - build_variant_payloads           — types[] → Map[Enum::Variant, slot count]
+//
+// The registry builders walk a TIR `types: List[Value]` array once per
+// program (see emit_program.mvl).  All type lowering is via
+// `tir_ty_to_llvm_full(ty, structs, enum_types)`; the `_ctx` and legacy
+// wrappers exist for call sites that don't need both maps.
 
-// Emit the LLVM `%struct.Name = type { ... }` declaration for a TIR type decl.
-// A0: returns "" so the module header is unaffected by type declarations.
-partial fn emit_type_decl(name: String) -> String {
-    ""
+use std.collections.{Map}
+use std.json.{Value}
+use emit_context::StructInfo;
+use emit_helpers::jget;
+use emit_helpers::jstr;
+use emit_helpers::jarr;
+use emit_helpers::jtag;
+use emit_context::clone_structs;
+
+// Legacy wrapper: preserved for call sites that don't need to
+// distinguish struct-Named from enum-Named (Named → "i8").  A1n
+// sites that need struct awareness use `tir_ty_to_llvm_ctx`.
+pub partial fn tir_ty_to_llvm(ty: Value) -> String {
+    tir_ty_to_llvm_ctx(ty, Map[String, StructInfo]::new())
+}
+
+pub partial fn tir_ty_to_llvm_ctx(
+    ty: Value, structs: Map[String, StructInfo]
+) -> String {
+    tir_ty_to_llvm_full(ty, structs, Map[String, String]::new())
+}
+
+// A1o: struct-aware AND enum-type-aware type lowering.  If a Named
+// type is registered in `enum_types`, use its declared LLVM shape
+// (`i8` for unit-only enums, `{i8, i64}` for payload enums).  Struct
+// registry lookup takes precedence — a Named that's a struct always
+// wins.
+pub partial fn tir_ty_to_llvm_full(
+    ty: Value,
+    structs: Map[String, StructInfo],
+    enum_types: Map[String, String],
+) -> String {
+    let ty_tag: String = jtag(ty);
+    if ty_tag == "Named" {
+        let name: String = jstr(ty, "name");
+        if structs.contains_key(name) {
+            return format("%{}", [name])
+        }
+        if enum_types.contains_key(name) {
+            return enum_types.get(name).unwrap_or("i8")
+        }
+        return "i8"
+    }
+    match ty_tag {
+        "Bool"   => "i1",
+        "Option" => "{i8, i64}",
+        "Result" => "{i8, i64}",
+        // A1k: `List[Int]` lowers to `{i64, ptr}` — length + data ptr
+        // to a private constant array (`ListLit` emits the storage).
+        "List"   => "{i64, ptr}",
+        // A1m: String lowers to `{i64, ptr}` — length + data ptr to a
+        // private constant `[N x i8]` global (`Literal.Str` emits it).
+        "Str"    => "{i64, ptr}",
+        // A1m: Unit-typed exprs / stmts have no runtime value; use
+        // `void` so callers can decide to elide the store/reg.
+        "Unit"   => "void",
+        // A1r: `Float` — LLVM IEEE-754 double-precision.
+        "Float"  => "double",
+        _        => "i64",
+    }
+}
+
+// True if `ty` is an aggregate/struct-shaped LLVM type (i.e. starts with `{`).
+// Distinguishes enum scrutinees from scalar Int/Bool inside `emit_match`.
+pub total fn is_aggregate_ty(ty: String) -> Bool {
+    ty.len() > 0 && ty.starts_with("{")
+}
+
+// A1n: walk TIR `types` list, extracting struct declarations.  Each
+// `Struct`-bodied type registers a `StructInfo` with field-name→index
+// and ordered LLVM types.  Non-struct types (enums, aliases) are
+// ignored — enums have their own registry via [`build_enum_registry`].
+//
+// Field-type lowering uses `tir_ty_to_llvm_ctx` with the partially-built
+// registry — so `type Line = struct { a: Point, b: Point }` is resolved
+// AFTER `Point` is registered (declaration order matters; MVL parser
+// enforces topological ordering).
+pub partial fn build_struct_registry(types: List[Value]) -> Map[String, StructInfo] {
+    let m: ref Map[String, StructInfo] = Map::new();
+    for t in types {
+        let body: Value = jget(t, "body");
+        if jtag(body) == "Struct" {
+            let tname: String = jstr(t, "name");
+            let fields: List[Value] = jarr(body, "fields");
+            let idx_map: ref Map[String, Int] = Map::new();
+            let field_tys: ref List[String] = [];
+            let idx: ref Int = 0;
+            let snapshot: Map[String, StructInfo] = clone_structs(m);
+            for f in fields {
+                let fname: String = jstr(f, "name");
+                let flty: String = tir_ty_to_llvm_ctx(jget(f, "ty"), clone_structs(snapshot));
+                let i: Int = idx;
+                idx_map.insert(fname, i);
+                field_tys.push(flty);
+                idx = idx + 1;
+            }
+            m.insert(tname, StructInfo {
+                field_index: idx_map,
+                field_types: field_tys,
+            });
+        }
+    }
+    m
+}
+
+// Blue }` produces {"Color::Red": 0, "Color::Green": 1, "Color::Blue": 2}.
+// Non-enum types (structs, aliases) are ignored.
+pub partial fn build_enum_registry(types: List[Value]) -> Map[String, Int] {
+    let m: ref Map[String, Int] = Map::new();
+    for t in types {
+        let tname: String = jstr(t, "name");
+        let body: Value = jget(t, "body");
+        if jtag(body) == "Enum" {
+            let variants: List[Value] = jarr(body, "variants");
+            let idx: ref Int = 0;
+            for v in variants {
+                let vname: String = jstr(v, "name");
+                let full: String = format("{}::{}", [tname, vname]);
+                let i: Int = idx;
+                m.insert(full, i);
+                idx = idx + 1;
+            }
+        }
+    }
+    m
+}
+
+// A1o/A1q: derive per-enum LLVM type based on max payload width.
+//   - All-unit enums                → `i8`
+//   - Any single-slot payload enum  → `{i8, i64}` (A1o)
+//   - Multi-slot payload enum       → `{i8, i64, i64, ...}` where the
+//     count of `i64` slots equals the widest variant's field count (A1q)
+pub partial fn build_enum_types(types: List[Value]) -> Map[String, String] {
+    let m: ref Map[String, String] = Map::new();
+    for t in types {
+        let body: Value = jget(t, "body");
+        if jtag(body) == "Enum" {
+            let tname: String = jstr(t, "name");
+            let variants: List[Value] = jarr(body, "variants");
+            let max_slots: ref Int = 0;
+            for v in variants {
+                let fields: Value = jget(v, "fields");
+                let fields_tag: String = jtag(fields);
+                let slots: Int = if fields_tag == "Tuple" {
+                    jarr(fields, "tys").len()
+                } else if fields_tag == "Struct" {
+                    jarr(fields, "fields").len()
+                } else {
+                    0
+                };
+                let cur: Int = max_slots;
+                if slots > cur { max_slots = slots }
+            }
+            let mx: Int = max_slots;
+            let llvm_ty: String = if mx == 0 {
+                "i8"
+            } else {
+                // Build `{i8, i64, i64, ...}` with `mx` payload slots.
+                let slots_str: ref List[String] = ["i8"];
+                let i: ref Int = 0;
+                while i < mx {
+                    slots_str.push("i64");
+                    i = i + 1;
+                }
+                "{".concat(slots_str.join(", ")).concat("}")
+            };
+            m.insert(tname, llvm_ty);
+        }
+    }
+    m
+}
+
+// A1r: per-variant ordered LLVM slot types.  For a variant like
+// `Circle(Float)`, the entry is `["double"]`.  For `Rect(Int, Int)`,
+// `["i64", "i64"]`.  Used by construction (bitcast non-i64 to i64
+// before insertvalue) and pattern extraction (bitcast i64 back to
+// original type).  Unit variants map to an empty list.
+pub partial fn build_variant_slot_types(types: List[Value]) -> Map[String, List[String]] {
+    let m: ref Map[String, List[String]] = Map::new();
+    for t in types {
+        let body: Value = jget(t, "body");
+        if jtag(body) == "Enum" {
+            let tname: String = jstr(t, "name");
+            let variants: List[Value] = jarr(body, "variants");
+            for v in variants {
+                let vname: String = jstr(v, "name");
+                let full: String = format("{}::{}", [tname, vname]);
+                let fields: Value = jget(v, "fields");
+                let fields_tag: String = jtag(fields);
+                let slot_tys: ref List[String] = [];
+                if fields_tag == "Tuple" {
+                    for ty in jarr(fields, "tys") {
+                        slot_tys.push(tir_ty_to_llvm(ty));
+                    }
+                } else if fields_tag == "Struct" {
+                    for f in jarr(fields, "fields") {
+                        slot_tys.push(tir_ty_to_llvm(jget(f, "ty")));
+                    }
+                }
+                m.insert(full, slot_tys);
+            }
+        }
+    }
+    m
+}
+
+// A1q: per-variant field-name → slot-index map.  Tuple variants get
+// positional keys ("0", "1", ...); struct variants use their field
+// names.  Unit variants get an empty map.  Used by both construction
+// (map declared fields to slot positions) and pattern matching
+// (`Struct { name: ..., fields: [(name, pat)] }` lookups).
+pub partial fn build_variant_slot_maps(types: List[Value]) -> Map[String, Map[String, Int]] {
+    let m: ref Map[String, Map[String, Int]] = Map::new();
+    for t in types {
+        let body: Value = jget(t, "body");
+        if jtag(body) == "Enum" {
+            let tname: String = jstr(t, "name");
+            let variants: List[Value] = jarr(body, "variants");
+            for v in variants {
+                let vname: String = jstr(v, "name");
+                let full: String = format("{}::{}", [tname, vname]);
+                let fields: Value = jget(v, "fields");
+                let fields_tag: String = jtag(fields);
+                let slot_map: ref Map[String, Int] = Map::new();
+                if fields_tag == "Tuple" {
+                    let tys: List[Value] = jarr(fields, "tys");
+                    let n: Int = tys.len();
+                    let i: ref Int = 0;
+                    while i < n {
+                        let idx: Int = i;
+                        slot_map.insert(idx.to_string(), idx);
+                        i = i + 1;
+                    }
+                } else if fields_tag == "Struct" {
+                    let sf: List[Value] = jarr(fields, "fields");
+                    let idx: ref Int = 0;
+                    for f in sf {
+                        let fname: String = jstr(f, "name");
+                        let i: Int = idx;
+                        slot_map.insert(fname, i);
+                        idx = idx + 1;
+                    }
+                }
+                m.insert(full, slot_map);
+            }
+        }
+    }
+    m
+}
+
+pub partial fn build_variant_payloads(types: List[Value]) -> Map[String, Int] {
+    let m: ref Map[String, Int] = Map::new();
+    for t in types {
+        let body: Value = jget(t, "body");
+        if jtag(body) == "Enum" {
+            let tname: String = jstr(t, "name");
+            let variants: List[Value] = jarr(body, "variants");
+            for v in variants {
+                let vname: String = jstr(v, "name");
+                let full: String = format("{}::{}", [tname, vname]);
+                let fields: Value = jget(v, "fields");
+                let fields_tag: String = jtag(fields);
+                let cnt: Int = if fields_tag == "Unit" {
+                    0
+                } else if fields_tag == "Tuple" {
+                    jarr(fields, "tys").len()
+                } else if fields_tag == "Struct" {
+                    // A1q: named-field variant has one slot per field.
+                    jarr(fields, "fields").len()
+                } else {
+                    0
+                };
+                m.insert(full, cnt);
+            }
+        }
+    }
+    m
 }
