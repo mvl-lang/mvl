@@ -462,11 +462,11 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
         // modules THIS file transitively imports.  This keeps stdlib types
         // out of files that never `use std.X` — critical when a file declares
         // its own type with a stdlib-conflicting name (#1707 phase 3).
-        let file_extras = loader::load_mvl_native_stdlib_extras(&[prog.clone()]);
+        let file_extras = loader::load_mvl_native_stdlib_extras(std::slice::from_ref(&prog));
         let file_prelude_progs: Vec<_> = stdlib_prelude_progs[..n_universal_prelude]
             .iter()
             .cloned()
-            .chain(file_extras.into_iter())
+            .chain(file_extras)
             .collect();
         let file_prelude_stems: Vec<Option<String>> = prelude_stems[..n_universal_prelude]
             .iter()
@@ -584,11 +584,11 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
         let tir = mvl::mvl::ir::lower::lower(&prog, &mono, &expr_types);
         // Per-file prelude filtering — see the main test-file loop above for
         // rationale (#1707 phase 3).
-        let file_extras = loader::load_mvl_native_stdlib_extras(&[prog.clone()]);
+        let file_extras = loader::load_mvl_native_stdlib_extras(std::slice::from_ref(&prog));
         let file_prelude_progs: Vec<_> = stdlib_prelude_progs[..n_universal_prelude]
             .iter()
             .cloned()
-            .chain(file_extras.into_iter())
+            .chain(file_extras)
             .collect();
         let (out, branches) = if coverage {
             {
