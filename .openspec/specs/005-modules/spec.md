@@ -19,7 +19,7 @@ Modules are namespaces, not encapsulation strategies. The module system exists s
 |----------|--------|-----------|
 | File structure | One file = one module | Eliminates ambiguity; compiler knows exactly where to look |
 | Visibility default | Private by default; `pub` exports | Explicit over implicit — matches MVL's "no hidden state" principle |
-| Import syntax | `use path::to::Item;` | One syntax, one meaning; qualified path resolves name unambiguously |
+| Import syntax | `use path::to::Item;` or `use sub.dir.module::Item;` | One syntax; bare name for top-level modules, dot-qualified path for nested modules |
 | Wildcard imports | Not allowed | Forces explicit imports; LLM-generated code must name what it uses |
 | Directory modules | Directories as module groups | `src/geometry/` → `geometry` module; entry is `geometry.mvl` (sibling file, preferred) or `geometry/mod.mvl` (deprecated) |
 | Re-exports | `pub use sub::Item;` | Allowed, explicit, one mechanism |
@@ -29,21 +29,39 @@ Modules are namespaces, not encapsulation strategies. The module system exists s
 
 ### Requirement 1: File-Module Correspondence [MUST]
 
-Each `.mvl` source file MUST correspond to exactly one module. The module name MUST be the filename without extension (e.g., `geometry.mvl` → module `geometry`). A directory module MUST use the sibling-file pattern: `math.mvl` alongside `math/` is the entry for the `math` module (Rust 2018 style). The compiler MUST also accept `math/mod.mvl` for backward compatibility but MUST emit a deprecation warning.
+Each `.mvl` source file MUST correspond to exactly one module. The module name MUST be derived from the file's path relative to the base directory (the directory passed to `mvl check`/`mvl build`), with path separators replaced by dots and the `.mvl` extension stripped (ADR-0052).
 
-**Resolution order:**
-1. `{mod_name}.mvl` — preferred (sibling file, Rust 2018 style)
-2. `{mod_name}/mod.mvl` — deprecated; accepted with a warning
+- A file directly in the base directory uses a bare name: `context.mvl` → `"context"`.
+- A file in a subdirectory uses a dot-qualified name: `backends/llvm/context.mvl` → `"backends.llvm.context"`.
+- Two files that share a basename but live in different subdirectories get distinct qualified names and MUST NOT collide.
 
-**Implementation:** `src/mvl/loader.rs::find_module_file`, `src/mvl/loader.rs::stem`
+A directory module MUST use the sibling-file pattern: `math.mvl` alongside `math/` is the entry for the `math` module (Rust 2018 style, ADR-0033). The compiler MUST also accept `math/mod.mvl` for backward compatibility but MUST emit a deprecation warning.
 
-**Tests:** `tests/module_resolver.rs::file_module_correspondence`
+**Resolution order for a `use` import:**
+1. `{base_dir}/{dot/path}.mvl` — preferred; dots converted to path separators
+2. `{base_dir}/{mod_name}/mod.mvl` — single-segment only, deprecated; accepted with a warning
 
-#### Scenario: Single-file module
+**Implementation:** `src/mvl/loader.rs::find_module_file`, `src/mvl/loader.rs::stem`, `src/mvl/loader.rs::qualified_stem`
 
-- GIVEN a file `math/stats.mvl` in the source tree
-- WHEN the compiler resolves modules
-- THEN the module name MUST be `stats`, accessible as `math::stats`
+**Tests:** `tests/module_resolver.rs::file_module_correspondence`, `tests/module_resolver.rs::qualified_module_path_no_collision`
+
+#### Scenario: Bare module name (top-level file)
+
+- GIVEN a base directory `src/` and a file `src/context.mvl`
+- WHEN the compiler derives the module name
+- THEN the module name MUST be `"context"` and MUST be importable as `use context::X`
+
+#### Scenario: Qualified module name (nested file)
+
+- GIVEN a base directory `src/` and a file `src/backends/llvm/context.mvl`
+- WHEN the compiler derives the module name
+- THEN the module name MUST be `"backends.llvm.context"` and MUST be importable as `use backends.llvm.context::X`
+
+#### Scenario: Same basename in different subdirectories — no collision
+
+- GIVEN `src/context.mvl` (module `"context"`) and `src/backends/llvm/context.mvl` (module `"backends.llvm.context"`)
+- WHEN both are loaded by `mvl check src/`
+- THEN they MUST coexist without collision, each importable via its distinct qualified name
 
 #### Scenario: Directory module entry — sibling file (preferred)
 
@@ -93,17 +111,29 @@ All items (functions, types, constants) MUST be private by default. An item MUST
 
 ### Requirement 3: Import Syntax [MUST]
 
-Imports MUST use the `use` keyword with a fully-qualified path ending in a specific item name. Wildcard imports (`use module::*`) MUST NOT be permitted. All `use` declarations MUST appear at the top of the file, before any other declarations.
+Imports MUST use the `use` keyword. The module path before `::` MUST be a dot-separated qualified name matching the module's path relative to the base directory (ADR-0052). Wildcard imports (`use module::*`) MUST NOT be permitted. All `use` declarations MUST appear at the top of the file, before any other declarations.
 
-**Implementation:** `src/mvl/parser.rs`, `src/mvl/resolver.rs`
+Three forms are accepted:
+- `use module::Item;` — bare name for a top-level module
+- `use sub.dir.module::Item;` — dot-qualified for a nested module
+- `use module::{A, B};` — brace group for multiple items from one module
 
-**Tests:** `tests/module_resolver.rs::use_at_top`, `tests/module_resolver.rs::wildcard_rejected`, `tests/module_resolver.rs::name_collision_rejected`, `tests/module_resolver.rs::missing_module_rejected`
+**Implementation:** `src/mvl/parser.rs`, `src/mvl/resolver.rs`, `src/mvl/loader.rs::collect_imported_module_names`
 
-#### Scenario: Named import
+**Tests:** `tests/module_resolver.rs::use_at_top`, `tests/module_resolver.rs::wildcard_rejected`, `tests/module_resolver.rs::name_collision_rejected`, `tests/module_resolver.rs::missing_module_rejected`, `tests/module_resolver.rs::qualified_module_import_resolves`, `tests/module_resolver.rs::bare_and_qualified_names_coexist`
 
-- GIVEN `use std::collections::Map;` at top of file
-- WHEN `Map` is used in the file body
-- THEN it MUST resolve to `std::collections::Map`
+#### Scenario: Named import (bare module)
+
+- GIVEN `use geometry::Point;` at top of file, and `geometry.mvl` is in the base directory
+- WHEN `Point` is used in the file body
+- THEN it MUST resolve to the `Point` type exported by module `geometry`
+
+#### Scenario: Qualified import (nested module)
+
+- GIVEN `use backends.llvm.context::EmitCtx;` at top of file
+- AND `backends/llvm/context.mvl` exists relative to the base directory
+- WHEN `EmitCtx` is used in the file body
+- THEN it MUST resolve to the `EmitCtx` type exported by module `backends.llvm.context`
 
 #### Scenario: Multiple imports from same module
 
@@ -284,3 +314,24 @@ pub use linalg::Matrix;
 use math::mean;
 use math::Matrix;
 ```
+
+### Qualified paths for nested modules (ADR-0052)
+
+When two modules share a basename but live in different subdirectories, each is imported via its unique dot-qualified path derived from the base directory:
+
+```
+compiler/
+  context.mvl               ← module "context"      (TypeEnv lives here)
+  backends/
+    llvm/
+      context.mvl           ← module "backends.llvm.context"  (EmitCtx lives here)
+  main.mvl
+```
+
+```mvl
+// file: compiler/main.mvl
+use context::TypeEnv;                // → compiler/context.mvl
+use backends.llvm.context::EmitCtx; // → compiler/backends/llvm/context.mvl
+```
+
+The dot-path mirrors the directory hierarchy relative to the base directory (`compiler/`). No renaming is required; the path is the disambiguator.
