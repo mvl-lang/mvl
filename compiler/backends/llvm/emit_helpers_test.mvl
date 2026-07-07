@@ -1,0 +1,151 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// compiler/backends/llvm/emit_helpers_test.mvl — MVL unit tests for
+// compiler/backends/llvm/emit_helpers.mvl (#1693).
+//
+// Covers:
+//   - jstr / jarr / jget / jtag / jbool — JSON accessor behavior on
+//     Object / non-Object / missing-key inputs (all guaranteed total).
+//   - lbrace / rbrace                   — trivial `{`/`}` literals used
+//     to break out of format() interpolation.
+//   - llvm_ty_of                        — MVL scalar name → LLVM mnemonic
+//     lookup with the "fall through to i64" A0 default.
+//
+// Run with:  mvl test compiler/
+//            make test-mvl
+
+use std.collections.{Map}
+use std.json.{decode, Value}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+partial fn parse(src: String) -> Value {
+    match decode(src) {
+        Ok(v)  => v,
+        Err(_) => Value::Null,
+    }
+}
+
+// ── jstr ─────────────────────────────────────────────────────────────────────
+
+test fn jstr_reads_string_from_object() -> Unit {
+    let v: Value = parse("{\"name\":\"hello\"}");
+    assert_eq(jstr(v, "name"), "hello")
+}
+
+test fn jstr_missing_key_returns_empty() -> Unit {
+    let v: Value = parse("{\"name\":\"hello\"}");
+    assert_eq(jstr(v, "absent"), "")
+}
+
+test fn jstr_non_string_value_returns_empty() -> Unit {
+    // Key exists but value is a number, not a string → "" (total).
+    let v: Value = parse("{\"n\":42}");
+    assert_eq(jstr(v, "n"), "")
+}
+
+test fn jstr_non_object_returns_empty() -> Unit {
+    let v: Value = parse("[1, 2, 3]");
+    assert_eq(jstr(v, "any"), "")
+}
+
+// ── jarr ─────────────────────────────────────────────────────────────────────
+
+test fn jarr_reads_array_from_object() -> Unit {
+    let v: Value = parse("{\"items\":[1, 2, 3]}");
+    let items: List[Value] = jarr(v, "items");
+    assert_eq(items.len(), 3)
+}
+
+test fn jarr_missing_key_returns_empty() -> Unit {
+    let v: Value = parse("{\"items\":[1]}");
+    let items: List[Value] = jarr(v, "absent");
+    assert_eq(items.len(), 0)
+}
+
+test fn jarr_non_array_value_returns_empty() -> Unit {
+    let v: Value = parse("{\"items\":\"not an array\"}");
+    let items: List[Value] = jarr(v, "items");
+    assert_eq(items.len(), 0)
+}
+
+// ── jget ─────────────────────────────────────────────────────────────────────
+
+test fn jget_returns_nested_value() -> Unit {
+    // Nested object round-trips through jget → jstr.
+    let v: Value = parse("{\"outer\":{\"inner\":\"nested\"}}");
+    let inner: Value = jget(v, "outer");
+    assert_eq(jstr(inner, "inner"), "nested")
+}
+
+test fn jget_missing_key_returns_null() -> Unit {
+    // Missing keys return Value::Null; downstream jtag/jstr yield "" on Null.
+    let v: Value = parse("{\"a\":1}");
+    let missing: Value = jget(v, "b");
+    assert_eq(jtag(missing), "")
+}
+
+// ── jtag ─────────────────────────────────────────────────────────────────────
+
+test fn jtag_reads_the_tag_field() -> Unit {
+    let v: Value = parse("{\"tag\":\"Named\",\"name\":\"Point\"}");
+    assert_eq(jtag(v), "Named")
+}
+
+test fn jtag_missing_tag_returns_empty() -> Unit {
+    let v: Value = parse("{\"name\":\"x\"}");
+    assert_eq(jtag(v), "")
+}
+
+// ── jbool ────────────────────────────────────────────────────────────────────
+
+test fn jbool_reads_true_from_object() -> Unit {
+    let v: Value = parse("{\"flag\":true}");
+    assert_eq(jbool(v, "flag"), true)
+}
+
+test fn jbool_reads_false_from_object() -> Unit {
+    let v: Value = parse("{\"flag\":false}");
+    assert_eq(jbool(v, "flag"), false)
+}
+
+test fn jbool_missing_key_returns_false() -> Unit {
+    let v: Value = parse("{\"other\":true}");
+    assert_eq(jbool(v, "flag"), false)
+}
+
+test fn jbool_non_bool_value_returns_false() -> Unit {
+    // Key exists but value is a string, not a Bool → false (total).
+    let v: Value = parse("{\"flag\":\"yes\"}");
+    assert_eq(jbool(v, "flag"), false)
+}
+
+// ── lbrace / rbrace ──────────────────────────────────────────────────────────
+
+test fn lbrace_and_rbrace_are_single_chars() -> Unit {
+    assert_eq(lbrace(), "{");
+    assert_eq(rbrace(), "}")
+}
+
+// ── llvm_ty_of ───────────────────────────────────────────────────────────────
+
+test fn llvm_ty_of_maps_int_to_i64() -> Unit {
+    assert_eq(llvm_ty_of("Int"), "i64")
+}
+
+test fn llvm_ty_of_maps_bool_to_i1() -> Unit {
+    assert_eq(llvm_ty_of("Bool"), "i1")
+}
+
+test fn llvm_ty_of_maps_unit_to_void() -> Unit {
+    assert_eq(llvm_ty_of("Unit"), "void")
+}
+
+test fn llvm_ty_of_unknown_falls_through_to_i64() -> Unit {
+    // A0 default: everything not explicitly mapped stays i64 so downstream
+    // emission is type-consistent.
+    assert_eq(llvm_ty_of("SomeCustomType"), "i64");
+    assert_eq(llvm_ty_of("Float"), "i64");
+    assert_eq(llvm_ty_of(""), "i64")
+}
