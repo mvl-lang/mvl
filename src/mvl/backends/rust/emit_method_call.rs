@@ -698,6 +698,26 @@ impl RustEmitter {
 
             // ── Generic Rust method fallthrough ───────────────────────────────
             _ => {
+                // #1717: In actor behavior bodies, `self.behavior()` is a direct
+                // recursive state-method call (`&mut ActorState`).  The actor state
+                // struct has no `Clone` impl, so any code path that would append
+                // `.clone()` to the receiver produces invalid Rust.  Emit the call
+                // directly to prevent any clone-insertion that might occur through
+                // last-use analysis or other mechanisms downstream.
+                if let TirExprKind::Var(name) = &receiver.kind {
+                    if name == "self"
+                        && !self.actor_self_type.is_empty()
+                        && self.actor_methods.contains(method)
+                    {
+                        self.push("self.");
+                        self.push(method);
+                        self.push("(");
+                        self.emit_args(args);
+                        self.push(")");
+                        return;
+                    }
+                }
+
                 // #992 / #1433: Pure MVL extension methods on builtin types are
                 // transpiled as top-level free functions and must be called via UFCS
                 // (`method(receiver.clone().into(), args)`), not as native Rust
