@@ -57,8 +57,21 @@ use crate::mvl::parser::lexer::Span;
 ///
 /// [`emit_stmts`] emits `let name = ...` (no `mut`) when the `Pattern::Ident`
 /// span of a `Ty::Ref(true, _)` binding appears in this set.
-pub fn compute_readonly_names(body: &TirBlock) -> HashSet<Span> {
-    let mut tracker = MutTracker::default();
+///
+/// `capability_params_map` — callee-name → per-parameter borrow flags
+/// (matches [`RustEmitter::capability_params_map`]).  Passed through so
+/// `FnCall` args at `Some(true)` (mutable-borrow) positions are marked as
+/// mutations of the source binding, preventing the analyser from stripping
+/// the `mut` off a `let` that's only ever passed as `&mut` and never
+/// assigned to directly (#1707 phase 6).
+pub fn compute_readonly_names(
+    body: &TirBlock,
+    capability_params_map: &HashMap<String, Vec<Option<bool>>>,
+) -> HashSet<Span> {
+    let mut tracker = MutTracker {
+        capability_params_map: capability_params_map.clone(),
+        ..MutTracker::default()
+    };
     tracker.visit_block(body);
     tracker
         .bindings
@@ -176,6 +189,11 @@ struct MutTracker {
     /// updates the top scope's entry, hiding any outer binding of the same
     /// name until the current scope is popped.
     scopes: Vec<HashMap<String, usize>>,
+    /// Callee → per-parameter borrow flags (mirrors
+    /// `RustEmitter::capability_params_map`).  Used at `FnCall` sites to
+    /// detect args that will be emitted as `&mut name` and mark the source
+    /// binding as mutated (#1707 phase 6).  Empty when not provided.
+    capability_params_map: HashMap<String, Vec<Option<bool>>>,
 }
 
 impl MutTracker {
@@ -346,6 +364,22 @@ impl MutTracker {
         }
     }
 
+    /// Visit a function/method argument at index `i` for callee `fn_name`.
+    /// When the callee's borrow flag at that position is `Some(true)` (mutable
+    /// borrow), the Rust emitter will emit `&mut name` at the call site,
+    /// which requires the binding to be declared `mut`.  Mark it as mutated
+    /// here so [`compute_readonly_names`] doesn't strip the `mut` (#1707
+    /// phase 6).
+    fn visit_arg_expr(&mut self, expr: &TirExpr, is_mut_borrow: bool) {
+        if is_mut_borrow {
+            if let TirExprKind::Var(name) = &expr.kind {
+                self.mark_mutated(name);
+                return;
+            }
+        }
+        self.visit_expr(expr);
+    }
+
     fn visit_expr(&mut self, expr: &TirExpr) {
         match &expr.kind {
             TirExprKind::Var(name) => {
@@ -363,7 +397,9 @@ impl MutTracker {
                     self.visit_expr(receiver);
                 }
                 for a in args {
-                    self.visit_expr(a);
+                    // Method call args: conservative pass-through (no callee
+                    // capability info threaded here yet).
+                    self.visit_arg_expr(a, false);
                 }
             }
             TirExprKind::FieldAccess { expr, .. } => self.visit_expr(expr),
@@ -373,8 +409,18 @@ impl MutTracker {
                 // is a no-op when `name` isn't a local binding — global
                 // function names simply miss the resolver.
                 self.mark_referenced(name);
-                for a in args {
-                    self.visit_expr(a);
+                // Look up the callee's per-parameter mutable-borrow flags.
+                // When flag `i` is `Some(true)`, the emitter will pass the
+                // arg as `&mut`, which needs the source binding to be `mut`
+                // (#1707 phase 6).
+                let borrows = self
+                    .capability_params_map
+                    .get(name)
+                    .cloned()
+                    .unwrap_or_default();
+                for (i, a) in args.iter().enumerate() {
+                    let is_mut_borrow = borrows.get(i).copied().flatten().unwrap_or(false);
+                    self.visit_arg_expr(a, is_mut_borrow);
                 }
             }
             TirExprKind::Unary { expr, .. } => self.visit_expr(expr),

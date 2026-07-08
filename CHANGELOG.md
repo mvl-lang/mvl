@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.238.6] - 2026-07-08
+
+### Fixed
+
+- **`rust-backend`: keep `let mut` on refs passed as `&mut` args** (#1707 phase 6) — `mut_analysis::compute_readonly_names` treated free-function args as pure reads and stripped `mut` from bindings only ever passed to callees.  When the emitter then consulted `capability_params_map` and emitted `&mut tf` at the call site, rustc rejected with E0596.  Concrete case in `tests/corpus/13_stdlib/temp_files.mvl`: `let tf: ref TempFile = temp_file()?; get_temp_path(&mut tf);` emitted as `let tf: TempFile = ...; get_temp_path(&mut tf);` — E0596.  Fix: thread `capability_params_map` into `compute_readonly_names` so the walk sees which arg positions the emitter will `&mut`, and marks the source binding as mutated.  New helper `visit_arg_expr(expr, is_mut_borrow)` dispatched from `TirExprKind::FnCall`.  `TirExprKind::MethodCall` args stay at `is_mut_borrow = false` for now.  Cleared 2× E0596; total corpus errors 63 → 61 (72% reduction).
+
 ## [0.238.5] - 2026-07-08
 
 ### Fixed
