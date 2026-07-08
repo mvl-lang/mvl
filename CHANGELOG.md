@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.238.7] - 2026-07-08
+
+### Fixed
+
+- **`rust-backend`: unwrap refinement newtype operands in checked arithmetic** (#1707 phase 7) — MVL's checked-arithmetic emission wraps both operands in `<i64>::clone(&(x))` to force `i64::checked_add`-family dispatch (matches LLVM overflow behaviour).  When the operand is a refined alias like `Positive` (a newtype wrapping `i64`), the borrow resolves to `&Positive`, not `&i64`, and rustc rejected with E0308.  Fix: at the `Ty::Int` arithmetic emit site, consult `self.refined_alias_base(&operand.ty)` for each operand and append `.0` when the operand is a refined alias.  Both operands are checked independently — `Positive + Int`, `Int + Positive`, `Positive + Positive` all work.  Cleared 3× E0308 in `refinement_totality_interaction::{positive_sum,bounded_sum}`; total corpus errors 61 → 58 (74% reduction).
+
 ## [0.238.6] - 2026-07-08
 
 ### Fixed
