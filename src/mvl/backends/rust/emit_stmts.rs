@@ -97,17 +97,26 @@ impl RustEmitter {
                 // implicit `self` in an actor method (`self.workers` where self is
                 // `&mut ActorState`) — the field is behind a reference and cannot be
                 // moved.  `.clone()` produces an owned copy for mutation + reassign.
-                let needs_clone = if let TirExprKind::FieldAccess { expr: inner, .. } = &init.kind {
-                    if let TirExprKind::Var(name) = &inner.kind {
-                        self.capability_param_names.contains(name.as_str())
-                            || (name == "self" && !self.actor_self_type.is_empty())
+                let field_needs_clone =
+                    if let TirExprKind::FieldAccess { expr: inner, .. } = &init.kind {
+                        if let TirExprKind::Var(name) = &inner.kind {
+                            self.capability_param_names.contains(name.as_str())
+                                || (name == "self" && !self.actor_self_type.is_empty())
+                        } else {
+                            false
+                        }
                     } else {
                         false
-                    }
-                } else {
-                    false
-                };
-                if needs_clone {
+                    };
+                // MVL value semantics on a `let x: T = other_var;` — Rust would
+                // otherwise MOVE `other_var` into `x`, leaving subsequent reads
+                // of `other_var` invalid.  When the init is a bare `Var` that
+                // is NOT its last use, insert `.clone()` so the source binding
+                // stays live for later reads (last-use analysis at
+                // [`compute_last_uses`], #1707 phase 10).
+                let var_needs_clone = matches!(&init.kind, TirExprKind::Var(_))
+                    && !self.last_uses.contains(&init.span);
+                if field_needs_clone || var_needs_clone {
                     self.push(".clone()");
                 }
                 if refined_unwrap {
