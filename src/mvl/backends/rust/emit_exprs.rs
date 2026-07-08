@@ -403,14 +403,28 @@ impl RustEmitter {
                             BinaryOp::Rem => ("checked_rem", "remainder by zero or overflow"),
                             _ => unreachable!(),
                         };
+                        // Refined-int operands (`Positive`, `NonNegative`, ...) are
+                        // newtypes wrapping `i64`.  `<i64>::clone(&op)` fails to
+                        // compile when `op: Positive` — we need `<i64>::clone(&op.0)`.
+                        // Check the operand type against the refined-alias registry
+                        // and emit `.0` when a wrapping type is detected (#1707
+                        // phase 7).
+                        let left_unwrap = self.refined_alias_base(&left.ty).is_some();
+                        let right_unwrap = self.refined_alias_base(&right.ty).is_some();
                         // Emit as a method chain — Suffix precedence, no outer wrap
                         // needed against any operator context (#1659).  The inner
                         // `&(...)` parens delimit the borrow expression and are
                         // required for correctness when the operand is a Binary.
                         self.push("<i64>::clone(&(");
                         self.emit_expr(left);
+                        if left_unwrap {
+                            self.push(".0");
+                        }
                         self.push(&format!(")).{method}(<i64>::clone(&("));
                         self.emit_expr(right);
+                        if right_unwrap {
+                            self.push(".0");
+                        }
                         self.push(&format!("))).expect(\"{msg}\")"));
                     } else {
                         // Precedence-aware operand wrapping (#1659) — outer parens
