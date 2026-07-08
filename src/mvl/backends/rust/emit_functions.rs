@@ -711,8 +711,13 @@ impl RustEmitter {
                 if matches!(
                     &expr.kind,
                     TirExprKind::FnCall { .. } | TirExprKind::MethodCall { .. }
-                ) =>
+                ) && expr.ty != *ret_ty =>
             {
+                // Coerce the call's raw result into the labeled return type
+                // via `.into()`.  Skip the coercion when the call's static
+                // result type already equals `ret_ty` — the `.into()` is a
+                // no-op there AND, for generic callees, blocks Rust from
+                // inferring the type parameter (#1707 phase 11).
                 self.emit_expr(expr);
                 self.push(".into()");
                 return;

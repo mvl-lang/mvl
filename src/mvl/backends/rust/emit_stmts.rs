@@ -127,8 +127,11 @@ impl RustEmitter {
                 }
                 // When the declared type is a security label (e.g. Tainted<String>) and the
                 // init is a plain value or function call, `.into()` converts it to the labeled
-                // type.
+                // type.  Skip the coercion when the init's static type already matches the
+                // declared type — `.into()` is a no-op there and, for a generic FnCall,
+                // blocks Rust from inferring the type parameter (#1707 phase 11).
                 let needs_into = matches!(ty, Ty::Labeled(..))
+                    && init.ty != *ty
                     && matches!(
                         &init.kind,
                         TirExprKind::Literal(Literal::Str(_))
