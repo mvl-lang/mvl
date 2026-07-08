@@ -441,6 +441,21 @@ impl RustEmitter {
                 self.push(")");
             }
 
+            // find(target) — type-aware dispatch mirroring `concat`:
+            //   String: dispatched via `BUILTINS` (`str_find`) — this arm
+            //           only fires for non-String receivers.
+            //   List:   inline `iter().position()`, cast usize → i64 to
+            //           yield `Option<i64>` matching MVL's `Option[Int]`.
+            //   Set/Map: no meaningful positional index — fall through to
+            //           the generic method emission (Rust will error
+            //           honestly with "no method `find`").
+            "find" if args.len() == 1 && matches!(receiver.ty.unlabeled(), Ty::List(_)) => {
+                self.emit_method_receiver(receiver);
+                self.push(".iter().position(|__x| __x == &(");
+                self.emit_expr(&args[0]);
+                self.push(")).map(|__n| __n as i64)");
+            }
+
             // ── Map / Set / List unified method traits ────────────────────────
 
             // get(key) — direct Rust using checker type info (#554).
