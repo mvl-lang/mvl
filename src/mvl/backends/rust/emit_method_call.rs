@@ -698,17 +698,25 @@ impl RustEmitter {
 
             // ── Generic Rust method fallthrough ───────────────────────────────
             _ => {
-                // #1717: In actor behavior bodies, `self.behavior()` is a direct
-                // recursive state-method call (`&mut ActorState`).  The actor state
-                // struct has no `Clone` impl, so any code path that would append
-                // `.clone()` to the receiver produces invalid Rust.  Emit the call
-                // directly to prevent any clone-insertion that might occur through
-                // last-use analysis or other mechanisms downstream.
-                if let TirExprKind::Var(name) = &receiver.kind {
-                    if name == "self"
-                        && !self.actor_self_type.is_empty()
-                        && self.actor_methods.contains(method)
-                    {
+                // #1717: In actor behavior bodies, any call of the form
+                // `self.method(...)` must emit as a direct state-method call.
+                // Actor state structs have no `Clone` impl.  If the TIR contains
+                // a spurious `self.clone()` as the receiver (a side-effect of
+                // prelude span-collision in expr_types), strip it and emit
+                // `self.method(args)` directly.
+                //
+                // Shape (a): MethodCall { receiver: Var("self"), method }
+                // Shape (b): MethodCall { receiver: MethodCall { Var("self"), "clone", [] }, method }
+                if !self.actor_self_type.is_empty() {
+                    let base = match &receiver.kind {
+                        TirExprKind::MethodCall { receiver: r, method: m, args: a }
+                            if m == "clone" && a.is_empty() =>
+                        {
+                            r.as_ref()
+                        }
+                        _ => receiver,
+                    };
+                    if matches!(&base.kind, TirExprKind::Var(n) if n == "self") {
                         self.push("self.");
                         self.push(method);
                         self.push("(");

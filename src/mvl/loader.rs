@@ -901,12 +901,101 @@ fn extract_native_dep_lines(content: &str) -> Vec<String> {
                         .chars()
                         .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
                 {
-                    result.push(line.to_string());
+                    result.push(strip_cargo_foreign_keys(line));
                 }
             }
         }
     }
     result
+}
+
+/// Keys valid in `[native]` mvl.toml entries but NOT valid Cargo dependency fields.
+const CARGO_FOREIGN_KEYS: &[&str] = &["license"];
+
+/// Strip MVL-only metadata keys from a `[native]` dep line before it is written
+/// into a generated Cargo.toml.
+///
+/// `rusqlite = { version = "0.31", features = ["bundled"], license = "MIT" }`
+/// → `rusqlite = { version = "0.31", features = ["bundled"] }`
+///
+/// Non-inline-table lines are returned unchanged.
+fn strip_cargo_foreign_keys(line: &str) -> String {
+    let Some(eq_pos) = line.find('=') else {
+        return line.to_string();
+    };
+    let dep_name = line[..eq_pos].trim();
+    let val = line[eq_pos + 1..].trim();
+
+    if !(val.starts_with('{') && val.ends_with('}')) {
+        return line.to_string();
+    }
+    let inner = &val[1..val.len() - 1];
+    let filtered: Vec<String> = split_inline_table_parts(inner)
+        .into_iter()
+        .filter(|part| {
+            if let Some(k_eq) = part.trim().find('=') {
+                let k = part.trim()[..k_eq].trim();
+                !CARGO_FOREIGN_KEYS.contains(&k)
+            } else {
+                true
+            }
+        })
+        .map(|p| p.trim().to_string())
+        .collect();
+
+    format!("{dep_name} = {{ {} }}", filtered.join(", "))
+}
+
+/// Split the inner content of an inline TOML table on commas, respecting
+/// quoted strings and `[...]` arrays.
+fn split_inline_table_parts(s: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut in_str = false;
+    let mut escaped = false;
+    let mut bracket_depth: u32 = 0;
+    for c in s.chars() {
+        if escaped {
+            current.push(c);
+            escaped = false;
+            continue;
+        }
+        if c == '\\' && in_str {
+            current.push(c);
+            escaped = true;
+            continue;
+        }
+        if c == '"' {
+            in_str = !in_str;
+            current.push(c);
+            continue;
+        }
+        if !in_str {
+            match c {
+                '[' => {
+                    bracket_depth += 1;
+                    current.push(c);
+                    continue;
+                }
+                ']' => {
+                    bracket_depth = bracket_depth.saturating_sub(1);
+                    current.push(c);
+                    continue;
+                }
+                ',' if bracket_depth == 0 => {
+                    parts.push(current.clone());
+                    current.clear();
+                    continue;
+                }
+                _ => {}
+            }
+        }
+        current.push(c);
+    }
+    if !current.trim().is_empty() {
+        parts.push(current);
+    }
+    parts
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────
@@ -1218,6 +1307,39 @@ mod tests {
             !map.contains_key("http"),
             "absent transitive dep must not appear in map; got: {map:?}"
         );
+    }
+
+    // ── strip_cargo_foreign_keys ──────────────────────────────────────────────
+
+    #[test]
+    fn strip_cargo_foreign_keys_removes_license_from_inline_table() {
+        let input = r#"rusqlite = { version = "0.31", features = ["bundled"], license = "MIT" }"#;
+        let output = strip_cargo_foreign_keys(input);
+        assert!(!output.contains("license"), "license key must be stripped; got: {output}");
+        assert!(output.contains("version"), "version must be preserved");
+        assert!(output.contains("features"), "features must be preserved");
+    }
+
+    #[test]
+    fn strip_cargo_foreign_keys_plain_version_string_unchanged() {
+        let input = r#"serde = "1.0""#;
+        assert_eq!(strip_cargo_foreign_keys(input), input);
+    }
+
+    #[test]
+    fn strip_cargo_foreign_keys_no_license_in_table_unchanged() {
+        let input = r#"tokio = { version = "1", features = ["full"] }"#;
+        assert_eq!(strip_cargo_foreign_keys(input), input);
+    }
+
+    #[test]
+    fn extract_native_dep_lines_strips_license() {
+        let content = "[native]\nrusqlite = { version = \"0.31\", features = [\"bundled\"], license = \"MIT\" }\n";
+        let lines = extract_native_dep_lines(content);
+        assert_eq!(lines.len(), 1);
+        assert!(!lines[0].contains("license"), "license must not appear in output; got: {}", lines[0]);
+        assert!(lines[0].contains("version"));
+        assert!(lines[0].contains("features"));
     }
 }
 

@@ -684,7 +684,9 @@ impl RustEmitter {
         // ADR-0051 (#1660) — the checker now rejects `==` / `!=` on any
         // value type that transitively contains a function-typed field,
         // so no comparison that would trip the lint can reach codegen.
-        self.line("#![allow(dead_code, unused_parens)]");
+        // non_snake_case: module names are derived from file paths (e.g.
+        // `_Users_foo_bar_config`) which may contain uppercase letters.
+        self.line("#![allow(dead_code, unused_parens, non_snake_case)]");
         self.blank();
 
         let prelude_has_extern = prelude_tirs

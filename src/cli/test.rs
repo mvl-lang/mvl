@@ -664,8 +664,10 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
     combined_rs.push_str("// Do not edit; regenerate with `mvl test`.\n");
     // File-level allow — inner attributes must appear at the top of the file,
     // before any items.  We strip per-module copies below.
+    // non_snake_case: module names are derived from file paths (e.g.
+    // `_Users_foo_bar_config`) which may contain uppercase letters.
     combined_rs.push_str(
-        "#![allow(dead_code, unused_variables, unused_imports, unused_parens, unused_unsafe, unused_assignments, non_shorthand_field_patterns, unpredictable_function_pointer_comparisons)]\n\n",
+        "#![allow(dead_code, unused_variables, unused_imports, unused_parens, unused_unsafe, unused_assignments, non_shorthand_field_patterns, unpredictable_function_pointer_comparisons, non_snake_case)]\n\n",
     );
 
     if coverage {
