@@ -573,6 +573,17 @@ impl RustEmitter {
                 self.push("]");
             }
             TirExprKind::Map { pairs } => {
+                // Determine whether the value type needs an `.into()` coercion.
+                // For labeled/refined value types (`Secret[String]`, `PosInt`,
+                // etc.) the map literal's raw values coerce via `From`.  For
+                // plain primitive value types, `.into()` has no target and
+                // produces a spurious `E0282: type annotations needed` on
+                // literals like `-2` where numeric-literal inference can't
+                // discriminate (#1707 phase 9).
+                let value_needs_into = match &expr.ty {
+                    Ty::Map(_, v) => matches!(v.as_ref(), Ty::Labeled(..) | Ty::Refined(..)),
+                    _ => true,
+                };
                 self.push("std::collections::HashMap::from([");
                 for (i, (k, v)) in pairs.iter().enumerate() {
                     if i > 0 {
@@ -582,7 +593,9 @@ impl RustEmitter {
                     self.emit_expr(k);
                     self.push(", ");
                     self.emit_expr(v);
-                    self.push(".clone().into()");
+                    if value_needs_into {
+                        self.push(".clone().into()");
+                    }
                     self.push(")");
                 }
                 self.push("])");
