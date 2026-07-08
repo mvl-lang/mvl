@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.238.10] - 2026-07-08
+
+### Fixed
+
+- **`rust-backend`: skip `.into()` on map values with primitive V type** (#1707 phase 9) — `TirExprKind::Map` unconditionally emitted `.clone().into()` on every value.  Useful for labeled/refined value types (`Secret[String]`, `PosInt`) which coerce via `From`.  For primitive value types there's no target — `HashMap::from([("a", 1.into()), ("b", -2.into())])` failed E0282 on numeric-literal inference.  Fix: inspect `expr.ty` and only emit `.clone().into()` when V is `Ty::Labeled(..)` or `Ty::Refined(..)`.  Cleared 2× E0282 on `05_collections/map_set_hof.mvl`.
+
 ## [0.238.9] - 2026-07-08
 
 ### Fixed
