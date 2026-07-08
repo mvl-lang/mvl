@@ -362,7 +362,18 @@ impl RustEmitter {
         self.line(&format!("pub struct {}{} {{", name, generic_params(params)));
         self.push_indent();
         for field in fields {
-            let ty_str = emit_ty(&field.ty);
+            // MVL `field: ref T` on a struct declares the field mutable when
+            // the struct is reached through a `ref` binding — it is NOT a
+            // reference-typed field.  Emitting `&mut T` (via `emit_ty`) would
+            // require a struct lifetime parameter and force every use of the
+            // struct to thread it (E0106).  Strip the wrapper so the field
+            // emits as plain `T`; mutability at the use site comes from Rust's
+            // ownership on the containing binding (#1707 phase 13).
+            let field_ty = match &field.ty {
+                crate::mvl::ir::Ty::Ref(_, inner) => inner.as_ref(),
+                other => other,
+            };
+            let ty_str = emit_ty(field_ty);
             self.line(&format!("pub {}: {},", field.name, ty_str));
         }
         self.pop_indent();
