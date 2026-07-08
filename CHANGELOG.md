@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.238.11] - 2026-07-08
+
+### Fixed
+
+- **`rust-backend`: auto-clone Var on let-init when not last use** (#1707 phase 10) — MVL has value semantics: `let a: Pair = p; let b: Pair = p;` treats each `let x = p` as a *copy*, leaving `p` alive.  Emitter was writing `let a = p; let b = p;` — Rust interprets both as MOVE, invalidating the second read with E0382.  Fix: in `TirStmt::Let`, when the init is a bare `Var` and its span is NOT in `self.last_uses`, append `.clone()`.  Mirrors the existing `field_needs_clone` check and reuses last-use analysis already computed per-body.  Cleared 1× E0382 on `06_ownership/value_semantics.mvl`.
+
 ## [0.238.10] - 2026-07-08
 
 ### Fixed
