@@ -1315,7 +1315,10 @@ mod tests {
     fn strip_cargo_foreign_keys_removes_license_from_inline_table() {
         let input = r#"rusqlite = { version = "0.31", features = ["bundled"], license = "MIT" }"#;
         let output = strip_cargo_foreign_keys(input);
-        assert!(!output.contains("license"), "license key must be stripped; got: {output}");
+        assert!(
+            !output.contains("license"),
+            "license key must be stripped; got: {output}"
+        );
         assert!(output.contains("version"), "version must be preserved");
         assert!(output.contains("features"), "features must be preserved");
     }
@@ -1337,7 +1340,11 @@ mod tests {
         let content = "[native]\nrusqlite = { version = \"0.31\", features = [\"bundled\"], license = \"MIT\" }\n";
         let lines = extract_native_dep_lines(content);
         assert_eq!(lines.len(), 1);
-        assert!(!lines[0].contains("license"), "license must not appear in output; got: {}", lines[0]);
+        assert!(
+            !lines[0].contains("license"),
+            "license must not appear in output; got: {}",
+            lines[0]
+        );
         assert!(lines[0].contains("version"));
         assert!(lines[0].contains("features"));
     }
