@@ -4,6 +4,8 @@
 // so the file is self-contained and the linter classifies the items as tests
 // (exempt from `unused-function`, `missing-doc-comment`, `missing-totality`).
 
+use std.math.{int_abs, int_max}
+
 // Supporting types used by field_access, nested_access, and struct_construction.
 type Point = struct {
     x: Int,
@@ -20,7 +22,7 @@ type DbConn = struct {
 
 // Helper used by `propagation` — `?` requires an enclosing `Result`-returning fn.
 fn propagation_impl(input: String) -> Result[Int, String] {
-    let n: Int = parse_int(input)?;
+    let n: Int = input.parse_int()?;
     Ok(n)
 }
 
@@ -63,11 +65,11 @@ test fn chained_method() -> Unit {
 // ── Function calls ────────────────────────────────────────────────────────────
 
 test fn fn_call() -> Unit {
-    let _: Int = abs(-5);
+    let _: Int = int_abs(-5);
 }
 
 test fn fn_call_multi() -> Unit {
-    let _: Int = max(1, 2);
+    let _: Int = int_max(1, 2);
 }
 
 // ── Binary operators ──────────────────────────────────────────────────────────

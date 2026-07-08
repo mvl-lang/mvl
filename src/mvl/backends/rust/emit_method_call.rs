@@ -709,11 +709,11 @@ impl RustEmitter {
                 // Shape (b): MethodCall { receiver: MethodCall { Var("self"), "clone", [] }, method }
                 if !self.actor_self_type.is_empty() {
                     let base = match &receiver.kind {
-                        TirExprKind::MethodCall { receiver: r, method: m, args: a }
-                            if m == "clone" && a.is_empty() =>
-                        {
-                            r.as_ref()
-                        }
+                        TirExprKind::MethodCall {
+                            receiver: r,
+                            method: m,
+                            args: a,
+                        } if m == "clone" && a.is_empty() => r.as_ref(),
                         _ => receiver,
                     };
                     if matches!(&base.kind, TirExprKind::Var(n) if n == "self") {

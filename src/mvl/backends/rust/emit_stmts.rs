@@ -44,10 +44,15 @@ impl RustEmitter {
             } => {
                 self.indent();
                 // `Ty::Ref(true, _)` encodes mutability — emit `let mut` and strip the ref wrapper.
-                let (is_mutable, ty_for_emit) = if let Ty::Ref(true, inner) = ty {
-                    (true, inner.as_ref())
-                } else {
-                    (false, ty)
+                // `Ty::Ref(false, _)` encodes MVL `val` (read-only borrow) — strip the ref too so
+                // the binding is emitted owned; the init expression is owned in Rust, and a bare
+                // `let x: &T = <owned>` would fail (E0308).  Val semantics at the local-binding
+                // site are indistinguishable from ownership once we already own the RHS (#1707
+                // phase 8).
+                let (is_mutable, ty_for_emit) = match ty {
+                    Ty::Ref(true, inner) => (true, inner.as_ref()),
+                    Ty::Ref(false, inner) => (false, inner.as_ref()),
+                    _ => (false, ty),
                 };
                 // Suppress `mut` when the analysis in `mut_analysis` proved that
                 // this `ref` binding is only read within the function body — no
