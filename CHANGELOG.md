@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.238.5] - 2026-07-08
+
+### Fixed
+
+- **`rust-backend`: qualify unit-variant patterns in match arms** (#1707 phase 5) — Match arms like `match dir { North => "north", South => "south" }` where `North`/`South` are variants of `Direction` were emitted as bare Rust identifiers.  Rust interprets bare `North` in pattern position as a fresh *binding*, not a match against `Direction::North` — yielding E0170 warnings/errors and, more critically, wrong runtime semantics: the first arm always matches everything.  Fix: new `unit_variants_per_enum` registry on `RustEmitter` populated from `TirTypeBody::Enum` variants with `TirVariantFields::Unit`, threaded from `Match { scrutinee, arms }` down through `emit_match_arm` → `emit_pattern_with_enum(pat, Option<&str>)`.  When the scrutinee's `Ty::Named(name, _)` resolves to a registered enum, bare-ident patterns matching a known unit variant are emitted qualified.  `Pattern::Or` propagates the hint through alternatives.  Cleared 12× E0170; total corpus errors 75 → 63 (71% reduction).
+
 ## [0.238.4] - 2026-07-07
 
 ### Fixed
