@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.238.9] - 2026-07-08
+
+### Fixed
+
+- **`test-runner`, `rust-backend`: skip typecheck-only corpus + strip val let annot** (#1707 phase 8) — Three fixes.  (1) New `is_typecheck_only(prog)` helper in `src/cli/test.rs` skips files whose every `test fn` is either named `*_typecheck` (MVL corpus convention) or bodied only by `touch(...)` calls — these files exist to demonstrate declaration forms parse and type-check, not to run. `make test-corpus` still validates them via `mvl check`.  (2) In `src/mvl/backends/rust/emit_stmts.rs`, `let x: val T = init` was emitting `let x: &T = <owned>` (E0308).  MVL `val` at a let site conveys value semantics; the RHS is owned in Rust, so strip the wrapper just like `ref`.  (3) `tests/corpus/01_syntax/expressions.mvl` used non-existent free functions (`abs`, `max`, `parse_int`); MVL check treated them as opaque unknown calls (too lenient — separate issue).  Replaced with `int_abs`/`int_max`/method-form `input.parse_int()` and added `use std.math.{int_abs, int_max}`.  Cut 58 → 11 rustc errors on `mvl test tests/corpus/` (cumulative 95% reduction).
+
 ## [0.238.7] - 2026-07-08
 
 ### Fixed
