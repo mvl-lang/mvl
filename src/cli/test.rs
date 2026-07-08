@@ -51,6 +51,20 @@ fn qualified_module_name(path: &str) -> String {
     name
 }
 
+/// Returns true if the file contains the `// corpus:expect-fail` annotation.
+///
+/// These files are negative test cases for `mvl check` — they intentionally
+/// contain violations (IFC, type, ownership, effects) that MUST cause the
+/// checker to reject them.  `make test-corpus` handles them via the Makefile
+/// annotation.  `mvl test` should skip them entirely: bundling them into the
+/// test crate produces spurious rustc errors from code that MVL itself
+/// declared invalid (#1707 phase 4).
+fn is_expect_fail(path: &std::path::Path) -> bool {
+    fs::read_to_string(path)
+        .map(|s| s.contains("corpus:expect-fail"))
+        .unwrap_or(false)
+}
+
 pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
     if quiet && verbose {
         eprintln!(
@@ -59,7 +73,10 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
     }
     let quiet = quiet && !verbose;
 
-    let test_files = loader::mvl_files(path, true); // test_only=true
+    let test_files: Vec<PathBuf> = loader::mvl_files(path, true) // test_only=true
+        .into_iter()
+        .filter(|f| !is_expect_fail(f))
+        .collect();
     if test_files.is_empty() {
         eprintln!("No *_test.mvl files found at: {path}");
         process::exit(1);
@@ -343,6 +360,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
         let inline_test_source_progs: Vec<mvl::mvl::parser::ast::Program> =
             loader::mvl_files(path, false)
                 .into_iter()
+                .filter(|f| !is_expect_fail(f))
                 .filter_map(|f| {
                     let (prog, _) = super::parse_or_exit(&f.display().to_string());
                     let has_test = prog
@@ -560,7 +578,10 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
     // `mod core` (which would collide on the Rust side).
     let covered_stems: std::collections::HashSet<String> =
         modules.iter().map(|(m, _, _)| m.clone()).collect();
-    let source_files = loader::mvl_files(path, false); // non-test files
+    let source_files: Vec<PathBuf> = loader::mvl_files(path, false)
+        .into_iter()
+        .filter(|f| !is_expect_fail(f))
+        .collect();
     for src_file in &source_files {
         let file_str = src_file.display().to_string();
         let module_name = qualified_module_name(&file_str);
