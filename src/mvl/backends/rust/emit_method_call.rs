@@ -7,9 +7,24 @@ use super::emitter::RustEmitter;
 use crate::mvl::backends::rust::emit_exprs::Prec;
 use crate::mvl::backends::rust::emit_types::emit_label;
 use crate::mvl::backends::{
-    is_stdlib_method, is_stdlib_ufcs_method, rust_emit_by_name, STRING_LABEL_PRESERVING_METHODS,
+    is_stdlib_method, is_stdlib_ufcs_method, is_stdlib_ufcs_method_for, rust_emit_for,
+    STRING_LABEL_PRESERVING_METHODS,
 };
 use crate::mvl::ir::{TirExpr, TirExprKind, Ty};
+
+/// Map a receiver `Ty` to the string key used in the `BUILTINS` table
+/// (`"String"`, `"List"`, `"Map"`, `"Set"`).  Returns `None` for types that
+/// carry no builtin methods here; callers should skip type-keyed dispatch
+/// and fall through to the generic method emission.
+fn ty_builtin_key(ty: &Ty) -> Option<&'static str> {
+    match ty.unlabeled() {
+        Ty::String => Some("String"),
+        Ty::List(_) => Some("List"),
+        Ty::Map(..) => Some("Map"),
+        Ty::Set(_) => Some("Set"),
+        _ => None,
+    }
+}
 
 impl RustEmitter {
     /// Emit a Rust method call from a MVL [`TirExprKind::MethodCall`].
@@ -626,7 +641,15 @@ impl RustEmitter {
             }
 
             // ── UFCS dispatch for pure MVL stdlib methods ─────────────────────
-            m if is_stdlib_ufcs_method(m) => {
+            // Type-aware: `is_stdlib_ufcs_method_for(m, ty)` only matches when
+            // this specific (method, receiver-type) pair is in the UFCS table.
+            // Without the type check, adding `("find", "List")` would poach
+            // `s.find(sub)` on String and route it through the free-fn `find`
+            // instead of the runtime's `str_find` — silently breaking every
+            // String::find call (#1707 phase 12).
+            m if ty_builtin_key(&receiver.ty).is_some_and(|k| is_stdlib_ufcs_method_for(m, k))
+                || (is_stdlib_ufcs_method(m) && ty_builtin_key(&receiver.ty).is_none()) =>
+            {
                 // Check whether we must re-wrap the result in a label newtype.
                 let wrap_label: Option<String> = if STRING_LABEL_PRESERVING_METHODS.contains(&m) {
                     {
@@ -663,8 +686,17 @@ impl RustEmitter {
 
             // ── Builtin stdlib method dispatch (#928) ───────────────────────────
             // Kernel builtins with `rust_emit` hints in `BUILTINS` are dispatched
-            // as `runtime_fn(receiver.clone().into(), args)`.
-            m if rust_emit_by_name(m).is_some() => {
+            // as `runtime_fn(receiver.clone().into(), args)`.  The lookup is
+            // TYPE-AWARE via `rust_emit_for(name, receiver_ty_key)` — a
+            // name-only lookup would silently misdispatch `xs.find(target)`
+            // on `List[Int]` to `String::find` (`str_find`) and emit code that
+            // rustc rejects with `String: From<Vec<i64>>` (#1707 phase 12).
+            m if ty_builtin_key(&receiver.ty)
+                .and_then(|k| rust_emit_for(m, k))
+                .is_some() =>
+            {
+                let receiver_key = ty_builtin_key(&receiver.ty).unwrap();
+                let rust_fn = rust_emit_for(m, receiver_key).unwrap();
                 // Label-preserving methods on String need re-wrapping (#1267).
                 let wrap_label: Option<String> = if STRING_LABEL_PRESERVING_METHODS.contains(&m) {
                     if let Ty::Labeled(label, inner) = &receiver.ty {
@@ -682,7 +714,7 @@ impl RustEmitter {
                 if let Some(ref lname) = wrap_label {
                     self.push(&format!("{lname}::new("));
                 }
-                self.push(rust_emit_by_name(m).unwrap());
+                self.push(rust_fn);
                 self.push("(");
                 self.emit_method_receiver(receiver);
                 self.push(".clone().into()");

@@ -250,6 +250,17 @@ pub fn is_stdlib_ufcs_method(name: &str) -> bool {
     STDLIB_UFCS_METHODS.iter().any(|(m, _)| *m == name)
 }
 
+/// True if `(name, ty)` is a UFCS-dispatched stdlib method for that specific
+/// receiver type — e.g. `("find", "List")` matches but `("find", "String")`
+/// does not (String's `find` is a `BUILTINS` entry with a `rust_emit` hint).
+/// Used by the Rust backend's method-call dispatch to keep the UFCS branch
+/// from swallowing calls that a builtin should handle (#1707).
+pub fn is_stdlib_ufcs_method_for(name: &str, ty: &str) -> bool {
+    STDLIB_UFCS_METHODS
+        .iter()
+        .any(|(m, t)| *m == name && *t == ty)
+}
+
 /// String methods that return a `String` with the same IFC label as their receiver.
 /// When the receiver is `Label<String>`, the call result must be re-wrapped in `Label::new(…)`
 /// because the UFCS trampoline (`method(receiver.clone().into(), …)`) strips the label via
