@@ -175,6 +175,12 @@ pub fn capability_params_for_tir_fn(
             if matches!(p.capability, Some(Capability::Val)) {
                 return None;
             }
+            // `self` in extension methods is always by-value in MVL.  Borrow
+            // inference cannot safely determine whether callee methods consume
+            // self, so suppress it entirely for the self parameter.
+            if p.name == "self" {
+                return None;
+            }
             // Conservative read-only inference on the TIR body.
             if is_read_only_param_tir(&p.name, &fd.body) {
                 Some(false)
@@ -289,15 +295,14 @@ fn expr_has_disqualifying_use_tir(param: &str, expr: &crate::mvl::ir::TirExpr) -
                 expr_has_disqualifying_use_tir(param, inner)
             }
         }
-        // Method call receiver auto-derefs — not disqualifying.
+        // Method call: if param is the direct receiver, treat as disqualifying.
+        // We cannot statically know whether the callee's self is `self` (by
+        // value) or `&self` (by reference) without a fixed-point analysis, so
+        // we conservatively assume value semantics (which is correct in MVL).
         TirExprKind::MethodCall { receiver, args, .. } => {
             let recv_is_param = matches!(&receiver.kind, TirExprKind::Var(n) if n == param);
             if recv_is_param {
-                // Receiver is fine; check args for bare param use (disqualifying).
-                args.iter().any(|a| {
-                    matches!(&a.kind, TirExprKind::Var(n) if n == param)
-                        || expr_has_disqualifying_use_tir(param, a)
-                })
+                true
             } else {
                 expr_has_disqualifying_use_tir(param, receiver)
                     || args.iter().any(|a| {

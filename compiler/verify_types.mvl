@@ -396,10 +396,103 @@ pub partial fn session_types_compatible(a: SessionTy, b: SessionTy) -> Bool {
     }
 }
 
+/// Compare labelled branch lists structurally.  Order-independent: for each
+/// branch in `a`, find a same-named branch in `b` and recurse on its session.
+/// Mirrors `src/mvl/checker/types.rs::session_branches_compatible`.
 partial fn session_branches_compatible(
     a: List[SessionTyBranch],
     b: List[SessionTyBranch],
 ) -> Bool {
-    // TODO: full label+content comparison requires 'for' in partial fn (pending fix)
-    a.len() == b.len()
+    if a.len() != b.len() {
+        false
+    } else {
+        let i: ref Int = 0;
+        let ok: ref Bool = true;
+        while i < a.len() {
+            let br_a: SessionTyBranch = a.get(i).unwrap_or(SessionTyBranch {
+                name: "",
+                session: SessionTy::End,
+            });
+            let found: ref Bool = false;
+            let j: ref Int = 0;
+            while j < b.len() {
+                let br_b: SessionTyBranch = b.get(j).unwrap_or(SessionTyBranch {
+                    name: "",
+                    session: SessionTy::End,
+                });
+                if br_b.name == br_a.name {
+                    found = true;
+                    if !session_types_compatible(br_a.session, br_b.session) {
+                        ok = false
+                    } else { () }
+                } else { () }
+                j = j + 1
+            }
+            if !found { ok = false } else { () }
+            i = i + 1
+        }
+        ok
+    }
+}
+
+// ── Tests: session_branches_compatible ────────────────────────────────────────
+
+total fn br(name: String, s: SessionTy) -> SessionTyBranch {
+    SessionTyBranch { name: name, session: s }
+}
+
+test partial fn session_end_matches_end() -> Unit {
+    assert_eq(session_types_compatible(SessionTy::End, SessionTy::End), true)
+}
+
+test partial fn session_end_rejects_send() -> Unit {
+    let s: SessionTy = SessionTy::Send(Box::new(Ty::Int), Box::new(SessionTy::End));
+    assert_eq(session_types_compatible(SessionTy::End, s), false)
+}
+
+test partial fn branches_length_mismatch_is_incompatible() -> Unit {
+    let a: SessionTy = SessionTy::InternalChoice([
+        br("ok",  SessionTy::End),
+        br("err", SessionTy::End),
+    ]);
+    let b: SessionTy = SessionTy::InternalChoice([br("ok", SessionTy::End)]);
+    assert_eq(session_types_compatible(a, b), false)
+}
+
+test partial fn branches_single_matching_is_compatible() -> Unit {
+    let a: SessionTy = SessionTy::InternalChoice([br("ping", SessionTy::End)]);
+    let b: SessionTy = SessionTy::InternalChoice([br("ping", SessionTy::End)]);
+    assert_eq(session_types_compatible(a, b), true)
+}
+
+test partial fn branches_are_order_independent() -> Unit {
+    let a: SessionTy = SessionTy::InternalChoice([
+        br("ok",  SessionTy::End),
+        br("err", SessionTy::End),
+    ]);
+    let b: SessionTy = SessionTy::InternalChoice([
+        br("err", SessionTy::End),
+        br("ok",  SessionTy::End),
+    ]);
+    assert_eq(session_types_compatible(a, b), true)
+}
+
+test partial fn branches_different_names_is_incompatible() -> Unit {
+    let a: SessionTy = SessionTy::InternalChoice([br("ping", SessionTy::End)]);
+    let b: SessionTy = SessionTy::InternalChoice([br("pong", SessionTy::End)]);
+    assert_eq(session_types_compatible(a, b), false)
+}
+
+test partial fn branches_same_name_incompatible_continuation() -> Unit {
+    let cont_a: SessionTy = SessionTy::Send(Box::new(Ty::Int), Box::new(SessionTy::End));
+    let cont_b: SessionTy = SessionTy::End;
+    let a: SessionTy = SessionTy::InternalChoice([br("ping", cont_a)]);
+    let b: SessionTy = SessionTy::InternalChoice([br("ping", cont_b)]);
+    assert_eq(session_types_compatible(a, b), false)
+}
+
+test partial fn internal_and_external_choice_do_not_match() -> Unit {
+    let a: SessionTy = SessionTy::InternalChoice([br("x", SessionTy::End)]);
+    let b: SessionTy = SessionTy::ExternalChoice([br("x", SessionTy::End)]);
+    assert_eq(session_types_compatible(a, b), false)
 }
