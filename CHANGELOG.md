@@ -1,5 +1,45 @@
 # Changelog
 
+## [0.239.0] - 2026-07-09
+
+Ships alongside **runtime 0.198.0** (mvl_runtime_rust, mvl_runtime_llvm,
+mvl_runtime_tokio) — the runtime crate is bumped to reflect the self-hosted
+LLVM backend modularization (#1693).
+
+### Changed — MVL compiler (self-hosting refactor)
+
+- **LLVM backend modularization** (#1693, ADR-0054): The 2983-LOC monolith
+  `compiler/backends/llvm/backend_llvm.mvl` has been split into eight
+  peer modules via sibling method dispatch (#1710, ADR-0052):
+  - `emit_context.mvl` — context types and accessors (EmitCtx, LocalRef, StructInfo)
+  - `emit_types.mvl` — TIR→LLVM type lowering and registry builders
+  - `emit_helpers.mvl` — JSON helpers, LLVM constants, string escaping
+  - `emit_exprs.mvl` — expression emission and if-block handling
+  - `emit_match.mvl` — match-statement lowering to LLVM IR
+  - `emit_stmts.mvl` — statement and loop emission
+  - `emit_program.mvl` — top-level driver and string collection
+  - `emitter.mvl` — main entry point
+  
+  Each module is a concern-focused peer implementing related EmitCtx methods,
+  mirroring the Rust backend structure. ~200 unit tests added; coverage
+  increased from 42% → 72%.
+
+- **Method receiver clone semantics** (ADR-0054): User-defined method calls
+  now apply the same last-use clone logic as free-function arguments. Methods
+  called on locals used multiple times in a fn body no longer raise E0382
+  move errors. Stdlib methods remain borrow-neutral per dispatch arm.
+
+### Fixed — Rust backend
+
+- **Test-runner sibling module resolution** (#1714): `mvl test` now matches
+  nested library files (e.g., `backends.llvm.emit_program`) by both bare
+  file stem and qualified module path, fixing 196 test-discovery failures
+  after qualified module paths landed on main.
+
+- **Binary expression string collection**: `collect_strings_in_expr` in
+  `emit_program.mvl` now reads `left`/`right` fields (not stale `lhs`/`rhs`),
+  ensuring string literals in binary ops are captured for emission.
+
 ## [0.238.16] - 2026-07-09
 
 Ships alongside **runtime 0.197.1** (mvl_runtime_rust, mvl_runtime_llvm,
