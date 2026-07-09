@@ -28,10 +28,7 @@ pub fn run(path: &str, json: bool, verbose: bool) {
     let base_dir: std::path::PathBuf = if std::path::Path::new(path).is_dir() {
         std::path::Path::new(path).to_path_buf()
     } else {
-        std::path::Path::new(path)
-            .parent()
-            .unwrap_or(std::path::Path::new("."))
-            .to_path_buf()
+        loader::infer_base_dir_from_qualified_imports(std::path::Path::new(path))
     };
     let modules: Vec<(String, String, Program)> = files
         .iter()
