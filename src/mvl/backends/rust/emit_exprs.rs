@@ -594,13 +594,16 @@ impl RustEmitter {
                 self.push("]");
             }
             TirExprKind::Map { pairs } => {
-                // Determine whether the value type needs an `.into()` coercion.
-                // For labeled/refined value types (`Secret[String]`, `PosInt`,
-                // etc.) the map literal's raw values coerce via `From`.  For
-                // plain primitive value types, `.into()` has no target and
-                // produces a spurious `E0282: type annotations needed` on
-                // literals like `-2` where numeric-literal inference can't
-                // discriminate (#1707 phase 9).
+                // For labeled/refined value types (`Secret[String]`, `PosInt`, etc.)
+                // raw values must coerce via `.into()` — use emit_expr_as_fn_arg which
+                // handles `.clone().into()` with last-use move elision.
+                //
+                // For plain value types (`String`, `Int`, etc.) we must NOT add
+                // `.into()` — it causes `E0282: type annotations needed` on integer
+                // literals like `-2` where type inference can't discriminate (#1707
+                // phase 9).  We DO still need `.clone()` for non-Copy types (String,
+                // Named structs) to prevent moves — emit_expr_as_arg handles this via
+                // last-use analysis.
                 let value_needs_into = match &expr.ty {
                     Ty::Map(_, v) => matches!(v.as_ref(), Ty::Labeled(..) | Ty::Refined(..)),
                     _ => true,
@@ -613,9 +616,10 @@ impl RustEmitter {
                     self.push("(");
                     self.emit_expr(k);
                     self.push(", ");
-                    self.emit_expr(v);
                     if value_needs_into {
-                        self.push(".clone().into()");
+                        self.emit_expr_as_fn_arg(v);
+                    } else {
+                        self.emit_expr_as_arg(v);
                     }
                     self.push(")");
                 }
