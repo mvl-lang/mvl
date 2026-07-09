@@ -762,7 +762,10 @@ impl RustEmitter {
         self.blank();
 
         for mod_name in sibling_mods {
-            self.line(&format!("pub mod {mod_name};"));
+            // Qualified MVL names (`backends.llvm.emit_context`) become
+            // underscore-joined idents for valid Rust (`mvl_mod_to_rust_ident`).
+            let rust_ident = super::mvl_mod_to_rust_ident(mod_name);
+            self.line(&format!("pub mod {rust_ident};"));
         }
         if !sibling_mods.is_empty() {
             self.blank();
@@ -1046,12 +1049,19 @@ impl RustEmitter {
                 let is_std = ud.path.first().map(|s| s == "std").unwrap_or(false);
                 let is_pkg = ud.path.first().map(|s| s == "pkg").unwrap_or(false);
                 if !is_std && !is_pkg && !self.test_extern_stubs {
-                    // Skip `use crate::mod::name` when `name` is an extension method in
-                    // a sibling — the method is accessible through the type's impl block.
-                    let mod_part = ud.path[..ud.path.len() - 1].join("::");
-                    let item_name = ud.path.last().cloned().unwrap_or_default();
-                    if !sibling_ext_methods.contains(&(mod_part, item_name)) {
-                        self.line(&format!("use crate::{};", ud.path.join("::")));
+                    // MVL `use A.B.C::Item` targets a user module named `A.B.C`
+                    // which the Rust backend emits as flat `pub mod A_B_C;` —
+                    // fold the module segments into one underscore-joined ident
+                    // and keep the item name as the final `::` component.
+                    let (mod_segs, item_seg) = ud.path.split_at(ud.path.len() - 1);
+                    let mvl_mod = mod_segs.join(".");
+                    let rust_mod = super::mvl_mod_to_rust_ident(&mvl_mod);
+                    // Extension-method skip preserved: sibling_ext_methods
+                    // stores mod_name as dot-joined (matching what
+                    // `collect_imported_module_names` produces).
+                    let item_name = item_seg.first().cloned().unwrap_or_default();
+                    if !sibling_ext_methods.contains(&(mvl_mod, item_name.clone())) {
+                        self.line(&format!("use crate::{rust_mod}::{item_name};"));
                     }
                 }
             } else if ud.path.len() == 1 {
@@ -1066,7 +1076,8 @@ impl RustEmitter {
                     // module.  Scope the allow to this line so real unused
                     // *specific* imports elsewhere still warn (#1657 follow-up).
                     self.line("#[allow(unused_imports)]");
-                    self.line(&format!("use crate::{}::*;", mod_name));
+                    let rust_mod = super::mvl_mod_to_rust_ident(mod_name);
+                    self.line(&format!("use crate::{}::*;", rust_mod));
                 }
             }
         }

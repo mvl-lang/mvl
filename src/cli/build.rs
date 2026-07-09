@@ -82,23 +82,14 @@ pub fn run(
     let (prog, src) = super::parse_or_exit(&file_path);
     let crate_name = loader::stem(path);
 
-    // Collect sibling modules referenced via `use module::item` declarations.
-    // Only load files that are actually imported — not all .mvl files in the directory.
+    // Collect sibling modules referenced via `use module::item` declarations —
+    // transitively, so an entry file importing peers that themselves import
+    // peers (e.g. the split MVL LLVM emitter) resolves in one pass.
     let entry_dir = Path::new(&file_path)
         .parent()
         .unwrap_or_else(|| Path::new("."));
-    let imported_mod_names = loader::collect_imported_module_names(&prog);
-    let mut sibling_modules: Vec<(String, String, mvl::mvl::parser::ast::Program)> =
-        imported_mod_names
-            .into_iter()
-            .filter_map(|mod_name| {
-                let mod_path = loader::find_module_file(entry_dir, &mod_name)?;
-                let mod_str = mod_path.display().to_string();
-                let (sib_prog, _) = super::parse_or_exit(&mod_str);
-                Some((mod_name, mod_str, sib_prog))
-            })
-            .collect();
-    sibling_modules.sort_by(|(a, _, _), (b, _, _)| a.cmp(b));
+    let sibling_modules: Vec<(String, String, mvl::mvl::parser::ast::Program)> =
+        loader::load_sibling_modules_transitive(&prog, entry_dir);
 
     // Run module resolver to validate `use` imports across all modules.
     let mut all_modules = vec![(crate_name.clone(), file_path.clone(), prog.clone())];
@@ -395,9 +386,13 @@ pub fn run(
     }
 
     // Write each sibling module as src/{name}.rs so `pub mod name;` resolves.
+    // Qualified names (e.g. `backends.llvm.emit_context`) are munged to a
+    // single underscore-joined ident so the emitted `pub mod` declaration and
+    // this filename agree — see `mvl_mod_to_rust_ident`.
     for (mod_name, mod_source) in &out.module_files {
-        fs::write(src_dir.join(format!("{mod_name}.rs")), mod_source).unwrap_or_else(|e| {
-            eprintln!("Cannot write {mod_name}.rs: {e}");
+        let rust_ident = mvl::mvl::backends::rust::mvl_mod_to_rust_ident(mod_name);
+        fs::write(src_dir.join(format!("{rust_ident}.rs")), mod_source).unwrap_or_else(|e| {
+            eprintln!("Cannot write {rust_ident}.rs: {e}");
             process::exit(1);
         });
     }

@@ -62,15 +62,13 @@ pub fn run(path: &str, verbose: bool, stdlib_profile: &str, callee_filter: Optio
             .collect();
         let entry_dir = Path::new(path).parent().unwrap_or_else(|| Path::new("."));
         if let Some((_, entry_prog)) = parsed.first() {
-            for mod_name in loader::collect_imported_module_names(entry_prog) {
+            // Transitive sibling load — see build.rs / check.rs for rationale.
+            let siblings = loader::load_sibling_modules_transitive(entry_prog, entry_dir);
+            for (mod_name, mod_str, sib_prog) in siblings {
                 if already_loaded.contains(&mod_name) {
                     continue;
                 }
-                if let Some(mod_path) = loader::find_module_file(entry_dir, &mod_name) {
-                    let mod_str = mod_path.display().to_string();
-                    let (sib_prog, _) = super::parse_or_exit(&mod_str);
-                    parsed.push((mod_str, sib_prog));
-                }
+                parsed.push((mod_str, sib_prog));
             }
         }
     }
