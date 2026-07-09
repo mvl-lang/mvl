@@ -1,0 +1,317 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// compiler/verify_termination.mvl — C6: Termination checker
+//
+// Port of src/mvl/checker/termination.rs.
+//
+// Checks that `total fn` declarations are provably terminating:
+//   1. Structural recursion: a total fn that calls itself must do so on a
+//      sub-term of one of its parameters (otherwise UnprovenRecursion).
+//   2. Mutual recursion: if a total fn participates in a cycle in the call
+//      graph, all functions in the cycle must be total (MutualRecursionInTotal).
+//
+// Note: the structural recursion proof in the Rust source tracks a `smaller`
+// set of variables known to be structurally smaller than the parameters.
+// In this MVL port we use a simplified "if a total fn directly calls itself
+// and has no while-decreases annotation, report UnprovenRecursion."  The
+// full structural analysis requires type-annotated expressions which are only
+// available after infer.rs is ported.
+//
+// Differences from Rust source:
+//   - Operates on TirProgram (not AST Program).
+//   - call_graph.mvl provides CallGraph for the mutual-recursion check.
+//   - No &mut Vec<CheckError>: errors returned as List[CheckError].
+//   - No TermCtx struct needed for the simplified check.
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// True if the function is subject to termination checks (i.e. not partial).
+total fn is_total(f: TirFn) -> Bool {
+    match f.totality {
+        Some(Totality::Partial) => false,
+        _                      => true,
+    }
+}
+
+/// True if any statement in `block` is a direct call to `fn_name`.
+partial fn block_has_direct_call(block: TirBlock, fn_name: String) -> Bool {
+    for stmt in block.stmts {
+        if stmt_has_direct_call(stmt, fn_name) { return true } else { () }
+    }
+    false
+}
+
+partial fn stmt_has_direct_call(stmt: TirStmt, fn_name: String) -> Bool {
+    match stmt {
+        TirStmt::Let { init: init, .. }          => expr_has_direct_call(init, fn_name),
+        TirStmt::Assign { value: value, .. }      => expr_has_direct_call(value, fn_name),
+        TirStmt::Return { value: value, .. }      =>
+            match value {
+                Some(e) => expr_has_direct_call(e, fn_name),
+                None    => false,
+            },
+        TirStmt::Expr { expr: expr, .. }         => expr_has_direct_call(expr, fn_name),
+        TirStmt::If { cond: cond, then: then, else_br: else_br, .. } =>
+            expr_has_direct_call(cond, fn_name)
+            || block_has_direct_call(then, fn_name)
+            || match else_br {
+                Some(TirElseBranch::Block(b))  => block_has_direct_call(b, fn_name),
+                Some(TirElseBranch::If(inner)) => stmt_has_direct_call(*inner, fn_name),
+                None                           => false,
+            },
+        TirStmt::Match { scrutinee: scrutinee, arms: arms, .. } =>
+            expr_has_direct_call(scrutinee, fn_name)
+            || arms_have_direct_call(arms, fn_name),
+        TirStmt::For { iter: iter, body: body, .. } =>
+            expr_has_direct_call(iter, fn_name)
+            || block_has_direct_call(body, fn_name),
+        TirStmt::While { cond: cond, body: body, .. } =>
+            expr_has_direct_call(cond, fn_name)
+            || block_has_direct_call(body, fn_name),
+    }
+}
+
+partial fn arms_have_direct_call(arms: List[TirMatchArm], fn_name: String) -> Bool {
+    for arm in arms {
+        let found: Bool = match arm.body {
+            TirMatchBody::Expr(e)  => expr_has_direct_call(e, fn_name),
+            TirMatchBody::Block(b) => block_has_direct_call(b, fn_name),
+        };
+        if found { return true } else { () }
+    }
+    false
+}
+
+partial fn expr_has_direct_call(expr: TirExpr, fn_name: String) -> Bool {
+    match expr.kind {
+        TirExprKind::FnCall { name: name, args: args, .. } =>
+            name == fn_name
+            || args_have_direct_call(args, fn_name),
+        TirExprKind::MethodCall { receiver: receiver, args: args, .. } =>
+            expr_has_direct_call(*receiver, fn_name)
+            || args_have_direct_call(args, fn_name),
+        TirExprKind::Binary { left: left, right: right, .. } =>
+            expr_has_direct_call(*left, fn_name)
+            || expr_has_direct_call(*right, fn_name),
+        TirExprKind::Unary { expr: inner, .. }       => expr_has_direct_call(*inner, fn_name),
+        TirExprKind::FieldAccess { expr: inner, .. } => expr_has_direct_call(*inner, fn_name),
+        TirExprKind::Propagate(inner)                => expr_has_direct_call(*inner, fn_name),
+        TirExprKind::Consume(inner)                  => expr_has_direct_call(*inner, fn_name),
+        TirExprKind::Borrow { expr: inner, .. }      => expr_has_direct_call(*inner, fn_name),
+        TirExprKind::Relabel { expr: inner, .. }     => expr_has_direct_call(*inner, fn_name),
+        TirExprKind::If { cond: cond, then: then, else_br: else_br, .. } =>
+            expr_has_direct_call(*cond, fn_name)
+            || block_has_direct_call(then, fn_name)
+            || match else_br {
+                Some(e) => expr_has_direct_call(*e, fn_name),
+                None    => false,
+            },
+        TirExprKind::Match { scrutinee: scrutinee, arms: arms, .. } =>
+            expr_has_direct_call(*scrutinee, fn_name)
+            || arms_have_direct_call(arms, fn_name),
+        TirExprKind::Block(b)          => block_has_direct_call(b, fn_name),
+        TirExprKind::Lambda { body: body, .. } => expr_has_direct_call(*body, fn_name),
+        TirExprKind::Construct { fields: fields, .. } =>
+            fields_have_direct_call(fields, fn_name),
+        TirExprKind::ListLit { elems: elems } => args_have_direct_call(elems, fn_name),
+        TirExprKind::SetLit  { elems: elems } => args_have_direct_call(elems, fn_name),
+        TirExprKind::MapLit  { pairs: pairs } => pairs_have_direct_call(pairs, fn_name),
+        TirExprKind::Spawn { fields: fields, .. } => fields_have_direct_call(fields, fn_name),
+        TirExprKind::Select { arms: arms } => {
+            let found: ref Bool = false;
+            for arm in arms {
+                if block_has_direct_call(arm.body, fn_name) { found = true } else { () }
+            }
+            found
+        },
+        _ => false,
+    }
+}
+
+partial fn args_have_direct_call(args: List[TirExpr], fn_name: String) -> Bool {
+    for a in args {
+        if expr_has_direct_call(a, fn_name) { return true } else { () }
+    }
+    false
+}
+
+partial fn fields_have_direct_call(fields: List[TirFieldExpr], fn_name: String) -> Bool {
+    for f in fields {
+        if expr_has_direct_call(f.expr, fn_name) { return true } else { () }
+    }
+    false
+}
+
+partial fn pairs_have_direct_call(pairs: List[TirMapPair], fn_name: String) -> Bool {
+    for p in pairs {
+        if expr_has_direct_call(p.key, fn_name) || expr_has_direct_call(p.value, fn_name) {
+            return true
+        } else { () }
+    }
+    false
+}
+
+// ── Passes ────────────────────────────────────────────────────────────────────
+
+/// Check all total functions for direct self-recursion that is not accompanied
+/// by a loop-variant (`decreases`) annotation.
+///
+/// A simplified port: we flag any total fn with a direct recursive call as
+/// UnprovenRecursion.  Functions whose recursive call is guarded by `decreases`
+/// are accepted by the compiler's prover and will not appear as total fns with
+/// naive recursion.  The full structural sub-term analysis requires post-infer
+/// type information and is deferred.
+pub partial fn check_structural_recursion(prog: TirProgram) -> List[CheckError] {
+    let errs: ref List[CheckError] = [];
+    for f in prog.fns {
+        if is_total(f) && block_has_direct_call(f.body, f.name) {
+            errs.push(CheckError::UnprovenRecursion {
+                fn_name: f.name,
+                span:    f.span,
+            });
+        } else { () }
+    }
+    errs
+}
+
+/// Check total functions for mutual recursion (cycles in the call graph that
+/// involve at least one total function).
+///
+/// A total function must not participate in a cycle unless all functions in
+/// the cycle are themselves proven terminating by structural metrics.  In
+/// practice, the MVL compiler rejects such cycles at the prover level; this
+/// pass surfaces the error at the checker level for early reporting.
+pub partial fn check_mutual_recursion(
+    prog:  TirProgram,
+    graph: CallGraph,
+) -> List[CheckError] {
+    let errs: ref List[CheckError] = [];
+    for f in prog.fns {
+        if is_total(f) {
+            for edge in graph.callees(f.name) {
+                // If callee can reach back to f, we have mutual recursion.
+                if graph.reachable(edge.callee, f.name) {
+                    errs.push(CheckError::MutualRecursionInTotal {
+                        fn_name:    f.name,
+                        cycle_with: edge.callee,
+                        span:       f.span,
+                    });
+                } else { () }
+            }
+        } else { () }
+    }
+    errs
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+total fn mk_empty_block() -> TirBlock {
+    TirBlock { stmts: [], span: SourceLoc { line: 0, col: 0 } }
+}
+
+total fn mk_total_fn(name: String, block: TirBlock) -> TirFn {
+    TirFn {
+        name:              name,
+        original_name:     name,
+        visible:           false,
+        is_test:           false,
+        is_builtin:        false,
+        receiver_type:     None,
+        type_params:       [],
+        constraints:       [],
+        totality:          Some(Totality::Total),
+        params:            [],
+        ret_ty:            Ty::Unit,
+        return_refinement: None,
+        effects:           [],
+        pre_conds:         [],
+        post_conds:        [],
+        body:              block,
+        span:              SourceLoc { line: 0, col: 0 },
+    }
+}
+
+total fn mk_partial_fn(name: String) -> TirFn {
+    TirFn {
+        name:              name,
+        original_name:     name,
+        visible:           false,
+        is_test:           false,
+        is_builtin:        false,
+        receiver_type:     None,
+        type_params:       [],
+        constraints:       [],
+        totality:          Some(Totality::Partial),
+        params:            [],
+        ret_ty:            Ty::Unit,
+        return_refinement: None,
+        effects:           [],
+        pre_conds:         [],
+        post_conds:        [],
+        body:              mk_empty_block(),
+        span:              SourceLoc { line: 0, col: 0 },
+    }
+}
+
+total fn mk_self_call_block(fn_name: String) -> TirBlock {
+    let call_expr: TirExpr = TirExpr {
+        kind: TirExprKind::FnCall { name: fn_name, args: [], type_args: [] },
+        ty:   Ty::Unit,
+        span: SourceLoc { line: 1, col: 0 },
+    };
+    TirBlock {
+        stmts: [TirStmt::Expr { expr: call_expr, span: SourceLoc { line: 1, col: 0 } }],
+        span:  SourceLoc { line: 0, col: 0 },
+    }
+}
+
+test partial fn partial_fn_with_self_call_not_flagged() -> Unit {
+    let prog: TirProgram = TirProgram {
+        fns: [TirFn {
+            name:              "recur",
+            original_name:     "recur",
+            visible:           false,
+            is_test:           false,
+            is_builtin:        false,
+            receiver_type:     None,
+            type_params:       [],
+            constraints:       [],
+            totality:          Some(Totality::Partial),
+            params:            [],
+            ret_ty:            Ty::Unit,
+            return_refinement: None,
+            effects:           [],
+            pre_conds:         [],
+            post_conds:        [],
+            body:              mk_self_call_block("recur"),
+            span:              SourceLoc { line: 0, col: 0 },
+        }],
+        types: [], externs: [], actors: [], impls: [], consts: [],
+        uses: [], effect_decls: [], label_decls: [], relabel_decls: [],
+    };
+    let errs: List[CheckError] = check_structural_recursion(prog);
+    assert_eq(errs.len(), 0)
+}
+
+test partial fn total_fn_no_recursion_is_ok() -> Unit {
+    let f: TirFn = mk_total_fn("pure", mk_empty_block());
+    let prog: TirProgram = TirProgram {
+        fns: [f],
+        types: [], externs: [], actors: [], impls: [], consts: [],
+        uses: [], effect_decls: [], label_decls: [], relabel_decls: [],
+    };
+    let errs: List[CheckError] = check_structural_recursion(prog);
+    assert_eq(errs.len(), 0)
+}
+
+test partial fn total_fn_self_recursion_is_error() -> Unit {
+    let f: TirFn = mk_total_fn("loop_fn", mk_self_call_block("loop_fn"));
+    let prog: TirProgram = TirProgram {
+        fns: [f],
+        types: [], externs: [], actors: [], impls: [], consts: [],
+        uses: [], effect_decls: [], label_decls: [], relabel_decls: [],
+    };
+    let errs: List[CheckError] = check_structural_recursion(prog);
+    assert_eq(errs.len(), 1)
+}

@@ -266,6 +266,7 @@ fn stmt_has_disqualifying_use_tir(
             scrutinee, arms, ..
         } => {
             matches!(&scrutinee.kind, TirExprKind::Var(n) if n == param)
+                || is_field_of_param(scrutinee, param)
                 || expr_has_disqualifying_use_tir(param, scrutinee)
                 || arms.iter().any(|a| match &a.body {
                     TirMatchBody::Block(b) => block_has_disqualifying_use_tir(param, b),
@@ -282,6 +283,15 @@ fn stmt_has_disqualifying_use_tir(
                 || block_has_disqualifying_use_tir(param, body)
         }
     }
+}
+
+/// True when `expr` is a direct field access on `param` (e.g. `param.kind`).
+/// A field access used as a match scrutinee may destructure owned values from
+/// the field, so it must be treated as a consuming use.
+fn is_field_of_param(expr: &crate::mvl::ir::TirExpr, param: &str) -> bool {
+    use crate::mvl::ir::TirExprKind;
+    matches!(&expr.kind, TirExprKind::FieldAccess { expr: inner, .. }
+        if matches!(&inner.kind, TirExprKind::Var(n) if n == param))
 }
 
 fn expr_has_disqualifying_use_tir(param: &str, expr: &crate::mvl::ir::TirExpr) -> bool {
@@ -354,6 +364,7 @@ fn expr_has_disqualifying_use_tir(param: &str, expr: &crate::mvl::ir::TirExpr) -
             scrutinee, arms, ..
         } => {
             matches!(&scrutinee.kind, TirExprKind::Var(n) if n == param)
+                || is_field_of_param(scrutinee, param)
                 || expr_has_disqualifying_use_tir(param, scrutinee)
                 || arms.iter().any(|a| match &a.body {
                     TirMatchBody::Block(b) => block_has_disqualifying_use_tir(param, b),

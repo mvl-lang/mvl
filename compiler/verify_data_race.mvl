@@ -1,0 +1,448 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// compiler/verify_data_race.mvl — C7: Data race freedom checker
+//
+// Port of src/mvl/checker/data_race.rs.
+//
+// Verifies three data-race-freedom properties over TirProgram:
+//
+//   1. check_ref_escape_to_spawn — a `ref`-capability parameter must not be
+//      used as a field value in an actor Spawn expression, because that would
+//      allow a mutable alias to cross an actor boundary.
+//
+//   2. check_iso_aliasing — an `iso` variable may not be aliased: every use of
+//      an iso binding must go through `consume()`, which transfers ownership.
+//      Any binding `let y = x` where x is iso (without consume) is an error.
+//
+//   3. count_race_free_fns — metrics helper: counts functions by whether they
+//      have ref parameters (potential race risk) or not.
+//
+// Differences from Rust source:
+//   - Operates on TirProgram (post-lowering) rather than AST Program.
+//   - HashSet<String> → List[String] with contains().
+//   - &mut Vec<CheckError> accumulator → returned List[CheckError].
+//   - Actor spawn is TirExprKind::Spawn rather than parser-level ActorSpawn.
+
+// ── Data race metrics ─────────────────────────────────────────────────────────
+
+/// Per-function data race freedom metrics.
+pub type DataRaceCounts = struct {
+    fn_count:            Int,
+    race_free:        Int,
+    actor_boundaries: Int,
+    iso_params:       Int,
+    val_params:       Int,
+    ref_escapes:      Int,
+}
+
+/// Count race-free functions by capability classification.
+/// A function is race-free iff it has no `ref`-capability parameters.
+pub total fn count_race_free_fns(prog: TirProgram) -> DataRaceCounts {
+    let fn_count:            ref Int = 0;
+    let race_free:        ref Int = 0;
+    let actor_boundaries: ref Int = 0;
+    let iso_params:       ref Int = 0;
+    let val_params:       ref Int = 0;
+    let ref_escapes:      ref Int = 0;
+    for f in prog.fns {
+        fn_count = fn_count + 1;
+        let has_ref: ref Bool = false;
+        for p in f.params {
+            match p.capability {
+                Some(Capability::RefCap) => { has_ref = true; ref_escapes = ref_escapes + 1 },
+                Some(Capability::Iso)    => { iso_params = iso_params + 1 },
+                Some(Capability::Val)    => { val_params = val_params + 1 },
+                _                        => {},
+            }
+        }
+        if !has_ref { race_free = race_free + 1 } else { () }
+    }
+    for a in prog.actors {
+        actor_boundaries = actor_boundaries + 1;
+        for m in a.methods {
+            fn_count = fn_count + 1;
+            let has_ref: ref Bool = false;
+            for p in m.params {
+                match p.capability {
+                    Some(Capability::RefCap) => { has_ref = true; ref_escapes = ref_escapes + 1 },
+                    Some(Capability::Iso)    => { iso_params = iso_params + 1 },
+                    Some(Capability::Val)    => { val_params = val_params + 1 },
+                    _                        => {},
+                }
+            }
+            if !has_ref { race_free = race_free + 1 } else { () }
+        }
+    }
+    DataRaceCounts {
+        fn_count:            fn_count,
+        race_free:        race_free,
+        actor_boundaries: actor_boundaries,
+        iso_params:       iso_params,
+        val_params:       val_params,
+        ref_escapes:      ref_escapes,
+    }
+}
+
+// ── Ref-escape check ──────────────────────────────────────────────────────────
+
+/// Check that ref-capability parameters do not escape into actor Spawn fields.
+///
+/// A `ref T` parameter is a mutable alias.  If it ends up as a field in a
+/// spawned actor, two mutable references to the same data exist in different
+/// actor contexts — a data race.
+pub partial fn check_ref_escape_to_spawn(prog: TirProgram) -> List[CheckError] {
+    let errs: ref List[CheckError] = [];
+    for f in prog.fns {
+        let ref_params: ref List[String] = [];
+        for p in f.params {
+            match p.capability {
+                Some(Capability::RefCap) => { ref_params.push(p.name) },
+                _                        => {},
+            }
+        }
+        if ref_params.len() > 0 {
+            check_block_for_ref_spawn(f.body, ref_params, f.name, errs);
+        } else { () }
+    }
+    errs
+}
+
+partial fn check_block_for_ref_spawn(
+    block:      TirBlock,
+    ref_params: List[String],
+    fn_name:    String,
+    errs:       ref List[CheckError],
+) -> Unit {
+    for stmt in block.stmts {
+        check_stmt_for_ref_spawn(stmt, ref_params, fn_name, errs)
+    }
+}
+
+partial fn check_stmt_for_ref_spawn(
+    stmt:       TirStmt,
+    ref_params: List[String],
+    fn_name:    String,
+    errs:       ref List[CheckError],
+) -> Unit {
+    match stmt {
+        TirStmt::Let  { init: init, .. }    => check_expr_for_ref_spawn(init, ref_params, fn_name, errs),
+        TirStmt::Assign { value: value, .. } => check_expr_for_ref_spawn(value, ref_params, fn_name, errs),
+        TirStmt::Expr { expr: expr, .. }    => check_expr_for_ref_spawn(expr, ref_params, fn_name, errs),
+        TirStmt::Return { value: value, .. } => match value {
+            Some(e) => check_expr_for_ref_spawn(e, ref_params, fn_name, errs),
+            None    => {},
+        },
+        TirStmt::If { cond: cond, then: then, else_br: else_br, .. } => {
+            check_expr_for_ref_spawn(cond, ref_params, fn_name, errs);
+            check_block_for_ref_spawn(then, ref_params, fn_name, errs);
+            match else_br {
+                Some(TirElseBranch::Block(b))  => check_block_for_ref_spawn(b, ref_params, fn_name, errs),
+                Some(TirElseBranch::If(inner)) => check_stmt_for_ref_spawn(*inner, ref_params, fn_name, errs),
+                None                           => {},
+            }
+        },
+        TirStmt::Match { scrutinee: scrutinee, arms: arms, .. } => {
+            check_expr_for_ref_spawn(scrutinee, ref_params, fn_name, errs);
+            for arm in arms {
+                match arm.body {
+                    TirMatchBody::Expr(e)  => check_expr_for_ref_spawn(e, ref_params, fn_name, errs),
+                    TirMatchBody::Block(b) => check_block_for_ref_spawn(b, ref_params, fn_name, errs),
+                }
+            }
+        },
+        TirStmt::For { iter: iter, body: body, .. } => {
+            check_expr_for_ref_spawn(iter, ref_params, fn_name, errs);
+            check_block_for_ref_spawn(body, ref_params, fn_name, errs);
+        },
+        TirStmt::While { cond: cond, body: body, .. } => {
+            check_expr_for_ref_spawn(cond, ref_params, fn_name, errs);
+            check_block_for_ref_spawn(body, ref_params, fn_name, errs);
+        },
+    }
+}
+
+partial fn check_expr_for_ref_spawn(
+    expr:       TirExpr,
+    ref_params: List[String],
+    fn_name:    String,
+    errs:       ref List[CheckError],
+) -> Unit {
+    match expr.kind {
+        TirExprKind::Spawn { fields: fields, .. } => {
+            for field in fields {
+                match field.expr.kind {
+                    TirExprKind::Var(vname) => {
+                        if ref_params.contains(vname) {
+                            errs.push(CheckError::RefEscapesToConcurrentContext {
+                                name:       vname,
+                                actor_name: fn_name,
+                                span:       field.expr.span,
+                            });
+                        } else { () }
+                    },
+                    _ => check_expr_for_ref_spawn(field.expr, ref_params, fn_name, errs),
+                }
+            }
+        },
+        TirExprKind::FnCall { args: args, .. } => {
+            for a in args { check_expr_for_ref_spawn(a, ref_params, fn_name, errs) }
+        },
+        TirExprKind::MethodCall { receiver: receiver, args: args, .. } => {
+            check_expr_for_ref_spawn(*receiver, ref_params, fn_name, errs);
+            for a in args { check_expr_for_ref_spawn(a, ref_params, fn_name, errs) }
+        },
+        TirExprKind::If { cond: cond, then: then, else_br: else_br, .. } => {
+            check_expr_for_ref_spawn(*cond, ref_params, fn_name, errs);
+            check_block_for_ref_spawn(then, ref_params, fn_name, errs);
+            match else_br {
+                Some(e) => check_expr_for_ref_spawn(*e, ref_params, fn_name, errs),
+                None    => {},
+            }
+        },
+        TirExprKind::Block(b) => check_block_for_ref_spawn(b, ref_params, fn_name, errs),
+        _                     => {},
+    }
+}
+
+// ── Iso aliasing check ────────────────────────────────────────────────────────
+
+/// Check that iso-capability variables are never aliased without consume().
+///
+/// `iso` means isolated — only one live reference exists.  Any binding
+/// `let y = x` where x is iso (without `consume(x)`) creates a second
+/// reference, violating isolation.
+pub partial fn check_iso_aliasing(prog: TirProgram) -> List[CheckError] {
+    let errs: ref List[CheckError] = [];
+    for f in prog.fns {
+        let iso_vars: ref List[String] = [];
+        for p in f.params {
+            match p.capability {
+                Some(Capability::Iso) => { iso_vars.push(p.name) },
+                _                     => {},
+            }
+        }
+        check_block_iso(f.body, iso_vars, errs);
+        ()
+    }
+    errs
+}
+
+// iso_vars is passed by value and returned updated — avoids rebinding a ref param.
+
+partial fn check_block_iso(
+    block:    TirBlock,
+    iso_vars: List[String],
+    errs:     ref List[CheckError],
+) -> List[String] {
+    let current: ref List[String] = iso_vars;
+    for stmt in block.stmts {
+        current = check_stmt_iso(stmt, current, errs)
+    }
+    current
+}
+
+partial fn check_stmt_iso(
+    stmt:     TirStmt,
+    iso_vars: List[String],
+    errs:     ref List[CheckError],
+) -> List[String] {
+    match stmt {
+        TirStmt::Let { pattern: pattern, init: init, span: span, .. } => {
+            match init.kind {
+                // consume(x) transfers ownership: remove old binding, add new.
+                TirExprKind::Consume(inner) => match inner.kind {
+                    TirExprKind::Var(consumed) => {
+                        let new_iso: ref List[String] = [];
+                        for v in iso_vars { if v != consumed { new_iso.push(v) } else { () } }
+                        match pattern {
+                            Pattern::Ident(new_name, _) => { new_iso.push(new_name) },
+                            _                           => {},
+                        }
+                        new_iso
+                    },
+                    _ => { check_expr_iso(*inner, iso_vars, errs); iso_vars },
+                },
+                // Direct var reference to an iso binding — aliasing violation.
+                TirExprKind::Var(vname) => {
+                    if iso_vars.contains(vname) {
+                        errs.push(CheckError::IsoAliasingViolation { name: vname, span: span });
+                    } else { () }
+                    iso_vars
+                },
+                _ => { check_expr_iso(init, iso_vars, errs); iso_vars },
+            }
+        },
+        TirStmt::Assign { value: value, .. }  => { check_expr_iso(value, iso_vars, errs); iso_vars },
+        TirStmt::Expr { expr: expr, .. }      => { check_expr_iso(expr, iso_vars, errs); iso_vars },
+        TirStmt::Return { value: value, .. }  => match value {
+            Some(e) => { check_expr_iso(e, iso_vars, errs); iso_vars },
+            None    => iso_vars,
+        },
+        TirStmt::If { cond: cond, then: then, else_br: else_br, .. } => {
+            check_expr_iso(cond, iso_vars, errs);
+            let iso2: List[String] = check_block_iso(then, iso_vars, errs);
+            match else_br {
+                Some(TirElseBranch::Block(b))  => { check_block_iso(b, iso2, errs); iso2 },
+                Some(TirElseBranch::If(inner)) => check_stmt_iso(*inner, iso2, errs),
+                None                           => iso2,
+            }
+        },
+        TirStmt::Match { scrutinee: scrutinee, arms: arms, .. } => {
+            check_expr_iso(scrutinee, iso_vars, errs);
+            for arm in arms {
+                match arm.body {
+                    TirMatchBody::Expr(e)  => check_expr_iso(e, iso_vars, errs),
+                    TirMatchBody::Block(b) => { check_block_iso(b, iso_vars, errs); () },
+                }
+            }
+            iso_vars
+        },
+        TirStmt::For { iter: iter, body: body, .. } => {
+            check_expr_iso(iter, iso_vars, errs);
+            check_block_iso(body, iso_vars, errs)
+        },
+        TirStmt::While { cond: cond, body: body, .. } => {
+            check_expr_iso(cond, iso_vars, errs);
+            check_block_iso(body, iso_vars, errs)
+        },
+    }
+}
+
+partial fn check_expr_iso(
+    expr:     TirExpr,
+    iso_vars: List[String],
+    errs:     ref List[CheckError],
+) -> Unit {
+    match expr.kind {
+        TirExprKind::FnCall { args: args, .. } => {
+            for a in args { check_expr_iso(a, iso_vars, errs) }
+        },
+        TirExprKind::MethodCall { receiver: receiver, args: args, .. } => {
+            check_expr_iso(*receiver, iso_vars, errs);
+            for a in args { check_expr_iso(a, iso_vars, errs) }
+        },
+        TirExprKind::If { cond: cond, then: then, else_br: else_br, .. } => {
+            check_expr_iso(*cond, iso_vars, errs);
+            let _: List[String] = check_block_iso(then, iso_vars, errs);
+            match else_br {
+                Some(e) => check_expr_iso(*e, iso_vars, errs),
+                None    => {},
+            }
+        },
+        TirExprKind::Block(b) => {
+            let _: List[String] = check_block_iso(b, iso_vars, errs);
+        },
+        TirExprKind::Consume(_) => {},  // consume is safe by definition
+        _ => {},
+    }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+total fn empty_prog() -> TirProgram {
+    TirProgram {
+        fns: [], types: [], externs: [], actors: [], impls: [], consts: [],
+        uses: [], effect_decls: [], label_decls: [], relabel_decls: [],
+    }
+}
+
+test fn count_race_free_empty_prog() -> Unit {
+    let c: DataRaceCounts = count_race_free_fns(empty_prog());
+    assert_eq(c.fn_count, 0);
+    assert_eq(c.race_free, 0)
+}
+
+test partial fn no_ref_params_is_race_free() -> Unit {
+    let f: TirFn = TirFn {
+        name: "f", original_name: "f",
+        visible: false, is_test: false, is_builtin: false,
+        receiver_type: None, type_params: [], constraints: [],
+        totality: None, params: [], ret_ty: Ty::Unit,
+        return_refinement: None, effects: [], pre_conds: [], post_conds: [],
+        body: TirBlock { stmts: [], span: SourceLoc { line: 0, col: 0 } },
+        span: SourceLoc { line: 0, col: 0 },
+    };
+    let prog: TirProgram = TirProgram {
+        fns: [f], types: [], externs: [], actors: [], impls: [], consts: [],
+        uses: [], effect_decls: [], label_decls: [], relabel_decls: [],
+    };
+    let c: DataRaceCounts = count_race_free_fns(prog);
+    assert_eq(c.fn_count, 1);
+    assert_eq(c.race_free, 1)
+}
+
+test partial fn ref_escape_to_spawn_detected() -> Unit {
+    let sl: SourceLoc = SourceLoc { line: 1, col: 0 };
+    let ref_param: TirParam = TirParam {
+        name:       "ctx",
+        ty:         Ty::Unit,
+        capability: Some(Capability::RefCap),
+        span:       sl,
+    };
+    let field_expr: TirExpr = TirExpr {
+        kind: TirExprKind::Var("ctx"),
+        ty:   Ty::Unit,
+        span: sl,
+    };
+    let spawn_expr: TirExpr = TirExpr {
+        kind: TirExprKind::Spawn {
+            actor_type: "MyActor",
+            fields: [TirFieldExpr { name: "state", expr: field_expr }],
+        },
+        ty:   Ty::Unit,
+        span: sl,
+    };
+    let body: TirBlock = TirBlock {
+        stmts: [TirStmt::Expr { expr: spawn_expr, span: sl }],
+        span:  sl,
+    };
+    let f: TirFn = TirFn {
+        name: "setup", original_name: "setup",
+        visible: false, is_test: false, is_builtin: false,
+        receiver_type: None, type_params: [], constraints: [],
+        totality: None, params: [ref_param], ret_ty: Ty::Unit,
+        return_refinement: None, effects: [], pre_conds: [], post_conds: [],
+        body: body, span: sl,
+    };
+    let prog: TirProgram = TirProgram {
+        fns: [f], types: [], externs: [], actors: [], impls: [], consts: [],
+        uses: [], effect_decls: [], label_decls: [], relabel_decls: [],
+    };
+    let errs: List[CheckError] = check_ref_escape_to_spawn(prog);
+    assert_eq(errs.len(), 1)
+}
+
+test partial fn iso_direct_alias_is_error() -> Unit {
+    let sl: SourceLoc = SourceLoc { line: 1, col: 0 };
+    let iso_param: TirParam = TirParam {
+        name: "x", ty: Ty::Unit, capability: Some(Capability::Iso), span: sl,
+    };
+    let alias_expr: TirExpr = TirExpr {
+        kind: TirExprKind::Var("x"), ty: Ty::Unit, span: sl,
+    };
+    let body: TirBlock = TirBlock {
+        stmts: [TirStmt::Let {
+            kind:    LetKind::Regular,
+            pattern: Pattern::Ident("y", sl),
+            ty:      Ty::Unit,
+            init:    alias_expr,
+            span:    sl,
+        }],
+        span: sl,
+    };
+    let f: TirFn = TirFn {
+        name: "alias_f", original_name: "alias_f",
+        visible: false, is_test: false, is_builtin: false,
+        receiver_type: None, type_params: [], constraints: [],
+        totality: None, params: [iso_param], ret_ty: Ty::Unit,
+        return_refinement: None, effects: [], pre_conds: [], post_conds: [],
+        body: body, span: sl,
+    };
+    let prog: TirProgram = TirProgram {
+        fns: [f], types: [], externs: [], actors: [], impls: [], consts: [],
+        uses: [], effect_decls: [], label_decls: [], relabel_decls: [],
+    };
+    let errs: List[CheckError] = check_iso_aliasing(prog);
+    assert_eq(errs.len(), 1)
+}

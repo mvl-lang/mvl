@@ -118,17 +118,17 @@ partial fn check_no_mutual_blocking(
     span: SourceLoc,
 ) -> Option[CheckError] {
     match a {
-        SessionTy::Receive(_, _) => match b {
-            SessionTy::Receive(_, _) =>
-                Some(CheckError::SessionDeadlock { span: span }),
-            _ => None,
-        },
         SessionTy::Send(_, a_cont) => match b {
             SessionTy::Receive(_, b_cont) =>
                 check_no_mutual_blocking(*a_cont, *b_cont, span),
             _ => None,
         },
+        // Handle both Receive sub-cases in one arm to avoid unreachable pattern:
+        //   a=Receive, b=Receive → deadlock
+        //   a=Receive, b=Send   → progress (recurse on continuations)
         SessionTy::Receive(_, a_cont) => match b {
+            SessionTy::Receive(_, _) =>
+                Some(CheckError::SessionDeadlock { span: span }),
             SessionTy::Send(_, b_cont) =>
                 check_no_mutual_blocking(*a_cont, *b_cont, span),
             _ => None,
