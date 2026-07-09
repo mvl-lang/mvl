@@ -42,11 +42,13 @@ module.exports = grammar({
 
   extras: ($) => [/\s/, $.line_comment],
 
-  // GLR conflicts: `where` after a type_expr is ambiguous between
-  // a refined_type and an outer `where constraints` clause.
-  // `construct_expr` (identifier '{') vs block after if/while is also ambiguous.
+  // GLR conflicts: `construct_expr` (identifier '{') vs block after
+  // if/while is ambiguous.  The prior `where` conflict between a
+  // return-type refinement and a fn-level constraints clause is gone
+  // (ADR-0053 — fn-level trait bounds removed).
   conflicts: ($) => [
-    // `where` after return type_expr: return-type refinement vs fn-level constraints
+    // `return_type` retained pending audit; conservative to keep the
+    // GLR handling for return-position `where` predicate parsing.
     [$.return_type],
     // `!` after fn_type's return type_expr: fn_type effects vs fn_decl effects
     [$.fn_type],
@@ -256,7 +258,9 @@ module.exports = grammar({
         "->",
         $.return_type,
         optional(seq("!", $.effect_list)),
-        optional(seq("where", $.constraints)),
+        // ADR-0053: no trailing `where T: Trait` clause.  MVL has no trait
+        // system; `where` is exclusively a solver-discharged predicate
+        // attached to a param/return/field/alias type.
         repeat($.contract_clause),
         optional($.block) // builtin fns have no body; required for non-builtin
       ),
@@ -303,12 +307,10 @@ module.exports = grammar({
         optional(seq("(", $.string_literal, ")"))
       ),
 
-    constraints: ($) => seq($.constraint, repeat(seq(",", $.constraint))),
-
-    constraint: ($) => seq($.identifier, ":", $.trait_bound),
-
-    // Phase 1: single trait bound only; "+" compound bounds deferred to Phase 2
-    trait_bound: ($) => $.identifier,
+    // ADR-0053: `constraints` / `constraint` / `trait_bound` productions
+    // removed — MVL has no trait system.  A trailing `where` clause on a
+    // fn signature is now a parse error in both the recursive-descent
+    // parser and this tree-sitter grammar.
 
     // === Type expressions ===
 
