@@ -396,15 +396,60 @@ pub total fn TypeEnv::push_scope(self) -> TypeEnv {
 }
 
 /// Pop the innermost scope and return the updated env.
-/// TODO: implement capability release on scope exit (#1117 phase 4b); see Rust pop_scope for Val(n)/Ref transitions.
+/// Mirrors Rust `pop_scope`: for each variable in the exiting scope that holds
+/// a `ref_var` reference, release the capability on the referenced variable.
+///   Val(1) / Ref → Owned
+///   Val(n) where n > 1 → Val(n-1)
 pub total fn TypeEnv::pop_scope(self) -> TypeEnv {
     let n: Int = self.scopes.len();
     if n <= 1 {
         self
     } else {
+        // Collect ref_var names from the scope about to exit.
+        let last_scope: Map[String, VarInfo] = match self.scopes.get(n - 1) {
+            Some(s) => s,
+            None    => Map::new(),
+        };
+        let release_names: ref List[String] = [];
+        for k in last_scope.keys() {
+            match last_scope.get(k) {
+                Some(info) => match info.ref_var {
+                    Some(rn) => { release_names.push(rn) },
+                    None     => {},
+                },
+                None => {},
+            }
+        }
+        // Rebuild scopes 0..n-1, releasing capabilities for each collected name.
         let new_scopes: ref List[Map[String, VarInfo]] = [];
         for i in range(0, n - 1) {
-            match self.scopes.get(i) { Some(s) => new_scopes.push(s), None => {} }
+            let scope: ref Map[String, VarInfo] = match self.scopes.get(i) {
+                Some(s) => s,
+                None    => Map::new(),
+            };
+            for rname in release_names {
+                match scope.get(rname) {
+                    Some(info) => {
+                        let new_state: CapabilityState = match info.capability_state {
+                            CapabilityState::Val(1) => CapabilityState::Owned,
+                            CapabilityState::Val(c) => CapabilityState::Val(c - 1),
+                            CapabilityState::Ref    => CapabilityState::Owned,
+                            CapabilityState::Owned  => CapabilityState::Owned,
+                        };
+                        scope.insert(rname, VarInfo {
+                            ty:               info.ty,
+                            mutable:          info.mutable,
+                            moved:            info.moved,
+                            capability:       info.capability,
+                            scope_depth:      info.scope_depth,
+                            capability_state: new_state,
+                            ref_var:          info.ref_var,
+                        });
+                    },
+                    None => {},
+                }
+            }
+            new_scopes.push(scope);
         }
         TypeEnv {
             scopes:       new_scopes,
