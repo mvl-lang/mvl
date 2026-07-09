@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.238.14] - 2026-07-09
+
+### Fixed
+
+- **`rust-backend`: strip `ref` wrapper on struct field types** (#1707 phase 13) — MVL's `count: ref Int` on a struct field is a mutability modifier (writable when the containing struct is reached via a `ref` binding) — it is NOT a reference type.  MVL usage confirms: constructors take plain values (`Counter { count: 0 }`).  The Rust emitter fed the field type through `emit_ty` which mapped `Ty::Ref(true, Int)` → `&mut i64`, requiring lifetime injection on every struct use (E0106).  Fix: strip `Ty::Ref(_, inner)` on struct fields before `emit_ty`.  Mutation at use sites comes from Rust ownership on the containing binding.  Cleared 2× E0106 on `03_types/{structs,immutability}.mvl`.
+
 ## [0.238.13] - 2026-07-09
 
 ### Fixed
