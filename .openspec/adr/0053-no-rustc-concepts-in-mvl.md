@@ -86,6 +86,51 @@ backend, and it is meant to be self-hostable (ADR-0044).  Every concept
 in the language must have a definition inside MVL.  Rust's `Clone` is
 not defined in MVL; therefore it may not appear in MVL source.
 
+## Relation to language definition
+
+### Eleven Requirements (ADR-0001)
+
+- **Req 1 (Type Safety) — narrows.**  Comparisons on unbounded generic
+  type parameters (`fn cmp[T](a: T, b: T) -> Bool { a < b }`) were
+  previously accepted with a `where T: Ord` bound; now they are a
+  static error at every call site.  The comparison-op check in
+  `checker/infer.rs::infer_binary` still runs — its diagnostic
+  message is rewritten to reflect that the bound cannot be declared.
+- **Req 9 (Generics)** — the requirement covers type-parameter
+  declaration and use.  The `where T: Trait` grammar was interpreted
+  by some spec scenarios as a trait-bound clause; those scenarios are
+  removed.  Generic type parameters remain declarable via `[T]`,
+  `[T, U]`, etc., and used in signatures and bodies exactly as before.
+  What's gone is the ability to constrain them with a named bound.
+
+### Grammar (docs/grammar.ebnf)
+
+- `fn_decl` no longer terminates with an optional `[ "where"
+  constraints ]` production.
+- The `constraints` / `constraint` / `trait_bound` productions are
+  removed and annotated as reserved.
+- The refinement-position `where` — on parameters, return types,
+  struct fields, and type aliases — is unchanged.  It parses a
+  `refinement` (a solver-discharged `RefExpr`), never an identifier.
+
+### ADR relationships
+
+- **ADR-0001 (Eleven Requirements)** — no requirement changes ordinal
+  or scope; Req 1 and Req 9 receive strengthened negative-scenario
+  coverage as noted above.
+- **ADR-0002 (Language Contraction)** — this ADR extends the
+  "one way to do each thing" rule to `where`.  Prior state: two
+  meanings (predicate + trait bound) sharing the keyword; now one.
+- **ADR-0004 (Language Size)** — reinforces.  MVL now has strictly
+  fewer grammar productions.
+- **ADR-0029 (Pony Reference Capabilities)** — MVL's ownership model
+  is `iso`/`val`/`ref`/`tag`; not `Clone`/`Copy`.  This ADR removes
+  the vestigial Rust-ownership vocabulary that had crept in.
+- **ADR-0044 (Self-Hosting)** — reinforces.  Every concept the
+  self-hosted compiler must recognise now has an MVL definition;
+  there are no "understood by the Rust backend, not by MVL" concepts
+  left on fn signatures.
+
 ## Consequences
 
 **Positive**
