@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.240.0] - 2026-07-09
+
+### Added — Refinement Solver
+
+- **Layer 1 string concat support** (#1743): `min_str_len_lower` helper computes a conservative lower bound on string lengths in `.concat()` chains by summing all literal substrings. Enables static proofs of `len(result) > 0` when a concat chain has a non-empty literal prefix or other measurable component. Example: `"[".concat(acc).concat("]")` proves `len > 0` without runtime checks.
+
 ## [0.239.2] - 2026-07-09
 
 ### Fixed — Stdlib
