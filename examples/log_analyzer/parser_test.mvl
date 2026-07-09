@@ -35,8 +35,8 @@ type ParseError = enum {
 // inputs ("ERROR", "Warn") are accepted.  This local version mirrors that
 // behaviour so the standalone tests stay in sync.
 
-total fn parse_level(raw: String) -> Result[Severity, ParseError] {
-    let lower: String = raw.to_lower();
+total fn parse_level(raw: Tainted[String]) -> Result[Severity, ParseError] {
+    let lower: String = relabel trust(raw, "VALIDATED").to_lower();
     match lower {
         "debug" => Ok(Severity::Debug),
         "info"  => Ok(Severity::Info),
