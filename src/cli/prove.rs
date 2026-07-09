@@ -48,10 +48,7 @@ pub fn run(path: &str, verbose: bool, stdlib_profile: &str, callee_filter: Optio
     let base_dir: std::path::PathBuf = if Path::new(path).is_dir() {
         Path::new(path).to_path_buf()
     } else {
-        Path::new(path)
-            .parent()
-            .unwrap_or(Path::new("."))
-            .to_path_buf()
+        loader::infer_base_dir_from_qualified_imports(Path::new(path))
     };
 
     // Auto-load imported sibling modules (mirrors check behaviour).

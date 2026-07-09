@@ -234,6 +234,53 @@ pub fn load_sibling_modules_transitive(
     result
 }
 
+/// Infer the module root (`base_dir`) for a single-file entry point by walking
+/// ancestors until one of its qualified imports resolves.
+///
+/// When `mvl check / assurance / prove` is invoked on a file that lives inside a
+/// qualified module tree (e.g. `compiler/backends/llvm/emitter.mvl` which imports
+/// `use backends.llvm.emit_context::X`), using the file's parent as `base_dir`
+/// produces bare module names ("emit_context") that don't match the qualified
+/// names in `use` declarations ("backends.llvm.emit_context").
+///
+/// Strategy: for the first qualified import (containing a `.`), convert to a
+/// relative file path and walk `entry_dir` ancestors until
+/// `{ancestor}/{mod/path}.mvl` exists — that ancestor is the module root.
+/// The walk is bounded by project-root markers (`mvl.toml` / `mvl.lock` /
+/// `.git`) so it never escapes the user's workspace.  Falls back to
+/// `entry_dir` (the file's parent) when no qualified import resolves,
+/// preserving existing behaviour for flat-layout projects.
+pub fn infer_base_dir_from_qualified_imports(entry_file: &Path) -> PathBuf {
+    let entry_dir = entry_file.parent().unwrap_or(Path::new("."));
+    let content = match fs::read_to_string(entry_file) {
+        Ok(c) => c,
+        Err(_) => return entry_dir.to_path_buf(),
+    };
+    let (mut parser, _) = Parser::new(&content);
+    let prog = parser.parse_program();
+    for mod_name in collect_imported_module_names(&prog) {
+        if !mod_name.contains('.') {
+            continue;
+        }
+        let rel_file = format!("{}.mvl", mod_name.split('.').collect::<Vec<_>>().join("/"));
+        for ancestor in entry_dir.ancestors() {
+            if ancestor.as_os_str().is_empty() {
+                break;
+            }
+            if ancestor.join(&rel_file).exists() {
+                return ancestor.to_path_buf();
+            }
+            if ancestor.join("mvl.toml").exists()
+                || ancestor.join("mvl.lock").exists()
+                || ancestor.join(".git").exists()
+            {
+                break;
+            }
+        }
+    }
+    entry_dir.to_path_buf()
+}
+
 /// Extract the file or directory stem from a path.
 /// Prefixes the stem with `mvl_` if it starts with a digit (Rust package name constraint).
 ///
@@ -1343,6 +1390,73 @@ mod tests {
             found.is_none(),
             "single-segment name must not walk ancestors; got {found:?}"
         );
+    }
+
+    // ── infer_base_dir_from_qualified_imports ─────────────────────────────────
+
+    // Entry file inside a qualified module tree → walks up to the module root.
+    #[test]
+    fn infer_base_dir_qualified_entry_finds_ancestor() {
+        let dir = tmpdir();
+        // Layout:  <root>/compiler/backends/llvm/{emitter,emit_context}.mvl
+        //          <root>/mvl.toml
+        let llvm_dir = dir.path().join("compiler").join("backends").join("llvm");
+        fs::create_dir_all(&llvm_dir).unwrap();
+        fs::write(dir.path().join("mvl.toml"), "").unwrap();
+        fs::write(llvm_dir.join("emit_context.mvl"), "").unwrap();
+        let emitter = llvm_dir.join("emitter.mvl");
+        fs::write(&emitter, "use backends.llvm.emit_context::EmitCtx;\n").unwrap();
+
+        let inferred = infer_base_dir_from_qualified_imports(&emitter);
+        let expected = dir.path().join("compiler");
+        assert_eq!(inferred, expected);
+    }
+
+    // Entry file with only bare (single-segment) imports → stays at entry_dir.
+    #[test]
+    fn infer_base_dir_bare_imports_stays_at_entry_dir() {
+        let dir = tmpdir();
+        let src = dir.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        let entry = src.join("main.mvl");
+        fs::write(&entry, "use helpers::Foo;\n").unwrap();
+        fs::write(src.join("helpers.mvl"), "").unwrap();
+
+        let inferred = infer_base_dir_from_qualified_imports(&entry);
+        assert_eq!(inferred, src);
+    }
+
+    // Entry file with no imports → falls back to entry_dir.
+    #[test]
+    fn infer_base_dir_no_imports_falls_back_to_entry_dir() {
+        let dir = tmpdir();
+        let entry = dir.path().join("main.mvl");
+        fs::write(&entry, "fn main() -> Unit { }\n").unwrap();
+
+        let inferred = infer_base_dir_from_qualified_imports(&entry);
+        assert_eq!(inferred, dir.path());
+    }
+
+    // Walk is bounded by mvl.toml — does not escape the project root.
+    #[test]
+    fn infer_base_dir_bounded_by_project_root() {
+        let dir = tmpdir();
+        // outer/backends/llvm/other.mvl  ← should NOT be found (outside project)
+        // outer/project/mvl.toml
+        // outer/project/src/entry.mvl   importing `use backends.llvm.other::X`
+        let outer_module = dir.path().join("backends").join("llvm").join("other.mvl");
+        fs::create_dir_all(outer_module.parent().unwrap()).unwrap();
+        fs::write(&outer_module, "").unwrap();
+        let project = dir.path().join("project");
+        let src = project.join("src");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(project.join("mvl.toml"), "").unwrap();
+        let entry = src.join("entry.mvl");
+        fs::write(&entry, "use backends.llvm.other::X;\n").unwrap();
+
+        let inferred = infer_base_dir_from_qualified_imports(&entry);
+        // Walk stops at mvl.toml in project/; module not found → falls back to src/.
+        assert_eq!(inferred, src);
     }
 
     // ── build_pkg_name_map_with_cache: transitive expansion (#1477) ──────────

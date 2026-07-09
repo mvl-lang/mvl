@@ -132,14 +132,12 @@ pub fn run(path: &str, req_filter: Option<u8>, opts: CheckOptions) {
     }
 
     // Base directory for computing qualified module names: the directory passed to
-    // the command (or the parent dir of the file, for single-file checks).
+    // the command, or — for single-file entry points inside a qualified module
+    // tree — the ancestor inferred from the file's own `use` declarations.
     let base_dir: std::path::PathBuf = if Path::new(path).is_dir() {
         Path::new(path).to_path_buf()
     } else {
-        Path::new(path)
-            .parent()
-            .unwrap_or(Path::new("."))
-            .to_path_buf()
+        loader::infer_base_dir_from_qualified_imports(Path::new(path))
     };
 
     // Parse all files once so we can pass them to both the resolver and the checker.
