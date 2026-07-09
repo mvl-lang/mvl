@@ -301,14 +301,29 @@ fn expr_has_disqualifying_use_tir(param: &str, expr: &crate::mvl::ir::TirExpr) -
                 expr_has_disqualifying_use_tir(param, inner)
             }
         }
-        // Method call: if param is the direct receiver, treat as disqualifying.
-        // We cannot statically know whether the callee's self is `self` (by
-        // value) or `&self` (by reference) without a fixed-point analysis, so
-        // we conservatively assume value semantics (which is correct in MVL).
+        // Method call: disqualifying only when param is the direct receiver AND
+        // the receiver type is a user-defined (Named) type.  Builtin types
+        // (List, Map, String, …) have stdlib methods that take `&self`, so
+        // method calls on them auto-deref and do NOT consume the value.
+        // User-defined methods (e.g. `a.base()` on a custom `Ty` struct) may
+        // take `self` by value — conservative assumption: treat as disqualifying.
         TirExprKind::MethodCall { receiver, args, .. } => {
             let recv_is_param = matches!(&receiver.kind, TirExprKind::Var(n) if n == param);
             if recv_is_param {
-                true
+                // Only disqualify for Named (user-defined) receiver types.
+                let is_user_defined_receiver = matches!(
+                    receiver.ty.unlabeled(),
+                    crate::mvl::checker::types::Ty::Named(..)
+                );
+                if is_user_defined_receiver {
+                    true
+                } else {
+                    // Builtin receiver — check args for bare param use.
+                    args.iter().any(|a| {
+                        matches!(&a.kind, TirExprKind::Var(n) if n == param)
+                            || expr_has_disqualifying_use_tir(param, a)
+                    })
+                }
             } else {
                 expr_has_disqualifying_use_tir(param, receiver)
                     || args.iter().any(|a| {
