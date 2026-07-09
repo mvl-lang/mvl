@@ -446,7 +446,6 @@ partial fn parse_array_val(chars: List[String], pos: Int) -> ValuePos {
 }
 
 partial fn parse_array(chars: List[String], pos: Int) -> ArrPos {
-    let len: Int = chars.len();
     let cur: ref Int = skip_ws(chars, pos + 1);
     match chars.get(cur) {
         None    => { return ArrPos::ArrPErr("unterminated array") },
@@ -525,7 +524,6 @@ partial fn parse_object_step(chars: List[String], cur: Int, result: Map[String, 
 }
 
 partial fn parse_object(chars: List[String], pos: Int) -> ObjPos {
-    let len: Int = chars.len();
     let cur: ref Int = skip_ws(chars, pos + 1);
     match chars.get(cur) {
         None    => { return ObjPos::ObjPErr("unterminated object") },

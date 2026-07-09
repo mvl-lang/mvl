@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.239.2] - 2026-07-09
+
+### Fixed — Stdlib
+
+- **`std/args.mvl`** `schema_has_name`: pattern arms that only use `name: n`
+  now bind `ty: _` instead of `ty: t`, suppressing unused-variable warnings
+  in every transpiled module that imports `std.args`.
+- **`std/json.mvl`** `parse_array` / `parse_object`: removed dead
+  `let len: Int = chars.len()` — these functions switched to
+  `chars.get(cur) → Option` for bounds checking and no longer reference
+  `len`.  Eliminates two unused-variable warnings per compiled module.
+
 ## [0.239.1] - 2026-07-09
 
 ### Fixed
