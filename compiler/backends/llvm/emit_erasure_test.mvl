@@ -1,0 +1,133 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// compiler/backends/llvm/emit_erasure_test.mvl — regression tests pinning
+// the solver-erasure policy for the MVL-hosted LLVM backend (#1683).
+//
+// Policy (mirrored in emit_program.mvl header): solver-triggered TIR
+// metadata is spec-only.  It is discharged upstream by the checker; the
+// backend emits ZERO instructions for it.  Fields covered:
+//
+//   - TirFn.pre_conds          (source: `requires`)
+//   - TirFn.post_conds         (source: `ensures`)
+//   - TirFn.return_refinement  (source: `-> T where …`)
+//   - TirFn.totality           (source: `partial fn` / `total fn`)
+//   - TirStmt::While.invariants
+//   - TirStmt::While.decrease_by
+//   - TirStmt::For.invariants
+//   - TirTypeBody.type_invariant  (source: `struct ... with invariant …`)
+//   - TirFieldDecl.refinement     (source: `field: T where …`)
+//
+// Each test builds two TIR JSON snippets — one with solver fields, one
+// with them absent (or explicit-null) — and asserts `emit_program`
+// returns byte-identical output.  Together with the paired .mvl source
+// files under tests/spikes/004-tir-backend/, this locks the policy: any
+// future TIR-reshape or emitter change that inadvertently reads a
+// solver field will break these tests.
+//
+// Companion paired MVL sources (documentation of the exercised syntax):
+//   - total_requires.mvl / total_requires_stripped.mvl
+//   - refinement_param.mvl / refinement_param_stripped.mvl
+//   - invariant_loop.mvl / invariant_loop_stripped.mvl
+//
+// Run with:  mvl test compiler/
+//            make test-mvl
+
+use std.collections.{Map}
+use std.json.{decode, Value}
+// Marker imports — pull sibling modules into the test crate under the
+// current `mvl test` sibling-scan rules (same convention as
+// emit_program_test.mvl).
+use backends.llvm.emit_types::build_struct_registry;
+use backends.llvm.emit_context::EmitCtx;
+use backends.llvm.emit_program::emit_program;
+use backends.llvm.emit_helpers::jstr;
+use backends.llvm.emit_stmts::emit_body;
+
+partial fn tir(src: String) -> Value {
+    match decode(src) {
+        Ok(v)  => v,
+        Err(_) => Value::Null,
+    }
+}
+
+// ── Erasure: fn-level solver metadata ────────────────────────────────────────
+
+test fn erasure_fn_requires_ensures_return_refinement_totality() -> Unit {
+    // Baseline: `fn main() -> Int { 42 }` — no solver fields.
+    let baseline: String = emit_program(tir(
+        "{\"types\":[],\"fns\":[{\"name\":\"main\",\"params\":[],\"ret_ty\":{\"tag\":\"Int\"},\"body\":{\"stmts\":[{\"tag\":\"Expr\",\"expr\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"42\"}},\"ty\":{\"tag\":\"Int\"}}}]}}]}"
+    ));
+    // Decorated: same fn body, decorated with:
+    //   - totality: "Partial"                     (source: `partial fn`)
+    //   - pre_conds: [true]                       (source: `requires true`)
+    //   - post_conds: [true]                      (source: `ensures true`)
+    //   - return_refinement: true                 (source: `-> Int where self >= 0`)
+    let bool_true: String = "{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Bool\",\"value\":true}},\"ty\":{\"tag\":\"Bool\"}}";
+    let decorated: String = emit_program(tir(
+        format(
+            "{\"types\":[],\"fns\":[{\"name\":\"main\",\"params\":[],\"ret_ty\":{\"tag\":\"Int\"},\"totality\":\"Partial\",\"pre_conds\":[{}],\"post_conds\":[{}],\"return_refinement\":{},\"body\":{\"stmts\":[{\"tag\":\"Expr\",\"expr\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"42\"}},\"ty\":{\"tag\":\"Int\"}}}]}}]}",
+            [bool_true, bool_true, bool_true]
+        )
+    ));
+    assert_eq(baseline, decorated)
+}
+
+// ── Erasure: parameter refinement ────────────────────────────────────────────
+
+test fn erasure_param_refinement() -> Unit {
+    // Baseline: `fn f(x: Int) -> Int { x }` — plain param, no refinement.
+    let baseline: String = emit_program(tir(
+        "{\"types\":[],\"fns\":[{\"name\":\"f\",\"params\":[{\"name\":\"x\",\"ty\":{\"tag\":\"Int\"}}],\"ret_ty\":{\"tag\":\"Int\"},\"body\":{\"stmts\":[{\"tag\":\"Expr\",\"expr\":{\"kind\":{\"tag\":\"Var\",\"name\":\"x\"},\"ty\":{\"tag\":\"Int\"}}}]}}]}"
+    ));
+    // Decorated: param carries a refinement predicate (`x: Int where self > 0`).
+    let decorated: String = emit_program(tir(
+        "{\"types\":[],\"fns\":[{\"name\":\"f\",\"params\":[{\"name\":\"x\",\"ty\":{\"tag\":\"Int\"},\"refinement\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Bool\",\"value\":true}},\"ty\":{\"tag\":\"Bool\"}}}],\"ret_ty\":{\"tag\":\"Int\"},\"body\":{\"stmts\":[{\"tag\":\"Expr\",\"expr\":{\"kind\":{\"tag\":\"Var\",\"name\":\"x\"},\"ty\":{\"tag\":\"Int\"}}}]}}]}"
+    ));
+    assert_eq(baseline, decorated)
+}
+
+// ── Erasure: while-loop invariant + decreases ────────────────────────────────
+
+test fn erasure_while_invariant_and_decreases() -> Unit {
+    // Baseline: minimal while(false) loop with an empty body.  Cond is
+    // never true so the emitter still lays out the header / latch blocks.
+    let baseline: String = emit_program(tir(
+        "{\"types\":[],\"fns\":[{\"name\":\"main\",\"params\":[],\"ret_ty\":{\"tag\":\"Unit\"},\"body\":{\"stmts\":[{\"tag\":\"While\",\"cond\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Bool\",\"value\":false}},\"ty\":{\"tag\":\"Bool\"}},\"body\":{\"stmts\":[]}}]}}]}"
+    ));
+    // Decorated: same loop plus `invariants: [true]` and `decrease_by: 0`.
+    let decorated: String = emit_program(tir(
+        "{\"types\":[],\"fns\":[{\"name\":\"main\",\"params\":[],\"ret_ty\":{\"tag\":\"Unit\"},\"body\":{\"stmts\":[{\"tag\":\"While\",\"cond\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Bool\",\"value\":false}},\"ty\":{\"tag\":\"Bool\"}},\"invariants\":[{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Bool\",\"value\":true}},\"ty\":{\"tag\":\"Bool\"}}],\"decrease_by\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"0\"}},\"ty\":{\"tag\":\"Int\"}},\"body\":{\"stmts\":[]}}]}}]}"
+    ));
+    assert_eq(baseline, decorated)
+}
+
+// ── Erasure: for-loop invariants ─────────────────────────────────────────────
+
+test fn erasure_for_invariants() -> Unit {
+    // Baseline: `for _ in [] {}` — empty list iteration, empty body.
+    let baseline: String = emit_program(tir(
+        "{\"types\":[],\"fns\":[{\"name\":\"main\",\"params\":[],\"ret_ty\":{\"tag\":\"Unit\"},\"body\":{\"stmts\":[{\"tag\":\"For\",\"var\":\"_\",\"iter\":{\"kind\":{\"tag\":\"ListLit\",\"elems\":[]},\"ty\":{\"tag\":\"List\",\"elem\":{\"tag\":\"Int\"}}},\"body\":{\"stmts\":[]}}]}}]}"
+    ));
+    // Decorated: same loop with `invariants: [true]`.
+    let decorated: String = emit_program(tir(
+        "{\"types\":[],\"fns\":[{\"name\":\"main\",\"params\":[],\"ret_ty\":{\"tag\":\"Unit\"},\"body\":{\"stmts\":[{\"tag\":\"For\",\"var\":\"_\",\"iter\":{\"kind\":{\"tag\":\"ListLit\",\"elems\":[]},\"ty\":{\"tag\":\"List\",\"elem\":{\"tag\":\"Int\"}}},\"invariants\":[{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Bool\",\"value\":true}},\"ty\":{\"tag\":\"Bool\"}}],\"body\":{\"stmts\":[]}}]}}]}"
+    ));
+    assert_eq(baseline, decorated)
+}
+
+// ── Erasure: struct field refinement + `with invariant` ──────────────────────
+
+test fn erasure_struct_invariant_and_field_refinement() -> Unit {
+    // Baseline: a `Point { x: Int, y: Int }` type registration with no
+    // struct-level invariant and no field refinement.
+    let baseline: String = emit_program(tir(
+        "{\"types\":[{\"name\":\"Point\",\"body\":{\"tag\":\"Struct\",\"fields\":[{\"name\":\"x\",\"ty\":{\"tag\":\"Int\"}},{\"name\":\"y\",\"ty\":{\"tag\":\"Int\"}}]}}],\"fns\":[]}"
+    ));
+    // Decorated: same struct plus `type_invariant: true` and a
+    // `refinement: true` on field `x`.
+    let decorated: String = emit_program(tir(
+        "{\"types\":[{\"name\":\"Point\",\"body\":{\"tag\":\"Struct\",\"fields\":[{\"name\":\"x\",\"ty\":{\"tag\":\"Int\"},\"refinement\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Bool\",\"value\":true}},\"ty\":{\"tag\":\"Bool\"}}},{\"name\":\"y\",\"ty\":{\"tag\":\"Int\"}}]},\"type_invariant\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Bool\",\"value\":true}},\"ty\":{\"tag\":\"Bool\"}}}],\"fns\":[]}"
+    ));
+    assert_eq(baseline, decorated)
+}

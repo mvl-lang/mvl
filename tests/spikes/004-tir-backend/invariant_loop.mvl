@@ -1,0 +1,20 @@
+// #1683 erasure pair (decorated): while loop with invariant + decreases.
+// Both clauses are solver-discharged; codegen must ignore them.
+// Expected stdout: 45  (sum 0..9)
+
+fn sum_up_to(n: Int) -> Int {
+    let sum: ref Int = 0;
+    let i: ref Int = 0;
+    while i < n
+        invariant sum >= 0
+        decreases (n - i)
+    {
+        sum = sum + i;
+        i = i + 1;
+    }
+    sum
+}
+
+fn main() -> Int {
+    sum_up_to(10)
+}
