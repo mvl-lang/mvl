@@ -153,20 +153,25 @@ test fn function_taking_secret() -> Unit {
     let _: fn(Secret[Data]) -> Data = declassify_result;
 }
 
-// Function with where-clause constraints
-fn compare[T](a: T, b: T) -> Bool where T: Eq { a == b }
+// Comparison-typed helpers — specialized on Int rather than generic-T because
+// MVL has no user-facing trait system (ADR-0053) and does not admit a
+// `where T: Eq` / `where T: Ord` clause on generic parameters.  Users writing
+// polymorphic comparison logic today must either specialize on a comparable
+// primitive (as below) or dispatch through a stdlib method that handles
+// comparability internally (e.g. `List::sort`).
+fn compare_ints(a: Int, b: Int) -> Bool { a == b }
 
-test fn function_with_type_bound() -> Unit {
-    let _: Bool = compare(1, 2);
+test fn function_with_concrete_eq() -> Unit {
+    let _: Bool = compare_ints(1, 2);
 }
 
-fn sort[T](xs: List[T]) -> List[T] where T: Ord {
+fn sort_ints(xs: List[Int]) -> List[Int] {
     xs.sort()
 }
 
-test fn function_with_ord_bound() -> Unit {
+test fn function_with_concrete_ord() -> Unit {
     let xs: List[Int] = [3, 1, 2];
-    let _: List[Int] = sort(xs);
+    let _: List[Int] = sort_ints(xs);
 }
 
 // Function with return type refinement

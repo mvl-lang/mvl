@@ -144,6 +144,20 @@ type Range = struct {
 } with invariant self.lo <= self.hi
 ```
 
+**`where` in MVL means one thing only: a solver-discharged predicate.**
+The trailing `where T: Trait` clause on fn signatures is **NOT MVL syntax**
+(ADR-0053) — MVL has no trait system.  If you find yourself writing
+`fn foo[T]() where T: Clone` you are leaking Rust vocabulary into MVL
+source; the parser will reject it.  Specialize on a concrete type instead:
+
+```mvl
+// WRONG — parse error, ADR-0053
+fn compare[T](a: T, b: T) -> Bool where T: Eq { a == b }
+
+// CORRECT — specialize
+fn compare_ints(a: Int, b: Int) -> Bool { a == b }
+```
+
 ### Contracts: `requires` / `ensures`
 
 ```mvl

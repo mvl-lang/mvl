@@ -50,9 +50,13 @@ alias_type     = type_expr ;
 (*   Orthogonal to totality; mutually exclusive with `builtin`; `pub` forbidden. *)
 (* `fn_name` allows a receiver-type prefix (#928) for extension methods:        *)
 (*   `fn List[T]::flatten(self)`, `fn Option[T]::is_some(self)`.                 *)
+(* ADR-0053: the trailing `where` clause on fn signatures is REJECTED.       *)
+(*   `where` in MVL is exclusively a solver-discharged refinement predicate  *)
+(*   attached to a param/return/field/alias type (`n: Int where self > 0`),  *)
+(*   never a trait-bound clause on a fn signature.  MVL has no trait system. *)
 fn_decl        = [ "test" ] [ totality ] [ "builtin" ] [ security ] "fn" fn_name [ type_params ]
                  "(" [ param_list ] ")" "->" return_type
-                 [ "!" effect_list ] [ "where" constraints ]
+                 [ "!" effect_list ]
                  { fn_contract }
                  ( block | (* empty — builtin only *) ) ;
 fn_name        = [ IDENT [ "[" type_list "]" ] "::" ] IDENT ;
@@ -76,10 +80,9 @@ effect         = IDENT [ "(" STRING ")" ] ;
    ! DB("SELECT")             — read-only database access
    A caller declaring ! FileRead("/etc/") satisfies a callee requiring
    ! FileRead("/etc/app/config.toml") via prefix matching (subsetting). *)
-constraints    = constraint { "," constraint } ;
-constraint     = IDENT ":" trait_bound ;
-(* Phase 1 trait bounds — one bound per constraint; "+" compound bounds deferred to Phase 2 *)
-trait_bound    = IDENT ;
+(* ADR-0053: `constraints` / `constraint` / `trait_bound` productions removed.  *)
+(*   Reserved slot; parser emits a hard error diagnostic if encountered so     *)
+(*   MVL never grows a Rust-style trait system by accident.                     *)
 
 (* === Actor declarations (Phase 8, #63) === *)
 (* `pub fn` = async behavior (message handler); parameters must be sendable.  *)

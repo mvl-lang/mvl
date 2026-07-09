@@ -407,37 +407,47 @@ impl Parser {
         }
     }
 
-    // ── Where-clause constraints ──────────────────────────────────────────
+    // ── Where-clause constraints (rejected) ───────────────────────────────
 
-    /// Parse optional `where T: Trait, U: Trait` constraints.
+    /// The trailing `where T: Trait` clause on fn signatures is REJECTED —
+    /// see ADR-0053.  MVL has no trait system; the grammar accepted these
+    /// bounds silently and passed them through to the Rust emitter, which
+    /// let rustc concepts (`Clone`, `Ord`, `Eq`) leak into MVL source.
+    ///
+    /// `where` in MVL means one thing: a solver-discharged refinement
+    /// predicate on a param/return/field/alias.  Reserving the trailing
+    /// slot for trait bounds violates the single-meaning rule and requires
+    /// MVL to maintain a Rust-trait vocabulary it doesn't own.
+    ///
+    /// The function returns an empty vec unconditionally; a `where` token
+    /// at this position emits a hard parse error pointing users at the
+    /// refinement form or removal.
     pub(crate) fn parse_where_constraints(&mut self) -> Vec<Constraint> {
-        if !self.eat(&TokenKind::Where) {
+        if !matches!(self.peek_kind(), TokenKind::Where) {
             return Vec::new();
         }
-        let mut constraints = Vec::new();
-        loop {
-            if matches!(self.peek_kind(), TokenKind::LBrace | TokenKind::Eof) {
-                break;
-            }
-            match self.parse_constraint() {
-                Ok(c) => constraints.push(c),
-                Err(()) => break,
-            }
-            if !self.eat(&TokenKind::Comma) {
-                break;
-            }
+        let where_span = self.peek_span();
+        // Detect a `where <Ident>: <Ident>` shape so the diagnostic is precise.
+        // Look at the two tokens after `where` — if they form `Name: Name`, it's
+        // a former trait-bound clause.  Anything else at this position is also
+        // wrong (refinement `where` only attaches to a type expression, not to
+        // an fn signature) — same error.
+        self.push_recover(ParseError {
+            message: "trailing `where T: Trait` bound on fn signature is not \
+                      valid MVL — see ADR-0053.  `where` in MVL is a solver \
+                      predicate on a param/return type (`n: Int where self > 0`), \
+                      not a trait bound.  Remove the clause; MVL has no trait \
+                      system."
+                .to_string(),
+            span: where_span,
+        });
+        // Consume the malformed clause so the parser can continue and report
+        // other errors in the same file.
+        self.advance(); // eat `where`
+        while !matches!(self.peek_kind(), TokenKind::LBrace | TokenKind::Eof) {
+            self.advance();
         }
-        constraints
-    }
-
-    fn parse_constraint(&mut self) -> Result<Constraint, ()> {
-        let ident_result = self.expect_ident();
-        let (name, _) = self.require(ident_result)?;
-        let colon = self.expect(&TokenKind::Colon);
-        self.require(colon)?;
-        let ident_result2 = self.expect_ident();
-        let (bound, _) = self.require(ident_result2)?;
-        Ok(Constraint { name, bound })
+        Vec::new()
     }
 
     // ── Top-level declarations (dispatches to type/fn/const/module) ───────
@@ -710,11 +720,31 @@ mod tests {
     }
 
     #[test]
-    fn parse_fn_where_constraints() {
-        let d = fn_decl("fn compare[T](a: T, b: T) -> Bool where T: Eq { }");
-        assert_eq!(d.constraints.len(), 1);
-        assert_eq!(d.constraints[0].name, "T");
-        assert_eq!(d.constraints[0].bound, "Eq");
+    fn where_trait_bound_on_fn_is_rejected() {
+        // ADR-0053: trailing `where T: Trait` clause on fn signatures is not
+        // valid MVL syntax.  Parser must produce a hard error diagnostic.
+        let (mut p, _) = Parser::new("fn compare[T](a: T, b: T) -> Bool where T: Eq { }");
+        let _ = p.parse_fn_decl();
+        assert!(
+            p.errors.iter().any(|e| e.message.contains("ADR-0053")),
+            "expected ADR-0053 rejection diagnostic, got: {:?}",
+            p.errors
+        );
+    }
+
+    #[test]
+    fn where_refinement_on_param_still_parses() {
+        // Refinement predicates `n: Int where self > 0` remain valid — they
+        // feed the Z3 solver.  Only trait bounds are rejected (ADR-0053).
+        let d = fn_decl("fn foo(n: Int where self > 0) -> Int { n }");
+        assert_eq!(d.name, "foo");
+    }
+
+    #[test]
+    fn where_refinement_on_return_still_parses() {
+        // Return-type refinement `-> Int where self > 0` remains valid.
+        let d = fn_decl("fn foo() -> Int where self > 0 { 0 }");
+        assert!(d.return_refinement.is_some());
     }
 
     #[test]

@@ -478,6 +478,21 @@ fn emit_tir_params(
 }
 
 /// Emit generics with TirParam-based bounds scanning.
+///
+/// MVL does not admit user-declared trait bounds on fn signatures (ADR-0053),
+/// so this pass derives every Rust bound the emit will actually rely on from
+/// the signature itself:
+///
+/// - `Map<K, V>` positions → `K: Hash + Eq + Clone`, `V: Clone`
+/// - `Set<T>` positions   → `T: Hash + Eq + Clone`
+/// - `List<T>` positions  → `T: Clone`
+/// - every generic type parameter used anywhere in `params` or `ret_ty` → `Clone`
+///
+/// The blanket `Clone` for every generic reflects the emit's argument-position
+/// pattern (`arg.clone().into()`) which requires it for value-semantic MVL
+/// calls.  It over-approximates — some fns don't actually need `Clone` — but
+/// it stays inside the Rust backend, is invisible to MVL source, and matches
+/// exactly what the emit outputs.  The user never sees these bounds.
 fn emit_generics_with_tir_params(
     type_params: &[GenericParam],
     constraints: &[Constraint],
@@ -497,6 +512,14 @@ fn emit_generics_with_tir_params(
     }
     collect_map_set_bounds_tir(params, &mut bounds);
     collect_ty_bounds(ret_ty, &mut bounds);
+    // Blanket `Clone` for every generic that appears in the signature.
+    // The emit's value-arg pattern `expr.clone().into()` requires this
+    // uniformly; deriving it here means MVL source never needs (and now
+    // cannot express) it — see ADR-0053.
+    let referenced_generics = generics_used_in_sig(type_params, params, ret_ty);
+    for name in referenced_generics {
+        add_bound_by_name(&name, "Clone", &mut bounds);
+    }
 
     let params_out: Vec<String> = type_params
         .iter()
@@ -539,6 +562,15 @@ fn collect_ty_bounds(ty: &Ty, bounds: &mut std::collections::HashMap<String, Vec
             add_ty_bound_if_named(t, "std::cmp::Eq", bounds);
             add_ty_bound_if_named(t, "Clone", bounds);
         }
+        // List<T>: the emit's higher-order-method inlining
+        // (`xs.map(f)` → `xs.into_iter().map(|__x| f(__x.clone())).collect()`)
+        // requires `T: Clone`.  MVL user code cannot declare this bound (ADR-0053
+        // — no trait bounds in MVL grammar); the Rust backend derives it from
+        // the signature so the leak stays inside the emit and out of MVL source.
+        Ty::List(t) => {
+            add_ty_bound_if_named(t, "Clone", bounds);
+            collect_ty_bounds(t, bounds);
+        }
         Ty::Named(_, args) => {
             for a in args {
                 collect_ty_bounds(a, bounds);
@@ -556,11 +588,78 @@ fn add_ty_bound_if_named(
 ) {
     if let Ty::Named(name, args) = ty {
         if args.is_empty() && !is_concrete_ty(name) {
-            let entry = bounds.entry(name.clone()).or_default();
-            if !entry.iter().any(|b| b == bound) {
-                entry.push(bound.to_string());
+            add_bound_by_name(name, bound, bounds);
+        }
+    }
+}
+
+fn add_bound_by_name(
+    name: &str,
+    bound: &str,
+    bounds: &mut std::collections::HashMap<String, Vec<String>>,
+) {
+    if is_concrete_ty(name) {
+        return;
+    }
+    let entry = bounds.entry(name.to_string()).or_default();
+    if !entry.iter().any(|b| b == bound) {
+        entry.push(bound.to_string());
+    }
+}
+
+/// Return the set of generic type-parameter names actually referenced by
+/// this fn's params or return type.  A signature can declare `[T, U]` but
+/// use only `T` — no bound should be emitted for the unused `U`.
+fn generics_used_in_sig(
+    type_params: &[GenericParam],
+    params: &[TirParam],
+    ret_ty: &Ty,
+) -> std::collections::HashSet<String> {
+    let declared: std::collections::HashSet<String> = type_params
+        .iter()
+        .filter_map(|p| match p {
+            GenericParam::Type(n) => Some(n.clone()),
+            GenericParam::Const(..) => None,
+        })
+        .collect();
+    let mut used = std::collections::HashSet::new();
+    for p in params {
+        walk_ty_generics(&p.ty, &declared, &mut used);
+    }
+    walk_ty_generics(ret_ty, &declared, &mut used);
+    used
+}
+
+fn walk_ty_generics(
+    ty: &Ty,
+    declared: &std::collections::HashSet<String>,
+    used: &mut std::collections::HashSet<String>,
+) {
+    match ty {
+        Ty::Named(name, args) => {
+            if args.is_empty() && declared.contains(name) {
+                used.insert(name.clone());
+            }
+            for a in args {
+                walk_ty_generics(a, declared, used);
             }
         }
+        Ty::List(t) | Ty::Set(t) | Ty::Option(t) | Ty::Ref(_, t) | Ty::Ptr(t) => {
+            walk_ty_generics(t, declared, used);
+        }
+        Ty::Map(k, v) | Ty::Result(k, v) => {
+            walk_ty_generics(k, declared, used);
+            walk_ty_generics(v, declared, used);
+        }
+        Ty::Fn(fn_params, ret, _, _) => {
+            for p in fn_params {
+                walk_ty_generics(p, declared, used);
+            }
+            walk_ty_generics(ret, declared, used);
+        }
+        Ty::Array(t, _) => walk_ty_generics(t, declared, used),
+        Ty::Labeled(_, inner) | Ty::Refined(inner, _) => walk_ty_generics(inner, declared, used),
+        _ => {}
     }
 }
 

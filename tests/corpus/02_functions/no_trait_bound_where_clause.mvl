@@ -1,0 +1,15 @@
+// corpus:expect-fail
+// Documents ADR-0053: MVL rejects the trailing `where T: Trait` clause on
+// fn signatures.  `where` in MVL is a solver predicate on a param/return/field
+// type; it is not a Rust-style trait bound.
+
+// Rejected: trailing `where T: Clone` bound.  No trait system in MVL.
+fn wrap[T](x: T) -> T where T: Clone {
+    x
+}
+
+// Rejected: any bound name.  MVL does not validate the identifier because
+// there is no set of known bounds to validate against — bounds don't exist.
+fn wrap_bogus[T](x: T) -> T where T: BananaBread {
+    x
+}
