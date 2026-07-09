@@ -259,20 +259,12 @@ test-solver: build ## Run solver layer programs — real MVL programs of progres
 
 test-stdlib: build ## Verify stdlib runtime correctness: transpile tests/stdlib/ → cargo test
 	@echo "Running stdlib correctness tests..."
-	@pass=0; fail=0; total=0; \
-	for f in tests/stdlib/*_test.mvl; do \
-		total=$$((total+1)); \
-		if $(MVL) test "$$f" > /dev/null 2>&1; then \
-			pass=$$((pass+1)); \
-		else \
-			fail=$$((fail+1)); \
-			echo "  FAIL: $$f"; \
-			$(MVL) test "$$f" 2>&1 | tail -5; \
-		fi; \
-	done; \
-	echo ""; \
-	echo "  $$pass/$$total stdlib tests passed, $$fail failed"; \
-	[ "$$fail" -eq 0 ]
+	@# Bundle all 38 _test.mvl files into ONE test crate via `mvl test <dir>` —
+	@# one transpile pass, one cargo build, one cargo test.  The prior per-file
+	@# loop paid a ~2-3s cargo build for each file (~1–2 min total); the bundled
+	@# form completes in ~5 s, cache-warm.  Per-file failures still surface via
+	@# rustc file:line references pointing back at the offending stdlib test.
+	$(MVL) test tests/stdlib/
 
 check-compiler: build ## Verify self-hosted compiler with mvl check + lint (all 4 source files)
 	$(MVL) check compiler/
