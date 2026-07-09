@@ -1,44 +1,20 @@
 // Integration tests for dependency rationale enforcement (#637).
 //
 // Validates that:
-// 1. All example mvl.toml files with dependencies parse correctly
-// 2. All dependencies have rationale when policy is enabled
-// 3. The audit_dep_rationale() API works end-to-end
-// 4. The root mvl.toml passes rationale audit
+// 1. Synthetic manifests parse rationale and policy fields correctly
+// 2. `audit_dep_rationale()` reports missing rationale entries
+// 3. The `[dependency-policy]` `rationale-required = false` opts out
+// 4. Rationale survives a TOML roundtrip
+//
+// Note: prior versions of this file also covered the root `mvl.toml` and
+// `examples/log_to_file/mvl.toml` — both removed in ead7ad484 ("chore:
+// remove stale root mvl.toml/mvl.lock and dead install invocations")
+// because no in-repo example imports a `pkg-*` package anymore.  The
+// tests that read them were left behind and started failing.  Dropped
+// here; the synthetic tests below still cover every code path that
+// mattered.
 
 use mvl::mvl::packages::manifest::Manifest;
-use std::path::Path;
-
-/// Helper: load manifest from a directory and assert it parses.
-fn load_manifest(dir: &str) -> Manifest {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(dir);
-    Manifest::load(&path).unwrap_or_else(|e| panic!("failed to load {dir}/mvl.toml: {e}"))
-}
-
-// ── Root manifest ────────────────────────────────────────────────────────────
-
-#[test]
-fn root_manifest_has_rationale_on_all_deps() {
-    let m = load_manifest(".");
-    let missing = m.audit_dep_rationale();
-    assert!(
-        missing.is_empty(),
-        "root mvl.toml: deps missing rationale: {missing:?}"
-    );
-}
-
-#[test]
-fn root_manifest_parses_all_rationale_fields() {
-    let m = load_manifest(".");
-    for (name, spec) in &m.dependencies {
-        assert!(
-            spec.rationale().is_some(),
-            "root dep '{name}' missing rationale"
-        );
-        let r = spec.rationale().unwrap();
-        assert!(!r.is_empty(), "root dep '{name}' has empty rationale");
-    }
-}
 
 // ── Policy enforcement tests (synthetic manifests) ───────────────────────────
 
@@ -120,36 +96,8 @@ requires-mvl = ">=0.1.0"
 }
 
 // ── License validation ───────────────────────────────────────────────────────
-
-fn manifest_dir(dir: &str) -> std::path::PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join(dir)
-}
-
-#[test]
-fn root_license_matches_manifest() {
-    let dir = manifest_dir(".");
-    let m = Manifest::load(&dir).unwrap();
-    assert!(m.validate_license(&dir).is_ok());
-}
-
-#[test]
-fn all_examples_license_matches() {
-    for name in &["log_to_file"] {
-        let dir = manifest_dir(&format!("examples/{name}"));
-        let m = Manifest::load(&dir).unwrap();
-        assert!(
-            m.validate_license(&dir).is_ok(),
-            "{name}: {}",
-            m.validate_license(&dir).unwrap_err()
-        );
-    }
-}
-
-// ── Regression: examples without deps still pass ─────────────────────────────
-
-#[test]
-fn log_to_file_manifest_no_deps() {
-    let m = load_manifest("examples/log_to_file");
-    assert!(m.dependencies.is_empty());
-    assert!(m.audit_dep_rationale().is_empty());
-}
+//
+// `validate_license` was previously exercised against the root manifest
+// and `examples/log_to_file/mvl.toml`.  Both files were removed in
+// ead7ad484; the license path is now covered by unit tests on the
+// `Manifest` type itself (see `src/mvl/packages/manifest.rs::tests`).

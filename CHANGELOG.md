@@ -1,5 +1,71 @@
 # Changelog
 
+## [0.238.16] - 2026-07-09
+
+Ships alongside **runtime 0.197.1** (mvl_runtime_rust, mvl_runtime_llvm,
+mvl_runtime_tokio) — the runtime crate is bumped because `Match` and
+`Captures` in `stdlib/regex.rs` gained `#[derive(Debug, Clone, PartialEq, Eq)]`,
+matching every other stdlib struct.  Compiler is bumped because MVL stdlib
+(`std/*.mvl`) shipped with a compiler is versioned alongside it.
+
+### Changed — MVL language (ADR-0053)
+
+- **Parser** rejects the trailing `where T: Trait` clause on fn
+  signatures.  MVL has no trait system; the syntax was Rust vocabulary
+  that leaked in without semantic backing on the MVL side.  `where` in
+  MVL now means one thing only: a solver-discharged predicate on a
+  param, return type, struct field, or type alias.  Any `where T:
+  BananaBread`-shaped clause is a hard parse error citing ADR-0053.
+- **Stdlib** (`std/lists.mvl`, `std/collections.mvl`) stripped of the
+  ~27 sites that used the removed grammar.  The bounds were never
+  enforced by MVL and only load-bearing because the Rust backend
+  re-emitted them verbatim.
+- **Tree-sitter grammar** (`etc/tree-sitter-mvl/grammar.js`) synced —
+  `constraint` / `constraints` / `trait_bound` rules removed and the
+  `fn_decl` production no longer terminates with an optional
+  `where`-clause.
+- **Documentation**: new ADR-0053, index updated, `CLAUDE.md` guidance
+  section added, `docs/grammar.ebnf` production reduced.
+
+### Fixed — Rust backend
+
+- **Bound derivation**: `emit_generics_with_tir_params` now derives
+  `T: Clone` (and Hash/Eq for Map/Set positions) automatically from
+  the fn signature.  Rust bounds stay inside the emit; MVL source
+  never references them.  Replaces what the deleted `where T: Clone`
+  stdlib clauses used to provide.
+- **`.sort()` emit**: clones the receiver into an owned `__v` so the
+  block returns `Vec<T>` even when `capability_params` inferred a
+  borrow at the caller.  Without the clone, a borrowed receiver made
+  the block return `&Vec<T>` (E0308 return-type mismatch).
+- **Float `is_positive` / `is_negative`**: receiver-type dispatch
+  routes to Rust's non-deprecated `is_sign_positive` /
+  `is_sign_negative`.  Int keeps the same-named non-deprecated `i64`
+  methods.  Removes the two `deprecated` warnings the emit was
+  producing per callsite.
+- **Checker diagnostic**: `MissingConstraint` no longer advises the
+  (now-invalid) `where T: Eq` remedy — points users at concrete-type
+  specialization instead.
+- **Corpus** (`tests/corpus/02_functions/functions.mvl`): the two
+  demonstrative generic wrappers replaced with concrete-Int
+  specializations.  New expect-fail negative
+  `tests/corpus/02_functions/no_trait_bound_where_clause.mvl`
+  documents the parser rejection.
+
+### Fixed — Rust runtime (0.197.1)
+
+- **`stdlib::regex::Match`** and **`Captures`** now derive `Debug,
+  Clone, PartialEq, Eq`.  Every field was already Clone-able; the
+  missing derive blocked value-semantic call patterns.  Fixes
+  `tests/stdlib/regex_test.mvl` failure ("`Match: Clone` is not
+  satisfied") that surfaced once the compiler stopped accepting
+  user-declared `where` bounds.
+
+### Test crate
+
+- `mvl test tests/corpus/` — **0 errors, 0 warnings, 291 tests
+  passing** (up from 220 errors / 10 warnings at the start of #1707).
+
 ## [0.238.15] - 2026-07-09
 
 ### Fixed

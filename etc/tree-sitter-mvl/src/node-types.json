@@ -302,40 +302,6 @@
     }
   },
   {
-    "type": "constraint",
-    "named": true,
-    "fields": {},
-    "children": {
-      "multiple": true,
-      "required": true,
-      "types": [
-        {
-          "type": "identifier",
-          "named": true
-        },
-        {
-          "type": "trait_bound",
-          "named": true
-        }
-      ]
-    }
-  },
-  {
-    "type": "constraints",
-    "named": true,
-    "fields": {},
-    "children": {
-      "multiple": true,
-      "required": true,
-      "types": [
-        {
-          "type": "constraint",
-          "named": true
-        }
-      ]
-    }
-  },
-  {
     "type": "construct_expr",
     "named": true,
     "fields": {
@@ -823,10 +789,6 @@
       "types": [
         {
           "type": "block",
-          "named": true
-        },
-        {
-          "type": "constraints",
           "named": true
         },
         {
@@ -1967,21 +1929,6 @@
     "type": "totality",
     "named": true,
     "fields": {}
-  },
-  {
-    "type": "trait_bound",
-    "named": true,
-    "fields": {},
-    "children": {
-      "multiple": false,
-      "required": true,
-      "types": [
-        {
-          "type": "identifier",
-          "named": true
-        }
-      ]
-    }
   },
   {
     "type": "tuple_pattern",

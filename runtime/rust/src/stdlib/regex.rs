@@ -52,6 +52,7 @@ impl Regex {
 
 /// A single match — the matched text and its byte offsets in the input.
 /// Mirrors `type Match = struct { text: String, start: Int, end: Int }` in `std/regex.mvl`.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Match {
     /// The matched text.
     pub text: String,
@@ -63,6 +64,7 @@ pub struct Match {
 
 /// Named and positional captures from a match.
 /// Mirrors `type Captures = struct { groups: List[Option[String]], named: Map[String, Option[String]] }`.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Captures {
     /// Positional capture groups (index 0 = full match).
     pub groups: Vec<Option<String>>,

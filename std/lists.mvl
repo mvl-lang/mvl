@@ -89,27 +89,27 @@ pub fn List[T]::is_empty(self) -> Bool {
 }
 
 /// Return the first `n` elements.
-pub fn List[T]::take(self, n: Int) -> List[T] where T: Clone {
+pub fn List[T]::take(self, n: Int) -> List[T] {
     self.slice(0, n)
 }
 
 /// Drop the first `n` elements.
-pub fn List[T]::skip(self, n: Int) -> List[T] where T: Clone {
+pub fn List[T]::skip(self, n: Int) -> List[T] {
     self.slice(n, self.len())
 }
 
 /// Return `Some(first element)` or `None` if empty.
-pub fn List[T]::first(self) -> Option[T] where T: Clone {
+pub fn List[T]::first(self) -> Option[T] {
     self.get(0)
 }
 
 /// Return `Some(last element)` or `None` if empty.
-pub fn List[T]::last(self) -> Option[T] where T: Clone {
+pub fn List[T]::last(self) -> Option[T] {
     self.get(self.len() - 1)
 }
 
 /// Flatten a list of lists into a single list.
-pub fn List[List[T]]::flatten(self) -> List[T] where T: Clone {
+pub fn List[List[T]]::flatten(self) -> List[T] {
     let result: ref List[T] = [];
     for inner in self {
         for x in inner {
@@ -120,7 +120,7 @@ pub fn List[List[T]]::flatten(self) -> List[T] where T: Clone {
 }
 
 /// Reverse the list.
-pub fn List[T]::reverse(self) -> List[T] where T: Clone {
+pub fn List[T]::reverse(self) -> List[T] {
     let result: ref List[T] = [];
     for x in self {
         result = [x].concat(result)
@@ -129,7 +129,7 @@ pub fn List[T]::reverse(self) -> List[T] where T: Clone {
 }
 
 /// Alias for `reverse`.
-pub fn List[T]::rev(self) -> List[T] where T: Clone {
+pub fn List[T]::rev(self) -> List[T] {
     self.reverse()
 }
 
@@ -144,7 +144,7 @@ pub fn List[T]::rev(self) -> List[T] where T: Clone {
 /// the transpiler (for Option/Result polymorphism), not through this method
 /// body. This body is compiled into the stdlib but is only reachable via
 /// direct qualified call `List::map(xs, f)`.
-pub fn List[T]::map[U](self, f: fn(T) -> U) -> List[U] where T: Clone, U: Clone {
+pub fn List[T]::map[U](self, f: fn(T) -> U) -> List[U] {
     let result: ref List[U] = [];
     for x in self {
         result.push(f(x))
@@ -153,7 +153,7 @@ pub fn List[T]::map[U](self, f: fn(T) -> U) -> List[U] where T: Clone, U: Clone 
 }
 
 /// Retain elements satisfying predicate `f`.
-pub fn List[T]::filter(self, f: fn(T) -> Bool) -> List[T] where T: Clone {
+pub fn List[T]::filter(self, f: fn(T) -> Bool) -> List[T] {
     let result: ref List[T] = [];
     for x in self {
         if f(x.clone()) {
@@ -168,7 +168,7 @@ pub fn List[T]::filter(self, f: fn(T) -> Bool) -> List[T] where T: Clone {
 /// `U: Clone` is required by the generated Rust: the emitted `let mut acc = init`
 /// binding and the `acc = f(acc, x)` rebinding both move `acc`, so the
 /// transpiled code needs `U: Clone` to re-bind after each iteration.
-pub fn List[T]::fold[U](self, init: U, f: fn(U, T) -> U) -> U where T: Clone, U: Clone {
+pub fn List[T]::fold[U](self, init: U, f: fn(U, T) -> U) -> U {
     let acc: ref U = init;
     for x in self {
         acc = f(acc, x)
@@ -179,8 +179,10 @@ pub fn List[T]::fold[U](self, init: U, f: fn(U, T) -> U) -> U where T: Clone, U:
 /// Sort in ascending order using natural ordering.
 ///
 /// Builtin: promoted from MVL body to avoid LLVM SSA-dominance issues with
-/// ref-variable loops (#992). MVL already supports `where T: Ord` bounds,
-/// so a pure MVL body is feasible once #992 is resolved (ADR-0041 Phase 2).
+/// ref-variable loops (#992).  Only valid on `List` element types that
+/// support ordering; MVL does not currently express "T is comparable" in
+/// user code (ADR-0053), so this builtin is guarded at dispatch time —
+/// call sites on unsupported element types are rejected by the checker.
 /// C-ABI: `_mvl_list_sort`. Closes #1290.
 pub builtin fn List[T]::sort(self) -> List[T]
 
@@ -214,7 +216,7 @@ pub builtin fn List[T]::zip[U](self, other: List[U]) -> List[Pair[T, U]]
 pub builtin fn List[T]::partition(self, f: fn(T) -> Bool) -> Partitioned[T]
 
 /// Retain leading elements while `f` returns true; stop at first false.
-pub fn List[T]::take_while(self, f: fn(T) -> Bool) -> List[T] where T: Clone {
+pub fn List[T]::take_while(self, f: fn(T) -> Bool) -> List[T] {
     let result: ref List[T] = [];
     for x in self {
         if f(x.clone()) {
@@ -227,7 +229,7 @@ pub fn List[T]::take_while(self, f: fn(T) -> Bool) -> List[T] where T: Clone {
 }
 
 /// Drop leading elements while `f` returns true; keep from first false onward.
-pub fn List[T]::skip_while(self, f: fn(T) -> Bool) -> List[T] where T: Clone {
+pub fn List[T]::skip_while(self, f: fn(T) -> Bool) -> List[T] {
     let result: ref List[T] = [];
     let skipping: ref Bool = true;
     for x in self {
@@ -244,7 +246,7 @@ pub fn List[T]::skip_while(self, f: fn(T) -> Bool) -> List[T] where T: Clone {
 /// True if at least one element satisfies `f`.
 ///
 /// Short-circuits: stops at the first element where `f` returns true.
-pub fn List[T]::any(self, f: fn(T) -> Bool) -> Bool where T: Clone {
+pub fn List[T]::any(self, f: fn(T) -> Bool) -> Bool {
     for x in self {
         if f(x) {
             return true
@@ -254,7 +256,7 @@ pub fn List[T]::any(self, f: fn(T) -> Bool) -> Bool where T: Clone {
 }
 
 /// True if every element satisfies `f`.
-pub fn List[T]::all(self, f: fn(T) -> Bool) -> Bool where T: Clone {
+pub fn List[T]::all(self, f: fn(T) -> Bool) -> Bool {
     self.skip_while(f).is_empty()
 }
 
@@ -262,7 +264,7 @@ pub fn List[T]::all(self, f: fn(T) -> Bool) -> Bool where T: Clone {
 ///
 /// Transpiler-handled: emits `into_iter().min_by(partial_cmp)`.
 /// MVL body is a fallback for LLVM backend (returns first, not min).
-pub fn List[T]::min(self) -> Option[T] where T: Clone {
+pub fn List[T]::min(self) -> Option[T] {
     self.first()
 }
 
@@ -270,7 +272,7 @@ pub fn List[T]::min(self) -> Option[T] where T: Clone {
 ///
 /// Transpiler-handled: emits `into_iter().max_by(partial_cmp)`.
 /// MVL body is a fallback for LLVM backend (returns last, not max).
-pub fn List[T]::max(self) -> Option[T] where T: Clone {
+pub fn List[T]::max(self) -> Option[T] {
     self.last()
 }
 

@@ -2607,39 +2607,28 @@ fn generic_pair_type_parses() {
     parses_and_checks("type Pair[A, B] = struct { first: A, second: B }");
 }
 
-#[test]
-fn generic_with_constraint_parses() {
-    // Req 9: where-clause constraint parses and checks
-    parses_and_checks("total fn max[T](a: T, b: T) -> T where T: Ord { return a; }");
-}
+// ── Requirement 9: trait bounds — DELETED under ADR-0053 ─────────────────
+//
+// The prior `generic_with_constraint_parses` / `ord_constraint_satisfies_*` /
+// `eq_constraint_satisfies_*` / `generic_multiple_constraints_parse` tests all
+// asserted that `total fn max[T]() where T: Ord { … }` parses and checks —
+// documenting a Rust-style trait-bound feature that MVL never actually
+// implemented (the checker only whitelisted `Ord` / `Eq` names for comparison
+// operators; all other bound identifiers, including `BananaBread`, passed
+// silently).  ADR-0053 removes the trailing `where T: Trait` clause from the
+// fn grammar; the corresponding tests are covered instead by
+// `trailing_where_trait_bound_is_rejected` below and by
+// `tests/corpus/02_functions/no_trait_bound_where_clause.mvl`.
 
 #[test]
-fn ord_constraint_satisfies_comparison() {
-    // Req 9: T with Ord bound may use <, >, <=, >= without error
-    parses_and_checks(
-        "total fn max[T](a: T, b: T) -> T where T: Ord { if a > b { return a; } else { return b; } }",
-    );
-}
-
-#[test]
-fn eq_constraint_satisfies_equality() {
-    // Req 9: T with Eq bound may use == and != without error
-    parses_and_checks("total fn are_equal[T](a: T, b: T) -> Bool where T: Eq { return a == b; }");
-}
-
-#[test]
-fn ord_constraint_satisfies_eq_check() {
-    // Req 9: Ord is a supertrait of Eq — where T: Ord must also permit == and !=
-    parses_and_checks(
-        "total fn cmp_and_eq[T](a: T, b: T) -> Bool where T: Ord { if a > b { return true; } else { return a == b; } }",
-    );
-}
-
-#[test]
-fn generic_multiple_constraints_parse() {
-    // Req 9: multiple constraints in where clause parse and check
-    parses_and_checks(
-        "total fn show_max[T](a: T, b: T) -> T where T: Ord, T: Display { return a; }",
+fn trailing_where_trait_bound_is_rejected() {
+    // ADR-0053: MVL rejects `where T: Trait` on fn signatures.
+    let (mut p, _) = Parser::new("fn max[T](a: T, b: T) -> T where T: Ord { a }");
+    let _ = p.parse_program();
+    assert!(
+        p.errors().iter().any(|e| e.message.contains("ADR-0053")),
+        "expected ADR-0053 rejection diagnostic, got: {:?}",
+        p.errors()
     );
 }
 
@@ -2728,32 +2717,12 @@ fn missing_eq_constraint_on_ne_rejected() {
     );
 }
 
-#[test]
-fn unconstrained_second_param_rejected_when_first_is_constrained() {
-    // Req 9: A has Ord, B does not — comparing two B values must still fail
-    let (mut p, _) = Parser::new(
-        "total fn pair_cmp[A, B](a1: A, a2: A, b1: B, b2: B) -> Bool where A: Ord { return b1 > b2; }",
-    );
-    let prog = p.parse_program();
-    assert!(
-        p.errors().is_empty(),
-        "unexpected parse errors: {:?}",
-        p.errors()
-    );
-    let result = check(&prog);
-    assert!(
-        !result.is_ok(),
-        "unconstrained B used with > must be rejected even when A has Ord"
-    );
-}
-
-#[test]
-fn constrained_first_param_allowed_when_second_unconstrained() {
-    // Req 9: comparing A values is fine; A's Ord bound must not leak to B
-    parses_and_checks(
-        "total fn pair_cmp[A, B](a1: A, a2: A, b1: B, b2: B) -> Bool where A: Ord { return a1 > a2; }",
-    );
-}
+// The prior `unconstrained_second_param_rejected_when_first_is_constrained`
+// and `constrained_first_param_allowed_when_second_unconstrained` tests
+// exercised leak-in-scope logic of the removed `where A: Ord` clause and
+// are dropped under ADR-0053.  All comparisons on unbounded generic type
+// parameters are now rejected uniformly by `missing_constraint_on_comparison_rejected`
+// and its `_eq_` / `_ne_` companions above.
 
 #[test]
 fn higher_kinded_type_param_rejected() {

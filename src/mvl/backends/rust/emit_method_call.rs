@@ -289,11 +289,20 @@ impl RustEmitter {
                 self.emit_expr(&args[0]);
                 self.push(")(__x.clone()))");
             }
-            // sort() — sort_by with partial_cmp for numeric stability
+            // sort() — sort_by with partial_cmp for numeric stability.
+            //
+            // Clone the receiver into an owned `__v` so the block returns
+            // `Vec<T>` regardless of whether `capability_params` inferred a
+            // borrow at the caller.  Without `.clone()`, a borrowed receiver
+            // (`xs: &Vec<T>`) makes `__v: &Vec<T>` and the block returns
+            // `&Vec<T>` — E0308 on the `Vec<T>` return type.  `Vec<T>: Clone`
+            // is satisfied because `T: Clone` is either a primitive (Copy) or
+            // derived by `emit_generics_with_tir_params` for generics
+            // (ADR-0053).
             "sort" if args.is_empty() => {
                 self.push("{let mut __v=(");
                 self.emit_method_receiver(receiver);
-                self.push(");__v.sort_by(|__a,__b|__a.partial_cmp(__b).unwrap_or(std::cmp::Ordering::Equal));__v}");
+                self.push(").clone();__v.sort_by(|__a,__b|__a.partial_cmp(__b).unwrap_or(std::cmp::Ordering::Equal));__v}");
             }
             // min() — smallest element via partial_cmp
             "min" if args.is_empty() => {
@@ -402,6 +411,38 @@ impl RustEmitter {
             // clamp(low, high) — Rust's clamp panics on inverted bounds; safe wrapper
             "clamp" if args.len() == 2 => {
                 self.emit_safe_clamp(receiver, &args[0], &args[1]);
+            }
+            // is_positive() / is_negative() — receiver-type-specific rename.
+            //
+            // `Int::is_positive` / `is_negative` are the non-deprecated Rust
+            // `i64` methods — pass through.  On `Float`, Rust deprecated the
+            // same-named `f64::is_positive` / `is_negative` in favour of
+            // `is_sign_positive` / `is_sign_negative`; emitting the old name
+            // triggers a `deprecated` warning on every callsite of the
+            // generated crate.  MVL's method-type table registers these on
+            // Float (see `float_method_ty` in `checker/method_types.rs`), so
+            // MVL check accepts `x.is_positive()` on `x: Float`.  The rename
+            // to Rust's current API belongs here — same shape as `pow` /
+            // `contains` / `concat` above, which also branch on receiver
+            // type.  (Same-shape dispatch does not violate the "no rust
+            // vocabulary in MVL source" rule from ADR-0053 — this is entirely
+            // inside the backend and invisible to MVL.)
+            "is_positive" | "is_negative" if args.is_empty() => {
+                self.emit_method_receiver(receiver);
+                match receiver.ty.unlabeled() {
+                    Ty::Float => {
+                        self.push(if method == "is_positive" {
+                            ".is_sign_positive()"
+                        } else {
+                            ".is_sign_negative()"
+                        });
+                    }
+                    _ => {
+                        self.push(".");
+                        self.push(method);
+                        self.push("()");
+                    }
+                }
             }
             // contains(x) — direct Rust using checker type info (#554).
             // String: .contains(arg.as_str()); List/Set: .contains(&arg).

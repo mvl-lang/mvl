@@ -644,7 +644,7 @@ dependencies = [
 
 [[package]]
 name = "mvl"
-version = "0.238.14"
+version = "0.238.16"
 dependencies = [
  "criterion",
  "flate2",
@@ -657,7 +657,7 @@ dependencies = [
 
 [[package]]
 name = "mvl_runtime_llvm"
-version = "0.197.0"
+version = "0.197.1"
 dependencies = [
  "crossbeam-deque",
  "libc",
@@ -666,7 +666,7 @@ dependencies = [
 
 [[package]]
 name = "mvl_runtime_rust"
-version = "0.197.0"
+version = "0.197.1"
 dependencies = [
  "getrandom 0.2.17",
  "hex",
@@ -676,7 +676,7 @@ dependencies = [
 
 [[package]]
 name = "mvl_runtime_tokio"
-version = "0.197.0"
+version = "0.197.1"
 dependencies = [
  "mvl_runtime_rust",
  "tokio",

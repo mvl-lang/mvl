@@ -910,7 +910,11 @@ impl CheckError {
                 required_bound,
                 ..
             } => format!(
-                "type parameter `{type_param}` does not implement `{required_bound}` — add `where {type_param}: {required_bound}` to the function signature"
+                "cannot compare values of unbounded generic type parameter `{type_param}` — \
+                 MVL has no user-facing trait system (ADR-0053); `{required_bound}` cannot be \
+                 declared.  Specialize the function on a concrete comparable type \
+                 (e.g. `Int`, `String`) or dispatch through a stdlib method that handles \
+                 comparability internally"
             ),
             CheckError::FnFieldEqualityDenied { ty, offending_path, .. } => format!(
                 "cannot compare values of type `{ty}` with `==` / `!=` — it transitively contains a function-typed field ({offending_path}); function-pointer equality is implementation-defined (ADR-0051)"
