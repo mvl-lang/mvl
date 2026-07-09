@@ -138,8 +138,7 @@ impl RustEmitter {
     /// `range()` and similar in-place builders).
     pub(super) fn emit_user_method_receiver(&mut self, receiver: &TirExpr) {
         self.emit_method_receiver(receiver);
-        if matches!(&receiver.kind, TirExprKind::Var(_))
-            && !self.last_uses.contains(&receiver.span)
+        if matches!(&receiver.kind, TirExprKind::Var(_)) && !self.last_uses.contains(&receiver.span)
         {
             self.push(".clone()");
         }

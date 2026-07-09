@@ -130,3 +130,37 @@ preserving and typically LLVM-elided; the simpler unconditional-clone-
 on-non-last-use path was chosen.
 
 Filed as a future optimisation opportunity.
+
+---
+
+## Relation to language definition
+
+### Eleven Requirements (ADR-0001)
+
+1. **Implicit—explicit tradeoff** — **strengthens**. Makes method-receiver clone semantics explicit at call sites via the transpiler's last-use analysis, preventing silent borrow errors.
+2. **Concurrency primitive for safe parallelism** — **unchanged**. Does not affect async/concurrent semantics.
+3. **Correct borrow checker semantics for memory safety** — **strengthens**. Eliminates E0382 move errors on method-receiver calls by applying the same last-use clone logic as free functions.
+4. **Type system ensuring effect locality** — **unchanged**. Effect-system handling is independent of method-call codegen.
+5. **Typeclasses with instance resolution** — **unchanged**. No relation to method dispatch (which uses type-attached methods, not typeclasses).
+6. **Pattern matching with exhaustiveness** — **unchanged**. Pattern semantics are independent of method-call lowering.
+7. **Predictable performance model** — **weakens slightly**. Method-call clone insertion is now conditional (per last-use), adding a runtime cost that depends on the flow analysis. However, this is correct and LLVM typically elides redundant clones; the alternative (universal clone) would be worse.
+8. **Compile-time termination guarantee** — **unchanged**. Clone insertion is a codegen choice, not a termination concern.
+9. **Symbol-name hygiene** — **unchanged**. Does not affect name mangling or symbol generation.
+10. **Audit-trail accuracy** — **unchanged**. IFC and audit labeling are independent of method-call lowering.
+11. **Semantics clarity for self-hosting** — **strengthens**. Formalizing method-call clone semantics explicitly is necessary for the self-hosted compiler (#1693) to mirror Rust emitter behavior faithfully.
+
+### Design Principles (README)
+
+- **Explicit over implicit** — **strengthens**. The rule "call-site clone knowledge lives with the caller" makes clone insertion explicit and localized.
+- **One way to do it** — **consistent with**. There is one rule per dispatch path; user methods follow free-fn clone semantics.
+- **The signature IS the threat model** — **consistent with**. Method borrow flags remain visible in the signature; clone insertion follows the inferred flags.
+- **No UFCS** — **unchanged**. Method call syntax is unchanged by this decision.
+- **No bare unwrap** — **unchanged**. This decision does not affect error handling.
+
+### Specifications
+
+This decision affects the self-hosting specification for the Rust backend:
+- `.openspec/specs/010-tir-backend/spec.md` — clarifies that method-call codegen must apply the same last-use clone logic as free-function argument emission.
+- `.openspec/specs/011-self-hosting-phase3-llvm/spec.md` (if created) — would specify the method-receiver clone semantics for the MVL-hosted LLVM backend (see #1693).
+
+Currently, these specs are not detailed enough to reference this decision explicitly. A follow-up improvement would add a scenario covering method-call clone insertion.

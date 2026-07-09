@@ -349,10 +349,8 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
                                 // match any nested library file, so also
                                 // derive the qualified stem relative to the
                                 // CLI base directory and check both forms.
-                                let qual_stem = loader::qualified_stem(
-                                    std::path::Path::new(path),
-                                    &p,
-                                );
+                                let qual_stem =
+                                    loader::qualified_stem(std::path::Path::new(path), &p);
                                 let is_entry_point = transpiler::has_main_fn(&parsed);
                                 let entry_point_ok = !is_entry_point || {
                                     // Include an entry-point file only when it is integrated
