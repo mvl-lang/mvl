@@ -143,7 +143,7 @@ fn min_str_len_lower(expr: &Expr) -> i64 {
             ..
         } if method == "concat" => {
             let r = min_str_len_lower(receiver);
-            let a = args.first().map(|e| min_str_len_lower(e)).unwrap_or(0);
+            let a = args.first().map(min_str_len_lower).unwrap_or(0);
             r + a
         }
         _ => 0,
