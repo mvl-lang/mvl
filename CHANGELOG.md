@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.238.13] - 2026-07-09
+
+### Fixed
+
+- **`rust-backend`: type-aware method dispatch for builtins and UFCS** (#1707 phase 12) — Two shared lookups in `emit_method_call.rs` were name-only: `rust_emit_by_name(m)` hunted `BUILTINS` for any entry with method name `m`, ignoring receiver type.  For `xs.find(target)` on `List[Int]` this returned `Some("str_find")` (from `("find", "String")`) and emitted broken code with two confusing E0277 trait errors.  Fix: new `ty_builtin_key(ty)` helper mapping `Ty` variants to `BUILTINS` string keys, use `rust_emit_for(name, ty_key)` at the dispatch arm, add `is_stdlib_ufcs_method_for(name, ty)` as the type-aware companion to `is_stdlib_ufcs_method`.  Sets up infrastructure so future `List::find` / `Set::find` / `Map::find` additions can coexist with `String::find` without silently poaching each other's dispatch.  Cleared 2× E0277 misdispatch (converted to honest E0599 "no method").
+
 ## [0.238.12] - 2026-07-09
 
 ### Fixed
