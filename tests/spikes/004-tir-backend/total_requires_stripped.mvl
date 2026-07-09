@@ -1,0 +1,11 @@
+// #1683 erasure pair (stripped): same function body without solver clauses.
+// Must produce byte-identical .ll (whitespace-normalized) to total_requires.mvl.
+// Expected stdout: 15
+
+fn triangle_sum(n: Int) -> Int {
+    n * (n + 1) / 2
+}
+
+fn main() -> Int {
+    triangle_sum(5)
+}

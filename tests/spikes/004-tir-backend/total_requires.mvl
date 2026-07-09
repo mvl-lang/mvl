@@ -1,0 +1,15 @@
+// #1683 erasure pair (decorated): total fn with requires + ensures.
+// Solver metadata must be erased at codegen — the emitted `.ll` must be
+// byte-identical (whitespace-normalized) to total_requires_stripped.mvl.
+// Expected stdout: 15  (triangle sum: 5*6/2)
+
+total fn triangle_sum(n: Int) -> Int
+    requires n >= 0
+    ensures result >= 0
+{
+    n * (n + 1) / 2
+}
+
+fn main() -> Int {
+    triangle_sum(5)
+}

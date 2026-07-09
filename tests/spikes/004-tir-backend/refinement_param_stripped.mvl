@@ -1,0 +1,11 @@
+// #1683 erasure pair (stripped): same function without the refinement clause.
+// Must produce byte-identical .ll (whitespace-normalized) to refinement_param.mvl.
+// Expected stdout: 10
+
+fn double(x: Int) -> Int {
+    x * 2
+}
+
+fn main() -> Int {
+    double(5)
+}
