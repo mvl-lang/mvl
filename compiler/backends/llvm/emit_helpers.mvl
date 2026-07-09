@@ -1,18 +1,60 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Schuberg Philis
 //
-// compiler/backends/llvm/emit_helpers.mvl — shared low-level emit helpers
-// (issue #1118, Phase A0 scaffold).
+// compiler/backends/llvm/emit_helpers.mvl — low-level emit helpers
+// shared across the LLVM backend (#1118, #1693).
 //
-// Corresponds to src/mvl/backends/llvm_text/emit_helpers.rs in the Rust compiler.
+// Corresponds to src/mvl/backends/llvm_text/emit_helpers.rs in the Rust
+// compiler.
 //
-// A0 status: placeholder stubs. Real helpers (type mapping, heap-drop tracking,
-// string globals, value conversion, mangling, literals) land in A1+.
+// Contents:
+//   - jstr/jarr/jget/jtag/jbool  — JSON accessors on `Value`
+//   - lbrace/rbrace              — `{`/`}` literals (format() can't escape)
 
-// Return the LLVM IR type mnemonic for an MVL scalar name.
-// A0: only Int → i64 is populated; every other case falls through to "i64" so
+use std.collections.{Map}
+use std.json.{Value}
+
+// ── JSON helpers ──────────────────────────────────────────────────────────────
+
+pub fn jstr(v: Value, key: String) -> String {
+    match v {
+        Value::Object(m) => match m.get(key) { Some(Value::String(s)) => s, _ => "" },
+        _ => "",
+    }
+}
+
+pub fn jarr(v: Value, key: String) -> List[Value] {
+    match v {
+        Value::Object(m) => match m.get(key) { Some(Value::Array(a)) => a, _ => [] },
+        _ => [],
+    }
+}
+
+pub fn jget(v: Value, key: String) -> Value {
+    match v {
+        Value::Object(m) => match m.get(key) { Some(inner) => inner, None => Value::Null },
+        _ => Value::Null,
+    }
+}
+
+pub fn jtag(v: Value) -> String { jstr(v, "tag") }
+
+pub total fn jbool(v: Value, key: String) -> Bool {
+    match v {
+        Value::Object(m) => match m.get(key) { Some(Value::Bool(b)) => b, _ => false },
+        _ => false,
+    }
+}
+
+// MVL format() does not escape `{{` — helpers keep braces out of the
+// interpolation grammar.
+pub fn lbrace() -> String { "{" }
+pub fn rbrace() -> String { "}" }
+
+// Return the LLVM IR type mnemonic for an MVL scalar name (A0 helper).
+// Only Int → i64 is populated; every other case falls through to "i64" so
 // downstream emission stays type-consistent until A1 introduces a real mapping.
-partial fn llvm_ty_of(mvl_ty: String) -> String {
+pub partial fn llvm_ty_of(mvl_ty: String) -> String {
     match mvl_ty {
         "Int"  => "i64",
         "Bool" => "i1",
@@ -21,9 +63,100 @@ partial fn llvm_ty_of(mvl_ty: String) -> String {
     }
 }
 
-// Host target triple for the emitted module header.
-// A0: hard-coded to arm64-apple-darwin. A1 will source this from the CLI /
-// build environment like `default_target_triple()` in emitter.rs does.
-total fn default_target_triple() -> String {
+//
+// A1g: Option[Int] lowers to a `{i8, i64}` tagged-union struct — first byte
+// is the variant tag (0 = None, 1 = Some), second word is the Int payload
+// (uninitialized for None).  Other Option[T] and general enums are deferred.
+// A1o: split "Enum::Variant" → "Enum".  Returns the empty string
+// if `s` has no "::" (e.g. bare `None`).
+pub partial fn enum_name_of_variant(s: String) -> String {
+    let parts: List[String] = s.split("::");
+    match parts.get(0) {
+        Some(p) => p,
+        None => "",
+    }
+}
+
+// Extract the TirBlock (or a synthesized single-stmt block) for the else
+// branch of an if.  Handles four shapes:
+//
+//   - Expr-form Block: `else_br` is a TirExpr with `kind.tag == "Block"` —
+//     return `kind.block`.
+//   - Expr-form else-if: `else_br` is a TirExpr with `kind.tag == "If"` —
+//     wrap the entire TirExpr as a single Expr-stmt so `emit_body` recurses
+//     back through `emit_expr` and hits the "If" case.
+//   - Stmt-form Block: `{tag: "Block", block}` — return `block`.
+//   - Stmt-form else-if: `{tag: "If", stmt: <TirStmt::If>}` — wrap the
+//     nested If-stmt as a single-stmt block so `emit_body` recurses through
+//     the "If" case of `emit_stmt`.
+pub partial fn extract_else_block(else_br: Value) -> Value {
+    let inner_kind: Value = jget(else_br, "kind");
+    let inner_tag: String = jtag(inner_kind);
+    if inner_tag == "Block" {
+        return jget(inner_kind, "block");
+    }
+    if inner_tag == "If" {
+        // Wrap the whole else_br TirExpr as an Expr statement.
+        return wrap_stmts_as_block([make_expr_stmt(else_br)]);
+    }
+    if jtag(else_br) == "Block" {
+        return jget(else_br, "block");
+    }
+    if jtag(else_br) == "If" {
+        // Wrap the nested If-stmt as a single-stmt block.
+        return wrap_stmts_as_block([jget(else_br, "stmt")]);
+    }
+    // Missing else — synthesize an empty block so emit_if_blocks phi'd
+    // else-arm still has somewhere to go.
+    wrap_stmts_as_block([])
+}
+
+// Build a synthetic TirBlock JSON containing `stmts` verbatim.  Used when
+// wrapping a nested else-if into a shape emit_body can walk.
+pub partial fn wrap_stmts_as_block(stmts: List[Value]) -> Value {
+    let m: ref Map[String, Value] = Map::new();
+    m.insert("stmts", Value::Array(stmts));
+    Value::Object(m)
+}
+
+// Build a synthetic `{tag: "Expr", expr: <e>}` statement wrapping a TirExpr.
+pub partial fn make_expr_stmt(e: Value) -> Value {
+    let m: ref Map[String, Value] = Map::new();
+    m.insert("tag", Value::String("Expr"));
+    m.insert("expr", e);
+    Value::Object(m)
+}
+
+// ── LLVM module-level constants ──────────────────────────────────────────────
+
+// Host target triple for the emitted module header.  Hard-coded for arm64
+// macOS; a future CLI/env-based override will replace this call site.
+pub fn default_target_triple() -> String {
     "arm64-apple-darwin"
 }
+
+// Escape a raw MVL string for LLVM IR's `c"..."` literal syntax.  Handles
+// the five characters LLVM's textual IR reader requires escaping — the
+// double-quote closes the literal, backslash is the escape leader itself,
+// and \n/\t/\r are non-printable.  Every other byte passes through.
+pub partial fn escape_llvm_string(s: String) -> String {
+    let out: ref String = "";
+    let chars: List[String] = s.chars();
+    for c in chars {
+        if c == "\"" {
+            out = out.concat("\\22");
+        } else if c == "\\" {
+            out = out.concat("\\5C");
+        } else if c == "\n" {
+            out = out.concat("\\0A");
+        } else if c == "\t" {
+            out = out.concat("\\09");
+        } else if c == "\r" {
+            out = out.concat("\\0D");
+        } else {
+            out = out.concat(c);
+        }
+    }
+    out
+}
+

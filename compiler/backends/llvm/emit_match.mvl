@@ -1,0 +1,415 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// compiler/backends/llvm/emit_match.mvl — TIR match expression → LLVM
+// IR emission (#1118, #1693 step 4b).
+//
+// Corresponds to the match lowering in
+// src/mvl/backends/llvm_text/emit_exprs_tir.rs.  Contains the arm
+// dispatch + payload extraction methods on EmitCtx:
+//   - EmitCtx::emit_match       — scrutinee lowering + arm-by-arm phi merge
+//   - EmitCtx::emit_match_body  — evaluate one arm body
+
+use std.collections.{Map}
+use std.json.{Value}
+use backends.llvm.emit_context::LocalRef;
+use backends.llvm.emit_context::EmitCtx;
+use backends.llvm.emit_context::Emitted;
+use backends.llvm.emit_context::StmtOut;
+use backends.llvm.emit_context::MatchArmOut;
+use backends.llvm.emit_context::emitted_imm;
+use backends.llvm.emit_context::extend_locals;
+use backends.llvm.emit_context::clone_locals;
+use backends.llvm.emit_context::clone_enums;
+use backends.llvm.emit_context::clone_strings;
+use backends.llvm.emit_context::clone_structs;
+use backends.llvm.emit_context::clone_variant_slots;
+use backends.llvm.emit_context::clone_variant_slot_types;
+use backends.llvm.emit_context::StructInfo;
+use backends.llvm.emit_types::tir_ty_to_llvm;
+use backends.llvm.emit_types::tir_ty_to_llvm_ctx;
+use backends.llvm.emit_types::tir_ty_to_llvm_full;
+use backends.llvm.emit_types::is_aggregate_ty;
+use backends.llvm.emit_helpers::jstr;
+use backends.llvm.emit_helpers::jarr;
+use backends.llvm.emit_helpers::jget;
+use backends.llvm.emit_helpers::jtag;
+use backends.llvm.emit_helpers::jbool;
+use backends.llvm.emit_helpers::lbrace;
+use backends.llvm.emit_helpers::rbrace;
+use backends.llvm.emit_helpers::enum_name_of_variant;
+
+// Extract the literal LLVM operand for a Literal(Integer|Bool) pattern.
+total fn literal_pattern_value(pat: Value) -> String {
+    let lit: Value = jget(pat, "lit");
+    let lit_kind: String = jtag(lit);
+    if lit_kind == "Integer" {
+        jstr(lit, "value")
+    } else {
+        if lit_kind == "Bool" {
+            if jbool(lit, "value") { "1" } else { "0" }
+        } else {
+            "0"
+        }
+    }
+}
+
+//
+// Lower `match scrutinee { p1 => e1, p2 => e2, _ => eN }` to a chain of
+// icmp+br tests, with a phi merging arm results at the join block.
+// Supports the pattern shapes needed for Int/Bool scrutinees:
+//
+//   - Literal(Integer|Bool) — equality test via `icmp eq`.
+//   - Wildcard              — always matches; final fallback.
+//   - Ident(name)           — always matches; binds `name` to the scrutinee
+//     value in the arm's scope (as a non-ref local).
+//
+// Enum patterns / tuple patterns / range patterns are deferred (they need
+// tag-load + destructuring shapes not exercised by the current corpus).
+//
+// # Cross-iteration locals
+//
+// Arm bodies must see the enclosing fn's `locals` (so `match n { 0 => x + 1,
+// _ => 0 }` can read `x` from the outer scope).  The Rust transpiler moves
+// values by default, so a naive `... ctx.locals ...` inside a for-loop is a
+// cross-iteration move error.  Workaround: capture `ctx.locals` into a
+// `ref` variable BEFORE the loop; each iteration calls `clone_locals` on
+// the ref-var, which the transpiler translates as an alloca-load followed
+// by `.clone()` (verified via a spike probe on 2026-07-04).  Each arm gets
+// a fresh locals map, optionally extended with an Ident-pattern binding.
+pub partial fn EmitCtx::emit_match(self, scrutinee: Value, arms: List[Value]) -> Emitted {
+    let ctx: EmitCtx = self;
+    let s: Emitted = ctx.emit_expr(scrutinee);
+    let n: Int = s.next_reg;
+    let join_lbl: String = format("match_join_{}", [n.to_string()]);
+
+    let instrs: ref List[String] = s.instrs;
+    let phi_pairs: ref List[String] = [];
+    let cur_reg: ref Int = n;
+    let arm_idx: ref Int = 0;
+    let scrut_reg: String = s.reg;
+    let scrut_ty: String = s.ty;
+    let saw_fallback: ref Bool = false;
+    let is_enum: Bool = is_aggregate_ty(scrut_ty);
+    // A1i: track arm result type for the join-block phi.  All arms must
+    // have the same ty (checker-enforced); we capture the last one.
+    let result_ty: ref String = "i64";
+
+    // For enum scrutinees, extract the variant tag once up front — each arm
+    // then dispatches on this shared i8 value rather than re-extracting.
+    let tag_reg: ref String = "";
+    if is_enum {
+        let extract_reg: String = format("%t{}", [cur_reg.to_string()]);
+        instrs.push(format(
+            "  {} = extractvalue {} {}, 0",
+            [extract_reg, scrut_ty, scrut_reg]
+        ));
+        tag_reg = extract_reg;
+        cur_reg = cur_reg + 1;
+    }
+
+    // Capture outer locals in a `ref` so per-iteration `clone_locals` calls
+    // survive the for-loop's move semantics (see docstring above).
+    // Clone rather than move ctx.locals — later ctx.method(...) calls in
+    // the loop body need ctx intact (ADR-0054).  Direct field access
+    // moves the field out and leaves ctx partially initialized.
+    let outer_locals: ref Map[String, LocalRef] = clone_locals(ctx.locals);
+
+    for arm in arms {
+        if saw_fallback {
+            // Exhaustiveness fallback already handled — remaining arms are
+            // unreachable dead code.
+        } else {
+            let pat: Value = jget(arm, "pattern");
+            let pat_tag: String = jtag(pat);
+            let idx: Int = arm_idx;
+            let arm_lbl: String = format("match_arm_{}_{}", [n.to_string(), idx.to_string()]);
+            let next_lbl: String = format("match_next_{}_{}", [n.to_string(), idx.to_string()]);
+
+            // A1l/A1o: user-enum variant match — dispatch on the tag byte.
+            //   - Ident("Color::Red") — unit variant
+            //   - TupleStruct("Value::Num", [Ident("n")]) — payload variant
+            // For all-unit enums, scrutinee IS the tag (i8).  For payload
+            // enums, scrutinee is `{i8, i64}` and the tag has already been
+            // extracted into `tag_reg` at the top of `emit_match`.
+            let pat_name: String = if pat_tag == "Ident" {
+                jstr(pat, "name")
+            } else if pat_tag == "TupleStruct" {
+                jstr(pat, "name")
+            } else if pat_tag == "Struct" {
+                jstr(pat, "name")
+            } else { "" };
+            let is_user_variant_ident: Bool = pat_tag == "Ident" && ctx.has_enum_variant(pat_name);
+            let is_user_variant_tuple: Bool = pat_tag == "TupleStruct" && ctx.has_enum_variant(pat_name);
+            // A1q: `Session::Locked { attempts: a, window: w }` — struct-
+            // variant pattern.  Dispatch mirrors TupleStruct, binding
+            // mirrors struct field access.
+            let is_user_variant_struct: Bool = pat_tag == "Struct" && ctx.has_enum_variant(pat_name);
+            let is_user_variant: Bool = is_user_variant_ident || is_user_variant_tuple || is_user_variant_struct;
+            let is_fallback: Bool = pat_tag == "Wildcard" || (pat_tag == "Ident" && !is_user_variant);
+            let is_enum_variant: Bool = pat_tag == "Some" || pat_tag == "None" || pat_tag == "Ok" || pat_tag == "Err";
+
+            if is_fallback {
+                instrs.push(format("  br label %{}", [arm_lbl]));
+                saw_fallback = true;
+            } else {
+                if is_user_variant {
+                    // For an aggregate scrutinee use `tag_reg` (already
+                    // extracted); for a plain-i8 scrutinee use the reg
+                    // directly.  Clone via `.concat("")` to sidestep the
+                    // transpiler's per-iteration move analysis (values
+                    // used inside a loop body must be freshly owned).
+                    let compare_reg: String = if is_enum {
+                        tag_reg.concat("")
+                    } else {
+                        scrut_reg.concat("")
+                    };
+                    let variant_tag: Int = ctx.enum_tag_of(pat_name);
+                    let cmp_reg: String = format("%t{}", [cur_reg.to_string()]);
+                    instrs.push(format(
+                        "  {} = icmp eq i8 {}, {}",
+                        [cmp_reg.concat(""), compare_reg, variant_tag.to_string()]
+                    ));
+                    instrs.push(format(
+                        "  br i1 {}, label %{}, label %{}",
+                        [cmp_reg, arm_lbl, next_lbl]
+                    ));
+                    cur_reg = cur_reg + 1;
+                } else if is_enum_variant {
+                    // Enum tag dispatch: compare against the variant's tag byte.
+                    // Some = 1, None = 0, Ok = 0, Err = 1.
+                    let variant_tag: String = match pat_tag {
+                        "Some" => "1",
+                        "Ok"   => "0",
+                        "Err"  => "1",
+                        _      => "0",
+                    };
+                    let cmp_reg: String = format("%t{}", [cur_reg.to_string()]);
+                    instrs.push(format(
+                        "  {} = icmp eq i8 {}, {}",
+                        [cmp_reg, tag_reg, variant_tag]
+                    ));
+                    instrs.push(format(
+                        "  br i1 {}, label %{}, label %{}",
+                        [cmp_reg, arm_lbl, next_lbl]
+                    ));
+                    cur_reg = cur_reg + 1;
+                } else {
+                    // Scalar Literal(Integer|Bool) pattern.
+                    let lit_val: String = literal_pattern_value(pat);
+                    let cmp_reg: String = format("%t{}", [cur_reg.to_string()]);
+                    instrs.push(format(
+                        "  {} = icmp eq {} {}, {}",
+                        [cmp_reg, scrut_ty, scrut_reg, lit_val]
+                    ));
+                    instrs.push(format(
+                        "  br i1 {}, label %{}, label %{}",
+                        [cmp_reg, arm_lbl, next_lbl]
+                    ));
+                    cur_reg = cur_reg + 1;
+                }
+            }
+
+            instrs.push(format("{}:", [arm_lbl]));
+
+            // Build this arm's locals.  Several shapes:
+            //   - Ident pattern: bind the scrutinee value to the pattern name.
+            //   - Some/Ok(Ident(name)): extract payload via `extractvalue ..., 1`
+            //     and bind `name` to it.
+            //   - Err(Ident(name)): same as Some/Ok.
+            //   - Everything else (Wildcard, None, Literal, Some(Wildcard)):
+            //     no additional binding, just clone outer scope.
+            // User-enum variant patterns (`Color::Red`) SHOULD NOT bind
+            // their name in the arm scope — they're tag comparisons.  Only
+            // bare Ident patterns (`x`) bind.
+            let arm_locals: Map[String, LocalRef] = if pat_tag == "Ident" && !is_user_variant {
+                extend_locals(
+                    clone_locals(outer_locals),
+                    jstr(pat, "name"),
+                    LocalRef { reg: scrut_reg, ty: scrut_ty, is_ref: false },
+                )
+            } else if is_user_variant_tuple {
+                // A1o/A1r/A1s: `Value::Num(n)` / `Circle(r)` — extract
+                // payload slot(s) and bind each Ident field.  Slot index
+                // = position + 1 (skipping tag byte).  If the slot's
+                // native type isn't i64 (A1r: Float→double), bitcast on
+                // the way out so the binding sees the correct type.
+                let ts_fields: List[Value] = jarr(pat, "fields");
+                let vt: List[String] = ctx.variant_slot_types_of(pat_name);
+                let extend_start: Map[String, LocalRef] = clone_locals(outer_locals);
+                let arm_locals_ref: ref Map[String, LocalRef] = extend_start;
+                let pos: ref Int = 0;
+                for f in ts_fields {
+                    let inner_tag: String = jtag(f);
+                    if inner_tag == "Ident" {
+                        let slot_llvm: Int = pos + 1;
+                        let payload_reg: String = format("%t{}", [cur_reg.to_string()]);
+                        let scrut_ty_snap: String = scrut_ty.concat("");
+                        let scrut_reg_snap: String = scrut_reg.concat("");
+                        instrs.push(format(
+                            "  {} = extractvalue {} {}, {}",
+                            [payload_reg.concat(""), scrut_ty_snap, scrut_reg_snap, slot_llvm.to_string()]
+                        ));
+                        cur_reg = cur_reg + 1;
+                        let sp: Int = pos;
+                        let slot_ty: String = vt.get(sp).unwrap_or("i64");
+                        let final_reg: String = if slot_ty == "double" {
+                            let cast_reg: String = format("%t{}", [cur_reg.to_string()]);
+                            instrs.push(format(
+                                "  {} = bitcast i64 {} to double",
+                                [cast_reg.concat(""), payload_reg]
+                            ));
+                            cur_reg = cur_reg + 1;
+                            cast_reg
+                        } else {
+                            payload_reg.concat("")
+                        };
+                        arm_locals_ref = extend_locals(
+                            clone_locals(arm_locals_ref),
+                            jstr(f, "name"),
+                            LocalRef { reg: final_reg, ty: slot_ty, is_ref: false },
+                        );
+                    }
+                    pos = pos + 1;
+                }
+                arm_locals_ref
+            } else if is_user_variant_struct {
+                // A1q: `Session::Locked { attempts: a, window: w }` —
+                // extract each named field at its slot index (looked up
+                // via `ctx.variant_slots`) and bind the Ident pattern.
+                let sf: List[Value] = jarr(pat, "fields");
+                let extend_start: Map[String, LocalRef] = clone_locals(outer_locals);
+                let arm_locals_ref: ref Map[String, LocalRef] = extend_start;
+                let slot_lookup: Map[String, Int] = match ctx.variant_slot_map(pat_name) {
+                    Some(sm) => sm,
+                    None => Map[String, Int]::new(),
+                };
+                for f in sf {
+                    let fname: String = jstr(f, "name");
+                    let inner_pat: Value = jget(f, "pattern");
+                    let inner_tag: String = jtag(inner_pat);
+                    if inner_tag == "Ident" {
+                        let slot_idx: Int = slot_lookup.get(fname).unwrap_or(0);
+                        let slot_llvm: Int = slot_idx + 1;
+                        let payload_reg: String = format("%t{}", [cur_reg.to_string()]);
+                        let scrut_ty_snap: String = scrut_ty.concat("");
+                        let scrut_reg_snap: String = scrut_reg.concat("");
+                        instrs.push(format(
+                            "  {} = extractvalue {} {}, {}",
+                            [payload_reg.concat(""), scrut_ty_snap, scrut_reg_snap, slot_llvm.to_string()]
+                        ));
+                        cur_reg = cur_reg + 1;
+                        arm_locals_ref = extend_locals(
+                            clone_locals(arm_locals_ref),
+                            jstr(inner_pat, "name"),
+                            LocalRef { reg: payload_reg, ty: "i64", is_ref: false },
+                        );
+                    }
+                }
+                arm_locals_ref
+            } else if pat_tag == "Some" || pat_tag == "Ok" || pat_tag == "Err" {
+                let inner: Value = jget(pat, "inner");
+                let inner_tag: String = jtag(inner);
+                if inner_tag == "Ident" {
+                    let payload_reg: String = format("%t{}", [cur_reg.to_string()]);
+                    instrs.push(format(
+                        "  {} = extractvalue {} {}, 1",
+                        [payload_reg, scrut_ty, scrut_reg]
+                    ));
+                    cur_reg = cur_reg + 1;
+                    extend_locals(
+                        clone_locals(outer_locals),
+                        jstr(inner, "name"),
+                        LocalRef { reg: payload_reg, ty: "i64", is_ref: false },
+                    )
+                } else {
+                    clone_locals(outer_locals)
+                }
+            } else {
+                clone_locals(outer_locals)
+            };
+            let arm_ctx: EmitCtx = EmitCtx {
+                next_reg: cur_reg,
+                locals: arm_locals,
+                enums: ctx.enums,
+                strings: ctx.strings,
+                structs: ctx.structs,
+                enum_types: ctx.enum_types,
+                variant_payloads: ctx.variant_payloads,
+                variant_slots: ctx.variant_slots,
+                variant_slot_types: ctx.variant_slot_types,
+            };
+            let arm_body: Value = jget(arm, "body");
+            let arm_out: MatchArmOut = arm_ctx.emit_match_body(arm_body);
+            for line in arm_out.instrs { instrs.push(line) }
+            instrs.push(format("  br label %{}", [join_lbl]));
+
+            let pred_lbl: String = if arm_out.last_label == "" {
+                format("match_arm_{}_{}", [n.to_string(), idx.to_string()])
+            } else {
+                arm_out.last_label
+            };
+            phi_pairs.push(format("[ {}, %{} ]", [arm_out.reg, pred_lbl]));
+            result_ty = arm_out.ty;
+
+            cur_reg = arm_out.next_reg;
+
+            if !is_fallback {
+                instrs.push(format("{}:", [next_lbl]));
+            }
+            arm_idx = arm_idx + 1;
+        }
+    }
+
+    // If no fallback arm was seen (e.g. exhaustive Bool match on `true`
+    // and `false`), the final `match_next_N` block has no terminator.
+    // MVL's checker proves exhaustiveness, but LLVM's verifier can't see
+    // that — emit `unreachable` to satisfy it.  Reached execution here
+    // would be a type-system violation.
+    if !saw_fallback {
+        instrs.push("  unreachable");
+    }
+    // Join block + phi merge.  Phi ty comes from the arm results (all
+    // arms must have the same ty per the checker; we use the last one).
+    instrs.push(format("{}:", [join_lbl]));
+    let phi_reg: String = format("%t{}", [cur_reg.to_string()]);
+    let phi_body: String = phi_pairs.join(", ");
+    let final_ty: String = result_ty;
+    instrs.push(format("  {} = phi {} {}", [phi_reg, final_ty, phi_body]));
+
+    Emitted {
+        reg: phi_reg,
+        ty: final_ty,
+        next_reg: cur_reg + 1,
+        instrs: instrs,
+        last_label: join_lbl,
+    }
+}
+
+pub partial fn EmitCtx::emit_match_body(self, body: Value) -> MatchArmOut {
+    let ctx: EmitCtx = self;
+    let body_tag: String = jtag(body);
+    if body_tag == "Expr" {
+        let e: Emitted = ctx.emit_expr(jget(body, "expr"));
+        MatchArmOut {
+            reg: e.reg,
+            ty: e.ty,
+            next_reg: e.next_reg,
+            instrs: e.instrs,
+            last_label: e.last_label,
+        }
+    } else {
+        // Block arm — walk it as a body and use its trailing tail_reg.
+        let out: StmtOut = ctx.emit_body(jget(body, "block"));
+        let reg: String = if out.tail_reg == "" { "0" } else { out.tail_reg };
+        let ty: String = if out.tail_ty == "" { "i64" } else { out.tail_ty };
+        MatchArmOut {
+            reg: reg,
+            ty: ty,
+            next_reg: out.ctx.next_reg,
+            instrs: out.instrs,
+            last_label: out.last_label,
+        }
+    }
+}
+

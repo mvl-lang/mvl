@@ -1738,6 +1738,73 @@ fn method_call_on_arithmetic_wraps_receiver_in_parens() {
     );
 }
 
+/// Regression #1693: user-defined method calls on a non-last-use `Var`
+/// receiver must emit `.clone()` so the caller's binding stays alive
+/// across the call.  Without this, `ctx.method(...)` move-consumes ctx
+/// when ctx is used again later — Rust E0382.  Stdlib method dispatches
+/// (`.push`, `.map`, `.get`, …) use the shared `emit_method_receiver`
+/// path and handle their own borrow/clone semantics; only user-defined
+/// method fallthrough gets the clone.
+#[test]
+fn user_method_call_clones_receiver_on_non_last_use() {
+    let src = r#"
+        pub type Ctx = struct { n: Int }
+        pub fn Ctx::describe(self) -> String { "ctx".to_string() }
+        fn caller(c: Ctx) -> String {
+            let a: String = c.describe();
+            let b: String = c.describe();
+            a.concat(b)
+        }
+    "#;
+    let rust = transpile_src(src);
+    // At least one `c.clone().describe()` must appear.  The last-use call
+    // may emit the bare `c.describe()`; the earlier call MUST clone.
+    assert!(
+        rust.contains("c.clone().describe()"),
+        "non-last-use method receiver must clone:\n{rust}"
+    );
+}
+
+#[test]
+fn user_method_call_at_last_use_does_not_clone() {
+    let src = r#"
+        pub type Ctx = struct { n: Int }
+        pub fn Ctx::describe(self) -> String { "ctx".to_string() }
+        fn caller(c: Ctx) -> String { c.describe() }
+    "#;
+    let rust = transpile_src(src);
+    // Last-use elision: no clone needed on the final call.
+    assert!(
+        !rust.contains("c.clone().describe()"),
+        "last-use method receiver must NOT clone:\n{rust}"
+    );
+    assert!(
+        rust.contains("c.describe()"),
+        "last-use method receiver missing:\n{rust}"
+    );
+}
+
+#[test]
+fn mutable_ref_local_method_call_does_not_clone() {
+    // Regression: `result: ref List[Int]` in `range()` calls `.push` on
+    // its ref-local.  Cloning would snapshot the pointee and drop the
+    // write — silent bug (compiles, produces empty list).  Ref locals
+    // must stay unclones so `.push` mutates in place.
+    let src = r#"
+        pub partial fn build() -> List[Int] {
+            let result: ref List[Int] = [];
+            result.push(1);
+            result.push(2);
+            result
+        }
+    "#;
+    let rust = transpile_src(src);
+    assert!(
+        !rust.contains("result.clone().push"),
+        "ref-local method call must NOT clone:\n{rust}"
+    );
+}
+
 /// Regression #1692: passing a `Map[K, V]` (or List/Set) as a fn argument
 /// must NOT emit `.into()` at the call site.  `HashMap`/`HashSet`/`Vec`
 /// don't implement blanket `Into<_>` for arbitrary target types, so the

@@ -1,20 +1,38 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Schuberg Philis
 //
-// compiler/backends/llvm/emitter.mvl — top-level LLVM-text emitter
-// (issue #1118, Phase A0 scaffold).
+// compiler/backends/llvm/emitter.mvl — LLVM emitter entry point (#1118, #1693)
 //
-// Corresponds to src/mvl/backends/llvm_text/emitter.rs in the Rust compiler.
+// Corresponds to src/mvl/backends/llvm_text/emitter.rs.
 //
-// A0 status: single entry point that assembles a canned module.  A1 wires
-// this into the real TIR walk and threads ModuleCtx through the per-kind
-// emit_* modules.
+// Reads a TIR JSON document from stdin, decodes it, hands off to
+// `emit_program`, and prints the resulting LLVM IR text to stdout.
+//
+// Usage:
+//   mvl tir foo.mvl | mvl run compiler/backends/llvm/emitter.mvl > foo.ll
+//   llc foo.ll -o foo.s && cc foo.s -o foo && ./foo
+//
+// See tests/spikes/004-tir-backend/Makefile target `llvm` for the full
+// pipeline (compare against corpus expected outputs).
 
-// Compile a TIR program to LLVM IR text.
-// A0: ignores the TIR JSON tag string and returns a canned exit-0 module.
-partial fn compile_to_ir(module_name: String, target_triple: String) -> String {
-    let header: String = format("; ModuleID = '{}'\nsource_filename = \"{}\"\ntarget triple = \"{}\"\n",
-        [module_name, module_name, target_triple]);
-    let body: String = "\ndefine i32 @main() {\n  ret i32 0\n}\n";
-    header.concat(body)
+use std.io.{read, stdin}
+use std.json.{decode, Value}
+use backends.llvm.emit_context::EmitCtx;
+use backends.llvm.emit_stmts::emit_body;
+use backends.llvm.emit_exprs::emit_expr;
+use backends.llvm.emit_match::emit_match;
+use backends.llvm.emit_helpers::jstr;
+use backends.llvm.emit_program::emit_program;
+
+partial fn main() -> Unit ! Console {
+    match read(stdin(), 100000000) {
+        Err(_)  => println("error: could not read stdin"),
+        Ok(raw) => {
+            let src: String = relabel trust(raw, "TIR_INPUT");
+            match decode(src) {
+                Err(e)  => println(format("error: {}", [e.user_message()])),
+                Ok(tir) => println(emit_program(tir)),
+            }
+        }
+    }
 }

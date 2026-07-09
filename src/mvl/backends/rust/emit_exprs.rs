@@ -123,6 +123,27 @@ impl RustEmitter {
         }
     }
 
+    /// Emit a method call receiver for a **user-defined** method (a
+    /// generic fallthrough call where MVL doesn't have a special-case
+    /// stdlib dispatch).  Adds `.clone()` on non-last-use `Var` receivers
+    /// so the caller's binding stays alive across the call — Rust E0382
+    /// would trip otherwise when the method sig is `self` (consuming).
+    ///
+    /// Skipped for stdlib fast-path calls (`.push`, `.map`, `.get`, …)
+    /// because those either take `&mut self` (auto-refs owned locals)
+    /// or already emit their own `.clone()` in the pushed suffix.
+    /// Sharing `emit_method_receiver` with those paths and unconditionally
+    /// cloning here would double-clone or, worse, snapshot mutable ref
+    /// locals like `result: ref List[Int]` and drop the write (breaks
+    /// `range()` and similar in-place builders).
+    pub(super) fn emit_user_method_receiver(&mut self, receiver: &TirExpr) {
+        self.emit_method_receiver(receiver);
+        if matches!(&receiver.kind, TirExprKind::Var(_)) && !self.last_uses.contains(&receiver.span)
+        {
+            self.push(".clone()");
+        }
+    }
+
     /// Emit `sub` as the right operand of a left-associative binary op:
     /// wrap iff own precedence is *less than or equal to* `parent_prec`.
     /// This keeps `a - (b - c)` from parsing as `(a - b) - c` when the
@@ -573,13 +594,16 @@ impl RustEmitter {
                 self.push("]");
             }
             TirExprKind::Map { pairs } => {
-                // Determine whether the value type needs an `.into()` coercion.
-                // For labeled/refined value types (`Secret[String]`, `PosInt`,
-                // etc.) the map literal's raw values coerce via `From`.  For
-                // plain primitive value types, `.into()` has no target and
-                // produces a spurious `E0282: type annotations needed` on
-                // literals like `-2` where numeric-literal inference can't
-                // discriminate (#1707 phase 9).
+                // For labeled/refined value types (`Secret[String]`, `PosInt`, etc.)
+                // raw values must coerce via `.into()` — use emit_expr_as_fn_arg which
+                // handles `.clone().into()` with last-use move elision.
+                //
+                // For plain value types (`String`, `Int`, etc.) we must NOT add
+                // `.into()` — it causes `E0282: type annotations needed` on integer
+                // literals like `-2` where type inference can't discriminate (#1707
+                // phase 9).  We DO still need `.clone()` for non-Copy types (String,
+                // Named structs) to prevent moves — emit_expr_as_arg handles this via
+                // last-use analysis.
                 let value_needs_into = match &expr.ty {
                     Ty::Map(_, v) => matches!(v.as_ref(), Ty::Labeled(..) | Ty::Refined(..)),
                     _ => true,
@@ -592,9 +616,10 @@ impl RustEmitter {
                     self.push("(");
                     self.emit_expr(k);
                     self.push(", ");
-                    self.emit_expr(v);
                     if value_needs_into {
-                        self.push(".clone().into()");
+                        self.emit_expr_as_fn_arg(v);
+                    } else {
+                        self.emit_expr_as_arg(v);
                     }
                     self.push(")");
                 }

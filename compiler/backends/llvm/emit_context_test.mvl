@@ -1,0 +1,424 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// compiler/backends/llvm/context_test.mvl — MVL unit tests for EmitCtx
+// accessor methods (#1693).
+//
+// `mvl test` inlines every sibling module in this directory into one
+// compilation unit, so `EmitCtx`, `LocalRef`, `StructInfo`, etc. and
+// their `EmitCtx::*` methods are in scope regardless of which file
+// they currently live in (backend_llvm.mvl today → context.mvl once
+// the extraction lands).
+//
+// Tests build an EmitCtx directly with the fields under test populated,
+// call the accessor, and assert the return value.  Small, targeted,
+// independent of the LLVM emission pipeline.
+//
+// Run with:  mvl test compiler/
+//            make -C compiler test
+//            make test-mvl
+
+use std.collections.{Map}
+use backends.llvm.emit_context::EmitCtx;
+use backends.llvm.emit_helpers::llvm_ty_of;
+use backends.llvm.emit_context::clone_enums;
+use backends.llvm.emit_context::clone_locals;
+use backends.llvm.emit_context::clone_strings;
+use backends.llvm.emit_context::clone_structs;
+use backends.llvm.emit_context::clone_variant_slot_types;
+use backends.llvm.emit_context::clone_variant_slots;
+use backends.llvm.emit_context::emitted_bool;
+use backends.llvm.emit_context::emitted_imm;
+use backends.llvm.emit_context::extend_locals;
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+// Build an EmitCtx with all-empty registries.  Tests overwrite specific
+// fields via the field-init "cover" pattern in a single struct literal.
+partial fn empty_ctx() -> EmitCtx {
+    EmitCtx {
+        next_reg: 0,
+        locals: Map[String, LocalRef]::new(),
+        enums: Map[String, Int]::new(),
+        strings: Map[String, String]::new(),
+        structs: Map[String, StructInfo]::new(),
+        enum_types: Map[String, String]::new(),
+        variant_payloads: Map[String, Int]::new(),
+        variant_slots: Map[String, Map[String, Int]]::new(),
+        variant_slot_types: Map[String, List[String]]::new(),
+    }
+}
+
+partial fn ctx_with_strings(strings: Map[String, String]) -> EmitCtx {
+    EmitCtx {
+        next_reg: 0,
+        locals: Map[String, LocalRef]::new(),
+        enums: Map[String, Int]::new(),
+        strings: strings,
+        structs: Map[String, StructInfo]::new(),
+        enum_types: Map[String, String]::new(),
+        variant_payloads: Map[String, Int]::new(),
+        variant_slots: Map[String, Map[String, Int]]::new(),
+        variant_slot_types: Map[String, List[String]]::new(),
+    }
+}
+
+partial fn ctx_with_enums(enums: Map[String, Int]) -> EmitCtx {
+    EmitCtx {
+        next_reg: 0,
+        locals: Map[String, LocalRef]::new(),
+        enums: enums,
+        strings: Map[String, String]::new(),
+        structs: Map[String, StructInfo]::new(),
+        enum_types: Map[String, String]::new(),
+        variant_payloads: Map[String, Int]::new(),
+        variant_slots: Map[String, Map[String, Int]]::new(),
+        variant_slot_types: Map[String, List[String]]::new(),
+    }
+}
+
+partial fn ctx_with_enum_types(enum_types: Map[String, String]) -> EmitCtx {
+    EmitCtx {
+        next_reg: 0,
+        locals: Map[String, LocalRef]::new(),
+        enums: Map[String, Int]::new(),
+        strings: Map[String, String]::new(),
+        structs: Map[String, StructInfo]::new(),
+        enum_types: enum_types,
+        variant_payloads: Map[String, Int]::new(),
+        variant_slots: Map[String, Map[String, Int]]::new(),
+        variant_slot_types: Map[String, List[String]]::new(),
+    }
+}
+
+partial fn ctx_with_payloads(variant_payloads: Map[String, Int]) -> EmitCtx {
+    EmitCtx {
+        next_reg: 0,
+        locals: Map[String, LocalRef]::new(),
+        enums: Map[String, Int]::new(),
+        strings: Map[String, String]::new(),
+        structs: Map[String, StructInfo]::new(),
+        enum_types: Map[String, String]::new(),
+        variant_payloads: variant_payloads,
+        variant_slots: Map[String, Map[String, Int]]::new(),
+        variant_slot_types: Map[String, List[String]]::new(),
+    }
+}
+
+partial fn ctx_with_slot_types(vst: Map[String, List[String]]) -> EmitCtx {
+    EmitCtx {
+        next_reg: 0,
+        locals: Map[String, LocalRef]::new(),
+        enums: Map[String, Int]::new(),
+        strings: Map[String, String]::new(),
+        structs: Map[String, StructInfo]::new(),
+        enum_types: Map[String, String]::new(),
+        variant_payloads: Map[String, Int]::new(),
+        variant_slots: Map[String, Map[String, Int]]::new(),
+        variant_slot_types: vst,
+    }
+}
+
+// ── EmitCtx::string_global_of ────────────────────────────────────────────────
+
+test fn string_global_of_returns_registered_symbol() -> Unit {
+    // A registered literal returns its `@.str.N` symbol.
+    let s: ref Map[String, String] = Map::new();
+    s.insert("alpha", "@.str.0");
+    s.insert("beta",  "@.str.1");
+    let ctx: EmitCtx = ctx_with_strings(s);
+    assert_eq(ctx.string_global_of("alpha"), "@.str.0")
+}
+
+test fn string_global_of_returns_second_symbol() -> Unit {
+    let s: ref Map[String, String] = Map::new();
+    s.insert("alpha", "@.str.0");
+    s.insert("beta",  "@.str.1");
+    let ctx: EmitCtx = ctx_with_strings(s);
+    assert_eq(ctx.string_global_of("beta"), "@.str.1")
+}
+
+test fn string_global_of_missing_returns_sentinel() -> Unit {
+    // An unregistered literal returns "@.str.missing" — never emitted by
+    // `build_string_registry`, so a miss surfaces as an invalid IR symbol
+    // at link time instead of a silent empty string.
+    let s: ref Map[String, String] = Map::new();
+    s.insert("alpha", "@.str.0");
+    let ctx: EmitCtx = ctx_with_strings(s);
+    assert_eq(ctx.string_global_of("beta"), "@.str.missing")
+}
+
+test fn string_global_of_empty_registry_returns_sentinel() -> Unit {
+    // Empty program (no string literals) — every lookup misses.
+    let ctx: EmitCtx = ctx_with_strings(Map[String, String]::new());
+    assert_eq(ctx.string_global_of("anything"), "@.str.missing")
+}
+
+test fn string_global_of_multi_use_on_same_ctx() -> Unit {
+    // Regression: EmitCtx accessor method called multiple times on the
+    // same ctx binding.  Before ADR-0054 landed, MVL emitted bare
+    // `ctx.method(...)` at each call site, move-consuming ctx after the
+    // first call.  Now each non-last-use call emits `ctx.clone().method(...)`.
+    let s: ref Map[String, String] = Map::new();
+    s.insert("alpha", "@.str.0");
+    s.insert("beta",  "@.str.1");
+    s.insert("gamma", "@.str.2");
+    let ctx: EmitCtx = ctx_with_strings(s);
+    assert_eq(ctx.string_global_of("alpha"), "@.str.0");
+    assert_eq(ctx.string_global_of("beta"),  "@.str.1");
+    assert_eq(ctx.string_global_of("gamma"), "@.str.2")
+}
+
+// ── EmitCtx::has_enum_variant / enum_tag_of ─────────────────────────────────
+
+test fn has_enum_variant_true_for_registered() -> Unit {
+    let e: ref Map[String, Int] = Map::new();
+    e.insert("Color::Red", 0);
+    e.insert("Color::Green", 1);
+    let ctx: EmitCtx = ctx_with_enums(e);
+    assert_eq(ctx.has_enum_variant("Color::Red"),   true);
+    assert_eq(ctx.has_enum_variant("Color::Green"), true)
+}
+
+test fn has_enum_variant_false_for_unregistered() -> Unit {
+    let ctx: EmitCtx = empty_ctx();
+    assert_eq(ctx.has_enum_variant("Nonexistent::X"), false)
+}
+
+test fn enum_tag_of_returns_index() -> Unit {
+    let e: ref Map[String, Int] = Map::new();
+    e.insert("Color::Red",   0);
+    e.insert("Color::Green", 1);
+    e.insert("Color::Blue",  2);
+    let ctx: EmitCtx = ctx_with_enums(e);
+    assert_eq(ctx.enum_tag_of("Color::Red"),   0);
+    assert_eq(ctx.enum_tag_of("Color::Green"), 1);
+    assert_eq(ctx.enum_tag_of("Color::Blue"),  2)
+}
+
+test fn enum_tag_of_missing_returns_zero() -> Unit {
+    let ctx: EmitCtx = empty_ctx();
+    assert_eq(ctx.enum_tag_of("Nonexistent::X"), 0)
+}
+
+// ── EmitCtx::enum_type_of ───────────────────────────────────────────────────
+
+test fn enum_type_of_returns_registered_shape() -> Unit {
+    // A1o: enum LLVM shape lookup.  All-unit enums use "i8"; payload
+    // enums use "{i8, i64, ...}".
+    let et: ref Map[String, String] = Map::new();
+    et.insert("Direction", "i8");
+    et.insert("Option",    "{i8, i64}");
+    et.insert("Session",   "{i8, i64, i64}");
+    let ctx: EmitCtx = ctx_with_enum_types(et);
+    assert_eq(ctx.enum_type_of("Direction").unwrap_or(""),   "i8");
+    assert_eq(ctx.enum_type_of("Option").unwrap_or(""),      "{i8, i64}");
+    assert_eq(ctx.enum_type_of("Session").unwrap_or(""),     "{i8, i64, i64}")
+}
+
+test fn enum_type_of_missing_is_none() -> Unit {
+    let ctx: EmitCtx = empty_ctx();
+    let opt: Option[String] = ctx.enum_type_of("Nonexistent");
+    let is_none: Bool = match opt { Some(_) => false, None => true };
+    assert_eq(is_none, true)
+}
+
+// ── EmitCtx::variant_payload_count ──────────────────────────────────────────
+
+test fn variant_payload_count_returns_slot_count() -> Unit {
+    // A1q: unit variants have 0 slots, tuple/struct variants have their
+    // field count.
+    let vp: ref Map[String, Int] = Map::new();
+    vp.insert("Color::Red",         0);
+    vp.insert("Value::Num",         1);
+    vp.insert("Session::Locked",    2);
+    vp.insert("Box::Cube",          3);
+    let ctx: EmitCtx = ctx_with_payloads(vp);
+    assert_eq(ctx.variant_payload_count("Color::Red"),      0);
+    assert_eq(ctx.variant_payload_count("Value::Num"),      1);
+    assert_eq(ctx.variant_payload_count("Session::Locked"), 2);
+    assert_eq(ctx.variant_payload_count("Box::Cube"),       3)
+}
+
+test fn variant_payload_count_missing_returns_zero() -> Unit {
+    let ctx: EmitCtx = empty_ctx();
+    assert_eq(ctx.variant_payload_count("Nonexistent::X"), 0)
+}
+
+// ── EmitCtx::variant_slot_types_of ──────────────────────────────────────────
+
+test fn variant_slot_types_of_returns_registered_types() -> Unit {
+    // A1r: Circle(Float) has a single "double" slot; Rect(Int, Int) has two.
+    let vst: ref Map[String, List[String]] = Map::new();
+    vst.insert("Shape::Circle", ["double"]);
+    vst.insert("Shape::Rect",   ["i64", "i64"]);
+    let ctx: EmitCtx = ctx_with_slot_types(vst);
+    let circle: List[String] = ctx.variant_slot_types_of("Shape::Circle");
+    let rect:   List[String] = ctx.variant_slot_types_of("Shape::Rect");
+    assert_eq(circle.len(), 1);
+    assert_eq(circle.get(0).unwrap_or(""), "double");
+    assert_eq(rect.len(),   2);
+    assert_eq(rect.get(0).unwrap_or(""),   "i64");
+    assert_eq(rect.get(1).unwrap_or(""),   "i64")
+}
+
+test fn variant_slot_types_of_missing_returns_empty() -> Unit {
+    let ctx: EmitCtx = empty_ctx();
+    let slots: List[String] = ctx.variant_slot_types_of("Nonexistent::X");
+    assert_eq(slots.len(), 0)
+}
+
+// ── EmitCtx::local_of / struct_info_of / variant_slot_map ───────────────────
+//
+// These accessors return `Option[T]` — the caller pattern-matches to
+// distinguish present-and-empty from absent.  Basic presence tests below.
+
+test fn local_of_missing_is_none() -> Unit {
+    let ctx: EmitCtx = empty_ctx();
+    let opt: Option[LocalRef] = ctx.local_of("nonexistent");
+    let is_none: Bool = match opt { Some(_) => false, None => true };
+    assert_eq(is_none, true)
+}
+
+test fn struct_info_of_missing_is_none() -> Unit {
+    let ctx: EmitCtx = empty_ctx();
+    let opt: Option[StructInfo] = ctx.struct_info_of("Nonexistent");
+    let is_none: Bool = match opt { Some(_) => false, None => true };
+    assert_eq(is_none, true)
+}
+
+test fn variant_slot_map_missing_is_none() -> Unit {
+    let ctx: EmitCtx = empty_ctx();
+    let opt: Option[Map[String, Int]] = ctx.variant_slot_map("Nonexistent::X");
+    let is_none: Bool = match opt { Some(_) => false, None => true };
+    assert_eq(is_none, true)
+}
+
+// ── emitted_imm / emitted_bool constructors ─────────────────────────────────
+
+test fn emitted_imm_sets_reg_and_i64_ty() -> Unit {
+    let e: Emitted = emitted_imm("42", 3);
+    assert_eq(e.reg, "42");
+    assert_eq(e.ty, "i64");
+    assert_eq(e.next_reg, 3);
+    assert_eq(e.instrs.len(), 0);
+    assert_eq(e.last_label, "")
+}
+
+test fn emitted_bool_sets_reg_and_i1_ty() -> Unit {
+    let e: Emitted = emitted_bool("1", 5);
+    assert_eq(e.reg, "1");
+    assert_eq(e.ty, "i1");
+    assert_eq(e.next_reg, 5);
+    assert_eq(e.instrs.len(), 0)
+}
+
+// ── extend_locals ───────────────────────────────────────────────────────────
+
+test fn extend_locals_adds_new_binding_and_preserves_existing() -> Unit {
+    // Insert "a"→r1, then extend with "b"→r2; both must be present in
+    // the returned map without mutating the original.
+    let r1: LocalRef = LocalRef { reg: "%a", ty: "i64", is_ref: false };
+    let r2: LocalRef = LocalRef { reg: "%b", ty: "i64", is_ref: false };
+    let base: ref Map[String, LocalRef] = Map::new();
+    base.insert("a", r1);
+    let extended: Map[String, LocalRef] = extend_locals(base, "b", r2);
+    match extended.get("a") {
+        Some(v) => assert_eq(v.reg, "%a"),
+        None    => assert_eq("a", "missing"),
+    }
+    match extended.get("b") {
+        Some(v) => assert_eq(v.reg, "%b"),
+        None    => assert_eq("b", "missing"),
+    }
+}
+
+test fn extend_locals_empty_base_still_binds() -> Unit {
+    let r: LocalRef = LocalRef { reg: "%x", ty: "i64", is_ref: false };
+    let m: Map[String, LocalRef] = extend_locals(Map[String, LocalRef]::new(), "x", r);
+    assert_eq(m.contains_key("x"), true)
+}
+
+// ── clone_locals ────────────────────────────────────────────────────────────
+
+test fn clone_locals_copies_all_entries() -> Unit {
+    let r: LocalRef = LocalRef { reg: "%y", ty: "i64", is_ref: false };
+    let base: ref Map[String, LocalRef] = Map::new();
+    base.insert("y", r);
+    let cloned: Map[String, LocalRef] = clone_locals(base);
+    match cloned.get("y") {
+        Some(v) => assert_eq(v.reg, "%y"),
+        None    => assert_eq("y", "missing"),
+    }
+}
+
+test fn clone_locals_empty_returns_empty() -> Unit {
+    let m: Map[String, LocalRef] = clone_locals(Map[String, LocalRef]::new());
+    assert_eq(m.contains_key("anything"), false)
+}
+
+// ── clone_enums / clone_strings ─────────────────────────────────────────────
+
+test fn clone_enums_copies_int_registry() -> Unit {
+    let base: ref Map[String, Int] = Map::new();
+    base.insert("Color::Red", 0);
+    base.insert("Color::Blue", 2);
+    let m: Map[String, Int] = clone_enums(base);
+    assert_eq(m.get("Color::Red").unwrap_or(-1), 0);
+    assert_eq(m.get("Color::Blue").unwrap_or(-1), 2)
+}
+
+test fn clone_strings_copies_string_registry() -> Unit {
+    let base: ref Map[String, String] = Map::new();
+    base.insert("hello", "@.str.0");
+    let m: Map[String, String] = clone_strings(base);
+    assert_eq(m.get("hello").unwrap_or(""), "@.str.0")
+}
+
+// ── clone_structs ───────────────────────────────────────────────────────────
+
+test fn clone_structs_copies_struct_registry() -> Unit {
+    let idx: ref Map[String, Int] = Map::new();
+    idx.insert("x", 0);
+    let base: ref Map[String, StructInfo] = Map::new();
+    base.insert("Point", StructInfo {
+        field_index: idx,
+        field_types: ["i64"],
+    });
+    let m: Map[String, StructInfo] = clone_structs(base);
+    match m.get("Point") {
+        Some(info) => assert_eq(info.field_index.get("x").unwrap_or(-1), 0),
+        None       => assert_eq("Point", "missing"),
+    }
+}
+
+// ── clone_variant_slots / clone_variant_slot_types ──────────────────────────
+
+test fn clone_variant_slots_copies_nested_map() -> Unit {
+    let inner: ref Map[String, Int] = Map::new();
+    inner.insert("0", 0);
+    inner.insert("1", 1);
+    let base: ref Map[String, Map[String, Int]] = Map::new();
+    base.insert("Pair::Two", inner);
+    let m: Map[String, Map[String, Int]] = clone_variant_slots(base);
+    match m.get("Pair::Two") {
+        Some(map) => {
+            assert_eq(map.get("0").unwrap_or(-1), 0);
+            assert_eq(map.get("1").unwrap_or(-1), 1)
+        },
+        None => assert_eq("Pair::Two", "missing"),
+    }
+}
+
+test fn clone_variant_slot_types_copies_list_of_types() -> Unit {
+    let base: ref Map[String, List[String]] = Map::new();
+    base.insert("Shape::Rect", ["i64", "i64"]);
+    let m: Map[String, List[String]] = clone_variant_slot_types(base);
+    match m.get("Shape::Rect") {
+        Some(slots) => {
+            assert_eq(slots.len(), 2);
+            assert_eq(slots.get(0).unwrap_or(""), "i64")
+        },
+        None => assert_eq("Shape::Rect", "missing"),
+    }
+}

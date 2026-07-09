@@ -856,7 +856,13 @@ impl RustEmitter {
                     if is_fn_typed_field {
                         self.push("(");
                     }
-                    self.emit_method_receiver(receiver);
+                    // #1693: user-defined method calls need `.clone()` on
+                    // non-last-use `Var` receivers so `ctx.method(...)`
+                    // doesn't move ctx when ctx is used again later.
+                    // Stdlib methods above take the shared `emit_method_receiver`
+                    // path and handle their own borrow/clone semantics
+                    // in the pushed suffix (e.g. `.clone().into_iter()`).
+                    self.emit_user_method_receiver(receiver);
                     self.push(".");
                     self.push(method);
                     if is_fn_typed_field {

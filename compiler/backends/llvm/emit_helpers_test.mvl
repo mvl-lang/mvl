@@ -1,0 +1,315 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// compiler/backends/llvm/emit_helpers_test.mvl — MVL unit tests for
+// compiler/backends/llvm/emit_helpers.mvl (#1693).
+//
+// Covers:
+//   - jstr / jarr / jget / jtag / jbool — JSON accessor behavior on
+//     Object / non-Object / missing-key inputs (all guaranteed total).
+//   - lbrace / rbrace                   — trivial `{`/`}` literals used
+//     to break out of format() interpolation.
+//   - llvm_ty_of                        — MVL scalar name → LLVM mnemonic
+//     lookup with the "fall through to i64" A0 default.
+//
+// Run with:  mvl test compiler/
+//            make test-mvl
+
+use std.collections.{Map}
+use std.json.{decode, Value}
+use backends.llvm.emit_helpers::jstr;
+use backends.llvm.emit_helpers::default_target_triple;
+use backends.llvm.emit_helpers::enum_name_of_variant;
+use backends.llvm.emit_helpers::escape_llvm_string;
+use backends.llvm.emit_helpers::extract_else_block;
+use backends.llvm.emit_helpers::jarr;
+use backends.llvm.emit_helpers::jbool;
+use backends.llvm.emit_helpers::jget;
+use backends.llvm.emit_helpers::jtag;
+use backends.llvm.emit_helpers::lbrace;
+use backends.llvm.emit_helpers::llvm_ty_of;
+use backends.llvm.emit_helpers::make_expr_stmt;
+use backends.llvm.emit_helpers::rbrace;
+use backends.llvm.emit_helpers::wrap_stmts_as_block;
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+partial fn parse(src: String) -> Value {
+    match decode(src) {
+        Ok(v)  => v,
+        Err(_) => Value::Null,
+    }
+}
+
+// ── jstr ─────────────────────────────────────────────────────────────────────
+
+test fn jstr_reads_string_from_object() -> Unit {
+    let v: Value = parse("{\"name\":\"hello\"}");
+    assert_eq(jstr(v, "name"), "hello")
+}
+
+test fn jstr_missing_key_returns_empty() -> Unit {
+    let v: Value = parse("{\"name\":\"hello\"}");
+    assert_eq(jstr(v, "absent"), "")
+}
+
+test fn jstr_non_string_value_returns_empty() -> Unit {
+    // Key exists but value is a number, not a string → "" (total).
+    let v: Value = parse("{\"n\":42}");
+    assert_eq(jstr(v, "n"), "")
+}
+
+test fn jstr_non_object_returns_empty() -> Unit {
+    let v: Value = parse("[1, 2, 3]");
+    assert_eq(jstr(v, "any"), "")
+}
+
+// ── jarr ─────────────────────────────────────────────────────────────────────
+
+test fn jarr_reads_array_from_object() -> Unit {
+    let v: Value = parse("{\"items\":[1, 2, 3]}");
+    let items: List[Value] = jarr(v, "items");
+    assert_eq(items.len(), 3)
+}
+
+test fn jarr_missing_key_returns_empty() -> Unit {
+    let v: Value = parse("{\"items\":[1]}");
+    let items: List[Value] = jarr(v, "absent");
+    assert_eq(items.len(), 0)
+}
+
+test fn jarr_non_array_value_returns_empty() -> Unit {
+    let v: Value = parse("{\"items\":\"not an array\"}");
+    let items: List[Value] = jarr(v, "items");
+    assert_eq(items.len(), 0)
+}
+
+// ── jget ─────────────────────────────────────────────────────────────────────
+
+test fn jget_returns_nested_value() -> Unit {
+    // Nested object round-trips through jget → jstr.
+    let v: Value = parse("{\"outer\":{\"inner\":\"nested\"}}");
+    let inner: Value = jget(v, "outer");
+    assert_eq(jstr(inner, "inner"), "nested")
+}
+
+test fn jget_missing_key_returns_null() -> Unit {
+    // Missing keys return Value::Null; downstream jtag/jstr yield "" on Null.
+    let v: Value = parse("{\"a\":1}");
+    let missing: Value = jget(v, "b");
+    assert_eq(jtag(missing), "")
+}
+
+// ── jtag ─────────────────────────────────────────────────────────────────────
+
+test fn jtag_reads_the_tag_field() -> Unit {
+    let v: Value = parse("{\"tag\":\"Named\",\"name\":\"Point\"}");
+    assert_eq(jtag(v), "Named")
+}
+
+test fn jtag_missing_tag_returns_empty() -> Unit {
+    let v: Value = parse("{\"name\":\"x\"}");
+    assert_eq(jtag(v), "")
+}
+
+// ── jbool ────────────────────────────────────────────────────────────────────
+
+test fn jbool_reads_true_from_object() -> Unit {
+    let v: Value = parse("{\"flag\":true}");
+    assert_eq(jbool(v, "flag"), true)
+}
+
+test fn jbool_reads_false_from_object() -> Unit {
+    let v: Value = parse("{\"flag\":false}");
+    assert_eq(jbool(v, "flag"), false)
+}
+
+test fn jbool_missing_key_returns_false() -> Unit {
+    let v: Value = parse("{\"other\":true}");
+    assert_eq(jbool(v, "flag"), false)
+}
+
+test fn jbool_non_bool_value_returns_false() -> Unit {
+    // Key exists but value is a string, not a Bool → false (total).
+    let v: Value = parse("{\"flag\":\"yes\"}");
+    assert_eq(jbool(v, "flag"), false)
+}
+
+// ── lbrace / rbrace ──────────────────────────────────────────────────────────
+
+test fn lbrace_and_rbrace_are_single_chars() -> Unit {
+    assert_eq(lbrace(), "{");
+    assert_eq(rbrace(), "}")
+}
+
+// ── llvm_ty_of ───────────────────────────────────────────────────────────────
+
+test fn llvm_ty_of_maps_int_to_i64() -> Unit {
+    assert_eq(llvm_ty_of("Int"), "i64")
+}
+
+test fn llvm_ty_of_maps_bool_to_i1() -> Unit {
+    assert_eq(llvm_ty_of("Bool"), "i1")
+}
+
+test fn llvm_ty_of_maps_unit_to_void() -> Unit {
+    assert_eq(llvm_ty_of("Unit"), "void")
+}
+
+test fn llvm_ty_of_unknown_falls_through_to_i64() -> Unit {
+    // A0 default: everything not explicitly mapped stays i64 so downstream
+    // emission is type-consistent.
+    assert_eq(llvm_ty_of("SomeCustomType"), "i64");
+    assert_eq(llvm_ty_of("Float"), "i64");
+    assert_eq(llvm_ty_of(""), "i64")
+}
+
+// ── escape_llvm_string ──────────────────────────────────────────────────────
+
+test fn escape_llvm_string_passthrough_ascii() -> Unit {
+    // No escapable chars → identity.
+    assert_eq(escape_llvm_string("hello"), "hello");
+    assert_eq(escape_llvm_string(""), "")
+}
+
+test fn escape_llvm_string_escapes_double_quote() -> Unit {
+    // `"` closes the c"..." literal → must render as \22.
+    assert_eq(escape_llvm_string("a\"b"), "a\\22b")
+}
+
+test fn escape_llvm_string_escapes_backslash() -> Unit {
+    // Backslash is the escape leader itself → \5C.
+    assert_eq(escape_llvm_string("a\\b"), "a\\5Cb")
+}
+
+test fn escape_llvm_string_escapes_newline() -> Unit {
+    assert_eq(escape_llvm_string("a\nb"), "a\\0Ab")
+}
+
+test fn escape_llvm_string_escapes_tab() -> Unit {
+    assert_eq(escape_llvm_string("a\tb"), "a\\09b")
+}
+
+test fn escape_llvm_string_escapes_carriage_return() -> Unit {
+    assert_eq(escape_llvm_string("a\rb"), "a\\0Db")
+}
+
+test fn escape_llvm_string_mixed_escapes() -> Unit {
+    // All five specials in one string, plus passthrough chars in between.
+    assert_eq(
+        escape_llvm_string("\"\\\n\t\rok"),
+        "\\22\\5C\\0A\\09\\0Dok"
+    )
+}
+
+// ── default_target_triple ───────────────────────────────────────────────────
+
+test fn default_target_triple_is_arm64_darwin() -> Unit {
+    assert_eq(default_target_triple(), "arm64-apple-darwin")
+}
+
+// ── enum_name_of_variant ────────────────────────────────────────────────────
+
+test fn enum_name_of_variant_splits_at_double_colon() -> Unit {
+    assert_eq(enum_name_of_variant("Color::Red"), "Color");
+    assert_eq(enum_name_of_variant("Direction::North"), "Direction")
+}
+
+test fn enum_name_of_variant_no_separator_returns_input() -> Unit {
+    // `split("::")` on a string without "::" yields a single-element list;
+    // caller reads element 0.  A bare `None` (no `::`) round-trips.
+    assert_eq(enum_name_of_variant("None"), "None");
+    assert_eq(enum_name_of_variant(""), "")
+}
+
+// ── extract_else_block: four shapes ─────────────────────────────────────────
+
+test fn extract_else_block_expr_block_returns_inner_block() -> Unit {
+    // Expr-form Block: `else_br.kind.tag == "Block"` → return `kind.block`.
+    let else_br: Value = parse(
+        "{\"kind\":{\"tag\":\"Block\",\"block\":{\"stmts\":[]}}}"
+    );
+    let out: Value = extract_else_block(else_br);
+    // The extracted block should still contain a `stmts` field (empty here).
+    assert_eq(jarr(out, "stmts").len(), 0)
+}
+
+test fn extract_else_block_stmt_block_returns_inner_block() -> Unit {
+    // Stmt-form Block: outer `tag == "Block"` → return `block`.
+    let else_br: Value = parse(
+        "{\"tag\":\"Block\",\"block\":{\"stmts\":[]}}"
+    );
+    let out: Value = extract_else_block(else_br);
+    assert_eq(jarr(out, "stmts").len(), 0)
+}
+
+test fn extract_else_block_expr_if_wraps_as_singleton() -> Unit {
+    // Expr-form nested If: wrap the whole expr as `{tag: "Expr", expr: <it>}`
+    // then wrap that into a `{stmts: [...]}` block.
+    let else_br: Value = parse(
+        "{\"kind\":{\"tag\":\"If\",\"cond\":{},\"then\":{},\"else_br\":{}}}"
+    );
+    let out: Value = extract_else_block(else_br);
+    let stmts: List[Value] = jarr(out, "stmts");
+    assert_eq(stmts.len(), 1);
+    // The wrapper stmt has tag "Expr".
+    match stmts.get(0) {
+        Some(s) => assert_eq(jstr(s, "tag"), "Expr"),
+        None    => assert_eq("stmts[0]", "missing"),
+    }
+}
+
+test fn extract_else_block_stmt_if_wraps_as_singleton() -> Unit {
+    // Stmt-form nested If: `{tag: "If", stmt: <TirStmt::If>}` → wrap the
+    // nested stmt into a `{stmts: [...]}` block.
+    let else_br: Value = parse(
+        "{\"tag\":\"If\",\"stmt\":{\"tag\":\"If\",\"cond\":{},\"then\":{},\"else_br\":{}}}"
+    );
+    let out: Value = extract_else_block(else_br);
+    let stmts: List[Value] = jarr(out, "stmts");
+    assert_eq(stmts.len(), 1)
+}
+
+test fn extract_else_block_missing_else_returns_empty_block() -> Unit {
+    // Absent-else shape (no matching tag) → synthesized empty block so
+    // emit_if_blocks' phi still has an else-arm to jump to.
+    let else_br: Value = parse("{\"kind\":{\"tag\":\"Other\"}}");
+    let out: Value = extract_else_block(else_br);
+    assert_eq(jarr(out, "stmts").len(), 0)
+}
+
+// ── wrap_stmts_as_block ─────────────────────────────────────────────────────
+
+test fn wrap_stmts_as_block_produces_valid_block_object() -> Unit {
+    let s: Value = parse("{\"tag\":\"Expr\",\"expr\":{\"kind\":{\"tag\":\"Literal\"}}}");
+    let out: Value = wrap_stmts_as_block([s]);
+    let stmts: List[Value] = jarr(out, "stmts");
+    assert_eq(stmts.len(), 1)
+}
+
+test fn wrap_stmts_as_block_empty_list_still_produces_block() -> Unit {
+    let out: Value = wrap_stmts_as_block([]);
+    assert_eq(jarr(out, "stmts").len(), 0)
+}
+
+// ── make_expr_stmt ──────────────────────────────────────────────────────────
+
+test fn make_expr_stmt_wraps_expr_with_tag_expr() -> Unit {
+    let e: Value = parse(
+        "{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"7\"}}}"
+    );
+    let out: Value = make_expr_stmt(e);
+    assert_eq(jstr(out, "tag"), "Expr");
+    // `expr` field carries the original.
+    let inner: Value = jget(out, "expr");
+    assert_eq(jstr(jget(inner, "kind"), "tag"), "Literal")
+}
+
+// ── parse (helper) error path ───────────────────────────────────────────────
+
+test fn parse_helper_returns_null_on_bad_json() -> Unit {
+    // The `parse` helper folds Err → Value::Null.  Assert via jtag("") on
+    // Null-input jstr yielding "" — an oblique but stable check.
+    let bad: Value = parse("this is not json {");
+    assert_eq(jstr(bad, "anything"), "")
+}
