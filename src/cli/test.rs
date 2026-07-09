@@ -9,7 +9,7 @@ use mvl::mvl::parser::ast::Decl;
 use mvl::mvl::parser::Parser;
 use mvl::mvl::pipeline::lower_prelude;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process;
 
 /// Derive a Rust-identifier-safe module name from a test-file path (#1707).
@@ -1056,110 +1056,70 @@ pub fn run_expect_tests(path: &str, quiet: bool, verbose: bool) {
         process::exit(1);
     });
     let compiler_version = env!("CARGO_PKG_VERSION");
+
+    // Parallelize across worker threads.  Each case is an independent
+    // `mvl build` + run — no shared state, no ordering.  Cargo's per-crate
+    // temp dir is derived from the file stem so builds don't collide.
+    // Matches the pattern used by `llvm_text::cmd_test_llvm_text` and
+    // `mutate::run` (#1699).  Output is buffered per-case and flushed in
+    // input order after all workers finish so `--verbose` PASS/FAIL
+    // reporting stays deterministic.
+    let parallelism = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .min(test_cases.len());
+    let chunk_size = test_cases.len().div_ceil(parallelism).max(1);
+
+    if !quiet && verbose {
+        println!(
+            "Rust transpiler: dispatching {} case(s) across {} worker(s)",
+            test_cases.len(),
+            parallelism
+        );
+    }
+
+    let mvl_bin_ref: &Path = &mvl_bin;
+    let results: Vec<ExpectCaseResult> = std::thread::scope(|scope| {
+        let handles: Vec<_> = test_cases
+            .chunks(chunk_size)
+            .map(|chunk| {
+                scope.spawn(move || {
+                    chunk
+                        .iter()
+                        .map(|(f, e, p)| {
+                            run_one_expect_case(mvl_bin_ref, compiler_version, f, e, *p, verbose)
+                        })
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|h| h.join().expect("rust expect-test worker panicked"))
+            .collect()
+    });
+
     let mut passed = 0usize;
     let mut failed = 0usize;
-
-    for (file, expected, is_pattern) in &test_cases {
-        let file_str = file.display().to_string();
-        let crate_name = loader::stem(&file_str);
-
-        // Build the file silently via `mvl build`
-        let build_output = process::Command::new(&mvl_bin)
-            .args(["build", &file_str])
-            .stdout(process::Stdio::null())
-            .stderr(process::Stdio::piped())
-            .output();
-
-        match build_output {
-            Ok(ref o) if o.status.success() => {}
-            Ok(ref o) => {
-                if verbose {
-                    let stderr = String::from_utf8_lossy(&o.stderr);
-                    let lines: Vec<&str> = stderr.lines().collect();
-                    let start = lines.len().saturating_sub(10);
-                    eprintln!("  FAIL (build): {file_str}");
-                    for line in &lines[start..] {
-                        eprintln!("    {line}");
-                    }
-                } else {
-                    eprintln!("  FAIL (build): {file_str}");
-                }
-                failed += 1;
-                continue;
-            }
-            Err(e) => {
-                eprintln!("  FAIL (build): {file_str}: {e}");
-                failed += 1;
-                continue;
-            }
-        }
-
-        // Locate the compiled binary
-        let binary = std::env::temp_dir()
-            .join(format!("mvl_build_{compiler_version}_{crate_name}"))
-            .join(&crate_name)
-            .join("target")
-            .join("debug")
-            .join(&crate_name);
-
-        if !binary.exists() {
-            eprintln!("  FAIL (binary not found): {file_str}");
-            eprintln!("    expected at: {}", binary.display());
-            failed += 1;
-            continue;
-        }
-
-        // Run the binary and capture stdout
-        let output = match process::Command::new(&binary).output() {
-            Ok(o) => o,
-            Err(e) => {
-                eprintln!("  FAIL (run): {file_str}: {e}");
-                failed += 1;
-                continue;
-            }
-        };
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            eprintln!("  FAIL (exit {}): {file_str}", output.status);
+    for r in &results {
+        if r.passed {
+            passed += 1;
             if verbose {
-                for line in stderr.lines().take(10) {
-                    eprintln!("    {line}");
+                if !r.stdout.is_empty() {
+                    print!("{}", r.stdout);
                 }
-            }
-            failed += 1;
-            continue;
-        }
-
-        let actual = String::from_utf8_lossy(&output.stdout);
-        let actual_trimmed = actual.trim_end_matches('\n');
-        let expected_trimmed = expected.trim_end_matches('\n');
-
-        let matched = if *is_pattern {
-            lli::glob_match(expected_trimmed, actual_trimmed)
-        } else {
-            actual_trimmed == expected_trimmed
-        };
-
-        if matched {
-            if verbose {
-                println!("  PASS: {file_str}");
             } else if !quiet {
                 print!(".");
                 let _ = std::io::Write::flush(&mut std::io::stdout());
             }
-            passed += 1;
         } else {
-            if !quiet {
-                println!("\n  FAIL: {file_str}");
-                if *is_pattern {
-                    println!("    pattern:  {expected_trimmed:?}");
-                } else {
-                    println!("    expected: {expected_trimmed:?}");
-                }
-                println!("    got:      {actual_trimmed:?}");
-            }
             failed += 1;
+            if !r.stderr.is_empty() {
+                eprint!("{}", r.stderr);
+            }
+            if !r.stdout.is_empty() {
+                print!("{}", r.stdout);
+            }
         }
     }
 
@@ -1169,6 +1129,148 @@ pub fn run_expect_tests(path: &str, quiet: bool, verbose: bool) {
     println!("{passed} passed, {failed} failed");
     if failed > 0 {
         process::exit(1);
+    }
+}
+
+/// Result of one `run_expect_tests` worker.  Buffered so main-thread output
+/// stays in the caller's file order.
+struct ExpectCaseResult {
+    passed: bool,
+    stdout: String,
+    stderr: String,
+}
+
+/// Run a single `// expect:` case through the Rust transpiler backend.
+///
+/// Pure function of its inputs — invoked concurrently by
+/// [`run_expect_tests`] via `std::thread::scope`.  Output is buffered into
+/// the returned struct rather than written directly so the main thread can
+/// serialize final PASS/FAIL reporting deterministically.
+fn run_one_expect_case(
+    mvl_bin: &Path,
+    compiler_version: &str,
+    file: &Path,
+    expected: &str,
+    is_pattern: bool,
+    verbose: bool,
+) -> ExpectCaseResult {
+    let file_str = file.display().to_string();
+    let crate_name = loader::stem(&file_str);
+    let mut stdout = String::new();
+    let mut stderr = String::new();
+
+    // Build the file silently via `mvl build`
+    let build_output = process::Command::new(mvl_bin)
+        .args(["build", &file_str])
+        .stdout(process::Stdio::null())
+        .stderr(process::Stdio::piped())
+        .output();
+
+    match build_output {
+        Ok(ref o) if o.status.success() => {}
+        Ok(ref o) => {
+            if verbose {
+                let err = String::from_utf8_lossy(&o.stderr);
+                let lines: Vec<&str> = err.lines().collect();
+                let start = lines.len().saturating_sub(10);
+                stderr.push_str(&format!("  FAIL (build): {file_str}\n"));
+                for line in &lines[start..] {
+                    stderr.push_str(&format!("    {line}\n"));
+                }
+            } else {
+                stderr.push_str(&format!("  FAIL (build): {file_str}\n"));
+            }
+            return ExpectCaseResult {
+                passed: false,
+                stdout,
+                stderr,
+            };
+        }
+        Err(e) => {
+            stderr.push_str(&format!("  FAIL (build): {file_str}: {e}\n"));
+            return ExpectCaseResult {
+                passed: false,
+                stdout,
+                stderr,
+            };
+        }
+    }
+
+    let binary = std::env::temp_dir()
+        .join(format!("mvl_build_{compiler_version}_{crate_name}"))
+        .join(&crate_name)
+        .join("target")
+        .join("debug")
+        .join(&crate_name);
+
+    if !binary.exists() {
+        stderr.push_str(&format!("  FAIL (binary not found): {file_str}\n"));
+        stderr.push_str(&format!("    expected at: {}\n", binary.display()));
+        return ExpectCaseResult {
+            passed: false,
+            stdout,
+            stderr,
+        };
+    }
+
+    let output = match process::Command::new(&binary).output() {
+        Ok(o) => o,
+        Err(e) => {
+            stderr.push_str(&format!("  FAIL (run): {file_str}: {e}\n"));
+            return ExpectCaseResult {
+                passed: false,
+                stdout,
+                stderr,
+            };
+        }
+    };
+
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        stderr.push_str(&format!("  FAIL (exit {}): {file_str}\n", output.status));
+        if verbose {
+            for line in err.lines().take(10) {
+                stderr.push_str(&format!("    {line}\n"));
+            }
+        }
+        return ExpectCaseResult {
+            passed: false,
+            stdout,
+            stderr,
+        };
+    }
+
+    let actual = String::from_utf8_lossy(&output.stdout);
+    let actual_trimmed = actual.trim_end_matches('\n');
+    let expected_trimmed = expected.trim_end_matches('\n');
+    let matched = if is_pattern {
+        lli::glob_match(expected_trimmed, actual_trimmed)
+    } else {
+        actual_trimmed == expected_trimmed
+    };
+
+    if matched {
+        if verbose {
+            stdout.push_str(&format!("  PASS: {file_str}\n"));
+        }
+        ExpectCaseResult {
+            passed: true,
+            stdout,
+            stderr,
+        }
+    } else {
+        stdout.push_str(&format!("\n  FAIL: {file_str}\n"));
+        if is_pattern {
+            stdout.push_str(&format!("    pattern:  {expected_trimmed:?}\n"));
+        } else {
+            stdout.push_str(&format!("    expected: {expected_trimmed:?}\n"));
+        }
+        stdout.push_str(&format!("    got:      {actual_trimmed:?}\n"));
+        ExpectCaseResult {
+            passed: false,
+            stdout,
+            stderr,
+        }
     }
 }
 

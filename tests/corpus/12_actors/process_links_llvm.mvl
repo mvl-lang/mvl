@@ -1,8 +1,13 @@
 // process_links_llvm.mvl -- Link/monitor C-ABI smoke test (#1599)
 //
-// Exercises the ID-based runtime symbols:
-//   _mvl_actors_link, _mvl_actors_unlink,
-//   _mvl_actors_monitor, _mvl_actors_demonitor.
+// corpus:llvm — LLVM-only.  Uses `extern "C"` to call the LLVM runtime's
+// C-ABI symbols (`_mvl_actors_link`, `_mvl_actors_unlink`,
+// `_mvl_actors_monitor`, `_mvl_actors_demonitor`) directly.  Those symbols
+// live in `mvl_runtime_llvm` (the cdylib `lli` loads at runtime); they are
+// NOT part of `mvl_runtime_rust` used by the Rust backend.  Building this
+// via the Rust transpiler → cargo produces linker "symbol not found"
+// errors.  The `corpus:llvm` annotation is honoured by `src/cli/test.rs`
+// (`--expect --verbose` on the Rust backend skips these files).
 //
 // Verifies the LLVM backend can call into the link/monitor runtime without
 // crashing (prior to #1599 these were declared with the wrong name and

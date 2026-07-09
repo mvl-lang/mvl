@@ -28,10 +28,6 @@ fn corpus(name: &str) -> String {
     format!("{}/examples/programs/{name}", env!("CARGO_MANIFEST_DIR"))
 }
 
-fn example(name: &str) -> String {
-    format!("{}/examples/{name}", env!("CARGO_MANIFEST_DIR"))
-}
-
 // ── helpers ───────────────────────────────────────────────────────────────
 
 fn run_check(file: &str) -> std::process::Output {
