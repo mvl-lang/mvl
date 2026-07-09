@@ -176,11 +176,11 @@ fn schema_has_name(schema: List[FieldSpec], name: String) -> Bool {
     let found: ref Bool = false;
     for f in schema {
         match f {
-            FieldSpec::Required      { name: n, ty: t } => { if n == name { found = true } },
-            FieldSpec::Optional      { name: n, ty: t } => { if n == name { found = true } },
+            FieldSpec::Required      { name: n, ty: _ } => { if n == name { found = true } },
+            FieldSpec::Optional      { name: n, ty: _ } => { if n == name { found = true } },
             FieldSpec::Flag          { name: n }        => { if n == name { found = true } },
-            FieldSpec::Positional    { name: n, ty: t } => { if n == name { found = true } },
-            FieldSpec::OptPositional { name: n, ty: t } => { if n == name { found = true } },
+            FieldSpec::Positional    { name: n, ty: _ } => { if n == name { found = true } },
+            FieldSpec::OptPositional { name: n, ty: _ } => { if n == name { found = true } },
             _ => {},
         }
     }
