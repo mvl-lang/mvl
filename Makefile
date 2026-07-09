@@ -2,7 +2,7 @@
 .ONESHELL:
 SHELL := /bin/bash
 
-.PHONY: help version build build-llvm-runtime build-release test test-full test-unit test-rust-integration test-requirements test-error-messages test-fmt-roundtrip test-corpus test-solver test-stdlib check-compiler assure-compiler test-mvl test-bdd test-backend-rust test-backend-llvm test-cross-backend test-tree-sitter test-grammar-coverage test-examples test-examples-rust test-examples-llvm coverage validate-keywords lint mvl-lint format format-check format-mvl format-mvl-check assurance assurance-gate audit-backend-ast check-adr docs docs-serve tree-sitter-build install install-nvim setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
+.PHONY: help version build build-llvm-runtime build-release test test-full test-unit test-rust-integration test-requirements test-error-messages test-fmt-roundtrip test-corpus test-checker-parity test-checker-parity-update test-solver test-stdlib check-compiler assure-compiler test-mvl test-bdd test-backend-rust test-backend-llvm test-cross-backend test-tree-sitter test-grammar-coverage test-examples test-examples-rust test-examples-llvm coverage validate-keywords lint mvl-lint format format-check format-mvl format-mvl-check assurance assurance-gate audit-backend-ast check-adr docs docs-serve tree-sitter-build install install-nvim setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
 
 .DEFAULT_GOAL := help
 
@@ -88,6 +88,7 @@ TEST_FAST_SUITES := \
 	"Error messages    |test-error-messages" \
 	"Fmt roundtrip     |test-fmt-roundtrip" \
 	"Corpus            |test-corpus" \
+	"Checker parity    |test-checker-parity" \
 	"Solver            |test-solver" \
 	"Tree-sitter       |test-tree-sitter" \
 	"Grammar coverage  |test-grammar-coverage" \
@@ -228,6 +229,12 @@ test-corpus-warnings: build ## Verify emitted Rust from corpus builds warning-fr
 	else \
 		printf "  \033[31m✗  $$pass warning-free, $$expected expected-warnings, $$skip build-skipped, $$fail failed\033[0m\n\n"; exit 1; \
 	fi
+
+test-checker-parity: ## Verify Rust checker verdict over corpus matches baseline (self-hosting #1117)
+	@cargo test --test checker_parity --quiet 2>&1 | tail -20
+
+test-checker-parity-update: ## Regenerate checker parity baseline (only when corpus verdicts change intentionally)
+	@MVL_UPDATE_PARITY_BASELINE=1 cargo test --test checker_parity --quiet 2>&1 | tail -5
 
 test-solver: build ## Run solver layer programs — real MVL programs of progressing complexity
 	@pass=0; fail=0; \
