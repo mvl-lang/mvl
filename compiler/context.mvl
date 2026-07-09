@@ -403,8 +403,10 @@ pub total fn TypeEnv::push_scope(self) -> TypeEnv {
 pub total fn TypeEnv::pop_scope(self) -> TypeEnv {
     let n: Int = self.scopes.len();
     if n <= 1 {
-        self
-    } else {
+        // Explicit return to ensure self is seen as consumed (preventing &self inference).
+        return self
+    } else { () }
+    {
         // Collect ref_var names from the scope about to exit.
         let last_scope: Map[String, VarInfo] = match self.scopes.get(n - 1) {
             Some(s) => s,
@@ -645,6 +647,69 @@ pub total fn TypeEnv::lookup_fn(self, name: String) -> Option[FnInfo] {
 /// Return all registered function names.
 pub total fn TypeEnv::fn_names(self) -> List[String] {
     self.fns.keys()
+}
+
+// ── Combined name lookup ──────────────────────────────────────────────────────
+// When TypeEnv methods are compiled as prelude (explicit-only borrow flags),
+// they take self by value.  Multiple sequential lookups would move self multiple
+// times.  This combined lookup does all three in one call, returning the env
+// alongside the result so callers can reconstruct a Checker without partial moves.
+
+pub type NameLookupFound = enum {
+    FoundVar(VarInfo),
+    FoundFn(FnInfo),
+    FoundVariant(Ty),
+    NotFound,
+}
+
+pub type NameLookupResult = struct {
+    found: NameLookupFound,
+    env:   TypeEnv,
+}
+
+/// Look up a name as variable, function, or enum variant (in that order).
+/// Returns the TypeEnv alongside the result to avoid partial moves at call sites.
+pub total fn TypeEnv::lookup_name(self, name: String) -> NameLookupResult {
+    // 1. Variable
+    match self.lookup(name) {
+        Some(info) => {
+            return NameLookupResult {
+                found: NameLookupFound::FoundVar(info),
+                env:   self,
+            }
+        },
+        None => {},
+    }
+    // 2. Function
+    match self.lookup_fn(name) {
+        Some(fi) => {
+            return NameLookupResult {
+                found: NameLookupFound::FoundFn(fi),
+                env:   self,
+            }
+        },
+        None => {},
+    }
+    // 3. Enum variant — search types table directly (avoids extra self.lookup_type call)
+    for type_name in self.types.keys() {
+        match self.types.get(type_name) {
+            Some(info) => match info.body {
+                TypeBodyInfo::Enum(variants) => {
+                    for v in variants {
+                        if v.name == name {
+                            return NameLookupResult {
+                                found: NameLookupFound::FoundVariant(Ty::Named(type_name, [])),
+                                env:   self,
+                            }
+                        } else { () }
+                    }
+                },
+                _ => {},
+            },
+            None => {},
+        }
+    }
+    NameLookupResult { found: NameLookupFound::NotFound, env: self }
 }
 
 // ── IFC label and relabel registration ────────────────────────────────────────

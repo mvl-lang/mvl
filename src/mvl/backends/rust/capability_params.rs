@@ -175,12 +175,6 @@ pub fn capability_params_for_tir_fn(
             if matches!(p.capability, Some(Capability::Val)) {
                 return None;
             }
-            // `self` in extension methods is always by-value in MVL.  Borrow
-            // inference cannot safely determine whether callee methods consume
-            // self, so suppress it entirely for the self parameter.
-            if p.name == "self" {
-                return None;
-            }
             // Conservative read-only inference on the TIR body.
             if is_read_only_param_tir(&p.name, &fd.body) {
                 Some(false)
@@ -245,7 +239,9 @@ fn stmt_has_disqualifying_use_tir(
         }
         TirStmt::Return { value: None, .. } => false,
         TirStmt::Let { init, .. } => {
+            // A direct field extraction `let x = param.field` partially moves param — disqualifying.
             matches!(&init.kind, TirExprKind::Var(n) if n == param)
+                || is_field_of_param(init, param)
                 || expr_has_disqualifying_use_tir(param, init)
         }
         TirStmt::Expr { expr, .. } => {
@@ -321,9 +317,11 @@ fn expr_has_disqualifying_use_tir(param: &str, expr: &crate::mvl::ir::TirExpr) -
                     })
             }
         }
-        // Free function call: any bare param arg disqualifies.
+        // Free function call: bare param arg OR field-of-param arg disqualifies.
+        // A call like `f(c.env, ...)` consumes c.env, so c is disqualified.
         TirExprKind::FnCall { args, .. } => args.iter().any(|a| {
             matches!(&a.kind, TirExprKind::Var(n) if n == param)
+                || is_field_of_param(a, param)
                 || expr_has_disqualifying_use_tir(param, a)
         }),
         // Binary: direct bare param operand disqualifies.
@@ -382,7 +380,10 @@ fn expr_has_disqualifying_use_tir(param: &str, expr: &crate::mvl::ir::TirExpr) -
         }
         TirExprKind::Construct { fields, .. } | TirExprKind::Spawn { fields, .. } => {
             fields.iter().any(|(_, e)| {
+                // A direct field access on the param (e.g. `self.env`) used as a
+                // struct field value is a consuming move of that field — disqualifying.
                 matches!(&e.kind, TirExprKind::Var(n) if n == param)
+                    || is_field_of_param(e, param)
                     || expr_has_disqualifying_use_tir(param, e)
             })
         }

@@ -1,0 +1,406 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// compiler/checker.mvl — C8: Type checker context and shared helpers
+//
+// Defines the Checker struct (threading env + fn-context through checking
+// passes), InferResult (type + updated checker), and the helpers that are
+// shared between infer.mvl and check_stmts.mvl.
+//
+// Port of:
+//   src/mvl/checker/mod.rs  (TypeChecker struct — simplified)
+//   src/mvl/checker/stmts.rs::resolve_alias, types_compatible_resolved,
+//                             field_type, field_type_checked
+//   src/mvl/checker/infer.rs::lookup_enum_for_variant
+//
+// Key simplifications vs Rust source:
+//   - No IFC label operations (carved out to #1738)
+//   - No expr_types cache (not needed for parity error output)
+//   - No lambda effect tracking (deferred)
+//   - No module alias redirect (unused in corpus tests)
+//   - TypeChecker.&mut self → Checker value type threaded explicitly
+//   - Errors accumulated via ref List[CheckError] parameter
+
+// ── Local Ty predicates ───────────────────────────────────────────────────────
+// Duplicate-free helpers used by checker.mvl, infer.mvl and check_stmts.mvl.
+// These mirror the extension methods in verify_types.mvl but are defined
+// locally so files compile correctly in the isolated per-file test harness.
+
+pub total fn ty_is_unknown(ty: Ty) -> Bool {
+    match ty { Ty::Unknown => true, _ => false }
+}
+
+pub total fn ty_is_bool(ty: Ty) -> Bool {
+    match ty { Ty::Bool => true, _ => false }
+}
+
+pub total fn ty_is_numeric(ty: Ty) -> Bool {
+    match ty {
+        Ty::Int | Ty::Float | Ty::Byte | Ty::UByte | Ty::UInt => true,
+        _ => false,
+    }
+}
+
+pub total fn ty_is_integer(ty: Ty) -> Bool {
+    match ty {
+        Ty::Int | Ty::Byte | Ty::UByte | Ty::UInt => true,
+        _ => false,
+    }
+}
+
+pub total fn ty_is_propagatable(ty: Ty) -> Bool {
+    match ty { Ty::Result(_, _) | Ty::Option(_) => true, _ => false }
+}
+
+pub partial fn ty_propagate_inner(ty: Ty) -> Ty {
+    match ty {
+        Ty::Result(ok, _) => *ok,
+        Ty::Option(inner) => *inner,
+        _                 => Ty::Unknown,
+    }
+}
+
+/// Strip Labeled/Refined wrappers to get the structural base type.
+pub partial fn ty_strip(ty: Ty) -> Ty {
+    match ty {
+        Ty::Labeled(_, inner) => ty_strip(*inner),
+        Ty::Refined(inner, _) => ty_strip(*inner),
+        other                 => other,
+    }
+}
+
+/// Simplified type display for error messages.
+pub partial fn ty_name(ty: Ty) -> String {
+    match ty {
+        Ty::Int               => "Int",
+        Ty::Float             => "Float",
+        Ty::Bool              => "Bool",
+        Ty::Str               => "String",
+        Ty::Char              => "Char",
+        Ty::Byte              => "Byte",
+        Ty::UByte             => "UByte",
+        Ty::UInt              => "UInt",
+        Ty::Unit              => "Unit",
+        Ty::Unknown           => "Unknown",
+        Ty::Never             => "Never",
+        Ty::List(t)           => format("List[{}]", [ty_name(*t)]),
+        Ty::Option(t)         => format("Option[{}]", [ty_name(*t)]),
+        Ty::Result(ok, err)   => format("Result[{}, {}]", [ty_name(*ok), ty_name(*err)]),
+        Ty::Map(k, v)         => format("Map[{}, {}]", [ty_name(*k), ty_name(*v)]),
+        Ty::Set(t)            => format("Set[{}]", [ty_name(*t)]),
+        Ty::Named(name, _)    => name,
+        Ty::Labeled(lbl, t)   => format("{}[{}]", [lbl, ty_name(*t)]),
+        Ty::Session(_)        => "Session",
+        Ty::TyFn { ret: r, .. } => format("fn(..) -> {}", [ty_name(*r)]),
+        _                     => "?",
+    }
+}
+
+/// Simplified structural type compatibility (no alias resolution).
+pub partial fn ty_compat(a: Ty, b: Ty) -> Bool {
+    match a {
+        Ty::Unknown => true,
+        Ty::Never   => true,
+        _ => match b {
+            Ty::Unknown => true,
+            Ty::Never   => true,
+            _ => ty_compat_structural(a, b),
+        },
+    }
+}
+
+partial fn ty_compat_structural(a: Ty, b: Ty) -> Bool {
+    match a {
+        Ty::Int    => match b { Ty::Int => true,    _ => false },
+        Ty::Float  => match b { Ty::Float => true,  _ => false },
+        Ty::Bool   => match b { Ty::Bool => true,   _ => false },
+        Ty::Str    => match b { Ty::Str => true,    _ => false },
+        Ty::Char   => match b { Ty::Char => true,   _ => false },
+        Ty::Byte   => match b { Ty::Byte => true,   _ => false },
+        Ty::UByte  => match b { Ty::UByte => true,  _ => false },
+        Ty::UInt   => match b { Ty::UInt => true,   _ => false },
+        Ty::Unit   => match b { Ty::Unit => true,   _ => false },
+        Ty::Named(na, _) => match b { Ty::Named(nb, _) => na == nb, _ => false },
+        Ty::List(ia) => match b { Ty::List(ib) => ty_compat(*ia, *ib), _ => false },
+        Ty::Option(ia) => match b { Ty::Option(ib) => ty_compat(*ia, *ib), _ => false },
+        Ty::Result(ao, ae) => match b {
+            Ty::Result(bo, be) => ty_compat(*ao, *bo) && ty_compat(*ae, *be),
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+// ── FnContext ─────────────────────────────────────────────────────────────────
+
+/// Per-function metadata pushed onto the checker's context stack.
+pub type FnContext = struct {
+    fn_name:   String,
+    return_ty: Option[Ty],
+    totality:  Option[Totality],
+}
+
+pub total fn FnContext::new(fn_name: String, return_ty: Option[Ty], totality: Option[Totality]) -> FnContext {
+    FnContext { fn_name: fn_name, return_ty: return_ty, totality: totality }
+}
+
+// ── Checker ───────────────────────────────────────────────────────────────────
+
+/// Type checker state threaded through all checking functions.
+pub type Checker = struct {
+    env:    TypeEnv,
+    fn_ctx: List[FnContext],
+}
+
+pub total fn Checker::new(env: TypeEnv) -> Checker {
+    Checker { env: env, fn_ctx: [] }
+}
+
+pub total fn Checker::enter_scope(self) -> Checker {
+    Checker { env: self.env.push_scope(), fn_ctx: self.fn_ctx }
+}
+
+pub total fn Checker::leave_scope(self) -> Checker {
+    Checker { env: self.env.pop_scope(), fn_ctx: self.fn_ctx }
+}
+
+pub total fn Checker::push_fn_ctx(self, ctx: FnContext) -> Checker {
+    let new_ctx: ref List[FnContext] = self.fn_ctx;
+    new_ctx.push(ctx);
+    Checker { env: self.env, fn_ctx: new_ctx }
+}
+
+pub total fn Checker::pop_fn_ctx(self) -> Checker {
+    let n: Int = self.fn_ctx.len();
+    if n == 0 {
+        self
+    } else {
+        let new_ctx: ref List[FnContext] = [];
+        for i in range(0, n - 1) {
+            match self.fn_ctx.get(i) { Some(c) => { new_ctx.push(c) }, None => {} }
+        }
+        Checker { env: self.env, fn_ctx: new_ctx }
+    }
+}
+
+pub total fn Checker::fn_ctx(self) -> Option[FnContext] {
+    self.fn_ctx.get(self.fn_ctx.len() - 1)
+}
+
+pub total fn Checker::return_ty(self) -> Option[Ty] {
+    match self.fn_ctx() {
+        Some(ctx) => ctx.return_ty,
+        None      => None,
+    }
+}
+
+pub total fn Checker::with_env(self, env: TypeEnv) -> Checker {
+    Checker { env: env, fn_ctx: self.fn_ctx }
+}
+
+// ── InferResult ───────────────────────────────────────────────────────────────
+
+/// Return type for expression inference: the inferred type + updated checker.
+pub type InferResult = struct {
+    ty:      Ty,
+    checker: Checker,
+}
+
+pub total fn InferResult::ok(ty: Ty, checker: Checker) -> InferResult {
+    InferResult { ty: ty, checker: checker }
+}
+
+pub total fn InferResult::unknown(checker: Checker) -> InferResult {
+    InferResult { ty: Ty::Unknown, checker: checker }
+}
+
+// ── Type alias resolution ─────────────────────────────────────────────────────
+
+/// Follow a chain of `Alias` type bodies until a non-alias is reached.
+pub partial fn resolve_alias(env: TypeEnv, ty: Ty) -> Ty {
+    match ty {
+        Ty::Named(name, args) => match env.lookup_type(name) {
+            Some(info) => match info.body {
+                TypeBodyInfo::Alias(alias_ty) => resolve_alias(env, alias_ty),
+                _                             => Ty::Named(name, args),
+            },
+            None => Ty::Named(name, args),
+        },
+        other => other,
+    }
+}
+
+/// Type compatibility with alias transparency.
+pub partial fn types_compatible_resolved(env: TypeEnv, a: Ty, b: Ty) -> Bool {
+    let a2: Ty = resolve_alias(env, a);
+    let b2: Ty = resolve_alias(env, b);
+    ty_compat(a2, b2)
+}
+
+// ── Enum variant reverse-lookup ───────────────────────────────────────────────
+
+/// Find the enum type that declares a given variant name.
+/// Uses env.types.get directly (not env.lookup_type) so that borrow inference
+/// treats this as a read-only use of env, allowing &TypeEnv inference.
+pub total fn lookup_enum_for_variant(env: TypeEnv, variant_name: String) -> Option[Ty] {
+    for type_name in env.types.keys() {
+        match env.types.get(type_name) {
+            Some(info) => match info.body {
+                TypeBodyInfo::Enum(variants) => {
+                    for v in variants {
+                        if v.name == variant_name {
+                            return Some(Ty::Named(type_name, []))
+                        } else { () }
+                    }
+                },
+                _ => {},
+            },
+            None => {},
+        }
+    }
+    None
+}
+
+// ── Field type lookup ─────────────────────────────────────────────────────────
+
+/// Look up a struct field type without emitting an error.
+pub partial fn field_type(env: TypeEnv, ty: Ty, field_name: String) -> Option[Ty] {
+    let base: Ty = resolve_alias(env, ty_strip(ty));
+    match base {
+        Ty::Named(name, _) => match env.lookup_type(name) {
+            Some(info) => match info.body {
+                TypeBodyInfo::Struct { fields: fields, .. } => {
+                    for f in fields {
+                        if f.name == field_name { return Some(f.ty) } else { () }
+                    }
+                    None
+                },
+                _ => None,
+            },
+            None => None,
+        },
+        _ => None,
+    }
+}
+
+/// Look up a struct field type, emitting an error if not found.
+pub partial fn field_type_checked(
+    c:          Checker,
+    errs:       ref List[CheckError],
+    ty:         Ty,
+    field_name: String,
+    span:       SourceLoc,
+) -> InferResult {
+    let base: Ty = ty_strip(ty);
+    match base {
+        Ty::Option(_) => {
+            errs.push(CheckError::OptionDirectAccess { span: span });
+            InferResult::unknown(c)
+        },
+        _ => match field_type(c.env, ty, field_name) {
+            Some(ft) => InferResult::ok(ft, c),
+            None => {
+                let ty_str: String = ty_name(ty);
+                match base {
+                    Ty::Named(_, _) => {
+                        errs.push(CheckError::FieldNotFound {
+                            ty:    ty_str,
+                            field: field_name,
+                            span:  span,
+                        });
+                    },
+                    _ => {
+                        errs.push(CheckError::FieldAccessOnEnum {
+                            ty:   ty_str,
+                            span: span,
+                        });
+                    },
+                }
+                InferResult::unknown(c)
+            },
+        },
+    }
+}
+
+// ── TypeExpr resolution ───────────────────────────────────────────────────────
+
+/// Resolve a parser-stage TypeExpr (flat struct with name + args) to a Ty.
+pub partial fn resolve_type_expr(env: TypeEnv, te: TypeExpr) -> Ty {
+    let arg_tys: ref List[Ty] = [];
+    for a in te.args { arg_tys.push(resolve_type_expr(env, a)) }
+    let n: String = te.name;
+    if      n == "Int"    { Ty::Int }
+    else if n == "Float"  { Ty::Float }
+    else if n == "Bool"   { Ty::Bool }
+    else if n == "String" { Ty::Str }
+    else if n == "Unit"   { Ty::Unit }
+    else if n == "Byte"   { Ty::Byte }
+    else if n == "UByte"  { Ty::UByte }
+    else if n == "UInt"   { Ty::UInt }
+    else if n == "Char"   { Ty::Char }
+    else if n == "List"   { Ty::List(Box::new(arg_tys.get(0).unwrap_or(Ty::Unknown))) }
+    else if n == "Option" { Ty::Option(Box::new(arg_tys.get(0).unwrap_or(Ty::Unknown))) }
+    else if n == "Result" { Ty::Result(
+        Box::new(arg_tys.get(0).unwrap_or(Ty::Unknown)),
+        Box::new(arg_tys.get(1).unwrap_or(Ty::Unknown)),
+    ) }
+    else if n == "Map"    { Ty::Map(
+        Box::new(arg_tys.get(0).unwrap_or(Ty::Unknown)),
+        Box::new(arg_tys.get(1).unwrap_or(Ty::Unknown)),
+    ) }
+    else if n == "Set"    { Ty::Set(Box::new(arg_tys.get(0).unwrap_or(Ty::Unknown))) }
+    else if n == "Box"    { arg_tys.get(0).unwrap_or(Ty::Unknown) }
+    else                  { Ty::Named(n, arg_tys) }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+test fn ty_is_unknown_true_for_unknown() -> Unit {
+    assert_eq(ty_is_unknown(Ty::Unknown), true)
+}
+
+test fn ty_is_unknown_false_for_int() -> Unit {
+    assert_eq(ty_is_unknown(Ty::Int), false)
+}
+
+test fn ty_is_bool_true() -> Unit {
+    assert_eq(ty_is_bool(Ty::Bool), true)
+}
+
+test fn ty_is_numeric_true_for_float() -> Unit {
+    assert_eq(ty_is_numeric(Ty::Float), true)
+}
+
+test fn ty_is_integer_false_for_float() -> Unit {
+    assert_eq(ty_is_integer(Ty::Float), false)
+}
+
+test fn ty_is_propagatable_true_for_result() -> Unit {
+    assert_eq(ty_is_propagatable(Ty::Result(Box::new(Ty::Int), Box::new(Ty::Str))), true)
+}
+
+test fn ty_compat_unknown_is_compat_with_everything() -> Unit {
+    assert_eq(ty_compat(Ty::Unknown, Ty::Int), true)
+}
+
+test fn ty_compat_int_int() -> Unit {
+    assert_eq(ty_compat(Ty::Int, Ty::Int), true)
+}
+
+test fn ty_compat_int_bool_is_false() -> Unit {
+    assert_eq(ty_compat(Ty::Int, Ty::Bool), false)
+}
+
+test fn checker_new_has_empty_fn_ctx() -> Unit {
+    let c: Checker = Checker::new(TypeEnv::new());
+    assert_eq(c.fn_ctx.len(), 0)
+}
+
+test fn checker_push_pop_fn_ctx() -> Unit {
+    let c: Checker = Checker::new(TypeEnv::new());
+    let ctx: FnContext = FnContext::new("foo", None, None);
+    let c2: Checker = c.push_fn_ctx(ctx);
+    assert_eq(c2.fn_ctx.len(), 1);
+    let c3: Checker = c2.pop_fn_ctx();
+    assert_eq(c3.fn_ctx.len(), 0)
+}
