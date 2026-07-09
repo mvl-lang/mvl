@@ -178,7 +178,7 @@ impl RustEmitter {
                         Some(true) => "&mut self",
                         Some(false) => "&self",
                         None => match fd.params[0].capability {
-                            Some(Capability::Ref) => "&self",
+                            Some(Capability::Val) | Some(Capability::Ref) => "&self",
                             _ => "self",
                         },
                     };
