@@ -21,6 +21,37 @@
 // Cross-file dependencies on backend_llvm.mvl are enumerated below.  Once
 // backend_llvm.mvl finishes splitting up (#1693), those imports will retarget
 // to the per-concern modules (context, emit_helpers, emit_types, emit_body).
+//
+// ── Solver-erasure policy (#1683) ─────────────────────────────────────────────
+//
+// This backend treats solver-triggered TIR metadata as spec-only.  The
+// checker has already discharged the obligations upstream; the emitter
+// contributes ZERO instructions and ZERO runtime cost for them.  The
+// following TIR fields are read by NO emit_* module (grep-verified):
+//
+//   - TirFn.pre_conds          (source: `requires` clause)
+//   - TirFn.post_conds         (source: `ensures` clause)
+//   - TirFn.return_refinement  (source: `-> T where …`)
+//   - TirFn.totality           (source: `partial fn` / `total fn`)
+//   - TirStmt::While.invariants
+//   - TirStmt::While.decrease_by
+//   - TirStmt::For.invariants
+//   - TirTypeBody.type_invariant  (source: `struct … with invariant …`)
+//   - TirFieldDecl.refinement     (source: `field: T where …`)
+//
+// Rationale:
+//   1. Cross-backend parity — the Rust LLVM backend under
+//      src/mvl/backends/llvm_text/ enforces the same policy.  A future
+//      MVL/Rust divergence would break the self-hosting bootstrap.
+//   2. Verified programs get no runtime double-check.  Emitting runtime
+//      asserts for verified obligations is redundant.
+//   3. Runtime contract checking (`--debug-contracts`) is a separate
+//      whole-program flag, not a per-clause baked-in cost.
+//
+// Regression tests live in emit_erasure_test.mvl.  Paired MVL source
+// files under tests/spikes/004-tir-backend/{total_requires,refinement_param,
+// invariant_loop}{,_stripped}.mvl document the surface syntax that
+// populates each field.
 
 use std.collections.{Map}
 use std.json.{Value}

@@ -1,0 +1,11 @@
+// #1683 erasure pair (decorated): parameter with `where`-refined type.
+// The refinement is discharged by the checker; codegen must ignore it.
+// Expected stdout: 10
+
+fn double(x: Int where self > 0) -> Int {
+    x * 2
+}
+
+fn main() -> Int {
+    double(5)
+}

@@ -1,0 +1,18 @@
+// #1683 erasure pair (stripped): same loop without invariant/decreases.
+// Uses `partial fn` because a total `fn` with an unbounded `while` is
+// rejected by the checker — but the LLVM output is unaffected by totality.
+// Expected stdout: 45
+
+partial fn sum_up_to(n: Int) -> Int {
+    let sum: ref Int = 0;
+    let i: ref Int = 0;
+    while i < n {
+        sum = sum + i;
+        i = i + 1;
+    }
+    sum
+}
+
+partial fn main() -> Int {
+    sum_up_to(10)
+}

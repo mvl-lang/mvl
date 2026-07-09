@@ -152,6 +152,57 @@ No struct wrappers are needed; MVL's tuple type syntax handles these directly.
 - **Two-phase bootstrap:** Until Phase 3 is complete, the self-hosting front-end cannot
   parse the full MVL surface language; it relies on the Rust front-end to produce TIR.
 
+### Solver-erasure at codegen (#1683)
+
+Both backends — the Rust-hosted LLVM backend under `src/mvl/backends/llvm_text/`
+and the MVL-hosted backend under `compiler/backends/llvm/` — treat solver-triggered
+TIR metadata as **spec-only**.  The checker has already discharged the obligations
+upstream (Requirements 5, 10 — refinements and contracts); codegen contributes
+ZERO instructions and ZERO runtime cost for them.
+
+Fields erased at codegen:
+
+| TIR field | Source syntax | Discharged by |
+|-----------|---------------|---------------|
+| `TirFn.pre_conds` | `fn f(...) requires P { … }` | Req 5 (function contracts) |
+| `TirFn.post_conds` | `fn f(...) ensures Q { … }` | Req 5 |
+| `TirFn.return_refinement` | `-> T where …` | Req 10 (refinement types) |
+| `TirFn.totality` | `partial fn` / `total fn` | Req 8 (termination) |
+| `TirStmt::While.invariants` | `while … invariant P` | Req 5 |
+| `TirStmt::While.decrease_by` | `while … decreases m` | Req 8 |
+| `TirStmt::For.invariants` | `for … invariant P` | Req 5 |
+| `TirTypeBody.type_invariant` | `struct … with invariant …` | Req 5 |
+| `TirFieldDecl.refinement` | `field: T where …` | Req 10 |
+
+**Rationale:**
+
+1. **Cross-backend parity.** The Rust LLVM backend implements the same policy.
+   A divergence would break the self-hosting bootstrap goal — Stage 1 and
+   Stage 2 must produce byte-identical binaries.
+2. **No redundant runtime checks.** Emitting asserts for statically verified
+   obligations is redundant.  Contract-checking at runtime is a separate
+   whole-program feature (`--debug-contracts`), not a per-clause baked-in cost.
+3. **The checker is the source of truth.** If a solver-triggered check should
+   surface at runtime, it belongs in the checker (as a runtime-verified verdict),
+   not silently in codegen.
+
+**Enforcement:**
+
+- Policy header comment: `compiler/backends/llvm/emit_program.mvl` file preamble.
+- Regression tests: `compiler/backends/llvm/emit_erasure_test.mvl` — for each
+  field, constructs a TIR JSON pair (with / without the field), calls
+  `emit_program`, asserts byte-identical output.
+- Documentation of surface syntax: paired MVL sources under
+  `tests/spikes/004-tir-backend/{total_requires,refinement_param,invariant_loop}
+  {,_stripped}.mvl` — each pair type-checks and exercises one field cluster.
+
+**Out of scope for this policy:**
+
+- Runtime contract checking (`--debug-contracts` mode) is a separate feature.
+- Solver correctness itself — tested upstream in the checker's `cargo test`.
+- The Rust-source backend — its erasure behaviour follows from Rust's own
+  cost model and is not being ported (per #1118 revised scope).
+
 ---
 
 ## Relation to language definition
