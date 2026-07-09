@@ -342,6 +342,17 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
                                     .and_then(|s| s.to_str())
                                     .unwrap_or("")
                                     .to_owned();
+                                // Post-#1714, `imported_by_test_files` holds
+                                // dot-qualified module names (e.g.
+                                // `backends.llvm.emit_program`).  Comparing
+                                // the bare file_stem alone would fail to
+                                // match any nested library file, so also
+                                // derive the qualified stem relative to the
+                                // CLI base directory and check both forms.
+                                let qual_stem = loader::qualified_stem(
+                                    std::path::Path::new(path),
+                                    &p,
+                                );
                                 let is_entry_point = transpiler::has_main_fn(&parsed);
                                 let entry_point_ok = !is_entry_point || {
                                     // Include an entry-point file only when it is integrated
@@ -358,7 +369,8 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
                                 };
                                 if entry_point_ok
                                     && (transpiler::has_extern_or_type_decls(&parsed)
-                                        || imported_by_test_files.contains(&file_stem))
+                                        || imported_by_test_files.contains(&file_stem)
+                                        || imported_by_test_files.contains(&qual_stem))
                                 {
                                     let stem = file_stem.replace('-', "_");
                                     sibling_progs.push(parsed.clone());
