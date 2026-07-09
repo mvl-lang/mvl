@@ -226,3 +226,128 @@ fn checker_parity_baseline_stable() {
         );
     }
 }
+
+// ── Unit tests for the harness itself ────────────────────────────────────────
+//
+// These guard against silent breakage in `MVL_UPDATE_PARITY_BASELINE=1` mode,
+// where a broken `check_file` (e.g. always returning ParseError) would happily
+// write a bogus baseline that then passes the outer test forever.
+
+#[test]
+fn format_line_ok() {
+    let v = FileVerdict {
+        rel_path: "tests/corpus/a.mvl".into(),
+        kind: VerdictKind::Ok,
+    };
+    assert_eq!(v.format_line(), "tests/corpus/a.mvl\tok");
+}
+
+#[test]
+fn format_line_parse_error() {
+    let v = FileVerdict {
+        rel_path: "tests/corpus/bad.mvl".into(),
+        kind: VerdictKind::ParseError,
+    };
+    assert_eq!(v.format_line(), "tests/corpus/bad.mvl\tparse-error");
+}
+
+#[test]
+fn format_line_fail_sorts_and_joins_requirements() {
+    let v = FileVerdict {
+        rel_path: "tests/corpus/x.mvl".into(),
+        kind: VerdictKind::Fail {
+            error_count: 3,
+            requirements: vec![1, 7, 11],
+        },
+    };
+    assert_eq!(v.format_line(), "tests/corpus/x.mvl\tfail\t3\t1,7,11");
+}
+
+#[test]
+fn serialize_sorts_lines_and_includes_header() {
+    let verdicts = vec![
+        FileVerdict {
+            rel_path: "z.mvl".into(),
+            kind: VerdictKind::Ok,
+        },
+        FileVerdict {
+            rel_path: "a.mvl".into(),
+            kind: VerdictKind::ParseError,
+        },
+        FileVerdict {
+            rel_path: "m.mvl".into(),
+            kind: VerdictKind::Fail {
+                error_count: 1,
+                requirements: vec![7],
+            },
+        },
+    ];
+    let s = serialize(&verdicts);
+    assert!(s.starts_with("# Checker parity baseline"), "missing header");
+    assert!(s.ends_with('\n'), "must end with newline");
+    let body: Vec<&str> = s.lines().skip(1).collect();
+    assert_eq!(
+        body,
+        vec!["a.mvl\tparse-error", "m.mvl\tfail\t1\t7", "z.mvl\tok"],
+    );
+}
+
+#[test]
+fn walk_finds_mvl_files_recursively_and_skips_others() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path();
+    std::fs::create_dir(root.join("sub")).unwrap();
+    std::fs::write(root.join("top.mvl"), "").unwrap();
+    std::fs::write(root.join("sub").join("nested.mvl"), "").unwrap();
+    std::fs::write(root.join("ignored.rs"), "").unwrap();
+    std::fs::write(root.join("no_ext"), "").unwrap();
+
+    let mut out = Vec::new();
+    walk(root, &mut out);
+    out.sort();
+    let names: Vec<String> = out
+        .iter()
+        .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+        .collect();
+    assert_eq!(names, vec!["nested.mvl", "top.mvl"]);
+}
+
+#[test]
+fn check_file_returns_ok_for_valid_program() {
+    let tmp = tempfile::NamedTempFile::with_suffix(".mvl").expect("tempfile");
+    std::fs::write(tmp.path(), "fn main() -> Unit { }\n").unwrap();
+    assert_eq!(check_file(tmp.path()), VerdictKind::Ok);
+}
+
+#[test]
+fn check_file_returns_parse_error_for_garbage() {
+    let tmp = tempfile::NamedTempFile::with_suffix(".mvl").expect("tempfile");
+    // Missing braces / clearly not MVL — the parser should reject.
+    std::fs::write(tmp.path(), "this is not mvl syntax @@@\n").unwrap();
+    assert_eq!(check_file(tmp.path()), VerdictKind::ParseError);
+}
+
+#[test]
+fn check_file_returns_fail_for_type_error() {
+    let tmp = tempfile::NamedTempFile::with_suffix(".mvl").expect("tempfile");
+    // Type mismatch — Int assigned to a String binding.  Requirement 1
+    // (types) should be the one reported.
+    std::fs::write(
+        tmp.path(),
+        "fn main() -> Unit { let x: String = 42; }\n",
+    )
+    .unwrap();
+    match check_file(tmp.path()) {
+        VerdictKind::Fail {
+            error_count,
+            requirements,
+        } => {
+            assert!(error_count >= 1, "expected >=1 error, got {error_count}");
+            assert!(
+                requirements.contains(&1),
+                "expected requirement 1 among {requirements:?}",
+            );
+        }
+        other => panic!("expected Fail, got {other:?}"),
+    }
+}
