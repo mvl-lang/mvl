@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.238.12] - 2026-07-09
+
+### Fixed
+
+- **`rust-backend`: skip redundant `.into()` when call result already matches target** (#1707 phase 11) — Two symmetric emit sites unconditionally appended `.into()` when the enclosing context expected a labeled type and the value was a `FnCall` / `MethodCall`: `emit_functions::emit_expr_tail_with_return_type_tir` and `emit_stmts::emit_stmt` (Let).  Useful when the call returns a plain `T` needing coercion to `Label<T>`.  But when the call already returns the labeled type (e.g. `identity[T](x: T) -> T` invoked with `t: Tainted[String]`), the `.into()` is a no-op AND blocks Rust from inferring `T` — E0282.  Fix: gate both emissions on `expr.ty != *ret_ty` (or `init.ty != *ty`).  Purely type-driven — no method-name lists.  Cleared 2× E0282 on `02_functions/generic_instantiation.mvl` and `08_ifc/secret_env.mvl`.
+
 ## [0.238.11] - 2026-07-08
 
 ### Fixed
