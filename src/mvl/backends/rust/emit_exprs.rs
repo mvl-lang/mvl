@@ -147,7 +147,10 @@ impl RustEmitter {
         //   emit would try to move out of the `&mut` reference (E0507).
         let needs_clone = match &receiver.kind {
             TirExprKind::Var(_) => !self.last_uses.contains(&receiver.span),
-            TirExprKind::FieldAccess { .. } => matches!(receiver.ty.unlabeled(), crate::mvl::checker::types::Ty::Named(..)),
+            TirExprKind::FieldAccess { .. } => matches!(
+                receiver.ty.unlabeled(),
+                crate::mvl::checker::types::Ty::Named(..)
+            ),
             _ => false,
         };
         if needs_clone {

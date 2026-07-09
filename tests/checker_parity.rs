@@ -332,11 +332,7 @@ fn check_file_returns_fail_for_type_error() {
     let tmp = tempfile::NamedTempFile::with_suffix(".mvl").expect("tempfile");
     // Type mismatch — Int assigned to a String binding.  Requirement 1
     // (types) should be the one reported.
-    std::fs::write(
-        tmp.path(),
-        "fn main() -> Unit { let x: String = 42; }\n",
-    )
-    .unwrap();
+    std::fs::write(tmp.path(), "fn main() -> Unit { let x: String = 42; }\n").unwrap();
     match check_file(tmp.path()) {
         VerdictKind::Fail {
             error_count,
