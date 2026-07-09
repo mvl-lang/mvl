@@ -96,6 +96,20 @@ pub(super) fn try_trivial(
         // Enables static proof of e.g. `validate_log_path("app.log")` where pred is `len(p) > 0`.
         Expr::Literal(Literal::Str(s), _) => Some(eval_pred_str_len(s.len() as i64, pred)),
 
+        // String concat chain: prove len-based predicates using a conservative lower
+        // bound derived from all literal substrings in the chain.  For example:
+        //   `"{\"id\":".concat(x).concat(",")`  →  min_len = 6 + 0 + 1 = 7  →  proves `len > 0`
+        //   `"[".concat(acc).concat("]")`        →  min_len = 1 + 0 + 1 = 2  →  proves `len > 0`
+        // Unknown sub-expressions (variables, function calls) contribute 0.
+        Expr::MethodCall { method, .. } if method == "concat" => {
+            let min_len = min_str_len_lower(arg);
+            if min_len > 0 {
+                Some(eval_pred_str_len(min_len, pred))
+            } else {
+                None
+            }
+        }
+
         // Struct literal as return value (#1540): resolve `self.field` against the
         // construct's field exprs. Enables `ensures result.field == literal` to be
         // proven statically when the function body is a struct literal.
@@ -103,6 +117,36 @@ pub(super) fn try_trivial(
 
         // Everything else: Layer 1 cannot decide.
         _ => None,
+    }
+}
+
+// ── String length lower-bound helper ─────────────────────────────────────────
+
+/// Conservative lower bound on the length of a string expression.
+///
+/// Recursively sums the character counts of all `Literal::Str` nodes reachable
+/// through `concat` chains.  Unknown sub-expressions (variables, calls, etc.)
+/// contribute 0 — they might be empty.
+///
+/// Examples:
+/// - `"hello"` → 5
+/// - `"hello".concat(x)` → 5
+/// - `"a".concat(x).concat("b")` → 2
+/// - `x.concat(y)` → 0  (nothing known)
+fn min_str_len_lower(expr: &Expr) -> i64 {
+    match expr {
+        Expr::Literal(Literal::Str(s), _) => s.len() as i64,
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+            ..
+        } if method == "concat" => {
+            let r = min_str_len_lower(receiver);
+            let a = args.first().map(|e| min_str_len_lower(e)).unwrap_or(0);
+            r + a
+        }
+        _ => 0,
     }
 }
 
@@ -1109,5 +1153,99 @@ mod tests {
         let arg = Expr::Ident("x".into(), sp());
         let result = try_trivial(&pred, &arg, &var_refs, &HashMap::new());
         assert_eq!(result, Some(RefResult::Proven));
+    }
+
+    // ── min_str_len_lower ─────────────────────────────────────────────────
+
+    fn str_lit(s: &str) -> Expr {
+        Expr::Literal(Literal::Str(s.to_string()), sp())
+    }
+
+    fn concat_call(receiver: Expr, arg: Expr) -> Expr {
+        Expr::MethodCall {
+            receiver: Box::new(receiver),
+            method: "concat".to_string(),
+            args: vec![arg],
+            span: sp(),
+        }
+    }
+
+    fn var_arg(name: &str) -> Expr {
+        Expr::Ident(name.to_string(), sp())
+    }
+
+    #[test]
+    fn min_str_len_lower_literal() {
+        assert_eq!(min_str_len_lower(&str_lit("hello")), 5);
+    }
+
+    #[test]
+    fn min_str_len_lower_empty_literal() {
+        assert_eq!(min_str_len_lower(&str_lit("")), 0);
+    }
+
+    #[test]
+    fn min_str_len_lower_concat_with_var() {
+        // `"prefix".concat(x)` → min = 6
+        let expr = concat_call(str_lit("prefix"), var_arg("x"));
+        assert_eq!(min_str_len_lower(&expr), 6);
+    }
+
+    #[test]
+    fn min_str_len_lower_chained_literals() {
+        // `"[".concat(acc).concat("]")` → min = 1 + 0 + 1 = 2
+        let inner = concat_call(str_lit("["), var_arg("acc"));
+        let expr = concat_call(inner, str_lit("]"));
+        assert_eq!(min_str_len_lower(&expr), 2);
+    }
+
+    #[test]
+    fn min_str_len_lower_all_vars() {
+        // `x.concat(y)` → 0 (nothing known)
+        let expr = concat_call(var_arg("x"), var_arg("y"));
+        assert_eq!(min_str_len_lower(&expr), 0);
+    }
+
+    // ── try_trivial: concat chain ─────────────────────────────────────────
+
+    fn len_gt_zero() -> RefExpr {
+        // `len(self) > 0`
+        RefExpr::Compare {
+            op: CmpOp::Gt,
+            left: Box::new(RefExpr::Len {
+                ident: "self".to_string(),
+                span: sp(),
+            }),
+            right: Box::new(RefExpr::Integer {
+                value: 0,
+                span: sp(),
+            }),
+            span: sp(),
+        }
+    }
+
+    #[test]
+    fn trivial_concat_nonempty_prefix_proves_len_gt_zero() {
+        // `"{\"id\":".concat(x)` — prefix has len 6 → proves `len(self) > 0`
+        let expr = concat_call(str_lit("{\"id\":"), var_arg("x"));
+        let result = try_trivial(&len_gt_zero(), &expr, &HashMap::new(), &HashMap::new());
+        assert_eq!(result, Some(RefResult::Proven));
+    }
+
+    #[test]
+    fn trivial_concat_bracket_chain_proves_len_gt_zero() {
+        // `"[".concat(acc).concat("]")` — min = 2 → proves `len(self) > 0`
+        let inner = concat_call(str_lit("["), var_arg("acc"));
+        let expr = concat_call(inner, str_lit("]"));
+        let result = try_trivial(&len_gt_zero(), &expr, &HashMap::new(), &HashMap::new());
+        assert_eq!(result, Some(RefResult::Proven));
+    }
+
+    #[test]
+    fn trivial_concat_all_vars_returns_none() {
+        // `x.concat(y)` — nothing known → Layer 1 cannot decide
+        let expr = concat_call(var_arg("x"), var_arg("y"));
+        let result = try_trivial(&len_gt_zero(), &expr, &HashMap::new(), &HashMap::new());
+        assert_eq!(result, None);
     }
 }
