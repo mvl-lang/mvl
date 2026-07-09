@@ -98,7 +98,7 @@ TEST_FULL_EXTRA_SUITES := \
 	"BDD               |test-bdd" \
 	"Rust integration  |test-rust-integration" \
 	"Backend (Rust)    |test-backend-rust" \
-	"LLVM backend      |test-backend-llvm" \
+	"Backend (LLVM)    |test-backend-llvm" \
 	"Cross-backend     |test-cross-backend" \
 	"Examples (Rust)   |test-examples-rust" \
 	"Examples (LLVM)   |test-examples-llvm"
