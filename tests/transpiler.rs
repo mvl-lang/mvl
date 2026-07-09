@@ -3358,9 +3358,12 @@ fn actor_decl_emits_runtime_infrastructure() {
     assert_contains(&rust, "enum CounterMailbox {");
     assert_contains(&rust, "Increment { n: i64 },");
     assert_contains(&rust, "Reset,");
-    // State impl (all methods run on actor thread)
+    // State impl (all methods run on actor thread).  The parameter is
+    // emitted as `_n` because the test fixture's method body is empty —
+    // the mut-analysis pass prefixes unused params with `_` to avoid a
+    // Rust `unused_variables` warning (#1658).
     assert_contains(&rust, "impl CounterState {");
-    assert_contains(&rust, "fn increment(&mut self, n: i64)");
+    assert_contains(&rust, "fn increment(&mut self, _n: i64)");
     assert_contains(&rust, "fn reset(&mut self)");
     assert_contains(&rust, "fn get_count(&mut self)");
     // Actor handle uses the named runtime type (MvlSender), not std::sync::mpsc.
