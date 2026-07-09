@@ -183,6 +183,57 @@ pub fn collect_imported_module_names(prog: &Program) -> Vec<String> {
     names
 }
 
+/// Collect user-level sibling modules imported by `prog` transitively — walk
+/// each newly-discovered module's own `use` declarations until fixed point.
+///
+/// Solves the emitter-style case where the entry file imports peers that
+/// themselves import peers (e.g. `compiler/backends/llvm/emitter.mvl` imports
+/// `emit_program.mvl` which imports `emit_types.mvl`).  The single-hop
+/// collection in earlier CLI implementations missed transitive siblings.
+///
+/// `std.*` and `pkg.*` modules are filtered out by
+/// [`collect_imported_module_names`] and handled on separate load paths.
+/// Files that cannot be read or parsed are silently skipped — downstream
+/// resolver/checker passes surface the resulting errors with proper
+/// diagnostics.
+///
+/// Returns `(mod_name, path_str, parsed_prog)` triples sorted by mod_name.
+pub fn load_sibling_modules_transitive(
+    prog: &Program,
+    entry_dir: &Path,
+) -> Vec<(String, String, Program)> {
+    use std::collections::HashSet;
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut result: Vec<(String, String, Program)> = Vec::new();
+    let mut frontier: Vec<Program> = vec![prog.clone()];
+    while !frontier.is_empty() {
+        let mut next: Vec<Program> = Vec::new();
+        for p in &frontier {
+            for mod_name in collect_imported_module_names(p) {
+                if !seen.insert(mod_name.clone()) {
+                    continue;
+                }
+                let mod_path = match find_module_file(entry_dir, &mod_name) {
+                    Some(path) => path,
+                    None => continue, // Resolver will surface the missing-module error.
+                };
+                let content = match fs::read_to_string(&mod_path) {
+                    Ok(c) => c,
+                    Err(_) => continue,
+                };
+                let (mut parser, _) = Parser::new(&content);
+                let sib_prog = parser.parse_program();
+                let path_str = mod_path.display().to_string();
+                next.push(sib_prog.clone());
+                result.push((mod_name, path_str, sib_prog));
+            }
+        }
+        frontier = next;
+    }
+    result.sort_by(|(a, _, _), (b, _, _)| a.cmp(b));
+    result
+}
+
 /// Extract the file or directory stem from a path.
 /// Prefixes the stem with `mvl_` if it starts with a digit (Rust package name constraint).
 ///
@@ -291,16 +342,56 @@ pub fn sibling_module_files(dir: &Path) -> Vec<PathBuf> {
 /// so `"backends.llvm.context"` resolves to `entry_dir/backends/llvm/context.mvl`.
 ///
 /// Resolution order (Rust 2018 style, Spec 005):
-/// 1. `{entry_dir}/{mod/path}.mvl`        — preferred
-/// 2. `{entry_dir}/{mod_name}/mod.mvl`    — single-segment only, deprecated
+/// 1. `{entry_dir}/{mod/path}.mvl`         — preferred
+/// 2. Qualified only: walk `entry_dir` ancestors and try
+///    `{ancestor}/{mod/path}.mvl`.  Bounded by project-root markers
+///    (`mvl.toml` / `mvl.lock` / `.git`) so the walk doesn't escape the
+///    user's workspace.  Enables `mvl run` on entry files that live
+///    inside the qualified module tree (e.g.
+///    `mvl run compiler/backends/llvm/emitter.mvl` importing
+///    `use backends.llvm.emit_context::X` finds
+///    `compiler/backends/llvm/emit_context.mvl`).
+/// 3. `{entry_dir}/{mod_name}/mod.mvl`     — single-segment only, deprecated
 ///
-/// Returns `None` if neither path exists.
+/// Returns `None` if no candidate exists.
 pub fn find_module_file(entry_dir: &Path, mod_name: &str) -> Option<PathBuf> {
     // Convert dot-path to filesystem path: "backends.llvm.context" → "backends/llvm/context"
     let rel_path: PathBuf = mod_name.split('.').collect::<Vec<_>>().join("/").into();
-    let sibling = entry_dir.join(format!("{}.mvl", rel_path.display()));
+    let rel_file = format!("{}.mvl", rel_path.display());
+    let sibling = entry_dir.join(&rel_file);
     if sibling.exists() {
         return Some(sibling);
+    }
+    // Qualified (dot-separated) module names may resolve against an ancestor
+    // of `entry_dir` — required when an entry file itself lives inside the
+    // qualified module tree (e.g. entry = `compiler/backends/llvm/emitter.mvl`
+    // importing `use backends.llvm.emit_context::X` — the file lives at
+    // `compiler/backends/llvm/emit_context.mvl` alongside `emitter.mvl`, so
+    // the resolver must strip the shared trailing prefix).
+    //
+    // The walk is bounded by project-root markers so it never leaks outside
+    // the user's mental workspace.
+    if mod_name.contains('.') {
+        for ancestor in entry_dir.ancestors().skip(1) {
+            // Skip empty path component that `Path::ancestors` may yield for
+            // relative inputs — `Path::new("").join(...)` still succeeds but
+            // is semantically the CWD, which rule 1 already covered.
+            if ancestor.as_os_str().is_empty() {
+                break;
+            }
+            let candidate = ancestor.join(&rel_file);
+            if candidate.exists() {
+                return Some(candidate);
+            }
+            // Stop after checking the candidate at a project root — walking
+            // any higher would leave the workspace.
+            if ancestor.join("mvl.toml").exists()
+                || ancestor.join("mvl.lock").exists()
+                || ancestor.join(".git").exists()
+            {
+                break;
+            }
+        }
     }
     // Legacy mod.mvl form: only valid for single-segment names.
     if !mod_name.contains('.') {
@@ -1181,6 +1272,77 @@ mod tests {
         let found = find_module_file(dir.path(), "backends.llvm.context")
             .expect("should find nested file via dot-path");
         assert_eq!(found, file);
+    }
+
+    // find_module_file: entry file living inside the qualified module tree
+    // resolves siblings by their fully-qualified name.  This is the shape
+    // triggered by `mvl run compiler/backends/llvm/emitter.mvl` importing
+    // `use backends.llvm.emit_context::X`.
+    #[test]
+    fn find_module_file_qualified_from_inside_module_tree() {
+        let dir = tmpdir();
+        // Set up: <root>/compiler/backends/llvm/{emitter,emit_context}.mvl
+        //         <root>/mvl.toml    ← project marker bounding the walk
+        let llvm_dir = dir.path().join("compiler").join("backends").join("llvm");
+        fs::create_dir_all(&llvm_dir).unwrap();
+        fs::write(dir.path().join("mvl.toml"), "").unwrap();
+        fs::write(llvm_dir.join("emitter.mvl"), "").unwrap();
+        let target = llvm_dir.join("emit_context.mvl");
+        fs::write(&target, "").unwrap();
+
+        // Entry file's parent is inside the qualified tree; the qualified
+        // path "backends.llvm.emit_context" duplicates the trailing
+        // "backends/llvm/" already present in entry_dir.
+        let found = find_module_file(&llvm_dir, "backends.llvm.emit_context")
+            .expect("qualified sibling should resolve by walking to ancestor");
+        assert_eq!(found, target);
+    }
+
+    // find_module_file: qualified-path ancestor walk is bounded by a
+    // project-root marker (mvl.toml).  A candidate file living OUTSIDE
+    // the marked project must not be discovered.
+    #[test]
+    fn find_module_file_qualified_walk_bounded_by_project_root() {
+        let dir = tmpdir();
+        // outer/                       ← candidate file lives here (should NOT be found)
+        //   backends/llvm/other.mvl
+        //   project/                   ← project root (mvl.toml)
+        //     src/entry.mvl            ← entry point
+        let outer_target = dir.path().join("backends").join("llvm").join("other.mvl");
+        fs::create_dir_all(outer_target.parent().unwrap()).unwrap();
+        fs::write(&outer_target, "").unwrap();
+        let project = dir.path().join("project");
+        let src = project.join("src");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(project.join("mvl.toml"), "").unwrap();
+        fs::write(src.join("entry.mvl"), "").unwrap();
+
+        // Walk starts at src/, goes to project/, checks mvl.toml (no match
+        // in candidate), then stops.  The outer file remains hidden.
+        let found = find_module_file(&src, "backends.llvm.other");
+        assert!(
+            found.is_none(),
+            "walk must stop at project root; got {found:?}"
+        );
+    }
+
+    // find_module_file: bare (single-segment) name does NOT walk ancestors
+    // — Rust 2018 sibling-only semantics.
+    #[test]
+    fn find_module_file_single_segment_no_ancestor_walk() {
+        let dir = tmpdir();
+        // Put a `point.mvl` in an ancestor of the entry dir.
+        let ancestor_file = dir.path().join("point.mvl");
+        fs::write(&ancestor_file, "").unwrap();
+        let entry_dir = dir.path().join("nested").join("subdir");
+        fs::create_dir_all(&entry_dir).unwrap();
+
+        // Bare "point" import should NOT reach up to the ancestor.
+        let found = find_module_file(&entry_dir, "point");
+        assert!(
+            found.is_none(),
+            "single-segment name must not walk ancestors; got {found:?}"
+        );
     }
 
     // ── build_pkg_name_map_with_cache: transitive expansion (#1477) ──────────

@@ -112,6 +112,28 @@ pub(crate) fn annotate_prelude_pkg_names(
     }
 }
 
+/// Munge a dot-qualified MVL module name into a single valid Rust identifier
+/// (e.g. `backends.llvm.emit_context` → `backends_llvm_emit_context`).
+///
+/// The Rust backend emits sibling modules as flat top-level `pub mod` items
+/// in the crate root — nested `mod` blocks would require synthesising
+/// intermediate parent modules that hold nothing but a `pub use`, doubling
+/// the emitted file count for no functional gain.  Instead every emit site
+/// that references a sibling module name — `pub mod X;`, `use crate::X::Y;`,
+/// the on-disk `.rs` file path — routes through this helper so the same
+/// mangling applies everywhere.
+///
+/// Bare (single-segment) names pass through unchanged, so existing
+/// same-directory sibling imports (`use point::Point;` in
+/// `examples/programs/sibling_dispatch/`) are unaffected.
+pub fn mvl_mod_to_rust_ident(mod_name: &str) -> String {
+    if mod_name.contains('.') {
+        mod_name.replace('.', "_")
+    } else {
+        mod_name.to_string()
+    }
+}
+
 /// Returns the deduplicated list of `std.*` sub-module names used in this TIR
 /// that have a Rust implementation in `mvl_runtime::stdlib`.
 pub fn collect_stdlib_modules_tir(tir: &crate::mvl::ir::TirProgram) -> Vec<String> {
@@ -304,6 +326,27 @@ mod tests {
         let mono = crate::mvl::passes::mono::monomorphize(prog, &all_fns, &expr_types);
         let tir = crate::mvl::ir::lower::lower(prog, &mono, &expr_types);
         transpile(&tir, config)
+    }
+
+    // ── mvl_mod_to_rust_ident: dotted names mangle for valid Rust ──────────
+
+    #[test]
+    fn mvl_mod_to_rust_ident_single_segment_unchanged() {
+        assert_eq!(mvl_mod_to_rust_ident("point"), "point");
+        assert_eq!(mvl_mod_to_rust_ident("emit_context"), "emit_context");
+    }
+
+    #[test]
+    fn mvl_mod_to_rust_ident_dotted_becomes_underscored() {
+        assert_eq!(
+            mvl_mod_to_rust_ident("backends.llvm.emit_context"),
+            "backends_llvm_emit_context"
+        );
+    }
+
+    #[test]
+    fn mvl_mod_to_rust_ident_two_segment() {
+        assert_eq!(mvl_mod_to_rust_ident("foo.bar"), "foo_bar");
     }
 
     // ── collect_stdlib_modules tests (#488 #489) ───────────────────────────

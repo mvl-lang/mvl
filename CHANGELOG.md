@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.239.1] - 2026-07-09
+
+### Fixed
+
+- **Resolver qualified module imports** (#1734): `find_module_file` now walks ancestors when looking up qualified module paths (e.g., `backends.llvm.emit_context`). Bounded by project-root markers (`mvl.toml` / `.git`). Fixes "unknown module" errors when entry files live inside a qualified module tree.
+
+- **Transitive sibling module discovery** (#1734): New `load_sibling_modules_transitive` helper (BFS) ensures peers-of-peers are loaded before resolution — e.g., when `emitter.mvl` imports `emit_program.mvl` which imports `emit_types.mvl`, all three are now available to the resolver.
+
+- **Rust backend dotted module names** (#1734): Added `mvl_mod_to_rust_ident` helper to fold dot-qualified MVL module names into single valid Rust identifiers (`backends.llvm.emit_context` → `backends_llvm_emit_context`). Applied to `pub mod` declarations, `use` statements, and sibling file paths in `build.rs`. Bare names unchanged for compatibility.
+
+Enables `mvl build / mvl run` on split MVL-hosted backends (e.g., LLVM emitter) with qualified peer imports.
+
 ## [0.239.0] - 2026-07-09
 
 Ships alongside **runtime 0.198.0** (mvl_runtime_rust, mvl_runtime_llvm,
