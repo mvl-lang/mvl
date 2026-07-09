@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.238.15] - 2026-07-09
+
+### Fixed
+
+- **`rust-backend`: inline dispatch for `List::find`** (#1707 phase 14) — MVL corpus calls `xs.find(target)` on `List[Int]` expecting `Option[Int]`.  Follows the existing `concat` / `get` receiver-type-specific dispatch pattern in `emit_method_call.rs`.  Adds a `find` arm that fires only when the receiver is a `List` — String's `find` still goes through `BUILTINS` (`str_find`).  Emits `xs.iter().position(|__x| __x == &target).map(|n| n as i64)` — returns `Option<i64>` matching MVL's `Option[Int]`.  Cleared 2× E0277 misdispatch (or 1× E0599 after phase 12) → 0 errors.
+
 ## [0.238.14] - 2026-07-09
 
 ### Fixed
