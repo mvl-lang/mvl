@@ -555,9 +555,13 @@ impl RustEmitter {
         peer_tirs: &[TirProgram],
         prelude_tirs: &[TirProgram],
     ) {
-        // sibling_tirs is empty (capability inference not needed for sibling files);
-        // suppress_names/suppress_tirs carry peer info for ext-method suppression only.
-        self.emit_program_core(tir, &[], true, &[], peer_names, peer_tirs, prelude_tirs);
+        // Pass peer_tirs as sibling_tirs so build_capability_params_map_tir_with_siblings
+        // includes cross-module borrow flags (#1745).  Without this, functions like
+        // `clone_locals(&HashMap)` defined in peer modules are absent from the map,
+        // causing call sites to emit `x.clone()` instead of `&x`.
+        // suppress_names/suppress_tirs carry the same peer info for ext-method
+        // import suppression — the two uses are independent.
+        self.emit_program_core(tir, &[], true, peer_tirs, peer_names, peer_tirs, prelude_tirs);
     }
 
     #[allow(clippy::too_many_arguments)]
