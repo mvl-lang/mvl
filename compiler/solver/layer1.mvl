@@ -1,0 +1,780 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// compiler/solver/layer1.mvl — Layer 1: trivial pattern matching.
+//
+// Port of src/mvl/checker/solver/layer1.rs.
+//
+// Handles ~40% of refinement proofs with O(1) complexity:
+//
+//   - Literal argument:    `positive(42)` where pred is `self > 0`
+//   - Subsumption:         `bar(x)` when `x` carries `x > 0` too
+//   - Tautology predicate: `self == self` → proven for any arg
+//   - Contradiction pred.: `self > 0 && self < 0` → fails always
+//   - Constant folding:    `bar(abs(-3))` via pure-fn evaluation
+
+// ── Entry point ───────────────────────────────────────────────────────────────
+
+/// Try to prove or refute `pred` for `arg` using trivial-pattern rules.
+/// Returns `None` when Layer 1 cannot make a determination.
+pub partial fn try_trivial(
+    pred:     RefExpr,
+    arg:      Expr,
+    var_refs: Map[String, Option[RefExpr]],
+    fn_decls: Map[String, FnDecl],
+) -> Option[RefResult] {
+    if is_tautology(pred) { return Some(RefResult::Proven) }
+    if is_contradiction(pred) { return Some(RefResult::Failed(None)) }
+
+    match arg {
+        Expr::Lit(AstLiteral::Integer(n), _) => Some(eval_pred_int(n, pred)),
+        Expr::Lit(AstLiteral::Floating(f), _) => Some(eval_pred_float(f, pred)),
+
+        Expr::Unary(u) => {
+            match u.op {
+                UnaryOp::Neg => {
+                    match u.expr.get(0) {
+                        Some(Expr::Lit(AstLiteral::Integer(n), _)) => Some(eval_pred_int(0 - n, pred)),
+                        Some(Expr::Lit(AstLiteral::Floating(f), _)) => Some(eval_pred_float(0.0 - f, pred)),
+                        _ => None,
+                    }
+                },
+                _ => None,
+            }
+        },
+
+        Expr::Ident(name, _) => {
+            match var_refs.get(name) {
+                Some(Some(arg_pred)) => {
+                    if preds_equivalent(arg_pred, pred) {
+                        Some(RefResult::Proven)
+                    } else {
+                        match extract_eq_int_from_hyp(arg_pred) {
+                            Some(n) => Some(eval_pred_int(n, pred)),
+                            None => {
+                                match extract_eq_float_from_hyp(arg_pred) {
+                                    Some(f) => Some(eval_pred_float(f, pred)),
+                                    None    => None,
+                                }
+                            },
+                        }
+                    }
+                },
+                _ => None,
+            }
+        },
+
+        Expr::Call(c) => {
+            match fn_decls.get(c.name) {
+                Some(fd) => {
+                    match try_fold_call(fd, c.args, fn_decls) {
+                        Some(ConstValue::CInt(n))   => Some(eval_pred_int(n, pred)),
+                        Some(ConstValue::CFloat(f)) => Some(eval_pred_float(f, pred)),
+                        _                           => None,
+                    }
+                },
+                None => None,
+            }
+        },
+
+        Expr::Lit(AstLiteral::Str(s), _) => Some(eval_pred_str_len(s.len(), pred)),
+
+        Expr::Method(m) => {
+            if m.method == "concat" {
+                let min_len: Int = min_str_len_lower(arg);
+                if min_len > 0 { Some(eval_pred_str_len(min_len, pred)) } else { None }
+            } else {
+                None
+            }
+        },
+
+        Expr::StructLit(sl) => Some(eval_pred_struct(sl.fields, pred)),
+
+        _ => None,
+    }
+}
+
+// ── String length lower-bound helper ─────────────────────────────────────────
+
+/// Conservative lower bound on the length of a string expression.
+/// Recursively sums character counts of string literals in concat chains.
+partial fn min_str_len_lower(expr: Expr) -> Int {
+    match expr {
+        Expr::Lit(AstLiteral::Str(s), _) => s.len(),
+        Expr::Method(m) => {
+            if m.method == "concat" {
+                let r: Int = match m.receiver.get(0) {
+                    Some(recv) => min_str_len_lower(recv),
+                    None       => 0,
+                };
+                let a: Int = match m.args.get(0) {
+                    Some(arg) => min_str_len_lower(arg),
+                    None      => 0,
+                };
+                r + a
+            } else {
+                0
+            }
+        },
+        _ => 0,
+    }
+}
+
+// ── Predicate-level trivial analysis ─────────────────────────────────────────
+
+/// Returns `true` when `pred` is trivially satisfied by every value of `self`.
+partial fn is_tautology(pred: RefExpr) -> Bool {
+    match pred {
+        RefExpr::Compare { op: CmpOp::Eq, left: l, right: r, .. } => preds_equivalent(*l, *r),
+        RefExpr::Compare { op: CmpOp::Le, left: l, right: r, .. } => preds_equivalent(*l, *r),
+        RefExpr::Compare { op: CmpOp::Ge, left: l, right: r, .. } => preds_equivalent(*l, *r),
+        RefExpr::Compare { .. } => false,
+        RefExpr::Logic { op: LogicOp::Or, left: l, right: r, .. } =>
+            is_tautology(*l) || is_tautology(*r),
+        RefExpr::Not { inner: inn, .. } => is_contradiction(*inn),
+        RefExpr::Grouped { inner: inn, .. } => is_tautology(*inn),
+        _ => false,
+    }
+}
+
+/// Returns `true` when `pred` cannot be satisfied by any value of `self`.
+partial fn is_contradiction(pred: RefExpr) -> Bool {
+    match pred {
+        RefExpr::Compare { op: CmpOp::Ne, left: l, right: r, .. } => preds_equivalent(*l, *r),
+        RefExpr::Compare { op: CmpOp::Lt, left: l, right: r, .. } => preds_equivalent(*l, *r),
+        RefExpr::Compare { op: CmpOp::Gt, left: l, right: r, .. } => preds_equivalent(*l, *r),
+        RefExpr::Compare { .. } => false,
+        RefExpr::Logic { op: LogicOp::And, left: l, right: r, .. } => {
+            // A && !A
+            let rval: RefExpr = *r;
+            match rval {
+                RefExpr::Not { inner: inn, .. } => {
+                    if preds_equivalent(*l, *inn) { return true }
+                },
+                _ => {},
+            }
+            // !A && A
+            let lval: RefExpr = *l;
+            match lval {
+                RefExpr::Not { inner: inn, .. } => {
+                    if preds_equivalent(*inn, *r) { return true }
+                },
+                _ => {},
+            }
+            // Interval emptiness: self > N && self < M where N >= M.
+            interval_contradiction_check(*l, *r)
+        },
+        RefExpr::Not { inner: inn, .. } => is_tautology(*inn),
+        RefExpr::Grouped { inner: inn, .. } => is_contradiction(*inn),
+        _ => false,
+    }
+}
+
+/// Check if two predicates form an empty integer interval.
+partial fn interval_contradiction_check(left: RefExpr, right: RefExpr) -> Bool {
+    match extract_self_int_bound(left) {
+        Some(bound_a) => {
+            match extract_self_int_bound(right) {
+                Some(bound_b) =>
+                    bounds_contradictory(bound_a.op, bound_a.bound_n, bound_b.op, bound_b.bound_n) ||
+                    bounds_contradictory(bound_b.op, bound_b.bound_n, bound_a.op, bound_a.bound_n),
+                None => false,
+            }
+        },
+        None => false,
+    }
+}
+
+// Helper struct for a bound of the form `self op N`.
+type SelfBound = struct { op: CmpOp, bound_n: Int }
+
+/// Extract a bound of the form `self <op> <integer>` from a simple comparison.
+partial fn extract_self_int_bound(pred: RefExpr) -> Option[SelfBound] {
+    match pred {
+        RefExpr::Compare { op: op, left: l, right: r, .. } => {
+            let lv: RefExpr = *l;
+            let rv: RefExpr = *r;
+            match lv {
+                RefExpr::Ident { name: n, .. } => {
+                    if n != "self" { return None }
+                    match rv {
+                        RefExpr::Integer { value: v, .. } => Some(SelfBound { op: op, bound_n: v }),
+                        _ => None,
+                    }
+                },
+                RefExpr::Integer { value: v, .. } => {
+                    match rv {
+                        RefExpr::Ident { name: n, .. } => {
+                            if n == "self" { Some(SelfBound { op: op.flip(), bound_n: v }) } else { None }
+                        },
+                        _ => None,
+                    }
+                },
+                _ => None,
+            }
+        },
+        _ => None,
+    }
+}
+
+/// Returns `true` when (op_a, v_a) is a lower bound and (op_b, v_b) is an
+/// upper bound whose combination makes the integer interval empty.
+fn bounds_contradictory(op_a: CmpOp, v_a: Int, op_b: CmpOp, v_b: Int) -> Bool {
+    match op_a {
+        CmpOp::Gt => {
+            match op_b {
+                CmpOp::Lt | CmpOp::Le => v_b <= v_a,
+                _ => false,
+            }
+        },
+        CmpOp::Ge => {
+            match op_b {
+                CmpOp::Lt => v_b <= v_a,
+                CmpOp::Le => v_b < v_a,
+                _ => false,
+            }
+        },
+        _ => false,
+    }
+}
+
+// ── Predicate evaluation for literal values ───────────────────────────────────
+
+/// Evaluate a predicate against an integer literal.
+pub partial fn eval_pred_int(self_val: Int, pred: RefExpr) -> RefResult {
+    match eval_bool_int(self_val, pred) {
+        Some(true)  => RefResult::Proven,
+        Some(false) => RefResult::Failed(None),
+        None        => RefResult::RuntimeCheck,
+    }
+}
+
+/// Evaluate a predicate against a float literal.
+pub partial fn eval_pred_float(self_val: Float, pred: RefExpr) -> RefResult {
+    match eval_bool_float(self_val, pred) {
+        Some(true)  => RefResult::Proven,
+        Some(false) => RefResult::Failed(None),
+        None        => RefResult::RuntimeCheck,
+    }
+}
+
+/// Evaluate a predicate against a string literal's length.
+pub partial fn eval_pred_str_len(len_val: Int, pred: RefExpr) -> RefResult {
+    match eval_bool_str_len(len_val, pred) {
+        Some(true)  => RefResult::Proven,
+        Some(false) => RefResult::Failed(None),
+        None        => RefResult::RuntimeCheck,
+    }
+}
+
+partial fn eval_bool_str_len(len_val: Int, pred: RefExpr) -> Option[Bool] {
+    match pred {
+        RefExpr::Compare { op: op, left: l, right: r, .. } => {
+            match eval_num_str_len(len_val, *l) {
+                Some(lv) => {
+                    match eval_num_str_len(len_val, *r) {
+                        Some(rv) => Some(apply_cmp(op, lv, rv)),
+                        None     => None,
+                    }
+                },
+                None => None,
+            }
+        },
+        RefExpr::Logic { op: op, left: l, right: r, .. } => {
+            match op {
+                LogicOp::And => {
+                    let lv: Option[Bool] = eval_bool_str_len(len_val, *l);
+                    if lv == Some(false) { return Some(false) }
+                    let rv: Option[Bool] = eval_bool_str_len(len_val, *r);
+                    and_opts(lv, rv)
+                },
+                LogicOp::Or => {
+                    let lv: Option[Bool] = eval_bool_str_len(len_val, *l);
+                    if lv == Some(true) { return Some(true) }
+                    let rv: Option[Bool] = eval_bool_str_len(len_val, *r);
+                    or_opts(lv, rv)
+                },
+            }
+        },
+        RefExpr::Not { inner: inn, .. } => {
+            match eval_bool_str_len(len_val, *inn) {
+                Some(v) => Some(!v),
+                None    => None,
+            }
+        },
+        RefExpr::Grouped { inner: inn, .. } => eval_bool_str_len(len_val, *inn),
+        _ => None,
+    }
+}
+
+partial fn eval_num_str_len(len_val: Int, expr: RefExpr) -> Option[Int] {
+    match expr {
+        RefExpr::Len { .. }               => Some(len_val),
+        RefExpr::Integer { value: v, .. } => Some(v),
+        RefExpr::Arith { op: op, left: l, right: r, .. } => {
+            match eval_num_str_len(len_val, *l) {
+                Some(lv) => {
+                    match eval_num_str_len(len_val, *r) {
+                        Some(rv) => apply_arith_int(op, lv, rv),
+                        None     => None,
+                    }
+                },
+                None => None,
+            }
+        },
+        RefExpr::Grouped { inner: inn, .. } => eval_num_str_len(len_val, *inn),
+        _ => None,
+    }
+}
+
+partial fn eval_bool_int(self_val: Int, pred: RefExpr) -> Option[Bool] {
+    match pred {
+        RefExpr::Compare { op: op, left: l, right: r, .. } => {
+            match eval_num_int(self_val, *l) {
+                Some(lv) => {
+                    match eval_num_int(self_val, *r) {
+                        Some(rv) => Some(apply_cmp(op, lv, rv)),
+                        None     => None,
+                    }
+                },
+                None => None,
+            }
+        },
+        RefExpr::Logic { op: op, left: l, right: r, .. } => {
+            match op {
+                LogicOp::And => {
+                    let lv: Option[Bool] = eval_bool_int(self_val, *l);
+                    if lv == Some(false) { return Some(false) }
+                    let rv: Option[Bool] = eval_bool_int(self_val, *r);
+                    and_opts(lv, rv)
+                },
+                LogicOp::Or => {
+                    let lv: Option[Bool] = eval_bool_int(self_val, *l);
+                    if lv == Some(true) { return Some(true) }
+                    let rv: Option[Bool] = eval_bool_int(self_val, *r);
+                    or_opts(lv, rv)
+                },
+            }
+        },
+        RefExpr::Not { inner: inn, .. } => {
+            match eval_bool_int(self_val, *inn) {
+                Some(v) => Some(!v),
+                None    => None,
+            }
+        },
+        RefExpr::Grouped { inner: inn, .. } => eval_bool_int(self_val, *inn),
+        _ => None,
+    }
+}
+
+partial fn eval_num_int(self_val: Int, expr: RefExpr) -> Option[Int] {
+    match expr {
+        RefExpr::Ident { name: n, .. } => {
+            if n == "self" { Some(self_val) } else { None }
+        },
+        RefExpr::Integer { value: v, .. } => Some(v),
+        RefExpr::Arith { op: op, left: l, right: r, .. } => {
+            match eval_num_int(self_val, *l) {
+                Some(lv) => {
+                    match eval_num_int(self_val, *r) {
+                        Some(rv) => apply_arith_int(op, lv, rv),
+                        None     => None,
+                    }
+                },
+                None => None,
+            }
+        },
+        RefExpr::Grouped { inner: inn, .. } => eval_num_int(self_val, *inn),
+        _ => None,
+    }
+}
+
+partial fn eval_bool_float(self_val: Float, pred: RefExpr) -> Option[Bool] {
+    match pred {
+        RefExpr::Compare { op: op, left: l, right: r, .. } => {
+            match eval_num_float(self_val, *l) {
+                Some(lv) => {
+                    match eval_num_float(self_val, *r) {
+                        Some(rv) => Some(apply_cmp_float(op, lv, rv)),
+                        None     => None,
+                    }
+                },
+                None => None,
+            }
+        },
+        RefExpr::Logic { op: op, left: l, right: r, .. } => {
+            match op {
+                LogicOp::And => {
+                    let lv: Option[Bool] = eval_bool_float(self_val, *l);
+                    if lv == Some(false) { return Some(false) }
+                    let rv: Option[Bool] = eval_bool_float(self_val, *r);
+                    and_opts(lv, rv)
+                },
+                LogicOp::Or => {
+                    let lv: Option[Bool] = eval_bool_float(self_val, *l);
+                    if lv == Some(true) { return Some(true) }
+                    let rv: Option[Bool] = eval_bool_float(self_val, *r);
+                    or_opts(lv, rv)
+                },
+            }
+        },
+        RefExpr::Not { inner: inn, .. } => {
+            match eval_bool_float(self_val, *inn) {
+                Some(v) => Some(!v),
+                None    => None,
+            }
+        },
+        RefExpr::Grouped { inner: inn, .. } => eval_bool_float(self_val, *inn),
+        _ => None,
+    }
+}
+
+partial fn eval_num_float(self_val: Float, expr: RefExpr) -> Option[Float] {
+    match expr {
+        RefExpr::Ident { name: n, .. } => {
+            if n == "self" { Some(self_val) } else { None }
+        },
+        RefExpr::Integer { value: v, .. } => Some(v as Float),
+        RefExpr::Float { value: v, .. }   => Some(v),
+        RefExpr::Arith { op: op, left: l, right: r, .. } => {
+            match eval_num_float(self_val, *l) {
+                Some(lv) => {
+                    match eval_num_float(self_val, *r) {
+                        Some(rv) => apply_arith_float(op, lv, rv),
+                        None     => None,
+                    }
+                },
+                None => None,
+            }
+        },
+        RefExpr::Grouped { inner: inn, .. } => eval_num_float(self_val, *inn),
+        _ => None,
+    }
+}
+
+// ── Struct-literal field projection ──────────────────────────────────────────
+
+/// Evaluate a predicate against a struct literal's field expressions.
+pub partial fn eval_pred_struct(fields: List[StructField], pred: RefExpr) -> RefResult {
+    match eval_bool_struct(fields, pred) {
+        Some(true)  => RefResult::Proven,
+        Some(false) => RefResult::Failed(None),
+        None        => RefResult::RuntimeCheck,
+    }
+}
+
+partial fn eval_bool_struct(fields: List[StructField], pred: RefExpr) -> Option[Bool] {
+    match pred {
+        RefExpr::Compare { op: op, left: l, right: r, .. } => {
+            // Try bool domain first (self.alive == true).
+            let lb: Option[Bool] = eval_bool_value_struct(fields, *l);
+            let rb: Option[Bool] = eval_bool_value_struct(fields, *r);
+            match lb {
+                Some(lv) => {
+                    match rb {
+                        Some(rv) => {
+                            match op {
+                                CmpOp::Eq => Some(lv == rv),
+                                CmpOp::Ne => Some(lv != rv),
+                                _         => None,
+                            }
+                        },
+                        None => None,
+                    }
+                },
+                None => {
+                    // Fall back to integer domain.
+                    match eval_num_int_struct(fields, *l) {
+                        Some(lv) => {
+                            match eval_num_int_struct(fields, *r) {
+                                Some(rv) => Some(apply_cmp(op, lv, rv)),
+                                None     => None,
+                            }
+                        },
+                        None => None,
+                    }
+                },
+            }
+        },
+        RefExpr::Logic { op: op, left: l, right: r, .. } => {
+            match op {
+                LogicOp::And => {
+                    let lv: Option[Bool] = eval_bool_struct(fields, *l);
+                    if lv == Some(false) { return Some(false) }
+                    let rv: Option[Bool] = eval_bool_struct(fields, *r);
+                    and_opts(lv, rv)
+                },
+                LogicOp::Or => {
+                    let lv: Option[Bool] = eval_bool_struct(fields, *l);
+                    if lv == Some(true) { return Some(true) }
+                    let rv: Option[Bool] = eval_bool_struct(fields, *r);
+                    or_opts(lv, rv)
+                },
+            }
+        },
+        RefExpr::Not { inner: inn, .. } => {
+            match eval_bool_struct(fields, *inn) {
+                Some(v) => Some(!v),
+                None    => None,
+            }
+        },
+        RefExpr::Grouped { inner: inn, .. } => eval_bool_struct(fields, *inn),
+        RefExpr::FieldAccess { .. }         => eval_bool_value_struct(fields, pred),
+        _ => None,
+    }
+}
+
+partial fn eval_num_int_struct(fields: List[StructField], expr: RefExpr) -> Option[Int] {
+    match expr {
+        RefExpr::Integer { value: v, .. } => Some(v),
+        RefExpr::FieldAccess { object: obj, field: fname, .. } => {
+            match *obj {
+                RefExpr::Ident { name: n, .. } => {
+                    if n != "self" { return None }
+                    for sf in fields {
+                        if sf.name == fname {
+                            return match sf.expr.get(0) {
+                                Some(Expr::Lit(AstLiteral::Integer(n), _)) => Some(n),
+                                Some(Expr::Unary(u)) => {
+                                    match u.op {
+                                        UnaryOp::Neg => {
+                                            match u.expr.get(0) {
+                                                Some(Expr::Lit(AstLiteral::Integer(n), _)) => Some(0 - n),
+                                                _ => None,
+                                            }
+                                        },
+                                        _ => None,
+                                    }
+                                },
+                                _ => None,
+                            }
+                        }
+                    }
+                    None
+                },
+                _ => None,
+            }
+        },
+        RefExpr::Arith { op: op, left: l, right: r, .. } => {
+            match eval_num_int_struct(fields, *l) {
+                Some(lv) => {
+                    match eval_num_int_struct(fields, *r) {
+                        Some(rv) => apply_arith_int(op, lv, rv),
+                        None     => None,
+                    }
+                },
+                None => None,
+            }
+        },
+        RefExpr::Grouped { inner: inn, .. } => eval_num_int_struct(fields, *inn),
+        _ => None,
+    }
+}
+
+partial fn eval_bool_value_struct(fields: List[StructField], expr: RefExpr) -> Option[Bool] {
+    match expr {
+        RefExpr::FieldAccess { object: obj, field: fname, .. } => {
+            match *obj {
+                RefExpr::Ident { name: n, .. } => {
+                    if n != "self" { return None }
+                    for sf in fields {
+                        if sf.name == fname {
+                            return match sf.expr.get(0) {
+                                Some(Expr::Lit(AstLiteral::Bool(b), _)) => Some(b),
+                                _ => None,
+                            }
+                        }
+                    }
+                    None
+                },
+                _ => None,
+            }
+        },
+        RefExpr::Grouped { inner: inn, .. } => eval_bool_value_struct(fields, *inn),
+        RefExpr::Not { inner: inn, .. } => {
+            match eval_bool_value_struct(fields, *inn) {
+                Some(v) => Some(!v),
+                None    => None,
+            }
+        },
+        _ => None,
+    }
+}
+
+// ── Structural predicate equivalence ─────────────────────────────────────────
+
+/// Returns `true` when two predicates are structurally equivalent after
+/// normalising all parameter names to the canonical `"self"`.
+pub partial fn preds_equivalent(a: RefExpr, b: RefExpr) -> Bool {
+    match a {
+        RefExpr::Ident { name: na, .. } => {
+            match b {
+                RefExpr::Ident { name: nb, .. } =>
+                    (na == "self" && nb == "self") ||
+                    (na != "self" && nb != "self" && na == nb),
+                _ => false,
+            }
+        },
+        RefExpr::Integer { value: va, .. } => {
+            match b { RefExpr::Integer { value: vb, .. } => va == vb, _ => false }
+        },
+        RefExpr::Float { value: va, .. } => {
+            match b { RefExpr::Float { value: vb, .. } => va == vb, _ => false }
+        },
+        RefExpr::Compare { op: oa, left: la, right: ra, .. } => {
+            match b {
+                RefExpr::Compare { op: ob, left: lb, right: rb, .. } =>
+                    oa == ob && preds_equivalent(*la, *lb) && preds_equivalent(*ra, *rb),
+                _ => false,
+            }
+        },
+        RefExpr::Logic { op: oa, left: la, right: ra, .. } => {
+            match b {
+                RefExpr::Logic { op: ob, left: lb, right: rb, .. } =>
+                    oa == ob && preds_equivalent(*la, *lb) && preds_equivalent(*ra, *rb),
+                _ => false,
+            }
+        },
+        RefExpr::Arith { op: oa, left: la, right: ra, .. } => {
+            match b {
+                RefExpr::Arith { op: ob, left: lb, right: rb, .. } =>
+                    oa == ob && preds_equivalent(*la, *lb) && preds_equivalent(*ra, *rb),
+                _ => false,
+            }
+        },
+        RefExpr::Not { inner: ia, .. } => {
+            match b {
+                RefExpr::Not { inner: ib, .. } => preds_equivalent(*ia, *ib),
+                _ => false,
+            }
+        },
+        RefExpr::Grouped { inner: ia, .. } => preds_equivalent(*ia, b),
+        RefExpr::Len { ident: ia, .. } => {
+            match b {
+                RefExpr::Len { ident: ib, .. }  => ia == "self" && ib == "self",
+                RefExpr::Grouped { inner: ib, .. } => preds_equivalent(a, *ib),
+                _ => false,
+            }
+        },
+        _ => {
+            match b {
+                RefExpr::Grouped { inner: ib, .. } => preds_equivalent(a, *ib),
+                _ => false,
+            }
+        },
+    }
+}
+
+// ── Hypothesis helpers ────────────────────────────────────────────────────────
+
+/// If `pred` has the form `self == <int>`, extract that integer.
+pub partial fn extract_eq_int_from_hyp(pred: RefExpr) -> Option[Int] {
+    match pred {
+        RefExpr::Compare { op: CmpOp::Eq, left: l, right: r, .. } => {
+            let lv: RefExpr = *l;
+            let rv: RefExpr = *r;
+            match lv {
+                RefExpr::Ident { name: n, .. } => {
+                    if n != "self" { return None }
+                    match rv { RefExpr::Integer { value: v, .. } => Some(v), _ => None }
+                },
+                RefExpr::Integer { value: v, .. } => {
+                    match rv {
+                        RefExpr::Ident { name: n, .. } => {
+                            if n == "self" { Some(v) } else { None }
+                        },
+                        _ => None,
+                    }
+                },
+                _ => None,
+            }
+        },
+        _ => None,
+    }
+}
+
+/// If `pred` has the form `self == <float>`, extract that float.
+pub partial fn extract_eq_float_from_hyp(pred: RefExpr) -> Option[Float] {
+    match pred {
+        RefExpr::Compare { op: CmpOp::Eq, left: l, right: r, .. } => {
+            let lv: RefExpr = *l;
+            let rv: RefExpr = *r;
+            match lv {
+                RefExpr::Ident { name: n, .. } => {
+                    if n != "self" { return None }
+                    match rv { RefExpr::Float { value: v, .. } => Some(v), _ => None }
+                },
+                RefExpr::Float { value: v, .. } => {
+                    match rv {
+                        RefExpr::Ident { name: n, .. } => {
+                            if n == "self" { Some(v) } else { None }
+                        },
+                        _ => None,
+                    }
+                },
+                _ => None,
+            }
+        },
+        _ => None,
+    }
+}
+
+// ── Option[Bool] combinators ──────────────────────────────────────────────────
+
+fn and_opts(l: Option[Bool], r: Option[Bool]) -> Option[Bool] {
+    match l {
+        Some(a) => { match r { Some(b) => Some(a && b), None => None } },
+        None    => None,
+    }
+}
+
+fn or_opts(l: Option[Bool], r: Option[Bool]) -> Option[Bool] {
+    match l {
+        Some(a) => { match r { Some(b) => Some(a || b), None => None } },
+        None    => None,
+    }
+}
+
+// ── Arithmetic helpers ────────────────────────────────────────────────────────
+
+fn apply_cmp(op: CmpOp, l: Int, r: Int) -> Bool {
+    match op {
+        CmpOp::Eq => l == r,
+        CmpOp::Ne => l != r,
+        CmpOp::Lt => l < r,
+        CmpOp::Gt => l > r,
+        CmpOp::Le => l <= r,
+        CmpOp::Ge => l >= r,
+    }
+}
+
+fn apply_cmp_float(op: CmpOp, l: Float, r: Float) -> Bool {
+    match op {
+        CmpOp::Eq => l == r,
+        CmpOp::Ne => l != r,
+        CmpOp::Lt => l < r,
+        CmpOp::Gt => l > r,
+        CmpOp::Le => l <= r,
+        CmpOp::Ge => l >= r,
+    }
+}
+
+fn apply_arith_int(op: ArithOp, l: Int, r: Int) -> Option[Int] {
+    match op {
+        ArithOp::Add => Some(l + r),
+        ArithOp::Sub => Some(l - r),
+        ArithOp::Mul => Some(l * r),
+        ArithOp::Div => { if r == 0 { None } else { Some(l / r) } },
+        ArithOp::Rem => { if r == 0 { None } else { Some(l % r) } },
+    }
+}
+
+fn apply_arith_float(op: ArithOp, l: Float, r: Float) -> Option[Float] {
+    match op {
+        ArithOp::Add => Some(l + r),
+        ArithOp::Sub => Some(l - r),
+        ArithOp::Mul => Some(l * r),
+        ArithOp::Div => { if r == 0.0 { None } else { Some(l / r) } },
+        ArithOp::Rem => { if r == 0.0 { None } else { Some(l % r) } },
+    }
+}

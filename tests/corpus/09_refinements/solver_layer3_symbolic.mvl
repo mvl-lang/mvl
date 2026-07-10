@@ -1,0 +1,71 @@
+// Corpus: solver Layer 3 — symbolic path analysis
+//
+// Layer 3 proves predicates by symbolically executing the body of a pure
+// helper function, enumerating paths, and checking that every path's return
+// value satisfies the required predicate.
+//
+// These cases require calling a pure function whose return is statically
+// decidable via path enumeration:
+//   - abs(x) always >= 0 regardless of sign of x
+//   - clamp(x, lo, hi) satisfies lo <= result <= hi on all paths
+//   - max(a, b) satisfies result >= a and result >= b
+
+// ── Helpers (pure functions used as arguments) ────────────────────────────────
+
+total fn abs_int(n: Int) -> Int {
+    if n >= 0 { n } else { 0 - n }
+}
+
+total fn clamp(x: Int, lo: Int, hi: Int) -> Int {
+    if x < lo { lo } else if x > hi { hi } else { x }
+}
+
+total fn max_int(a: Int, b: Int) -> Int {
+    if a >= b { a } else { b }
+}
+
+total fn min_int(a: Int, b: Int) -> Int {
+    if a <= b { a } else { b }
+}
+
+// ── Refinement targets ────────────────────────────────────────────────────────
+
+total fn require_nonneg(x: Int where x >= 0) -> Int { x }
+total fn require_positive(x: Int where x > 0) -> Int { x }
+total fn require_le(x: Int where x <= 100) -> Int { x }
+total fn require_ge(x: Int where x >= 0) -> Int { x }
+
+// abs_int returns >= 0 on both branches → Layer 3 can prove this
+total fn symbolic_abs_nonneg(n: Int) -> Int {
+    require_nonneg(abs_int(n))
+}
+
+// max_int(a, b) >= a: on the a>=b branch result=a>=a, on b branch result=b>=a
+total fn symbolic_max_ge_a(a: Int where a >= 0, b: Int where b >= 0) -> Int {
+    require_nonneg(max_int(a, b))
+}
+
+// min_int(a, b) with a>=0 and b>=0 returns >= 0 on both paths
+total fn symbolic_min_nonneg(a: Int where a >= 0, b: Int where b >= 0) -> Int {
+    require_nonneg(min_int(a, b))
+}
+
+// clamp(x, 0, 100) <= 100 on all three branches
+total fn symbolic_clamp_le100(x: Int) -> Int {
+    require_le(clamp(x, 0, 100))
+}
+
+// clamp(x, 0, 100) >= 0 on all three branches
+total fn symbolic_clamp_ge0(x: Int) -> Int {
+    require_ge(clamp(x, 0, 100))
+}
+
+fn touch[T](_x: T) -> Unit { }
+
+test fn solver_layer3_symbolic_typecheck() -> Unit {
+    touch(symbolic_abs_nonneg);
+    touch(symbolic_max_ge_a);
+    touch(symbolic_min_nonneg);
+    touch(symbolic_clamp_le100);
+    touch(symbolic_clamp_ge0);
+}

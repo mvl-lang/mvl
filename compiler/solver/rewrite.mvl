@@ -1,0 +1,139 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// compiler/solver/rewrite.mvl — Builtin rewrite rules for Layer 3 symbolic execution.
+//
+// Port of src/mvl/checker/solver/rewrite.rs.
+//
+// Rewrites method calls on concrete receivers to simpler expressions that
+// Layers 1 and 2 can evaluate directly.  All rules are sound — they only fire
+// when the result is definitively known from the argument structure alone.
+//
+// Rules:
+//   `"hello".len()`   → Integer(5)
+//   `"".is_empty()`   → Bool(true)
+//   `[a,b,c].len()`   → Integer(3)
+//   `Some(x).is_some()` → Bool(true)
+//   `None.is_some()`    → Bool(false)
+//   `Some(x).is_none()` → Bool(false)
+//   `None.is_none()`    → Bool(true)
+//   `Ok(x).is_ok()`     → Bool(true)
+//   `Err(e).is_ok()`    → Bool(false)
+//   `Ok(x).is_err()`    → Bool(false)
+//   `Err(e).is_err()`   → Bool(true)
+
+/// Apply builtin rewrite rules to `expr`, reducing method calls on concrete
+/// receivers to literal values where possible.
+///
+/// Recurses into sub-expressions so nested rewrites compose correctly.
+/// Returns a structurally different `Expr` when a rule fires; otherwise returns
+/// a clone with recursively-rewritten sub-expressions.
+pub partial fn rewrite_expr(expr: Expr) -> Expr {
+    match expr {
+        Expr::Method(m) => {
+            let recv: Expr = match m.receiver.get(0) {
+                Some(r) => rewrite_expr(r),
+                None    => { return expr },
+            };
+            let sp: SourceLoc = m.span;
+            match recv {
+                // ── String methods ────────────────────────────────────────────
+                Expr::Lit(AstLiteral::Str(s), _) => {
+                    if m.method == "len" && m.args.len() == 0 {
+                        Expr::Lit(AstLiteral::Integer(s.len()), sp)
+                    } else if m.method == "is_empty" && m.args.len() == 0 {
+                        Expr::Lit(AstLiteral::Bool(s.len() == 0), sp)
+                    } else {
+                        reconstruct_method(recv, m.method, m.args, sp)
+                    }
+                },
+
+                // ── List methods ──────────────────────────────────────────────
+                Expr::ListLit(elems, _) => {
+                    if m.method == "len" && m.args.len() == 0 {
+                        Expr::Lit(AstLiteral::Integer(elems.len()), sp)
+                    } else {
+                        reconstruct_method(Expr::ListLit(elems, sp), m.method, m.args, sp)
+                    }
+                },
+
+                // ── Option / Result constructor methods ───────────────────────
+                Expr::Call(c) => {
+                    let cname: String = c.name;
+                    if m.args.len() == 0 {
+                        if m.method == "is_some" && cname == "Some" {
+                            Expr::Lit(AstLiteral::Bool(true), sp)
+                        } else if m.method == "is_none" && cname == "Some" {
+                            Expr::Lit(AstLiteral::Bool(false), sp)
+                        } else if m.method == "is_ok" && cname == "Ok" {
+                            Expr::Lit(AstLiteral::Bool(true), sp)
+                        } else if m.method == "is_ok" && cname == "Err" {
+                            Expr::Lit(AstLiteral::Bool(false), sp)
+                        } else if m.method == "is_err" && cname == "Ok" {
+                            Expr::Lit(AstLiteral::Bool(false), sp)
+                        } else if m.method == "is_err" && cname == "Err" {
+                            Expr::Lit(AstLiteral::Bool(true), sp)
+                        } else {
+                            reconstruct_method(Expr::Call(c), m.method, m.args, sp)
+                        }
+                    } else {
+                        reconstruct_method(Expr::Call(c), m.method, m.args, sp)
+                    }
+                },
+
+                Expr::Ident(name, isp) => {
+                    if m.method == "is_some" && m.args.len() == 0 && name == "None" {
+                        Expr::Lit(AstLiteral::Bool(false), sp)
+                    } else if m.method == "is_none" && m.args.len() == 0 && name == "None" {
+                        Expr::Lit(AstLiteral::Bool(true), sp)
+                    } else {
+                        reconstruct_method(Expr::Ident(name, isp), m.method, m.args, sp)
+                    }
+                },
+
+                _ => reconstruct_method(recv, m.method, m.args, sp),
+            }
+        },
+
+        // ── Recursive descent into compound expressions ───────────────────────
+        Expr::Binary(b) => {
+            let sp: SourceLoc = b.span;
+            let new_left: Expr = match b.left.get(0) {
+                Some(e) => rewrite_expr(e),
+                None    => { return expr },
+            };
+            let new_right: Expr = match b.right.get(0) {
+                Some(e) => rewrite_expr(e),
+                None    => { return expr },
+            };
+            Expr::Binary(AstBinaryExpr { op: b.op, left: [new_left], right: [new_right], span: sp })
+        },
+
+        Expr::Unary(u) => {
+            let sp: SourceLoc = u.span;
+            let new_inner: Expr = match u.expr.get(0) {
+                Some(e) => rewrite_expr(e),
+                None    => { return expr },
+            };
+            Expr::Unary(AstUnaryExpr { op: u.op, expr: [new_inner], span: sp })
+        },
+
+        Expr::Call(c) => {
+            let new_args: ref List[Expr] = [];
+            for a in c.args {
+                new_args.push(rewrite_expr(a))
+            }
+            Expr::Call(AstCallExpr { name: c.name, args: new_args, span: c.span })
+        },
+
+        _ => expr,
+    }
+}
+
+partial fn reconstruct_method(recv: Expr, method: String, args: List[Expr], sp: SourceLoc) -> Expr {
+    let new_args: ref List[Expr] = [];
+    for a in args {
+        new_args.push(rewrite_expr(a))
+    }
+    Expr::Method(AstMethodExpr { receiver: [recv], method: method, args: new_args, span: sp })
+}

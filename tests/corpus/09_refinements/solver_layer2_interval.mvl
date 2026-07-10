@@ -1,0 +1,69 @@
+// Corpus: solver Layer 2 — interval arithmetic
+//
+// Layer 2 proves predicates by extracting an integer interval from a variable's
+// hypothesis and checking whether the entire interval satisfies the required pred.
+//
+// These cases require interval reasoning beyond what Layer 1 can pattern-match:
+//   - Variable with x > 5 proves x > 0 (whole interval above 0)
+//   - Variable with x > 5 && x < 20 proves x < 100 (bounded interval)
+//   - Variable with x > 0 && x <= 10 proves x != 0 (interval excludes 0)
+//   - Variable with x < -1 proves x < 0
+//   - Exact-equality hypothesis proves equality pred
+
+// ── Simple open bounds ────────────────────────────────────────────────────────
+
+total fn require_positive(x: Int where x > 0) -> Int { x }
+total fn require_lt_hundred(x: Int where x < 100) -> Int { x }
+total fn require_nonzero(x: Int where x != 0) -> Int { x }
+total fn require_ge_zero(x: Int where x >= 0) -> Int { x }
+
+// x > 5 implies x > 0 — interval [6, ∞) fully above 0
+total fn interval_gt5_proves_positive(x: Int where x > 5) -> Int {
+    require_positive(x)
+}
+
+// x > 5 implies x != 0 — entire interval misses 0
+total fn interval_gt5_proves_nonzero(x: Int where x > 5) -> Int {
+    require_nonzero(x)
+}
+
+// ── Intersection of bounds ────────────────────────────────────────────────────
+
+// x > 5 && x < 20 proves x < 100 — intersection [6, 19] ⊆ (−∞, 99]
+total fn interval_intersect_proves_lt(x: Int where x > 5 && x < 20) -> Int {
+    require_lt_hundred(x)
+}
+
+// x >= 1 && x <= 10 proves x > 0 — intersection [1, 10] fully above 0
+total fn interval_ge1_le10_proves_positive(x: Int where x >= 1 && x <= 10) -> Int {
+    require_positive(x)
+}
+
+// x >= 1 && x <= 10 proves x != 0 — whole range misses 0
+total fn interval_ge1_le10_proves_nonzero(x: Int where x >= 1 && x <= 10) -> Int {
+    require_nonzero(x)
+}
+
+// ── Equalities ────────────────────────────────────────────────────────────────
+
+// x == 7 proves x > 0 — point interval {7}
+total fn interval_eq7_proves_positive(x: Int where x == 7) -> Int {
+    require_positive(x)
+}
+
+// x == 7 proves x < 100
+total fn interval_eq7_proves_lt100(x: Int where x == 7) -> Int {
+    require_lt_hundred(x)
+}
+
+fn touch[T](_x: T) -> Unit { }
+
+test fn solver_layer2_interval_typecheck() -> Unit {
+    touch(interval_gt5_proves_positive);
+    touch(interval_gt5_proves_nonzero);
+    touch(interval_intersect_proves_lt);
+    touch(interval_ge1_le10_proves_positive);
+    touch(interval_ge1_le10_proves_nonzero);
+    touch(interval_eq7_proves_positive);
+    touch(interval_eq7_proves_lt100);
+}
