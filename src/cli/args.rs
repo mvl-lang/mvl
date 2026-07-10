@@ -22,6 +22,7 @@ pub fn print_usage() {
     );
     eprintln!("  mvl build <file|dir>               — transpile to Rust and run cargo build");
     eprintln!("  mvl build <file|dir> --release     — build with release optimizations");
+    eprintln!("  mvl build <file|dir> --emit-only   — transpile only, skip cargo build (panic detection gate)");
     eprintln!("  mvl run   [--] <file.mvl>          — transpile, build, and execute");
     eprintln!("  mvl run   [--] <file.mvl> --release — build and run with release optimizations");
     eprintln!("  mvl run   [--] <file.mvl> -- ...   — pass args to the compiled binary");

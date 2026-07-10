@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.243.1] - 2026-07-10
+
+### Fixed — CI
+
+- **Corpus codegen gate**: `mvl build --emit-only` transpiles but skips `cargo build`, enabling fast emitter panic detection (~0.1s per file). New `test-corpus-codegen` target runs emitter on all 178 corpus files in the fast `make test` gate. Catches panics that `mvl check` alone cannot (e.g., unreachable!() in emit_types.rs, emit_exprs.rs) (#1705).
+
 ## [0.243.0] - 2026-07-10
 
 ### Added — Self-Hosted Checker

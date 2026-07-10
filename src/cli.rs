@@ -89,10 +89,11 @@ pub(super) fn dispatch(args: &[String]) {
             }
             check::maybe_check_proven_stdlib_or_exit(stdlib_profile);
             let release = args.iter().any(|a| a == "--release");
+            let emit_only = args.iter().any(|a| a == "--emit-only");
             if backend == "llvm" {
                 llvm_text::build_project_llvm_text(&path);
             } else {
-                build::run(&path, false, &[], assert_mode, target, release);
+                build::run(&path, false, &[], assert_mode, target, release, emit_only);
             }
         }
         "run" => {
@@ -113,7 +114,7 @@ pub(super) fn dispatch(args: &[String]) {
             if backend == "llvm" {
                 llvm_text::run_project_llvm_text(&path);
             } else {
-                build::run(&path, true, &run_args, assert_mode, target, release);
+                build::run(&path, true, &run_args, assert_mode, target, release, false);
             }
         }
         "test" => {

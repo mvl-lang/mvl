@@ -47,6 +47,7 @@ pub fn run(
     assert_mode: AssertMode,
     target: &str,
     release: bool,
+    emit_only: bool,
 ) {
     let stdlib_dir = stdlib::ensure_stdlib();
     // For directory inputs, use the directory stem as the crate name and
@@ -429,6 +430,11 @@ pub fn run(
     }
 
     println!("Transpiled to: {}", tmp_dir.display());
+
+    if emit_only {
+        return;
+    }
+
     let profile_label = if release { "release" } else { "dev" };
     println!("Running: cargo build (profile: {profile_label})");
 
