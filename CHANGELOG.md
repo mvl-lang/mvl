@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.241.1] - 2026-07-10
+
+### Fixed — Transpiler
+
+- **Hybrid prelude module imports**: inject synthetic `use std.<module>` declaration when stripping types from hybrid stdlib modules (e.g., `std/env.mvl`) to avoid duplicate definitions with the runtime. This ensures the emitter records the dependency in TIR and emits `use mvl_runtime::stdlib::<module>::*;` in every file that receives prelude functions, resolving dangling `Signal` type references in `mvl build` output (#1744).
+
 ## [0.241.0] - 2026-07-10
 
 ### Added — Self-Hosted Checker (#1117)

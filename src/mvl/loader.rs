@@ -514,6 +514,21 @@ pub fn load_mvl_native_stdlib_extras(progs: &[Program]) -> Vec<Program> {
                                     loaded_prog
                                         .declarations
                                         .retain(|d| !matches!(d, Decl::Type(_)));
+                                    // Inject a synthetic `use std.<module>` so the TIR lowerer
+                                    // records the dependency.  The emitter's all_modules logic
+                                    // (#1744) then emits `use mvl_runtime::stdlib::<module>::*;`
+                                    // in every file that receives these prelude functions,
+                                    // making types like `Signal` visible without a re-declaration.
+                                    loaded_prog.declarations.insert(
+                                        0,
+                                        Decl::Use(crate::mvl::parser::ast::UseDecl {
+                                            reexport: false,
+                                            path: vec!["std".to_string(), m.to_string()],
+                                            items: vec![],
+                                            module_only: false,
+                                            span: Default::default(),
+                                        }),
+                                    );
                                 }
                                 next_pending.push(loaded_prog.clone());
                                 extras.push(loaded_prog);
