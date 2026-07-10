@@ -46,23 +46,6 @@ Every MVL program passes through five stages before any code is emitted:
 
 The MVL compiler is the single proof gate — all eleven requirements are fully verified before emit touches any target code.
 
-## Roadmap — Eight Pillars, Nine Phases
-
-A language is "complete" along eight independent pillars: requirements, language constructs, stdlib, testing, packaging, backends, toolchain, verification. The roadmap delivers them in nine phases. Phases 1–4 are the foundation (done). Phases 5–9 are the path forward.
-
-| Phase | Identity | What it proves |
-|-------|----------|----------------|
-| 1–4 | **Foundation** | MVL verifies its 11 requirements at compile time |
-| 5 | **Compiles** | MVL owns the full compilation chain (LLVM, no host compiler) |
-| 6 | **Works** | Real programs run — stdlib complete, testing matures |
-| 7 | **Self-hosting** | The compiler verifies its own source — MVL is its own first customer |
-| 8 | **Proves** | Concurrent programs verified — actors and model checking |
-| 9 | **Proven** | Language formally verified — Lean/Coq metatheory |
-
-**Status (May 2026):** Foundation complete. Phase 5 shipped May 1 (LLVM Phases A–E + ownership-based drop, v0.60–v0.65). Phase 7 complete (self-hosted parser, snake_game). Phase 8 in progress.
-
-Full pillar/phase mapping and per-phase acceptance criteria: [spec 012](.openspec/specs/012-phases/spec.md). Architectural rationale: [ADR-0003](.openspec/adr/0003-compilation-strategy.md).
-
 ## Design Principles
 
 1. **Explicit over implicit.** No hidden control flow, no implicit conversions.
