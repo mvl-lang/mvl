@@ -1,0 +1,341 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// compiler/decls.mvl — C10: Declaration registration
+//
+// Port of:
+//   src/mvl/checker/decls.rs  (Pass 1 only — collect_declarations)
+//
+// Two-pass structure (mirrors Rust source):
+//   Pass 1 (collect_declarations): register types, fns, externs, impls, actors.
+//   Pass 2 (check_decls):          verify declaration bodies — lives in check_stmts.mvl
+//                                   (requires infer_block_type from same file).
+//
+// Uses the simplified MVL parser-stage types from tir.mvl:
+//   - TypeDecl (body_kind + fields/variants/alias_ty) not TypeBody enum
+//   - FnDecl.name may be "Type::method" for extension methods
+//   - FnDecl.totality: String ("total" | "partial" | "")
+//   - ExternDecl.lang: String
+//   - Program separate lists (no Decl enum)
+//
+// Key simplifications vs Rust source:
+//   - Pass 2 (check_decls) is deferred to check_stmts.mvl (needs infer_block_type)
+//   - IFC label FFI boundary check stubbed (#1738)
+//   - Effect hierarchy validation uses name equality (full hierarchy in #1738)
+
+// ── Local string helpers (cannot call calls.mvl in isolated test harness) ─────
+
+total fn split_once_decls(s: String, sep: String) -> Option[List[String]] {
+    let i: ref Int = 0;
+    let sep_len: Int = sep.len();
+    let s_len: Int = s.len();
+    while i <= s_len - sep_len {
+        let sub: String = s.substring(i, i + sep_len);
+        if sub == sep {
+            return Some([s.substring(0, i), s.substring(i + sep_len, s_len)])
+        } else { () }
+        i = i + 1
+    }
+    None
+}
+
+total fn list_contains_str_decls(list: List[String], s: String) -> Bool {
+    for item in list {
+        if item == s { return true } else { () }
+    }
+    false
+}
+
+// ── Type and receiver helpers ─────────────────────────────────────────────────
+
+pub total fn is_builtin_recv(name: String) -> Bool {
+    name == "String" || name == "Int" || name == "Float" || name == "Bool"
+    || name == "Byte" || name == "UByte" || name == "UInt"
+    || name == "List" || name == "Map" || name == "Set"
+    || name == "Option" || name == "Result"
+}
+
+pub total fn totality_of(s: String) -> Option[Totality] {
+    if s == "total"   { Some(Totality::Total) }
+    else if s == "partial" { Some(Totality::Partial) }
+    else              { None }
+}
+
+pub total fn param_capability_of(cap: String) -> Option[Capability] {
+    if cap == "iso" { Some(Capability::Iso) }
+    else if cap == "val" { Some(Capability::Val) }
+    else if cap == "ref" { Some(Capability::RefCap) }
+    else if cap == "tag" { Some(Capability::Tag) }
+    else                { None }
+}
+
+pub total fn param_is_mutable(cap: String, mutable: Bool, ty: Ty) -> Bool {
+    mutable || cap == "ref" || cap == "iso"
+    || match ty { Ty::Ref(true, _) => true, _ => false }
+}
+
+// ── Pass 1: Declaration registration ─────────────────────────────────────────
+
+/// Register only type declarations.
+/// Pre-pass for multi-file checking so extension methods can validate their
+/// receiver type before the full prelude is collected.
+pub partial fn collect_type_decls_only(c: Checker, prog: Program) -> Checker {
+    let curr: ref Checker = c;
+    for td in prog.types {
+        curr = register_type_decl(curr, td)
+    }
+    // Register actors as named types.
+    for actor_name in prog.actors {
+        let actor_info: TypeInfo = TypeInfo {
+            params: [],
+            body: TypeBodyInfo::Struct { fields: [], inv: None },
+        };
+        curr = curr.with_env(curr.env.define_type(actor_name, actor_info));
+        curr = curr.register_actor(actor_name)
+    }
+    curr
+}
+
+/// Register all declarations from a parsed program.
+pub partial fn collect_declarations(c: Checker, errs: ref List[CheckError], prog: Program) -> Checker {
+    let curr: ref Checker = c;
+    // Types and actors first (so extension methods can validate receivers).
+    curr = collect_type_decls_only(curr, prog);
+    // Functions (including extension methods).
+    for fd in prog.fns {
+        curr = register_fn_decl(curr, errs, fd)
+    }
+    // Extern functions.
+    for ed in prog.externs {
+        curr = register_extern_decl(curr, ed)
+    }
+    // Impl blocks (From, Iterator).
+    for id in prog.impls {
+        curr = register_impl_decl(curr, id)
+    }
+    // Labels and relabels.
+    for ld in prog.label_decls {
+        curr = curr.with_env(curr.env.register_label(ld.name))
+    }
+    for rd in prog.relabel_decls {
+        let info: RelabelInfo = RelabelInfo {
+            from_lbl: rd.from,
+            to_lbl:   rd.to,
+            audit:    rd.audit,
+        };
+        curr = curr.with_env(curr.env.register_relabel(rd.name, info))
+    }
+    curr
+}
+
+partial fn register_type_decl(c: Checker, td: TypeDecl) -> Checker {
+    let params: ref List[String] = [];
+    for tp in td.type_params { params.push(tp.name) }
+    let body: TypeBodyInfo = match td.body_kind {
+        TypeBodyKind::IsStruct => TypeBodyInfo::Struct {
+            fields: type_decl_field_infos(c.env, td.fields),
+            inv:    None,
+        },
+        TypeBodyKind::IsEnum => TypeBodyInfo::Enum(
+            variant_name_infos(td.variants)
+        ),
+        TypeBodyKind::IsAlias => TypeBodyInfo::Alias(
+            resolve_type_expr(c.env, td.alias_ty)
+        ),
+    };
+    c.with_env(c.env.define_type(td.name, TypeInfo { params: params, body: body }))
+}
+
+partial fn register_fn_decl(c: Checker, errs: ref List[CheckError], fd: FnDecl) -> Checker {
+    let params: ref List[Ty] = [];
+    for p in fd.params { params.push(resolve_type_expr(c.env, p.ty)) }
+    let ret:  Ty             = resolve_type_expr(c.env, fd.ret_type);
+    let tps:  ref List[String] = [];
+    for tp in fd.type_params { tps.push(tp.name) }
+    let info: FnInfo = FnInfo {
+        params:      params,
+        ret:         ret,
+        effects:     fd.effects,
+        totality:    totality_of(fd.totality),
+        type_params: tps,
+    };
+    // Extension method? name contains "::"
+    match split_once_decls(fd.name, "::") {
+        Some(pv) => {
+            let recv_ty: String     = pv.get(0).unwrap_or("");
+            let method_name: String = pv.get(1).unwrap_or(fd.name);
+            if !is_builtin_recv(recv_ty) {
+                match c.env.lookup_type(recv_ty) {
+                    None => {
+                        errs.push(CheckError::UndefinedType { name: recv_ty, span: fd.span });
+                        return c
+                    },
+                    Some(_) => {},
+                }
+            } else { () }
+            c.register_method(recv_ty, method_name, info)
+        },
+        None => c.with_env(c.env.define_fn(fd.name, info)),
+    }
+}
+
+partial fn register_extern_decl(c: Checker, ed: ExternDecl) -> Checker {
+    let curr: ref Checker = c;
+    for f in ed.fns {
+        let params: ref List[Ty] = [];
+        for p in f.params { params.push(resolve_type_expr(curr.env, p.ty)) }
+        let ret: Ty = resolve_type_expr(curr.env, f.ret_ty);
+        curr = curr.with_env(curr.env.define_fn(f.name, FnInfo {
+            params:      params,
+            ret:         ret,
+            effects:     f.effects,
+            totality:    None,
+            type_params: [],
+        }))
+    }
+    curr
+}
+
+partial fn register_impl_decl(c: Checker, id: ImplDecl) -> Checker {
+    let impl_type_name: String = format("{}", [id.ty.name]);
+    if id.trait_name == "From" {
+        match id.trait_args.get(0) {
+            Some(source_te) => {
+                let source: Ty = resolve_type_expr(c.env, source_te);
+                c.with_env(c.env.register_from_impl(impl_type_name, ty_name(source)))
+            },
+            None => c,
+        }
+    } else if id.trait_name == "Iterator" {
+        let elem_ty: Ty = match id.trait_args.get(0) {
+            Some(te) => resolve_type_expr(c.env, te),
+            None     => Ty::Unknown,
+        };
+        let new_impls: ref Map[String, Ty] = c.iterator_impls;
+        new_impls.insert(impl_type_name, elem_ty);
+        Checker {
+            env:            c.env,
+            fn_ctx:         c.fn_ctx,
+            method_table:   c.method_table,
+            actor_names:    c.actor_names,
+            iterator_impls: new_impls,
+        }
+    } else {
+        c
+    }
+}
+
+// ── Field / variant helpers ───────────────────────────────────────────────────
+
+partial fn type_decl_field_infos(env: TypeEnv, fields: List[FieldDecl]) -> List[FieldInfo] {
+    let result: ref List[FieldInfo] = [];
+    for f in fields {
+        let ty: Ty = resolve_type_expr(env, f.ty);
+        result.push(FieldInfo { name: f.name, ty: ty, mutable: false })
+    }
+    result
+}
+
+total fn variant_name_infos(variant_names: List[String]) -> List[VariantInfo] {
+    let result: ref List[VariantInfo] = [];
+    for v in variant_names {
+        result.push(VariantInfo { name: v, fields: VariantFieldsInfo::Unit })
+    }
+    result
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+test fn is_builtin_recv_string() -> Unit {
+    assert_eq(is_builtin_recv("String"), true)
+}
+
+test fn is_builtin_recv_user_type() -> Unit {
+    assert_eq(is_builtin_recv("MyStruct"), false)
+}
+
+test fn totality_of_total() -> Unit {
+    assert_eq(totality_of("total"), Some(Totality::Total))
+}
+
+test fn totality_of_partial() -> Unit {
+    assert_eq(totality_of("partial"), Some(Totality::Partial))
+}
+
+test fn totality_of_empty() -> Unit {
+    assert_eq(totality_of("").is_none(), true)
+}
+
+test fn collect_declarations_registers_fn() -> Unit {
+    let env: TypeEnv = TypeEnv::new();
+    let c: Checker = Checker::new(env);
+    let errs: ref List[CheckError] = [];
+    let prog: Program = Program {
+        fns: [FnDecl {
+            visible:     false,
+            is_test:     false,
+            is_builtin:  false,
+            totality:    "",
+            name:        "add",
+            type_params: [],
+            params:      [],
+            ret_type:    TypeExpr { name: "Int", args: [], span: SourceLoc { line: 0, col: 0 } },
+            effects:     [],
+            constraints: [],
+            body:        None,
+            span:        SourceLoc { line: 0, col: 0 },
+        }],
+        types:         [],
+        uses:          [],
+        consts:        [],
+        externs:       [],
+        impls:         [],
+        actors:        [],
+        effect_decls:  [],
+        label_decls:   [],
+        relabel_decls: [],
+        errors:        [],
+    };
+    let c2: Checker = collect_declarations(c, errs, prog);
+    match c2.env.lookup_fn("add") {
+        Some(_) => assert_eq(true, true),
+        None    => assert_eq(true, false),
+    }
+}
+
+test fn collect_declarations_registers_extension_method() -> Unit {
+    let env: TypeEnv = TypeEnv::new();
+    let c: Checker = Checker::new(env);
+    let errs: ref List[CheckError] = [];
+    let prog: Program = Program {
+        fns: [FnDecl {
+            visible:     false,
+            is_test:     false,
+            is_builtin:  false,
+            totality:    "",
+            name:        "String::len",
+            type_params: [],
+            params:      [Param { capability: "", mutable: false, name: "self", ty: TypeExpr { name: "String", args: [], span: SourceLoc { line: 0, col: 0 } }, span: SourceLoc { line: 0, col: 0 } }],
+            ret_type:    TypeExpr { name: "Int", args: [], span: SourceLoc { line: 0, col: 0 } },
+            effects:     [],
+            constraints: [],
+            body:        None,
+            span:        SourceLoc { line: 0, col: 0 },
+        }],
+        types:         [],
+        uses:          [],
+        consts:        [],
+        externs:       [],
+        impls:         [],
+        actors:        [],
+        effect_decls:  [],
+        label_decls:   [],
+        relabel_decls: [],
+        errors:        [],
+    };
+    let c2: Checker = collect_declarations(c, errs, prog);
+    match c2.lookup_method("String", "len") {
+        Some(_) => assert_eq(true, true),
+        None    => assert_eq(true, false),
+    }
+}

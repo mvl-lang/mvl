@@ -1,0 +1,539 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// compiler/calls.mvl — C9: Function and method call type inference (pure helpers)
+//
+// Port of:
+//   src/mvl/checker/calls.rs    (pure helpers — infer_fn_call/infer_method_call live in infer.mvl)
+//   src/mvl/checker/method_types.rs  (builtin method return types)
+//
+// Key simplifications vs Rust source:
+//   - IFC label propagation stubbed (carved out to #1738)
+//   - Lambda body effect accumulation omitted (no lambda_body_effects field)
+//   - Effect subsumption uses name equality (hierarchy deferred to #1738)
+//   - infer_fn_call / infer_method_call live in infer.mvl (they need infer_expr)
+
+// ── String helpers ────────────────────────────────────────────────────────────
+
+/// Split string on first occurrence of sep, returning [before, after] or None.
+pub total fn split_once(s: String, sep: String) -> Option[List[String]] {
+    let i: ref Int = 0;
+    let sep_len: Int = sep.len();
+    let s_len: Int = s.len();
+    while i <= s_len - sep_len {
+        let sub: String = s.substring(i, i + sep_len);
+        if sub == sep {
+            return Some([s.substring(0, i), s.substring(i + sep_len, s_len)])
+        } else { () }
+        i = i + 1
+    }
+    None
+}
+
+pub total fn list_contains_str(list: List[String], s: String) -> Bool {
+    for item in list {
+        if item == s { return true } else { () }
+    }
+    false
+}
+
+// ── Generic type substitution ─────────────────────────────────────────────────
+
+/// Apply a type-parameter substitution map to a Ty.
+/// Bare Named("T") where T is a type param → looked up in subst, or Unknown.
+pub partial fn substitute_ty(ty: Ty, subst: Map[String, Ty], type_params: List[String]) -> Ty {
+    match ty {
+        Ty::Named(name, args) => {
+            if args.len() == 0 {
+                match subst.get(name) {
+                    Some(concrete) => concrete,
+                    None => {
+                        if list_contains_str(type_params, name) {
+                            Ty::Unknown
+                        } else {
+                            Ty::Named(name, [])
+                        }
+                    },
+                }
+            } else {
+                let new_args: ref List[Ty] = [];
+                for a in args {
+                    new_args.push(substitute_ty(a, subst, type_params))
+                }
+                Ty::Named(name, new_args)
+            }
+        },
+        Ty::List(inner) =>
+            Ty::List(Box::new(substitute_ty(*inner, subst, type_params))),
+        Ty::Option(inner) =>
+            Ty::Option(Box::new(substitute_ty(*inner, subst, type_params))),
+        Ty::Result(ok, err) => Ty::Result(
+            Box::new(substitute_ty(*ok,  subst, type_params)),
+            Box::new(substitute_ty(*err, subst, type_params)),
+        ),
+        Ty::Map(k, v) => Ty::Map(
+            Box::new(substitute_ty(*k, subst, type_params)),
+            Box::new(substitute_ty(*v, subst, type_params)),
+        ),
+        Ty::Set(elem) =>
+            Ty::Set(Box::new(substitute_ty(*elem, subst, type_params))),
+        Ty::Labeled(lbl, inner) =>
+            Ty::Labeled(lbl, Box::new(substitute_ty(*inner, subst, type_params))),
+        Ty::Refined(base, pred) =>
+            Ty::Refined(Box::new(substitute_ty(*base, subst, type_params)), pred),
+        _ => ty,
+    }
+}
+
+/// Infer type-param bindings from a single (param_type, arg_type) pair.
+pub partial fn infer_type_param_pair(
+    type_params: List[String],
+    param_ty:    Ty,
+    arg_ty:      Ty,
+    subst:       ref Map[String, Ty],
+) -> Unit {
+    let param_base: Ty = ty_strip(param_ty);
+    match param_base {
+        Ty::Named(name, args) => {
+            if args.len() == 0 && list_contains_str(type_params, name) {
+                // Bare type parameter — bind if not yet bound.
+                if subst.get(name).is_none() {
+                    subst.insert(name, arg_ty)
+                } else { () }
+            } else {
+                // Named[A, B] — recurse into args.
+                let arg_base: Ty = ty_strip(arg_ty);
+                match arg_base {
+                    Ty::Named(_, arg_args) => {
+                        let i: ref Int = 0;
+                        for pa in args {
+                            match arg_args.get(i) {
+                                Some(aa) => infer_type_param_pair(type_params, pa, aa, subst),
+                                None     => {},
+                            }
+                            i = i + 1
+                        }
+                    },
+                    _ => {},
+                }
+            }
+        },
+        Ty::List(inner_p) => {
+            match ty_strip(arg_ty) {
+                Ty::List(inner_a) => infer_type_param_pair(type_params, *inner_p, *inner_a, subst),
+                _ => {},
+            }
+        },
+        Ty::Option(inner_p) => {
+            match ty_strip(arg_ty) {
+                Ty::Option(inner_a) => infer_type_param_pair(type_params, *inner_p, *inner_a, subst),
+                _ => {},
+            }
+        },
+        Ty::Result(ok_p, err_p) => {
+            match ty_strip(arg_ty) {
+                Ty::Result(ok_a, err_a) => {
+                    infer_type_param_pair(type_params, *ok_p,  *ok_a,  subst);
+                    infer_type_param_pair(type_params, *err_p, *err_a, subst)
+                },
+                _ => {},
+            }
+        },
+        Ty::Map(k_p, v_p) => {
+            match ty_strip(arg_ty) {
+                Ty::Map(k_a, v_a) => {
+                    infer_type_param_pair(type_params, *k_p, *k_a, subst);
+                    infer_type_param_pair(type_params, *v_p, *v_a, subst)
+                },
+                _ => {},
+            }
+        },
+        Ty::Set(inner_p) => {
+            match ty_strip(arg_ty) {
+                Ty::Set(inner_a) => infer_type_param_pair(type_params, *inner_p, *inner_a, subst),
+                _ => {},
+            }
+        },
+        _ => {},
+    }
+}
+
+/// Infer type-param bindings for all (param_type, arg_type) pairs.
+pub partial fn infer_type_params(
+    type_params: List[String],
+    param_tys:   List[Ty],
+    arg_tys:     List[Ty],
+    subst:       ref Map[String, Ty],
+) -> Unit {
+    let i: ref Int = 0;
+    while i < param_tys.len() {
+        match param_tys.get(i) {
+            Some(pt) => match arg_tys.get(i) {
+                Some(at) => infer_type_param_pair(type_params, pt, at, subst),
+                None     => {},
+            },
+            None => {},
+        }
+        i = i + 1
+    }
+}
+
+// ── Effect checking helpers ───────────────────────────────────────────────────
+
+pub partial fn check_callee_effects(
+    c:         Checker,
+    errs:      ref List[CheckError],
+    effects:   List[Effect],
+    callee:    String,
+    call_span: SourceLoc,
+) -> Unit {
+    for eff in effects {
+        if !c.effect_covered(eff.name) {
+            if c.effects_empty() {
+                errs.push(CheckError::UndeclaredEffect {
+                    callee: callee,
+                    eff: eff.name,
+                    span:   call_span,
+                })
+            } else {
+                errs.push(CheckError::MissingEffect {
+                    caller: c.current_fn_name(),
+                    callee: callee,
+                    eff: eff.name,
+                    span:   call_span,
+                })
+            }
+        } else { () }
+    }
+}
+
+// ── IFC label helpers (stubbed — full implementation in #1738) ────────────────
+
+pub total fn label_of(ty: Ty) -> Option[String] {
+    match ty {
+        Ty::Labeled(lbl, _) => Some(lbl),
+        _                     => None,
+    }
+}
+
+pub total fn strip_label(ty: Ty) -> Ty {
+    match ty {
+        Ty::Labeled(_, inner) => *inner,
+        other                 => other,
+    }
+}
+
+// ── Builtin method return types ───────────────────────────────────────────────
+// Port of src/mvl/checker/method_types.rs
+
+pub partial fn int_method_ty(method: String) -> Ty {
+    if      method == "abs"        { Ty::Int }
+    else if method == "min"        { Ty::Int }
+    else if method == "max"        { Ty::Int }
+    else if method == "clamp"      { Ty::Int }
+    else if method == "pow"        { Ty::Int }
+    else if method == "to_string"  { Ty::Str }
+    else if method == "to_float"   { Ty::Float }
+    else if method == "to_byte"    { Ty::Byte }
+    else if method == "to_ubyte"   { Ty::UByte }
+    else if method == "to_uint"    { Ty::UInt }
+    else if method == "checked_add"    { Ty::Option(Box::new(Ty::Int)) }
+    else if method == "checked_sub"    { Ty::Option(Box::new(Ty::Int)) }
+    else if method == "checked_mul"    { Ty::Option(Box::new(Ty::Int)) }
+    else if method == "checked_div"    { Ty::Option(Box::new(Ty::Int)) }
+    else                           { Ty::Unknown }
+}
+
+pub partial fn float_method_ty(method: String) -> Ty {
+    if      method == "abs"        { Ty::Float }
+    else if method == "sqrt"       { Ty::Float }
+    else if method == "floor"      { Ty::Float }
+    else if method == "ceil"       { Ty::Float }
+    else if method == "round"      { Ty::Float }
+    else if method == "min"        { Ty::Float }
+    else if method == "max"        { Ty::Float }
+    else if method == "clamp"      { Ty::Float }
+    else if method == "to_int"     { Ty::Int }
+    else if method == "to_string"  { Ty::Str }
+    else if method == "is_nan"     { Ty::Bool }
+    else if method == "is_inf"     { Ty::Bool }
+    else                           { Ty::Unknown }
+}
+
+pub partial fn bool_method_ty(method: String) -> Ty {
+    if method == "to_string" { Ty::Str }
+    else                     { Ty::Unknown }
+}
+
+pub partial fn byte_method_ty(method: String) -> Ty {
+    if      method == "to_int"    { Ty::Int }
+    else if method == "to_uint"   { Ty::UInt }
+    else if method == "to_ubyte"  { Ty::UByte }
+    else if method == "to_string" { Ty::Str }
+    else                          { Ty::Unknown }
+}
+
+pub partial fn ubyte_method_ty(method: String) -> Ty {
+    if      method == "to_int"    { Ty::Int }
+    else if method == "to_uint"   { Ty::UInt }
+    else if method == "to_byte"   { Ty::Byte }
+    else if method == "to_string" { Ty::Str }
+    else                          { Ty::Unknown }
+}
+
+pub partial fn uint_method_ty(method: String) -> Ty {
+    if      method == "to_int"    { Ty::Int }
+    else if method == "to_byte"   { Ty::Byte }
+    else if method == "to_ubyte"  { Ty::UByte }
+    else if method == "to_string" { Ty::Str }
+    else                          { Ty::Unknown }
+}
+
+pub partial fn string_method_ty(method: String, arg_tys: List[Ty]) -> Ty {
+    if      method == "len"         { Ty::Int }
+    else if method == "is_empty"    { Ty::Bool }
+    else if method == "to_upper"    { Ty::Str }
+    else if method == "to_lower"    { Ty::Str }
+    else if method == "trim"        { Ty::Str }
+    else if method == "trim_start"  { Ty::Str }
+    else if method == "trim_end"    { Ty::Str }
+    else if method == "reverse"     { Ty::Str }
+    else if method == "concat"      { Ty::Str }
+    else if method == "repeat"      { Ty::Str }
+    else if method == "contains"    { Ty::Bool }
+    else if method == "starts_with" { Ty::Bool }
+    else if method == "ends_with"   { Ty::Bool }
+    else if method == "replace"     { Ty::Str }
+    else if method == "split"       { Ty::List(Box::new(Ty::Str)) }
+    else if method == "split_once"  { Ty::Option(Box::new(Ty::Named("Pair", [Ty::Str, Ty::Str]))) }
+    else if method == "chars"       { Ty::List(Box::new(Ty::Char)) }
+    else if method == "bytes"       { Ty::List(Box::new(Ty::Byte)) }
+    else if method == "parse_int"   { Ty::Option(Box::new(Ty::Int)) }
+    else if method == "parse_float" { Ty::Option(Box::new(Ty::Float)) }
+    else if method == "to_string"   { Ty::Str }
+    else if method == "char_at"     { Ty::Option(Box::new(Ty::Char)) }
+    else if method == "substring"   { Ty::Str }
+    else if method == "index_of"    { Ty::Option(Box::new(Ty::Int)) }
+    else if method == "as_str"      { Ty::Str }
+    else if method == "strip_prefix" { Ty::Option(Box::new(Ty::Str)) }
+    else if method == "strip_suffix" { Ty::Option(Box::new(Ty::Str)) }
+    else                            { Ty::Unknown }
+}
+
+pub partial fn list_method_ty(elem_ty: Ty, method: String, arg_tys: List[Ty]) -> Ty {
+    if      method == "len"         { Ty::Int }
+    else if method == "is_empty"    { Ty::Bool }
+    else if method == "get"         { Ty::Option(Box::new(elem_ty)) }
+    else if method == "first"       { Ty::Option(Box::new(elem_ty)) }
+    else if method == "last"        { Ty::Option(Box::new(elem_ty)) }
+    else if method == "push"        { Ty::Unit }
+    else if method == "pop"         { Ty::Option(Box::new(elem_ty)) }
+    else if method == "append"      { Ty::Unit }
+    else if method == "contains"    { Ty::Bool }
+    else if method == "reverse"     { Ty::List(Box::new(elem_ty)) }
+    else if method == "sort"        { Ty::List(Box::new(elem_ty)) }
+    else if method == "sort_by"     { Ty::List(Box::new(elem_ty)) }
+    else if method == "dedup"       { Ty::List(Box::new(elem_ty)) }
+    else if method == "slice"       { Ty::List(Box::new(elem_ty)) }
+    else if method == "take"        { Ty::List(Box::new(elem_ty)) }
+    else if method == "skip"        { Ty::List(Box::new(elem_ty)) }
+    else if method == "join"        { Ty::Str }
+    else if method == "keys"        { Ty::List(Box::new(elem_ty)) }
+    else if method == "clone"       { Ty::List(Box::new(elem_ty)) }
+    else if method == "map" {
+        let mapped_ty: Ty = match arg_tys.get(0) {
+            Some(Ty::TyFn { ret: r, .. }) => *r,
+            _ => Ty::Unknown,
+        };
+        Ty::List(Box::new(mapped_ty))
+    }
+    else if method == "filter"      { Ty::List(Box::new(elem_ty)) }
+    else if method == "find"        { Ty::Option(Box::new(elem_ty)) }
+    else if method == "any"         { Ty::Bool }
+    else if method == "all"         { Ty::Bool }
+    else if method == "count"       { Ty::Int }
+    else if method == "fold" {
+        match arg_tys.get(0) {
+            Some(init_ty) => init_ty,
+            None          => Ty::Unknown,
+        }
+    }
+    else if method == "partition"   {
+        Ty::Named("Partitioned", [elem_ty])
+    }
+    else if method == "flat_map" {
+        Ty::List(Box::new(Ty::Unknown))
+    }
+    else if method == "zip" {
+        let other_elem: Ty = match arg_tys.get(0) {
+            Some(Ty::List(inner)) => *inner,
+            _                     => Ty::Unknown,
+        };
+        Ty::List(Box::new(Ty::Named("Pair", [elem_ty, other_elem])))
+    }
+    else if method == "enumerate"   {
+        Ty::List(Box::new(Ty::Named("Pair", [Ty::Int, elem_ty])))
+    }
+    else if method == "to_set"      { Ty::Set(Box::new(elem_ty)) }
+    else if method == "sum"         { elem_ty }
+    else if method == "min"         { Ty::Option(Box::new(elem_ty)) }
+    else if method == "max"         { Ty::Option(Box::new(elem_ty)) }
+    else if method == "unwrap_or"   { elem_ty }
+    else if method == "take_while"  { Ty::List(Box::new(elem_ty)) }
+    else if method == "skip_while"  { Ty::List(Box::new(elem_ty)) }
+    else                            { Ty::Unknown }
+}
+
+pub partial fn option_method_ty(inner: Ty, method: String, arg_tys: List[Ty]) -> Ty {
+    if      method == "is_some"      { Ty::Bool }
+    else if method == "is_none"      { Ty::Bool }
+    else if method == "unwrap_or"    { inner }
+    else if method == "unwrap_or_else" { inner }
+    else if method == "unwrap_or_default" { inner }
+    else if method == "map" {
+        let mapped_ty: Ty = match arg_tys.get(0) {
+            Some(Ty::TyFn { ret: r, .. }) => *r,
+            _ => Ty::Unknown,
+        };
+        Ty::Option(Box::new(mapped_ty))
+    }
+    else if method == "and_then" {
+        match arg_tys.get(0) {
+            Some(Ty::TyFn { ret: r, .. }) => *r,
+            _ => Ty::Unknown,
+        }
+    }
+    else if method == "or"           { Ty::Option(Box::new(inner)) }
+    else if method == "or_else"      { Ty::Option(Box::new(inner)) }
+    else if method == "filter"       { Ty::Option(Box::new(inner)) }
+    else if method == "ok_or" {
+        let err_ty: Ty = arg_tys.get(0).unwrap_or(Ty::Unknown);
+        Ty::Result(Box::new(inner), Box::new(err_ty))
+    }
+    else if method == "to_result"    { Ty::Result(Box::new(inner), Box::new(Ty::Unknown)) }
+    else if method == "get"          { Ty::Option(Box::new(inner)) }
+    else                             { Ty::Unknown }
+}
+
+pub partial fn result_method_ty(ok_ty: Ty, method: String, arg_tys: List[Ty]) -> Ty {
+    if      method == "is_ok"        { Ty::Bool }
+    else if method == "is_err"       { Ty::Bool }
+    else if method == "unwrap_or" {
+        match arg_tys.get(0) {
+            Some(t) => t,
+            None    => ok_ty,
+        }
+    }
+    else if method == "ok"           { Ty::Option(Box::new(ok_ty)) }
+    else if method == "err"          { Ty::Option(Box::new(Ty::Unknown)) }
+    else if method == "map" {
+        let mapped_ty: Ty = match arg_tys.get(0) {
+            Some(Ty::TyFn { ret: r, .. }) => *r,
+            _ => Ty::Unknown,
+        };
+        Ty::Result(Box::new(mapped_ty), Box::new(Ty::Unknown))
+    }
+    else if method == "map_err"      { Ty::Result(Box::new(ok_ty), Box::new(Ty::Unknown)) }
+    else if method == "and_then" {
+        match arg_tys.get(0) {
+            Some(Ty::TyFn { ret: r, .. }) => *r,
+            _ => Ty::Unknown,
+        }
+    }
+    else                             { Ty::Unknown }
+}
+
+pub partial fn map_method_ty(k_ty: Ty, v_ty: Ty, method: String, arg_tys: List[Ty]) -> Ty {
+    if      method == "len"         { Ty::Int }
+    else if method == "is_empty"    { Ty::Bool }
+    else if method == "get"         { Ty::Option(Box::new(v_ty)) }
+    else if method == "contains_key" { Ty::Bool }
+    else if method == "contains_value" { Ty::Bool }
+    else if method == "insert"      { Ty::Unit }
+    else if method == "remove"      { Ty::Option(Box::new(v_ty)) }
+    else if method == "keys"        { Ty::List(Box::new(k_ty)) }
+    else if method == "values"      { Ty::List(Box::new(v_ty)) }
+    else if method == "entries"     { Ty::List(Box::new(Ty::Named("Pair", [k_ty, v_ty]))) }
+    else if method == "map_values" {
+        let mapped: Ty = match arg_tys.get(0) {
+            Some(Ty::TyFn { ret: r, .. }) => *r,
+            _ => Ty::Unknown,
+        };
+        Ty::Map(Box::new(k_ty), Box::new(mapped))
+    }
+    else if method == "filter"      { Ty::Map(Box::new(k_ty), Box::new(v_ty)) }
+    else if method == "merge"       { Ty::Map(Box::new(k_ty), Box::new(v_ty)) }
+    else if method == "clone"       { Ty::Map(Box::new(k_ty), Box::new(v_ty)) }
+    else                            { Ty::Unknown }
+}
+
+pub partial fn set_method_ty(elem_ty: Ty, method: String, arg_tys: List[Ty]) -> Ty {
+    if      method == "len"         { Ty::Int }
+    else if method == "is_empty"    { Ty::Bool }
+    else if method == "contains"    { Ty::Bool }
+    else if method == "insert"      { Ty::Unit }
+    else if method == "remove"      { Ty::Bool }
+    else if method == "union"       { Ty::Set(Box::new(elem_ty)) }
+    else if method == "intersection" { Ty::Set(Box::new(elem_ty)) }
+    else if method == "difference"  { Ty::Set(Box::new(elem_ty)) }
+    else if method == "is_subset"   { Ty::Bool }
+    else if method == "is_superset" { Ty::Bool }
+    else if method == "to_list"     { Ty::List(Box::new(elem_ty)) }
+    else if method == "filter"      { Ty::Set(Box::new(elem_ty)) }
+    else if method == "map"         { Ty::Set(Box::new(Ty::Unknown)) }
+    else                            { Ty::Unknown }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+test fn substitute_ty_bare_param_bound() -> Unit {
+    let subst: ref Map[String, Ty] = Map::new();
+    subst.insert("T", Ty::Int);
+    let result: Ty = substitute_ty(Ty::Named("T", []), subst, ["T"]);
+    assert_eq(result, Ty::Int)
+}
+
+test fn substitute_ty_unbound_param_becomes_unknown() -> Unit {
+    let subst: Map[String, Ty] = Map::new();
+    let result: Ty = substitute_ty(Ty::Named("T", []), subst, ["T"]);
+    assert_eq(result, Ty::Unknown)
+}
+
+test fn substitute_ty_non_param_preserved() -> Unit {
+    let subst: Map[String, Ty] = Map::new();
+    let result: Ty = substitute_ty(Ty::Named("MyType", []), subst, ["T"]);
+    assert_eq(result, Ty::Named("MyType", []))
+}
+
+test fn substitute_ty_list_inner() -> Unit {
+    let subst: ref Map[String, Ty] = Map::new();
+    subst.insert("T", Ty::Str);
+    let result: Ty = substitute_ty(Ty::List(Box::new(Ty::Named("T", []))), subst, ["T"]);
+    assert_eq(result, Ty::List(Box::new(Ty::Str)))
+}
+
+test fn split_once_finds_sep() -> Unit {
+    let result: Option[List[String]] = split_once("Type::method", "::");
+    match result {
+        Some(parts) => {
+            assert_eq(parts.get(0).unwrap_or(""), "Type");
+            assert_eq(parts.get(1).unwrap_or(""), "method")
+        },
+        None => assert_eq(true, false),
+    }
+}
+
+test fn split_once_no_sep_returns_none() -> Unit {
+    let result: Option[List[String]] = split_once("nocolon", "::");
+    assert_eq(result.is_none(), true)
+}
+
+test fn int_method_ty_known_method() -> Unit {
+    assert_eq(int_method_ty("abs"), Ty::Int);
+    assert_eq(int_method_ty("to_string"), Ty::Str);
+    assert_eq(int_method_ty("to_float"), Ty::Float)
+}
+
+test fn int_method_ty_unknown_method() -> Unit {
+    assert_eq(int_method_ty("nonexistent"), Ty::Unknown)
+}

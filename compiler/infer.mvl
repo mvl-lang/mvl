@@ -176,8 +176,11 @@ partial fn infer_ident(
     // Use combined lookup to avoid multiple moves of c.env (TypeEnv methods are
     // value-consuming in test compilation contexts where they run as prelude).
     let fn_ctx: List[FnContext] = c.fn_ctx;
+    let method_table: Map[String, Map[String, FnInfo]] = c.method_table;
+    let actor_names: List[String] = c.actor_names;
+    let iterator_impls: Map[String, Ty] = c.iterator_impls;
     let lr: NameLookupResult = c.env.lookup_name(name);
-    let c2: Checker = Checker { env: lr.env, fn_ctx: fn_ctx };
+    let c2: Checker = Checker { env: lr.env, fn_ctx: fn_ctx, method_table: method_table, actor_names: actor_names, iterator_impls: iterator_impls };
     match lr.found {
         NameLookupFound::FoundVar(info) => {
             if info.moved {
@@ -282,17 +285,20 @@ partial fn infer_consume(
         Some(Expr::Ident(name, _)) => {
             // Use combined lookup to avoid double-move of c.env.
             let fn_ctx: List[FnContext] = c.fn_ctx;
+            let method_table: Map[String, Map[String, FnInfo]] = c.method_table;
+            let actor_names: List[String] = c.actor_names;
+            let iterator_impls: Map[String, Ty] = c.iterator_impls;
             let lr: NameLookupResult = c.env.lookup_name(name);
             match lr.found {
                 NameLookupFound::FoundVar(info) => {
                     // Mark the variable as moved in the returned env.
                     let moved_env: TypeEnv = lr.env.mark_moved(name);
-                    let c2: Checker = Checker { env: moved_env, fn_ctx: fn_ctx };
+                    let c2: Checker = Checker { env: moved_env, fn_ctx: fn_ctx, method_table: method_table, actor_names: actor_names, iterator_impls: iterator_impls };
                     InferResult::ok(info.ty, c2)
                 },
                 _ => {
                     errs.push(CheckError::UndefinedVariable { name: name, span: span });
-                    let c2: Checker = Checker { env: lr.env, fn_ctx: fn_ctx };
+                    let c2: Checker = Checker { env: lr.env, fn_ctx: fn_ctx, method_table: method_table, actor_names: actor_names, iterator_impls: iterator_impls };
                     InferResult::unknown(c2)
                 },
             }
@@ -325,47 +331,8 @@ pub partial fn infer_expr(
         Expr::Propagate(cell, span) => infer_propagate(c, errs, cell, span),
         Expr::Consume(cell, span)   => infer_consume(c, errs, cell, span),
         Expr::StructLit(sl)         => InferResult::ok(Ty::Named(sl.name, []), c),
-        Expr::Call(call) => {
-            // Use combined lookup to avoid double-move of c.env.
-            let fn_ctx: List[FnContext] = c.fn_ctx;
-            let lr: NameLookupResult = c.env.lookup_name(call.name);
-            let c2: ref Checker = Checker { env: lr.env, fn_ctx: fn_ctx };
-            match lr.found {
-                NameLookupFound::FoundFn(fn_info) => {
-                    if call.args.len() != fn_info.params.len() {
-                        errs.push(CheckError::WrongArgCount {
-                            name:     call.name,
-                            expected: fn_info.params.len(),
-                            found:    call.args.len(),
-                            span:     call.span,
-                        });
-                    } else { () }
-                    for arg in call.args {
-                        let ir: InferResult = infer_expr(c2, errs, arg);
-                        c2 = ir.checker;
-                    }
-                    InferResult::ok(fn_info.ret, c2)
-                },
-                _ => {
-                    errs.push(CheckError::UndefinedFunction { name: call.name, span: call.span });
-                    for arg in call.args {
-                        let ir: InferResult = infer_expr(c2, errs, arg);
-                        c2 = ir.checker;
-                    }
-                    InferResult::unknown(c2)
-                },
-            }
-        },
-        Expr::Method(m) => {
-            // Stub — full resolution in calls.mvl port.
-            let base_ir: InferResult = infer_expr(c, errs, unbox_expr(m.receiver));
-            let curr: ref Checker = base_ir.checker;
-            for arg in m.args {
-                let ir: InferResult = infer_expr(curr, errs, arg);
-                curr = ir.checker;
-            }
-            InferResult::unknown(curr)
-        },
+        Expr::Call(call) => infer_fn_call(c, errs, call),
+        Expr::Method(m) => infer_method_call(c, errs, m),
         Expr::MatchExpr(m) => {
             let scr_ir: InferResult = infer_expr(c, errs, unbox_expr(m.scrutinee));
             // Arm type unification stubbed — full check in calls.mvl port.
@@ -384,6 +351,897 @@ pub partial fn infer_expr(
         Expr::Relabel(r)  => infer_expr(c, errs, unbox_expr(r.expr)),
         Expr::Index(_)    => InferResult::unknown(c),
     }
+}
+
+// ── Local helpers (cannot call calls.mvl in isolated test harness) ───────────
+
+total fn list_contains_str_infer(list: List[String], s: String) -> Bool {
+    for item in list {
+        if item == s { return true } else { () }
+    }
+    false
+}
+
+total fn split_once_infer(s: String, sep: String) -> Option[List[String]] {
+    let i: ref Int = 0;
+    let sep_len: Int = sep.len();
+    let s_len: Int = s.len();
+    while i <= s_len - sep_len {
+        let sub: String = s.substring(i, i + sep_len);
+        if sub == sep {
+            return Some([s.substring(0, i), s.substring(i + sep_len, s_len)])
+        } else { () }
+        i = i + 1
+    }
+    None
+}
+
+total fn label_of_infer(ty: Ty) -> Option[String] {
+    match ty {
+        Ty::Labeled(lbl, _) => Some(lbl),
+        _                   => None,
+    }
+}
+
+total fn strip_label_infer(ty: Ty) -> Ty {
+    match ty {
+        Ty::Labeled(_, inner) => *inner,
+        other                 => other,
+    }
+}
+
+partial fn substitute_ty_infer(ty: Ty, subst: Map[String, Ty], type_params: List[String]) -> Ty {
+    match ty {
+        Ty::Named(name, args) => {
+            if args.len() == 0 {
+                match subst.get(name) {
+                    Some(concrete) => concrete,
+                    None => {
+                        if list_contains_str_infer(type_params, name) {
+                            Ty::Unknown
+                        } else {
+                            Ty::Named(name, [])
+                        }
+                    },
+                }
+            } else {
+                let new_args: ref List[Ty] = [];
+                for a in args {
+                    new_args.push(substitute_ty_infer(a, subst, type_params))
+                }
+                Ty::Named(name, new_args)
+            }
+        },
+        Ty::List(inner)  => Ty::List(Box::new(substitute_ty_infer(*inner, subst, type_params))),
+        Ty::Option(inner) => Ty::Option(Box::new(substitute_ty_infer(*inner, subst, type_params))),
+        Ty::Result(ok, err) => Ty::Result(
+            Box::new(substitute_ty_infer(*ok,  subst, type_params)),
+            Box::new(substitute_ty_infer(*err, subst, type_params)),
+        ),
+        Ty::Map(k, v) => Ty::Map(
+            Box::new(substitute_ty_infer(*k, subst, type_params)),
+            Box::new(substitute_ty_infer(*v, subst, type_params)),
+        ),
+        Ty::Set(elem) => Ty::Set(Box::new(substitute_ty_infer(*elem, subst, type_params))),
+        Ty::Labeled(lbl, inner) =>
+            Ty::Labeled(lbl, Box::new(substitute_ty_infer(*inner, subst, type_params))),
+        Ty::Refined(base, pred) =>
+            Ty::Refined(Box::new(substitute_ty_infer(*base, subst, type_params)), pred),
+        _ => ty,
+    }
+}
+
+partial fn infer_type_param_pair_infer(
+    type_params: List[String],
+    param_ty:    Ty,
+    arg_ty:      Ty,
+    subst:       ref Map[String, Ty],
+) -> Unit {
+    let param_base: Ty = ty_strip(param_ty);
+    match param_base {
+        Ty::Named(name, args) => {
+            if args.len() == 0 && list_contains_str_infer(type_params, name) {
+                if subst.get(name).is_none() {
+                    subst.insert(name, arg_ty)
+                } else { () }
+            } else {
+                let arg_base: Ty = ty_strip(arg_ty);
+                match arg_base {
+                    Ty::Named(_, arg_args) => {
+                        let i: ref Int = 0;
+                        for pa in args {
+                            match arg_args.get(i) {
+                                Some(aa) => infer_type_param_pair_infer(type_params, pa, aa, subst),
+                                None     => {},
+                            }
+                            i = i + 1
+                        }
+                    },
+                    _ => {},
+                }
+            }
+        },
+        Ty::List(inner_p) => {
+            match ty_strip(arg_ty) {
+                Ty::List(inner_a) => infer_type_param_pair_infer(type_params, *inner_p, *inner_a, subst),
+                _ => {},
+            }
+        },
+        Ty::Option(inner_p) => {
+            match ty_strip(arg_ty) {
+                Ty::Option(inner_a) => infer_type_param_pair_infer(type_params, *inner_p, *inner_a, subst),
+                _ => {},
+            }
+        },
+        Ty::Result(ok_p, err_p) => {
+            match ty_strip(arg_ty) {
+                Ty::Result(ok_a, err_a) => {
+                    infer_type_param_pair_infer(type_params, *ok_p,  *ok_a,  subst);
+                    infer_type_param_pair_infer(type_params, *err_p, *err_a, subst)
+                },
+                _ => {},
+            }
+        },
+        Ty::Map(k_p, v_p) => {
+            match ty_strip(arg_ty) {
+                Ty::Map(k_a, v_a) => {
+                    infer_type_param_pair_infer(type_params, *k_p, *k_a, subst);
+                    infer_type_param_pair_infer(type_params, *v_p, *v_a, subst)
+                },
+                _ => {},
+            }
+        },
+        Ty::Set(inner_p) => {
+            match ty_strip(arg_ty) {
+                Ty::Set(inner_a) => infer_type_param_pair_infer(type_params, *inner_p, *inner_a, subst),
+                _ => {},
+            }
+        },
+        _ => {},
+    }
+}
+
+partial fn infer_type_params_infer(
+    type_params: List[String],
+    param_tys:   List[Ty],
+    arg_tys:     List[Ty],
+    subst:       ref Map[String, Ty],
+) -> Unit {
+    let i: ref Int = 0;
+    while i < param_tys.len() {
+        match param_tys.get(i) {
+            Some(pt) => match arg_tys.get(i) {
+                Some(at) => infer_type_param_pair_infer(type_params, pt, at, subst),
+                None     => {},
+            },
+            None => {},
+        }
+        i = i + 1
+    }
+}
+
+partial fn check_callee_effects_infer(
+    c:         Checker,
+    errs:      ref List[CheckError],
+    effects:   List[Effect],
+    callee:    String,
+    call_span: SourceLoc,
+) -> Unit {
+    for eff in effects {
+        if !c.effect_covered(eff.name) {
+            if c.effects_empty() {
+                errs.push(CheckError::UndeclaredEffect {
+                    callee: callee,
+                    eff: eff.name,
+                    span:   call_span,
+                })
+            } else {
+                errs.push(CheckError::MissingEffect {
+                    caller: c.current_fn_name(),
+                    callee: callee,
+                    eff: eff.name,
+                    span:   call_span,
+                })
+            }
+        } else { () }
+    }
+}
+
+// ── Builtin method return types (local copies for isolated module) ────────────
+
+partial fn int_method_ty_infer(method: String) -> Ty {
+    if      method == "abs"        { Ty::Int }
+    else if method == "min"        { Ty::Int }
+    else if method == "max"        { Ty::Int }
+    else if method == "clamp"      { Ty::Int }
+    else if method == "pow"        { Ty::Int }
+    else if method == "to_string"  { Ty::Str }
+    else if method == "to_float"   { Ty::Float }
+    else if method == "to_byte"    { Ty::Byte }
+    else if method == "to_ubyte"   { Ty::UByte }
+    else if method == "to_uint"    { Ty::UInt }
+    else if method == "checked_add"    { Ty::Option(Box::new(Ty::Int)) }
+    else if method == "checked_sub"    { Ty::Option(Box::new(Ty::Int)) }
+    else if method == "checked_mul"    { Ty::Option(Box::new(Ty::Int)) }
+    else if method == "checked_div"    { Ty::Option(Box::new(Ty::Int)) }
+    else                           { Ty::Unknown }
+}
+
+partial fn float_method_ty_infer(method: String) -> Ty {
+    if      method == "abs"        { Ty::Float }
+    else if method == "sqrt"       { Ty::Float }
+    else if method == "floor"      { Ty::Float }
+    else if method == "ceil"       { Ty::Float }
+    else if method == "round"      { Ty::Float }
+    else if method == "min"        { Ty::Float }
+    else if method == "max"        { Ty::Float }
+    else if method == "clamp"      { Ty::Float }
+    else if method == "to_int"     { Ty::Int }
+    else if method == "to_string"  { Ty::Str }
+    else if method == "is_nan"     { Ty::Bool }
+    else if method == "is_inf"     { Ty::Bool }
+    else                           { Ty::Unknown }
+}
+
+partial fn bool_method_ty_infer(method: String) -> Ty {
+    if method == "to_string" { Ty::Str }
+    else                     { Ty::Unknown }
+}
+
+partial fn byte_method_ty_infer(method: String) -> Ty {
+    if      method == "to_int"    { Ty::Int }
+    else if method == "to_uint"   { Ty::UInt }
+    else if method == "to_ubyte"  { Ty::UByte }
+    else if method == "to_string" { Ty::Str }
+    else                          { Ty::Unknown }
+}
+
+partial fn ubyte_method_ty_infer(method: String) -> Ty {
+    if      method == "to_int"    { Ty::Int }
+    else if method == "to_uint"   { Ty::UInt }
+    else if method == "to_byte"   { Ty::Byte }
+    else if method == "to_string" { Ty::Str }
+    else                          { Ty::Unknown }
+}
+
+partial fn uint_method_ty_infer(method: String) -> Ty {
+    if      method == "to_int"    { Ty::Int }
+    else if method == "to_byte"   { Ty::Byte }
+    else if method == "to_ubyte"  { Ty::UByte }
+    else if method == "to_string" { Ty::Str }
+    else                          { Ty::Unknown }
+}
+
+partial fn string_method_ty_infer(method: String, arg_tys: List[Ty]) -> Ty {
+    if      method == "len"         { Ty::Int }
+    else if method == "is_empty"    { Ty::Bool }
+    else if method == "to_upper"    { Ty::Str }
+    else if method == "to_lower"    { Ty::Str }
+    else if method == "trim"        { Ty::Str }
+    else if method == "trim_start"  { Ty::Str }
+    else if method == "trim_end"    { Ty::Str }
+    else if method == "reverse"     { Ty::Str }
+    else if method == "concat"      { Ty::Str }
+    else if method == "repeat"      { Ty::Str }
+    else if method == "contains"    { Ty::Bool }
+    else if method == "starts_with" { Ty::Bool }
+    else if method == "ends_with"   { Ty::Bool }
+    else if method == "replace"     { Ty::Str }
+    else if method == "split"       { Ty::List(Box::new(Ty::Str)) }
+    else if method == "split_once"  { Ty::Option(Box::new(Ty::Named("Pair", [Ty::Str, Ty::Str]))) }
+    else if method == "chars"       { Ty::List(Box::new(Ty::Char)) }
+    else if method == "bytes"       { Ty::List(Box::new(Ty::Byte)) }
+    else if method == "parse_int"   { Ty::Option(Box::new(Ty::Int)) }
+    else if method == "parse_float" { Ty::Option(Box::new(Ty::Float)) }
+    else if method == "to_string"   { Ty::Str }
+    else if method == "char_at"     { Ty::Option(Box::new(Ty::Char)) }
+    else if method == "substring"   { Ty::Str }
+    else if method == "index_of"    { Ty::Option(Box::new(Ty::Int)) }
+    else if method == "as_str"      { Ty::Str }
+    else if method == "strip_prefix" { Ty::Option(Box::new(Ty::Str)) }
+    else if method == "strip_suffix" { Ty::Option(Box::new(Ty::Str)) }
+    else                            { Ty::Unknown }
+}
+
+partial fn list_method_ty_infer(elem_ty: Ty, method: String, arg_tys: List[Ty]) -> Ty {
+    if      method == "len"         { Ty::Int }
+    else if method == "is_empty"    { Ty::Bool }
+    else if method == "get"         { Ty::Option(Box::new(elem_ty)) }
+    else if method == "first"       { Ty::Option(Box::new(elem_ty)) }
+    else if method == "last"        { Ty::Option(Box::new(elem_ty)) }
+    else if method == "push"        { Ty::Unit }
+    else if method == "pop"         { Ty::Option(Box::new(elem_ty)) }
+    else if method == "append"      { Ty::Unit }
+    else if method == "contains"    { Ty::Bool }
+    else if method == "reverse"     { Ty::List(Box::new(elem_ty)) }
+    else if method == "sort"        { Ty::List(Box::new(elem_ty)) }
+    else if method == "sort_by"     { Ty::List(Box::new(elem_ty)) }
+    else if method == "dedup"       { Ty::List(Box::new(elem_ty)) }
+    else if method == "slice"       { Ty::List(Box::new(elem_ty)) }
+    else if method == "take"        { Ty::List(Box::new(elem_ty)) }
+    else if method == "skip"        { Ty::List(Box::new(elem_ty)) }
+    else if method == "join"        { Ty::Str }
+    else if method == "keys"        { Ty::List(Box::new(elem_ty)) }
+    else if method == "clone"       { Ty::List(Box::new(elem_ty)) }
+    else if method == "map" {
+        let mapped_ty: Ty = match arg_tys.get(0) {
+            Some(Ty::TyFn { ret: r, .. }) => *r,
+            _ => Ty::Unknown,
+        };
+        Ty::List(Box::new(mapped_ty))
+    }
+    else if method == "filter"      { Ty::List(Box::new(elem_ty)) }
+    else if method == "find"        { Ty::Option(Box::new(elem_ty)) }
+    else if method == "any"         { Ty::Bool }
+    else if method == "all"         { Ty::Bool }
+    else if method == "count"       { Ty::Int }
+    else if method == "fold" {
+        match arg_tys.get(0) {
+            Some(init_ty) => init_ty,
+            None          => Ty::Unknown,
+        }
+    }
+    else if method == "partition"   { Ty::Named("Partitioned", [elem_ty]) }
+    else if method == "flat_map"    { Ty::List(Box::new(Ty::Unknown)) }
+    else if method == "zip" {
+        let other_elem: Ty = match arg_tys.get(0) {
+            Some(Ty::List(inner)) => *inner,
+            _                     => Ty::Unknown,
+        };
+        Ty::List(Box::new(Ty::Named("Pair", [elem_ty, other_elem])))
+    }
+    else if method == "enumerate"   { Ty::List(Box::new(Ty::Named("Pair", [Ty::Int, elem_ty]))) }
+    else if method == "to_set"      { Ty::Set(Box::new(elem_ty)) }
+    else if method == "sum"         { elem_ty }
+    else if method == "min"         { Ty::Option(Box::new(elem_ty)) }
+    else if method == "max"         { Ty::Option(Box::new(elem_ty)) }
+    else if method == "unwrap_or"   { elem_ty }
+    else if method == "take_while"  { Ty::List(Box::new(elem_ty)) }
+    else if method == "skip_while"  { Ty::List(Box::new(elem_ty)) }
+    else                            { Ty::Unknown }
+}
+
+partial fn option_method_ty_infer(inner: Ty, method: String, arg_tys: List[Ty]) -> Ty {
+    if      method == "is_some"      { Ty::Bool }
+    else if method == "is_none"      { Ty::Bool }
+    else if method == "unwrap_or"    { inner }
+    else if method == "unwrap_or_else" { inner }
+    else if method == "unwrap_or_default" { inner }
+    else if method == "map" {
+        let mapped_ty: Ty = match arg_tys.get(0) {
+            Some(Ty::TyFn { ret: r, .. }) => *r,
+            _ => Ty::Unknown,
+        };
+        Ty::Option(Box::new(mapped_ty))
+    }
+    else if method == "and_then" {
+        match arg_tys.get(0) {
+            Some(Ty::TyFn { ret: r, .. }) => *r,
+            _ => Ty::Unknown,
+        }
+    }
+    else if method == "or"           { Ty::Option(Box::new(inner)) }
+    else if method == "or_else"      { Ty::Option(Box::new(inner)) }
+    else if method == "filter"       { Ty::Option(Box::new(inner)) }
+    else if method == "ok_or" {
+        let err_ty: Ty = arg_tys.get(0).unwrap_or(Ty::Unknown);
+        Ty::Result(Box::new(inner), Box::new(err_ty))
+    }
+    else if method == "to_result"    { Ty::Result(Box::new(inner), Box::new(Ty::Unknown)) }
+    else if method == "get"          { Ty::Option(Box::new(inner)) }
+    else                             { Ty::Unknown }
+}
+
+partial fn result_method_ty_infer(ok_ty: Ty, method: String, arg_tys: List[Ty]) -> Ty {
+    if      method == "is_ok"        { Ty::Bool }
+    else if method == "is_err"       { Ty::Bool }
+    else if method == "unwrap_or" {
+        match arg_tys.get(0) {
+            Some(t) => t,
+            None    => ok_ty,
+        }
+    }
+    else if method == "ok"           { Ty::Option(Box::new(ok_ty)) }
+    else if method == "err"          { Ty::Option(Box::new(Ty::Unknown)) }
+    else if method == "map" {
+        let mapped_ty: Ty = match arg_tys.get(0) {
+            Some(Ty::TyFn { ret: r, .. }) => *r,
+            _ => Ty::Unknown,
+        };
+        Ty::Result(Box::new(mapped_ty), Box::new(Ty::Unknown))
+    }
+    else if method == "map_err"      { Ty::Result(Box::new(ok_ty), Box::new(Ty::Unknown)) }
+    else if method == "and_then" {
+        match arg_tys.get(0) {
+            Some(Ty::TyFn { ret: r, .. }) => *r,
+            _ => Ty::Unknown,
+        }
+    }
+    else                             { Ty::Unknown }
+}
+
+partial fn map_method_ty_infer(k_ty: Ty, v_ty: Ty, method: String, arg_tys: List[Ty]) -> Ty {
+    if      method == "len"         { Ty::Int }
+    else if method == "is_empty"    { Ty::Bool }
+    else if method == "get"         { Ty::Option(Box::new(v_ty)) }
+    else if method == "contains_key" { Ty::Bool }
+    else if method == "contains_value" { Ty::Bool }
+    else if method == "insert"      { Ty::Unit }
+    else if method == "remove"      { Ty::Option(Box::new(v_ty)) }
+    else if method == "keys"        { Ty::List(Box::new(k_ty)) }
+    else if method == "values"      { Ty::List(Box::new(v_ty)) }
+    else if method == "entries"     { Ty::List(Box::new(Ty::Named("Pair", [k_ty, v_ty]))) }
+    else if method == "map_values" {
+        let mapped: Ty = match arg_tys.get(0) {
+            Some(Ty::TyFn { ret: r, .. }) => *r,
+            _ => Ty::Unknown,
+        };
+        Ty::Map(Box::new(k_ty), Box::new(mapped))
+    }
+    else if method == "filter"      { Ty::Map(Box::new(k_ty), Box::new(v_ty)) }
+    else if method == "merge"       { Ty::Map(Box::new(k_ty), Box::new(v_ty)) }
+    else if method == "clone"       { Ty::Map(Box::new(k_ty), Box::new(v_ty)) }
+    else                            { Ty::Unknown }
+}
+
+partial fn set_method_ty_infer(elem_ty: Ty, method: String, arg_tys: List[Ty]) -> Ty {
+    if      method == "len"         { Ty::Int }
+    else if method == "is_empty"    { Ty::Bool }
+    else if method == "contains"    { Ty::Bool }
+    else if method == "insert"      { Ty::Unit }
+    else if method == "remove"      { Ty::Bool }
+    else if method == "union"       { Ty::Set(Box::new(elem_ty)) }
+    else if method == "intersection" { Ty::Set(Box::new(elem_ty)) }
+    else if method == "difference"  { Ty::Set(Box::new(elem_ty)) }
+    else if method == "is_subset"   { Ty::Bool }
+    else if method == "is_superset" { Ty::Bool }
+    else if method == "to_list"     { Ty::List(Box::new(elem_ty)) }
+    else if method == "filter"      { Ty::Set(Box::new(elem_ty)) }
+    else if method == "map"         { Ty::Set(Box::new(Ty::Unknown)) }
+    else                            { Ty::Unknown }
+}
+
+// ── Function call inference ───────────────────────────────────────────────────
+// Port of TypeChecker::infer_fn_call from calls.rs.
+// Lives here (not calls.mvl) because it needs infer_expr, which is defined
+// in this file.
+
+/// Validate method call arity, per-arg types, effects, and totality.
+partial fn check_method_args_and_effects_infer(
+    c:         Checker,
+    errs:      ref List[CheckError],
+    mi:        FnInfo,
+    qual_name: String,
+    arg_tys:   List[Ty],
+    span:      SourceLoc,
+) -> Unit {
+    // params[0] is self — skip it for arity/type checks.
+    let expected_args: Int = if mi.params.len() > 0 { mi.params.len() - 1 } else { 0 };
+    if expected_args != arg_tys.len() {
+        errs.push(CheckError::WrongArgCount {
+            name:     qual_name,
+            expected: expected_args,
+            found:    arg_tys.len(),
+            span:     span,
+        })
+    } else {
+        let i: ref Int = 0;
+        while i < expected_args {
+            match mi.params.get(i + 1) {
+                Some(expected) => match arg_tys.get(i) {
+                    Some(found) => if !types_compatible_resolved(c.env, expected, found) {
+                        errs.push(CheckError::TypeMismatch {
+                            expected: ty_name(expected),
+                            found:    ty_name(found),
+                            span:     span,
+                        })
+                    } else { () },
+                    None => {},
+                },
+                None => {},
+            }
+            i = i + 1
+        }
+    }
+    check_callee_effects_infer(c, errs, mi.effects, qual_name, span);
+    match mi.totality {
+        Some(Totality::Partial) => match c.current_totality() {
+            Some(Totality::Partial) | None => {},
+            _ => errs.push(CheckError::PartialCallInTotal { callee: qual_name, span: span }),
+        },
+        _ => {},
+    }
+}
+
+/// Infer a method call on a user-defined Named type.
+partial fn infer_named_method_dispatch(
+    c:         Checker,
+    errs:      ref List[CheckError],
+    type_name: String,
+    method:    String,
+    arg_tys:   List[Ty],
+    span:      SourceLoc,
+) -> Ty {
+    // actor_id() is a pure sync accessor — no mailbox send.
+    if c.is_actor(type_name) && method == "actor_id" {
+        return Ty::Int
+    } else { () }
+
+    // Actor method call requires Send effect.
+    if c.is_actor(type_name) {
+        if !c.effect_covered("Send") {
+            if c.effects_empty() {
+                errs.push(CheckError::UndeclaredEffect {
+                    callee: format("{}.{}", [type_name, method]),
+                    eff: "Send",
+                    span:   span,
+                })
+            } else {
+                errs.push(CheckError::MissingEffect {
+                    caller: c.current_fn_name(),
+                    callee: format("{}.{}", [type_name, method]),
+                    eff: "Send",
+                    span:   span,
+                })
+            }
+        } else { () }
+    } else { () }
+
+    // Look up in method_table.
+    match c.lookup_method(type_name, method) {
+        Some(mi) => {
+            check_method_args_and_effects_infer(c, errs, mi, format("{}.{}", [type_name, method]), arg_tys, span);
+            mi.ret
+        },
+        None => {
+            // Emit UndefinedFunction only if the type has any registered methods.
+            match c.method_table.get(type_name) {
+                Some(_) => errs.push(CheckError::UndefinedFunction {
+                    name: format("{}.{}", [type_name, method]),
+                    span: span,
+                }),
+                None => {},
+            }
+            Ty::Unknown
+        },
+    }
+}
+
+/// Fallback paths when the function name is not in env.fns.
+partial fn infer_fn_call_fallback(
+    c:       Checker,
+    errs:    ref List[CheckError],
+    call:    AstCallExpr,
+    arg_tys: List[Ty],
+) -> InferResult {
+    let call_name: String    = call.name;
+    let call_span: SourceLoc = call.span;
+    let first_arg: Ty = arg_tys.get(0).unwrap_or(Ty::Unknown);
+    let arg_count: Int = arg_tys.len();
+
+    // 1. Built-in constructors.
+    if call_name == "Some" {
+        return InferResult::ok(Ty::Option(Box::new(first_arg)), c)
+    } else { () }
+    if call_name == "Ok" {
+        return InferResult::ok(Ty::Result(Box::new(first_arg), Box::new(Ty::Unknown)), c)
+    } else { () }
+    if call_name == "Err" {
+        return InferResult::ok(Ty::Result(Box::new(Ty::Unknown), Box::new(first_arg)), c)
+    } else { () }
+    if call_name == "Box::new" {
+        if arg_count != 1 {
+            errs.push(CheckError::WrongArgCount { name: "Box::new", expected: 1, found: arg_count, span: call_span })
+        } else { () }
+        return InferResult::ok(Ty::Named("Box", [first_arg]), c)
+    } else { () }
+    if call_name == "from_int" || call_name == "wrapping_from_int" {
+        if arg_count != 1 {
+            errs.push(CheckError::WrongArgCount { name: call_name, expected: 1, found: arg_count, span: call_span })
+        } else if !ty_is_integer(first_arg) {
+            errs.push(CheckError::TypeMismatch { expected: "Int", found: ty_name(first_arg), span: call_span })
+        } else { () }
+        return InferResult::ok(Ty::Byte, c)
+    } else { () }
+
+    // 2. Enum variant constructors — qualified ("Type::Variant") first.
+    // Use a single split; derive variant_name from the result.
+    let split_result: Option[List[String]] = split_once_infer(call_name, "::");
+    let variant_name: String = match split_result {
+        Some(prefix_variant) => {
+            let type_prefix: String = prefix_variant.get(0).unwrap_or("");
+            let variant:     String = prefix_variant.get(1).unwrap_or("");
+            match c.env.lookup_type(type_prefix) {
+                Some(info) => match info.body {
+                    TypeBodyInfo::Enum(variants) => {
+                        for v in variants {
+                            if v.name == variant {
+                                return InferResult::ok(Ty::Named(type_prefix, []), c)
+                            } else { () }
+                        }
+                    },
+                    _ => {},
+                },
+                None => {},
+            }
+            variant
+        },
+        None => format("{}", [call_name]),
+    };
+    match lookup_enum_for_variant(c.env, variant_name) {
+        Some(enum_ty) => { return InferResult::ok(enum_ty, c) },
+        None          => {},
+    }
+
+    // 3. HOF variable call.
+    match c.env.lookup(call_name) {
+        Some(vi) => {
+            match resolve_alias(c.env, vi.ty) {
+                Ty::TyFn { params: param_tys, ret: ret_ty, effects: hof_effs, totality: hof_tot, .. } => {
+                    if arg_count != param_tys.len() {
+                        errs.push(CheckError::WrongArgCount {
+                            name:     call_name,
+                            expected: param_tys.len(),
+                            found:    arg_count,
+                            span:     call_span,
+                        })
+                    } else {
+                        let j: ref Int = 0;
+                        while j < param_tys.len() {
+                            match param_tys.get(j) {
+                                Some(expected) => match arg_tys.get(j) {
+                                    Some(found_ty) => if !types_compatible_resolved(c.env, expected, found_ty) {
+                                        errs.push(CheckError::TypeMismatch {
+                                            expected: ty_name(expected),
+                                            found:    ty_name(found_ty),
+                                            span:     call_span,
+                                        })
+                                    } else { () },
+                                    None => {},
+                                },
+                                None => {},
+                            }
+                            j = j + 1
+                        }
+                    }
+                    check_callee_effects_infer(c, errs, hof_effs, call_name, call_span);
+                    match hof_tot {
+                        Some(Totality::Partial) => match c.current_totality() {
+                            Some(Totality::Partial) | None => {},
+                            _ => errs.push(CheckError::PartialCallInTotal { callee: call_name, span: call_span }),
+                        },
+                        _ => {},
+                    }
+                    return InferResult::ok(*ret_ty, c)
+                },
+                _ => {},
+            }
+        },
+        None => {},
+    }
+
+    // 4. Static method call (Type::method via method_table).
+    match split_once_infer(call_name, "::") {
+        Some(pv) => {
+            let type_name_s:   String = pv.get(0).unwrap_or("");
+            let method_name_s: String = pv.get(1).unwrap_or("");
+            match c.lookup_method(type_name_s, method_name_s) {
+                Some(fn_info) => {
+                    let fn_ret: Ty = fn_info.ret;
+                    if fn_info.type_params.len() > 0 {
+                        let subst: ref Map[String, Ty] = Map::new();
+                        infer_type_params_infer(fn_info.type_params, fn_info.params, arg_tys, subst);
+                        return InferResult::ok(substitute_ty_infer(fn_ret, subst, fn_info.type_params), c)
+                    } else { () }
+                    return InferResult::ok(fn_ret, c)
+                },
+                None => {},
+            }
+        },
+        None => {},
+    }
+
+    // 5. Undefined.
+    errs.push(CheckError::UndefinedFunction { name: call_name, span: call_span });
+    InferResult::unknown(c)
+}
+
+/// Infer the return type of a function call.  Port of TypeChecker::infer_fn_call.
+pub partial fn infer_fn_call(
+    c:    Checker,
+    errs: ref List[CheckError],
+    call: AstCallExpr,
+) -> InferResult {
+    // Infer arg types first (for side-effect error accumulation).
+    let arg_tys: ref List[Ty] = [];
+    let curr: ref Checker = c;
+    for arg in call.args {
+        let ir: InferResult = infer_expr(curr, errs, arg);
+        arg_tys.push(ir.ty);
+        curr = ir.checker
+    }
+
+    let call_name: String    = call.name;
+    let call_span: SourceLoc = call.span;
+
+    // ── Named function lookup ────────────────────────────────────────────────
+    match curr.env.lookup_fn(call_name) {
+        Some(fn_info) => {
+            let is_generic: Bool = fn_info.type_params.len() > 0;
+
+            // Arity check.
+            if fn_info.params.len() != arg_tys.len() {
+                errs.push(CheckError::WrongArgCount {
+                    name:     call_name,
+                    expected: fn_info.params.len(),
+                    found:    arg_tys.len(),
+                    span:     call_span,
+                })
+            } else { () }
+
+            // Build instantiated param / return types.
+            let inst_params: ref List[Ty] = [];
+            let fn_ret: Ty = fn_info.ret;
+            let inst_ret: ref Ty = fn_ret;
+
+            if is_generic {
+                let subst: ref Map[String, Ty] = Map::new();
+                infer_type_params_infer(fn_info.type_params, fn_info.params, arg_tys, subst);
+                for p in fn_info.params {
+                    inst_params.push(substitute_ty_infer(p, subst, fn_info.type_params))
+                }
+                inst_ret = substitute_ty_infer(fn_ret, subst, fn_info.type_params)
+            } else {
+                for p in fn_info.params { inst_params.push(p) }
+            }
+
+            // Per-argument type checks.
+            let i: ref Int = 0;
+            while i < inst_params.len() {
+                match inst_params.get(i) {
+                    Some(expected) => match arg_tys.get(i) {
+                        Some(arg_found) => {
+                            let arg_found_name: String = ty_name(arg_found);
+                            let found_check: Ty = if label_of_infer(expected).is_none() {
+                                strip_label_infer(arg_found)
+                            } else {
+                                arg_found
+                            };
+                            if !types_compatible_resolved(curr.env, expected, found_check) {
+                                errs.push(CheckError::TypeMismatch {
+                                        expected: ty_name(expected),
+                                        found:    arg_found_name,
+                                        span:     call_span,
+                                    })
+                            } else { () }
+                        },
+                        None => {},
+                    },
+                    None => {},
+                }
+                i = i + 1
+            }
+
+            // Effect propagation.
+            check_callee_effects_infer(curr, errs, fn_info.effects, call_name, call_span);
+
+            // Totality: total caller must not call partial callee.
+            match fn_info.totality {
+                Some(Totality::Partial) => match curr.current_totality() {
+                    Some(Totality::Partial) | None => {},
+                    _ => errs.push(CheckError::PartialCallInTotal {
+                        callee: call_name,
+                        span:   call_span,
+                    }),
+                },
+                _ => {},
+            }
+
+            InferResult::ok(inst_ret, curr)
+        },
+        None => {
+            let call2: AstCallExpr = AstCallExpr { name: call_name, args: call.args, span: call_span };
+            infer_fn_call_fallback(curr, errs, call2, arg_tys)
+        },
+    }
+}
+
+/// Infer the return type of a method call.  Port of TypeChecker::infer_method_call.
+pub partial fn infer_method_call(
+    c:    Checker,
+    errs: ref List[CheckError],
+    m:    AstMethodExpr,
+) -> InferResult {
+    let recv_ir: InferResult = infer_expr(c, errs, unbox_expr(m.receiver));
+    let curr: ref Checker = recv_ir.checker;
+
+    let arg_tys: ref List[Ty] = [];
+    for arg in m.args {
+        let ir: InferResult = infer_expr(curr, errs, arg);
+        arg_tys.push(ir.ty);
+        curr = ir.checker
+    }
+
+    let recv_ty: Ty    = recv_ir.ty;
+    let method:  String    = m.method;
+    let span:    SourceLoc = m.span;
+
+    // into_inner / as_inner on Labeled types.
+    if (method == "into_inner" || method == "as_inner") && arg_tys.len() == 0 {
+        match recv_ty {
+            Ty::Labeled(_, inner) => { return InferResult::ok(*inner, curr) },
+            _                     => {},
+        }
+    } else { () }
+
+    let base: Ty = ty_strip(recv_ty);
+
+    // Pre-compute builtin name and receiver type name before consuming `base`.
+    let builtin_name: String = match base {
+        Ty::Str          => "String",
+        Ty::Int          => "Int",
+        Ty::Float        => "Float",
+        Ty::Bool         => "Bool",
+        Ty::Byte         => "Byte",
+        Ty::UByte        => "UByte",
+        Ty::UInt         => "UInt",
+        Ty::List(_)      => "List",
+        Ty::Map(_, _)    => "Map",
+        Ty::Set(_)       => "Set",
+        Ty::Option(_)    => "Option",
+        Ty::Result(_, _) => "Result",
+        _                => "",
+    };
+    let base_ty_name: String = ty_name(base);
+    let is_closed_builtin: Bool = builtin_name != "" && match base { Ty::Named(_, _) => false, _ => true };
+
+    // Dispatch on base type.
+    let result: Ty = match base {
+        Ty::Int              => int_method_ty_infer(method),
+        Ty::Float            => float_method_ty_infer(method),
+        Ty::Bool             => bool_method_ty_infer(method),
+        Ty::Byte             => byte_method_ty_infer(method),
+        Ty::UByte            => ubyte_method_ty_infer(method),
+        Ty::UInt             => uint_method_ty_infer(method),
+        Ty::Str              => string_method_ty_infer(method, arg_tys),
+        Ty::List(elem)       => list_method_ty_infer(*elem, method, arg_tys),
+        Ty::Option(inner)    => option_method_ty_infer(*inner, method, arg_tys),
+        Ty::Result(ok_ty, _) => result_method_ty_infer(*ok_ty, method, arg_tys),
+        Ty::Map(k, v)        => map_method_ty_infer(*k, *v, method, arg_tys),
+        Ty::Set(elem)        => set_method_ty_infer(*elem, method, arg_tys),
+        Ty::Named(type_name, _) => {
+            infer_named_method_dispatch(curr, errs, type_name, method, arg_tys, span)
+        },
+        _ => Ty::Unknown,
+    };
+
+    // For builtin types: fall through to method_table (pure MVL extension methods).
+    let result2: Ty = if result == Ty::Unknown {
+        if builtin_name == "" {
+            Ty::Unknown
+        } else {
+            match curr.lookup_method(builtin_name, method) {
+                Some(mi) => {
+                    check_method_args_and_effects_infer(curr, errs, mi, format("{}.{}", [builtin_name, method]), arg_tys, span);
+                    mi.ret
+                },
+                None => Ty::Unknown,
+            }
+        }
+    } else {
+        result
+    };
+
+    // For closed builtin types, Unknown means "method not found" — emit diagnostic.
+    if result2 == Ty::Unknown && is_closed_builtin {
+        errs.push(CheckError::UnknownMethod {
+            receiver_ty: base_ty_name,
+            method:      method,
+            span:        span,
+        })
+    } else { () }
+
+    InferResult::ok(result2, curr)
 }
 
 // ── Simplified block tail inference ──────────────────────────────────────────
