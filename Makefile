@@ -2,7 +2,7 @@
 .ONESHELL:
 SHELL := /bin/bash
 
-.PHONY: help version build build-llvm-runtime build-release test test-full test-unit test-rust-integration test-requirements test-error-messages test-fmt-roundtrip test-corpus test-checker-parity test-checker-parity-update test-solver test-stdlib check-compiler assure-compiler test-mvl test-bdd test-backend-rust test-backend-llvm test-cross-backend test-tree-sitter test-grammar-coverage test-examples test-examples-rust test-examples-llvm coverage validate-keywords lint mvl-lint format format-check format-mvl format-mvl-check assurance assurance-gate audit-backend-ast check-adr docs docs-serve tree-sitter-build install install-nvim setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
+.PHONY: help version build build-llvm-runtime build-release test test-full test-unit test-rust-integration test-requirements test-error-messages test-fmt-roundtrip test-corpus test-checker-parity test-checker-parity-update test-solver test-stdlib check-compiler assure-compiler test-mvl test-bootstrap-e2e test-bdd test-backend-rust test-backend-llvm test-cross-backend test-tree-sitter test-grammar-coverage test-examples test-examples-rust test-examples-llvm coverage validate-keywords lint mvl-lint format format-check format-mvl format-mvl-check assurance assurance-gate audit-backend-ast check-adr docs docs-serve tree-sitter-build install install-nvim setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
 
 .DEFAULT_GOAL := help
 
@@ -283,6 +283,24 @@ assure-compiler: build ## Assurance report for the self-hosted compiler (verbose
 
 test-mvl: build ## Run MVL-in-MVL tests for the self-hosted compiler (compiler/*_test.mvl)
 	$(MVL) test compiler/
+
+test-bootstrap-e2e: build ## Tracer bullet: hello_world.mvl → MVL LLVM emitter → llc → cc → run (#1746)
+	@LLC=/opt/homebrew/opt/llvm/bin/llc; \
+	OUT=$$(mktemp -d); \
+	printf "  Running hello_world.mvl through self-hosted LLVM emitter...\n"; \
+	$(MVL) tir examples/programs/hello_world.mvl 2>/dev/null \
+	  | $(MVL) run compiler/backends/llvm/emitter.mvl 2>/dev/null \
+	  | tail -n +3 > "$$OUT/hello.ll"; \
+	$$LLC -filetype=obj "$$OUT/hello.ll" -o "$$OUT/hello.o"; \
+	cc -o "$$OUT/hello" "$$OUT/hello.o" -lc 2>/dev/null; \
+	GOT=$$($$OUT/hello); \
+	if [ "$$GOT" = "Hello, world!" ]; then \
+	  printf "  \033[32m✓\033[0m  hello_world: Hello, world!\n"; \
+	else \
+	  printf "  \033[31m✗\033[0m  hello_world: expected 'Hello, world!' got '$$GOT'\n"; \
+	  exit 1; \
+	fi; \
+	rm -rf "$$OUT"
 
 # Spike tests are INTENTIONALLY excluded from the main `test` target and from CI.
 # They explore speculative ideas (issue #187: parser-in-MVL) and require manual invocation.
