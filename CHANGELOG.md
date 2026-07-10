@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.241.2] - 2026-07-10
+
+### Fixed — Transpiler
+
+- **Sibling borrow flags**: `emit_sibling_module` now passes `peer_tirs` as `sibling_tirs` to `build_capability_params_map_tir_with_siblings`, so borrow flags for cross-module functions (e.g., `clone_locals`, `clone_structs`, `extend_locals`, `enum_name_of_variant`, `is_aggregate_ty`) are populated for every sibling module. Without this, call sites emitted `x.clone()` instead of `&x`, causing 43 E0308/E0277 compile errors in the self-hosted LLVM emitter (#1745). End-to-end tracer bullet now passes: `mvl tir hello_world.mvl | mvl run emitter.mvl → llc → cc → Hello, world!`
+
 ## [0.241.1] - 2026-07-10
 
 ### Fixed — Transpiler
