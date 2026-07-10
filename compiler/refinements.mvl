@@ -1,0 +1,828 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// compiler/refinements.mvl — Refinement type checker.
+//
+// Port of src/mvl/checker/refinements.rs.
+//
+// MVL adaptation notes:
+//   - struct fields are immutable; proof counters accumulated via return values.
+//   - Only `errors: ref List[CheckError]` is threaded through as a shared ref.
+//   - Program has prog.fns / prog.impls, not a unified declarations list.
+//   - Parser-stage Param has no `refinement` field; all param preds are None.
+//   - AstLetStmt.value, AstAssignStmt.value are List[Expr] (single element).
+//   - If/Match are Expr variants (If/MatchExpr), not statement variants.
+//   - MatchArm.body is List[Expr] with one element; MatchArm has no guard.
+//   - AstLiteral::Floating (not Float) for float literals.
+
+// ── Result types ──────────────────────────────────────────────────────────────
+
+pub type ProofEntry = struct {
+    file: String, line: Int, caller: String, callee: String, predicate: String, layer: Int,
+}
+
+pub type ProofOutcome = enum { ProvenAt(Int), RuntimeCheck, Failed }
+
+pub type ProofSite = struct {
+    caller_fn: String, fn_name: String, param_name: String,
+    predicate: String, span: SourceLoc, outcome: ProofOutcome,
+}
+
+pub type LayerCounts = struct { l1: Int, l2: Int, l3: Int, l4: Int, l5: Int }
+
+fn lc_empty() -> LayerCounts { LayerCounts { l1: 0, l2: 0, l3: 0, l4: 0, l5: 0 } }
+fn lc_get(lc: LayerCounts, n: Int) -> Int {
+    match n { 1 => lc.l1, 2 => lc.l2, 3 => lc.l3, 4 => lc.l4, 5 => lc.l5, _ => 0 }
+}
+fn lc_inc(lc: LayerCounts, n: Int) -> LayerCounts {
+    match n {
+        1 => LayerCounts { l1: lc.l1+1, l2: lc.l2, l3: lc.l3, l4: lc.l4, l5: lc.l5 },
+        2 => LayerCounts { l1: lc.l1, l2: lc.l2+1, l3: lc.l3, l4: lc.l4, l5: lc.l5 },
+        3 => LayerCounts { l1: lc.l1, l2: lc.l2, l3: lc.l3+1, l4: lc.l4, l5: lc.l5 },
+        4 => LayerCounts { l1: lc.l1, l2: lc.l2, l3: lc.l3, l4: lc.l4+1, l5: lc.l5 },
+        5 => LayerCounts { l1: lc.l1, l2: lc.l2, l3: lc.l3, l4: lc.l4, l5: lc.l5+1 },
+        _ => lc,
+    }
+}
+fn lc_merge(a: LayerCounts, b: LayerCounts) -> LayerCounts {
+    LayerCounts { l1: a.l1+b.l1, l2: a.l2+b.l2, l3: a.l3+b.l3, l4: a.l4+b.l4, l5: a.l5+b.l5 }
+}
+
+pub type RefCounts = struct {
+    mode:               SolverMode,
+    proven:             Int,
+    runtime_checked:    Int,
+    failed:             Int,
+    by_layer:           LayerCounts,
+    fn_total:           Int,
+    fully_verified_fns: Int,
+    proof_log:          List[ProofEntry],
+    sites:              List[ProofSite],
+}
+
+fn rc_zero(mode: SolverMode) -> RefCounts {
+    RefCounts { mode: mode, proven: 0, runtime_checked: 0, failed: 0, by_layer: lc_empty(),
+                fn_total: 0, fully_verified_fns: 0, proof_log: [], sites: [] }
+}
+
+fn rc_merge(a: RefCounts, b: RefCounts) -> RefCounts {
+    RefCounts {
+        mode:               a.mode,
+        proven:             a.proven + b.proven,
+        runtime_checked:    a.runtime_checked + b.runtime_checked,
+        failed:             a.failed + b.failed,
+        by_layer:           lc_merge(a.by_layer, b.by_layer),
+        fn_total:           a.fn_total + b.fn_total,
+        fully_verified_fns: a.fully_verified_fns + b.fully_verified_fns,
+        proof_log:          a.proof_log.concat(b.proof_log),
+        sites:              a.sites.concat(b.sites),
+    }
+}
+
+fn rc_proven(mode: SolverMode) -> RefCounts {
+    RefCounts { mode: mode, proven: 1, runtime_checked: 0, failed: 0, by_layer: lc_empty(),
+                fn_total: 0, fully_verified_fns: 0, proof_log: [], sites: [] }
+}
+fn rc_rt(mode: SolverMode) -> RefCounts {
+    RefCounts { mode: mode, proven: 0, runtime_checked: 1, failed: 0, by_layer: lc_empty(),
+                fn_total: 0, fully_verified_fns: 0, proof_log: [], sites: [] }
+}
+fn rc_failed(mode: SolverMode) -> RefCounts {
+    RefCounts { mode: mode, proven: 0, runtime_checked: 0, failed: 1, by_layer: lc_empty(),
+                fn_total: 0, fully_verified_fns: 0, proof_log: [], sites: [] }
+}
+
+// ── ParamRef ──────────────────────────────────────────────────────────────────
+
+pub type ParamRef = struct { name: String, pred: Option[RefExpr] }
+
+// ── Lookup table builders ─────────────────────────────────────────────────────
+
+pub partial fn build_pure_fn_decls(prog: Program) -> Map[String, FnDecl] {
+    let m: ref Map[String, FnDecl] = Map::new();
+    for fd in prog.fns {
+        if fd.effects.len() == 0 { m.insert(fd.name, fd) }
+    }
+    for id in prog.impls {
+        for method in id.methods {
+            if method.effects.len() == 0 { m.insert(method.name, method) }
+        }
+    }
+    m
+}
+
+pub partial fn build_fn_param_refs(prog: Program) -> Map[String, List[ParamRef]] {
+    build_fn_param_refs_multi([prog])
+}
+
+pub partial fn build_fn_param_refs_multi(progs: List[Program]) -> Map[String, List[ParamRef]] {
+    let m: ref Map[String, List[ParamRef]] = Map::new();
+    for prog in progs {
+        for fd in prog.fns { m.insert(fd.name, mk_param_refs(fd.params)) }
+        for id in prog.impls {
+            for method in id.methods { m.insert(method.name, mk_param_refs(method.params)) }
+        }
+    }
+    m
+}
+
+fn mk_param_refs(params: List[Param]) -> List[ParamRef] {
+    let r: ref List[ParamRef] = [];
+    for p in params { r.push(ParamRef { name: p.name, pred: None }) }
+    r
+}
+
+pub partial fn params_to_var_refs(
+    params:    List[Param],
+    type_refs: Map[String, Option[RefExpr]],
+) -> Map[String, Option[RefExpr]] {
+    let m: ref Map[String, Option[RefExpr]] = Map::new();
+    for p in params {
+        let pred: Option[RefExpr] = match type_refs.get(p.ty.name) {
+            Some(v) => v, None => None,
+        };
+        m.insert(p.name, pred)
+    }
+    m
+}
+
+pub partial fn build_type_alias_refs(prog: Program) -> Map[String, Option[RefExpr]] {
+    let m: ref Map[String, Option[RefExpr]] = Map::new();
+    for td in prog.types { m.insert(td.name, None) }
+    m
+}
+
+// ── Synthetic predicate helpers ───────────────────────────────────────────────
+
+fn self_cmp_int(op: CmpOp, n: Int) -> RefExpr {
+    let s: SourceLoc = dummy_loc();
+    RefExpr::Compare {
+        op: op, left: Box::new(RefExpr::Ident { name: "self", span: s }),
+        right: Box::new(RefExpr::Integer { value: n, span: s }), span: s,
+    }
+}
+fn self_eq_int(n: Int)  -> RefExpr { self_cmp_int(CmpOp::Eq, n) }
+fn self_ne_int(n: Int)  -> RefExpr { self_cmp_int(CmpOp::Ne, n) }
+fn self_eq_float(f: Float) -> RefExpr {
+    let s: SourceLoc = dummy_loc();
+    RefExpr::Compare {
+        op: CmpOp::Eq, left: Box::new(RefExpr::Ident { name: "self", span: s }),
+        right: Box::new(RefExpr::Float { value: f, span: s }), span: s,
+    }
+}
+fn self_ne_float(f: Float) -> RefExpr {
+    let s: SourceLoc = dummy_loc();
+    RefExpr::Compare {
+        op: CmpOp::Ne, left: Box::new(RefExpr::Ident { name: "self", span: s }),
+        right: Box::new(RefExpr::Float { value: f, span: s }), span: s,
+    }
+}
+
+partial fn conj_preds(preds: List[RefExpr]) -> Option[RefExpr] {
+    if preds.len() == 0 { return None }
+    let s: SourceLoc = dummy_loc();
+    let acc: ref RefExpr = match preds.get(0) { Some(p) => p, None => { return None } };
+    let i: ref Int = 1;
+    while i < preds.len() {
+        let p: RefExpr = match preds.get(i) { Some(x) => x, None => { return Some(acc) } };
+        acc = RefExpr::Logic { op: LogicOp::And, left: Box::new(acc), right: Box::new(p), span: s };
+        i = i + 1
+    }
+    Some(acc)
+}
+
+fn lit_eq_pred(cv: ConstValue) -> Option[RefExpr] {
+    match cv {
+        ConstValue::CInt(n)   => Some(self_eq_int(n)),
+        ConstValue::CFloat(f) => Some(self_eq_float(f)),
+        _                     => None,
+    }
+}
+
+// ── Predicate normalisation ───────────────────────────────────────────────────
+
+pub partial fn normalize_pred(pred: RefExpr, pname: String) -> RefExpr {
+    match pred {
+        RefExpr::Ident { name: n, span: s } => {
+            RefExpr::Ident { name: if n == pname { "self" } else { n }, span: s }
+        },
+        RefExpr::Compare { op: op, left: l, right: r, span: s } => {
+            RefExpr::Compare { op: op, left: Box::new(normalize_pred(*l, pname)),
+                               right: Box::new(normalize_pred(*r, pname)), span: s }
+        },
+        RefExpr::Logic { op: op, left: l, right: r, span: s } => {
+            RefExpr::Logic { op: op, left: Box::new(normalize_pred(*l, pname)),
+                             right: Box::new(normalize_pred(*r, pname)), span: s }
+        },
+        RefExpr::Arith { op: op, left: l, right: r, span: s } => {
+            RefExpr::Arith { op: op, left: Box::new(normalize_pred(*l, pname)),
+                             right: Box::new(normalize_pred(*r, pname)), span: s }
+        },
+        RefExpr::Not { inner: inn, span: s } => {
+            RefExpr::Not { inner: Box::new(normalize_pred(*inn, pname)), span: s }
+        },
+        RefExpr::Grouped { inner: inn, span: s } => {
+            RefExpr::Grouped { inner: Box::new(normalize_pred(*inn, pname)), span: s }
+        },
+        RefExpr::FieldAccess { object: obj, field: f, span: s } => {
+            RefExpr::FieldAccess { object: Box::new(normalize_pred(*obj, pname)), field: f, span: s }
+        },
+        other => other,
+    }
+}
+
+// ── If-condition hypothesis injection ─────────────────────────────────────────
+
+pub partial fn inject_if_hypothesis(
+    cond:     Expr,
+    var_refs: ref Map[String, Option[RefExpr]],
+) -> Unit {
+    match cond {
+        Expr::Binary(b) => {
+            let left: Expr  = match b.left.get(0)  { Some(e) => e, None => { return () } };
+            let right: Expr = match b.right.get(0) { Some(e) => e, None => { return () } };
+            match binary_op_to_cmp(b.op) {
+                Some(cmp) => {
+                    let var_name: ref String = "";
+                    let cmp_op:   ref CmpOp  = cmp;
+                    let int_val:  ref Int    = 0;
+                    let matched:  ref Bool   = false;
+                    match left {
+                        Expr::Ident(lname, _) => {
+                            match right {
+                                Expr::Lit(AstLiteral::Integer(n), _) => {
+                                    var_name = lname; int_val = n; matched = true
+                                },
+                                _ => {},
+                            }
+                        },
+                        Expr::Lit(AstLiteral::Integer(n), _) => {
+                            match right {
+                                Expr::Ident(rname, _) => {
+                                    var_name = rname; cmp_op = cmp.flip(); int_val = n; matched = true
+                                },
+                                _ => {},
+                            }
+                        },
+                        _ => {},
+                    }
+                    if matched {
+                        let s: SourceLoc = dummy_loc();
+                        let ref_expr: RefExpr = RefExpr::Compare {
+                            op: cmp_op, left: Box::new(RefExpr::Ident { name: "self", span: s }),
+                            right: Box::new(RefExpr::Integer { value: int_val, span: s }), span: s,
+                        };
+                        let new_hyp: RefExpr = match var_refs.get(var_name) {
+                            Some(Some(existing)) => RefExpr::Logic {
+                                op: LogicOp::And, left: Box::new(existing),
+                                right: Box::new(ref_expr), span: s,
+                            },
+                            _ => ref_expr,
+                        };
+                        var_refs.insert(var_name, Some(new_hyp))
+                    }
+                },
+                None => {
+                    if b.op == BinaryOp::And {
+                        inject_if_hypothesis(left, var_refs);
+                        inject_if_hypothesis(right, var_refs)
+                    }
+                },
+            }
+        },
+        _ => {},
+    }
+}
+
+// ── Match-arm hypothesis injection ────────────────────────────────────────────
+
+pub partial fn inject_arm_hypotheses(
+    scrutinee_name:   Option[String],
+    pattern:          Pattern,
+    prior_int_lits:   List[Int],
+    prior_float_lits: List[Float],
+    arm_refs:         ref Map[String, Option[RefExpr]],
+) -> Unit {
+    match pattern {
+        Pattern::Literal(AstLiteral::Integer(n), _) => {
+            match scrutinee_name {
+                Some(sname) => arm_refs.insert(sname, Some(self_eq_int(n))),
+                None => {},
+            }
+        },
+        Pattern::Literal(AstLiteral::Floating(f), _) => {
+            match scrutinee_name {
+                Some(sname) => arm_refs.insert(sname, Some(self_eq_float(f))),
+                None => {},
+            }
+        },
+        Pattern::Ident(var_name, _) => {
+            let ne_preds: ref List[RefExpr] = [];
+            for n in prior_int_lits   { ne_preds.push(self_ne_int(n)) }
+            for f in prior_float_lits { ne_preds.push(self_ne_float(f)) }
+            let hyp: Option[RefExpr] = conj_preds(ne_preds);
+            match hyp {
+                Some(h) => {
+                    arm_refs.insert(var_name, Some(h));
+                    match scrutinee_name {
+                        Some(sname) => {
+                            if sname != var_name { arm_refs.insert(sname, Some(h)) }
+                        },
+                        None => {},
+                    }
+                },
+                None => {},
+            }
+        },
+        Pattern::Wildcard(_) => {
+            let ne_preds: ref List[RefExpr] = [];
+            for n in prior_int_lits   { ne_preds.push(self_ne_int(n)) }
+            for f in prior_float_lits { ne_preds.push(self_ne_float(f)) }
+            match conj_preds(ne_preds) {
+                Some(hyp) => {
+                    match scrutinee_name {
+                        Some(sname) => arm_refs.insert(sname, Some(hyp)),
+                        None => {},
+                    }
+                },
+                None => {},
+            }
+        },
+        _ => {},
+    }
+}
+
+// ── Mode-aware solver dispatch ────────────────────────────────────────────────
+
+pub partial fn dispatch_layers(
+    arg:      Expr,
+    pred:     RefExpr,
+    var_refs: Map[String, Option[RefExpr]],
+    fn_decls: Map[String, FnDecl],
+    mode:     SolverMode,
+) -> RefResult {
+    match mode {
+        SolverMode::Z3Only   => RefResult::RuntimeCheck,
+        SolverMode::FastOnly => {
+            match try_trivial(pred, arg, var_refs, fn_decls) {
+                Some(r) => r,
+                None    => match try_interval(pred, arg, var_refs) {
+                    Some(r) => r,
+                    None    => RefResult::RuntimeCheck,
+                },
+            }
+        },
+        SolverMode::Layered => {
+            match try_trivial(pred, arg, var_refs, fn_decls) {
+                Some(r) => r,
+                None    => match try_interval(pred, arg, var_refs) {
+                    Some(r) => r,
+                    None    => match try_symbolic(pred, arg, var_refs, fn_decls) {
+                        Some(r) => r,
+                        None    => match try_cooper(pred, arg, var_refs) {
+                            Some(r) => r,
+                            None    => RefResult::RuntimeCheck,
+                        },
+                    },
+                },
+            }
+        },
+    }
+}
+
+// ── Predicate display ─────────────────────────────────────────────────────────
+
+pub partial fn display_pred(pred: RefExpr) -> String {
+    match pred {
+        RefExpr::Ident { name: n, .. }    => n,
+        RefExpr::Integer { value: v, .. } => v.to_string(),
+        RefExpr::Float { value: f, .. }   => f.to_string(),
+        RefExpr::Len { ident: id, .. }    => format("len({})", [id]),
+        RefExpr::Compare { op: op, left: l, right: r, .. } => {
+            let op_str: String = match op {
+                CmpOp::Eq => "==", CmpOp::Ne => "!=",
+                CmpOp::Lt => "<",  CmpOp::Gt => ">",
+                CmpOp::Le => "<=", CmpOp::Ge => ">=",
+            };
+            format("{} {} {}", [display_pred(*l), op_str, display_pred(*r)])
+        },
+        RefExpr::Logic { op: op, left: l, right: r, .. } => {
+            let op_str: String = match op { LogicOp::And => "&&", LogicOp::Or => "||" };
+            format("{} {} {}", [display_pred(*l), op_str, display_pred(*r)])
+        },
+        RefExpr::Arith { op: op, left: l, right: r, .. } => {
+            let op_str: String = match op {
+                ArithOp::Add => "+", ArithOp::Sub => "-",
+                ArithOp::Mul => "*", ArithOp::Div => "/", ArithOp::Rem => "%",
+            };
+            format("{} {} {}", [display_pred(*l), op_str, display_pred(*r)])
+        },
+        RefExpr::Not { inner: inn, .. }     => format("!{}", [display_pred(*inn)]),
+        RefExpr::Grouped { inner: inn, .. } => format("({})", [display_pred(*inn)]),
+        RefExpr::Old { inner: inn, .. }     => format("old({})", [display_pred(*inn)]),
+        RefExpr::FieldAccess { object: obj, field: f, .. } => {
+            format("{}.{}", [display_pred(*obj), f])
+        },
+        RefExpr::Forall { var: v, body: b, .. } => {
+            format("forall {}, {}", [v, display_pred(*b)])
+        },
+        RefExpr::Exists { var: v, body: b, .. } => {
+            format("exists {}, {}", [v, display_pred(*b)])
+        },
+    }
+}
+
+// ── Map clone helper ──────────────────────────────────────────────────────────
+
+fn clone_var_refs(m: Map[String, Option[RefExpr]]) -> Map[String, Option[RefExpr]] {
+    let r: ref Map[String, Option[RefExpr]] = Map::new();
+    for k in m.keys() { match m.get(k) { Some(v) => r.insert(k, v), None => {} } }
+    r
+}
+
+// ── Call-site checker (returns RefCounts, emits into errors) ─────────────────
+
+pub partial fn check_call_site(
+    fn_name:    String,
+    args:       List[Expr],
+    call_span:  SourceLoc,
+    param_refs: List[ParamRef],
+    var_refs:   Map[String, Option[RefExpr]],
+    fn_decls:   Map[String, FnDecl],
+    mode:       SolverMode,
+    current_fn: String,
+    errors:     ref List[CheckError],
+) -> RefCounts {
+    let proven:     ref Int          = 0;
+    let rt:         ref Int          = 0;
+    let fail:       ref Int          = 0;
+    let by_layer:   ref LayerCounts  = lc_empty();
+    let proof_log:  ref List[ProofEntry] = [];
+    let sites:      ref List[ProofSite]  = [];
+
+    let i: ref Int = 0;
+    while i < args.len() && i < param_refs.len() {
+        match args.get(i) {
+            Some(arg) => {
+                match param_refs.get(i) {
+                    Some(pr) => {
+                        match pr.pred {
+                            None => {},
+                            Some(pred) => {
+                                let before: LayerCounts = by_layer;
+                                let outcome: RefResult  = dispatch_layers(arg, pred, var_refs, fn_decls, mode);
+                                let layer: ref Int = 0;
+                                let li: ref Int = 1;
+                                while li <= 5 {
+                                    if lc_get(by_layer, li) > lc_get(before, li) {
+                                        layer = li; li = 6
+                                    } else { li = li + 1 }
+                                }
+                                let proof_outcome: ProofOutcome = match outcome {
+                                    RefResult::Proven => {
+                                        proven = proven + 1;
+                                        by_layer = lc_inc(by_layer, layer);
+                                        proof_log.push(ProofEntry {
+                                            file: "", line: call_span.line, caller: "",
+                                            callee: fn_name,
+                                            predicate: format("{}: {}", [pr.name, display_pred(pred)]),
+                                            layer: layer,
+                                        });
+                                        ProofOutcome::ProvenAt(layer)
+                                    },
+                                    RefResult::RuntimeCheck => {
+                                        rt = rt + 1;
+                                        ProofOutcome::RuntimeCheck
+                                    },
+                                    RefResult::Failed(cx) => {
+                                        fail = fail + 1;
+                                        errors.push(CheckError::RefinementViolated {
+                                            pred:           format("argument to `{}` violates refinement `{}`", [fn_name, display_pred(pred)]),
+                                            span:           call_span,
+                                            counterexample: cx,
+                                        });
+                                        ProofOutcome::Failed
+                                    },
+                                };
+                                sites.push(ProofSite {
+                                    caller_fn: current_fn, fn_name: fn_name, param_name: pr.name,
+                                    predicate: display_pred(pred), span: call_span, outcome: proof_outcome,
+                                })
+                            },
+                        }
+                    },
+                    None => {},
+                }
+            },
+            None => {},
+        }
+        i = i + 1
+    }
+    RefCounts { mode: mode, proven: proven, runtime_checked: rt, failed: fail,
+                by_layer: by_layer, fn_total: 0, fully_verified_fns: 0,
+                proof_log: proof_log, sites: sites }
+}
+
+// ── AST walker ────────────────────────────────────────────────────────────────
+
+pub partial fn analyze_block(
+    block:      Block,
+    var_refs:   ref Map[String, Option[RefExpr]],
+    fn_params:  Map[String, List[ParamRef]],
+    fn_decls:   Map[String, FnDecl],
+    mode:       SolverMode,
+    current_fn: String,
+    errors:     ref List[CheckError],
+) -> RefCounts {
+    let counts: ref RefCounts = rc_zero(mode);
+    for stmt in block.stmts {
+        let c: RefCounts = analyze_stmt(stmt, var_refs, fn_params, fn_decls, mode, current_fn, errors);
+        counts = rc_merge(counts, c)
+    }
+    match block.tail_expr.get(0) {
+        Some(e) => {
+            let c: RefCounts = analyze_expr(e, var_refs, fn_params, fn_decls, mode, current_fn, errors);
+            counts = rc_merge(counts, c)
+        },
+        None => {},
+    }
+    counts
+}
+
+partial fn analyze_stmt(
+    stmt:       Stmt,
+    var_refs:   ref Map[String, Option[RefExpr]],
+    fn_params:  Map[String, List[ParamRef]],
+    fn_decls:   Map[String, FnDecl],
+    mode:       SolverMode,
+    current_fn: String,
+    errors:     ref List[CheckError],
+) -> RefCounts {
+    match stmt {
+        Stmt::Let(ls) => {
+            let init: Expr = match ls.value.get(0) { Some(e) => e, None => { return rc_zero(mode) } };
+            let c0: RefCounts = analyze_expr(init, var_refs, fn_params, fn_decls, mode, current_fn, errors);
+            let pred: Option[RefExpr] = match init {
+                Expr::Call(c) => match fn_decls.get(c.name) {
+                    Some(fd) => match try_fold_call(fd, c.args, fn_decls) {
+                        Some(cv) => lit_eq_pred(cv),
+                        None     => None,
+                    },
+                    None => None,
+                },
+                _ => None,
+            };
+            let c1: RefCounts = match pred {
+                Some(p) => {
+                    let outcome: RefResult = dispatch_layers(init, p, var_refs, fn_decls, mode);
+                    match outcome {
+                        RefResult::Proven => {
+                            var_refs.insert(ls.name, Some(p));
+                            rc_proven(mode)
+                        },
+                        RefResult::RuntimeCheck => {
+                            var_refs.insert(ls.name, Some(p));
+                            rc_rt(mode)
+                        },
+                        RefResult::Failed(cx) => {
+                            errors.push(CheckError::RefinementViolated {
+                                pred:           format("let binding violates refinement `{}`", [display_pred(p)]),
+                                span:           ls.span,
+                                counterexample: cx,
+                            });
+                            var_refs.insert(ls.name, Some(p));
+                            rc_failed(mode)
+                        },
+                    }
+                },
+                None => { var_refs.insert(ls.name, None); rc_zero(mode) },
+            };
+            rc_merge(c0, c1)
+        },
+        Stmt::Assign(asgn) => {
+            let asgn_val: Expr = match asgn.value.get(0) { Some(e) => e, None => { return rc_zero(mode) } };
+            let c: RefCounts = analyze_expr(asgn_val, var_refs, fn_params, fn_decls, mode, current_fn, errors);
+            var_refs.insert(asgn.target, None);
+            c
+        },
+        Stmt::Return(exprs, _) => {
+            match exprs.get(0) {
+                Some(e) => analyze_expr(e, var_refs, fn_params, fn_decls, mode, current_fn, errors),
+                None    => rc_zero(mode),
+            }
+        },
+        Stmt::While(sw) => {
+            let cond: Expr = match sw.cond.get(0) { Some(e) => e, None => { return rc_zero(mode) } };
+            let c0: RefCounts = analyze_expr(cond, var_refs, fn_params, fn_decls, mode, current_fn, errors);
+            let c1: RefCounts = analyze_block(sw.body, var_refs, fn_params, fn_decls, mode, current_fn, errors);
+            rc_merge(c0, c1)
+        },
+        Stmt::For(sf) => {
+            let iter: Expr = match sf.iter.get(0) { Some(e) => e, None => { return rc_zero(mode) } };
+            let c0: RefCounts = analyze_expr(iter, var_refs, fn_params, fn_decls, mode, current_fn, errors);
+            let c1: RefCounts = analyze_block(sf.body, var_refs, fn_params, fn_decls, mode, current_fn, errors);
+            rc_merge(c0, c1)
+        },
+        Stmt::ExprStmt(exprs, _) => {
+            match exprs.get(0) {
+                Some(e) => analyze_expr(e, var_refs, fn_params, fn_decls, mode, current_fn, errors),
+                None    => rc_zero(mode),
+            }
+        },
+    }
+}
+
+partial fn analyze_expr(
+    expr:       Expr,
+    var_refs:   ref Map[String, Option[RefExpr]],
+    fn_params:  Map[String, List[ParamRef]],
+    fn_decls:   Map[String, FnDecl],
+    mode:       SolverMode,
+    current_fn: String,
+    errors:     ref List[CheckError],
+) -> RefCounts {
+    match expr {
+        Expr::Call(c) => {
+            let c0: RefCounts = match fn_params.get(c.name) {
+                Some(param_refs) => {
+                    check_call_site(c.name, c.args, c.span, param_refs, var_refs, fn_decls, mode, current_fn, errors)
+                },
+                None => rc_zero(mode),
+            };
+            let c1: ref RefCounts = rc_zero(mode);
+            for arg in c.args {
+                let sub: RefCounts = analyze_expr(arg, var_refs, fn_params, fn_decls, mode, current_fn, errors);
+                c1 = rc_merge(c1, sub)
+            }
+            rc_merge(c0, c1)
+        },
+        Expr::Method(m) => {
+            let recv: Expr = match m.receiver.get(0) { Some(r) => r, None => { return rc_zero(mode) } };
+            let c0: RefCounts = match fn_params.get(m.method) {
+                Some(all_params) => {
+                    let pr: List[ParamRef] = match all_params.get(0) {
+                        Some(p) => if p.name == "self" { all_params.slice(1, all_params.len()) } else { all_params },
+                        None    => all_params,
+                    };
+                    check_call_site(m.method, m.args, m.span, pr, var_refs, fn_decls, mode, current_fn, errors)
+                },
+                None => rc_zero(mode),
+            };
+            let c1: RefCounts = analyze_expr(recv, var_refs, fn_params, fn_decls, mode, current_fn, errors);
+            let c2: ref RefCounts = rc_zero(mode);
+            for arg in m.args {
+                let sub: RefCounts = analyze_expr(arg, var_refs, fn_params, fn_decls, mode, current_fn, errors);
+                c2 = rc_merge(c2, sub)
+            }
+            rc_merge(rc_merge(c0, c1), c2)
+        },
+        Expr::If(ei) => {
+            let cond: Expr = match ei.cond.get(0) { Some(c) => c, None => { return rc_zero(mode) } };
+            let c0: RefCounts = analyze_expr(cond, var_refs, fn_params, fn_decls, mode, current_fn, errors);
+            let then_refs: ref Map[String, Option[RefExpr]] = clone_var_refs(var_refs);
+            inject_if_hypothesis(cond, then_refs);
+            let c1: RefCounts = analyze_block(ei.then, then_refs, fn_params, fn_decls, mode, current_fn, errors);
+            let c2: RefCounts = match ei.else_br.get(0) {
+                Some(e) => analyze_expr(e, var_refs, fn_params, fn_decls, mode, current_fn, errors),
+                None    => rc_zero(mode),
+            };
+            rc_merge(rc_merge(c0, c1), c2)
+        },
+        Expr::MatchExpr(em) => {
+            let scrut: Expr = match em.scrutinee.get(0) { Some(s) => s, None => { return rc_zero(mode) } };
+            analyze_match_arms(scrut, em.arms, var_refs, fn_params, fn_decls, mode, current_fn, errors)
+        },
+        Expr::Binary(b) => {
+            let l: Expr = match b.left.get(0)  { Some(e) => e, None => { return rc_zero(mode) } };
+            let r: Expr = match b.right.get(0) { Some(e) => e, None => { return rc_zero(mode) } };
+            let c0: RefCounts = analyze_expr(l, var_refs, fn_params, fn_decls, mode, current_fn, errors);
+            let c1: RefCounts = analyze_expr(r, var_refs, fn_params, fn_decls, mode, current_fn, errors);
+            rc_merge(c0, c1)
+        },
+        Expr::Unary(u) => {
+            let inner: Expr = match u.expr.get(0) { Some(e) => e, None => { return rc_zero(mode) } };
+            analyze_expr(inner, var_refs, fn_params, fn_decls, mode, current_fn, errors)
+        },
+        Expr::BlockExpr(blk, _) => {
+            analyze_block(blk, var_refs, fn_params, fn_decls, mode, current_fn, errors)
+        },
+        _ => rc_zero(mode),
+    }
+}
+
+partial fn analyze_match_arms(
+    scrutinee:  Expr,
+    arms:       List[MatchArm],
+    var_refs:   ref Map[String, Option[RefExpr]],
+    fn_params:  Map[String, List[ParamRef]],
+    fn_decls:   Map[String, FnDecl],
+    mode:       SolverMode,
+    current_fn: String,
+    errors:     ref List[CheckError],
+) -> RefCounts {
+    let c0: RefCounts = analyze_expr(scrutinee, var_refs, fn_params, fn_decls, mode, current_fn, errors);
+    let scrutinee_name: Option[String] = match scrutinee {
+        Expr::Ident(n, _) => Some(n),
+        _                 => None,
+    };
+    let prior_int_lits:   ref List[Int]   = [];
+    let prior_float_lits: ref List[Float] = [];
+    let counts: ref RefCounts = rc_zero(mode);
+    for arm in arms {
+        let arm_refs: ref Map[String, Option[RefExpr]] = clone_var_refs(var_refs);
+        inject_arm_hypotheses(scrutinee_name, arm.pattern, prior_int_lits, prior_float_lits, arm_refs);
+        match arm.pattern {
+            Pattern::Literal(AstLiteral::Integer(n), _)   => prior_int_lits.push(n),
+            Pattern::Literal(AstLiteral::Floating(f), _)  => prior_float_lits.push(f),
+            _                                              => {},
+        }
+        let arm_c: RefCounts = match arm.body.get(0) {
+            Some(e) => analyze_expr(e, arm_refs, fn_params, fn_decls, mode, current_fn, errors),
+            None    => rc_zero(mode),
+        };
+        counts = rc_merge(counts, arm_c)
+    }
+    rc_merge(c0, counts)
+}
+
+// ── Walk one function ─────────────────────────────────────────────────────────
+
+partial fn analyze_fn(
+    fd:        FnDecl,
+    fn_params: Map[String, List[ParamRef]],
+    type_refs: Map[String, Option[RefExpr]],
+    fn_decls:  Map[String, FnDecl],
+    mode:      SolverMode,
+    errors:    ref List[CheckError],
+) -> RefCounts {
+    let var_refs: ref Map[String, Option[RefExpr]] = params_to_var_refs(fd.params, type_refs);
+    match fd.body {
+        Some(body) => analyze_block(body, var_refs, fn_params, fn_decls, mode, fd.name, errors),
+        None       => rc_zero(mode),
+    }
+}
+
+// ── Entry points ──────────────────────────────────────────────────────────────
+
+pub partial fn check_refinements(
+    progs:  List[Program],
+    prog:   Program,
+    errors: ref List[CheckError],
+    mode:   SolverMode,
+) -> RefCounts {
+    let fn_params: Map[String, List[ParamRef]] = build_fn_param_refs_multi(progs);
+    let type_refs: Map[String, Option[RefExpr]] = build_type_alias_refs(prog);
+    let fn_decls:  Map[String, FnDecl]          = build_pure_fn_decls(prog);
+
+    let counts: ref RefCounts = rc_zero(mode);
+    for fd in prog.fns {
+        let c: RefCounts = analyze_fn(fd, fn_params, type_refs, fn_decls, mode, errors);
+        counts = rc_merge(counts, c)
+    }
+    for id in prog.impls {
+        for method in id.methods {
+            let c: RefCounts = analyze_fn(method, fn_params, type_refs, fn_decls, mode, errors);
+            counts = rc_merge(counts, c)
+        }
+    }
+
+    // fn_total / fully_verified_fns
+    let fn_total:           ref Int = 0;
+    let fully_verified_fns: ref Int = 0;
+    for fd in prog.fns {
+        let sub_errs: ref List[CheckError] = [];
+        let sub: RefCounts = analyze_fn(fd, fn_params, type_refs, fn_decls, mode, sub_errs);
+        let n_checks: Int = sub.proven + sub.runtime_checked + sub.failed;
+        if n_checks > 0 {
+            fn_total = fn_total + 1;
+            if sub.runtime_checked == 0 && sub.failed == 0 {
+                fully_verified_fns = fully_verified_fns + 1
+            }
+        }
+    }
+    for id in prog.impls {
+        for method in id.methods {
+            let sub_errs: ref List[CheckError] = [];
+            let sub: RefCounts = analyze_fn(method, fn_params, type_refs, fn_decls, mode, sub_errs);
+            let n_checks: Int = sub.proven + sub.runtime_checked + sub.failed;
+            if n_checks > 0 {
+                fn_total = fn_total + 1;
+                if sub.runtime_checked == 0 && sub.failed == 0 {
+                    fully_verified_fns = fully_verified_fns + 1
+                }
+            }
+        }
+    }
+
+    RefCounts {
+        mode: counts.mode, proven: counts.proven, runtime_checked: counts.runtime_checked,
+        failed: counts.failed, by_layer: counts.by_layer,
+        fn_total: fn_total, fully_verified_fns: fully_verified_fns,
+        proof_log: counts.proof_log, sites: counts.sites,
+    }
+}
+
+pub partial fn count_refinements(prog: Program, mode: SolverMode) -> RefCounts {
+    let errors: ref List[CheckError] = [];
+    check_refinements([prog], prog, errors, mode)
+}

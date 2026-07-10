@@ -1,0 +1,501 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// compiler/contracts.mvl — Function contract checker.
+//
+// Port of src/mvl/checker/contracts/mod.rs and contracts/loop_and_field.rs.
+//
+// Verifies `requires` / `ensures` / `invariant` clauses (Issue #621).
+//
+// MVL adaptation notes:
+//   - Parser-stage FnDecl does not preserve `requires`/`ensures` clauses
+//     (parser skips them — see parser.mvl:1682). fn_contract_map is always
+//     empty until the parser is extended. The structural walking is correct.
+//   - TypeDecl has no per-field refinements at parser stage.
+//   - Result type reuses RefCounts from refinements.mvl.
+
+// ── Contract map ──────────────────────────────────────────────────────────────
+
+/// A `requires` clause attached to a function (parser-stage representation).
+/// Empty until the parser is extended to preserve contract clauses.
+pub type FnContracts = struct {
+    fn_name:    String,
+    pre_conds:  List[RefExpr],
+    post_conds: List[RefExpr],
+}
+
+/// Build map from function name → contracts.
+/// Currently always empty (parser doesn't preserve requires/ensures).
+pub partial fn build_fn_contract_map(prog: Program) -> Map[String, FnContracts] {
+    let m: ref Map[String, FnContracts] = Map::new();
+    for fd in prog.fns {
+        m.insert(fd.name, FnContracts { fn_name: fd.name, pre_conds: [], post_conds: [] })
+    }
+    for id in prog.impls {
+        for method in id.methods {
+            m.insert(method.name, FnContracts { fn_name: method.name, pre_conds: [], post_conds: [] })
+        }
+    }
+    m
+}
+
+// ── Collect free variable names from a predicate ─────────────────────────────
+
+pub partial fn collect_pred_idents(pred: RefExpr) -> List[String] {
+    match pred {
+        RefExpr::Ident { name: n, .. } => [n],
+        RefExpr::Compare { left: l, right: r, .. } => {
+            collect_pred_idents(*l).concat(collect_pred_idents(*r))
+        },
+        RefExpr::Logic { left: l, right: r, .. } => {
+            collect_pred_idents(*l).concat(collect_pred_idents(*r))
+        },
+        RefExpr::Arith { left: l, right: r, .. } => {
+            collect_pred_idents(*l).concat(collect_pred_idents(*r))
+        },
+        RefExpr::Not { inner: inn, .. }     => collect_pred_idents(*inn),
+        RefExpr::Grouped { inner: inn, .. } => collect_pred_idents(*inn),
+        RefExpr::Old { inner: inn, .. }     => collect_pred_idents(*inn),
+        RefExpr::FieldAccess { object: obj, .. } => collect_pred_idents(*obj),
+        RefExpr::Forall { body: b, .. } => collect_pred_idents(*b),
+        RefExpr::Exists { body: b, .. } => collect_pred_idents(*b),
+        _                               => [],
+    }
+}
+
+// ── Check requires at a call site ─────────────────────────────────────────────
+
+/// Check all `requires` clauses of `fn_name` for the given call-site arguments.
+/// Returns proof counts for this check.
+pub partial fn check_requires_at_call(
+    fn_name:    String,
+    args:       List[Expr],
+    call_span:  SourceLoc,
+    contracts:  FnContracts,
+    var_refs:   Map[String, Option[RefExpr]],
+    fn_decls:   Map[String, FnDecl],
+    mode:       SolverMode,
+    current_fn: String,
+    params:     List[ParamRef],
+    errors:     ref List[CheckError],
+) -> RefCounts {
+    let counts: ref RefCounts = rc_zero(mode);
+    for req_pred in contracts.pre_conds {
+        let idents: List[String] = collect_pred_idents(req_pred);
+        // Find which single param this predicate references.
+        let param_name: ref String = "";
+        let param_idx:  ref Int    = -1;
+        let multi:      ref Bool   = false;
+        let i: ref Int = 0;
+        while i < params.len() {
+            let pr: ParamRef = match params.get(i) { Some(p) => p, None => { i = i + 1 } };
+            if idents.contains(pr.name) {
+                if param_idx == -1 {
+                    param_name = pr.name; param_idx = i
+                } else {
+                    multi = true
+                }
+            }
+            i = i + 1
+        }
+        if multi || param_idx == -1 {
+            // 0 or 2+ params referenced → RuntimeCheck
+            counts = rc_merge(counts, rc_rt(mode))
+        } else {
+            let arg: Expr = match args.get(param_idx) {
+                Some(a) => a,
+                None    => { counts = rc_merge(counts, rc_rt(mode)); rc_zero(mode) },
+            };
+            let normed: RefExpr = normalize_pred(req_pred, param_name);
+            let outcome: RefResult = dispatch_layers(arg, normed, var_refs, fn_decls, mode);
+            let sub: RefCounts = match outcome {
+                RefResult::Proven => {
+                    rc_proven(mode)
+                },
+                RefResult::RuntimeCheck => rc_rt(mode),
+                RefResult::Failed(cx) => {
+                    errors.push(CheckError::PreconditionViolated {
+                        fn_name:        fn_name,
+                        pred:           display_pred(normed),
+                        span:           call_span,
+                        counterexample: cx,
+                    });
+                    rc_failed(mode)
+                },
+            };
+            counts = rc_merge(counts, sub)
+        }
+    }
+    counts
+}
+
+// ── Walk a block checking requires for all call sites ─────────────────────────
+
+pub partial fn walk_and_check_requires(
+    block:       Block,
+    fn_map:      Map[String, FnContracts],
+    var_refs:    Map[String, Option[RefExpr]],
+    fn_decls:    Map[String, FnDecl],
+    mode:        SolverMode,
+    current_fn:  String,
+    errors:      ref List[CheckError],
+) -> RefCounts {
+    let counts: ref RefCounts = rc_zero(mode);
+    for stmt in block.stmts {
+        let c: RefCounts = walk_stmt_requires(stmt, fn_map, var_refs, fn_decls, mode, current_fn, errors);
+        counts = rc_merge(counts, c)
+    }
+    match block.tail_expr.get(0) {
+        Some(e) => {
+            let c: RefCounts = walk_expr_requires(e, fn_map, var_refs, fn_decls, mode, current_fn, errors);
+            counts = rc_merge(counts, c)
+        },
+        None => {},
+    }
+    counts
+}
+
+partial fn walk_stmt_requires(
+    stmt:       Stmt,
+    fn_map:     Map[String, FnContracts],
+    var_refs:   Map[String, Option[RefExpr]],
+    fn_decls:   Map[String, FnDecl],
+    mode:       SolverMode,
+    current_fn: String,
+    errors:     ref List[CheckError],
+) -> RefCounts {
+    match stmt {
+        Stmt::Let(ls) => {
+            match ls.value.get(0) {
+                Some(e) => walk_expr_requires(e, fn_map, var_refs, fn_decls, mode, current_fn, errors),
+                None    => rc_zero(mode),
+            }
+        },
+        Stmt::Assign(asgn) => {
+            match asgn.value.get(0) {
+                Some(e) => walk_expr_requires(e, fn_map, var_refs, fn_decls, mode, current_fn, errors),
+                None    => rc_zero(mode),
+            }
+        },
+        Stmt::Return(exprs, _) => {
+            match exprs.get(0) {
+                Some(e) => walk_expr_requires(e, fn_map, var_refs, fn_decls, mode, current_fn, errors),
+                None    => rc_zero(mode),
+            }
+        },
+        Stmt::While(sw) => {
+            let c0: RefCounts = match sw.cond.get(0) {
+                Some(e) => walk_expr_requires(e, fn_map, var_refs, fn_decls, mode, current_fn, errors),
+                None    => rc_zero(mode),
+            };
+            let c1: RefCounts = walk_and_check_requires(sw.body, fn_map, var_refs, fn_decls, mode, current_fn, errors);
+            rc_merge(c0, c1)
+        },
+        Stmt::For(sf) => {
+            let c0: RefCounts = match sf.iter.get(0) {
+                Some(e) => walk_expr_requires(e, fn_map, var_refs, fn_decls, mode, current_fn, errors),
+                None    => rc_zero(mode),
+            };
+            let c1: RefCounts = walk_and_check_requires(sf.body, fn_map, var_refs, fn_decls, mode, current_fn, errors);
+            rc_merge(c0, c1)
+        },
+        Stmt::ExprStmt(exprs, _) => {
+            match exprs.get(0) {
+                Some(e) => walk_expr_requires(e, fn_map, var_refs, fn_decls, mode, current_fn, errors),
+                None    => rc_zero(mode),
+            }
+        },
+    }
+}
+
+partial fn walk_expr_requires(
+    expr:       Expr,
+    fn_map:     Map[String, FnContracts],
+    var_refs:   Map[String, Option[RefExpr]],
+    fn_decls:   Map[String, FnDecl],
+    mode:       SolverMode,
+    current_fn: String,
+    errors:     ref List[CheckError],
+) -> RefCounts {
+    match expr {
+        Expr::Call(c) => {
+            let c0: RefCounts = match fn_map.get(c.name) {
+                Some(contracts) => {
+                    let params: List[ParamRef] = c.args.map(|_a: Expr| ParamRef { name: "", pred: None });
+                    check_requires_at_call(c.name, c.args, c.span, contracts, var_refs, fn_decls, mode, current_fn, params, errors)
+                },
+                None => rc_zero(mode),
+            };
+            let c1: ref RefCounts = rc_zero(mode);
+            for arg in c.args {
+                let sub: RefCounts = walk_expr_requires(arg, fn_map, var_refs, fn_decls, mode, current_fn, errors);
+                c1 = rc_merge(c1, sub)
+            }
+            rc_merge(c0, c1)
+        },
+        Expr::If(ei) => {
+            let c0: RefCounts = match ei.cond.get(0) {
+                Some(e) => walk_expr_requires(e, fn_map, var_refs, fn_decls, mode, current_fn, errors),
+                None    => rc_zero(mode),
+            };
+            let c1: RefCounts = walk_and_check_requires(ei.then, fn_map, var_refs, fn_decls, mode, current_fn, errors);
+            let c2: RefCounts = match ei.else_br.get(0) {
+                Some(e) => walk_expr_requires(e, fn_map, var_refs, fn_decls, mode, current_fn, errors),
+                None    => rc_zero(mode),
+            };
+            rc_merge(rc_merge(c0, c1), c2)
+        },
+        Expr::MatchExpr(em) => {
+            let c0: RefCounts = match em.scrutinee.get(0) {
+                Some(s) => walk_expr_requires(s, fn_map, var_refs, fn_decls, mode, current_fn, errors),
+                None    => rc_zero(mode),
+            };
+            let c1: ref RefCounts = rc_zero(mode);
+            for arm in em.arms {
+                let arm_c: RefCounts = match arm.body.get(0) {
+                    Some(e) => walk_expr_requires(e, fn_map, var_refs, fn_decls, mode, current_fn, errors),
+                    None    => rc_zero(mode),
+                };
+                c1 = rc_merge(c1, arm_c)
+            }
+            rc_merge(c0, c1)
+        },
+        Expr::Binary(b) => {
+            let l: Expr = match b.left.get(0)  { Some(e) => e, None => { return rc_zero(mode) } };
+            let r: Expr = match b.right.get(0) { Some(e) => e, None => { return rc_zero(mode) } };
+            rc_merge(
+                walk_expr_requires(l, fn_map, var_refs, fn_decls, mode, current_fn, errors),
+                walk_expr_requires(r, fn_map, var_refs, fn_decls, mode, current_fn, errors),
+            )
+        },
+        Expr::Unary(u) => {
+            match u.expr.get(0) {
+                Some(e) => walk_expr_requires(e, fn_map, var_refs, fn_decls, mode, current_fn, errors),
+                None    => rc_zero(mode),
+            }
+        },
+        Expr::BlockExpr(blk, _) => {
+            walk_and_check_requires(blk, fn_map, var_refs, fn_decls, mode, current_fn, errors)
+        },
+        _ => rc_zero(mode),
+    }
+}
+
+// ── Ensures checking ──────────────────────────────────────────────────────────
+
+/// Check `ensures` clauses at every return point in a function body.
+/// (Stub — until parser preserves ensures clauses in FnDecl.)
+pub partial fn check_ensures_for_fn(
+    body:       Block,
+    fn_name:    String,
+    post_clauses: List[RefExpr],
+    params:     List[Param],
+    fn_decls:   Map[String, FnDecl],
+    mode:       SolverMode,
+    errors:     ref List[CheckError],
+) -> RefCounts {
+    if post_clauses.len() == 0 { return rc_zero(mode) }
+    let var_refs: Map[String, Option[RefExpr]] = params_to_var_refs(params, Map::new());
+    let counts: ref RefCounts = rc_zero(mode);
+    let c: RefCounts = check_ensures_in_block(body, fn_name, post_clauses, var_refs, fn_decls, mode, errors);
+    counts = rc_merge(counts, c);
+    counts
+}
+
+partial fn check_ensures_in_block(
+    block:    Block,
+    fn_name:  String,
+    post_cs:  List[RefExpr],
+    var_refs: Map[String, Option[RefExpr]],
+    fn_decls: Map[String, FnDecl],
+    mode:     SolverMode,
+    errors:   ref List[CheckError],
+) -> RefCounts {
+    let counts: ref RefCounts = rc_zero(mode);
+    // Check explicit returns and the tail expression.
+    for stmt in block.stmts {
+        match stmt {
+            Stmt::Return(exprs, span) => {
+                match exprs.get(0) {
+                    Some(ret_expr) => {
+                        let c: RefCounts = check_expr_against_ensures(
+                            ret_expr, span, fn_name, post_cs, var_refs, fn_decls, mode, errors,
+                        );
+                        counts = rc_merge(counts, c)
+                    },
+                    None => {},
+                }
+            },
+            Stmt::While(sw) => {
+                let c: RefCounts = check_ensures_in_block(sw.body, fn_name, post_cs, var_refs, fn_decls, mode, errors);
+                counts = rc_merge(counts, c)
+            },
+            Stmt::For(sf) => {
+                let c: RefCounts = check_ensures_in_block(sf.body, fn_name, post_cs, var_refs, fn_decls, mode, errors);
+                counts = rc_merge(counts, c)
+            },
+            _ => {},
+        }
+    }
+    // Check implicit tail.
+    match block.tail_expr.get(0) {
+        Some(tail) => {
+            let c: RefCounts = check_expr_against_ensures(
+                tail, block.span, fn_name, post_cs, var_refs, fn_decls, mode, errors,
+            );
+            counts = rc_merge(counts, c)
+        },
+        None => {},
+    }
+    counts
+}
+
+partial fn check_expr_against_ensures(
+    ret_expr: Expr,
+    span:     SourceLoc,
+    fn_name:  String,
+    post_cs:  List[RefExpr],
+    var_refs: Map[String, Option[RefExpr]],
+    fn_decls: Map[String, FnDecl],
+    mode:     SolverMode,
+    errors:   ref List[CheckError],
+) -> RefCounts {
+    let counts: ref RefCounts = rc_zero(mode);
+    for clause in post_cs {
+        let normed: RefExpr = normalize_pred(clause, "result");
+        let outcome: RefResult = dispatch_layers(ret_expr, normed, var_refs, fn_decls, mode);
+        let c: RefCounts = match outcome {
+            RefResult::Proven        => rc_proven(mode),
+            RefResult::RuntimeCheck  => rc_rt(mode),
+            RefResult::Failed(cx)    => {
+                errors.push(CheckError::PostconditionViolated {
+                    fn_name:        fn_name,
+                    pred:           display_pred(normed),
+                    span:           span,
+                    counterexample: cx,
+                });
+                rc_failed(mode)
+            },
+        };
+        counts = rc_merge(counts, c)
+    }
+    counts
+}
+
+// ── Return refinement checking ────────────────────────────────────────────────
+
+/// Check that every return point of a function satisfies its return-type
+/// refinement (`-> T where self > 0`).
+/// (Stub — FnDecl at parser stage has no return_refinement field.)
+pub partial fn check_return_refinements(
+    prog:   Program,
+    errors: ref List[CheckError],
+    mode:   SolverMode,
+) -> Unit {
+    let fn_decls: Map[String, FnDecl] = build_pure_fn_decls(prog);
+    for fd in prog.fns {
+        // return_refinement not available at parser stage — skipped
+        let _: Map[String, FnDecl] = fn_decls;
+        let _: ref List[CheckError] = errors;
+        let _: SolverMode = mode;
+        ()
+    }
+}
+
+// ── Loop invariant checking ───────────────────────────────────────────────────
+
+/// Check loop invariants in a function body.
+/// Walks the block and checks `while` loops for invariant predicates.
+/// (Stub — loop invariants are not parsed into the simplified Block/WhileStmt.)
+pub partial fn check_invariants_in_block(
+    block:   Block,
+    fn_name: String,
+    errors:  ref List[CheckError],
+    mode:    SolverMode,
+) -> RefCounts {
+    let counts: ref RefCounts = rc_zero(mode);
+    for stmt in block.stmts {
+        match stmt {
+            Stmt::While(sw) => {
+                let c: RefCounts = check_invariants_in_block(sw.body, fn_name, errors, mode);
+                counts = rc_merge(counts, c)
+            },
+            Stmt::For(sf) => {
+                let c: RefCounts = check_invariants_in_block(sf.body, fn_name, errors, mode);
+                counts = rc_merge(counts, c)
+            },
+            _ => {},
+        }
+    }
+    counts
+}
+
+// ── Actor and struct field refinement checking ────────────────────────────────
+
+/// Check actor field-init values satisfy declared refinements at spawn sites.
+/// (Stub — TirFieldDecl.refinement not available at parser stage.)
+pub partial fn check_actor_field_refinements(
+    prog:   Program,
+    errors: ref List[CheckError],
+    mode:   SolverMode,
+) -> Unit {
+    let _: Program = prog;
+    let _: ref List[CheckError] = errors;
+    let _: SolverMode = mode;
+    ()
+}
+
+/// Check struct/enum field-init values at construction sites.
+/// (Stub — TirFieldDecl.refinement not available at parser stage.)
+pub partial fn check_struct_field_refinements(
+    prog:   Program,
+    errors: ref List[CheckError],
+    mode:   SolverMode,
+) -> Unit {
+    let _: Program = prog;
+    let _: ref List[CheckError] = errors;
+    let _: SolverMode = mode;
+    ()
+}
+
+// ── Entry point ───────────────────────────────────────────────────────────────
+
+/// Check all `requires`/`ensures` clauses for every function and method in `prog`.
+pub partial fn check_contracts(
+    prog:   Program,
+    errors: ref List[CheckError],
+    mode:   SolverMode,
+) -> RefCounts {
+    let fn_map:   Map[String, FnContracts] = build_fn_contract_map(prog);
+    let type_refs: Map[String, Option[RefExpr]] = build_type_alias_refs(prog);
+    let fn_decls:  Map[String, FnDecl]          = build_pure_fn_decls(prog);
+    let counts: ref RefCounts = rc_zero(mode);
+
+    for fd in prog.fns {
+        let var_refs: Map[String, Option[RefExpr]] = params_to_var_refs(fd.params, type_refs);
+        match fd.body {
+            Some(body) => {
+                let c0: RefCounts = walk_and_check_requires(body, fn_map, var_refs, fn_decls, mode, fd.name, errors);
+                counts = rc_merge(counts, c0);
+                let c1: RefCounts = check_invariants_in_block(body, fd.name, errors, mode);
+                counts = rc_merge(counts, c1)
+            },
+            None => {},
+        }
+    }
+    for id in prog.impls {
+        for method in id.methods {
+            let var_refs: Map[String, Option[RefExpr]] = params_to_var_refs(method.params, type_refs);
+            match method.body {
+                Some(body) => {
+                    let c0: RefCounts = walk_and_check_requires(body, fn_map, var_refs, fn_decls, mode, method.name, errors);
+                    counts = rc_merge(counts, c0);
+                    let c1: RefCounts = check_invariants_in_block(body, method.name, errors, mode);
+                    counts = rc_merge(counts, c1)
+                },
+                None => {},
+            }
+        }
+    }
+    counts
+}
