@@ -1,0 +1,153 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// compiler/walk.mvl — generic pre-order AST expression collector
+//
+// Port of src/mvl/checker/walk.rs.
+//
+// MVL does not have generic FnMut closures, so instead of the Rust
+//   walk_block(block, &mut |expr| { ... })
+// pattern, this module provides list-collecting variants:
+//   walk_block(block) -> List[Expr]   — all expressions reachable from block
+//   walk_expr(expr)   -> List[Expr]   — expr itself + all descendants
+//
+// Callers filter/fold the returned list for their specific needs.
+// Pre-order traversal: a parent Expr always appears before its children.
+
+use tir::{
+    AstIfExpr, AstMatchExpr, AstMethodExpr, AstUnaryExpr,
+    Block, Expr, MatchArm, Stmt,
+}
+
+// ── Public API ─────────────────────────────────────────────────────────────────
+
+/// Collect every Expr reachable from `block` in pre-order depth-first order.
+/// Includes expressions in statements and the optional tail expression.
+pub partial fn walk_block(block: Block) -> List[Expr] {
+    let out: ref List[Expr] = [];
+    for s in block.stmts { out.extend(walk_stmt(s)) }
+    match block.tail_expr.get(0) {
+        Some(e) => out.extend(walk_expr(e)),
+        None    => {},
+    }
+    out
+}
+
+/// Collect `expr` itself plus every descendant Expr, in pre-order.
+pub partial fn walk_expr(expr: Expr) -> List[Expr] {
+    let out: ref List[Expr] = [expr];
+    walk_children(expr, out);
+    out
+}
+
+// ── Internal helpers ───────────────────────────────────────────────────────────
+
+/// Append all child expressions of `expr` (recursively) to `out`.
+partial fn walk_children(expr: Expr, out: ref List[Expr]) -> Unit {
+    match expr {
+        Expr::Lit(_, _) | Expr::Ident(_, _) => {},
+
+        Expr::Binary(b) => {
+            match b.left.get(0)  { Some(e) => out.extend(walk_expr(e)), None => {} }
+            match b.right.get(0) { Some(e) => out.extend(walk_expr(e)), None => {} }
+        },
+
+        Expr::Unary(u) => {
+            match u.expr.get(0) { Some(e) => out.extend(walk_expr(e)), None => {} }
+        },
+
+        Expr::Field(fa) => {
+            match fa.expr.get(0) { Some(e) => out.extend(walk_expr(e)), None => {} }
+        },
+
+        Expr::Index(ix) => {
+            match ix.expr.get(0)  { Some(e) => out.extend(walk_expr(e)), None => {} }
+            match ix.index.get(0) { Some(e) => out.extend(walk_expr(e)), None => {} }
+        },
+
+        Expr::Call(c) => {
+            for a in c.args { out.extend(walk_expr(a)) }
+        },
+
+        Expr::Method(m) => {
+            match m.receiver.get(0) { Some(e) => out.extend(walk_expr(e)), None => {} }
+            for a in m.args { out.extend(walk_expr(a)) }
+        },
+
+        Expr::If(ie) => {
+            match ie.cond.get(0) { Some(e) => out.extend(walk_expr(e)), None => {} }
+            out.extend(walk_block(ie.then));
+            match ie.else_br.get(0) { Some(e) => out.extend(walk_expr(e)), None => {} }
+        },
+
+        Expr::MatchExpr(m) => {
+            match m.scrutinee.get(0) { Some(e) => out.extend(walk_expr(e)), None => {} }
+            for arm in m.arms {
+                match arm.body.get(0) { Some(e) => out.extend(walk_expr(e)), None => {} }
+            }
+        },
+
+        Expr::ListLit(elems, _) | Expr::SetLit(elems, _) => {
+            for e in elems { out.extend(walk_expr(e)) }
+        },
+
+        Expr::MapLit(ml) => {
+            for entry in ml.pairs {
+                match entry.key.get(0)   { Some(e) => out.extend(walk_expr(e)), None => {} }
+                match entry.value.get(0) { Some(e) => out.extend(walk_expr(e)), None => {} }
+            }
+        },
+
+        Expr::StructLit(sl) => {
+            for f in sl.fields {
+                match f.expr.get(0) { Some(e) => out.extend(walk_expr(e)), None => {} }
+            }
+        },
+
+        Expr::BlockExpr(block, _) => {
+            out.extend(walk_block(block));
+        },
+
+        Expr::Propagate(cell, _) | Expr::Consume(cell, _) => {
+            match cell.get(0) { Some(e) => out.extend(walk_expr(e)), None => {} }
+        },
+
+        Expr::Cast(ca) => {
+            match ca.expr.get(0) { Some(e) => out.extend(walk_expr(e)), None => {} }
+        },
+
+        Expr::Relabel(r) => {
+            match r.expr.get(0) { Some(e) => out.extend(walk_expr(e)), None => {} }
+        },
+    }
+}
+
+/// Collect all Expr nodes reachable from `stmt`.
+partial fn walk_stmt(stmt: Stmt) -> List[Expr] {
+    match stmt {
+        Stmt::Let(ls) => {
+            match ls.value.get(0) { Some(e) => walk_expr(e), None => [] }
+        },
+        Stmt::Assign(a) => {
+            match a.value.get(0) { Some(e) => walk_expr(e), None => [] }
+        },
+        Stmt::Return(cell, _) => {
+            match cell.get(0) { Some(e) => walk_expr(e), None => [] }
+        },
+        Stmt::While(ws) => {
+            let out: ref List[Expr] = [];
+            match ws.cond.get(0) { Some(e) => out.extend(walk_expr(e)), None => {} }
+            out.extend(walk_block(ws.body));
+            out
+        },
+        Stmt::For(fs) => {
+            let out: ref List[Expr] = [];
+            match fs.iter.get(0) { Some(e) => out.extend(walk_expr(e)), None => {} }
+            out.extend(walk_block(fs.body));
+            out
+        },
+        Stmt::ExprStmt(cell, _) => {
+            match cell.get(0) { Some(e) => walk_expr(e), None => [] }
+        },
+    }
+}

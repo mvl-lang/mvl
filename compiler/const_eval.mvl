@@ -1,0 +1,658 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// compiler/const_eval.mvl — compile-time constant folding
+//
+// Port of src/mvl/checker/const_eval.rs.
+//
+// When a pure function (no effects) is called with all-literal arguments,
+// this module evaluates the function body at compile time and returns the
+// result.  The result feeds into the refinement solver so predicates can
+// be proven statically without a runtime check.
+//
+// Bounded computation: evaluation is limited by EVAL_BUDGET steps.
+// When the budget is exhausted, None is returned conservatively and the
+// caller falls back to a runtime check.
+//
+// MVL differences from Rust:
+//   - HashMap[String, ConstValue] → Map[String, ConstValue]
+//   - `val` is a keyword in MVL   → renamed to `cv` throughout
+//   - AstLiteral::Floating        → Rust: Float
+//   - AstLiteral::Char not foldable (stored as String lexeme in MVL)
+//   - MatchArm.body is List[Expr][1], not MatchBody enum
+//   - Block.tail_expr is List[Expr] (no block.stmts.last())
+//   - `return` in a match arm must be in { } block
+
+// ── Budget ────────────────────────────────────────────────────────────────────
+
+/// Maximum evaluation steps. Prevents non-termination in recursive functions.
+total fn eval_budget() -> Int { 10000 }
+
+// ── ConstValue ────────────────────────────────────────────────────────────────
+
+/// A compile-time constant value produced by the evaluator.
+pub type ConstValue = enum {
+    CInt(Int),
+    CFloat(Float),
+    CStr(String),
+    CBool(Bool),
+    CUnit,
+}
+
+/// Convert a ConstValue back to an AstLiteral for injection into refinement checking.
+pub total fn ConstValue::to_literal(self) -> AstLiteral {
+    match self {
+        ConstValue::CInt(n)   => AstLiteral::Integer(n),
+        ConstValue::CFloat(f) => AstLiteral::Floating(f),
+        ConstValue::CStr(s)   => AstLiteral::Str(s),
+        ConstValue::CBool(b)  => AstLiteral::Bool(b),
+        ConstValue::CUnit     => AstLiteral::Unit,
+    }
+}
+
+// ── Signal (internal early-return threading) ──────────────────────────────────
+
+/// Threaded through statement evaluation to distinguish normal values from
+/// early `return` statements.  Port of Rust's `enum Signal`.
+type ConstSignal = enum {
+    SigVal(ConstValue),
+    SigReturn(ConstValue),
+}
+
+// ── Public API ────────────────────────────────────────────────────────────────
+
+/// Try to extract a ConstValue from an expression that is already a literal
+/// (or a negated literal).  Returns None for anything more complex.
+/// Total: only one level of recursion (Unary wrapping a Literal), never deeper.
+pub total fn expr_as_const(expr: Expr) -> Option[ConstValue] {
+    match expr {
+        Expr::Lit(AstLiteral::Integer(n), _)  => Some(ConstValue::CInt(n)),
+        Expr::Lit(AstLiteral::Floating(f), _) => Some(ConstValue::CFloat(f)),
+        Expr::Lit(AstLiteral::Str(s), _)      => Some(ConstValue::CStr(s)),
+        Expr::Lit(AstLiteral::Bool(b), _)     => Some(ConstValue::CBool(b)),
+        Expr::Lit(AstLiteral::Unit, _)        => Some(ConstValue::CUnit),
+        Expr::Lit(AstLiteral::Char(_), _)     => None,
+        Expr::Unary(u) => {
+            match u.op {
+                UnaryOp::Neg => {
+                    match u.expr.get(0) {
+                        Some(Expr::Lit(AstLiteral::Integer(n), _)) => Some(ConstValue::CInt(0 - n)),
+                        Some(Expr::Lit(AstLiteral::Floating(f), _)) => Some(ConstValue::CFloat(0.0 - f)),
+                        _ => None,
+                    }
+                },
+                _ => None,
+            }
+        },
+        _ => None,
+    }
+}
+
+/// Return true if every expression in `args` reduces to a literal.
+/// Total: bounded loop over a finite list; calls only total functions.
+pub total fn all_literal_args(args: List[Expr]) -> Bool {
+    let ok: ref Bool = true;
+    for a in args {
+        if expr_as_const(a).is_none() { ok = false } else { () }
+    }
+    ok
+}
+
+/// Try to constant-fold a call to `fn_decl` with the given argument expressions.
+///
+/// Succeeds only when:
+///   - fn_decl.effects is empty (pure function)
+///   - all args reduce to literal values
+///   - evaluation completes within eval_budget() steps
+///
+/// Returns None on any failure, deferring to runtime.
+pub partial fn try_fold_call(
+    fn_decl: FnDecl,
+    args: List[Expr],
+    fn_decls: Map[String, FnDecl],
+) -> Option[ConstValue] {
+    if fn_decl.effects.len() > 0 { return None }
+    let arg_vals: ref List[ConstValue] = [];
+    for a in args {
+        match expr_as_const(a) {
+            Some(cv) => arg_vals.push(cv),
+            None     => { return None },
+        }
+    }
+    if fn_decl.params.len() != arg_vals.len() { return None }
+    let env: ref Map[String, ConstValue] = Map::new();
+    let i: ref Int = 0;
+    while i < fn_decl.params.len() {
+        match fn_decl.params.get(i) {
+            Some(p) => {
+                match arg_vals.get(i) {
+                    Some(cv) => { env.insert(p.name, cv) },
+                    None     => { return None },
+                }
+            },
+            None => { return None },
+        }
+        i = i + 1
+    }
+    let budget: ref Int = eval_budget();
+    match fn_decl.body {
+        Some(body) => eval_block(body, env, fn_decls, budget),
+        None       => None,
+    }
+}
+
+// ── Internal evaluators ───────────────────────────────────────────────────────
+
+/// Evaluate a block; an early `return` short-circuits the rest.
+/// Returns the last evaluated value or None on budget exhaustion.
+partial fn eval_block(
+    block: Block,
+    env: Map[String, ConstValue],
+    fn_decls: Map[String, FnDecl],
+    budget: ref Int,
+) -> Option[ConstValue] {
+    let env_mut: ref Map[String, ConstValue] = env;
+    let last_v: ref List[ConstValue] = [];
+    for s in block.stmts {
+        match eval_stmt(s, env_mut, fn_decls, budget) {
+            Some(ConstSignal::SigReturn(cv)) => { return Some(cv) },
+            Some(ConstSignal::SigVal(cv))    => { last_v = [cv] },
+            None                             => { return None },
+        }
+    }
+    match block.tail_expr.get(0) {
+        Some(e) => eval_expr(e, env_mut, fn_decls, budget),
+        None    => match last_v.get(0) {
+            Some(cv) => Some(cv),
+            None     => Some(ConstValue::CUnit),
+        },
+    }
+}
+
+/// Evaluate a block, preserving the SigReturn signal so callers can propagate it.
+partial fn eval_block_signal(
+    block: Block,
+    env: ref Map[String, ConstValue],
+    fn_decls: Map[String, FnDecl],
+    budget: ref Int,
+) -> Option[ConstSignal] {
+    let last_v: ref List[ConstValue] = [];
+    for s in block.stmts {
+        match eval_stmt(s, env, fn_decls, budget) {
+            Some(ConstSignal::SigReturn(cv)) => { return Some(ConstSignal::SigReturn(cv)) },
+            Some(ConstSignal::SigVal(cv))    => { last_v = [cv] },
+            None                             => { return None },
+        }
+    }
+    match block.tail_expr.get(0) {
+        Some(e) => {
+            match eval_expr(e, env, fn_decls, budget) {
+                Some(cv) => Some(ConstSignal::SigVal(cv)),
+                None     => None,
+            }
+        },
+        None => match last_v.get(0) {
+            Some(cv) => Some(ConstSignal::SigVal(cv)),
+            None     => Some(ConstSignal::SigVal(ConstValue::CUnit)),
+        },
+    }
+}
+
+partial fn eval_stmt(
+    stmt: Stmt,
+    env: ref Map[String, ConstValue],
+    fn_decls: Map[String, FnDecl],
+    budget: ref Int,
+) -> Option[ConstSignal] {
+    if budget <= 0 { return None }
+    budget = budget - 1;
+    match stmt {
+        Stmt::Let(ls) => {
+            match ls.value.get(0) {
+                Some(init) => {
+                    match eval_expr(init, env, fn_decls, budget) {
+                        Some(cv) => {
+                            env.insert(ls.name, cv);
+                            Some(ConstSignal::SigVal(ConstValue::CUnit))
+                        },
+                        None => None,
+                    }
+                },
+                None => Some(ConstSignal::SigVal(ConstValue::CUnit)),
+            }
+        },
+        Stmt::Return(cell, _) => {
+            let cv: ConstValue = match cell.get(0) {
+                Some(e) => {
+                    match eval_expr(e, env, fn_decls, budget) {
+                        Some(v) => v,
+                        None    => { return None },
+                    }
+                },
+                None => ConstValue::CUnit,
+            };
+            Some(ConstSignal::SigReturn(cv))
+        },
+        Stmt::ExprStmt(cell, _) => {
+            match cell.get(0) {
+                Some(e) => {
+                    match eval_expr(e, env, fn_decls, budget) {
+                        Some(cv) => Some(ConstSignal::SigVal(cv)),
+                        None     => None,
+                    }
+                },
+                None => Some(ConstSignal::SigVal(ConstValue::CUnit)),
+            }
+        },
+        // Loops and assignments are not folded (conservative).
+        Stmt::Assign(_) | Stmt::While(_) | Stmt::For(_) => None,
+    }
+}
+
+partial fn eval_expr(
+    expr: Expr,
+    env: ref Map[String, ConstValue],
+    fn_decls: Map[String, FnDecl],
+    budget: ref Int,
+) -> Option[ConstValue] {
+    if budget <= 0 { return None }
+    budget = budget - 1;
+    match expr {
+        Expr::Lit(lit, _) => {
+            match lit {
+                AstLiteral::Integer(n)  => Some(ConstValue::CInt(n)),
+                AstLiteral::Floating(f) => Some(ConstValue::CFloat(f)),
+                AstLiteral::Str(s)      => Some(ConstValue::CStr(s)),
+                AstLiteral::Bool(b)     => Some(ConstValue::CBool(b)),
+                AstLiteral::Unit        => Some(ConstValue::CUnit),
+                AstLiteral::Char(_)     => None,
+            }
+        },
+        Expr::Ident(name, _) => env.get(name),
+        Expr::Unary(u) => {
+            match u.expr.get(0) {
+                Some(inner) => {
+                    match eval_expr(inner, env, fn_decls, budget) {
+                        Some(cv) => eval_unary(u.op, cv),
+                        None     => None,
+                    }
+                },
+                None => None,
+            }
+        },
+        Expr::Binary(b) => {
+            let lv: ConstValue = match b.left.get(0) {
+                Some(le) => {
+                    match eval_expr(le, env, fn_decls, budget) {
+                        Some(cv) => cv,
+                        None     => { return None },
+                    }
+                },
+                None => { return None },
+            };
+            let rv: ConstValue = match b.right.get(0) {
+                Some(re) => {
+                    match eval_expr(re, env, fn_decls, budget) {
+                        Some(cv) => cv,
+                        None     => { return None },
+                    }
+                },
+                None => { return None },
+            };
+            eval_binary(b.op, lv, rv)
+        },
+        Expr::If(ie) => {
+            let cond_cv: ConstValue = match ie.cond.get(0) {
+                Some(ce) => {
+                    match eval_expr(ce, env, fn_decls, budget) {
+                        Some(cv) => cv,
+                        None     => { return None },
+                    }
+                },
+                None => { return None },
+            };
+            match cond_cv {
+                ConstValue::CBool(true) => eval_block_expr(ie.then, env, fn_decls, budget),
+                ConstValue::CBool(false) => {
+                    match ie.else_br.get(0) {
+                        None    => Some(ConstValue::CUnit),
+                        Some(e) => eval_expr(e, env, fn_decls, budget),
+                    }
+                },
+                _ => None,
+            }
+        },
+        Expr::BlockExpr(block, _) => eval_block_expr(block, env, fn_decls, budget),
+        Expr::Call(c) => {
+            match fn_decls.get(c.name) {
+                None => None,
+                Some(fd) => {
+                    if fd.effects.len() > 0 { return None }
+                    let arg_vals: ref List[ConstValue] = [];
+                    for a in c.args {
+                        match eval_expr(a, env, fn_decls, budget) {
+                            Some(cv) => arg_vals.push(cv),
+                            None     => { return None },
+                        }
+                    }
+                    if fd.params.len() != arg_vals.len() { return None }
+                    let callee_env: ref Map[String, ConstValue] = Map::new();
+                    let j: ref Int = 0;
+                    while j < fd.params.len() {
+                        match fd.params.get(j) {
+                            Some(p) => {
+                                match arg_vals.get(j) {
+                                    Some(cv) => { callee_env.insert(p.name, cv) },
+                                    None     => { return None },
+                                }
+                            },
+                            None => { return None },
+                        }
+                        j = j + 1
+                    }
+                    match fd.body {
+                        Some(body) => eval_block(body, callee_env, fn_decls, budget),
+                        None       => None,
+                    }
+                },
+            }
+        },
+        Expr::MatchExpr(m) => {
+            let scr: ConstValue = match m.scrutinee.get(0) {
+                Some(se) => {
+                    match eval_expr(se, env, fn_decls, budget) {
+                        Some(cv) => cv,
+                        None     => { return None },
+                    }
+                },
+                None => { return None },
+            };
+            eval_match_arms(scr, m.arms, env, fn_decls, budget)
+        },
+        _ => None,
+    }
+}
+
+/// Evaluate a Block as an expression (inner let-bindings stay scoped to the block).
+partial fn eval_block_expr(
+    block: Block,
+    outer_env: ref Map[String, ConstValue],
+    fn_decls: Map[String, FnDecl],
+    budget: ref Int,
+) -> Option[ConstValue] {
+    let inner_env: ref Map[String, ConstValue] = Map::new();
+    for k in outer_env.keys() {
+        match outer_env.get(k) { Some(cv) => { inner_env.insert(k, cv) }, None => {} }
+    }
+    let last_v: ref List[ConstValue] = [];
+    for s in block.stmts {
+        match eval_stmt(s, inner_env, fn_decls, budget) {
+            Some(ConstSignal::SigReturn(cv)) => { return Some(cv) },
+            Some(ConstSignal::SigVal(cv))    => { last_v = [cv] },
+            None                             => { return None },
+        }
+    }
+    match block.tail_expr.get(0) {
+        Some(e) => eval_expr(e, inner_env, fn_decls, budget),
+        None    => match last_v.get(0) {
+            Some(cv) => Some(cv),
+            None     => Some(ConstValue::CUnit),
+        },
+    }
+}
+
+partial fn eval_match_arms(
+    scr: ConstValue,
+    arms: List[MatchArm],
+    env: ref Map[String, ConstValue],
+    fn_decls: Map[String, FnDecl],
+    budget: ref Int,
+) -> Option[ConstValue] {
+    for arm in arms {
+        match arm_env_if_matches(arm.pattern, scr, env) {
+            Some(ae) => {
+                let arm_env: ref Map[String, ConstValue] = ae;
+                match arm.body.get(0) {
+                    Some(Expr::BlockExpr(b, _)) => { return eval_block(b, arm_env, fn_decls, budget) },
+                    Some(e)                     => { return eval_expr(e, arm_env, fn_decls, budget) },
+                    None                        => { return Some(ConstValue::CUnit) },
+                }
+            },
+            None => {},
+        }
+    }
+    None
+}
+
+/// Attempt to match `scr` against `pattern`.
+/// Returns `Some(env_with_bindings)` if matched, `None` if not.
+partial fn arm_env_if_matches(
+    pattern: Pattern,
+    scr: ConstValue,
+    env: ref Map[String, ConstValue],
+) -> Option[Map[String, ConstValue]] {
+    let new_env: ref Map[String, ConstValue] = Map::new();
+    for k in env.keys() {
+        match env.get(k) { Some(cv) => { new_env.insert(k, cv) }, None => {} }
+    }
+    match pattern {
+        Pattern::Wildcard(_) => Some(new_env),
+        Pattern::Ident(name, _) => {
+            new_env.insert(name, scr);
+            Some(new_env)
+        },
+        Pattern::Literal(AstLiteral::Integer(n), _) => {
+            match scr {
+                ConstValue::CInt(v) => { if v == n { Some(new_env) } else { None } },
+                _                   => None,
+            }
+        },
+        Pattern::Literal(AstLiteral::Bool(b), _) => {
+            match scr {
+                ConstValue::CBool(v) => { if v == b { Some(new_env) } else { None } },
+                _                    => None,
+            }
+        },
+        Pattern::Literal(AstLiteral::Str(s), _) => {
+            match scr {
+                ConstValue::CStr(v) => { if v == s { Some(new_env) } else { None } },
+                _                   => None,
+            }
+        },
+        Pattern::Literal(AstLiteral::Unit, _) => {
+            match scr {
+                ConstValue::CUnit => Some(new_env),
+                _                 => None,
+            }
+        },
+        _ => None,
+    }
+}
+
+// ── Arithmetic helpers ────────────────────────────────────────────────────────
+
+partial fn eval_unary(op: UnaryOp, cv: ConstValue) -> Option[ConstValue] {
+    match op {
+        UnaryOp::Neg => {
+            match cv {
+                ConstValue::CInt(n)   => Some(ConstValue::CInt(0 - n)),
+                ConstValue::CFloat(f) => Some(ConstValue::CFloat(0.0 - f)),
+                _                     => None,
+            }
+        },
+        UnaryOp::Not => {
+            match cv {
+                ConstValue::CBool(b) => Some(ConstValue::CBool(!b)),
+                _                    => None,
+            }
+        },
+        UnaryOp::BitNot => None,  // bitwise complement not needed for refinement predicates
+        UnaryOp::Deref => None,
+    }
+}
+
+partial fn eval_binary(op: BinaryOp, lv: ConstValue, rv: ConstValue) -> Option[ConstValue] {
+    match op {
+        BinaryOp::Add => {
+            match lv {
+                ConstValue::CInt(l)   => { match rv { ConstValue::CInt(r)   => Some(ConstValue::CInt(l + r)),   _ => None } },
+                ConstValue::CFloat(l) => { match rv { ConstValue::CFloat(r) => Some(ConstValue::CFloat(l + r)), _ => None } },
+                _                     => None,
+            }
+        },
+        BinaryOp::Sub => {
+            match lv {
+                ConstValue::CInt(l)   => { match rv { ConstValue::CInt(r)   => Some(ConstValue::CInt(l - r)),   _ => None } },
+                ConstValue::CFloat(l) => { match rv { ConstValue::CFloat(r) => Some(ConstValue::CFloat(l - r)), _ => None } },
+                _                     => None,
+            }
+        },
+        BinaryOp::Mul => {
+            match lv {
+                ConstValue::CInt(l)   => { match rv { ConstValue::CInt(r)   => Some(ConstValue::CInt(l * r)),   _ => None } },
+                ConstValue::CFloat(l) => { match rv { ConstValue::CFloat(r) => Some(ConstValue::CFloat(l * r)), _ => None } },
+                _                     => None,
+            }
+        },
+        BinaryOp::Div => {
+            match lv {
+                ConstValue::CInt(l) => {
+                    match rv {
+                        ConstValue::CInt(r) => { if r == 0 { None } else { Some(ConstValue::CInt(l / r)) } },
+                        _                   => None,
+                    }
+                },
+                ConstValue::CFloat(l) => {
+                    match rv {
+                        ConstValue::CFloat(r) => { if r == 0.0 { None } else { Some(ConstValue::CFloat(l / r)) } },
+                        _                     => None,
+                    }
+                },
+                _ => None,
+            }
+        },
+        BinaryOp::Rem => {
+            match lv {
+                ConstValue::CInt(l) => {
+                    match rv {
+                        ConstValue::CInt(r) => { if r == 0 { None } else { Some(ConstValue::CInt(l % r)) } },
+                        _                   => None,
+                    }
+                },
+                _ => None,
+            }
+        },
+        BinaryOp::Eq => {
+            match lv {
+                ConstValue::CInt(l)   => { match rv { ConstValue::CInt(r)   => Some(ConstValue::CBool(l == r)), _ => None } },
+                ConstValue::CFloat(l) => { match rv { ConstValue::CFloat(r) => Some(ConstValue::CBool(l == r)), _ => None } },
+                ConstValue::CBool(l)  => { match rv { ConstValue::CBool(r)  => Some(ConstValue::CBool(l == r)), _ => None } },
+                ConstValue::CStr(l)   => { match rv { ConstValue::CStr(r)   => Some(ConstValue::CBool(l == r)), _ => None } },
+                ConstValue::CUnit     => { match rv { ConstValue::CUnit     => Some(ConstValue::CBool(true)),   _ => None } },
+            }
+        },
+        BinaryOp::Ne => {
+            match lv {
+                ConstValue::CInt(l)   => { match rv { ConstValue::CInt(r)   => Some(ConstValue::CBool(l != r)), _ => None } },
+                ConstValue::CFloat(l) => { match rv { ConstValue::CFloat(r) => Some(ConstValue::CBool(l != r)), _ => None } },
+                ConstValue::CBool(l)  => { match rv { ConstValue::CBool(r)  => Some(ConstValue::CBool(l != r)), _ => None } },
+                ConstValue::CStr(l)   => { match rv { ConstValue::CStr(r)   => Some(ConstValue::CBool(l != r)), _ => None } },
+                ConstValue::CUnit     => { match rv { ConstValue::CUnit     => Some(ConstValue::CBool(false)),  _ => None } },
+            }
+        },
+        BinaryOp::Lt => {
+            match lv {
+                ConstValue::CInt(l)   => { match rv { ConstValue::CInt(r)   => Some(ConstValue::CBool(l < r)), _ => None } },
+                ConstValue::CFloat(l) => { match rv { ConstValue::CFloat(r) => Some(ConstValue::CBool(l < r)), _ => None } },
+                _                     => None,
+            }
+        },
+        BinaryOp::Gt => {
+            match lv {
+                ConstValue::CInt(l)   => { match rv { ConstValue::CInt(r)   => Some(ConstValue::CBool(l > r)), _ => None } },
+                ConstValue::CFloat(l) => { match rv { ConstValue::CFloat(r) => Some(ConstValue::CBool(l > r)), _ => None } },
+                _                     => None,
+            }
+        },
+        BinaryOp::Le => {
+            match lv {
+                ConstValue::CInt(l)   => { match rv { ConstValue::CInt(r)   => Some(ConstValue::CBool(l <= r)), _ => None } },
+                ConstValue::CFloat(l) => { match rv { ConstValue::CFloat(r) => Some(ConstValue::CBool(l <= r)), _ => None } },
+                _                     => None,
+            }
+        },
+        BinaryOp::Ge => {
+            match lv {
+                ConstValue::CInt(l)   => { match rv { ConstValue::CInt(r)   => Some(ConstValue::CBool(l >= r)), _ => None } },
+                ConstValue::CFloat(l) => { match rv { ConstValue::CFloat(r) => Some(ConstValue::CBool(l >= r)), _ => None } },
+                _                     => None,
+            }
+        },
+        BinaryOp::And => {
+            match lv {
+                ConstValue::CBool(l) => { match rv { ConstValue::CBool(r) => Some(ConstValue::CBool(l && r)), _ => None } },
+                _                    => None,
+            }
+        },
+        BinaryOp::Or => {
+            match lv {
+                ConstValue::CBool(l) => { match rv { ConstValue::CBool(r) => Some(ConstValue::CBool(l || r)), _ => None } },
+                _                    => None,
+            }
+        },
+        // Bitwise and shift ops: not foldable (not needed for refinement predicates)
+        _ => None,
+    }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+test fn expr_as_const_integer() -> Unit {
+    let sp: SourceLoc = SourceLoc { line: 0, col: 0 };
+    let e: Expr = Expr::Lit(AstLiteral::Integer(42), sp);
+    assert_eq(expr_as_const(e), Some(ConstValue::CInt(42)))
+}
+
+test fn expr_as_const_neg_int() -> Unit {
+    let sp: SourceLoc = SourceLoc { line: 0, col: 0 };
+    let inner: Expr = Expr::Lit(AstLiteral::Integer(5), sp);
+    let e: Expr = Expr::Unary(AstUnaryExpr { op: UnaryOp::Neg, expr: [inner], span: sp });
+    assert_eq(expr_as_const(e), Some(ConstValue::CInt(-5)))
+}
+
+test fn expr_as_const_str() -> Unit {
+    let sp: SourceLoc = SourceLoc { line: 0, col: 0 };
+    let e: Expr = Expr::Lit(AstLiteral::Str("hello"), sp);
+    assert_eq(expr_as_const(e), Some(ConstValue::CStr("hello")))
+}
+
+test fn expr_as_const_ident_is_none() -> Unit {
+    let sp: SourceLoc = SourceLoc { line: 0, col: 0 };
+    let e: Expr = Expr::Ident("x", sp);
+    assert_eq(expr_as_const(e).is_none(), true)
+}
+
+test fn all_literal_args_true() -> Unit {
+    let sp: SourceLoc = SourceLoc { line: 0, col: 0 };
+    let args: List[Expr] = [
+        Expr::Lit(AstLiteral::Integer(1), sp),
+        Expr::Lit(AstLiteral::Integer(2), sp),
+    ];
+    assert_eq(all_literal_args(args), true)
+}
+
+test fn all_literal_args_false_when_ident() -> Unit {
+    let sp: SourceLoc = SourceLoc { line: 0, col: 0 };
+    let args: List[Expr] = [
+        Expr::Lit(AstLiteral::Integer(1), sp),
+        Expr::Ident("x", sp),
+    ];
+    assert_eq(all_literal_args(args), false)
+}
+
+test fn const_value_to_literal_roundtrip() -> Unit {
+    assert_eq(ConstValue::CInt(7).to_literal(),   AstLiteral::Integer(7))
+    assert_eq(ConstValue::CBool(true).to_literal(), AstLiteral::Bool(true))
+    assert_eq(ConstValue::CStr("hi").to_literal(), AstLiteral::Str("hi"))
+    assert_eq(ConstValue::CUnit.to_literal(),     AstLiteral::Unit)
+}

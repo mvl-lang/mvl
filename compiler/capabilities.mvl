@@ -1,0 +1,311 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// compiler/capabilities.mvl — capability scope checking and reference lifetime helpers
+//
+// Port of src/mvl/checker/capabilities.rs.
+//
+// Provides:
+//   - check_send_capability              — actor send / channel.send() capability check
+//   - check_capability_scope             — Phase C scope-depth check for val/ref bindings
+//   - block_return_flows_from_ref_param  — all return paths must flow from a ref param
+//   - expr_description                   — short printable description for error messages
+//
+// Omitted (dead code in Rust, superseded by scope-index check):
+//   - collect_free_var_refs / collect_refs_expr / collect_refs_block / check_lambda_captures
+//
+// MVL differences from Rust:
+//   - Capability::Ref    → Capability::RefCap  (avoids Ty::Ref collision)
+//   - Expr::Borrow       → not in MVL Expr; val/ref borrows come through other forms
+//   - Stmt::Expr         → Stmt::ExprStmt; if/match in stmt position wrap as ExprStmt
+//   - Block tail         → block.tail_expr.get(0) instead of block.stmts.last()
+//   - HashSet[&str]      → List[String] with .contains() check
+//   - No `use` imports   — compiler/ is one module; all types are in scope
+
+// ── Public API ─────────────────────────────────────────────────────────────────
+
+/// Verify that an argument to `channel.send()` or actor behavior has a sendable capability.
+///
+/// Only `iso` and `val` may cross actor boundaries; `ref` (RefCap) may not.
+/// `tag` is sendable (identity-only, no read/write access).
+/// `consume` transfers ownership — always sendable.
+pub partial fn check_send_capability(
+    c: Checker, errs: ref List[CheckError], arg: Expr, span: SourceLoc
+) -> Checker {
+    match arg {
+        Expr::Ident(name, _) => {
+            match c.env.lookup(name) {
+                Some(info) => {
+                    match info.capability {
+                        Some(Capability::RefCap) => {
+                            errs.push(CheckError::CapabilityViolation {
+                                param: name, capability: "ref", span: span,
+                            });
+                            c
+                        },
+                        _ => c,
+                    }
+                },
+                None => c,
+            }
+        },
+        Expr::Field(fa) => {
+            match fa.expr.get(0) {
+                Some(inner) => check_send_capability(c, errs, inner, span),
+                None        => c,
+            }
+        },
+        Expr::Consume(_, _) => c,
+        _ => {
+            let ir: InferResult = infer_expr(c, errs, arg);
+            match ir.ty {
+                Ty::Ref(_, _) => {
+                    errs.push(CheckError::CapabilityViolation {
+                        param: expr_description(arg), capability: "ref", span: span,
+                    });
+                    ir.checker
+                },
+                _ => ir.checker,
+            }
+        },
+    }
+}
+
+/// Phase C (#305, #363): scope-depth check for `val`/`ref` bindings.
+///
+/// Emits `ReferenceOutlivesOwner` when the referent is defined at a deeper
+/// (shorter-lived) scope than the reference binding, or when the referent
+/// is block-local and leaves scope before the binding is made.
+pub partial fn check_capability_scope(
+    c: Checker, errs: ref List[CheckError], pattern: Pattern, init: Expr
+) -> Checker {
+    match pattern {
+        Pattern::Ident(ref_name, _) => {
+            match referent_ident(init) {
+                Some(owner_name) => {
+                    // scope_depth() = scopes.len(); VarInfo.scope_depth = scopes.len()-1
+                    let r_depth: Int = if c.env.scope_depth() > 0 { c.env.scope_depth() - 1 } else { 0 };
+                    let owner_too_deep: Bool = match c.env.lookup(owner_name) {
+                        Some(info) => info.scope_depth > r_depth,
+                        None       => true,
+                    };
+                    if owner_too_deep {
+                        errs.push(CheckError::ReferenceOutlivesOwner {
+                            ref_name: ref_name, owner_name: owner_name, span: expr_span(init),
+                        });
+                    }
+                    c
+                },
+                None => c,
+            }
+        },
+        _ => c,
+    }
+}
+
+/// Check whether all return paths from `block` flow from one of the `ref_params` names.
+///
+/// Returns `None` if every path is valid.
+/// Returns `Some(span)` of the first expression that does NOT flow from a ref param.
+///
+/// Used by `decls.mvl` for Phase C return-flow checking (#364).
+pub partial fn block_return_flows_from_ref_param(
+    block: Block, ref_params: List[String]
+) -> Option[SourceLoc] {
+    match block_early_return_violation(block, ref_params) {
+        Some(bad) => Some(bad),
+        None => {
+            match block.tail_expr.get(0) {
+                None    => Some(block.span),
+                Some(e) => expr_return_flows_from_ref_param(e, ref_params),
+            }
+        },
+    }
+}
+
+/// Short human-readable description of `expr` for error messages.
+pub partial fn expr_description(expr: Expr) -> String {
+    match expr {
+        Expr::Ident(name, _) => name,
+        Expr::Field(fa) => {
+            match fa.expr.get(0) {
+                Some(inner) => format("{}.{}", [expr_description(inner), fa.field]),
+                None        => format("<expr>.{}", [fa.field]),
+            }
+        },
+        Expr::Call(c)   => format("{}(..)", [c.name]),
+        Expr::Method(m) => {
+            match m.receiver.get(0) {
+                Some(r) => format("{}.{}(..)", [expr_description(r), m.method]),
+                None    => format("<expr>.{}(..)", [m.method]),
+            }
+        },
+        _               => "<expr>",
+    }
+}
+
+// ── Internal helpers ───────────────────────────────────────────────────────────
+
+/// Extract the SourceLoc from an expression (used for error spans).
+total fn expr_span(expr: Expr) -> SourceLoc {
+    match expr {
+        Expr::Lit(_, sp)       => sp,
+        Expr::Ident(_, sp)     => sp,
+        Expr::Binary(b)        => b.span,
+        Expr::Unary(u)         => u.span,
+        Expr::Field(fa)        => fa.span,
+        Expr::Index(ix)        => ix.span,
+        Expr::Call(c)          => c.span,
+        Expr::Method(m)        => m.span,
+        Expr::If(ie)           => ie.span,
+        Expr::MatchExpr(m)     => m.span,
+        Expr::ListLit(_, sp)   => sp,
+        Expr::MapLit(ml)       => ml.span,
+        Expr::SetLit(_, sp)    => sp,
+        Expr::StructLit(sl)    => sl.span,
+        Expr::BlockExpr(_, sp) => sp,
+        Expr::Propagate(_, sp) => sp,
+        Expr::Cast(ca)         => ca.span,
+        Expr::Consume(_, sp)   => sp,
+        Expr::Relabel(r)       => r.span,
+    }
+}
+
+/// Extract the "root identifier" from an expression used as a `val`/`ref` init.
+///
+/// For `let r: val T = x`, returns `Some("x")`.
+/// For `let r: val T = { ...; x }`, returns `Some("x")` (block's tail ident).
+/// Returns `None` for complex expressions where the referent cannot be named.
+partial fn referent_ident(expr: Expr) -> Option[String] {
+    match expr {
+        Expr::Ident(name, _)   => Some(name),
+        Expr::BlockExpr(b, _)  => {
+            match b.tail_expr.get(0) {
+                Some(Expr::Ident(name, _)) => Some(name),
+                _                          => None,
+            }
+        },
+        _ => None,
+    }
+}
+
+// ── Return-flow helpers ────────────────────────────────────────────────────────
+
+/// Check whether `expr` produces a value flowing from one of `ref_params`.
+/// Returns `None` if OK, `Some(span)` at the first problematic sub-expression.
+partial fn expr_return_flows_from_ref_param(
+    expr: Expr, ref_params: List[String]
+) -> Option[SourceLoc] {
+    match expr {
+        Expr::Ident(name, _) => {
+            if ref_params.contains(name) { None } else { Some(expr_span(expr)) }
+        },
+        Expr::If(ie) => {
+            match block_return_flows_from_ref_param(ie.then, ref_params) {
+                Some(bad) => Some(bad),
+                None      => {
+                    match ie.else_br.get(0) {
+                        None    => Some(ie.span),
+                        Some(e) => expr_return_flows_from_ref_param(e, ref_params),
+                    }
+                },
+            }
+        },
+        Expr::MatchExpr(m) => {
+            if m.arms.len() == 0 {
+                Some(m.span)
+            } else {
+                check_match_arms_flow(m.arms, ref_params)
+            }
+        },
+        Expr::BlockExpr(b, _) => block_return_flows_from_ref_param(b, ref_params),
+        _                     => Some(expr_span(expr)),
+    }
+}
+
+/// Check each arm; return `Some(span)` of the first arm not flowing from a ref param.
+partial fn check_match_arms_flow(
+    arms: List[MatchArm], ref_params: List[String]
+) -> Option[SourceLoc] {
+    for arm in arms {
+        let bad: Option[SourceLoc] = match arm.body.get(0) {
+            Some(Expr::BlockExpr(b, _)) => block_return_flows_from_ref_param(b, ref_params),
+            Some(e)                     => expr_return_flows_from_ref_param(e, ref_params),
+            None                        => None,
+        };
+        match bad {
+            Some(span) => { return Some(span) },
+            None       => {},
+        }
+    }
+    None
+}
+
+/// Scan all statements for early `return` that doesn't flow from `ref_params`.
+partial fn block_early_return_violation(
+    block: Block, ref_params: List[String]
+) -> Option[SourceLoc] {
+    for s in block.stmts {
+        match stmt_early_return_violation(s, ref_params) {
+            Some(bad) => { return Some(bad) },
+            None      => {},
+        }
+    }
+    None
+}
+
+partial fn stmt_early_return_violation(
+    stmt: Stmt, ref_params: List[String]
+) -> Option[SourceLoc] {
+    match stmt {
+        Stmt::Return(cell, span) => {
+            match cell.get(0) {
+                Some(e) => expr_return_flows_from_ref_param(e, ref_params),
+                None    => Some(span),
+            }
+        },
+        Stmt::ExprStmt(cell, _) => {
+            match cell.get(0) {
+                Some(e) => expr_early_return_violation(e, ref_params),
+                None    => None,
+            }
+        },
+        Stmt::While(ws) => block_early_return_violation(ws.body, ref_params),
+        Stmt::For(fs)   => block_early_return_violation(fs.body, ref_params),
+        _               => None,
+    }
+}
+
+partial fn expr_early_return_violation(
+    expr: Expr, ref_params: List[String]
+) -> Option[SourceLoc] {
+    match expr {
+        Expr::If(ie) => {
+            match block_early_return_violation(ie.then, ref_params) {
+                Some(bad) => Some(bad),
+                None      => {
+                    match ie.else_br.get(0) {
+                        None    => None,
+                        Some(e) => expr_early_return_violation(e, ref_params),
+                    }
+                },
+            }
+        },
+        Expr::MatchExpr(m) => {
+            for arm in m.arms {
+                match arm.body.get(0) {
+                    Some(Expr::BlockExpr(b, _)) => {
+                        match block_early_return_violation(b, ref_params) {
+                            Some(bad) => { return Some(bad) },
+                            None      => {},
+                        }
+                    },
+                    _ => {},
+                }
+            }
+            None
+        },
+        Expr::BlockExpr(b, _) => block_early_return_violation(b, ref_params),
+        _                     => None,
+    }
+}
