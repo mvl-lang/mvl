@@ -135,39 +135,52 @@ partial fn ty_compat_structural(a: Ty, b: Ty) -> Bool {
 
 /// Per-function metadata pushed onto the checker's context stack.
 pub type FnContext = struct {
-    fn_name:   String,
-    return_ty: Option[Ty],
-    totality:  Option[Totality],
+    fn_name:     String,
+    return_ty:   Option[Ty],
+    totality:    Option[Totality],
+    effects:     List[Effect],
+    type_params: List[String],
 }
 
 pub total fn FnContext::new(fn_name: String, return_ty: Option[Ty], totality: Option[Totality]) -> FnContext {
-    FnContext { fn_name: fn_name, return_ty: return_ty, totality: totality }
+    FnContext { fn_name: fn_name, return_ty: return_ty, totality: totality, effects: [], type_params: [] }
+}
+
+pub total fn FnContext::with_effects(self, effects: List[Effect]) -> FnContext {
+    FnContext { fn_name: self.fn_name, return_ty: self.return_ty, totality: self.totality, effects: effects, type_params: self.type_params }
 }
 
 // ── Checker ───────────────────────────────────────────────────────────────────
 
 /// Type checker state threaded through all checking functions.
+///
+/// method_table: registered extension/instance methods keyed by receiver type name.
+/// actor_names:  names of declared actor types (for Send-effect enforcement).
+/// iterator_impls: named types registered as Iterator<T> via `impl Iterator<T> for X`.
 pub type Checker = struct {
-    env:    TypeEnv,
-    fn_ctx: List[FnContext],
+    env:             TypeEnv,
+    fn_ctx:          List[FnContext],
+    method_table:    Map[String, Map[String, FnInfo]],
+    actor_names:     List[String],
+    iterator_impls:  Map[String, Ty],
 }
 
 pub total fn Checker::new(env: TypeEnv) -> Checker {
-    Checker { env: env, fn_ctx: [] }
+    Checker { env: env, fn_ctx: [], method_table: Map::new(), actor_names: [], iterator_impls: Map::new() }
 }
 
 pub total fn Checker::enter_scope(self) -> Checker {
-    Checker { env: self.env.push_scope(), fn_ctx: self.fn_ctx }
+    Checker { env: self.env.push_scope(), fn_ctx: self.fn_ctx, method_table: self.method_table, actor_names: self.actor_names, iterator_impls: self.iterator_impls }
 }
 
 pub total fn Checker::leave_scope(self) -> Checker {
-    Checker { env: self.env.pop_scope(), fn_ctx: self.fn_ctx }
+    Checker { env: self.env.pop_scope(), fn_ctx: self.fn_ctx, method_table: self.method_table, actor_names: self.actor_names, iterator_impls: self.iterator_impls }
 }
 
 pub total fn Checker::push_fn_ctx(self, ctx: FnContext) -> Checker {
     let new_ctx: ref List[FnContext] = self.fn_ctx;
     new_ctx.push(ctx);
-    Checker { env: self.env, fn_ctx: new_ctx }
+    Checker { env: self.env, fn_ctx: new_ctx, method_table: self.method_table, actor_names: self.actor_names, iterator_impls: self.iterator_impls }
 }
 
 pub total fn Checker::pop_fn_ctx(self) -> Checker {
@@ -179,7 +192,7 @@ pub total fn Checker::pop_fn_ctx(self) -> Checker {
         for i in range(0, n - 1) {
             match self.fn_ctx.get(i) { Some(c) => { new_ctx.push(c) }, None => {} }
         }
-        Checker { env: self.env, fn_ctx: new_ctx }
+        Checker { env: self.env, fn_ctx: new_ctx, method_table: self.method_table, actor_names: self.actor_names, iterator_impls: self.iterator_impls }
     }
 }
 
@@ -195,7 +208,77 @@ pub total fn Checker::return_ty(self) -> Option[Ty] {
 }
 
 pub total fn Checker::with_env(self, env: TypeEnv) -> Checker {
-    Checker { env: env, fn_ctx: self.fn_ctx }
+    Checker { env: env, fn_ctx: self.fn_ctx, method_table: self.method_table, actor_names: self.actor_names, iterator_impls: self.iterator_impls }
+}
+
+/// Register an extension/instance method for a given receiver type.
+pub total fn Checker::register_method(self, recv_ty: String, name: String, info: FnInfo) -> Checker {
+    let existing: ref Map[String, FnInfo] = self.method_table.get(recv_ty).unwrap_or(Map::new());
+    existing.insert(name, info);
+    let new_table: ref Map[String, Map[String, FnInfo]] = self.method_table;
+    new_table.insert(recv_ty, existing);
+    Checker { env: self.env, fn_ctx: self.fn_ctx, method_table: new_table, actor_names: self.actor_names, iterator_impls: self.iterator_impls }
+}
+
+/// Look up a method on a given receiver type name.
+pub total fn Checker::lookup_method(self, recv_ty: String, method: String) -> Option[FnInfo] {
+    match self.method_table.get(recv_ty) {
+        Some(methods) => methods.get(method),
+        None          => None,
+    }
+}
+
+/// Register a named type as an actor.
+pub total fn Checker::register_actor(self, name: String) -> Checker {
+    let names: ref List[String] = self.actor_names;
+    names.push(name);
+    Checker { env: self.env, fn_ctx: self.fn_ctx, method_table: self.method_table, actor_names: names, iterator_impls: self.iterator_impls }
+}
+
+/// True if the named type is a known actor.
+pub total fn Checker::is_actor(self, name: String) -> Bool {
+    for n in self.actor_names {
+        if n == name { return true } else { () }
+    }
+    false
+}
+
+/// True if the current function context has no declared effects.
+pub total fn Checker::effects_empty(self) -> Bool {
+    match self.fn_ctx() {
+        Some(ctx) => ctx.effects.len() == 0,
+        None      => true,
+    }
+}
+
+/// True if the effect `name` is covered by the current function context (simple name equality).
+/// Full subsumption via the effect hierarchy is deferred to #1738 / #1117.
+pub total fn Checker::effect_covered(self, name: String) -> Bool {
+    match self.fn_ctx() {
+        Some(ctx) => {
+            for eff in ctx.effects {
+                if eff.name == name { return true } else { () }
+            }
+            false
+        },
+        None => false,
+    }
+}
+
+/// Current function name from the top of the fn context stack.
+pub total fn Checker::current_fn_name(self) -> String {
+    match self.fn_ctx() {
+        Some(ctx) => ctx.fn_name,
+        None      => "",
+    }
+}
+
+/// Current function totality from the top of the fn context stack.
+pub total fn Checker::current_totality(self) -> Option[Totality] {
+    match self.fn_ctx() {
+        Some(ctx) => ctx.totality,
+        None      => None,
+    }
 }
 
 // ── InferResult ───────────────────────────────────────────────────────────────
