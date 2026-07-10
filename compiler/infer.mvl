@@ -218,27 +218,11 @@ partial fn infer_list_lit(
         return InferResult::ok(Ty::List(Box::new(Ty::Unknown)), c)
     } else { () }
     let curr: ref Checker = c;
-    // Derive element type from first element (mirrors Rust source).
-    // Avoids ref Ty initialized from a temporary enum value (REQ2).
-    let elem_ty: Ty = match elems.first() {
-        None    => Ty::Unknown,
-        Some(e) => {
-            let ir: InferResult = infer_expr(curr, errs, e);
-            curr = ir.checker;
-            if ty_is_unknown(ir.ty) { Ty::Unknown } else { ir.ty }
-        },
-    };
-    // Thread checker state through remaining elements (type already known).
-    let i: ref Int = 1;
-    while i < elems.len() {
-        match elems.get(i) {
-            None    => (),
-            Some(e) => {
-                let ir: InferResult = infer_expr(curr, errs, e);
-                curr = ir.checker;
-            },
-        }
-        i = i + 1
+    let elem_ty: ref Ty = Ty::Unknown;
+    for e in elems {
+        let ir: InferResult = infer_expr(curr, errs, e);
+        curr = ir.checker;
+        if !ty_is_unknown(ir.ty) { elem_ty = ir.ty } else { () }
     }
     InferResult::ok(Ty::List(Box::new(elem_ty)), curr)
 }
