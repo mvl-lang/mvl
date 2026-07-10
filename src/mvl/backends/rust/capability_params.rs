@@ -239,7 +239,9 @@ fn stmt_has_disqualifying_use_tir(
         }
         TirStmt::Return { value: None, .. } => false,
         TirStmt::Let { init, .. } => {
+            // A direct field extraction `let x = param.field` partially moves param — disqualifying.
             matches!(&init.kind, TirExprKind::Var(n) if n == param)
+                || is_field_of_param(init, param)
                 || expr_has_disqualifying_use_tir(param, init)
         }
         TirStmt::Expr { expr, .. } => {
@@ -260,6 +262,7 @@ fn stmt_has_disqualifying_use_tir(
             scrutinee, arms, ..
         } => {
             matches!(&scrutinee.kind, TirExprKind::Var(n) if n == param)
+                || is_field_of_param(scrutinee, param)
                 || expr_has_disqualifying_use_tir(param, scrutinee)
                 || arms.iter().any(|a| match &a.body {
                     TirMatchBody::Block(b) => block_has_disqualifying_use_tir(param, b),
@@ -278,6 +281,15 @@ fn stmt_has_disqualifying_use_tir(
     }
 }
 
+/// True when `expr` is a direct field access on `param` (e.g. `param.kind`).
+/// A field access used as a match scrutinee may destructure owned values from
+/// the field, so it must be treated as a consuming use.
+fn is_field_of_param(expr: &crate::mvl::ir::TirExpr, param: &str) -> bool {
+    use crate::mvl::ir::TirExprKind;
+    matches!(&expr.kind, TirExprKind::FieldAccess { expr: inner, .. }
+        if matches!(&inner.kind, TirExprKind::Var(n) if n == param))
+}
+
 fn expr_has_disqualifying_use_tir(param: &str, expr: &crate::mvl::ir::TirExpr) -> bool {
     use crate::mvl::ir::{TirExprKind, TirMatchBody};
     match &expr.kind {
@@ -289,15 +301,29 @@ fn expr_has_disqualifying_use_tir(param: &str, expr: &crate::mvl::ir::TirExpr) -
                 expr_has_disqualifying_use_tir(param, inner)
             }
         }
-        // Method call receiver auto-derefs — not disqualifying.
+        // Method call: disqualifying only when param is the direct receiver AND
+        // the receiver type is a user-defined (Named) type.  Builtin types
+        // (List, Map, String, …) have stdlib methods that take `&self`, so
+        // method calls on them auto-deref and do NOT consume the value.
+        // User-defined methods (e.g. `a.base()` on a custom `Ty` struct) may
+        // take `self` by value — conservative assumption: treat as disqualifying.
         TirExprKind::MethodCall { receiver, args, .. } => {
             let recv_is_param = matches!(&receiver.kind, TirExprKind::Var(n) if n == param);
             if recv_is_param {
-                // Receiver is fine; check args for bare param use (disqualifying).
-                args.iter().any(|a| {
-                    matches!(&a.kind, TirExprKind::Var(n) if n == param)
-                        || expr_has_disqualifying_use_tir(param, a)
-                })
+                // Only disqualify for Named (user-defined) receiver types.
+                let is_user_defined_receiver = matches!(
+                    receiver.ty.unlabeled(),
+                    crate::mvl::checker::types::Ty::Named(..)
+                );
+                if is_user_defined_receiver {
+                    true
+                } else {
+                    // Builtin receiver — check args for bare param use.
+                    args.iter().any(|a| {
+                        matches!(&a.kind, TirExprKind::Var(n) if n == param)
+                            || expr_has_disqualifying_use_tir(param, a)
+                    })
+                }
             } else {
                 expr_has_disqualifying_use_tir(param, receiver)
                     || args.iter().any(|a| {
@@ -306,9 +332,11 @@ fn expr_has_disqualifying_use_tir(param: &str, expr: &crate::mvl::ir::TirExpr) -
                     })
             }
         }
-        // Free function call: any bare param arg disqualifies.
+        // Free function call: bare param arg OR field-of-param arg disqualifies.
+        // A call like `f(c.env, ...)` consumes c.env, so c is disqualified.
         TirExprKind::FnCall { args, .. } => args.iter().any(|a| {
             matches!(&a.kind, TirExprKind::Var(n) if n == param)
+                || is_field_of_param(a, param)
                 || expr_has_disqualifying_use_tir(param, a)
         }),
         // Binary: direct bare param operand disqualifies.
@@ -349,6 +377,7 @@ fn expr_has_disqualifying_use_tir(param: &str, expr: &crate::mvl::ir::TirExpr) -
             scrutinee, arms, ..
         } => {
             matches!(&scrutinee.kind, TirExprKind::Var(n) if n == param)
+                || is_field_of_param(scrutinee, param)
                 || expr_has_disqualifying_use_tir(param, scrutinee)
                 || arms.iter().any(|a| match &a.body {
                     TirMatchBody::Block(b) => block_has_disqualifying_use_tir(param, b),
@@ -366,7 +395,10 @@ fn expr_has_disqualifying_use_tir(param: &str, expr: &crate::mvl::ir::TirExpr) -
         }
         TirExprKind::Construct { fields, .. } | TirExprKind::Spawn { fields, .. } => {
             fields.iter().any(|(_, e)| {
+                // A direct field access on the param (e.g. `self.env`) used as a
+                // struct field value is a consuming move of that field — disqualifying.
                 matches!(&e.kind, TirExprKind::Var(n) if n == param)
+                    || is_field_of_param(e, param)
                     || expr_has_disqualifying_use_tir(param, e)
             })
         }

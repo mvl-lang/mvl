@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.241.0] - 2026-07-10
+
+### Added — Self-Hosted Checker (#1117)
+
+- **Core type inference**: ported `checker.mvl`, `infer.mvl`, `check_stmts.mvl` — the main type inference engine now has a self-hosted MVL implementation alongside the Rust reference.
+- **Call graph & termination**: ported `call_graph.mvl`, `verify_termination.mvl`, `verify_data_race.mvl`.
+- **Context, sessions, patterns**: ported `context.mvl` (capability release), `verify_session.mvl`, `verify_patterns.mvl`.
+- **Checker parity harness**: captures a baseline TSV of diagnostics emitted by both Rust and MVL checkers; CI flags regressions.
+
+### Fixed — Rust Backend
+
+- **`val self` extension methods**: restored `val self` as `&self` in emitted Rust (consistent with callers that pass `val T` params as `&T`).
+- **FieldAccess receiver clone**: `emit_user_method_receiver` now adds `.clone()` for `FieldAccess` receivers on Named types, fixing E0507 move-out-of-`&mut`-reference errors in actor bodies (e.g., `self.logger.warn(...)`).
+- **MethodCall disqualifying (narrowed)**: method calls on user-defined (Named) type parameters now disqualify borrow inference, preventing E0507 when user extension methods take `self` by value. Builtin-type receivers (List, Map, String, …) are unaffected — their stdlib methods take `&self` and do not consume the value.
+
+### Fixed — Examples
+
+- **`log_analyzer` parser_test**: aligned local `parse_level` signature to `Tainted[String]` to match the production version, eliminating a silent name-collision that produced incorrect borrow inference when compiled together.
+
 ## [0.240.0] - 2026-07-09
 
 ### Added — Refinement Solver

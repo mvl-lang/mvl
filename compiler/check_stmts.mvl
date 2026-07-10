@@ -1,0 +1,259 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// compiler/check_stmts.mvl — C10: Statement and block type checking
+//
+// Port of src/mvl/checker/stmts.rs.
+//
+// check_stmt_impl is the real implementation of check_stmt (the forward decl
+// is in infer.mvl to break the mutual recursion: infer_expr ↔ check_stmt).
+//
+// Simplifications vs Rust source:
+//   - IFC label promotion stubbed (#1738)
+//   - Phase D capability-state updates simplified
+//   - Generic type param inference stubbed
+//   - Iterator element type: assumes List[T] or Set[T]
+//   - Uses local helpers from checker.mvl (ty_compat, ty_name, etc.)
+
+// ── LValue type inference ─────────────────────────────────────────────────────
+
+pub partial fn infer_lvalue(env: TypeEnv, lv: LValue) -> Ty {
+    match lv {
+        LValue::Ident(name, _) => match env.lookup(name) {
+            Some(info) => info.ty,
+            None       => Ty::Unknown,
+        },
+        LValue::Field { base: base, field: field, .. } => {
+            let base_ty: Ty = infer_lvalue(env, *base);
+            field_type(env, base_ty, field).unwrap_or(Ty::Unknown)
+        },
+    }
+}
+
+// ── Assignment checking ───────────────────────────────────────────────────────
+
+pub partial fn check_assignment(
+    c:      Checker,
+    errs:   ref List[CheckError],
+    target: String,
+    val_ty: Ty,
+    span:   SourceLoc,
+) -> Checker {
+    match c.env.lookup(target) {
+        None => {
+            errs.push(CheckError::UndefinedVariable { name: target, span: span });
+            c
+        },
+        Some(info) => {
+            if !info.mutable {
+                errs.push(CheckError::AssignToImmutable { name: target, span: span });
+            } else { () }
+            if !ty_is_unknown(val_ty) && !ty_is_unknown(info.ty)
+                && !types_compatible_resolved(c.env, info.ty, val_ty) {
+                errs.push(CheckError::TypeMismatch {
+                    expected: ty_name(info.ty),
+                    found:    ty_name(val_ty),
+                    span:     span,
+                });
+            } else { () }
+            c
+        },
+    }
+}
+
+// ── Block checking ────────────────────────────────────────────────────────────
+
+/// Infer the tail type of a block, processing all statements.
+pub partial fn infer_block_type(
+    c:     Checker,
+    errs:  ref List[CheckError],
+    block: Block,
+) -> InferResult {
+    let curr: ref Checker = c.enter_scope();
+    for stmt in block.stmts {
+        curr = check_stmt(curr, errs, stmt)
+    }
+    let tail_ir: InferResult = match block.tail_expr.get(0) {
+        Some(e) => infer_expr(curr, errs, e),
+        None    => InferResult::ok(Ty::Unit, curr),
+    };
+    InferResult::ok(tail_ir.ty, tail_ir.checker.leave_scope())
+}
+
+pub partial fn check_block(
+    c:     Checker,
+    errs:  ref List[CheckError],
+    block: Block,
+) -> Checker {
+    let curr: ref Checker = c.enter_scope();
+    for stmt in block.stmts {
+        curr = check_stmt(curr, errs, stmt)
+    }
+    match block.tail_expr.get(0) {
+        Some(e) => { infer_expr(curr, errs, e); () },
+        None    => {},
+    }
+    curr.leave_scope()
+}
+
+// ── Statement checking (implementation) ──────────────────────────────────────
+
+/// Check a single statement, returning the updated checker.
+pub partial fn check_stmt(
+    c:    Checker,
+    errs: ref List[CheckError],
+    stmt: Stmt,
+) -> Checker {
+    check_stmt_impl(c, errs, stmt)
+}
+
+partial fn check_stmt_impl(
+    c:    Checker,
+    errs: ref List[CheckError],
+    stmt: Stmt,
+) -> Checker {
+    match stmt {
+        Stmt::Let(ls)             => check_let(c, errs, ls),
+        Stmt::Assign(a)           => check_assign_stmt(c, errs, a),
+        Stmt::Return(ret, span)   => check_return(c, errs, ret, span),
+        Stmt::While(ws)           => check_while(c, errs, ws),
+        Stmt::For(fs)             => check_for(c, errs, fs),
+        Stmt::ExprStmt(e, span)   => check_expr_stmt(c, errs, e, span),
+    }
+}
+
+// ── Let ───────────────────────────────────────────────────────────────────────
+
+partial fn check_let(
+    c:    Checker,
+    errs: ref List[CheckError],
+    ls:   AstLetStmt,
+) -> Checker {
+    let init_ir: InferResult = infer_expr(c, errs, unbox_expr(ls.value));
+    let c2: Checker = init_ir.checker;
+    let init_ty: Ty = init_ir.ty;
+    let decl_ty: Ty = resolve_type_expr(c2.env, ls.ty);
+    if !ty_is_unknown(init_ty) && !ty_is_unknown(decl_ty)
+        && !types_compatible_resolved(c2.env, decl_ty, init_ty) {
+        errs.push(CheckError::TypeMismatch {
+            expected: ty_name(decl_ty),
+            found:    ty_name(init_ty),
+            span:     ls.span,
+        });
+    } else { () }
+    let binding_ty: Ty = if ty_is_unknown(decl_ty) { init_ty } else { decl_ty };
+    let info: VarInfo = VarInfo::new(binding_ty, ls.mutable);
+    c2.with_env(c2.env.define(ls.name, info))
+}
+
+// ── Assign ────────────────────────────────────────────────────────────────────
+
+partial fn check_assign_stmt(
+    c:    Checker,
+    errs: ref List[CheckError],
+    a:    AstAssignStmt,
+) -> Checker {
+    let val_ir: InferResult = infer_expr(c, errs, unbox_expr(a.value));
+    check_assignment(val_ir.checker, errs, a.target, val_ir.ty, a.span)
+}
+
+// ── Return ────────────────────────────────────────────────────────────────────
+
+partial fn check_return(
+    c:    Checker,
+    errs: ref List[CheckError],
+    ret:  List[Expr],
+    span: SourceLoc,
+) -> Checker {
+    let expected: Option[Ty] = c.return_ty();
+    match ret.get(0) {
+        None => {
+            match expected {
+                Some(exp) =>
+                    if !ty_is_unknown(exp) && !ty_compat(exp, Ty::Unit) {
+                        errs.push(CheckError::TypeMismatch {
+                            expected: ty_name(exp), found: "Unit", span: span,
+                        });
+                    } else { () },
+                None => {},
+            }
+            c
+        },
+        Some(e) => {
+            let ir: InferResult = infer_expr(c, errs, e);
+            match expected {
+                Some(exp) =>
+                    if !ty_is_unknown(ir.ty) && !ty_is_unknown(exp)
+                        && !types_compatible_resolved(ir.checker.env, exp, ir.ty) {
+                        errs.push(CheckError::TypeMismatch {
+                            expected: ty_name(exp), found: ty_name(ir.ty), span: span,
+                        });
+                    } else { () },
+                None => {},
+            }
+            ir.checker
+        },
+    }
+}
+
+// ── While ─────────────────────────────────────────────────────────────────────
+
+partial fn check_while(
+    c:    Checker,
+    errs: ref List[CheckError],
+    ws:   AstWhileStmt,
+) -> Checker {
+    let cond_ir: InferResult = infer_expr(c, errs, unbox_expr(ws.cond));
+    if !ty_is_bool(cond_ir.ty) && !ty_is_unknown(cond_ir.ty) {
+        errs.push(CheckError::TypeMismatch {
+            expected: "Bool", found: ty_name(cond_ir.ty), span: ws.span,
+        });
+    } else { () }
+    check_block(cond_ir.checker, errs, ws.body)
+}
+
+// ── For ───────────────────────────────────────────────────────────────────────
+
+partial fn check_for(
+    c:    Checker,
+    errs: ref List[CheckError],
+    fs:   AstForStmt,
+) -> Checker {
+    let iter_ir: InferResult = infer_expr(c, errs, unbox_expr(fs.iter));
+    let elem_ty: Ty = match iter_ir.ty {
+        Ty::List(inner) => *inner,
+        Ty::Set(inner)  => *inner,
+        _               => Ty::Unknown,
+    };
+    let body_c: Checker = iter_ir.checker.enter_scope();
+    let new_env: TypeEnv = body_c.env.define(fs.var, VarInfo::new(elem_ty, false));
+    let after: Checker = check_block(body_c.with_env(new_env), errs, fs.body);
+    after.leave_scope()
+}
+
+// ── ExprStmt ──────────────────────────────────────────────────────────────────
+
+partial fn check_expr_stmt(
+    c:    Checker,
+    errs: ref List[CheckError],
+    e:    List[Expr],
+    span: SourceLoc,
+) -> Checker {
+    match e.get(0) {
+        None    => c,
+        Some(expr) => {
+            let ir: InferResult = infer_expr(c, errs, expr);
+            match ir.ty {
+                Ty::Result(_, _) =>
+                    errs.push(CheckError::ResultIgnored { span: span }),
+                _ => {},
+            }
+            ir.checker
+        },
+    }
+}
+
+// Note: inline tests for check_stmts.mvl are omitted because all checking
+// functions call infer_expr (from infer.mvl) which is not available in the
+// isolated per-file test harness.  Integration coverage is provided by the
+// parity harness (tests/checker_parity.rs).

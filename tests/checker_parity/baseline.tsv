@@ -1,0 +1,188 @@
+# Checker parity baseline (#1117).  Regenerate: MVL_UPDATE_PARITY_BASELINE=1 cargo test --test checker_parity
+tests/corpus/01_syntax/expressions.mvl	ok
+tests/corpus/01_syntax/keywords.mvl	ok
+tests/corpus/01_syntax/literals.mvl	ok
+tests/corpus/01_syntax/multi_module/main.mvl	fail	2	1
+tests/corpus/01_syntax/multi_module/models.mvl	ok
+tests/corpus/01_syntax/statements.mvl	ok
+tests/corpus/02_functions/closure_fn_param_llvm.mvl	ok
+tests/corpus/02_functions/closure_nested.mvl	ok
+tests/corpus/02_functions/closure_nested_capture.mvl	ok
+tests/corpus/02_functions/closure_return_value.mvl	ok
+tests/corpus/02_functions/closure_string_bool_capture.mvl	ok
+tests/corpus/02_functions/closure_value_capture.mvl	ok
+tests/corpus/02_functions/fn_alias_val_param.mvl	ok
+tests/corpus/02_functions/functions.mvl	ok
+tests/corpus/02_functions/generic_container_ops.mvl	ok
+tests/corpus/02_functions/generic_instantiation.mvl	ok
+tests/corpus/02_functions/generic_multi_instantiation.mvl	ok
+tests/corpus/02_functions/generic_nested_option.mvl	ok
+tests/corpus/02_functions/if_let.mvl	ok
+tests/corpus/02_functions/no_trait_bound_where_clause.mvl	parse-error
+tests/corpus/03_types/adt_checking.mvl	ok
+tests/corpus/03_types/basic_types.mvl	ok
+tests/corpus/03_types/core_types.mvl	ok
+tests/corpus/03_types/enum_match_llvm.mvl	ok
+tests/corpus/03_types/enum_named_construct.mvl	ok
+tests/corpus/03_types/enum_string_match_llvm.mvl	ok
+tests/corpus/03_types/enums.mvl	ok
+tests/corpus/03_types/exhaustive_match.mvl	ok
+tests/corpus/03_types/fn_field_struct_no_eq.mvl	fail	1	1
+tests/corpus/03_types/guard_patterns.mvl	ok
+tests/corpus/03_types/immutability.mvl	ok
+tests/corpus/03_types/nested_enum_pattern_annotation.mvl	ok
+tests/corpus/03_types/option_result.mvl	ok
+tests/corpus/03_types/or_patterns.mvl	ok
+tests/corpus/03_types/refined_alias_coercion.mvl	ok
+tests/corpus/03_types/refinements.mvl	ok
+tests/corpus/03_types/result_propagate_llvm.mvl	ok
+tests/corpus/03_types/struct_fields_llvm.mvl	ok
+tests/corpus/03_types/struct_pattern_rest.mvl	ok
+tests/corpus/03_types/structs.mvl	ok
+tests/corpus/03_types/user_type_shared_method_name.mvl	ok
+tests/corpus/04_primitives/bit_operators.mvl	ok
+tests/corpus/04_primitives/bitwise.mvl	ok
+tests/corpus/04_primitives/byte_list.mvl	ok
+tests/corpus/04_primitives/float_checked_to_int.mvl	ok
+tests/corpus/04_primitives/fn_takes_string_llvm.mvl	ok
+tests/corpus/04_primitives/for_loop_llvm.mvl	ok
+tests/corpus/04_primitives/move_string_llvm.mvl	ok
+tests/corpus/04_primitives/overflow_checking.mvl	ok
+tests/corpus/04_primitives/parse_int_float_llvm.mvl	ok
+tests/corpus/04_primitives/string_heap_llvm.mvl	ok
+tests/corpus/04_primitives/string_ufcs.mvl	ok
+tests/corpus/04_primitives/unsigned_types.mvl	ok
+tests/corpus/04_primitives/while_loop_llvm.mvl	ok
+tests/corpus/05_collections/for_in_list.mvl	ok
+tests/corpus/05_collections/list_set_filled.mvl	ok
+tests/corpus/05_collections/list_stubs.mvl	ok
+tests/corpus/05_collections/list_ufcs.mvl	ok
+tests/corpus/05_collections/map_set_hof.mvl	ok
+tests/corpus/05_collections/map_typed_new.mvl	ok
+tests/corpus/05_collections/struct_returns.mvl	ok
+tests/corpus/05_effects/runtime_manifest_phase4.mvl	ok
+tests/corpus/05_effects/runtime_manifest_phase7.mvl	ok
+tests/corpus/06_ownership/clone_heap_independence.mvl	ok
+tests/corpus/06_ownership/collection_post_use.mvl	ok
+tests/corpus/06_ownership/consume_transfer.mvl	ok
+tests/corpus/06_ownership/extension_method_self_ownership.mvl	ok
+tests/corpus/06_ownership/field_access.mvl	ok
+tests/corpus/06_ownership/lambda_capture.mvl	ok
+tests/corpus/06_ownership/last_use_move.mvl	ok
+tests/corpus/06_ownership/loop_clone.mvl	ok
+tests/corpus/06_ownership/multi_use_clone.mvl	ok
+tests/corpus/06_ownership/nested_calls.mvl	ok
+tests/corpus/06_ownership/ownership.mvl	ok
+tests/corpus/06_ownership/ref_mutation.mvl	ok
+tests/corpus/06_ownership/use_after_move.mvl	fail	1	2
+tests/corpus/06_ownership/value_semantics.mvl	ok
+tests/corpus/07_effects/audit_effect_missing.mvl	fail	1	7
+tests/corpus/07_effects/concurrency_effects.mvl	ok
+tests/corpus/07_effects/declarations.mvl	ok
+tests/corpus/07_effects/effect_decl.mvl	ok
+tests/corpus/07_effects/propagation.mvl	ok
+tests/corpus/07_effects/pure_vs_effectful.mvl	ok
+tests/corpus/07_effects/subsumption.mvl	ok
+tests/corpus/07_effects/user_defined_effects.mvl	ok
+tests/corpus/08_ifc/audit_relabel.mvl	ok
+tests/corpus/08_ifc/audit_relabel_runnable.mvl	ok
+tests/corpus/08_ifc/call_chain_error_message.mvl	fail	1	11
+tests/corpus/08_ifc/capability_labels.mvl	ok
+tests/corpus/08_ifc/cross_function_implicit.mvl	fail	1	11
+tests/corpus/08_ifc/declassification.mvl	ok
+tests/corpus/08_ifc/error_exposure.mvl	ok
+tests/corpus/08_ifc/implicit_flow.mvl	fail	3	11
+tests/corpus/08_ifc/interprocedural_clean.mvl	ok
+tests/corpus/08_ifc/interprocedural_taint.mvl	fail	1	11
+tests/corpus/08_ifc/label_into_inner.mvl	ok
+tests/corpus/08_ifc/label_types.mvl	ok
+tests/corpus/08_ifc/labels.mvl	ok
+tests/corpus/08_ifc/lattice.mvl	ok
+tests/corpus/08_ifc/propagation.mvl	ok
+tests/corpus/08_ifc/return_label_inference.mvl	ok
+tests/corpus/08_ifc/secret_env.mvl	ok
+tests/corpus/09_refinements/ensures_contracts_proven.mvl	ok
+tests/corpus/09_refinements/refinements_fully_proven.mvl	ok
+tests/corpus/09_refinements/refinements_valid.mvl	ok
+tests/corpus/09_refinements/refinements_violations.mvl	ok
+tests/corpus/10_termination/total_vs_partial.mvl	ok
+tests/corpus/11_contracts/basic_contracts.mvl	ok
+tests/corpus/11_contracts/ghost_old_contracts.mvl	ok
+tests/corpus/11_contracts/loop_verification.mvl	ok
+tests/corpus/12_actors/actor_bounded_mailbox_llvm.mvl	ok
+tests/corpus/12_actors/actor_lifecycle_llvm.mvl	ok
+tests/corpus/12_actors/actor_mailbox_config.mvl	ok
+tests/corpus/12_actors/actor_multi_comm_llvm.mvl	ok
+tests/corpus/12_actors/actor_println_llvm.mvl	ok
+tests/corpus/12_actors/actor_pub_test_fn.mvl	ok
+tests/corpus/12_actors/actor_ref.mvl	ok
+tests/corpus/12_actors/actor_state_mutation_llvm.mvl	ok
+tests/corpus/12_actors/actor_struct_param_llvm.mvl	ok
+tests/corpus/12_actors/actor_test_fn.mvl	ok
+tests/corpus/12_actors/actors.mvl	ok
+tests/corpus/12_actors/capabilities.mvl	ok
+tests/corpus/12_actors/dead_letter.mvl	ok
+tests/corpus/12_actors/exit_cascade_on_shutdown_llvm.mvl	ok
+tests/corpus/12_actors/process_links.mvl	ok
+tests/corpus/12_actors/process_links_llvm.mvl	ok
+tests/corpus/12_actors/race_free_fns.mvl	ok
+tests/corpus/12_actors/select.mvl	ok
+tests/corpus/12_actors/session_types.mvl	ok
+tests/corpus/12_actors/structured_concurrency.mvl	ok
+tests/corpus/12_actors/supervisor.mvl	ok
+tests/corpus/13_stdlib/args.mvl	ok
+tests/corpus/13_stdlib/audit_trail.mvl	ok
+tests/corpus/13_stdlib/crypto_random_bytes_shape.mvl	ok
+tests/corpus/13_stdlib/crypto_random_bytes_zero.mvl	ok
+tests/corpus/13_stdlib/crypto_sha256.mvl	ok
+tests/corpus/13_stdlib/env_basic.mvl	ok
+tests/corpus/13_stdlib/env_identity_llvm.mvl	ok
+tests/corpus/13_stdlib/env_signal_ignore.mvl	fail	2	1
+tests/corpus/13_stdlib/env_signal_on.mvl	fail	1	1
+tests/corpus/13_stdlib/eprint_stderr.mvl	ok
+tests/corpus/13_stdlib/file_io.mvl	fail	32	1
+tests/corpus/13_stdlib/io_basic.mvl	fail	9	1
+tests/corpus/13_stdlib/json_log_imports.mvl	ok
+tests/corpus/13_stdlib/log_output.mvl	ok
+tests/corpus/13_stdlib/logging.mvl	ok
+tests/corpus/13_stdlib/process_echo.mvl	fail	2	1
+tests/corpus/13_stdlib/random_choice.mvl	ok
+tests/corpus/13_stdlib/random_int.mvl	ok
+tests/corpus/13_stdlib/random_shuffle.mvl	ok
+tests/corpus/13_stdlib/runtime_manifest.mvl	ok
+tests/corpus/13_stdlib/runtime_manifest_native_deps.mvl	ok
+tests/corpus/13_stdlib/runtime_manifest_phase2.mvl	ok
+tests/corpus/13_stdlib/runtime_manifest_phase3.mvl	ok
+tests/corpus/13_stdlib/runtime_manifest_phase5.mvl	ok
+tests/corpus/13_stdlib/runtime_manifest_phase6.mvl	ok
+tests/corpus/13_stdlib/runtime_manifest_source_digest.mvl	ok
+tests/corpus/13_stdlib/temp_files.mvl	fail	19	1
+tests/corpus/13_stdlib/time_format_datetime.mvl	ok
+tests/corpus/13_stdlib/time_format_instant.mvl	ok
+tests/corpus/13_stdlib/time_sleep.mvl	ok
+tests/corpus/13_stdlib/unix.mvl	fail	15	1
+tests/corpus/13_stdlib/uuid_v4_format.mvl	ok
+tests/corpus/14_linting/clean_program.mvl	ok
+tests/corpus/14_linting/complexity_demo.mvl	ok
+tests/corpus/14_linting/fn_length.mvl	ok
+tests/corpus/14_linting/for_iter_antipattern.mvl	ok
+tests/corpus/14_linting/missing_totality.mvl	ok
+tests/corpus/14_linting/naming_conventions.mvl	ok
+tests/corpus/14_linting/redundant_effects.mvl	ok
+tests/corpus/14_linting/redundant_match.mvl	ok
+tests/corpus/14_linting/relabel_tag_hygiene.mvl	ok
+tests/corpus/14_linting/silent_result_discard.mvl	ok
+tests/corpus/14_linting/trailing_whitespace.mvl	ok
+tests/corpus/14_linting/unreachable_code.mvl	ok
+tests/corpus/14_linting/unused_function.mvl	ok
+tests/corpus/14_linting/while_to_for_range.mvl	ok
+tests/corpus/15_verification/effect_ifc_interaction/main.mvl	ok
+tests/corpus/15_verification/ownership_effects_interaction.mvl	ok
+tests/corpus/15_verification/refinement_totality_interaction.mvl	ok
+tests/corpus/16_ffi/extern_c_basic.mvl	ok
+tests/corpus/16_ffi/extern_c_effects.mvl	ok
+tests/corpus/16_ffi/extern_c_link.mvl	ok
+tests/corpus/16_ffi/extern_c_ptr_types.mvl	ok
+tests/corpus/17_bdd/calculator_bdd_test.mvl	fail	4	1,3,8
+tests/corpus/18_modules/ctx_ops.mvl	fail	1	1
+tests/corpus/18_modules/ctx_types.mvl	ok

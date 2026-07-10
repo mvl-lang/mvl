@@ -138,8 +138,22 @@ impl RustEmitter {
     /// `range()` and similar in-place builders).
     pub(super) fn emit_user_method_receiver(&mut self, receiver: &TirExpr) {
         self.emit_method_receiver(receiver);
-        if matches!(&receiver.kind, TirExprKind::Var(_)) && !self.last_uses.contains(&receiver.span)
-        {
+        // Add .clone() on non-last-use receivers so the caller's binding stays
+        // alive across a consuming method call (Rust E0382 / E0507).
+        //
+        // - Var: non-last-use local or parameter — already handled below.
+        // - FieldAccess on a Named type: e.g. `self.logger.warn(...)` inside
+        //   an actor body where `self` is `&mut State`.  Without .clone() the
+        //   emit would try to move out of the `&mut` reference (E0507).
+        let needs_clone = match &receiver.kind {
+            TirExprKind::Var(_) => !self.last_uses.contains(&receiver.span),
+            TirExprKind::FieldAccess { .. } => matches!(
+                receiver.ty.unlabeled(),
+                crate::mvl::checker::types::Ty::Named(..)
+            ),
+            _ => false,
+        };
+        if needs_clone {
             self.push(".clone()");
         }
     }

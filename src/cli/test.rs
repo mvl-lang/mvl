@@ -29,6 +29,14 @@ use std::process;
 ///     `run()`).
 ///   - If the first character is not a letter/underscore, prefix with `_`.
 fn qualified_module_name(path: &str) -> String {
+    // Strip the working directory prefix so test module names are relative
+    // (e.g. "compiler_parser" instead of "_users_…_compiler_parser").
+    let path = if let Ok(cwd) = std::env::current_dir() {
+        let cwd_str = format!("{}/", cwd.to_string_lossy());
+        path.strip_prefix(cwd_str.as_str()).unwrap_or(path)
+    } else {
+        path
+    };
     let stem = path.strip_suffix(".mvl").unwrap_or(path);
     let stem = stem.strip_prefix("./").unwrap_or(stem);
     let mut name: String = stem

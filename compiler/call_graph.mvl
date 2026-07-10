@@ -1,0 +1,269 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// compiler/call_graph.mvl — whole-program call graph over TirProgram
+//
+// Port of src/mvl/checker/call_graph.rs.
+//
+// Nodes  = function names.
+// Edges  = (caller → callee) pairs extracted from TirExprKind::FnCall nodes.
+// MethodCall edges are not recorded (callee resolution requires receiver types).
+//
+// Differences from Rust source:
+//   - Operates on TirProgram (post-lowering) rather than parser AST Program.
+//   - BFS in reachable() uses List[String] with index tracking instead of VecDeque.
+//   - HashMap<String, Vec<CallEdge>> → Map[String, List[CallEdge]].
+//   - HashSet<String> → List[String] with contains().
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+/// A single call-site edge: caller → callee.
+pub type CallEdge = struct {
+    callee: String,
+    span:   SourceLoc,
+}
+
+/// Whole-program call graph (nodes + directed edges).
+pub type CallGraph = struct {
+    /// All known function names (declared or called).
+    nodes: List[String],
+    /// Outgoing edges per caller: caller_name → list of callee edges.
+    edges: Map[String, List[CallEdge]],
+}
+
+// ── Queries ───────────────────────────────────────────────────────────────────
+
+/// Edges outgoing from `fn_name` (the functions it calls).
+pub total fn CallGraph::callees(self, fn_name: String) -> List[CallEdge] {
+    self.edges.get(fn_name).unwrap_or([])
+}
+
+/// True if `fn_name` is a known node.
+pub total fn CallGraph::has_node(self, fn_name: String) -> Bool {
+    self.nodes.contains(fn_name)
+}
+
+/// All function names that directly call `fn_name`.
+pub total fn CallGraph::callers(self, fn_name: String) -> List[String] {
+    let result: ref List[String] = [];
+    for caller in self.edges.keys() {
+        let edges: List[CallEdge] = self.edges.get(caller).unwrap_or([]);
+        for e in edges {
+            if e.callee == fn_name { result.push(caller) }  else { () }
+        }
+    }
+    result
+}
+
+/// True if `to` is reachable from `from` via call edges (BFS).
+/// `reachable(f, f)` returns true when f is directly or mutually recursive.
+pub partial fn CallGraph::reachable(self, from_fn: String, to_fn: String) -> Bool {
+    let visited: ref List[String] = [from_fn];
+    let queue:   ref List[String] = [from_fn];
+    let qi:      ref Int = 0;
+    while qi < queue.len() {
+        let current: String = queue.get(qi).unwrap_or("");
+        qi = qi + 1;
+        for edge in self.callees(current) {
+            if edge.callee == to_fn { return true } else { () }
+            if !visited.contains(edge.callee) {
+                visited.push(edge.callee);
+                queue.push(edge.callee);
+            }
+        }
+    }
+    false
+}
+
+// ── Construction ──────────────────────────────────────────────────────────────
+
+/// Build a call graph from a TirProgram.
+pub partial fn build_call_graph(prog: TirProgram) -> CallGraph {
+    let nodes: ref List[String] = [];
+    let edges: ref Map[String, List[CallEdge]] = Map::new();
+    for f in prog.fns {
+        if !nodes.contains(f.name) { nodes.push(f.name) } else { () }
+        let fn_edges: ref List[CallEdge] = [];
+        collect_calls_from_block(f.body, fn_edges);
+        for edge in fn_edges {
+            if !nodes.contains(edge.callee) { nodes.push(edge.callee) } else { () }
+        }
+        if fn_edges.len() > 0 {
+            let existing: List[CallEdge] = edges.get(f.name).unwrap_or([]);
+            let merged: ref List[CallEdge] = existing;
+            for edge in fn_edges { merged.push(edge) }
+            edges.insert(f.name, merged);
+        } else { () }
+    }
+    CallGraph { nodes: nodes, edges: edges }
+}
+
+// ── AST walkers ───────────────────────────────────────────────────────────────
+
+partial fn collect_calls_from_block(block: TirBlock, acc: ref List[CallEdge]) -> Unit {
+    for stmt in block.stmts {
+        collect_calls_from_stmt(stmt, acc)
+    }
+}
+
+partial fn collect_calls_from_stmt(stmt: TirStmt, acc: ref List[CallEdge]) -> Unit {
+    match stmt {
+        TirStmt::Let { init: init, .. } => {
+            collect_calls_from_expr(init, acc)
+        },
+        TirStmt::Assign { value: value, .. } => {
+            collect_calls_from_expr(value, acc)
+        },
+        TirStmt::Return { value: value, .. } => {
+            match value {
+                Some(e) => collect_calls_from_expr(e, acc),
+                None    => {},
+            }
+        },
+        TirStmt::If { cond: cond, then: then, else_br: else_br, .. } => {
+            collect_calls_from_expr(cond, acc);
+            collect_calls_from_block(then, acc);
+            match else_br {
+                Some(TirElseBranch::Block(b))  => collect_calls_from_block(b, acc),
+                Some(TirElseBranch::If(inner)) => collect_calls_from_stmt(*inner, acc),
+                None                           => {},
+            }
+        },
+        TirStmt::Match { scrutinee: scrutinee, arms: arms, .. } => {
+            collect_calls_from_expr(scrutinee, acc);
+            for arm in arms {
+                match arm.body {
+                    TirMatchBody::Expr(e)  => collect_calls_from_expr(e, acc),
+                    TirMatchBody::Block(b) => collect_calls_from_block(b, acc),
+                }
+            }
+        },
+        TirStmt::For { iter: iter, body: body, .. } => {
+            collect_calls_from_expr(iter, acc);
+            collect_calls_from_block(body, acc);
+        },
+        TirStmt::While { cond: cond, body: body, .. } => {
+            collect_calls_from_expr(cond, acc);
+            collect_calls_from_block(body, acc);
+        },
+        TirStmt::Expr { expr: expr, .. } => {
+            collect_calls_from_expr(expr, acc)
+        },
+    }
+}
+
+partial fn collect_calls_from_expr(expr: TirExpr, acc: ref List[CallEdge]) -> Unit {
+    match expr.kind {
+        TirExprKind::FnCall { name: name, args: args, .. } => {
+            acc.push(CallEdge { callee: name, span: expr.span });
+            for arg in args { collect_calls_from_expr(arg, acc) }
+        },
+        TirExprKind::MethodCall { receiver: receiver, args: args, .. } => {
+            collect_calls_from_expr(*receiver, acc);
+            for arg in args { collect_calls_from_expr(arg, acc) }
+        },
+        TirExprKind::Binary { left: left, right: right, .. } => {
+            collect_calls_from_expr(*left, acc);
+            collect_calls_from_expr(*right, acc);
+        },
+        TirExprKind::Unary { expr: inner, .. } => {
+            collect_calls_from_expr(*inner, acc)
+        },
+        TirExprKind::FieldAccess { expr: inner, .. } => {
+            collect_calls_from_expr(*inner, acc)
+        },
+        TirExprKind::If { cond: cond, then: then, else_br: else_br, .. } => {
+            collect_calls_from_expr(*cond, acc);
+            collect_calls_from_block(then, acc);
+            match else_br {
+                Some(e) => collect_calls_from_expr(*e, acc),
+                None    => {},
+            }
+        },
+        TirExprKind::Match { scrutinee: scrutinee, arms: arms, .. } => {
+            collect_calls_from_expr(*scrutinee, acc);
+            for arm in arms {
+                match arm.body {
+                    TirMatchBody::Expr(e)  => collect_calls_from_expr(e, acc),
+                    TirMatchBody::Block(b) => collect_calls_from_block(b, acc),
+                }
+            }
+        },
+        TirExprKind::Block(b) => collect_calls_from_block(b, acc),
+        TirExprKind::Lambda { body: body, .. } => collect_calls_from_expr(*body, acc),
+        TirExprKind::Propagate(inner) => collect_calls_from_expr(*inner, acc),
+        TirExprKind::Consume(inner)   => collect_calls_from_expr(*inner, acc),
+        TirExprKind::Borrow { expr: inner, .. } => collect_calls_from_expr(*inner, acc),
+        TirExprKind::Relabel { expr: inner, .. } => collect_calls_from_expr(*inner, acc),
+        TirExprKind::Construct { fields: fields, .. } => {
+            for f in fields { collect_calls_from_expr(f.expr, acc) }
+        },
+        TirExprKind::ListLit { elems: elems } => {
+            for e in elems { collect_calls_from_expr(e, acc) }
+        },
+        TirExprKind::SetLit { elems: elems } => {
+            for e in elems { collect_calls_from_expr(e, acc) }
+        },
+        TirExprKind::MapLit { pairs: pairs } => {
+            for p in pairs {
+                collect_calls_from_expr(p.key, acc);
+                collect_calls_from_expr(p.value, acc);  // TirMapPair.value is correct
+            }
+        },
+        TirExprKind::Spawn { fields: fields, .. } => {
+            for f in fields { collect_calls_from_expr(f.expr, acc) }
+        },
+        TirExprKind::Select { arms: arms } => {
+            for arm in arms { collect_calls_from_block(arm.body, acc) }
+        },
+        _ => {},
+    }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+test partial fn empty_graph_has_no_reachability() -> Unit {
+    let g: CallGraph = CallGraph { nodes: [], edges: Map::new() };
+    assert_eq(g.reachable("a", "b"), false)
+}
+
+test partial fn graph_contains_added_node() -> Unit {
+    let g: CallGraph = CallGraph { nodes: ["foo"], edges: Map::new() };
+    assert_eq(g.has_node("foo"), true)
+}
+
+test partial fn graph_not_contains_unknown_node() -> Unit {
+    let g: CallGraph = CallGraph { nodes: ["foo"], edges: Map::new() };
+    assert_eq(g.has_node("bar"), false)
+}
+
+test partial fn direct_call_reachable() -> Unit {
+    let edges: ref Map[String, List[CallEdge]] = Map::new();
+    edges.insert("a", [CallEdge { callee: "b", span: SourceLoc { line: 0, col: 0 } }]);
+    let g: CallGraph = CallGraph { nodes: ["a", "b"], edges: edges };
+    assert_eq(g.reachable("a", "b"), true)
+}
+
+test partial fn no_edge_not_reachable() -> Unit {
+    let edges: ref Map[String, List[CallEdge]] = Map::new();
+    edges.insert("a", [CallEdge { callee: "b", span: SourceLoc { line: 0, col: 0 } }]);
+    let g: CallGraph = CallGraph { nodes: ["a", "b"], edges: edges };
+    assert_eq(g.reachable("b", "a"), false)
+}
+
+test partial fn transitive_reachability() -> Unit {
+    let edges: ref Map[String, List[CallEdge]] = Map::new();
+    let sl: SourceLoc = SourceLoc { line: 0, col: 0 };
+    edges.insert("a", [CallEdge { callee: "b", span: sl }]);
+    edges.insert("b", [CallEdge { callee: "c", span: sl }]);
+    let g: CallGraph = CallGraph { nodes: ["a", "b", "c"], edges: edges };
+    assert_eq(g.reachable("a", "c"), true)
+}
+
+test partial fn direct_self_recursion_reachable() -> Unit {
+    let edges: ref Map[String, List[CallEdge]] = Map::new();
+    let sl: SourceLoc = SourceLoc { line: 0, col: 0 };
+    edges.insert("f", [CallEdge { callee: "f", span: sl }]);
+    let g: CallGraph = CallGraph { nodes: ["f"], edges: edges };
+    assert_eq(g.reachable("f", "f"), true)
+}
