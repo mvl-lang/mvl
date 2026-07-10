@@ -561,7 +561,15 @@ impl RustEmitter {
         // causing call sites to emit `x.clone()` instead of `&x`.
         // suppress_names/suppress_tirs carry the same peer info for ext-method
         // import suppression — the two uses are independent.
-        self.emit_program_core(tir, &[], true, peer_tirs, peer_names, peer_tirs, prelude_tirs);
+        self.emit_program_core(
+            tir,
+            &[],
+            true,
+            peer_tirs,
+            peer_names,
+            peer_tirs,
+            prelude_tirs,
+        );
     }
 
     #[allow(clippy::too_many_arguments)]
