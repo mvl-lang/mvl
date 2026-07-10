@@ -3,21 +3,22 @@
 **Status:** Accepted
 **Date:** 2026-04-11
 **Revised:** 2026-04-30 — expanded to five phases; Phases 1–4 completed; Phase 5 (LLVM) active
+**Revised:** 2026-07-10 — Phase 5A e2e tracer bullet complete (#1746); Phase 7 self-hosting in progress; Phase 4 expanded to include actors + Tokio and package system
 **Context:** How should the MVL compiler emit executable code? Transpile to an existing language or target LLVM IR directly?
 
 ## Decision
 
-Five-phase approach (originally four; Phase 3 split as the project matured):
+Seven-phase approach (originally four; Phase 3 split as the project matured; Phases 6–7 added for formal verification and self-hosting):
 
 | Phase | Name | Status |
 |-------|------|--------|
 | 1 | **It compiles** — MVL → Rust transpilation | ✅ Complete |
 | 2 | **It's useful** — Rust FFI ecosystem, real programs | ✅ Complete |
 | 3 | **It's verified** — All 11 requirements enforced at compile time | ✅ Complete |
-| 4 | **It's complete** — Full stdlib in pure MVL | ✅ Complete |
-| 5 | **It's native** — Direct LLVM IR backend | 🔄 Active (Phase A done) |
+| 4 | **It's complete** — Full stdlib in pure MVL; actors + Tokio; package system | ✅ Complete |
+| 5 | **It's native** — Direct LLVM IR backend | 🔄 Active (Phase 5A done — e2e tracer bullet #1746) |
 | 6 | **It's trustworthy** — Formal proofs, SMT solver, model checker | ⬜ Planned |
-| 7 | **It's self-sufficient** — Self-hosting, certification pipeline | ⬜ Planned |
+| 7 | **It's self-sufficient** — Self-hosting, certification pipeline | 🔄 In progress (#1113) |
 
 > **Why the split?** The original Phase 3 bundled LLVM codegen and formal provers together as a single milestone. In practice, the type checker achieved full 11-requirement enforcement via the Rust transpiler (completing "trustworthy" semantics without LLVM), and the stdlib matured enough to warrant its own phase. LLVM IR codegen is now a distinct engineering phase (Phase 5) tracked under the `phase-5` GitHub label.
 
@@ -101,7 +102,7 @@ Rust scores 7/11 — highest of any mainstream language. The transpilation only 
 
 The LLVM backend is gated on the `llvm` Cargo feature (default-on). `mvl build/run/test --backend=llvm` invokes it.
 
-### Phase 5A — Hello World ✅ (v0.55.0, closes #352)
+### Phase 5A — Hello World ✅ (v0.55.0 Rust LLVM backend #352; v0.242.0 self-hosted emitter e2e #1746)
 
 | Story | Description | Status |
 |-------|-------------|--------|
@@ -146,14 +147,19 @@ The LLVM backend is gated on the `llvm` Cargo feature (default-on). `mvl build/r
 - Structural recursion proofs — Req 8 termination
 - Model checker (#37) — invariants, deadlock/livelock detection
 
-## Phase 7 — It's self-sufficient ⬜
+## Phase 7 — It's self-sufficient 🔄
 
 **Done when:** MVL compiler compiles itself. Full ecosystem for certified software.
 
-- Self-hosting — MVL compiler rewritten in MVL, compiled by Phase 6 compiler
-- Package manager (#56) — dependency resolution, SBOM generation, trust scoring
+**In progress (#1113):** The self-hosted compiler is written in MVL (`compiler/`) and passes `mvl check`. Phases 1 (shared types), 3 (parser + lexer), and A (MVL-hosted LLVM emitter with e2e tracer bullet) are complete. Phases 2 (resolver/mono/TIR lower) and 4 (checker + solver) are in progress.
+
+**Delivered ahead of Phase 7 dependency:**
+- Package manager (#56) ✅ — `mvl install`, `mvl audit`, `mvl sbom`, supply chain audit
+- Concurrency model ✅ — actors + Tokio, `std.actors` supervision, `pub fn` async behaviors
+
+**Remaining:**
+- Self-hosting bootstrap — three-stage verify: Rust `mvl₀` → MVL `mvl₁` → MVL `mvl₂`, assert byte-identical
 - Verified MVL stdlib — replaces Rust runtime wrappers, assurance ratio → 90%+
-- Concurrency model — actors, reference capabilities, WCET refinements
 - AAE-5 certification pipeline — automated evidence for IEC 61508, DO-178C
 
 ## Phase Model Note
