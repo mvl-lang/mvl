@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.242.0] - 2026-07-10
+
+### Added — Bootstrap
+
+- **Bootstrap E2E target**: `make test-bootstrap-e2e` runs the complete self-hosting tracer bullet: `mvl tir hello_world.mvl | mvl run compiler/backends/llvm/emitter.mvl | llc | cc | ./hello` → assert `Hello, world!`. Serves as a permanent regression guard for the MVL → self-hosted emitter → binary pipeline (#1746).
+
 ## [0.241.2] - 2026-07-10
 
 ### Fixed — Transpiler
