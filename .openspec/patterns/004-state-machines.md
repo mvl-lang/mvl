@@ -1,4 +1,4 @@
-# Pattern 003: State Machines via Exhaustive Match
+# Pattern 004: State Machines via Exhaustive Match
 
 ## Summary
 
