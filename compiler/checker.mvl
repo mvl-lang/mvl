@@ -462,15 +462,15 @@ test fn ty_is_propagatable_true_for_result() -> Unit {
     assert_eq(ty_is_propagatable(Ty::Result(Box::new(Ty::Int), Box::new(Ty::Str))), true)
 }
 
-test fn ty_compat_unknown_is_compat_with_everything() -> Unit {
+test partial fn ty_compat_unknown_is_compat_with_everything() -> Unit {
     assert_eq(ty_compat(Ty::Unknown, Ty::Int), true)
 }
 
-test fn ty_compat_int_int() -> Unit {
+test partial fn ty_compat_int_int() -> Unit {
     assert_eq(ty_compat(Ty::Int, Ty::Int), true)
 }
 
-test fn ty_compat_int_bool_is_false() -> Unit {
+test partial fn ty_compat_int_bool_is_false() -> Unit {
     assert_eq(ty_compat(Ty::Int, Ty::Bool), false)
 }
 

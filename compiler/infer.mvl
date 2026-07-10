@@ -218,11 +218,27 @@ partial fn infer_list_lit(
         return InferResult::ok(Ty::List(Box::new(Ty::Unknown)), c)
     } else { () }
     let curr: ref Checker = c;
-    let elem_ty: ref Ty = Ty::Unknown;
-    for e in elems {
-        let ir: InferResult = infer_expr(curr, errs, e);
-        curr = ir.checker;
-        if !ty_is_unknown(ir.ty) { elem_ty = ir.ty } else { () }
+    // Derive element type from first element (mirrors Rust source).
+    // Avoids ref Ty initialized from a temporary enum value (REQ2).
+    let elem_ty: Ty = match elems.first() {
+        None    => Ty::Unknown,
+        Some(e) => {
+            let ir: InferResult = infer_expr(curr, errs, e);
+            curr = ir.checker;
+            if ty_is_unknown(ir.ty) { Ty::Unknown } else { ir.ty }
+        },
+    };
+    // Thread checker state through remaining elements (type already known).
+    let i: ref Int = 1;
+    while i < elems.len() {
+        match elems.get(i) {
+            None    => (),
+            Some(e) => {
+                let ir: InferResult = infer_expr(curr, errs, e);
+                curr = ir.checker;
+            },
+        }
+        i = i + 1
     }
     InferResult::ok(Ty::List(Box::new(elem_ty)), curr)
 }
@@ -366,7 +382,7 @@ total fn split_once_infer(s: String, sep: String) -> Option[List[String]] {
     let i: ref Int = 0;
     let sep_len: Int = sep.len();
     let s_len: Int = s.len();
-    while i <= s_len - sep_len {
+    while i <= s_len - sep_len decreases s_len - sep_len - i {
         let sub: String = s.substring(i, i + sep_len);
         if sub == sep {
             return Some([s.substring(0, i), s.substring(i + sep_len, s_len)])

@@ -20,7 +20,7 @@ pub total fn split_once(s: String, sep: String) -> Option[List[String]] {
     let i: ref Int = 0;
     let sep_len: Int = sep.len();
     let s_len: Int = s.len();
-    while i <= s_len - sep_len {
+    while i <= s_len - sep_len decreases s_len - sep_len - i {
         let sub: String = s.substring(i, i + sep_len);
         if sub == sep {
             return Some([s.substring(0, i), s.substring(i + sep_len, s_len)])
@@ -226,7 +226,7 @@ pub total fn strip_label(ty: Ty) -> Ty {
 // ── Builtin method return types ───────────────────────────────────────────────
 // Port of src/mvl/checker/method_types.rs
 
-pub partial fn int_method_ty(method: String) -> Ty {
+pub total fn int_method_ty(method: String) -> Ty {
     if      method == "abs"        { Ty::Int }
     else if method == "min"        { Ty::Int }
     else if method == "max"        { Ty::Int }
@@ -244,7 +244,7 @@ pub partial fn int_method_ty(method: String) -> Ty {
     else                           { Ty::Unknown }
 }
 
-pub partial fn float_method_ty(method: String) -> Ty {
+pub total fn float_method_ty(method: String) -> Ty {
     if      method == "abs"        { Ty::Float }
     else if method == "sqrt"       { Ty::Float }
     else if method == "floor"      { Ty::Float }
@@ -260,12 +260,12 @@ pub partial fn float_method_ty(method: String) -> Ty {
     else                           { Ty::Unknown }
 }
 
-pub partial fn bool_method_ty(method: String) -> Ty {
+pub total fn bool_method_ty(method: String) -> Ty {
     if method == "to_string" { Ty::Str }
     else                     { Ty::Unknown }
 }
 
-pub partial fn byte_method_ty(method: String) -> Ty {
+pub total fn byte_method_ty(method: String) -> Ty {
     if      method == "to_int"    { Ty::Int }
     else if method == "to_uint"   { Ty::UInt }
     else if method == "to_ubyte"  { Ty::UByte }
@@ -273,7 +273,7 @@ pub partial fn byte_method_ty(method: String) -> Ty {
     else                          { Ty::Unknown }
 }
 
-pub partial fn ubyte_method_ty(method: String) -> Ty {
+pub total fn ubyte_method_ty(method: String) -> Ty {
     if      method == "to_int"    { Ty::Int }
     else if method == "to_uint"   { Ty::UInt }
     else if method == "to_byte"   { Ty::Byte }
@@ -281,7 +281,7 @@ pub partial fn ubyte_method_ty(method: String) -> Ty {
     else                          { Ty::Unknown }
 }
 
-pub partial fn uint_method_ty(method: String) -> Ty {
+pub total fn uint_method_ty(method: String) -> Ty {
     if      method == "to_int"    { Ty::Int }
     else if method == "to_byte"   { Ty::Byte }
     else if method == "to_ubyte"  { Ty::UByte }
@@ -289,7 +289,7 @@ pub partial fn uint_method_ty(method: String) -> Ty {
     else                          { Ty::Unknown }
 }
 
-pub partial fn string_method_ty(method: String, arg_tys: List[Ty]) -> Ty {
+pub total fn string_method_ty(method: String, arg_tys: List[Ty]) -> Ty {
     if      method == "len"         { Ty::Int }
     else if method == "is_empty"    { Ty::Bool }
     else if method == "to_upper"    { Ty::Str }
@@ -320,7 +320,7 @@ pub partial fn string_method_ty(method: String, arg_tys: List[Ty]) -> Ty {
     else                            { Ty::Unknown }
 }
 
-pub partial fn list_method_ty(elem_ty: Ty, method: String, arg_tys: List[Ty]) -> Ty {
+pub total fn list_method_ty(elem_ty: Ty, method: String, arg_tys: List[Ty]) -> Ty {
     if      method == "len"         { Ty::Int }
     else if method == "is_empty"    { Ty::Bool }
     else if method == "get"         { Ty::Option(Box::new(elem_ty)) }
@@ -384,7 +384,7 @@ pub partial fn list_method_ty(elem_ty: Ty, method: String, arg_tys: List[Ty]) ->
     else                            { Ty::Unknown }
 }
 
-pub partial fn option_method_ty(inner: Ty, method: String, arg_tys: List[Ty]) -> Ty {
+pub total fn option_method_ty(inner: Ty, method: String, arg_tys: List[Ty]) -> Ty {
     if      method == "is_some"      { Ty::Bool }
     else if method == "is_none"      { Ty::Bool }
     else if method == "unwrap_or"    { inner }
@@ -486,26 +486,26 @@ pub partial fn set_method_ty(elem_ty: Ty, method: String, arg_tys: List[Ty]) -> 
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-test fn substitute_ty_bare_param_bound() -> Unit {
+test partial fn substitute_ty_bare_param_bound() -> Unit {
     let subst: ref Map[String, Ty] = Map::new();
     subst.insert("T", Ty::Int);
     let result: Ty = substitute_ty(Ty::Named("T", []), subst, ["T"]);
     assert_eq(result, Ty::Int)
 }
 
-test fn substitute_ty_unbound_param_becomes_unknown() -> Unit {
+test partial fn substitute_ty_unbound_param_becomes_unknown() -> Unit {
     let subst: Map[String, Ty] = Map::new();
     let result: Ty = substitute_ty(Ty::Named("T", []), subst, ["T"]);
     assert_eq(result, Ty::Unknown)
 }
 
-test fn substitute_ty_non_param_preserved() -> Unit {
+test partial fn substitute_ty_non_param_preserved() -> Unit {
     let subst: Map[String, Ty] = Map::new();
     let result: Ty = substitute_ty(Ty::Named("MyType", []), subst, ["T"]);
     assert_eq(result, Ty::Named("MyType", []))
 }
 
-test fn substitute_ty_list_inner() -> Unit {
+test partial fn substitute_ty_list_inner() -> Unit {
     let subst: ref Map[String, Ty] = Map::new();
     subst.insert("T", Ty::Str);
     let result: Ty = substitute_ty(Ty::List(Box::new(Ty::Named("T", []))), subst, ["T"]);
@@ -565,7 +565,7 @@ test fn option_method_ty_unwrap_or_preserves_inner() -> Unit {
     assert_eq(option_method_ty(Ty::Int, "unwrap_or", [Ty::Int]), Ty::Int)
 }
 
-test fn infer_type_params_binds_list_inner() -> Unit {
+test partial fn infer_type_params_binds_list_inner() -> Unit {
     let subst: ref Map[String, Ty] = Map::new();
     let param_tys: List[Ty] = [Ty::List(Box::new(Ty::Named("T", [])))];
     let arg_tys:   List[Ty] = [Ty::List(Box::new(Ty::Str))];
@@ -576,7 +576,7 @@ test fn infer_type_params_binds_list_inner() -> Unit {
     }
 }
 
-test fn infer_type_params_bare_named_binds() -> Unit {
+test partial fn infer_type_params_bare_named_binds() -> Unit {
     let subst: ref Map[String, Ty] = Map::new();
     infer_type_params(["T"], [Ty::Named("T", [])], [Ty::Int], subst);
     assert_eq(subst.get("T"), Some(Ty::Int))
