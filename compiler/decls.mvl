@@ -303,6 +303,78 @@ test fn collect_declarations_registers_fn() -> Unit {
     }
 }
 
+total fn empty_prog() -> Program {
+    Program {
+        fns: [], types: [], uses: [], consts: [],
+        externs: [], impls: [], actors: [],
+        effect_decls: [], label_decls: [], relabel_decls: [], errors: [],
+    }
+}
+
+total fn zero_loc() -> SourceLoc { SourceLoc { line: 0, col: 0 } }
+
+total fn simple_te(name: String) -> TypeExpr { TypeExpr { name: name, args: [], span: zero_loc() } }
+
+total fn prog_with_type(td: TypeDecl) -> Program {
+    Program {
+        fns: [], types: [td], uses: [], consts: [],
+        externs: [], impls: [], actors: [],
+        effect_decls: [], label_decls: [], relabel_decls: [], errors: [],
+    }
+}
+
+total fn prog_with_actor(name: String) -> Program {
+    Program {
+        fns: [], types: [], uses: [], consts: [],
+        externs: [], impls: [], actors: [name],
+        effect_decls: [], label_decls: [], relabel_decls: [], errors: [],
+    }
+}
+
+total fn prog_with_extern(ed: ExternDecl) -> Program {
+    Program {
+        fns: [], types: [], uses: [], consts: [],
+        externs: [ed], impls: [], actors: [],
+        effect_decls: [], label_decls: [], relabel_decls: [], errors: [],
+    }
+}
+
+test fn collect_declarations_registers_type() -> Unit {
+    let c: Checker = Checker::new(TypeEnv::new());
+    let errs: ref List[CheckError] = [];
+    let td: TypeDecl = TypeDecl {
+        visible: false, name: "MyStruct", type_params: [], body_kind: TypeBodyKind::IsStruct,
+        fields: [], variants: [], alias_ty: simple_te(""), span: zero_loc(),
+    };
+    let c2: Checker = collect_declarations(c, errs, prog_with_type(td));
+    match c2.env.lookup_type("MyStruct") {
+        Some(_) => assert_eq(true, true),
+        None    => assert_eq(true, false),
+    }
+}
+
+test fn collect_declarations_registers_actor() -> Unit {
+    let c: Checker = Checker::new(TypeEnv::new());
+    let errs: ref List[CheckError] = [];
+    let c2: Checker = collect_declarations(c, errs, prog_with_actor("Counter"));
+    assert_eq(c2.is_actor("Counter"), true)
+}
+
+test fn collect_declarations_registers_extern_fn() -> Unit {
+    let c: Checker = Checker::new(TypeEnv::new());
+    let errs: ref List[CheckError] = [];
+    let ed: ExternDecl = ExternDecl {
+        lang: "rust",
+        fns: [ExternFnDecl { name: "os_time", params: [], ret_ty: simple_te("Int"), effects: [], span: zero_loc() }],
+        span: zero_loc(),
+    };
+    let c2: Checker = collect_declarations(c, errs, prog_with_extern(ed));
+    match c2.env.lookup_fn("os_time") {
+        Some(fi) => assert_eq(fi.ret, Ty::Int),
+        None     => assert_eq(true, false),
+    }
+}
+
 test fn collect_declarations_registers_extension_method() -> Unit {
     let env: TypeEnv = TypeEnv::new();
     let c: Checker = Checker::new(env);

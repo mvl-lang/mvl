@@ -1295,7 +1295,103 @@ test fn binary_op_eq_name() -> Unit {
     assert_eq(binary_op_name(BinaryOp::Eq), "==")
 }
 
-// Note: tests that call infer_expr are omitted here because infer_expr
-// calls check_stmt (via infer_block_type) which is in check_stmts.mvl —
-// not available in the isolated per-file test harness.
-// Integration coverage provided by the parity harness (tests/checker_parity.rs).
+// infer_fn_call / infer_method_call tests: these are safe because the only
+// recursive call is infer_expr on *literal* arguments, which never reaches
+// check_stmt (check_stmt lives in check_stmts.mvl, not here).
+
+test partial fn infer_fn_call_known_fn_returns_ret_ty() -> Unit {
+    let env: TypeEnv = TypeEnv::new();
+    let env2: TypeEnv = env.define_fn("greet", FnInfo::pure([Ty::Str], Ty::Unit));
+    let c: Checker = Checker::new(env2);
+    let errs: ref List[CheckError] = [];
+    let sp: SourceLoc = SourceLoc { line: 0, col: 0 };
+    let call: AstCallExpr = AstCallExpr { name: "greet", args: [Expr::Lit(AstLiteral::Str("hi"), sp)], span: sp };
+    let ir: InferResult = infer_fn_call(c, errs, call);
+    assert_eq(ir.ty, Ty::Unit);
+    assert_eq(errs.len(), 0)
+}
+
+test partial fn infer_fn_call_arity_mismatch_emits_error() -> Unit {
+    let env: TypeEnv = TypeEnv::new();
+    let env2: TypeEnv = env.define_fn("add", FnInfo::pure([Ty::Int, Ty::Int], Ty::Int));
+    let c: Checker = Checker::new(env2);
+    let errs: ref List[CheckError] = [];
+    let sp: SourceLoc = SourceLoc { line: 0, col: 0 };
+    let call: AstCallExpr = AstCallExpr { name: "add", args: [Expr::Lit(AstLiteral::Integer(1), sp)], span: sp };
+    let _: InferResult = infer_fn_call(c, errs, call);
+    assert_eq(errs.len(), 1)
+}
+
+test partial fn infer_fn_call_unknown_fn_emits_error() -> Unit {
+    let c: Checker = Checker::new(TypeEnv::new());
+    let errs: ref List[CheckError] = [];
+    let sp: SourceLoc = SourceLoc { line: 0, col: 0 };
+    let call: AstCallExpr = AstCallExpr { name: "no_such_fn", args: [], span: sp };
+    let ir: InferResult = infer_fn_call(c, errs, call);
+    assert_eq(ir.ty, Ty::Unknown);
+    assert_eq(errs.len(), 1)
+}
+
+test partial fn infer_fn_call_some_constructor() -> Unit {
+    let c: Checker = Checker::new(TypeEnv::new());
+    let errs: ref List[CheckError] = [];
+    let sp: SourceLoc = SourceLoc { line: 0, col: 0 };
+    let call: AstCallExpr = AstCallExpr { name: "Some", args: [Expr::Lit(AstLiteral::Integer(42), sp)], span: sp };
+    let ir: InferResult = infer_fn_call(c, errs, call);
+    assert_eq(ir.ty, Ty::Option(Box::new(Ty::Int)));
+    assert_eq(errs.len(), 0)
+}
+
+test partial fn infer_fn_call_ok_constructor() -> Unit {
+    let c: Checker = Checker::new(TypeEnv::new());
+    let errs: ref List[CheckError] = [];
+    let sp: SourceLoc = SourceLoc { line: 0, col: 0 };
+    let call: AstCallExpr = AstCallExpr { name: "Ok", args: [Expr::Lit(AstLiteral::Integer(1), sp)], span: sp };
+    let ir: InferResult = infer_fn_call(c, errs, call);
+    match ir.ty {
+        Ty::Result(ok_ty, _) => assert_eq(*ok_ty, Ty::Int),
+        _                    => assert_eq(true, false),
+    }
+}
+
+test partial fn infer_method_call_int_method() -> Unit {
+    let c: Checker = Checker::new(TypeEnv::new());
+    let errs: ref List[CheckError] = [];
+    let sp: SourceLoc = SourceLoc { line: 0, col: 0 };
+    let m: AstMethodExpr = AstMethodExpr {
+        receiver: [Expr::Lit(AstLiteral::Integer(5), sp)],
+        method:   "abs",
+        args:     [],
+        span:     sp,
+    };
+    let ir: InferResult = infer_method_call(c, errs, m);
+    assert_eq(ir.ty, Ty::Int)
+}
+
+test partial fn infer_method_call_string_len() -> Unit {
+    let c: Checker = Checker::new(TypeEnv::new());
+    let errs: ref List[CheckError] = [];
+    let sp: SourceLoc = SourceLoc { line: 0, col: 0 };
+    let m: AstMethodExpr = AstMethodExpr {
+        receiver: [Expr::Lit(AstLiteral::Str("hello"), sp)],
+        method:   "len",
+        args:     [],
+        span:     sp,
+    };
+    let ir: InferResult = infer_method_call(c, errs, m);
+    assert_eq(ir.ty, Ty::Int)
+}
+
+test partial fn infer_method_call_unknown_method_on_int_emits_error() -> Unit {
+    let c: Checker = Checker::new(TypeEnv::new());
+    let errs: ref List[CheckError] = [];
+    let sp: SourceLoc = SourceLoc { line: 0, col: 0 };
+    let m: AstMethodExpr = AstMethodExpr {
+        receiver: [Expr::Lit(AstLiteral::Integer(1), sp)],
+        method:   "nonexistent_method",
+        args:     [],
+        span:     sp,
+    };
+    let _: InferResult = infer_method_call(c, errs, m);
+    assert_eq(errs.len(), 1)
+}

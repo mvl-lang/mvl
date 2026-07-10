@@ -537,3 +537,47 @@ test fn int_method_ty_known_method() -> Unit {
 test fn int_method_ty_unknown_method() -> Unit {
     assert_eq(int_method_ty("nonexistent"), Ty::Unknown)
 }
+
+test fn string_method_ty_len() -> Unit {
+    assert_eq(string_method_ty("len", []), Ty::Int)
+}
+
+test fn string_method_ty_to_upper() -> Unit {
+    assert_eq(string_method_ty("to_upper", []), Ty::Str)
+}
+
+test fn list_method_ty_len() -> Unit {
+    assert_eq(list_method_ty(Ty::Int, "len", []), Ty::Int)
+}
+
+test fn list_method_ty_get_wraps_option() -> Unit {
+    match list_method_ty(Ty::Str, "get", []) {
+        Ty::Option(inner) => assert_eq(*inner, Ty::Str),
+        _                 => assert_eq(true, false),
+    }
+}
+
+test fn option_method_ty_is_some() -> Unit {
+    assert_eq(option_method_ty(Ty::Int, "is_some", []), Ty::Bool)
+}
+
+test fn option_method_ty_unwrap_or_preserves_inner() -> Unit {
+    assert_eq(option_method_ty(Ty::Int, "unwrap_or", [Ty::Int]), Ty::Int)
+}
+
+test fn infer_type_params_binds_list_inner() -> Unit {
+    let subst: ref Map[String, Ty] = Map::new();
+    let param_tys: List[Ty] = [Ty::List(Box::new(Ty::Named("T", [])))];
+    let arg_tys:   List[Ty] = [Ty::List(Box::new(Ty::Str))];
+    infer_type_params(["T"], param_tys, arg_tys, subst);
+    match subst.get("T") {
+        Some(t) => assert_eq(t, Ty::Str),
+        None    => assert_eq(true, false),
+    }
+}
+
+test fn infer_type_params_bare_named_binds() -> Unit {
+    let subst: ref Map[String, Ty] = Map::new();
+    infer_type_params(["T"], [Ty::Named("T", [])], [Ty::Int], subst);
+    assert_eq(subst.get("T"), Some(Ty::Int))
+}
