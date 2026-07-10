@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.244.0] - 2026-07-10
+
+### Added — Self-Hosted IFC Checker
+
+- **Information flow control (IFC)**: `compiler/ifc.mvl` and `compiler/ifc_propagation.mvl` port implicit flow analysis and interprocedural label propagation from Rust. Tainted value tracking, secret classification, and policy enforcement now run in the MVL self-hosted checker (#1738).
+- **Label tracking**: tracks `Tainted[T]` and `Secret[T]` types through assignments, function calls, and data flow — a complete rewrite of the implicit flow engine to handle refinement type labels in a self-hosted context.
+- **Interprocedural propagation**: label refinement information flows across function boundaries — callers' label constraints are discharged using callee context.
+
 ## [0.243.1] - 2026-07-10
 
 ### Fixed — CI
