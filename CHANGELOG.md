@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.245.0] - 2026-07-11
+
+### Added — Self-Hosted Refinements & Contracts Checker
+
+- **Refinement type checking**: `compiler/refinements.mvl` ports refinements.rs from Rust — call-site validation of function parameters against `where`-predicates, hypothesis injection from match patterns and if-conditions, and 5-layer solver dispatch (trivial / interval / symbolic / Cooper / Z3). Per-call-site proof tracking with outcome logging (#1739).
+- **Contract checking**: `compiler/contracts.mvl` ports contracts/ from Rust — `requires` clause validation at function call sites with single-parameter argument checking, `ensures` clause validation at return points, and stubs for loop invariants and field refinement validation. Parser-stage contracts not yet preserved (awaiting parser extension).
+- **Proof tracking**: RefCounts, ProofEntry, ProofSite, and LayerCounts types record proof outcomes per solver layer and call site — enables assurance dashboards and proof-layer profiling in the self-hosted checker.
+
 ## [0.244.1] - 2026-07-10
 
 ### Fixed — Compiler Self-Hosting REQ8 Errors
