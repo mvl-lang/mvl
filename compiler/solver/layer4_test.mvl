@@ -1,0 +1,208 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// compiler/solver/layer4_test.mvl — unit tests for compiler/solver/layer4.mvl
+//
+// Tests the internal types and public entry point:
+//   - linterm_* arithmetic helpers
+//   - Constraint trivially-true / trivially-false detection
+//   - is_unsat() via the divisibility and FM paths
+//   - try_cooper() end-to-end
+//
+// All types (LinTerm, Constraint, RefExpr, Expr, …) are available via the
+// compiler prelude when running `mvl test compiler/`.
+//
+// Run with: mvl test compiler/
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+total fn loc() -> SourceLoc { SourceLoc { line: 0, col: 0 } }
+
+total fn int_expr(n: Int) -> Expr {
+    Expr::Lit(AstLiteral::Integer(n), loc())
+}
+
+total fn ident_expr(name: String) -> Expr {
+    Expr::Ident(name, loc())
+}
+
+total fn self_cmp_ref(op: CmpOp, n: Int) -> RefExpr {
+    RefExpr::Compare {
+        op: op,
+        left:  [RefExpr::Ident { name: "self", span: loc() }],
+        right: [RefExpr::Integer { value: n, span: loc() }],
+        span: loc(),
+    }
+}
+
+total fn empty_var_refs() -> Map[String, Option[RefExpr]] { Map::new() }
+
+total fn single_hyp(name: String, pred: RefExpr) -> Map[String, Option[RefExpr]] {
+    let m: ref Map[String, Option[RefExpr]] = Map::new();
+    m.insert(name, Some(pred));
+    m
+}
+
+// ── linterm helpers ───────────────────────────────────────────────────────────
+
+test fn linterm_const_is_constant() -> Unit {
+    let t: LinTerm = linterm_const(5);
+    assert_eq(linterm_is_constant(t), true);
+    assert_eq(t.constant, 5)
+}
+
+test fn linterm_var_is_not_constant() -> Unit {
+    let t: LinTerm = linterm_var("x");
+    assert_eq(linterm_is_constant(t), false);
+    assert_eq(t.constant, 0)
+}
+
+test fn linterm_add_constants() -> Unit {
+    let t: LinTerm = linterm_add(linterm_const(3), linterm_const(4));
+    assert_eq(linterm_is_constant(t), true);
+    assert_eq(t.constant, 7)
+}
+
+test fn linterm_add_same_var_accumulates_coeff() -> Unit {
+    // x + x = 2x
+    let t: LinTerm = linterm_add(linterm_var("x"), linterm_var("x"));
+    assert_eq(linterm_coeff_of(t, "x"), 2)
+}
+
+test fn linterm_add_opposite_vars_cancel() -> Unit {
+    // x + (-x) = 0  — coeffs entry should be removed
+    let t: LinTerm = linterm_add(linterm_var("x"), linterm_negate(linterm_var("x")));
+    assert_eq(linterm_is_constant(t), true);
+    assert_eq(t.constant, 0)
+}
+
+test fn linterm_scale_by_zero_is_const_zero() -> Unit {
+    let t: LinTerm = linterm_scale(linterm_var("x"), 0);
+    assert_eq(linterm_is_constant(t), true);
+    assert_eq(t.constant, 0)
+}
+
+test fn linterm_scale_negative() -> Unit {
+    // -3 * (x + 2) = -3x - 6
+    let base: LinTerm = linterm_add(linterm_var("x"), linterm_const(2));
+    let t: LinTerm = linterm_scale(base, -3);
+    assert_eq(linterm_coeff_of(t, "x"), -3);
+    assert_eq(t.constant, -6)
+}
+
+test fn linterm_sub_gives_zero_constant() -> Unit {
+    // 5 - 5 = 0
+    let t: LinTerm = linterm_sub(linterm_const(5), linterm_const(5));
+    assert_eq(t.constant, 0)
+}
+
+test fn linterm_coeff_of_absent_var_is_zero() -> Unit {
+    let t: LinTerm = linterm_var("x");
+    assert_eq(linterm_coeff_of(t, "y"), 0)
+}
+
+test fn linterm_without_var_removes_it() -> Unit {
+    // x + 3 without "x" → constant 3
+    let t: LinTerm = linterm_add(linterm_var("x"), linterm_const(3));
+    let r: LinTerm = linterm_without_var(t, "x");
+    assert_eq(linterm_is_constant(r), true);
+    assert_eq(r.constant, 3)
+}
+
+test fn linterm_free_vars_collects_names() -> Unit {
+    // x + y has two free vars
+    let t: LinTerm = linterm_add(linterm_var("x"), linterm_var("y"));
+    let vs: List[String] = linterm_free_vars(t);
+    assert_eq(vs.len(), 2)
+}
+
+// ── Constraint trivial checks ─────────────────────────────────────────────────
+
+test fn le_positive_constant_is_trivially_false() -> Unit {
+    // 3 ≤ 0  is false
+    let c: Constraint = Constraint::Le(linterm_const(3));
+    assert_eq(constraint_is_trivially_false(c), true)
+}
+
+test fn le_zero_constant_is_trivially_true() -> Unit {
+    let c: Constraint = Constraint::Le(linterm_const(0));
+    assert_eq(constraint_is_trivially_true(c), true)
+}
+
+test fn eq_nonzero_constant_is_trivially_false() -> Unit {
+    let c: Constraint = Constraint::Eq(linterm_const(1));
+    assert_eq(constraint_is_trivially_false(c), true)
+}
+
+test fn eq_zero_constant_is_trivially_true() -> Unit {
+    let c: Constraint = Constraint::Eq(linterm_const(0));
+    assert_eq(constraint_is_trivially_true(c), true)
+}
+
+test fn ne_zero_constant_is_trivially_false() -> Unit {
+    let c: Constraint = Constraint::Ne(linterm_const(0));
+    assert_eq(constraint_is_trivially_false(c), true)
+}
+
+test fn ne_nonzero_constant_is_trivially_true() -> Unit {
+    let c: Constraint = Constraint::Ne(linterm_const(5));
+    assert_eq(constraint_is_trivially_true(c), true)
+}
+
+test fn le_with_variable_is_not_trivial() -> Unit {
+    let c: Constraint = Constraint::Le(linterm_var("x"));
+    assert_eq(constraint_is_trivially_false(c), false);
+    assert_eq(constraint_is_trivially_true(c), false)
+}
+
+// ── try_cooper — literal arguments ────────────────────────────────────────────
+
+test fn cooper_literal_satisfies_gt_pred() -> Unit {
+    // arg=5, pred: self > 0  — FM proves ¬(5 > 0) = (5 ≤ 0) UNSAT
+    let pred: RefExpr = self_cmp_ref(CmpOp::Gt, 0);
+    let result: Option[RefResult] = try_cooper(pred, int_expr(5), empty_var_refs());
+    assert_eq(match result { Some(RefResult::Proven) => true, _ => false }, true)
+}
+
+test fn cooper_literal_refutes_gt_pred() -> Unit {
+    // arg=0, pred: self > 0  — 0 does not satisfy; ¬pred (0 ≤ 0) is SAT
+    let pred: RefExpr = self_cmp_ref(CmpOp::Gt, 0);
+    let result: Option[RefResult] = try_cooper(pred, int_expr(0), empty_var_refs());
+    // Cooper can't prove it (negation is SAT) → None or not Proven
+    let is_proven: Bool = match result { Some(RefResult::Proven) => true, _ => false };
+    assert_eq(is_proven, false)
+}
+
+// ── try_cooper — variable + hypothesis ───────────────────────────────────────
+
+test fn cooper_var_with_hyp_proves_pred() -> Unit {
+    // hyp: x > 5;  pred: x > 0
+    // Negation: x <= 0. Combined with x > 5: x > 5 && x <= 0 is UNSAT → Proven
+    let hyp: Map[String, Option[RefExpr]] = single_hyp("x", self_cmp_ref(CmpOp::Gt, 5));
+    let pred: RefExpr = self_cmp_ref(CmpOp::Gt, 0);
+    let result: Option[RefResult] = try_cooper(pred, ident_expr("x"), hyp);
+    assert_eq(match result { Some(RefResult::Proven) => true, _ => false }, true)
+}
+
+test fn cooper_var_no_hyp_returns_none_for_unbounded() -> Unit {
+    // x has no hypothesis → interval is (−∞, ∞); cannot prove x > 0
+    let pred: RefExpr = self_cmp_ref(CmpOp::Gt, 0);
+    let result: Option[RefResult] = try_cooper(pred, ident_expr("x"), empty_var_refs());
+    let is_proven: Bool = match result { Some(RefResult::Proven) => true, _ => false };
+    assert_eq(is_proven, false)
+}
+
+// ── try_cooper — linear expressions ──────────────────────────────────────────
+
+test fn cooper_binary_add_expr_proven() -> Unit {
+    // arg = 3 + 4 = 7; pred: self > 0
+    let arg: Expr = Expr::Binary(AstBinaryExpr {
+        op: BinaryOp::Add,
+        left:  [int_expr(3)],
+        right: [int_expr(4)],
+        span: loc(),
+    });
+    let pred: RefExpr = self_cmp_ref(CmpOp::Gt, 0);
+    let result: Option[RefResult] = try_cooper(pred, arg, empty_var_refs());
+    assert_eq(match result { Some(RefResult::Proven) => true, _ => false }, true)
+}

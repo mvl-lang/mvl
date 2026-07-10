@@ -1,0 +1,155 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// compiler/solver/solver_test.mvl — unit tests for compiler/solver.mvl
+//
+// Tests the shared types and helpers exposed by solver.mvl:
+//   - SolverMode::as_str()
+//   - RefResult variants
+//   - CmpOp::flip()
+//   - binary_op_to_cmp()
+//   - dummy_loc()
+//
+// Run with: mvl test compiler/
+
+// ── SolverMode::as_str ────────────────────────────────────────────────────────
+
+test fn solver_mode_as_str_layered() -> Unit {
+    assert_eq(SolverMode::Layered.as_str(), "layered")
+}
+
+test fn solver_mode_as_str_z3only() -> Unit {
+    assert_eq(SolverMode::Z3Only.as_str(), "z3-only")
+}
+
+test fn solver_mode_as_str_fastonly() -> Unit {
+    assert_eq(SolverMode::FastOnly.as_str(), "fast-only")
+}
+
+// ── RefResult variants ────────────────────────────────────────────────────────
+
+test fn ref_result_proven_is_proven() -> Unit {
+    let r: RefResult = RefResult::Proven;
+    let is_proven: Bool = match r { RefResult::Proven => true, _ => false };
+    assert_eq(is_proven, true)
+}
+
+test fn ref_result_runtime_check() -> Unit {
+    let r: RefResult = RefResult::RuntimeCheck;
+    let is_rt: Bool = match r { RefResult::RuntimeCheck => true, _ => false };
+    assert_eq(is_rt, true)
+}
+
+test fn ref_result_failed_none_payload() -> Unit {
+    let r: RefResult = RefResult::Failed(None);
+    let payload: Option[String] = match r { RefResult::Failed(p) => p, _ => Some("wrong") };
+    let is_none: Bool = match payload { None => true, Some(_) => false };
+    assert_eq(is_none, true)
+}
+
+test fn ref_result_failed_with_counterexample() -> Unit {
+    let r: RefResult = RefResult::Failed(Some("x = -1"));
+    let payload: Option[String] = match r { RefResult::Failed(p) => p, _ => None };
+    let s: String = match payload { Some(v) => v, None => "" };
+    assert_eq(s, "x = -1")
+}
+
+// ── CmpOp::flip ───────────────────────────────────────────────────────────────
+
+test fn flip_eq_is_eq() -> Unit {
+    let f: CmpOp = CmpOp::Eq.flip();
+    assert_eq(match f { CmpOp::Eq => true, _ => false }, true)
+}
+
+test fn flip_ne_is_ne() -> Unit {
+    let f: CmpOp = CmpOp::Ne.flip();
+    assert_eq(match f { CmpOp::Ne => true, _ => false }, true)
+}
+
+test fn flip_lt_is_gt() -> Unit {
+    let f: CmpOp = CmpOp::Lt.flip();
+    assert_eq(match f { CmpOp::Gt => true, _ => false }, true)
+}
+
+test fn flip_gt_is_lt() -> Unit {
+    let f: CmpOp = CmpOp::Gt.flip();
+    assert_eq(match f { CmpOp::Lt => true, _ => false }, true)
+}
+
+test fn flip_le_is_ge() -> Unit {
+    let f: CmpOp = CmpOp::Le.flip();
+    assert_eq(match f { CmpOp::Ge => true, _ => false }, true)
+}
+
+test fn flip_ge_is_le() -> Unit {
+    let f: CmpOp = CmpOp::Ge.flip();
+    assert_eq(match f { CmpOp::Le => true, _ => false }, true)
+}
+
+test fn flip_is_involution() -> Unit {
+    // flip(flip(op)) == op for all ops
+    assert_eq(match CmpOp::Lt.flip().flip() { CmpOp::Lt => true, _ => false }, true);
+    assert_eq(match CmpOp::Gt.flip().flip() { CmpOp::Gt => true, _ => false }, true);
+    assert_eq(match CmpOp::Le.flip().flip() { CmpOp::Le => true, _ => false }, true);
+    assert_eq(match CmpOp::Ge.flip().flip() { CmpOp::Ge => true, _ => false }, true)
+}
+
+// ── binary_op_to_cmp ─────────────────────────────────────────────────────────
+
+test fn binary_op_to_cmp_eq() -> Unit {
+    let r: Option[CmpOp] = binary_op_to_cmp(BinaryOp::Eq);
+    assert_eq(match r { Some(CmpOp::Eq) => true, _ => false }, true)
+}
+
+test fn binary_op_to_cmp_ne() -> Unit {
+    let r: Option[CmpOp] = binary_op_to_cmp(BinaryOp::Ne);
+    assert_eq(match r { Some(CmpOp::Ne) => true, _ => false }, true)
+}
+
+test fn binary_op_to_cmp_lt() -> Unit {
+    let r: Option[CmpOp] = binary_op_to_cmp(BinaryOp::Lt);
+    assert_eq(match r { Some(CmpOp::Lt) => true, _ => false }, true)
+}
+
+test fn binary_op_to_cmp_gt() -> Unit {
+    let r: Option[CmpOp] = binary_op_to_cmp(BinaryOp::Gt);
+    assert_eq(match r { Some(CmpOp::Gt) => true, _ => false }, true)
+}
+
+test fn binary_op_to_cmp_le() -> Unit {
+    let r: Option[CmpOp] = binary_op_to_cmp(BinaryOp::Le);
+    assert_eq(match r { Some(CmpOp::Le) => true, _ => false }, true)
+}
+
+test fn binary_op_to_cmp_ge() -> Unit {
+    let r: Option[CmpOp] = binary_op_to_cmp(BinaryOp::Ge);
+    assert_eq(match r { Some(CmpOp::Ge) => true, _ => false }, true)
+}
+
+test fn binary_op_to_cmp_add_is_none() -> Unit {
+    let r: Option[CmpOp] = binary_op_to_cmp(BinaryOp::Add);
+    assert_eq(r.is_none(), true)
+}
+
+test fn binary_op_to_cmp_sub_is_none() -> Unit {
+    let r: Option[CmpOp] = binary_op_to_cmp(BinaryOp::Sub);
+    assert_eq(r.is_none(), true)
+}
+
+test fn binary_op_to_cmp_mul_is_none() -> Unit {
+    let r: Option[CmpOp] = binary_op_to_cmp(BinaryOp::Mul);
+    assert_eq(r.is_none(), true)
+}
+
+test fn binary_op_to_cmp_and_is_none() -> Unit {
+    let r: Option[CmpOp] = binary_op_to_cmp(BinaryOp::And);
+    assert_eq(r.is_none(), true)
+}
+
+// ── dummy_loc ────────────────────────────────────────────────────────────────
+
+test fn dummy_loc_is_zero_zero() -> Unit {
+    let loc: SourceLoc = dummy_loc();
+    assert_eq(loc.line, 0);
+    assert_eq(loc.col, 0)
+}
