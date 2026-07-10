@@ -29,7 +29,7 @@ total fn split_once_decls(s: String, sep: String) -> Option[List[String]] {
     let i: ref Int = 0;
     let sep_len: Int = sep.len();
     let s_len: Int = s.len();
-    while i <= s_len - sep_len {
+    while i <= s_len - sep_len decreases s_len - sep_len - i {
         let sub: String = s.substring(i, i + sep_len);
         if sub == sep {
             return Some([s.substring(0, i), s.substring(i + sep_len, s_len)])
@@ -266,7 +266,7 @@ test fn totality_of_empty() -> Unit {
     assert_eq(totality_of("").is_none(), true)
 }
 
-test fn collect_declarations_registers_fn() -> Unit {
+test partial fn collect_declarations_registers_fn() -> Unit {
     let env: TypeEnv = TypeEnv::new();
     let c: Checker = Checker::new(env);
     let errs: ref List[CheckError] = [];
@@ -339,7 +339,7 @@ total fn prog_with_extern(ed: ExternDecl) -> Program {
     }
 }
 
-test fn collect_declarations_registers_type() -> Unit {
+test partial fn collect_declarations_registers_type() -> Unit {
     let c: Checker = Checker::new(TypeEnv::new());
     let errs: ref List[CheckError] = [];
     let td: TypeDecl = TypeDecl {
@@ -353,14 +353,14 @@ test fn collect_declarations_registers_type() -> Unit {
     }
 }
 
-test fn collect_declarations_registers_actor() -> Unit {
+test partial fn collect_declarations_registers_actor() -> Unit {
     let c: Checker = Checker::new(TypeEnv::new());
     let errs: ref List[CheckError] = [];
     let c2: Checker = collect_declarations(c, errs, prog_with_actor("Counter"));
     assert_eq(c2.is_actor("Counter"), true)
 }
 
-test fn collect_declarations_registers_extern_fn() -> Unit {
+test partial fn collect_declarations_registers_extern_fn() -> Unit {
     let c: Checker = Checker::new(TypeEnv::new());
     let errs: ref List[CheckError] = [];
     let ed: ExternDecl = ExternDecl {
@@ -375,7 +375,7 @@ test fn collect_declarations_registers_extern_fn() -> Unit {
     }
 }
 
-test fn collect_declarations_registers_extension_method() -> Unit {
+test partial fn collect_declarations_registers_extension_method() -> Unit {
     let env: TypeEnv = TypeEnv::new();
     let c: Checker = Checker::new(env);
     let errs: ref List[CheckError] = [];

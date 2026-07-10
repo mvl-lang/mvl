@@ -1,0 +1,5 @@
+[package]
+name = "agent-3"
+version = "0.1.0"
+license = "MIT"
+requires-mvl = ">=0.237.2"

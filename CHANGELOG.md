@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.244.1] - 2026-07-10
+
+### Fixed — Compiler Self-Hosting REQ8 Errors
+
+- Add `decreases` clauses to `split_once` functions in `calls.mvl`, `decls.mvl`, `infer.mvl` (REQ8 unbounded loop)
+- Convert pure `method_ty` dispatch functions from `partial` to `total` in `calls.mvl` (REQ8 total-calls-partial)
+- Mark `test partial fn` on test functions that call partial functions in `calls.mvl`, `checker.mvl`, `decls.mvl` (REQ8)
+
 ## [0.244.0] - 2026-07-10
 
 ### Added — Self-Hosted IFC Checker

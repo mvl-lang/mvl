@@ -366,7 +366,7 @@ total fn split_once_infer(s: String, sep: String) -> Option[List[String]] {
     let i: ref Int = 0;
     let sep_len: Int = sep.len();
     let s_len: Int = s.len();
-    while i <= s_len - sep_len {
+    while i <= s_len - sep_len decreases s_len - sep_len - i {
         let sub: String = s.substring(i, i + sep_len);
         if sub == sep {
             return Some([s.substring(0, i), s.substring(i + sep_len, s_len)])
