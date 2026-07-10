@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.243.0] - 2026-07-10
+
+### Added — Self-Hosted Checker
+
+- **Call inference**: `compiler/calls.mvl` ports call inference from Rust — `infer_fn_call`, `infer_method_call`, and related helpers now run in the MVL self-hosted checker (#1117)
+- **Declaration registration**: `compiler/decls.mvl` ports declaration collection from Rust — top-level declaration gathering and symbol registration now run in the MVL self-hosted checker (#1117)
+- **Test coverage**: comprehensive tests for `infer_fn_call`, `infer_method_call`, and `collect_declarations` added to the checker test suite (#1117)
+
 ## [0.242.0] - 2026-07-10
 
 ### Added — Bootstrap
