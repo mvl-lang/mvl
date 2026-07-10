@@ -21,6 +21,7 @@
 //!                    load_path
 //!   Env + FileRead — find_config
 
+use std.collections.{Map}
 use std.env.{env_var, _env_read}
 use std.io.{path, path_exists}
 use std.json.{Value}
@@ -151,9 +152,8 @@ partial fn from_json_list(arr: List[Value]) -> List[ConfigValue] {
     let out: ref List[ConfigValue] = [];
     let i: ref Int = 0;
     while i < len {
-        match arr.get(i) {
-            Some(v) => { out.push(from_json(v)) },
-            None    => {},
+        if let Some(v) = arr.get(i) {
+            out.push(from_json(v))
         }
         i = i + 1
     }
@@ -166,14 +166,10 @@ partial fn from_json_map(obj: Map[String, Value]) -> Map[String, ConfigValue] {
     let out: ref Map[String, ConfigValue] = Map::new();
     let i: ref Int = 0;
     while i < len {
-        match keys.get(i) {
-            Some(k) => {
-                match obj.get(k) {
-                    Some(v) => { out = out.put(k, from_json(v)) },
-                    None    => {},
-                }
-            },
-            None => {},
+        if let Some(k) = keys.get(i) {
+            if let Some(v) = obj.get(k) {
+                out.insert(k, from_json(v))
+            }
         }
         i = i + 1
     }
@@ -203,9 +199,8 @@ partial fn from_toml_list(arr: List[TomlValue]) -> List[ConfigValue] {
     let out: ref List[ConfigValue] = [];
     let i: ref Int = 0;
     while i < len {
-        match arr.get(i) {
-            Some(v) => { out.push(from_toml(v)) },
-            None    => {},
+        if let Some(v) = arr.get(i) {
+            out.push(from_toml(v))
         }
         i = i + 1
     }
@@ -218,14 +213,10 @@ partial fn from_toml_map(tbl: Map[String, TomlValue]) -> Map[String, ConfigValue
     let out: ref Map[String, ConfigValue] = Map::new();
     let i: ref Int = 0;
     while i < len {
-        match keys.get(i) {
-            Some(k) => {
-                match tbl.get(k) {
-                    Some(v) => { out = out.put(k, from_toml(v)) },
-                    None    => {},
-                }
-            },
-            None => {},
+        if let Some(k) = keys.get(i) {
+            if let Some(v) = tbl.get(k) {
+                out.insert(k, from_toml(v))
+            }
         }
         i = i + 1
     }
@@ -247,15 +238,12 @@ partial fn from_toml_map(tbl: Map[String, TomlValue]) -> Map[String, ConfigValue
 ///   )
 ///   // → Map { "port": Int(8080), "db": Map { "pool": Int(20) } }
 pub partial fn merge(base: ConfigValue, overlay: ConfigValue) -> ConfigValue {
-    match base {
-        ConfigValue::Map(b) => {
-            match overlay {
-                ConfigValue::Map(o) => ConfigValue::Map(merge_maps(b, o)),
-                _                   => overlay,
-            }
-        },
-        _ => overlay,
+    if let ConfigValue::Map(b) = base {
+        if let ConfigValue::Map(o) = overlay {
+            return ConfigValue::Map(merge_maps(b, o))
+        }
     }
+    overlay
 }
 
 partial fn merge_maps(
@@ -267,20 +255,14 @@ partial fn merge_maps(
     let out: ref Map[String, ConfigValue] = base;
     let i: ref Int = 0;
     while i < len {
-        match keys.get(i) {
-            Some(k) => {
-                match overlay.get(k) {
-                    Some(ov) => {
-                        let merged_val: ConfigValue = match out.get(k) {
-                            Some(bv) => merge(bv, ov),
-                            None     => ov,
-                        };
-                        out = out.put(k, merged_val)
-                    },
-                    None => {},
-                }
-            },
-            None => {},
+        if let Some(k) = keys.get(i) {
+            if let Some(ov) = overlay.get(k) {
+                let merged_val: ConfigValue = match out.get(k) {
+                    Some(bv) => merge(bv, ov),
+                    None     => ov,
+                };
+                out.insert(k, merged_val)
+            }
         }
         i = i + 1
     }
@@ -303,24 +285,18 @@ pub partial fn get_path(cfg: ConfigValue, key_path: String) -> Option[ConfigValu
 }
 
 partial fn get_path_parts(cfg: ConfigValue, parts: List[String], idx: Int) -> Option[ConfigValue] {
-    let len: Int = parts.len();
-    if idx >= len {
-        Some(cfg)
-    } else {
-        match cfg {
-            ConfigValue::Map(m) => {
-                match parts.get(idx) {
-                    Some(key) => {
-                        match m.get(key) {
-                            Some(v) => get_path_parts(v, parts, idx + 1),
-                            None    => None,
-                        }
-                    },
-                    None => None,
-                }
-            },
-            _ => None,
-        }
+    if idx >= parts.len() { return Some(cfg) }
+    let m: Map[String, ConfigValue] = match cfg {
+        ConfigValue::Map(m) => m,
+        _                   => { return None },
+    };
+    let key: String = match parts.get(idx) {
+        Some(k) => k,
+        None    => { return None },
+    };
+    match m.get(key) {
+        Some(v) => get_path_parts(v, parts, idx + 1),
+        None    => None,
     }
 }
 
@@ -471,43 +447,33 @@ partial fn build_env_overlay(
             let overlay: ref Map[String, ConfigValue] = Map::new();
             let i: ref Int = 0;
             while i < len {
-                match keys.get(i) {
-                    Some(k) => {
-                        let upper_k: String = k.to_upper();
-                        let env_key: String = if parent_path.len() == 0 {
-                            prefix.concat("_".concat(upper_k))
-                        } else {
-                            prefix.concat("_".concat(
-                                parent_path.concat("_".concat(upper_k))))
-                        };
-                        match m.get(k) {
-                            Some(child) => {
-                                match child {
-                                    ConfigValue::Map(_) => {
-                                        let child_path: String = if parent_path.len() == 0 {
-                                            upper_k
-                                        } else {
-                                            parent_path.concat("_".concat(upper_k))
-                                        };
-                                        let child_overlay: ConfigValue =
-                                            build_env_overlay(child, prefix, child_path);
-                                        overlay = overlay.put(k, child_overlay)
-                                    },
-                                    _ => {
-                                        match env_var(env_key) {
-                                            Some(raw) => {
-                                                overlay = overlay.put(k,
-                                                    parse_env_value(raw))
-                                            },
-                                            None => {},
-                                        }
-                                    },
+                if let Some(k) = keys.get(i) {
+                    let upper_k: String = k.to_upper();
+                    let env_key: String = if parent_path.len() == 0 {
+                        prefix.concat("_".concat(upper_k))
+                    } else {
+                        prefix.concat("_".concat(
+                            parent_path.concat("_".concat(upper_k))))
+                    };
+                    if let Some(child) = m.get(k) {
+                        match child {
+                            ConfigValue::Map(_) => {
+                                let child_path: String = if parent_path.len() == 0 {
+                                    upper_k
+                                } else {
+                                    parent_path.concat("_".concat(upper_k))
+                                };
+                                let child_overlay: ConfigValue =
+                                    build_env_overlay(child, prefix, child_path);
+                                overlay.insert(k, child_overlay)
+                            },
+                            _ => {
+                                if let Some(raw) = env_var(env_key) {
+                                    overlay.insert(k, parse_env_value(raw))
                                 }
                             },
-                            None => {},
                         }
-                    },
-                    None => {},
+                    }
                 }
                 i = i + 1
             }

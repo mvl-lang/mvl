@@ -8,6 +8,8 @@
 //!
 //! Effects: none (pure).
 
+use std.collections.{Map}
+
 // ── Error type ────────────────────────────────────────────────────────────────
 
 /// Structured error returned by `decode`.
@@ -488,22 +490,19 @@ partial fn parse_object_val(chars: List[String], pos: Int) -> ValuePos {
 partial fn parse_kv(chars: List[String], pos: Int) -> KVPos {
     match parse_string(chars, pos) {
         StrPos::SPErr(e)    => KVPos::KVPErr(e),
-        StrPos::SP(key, np) => {
-            let cur: Int = skip_ws(chars, np);
-            match chars.get(cur) {
-                None        => KVPos::KVPErr("expected ':' after key"),
-                Some(colon) => {
-                    if colon != ":" {
-                        KVPos::KVPErr("expected ':', got: ".concat(colon))
-                    } else {
-                        match parse_value(chars, cur + 1) {
-                            ValuePos::VPErr(e)    => KVPos::KVPErr(e),
-                            ValuePos::VP(jv, np2) => KVPos::KVP(key, jv, np2),
-                        }
-                    }
-                }
-            }
-        }
+        StrPos::SP(key, np) => parse_kv_colon(chars, key, skip_ws(chars, np)),
+    }
+}
+
+partial fn parse_kv_colon(chars: List[String], key: String, cur: Int) -> KVPos {
+    let colon: String = match chars.get(cur) {
+        None    => { return KVPos::KVPErr("expected ':' after key") },
+        Some(c) => c,
+    };
+    if colon != ":" { return KVPos::KVPErr("expected ':', got: ".concat(colon)) }
+    match parse_value(chars, cur + 1) {
+        ValuePos::VPErr(e)    => KVPos::KVPErr(e),
+        ValuePos::VP(jv, np2) => KVPos::KVP(key, jv, np2),
     }
 }
 
