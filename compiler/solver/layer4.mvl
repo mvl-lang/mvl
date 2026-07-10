@@ -1,0 +1,401 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// compiler/solver/layer4.mvl — Layer 4: Presburger / Cooper's algorithm.
+//
+// Port of src/mvl/checker/solver/layer4.rs.
+//
+// Handles refinement predicates that Layers 1–3 cannot decide by applying
+// quantifier elimination over linear integer arithmetic.
+//
+// Algorithm:
+//   1. Extract a LinTerm from `arg`.
+//   2. Convert ¬pred and var_refs hypotheses into Constraints.
+//   3. Check UNSAT via divisibility + Fourier-Motzkin elimination.
+//   4. Return Some(Proven) if UNSAT; None otherwise.
+//
+// Complexity guard: returns None for > 5 free variables.
+
+// ── Linear term ───────────────────────────────────────────────────────────────
+
+/// A linear integer expression: `constant + Σ (coeff_i · var_i)`.
+type LinTerm = struct {
+    constant: Int,
+    coeffs:   Map[String, Int],
+}
+
+fn linterm_const(n: Int) -> LinTerm {
+    LinTerm { constant: n, coeffs: Map::new() }
+}
+
+fn linterm_var(name: String) -> LinTerm {
+    let c: ref Map[String, Int] = Map::new();
+    c.insert(name, 1);
+    LinTerm { constant: 0, coeffs: c }
+}
+
+fn linterm_add(a: LinTerm, b: LinTerm) -> LinTerm {
+    let vars: ref Map[String, Int] = Map::new();
+    for k in a.coeffs.keys() {
+        match a.coeffs.get(k) { Some(v) => { vars.insert(k, v) }, None => {} }
+    }
+    for k in b.coeffs.keys() {
+        match b.coeffs.get(k) {
+            Some(bv) => {
+                let prev: Int = match vars.get(k) { Some(p) => p, None => 0 };
+                let sum: Int = prev + bv;
+                if sum != 0 {
+                    vars.insert(k, sum)
+                } else {
+                    let _: Option[Int] = vars.remove(k);
+                    ()
+                }
+            },
+            None => {},
+        }
+    }
+    LinTerm { constant: a.constant + b.constant, coeffs: vars }
+}
+
+fn linterm_scale(a: LinTerm, c: Int) -> LinTerm {
+    if c == 0 { return linterm_const(0) }
+    let vars: ref Map[String, Int] = Map::new();
+    for k in a.coeffs.keys() {
+        match a.coeffs.get(k) { Some(v) => { vars.insert(k, v * c) }, None => {} }
+    }
+    LinTerm { constant: a.constant * c, coeffs: vars }
+}
+
+fn linterm_negate(a: LinTerm) -> LinTerm { linterm_scale(a, -1) }
+
+fn linterm_sub(a: LinTerm, b: LinTerm) -> LinTerm { linterm_add(a, linterm_negate(b)) }
+
+fn linterm_is_constant(a: LinTerm) -> Bool { a.coeffs.len() == 0 }
+
+fn linterm_coeff_of(a: LinTerm, varname: String) -> Int {
+    match a.coeffs.get(varname) { Some(v) => v, None => 0 }
+}
+
+fn linterm_without_var(a: LinTerm, varname: String) -> LinTerm {
+    let vars: ref Map[String, Int] = Map::new();
+    for k in a.coeffs.keys() {
+        if k != varname {
+            match a.coeffs.get(k) { Some(v) => { vars.insert(k, v) }, None => {} }
+        }
+    }
+    LinTerm { constant: a.constant, coeffs: vars }
+}
+
+fn linterm_free_vars(a: LinTerm) -> List[String] {
+    let result: ref List[String] = [];
+    for k in a.coeffs.keys() { result.push(k) }
+    result
+}
+
+// ── Constraint ────────────────────────────────────────────────────────────────
+
+type Constraint = enum {
+    Le(LinTerm),
+    Eq(LinTerm),
+    Ne(LinTerm),
+}
+
+fn constraint_is_trivially_false(c: Constraint) -> Bool {
+    match c {
+        Constraint::Le(t) => linterm_is_constant(t) && t.constant > 0,
+        Constraint::Eq(t) => linterm_is_constant(t) && t.constant != 0,
+        Constraint::Ne(t) => linterm_is_constant(t) && t.constant == 0,
+    }
+}
+
+fn constraint_is_trivially_true(c: Constraint) -> Bool {
+    match c {
+        Constraint::Le(t) => linterm_is_constant(t) && t.constant <= 0,
+        Constraint::Eq(t) => linterm_is_constant(t) && t.constant == 0,
+        Constraint::Ne(t) => linterm_is_constant(t) && t.constant != 0,
+    }
+}
+
+// ── Fourier-Motzkin helper ────────────────────────────────────────────────────
+
+/// (coefficient, remainder-term) pair used in FM elimination.
+type CoeffTerm = struct { coeff: Int, term: LinTerm }
+
+// ── Extract LinTerm from Expr ─────────────────────────────────────────────────
+
+partial fn linterm_from_expr(expr: Expr) -> Option[LinTerm] {
+    match expr {
+        Expr::Lit(AstLiteral::Integer(n), _) => Some(linterm_const(n)),
+        Expr::Ident(name, _) => Some(linterm_var(name)),
+        Expr::Unary(u) => {
+            match u.op {
+                UnaryOp::Neg => {
+                    match u.expr.get(0) {
+                        Some(inner) => {
+                            match linterm_from_expr(inner) {
+                                Some(t) => Some(linterm_negate(t)),
+                                None    => None,
+                            }
+                        },
+                        None => None,
+                    }
+                },
+                _ => None,
+            }
+        },
+        Expr::Binary(b) => {
+            let left: Expr  = match b.left.get(0)  { Some(e) => e, None => { return None } };
+            let right: Expr = match b.right.get(0) { Some(e) => e, None => { return None } };
+            let l: LinTerm = match linterm_from_expr(left)  { Some(t) => t, None => { return None } };
+            let r: LinTerm = match linterm_from_expr(right) { Some(t) => t, None => { return None } };
+            match b.op {
+                BinaryOp::Add => Some(linterm_add(l, r)),
+                BinaryOp::Sub => Some(linterm_sub(l, r)),
+                BinaryOp::Mul => {
+                    if linterm_is_constant(l) { Some(linterm_scale(r, l.constant)) }
+                    else if linterm_is_constant(r) { Some(linterm_scale(l, r.constant)) }
+                    else { None }
+                },
+                _ => None,
+            }
+        },
+        _ => None,
+    }
+}
+
+// ── Extract LinTerm from RefExpr ──────────────────────────────────────────────
+
+partial fn linterm_from_ref(expr: RefExpr, self_term: LinTerm) -> Option[LinTerm] {
+    match expr {
+        RefExpr::Integer { value: v, .. } => Some(linterm_const(v)),
+        RefExpr::Ident { name: n, .. } => {
+            if n == "self" { Some(self_term) } else { Some(linterm_var(n)) }
+        },
+        RefExpr::Arith { op: op, left: l, right: r, .. } => {
+            let lv: LinTerm = match linterm_from_ref(*l, self_term) { Some(t) => t, None => { return None } };
+            let rv: LinTerm = match linterm_from_ref(*r, self_term) { Some(t) => t, None => { return None } };
+            match op {
+                ArithOp::Add => Some(linterm_add(lv, rv)),
+                ArithOp::Sub => Some(linterm_sub(lv, rv)),
+                ArithOp::Mul => {
+                    if linterm_is_constant(lv) { Some(linterm_scale(rv, lv.constant)) }
+                    else if linterm_is_constant(rv) { Some(linterm_scale(lv, rv.constant)) }
+                    else { None }
+                },
+                _ => None,
+            }
+        },
+        RefExpr::Grouped { inner: inn, .. } => linterm_from_ref(*inn, self_term),
+        _ => None,
+    }
+}
+
+// ── RefExpr → Constraints ─────────────────────────────────────────────────────
+
+partial fn ref_to_constraints(
+    pred:      RefExpr,
+    self_term: LinTerm,
+    negate:    Bool,
+) -> Option[List[Constraint]] {
+    match pred {
+        RefExpr::Compare { op: op, left: l, right: r, .. } => {
+            let lv: LinTerm = match linterm_from_ref(*l, self_term) { Some(t) => t, None => { return None } };
+            let rv: LinTerm = match linterm_from_ref(*r, self_term) { Some(t) => t, None => { return None } };
+            let diff: LinTerm = linterm_sub(lv, rv);
+            let eff_op: CmpOp = if negate { negate_cmp(op) } else { op };
+            Some(cmp_to_constraints(eff_op, diff))
+        },
+        RefExpr::Logic { op: op, left: l, right: r, .. } => {
+            let eff_op: LogicOp = if negate {
+                match op { LogicOp::And => LogicOp::Or, LogicOp::Or => LogicOp::And }
+            } else { op };
+            match eff_op {
+                LogicOp::And => {
+                    let lcs: List[Constraint] = match ref_to_constraints(*l, self_term, negate) {
+                        Some(cs) => cs, None => { return None }
+                    };
+                    let rcs: List[Constraint] = match ref_to_constraints(*r, self_term, negate) {
+                        Some(cs) => cs, None => { return None }
+                    };
+                    let combined: ref List[Constraint] = [];
+                    for c in lcs { combined.push(c) }
+                    for c in rcs { combined.push(c) }
+                    Some(combined)
+                },
+                LogicOp::Or => None,
+            }
+        },
+        RefExpr::Not { inner: inn, .. } => ref_to_constraints(*inn, self_term, !negate),
+        RefExpr::Grouped { inner: inn, .. } => ref_to_constraints(*inn, self_term, negate),
+        _ => None,
+    }
+}
+
+fn negate_cmp(op: CmpOp) -> CmpOp {
+    match op {
+        CmpOp::Eq => CmpOp::Ne,  CmpOp::Ne => CmpOp::Eq,
+        CmpOp::Lt => CmpOp::Ge,  CmpOp::Ge => CmpOp::Lt,
+        CmpOp::Le => CmpOp::Gt,  CmpOp::Gt => CmpOp::Le,
+    }
+}
+
+fn cmp_to_constraints(op: CmpOp, term: LinTerm) -> List[Constraint] {
+    match op {
+        CmpOp::Le => [Constraint::Le(term)],
+        CmpOp::Lt => [Constraint::Le(linterm_add(term, linterm_const(1)))],
+        CmpOp::Ge => [Constraint::Le(linterm_negate(term))],
+        CmpOp::Gt => [Constraint::Le(linterm_add(linterm_negate(term), linterm_const(1)))],
+        CmpOp::Eq => [Constraint::Eq(term)],
+        CmpOp::Ne => [Constraint::Ne(term)],
+    }
+}
+
+// ── Hypothesis extraction ─────────────────────────────────────────────────────
+
+partial fn hyp_constraints(var_refs: Map[String, Option[RefExpr]]) -> List[Constraint] {
+    let all: ref List[Constraint] = [];
+    for varname in var_refs.keys() {
+        match var_refs.get(varname) {
+            Some(Some(hyp)) => {
+                match ref_to_constraints(hyp, linterm_var(varname), false) {
+                    Some(cs) => { for c in cs { all.push(c) } },
+                    None     => {},
+                }
+            },
+            _ => {},
+        }
+    }
+    all
+}
+
+// ── Unsatisfiability check ────────────────────────────────────────────────────
+
+partial fn is_unsat(constraints: List[Constraint]) -> Bool {
+    for c in constraints {
+        if constraint_is_trivially_false(c) { return true }
+    }
+
+    let active: ref List[Constraint] = [];
+    for c in constraints {
+        if !constraint_is_trivially_true(c) { active.push(c) }
+    }
+
+    // Divisibility: a·x + c = 0 is UNSAT iff a ∤ c.
+    for c in active {
+        match c {
+            Constraint::Eq(t) => {
+                if t.coeffs.len() == 1 {
+                    for k in t.coeffs.keys() {
+                        match t.coeffs.get(k) {
+                            Some(coeff) => {
+                                if coeff != 0 && t.constant % coeff != 0 { return true }
+                            },
+                            None => {},
+                        }
+                    }
+                }
+            },
+            _ => {},
+        }
+    }
+
+    // Collect ≤ constraints for FM.
+    let le_terms: ref List[LinTerm] = [];
+    for c in active {
+        match c {
+            Constraint::Le(t) => le_terms.push(t),
+            _                 => {},
+        }
+    }
+
+    if le_terms.len() == 0 { return false }
+
+    // Collect free variables (complexity guard).
+    let free_set: ref Map[String, Bool] = Map::new();
+    for t in le_terms {
+        for v in linterm_free_vars(t) { free_set.insert(v, true) }
+    }
+    if free_set.len() > 5 { return false }
+
+    let vars: ref List[String] = [];
+    for v in free_set.keys() { vars.push(v) }
+
+    fm_eliminate(le_terms, vars)
+}
+
+/// Fourier-Motzkin elimination: eliminate variables one by one.
+partial fn fm_eliminate(constraints: List[LinTerm], vars: List[String]) -> Bool {
+    for t in constraints {
+        if linterm_is_constant(t) && t.constant > 0 { return true }
+    }
+    if vars.len() == 0 { return false }
+
+    let varname: String = match vars.get(0) { Some(v) => v, None => { return false } };
+    let rest_vars: ref List[String] = [];
+    let vi: ref Int = 1;
+    while vi < vars.len() {
+        match vars.get(vi) { Some(v) => rest_vars.push(v), None => {} }
+        vi = vi + 1
+    }
+
+    // Partition: uppers (coeff > 0), lowers (coeff < 0), free (coeff = 0).
+    let uppers: ref List[CoeffTerm] = [];
+    let lowers: ref List[CoeffTerm] = [];
+    let new_constraints: ref List[LinTerm] = [];
+
+    for t in constraints {
+        let c: Int = linterm_coeff_of(t, varname);
+        if c == 0 {
+            new_constraints.push(t)
+        } else if c > 0 {
+            uppers.push(CoeffTerm { coeff: c, term: linterm_without_var(t, varname) })
+        } else {
+            lowers.push(CoeffTerm { coeff: 0 - c, term: linterm_without_var(t, varname) })
+        }
+    }
+
+    // FM cross-product: b_j * r_i + a_i * s_j ≤ 0
+    let ui: ref Int = 0;
+    while ui < uppers.len() {
+        let up: CoeffTerm = match uppers.get(ui) { Some(u) => u, None => { return false } };
+        let li: ref Int = 0;
+        while li < lowers.len() {
+            let lo: CoeffTerm = match lowers.get(li) { Some(l) => l, None => { return false } };
+            // Overflow guard.
+            if up.coeff > 1000000 || lo.coeff > 1000000 { return false }
+            let new_term: LinTerm = linterm_add(
+                linterm_scale(up.term, lo.coeff),
+                linterm_scale(lo.term, up.coeff),
+            );
+            new_constraints.push(new_term);
+            if new_constraints.len() > 128 { return false }
+            li = li + 1
+        }
+        ui = ui + 1
+    }
+
+    fm_eliminate(new_constraints, rest_vars)
+}
+
+// ── Entry point ───────────────────────────────────────────────────────────────
+
+/// Try to prove or refute `pred` for `arg` using Cooper's algorithm (Layer 4).
+pub partial fn try_cooper(
+    pred:     RefExpr,
+    arg:      Expr,
+    var_refs: Map[String, Option[RefExpr]],
+) -> Option[RefResult] {
+    let arg_term: LinTerm = match linterm_from_expr(arg) {
+        Some(t) => t,
+        None    => { return None },
+    };
+    let neg_pred_cs: List[Constraint] = match ref_to_constraints(pred, arg_term, true) {
+        Some(cs) => cs,
+        None     => { return None },
+    };
+    let hyp_cs: List[Constraint] = hyp_constraints(var_refs);
+    let all: ref List[Constraint] = [];
+    for c in hyp_cs { all.push(c) }
+    for c in neg_pred_cs { all.push(c) }
+    if is_unsat(all) { Some(RefResult::Proven) } else { None }
+}

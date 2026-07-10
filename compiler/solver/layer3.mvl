@@ -1,0 +1,513 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// compiler/solver/layer3.mvl — Layer 3: symbolic path analysis.
+//
+// Port of src/mvl/checker/solver/layer3.rs.
+//
+// Handles ~15% of refinement proofs by symbolically executing pure function
+// bodies and proving the return value satisfies the predicate on every path.
+//
+// Algorithm:
+//   1. Detect Expr::Call with a body in fn_decls.
+//   2. Collect all execution paths: (conditions, return_expr) pairs.
+//   3. For each path, substitute parameter names with actual argument exprs.
+//   4. Inject path conditions as narrowing hypotheses into a cloned var_refs.
+//   5. Check the substituted return expr against pred using L1 + L2.
+//   6. Proven iff all paths pass; Failed if any path fails; None if undecided.
+
+/// Functions with this many or more execution paths bail out.
+total fn max_paths() -> Int { 32 }
+
+/// Blocks nested more deeply than this are treated conservatively.
+total fn max_depth() -> Int { 64 }
+
+// ── Path representation ────────────────────────────────────────────────────────
+
+/// One complete execution path from a function body.
+type ExecPath = struct {
+    conditions:  List[Expr],
+    return_expr: Expr,
+}
+
+// ── Helper struct for inject_condition ────────────────────────────────────────
+
+/// Extracted injection bound: variable name, comparison op, integer value.
+type InjBound = struct { varname: String, cmp_op: CmpOp, int_val: Int }
+
+// ── Entry point ───────────────────────────────────────────────────────────────
+
+/// Try to prove or refute `pred` for `arg` using symbolic path analysis.
+pub partial fn try_symbolic(
+    pred:     RefExpr,
+    arg:      Expr,
+    var_refs: Map[String, Option[RefExpr]],
+    fn_decls: Map[String, FnDecl],
+) -> Option[RefResult] {
+    // Apply builtin rewrite rules to method calls on known receivers.
+    match arg {
+        Expr::Method(_) => {
+            let rewritten: Expr = rewrite_expr(arg);
+            match rewritten {
+                Expr::Method(_) => {}, // no rule fired
+                _ => {
+                    return match try_trivial(pred, rewritten, var_refs, fn_decls) {
+                        Some(r) => Some(r),
+                        None    => try_interval(pred, rewritten, var_refs),
+                    }
+                },
+            }
+        },
+        _ => {},
+    }
+
+    let call: AstCallExpr = match arg {
+        Expr::Call(c) => c,
+        _             => { return None },
+    };
+    let fn_name: String    = call.name;
+    let actual_args: List[Expr] = call.args;
+
+    let fd: FnDecl = match fn_decls.get(fn_name) {
+        Some(f) => f,
+        None    => { return None },
+    };
+    if fd.is_builtin { return None }
+    if fd.params.len() != actual_args.len() { return None }
+
+    // Build parameter bindings: param name → actual argument expr.
+    let bindings: ref Map[String, Expr] = Map::new();
+    let i: ref Int = 0;
+    while i < fd.params.len() {
+        let pname: String = match fd.params.get(i) {
+            Some(p) => p.name,
+            None    => { return None },
+        };
+        let aval: Expr = match actual_args.get(i) {
+            Some(a) => a,
+            None    => { return None },
+        };
+        bindings.insert(pname, aval);
+        i = i + 1
+    }
+
+    let body: Block = match fd.body {
+        Some(b) => b,
+        None    => { return None },
+    };
+
+    // Collect all execution paths from the function body.
+    let paths: ref List[ExecPath] = [];
+    collect_block_paths(body, [], paths, 0);
+
+    if paths.len() == 0 || paths.len() >= max_paths() { return None }
+
+    let any_undecided: ref Bool = false;
+    let j: ref Int = 0;
+    while j < paths.len() {
+        let path: ExecPath = match paths.get(j) {
+            Some(p) => p,
+            None    => { return None },
+        };
+
+        // Build narrowed var_refs: clone caller context, then inject conditions.
+        let path_var_refs: ref Map[String, Option[RefExpr]] = Map::new();
+        for k in var_refs.keys() {
+            match var_refs.get(k) {
+                Some(v) => { path_var_refs.insert(k, v) },
+                None    => {},
+            }
+        }
+        for cond in path.conditions {
+            let cond_subst: Expr = substitute_expr(cond, bindings);
+            inject_condition(cond_subst, path_var_refs, 0)
+        }
+
+        // Substitute, rewrite, then check against pred.
+        let ret_expr: Expr = rewrite_expr(substitute_expr(path.return_expr, bindings));
+        let result: Option[RefResult] =
+            match try_trivial(pred, ret_expr, path_var_refs, fn_decls) {
+                Some(r) => Some(r),
+                None    => try_interval(pred, ret_expr, path_var_refs),
+            };
+
+        match result {
+            Some(RefResult::Proven)      => {},
+            Some(RefResult::Failed(ce))  => { return Some(RefResult::Failed(ce)) },
+            _                            => { any_undecided = true },
+        }
+        j = j + 1
+    }
+
+    if any_undecided { None } else { Some(RefResult::Proven) }
+}
+
+// ── Path collection ───────────────────────────────────────────────────────────
+
+/// Walk a Block and collect all execution paths.
+partial fn collect_block_paths(
+    block:  Block,
+    prefix: List[Expr],
+    paths:  ref List[ExecPath],
+    depth:  Int,
+) -> Unit {
+    if depth > max_depth() || paths.len() >= max_paths() { return () }
+    let stmts: List[Stmt] = block.stmts;
+    let n: Int = stmts.len();
+    let i: ref Int = 0;
+    while i < n {
+        let stmt: Stmt = match stmts.get(i) {
+            Some(s) => s,
+            None    => { return () },
+        };
+        let handled: Bool = handle_stmt(stmt, i, n, block, prefix, paths, depth);
+        if handled { return () } else { () }
+        i = i + 1
+    }
+    // Handle tail expression.
+    match block.tail_expr.get(0) {
+        Some(e) => collect_expr_paths(e, prefix, paths, depth + 1),
+        None    => {},
+    }
+}
+
+/// Process a single statement; returns true if iteration should stop.
+partial fn handle_stmt(
+    stmt:   Stmt,
+    idx:    Int,
+    n_stmts: Int,
+    block:  Block,
+    prefix: List[Expr],
+    paths:  ref List[ExecPath],
+    depth:  Int,
+) -> Bool {
+    match stmt {
+        Stmt::Return(cell, _) => {
+            match cell.get(0) {
+                Some(e) => paths.push(ExecPath { conditions: prefix, return_expr: e }),
+                None    => {},
+            }
+            true
+        },
+
+        Stmt::ExprStmt(cell, _) => {
+            let is_last: Bool = idx == n_stmts - 1;
+            match cell.get(0) {
+                Some(Expr::If(ie)) => {
+                    handle_if_stmt(ie, is_last, idx, n_stmts, block, prefix, paths, depth);
+                    true
+                },
+                Some(other) => {
+                    if is_last {
+                        collect_expr_paths(other, prefix, paths, depth + 1);
+                        true
+                    } else {
+                        false
+                    }
+                },
+                None => false,
+            }
+        },
+
+        _ => false,
+    }
+}
+
+/// Handle an if-expression appearing as a statement (non-tail or tail).
+partial fn handle_if_stmt(
+    ie:     AstIfExpr,
+    is_last: Bool,
+    idx:    Int,
+    n_stmts: Int,
+    block:  Block,
+    prefix: List[Expr],
+    paths:  ref List[ExecPath],
+    depth:  Int,
+) -> Unit {
+    let cond: Expr = match ie.cond.get(0) {
+        Some(c) => c,
+        None    => { return () },
+    };
+
+    if is_last {
+        collect_expr_paths(Expr::If(ie), prefix, paths, depth + 1);
+        return ()
+    } else { () }
+
+    // Mid-block: fork into then-branch and else/fall-through.
+    let then_prefix: ref List[Expr] = [];
+    for c in prefix { then_prefix.push(c) }
+    then_prefix.push(cond);
+    collect_block_paths(ie.then, then_prefix, paths, depth + 1);
+
+    let else_prefix: ref List[Expr] = [];
+    for c in prefix { else_prefix.push(c) }
+    match negate_simple(cond) {
+        Some(neg) => { else_prefix.push(neg) },
+        None      => {},
+    }
+
+    // Collect remaining statements into a synthetic block.
+    let rest_stmts: ref List[Stmt] = [];
+    let k: ref Int = idx + 1;
+    while k < n_stmts {
+        match block.stmts.get(k) {
+            Some(s) => rest_stmts.push(s),
+            None    => {},
+        }
+        k = k + 1
+    }
+
+    match ie.else_br.get(0) {
+        Some(else_expr) => {
+            collect_expr_paths(else_expr, else_prefix, paths, depth + 1)
+        },
+        None => {
+            let rest_block: Block = Block {
+                stmts:     rest_stmts,
+                tail_expr: block.tail_expr,
+                span:      dummy_loc(),
+            };
+            collect_block_paths(rest_block, else_prefix, paths, depth + 1);
+            if !block_always_returns(ie.then) {
+                let then_rest: Block = Block {
+                    stmts:     rest_stmts,
+                    tail_expr: block.tail_expr,
+                    span:      dummy_loc(),
+                };
+                collect_block_paths(then_rest, then_prefix, paths, depth + 1)
+            } else { () }
+        },
+    }
+}
+
+/// Walk an Expr and collect execution paths (for if-expressions and tail positions).
+partial fn collect_expr_paths(
+    expr:   Expr,
+    prefix: List[Expr],
+    paths:  ref List[ExecPath],
+    depth:  Int,
+) -> Unit {
+    if depth > max_depth() || paths.len() >= max_paths() { return () }
+    match expr {
+        Expr::If(ie) => {
+            let cond: Expr = match ie.cond.get(0) {
+                Some(c) => c,
+                None    => { return () },
+            };
+            let then_prefix: ref List[Expr] = [];
+            for c in prefix { then_prefix.push(c) }
+            then_prefix.push(cond);
+            collect_block_paths(ie.then, then_prefix, paths, depth + 1);
+
+            let else_prefix: ref List[Expr] = [];
+            for c in prefix { else_prefix.push(c) }
+            match negate_simple(cond) {
+                Some(neg) => { else_prefix.push(neg) },
+                None      => {},
+            }
+            match ie.else_br.get(0) {
+                Some(e) => collect_expr_paths(e, else_prefix, paths, depth + 1),
+                None    => {},
+            }
+        },
+        Expr::BlockExpr(b, _) => collect_block_paths(b, prefix, paths, depth + 1),
+        other => {
+            paths.push(ExecPath { conditions: prefix, return_expr: other })
+        },
+    }
+}
+
+/// Returns `true` if every path through `block` ends with an explicit return.
+partial fn block_always_returns(block: Block) -> Bool {
+    let last_idx: Int = block.stmts.len() - 1;
+    match block.stmts.get(last_idx) {
+        Some(Stmt::Return(_, _)) => true,
+        Some(Stmt::ExprStmt(cell, _)) => {
+            match cell.get(0) {
+                Some(Expr::If(ie)) => {
+                    match ie.else_br.get(0) {
+                        Some(Expr::If(eie)) => {
+                            let sp: SourceLoc = dummy_loc();
+                            let synthetic: Block = Block {
+                                stmts:     [Stmt::ExprStmt([Expr::If(eie)], sp)],
+                                tail_expr: [],
+                                span:      sp,
+                            };
+                            block_always_returns(ie.then) && block_always_returns(synthetic)
+                        },
+                        Some(Expr::BlockExpr(else_b, _)) =>
+                            block_always_returns(ie.then) && block_always_returns(else_b),
+                        _ => false,
+                    }
+                },
+                _ => false,
+            }
+        },
+        _ => false,
+    }
+}
+
+// ── Condition negation ────────────────────────────────────────────────────────
+
+fn negate_simple(cond: Expr) -> Option[Expr] {
+    match cond {
+        Expr::Binary(b) => {
+            match flip_binary_op(b.op) {
+                Some(flipped) => Some(Expr::Binary(AstBinaryExpr {
+                    op: flipped, left: b.left, right: b.right, span: b.span,
+                })),
+                None => None,
+            }
+        },
+        _ => None,
+    }
+}
+
+fn flip_binary_op(op: BinaryOp) -> Option[BinaryOp] {
+    match op {
+        BinaryOp::Lt => Some(BinaryOp::Ge),
+        BinaryOp::Le => Some(BinaryOp::Gt),
+        BinaryOp::Gt => Some(BinaryOp::Le),
+        BinaryOp::Ge => Some(BinaryOp::Lt),
+        BinaryOp::Eq => Some(BinaryOp::Ne),
+        BinaryOp::Ne => Some(BinaryOp::Eq),
+        _            => None,
+    }
+}
+
+// ── Expression substitution ───────────────────────────────────────────────────
+
+/// Substitute parameter names in `expr` with their actual argument expressions.
+partial fn substitute_expr(expr: Expr, bindings: Map[String, Expr]) -> Expr {
+    match expr {
+        Expr::Ident(name, sp) => {
+            match bindings.get(name) {
+                Some(replacement) => replacement,
+                None              => Expr::Ident(name, sp),
+            }
+        },
+        Expr::Binary(b) => {
+            let new_left: Expr = match b.left.get(0) {
+                Some(e) => substitute_expr(e, bindings),
+                None    => { return expr },
+            };
+            let new_right: Expr = match b.right.get(0) {
+                Some(e) => substitute_expr(e, bindings),
+                None    => { return expr },
+            };
+            Expr::Binary(AstBinaryExpr {
+                op: b.op, left: [new_left], right: [new_right], span: b.span,
+            })
+        },
+        Expr::Unary(u) => {
+            let new_inner: Expr = match u.expr.get(0) {
+                Some(e) => substitute_expr(e, bindings),
+                None    => { return expr },
+            };
+            Expr::Unary(AstUnaryExpr { op: u.op, expr: [new_inner], span: u.span })
+        },
+        Expr::Call(c) => {
+            let new_args: ref List[Expr] = [];
+            for a in c.args { new_args.push(substitute_expr(a, bindings)) }
+            Expr::Call(AstCallExpr { name: c.name, args: new_args, span: c.span })
+        },
+        Expr::Method(m) => {
+            let new_recv: Expr = match m.receiver.get(0) {
+                Some(r) => substitute_expr(r, bindings),
+                None    => { return expr },
+            };
+            let new_args: ref List[Expr] = [];
+            for a in m.args { new_args.push(substitute_expr(a, bindings)) }
+            Expr::Method(AstMethodExpr {
+                receiver: [new_recv], method: m.method, args: new_args, span: m.span,
+            })
+        },
+        _ => expr,
+    }
+}
+
+// ── Condition injection ───────────────────────────────────────────────────────
+
+/// Inject a (substituted) path condition into `var_refs` as a narrowing hypothesis.
+partial fn inject_condition(
+    cond:     Expr,
+    var_refs: ref Map[String, Option[RefExpr]],
+    depth:    Int,
+) -> Unit {
+    if depth > 32 { return () }
+    match cond {
+        Expr::Binary(b) => {
+            match binary_op_to_cmp(b.op) {
+                Some(cmp) => {
+                    let left: Expr = match b.left.get(0) {
+                        Some(e) => e,
+                        None    => { return () },
+                    };
+                    let right: Expr = match b.right.get(0) {
+                        Some(e) => e,
+                        None    => { return () },
+                    };
+                    let ib_opt: Option[InjBound] = extract_inj_bound(left, right, cmp);
+                    match ib_opt {
+                        Some(ib) => {
+                            let sp: SourceLoc = dummy_loc();
+                            let new_ref: RefExpr = RefExpr::Compare {
+                                op:    ib.cmp_op,
+                                left:  Box::new(RefExpr::Ident { name: "self", span: sp }),
+                                right: Box::new(RefExpr::Integer { value: ib.int_val, span: sp }),
+                                span:  sp,
+                            };
+                            let hypothesis: RefExpr = match var_refs.get(ib.varname) {
+                                Some(Some(existing)) => RefExpr::Logic {
+                                    op:    LogicOp::And,
+                                    left:  Box::new(existing),
+                                    right: Box::new(new_ref),
+                                    span:  sp,
+                                },
+                                _ => new_ref,
+                            };
+                            var_refs.insert(ib.varname, Some(hypothesis))
+                        },
+                        None => {},
+                    }
+                },
+                None => {
+                    if b.op == BinaryOp::And {
+                        match b.left.get(0) {
+                            Some(l) => inject_condition(l, var_refs, depth + 1),
+                            None    => {},
+                        }
+                        match b.right.get(0) {
+                            Some(r) => inject_condition(r, var_refs, depth + 1),
+                            None    => {},
+                        }
+                    } else { () }
+                },
+            }
+        },
+        _ => {},
+    }
+}
+
+/// Extract an injection bound from a `left cmp right` pair.
+/// Only handles `var op int` and `int op var` patterns.
+fn extract_inj_bound(left: Expr, right: Expr, cmp: CmpOp) -> Option[InjBound] {
+    match left {
+        Expr::Ident(n, _) => {
+            match right {
+                Expr::Lit(AstLiteral::Integer(v), _) =>
+                    Some(InjBound { varname: n, cmp_op: cmp, int_val: v }),
+                _ => None,
+            }
+        },
+        Expr::Lit(AstLiteral::Integer(v), _) => {
+            match right {
+                Expr::Ident(n, _) =>
+                    Some(InjBound { varname: n, cmp_op: cmp.flip(), int_val: v }),
+                _ => None,
+            }
+        },
+        _ => None,
+    }
+}

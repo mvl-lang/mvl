@@ -1,0 +1,369 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// compiler/solver/layer2.mvl — Layer 2: interval arithmetic.
+//
+// Port of src/mvl/checker/solver/layer2.rs.
+//
+// Handles cases where Layer 1 cannot decide by extracting integer intervals
+// from variable hypotheses and checking whether the entire interval satisfies
+// the required predicate.
+//
+//   - `x: self > 5` → proves `require_positive(x)` (> 0)
+//   - `x: self < 0` → refutes `require_positive(x)` (> 0)
+//   - `self > 0 && self <= 100` → intersects to [1, 100]
+
+// ── Interval types ─────────────────────────────────────────────────────────────
+
+/// A bound on one end of an integer interval.
+pub type Bound = enum {
+    /// No bound in this direction (represents ±∞).
+    Unbounded,
+    /// The endpoint is included: value ≥ n (lo) or value ≤ n (hi).
+    Inclusive(Int),
+    /// The endpoint is excluded: value > n (lo) or value < n (hi).
+    Exclusive(Int),
+}
+
+/// A possibly-unbounded integer interval `[lo, hi]`.
+pub type Interval = struct {
+    /// Lower bound (towards −∞).
+    lo: Bound,
+    /// Upper bound (towards +∞).
+    hi: Bound,
+}
+
+/// The smallest concrete integer in the interval, if it has a finite lower bound.
+pub fn Interval::effective_min(self) -> Option[Int] {
+    match self.lo {
+        Bound::Unbounded    => None,
+        Bound::Inclusive(n) => Some(n),
+        Bound::Exclusive(n) => Some(n + 1),
+    }
+}
+
+/// The largest concrete integer in the interval, if it has a finite upper bound.
+pub fn Interval::effective_max(self) -> Option[Int] {
+    match self.hi {
+        Bound::Unbounded    => None,
+        Bound::Inclusive(n) => Some(n),
+        Bound::Exclusive(n) => Some(n - 1),
+    }
+}
+
+// ── Bound arithmetic ──────────────────────────────────────────────────────────
+
+fn tighter_lo(a: Bound, b: Bound) -> Bound {
+    match a {
+        Bound::Unbounded => b,
+        Bound::Inclusive(m) => {
+            match b {
+                Bound::Unbounded    => a,
+                Bound::Inclusive(n) => Bound::Inclusive(max_int(m, n)),
+                Bound::Exclusive(n) => {
+                    // eff_min(Inclusive(m)) = m; eff_min(Exclusive(n)) = n+1
+                    // Exclusive(n) is tighter when n+1 > m, i.e. n >= m.
+                    if n >= m { Bound::Exclusive(n) } else { Bound::Inclusive(m) }
+                },
+            }
+        },
+        Bound::Exclusive(m) => {
+            match b {
+                Bound::Unbounded    => a,
+                Bound::Inclusive(n) => {
+                    if m >= n { Bound::Exclusive(m) } else { Bound::Inclusive(n) }
+                },
+                Bound::Exclusive(n) => Bound::Exclusive(max_int(m, n)),
+            }
+        },
+    }
+}
+
+fn tighter_hi(a: Bound, b: Bound) -> Bound {
+    match a {
+        Bound::Unbounded => b,
+        Bound::Inclusive(m) => {
+            match b {
+                Bound::Unbounded    => a,
+                Bound::Inclusive(n) => Bound::Inclusive(min_int(m, n)),
+                Bound::Exclusive(n) => {
+                    // eff_max(Inclusive(m)) = m; eff_max(Exclusive(n)) = n-1
+                    // Exclusive(n) is tighter when n-1 < m, i.e. n <= m.
+                    if n <= m { Bound::Exclusive(n) } else { Bound::Inclusive(m) }
+                },
+            }
+        },
+        Bound::Exclusive(m) => {
+            match b {
+                Bound::Unbounded    => a,
+                Bound::Inclusive(n) => {
+                    if m <= n { Bound::Exclusive(m) } else { Bound::Inclusive(n) }
+                },
+                Bound::Exclusive(n) => Bound::Exclusive(min_int(m, n)),
+            }
+        },
+    }
+}
+
+fn intersect_intervals(a: Interval, b: Interval) -> Interval {
+    Interval {
+        lo: tighter_lo(a.lo, b.lo),
+        hi: tighter_hi(a.hi, b.hi),
+    }
+}
+
+fn max_int(a: Int, b: Int) -> Int { if a > b { a } else { b } }
+fn min_int(a: Int, b: Int) -> Int { if a < b { a } else { b } }
+
+// ── Interval extraction ────────────────────────────────────────────────────────
+
+/// Convert a `RefExpr` hypothesis about `self` into an integer interval.
+/// Returns `None` for predicates that cannot be expressed as a contiguous interval.
+pub partial fn interval_from_ref_expr(pred: RefExpr) -> Option[Interval] {
+    match pred {
+        RefExpr::Compare { op: op, left: l, right: r, .. } => {
+            match self_int_bound(op, *l, *r) {
+                Some(bound) => Some(bound),
+                None        => None,
+            }
+        },
+        RefExpr::Logic { op: LogicOp::And, left: l, right: r, .. } => {
+            match interval_from_ref_expr(*l) {
+                Some(a) => {
+                    match interval_from_ref_expr(*r) {
+                        Some(b) => Some(intersect_intervals(a, b)),
+                        None    => None,
+                    }
+                },
+                None => None,
+            }
+        },
+        RefExpr::Grouped { inner: inn, .. } => interval_from_ref_expr(*inn),
+        _ => None,
+    }
+}
+
+/// Extract `Interval` from a comparison of the form `self op n` or `n op self`.
+/// Returns `None` for non-interval forms (Ne) or non-integer/non-self comparisons.
+fn self_int_bound(op: CmpOp, left: RefExpr, right: RefExpr) -> Option[Interval] {
+    match left {
+        RefExpr::Ident { name: n, .. } => {
+            if n != "self" { return None }
+            match right {
+                RefExpr::Integer { value: v, .. } => Some(cmp_to_interval(op, v)),
+                _ => None,
+            }
+        },
+        RefExpr::Integer { value: v, .. } => {
+            match right {
+                RefExpr::Ident { name: n, .. } => {
+                    if n == "self" { Some(cmp_to_interval(op.flip(), v)) } else { None }
+                },
+                _ => None,
+            }
+        },
+        _ => None,
+    }
+}
+
+/// Convert `self op n` to an interval.
+fn cmp_to_interval(op: CmpOp, n: Int) -> Interval {
+    match op {
+        CmpOp::Gt => Interval { lo: Bound::Exclusive(n), hi: Bound::Unbounded },
+        CmpOp::Ge => Interval { lo: Bound::Inclusive(n), hi: Bound::Unbounded },
+        CmpOp::Lt => Interval { lo: Bound::Unbounded,    hi: Bound::Exclusive(n) },
+        CmpOp::Le => Interval { lo: Bound::Unbounded,    hi: Bound::Inclusive(n) },
+        CmpOp::Eq => Interval { lo: Bound::Inclusive(n), hi: Bound::Inclusive(n) },
+        CmpOp::Ne => Interval { lo: Bound::Unbounded,    hi: Bound::Unbounded }, // placeholder, not used
+    }
+}
+
+// ── Interval → predicate containment ─────────────────────────────────────────
+
+/// Check whether all integers in `iv` satisfy `pred`.
+///   `Some(true)`  — every value satisfies
+///   `Some(false)` — no value satisfies
+///   `None`        — partial overlap or too complex
+partial fn interval_satisfies_pred(iv: Interval, pred: RefExpr) -> Option[Bool] {
+    match pred {
+        RefExpr::Compare { op: op, left: l, right: r, .. } => {
+            match self_int_bound(op, *l, *r) {
+                None => None,
+                Some(_) => interval_satisfies_cmp(iv, op, *l, *r),
+            }
+        },
+        RefExpr::Logic { op: op, left: l, right: r, .. } => {
+            match op {
+                LogicOp::And => {
+                    let lv: Option[Bool] = interval_satisfies_pred(iv, *l);
+                    let rv: Option[Bool] = interval_satisfies_pred(iv, *r);
+                    if lv == Some(false) || rv == Some(false) {
+                        Some(false)
+                    } else if lv == Some(true) && rv == Some(true) {
+                        Some(true)
+                    } else {
+                        None
+                    }
+                },
+                LogicOp::Or => {
+                    let lv: Option[Bool] = interval_satisfies_pred(iv, *l);
+                    let rv: Option[Bool] = interval_satisfies_pred(iv, *r);
+                    if lv == Some(true) || rv == Some(true) {
+                        Some(true)
+                    } else if lv == Some(false) && rv == Some(false) {
+                        Some(false)
+                    } else {
+                        None
+                    }
+                },
+            }
+        },
+        RefExpr::Not { inner: inn, .. } => {
+            match interval_satisfies_pred(iv, *inn) {
+                Some(b) => Some(!b),
+                None    => None,
+            }
+        },
+        RefExpr::Grouped { inner: inn, .. } => interval_satisfies_pred(iv, *inn),
+        _ => None,
+    }
+}
+
+/// Check `iv` against a simple `self op n` comparison.
+fn interval_satisfies_cmp(iv: Interval, op: CmpOp, left: RefExpr, right: RefExpr) -> Option[Bool] {
+    let n: Int = match right {
+        RefExpr::Integer { value: v, .. } => v,
+        _ => {
+            match left {
+                RefExpr::Integer { value: v, .. } => v,
+                _ => { return None },
+            }
+        },
+    };
+    // Normalise: get the effective comparison from self's perspective.
+    let cmp: CmpOp = match left {
+        RefExpr::Ident { name: nm, .. } => {
+            if nm == "self" { op } else { return None }
+        },
+        RefExpr::Integer { .. } => op.flip(),
+        _ => { return None },
+    };
+    match cmp {
+        CmpOp::Gt => {
+            match iv.effective_min() {
+                Some(mn) => { if mn > n { return Some(true) } },
+                None     => {},
+            }
+            match iv.effective_max() {
+                Some(mx) => { if mx <= n { return Some(false) } },
+                None     => {},
+            }
+            None
+        },
+        CmpOp::Ge => {
+            match iv.effective_min() {
+                Some(mn) => { if mn >= n { return Some(true) } },
+                None     => {},
+            }
+            match iv.effective_max() {
+                Some(mx) => { if mx < n { return Some(false) } },
+                None     => {},
+            }
+            None
+        },
+        CmpOp::Lt => {
+            match iv.effective_max() {
+                Some(mx) => { if mx < n { return Some(true) } },
+                None     => {},
+            }
+            match iv.effective_min() {
+                Some(mn) => { if mn >= n { return Some(false) } },
+                None     => {},
+            }
+            None
+        },
+        CmpOp::Le => {
+            match iv.effective_max() {
+                Some(mx) => { if mx <= n { return Some(true) } },
+                None     => {},
+            }
+            match iv.effective_min() {
+                Some(mn) => { if mn > n { return Some(false) } },
+                None     => {},
+            }
+            None
+        },
+        CmpOp::Eq => {
+            let mn_opt: Option[Int] = iv.effective_min();
+            let mx_opt: Option[Int] = iv.effective_max();
+            match mn_opt {
+                Some(mn) => {
+                    match mx_opt {
+                        Some(mx) => {
+                            if mn == n && mx == n { return Some(true) }
+                            if mn > n { return Some(false) }
+                        },
+                        None => { if mn > n { return Some(false) } },
+                    }
+                },
+                None => {},
+            }
+            match mx_opt {
+                Some(mx) => { if mx < n { return Some(false) } },
+                None     => {},
+            }
+            None
+        },
+        CmpOp::Ne => {
+            match iv.effective_min() {
+                Some(mn) => { if mn > n { return Some(true) } },
+                None     => {},
+            }
+            match iv.effective_max() {
+                Some(mx) => { if mx < n { return Some(true) } },
+                None     => {},
+            }
+            // Failed if interval is exactly [n, n].
+            match iv.effective_min() {
+                Some(mn) => {
+                    match iv.effective_max() {
+                        Some(mx) => { if mn == n && mx == n { return Some(false) } },
+                        None     => {},
+                    }
+                },
+                None => {},
+            }
+            None
+        },
+    }
+}
+
+// ── Entry point ───────────────────────────────────────────────────────────────
+
+/// Try to prove or refute `pred` for `arg` using interval arithmetic.
+/// Only applicable when `arg` is a named variable with a hypothesis expressible
+/// as an integer interval.
+pub partial fn try_interval(
+    pred:     RefExpr,
+    arg:      Expr,
+    var_refs: Map[String, Option[RefExpr]],
+) -> Option[RefResult] {
+    let name: String = match arg {
+        Expr::Ident(n, _) => n,
+        _                 => { return None },
+    };
+    let hyp: RefExpr = match var_refs.get(name) {
+        Some(Some(h)) => h,
+        _             => { return None },
+    };
+    match interval_from_ref_expr(hyp) {
+        Some(iv) => {
+            match interval_satisfies_pred(iv, pred) {
+                Some(true)  => Some(RefResult::Proven),
+                Some(false) => Some(RefResult::Failed(None)),
+                None        => None,
+            }
+        },
+        None => None,
+    }
+}

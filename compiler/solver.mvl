@@ -1,0 +1,84 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// compiler/solver.mvl — Layered refinement solver: shared types and helpers.
+//
+// Port of src/mvl/checker/solver.rs.
+//
+// Layer dispatch is performed by the caller (refinements.mvl, not yet ported).
+// Each layer lives in compiler/solver/layerN.mvl.
+//
+// | Layer | Module              | Technique                   | ~Coverage |
+// |-------|---------------------|-----------------------------|-----------|
+// | 1     | solver/layer1.mvl  | Trivial pattern matching    | ~40%      |
+// | 2     | solver/layer2.mvl  | Interval arithmetic         | ~60%      |
+// | 3     | solver/layer3.mvl  | Symbolic path analysis      | ~15%      |
+// | 4     | solver/layer4.mvl  | Presburger / Cooper's QE    | ~5%       |
+// | 5     | Z3 (Rust extern)   | SMT solver — out of scope   | remaining |
+
+// ── Solver mode ───────────────────────────────────────────────────────────────
+
+/// Controls which layers the refinement solver activates.
+pub type SolverMode = enum {
+    /// Run all layers in order until one decides (default).
+    Layered,
+    /// Skip Layers 1–4; delegate every check directly to Z3.
+    Z3Only,
+    /// Run only Layers 1–2 (trivial + interval); never invoke symbolic or SMT.
+    FastOnly,
+}
+
+pub fn SolverMode::as_str(self) -> String {
+    match self {
+        SolverMode::Layered  => "layered",
+        SolverMode::Z3Only   => "z3-only",
+        SolverMode::FastOnly => "fast-only",
+    }
+}
+
+// ── Outcome type ──────────────────────────────────────────────────────────────
+
+/// Three-way outcome for a single refinement predicate check.
+pub type RefResult = enum {
+    /// Argument statically satisfies the predicate — no runtime check needed.
+    Proven,
+    /// Cannot be proven statically — a runtime assertion must be emitted.
+    RuntimeCheck,
+    /// Argument statically violates the predicate — a compile-time error.
+    /// Payload: optional counterexample string extracted by Z3.
+    Failed(Option[String]),
+}
+
+// ── Shared helpers ────────────────────────────────────────────────────────────
+
+/// Zero-location placeholder for synthetic AST nodes in the solver.
+pub fn dummy_loc() -> SourceLoc {
+    SourceLoc { line: 0, col: 0 }
+}
+
+/// Flip a comparison operator: `a op b` → `b flip(op) a`.
+/// Used to normalise `n op self` comparisons to `self flip(op) n`.
+pub fn CmpOp::flip(self) -> CmpOp {
+    match self {
+        CmpOp::Eq => CmpOp::Eq,
+        CmpOp::Ne => CmpOp::Ne,
+        CmpOp::Lt => CmpOp::Gt,
+        CmpOp::Gt => CmpOp::Lt,
+        CmpOp::Le => CmpOp::Ge,
+        CmpOp::Ge => CmpOp::Le,
+    }
+}
+
+/// Convert a `BinaryOp` comparison to the corresponding `CmpOp`, if applicable.
+/// Returns `None` for non-comparison operators (arithmetic, logical, bitwise).
+pub fn binary_op_to_cmp(op: BinaryOp) -> Option[CmpOp] {
+    match op {
+        BinaryOp::Eq => Some(CmpOp::Eq),
+        BinaryOp::Ne => Some(CmpOp::Ne),
+        BinaryOp::Lt => Some(CmpOp::Lt),
+        BinaryOp::Gt => Some(CmpOp::Gt),
+        BinaryOp::Le => Some(CmpOp::Le),
+        BinaryOp::Ge => Some(CmpOp::Ge),
+        _            => None,
+    }
+}
