@@ -1,0 +1,708 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// compiler/ifc.mvl — Req 11: IFC label utilities and implicit flow analysis
+//
+// Port of src/mvl/checker/ifc.rs.
+//
+// Implements:
+//   - Label type utilities: label_of, strip_label, apply_label, join_opt
+//   - label_of_type_expr — extract label name from flat MVL TypeExpr
+//   - bind_pattern_labels — bind pattern idents to a label in an env
+//   - collect_effectful_names — functions with declared effects
+//   - build_effect_reachability — fixed-point BFS: fn → nearest observable callee
+//   - check_implicit_flows — main entry: PC-label flow analysis
+//   - count_* metrics used by verify_passes.mvl evidence trail
+//
+// MVL differences from Rust:
+//   - Program has separate prog.fns / prog.impls lists (no Decl enum)
+//   - Actor method bodies not available at parser-AST stage (actors: List[String])
+//   - TypeExpr is flat struct; labels detected via known_labels membership
+//   - No Expr::Lambda, Expr::Select, Expr::Borrow, Expr::Spawn, Expr::Quantifier
+//   - Expr::Binary/Unary/Field/Method use List[Expr] cells for recursive refs
+//   - IfcFlowAnalyzer visitor → explicit IfcState struct threaded as values
+//   - in_branch/in_pc closures → passing state copy (changes discarded on return)
+
+// ── IfcState: visitor state threaded through flow analysis ────────────────────
+
+/// Immutable-copy visitor state for the implicit flow analyzer.
+/// Branch visits receive a copy; env changes in branches don't propagate back.
+pub type IfcState = struct {
+    pc:           Option[String],
+    env:          Map[String, String],
+    caller_fn:    String,
+    known_labels: List[String],
+}
+
+pub total fn IfcState::new(
+    env: Map[String, String], caller_fn: String, known_labels: List[String]
+) -> IfcState {
+    IfcState { pc: None, env: env, caller_fn: caller_fn, known_labels: known_labels }
+}
+
+pub total fn IfcState::with_pc(self, pc: Option[String]) -> IfcState {
+    IfcState { pc: pc, env: self.env, caller_fn: self.caller_fn, known_labels: self.known_labels }
+}
+
+pub total fn IfcState::with_env(self, env: Map[String, String]) -> IfcState {
+    IfcState { pc: self.pc, env: env, caller_fn: self.caller_fn, known_labels: self.known_labels }
+}
+
+// ── Label type utilities ──────────────────────────────────────────────────────
+
+/// Extract the outermost security label from a type, if any.
+/// Looks through Refined wrappers.
+pub partial fn label_of(ty: Ty) -> Option[String] {
+    match ty {
+        Ty::Labeled(l, _) => Some(l),
+        Ty::Refined(inner, _) => label_of(*inner),
+        _ => None,
+    }
+}
+
+/// Remove the outermost security label from a type.
+pub partial fn strip_label(ty: Ty) -> Ty {
+    match ty {
+        Ty::Labeled(_, inner) => *inner,
+        Ty::Refined(inner, _) => strip_label(*inner),
+        _ => ty,
+    }
+}
+
+/// Wrap a type in a security label, or return it unchanged if label is None.
+pub partial fn apply_label(lbl: Option[String], ty: Ty) -> Ty {
+    match lbl {
+        Some(l) => Ty::Labeled(l, Box::new(ty)),
+        None    => ty,
+    }
+}
+
+/// Join two optional label names.
+/// Any labeled condition raises the PC; if both are present, keep first.
+pub total fn join_opt(a: Option[String], b: Option[String]) -> Option[String] {
+    match a {
+        Some(la) => Some(la),
+        None     => b,
+    }
+}
+
+/// Extract the outermost security label name from a flat MVL TypeExpr.
+///
+/// In MVL, `Secret[String]` is stored as `TypeExpr { name: "Secret", args: [String_te] }`.
+/// The label is detected by checking if `te.name` is in `known_labels` (from TypeEnv).
+///
+/// This differs from the Rust port which had explicit `TypeExpr::Labeled { label, .. }`.
+pub partial fn label_of_type_expr(te: TypeExpr, known_labels: List[String]) -> Option[String] {
+    if known_labels.contains(te.name) && te.args.len() == 1 {
+        Some(te.name)
+    } else if te.name == "Refined" && te.args.len() >= 1 {
+        match te.args.get(0) {
+            Some(inner) => label_of_type_expr(inner, known_labels),
+            None        => None,
+        }
+    } else {
+        None
+    }
+}
+
+/// Recursively bind every identifier in `pat` to `label` in `env`.
+/// Handles nested patterns like `Some(a)`, struct patterns, etc.
+pub partial fn bind_pattern_labels(
+    pat: Pattern, lbl: String, env: ref Map[String, String]
+) -> Unit {
+    match pat {
+        Pattern::Ident(name, _)          => { env.insert(name, lbl) },
+        Pattern::TupleStruct(ts)         => {
+            for f in ts.fields { bind_pattern_labels(f, lbl, env) }
+        },
+        Pattern::Struct(sp)              => {
+            for pf in sp.fields { bind_pattern_labels(pf.pattern, lbl, env) }
+        },
+        Pattern::Some(inner_list, _)     => {
+            match inner_list.get(0) {
+                Some(inner) => bind_pattern_labels(inner, lbl, env),
+                None        => {},
+            }
+        },
+        Pattern::Ok(inner_list, _)       => {
+            match inner_list.get(0) {
+                Some(inner) => bind_pattern_labels(inner, lbl, env),
+                None        => {},
+            }
+        },
+        Pattern::Err(inner_list, _)      => {
+            match inner_list.get(0) {
+                Some(inner) => bind_pattern_labels(inner, lbl, env),
+                None        => {},
+            }
+        },
+        Pattern::Wildcard(_) | Pattern::Literal(_, _) | Pattern::None(_) => {},
+        Pattern::Tuple(tp)               => {
+            for e in tp.elems { bind_pattern_labels(e, lbl, env) }
+        },
+    }
+}
+
+// ── Infer label from expression in current env ────────────────────────────────
+
+/// Conservative label inference from env bindings.
+/// Returns None if the label cannot be determined from the expression.
+pub partial fn infer_label(expr: Expr, env: Map[String, String]) -> Option[String] {
+    match expr {
+        Expr::Ident(name, _) => env.get(name),
+        Expr::Binary(b) => {
+            let lv: Option[String] = match b.left.get(0) { Some(l) => infer_label(l, env), None => None };
+            let rv: Option[String] = match b.right.get(0) { Some(r) => infer_label(r, env), None => None };
+            join_opt(lv, rv)
+        },
+        Expr::Unary(u) => {
+            match u.expr.get(0) { Some(e) => infer_label(e, env), None => None }
+        },
+        Expr::Field(fa) => {
+            match fa.expr.get(0) { Some(e) => infer_label(e, env), None => None }
+        },
+        Expr::Relabel(_) => None,
+        Expr::Call(c) => infer_label_args(c.args, env),
+        Expr::Method(m) => {
+            let recv_lbl: Option[String] = match m.receiver.get(0) {
+                Some(r) => infer_label(r, env), None => None
+            };
+            join_opt(recv_lbl, infer_label_args(m.args, env))
+        },
+        _ => None,
+    }
+}
+
+/// Return the label of the first labeled argument, or None.
+/// join_opt(fold(None, join_opt)) = first non-None label in the list.
+partial fn infer_label_args(args: List[Expr], env: Map[String, String]) -> Option[String] {
+    for a in args {
+        match infer_label(a, env) {
+            Some(l) => { return Some(l) },
+            None    => {},
+        }
+    }
+    None
+}
+
+// ── Collect effectful function names ─────────────────────────────────────────
+
+/// Collect all function names that have declared effects (observable sinks).
+/// Seeds from both program declarations and TypeEnv builtins.
+pub partial fn collect_effectful_names(
+    programs: List[Program], env: TypeEnv
+) -> List[String] {
+    let names: ref List[String] = [];
+    // Seed from TypeEnv builtin functions.
+    for fn_name in env.fns.keys() {
+        match env.fns.get(fn_name) {
+            Some(info) => {
+                if info.effects.len() > 0 {
+                    if !names.contains(fn_name) { names.push(fn_name) }
+                }
+            },
+            None => {},
+        }
+    }
+    for prog in programs {
+        for fd in prog.fns {
+            if fd.effects.len() > 0 {
+                if !names.contains(fd.name) { names.push(fd.name) }
+            }
+        }
+        for id in prog.impls {
+            for m in id.methods {
+                if m.effects.len() > 0 {
+                    let qual: String = format("{}::{}", [id.ty.name, m.name]);
+                    if !names.contains(qual) { names.push(qual) }
+                }
+            }
+        }
+    }
+    names
+}
+
+// ── Build effect reachability ─────────────────────────────────────────────────
+
+/// Build map: fn_name → nearest observable (effectful) fn reachable from it.
+/// Seeds from direct callers of effectful fns, then propagates transitively.
+pub partial fn build_effect_reachability(
+    programs: List[Program], effectful: List[String]
+) -> Map[String, String] {
+    // Step 1: collect callee sets per function.
+    let callee_map: ref Map[String, List[String]] = Map::new();
+    for prog in programs {
+        for fd in prog.fns {
+            let callees: ref List[String] = [];
+            match fd.body { Some(b) => collect_calls_from_block_ifc(b, callees), None => {} }
+            callee_map.insert(fd.name, callees);
+        }
+        for id in prog.impls {
+            for m in id.methods {
+                let callees: ref List[String] = [];
+                match m.body { Some(b) => collect_calls_from_block_ifc(b, callees), None => {} }
+                callee_map.insert(m.name, callees);
+            }
+        }
+    }
+    // Step 2: seed — direct callers of effectful functions.
+    let reach: ref Map[String, String] = Map::new();
+    for fn_name in callee_map.keys() {
+        let callees: List[String] = callee_map.get(fn_name).unwrap_or([]);
+        let sorted: ref List[String] = [];
+        for c in callees {
+            if effectful.contains(c) { sorted.push(c) }
+        }
+        sorted.sort();
+        match sorted.get(0) {
+            Some(first) => {
+                if reach.get(fn_name).is_none() { reach.insert(fn_name, first) }
+            },
+            None => {},
+        }
+    }
+    // Step 3: fixed-point propagation.
+    let changed: ref Bool = true;
+    while changed {
+        changed = false;
+        for fn_name in callee_map.keys() {
+            if reach.get(fn_name).is_some() {} else {
+                let callees: List[String] = callee_map.get(fn_name).unwrap_or([]);
+                for callee in callees {
+                    match reach.get(callee) {
+                        Some(observable) => {
+                            if reach.get(fn_name).is_none() {
+                                reach.insert(fn_name, observable);
+                                changed = true;
+                            }
+                        },
+                        None => {},
+                    }
+                }
+            }
+        }
+    }
+    reach
+}
+
+/// Collect all called function names from a block into `acc`.
+partial fn collect_calls_from_block_ifc(block: Block, acc: ref List[String]) -> Unit {
+    let exprs: List[Expr] = walk_block(block);
+    for e in exprs {
+        match e {
+            Expr::Call(c) => {
+                if !acc.contains(c.name) { acc.push(c.name) }
+            },
+            Expr::Method(m) => {
+                if !acc.contains(m.method) { acc.push(m.method) }
+                match m.receiver.get(0) {
+                    Some(Expr::Ident(recv_name, _)) => {
+                        let qual: String = format("{}::{}", [recv_name, m.method]);
+                        if !acc.contains(qual) { acc.push(qual) }
+                    },
+                    _ => {},
+                }
+            },
+            _ => {},
+        }
+    }
+}
+
+// ── Main entry: check_implicit_flows ─────────────────────────────────────────
+
+/// Main entry point for implicit flow analysis.
+///
+/// Walks every function in `prog` and emits ImplicitFlowViolation /
+/// CrossFunctionImplicitFlowViolation for effectful calls inside branches
+/// controlled by a labeled condition.
+pub partial fn check_implicit_flows(
+    prog: Program,
+    all_programs: List[Program],
+    env: TypeEnv,
+    errs: ref List[CheckError],
+) -> Unit {
+    let effectful: List[String] = collect_effectful_names(all_programs, env);
+    let effect_reach: ref Map[String, String] = build_effect_reachability(all_programs, effectful);
+    // Merge direct effectful fns into reach so a single lookup covers both direct
+    // and transitive observable calls.
+    for name in effectful {
+        if effect_reach.get(name).is_none() { effect_reach.insert(name, name) }
+    }
+    let known_labels: List[String] = env.known_labels;
+    for fd in prog.fns {
+        let init_env: ref Map[String, String] = Map::new();
+        for p in fd.params {
+            match label_of_type_expr(p.ty, known_labels) {
+                Some(lbl) => { init_env.insert(p.name, lbl) },
+                None      => {},
+            }
+        }
+        let state: IfcState = IfcState::new(init_env, fd.name, known_labels);
+        match fd.body {
+            Some(body) => { let _: IfcState = visit_block_ifc(state, errs, body, effect_reach); },
+            None       => {},
+        }
+    }
+    for id in prog.impls {
+        for m in id.methods {
+            let init_env: ref Map[String, String] = Map::new();
+            for p in m.params {
+                match label_of_type_expr(p.ty, known_labels) {
+                    Some(lbl) => { init_env.insert(p.name, lbl) },
+                    None      => {},
+                }
+            }
+            let fn_name: String = format("{}::{}", [id.ty.name, m.name]);
+            let state: IfcState = IfcState::new(init_env, fn_name, known_labels);
+            match m.body {
+                Some(body) => { let _: IfcState = visit_block_ifc(state, errs, body, effect_reach); },
+                None       => {},
+            }
+        }
+    }
+}
+
+// ── Visitor: block, stmt, expr ────────────────────────────────────────────────
+
+/// Walk a block, threading IfcState. Let-bindings update state for subsequent stmts.
+partial fn visit_block_ifc(
+    state: IfcState, errs: ref List[CheckError], block: Block, effect_reach: ref Map[String, String]
+) -> IfcState {
+    let cur: ref IfcState = state;
+    for s in block.stmts {
+        cur = visit_stmt_ifc(cur, errs, s, effect_reach);
+    }
+    // Tail expression is visited in expression position, no let-binding.
+    match block.tail_expr.get(0) {
+        Some(e) => {
+            let _: IfcState = visit_expr_ifc(cur, errs, e, effect_reach);
+        },
+        None => {},
+    }
+    cur
+}
+
+partial fn visit_stmt_ifc(
+    state: IfcState, errs: ref List[CheckError], stmt: Stmt, effect_reach: ref Map[String, String]
+) -> IfcState {
+    match stmt {
+        Stmt::Let(ls) => {
+            let init: Expr = match ls.value.get(0) { Some(e) => e, None => { return state } };
+            let _: IfcState = visit_expr_ifc(state, errs, init, effect_reach);
+            let lbl: Option[String] = match label_of_type_expr(ls.ty, state.known_labels) {
+                Some(l) => Some(l),
+                None    => infer_label(init, state.env),
+            };
+            match lbl {
+                Some(l) => {
+                    let new_env: ref Map[String, String] = Map::new();
+                    for k in state.env.keys() {
+                        match state.env.get(k) { Some(v) => { new_env.insert(k, v) }, None => {} }
+                    }
+                    bind_pattern_labels(Pattern::Ident(ls.name, ls.span), l, new_env);
+                    state.with_env(new_env)
+                },
+                None => state,
+            }
+        },
+        Stmt::While(ws) => {
+            let cond: Expr = match ws.cond.get(0) { Some(e) => e, None => { return state } };
+            let cond_lbl: Option[String] = infer_label(cond, state.env);
+            let body_pc: Option[String] = join_opt(state.pc, cond_lbl);
+            let _: IfcState = visit_expr_ifc(state, errs, cond, effect_reach);
+            let branch_state: IfcState = state.with_pc(body_pc);
+            let _: IfcState = visit_block_ifc(branch_state, errs, ws.body, effect_reach);
+            state
+        },
+        Stmt::For(fs) => {
+            let iter: Expr = match fs.iter.get(0) { Some(e) => e, None => { return state } };
+            let iter_lbl: Option[String] = infer_label(iter, state.env);
+            let body_pc: Option[String] = join_opt(state.pc, iter_lbl);
+            let _: IfcState = visit_expr_ifc(state, errs, iter, effect_reach);
+            // Bind loop variable to iterator label inside body.
+            let branch_env: ref Map[String, String] = Map::new();
+            for k in state.env.keys() {
+                match state.env.get(k) { Some(v) => { branch_env.insert(k, v) }, None => {} }
+            }
+            match iter_lbl {
+                Some(l) => { branch_env.insert(fs.var, l) },
+                None    => {},
+            }
+            let branch_state: IfcState = IfcState { pc: body_pc, env: branch_env, caller_fn: state.caller_fn, known_labels: state.known_labels };
+            let _: IfcState = visit_block_ifc(branch_state, errs, fs.body, effect_reach);
+            state
+        },
+        Stmt::Return(cell, _) => {
+            match cell.get(0) {
+                Some(e) => { let _: IfcState = visit_expr_ifc(state, errs, e, effect_reach); },
+                None    => {},
+            }
+            state
+        },
+        Stmt::Assign(a) => {
+            match a.value.get(0) {
+                Some(e) => { let _: IfcState = visit_expr_ifc(state, errs, e, effect_reach); },
+                None    => {},
+            }
+            state
+        },
+        Stmt::ExprStmt(cell, _) => {
+            match cell.get(0) {
+                Some(e) => { let _: IfcState = visit_expr_ifc(state, errs, e, effect_reach); },
+                None    => {},
+            }
+            state
+        },
+    }
+}
+
+partial fn visit_expr_ifc(
+    state: IfcState, errs: ref List[CheckError], expr: Expr, effect_reach: ref Map[String, String]
+) -> IfcState {
+    match expr {
+        Expr::Call(c) => {
+            // Check implicit flow: if PC is high and callee is observable, emit violation.
+            if state.pc.is_some() {
+                match effect_reach.get(c.name) {
+                    Some(observable) => {
+                        emit_implicit_flow(state, errs, c.name, observable, c.span);
+                    },
+                    None => {},
+                }
+            }
+            for a in c.args { let _: IfcState = visit_expr_ifc(state, errs, a, effect_reach); }
+            state
+        },
+        Expr::Method(m) => {
+            // Check implicit flow for method calls using qualified names.
+            if state.pc.is_some() {
+                let qualified_names: ref List[String] = [m.method];
+                match m.receiver.get(0) {
+                    Some(Expr::Ident(recv_name, _)) => {
+                        let qual: String = format("{}::{}", [recv_name, m.method]);
+                        if !qualified_names.contains(qual) { qualified_names.push(qual) }
+                    },
+                    _ => {},
+                }
+                let suffix: String = format("::{}", [m.method]);
+                for key in effect_reach.keys() {
+                    if key.ends_with(suffix) && !qualified_names.contains(key) {
+                        qualified_names.push(key)
+                    }
+                }
+                let found: ref Bool = false;
+                for qn in qualified_names {
+                    if !found {
+                        match effect_reach.get(qn) {
+                            Some(observable) => {
+                                emit_implicit_flow(state, errs, qn, observable, m.span);
+                                found = true;
+                            },
+                            None => {},
+                        }
+                    }
+                }
+            }
+            match m.receiver.get(0) { Some(r) => { let _: IfcState = visit_expr_ifc(state, errs, r, effect_reach); }, None => {} }
+            for a in m.args { let _: IfcState = visit_expr_ifc(state, errs, a, effect_reach); }
+            state
+        },
+        Expr::If(ie) => {
+            let cond: Expr = match ie.cond.get(0) { Some(e) => e, None => { return state } };
+            let cond_lbl: Option[String] = infer_label(cond, state.env);
+            let body_pc: Option[String] = join_opt(state.pc, cond_lbl);
+            let _: IfcState = visit_expr_ifc(state, errs, cond, effect_reach);
+            let branch_state: IfcState = state.with_pc(body_pc);
+            let _: IfcState = visit_block_ifc(branch_state, errs, ie.then, effect_reach);
+            match ie.else_br.get(0) {
+                Some(e) => { let _: IfcState = visit_expr_ifc(branch_state, errs, e, effect_reach); },
+                None    => {},
+            }
+            state
+        },
+        Expr::MatchExpr(m) => {
+            let scr: Expr = match m.scrutinee.get(0) { Some(e) => e, None => { return state } };
+            let scr_lbl: Option[String] = infer_label(scr, state.env);
+            let body_pc: Option[String] = join_opt(state.pc, scr_lbl);
+            let _: IfcState = visit_expr_ifc(state, errs, scr, effect_reach);
+            let branch_state: IfcState = state.with_pc(body_pc);
+            for arm in m.arms {
+                match arm.body.get(0) {
+                    Some(Expr::BlockExpr(blk, _)) => { let _: IfcState = visit_block_ifc(branch_state, errs, blk, effect_reach); },
+                    Some(e)                       => { let _: IfcState = visit_expr_ifc(branch_state, errs, e, effect_reach); },
+                    None                          => {},
+                }
+            }
+            state
+        },
+        Expr::BlockExpr(blk, _) => {
+            // Block opens a new scope: changes to env inside don't leak.
+            let _: IfcState = visit_block_ifc(state, errs, blk, effect_reach);
+            state
+        },
+        // Default: recurse into all child expressions at current pc/env.
+        _ => {
+            let children: List[Expr] = walk_expr(expr);
+            // Skip children[0] (expr itself), recurse into rest.
+            let i: ref Int = 1;
+            while i < children.len() {
+                match children.get(i) {
+                    Some(child) => { let _: IfcState = visit_expr_ifc(state, errs, child, effect_reach); },
+                    None        => {},
+                }
+                i = i + 1
+            }
+            state
+        },
+    }
+}
+
+/// Emit ImplicitFlowViolation or CrossFunctionImplicitFlowViolation.
+partial fn emit_implicit_flow(
+    state: IfcState, errs: ref List[CheckError], callee: String, observable: String, span: SourceLoc
+) -> Unit {
+    let pc_lbl: String = match state.pc { Some(l) => l, None => "labeled" };
+    if observable == callee {
+        errs.push(CheckError::ImplicitFlowViolation {
+            pc_lbl: pc_lbl, observable_fn: callee, span: span,
+        });
+    } else {
+        errs.push(CheckError::CrossFunctionImplicitFlowViolation {
+            pc_lbl: pc_lbl, caller: state.caller_fn,
+            callee: callee, observable_fn: observable, span: span,
+        });
+    }
+}
+
+// ── Metrics (used by verify_passes.mvl evidence trail) ───────────────────────
+
+/// Count all Expr::Relabel call sites in the program.
+pub partial fn count_relabels(prog: Program) -> Int {
+    let count: ref Int = 0;
+    for fd in prog.fns {
+        match fd.body {
+            Some(body) => {
+                let exprs: List[Expr] = walk_block(body);
+                for e in exprs { match e { Expr::Relabel(_) => { count = count + 1 }, _ => {} } }
+            },
+            None => {},
+        }
+    }
+    count
+}
+
+/// Count relabel declarations that carry the `audit` keyword.
+pub total fn count_audit_relabels(prog: Program) -> Int {
+    let count: ref Int = 0;
+    for rd in prog.relabel_decls {
+        if rd.audit { count = count + 1 }
+    }
+    count
+}
+
+/// Count function parameters carrying a security label.
+pub partial fn count_labeled_params(prog: Program, known_labels: List[String]) -> Int {
+    let count: ref Int = 0;
+    for fd in prog.fns {
+        for p in fd.params {
+            if label_of_type_expr(p.ty, known_labels).is_some() { count = count + 1 }
+        }
+    }
+    count
+}
+
+/// Count flow-check sites: labeled if/match conditions plus labeled fn-call args.
+pub partial fn count_flow_check_sites(prog: Program, known_labels: List[String]) -> Int {  // also calls partial label_of_type_expr
+    let count: ref Int = 0;
+    for fd in prog.fns {
+        let labeled_params: ref List[String] = [];
+        for p in fd.params {
+            if label_of_type_expr(p.ty, known_labels).is_some() { labeled_params.push(p.name) }
+        }
+        if labeled_params.len() > 0 {
+            match fd.body {
+                Some(body) => { count = count + count_flow_sites_block(body, labeled_params) },
+                None       => {},
+            }
+        }
+    }
+    count
+}
+
+partial fn count_flow_sites_block(block: Block, labeled: List[String]) -> Int {
+    let exprs: List[Expr] = walk_block(block);
+    let count: ref Int = 0;
+    for e in exprs {
+        match e {
+            Expr::If(ie) => {
+                match ie.cond.get(0) {
+                    Some(cond) => { if expr_uses_labeled(cond, labeled) { count = count + 1 } },
+                    None       => {},
+                }
+            },
+            Expr::MatchExpr(m) => {
+                match m.scrutinee.get(0) {
+                    Some(scr) => { if expr_uses_labeled(scr, labeled) { count = count + 1 } },
+                    None      => {},
+                }
+            },
+            Expr::Call(c) => {
+                for a in c.args {
+                    if expr_uses_labeled(a, labeled) { count = count + 1 }
+                }
+            },
+            _ => {},
+        }
+    }
+    count
+}
+
+partial fn expr_uses_labeled(expr: Expr, labeled: List[String]) -> Bool {
+    match expr {
+        Expr::Ident(name, _)  => labeled.contains(name),
+        Expr::Field(fa)       => match fa.expr.get(0) {
+            Some(e) => expr_uses_labeled(e, labeled), None => false,
+        },
+        Expr::Binary(b)       => {
+            let lv: Bool = match b.left.get(0)  { Some(l) => expr_uses_labeled(l, labeled), None => false };
+            let rv: Bool = match b.right.get(0) { Some(r) => expr_uses_labeled(r, labeled), None => false };
+            lv || rv
+        },
+        Expr::Unary(u)        => match u.expr.get(0) {
+            Some(e) => expr_uses_labeled(e, labeled), None => false,
+        },
+        _ => false,
+    }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+test fn join_opt_both_none_is_none() -> Unit {
+    assert_eq(join_opt(None, None), None)
+}
+
+test fn join_opt_first_wins() -> Unit {
+    assert_eq(join_opt(Some("Secret"), None), Some("Secret"))
+    assert_eq(join_opt(None, Some("Tainted")), Some("Tainted"))
+    assert_eq(join_opt(Some("Tainted"), Some("Secret")), Some("Tainted"))
+}
+
+test partial fn label_of_type_expr_labeled() -> Unit {
+    let sp: SourceLoc = SourceLoc { line: 0, col: 0 };
+    let inner: TypeExpr = TypeExpr { name: "String", args: [], span: sp };
+    let te: TypeExpr = TypeExpr { name: "Secret", args: [inner], span: sp };
+    assert_eq(label_of_type_expr(te, ["Secret", "Tainted"]), Some("Secret"))
+}
+
+test partial fn label_of_type_expr_plain_type() -> Unit {
+    let sp: SourceLoc = SourceLoc { line: 0, col: 0 };
+    let te: TypeExpr = TypeExpr { name: "String", args: [], span: sp };
+    assert_eq(label_of_type_expr(te, ["Secret", "Tainted"]), None)
+}
+
+test partial fn label_of_type_expr_not_in_labels() -> Unit {
+    let sp: SourceLoc = SourceLoc { line: 0, col: 0 };
+    let inner: TypeExpr = TypeExpr { name: "String", args: [], span: sp };
+    let te: TypeExpr = TypeExpr { name: "List", args: [inner], span: sp };
+    assert_eq(label_of_type_expr(te, ["Secret", "Tainted"]), None)
+}

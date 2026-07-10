@@ -1,0 +1,786 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+//
+// compiler/ifc_propagation.mvl — Req 11: interprocedural IFC label propagation
+//
+// Port of src/mvl/checker/ifc_propagation.rs.
+//
+// Implements:
+//   - InferredLabels type + get() accessor
+//   - propagate()      — fixed-point return-label inference (#830, #833)
+//   - infer_label_extended() — label inference with inferred table lookup
+//   - detect_violations()   — interprocedural call-site violation detection (#831)
+//   - check_call_violations() — per-call-site check
+//   - extract_chain()  — call chain for error messages
+//
+// MVL differences from Rust:
+//   - Program.fns / Program.impls (no Decl enum, no actor method bodies)
+//   - Block.tail_expr is List[Expr][0,1] (not block.stmts.last())
+//   - Stmt variants differ: If/Match in stmt position → Stmt::ExprStmt wrapping Expr::If/MatchExpr
+//   - No Expr::Lambda, Expr::Select, Expr::Spawn, Expr::Construct, Expr::Quantifier (simplified)
+//   - ViolationCollector visitor → ViolState struct threaded as values
+//   - HashSet → List[String] with .contains()
+//   - HashMap → Map[String, String]
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+/// Sentinel stored in the inferred table when a function explicitly strips labels.
+/// Leading `<` makes it impossible to match any valid MVL label name.
+total fn stripped_sentinel() -> String { "<stripped>" }
+
+/// Functions that always return Tainted data, independent of arguments.
+/// Safety net for when stdlib is not loaded.
+total fn taint_sources() -> List[String] {
+    ["read_line", "args", "read_tainted", "env_var", "read_file", "recv", "recv_line"]
+}
+
+// ── InferredLabels ─────────────────────────────────────────────────────────────
+
+/// Inferred security labels for function return types.
+/// - explicit: TypeEnv-seeded + TAINT_SOURCES (authoritative)
+/// - inferred: body-analysis derived (context-sensitive via arg-label join)
+pub type InferredLabels = struct {
+    explicit: Map[String, String],
+    inferred: Map[String, String],
+}
+
+/// Return the return label for fn_name, if any.
+/// Explicit labels take precedence; STRIPPED_SENTINEL is filtered to None.
+/// Note: partial because stripped_sentinel() comparison may not be provably terminating.
+pub partial fn InferredLabels::get(self, fn_name: String) -> Option[String] {
+    let lbl: Option[String] = match self.explicit.get(fn_name) {
+        Some(l) => Some(l),
+        None    => self.inferred.get(fn_name),
+    };
+    match lbl {
+        Some(l) => { if l == stripped_sentinel() { None } else { Some(l) } },
+        None    => None,
+    }
+}
+
+// ── Propagation (#830 + #833) ─────────────────────────────────────────────────
+
+/// Build the inferred label table by fixed-point body-analysis propagation.
+///
+/// Seeds from TypeEnv explicit return labels, augments with TAINT_SOURCES registry,
+/// then runs fixed-point loop over user program function bodies.
+pub partial fn propagate(programs: List[Program], env: TypeEnv) -> InferredLabels {
+    let table: ref Map[String, String] = Map::new();
+    let explicit_names: ref List[String] = [];
+    let known_labels: List[String] = env.known_labels;
+
+    // Seed 1: explicit return labels from TypeEnv.
+    for fn_name in env.fns.keys() {
+        match env.fns.get(fn_name) {
+            Some(info) => {
+                match label_of(info.ret) {
+                    Some(lbl) => {
+                        table.insert(fn_name, lbl);
+                        if !explicit_names.contains(fn_name) { explicit_names.push(fn_name) }
+                    },
+                    None => {},
+                }
+            },
+            None => {},
+        }
+    }
+
+    // Seed 2: external taint source registry (#833).
+    for src in taint_sources() {
+        if table.get(src).is_none() { table.insert(src, "Tainted") }
+        if !explicit_names.contains(src) { explicit_names.push(src) }
+    }
+
+    // Fixed-point body-analysis loop (#830).
+    let changed: ref Bool = true;
+    while changed {
+        changed = false;
+        for prog in programs {
+            for fd in prog.fns {
+                changed = propagate_fn(fd.name, fd.params, fd.ret_type, fd.body, table, explicit_names, known_labels) || changed;
+            }
+            for id in prog.impls {
+                for m in id.methods {
+                    changed = propagate_fn(m.name, m.params, m.ret_type, m.body, table, explicit_names, known_labels) || changed;
+                }
+            }
+        }
+    }
+
+    // Split combined table into explicit (TypeEnv-seeded) and inferred (body-analysis).
+    let explicit_map: ref Map[String, String] = Map::new();
+    let inferred_map: ref Map[String, String] = Map::new();
+    for fn_name in table.keys() {
+        match table.get(fn_name) {
+            Some(lbl) => {
+                if explicit_names.contains(fn_name) {
+                    explicit_map.insert(fn_name, lbl)
+                } else {
+                    inferred_map.insert(fn_name, lbl)
+                }
+            },
+            None => {},
+        }
+    }
+    InferredLabels { explicit: explicit_map, inferred: inferred_map }
+}
+
+/// Run one propagation step for a single function. Returns true if table changed.
+partial fn propagate_fn(
+    name: String,
+    params: List[Param],
+    ret_type: TypeExpr,
+    body: Option[Block],
+    table: ref Map[String, String],
+    explicit_names: ref List[String],
+    known_labels: List[String],
+) -> Bool {
+    // Skip functions with an explicit return label annotation.
+    if label_of_type_expr(ret_type, known_labels).is_some() { return false }
+    let body_block: Block = match body { Some(b) => b, None => { return false } };
+    let param_env: ref Map[String, String] = Map::new();
+    for p in params {
+        match label_of_type_expr(p.ty, known_labels) {
+            Some(l) => { param_env.insert(p.name, l) },
+            None    => {},
+        }
+    }
+    let has_labeled_params: Bool = param_env.len() > 0;
+    match infer_return_label(body_block, param_env, table, known_labels) {
+        Some(inferred_lbl) => {
+            let current: Option[String] = table.get(name);
+            let new_lbl: String = match current { Some(c) => c, None => inferred_lbl };
+            if current.is_none() {
+                table.insert(name, new_lbl);
+                true
+            } else { false }
+        },
+        None => {
+            if has_labeled_params && table.get(name).is_none() {
+                // Function has labeled params but body returns bare — mark as stripped.
+                table.insert(name, stripped_sentinel());
+                false
+            } else { false }
+        },
+    }
+}
+
+/// Infer the return label for a function body from its return points.
+partial fn infer_return_label(
+    block: Block,
+    param_env: Map[String, String],
+    table: Map[String, String],
+    known_labels: List[String],
+) -> Option[String] {
+    let returns: Option[String] = collect_explicit_returns(block, param_env, table, known_labels);
+    let tail: Option[String] = match block.tail_expr.get(0) {
+        Some(e) => infer_label_extended(e, param_env, table, table),
+        None    => {
+            match block.stmts.get(block.stmts.len() - 1) {
+                Some(Stmt::ExprStmt(cell, _)) => match cell.get(0) {
+                    Some(e) => infer_label_extended(e, param_env, table, table),
+                    None    => None,
+                },
+                _ => None,
+            }
+        },
+    };
+    join_opt(returns, tail)
+}
+
+/// Walk a block collecting labels from explicit `return expr` statements.
+partial fn collect_explicit_returns(
+    block: Block,
+    env: Map[String, String],
+    table: Map[String, String],
+    known_labels: List[String],
+) -> Option[String] {
+    let acc: ref List[String] = [];
+    for s in block.stmts {
+        if acc.len() == 0 {
+            match collect_returns_in_stmt(s, env, table, known_labels) {
+                Some(l) => acc.push(l),
+                None    => {},
+            }
+        }
+    }
+    acc.get(0)
+}
+
+partial fn collect_returns_in_stmt(
+    stmt: Stmt,
+    env: Map[String, String],
+    table: Map[String, String],
+    known_labels: List[String],
+) -> Option[String] {
+    match stmt {
+        Stmt::Return(cell, _) => {
+            match cell.get(0) {
+                Some(e) => infer_label_extended(e, env, table, table),
+                None    => None,
+            }
+        },
+        Stmt::ExprStmt(cell, _) => {
+            // If/match expressions in stmt position may contain early returns inside.
+            match cell.get(0) {
+                Some(Expr::If(ie)) => {
+                    let then_ret: Option[String] = collect_explicit_returns(ie.then, env, table, known_labels);
+                    let else_ret: Option[String] = match ie.else_br.get(0) {
+                        Some(Expr::BlockExpr(b, _)) => collect_explicit_returns(b, env, table, known_labels),
+                        Some(Expr::If(nested))      => {
+                            let nested_ie: AstIfExpr = nested;
+                            collect_returns_in_stmt(
+                                Stmt::ExprStmt([Expr::If(nested_ie)], ie.span),
+                                env, table, known_labels
+                            )
+                        },
+                        _                           => None,
+                    };
+                    join_opt(then_ret, else_ret)
+                },
+                Some(Expr::MatchExpr(m)) => {
+                    let acc: ref List[String] = [];
+                    for arm in m.arms {
+                        match arm.body.get(0) {
+                            Some(Expr::BlockExpr(b, _)) => {
+                                match collect_explicit_returns(b, env, table, known_labels) {
+                                    Some(l) => { if acc.len() == 0 { acc.push(l) } },
+                                    None    => {},
+                                }
+                            },
+                            Some(e) => {
+                                match infer_label_extended(e, env, table, table) {
+                                    Some(l) => { if acc.len() == 0 { acc.push(l) } },
+                                    None    => {},
+                                }
+                            },
+                            None => {},
+                        }
+                    }
+                    acc.get(0)
+                },
+                _ => None,
+            }
+        },
+        Stmt::While(ws) => collect_explicit_returns(ws.body, env, table, known_labels),
+        Stmt::For(fs)   => collect_explicit_returns(fs.body, env, table, known_labels),
+        _               => None,
+    }
+}
+
+// ── Extended label inference ──────────────────────────────────────────────────
+
+/// Infer the security label of an expression using explicit + inferred tables.
+///
+/// Explicit labels are authoritative (short-circuit).
+/// Inferred labels are joined with argument labels (context sensitivity).
+pub partial fn infer_label_extended(
+    expr: Expr,
+    env: Map[String, String],
+    explicit: Map[String, String],
+    inferred: Map[String, String],
+) -> Option[String] {
+    match expr {
+        Expr::Ident(name, _) => env.get(name),
+        Expr::Call(c) => {
+            match explicit.get(c.name) {
+                Some(lbl) => { return Some(lbl) },
+                None      => {},
+            }
+            if inferred.get(c.name) == Some(stripped_sentinel()) { return None }
+            if inferred.get(c.name).is_none() {
+                match env.get(c.name) {
+                    Some(lbl) => { return Some(lbl) },
+                    None      => {},
+                }
+            }
+            let base: Option[String] = inferred.get(c.name);
+            // First labeled arg (join_opt keeps first, so fold ≡ find-first).
+            let first_arg: Option[String] = ile_first_labeled(c.args, env, explicit, inferred);
+            join_opt(base, first_arg)
+        },
+        Expr::Relabel(_) => None,
+        Expr::Binary(b) => {
+            let lv: Option[String] = match b.left.get(0) {
+                Some(l) => infer_label_extended(l, env, explicit, inferred), None => None
+            };
+            let rv: Option[String] = match b.right.get(0) {
+                Some(r) => infer_label_extended(r, env, explicit, inferred), None => None
+            };
+            join_opt(lv, rv)
+        },
+        Expr::Unary(u) => {
+            match u.expr.get(0) {
+                Some(e) => infer_label_extended(e, env, explicit, inferred), None => None
+            }
+        },
+        Expr::Field(fa) => {
+            match fa.expr.get(0) {
+                Some(e) => infer_label_extended(e, env, explicit, inferred), None => None
+            }
+        },
+        Expr::Propagate(cell, _) | Expr::Consume(cell, _) => {
+            match cell.get(0) {
+                Some(e) => infer_label_extended(e, env, explicit, inferred), None => None
+            }
+        },
+        Expr::Cast(ca) => {
+            match ca.expr.get(0) {
+                Some(e) => infer_label_extended(e, env, explicit, inferred), None => None
+            }
+        },
+        Expr::If(ie) => {
+            let then_lbl: Option[String] = tail_label_of_block(ie.then, env, explicit, inferred);
+            let else_lbl: Option[String] = match ie.else_br.get(0) {
+                Some(e) => infer_label_extended(e, env, explicit, inferred), None => None
+            };
+            join_opt(then_lbl, else_lbl)
+        },
+        Expr::BlockExpr(b, _) => tail_label_of_block(b, env, explicit, inferred),
+        Expr::MatchExpr(m) => {
+            let scr_lbl: Option[String] = match m.scrutinee.get(0) {
+                Some(e) => infer_label_extended(e, env, explicit, inferred), None => None
+            };
+            // Find first labeled arm.
+            for arm in m.arms {
+                match arm.body.get(0) {
+                    Some(Expr::BlockExpr(b, _)) => {
+                        match tail_label_of_block(b, env, explicit, inferred) {
+                            Some(l) => { return join_opt(scr_lbl, Some(l)) },
+                            None    => {},
+                        }
+                    },
+                    Some(e) => {
+                        match infer_label_extended(e, env, explicit, inferred) {
+                            Some(l) => { return join_opt(scr_lbl, Some(l)) },
+                            None    => {},
+                        }
+                    },
+                    None => {},
+                }
+            }
+            scr_lbl
+        },
+        Expr::Method(m) => {
+            let recv_lbl: Option[String] = match m.receiver.get(0) {
+                Some(r) => infer_label_extended(r, env, explicit, inferred), None => None
+            };
+            let arg_lbl: Option[String] = ile_first_labeled(m.args, env, explicit, inferred);
+            join_opt(recv_lbl, arg_lbl)
+        },
+        Expr::StructLit(sl) => {
+            for f in sl.fields {
+                match f.expr.get(0) {
+                    Some(e) => {
+                        match infer_label_extended(e, env, explicit, inferred) {
+                            Some(l) => { return Some(l) },
+                            None    => {},
+                        }
+                    },
+                    None => {},
+                }
+            }
+            None
+        },
+        Expr::ListLit(elems, _) | Expr::SetLit(elems, _) => {
+            ile_first_labeled(elems, env, explicit, inferred)
+        },
+        Expr::MapLit(ml) => {
+            for entry in ml.pairs {
+                match entry.key.get(0) {
+                    Some(k) => {
+                        match infer_label_extended(k, env, explicit, inferred) {
+                            Some(l) => { return Some(l) },
+                            None    => {},
+                        }
+                    },
+                    None => {},
+                }
+                match entry.value.get(0) {
+                    Some(v) => {
+                        match infer_label_extended(v, env, explicit, inferred) {
+                            Some(l) => { return Some(l) },
+                            None    => {},
+                        }
+                    },
+                    None => {},
+                }
+            }
+            None
+        },
+        Expr::Lit(_, _) => None,
+        _ => None,
+    }
+}
+
+/// Return the label of the first labeled expression in `args` (join_opt is first-wins).
+partial fn ile_first_labeled(
+    args: List[Expr],
+    env: Map[String, String],
+    explicit: Map[String, String],
+    inferred: Map[String, String],
+) -> Option[String] {
+    for a in args {
+        match infer_label_extended(a, env, explicit, inferred) {
+            Some(l) => { return Some(l) },
+            None    => {},
+        }
+    }
+    None
+}
+
+/// Return the label of the tail expression of a block.
+partial fn tail_label_of_block(
+    block: Block,
+    env: Map[String, String],
+    explicit: Map[String, String],
+    inferred: Map[String, String],
+) -> Option[String] {
+    match block.tail_expr.get(0) {
+        Some(e) => infer_label_extended(e, env, explicit, inferred),
+        None    => {
+            match block.stmts.get(block.stmts.len() - 1) {
+                Some(Stmt::ExprStmt(cell, _)) => match cell.get(0) {
+                    Some(e) => infer_label_extended(e, env, explicit, inferred),
+                    None    => None,
+                },
+                _ => None,
+            }
+        },
+    }
+}
+
+// ── Violation detection (#831) ────────────────────────────────────────────────
+
+/// Per-function violation collector state.
+pub type ViolState = struct {
+    caller: String,
+    env:    Map[String, String],
+}
+
+/// Detect interprocedural IFC violations in `prog`.
+/// Returns all InterprocFlowViolation errors found.
+pub partial fn detect_violations(
+    prog: Program, env: TypeEnv, inferred: InferredLabels
+) -> List[CheckError] {
+    let errs: ref List[CheckError] = [];
+    let known_labels: List[String] = env.known_labels;
+    for fd in prog.fns {
+        let init_env: ref Map[String, String] = Map::new();
+        for p in fd.params {
+            match label_of_type_expr(p.ty, known_labels) {
+                Some(l) => { init_env.insert(p.name, l) },
+                None    => {},
+            }
+        }
+        let vstate: ViolState = ViolState { caller: fd.name, env: init_env };
+        match fd.body {
+            Some(body) => { let _: ViolState = viol_visit_block(vstate, errs, body, env, inferred); },
+            None       => {},
+        }
+    }
+    for id in prog.impls {
+        for m in id.methods {
+            let init_env: ref Map[String, String] = Map::new();
+            for p in m.params {
+                match label_of_type_expr(p.ty, known_labels) {
+                    Some(l) => { init_env.insert(p.name, l) },
+                    None    => {},
+                }
+            }
+            let vstate: ViolState = ViolState { caller: m.name, env: init_env };
+            match m.body {
+                Some(body) => { let _: ViolState = viol_visit_block(vstate, errs, body, env, inferred); },
+                None       => {},
+            }
+        }
+    }
+    errs
+}
+
+/// Walk a block for violation detection. Let-bindings update env for later stmts.
+partial fn viol_visit_block(
+    state: ViolState, errs: ref List[CheckError], block: Block, type_env: TypeEnv, inferred: InferredLabels
+) -> ViolState {
+    let saved_env: Map[String, String] = state.env;
+    let cur: ref ViolState = state;
+    for s in block.stmts {
+        cur = viol_visit_stmt(cur, errs, s, type_env, inferred);
+    }
+    match block.tail_expr.get(0) {
+        Some(e) => { let _: ViolState = viol_visit_expr(cur, errs, e, type_env, inferred); },
+        None    => {},
+    }
+    // Restore env after block (block-scoped let bindings die here).
+    ViolState { caller: cur.caller, env: saved_env }
+}
+
+partial fn viol_visit_stmt(
+    state: ViolState, errs: ref List[CheckError], stmt: Stmt, type_env: TypeEnv, inferred: InferredLabels
+) -> ViolState {
+    match stmt {
+        Stmt::Let(ls) => {
+            let init: Expr = match ls.value.get(0) { Some(e) => e, None => { return state } };
+            let _: ViolState = viol_visit_expr(state, errs, init, type_env, inferred);
+            // Prefer declared label over inferred init label.
+            let init_lbl: Option[String] = infer_label_extended(
+                init, state.env, inferred.explicit, inferred.inferred
+            );
+            let known_labels: List[String] = type_env.known_labels;
+            let effective_lbl: Option[String] = match label_of_type_expr(ls.ty, known_labels) {
+                Some(l) => Some(l),
+                None    => init_lbl,
+            };
+            match effective_lbl {
+                Some(l) => {
+                    let new_env: ref Map[String, String] = Map::new();
+                    for k in state.env.keys() {
+                        match state.env.get(k) { Some(v) => { new_env.insert(k, v) }, None => {} }
+                    }
+                    bind_pattern_labels(Pattern::Ident(ls.name, ls.span), l, new_env);
+                    ViolState { caller: state.caller, env: new_env }
+                },
+                None => state,
+            }
+        },
+        Stmt::ExprStmt(cell, _) => {
+            match cell.get(0) {
+                Some(e) => {
+                    match e {
+                        Expr::MatchExpr(m) => {
+                            match m.scrutinee.get(0) {
+                                Some(scr) => { let _: ViolState = viol_visit_expr(state, errs, scr, type_env, inferred); },
+                                None      => {},
+                            }
+                            let saved: Map[String, String] = state.env;
+                            for arm in m.arms {
+                                let arm_state: ViolState = ViolState { caller: state.caller, env: saved };
+                                match arm.body.get(0) {
+                                    Some(Expr::BlockExpr(b, _)) => { let _: ViolState = viol_visit_block(arm_state, errs, b, type_env, inferred); },
+                                    Some(ae)                    => { let _: ViolState = viol_visit_expr(arm_state, errs, ae, type_env, inferred); },
+                                    None => {},
+                                }
+                            }
+                            state
+                        },
+                        _ => {
+                            let _: ViolState = viol_visit_expr(state, errs, e, type_env, inferred);
+                            state
+                        },
+                    }
+                },
+                None => state,
+            }
+        },
+        Stmt::For(fs) => {
+            let iter: Expr = match fs.iter.get(0) { Some(e) => e, None => { return state } };
+            let _: ViolState = viol_visit_expr(state, errs, iter, type_env, inferred);
+            let iter_lbl: Option[String] = infer_label_extended(
+                iter, state.env, inferred.explicit, inferred.inferred
+            );
+            let saved: Map[String, String] = state.env;
+            let body_env: ref Map[String, String] = Map::new();
+            for k in state.env.keys() {
+                match state.env.get(k) { Some(v) => { body_env.insert(k, v) }, None => {} }
+            }
+            match iter_lbl {
+                Some(l) => { body_env.insert(fs.var, l) },
+                None    => {},
+            }
+            let body_state: ViolState = ViolState { caller: state.caller, env: body_env };
+            let _: ViolState = viol_visit_block(body_state, errs, fs.body, type_env, inferred);
+            ViolState { caller: state.caller, env: saved }
+        },
+        Stmt::Return(cell, _) => {
+            match cell.get(0) {
+                Some(e) => { let _: ViolState = viol_visit_expr(state, errs, e, type_env, inferred); },
+                None    => {},
+            }
+            state
+        },
+        Stmt::While(ws) => {
+            match ws.cond.get(0) {
+                Some(c) => { let _: ViolState = viol_visit_expr(state, errs, c, type_env, inferred); },
+                None    => {},
+            }
+            let _: ViolState = viol_visit_block(state, errs, ws.body, type_env, inferred);
+            state
+        },
+        Stmt::Assign(a) => {
+            match a.value.get(0) {
+                Some(e) => { let _: ViolState = viol_visit_expr(state, errs, e, type_env, inferred); },
+                None    => {},
+            }
+            state
+        },
+    }
+}
+
+partial fn viol_visit_expr(
+    state: ViolState, errs: ref List[CheckError], expr: Expr, type_env: TypeEnv, inferred: InferredLabels
+) -> ViolState {
+    match expr {
+        Expr::Call(c) => {
+            let call_errs: List[CheckError] = check_call_violations(
+                c.name, c.args, c.span, state.caller, state.env, type_env, inferred
+            );
+            for e in call_errs { errs.push(e) }
+            for a in c.args { let _: ViolState = viol_visit_expr(state, errs, a, type_env, inferred); }
+            state
+        },
+        Expr::MatchExpr(m) => {
+            match m.scrutinee.get(0) {
+                Some(scr) => { let _: ViolState = viol_visit_expr(state, errs, scr, type_env, inferred); },
+                None      => {},
+            }
+            let saved: Map[String, String] = state.env;
+            for arm in m.arms {
+                let arm_state: ViolState = ViolState { caller: state.caller, env: saved };
+                match arm.body.get(0) {
+                    Some(Expr::BlockExpr(b, _)) => { let _: ViolState = viol_visit_block(arm_state, errs, b, type_env, inferred); },
+                    Some(e)                     => { let _: ViolState = viol_visit_expr(arm_state, errs, e, type_env, inferred); },
+                    None => {},
+                }
+            }
+            state
+        },
+        Expr::If(ie) => {
+            match ie.cond.get(0) {
+                Some(c) => { let _: ViolState = viol_visit_expr(state, errs, c, type_env, inferred); },
+                None    => {},
+            }
+            let _: ViolState = viol_visit_block(state, errs, ie.then, type_env, inferred);
+            match ie.else_br.get(0) {
+                Some(e) => {
+                    // else-if: treat as nested if with saved env
+                    let saved: Map[String, String] = state.env;
+                    let else_state: ViolState = ViolState { caller: state.caller, env: saved };
+                    let _: ViolState = viol_visit_expr(else_state, errs, e, type_env, inferred);
+                },
+                None => {},
+            }
+            state
+        },
+        Expr::BlockExpr(b, _) => {
+            let _: ViolState = viol_visit_block(state, errs, b, type_env, inferred);
+            state
+        },
+        // For other expressions: recurse into children via walk_expr.
+        _ => {
+            let children: List[Expr] = walk_expr(expr);
+            let i: ref Int = 1;
+            while i < children.len() {
+                match children.get(i) {
+                    Some(child) => { let _: ViolState = viol_visit_expr(state, errs, child, type_env, inferred); },
+                    None        => {},
+                }
+                i = i + 1
+            }
+            state
+        },
+    }
+}
+
+/// Check a single call site for interprocedural IFC violations.
+partial fn check_call_violations(
+    callee_name: String,
+    args: List[Expr],
+    call_span: SourceLoc,
+    caller: String,
+    env: Map[String, String],
+    type_env: TypeEnv,
+    inferred: InferredLabels,
+) -> List[CheckError] {
+    let errs: ref List[CheckError] = [];
+    let fn_info: FnInfo = match type_env.lookup_fn(callee_name) {
+        Some(fi) => fi,
+        None     => { return errs },
+    };
+    // Skip variadic builtins (empty params sentinel) and generics.
+    if fn_info.params.len() == 0 || fn_info.type_params.len() > 0 { return errs }
+
+    let i: ref Int = 0;
+    while i < args.len() && i < fn_info.params.len() {
+        match args.get(i) {
+            Some(arg) => {
+                match fn_info.params.get(i) {
+                    Some(param_ty) => {
+                        let required: Option[String] = label_of(param_ty);
+                        let arg_lbl: Option[String] = infer_label_extended(
+                            arg, env, inferred.explicit, inferred.inferred
+                        );
+                        if arg_lbl != required {
+                            match arg_lbl {
+                                Some(al) => {
+                                    let chain: List[String] = extract_chain(arg, env, inferred.explicit, inferred.inferred);
+                                    errs.push(CheckError::InterprocFlowViolation {
+                                        callee:       callee_name,
+                                        param_idx:    i,
+                                        required_lbl: match required { Some(r) => r, None => "bare" },
+                                        inferred_lbl: al,
+                                        chain:        chain,
+                                        caller:       caller,
+                                        span:         call_span,
+                                    });
+                                },
+                                None => {},
+                            }
+                        }
+                    },
+                    None => {},
+                }
+            },
+            None => {},
+        }
+        i = i + 1
+    }
+    errs
+}
+
+/// Extract a simplified call chain from an arg expression for error messages.
+partial fn extract_chain(
+    expr: Expr,
+    env: Map[String, String],
+    explicit: Map[String, String],
+    inferred: Map[String, String],
+) -> List[String] {
+    match expr {
+        Expr::Call(c) => {
+            let chain: ref List[String] = [c.name];
+            for a in c.args {
+                if infer_label_extended(a, env, explicit, inferred).is_some() {
+                    let sub: List[String] = extract_chain(a, env, explicit, inferred);
+                    if sub.len() > 0 { chain.extend(sub) }
+                    return chain  // stop at first labeled arg
+                }
+            }
+            chain
+        },
+        Expr::Ident(name, _) => [name],
+        _ => [],
+    }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+test fn stripped_sentinel_not_valid_label() -> Unit {
+    // Sentinel must start with < to be impossible as a valid label name.
+    assert_eq(stripped_sentinel().starts_with("<"), true)
+}
+
+test partial fn inferred_labels_get_filters_sentinel() -> Unit {
+    let explicit: ref Map[String, String] = Map::new();
+    explicit.insert("f", "<stripped>");
+    let inferred_map: Map[String, String] = Map::new();
+    let il: InferredLabels = InferredLabels { explicit: explicit, inferred: inferred_map };
+    assert_eq(il.get("f").is_none(), true)
+}
+
+test partial fn inferred_labels_get_explicit_wins() -> Unit {
+    let explicit: ref Map[String, String] = Map::new();
+    explicit.insert("src", "Tainted");
+    let inferred_map: ref Map[String, String] = Map::new();
+    inferred_map.insert("src", "Secret");
+    let il: InferredLabels = InferredLabels { explicit: explicit, inferred: inferred_map };
+    assert_eq(il.get("src"), Some("Tainted"))
+}
