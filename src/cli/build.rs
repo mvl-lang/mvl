@@ -365,7 +365,15 @@ pub fn run(
     };
 
     if out.has_main {
-        // Binary crate: the transpiled code IS src/main.rs
+        // Binary crate: the transpiled code IS src/main.rs.
+        // Remove any stale lib.rs from a previous library-crate build — if both
+        // main.rs and lib.rs exist in src/, Cargo treats the package as having
+        // two targets and tries to compile the stale lib.rs (which may reference
+        // a bridge or deps no longer present in Cargo.toml).
+        let stale_lib = src_dir.join("lib.rs");
+        if stale_lib.exists() {
+            let _ = fs::remove_file(&stale_lib);
+        }
         fs::write(src_dir.join("main.rs"), &main_source).unwrap_or_else(|e| {
             eprintln!("Cannot write main.rs: {e}");
             process::exit(1);
@@ -400,11 +408,18 @@ pub fn run(
 
     // Copy bridge.rs into src/ so `mod bridge;` resolves.
     // Use fs::copy (single syscall) to avoid the read→write TOCTOU window.
+    // When no bridge is needed, remove any stale bridge.rs from a prior build
+    // to prevent it from being compiled with missing deps in Cargo.toml.
     if let Some(ref bp) = bridge_path {
         fs::copy(bp, src_dir.join("bridge.rs")).unwrap_or_else(|e| {
             eprintln!("Cannot copy bridge.rs: {e}");
             process::exit(1);
         });
+    } else {
+        let stale_bridge = src_dir.join("bridge.rs");
+        if stale_bridge.exists() {
+            let _ = fs::remove_file(&stale_bridge);
+        }
     }
 
     // If the program uses mvl_runtime, make it available for the build:

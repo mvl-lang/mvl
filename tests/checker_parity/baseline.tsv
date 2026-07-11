@@ -105,6 +105,11 @@ tests/corpus/09_refinements/ensures_contracts_proven.mvl	ok
 tests/corpus/09_refinements/refinements_fully_proven.mvl	ok
 tests/corpus/09_refinements/refinements_valid.mvl	ok
 tests/corpus/09_refinements/refinements_violations.mvl	ok
+tests/corpus/09_refinements/solver_layer1_trivial.mvl	ok
+tests/corpus/09_refinements/solver_layer2_interval.mvl	ok
+tests/corpus/09_refinements/solver_layer3_symbolic.mvl	ok
+tests/corpus/09_refinements/solver_layer4_presburger.mvl	ok
+tests/corpus/09_refinements/solver_layered_fallthrough.mvl	ok
 tests/corpus/10_termination/total_vs_partial.mvl	ok
 tests/corpus/11_contracts/basic_contracts.mvl	ok
 tests/corpus/11_contracts/ghost_old_contracts.mvl	ok

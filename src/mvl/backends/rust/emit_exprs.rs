@@ -428,7 +428,10 @@ impl RustEmitter {
                     // overflow behaviour (trap on overflow rather than wrapping).
                     // Div/Rem: checked_div/checked_rem catch division-by-zero and
                     // i64::MIN / -1 overflow (#1266).
-                    let is_int_arith = op.is_arithmetic() && matches!(expr.ty, Ty::Int);
+                    //
+                    // Also matches labeled Int results (`Secret[Int]`, `Tainted[Int]`):
+                    // the label propagates through arithmetic (#1708).
+                    let is_int_arith = op.is_arithmetic() && expr.ty.unlabeled() == &Ty::Int;
                     if is_int_arith {
                         let (method, msg) = match op {
                             BinaryOp::Add => ("checked_add", "integer overflow"),
@@ -444,8 +447,23 @@ impl RustEmitter {
                         // Check the operand type against the refined-alias registry
                         // and emit `.0` when a wrapping type is detected (#1707
                         // phase 7).
-                        let left_unwrap = self.refined_alias_base(&left.ty).is_some();
-                        let right_unwrap = self.refined_alias_base(&right.ty).is_some();
+                        //
+                        // IFC labeled operands (`Secret[Int]`, `Tainted[Int]`) also
+                        // need `.0` unwrap since they're Rust newtypes (#1708).
+                        let left_unwrap = self.refined_alias_base(&left.ty).is_some()
+                            || matches!(left.ty, Ty::Labeled(..));
+                        let right_unwrap = self.refined_alias_base(&right.ty).is_some()
+                            || matches!(right.ty, Ty::Labeled(..));
+                        // When the result is a labeled Int (e.g. `Secret[Int]`), wrap
+                        // the checked arithmetic in the label constructor (#1708).
+                        let result_label = if let Ty::Labeled(lbl, _) = &expr.ty {
+                            Some(lbl.as_str())
+                        } else {
+                            None
+                        };
+                        if let Some(lbl) = result_label {
+                            self.push(&format!("{lbl}("));
+                        }
                         // Emit as a method chain — Suffix precedence, no outer wrap
                         // needed against any operator context (#1659).  The inner
                         // `&(...)` parens delimit the borrow expression and are
@@ -461,13 +479,24 @@ impl RustEmitter {
                             self.push(".0");
                         }
                         self.push(&format!("))).expect(\"{msg}\")"));
+                        if result_label.is_some() {
+                            self.push(")");
+                        }
                     } else {
                         // Precedence-aware operand wrapping (#1659) — outer parens
                         // are elided; the caller's context (all top-level via
                         // `emit_expr`) never requires them, and Binary-nested
                         // operands wrap only when their own precedence demands it.
+                        //
+                        // IFC labeled operands need `.0` unwrap before comparison /
+                        // logical ops — the operator acts on the inner value (#1708).
+                        let left_labeled = matches!(left.ty, Ty::Labeled(..));
+                        let right_labeled = matches!(right.ty, Ty::Labeled(..));
                         let my_prec = binary_own_prec(*op);
                         self.emit_operand_left(left, my_prec);
+                        if left_labeled {
+                            self.push(".0");
+                        }
                         self.push(" ");
                         self.push(emit_binary_op(*op));
                         self.push(" ");
@@ -479,6 +508,9 @@ impl RustEmitter {
                             self.push(")");
                         } else {
                             self.emit_operand_right(right, my_prec);
+                            if right_labeled {
+                                self.push(".0");
+                            }
                         }
                     }
                 }
@@ -486,6 +518,11 @@ impl RustEmitter {
             TirExprKind::If { cond, then, else_ } => {
                 self.push("if ");
                 self.emit_expr(cond);
+                // IFC labeled Bool (e.g. `Secret[Bool]`) is a Rust newtype; unwrap
+                // to `bool` for the condition (#1708).
+                if matches!(cond.ty, Ty::Labeled(..)) {
+                    self.push(".0");
+                }
                 self.push(" {");
                 self.nl();
                 self.push_indent();
@@ -520,6 +557,12 @@ impl RustEmitter {
                 // MC/DC IDs before the match-level decisions (mirrors analysis order).
                 self.push("match ");
                 self.emit_expr(scrutinee);
+                // IFC labeled scrutinee (e.g. `Tainted[Bool]`) — unwrap with `.0`
+                // so patterns match against the inner type (#1708).
+                let scrutinee_labeled = matches!(scrutinee.ty, Ty::Labeled(..));
+                if scrutinee_labeled {
+                    self.push(".0");
+                }
                 // Clone when the scrutinee is a self.field access (can't move out of &self)
                 // or a capability param (val/ref → &T/&mut T in Rust). Without clone,
                 // match ergonomics yield reference bindings that fail E0507/E0277.
