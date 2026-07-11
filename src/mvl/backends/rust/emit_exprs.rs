@@ -172,6 +172,25 @@ impl RustEmitter {
         }
     }
 
+    /// Emit a binary operand, dereferencing `ref T` capability params.
+    /// `ref T` parameters become `&mut T` in Rust and must be dereferenced
+    /// before use in comparisons and arithmetic.
+    fn emit_operand_deref_cap(&mut self, sub: &TirExpr, parent_prec: Prec, is_right: bool) {
+        if let TirExprKind::Var(name) = &sub.kind {
+            if self.capability_param_names.contains(name.as_str()) {
+                self.push("(*");
+                self.push(name);
+                self.push(")");
+                return;
+            }
+        }
+        if is_right {
+            self.emit_operand_right(sub, parent_prec);
+        } else {
+            self.emit_operand_left(sub, parent_prec);
+        }
+    }
+
     /// Emit an expression into the code buffer (no trailing newline).
     pub fn emit_expr(&mut self, expr: &TirExpr) {
         let span = expr.span;
@@ -488,7 +507,7 @@ impl RustEmitter {
                         // `emit_expr`) never requires them, and Binary-nested
                         // operands wrap only when their own precedence demands it.
                         let my_prec = binary_own_prec(*op);
-                        self.emit_operand_left(left, my_prec);
+                        self.emit_operand_deref_cap(left, my_prec, false);
                         self.push(" ");
                         self.push(emit_binary_op(*op));
                         self.push(" ");
@@ -499,7 +518,7 @@ impl RustEmitter {
                             self.emit_expr(right);
                             self.push(")");
                         } else {
-                            self.emit_operand_right(right, my_prec);
+                            self.emit_operand_deref_cap(right, my_prec, true);
                         }
                     }
                 }

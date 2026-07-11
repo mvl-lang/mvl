@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.245.2] - 2026-07-11
+
+### Fixed — Rust Emitter: ref T param deref in binary ops
+
+- Restore `emit_operand_deref_cap` lost during rebase conflict resolution in #1760; `ref T` capability params (e.g. `budget: ref Int`) become `&mut T` in Rust and require `(*param)` wrapping before comparisons and arithmetic — without it `compiler/make test` failed with 56 E0308 errors (#1764).
+
 ## [0.245.1] - 2026-07-11
 
 ### Fixed — IFC Label Unwrapping in Rust Emitter
