@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.245.3] - 2026-07-11
+
+### Fixed — Wildcard let bindings type annotations
+
+- Restore type annotations on `let _: T = expr` bindings; commit 72426026 suppressed them to avoid a hypothetical E0308 reborrow case that never actually manifests in generated code. The suppression broke `corpus_bitwise_transpiles` which asserts `let _: u8 = (a & b)` — loss of Byte → u8 type mapping weakens correctness verification (#1766).
+
 ## [0.245.2] - 2026-07-11
 
 ### Fixed — Rust Emitter: ref T param deref in binary ops
