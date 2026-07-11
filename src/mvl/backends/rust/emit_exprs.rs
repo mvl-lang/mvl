@@ -176,7 +176,12 @@ impl RustEmitter {
     /// `ref T` parameters are `&mut T` in Rust and must be dereferenced before
     /// comparing with plain values.  `is_right` controls left-vs-right associativity
     /// precedence wrapping for non-cap-param expressions.
-    pub(super) fn emit_operand_deref_cap(&mut self, sub: &TirExpr, parent_prec: Prec, is_right: bool) {
+    pub(super) fn emit_operand_deref_cap(
+        &mut self,
+        sub: &TirExpr,
+        parent_prec: Prec,
+        is_right: bool,
+    ) {
         if let TirExprKind::Var(name) = &sub.kind {
             if self.capability_param_names.contains(name.as_str()) {
                 self.push("(*");
@@ -1096,12 +1101,15 @@ impl RustEmitter {
             // same box can be dereffed multiple times (e.g. repeated use in function
             // call args after a match-arm binding `Box<T>`).
             TirExprKind::Unary {
-                op: UnaryOp::Deref,
-                ..
+                op: UnaryOp::Deref, ..
             } => {
                 self.push("(");
                 self.emit_expr(expr);
-                self.push(if coerce { ").clone().into()" } else { ").clone()" });
+                self.push(if coerce {
+                    ").clone().into()"
+                } else {
+                    ").clone()"
+                });
             }
             _ => {
                 self.emit_expr(expr);

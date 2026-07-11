@@ -120,7 +120,10 @@ impl RustEmitter {
                 // Clone so the same box can be dereffed again in later expressions.
                 let deref_needs_clone = matches!(
                     &init.kind,
-                    TirExprKind::Unary { op: UnaryOp::Deref, .. }
+                    TirExprKind::Unary {
+                        op: UnaryOp::Deref,
+                        ..
+                    }
                 );
                 if field_needs_clone || var_needs_clone || deref_needs_clone {
                     self.push(".clone()");
