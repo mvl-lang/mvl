@@ -4,7 +4,7 @@
 //! `mvl doctor` — report installed versions and flag path mismatches.
 
 use mvl::mvl::stdlib;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const RUNTIME_VERSION: &str = env!("MVL_RUNTIME_VERSION");
 const STDLIB_VERSION: &str = env!("MVL_STDLIB_VERSION");
@@ -40,7 +40,7 @@ pub fn run() {
     }
 }
 
-fn print_artifact(label: &str, version: &str, path: &PathBuf, ok: bool) {
+fn print_artifact(label: &str, version: &str, path: &Path, ok: bool) {
     let status = if ok { "✓" } else { "✗" };
     println!("  {status} {label} v{version}  {}", path.display());
 }
@@ -63,7 +63,7 @@ fn mvl_runtime_dir() -> PathBuf {
     base.join("runtime").join(RUNTIME_VERSION)
 }
 
-fn llvm_dylib(dir: &PathBuf) -> Option<PathBuf> {
+fn llvm_dylib(dir: &Path) -> Option<PathBuf> {
     for ext in &["dylib", "so"] {
         let p = dir.join(format!("libmvl_runtime_llvm.{ext}"));
         if p.exists() {
