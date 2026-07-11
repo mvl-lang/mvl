@@ -303,7 +303,8 @@ partial fn main() -> Unit ! FileRead + Console + Env {
 
     match read_dir(dir_path) {
         Err(_) => println("error: could not read directory"),
-        Ok(entries) => {
+        Ok(entries0) => {
+            let entries: List[DirEntry] = entries0;
             let file_count: ref Int  = 0;
             let fn_total: ref   Int  = 0;
             let type_total: ref Int  = 0;

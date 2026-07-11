@@ -591,8 +591,15 @@ impl RustEmitter {
                 // Clone when the scrutinee is a self.field access (can't move out of &self)
                 // or a capability param (val/ref → &T/&mut T in Rust). Without clone,
                 // match ergonomics yield reference bindings that fail E0507/E0277.
+                // Also clone when the scrutinee is a bare local Var that is NOT its
+                // last use — the arm patterns partially move the value and later
+                // reads would trip E0382.
+                let scrutinee_var_needs_clone = matches!(&scrutinee.kind, TirExprKind::Var(name)
+                    if !self.capability_param_names.contains(name)
+                        && !self.last_uses.contains(&scrutinee.span));
                 if scrutinee_needs_clone(scrutinee)
                     || matches!(&scrutinee.kind, TirExprKind::Var(name) if self.capability_param_names.contains(name))
+                    || scrutinee_var_needs_clone
                 {
                     self.push(".clone()");
                 }

@@ -88,13 +88,17 @@ pub partial fn check_requires_at_call(
         let multi:      ref Bool   = false;
         let i: ref Int = 0;
         while i < params.len() {
-            let pr: ParamRef = match params.get(i) { Some(p) => p, None => { i = i + 1 } };
-            if idents.contains(pr.name) {
-                if param_idx == -1 {
-                    param_name = pr.name; param_idx = i
-                } else {
-                    multi = true
-                }
+            match params.get(i) {
+                None => {},
+                Some(pr) => {
+                    if idents.contains(pr.name) {
+                        if param_idx == -1 {
+                            param_name = pr.name; param_idx = i
+                        } else {
+                            multi = true
+                        }
+                    }
+                },
             }
             i = i + 1
         }

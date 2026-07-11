@@ -266,7 +266,10 @@ fn stmt_has_disqualifying_use_tir(
                 || expr_has_disqualifying_use_tir(param, scrutinee)
                 || arms.iter().any(|a| match &a.body {
                     TirMatchBody::Block(b) => block_has_disqualifying_use_tir(param, b),
-                    TirMatchBody::Expr(e) => expr_has_disqualifying_use_tir(param, e),
+                    TirMatchBody::Expr(e) => {
+                        matches!(&e.kind, TirExprKind::Var(n) if n == param)
+                            || expr_has_disqualifying_use_tir(param, e)
+                    }
                 })
         }
         TirStmt::For { iter, body, .. } => {
@@ -381,7 +384,10 @@ fn expr_has_disqualifying_use_tir(param: &str, expr: &crate::mvl::ir::TirExpr) -
                 || expr_has_disqualifying_use_tir(param, scrutinee)
                 || arms.iter().any(|a| match &a.body {
                     TirMatchBody::Block(b) => block_has_disqualifying_use_tir(param, b),
-                    TirMatchBody::Expr(e) => expr_has_disqualifying_use_tir(param, e),
+                    TirMatchBody::Expr(e) => {
+                        matches!(&e.kind, TirExprKind::Var(n) if n == param)
+                            || expr_has_disqualifying_use_tir(param, e)
+                    }
                 })
         }
         TirExprKind::Block(b) => block_has_disqualifying_use_tir(param, b),

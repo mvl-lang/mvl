@@ -44,7 +44,7 @@ pub partial fn rewrite_expr(expr: Expr) -> Expr {
                     } else if m.method == "is_empty" && m.args.len() == 0 {
                         Expr::Lit(AstLiteral::Bool(s.len() == 0), sp)
                     } else {
-                        reconstruct_method(recv, m.method, m.args, sp)
+                        reconstruct_method(Expr::Lit(AstLiteral::Str(s), sp), m.method, m.args, sp)
                     }
                 },
 
@@ -59,23 +59,18 @@ pub partial fn rewrite_expr(expr: Expr) -> Expr {
 
                 // ── Option / Result constructor methods ───────────────────────
                 Expr::Call(c) => {
-                    let cname: String = c.name;
-                    if m.args.len() == 0 {
-                        if m.method == "is_some" && cname == "Some" {
-                            Expr::Lit(AstLiteral::Bool(true), sp)
-                        } else if m.method == "is_none" && cname == "Some" {
-                            Expr::Lit(AstLiteral::Bool(false), sp)
-                        } else if m.method == "is_ok" && cname == "Ok" {
-                            Expr::Lit(AstLiteral::Bool(true), sp)
-                        } else if m.method == "is_ok" && cname == "Err" {
-                            Expr::Lit(AstLiteral::Bool(false), sp)
-                        } else if m.method == "is_err" && cname == "Ok" {
-                            Expr::Lit(AstLiteral::Bool(false), sp)
-                        } else if m.method == "is_err" && cname == "Err" {
-                            Expr::Lit(AstLiteral::Bool(true), sp)
-                        } else {
-                            reconstruct_method(Expr::Call(c), m.method, m.args, sp)
-                        }
+                    if m.args.len() == 0 && m.method == "is_some" && c.name == "Some" {
+                        Expr::Lit(AstLiteral::Bool(true), sp)
+                    } else if m.args.len() == 0 && m.method == "is_none" && c.name == "Some" {
+                        Expr::Lit(AstLiteral::Bool(false), sp)
+                    } else if m.args.len() == 0 && m.method == "is_ok" && c.name == "Ok" {
+                        Expr::Lit(AstLiteral::Bool(true), sp)
+                    } else if m.args.len() == 0 && m.method == "is_ok" && c.name == "Err" {
+                        Expr::Lit(AstLiteral::Bool(false), sp)
+                    } else if m.args.len() == 0 && m.method == "is_err" && c.name == "Ok" {
+                        Expr::Lit(AstLiteral::Bool(false), sp)
+                    } else if m.args.len() == 0 && m.method == "is_err" && c.name == "Err" {
+                        Expr::Lit(AstLiteral::Bool(true), sp)
                     } else {
                         reconstruct_method(Expr::Call(c), m.method, m.args, sp)
                     }

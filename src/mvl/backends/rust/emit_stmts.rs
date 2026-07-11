@@ -59,8 +59,9 @@ impl RustEmitter {
                 // assignments, no method-call receivers.  Rust would emit an
                 // `unused_mut` warning for these otherwise.  Keyed by pattern
                 // span so shadowed bindings are analysed independently.
-                let is_readonly = matches!(pattern, Pattern::Ident(_, span)
-                    if self.readonly_names.contains(span));
+                let is_readonly = matches!(pattern, Pattern::Wildcard(_))
+                    || matches!(pattern, Pattern::Ident(_, span)
+                        if self.readonly_names.contains(span));
                 if is_mutable && !is_readonly {
                     self.push("let mut ");
                 } else {
@@ -69,7 +70,11 @@ impl RustEmitter {
                 self.emit_pattern(pattern);
                 // Fn types: omit the annotation so Rust infers the concrete
                 // closure type — `fn(T)->U` rejects capturing closures (#1313).
-                if !matches!(ty_for_emit, Ty::Fn(..)) {
+                // Wildcard patterns: omit the annotation — `let _: T = expr` is
+                // stricter than `let _ = expr` and rejects reborrows like
+                // `let _: Vec<T> = &mut vec` (E0308).  The value is discarded
+                // anyway, so type checking adds no value here.
+                if !matches!(ty_for_emit, Ty::Fn(..)) && !matches!(pattern, Pattern::Wildcard(_)) {
                     self.push(": ");
                     self.push(&emit_ty(ty_for_emit));
                 }

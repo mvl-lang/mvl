@@ -62,13 +62,15 @@ impl RustEmitter {
                 } else if is_set {
                     // Set.map: into_iter + collect into HashSet.
                     self.emit_method_receiver(receiver);
-                    self.push(".into_iter().map(|__x| (");
+                    self.push(".clone().into_iter().map(|__x| (");
                     self.emit_expr(&args[0]);
                     self.push(")(__x.clone())).collect::<std::collections::HashSet<_>>()");
                 } else {
                     // List (and unknown types) use into_iter().collect().
+                    // Clone the receiver: `into_iter()` moves, but MVL semantics
+                    // let the collection stay live for later reads.
                     self.emit_method_receiver(receiver);
-                    self.push(".into_iter().map(|__x| (");
+                    self.push(".clone().into_iter().map(|__x| (");
                     self.emit_expr(&args[0]);
                     self.push(")(__x.clone())).collect::<Vec<_>>()");
                 }

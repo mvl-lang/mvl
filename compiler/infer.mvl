@@ -987,8 +987,9 @@ partial fn infer_fn_call_fallback(
                         })
                     } else {
                         let j: ref Int = 0;
-                        while j < param_tys.len() {
-                            match param_tys.get(j) {
+                        let ptys: List[Ty] = param_tys;
+                        while j < ptys.len() {
+                            match ptys.get(j) {
                                 Some(expected) => match arg_tys.get(j) {
                                     Some(found_ty) => if !types_compatible_resolved(c.env, expected, found_ty) {
                                         errs.push(CheckError::TypeMismatch {
