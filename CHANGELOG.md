@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.245.1] - 2026-07-11
+
+### Fixed — IFC Label Unwrapping in Rust Emitter
+
+- Emit `.0` unwraps for labeled Int/Bool operands in arithmetic, comparison, conditional, and match expressions (`Secret[Int]`, `Tainted[Bool]`, etc. are Rust newtypes) (#1708).
+- Remove stale `lib.rs` when building a binary crate and stale `bridge.rs` when no bridge is needed, preventing cargo from trying to compile files with missing dependencies (sibling dispatch test fix).
+- Regenerate `checker_parity/baseline.tsv` to include new solver-layer corpus files.
+
 ## [0.245.0] - 2026-07-11
 
 ### Added — Self-Hosted Refinements & Contracts Checker

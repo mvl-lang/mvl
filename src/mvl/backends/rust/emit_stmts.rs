@@ -188,6 +188,11 @@ impl RustEmitter {
                     self.indent();
                     self.push("if ");
                     self.emit_expr(cond);
+                    // IFC labeled Bool (e.g. `Secret[Bool]`) is a Rust newtype; unwrap
+                    // to `bool` for the condition (#1708).
+                    if matches!(cond.ty, Ty::Labeled(..)) {
+                        self.push(".0");
+                    }
                     self.push(" {");
                     self.nl();
                     self.push_indent();
@@ -230,6 +235,11 @@ impl RustEmitter {
                     || matches!(&scrutinee.kind, TirExprKind::Var(name) if self.capability_param_names.contains(name))
                 {
                     self.push(".clone()");
+                }
+                // IFC labeled scrutinee (e.g. `Tainted[Bool]`) — unwrap with `.0`
+                // so patterns match against the inner type (#1708).
+                if matches!(scrutinee.ty, Ty::Labeled(..)) {
+                    self.push(".0");
                 }
 
                 // Allocate MC/DC arm-coverage decision (Match kind, one "clause" per arm).
@@ -373,6 +383,10 @@ impl RustEmitter {
                     } else {
                         self.push("while ");
                         self.emit_expr(cond);
+                        // IFC labeled Bool condition needs `.0` unwrap (#1708).
+                        if matches!(cond.ty, Ty::Labeled(..)) {
+                            self.push(".0");
+                        }
                         self.push(" {");
                     }
                     self.nl();
