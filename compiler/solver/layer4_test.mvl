@@ -5,11 +5,11 @@
 //
 // Tests the internal types and public entry point:
 //   - linterm_* arithmetic helpers
-//   - Constraint trivially-true / trivially-false detection
+//   - LinConstraint trivially-true / trivially-false detection
 //   - is_unsat() via the divisibility and FM paths
 //   - try_cooper() end-to-end
 //
-// All types (LinTerm, Constraint, RefExpr, Expr, …) are available via the
+// All types (LinTerm, LinConstraint, RefExpr, Expr, …) are available via the
 // compiler prelude when running `mvl test compiler/`.
 //
 // Run with: mvl test compiler/
@@ -26,11 +26,11 @@ total fn ident_expr(name: String) -> Expr {
     Expr::Ident(name, loc())
 }
 
-total fn self_cmp_ref(op: CmpOp, n: Int) -> RefExpr {
+partial fn self_cmp_ref(op: CmpOp, n: Int) -> RefExpr {
     RefExpr::Compare {
         op: op,
-        left:  [RefExpr::Ident { name: "self", span: loc() }],
-        right: [RefExpr::Integer { value: n, span: loc() }],
+        left:  Box::new(RefExpr::Ident { name: "self", span: loc() }),
+        right: Box::new(RefExpr::Integer { value: n, span: loc() }),
         span: loc(),
     }
 }
@@ -116,41 +116,41 @@ test fn linterm_free_vars_collects_names() -> Unit {
     assert_eq(vs.len(), 2)
 }
 
-// ── Constraint trivial checks ─────────────────────────────────────────────────
+// ── LinConstraint trivial checks ─────────────────────────────────────────────────
 
 test fn le_positive_constant_is_trivially_false() -> Unit {
     // 3 ≤ 0  is false
-    let c: Constraint = Constraint::Le(linterm_const(3));
+    let c: LinConstraint = LinConstraint::Le(linterm_const(3));
     assert_eq(constraint_is_trivially_false(c), true)
 }
 
 test fn le_zero_constant_is_trivially_true() -> Unit {
-    let c: Constraint = Constraint::Le(linterm_const(0));
+    let c: LinConstraint = LinConstraint::Le(linterm_const(0));
     assert_eq(constraint_is_trivially_true(c), true)
 }
 
 test fn eq_nonzero_constant_is_trivially_false() -> Unit {
-    let c: Constraint = Constraint::Eq(linterm_const(1));
+    let c: LinConstraint = LinConstraint::Eq(linterm_const(1));
     assert_eq(constraint_is_trivially_false(c), true)
 }
 
 test fn eq_zero_constant_is_trivially_true() -> Unit {
-    let c: Constraint = Constraint::Eq(linterm_const(0));
+    let c: LinConstraint = LinConstraint::Eq(linterm_const(0));
     assert_eq(constraint_is_trivially_true(c), true)
 }
 
 test fn ne_zero_constant_is_trivially_false() -> Unit {
-    let c: Constraint = Constraint::Ne(linterm_const(0));
+    let c: LinConstraint = LinConstraint::Ne(linterm_const(0));
     assert_eq(constraint_is_trivially_false(c), true)
 }
 
 test fn ne_nonzero_constant_is_trivially_true() -> Unit {
-    let c: Constraint = Constraint::Ne(linterm_const(5));
+    let c: LinConstraint = LinConstraint::Ne(linterm_const(5));
     assert_eq(constraint_is_trivially_true(c), true)
 }
 
 test fn le_with_variable_is_not_trivial() -> Unit {
-    let c: Constraint = Constraint::Le(linterm_var("x"));
+    let c: LinConstraint = LinConstraint::Le(linterm_var("x"));
     assert_eq(constraint_is_trivially_false(c), false);
     assert_eq(constraint_is_trivially_true(c), false)
 }

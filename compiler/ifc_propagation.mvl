@@ -22,6 +22,27 @@
 //   - HashSet → List[String] with .contains()
 //   - HashMap → Map[String, String]
 
+// ── Local walk helper (cannot use walk.mvl in isolated test harness) ─────────
+
+partial fn walk_expr_prop(expr: Expr) -> List[Expr] {
+    let out: ref List[Expr] = [expr];
+    match expr {
+        Expr::Binary(b) => {
+            match b.left.get(0)  { Some(e) => out.extend(walk_expr_prop(e)), None => {} }
+            match b.right.get(0) { Some(e) => out.extend(walk_expr_prop(e)), None => {} }
+        },
+        Expr::Unary(u) => { match u.expr.get(0) { Some(e) => out.extend(walk_expr_prop(e)), None => {} } },
+        Expr::Field(f) => { match f.expr.get(0) { Some(e) => out.extend(walk_expr_prop(e)), None => {} } },
+        Expr::Call(c) => { for a in c.args { out.extend(walk_expr_prop(a)) } },
+        Expr::Method(m) => {
+            match m.receiver.get(0) { Some(e) => out.extend(walk_expr_prop(e)), None => {} }
+            for a in m.args { out.extend(walk_expr_prop(a)) }
+        },
+        _ => {},
+    }
+    out
+}
+
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 /// Sentinel stored in the inferred table when a function explicitly strips labels.
@@ -148,12 +169,10 @@ partial fn propagate_fn(
     let has_labeled_params: Bool = param_env.len() > 0;
     match infer_return_label(body_block, param_env, table, known_labels) {
         Some(inferred_lbl) => {
-            let current: Option[String] = table.get(name);
-            let new_lbl: String = match current { Some(c) => c, None => inferred_lbl };
-            if current.is_none() {
-                table.insert(name, new_lbl);
-                true
-            } else { false }
+            match table.get(name) {
+                Some(_) => false,
+                None    => { table.insert(name, inferred_lbl); true },
+            }
         },
         None => {
             if has_labeled_params && table.get(name).is_none() {
@@ -464,11 +483,10 @@ pub partial fn detect_violations(
     prog: Program, env: TypeEnv, inferred: InferredLabels
 ) -> List[CheckError] {
     let errs: ref List[CheckError] = [];
-    let known_labels: List[String] = env.known_labels;
     for fd in prog.fns {
         let init_env: ref Map[String, String] = Map::new();
         for p in fd.params {
-            match label_of_type_expr(p.ty, known_labels) {
+            match label_of_type_expr(p.ty, env.known_labels) {
                 Some(l) => { init_env.insert(p.name, l) },
                 None    => {},
             }
@@ -483,7 +501,7 @@ pub partial fn detect_violations(
         for m in id.methods {
             let init_env: ref Map[String, String] = Map::new();
             for p in m.params {
-                match label_of_type_expr(p.ty, known_labels) {
+                match label_of_type_expr(p.ty, env.known_labels) {
                     Some(l) => { init_env.insert(p.name, l) },
                     None    => {},
                 }
@@ -502,8 +520,12 @@ pub partial fn detect_violations(
 partial fn viol_visit_block(
     state: ViolState, errs: ref List[CheckError], block: Block, type_env: TypeEnv, inferred: InferredLabels
 ) -> ViolState {
-    let saved_env: Map[String, String] = state.env;
     let cur: ref ViolState = state;
+    // Copy initial env via iteration to avoid partial-move of state fields.
+    let saved_env: ref Map[String, String] = Map::new();
+    for k in cur.env.keys() {
+        match cur.env.get(k) { Some(v) => { saved_env.insert(k, v) }, None => {} }
+    }
     for s in block.stmts {
         cur = viol_visit_stmt(cur, errs, s, type_env, inferred);
     }
@@ -552,9 +574,10 @@ partial fn viol_visit_stmt(
                                 Some(scr) => { let _: ViolState = viol_visit_expr(state, errs, scr, type_env, inferred); },
                                 None      => {},
                             }
-                            let saved: Map[String, String] = state.env;
+                            // Use state fields directly in loop — looped-vars analysis
+                            // ensures .clone() is emitted, avoiding partial moves.
                             for arm in m.arms {
-                                let arm_state: ViolState = ViolState { caller: state.caller, env: saved };
+                                let arm_state: ViolState = ViolState { caller: state.caller, env: state.env };
                                 match arm.body.get(0) {
                                     Some(Expr::BlockExpr(b, _)) => { let _: ViolState = viol_visit_block(arm_state, errs, b, type_env, inferred); },
                                     Some(ae)                    => { let _: ViolState = viol_visit_expr(arm_state, errs, ae, type_env, inferred); },
@@ -578,7 +601,6 @@ partial fn viol_visit_stmt(
             let iter_lbl: Option[String] = infer_label_extended(
                 iter, state.env, inferred.explicit, inferred.inferred
             );
-            let saved: Map[String, String] = state.env;
             let body_env: ref Map[String, String] = Map::new();
             for k in state.env.keys() {
                 match state.env.get(k) { Some(v) => { body_env.insert(k, v) }, None => {} }
@@ -589,7 +611,7 @@ partial fn viol_visit_stmt(
             }
             let body_state: ViolState = ViolState { caller: state.caller, env: body_env };
             let _: ViolState = viol_visit_block(body_state, errs, fs.body, type_env, inferred);
-            ViolState { caller: state.caller, env: saved }
+            ViolState { caller: state.caller, env: state.env }
         },
         Stmt::Return(cell, _) => {
             match cell.get(0) {
@@ -633,9 +655,8 @@ partial fn viol_visit_expr(
                 Some(scr) => { let _: ViolState = viol_visit_expr(state, errs, scr, type_env, inferred); },
                 None      => {},
             }
-            let saved: Map[String, String] = state.env;
             for arm in m.arms {
-                let arm_state: ViolState = ViolState { caller: state.caller, env: saved };
+                let arm_state: ViolState = ViolState { caller: state.caller, env: state.env };
                 match arm.body.get(0) {
                     Some(Expr::BlockExpr(b, _)) => { let _: ViolState = viol_visit_block(arm_state, errs, b, type_env, inferred); },
                     Some(e)                     => { let _: ViolState = viol_visit_expr(arm_state, errs, e, type_env, inferred); },
@@ -652,9 +673,7 @@ partial fn viol_visit_expr(
             let _: ViolState = viol_visit_block(state, errs, ie.then, type_env, inferred);
             match ie.else_br.get(0) {
                 Some(e) => {
-                    // else-if: treat as nested if with saved env
-                    let saved: Map[String, String] = state.env;
-                    let else_state: ViolState = ViolState { caller: state.caller, env: saved };
+                    let else_state: ViolState = ViolState { caller: state.caller, env: state.env };
                     let _: ViolState = viol_visit_expr(else_state, errs, e, type_env, inferred);
                 },
                 None => {},
@@ -667,7 +686,7 @@ partial fn viol_visit_expr(
         },
         // For other expressions: recurse into children via walk_expr.
         _ => {
-            let children: List[Expr] = walk_expr(expr);
+            let children: List[Expr] = walk_expr_prop(expr);
             let i: ref Int = 1;
             while i < children.len() {
                 match children.get(i) {

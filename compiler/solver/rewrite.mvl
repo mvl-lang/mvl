@@ -33,7 +33,7 @@ pub partial fn rewrite_expr(expr: Expr) -> Expr {
         Expr::Method(m) => {
             let recv: Expr = match m.receiver.get(0) {
                 Some(r) => rewrite_expr(r),
-                None    => { return expr },
+                None    => { return Expr::Method(m) },
             };
             let sp: SourceLoc = m.span;
             match recv {
@@ -97,25 +97,23 @@ pub partial fn rewrite_expr(expr: Expr) -> Expr {
 
         // ── Recursive descent into compound expressions ───────────────────────
         Expr::Binary(b) => {
-            let sp: SourceLoc = b.span;
             let new_left: Expr = match b.left.get(0) {
                 Some(e) => rewrite_expr(e),
-                None    => { return expr },
+                None    => { return Expr::Binary(b) },
             };
             let new_right: Expr = match b.right.get(0) {
                 Some(e) => rewrite_expr(e),
-                None    => { return expr },
+                None    => { return Expr::Binary(AstBinaryExpr { op: b.op, left: [new_left], right: [], span: b.span }) },
             };
-            Expr::Binary(AstBinaryExpr { op: b.op, left: [new_left], right: [new_right], span: sp })
+            Expr::Binary(AstBinaryExpr { op: b.op, left: [new_left], right: [new_right], span: b.span })
         },
 
         Expr::Unary(u) => {
-            let sp: SourceLoc = u.span;
             let new_inner: Expr = match u.expr.get(0) {
                 Some(e) => rewrite_expr(e),
-                None    => { return expr },
+                None    => { return Expr::Unary(u) },
             };
-            Expr::Unary(AstUnaryExpr { op: u.op, expr: [new_inner], span: sp })
+            Expr::Unary(AstUnaryExpr { op: u.op, expr: [new_inner], span: u.span })
         },
 
         Expr::Call(c) => {
@@ -136,4 +134,16 @@ partial fn reconstruct_method(recv: Expr, method: String, args: List[Expr], sp: 
         new_args.push(rewrite_expr(a))
     }
     Expr::Method(AstMethodExpr { receiver: [recv], method: method, args: new_args, span: sp })
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+test partial fn rewrite_expr_ident_passthrough() -> Unit {
+    let sp: SourceLoc = SourceLoc { line: 0, col: 0 };
+    let e: Expr = Expr::Ident("x", sp);
+    let r: Expr = rewrite_expr(e);
+    match r {
+        Expr::Ident(n, _) => assert_eq(n, "x"),
+        _ => assert_eq(true, false),
+    }
 }

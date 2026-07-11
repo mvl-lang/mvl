@@ -81,7 +81,7 @@ pub partial fn try_trivial(
 
         Expr::Method(m) => {
             if m.method == "concat" {
-                let min_len: Int = min_str_len_lower(arg);
+                let min_len: Int = min_str_len_lower(Expr::Method(m));
                 if min_len > 0 { Some(eval_pred_str_len(min_len, pred)) } else { None }
             } else {
                 None
@@ -434,7 +434,7 @@ partial fn eval_num_float(self_val: Float, expr: RefExpr) -> Option[Float] {
         RefExpr::Ident { name: n, .. } => {
             if n == "self" { Some(self_val) } else { None }
         },
-        RefExpr::Integer { value: v, .. } => Some(v as Float),
+        RefExpr::Integer { value: v, .. } => Some(v.to_float()),
         RefExpr::Float { value: v, .. }   => Some(v),
         RefExpr::Arith { op: op, left: l, right: r, .. } => {
             match eval_num_float(self_val, *l) {
@@ -649,10 +649,10 @@ pub partial fn preds_equivalent(a: RefExpr, b: RefExpr) -> Bool {
             }
         },
         RefExpr::Grouped { inner: ia, .. } => preds_equivalent(*ia, b),
-        RefExpr::Len { ident: ia, .. } => {
+        RefExpr::Len { ident: ia, span: sa } => {
             match b {
                 RefExpr::Len { ident: ib, .. }  => ia == "self" && ib == "self",
-                RefExpr::Grouped { inner: ib, .. } => preds_equivalent(a, *ib),
+                RefExpr::Grouped { inner: ib, .. } => preds_equivalent(RefExpr::Len { ident: ia, span: sa }, *ib),
                 _ => false,
             }
         },

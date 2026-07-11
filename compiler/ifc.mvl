@@ -23,6 +23,66 @@
 //   - IfcFlowAnalyzer visitor → explicit IfcState struct threaded as values
 //   - in_branch/in_pc closures → passing state copy (changes discarded on return)
 
+// ── Local walk helpers (cannot use walk.mvl in isolated test harness) ────────
+// Minimal ports of walk_block/walk_expr for use within this file's test context.
+
+partial fn walk_expr_ifc(expr: Expr) -> List[Expr] {
+    let out: ref List[Expr] = [expr];
+    match expr {
+        Expr::Binary(b) => {
+            match b.left.get(0)  { Some(e) => out.extend(walk_expr_ifc(e)), None => {} }
+            match b.right.get(0) { Some(e) => out.extend(walk_expr_ifc(e)), None => {} }
+        },
+        Expr::Unary(u) => { match u.expr.get(0) { Some(e) => out.extend(walk_expr_ifc(e)), None => {} } },
+        Expr::Field(f) => { match f.expr.get(0) { Some(e) => out.extend(walk_expr_ifc(e)), None => {} } },
+        Expr::Call(c) => { for a in c.args { out.extend(walk_expr_ifc(a)) } },
+        Expr::Method(m) => {
+            match m.receiver.get(0) { Some(e) => out.extend(walk_expr_ifc(e)), None => {} }
+            for a in m.args { out.extend(walk_expr_ifc(a)) }
+        },
+        Expr::If(ie) => {
+            match ie.cond.get(0) { Some(e) => out.extend(walk_expr_ifc(e)), None => {} }
+            out.extend(walk_block_ifc(ie.then));
+            match ie.else_br.get(0) { Some(e) => out.extend(walk_expr_ifc(e)), None => {} }
+        },
+        Expr::MatchExpr(m) => {
+            match m.scrutinee.get(0) { Some(e) => out.extend(walk_expr_ifc(e)), None => {} }
+            for arm in m.arms {
+                match arm.body.get(0) { Some(e) => out.extend(walk_expr_ifc(e)), None => {} }
+            }
+        },
+        Expr::ListLit(elems, _) => { for e in elems { out.extend(walk_expr_ifc(e)) } },
+        Expr::BlockExpr(blk, _) => { out.extend(walk_block_ifc(blk)) },
+        _ => {},
+    }
+    out
+}
+
+partial fn walk_block_ifc(block: Block) -> List[Expr] {
+    let out: ref List[Expr] = [];
+    for s in block.stmts {
+        match s {
+            Stmt::Let(ls)      => { match ls.value.get(0)  { Some(e) => out.extend(walk_expr_ifc(e)), None => {} } },
+            Stmt::Assign(a)    => { match a.value.get(0)   { Some(e) => out.extend(walk_expr_ifc(e)), None => {} } },
+            Stmt::Return(c, _) => { match c.get(0)         { Some(e) => out.extend(walk_expr_ifc(e)), None => {} } },
+            Stmt::ExprStmt(c, _) => { match c.get(0) { Some(e) => out.extend(walk_expr_ifc(e)), None => {} } },
+            Stmt::While(ws) => {
+                match ws.cond.get(0) { Some(e) => out.extend(walk_expr_ifc(e)), None => {} }
+                out.extend(walk_block_ifc(ws.body));
+            },
+            Stmt::For(fs) => {
+                match fs.iter.get(0) { Some(e) => out.extend(walk_expr_ifc(e)), None => {} }
+                out.extend(walk_block_ifc(fs.body));
+            },
+        }
+    }
+    match block.tail_expr.get(0) {
+        Some(e) => out.extend(walk_expr_ifc(e)),
+        None    => {},
+    }
+    out
+}
+
 // ── IfcState: visitor state threaded through flow analysis ────────────────────
 
 /// Immutable-copy visitor state for the implicit flow analyzer.
@@ -287,7 +347,7 @@ pub partial fn build_effect_reachability(
 
 /// Collect all called function names from a block into `acc`.
 partial fn collect_calls_from_block_ifc(block: Block, acc: ref List[String]) -> Unit {
-    let exprs: List[Expr] = walk_block(block);
+    let exprs: List[Expr] = walk_block_ifc(block);
     for e in exprs {
         match e {
             Expr::Call(c) => {
@@ -542,7 +602,7 @@ partial fn visit_expr_ifc(
         },
         // Default: recurse into all child expressions at current pc/env.
         _ => {
-            let children: List[Expr] = walk_expr(expr);
+            let children: List[Expr] = walk_expr_ifc(expr);
             // Skip children[0] (expr itself), recurse into rest.
             let i: ref Int = 1;
             while i < children.len() {
@@ -582,7 +642,7 @@ pub partial fn count_relabels(prog: Program) -> Int {
     for fd in prog.fns {
         match fd.body {
             Some(body) => {
-                let exprs: List[Expr] = walk_block(body);
+                let exprs: List[Expr] = walk_block_ifc(body);
                 for e in exprs { match e { Expr::Relabel(_) => { count = count + 1 }, _ => {} } }
             },
             None => {},
@@ -630,7 +690,7 @@ pub partial fn count_flow_check_sites(prog: Program, known_labels: List[String])
 }
 
 partial fn count_flow_sites_block(block: Block, labeled: List[String]) -> Int {
-    let exprs: List[Expr] = walk_block(block);
+    let exprs: List[Expr] = walk_block_ifc(block);
     let count: ref Int = 0;
     for e in exprs {
         match e {
