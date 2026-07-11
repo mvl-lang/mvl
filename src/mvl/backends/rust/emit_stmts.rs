@@ -70,7 +70,14 @@ impl RustEmitter {
                 self.emit_pattern(pattern);
                 // Fn types: omit the annotation so Rust infers the concrete
                 // closure type — `fn(T)->U` rejects capturing closures (#1313).
-                if !matches!(ty_for_emit, Ty::Fn(..)) {
+                // Wildcard + Ref: `let _: ref T = cap_param` would emit as
+                // `let _: T = &mut T_val` (E0308) because ref-typed locals strip
+                // the `&mut` in emit_ty. Suppress annotation; the value is
+                // discarded anyway.
+                let skip_annotation = matches!(ty_for_emit, Ty::Fn(..))
+                    || (matches!(pattern, Pattern::Wildcard(_))
+                        && matches!(ty, Ty::Ref(..)));
+                if !skip_annotation {
                     self.push(": ");
                     self.push(&emit_ty(ty_for_emit));
                 }

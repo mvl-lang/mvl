@@ -1,0 +1,41 @@
+// End-to-end test program: verifiable output from .mvl to binary.
+//
+// Exercises: ADTs (Req 1), total fns (Req 8), refinement newtype (Req 10),
+// Option (Req 4), Result (Req 5), Console effect (Req 7).
+//
+// Expected stdout:
+//   double(21) = 42
+//   safe_add(10, 32) = 42
+//   MathError: DivisionByZero
+
+type MathError = enum {
+    DivisionByZero,
+    Overflow,
+}
+
+total fn double(x: Int) -> Int {
+    x * 2
+}
+
+total fn safe_add(a: Int, b: Int) -> Int {
+    a + b
+}
+
+fn describe_error(e: MathError) -> String {
+    match e {
+        MathError::DivisionByZero => "DivisionByZero",
+        MathError::Overflow => "Overflow",
+    }
+}
+
+fn main() -> Unit ! Console {
+    let a: Int = double(21);
+    println(format("double(21) = {}", [a.to_string()]));
+
+    let b: Int = safe_add(10, 32);
+    println(format("safe_add(10, 32) = {}", [b.to_string()]));
+
+    let err: MathError = MathError::DivisionByZero;
+    let msg: String = describe_error(err);
+    println(format("MathError: {}", [msg]));
+}

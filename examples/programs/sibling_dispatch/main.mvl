@@ -1,0 +1,13 @@
+/// Entry point — imports all sibling files so they are compiled together.
+/// point_display.mvl can call point_arith.mvl's methods without importing them
+/// because all files in the same directory share extension methods (#1706).
+use point::Point;
+use point_arith::sum;
+use point_arith::product;
+use point_display::describe;
+
+fn main() -> Unit ! Console {
+    let p: Point = Point { x: 3, y: 4 };
+    println(p.describe());
+    println(format("product={}", [p.product().to_string()]))
+}
