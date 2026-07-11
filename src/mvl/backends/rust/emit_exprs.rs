@@ -172,31 +172,6 @@ impl RustEmitter {
         }
     }
 
-    /// Emit an expression as a binary operand with deref for `ref T` capability params.
-    /// `ref T` parameters are `&mut T` in Rust and must be dereferenced before
-    /// comparing with plain values.  `is_right` controls left-vs-right associativity
-    /// precedence wrapping for non-cap-param expressions.
-    pub(super) fn emit_operand_deref_cap(
-        &mut self,
-        sub: &TirExpr,
-        parent_prec: Prec,
-        is_right: bool,
-    ) {
-        if let TirExprKind::Var(name) = &sub.kind {
-            if self.capability_param_names.contains(name.as_str()) {
-                self.push("(*");
-                self.push(name);
-                self.push(")");
-                return;
-            }
-        }
-        if is_right {
-            self.emit_operand_right(sub, parent_prec);
-        } else {
-            self.emit_operand_left(sub, parent_prec);
-        }
-    }
-
     /// Emit an expression into the code buffer (no trailing newline).
     pub fn emit_expr(&mut self, expr: &TirExpr) {
         let span = expr.span;
