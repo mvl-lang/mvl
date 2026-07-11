@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.245.4] - 2026-07-11
+
+### Fixed — test-full: restore deleted examples and targeted wildcard-let annotation
+
+- Restore example programs deleted/moved in cleanup commit 092c9e06 without updating tests: `hello_world.mvl`, `hello_mvl.mvl`, `random_dice/`, `bridge_ok/`, `sibling_dispatch/` — fixed 11 backend + 4 assurance failures (#1767).
+- Suppress type annotation on wildcard `let _` bindings only when the declared type is `ref T` (original `ty` is `Ty::Ref(..)`); blanket suppression in 72426026 broke `corpus_bitwise_transpiles`, targeted fix handles both the E0308 reborrow case and the Byte type assertion (#1767).
+
 ## [0.245.3] - 2026-07-11
 
 ### Fixed — Wildcard let bindings type annotations
