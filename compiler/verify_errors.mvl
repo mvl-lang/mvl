@@ -1,19 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Schuberg Philis
 //
-// compiler/verify_errors.mvl — C2: CheckError enum (data model)
+// compiler/verify_errors.mvl — C2: CheckError enum + methods
 //
-// Port of src/mvl/checker/errors.rs (type definition only).
+// Port of src/mvl/checker/errors.rs.
 //
 // CheckError carries one variant per type-checker / verification failure,
 // each with a SourceLoc and enough context for human-readable messages.
 //
-// Methods (span, requirement_number, message) are DEFERRED.  The Rust backend
-// currently generates `&SourceLoc` in struct field patterns when the receiver is
-// `&self`, but the return type expects `SourceLoc` (owned, Copy type).  Until this
-// is fixed, calling these methods will not compile via `mvl test`.  The method
-// implementations are preserved in git history; re-enable them when the backend
-// correctly dereferences struct field bindings in `&self` match arms.
+// Methods use value receivers (self, not &self) to avoid the backend bug where
+// `&self` struct field patterns produce `&SourceLoc` but the return type expects
+// `SourceLoc` (owned, Copy type).  Value receivers are semantically equivalent
+// here since CheckError is not mutated.
 //
 // MVL keyword avoidance (cannot use as field names):
 //   effect  → eff         (effect is a keyword)
@@ -21,9 +19,7 @@
 //   label   → lbl         (label is a keyword)
 //   fn_name → fn_name     (fn is a keyword but fn_name is fine)
 //
-// MVL pattern constraints (no OR patterns, no `..` wildcards):
-//   - Each match arm uses one pattern with all fields listed
-//   - `_` for unused fields
+// Struct pattern wildcards (`..`) are supported since #1356.
 //
 // Key types: Vec<String> → List[String], Option<String> → Option[String],
 //            usize → Int.
@@ -56,6 +52,7 @@ pub type CheckError = enum {
     ResultIgnored         { span: SourceLoc },
     PropagateNotResult    { ty: String, span: SourceLoc },
     PropagateIncompatibleError { from_ty: String, into_ty: String, span: SourceLoc },
+    PropagateInNonResultFn { ret_ty: String, span: SourceLoc },
     // ── Req 6: Ownership / immutability ──────────────────────────────────
     AssignToImmutable     { name: String, span: SourceLoc },
     MutateImmutableField  { ty: String, field: String, span: SourceLoc },
@@ -89,6 +86,7 @@ pub type CheckError = enum {
     DuplicateActorField   { actor_name: String, field: String, span: SourceLoc },
     DuplicateActorMethod  { actor_name: String, method: String, span: SourceLoc },
     NonUnitBehaviorReturn { actor_name: String, method: String, ret_ty: String, span: SourceLoc },
+    ActorNameConflict     { name: String, span: SourceLoc },
     MissingConstraint     { type_param: String, required_bound: String, span: SourceLoc },
     // ── Req 10: Contracts ─────────────────────────────────────────────────
     PreconditionViolated  { fn_name: String, pred: String, span: SourceLoc, counterexample: Option[String] },
@@ -134,6 +132,353 @@ pub type CheckError = enum {
     InvalidLinkLibName            { name: String, span: SourceLoc },
     LabeledTypeCrossesFfiBoundary { fn_name: String, lbl: String, span: SourceLoc },
     // ── Req 1: Iterator / trait ───────────────────────────────────────────
-    NotIterator     { ty: String, span: SourceLoc },
+    NotIterator        { ty: String, span: SourceLoc },
+    FnFieldEqualityDenied { ty: String, offending_path: String, span: SourceLoc },
     MissingTraitMethod { trait_name: String, type_name: String, method: String, span: SourceLoc },
+}
+
+// ── Methods ───────────────────────────────────────────────────────────────────
+
+/// Maps this error to its requirement number (1–11).
+pub total fn CheckError::requirement_number(self) -> Int {
+    match self {
+        // Req 1: Type Safety
+        CheckError::TypeMismatch { .. }                   => 1,
+        CheckError::UndefinedVariable { .. }              => 1,
+        CheckError::UndefinedType { .. }                  => 1,
+        CheckError::NonNumericArithmetic { .. }           => 1,
+        CheckError::ArithmeticTypeMismatch { .. }         => 1,
+        CheckError::LogicTypeMismatch { .. }              => 1,
+        CheckError::UndefinedFunction { .. }              => 1,
+        CheckError::UnknownMethod { .. }                  => 1,
+        CheckError::WrongArgCount { .. }                  => 1,
+        CheckError::MissingField { .. }                   => 1,
+        CheckError::UnknownField { .. }                   => 1,
+        CheckError::FieldNotFound { .. }                  => 1,
+        CheckError::FieldAccessOnEnum { .. }              => 1,
+        CheckError::UnknownVariant { .. }                 => 1,
+        CheckError::NotAStruct { .. }                     => 1,
+        CheckError::UnsupportedExternAbi { .. }           => 1,
+        CheckError::InvalidLinkLibName { .. }             => 1,
+        CheckError::NotIterator { .. }                    => 1,
+        CheckError::FnFieldEqualityDenied { .. }          => 1,
+        CheckError::MissingTraitMethod { .. }             => 1,
+        CheckError::SessionProtocolMismatch { .. }        => 1,
+        CheckError::SessionDualityMismatch { .. }         => 1,
+        CheckError::SessionUnknownBranch { .. }           => 1,
+        CheckError::SessionAfterEnd { .. }                => 1,
+        CheckError::SessionDeadlock { .. }                => 1,
+        CheckError::SessionDuplicateLabel { .. }          => 1,
+        // Req 2: Memory Safety
+        CheckError::UseAfterMove { .. }                   => 2,
+        CheckError::ReferenceEscapesScope { .. }          => 2,
+        CheckError::ReferenceOutlivesOwner { .. }         => 2,
+        CheckError::AliasingMutableBorrow { .. }          => 2,
+        CheckError::DoubleMutableBorrow { .. }            => 2,
+        // Req 3: Totality
+        CheckError::NonExhaustiveMatch { .. }             => 3,
+        // Req 4: Null Elimination
+        CheckError::OptionDirectAccess { .. }             => 4,
+        // Req 5: Error Visibility
+        CheckError::ResultIgnored { .. }                  => 5,
+        CheckError::PropagateNotResult { .. }             => 5,
+        CheckError::PropagateIncompatibleError { .. }     => 5,
+        CheckError::PropagateInNonResultFn { .. }         => 5,
+        // Req 6: Ownership / immutability
+        CheckError::AssignToImmutable { .. }              => 6,
+        CheckError::MutateImmutableField { .. }           => 6,
+        CheckError::CaptureMutabilityViolation { .. }     => 6,
+        CheckError::LinearShadowDrop { .. }               => 6,
+        // Req 7: Effect Tracking
+        CheckError::InvalidEffectName { .. }              => 7,
+        CheckError::UnknownEffectParent { .. }            => 7,
+        CheckError::EffectCycle { .. }                    => 7,
+        CheckError::UndeclaredEffect { .. }               => 7,
+        CheckError::MissingEffect { .. }                  => 7,
+        // Req 8: Termination
+        CheckError::UnboundedLoopInTotal { .. }           => 8,
+        CheckError::PartialCallInTotal { .. }             => 8,
+        CheckError::UnprovenRecursion { .. }              => 8,
+        CheckError::MutualRecursionInTotal { .. }         => 8,
+        CheckError::DecreasesNotBounded { .. }            => 8,
+        CheckError::DecreasesNotDecreasing { .. }         => 8,
+        // Req 9: Data Race Freedom
+        CheckError::CapabilityViolation { .. }            => 9,
+        CheckError::IsoAliasingViolation { .. }           => 9,
+        CheckError::RefEscapesToConcurrentContext { .. }  => 9,
+        CheckError::DuplicateActorField { .. }            => 9,
+        CheckError::DuplicateActorMethod { .. }           => 9,
+        CheckError::NonUnitBehaviorReturn { .. }          => 9,
+        CheckError::ActorNameConflict { .. }              => 9,
+        CheckError::MissingConstraint { .. }              => 9,
+        // Req 10: Refinement Types & Contracts
+        CheckError::RefinementViolated { .. }             => 10,
+        CheckError::PreconditionViolated { .. }           => 10,
+        CheckError::PostconditionViolated { .. }          => 10,
+        CheckError::InvariantViolated { .. }              => 10,
+        CheckError::InvariantNotPreserved { .. }          => 10,
+        CheckError::QuantifierOutsideGhost { .. }         => 10,
+        // Req 11: Information Flow Control
+        CheckError::InvalidRelabel { .. }                     => 11,
+        CheckError::UnknownRelabel { .. }                     => 11,
+        CheckError::InvalidDeclassify { .. }                  => 11,
+        CheckError::InvalidSanitize { .. }                    => 11,
+        CheckError::ImplicitFlowViolation { .. }              => 11,
+        CheckError::CrossFunctionImplicitFlowViolation { .. } => 11,
+        CheckError::InterprocFlowViolation { .. }             => 11,
+        CheckError::LabeledTypeCrossesFfiBoundary { .. }      => 11,
+    }
+}
+
+/// Extracts the source location from this error.
+pub total fn CheckError::span(self) -> SourceLoc {
+    match self {
+        CheckError::TypeMismatch { span: s, .. }                   => s,
+        CheckError::UndefinedVariable { span: s, .. }              => s,
+        CheckError::UndefinedType { span: s, .. }                  => s,
+        CheckError::NonNumericArithmetic { span: s, .. }           => s,
+        CheckError::ArithmeticTypeMismatch { span: s, .. }         => s,
+        CheckError::LogicTypeMismatch { span: s, .. }              => s,
+        CheckError::UndefinedFunction { span: s, .. }              => s,
+        CheckError::UnknownMethod { span: s, .. }                  => s,
+        CheckError::WrongArgCount { span: s, .. }                  => s,
+        CheckError::MissingField { span: s, .. }                   => s,
+        CheckError::UnknownField { span: s, .. }                   => s,
+        CheckError::FieldNotFound { span: s, .. }                  => s,
+        CheckError::FieldAccessOnEnum { span: s, .. }              => s,
+        CheckError::UnknownVariant { span: s, .. }                 => s,
+        CheckError::NotAStruct { span: s, .. }                     => s,
+        CheckError::NonExhaustiveMatch { span: s, .. }             => s,
+        CheckError::OptionDirectAccess { span: s }                 => s,
+        CheckError::ResultIgnored { span: s }                      => s,
+        CheckError::PropagateNotResult { span: s, .. }             => s,
+        CheckError::PropagateIncompatibleError { span: s, .. }     => s,
+        CheckError::PropagateInNonResultFn { span: s, .. }         => s,
+        CheckError::AssignToImmutable { span: s, .. }              => s,
+        CheckError::MutateImmutableField { span: s, .. }           => s,
+        CheckError::CaptureMutabilityViolation { span: s, .. }     => s,
+        CheckError::LinearShadowDrop { span: s, .. }               => s,
+        CheckError::UseAfterMove { span: s, .. }                   => s,
+        CheckError::ReferenceEscapesScope { span: s, .. }          => s,
+        CheckError::ReferenceOutlivesOwner { span: s, .. }         => s,
+        CheckError::AliasingMutableBorrow { span: s, .. }          => s,
+        CheckError::DoubleMutableBorrow { span: s, .. }            => s,
+        CheckError::RefinementViolated { span: s, .. }             => s,
+        CheckError::InvalidEffectName { span: s, .. }              => s,
+        CheckError::UnknownEffectParent { span: s, .. }            => s,
+        CheckError::EffectCycle { span: s, .. }                    => s,
+        CheckError::UndeclaredEffect { span: s, .. }               => s,
+        CheckError::MissingEffect { span: s, .. }                  => s,
+        CheckError::UnboundedLoopInTotal { span: s }               => s,
+        CheckError::PartialCallInTotal { span: s, .. }             => s,
+        CheckError::UnprovenRecursion { span: s, .. }              => s,
+        CheckError::MutualRecursionInTotal { span: s, .. }         => s,
+        CheckError::DecreasesNotBounded { span: s, .. }            => s,
+        CheckError::DecreasesNotDecreasing { span: s, .. }         => s,
+        CheckError::CapabilityViolation { span: s, .. }            => s,
+        CheckError::IsoAliasingViolation { span: s, .. }           => s,
+        CheckError::RefEscapesToConcurrentContext { span: s, .. }  => s,
+        CheckError::DuplicateActorField { span: s, .. }            => s,
+        CheckError::DuplicateActorMethod { span: s, .. }           => s,
+        CheckError::NonUnitBehaviorReturn { span: s, .. }          => s,
+        CheckError::ActorNameConflict { span: s, .. }              => s,
+        CheckError::MissingConstraint { span: s, .. }              => s,
+        CheckError::PreconditionViolated { span: s, .. }           => s,
+        CheckError::PostconditionViolated { span: s, .. }          => s,
+        CheckError::InvariantViolated { span: s, .. }              => s,
+        CheckError::InvariantNotPreserved { span: s, .. }          => s,
+        CheckError::QuantifierOutsideGhost { span: s }             => s,
+        CheckError::SessionProtocolMismatch { span: s, .. }        => s,
+        CheckError::SessionDualityMismatch { span: s, .. }         => s,
+        CheckError::SessionUnknownBranch { span: s, .. }           => s,
+        CheckError::SessionAfterEnd { span: s }                    => s,
+        CheckError::SessionDeadlock { span: s }                    => s,
+        CheckError::SessionDuplicateLabel { span: s, .. }          => s,
+        CheckError::InvalidRelabel { span: s, .. }                     => s,
+        CheckError::UnknownRelabel { span: s, .. }                     => s,
+        CheckError::InvalidDeclassify { span: s, .. }                  => s,
+        CheckError::InvalidSanitize { span: s, .. }                    => s,
+        CheckError::ImplicitFlowViolation { span: s, .. }              => s,
+        CheckError::CrossFunctionImplicitFlowViolation { span: s, .. } => s,
+        CheckError::InterprocFlowViolation { span: s, .. }             => s,
+        CheckError::UnsupportedExternAbi { span: s, .. }               => s,
+        CheckError::InvalidLinkLibName { span: s, .. }                 => s,
+        CheckError::LabeledTypeCrossesFfiBoundary { span: s, .. }      => s,
+        CheckError::NotIterator { span: s, .. }                        => s,
+        CheckError::FnFieldEqualityDenied { span: s, .. }              => s,
+        CheckError::MissingTraitMethod { span: s, .. }                 => s,
+    }
+}
+
+/// Human-readable error message for display.
+///
+/// Uses list-join pattern throughout: `[part1, var, part2].join("")`
+/// avoids the checker bug where `"literal".concat(pattern_bound_var)`
+/// produces `<unknown>` in match arms (tracked as upstream issue).
+pub total fn CheckError::message(self) -> String {
+    match self {
+        CheckError::TypeMismatch { expected: e, found: f, .. } =>
+            ["type mismatch: expected `", e, "`, found `", f, "`"].join(""),
+        CheckError::UndefinedVariable { name: n, .. } =>
+            ["undefined variable `", n, "`"].join(""),
+        CheckError::UndefinedType { name: n, .. } =>
+            ["undefined type `", n, "`"].join(""),
+        CheckError::NonNumericArithmetic { ty: t, .. } =>
+            ["arithmetic operation requires numeric type, found `", t, "`"].join(""),
+        CheckError::ArithmeticTypeMismatch { op: o, left: l, right: r, .. } =>
+            ["type mismatch in `", o, "`: `", l, "` vs `", r, "`"].join(""),
+        CheckError::LogicTypeMismatch { op: o, ty: t, .. } =>
+            ["logical operator `", o, "` requires `Bool`, found `", t, "`"].join(""),
+        CheckError::UndefinedFunction { name: n, .. } =>
+            ["undefined function `", n, "`"].join(""),
+        CheckError::UnknownMethod { receiver_ty: rt, method: m, .. } =>
+            ["no method `", m, "` on type `", rt, "`"].join(""),
+        CheckError::WrongArgCount { name: n, expected: e, found: f, .. } =>
+            ["function `", n, "` expects ", e.to_string(), " argument(s), got ", f.to_string()].join(""),
+        CheckError::MissingField { ty: t, field: fi, .. } =>
+            ["missing field `", fi, "` in construction of `", t, "`"].join(""),
+        CheckError::UnknownField { ty: t, field: fi, .. } =>
+            ["unknown field `", fi, "` in construction of `", t, "`"].join(""),
+        CheckError::FieldNotFound { ty: t, field: fi, .. } =>
+            ["no field `", fi, "` on type `", t, "`"].join(""),
+        CheckError::FieldAccessOnEnum { ty: t, .. } =>
+            ["cannot access field directly on enum `", t, "` — use `match`"].join(""),
+        CheckError::UnknownVariant { ty: t, variant: v, .. } =>
+            ["no variant `", v, "` on enum `", t, "`"].join(""),
+        CheckError::NotAStruct { ty: t, .. } =>
+            ["`", t, "` is not a struct type"].join(""),
+        CheckError::NonExhaustiveMatch { missing: ms, .. } =>
+            ["non-exhaustive `match`: missing ", ms.join(", ")].join(""),
+        CheckError::OptionDirectAccess { .. } =>
+            "cannot access `Option<T>` value directly — use `match` or `?`",
+        CheckError::ResultIgnored { .. } =>
+            "`Result` value must be used — handle with `match` or propagate with `?`",
+        CheckError::PropagateNotResult { ty: t, .. } =>
+            ["`?` applied to `", t, "`, which is neither `Result` nor `Option`"].join(""),
+        CheckError::PropagateIncompatibleError { from_ty: ft, into_ty: it, .. } =>
+            ["`?` cannot convert error `", ft, "` into `", it, "` — implement `From<", ft, "> for ", it, "`"].join(""),
+        CheckError::PropagateInNonResultFn { ret_ty: rt, .. } =>
+            ["`?` cannot be used in a function returning `", rt, "` — the enclosing function must return `Result` or `Option`"].join(""),
+        CheckError::CaptureMutabilityViolation { name: n, .. } =>
+            ["lambda captures mutable binding `", n, "` — lambdas must have immutable captures only (ADR-0002)"].join(""),
+        CheckError::AssignToImmutable { name: n, .. } =>
+            ["cannot assign to immutable binding `", n, "`"].join(""),
+        CheckError::MutateImmutableField { ty: t, field: fi, .. } =>
+            ["cannot assign to immutable field `", fi, "` on `", t, "`"].join(""),
+        CheckError::UseAfterMove { name: n, .. } =>
+            ["use of moved value `", n, "`"].join(""),
+        CheckError::ReferenceEscapesScope { name: n, .. } =>
+            ["reference to `", n, "` escapes its scope — the referenced value would be deallocated before the reference is used"].join(""),
+        CheckError::ReferenceOutlivesOwner { ref_name: rn, owner_name: on, .. } =>
+            ["binding `", rn, "` of reference type outlives `", on, "` — the reference would be dangling when `", on, "` is dropped"].join(""),
+        CheckError::AliasingMutableBorrow { name: n, .. } =>
+            ["cannot create `ref` to `", n, "`: it is already borrowed — release existing references before creating a mutable reference"].join(""),
+        CheckError::DoubleMutableBorrow { name: n, .. } =>
+            ["cannot create `ref` to `", n, "` more than once at a time — only one mutable reference is allowed"].join(""),
+        CheckError::RefinementViolated { pred: p, counterexample: cx, .. } =>
+            match cx {
+                Some(c) => ["refinement predicate violated: ", p, " (counterexample: ", c, ")"].join(""),
+                None    => ["refinement predicate violated: ", p].join(""),
+            },
+        CheckError::InvalidEffectName { name: n, .. } =>
+            ["unknown effect `", n, "` — valid effects are declared in std/effects.mvl"].join(""),
+        CheckError::UnknownEffectParent { eff: e, parent: p, .. } =>
+            ["effect `", e, "` subsumes unknown effect `", p, "` — declare `", p, "` before using it as a parent"].join(""),
+        CheckError::EffectCycle { chain: ch, .. } =>
+            ["effect subsumption cycle detected: ", ch.join(" > ")].join(""),
+        CheckError::UndeclaredEffect { callee: c, eff: e, .. } =>
+            ["function has no effect declaration but calls `", c, "` which requires `! ", e, "`"].join(""),
+        CheckError::MissingEffect { caller: cr, callee: ce, eff: e, .. } =>
+            ["function `", cr, "` calls `", ce, "` which requires `! ", e, "` but `", cr, "` does not declare it"].join(""),
+        CheckError::UnboundedLoopInTotal { .. } =>
+            "unbounded loop in total function — declare function as `partial` to allow non-termination",
+        CheckError::PartialCallInTotal { callee: c, .. } =>
+            ["total function calls `partial` function `", c, "` — total functions cannot call partial ones"].join(""),
+        CheckError::UnprovenRecursion { fn_name: n, .. } =>
+            ["recursive call in total function `", n, "` cannot be proven terminating — argument does not structurally decrease"].join(""),
+        CheckError::MutualRecursionInTotal { fn_name: n, cycle_with: cw, .. } =>
+            ["total function `", n, "` participates in mutual recursion with `", cw, "` — mark as `partial` or add `decreases` measure"].join(""),
+        CheckError::CapabilityViolation { param: p, capability: cap, .. } =>
+            ["`", cap, "` capability of `", p, "` cannot be sent across actor boundary; use `iso` or `val`"].join(""),
+        CheckError::IsoAliasingViolation { name: n, .. } =>
+            ["`iso` value `", n, "` aliased without `consume()` — use `consume(", n, ")` to transfer ownership and preserve isolation"].join(""),
+        CheckError::RefEscapesToConcurrentContext { name: n, actor_name: an, .. } =>
+            ["`ref` value `", n, "` escapes to concurrent actor `", an, "` — use `iso` or `val` for actor field initialization"].join(""),
+        CheckError::DuplicateActorField { actor_name: an, field: fi, .. } =>
+            ["actor `", an, "` declares duplicate field `", fi, "`"].join(""),
+        CheckError::DuplicateActorMethod { actor_name: an, method: m, .. } =>
+            ["actor `", an, "` declares duplicate method `", m, "`"].join(""),
+        CheckError::NonUnitBehaviorReturn { actor_name: an, method: m, ret_ty: rt, .. } =>
+            ["actor `", an, "` behavior `", m, "` must return `Unit` (fire-and-forget), found `", rt, "`"].join(""),
+        CheckError::ActorNameConflict { name: n, .. } =>
+            ["actor `", n, "` shadows a prelude actor — choose a different name to avoid replacing security-enforcing behavior"].join(""),
+        CheckError::LinearShadowDrop { name: n, ty: t, .. } =>
+            ["linear type `", t, "` in binding `", n, "` is silently dropped by shadowing — use `consume(", n, ")` before rebinding"].join(""),
+        CheckError::InvalidRelabel { transition: tr, expected_from: ef, found: fo, .. } =>
+            ["`relabel ", tr, "` expects `", ef, "[T]` input, found `", fo, "` — check the declared transition type"].join(""),
+        CheckError::UnknownRelabel { name: n, .. } =>
+            ["`relabel ", n, "` is not declared — add `relabel ", n, ": From -> To` to introduce it"].join(""),
+        CheckError::InvalidDeclassify { found: fo, .. } =>
+            ["`declassify()` is removed — use `relabel release(", fo, ", \"TAG\")` instead"].join(""),
+        CheckError::InvalidSanitize { found: fo, .. } =>
+            ["`sanitize()` is removed — use `relabel trust(", fo, ", \"TAG\")` instead"].join(""),
+        CheckError::ImplicitFlowViolation { pc_lbl: pc, observable_fn: obs, .. } =>
+            ["implicit information flow: `", obs, "` call inside a branch controlled by a `", pc, "` condition leaks information via control flow — move the call outside the branch or relabel the condition"].join(""),
+        CheckError::CrossFunctionImplicitFlowViolation { pc_lbl: pc, caller: cr, callee: ce, observable_fn: obs, .. } =>
+            ["cross-function implicit flow: `", ce, "` called in `", cr, "` inside a branch controlled by a `", pc, "` condition reaches observable function `", obs, "` — move the call outside the branch or relabel the condition"].join(""),
+        CheckError::UnsupportedExternAbi { abi: a, .. } =>
+            ["unsupported extern ABI `\"", a, "\"` — only \"rust\" and \"c\" are allowed"].join(""),
+        CheckError::InvalidLinkLibName { name: n, .. } =>
+            ["invalid link library name `", n, "` — only [a-zA-Z0-9_.-] characters are allowed"].join(""),
+        CheckError::LabeledTypeCrossesFfiBoundary { fn_name: fn_n, lbl: l, .. } =>
+            ["extern fn `", fn_n, "` uses labeled type `", l, "` across the C FFI boundary — labels are meaningless in C ABI; use `relabel` to strip before passing"].join(""),
+        CheckError::NotIterator { ty: t, .. } =>
+            ["`", t, "` does not implement `Iterator` — only types with `impl Iterator<T>` can be used in `for...in`"].join(""),
+        CheckError::MissingConstraint { type_param: tp, required_bound: rb, .. } =>
+            ["cannot compare values of unbounded generic type parameter `", tp, "` — MVL has no user-facing trait system (ADR-0053); `", rb, "` cannot be declared.  Specialize the function on a concrete comparable type (e.g. `Int`, `String`) or dispatch through a stdlib method that handles comparability internally"].join(""),
+        CheckError::FnFieldEqualityDenied { ty: t, offending_path: op, .. } =>
+            ["cannot compare values of type `", t, "` with `==` / `!=` — it transitively contains a function-typed field (", op, "); function-pointer equality is implementation-defined (ADR-0051)"].join(""),
+        CheckError::PreconditionViolated { fn_name: n, pred: p, counterexample: cx, .. } =>
+            match cx {
+                Some(c) => ["precondition violated for `", n, "`: `", p, "` cannot be proven at this call site (counterexample: ", c, ")"].join(""),
+                None    => ["precondition violated for `", n, "`: `", p, "` cannot be proven at this call site"].join(""),
+            },
+        CheckError::PostconditionViolated { fn_name: n, pred: p, counterexample: cx, .. } =>
+            match cx {
+                Some(c) => ["postcondition violated in `", n, "`: `", p, "` cannot be proven at this return point (counterexample: ", c, ")"].join(""),
+                None    => ["postcondition violated in `", n, "`: `", p, "` cannot be proven at this return point"].join(""),
+            },
+        CheckError::InvariantViolated { fn_name: n, pred: p, counterexample: cx, .. } =>
+            match cx {
+                Some(c) => ["loop invariant `", p, "` in `", n, "` cannot be proven to hold at loop entry (counterexample: ", c, ")"].join(""),
+                None    => ["loop invariant `", p, "` in `", n, "` cannot be proven to hold at loop entry"].join(""),
+            },
+        CheckError::InvariantNotPreserved { fn_name: n, pred: p, .. } =>
+            ["loop invariant `", p, "` in `", n, "` is not preserved across loop iterations"].join(""),
+        CheckError::DecreasesNotBounded { fn_name: n, measure: m, .. } =>
+            ["`decreases ", m, "` in `", n, "` cannot be proven to be bounded below (must be ≥ 0) at loop entry"].join(""),
+        CheckError::DecreasesNotDecreasing { fn_name: n, measure: m, .. } =>
+            ["`decreases ", m, "` in `", n, "` cannot be proven to strictly decrease across loop iterations"].join(""),
+        CheckError::QuantifierOutsideGhost { .. } =>
+            "`forall`/`exists` quantifiers are only valid inside ghost bindings, `requires`, `ensures`, or `invariant` predicates",
+        CheckError::SessionProtocolMismatch { expected: e, found: f, .. } =>
+            ["session protocol mismatch: expected `", e, "`, found `", f, "`"].join(""),
+        CheckError::SessionDualityMismatch { side_a: a, side_b: b, .. } =>
+            ["session type duality violation: `", a, "` and `", b, "` are not duals of each other"].join(""),
+        CheckError::SessionUnknownBranch { lbl: l, available: av, .. } =>
+            ["unknown session branch `", l, "`; available branches are: ", av.join(", ")].join(""),
+        CheckError::SessionAfterEnd { .. } =>
+            "session protocol already reached `end`; no further operations are allowed",
+        CheckError::SessionDeadlock { .. } =>
+            "session protocol deadlock: both sides are simultaneously in `receive` state (mutual blocking)",
+        CheckError::SessionDuplicateLabel { lbl: l, .. } =>
+            ["session protocol unreachable state: duplicate branch label `", l, "`"].join(""),
+        CheckError::InterprocFlowViolation { callee: ce, param_idx: pi, required_lbl: rl, inferred_lbl: il, chain: ch, caller: cr, .. } =>
+            match ch.is_empty() {
+                true  => ["interprocedural IFC: ", il, " data from `", cr, "` reaches `", ce, "` parameter ", pi.to_string(), " requiring ", rl, "; use sanitize() or declassify()"].join(""),
+                false => ["interprocedural IFC: ", il, " data from `", cr, "` reaches `", ce, "` parameter ", pi.to_string(), " requiring ", rl, "; use sanitize() or declassify() (via ", ch.join(" → "), ")"].join(""),
+            },
+        CheckError::MissingTraitMethod { trait_name: tn, type_name: tyn, method: m, .. } =>
+            ["`impl ", tn, " for ", tyn, "` is missing required method `", m, "` — add a `fn ", m, "` body to the impl block"].join(""),
+    }
 }

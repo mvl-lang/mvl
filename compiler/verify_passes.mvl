@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Schuberg Philis
 //
-// compiler/checker_passes.mvl — C3: Verdict enum + pass framework skeleton
+// compiler/verify_passes.mvl — C3: Verdict + CheckResult + 11-pass registry
 //
 // Port of src/mvl/checker/passes.rs.
 //
@@ -9,17 +9,26 @@
 // 11 named passes — one per MVL requirement.  This is the committed MVL
 // architecture: no dynamic dispatch, no trait objects, explicit enum arms.
 //
-// Note: Verdict uses TUPLE variants (not named-field struct variants) because
-// MVL does not yet support named-field struct enum variant construction.
-// Pattern matching uses positional binding.
+// Verdict uses TUPLE variants (not named-field struct variants) because
+// MVL does not support named-field struct enum variant construction.
+//
+// CheckResult carries per-requirement error counts via ReqErrors (a struct
+// with named fields r1..r11) instead of Rust's `[usize; 12]` fixed array.
+//
+// DataRaceFreedomPass evidence counting is deferred: count_race_free_fns
+// operates on TirProgram (post-lowering) which is not available at check time.
+// The pass still returns Proven/Failed correctly from req_errors[9].
 //
 // Key types:
 //   Verdict         — outcome of running one verification pass
 //   PassId          — identifies which of the 11 requirements a pass covers
+//   CheckResult     — checker output consumed by passes
+//   ReqErrors       — per-requirement violation counts (r1..r11)
 //   PassEntry       — (pass, verdict) pair in the assurance report
 //   AssuranceReport — collects per-requirement verdicts for display
 
-// Span comes from compiler/tir.mvl (peer file in same dir).
+// Span / Program come from compiler/tir.mvl (peer file in same dir).
+// CheckError / methods come from compiler/verify_errors.mvl.
 
 // ── Verdict ───────────────────────────────────────────────────────────────────
 
@@ -199,4 +208,380 @@ pub total fn AssuranceReport::all_proven(self) -> Bool {
 pub total fn AssuranceReport::summary(self) -> String {
     let n: Int = self.proven_count();
     format("{}/11 requirements proven", [n.to_string()])
+}
+
+// ── ReqErrors ─────────────────────────────────────────────────────────────────
+
+/// Per-requirement violation counts from the type checker.
+///
+/// Mirrors Rust's `[usize; 12]` (index 0 unused, 1–11 per requirement).
+/// MVL lacks fixed-size integer-indexed arrays, so named fields are used.
+pub type ReqErrors = struct {
+    r1:  Int,   // Type Safety
+    r2:  Int,   // Memory Safety
+    r3:  Int,   // Exhaustive Match
+    r4:  Int,   // Null Elimination
+    r5:  Int,   // Error Visibility
+    r6:  Int,   // Ownership
+    r7:  Int,   // Effect Tracking
+    r8:  Int,   // Termination
+    r9:  Int,   // Data Race Freedom
+    r10: Int,   // Refinement & Contracts
+    r11: Int,   // Information Flow
+}
+
+pub total fn ReqErrors::zero() -> ReqErrors {
+    ReqErrors { r1: 0, r2: 0, r3: 0, r4: 0, r5: 0, r6: 0, r7: 0, r8: 0, r9: 0, r10: 0, r11: 0 }
+}
+
+/// Lookup violation count by requirement number (1–11).  Returns 0 for out-of-range.
+pub total fn ReqErrors::get(self, n: Int) -> Int {
+    match n {
+        1  => self.r1,
+        2  => self.r2,
+        3  => self.r3,
+        4  => self.r4,
+        5  => self.r5,
+        6  => self.r6,
+        7  => self.r7,
+        8  => self.r8,
+        9  => self.r9,
+        10 => self.r10,
+        11 => self.r11,
+        _  => 0,
+    }
+}
+
+// ── CheckResult ───────────────────────────────────────────────────────────────
+
+/// Output of the type checker, consumed by all 11 verification passes.
+///
+/// Port of src/mvl/checker.rs::CheckResult.
+///
+/// `expr_types`, `type_env`, `call_graph`, and `inferred_labels` are not
+/// included — they are Rust-internal and not consumed by the pass framework.
+pub type CheckResult = struct {
+    errors:                   List[CheckError],
+    extern_count:             Int,
+    req_errors:               ReqErrors,
+    refinement_counts:        RefCounts,
+    has_prelude_ifc_boundary: Bool,
+}
+
+pub total fn CheckResult::zero() -> CheckResult {
+    let zero_layers: LayerCounts = LayerCounts { l1: 0, l2: 0, l3: 0, l4: 0, l5: 0 };
+    let zero_refs: RefCounts = RefCounts {
+        mode: SolverMode::Layered, proven: 0, runtime_checked: 0, failed: 0,
+        by_layer: zero_layers, fn_total: 0, fully_verified_fns: 0,
+    };
+    CheckResult {
+        errors:                   [],
+        extern_count:             0,
+        req_errors:               ReqErrors::zero(),
+        refinement_counts:        zero_refs,
+        has_prelude_ifc_boundary: false,
+    }
+}
+
+pub total fn CheckResult::is_ok(self) -> Bool { self.errors.len() == 0 }
+
+// ── Memory safety site counting ───────────────────────────────────────────────
+
+/// Counts of let/ref/consume sites across all functions in a program.
+pub type MemorySafetyCounts = struct {
+    let_bindings:  Int,
+    ref_bindings:  Int,
+    consume_sites: Int,
+}
+
+/// Walk all fn bodies and count let, ref, and consume sites.
+/// Port of passes.rs::count_memory_safety_sites.
+pub total fn count_memory_safety_sites(prog: Program) -> MemorySafetyCounts {
+    let let_b: ref Int = 0;
+    let ref_b: ref Int = 0;
+    let con_s: ref Int = 0;
+    for fd in prog.fns {
+        match fd.body {
+            Some(body) => {
+                for s in body.stmts {
+                    match s {
+                        Stmt::Let(ls) => {
+                            let_b = let_b + 1;
+                            if ls.mutable { ref_b = ref_b + 1 }
+                        },
+                        _ => {},
+                    }
+                }
+                for e in walk_block(body) {
+                    match e {
+                        Expr::Consume(_, _) => { con_s = con_s + 1 },
+                        _ => {},
+                    }
+                }
+            },
+            None => {},
+        }
+    }
+    MemorySafetyCounts { let_bindings: let_b, ref_bindings: ref_b, consume_sites: con_s }
+}
+
+/// Count struct fields that carry inline `where` refinement predicates.
+///
+/// Returns 0: AST-level FieldDecl does not carry refinement predicates
+/// (only TirFieldDecl does, post-lowering).  The Proven/Unchecked distinction
+/// for Req 10 when fn_total == 0 falls back to the "no refined types" case.
+pub total fn count_struct_field_refinements(prog: Program) -> Int { 0 }
+
+// ── Error-span lookup ─────────────────────────────────────────────────────────
+
+/// Find the span of the first error belonging to the given requirement.
+total fn find_error_span(errors: List[CheckError], req: Int) -> Option[SourceLoc] {
+    let matching: List[CheckError] = errors.filter(|e: CheckError| e.requirement_number() == req);
+    match matching.get(0) {
+        Some(e) => Some(e.span()),
+        None    => None,
+    }
+}
+
+// ── Pass execution order ──────────────────────────────────────────────────────
+
+/// Canonical execution order (dependency-aware).
+/// Type Safety (1) first; SMT-backed passes (2, 9, 10, 11) last.
+pub total fn pass_execution_order() -> List[PassId] {
+    [
+        PassId::TypeSafety,
+        PassId::NullElimination,
+        PassId::ErrorVisibility,
+        PassId::Exhaustiveness,
+        PassId::Ownership,
+        PassId::EffectTracking,
+        PassId::Termination,
+        PassId::MemorySafety,
+        PassId::DataRaceFreedom,
+        PassId::RefinementContracts,
+        PassId::InformationFlow,
+    ]
+}
+
+// ── Pass dispatch ─────────────────────────────────────────────────────────────
+
+/// Run a single pass and return its verdict.
+///
+/// This is the central dispatch table — one arm per requirement.
+/// The DataRaceFreedom pass returns evidence without site counts
+/// because count_race_free_fns requires TirProgram (post-lowering).
+pub partial fn run_pass(pass_id: PassId, prog: Program, result: CheckResult) -> Verdict {
+    let req: Int = pass_id.number();
+    let violations: Int = result.req_errors.get(req);
+    match pass_id {
+        // ── Req 1: Type Safety ────────────────────────────────────────────
+        PassId::TypeSafety => {
+            if violations > 0 {
+                Verdict::Failed(
+                    [violations.to_string(), " type error(s)"].join(""),
+                    find_error_span(result.errors, 1),
+                )
+            } else {
+                Verdict::Proven("all type constraints satisfied")
+            }
+        },
+        // ── Req 2: Memory Safety ──────────────────────────────────────────
+        PassId::MemorySafety => {
+            if violations > 0 {
+                Verdict::Failed(
+                    [violations.to_string(), " use-after-move / dangling-ref violation(s)"].join(""),
+                    find_error_span(result.errors, 2),
+                )
+            } else {
+                let mc: MemorySafetyCounts = count_memory_safety_sites(prog);
+                Verdict::Proven(
+                    [mc.let_bindings.to_string(), " let bindings, ",
+                     mc.ref_bindings.to_string(), " ref bindings, ",
+                     mc.consume_sites.to_string(), " consume sites — no violations"].join(""),
+                )
+            }
+        },
+        // ── Req 3: Exhaustive Match ───────────────────────────────────────
+        PassId::Exhaustiveness => {
+            if violations > 0 {
+                Verdict::Failed(
+                    [violations.to_string(), " non-exhaustive match(es)"].join(""),
+                    find_error_span(result.errors, 3),
+                )
+            } else {
+                Verdict::Proven("all matches exhaustive, no partial calls in total fns")
+            }
+        },
+        // ── Req 4: Null Elimination ───────────────────────────────────────
+        PassId::NullElimination => {
+            if violations > 0 {
+                Verdict::Failed(
+                    [violations.to_string(), " direct Option access(es)"].join(""),
+                    find_error_span(result.errors, 4),
+                )
+            } else {
+                Verdict::Proven("no direct Option access")
+            }
+        },
+        // ── Req 5: Error Visibility ───────────────────────────────────────
+        PassId::ErrorVisibility => {
+            if violations > 0 {
+                Verdict::Failed(
+                    [violations.to_string(), " ignored Result(s)"].join(""),
+                    find_error_span(result.errors, 5),
+                )
+            } else {
+                Verdict::Proven("all Result values handled")
+            }
+        },
+        // ── Req 6: Ownership ─────────────────────────────────────────────
+        PassId::Ownership => {
+            if violations > 0 {
+                Verdict::Failed(
+                    [violations.to_string(), " immutability / linearity violation(s)"].join(""),
+                    find_error_span(result.errors, 6),
+                )
+            } else {
+                Verdict::Proven("no immutability or linear-type consumption violations")
+            }
+        },
+        // ── Req 7: Effect Tracking ────────────────────────────────────────
+        PassId::EffectTracking => {
+            if violations > 0 {
+                Verdict::Failed(
+                    [violations.to_string(), " undeclared or missing effect(s)"].join(""),
+                    find_error_span(result.errors, 7),
+                )
+            } else {
+                Verdict::Proven("all effects declared and propagated")
+            }
+        },
+        // ── Req 8: Termination ────────────────────────────────────────────
+        PassId::Termination => {
+            if violations > 0 {
+                Verdict::Failed(
+                    [violations.to_string(), " termination violation(s)"].join(""),
+                    find_error_span(result.errors, 8),
+                )
+            } else {
+                Verdict::Proven("no unbounded loops or unproven recursive calls in total functions")
+            }
+        },
+        // ── Req 9: Data Race Freedom ──────────────────────────────────────
+        PassId::DataRaceFreedom => {
+            if violations > 0 {
+                Verdict::Failed(
+                    [violations.to_string(), " capability violation(s)"].join(""),
+                    find_error_span(result.errors, 9),
+                )
+            } else {
+                // count_race_free_fns requires TirProgram (post-lowering);
+                // return Proven with a note rather than site counts.
+                Verdict::Proven("no capability or iso-aliasing violations — race-freedom metrics available post-lowering")
+            }
+        },
+        // ── Req 10: Refinement & Contracts ───────────────────────────────
+        PassId::RefinementContracts => {
+            if violations > 0 {
+                Verdict::Failed(
+                    [violations.to_string(), " refinement / contract violation(s)"].join(""),
+                    find_error_span(result.errors, 10),
+                )
+            } else {
+                let rc: RefCounts = result.refinement_counts;
+                let fn_total: Int = rc.fn_total;
+                let fully_verified: Int = rc.fully_verified_fns;
+                let total_sites: Int = rc.proven + rc.runtime_checked + rc.failed;
+                if fn_total == 0 {
+                    let refined_fields: Int = count_struct_field_refinements(prog);
+                    if refined_fields > 0 {
+                        Verdict::Unchecked(
+                            [refined_fields.to_string(), " struct field(s) have where clauses but 0 call sites proven — field invariants unchecked"].join(""),
+                        )
+                    } else {
+                        Verdict::Unchecked("no refined types used in this file")
+                    }
+                } else if fully_verified == fn_total {
+                    Verdict::Proven(
+                        [fully_verified.to_string(), "/", fn_total.to_string(),
+                         " function(s) fully verified; ",
+                         rc.proven.to_string(), " proven, ",
+                         rc.runtime_checked.to_string(), " runtime-checked out of ",
+                         total_sites.to_string(), " refined call site(s)"].join(""),
+                    )
+                } else {
+                    Verdict::Unchecked(
+                        [fully_verified.to_string(), "/", fn_total.to_string(),
+                         " function(s) fully verified; ",
+                         rc.proven.to_string(), " proven, ",
+                         rc.runtime_checked.to_string(), " runtime-checked out of ",
+                         total_sites.to_string(), " refined call site(s); ",
+                         "some call sites deferred to runtime checks"].join(""),
+                    )
+                }
+            }
+        },
+        // ── Req 11: Information Flow ──────────────────────────────────────
+        PassId::InformationFlow => {
+            if violations > 0 {
+                Verdict::Failed(
+                    [violations.to_string(), " information flow violation(s)"].join(""),
+                    find_error_span(result.errors, 11),
+                )
+            } else {
+                let known_labels: List[String] = prog.label_decls.map(|ld: LabelDecl| ld.name);
+                let relabel_count: Int = count_relabels(prog);
+                let labeled_params: Int = count_labeled_params(prog, known_labels);
+                let flow_checks: Int = count_flow_check_sites(prog, known_labels);
+                let has_labeled: Bool = labeled_params > 0 || relabel_count > 0;
+                let has_ifc: Bool = has_labeled || result.has_prelude_ifc_boundary;
+                if has_ifc {
+                    Verdict::Proven(
+                        [relabel_count.to_string(), " relabel operations, ",
+                         labeled_params.to_string(), " labeled params, ",
+                         flow_checks.to_string(), " flow checks — no violations"].join(""),
+                    )
+                } else {
+                    Verdict::Unchecked("program has no security-labeled types — IFC lattice not exercised")
+                }
+            }
+        },
+    }
+}
+
+// ── Pass registry ─────────────────────────────────────────────────────────────
+
+/// Run all 11 passes in dependency order and return an AssuranceReport.
+pub partial fn run_all_passes(prog: Program, result: CheckResult) -> AssuranceReport {
+    let entries: ref List[PassEntry] = [];
+    for pass_id in pass_execution_order() {
+        let v: Verdict = run_pass(pass_id, prog, result);
+        entries.push(PassEntry { pass: pass_id, verdict: v })
+    }
+    let error_count: Int = result.errors.len();
+    AssuranceReport { entries: entries, error_count: error_count }
+}
+
+/// Run a single pass by PassId and return its verdict.
+pub partial fn run_single_pass(pass_id: PassId, prog: Program, result: CheckResult) -> Verdict {
+    run_pass(pass_id, prog, result)
+}
+
+/// Aggregate two assurance reports (e.g. from two source files).
+/// Any Failed → Failed; all Proven → Proven; otherwise Unchecked.
+pub total fn aggregate_verdicts(a: Verdict, b: Verdict) -> Verdict {
+    match a {
+        Verdict::Failed(r, sp) => Verdict::Failed(r, sp),
+        Verdict::Proven(_) => match b {
+            Verdict::Proven(ev)   => Verdict::Proven(ev),
+            Verdict::Failed(r, sp) => Verdict::Failed(r, sp),
+            Verdict::Unchecked(r) => Verdict::Unchecked(r),
+            Verdict::Timeout      => Verdict::Timeout,
+        },
+        Verdict::Unchecked(r) => match b {
+            Verdict::Failed(fr, sp) => Verdict::Failed(fr, sp),
+            _                        => Verdict::Unchecked(r),
+        },
+        Verdict::Timeout => Verdict::Timeout,
+    }
 }
