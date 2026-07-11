@@ -1,4 +1,4 @@
-# MVL — Minimum Verification Language
+# MVL — Maximum Verifiable Language
 .ONESHELL:
 SHELL := /bin/bash
 
@@ -78,9 +78,9 @@ MVL ?= ./target/debug/mvl
 # Suite list for `make test` (fast pre-PR gate) and `make test-full` (full pre-merge gate).
 # Format: "label|target" — keep alignment by padding the label.
 #
-# `test` covers parse/typecheck/lint correctness and small e2e — the inner loop
-# you want to fail fast on every commit. The heavy e2e/backend/parity/examples
-# suites live in `test-full` and run in CI on push-to-main.
+# `test` covers parse/typecheck/lint correctness + stdlib runtime (~10–15 s) — the inner
+# loop you want to fail fast on every commit. Codegen, parity, MVL compiler, backends,
+# and examples live in `test-full` and run in CI on push-to-main.
 TEST_FAST_SUITES := \
 	"Unit tests        |test-unit" \
 	"Type checker      |test-type-checker" \
@@ -88,15 +88,15 @@ TEST_FAST_SUITES := \
 	"Error messages    |test-error-messages" \
 	"Fmt roundtrip     |test-fmt-roundtrip" \
 	"Corpus            |test-corpus" \
-	"Corpus codegen    |test-corpus-codegen" \
-	"Checker parity    |test-checker-parity" \
 	"Solver            |test-solver" \
 	"Tree-sitter       |test-tree-sitter" \
 	"Grammar coverage  |test-grammar-coverage" \
-	"MVL compiler      |test-mvl"
+	"Stdlib            |test-stdlib"
 
 TEST_FULL_EXTRA_SUITES := \
-	"Stdlib            |test-stdlib" \
+	"Corpus codegen    |test-corpus-codegen" \
+	"Checker parity    |test-checker-parity" \
+	"MVL compiler      |test-mvl" \
 	"BDD               |test-bdd" \
 	"Rust integration  |test-rust-integration" \
 	"Backend (Rust)    |test-backend-rust" \
@@ -135,10 +135,10 @@ define run_test_suites
 	fi
 endef
 
-test: build build-llvm-runtime ## Fast pre-PR gate: unit, type checker, corpus/solver checks, grammar, MVL compiler (~1–2 min)
+test: build build-llvm-runtime ## Fast pre-PR gate: unit, type checker, corpus, solver, grammar, stdlib (~10–15 s)
 	$(call run_test_suites,$(TEST_FAST_SUITES))
 
-test-full: build build-llvm-runtime ## Full pre-merge gate: everything in `test` plus stdlib, BDD, backends, parity, examples (~10–20 min)
+test-full: build build-llvm-runtime ## Full pre-merge gate: everything in `test` plus codegen, parity, MVL compiler, BDD, backends, examples (~10–20 min)
 	$(call run_test_suites,$(TEST_FAST_SUITES) $(TEST_FULL_EXTRA_SUITES))
 
 test-unit: ## Run unit tests only

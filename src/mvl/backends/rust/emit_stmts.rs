@@ -21,7 +21,7 @@ use crate::mvl::backends::rust::emit_types::{emit_ref_expr_for_assert, emit_ty};
 use crate::mvl::backends::rust::mcdc_instr::DecisionKind;
 use crate::mvl::ir::{
     BinaryOp, LValue, LetKind, Literal, LogicOp, Pattern, RefExpr, TirBlock, TirElseBranch,
-    TirExpr, TirExprKind, TirMatchBody, TirStmt, Ty,
+    TirExpr, TirExprKind, TirMatchBody, TirStmt, Ty, UnaryOp,
 };
 use crate::mvl::passes::coverage::BranchKind;
 use crate::mvl::passes::mcdc::analysis::count_clauses_ref;
@@ -59,8 +59,9 @@ impl RustEmitter {
                 // assignments, no method-call receivers.  Rust would emit an
                 // `unused_mut` warning for these otherwise.  Keyed by pattern
                 // span so shadowed bindings are analysed independently.
-                let is_readonly = matches!(pattern, Pattern::Ident(_, span)
-                    if self.readonly_names.contains(span));
+                let is_readonly = matches!(pattern, Pattern::Wildcard(_))
+                    || matches!(pattern, Pattern::Ident(_, span)
+                        if self.readonly_names.contains(span));
                 if is_mutable && !is_readonly {
                     self.push("let mut ");
                 } else {
@@ -69,7 +70,11 @@ impl RustEmitter {
                 self.emit_pattern(pattern);
                 // Fn types: omit the annotation so Rust infers the concrete
                 // closure type — `fn(T)->U` rejects capturing closures (#1313).
-                if !matches!(ty_for_emit, Ty::Fn(..)) {
+                // Wildcard patterns: omit the annotation — `let _: T = expr` is
+                // stricter than `let _ = expr` and rejects reborrows like
+                // `let _: Vec<T> = &mut vec` (E0308).  The value is discarded
+                // anyway, so type checking adds no value here.
+                if !matches!(ty_for_emit, Ty::Fn(..)) && !matches!(pattern, Pattern::Wildcard(_)) {
                     self.push(": ");
                     self.push(&emit_ty(ty_for_emit));
                 }
@@ -116,7 +121,16 @@ impl RustEmitter {
                 // [`compute_last_uses`], #1707 phase 10).
                 let var_needs_clone = matches!(&init.kind, TirExprKind::Var(_))
                     && !self.last_uses.contains(&init.span);
-                if field_needs_clone || var_needs_clone {
+                // `let x: T = *box_val` — dereffing a Box moves its contents out.
+                // Clone so the same box can be dereffed again in later expressions.
+                let deref_needs_clone = matches!(
+                    &init.kind,
+                    TirExprKind::Unary {
+                        op: UnaryOp::Deref,
+                        ..
+                    }
+                );
+                if field_needs_clone || var_needs_clone || deref_needs_clone {
                     self.push(".clone()");
                 }
                 if refined_unwrap {
@@ -430,7 +444,13 @@ pub(crate) fn scrutinee_needs_clone(expr: &TirExpr) -> bool {
 impl RustEmitter {
     fn emit_lvalue(&mut self, lv: &LValue) {
         match lv {
-            LValue::Ident(name, _) => self.push(name),
+            LValue::Ident(name, _) => {
+                // `ref T` parameters are `&mut T` in Rust — assign through the pointer.
+                if self.capability_param_names.contains(name.as_str()) {
+                    self.push("*");
+                }
+                self.push(name)
+            }
             LValue::Field { base, field, .. } => {
                 self.emit_lvalue(base);
                 self.push(".");

@@ -146,6 +146,9 @@ pub partial fn interval_from_ref_expr(pred: RefExpr) -> Option[Interval] {
 /// Extract `Interval` from a comparison of the form `self op n` or `n op self`.
 /// Returns `None` for non-interval forms (Ne) or non-integer/non-self comparisons.
 fn self_int_bound(op: CmpOp, left: RefExpr, right: RefExpr) -> Option[Interval] {
+    // Ne cannot be expressed as a contiguous interval.
+    let is_ne: Bool = match op { CmpOp::Ne => true, _ => false };
+    if is_ne { return None }
     match left {
         RefExpr::Ident { name: n, .. } => {
             if n != "self" { return None }

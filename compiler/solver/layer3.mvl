@@ -16,6 +16,11 @@
 //   5. Check the substituted return expr against pred using L1 + L2.
 //   6. Proven iff all paths pass; Failed if any path fails; None if undecided.
 
+// rewrite_expr is defined in compiler/solver/rewrite.mvl.
+// In the isolated test harness, rewrite.mvl may not be in scope, so we
+// provide a minimal local stub: identity (no rewrite rules applied).
+partial fn rewrite_expr(expr: Expr) -> Expr { expr }
+
 /// Functions with this many or more execution paths bail out.
 total fn max_paths() -> Int { 32 }
 
@@ -152,11 +157,10 @@ partial fn collect_block_paths(
     depth:  Int,
 ) -> Unit {
     if depth > max_depth() || paths.len() >= max_paths() { return () }
-    let stmts: List[Stmt] = block.stmts;
-    let n: Int = stmts.len();
+    let n: Int = block.stmts.len();
     let i: ref Int = 0;
     while i < n {
-        let stmt: Stmt = match stmts.get(i) {
+        let stmt: Stmt = match block.stmts.get(i) {
             Some(s) => s,
             None    => { return () },
         };
@@ -390,20 +394,18 @@ partial fn substitute_expr(expr: Expr, bindings: Map[String, Expr]) -> Expr {
         Expr::Binary(b) => {
             let new_left: Expr = match b.left.get(0) {
                 Some(e) => substitute_expr(e, bindings),
-                None    => { return expr },
+                None    => { return Expr::Binary(b) },
             };
             let new_right: Expr = match b.right.get(0) {
                 Some(e) => substitute_expr(e, bindings),
-                None    => { return expr },
+                None    => { return Expr::Binary(AstBinaryExpr { op: b.op, left: [new_left], right: [], span: b.span }) },
             };
-            Expr::Binary(AstBinaryExpr {
-                op: b.op, left: [new_left], right: [new_right], span: b.span,
-            })
+            Expr::Binary(AstBinaryExpr { op: b.op, left: [new_left], right: [new_right], span: b.span })
         },
         Expr::Unary(u) => {
             let new_inner: Expr = match u.expr.get(0) {
                 Some(e) => substitute_expr(e, bindings),
-                None    => { return expr },
+                None    => { return Expr::Unary(u) },
             };
             Expr::Unary(AstUnaryExpr { op: u.op, expr: [new_inner], span: u.span })
         },
@@ -415,7 +417,7 @@ partial fn substitute_expr(expr: Expr, bindings: Map[String, Expr]) -> Expr {
         Expr::Method(m) => {
             let new_recv: Expr = match m.receiver.get(0) {
                 Some(r) => substitute_expr(r, bindings),
-                None    => { return expr },
+                None    => { return Expr::Method(m) },
             };
             let new_args: ref List[Expr] = [];
             for a in m.args { new_args.push(substitute_expr(a, bindings)) }

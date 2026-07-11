@@ -22,15 +22,15 @@ total fn loc() -> SourceLoc { SourceLoc { line: 0, col: 0 } }
 total fn self_cmp(op: CmpOp, n: Int) -> RefExpr {
     RefExpr::Compare {
         op: op,
-        left:  [RefExpr::Ident { name: "self", span: loc() }],
-        right: [RefExpr::Integer { value: n, span: loc() }],
+        left:  Box::new(RefExpr::Ident { name: "self", span: loc() }),
+        right: Box::new(RefExpr::Integer { value: n, span: loc() }),
         span: loc(),
     }
 }
 
 // Build `left && right`
-total fn and_ref(left: RefExpr, right: RefExpr) -> RefExpr {
-    RefExpr::Logic { op: LogicOp::And, left: [left], right: [right], span: loc() }
+partial fn and_ref(left: RefExpr, right: RefExpr) -> RefExpr {
+    RefExpr::Logic { op: LogicOp::And, left: Box::new(left), right: Box::new(right), span: loc() }
 }
 
 // ── Bound::Inclusive / Exclusive effective_min ────────────────────────────────
@@ -145,7 +145,7 @@ total fn single_ref(name: String, pred: RefExpr) -> Map[String, Option[RefExpr]]
     m
 }
 
-total fn empty_expr(name: String) -> Expr {
+total fn empty_expr_l2(name: String) -> Expr {
     Expr::Ident(name, SourceLoc { line: 0, col: 0 })
 }
 
@@ -153,7 +153,7 @@ test fn try_interval_proves_when_interval_satisfies() -> Unit {
     // var x where x > 5; pred: x > 0 — interval [6,∞) proves x > 0
     let var_refs: Map[String, Option[RefExpr]] = single_ref("x", self_cmp(CmpOp::Gt, 5));
     let pred: RefExpr = self_cmp(CmpOp::Gt, 0);
-    let result: Option[RefResult] = try_interval(pred, empty_expr("x"), var_refs);
+    let result: Option[RefResult] = try_interval(pred, empty_expr_l2("x"), var_refs);
     assert_eq(match result { Some(RefResult::Proven) => true, _ => false }, true)
 }
 
@@ -171,7 +171,7 @@ test fn try_interval_returns_none_when_no_hypothesis() -> Unit {
     let m: ref Map[String, Option[RefExpr]] = Map::new();
     m.insert("x", None);
     let pred: RefExpr = self_cmp(CmpOp::Gt, 0);
-    let result: Option[RefResult] = try_interval(pred, empty_expr("x"), m);
+    let result: Option[RefResult] = try_interval(pred, empty_expr_l2("x"), m);
     assert_eq(result.is_none(), true)
 }
 
@@ -179,7 +179,7 @@ test fn try_interval_fails_when_interval_violates() -> Unit {
     // var x where x < 0 (i.e. x <= -1); pred: x > 0 — interval (−∞, -1] fails
     let var_refs: Map[String, Option[RefExpr]] = single_ref("x", self_cmp(CmpOp::Le, 0));
     let pred: RefExpr = self_cmp(CmpOp::Gt, 0);
-    let result: Option[RefResult] = try_interval(pred, empty_expr("x"), var_refs);
+    let result: Option[RefResult] = try_interval(pred, empty_expr_l2("x"), var_refs);
     assert_eq(match result { Some(RefResult::Failed(_)) => true, _ => false }, true)
 }
 
@@ -187,6 +187,6 @@ test fn try_interval_returns_none_for_partial_overlap() -> Unit {
     // var x where x > 0 (unbounded above); pred: x < 5 — partial overlap
     let var_refs: Map[String, Option[RefExpr]] = single_ref("x", self_cmp(CmpOp::Gt, 0));
     let pred: RefExpr = self_cmp(CmpOp::Lt, 5);
-    let result: Option[RefResult] = try_interval(pred, empty_expr("x"), var_refs);
+    let result: Option[RefResult] = try_interval(pred, empty_expr_l2("x"), var_refs);
     assert_eq(result.is_none(), true)
 }

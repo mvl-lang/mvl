@@ -92,27 +92,27 @@ fn linterm_free_vars(a: LinTerm) -> List[String] {
     result
 }
 
-// ── Constraint ────────────────────────────────────────────────────────────────
+// ── LinConstraint ────────────────────────────────────────────────────────────────
 
-type Constraint = enum {
+type LinConstraint = enum {
     Le(LinTerm),
     Eq(LinTerm),
     Ne(LinTerm),
 }
 
-fn constraint_is_trivially_false(c: Constraint) -> Bool {
+fn constraint_is_trivially_false(c: LinConstraint) -> Bool {
     match c {
-        Constraint::Le(t) => linterm_is_constant(t) && t.constant > 0,
-        Constraint::Eq(t) => linterm_is_constant(t) && t.constant != 0,
-        Constraint::Ne(t) => linterm_is_constant(t) && t.constant == 0,
+        LinConstraint::Le(t) => linterm_is_constant(t) && t.constant > 0,
+        LinConstraint::Eq(t) => linterm_is_constant(t) && t.constant != 0,
+        LinConstraint::Ne(t) => linterm_is_constant(t) && t.constant == 0,
     }
 }
 
-fn constraint_is_trivially_true(c: Constraint) -> Bool {
+fn constraint_is_trivially_true(c: LinConstraint) -> Bool {
     match c {
-        Constraint::Le(t) => linterm_is_constant(t) && t.constant <= 0,
-        Constraint::Eq(t) => linterm_is_constant(t) && t.constant == 0,
-        Constraint::Ne(t) => linterm_is_constant(t) && t.constant != 0,
+        LinConstraint::Le(t) => linterm_is_constant(t) && t.constant <= 0,
+        LinConstraint::Eq(t) => linterm_is_constant(t) && t.constant == 0,
+        LinConstraint::Ne(t) => linterm_is_constant(t) && t.constant != 0,
     }
 }
 
@@ -196,7 +196,7 @@ partial fn ref_to_constraints(
     pred:      RefExpr,
     self_term: LinTerm,
     negate:    Bool,
-) -> Option[List[Constraint]] {
+) -> Option[List[LinConstraint]] {
     match pred {
         RefExpr::Compare { op: op, left: l, right: r, .. } => {
             let lv: LinTerm = match linterm_from_ref(*l, self_term) { Some(t) => t, None => { return None } };
@@ -211,13 +211,13 @@ partial fn ref_to_constraints(
             } else { op };
             match eff_op {
                 LogicOp::And => {
-                    let lcs: List[Constraint] = match ref_to_constraints(*l, self_term, negate) {
+                    let lcs: List[LinConstraint] = match ref_to_constraints(*l, self_term, negate) {
                         Some(cs) => cs, None => { return None }
                     };
-                    let rcs: List[Constraint] = match ref_to_constraints(*r, self_term, negate) {
+                    let rcs: List[LinConstraint] = match ref_to_constraints(*r, self_term, negate) {
                         Some(cs) => cs, None => { return None }
                     };
-                    let combined: ref List[Constraint] = [];
+                    let combined: ref List[LinConstraint] = [];
                     for c in lcs { combined.push(c) }
                     for c in rcs { combined.push(c) }
                     Some(combined)
@@ -239,21 +239,21 @@ fn negate_cmp(op: CmpOp) -> CmpOp {
     }
 }
 
-fn cmp_to_constraints(op: CmpOp, term: LinTerm) -> List[Constraint] {
+fn cmp_to_constraints(op: CmpOp, term: LinTerm) -> List[LinConstraint] {
     match op {
-        CmpOp::Le => [Constraint::Le(term)],
-        CmpOp::Lt => [Constraint::Le(linterm_add(term, linterm_const(1)))],
-        CmpOp::Ge => [Constraint::Le(linterm_negate(term))],
-        CmpOp::Gt => [Constraint::Le(linterm_add(linterm_negate(term), linterm_const(1)))],
-        CmpOp::Eq => [Constraint::Eq(term)],
-        CmpOp::Ne => [Constraint::Ne(term)],
+        CmpOp::Le => [LinConstraint::Le(term)],
+        CmpOp::Lt => [LinConstraint::Le(linterm_add(term, linterm_const(1)))],
+        CmpOp::Ge => [LinConstraint::Le(linterm_negate(term))],
+        CmpOp::Gt => [LinConstraint::Le(linterm_add(linterm_negate(term), linterm_const(1)))],
+        CmpOp::Eq => [LinConstraint::Eq(term)],
+        CmpOp::Ne => [LinConstraint::Ne(term)],
     }
 }
 
 // ── Hypothesis extraction ─────────────────────────────────────────────────────
 
-partial fn hyp_constraints(var_refs: Map[String, Option[RefExpr]]) -> List[Constraint] {
-    let all: ref List[Constraint] = [];
+partial fn hyp_constraints(var_refs: Map[String, Option[RefExpr]]) -> List[LinConstraint] {
+    let all: ref List[LinConstraint] = [];
     for varname in var_refs.keys() {
         match var_refs.get(varname) {
             Some(Some(hyp)) => {
@@ -270,12 +270,12 @@ partial fn hyp_constraints(var_refs: Map[String, Option[RefExpr]]) -> List[Const
 
 // ── Unsatisfiability check ────────────────────────────────────────────────────
 
-partial fn is_unsat(constraints: List[Constraint]) -> Bool {
+partial fn is_unsat(constraints: List[LinConstraint]) -> Bool {
     for c in constraints {
         if constraint_is_trivially_false(c) { return true }
     }
 
-    let active: ref List[Constraint] = [];
+    let active: ref List[LinConstraint] = [];
     for c in constraints {
         if !constraint_is_trivially_true(c) { active.push(c) }
     }
@@ -283,7 +283,7 @@ partial fn is_unsat(constraints: List[Constraint]) -> Bool {
     // Divisibility: a·x + c = 0 is UNSAT iff a ∤ c.
     for c in active {
         match c {
-            Constraint::Eq(t) => {
+            LinConstraint::Eq(t) => {
                 if t.coeffs.len() == 1 {
                     for k in t.coeffs.keys() {
                         match t.coeffs.get(k) {
@@ -303,7 +303,7 @@ partial fn is_unsat(constraints: List[Constraint]) -> Bool {
     let le_terms: ref List[LinTerm] = [];
     for c in active {
         match c {
-            Constraint::Le(t) => le_terms.push(t),
+            LinConstraint::Le(t) => le_terms.push(t),
             _                 => {},
         }
     }
@@ -389,12 +389,12 @@ pub partial fn try_cooper(
         Some(t) => t,
         None    => { return None },
     };
-    let neg_pred_cs: List[Constraint] = match ref_to_constraints(pred, arg_term, true) {
+    let neg_pred_cs: List[LinConstraint] = match ref_to_constraints(pred, arg_term, true) {
         Some(cs) => cs,
         None     => { return None },
     };
-    let hyp_cs: List[Constraint] = hyp_constraints(var_refs);
-    let all: ref List[Constraint] = [];
+    let hyp_cs: List[LinConstraint] = hyp_constraints(var_refs);
+    let all: ref List[LinConstraint] = [];
     for c in hyp_cs { all.push(c) }
     for c in neg_pred_cs { all.push(c) }
     if is_unsat(all) { Some(RefResult::Proven) } else { None }

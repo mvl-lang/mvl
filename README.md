@@ -76,8 +76,8 @@ No anonymous lambdas, no list comprehensions, no decorators, no operator overloa
 ### Setup
 
 ```bash
-git clone git@github.com:LAB271/mvl_language.git
-cd mvl_language
+git clone git@github.com:mvl-lang/mvl.git
+cd mvl
 make setup    # installs git hooks, verifies tooling
 ```
 

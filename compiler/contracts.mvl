@@ -88,13 +88,17 @@ pub partial fn check_requires_at_call(
         let multi:      ref Bool   = false;
         let i: ref Int = 0;
         while i < params.len() {
-            let pr: ParamRef = match params.get(i) { Some(p) => p, None => { i = i + 1 } };
-            if idents.contains(pr.name) {
-                if param_idx == -1 {
-                    param_name = pr.name; param_idx = i
-                } else {
-                    multi = true
-                }
+            match params.get(i) {
+                None => {},
+                Some(pr) => {
+                    if idents.contains(pr.name) {
+                        if param_idx == -1 {
+                            param_name = pr.name; param_idx = i
+                        } else {
+                            multi = true
+                        }
+                    }
+                },
             }
             i = i + 1
         }
@@ -102,28 +106,29 @@ pub partial fn check_requires_at_call(
             // 0 or 2+ params referenced → RuntimeCheck
             counts = rc_merge(counts, rc_rt(mode))
         } else {
-            let arg: Expr = match args.get(param_idx) {
-                Some(a) => a,
-                None    => { counts = rc_merge(counts, rc_rt(mode)); rc_zero(mode) },
-            };
-            let normed: RefExpr = normalize_pred(req_pred, param_name);
-            let outcome: RefResult = dispatch_layers(arg, normed, var_refs, fn_decls, mode);
-            let sub: RefCounts = match outcome {
-                RefResult::Proven => {
-                    rc_proven(mode)
+            match args.get(param_idx) {
+                None => { counts = rc_merge(counts, rc_rt(mode)) },
+                Some(arg) => {
+                    let normed: RefExpr = normalize_pred(req_pred, param_name);
+                    let outcome: RefResult = dispatch_layers(arg, normed, var_refs, fn_decls, mode);
+                    let sub: RefCounts = match outcome {
+                        RefResult::Proven => {
+                            rc_proven(mode)
+                        },
+                        RefResult::RuntimeCheck => rc_rt(mode),
+                        RefResult::Failed(cx) => {
+                            errors.push(CheckError::PreconditionViolated {
+                                fn_name:        fn_name,
+                                pred:           display_pred(normed),
+                                span:           call_span,
+                                counterexample: cx,
+                            });
+                            rc_failed(mode)
+                        },
+                    };
+                    counts = rc_merge(counts, sub)
                 },
-                RefResult::RuntimeCheck => rc_rt(mode),
-                RefResult::Failed(cx) => {
-                    errors.push(CheckError::PreconditionViolated {
-                        fn_name:        fn_name,
-                        pred:           display_pred(normed),
-                        span:           call_span,
-                        counterexample: cx,
-                    });
-                    rc_failed(mode)
-                },
-            };
-            counts = rc_merge(counts, sub)
+            }
         }
     }
     counts

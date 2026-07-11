@@ -62,13 +62,15 @@ impl RustEmitter {
                 } else if is_set {
                     // Set.map: into_iter + collect into HashSet.
                     self.emit_method_receiver(receiver);
-                    self.push(".into_iter().map(|__x| (");
+                    self.push(".clone().into_iter().map(|__x| (");
                     self.emit_expr(&args[0]);
                     self.push(")(__x.clone())).collect::<std::collections::HashSet<_>>()");
                 } else {
                     // List (and unknown types) use into_iter().collect().
+                    // Clone the receiver: `into_iter()` moves, but MVL semantics
+                    // let the collection stay live for later reads.
                     self.emit_method_receiver(receiver);
-                    self.push(".into_iter().map(|__x| (");
+                    self.push(".clone().into_iter().map(|__x| (");
                     self.emit_expr(&args[0]);
                     self.push(")(__x.clone())).collect::<Vec<_>>()");
                 }
@@ -506,18 +508,27 @@ impl RustEmitter {
             // instead of falling into the list-index default — bug #1692
             // variant 1.  Same pattern used by `filter`/`any`/`all` above.
             "get" if args.len() == 1 => {
-                let is_map = matches!(receiver.ty.unlabeled(), Ty::Map(_, _));
+                let rcv_ty = receiver.ty.unlabeled();
+                let is_map = matches!(rcv_ty, Ty::Map(_, _));
+                let is_list_or_set = matches!(rcv_ty, Ty::List(_) | Ty::Set(_));
                 if is_map {
                     self.emit_method_receiver(receiver);
                     self.push(".get(&(");
                     self.emit_expr(&args[0]);
                     self.push(").clone()).cloned()");
-                } else {
+                } else if is_list_or_set {
                     self.push("{ let __mvl_i = (");
                     self.emit_expr(&args[0]);
                     self.push("); if __mvl_i < 0 { None } else { (");
                     self.emit_method_receiver(receiver);
                     self.push(").get(__mvl_i as usize).cloned() } }");
+                } else {
+                    // User-defined type with a custom .get() method — emit as
+                    // a regular method call, not List indexing semantics.
+                    self.emit_user_method_receiver(receiver);
+                    self.push(".get(");
+                    self.emit_args(args);
+                    self.push(")");
                 }
             }
 

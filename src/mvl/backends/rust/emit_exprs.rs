@@ -487,16 +487,8 @@ impl RustEmitter {
                         // are elided; the caller's context (all top-level via
                         // `emit_expr`) never requires them, and Binary-nested
                         // operands wrap only when their own precedence demands it.
-                        //
-                        // IFC labeled operands need `.0` unwrap before comparison /
-                        // logical ops — the operator acts on the inner value (#1708).
-                        let left_labeled = matches!(left.ty, Ty::Labeled(..));
-                        let right_labeled = matches!(right.ty, Ty::Labeled(..));
                         let my_prec = binary_own_prec(*op);
                         self.emit_operand_left(left, my_prec);
-                        if left_labeled {
-                            self.push(".0");
-                        }
                         self.push(" ");
                         self.push(emit_binary_op(*op));
                         self.push(" ");
@@ -508,9 +500,6 @@ impl RustEmitter {
                             self.push(")");
                         } else {
                             self.emit_operand_right(right, my_prec);
-                            if right_labeled {
-                                self.push(".0");
-                            }
                         }
                     }
                 }
@@ -566,8 +555,15 @@ impl RustEmitter {
                 // Clone when the scrutinee is a self.field access (can't move out of &self)
                 // or a capability param (val/ref → &T/&mut T in Rust). Without clone,
                 // match ergonomics yield reference bindings that fail E0507/E0277.
+                // Also clone when the scrutinee is a bare local Var that is NOT its
+                // last use — the arm patterns partially move the value and later
+                // reads would trip E0382.
+                let scrutinee_var_needs_clone = matches!(&scrutinee.kind, TirExprKind::Var(name)
+                    if !self.capability_param_names.contains(name)
+                        && !self.last_uses.contains(&scrutinee.span));
                 if scrutinee_needs_clone(scrutinee)
                     || matches!(&scrutinee.kind, TirExprKind::Var(name) if self.capability_param_names.contains(name))
+                    || scrutinee_var_needs_clone
                 {
                     self.push(".clone()");
                 }
@@ -1070,6 +1066,20 @@ impl RustEmitter {
                     ".clone().into()"
                 } else {
                     ".clone()"
+                });
+            }
+            // Deref of Box<T>: *box moves the value out of the box.  Clone so the
+            // same box can be dereffed multiple times (e.g. repeated use in function
+            // call args after a match-arm binding `Box<T>`).
+            TirExprKind::Unary {
+                op: UnaryOp::Deref, ..
+            } => {
+                self.push("(");
+                self.emit_expr(expr);
+                self.push(if coerce {
+                    ").clone().into()"
+                } else {
+                    ").clone()"
                 });
             }
             _ => {
