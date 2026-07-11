@@ -2,7 +2,7 @@
 .ONESHELL:
 SHELL := /bin/bash
 
-.PHONY: help version build build-llvm-runtime build-release test test-full test-unit test-rust-integration test-requirements test-error-messages test-fmt-roundtrip test-corpus test-corpus-codegen test-checker-parity test-checker-parity-update test-solver test-stdlib check-compiler assure-compiler test-mvl test-bootstrap-e2e test-bdd test-backend-rust test-backend-llvm test-cross-backend test-tree-sitter test-grammar-coverage test-examples test-examples-rust test-examples-llvm coverage validate-keywords lint mvl-lint format format-check format-mvl format-mvl-check assurance assurance-gate audit-backend-ast check-adr docs docs-serve tree-sitter-build install install-nvim setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
+.PHONY: help version build test test-full test-unit test-rust-integration test-requirements test-error-messages test-fmt-roundtrip test-corpus test-corpus-codegen test-checker-parity test-checker-parity-update test-solver test-stdlib check-compiler assure-compiler test-mvl test-bootstrap-e2e test-bdd test-backend-rust test-backend-llvm test-cross-backend test-tree-sitter test-grammar-coverage test-examples test-examples-rust test-examples-llvm coverage validate-keywords lint mvl-lint format format-check format-mvl format-mvl-check assurance assurance-gate audit-backend-ast check-adr docs docs-serve tree-sitter-build install install-nvim setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
 
 .DEFAULT_GOAL := help
 
@@ -49,27 +49,63 @@ doctor: ## Check that all dev tools are available
 	fi; \
 	echo
 
-install: build-release build-llvm-runtime-release ## Install mvl binary + LLVM runtime to ~/.local/bin
-	@mkdir -p ~/.local/bin
-	cp target/release/mvl ~/.local/bin/mvl
-	cp target/release/libmvl_runtime_llvm.dylib ~/.local/bin/libmvl_runtime_llvm.dylib 2>/dev/null || true
-	cp target/release/libmvl_runtime_llvm.so    ~/.local/bin/libmvl_runtime_llvm.so    2>/dev/null || true
-	@echo "Installed: ~/.local/bin/mvl"
+# Install paths — versioned toolchain layout under XDG_DATA_HOME (ADR-0009).
+# Compiler version drives the toolchain dir; runtime version drives the runtime dir.
+# They are tracked independently and may differ (see #1765).
+INSTALL_VERSION         := $(shell grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+INSTALL_RUNTIME_VERSION := $(shell grep '^version' runtime/rust/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+
+INSTALL_XDG_DATA_HOME   ?= $(HOME)/.local/share
+INSTALL_MVL_DATA_DIR    := $(INSTALL_XDG_DATA_HOME)/mvl
+INSTALL_TOOLCHAIN_DIR   := $(INSTALL_MVL_DATA_DIR)/toolchains/$(INSTALL_VERSION)
+INSTALL_RUNTIME_DIR     := $(INSTALL_MVL_DATA_DIR)/runtime/$(INSTALL_RUNTIME_VERSION)
+INSTALL_BIN_DIR         := $(HOME)/.local/bin
+
+install: ## Install all 4 artifacts (mvl, stdlib, rust runtime, llvm runtime) from local source
+	@$(MAKE) build BUILD=release
+	@echo ""
+	@echo "Installing mvl $(INSTALL_VERSION) to $(INSTALL_TOOLCHAIN_DIR) ..."
+	@mkdir -p $(INSTALL_TOOLCHAIN_DIR)/bin $(INSTALL_TOOLCHAIN_DIR)/std $(INSTALL_BIN_DIR)
+	@mkdir -p $(INSTALL_RUNTIME_DIR)/rust $(INSTALL_RUNTIME_DIR)/rust-tokio
+	# 1. mvl binary + ~/.local/bin symlink
+	cp target/release/mvl $(INSTALL_TOOLCHAIN_DIR)/bin/mvl
+	chmod +x $(INSTALL_TOOLCHAIN_DIR)/bin/mvl
+	ln -sfn $(INSTALL_TOOLCHAIN_DIR)/bin/mvl $(INSTALL_BIN_DIR)/mvl
+	# 2. stdlib source (.mvl files)
+	rsync -a --delete std/ $(INSTALL_TOOLCHAIN_DIR)/std/
+	@echo "$(INSTALL_VERSION)" > $(INSTALL_TOOLCHAIN_DIR)/std/.version
+	# 3. Rust runtime crate source (default + tokio target)
+	rsync -a --delete runtime/rust/       $(INSTALL_RUNTIME_DIR)/rust/
+	rsync -a --delete runtime/rust-tokio/ $(INSTALL_RUNTIME_DIR)/rust-tokio/
+	# 4. LLVM runtime cdylib — installed in the toolchain bin dir, plus a symlink
+	#    in ~/.local/bin/ because find_mvl_runtime_llvm_lib uses current_exe() which
+	#    returns the unresolved symlink path on macOS (looks in ~/.local/bin/, not
+	#    the toolchain dir). A dedicated runtime/{ver}/llvm/ path is planned in a
+	#    follow-up (see #1765) once the dylib finder is updated to resolve symlinks.
+	@cp target/release/libmvl_runtime_llvm.dylib $(INSTALL_TOOLCHAIN_DIR)/bin/ 2>/dev/null || true
+	@cp target/release/libmvl_runtime_llvm.so    $(INSTALL_TOOLCHAIN_DIR)/bin/ 2>/dev/null || true
+	@[ -e $(INSTALL_TOOLCHAIN_DIR)/bin/libmvl_runtime_llvm.dylib ] && \
+	  ln -sfn $(INSTALL_TOOLCHAIN_DIR)/bin/libmvl_runtime_llvm.dylib $(INSTALL_BIN_DIR)/libmvl_runtime_llvm.dylib || true
+	@[ -e $(INSTALL_TOOLCHAIN_DIR)/bin/libmvl_runtime_llvm.so ] && \
+	  ln -sfn $(INSTALL_TOOLCHAIN_DIR)/bin/libmvl_runtime_llvm.so $(INSTALL_BIN_DIR)/libmvl_runtime_llvm.so || true
+	@echo ""
+	@echo "Installed:"
+	@echo "  binary:       $(INSTALL_BIN_DIR)/mvl -> $(INSTALL_TOOLCHAIN_DIR)/bin/mvl"
+	@echo "  stdlib:       $(INSTALL_TOOLCHAIN_DIR)/std/"
+	@echo "  rust runtime: $(INSTALL_RUNTIME_DIR)/rust/ (v$(INSTALL_RUNTIME_VERSION))"
+	@echo "  rust-tokio:   $(INSTALL_RUNTIME_DIR)/rust-tokio/"
+	@echo "  llvm runtime: $(INSTALL_TOOLCHAIN_DIR)/bin/libmvl_runtime_llvm.*"
 
 # === Build ===
 
-build: ## Build the MVL compiler
-	@echo "Building MVL compiler..."
-	cargo build
+# BUILD=debug (default) or BUILD=release
+BUILD              ?= debug
+BUILD_CARGO_FLAGS  := $(if $(filter release,$(BUILD)),--release)
 
-build-llvm-runtime: ## Build the LLVM runtime cdylib (mvl_runtime_llvm at runtime/llvm)
-	cargo build -p mvl_runtime_llvm
-
-build-llvm-runtime-release: ## Build the LLVM runtime cdylib in release mode
-	cargo build --release -p mvl_runtime_llvm
-
-build-release: ## Build release binary
-	cargo build --release
+build: ## Build the MVL compiler + LLVM runtime (BUILD=debug|release, default debug)
+	@echo "Building MVL compiler + LLVM runtime ($(BUILD)) ..."
+	cargo build $(BUILD_CARGO_FLAGS)
+	cargo build -p mvl_runtime_llvm $(BUILD_CARGO_FLAGS)
 
 # === Test ===
 
@@ -135,10 +171,10 @@ define run_test_suites
 	fi
 endef
 
-test: build build-llvm-runtime ## Fast pre-PR gate: unit, type checker, corpus, solver, grammar, stdlib (~10–15 s)
+test: build ## Fast pre-PR gate: unit, type checker, corpus, solver, grammar, stdlib (~10–15 s)
 	$(call run_test_suites,$(TEST_FAST_SUITES))
 
-test-full: build build-llvm-runtime ## Full pre-merge gate: everything in `test` plus codegen, parity, MVL compiler, BDD, backends, examples (~10–20 min)
+test-full: build ## Full pre-merge gate: everything in `test` plus codegen, parity, MVL compiler, BDD, backends, examples (~10–20 min)
 	$(call run_test_suites,$(TEST_FAST_SUITES) $(TEST_FULL_EXTRA_SUITES))
 
 test-unit: ## Run unit tests only
@@ -355,7 +391,7 @@ test-backend-rust: build ## Run end-to-end transpiler tests: compile_and_run + e
 		printf "  \033[31m✗  $$pass passed, $$fail failed\033[0m\n\n"; exit 1; \
 	fi
 
-test-backend-llvm: build build-llvm-runtime ## Run LLVM backend tests across full corpus + intrinsics
+test-backend-llvm: build ## Run LLVM backend tests across full corpus + intrinsics
 	@pass=0; fail=0; \
 	OK="\033[32m✓\033[0m"; FAIL="\033[31m✗\033[0m"; \
 	while IFS= read -r line; do \
@@ -371,7 +407,7 @@ test-backend-llvm: build build-llvm-runtime ## Run LLVM backend tests across ful
 		printf "  \033[31m✗  $$pass passed, $$fail failed\033[0m\n\n"; exit 1; \
 	fi
 
-test-cross-backend: build build-llvm-runtime ## Run Rust integration tests for backend parity (transpiler vs LLVM)
+test-cross-backend: build ## Run Rust integration tests for backend parity (transpiler vs LLVM)
 	@echo "Running cross-backend tests (transpiler vs LLVM parity)..."
 	cargo test --test cross_backend
 
@@ -381,7 +417,7 @@ test-examples: build ## Run `make test` for every example subdirectory
 test-examples-rust: build ## Run Rust transpiler smoke build for every example subdirectory
 	@examples/test-all.sh --smoke
 
-test-examples-llvm: build build-llvm-runtime ## Run LLVM backend tests for every example subdirectory
+test-examples-llvm: build ## Run LLVM backend tests for every example subdirectory
 	@examples/test-all.sh --llvm
 
 # === Quality ===

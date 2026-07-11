@@ -2,7 +2,7 @@
 # Run `make test` (or `make test-llvm` with --llvm) for every example subdirectory.
 # With --full: also runs `make check`, `make test-solver`, and `make smoke` for each example.
 # The MVL compiler is NOT recompiled here — it must be pre-built by the caller
-# (root `make test-examples` depends on `build build-llvm-runtime`).
+# (root `make test-examples` depends on `build`).
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
