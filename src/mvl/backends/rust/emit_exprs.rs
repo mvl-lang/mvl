@@ -487,16 +487,8 @@ impl RustEmitter {
                         // are elided; the caller's context (all top-level via
                         // `emit_expr`) never requires them, and Binary-nested
                         // operands wrap only when their own precedence demands it.
-                        //
-                        // IFC labeled operands need `.0` unwrap before comparison /
-                        // logical ops — the operator acts on the inner value (#1708).
-                        let left_labeled = matches!(left.ty, Ty::Labeled(..));
-                        let right_labeled = matches!(right.ty, Ty::Labeled(..));
                         let my_prec = binary_own_prec(*op);
                         self.emit_operand_left(left, my_prec);
-                        if left_labeled {
-                            self.push(".0");
-                        }
                         self.push(" ");
                         self.push(emit_binary_op(*op));
                         self.push(" ");
@@ -508,9 +500,6 @@ impl RustEmitter {
                             self.push(")");
                         } else {
                             self.emit_operand_right(right, my_prec);
-                            if right_labeled {
-                                self.push(".0");
-                            }
                         }
                     }
                 }
