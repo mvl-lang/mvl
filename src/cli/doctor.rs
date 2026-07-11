@@ -21,27 +21,15 @@ pub fn run() {
 
     println!("mvl doctor");
     println!();
-    println!(
-        "  compiler  v{compiler_ver}  (this binary)"
-    );
-    print_artifact(
-        "stdlib   ",
-        STDLIB_VERSION,
-        &stdlib_path,
-        stdlib_ok,
-    );
+    println!("  compiler  v{compiler_ver}  (this binary)");
+    print_artifact("stdlib   ", STDLIB_VERSION, &stdlib_path, stdlib_ok);
     print_artifact(
         "runtime  ",
         RUNTIME_VERSION,
         &runtime_dir.join("rust"),
         rust_ok,
     );
-    print_artifact(
-        "llvm-rt  ",
-        RUNTIME_VERSION,
-        &llvm_dir,
-        llvm_ok,
-    );
+    print_artifact("llvm-rt  ", RUNTIME_VERSION, &llvm_dir, llvm_ok);
 
     println!();
     if stdlib_ok && rust_ok && llvm_ok {
