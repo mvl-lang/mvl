@@ -9,6 +9,8 @@
 
 use std::path::PathBuf;
 
+const RUNTIME_VERSION: &str = env!("MVL_RUNTIME_VERSION");
+
 // ── lli discovery ─────────────────────────────────────────────────────────────
 
 /// Locate the `lli` interpreter on this machine.
@@ -53,10 +55,28 @@ fn which_lli() -> Option<PathBuf> {
 ///
 /// Search order:
 /// 1. `MVL_RUNTIME_LLVM_LIB` env var (must end in `.dylib` or `.so`)
-/// 2. Sibling of the current executable: `target/{profile}/libmvl_runtime_llvm.{dylib,so}`
-/// 3. Cargo cdylib output: `target/{profile}/deps/libmvl_runtime_llvm.{dylib,so}`
+/// 2. XDG runtime dir: `<mvl_data_home>/runtime/{RUNTIME_VERSION}/llvm/`
+/// 3. Sibling of the current executable (resolved, not the symlink path):
+///    `target/{profile}/libmvl_runtime_llvm.{dylib,so}`
+/// 4. Cargo cdylib output: `target/{profile}/deps/libmvl_runtime_llvm.{dylib,so}`
 pub fn find_mvl_runtime_llvm_lib() -> Option<PathBuf> {
     find_cdylib("MVL_RUNTIME_LLVM_LIB", "libmvl_runtime_llvm")
+}
+
+fn mvl_data_home() -> PathBuf {
+    if let Ok(home) = std::env::var("MVL_HOME") {
+        return PathBuf::from(home);
+    }
+    let base = std::env::var("XDG_DATA_HOME")
+        .ok()
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var("HOME")
+                .ok()
+                .map(|h| PathBuf::from(h).join(".local").join("share"))
+        })
+        .unwrap_or_else(|| PathBuf::from("."));
+    base.join("mvl")
 }
 
 fn find_cdylib(env_var: &str, lib_name: &str) -> Option<PathBuf> {
@@ -68,8 +88,23 @@ fn find_cdylib(env_var: &str, lib_name: &str) -> Option<PathBuf> {
         }
         eprintln!("warning: {env_var} ignored — must end in .dylib or .so and exist: {path}");
     }
+    // XDG runtime dir — the canonical installed location (ADR-0009, #1765).
+    let xdg_llvm = mvl_data_home()
+        .join("runtime")
+        .join(RUNTIME_VERSION)
+        .join("llvm");
+    for ext in &["dylib", "so"] {
+        let lib = xdg_llvm.join(format!("{lib_name}.{ext}"));
+        if lib.exists() {
+            return Some(lib);
+        }
+    }
+    // Sibling of the resolved executable — covers dev builds where the binary
+    // lives in target/{profile}/ and the dylib is next to it.  Canonicalize
+    // so that a ~/.local/bin/mvl symlink resolves to the actual toolchain dir.
     if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
+        let resolved = exe.canonicalize().unwrap_or(exe);
+        if let Some(dir) = resolved.parent() {
             for ext in &["dylib", "so"] {
                 for suffix in &["", "deps/"] {
                     let lib = dir.join(format!("{suffix}{lib_name}.{ext}"));

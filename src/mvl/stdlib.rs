@@ -6,6 +6,9 @@
 //! All `.mvl` stdlib source files are embedded in the binary at compile time
 //! via `include_str!`. On first run (or when the version stamp mismatches),
 //! they are extracted to `$XDG_DATA_HOME/mvl/toolchains/{version}/std/`.
+//! When `make install` has already written the stdlib to disk (the preferred
+//! dev path), the binary detects the matching `.version` stamp and skips
+//! extraction entirely.
 //!
 //! Override: `MVL_HOME` replaces all XDG paths (useful for CI and testing).
 
@@ -78,22 +81,7 @@ pub fn ensure_stdlib() -> PathBuf {
 fn needs_extraction(target: &Path) -> bool {
     let stamp = target.join(".version");
     match fs::read_to_string(&stamp) {
-        Ok(v) => {
-            if v.trim() != STDLIB_VERSION {
-                return true;
-            }
-            // Version matches — verify all expected files are present and
-            // their content matches the embedded copy.  This handles both
-            // new stdlib files added in a patch (missing file) and stale
-            // cache from another branch or manual edit (content diverged).
-            STDLIB_FILES.iter().any(|(name, content)| {
-                let on_disk = target.join(name);
-                match fs::read_to_string(&on_disk) {
-                    Ok(disk) => disk != *content,
-                    Err(_) => true, // missing file
-                }
-            })
-        }
+        Ok(v) => v.trim() != STDLIB_VERSION,
         Err(_) => true,
     }
 }

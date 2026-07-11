@@ -24,7 +24,16 @@ fn main() {
     // project pin.  Keep this list in sync with the dispatch match arms below.
     let is_toolchain_meta = matches!(
         cmd.as_str(),
-        "self" | "--version" | "-V" | "version" | "--help" | "-h" | "help" | "init" | "pin"
+        "self"
+            | "--version"
+            | "-V"
+            | "version"
+            | "--help"
+            | "-h"
+            | "help"
+            | "init"
+            | "pin"
+            | "doctor"
     );
 
     if !is_toolchain_meta {
