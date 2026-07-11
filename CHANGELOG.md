@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.245.5] - 2026-07-11
+
+### Fixed — Rust Emitter: list literal .join() codegen
+
+- Avoid emitting `.into()` on elements of inline list literals used as `.join()` receivers — Rust can't infer the `Vec<T>` element type through `.join()` context alone and falls back to a wrong impl, causing E0308 (found `Vec<String>`, expected `String`). Fix: emit elements via `emit_args_no_into` which pins types to concrete Rust types without ambiguous coercions (#1770).
+
 ## [0.245.4] - 2026-07-11
 
 ### Fixed — test-full: restore deleted examples and targeted wildcard-let annotation
