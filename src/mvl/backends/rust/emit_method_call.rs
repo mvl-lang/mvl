@@ -318,7 +318,18 @@ impl RustEmitter {
             }
             // join(sep) — join strings with separator
             "join" if args.len() == 1 => {
-                self.emit_method_receiver(receiver);
+                // When the receiver is an inline list literal, emit its elements
+                // without .into() — Rust can't infer Vec<T>'s element type solely
+                // from the .join() context and defaults to ambiguous inference that
+                // causes E0308 (found Vec<String>, expected String).
+                match &receiver.kind {
+                    TirExprKind::List { elems } => {
+                        self.push("vec![");
+                        self.emit_args_no_into(elems);
+                        self.push("]");
+                    }
+                    _ => self.emit_method_receiver(receiver),
+                }
                 self.push(".join(&");
                 self.emit_expr(&args[0]);
                 self.push(")");
