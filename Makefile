@@ -66,7 +66,7 @@ install: ## Install all 4 artifacts (mvl, stdlib, rust runtime, llvm runtime) fr
 	@echo ""
 	@echo "Installing mvl $(INSTALL_VERSION) to $(INSTALL_TOOLCHAIN_DIR) ..."
 	@mkdir -p $(INSTALL_TOOLCHAIN_DIR)/bin $(INSTALL_TOOLCHAIN_DIR)/std $(INSTALL_BIN_DIR)
-	@mkdir -p $(INSTALL_RUNTIME_DIR)/rust $(INSTALL_RUNTIME_DIR)/rust-tokio
+	@mkdir -p $(INSTALL_RUNTIME_DIR)/rust $(INSTALL_RUNTIME_DIR)/rust-tokio $(INSTALL_RUNTIME_DIR)/llvm
 	# 1. mvl binary + ~/.local/bin symlink
 	cp target/release/mvl $(INSTALL_TOOLCHAIN_DIR)/bin/mvl
 	chmod +x $(INSTALL_TOOLCHAIN_DIR)/bin/mvl
@@ -77,24 +77,18 @@ install: ## Install all 4 artifacts (mvl, stdlib, rust runtime, llvm runtime) fr
 	# 3. Rust runtime crate source (default + tokio target)
 	rsync -a --delete runtime/rust/       $(INSTALL_RUNTIME_DIR)/rust/
 	rsync -a --delete runtime/rust-tokio/ $(INSTALL_RUNTIME_DIR)/rust-tokio/
-	# 4. LLVM runtime cdylib — installed in the toolchain bin dir, plus a symlink
-	#    in ~/.local/bin/ because find_mvl_runtime_llvm_lib uses current_exe() which
-	#    returns the unresolved symlink path on macOS (looks in ~/.local/bin/, not
-	#    the toolchain dir). A dedicated runtime/{ver}/llvm/ path is planned in a
-	#    follow-up (see #1765) once the dylib finder is updated to resolve symlinks.
-	@cp target/release/libmvl_runtime_llvm.dylib $(INSTALL_TOOLCHAIN_DIR)/bin/ 2>/dev/null || true
-	@cp target/release/libmvl_runtime_llvm.so    $(INSTALL_TOOLCHAIN_DIR)/bin/ 2>/dev/null || true
-	@[ -e $(INSTALL_TOOLCHAIN_DIR)/bin/libmvl_runtime_llvm.dylib ] && \
-	  ln -sfn $(INSTALL_TOOLCHAIN_DIR)/bin/libmvl_runtime_llvm.dylib $(INSTALL_BIN_DIR)/libmvl_runtime_llvm.dylib || true
-	@[ -e $(INSTALL_TOOLCHAIN_DIR)/bin/libmvl_runtime_llvm.so ] && \
-	  ln -sfn $(INSTALL_TOOLCHAIN_DIR)/bin/libmvl_runtime_llvm.so $(INSTALL_BIN_DIR)/libmvl_runtime_llvm.so || true
+	# 4. LLVM runtime cdylib — installed in runtime/{ver}/llvm/ (ADR-0009, #1765).
+	#    find_mvl_runtime_llvm_lib() resolves current_exe() symlinks and searches
+	#    this XDG path first, so no ~/.local/bin/ symlink hack is needed.
+	@cp target/release/libmvl_runtime_llvm.dylib $(INSTALL_RUNTIME_DIR)/llvm/ 2>/dev/null || true
+	@cp target/release/libmvl_runtime_llvm.so    $(INSTALL_RUNTIME_DIR)/llvm/ 2>/dev/null || true
 	@echo ""
 	@echo "Installed:"
 	@echo "  binary:       $(INSTALL_BIN_DIR)/mvl -> $(INSTALL_TOOLCHAIN_DIR)/bin/mvl"
 	@echo "  stdlib:       $(INSTALL_TOOLCHAIN_DIR)/std/"
 	@echo "  rust runtime: $(INSTALL_RUNTIME_DIR)/rust/ (v$(INSTALL_RUNTIME_VERSION))"
 	@echo "  rust-tokio:   $(INSTALL_RUNTIME_DIR)/rust-tokio/"
-	@echo "  llvm runtime: $(INSTALL_TOOLCHAIN_DIR)/bin/libmvl_runtime_llvm.*"
+	@echo "  llvm runtime: $(INSTALL_RUNTIME_DIR)/llvm/ (v$(INSTALL_RUNTIME_VERSION))"
 
 # === Build ===
 

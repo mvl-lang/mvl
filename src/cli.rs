@@ -5,6 +5,7 @@ pub mod args;
 pub mod assurance;
 pub mod build;
 pub mod check;
+pub mod doctor;
 pub mod fmt;
 pub mod fuzz;
 pub mod lint;
@@ -258,6 +259,9 @@ pub(super) fn dispatch(args: &[String]) {
             let json = args.iter().any(|a| a == "--format=json" || a == "--json");
             let verbose = args.iter().any(|a| a == "--verbose" || a == "-v");
             assurance::run(&path, json, verbose);
+        }
+        "doctor" => {
+            doctor::run();
         }
         "init" => {
             meta::cmd_init(args);
