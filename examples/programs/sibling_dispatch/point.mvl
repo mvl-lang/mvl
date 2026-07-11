@@ -1,5 +1,0 @@
-/// Shared type — imported by all sibling implementation files.
-pub type Point = struct { x: Int, y: Int }
-
-pub fn Point::x_val(self) -> Int { self.x }
-pub fn Point::y_val(self) -> Int { self.y }
