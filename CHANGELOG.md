@@ -7,6 +7,10 @@
 - Restore example programs deleted/moved in cleanup commit 092c9e06 without updating tests: `hello_world.mvl`, `hello_mvl.mvl`, `random_dice/`, `bridge_ok/`, `sibling_dispatch/` — fixed 11 backend + 4 assurance failures (#1767).
 - Suppress type annotation on wildcard `let _` bindings only when the declared type is `ref T` (original `ty` is `Ty::Ref(..)`); blanket suppression in 72426026 broke `corpus_bitwise_transpiles`, targeted fix handles both the E0308 reborrow case and the Byte type assertion (#1767).
 
+### Changed — `make install` installs all 4 artifacts locally
+
+- `make install` now installs the mvl binary, stdlib source, Rust runtime crate, and LLVM runtime cdylib from the local source tree in one step — previously the Rust runtime was only reachable via `mvl self install` (GitHub Releases download), which fails for dev builds. Layout follows ADR-0009: `~/.local/share/mvl/toolchains/{ver}/{bin,std}/` for the binary + stdlib, `~/.local/share/mvl/runtime/{runtime_ver}/{rust,rust-tokio}/` for the Rust runtime. `~/.local/bin/mvl` and `libmvl_runtime_llvm.*` become symlinks into the toolchain dir (#1765).
+- `make build` now builds the compiler + LLVM runtime in one target, parameterised by `BUILD=debug|release` (default `debug`). Removed `build-release`, `build-llvm-runtime`, `build-llvm-runtime-release` — test targets that composed `build build-llvm-runtime` are simplified to `build`. Follow-up work in #1765 will decouple stdlib from the binary and add a stdlib tarball artifact to CI releases.
 ## [0.245.3] - 2026-07-11
 
 ### Fixed — Wildcard let bindings type annotations
