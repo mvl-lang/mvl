@@ -63,12 +63,19 @@ make assurance      # full assurance report (spec + MC/DC + mutation)
 | `make test` | Behaviour on scenarios | 79/79 tests pass |
 | `make coverage` | Branch coverage of test suite | 100% (33/33 branches) |
 | `make mcdc` | MC/DC clause independence | 100% (57/57 pure obligations) |
-| `make prove` | Refinement contracts discharged by solver | 5 obligations, all Layer 1 |
+| `make prove` | Refinement contracts discharged by solver | 9 obligations, L1:5 L2:1 L3:1 L4:2 |
 
-The `reassess_interval` function carries an `ensures result >= 0 && result <= 240`
-postcondition — the solver proves it once per match arm, giving `mvl prove` real
-work to do.  Add further `ensures` clauses to the boolean helpers to expand the
-refinement-proof surface.
+The reassessment helpers deliberately span the refinement-solver layers:
+
+| Function | Layer | What it exercises |
+|----------|-------|-------------------|
+| `reassess_interval` (5 arms) | **L1 trivial** | Each match arm returns a literal fitting `[0, 240]` |
+| `cap_stable_reassess` | **L2 interval** | Parameter's `[0, 60]` range is a subset of the postcondition's `[0, 240]` |
+| `sanitize_reassess` | **L3 symbolic** | Enumerates the three paths of `clamp_to_mts_range` and proves each independently fits `[0, 240]` |
+| `buffered_reassess_min` | **L4 Presburger** | From `mins >= 0`, derives `mins + 5 >= 5` via Fourier-Motzkin |
+| `buffered_reassess_max` | **L4 Presburger** | From `mins <= 240`, derives `mins + 5 <= 245` via Fourier-Motzkin |
+
+All nine obligations discharge without falling through to Z3 (L5) or runtime.
 
 ---
 

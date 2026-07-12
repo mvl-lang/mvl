@@ -149,6 +149,80 @@ pub total fn reassess_interval(pri: Priority) -> Int
     }
 }
 
+// ── Reassess adjustments (solver-layer demonstrations) ───────────────────
+//
+// Clinical rationale: the base MTS interval is a ceiling.  Sicker or more
+// vulnerable patients (infants, elderly, unstable vitals) get shorter
+// reassessment windows — see MTS 3rd edition §5.4.  These helpers cap,
+// buffer, or clamp the interval and are contract-heavy so the refinement
+// solver exercises its higher layers.
+
+// Internal targets — each demands a specific bounded input.  Callers must
+// prove the value they hand in fits.
+
+/// Precondition: the interval sits in the canonical MTS window [0, 240].
+total fn require_reassess(mins: Int where mins >= 0 && mins <= 240) -> Int { mins }
+
+/// Precondition: the interval is at least 5 minutes (single-bound lets
+/// the FM/Presburger solver reason without falling through to Z3).
+total fn require_min_buffered(mins: Int where mins >= 5) -> Int { mins }
+
+/// Precondition: the interval is at most 245 minutes.
+total fn require_max_buffered(mins: Int where mins <= 245) -> Int { mins }
+
+/// Cap the reassessment interval at the Yellow ceiling for stable-but-observed
+/// patients — never longer than 60 minutes.
+///
+/// Refinement layer: **L2 (interval subsumption).**
+/// The parameter's declared range [0, 60] is a subset of the postcondition's
+/// [0, 240], so no arithmetic reasoning is needed — the solver reads off the
+/// interval bounds and checks containment.
+pub total fn cap_stable_reassess(mins: Int where mins >= 0 && mins <= 60) -> Int
+    ensures result >= 0 && result <= 240
+{
+    mins
+}
+
+/// Add a 5-minute clinical-handoff buffer to a reassessment interval —
+/// prove the lower bound of the buffered result.
+///
+/// Refinement layer: **L4 (Presburger / linear arithmetic).**
+/// The solver combines the hypothesis `mins >= 0` with the linear
+/// operation `mins + 5` to prove `mins + 5 >= 5`, satisfying
+/// `require_min_buffered`'s precondition.
+pub total fn buffered_reassess_min(mins: Int where mins >= 0) -> Int {
+    require_min_buffered(mins + 5)
+}
+
+/// Add a 5-minute clinical-handoff buffer — prove the upper bound.
+///
+/// Refinement layer: **L4 (Presburger / linear arithmetic).**
+/// From `mins <= 240` and `mins + 5`, the solver derives `mins + 5 <= 245`
+/// via Fourier-Motzkin elimination.
+pub total fn buffered_reassess_max(mins: Int where mins <= 240) -> Int {
+    require_max_buffered(mins + 5)
+}
+
+/// Sensor-safe clamp: fold an arbitrary integer minute value into the canonical
+/// MTS window before it reaches the reassessment queue.
+///
+/// Refinement layer: **L3 (symbolic path enumeration).**
+/// The wrapped `clamp_to_mts_range` has no `ensures` — the solver enumerates
+/// its three paths (return `0`, return `240`, or pass `mins` under the
+/// combined guard `mins >= 0 && mins <= 240`) and proves each path satisfies
+/// `require_reassess`'s precondition `[0, 240]`.
+pub total fn sanitize_reassess(mins: Int) -> Int {
+    require_reassess(clamp_to_mts_range(mins))
+}
+
+/// Clamp any integer into `[0, 240]` — the callee whose path enumeration
+/// backs `sanitize_reassess`'s L3 obligation.
+total fn clamp_to_mts_range(mins: Int) -> Int {
+    if mins < 0 { 0 }
+    else if mins > 240 { 240 }
+    else { mins }
+}
+
 // ── Full assessment ──────────────────────────────────────────────────────
 
 /// Full triage assessment: compute priority, resuscitation flag, isolation flag, and reassess time.
