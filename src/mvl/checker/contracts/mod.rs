@@ -638,11 +638,10 @@ fn check_ensures_for_return_expr_recur(
         check_ensures_in_block(then, fn_name, ensures, params, &then_hyps, ctx);
         let mut else_hyps = branch_hyps.to_vec();
         else_hyps.push(negate_cond(cond));
-        match else_ {
-            Some(inner) => check_ensures_for_return_expr_recur(
+        if let Some(inner) = else_ {
+            check_ensures_for_return_expr_recur(
                 inner, span, fn_name, ensures, params, &else_hyps, ctx,
-            ),
-            None => {}
+            );
         }
         return;
     }
