@@ -416,8 +416,7 @@ impl TypeChecker {
                 // known_labels set from all prelude collect_declarations passes.
                 let inner_ty = match &raw_ty {
                     Ty::Named(n, args)
-                        if args.len() == 1
-                            && self.env.known_labels.contains(n.as_str()) =>
+                        if args.len() == 1 && self.env.known_labels.contains(n.as_str()) =>
                     {
                         Ty::Labeled(n.clone(), Box::new(args[0].clone()))
                     }

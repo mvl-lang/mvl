@@ -1177,7 +1177,8 @@ mod tests {
         let prelude_prog = pp.parse_program();
         let (mut cp, _) = crate::mvl::parser::Parser::new(consumer_src);
         let consumer_prog = cp.parse_program();
-        let result = crate::mvl::checker::check_with_two_preludes(&[], &[&prelude_prog], &consumer_prog);
+        let result =
+            crate::mvl::checker::check_with_two_preludes(&[], &[&prelude_prog], &consumer_prog);
         assert!(
             result.is_ok(),
             "cross-file user label relabel should be accepted, got: {:?}",
