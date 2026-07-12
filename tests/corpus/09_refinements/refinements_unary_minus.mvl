@@ -1,0 +1,30 @@
+// Corpus: unary minus in refinement predicates (#1777)
+//
+// Previously the parser rejected `-N` after a comparison operator
+// (`self >= -3`) and at the start of an expression (`-3 <= self`),
+// forcing users to write `self >= 0 - 3`.  Both forms should now parse
+// and be semantically identical to the binary-subtraction workaround.
+
+// Unary minus after a comparison — the bug's canonical repro.
+pub type BoundedSigned = struct {
+    v: Int where self >= -3 && self <= 3 && self != 0,
+}
+
+// Unary minus at the start of an expression, both operands positioned.
+pub type SymmetricBias = struct {
+    v: Int where -1 <= self && self <= 1,
+}
+
+// Nested unary minus in an arithmetic subexpression.
+pub type NestedNeg = struct {
+    v: Int where self >= -3 - -2,   // == self >= -1
+}
+
+// Unary minus inside a struct invariant.
+pub type OffsetPair = struct {
+    lo: Int,
+    hi: Int,
+} with invariant self.lo >= -100 && self.hi <= 100
+
+// Reference each type so the linter records it as used.
+fn touch(_a: BoundedSigned, _b: SymmetricBias, _c: NestedNeg, _d: OffsetPair) -> Unit { }
