@@ -134,7 +134,12 @@ pub total fn assign_priority(p: Patient) -> Priority {
 // ── Reassessment interval ────────────────────────────────────────────────
 
 /// Return the reassessment interval in minutes for a given triage priority.
-pub total fn reassess_interval(pri: Priority) -> Int {
+///
+/// Contract: the interval is always non-negative and never exceeds the Blue
+/// escalation window (240 min).  Proven per-arm by the solver.
+pub total fn reassess_interval(pri: Priority) -> Int
+    ensures result >= 0 && result <= 240
+{
     match pri {
         Priority::Red    => 0,
         Priority::Orange => 10,

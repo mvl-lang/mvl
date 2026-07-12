@@ -102,7 +102,9 @@ fn assign_priority(p: Patient) -> Priority {
     }
 }
 
-fn reassess_interval(pri: Priority) -> Int {
+fn reassess_interval(pri: Priority) -> Int
+    ensures result >= 0 && result <= 240
+{
     match pri { Priority::Red => 0, Priority::Orange => 10, Priority::Yellow => 60, Priority::Green => 120, Priority::Blue => 240 }
 }
 
@@ -176,6 +178,14 @@ test fn d3_toggle_tachy_low_bp() -> Unit {
 
 test fn d3_low_bp_strong_pulse() -> Unit {
     let v: Vitals = Vitals { heart_rate: 75, systolic_bp: 85, oxygen_sat: 98, temperature: 370,
+                     consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal, pulse: PulseStrength::Strong };
+    assert_eq(circulation_failure(v), false);
+}
+
+// MC/DC pair for clause 3 (v.systolic_bp < 100 in the tachy branch).
+// Pairs with d3_toggle_tachy_low_bp (HR=140, BP=95 → true) to independently flip BP.
+test fn d3_tachy_normal_bp() -> Unit {
+    let v: Vitals = Vitals { heart_rate: 140, systolic_bp: 110, oxygen_sat: 98, temperature: 370,
                      consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal, pulse: PulseStrength::Strong };
     assert_eq(circulation_failure(v), false);
 }
@@ -283,6 +293,22 @@ test fn d6_chest_adult_not_orange() -> Unit {
     assert_eq(is_orange(p), false);
 }
 
+// MC/DC pair for clause 2 (age == Infant).
+// Pairs with d6_chest_adult_not_orange to independently flip the age check.
+test fn d6_toggle_chest_infant() -> Unit {
+    let p: Patient = Patient { age_group: AgeGroup::Infant, complaint: ChiefComplaint::ChestPain, vitals: normal_vitals(), allergies: false, pregnant: false };
+    assert_eq(is_orange(p), true);
+}
+
+// MC/DC pair for clause 3 (oxygen_sat > 91).
+// Pairs with d6_toggle_borderline_labored (sat=93 → true) to independently flip sat > 91.
+test fn d6_o2_below_borderline() -> Unit {
+    let v: Vitals = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 90, temperature: 370,
+                     consciousness: Consciousness::Alert, breathing: BreathingStatus::Labored, pulse: PulseStrength::Strong };
+    let p: Patient = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Breathing, vitals: v, allergies: false, pregnant: false };
+    assert_eq(is_orange(p), false);
+}
+
 // ════════════════════════════════════════════════════════════════════════
 // Decision 6: fever_risk
 // ════════════════════════════════════════════════════════════════════════
@@ -315,6 +341,16 @@ test fn d7_toggle_complaint() -> Unit {
                      consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal, pulse: PulseStrength::Strong };
     let p: Patient = Patient { age_group: AgeGroup::Infant, complaint: ChiefComplaint::Minor, vitals: v, allergies: false, pregnant: false };
     assert_eq(fever_risk(p), false);
+}
+
+// MC/DC pair for clause 2 (age == Elderly).
+// Pairs with d7_toggle_age (Adult → false) to independently flip the elderly check
+// while Infant remains false.
+test fn d7_all_true_elderly() -> Unit {
+    let v: Vitals = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 98, temperature: 395,
+                     consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal, pulse: PulseStrength::Strong };
+    let p: Patient = Patient { age_group: AgeGroup::Elderly, complaint: ChiefComplaint::Fever, vitals: v, allergies: false, pregnant: false };
+    assert_eq(fever_risk(p), true);
 }
 
 // ════════════════════════════════════════════════════════════════════════
@@ -546,6 +582,51 @@ test fn priority_green_for_adult_abdominal() -> Unit {
     assert_eq(pri == Priority::Green, true);
 }
 
+// Cover each disjunct of the Orange-branch condition at triage:123 to satisfy
+// masking-MC/DC obligations for the 5 structurally-coupled clauses.
+
+test fn priority_orange_via_fever_risk() -> Unit {
+    let v: Vitals = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 98, temperature: 395,
+                     consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal, pulse: PulseStrength::Strong };
+    let p: Patient = Patient { age_group: AgeGroup::Infant, complaint: ChiefComplaint::Fever, vitals: v, allergies: false, pregnant: false };
+    let pri: Priority = assign_priority(p);
+    assert_eq(pri == Priority::Orange, true);
+}
+
+test fn priority_orange_via_trauma_urgent() -> Unit {
+    let v: Vitals = Vitals { heart_rate: 100, systolic_bp: 105, oxygen_sat: 96, temperature: 370,
+                     consciousness: Consciousness::VoiceResponse, breathing: BreathingStatus::Normal, pulse: PulseStrength::Weak };
+    let p: Patient = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Trauma, vitals: v, allergies: false, pregnant: false };
+    let pri: Priority = assign_priority(p);
+    assert_eq(pri == Priority::Orange, true);
+}
+
+test fn priority_orange_via_pregnancy_escalate() -> Unit {
+    let p: Patient = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Abdominal, vitals: normal_vitals(), allergies: false, pregnant: true };
+    let pri: Priority = assign_priority(p);
+    assert_eq(pri == Priority::Orange, true);
+}
+
+test fn priority_orange_via_elderly_risk() -> Unit {
+    let v: Vitals = Vitals { heart_rate: 75, systolic_bp: 95, oxygen_sat: 98, temperature: 370,
+                     consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal, pulse: PulseStrength::Strong };
+    let p: Patient = Patient { age_group: AgeGroup::Elderly, complaint: ChiefComplaint::Abdominal, vitals: v, allergies: false, pregnant: false };
+    let pri: Priority = assign_priority(p);
+    assert_eq(pri == Priority::Orange, true);
+}
+
+test fn priority_yellow_for_isolation() -> Unit {
+    // needs_isolation true (fever+high temp) but no red/orange trigger — falls through
+    // is_red = false, is_orange/fever_risk/etc = false (Adult, not vulnerable), then
+    // needs_isolation = true → Yellow.  Note: fever_risk requires Infant/Elderly, so an
+    // Adult with fever+high temp skips Orange and lands on Yellow.
+    let v: Vitals = Vitals { heart_rate: 75, systolic_bp: 120, oxygen_sat: 98, temperature: 395,
+                     consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal, pulse: PulseStrength::Strong };
+    let p: Patient = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Fever, vitals: v, allergies: false, pregnant: false };
+    let pri: Priority = assign_priority(p);
+    assert_eq(pri == Priority::Yellow, true);
+}
+
 // ════════════════════════════════════════════════════════════════════════
 // Integration: assess
 // ════════════════════════════════════════════════════════════════════════
@@ -577,4 +658,18 @@ test fn assess_fever_isolates() -> Unit {
     let p: Patient = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Fever, vitals: v, allergies: false, pregnant: false };
     let a: Assessment = assess(p);
     assert_eq(a.isolate, true);
+}
+
+// Cover the remaining match arms of reassess_interval at triage:138 through assess().
+
+test fn assess_reassess_interval_orange() -> Unit {
+    let p: Patient = Patient { age_group: AgeGroup::Elderly, complaint: ChiefComplaint::ChestPain, vitals: normal_vitals(), allergies: false, pregnant: false };
+    let a: Assessment = assess(p);
+    assert_eq(a.reassess_mins, 10);
+}
+
+test fn assess_reassess_interval_green() -> Unit {
+    let p: Patient = Patient { age_group: AgeGroup::Adult, complaint: ChiefComplaint::Abdominal, vitals: normal_vitals(), allergies: false, pregnant: false };
+    let a: Assessment = assess(p);
+    assert_eq(a.reassess_mins, 120);
 }

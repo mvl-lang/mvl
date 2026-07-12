@@ -42,10 +42,33 @@ Emergency department triage logic — demonstrates **pure domain modeling** and 
 ## Running
 
 ```bash
-make build
+make build                       # build the compiler once, from repo root
 cd examples/medical_triage
-make test
+
+make check          # type-check all sources
+make test           # run unit tests (79 tests)
+make coverage       # branch coverage report
+make mcdc           # MC/DC coverage (DO-178C DAL-A)
+make prove          # per-call-site refinement proof breakdown
+make assurance      # full assurance report (spec + MC/DC + mutation)
 ```
+
+---
+
+## Assurance surface
+
+| Layer | What it verifies | Current result |
+|-------|------------------|----------------|
+| `make check` | Type-check + totality | 10/11 requirements proven per file |
+| `make test` | Behaviour on scenarios | 79/79 tests pass |
+| `make coverage` | Branch coverage of test suite | 100% (33/33 branches) |
+| `make mcdc` | MC/DC clause independence | 100% (57/57 pure obligations) |
+| `make prove` | Refinement contracts discharged by solver | 5 obligations, all Layer 1 |
+
+The `reassess_interval` function carries an `ensures result >= 0 && result <= 240`
+postcondition — the solver proves it once per match arm, giving `mvl prove` real
+work to do.  Add further `ensures` clauses to the boolean helpers to expand the
+refinement-proof surface.
 
 ---
 
