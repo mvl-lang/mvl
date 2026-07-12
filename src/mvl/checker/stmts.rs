@@ -36,7 +36,9 @@ impl TypeChecker {
         if let (Some(lbl), Some(ret)) = (cond_label, return_ty) {
             if !matches!(branch_ty.unlabeled(), Ty::Unit | Ty::Unknown) {
                 let promoted = ifc::apply_label(Some(lbl), branch_ty.unlabeled().clone());
-                if !matches!(promoted, Ty::Unknown) && !self.types_compatible_resolved(ret, &promoted) {
+                if !matches!(promoted, Ty::Unknown)
+                    && !self.types_compatible_resolved(ret, &promoted)
+                {
                     self.emit(CheckError::TypeMismatch {
                         expected: ret.display(),
                         found: promoted.display(),

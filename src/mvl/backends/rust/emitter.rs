@@ -902,7 +902,7 @@ impl RustEmitter {
         let prelude_actor_names: std::collections::HashSet<&str> =
             prelude_actors.iter().map(|a| a.name.as_str()).collect();
         let fn_spawns_prelude_actor = |f: &crate::mvl::ir::TirFn| -> bool {
-            use crate::mvl::ir::visit::{Visit, walk_tir_expr};
+            use crate::mvl::ir::visit::{walk_tir_expr, Visit};
             use crate::mvl::ir::{TirExpr, TirExprKind};
             struct SpawnFinder<'a> {
                 actor_names: &'a std::collections::HashSet<&'a str>,
