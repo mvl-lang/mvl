@@ -48,8 +48,67 @@ total fn make_person(raw_age: Int) -> Person {
     Person { name: "Alice", age: raw_age }
 }
 
+// #1786: alias-transparency extended to six more sites.  Each fn below
+// exercises one of the sites patched from raw `types_compatible` to
+// `types_compatible_resolved`.  All must type-check without emitting
+// a spurious TypeMismatch.
+
+type Port = Int where self >= 0 && self <= 65535
+
+// Struct with a mutable field whose type is a named refined alias.
+// Used by the LValue::Field assignment test below.
+type Counter = struct {
+    limit: Port,
+    tally: ref Int,
+}
+
+// stmts.rs:245 — tail-`if` else-branch compat.
+// If-branch has base type Int; else-branch has aliased type Port.
+// The tail-expression union must accept both.
+total fn tail_if_alias_else(cond: Bool, p: Port) -> Int {
+    if cond { 0 } else { p }
+}
+
+// stmts.rs:273 — `else if` chain compat.
+// Same shape as above but with a chained `else if`.
+total fn tail_else_if_alias(a: Bool, b: Bool, p: Port) -> Int {
+    if a { 0 } else if b { 1 } else { p }
+}
+
+// stmts.rs:305 — `is_ref_assignment` detection through a named alias.
+// `let r: ref Port = 8080` must succeed: Int literal into ref-of-alias.
+// Prior to #1786, the ref-scope check silently missed this pattern.
+partial fn ref_alias_binding() -> Unit {
+    let r: ref Port = 8080;
+    r = r;
+}
+
+// stmts.rs:617 — field assignment through a mutable field whose type is
+// an alias.  `c.tally = raw` where `tally: ref Int` and `raw: Int`
+// exercises the LValue::Field path (LValue::Ident already resolved).
+partial fn assign_field_alias(raw: Int) -> Unit {
+    let c: Counter = Counter { limit: 8080, tally: 0 };
+    c.tally = raw;
+}
+
+// decls.rs:617 — `const` declaration with aliased annotation and Int value.
+// Sibling `let P: Port = 8080` already compiles via #1781; `const` did not.
+const HTTP_PORT: Port = 8080;
+
+// stmts.rs:39 — branch-label promotion return-type compat.
+// If the fn returns an aliased type and a branch's promoted type equals the
+// alias base, the promoted-vs-declared comparison must accept it.
+total fn branch_promotion_return(cond: Bool, p: Port) -> Port {
+    if cond { p } else { 0 }
+}
+
 test fn refinements_valid_typecheck() -> Unit {
     touch(safe_divide);
     touch(positive_sum);
     touch(make_person);
+    touch(tail_if_alias_else);
+    touch(tail_else_if_alias);
+    touch(ref_alias_binding);
+    touch(assign_field_alias);
+    touch(branch_promotion_return);
 }
