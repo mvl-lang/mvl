@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.249.2] - 2026-07-12
+
+### Fixed — cli: `mvl tir` and `mvl mutate` missing stdlib extras preload
+
+Two CLI subcommands assembled a checker prelude with only `loader::load_implicit_prelude()`, skipping `loader::load_mvl_native_stdlib_extras()` — the same class of bug fixed in v0.246.1 for `mvl mcdc`.
+
+- **`mvl tir`** — Programs using pure-MVL stdlib modules (e.g. `std.log`, `std.json`) type-checked with unresolved names. The emitted TIR JSON silently had those expression types serialized as `{"tag": "Unknown"}`, breaking downstream consumers like the MVL backend spike and the `mvl.mvl` self-host pipeline.
+- **`mvl mutate`** — Test files importing pure-MVL stdlib modules generated Rust harnesses that failed to compile with `E0425` / `E0433` because the transpiler's prelude was incomplete.
+
+Fixes mirror existing patterns in `llvm_text.rs` (single-file) and `mcdc.rs` (multi-file). Regression test runs from a tempdir to avoid workspace `mvl.toml` re-exec to installed toolchain. Closes #1788.
+
 ## [0.249.1] - 2026-07-12
 
 ### Fixed — checker: three silent drops at pattern-match/lookup sites
