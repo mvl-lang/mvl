@@ -1,5 +1,91 @@
 # Changelog
 
+## [1.0.0] - 2026-07-12
+
+First stable release of MVL — the Maximum Verifiable Language.
+
+MVL compiles a small, explicit surface (~10 statement forms, ~5 expression forms)
+through a five-stage pipeline (parse → resolve → check → passes → emit) that
+verifies all eleven compile-time guarantees before any target code is emitted.
+Two backends ship: a Rust transpiler and an LLVM IR emitter.
+
+### What ships in 1.0.0
+
+**Language**
+
+- Explicit types on all `let` bindings; no inference at binding sites.
+- Immutable by default; `ref` opts in to mutation.
+- Effects declared in the signature (`-> T ! Console + Net`).
+- Refinement types (`Int where self > 0`), struct invariants (`with invariant`),
+  and function contracts (`requires` / `ensures`) — discharged by a layered
+  solver (L1 shape → L2 interval → L3 symbolic → L4 Cooper QE → L5 Z3).
+- Total-by-default functions; `partial` opts out. `total fn` + `decreases` for
+  provable termination.
+- Information-flow control via opaque labels (`Tainted[T]`, `Secret[T]`,
+  user-defined) with `relabel` as the only escape hatch — every relabel carries
+  an audit tag.
+- Pattern matching with exhaustiveness checking, including on aliased sum types
+  and generic struct field substitution.
+- Actors with `pub fn` behaviors (async), sendable parameters (`val` / `iso`),
+  and private sync helpers. Supervisor and dead-letter types defined in stdlib
+  (runtime wiring for supervised restart and dead-letter routing tracked
+  post-1.0 in #1741 / #1742).
+- Extension methods with dot-syntax dispatch. No UFCS (ADR-0031); no trait
+  system (ADR-0053) — specialize on concrete types.
+
+**Toolchain**
+
+- `mvl check` — full type + refinement + effect + IFC checking.
+- `mvl build` — emit Rust and compile.
+- `mvl tir` — dump typed IR as JSON.
+- `mvl prove` / `mvl assurance` — refinement proof reporting and spec-coverage
+  gating.
+- `mvl mcdc` — modified condition/decision coverage harness generation.
+- `mvl mutate` — mutation-testing harness.
+- `mvl self install` — pinned-version toolchain fetch (compiler + runtime +
+  stdlib artifacts).
+- LSP server (`mvl lsp`) with real-time diagnostics.
+
+**Backends**
+
+- Rust transpiler — production backend, all corpus + stdlib tests pass.
+- LLVM IR text emitter — second backend, native binary via `clang`.
+
+**Stdlib and runtime**
+
+- `std/*.mvl` — pure-MVL stdlib modules (log, env, json, actors, effects, …)
+  packaged as `mvl-stdlib-1.0.0.tar.gz` alongside the compiler binary.
+- `runtime/rust`, `runtime/rust-tokio` — Rust runtime crates packaged as
+  `mvl-runtime-<runtime-version>.tar.gz` for the pinned runtime version the
+  compiler was built against.
+
+### Known limitations deferred to 1.1+
+
+- WASM backend and edge stack (#1571 and related) — planned for 1.1.0.
+- Refinement enforcement on struct field mutation and collection elements
+  (#1553) — planned for 1.2.0.
+- Solver atom normalization to close the L2–L5 dispatch gap (#1805) — planned
+  for 1.2.0.
+- Actor supervision and dead-letter runtime wiring (#1741 / #1742), `select {}`
+  codegen (#1740), bounded mailbox policy (#1495) — planned for a subsequent
+  actors release.
+- FFI completion for `extern "c"` (`Ptr[T]`, type-mapping docs, library
+  linking) (#1637) — planned post-1.0.
+- Self-hosting (#1113 epic) and formalization in Lean/Coq (#246 epic) —
+  long-horizon phase-9 work.
+
+### Recent fixes rolled into 1.0.0
+
+Includes all fixes up to `0.249.4`, notably:
+
+- `#1793` — cross-file label return-type leak (blocking the 1.0 cut).
+- `#1789` — `mvl mcdc` now loads `pkg.*` modules into the prelude.
+- `#1788` — `mvl tir` / `mvl mutate` load pure-MVL stdlib extras (matches the
+  fix that landed for `mvl mcdc` in 0.246.1).
+- `#1787` — three silent drops at pattern-match / lookup sites (aliased enum
+  exhaustiveness, generic struct field substitution, unknown enum variants).
+- Contracts: branch conditions flow as ensures hypotheses (#1796 / #1797).
+
 ## [0.249.4] - 2026-07-12
 
 ### Fixed — cli/mcdc: load pkg.* modules into prelude

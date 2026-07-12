@@ -644,7 +644,7 @@ dependencies = [
 
 [[package]]
 name = "mvl"
-version = "0.249.3"
+version = "1.0.0"
 dependencies = [
  "criterion",
  "flate2",
@@ -666,7 +666,7 @@ dependencies = [
 
 [[package]]
 name = "mvl_runtime_rust"
-version = "0.197.1"
+version = "1.0.0"
 dependencies = [
  "getrandom 0.2.17",
  "hex",
@@ -676,7 +676,7 @@ dependencies = [
 
 [[package]]
 name = "mvl_runtime_tokio"
-version = "0.197.1"
+version = "1.0.0"
 dependencies = [
  "mvl_runtime_rust",
  "tokio",
