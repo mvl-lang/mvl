@@ -44,11 +44,17 @@ pub type PulseStrength = enum {
 }
 
 /// Measured physiological parameters recorded at triage.
+///
+/// The Vitals type keeps raw `Int` fields to allow the concise clinical
+/// comparisons used throughout `triage.mvl` (`v.systolic_bp < 90`, etc.).
+/// Range validation lives in the [`validate_vitals`] function (see triage.mvl),
+/// which returns a `Result` with typed error variants — proven correct via
+/// contracts on that function's postcondition rather than at struct construction.
 pub type Vitals = struct {
-    heart_rate:     Int,    // bpm
-    systolic_bp:    Int,    // mmHg
-    oxygen_sat:     Int,    // SpO2 percentage
-    temperature:    Int,    // celsius × 10 (e.g., 385 = 38.5°C) — avoids float
+    heart_rate:     Int,    // bpm — validated by validate_vitals: 0 < hr < 300
+    systolic_bp:    Int,    // mmHg — validated: 0 < bp <= 300
+    oxygen_sat:     Int,    // SpO2 percentage — validated: 0 <= sat <= 100
+    temperature:    Int,    // celsius × 10 — validated: 300 <= temp <= 450
     consciousness:  Consciousness,
     breathing:      BreathingStatus,
     pulse:          PulseStrength,
@@ -91,7 +97,7 @@ pub type Assessment = struct {
     priority:       Priority,
     resuscitate:    Bool,   // needs immediate resuscitation team
     isolate:        Bool,   // infection control isolation
-    reassess_mins:  Int,    // minutes until reassessment
+    reassess_mins:  Int,    // minutes until reassessment (0..=240 — see reassess_interval contract)
 }
 
 /// Validation errors for out-of-range vital signs.

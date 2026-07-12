@@ -14,7 +14,7 @@ use model::Patient;
 use model::Assessment;
 use triage::assess;
 
-fn pri_str(p: Priority) -> String {
+total fn pri_str(p: Priority) -> String {
     match p {
         Priority::Red    => "RED",
         Priority::Orange => "ORANGE",
@@ -24,7 +24,7 @@ fn pri_str(p: Priority) -> String {
     }
 }
 
-fn s1_stable_adult() -> String {
+total fn s1_stable_adult() -> String {
     let v: Vitals = Vitals { heart_rate: 72, systolic_bp: 118, oxygen_sat: 98, temperature: 368,
         consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal,
         pulse: PulseStrength::Strong };
@@ -33,7 +33,7 @@ fn s1_stable_adult() -> String {
     pri_str(assess(p).priority)
 }
 
-fn s2_unresponsive() -> String {
+total fn s2_unresponsive() -> String {
     let v: Vitals = Vitals { heart_rate: 45, systolic_bp: 80, oxygen_sat: 88, temperature: 365,
         consciousness: Consciousness::Unresponsive, breathing: BreathingStatus::Labored,
         pulse: PulseStrength::Weak };
@@ -42,7 +42,7 @@ fn s2_unresponsive() -> String {
     pri_str(assess(p).priority)
 }
 
-fn s3_elderly_chest_pain() -> String {
+total fn s3_elderly_chest_pain() -> String {
     let v: Vitals = Vitals { heart_rate: 88, systolic_bp: 145, oxygen_sat: 96, temperature: 370,
         consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal,
         pulse: PulseStrength::Strong };
@@ -52,7 +52,7 @@ fn s3_elderly_chest_pain() -> String {
 }
 
 // Note: hr and bp must not trigger circulation_failure (hr>130 && bp<100)
-fn s4_febrile_infant() -> String {
+total fn s4_febrile_infant() -> String {
     let v: Vitals = Vitals { heart_rate: 120, systolic_bp: 100, oxygen_sat: 97, temperature: 396,
         consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal,
         pulse: PulseStrength::Strong };
@@ -61,7 +61,7 @@ fn s4_febrile_infant() -> String {
     pri_str(assess(p).priority)
 }
 
-fn s5_pregnant_abdominal() -> String {
+total fn s5_pregnant_abdominal() -> String {
     let v: Vitals = Vitals { heart_rate: 90, systolic_bp: 110, oxygen_sat: 99, temperature: 372,
         consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal,
         pulse: PulseStrength::Strong };
@@ -70,7 +70,7 @@ fn s5_pregnant_abdominal() -> String {
     pri_str(assess(p).priority)
 }
 
-fn s6_fever_breathing() -> String {
+total fn s6_fever_breathing() -> String {
     let v: Vitals = Vitals { heart_rate: 95, systolic_bp: 115, oxygen_sat: 96, temperature: 393,
         consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal,
         pulse: PulseStrength::Strong };
@@ -81,7 +81,7 @@ fn s6_fever_breathing() -> String {
     pri_str(a.priority).concat(iso_str)
 }
 
-fn main() -> Unit ! Console {
+total fn main() -> Unit ! Console {
     println("1. Stable adult/minor:     ".concat(s1_stable_adult()));
     println("2. Unresponsive/neuro:     ".concat(s2_unresponsive()));
     println("3. Elderly/chest pain:     ".concat(s3_elderly_chest_pain()));

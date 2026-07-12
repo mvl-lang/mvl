@@ -1,6 +1,6 @@
 # medical_triage example — MC/DC coverage demonstration (IEC 62304)
 # Run from this directory or from the repo root.
-.PHONY: help guard-mvl check prove lint test-solver test test-llvm assurance mcdc mutate smoke run run-llvm all clean
+.PHONY: help guard-mvl check prove lint test-solver test test-llvm coverage assurance mcdc mutate smoke run run-llvm all clean
 
 .DEFAULT_GOAL := help
 
@@ -52,6 +52,9 @@ test: guard-mvl ## Run unit tests
 
 test-llvm: guard-mvl ## Run unit tests via LLVM backend
 	$(MVL) test $(DIR) --backend=llvm
+
+coverage: guard-mvl ## Run unit tests with native behavioral branch coverage report
+	$(MVL) test $(DIR) --coverage
 
 mcdc: guard-mvl ## Run MC/DC coverage analysis (use ARGS="--masking" to exempt coupled)
 	$(MVL) mcdc $(DIR) --verbose $(ARGS)
