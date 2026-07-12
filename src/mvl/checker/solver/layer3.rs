@@ -86,6 +86,22 @@ pub(super) fn try_symbolic(
         }
     }
 
+    // NEW: If the argument is itself an if-expression or a block (typical
+    // when checking an `ensures` postcondition against a function body that
+    // returns via a multi-branch clamp-style expression), collect the
+    // execution paths directly and check the predicate on each branch's
+    // return value, propagating the branch condition as a hypothesis.
+    //
+    // Concrete case: `clamp_col(x, field)` with body
+    //     if x < 0 { 0 } else if x >= field.width { field.width - 1 } else { x }
+    // and ensures `result >= 0`, `result < field.width` — each branch
+    // discharges via L1 + injected path conditions.
+    if matches!(arg, Expr::If { .. } | Expr::Block(_)) {
+        let mut paths: Vec<ExecutionPath> = Vec::new();
+        collect_expr_paths(arg, vec![], &mut paths, 0);
+        return check_direct_paths(&paths, pred, var_refs, fn_decls);
+    }
+
     let (fn_name, actual_args) = match arg {
         Expr::FnCall { name, args, .. } => (name.as_str(), args),
         _ => return None,
@@ -144,6 +160,46 @@ pub(super) fn try_symbolic(
         }
     }
 
+    if any_undecided {
+        None
+    } else {
+        Some(RefResult::Proven)
+    }
+}
+
+/// Check `pred` against every branch of a pre-collected set of paths, using
+/// each path's conditions as narrowing hypotheses in `var_refs`.
+///
+/// Unlike the FnCall path in `try_symbolic`, this variant does no parameter
+/// substitution — it's used when the argument expression itself is an
+/// if/else chain and the branch conditions reference caller-visible
+/// variables directly.
+fn check_direct_paths(
+    paths: &[ExecutionPath],
+    pred: &RefExpr,
+    var_refs: &HashMap<String, Option<RefExpr>>,
+    fn_decls: &HashMap<String, FnDecl>,
+) -> Option<RefResult> {
+    if paths.is_empty() || paths.len() >= MAX_PATHS {
+        return None;
+    }
+    let mut any_undecided = false;
+    for path in paths {
+        let mut path_var_refs = var_refs.clone();
+        for cond in &path.conditions {
+            inject_condition(cond, &mut path_var_refs, 0);
+        }
+        let return_expr = rewrite::rewrite_expr(&path.return_expr);
+        let result = layer1::try_trivial(pred, &return_expr, &path_var_refs, fn_decls)
+            .or_else(|| layer2::try_interval(pred, &return_expr, &path_var_refs));
+        match result {
+            Some(RefResult::Proven) => {}
+            Some(RefResult::Failed { counterexample }) => {
+                return Some(RefResult::Failed { counterexample })
+            }
+            Some(RefResult::RuntimeCheck) | None => any_undecided = true,
+        }
+    }
     if any_undecided {
         None
     } else {
@@ -436,7 +492,11 @@ fn substitute_expr(expr: &Expr, bindings: &HashMap<&str, &Expr>) -> Expr {
 /// `&&`-conjunctions. All other patterns are silently ignored — conservative and
 /// always sound. `depth` limits `&&`-recursion to prevent stack overflow on
 /// pathological inputs.
-fn inject_condition(cond: &Expr, var_refs: &mut HashMap<String, Option<RefExpr>>, depth: usize) {
+pub(crate) fn inject_condition(
+    cond: &Expr,
+    var_refs: &mut HashMap<String, Option<RefExpr>>,
+    depth: usize,
+) {
     if depth > 32 {
         return;
     }
