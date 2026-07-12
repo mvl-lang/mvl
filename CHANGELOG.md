@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.247.1] - 2026-07-12
+
+### Fixed — checker: user-declared IFC label loses `[T]` type argument across `use` boundary
+
+- `relabel` on a user-declared label imported via `use` from a sibling file failed with
+  `error[REQ11]: relabel from_l expects L[T] input, found L<Move>`. The parser seeds
+  `known_labels` only from labels declared in the current file, so `L[Move]` in a consumer
+  file was parsed as `Ty::Named("L",[Move])` instead of `Ty::Labeled("L",Move)`. The relabel
+  checker now normalises `Ty::Named` → `Ty::Labeled` when the name is a registered label, which
+  is known by the time any relabel expression is checked. Also fixes `Ty::Labeled` display to use
+  `[]` (MVL syntax) instead of `<>`. Closes #1780.
+
 ## [0.247.0] - 2026-07-12
 
 ### Added — linter: suggest-if-let rule

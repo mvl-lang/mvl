@@ -1152,6 +1152,40 @@ mod tests {
         );
     }
 
+    // ── Cross-file user label (#1780) ────────────────────────────────────────
+
+    /// Regression: user-declared label imported across a `use` boundary must
+    /// resolve correctly in a `relabel` call.  The parser only seeds known_labels
+    /// from the current file, so a foreign label L is parsed as Ty::Named("L",[T])
+    /// rather than Ty::Labeled("L",T).  The relabel checker normalises this.
+    #[test]
+    fn user_label_cross_file_relabel_accepted() {
+        // m.mvl (prelude_b)
+        let prelude_src = "pub type Move = enum { Up, Down } \
+                           pub label L \
+                           pub relabel to_l:   _ -> L audit \
+                           pub relabel from_l: L -> _ audit";
+        // g.mvl (checked file) — L is NOT declared here, only imported via use.
+        // The parser of g.mvl doesn't know L is a label, so L[Move] becomes
+        // Ty::Named("L",[Move]).  The checker must normalise it before the
+        // relabel input-type match.
+        let consumer_src = "use m::{Move, L} \
+                            total fn use_it(i: L[Move]) -> Move { \
+                                relabel from_l(i, \"TEST\") \
+                            }";
+        let (mut pp, _) = crate::mvl::parser::Parser::new(prelude_src);
+        let prelude_prog = pp.parse_program();
+        let (mut cp, _) = crate::mvl::parser::Parser::new(consumer_src);
+        let consumer_prog = cp.parse_program();
+        let result =
+            crate::mvl::checker::check_with_two_preludes(&[], &[&prelude_prog], &consumer_prog);
+        assert!(
+            result.is_ok(),
+            "cross-file user label relabel should be accepted, got: {:?}",
+            result.errors
+        );
+    }
+
     /// Implicit flow inside an `impl` method body is detected.
     ///
     /// Note: bare `self` in impl blocks requires `self: Type` syntax (parser limitation).

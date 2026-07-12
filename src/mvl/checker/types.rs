@@ -180,7 +180,7 @@ impl Ty {
             Ty::Ptr(inner) => format!("Ptr<{}>", inner.display()),
             Ty::Refined(inner, _pred) => inner.display(),
             Ty::Labeled(label, inner) => {
-                format!("{}<{}>", label, inner.display())
+                format!("{}[{}]", label, inner.display())
             }
             Ty::Session(s) => s.display(),
             Ty::Unknown => "<unknown>".to_string(),
