@@ -50,7 +50,23 @@ pub fn run(path: &str, quiet: bool, gen_boundary: bool, limit: Option<usize>) {
     });
 
     // Load the implicit stdlib prelude (core + Phase 4 stdlib files).
-    let stdlib_prelude_progs = loader::load_implicit_prelude();
+    let mut stdlib_prelude_progs = loader::load_implicit_prelude();
+
+    // Extend with pure-MVL stdlib modules (e.g. std.log, std.config, std.json)
+    // imported by the test or source files.  Without this, types from those
+    // modules are absent from the generated Rust harness, mirroring the mcdc.rs
+    // fix in v0.246.1.
+    {
+        let all_files: Vec<_> = loader::mvl_files(path, true)
+            .into_iter()
+            .chain(loader::mvl_files(path, false))
+            .collect();
+        let all_progs: Vec<_> = all_files
+            .iter()
+            .map(|f| super::parse_or_exit(&f.display().to_string()).0)
+            .collect();
+        stdlib_prelude_progs.extend(loader::load_mvl_native_stdlib_extras(&all_progs));
+    }
 
     // Transpile all test files with mutation instrumentation
     let mut modules: Vec<(String, String, String)> = Vec::new();

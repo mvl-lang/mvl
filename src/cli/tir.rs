@@ -925,7 +925,10 @@ fn serialize(tir: &TirProgram) -> String {
 
 pub fn run(path: &str) {
     let (prog, _src) = super::parse_or_exit(path);
-    let prelude = loader::load_implicit_prelude();
+    let mut prelude = loader::load_implicit_prelude();
+    prelude.extend(loader::load_mvl_native_stdlib_extras(std::slice::from_ref(
+        &prog,
+    )));
     let expr_types = assemble_expr_types(&prog, &prelude);
     let all_fns = mono::collect_fns(std::iter::once(&prog).chain(prelude.iter()));
     let mono_prog = mono::monomorphize(&prog, &all_fns, &expr_types);
