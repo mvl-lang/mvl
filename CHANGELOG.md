@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.247.0] - 2026-07-12
+
+### Added — linter: suggest-if-let rule
+
+- New lint rule `suggest-if-let` fires on 2-arm `match` expressions with a refutable variant pattern (`Some/Ok/Err/TupleStruct/Struct`) and a `_ => ()` fallback. This is the exact AST shape produced by the parser desugaring of `if let PAT = expr { … }` with no else branch. The lint suggests the more concise `if let` form for clarity. Enabled by default; opt out via `suggest_if_let = false` in `.mvllintrc`. Closes #1776.
+
 ## [0.246.2] - 2026-07-12
 
 ### Fixed — parser: accept unary minus in refinement predicates
