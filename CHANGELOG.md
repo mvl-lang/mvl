@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.249.3] - 2026-07-12
+
+### Fixed — checker/contracts: branch conditions flow as ensures hypotheses
+
+Threads branch conditions (`if cond { .. } else { .. }`) through the ensures
+traversal so postconditions can rely on the enclosing branch as a hypothesis.
+Previously, an ensures obligation checked inside a then-branch had no knowledge
+of `cond`, and in an else-branch no knowledge of `!cond` — every such obligation
+fell through to L1 shape-equality or the runtime check.
+
+- `negate_cond` flips `Lt/Le/Gt/Ge/Eq/Ne` binary comparisons so
+  `!(y < 0)` becomes `y >= 0` (falls back to `Unary::Not` for
+  non-comparison predicates).
+- `check_ensures_in_block` / `check_ensures_in_stmt` / `check_ensures_in_match_body`
+  / `check_ensures_for_return` all accept `branch_hyps: &[Expr]` and push the
+  branch condition (or its negation) as they descend.
+- `check_ensures_for_return_expr_recur` descends into tail `Expr::If` so the same
+  hypothesis flow works for the implicit-return form.
+- `check_ensures_for_return` calls `layer3::inject_condition` on each hypothesis
+  before dispatching to the solver, extending `var_refs` with narrowing facts.
+
+Follow-up to #1796 / #1797. Bumps pong's proven count 24 → 27; remaining
+runtime obligations reference struct-field access (`field.height`,
+`game.left_score`) which L2/L3 still treat opaquely.
+
 ## [0.249.2] - 2026-07-12
 
 ### Fixed — cli: `mvl tir` and `mvl mutate` missing stdlib extras preload
