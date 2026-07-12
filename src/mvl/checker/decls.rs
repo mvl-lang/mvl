@@ -439,7 +439,7 @@ impl TypeChecker {
             return;
         }
         for ef in &ed.fns {
-            let ret_ty = resolve(&ef.return_type);
+            let ret_ty = self.env.normalize_ty(resolve(&ef.return_type));
             if let Ty::Labeled(label, _) = &ret_ty {
                 self.emit(CheckError::LabeledTypeCrossesFfiBoundary {
                     fn_name: ef.name.clone(),
@@ -448,7 +448,7 @@ impl TypeChecker {
                 });
             }
             for param in &ef.params {
-                let param_ty = resolve(&param.ty);
+                let param_ty = self.env.normalize_ty(resolve(&param.ty));
                 if let Ty::Labeled(label, _) = &param_ty {
                     self.emit(CheckError::LabeledTypeCrossesFfiBoundary {
                         fn_name: ef.name.clone(),

@@ -1213,6 +1213,82 @@ mod tests {
         );
     }
 
+    /// Regression (#1785): cross-file user label on an FFI extern "c" return type must be
+    /// rejected.  Before this fix, the label arrived as `Ty::Named("L",[T])` and the FFI
+    /// boundary check (which matches only `Ty::Labeled`) silently passed.
+    #[test]
+    fn user_label_cross_file_ffi_rejected() {
+        let prelude_src = "pub label L";
+        let consumer_src = "use m::{L} \
+                            extern \"c\" { fn get_value() -> L[Int] }";
+        let (mut pp, _) = crate::mvl::parser::Parser::new(prelude_src);
+        let prelude_prog = pp.parse_program();
+        let (mut cp, _) = crate::mvl::parser::Parser::new(consumer_src);
+        let consumer_prog = cp.parse_program();
+        let result =
+            crate::mvl::checker::check_with_two_preludes(&[], &[&prelude_prog], &consumer_prog);
+        assert!(
+            result.errors.iter().any(|e| matches!(
+                e,
+                crate::mvl::checker::errors::CheckError::LabeledTypeCrossesFfiBoundary { .. }
+            )),
+            "cross-file user label on FFI extern return type must be rejected, got: {:?}",
+            result.errors
+        );
+    }
+
+    /// Regression (#1785): `into_inner()` on a cross-file user label must return the inner
+    /// type, not `Ty::Unknown`.  Before this fix the method fast-path matched only
+    /// `Ty::Labeled`, so the cross-file `Ty::Named` variant fell through.
+    #[test]
+    fn user_label_cross_file_into_inner_accepted() {
+        let prelude_src = "pub label L";
+        // L is declared in prelude; consumer only imports it.  L[Int].into_inner() must
+        // return Int and the surrounding addition must type-check.
+        let consumer_src = "use m::{L} \
+                            total fn unwrap_l(v: L[Int]) -> Int { \
+                                v.into_inner() \
+                            }";
+        let (mut pp, _) = crate::mvl::parser::Parser::new(prelude_src);
+        let prelude_prog = pp.parse_program();
+        let (mut cp, _) = crate::mvl::parser::Parser::new(consumer_src);
+        let consumer_prog = cp.parse_program();
+        let result =
+            crate::mvl::checker::check_with_two_preludes(&[], &[&prelude_prog], &consumer_prog);
+        assert!(
+            result.is_ok(),
+            "into_inner on cross-file user label must type-check, got: {:?}",
+            result.errors
+        );
+    }
+
+    /// Regression (#1785): IFC taint propagation must recognise cross-file user labels.
+    /// Before this fix `label_of` returned `None` for `Ty::Named("L",[T])`, so the taint
+    /// was never seeded and propagation was silently skipped.
+    #[test]
+    fn user_label_cross_file_ifc_propagation() {
+        let prelude_src = "pub label L \
+                           pub relabel to_l:   _ -> L audit \
+                           pub relabel from_l: L -> _ audit \
+                           pub fn println(msg: String) -> Unit ! Console { }";
+        // consumer uses the cross-file label — if propagation works, passing L[String]
+        // to a fn that expects String should be rejected (type mismatch, not silent pass).
+        let consumer_src = "use m::{L, to_l, from_l, println} \
+                            fn leak(s: L[String]) -> Unit ! Console { \
+                                println(s) \
+                            }";
+        let (mut pp, _) = crate::mvl::parser::Parser::new(prelude_src);
+        let prelude_prog = pp.parse_program();
+        let (mut cp, _) = crate::mvl::parser::Parser::new(consumer_src);
+        let consumer_prog = cp.parse_program();
+        let result =
+            crate::mvl::checker::check_with_two_preludes(&[], &[&prelude_prog], &consumer_prog);
+        assert!(
+            !result.is_ok(),
+            "passing L[String] where String is expected must be a type error, got no errors"
+        );
+    }
+
     /// Implicit flow inside an `impl` method body is detected.
     ///
     /// Note: bare `self` in impl blocks requires `self: Type` syntax (parser limitation).

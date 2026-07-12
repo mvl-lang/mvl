@@ -303,6 +303,22 @@ impl TypeEnv {
         self.known_labels.insert(name);
     }
 
+    /// Rewrite `Ty::Named(n, [t])` → `Ty::Labeled(n, t)` when `n` is a known label.
+    ///
+    /// The parser seeds `known_labels` only from the current file's declarations,
+    /// so cross-file user labels arrive as `Ty::Named` and must be normalized here,
+    /// where the full label set from all prelude `collect_declarations` passes is available.
+    pub fn normalize_ty(&self, ty: Ty) -> Ty {
+        match ty {
+            Ty::Named(ref n, ref args)
+                if args.len() == 1 && self.known_labels.contains(n.as_str()) =>
+            {
+                Ty::Labeled(n.clone(), Box::new(args[0].clone()))
+            }
+            _ => ty,
+        }
+    }
+
     /// Register a relabel transition.
     pub fn register_relabel(
         &mut self,
