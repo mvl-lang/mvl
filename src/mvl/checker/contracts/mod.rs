@@ -140,11 +140,13 @@ pub fn check_contracts(
                         }
                     });
                     if !fd.ensures.is_empty() {
+                        let branch_hyps: Vec<Expr> = Vec::new();
                         check_ensures_in_block(
                             &fd.body,
                             &fd.name,
                             &fd.ensures,
                             &fd.params,
+                            &branch_hyps,
                             &mut ctx,
                         );
                     }
@@ -179,11 +181,13 @@ pub fn check_contracts(
                             }
                         });
                         if !method.ensures.is_empty() {
+                            let branch_hyps: Vec<Expr> = Vec::new();
                             check_ensures_in_block(
                                 &method.body,
                                 &method.name,
                                 &method.ensures,
                                 &method.params,
+                                &branch_hyps,
                                 &mut ctx,
                             );
                         }
@@ -495,11 +499,50 @@ pub(super) fn check_requires_at_call(
 
 // ── ensures: return-point checker ────────────────────────────────────────────
 
+/// Return the logical negation of `cond` in a shape [`inject_condition`]
+/// can consume.  For a Binary comparison `a op b`, this flips the op
+/// (e.g. `<` → `>=`) — the result stays a Binary and drives the
+/// hypothesis into var_refs.  For anything else, fall back to wrapping
+/// in Not (which inject_condition ignores conservatively).
+fn negate_cond(cond: &Expr) -> Expr {
+    if let Expr::Binary {
+        op,
+        left,
+        right,
+        span,
+    } = cond
+    {
+        let flipped = match op {
+            crate::mvl::parser::ast::BinaryOp::Lt => Some(crate::mvl::parser::ast::BinaryOp::Ge),
+            crate::mvl::parser::ast::BinaryOp::Le => Some(crate::mvl::parser::ast::BinaryOp::Gt),
+            crate::mvl::parser::ast::BinaryOp::Gt => Some(crate::mvl::parser::ast::BinaryOp::Le),
+            crate::mvl::parser::ast::BinaryOp::Ge => Some(crate::mvl::parser::ast::BinaryOp::Lt),
+            crate::mvl::parser::ast::BinaryOp::Eq => Some(crate::mvl::parser::ast::BinaryOp::Ne),
+            crate::mvl::parser::ast::BinaryOp::Ne => Some(crate::mvl::parser::ast::BinaryOp::Eq),
+            _ => None,
+        };
+        if let Some(nop) = flipped {
+            return Expr::Binary {
+                op: nop,
+                left: left.clone(),
+                right: right.clone(),
+                span: *span,
+            };
+        }
+    }
+    Expr::Unary {
+        op: crate::mvl::parser::ast::UnaryOp::Not,
+        expr: Box::new(cond.clone()),
+        span: crate::mvl::parser::lexer::Span::new(0, 0, 0, 0),
+    }
+}
+
 fn check_ensures_in_block(
     block: &Block,
     fn_name: &str,
     ensures: &[Expr],
     params: &[Param],
+    branch_hyps: &[Expr],
     ctx: &mut ContractCheckCtx<'_>,
 ) {
     for (i, stmt) in block.stmts.iter().enumerate() {
@@ -508,42 +551,105 @@ fn check_ensures_in_block(
                 value: Some(ret_expr),
                 span,
             } => {
-                check_ensures_for_return(ret_expr, *span, fn_name, ensures, params, ctx);
+                check_ensures_for_return(
+                    ret_expr,
+                    *span,
+                    fn_name,
+                    ensures,
+                    params,
+                    branch_hyps,
+                    ctx,
+                );
             }
             Stmt::Return { value: None, .. } => {
                 // `return;` returns Unit — nothing to check against ensures.
             }
-            Stmt::If { then, else_, .. } => {
-                check_ensures_in_block(then, fn_name, ensures, params, ctx);
+            Stmt::If {
+                cond, then, else_, ..
+            } => {
+                let mut then_hyps = branch_hyps.to_vec();
+                then_hyps.push(cond.clone());
+                check_ensures_in_block(then, fn_name, ensures, params, &then_hyps, ctx);
+                let mut else_hyps = branch_hyps.to_vec();
+                else_hyps.push(negate_cond(cond));
                 if let Some(eb) = else_ {
                     match eb {
                         ElseBranch::Block(b) => {
-                            check_ensures_in_block(b, fn_name, ensures, params, ctx)
+                            check_ensures_in_block(b, fn_name, ensures, params, &else_hyps, ctx)
                         }
                         ElseBranch::If(s) => {
-                            check_ensures_in_stmt(s, fn_name, ensures, params, ctx)
+                            check_ensures_in_stmt(s, fn_name, ensures, params, &else_hyps, ctx)
                         }
                     }
                 }
             }
             Stmt::While { body, .. } => {
-                check_ensures_in_block(body, fn_name, ensures, params, ctx);
+                check_ensures_in_block(body, fn_name, ensures, params, branch_hyps, ctx);
             }
             Stmt::For { body, .. } => {
-                check_ensures_in_block(body, fn_name, ensures, params, ctx);
+                check_ensures_in_block(body, fn_name, ensures, params, branch_hyps, ctx);
             }
             Stmt::Match { arms, .. } => {
                 for arm in arms {
-                    check_ensures_in_match_body(&arm.body, fn_name, ensures, params, ctx);
+                    check_ensures_in_match_body(
+                        &arm.body,
+                        fn_name,
+                        ensures,
+                        params,
+                        branch_hyps,
+                        ctx,
+                    );
                 }
             }
             // Tail expression (implicit return) — last Stmt::Expr in the block.
             Stmt::Expr { expr, span } if i + 1 == block.stmts.len() => {
-                check_ensures_for_return(expr, *span, fn_name, ensures, params, ctx);
+                check_ensures_for_return_expr_recur(
+                    expr,
+                    *span,
+                    fn_name,
+                    ensures,
+                    params,
+                    branch_hyps,
+                    ctx,
+                );
             }
             _ => {}
         }
     }
+}
+
+/// A tail-expression can itself be an `Expr::If` — descend into its branches
+/// carrying the branch condition as a hypothesis.
+fn check_ensures_for_return_expr_recur(
+    expr: &Expr,
+    span: Span,
+    fn_name: &str,
+    ensures: &[Expr],
+    params: &[Param],
+    branch_hyps: &[Expr],
+    ctx: &mut ContractCheckCtx<'_>,
+) {
+    if let Expr::If {
+        cond, then, else_, ..
+    } = expr
+    {
+        let mut then_hyps = branch_hyps.to_vec();
+        then_hyps.push(*cond.clone());
+        check_ensures_in_block(then, fn_name, ensures, params, &then_hyps, ctx);
+        let mut else_hyps = branch_hyps.to_vec();
+        else_hyps.push(negate_cond(cond));
+        if let Some(inner) = else_ {
+            check_ensures_for_return_expr_recur(
+                inner, span, fn_name, ensures, params, &else_hyps, ctx,
+            );
+        }
+        return;
+    }
+    if let Expr::Block(b) = expr {
+        check_ensures_in_block(b, fn_name, ensures, params, branch_hyps, ctx);
+        return;
+    }
+    check_ensures_for_return(expr, span, fn_name, ensures, params, branch_hyps, ctx);
 }
 
 fn check_ensures_in_stmt(
@@ -551,15 +657,27 @@ fn check_ensures_in_stmt(
     fn_name: &str,
     ensures: &[Expr],
     params: &[Param],
+    branch_hyps: &[Expr],
     ctx: &mut ContractCheckCtx<'_>,
 ) {
     // Recursion helper for else-if chains.
-    if let Stmt::If { then, else_, .. } = stmt {
-        check_ensures_in_block(then, fn_name, ensures, params, ctx);
+    if let Stmt::If {
+        cond, then, else_, ..
+    } = stmt
+    {
+        let mut then_hyps = branch_hyps.to_vec();
+        then_hyps.push(cond.clone());
+        check_ensures_in_block(then, fn_name, ensures, params, &then_hyps, ctx);
+        let mut else_hyps = branch_hyps.to_vec();
+        else_hyps.push(negate_cond(cond));
         if let Some(eb) = else_ {
             match eb {
-                ElseBranch::Block(b) => check_ensures_in_block(b, fn_name, ensures, params, ctx),
-                ElseBranch::If(s) => check_ensures_in_stmt(s, fn_name, ensures, params, ctx),
+                ElseBranch::Block(b) => {
+                    check_ensures_in_block(b, fn_name, ensures, params, &else_hyps, ctx)
+                }
+                ElseBranch::If(s) => {
+                    check_ensures_in_stmt(s, fn_name, ensures, params, &else_hyps, ctx)
+                }
             }
         }
     }
@@ -570,14 +688,17 @@ fn check_ensures_in_match_body(
     fn_name: &str,
     ensures: &[Expr],
     params: &[Param],
+    branch_hyps: &[Expr],
     ctx: &mut ContractCheckCtx<'_>,
 ) {
     match body {
-        MatchBody::Block(b) => check_ensures_in_block(b, fn_name, ensures, params, ctx),
+        MatchBody::Block(b) => {
+            check_ensures_in_block(b, fn_name, ensures, params, branch_hyps, ctx)
+        }
         MatchBody::Expr(e) => {
             // MatchBody::Expr is a tail expression — treated as a return point.
             let span = e.span();
-            check_ensures_for_return(e, span, fn_name, ensures, params, ctx);
+            check_ensures_for_return(e, span, fn_name, ensures, params, branch_hyps, ctx);
         }
     }
 }
@@ -594,13 +715,22 @@ pub(super) fn check_ensures_for_return(
     fn_name: &str,
     ensures: &[Expr],
     params: &[Param],
+    branch_hyps: &[Expr],
     ctx: &mut ContractCheckCtx<'_>,
 ) {
     // Phase 2: populate var_refs with each parameter's inline where-predicate
     // (normalised so the param name becomes "self").  This lets Layer 2 and
     // Layer 4 prove postconditions like `ensures result >= 0` when the function
     // parameter is annotated `n: Int where self >= 0`.
-    let var_refs = build_param_var_refs(params);
+    let mut var_refs = build_param_var_refs(params);
+
+    // #1796: inject each accumulated branch condition as a hypothesis in
+    // var_refs.  This lets ensures clauses on the else-branch of an
+    // if/else-if chain benefit from the previous branch conditions being
+    // false (e.g. inside `else` after `if x < 0`, the solver knows `x >= 0`).
+    for cond in branch_hyps {
+        crate::mvl::checker::solver::layer3::inject_condition(cond, &mut var_refs, 0);
+    }
 
     for ens_expr in ensures {
         // Expressions the solver can't handle (e.g. method calls) fall back to
