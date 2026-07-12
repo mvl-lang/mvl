@@ -731,13 +731,32 @@ impl TypeChecker {
     /// Look up a field type without emitting errors.
     pub(super) fn field_type(&self, ty: &Ty, field: &str) -> Option<Ty> {
         let base = ty.unlabeled();
-        if let Ty::Named(name, _) = base {
+        // #1787: capture generic args so `p: Pair[Int]` → `p.first: Int`, not the raw param `A`.
+        if let Ty::Named(name, args) = base {
             if let Some(type_info) = self.env.lookup_type(name) {
-                if let TypeBodyInfo::Struct { fields, .. } = &type_info.body {
-                    return fields
-                        .iter()
-                        .find(|f| f.name == field)
-                        .map(|f| f.ty.clone());
+                let param_names: Vec<String> = type_info
+                    .params
+                    .iter()
+                    .map(GenericParam::name)
+                    .map(str::to_string)
+                    .collect();
+                let subst: std::collections::HashMap<String, Ty> = param_names
+                    .iter()
+                    .cloned()
+                    .zip(args.iter().cloned())
+                    .collect();
+                match &type_info.body {
+                    TypeBodyInfo::Struct { fields, .. } => {
+                        return fields
+                            .iter()
+                            .find(|f| f.name == field)
+                            .map(|f| apply_subst(&f.ty, &param_names, &subst));
+                    }
+                    TypeBodyInfo::Alias(inner) => {
+                        let inner_ty = apply_subst(inner, &param_names, &subst);
+                        return self.field_type(&inner_ty, field);
+                    }
+                    TypeBodyInfo::Enum(_) => {}
                 }
             }
         }
@@ -748,12 +767,24 @@ impl TypeChecker {
     pub(super) fn field_type_checked(&mut self, ty: &Ty, field: &str, span: Span) -> Ty {
         let base = ty.unlabeled().clone();
         match &base {
-            Ty::Named(name, _) => {
+            // #1787: capture args so generic struct fields substitute correctly.
+            Ty::Named(name, args) => {
                 if let Some(type_info) = self.env.lookup_type(name).cloned() {
+                    let param_names: Vec<String> = type_info
+                        .params
+                        .iter()
+                        .map(GenericParam::name)
+                        .map(str::to_string)
+                        .collect();
+                    let subst: std::collections::HashMap<String, Ty> = param_names
+                        .iter()
+                        .cloned()
+                        .zip(args.iter().cloned())
+                        .collect();
                     match &type_info.body {
                         TypeBodyInfo::Struct { fields, .. } => {
                             if let Some(fi) = fields.iter().find(|f| f.name == field) {
-                                fi.ty.clone()
+                                apply_subst(&fi.ty, &param_names, &subst)
                             } else {
                                 self.emit(CheckError::FieldNotFound {
                                     ty: name.clone(),
@@ -771,7 +802,8 @@ impl TypeChecker {
                             Ty::Unknown
                         }
                         TypeBodyInfo::Alias(inner) => {
-                            self.field_type_checked(&inner.clone(), field, span)
+                            let inner_ty = apply_subst(inner, &param_names, &subst);
+                            self.field_type_checked(&inner_ty, field, span)
                         }
                     }
                 } else {
@@ -814,11 +846,25 @@ impl TypeChecker {
         };
 
         if let Some(type_info) = self.env.lookup_type(lookup_name).cloned() {
+            // #1787: infer generic type args from provided values so downstream
+            // compat checks and the returned type respect the caller's args.
+            let param_names: Vec<String> = type_info
+                .params
+                .iter()
+                .map(GenericParam::name)
+                .map(str::to_string)
+                .collect();
             match &type_info.body {
                 TypeBodyInfo::Struct {
                     fields: declared_fields,
                     ..
                 } => {
+                    let mut subst = std::collections::HashMap::<String, Ty>::new();
+                    for df in declared_fields.iter() {
+                        if let Some((_, pty)) = provided.iter().find(|(pn, _)| pn == &df.name) {
+                            infer_type_param(&param_names, &df.ty, pty, &mut subst);
+                        }
+                    }
                     // Check that all declared fields are provided
                     for df in declared_fields.iter() {
                         if !provided.iter().any(|(pname, _)| pname == &df.name) {
@@ -832,12 +878,14 @@ impl TypeChecker {
                     // Check no extra fields are provided
                     for (pname, pty) in &provided {
                         if let Some(df) = declared_fields.iter().find(|f| &f.name == pname) {
-                            // #1781: use types_compatible_resolved so named refined-type aliases
-                            // (e.g. `type FieldCol = Int where self >= 0`) are expanded before
-                            // the compatibility check, allowing `Int` to flow into `FieldCol`.
-                            if !self.types_compatible_resolved(&df.ty, pty) {
+                            // #1787: substitute inferred type params before compat.
+                            // #1781: types_compatible_resolved expands named refined-type
+                            // aliases (e.g. `type FieldCol = Int where self >= 0`) so `Int`
+                            // can flow into `FieldCol`.
+                            let expected = apply_subst(&df.ty, &param_names, &subst);
+                            if !self.types_compatible_resolved(&expected, pty) {
                                 self.emit(CheckError::TypeMismatch {
-                                    expected: df.ty.display(),
+                                    expected: expected.display(),
                                     found: pty.display(),
                                     span,
                                 });
@@ -850,71 +898,99 @@ impl TypeChecker {
                             });
                         }
                     }
-                    Ty::Named(lookup_name.to_string(), vec![])
+                    // #1787: return the type with inferred args, matching the enum path.
+                    let type_args: Vec<Ty> = param_names
+                        .iter()
+                        .map(|n| subst.get(n).cloned().unwrap_or(Ty::Unknown))
+                        .collect();
+                    Ty::Named(lookup_name.to_string(), type_args)
                 }
                 TypeBodyInfo::Enum(variants) => {
                     // Named-field enum variant construction: "EnumType::Variant { field: val }"
                     // Find the variant and type-check its fields.
                     if let Some(var_name) = variant_name {
-                        if let Some(vi) = variants.iter().find(|v| v.name == var_name) {
-                            if let VariantFieldsInfo::Struct(declared_fields) = &vi.fields {
-                                // Infer generic type params from the provided field values.
-                                let param_names: Vec<String> = type_info
-                                    .params
-                                    .iter()
-                                    .map(GenericParam::name)
-                                    .map(str::to_string)
-                                    .collect();
-                                let mut subst = std::collections::HashMap::<String, Ty>::new();
-                                for df in declared_fields.iter() {
-                                    if let Some((_, pty)) =
-                                        provided.iter().find(|(pn, _)| pn == &df.name)
-                                    {
-                                        infer_type_param(&param_names, &df.ty, pty, &mut subst);
+                        match variants.iter().find(|v| v.name == var_name) {
+                            Some(vi) => match &vi.fields {
+                                VariantFieldsInfo::Struct(declared_fields) => {
+                                    // Infer generic type params from the provided field values.
+                                    let mut subst = std::collections::HashMap::<String, Ty>::new();
+                                    for df in declared_fields.iter() {
+                                        if let Some((_, pty)) =
+                                            provided.iter().find(|(pn, _)| pn == &df.name)
+                                        {
+                                            infer_type_param(&param_names, &df.ty, pty, &mut subst);
+                                        }
                                     }
-                                }
 
-                                for df in declared_fields.iter() {
-                                    if !provided.iter().any(|(pname, _)| pname == &df.name) {
-                                        self.emit(CheckError::MissingField {
-                                            ty: name.to_string(),
-                                            field: df.name.clone(),
-                                            span,
-                                        });
-                                    }
-                                }
-                                for (pname, pty) in &provided {
-                                    if let Some(df) =
-                                        declared_fields.iter().find(|f| &f.name == pname)
-                                    {
-                                        let expected = apply_subst(&df.ty, &param_names, &subst);
-                                        // #1781: resolve named refined-type aliases before check.
-                                        if !self.types_compatible_resolved(&expected, pty) {
-                                            self.emit(CheckError::TypeMismatch {
-                                                expected: expected.display(),
-                                                found: pty.display(),
+                                    for df in declared_fields.iter() {
+                                        if !provided.iter().any(|(pname, _)| pname == &df.name) {
+                                            self.emit(CheckError::MissingField {
+                                                ty: name.to_string(),
+                                                field: df.name.clone(),
                                                 span,
                                             });
                                         }
-                                    } else {
-                                        self.emit(CheckError::UnknownField {
-                                            ty: name.to_string(),
-                                            field: pname.clone(),
-                                            span,
-                                        });
                                     }
-                                }
+                                    for (pname, pty) in &provided {
+                                        if let Some(df) =
+                                            declared_fields.iter().find(|f| &f.name == pname)
+                                        {
+                                            let expected =
+                                                apply_subst(&df.ty, &param_names, &subst);
+                                            // #1781: resolve named refined-type aliases before check.
+                                            if !self.types_compatible_resolved(&expected, pty) {
+                                                self.emit(CheckError::TypeMismatch {
+                                                    expected: expected.display(),
+                                                    found: pty.display(),
+                                                    span,
+                                                });
+                                            }
+                                        } else {
+                                            self.emit(CheckError::UnknownField {
+                                                ty: name.to_string(),
+                                                field: pname.clone(),
+                                                span,
+                                            });
+                                        }
+                                    }
 
-                                // Return the enum type with inferred type args.
-                                let type_args: Vec<Ty> = param_names
-                                    .iter()
-                                    .map(|n| subst.get(n).cloned().unwrap_or(Ty::Unknown))
-                                    .collect();
-                                return Ty::Named(lookup_name.to_string(), type_args);
+                                    // Return the enum type with inferred type args.
+                                    let type_args: Vec<Ty> = param_names
+                                        .iter()
+                                        .map(|n| subst.get(n).cloned().unwrap_or(Ty::Unknown))
+                                        .collect();
+                                    Ty::Named(lookup_name.to_string(), type_args)
+                                }
+                                // #1787: variant exists but was constructed with the wrong
+                                // kind (struct syntax on a Unit/Tuple variant).
+                                VariantFieldsInfo::Unit | VariantFieldsInfo::Tuple(_) => {
+                                    self.emit(CheckError::NotAStruct {
+                                        ty: format!("{lookup_name}::{var_name}"),
+                                        span,
+                                    });
+                                    Ty::Unknown
+                                }
+                            },
+                            // #1787: qualified `Enum::Variant` referenced a variant that
+                            // does not exist — surface it instead of silently returning
+                            // the enum type (typo/refactor drift).
+                            None => {
+                                self.emit(CheckError::UnknownVariant {
+                                    ty: lookup_name.to_string(),
+                                    variant: var_name.to_string(),
+                                    span,
+                                });
+                                Ty::Unknown
                             }
                         }
+                    } else {
+                        // Bare enum name (no variant) — not a struct.
+                        self.emit(CheckError::NotAStruct {
+                            ty: lookup_name.to_string(),
+                            span,
+                        });
+                        Ty::Unknown
                     }
-                    Ty::Named(lookup_name.to_string(), vec![])
                 }
                 TypeBodyInfo::Alias(inner) => inner.clone(),
             }
