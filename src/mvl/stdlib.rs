@@ -88,7 +88,9 @@ pub fn ensure_stdlib() -> PathBuf {
             stdlib_path().display()
         );
         eprintln!("  Run `make install` (dev) or `mvl self install` (end-user).");
-        eprintln!("  Or set MVL_HOME to a directory containing toolchains/{COMPILER_VERSION}/std/.");
+        eprintln!(
+            "  Or set MVL_HOME to a directory containing toolchains/{COMPILER_VERSION}/std/."
+        );
         process::exit(1);
     })
 }
