@@ -48,21 +48,28 @@ The MVL compiler is the single proof gate — all eleven requirements are fully 
 
 ## Design Principles
 
-1. **Explicit over implicit.** No hidden control flow, no implicit conversions.
-2. **One way to do each thing.** One loop, one branch, one error mechanism.
-3. **Vocabulary over syntax.** Stdlib functions, not macros or sugar.
-4. **Total by default.** Functions must terminate. `partial` opts out.
-5. **Immutable by default.** `mut` opts in.
-6. **Effects in signatures.** Pure is the default.
-7. **Security labels on all data.** `Tainted`, `Secret`, user-defined.
-8. **Actors, not threads.** No shared mutable state, no locks, no deadlocks.
-9. **Ownership, not GC.** Deterministic deallocation for real-time.
-10. **Refinement types inline.** `x: Int where x > 0` is a first-class type.
-11. **Honest over silent.** The compiler must either verify it or reject it. Never silently drop, accept, or defer.
+Nine principles across two tiers. Tier 1 is the *why* — cross-cutting philosophy that guides every decision. Tier 2 is the *what* — concrete structural choices those principles produced. See `docs/principles.md` for the canonical page with full sourcing.
+
+### Tier 1 — Meta principles
+
+1. **Explicit over implicit.** No hidden control flow, no implicit conversions, no silent coercion. Every relevant property lives in the signature or the source.
+2. **One syntax per concept.** One loop, one branch, one error mechanism, one form of mutation. Regularity beats variety.
+3. **Vocabulary over syntax.** Grow the stdlib, not the grammar. Compression comes from named, typed, verifiable functions — never from sugar the compiler can't see through.
+4. **The signature IS the threat model.** Effects, IFC labels, ownership, refinements, termination, errors — all visible in the type signature. Nothing is ambient.
+5. **Honest over silent.** The compiler must either verify a property or reject the program. Never silently drop, accept, or defer.
+
+### Tier 2 — Structural decisions
+
+6. **Eleven requirements — no more, no less.** The compiler verifies exactly eleven properties. A twelfth is added only if it catches bugs no combination of the other eleven catches. (ADR-0001)
+7. **Language contraction.** Features are dropped whenever they prioritise writability over verifiability. (ADR-0002)
+8. **LL(1) grammar, hand-written recursive descent.** ~100 EBNF productions, no lookahead beyond one token, no parser generator. (ADR-0005)
+9. **Ownership, not GC.** Memory safety via linearity and reference capabilities (`val`, `ref`, `iso`, `tag`) adapted from Pony. Deterministic deallocation, no garbage collector. (ADR-0029)
 
 ## What the MVL Drops
 
-No anonymous lambdas, no list comprehensions, no decorators, no operator overloading, no implicit conversions, no default arguments, no variadic arguments, no macros, no ternary operator, no string interpolation, no inheritance, no exceptions, no null, no global state, no `while` in total functions.
+No mutable closures, no list comprehensions, no decorators, no operator overloading, no implicit conversions, no default arguments, no variadic arguments, no macros, no ternary operator, no string interpolation, no inheritance, no exceptions, no null, no global state, no `while` in total functions.
+
+Anonymous lambdas with immutable captures are supported (`|x| x + 1`) — they power the higher-order functions in the stdlib (`map`, `filter`, `fold`).
 
 ~10 statement forms. ~5 expression forms. ~3 declaration forms. The smallest general-purpose language.
 
