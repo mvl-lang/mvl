@@ -1216,10 +1216,7 @@ mod tests {
     /// Parse `prelude_src` and `consumer_src` as two programs and type-check the
     /// consumer with the prelude in scope.  Shared helper for the #1785 regression
     /// tests below.
-    fn check_two_files(
-        prelude_src: &str,
-        consumer_src: &str,
-    ) -> crate::mvl::checker::CheckResult {
+    fn check_two_files(prelude_src: &str, consumer_src: &str) -> crate::mvl::checker::CheckResult {
         let (mut pp, _) = crate::mvl::parser::Parser::new(prelude_src);
         let prelude_prog = pp.parse_program();
         let (mut cp, _) = crate::mvl::parser::Parser::new(consumer_src);

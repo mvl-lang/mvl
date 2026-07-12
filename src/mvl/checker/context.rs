@@ -314,9 +314,7 @@ impl TypeEnv {
     /// callers must not assume compound types are fully canonical.
     pub fn normalize_ty(&self, ty: Ty) -> Ty {
         match ty {
-            Ty::Named(n, mut args)
-                if args.len() == 1 && self.known_labels.contains(n.as_str()) =>
-            {
+            Ty::Named(n, mut args) if args.len() == 1 && self.known_labels.contains(n.as_str()) => {
                 Ty::Labeled(n, Box::new(args.pop().unwrap()))
             }
             other => other,
