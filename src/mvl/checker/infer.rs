@@ -22,6 +22,7 @@ impl TypeChecker {
 
     pub(super) fn infer_expr(&mut self, expr: &Expr) -> Ty {
         let ty = self.infer_expr_inner(expr);
+        let ty = self.env.normalize_ty(ty);
         self.expr_types.insert(expr.span(), ty.clone());
         ty
     }
@@ -408,20 +409,7 @@ impl TypeChecker {
                 audit: _,
                 span,
             } => {
-                let raw_ty = self.infer_expr(expr);
-                // #1780: A user-declared label L imported via `use` is parsed as
-                // Ty::Named("L", [T]) when the parser's known_labels doesn't include
-                // it (only labels declared in the *current* file are seeded at parse
-                // time).  Normalise to Ty::Labeled here, where we have the full
-                // known_labels set from all prelude collect_declarations passes.
-                let inner_ty = match &raw_ty {
-                    Ty::Named(n, args)
-                        if args.len() == 1 && self.env.known_labels.contains(n.as_str()) =>
-                    {
-                        Ty::Labeled(n.clone(), Box::new(args[0].clone()))
-                    }
-                    _ => raw_ty,
-                };
+                let inner_ty = self.infer_expr(expr);
                 // Look up the declared relabel transition.
                 if let Some((from, to, _audit_decl)) = self.env.lookup_relabel(name) {
                     let inner_base = inner_ty.base();

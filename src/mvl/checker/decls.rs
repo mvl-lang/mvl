@@ -99,8 +99,15 @@ impl TypeChecker {
     }
 
     fn register_fn(&mut self, fd: &FnDecl) {
-        let params: Vec<Ty> = fd.params.iter().map(|p| resolve(&p.ty)).collect();
-        let ret = resolve(&fd.return_type);
+        // #1785: normalize at FnInfo construction so downstream consumers
+        // (ifc_propagation seed, call-graph, argument checks) see canonical
+        // Ty::Labeled for cross-file user labels.
+        let params: Vec<Ty> = fd
+            .params
+            .iter()
+            .map(|p| self.env.normalize_ty(resolve(&p.ty)))
+            .collect();
+        let ret = self.env.normalize_ty(resolve(&fd.return_type));
         let type_params = fd
             .type_params
             .iter()
@@ -150,8 +157,12 @@ impl TypeChecker {
         // Note: extern_count is incremented in check_extern_decl (pass 2) after
         // ABI validation, not here, so rejected blocks don't inflate the count.
         for f in &ed.fns {
-            let params: Vec<Ty> = f.params.iter().map(|p| resolve(&p.ty)).collect();
-            let ret = resolve(&f.return_type);
+            let params: Vec<Ty> = f
+                .params
+                .iter()
+                .map(|p| self.env.normalize_ty(resolve(&p.ty)))
+                .collect();
+            let ret = self.env.normalize_ty(resolve(&f.return_type));
             self.env.define_fn(
                 f.name.clone(),
                 FnInfo {
@@ -268,8 +279,12 @@ impl TypeChecker {
             .map(|m| m.name.clone())
             .collect();
         for method in ad.methods.iter().filter(|m| !m.is_public) {
-            let params: Vec<Ty> = method.params.iter().map(|p| resolve(&p.ty)).collect();
-            let ret = resolve(&method.return_type);
+            let params: Vec<Ty> = method
+                .params
+                .iter()
+                .map(|p| self.env.normalize_ty(resolve(&p.ty)))
+                .collect();
+            let ret = self.env.normalize_ty(resolve(&method.return_type));
             self.env.define_fn(
                 method.name.clone(),
                 FnInfo {
@@ -439,7 +454,7 @@ impl TypeChecker {
             return;
         }
         for ef in &ed.fns {
-            let ret_ty = resolve(&ef.return_type);
+            let ret_ty = self.env.normalize_ty(resolve(&ef.return_type));
             if let Ty::Labeled(label, _) = &ret_ty {
                 self.emit(CheckError::LabeledTypeCrossesFfiBoundary {
                     fn_name: ef.name.clone(),
@@ -448,7 +463,7 @@ impl TypeChecker {
                 });
             }
             for param in &ef.params {
-                let param_ty = resolve(&param.ty);
+                let param_ty = self.env.normalize_ty(resolve(&param.ty));
                 if let Ty::Labeled(label, _) = &param_ty {
                     self.emit(CheckError::LabeledTypeCrossesFfiBoundary {
                         fn_name: ef.name.clone(),

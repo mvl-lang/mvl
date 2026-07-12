@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.248.1] - 2026-07-12
+
+### Fixed — checker: normalize Ty::Named→Ty::Labeled for cross-file user labels (#1785)
+
+- Adds `TypeEnv::normalize_ty` that rewrites `Ty::Named(n,[t]) → Ty::Labeled(n,t)` when `n`
+  is a known label.  Applied at `infer_expr`, at FFI resolve sites in `decls.rs`, and at
+  every `FnInfo` construction site (`register_fn`, `register_extern`, actor private methods)
+  so downstream consumers — including `ifc_propagation`, call-graph, argument checks and
+  the FFI boundary — see canonical `Ty::Labeled` for cross-file user labels.
+- Fixes six silent failures introduced by the parser seeding `known_labels` only from the
+  current file: FFI boundary checks, `into_inner`/`as_inner` dispatch, `ifc::label_of` and
+  every downstream taint-propagation call site.
+- Removes the ad-hoc per-site normalization added for #1780 (now handled centrally).
+- Adds five regression tests (`user_label_cross_file_ffi_rejected`,
+  `user_label_cross_file_into_inner_accepted`, `user_label_cross_file_ifc_propagation`,
+  `user_label_cross_file_type_mismatch_rejected`,
+  `user_label_cross_file_propagation_seed_from_return_type`) with a shared
+  `check_two_files` helper.
+
 ## [0.248.0] - 2026-07-12
 
 ### Changed — install: stdlib ships as a separate release artifact (no more binary embedding)
