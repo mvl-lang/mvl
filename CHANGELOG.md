@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.246.1] - 2026-07-12
+
+### Fixed — cli/mcdc: load pure-MVL stdlib extras into prelude
+
+- `mvl mcdc` transpiled test files with only the implicit prelude (`core`, `strings`, `lists`, `effects`, `io`), so types defined in pure-MVL stdlib modules (`LogLevel`, `LogFormat`, `ConfigValue`, `ConfigError`, `DbValue`, …) never reached the emitter and the generated Rust harness failed to compile with rustc `E0425`/`E0433` errors. Every other CLI command (`test`, `build`, `fuzz`, `llvm_text`) already calls `loader::load_mvl_native_stdlib_extras` for these modules; `mcdc` now does the same. Reproducer: `cd examples/crud_api && mvl mcdc .`.
+
 ## [0.246.0] - 2026-07-12
 
 ### Added — C3: Verdict + CheckResult + 11-pass registry + all verify_* passes

@@ -59,7 +59,25 @@ pub fn run(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
         process::exit(1);
     });
 
-    let stdlib_prelude_progs = loader::load_implicit_prelude();
+    let mut stdlib_prelude_progs = loader::load_implicit_prelude();
+
+    // Extend the prelude with pure-MVL stdlib modules (e.g. std.log, std.config,
+    // std.db) imported by the test or source files.  Without this, types like
+    // LogLevel, ConfigValue, and DbValue are absent from the generated Rust harness
+    // because the MCDC runner processes each file with only the implicit prelude
+    // (core, strings, lists), unlike `mvl test` and `mvl build` which both call
+    // load_mvl_native_stdlib_extras.
+    {
+        let all_files: Vec<_> = loader::mvl_files(path, true)
+            .into_iter()
+            .chain(loader::mvl_files(path, false))
+            .collect();
+        let all_progs: Vec<_> = all_files
+            .iter()
+            .map(|f| super::parse_or_exit(&f.display().to_string()).0)
+            .collect();
+        stdlib_prelude_progs.extend(loader::load_mvl_native_stdlib_extras(&all_progs));
+    }
 
     // The implicit prelude always has `pub builtin fn` declarations (strings.mvl,
     // lists.mvl), so mvl_runtime is always required for MC/DC instrumented builds.
