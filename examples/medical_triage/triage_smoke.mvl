@@ -18,24 +18,24 @@ type Patient = struct {
 }
 type Assessment = struct { priority: Priority, resuscitate: Bool, isolate: Bool, reassess_mins: Int }
 
-fn airway_compromise(v: Vitals) -> Bool {
+total fn airway_compromise(v: Vitals) -> Bool {
     v.breathing == BreathingStatus::Absent
     || (v.breathing == BreathingStatus::Labored && v.oxygen_sat < 92)
     || v.pulse == PulseStrength::Absent
 }
 
-fn circulation_failure(v: Vitals) -> Bool {
+total fn circulation_failure(v: Vitals) -> Bool {
     (v.heart_rate > 130 && v.systolic_bp < 100)
     || v.systolic_bp < 80
     || (v.oxygen_sat < 90 && v.breathing != BreathingStatus::Absent)
 }
 
-fn neuro_critical(v: Vitals) -> Bool {
+total fn neuro_critical(v: Vitals) -> Bool {
     v.consciousness == Consciousness::Unresponsive
     || v.consciousness == Consciousness::PainResponse
 }
 
-fn assess(p: Patient) -> Assessment {
+total fn assess(p: Patient) -> Assessment {
     if airway_compromise(p.vitals) || circulation_failure(p.vitals) || neuro_critical(p.vitals) {
         Assessment { priority: Priority::Red, resuscitate: true, isolate: false, reassess_mins: 0 }
     } else {
@@ -43,7 +43,7 @@ fn assess(p: Patient) -> Assessment {
     }
 }
 
-fn print_priority(p: Priority) -> Unit ! Console {
+total fn print_priority(p: Priority) -> Unit ! Console {
     match p {
         Priority::Red    => println("RED"),
         Priority::Orange => println("ORANGE"),
@@ -53,7 +53,7 @@ fn print_priority(p: Priority) -> Unit ! Console {
     }
 }
 
-fn main() -> Unit ! Console {
+total fn main() -> Unit ! Console {
     let cv: Vitals = Vitals {
         heart_rate: 45, systolic_bp: 80, oxygen_sat: 88, temperature: 365,
         consciousness: Consciousness::Unresponsive, breathing: BreathingStatus::Labored,

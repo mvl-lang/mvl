@@ -23,15 +23,15 @@ use model::Assessment;
 // ambiguous.  Match-based helpers avoid the expression-position collision:
 // pattern arms resolve `Absent` from the match target's field type, not by name.
 
-fn breathing_is_absent(b: BreathingStatus) -> Bool {
+total fn breathing_is_absent(b: BreathingStatus) -> Bool {
     match b { BreathingStatus::Absent => true, _ => false }
 }
 
-fn pulse_is_absent(p: PulseStrength) -> Bool {
+total fn pulse_is_absent(p: PulseStrength) -> Bool {
     match p { PulseStrength::Absent => true, _ => false }
 }
 
-fn pulse_is_weak(p: PulseStrength) -> Bool {
+total fn pulse_is_weak(p: PulseStrength) -> Bool {
     match p { PulseStrength::Weak => true, _ => false }
 }
 
