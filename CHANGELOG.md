@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.246.0] - 2026-07-12
+
+### Added — C3: Verdict + CheckResult + 11-pass registry + all verify_* passes
+
+- Port of `src/mvl/checker/passes.rs` (C3 checker phase): verdict enum, per-requirement pass framework, CheckResult struct with per-requirement error counts.
+- Replaces Rust's `Box<dyn VerificationPass>` with MVL enum dispatch over 11 named passes — one per MVL requirement. No dynamic dispatch, no trait objects, explicit enum arms for: Type Safety, Memory Safety, Exhaustiveness, Null Elimination, Error Visibility, Ownership, Effect Tracking, Termination, Data Race Freedom, Refinement & Contracts, Information Flow.
+- Complete MVL ports of all 11 verification passes: `verify_types.mvl`, `verify_errors.mvl`, `verify_passes.mvl` (framework), plus `verify_session.mvl`, `verify_termination.mvl`, `verify_patterns.mvl`, `verify_data_race.mvl`, and per-module verification stubs that delegate to the runtime solver.
+- All 459 `make test-mvl` tests passing — isolated test harness compiles each MVL file independently, requiring local copies of cross-file helpers (walk_block/walk_expr) to avoid forward-reference visibility issues.
+- Resets refinement + contract solver workflow: zero_layers, proof_log, sites infrastructure for three-phase solver verification.
+- Port complete; verification passes ready for Phase 9 formalization (#1117).
+
 ## [0.245.5] - 2026-07-11
 
 ### Fixed — Rust Emitter: list literal .join() codegen
