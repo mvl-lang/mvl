@@ -49,7 +49,12 @@ pub(super) fn cmd_self(args: &[String]) {
     }
 }
 
-/// `mvl self init` — extract the bundled stdlib to the toolchain directory.
+/// `mvl self init` — verify that the stdlib is installed and report its path.
+///
+/// Since #1765 the stdlib ships as a separate release artifact rather than
+/// being embedded in the binary. This subcommand no longer performs any
+/// extraction; it just reports the installed location, or errors out
+/// (with a hint to run `mvl self install`) if it is missing.
 fn cmd_self_init() {
     let path = stdlib::ensure_stdlib();
     println!(

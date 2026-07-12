@@ -457,10 +457,10 @@ pub fn stdlib_module() -> ResolvedModule {
     ] {
         exports.insert((*name).to_string());
     }
-    // Stdlib submodule names derived from the embedded file list — so `use std.io.{…}`
-    // resolves `io` from `std` even in the fallback stub. Stays in sync with STDLIB_FILES
-    // automatically; no manual list to maintain.
-    for (filename, _) in crate::mvl::stdlib::STDLIB_FILES {
+    // Stdlib submodule names derived from the on-disk stdlib file list — so
+    // `use std.io.{…}` resolves `io` from `std` even in the fallback stub.
+    // Stays in sync with the installed stdlib automatically.
+    for (filename, _) in crate::mvl::stdlib::stdlib_files() {
         if let Some(stem) = filename.strip_suffix(".mvl") {
             if stem != "core" {
                 exports.insert(stem.to_string());

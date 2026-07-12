@@ -19,7 +19,7 @@ fn check_proven_stdlib() -> Vec<(String, mvl::mvl::checker::CheckResult)> {
         .iter()
         .filter_map(|name| {
             stdlib::stdlib_content(name).map(|src| {
-                let (mut p, _) = Parser::new(src);
+                let (mut p, _) = Parser::new(&src);
                 (name.to_string(), p.parse_program())
             })
         })

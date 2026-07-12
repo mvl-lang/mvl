@@ -210,9 +210,8 @@ pub fn cmd_self_install(version: &str) {
         });
     }
 
-    // Extract stdlib via `{binary} init`.
-    println!("Initialising stdlib for v{version}...");
-    run_init(&bin_path, version);
+    // Download and install the stdlib artifact.
+    super::stdlib::install_stdlib(version);
 
     // Download and install the runtime artifact.
     super::runtime_xdg::install_runtime(version);
@@ -368,25 +367,6 @@ pub fn cmd_self_uninstall(version: &str) {
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
-
-/// Run `{binary} init` to extract the stdlib after install.
-///
-/// Uses an explicit `bool` flag rather than `ExitStatus::default()` (whose
-/// value is unspecified by the standard) to avoid a potentially spurious
-/// "exited non-zero" warning on platforms where the default is non-zero.
-fn run_init(bin_path: &std::path::Path, version: &str) {
-    match process::Command::new(bin_path).arg("init").status() {
-        Err(e) => {
-            eprintln!("warning: could not run `mvl init` for v{version}: {e}");
-            eprintln!("  Run `mvl@{version} init` manually to extract the stdlib.");
-        }
-        Ok(status) if !status.success() => {
-            eprintln!("warning: `mvl init` exited non-zero for v{version}");
-            eprintln!("  Run `mvl@{version} init` manually to extract the stdlib.");
-        }
-        Ok(_) => {}
-    }
-}
 
 /// Download `url` to `dest`, exiting on failure.
 ///

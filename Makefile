@@ -204,7 +204,6 @@ test-fmt-roundtrip: ## Run fmt roundtrip tests — verify check(fmt(src)) == che
 	cargo test --test fmt_roundtrip
 
 test-corpus: build ## Validate corpus examples parse and type-check
-	@$(MVL) init --stdlib 2>/dev/null || true
 	@pass=0; fail=0; \
 	OK="\033[32m✓\033[0m"; FAIL="\033[31m✗\033[0m"; \
 	while IFS= read -r f; do \
@@ -234,7 +233,6 @@ test-corpus: build ## Validate corpus examples parse and type-check
 	fi
 
 test-corpus-codegen: build ## Invoke Rust emitter on every corpus file; fail on panics, skip known errors (#1705)
-	@$(MVL) init --stdlib 2>/dev/null || true
 	@pass=0; fail=0; skip=0; \
 	OK="\033[32m✓\033[0m"; FAIL="\033[31m✗\033[0m"; SKIP="\033[33m~\033[0m"; \
 	while IFS= read -r f; do \
@@ -270,7 +268,6 @@ test-corpus-codegen: build ## Invoke Rust emitter on every corpus file; fail on 
 # is a CI/validation target, not a dev-inner-loop target — do NOT wire
 # into `test-corpus`.
 test-corpus-warnings: build ## Verify emitted Rust from corpus builds warning-free (slow — CI only)
-	@$(MVL) init --stdlib 2>/dev/null || true
 	@pass=0; fail=0; skip=0; expected=0; \
 	OK="\033[32m✓\033[0m"; FAIL="\033[31m✗\033[0m"; SKIP="\033[33m·\033[0m"; EXP="\033[33m~\033[0m"; \
 	while IFS= read -r f; do \

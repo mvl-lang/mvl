@@ -8630,7 +8630,7 @@ fn toml_mvl_passes_proven_mode() {
         .iter()
         .filter_map(|name| {
             stdlib_content(name).map(|src| {
-                let (mut p, _) = Parser::new(src);
+                let (mut p, _) = Parser::new(&src);
                 p.parse_program()
             })
         })
