@@ -42,7 +42,14 @@ type Range = struct {
 
 fn touch[T](_x: T) -> Unit { }
 
+// #1781: named alias used as a struct field — Int should be accepted via
+// refinement subtyping (alias is structurally expanded before the check).
+total fn make_person(raw_age: Int) -> Person {
+    Person { name: "Alice", age: raw_age }
+}
+
 test fn refinements_valid_typecheck() -> Unit {
     touch(safe_divide);
     touch(positive_sum);
+    touch(make_person);
 }

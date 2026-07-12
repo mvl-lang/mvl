@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.247.2] - 2026-07-12
+
+### Fixed — checker: named refined-type aliases at struct/enum construction sites
+
+- `type FieldCol = Int where self >= 0` used as a struct field type (`x: FieldCol`)
+  previously rejected plain `Int` values at construction sites (`Struct { x: raw }` where
+  `raw: Int`), even though the refinement predicate was trivially satisfied. The checker
+  was calling `types_compatible` (nominal) instead of `types_compatible_resolved`
+  (alias-expanding). Both struct and enum struct-variant field checks now use the resolving
+  form, allowing named refined-type aliases to behave structurally. Closes #1781.
+
 ## [0.247.1] - 2026-07-12
 
 ### Fixed — checker: user-declared IFC label loses `[T]` type argument across `use` boundary

@@ -803,7 +803,10 @@ impl TypeChecker {
                     // Check no extra fields are provided
                     for (pname, pty) in &provided {
                         if let Some(df) = declared_fields.iter().find(|f| &f.name == pname) {
-                            if !types_compatible(&df.ty, pty) {
+                            // #1781: use types_compatible_resolved so named refined-type aliases
+                            // (e.g. `type FieldCol = Int where self >= 0`) are expanded before
+                            // the compatibility check, allowing `Int` to flow into `FieldCol`.
+                            if !self.types_compatible_resolved(&df.ty, pty) {
                                 self.emit(CheckError::TypeMismatch {
                                     expected: df.ty.display(),
                                     found: pty.display(),
@@ -856,7 +859,8 @@ impl TypeChecker {
                                         declared_fields.iter().find(|f| &f.name == pname)
                                     {
                                         let expected = apply_subst(&df.ty, &param_names, &subst);
-                                        if !types_compatible(&expected, pty) {
+                                        // #1781: resolve named refined-type aliases before check.
+                                        if !self.types_compatible_resolved(&expected, pty) {
                                             self.emit(CheckError::TypeMismatch {
                                                 expected: expected.display(),
                                                 found: pty.display(),
