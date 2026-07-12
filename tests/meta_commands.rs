@@ -1,7 +1,8 @@
 //! Integration tests for `mvl init`, `mvl sbom --output`, and `mvl sbom --help`.
 //!
 //! Covers spec 024 R6 (SBOM File Output), R7 (Project Scaffolding), and R9 (SBOM Help Flag).
-//! `tests/stdlib.rs::fresh_extraction_creates_files_and_stamp` covers R8 (Stdlib Extraction).
+//! `tests/stdlib.rs` covers the disk-based stdlib loader (#1765 replaces the
+//! extraction flow — R8 no longer applies).
 
 use std::process::Command;
 

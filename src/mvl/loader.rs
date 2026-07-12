@@ -461,9 +461,12 @@ pub fn load_implicit_prelude() -> Vec<Program> {
     const IMPLICIT: &[&str] = &["core.mvl", "strings.mvl", "lists.mvl", "effects.mvl"];
     let mut progs = Vec::new();
     for name in IMPLICIT {
-        let content = stdlib::stdlib_content(name)
-            .unwrap_or_else(|| panic!("{name} is embedded at compile time and must be present"));
-        let (mut parser, _) = Parser::new(content);
+        let content = stdlib::stdlib_content(name).unwrap_or_else(|| {
+            panic!(
+                "stdlib file `{name}` not found — run `make install` or `mvl self install` to install the stdlib"
+            )
+        });
+        let (mut parser, _) = Parser::new(&content);
         progs.push(parser.parse_program());
     }
     progs
@@ -496,7 +499,7 @@ pub fn load_mvl_native_stdlib_extras(progs: &[Program]) -> Vec<Program> {
                         let filename = format!("{}.mvl", subpath.join("/"));
                         if loaded.insert(cache_key) {
                             if let Some(content) = stdlib::stdlib_content(&filename) {
-                                let (mut p, _) = Parser::new(content);
+                                let (mut p, _) = Parser::new(&content);
                                 let mut loaded_prog = p.parse_program();
                                 // For hybrid modules (in RUST_RUNTIME_IMPORTS but not in
                                 // RUST_BACKED_STDLIB), types normally come from
@@ -574,7 +577,7 @@ pub fn load_rust_backed_stdlib_fns(progs: &[Program]) -> Vec<Program> {
                         }
                         let filename = format!("{m}.mvl");
                         if let Some(content) = stdlib::stdlib_content(&filename) {
-                            let (mut p, _) = Parser::new(content);
+                            let (mut p, _) = Parser::new(&content);
                             let mut loaded_prog = p.parse_program();
                             // Collect names of builtin fns — the LLVM C-ABI dispatch
                             // handles these, so we must not emit conflicting MVL bodies.
@@ -792,7 +795,7 @@ pub fn collect_llvm_text_builtins(progs: &[Program]) -> HashMap<String, BuiltinS
         let Some(content) = stdlib::stdlib_content(&filename) else {
             continue;
         };
-        let (mut p, _) = Parser::new(content);
+        let (mut p, _) = Parser::new(&content);
         let mod_prog = p.parse_program();
         for mod_decl in &mod_prog.declarations {
             match mod_decl {
@@ -1658,12 +1661,9 @@ pub fn load_stdlib_prelude<'a>(
                         if loaded.insert(module.clone()) {
                             let filename = format!("{module}.mvl");
                             let stdlib_file = stdlib_dir.join(&filename);
-                            let src_opt = fs::read_to_string(&stdlib_file).ok().or_else(|| {
-                                crate::mvl::stdlib::STDLIB_FILES
-                                    .iter()
-                                    .find(|(name, _)| *name == filename)
-                                    .map(|(_, content)| content.to_string())
-                            });
+                            let src_opt = fs::read_to_string(&stdlib_file)
+                                .ok()
+                                .or_else(|| crate::mvl::stdlib::stdlib_content(&filename));
                             if let Some(src) = src_opt {
                                 let (mut p, _) = Parser::new(&src);
                                 prelude.push(p.parse_program());

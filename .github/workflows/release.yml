@@ -90,6 +90,41 @@ jobs:
           path: ${{ env.ASSET }}
           retention-days: 7
 
+  package-stdlib:
+    name: Package Stdlib
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      - name: Determine version
+        id: version
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Package stdlib tarball
+        run: |
+          # Keyed on the compiler version so `mvl self install <ver>` can find
+          # the artifact without prior knowledge of the stdlib version that
+          # shipped with that release (matches how the runtime tarball is
+          # looked up).
+          ASSET="mvl-stdlib-${{ steps.version.outputs.version }}.tar.gz"
+          # Layout inside the archive: `std/*.mvl` — extractor drops it under
+          # `<mvl_data_home>/toolchains/{compiler_ver}/` so the final path is
+          # `<mvl_data_home>/toolchains/{compiler_ver}/std/*.mvl`.
+          tar czf "${ASSET}" std
+          echo "STDLIB_ASSET=${ASSET}" >> "$GITHUB_ENV"
+
+      - name: Upload stdlib artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: mvl-stdlib-${{ steps.version.outputs.version }}
+          path: ${{ env.STDLIB_ASSET }}
+          retention-days: 7
+
   package-runtime:
     name: Package Runtime
     runs-on: ubuntu-latest
@@ -124,7 +159,7 @@ jobs:
 
   release:
     name: Create GitHub Release
-    needs: [build, package-runtime]
+    needs: [build, package-runtime, package-stdlib]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
 

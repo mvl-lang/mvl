@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.248.0] - 2026-07-12
+
+### Changed — install: stdlib ships as a separate release artifact (no more binary embedding)
+
+- Completes #1765: the compiler binary no longer embeds `.mvl` stdlib source files via `include_str!`.
+  Instead, `std/*.mvl` ships as a separate `mvl-stdlib-{compiler_version}.tar.gz` release asset and is
+  installed under `<mvl_data_home>/toolchains/{compiler_version}/std/`.
+- `mvl self install <ver>` now downloads and extracts the stdlib tarball alongside the runtime and
+  the binary itself — the four artifacts (`mvl`, stdlib, Rust runtime, LLVM runtime) are all present
+  after a single install step.
+- Path resolution: XDG install if `core.mvl` is present there; otherwise a dev fallback to
+  `<CARGO_MANIFEST_DIR>/std/` for `cargo run` from a source tree. `ensure_stdlib()` errors with a
+  hint to `make install` / `mvl self install` when neither is available.
+- `stdlib_content()` now returns `Option<String>` (reads from disk each call); `STDLIB_FILES` const
+  is replaced by `stdlib_files()` (walks disk). `build.rs` no longer generates `stdlib_files.rs`.
+- CI: new `package-stdlib` job in `.github/workflows/release.yml` publishes the tarball.
+
 ## [0.247.2] - 2026-07-12
 
 ### Fixed — checker: named refined-type aliases at struct/enum construction sites

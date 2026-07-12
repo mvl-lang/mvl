@@ -906,7 +906,7 @@ impl RustEmitter {
                     if RUST_BACKED_STDLIB.contains(&m) && seen.insert(m.to_string()) {
                         let filename = format!("{m}.mvl");
                         if let Some(content) = stdlib::stdlib_content(&filename) {
-                            let stdlib_tir = load_stdlib_tir(content);
+                            let stdlib_tir = load_stdlib_tir(&content);
                             for f in &stdlib_tir.fns {
                                 if !self.capability_params_map.contains_key(&f.name) {
                                     let flags = explicit_borrow_flags_tir(f);
@@ -1237,7 +1237,7 @@ fn collect_undefined_types_tir(tir: &TirProgram, prelude_tirs: &[TirProgram]) ->
             let module = &ud.path[1];
             let filename = format!("{module}.mvl");
             if let Some(content) = crate::mvl::stdlib::stdlib_content(&filename) {
-                let stdlib_tir = load_stdlib_tir(content);
+                let stdlib_tir = load_stdlib_tir(&content);
                 for td in &stdlib_tir.types {
                     defined.insert(td.name.clone());
                 }
