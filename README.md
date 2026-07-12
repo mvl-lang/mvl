@@ -67,7 +67,9 @@ Nine principles across two tiers. Tier 1 is the *why* — cross-cutting philosop
 
 ## What the MVL Drops
 
-No anonymous lambdas, no list comprehensions, no decorators, no operator overloading, no implicit conversions, no default arguments, no variadic arguments, no macros, no ternary operator, no string interpolation, no inheritance, no exceptions, no null, no global state, no `while` in total functions.
+No mutable closures, no list comprehensions, no decorators, no operator overloading, no implicit conversions, no default arguments, no variadic arguments, no macros, no ternary operator, no string interpolation, no inheritance, no exceptions, no null, no global state, no `while` in total functions.
+
+Anonymous lambdas with immutable captures are supported (`|x| x + 1`) — they power the higher-order functions in the stdlib (`map`, `filter`, `fold`).
 
 ~10 statement forms. ~5 expression forms. ~3 declaration forms. The smallest general-purpose language.
 
