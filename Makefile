@@ -177,8 +177,21 @@ test-unit: ## Run unit tests only
 test-type-checker: ## Run type checker integration tests (IFC, effects, labels, format)
 	cargo test --test type_checker
 
-test-rust-integration: build ## Run every Rust integration test binary (`cargo test --tests`) + CLI arg tests. Included in `test-full`; catches binaries like `transpiler`, `assurance`, `corpus_ir_parity`, `cross_backend_tir`, `linter_integration`, `manifest_rationale`, `meta_commands`, `module_resolver`, `toolchain` that no per-suite target exercises.
-	cargo test --tests
+test-rust-integration: build ## Run integration test binaries not covered by any other suite. Excluded: type_checker, requirements, error_messages, fmt_roundtrip (fast gate), checker_parity, compile_and_run, cross_backend (full extra suites).
+	cargo test \
+		--test assurance \
+		--test corpus_ir_parity \
+		--test cross_backend_tir \
+		--test linter_integration \
+		--test manifest_rationale \
+		--test meta_commands \
+		--test module_resolver \
+		--test parser \
+		--test solver_corpus \
+		--test stdlib \
+		--test toolchain \
+		--test transpiler \
+		--test tools
 	@bash tests/integration/compile_and_run/args.sh
 
 test-requirements: ## Run requirement verdict tests — one Proven + one Failed per requirement (1–11)
