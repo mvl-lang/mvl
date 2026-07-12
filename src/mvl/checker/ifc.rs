@@ -1186,6 +1186,33 @@ mod tests {
         );
     }
 
+    /// Regression: a `let` binding with an explicit cross-file label annotation must
+    /// be accepted (#1784 follow-up to #1780).  The parser produces Ty::Named("L",[T])
+    /// for the annotation; the checker must normalise it to Ty::Labeled before comparing.
+    #[test]
+    fn user_label_cross_file_let_binding_accepted() {
+        let prelude_src = "pub type Move = enum { Up, Down } \
+                           pub label L \
+                           pub relabel to_l:   _ -> L audit \
+                           pub relabel from_l: L -> _ audit";
+        let consumer_src = "use m::{Move, L, to_l, from_l} \
+                            total fn wrap(m: Move) -> L[Move] { \
+                                let labeled: L[Move] = relabel to_l(m, \"WRAP\"); \
+                                labeled \
+                            }";
+        let (mut pp, _) = crate::mvl::parser::Parser::new(prelude_src);
+        let prelude_prog = pp.parse_program();
+        let (mut cp, _) = crate::mvl::parser::Parser::new(consumer_src);
+        let consumer_prog = cp.parse_program();
+        let result =
+            crate::mvl::checker::check_with_two_preludes(&[], &[&prelude_prog], &consumer_prog);
+        assert!(
+            result.is_ok(),
+            "cross-file user label let annotation should be accepted, got: {:?}",
+            result.errors
+        );
+    }
+
     /// Implicit flow inside an `impl` method body is detected.
     ///
     /// Note: bare `self` in impl blocks requires `self: Type` syntax (parser limitation).
