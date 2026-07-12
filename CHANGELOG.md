@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.249.0] - 2026-07-12
+
+### Added — examples/medical_triage: full-assurance posture
+
+Brings the medical_triage example to a demonstrable full-assurance surface —
+MC/DC clause coverage at 100%, refinement obligations spanning L1–L4 of the
+layered solver, all totality qualifiers explicit, and a new coverage target.
+
+- New `make coverage` target wrapping `mvl test --coverage`.
+- Close all MC/DC gaps at `triage:46 / 66 / 75 / 123 / 138` with 13 targeted
+  tests — result: 57/57 pure MC/DC obligations covered (was 44/57).
+- New reassessment helpers demonstrate every solver layer:
+  - `reassess_interval` gains an `ensures result >= 0 && result <= 240`
+    postcondition (L1 trivial, ×5).
+  - `cap_stable_reassess` — L2 interval subsumption.
+  - `sanitize_reassess` / `clamp_to_mts_range` — L3 symbolic path enumeration.
+  - `buffered_reassess_min` / `buffered_reassess_max` — L4 Presburger via
+    single-sided FM bounds (splitting a double-bound predicate that had
+    otherwise collapsed to L5/Z3).
+- 17 previously-implicit `total fn` declarations made explicit across
+  `main.mvl`, `triage.mvl` private helpers, and `triage_smoke.mvl` — the
+  assurance report's `implicit total ⚠` warning is now clear.
+- README rewritten with the assurance-surface table and per-target results.
+
 ## [0.248.4] - 2026-07-12
 
 ### Fixed — checker/solver: L1 discharges struct-literal ensures via shape equality
