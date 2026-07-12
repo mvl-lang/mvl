@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.248.2] - 2026-07-12
+
+### Fixed — transpiler: cross-file value type from a pkg emits distinct Rust types
+
+- Prelude actor handles imported across sibling MVL files (`use pkg.metrics.{Metrics}` in
+  both `main.mvl` and `handlers.mvl`) previously emitted a fresh `pub struct Metrics { … }`
+  per sibling.  Entry (`main.rs`) held `crate::Metrics`; the sibling held
+  `crate::handlers::Metrics` — two distinct nominal types.  Call sites failed with
+  `error[E0277]: handlers::Metrics: From<Metrics>` even though `mvl check` passed.
+- The Rust backend now re-exports prelude actor handles from the crate root in sibling
+  modules (`pub use crate::<Name>;`), matching the existing behaviour for prelude value
+  types.  Prelude constructor fns that `Spawn` the actor (their bodies reference the
+  non-`pub` `_start_<name>` and `<Name>State` helpers, emitted only in the crate root)
+  are re-exported instead of re-emitted.  Closes #1794.
+
 ## [0.248.1] - 2026-07-12
 
 ### Fixed — checker: normalize Ty::Named→Ty::Labeled for cross-file user labels (#1785)
@@ -18,7 +33,6 @@
   `user_label_cross_file_type_mismatch_rejected`,
   `user_label_cross_file_propagation_seed_from_return_type`) with a shared
   `check_two_files` helper.
-
 ## [0.248.0] - 2026-07-12
 
 ### Changed — install: stdlib ships as a separate release artifact (no more binary embedding)

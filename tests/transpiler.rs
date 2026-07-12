@@ -1203,6 +1203,112 @@ pub actor Counter {
     );
 }
 
+/// Regression #1794: cross-file value type from a prelude/pkg actor emits
+/// distinct Rust types.  Before the fix, sibling modules re-emitted the full
+/// `pub struct Metrics { … }` actor plumbing locally.  Entry (`main.rs`) held
+/// `crate::Metrics`; a sibling held `crate::handlers::Metrics`.  Cross-file
+/// calls surfaced as `error[E0277]: handlers::Metrics: From<Metrics>`.
+///
+/// Fixed by re-exporting prelude actor handles from the crate root in sibling
+/// modules (`pub use crate::Metrics;`).  Also re-exports prelude constructor
+/// fns whose bodies `Spawn` the actor — their bodies reference the actor's
+/// non-`pub` `_start_<name>` and `<Name>State` helpers, which are only
+/// available in the crate root.
+#[test]
+fn prelude_actor_reexported_in_sibling_module() {
+    let prelude_src = r#"
+pub actor Metrics {
+    hits: Int
+
+    pub fn record_hit() { }
+}
+
+pub total fn new_metrics() -> Metrics ! Spawn {
+    actor Metrics { hits: 0 }
+}
+"#;
+    let sibling_src = r#"
+pub fn list_users(val m: Metrics) -> Unit {
+    m.record_hit()
+}
+"#;
+    // `use std.io` forces `pipeline::has_std_imports` → `use_runtime = true`,
+    // routing sibling emission through `emit_sibling_module` (the code path
+    // that regressed).  Without this, the pipeline uses the legacy no-prelude
+    // sibling emitter and #1794 does not appear at all.
+    let entry_src = r#"
+use std.io.println;
+use handlers::list_users;
+partial fn main() -> Unit ! Console + Spawn {
+    let m: Metrics = new_metrics();
+    list_users(m);
+    println("done")
+}
+"#;
+
+    let prelude = vec![parse_prog(prelude_src)];
+    let entry_prog = parse_prog(entry_src);
+    let sibling_prog = parse_prog(sibling_src);
+
+    let sibling_expr_types = mvl::mvl::pipeline::assemble_expr_types(&sibling_prog, &prelude);
+    let siblings = vec![("handlers".to_string(), sibling_prog)];
+    let expr_types = mvl::mvl::pipeline::assemble_expr_types(&entry_prog, &prelude);
+
+    let out = transpile_project(
+        "crate",
+        &entry_prog,
+        &siblings,
+        &prelude,
+        expr_types,
+        vec![sibling_expr_types],
+        Default::default(),
+    );
+
+    // Entry crate emits the full actor plumbing (definition site).
+    assert!(
+        out.main_rs.contains("pub struct Metrics"),
+        "entry main.rs must define the actor handle struct:\n{}",
+        out.main_rs
+    );
+
+    // Sibling re-exports the actor handle and constructor from the crate root
+    // instead of redefining them.  Any `pub struct Metrics` in the sibling
+    // would create a distinct nominal type — the exact class of failure #1794
+    // reports.
+    let (name, sibling_rs) = out
+        .module_files
+        .iter()
+        .find(|(n, _)| n == "handlers")
+        .expect("handlers sibling module must be emitted");
+    assert_eq!(name, "handlers");
+    assert!(
+        sibling_rs.contains("pub use crate::Metrics;"),
+        "sibling must re-export the actor handle from crate root:\n{sibling_rs}"
+    );
+    assert!(
+        !sibling_rs.contains("pub struct Metrics"),
+        "sibling must NOT redefine the actor handle (would break type identity):\n{sibling_rs}"
+    );
+    assert!(
+        !sibling_rs.contains("struct MetricsState"),
+        "sibling must NOT emit the actor state (private helper of the crate root):\n{sibling_rs}"
+    );
+    assert!(
+        sibling_rs.contains("pub use crate::new_metrics"),
+        "constructor that Spawn's the actor must be re-exported, not re-emitted:\n{sibling_rs}"
+    );
+    assert!(
+        !sibling_rs.contains("_start_metrics("),
+        "sibling must NOT call the private `_start_<name>` helper:\n{sibling_rs}"
+    );
+
+    // The `.into()` at the call site is left in place — it's the emitter's
+    // uniform value-arg pattern (`arg.into()` / `arg.clone().into()`) and
+    // becomes a Rust no-op via `impl<T> From<T> for T` once both sides refer
+    // to the same nominal `crate::Metrics`.  #1794 was NOT the coercion
+    // itself; it was that the two sides referred to *different* structs.
+}
+
 /// User-defined function shadows the prelude — no duplicate definitions.
 #[test]
 fn user_fn_shadows_prelude_fn_no_duplicate() {
