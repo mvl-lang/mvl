@@ -891,6 +891,41 @@ impl RustEmitter {
             .filter(|a| seen_prelude_actors.insert(a.name.as_str()))
             .collect();
 
+        // #1794: prelude fns whose bodies `Spawn` a prelude actor cannot be
+        // re-emitted in sibling modules, because the spawn expression lowers to
+        // `_start_<name>(<Name>State { … })` and both helpers are non-`pub`
+        // items produced only where the actor decl itself is emitted (main.rs).
+        // Sibling modules therefore re-export the constructor from the crate
+        // root instead of duplicating the body — the alternative would emit a
+        // fresh `pub struct <Name>` per sibling, and cross-file calls would
+        // fail with `handlers::Name: From<Name>` mismatches.
+        let prelude_actor_names: std::collections::HashSet<&str> =
+            prelude_actors.iter().map(|a| a.name.as_str()).collect();
+        let fn_spawns_prelude_actor = |f: &crate::mvl::ir::TirFn| -> bool {
+            use crate::mvl::ir::visit::{Visit, walk_tir_expr};
+            use crate::mvl::ir::{TirExpr, TirExprKind};
+            struct SpawnFinder<'a> {
+                actor_names: &'a std::collections::HashSet<&'a str>,
+                found: bool,
+            }
+            impl<'a> Visit<'a> for SpawnFinder<'a> {
+                fn visit_tir_expr(&mut self, e: &'a TirExpr) {
+                    if let TirExprKind::Spawn { actor_type, .. } = &e.kind {
+                        if self.actor_names.contains(actor_type.as_str()) {
+                            self.found = true;
+                        }
+                    }
+                    walk_tir_expr(self, e);
+                }
+            }
+            let mut sf = SpawnFinder {
+                actor_names: &prelude_actor_names,
+                found: false,
+            };
+            sf.visit_tir_block(&f.body);
+            sf.found
+        };
+
         // Phase B: capability params map from TIR
         self.capability_params_map =
             build_capability_params_map_tir_with_siblings(tir, sibling_tirs, prelude_tirs);
@@ -948,8 +983,15 @@ impl RustEmitter {
             }
             // Names of types re-exported from the crate root in sibling modules.
             // Methods on these types must not be re-emitted to avoid E0592.
+            // Prelude actor handles are also re-exported (#1794): otherwise the
+            // sibling would emit a duplicate `pub struct <Name>` and cross-file
+            // calls would fail with `From<Name>` trait bound errors.
             let reexported_type_names: std::collections::HashSet<&str> = if force_runtime {
-                prelude_types.iter().map(|t| t.name.as_str()).collect()
+                prelude_types
+                    .iter()
+                    .map(|t| t.name.as_str())
+                    .chain(prelude_actors.iter().map(|a| a.name.as_str()))
+                    .collect()
             } else {
                 std::collections::HashSet::new()
             };
@@ -966,6 +1008,16 @@ impl RustEmitter {
                     if reexported_type_names.contains(rty.as_str()) {
                         continue;
                     }
+                }
+                // #1794: fn constructs a prelude actor (`Spawn` expression).
+                // Its body lowers to `_start_<name>(<Name>State { … })` — both
+                // items are only emitted in the crate root, so re-export the
+                // fn from `crate::` rather than duplicating a body that would
+                // fail to compile in this sibling.
+                if force_runtime && fn_spawns_prelude_actor(fd) {
+                    self.line(&format!("pub use crate::{};", fd.name));
+                    self.blank();
+                    continue;
                 }
                 let stem = self
                     .prelude_stems
@@ -1003,8 +1055,14 @@ impl RustEmitter {
             self.current_file = saved_current_file;
         }
 
-        // Actor runtime preamble — needed for both entry-TIR and prelude actors.
-        if !tir.actors.is_empty() || !prelude_actors.is_empty() {
+        // Actor runtime preamble — needed for full actor emission only.
+        // Sibling modules re-export prelude actor handles from crate root
+        // (#1794), so they only need the runtime import when they contain
+        // their own `tir.actors`.  Emitting the preamble for a re-exported
+        // handle would leave an unused `use mvl_runtime::actors::*;`.
+        let emits_actor_decls =
+            !tir.actors.is_empty() || (!force_runtime && !prelude_actors.is_empty());
+        if emits_actor_decls {
             self.has_actors = true;
             self.emit_actor_runtime_preamble();
             self.blank();
@@ -1095,9 +1153,23 @@ impl RustEmitter {
         }
         // Actor bodies carry no coverage/mutation probes, so no per-file
         // instrumentation routing is needed here (unlike prelude_fns).
+        //
+        // #1794: sibling modules re-export the actor handle from the crate root
+        // instead of duplicating the actor plumbing.  Emitting a fresh
+        // `pub struct <Name>` per sibling breaks type identity — a call
+        // `handler::do_work(m)` on a pkg actor `Metrics` fails with
+        // `handlers::Metrics: From<Metrics>` because the two `Metrics` structs
+        // are distinct Rust types.  The re-export makes `handlers::Metrics`
+        // and `Metrics` (crate root) the same nominal type, and cross-file
+        // calls compile without `From`/`Into` conversions.
         for ad in prelude_actors {
-            self.emit_actor_decl(ad);
-            self.blank();
+            if force_runtime {
+                self.line(&format!("pub use crate::{};", ad.name));
+                self.blank();
+            } else {
+                self.emit_actor_decl(ad);
+                self.blank();
+            }
         }
         for ad in &tir.actors {
             self.emit_actor_decl(ad);
