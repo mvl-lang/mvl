@@ -16,7 +16,9 @@
 use std::collections::HashMap;
 
 use crate::mvl::checker::const_eval;
-use crate::mvl::parser::ast::{ArithOp, CmpOp, Expr, FnDecl, Literal, LogicOp, RefExpr, UnaryOp};
+use crate::mvl::parser::ast::{
+    ArithOp, BinaryOp, CmpOp, Expr, FnDecl, Literal, LogicOp, RefExpr, UnaryOp,
+};
 
 use super::RefResult;
 
@@ -619,6 +621,23 @@ fn eval_bool_struct(fields: &[(String, Expr)], pred: &RefExpr) -> Option<bool> {
         RefExpr::Compare {
             op, left, right, ..
         } => {
+            // Symbolic equality (#1796): if pred is `self.<f> <op> Y` and the
+            // field's init in the struct is exactly `Y`, the predicate holds
+            // (for Eq / Le / Ge / etc.) without needing to eval to an integer.
+            //
+            // Covers ensures clauses like `result.x == ball.x` in bounce_paddle
+            // where the returned struct sets `x: ball.x` — the two sides are
+            // structurally identical, but neither is a literal integer.
+            if let Some(l_sub) = subst_self_field(left, fields) {
+                if let Some(r_sub) = subst_self_field(right, fields) {
+                    if ref_expr_shape_eq(&l_sub, &r_sub) {
+                        return Some(match op {
+                            CmpOp::Eq | CmpOp::Le | CmpOp::Ge => true,
+                            CmpOp::Ne | CmpOp::Lt | CmpOp::Gt => false,
+                        });
+                    }
+                }
+            }
             // Try a bool-domain comparison first (covers `self.alive == true`).
             if let (Some(l), Some(r)) = (
                 eval_bool_value_struct(fields, left),
@@ -855,6 +874,191 @@ pub(super) fn preds_equivalent(a: &RefExpr, b: &RefExpr) -> bool {
 /// predicate normalisation.
 pub(super) fn is_self_like(name: &str) -> bool {
     name == "self"
+}
+
+// ── Symbolic substitution + shape equality (#1796) ───────────────────────────
+//
+// These helpers let Layer 1 discharge ensures postconditions of the form
+// `self.<field> == <expr>` when the returned struct literal sets that field
+// to `<expr>` verbatim, without needing to reduce to a literal integer.
+
+/// Structural equality on `RefExpr` values, ignoring spans and grouping.
+/// Two predicates are shape-equal iff they parse to the same tree.
+pub(super) fn ref_expr_shape_eq(a: &RefExpr, b: &RefExpr) -> bool {
+    match (a, b) {
+        (RefExpr::Grouped { inner, .. }, other) | (other, RefExpr::Grouped { inner, .. }) => {
+            ref_expr_shape_eq(inner, other)
+        }
+        (RefExpr::Ident { name: n1, .. }, RefExpr::Ident { name: n2, .. }) => n1 == n2,
+        (RefExpr::Integer { value: v1, .. }, RefExpr::Integer { value: v2, .. }) => v1 == v2,
+        (RefExpr::Float { value: v1, .. }, RefExpr::Float { value: v2, .. }) => {
+            !v1.is_nan() && !v2.is_nan() && v1.to_bits() == v2.to_bits()
+        }
+        (RefExpr::Bool { value: v1, .. }, RefExpr::Bool { value: v2, .. }) => v1 == v2,
+        (
+            RefExpr::FieldAccess {
+                object: o1,
+                field: f1,
+                ..
+            },
+            RefExpr::FieldAccess {
+                object: o2,
+                field: f2,
+                ..
+            },
+        ) => f1 == f2 && ref_expr_shape_eq(o1, o2),
+        (
+            RefExpr::ArithOp {
+                op: o1,
+                left: l1,
+                right: r1,
+                ..
+            },
+            RefExpr::ArithOp {
+                op: o2,
+                left: l2,
+                right: r2,
+                ..
+            },
+        ) => o1 == o2 && ref_expr_shape_eq(l1, l2) && ref_expr_shape_eq(r1, r2),
+        (
+            RefExpr::Compare {
+                op: o1,
+                left: l1,
+                right: r1,
+                ..
+            },
+            RefExpr::Compare {
+                op: o2,
+                left: l2,
+                right: r2,
+                ..
+            },
+        ) => o1 == o2 && ref_expr_shape_eq(l1, l2) && ref_expr_shape_eq(r1, r2),
+        (
+            RefExpr::LogicOp {
+                op: o1,
+                left: l1,
+                right: r1,
+                ..
+            },
+            RefExpr::LogicOp {
+                op: o2,
+                left: l2,
+                right: r2,
+                ..
+            },
+        ) => o1 == o2 && ref_expr_shape_eq(l1, l2) && ref_expr_shape_eq(r1, r2),
+        (RefExpr::Not { inner: i1, .. }, RefExpr::Not { inner: i2, .. }) => {
+            ref_expr_shape_eq(i1, i2)
+        }
+        _ => false,
+    }
+}
+
+/// Convert an `Expr` (as it appears in an argument or struct field init)
+/// into a `RefExpr` for structural comparison.  Best-effort — only the
+/// AST shapes that can appear on both sides of an ensures clause are
+/// handled; anything else returns `None` and the caller falls through
+/// to numeric or runtime evaluation.
+pub(super) fn expr_to_ref_expr_symbolic(expr: &Expr) -> Option<RefExpr> {
+    let span = crate::mvl::parser::lexer::Span::new(0, 0, 0, 0);
+    match expr {
+        Expr::Literal(Literal::Integer(n), _) => Some(RefExpr::Integer { value: *n, span }),
+        Expr::Literal(Literal::Float(f), _) => Some(RefExpr::Float { value: *f, span }),
+        Expr::Literal(Literal::Bool(b), _) => Some(RefExpr::Bool { value: *b, span }),
+        Expr::Ident(name, _) => Some(RefExpr::Ident {
+            name: name.clone(),
+            span,
+        }),
+        Expr::FieldAccess {
+            expr: inner, field, ..
+        } => Some(RefExpr::FieldAccess {
+            object: Box::new(expr_to_ref_expr_symbolic(inner)?),
+            field: field.clone(),
+            span,
+        }),
+        Expr::Unary {
+            op: UnaryOp::Neg,
+            expr: inner,
+            ..
+        } => Some(RefExpr::ArithOp {
+            op: ArithOp::Sub,
+            left: Box::new(RefExpr::Integer { value: 0, span }),
+            right: Box::new(expr_to_ref_expr_symbolic(inner)?),
+            span,
+        }),
+        Expr::Binary {
+            op, left, right, ..
+        } => {
+            let arith_op = match op {
+                BinaryOp::Add => Some(ArithOp::Add),
+                BinaryOp::Sub => Some(ArithOp::Sub),
+                BinaryOp::Mul => Some(ArithOp::Mul),
+                BinaryOp::Div => Some(ArithOp::Div),
+                BinaryOp::Rem => Some(ArithOp::Rem),
+                _ => None,
+            }?;
+            Some(RefExpr::ArithOp {
+                op: arith_op,
+                left: Box::new(expr_to_ref_expr_symbolic(left)?),
+                right: Box::new(expr_to_ref_expr_symbolic(right)?),
+                span,
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Substitute occurrences of `self.<F>` in `pred` with the initialiser
+/// expression of field `F` in `fields`, then convert the whole thing to a
+/// `RefExpr`.  Returns `None` if any field is missing or its initialiser
+/// can't be converted (see [`expr_to_ref_expr_symbolic`]).
+pub(super) fn subst_self_field(pred: &RefExpr, fields: &[(String, Expr)]) -> Option<RefExpr> {
+    let span = crate::mvl::parser::lexer::Span::new(0, 0, 0, 0);
+    match pred {
+        RefExpr::FieldAccess { object, field, .. } => {
+            // `self.<field>` → the init expression for that field.
+            if let RefExpr::Ident { name, .. } = object.as_ref() {
+                if is_self_like(name) {
+                    let init = fields.iter().find(|(n, _)| n == field).map(|(_, e)| e)?;
+                    return expr_to_ref_expr_symbolic(init);
+                }
+            }
+            // Nested field access we can't resolve here.
+            Some(RefExpr::FieldAccess {
+                object: Box::new(subst_self_field(object, fields)?),
+                field: field.clone(),
+                span,
+            })
+        }
+        RefExpr::ArithOp {
+            op, left, right, ..
+        } => Some(RefExpr::ArithOp {
+            op: *op,
+            left: Box::new(subst_self_field(left, fields)?),
+            right: Box::new(subst_self_field(right, fields)?),
+            span,
+        }),
+        RefExpr::Grouped { inner, .. } => subst_self_field(inner, fields),
+        RefExpr::Integer { value, .. } => Some(RefExpr::Integer {
+            value: *value,
+            span,
+        }),
+        RefExpr::Float { value, .. } => Some(RefExpr::Float {
+            value: *value,
+            span,
+        }),
+        RefExpr::Bool { value, .. } => Some(RefExpr::Bool {
+            value: *value,
+            span,
+        }),
+        RefExpr::Ident { name, .. } => Some(RefExpr::Ident {
+            name: name.clone(),
+            span,
+        }),
+        _ => None,
+    }
 }
 
 // ── Hypothesis helpers ────────────────────────────────────────────────────────
