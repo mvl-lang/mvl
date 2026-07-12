@@ -34,6 +34,7 @@ nav:
   - Getting Started: getting-started.md
   - Introduction: introduction.md
   - Rationale: mvl_rationale.md
+  - Design Principles: principles.md
   - The Eleven Requirements: requirements.md
   - Features: features.md
   - Roadmap: roadmap.md
