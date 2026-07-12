@@ -1311,6 +1311,39 @@ mod tests {
         );
     }
 
+    /// Regression (#1793): calling a cross-file function with a labeled
+    /// parameter and a bare return type must not leak the argument's label
+    /// into the call expression's inferred type.  The bug (reported on
+    /// v0.248.0) manifested as `move_paddle(p, labeled)` — where
+    /// `move_paddle(p: Paddle, i: L[Move]) -> Paddle` and `labeled: L[Move]`
+    /// — being inferred as `L[Paddle]` instead of `Paddle`, causing the
+    /// outer fn's `-> Paddle` return-type check to fail.  Fixed as a
+    /// side-effect of #1785 (normalize inside `infer_expr`) and
+    /// commit `a983c34a` (normalize `FnInfo` params/ret at `register_fn`)
+    /// which ensure `label_of(param_ty)` returns `Some(L)` and blocks
+    /// the excess-label propagation path.
+    #[test]
+    fn user_label_cross_file_arg_label_not_leaked_into_return_type() {
+        let result = check_two_files(
+            "pub type Move = enum { Up, Down } \
+             pub type Paddle = struct { y: Int } \
+             pub label L \
+             pub relabel to_l: _ -> L audit",
+            "use m::{Move, Paddle, L, to_l} \
+             pub total fn move_paddle(p: Paddle, i: L[Move]) -> Paddle { p } \
+             pub total fn dispatch(p: Paddle, m: Move) -> Paddle { \
+                 let labeled: L[Move] = relabel to_l(m, \"DISPATCH\"); \
+                 move_paddle(p, labeled) \
+             }",
+        );
+        assert!(
+            result.is_ok(),
+            "call to cross-file fn with labeled param must not leak the label \
+             into the return type; expected Paddle, got errors: {:?}",
+            result.errors
+        );
+    }
+
     /// Implicit flow inside an `impl` method body is detected.
     ///
     /// Note: bare `self` in impl blocks requires `self: Type` syntax (parser limitation).
