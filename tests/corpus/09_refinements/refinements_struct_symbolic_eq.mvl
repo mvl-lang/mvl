@@ -1,0 +1,39 @@
+// Corpus: symbolic equality for struct-literal ensures postconditions (#1796)
+//
+// Before the fix, `ensures result.x == ball.x` where the returned struct
+// literal sets `x: ball.x` verbatim was deferred to runtime — Layer 1
+// could only prove ensures when the field was set to a literal integer.
+//
+// Now the L1 solver substitutes `self.field` with the field's init
+// expression and checks structural equality on both sides of the Compare
+// clause.
+
+pub type Ball = struct {
+    x:  Int,
+    y:  Int,
+    vx: Int where self >= -3 && self <= 3 && self != 0,
+    vy: Int where self >= -1 && self <= 1,
+}
+
+/// Every field on the returned Ball is a direct copy of `b`'s field.
+/// All four ensures should now discharge at L1 via shape equality.
+pub total fn identity_ball(b: Ball) -> Ball
+    ensures result.x == b.x
+    ensures result.y == b.y
+    ensures result.vx == b.vx
+    ensures result.vy == b.vy
+{
+    Ball { x: b.x, y: b.y, vx: b.vx, vy: b.vy }
+}
+
+/// Return a ball with vx flipped.  `ensures result.vx == 0 - b.vx`
+/// should discharge via shape equality (RHS is a binary Sub matching
+/// the field init exactly).
+pub total fn flip_vx(b: Ball) -> Ball
+    ensures result.x  == b.x
+    ensures result.y  == b.y
+    ensures result.vx == 0 - b.vx
+    ensures result.vy == b.vy
+{
+    Ball { x: b.x, y: b.y, vx: 0 - b.vx, vy: b.vy }
+}
