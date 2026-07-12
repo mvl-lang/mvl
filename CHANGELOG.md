@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.246.2] - 2026-07-12
+
+### Fixed — parser: accept unary minus in refinement predicates
+
+- Refinement predicate parser previously rejected unary `-` after comparison operators (`self >= -3`) and at expression start (`-3 <= self`), even though `self >= 0 - 3` (binary minus) worked fine. Any refined `Int` needing negative lower bounds was forced to use the `0 - N` idiom. Now desugars `-x` to `0 - x` so downstream consumers (checker, solver, printer) need no AST changes. Fixes #1777.
+
 ## [0.246.1] - 2026-07-12
 
 ### Fixed — cli/mcdc: load pure-MVL stdlib extras into prelude
