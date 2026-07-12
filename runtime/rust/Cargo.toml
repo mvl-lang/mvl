@@ -1,6 +1,6 @@
 [package]
 name = "mvl_runtime_rust"
-version = "0.197.1"
+version = "1.0.0"
 edition = "2021"
 description = "MVL runtime — newtypes, prelude, and effect markers for generated Rust code"
 license = "Apache-2.0"
