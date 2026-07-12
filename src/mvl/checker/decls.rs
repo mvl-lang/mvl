@@ -467,7 +467,7 @@ impl TypeChecker {
             return;
         }
 
-        let ret_ty = resolve(&fd.return_type);
+        let ret_ty = self.normalize_label_ty(resolve(&fd.return_type));
 
         // Phase C (Spec 009 Req 2): scope-based lifetime check.
         // If the return type is val T / ref T and the function has no val/ref parameters,

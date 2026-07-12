@@ -295,7 +295,9 @@ impl TypeChecker {
                 pattern, ty, init, ..
             } => {
                 let init_ty = self.infer_expr(init);
-                let ann_ty = resolve(ty);
+                // #1784: normalise any cross-file label annotation via normalize_label_ty
+                // (called inside types_compatible_resolved).
+                let ann_ty = self.normalize_label_ty(resolve(ty));
                 // Phase C (#305, #363): scope-depth check for any reference assignment.
                 // Covers both implicit borrow (`let r: val T = x` where x: T) and explicit
                 // borrow / ref-copy (`let r: val T = val x` or `let r: val T = existing_ref`).
@@ -649,9 +651,22 @@ impl TypeChecker {
         if types_compatible(expected, found) {
             return true;
         }
-        let expected_resolved = self.resolve_alias(expected.clone());
-        let found_resolved = self.resolve_alias(found.clone());
+        let expected_resolved = self.resolve_alias(self.normalize_label_ty(expected.clone()));
+        let found_resolved = self.resolve_alias(self.normalize_label_ty(found.clone()));
         types_compatible(&expected_resolved, &found_resolved)
+    }
+
+    /// Normalise a user-written label type that was parsed as `Ty::Named(L, [T])` (because
+    /// the parser only seeds known_labels from the current file) into `Ty::Labeled(L, T)`.
+    /// Called in compatibility checks where the checker has the full known_labels set.
+    /// See #1780 (relabel), #1784 (let annotation, return type).
+    pub(super) fn normalize_label_ty(&self, ty: Ty) -> Ty {
+        if let Ty::Named(ref n, ref args) = ty {
+            if args.len() == 1 && self.env.known_labels.contains(n.as_str()) {
+                return Ty::Labeled(n.clone(), Box::new(args[0].clone()));
+            }
+        }
+        ty
     }
 
     /// Resolve named aliases inside a Labeled wrapper.
