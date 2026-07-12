@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.248.3] - 2026-07-12
+
+### Fixed — checker: extend #1781 alias-transparency to six more sites
+
+- Following #1781 (`check_construction` in `stmts.rs`), a systematic audit turned up
+  six more sites where the raw `types_compatible` was called instead of the
+  alias-expanding `types_compatible_resolved`.  Each rejected a legitimate value
+  flowing into a named refined-type alias:
+  - `stmts.rs:39` — `check_branch_label_promotion` return-type compat
+  - `stmts.rs:245` — tail-`if` else-branch compat
+  - `stmts.rs:273` — `else if` chain compat
+  - `stmts.rs:305` — `is_ref_assignment` detection (`let r: ref MyInt = 5`)
+  - `stmts.rs:617` — `LValue::Field` assignment (`c.tally = raw` on `tally: ref Int`)
+  - `decls.rs:617` — `check_const_decl` (`const P: Port = 8080`)
+- Extends `resolve_alias` to peel refined aliases inside `Ty::Ref(_, inner)` so the
+  ref-assignment scope-check fires for aliased ref bindings.  Other wrappers
+  (`Option`, `List`, `Map`, …) already round-trip structurally through the
+  recursive `types_compatible` on their inner types.
+- Adds six regression snippets in `tests/corpus/09_refinements/refinements_valid.mvl`.
+- Retirement of the raw form (rename / `pub(crate)` / delete) is deferred to a
+  follow-up ticket — `infer.rs` contains four additional call sites not covered
+  by this audit table.  Closes #1786.
+
 ## [0.248.2] - 2026-07-12
 
 ### Fixed — transpiler: cross-file value type from a pkg emits distinct Rust types

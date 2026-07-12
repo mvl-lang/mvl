@@ -36,7 +36,9 @@ impl TypeChecker {
         if let (Some(lbl), Some(ret)) = (cond_label, return_ty) {
             if !matches!(branch_ty.unlabeled(), Ty::Unit | Ty::Unknown) {
                 let promoted = ifc::apply_label(Some(lbl), branch_ty.unlabeled().clone());
-                if !matches!(promoted, Ty::Unknown) && !types_compatible(ret, &promoted) {
+                if !matches!(promoted, Ty::Unknown)
+                    && !self.types_compatible_resolved(ret, &promoted)
+                {
                     self.emit(CheckError::TypeMismatch {
                         expected: ret.display(),
                         found: promoted.display(),
@@ -242,7 +244,7 @@ impl TypeChecker {
                     );
                     if !matches!(result_ty, Ty::Unknown)
                         && !matches!(else_ty, Ty::Unknown)
-                        && !types_compatible(&result_ty, &else_ty)
+                        && !self.types_compatible_resolved(&result_ty, &else_ty)
                     {
                         self.emit(CheckError::TypeMismatch {
                             expected: result_ty.display(),
@@ -270,7 +272,7 @@ impl TypeChecker {
                         );
                         if !matches!(result_ty, Ty::Unknown)
                             && !matches!(nested_ty, Ty::Unknown)
-                            && !types_compatible(&result_ty, &nested_ty)
+                            && !self.types_compatible_resolved(&result_ty, &nested_ty)
                         {
                             self.emit(CheckError::TypeMismatch {
                                 expected: result_ty.display(),
@@ -302,7 +304,8 @@ impl TypeChecker {
                 // Covers both implicit borrow (`let r: val T = x` where x: T) and explicit
                 // borrow / ref-copy (`let r: val T = val x` or `let r: val T = existing_ref`).
                 let is_ref_assignment = if let Ty::Ref(_, inner_ty) = &ann_ty {
-                    types_compatible(inner_ty, &init_ty) || types_compatible(&ann_ty, &init_ty)
+                    self.types_compatible_resolved(inner_ty, &init_ty)
+                        || self.types_compatible_resolved(&ann_ty, &init_ty)
                 } else {
                     false
                 };
@@ -614,7 +617,9 @@ impl TypeChecker {
                 // Recursing with val_ty into check_assignment on the base would incorrectly
                 // compare the base struct type against the field value type.
                 let field_ty = self.field_type(&base_ty, field).unwrap_or(Ty::Unknown);
-                if !matches!(field_ty, Ty::Unknown) && !types_compatible(&field_ty, val_ty) {
+                if !matches!(field_ty, Ty::Unknown)
+                    && !self.types_compatible_resolved(&field_ty, val_ty)
+                {
                     self.emit(CheckError::TypeMismatch {
                         expected: field_ty.display(),
                         found: val_ty.display(),
@@ -628,17 +633,26 @@ impl TypeChecker {
     /// Resolve a named type through the type environment if it is a type alias.
     /// Returns the alias base type (with Refined stripped), or the original type if not an alias.
     /// Recursively resolves chained aliases (e.g. `Port → PositiveInt → Int`).
-    /// Used for return-type and arithmetic checks where named aliases should be transparent.
+    ///
+    /// Also peels the alias inside `Ty::Ref(_, inner)` so that `ref MyInt`
+    /// (where `type MyInt = Int where …`) resolves to `ref Int` — otherwise
+    /// `let r: ref MyInt = 5` misses the ref-assignment path even though the
+    /// scope-check should fire (#1786).  Other wrappers (`Option`, `List`, …)
+    /// are intentionally left alone: they already round-trip structurally
+    /// through the recursive `types_compatible` on their inner types.
     pub(super) fn resolve_alias(&self, ty: Ty) -> Ty {
-        if let Ty::Named(ref name, _) = ty {
-            if let Some(type_info) = self.env.lookup_type(name) {
-                if let TypeBodyInfo::Alias(inner) = &type_info.body {
-                    // Recurse to resolve chained aliases.
-                    return self.resolve_alias(inner.base().clone());
+        match ty {
+            Ty::Named(ref name, _) => {
+                if let Some(type_info) = self.env.lookup_type(name) {
+                    if let TypeBodyInfo::Alias(inner) = &type_info.body {
+                        return self.resolve_alias(inner.base().clone());
+                    }
                 }
+                ty
             }
+            Ty::Ref(mutable, inner) => Ty::Ref(mutable, Box::new(self.resolve_alias(*inner))),
+            _ => ty,
         }
-        ty
     }
 
     /// Type compatibility that sees through type aliases (#1324).

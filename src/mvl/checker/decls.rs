@@ -10,7 +10,7 @@ use crate::mvl::checker::context::{
     actor_field_infos, field_infos, variant_infos, FnInfo, TypeBodyInfo, TypeInfo, VarInfo,
 };
 use crate::mvl::checker::errors::CheckError;
-use crate::mvl::checker::types::{resolve, types_compatible, Ty};
+use crate::mvl::checker::types::{resolve, Ty};
 use crate::mvl::parser::ast::{
     ActorDecl, Capability, ConstDecl, Decl, ExternDecl, FnDecl, ImplDecl, TypeBody, TypeDecl,
 };
@@ -614,7 +614,7 @@ impl TypeChecker {
     fn check_const_decl(&mut self, cd: &ConstDecl) {
         let expected = resolve(&cd.ty);
         let found = self.infer_expr(&cd.value);
-        if !types_compatible(&expected, &found) {
+        if !self.types_compatible_resolved(&expected, &found) {
             self.emit(CheckError::TypeMismatch {
                 expected: expected.display(),
                 found: found.display(),
