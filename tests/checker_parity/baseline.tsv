@@ -103,6 +103,7 @@ tests/corpus/08_ifc/return_label_inference.mvl	ok
 tests/corpus/08_ifc/secret_env.mvl	ok
 tests/corpus/09_refinements/ensures_contracts_proven.mvl	ok
 tests/corpus/09_refinements/refinements_fully_proven.mvl	ok
+tests/corpus/09_refinements/refinements_unary_minus.mvl	ok
 tests/corpus/09_refinements/refinements_valid.mvl	ok
 tests/corpus/09_refinements/refinements_violations.mvl	ok
 tests/corpus/09_refinements/solver_layer1_trivial.mvl	ok
