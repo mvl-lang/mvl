@@ -1213,20 +1213,29 @@ mod tests {
         );
     }
 
+    /// Parse `prelude_src` and `consumer_src` as two programs and type-check the
+    /// consumer with the prelude in scope.  Shared helper for the #1785 regression
+    /// tests below.
+    fn check_two_files(
+        prelude_src: &str,
+        consumer_src: &str,
+    ) -> crate::mvl::checker::CheckResult {
+        let (mut pp, _) = crate::mvl::parser::Parser::new(prelude_src);
+        let prelude_prog = pp.parse_program();
+        let (mut cp, _) = crate::mvl::parser::Parser::new(consumer_src);
+        let consumer_prog = cp.parse_program();
+        crate::mvl::checker::check_with_two_preludes(&[], &[&prelude_prog], &consumer_prog)
+    }
+
     /// Regression (#1785): cross-file user label on an FFI extern "c" return type must be
     /// rejected.  Before this fix, the label arrived as `Ty::Named("L",[T])` and the FFI
     /// boundary check (which matches only `Ty::Labeled`) silently passed.
     #[test]
     fn user_label_cross_file_ffi_rejected() {
-        let prelude_src = "pub label L";
-        let consumer_src = "use m::{L} \
-                            extern \"c\" { fn get_value() -> L[Int] }";
-        let (mut pp, _) = crate::mvl::parser::Parser::new(prelude_src);
-        let prelude_prog = pp.parse_program();
-        let (mut cp, _) = crate::mvl::parser::Parser::new(consumer_src);
-        let consumer_prog = cp.parse_program();
-        let result =
-            crate::mvl::checker::check_with_two_preludes(&[], &[&prelude_prog], &consumer_prog);
+        let result = check_two_files(
+            "pub label L",
+            "use m::{L} extern \"c\" { fn get_value() -> L[Int] }",
+        );
         assert!(
             result.errors.iter().any(|e| matches!(
                 e,
@@ -1242,19 +1251,13 @@ mod tests {
     /// `Ty::Labeled`, so the cross-file `Ty::Named` variant fell through.
     #[test]
     fn user_label_cross_file_into_inner_accepted() {
-        let prelude_src = "pub label L";
         // L is declared in prelude; consumer only imports it.  L[Int].into_inner() must
-        // return Int and the surrounding addition must type-check.
-        let consumer_src = "use m::{L} \
-                            total fn unwrap_l(v: L[Int]) -> Int { \
-                                v.into_inner() \
-                            }";
-        let (mut pp, _) = crate::mvl::parser::Parser::new(prelude_src);
-        let prelude_prog = pp.parse_program();
-        let (mut cp, _) = crate::mvl::parser::Parser::new(consumer_src);
-        let consumer_prog = cp.parse_program();
-        let result =
-            crate::mvl::checker::check_with_two_preludes(&[], &[&prelude_prog], &consumer_prog);
+        // return Int and the surrounding fn body must type-check.
+        let result = check_two_files(
+            "pub label L",
+            "use m::{L} \
+             total fn unwrap_l(v: L[Int]) -> Int { v.into_inner() }",
+        );
         assert!(
             result.is_ok(),
             "into_inner on cross-file user label must type-check, got: {:?}",
@@ -1262,30 +1265,52 @@ mod tests {
         );
     }
 
-    /// Regression (#1785): IFC taint propagation must recognise cross-file user labels.
-    /// Before this fix `label_of` returned `None` for `Ty::Named("L",[T])`, so the taint
-    /// was never seeded and propagation was silently skipped.
+    /// Regression (#1785): passing a cross-file `L[String]` where an unlabeled
+    /// `String` is expected must be rejected as a type mismatch.  Before the fix,
+    /// the parser produced `Ty::Named("L",[String])`; without normalization the
+    /// argument type unified with `String` and the leak silently passed.
     #[test]
-    fn user_label_cross_file_ifc_propagation() {
-        let prelude_src = "pub label L \
-                           pub relabel to_l:   _ -> L audit \
-                           pub relabel from_l: L -> _ audit \
-                           pub fn println(msg: String) -> Unit ! Console { }";
-        // consumer uses the cross-file label — if propagation works, passing L[String]
-        // to a fn that expects String should be rejected (type mismatch, not silent pass).
-        let consumer_src = "use m::{L, to_l, from_l, println} \
-                            fn leak(s: L[String]) -> Unit ! Console { \
-                                println(s) \
-                            }";
-        let (mut pp, _) = crate::mvl::parser::Parser::new(prelude_src);
-        let prelude_prog = pp.parse_program();
-        let (mut cp, _) = crate::mvl::parser::Parser::new(consumer_src);
-        let consumer_prog = cp.parse_program();
-        let result =
-            crate::mvl::checker::check_with_two_preludes(&[], &[&prelude_prog], &consumer_prog);
+    fn user_label_cross_file_type_mismatch_rejected() {
+        let result = check_two_files(
+            "pub label L \
+             pub fn println(msg: String) -> Unit ! Console { }",
+            "use m::{L, println} \
+             fn leak(s: L[String]) -> Unit ! Console { println(s) }",
+        );
+        assert!(
+            result.errors.iter().any(|e| matches!(
+                e,
+                crate::mvl::checker::errors::CheckError::TypeMismatch { .. }
+            )),
+            "expected TypeMismatch on L[String] vs String, got: {:?}",
+            result.errors
+        );
+    }
+
+    /// Regression (#1785): a cross-file function whose return type is a user
+    /// label must seed IFC taint propagation.  The consumer calls
+    /// `read_secret()` (declared in prelude to return `L[String]`) and passes
+    /// the result to `println(msg: String)`.  Before normalizing at `FnInfo`
+    /// construction, `fn_info.ret` was `Ty::Named("L",[String])`, so
+    /// `ifc::label_of` returned `None`, propagation was never seeded, and the
+    /// leak passed silently.  The result must now be rejected.
+    #[test]
+    fn user_label_cross_file_propagation_seed_from_return_type() {
+        let result = check_two_files(
+            "pub label L \
+             pub fn read_secret() -> L[String] { relabel to_l(\"x\", \"T\") } \
+             pub relabel to_l: _ -> L audit \
+             pub fn println(msg: String) -> Unit ! Console { }",
+            "use m::{L, read_secret, println} \
+             fn leak() -> Unit ! Console { \
+                 let s: L[String] = read_secret(); \
+                 println(s) \
+             }",
+        );
         assert!(
             !result.is_ok(),
-            "passing L[String] where String is expected must be a type error, got no errors"
+            "cross-file fn returning L[String] must taint its result; leak into \
+             println(String) should be rejected, got no errors"
         );
     }
 

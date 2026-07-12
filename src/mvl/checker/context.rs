@@ -308,14 +308,18 @@ impl TypeEnv {
     /// The parser seeds `known_labels` only from the current file's declarations,
     /// so cross-file user labels arrive as `Ty::Named` and must be normalized here,
     /// where the full label set from all prelude `collect_declarations` passes is available.
+    ///
+    /// Normalization is **shallow** — only the outermost head is rewritten.  Nested
+    /// labels inside compound types (e.g. `Option[L[T]]`) are not normalized here;
+    /// callers must not assume compound types are fully canonical.
     pub fn normalize_ty(&self, ty: Ty) -> Ty {
         match ty {
-            Ty::Named(ref n, ref args)
+            Ty::Named(n, mut args)
                 if args.len() == 1 && self.known_labels.contains(n.as_str()) =>
             {
-                Ty::Labeled(n.clone(), Box::new(args[0].clone()))
+                Ty::Labeled(n, Box::new(args.pop().unwrap()))
             }
-            _ => ty,
+            other => other,
         }
     }
 
