@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.248.4] - 2026-07-12
+
+### Fixed — checker/solver: L1 discharges struct-literal ensures via shape equality
+
+- Layer 1 struct-literal path (`eval_bool_struct`) previously required a field's init to be a literal integer/bool to prove a Compare predicate.  Ensures like `result.x == ball.x` where the returned struct sets `x: ball.x` verbatim fell through to runtime.  Now L1 substitutes `self.<field>` on both sides of the Compare and checks structural equality (`ref_expr_shape_eq`); if the substituted trees match, the predicate discharges trivially.  On `examples/pong` this lifts compile-time proofs from 7 → 24 (3.4×).  Fixes #1796.
+
 ## [0.248.3] - 2026-07-12
 
 ### Fixed — checker: extend #1781 alias-transparency to six more sites
