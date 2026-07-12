@@ -193,6 +193,114 @@ fn is_irrefutable(pat: &Pattern) -> bool {
     matches!(pat, Pattern::Wildcard(_) | Pattern::Ident(..))
 }
 
+/// Suggest rewriting a 2-arm `match` as `if let` when the second arm is
+/// `_ => ()` and the first arm is a refutable variant pattern.
+///
+/// Rule id: `suggest-if-let`
+///
+/// Example — flagged:
+/// ```mvl
+/// match items.get(i) {
+///     Some(v) => { … }
+///     _ => (),
+/// }
+/// ```
+/// Preferred:
+/// ```mvl
+/// if let Some(v) = items.get(i) { … }
+/// ```
+pub fn suggest_if_let(prog: &Program, cfg: &LintConfig, out: &mut Vec<LintDiag>) {
+    if !cfg.suggest_if_let {
+        return;
+    }
+    for decl in &prog.declarations {
+        if let Decl::Fn(f) = decl {
+            check_block_suggest_if_let(&f.body, out);
+        }
+    }
+}
+
+fn check_block_suggest_if_let(block: &Block, out: &mut Vec<LintDiag>) {
+    for stmt in &block.stmts {
+        match stmt {
+            Stmt::Match { arms, span, .. } => {
+                emit_if_suggest_if_let(arms, span.line, span.col, out);
+                for arm in arms {
+                    if let MatchBody::Block(b) = &arm.body {
+                        check_block_suggest_if_let(b, out);
+                    }
+                }
+            }
+            Stmt::Expr {
+                expr: Expr::Match { arms, span, .. },
+                ..
+            } => {
+                emit_if_suggest_if_let(arms, span.line, span.col, out);
+                for arm in arms {
+                    if let MatchBody::Block(b) = &arm.body {
+                        check_block_suggest_if_let(b, out);
+                    }
+                }
+            }
+            Stmt::If { then, else_, .. } => {
+                check_block_suggest_if_let(then, out);
+                match else_ {
+                    Some(ElseBranch::Block(eb)) => check_block_suggest_if_let(eb, out),
+                    Some(ElseBranch::If(inner)) => check_block_suggest_if_let(
+                        &Block {
+                            stmts: vec![*inner.clone()],
+                            span: inner.span(),
+                        },
+                        out,
+                    ),
+                    None => {}
+                }
+            }
+            Stmt::For { body, .. } | Stmt::While { body, .. } => {
+                check_block_suggest_if_let(body, out);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn emit_if_suggest_if_let(arms: &[MatchArm], line: u32, col: u32, out: &mut Vec<LintDiag>) {
+    if arms.len() != 2 {
+        return;
+    }
+    // Second arm must be `_ => ()` (wildcard with unit body).
+    let second_is_wildcard_unit = matches!(&arms[1].pattern, Pattern::Wildcard(_))
+        && matches!(
+            &arms[1].body,
+            MatchBody::Expr(Expr::Literal(Literal::Unit, _))
+        );
+    if !second_is_wildcard_unit {
+        return;
+    }
+    // First arm must be a refutable variant pattern (i.e. one that if-let handles).
+    if !is_if_let_pattern(&arms[0].pattern) {
+        return;
+    }
+    out.push(LintDiag::warning(
+        "suggest-if-let",
+        "2-arm `match` with `_ => ()` fallback — prefer `if let` for clarity",
+        line,
+        col,
+    ));
+}
+
+/// Patterns that `if let` can bind directly.
+fn is_if_let_pattern(pat: &Pattern) -> bool {
+    matches!(
+        pat,
+        Pattern::Some { .. }
+            | Pattern::Ok { .. }
+            | Pattern::Err { .. }
+            | Pattern::TupleStruct { .. }
+            | Pattern::Struct { .. }
+    )
+}
+
 fn pattern_display(pat: &Pattern) -> &str {
     match pat {
         Pattern::Wildcard(_) => "_",
@@ -1509,6 +1617,98 @@ mod tests {
             ..LintConfig::default()
         };
         silent_result_discard(&prog, &cfg_off, &mut diags);
+        assert!(diags.is_empty(), "rule must be silent when disabled");
+    }
+
+    // -- suggest_if_let --
+
+    #[test]
+    fn suggest_if_let_fires_on_some_wildcard_unit() {
+        let src = concat!(
+            "fn main() -> Unit {\n",
+            "    match [1].get(0) {\n",
+            "        Some(v) => { let _: Int = v; },\n",
+            "        _ => (),\n",
+            "    }\n",
+            "}\n",
+        );
+        let prog = parse(src);
+        let mut diags = vec![];
+        suggest_if_let(&prog, &cfg(), &mut diags);
+        assert_eq!(diags.len(), 1, "expected one suggest-if-let warning");
+        assert!(diags[0].rule.contains("suggest-if-let"));
+    }
+
+    #[test]
+    fn suggest_if_let_silent_on_three_arm_match() {
+        let src = concat!(
+            "type Color = enum { Red, Green, Blue }\n",
+            "fn f(c: Color) -> Int {\n",
+            "    match c {\n",
+            "        Color::Red => 1,\n",
+            "        Color::Green => 2,\n",
+            "        _ => 0,\n",
+            "    }\n",
+            "}\n",
+        );
+        let prog = parse(src);
+        let mut diags = vec![];
+        suggest_if_let(&prog, &cfg(), &mut diags);
+        assert!(diags.is_empty(), "3-arm match should not trigger");
+    }
+
+    #[test]
+    fn suggest_if_let_silent_when_fallback_is_not_unit() {
+        // Second arm returns a real value — this is a proper 2-branch decision,
+        // not a "care about one variant" pattern.
+        let src = concat!(
+            "fn main() -> Int {\n",
+            "    match [1].get(0) {\n",
+            "        Some(v) => v,\n",
+            "        _ => 0,\n",
+            "    }\n",
+            "}\n",
+        );
+        let prog = parse(src);
+        let mut diags = vec![];
+        suggest_if_let(&prog, &cfg(), &mut diags);
+        assert!(diags.is_empty(), "non-unit fallback should not trigger");
+    }
+
+    #[test]
+    fn suggest_if_let_silent_when_first_arm_is_wildcard() {
+        // Two wildcard-like arms — this is `redundant-match` territory, not us.
+        let src = concat!(
+            "fn f(x: Int) -> Unit {\n",
+            "    match x {\n",
+            "        _ => (),\n",
+            "        _ => (),\n",
+            "    }\n",
+            "}\n",
+        );
+        let prog = parse(src);
+        let mut diags = vec![];
+        suggest_if_let(&prog, &cfg(), &mut diags);
+        assert!(diags.is_empty(), "wildcard first arm should not trigger");
+    }
+
+    #[test]
+    fn suggest_if_let_disabled() {
+        let src = concat!(
+            "fn main() -> Unit {\n",
+            "    match [1].get(0) {\n",
+            "        Some(v) => { let _: Int = v; },\n",
+            "        _ => (),\n",
+            "    }\n",
+            "}\n",
+        );
+        let prog = parse(src);
+        let mut diags = vec![];
+        let cfg_off = LintConfig {
+            suggest_if_let: false,
+            ..LintConfig::default()
+        };
+        suggest_if_let(&prog, &cfg_off, &mut diags);
         assert!(diags.is_empty(), "rule must be silent when disabled");
     }
 }

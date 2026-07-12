@@ -41,6 +41,7 @@
 //! |------------------------|---------|------------------------------------------------------|
 //! | `unreachable_code`     | `true`  | Flag statements after `return` in a block            |
 //! | `redundant_match`      | `true`  | Flag `match` with a single irrefutable arm           |
+//! | `suggest_if_let`       | `true`  | Suggest `if let` for 2-arm match with `_ => ()` fallback |
 //! | `redundant_effects`    | `true`  | Flag effect declarations on call-free functions      |
 //! | `redundant_ifc_labels` | `true`  | Flag `Public<T>` annotations (redundant base label)  |
 //! | `missing_annotations`       | `false` | Warn on functions with calls but no effect annotation (opt-in) |
@@ -102,6 +103,10 @@ pub struct LintConfig {
     pub unreachable_code: bool,
     /// Flag `match` expressions/statements with a single irrefutable arm.
     pub redundant_match: bool,
+    /// Suggest `if let` when a 2-arm `match` has a variant pattern and a `_ => ()`
+    /// fallback — the `if let` form is more concise and expresses "only care
+    /// about this variant" more directly (#1776).
+    pub suggest_if_let: bool,
     /// Flag functions that declare effects but contain no function calls.
     pub redundant_effects: bool,
     /// Flag `Public<T>` type annotations (the base IFC label, always redundant).
@@ -171,6 +176,7 @@ impl Default for LintConfig {
             unused_bindings: true,
             unreachable_code: true,
             redundant_match: true,
+            suggest_if_let: true,
             redundant_effects: true,
             redundant_ifc_labels: true,
             missing_annotations: false,
@@ -308,6 +314,7 @@ fn load_from(path: &Path) -> Option<LintConfig> {
             "unused_bindings" => cfg.unused_bindings = parse_bool(val),
             "unreachable_code" => cfg.unreachable_code = parse_bool(val),
             "redundant_match" => cfg.redundant_match = parse_bool(val),
+            "suggest_if_let" => cfg.suggest_if_let = parse_bool(val),
             "redundant_effects" => cfg.redundant_effects = parse_bool(val),
             "redundant_ifc_labels" => cfg.redundant_ifc_labels = parse_bool(val),
             "missing_annotations" => cfg.missing_annotations = parse_bool(val),
