@@ -67,6 +67,12 @@ pub fn run(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
     // because the MCDC runner processes each file with only the implicit prelude
     // (core, strings, lists), unlike `mvl test` and `mvl build` which both call
     // load_mvl_native_stdlib_extras.
+    //
+    // Also load transitive `pkg.*` package modules (#1789) — matches the pattern
+    // in `test.rs`.  Without this, types from external packages (e.g. `Direction`
+    // from `use pkg.tui.{Direction}`) are absent from the harness and rustc
+    // errors with `E0433: cannot find type` when patterns match on the type's
+    // variants.
     {
         let all_files: Vec<_> = loader::mvl_files(path, true)
             .into_iter()
@@ -77,6 +83,21 @@ pub fn run(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
             .map(|f| super::parse_or_exit(&f.display().to_string()).0)
             .collect();
         stdlib_prelude_progs.extend(loader::load_mvl_native_stdlib_extras(&all_progs));
+
+        // Frontier loop for pkg.* dependencies — mirror test.rs:216-245.  Uses a
+        // frontier so transitive pkg deps are picked up (e.g. pkg-a → pkg-b).
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let project_root = super::find_project_root(&cwd);
+        let mut seen_pkgs: HashSet<String> = HashSet::new();
+        let mut frontier = all_progs.clone();
+        loop {
+            let new_pkgs = loader::load_pkg_modules(&frontier, &project_root, &mut seen_pkgs);
+            if new_pkgs.is_empty() {
+                break;
+            }
+            frontier = new_pkgs.clone();
+            stdlib_prelude_progs.extend(new_pkgs);
+        }
     }
 
     // The implicit prelude always has `pub builtin fn` declarations (strings.mvl,

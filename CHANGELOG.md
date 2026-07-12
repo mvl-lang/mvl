@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.249.4] - 2026-07-12
+
+### Fixed — cli/mcdc: load pkg.* modules into prelude
+
+`mvl mcdc` on a project importing `use pkg.tui.{Direction}` and matching on `Key::Arrow(Direction::Up)` failed with rustc `E0433: cannot find type Direction in this scope` errors in the generated harness. The same class of bug fixed in v0.246.1 (#1773) for pure-MVL stdlib modules, but for external `pkg.*` package dependencies.
+
+Root cause: `mcdc.rs` only loaded `load_implicit_prelude()` + `load_mvl_native_stdlib_extras()`. Transitive `pkg.*` dependencies were never loaded, so their type declarations were absent from the emitted Rust harness. Mirror the frontier loop from `test.rs` — call `loader::load_pkg_modules()` in a loop until no new packages appear, extending `stdlib_prelude_progs` each iteration.
+
+Closes #1789. Related: #1773, #1788, #1803.
+
 ## [0.249.3] - 2026-07-12
 
 ### Fixed — checker/contracts: branch conditions flow as ensures hypotheses
