@@ -710,6 +710,21 @@ impl Parser {
                 inner: Box::new(inner),
                 span,
             })
+        } else if matches!(self.peek_kind(), TokenKind::Minus) {
+            // Unary minus in refinement predicates (#1777): desugar `-x`
+            // to `0 - x` so downstream consumers (checker, solver, printer)
+            // need no new variant.  Semantically identical to any well-
+            // formed arithmetic expression using binary subtraction.
+            let start = self.peek_span();
+            self.advance();
+            let inner = self.parse_ref_unary()?;
+            let span = self.span_from(start);
+            Ok(RefExpr::ArithOp {
+                op: ArithOp::Sub,
+                left: Box::new(RefExpr::Integer { value: 0, span }),
+                right: Box::new(inner),
+                span,
+            })
         } else {
             self.parse_ref_atom()
         }
