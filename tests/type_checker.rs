@@ -263,6 +263,78 @@ fn result_match_missing_ok_rejected() {
     );
 }
 
+// #1787 — silent-drop regression tests
+
+#[test]
+fn aliased_enum_match_missing_variant_rejected() {
+    // GIVEN: enum aliased via `type MyColor = Color` with a non-exhaustive match.
+    // Before #1787, `check_exhaustiveness` skipped the Alias body silently.
+    let src = "type Color = enum { Red, Green, Blue }\n\
+               type MyColor = Color\n\
+               fn f(c: MyColor) -> Int { match c { Red => 1, Green => 2 } }";
+    let errors = errors_for(src);
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            CheckError::NonExhaustiveMatch { missing, .. } if missing.contains(&"Blue".to_string())
+        )),
+        "expected NonExhaustiveMatch(Blue) for aliased enum, got: {errors:?}"
+    );
+}
+
+#[test]
+fn aliased_option_match_missing_none_rejected() {
+    // GIVEN: `type MyOption = Option[Int]` matched without a None arm.
+    // Before #1787, aliased Option was accepted silently.
+    let src = "type MyOption = Option[Int]\n\
+               fn f(x: MyOption) -> Int { match x { Some(v) => v } }";
+    let errors = errors_for(src);
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            CheckError::NonExhaustiveMatch { missing, .. } if missing.contains(&"None".to_string())
+        )),
+        "expected NonExhaustiveMatch(None) for aliased Option, got: {errors:?}"
+    );
+}
+
+#[test]
+fn generic_struct_field_type_substitutes() {
+    // GIVEN: `Pair[A]` with `first: A`, constructed with A=Int.
+    // Before #1787, `field_type` returned raw param `A`, so `p.first + 1`
+    // failed with a type mismatch.
+    let src = "type Pair[A] = struct { first: A }\n\
+               fn main() -> Int {\n\
+                   let p: Pair[Int] = Pair { first: 42 };\n\
+                   p.first + 1\n\
+               }";
+    let errors = errors_for(src);
+    let type_errors: Vec<_> = errors
+        .iter()
+        .filter(|e| matches!(e, CheckError::TypeMismatch { .. }))
+        .collect();
+    assert!(
+        type_errors.is_empty(),
+        "expected no TypeMismatch on p.first + 1, got: {type_errors:?}"
+    );
+}
+
+#[test]
+fn unknown_enum_variant_struct_construction_rejected() {
+    // GIVEN: `Enum::UnknownVariant { ... }` struct-style construction.
+    // Before #1787, the checker silently returned Ty::Named(Enum, []) with no diagnostic.
+    let src = "type E = enum { A { x: Int } }\n\
+               fn main() -> E { E::B { x: 1 } }";
+    let errors = errors_for(src);
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            CheckError::UnknownVariant { ty, variant, .. } if ty == "E" && variant == "B"
+        )),
+        "expected UnknownVariant(E::B), got: {errors:?}"
+    );
+}
+
 // ── #14: Option/Result enforcement (Requirements 4, 5) ───────────────────────
 
 #[test]

@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.249.1] - 2026-07-12
+
+### Fixed — checker: three silent drops at pattern-match/lookup sites
+
+Fixes three distinct bugs where incorrect code was accepted without error:
+
+- **Exhaustiveness on aliased enum types** — `check_exhaustiveness` was silently skipped for aliased sum types like `type MyOpt = Option[Int]`. Now recurses through alias wrappers to verify all branches are covered.
+- **Generic struct field type substitution** — `field_type` and `field_type_checked` discarded generic type arguments, so field access like `p.first` on `p: Pair[Int]` was typed against the raw parameter instead of the substituted concrete type.
+- **Enum variant validation** — `check_construction` silently accepted unknown or wrongly-scoped enum variants instead of emitting `UnknownVariant` or `NotAStruct` errors.
+
+Adds 4 regression tests covering all three bugs. Closes #1787.
+
 ## [0.249.0] - 2026-07-12
 
 ### Added — examples/medical_triage: full-assurance posture

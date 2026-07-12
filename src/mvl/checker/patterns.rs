@@ -122,35 +122,44 @@ impl TypeChecker {
             // Named enum: collect which variants are covered
             Ty::Named(name, _) => {
                 if let Some(type_info) = self.env.lookup_type(name).cloned() {
-                    if let TypeBodyInfo::Enum(variants) = &type_info.body {
-                        let variant_names: Vec<String> =
-                            variants.iter().map(|v| v.name.clone()).collect();
+                    match &type_info.body {
+                        TypeBodyInfo::Enum(variants) => {
+                            let variant_names: Vec<String> =
+                                variants.iter().map(|v| v.name.clone()).collect();
 
-                        // A wildcard is any Pattern::Wildcard OR a bare ident not in the enum's variants
-                        if unguarded
-                            .iter()
-                            .any(|a| is_wildcard_pattern(&a.pattern, &variant_names))
-                        {
-                            return;
+                            // A wildcard is any Pattern::Wildcard OR a bare ident not in the enum's variants
+                            if unguarded
+                                .iter()
+                                .any(|a| is_wildcard_pattern(&a.pattern, &variant_names))
+                            {
+                                return;
+                            }
+
+                            // Collect which variant names are explicitly covered (Or patterns cover many)
+                            let covered: Vec<String> = unguarded
+                                .iter()
+                                .flat_map(|arm| covered_variant_names(&arm.pattern, &variant_names))
+                                .collect();
+
+                            let missing: Vec<String> = variant_names
+                                .iter()
+                                .filter(|v| !covered.contains(v))
+                                .cloned()
+                                .collect();
+                            if !missing.is_empty() {
+                                self.emit(CheckError::NonExhaustiveMatch { missing, span });
+                            }
                         }
-
-                        // Collect which variant names are explicitly covered (Or patterns cover many)
-                        let covered: Vec<String> = unguarded
-                            .iter()
-                            .flat_map(|arm| covered_variant_names(&arm.pattern, &variant_names))
-                            .collect();
-
-                        let missing: Vec<String> = variant_names
-                            .iter()
-                            .filter(|v| !covered.contains(v))
-                            .cloned()
-                            .collect();
-                        if !missing.is_empty() {
-                            self.emit(CheckError::NonExhaustiveMatch { missing, span });
+                        // #1787: peel alias types so `type MyOpt = Option[Int]` matches
+                        // are still checked for exhaustiveness against the underlying sum.
+                        TypeBodyInfo::Alias(inner) => {
+                            let inner_ty = inner.clone();
+                            self.check_exhaustiveness(arms, &inner_ty, span);
                         }
+                        TypeBodyInfo::Struct { .. } => {}
                     }
                 }
-                // Unknown type or non-enum → no exhaustiveness check
+                // Unknown type → no exhaustiveness check
             }
 
             _ => {} // literals, bools, tuples — skip exhaustiveness
