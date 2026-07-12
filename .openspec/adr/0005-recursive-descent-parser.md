@@ -105,6 +105,50 @@ Ident → peek LParen   → consume ( → parse args → FnCall (no type args)
 
 *Call sites migrated in v0.46.0. Full migration (all positions) completed in v0.50.0 (#312). `<` is now rejected as a generic delimiter everywhere — in type declarations (`fn foo[T]`, `type List[T]`), type expressions (`Option[T]`, `Result[T, E]`), and security labels (`Secret[T]`). `<` remains valid only as a comparison operator. See also: Go 1.18 type parameter proposal.*
 
+## Block-terminating statements do not take a trailing semicolon
+
+The grammar distinguishes two statement forms in a function body:
+
+```ebnf
+match_stmt  = "match" expr "{" { match_arm } "}" ;   -- no trailing ";"
+if_stmt     = "if" expr block [ "else" ( if_stmt | block ) ] ;
+for_stmt    = "for" pattern "in" expr block ;
+while_stmt  = "while" expr [ "decreases" expr ] block ;
+expr_stmt   = expr ";" ;                              -- trailing ";" required
+```
+
+`match`, `if`, `for`, and `while` are syntactically self-delimiting: every branch ends with `}`. The parser can identify the end of the construct from a single closing brace token — no `;` is needed, and the grammar rejects one if present.
+
+`expr_stmt` covers everything else used as a statement: function calls, assignments, and `let` bindings. These are not self-delimiting — a bare `logger.warn(...)` could be the start of a larger expression — so `;` is required as a terminator.
+
+### Consequence for result discarding
+
+This means the two most common ways to use a `Result` as a statement look different:
+
+```mvl
+// function call used as statement — expr_stmt, needs ";"
+let _: Result[Unit, IoError] = auditor.emit(ev);    // triggers [silent-result-discard] lint
+
+// match used as statement — match_stmt, no ";"
+match auditor.emit(ev) {
+    Err(e) => logger.warn("audit failed", {"error": e}),
+    Ok(_) => { },
+}
+```
+
+The `match` form is preferred: it forces explicit handling of both arms. The `let _` form is available but linted.
+
+### Precedent
+
+| Language | Block-terminating forms need `;`? |
+|----------|----------------------------------|
+| **Rust** | Optional — `match x { ... };` is legal (discards value), `match x { ... }` is also legal |
+| **Swift** | No — `if`, `switch`, `for`, `while` never take `;` |
+| **Go** | No — block-terminated statements never take `;` |
+| **MVL** | No — `;` after `}` is a parse error; the grammar is unambiguous without it |
+
+Rust's optionality is a source of minor confusion (does `;` change the type?). MVL eliminates the question by making `;` after `}` illegal.
+
 ## Alternatives reconsidered for later phases
 
 - **tree-sitter grammar** for IDE support (syntax highlighting, incremental parsing) — add in Phase 3 alongside the language server.
