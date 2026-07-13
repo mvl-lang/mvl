@@ -1,0 +1,3 @@
+[submodule "vendor/mvl-spec"]
+	path = vendor/mvl-spec
+	url = https://github.com/mvl-lang/mvl-spec

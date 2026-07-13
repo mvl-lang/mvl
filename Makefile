@@ -2,7 +2,7 @@
 .ONESHELL:
 SHELL := /bin/bash
 
-.PHONY: help version build test test-full test-unit test-rust-integration test-requirements test-error-messages test-fmt-roundtrip test-corpus test-corpus-codegen test-checker-parity test-checker-parity-update test-solver test-stdlib check-compiler assure-compiler test-mvl test-bootstrap-e2e test-bdd test-backend-rust test-backend-llvm test-cross-backend test-examples test-examples-rust test-examples-llvm coverage validate-keywords lint mvl-lint format format-check format-mvl format-mvl-check assurance assurance-gate audit-backend-ast check-adr docs docs-serve install setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
+.PHONY: help version build test test-full test-unit test-rust-integration test-requirements test-error-messages test-fmt-roundtrip test-corpus test-corpus-codegen test-checker-parity test-checker-parity-update test-solver test-stdlib check-compiler assure-compiler test-mvl test-bootstrap-e2e test-bdd test-backend-rust test-backend-llvm test-cross-backend test-grammar-coverage test-examples test-examples-rust test-examples-llvm coverage validate-keywords lint mvl-lint format format-check format-mvl format-mvl-check assurance assurance-gate audit-backend-ast check-adr docs docs-serve install setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
 
 .DEFAULT_GOAL := help
 
@@ -19,13 +19,14 @@ version: ## Show current project version
 
 # === Setup ===
 
-setup: ## Install git hooks and verify tooling
+setup: ## Install git hooks, init submodules, and verify tooling
 	git config core.hooksPath .githooks
 	@echo "Git hooks installed from .githooks/"
 	@command -v cargo >/dev/null 2>&1 || { echo "cargo not found — install Rust: https://rustup.rs"; exit 1; }
+	git submodule update --init --recursive
 	cargo install cargo-mutants --locked
 	@echo "Ready."
-	@echo "Grammar, tree-sitter, and editor extensions now live in https://github.com/mvl-lang/mvl-spec"
+	@echo "Grammar, tree-sitter, and editor extensions live in vendor/mvl-spec/ (submodule of https://github.com/mvl-lang/mvl-spec)"
 
 doctor: ## Check that all dev tools are available
 	@echo "Checking dev tools..."; echo; \
@@ -118,6 +119,7 @@ TEST_FAST_SUITES := \
 	"Fmt roundtrip     |test-fmt-roundtrip" \
 	"Corpus            |test-corpus" \
 	"Solver            |test-solver" \
+	"Grammar coverage  |test-grammar-coverage" \
 	"Stdlib            |test-stdlib"
 
 TEST_FULL_EXTRA_SUITES := \
@@ -423,8 +425,11 @@ test-examples-llvm: build ## Run LLVM backend tests for every example subdirecto
 
 # === Quality ===
 
-validate-keywords: ## Cross-check keyword lists between compiler/lexer.mvl and Rust lexer (#706)
+validate-keywords: ## Cross-check keyword lists across mvl-spec EBNF, tree-sitter, compiler/lexer.mvl, and Rust lexer (#706)
 	python3 tools/validate_keywords.py
+
+test-grammar-coverage: validate-keywords ## Cross-validate mvl-spec EBNF against the tree-sitter grammar.js
+	@python3 tools/check_grammar_coverage.py
 
 lint: ## Lint Rust source with clippy
 	cargo clippy -- -D warnings
@@ -500,7 +505,10 @@ docs-serve: ## Serve documentation locally (http://localhost:8000)
 # === Grammar / editor tooling ===
 # Grammar (EBNF), tree-sitter parser, and editor extensions live in
 #   https://github.com/mvl-lang/mvl-spec
-# See that repo's tools/ and editors/ trees for build/install instructions.
+# vendored here as a submodule at vendor/mvl-spec/.  See that repo's
+# tools/ and editors/ trees for tree-sitter builds and editor installs.
+# `make test-grammar-coverage` cross-validates the EBNF against the
+# tree-sitter grammar via the pinned submodule.
 
 # === Fuzzing (long-running — not part of per-PR CI) ===
 # Requires: rustup toolchain install nightly && cargo install cargo-fuzz

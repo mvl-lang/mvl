@@ -1,9 +1,9 @@
 # MVL LSP server — dependency management
 # Requires: uv (https://github.com/astral-sh/uv) and an active venv
 #
-# The tree-sitter grammar lives in https://github.com/mvl-lang/mvl-spec.
-# Install the Python binding from a local checkout of that repo:
-#     uv pip install /path/to/mvl-spec/tools/tree-sitter
+# The tree-sitter grammar is vendored via the mvl-spec submodule.
+# Install the Python binding after `git submodule update --init`:
+#     uv pip install ../vendor/mvl-spec/tools/tree-sitter
 
 .DEFAULT_GOAL := help
 
@@ -16,7 +16,7 @@ help:
 	@echo "  run       Start the MVL LSP server (stdio transport)"
 	@echo ""
 	@echo "  Note: the tree-sitter grammar binding must be installed separately"
-	@echo "  from https://github.com/mvl-lang/mvl-spec (tools/tree-sitter)."
+	@echo "  from the vendored mvl-spec submodule (../vendor/mvl-spec/tools/tree-sitter)."
 
 install:
 	uv pip install -r requirements.txt

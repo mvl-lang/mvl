@@ -2,28 +2,38 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`mvl-spec` submodule at `vendor/mvl-spec/`** (#1813) — pinned to a
+  specific `mvl-lang/mvl-spec` commit. Initialise with
+  `git submodule update --init --recursive` (or `make setup`). The
+  relationship mirrors [`rust-lang/rust`](https://github.com/rust-lang/rust)
+  ↔ [`rust-lang/reference`](https://github.com/rust-lang/reference): what
+  defines MVL lives in `mvl-spec`, what implements MVL lives here.
+
 ### Changed
 
 - **Grammar, tree-sitter, and editor extensions relocated to
   [`mvl-lang/mvl-spec`](https://github.com/mvl-lang/mvl-spec)** (#1813).
   `docs/grammar.ebnf`, `etc/tree-sitter-mvl/`, `etc/nvim-mvl/`,
   `etc/vscode-mvl/`, `etc/zed-mvl/`, and `etc/vscode-install.sh` have been
-  deleted from this repository. All internal ADR, spec, and manual references
-  now link to the corresponding files in `mvl-spec`. The relationship
-  mirrors [`rust-lang/rust`](https://github.com/rust-lang/rust) ↔
-  [`rust-lang/reference`](https://github.com/rust-lang/reference): what
-  defines MVL lives in `mvl-spec`, what implements MVL lives here.
+  deleted from this repository; the canonical sources are now consumed via
+  the `vendor/mvl-spec/` submodule. All internal ADR, spec, and manual
+  references were updated accordingly.
+- `tools/validate_keywords.py` now reads the EBNF and tree-sitter grammar
+  from `vendor/mvl-spec/`, restoring the full 4-source keyword drift check
+  against the Rust reference lexer.
+- `tools/check_grammar_coverage.py` and `make test-grammar-coverage` now
+  cross-validate `vendor/mvl-spec/grammar/grammar.ebnf` against
+  `vendor/mvl-spec/tools/tree-sitter/grammar.js` via the pinned submodule.
+- CI's `check` job now checks out submodules recursively so the drift
+  checks have access to the vendored grammar.
 
 ### Removed
 
-- Makefile targets `tree-sitter-build`, `test-tree-sitter`,
-  `test-grammar-coverage`, and `install-nvim`. Tree-sitter build and
-  drift checks are now the responsibility of `mvl-spec`'s CI.
-- `tools/check_grammar_coverage.py` (moved to `mvl-spec`).
-- `tools/validate_keywords.py` now only cross-checks
-  `compiler/lexer.mvl` against the Rust reference lexer; EBNF and
-  tree-sitter arms have been retired in favour of the equivalent
-  drift check in `mvl-spec`.
+- Makefile targets `tree-sitter-build`, `test-tree-sitter`, and
+  `install-nvim`. Tree-sitter builds and editor installs are the
+  responsibility of `mvl-spec` and its downstream users.
 
 ## [1.0.0] - 2026-07-12
 

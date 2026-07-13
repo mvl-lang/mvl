@@ -382,26 +382,30 @@ The language stays at ~25 keywords. Everything else is tooling on the same AST.
 
 ## 21.10 Compiler Grammar Tests
 
-The MVL compiler itself has a grammar test suite that validates the Rust
-reference parser stays consistent with the formal definition.
+The MVL compiler has a grammar test suite that validates the formal
+definition stays consistent with the implementations that derive from it.
+The EBNF and tree-sitter grammars live in `mvl-lang/mvl-spec`, pinned into
+this repo as a submodule at `vendor/mvl-spec/`.
 
 ### What is tested
 
 | Layer | Source of truth | Test |
 |-------|----------------|------|
-| EBNF formal grammar | [`mvl-spec/grammar/grammar.ebnf`](https://github.com/mvl-lang/mvl-spec/blob/main/grammar/grammar.ebnf) (ISO 14977 notation) | Human-readable reference |
+| EBNF formal grammar | `vendor/mvl-spec/grammar/grammar.ebnf` (ISO 14977) | Human-readable reference |
 | Rust recursive-descent parser | `src/mvl/parser/` | `cargo test` — 154 tests |
-| Tree-sitter grammar (editor support) | [`mvl-spec/tools/tree-sitter/grammar.js`](https://github.com/mvl-lang/mvl-spec/blob/main/tools/tree-sitter/grammar.js) | Verified in mvl-spec CI |
-| EBNF ↔ tree-sitter coverage | mvl-spec CI | Runs in the spec repo |
-| Rust lexer ↔ compiler/lexer.mvl keywords | `tools/validate_keywords.py` | `make validate-keywords` |
+| Tree-sitter grammar (editor support) | `vendor/mvl-spec/tools/tree-sitter/grammar.js` | Corpus tests run in mvl-spec CI |
+| EBNF ↔ tree-sitter coverage | `tools/check_grammar_coverage.py` | `make test-grammar-coverage` |
+| Keyword agreement across all four sources | `tools/validate_keywords.py` | `make validate-keywords` |
 
-Cross-repo drift between the Rust lexer here and the EBNF/tree-sitter grammars
-in `mvl-spec` is checked by that repository's own CI (see #1813).
+The keyword validator treats the Rust lexer (`src/mvl/parser/lexer/mod.rs`)
+as ground truth. When the EBNF or tree-sitter grammar drifts, fix the
+divergence upstream in `mvl-lang/mvl-spec` and bump the submodule pointer
+with `git submodule update --remote vendor/mvl-spec`.
 
-### Running all local grammar tests
+### Running all grammar tests
 
 ```bash
-make test   # runs test-corpus + cargo test + validate-keywords
+make test   # runs test-corpus + test-grammar-coverage + validate-keywords + cargo test
 ```
 
 ## 21.11 Assurance Traceability

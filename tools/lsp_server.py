@@ -12,8 +12,9 @@ For full type/effect/refinement diagnostics, see the Phase 2 LSP (#1003).
 
 Dependencies:
     pip install pygls tree-sitter
-    # Then install the tree-sitter binding from a local mvl-spec checkout:
-    pip install /path/to/mvl-spec/tools/tree-sitter
+    # Then install the tree-sitter binding from the vendored mvl-spec submodule:
+    git submodule update --init --recursive
+    pip install ./vendor/mvl-spec/tools/tree-sitter
 
 Run (stdio, for editors):
     python tools/lsp_server.py
@@ -66,7 +67,7 @@ if _PARSER is None:
     print(
         "[mvl-lsp] WARNING: tree-sitter not available — no diagnostics will be reported.\n"
         "  Install: pip install tree-sitter && \\\n"
-        "           pip install /path/to/mvl-spec/tools/tree-sitter",
+        "           pip install ./vendor/mvl-spec/tools/tree-sitter",
         file=sys.stderr,
     )
 

@@ -1,9 +1,10 @@
 # MVL EBNF Grammar
 
-The complete formal grammar for the Maximum Verifiable Language now lives
-in the dedicated spec repository:
+The complete formal grammar for the Maximum Verifiable Language lives in
+the dedicated spec repository, vendored into this repo as a submodule:
 
-- [`mvl-lang/mvl-spec` — `grammar/grammar.ebnf`](https://github.com/mvl-lang/mvl-spec/blob/main/grammar/grammar.ebnf)
+- Upstream: [`mvl-lang/mvl-spec` — `grammar/grammar.ebnf`](https://github.com/mvl-lang/mvl-spec/blob/main/grammar/grammar.ebnf)
+- Vendored: `vendor/mvl-spec/grammar/grammar.ebnf`
 
 ~100 productions, LL(1) — parseable by recursive descent with one token of
 lookahead. See [ADR-0005](adr/0005-recursive-descent-parser.md) for the
@@ -55,11 +56,18 @@ lexical tokens (terminals) defined at the bottom of the file.
 
 The tree-sitter grammar is a hand-translation of the EBNF into tree-sitter's
 DSL, used for syntax highlighting in Zed and Neovim. It lives alongside the
-EBNF in [`mvl-lang/mvl-spec`](https://github.com/mvl-lang/mvl-spec):
+EBNF in [`mvl-lang/mvl-spec`](https://github.com/mvl-lang/mvl-spec) (vendored
+here at `vendor/mvl-spec/`):
 
 - Grammar source: [`tools/tree-sitter/grammar.js`](https://github.com/mvl-lang/mvl-spec/blob/main/tools/tree-sitter/grammar.js)
 - Editor extensions: [`editors/`](https://github.com/mvl-lang/mvl-spec/tree/main/editors) (Neovim, VS Code, Zed)
 
-Drift between the EBNF and the tree-sitter grammar is checked by mvl-spec's
-own CI. Drift between the Rust reference lexer in this repo and the mvl-spec
-keyword list is checked separately — see `make validate-keywords`.
+### Coverage check
+
+`make test-grammar-coverage` (in this repo) cross-validates the EBNF against
+the tree-sitter grammar via the pinned submodule. `make validate-keywords`
+checks all four sources (EBNF, tree-sitter, `compiler/lexer.mvl`, and the
+Rust reference lexer) for keyword agreement.
+
+Tree-sitter corpus tests, tree-sitter builds, and the editor extensions
+themselves are tested/built in mvl-spec's own CI.
