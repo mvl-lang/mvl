@@ -18,6 +18,7 @@ pub mod openapi;
 pub mod prove;
 pub mod test;
 pub mod tir;
+pub mod wasm_text;
 
 use mvl::mvl::checker::errors::CheckError;
 use mvl::mvl::loader;
@@ -93,6 +94,8 @@ pub(super) fn dispatch(args: &[String]) {
             let emit_only = args.iter().any(|a| a == "--emit-only");
             if backend == "llvm" {
                 llvm_text::build_project_llvm_text(&path);
+            } else if backend == "wasm" {
+                wasm_text::build_project_wasm(&path);
             } else {
                 build::run(&path, false, &[], assert_mode, target, release, emit_only);
             }

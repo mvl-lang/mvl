@@ -1,6 +1,6 @@
 # MVL Roadmap
 
-**Status (May 2026):** Foundation complete (phases 1–4). Phase 5 shipped (LLVM backend, v0.60–v0.68). Phase 6 in progress.
+**Status (July 2026):** Foundation complete (phases 1–4). Phase 5 shipped (LLVM backend, v0.60–v0.68). Phase 6 shipped (stdlib complete, packaging live). Phase 7 (self-hosting) and Phase 8 (proves) in progress.
 
 See [spec 012](specs/012-phases.md) for the full pillar/phase model and per-phase acceptance criteria.
 
@@ -26,15 +26,17 @@ A language is "complete" along eight independent pillars. Each phase delivers on
 ## Phases
 
 ```
-Phase 1–4  Foundation   MVL verifies its 11 requirements at compile time   ✅ Done
-Phase 5    Compiles     MVL owns the full compilation chain (LLVM, no      ✅ Done (May 2026)
-                        host compiler dependency)
-Phase 6    Works        Real programs run — stdlib complete, testing        🔴 In progress
-                        matures
-Phase 7    Ships        Packages distribute and are trustworthy             Future
-Phase 8    Proves       Concurrent programs verified — actors and model     Future
-                        checking
-Phase 9    Proven       Language formally verified — Lean/Coq metatheory    Future
+Phase 1–4  Foundation     MVL verifies its 11 requirements at compile time  ✅ Done
+Phase 5    Compiles       MVL owns the full compilation chain (LLVM, no     ✅ Done (May 2026)
+                          host compiler dependency)
+Phase 6    Works          Real programs run — stdlib complete, testing      ✅ Done
+                          matures
+Phase 7    Self-hosting   The compiler compiles itself — MVL is its own     🔄 In progress
+                          first customer
+Phase 8    Proves         Concurrent programs verified — actors, session    🔄 In progress
+                          types, model checking
+Phase 9    Proven         Language formally verified — Lean/Coq metatheory  Future
+                          + package supply chain trust
 ```
 
 ### Phase 5 — Compiles ✅
@@ -51,16 +53,16 @@ LLVM backend shipped across five sub-phases (v0.60–v0.68):
 
 Both backends compile the same MVL source. The test suite differentially fuzzes them against each other (`make fuzz-diff`).
 
-### Phase 6 — Works 🔴
+### Phase 6 — Works ✅
 
-**Goal:** Real programs run without stubs. Stdlib modules have real Rust runtime implementations. Testing discipline enforced by CI.
+**Goal:** Real programs run without stubs. Stdlib modules have real implementations. Packaging pipeline delivers trustworthy distribution.
+
+30 stdlib modules ship real implementations (actors, args, audit, collections, config, core, crypto, csv, db, effects, env, error, ifc, io, json, kv, lists, log, math, net, pbt, process, random, regex, runtime, strings, testing, text, time, toml). Packaging module (`src/mvl/packages/`) ships SBOM (CycloneDX + SPDX), audit, manifest, dependency resolution, and lock-file verification.
+
+Open follow-ups tracked separately (do not block phase completion):
 
 | Component | Issues | Status |
 |-----------|--------|--------|
-| env module (getenv, args, uid, gid, …) | [#414](https://github.com/LAB271/mvl_language/issues/414) | ✅ Shipped |
-| process module (spawn, wait, exit, …) | [#414](https://github.com/LAB271/mvl_language/issues/414) | ✅ Shipped |
-| io module (file read/write, buf) | [#44](https://github.com/LAB271/mvl_language/issues/44) | Partial |
-| strings, lists, collections, math | — | MVL-only stubs |
 | Iterator trait + lazy ops | [#219](https://github.com/LAB271/mvl_language/issues/219) | Open |
 | Generics constraint enforcement | [#225](https://github.com/LAB271/mvl_language/issues/225) | Open |
 | MC/DC coverage in CI | — | Open |
@@ -69,19 +71,29 @@ Both backends compile the same MVL source. The test suite differentially fuzzes 
 
 See [stdlib](stdlib.md) for full module implementation status.
 
-### Phase 7 — Ships
+### Phase 7 — Self-hosting 🔄
 
-Package registry, signing, SBOM, LSP, assurance pipeline to AAE-3 artifacts.
-Tracked: [#56](https://github.com/LAB271/mvl_language/issues/56), [#151](https://github.com/LAB271/mvl_language/issues/151), [#252](https://github.com/LAB271/mvl_language/issues/252).
+**Goal:** The MVL compiler compiles itself. Validates the toolchain end-to-end and proves the language is expressive enough for a real, non-trivial program (the compiler).
 
-### Phase 8 — Proves
+The MVL-in-MVL compiler lives under `compiler/` (35 modules) and passes `mvl check`. Lexer, parser, TIR, and both LLVM and Rust emitters are ported. Resolver, monomorphizer, and type-checker passes are in progress.
 
-Actor runtime, session types, model checker, structured concurrency.
-Tracked: [#134](https://github.com/LAB271/mvl_language/issues/134), [#63](https://github.com/LAB271/mvl_language/issues/63), [#37](https://github.com/LAB271/mvl_language/issues/37).
+**Completion criterion:** Three-stage bootstrap verify — Rust `mvl₀` compiles `compiler/*.mvl` to produce `mvl₁`; `mvl₁` recompiles the same source to produce `mvl₂`; `mvl₁` and `mvl₂` are byte-identical.
+
+Tracked: [#187](https://github.com/LAB271/mvl_language/issues/187) (milestone: MVL frontend in MVL), #1117, #1118.
+
+### Phase 8 — Proves 🔄
+
+**Goal:** Concurrent programs verified — actors, session types, model checker.
+
+Foundations exist: `std.actors` with Tokio runtime (spec 015), data-race freedom checker foundation (`src/mvl/checker/data_race.rs`), session types spec drafted (spec 016). Model-checking and full protocol verification tracked as ongoing work.
+
+Tracked: [#134](https://github.com/LAB271/mvl_language/issues/134), [#63](https://github.com/LAB271/mvl_language/issues/63), [#37](https://github.com/LAB271/mvl_language/issues/37), #260, #262, #295, #306, #362.
 
 ### Phase 9 — Proven
 
-Formal metatheory in Lean 4 / Coq. Out of scope until post-1.0.
+Two pillars: package supply chain trust (registry, signing, publish workflow) and formal metatheory (Lean 4 / Coq soundness theorem). Post-1.0.
+
+Tracked: [#56](https://github.com/LAB271/mvl_language/issues/56), [#151](https://github.com/LAB271/mvl_language/issues/151), [#252](https://github.com/LAB271/mvl_language/issues/252), #185, #246, #251.
 
 ---
 

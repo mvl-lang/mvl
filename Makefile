@@ -2,7 +2,7 @@
 .ONESHELL:
 SHELL := /bin/bash
 
-.PHONY: help version build test test-full test-unit test-rust-integration test-requirements test-error-messages test-fmt-roundtrip test-corpus test-corpus-codegen test-checker-parity test-checker-parity-update test-solver test-stdlib check-compiler assure-compiler test-mvl test-bootstrap-e2e test-bdd test-backend-rust test-backend-llvm test-cross-backend test-grammar-coverage test-examples test-examples-rust test-examples-llvm coverage validate-keywords lint mvl-lint format format-check format-mvl format-mvl-check assurance assurance-gate audit-backend-ast check-adr docs docs-serve install setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
+.PHONY: help version build test test-full test-unit test-rust-integration test-requirements test-error-messages test-fmt-roundtrip test-corpus test-corpus-codegen test-checker-parity test-checker-parity-update test-solver test-stdlib check-compiler assure-compiler test-mvl test-bootstrap-e2e test-bdd test-backend-rust test-backend-llvm test-backend-wasm test-cross-backend test-grammar-coverage test-examples test-examples-rust test-examples-llvm coverage validate-keywords lint mvl-lint format format-check format-mvl format-mvl-check assurance assurance-gate audit-backend-ast check-adr docs docs-serve install setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
 
 .DEFAULT_GOAL := help
 
@@ -38,6 +38,8 @@ doctor: ## Check that all dev tools are available
 	check node          "https://nodejs.org"; \
 	check python3       "required for make assurance"; \
 	check /opt/homebrew/opt/llvm/bin/lli "brew install llvm  (required for LLVM backend)"; \
+	check wasm-tools    "cargo install wasm-tools  (required for WASM backend spike)"; \
+	check wasmtime      "https://wasmtime.dev/  (required for WASM backend spike)"; \
 	WANT=$$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)"/\1/'); \
 	GOT=$$(mvl --version 2>/dev/null | awk '{print $$2}'); \
 	if [ -z "$$GOT" ]; then \
@@ -130,6 +132,7 @@ TEST_FULL_EXTRA_SUITES := \
 	"Rust integration  |test-rust-integration" \
 	"Backend (Rust)    |test-backend-rust" \
 	"Backend (LLVM)    |test-backend-llvm" \
+	"Backend (WASM)    |test-backend-wasm" \
 	"Cross-backend     |test-cross-backend" \
 	"Examples (Rust)   |test-examples-rust" \
 	"Examples (LLVM)   |test-examples-llvm"
@@ -413,6 +416,24 @@ test-backend-llvm: build ## Run LLVM backend tests across full corpus + intrinsi
 test-cross-backend: build ## Run Rust integration tests for backend parity (transpiler vs LLVM)
 	@echo "Running cross-backend tests (transpiler vs LLVM parity)..."
 	cargo test --test cross_backend
+
+# WASM cases the backend actually handles. Deliberately narrow (#1571 is a
+# spike): the emitter today supports only what these two files exercise —
+# Int arithmetic, direct calls, string literals, Int.to_string(), println.
+# Adding a new case here requires the emitter to actually handle it end-to-end
+# through wasmtime — no "check-only" entries.
+WASM_CASES := \
+	tests/spikes/006-wasm-backend/add.mvl \
+	tests/spikes/006-wasm-backend/hello.mvl
+
+test-backend-wasm: build ## Run WASM backend against the curated case list (mvl → wat → wasmtime)
+	@command -v wasm-tools > /dev/null 2>&1 || { \
+	  printf "  \033[31m✗  wasm-tools not installed — 'cargo install wasm-tools'\033[0m\n"; exit 1; }
+	@command -v wasmtime > /dev/null 2>&1 || { \
+	  printf "  \033[31m✗  wasmtime not installed — see https://wasmtime.dev/\033[0m\n"; exit 1; }
+	@echo "WASM cases: $(words $(WASM_CASES)) files"
+	@for f in $(WASM_CASES); do echo "  - $$f"; done
+	@$(MAKE) --no-print-directory -C tests/spikes/006-wasm-backend test
 
 test-examples: build ## Run `make test` for every example subdirectory
 	@examples/test-all.sh

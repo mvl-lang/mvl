@@ -13,6 +13,7 @@
 
 pub mod llvm_text;
 pub mod rust;
+pub mod wasm_text;
 
 use crate::mvl::ir::TirProgram;
 

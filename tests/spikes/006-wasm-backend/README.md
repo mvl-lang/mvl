@@ -1,30 +1,37 @@
-# Spike 006 — WASM Backend (hand-translation)
+# Spike 006 — WASM Backend
 
-A first end-to-end validation of the WASM backend story from the [#1571 epic][epic].
-Two small MVL programs are translated **by hand** to WebAssembly Text (WAT),
-assembled with `wasm-tools`, and executed with `wasmtime`.
+End-to-end validation of the WASM backend story from the [#1571 epic][epic].
+Two small MVL programs go through the real emitter (`mvl build --backend=wasm`),
+are assembled with `wasm-tools`, and executed with `wasmtime`.
 
-Goal: prove the path works and surface the concrete questions a real
-`TIR → WASM` emitter would have to answer. No code is generated yet.
+Hand-written `*_reference.wat` files are checked in alongside the sources as
+a spec of the target shape the emitter should produce — useful for
+bootstrapping and as documentation, but no longer the primary test path.
 
 ## Variants
 
-| File | What it shows | Run shape |
-|------|---------------|-----------|
-| `add.{mvl,wat}`   | Pure compute. Two exported functions (`main`, `add`). No host imports. | `wasmtime run --invoke <fn> add.wasm [args…]` |
-| `hello.{mvl,wat}` | Host imports via WASI preview 1 (`fd_write`). Models the eventual `extern "wasm"` ABI from the epic. | `wasmtime run hello.wasm` |
+| Files | What it shows | Run shape |
+|-------|---------------|-----------|
+| `add.mvl` + `add_reference.wat`   | Pure compute. Two exported functions (`main`, `add`). No host imports. | `wasmtime run --invoke <fn> add.wasm [args…]` |
+| `hello.mvl` + `hello_reference.wat` | Host imports via WASI preview 1 (`fd_write`). Real `Int→String` + `println → fd_write` lowering. | `wasmtime run hello.wasm` |
 
 ## Running
 
 ```bash
-# from repo root
+# The whole thing: fresh debug mvl → emit → assemble → run, for both programs.
 make -C tests/spikes/006-wasm-backend test
 
-# individual targets
+# Individual emit-path targets
 make -C tests/spikes/006-wasm-backend check   # type-check the MVL sources
-make -C tests/spikes/006-wasm-backend add     # pure compute variant
-make -C tests/spikes/006-wasm-backend hello   # WASI variant
+make -C tests/spikes/006-wasm-backend add     # emit + run add.mvl
+make -C tests/spikes/006-wasm-backend hello   # emit + run hello.mvl
+
+# Reference pipeline against hand-written *_reference.wat
+make -C tests/spikes/006-wasm-backend test-reference
 ```
+
+`make test` treats `cargo build` (debug) as a prerequisite, so the emitter
+under test is always current with source.
 
 Prerequisites: `wasm-tools` (`cargo install wasm-tools`) and `wasmtime`.
 
@@ -33,7 +40,7 @@ Prerequisites: `wasm-tools` (`cargo install wasm-tools`) and `wasmtime`.
 ```
 add.wasm     main()      → 5
 add.wasm     add(7, 35)  → 42
-hello.wasm   _start      → prints "5\n" to stdout
+hello.wasm   _start      → prints "hello, world\n" to stdout
 ```
 
 ## What the spike answers
@@ -63,20 +70,36 @@ hello.wasm   _start      → prints "5\n" to stdout
   buffer arguments — `fd_write` reads `iovec`s from guest memory. The
   emitter must allocate a memory and export it.
 
+## Reference WAT vs. emitter output — where they differ
+
+The hand-written `*_reference.wat` files are a *minimal, honest* target
+shape — same memory layout, same iovec pattern, same static bytes at the
+same offsets. Both pipelines produce identical stdout (`hello, world\n`).
+
+Where the emitter goes further than the reference:
+
+- The reference contains only what `hello.mvl` needs. The emitter also
+  emits the `$mvl_int_to_string` helper (dead in this program, live for
+  any program that calls `Int.to_string()`), the `$mvl_alloc` bump
+  allocator, and a `$heap` global — because those are part of the
+  runtime blob the emitter drops in whenever WASI is enabled.
+
 ## What the spike deliberately *does not* do
 
-- **No `i64 → String`**. The `hello.wat` variant hard-codes `"5\n"`. A real
-  emitter needs `mvl_int_to_string` (already in `runtime/llvm/`) ported to
-  WASM, plus a small bump allocator or `wee_alloc`-style runtime.
 - **No `MvlString` layout**. `runtime/llvm/src/memory.rs` defines the LLVM
   layout (`{ptr, len, cap, rc}`). WASM needs the same fields but in linear
-  memory — the ADR call-out in the epic.
-- **No drop / refcount emission**. The compute path has no allocations so
-  this didn't come up. It will the moment a `String` or `List[T]` shows up
-  in a function body.
-- **No effects-to-imports mapping**. `hello.mvl` declares `! Console`, but
-  the WAT manually picks `wasi_snapshot_preview1/fd_write`. The emitter
-  needs a table: `Console → wasi:cli/stdout`, `Net → wasi:sockets`, etc.
+  memory — the ADR call-out in the epic. Today the emitter passes strings
+  as bare `(ptr, len)` i32 pairs on the WASM stack, which works only
+  because nothing is ever dropped.
+- **No drop / refcount emission**. The bump allocator never frees. Fine
+  for a "print one line and exit" program; broken for anything
+  longer-running.
+- **No effects-to-imports table**. The emitter has a single hard-coded
+  mapping: `Console → wasi_snapshot_preview1/fd_write`. `Net`, `FileRead`,
+  `Log`, etc. all fall through today.
+- **No string operations**. Literals + `Int.to_string()` are the only two
+  ways a string can come into existence. Concatenation, slicing, indexing,
+  interpolation — none of those emit yet.
 - **No component model**. We target the older `wasi_snapshot_preview1`
   ABI, not WASI 0.2 components. The ADR in the epic should decide whether
   the emitter targets preview1, preview2/component, or both.
