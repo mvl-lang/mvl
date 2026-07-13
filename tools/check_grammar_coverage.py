@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-check_grammar_coverage.py — Cross-validate docs/grammar.ebnf against
-etc/tree-sitter-mvl/grammar.js.
+check_grammar_coverage.py — Cross-validate the EBNF grammar against the
+tree-sitter grammar, both pulled in via the mvl-spec submodule at
+vendor/mvl-spec/.
 
 Extracts all lowercase production rule names from the EBNF and all
 rule names from the tree-sitter grammar, then reports:
@@ -21,8 +22,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
 
-EBNF_PATH = ROOT / "docs" / "grammar.ebnf"
-GRAMMAR_JS_PATH = ROOT / "etc" / "tree-sitter-mvl" / "grammar.js"
+EBNF_PATH = ROOT / "vendor" / "mvl-spec" / "grammar" / "grammar.ebnf"
+GRAMMAR_JS_PATH = ROOT / "vendor" / "mvl-spec" / "tools" / "tree-sitter" / "grammar.js"
 
 # ── Known intentional divergences ────────────────────────────────────────────
 # Rules that are in the EBNF but deliberately absent/renamed/inlined in
@@ -185,6 +186,13 @@ def extract_ts_rules(path: Path) -> set[str]:
 
 
 def main() -> int:
+    if not EBNF_PATH.exists() or not GRAMMAR_JS_PATH.exists():
+        print(
+            f"FAIL: mvl-spec submodule not initialised — missing {EBNF_PATH.relative_to(ROOT)}\n"
+            "Fix: git submodule update --init --recursive",
+            file=sys.stderr,
+        )
+        return 1
     ebnf_rules = extract_ebnf_rules(EBNF_PATH)
     ts_rules = extract_ts_rules(GRAMMAR_JS_PATH)
 

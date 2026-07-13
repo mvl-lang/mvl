@@ -382,62 +382,30 @@ The language stays at ~25 keywords. Everything else is tooling on the same AST.
 
 ## 21.10 Compiler Grammar Tests
 
-The MVL compiler itself has a grammar test suite that validates the formal definition stays consistent with the two implementations that derive from it.
+The MVL compiler has a grammar test suite that validates the formal
+definition stays consistent with the implementations that derive from it.
+The EBNF and tree-sitter grammars live in `mvl-lang/mvl-spec`, pinned into
+this repo as a submodule at `vendor/mvl-spec/`.
 
 ### What is tested
 
 | Layer | Source of truth | Test |
 |-------|----------------|------|
-| EBNF formal grammar | `docs/grammar.ebnf` (ISO 14977 notation) | Human-readable reference |
+| EBNF formal grammar | `vendor/mvl-spec/grammar/grammar.ebnf` (ISO 14977) | Human-readable reference |
 | Rust recursive-descent parser | `src/mvl/parser/` | `cargo test` — 154 tests |
-| Tree-sitter grammar (editor support) | `etc/tree-sitter-mvl/grammar.js` | `make test-tree-sitter` — 26 corpus tests |
+| Tree-sitter grammar (editor support) | `vendor/mvl-spec/tools/tree-sitter/grammar.js` | Corpus tests run in mvl-spec CI |
 | EBNF ↔ tree-sitter coverage | `tools/check_grammar_coverage.py` | `make test-grammar-coverage` |
+| Keyword agreement across all four sources | `tools/validate_keywords.py` | `make validate-keywords` |
 
-### EBNF ↔ tree-sitter coverage check
-
-`tools/check_grammar_coverage.py` cross-validates `docs/grammar.ebnf` against `grammar.js` at the production-name level:
-
-- Extracts all lowercase production rule names from the EBNF (`rule = body ;` pattern)
-- Extracts all rule names from `grammar.js` (`rulename: ($) =>` pattern)
-- Reports EBNF rules with no tree-sitter counterpart as **unexpected gaps** (exit 1)
-- Documents intentional divergences (inlined rules, renames, unimplemented features) in two allow-lists so future gaps are always detected
-
-Run it:
-
-```bash
-make test-grammar-coverage
-```
-
-Example output (all passing):
-
-```
-EBNF productions:         79
-Tree-sitter rules:        85
-
-✅  No unexpected gaps — all EBNF rules are covered or documented.
-
-ℹ️   Known intentional absences in tree-sitter (documented):
-     alias_type            inlined: type_body uses type_expr directly
-     map_literal           not yet implemented in tree-sitter grammar
-     ...
-
-RESULT: PASS
-```
-
-### Tree-sitter corpus tests
-
-26 corpus test cases in `etc/tree-sitter-mvl/test/corpus/` verify that the tree-sitter grammar parses representative MVL programs into the correct parse trees:
-
-```bash
-make test-tree-sitter
-```
-
-The corpus covers: literals, type declarations (struct/enum/alias/generic), function declarations (effects, capabilities, where-clauses), statements, expressions, patterns, module declarations, and extern blocks.
+The keyword validator treats the Rust lexer (`src/mvl/parser/lexer/mod.rs`)
+as ground truth. When the EBNF or tree-sitter grammar drifts, fix the
+divergence upstream in `mvl-lang/mvl-spec` and bump the submodule pointer
+with `git submodule update --remote vendor/mvl-spec`.
 
 ### Running all grammar tests
 
 ```bash
-make test   # runs test-corpus + test-tree-sitter + test-grammar-coverage + cargo test
+make test   # runs test-corpus + test-grammar-coverage + validate-keywords + cargo test
 ```
 
 ## 21.11 Assurance Traceability

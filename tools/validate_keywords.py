@@ -4,10 +4,13 @@
 #
 # validate_keywords.py — cross-check keyword lists from four sources (#706):
 #
-#   1. docs/grammar.ebnf          — formal grammar (Reserved Keywords section)
-#   2. etc/tree-sitter-mvl/grammar.js — tree-sitter grammar
-#   3. compiler/lexer.mvl         — self-hosted MVL lexer
-#   4. src/mvl/parser/lexer/mod.rs — Rust reference lexer
+#   1. vendor/mvl-spec/grammar/grammar.ebnf         — formal grammar (Reserved Keywords)
+#   2. vendor/mvl-spec/tools/tree-sitter/grammar.js — tree-sitter grammar
+#   3. compiler/lexer.mvl                           — self-hosted MVL lexer
+#   4. src/mvl/parser/lexer/mod.rs                  — Rust reference lexer
+#
+# The mvl-spec grammar sources are pulled in as a git submodule; run
+# `git submodule update --init --recursive` if the vendor/ tree is missing.
 #
 # Usage:
 #   python3 tools/validate_keywords.py
@@ -96,10 +99,18 @@ def keywords_from_rust_lexer(path: Path) -> set[str]:
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> int:
-    ebnf_path = REPO_ROOT / "docs" / "grammar.ebnf"
-    ts_path   = REPO_ROOT / "etc" / "tree-sitter-mvl" / "grammar.js"
+    ebnf_path = REPO_ROOT / "vendor" / "mvl-spec" / "grammar" / "grammar.ebnf"
+    ts_path   = REPO_ROOT / "vendor" / "mvl-spec" / "tools" / "tree-sitter" / "grammar.js"
     mvl_path  = REPO_ROOT / "compiler" / "lexer.mvl"
     rust_path = REPO_ROOT / "src" / "mvl" / "parser" / "lexer" / "mod.rs"
+
+    if not ebnf_path.exists() or not ts_path.exists():
+        print(
+            f"FAIL: mvl-spec submodule not initialised — missing {ebnf_path.relative_to(REPO_ROOT)}\n"
+            "Fix: git submodule update --init --recursive",
+            file=sys.stderr,
+        )
+        return 1
 
     ebnf = keywords_from_ebnf(ebnf_path)
     ts   = keywords_from_grammar_js(ts_path)
@@ -117,11 +128,11 @@ def main() -> int:
     extra_in_ebnf   = ebnf - rust
     if missing_in_ebnf:
         errors.append(
-            f"docs/grammar.ebnf is missing keywords: {sorted(missing_in_ebnf)}"
+            f"vendor/mvl-spec/grammar/grammar.ebnf is missing keywords: {sorted(missing_in_ebnf)}"
         )
     if extra_in_ebnf:
         errors.append(
-            f"docs/grammar.ebnf has extra keywords not in Rust lexer: {sorted(extra_in_ebnf)}"
+            f"vendor/mvl-spec/grammar/grammar.ebnf has extra keywords not in Rust lexer: {sorted(extra_in_ebnf)}"
         )
 
     # 2. compiler/lexer.mvl vs Rust
@@ -140,7 +151,7 @@ def main() -> int:
     missing_in_ts = rust - ts
     if missing_in_ts:
         errors.append(
-            f"etc/tree-sitter-mvl/grammar.js is missing keywords: {sorted(missing_in_ts)}"
+            f"vendor/mvl-spec/tools/tree-sitter/grammar.js is missing keywords: {sorted(missing_in_ts)}"
         )
 
     if errors:
@@ -148,7 +159,9 @@ def main() -> int:
         for e in errors:
             print(f"  {e}")
         print(
-            "\nFix: update the diverging files to match src/mvl/parser/lexer/mod.rs."
+            "\nFix: update the diverging source to match src/mvl/parser/lexer/mod.rs.\n"
+            "     For EBNF/tree-sitter divergence, PR the change to mvl-lang/mvl-spec\n"
+            "     and bump the submodule with `git submodule update --remote vendor/mvl-spec`."
         )
         return 1
 

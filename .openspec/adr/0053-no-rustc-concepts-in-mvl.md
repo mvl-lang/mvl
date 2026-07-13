@@ -103,7 +103,7 @@ not defined in MVL; therefore it may not appear in MVL source.
   `[T, U]`, etc., and used in signatures and bodies exactly as before.
   What's gone is the ability to constrain them with a named bound.
 
-### Grammar (docs/grammar.ebnf)
+### Grammar ([mvl-spec/grammar/grammar.ebnf](https://github.com/mvl-lang/mvl-spec/blob/main/grammar/grammar.ebnf))
 
 - `fn_decl` no longer terminates with an optional `[ "where"
   constraints ]` production.

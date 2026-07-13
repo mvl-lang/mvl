@@ -1,6 +1,6 @@
 # 20. Grammar
 
-The complete formal grammar is defined in EBNF notation in [`grammar.ebnf`](../grammar.ebnf).
+The complete formal grammar is defined in EBNF notation in [`mvl-spec/grammar/grammar.ebnf`](https://github.com/mvl-lang/mvl-spec/blob/main/grammar/grammar.ebnf).
 
 ## 20.1 Design Constraints
 
@@ -41,4 +41,4 @@ Seven common constructs in popular languages break LL(1). MVL avoids all by desi
 
 ## 20.4 Full EBNF
 
-See [`grammar.ebnf`](../grammar.ebnf) for the complete formal grammar.
+See [`mvl-spec/grammar/grammar.ebnf`](https://github.com/mvl-lang/mvl-spec/blob/main/grammar/grammar.ebnf) for the complete formal grammar.

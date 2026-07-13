@@ -20,7 +20,7 @@ The minimal syntax to express programs. ~25 keywords, ~10 statement forms, LL(1)
 
 The contraction principle: features are only added if they increase verification density. The language shrinks by policy. The grammar fits in 100 EBNF productions.
 
-**Spec:** ADR-0002 (contraction), ADR-0004 (size), ADR-0005 (parser). Grammar: `docs/grammar.ebnf`.
+**Spec:** ADR-0002 (contraction), ADR-0004 (size), ADR-0005 (parser). Grammar: [`mvl-spec/grammar/grammar.ebnf`](https://github.com/mvl-lang/mvl-spec/blob/main/grammar/grammar.ebnf).
 
 ### 3. Standard Library + External Packages (evolves)
 
@@ -233,7 +233,7 @@ This is a stdlib concern, not a language feature. Zero keywords added.
 
 | Area | Designed? | Specced? | Gaps | Ticket |
 |------|-----------|----------|------|--------|
-| Language syntax | Yes — EBNF, ~100 productions, LL(1) | Yes — grammar.ebnf | Lambda resolved: immutable captures kept (#61) | #51 |
+| Language syntax | Yes — EBNF, ~100 productions, LL(1) | Yes — [mvl-spec/grammar](https://github.com/mvl-lang/mvl-spec/blob/main/grammar/grammar.ebnf) | Lambda resolved: immutable captures kept (#61) | #51 |
 | 11 requirements | Yes — derivation, origins, code examples | Yes — ADR-0001 | Solid | — |
 | Type system | Yes — ADTs, Option, Result, ownership, refinements, IFC | Yes — spec 001 | Trait system needs detail | — |
 | Effect system | Yes — fine-grained effects, capabilities, totality | Yes — spec 002 | Effect handler syntax undefined | — |
@@ -254,7 +254,7 @@ This is a stdlib concern, not a language feature. Zero keywords added.
 
 ## Full EBNF
 
-See `docs/grammar.ebnf` for the complete formal grammar (~100 productions).
+See [`mvl-spec/grammar/grammar.ebnf`](https://github.com/mvl-lang/mvl-spec/blob/main/grammar/grammar.ebnf) for the complete formal grammar (~100 productions).
 
 ## Standard Library
 

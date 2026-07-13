@@ -4,22 +4,23 @@
 """
 MVL Language Server — Phase 1 (tree-sitter, no compiler required)
 
-Provides syntax-error diagnostics for .mvl files using the tree-sitter
-grammar bundled in etc/tree-sitter-mvl/. No MVL binary needed.
+Provides syntax-error diagnostics for .mvl files using the MVL tree-sitter
+grammar, which lives in https://github.com/mvl-lang/mvl-spec
+(tools/tree-sitter/). No MVL compiler binary needed.
 
 For full type/effect/refinement diagnostics, see the Phase 2 LSP (#1003).
 
 Dependencies:
     pip install pygls tree-sitter
-    # Then one of:
-    pip install ./etc/tree-sitter-mvl          # pre-built binding (preferred)
-    # OR let this server build from parser.c automatically (requires a C compiler)
+    # Then install the tree-sitter binding from the vendored mvl-spec submodule:
+    git submodule update --init --recursive
+    pip install ./vendor/mvl-spec/tools/tree-sitter
 
 Run (stdio, for editors):
     python tools/lsp_server.py
 
-VS Code: see etc/vscode-mvl/extension.js
-Neovim:  require('mvl').setup({ lsp = true })
+Editor extensions (VS Code, Neovim, Zed) live in
+https://github.com/mvl-lang/mvl-spec (editors/).
 """
 
 from __future__ import annotations
@@ -37,11 +38,8 @@ SERVER_VERSION = "0.1.0"
 
 def _load_parser():
     """
-    Load the MVL tree-sitter parser.
-
-    Tries in order:
-      1. Installed tree_sitter_mvl package  (pip install ./etc/tree-sitter-mvl)
-      2. Build from parser.c in the repo    (requires a C compiler, one-time)
+    Load the MVL tree-sitter parser from the installed tree_sitter_mvl
+    Python binding (built and published from https://github.com/mvl-lang/mvl-spec).
 
     Returns a configured Parser, or None if tree-sitter is unavailable.
     """
@@ -50,7 +48,6 @@ def _load_parser():
     except ImportError:
         return None
 
-    # ── Method 1: installed Python binding (preferred) ────────────────────────
     try:
         import tree_sitter_mvl as _ts_mvl  # type: ignore[import]
         lang = Language(_ts_mvl.language())
@@ -61,24 +58,6 @@ def _load_parser():
             p.set_language(lang)           # tree-sitter 0.21
             return p
     except (ImportError, AttributeError):
-        pass
-
-    # ── Method 2: build from parser.c (auto, one-time) ───────────────────────
-    grammar_dir = Path(__file__).parent.parent / "etc" / "tree-sitter-mvl"
-    parser_c = grammar_dir / "src" / "parser.c"
-    if not parser_c.exists():
-        return None
-
-    so_path = grammar_dir / "build" / "mvl_lsp.so"
-    so_path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        Language.build_library(str(so_path), [str(grammar_dir)])
-        lang = Language(str(so_path), "mvl")
-        p = TSParser()
-        p.set_language(lang)
-        return p
-    except Exception as exc:
-        print(f"[mvl-lsp] failed to build tree-sitter grammar: {exc}", file=sys.stderr)
         return None
 
 
@@ -87,7 +66,8 @@ _PARSER = _load_parser()
 if _PARSER is None:
     print(
         "[mvl-lsp] WARNING: tree-sitter not available — no diagnostics will be reported.\n"
-        "  Install: pip install tree-sitter && pip install ./etc/tree-sitter-mvl",
+        "  Install: pip install tree-sitter && \\\n"
+        "           pip install ./vendor/mvl-spec/tools/tree-sitter",
         file=sys.stderr,
     )
 
