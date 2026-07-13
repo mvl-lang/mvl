@@ -27,7 +27,7 @@ use std::collections::HashMap;
 use super::Backend;
 use crate::mvl::checker::types::Ty;
 use crate::mvl::ir::{TirBlock, TirExpr, TirExprKind, TirFn, TirProgram, TirStmt};
-use crate::mvl::parser::ast::{BinaryOp, Literal};
+use crate::mvl::parser::ast::{BinaryOp, Literal, UnaryOp};
 
 pub struct WasmTextCompiler;
 
@@ -79,7 +79,7 @@ impl Backend for WasmTextCompiler {
             .iter()
             .any(|f| f.name == "main" && matches!(f.ret_ty, Ty::Unit));
 
-        let (literals, heap_start) = collect_literals(&fns);
+        let (literals, heap_start) = collect_literals(&fns, needs_wasi);
         let ctx = Ctx {
             needs_wasi,
             literals: &literals,
@@ -155,11 +155,17 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
         TirExprKind::Literal(Literal::Integer(n)) => {
             out.push_str(&format!("    i64.const {n}\n"));
         }
+        TirExprKind::Literal(Literal::Float(f)) => {
+            // {:?} preserves the `.0` on whole-number floats so WAT parses
+            // the literal as f64 rather than integer.
+            out.push_str(&format!("    f64.const {f:?}\n"));
+        }
+        TirExprKind::Literal(Literal::Bool(b)) => {
+            out.push_str(&format!("    i32.const {}\n", if *b { 1 } else { 0 }));
+        }
         TirExprKind::Literal(Literal::Str(s)) => {
-            // String literals are placed in the module's data section during
-            // collect_literals; here we just push (offset, len) as i32s.
-            // Missing entries are a bug — every Str seen at emit time should
-            // have been recorded during the pre-scan.
+            // Placed in the module data section during collect_literals; here
+            // we just push (offset, len) as i32s.
             if let Some(&(offset, len)) = ctx.literals.get(s) {
                 out.push_str(&format!("    i32.const {offset}\n"));
                 out.push_str(&format!("    i32.const {len}\n"));
@@ -170,31 +176,28 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
         TirExprKind::Var(name) => {
             out.push_str(&format!("    local.get ${name}\n"));
         }
+        TirExprKind::Unary { op, expr: inner } => {
+            emit_unary(out, *op, inner, ctx);
+        }
         TirExprKind::Binary { op, left, right } => {
-            emit_expr(out, left, ctx);
-            emit_expr(out, right, ctx);
-            let opcode = match op {
-                BinaryOp::Add => "i64.add",
-                BinaryOp::Sub => "i64.sub",
-                BinaryOp::Mul => "i64.mul",
-                BinaryOp::Div => "i64.div_s",
-                BinaryOp::Rem => "i64.rem_s",
-                other => {
-                    out.push_str(&format!("    ;; unsupported binop: {other:?}\n"));
-                    return;
-                }
-            };
-            out.push_str(&format!("    {opcode}\n"));
+            emit_binary(out, *op, left, right, ctx);
         }
         TirExprKind::FnCall { name, args, .. } => {
-            // Route `println` through the WASI helper. `$mvl_println` takes
-            // (ptr, len) which is exactly what both string literals and
-            // `Int.to_string()` leave on the stack.
+            // Route builtins that don't have MVL bodies through the runtime
+            // shims. `assert` and `println` are the two phase-1 cases.
             if name == "println" {
                 for a in args {
                     emit_expr(out, a, ctx);
                 }
                 out.push_str("    call $mvl_println\n");
+                return;
+            }
+            if name == "assert" && args.len() == 1 {
+                emit_expr(out, &args[0], ctx);
+                out.push_str("    i32.eqz\n");
+                out.push_str("    if\n");
+                out.push_str("      unreachable\n");
+                out.push_str("    end\n");
                 return;
             }
             for a in args {
@@ -204,9 +207,23 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
         }
         TirExprKind::MethodCall {
             receiver, method, ..
-        } if method == "to_string" && matches!(receiver.ty, Ty::Int) => {
+        } if method == "to_string" => {
             emit_expr(out, receiver, ctx);
-            out.push_str("    call $mvl_int_to_string\n");
+            match &receiver.ty {
+                Ty::Int => out.push_str("    call $mvl_int_to_string\n"),
+                Ty::Bool => {
+                    let (tp, tl) = ctx.literals.get("true").copied().unwrap_or((0, 0));
+                    let (fp, fl) = ctx.literals.get("false").copied().unwrap_or((0, 0));
+                    out.push_str("    if (result i32 i32)\n");
+                    out.push_str(&format!("      i32.const {tp}\n      i32.const {tl}\n"));
+                    out.push_str("    else\n");
+                    out.push_str(&format!("      i32.const {fp}\n      i32.const {fl}\n"));
+                    out.push_str("    end\n");
+                }
+                other => {
+                    out.push_str(&format!("    ;; unsupported to_string on {other:?}\n"));
+                }
+            }
         }
         TirExprKind::Block(block) => emit_block(out, block, ctx),
         other => {
@@ -215,13 +232,126 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
     }
 }
 
+/// Emit a unary operator. `Neg` and `BitNot` dispatch on operand type; `Not`
+/// is always Bool→Bool.
+fn emit_unary(out: &mut String, op: UnaryOp, inner: &TirExpr, ctx: &Ctx) {
+    match op {
+        UnaryOp::Neg => {
+            if is_float(&inner.ty) {
+                emit_expr(out, inner, ctx);
+                out.push_str("    f64.neg\n");
+            } else {
+                out.push_str("    i64.const 0\n");
+                emit_expr(out, inner, ctx);
+                out.push_str("    i64.sub\n");
+            }
+        }
+        UnaryOp::Not => {
+            emit_expr(out, inner, ctx);
+            out.push_str("    i32.eqz\n");
+        }
+        UnaryOp::BitNot => {
+            emit_expr(out, inner, ctx);
+            out.push_str("    i64.const -1\n");
+            out.push_str("    i64.xor\n");
+        }
+        UnaryOp::Deref => {
+            emit_expr(out, inner, ctx);
+            // No-op in this backend today — `ref` bindings and dereferences
+            // are handled via WASM locals directly.
+        }
+    }
+}
+
+/// Emit a binary operator, picking i64/f64/i32 opcode family from operand type.
+/// Short-circuit `&&` / `||` lower to an inline structured `if` for laziness.
+fn emit_binary(out: &mut String, op: BinaryOp, left: &TirExpr, right: &TirExpr, ctx: &Ctx) {
+    // Short-circuit boolean ops — need laziness, can't emit both operands up
+    // front. `a && b` ≡ `if a then b else false`; `a || b` ≡ `if a then true else b`.
+    if matches!(op, BinaryOp::And | BinaryOp::Or) {
+        emit_expr(out, left, ctx);
+        out.push_str("    if (result i32)\n");
+        match op {
+            BinaryOp::And => {
+                emit_expr(out, right, ctx);
+                out.push_str("    else\n      i32.const 0\n    end\n");
+            }
+            BinaryOp::Or => {
+                out.push_str("      i32.const 1\n    else\n");
+                emit_expr(out, right, ctx);
+                out.push_str("    end\n");
+            }
+            _ => unreachable!(),
+        }
+        return;
+    }
+
+    emit_expr(out, left, ctx);
+    emit_expr(out, right, ctx);
+    // Pick opcode family from the operand type. Comparisons produce i32
+    // regardless of operand type.
+    let (family, is_cmp_operand_float) = if is_float(&left.ty) {
+        ("f64", true)
+    } else if is_i32(&left.ty) {
+        ("i32", false)
+    } else {
+        ("i64", false)
+    };
+    let signed_suffix = if family == "i64" { "_s" } else { "" };
+    let opcode: String = match op {
+        BinaryOp::Add => format!("{family}.add"),
+        BinaryOp::Sub => format!("{family}.sub"),
+        BinaryOp::Mul => format!("{family}.mul"),
+        BinaryOp::Div => {
+            if is_cmp_operand_float {
+                "f64.div".to_string()
+            } else {
+                format!("{family}.div{signed_suffix}")
+            }
+        }
+        BinaryOp::Rem => format!("{family}.rem{signed_suffix}"),
+        BinaryOp::Eq => format!("{family}.eq"),
+        BinaryOp::Ne => format!("{family}.ne"),
+        BinaryOp::Lt => format!("{family}.lt{signed_suffix}"),
+        BinaryOp::Gt => format!("{family}.gt{signed_suffix}"),
+        BinaryOp::Le => format!("{family}.le{signed_suffix}"),
+        BinaryOp::Ge => format!("{family}.ge{signed_suffix}"),
+        BinaryOp::BitAnd => format!("{family}.and"),
+        BinaryOp::BitOr => format!("{family}.or"),
+        BinaryOp::BitXor => format!("{family}.xor"),
+        BinaryOp::Shl => format!("{family}.shl"),
+        BinaryOp::Shr => format!("{family}.shr{signed_suffix}"),
+        BinaryOp::And | BinaryOp::Or => unreachable!("short-circuited above"),
+    };
+    out.push_str(&format!("    {opcode}\n"));
+}
+
 fn wasm_ty(ty: &Ty) -> &'static str {
     match ty {
-        Ty::Int => "i64",
-        Ty::Bool => "i32",
-        Ty::UInt => "i64",
+        Ty::Int | Ty::UInt => "i64",
+        Ty::Float => "f64",
+        Ty::Bool | Ty::Byte => "i32",
         Ty::Ref(_, inner) | Ty::Labeled(_, inner) | Ty::Refined(inner, _) => wasm_ty(inner),
         _ => "i64",
+    }
+}
+
+/// True if this MVL type lowers to WASM `f64`.
+fn is_float(ty: &Ty) -> bool {
+    match ty {
+        Ty::Float => true,
+        Ty::Ref(_, inner) | Ty::Labeled(_, inner) | Ty::Refined(inner, _) => is_float(inner),
+        _ => false,
+    }
+}
+
+/// True if this MVL type lowers to WASM `i32` (Bool, Byte). Used to pick
+/// between `i64.*` / `i32.*` / `f64.*` opcode families.
+fn is_i32(ty: &Ty) -> bool {
+    match ty {
+        Ty::Bool | Ty::Byte => true,
+        Ty::Ref(_, inner) | Ty::Labeled(_, inner) | Ty::Refined(inner, _) => is_i32(inner),
+        _ => false,
     }
 }
 
@@ -232,9 +362,18 @@ fn wasm_ty(ty: &Ty) -> &'static str {
 /// interning table and the first free offset after all literals — used as
 /// the initial value of the runtime's `$heap` global so bump allocations
 /// don't overwrite the data section.
-fn collect_literals(fns: &[&TirFn]) -> (HashMap<String, (u32, u32)>, u32) {
+fn collect_literals(fns: &[&TirFn], needs_wasi: bool) -> (HashMap<String, (u32, u32)>, u32) {
     let mut map = HashMap::new();
     let mut next = LITERAL_BASE;
+    // Seed "true" / "false" so `Bool.to_string()` has offsets to point at.
+    // Cheap: 4 + 5 = 9 bytes of data section even when unused.
+    if needs_wasi {
+        for lit in &["true", "false"] {
+            let len = lit.len() as u32;
+            map.insert((*lit).to_string(), (next, len));
+            next += len;
+        }
+    }
     for f in fns {
         collect_block(&f.body, &mut map, &mut next);
     }
@@ -266,6 +405,7 @@ fn collect_expr(expr: &TirExpr, map: &mut HashMap<String, (u32, u32)>, next: &mu
                 *next += len;
             }
         }
+        TirExprKind::Unary { expr, .. } => collect_expr(expr, map, next),
         TirExprKind::Binary { left, right, .. } => {
             collect_expr(left, map, next);
             collect_expr(right, map, next);
