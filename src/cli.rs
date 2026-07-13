@@ -132,6 +132,8 @@ pub(super) fn dispatch(args: &[String]) {
             let bdd = args.iter().any(|a| a == "--bdd");
             if backend == "llvm" {
                 llvm_text::cmd_test_llvm_text(&path, quiet, verbose);
+            } else if backend == "wasm" {
+                wasm_text::cmd_test_wasm(&path, quiet, verbose);
             } else {
                 let expect_only = args.iter().any(|a| a == "--expect");
                 if expect_only {
