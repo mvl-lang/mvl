@@ -59,7 +59,7 @@ Add six bitwise operators to the full language stack:
 
 Pratt table renumbered to 10–90 scale (matching C-style precedences): BITOR=30, BITXOR=40, BITAND=50, shift=70, add=80, mul=90. This matches ISO C operator precedence.
 
-Grammar (`docs/grammar.ebnf`), tree-sitter (`etc/tree-sitter-mvl/grammar.js`, `highlights.scm`), and nvim highlights updated.
+Grammar and tree-sitter (both in [mvl-lang/mvl-spec](https://github.com/mvl-lang/mvl-spec)), and nvim highlights updated.
 
 **Evidence:** `tests/corpus/02_types/bit_operators.mvl`, `src/mvl/parser/ast.rs`, `src/mvl/backends/rust/emit_exprs.rs`, `src/mvl/backends/llvm/exprs.rs`
 

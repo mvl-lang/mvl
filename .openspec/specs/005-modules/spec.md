@@ -233,7 +233,7 @@ The MVL standard library MUST be organized as a module tree rooted at `std`. All
 
 ## EBNF Updates
 
-The following productions extend the grammar in `docs/grammar.ebnf`:
+The following productions extend the grammar in [`mvl-spec/grammar/grammar.ebnf`](https://github.com/mvl-lang/mvl-spec/blob/main/grammar/grammar.ebnf):
 
 ```ebnf
 (* === Top-level with module imports === *)

@@ -264,7 +264,7 @@ std/              — stdlib declarations (.mvl)
 tests/corpus/     — test programs by category (01_basics..12_contracts)
 tests/stdlib/     — stdlib integration tests
 mvl_runtime/      — Rust runtime backing stdlib builtins
-docs/             — mkdocs site, grammar.ebnf, manual
+docs/             — mkdocs site, language manual (grammar EBNF lives in mvl-lang/mvl-spec)
 .openspec/        — specs and ADRs
 ```
 

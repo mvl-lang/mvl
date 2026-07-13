@@ -2,7 +2,7 @@
 .ONESHELL:
 SHELL := /bin/bash
 
-.PHONY: help version build test test-full test-unit test-rust-integration test-requirements test-error-messages test-fmt-roundtrip test-corpus test-corpus-codegen test-checker-parity test-checker-parity-update test-solver test-stdlib check-compiler assure-compiler test-mvl test-bootstrap-e2e test-bdd test-backend-rust test-backend-llvm test-cross-backend test-tree-sitter test-grammar-coverage test-examples test-examples-rust test-examples-llvm coverage validate-keywords lint mvl-lint format format-check format-mvl format-mvl-check assurance assurance-gate audit-backend-ast check-adr docs docs-serve tree-sitter-build install install-nvim setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
+.PHONY: help version build test test-full test-unit test-rust-integration test-requirements test-error-messages test-fmt-roundtrip test-corpus test-corpus-codegen test-checker-parity test-checker-parity-update test-solver test-stdlib check-compiler assure-compiler test-mvl test-bootstrap-e2e test-bdd test-backend-rust test-backend-llvm test-cross-backend test-examples test-examples-rust test-examples-llvm coverage validate-keywords lint mvl-lint format format-check format-mvl format-mvl-check assurance assurance-gate audit-backend-ast check-adr docs docs-serve install setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
 
 .DEFAULT_GOAL := help
 
@@ -19,14 +19,13 @@ version: ## Show current project version
 
 # === Setup ===
 
-setup: ## Install git hooks, verify tooling, and install tree-sitter npm deps
+setup: ## Install git hooks and verify tooling
 	git config core.hooksPath .githooks
 	@echo "Git hooks installed from .githooks/"
 	@command -v cargo >/dev/null 2>&1 || { echo "cargo not found — install Rust: https://rustup.rs"; exit 1; }
-	@command -v node >/dev/null 2>&1 || { echo "node not found — install Node.js: https://nodejs.org"; exit 1; }
-	cd etc/tree-sitter-mvl && npm install
 	cargo install cargo-mutants --locked
 	@echo "Ready."
+	@echo "Grammar, tree-sitter, and editor extensions now live in https://github.com/mvl-lang/mvl-spec"
 
 doctor: ## Check that all dev tools are available
 	@echo "Checking dev tools..."; echo; \
@@ -119,8 +118,6 @@ TEST_FAST_SUITES := \
 	"Fmt roundtrip     |test-fmt-roundtrip" \
 	"Corpus            |test-corpus" \
 	"Solver            |test-solver" \
-	"Tree-sitter       |test-tree-sitter" \
-	"Grammar coverage  |test-grammar-coverage" \
 	"Stdlib            |test-stdlib"
 
 TEST_FULL_EXTRA_SUITES := \
@@ -426,7 +423,7 @@ test-examples-llvm: build ## Run LLVM backend tests for every example subdirecto
 
 # === Quality ===
 
-validate-keywords: ## Cross-check keyword lists across EBNF, tree-sitter, compiler/lexer.mvl, and Rust lexer (#706)
+validate-keywords: ## Cross-check keyword lists between compiler/lexer.mvl and Rust lexer (#706)
 	python3 tools/validate_keywords.py
 
 lint: ## Lint Rust source with clippy
@@ -500,20 +497,10 @@ docs-serve: ## Serve documentation locally (http://localhost:8000)
 	bash tools/harvest-specs.sh
 	uvx --with mkdocs-material mkdocs serve
 
-# === Tree-sitter (editor support) ===
-# Grammar is derived from docs/grammar.ebnf — keep in sync manually.
-
-tree-sitter-build: ## Build tree-sitter grammar for Zed/Neovim
-	cd etc/tree-sitter-mvl && npm install && npm run build
-
-test-tree-sitter: tree-sitter-build ## Run tree-sitter corpus tests (grammar derived from docs/grammar.ebnf)
-	cd etc/tree-sitter-mvl && npm test
-
-test-grammar-coverage: validate-keywords ## Cross-validate docs/grammar.ebnf against tree-sitter grammar.js
-	@python3 tools/check_grammar_coverage.py
-
-install-nvim: ## Install nvim-mvl plugin + compile tree-sitter parser
-	etc/nvim-mvl/install.sh
+# === Grammar / editor tooling ===
+# Grammar (EBNF), tree-sitter parser, and editor extensions live in
+#   https://github.com/mvl-lang/mvl-spec
+# See that repo's tools/ and editors/ trees for build/install instructions.
 
 # === Fuzzing (long-running — not part of per-PR CI) ===
 # Requires: rustup toolchain install nightly && cargo install cargo-fuzz

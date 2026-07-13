@@ -7,7 +7,7 @@ date: 2026-04-11
 
 # 000 — Parser
 
-The MVL parser transforms source text into an Abstract Syntax Tree (AST). It is a hand-written recursive descent LL(1) parser (ADR-0005) implementing the EBNF grammar defined in `docs/grammar.ebnf`.
+The MVL parser transforms source text into an Abstract Syntax Tree (AST). It is a hand-written recursive descent LL(1) parser (ADR-0005) implementing the EBNF grammar defined in [`mvl-spec/grammar/grammar.ebnf`](https://github.com/mvl-lang/mvl-spec/blob/main/grammar/grammar.ebnf).
 
 ## Philosophy
 

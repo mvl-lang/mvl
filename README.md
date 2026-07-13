@@ -100,7 +100,7 @@ No Python dependencies — hooks are plain bash scripts.
 
 ```bash
 make build    # build the MVL compiler
-make test     # run all 7 suites: unit, corpus, stdlib, transpiler, LLVM, tree-sitter, grammar
+make test     # run all suites: unit, corpus, stdlib, transpiler, LLVM
 make lint     # cargo clippy
 make format   # cargo fmt
 make help     # show all targets grouped by section
@@ -137,7 +137,6 @@ mvl_language/
 ├── docs/                   # mkdocs site content
 │   ├── introduction.md     # 1000-word introduction
 │   ├── language.md         # language reference
-│   ├── grammar.ebnf        # formal EBNF (~100 productions)
 │   ├── stdlib.md           # three-tier stdlib spec
 │   ├── references.md       # validated academic references
 │   ├── adr/                # architectural decision records

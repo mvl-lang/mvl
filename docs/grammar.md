@@ -1,8 +1,14 @@
 # MVL EBNF Grammar
 
-The complete formal grammar for the Maximum Verifiable Language. ~100 productions, LL(1) — parseable by recursive descent with one token of lookahead.
+The complete formal grammar for the Maximum Verifiable Language now lives
+in the dedicated spec repository:
 
-See [ADR-0005](adr/0005-recursive-descent-parser.md) for the parser design decision. See [Chapter 20](manual/20-grammar.md) of the language manual for the design rationale and LL(1) analysis.
+- [`mvl-lang/mvl-spec` — `grammar/grammar.ebnf`](https://github.com/mvl-lang/mvl-spec/blob/main/grammar/grammar.ebnf)
+
+~100 productions, LL(1) — parseable by recursive descent with one token of
+lookahead. See [ADR-0005](adr/0005-recursive-descent-parser.md) for the
+parser design decision. See [Chapter 20](manual/20-grammar.md) of the
+language manual for the design rationale and LL(1) analysis.
 
 ## Notation — ISO 14977 EBNF
 
@@ -18,7 +24,8 @@ The grammar uses ISO 14977 Extended BNF. Quick reference:
 | `( a \| b )` | Alternation | `( "total" \| "partial" )` |
 | `(* text *)` | Comment — ignored by parser | `(* LL(1) property *)` |
 
-Lowercase names are grammar productions (nonterminals). Uppercase names are lexical tokens (terminals) defined at the bottom of the file.
+Lowercase names are grammar productions (nonterminals). Uppercase names are
+lexical tokens (terminals) defined at the bottom of the file.
 
 ## Design Constraints
 
@@ -46,24 +53,13 @@ Lowercase names are grammar productions (nonterminals). Uppercase names are lexi
 
 ## Tree-sitter Grammar
 
-The file `etc/tree-sitter-mvl/grammar.js` is a hand-translation of this EBNF into tree-sitter's DSL, used for syntax highlighting in Zed and Neovim. It follows the same structure but adapts for tree-sitter's GLR parser:
+The tree-sitter grammar is a hand-translation of the EBNF into tree-sitter's
+DSL, used for syntax highlighting in Zed and Neovim. It lives alongside the
+EBNF in [`mvl-lang/mvl-spec`](https://github.com/mvl-lang/mvl-spec):
 
-- Left-recursive rules (e.g. `expr`) are written as `prec.left` branches instead of EBNF repetition
-- Some rules are split or renamed to avoid ambiguity (e.g. `fn_call` → `fn_call_expr`)
-- Uppercase terminals (e.g. `IDENT`) become named regex rules (e.g. `identifier: ($) => /[a-zA-Z_][a-zA-Z0-9_]*/`)
-- Tree-sitter extensions not yet in the EBNF: `module_decl`, `extern_decl`, `extern_fn_decl`
+- Grammar source: [`tools/tree-sitter/grammar.js`](https://github.com/mvl-lang/mvl-spec/blob/main/tools/tree-sitter/grammar.js)
+- Editor extensions: [`editors/`](https://github.com/mvl-lang/mvl-spec/tree/main/editors) (Neovim, VS Code, Zed)
 
-### Coverage check
-
-```bash
-make test-grammar-coverage   # diff EBNF productions against grammar.js rules
-make test-tree-sitter        # run tree-sitter corpus tests (26 test cases)
-```
-
-`tools/check_grammar_coverage.py` extracts all production names from this EBNF file and all rule names from `grammar.js`, then reports unexpected gaps. All intentional divergences (inlined rules, renames, unimplemented features) are documented in the script's `EBNF_KNOWN_ABSENT` and `TS_KNOWN_EXTENSIONS` tables.
-
-## Complete EBNF
-
-```ebnf
---8<-- "grammar.ebnf"
-```
+Drift between the EBNF and the tree-sitter grammar is checked by mvl-spec's
+own CI. Drift between the Rust reference lexer in this repo and the mvl-spec
+keyword list is checked separately — see `make validate-keywords`.
