@@ -40,7 +40,7 @@ Prerequisites: `wasm-tools` (`cargo install wasm-tools`) and `wasmtime`.
 ```
 add.wasm     main()      → 5
 add.wasm     add(7, 35)  → 42
-hello.wasm   _start      → prints "5\n" to stdout
+hello.wasm   _start      → prints "hello, world\n" to stdout
 ```
 
 ## What the spike answers
@@ -72,34 +72,34 @@ hello.wasm   _start      → prints "5\n" to stdout
 
 ## Reference WAT vs. emitter output — where they differ
 
-The hand-written `*_reference.wat` files are a *minimal* target shape. The
-emitter's output for the same program is intentionally *more complete* in
-one place:
+The hand-written `*_reference.wat` files are a *minimal, honest* target
+shape — same memory layout, same iovec pattern, same static bytes at the
+same offsets. Both pipelines produce identical stdout (`hello, world\n`).
 
-- `hello_reference.wat` hard-codes the literal bytes `"5\n"` — it does not
-  actually compute `add(2, 3).to_string()`. It's a shape spec, not a real
-  lowering.
-- `hello.wat` (emitted by `mvl build --backend=wasm`) does the real work: a
-  bump allocator, an inline `i64 → decimal ASCII` helper (`$mvl_int_to_string`),
-  and a `println → fd_write` lowering with a two-entry iovec (string + newline).
+Where the emitter goes further than the reference:
 
-Both produce the same stdout (`5\n`), by design.
+- The reference contains only what `hello.mvl` needs. The emitter also
+  emits the `$mvl_int_to_string` helper (dead in this program, live for
+  any program that calls `Int.to_string()`), the `$mvl_alloc` bump
+  allocator, and a `$heap` global — because those are part of the
+  runtime blob the emitter drops in whenever WASI is enabled.
 
 ## What the spike deliberately *does not* do
 
 - **No `MvlString` layout**. `runtime/llvm/src/memory.rs` defines the LLVM
   layout (`{ptr, len, cap, rc}`). WASM needs the same fields but in linear
   memory — the ADR call-out in the epic. Today the emitter passes strings
-  as bare `(ptr, len)` pairs on the WASM stack, which works only because
-  nothing is ever dropped.
-- **No drop / refcount emission**. The bump allocator never frees. Fine for
-  a "print one line and exit" program; broken for anything longer-running.
+  as bare `(ptr, len)` i32 pairs on the WASM stack, which works only
+  because nothing is ever dropped.
+- **No drop / refcount emission**. The bump allocator never frees. Fine
+  for a "print one line and exit" program; broken for anything
+  longer-running.
 - **No effects-to-imports table**. The emitter has a single hard-coded
   mapping: `Console → wasi_snapshot_preview1/fd_write`. `Net`, `FileRead`,
   `Log`, etc. all fall through today.
-- **No string literals in source**. `println("hello")` would fail because
-  the emitter has no `String::Literal → data section` path yet — only
-  `Int.to_string()` output is supported.
+- **No string operations**. Literals + `Int.to_string()` are the only two
+  ways a string can come into existence. Concatenation, slicing, indexing,
+  interpolation — none of those emit yet.
 - **No component model**. We target the older `wasi_snapshot_preview1`
   ABI, not WASI 0.2 components. The ADR in the epic should decide whether
   the emitter targets preview1, preview2/component, or both.

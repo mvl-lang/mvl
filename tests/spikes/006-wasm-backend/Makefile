@@ -88,7 +88,7 @@ add: mvl guard-wasm $(BUILD_DIR) ## Emit add.wat via mvl, assemble, invoke main 
 	  if [ "$$OUT" = "42" ]; then echo "  ✓  matches expected: 42"; \
 	  else echo "  ✗  expected '42', got '$$OUT'"; exit 1; fi
 
-hello: mvl guard-wasm $(BUILD_DIR) ## Emit hello.wat via mvl, assemble, run via WASI (prints "5")
+hello: mvl guard-wasm $(BUILD_DIR) ## Emit hello.wat via mvl, assemble, run via WASI (prints "hello, world")
 	@echo "→ mvl build hello.mvl --backend=wasm"
 	@cd $(BUILD_DIR) && $(MVL) build $(HELLO_SRC) --backend=wasm
 	@echo "  emitted: $(HELLO_WAT)"
@@ -98,8 +98,8 @@ hello: mvl guard-wasm $(BUILD_DIR) ## Emit hello.wat via mvl, assemble, run via 
 	@echo "→ wasmtime run hello.wasm"
 	@OUT=$$(wasmtime run $(HELLO_WASM)) && \
 	  echo "  stdout: $$OUT" && \
-	  if [ "$$OUT" = "5" ]; then echo "  ✓  matches expected: 5"; \
-	  else echo "  ✗  expected '5', got '$$OUT'"; exit 1; fi
+	  if [ "$$OUT" = "hello, world" ]; then echo "  ✓  matches expected: hello, world"; \
+	  else echo "  ✗  expected 'hello, world', got '$$OUT'"; exit 1; fi
 
 # ── Reference pipeline (hand-written WAT under *_reference.wat) ─────────────
 
@@ -114,8 +114,9 @@ add-reference: guard-wasm $(BUILD_DIR) ## Assemble hand-written add_reference.wa
 hello-reference: guard-wasm $(BUILD_DIR) ## Assemble hand-written hello_reference.wat and run via WASI
 	@echo "→ wasm-tools parse (reference) $(HELLO_WAT_REF)"
 	@wasm-tools parse $(HELLO_WAT_REF) -o $(BUILD_DIR)/hello_reference.wasm
-	@wasmtime run $(BUILD_DIR)/hello_reference.wasm | \
-	  awk '{ if ($$1=="5") print "  ✓  stdout = 5"; else { print "  ✗  stdout = " $$1; exit 1 } }'
+	@OUT=$$(wasmtime run $(BUILD_DIR)/hello_reference.wasm) && \
+	  if [ "$$OUT" = "hello, world" ]; then echo "  ✓  stdout = hello, world"; \
+	  else echo "  ✗  stdout = '$$OUT' (expected 'hello, world')"; exit 1; fi
 
 # ── Aggregate targets ───────────────────────────────────────────────────────
 
