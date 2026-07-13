@@ -249,9 +249,10 @@ fn collect_block(block: &TirBlock, map: &mut HashMap<String, (u32, u32)>, next: 
 
 fn collect_stmt(stmt: &TirStmt, map: &mut HashMap<String, (u32, u32)>, next: &mut u32) {
     match stmt {
-        TirStmt::Expr { expr, .. } | TirStmt::Return { value: Some(expr), .. } => {
-            collect_expr(expr, map, next)
-        }
+        TirStmt::Expr { expr, .. }
+        | TirStmt::Return {
+            value: Some(expr), ..
+        } => collect_expr(expr, map, next),
         _ => {}
     }
 }
