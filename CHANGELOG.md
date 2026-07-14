@@ -2,13 +2,11 @@
 
 ## [Unreleased]
 
-- **`tests/corpus/08_ifc/`** — 12 executable tests covering `Tainted[T]`, `Secret[T]`, and the `audit`-flagged variant of each relabel transition. Merged as chore/ — no version bump. See #1847 (double-drop on relabel + let-binding — inline composition used throughout as a workaround).
-
 ## [1.3.0] - 2026-07-14
 
-### Added — corpus categories 05–07 (bundled feat)
+### Added — corpus categories 05–08 (bundled feat)
 
-Consolidated from prior v1.3.0 / v1.4.0 / v1.5.0 tags into a single 1.3.0 release. Test-only corpus growth doesn't warrant three minor bumps — this is one feat surface, three categories deep.
+Consolidated from prior v1.3.0 / v1.4.0 / v1.5.0 tags into a single 1.3.0 release. Test-only corpus growth doesn't warrant three minor bumps — this is one feat surface, four categories deep.
 
 - **`tests/corpus/05_collections/`** — 24 executable tests covering List/Map/Set construction, size, lookup returning `Option`, mutation (`insert`), membership (`contains`, `contains_key`), and iteration (`for x in xs`, indexed `while` + `.get(i)`). Split across `list_test.mvl` (7), `list_iter_test.mvl` (5), `map_test.mvl` (6), `set_test.mvl` (6).
 
@@ -16,7 +14,13 @@ Consolidated from prior v1.3.0 / v1.4.0 / v1.5.0 tags into a single 1.3.0 releas
 
 - **`tests/corpus/07_ownership/`** — 17 executable tests covering MVL's ownership discipline: `ref` mutable bindings (`ref_test.mvl` — 5), value semantics on struct assignment (`value_test.mvl` — 4), explicit ownership transfer via `consume(x)` (`consume_test.mvl` — 4), and lambdas capturing by value (`lambda_capture_test.mvl` — 4).
 
-Both backends green. Corpus total: **138 tests across 8 categories** (prior to 08_ifc landing on top of this).
+- **`tests/corpus/08_ifc/`** — 12 executable tests covering `Tainted[T]`, `Secret[T]`, and the `audit`-flagged variant of each relabel transition. Includes the regression test for #1847 (see Fixed below).
+
+Both backends green. Corpus total: **151 tests across 9 categories**.
+
+### Fixed
+
+- **#1847 — LLVM double-drop on fn-call arguments.** Ergonomic patterns like `let t: Tainted[String] = wrap(x); let s = use_it(t)` segfaulted in `_mvl_string_drop` because both caller and callee dropped the same allocation. Fixed in `emit_fn_call_tir`: after evaluating each argument, call the existing `exclude_returned_value_tir` to remove moved heap values from the caller's `heap_locals`. Applies to all heap-owning arguments (`String`, `List[T]`, `Map[K, V]`), not just labeled variants. Regression test in `tests/corpus/08_ifc/tainted_test.mvl::tainted_via_let_binding_regression_1847`.
 
 ### Notes and known limitations
 
