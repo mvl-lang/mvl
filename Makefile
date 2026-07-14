@@ -2,7 +2,7 @@
 .ONESHELL:
 SHELL := /bin/bash
 
-.PHONY: help version build test test-full test-unit test-rust-integration test-requirements test-error-messages test-fmt-roundtrip test-corpus-old test-corpus-codegen-old test-corpus-warnings-old test-checker-parity test-checker-parity-update test-solver test-stdlib check-compiler assure-compiler test-mvl test-bootstrap-e2e test-bdd test-backend-rust-old test-backend-llvm-old test-backend-wasm test-cross-backend test-grammar-coverage test-examples test-examples-rust test-examples-llvm coverage validate-keywords lint mvl-lint format format-check format-mvl format-mvl-check assurance assurance-gate audit-backend-ast check-adr docs docs-serve install setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
+.PHONY: help version build test test-full test-unit test-rust-integration test-requirements test-error-messages test-fmt-roundtrip test-corpus-old test-corpus-warnings-old test-checker-parity test-checker-parity-update test-solver test-stdlib check-compiler assure-compiler test-mvl test-bootstrap-e2e test-bdd test-backend-rust-old test-backend-llvm-old test-backend-wasm test-cross-backend test-grammar-coverage test-examples test-examples-rust test-examples-llvm coverage validate-keywords lint mvl-lint format format-check format-mvl format-mvl-check assurance assurance-gate audit-backend-ast check-adr docs docs-serve install setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
 
 .DEFAULT_GOAL := help
 
@@ -125,7 +125,6 @@ TEST_FAST_SUITES := \
 	"Stdlib            |test-stdlib"
 
 TEST_FULL_EXTRA_SUITES := \
-	"Corpus codegen (old) |test-corpus-codegen-old" \
 	"Checker parity    |test-checker-parity" \
 	"MVL compiler      |test-mvl" \
 	"BDD               |test-bdd" \
@@ -231,31 +230,6 @@ test-corpus-old: build ## Validate legacy corpus examples parse and type-check (
 		printf "  \033[32m✓  $$pass passed, 0 failed\033[0m\n\n"; \
 	else \
 		printf "  \033[31m✗  $$pass passed, $$fail failed\033[0m\n\n"; exit 1; \
-	fi
-
-test-corpus-codegen-old: build ## Invoke Rust emitter on every legacy corpus file; fail on panics, skip known errors (#1705, #1823 phase 1)
-	@pass=0; fail=0; skip=0; \
-	OK="\033[32m✓\033[0m"; FAIL="\033[31m✗\033[0m"; SKIP="\033[33m~\033[0m"; \
-	while IFS= read -r f; do \
-		short=$${f#tests/corpus_old/}; \
-		[[ "$$f" == *_test.mvl ]] && continue; \
-		grep -q "corpus:expect-fail" "$$f" 2>/dev/null && continue; \
-		out=$$($(MVL) build --emit-only "$$f" 2>&1); rc=$$?; \
-		if echo "$$out" | grep -q "panicked at"; then \
-			printf "  $$FAIL  %s  (PANIC)\n" "$$short"; \
-			echo "$$out" | grep "panicked at" | sed 's/^/         /'; \
-			fail=$$((fail + 1)); \
-		elif [ $$rc -ne 0 ]; then \
-			skip=$$((skip + 1)); \
-		else \
-			pass=$$((pass + 1)); \
-		fi; \
-	done < <(find tests/corpus_old -name "*.mvl" -not -path "*/00_intrinsics/*" | sort); \
-	echo ""; \
-	if [ $$fail -eq 0 ]; then \
-		printf "  \033[32m✓  $$pass emitted, $$skip skipped, 0 panics\033[0m\n\n"; \
-	else \
-		printf "  \033[31m✗  $$fail panic(s) in corpus codegen\033[0m\n\n"; exit 1; \
 	fi
 
 # Verify emitted Rust from every buildable corpus file compiles without
