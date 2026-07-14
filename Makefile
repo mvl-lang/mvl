@@ -119,7 +119,8 @@ TEST_FAST_SUITES := \
 	"Requirements      |test-requirements" \
 	"Error messages    |test-error-messages" \
 	"Fmt roundtrip     |test-fmt-roundtrip" \
-	"Backend rust/rust |test-backend-rust-old" \
+	"Backend rust/rust (old) |test-backend-rust-old" \
+	"Backend rust/rust (new) |test-rust-rust" \
 	"Solver            |test-solver" \
 	"Grammar coverage  |test-grammar-coverage" \
 	"Stdlib            |test-stdlib"
