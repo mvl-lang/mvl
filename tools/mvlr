@@ -202,16 +202,23 @@ run_mvl_llvm_file() {
 
 run_dir_iter() {
     local dir="$1" combo="$2"
-    local pass=0 fail=0 short
+    local pass=0 fail=0 short output rc
     local OK="\033[32m✓\033[0m" FAIL="\033[31m✗\033[0m"
+    local tmpout
+    tmpout=$(mktemp)
+    # shellcheck disable=SC2064
+    trap "rm -f '$tmpout'" RETURN
     while IFS= read -r f; do
         short="${f#$dir/}"
         [ "$short" = "$f" ] && short="${f#tests/corpus/}"
-        if run_file "$combo" "$f" >/dev/null 2>&1; then
+        if run_file "$combo" "$f" >"$tmpout" 2>&1; then
             [ "$QUIET" = "1" ] || printf "  $OK  %s\n" "$short"
             pass=$((pass + 1))
         else
             printf "  $FAIL  %s\n" "$short"
+            # Preserve error output — indispensable for diagnosing CI-only
+            # failures (macOS vs Linux, llc path, missing runtime, etc.).
+            sed 's/^/         /' "$tmpout"
             fail=$((fail + 1))
         fi
     done < <(find "$dir" -name "*_test.mvl" | sort)
