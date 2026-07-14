@@ -33,7 +33,7 @@
 use std::collections::HashMap;
 
 use crate::mvl::parser::ast::{
-    BinaryOp, Block, ElseBranch, Expr, FnDecl, Literal, LogicOp, RefExpr, Stmt,
+    BinaryOp, Block, ElseBranch, Expr, FnDecl, Literal, LogicOp, Pattern, RefExpr, Stmt,
 };
 
 use super::{binary_op_to_cmp, dummy_span, layer1, layer2, rewrite, RefResult};
@@ -305,9 +305,129 @@ fn collect_block_paths(
                 return;
             }
 
+            // Let-binding: unfold into per-path substitution over the remainder
+            // of the block (#1805).  For each path through `init`, replace the
+            // bound name in every subsequent statement's return expression with
+            // that path's tail expression.  Enables patterns like:
+            //
+            //     let s = if cond { a + 1 } else { a };
+            //     Game { .. right_score: s }
+            //
+            // where the ensures references `s` transitively through the struct
+            // literal.  When the init has a single path (no branching), this is
+            // equivalent to plain substitution.
+            Stmt::Let {
+                pattern: Pattern::Ident(name, _),
+                init,
+                ..
+            } => {
+                // Collect init paths under an empty prefix — their conditions
+                // are additive on top of the outer prefix.
+                let mut init_paths: Vec<ExecutionPath> = Vec::new();
+                collect_expr_paths(init, vec![], &mut init_paths, depth + 1);
+
+                // Path explosion guard: if the init alone already saturates the
+                // budget, fall back to the conservative skip.
+                if init_paths.is_empty() || init_paths.len() >= MAX_PATHS {
+                    // Skip this let (conservative — subsequent tail may still
+                    // discharge via a hypothesis that doesn't reference the
+                    // bound name).
+                    continue;
+                }
+
+                let rest = if i + 1 < stmts.len() {
+                    stmts[i + 1..].to_vec()
+                } else {
+                    // Trailing let with no continuation — its bound value is
+                    // effectively the return.  Emit one path per init path.
+                    for ip in init_paths {
+                        let mut merged = prefix.clone();
+                        merged.extend(ip.conditions.into_iter());
+                        paths.push(ExecutionPath {
+                            conditions: merged,
+                            return_expr: ip.return_expr,
+                        });
+                    }
+                    return;
+                };
+
+                for ip in init_paths {
+                    let mut branch_prefix = prefix.clone();
+                    branch_prefix.extend(ip.conditions.into_iter());
+                    let mut bindings: HashMap<&str, &Expr> = HashMap::new();
+                    bindings.insert(name.as_str(), &ip.return_expr);
+
+                    let subst_rest: Vec<Stmt> =
+                        rest.iter().map(|s| substitute_stmt(s, &bindings)).collect();
+                    let synthetic = Block {
+                        stmts: subst_rest,
+                        span: dummy_span(),
+                    };
+                    collect_block_paths(&synthetic, branch_prefix, paths, depth + 1);
+                }
+                return;
+            }
+
             // All other statements: skip (conservative).
             _ => {}
         }
+    }
+}
+
+/// Apply `bindings` to any `Expr` positions inside `stmt`.  Used by the
+/// let-unfolding step in [`collect_block_paths`] and by the contract checker
+/// to propagate a bound name's value into subsequent statements' return
+/// expressions.
+///
+/// Only the return-carrying positions are substituted: `Stmt::Expr`,
+/// `Stmt::Return`, `Stmt::If.cond` / `then` / `else_`, and `Stmt::Let.init`.
+/// Loops, assignments, and match arms are left untouched (conservative —
+/// path collection already skips those bodies).
+pub(crate) fn substitute_stmt(stmt: &Stmt, bindings: &HashMap<&str, &Expr>) -> Stmt {
+    match stmt {
+        Stmt::Expr { expr, span } => Stmt::Expr {
+            expr: substitute_expr(expr, bindings),
+            span: *span,
+        },
+        Stmt::Return { value, span } => Stmt::Return {
+            value: value.as_ref().map(|e| substitute_expr(e, bindings)),
+            span: *span,
+        },
+        Stmt::If {
+            cond,
+            then,
+            else_,
+            span,
+        } => Stmt::If {
+            cond: substitute_expr(cond, bindings),
+            then: substitute_block(then, bindings),
+            else_: else_.as_ref().map(|eb| match eb {
+                ElseBranch::Block(b) => ElseBranch::Block(substitute_block(b, bindings)),
+                ElseBranch::If(inner) => ElseBranch::If(Box::new(substitute_stmt(inner, bindings))),
+            }),
+            span: *span,
+        },
+        Stmt::Let {
+            kind,
+            pattern,
+            ty,
+            init,
+            span,
+        } => Stmt::Let {
+            kind: kind.clone(),
+            pattern: pattern.clone(),
+            ty: ty.clone(),
+            init: substitute_expr(init, bindings),
+            span: *span,
+        },
+        other => other.clone(),
+    }
+}
+
+fn substitute_block(block: &Block, bindings: &HashMap<&str, &Expr>) -> Block {
+    Block {
+        stmts: block.stmts.iter().map(|s| substitute_stmt(s, bindings)).collect(),
+        span: block.span,
     }
 }
 
@@ -429,7 +549,7 @@ fn flip_binary_op(op: BinaryOp) -> Option<BinaryOp> {
 /// (worst case: the check falls through to `RuntimeCheck`).
 /// Note: `Expr::If` and `Expr::Block` are not substituted into; path
 /// collection extracts return expressions before substitution is applied.
-fn substitute_expr(expr: &Expr, bindings: &HashMap<&str, &Expr>) -> Expr {
+pub(crate) fn substitute_expr(expr: &Expr, bindings: &HashMap<&str, &Expr>) -> Expr {
     match expr {
         Expr::Ident(name, _) => {
             if let Some(&replacement) = bindings.get(name.as_str()) {
@@ -478,6 +598,25 @@ fn substitute_expr(expr: &Expr, bindings: &HashMap<&str, &Expr>) -> Expr {
             receiver: Box::new(substitute_expr(receiver, bindings)),
             method: method.clone(),
             args: args.iter().map(|a| substitute_expr(a, bindings)).collect(),
+            span: *span,
+        },
+        // FieldAccess: substitute inside the base expression (#1805 let-unfold).
+        // Enables `Game { right_score: new_score, .. }.right_score` after a let
+        // rewrite to normalize through the field projection.
+        Expr::FieldAccess { expr: inner, field, span } => Expr::FieldAccess {
+            expr: Box::new(substitute_expr(inner, bindings)),
+            field: field.clone(),
+            span: *span,
+        },
+        // Construct: substitute inside each field value (#1805 let-unfold).
+        // Needed for the ticket's `Game { .. right_score: new_score }` pattern
+        // where the let-bound name appears in a struct-literal tail return.
+        Expr::Construct { name, fields, span } => Expr::Construct {
+            name: name.clone(),
+            fields: fields
+                .iter()
+                .map(|(k, v)| (k.clone(), substitute_expr(v, bindings)))
+                .collect(),
             span: *span,
         },
         other => other.clone(),

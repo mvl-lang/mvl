@@ -24,8 +24,10 @@
 
 // ── String kernel (10 builtin methods) ──────────────────────────────────────
 
-/// Character count (Unicode scalar values), not byte count.
+/// Character count (Unicode scalar values), not byte count.  Always
+/// non-negative — the runtime guarantees this axiom (#1805).
 pub builtin fn String::len(self) -> Int
+    ensures result >= 0
 
 /// Decompose a string into a list of single-character strings.
 pub builtin fn String::chars(self) -> List[String]

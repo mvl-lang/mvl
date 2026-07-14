@@ -547,6 +547,37 @@ fn check_ensures_in_block(
 ) {
     for (i, stmt) in block.stmts.iter().enumerate() {
         match stmt {
+            // Let-binding: unfold the bound name into every subsequent
+            // statement's return-carrying position (#1805).  Enables patterns
+            // like:
+            //
+            //     let s = if cond { a + 1 } else { a };
+            //     Game { .. right_score: s }
+            //
+            // to propagate the branching init into the tail return, so the
+            // atom normalizer and L1/L2/L3 see `Game { .. right_score:
+            // (if cond { a + 1 } else { a }) }` and can reason about each
+            // branch's value.  Recurses with a synthetic block; the current
+            // recursion frame returns after handling the remainder.
+            Stmt::Let {
+                pattern: crate::mvl::parser::ast::Pattern::Ident(name, _),
+                init,
+                ..
+            } if i + 1 < block.stmts.len() => {
+                use std::collections::HashMap;
+                let mut bindings: HashMap<&str, &Expr> = HashMap::new();
+                bindings.insert(name.as_str(), init);
+                let subst_rest: Vec<Stmt> = block.stmts[i + 1..]
+                    .iter()
+                    .map(|s| crate::mvl::checker::solver::layer3::substitute_stmt(s, &bindings))
+                    .collect();
+                let synthetic = Block {
+                    stmts: subst_rest,
+                    span: block.span,
+                };
+                check_ensures_in_block(&synthetic, fn_name, ensures, params, branch_hyps, ctx);
+                return;
+            }
             Stmt::Return {
                 value: Some(ret_expr),
                 span,

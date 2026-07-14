@@ -30,6 +30,7 @@ use std::marker::PhantomData;
 
 use crate::mvl::checker::const_eval;
 use crate::mvl::checker::errors::CheckError;
+use crate::mvl::checker::solver::atom_norm::AtomNormalizer;
 use crate::mvl::checker::solver::{
     binary_op_to_cmp, dummy_span, try_cooper, try_interval, try_symbolic, try_trivial, try_z3,
     RefResult, SolverMode,
@@ -149,16 +150,19 @@ pub fn check_refinements(
         .chain(std::iter::once(prog))
         .collect();
     let fn_params = build_fn_param_refinements_combined(&all_progs);
+    let fn_ensures = build_fn_ensures_combined(&all_progs);
     let type_refs = build_type_alias_refinements(prog);
+    let struct_fields = build_struct_field_refinements(prog);
     let fn_decls = build_pure_fn_decls(prog);
     for decl in &prog.declarations {
         match decl {
             Decl::Fn(fd) => {
                 counts.current_fn = fd.name.clone();
-                let var_refs = param_refinements(fd, &type_refs);
+                let var_refs = param_refinements(fd, &type_refs, &struct_fields);
                 RefinementAnalyzer::new(
                     var_refs,
                     &fn_params,
+                    &fn_ensures,
                     &type_refs,
                     &fn_decls,
                     errors,
@@ -169,10 +173,11 @@ pub fn check_refinements(
             Decl::Impl(impl_decl) => {
                 for method in &impl_decl.methods {
                     counts.current_fn = method.name.clone();
-                    let var_refs = param_refinements(method, &type_refs);
+                    let var_refs = param_refinements(method, &type_refs, &struct_fields);
                     RefinementAnalyzer::new(
                         var_refs,
                         &fn_params,
+                        &fn_ensures,
                         &type_refs,
                         &fn_decls,
                         errors,
@@ -187,10 +192,11 @@ pub fn check_refinements(
             Decl::Actor(ad) => {
                 for method in &ad.methods {
                     counts.current_fn = format!("{}::{}", ad.name, method.name);
-                    let var_refs = params_to_var_refs(&method.params, &type_refs);
+                    let var_refs = params_to_var_refs(&method.params, &type_refs, &struct_fields);
                     RefinementAnalyzer::new(
                         var_refs,
                         &fn_params,
+                        &fn_ensures,
                         &type_refs,
                         &fn_decls,
                         errors,
@@ -212,12 +218,13 @@ pub fn check_refinements(
             _ => vec![],
         };
         for fd in fns {
-            let var_refs = param_refinements(fd, &type_refs);
+            let var_refs = param_refinements(fd, &type_refs, &struct_fields);
             let mut per_fn_errors = Vec::new();
             let mut per_fn_counts = RefinementCounts::default();
             RefinementAnalyzer::new(
                 var_refs,
                 &fn_params,
+                &fn_ensures,
                 &type_refs,
                 &fn_decls,
                 &mut per_fn_errors,
@@ -234,12 +241,13 @@ pub fn check_refinements(
         }
         if let Decl::Actor(ad) = decl {
             for method in &ad.methods {
-                let var_refs = params_to_var_refs(&method.params, &type_refs);
+                let var_refs = params_to_var_refs(&method.params, &type_refs, &struct_fields);
                 let mut per_fn_errors = Vec::new();
                 let mut per_fn_counts = RefinementCounts::default();
                 RefinementAnalyzer::new(
                     var_refs,
                     &fn_params,
+                    &fn_ensures,
                     &type_refs,
                     &fn_decls,
                     &mut per_fn_errors,
@@ -272,15 +280,18 @@ pub fn count_refinements(prog: &Program) -> RefinementCounts {
         ..Default::default()
     };
     let fn_params = build_fn_param_refinements(prog);
+    let fn_ensures = build_fn_ensures_combined(&[prog]);
     let type_refs = build_type_alias_refinements(prog);
+    let struct_fields = build_struct_field_refinements(prog);
     let fn_decls = build_pure_fn_decls(prog);
     for decl in &prog.declarations {
         match decl {
             Decl::Fn(fd) => {
-                let var_refs = param_refinements(fd, &type_refs);
+                let var_refs = param_refinements(fd, &type_refs, &struct_fields);
                 RefinementAnalyzer::new(
                     var_refs,
                     &fn_params,
+                    &fn_ensures,
                     &type_refs,
                     &fn_decls,
                     &mut errors,
@@ -290,10 +301,11 @@ pub fn count_refinements(prog: &Program) -> RefinementCounts {
             }
             Decl::Impl(impl_decl) => {
                 for method in &impl_decl.methods {
-                    let var_refs = param_refinements(method, &type_refs);
+                    let var_refs = param_refinements(method, &type_refs, &struct_fields);
                     RefinementAnalyzer::new(
                         var_refs,
                         &fn_params,
+                        &fn_ensures,
                         &type_refs,
                         &fn_decls,
                         &mut errors,
@@ -304,10 +316,11 @@ pub fn count_refinements(prog: &Program) -> RefinementCounts {
             }
             Decl::Actor(ad) => {
                 for method in &ad.methods {
-                    let var_refs = params_to_var_refs(&method.params, &type_refs);
+                    let var_refs = params_to_var_refs(&method.params, &type_refs, &struct_fields);
                     RefinementAnalyzer::new(
                         var_refs,
                         &fn_params,
+                        &fn_ensures,
                         &type_refs,
                         &fn_decls,
                         &mut errors,
@@ -331,7 +344,9 @@ pub fn count_refinements(prog: &Program) -> RefinementCounts {
 /// Used by [`crate::mvl::checker::passes::RefinementsPass`] to build the coverage report.
 pub fn count_fully_verified_fns(prog: &Program) -> (usize, usize) {
     let fn_params = build_fn_param_refinements(prog);
+    let fn_ensures = build_fn_ensures_combined(&[prog]);
     let type_refs = build_type_alias_refinements(prog);
+    let struct_fields = build_struct_field_refinements(prog);
     let fn_decls = build_pure_fn_decls(prog);
     let mut fn_total = 0usize;
     let mut fully_verified = 0usize;
@@ -343,12 +358,13 @@ pub fn count_fully_verified_fns(prog: &Program) -> (usize, usize) {
             _ => vec![],
         };
         for fd in fns {
-            let var_refs = param_refinements(fd, &type_refs);
+            let var_refs = param_refinements(fd, &type_refs, &struct_fields);
             let mut errors = Vec::new();
             let mut counts = RefinementCounts::default();
             RefinementAnalyzer::new(
                 var_refs,
                 &fn_params,
+                &fn_ensures,
                 &type_refs,
                 &fn_decls,
                 &mut errors,
@@ -366,12 +382,13 @@ pub fn count_fully_verified_fns(prog: &Program) -> (usize, usize) {
         // Actor behavior methods must also be counted.
         if let Decl::Actor(ad) = decl {
             for method in &ad.methods {
-                let var_refs = params_to_var_refs(&method.params, &type_refs);
+                let var_refs = params_to_var_refs(&method.params, &type_refs, &struct_fields);
                 let mut errors = Vec::new();
                 let mut counts = RefinementCounts::default();
                 RefinementAnalyzer::new(
                     var_refs,
                     &fn_params,
+                    &fn_ensures,
                     &type_refs,
                     &fn_decls,
                     &mut errors,
@@ -422,6 +439,50 @@ fn build_pure_fn_decls(prog: &Program) -> HashMap<String, FnDecl> {
     map
 }
 
+/// Maps function/method name → its `ensures` postconditions expressed as
+/// `RefExpr`s in `self`-form (#1805 MethodCall axiom projection).
+///
+/// Postconditions that can be lowered via [`expr_to_ref_expr_ext`] are kept;
+/// the rest are dropped (they still get checked by `contracts::check_contracts`
+/// but cannot be used as static hypotheses).  `result` is normalized to `self`
+/// so downstream code can index the RefExpr against an atom whose `self` is
+/// the method's return value.
+///
+/// Builtin methods like `List[T]::len` — declared with `ensures result >= 0`
+/// — surface here so that a call site `xs.len()` can inject `self >= 0` as
+/// a hypothesis under the canonical key `"xs.len()"`.
+fn build_fn_ensures_combined(progs: &[&Program]) -> HashMap<String, Vec<RefExpr>> {
+    let mut map: HashMap<String, Vec<RefExpr>> = HashMap::new();
+    for prog in progs {
+        for decl in &prog.declarations {
+            let fns: Vec<&FnDecl> = match decl {
+                Decl::Fn(fd) => vec![fd],
+                Decl::Impl(id) => id.methods.iter().collect(),
+                _ => vec![],
+            };
+            for fd in fns {
+                if fd.ensures.is_empty() {
+                    continue;
+                }
+                let mut lowered = Vec::new();
+                for e in &fd.ensures {
+                    let span = crate::mvl::checker::solver::dummy_span();
+                    if let Some(r) = crate::mvl::parser::ast::expr_to_ref_expr_ext(e, span) {
+                        lowered.push(normalize_pred(&r, "result"));
+                    }
+                }
+                if !lowered.is_empty() {
+                    // If multiple methods share a name, later definitions win.
+                    // Acceptable — the axiom is conservative and the analysis
+                    // is aware of this loss at hypothesis-lookup time.
+                    map.insert(fd.name.clone(), lowered);
+                }
+            }
+        }
+    }
+    map
+}
+
 /// Maps function name → `Vec<(param_name, Option<RefExpr>)>` for top-level functions.
 fn build_fn_param_refinements(prog: &Program) -> HashMap<String, Vec<(String, Option<RefExpr>)>> {
     build_fn_param_refinements_combined(&[prog])
@@ -467,6 +528,35 @@ fn param_ref_vec(fd: &FnDecl) -> Vec<(String, Option<RefExpr>)> {
         .collect()
 }
 
+/// Maps struct name → its per-field refinements (#1805 hypothesis threading).
+///
+/// E.g. `type Box = struct { size: Int where self > 5 }`
+/// → `"Box" → { "size" → RefExpr(self > 5) }`.
+///
+/// Used by [`params_to_var_refs`] to project field-level invariants of a
+/// struct-typed parameter into synthetic `"param.field"` hypothesis keys, so
+/// that the solver's atom normalizer (`solver::atom_norm`) can bridge them
+/// onto atom names when a `FieldAccess` argument is seen at a call site.
+fn build_struct_field_refinements(prog: &Program) -> HashMap<String, HashMap<String, RefExpr>> {
+    let mut map: HashMap<String, HashMap<String, RefExpr>> = HashMap::new();
+    for decl in &prog.declarations {
+        if let Decl::Type(td) = decl {
+            if let TypeBody::Struct { fields, .. } = &td.body {
+                let mut fmap = HashMap::new();
+                for f in fields {
+                    if let Some(pred) = &f.refinement {
+                        fmap.insert(f.name.clone(), pred.clone());
+                    }
+                }
+                if !fmap.is_empty() {
+                    map.insert(td.name.clone(), fmap);
+                }
+            }
+        }
+    }
+    map
+}
+
 /// Maps type alias name → the refinement attached to that alias (if any).
 ///
 /// E.g. `type PositiveInt = Int where self > 0` → `"PositiveInt" → Some(self > 0)`.
@@ -501,14 +591,21 @@ fn extract_type_refinement(ty: &TypeExpr) -> Option<RefExpr> {
 fn param_refinements(
     fd: &FnDecl,
     type_refs: &HashMap<String, Option<RefExpr>>,
+    struct_fields: &HashMap<String, HashMap<String, RefExpr>>,
 ) -> HashMap<String, Option<RefExpr>> {
-    params_to_var_refs(&fd.params, type_refs)
+    params_to_var_refs(&fd.params, type_refs, struct_fields)
 }
 
 /// Build var_refs from a slice of parameters (used for both `FnDecl` and `ActorMethod`).
+///
+/// Also projects struct-field invariants into synthetic hypothesis keys of
+/// the form `"param.field"` (#1805).  These keys line up with the canonical
+/// form produced by [`solver::atom_norm::AtomNormalizer`], enabling
+/// arithmetic layers to see a hypothesis for a `FieldAccess` argument.
 fn params_to_var_refs(
     params: &[Param],
     type_refs: &HashMap<String, Option<RefExpr>>,
+    struct_fields: &HashMap<String, HashMap<String, RefExpr>>,
 ) -> HashMap<String, Option<RefExpr>> {
     let mut map = HashMap::new();
     for p in params {
@@ -519,8 +616,35 @@ fn params_to_var_refs(
             .map(|r| normalize_pred(r, &p.name))
             .or_else(|| resolve_type_alias_pred(&p.ty, type_refs));
         map.insert(p.name.clone(), pred);
+
+        // Struct-field projection: if this param is a struct with refined
+        // fields, synthesize a hypothesis for each such field under the key
+        // `"param.field"`.  Field refinements already use `self` to refer to
+        // the field value, so no rewriting is needed.
+        if let Some(struct_name) = struct_type_name(&p.ty) {
+            if let Some(fmap) = struct_fields.get(struct_name) {
+                for (fname, fpred) in fmap {
+                    let key = format!("{}.{}", p.name, fname);
+                    map.insert(key, Some(fpred.clone()));
+                }
+            }
+        }
     }
     map
+}
+
+/// Unwrap `Refined` / `Ref` / `Labeled` wrappers and return the base struct
+/// name, if the type ultimately resolves to a named struct.  Returns `None`
+/// for `Option`, `Result`, generics, and non-Base types — those cases are
+/// out of scope for this projection.
+fn struct_type_name(ty: &TypeExpr) -> Option<&str> {
+    match ty {
+        TypeExpr::Base { name, .. } => Some(name.as_str()),
+        TypeExpr::Refined { inner, .. }
+        | TypeExpr::Ref { inner, .. }
+        | TypeExpr::Labeled { inner, .. } => struct_type_name(inner),
+        _ => None,
+    }
 }
 
 // ── Synthetic predicate helpers ──────────────────────────────────────────────
@@ -899,6 +1023,118 @@ fn inject_if_hypothesis(cond: &Expr, var_refs: &mut HashMap<String, Option<RefEx
     }
 }
 
+/// Canonical string form of an `Expr` subtree, aligned with
+/// [`crate::mvl::checker::solver::atom_norm`]'s canonical form so that the
+/// hypothesis inserted here under a canonical key is picked up by the
+/// atom normalizer's bridge step.
+///
+/// Kept private and intentionally minimal — the atom normalizer owns the
+/// authoritative canonicalization; this mirror is invoked only for the
+/// subtrees an `enrich_var_refs` call actually visits (MethodCall / FnCall).
+fn canon_call_key(e: &Expr) -> String {
+    match e {
+        Expr::Ident(n, _) => n.clone(),
+        Expr::Literal(l, _) => match l {
+            Literal::Integer(n) => n.to_string(),
+            Literal::Float(f) => format!("f{f}"),
+            Literal::Str(s) => format!("\"{s}\""),
+            Literal::Char(c) => format!("'{c}'"),
+            Literal::Bool(b) => b.to_string(),
+            Literal::Unit => "()".to_string(),
+        },
+        Expr::FieldAccess { expr, field, .. } => {
+            format!("{}.{field}", canon_call_key(expr))
+        }
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+            ..
+        } => {
+            let args_s = args
+                .iter()
+                .map(canon_call_key)
+                .collect::<Vec<_>>()
+                .join(",");
+            format!("{}.{method}({args_s})", canon_call_key(receiver))
+        }
+        Expr::FnCall { name, args, .. } => {
+            let args_s = args
+                .iter()
+                .map(canon_call_key)
+                .collect::<Vec<_>>()
+                .join(",");
+            format!("{name}({args_s})")
+        }
+        other => format!("#{other:?}"),
+    }
+}
+
+/// Walk `expr` and inject a `MethodCall` / `FnCall` postcondition hypothesis
+/// into `out` for every callee whose `fn_ensures` entry is present (#1805).
+///
+/// The canonical key form matches `canon_expr` in `solver::atom_norm`, so the
+/// atom normalizer's `rewrite_var_refs` step bridges the entry onto the
+/// synthesized atom name.
+fn collect_call_hypotheses(
+    expr: &Expr,
+    fn_ensures: &HashMap<String, Vec<RefExpr>>,
+    out: &mut HashMap<String, Option<RefExpr>>,
+) {
+    match expr {
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+            ..
+        } => {
+            if let Some(hyps) = fn_ensures.get(method) {
+                let key = canon_call_key(expr);
+                if let Some(conjunction) = conjoin(hyps) {
+                    out.insert(key, Some(conjunction));
+                }
+            }
+            collect_call_hypotheses(receiver, fn_ensures, out);
+            for a in args {
+                collect_call_hypotheses(a, fn_ensures, out);
+            }
+        }
+        Expr::FnCall { name, args, .. } => {
+            if let Some(hyps) = fn_ensures.get(name) {
+                let key = canon_call_key(expr);
+                if let Some(conjunction) = conjoin(hyps) {
+                    out.insert(key, Some(conjunction));
+                }
+            }
+            for a in args {
+                collect_call_hypotheses(a, fn_ensures, out);
+            }
+        }
+        Expr::Unary { expr: inner, .. } => collect_call_hypotheses(inner, fn_ensures, out),
+        Expr::Binary { left, right, .. } => {
+            collect_call_hypotheses(left, fn_ensures, out);
+            collect_call_hypotheses(right, fn_ensures, out);
+        }
+        Expr::FieldAccess { expr: inner, .. } => {
+            collect_call_hypotheses(inner, fn_ensures, out)
+        }
+        _ => {}
+    }
+}
+
+/// Fold a list of `RefExpr` hypotheses into a single `And`-conjunction.
+/// Returns `None` for an empty input.
+fn conjoin(hyps: &[RefExpr]) -> Option<RefExpr> {
+    let mut it = hyps.iter().cloned();
+    let first = it.next()?;
+    Some(it.fold(first, |acc, r| RefExpr::LogicOp {
+        op: LogicOp::And,
+        left: Box::new(acc),
+        right: Box::new(r),
+        span: dummy_span(),
+    }))
+}
+
 // ── AST walker (Visit-trait based) ────────────────────────────────────────────
 
 /// Per-function refinement analyzer.  Walks the AST and reports refinement
@@ -911,6 +1147,7 @@ fn inject_if_hypothesis(cond: &Expr, var_refs: &mut HashMap<String, Option<RefEx
 struct RefinementAnalyzer<'a, 'ast> {
     var_refs: HashMap<String, Option<RefExpr>>,
     fn_params: &'a HashMap<String, Vec<(String, Option<RefExpr>)>>,
+    fn_ensures: &'a HashMap<String, Vec<RefExpr>>,
     type_refs: &'a HashMap<String, Option<RefExpr>>,
     fn_decls: &'a HashMap<String, FnDecl>,
     errors: &'a mut Vec<CheckError>,
@@ -922,6 +1159,7 @@ impl<'a, 'ast> RefinementAnalyzer<'a, 'ast> {
     fn new(
         var_refs: HashMap<String, Option<RefExpr>>,
         fn_params: &'a HashMap<String, Vec<(String, Option<RefExpr>)>>,
+        fn_ensures: &'a HashMap<String, Vec<RefExpr>>,
         type_refs: &'a HashMap<String, Option<RefExpr>>,
         fn_decls: &'a HashMap<String, FnDecl>,
         errors: &'a mut Vec<CheckError>,
@@ -930,12 +1168,40 @@ impl<'a, 'ast> RefinementAnalyzer<'a, 'ast> {
         Self {
             var_refs,
             fn_params,
+            fn_ensures,
             type_refs,
             fn_decls,
             errors,
             counts,
             _marker: PhantomData,
         }
+    }
+
+    /// Enrich `var_refs` with hypotheses derived from method / function
+    /// postconditions of any `MethodCall` or `FnCall` subtree in `arg`
+    /// (#1805).  For each such subtree, look up the callee's ensures in
+    /// `fn_ensures`; if present, insert them under the canonical string form
+    /// of the subtree (as produced by `atom_norm::canon_expr`) so that the
+    /// atom normalizer can bridge the hypothesis onto the synthesized atom
+    /// name.
+    ///
+    /// Returns a fresh `HashMap` — the analyzer's own `var_refs` is not
+    /// mutated (each call site sees its own enrichment).
+    #[allow(dead_code)]
+    fn enrich_var_refs(&self, arg: &Expr) -> HashMap<String, Option<RefExpr>> {
+        let mut out = self.var_refs.clone();
+        collect_call_hypotheses(arg, self.fn_ensures, &mut out);
+        out
+    }
+
+    /// Like [`enrich_var_refs`] but for a slice of arguments (call sites
+    /// pass all arguments in one shot).
+    fn enrich_var_refs_from_args(&self, args: &[Expr]) -> HashMap<String, Option<RefExpr>> {
+        let mut out = self.var_refs.clone();
+        for a in args {
+            collect_call_hypotheses(a, self.fn_ensures, &mut out);
+        }
+        out
     }
 
     /// Swap in a narrowed `var_refs` for the duration of `f`, then restore.
@@ -1013,10 +1279,11 @@ impl<'a, 'ast> Visit<'ast> for RefinementAnalyzer<'a, 'ast> {
                 // Check that the initialiser satisfies the declared type's
                 // refinement predicate.
                 if let Some(ref p) = pred {
+                    let enriched = self.enrich_var_refs(init);
                     let outcome = check_arg_against_pred_counted(
                         init,
                         p,
-                        &self.var_refs,
+                        &enriched,
                         self.fn_decls,
                         self.counts,
                     );
@@ -1095,12 +1362,13 @@ impl<'a, 'ast> Visit<'ast> for RefinementAnalyzer<'a, 'ast> {
             } => {
                 // Check each argument against the callee's parameter refinements.
                 if let Some(param_refs) = self.fn_params.get(name) {
+                    let enriched = self.enrich_var_refs_from_args(args);
                     check_call_site(
                         name,
                         args,
                         *span,
                         param_refs,
-                        &self.var_refs,
+                        &enriched,
                         self.fn_decls,
                         self.errors,
                         self.counts,
@@ -1127,12 +1395,13 @@ impl<'a, 'ast> Visit<'ast> for RefinementAnalyzer<'a, 'ast> {
                     } else {
                         param_refs.as_slice()
                     };
+                    let enriched = self.enrich_var_refs_from_args(args);
                     check_call_site(
                         method,
                         args,
                         *span,
                         arg_params,
-                        &self.var_refs,
+                        &enriched,
                         self.fn_decls,
                         self.errors,
                         self.counts,
@@ -1260,9 +1529,25 @@ pub(crate) fn check_arg_against_pred_counted(
     fn_decls: &HashMap<String, FnDecl>,
     counts: &mut RefinementCounts,
 ) -> RefResult {
+    // Atom normalization (#1805): L2/L4/L5 gate on `Expr::Ident`, which excludes
+    // real-world compound atoms like `field.height` or `xs.len()`.  We rewrite
+    // those non-arithmetic subtrees to fresh `Ident("__atom_N")` in a single
+    // pass, then hand the normalized triple to the arithmetic layers.  Layers 1
+    // and 3 receive the *original* inputs — L1 relies on structural shape
+    // equality, and L3 dispatches on `Expr::FnCall` which normalization does
+    // not rewrite anyway (but keeping originals avoids any accidental drift).
+    let normalize = || {
+        let mut norm = AtomNormalizer::new();
+        let n_arg = norm.rewrite_expr(arg);
+        let n_pred = norm.rewrite_refexpr(pred);
+        let n_var_refs = norm.rewrite_var_refs(var_refs);
+        (n_arg, n_pred, n_var_refs)
+    };
+
     match counts.mode {
         SolverMode::Z3Only => {
-            if let Some(r) = try_z3(pred, arg, var_refs) {
+            let (n_arg, n_pred, n_var_refs) = normalize();
+            if let Some(r) = try_z3(&n_pred, &n_arg, &n_var_refs) {
                 return record(5, r, counts);
             }
         }
@@ -1270,7 +1555,8 @@ pub(crate) fn check_arg_against_pred_counted(
             if let Some(r) = try_trivial(pred, arg, var_refs, fn_decls) {
                 return record(1, r, counts);
             }
-            if let Some(r) = try_interval(pred, arg, var_refs) {
+            let (n_arg, n_pred, n_var_refs) = normalize();
+            if let Some(r) = try_interval(&n_pred, &n_arg, &n_var_refs) {
                 return record(2, r, counts);
             }
         }
@@ -1278,16 +1564,21 @@ pub(crate) fn check_arg_against_pred_counted(
             if let Some(r) = try_trivial(pred, arg, var_refs, fn_decls) {
                 return record(1, r, counts);
             }
-            if let Some(r) = try_interval(pred, arg, var_refs) {
+            let (n_arg, n_pred, n_var_refs) = normalize();
+            if let Some(r) = try_interval(&n_pred, &n_arg, &n_var_refs) {
                 return record(2, r, counts);
             }
+            // L3 needs the original argument (dispatch on `Expr::FnCall` /
+            // `Expr::If` / `Expr::Block`).  Normalization would not rewrite
+            // these but we pass the originals explicitly to make the intent
+            // obvious.
             if let Some(r) = try_symbolic(pred, arg, var_refs, fn_decls) {
                 return record(3, r, counts);
             }
-            if let Some(r) = try_cooper(pred, arg, var_refs) {
+            if let Some(r) = try_cooper(&n_pred, &n_arg, &n_var_refs) {
                 return record(4, r, counts);
             }
-            if let Some(r) = try_z3(pred, arg, var_refs) {
+            if let Some(r) = try_z3(&n_pred, &n_arg, &n_var_refs) {
                 return record(5, r, counts);
             }
         }

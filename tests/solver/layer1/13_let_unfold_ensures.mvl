@@ -1,0 +1,34 @@
+// Solver Layer 1: Let-binding unfolding at contract-check time (#1805).
+//
+// Before #1805 the contract checker's `check_ensures_in_block` skipped
+// `Stmt::Let` conservatively.  When the tail return referenced a let-bound
+// name whose init was an `if`-expression, the ensures clause fell to
+// runtime because the tail was opaque — the solver saw only the identifier,
+// not the branch structure.
+//
+// The fix substitutes the let-bound name into every subsequent statement's
+// return-carrying position, so:
+//
+//     fn f(g: Game) -> Int ensures result >= 0 {
+//         let s: Int = if g.right_score < 11 { 5 } else { 3 };
+//         s
+//     }
+//
+// becomes, for the purpose of the ensures check:
+//
+//     Game { .. } ⊢ if g.right_score < 11 { 5 } else { 3 }
+//
+// The existing `check_ensures_for_return_expr_recur` then descends into
+// each branch with the branch condition as a hypothesis, and each literal
+// tail proves at L1 trivially.
+//
+// Every ensures site in this file should discharge at L1 (once per branch).
+
+type Game = struct { right_score: Int }
+
+fn positive_from_scoring(game: Game) -> Int
+    ensures result >= 0
+{
+    let s: Int = if game.right_score < 11 { 5 } else { 3 };
+    s
+}

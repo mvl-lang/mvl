@@ -2,67 +2,89 @@
 
 ## [Unreleased]
 
-## [1.2.1] - 2026-07-14
-
-### Fixed
-
-- **LLVM backend crash on named-fn to `fn(T) -> U` coercion** (#1832) — passing a named top-level function where a function-typed parameter is expected now works on both Rust and LLVM backends. The emitter previously passed the raw `@fn_name` pointer to a callee expecting a `%__closure_type { fn_ptr, env_ptr }` layout, causing `lli` to segfault when the callee GEPed into the function's machine code. The fix wraps named-fn arguments in a synthesized shim closure at the call site (mirrors what lambdas already did). `hof_apply_named_function` in `tests/corpus/03_functions/higher_order_test.mvl` re-enabled.
-
-## [1.2.0] - 2026-07-14
+Compiler patch bump `1.0.0 → 1.0.1` and stdlib patch bump `1.0.0 → 1.0.1`,
+both driven by #1805.  The compiler bump covers the atom-normalization,
+struct-field, and MethodCall hypothesis-threading code paths; the stdlib
+bump covers new `ensures result >= 0` axioms on `len()` methods.
 
 ### Added
 
-- **`tests/corpus/03_functions/`** (#1823) — new corpus category with 4 files, 19 test functions covering plain functions (params/returns/composition), `total` recursion (factorial, sum, fib), `partial` fn with while+return, generics (parametric identity, multi-param with explicit type args, turbofish syntax), and higher-order functions (lambdas as arguments, returning closures with capture, apply_twice, zero-arg lambdas). All green on `rust/rust` and `rust/llvm` backends.
+- **Let-binding unfolding in contract checking** (#1805).
+  `check_ensures_in_block` (in `checker/contracts/mod.rs`) previously
+  skipped `Stmt::Let` conservatively; when the tail return referenced a
+  let-bound name whose init was an `if`-expression, the ensures clause
+  fell to runtime.  It now substitutes the bound name into every
+  subsequent statement's return-carrying position, so
+  `fn f() -> Int ensures result >= 0 { let s = if c { 5 } else { 3 };
+  s }` discharges at L1 via the existing per-branch descent.
+  `layer3.rs::collect_block_paths` gained the parallel unfolding path
+  for when the solver is invoked with a `Block` argument directly.
+  `substitute_expr` / `substitute_stmt` in `layer3.rs` were promoted
+  to `pub(crate)` and now recurse into `Construct` and `FieldAccess`
+  so struct-literal tails propagate substitutions correctly.
 
-### Known Issues
-
-- **#1832 — LLVM backend crashes on named-fn to `fn(T) -> U` coercion.** Passing a named function where a function-typed parameter is expected currently segfaults on `lli` (works fine on the Rust backend). The `hof_apply_named_function` test is documented as TODO in `higher_order_test.mvl` pending fix.
-
-## [1.1.1] - 2026-07-14
+- **Stdlib `len()` postcondition axioms** (#1805).  `List[T]::len`,
+  `Map[K, V]::len`, `Set[T]::len`, `String::len`, and `Span::len` now
+  carry `ensures result >= 0`.  Together with the MethodCall-postcondition
+  projection landed in the same change, `positive(xs.len())` and
+  `non_negative(s.len())` now discharge at L2 (was runtime).
 
 ### Fixed
 
-- **Self-hosted LLVM emitter emits host-neutral IR** (#1830) — `emit_helpers.mvl::default_target_triple()` deleted; the module header no longer emits a hardcoded `target triple = "arm64-apple-darwin"`, so llc uses the host default triple on both macOS and Linux without patching. Emitter also sets `!llvm.module.flags` for `PIC Level = 2` / `PIE Level = 2` (informative metadata). Removes the sed target-triple stripping workaround from `tools/mvlr`. Note: `-relocation-model=pic` remains on the llc invocation — required by modern Linux linkers, harmless on macOS.
+- **Solver reaches struct-field arguments via atom normalization + hypothesis
+  projection** (#1805,
+  [ADR-0055](.openspec/adr/0055-solver-atom-normalization.md)).  Two
+  coordinated changes:
 
-## [1.1.0] - 2026-07-14
+  1. `solver::atom_norm` rewrites non-arithmetic subtrees
+     (`Expr::FieldAccess`, `Expr::MethodCall`, `RefExpr::FieldAccess`,
+     `RefExpr::Len`) to fresh `Ident("__atom_N")` atoms at the dispatch
+     boundary in `check_arg_against_pred_counted`.  Same subtree — in
+     the goal or in a hypothesis — collapses to the same atom.  L1 and
+     L3 continue to see the original inputs.
+  2. `refinements.rs::params_to_var_refs` projects a struct-typed
+     parameter's per-field refinements into synthetic hypothesis keys
+     `"param.field"` derived from a new
+     `build_struct_field_refinements(prog)` registry, which the
+     normalizer then bridges onto atom names.
+
+  Effect: `positive(b.size)` where `Box.size: Int where self > 5`
+  discharges at L2 (was runtime).  Corpus coverage in
+  `tests/solver/layer4/11_field_access_atoms.mvl`; mechanism tests in
+  `src/mvl/checker/solver/atom_norm.rs`.
 
 ### Added
 
-- **Phase 2 corpus buildout: 00_smoke, 01_expressions, 02_control_flow** (#1823) —
-  New modular test corpus with `test fn` blocks, replacing monolithic `corpus_old/`.
-  Includes 11 test files with 48 test functions across three categories:
-  - `00_smoke/`: hello, arithmetic, assertions (3 files, 11 tests)
-  - `01_expressions/`: int ops, bool ops, precedence (3 files, 17 tests)
-  - `02_control_flow/`: if/else, match, while, early return (4 files, 20 tests)
-
-- **`tools/mvlr` matrix run driver** — Orchestrates `(compiler, backend)` matrix
-  combinations (rust/rust, rust/llvm, mvl/llvm). Handles per-file synthesis for
-  non-batched backends, llc/cc/lli path resolution, and platform-specific workarounds.
-  Replaces scattered shell blocks with a single command: `mvlr --backend=llvm file.mvl`.
-
-- **Test anchors in Makefile**: `test-rust-rust`, `test-rust-llvm`, `test-mvl-llvm`,
-  `test-rust-wasm` (initial stub). Wired into `make test` and `make test-full`.
+- **`mvl-spec` submodule at `vendor/mvl-spec/`** (#1813) — pinned to a
+  specific `mvl-lang/mvl-spec` commit. Initialise with
+  `git submodule update --init --recursive` (or `make setup`). The
+  relationship mirrors [`rust-lang/rust`](https://github.com/rust-lang/rust)
+  ↔ [`rust-lang/reference`](https://github.com/rust-lang/reference): what
+  defines MVL lives in `mvl-spec`, what implements MVL lives here.
 
 ### Changed
 
-- **`make install` now copies `tools/mvlr` to `~/.local/bin`** (or fallback to
-  tools/mvlr if not on PATH). Supports `--mvl=<path>` override in Makefile for dev builds.
+- **Grammar, tree-sitter, and editor extensions relocated to
+  [`mvl-lang/mvl-spec`](https://github.com/mvl-lang/mvl-spec)** (#1813).
+  `docs/grammar.ebnf`, `etc/tree-sitter-mvl/`, `etc/nvim-mvl/`,
+  `etc/vscode-mvl/`, `etc/zed-mvl/`, and `etc/vscode-install.sh` have been
+  deleted from this repository; the canonical sources are now consumed via
+  the `vendor/mvl-spec/` submodule. All internal ADR, spec, and manual
+  references were updated accordingly.
+- `tools/validate_keywords.py` now reads the EBNF and tree-sitter grammar
+  from `vendor/mvl-spec/`, restoring the full 4-source keyword drift check
+  against the Rust reference lexer.
+- `tools/check_grammar_coverage.py` and `make test-grammar-coverage` now
+  cross-validate `vendor/mvl-spec/grammar/grammar.ebnf` against
+  `vendor/mvl-spec/tools/tree-sitter/grammar.js` via the pinned submodule.
+- CI's `check` job now checks out submodules recursively so the drift
+  checks have access to the vendored grammar.
 
-- **CI matrix testing** — New job runs three backend anchors (rust/rust, rust/llvm, mvl/llvm)
-  with environment setup for LLC paths, runtime installation, and platform-specific fixes.
-  Adds `install-runtime` target for test dependency backfill.
+### Removed
 
-### Fixed
-
-- **Interim workarounds for #1829, #1828** — Self-hosted LLVM emitter hardcodes
-  `arm64-apple-darwin` triple (causes Linux linker errors); `mvl tir | emitter` pipes
-  leak checker STDOUT debug; `mvl run --backend=llvm` doesn't batch `test fn` blocks.
-  mvlr and Makefile include temporary sed/grep/relocation-model fixes; removed once
-  emitter and `mvl test` are fixed.
-
-## [1.0.0] - 2026-07-12
-
-First stable release of MVL — the Maximum Verifiable Language.
+- Makefile targets `tree-sitter-build`, `test-tree-sitter`, and
+  `install-nvim`. Tree-sitter builds and editor installs are the
+  responsibility of `mvl-spec` and its downstream users.
 
 ## [1.0.0] - 2026-07-12
 
