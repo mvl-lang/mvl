@@ -1,0 +1,71 @@
+// 10_termination/decreases_test.mvl — `decreases` loop variants.
+//
+// A `while` loop inside a `total fn` needs a `decreases` clause giving a
+// non-negative Int variant that strictly decreases on every iteration. This
+// lets the checker prove termination without falling back to `partial fn`.
+//
+//     while cond decreases i {
+//         i = i - 1;
+//         ...
+//     }
+//
+// At runtime `decreases` erases — these tests verify the loop still
+// terminates and computes correctly on both backends.
+
+total fn countdown_sum(n: Int) -> Int {
+    let acc: ref Int = 0;
+    let i: ref Int = n;
+    while i > 0 decreases i {
+        acc = acc + i;
+        i = i - 1;
+    }
+    acc
+}
+
+total fn repeat_string(s: String, n: Int) -> Int {
+    // Return total length of `s` repeated `n` times.
+    let out_len: ref Int = 0;
+    let remaining: ref Int = n;
+    while remaining > 0 decreases remaining {
+        out_len = out_len + s.len();
+        remaining = remaining - 1;
+    }
+    out_len
+}
+
+total fn digit_count(n: Int) -> Int {
+    // n / 10 monotonically decreases toward 0 for n >= 0.
+    let count: ref Int = 0;
+    let x: ref Int = n;
+    if x == 0 {
+        return 1;
+    }
+    while x > 0 decreases x {
+        count = count + 1;
+        x = x / 10;
+    }
+    count
+}
+
+test fn decreases_countdown_sum() -> Unit {
+    // Triangular number: n*(n+1)/2. For n=10 → 55.
+    assert_eq(countdown_sum(10), 55);
+    assert_eq(countdown_sum(0), 0);
+    assert_eq(countdown_sum(1), 1);
+    assert_eq(countdown_sum(5), 15);
+}
+
+test fn decreases_repeat_string_length() -> Unit {
+    // "abc" * 4 = 12 chars.
+    assert_eq(repeat_string("abc", 4), 12);
+    assert_eq(repeat_string("abc", 0), 0);
+    assert_eq(repeat_string("x", 100), 100);
+}
+
+test fn decreases_digit_count() -> Unit {
+    assert_eq(digit_count(0), 1);
+    assert_eq(digit_count(7), 1);
+    assert_eq(digit_count(42), 2);
+    assert_eq(digit_count(1234), 4);
+    assert_eq(digit_count(999999), 6);
+}

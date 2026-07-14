@@ -1,0 +1,84 @@
+// 10_termination/total_fn_test.mvl — `total fn` termination proofs.
+//
+// `total fn` promises the checker that the function terminates on all
+// inputs. Allowed: bounded iteration (`for x in xs`), structural recursion
+// on a decreasing argument, calls to other `total fn`s. Not allowed:
+// unbounded `while`, calls to `partial fn`.
+//
+// At runtime `total` erases — these tests verify the value semantics.
+
+total fn add(a: Int, b: Int) -> Int { a + b }
+
+total fn mul(a: Int, b: Int) -> Int { a * b }
+
+total fn sum(items: List[Int]) -> Int {
+    let acc: ref Int = 0;
+    for x in items {
+        acc = add(acc, x)
+    }
+    acc
+}
+
+total fn product(items: List[Int]) -> Int {
+    let acc: ref Int = 1;
+    for x in items {
+        acc = mul(acc, x)
+    }
+    acc
+}
+
+total fn count_positive(items: List[Int]) -> Int {
+    let n: ref Int = 0;
+    for x in items {
+        if x > 0 {
+            n = add(n, 1)
+        }
+    }
+    n
+}
+
+total fn factorial(n: Int) -> Int {
+    if n <= 1 { 1 } else { n * factorial(n - 1) }
+}
+
+total fn fib(n: Int) -> Int {
+    if n <= 1 { n } else { fib(n - 1) + fib(n - 2) }
+}
+
+test fn total_add_returns_correct_sum() -> Unit {
+    assert_eq(add(3, 4), 7);
+}
+
+test fn total_sum_over_list() -> Unit {
+    let xs: List[Int] = [1, 2, 3, 4, 5];
+    assert_eq(sum(xs), 15);
+}
+
+test fn total_product_over_list() -> Unit {
+    let xs: List[Int] = [1, 2, 3, 4];
+    assert_eq(product(xs), 24);
+}
+
+test fn total_sum_of_empty_is_zero() -> Unit {
+    let empty: List[Int] = [];
+    assert_eq(sum(empty), 0);
+}
+
+test fn total_count_positive_filters() -> Unit {
+    let mixed: List[Int] = [3, -1, 4, -1, 5, -9, 2, 6];
+    assert_eq(count_positive(mixed), 5);
+}
+
+test fn total_factorial_recursion() -> Unit {
+    assert_eq(factorial(0), 1);
+    assert_eq(factorial(1), 1);
+    assert_eq(factorial(5), 120);
+    assert_eq(factorial(6), 720);
+}
+
+test fn total_fib_recursion() -> Unit {
+    assert_eq(fib(0), 0);
+    assert_eq(fib(1), 1);
+    assert_eq(fib(6), 8);
+    assert_eq(fib(10), 55);
+}
