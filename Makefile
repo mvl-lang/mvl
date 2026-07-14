@@ -119,7 +119,7 @@ TEST_FAST_SUITES := \
 	"Requirements      |test-requirements" \
 	"Error messages    |test-error-messages" \
 	"Fmt roundtrip     |test-fmt-roundtrip" \
-	"Corpus (old)      |test-corpus-old" \
+	"Backend rust/rust |test-backend-rust-old" \
 	"Solver            |test-solver" \
 	"Grammar coverage  |test-grammar-coverage" \
 	"Stdlib            |test-stdlib"
@@ -130,8 +130,7 @@ TEST_FULL_EXTRA_SUITES := \
 	"MVL compiler      |test-mvl" \
 	"BDD               |test-bdd" \
 	"Rust integration  |test-rust-integration" \
-	"Backend Rust (old) |test-backend-rust-old" \
-	"Backend LLVM (old) |test-backend-llvm-old" \
+	"Backend rust/llvm |test-backend-llvm-old" \
 	"Backend (WASM)    |test-backend-wasm" \
 	"Cross-backend     |test-cross-backend" \
 	"Examples (Rust)   |test-examples-rust" \
@@ -167,7 +166,7 @@ define run_test_suites
 	fi
 endef
 
-test: build ## Fast pre-PR gate: unit, type checker, corpus, solver, grammar, stdlib (~10–15 s)
+test: build ## Fast pre-PR gate: unit, type checker, rust/rust backend, solver, grammar, stdlib
 	$(call run_test_suites,$(TEST_FAST_SUITES))
 
 test-full: build ## Full pre-merge gate: everything in `test` plus codegen, parity, MVL compiler, BDD, backends, examples (~10–20 min)
