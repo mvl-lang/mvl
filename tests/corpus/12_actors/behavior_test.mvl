@@ -1,0 +1,79 @@
+// 12_actors/behavior_test.mvl — invoking actor behaviors.
+//
+// `pub fn behavior(val n: Int) { ... }` on an actor is an async behavior:
+// the call site enqueues the message and returns immediately. Behaviors
+// mutate `self.<field>` and can be reordered relative to the caller's other
+// work, but messages sent to the SAME actor from the SAME caller preserve
+// FIFO order (per-actor mailbox).
+//
+// `pub test fn` is synchronous state introspection — it walks in front of
+// the mailbox to read state and returns a value. Test fns that spawn actors
+// and call behaviors declare `! Spawn + Send` (Spawn to construct, Send
+// to enqueue the messages).
+
+actor Counter {
+    count: Int
+
+    pub fn increment(val n: Int) {
+        self.count = self.count + n
+    }
+
+    pub fn reset() {
+        self.count = 0
+    }
+
+    pub test fn get_count() -> Int {
+        self.count
+    }
+}
+
+actor Register {
+    slot: Int
+
+    pub fn set(val n: Int) {
+        self.slot = n
+    }
+
+    pub test fn get() -> Int {
+        self.slot
+    }
+}
+
+test fn behavior_single_message() -> Unit ! Spawn + Send {
+    let c: Counter = actor Counter { count: 0 };
+    c.increment(5);
+    assert_eq(c.get_count(), 5);
+}
+
+test fn behavior_multiple_messages_fifo() -> Unit ! Spawn + Send {
+    let c: Counter = actor Counter { count: 0 };
+    c.increment(1);
+    c.increment(2);
+    c.increment(3);
+    assert_eq(c.get_count(), 6);
+}
+
+test fn behavior_reset_after_increments() -> Unit ! Spawn + Send {
+    let c: Counter = actor Counter { count: 0 };
+    c.increment(10);
+    c.increment(20);
+    c.reset();
+    assert_eq(c.get_count(), 0);
+}
+
+test fn behavior_set_overrides_previous() -> Unit ! Spawn + Send {
+    let r: Register = actor Register { slot: 0 };
+    r.set(1);
+    r.set(2);
+    r.set(3);
+    assert_eq(r.get(), 3);
+}
+
+test fn behavior_two_actors_independent() -> Unit ! Spawn + Send {
+    let a: Counter = actor Counter { count: 0 };
+    let b: Counter = actor Counter { count: 0 };
+    a.increment(100);
+    b.increment(200);
+    assert_eq(a.get_count(), 100);
+    assert_eq(b.get_count(), 200);
+}
