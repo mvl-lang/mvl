@@ -1,0 +1,37 @@
+// 01_expressions/precedence_test.mvl — operator precedence.
+//
+// Verifies * binds tighter than +, comparison tighter than &&/||, unary tighter
+// than binary, and parens override.
+
+test fn precedence_mul_over_add() -> Unit {
+    assert_eq(1 + 2 * 3, 7);
+    assert_eq(2 * 3 + 1, 7);
+    assert_eq((1 + 2) * 3, 9);
+}
+
+test fn precedence_div_over_add() -> Unit {
+    assert_eq(10 + 20 / 4, 15);
+    assert_eq((10 + 20) / 3, 10);
+}
+
+test fn precedence_comparison_below_arith() -> Unit {
+    assert_eq(1 + 2 == 3, true);
+    assert_eq(2 * 3 > 5, true);
+    assert_eq(2 * 3 < 5, false);
+}
+
+test fn precedence_and_below_comparison() -> Unit {
+    assert_eq(1 < 2 && 3 < 4, true);
+    assert_eq(1 < 2 && 3 > 4, false);
+}
+
+test fn precedence_or_below_and() -> Unit {
+    assert_eq(true && false || true, true);
+    assert_eq(false || true && false, false);
+}
+
+test fn precedence_unary_negation() -> Unit {
+    assert_eq(-2 * 3, -6);
+    assert_eq(-(2 + 3), -5);
+    assert_eq(!(false || false), true);
+}

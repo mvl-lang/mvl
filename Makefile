@@ -2,7 +2,7 @@
 .ONESHELL:
 SHELL := /bin/bash
 
-.PHONY: help version build test test-full test-unit test-rust-integration test-requirements test-error-messages test-fmt-roundtrip test-corpus-old test-corpus-warnings-old test-checker-parity test-checker-parity-update test-solver test-stdlib check-compiler assure-compiler test-mvl test-bootstrap-e2e test-bdd test-backend-rust-old test-backend-llvm-old test-backend-wasm test-cross-backend test-grammar-coverage test-examples test-examples-rust test-examples-llvm coverage validate-keywords lint mvl-lint format format-check format-mvl format-mvl-check assurance assurance-gate audit-backend-ast check-adr docs docs-serve install setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
+.PHONY: help version build test test-full test-unit test-rust-integration test-requirements test-error-messages test-fmt-roundtrip test-corpus-old test-corpus-warnings-old test-rust-rust test-rust-llvm test-mvl-llvm test-rust-wasm test-mvl-wasm test-rust-tokio test-checker-parity test-checker-parity-update test-solver test-stdlib check-compiler assure-compiler test-mvl test-bootstrap-e2e test-bdd test-backend-rust-old test-backend-llvm-old test-cross-backend test-grammar-coverage test-examples test-examples-rust test-examples-llvm coverage validate-keywords lint mvl-lint format format-check format-mvl format-mvl-check assurance assurance-gate audit-backend-ast check-adr docs docs-serve install install-runtime setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
 
 .DEFAULT_GOAL := help
 
@@ -63,6 +63,17 @@ INSTALL_TOOLCHAIN_DIR   := $(INSTALL_MVL_DATA_DIR)/toolchains/$(INSTALL_VERSION)
 INSTALL_RUNTIME_DIR     := $(INSTALL_MVL_DATA_DIR)/runtime/$(INSTALL_RUNTIME_VERSION)
 INSTALL_BIN_DIR         := $(HOME)/.local/bin
 
+install-runtime: build ## Install stdlib + runtime crates from CURRENT $(BUILD) (no mvl binary; for CI matrix)
+	@echo "Installing runtime v$(INSTALL_RUNTIME_VERSION) + stdlib from $(BUILD) artifacts ..."
+	@mkdir -p $(INSTALL_TOOLCHAIN_DIR)/std
+	@mkdir -p $(INSTALL_RUNTIME_DIR)/rust $(INSTALL_RUNTIME_DIR)/rust-tokio $(INSTALL_RUNTIME_DIR)/llvm
+	rsync -a --delete std/ $(INSTALL_TOOLCHAIN_DIR)/std/
+	@echo "$(INSTALL_VERSION)" > $(INSTALL_TOOLCHAIN_DIR)/std/.version
+	rsync -a --delete runtime/rust/       $(INSTALL_RUNTIME_DIR)/rust/
+	rsync -a --delete runtime/rust-tokio/ $(INSTALL_RUNTIME_DIR)/rust-tokio/
+	@cp target/$(BUILD)/libmvl_runtime_llvm.dylib $(INSTALL_RUNTIME_DIR)/llvm/ 2>/dev/null || true
+	@cp target/$(BUILD)/libmvl_runtime_llvm.so    $(INSTALL_RUNTIME_DIR)/llvm/ 2>/dev/null || true
+
 install: ## Install all 4 artifacts (mvl, stdlib, rust runtime, llvm runtime) from local source
 	@$(MAKE) build BUILD=release
 	@echo ""
@@ -73,6 +84,10 @@ install: ## Install all 4 artifacts (mvl, stdlib, rust runtime, llvm runtime) fr
 	cp target/release/mvl $(INSTALL_TOOLCHAIN_DIR)/bin/mvl
 	chmod +x $(INSTALL_TOOLCHAIN_DIR)/bin/mvl
 	ln -sfn $(INSTALL_TOOLCHAIN_DIR)/bin/mvl $(INSTALL_BIN_DIR)/mvl
+	# 1b. mvlr driver script + ~/.local/bin symlink (#1823)
+	cp tools/mvlr $(INSTALL_TOOLCHAIN_DIR)/bin/mvlr
+	chmod +x $(INSTALL_TOOLCHAIN_DIR)/bin/mvlr
+	ln -sfn $(INSTALL_TOOLCHAIN_DIR)/bin/mvlr $(INSTALL_BIN_DIR)/mvlr
 	# 2. stdlib source (.mvl files)
 	rsync -a --delete std/ $(INSTALL_TOOLCHAIN_DIR)/std/
 	@echo "$(INSTALL_VERSION)" > $(INSTALL_TOOLCHAIN_DIR)/std/.version
@@ -87,6 +102,7 @@ install: ## Install all 4 artifacts (mvl, stdlib, rust runtime, llvm runtime) fr
 	@echo ""
 	@echo "Installed:"
 	@echo "  binary:       $(INSTALL_BIN_DIR)/mvl -> $(INSTALL_TOOLCHAIN_DIR)/bin/mvl"
+	@echo "  driver:       $(INSTALL_BIN_DIR)/mvlr -> $(INSTALL_TOOLCHAIN_DIR)/bin/mvlr"
 	@echo "  stdlib:       $(INSTALL_TOOLCHAIN_DIR)/std/"
 	@echo "  rust runtime: $(INSTALL_RUNTIME_DIR)/rust/ (v$(INSTALL_RUNTIME_VERSION))"
 	@echo "  rust-tokio:   $(INSTALL_RUNTIME_DIR)/rust-tokio/"
@@ -106,6 +122,10 @@ build: ## Build the MVL compiler + LLVM runtime (BUILD=debug|release, default de
 # === Test ===
 
 MVL ?= ./target/debug/mvl
+# mvlr — matrix run driver. Prefer the installed binary (make install
+# drops it in ~/.local/bin); fall back to the in-repo copy so a fresh
+# checkout works before install.
+MVLR ?= $(shell command -v mvlr 2>/dev/null || echo tools/mvlr)
 
 # Suite list for `make test` (fast pre-PR gate) and `make test-full` (full pre-merge gate).
 # Format: "label|target" — keep alignment by padding the label.
@@ -119,7 +139,7 @@ TEST_FAST_SUITES := \
 	"Requirements      |test-requirements" \
 	"Error messages    |test-error-messages" \
 	"Fmt roundtrip     |test-fmt-roundtrip" \
-	"Backend rust/rust |test-backend-rust-old" \
+	"Backend rust/rust |test-rust-rust" \
 	"Solver            |test-solver" \
 	"Grammar coverage  |test-grammar-coverage" \
 	"Stdlib            |test-stdlib"
@@ -128,23 +148,28 @@ TEST_FULL_EXTRA_SUITES := \
 	"Checker parity    |test-checker-parity" \
 	"MVL compiler      |test-mvl" \
 	"BDD               |test-bdd" \
-	"Rust integration  |test-rust-integration" \
-	"Backend rust/llvm |test-backend-llvm-old" \
-	"Backend (WASM)    |test-backend-wasm" \
-	"Cross-backend     |test-cross-backend" \
+	"Backend rust/llvm |test-rust-llvm" \
+	"Backend mvl/llvm  |test-mvl-llvm" \
+	"Backend rust/wasm |test-rust-wasm" \
 	"Examples (Rust)   |test-examples-rust" \
 	"Examples (LLVM)   |test-examples-llvm"
 
 # $(call run_test_suites,SUITES) — accepts a $(...)-expanded suite list and
 # emits a per-suite PASS/FAIL summary, exiting non-zero if any suite failed.
 define run_test_suites
-	@pass=0; fail=0; \
+	@pass=0; fail=0; skip=0; \
 	run_suite() { \
 		label="$$1"; target="$$2"; \
 		out=$$($(MAKE) --no-print-directory "$$target" 2>&1); rc=$$?; \
 		if [ $$rc -eq 0 ]; then \
-			printf "  %-20s  \033[32m✓  PASS\033[0m\n" "$$label"; \
-			pass=$$((pass + 1)); \
+			if echo "$$out" | grep -q "SKIP:"; then \
+				reason=$$(echo "$$out" | grep -m1 "SKIP:" | sed 's/.*SKIP: //'); \
+				printf "  %-20s  \033[33m~  SKIP\033[0m  %s\n" "$$label" "$$reason"; \
+				skip=$$((skip + 1)); \
+			else \
+				printf "  %-20s  \033[32m✓  PASS\033[0m\n" "$$label"; \
+				pass=$$((pass + 1)); \
+			fi; \
 		else \
 			printf "  %-20s  \033[31m✗  FAIL\033[0m\n" "$$label"; \
 			printf "%s\n" "$$out" | sed 's/^/         /'; \
@@ -158,9 +183,9 @@ define run_test_suites
 	done; \
 	echo ""; \
 	if [ $$fail -eq 0 ]; then \
-		printf "  \033[32m✓  All $$((pass)) suites passed\033[0m\n\n"; \
+		printf "  \033[32m✓  %d passed, %d skipped\033[0m\n\n" "$$pass" "$$skip"; \
 	else \
-		printf "  \033[31m✗  $$fail of $$((pass + fail)) suites failed\033[0m\n\n"; \
+		printf "  \033[31m✗  %d of %d suites failed (%d skipped)\033[0m\n\n" "$$fail" "$$((pass + fail))" "$$skip"; \
 		exit 1; \
 	fi
 endef
@@ -327,11 +352,15 @@ test-mvl: build ## Run MVL-in-MVL tests for the self-hosted compiler (compiler/*
 	$(MVL) test compiler/
 
 test-bootstrap-e2e: build ## Tracer bullet: hello_world.mvl → MVL LLVM emitter → llc → cc → run (#1746)
+	@# `grep -v '^STDOUT '` filters the checker's leaking debug lines
+	@# (#1829). Remove the filters once that bug is fixed.
 	@LLC=/opt/homebrew/opt/llvm/bin/llc; \
 	OUT=$$(mktemp -d); \
 	printf "  Running hello_world.mvl through self-hosted LLVM emitter...\n"; \
 	$(MVL) tir examples/programs/hello_world.mvl 2>/dev/null \
+	  | grep -v '^STDOUT ' \
 	  | $(MVL) run compiler/backends/llvm/emitter.mvl 2>/dev/null \
+	  | grep -v '^STDOUT ' \
 	  | tail -n +3 > "$$OUT/hello.ll"; \
 	$$LLC -filetype=obj "$$OUT/hello.ll" -o "$$OUT/hello.o"; \
 	cc -o "$$OUT/hello" "$$OUT/hello.o" -lc 2>/dev/null; \
@@ -390,6 +419,40 @@ test-cross-backend: build ## Run Rust integration tests for backend parity (tran
 	@echo "Running cross-backend tests (transpiler vs LLVM parity)..."
 	cargo test --test cross_backend
 
+# ── New corpus matrix (#1823 phase 2) ────────────────────────────────────────
+# Files are *_test.mvl with `test fn` blocks; a passing return = pass, a
+# panic (from assert/assert_eq/assert_ne) = fail. No --expect strings.
+# `mvl test <dir>` bundles every _test.mvl file into ONE cargo test crate:
+# one transpile pass, one cargo build, one cargo test — same shape as
+# test-stdlib. Same corpus runs through every backend; rust/rust below is
+# the reference. LLVM / WASM / MVL-self-hosted anchors are stubs today
+# and become active in follow-up tickets (#1828, #1829).
+
+# Naming: test-<compiler>-<backend>
+#   rust/rust        — Rust compiler → Rust transpiler → cargo test  (active)
+#   rust/llvm        — Rust compiler → LLVM text emitter → lli       (stub)
+#   mvl/llvm         — MVL self-hosted compiler → LLVM               (stub)
+#   rust/wasm        — Rust compiler → WAT emitter → wasmtime        (curated spike)
+#   mvl/wasm         — MVL self-hosted → WAT                         (stub)
+#   rust/rust-tokio  — Rust compiler → Rust with tokio runtime       (stub, actors only)
+
+test-rust-rust: build ## rust/rust — new corpus through Rust transpiler (batched, via mvlr)
+	$(MVLR) --mvl=$(MVL) --compiler=rust --backend=rust tests/corpus/
+
+test-rust-llvm: build ## rust/llvm — new corpus through LLVM text emitter (via mvlr, see #1828)
+	$(MVLR) --mvl=$(MVL) --compiler=rust --backend=llvm tests/corpus/
+
+test-mvl-llvm: build ## mvl/llvm — MVL self-hosted → LLVM (tracer bullet, via mvlr, broader corpus in #1828)
+	$(MVLR) --mvl=$(MVL) --compiler=mvl --backend=llvm examples/programs/hello_world.mvl
+
+test-rust-tokio: build ## rust/rust-tokio — actor subset only (stub, tracked in #1828)
+	@printf "  \033[33m~  SKIP: test-rust-tokio not yet wired\033[0m\n"
+	@echo "    Will run tests/corpus/12_actors/ only, once actors category lands. See #1828."
+
+test-mvl-wasm: build ## mvl/wasm — MVL self-hosted → WAT (stub, tracked in #1828)
+	@printf "  \033[33m~  SKIP: test-mvl-wasm not yet wired\033[0m\n"
+	@echo "    Blocker: self-hosted compiler doesn't have a WASM backend yet. See #1828."
+
 # WASM cases the backend actually handles. Deliberately narrow (#1571 is a
 # spike): the emitter today supports only what these two files exercise —
 # Int arithmetic, direct calls, string literals, Int.to_string(), println.
@@ -399,7 +462,7 @@ WASM_CASES := \
 	tests/spikes/006-wasm-backend/add.mvl \
 	tests/spikes/006-wasm-backend/hello.mvl
 
-test-backend-wasm: build ## Run WASM backend against the curated case list (mvl → wat → wasmtime)
+test-rust-wasm: build ## rust/wasm — WASM backend against curated case list (mvl → wat → wasmtime, spike-scope)
 	@command -v wasm-tools > /dev/null 2>&1 || { \
 	  printf "  \033[31m✗  wasm-tools not installed — 'cargo install wasm-tools'\033[0m\n"; exit 1; }
 	@command -v wasmtime > /dev/null 2>&1 || { \

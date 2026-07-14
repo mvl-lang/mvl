@@ -1,0 +1,37 @@
+// 02_control_flow/if_expr_test.mvl — if/else as an expression.
+//
+// Both arms must have the same type; the whole `if` evaluates to that type.
+
+test fn if_expr_returns_int() -> Unit {
+    let x: Int = if true { 42 } else { 0 };
+    assert_eq(x, 42);
+}
+
+test fn if_expr_returns_int_false_branch() -> Unit {
+    let x: Int = if false { 42 } else { 99 };
+    assert_eq(x, 99);
+}
+
+test fn if_expr_returns_bool() -> Unit {
+    let x: Int = 5;
+    let is_positive: Bool = if x > 0 { true } else { false };
+    assert_eq(is_positive, true);
+}
+
+test fn if_expr_chained() -> Unit {
+    let n: Int = 5;
+    let sign: Int = if n > 0 { 1 } else if n < 0 { -1 } else { 0 };
+    assert_eq(sign, 1);
+}
+
+test fn if_expr_chained_zero() -> Unit {
+    let n: Int = 0;
+    let sign: Int = if n > 0 { 1 } else if n < 0 { -1 } else { 0 };
+    assert_eq(sign, 0);
+}
+
+test fn if_expr_chained_negative() -> Unit {
+    let n: Int = -7;
+    let sign: Int = if n > 0 { 1 } else if n < 0 { -1 } else { 0 };
+    assert_eq(sign, -1);
+}

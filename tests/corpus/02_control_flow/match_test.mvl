@@ -1,0 +1,42 @@
+// 02_control_flow/match_test.mvl — match on primitive types.
+//
+// Covers match on Int, Bool with literal patterns and a wildcard fallthrough.
+
+test fn match_int_literal() -> Unit {
+    let n: Int = 2;
+    let word: Int = match n {
+        1 => 10,
+        2 => 20,
+        3 => 30,
+        _ => 0,
+    };
+    assert_eq(word, 20);
+}
+
+test fn match_int_wildcard() -> Unit {
+    let n: Int = 99;
+    let word: Int = match n {
+        1 => 10,
+        2 => 20,
+        _ => -1,
+    };
+    assert_eq(word, -1);
+}
+
+test fn match_bool() -> Unit {
+    let b: Bool = true;
+    let n: Int = match b {
+        true => 1,
+        false => 0,
+    };
+    assert_eq(n, 1);
+}
+
+test fn match_bool_false_arm() -> Unit {
+    let b: Bool = false;
+    let n: Int = match b {
+        true => 1,
+        false => 0,
+    };
+    assert_eq(n, 0);
+}

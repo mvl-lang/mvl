@@ -1,0 +1,24 @@
+// 00_smoke/assertions_test.mvl — verify all three assertion builtins work.
+//
+// Covers: assert(true), assert_eq on Int and Bool, assert_ne on Int and Bool.
+// Any failure panics with non-zero exit.
+
+test fn assertions_smoke_assert_true() -> Unit {
+    assert(true);
+}
+
+test fn assertions_smoke_assert_eq_int() -> Unit {
+    assert_eq(1, 1);
+}
+
+test fn assertions_smoke_assert_eq_bool() -> Unit {
+    assert_eq(true, true);
+}
+
+test fn assertions_smoke_assert_ne_int() -> Unit {
+    assert_ne(1, 2);
+}
+
+test fn assertions_smoke_assert_ne_bool() -> Unit {
+    assert_ne(true, false);
+}

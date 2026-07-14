@@ -1,0 +1,30 @@
+// 02_control_flow/while_test.mvl — while loops with ref bindings.
+//
+// MVL uses `ref` for mutable bindings; no `mut` keyword. `while cond { body }`
+// runs body while cond holds.
+
+test fn while_counts_to_ten() -> Unit {
+    let i: ref Int = 0;
+    while i < 10 {
+        i = i + 1;
+    }
+    assert_eq(i, 10);
+}
+
+test fn while_sums_to_fifty_five() -> Unit {
+    let sum: ref Int = 0;
+    let i: ref Int = 1;
+    while i <= 10 {
+        sum = sum + i;
+        i = i + 1;
+    }
+    assert_eq(sum, 55);
+}
+
+test fn while_never_enters_if_false() -> Unit {
+    let x: ref Int = 42;
+    while false {
+        x = x - 1;
+    }
+    assert_eq(x, 42);
+}

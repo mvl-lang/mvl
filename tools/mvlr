@@ -1,0 +1,310 @@
+#!/usr/bin/env bash
+# mvlr — MVL matrix run driver.
+#
+# Runs an MVL file (or directory of _test.mvl files) through a specific
+# (compiler, backend) combination. Wraps existing `mvl` invocations plus
+# the bootstrap chain for self-hosted paths.
+#
+# The corpus under tests/corpus/ uses `test fn` blocks. For non-batched
+# backends (currently rust/llvm), mvlr synthesizes a per-file `fn main`
+# that calls each `test fn` in order so the file can be lowered through
+# any backend that expects `fn main`.
+#
+# Interim workarounds documented here:
+#   * `grep -v '^STDOUT '`  — checker debug leaks polluting pipes (#1829)
+#   * `test fn` → `fn` shim — until `mvl test --backend=llvm` batches
+#                              `test fn` natively (#1828)
+#
+# Both should be removed once their tickets close.
+
+set -euo pipefail
+
+COMPILER=rust
+BACKEND=rust
+QUIET=0
+MVL_OVERRIDE=""
+LLC_OVERRIDE=""
+POSITIONAL=()
+
+usage() {
+    cat >&2 <<'EOF'
+Usage: mvlr [OPTIONS] <file.mvl | dir>
+
+Options:
+  --compiler=<rust|mvl>       which compiler to drive         (default: rust)
+  --backend=<rust|llvm|wasm|rust-tokio>
+                              which backend to lower through  (default: rust)
+  --mvl=<path>                pin the mvl binary (overrides PATH + fallback)
+  --llc=<path>                pin llc (mvl/llvm only; overrides $LLC + PATH)
+  -q, --quiet                 suppress per-file output
+  -h, --help                  show this help
+
+Supported combinations:
+  rust/rust        mvl run  (or  mvl test  for a directory)
+  rust/llvm        per-file: sed test fn → fn + synth main, mvl run --backend=llvm
+  rust/wasm        NOT SUPPORTED via mvlr — use `make test-rust-wasm` (curated spike)
+  rust/rust-tokio  NOT YET IMPLEMENTED (#1828)
+  mvl/llvm         mvl tir | emitter.mvl | llc | cc | run
+  mvl/wasm         NOT YET IMPLEMENTED (#1828)
+
+Environment:
+  MVL   path to the mvl binary   (default: ./target/debug/mvl)
+  LLC   path to llc              (default: /opt/homebrew/opt/llvm/bin/llc)
+
+Examples:
+  mvlr file.mvl
+  mvlr --backend=llvm file.mvl
+  mvlr --backend=llvm tests/corpus/
+  mvlr --compiler=mvl --backend=llvm examples/programs/hello_world.mvl
+EOF
+}
+
+for arg in "$@"; do
+    case "$arg" in
+        --compiler=*) COMPILER="${arg#*=}" ;;
+        --backend=*)  BACKEND="${arg#*=}" ;;
+        --mvl=*)      MVL_OVERRIDE="${arg#*=}" ;;
+        --llc=*)      LLC_OVERRIDE="${arg#*=}" ;;
+        -q|--quiet)   QUIET=1 ;;
+        -h|--help)    usage; exit 0 ;;
+        --*)          echo "mvlr: unknown option: $arg" >&2; usage; exit 2 ;;
+        *)            POSITIONAL+=("$arg") ;;
+    esac
+done
+
+if [ "${#POSITIONAL[@]}" -eq 0 ]; then
+    echo "mvlr: missing input file or directory" >&2
+    usage
+    exit 2
+fi
+
+INPUT="${POSITIONAL[0]}"
+# Resolve `mvl` binary with this precedence:
+#   1. --mvl=<path>      (explicit flag, used by the Makefile for dev builds)
+#   2. $MVL env var      (explicit override)
+#   3. mvl on PATH       (installed release build)
+#   4. ./target/debug/mvl (fresh checkout without install)
+if [ -n "$MVL_OVERRIDE" ]; then
+    MVL="$MVL_OVERRIDE"
+elif [ -z "${MVL:-}" ]; then
+    if command -v mvl >/dev/null 2>&1; then
+        MVL=$(command -v mvl)
+    elif [ -x ./target/debug/mvl ]; then
+        MVL=./target/debug/mvl
+    else
+        echo "mvlr: mvl binary not found — install with \`make install\` or build with \`make build\`" >&2
+        exit 1
+    fi
+fi
+# Resolve `llc` (only needed by mvl/llvm). Precedence:
+#   1. --llc=<path>       (explicit flag)
+#   2. $LLC env var       (CI/user override)
+#   3. `llc` on PATH      (Linux with LLVM installed system-wide)
+#   4. Platform defaults  (Homebrew on macOS, apt LLVM on Ubuntu)
+resolve_llc() {
+    if [ -n "$LLC_OVERRIDE" ]; then
+        echo "$LLC_OVERRIDE"; return
+    fi
+    if [ -n "${LLC:-}" ]; then
+        echo "$LLC"; return
+    fi
+    if command -v llc >/dev/null 2>&1; then
+        command -v llc; return
+    fi
+    for cand in \
+        /opt/homebrew/opt/llvm/bin/llc \
+        /usr/local/opt/llvm/bin/llc \
+        /usr/lib/llvm-22/bin/llc \
+        /usr/lib/llvm-21/bin/llc \
+        /usr/lib/llvm-20/bin/llc \
+        /usr/bin/llc-22 /usr/bin/llc-21 /usr/bin/llc-20; do
+        [ -x "$cand" ] && { echo "$cand"; return; }
+    done
+    echo ""  # not found — caller reports
+}
+
+if [ ! -x "$MVL" ]; then
+    echo "mvlr: mvl binary not executable at $MVL" >&2
+    exit 1
+fi
+
+if [ ! -e "$INPUT" ]; then
+    echo "mvlr: input not found: $INPUT" >&2
+    exit 1
+fi
+
+# ── Synthesize a fn-main driver from a *_test.mvl file ────────────────────
+# Prints the synthesized file path. Caller owns the tempdir.
+synth_test_main() {
+    local src="$1" out="$2"
+    sed 's/^test fn /fn /' "$src" > "$out"
+    {
+        echo ""
+        echo "fn main() -> Unit ! Console {"
+        grep -oE "^test fn [a-z_0-9]+" "$src" | awk '{print "    " $3 "();"}'
+        echo "}"
+    } >> "$out"
+}
+
+# ── Per-combo runners ─────────────────────────────────────────────────────
+
+run_rust_rust_file() {
+    # *_test.mvl files have no fn main; drive them through `mvl test`,
+    # which accepts a single file and runs the batched harness on it.
+    if [[ "$1" == *_test.mvl ]]; then
+        "$MVL" test "$1"
+    else
+        "$MVL" run "$1"
+    fi
+}
+
+run_rust_rust_dir() {
+    # mvl test is the batched harness — one cargo build for the whole tree.
+    "$MVL" test "$1"
+}
+
+run_rust_llvm_file() {
+    local src="$1" tmp
+    tmp=$(mktemp -d)
+    # shellcheck disable=SC2064
+    trap "rm -rf '$tmp'" RETURN
+    if [[ "$src" == *_test.mvl ]]; then
+        local out="$tmp/$(basename "$src")"
+        synth_test_main "$src" "$out"
+        "$MVL" run --backend=llvm "$out"
+    else
+        "$MVL" run --backend=llvm "$src"
+    fi
+}
+
+run_mvl_llvm_file() {
+    local src="$1" tmp llc
+    llc=$(resolve_llc)
+    if [ -z "$llc" ]; then
+        echo "mvlr: llc not found (set --llc=<path> or LLC env, or install LLVM)" >&2
+        return 1
+    fi
+    tmp=$(mktemp -d)
+    # shellcheck disable=SC2064
+    trap "rm -rf '$tmp'" RETURN
+    # #1829: filter checker STDOUT leaks at both pipe stages. Stage stderr
+    # is captured to files so a failure in either mvl invocation surfaces
+    # a useful message instead of an empty exit 1.
+    if ! "$MVL" tir "$src" 2>"$tmp/tir.err" > "$tmp/tir.out"; then
+        echo "mvlr: mvl tir failed for $src" >&2
+        cat "$tmp/tir.err" >&2
+        return 1
+    fi
+    if ! grep -v '^STDOUT ' "$tmp/tir.out" \
+        | "$MVL" run compiler/backends/llvm/emitter.mvl 2>"$tmp/emit.err" \
+        | grep -v '^STDOUT ' \
+        | tail -n +3 > "$tmp/out.ll"; then
+        echo "mvlr: self-hosted LLVM emitter failed" >&2
+        cat "$tmp/emit.err" >&2
+        return 1
+    fi
+    # The self-hosted emitter hardcodes `target triple = arm64-apple-darwin`.
+    # On Linux CI that produces an object file the native linker can't use.
+    # Drop the triple so llc falls back to its default (host) triple.
+    sed -i.bak '/^target triple = /d' "$tmp/out.ll" && rm -f "$tmp/out.ll.bak"
+    # -relocation-model=pic: modern Linux distros default to PIE binaries,
+    # which need position-independent relocations in .o files. Harmless on
+    # macOS. Skipping this yields "R_X86_64_32 … cannot be used when making
+    # a PIE object" from the GNU linker.
+    if ! "$llc" -relocation-model=pic -filetype=obj "$tmp/out.ll" -o "$tmp/out.o" 2>"$tmp/llc.err"; then
+        echo "mvlr: llc failed" >&2
+        cat "$tmp/llc.err" >&2
+        head -3 "$tmp/out.ll" >&2
+        return 1
+    fi
+    if ! cc -o "$tmp/out" "$tmp/out.o" -lc 2>"$tmp/cc.err"; then
+        echo "mvlr: cc link failed" >&2
+        cat "$tmp/cc.err" >&2
+        return 1
+    fi
+    "$tmp/out"
+}
+
+# ── Directory driver: iterate _test.mvl files for combos that lack batching ─
+
+run_dir_iter() {
+    local dir="$1" combo="$2"
+    local pass=0 fail=0 short output rc
+    local OK="\033[32m✓\033[0m" FAIL="\033[31m✗\033[0m"
+    local tmpout
+    tmpout=$(mktemp)
+    # shellcheck disable=SC2064
+    trap "rm -f '$tmpout'" RETURN
+    while IFS= read -r f; do
+        short="${f#$dir/}"
+        [ "$short" = "$f" ] && short="${f#tests/corpus/}"
+        if run_file "$combo" "$f" >"$tmpout" 2>&1; then
+            [ "$QUIET" = "1" ] || printf "  $OK  %s\n" "$short"
+            pass=$((pass + 1))
+        else
+            printf "  $FAIL  %s\n" "$short"
+            # Preserve error output — indispensable for diagnosing CI-only
+            # failures (macOS vs Linux, llc path, missing runtime, etc.).
+            sed 's/^/         /' "$tmpout"
+            fail=$((fail + 1))
+        fi
+    done < <(find "$dir" -name "*_test.mvl" | sort)
+    echo ""
+    if [ "$fail" -eq 0 ]; then
+        printf "  \033[32m✓  %d passed, 0 failed\033[0m\n\n" "$pass"
+    else
+        printf "  \033[31m✗  %d passed, %d failed\033[0m\n\n" "$pass" "$fail"
+        return 1
+    fi
+}
+
+# Dispatch a single file to the requested combo runner.
+run_file() {
+    local combo="$1" src="$2"
+    case "$combo" in
+        rust/rust)  run_rust_rust_file "$src" ;;
+        rust/llvm)  run_rust_llvm_file "$src" ;;
+        mvl/llvm)   run_mvl_llvm_file  "$src" ;;
+        *)          echo "mvlr: no per-file runner for $combo" >&2; return 2 ;;
+    esac
+}
+
+# ── Main dispatch ─────────────────────────────────────────────────────────
+
+COMBO="$COMPILER/$BACKEND"
+
+case "$COMBO" in
+    rust/rust-tokio)
+        echo "mvlr: rust/rust-tokio not yet supported (#1828)" >&2
+        exit 1
+        ;;
+    rust/wasm)
+        echo "mvlr: rust/wasm not supported by mvlr — use \`make test-rust-wasm\` (curated spike case list)" >&2
+        exit 1
+        ;;
+    mvl/wasm)
+        echo "mvlr: mvl/wasm not yet supported (#1828)" >&2
+        exit 1
+        ;;
+    rust/rust|rust/llvm|mvl/llvm)
+        ;;
+    *)
+        echo "mvlr: unknown combo: $COMBO" >&2
+        usage
+        exit 2
+        ;;
+esac
+
+if [ -d "$INPUT" ]; then
+    case "$COMBO" in
+        rust/rust)
+            # Batched path — mvl test bundles the whole tree.
+            run_rust_rust_dir "$INPUT"
+            ;;
+        *)
+            run_dir_iter "$INPUT" "$COMBO"
+            ;;
+    esac
+else
+    run_file "$COMBO" "$INPUT"
+fi

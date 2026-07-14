@@ -1,0 +1,29 @@
+// 01_expressions/bool_ops_test.mvl — logical operators on Bool.
+//
+// Covers &&, ||, ! and short-circuit truth tables.
+
+test fn bool_ops_and_truth_table() -> Unit {
+    assert_eq(true && true, true);
+    assert_eq(true && false, false);
+    assert_eq(false && true, false);
+    assert_eq(false && false, false);
+}
+
+test fn bool_ops_or_truth_table() -> Unit {
+    assert_eq(true || true, true);
+    assert_eq(true || false, true);
+    assert_eq(false || true, true);
+    assert_eq(false || false, false);
+}
+
+test fn bool_ops_not() -> Unit {
+    assert_eq(!true, false);
+    assert_eq(!false, true);
+    assert_eq(!!true, true);
+}
+
+test fn bool_ops_combined() -> Unit {
+    assert_eq(true && !false, true);
+    assert_eq(!(true && false), true);
+    assert_eq((true || false) && !false, true);
+}

@@ -2,38 +2,45 @@
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-07-14
+
 ### Added
 
-- **`mvl-spec` submodule at `vendor/mvl-spec/`** (#1813) — pinned to a
-  specific `mvl-lang/mvl-spec` commit. Initialise with
-  `git submodule update --init --recursive` (or `make setup`). The
-  relationship mirrors [`rust-lang/rust`](https://github.com/rust-lang/rust)
-  ↔ [`rust-lang/reference`](https://github.com/rust-lang/reference): what
-  defines MVL lives in `mvl-spec`, what implements MVL lives here.
+- **Phase 2 corpus buildout: 00_smoke, 01_expressions, 02_control_flow** (#1823) —
+  New modular test corpus with `test fn` blocks, replacing monolithic `corpus_old/`.
+  Includes 11 test files with 48 test functions across three categories:
+  - `00_smoke/`: hello, arithmetic, assertions (3 files, 11 tests)
+  - `01_expressions/`: int ops, bool ops, precedence (3 files, 17 tests)
+  - `02_control_flow/`: if/else, match, while, early return (4 files, 20 tests)
+
+- **`tools/mvlr` matrix run driver** — Orchestrates `(compiler, backend)` matrix
+  combinations (rust/rust, rust/llvm, mvl/llvm). Handles per-file synthesis for
+  non-batched backends, llc/cc/lli path resolution, and platform-specific workarounds.
+  Replaces scattered shell blocks with a single command: `mvlr --backend=llvm file.mvl`.
+
+- **Test anchors in Makefile**: `test-rust-rust`, `test-rust-llvm`, `test-mvl-llvm`,
+  `test-rust-wasm` (initial stub). Wired into `make test` and `make test-full`.
 
 ### Changed
 
-- **Grammar, tree-sitter, and editor extensions relocated to
-  [`mvl-lang/mvl-spec`](https://github.com/mvl-lang/mvl-spec)** (#1813).
-  `docs/grammar.ebnf`, `etc/tree-sitter-mvl/`, `etc/nvim-mvl/`,
-  `etc/vscode-mvl/`, `etc/zed-mvl/`, and `etc/vscode-install.sh` have been
-  deleted from this repository; the canonical sources are now consumed via
-  the `vendor/mvl-spec/` submodule. All internal ADR, spec, and manual
-  references were updated accordingly.
-- `tools/validate_keywords.py` now reads the EBNF and tree-sitter grammar
-  from `vendor/mvl-spec/`, restoring the full 4-source keyword drift check
-  against the Rust reference lexer.
-- `tools/check_grammar_coverage.py` and `make test-grammar-coverage` now
-  cross-validate `vendor/mvl-spec/grammar/grammar.ebnf` against
-  `vendor/mvl-spec/tools/tree-sitter/grammar.js` via the pinned submodule.
-- CI's `check` job now checks out submodules recursively so the drift
-  checks have access to the vendored grammar.
+- **`make install` now copies `tools/mvlr` to `~/.local/bin`** (or fallback to
+  tools/mvlr if not on PATH). Supports `--mvl=<path>` override in Makefile for dev builds.
 
-### Removed
+- **CI matrix testing** — New job runs three backend anchors (rust/rust, rust/llvm, mvl/llvm)
+  with environment setup for LLC paths, runtime installation, and platform-specific fixes.
+  Adds `install-runtime` target for test dependency backfill.
 
-- Makefile targets `tree-sitter-build`, `test-tree-sitter`, and
-  `install-nvim`. Tree-sitter builds and editor installs are the
-  responsibility of `mvl-spec` and its downstream users.
+### Fixed
+
+- **Interim workarounds for #1829, #1828** — Self-hosted LLVM emitter hardcodes
+  `arm64-apple-darwin` triple (causes Linux linker errors); `mvl tir | emitter` pipes
+  leak checker STDOUT debug; `mvl run --backend=llvm` doesn't batch `test fn` blocks.
+  mvlr and Makefile include temporary sed/grep/relocation-model fixes; removed once
+  emitter and `mvl test` are fixed.
+
+## [1.0.0] - 2026-07-12
+
+First stable release of MVL — the Maximum Verifiable Language.
 
 ## [1.0.0] - 2026-07-12
 

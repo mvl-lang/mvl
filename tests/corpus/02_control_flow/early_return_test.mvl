@@ -1,0 +1,40 @@
+// 02_control_flow/early_return_test.mvl — early return from helper functions.
+//
+// The `test fn` itself is Unit-returning; we exercise `return` in helpers
+// that the tests call. Note: the last expression of a block is a return
+// value by default — `return` is only needed for early exit.
+
+fn signum(n: Int) -> Int {
+    if n > 0 { return 1; }
+    if n < 0 { return -1; }
+    0
+}
+
+fn first_multiple_of_three(limit: Int) -> Int {
+    let i: ref Int = 1;
+    while i <= limit {
+        if i % 3 == 0 { return i; }
+        i = i + 1;
+    }
+    -1
+}
+
+test fn early_return_signum_positive() -> Unit {
+    assert_eq(signum(42), 1);
+}
+
+test fn early_return_signum_negative() -> Unit {
+    assert_eq(signum(-7), -1);
+}
+
+test fn early_return_signum_zero() -> Unit {
+    assert_eq(signum(0), 0);
+}
+
+test fn early_return_first_multiple_hits() -> Unit {
+    assert_eq(first_multiple_of_three(10), 3);
+}
+
+test fn early_return_first_multiple_misses() -> Unit {
+    assert_eq(first_multiple_of_three(2), -1);
+}

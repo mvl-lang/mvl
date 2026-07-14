@@ -1,0 +1,46 @@
+// 01_expressions/int_ops_test.mvl — Int operators not covered by 00_smoke.
+//
+// Smoke already covers +, -, *, /, %. This file covers comparison, negation,
+// and Int-level edge cases (zero, negative, large values).
+
+test fn int_ops_lt() -> Unit {
+    assert_eq(1 < 2, true);
+    assert_eq(2 < 1, false);
+    assert_eq(1 < 1, false);
+}
+
+test fn int_ops_le() -> Unit {
+    assert_eq(1 <= 2, true);
+    assert_eq(1 <= 1, true);
+    assert_eq(2 <= 1, false);
+}
+
+test fn int_ops_gt() -> Unit {
+    assert_eq(2 > 1, true);
+    assert_eq(1 > 2, false);
+    assert_eq(1 > 1, false);
+}
+
+test fn int_ops_ge() -> Unit {
+    assert_eq(2 >= 1, true);
+    assert_eq(1 >= 1, true);
+    assert_eq(1 >= 2, false);
+}
+
+test fn int_ops_eq_ne() -> Unit {
+    assert_eq(42 == 42, true);
+    assert_eq(42 == 43, false);
+    assert_eq(42 != 43, true);
+    assert_eq(42 != 42, false);
+}
+
+test fn int_ops_negation() -> Unit {
+    assert_eq(-5, 0 - 5);
+    assert_eq(-(-5), 5);
+}
+
+test fn int_ops_zero() -> Unit {
+    assert_eq(0 + 0, 0);
+    assert_eq(0 * 100, 0);
+    assert_eq(0 - 5, -5);
+}
