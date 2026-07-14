@@ -1,0 +1,53 @@
+// 05_collections/list_test.mvl — List[T] construction, size, indexed access.
+//
+// Indexing is bounds-checked: `.get(i)` returns `Option[T]`. There is no
+// bare `.unwrap()` in MVL — callers must `match` or use `.unwrap_or(default)`.
+
+test fn list_literal_and_len() -> Unit {
+    let xs: List[Int] = [10, 20, 30, 40];
+    assert_eq(xs.len(), 4);
+}
+
+test fn list_empty_len_is_zero() -> Unit {
+    let xs: List[Int] = [];
+    assert_eq(xs.len(), 0);
+}
+
+test fn list_get_in_bounds_returns_some() -> Unit {
+    let xs: List[Int] = [10, 20, 30];
+    let v: Int = match xs.get(1) {
+        Some(n) => n,
+        None => -1,
+    };
+    assert_eq(v, 20);
+}
+
+test fn list_get_out_of_bounds_returns_none() -> Unit {
+    let xs: List[Int] = [10, 20, 30];
+    let v: Int = match xs.get(5) {
+        Some(n) => n,
+        None => -1,
+    };
+    assert_eq(v, -1);
+}
+
+test fn list_get_first_and_last() -> Unit {
+    let xs: List[Int] = [100, 200, 300, 400];
+    let first: Int = xs.get(0).unwrap_or(-1);
+    let last: Int = xs.get(3).unwrap_or(-1);
+    assert_eq(first, 100);
+    assert_eq(last, 400);
+}
+
+test fn list_of_strings() -> Unit {
+    let names: List[String] = ["alice", "bob", "carol"];
+    assert_eq(names.len(), 3);
+    assert_eq(names.get(1).unwrap_or(""), "bob");
+}
+
+test fn list_of_bools() -> Unit {
+    let flags: List[Bool] = [true, false, true];
+    assert_eq(flags.len(), 3);
+    assert_eq(flags.get(0).unwrap_or(false), true);
+    assert_eq(flags.get(1).unwrap_or(true), false);
+}

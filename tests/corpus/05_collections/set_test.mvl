@@ -1,0 +1,42 @@
+// 05_collections/set_test.mvl — Set[T] construction, membership, insertion.
+//
+// Literal syntax: `{1, 2, 3}` — bare braces with values (contrast Map:
+// `{"k": v}` uses key: value pairs). Empty set via `Set::new()` is
+// skipped for now — same LLVM ::-in-symbol issue as Map (#1842).
+
+test fn set_literal_and_len() -> Unit {
+    let s: Set[Int] = {1, 2, 3, 4};
+    assert_eq(s.len(), 4);
+}
+
+test fn set_dedupes_on_construction() -> Unit {
+    let s: Set[Int] = {1, 2, 2, 3, 3, 3};
+    assert_eq(s.len(), 3);
+}
+
+test fn set_contains_hit() -> Unit {
+    let s: Set[Int] = {10, 20, 30};
+    assert_eq(s.contains(20), true);
+}
+
+test fn set_contains_miss() -> Unit {
+    let s: Set[Int] = {10, 20, 30};
+    assert_eq(s.contains(99), false);
+}
+
+test fn set_insert_new_element() -> Unit {
+    let s: ref Set[Int] = {1, 2, 3};
+    s.insert(4);
+    assert_eq(s.len(), 4);
+    assert_eq(s.contains(4), true);
+}
+
+test fn set_insert_existing_element_noop() -> Unit {
+    let s: ref Set[Int] = {1, 2, 3};
+    s.insert(2);
+    assert_eq(s.len(), 3);
+}
+
+// TODO: `Set[String].contains(literal)` fails in the Rust transpiler with an
+// ambiguous `.into()` target — pending a separate ticket. Set[Int] covers the
+// key-lookup path meanwhile.
