@@ -416,8 +416,38 @@ impl TextEmitter {
         }
 
         // User-defined function call.
+        //
+        // #1832: when the callee declares a param of function type and we're
+        // passing a named top-level function (a bare `Var(fn_name)`), the raw
+        // `@fn_name` pointer is not compatible with the callee's expected
+        // `%__closure_type { fn_ptr, env_ptr }` layout — the callee would GEP
+        // into the function's machine code and segfault. Wrap the named fn in
+        // a shim closure at the call site instead.
+        let callee_param_tys: Vec<TypeExpr> = self
+            .module
+            .fn_param_types
+            .get(name)
+            .cloned()
+            .unwrap_or_default();
         let mut arg_vals: Vec<(String, String)> = Vec::new();
-        for arg in args {
+        for (i, arg) in args.iter().enumerate() {
+            let param_wants_fn = callee_param_tys
+                .get(i)
+                .is_some_and(|pt| matches!(pt, TypeExpr::Fn { .. }));
+            if param_wants_fn {
+                if let TirExprKind::Var(fn_name) = &arg.kind {
+                    if self.module.fn_ret_types.contains_key(fn_name)
+                        && !self.mono.tir_generic_fns.contains_key(fn_name)
+                    {
+                        if let Some(closure_ptr) =
+                            self.make_named_fn_closure_hof(fn_name, &[])?
+                        {
+                            arg_vals.push(("ptr".into(), closure_ptr));
+                            continue;
+                        }
+                    }
+                }
+            }
             let ty = self.ty_to_llvm_ctx(&arg.ty);
             if let Some(v) = self.emit_expr_tir(arg)? {
                 arg_vals.push((ty, v));
