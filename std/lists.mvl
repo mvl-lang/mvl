@@ -56,8 +56,10 @@ pub type Entry[K, V] = struct {
 
 // ── List kernel (6 builtin methods) ─────────────────────────────────────────
 
-/// Number of elements.
+/// Number of elements.  Always non-negative — the runtime guarantees this
+/// axiom (#1805).
 pub builtin fn List[T]::len(self) -> Int
+    ensures result >= 0
 
 /// Element at index `i`, or None if out of range.
 pub builtin fn List[T]::get(self, i: Int) -> Option[T]

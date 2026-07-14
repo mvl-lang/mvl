@@ -1,0 +1,29 @@
+// Solver Layer 2: MethodCall postcondition axioms via #1805.
+//
+// `List[T]::len`, `Map[K, V]::len`, `Set[T]::len`, `String::len`, and
+// `Span::len` in the stdlib now carry `ensures result >= 0`.  The
+// refinements analyzer projects those postconditions into `var_refs`
+// under the canonical key `"receiver.method()"` at each call site; the
+// atom normalizer then bridges the entry onto the synthesized atom
+// `Ident("__atom_N")` that L2 sees as the argument.
+//
+// Effect: `non_negative(xs.len())` now discharges at L2 via interval
+// subsumption from the `self >= 0` hypothesis.  Before #1805 it fell
+// to runtime.
+//
+// Every call in this file should be PROVEN.
+
+fn non_negative(x: Int where self >= 0) -> Int { x }
+
+// List::len — canonical MethodCall axiom case.  The stdlib declares
+// `pub builtin fn List[T]::len(self) -> Int ensures result >= 0` (#1805);
+// the analyzer projects that ensures into `var_refs["xs.len()"]` at the
+// call site so L2 sees a `self >= 0` hypothesis on the atom.
+fn list_len_is_non_negative(xs: List[Int]) -> Int {
+    non_negative(xs.len())
+}
+
+// String::len — same shape, different receiver (also `ensures result >= 0`).
+fn string_len_is_non_negative(s: String) -> Int {
+    non_negative(s.len())
+}

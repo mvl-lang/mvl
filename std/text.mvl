@@ -40,8 +40,11 @@ pub fn Span::text(self, source: String) -> String {
     source.substring(self.start, self.end)
 }
 
-/// Length of the span in characters.
-pub fn Span::len(self) -> Int {
+/// Length of the span in characters.  Always non-negative — the branch
+/// returns `0` when `end <= start` (#1805).
+pub fn Span::len(self) -> Int
+    ensures result >= 0
+{
     if self.end > self.start { self.end - self.start } else { 0 }
 }
 

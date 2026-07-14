@@ -1,0 +1,37 @@
+// Solver Layer 2/4: FieldAccess atoms discharge through dispatch-boundary
+// normalization + struct-field hypothesis threading (#1805).
+//
+// Before #1805 the layered solver's L2/L4/L5 gated on `Expr::Ident`, so a
+// call site like `positive(b.size)` — where `b.size` is `Expr::FieldAccess`
+// — could not be seen by any arithmetic layer.  Two changes land the fix:
+//
+//   1. `solver::atom_norm` normalizes non-arithmetic subtrees (FieldAccess,
+//      MethodCall) to fresh `Ident("__atom_N")` atoms before L2/L4/L5.
+//   2. `refinements.rs::params_to_var_refs` projects a struct-typed
+//      parameter's field-level refinements into synthetic hypothesis keys
+//      of the form `"param.field"`, which the normalizer bridges onto the
+//      atom name so L2/L4/L5 have a hypothesis to reason against.
+//
+// Together they let L2 discharge `positive(b.size)` from the struct-field
+// invariant `size: Int where self > 5` — same interval reasoning as a
+// plain `Int where self > 5` parameter.
+//
+// Every call in this file should be PROVEN at L2.
+
+type Box = struct { size: Int where self > 5 }
+
+fn positive(x: Int where self > 0) -> Int { x }
+
+// Baseline: plain-ident parameter with an interval hypothesis.  Proven at L2
+// before and after #1805.
+fn plain_caller(x: Int where self > 5) -> Int {
+    positive(x)
+}
+
+// FieldAccess argument on a struct with a refined field.  Before #1805 this
+// fell to runtime because L2 could not accept `Expr::FieldAccess`.  After
+// #1805 the atom `__atom_0` for `b.size` carries the hypothesis `self > 5`,
+// so L2 proves `self > 0` via interval subsumption.
+fn field_caller(b: Box) -> Int {
+    positive(b.size)
+}

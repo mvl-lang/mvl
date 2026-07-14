@@ -111,6 +111,11 @@ solver_test!(
     "layer1",
     "12_ensures_result_field_violation.mvl"
 );
+solver_test!(
+    solver_l1_13_let_unfold_ensures,
+    "layer1",
+    "13_let_unfold_ensures.mvl"
+);
 
 // ── Layer 2: Interval analysis ───────────────────────────────────────────────
 
@@ -156,6 +161,12 @@ solver_test!(
     "layer2",
     "10_violations_interval.mvl"
 );
+solver_test!(
+    solver_l2_11_field_access_atoms,
+    "layer2",
+    "11_field_access_atoms.mvl"
+);
+solver_test!(solver_l2_12_len_axiom, "layer2", "12_len_axiom.mvl");
 
 // ── Layer 3: Symbolic (path-sensitive) ───────────────────────────────────────
 
