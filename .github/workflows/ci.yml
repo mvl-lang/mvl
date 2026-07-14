@@ -224,13 +224,17 @@ jobs:
         run: cargo test --test compile_and_run --test cross_backend --test stdlib
 
       # New corpus matrix (#1823 phase 2) — three active anchors via tools/mvlr.
-      # LLC path is Ubuntu-specific; mvlr auto-detects it but pinning here
-      # avoids surprises if LLVM install layout changes.
+      # `install-runtime` places stdlib + runtime crates + libmvl_runtime_llvm.so
+      # under ~/.local/share/mvl/ so `mvl test` can resolve them (matches the
+      # layout an end user gets from `make install`). Uses the debug artifacts
+      # already built by earlier steps — no release rebuild.
+      # LLC path is pinned to the Ubuntu apt-installed LLVM 22.
       - name: Test matrix (rust/rust + rust/llvm + mvl/llvm)
         if: needs.changes.outputs.rust == 'true'
         env:
           LLC: /usr/lib/llvm-22/bin/llc
         run: |
+          make install-runtime
           make test-rust-rust
           make test-rust-llvm
           make test-mvl-llvm
