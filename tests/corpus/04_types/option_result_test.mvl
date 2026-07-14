@@ -1,0 +1,112 @@
+// 04_types/option_result_test.mvl — Option and Result construction/handling.
+//
+// Option[T] and Result[T, E] are the two builtin failure-carrying types.
+// MVL has no null and no bare `unwrap()` — callers must destructure via
+// match (or `unwrap_or(default)`, or the `?` propagation operator on
+// Result-returning fns).
+
+fn parse_positive(s: String) -> Result[Int, String] {
+    if s == "0" {
+        Err("not positive")
+    } else if s == "1" {
+        Ok(1)
+    } else if s == "2" {
+        Ok(2)
+    } else {
+        Err("unknown")
+    }
+}
+
+fn double_parsed(s: String) -> Result[Int, String] {
+    let n: Int = parse_positive(s)?;
+    Ok(n * 2)
+}
+
+fn find(xs: List[Int], target: Int) -> Option[Int] {
+    let i: ref Int = 0;
+    let n: Int = xs.len();
+    while i < n {
+        match xs.get(i) {
+            Some(v) => {
+                if v == target {
+                    return Some(i);
+                }
+            },
+            None => {},
+        }
+        i = i + 1;
+    }
+    None
+}
+
+test fn option_some_match_extracts_value() -> Unit {
+    let x: Option[Int] = Some(42);
+    let v: Int = match x {
+        Some(n) => n,
+        None => 0,
+    };
+    assert_eq(v, 42);
+}
+
+test fn option_none_match_uses_default() -> Unit {
+    let x: Option[Int] = None;
+    let v: Int = match x {
+        Some(n) => n,
+        None => -1,
+    };
+    assert_eq(v, -1);
+}
+
+test fn result_ok_match_extracts() -> Unit {
+    let r: Result[Int, String] = Ok(7);
+    let v: Int = match r {
+        Ok(n) => n,
+        Err(_) => -1,
+    };
+    assert_eq(v, 7);
+}
+
+test fn result_err_match_default() -> Unit {
+    let r: Result[Int, String] = Err("bad");
+    let v: Int = match r {
+        Ok(n) => n,
+        Err(_) => -1,
+    };
+    assert_eq(v, -1);
+}
+
+test fn result_propagation_success() -> Unit {
+    let r: Result[Int, String] = double_parsed("1");
+    let v: Int = match r {
+        Ok(n) => n,
+        Err(_) => 0,
+    };
+    assert_eq(v, 2);
+}
+
+test fn result_propagation_short_circuits_on_err() -> Unit {
+    let r: Result[Int, String] = double_parsed("0");
+    let v: Int = match r {
+        Ok(n) => n,
+        Err(_) => -99,
+    };
+    assert_eq(v, -99);
+}
+
+test fn option_from_search_hit() -> Unit {
+    let xs: List[Int] = [10, 20, 30];
+    let idx: Int = match find(xs, 20) {
+        Some(i) => i,
+        None => -1,
+    };
+    assert_eq(idx, 1);
+}
+
+test fn option_from_search_miss() -> Unit {
+    let xs: List[Int] = [10, 20, 30];
+    let idx: Int = match find(xs, 99) {
+        Some(i) => i,
+        None => -1,
+    };
+    assert_eq(idx, -1);
+}
