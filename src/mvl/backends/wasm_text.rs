@@ -109,7 +109,7 @@ impl Backend for WasmTextCompiler {
 
 /// Map a MVL function to its WAT symbol / export name. Unit-returning `main`
 /// becomes `_start` (WASI command convention) when the WASI runtime is enabled.
-fn effective_name<'a>(f: &'a TirFn, needs_wasi: bool) -> (&'a str, &'a str) {
+fn effective_name(f: &TirFn, needs_wasi: bool) -> (&str, &str) {
     if needs_wasi && f.name == "main" && matches!(f.ret_ty, Ty::Unit) {
         ("_start", "_start")
     } else {
