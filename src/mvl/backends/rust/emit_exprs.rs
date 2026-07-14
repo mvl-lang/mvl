@@ -409,7 +409,19 @@ impl RustEmitter {
                 // Prefix operators bind tighter than any binary op, so
                 // Binary/If/Match sub-expressions need parens; leaf
                 // expressions don't (#1659).
+                //
+                // `-(-x)` must not collapse to `--x` — Rust's `double_negations`
+                // lint reads that as a decrement operator lookalike. Parenthesize
+                // when the operand is itself a unary op.
+                let needs_parens =
+                    matches!(op, UnaryOp::Neg) && matches!(inner.kind, TirExprKind::Unary { .. });
+                if needs_parens {
+                    self.push("(");
+                }
                 self.emit_operand_left(inner, Prec::Prefix);
+                if needs_parens {
+                    self.push(")");
+                }
             }
             TirExprKind::Binary { op, left, right } => {
                 // Mutation mode: inject env-var dispatch for behavioral operator alternatives.

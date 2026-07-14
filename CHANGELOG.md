@@ -2,6 +2,31 @@
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-07-14
+
+### Fixed — LLVM corpus hygiene (#1836)
+
+Four related fixes that surface real backend behavior. Without any one of them, corpus tests on the LLVM path were not actually verifying what they claimed to verify.
+
+- **Rust transpiler: `-(-x)` no longer collapses to `--x`.** MVL `-(-5)` was transpiling to Rust `--5`, tripping clippy's `double_negations` lint. Fix in `src/mvl/backends/rust/emit_exprs.rs` — when emitting `Unary::Neg` whose operand is also a `Unary`, wrap the operand in parens.
+
+- **LLVM: real `assert_eq` / `assert_ne`** (#1837). Both were declared as generic builtins in `std/core.mvl` with no body. Rust backend intercepts them as `assert_eq!` / `assert_ne!` macros. LLVM backend didn't — the monomorphized instances emitted `ret void`, making every `assert_eq` a silent no-op. Every corpus test using `assert_eq` "passed" on rust/llvm regardless of the actual comparison. Fix: intercept `"assert_eq"` and `"assert_ne"` in `emit_fn_call_tir`; emit real equality check + conditional `llvm.trap` (Int/Bool/enum via `icmp`, String via `_mvl_string_eq`, Float via `fcmp oeq`).
+
+- **LLVM: `match` on `Bool` scrutinee** (#1838). `collect_or_discriminants_tir` handled `Pattern::Literal(Integer)` but not `Pattern::Literal(Bool)`. Bool arms fell through to the wildcard branch, marking every arm as wildcard (last one won). The match unconditionally jumped to the last arm. Fix: extend the pattern match to handle `Literal(Bool(b))`, pushing `1`/`0` into `switch_arms`.
+
+- **LLVM: closures returned from a fn** (#1839). Env struct and closure struct were both `alloca` — returning a closure by value gave callers a pointer into the freed stack frame. Fix: heap-allocate both via `call ptr @_mvl_alloc(i64 SIZE)`. Env size via the `ptrtoint(gep null, 1)` sizeof-hack; closure struct is a fixed 16 bytes. Trade-off: unconditional heap alloc leaks over long runs. Escape analysis is a follow-up.
+
+### Changed
+
+- **`tools/mvlr` — per-test-fn reporting.** Synthesizes `eprintln("MVLR_MARK:<name>")` before each `test fn` call and parses those markers to attribute per-test-fn pass/fail. rust/llvm now reports **66 tests** (matches rust/rust) instead of the misleading "14 files". Also picks up `test partial fn` / `test total fn` modifiers.
+
+### Fixed — sweep of #1805 leftovers
+
+- `cargo fmt` (blocked CI)
+- `clippy::useless_conversion` — one `.into_iter()` on an owned `Vec`
+
+
+
 Compiler patch bump `1.0.0 → 1.0.1` and stdlib patch bump `1.0.0 → 1.0.1`,
 both driven by #1805.  The compiler bump covers the atom-normalization,
 struct-field, and MethodCall hypothesis-threading code paths; the stdlib

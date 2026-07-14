@@ -14,12 +14,12 @@
 //! | 4     | layer4  | Presburger / Cooper's QE      | ~5%       |
 //! | 5     | layer5  | Z3 SMT solver (feature = z3)  | ~remaining|
 
+pub(crate) mod atom_norm;
 pub mod layer1;
 pub mod layer2;
 pub mod layer3;
 pub mod layer4;
 pub mod layer5;
-pub(crate) mod atom_norm;
 pub(super) mod rewrite;
 
 use std::collections::HashMap;

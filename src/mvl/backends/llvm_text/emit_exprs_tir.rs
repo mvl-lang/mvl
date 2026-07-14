@@ -207,6 +207,8 @@ impl TextEmitter {
         // Builtins ported so far.
         match name {
             "assert" => return self.emit_assert_builtin_tir(args),
+            "assert_eq" => return self.emit_assert_eq_builtin_tir(args, false),
+            "assert_ne" => return self.emit_assert_eq_builtin_tir(args, true),
             "println" | "print" | "eprintln" => return self.emit_println_builtin_tir(name, args),
             "Ok" | "Err" => return self.emit_result_constructor_tir(name, args),
             "Some" => return self.emit_option_constructor_tir(args),
@@ -994,6 +996,13 @@ impl TextEmitter {
                 switch_arms.push((*n, arm_idx));
                 true
             }
+            // #1838: Bool literal patterns were dropping through to the
+            // `_ => false` catch-all, leaving switch_arms empty and the
+            // whole match falling through to the default (last arm).
+            Pattern::Literal(crate::mvl::ir::Literal::Bool(b), _) => {
+                switch_arms.push((if *b { 1 } else { 0 }, arm_idx));
+                true
+            }
             Pattern::Wildcard(_) | Pattern::Ident(_, _) => {
                 *wildcard_arm = Some(arm_idx);
                 true
@@ -1744,6 +1753,105 @@ impl TextEmitter {
         self.push_instr("call void @llvm.trap()");
         self.push_instr("unreachable");
         self.fn_ctx.terminated = true;
+        self.fn_ctx.fn_buf.push(format!("{ok_bb}:"));
+        self.fn_ctx.current_bb = ok_bb;
+        self.fn_ctx.terminated = false;
+        Ok(None)
+    }
+
+    /// #1837: `assert_eq[T](left, right)` / `assert_ne[T](left, right)`.
+    ///
+    /// The stdlib declares these as generic builtins with no body; without
+    /// backend interception, monomorphization emits an empty `ret void`,
+    /// making every `assert_eq` a silent no-op. Emit a real equality check
+    /// followed by conditional `llvm.trap`, mirroring `emit_assert_builtin_tir`.
+    ///
+    /// `negate = true` inverts the check for `assert_ne`.
+    fn emit_assert_eq_builtin_tir(
+        &mut self,
+        args: &[TirExpr],
+        negate: bool,
+    ) -> Result<Option<String>, String> {
+        if args.len() != 2 {
+            return Err(format!(
+                "assert_{}: expected 2 arguments, got {}",
+                if negate { "ne" } else { "eq" },
+                args.len()
+            ));
+        }
+        let left_ty_llvm = self.ty_to_llvm_ctx(&args[0].ty);
+        let left_val = match self.emit_expr_tir(&args[0])? {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+        let right_val = match self.emit_expr_tir(&args[1])? {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+
+        // Compare — Int/Bool/enum-disc via icmp; String via runtime helper.
+        // Any other aggregate type is unsupported (matches what the
+        // Rust backend covers in practice for corpus assertions).
+        let eq_reg = self.next_reg();
+        match left_ty_llvm.as_str() {
+            "i64" | "i32" | "i8" | "i1" => {
+                self.push_instr(&format!(
+                    "{eq_reg} = icmp eq {left_ty_llvm} {left_val}, {right_val}"
+                ));
+            }
+            "ptr" => {
+                // Strings and other ptr-carried values. Currently only String
+                // has a runtime equality helper; conservatively route all
+                // pointer types through it — the checker guarantees both
+                // sides have the same MVL type.
+                self.ensure_extern("declare i1 @_mvl_string_eq(ptr, ptr)");
+                self.push_instr(&format!(
+                    "{eq_reg} = call i1 @_mvl_string_eq(ptr {left_val}, ptr {right_val})"
+                ));
+            }
+            "double" => {
+                self.push_instr(&format!(
+                    "{eq_reg} = fcmp oeq double {left_val}, {right_val}"
+                ));
+            }
+            other => {
+                return Err(format!(
+                    "assert_{}: unsupported LLVM type `{other}` for compared values",
+                    if negate { "ne" } else { "eq" }
+                ));
+            }
+        }
+        self.fn_ctx.reg_types.insert(eq_reg.clone(), "i1".into());
+
+        // `assert_eq`: branch on `%eq`; `assert_ne`: branch on `not %eq`.
+        // Cheaper to swap ok/fail labels than to emit an extra xor.
+        let ok_bb = self.next_bb(if negate {
+            "assert_ne_ok"
+        } else {
+            "assert_eq_ok"
+        });
+        let fail_bb = self.next_bb(if negate {
+            "assert_ne_fail"
+        } else {
+            "assert_eq_fail"
+        });
+        let (true_label, false_label) = if negate {
+            (fail_bb.clone(), ok_bb.clone())
+        } else {
+            (ok_bb.clone(), fail_bb.clone())
+        };
+        self.push_instr(&format!(
+            "br i1 {eq_reg}, label %{true_label}, label %{false_label}"
+        ));
+
+        self.fn_ctx.fn_buf.push(format!("{fail_bb}:"));
+        self.fn_ctx.current_bb = fail_bb;
+        self.fn_ctx.terminated = false;
+        self.ensure_extern("declare void @llvm.trap()");
+        self.push_instr("call void @llvm.trap()");
+        self.push_instr("unreachable");
+        self.fn_ctx.terminated = true;
+
         self.fn_ctx.fn_buf.push(format!("{ok_bb}:"));
         self.fn_ctx.current_bb = ok_bb;
         self.fn_ctx.terminated = false;

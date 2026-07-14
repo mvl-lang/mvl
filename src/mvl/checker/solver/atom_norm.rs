@@ -100,18 +100,12 @@ impl AtomNormalizer {
             RefExpr::FieldAccess { span, .. } => {
                 let key = canon_refexpr(r);
                 let name = self.atom_for(key);
-                RefExpr::Ident {
-                    name,
-                    span: *span,
-                }
+                RefExpr::Ident { name, span: *span }
             }
             RefExpr::Len { ident, span } => {
                 let key = format!("{ident}.__len__");
                 let name = self.atom_for(key);
-                RefExpr::Ident {
-                    name,
-                    span: *span,
-                }
+                RefExpr::Ident { name, span: *span }
             }
             RefExpr::LogicOp {
                 op,
@@ -178,12 +172,7 @@ impl AtomNormalizer {
     ) -> HashMap<String, Option<RefExpr>> {
         let mut out: HashMap<String, Option<RefExpr>> = var_refs
             .iter()
-            .map(|(k, v)| {
-                (
-                    k.clone(),
-                    v.as_ref().map(|r| self.rewrite_refexpr(r)),
-                )
-            })
+            .map(|(k, v)| (k.clone(), v.as_ref().map(|r| self.rewrite_refexpr(r))))
             .collect();
 
         // Bridge: for each atom introduced during expr / pred rewriting,
@@ -228,19 +217,11 @@ fn canon_expr(e: &Expr) -> String {
             args,
             ..
         } => {
-            let args_s = args
-                .iter()
-                .map(canon_expr)
-                .collect::<Vec<_>>()
-                .join(",");
+            let args_s = args.iter().map(canon_expr).collect::<Vec<_>>().join(",");
             format!("{}.{method}({args_s})", canon_expr(receiver))
         }
         Expr::FnCall { name, args, .. } => {
-            let args_s = args
-                .iter()
-                .map(canon_expr)
-                .collect::<Vec<_>>()
-                .join(",");
+            let args_s = args.iter().map(canon_expr).collect::<Vec<_>>().join(",");
             format!("{name}({args_s})")
         }
         Expr::Unary { op, expr, .. } => format!("({op:?} {})", canon_expr(expr)),
@@ -281,25 +262,13 @@ fn canon_refexpr(r: &RefExpr) -> String {
         RefExpr::Len { ident, .. } => format!("{ident}.__len__"),
         RefExpr::ArithOp {
             op, left, right, ..
-        } => format!(
-            "({} {op:?} {})",
-            canon_refexpr(left),
-            canon_refexpr(right)
-        ),
+        } => format!("({} {op:?} {})", canon_refexpr(left), canon_refexpr(right)),
         RefExpr::Compare {
             op, left, right, ..
-        } => format!(
-            "({} {op:?} {})",
-            canon_refexpr(left),
-            canon_refexpr(right)
-        ),
+        } => format!("({} {op:?} {})", canon_refexpr(left), canon_refexpr(right)),
         RefExpr::LogicOp {
             op, left, right, ..
-        } => format!(
-            "({} {op:?} {})",
-            canon_refexpr(left),
-            canon_refexpr(right)
-        ),
+        } => format!("({} {op:?} {})", canon_refexpr(left), canon_refexpr(right)),
         RefExpr::Not { inner, .. } => format!("(! {})", canon_refexpr(inner)),
         RefExpr::Grouped { inner, .. } => canon_refexpr(inner),
         RefExpr::Old { inner, .. } => format!("old({})", canon_refexpr(inner)),
@@ -445,7 +414,10 @@ mod tests {
                 field: "height".to_string(),
                 span: s(),
             }),
-            right: Box::new(RefExpr::Integer { value: 10, span: s() }),
+            right: Box::new(RefExpr::Integer {
+                value: 10,
+                span: s(),
+            }),
             span: s(),
         };
         let out = norm.rewrite_refexpr(&r);

@@ -342,7 +342,7 @@ fn collect_block_paths(
                     // effectively the return.  Emit one path per init path.
                     for ip in init_paths {
                         let mut merged = prefix.clone();
-                        merged.extend(ip.conditions.into_iter());
+                        merged.extend(ip.conditions);
                         paths.push(ExecutionPath {
                             conditions: merged,
                             return_expr: ip.return_expr,
@@ -353,7 +353,7 @@ fn collect_block_paths(
 
                 for ip in init_paths {
                     let mut branch_prefix = prefix.clone();
-                    branch_prefix.extend(ip.conditions.into_iter());
+                    branch_prefix.extend(ip.conditions);
                     let mut bindings: HashMap<&str, &Expr> = HashMap::new();
                     bindings.insert(name.as_str(), &ip.return_expr);
 
@@ -426,7 +426,11 @@ pub(crate) fn substitute_stmt(stmt: &Stmt, bindings: &HashMap<&str, &Expr>) -> S
 
 fn substitute_block(block: &Block, bindings: &HashMap<&str, &Expr>) -> Block {
     Block {
-        stmts: block.stmts.iter().map(|s| substitute_stmt(s, bindings)).collect(),
+        stmts: block
+            .stmts
+            .iter()
+            .map(|s| substitute_stmt(s, bindings))
+            .collect(),
         span: block.span,
     }
 }
@@ -603,7 +607,11 @@ pub(crate) fn substitute_expr(expr: &Expr, bindings: &HashMap<&str, &Expr>) -> E
         // FieldAccess: substitute inside the base expression (#1805 let-unfold).
         // Enables `Game { right_score: new_score, .. }.right_score` after a let
         // rewrite to normalize through the field projection.
-        Expr::FieldAccess { expr: inner, field, span } => Expr::FieldAccess {
+        Expr::FieldAccess {
+            expr: inner,
+            field,
+            span,
+        } => Expr::FieldAccess {
             expr: Box::new(substitute_expr(inner, bindings)),
             field: field.clone(),
             span: *span,
