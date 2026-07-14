@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-07-14
+
+### Added
+
+- **`tests/corpus/06_effects/`** — 12 executable tests covering MVL's effect system: pure baseline (`pure_test.mvl` — 3), single-effect `Console` (`console_test.mvl` — 3), multi-effect + subsumption (`composite_test.mvl` — 3), user-declared effects and composite subsumption (`user_defined_test.mvl` — 3). Both backends green. Corpus total now **124 tests across 7 categories**.
+
+### Notes on scope
+
+Effect testing at runtime is limited by design — effect enforcement is a compile-time property. These tests confirm effectful fns *execute* to completion and return correct values on both backends. Negative tests (attempt to call `! Console` from pure code and expect a compile-time reject) belong in a separate lint/type-check category later.
+
+Reserved-word gotchas discovered: `label` (IFC labels) and `tag` (enum discriminants) are both reserved identifiers.
+
 ## [1.3.0] - 2026-07-14
 
 ### Added
