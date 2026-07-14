@@ -9,10 +9,8 @@
 // The runtime value passes through unchanged — the labels are compile-time
 // only. Tests verify value equality across taint/trust round-trips.
 //
-// #1847: `let t: Tainted[T] = wrap(...); let s = use_it(t)` double-drops the
-// underlying string on LLVM. Tests below use inline composition to sidestep
-// the bug (patterns that work today; the ergonomic version will re-enable
-// once #1847 is fixed).
+// #1847 (fixed): `let t: Tainted[T] = wrap(...); let s = use_it(t)` used to
+// double-drop on LLVM. The `tainted_via_let_binding` test locks in the fix.
 
 fn wrap_input(raw: String) -> Tainted[String] {
     relabel taint(raw, "TAINTED-INPUT-001")
@@ -45,4 +43,15 @@ test fn tainted_stable_across_two_call_sites() -> Unit {
     let a: String = validate_and_use(wrap_input("stable"));
     let b: String = validate_and_use(wrap_input("stable"));
     assert_eq(a, b);
+}
+
+// Regression test for #1847 (LLVM double-drop through let-binding).
+// Before the fix, `let t = wrap(...); let s = use_it(t)` segfaulted in
+// `_mvl_string_drop` because the caller's scope-exit dropped `t` after
+// the callee had already dropped its argument. Fixed by removing moved
+// args from `heap_locals` at the call site.
+test fn tainted_via_let_binding_regression_1847() -> Unit {
+    let t: Tainted[String] = wrap_input("via-let");
+    let s: String = validate_and_use(t);
+    assert_eq(s, "via-let");
 }
