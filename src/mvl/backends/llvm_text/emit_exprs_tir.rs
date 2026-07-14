@@ -439,9 +439,7 @@ impl TextEmitter {
                     if self.module.fn_ret_types.contains_key(fn_name)
                         && !self.mono.tir_generic_fns.contains_key(fn_name)
                     {
-                        if let Some(closure_ptr) =
-                            self.make_named_fn_closure_hof(fn_name, &[])?
-                        {
+                        if let Some(closure_ptr) = self.make_named_fn_closure_hof(fn_name, &[])? {
                             arg_vals.push(("ptr".into(), closure_ptr));
                             continue;
                         }
