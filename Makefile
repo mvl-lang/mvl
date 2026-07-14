@@ -453,29 +453,18 @@ test-mvl-wasm: build ## mvl/wasm — MVL self-hosted → WAT (stub, tracked in #
 	@printf "  \033[33m~  SKIP: test-mvl-wasm not yet wired\033[0m\n"
 	@echo "    Blocker: self-hosted compiler doesn't have a WASM backend yet. See #1828."
 
-# WASM cases the backend actually handles. Deliberately narrow (#1571 is a
-# spike): the emitter today supports only what these two files exercise —
-# Int arithmetic, direct calls, string literals, Int.to_string(), println.
-# Adding a new case here requires the emitter to actually handle it end-to-end
-# through wasmtime — no "check-only" entries.
-WASM_CASES := \
-	tests/spikes/006-wasm-backend/add.mvl \
-	tests/spikes/006-wasm-backend/hello.mvl
-
 test-runtime-rust: ## Unit-test runtime/rust/ crate natively (peer of test-runtime-wasm)
 	cargo test -p mvl_runtime_rust
 
 test-runtime-llvm: ## Unit-test runtime/llvm/ crate natively (peer of test-runtime-wasm)
 	cargo test -p mvl_runtime_llvm
 
-test-rust-wasm: build ## rust/wasm — WASM backend against curated case list (mvl → wat → wasmtime, spike-scope)
+test-rust-wasm: build ## rust/wasm — new corpus through the WAT emitter (via mvlr, see #1818)
 	@command -v wasm-tools > /dev/null 2>&1 || { \
 	  printf "  \033[31m✗  wasm-tools not installed — 'cargo install wasm-tools'\033[0m\n"; exit 1; }
 	@command -v wasmtime > /dev/null 2>&1 || { \
 	  printf "  \033[31m✗  wasmtime not installed — see https://wasmtime.dev/\033[0m\n"; exit 1; }
-	@echo "WASM cases: $(words $(WASM_CASES)) files"
-	@for f in $(WASM_CASES); do echo "  - $$f"; done
-	@$(MAKE) --no-print-directory -C tests/spikes/006-wasm-backend test
+	$(MVLR) --mvl=$(MVL) --compiler=rust --backend=wasm tests/corpus/
 
 test-examples: build ## Run `make test` for every example subdirectory
 	@examples/test-all.sh
