@@ -2,7 +2,7 @@
 .ONESHELL:
 SHELL := /bin/bash
 
-.PHONY: help version build test test-full test-unit test-rust-integration test-requirements test-error-messages test-fmt-roundtrip test-corpus-old test-corpus-warnings-old test-checker-parity test-checker-parity-update test-solver test-stdlib check-compiler assure-compiler test-mvl test-bootstrap-e2e test-bdd test-backend-rust-old test-backend-llvm-old test-backend-wasm test-cross-backend test-grammar-coverage test-examples test-examples-rust test-examples-llvm coverage validate-keywords lint mvl-lint format format-check format-mvl format-mvl-check assurance assurance-gate audit-backend-ast check-adr docs docs-serve install setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
+.PHONY: help version build test test-full test-unit test-rust-integration test-requirements test-error-messages test-fmt-roundtrip test-corpus-old test-corpus-warnings-old test-rust-rust test-checker-parity test-checker-parity-update test-solver test-stdlib check-compiler assure-compiler test-mvl test-bootstrap-e2e test-bdd test-backend-rust-old test-backend-llvm-old test-backend-wasm test-cross-backend test-grammar-coverage test-examples test-examples-rust test-examples-llvm coverage validate-keywords lint mvl-lint format format-check format-mvl format-mvl-check assurance assurance-gate audit-backend-ast check-adr docs docs-serve install setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
 
 .DEFAULT_GOAL := help
 
@@ -389,6 +389,17 @@ test-backend-llvm-old: build ## Run LLVM backend tests across legacy corpus + st
 test-cross-backend: build ## Run Rust integration tests for backend parity (transpiler vs LLVM)
 	@echo "Running cross-backend tests (transpiler vs LLVM parity)..."
 	cargo test --test cross_backend
+
+# ── New corpus matrix (#1823 phase 2) ────────────────────────────────────────
+# Files are *_test.mvl with `test fn` blocks; a passing return = pass, a
+# panic (from assert/assert_eq/assert_ne) = fail. No --expect strings.
+# `mvl test <dir>` bundles every _test.mvl file into ONE cargo test crate:
+# one transpile pass, one cargo build, one cargo test — same shape as
+# test-stdlib. Same corpus runs through every backend; rust/rust below is
+# the reference. Phase 2 will add test-rust-llvm and test-mvl-llvm.
+
+test-rust-rust: build ## Run new tests/corpus/ through rust/rust backend (#1823 phase 2)
+	$(MVL) test tests/corpus/
 
 # WASM cases the backend actually handles. Deliberately narrow (#1571 is a
 # spike): the emitter today supports only what these two files exercise —

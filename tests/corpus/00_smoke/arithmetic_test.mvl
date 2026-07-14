@@ -1,0 +1,23 @@
+// 00_smoke/arithmetic_test.mvl — Int arithmetic and assert_eq.
+//
+// Verifies +, -, *, /, % on Int and that assert_eq compares Ints correctly.
+
+test fn arithmetic_smoke_int_add() -> Unit {
+    assert_eq(1 + 2, 3);
+}
+
+test fn arithmetic_smoke_int_sub() -> Unit {
+    assert_eq(10 - 3, 7);
+}
+
+test fn arithmetic_smoke_int_mul() -> Unit {
+    assert_eq(4 * 5, 20);
+}
+
+test fn arithmetic_smoke_int_div() -> Unit {
+    assert_eq(20 / 4, 5);
+}
+
+test fn arithmetic_smoke_int_rem() -> Unit {
+    assert_eq(17 % 5, 2);
+}

@@ -1,0 +1,9 @@
+// 00_smoke/hello_test.mvl — println tracer bullet.
+//
+// The test fn runs to completion iff the backend can lower println end-to-end
+// (transpile → build → link → invoke the runtime println). No assertion needed:
+// a panic or a non-terminating call fails the test; clean return passes.
+
+test fn hello_smoke_println_returns() -> Unit ! Console {
+    println("hello, mvl");
+}
