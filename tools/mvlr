@@ -103,6 +103,15 @@ elif [ -z "${MVL:-}" ]; then
         exit 1
     fi
 fi
+
+# When --mvl is given explicitly, the caller wants THIS binary run — not a
+# re-exec to whatever toolchain the project's mvl.toml pins. Set
+# MVL_NO_REEXEC=1 so `mvl` skips the version resolution chain. Prevents the
+# "I fixed the emitter but tests still fail because the installed toolchain
+# is stale" trap.
+if [ -n "$MVL_OVERRIDE" ]; then
+    export MVL_NO_REEXEC=1
+fi
 # Resolve `llc` (only needed by mvl/llvm). Precedence:
 #   1. --llc=<path>       (explicit flag)
 #   2. $LLC env var       (CI/user override)

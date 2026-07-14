@@ -36,7 +36,15 @@ fn main() {
             | "doctor"
     );
 
-    if !is_toolchain_meta {
+    // MVL_NO_REEXEC=1 pins execution to the current binary regardless of any
+    // project-level `requires-mvl`. Useful in test loops that want to exercise
+    // a freshly-built compiler without a `make install` between iterations
+    // (e.g. `make test-rust-llvm` after a code change on the emitter).
+    let no_reexec = std::env::var("MVL_NO_REEXEC")
+        .map(|v| !v.is_empty() && v != "0")
+        .unwrap_or(false);
+
+    if !is_toolchain_meta && !no_reexec {
         if let Some(target_version) = toolchain::resolve::resolve_version(
             &args[0],
             &std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
