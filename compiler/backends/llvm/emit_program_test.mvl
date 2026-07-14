@@ -76,12 +76,14 @@ test fn empty_fn_list_has_empty_registry() -> Unit {
 // ── emit_program: module preamble ────────────────────────────────────────────
 
 test fn emit_program_carries_module_header() -> Unit {
-    // Every emitted module carries the ModuleID / triple preamble + printf.
+    // Every emitted module carries the ModuleID + PIC/PIE flags + printf.
+    // Target triple is omitted so llc uses the host default.
     let ir: String = emit_program(tir(
         "{\"name\":\"m\",\"types\":[],\"fns\":[]}"
     ));
     assert_eq(contains(ir, "ModuleID = 'm'"),          true);
-    assert_eq(contains(ir, "target triple ="),         true);
+    assert_eq(contains(ir, "\"PIC Level\""),           true);
+    assert_eq(contains(ir, "\"PIE Level\""),           true);
     assert_eq(contains(ir, "declare i32 @printf"),     true);
     // fmt_int + fmt_str globals present regardless of program content —
     // needed by println builtin.

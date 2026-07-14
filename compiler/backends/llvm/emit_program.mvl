@@ -73,7 +73,6 @@ use backends.llvm.emit_helpers::jarr;
 use backends.llvm.emit_helpers::jget;
 use backends.llvm.emit_helpers::jtag;
 use backends.llvm.emit_helpers::escape_llvm_string;
-use backends.llvm.emit_helpers::default_target_triple;
 use backends.llvm.emit_helpers::lbrace;
 use backends.llvm.emit_helpers::rbrace;
 use backends.llvm.emit_types::build_enum_registry;
@@ -327,10 +326,12 @@ partial fn collect_strings_in_expr(expr: Value) -> List[String] {
 pub partial fn emit_program(tir: Value) -> String {
     let name_raw: String = jstr(tir, "name");
     let module_name: String = if name_raw == "" { "mvl_module" } else { name_raw };
-    let triple: String = default_target_triple();
+    // Omit `target triple` so llc falls back to the host default (portable
+    // across macOS/Linux). PIC/PIE module flags tell llc to emit position-
+    // independent code, matching `-fPIE` — required by modern Linux linkers.
     let header: String = format(
-        "; ModuleID = '{}'\nsource_filename = \"{}\"\ntarget triple = \"{}\"\n",
-        [module_name, module_name, triple]
+        "; ModuleID = '{}'\nsource_filename = \"{}\"\n!llvm.module.flags = !{}!100, !101{}\n!100 = !{}i32 7, !\"PIC Level\", i32 2{}\n!101 = !{}i32 7, !\"PIE Level\", i32 2{}\n",
+        [module_name, module_name, lbrace(), rbrace(), lbrace(), rbrace(), lbrace(), rbrace()]
     );
     let printf_fmt_int: String = "\n@.fmt_int = private unnamed_addr constant [5 x i8] c\"%ld\\0A\\00\"\n";
     let printf_fmt_str: String = "@.fmt_str = private unnamed_addr constant [4 x i8] c\"%s\\0A\\00\"\n";

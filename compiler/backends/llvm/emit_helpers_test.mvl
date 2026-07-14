@@ -18,7 +18,6 @@
 use std.collections.{Map}
 use std.json.{decode, Value}
 use backends.llvm.emit_helpers::jstr;
-use backends.llvm.emit_helpers::default_target_triple;
 use backends.llvm.emit_helpers::enum_name_of_variant;
 use backends.llvm.emit_helpers::escape_llvm_string;
 use backends.llvm.emit_helpers::extract_else_block;
@@ -200,12 +199,6 @@ test fn escape_llvm_string_mixed_escapes() -> Unit {
         escape_llvm_string("\"\\\n\t\rok"),
         "\\22\\5C\\0A\\09\\0Dok"
     )
-}
-
-// ── default_target_triple ───────────────────────────────────────────────────
-
-test fn default_target_triple_is_arm64_darwin() -> Unit {
-    assert_eq(default_target_triple(), "arm64-apple-darwin")
 }
 
 // ── enum_name_of_variant ────────────────────────────────────────────────────
