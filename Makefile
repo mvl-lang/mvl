@@ -427,13 +427,13 @@ test-cross-backend: build ## Run Rust integration tests for backend parity (tran
 #   rust/rust-tokio  — Rust compiler → Rust with tokio runtime       (stub, actors only)
 
 test-rust-rust: build ## rust/rust — new corpus through Rust transpiler (batched, via mvlr)
-	$(MVLR) --compiler=rust --backend=rust tests/corpus/
+	$(MVLR) --mvl=$(MVL) --compiler=rust --backend=rust tests/corpus/
 
 test-rust-llvm: build ## rust/llvm — new corpus through LLVM text emitter (via mvlr, see #1828)
-	$(MVLR) --compiler=rust --backend=llvm tests/corpus/
+	$(MVLR) --mvl=$(MVL) --compiler=rust --backend=llvm tests/corpus/
 
 test-mvl-llvm: build ## mvl/llvm — MVL self-hosted → LLVM (tracer bullet, via mvlr, broader corpus in #1828)
-	$(MVLR) --compiler=mvl --backend=llvm examples/programs/hello_world.mvl
+	$(MVLR) --mvl=$(MVL) --compiler=mvl --backend=llvm examples/programs/hello_world.mvl
 
 test-rust-tokio: build ## rust/rust-tokio — actor subset only (stub, tracked in #1828)
 	@printf "  \033[33m~  SKIP: test-rust-tokio not yet wired\033[0m\n"

@@ -22,6 +22,7 @@ set -euo pipefail
 COMPILER=rust
 BACKEND=rust
 QUIET=0
+MVL_OVERRIDE=""
 POSITIONAL=()
 
 usage() {
@@ -32,6 +33,7 @@ Options:
   --compiler=<rust|mvl>       which compiler to drive         (default: rust)
   --backend=<rust|llvm|wasm|rust-tokio>
                               which backend to lower through  (default: rust)
+  --mvl=<path>                pin the mvl binary (overrides PATH + fallback)
   -q, --quiet                 suppress per-file output
   -h, --help                  show this help
 
@@ -59,6 +61,7 @@ for arg in "$@"; do
     case "$arg" in
         --compiler=*) COMPILER="${arg#*=}" ;;
         --backend=*)  BACKEND="${arg#*=}" ;;
+        --mvl=*)      MVL_OVERRIDE="${arg#*=}" ;;
         -q|--quiet)   QUIET=1 ;;
         -h|--help)    usage; exit 0 ;;
         --*)          echo "mvlr: unknown option: $arg" >&2; usage; exit 2 ;;
@@ -73,11 +76,27 @@ if [ "${#POSITIONAL[@]}" -eq 0 ]; then
 fi
 
 INPUT="${POSITIONAL[0]}"
-MVL="${MVL:-./target/debug/mvl}"
+# Resolve `mvl` binary with this precedence:
+#   1. --mvl=<path>      (explicit flag, used by the Makefile for dev builds)
+#   2. $MVL env var      (explicit override)
+#   3. mvl on PATH       (installed release build)
+#   4. ./target/debug/mvl (fresh checkout without install)
+if [ -n "$MVL_OVERRIDE" ]; then
+    MVL="$MVL_OVERRIDE"
+elif [ -z "${MVL:-}" ]; then
+    if command -v mvl >/dev/null 2>&1; then
+        MVL=$(command -v mvl)
+    elif [ -x ./target/debug/mvl ]; then
+        MVL=./target/debug/mvl
+    else
+        echo "mvlr: mvl binary not found — install with \`make install\` or build with \`make build\`" >&2
+        exit 1
+    fi
+fi
 LLC="${LLC:-/opt/homebrew/opt/llvm/bin/llc}"
 
 if [ ! -x "$MVL" ]; then
-    echo "mvlr: mvl binary not found at $MVL — run \`make build\`" >&2
+    echo "mvlr: mvl binary not executable at $MVL" >&2
     exit 1
 fi
 
