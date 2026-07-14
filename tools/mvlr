@@ -16,6 +16,12 @@
 #                              `test fn` natively (#1828)
 #
 # Both should be removed once their tickets close.
+#
+# Removed (#1830 — 2026-07-14):
+#   * Target-triple sed — emitter no longer emits a hardcoded triple;
+#                          llc falls back to host default.
+#   * `-relocation-model=pic` — emitter now sets PIC/PIE module flags,
+#                                 llc picks PIC automatically.
 
 set -euo pipefail
 
@@ -203,15 +209,9 @@ run_mvl_llvm_file() {
         cat "$tmp/emit.err" >&2
         return 1
     fi
-    # The self-hosted emitter hardcodes `target triple = arm64-apple-darwin`.
-    # On Linux CI that produces an object file the native linker can't use.
-    # Drop the triple so llc falls back to its default (host) triple.
-    sed -i.bak '/^target triple = /d' "$tmp/out.ll" && rm -f "$tmp/out.ll.bak"
-    # -relocation-model=pic: modern Linux distros default to PIE binaries,
-    # which need position-independent relocations in .o files. Harmless on
-    # macOS. Skipping this yields "R_X86_64_32 … cannot be used when making
-    # a PIE object" from the GNU linker.
-    if ! "$llc" -relocation-model=pic -filetype=obj "$tmp/out.ll" -o "$tmp/out.o" 2>"$tmp/llc.err"; then
+    # Emitter now omits `target triple` (llc uses host default) and sets
+    # PIC/PIE module flags (llc picks PIC automatically). See #1830.
+    if ! "$llc" -filetype=obj "$tmp/out.ll" -o "$tmp/out.o" 2>"$tmp/llc.err"; then
         echo "mvlr: llc failed" >&2
         cat "$tmp/llc.err" >&2
         head -3 "$tmp/out.ll" >&2
