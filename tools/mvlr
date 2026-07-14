@@ -23,6 +23,7 @@ COMPILER=rust
 BACKEND=rust
 QUIET=0
 MVL_OVERRIDE=""
+LLC_OVERRIDE=""
 POSITIONAL=()
 
 usage() {
@@ -34,6 +35,7 @@ Options:
   --backend=<rust|llvm|wasm|rust-tokio>
                               which backend to lower through  (default: rust)
   --mvl=<path>                pin the mvl binary (overrides PATH + fallback)
+  --llc=<path>                pin llc (mvl/llvm only; overrides $LLC + PATH)
   -q, --quiet                 suppress per-file output
   -h, --help                  show this help
 
@@ -62,6 +64,7 @@ for arg in "$@"; do
         --compiler=*) COMPILER="${arg#*=}" ;;
         --backend=*)  BACKEND="${arg#*=}" ;;
         --mvl=*)      MVL_OVERRIDE="${arg#*=}" ;;
+        --llc=*)      LLC_OVERRIDE="${arg#*=}" ;;
         -q|--quiet)   QUIET=1 ;;
         -h|--help)    usage; exit 0 ;;
         --*)          echo "mvlr: unknown option: $arg" >&2; usage; exit 2 ;;
@@ -93,7 +96,32 @@ elif [ -z "${MVL:-}" ]; then
         exit 1
     fi
 fi
-LLC="${LLC:-/opt/homebrew/opt/llvm/bin/llc}"
+# Resolve `llc` (only needed by mvl/llvm). Precedence:
+#   1. --llc=<path>       (explicit flag)
+#   2. $LLC env var       (CI/user override)
+#   3. `llc` on PATH      (Linux with LLVM installed system-wide)
+#   4. Platform defaults  (Homebrew on macOS, apt LLVM on Ubuntu)
+resolve_llc() {
+    if [ -n "$LLC_OVERRIDE" ]; then
+        echo "$LLC_OVERRIDE"; return
+    fi
+    if [ -n "${LLC:-}" ]; then
+        echo "$LLC"; return
+    fi
+    if command -v llc >/dev/null 2>&1; then
+        command -v llc; return
+    fi
+    for cand in \
+        /opt/homebrew/opt/llvm/bin/llc \
+        /usr/local/opt/llvm/bin/llc \
+        /usr/lib/llvm-22/bin/llc \
+        /usr/lib/llvm-21/bin/llc \
+        /usr/lib/llvm-20/bin/llc \
+        /usr/bin/llc-22 /usr/bin/llc-21 /usr/bin/llc-20; do
+        [ -x "$cand" ] && { echo "$cand"; return; }
+    done
+    echo ""  # not found — caller reports
+}
 
 if [ ! -x "$MVL" ]; then
     echo "mvlr: mvl binary not executable at $MVL" >&2
@@ -150,7 +178,12 @@ run_rust_llvm_file() {
 }
 
 run_mvl_llvm_file() {
-    local src="$1" tmp
+    local src="$1" tmp llc
+    llc=$(resolve_llc)
+    if [ -z "$llc" ]; then
+        echo "mvlr: llc not found (set --llc=<path> or LLC env, or install LLVM)" >&2
+        return 1
+    fi
     tmp=$(mktemp -d)
     # shellcheck disable=SC2064
     trap "rm -rf '$tmp'" RETURN
@@ -160,7 +193,7 @@ run_mvl_llvm_file() {
         | "$MVL" run compiler/backends/llvm/emitter.mvl 2>/dev/null \
         | grep -v '^STDOUT ' \
         | tail -n +3 > "$tmp/out.ll"
-    "$LLC" -filetype=obj "$tmp/out.ll" -o "$tmp/out.o"
+    "$llc" -filetype=obj "$tmp/out.ll" -o "$tmp/out.o"
     cc -o "$tmp/out" "$tmp/out.o" -lc 2>/dev/null
     "$tmp/out"
 }

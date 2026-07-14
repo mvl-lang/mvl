@@ -221,6 +221,18 @@ jobs:
         if: needs.changes.outputs.rust == 'true' && github.event_name == 'push'
         run: cargo test --test compile_and_run --test cross_backend --test stdlib
 
+      # New corpus matrix (#1823 phase 2) — three active anchors via tools/mvlr.
+      # LLC path is Ubuntu-specific; mvlr auto-detects it but pinning here
+      # avoids surprises if LLVM install layout changes.
+      - name: Test matrix (rust/rust + rust/llvm + mvl/llvm)
+        if: needs.changes.outputs.rust == 'true'
+        env:
+          LLC: /usr/lib/llvm-22/bin/llc
+        run: |
+          make test-rust-rust
+          make test-rust-llvm
+          make test-mvl-llvm
+
       # Regression net for emitter-emission bugs like #1671.  Every corpus
       # file that builds successfully must produce warning-free Rust.
       # Files with pre-existing legitimate warnings (e.g. linter negative
