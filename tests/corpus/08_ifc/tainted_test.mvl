@@ -1,0 +1,48 @@
+// 08_ifc/tainted_test.mvl — untrusted-input labels (Tainted[T]).
+//
+// `Tainted[T]` marks a value as untrusted (external input, network, user).
+// Once wrapped, it cannot flow into APIs expecting a plain `T` — the checker
+// forces an explicit `relabel trust(x, "TAG")` unwrap that threads through
+// the audit trail so security review can see where trust boundaries live.
+//
+// Construction is via `relabel taint(value, "TAG")` (at the ingress boundary).
+// The runtime value passes through unchanged — the labels are compile-time
+// only. Tests verify value equality across taint/trust round-trips.
+//
+// #1847: `let t: Tainted[T] = wrap(...); let s = use_it(t)` double-drops the
+// underlying string on LLVM. Tests below use inline composition to sidestep
+// the bug (patterns that work today; the ergonomic version will re-enable
+// once #1847 is fixed).
+
+fn wrap_input(raw: String) -> Tainted[String] {
+    relabel taint(raw, "TAINTED-INPUT-001")
+}
+
+fn validate_and_use(input: Tainted[String]) -> String {
+    relabel trust(input, "VALIDATED-USE-001")
+}
+
+fn tainted_length(input: Tainted[String]) -> Int {
+    (relabel trust(input, "LENGTH-USE-001")).len()
+}
+
+test fn tainted_wrap_and_unwrap_preserves_value() -> Unit {
+    assert_eq(validate_and_use(wrap_input("hello")), "hello");
+}
+
+test fn tainted_round_trip_from_literal_source() -> Unit {
+    assert_eq(
+        validate_and_use(relabel taint("world", "LITERAL-TAINT-001")),
+        "world",
+    );
+}
+
+test fn tainted_length_after_trust() -> Unit {
+    assert_eq(tainted_length(relabel taint("abcde", "LEN-TAINT-001")), 5);
+}
+
+test fn tainted_stable_across_two_call_sites() -> Unit {
+    let a: String = validate_and_use(wrap_input("stable"));
+    let b: String = validate_and_use(wrap_input("stable"));
+    assert_eq(a, b);
+}

@@ -1,0 +1,60 @@
+// 08_ifc/audit_relabel_test.mvl — `audit`-flagged relabel transitions.
+//
+// A relabel with a trailing `audit` marker logs the transition through the
+// runtime audit sink (JSONL to `MVL_AUDIT_SINK` when set). The runtime value
+// still passes through unchanged — `audit` is orthogonal to the value flow.
+// These tests verify that the audit form produces the same result as the
+// silent form and doesn't change return values.
+
+fn trust_silent(input: Tainted[String]) -> String {
+    relabel trust(input, "SILENT-TRUST-001")
+}
+
+fn trust_audited(input: Tainted[String]) -> String {
+    relabel trust(input, "AUDIT-TRUST-001") audit
+}
+
+fn classify_silent(s: String) -> Secret[String] {
+    relabel classify(s, "SILENT-CLASSIFY-001")
+}
+
+fn classify_audited(s: String) -> Secret[String] {
+    relabel classify(s, "AUDIT-CLASSIFY-001") audit
+}
+
+fn release_silent(s: Secret[String]) -> String {
+    relabel release(s, "SILENT-RELEASE-001")
+}
+
+fn release_audited(s: Secret[String]) -> String {
+    relabel release(s, "AUDIT-RELEASE-001") audit
+}
+
+test fn audit_trust_returns_same_value_as_silent() -> Unit {
+    let a: String = trust_silent(relabel taint("hello", "SILENT-IN"));
+    let b: String = trust_audited(relabel taint("hello", "AUDIT-IN"));
+    assert_eq(a, "hello");
+    assert_eq(b, "hello");
+    assert_eq(a, b);
+}
+
+test fn audit_classify_release_round_trip() -> Unit {
+    // classify (audit) → release (audit) preserves the value.
+    let out: String = release_audited(classify_audited("payload"));
+    assert_eq(out, "payload");
+}
+
+test fn audit_and_silent_forms_interop() -> Unit {
+    // classify silent, release audited → still round-trips.
+    assert_eq(release_audited(classify_silent("mix-1")), "mix-1");
+    // classify audited, release silent → still round-trips.
+    assert_eq(release_silent(classify_audited("mix-2")), "mix-2");
+}
+
+test fn audit_transitions_are_deterministic() -> Unit {
+    // Running the same audit transition twice yields the same value each time.
+    let a1: String = trust_audited(relabel taint("stable", "AUDIT-STABLE-1"));
+    let a2: String = trust_audited(relabel taint("stable", "AUDIT-STABLE-2"));
+    assert_eq(a1, a2);
+    assert_eq(a1, "stable");
+}
