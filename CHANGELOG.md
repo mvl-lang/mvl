@@ -2,43 +2,41 @@
 
 ## [Unreleased]
 
-## [1.5.0] - 2026-07-14
-
-### Added
-
-- **`tests/corpus/07_ownership/`** — 17 executable tests covering MVL's ownership discipline: `ref` mutable bindings (`ref_test.mvl` — 5), value semantics on struct assignment (`value_test.mvl` — 4), explicit ownership transfer via `consume(x)` (`consume_test.mvl` — 4), and lambdas capturing by value (`lambda_capture_test.mvl` — 4). Both backends green. Corpus total now **138 tests across 8 categories**.
-
-### Known limitations
-
-- **#1845** — Set literal `{1, 2, 2, 3}` on the LLVM backend doesn't dedupe on construction, and subsequent `.insert()` / `.contains()` on a literal-constructed Set are no-ops (underlying storage isn't a real hash-set). Three tests in `05_collections/set_test.mvl` are gated behind `TODO(#1845)` markers pending the fix. `set_contains_hit`, `set_contains_miss`, and `set_literal_and_len` still pass because they use unique-value literals and don't mutate.
-
-- **Style — `type Pair` in user code** collides with `std::lists::Pair[A, B]` on the LLVM emitter, producing a double `%Pair = type ...` in IR. Corpus uses `IntPair` to avoid the collision.
-
-- **Style — consume-of-String-field** patterns (`fn describe(r) { r.name }` where `r.name: String`) trip the Rust transpiler with "cannot move out of `r`". Corpus uses Int fields in `consume_test.mvl` meanwhile.
-
-## [1.4.0] - 2026-07-14
-
-### Added
-
-- **`tests/corpus/06_effects/`** — 12 executable tests covering MVL's effect system: pure baseline (`pure_test.mvl` — 3), single-effect `Console` (`console_test.mvl` — 3), multi-effect + subsumption (`composite_test.mvl` — 3), user-declared effects and composite subsumption (`user_defined_test.mvl` — 3). Both backends green. Corpus total now **124 tests across 7 categories**.
-
-### Notes on scope
-
-Effect testing at runtime is limited by design — effect enforcement is a compile-time property. These tests confirm effectful fns *execute* to completion and return correct values on both backends. Negative tests (attempt to call `! Console` from pure code and expect a compile-time reject) belong in a separate lint/type-check category later.
-
-Reserved-word gotchas discovered: `label` (IFC labels) and `tag` (enum discriminants) are both reserved identifiers.
+- **`tests/corpus/08_ifc/`** — 12 executable tests covering `Tainted[T]`, `Secret[T]`, and the `audit`-flagged variant of each relabel transition. Merged as chore/ — no version bump. See #1847 (double-drop on relabel + let-binding — inline composition used throughout as a workaround).
 
 ## [1.3.0] - 2026-07-14
 
-### Added
+### Added — corpus categories 05–07 (bundled feat)
 
-- **`tests/corpus/05_collections/`** — 24 executable tests covering List/Map/Set construction, size, lookup returning `Option`, mutation (`insert`), membership (`contains`, `contains_key`), and iteration (`for x in xs`, indexed `while` + `.get(i)`). Split across `list_test.mvl` (7), `list_iter_test.mvl` (5), `map_test.mvl` (6), `set_test.mvl` (6). Both backends green. Corpus total now **112 tests across 6 categories**.
+Consolidated from prior v1.3.0 / v1.4.0 / v1.5.0 tags into a single 1.3.0 release. Test-only corpus growth doesn't warrant three minor bumps — this is one feat surface, three categories deep.
 
-### Known limitations
+- **`tests/corpus/05_collections/`** — 24 executable tests covering List/Map/Set construction, size, lookup returning `Option`, mutation (`insert`), membership (`contains`, `contains_key`), and iteration (`for x in xs`, indexed `while` + `.get(i)`). Split across `list_test.mvl` (7), `list_iter_test.mvl` (5), `map_test.mvl` (6), `set_test.mvl` (6).
 
-- **#1842** — `Map::new()` (and likely `List::new()` / `Set::new()`) emits `call i64 @Map::new()` on the LLVM backend, with raw `::` in the symbol name that lli rejects. Also warned as `UndefinedFunction` by the checker. Corpus uses literal construction (`{"a": 1}`, `{1, 2, 3}`, `[1, 2, 3]`) meanwhile.
+- **`tests/corpus/06_effects/`** — 12 executable tests covering MVL's effect system: pure baseline (`pure_test.mvl` — 3), single-effect `Console` (`console_test.mvl` — 3), multi-effect + subsumption (`composite_test.mvl` — 3), user-declared effects and composite subsumption (`user_defined_test.mvl` — 3).
 
-- **Set[String].contains(literal)** fails in the Rust transpiler with an ambiguous `.into()` target. `Set[Int]` covers the key-lookup path meanwhile — a separate ticket to be filed if we return to String-keyed sets.
+- **`tests/corpus/07_ownership/`** — 17 executable tests covering MVL's ownership discipline: `ref` mutable bindings (`ref_test.mvl` — 5), value semantics on struct assignment (`value_test.mvl` — 4), explicit ownership transfer via `consume(x)` (`consume_test.mvl` — 4), and lambdas capturing by value (`lambda_capture_test.mvl` — 4).
+
+Both backends green. Corpus total: **138 tests across 8 categories** (prior to 08_ifc landing on top of this).
+
+### Notes and known limitations
+
+- **#1842** — `Map::new()` (and likely `List::new()` / `Set::new()`) emits `call i64 @Map::new()` on the LLVM backend, with raw `::` in the symbol name that lli rejects. Corpus uses literal construction (`{"a": 1}`, `{1, 2, 3}`, `[1, 2, 3]`) meanwhile.
+
+- **#1845** — Set literal `{1, 2, 2, 3}` on the LLVM backend doesn't dedupe on construction, and subsequent `.insert()` / `.contains()` on a literal-constructed Set are no-ops (underlying storage isn't a real hash-set). Three tests in `05_collections/set_test.mvl` are gated behind `TODO(#1845)`.
+
+- **Set[String].contains(literal)** fails in the Rust transpiler with an ambiguous `.into()` target. `Set[Int]` covers the key-lookup path meanwhile.
+
+- **Effect testing is largely compile-time** — effect enforcement is a checker property. The 06_effects tests confirm effectful fns *execute* correctly on both backends; negative rejection tests belong in a later lint/type-check category.
+
+- **Reserved-word gotchas**: `label` (IFC labels) and `tag` (enum discriminants).
+
+- **Style — `type Pair`** in user code collides with `std::lists::Pair[A, B]` on the LLVM emitter, producing a double `%Pair = type ...` in IR. Corpus uses `IntPair` to avoid the collision.
+
+- **Style — consume-of-String-field** patterns (`fn describe(r) { r.name }` where `r.name: String`) trip the Rust transpiler with "cannot move out of `r`". Corpus uses Int fields in `consume_test.mvl` meanwhile.
+
+### Version consolidation
+
+Prior tags v1.4.0 (06_effects) and v1.5.0 (07_ownership) have been folded into this v1.3.0 entry. `Cargo.toml` reset from 1.5.0 → 1.3.0. Corpus-only PRs are test infrastructure, not user-visible compiler features, and shouldn't drive the minor number. Future test-only PRs land as chore/ with no version bump.
 
 ## [1.2.2] - 2026-07-14
 
