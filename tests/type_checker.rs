@@ -73,7 +73,7 @@ fn assert_no_effect_propagation_errors(result: &CheckResult, label: &str) {
 fn basic_types_corpus_parses_and_checks() {
     // GIVEN: the basic_types corpus (valid programs)
     // THEN: no type errors
-    let src = include_str!("corpus/03_types/basic_types.mvl");
+    let src = include_str!("corpus_old/03_types/basic_types.mvl");
     let result = check_src(src);
     assert!(
         result.is_ok(),
@@ -148,7 +148,7 @@ fn fn_call_wrong_arg_count() {
 fn adt_corpus_parses_and_checks() {
     // GIVEN: the ADT checking corpus
     // THEN: no type errors (besides UndefinedFunction from string literals used as exprs)
-    let src = include_str!("corpus/03_types/adt_checking.mvl");
+    let src = include_str!("corpus_old/03_types/adt_checking.mvl");
     let result = check_src(src);
     let serious: Vec<_> = result
         .errors
@@ -221,7 +221,7 @@ fn field_access_undefined_field_rejected() {
 fn exhaustive_match_corpus_parses_and_checks() {
     // GIVEN: the exhaustive match corpus (valid — all cases covered)
     // THEN: no NonExhaustiveMatch errors
-    let src = include_str!("corpus/03_types/exhaustive_match.mvl");
+    let src = include_str!("corpus_old/03_types/exhaustive_match.mvl");
     let result = check_src(src);
     let exhaustive_errors: Vec<_> = result
         .errors
@@ -341,7 +341,7 @@ fn unknown_enum_variant_struct_construction_rejected() {
 fn option_result_corpus_parses_and_checks() {
     // GIVEN: the option/result corpus (valid handling patterns)
     // THEN: no enforcement errors
-    let src = include_str!("corpus/03_types/option_result.mvl");
+    let src = include_str!("corpus_old/03_types/option_result.mvl");
     let result = check_src(src);
     let enforcement_errors: Vec<_> = result
         .errors
@@ -425,7 +425,7 @@ fn caller() -> Unit { let _v: Int = parse(\"hi\")?; }
 fn immutability_corpus_parses_and_checks() {
     // GIVEN: the immutability corpus (valid mutability patterns)
     // THEN: no immutability errors
-    let src = include_str!("corpus/03_types/immutability.mvl");
+    let src = include_str!("corpus_old/03_types/immutability.mvl");
     let result = check_src(src);
     let immut_errors: Vec<_> = result
         .errors
@@ -485,7 +485,7 @@ fn concat_with_two_args_is_rejected() {
 fn core_types_corpus_parses_and_checks() {
     // GIVEN: the core prelude types corpus (#42)
     // THEN: no type errors (Int/Float methods resolve to correct types)
-    let src = include_str!("corpus/03_types/core_types.mvl");
+    let src = include_str!("corpus_old/03_types/core_types.mvl");
     let result = check_src(src);
     assert!(
         result.is_ok(),
@@ -528,7 +528,7 @@ fn ownership_corpus_parses() {
     // GIVEN: the ownership corpus
     // WHEN: parsed and checked
     // THEN: no use-after-move errors (all moves are valid single uses)
-    let src = include_str!("corpus/06_ownership/ownership.mvl");
+    let src = include_str!("corpus_old/06_ownership/ownership.mvl");
     let result = check_src(src);
     let ownership_errors: Vec<_> = result
         .errors
@@ -561,7 +561,7 @@ fn refinements_corpus_parses() {
     // GIVEN: the refinement types corpus
     // WHEN: parsed (refinement checking is lightweight in Phase 1)
     // THEN: no parse errors, no crashes
-    let src = include_str!("corpus/09_refinements/refinements_valid.mvl");
+    let src = include_str!("corpus_old/09_refinements/refinements_valid.mvl");
     let (mut p, lex_errors) = Parser::new(src);
     let prog = p.parse_program();
     assert!(
@@ -583,7 +583,7 @@ fn refinements_corpus_parses() {
 fn effect_decl_corpus_parses_and_checks() {
     // GIVEN: corpus of effect declarations (base, single, multi-parent)
     // THEN: no parse or type errors
-    let src = include_str!("corpus/07_effects/effect_decl.mvl");
+    let src = include_str!("corpus_old/07_effects/effect_decl.mvl");
     let result = check_with_effects(src);
     let relevant_errors: Vec<_> = result
         .errors
@@ -607,7 +607,7 @@ fn effect_decl_corpus_parses_and_checks() {
 fn subsumption_corpus_checks() {
     // GIVEN: corpus of effect subsumption patterns
     // THEN: no effect propagation errors
-    let src = include_str!("corpus/07_effects/subsumption.mvl");
+    let src = include_str!("corpus_old/07_effects/subsumption.mvl");
     assert_no_effect_propagation_errors(
         &check_src(src), // self-contained (no std/effects.mvl needed)
         "subsumption corpus should compile without effect propagation errors",
@@ -618,7 +618,7 @@ fn subsumption_corpus_checks() {
 fn user_defined_effects_corpus_checks() {
     // GIVEN: corpus with user-defined domain effects (Billing > DB + Log)
     // THEN: no effect errors
-    let src = include_str!("corpus/07_effects/user_defined_effects.mvl");
+    let src = include_str!("corpus_old/07_effects/user_defined_effects.mvl");
     let result = check_src(src);
     let effect_errors: Vec<_> = result
         .errors
@@ -642,7 +642,7 @@ fn user_defined_effects_corpus_checks() {
 fn concurrency_effects_corpus_checks() {
     // GIVEN: corpus using Spawn, Send, Recv, Actor effects
     // THEN: no effect errors
-    let src = include_str!("corpus/07_effects/concurrency_effects.mvl");
+    let src = include_str!("corpus_old/07_effects/concurrency_effects.mvl");
     let result = check_src(src); // corpus is self-contained: declares its own hierarchy
     let effect_errors: Vec<_> = result
         .errors
@@ -668,7 +668,7 @@ fn concurrency_effects_corpus_checks() {
 fn pure_vs_effectful_corpus_parses_and_checks() {
     // GIVEN: valid corpus of pure/effectful declarations with correct annotations
     // THEN: no type errors
-    let src = include_str!("corpus/07_effects/pure_vs_effectful.mvl");
+    let src = include_str!("corpus_old/07_effects/pure_vs_effectful.mvl");
     let result = check_src(src);
     assert!(
         result.is_ok(),
@@ -725,7 +725,7 @@ fn effectful_function_with_correct_declaration_accepted() {
 fn propagation_corpus_parses_and_checks() {
     // GIVEN: valid corpus of effect propagation patterns
     // THEN: no type errors
-    let src = include_str!("corpus/07_effects/propagation.mvl");
+    let src = include_str!("corpus_old/07_effects/propagation.mvl");
     let result = check_src(src);
     assert!(
         result.is_ok(),
@@ -784,7 +784,7 @@ fn caller_declaring_effect_union_accepted() {
 fn totality_corpus_parses_and_checks() {
     // GIVEN: valid corpus of total/partial function declarations
     // THEN: no type errors
-    let src = include_str!("corpus/10_termination/total_vs_partial.mvl");
+    let src = include_str!("corpus_old/10_termination/total_vs_partial.mvl");
     let result = check_src(src);
     assert!(
         result.is_ok(),
@@ -1230,7 +1230,7 @@ fn recursion_inside_lambda_not_flagged() {
 fn capabilities_corpus_parses_and_checks() {
     // GIVEN: valid corpus of capability-annotated functions
     // THEN: no type errors
-    let src = include_str!("corpus/12_actors/capabilities.mvl");
+    let src = include_str!("corpus_old/12_actors/capabilities.mvl");
     let result = check_src(src);
     assert!(
         result.is_ok(),
@@ -1243,7 +1243,7 @@ fn capabilities_corpus_parses_and_checks() {
 fn session_types_corpus_parses_and_checks() {
     // GIVEN: session type declarations (Phase 8, #260)
     // THEN: all session type aliases parse and type-check cleanly
-    let src = include_str!("corpus/12_actors/session_types.mvl");
+    let src = include_str!("corpus_old/12_actors/session_types.mvl");
     let result = check_src(src);
     assert!(
         result.is_ok(),
@@ -1266,7 +1266,7 @@ fn dead_letter_corpus_parses_and_checks() {
     let log = p.parse_program();
     let (mut p, _) = Parser::new(include_str!("../std/actors.mvl"));
     let actors = p.parse_program();
-    let (mut p, _) = Parser::new(include_str!("corpus/12_actors/dead_letter.mvl"));
+    let (mut p, _) = Parser::new(include_str!("corpus_old/12_actors/dead_letter.mvl"));
     let prog = p.parse_program();
     let result = check_with_prelude(&[effects, collections, math, log, actors], &prog);
     assert!(
@@ -1725,7 +1725,7 @@ fn iso_multiple_aliasing_all_sites_reported() {
 fn labels_corpus_parses_and_checks() {
     // GIVEN: the existing labels corpus (valid labeled programs)
     // THEN: no IFC violations (UndefinedFunction for stdlib is OK)
-    let src = include_str!("corpus/08_ifc/labels.mvl");
+    let src = include_str!("corpus_old/08_ifc/labels.mvl");
     let result = check_src(src);
     let serious_errors: Vec<_> = result
         .errors
@@ -1742,7 +1742,7 @@ fn labels_corpus_parses_and_checks() {
 fn label_types_corpus_parses_and_checks() {
     // GIVEN: the label_types corpus (labeled parameters and upward flows)
     // THEN: no type errors
-    let src = include_str!("corpus/08_ifc/label_types.mvl");
+    let src = include_str!("corpus_old/08_ifc/label_types.mvl");
     let result = check_src(src);
     assert!(
         result.is_ok(),
@@ -1796,7 +1796,7 @@ fn tainted_flows_to_clean_rejected() {
 fn lattice_corpus_parses_and_checks() {
     // GIVEN: lattice corpus (valid upward flows)
     // THEN: no type errors
-    let src = include_str!("corpus/08_ifc/lattice.mvl");
+    let src = include_str!("corpus_old/08_ifc/lattice.mvl");
     let result = check_src(src);
     assert!(
         result.is_ok(),
@@ -1837,7 +1837,7 @@ fn clean_to_public_rejected() {
 fn propagation_ifc_corpus_parses_and_checks() {
     // GIVEN: propagation corpus (arithmetic label join)
     // THEN: no type errors
-    let src = include_str!("corpus/08_ifc/propagation.mvl");
+    let src = include_str!("corpus_old/08_ifc/propagation.mvl");
     let result = check_src(src);
     assert!(
         result.is_ok(),
@@ -1877,7 +1877,7 @@ fn arithmetic_label_join_downgrade_rejected() {
 fn declassification_corpus_parses_and_checks() {
     // GIVEN: declassification corpus (valid declassify/sanitize usage)
     // THEN: no type errors (UndefinedFunction for User types is OK)
-    let src = include_str!("corpus/08_ifc/declassification.mvl");
+    let src = include_str!("corpus_old/08_ifc/declassification.mvl");
     let result = check_src(src);
     let serious_errors: Vec<_> = result
         .errors
@@ -1894,7 +1894,7 @@ fn declassification_corpus_parses_and_checks() {
 fn secret_env_corpus_parses_and_checks() {
     // GIVEN: secret_env corpus (#872) — positive flows for Secret[String] IFC
     // THEN: no type errors (UndefinedFunction for Token type is OK)
-    let src = include_str!("corpus/08_ifc/secret_env.mvl");
+    let src = include_str!("corpus_old/08_ifc/secret_env.mvl");
     let result = check_src(src);
     let serious_errors: Vec<_> = result
         .errors
@@ -1914,7 +1914,7 @@ fn capability_labels_corpus_parses_and_checks() {
     // GIVEN: capability_labels corpus (#931) — positive flows for ConfigPath,
     //        DbUrl, ApiEndpoint, AuditTarget capability labels
     // THEN: no type errors (corpus uses only relabel expressions and inline fns)
-    let src = include_str!("corpus/08_ifc/capability_labels.mvl");
+    let src = include_str!("corpus_old/08_ifc/capability_labels.mvl");
     let result = check_src(src);
     assert!(
         result.is_ok(),
@@ -2902,7 +2902,7 @@ fn run() -> Result[String, AppError] {
 
 #[test]
 fn literals_corpus_with_multiline_raw_strings_checks() {
-    let src = include_str!("corpus/01_syntax/literals.mvl");
+    let src = include_str!("corpus_old/01_syntax/literals.mvl");
     let result = check_src(src);
     assert!(
         result.is_ok(),
@@ -3446,7 +3446,7 @@ fn implicit_flow_for_loop_tainted_iterator_rejected() {
 /// `ImplicitFlowViolation` errors. This test validates the corpus itself.
 #[test]
 fn implicit_flow_corpus_has_violations() {
-    let src = include_str!("corpus/08_ifc/implicit_flow.mvl");
+    let src = include_str!("corpus_old/08_ifc/implicit_flow.mvl");
     let result = check_src(src);
     assert!(
         result
@@ -3466,7 +3466,7 @@ fn implicit_flow_corpus_has_violations() {
 fn cross_function_implicit_corpus_has_violations() {
     // GIVEN: a helper wrapping println called inside a Secret-controlled if
     // THEN: CrossFunctionImplicitFlowViolation is emitted
-    let src = include_str!("corpus/08_ifc/cross_function_implicit.mvl");
+    let src = include_str!("corpus_old/08_ifc/cross_function_implicit.mvl");
     let result = check_src(src);
     assert!(
         result
@@ -3485,7 +3485,7 @@ fn cross_function_implicit_corpus_has_violations() {
 fn interprocedural_taint_corpus_has_violations() {
     // GIVEN: record_decision() → emit_log_line() → println; called under Tainted branch
     // THEN: CrossFunctionImplicitFlowViolation is emitted
-    let src = include_str!("corpus/08_ifc/interprocedural_taint.mvl");
+    let src = include_str!("corpus_old/08_ifc/interprocedural_taint.mvl");
     let result = check_src(src);
     assert!(
         result
@@ -3503,7 +3503,7 @@ fn interprocedural_taint_corpus_has_violations() {
 fn return_label_inference_corpus_has_no_req11_violations() {
     // GIVEN: compute_hash_code reaches no public sink; called under Secret branch
     // THEN: no ImplicitFlowViolation or CrossFunctionImplicitFlowViolation
-    let src = include_str!("corpus/08_ifc/return_label_inference.mvl");
+    let src = include_str!("corpus_old/08_ifc/return_label_inference.mvl");
     let result = check_src(src);
     let violations: Vec<_> = result
         .errors
@@ -3528,7 +3528,7 @@ fn return_label_inference_corpus_has_no_req11_violations() {
 fn interprocedural_clean_corpus_has_no_req11_violations() {
     // GIVEN: announce_result() reaches println but is called with PC = None
     // THEN: no ImplicitFlowViolation or CrossFunctionImplicitFlowViolation
-    let src = include_str!("corpus/08_ifc/interprocedural_clean.mvl");
+    let src = include_str!("corpus_old/08_ifc/interprocedural_clean.mvl");
     let result = check_src(src);
     let violations: Vec<_> = result
         .errors
@@ -3553,7 +3553,7 @@ fn interprocedural_clean_corpus_has_no_req11_violations() {
 fn call_chain_error_names_callee_and_observable() {
     // GIVEN: write_audit_log() reaches println; called under Secret branch
     // THEN: CrossFunctionImplicitFlowViolation with callee="write_audit_log", observable_fn="println"
-    let src = include_str!("corpus/08_ifc/call_chain_error_message.mvl");
+    let src = include_str!("corpus_old/08_ifc/call_chain_error_message.mvl");
     let result = check_src(src);
     let violation = result
         .errors
@@ -3901,7 +3901,7 @@ fn refinement_same_pred_var_proven() {
 fn refinements_valid_corpus_no_violations() {
     // GIVEN: valid refinement type corpus
     // THEN: no RefinementViolated errors
-    let src = include_str!("corpus/09_refinements/refinements_valid.mvl");
+    let src = include_str!("corpus_old/09_refinements/refinements_valid.mvl");
     let result = check_src(src);
     assert!(
         !result
@@ -3939,7 +3939,7 @@ fn refinement_pass_produces_counts_in_verdict() {
 fn refinements_violations_corpus_no_static_violations() {
     // GIVEN: violations corpus (unproven call sites — runtime-checked, not statically failed)
     // THEN: no RefinementViolated errors emitted
-    let src = include_str!("corpus/09_refinements/refinements_violations.mvl");
+    let src = include_str!("corpus_old/09_refinements/refinements_violations.mvl");
     let result = check_src(src);
     assert!(
         !result
@@ -4326,7 +4326,7 @@ fn file_io_corpus_parses_and_checks() {
     // GIVEN: the file I/O effects corpus (valid programs using std.io, #44)
     // THEN: no serious type errors; UndefinedFunction/UndefinedVariable/UndefinedType
     //       for stdlib symbols are expected without stdlib loaded
-    let src = include_str!("corpus/13_stdlib/file_io.mvl");
+    let src = include_str!("corpus_old/13_stdlib/file_io.mvl");
     let result = check_src(src);
     let serious: Vec<_> = result
         .errors
@@ -4393,7 +4393,7 @@ fn logging_corpus_parses_and_checks() {
     // GIVEN: the logging effects corpus (valid programs using std.log, #54)
     // THEN: no serious type errors; UndefinedFunction for log_* is expected
     //       when stdlib is not loaded (Phase 2)
-    let src = include_str!("corpus/13_stdlib/logging.mvl");
+    let src = include_str!("corpus_old/13_stdlib/logging.mvl");
     let result = check_src(src);
     let serious: Vec<_> = result
         .errors
@@ -4916,7 +4916,7 @@ fn for_loop_non_iterator_in_partial_fn_emits_not_iterator() {
 /// Note: transpile_src() does NOT run the checker; this test is required.
 #[test]
 fn bitwise_corpus_checks_cleanly() {
-    let src = include_str!("corpus/04_primitives/bitwise.mvl");
+    let src = include_str!("corpus_old/04_primitives/bitwise.mvl");
     let result = check_src(src);
     assert!(
         result.is_ok(),
@@ -5281,7 +5281,7 @@ fn unix_process_lifecycle_corpus_parses_and_checks() {
     // GIVEN: the unix corpus (valid programs using std.process, std.env, #45)
     // THEN: no serious type errors; UndefinedFunction/UndefinedType for stdlib
     //       symbols are expected when stdlib is not loaded in unit tests
-    let src = include_str!("corpus/13_stdlib/unix.mvl");
+    let src = include_str!("corpus_old/13_stdlib/unix.mvl");
     let result = check_src(src);
     let serious: Vec<_> = result
         .errors
@@ -6015,7 +6015,7 @@ fn let_with_annotation_accepted() {
 /// Unsigned types corpus must parse and type-check without errors (#481).
 #[test]
 fn unsigned_types_corpus_parses_and_checks() {
-    let src = include_str!("corpus/04_primitives/unsigned_types.mvl");
+    let src = include_str!("corpus_old/04_primitives/unsigned_types.mvl");
     let result = check_src(src);
     assert!(
         result.is_ok(),
@@ -6027,7 +6027,7 @@ fn unsigned_types_corpus_parses_and_checks() {
 /// Bit-operator corpus must parse and type-check without errors (#483 #484).
 #[test]
 fn bit_operators_corpus_parses_and_checks() {
-    let src = include_str!("corpus/04_primitives/bit_operators.mvl");
+    let src = include_str!("corpus_old/04_primitives/bit_operators.mvl");
     let result = check_src(src);
     assert!(
         result.is_ok(),
@@ -6039,7 +6039,7 @@ fn bit_operators_corpus_parses_and_checks() {
 /// Overflow-checking arithmetic corpus must parse and type-check without errors (#485).
 #[test]
 fn overflow_checking_corpus_parses_and_checks() {
-    let src = include_str!("corpus/04_primitives/overflow_checking.mvl");
+    let src = include_str!("corpus_old/04_primitives/overflow_checking.mvl");
     let result = check_src(src);
     assert!(
         result.is_ok(),
@@ -6486,7 +6486,7 @@ fn z3_proves_modular_implication() {
 fn contracts_corpus_parses_and_checks() {
     // GIVEN: the basic_contracts corpus (valid contract programs)
     // THEN: no type errors
-    let src = include_str!("corpus/11_contracts/basic_contracts.mvl");
+    let src = include_str!("corpus_old/11_contracts/basic_contracts.mvl");
     let result = check_src(src);
     assert!(
         result.is_ok(),
@@ -7136,7 +7136,7 @@ fn ghost_let_multiple_in_body_checks_cleanly() {
 fn ghost_corpus_parses_and_checks() {
     // GIVEN: the ghost_old_contracts corpus (all ghost/old contract programs)
     // THEN: no type errors
-    let src = include_str!("corpus/11_contracts/ghost_old_contracts.mvl");
+    let src = include_str!("corpus_old/11_contracts/ghost_old_contracts.mvl");
     let result = check_src(src);
     assert!(
         result.is_ok(),
@@ -7243,7 +7243,7 @@ fn precondition_violated_counterexample_field_is_none() {
 fn loop_verification_corpus_parses_and_checks() {
     // GIVEN: the Phase 5 loop verification corpus
     // THEN: no type errors (decreases + invariant preservation + quantifiers)
-    let src = include_str!("corpus/11_contracts/loop_verification.mvl");
+    let src = include_str!("corpus_old/11_contracts/loop_verification.mvl");
     let result = check_src(src);
     assert!(
         result.is_ok(),
@@ -7448,7 +7448,7 @@ fn exists_quantifier_parses_in_ensures() {
 fn keywords_corpus_parses_and_checks() {
     // GIVEN: the keywords corpus (01_syntax/keywords.mvl) covering all reserved keywords
     // THEN: parses and type-checks cleanly (no serious errors)
-    let src = include_str!("corpus/01_syntax/keywords.mvl");
+    let src = include_str!("corpus_old/01_syntax/keywords.mvl");
     let result = check_src(src);
     let serious: Vec<_> = result
         .errors
@@ -8859,7 +8859,7 @@ fn generic_effect_propagation_enforced() {
 /// Corpus: generic_instantiation.mvl covers all four requirements together (#1066).
 #[test]
 fn generic_instantiation_corpus_parses_and_checks() {
-    let src = include_str!("corpus/02_functions/generic_instantiation.mvl");
+    let src = include_str!("corpus_old/02_functions/generic_instantiation.mvl");
     let result = check_src(src);
     assert!(
         result.is_ok(),

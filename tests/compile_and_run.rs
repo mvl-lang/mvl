@@ -466,7 +466,7 @@ fn core_types_demo_runs_and_produces_expected_output() {
 
 fn corpus_13_stdlib(name: &str) -> String {
     format!(
-        "{}/tests/corpus/13_stdlib/{name}",
+        "{}/tests/corpus_old/13_stdlib/{name}",
         env!("CARGO_MANIFEST_DIR")
     )
 }
@@ -641,7 +641,10 @@ fn pbt_operations_runs_without_panic() {
 }
 
 fn corpus_bdd(name: &str) -> String {
-    format!("{}/tests/corpus/17_bdd/{name}", env!("CARGO_MANIFEST_DIR"))
+    format!(
+        "{}/tests/corpus_old/17_bdd/{name}",
+        env!("CARGO_MANIFEST_DIR")
+    )
 }
 
 /// Spec 004 Req 5 (ADR-0020): BDD naming convention — given_*/when_*/then_*/scenario_*
