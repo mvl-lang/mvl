@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+## [1.2.2] - 2026-07-14
+
+### Chore — version reconciliation
+
+Bump `Cargo.toml` from `1.1.0 → 1.2.2` to preserve semver monotonicity above the pre-#1805-clobber peak of `1.2.1`.
+
+Background: PR #1835 (solver atom normalization) was based on pre-#1827 main and its `chore: release v1.0.1` commit rewrote `Cargo.toml` `1.2.1 → 1.0.1` on merge. Subsequent PRs (#1836 → 1.0.2, #1840 → 1.1.0) then incremented from the reset point, so `Cargo.toml` now shows `1.1.0` while the git log still contains earlier release commits going up to `1.2.1`. This bump restores strict monotonicity so cross-worktree comparisons agree.
+
+All work from between the reset points is already on main:
+
+- #1827 (Phase 2 corpus)
+- #1831 (emitter host-neutral triple)
+- #1833 (03_functions corpus)
+- #1834 (LLVM named-fn coercion, #1832)
+- #1835 (solver atom normalization, #1805)
+- #1836 (LLVM corpus hygiene: #1837 assert_eq, #1838 match Bool, #1839 returned closures)
+- #1840 (04_types corpus)
+
 ## [1.1.0] - 2026-07-14
 
 ### Added
