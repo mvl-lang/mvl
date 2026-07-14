@@ -141,16 +141,31 @@ if [ ! -e "$INPUT" ]; then
 fi
 
 # ── Synthesize a fn-main driver from a *_test.mvl file ────────────────────
-# Prints the synthesized file path. Caller owns the tempdir.
+# Emits a marker line to stderr before each test call so failures can be
+# attributed per-test. If the binary exits 0, every test in the file
+# passed; if it aborts (MVL `assert` compiles to llvm.trap → SIGILL), the
+# last marker names the failing test.
 synth_test_main() {
     local src="$1" out="$2"
-    sed 's/^test fn /fn /' "$src" > "$out"
+    # Strip the `test` marker (and any modifier — `test partial fn`,
+    # `test total fn`) so what remains is a plain `fn NAME(...)`.
+    sed -E 's/^test (partial |total )?fn /\1fn /' "$src" > "$out"
     {
         echo ""
         echo "fn main() -> Unit ! Console {"
-        grep -oE "^test fn [a-z_0-9]+" "$src" | awk '{print "    " $3 "();"}'
+        list_test_fns "$src" | awk '{
+            print "    eprintln(\"MVLR_MARK:" $1 "\");"
+            print "    " $1 "();"
+        }'
         echo "}"
     } >> "$out"
+}
+
+# Extract test fn names from a *_test.mvl in declaration order.
+# Matches `test fn NAME`, `test partial fn NAME`, `test total fn NAME`.
+list_test_fns() {
+    grep -oE "^test (partial |total )?fn [a-z_0-9]+" "$1" \
+        | awk '{print $NF}'
 }
 
 # ── Per-combo runners ─────────────────────────────────────────────────────
@@ -235,7 +250,7 @@ run_mvl_llvm_file() {
 
 run_dir_iter() {
     local dir="$1" combo="$2"
-    local pass=0 fail=0 short output rc
+    local pass=0 fail=0 short
     local OK="\033[32m✓\033[0m" FAIL="\033[31m✗\033[0m"
     local tmpout
     tmpout=$(mktemp)
@@ -244,15 +259,54 @@ run_dir_iter() {
     while IFS= read -r f; do
         short="${f#$dir/}"
         [ "$short" = "$f" ] && short="${f#tests/corpus/}"
+        # Test fns declared in this file, in source order.
+        local tests
+        tests=$(list_test_fns "$f")
+        local n_tests
+        n_tests=$(printf "%s" "$tests" | grep -c . || true)
         if run_file "$combo" "$f" >"$tmpout" 2>&1; then
-            [ "$QUIET" = "1" ] || printf "  $OK  %s\n" "$short"
-            pass=$((pass + 1))
+            # Whole binary exited 0 → every test in the file passed. Report
+            # each test fn by name so per-backend counts match honestly.
+            if [ "$QUIET" != "1" ]; then
+                while IFS= read -r tn; do
+                    [ -z "$tn" ] && continue
+                    printf "  $OK  %s::%s\n" "$short" "$tn"
+                done <<< "$tests"
+            fi
+            pass=$((pass + n_tests))
         else
-            printf "  $FAIL  %s\n" "$short"
+            # llvm.trap → SIGILL kills the process. The last `MVLR_MARK:`
+            # marker on stderr identifies the failing test; anything after
+            # it in `tests` never ran.
+            local last_mark
+            last_mark=$(grep -oE "MVLR_MARK:[a-z_0-9]+" "$tmpout" | tail -1 | cut -d: -f2)
+            local failed_seen=0
+            while IFS= read -r tn; do
+                [ -z "$tn" ] && continue
+                if [ "$failed_seen" = "1" ]; then
+                    # After the failure, nothing else ran — don't count.
+                    continue
+                fi
+                if [ -n "$last_mark" ] && [ "$tn" = "$last_mark" ]; then
+                    printf "  $FAIL  %s::%s\n" "$short" "$tn"
+                    fail=$((fail + 1))
+                    failed_seen=1
+                else
+                    [ "$QUIET" = "1" ] || printf "  $OK  %s::%s\n" "$short" "$tn"
+                    pass=$((pass + 1))
+                fi
+            done <<< "$tests"
+            # If no marker matched (e.g. build/link failure before any
+            # test ran), attribute the failure to the file itself.
+            if [ "$failed_seen" = "0" ]; then
+                printf "  $FAIL  %s (before any test ran)\n" "$short"
+                fail=$((fail + 1))
+            fi
             # Preserve error output — indispensable for diagnosing CI-only
             # failures (macOS vs Linux, llc path, missing runtime, etc.).
-            sed 's/^/         /' "$tmpout"
-            fail=$((fail + 1))
+            # Drop the MVLR_MARK lines to keep the tail focused on the real
+            # error output.
+            grep -v "^MVLR_MARK:" "$tmpout" | sed 's/^/         /'
         fi
     done < <(find "$dir" -name "*_test.mvl" | sort)
     echo ""
