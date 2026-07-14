@@ -203,6 +203,10 @@ run_mvl_llvm_file() {
         cat "$tmp/emit.err" >&2
         return 1
     fi
+    # The self-hosted emitter hardcodes `target triple = arm64-apple-darwin`.
+    # On Linux CI that produces an object file the native linker can't use.
+    # Drop the triple so llc falls back to its default (host) triple.
+    sed -i.bak '/^target triple = /d' "$tmp/out.ll" && rm -f "$tmp/out.ll.bak"
     if ! "$llc" -filetype=obj "$tmp/out.ll" -o "$tmp/out.o" 2>"$tmp/llc.err"; then
         echo "mvlr: llc failed" >&2
         cat "$tmp/llc.err" >&2
