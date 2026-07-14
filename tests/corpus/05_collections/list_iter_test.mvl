@@ -1,0 +1,61 @@
+// 05_collections/list_iter_test.mvl — for-in iteration and index-based loops.
+//
+// Two forms of iteration coexist:
+//   * `for x in xs { ... }` — element-by-element, no index
+//   * `while i < xs.len() { ... }` — explicit index, needed when the position
+//     matters or when calling `.get(i)` for partial state
+
+test fn list_for_in_sums_elements() -> Unit {
+    let xs: List[Int] = [1, 2, 3, 4, 5];
+    let sum: ref Int = 0;
+    for x in xs {
+        sum = sum + x;
+    }
+    assert_eq(sum, 15);
+}
+
+test fn list_for_in_empty_is_noop() -> Unit {
+    let xs: List[Int] = [];
+    let count: ref Int = 0;
+    for _ in xs {
+        count = count + 1;
+    }
+    assert_eq(count, 0);
+}
+
+test fn list_while_indexed_sum() -> Unit {
+    let xs: List[Int] = [10, 20, 30, 40];
+    let i: ref Int = 0;
+    let n: Int = xs.len();
+    let sum: ref Int = 0;
+    while i < n {
+        sum = sum + xs.get(i).unwrap_or(0);
+        i = i + 1;
+    }
+    assert_eq(sum, 100);
+}
+
+test fn list_for_in_counts_matches() -> Unit {
+    let xs: List[Int] = [1, 2, 3, 4, 5, 6];
+    let evens: ref Int = 0;
+    for x in xs {
+        if x % 2 == 0 {
+            evens = evens + 1;
+        }
+    }
+    assert_eq(evens, 3);
+}
+
+fn first_negative_or_default(xs: List[Int]) -> Int {
+    for x in xs {
+        if x < 0 {
+            return x;
+        }
+    }
+    0
+}
+
+test fn list_for_in_early_return() -> Unit {
+    assert_eq(first_negative_or_default([1, 2, -3, 4]), -3);
+    assert_eq(first_negative_or_default([1, 2, 3, 4]), 0);
+}

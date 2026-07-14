@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-07-14
+
+### Added
+
+- **`tests/corpus/05_collections/`** — 24 executable tests covering List/Map/Set construction, size, lookup returning `Option`, mutation (`insert`), membership (`contains`, `contains_key`), and iteration (`for x in xs`, indexed `while` + `.get(i)`). Split across `list_test.mvl` (7), `list_iter_test.mvl` (5), `map_test.mvl` (6), `set_test.mvl` (6). Both backends green. Corpus total now **112 tests across 6 categories**.
+
+### Known limitations
+
+- **#1842** — `Map::new()` (and likely `List::new()` / `Set::new()`) emits `call i64 @Map::new()` on the LLVM backend, with raw `::` in the symbol name that lli rejects. Also warned as `UndefinedFunction` by the checker. Corpus uses literal construction (`{"a": 1}`, `{1, 2, 3}`, `[1, 2, 3]`) meanwhile.
+
+- **Set[String].contains(literal)** fails in the Rust transpiler with an ambiguous `.into()` target. `Set[Int]` covers the key-lookup path meanwhile — a separate ticket to be filed if we return to String-keyed sets.
+
 ## [1.2.2] - 2026-07-14
 
 ### Chore — version reconciliation
