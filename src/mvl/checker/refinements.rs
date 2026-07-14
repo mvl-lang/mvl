@@ -1115,9 +1115,7 @@ fn collect_call_hypotheses(
             collect_call_hypotheses(left, fn_ensures, out);
             collect_call_hypotheses(right, fn_ensures, out);
         }
-        Expr::FieldAccess { expr: inner, .. } => {
-            collect_call_hypotheses(inner, fn_ensures, out)
-        }
+        Expr::FieldAccess { expr: inner, .. } => collect_call_hypotheses(inner, fn_ensures, out),
         _ => {}
     }
 }

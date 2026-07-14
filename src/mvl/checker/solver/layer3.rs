@@ -426,7 +426,11 @@ pub(crate) fn substitute_stmt(stmt: &Stmt, bindings: &HashMap<&str, &Expr>) -> S
 
 fn substitute_block(block: &Block, bindings: &HashMap<&str, &Expr>) -> Block {
     Block {
-        stmts: block.stmts.iter().map(|s| substitute_stmt(s, bindings)).collect(),
+        stmts: block
+            .stmts
+            .iter()
+            .map(|s| substitute_stmt(s, bindings))
+            .collect(),
         span: block.span,
     }
 }
@@ -603,7 +607,11 @@ pub(crate) fn substitute_expr(expr: &Expr, bindings: &HashMap<&str, &Expr>) -> E
         // FieldAccess: substitute inside the base expression (#1805 let-unfold).
         // Enables `Game { right_score: new_score, .. }.right_score` after a let
         // rewrite to normalize through the field projection.
-        Expr::FieldAccess { expr: inner, field, span } => Expr::FieldAccess {
+        Expr::FieldAccess {
+            expr: inner,
+            field,
+            span,
+        } => Expr::FieldAccess {
             expr: Box::new(substitute_expr(inner, bindings)),
             field: field.clone(),
             span: *span,
