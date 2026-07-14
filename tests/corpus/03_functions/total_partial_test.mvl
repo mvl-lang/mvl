@@ -1,0 +1,59 @@
+// 03_functions/total_partial_test.mvl — totality modifiers.
+//
+// MVL distinguishes provably-terminating (`total`) from potentially-diverging
+// (`partial`) functions. Plain `fn` sits in between: totality is left implicit
+// and inferred. Recursive functions must be either `total` (with a decreasing
+// argument the checker verifies) or `partial`.
+
+total fn factorial(n: Int) -> Int {
+    if n <= 1 { 1 } else { n * factorial(n - 1) }
+}
+
+total fn sum_to(n: Int) -> Int {
+    if n <= 0 { 0 } else { n + sum_to(n - 1) }
+}
+
+total fn fib(n: Int) -> Int {
+    if n <= 1 { n } else { fib(n - 1) + fib(n - 2) }
+}
+
+// Partial: search may fail to terminate on adversarial input, but we drive
+// it with a bounded search here so the test itself is finite.
+partial fn linear_find(xs: List[Int], target: Int) -> Int {
+    let i: ref Int = 0;
+    let n: Int = xs.len();
+    while i < n {
+        if xs.get(i).unwrap_or(-1) == target {
+            return i;
+        }
+        i = i + 1;
+    }
+    -1
+}
+
+test fn total_factorial() -> Unit {
+    assert_eq(factorial(0), 1);
+    assert_eq(factorial(1), 1);
+    assert_eq(factorial(5), 120);
+}
+
+test fn total_sum_to_ten() -> Unit {
+    assert_eq(sum_to(10), 55);
+}
+
+test fn total_fib() -> Unit {
+    // 0, 1, 1, 2, 3, 5, 8, 13
+    assert_eq(fib(0), 0);
+    assert_eq(fib(1), 1);
+    assert_eq(fib(7), 13);
+}
+
+test partial fn partial_linear_find_hit() -> Unit {
+    let xs: List[Int] = [10, 20, 30, 40];
+    assert_eq(linear_find(xs, 30), 2);
+}
+
+test partial fn partial_linear_find_miss() -> Unit {
+    let xs: List[Int] = [1, 2, 3];
+    assert_eq(linear_find(xs, 99), -1);
+}

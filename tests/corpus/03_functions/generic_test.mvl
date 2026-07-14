@@ -1,0 +1,59 @@
+// 03_functions/generic_test.mvl — parametric polymorphism.
+//
+// MVL uses square brackets for type parameters: `fn f[T](x: T) -> T`.
+// The checker monomorphizes at each call site; every instantiation is
+// independent, and there is no trait system (ADR-0053), so functions
+// operate structurally on their type parameter alone.
+
+fn identity[T](x: T) -> T { x }
+
+fn pair_first[A, B](a: A, b: B) -> A {
+    let _: B = b;
+    a
+}
+
+fn pair_second[A, B](a: A, b: B) -> B {
+    let _: A = a;
+    b
+}
+
+test fn generic_identity_int() -> Unit {
+    let x: Int = identity(42);
+    let y: Int = identity(-7);
+    assert_eq(x, 42);
+    assert_eq(y, -7);
+}
+
+test fn generic_identity_string() -> Unit {
+    let s: String = identity("hello");
+    assert_eq(s, "hello");
+}
+
+test fn generic_identity_bool() -> Unit {
+    let t: Bool = identity(true);
+    let f: Bool = identity(false);
+    assert_eq(t, true);
+    assert_eq(f, false);
+}
+
+test fn generic_pair_first() -> Unit {
+    // Explicit type args pin both A and B; the translator otherwise cannot
+    // infer them from a receiver annotation alone (it only pins the return).
+    let a: Int = pair_first[Int, String](1, "two");
+    let b: String = pair_first[String, Int]("one", 2);
+    assert_eq(a, 1);
+    assert_eq(b, "one");
+}
+
+test fn generic_pair_second() -> Unit {
+    let a: String = pair_second[Int, String](1, "two");
+    let b: Int = pair_second[String, Int]("one", 2);
+    assert_eq(a, "two");
+    assert_eq(b, 2);
+}
+
+test fn generic_explicit_type_args() -> Unit {
+    // `identity[T](x)` — turbofish-style explicit instantiation.
+    assert_eq(identity[Int](99), 99);
+    assert_eq(identity[String]("world"), "world");
+}

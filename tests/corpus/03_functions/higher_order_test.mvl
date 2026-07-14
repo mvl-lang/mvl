@@ -1,0 +1,49 @@
+// 03_functions/higher_order_test.mvl — functions as values.
+//
+// MVL supports function-typed parameters (`fn(A) -> B`) and lambdas
+// (`|x: A| expr` / `|x: A| -> B { block }`). Together they let functions
+// take and return other functions. Named functions can also be passed by
+// name where a compatible `fn(...)` type is expected.
+
+fn apply(f: fn(Int) -> Int, n: Int) -> Int {
+    f(n)
+}
+
+fn apply_twice(f: fn(Int) -> Int, n: Int) -> Int {
+    f(f(n))
+}
+
+fn make_adder(k: Int) -> fn(Int) -> Int {
+    |x: Int| x + k
+}
+
+test fn hof_apply_lambda() -> Unit {
+    let inc: Int = apply(|x: Int| x + 1, 41);
+    assert_eq(inc, 42);
+}
+
+// TODO(#1832): pass a NAMED fn where `fn(Int) -> Int` is expected — LLVM
+// backend crashes on the coercion. Rust backend works. Add here once fixed:
+//   fn double(n: Int) -> Int { n + n }
+//   test fn hof_apply_named_function() -> Unit {
+//       assert_eq(apply(double, 21), 42);
+//   }
+
+test fn hof_apply_twice() -> Unit {
+    // ((3 * 3) * 3) = 27
+    let cube: Int = apply_twice(|x: Int| x * 3, 3);
+    assert_eq(cube, 27);
+}
+
+test fn hof_returning_closure() -> Unit {
+    // Closures capture from the enclosing scope by value.
+    let add5: fn(Int) -> Int = make_adder(5);
+    let add10: fn(Int) -> Int = make_adder(10);
+    assert_eq(add5(2), 7);
+    assert_eq(add10(2), 12);
+}
+
+test fn hof_zero_arg_lambda() -> Unit {
+    let const_seven: fn() -> Int = || 7;
+    assert_eq(const_seven(), 7);
+}

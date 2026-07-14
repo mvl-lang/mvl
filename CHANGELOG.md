@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-07-14
+
+### Added
+
+- **`tests/corpus/03_functions/`** (#1823) — new corpus category with 4 files, 19 test functions covering plain functions (params/returns/composition), `total` recursion (factorial, sum, fib), `partial` fn with while+return, generics (parametric identity, multi-param with explicit type args, turbofish syntax), and higher-order functions (lambdas as arguments, returning closures with capture, apply_twice, zero-arg lambdas). All green on `rust/rust` and `rust/llvm` backends.
+
+### Known Issues
+
+- **#1832 — LLVM backend crashes on named-fn to `fn(T) -> U` coercion.** Passing a named function where a function-typed parameter is expected currently segfaults on `lli` (works fine on the Rust backend). The `hof_apply_named_function` test is documented as TODO in `higher_order_test.mvl` pending fix.
+
 ## [1.1.1] - 2026-07-14
 
 ### Fixed

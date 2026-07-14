@@ -1,0 +1,38 @@
+// 03_functions/basic_test.mvl — plain functions: params, returns, call chains.
+//
+// Exercises the everyday shape of MVL functions:
+//   - zero and multi-parameter forms
+//   - non-Unit return
+//   - one function calling another (composition through explicit call)
+
+fn add(a: Int, b: Int) -> Int { a + b }
+
+fn square(n: Int) -> Int { n * n }
+
+fn sum_of_squares(a: Int, b: Int) -> Int {
+    add(square(a), square(b))
+}
+
+fn double(n: Int) -> Int { n + n }
+
+test fn basic_add() -> Unit {
+    assert_eq(add(2, 3), 5);
+    assert_eq(add(-1, 1), 0);
+    assert_eq(add(0, 0), 0);
+}
+
+test fn basic_square() -> Unit {
+    assert_eq(square(4), 16);
+    assert_eq(square(-3), 9);
+    assert_eq(square(0), 0);
+}
+
+test fn basic_composition() -> Unit {
+    // 3^2 + 4^2 = 9 + 16 = 25
+    assert_eq(sum_of_squares(3, 4), 25);
+}
+
+test fn basic_chained_calls() -> Unit {
+    // double(square(3)) = double(9) = 18
+    assert_eq(double(square(3)), 18);
+}
