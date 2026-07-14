@@ -1,0 +1,52 @@
+// 12_actors/spawn_test.mvl — actor construction and initial state.
+//
+// An actor is declared with `actor Name { fields; pub fn behavior(...) }`.
+// Construction is `actor Name { field: value }`, which requires the `Spawn`
+// effect. Fields are private but readable via `pub test fn` helpers on the
+// actor itself.
+
+actor Counter {
+    count: Int
+
+    pub fn increment(val n: Int) {
+        self.count = self.count + n
+    }
+
+    pub test fn get_count() -> Int {
+        self.count
+    }
+}
+
+actor Accumulator {
+    sum: Int
+
+    pub fn add(val n: Int) {
+        self.sum = self.sum + n
+    }
+
+    pub test fn get_sum() -> Int {
+        self.sum
+    }
+}
+
+test fn actor_spawn_with_initial_state() -> Unit ! Spawn {
+    let c: Counter = actor Counter { count: 42 };
+    assert_eq(c.get_count(), 42);
+}
+
+test fn actor_spawn_zero_initialized() -> Unit ! Spawn {
+    let c: Counter = actor Counter { count: 0 };
+    assert_eq(c.get_count(), 0);
+}
+
+test fn actor_spawn_second_type() -> Unit ! Spawn {
+    let a: Accumulator = actor Accumulator { sum: 0 };
+    assert_eq(a.get_sum(), 0);
+}
+
+test fn actor_multiple_independent_spawns() -> Unit ! Spawn {
+    let a: Counter = actor Counter { count: 10 };
+    let b: Counter = actor Counter { count: 20 };
+    assert_eq(a.get_count(), 10);
+    assert_eq(b.get_count(), 20);
+}

@@ -4,9 +4,9 @@
 
 ## [1.3.0] - 2026-07-14
 
-### Added — corpus categories 05–10 (bundled feat)
+### Added — corpus categories 05–12 (bundled feat)
 
-Consolidated from prior v1.3.0 / v1.4.0 / v1.5.0 tags into a single 1.3.0 release. Test-only corpus growth doesn't warrant multiple minor bumps — this is one feat surface, six categories deep.
+Consolidated from prior v1.3.0 / v1.4.0 / v1.5.0 tags into a single 1.3.0 release. Test-only corpus growth doesn't warrant multiple minor bumps — this is one feat surface, eight categories deep.
 
 - **`tests/corpus/05_collections/`** — 24 executable tests covering List/Map/Set construction, size, lookup returning `Option`, mutation (`insert`), membership (`contains`, `contains_key`), and iteration (`for x in xs`, indexed `while` + `.get(i)`). Split across `list_test.mvl` (7), `list_iter_test.mvl` (5), `map_test.mvl` (6), `set_test.mvl` (6).
 
@@ -20,7 +20,11 @@ Consolidated from prior v1.3.0 / v1.4.0 / v1.5.0 tags into a single 1.3.0 releas
 
 - **`tests/corpus/10_termination/`** — 15 executable tests covering MVL's termination discipline: `total fn` with bounded iteration and structural recursion (`total_fn_test.mvl` — 7), `partial fn` with unbounded `while` loops (`partial_fn_test.mvl` — 5), and `decreases` loop variants proving termination inside a `total fn` (`decreases_test.mvl` — 3).
 
-Both backends green. Corpus total: **183 tests across 11 categories**.
+- **`tests/corpus/11_contracts/`** — 13 executable tests covering function contracts: `requires` preconditions (`requires_test.mvl` — 5), `ensures` postconditions on `result` (`ensures_test.mvl` — 5), and loop `invariant` clauses combined with `decreases` (`invariant_test.mvl` — 3).
+
+- **`tests/corpus/12_actors/`** — 13 executable tests covering MVL's actor model: construction with `Spawn` effect (`spawn_test.mvl` — 4), async behavior dispatch with FIFO ordering (`behavior_test.mvl` — 5), and state mutation across Int/Bool fields with `pub test fn` introspection (`state_mutation_test.mvl` — 4).
+
+Both backends green. Corpus total: **209 tests across 13 categories**.
 
 ### Fixed
 
@@ -33,6 +37,10 @@ Both backends green. Corpus total: **183 tests across 11 categories**.
 - **#1845** — Set literal `{1, 2, 2, 3}` on the LLVM backend doesn't dedupe on construction, and subsequent `.insert()` / `.contains()` on a literal-constructed Set are no-ops (underlying storage isn't a real hash-set). Three tests in `05_collections/set_test.mvl` are gated behind `TODO(#1845)`.
 
 - **#1851** — LLVM backend doesn't resolve refined type-alias NAMES back to their underlying scalar. `type Port = Int where ...; fn f(p: Port)` emits `define ptr @f(ptr %p)` instead of `define i64 @f(i64 %p)`. `09_refinements` uses inline refinements (`Int where self > 0`) in fn signatures meanwhile — same semantics, correct lowering on both backends.
+
+- **#1856** — Rust transpiler cannot return a `String` field from `&self`: `pub test fn read() -> String { self.text }` fails with "cannot move out of `self.text` which is behind a shared reference". LLVM handles it fine. `12_actors` drops the String-field actor pending the fix; Int/Bool state actors cover the mutation code paths.
+
+- **Grammar reserved words**: `total`, `label`, and `tag` cannot be used as field or parameter names (they match `total fn` / IFC label / enum discriminant respectively). Multi-field actor init syntax (`actor A { a: 1, b: 2 }`) fails to parse — corpus actors are all single-field.
 
 - **Set[String].contains(literal)** fails in the Rust transpiler with an ambiguous `.into()` target. `Set[Int]` covers the key-lookup path meanwhile.
 

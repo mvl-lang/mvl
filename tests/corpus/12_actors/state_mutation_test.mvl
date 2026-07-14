@@ -1,0 +1,79 @@
+// 12_actors/state_mutation_test.mvl — actor state mutations across behavior arg types.
+//
+// Behaviors accept sendable parameters — value-type primitives (`Int`, `Bool`,
+// `String` via `val`) can cross the actor boundary safely. These tests cover
+// mutation patterns beyond simple accumulation: conditional updates, string
+// storage, and boolean flags.
+
+actor Bank {
+    balance: Int
+
+    pub fn deposit(val amount: Int) {
+        self.balance = self.balance + amount
+    }
+
+    pub fn withdraw(val amount: Int) {
+        if self.balance >= amount {
+            self.balance = self.balance - amount
+        }
+    }
+
+    pub test fn get_balance() -> Int {
+        self.balance
+    }
+}
+
+actor Flag {
+    on: Bool
+
+    pub fn set(val v: Bool) {
+        self.on = v
+    }
+
+    pub fn toggle() {
+        self.on = !self.on
+    }
+
+    pub test fn is_on() -> Bool {
+        self.on
+    }
+}
+
+// String-field actor test dropped pending #1856 (Rust transpiler cannot
+// move String out of &self without .clone()). LLVM handles it fine; the
+// Rust backend rejects `pub test fn read() -> String { self.text }`.
+
+test fn state_int_deposit_then_withdraw() -> Unit ! Spawn + Send {
+    let b: Bank = actor Bank { balance: 0 };
+    b.deposit(100);
+    b.deposit(50);
+    b.withdraw(30);
+    assert_eq(b.get_balance(), 120);
+}
+
+test fn state_int_conditional_update() -> Unit ! Spawn + Send {
+    // Withdrawing more than the balance is a no-op (guard inside behavior).
+    let b: Bank = actor Bank { balance: 10 };
+    b.withdraw(999);
+    assert_eq(b.get_balance(), 10);
+}
+
+test fn state_bool_set_and_toggle() -> Unit ! Spawn + Send {
+    let f: Flag = actor Flag { on: false };
+    f.set(true);
+    assert_eq(f.is_on(), true);
+    f.toggle();
+    assert_eq(f.is_on(), false);
+    f.toggle();
+    assert_eq(f.is_on(), true);
+}
+
+test fn state_survives_across_test_fn_scope() -> Unit ! Spawn + Send {
+    let b: Bank = actor Bank { balance: 1000 };
+    let f: Flag = actor Flag { on: false };
+    b.deposit(500);
+    f.set(true);
+    // Interleaved verify — both actors still hold their state.
+    assert_eq(b.get_balance(), 1500);
+    assert_eq(f.is_on(), true);
+}
