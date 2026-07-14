@@ -996,6 +996,13 @@ impl TextEmitter {
                 switch_arms.push((*n, arm_idx));
                 true
             }
+            // #1838: Bool literal patterns were dropping through to the
+            // `_ => false` catch-all, leaving switch_arms empty and the
+            // whole match falling through to the default (last arm).
+            Pattern::Literal(crate::mvl::ir::Literal::Bool(b), _) => {
+                switch_arms.push((if *b { 1 } else { 0 }, arm_idx));
+                true
+            }
             Pattern::Wildcard(_) | Pattern::Ident(_, _) => {
                 *wildcard_arm = Some(arm_idx);
                 true
@@ -1818,7 +1825,11 @@ impl TextEmitter {
 
         // `assert_eq`: branch on `%eq`; `assert_ne`: branch on `not %eq`.
         // Cheaper to swap ok/fail labels than to emit an extra xor.
-        let ok_bb = self.next_bb(if negate { "assert_ne_ok" } else { "assert_eq_ok" });
+        let ok_bb = self.next_bb(if negate {
+            "assert_ne_ok"
+        } else {
+            "assert_eq_ok"
+        });
         let fail_bb = self.next_bb(if negate {
             "assert_ne_fail"
         } else {

@@ -349,7 +349,15 @@ impl TextEmitter {
 
         self.ensure_closure_type();
 
-        // ── Build env struct + alloca in OUTER function ────────────────────
+        // ── Build env struct + heap allocation in OUTER function ────────────
+        //
+        // #1839: env and closure struct were stack-allocated (`alloca`).
+        // A closure returned by value from the enclosing fn would carry a
+        // pointer into the freed stack frame — classic use-after-return.
+        // Heap-allocate both via `_mvl_alloc` so returned closures work.
+        // Trade-off: unconditional heap alloc leaks memory over long runs;
+        // escape analysis would let us keep alloca for closures that never
+        // escape the enclosing fn (follow-up).
         let env_ty_name = format!("__env_{lambda_name}");
         let env_ptr: String = if captures.is_empty() {
             "null".into()
@@ -363,8 +371,19 @@ impl TextEmitter {
                 field_types.join(", ")
             ));
 
+            // sizeof(%__env_...) via the classic gep-null-1 trick.
+            self.ensure_extern("declare ptr @_mvl_alloc(i64)");
+            let size_gep = self.next_reg();
+            self.push_instr(&format!(
+                "{size_gep} = getelementptr %{env_ty_name}, ptr null, i32 1"
+            ));
+            let size_val = self.next_reg();
+            self.push_instr(&format!("{size_val} = ptrtoint ptr {size_gep} to i64"));
+            self.fn_ctx.reg_types.insert(size_val.clone(), "i64".into());
             let env_alloca = self.next_reg();
-            self.push_instr(&format!("{env_alloca} = alloca %{env_ty_name}"));
+            self.push_instr(&format!(
+                "{env_alloca} = call ptr @_mvl_alloc(i64 {size_val})"
+            ));
             self.fn_ctx
                 .reg_types
                 .insert(env_alloca.clone(), "ptr".into());
@@ -483,9 +502,15 @@ impl TextEmitter {
             Ok(())
         })?;
 
-        // ── Build closure struct in outer function ─────────────────────────
+        // ── Build closure struct on the heap in outer function ─────────────
+        //
+        // #1839: heap-allocate the {fn_ptr, env_ptr} struct too. If it were
+        // stack-allocated and the closure was returned, both the struct and
+        // its contents would be freed as the enclosing fn returned. Two
+        // pointers on a 64-bit target → 16 bytes.
+        self.ensure_extern("declare ptr @_mvl_alloc(i64)");
         let closure_alloca = self.next_reg();
-        self.push_instr(&format!("{closure_alloca} = alloca %__closure_type"));
+        self.push_instr(&format!("{closure_alloca} = call ptr @_mvl_alloc(i64 16)"));
         self.fn_ctx
             .reg_types
             .insert(closure_alloca.clone(), "ptr".into());

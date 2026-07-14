@@ -38,13 +38,13 @@ test fn hof_apply_twice() -> Unit {
     assert_eq(cube, 27);
 }
 
-// TODO(#1839): re-enable once LLVM backend handles closures returned by value.
-// test fn hof_returning_closure() -> Unit {
-//     let add5: fn(Int) -> Int = make_adder(5);
-//     let add10: fn(Int) -> Int = make_adder(10);
-//     assert_eq(add5(2), 7);
-//     assert_eq(add10(2), 12);
-// }
+test fn hof_returning_closure() -> Unit {
+    // Closures capture from the enclosing scope by value.
+    let add5: fn(Int) -> Int = make_adder(5);
+    let add10: fn(Int) -> Int = make_adder(10);
+    assert_eq(add5(2), 7);
+    assert_eq(add10(2), 12);
+}
 
 test fn hof_zero_arg_lambda() -> Unit {
     let const_seven: fn() -> Int = || 7;
