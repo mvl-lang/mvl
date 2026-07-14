@@ -1,0 +1,60 @@
+// 13_stdlib/parse_test.mvl — String parsing to Int/Float, split.
+//
+// `.parse_int()` and `.parse_float()` return `Result[T, String]` — no
+// exception, no null. Callers must destructure via `match` or use
+// `.unwrap_or(default)`. `.split(sep)` returns `List[String]`.
+
+test fn parse_int_valid() -> Unit {
+    let v: Int = match "42".parse_int() {
+        Ok(n) => n,
+        Err(_) => -1,
+    };
+    assert_eq(v, 42);
+}
+
+test fn parse_int_negative() -> Unit {
+    let v: Int = match "-17".parse_int() {
+        Ok(n) => n,
+        Err(_) => 0,
+    };
+    assert_eq(v, -17);
+}
+
+test fn parse_int_invalid_returns_err() -> Unit {
+    let v: Int = "abc".parse_int().unwrap_or(-1);
+    assert_eq(v, -1);
+}
+
+test fn parse_int_empty_returns_err() -> Unit {
+    let v: Int = "".parse_int().unwrap_or(-1);
+    assert_eq(v, -1);
+}
+
+test fn split_basic_comma_separated() -> Unit {
+    let parts: List[String] = "a,b,c".split(",");
+    assert_eq(parts.len(), 3);
+    assert_eq(parts.get(0).unwrap_or(""), "a");
+    assert_eq(parts.get(1).unwrap_or(""), "b");
+    assert_eq(parts.get(2).unwrap_or(""), "c");
+}
+
+test fn split_single_no_separator_yields_one() -> Unit {
+    let parts: List[String] = "hello".split(",");
+    assert_eq(parts.len(), 1);
+    assert_eq(parts.get(0).unwrap_or(""), "hello");
+}
+
+test fn split_multichar_separator() -> Unit {
+    let parts: List[String] = "one::two::three".split("::");
+    assert_eq(parts.len(), 3);
+    assert_eq(parts.get(1).unwrap_or(""), "two");
+}
+
+test fn split_then_parse_each() -> Unit {
+    let parts: List[String] = "10,20,30".split(",");
+    let sum: ref Int = 0;
+    for p in parts {
+        sum = sum + p.parse_int().unwrap_or(0);
+    }
+    assert_eq(sum, 60);
+}

@@ -1,0 +1,60 @@
+// 13_stdlib/string_test.mvl — String extension methods.
+//
+// Covers the portable subset of `std/strings.mvl` that both backends lower
+// via runtime shims: `.len`, `.concat`, `.substring`, `.to_upper`,
+// `.to_lower`, `.starts_with`, `.ends_with`, `.contains`, `.is_empty`, and
+// `.trim`. The methods are dispatched via dot syntax — MVL has no UFCS.
+
+test fn string_len() -> Unit {
+    assert_eq("hello".len(), 5);
+    assert_eq("".len(), 0);
+    assert_eq("abcdefghij".len(), 10);
+}
+
+test fn string_concat() -> Unit {
+    assert_eq("hello".concat(" world"), "hello world");
+    assert_eq("".concat("x"), "x");
+    assert_eq("x".concat(""), "x");
+}
+
+test fn string_substring() -> Unit {
+    assert_eq("hello world".substring(0, 5), "hello");
+    assert_eq("hello world".substring(6, 11), "world");
+    assert_eq("hello".substring(1, 4), "ell");
+}
+
+test fn string_case_conversion() -> Unit {
+    assert_eq("HELLO".to_lower(), "hello");
+    assert_eq("hello".to_upper(), "HELLO");
+    assert_eq("Mixed Case".to_lower(), "mixed case");
+    assert_eq("Mixed Case".to_upper(), "MIXED CASE");
+}
+
+test fn string_starts_and_ends_with() -> Unit {
+    assert_eq("hello world".starts_with("hello"), true);
+    assert_eq("hello world".starts_with("world"), false);
+    assert_eq("hello world".ends_with("world"), true);
+    assert_eq("hello world".ends_with("hello"), false);
+    assert_eq("hello".starts_with(""), true);
+    assert_eq("hello".ends_with(""), true);
+}
+
+test fn string_contains() -> Unit {
+    assert_eq("hello world".contains("world"), true);
+    assert_eq("hello world".contains("planet"), false);
+    assert_eq("hello".contains("hello"), true);
+    assert_eq("hello".contains(""), true);
+}
+
+test fn string_is_empty() -> Unit {
+    assert_eq("".is_empty(), true);
+    assert_eq("x".is_empty(), false);
+    assert_eq(" ".is_empty(), false);
+}
+
+test fn string_trim() -> Unit {
+    assert_eq("  hello  ".trim(), "hello");
+    assert_eq("hello".trim(), "hello");
+    assert_eq("".trim(), "");
+    assert_eq("   ".trim(), "");
+}

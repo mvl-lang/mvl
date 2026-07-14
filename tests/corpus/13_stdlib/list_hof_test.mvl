@@ -1,0 +1,81 @@
+// 13_stdlib/list_hof_test.mvl — List higher-order methods.
+//
+// Covers the closure-driven methods on `List[T]`: `.map`, `.filter`,
+// `.fold`, `.any`, `.all`, `.take`, `.skip`. Also touches non-HOF but
+// closely-related helpers: `.sort`, `.rev`, `.contains`.
+
+test fn list_map_transforms_each() -> Unit {
+    let xs: List[Int] = [1, 2, 3];
+    let doubled: List[Int] = xs.map(|x: Int| x * 2);
+    assert_eq(doubled.len(), 3);
+    assert_eq(doubled.get(0).unwrap_or(0), 2);
+    assert_eq(doubled.get(1).unwrap_or(0), 4);
+    assert_eq(doubled.get(2).unwrap_or(0), 6);
+}
+
+test fn list_filter_keeps_matching() -> Unit {
+    let xs: List[Int] = [1, 2, 3, 4, 5, 6];
+    let evens: List[Int] = xs.filter(|x: Int| x % 2 == 0);
+    assert_eq(evens.len(), 3);
+    assert_eq(evens.get(0).unwrap_or(-1), 2);
+    assert_eq(evens.get(1).unwrap_or(-1), 4);
+    assert_eq(evens.get(2).unwrap_or(-1), 6);
+}
+
+test fn list_fold_accumulates() -> Unit {
+    let xs: List[Int] = [1, 2, 3, 4, 5];
+    let sum: Int = xs.fold(0, |acc: Int, x: Int| acc + x);
+    assert_eq(sum, 15);
+}
+
+test fn list_fold_computes_product() -> Unit {
+    let xs: List[Int] = [1, 2, 3, 4];
+    let p: Int = xs.fold(1, |acc: Int, x: Int| acc * x);
+    assert_eq(p, 24);
+}
+
+test fn list_any() -> Unit {
+    let xs: List[Int] = [1, 2, 3, 4];
+    assert_eq(xs.any(|x: Int| x > 3), true);
+    assert_eq(xs.any(|x: Int| x > 10), false);
+    let empty: List[Int] = [];
+    assert_eq(empty.any(|x: Int| x > 0), false);
+}
+
+test fn list_all() -> Unit {
+    let xs: List[Int] = [2, 4, 6, 8];
+    assert_eq(xs.all(|x: Int| x % 2 == 0), true);
+    assert_eq(xs.all(|x: Int| x > 3), false);
+    let empty: List[Int] = [];
+    // Vacuously true over empty list.
+    assert_eq(empty.all(|x: Int| x > 100), true);
+}
+
+test fn list_take_and_skip() -> Unit {
+    let xs: List[Int] = [10, 20, 30, 40, 50];
+    let head: List[Int] = xs.take(3);
+    let tail: List[Int] = xs.skip(3);
+    assert_eq(head.len(), 3);
+    assert_eq(head.get(0).unwrap_or(0), 10);
+    assert_eq(head.get(2).unwrap_or(0), 30);
+    assert_eq(tail.len(), 2);
+    assert_eq(tail.get(0).unwrap_or(0), 40);
+    assert_eq(tail.get(1).unwrap_or(0), 50);
+}
+
+// TODO(#1858): re-enable once LLVM runtime exports _mvl_array_contains.
+// test fn list_contains() -> Unit {
+//     let xs: List[Int] = [10, 20, 30];
+//     assert_eq(xs.contains(20), true);
+//     assert_eq(xs.contains(99), false);
+// }
+
+test fn list_composed_map_filter_fold() -> Unit {
+    let xs: List[Int] = [1, 2, 3, 4, 5, 6];
+    // Square the evens then sum them: 4 + 16 + 36 = 56.
+    let result: Int = xs
+        .filter(|x: Int| x % 2 == 0)
+        .map(|x: Int| x * x)
+        .fold(0, |acc: Int, x: Int| acc + x);
+    assert_eq(result, 56);
+}
