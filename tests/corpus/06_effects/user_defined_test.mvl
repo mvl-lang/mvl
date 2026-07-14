@@ -1,0 +1,43 @@
+// 06_effects/user_defined_test.mvl — declaring and using non-stdlib effects.
+//
+// MVL programs can declare their own effects with `effect Name`. This gives
+// the checker a symbol to track — a fn that calls a `! Metrics` fn without
+// declaring `! Metrics` itself is rejected. Effects can also declare
+// subsumption via `effect Wider > Narrow1 + Narrow2`.
+
+effect Metrics
+effect Trace
+effect Telemetry > Metrics + Trace
+
+fn record_count(n: Int) -> Int ! Metrics {
+    // In a real system this would push to a metrics sink. For the test we
+    // just verify the value flows through unchanged.
+    n
+}
+
+fn record_span(span_name: String) -> String ! Trace {
+    span_name
+}
+
+fn instrumented(x: Int) -> Int ! Telemetry {
+    // `Telemetry > Metrics + Trace`, so we may call both without adding
+    // `Metrics` or `Trace` to our signature.
+    let _: Int = record_count(x);
+    let _: String = record_span("op");
+    x + 1
+}
+
+test fn user_effect_single() -> Unit ! Metrics {
+    let n: Int = record_count(42);
+    assert_eq(n, 42);
+}
+
+test fn user_effect_second() -> Unit ! Trace {
+    let s: String = record_span("hello");
+    assert_eq(s, "hello");
+}
+
+test fn user_effect_composite_subsumes() -> Unit ! Telemetry {
+    let r: Int = instrumented(100);
+    assert_eq(r, 101);
+}

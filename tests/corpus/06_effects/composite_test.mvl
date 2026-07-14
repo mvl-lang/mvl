@@ -1,0 +1,44 @@
+// 06_effects/composite_test.mvl — multi-effect signatures and subsumption.
+//
+// MVL effects form a lattice:
+//   * `Unit ! Console + Random`   — declares both explicitly
+//   * `Unit ! Log`                — where `Log > Clock + Console`; a fn
+//                                    with the `Log` effect is permitted to
+//                                    perform `Clock` and `Console` actions
+//   * `Unit ! IO`                 — subsumes Console, Net, File*, etc.
+//
+// These tests exercise: multi-effect declarations parse and execute, and
+// a caller with a wider (subsuming) effect can call fns declaring only the
+// narrower one.
+
+fn log_line(msg: String) -> Unit ! Console {
+    println(msg)
+}
+
+fn multi_effect_op(a: Int, b: Int) -> Int ! Console + Env {
+    println("mixing effects");
+    a + b
+}
+
+fn wide_caller(a: Int, b: Int) -> Int ! IO {
+    // `IO > Console + FileRead + Net + ...` — permitted to call any of
+    // its components without re-declaring them.
+    println("wide caller running");
+    log_line("delegated");
+    a * b
+}
+
+test fn multi_effect_declared() -> Unit ! Console + Env {
+    let r: Int = multi_effect_op(6, 7);
+    assert_eq(r, 13);
+}
+
+test fn subsumption_wide_calls_narrow() -> Unit ! IO {
+    let p: Int = wide_caller(3, 4);
+    assert_eq(p, 12);
+}
+
+test fn subsumption_wide_returns_correct_value_multiple_times() -> Unit ! IO {
+    assert_eq(wide_caller(2, 5), 10);
+    assert_eq(wide_caller(7, 3), 21);
+}

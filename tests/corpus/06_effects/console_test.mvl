@@ -1,0 +1,35 @@
+// 06_effects/console_test.mvl — `! Console` effect on functions that print.
+//
+// A fn that calls `println`/`print`/`eprintln` must declare `! Console` in
+// its signature — the compiler rejects the call otherwise. These tests
+// verify that Console-effect functions return the correct value; the
+// side-effect (writing to stdout) is orthogonal to the assertion.
+
+fn greet(name: String) -> String ! Console {
+    println("hello, ".concat(name));
+    name
+}
+
+fn log_and_double(x: Int) -> Int ! Console {
+    println(x.to_string());
+    x * 2
+}
+
+fn effectful_sum(a: Int, b: Int) -> Int ! Console {
+    let s: Int = a + b;
+    println("sum computed");
+    s
+}
+
+test fn console_fn_returns_correct_value() -> Unit ! Console {
+    assert_eq(greet("world"), "world");
+}
+
+test fn console_fn_side_effect_then_transform() -> Unit ! Console {
+    assert_eq(log_and_double(21), 42);
+}
+
+test fn console_fn_multiple_calls_stay_deterministic() -> Unit ! Console {
+    assert_eq(effectful_sum(1, 2), 3);
+    assert_eq(effectful_sum(10, 20), 30);
+}
