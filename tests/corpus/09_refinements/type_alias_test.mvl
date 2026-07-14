@@ -1,0 +1,53 @@
+// 09_refinements/type_alias_test.mvl — refined type aliases and inline refinements.
+//
+// A refinement is a compile-time predicate attached to a type: values must
+// satisfy the predicate wherever the type is used. At runtime the refinement
+// disappears — values flow as their base type.
+//
+// #1851: the LLVM backend doesn't resolve refined-alias NAMES back to their
+// underlying scalar type in fn signatures or builtin dispatch (e.g. `assert_eq`
+// on a `PositiveInt` value dispatches to `_mvl_string_eq`). Tests here use
+// **inline refinements** throughout — `Int where self > 0` in signatures and
+// bindings — which lower correctly on both backends. Alias-based tests will
+// return here once #1851 is fixed.
+
+fn double_positive(p: Int where self > 0) -> Int where self > 0 {
+    p * 2
+}
+
+fn triple_nonneg(n: Int where self >= 0) -> Int where self >= 0 {
+    n * 3
+}
+
+fn clamp_port(x: Int where self >= 0 && self <= 65535) -> Int where self >= 0 && self <= 65535 {
+    x
+}
+
+test fn inline_refinement_return_flows() -> Unit {
+    assert_eq(double_positive(5), 10);
+    assert_eq(double_positive(21), 42);
+}
+
+test fn inline_refinement_zero_is_valid_for_nonneg() -> Unit {
+    assert_eq(triple_nonneg(0), 0);
+    assert_eq(triple_nonneg(7), 21);
+}
+
+test fn inline_refinement_chains_through_calls() -> Unit {
+    let a: Int = double_positive(3);
+    let b: Int = triple_nonneg(a);
+    assert_eq(b, 18);
+}
+
+test fn inline_refinement_multi_predicate() -> Unit {
+    assert_eq(clamp_port(80), 80);
+    assert_eq(clamp_port(443), 443);
+    assert_eq(clamp_port(8080), 8080);
+}
+
+test fn inline_refinement_flows_through_arithmetic() -> Unit {
+    let a: Int = double_positive(10);
+    let b: Int = double_positive(20);
+    let c: Int = triple_nonneg(a + b);
+    assert_eq(c, 180);
+}
