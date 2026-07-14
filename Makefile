@@ -333,11 +333,15 @@ test-mvl: build ## Run MVL-in-MVL tests for the self-hosted compiler (compiler/*
 	$(MVL) test compiler/
 
 test-bootstrap-e2e: build ## Tracer bullet: hello_world.mvl → MVL LLVM emitter → llc → cc → run (#1746)
+	@# `grep -v '^STDOUT '` filters the checker's leaking debug lines
+	@# (#1829). Remove the filters once that bug is fixed.
 	@LLC=/opt/homebrew/opt/llvm/bin/llc; \
 	OUT=$$(mktemp -d); \
 	printf "  Running hello_world.mvl through self-hosted LLVM emitter...\n"; \
 	$(MVL) tir examples/programs/hello_world.mvl 2>/dev/null \
+	  | grep -v '^STDOUT ' \
 	  | $(MVL) run compiler/backends/llvm/emitter.mvl 2>/dev/null \
+	  | grep -v '^STDOUT ' \
 	  | tail -n +3 > "$$OUT/hello.ll"; \
 	$$LLC -filetype=obj "$$OUT/hello.ll" -o "$$OUT/hello.o"; \
 	cc -o "$$OUT/hello" "$$OUT/hello.o" -lc 2>/dev/null; \
@@ -416,14 +420,43 @@ test-cross-backend: build ## Run Rust integration tests for backend parity (tran
 test-rust-rust: build ## rust/rust — new corpus through Rust transpiler (batched)
 	$(MVL) test tests/corpus/
 
-test-rust-llvm: build ## rust/llvm — new corpus through LLVM text emitter (stub, tracked in #1828)
-	@printf "  \033[33m~  SKIP: test-rust-llvm not yet wired\033[0m\n"
-	@echo "    Blocker: mvl test --backend=llvm expects fn main + // expect: strings,"
-	@echo "    but the new corpus uses test fn blocks. See #1828."
+test-rust-llvm: build ## rust/llvm — new corpus through LLVM text emitter (per-file bridge, see #1828)
+	@# Per-file harness: `mvl test --backend=llvm` still requires fn main +
+	@# expect strings. Until #1828 extends it to handle test fn directly,
+	@# we bridge by synthesizing per-file drivers: sed `test fn` → `fn`,
+	@# append a main that calls each test fn in order, run via lli. A
+	@# panic from any assert fails the file; exit 0 for all files = pass.
+	@pass=0; fail=0; \
+	OK="\033[32m✓\033[0m"; FAIL="\033[31m✗\033[0m"; \
+	TMP=$$(mktemp -d); \
+	while IFS= read -r f; do \
+		short=$${f#tests/corpus/}; \
+		safe=$$(echo "$$short" | tr '/' '_'); \
+		out="$$TMP/$$safe"; \
+		sed 's/^test fn /fn /' "$$f" > "$$out"; \
+		{ echo ""; echo "fn main() -> Unit ! Console {"; \
+		  grep -oE "^test fn [a-z_0-9]+" "$$f" | awk '{print "    " $$3 "();"}'; \
+		  echo "}"; } >> "$$out"; \
+		if $(MVL) run --backend=llvm "$$out" >/dev/null 2>&1; then \
+			printf "  $$OK  %s\n" "$$short"; pass=$$((pass + 1)); \
+		else \
+			printf "  $$FAIL  %s\n" "$$short"; fail=$$((fail + 1)); \
+		fi; \
+	done < <(find tests/corpus -name "*_test.mvl" | sort); \
+	rm -rf "$$TMP"; \
+	echo ""; \
+	if [ $$fail -eq 0 ]; then \
+		printf "  \033[32m✓  $$pass passed, 0 failed\033[0m\n\n"; \
+	else \
+		printf "  \033[31m✗  $$pass passed, $$fail failed\033[0m\n\n"; exit 1; \
+	fi
 
-test-mvl-llvm: build ## mvl/llvm — new corpus through the MVL self-hosted compiler (stub, tracked in #1828)
-	@printf "  \033[33m~  SKIP: test-mvl-llvm not yet wired\033[0m\n"
-	@echo "    Blocker: self-hosted compiler doesn't run the batched corpus yet. See #1828."
+test-mvl-llvm: build ## mvl/llvm — MVL self-hosted → LLVM (tracer bullet, broader corpus in #1828)
+	@# Until the self-hosted compiler runs the batched corpus, this anchor
+	@# runs the existing bootstrap tracer: hello_world.mvl through
+	@# compiler/backends/llvm/emitter.mvl → llc → cc → run. Proves the
+	@# mvl/llvm pipeline is live end-to-end.
+	@$(MAKE) --no-print-directory test-bootstrap-e2e
 
 test-rust-tokio: build ## rust/rust-tokio — actor subset only (stub, tracked in #1828)
 	@printf "  \033[33m~  SKIP: test-rust-tokio not yet wired\033[0m\n"
