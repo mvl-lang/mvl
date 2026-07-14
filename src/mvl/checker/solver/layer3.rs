@@ -342,7 +342,7 @@ fn collect_block_paths(
                     // effectively the return.  Emit one path per init path.
                     for ip in init_paths {
                         let mut merged = prefix.clone();
-                        merged.extend(ip.conditions.into_iter());
+                        merged.extend(ip.conditions);
                         paths.push(ExecutionPath {
                             conditions: merged,
                             return_expr: ip.return_expr,
@@ -353,7 +353,7 @@ fn collect_block_paths(
 
                 for ip in init_paths {
                     let mut branch_prefix = prefix.clone();
-                    branch_prefix.extend(ip.conditions.into_iter());
+                    branch_prefix.extend(ip.conditions);
                     let mut bindings: HashMap<&str, &Expr> = HashMap::new();
                     bindings.insert(name.as_str(), &ip.return_expr);
 
