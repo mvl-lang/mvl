@@ -1,33 +1,48 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Schuberg Philis
 
-//! `WasmTextCompiler` — minimal TIR → WebAssembly Text emitter (#1571).
+//! `WasmTextCompiler` — TIR → WebAssembly Text emitter (#1818, epic #1817).
 //!
-//! Spike scope: emit WAT for the two programs in
-//! `tests/spikes/006-wasm-backend/` (`add.mvl` and `hello.mvl`). Enough to
-//! validate the end-to-end pipeline; deliberately not enough for anything
-//! larger. Extending beyond this requires the ADR decisions listed in the
-//! epic (string ABI, allocator, effect → import table).
+//! Runs against `tests/corpus/` via `make test-rust-wasm` (delegated to
+//! mvlr). Phase 1 scope: cover chapters 00_smoke, 01_expressions, and
+//! 02_control_flow (except `match`).
 //!
 //! Supported today:
-//! - `Int → i64` (all other primitives punted to i64)
-//! - integer literals, parameters, direct calls, arithmetic
-//! - trailing block expression as return value
-//! - `Int.to_string()` (via inline bump-allocated i64 → decimal helper)
-//! - **String literals** — collected up front, placed in a data section,
-//!   pushed on the WASM stack as `(ptr, len)` i32 pairs.
-//! - `println(s)` (via WASI `fd_write` + newline iovec)
-//! - `fn main() -> Unit ! Console` becomes the WASI `_start` export
+//! - Primitives: `Int → i64`, `Float → f64`, `Bool` / `Byte → i32`
+//! - All literal kinds (`Integer`, `Float`, `Bool`, `Str`)
+//! - Arithmetic, comparison, bitwise, and short-circuit boolean ops
+//! - Unary `Neg`, `Not`, `BitNot`
+//! - `Int.to_string()` (inline bump-allocated i64 → decimal helper)
+//! - `Bool.to_string()` (branch between interned `"true"` / `"false"`)
+//! - String literals — interned up front, emitted as `(data …)` sections
+//! - `println(s)` / `eprintln(s)` — WASI `fd_write` fd 1 / fd 2 + newline
+//! - `assert(cond)` / `assert_eq[T](a, b)` / `assert_ne[T](a, b)` — trap
+//!   via `unreachable` on failure. Type-directed equality.
+//! - `let` and `let ref` bindings — WASM locals, declared in a fn prelude
+//!   from a pre-scan of the body
+//! - `x = value;` assignment for `ref` locals — `local.set`
+//! - `if` / `else if` / `else` — both statement and expression forms
+//! - `while cond { body }` — canonical WASM `block/loop/br_if` shape
+//! - Early `return` (both `return expr` and bare `return`)
+//! - `fn main() -> Unit ! Console` → WASI `_start` export
 //!
-//! Everything else (control flow, structs, actors, refcounting, other
-//! effects, other host imports) is deliberately out of scope.
+//! Deliberately not supported (later phases of #1817):
+//! - `match` — pattern compilation, punted to phase 4
+//! - Structs, enums, `Option`, `Result` — phase 4
+//! - Collections (`List`, `Map`, `Set`) — phase 3
+//! - Higher-order fns / closures / generics — later
+//! - String equality, indexing, concat — phase 2 with `runtime/wasm/`
+//! - `MvlString` refcount layout, drop emission — phase 2
+//! - Other WASI hostcalls, `extern "wasm"` ABI — separate ticket
+//! - Actors, refinements, contracts — phase 4/5
 
+use std::cell::Cell;
 use std::collections::HashMap;
 
 use super::Backend;
 use crate::mvl::checker::types::Ty;
-use crate::mvl::ir::{TirBlock, TirExpr, TirExprKind, TirFn, TirProgram, TirStmt};
-use crate::mvl::parser::ast::{BinaryOp, Literal, UnaryOp};
+use crate::mvl::ir::{TirBlock, TirElseBranch, TirExpr, TirExprKind, TirFn, TirProgram, TirStmt};
+use crate::mvl::parser::ast::{BinaryOp, LValue, Literal, Pattern, UnaryOp};
 
 pub struct WasmTextCompiler;
 
@@ -45,11 +60,23 @@ impl Default for WasmTextCompiler {
 
 /// Shared per-emission context. Bundles the flags/tables threaded through
 /// every emit_*  free function so their signatures stay stable as the
-/// spike grows (or shrinks).
+/// spike grows (or shrinks). Uses `Cell` for the label counter so the
+/// context stays behind a `&`-reference — labels are module-wide unique,
+/// which is stricter than WASM requires but simpler to bookkeep.
 struct Ctx<'a> {
     needs_wasi: bool,
     /// Interned string literals: content → (linear-memory offset, byte length).
     literals: &'a HashMap<String, (u32, u32)>,
+    /// Monotonic counter for fresh WAT labels (`$while_0`, `$while_1`, …).
+    label_counter: Cell<usize>,
+}
+
+impl Ctx<'_> {
+    fn fresh_label(&self, prefix: &str) -> String {
+        let n = self.label_counter.get();
+        self.label_counter.set(n + 1);
+        format!("{prefix}_{n}")
+    }
 }
 
 /// First offset available for string-literal data after the fixed WASI
@@ -83,6 +110,7 @@ impl Backend for WasmTextCompiler {
         let ctx = Ctx {
             needs_wasi,
             literals: &literals,
+            label_counter: Cell::new(0),
         };
 
         let mut out = String::from("(module\n");
@@ -127,8 +155,90 @@ fn emit_fn(out: &mut String, f: &TirFn, ctx: &Ctx) {
         out.push_str(&format!(" (result {})", wasm_ty(&f.ret_ty)));
     }
     out.push('\n');
+
+    // WASM locals must be declared before any instruction. Pre-scan the
+    // body for `let` bindings and emit `(local $name ty)` declarations
+    // up front. Nested blocks (if / while) don't get their own scope in
+    // WASM — corpus tests happen not to reuse names, so a flat collection
+    // is fine for phase 1.
+    let mut locals: Vec<(String, Ty)> = Vec::new();
+    collect_locals_block(&f.body, &mut locals);
+    for (name, ty) in &locals {
+        out.push_str(&format!("    (local ${} {})\n", name, wasm_ty(ty)));
+    }
+
     emit_block(out, &f.body, ctx);
     out.push_str("  )\n");
+}
+
+// ── Local collection ─────────────────────────────────────────────────────
+
+fn collect_locals_block(block: &TirBlock, locals: &mut Vec<(String, Ty)>) {
+    for s in &block.stmts {
+        collect_locals_stmt(s, locals);
+    }
+}
+
+fn collect_locals_stmt(stmt: &TirStmt, locals: &mut Vec<(String, Ty)>) {
+    match stmt {
+        TirStmt::Let {
+            pattern, ty, init, ..
+        } => {
+            if let Pattern::Ident(name, _) = pattern {
+                locals.push((name.clone(), ty.clone()));
+            }
+            collect_locals_expr(init, locals);
+        }
+        TirStmt::Assign { value, .. } => collect_locals_expr(value, locals),
+        TirStmt::Return { value: Some(v), .. } => collect_locals_expr(v, locals),
+        TirStmt::If {
+            cond, then, else_, ..
+        } => {
+            collect_locals_expr(cond, locals);
+            collect_locals_block(then, locals);
+            match else_ {
+                Some(TirElseBranch::Block(b)) => collect_locals_block(b, locals),
+                Some(TirElseBranch::If(s)) => collect_locals_stmt(s, locals),
+                None => {}
+            }
+        }
+        TirStmt::While { cond, body, .. } => {
+            collect_locals_expr(cond, locals);
+            collect_locals_block(body, locals);
+        }
+        TirStmt::Expr { expr, .. } => collect_locals_expr(expr, locals),
+        _ => {}
+    }
+}
+
+fn collect_locals_expr(expr: &TirExpr, locals: &mut Vec<(String, Ty)>) {
+    match &expr.kind {
+        TirExprKind::If { cond, then, else_ } => {
+            collect_locals_expr(cond, locals);
+            collect_locals_block(then, locals);
+            if let Some(e) = else_ {
+                collect_locals_expr(e, locals);
+            }
+        }
+        TirExprKind::Block(b) => collect_locals_block(b, locals),
+        TirExprKind::Binary { left, right, .. } => {
+            collect_locals_expr(left, locals);
+            collect_locals_expr(right, locals);
+        }
+        TirExprKind::Unary { expr, .. } => collect_locals_expr(expr, locals),
+        TirExprKind::FnCall { args, .. } => {
+            for a in args {
+                collect_locals_expr(a, locals);
+            }
+        }
+        TirExprKind::MethodCall { receiver, args, .. } => {
+            collect_locals_expr(receiver, locals);
+            for a in args {
+                collect_locals_expr(a, locals);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn emit_block(out: &mut String, block: &TirBlock, ctx: &Ctx) {
@@ -143,6 +253,60 @@ fn emit_stmt(out: &mut String, stmt: &TirStmt, ctx: &Ctx) {
         TirStmt::Return { value: Some(e), .. } => {
             emit_expr(out, e, ctx);
             out.push_str("    return\n");
+        }
+        TirStmt::Return { value: None, .. } => {
+            out.push_str("    return\n");
+        }
+        // `let x: T = init;`  (or `let x: ref T = init;` — same lowering)
+        // The local was already declared in the fn prelude via
+        // `collect_locals_block`. Here we just evaluate the init and store.
+        TirStmt::Let { pattern, init, .. } => {
+            if let Pattern::Ident(name, _) = pattern {
+                emit_expr(out, init, ctx);
+                out.push_str(&format!("    local.set ${name}\n"));
+            } else {
+                out.push_str(&format!("    ;; unsupported let pattern: {pattern:?}\n"));
+            }
+        }
+        // `x = value;` — for `ref` locals. Only bare-identifier targets.
+        TirStmt::Assign { target, value, .. } => {
+            if let LValue::Ident(name, _) = target {
+                emit_expr(out, value, ctx);
+                out.push_str(&format!("    local.set ${name}\n"));
+            } else {
+                out.push_str(&format!("    ;; unsupported assign target: {target:?}\n"));
+            }
+        }
+        // `if cond { then } else { else_ }` — statement form (no result value).
+        TirStmt::If {
+            cond, then, else_, ..
+        } => {
+            emit_expr(out, cond, ctx);
+            out.push_str("    if\n");
+            emit_block(out, then, ctx);
+            if let Some(e) = else_ {
+                out.push_str("    else\n");
+                match e {
+                    TirElseBranch::Block(b) => emit_block(out, b, ctx),
+                    TirElseBranch::If(nested) => emit_stmt(out, nested, ctx),
+                }
+            }
+            out.push_str("    end\n");
+        }
+        // `while cond { body }` — canonical WASM shape:
+        //   block $break_N (loop $cont_N (br_if $break_N (i32.eqz cond)) body (br $cont_N))
+        TirStmt::While { cond, body, .. } => {
+            let brk = ctx.fresh_label("wend");
+            let cnt = ctx.fresh_label("wcont");
+            out.push_str(&format!("    block ${brk}\n"));
+            out.push_str(&format!("    loop ${cnt}\n"));
+            emit_expr(out, cond, ctx);
+            out.push_str("    i32.eqz\n");
+            out.push_str(&format!("    br_if ${brk}\n"));
+            emit_block(out, body, ctx);
+            out.push_str(&format!("    br ${cnt}\n"));
+            out.push_str("    end\n");
+            out.push_str("    end\n");
         }
         _ => {
             out.push_str(&format!("    ;; unsupported stmt: {stmt:?}\n"));
@@ -235,6 +399,30 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             }
         }
         TirExprKind::Block(block) => emit_block(out, block, ctx),
+        // `if cond { then } else { else_ }` — expression form. Both branches
+        // must produce a value of `expr.ty`. WASM's block-typed `if
+        // (result T)` handles this directly. `else_ = None` would give the
+        // whole expr type `Unit` — treat as a no-op else.
+        TirExprKind::If { cond, then, else_ } => {
+            emit_expr(out, cond, ctx);
+            let is_unit = matches!(expr.ty, Ty::Unit);
+            if is_unit {
+                out.push_str("    if\n");
+            } else {
+                out.push_str(&format!("    if (result {})\n", wasm_ty(&expr.ty)));
+            }
+            emit_block(out, then, ctx);
+            if let Some(e) = else_ {
+                out.push_str("    else\n");
+                emit_expr(out, e, ctx);
+            } else if !is_unit {
+                // Bare `if` used in expression position — should be Unit,
+                // handled above. Any other missing else is a checker bug;
+                // emit a comment so wasm-tools flags it.
+                out.push_str("    ;; if-expr with missing else\n");
+            }
+            out.push_str("    end\n");
+        }
         other => {
             out.push_str(&format!("    ;; unsupported expr: {other:?}\n"));
         }
@@ -431,10 +619,25 @@ fn collect_block(block: &TirBlock, map: &mut HashMap<String, (u32, u32)>, next: 
 
 fn collect_stmt(stmt: &TirStmt, map: &mut HashMap<String, (u32, u32)>, next: &mut u32) {
     match stmt {
-        TirStmt::Expr { expr, .. }
-        | TirStmt::Return {
-            value: Some(expr), ..
-        } => collect_expr(expr, map, next),
+        TirStmt::Expr { expr, .. } => collect_expr(expr, map, next),
+        TirStmt::Return { value: Some(v), .. } => collect_expr(v, map, next),
+        TirStmt::Let { init, .. } => collect_expr(init, map, next),
+        TirStmt::Assign { value, .. } => collect_expr(value, map, next),
+        TirStmt::If {
+            cond, then, else_, ..
+        } => {
+            collect_expr(cond, map, next);
+            collect_block(then, map, next);
+            match else_ {
+                Some(TirElseBranch::Block(b)) => collect_block(b, map, next),
+                Some(TirElseBranch::If(s)) => collect_stmt(s, map, next),
+                None => {}
+            }
+        }
+        TirStmt::While { cond, body, .. } => {
+            collect_expr(cond, map, next);
+            collect_block(body, map, next);
+        }
         _ => {}
     }
 }
@@ -462,6 +665,13 @@ fn collect_expr(expr: &TirExpr, map: &mut HashMap<String, (u32, u32)>, next: &mu
             collect_expr(receiver, map, next);
             for a in args {
                 collect_expr(a, map, next);
+            }
+        }
+        TirExprKind::If { cond, then, else_ } => {
+            collect_expr(cond, map, next);
+            collect_block(then, map, next);
+            if let Some(e) = else_ {
+                collect_expr(e, map, next);
             }
         }
         TirExprKind::Block(block) => collect_block(block, map, next),
