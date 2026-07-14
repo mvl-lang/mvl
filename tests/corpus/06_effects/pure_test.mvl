@@ -1,0 +1,32 @@
+// 06_effects/pure_test.mvl — pure functions (no effect annotation).
+//
+// Pure is the default: a fn signature with no `!` clause promises the
+// checker that the body performs no side effects. Return values must be
+// a function of arguments only. Baseline for the rest of 06_effects.
+
+fn add(a: Int, b: Int) -> Int { a + b }
+
+fn compute(x: Int, y: Int) -> Int {
+    let s: Int = add(x, y);
+    s * 2
+}
+
+total fn factorial(n: Int) -> Int {
+    if n <= 1 { 1 } else { n * factorial(n - 1) }
+}
+
+test fn pure_add_is_deterministic() -> Unit {
+    assert_eq(add(2, 3), 5);
+    assert_eq(add(2, 3), 5);
+    assert_eq(add(2, 3), 5);
+}
+
+test fn pure_composition_returns_correct_value() -> Unit {
+    assert_eq(compute(3, 4), 14);
+}
+
+test fn total_pure_recursion() -> Unit {
+    assert_eq(factorial(0), 1);
+    assert_eq(factorial(1), 1);
+    assert_eq(factorial(5), 120);
+}
