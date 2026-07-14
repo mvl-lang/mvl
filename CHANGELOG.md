@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-07-14
+
+### Fixed
+
+- **Toolchain re-exec no longer masks local emitter changes** — `mvl` now honors `MVL_NO_REEXEC=1` (any non-empty, non-"0" value) to skip the `requires-mvl` version resolution chain. `tools/mvlr` sets this env var whenever the caller passed `--mvl=<path>` explicitly. Before this change, `make test-rust-llvm` would silently re-exec `./target/debug/mvl` to the installed toolchain via the project's `mvl.toml` pin, so any freshly-built emitter changes were invisible until `make install` ran between iterations. This trap is what let the #1847 regression test appear to pass locally in one session and fail in the next. Ambient `mvl` invocations (no override, no env var) still resolve the pin exactly as before, so end-user projects are unaffected.
+
 ## [1.3.0] - 2026-07-14
 
 ### Added — corpus categories 05–12 (bundled feat)
