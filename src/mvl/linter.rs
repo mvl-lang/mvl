@@ -98,6 +98,7 @@ pub fn lint(prog: &Program, src: &str, cfg: &LintConfig) -> LintResult {
     rules::missing_totality(prog, cfg, &mut diags);
     rules::for_iter_antipattern(prog, cfg, &mut diags);
     rules::while_to_for_range(prog, cfg, &mut diags);
+    rules::zero_arg_literal_fn_as_const(prog, cfg, &mut diags);
     rules::deprecated_extern_rust(prog, cfg, &mut diags);
     rules::unused_functions(prog, cfg, &mut diags);
     rules::silent_result_discard(prog, cfg, &mut diags);

@@ -73,6 +73,10 @@ pub(super) struct ContractCheckCtx<'a> {
     /// per-field hypothesis under keys of the form `"param.field"` (#1805).
     pub(super) struct_fields:
         &'a HashMap<String, HashMap<String, RefExpr>>,
+    /// Top-level `const` hypotheses (`self == value`) seeded into var_refs
+    /// so bare Ident uses of `pub const N: Int = …;` reach L1 as concrete
+    /// integers (#1805 follow-up).
+    pub(super) const_refs: &'a HashMap<String, Option<RefExpr>>,
 }
 
 // ── Generic AST walker (post-order, context-threaded) ────────────────────────
@@ -124,6 +128,8 @@ pub fn check_contracts(
     let type_refs = crate::mvl::checker::refinements::build_type_alias_refinements(prog);
     let struct_fields =
         crate::mvl::checker::refinements::build_struct_field_refinements_combined(all_progs);
+    let const_map = crate::mvl::checker::refinements::build_const_map(all_progs);
+    let const_refs = crate::mvl::checker::refinements::const_map_to_var_refs(&const_map);
     let mut counts = RefinementCounts {
         mode,
         ..Default::default()
@@ -135,6 +141,7 @@ pub fn check_contracts(
             counts: &mut counts,
             type_refs: &type_refs,
             struct_fields: &struct_fields,
+            const_refs: &const_refs,
         };
 
         for decl in &prog.declarations {
@@ -145,7 +152,7 @@ pub fn check_contracts(
                     // Phase 3: seed var_refs with parameter where-refinements so that
                     // `requires` checks on variable arguments (e.g. `f(x)` where
                     // `x: Int where self > 0`) can be resolved by the solver.
-                    let var_refs = build_param_var_refs_full(&fd.params, ctx.type_refs, ctx.struct_fields);
+                    let var_refs = build_param_var_refs_full(&fd.params, ctx.type_refs, ctx.struct_fields, ctx.const_refs);
                     walk_stmts(&fd.body, &mut ctx, &mut |expr, ctx| {
                         if let Expr::FnCall {
                             name, args, span, ..
@@ -186,7 +193,7 @@ pub fn check_contracts(
                     for method in &impl_d.methods {
                         ctx.counts.current_fn = method.name.clone();
                         let sites_before = ctx.counts.sites.len();
-                        let var_refs = build_param_var_refs_full(&method.params, ctx.type_refs, ctx.struct_fields);
+                        let var_refs = build_param_var_refs_full(&method.params, ctx.type_refs, ctx.struct_fields, ctx.const_refs);
                         walk_stmts(&method.body, &mut ctx, &mut |expr, ctx| {
                             if let Expr::FnCall {
                                 name, args, span, ..
@@ -250,6 +257,8 @@ pub fn check_return_refinements(prog: &Program, errors: &mut Vec<CheckError>, mo
     let type_refs = crate::mvl::checker::refinements::build_type_alias_refinements(prog);
     let struct_fields =
         crate::mvl::checker::refinements::build_struct_field_refinements_combined(&[prog]);
+    let const_map = crate::mvl::checker::refinements::build_const_map(&[prog]);
+    let const_refs = crate::mvl::checker::refinements::const_map_to_var_refs(&const_map);
     let mut counts = RefinementCounts {
         mode,
         ..Default::default()
@@ -260,6 +269,7 @@ pub fn check_return_refinements(prog: &Program, errors: &mut Vec<CheckError>, mo
         counts: &mut counts,
         type_refs: &type_refs,
         struct_fields: &struct_fields,
+        const_refs: &const_refs,
     };
     for decl in &prog.declarations {
         let fns: Vec<&FnDecl> = match decl {
@@ -270,7 +280,7 @@ pub fn check_return_refinements(prog: &Program, errors: &mut Vec<CheckError>, mo
         for fd in fns {
             if let Some(ret_pred) = &fd.return_refinement {
                 ctx.counts.current_fn = fd.name.clone();
-                let var_refs = build_param_var_refs_full(&fd.params, ctx.type_refs, ctx.struct_fields);
+                let var_refs = build_param_var_refs_full(&fd.params, ctx.type_refs, ctx.struct_fields, ctx.const_refs);
                 check_return_pred_in_block(&fd.body, &fd.name, ret_pred, &var_refs, &mut ctx);
             }
         }
@@ -875,7 +885,7 @@ pub(super) fn check_ensures_for_return(
     // (normalised so the param name becomes "self").  This lets Layer 2 and
     // Layer 4 prove postconditions like `ensures result >= 0` when the function
     // parameter is annotated `n: Int where self >= 0`.
-    let mut var_refs = build_param_var_refs_full(params, ctx.type_refs, ctx.struct_fields);
+    let mut var_refs = build_param_var_refs_full(params, ctx.type_refs, ctx.struct_fields, ctx.const_refs);
 
     // #1796: inject each accumulated branch condition as a hypothesis in
     // var_refs.  This lets ensures clauses on the else-branch of an
@@ -1076,8 +1086,11 @@ pub(super) fn normalize_pred(pred: &RefExpr, old_name: &str) -> RefExpr {
 ///
 /// Each predicate is normalised so the parameter name becomes `"self"`,
 /// matching the form expected by the 5-layer solver.
+#[allow(dead_code)] // kept for external test callers that don't set up a
+                    // ContractCheckCtx; internal contract-checker code uses
+                    // `build_param_var_refs_full` so const, struct-field, and
+                    // type-alias hypotheses are always seeded.
 pub(super) fn build_param_var_refs(params: &[Param]) -> HashMap<String, Option<RefExpr>> {
-    // Legacy no-context callers: no struct-field / type-alias projection.
     let empty_types: HashMap<String, Option<RefExpr>> = HashMap::new();
     let empty_structs: HashMap<String, HashMap<String, RefExpr>> = HashMap::new();
     crate::mvl::checker::refinements::params_to_var_refs(params, &empty_types, &empty_structs)
@@ -1091,8 +1104,14 @@ pub(super) fn build_param_var_refs_full(
     params: &[Param],
     type_refs: &HashMap<String, Option<RefExpr>>,
     struct_fields: &HashMap<String, HashMap<String, RefExpr>>,
+    const_refs: &HashMap<String, Option<RefExpr>>,
 ) -> HashMap<String, Option<RefExpr>> {
-    crate::mvl::checker::refinements::params_to_var_refs(params, type_refs, struct_fields)
+    crate::mvl::checker::refinements::params_to_var_refs_full(
+        params,
+        type_refs,
+        struct_fields,
+        const_refs,
+    )
 }
 
 /// Substitute every `RefExpr::Ident { name == old_name }` with `new_val`.

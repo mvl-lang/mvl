@@ -46,6 +46,53 @@ Full corpus now **238 tests across 14 categories**, both backends green. Up from
 
 ## [1.3.0] - 2026-07-14
 
+### Added — solver follow-ups (#1805)
+
+Follow-up to the atom-normalization work merged as #1835.  Four
+coordinated changes push more compound-atom / const-shaped call sites
+from `runtime` to the arithmetic layers, without a further version bump.
+
+- **Cross-module struct-field refinements.**
+  `build_struct_field_refinements_combined(&[&Program])` replaces the
+  single-program variant.  Pong's `Field.height where self >= 10 && self <= 40`
+  in `models.mvl` is now projected into `var_refs["field.height"]` at
+  every call site in `game.mvl`, so `clamp_row` / `clamp_col` reach L4
+  Cooper instead of runtime.
+
+- **If-in-Construct field lift.**
+  `check_ensures_for_return_expr_recur` now rewrites
+  `Struct { .. f: (if C { A } else { B }), .. }` as
+  `if C { Struct { .. f: A, .. } } else { Struct { .. f: B, .. } }`
+  before the existing per-branch descent.  Unblocks `resolve_scoring`
+  style patterns where a let-if-tail lands in a struct-literal field —
+  the compound field used to short-circuit L1's `eval_pred_struct`
+  with `Some(RuntimeCheck)` before atom_norm could rewrite it.
+
+- **Top-level `const` inlining.**
+  `Decl::Const NAME: T = LITERAL;` now registers in `TypeEnv` via
+  `register_const` (bare `Expr::Ident(NAME)` uses type-check against
+  `T`) and seeds `var_refs[NAME] = Some(self == VALUE)` via
+  `build_const_map` + `const_map_to_var_refs` so the arithmetic layers
+  see a concrete equality.  `paddle_height()` (a zero-arg constant
+  function) and `paddle_height` (a first-class `const`) now discharge
+  identically at L1 — no regression when upgrading the older idiom.
+
+- **Linter rule `zero-arg-literal-fn-as-const`.**
+  Warns on `pub total fn NAME() -> T { LITERAL }` (no params, no
+  effects, single-literal body): flag the pattern as a workaround
+  for missing `const` support and suggest `pub const NAME: T = LITERAL;`.
+  Configurable via `.mvllintrc` — default: on.
+
+- **`examples/pong/game.mvl` upgraded.**  `paddle_height`,
+  `medium_speedup_after`, `max_speed` are now `pub const` decls
+  matching the recommended idiom; layer distribution is preserved
+  (was 29 proven / 16 runtime before; still 29+ proven with the
+  cross-module + If-lift wins on top).
+
+New corpus tests: `tests/solver/layer1/14_construct_if_field_lift.mvl`,
+`tests/solver/layer1/15_const_inlining.mvl`.  Solver corpus grows to
+60 tests; all 24 test groups remain green.
+
 ### Added — corpus categories 05–12 (bundled feat)
 
 Consolidated from prior v1.3.0 / v1.4.0 / v1.5.0 tags into a single 1.3.0 release. Test-only corpus growth doesn't warrant multiple minor bumps — this is one feat surface, eight categories deep.

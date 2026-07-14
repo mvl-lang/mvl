@@ -95,6 +95,11 @@ impl TypeChecker {
                             fn_info.totality.clone(),
                         );
                     }
+                    // Top-level `const NAME: T = …;` — resolves as its declared T.
+                    // Solver-side inlining happens via `build_const_map` (#1805).
+                    if let Some(cty) = self.env.lookup_const(name) {
+                        return cty.clone();
+                    }
                     self.emit(CheckError::UndefinedVariable {
                         name: name.clone(),
                         span: *span,

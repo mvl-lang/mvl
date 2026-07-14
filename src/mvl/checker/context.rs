@@ -226,6 +226,11 @@ pub struct TypeEnv {
     /// `None` = bare type; `Some(name)` = declared label.
     /// `audit` = true when declaration carries `audit` keyword (#896).
     pub relabels: HashMap<String, (Option<String>, Option<String>, bool)>,
+    /// Top-level `const NAME: T = expr;` declarations (#1805).  Stores each
+    /// const's declared type so bare `Expr::Ident(name)` uses type-check
+    /// against `T`.  The value is inlined at the solver layer by
+    /// `refinements::build_const_map`.
+    pub(super) consts: HashMap<String, Ty>,
 }
 
 impl Default for TypeEnv {
@@ -287,9 +292,22 @@ impl TypeEnv {
             from_impls: HashMap::new(),
             known_labels,
             relabels,
+            consts: HashMap::new(),
         };
         env.register_builtins();
         env
+    }
+
+    /// Register a top-level `const NAME: T = expr;` so bare-Ident type
+    /// resolution succeeds at use sites (#1805).
+    pub fn define_const(&mut self, name: String, ty: Ty) {
+        self.consts.insert(name, ty);
+    }
+
+    /// Lookup a top-level const's declared type.  Used by inference when a
+    /// bare Ident can't be resolved to a scope, param, or function name.
+    pub fn lookup_const(&self, name: &str) -> Option<&Ty> {
+        self.consts.get(name)
     }
 
     /// Look up a relabel transition by name.

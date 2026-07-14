@@ -57,6 +57,22 @@ impl ConstValue {
 /// Try to extract a `ConstValue` from an expression that is already a literal
 /// (or a negated literal). Returns `None` for anything else.
 pub fn expr_as_const(expr: &Expr) -> Option<ConstValue> {
+    expr_as_const_with_consts(expr, &HashMap::new())
+}
+
+/// Like [`expr_as_const`] but also resolves bare `Expr::Ident(name)` against
+/// a top-level `const` map (#1805 follow-up).  Enables `const N: Int = 4;`
+/// declarations to feed the same constant-folding path that `paddle_height()`
+/// pure-fn constants use, so upgrading a function-shaped constant to a real
+/// `const` decl doesn't regress proving.
+///
+/// The map contains only fully-evaluated top-level consts; nested `const`
+/// bindings inside a function body are not supported here (they live in
+/// `eval_expr`'s local `env`).
+pub fn expr_as_const_with_consts(
+    expr: &Expr,
+    consts: &HashMap<String, ConstValue>,
+) -> Option<ConstValue> {
     match expr {
         Expr::Literal(Literal::Integer(n), _) => Some(ConstValue::Integer(*n)),
         Expr::Literal(Literal::Float(f), _) => Some(ConstValue::Float(*f)),
@@ -64,6 +80,9 @@ pub fn expr_as_const(expr: &Expr) -> Option<ConstValue> {
         Expr::Literal(Literal::Bool(b), _) => Some(ConstValue::Bool(*b)),
         Expr::Literal(Literal::Unit, _) => Some(ConstValue::Unit),
         Expr::Literal(Literal::Char(_), _) => None,
+        // Top-level const lookup — first-class inlining so `const N: Int = 4`
+        // is indistinguishable from a bare literal at every use site.
+        Expr::Ident(name, _) => consts.get(name).cloned(),
         Expr::Unary {
             op: UnaryOp::Neg,
             expr: inner,
@@ -71,6 +90,12 @@ pub fn expr_as_const(expr: &Expr) -> Option<ConstValue> {
         } => match inner.as_ref() {
             Expr::Literal(Literal::Integer(n), _) => n.checked_neg().map(ConstValue::Integer),
             Expr::Literal(Literal::Float(f), _) => Some(ConstValue::Float(-f)),
+            // `-N` where N is a const-defined integer.
+            Expr::Ident(name, _) => match consts.get(name)? {
+                ConstValue::Integer(n) => n.checked_neg().map(ConstValue::Integer),
+                ConstValue::Float(f) => Some(ConstValue::Float(-f)),
+                _ => None,
+            },
             _ => None,
         },
         _ => None,
@@ -95,10 +120,27 @@ pub fn try_fold_call(
     args: &[Expr],
     fn_decls: &HashMap<String, FnDecl>,
 ) -> Option<ConstValue> {
+    try_fold_call_with_consts(fn_decl, args, fn_decls, &HashMap::new())
+}
+
+/// Like [`try_fold_call`] but also inlines top-level `const` values (#1805
+/// follow-up).  Arguments and Ident lookups inside the callee's body resolve
+/// against `consts` before falling to the local `env` — so a zero-arg
+/// `pub const paddle_height: Int = 4;` and a call `f(paddle_height)` both
+/// see the literal `4` during evaluation.
+pub fn try_fold_call_with_consts(
+    fn_decl: &FnDecl,
+    args: &[Expr],
+    fn_decls: &HashMap<String, FnDecl>,
+    consts: &HashMap<String, ConstValue>,
+) -> Option<ConstValue> {
     if !fn_decl.effects.is_empty() {
         return None;
     }
-    let arg_vals: Vec<ConstValue> = args.iter().map(expr_as_const).collect::<Option<Vec<_>>>()?;
+    let arg_vals: Vec<ConstValue> = args
+        .iter()
+        .map(|a| expr_as_const_with_consts(a, consts))
+        .collect::<Option<Vec<_>>>()?;
     if fn_decl.params.len() != arg_vals.len() {
         return None;
     }
@@ -108,6 +150,11 @@ pub fn try_fold_call(
         .zip(arg_vals.iter())
         .map(|(p, v)| (p.name.clone(), v.clone()))
         .collect();
+    // Seed the evaluator env with top-level consts so their names resolve
+    // even when a callee references them without a parameter name.
+    for (k, v) in consts {
+        env.entry(k.clone()).or_insert_with(|| v.clone());
+    }
     let mut budget = EVAL_BUDGET;
     eval_block(&fn_decl.body, &mut env, fn_decls, &mut budget)
 }

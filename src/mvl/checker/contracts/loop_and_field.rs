@@ -27,8 +27,8 @@ use crate::mvl::parser::ast::{
 use crate::mvl::parser::lexer::Span;
 
 use super::{
-    build_fn_decls_for_solver, build_param_var_refs, check_requires_at_call, collect_ident_names,
-    display_pred, normalize_pred, walk_stmts, ContractCheckCtx, FnContracts,
+    build_fn_decls_for_solver, build_param_var_refs_full, check_requires_at_call,
+    collect_ident_names, display_pred, normalize_pred, walk_stmts, ContractCheckCtx, FnContracts,
 };
 
 // ── Phase 3: invariant checker ────────────────────────────────────────────────
@@ -528,7 +528,7 @@ pub(super) fn check_actor_behavior_contracts(
 ) {
     for method in &ad.methods {
         ctx.counts.current_fn = format!("{}::{}", ad.name, method.name);
-        let var_refs = build_param_var_refs(&method.params);
+        let var_refs = build_param_var_refs_full(&method.params, ctx.type_refs, ctx.struct_fields, ctx.const_refs);
         walk_stmts(&method.body, ctx, &mut |expr, ctx| {
             if let Expr::FnCall {
                 name, args, span, ..
@@ -564,6 +564,8 @@ pub fn check_actor_field_refinements(
     let type_refs = crate::mvl::checker::refinements::build_type_alias_refinements(prog);
     let struct_fields =
         crate::mvl::checker::refinements::build_struct_field_refinements_combined(&[prog]);
+    let const_map = crate::mvl::checker::refinements::build_const_map(&[prog]);
+    let const_refs = crate::mvl::checker::refinements::const_map_to_var_refs(&const_map);
     let mut counts = RefinementCounts {
         mode,
         ..Default::default()
@@ -574,6 +576,7 @@ pub fn check_actor_field_refinements(
         counts: &mut counts,
         type_refs: &type_refs,
         struct_fields: &struct_fields,
+        const_refs: &const_refs,
     };
 
     for decl in &prog.declarations {
@@ -581,14 +584,14 @@ pub fn check_actor_field_refinements(
             Decl::Fn(fd) => {
                 // Seed var_refs from function parameters so the solver can use
                 // where-refinements on parameter variables as hypotheses.
-                let var_refs = build_param_var_refs(&fd.params);
+                let var_refs = build_param_var_refs_full(&fd.params, ctx.type_refs, ctx.struct_fields, ctx.const_refs);
                 walk_stmts(&fd.body, &mut ctx, &mut |expr, ctx| {
                     check_spawn_at_site(expr, &actor_fields, &var_refs, ctx);
                 });
             }
             Decl::Impl(impl_d) => {
                 for method in &impl_d.methods {
-                    let var_refs = build_param_var_refs(&method.params);
+                    let var_refs = build_param_var_refs_full(&method.params, ctx.type_refs, ctx.struct_fields, ctx.const_refs);
                     walk_stmts(&method.body, &mut ctx, &mut |expr, ctx| {
                         check_spawn_at_site(expr, &actor_fields, &var_refs, ctx);
                     });
@@ -596,7 +599,7 @@ pub fn check_actor_field_refinements(
             }
             Decl::Actor(ad) => {
                 for method in &ad.methods {
-                    let var_refs = build_param_var_refs(&method.params);
+                    let var_refs = build_param_var_refs_full(&method.params, ctx.type_refs, ctx.struct_fields, ctx.const_refs);
                     walk_stmts(&method.body, &mut ctx, &mut |expr, ctx| {
                         check_spawn_at_site(expr, &actor_fields, &var_refs, ctx);
                     });
@@ -706,6 +709,8 @@ pub fn check_struct_field_refinements(
     let type_refs = crate::mvl::checker::refinements::build_type_alias_refinements(prog);
     let struct_fields =
         crate::mvl::checker::refinements::build_struct_field_refinements_combined(&[prog]);
+    let const_map = crate::mvl::checker::refinements::build_const_map(&[prog]);
+    let const_refs = crate::mvl::checker::refinements::const_map_to_var_refs(&const_map);
     let mut counts = RefinementCounts {
         mode,
         ..Default::default()
@@ -716,19 +721,20 @@ pub fn check_struct_field_refinements(
         counts: &mut counts,
         type_refs: &type_refs,
         struct_fields: &struct_fields,
+        const_refs: &const_refs,
     };
 
     for decl in &prog.declarations {
         match decl {
             Decl::Fn(fd) => {
-                let var_refs = build_param_var_refs(&fd.params);
+                let var_refs = build_param_var_refs_full(&fd.params, ctx.type_refs, ctx.struct_fields, ctx.const_refs);
                 walk_stmts(&fd.body, &mut ctx, &mut |expr, ctx| {
                     check_construct_at_site(expr, &field_map, &var_refs, ctx);
                 });
             }
             Decl::Impl(impl_d) => {
                 for method in &impl_d.methods {
-                    let var_refs = build_param_var_refs(&method.params);
+                    let var_refs = build_param_var_refs_full(&method.params, ctx.type_refs, ctx.struct_fields, ctx.const_refs);
                     walk_stmts(&method.body, &mut ctx, &mut |expr, ctx| {
                         check_construct_at_site(expr, &field_map, &var_refs, ctx);
                     });
@@ -736,7 +742,7 @@ pub fn check_struct_field_refinements(
             }
             Decl::Actor(ad) => {
                 for method in &ad.methods {
-                    let var_refs = build_param_var_refs(&method.params);
+                    let var_refs = build_param_var_refs_full(&method.params, ctx.type_refs, ctx.struct_fields, ctx.const_refs);
                     walk_stmts(&method.body, &mut ctx, &mut |expr, ctx| {
                         check_construct_at_site(expr, &field_map, &var_refs, ctx);
                     });

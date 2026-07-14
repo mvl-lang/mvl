@@ -8,8 +8,92 @@ use std::collections::HashMap;
 use crate::mvl::linter::{config::LintConfig, errors::LintDiag};
 use crate::mvl::parser::ast::{
     BinaryOp, Block, Decl, Expr, LValue, Literal, MatchArm, MatchBody, Pattern, Program, Stmt,
+    UnaryOp,
 };
 use crate::mvl::parser::visit::Visit;
+
+/// Warn when a zero-arg pure function's body is a single literal expression —
+/// this is a workaround for missing `const` declarations, and it costs the
+/// solver: `paddle_height()` in a predicate must fold through `try_fold_call`
+/// on every use, while `paddle_height` as a `const` inlines to a hypothesis
+/// once at var-refs seed time (#1805).
+///
+/// Rule id: `zero-arg-literal-fn-as-const`
+///
+/// Detects:
+///
+/// ```mvl
+/// pub total fn paddle_height() -> Int { 4 }
+/// pub const max_speed: Int = 3;      // preferred
+/// ```
+///
+/// Silent when:
+/// - The function has any parameters.
+/// - The function has any effects.
+/// - The body is more than one statement, or the tail is not a literal
+///   / negated-literal expression.
+pub fn zero_arg_literal_fn_as_const(
+    prog: &Program,
+    cfg: &LintConfig,
+    out: &mut Vec<LintDiag>,
+) {
+    if !cfg.zero_arg_literal_fn_as_const {
+        return;
+    }
+    for decl in &prog.declarations {
+        if let Decl::Fn(fd) = decl {
+            if !fd.params.is_empty() || !fd.effects.is_empty() {
+                continue;
+            }
+            let Some(lit) = single_literal_tail(&fd.body) else {
+                continue;
+            };
+            out.push(LintDiag::warning(
+                "zero-arg-literal-fn-as-const",
+                format!(
+                    "zero-arg pure function `{name}` returns the literal `{lit}` \
+                     — prefer `pub const {name}: <ty> = {lit};` so the solver \
+                     inlines it at every use site (#1805)",
+                    name = fd.name,
+                ),
+                fd.span.line,
+                fd.span.col,
+            ));
+        }
+    }
+}
+
+/// If `block` is a single-statement body whose tail is a literal (or negated
+/// literal), return its printable form (for the diagnostic).  `None` for
+/// everything else.
+fn single_literal_tail(block: &Block) -> Option<String> {
+    if block.stmts.len() != 1 {
+        return None;
+    }
+    let Stmt::Expr { expr, .. } = &block.stmts[0] else {
+        return None;
+    };
+    format_literal_expr(expr)
+}
+
+fn format_literal_expr(expr: &Expr) -> Option<String> {
+    match expr {
+        Expr::Literal(Literal::Integer(n), _) => Some(n.to_string()),
+        Expr::Literal(Literal::Float(f), _) => Some(format!("{f}")),
+        Expr::Literal(Literal::Bool(b), _) => Some(b.to_string()),
+        Expr::Literal(Literal::Str(s), _) => Some(format!("\"{s}\"")),
+        Expr::Unary {
+            op: UnaryOp::Neg,
+            expr: inner,
+            ..
+        } => match inner.as_ref() {
+            Expr::Literal(Literal::Integer(n), _) => Some(format!("-{n}")),
+            Expr::Literal(Literal::Float(f), _) => Some(format!("-{f}")),
+            _ => None,
+        },
+        _ => None,
+    }
+}
 
 /// Error on the `while / .get(i) / match / None => ()` anti-pattern (#705).
 ///

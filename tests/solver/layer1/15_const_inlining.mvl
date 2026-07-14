@@ -1,0 +1,33 @@
+// Solver Layer 1: top-level `const` inlining (#1805 follow-up).
+//
+// Before this change, `const NAME: T = LITERAL;` was silently opaque to
+// the refinement solver — bare `Expr::Ident(NAME)` uses reached L1 as
+// an unknown variable, forcing runtime checks.  Rewriting the older
+// `pub total fn NAME() -> T { LITERAL }` idiom to a `const` would
+// therefore have regressed proving.
+//
+// The fix seeds `var_refs[NAME] = Some(self == VALUE)` for every
+// top-level integer / boolean `const` in the project, so L1's existing
+// Ident handler (`extract_eq_int_from_hyp`) sees a concrete equality
+// and evaluates the predicate against the const's value.
+//
+// Every ensures site here should discharge at L1.
+
+pub const paddle_height: Int = 4;
+pub const max_speed: Int = 3;
+
+// Predicate references the const directly as an argument — reaches
+// L1's Ident branch and resolves via the seeded `self == 4` hypothesis.
+fn small(x: Int where self >= 0 && self <= 10) -> Int { x }
+
+fn use_paddle_height() -> Int {
+    small(paddle_height)
+}
+
+// Predicate on a const-derived expression — Cooper collapses
+// `max_speed + 1` given `max_speed == 3`.
+fn bounded(y: Int where self >= 0 && self <= 5) -> Int { y }
+
+fn use_max_speed_plus_one() -> Int {
+    bounded(max_speed + 1)
+}
