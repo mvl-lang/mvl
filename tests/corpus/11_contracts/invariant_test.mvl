@@ -1,0 +1,58 @@
+// 11_contracts/invariant_test.mvl — loop `invariant` clauses.
+//
+// A `while cond invariant P { ... }` loop declares P as a predicate that
+// holds at loop entry and is preserved by every iteration. The checker
+// proves both the entry check and the inductive step; at runtime the
+// clause erases and the loop runs unchanged. Tests here verify that the
+// loop computes the expected value.
+
+partial fn count_up_to(n: Int) -> Int {
+    let i: ref Int = 0;
+    while i < n invariant i >= 0 {
+        i = i + 1;
+    }
+    i
+}
+
+partial fn sum_to_n(n: Int) -> Int {
+    let acc: ref Int = 0;
+    let i: ref Int = 0;
+    while i < n
+        invariant i >= 0
+        invariant acc >= 0
+    {
+        i = i + 1;
+        acc = acc + i;
+    }
+    acc
+}
+
+partial fn count_down_bounded(start: Int) -> Int {
+    let i: ref Int = start;
+    while i > 0
+        invariant i >= 0
+        decreases i
+    {
+        i = i - 1;
+    }
+    i
+}
+
+test fn invariant_count_up_reaches_target() -> Unit {
+    assert_eq(count_up_to(0), 0);
+    assert_eq(count_up_to(5), 5);
+    assert_eq(count_up_to(100), 100);
+}
+
+test fn invariant_sum_to_n_triangular() -> Unit {
+    assert_eq(sum_to_n(0), 0);
+    assert_eq(sum_to_n(1), 1);
+    assert_eq(sum_to_n(10), 55);
+    assert_eq(sum_to_n(100), 5050);
+}
+
+test fn invariant_with_decreases_terminates_at_zero() -> Unit {
+    assert_eq(count_down_bounded(0), 0);
+    assert_eq(count_down_bounded(1), 0);
+    assert_eq(count_down_bounded(50), 0);
+}

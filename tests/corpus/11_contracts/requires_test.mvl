@@ -1,0 +1,60 @@
+// 11_contracts/requires_test.mvl — `requires` preconditions.
+//
+// A `requires` clause is a precondition the checker enforces at each call
+// site. At runtime the clause erases — the value flows unchanged. Tests here
+// call the contracted fns with inputs that satisfy the precondition and
+// verify the return value.
+
+fn divide_int(a: Int, b: Int) -> Int
+    requires b != 0
+{
+    a / b
+}
+
+fn safe_index(xs: List[Int], i: Int) -> Int
+    requires i >= 0
+{
+    xs.get(i).unwrap_or(-1)
+}
+
+fn range_lo(lo: Int, hi: Int) -> Int
+    requires lo <= hi
+{
+    lo
+}
+
+fn range_span(lo: Int, hi: Int) -> Int
+    requires lo <= hi
+{
+    hi - lo
+}
+
+test fn requires_divide_by_nonzero() -> Unit {
+    assert_eq(divide_int(10, 2), 5);
+    assert_eq(divide_int(21, 3), 7);
+    assert_eq(divide_int(-10, 2), -5);
+}
+
+test fn requires_safe_index_valid() -> Unit {
+    let xs: List[Int] = [10, 20, 30];
+    assert_eq(safe_index(xs, 0), 10);
+    assert_eq(safe_index(xs, 2), 30);
+}
+
+test fn requires_safe_index_out_of_range_returns_default() -> Unit {
+    // Precondition is `i >= 0` — `.get(5)` returns None, unwrap_or gives -1.
+    let xs: List[Int] = [10, 20, 30];
+    assert_eq(safe_index(xs, 5), -1);
+}
+
+test fn requires_range_lo_hi_ordered() -> Unit {
+    assert_eq(range_lo(0, 10), 0);
+    assert_eq(range_lo(5, 5), 5);
+    assert_eq(range_lo(-3, 3), -3);
+}
+
+test fn requires_range_span_computes_correctly() -> Unit {
+    assert_eq(range_span(0, 10), 10);
+    assert_eq(range_span(3, 3), 0);
+    assert_eq(range_span(-5, 5), 10);
+}
