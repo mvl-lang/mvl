@@ -1,0 +1,68 @@
+// 11_contracts/ensures_test.mvl — `ensures` postconditions.
+//
+// An `ensures` clause is a postcondition the checker proves about `result`
+// (or the fn's ret value). At runtime the clause erases — the returned
+// value flows unchanged. Tests verify the postcondition holds by asserting
+// on the concrete return value.
+
+fn always_positive() -> Int
+    ensures result >= 0
+{
+    42
+}
+
+fn identity(n: Int) -> Int
+    ensures result == n
+{
+    n
+}
+
+fn inc(n: Int) -> Int
+    ensures result > n
+{
+    n + 1
+}
+
+fn abs_int(n: Int) -> Int
+    ensures result >= 0
+{
+    if n >= 0 { n } else { -n }
+}
+
+fn max_int(a: Int, b: Int) -> Int
+    ensures result >= a
+    ensures result >= b
+{
+    if a >= b { a } else { b }
+}
+
+test fn ensures_constant_postcondition() -> Unit {
+    let v: Int = always_positive();
+    assert_eq(v, 42);
+}
+
+test fn ensures_identity_returns_input() -> Unit {
+    assert_eq(identity(0), 0);
+    assert_eq(identity(42), 42);
+    assert_eq(identity(-17), -17);
+}
+
+test fn ensures_inc_strictly_greater() -> Unit {
+    assert_eq(inc(5), 6);
+    assert_eq(inc(-1), 0);
+    assert_eq(inc(0), 1);
+}
+
+test fn ensures_abs_never_negative() -> Unit {
+    assert_eq(abs_int(5), 5);
+    assert_eq(abs_int(-5), 5);
+    assert_eq(abs_int(0), 0);
+    assert_eq(abs_int(-100), 100);
+}
+
+test fn ensures_max_dominates_both() -> Unit {
+    assert_eq(max_int(3, 5), 5);
+    assert_eq(max_int(7, 2), 7);
+    assert_eq(max_int(-1, -5), -1);
+    assert_eq(max_int(4, 4), 4);
+}
