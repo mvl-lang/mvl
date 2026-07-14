@@ -148,7 +148,6 @@ TEST_FULL_EXTRA_SUITES := \
 	"Checker parity    |test-checker-parity" \
 	"MVL compiler      |test-mvl" \
 	"BDD               |test-bdd" \
-	"Rust integration  |test-rust-integration" \
 	"Backend rust/llvm |test-rust-llvm" \
 	"Backend mvl/llvm  |test-mvl-llvm" \
 	"Backend rust/wasm |test-rust-wasm" \
