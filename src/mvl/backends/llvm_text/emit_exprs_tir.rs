@@ -453,6 +453,16 @@ impl TextEmitter {
                 arg_vals.push((ty, v));
             }
         }
+
+        // #1847: fn arguments transfer ownership to the callee. Remove each
+        // moved arg from `heap_locals` so the caller's scope-exit drops don't
+        // double-free heap allocations the callee will own and drop itself.
+        // Same "transparent wrapper" walk as return-value handling — hops
+        // through `Consume` and `Relabel` to find the underlying `Var`.
+        for arg in args.iter() {
+            self.exclude_returned_value_tir(arg);
+        }
+
         let ret_ty = self
             .module
             .fn_ret_types
