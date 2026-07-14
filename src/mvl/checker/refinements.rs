@@ -152,7 +152,7 @@ pub fn check_refinements(
     let fn_params = build_fn_param_refinements_combined(&all_progs);
     let fn_ensures = build_fn_ensures_combined(&all_progs);
     let type_refs = build_type_alias_refinements(prog);
-    let struct_fields = build_struct_field_refinements(prog);
+    let struct_fields = build_struct_field_refinements_combined(&all_progs);
     let fn_decls = build_pure_fn_decls(prog);
     for decl in &prog.declarations {
         match decl {
@@ -538,18 +538,36 @@ fn param_ref_vec(fd: &FnDecl) -> Vec<(String, Option<RefExpr>)> {
 /// that the solver's atom normalizer (`solver::atom_norm`) can bridge them
 /// onto atom names when a `FieldAccess` argument is seen at a call site.
 fn build_struct_field_refinements(prog: &Program) -> HashMap<String, HashMap<String, RefExpr>> {
+    build_struct_field_refinements_combined(&[prog])
+}
+
+/// Multi-program variant of [`build_struct_field_refinements`] — needed for
+/// projects that split struct declarations across multiple `.mvl` files
+/// (e.g. pong keeps `Field`, `Ball` in `models.mvl` but consumes them in
+/// `game.mvl`).  Prior to this the single-file variant was called on the
+/// current file only, so cross-module refined fields silently lost their
+/// hypothesis.
+pub(crate) fn build_struct_field_refinements_combined(
+    progs: &[&Program],
+) -> HashMap<String, HashMap<String, RefExpr>> {
     let mut map: HashMap<String, HashMap<String, RefExpr>> = HashMap::new();
-    for decl in &prog.declarations {
-        if let Decl::Type(td) = decl {
-            if let TypeBody::Struct { fields, .. } = &td.body {
-                let mut fmap = HashMap::new();
-                for f in fields {
-                    if let Some(pred) = &f.refinement {
-                        fmap.insert(f.name.clone(), pred.clone());
+    for prog in progs {
+        for decl in &prog.declarations {
+            if let Decl::Type(td) = decl {
+                if let TypeBody::Struct { fields, .. } = &td.body {
+                    let mut fmap = HashMap::new();
+                    for f in fields {
+                        if let Some(pred) = &f.refinement {
+                            fmap.insert(f.name.clone(), pred.clone());
+                        }
                     }
-                }
-                if !fmap.is_empty() {
-                    map.insert(td.name.clone(), fmap);
+                    if !fmap.is_empty() {
+                        // Later definitions win — MVL's parser rejects
+                        // duplicate `type` names across a program so this
+                        // path only fires when a type is defined once and
+                        // referenced from another file.
+                        map.insert(td.name.clone(), fmap);
+                    }
                 }
             }
         }
@@ -560,7 +578,7 @@ fn build_struct_field_refinements(prog: &Program) -> HashMap<String, HashMap<Str
 /// Maps type alias name → the refinement attached to that alias (if any).
 ///
 /// E.g. `type PositiveInt = Int where self > 0` → `"PositiveInt" → Some(self > 0)`.
-fn build_type_alias_refinements(prog: &Program) -> HashMap<String, Option<RefExpr>> {
+pub(crate) fn build_type_alias_refinements(prog: &Program) -> HashMap<String, Option<RefExpr>> {
     let mut map = HashMap::new();
     for decl in &prog.declarations {
         if let Decl::Type(td) = decl {
@@ -602,7 +620,7 @@ fn param_refinements(
 /// the form `"param.field"` (#1805).  These keys line up with the canonical
 /// form produced by [`solver::atom_norm::AtomNormalizer`], enabling
 /// arithmetic layers to see a hypothesis for a `FieldAccess` argument.
-fn params_to_var_refs(
+pub(crate) fn params_to_var_refs(
     params: &[Param],
     type_refs: &HashMap<String, Option<RefExpr>>,
     struct_fields: &HashMap<String, HashMap<String, RefExpr>>,

@@ -561,6 +561,9 @@ pub fn check_actor_field_refinements(
         return; // Fast path: no actor has refined fields.
     }
     let fn_decls = build_fn_decls_for_solver(prog);
+    let type_refs = crate::mvl::checker::refinements::build_type_alias_refinements(prog);
+    let struct_fields =
+        crate::mvl::checker::refinements::build_struct_field_refinements_combined(&[prog]);
     let mut counts = RefinementCounts {
         mode,
         ..Default::default()
@@ -569,6 +572,8 @@ pub fn check_actor_field_refinements(
         fn_decls: &fn_decls,
         errors,
         counts: &mut counts,
+        type_refs: &type_refs,
+        struct_fields: &struct_fields,
     };
 
     for decl in &prog.declarations {
@@ -698,6 +703,9 @@ pub fn check_struct_field_refinements(
         return;
     }
     let fn_decls = build_fn_decls_for_solver(prog);
+    let type_refs = crate::mvl::checker::refinements::build_type_alias_refinements(prog);
+    let struct_fields =
+        crate::mvl::checker::refinements::build_struct_field_refinements_combined(&[prog]);
     let mut counts = RefinementCounts {
         mode,
         ..Default::default()
@@ -706,6 +714,8 @@ pub fn check_struct_field_refinements(
         fn_decls: &fn_decls,
         errors,
         counts: &mut counts,
+        type_refs: &type_refs,
+        struct_fields: &struct_fields,
     };
 
     for decl in &prog.declarations {

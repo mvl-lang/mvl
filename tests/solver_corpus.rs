@@ -116,6 +116,11 @@ solver_test!(
     "layer1",
     "13_let_unfold_ensures.mvl"
 );
+solver_test!(
+    solver_l1_14_construct_if_field_lift,
+    "layer1",
+    "14_construct_if_field_lift.mvl"
+);
 
 // ── Layer 2: Interval analysis ───────────────────────────────────────────────
 
