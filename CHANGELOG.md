@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-07-14
+
+### Fixed
+
+- **Self-hosted LLVM emitter emits host-neutral IR** (#1830) — `emit_helpers.mvl::default_target_triple()` deleted; the module header no longer emits a hardcoded `target triple = "arm64-apple-darwin"`, so llc uses the host default triple on both macOS and Linux without patching. Emitter also sets `!llvm.module.flags` for `PIC Level = 2` / `PIE Level = 2` (informative metadata). Removes the sed target-triple stripping workaround from `tools/mvlr`. Note: `-relocation-model=pic` remains on the llc invocation — required by modern Linux linkers, harmless on macOS.
+
 ## [1.1.0] - 2026-07-14
 
 ### Added
