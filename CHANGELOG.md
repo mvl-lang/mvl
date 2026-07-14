@@ -4,9 +4,9 @@
 
 ## [1.3.0] - 2026-07-14
 
-### Added — corpus categories 05–09 (bundled feat)
+### Added — corpus categories 05–10 (bundled feat)
 
-Consolidated from prior v1.3.0 / v1.4.0 / v1.5.0 tags into a single 1.3.0 release. Test-only corpus growth doesn't warrant multiple minor bumps — this is one feat surface, five categories deep.
+Consolidated from prior v1.3.0 / v1.4.0 / v1.5.0 tags into a single 1.3.0 release. Test-only corpus growth doesn't warrant multiple minor bumps — this is one feat surface, six categories deep.
 
 - **`tests/corpus/05_collections/`** — 24 executable tests covering List/Map/Set construction, size, lookup returning `Option`, mutation (`insert`), membership (`contains`, `contains_key`), and iteration (`for x in xs`, indexed `while` + `.get(i)`). Split across `list_test.mvl` (7), `list_iter_test.mvl` (5), `map_test.mvl` (6), `set_test.mvl` (6).
 
@@ -18,7 +18,9 @@ Consolidated from prior v1.3.0 / v1.4.0 / v1.5.0 tags into a single 1.3.0 releas
 
 - **`tests/corpus/09_refinements/`** — 17 executable tests covering MVL's refinement types: inline `Int where ...` in fn signatures (`type_alias_test.mvl` — 5), struct fields with `where` predicates (`field_refinement_test.mvl` — 6), and struct-level `with invariant` cross-field predicates (`struct_invariant_test.mvl` — 6).
 
-Both backends green. Corpus total: **168 tests across 10 categories**.
+- **`tests/corpus/10_termination/`** — 15 executable tests covering MVL's termination discipline: `total fn` with bounded iteration and structural recursion (`total_fn_test.mvl` — 7), `partial fn` with unbounded `while` loops (`partial_fn_test.mvl` — 5), and `decreases` loop variants proving termination inside a `total fn` (`decreases_test.mvl` — 3).
+
+Both backends green. Corpus total: **183 tests across 11 categories**.
 
 ### Fixed
 
