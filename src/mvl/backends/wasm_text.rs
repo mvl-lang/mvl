@@ -192,12 +192,21 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
                 out.push_str("    call $mvl_println\n");
                 return;
             }
+            if name == "eprintln" {
+                for a in args {
+                    emit_expr(out, a, ctx);
+                }
+                out.push_str("    call $mvl_eprintln\n");
+                return;
+            }
             if name == "assert" && args.len() == 1 {
                 emit_expr(out, &args[0], ctx);
                 out.push_str("    i32.eqz\n");
-                out.push_str("    if\n");
-                out.push_str("      unreachable\n");
-                out.push_str("    end\n");
+                out.push_str("    if\n      unreachable\n    end\n");
+                return;
+            }
+            if (name == "assert_eq" || name == "assert_ne") && args.len() == 2 {
+                emit_assert_eq(out, &args[0], &args[1], name == "assert_ne", ctx);
                 return;
             }
             for a in args {
@@ -230,6 +239,40 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             out.push_str(&format!("    ;; unsupported expr: {other:?}\n"));
         }
     }
+}
+
+/// Emit `assert_eq(a, b)` or `assert_ne(a, b)` — mirrors the LLVM backend's
+/// `emit_assert_eq_builtin_tir` (#1837). Compares the two values with a
+/// type-directed equality op, then traps via `unreachable` when the check
+/// fails. `negate = true` traps on equality (i.e. `assert_ne`).
+///
+/// String equality is deliberately not handled yet — the WASM emitter carries
+/// strings as bare `(ptr, len)` i32 pairs and has no `mvl_string_eq` shim.
+/// Corpus tests that compare strings will fall through to a `;; unsupported`
+/// comment and fail to assemble, which is honest.
+fn emit_assert_eq(out: &mut String, left: &TirExpr, right: &TirExpr, negate: bool, ctx: &Ctx) {
+    emit_expr(out, left, ctx);
+    emit_expr(out, right, ctx);
+    let eq_op = if is_float(&left.ty) {
+        "f64.eq"
+    } else if is_i32(&left.ty) {
+        "i32.eq"
+    } else {
+        // Int, UInt, and anything else defaulting to i64. String comparisons
+        // would land here today and silently miscompile — flagged via a
+        // comment so the assembly step fails loudly.
+        if matches!(&left.ty, Ty::String) {
+            out.push_str("    ;; unsupported assert_eq/ne on String\n");
+        }
+        "i64.eq"
+    };
+    out.push_str(&format!("    {eq_op}\n"));
+    // Normal assert_eq: trap when NOT equal. i32.eqz flips 1→0 (equal, skip)
+    // and 0→1 (not equal, trap). assert_ne: trap when equal — omit the flip.
+    if !negate {
+        out.push_str("    i32.eqz\n");
+    }
+    out.push_str("    if\n      unreachable\n    end\n");
 }
 
 /// Emit a unary operator. `Neg` and `BitNot` dispatch on operand type; `Not`
@@ -535,4 +578,10 @@ const WASI_HELPERS: &str = r#"  (func $mvl_alloc (param $n i32) (result i32)
     (i32.store (i32.const 8) (i32.const 20))
     (i32.store (i32.const 12) (i32.const 1))
     (drop (call $fd_write (i32.const 1) (i32.const 0) (i32.const 2) (i32.const 16))))
+  (func $mvl_eprintln (param $ptr i32) (param $len i32)
+    (i32.store (i32.const 0) (local.get $ptr))
+    (i32.store (i32.const 4) (local.get $len))
+    (i32.store (i32.const 8) (i32.const 20))
+    (i32.store (i32.const 12) (i32.const 1))
+    (drop (call $fd_write (i32.const 2) (i32.const 0) (i32.const 2) (i32.const 16))))
 "#;

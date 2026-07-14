@@ -49,7 +49,8 @@ Options:
 Supported combinations:
   rust/rust        mvl run  (or  mvl test  for a directory)
   rust/llvm        per-file: sed test fn → fn + synth main, mvl run --backend=llvm
-  rust/wasm        NOT SUPPORTED via mvlr — use `make test-rust-wasm` (curated spike)
+  rust/wasm        per-file: sed test fn → fn + synth main, mvl build --backend=wasm,
+                              wasm-tools parse → .wasm, wasmtime run
   rust/rust-tokio  NOT YET IMPLEMENTED (#1828)
   mvl/llvm         mvl tir | emitter.mvl | llc | cc | run
   mvl/wasm         NOT YET IMPLEMENTED (#1828)
@@ -208,6 +209,48 @@ run_rust_llvm_file() {
     fi
 }
 
+# rust/wasm: emit WAT, assemble to WASM, run under wasmtime.
+# Test files get the same `test fn → fn + synth main` treatment as LLVM.
+# `mvl build --backend=wasm` writes `<stem>.wat` into CWD, so we cd into
+# a tmp dir first. Assertion failure in the WAT emitter compiles to
+# `unreachable` → wasmtime traps → non-zero exit → run_dir_iter counts it.
+run_rust_wasm_file() {
+    local src="$1" tmp stem mvl_abs
+    tmp=$(mktemp -d)
+    # shellcheck disable=SC2064
+    trap "rm -rf '$tmp'" RETURN
+
+    # `mvl build --backend=wasm` writes `<stem>.wat` into CWD, so we
+    # need to cd into $tmp to sequester output. That means MVL and the
+    # input file must both be absolute paths before the cd.
+    if [[ "$MVL" = /* ]]; then
+        mvl_abs="$MVL"
+    else
+        mvl_abs="$(pwd)/$MVL"
+    fi
+    local input_abs
+    input_abs=$(cd "$(dirname "$src")" && pwd)/$(basename "$src")
+
+    if [[ "$src" == *_test.mvl ]]; then
+        local out="$tmp/$(basename "$src")"
+        synth_test_main "$src" "$out"
+        input_abs="$out"
+    fi
+
+    stem=$(basename "$input_abs" .mvl)
+    (cd "$tmp" && "$mvl_abs" build "$input_abs" --backend=wasm) >/dev/null 2>"$tmp/build.err" || {
+        echo "mvlr: mvl build --backend=wasm failed for $src" >&2
+        cat "$tmp/build.err" >&2
+        return 1
+    }
+    if ! wasm-tools parse "$tmp/$stem.wat" -o "$tmp/$stem.wasm" 2>"$tmp/parse.err"; then
+        echo "mvlr: wasm-tools parse failed for $src" >&2
+        cat "$tmp/parse.err" >&2
+        return 1
+    fi
+    wasmtime run "$tmp/$stem.wasm"
+}
+
 run_mvl_llvm_file() {
     local src="$1" tmp llc
     llc=$(resolve_llc)
@@ -288,7 +331,11 @@ run_dir_iter() {
             # marker on stderr identifies the failing test; anything after
             # it in `tests` never ran.
             local last_mark
-            last_mark=$(grep -oE "MVLR_MARK:[a-z_0-9]+" "$tmpout" | tail -1 | cut -d: -f2)
+            # `|| true` — otherwise `pipefail` + `set -e` kills the whole
+            # loop when the pipe returns 1 (no markers found, e.g. the
+            # binary trapped before printing any). Falls into the "before
+            # any test ran" branch below, which is exactly right.
+            last_mark=$(grep -oE "MVLR_MARK:[a-z_0-9]+" "$tmpout" | tail -1 | cut -d: -f2 || true)
             local failed_seen=0
             while IFS= read -r tn; do
                 [ -z "$tn" ] && continue
@@ -333,6 +380,7 @@ run_file() {
     case "$combo" in
         rust/rust)  run_rust_rust_file "$src" ;;
         rust/llvm)  run_rust_llvm_file "$src" ;;
+        rust/wasm)  run_rust_wasm_file "$src" ;;
         mvl/llvm)   run_mvl_llvm_file  "$src" ;;
         *)          echo "mvlr: no per-file runner for $combo" >&2; return 2 ;;
     esac
@@ -347,15 +395,11 @@ case "$COMBO" in
         echo "mvlr: rust/rust-tokio not yet supported (#1828)" >&2
         exit 1
         ;;
-    rust/wasm)
-        echo "mvlr: rust/wasm not supported by mvlr — use \`make test-rust-wasm\` (curated spike case list)" >&2
-        exit 1
-        ;;
     mvl/wasm)
         echo "mvlr: mvl/wasm not yet supported (#1828)" >&2
         exit 1
         ;;
-    rust/rust|rust/llvm|mvl/llvm)
+    rust/rust|rust/llvm|rust/wasm|mvl/llvm)
         ;;
     *)
         echo "mvlr: unknown combo: $COMBO" >&2
