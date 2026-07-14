@@ -1,0 +1,65 @@
+// 09_refinements/struct_invariant_test.mvl — `with invariant` cross-field predicates.
+//
+// A struct can declare an invariant that spans multiple fields:
+//
+//     type Range = struct {
+//         lo: Int,
+//         hi: Int,
+//     } with invariant self.lo <= self.hi
+//
+// The checker verifies that any construction site satisfies the invariant.
+// At runtime the invariant erases — the fields flow as base types. These
+// tests verify that valid constructions produce the expected field values
+// and that derived computations on the fields work as intended.
+
+type Range = struct {
+    lo: Int,
+    hi: Int,
+} with invariant self.lo <= self.hi
+
+type Interval = struct {
+    start: Int,
+    length: Int where self >= 0,
+} with invariant self.start + self.length >= self.start
+
+fn range_size(r: Range) -> Int {
+    r.hi - r.lo
+}
+
+fn interval_end(i: Interval) -> Int {
+    i.start + i.length
+}
+
+test fn range_lo_equals_hi_is_valid() -> Unit {
+    let r: Range = Range { lo: 5, hi: 5 };
+    assert_eq(r.lo, 5);
+    assert_eq(r.hi, 5);
+    assert_eq(range_size(r), 0);
+}
+
+test fn range_lo_less_than_hi() -> Unit {
+    let r: Range = Range { lo: 0, hi: 10 };
+    assert_eq(range_size(r), 10);
+}
+
+test fn range_negative_lo() -> Unit {
+    let r: Range = Range { lo: -5, hi: 5 };
+    assert_eq(r.lo, -5);
+    assert_eq(range_size(r), 10);
+}
+
+test fn interval_zero_length() -> Unit {
+    let i: Interval = Interval { start: 100, length: 0 };
+    assert_eq(interval_end(i), 100);
+}
+
+test fn interval_positive_length() -> Unit {
+    let i: Interval = Interval { start: 10, length: 25 };
+    assert_eq(interval_end(i), 35);
+}
+
+test fn interval_arithmetic_over_fields() -> Unit {
+    let i: Interval = Interval { start: 0, length: 100 };
+    let midpoint: Int = i.start + i.length / 2;
+    assert_eq(midpoint, 50);
+}

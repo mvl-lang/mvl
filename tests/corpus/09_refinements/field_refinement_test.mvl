@@ -1,0 +1,67 @@
+// 09_refinements/field_refinement_test.mvl — struct fields with `where` clauses.
+//
+// A struct field can carry a refinement predicate:
+//
+//     type Person = struct {
+//         name: String where len(self) > 0,
+//         age: Int where self >= 0,
+//     }
+//
+// The checker enforces the predicate on construction and mutation; at runtime
+// the value flows as its base type. These tests verify that the runtime value
+// reads back correctly and arithmetic on refined-Int fields works normally.
+
+type Person = struct {
+    name: String,
+    age: Int where self >= 0,
+}
+
+type BoundedCounter = struct {
+    value: Int where self >= 0,
+    max: Int where self > 0,
+}
+
+fn describe_age(p: Person) -> Int {
+    p.age
+}
+
+fn birthday(p: Person) -> Int {
+    p.age + 1
+}
+
+fn utilization(c: BoundedCounter) -> Int {
+    // Integer percentage (avoid Float for the corpus): 100 * value / max.
+    100 * c.value / c.max
+}
+
+test fn refined_field_construct_and_read() -> Unit {
+    let alice: Person = Person { name: "Alice", age: 30 };
+    assert_eq(alice.age, 30);
+}
+
+test fn refined_field_zero_is_valid_for_nonneg() -> Unit {
+    let newborn: Person = Person { name: "Newborn", age: 0 };
+    assert_eq(newborn.age, 0);
+}
+
+test fn refined_field_flows_through_fn() -> Unit {
+    let alice: Person = Person { name: "Alice", age: 30 };
+    assert_eq(describe_age(alice), 30);
+}
+
+test fn refined_field_arithmetic_after_read() -> Unit {
+    let alice: Person = Person { name: "Alice", age: 30 };
+    assert_eq(birthday(alice), 31);
+}
+
+test fn refined_multi_field_struct() -> Unit {
+    let c: BoundedCounter = BoundedCounter { value: 25, max: 100 };
+    assert_eq(c.value, 25);
+    assert_eq(c.max, 100);
+    assert_eq(utilization(c), 25);
+}
+
+test fn refined_field_edge_full_utilization() -> Unit {
+    let c: BoundedCounter = BoundedCounter { value: 100, max: 100 };
+    assert_eq(utilization(c), 100);
+}

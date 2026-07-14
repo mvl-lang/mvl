@@ -4,9 +4,9 @@
 
 ## [1.3.0] - 2026-07-14
 
-### Added — corpus categories 05–08 (bundled feat)
+### Added — corpus categories 05–09 (bundled feat)
 
-Consolidated from prior v1.3.0 / v1.4.0 / v1.5.0 tags into a single 1.3.0 release. Test-only corpus growth doesn't warrant three minor bumps — this is one feat surface, four categories deep.
+Consolidated from prior v1.3.0 / v1.4.0 / v1.5.0 tags into a single 1.3.0 release. Test-only corpus growth doesn't warrant multiple minor bumps — this is one feat surface, five categories deep.
 
 - **`tests/corpus/05_collections/`** — 24 executable tests covering List/Map/Set construction, size, lookup returning `Option`, mutation (`insert`), membership (`contains`, `contains_key`), and iteration (`for x in xs`, indexed `while` + `.get(i)`). Split across `list_test.mvl` (7), `list_iter_test.mvl` (5), `map_test.mvl` (6), `set_test.mvl` (6).
 
@@ -16,7 +16,9 @@ Consolidated from prior v1.3.0 / v1.4.0 / v1.5.0 tags into a single 1.3.0 releas
 
 - **`tests/corpus/08_ifc/`** — 12 executable tests covering `Tainted[T]`, `Secret[T]`, and the `audit`-flagged variant of each relabel transition. Includes the regression test for #1847 (see Fixed below).
 
-Both backends green. Corpus total: **151 tests across 9 categories**.
+- **`tests/corpus/09_refinements/`** — 17 executable tests covering MVL's refinement types: inline `Int where ...` in fn signatures (`type_alias_test.mvl` — 5), struct fields with `where` predicates (`field_refinement_test.mvl` — 6), and struct-level `with invariant` cross-field predicates (`struct_invariant_test.mvl` — 6).
+
+Both backends green. Corpus total: **168 tests across 10 categories**.
 
 ### Fixed
 
@@ -27,6 +29,8 @@ Both backends green. Corpus total: **151 tests across 9 categories**.
 - **#1842** — `Map::new()` (and likely `List::new()` / `Set::new()`) emits `call i64 @Map::new()` on the LLVM backend, with raw `::` in the symbol name that lli rejects. Corpus uses literal construction (`{"a": 1}`, `{1, 2, 3}`, `[1, 2, 3]`) meanwhile.
 
 - **#1845** — Set literal `{1, 2, 2, 3}` on the LLVM backend doesn't dedupe on construction, and subsequent `.insert()` / `.contains()` on a literal-constructed Set are no-ops (underlying storage isn't a real hash-set). Three tests in `05_collections/set_test.mvl` are gated behind `TODO(#1845)`.
+
+- **#1851** — LLVM backend doesn't resolve refined type-alias NAMES back to their underlying scalar. `type Port = Int where ...; fn f(p: Port)` emits `define ptr @f(ptr %p)` instead of `define i64 @f(i64 %p)`. `09_refinements` uses inline refinements (`Int where self > 0`) in fn signatures meanwhile — same semantics, correct lowering on both backends.
 
 - **Set[String].contains(literal)** fails in the Rust transpiler with an ambiguous `.into()` target. `Set[Int]` covers the key-lookup path meanwhile.
 
