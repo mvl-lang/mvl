@@ -187,14 +187,33 @@ run_mvl_llvm_file() {
     tmp=$(mktemp -d)
     # shellcheck disable=SC2064
     trap "rm -rf '$tmp'" RETURN
-    # #1829: filter checker STDOUT leaks at both pipe stages
-    "$MVL" tir "$src" 2>/dev/null \
+    # #1829: filter checker STDOUT leaks at both pipe stages. Stage stderr
+    # is captured to files so a failure in either mvl invocation surfaces
+    # a useful message instead of an empty exit 1.
+    if ! "$MVL" tir "$src" 2>"$tmp/tir.err" > "$tmp/tir.out"; then
+        echo "mvlr: mvl tir failed for $src" >&2
+        cat "$tmp/tir.err" >&2
+        return 1
+    fi
+    if ! grep -v '^STDOUT ' "$tmp/tir.out" \
+        | "$MVL" run compiler/backends/llvm/emitter.mvl 2>"$tmp/emit.err" \
         | grep -v '^STDOUT ' \
-        | "$MVL" run compiler/backends/llvm/emitter.mvl 2>/dev/null \
-        | grep -v '^STDOUT ' \
-        | tail -n +3 > "$tmp/out.ll"
-    "$llc" -filetype=obj "$tmp/out.ll" -o "$tmp/out.o"
-    cc -o "$tmp/out" "$tmp/out.o" -lc 2>/dev/null
+        | tail -n +3 > "$tmp/out.ll"; then
+        echo "mvlr: self-hosted LLVM emitter failed" >&2
+        cat "$tmp/emit.err" >&2
+        return 1
+    fi
+    if ! "$llc" -filetype=obj "$tmp/out.ll" -o "$tmp/out.o" 2>"$tmp/llc.err"; then
+        echo "mvlr: llc failed" >&2
+        cat "$tmp/llc.err" >&2
+        head -3 "$tmp/out.ll" >&2
+        return 1
+    fi
+    if ! cc -o "$tmp/out" "$tmp/out.o" -lc 2>"$tmp/cc.err"; then
+        echo "mvlr: cc link failed" >&2
+        cat "$tmp/cc.err" >&2
+        return 1
+    fi
     "$tmp/out"
 }
 
