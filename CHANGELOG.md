@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-07-14
+
+### Added
+
+- **`tests/corpus/04_types/`** — 22 executable tests covering struct construction and field access (`struct_test.mvl` — 5), unit-variant enums (`enum_test.mvl` — 4), enum tuple-payload variants (`enum_payload_test.mvl` — 5), and Option/Result destructuring + `?` propagation (`option_result_test.mvl` — 8). Green on rust/rust and rust/llvm with real assertions (post-#1837). Corpus total is now 88 tests across 5 categories (00_smoke, 01_expressions, 02_control_flow, 03_functions, 04_types).
+
+### Known limitations
+
+- **Struct-variant enum patterns** (`Msg::Move { x, y } =>`) are declared in `tests/corpus_old/03_types/enums.mvl` but the parser rejects them on the match side. Type declarations parse fine; only the matching side is missing. Tuple-payload variants cover the discriminant + payload code paths equivalently for now.
+
 ## [1.0.2] - 2026-07-14
 
 ### Fixed — LLVM corpus hygiene (#1836)

@@ -1,0 +1,67 @@
+// 04_types/enum_payload_test.mvl — enum variants that carry payload data.
+//
+// Positional (tuple) payloads only for now. Struct-variant enums
+// (`Move { x: Int, y: Int }`) exist in the type grammar but the match
+// side does not accept `{ x, y }` destructuring patterns — pending a
+// grammar fix in mvl-spec; the type declarations are otherwise legal.
+
+type Shape = enum {
+    Circle(Int),
+    Rectangle(Int, Int),
+    Point,
+}
+
+type Msg = enum {
+    Write(String),
+    Code(Int),
+    Quit,
+}
+
+fn area(s: Shape) -> Int {
+    match s {
+        Shape::Circle(r) => r * r * 3,
+        Shape::Rectangle(w, h) => w * h,
+        Shape::Point => 0,
+    }
+}
+
+fn describe(m: Msg) -> String {
+    match m {
+        Msg::Write(s) => s,
+        Msg::Code(_) => "code",
+        Msg::Quit => "bye",
+    }
+}
+
+fn code_or_default(m: Msg) -> Int {
+    match m {
+        Msg::Code(n) => n,
+        _ => -1,
+    }
+}
+
+test fn enum_positional_single_payload() -> Unit {
+    let c: Shape = Shape::Circle(5);
+    assert_eq(area(c), 75);
+}
+
+test fn enum_positional_multi_payload() -> Unit {
+    let r: Shape = Shape::Rectangle(4, 7);
+    assert_eq(area(r), 28);
+}
+
+test fn enum_unit_variant_alongside_payloads() -> Unit {
+    let p: Shape = Shape::Point;
+    assert_eq(area(p), 0);
+}
+
+test fn enum_string_payload_returned() -> Unit {
+    let m: Msg = Msg::Write("hello");
+    assert_eq(describe(m), "hello");
+}
+
+test fn enum_payload_with_wildcard_fallthrough() -> Unit {
+    assert_eq(code_or_default(Msg::Code(42)), 42);
+    assert_eq(code_or_default(Msg::Quit), -1);
+    assert_eq(code_or_default(Msg::Write("x")), -1);
+}

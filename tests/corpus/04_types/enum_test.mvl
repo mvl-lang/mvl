@@ -1,0 +1,59 @@
+// 04_types/enum_test.mvl — unit-variant enums and pattern matching.
+//
+// Covers enum declarations, variant construction, and match on unit variants.
+// Payload variants (Circle(radius), Move { x, y }) are exercised separately in
+// enum_payload_test.mvl to isolate the discriminant vs. payload code paths.
+
+type Direction = enum { North, South, East, West }
+
+type TrafficLight = enum { Red, Yellow, Green }
+
+fn direction_code(d: Direction) -> Int {
+    match d {
+        Direction::North => 0,
+        Direction::South => 1,
+        Direction::East => 2,
+        Direction::West => 3,
+    }
+}
+
+fn is_go(light: TrafficLight) -> Bool {
+    match light {
+        TrafficLight::Green => true,
+        TrafficLight::Yellow => false,
+        TrafficLight::Red => false,
+    }
+}
+
+test fn enum_unit_construct_and_match() -> Unit {
+    assert_eq(direction_code(Direction::North), 0);
+    assert_eq(direction_code(Direction::South), 1);
+    assert_eq(direction_code(Direction::East), 2);
+    assert_eq(direction_code(Direction::West), 3);
+}
+
+test fn enum_match_returns_bool() -> Unit {
+    assert_eq(is_go(TrafficLight::Green), true);
+    assert_eq(is_go(TrafficLight::Red), false);
+    assert_eq(is_go(TrafficLight::Yellow), false);
+}
+
+test fn enum_wildcard_arm() -> Unit {
+    let d: Direction = Direction::East;
+    let is_horizontal: Bool = match d {
+        Direction::East => true,
+        Direction::West => true,
+        _ => false,
+    };
+    assert_eq(is_horizontal, true);
+}
+
+test fn enum_wildcard_arm_falls_through() -> Unit {
+    let d: Direction = Direction::North;
+    let is_horizontal: Bool = match d {
+        Direction::East => true,
+        Direction::West => true,
+        _ => false,
+    };
+    assert_eq(is_horizontal, false);
+}
