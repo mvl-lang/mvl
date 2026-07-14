@@ -887,7 +887,10 @@ fn cross_backend_eprint_stderr() {
 // ── ADR-0022: Category 1 operator intrinsics (LLVM backend) ──────────────────
 
 fn intrinsic(name: &str) -> String {
-    format!("{}/tests/corpus_old/00_intrinsics/{name}", env!("CARGO_MANIFEST_DIR"))
+    format!(
+        "{}/tests/corpus_old/00_intrinsics/{name}",
+        env!("CARGO_MANIFEST_DIR")
+    )
 }
 
 #[test]
@@ -1230,7 +1233,10 @@ fn cross_backend_structured_concurrency() {
 // errors, even for programs without fn main / stdout output.
 
 fn corpus_ifc(name: &str) -> String {
-    format!("{}/tests/corpus_old/08_ifc/{name}", env!("CARGO_MANIFEST_DIR"))
+    format!(
+        "{}/tests/corpus_old/08_ifc/{name}",
+        env!("CARGO_MANIFEST_DIR")
+    )
 }
 
 fn assert_check_passes(file: &str) {
