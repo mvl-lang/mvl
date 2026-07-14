@@ -73,6 +73,10 @@ install: ## Install all 4 artifacts (mvl, stdlib, rust runtime, llvm runtime) fr
 	cp target/release/mvl $(INSTALL_TOOLCHAIN_DIR)/bin/mvl
 	chmod +x $(INSTALL_TOOLCHAIN_DIR)/bin/mvl
 	ln -sfn $(INSTALL_TOOLCHAIN_DIR)/bin/mvl $(INSTALL_BIN_DIR)/mvl
+	# 1b. mvlr driver script + ~/.local/bin symlink (#1823)
+	cp tools/mvlr $(INSTALL_TOOLCHAIN_DIR)/bin/mvlr
+	chmod +x $(INSTALL_TOOLCHAIN_DIR)/bin/mvlr
+	ln -sfn $(INSTALL_TOOLCHAIN_DIR)/bin/mvlr $(INSTALL_BIN_DIR)/mvlr
 	# 2. stdlib source (.mvl files)
 	rsync -a --delete std/ $(INSTALL_TOOLCHAIN_DIR)/std/
 	@echo "$(INSTALL_VERSION)" > $(INSTALL_TOOLCHAIN_DIR)/std/.version
@@ -87,6 +91,7 @@ install: ## Install all 4 artifacts (mvl, stdlib, rust runtime, llvm runtime) fr
 	@echo ""
 	@echo "Installed:"
 	@echo "  binary:       $(INSTALL_BIN_DIR)/mvl -> $(INSTALL_TOOLCHAIN_DIR)/bin/mvl"
+	@echo "  driver:       $(INSTALL_BIN_DIR)/mvlr -> $(INSTALL_TOOLCHAIN_DIR)/bin/mvlr"
 	@echo "  stdlib:       $(INSTALL_TOOLCHAIN_DIR)/std/"
 	@echo "  rust runtime: $(INSTALL_RUNTIME_DIR)/rust/ (v$(INSTALL_RUNTIME_VERSION))"
 	@echo "  rust-tokio:   $(INSTALL_RUNTIME_DIR)/rust-tokio/"
@@ -106,6 +111,10 @@ build: ## Build the MVL compiler + LLVM runtime (BUILD=debug|release, default de
 # === Test ===
 
 MVL ?= ./target/debug/mvl
+# mvlr — matrix run driver. Prefer the installed binary (make install
+# drops it in ~/.local/bin); fall back to the in-repo copy so a fresh
+# checkout works before install.
+MVLR ?= $(shell command -v mvlr 2>/dev/null || echo tools/mvlr)
 
 # Suite list for `make test` (fast pre-PR gate) and `make test-full` (full pre-merge gate).
 # Format: "label|target" — keep alignment by padding the label.
@@ -417,46 +426,14 @@ test-cross-backend: build ## Run Rust integration tests for backend parity (tran
 #   mvl/wasm         — MVL self-hosted → WAT                         (stub)
 #   rust/rust-tokio  — Rust compiler → Rust with tokio runtime       (stub, actors only)
 
-test-rust-rust: build ## rust/rust — new corpus through Rust transpiler (batched)
-	$(MVL) test tests/corpus/
+test-rust-rust: build ## rust/rust — new corpus through Rust transpiler (batched, via mvlr)
+	$(MVLR) --compiler=rust --backend=rust tests/corpus/
 
-test-rust-llvm: build ## rust/llvm — new corpus through LLVM text emitter (per-file bridge, see #1828)
-	@# Per-file harness: `mvl test --backend=llvm` still requires fn main +
-	@# expect strings. Until #1828 extends it to handle test fn directly,
-	@# we bridge by synthesizing per-file drivers: sed `test fn` → `fn`,
-	@# append a main that calls each test fn in order, run via lli. A
-	@# panic from any assert fails the file; exit 0 for all files = pass.
-	@pass=0; fail=0; \
-	OK="\033[32m✓\033[0m"; FAIL="\033[31m✗\033[0m"; \
-	TMP=$$(mktemp -d); \
-	while IFS= read -r f; do \
-		short=$${f#tests/corpus/}; \
-		safe=$$(echo "$$short" | tr '/' '_'); \
-		out="$$TMP/$$safe"; \
-		sed 's/^test fn /fn /' "$$f" > "$$out"; \
-		{ echo ""; echo "fn main() -> Unit ! Console {"; \
-		  grep -oE "^test fn [a-z_0-9]+" "$$f" | awk '{print "    " $$3 "();"}'; \
-		  echo "}"; } >> "$$out"; \
-		if $(MVL) run --backend=llvm "$$out" >/dev/null 2>&1; then \
-			printf "  $$OK  %s\n" "$$short"; pass=$$((pass + 1)); \
-		else \
-			printf "  $$FAIL  %s\n" "$$short"; fail=$$((fail + 1)); \
-		fi; \
-	done < <(find tests/corpus -name "*_test.mvl" | sort); \
-	rm -rf "$$TMP"; \
-	echo ""; \
-	if [ $$fail -eq 0 ]; then \
-		printf "  \033[32m✓  $$pass passed, 0 failed\033[0m\n\n"; \
-	else \
-		printf "  \033[31m✗  $$pass passed, $$fail failed\033[0m\n\n"; exit 1; \
-	fi
+test-rust-llvm: build ## rust/llvm — new corpus through LLVM text emitter (via mvlr, see #1828)
+	$(MVLR) --compiler=rust --backend=llvm tests/corpus/
 
-test-mvl-llvm: build ## mvl/llvm — MVL self-hosted → LLVM (tracer bullet, broader corpus in #1828)
-	@# Until the self-hosted compiler runs the batched corpus, this anchor
-	@# runs the existing bootstrap tracer: hello_world.mvl through
-	@# compiler/backends/llvm/emitter.mvl → llc → cc → run. Proves the
-	@# mvl/llvm pipeline is live end-to-end.
-	@$(MAKE) --no-print-directory test-bootstrap-e2e
+test-mvl-llvm: build ## mvl/llvm — MVL self-hosted → LLVM (tracer bullet, via mvlr, broader corpus in #1828)
+	$(MVLR) --compiler=mvl --backend=llvm examples/programs/hello_world.mvl
 
 test-rust-tokio: build ## rust/rust-tokio — actor subset only (stub, tracked in #1828)
 	@printf "  \033[33m~  SKIP: test-rust-tokio not yet wired\033[0m\n"
