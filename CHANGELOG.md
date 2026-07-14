@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-07-14
+
+### Added
+
+- **`tests/corpus/07_ownership/`** — 17 executable tests covering MVL's ownership discipline: `ref` mutable bindings (`ref_test.mvl` — 5), value semantics on struct assignment (`value_test.mvl` — 4), explicit ownership transfer via `consume(x)` (`consume_test.mvl` — 4), and lambdas capturing by value (`lambda_capture_test.mvl` — 4). Both backends green. Corpus total now **138 tests across 8 categories**.
+
+### Known limitations
+
+- **#1845** — Set literal `{1, 2, 2, 3}` on the LLVM backend doesn't dedupe on construction, and subsequent `.insert()` / `.contains()` on a literal-constructed Set are no-ops (underlying storage isn't a real hash-set). Three tests in `05_collections/set_test.mvl` are gated behind `TODO(#1845)` markers pending the fix. `set_contains_hit`, `set_contains_miss`, and `set_literal_and_len` still pass because they use unique-value literals and don't mutate.
+
+- **Style — `type Pair` in user code** collides with `std::lists::Pair[A, B]` on the LLVM emitter, producing a double `%Pair = type ...` in IR. Corpus uses `IntPair` to avoid the collision.
+
+- **Style — consume-of-String-field** patterns (`fn describe(r) { r.name }` where `r.name: String`) trip the Rust transpiler with "cannot move out of `r`". Corpus uses Int fields in `consume_test.mvl` meanwhile.
+
 ## [1.4.0] - 2026-07-14
 
 ### Added

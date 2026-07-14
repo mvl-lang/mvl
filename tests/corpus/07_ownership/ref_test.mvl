@@ -1,0 +1,46 @@
+// 07_ownership/ref_test.mvl — mutable bindings via `ref` and reassignment.
+//
+// `let x: Int = 42;`     — immutable (default). Cannot be reassigned.
+// `let x: ref Int = 0;`  — mutable. `x = new_value;` overwrites in place.
+// MVL has no `mut` keyword — mutability lives in the binding type.
+
+test fn ref_int_reassignment() -> Unit {
+    let x: ref Int = 0;
+    x = 42;
+    assert_eq(x, 42);
+}
+
+test fn ref_int_multiple_reassignments() -> Unit {
+    let x: ref Int = 1;
+    x = 2;
+    x = 3;
+    x = 4;
+    assert_eq(x, 4);
+}
+
+test fn ref_int_accumulator_loop() -> Unit {
+    let sum: ref Int = 0;
+    let i: ref Int = 1;
+    while i <= 10 {
+        sum = sum + i;
+        i = i + 1;
+    }
+    assert_eq(sum, 55);
+}
+
+test fn ref_bool_toggles() -> Unit {
+    let flag: ref Bool = false;
+    flag = true;
+    assert_eq(flag, true);
+    flag = false;
+    assert_eq(flag, false);
+}
+
+test fn ref_from_for_loop_iteration() -> Unit {
+    let xs: List[Int] = [10, 20, 30, 40];
+    let seen: ref Int = 0;
+    for x in xs {
+        seen = seen + x;
+    }
+    assert_eq(seen, 100);
+}

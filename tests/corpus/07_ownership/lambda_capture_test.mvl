@@ -1,0 +1,48 @@
+// 07_ownership/lambda_capture_test.mvl — closures capture by value.
+//
+// A lambda that references a free variable captures it from the enclosing
+// scope. MVL's value semantics extend to captures: the closure sees a copy
+// of the captured value at the point of lambda creation. Later mutation of
+// the outer binding does not affect the captured copy (unless the capture
+// is itself a `ref`, in which case the reference is captured — but writes
+// through it may or may not be visible depending on backend semantics;
+// we don't rely on that here).
+
+fn apply(f: fn(Int) -> Int, n: Int) -> Int { f(n) }
+
+fn make_adder(k: Int) -> fn(Int) -> Int { |x: Int| x + k }
+
+fn make_scaler(k: Int) -> fn(Int) -> Int { |x: Int| x * k }
+
+test fn lambda_captures_int_by_value() -> Unit {
+    let offset: Int = 10;
+    let add_offset: fn(Int) -> Int = |x: Int| x + offset;
+    assert_eq(add_offset(5), 15);
+}
+
+test fn lambda_captures_survive_return() -> Unit {
+    let add5: fn(Int) -> Int = make_adder(5);
+    let times3: fn(Int) -> Int = make_scaler(3);
+    assert_eq(add5(2), 7);
+    assert_eq(times3(4), 12);
+}
+
+test fn lambda_two_different_captures_independent() -> Unit {
+    // Verifies each returned closure carries its own env; capture from
+    // one factory does not leak into the other.
+    let a: fn(Int) -> Int = make_adder(100);
+    let b: fn(Int) -> Int = make_adder(200);
+    assert_eq(a(1), 101);
+    assert_eq(b(1), 201);
+    // Cross-call: no state has moved.
+    assert_eq(a(2), 102);
+    assert_eq(b(2), 202);
+}
+
+test fn lambda_capture_used_in_hof() -> Unit {
+    let threshold: Int = 5;
+    let is_above: fn(Int) -> Bool = |x: Int| x > threshold;
+    assert_eq(is_above(10), true);
+    assert_eq(is_above(3), false);
+    assert_eq(is_above(threshold), false);
+}

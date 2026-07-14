@@ -1,0 +1,55 @@
+// 07_ownership/consume_test.mvl — explicit ownership transfer with `consume`.
+//
+// `consume(x)` is MVL's destructive-read operator (Pony-style). It transfers
+// ownership out of `x`; using `x` after that is a compile-time error. This
+// is the sole ownership-transfer mechanism — there is no implicit move on
+// assignment or function-call.
+//
+// At runtime, `consume` compiles to the same value transfer as an ordinary
+// pass. The tests here verify that consumed values arrive at their destination
+// correctly and can be reused inside the receiving fn.
+
+type Resource = struct {
+    handle: Int,
+    name: String,
+}
+
+fn take_handle(r: Resource) -> Int {
+    r.handle
+}
+
+fn double_handle(r: Resource) -> Int {
+    r.handle * 2
+}
+
+test fn consume_into_fn_returns_field() -> Unit {
+    let r: Resource = Resource { handle: 7, name: "socket" };
+    let h: Int = take_handle(consume(r));
+    assert_eq(h, 7);
+}
+
+test fn consume_into_let_binding() -> Unit {
+    let r: Resource = Resource { handle: 42, name: "file" };
+    let moved: Resource = consume(r);
+    assert_eq(moved.handle, 42);
+}
+
+test fn consume_chain_across_two_fns() -> Unit {
+    let r1: Resource = Resource { handle: 1, name: "a" };
+    let r2: Resource = Resource { handle: 2, name: "b" };
+    let h: Int = take_handle(consume(r1));
+    let d: Int = double_handle(consume(r2));
+    assert_eq(h, 1);
+    assert_eq(d, 4);
+}
+
+test fn consume_inside_conditional() -> Unit {
+    let r: Resource = Resource { handle: 99, name: "cond" };
+    let flag: Bool = true;
+    let h: Int = if flag {
+        take_handle(consume(r))
+    } else {
+        0
+    };
+    assert_eq(h, 99);
+}
