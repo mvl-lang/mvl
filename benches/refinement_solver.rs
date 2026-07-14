@@ -84,12 +84,12 @@ total fn clamp_add(x: Int where x >= 0 && x <= 100,
 // ── Corpus programs ───────────────────────────────────────────────────────────
 
 const CORPUS_FULLY_PROVEN: &str =
-    include_str!("../tests/corpus/09_refinements/refinements_fully_proven.mvl");
+    include_str!("../tests/corpus_old/09_refinements/refinements_fully_proven.mvl");
 
 const CORPUS_REFINEMENTS_VALID: &str =
-    include_str!("../tests/corpus/09_refinements/refinements_valid.mvl");
+    include_str!("../tests/corpus_old/09_refinements/refinements_valid.mvl");
 
-const CORPUS_CONTRACTS: &str = include_str!("../tests/corpus/11_contracts/basic_contracts.mvl");
+const CORPUS_CONTRACTS: &str = include_str!("../tests/corpus_old/11_contracts/basic_contracts.mvl");
 
 // ── Benchmark: micro per-layer ────────────────────────────────────────────────
 

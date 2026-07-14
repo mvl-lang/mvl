@@ -66,7 +66,7 @@ impl FileVerdict {
 }
 
 fn corpus_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/corpus")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/corpus_old")
 }
 
 fn baseline_path() -> PathBuf {

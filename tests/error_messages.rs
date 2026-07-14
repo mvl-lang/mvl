@@ -349,7 +349,7 @@ fn req11_invalid_declassify_names_the_actual_type() {
 // ── Refinement solver CLI flags ───────────────────────────────────────────────
 
 fn corpus(name: &str) -> String {
-    format!("{}/tests/corpus/{name}", env!("CARGO_MANIFEST_DIR"))
+    format!("{}/tests/corpus_old/{name}", env!("CARGO_MANIFEST_DIR"))
 }
 
 /// Run `mvl check` with extra args on a file; assert it *succeeds* (exit 0).

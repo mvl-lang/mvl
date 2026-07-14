@@ -72,35 +72,35 @@ fn assert_fmt_idempotent(src: &str, label: &str) {
 
 #[test]
 fn roundtrip_expressions() {
-    let src = include_str!("corpus/01_syntax/expressions.mvl");
+    let src = include_str!("corpus_old/01_syntax/expressions.mvl");
     assert_fmt_preserves_check(src, "01_syntax/expressions");
     assert_fmt_idempotent(src, "01_syntax/expressions");
 }
 
 #[test]
 fn roundtrip_functions() {
-    let src = include_str!("corpus/02_functions/functions.mvl");
+    let src = include_str!("corpus_old/02_functions/functions.mvl");
     assert_fmt_preserves_check(src, "02_functions/functions");
     assert_fmt_idempotent(src, "02_functions/functions");
 }
 
 #[test]
 fn roundtrip_statements() {
-    let src = include_str!("corpus/01_syntax/statements.mvl");
+    let src = include_str!("corpus_old/01_syntax/statements.mvl");
     assert_fmt_preserves_check(src, "01_syntax/statements");
     assert_fmt_idempotent(src, "01_syntax/statements");
 }
 
 #[test]
 fn roundtrip_literals() {
-    let src = include_str!("corpus/01_syntax/literals.mvl");
+    let src = include_str!("corpus_old/01_syntax/literals.mvl");
     assert_fmt_preserves_check(src, "01_syntax/literals");
     assert_fmt_idempotent(src, "01_syntax/literals");
 }
 
 #[test]
 fn roundtrip_keywords() {
-    let src = include_str!("corpus/01_syntax/keywords.mvl");
+    let src = include_str!("corpus_old/01_syntax/keywords.mvl");
     assert_fmt_preserves_check(src, "01_syntax/keywords");
     assert_fmt_idempotent(src, "01_syntax/keywords");
 }
@@ -109,49 +109,49 @@ fn roundtrip_keywords() {
 
 #[test]
 fn roundtrip_basic_types() {
-    let src = include_str!("corpus/03_types/basic_types.mvl");
+    let src = include_str!("corpus_old/03_types/basic_types.mvl");
     assert_fmt_preserves_check(src, "03_types/basic_types");
     assert_fmt_idempotent(src, "03_types/basic_types");
 }
 
 #[test]
 fn roundtrip_structs() {
-    let src = include_str!("corpus/03_types/structs.mvl");
+    let src = include_str!("corpus_old/03_types/structs.mvl");
     assert_fmt_preserves_check(src, "03_types/structs");
     assert_fmt_idempotent(src, "03_types/structs");
 }
 
 #[test]
 fn roundtrip_enums() {
-    let src = include_str!("corpus/03_types/enums.mvl");
+    let src = include_str!("corpus_old/03_types/enums.mvl");
     assert_fmt_preserves_check(src, "03_types/enums");
     assert_fmt_idempotent(src, "03_types/enums");
 }
 
 #[test]
 fn roundtrip_option_result() {
-    let src = include_str!("corpus/03_types/option_result.mvl");
+    let src = include_str!("corpus_old/03_types/option_result.mvl");
     assert_fmt_preserves_check(src, "03_types/option_result");
     assert_fmt_idempotent(src, "03_types/option_result");
 }
 
 #[test]
 fn roundtrip_exhaustive_match() {
-    let src = include_str!("corpus/03_types/exhaustive_match.mvl");
+    let src = include_str!("corpus_old/03_types/exhaustive_match.mvl");
     assert_fmt_preserves_check(src, "03_types/exhaustive_match");
     assert_fmt_idempotent(src, "03_types/exhaustive_match");
 }
 
 #[test]
 fn roundtrip_immutability() {
-    let src = include_str!("corpus/03_types/immutability.mvl");
+    let src = include_str!("corpus_old/03_types/immutability.mvl");
     assert_fmt_preserves_check(src, "03_types/immutability");
     assert_fmt_idempotent(src, "03_types/immutability");
 }
 
 #[test]
 fn roundtrip_refinements() {
-    let src = include_str!("corpus/03_types/refinements.mvl");
+    let src = include_str!("corpus_old/03_types/refinements.mvl");
     assert_fmt_preserves_check(src, "03_types/refinements");
     assert_fmt_idempotent(src, "03_types/refinements");
 }
@@ -160,7 +160,7 @@ fn roundtrip_refinements() {
 
 #[test]
 fn roundtrip_ownership() {
-    let src = include_str!("corpus/06_ownership/ownership.mvl");
+    let src = include_str!("corpus_old/06_ownership/ownership.mvl");
     assert_fmt_preserves_check(src, "06_ownership/ownership");
     assert_fmt_idempotent(src, "06_ownership/ownership");
 }
@@ -169,7 +169,7 @@ fn roundtrip_ownership() {
 
 #[test]
 fn roundtrip_effects() {
-    let src = include_str!("corpus/07_effects/pure_vs_effectful.mvl");
+    let src = include_str!("corpus_old/07_effects/pure_vs_effectful.mvl");
     assert_fmt_preserves_check(src, "07_effects/effects");
     assert_fmt_idempotent(src, "07_effects/effects");
 }
@@ -178,7 +178,7 @@ fn roundtrip_effects() {
 
 #[test]
 fn roundtrip_termination() {
-    let src = include_str!("corpus/10_termination/total_vs_partial.mvl");
+    let src = include_str!("corpus_old/10_termination/total_vs_partial.mvl");
     assert_fmt_preserves_check(src, "10_termination/termination");
     assert_fmt_idempotent(src, "10_termination/termination");
 }
@@ -187,7 +187,7 @@ fn roundtrip_termination() {
 
 #[test]
 fn roundtrip_contracts() {
-    let src = include_str!("corpus/11_contracts/basic_contracts.mvl");
+    let src = include_str!("corpus_old/11_contracts/basic_contracts.mvl");
     assert_fmt_preserves_check(src, "11_contracts/contracts");
     assert_fmt_idempotent(src, "11_contracts/contracts");
 }

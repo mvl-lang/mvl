@@ -3,10 +3,10 @@
 
 //! Corpus TIR compilation smoke-test (#1612 Phase 3b).
 //!
-//! Walks every `.mvl` file under `tests/corpus/` that has a `fn main(` entry
+//! Walks every `.mvl` file under `tests/corpus_old/` that has a `fn main(` entry
 //! point and verifies it compiles without error via the TIR-walking LLVM emitter.
 //! This replaced the AST/TIR parity test once the AST walker was deleted in
-//! #1612 Phase 3b.
+//! #1612 Phase 3b. Path retargeted per #1823 phase 1.
 
 use std::path::PathBuf;
 
@@ -28,7 +28,7 @@ fn parse(src: &str) -> Program {
 
 fn corpus_main_files() -> Vec<PathBuf> {
     let manifest = env!("CARGO_MANIFEST_DIR");
-    let root = std::path::Path::new(manifest).join("tests/corpus");
+    let root = std::path::Path::new(manifest).join("tests/corpus_old");
     let mut out = Vec::new();
     walk(&root, &mut out);
     out.sort();

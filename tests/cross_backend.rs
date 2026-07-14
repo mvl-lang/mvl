@@ -36,28 +36,28 @@ fn corpus(name: &str) -> String {
 
 fn corpus_primitives(name: &str) -> String {
     format!(
-        "{}/tests/corpus/04_primitives/{name}",
+        "{}/tests/corpus_old/04_primitives/{name}",
         env!("CARGO_MANIFEST_DIR")
     )
 }
 
 fn corpus_13_stdlib(name: &str) -> String {
     format!(
-        "{}/tests/corpus/13_stdlib/{name}",
+        "{}/tests/corpus_old/13_stdlib/{name}",
         env!("CARGO_MANIFEST_DIR")
     )
 }
 
 fn corpus_ownership(name: &str) -> String {
     format!(
-        "{}/tests/corpus/06_ownership/{name}",
+        "{}/tests/corpus_old/06_ownership/{name}",
         env!("CARGO_MANIFEST_DIR")
     )
 }
 
 fn corpus_collections(name: &str) -> String {
     format!(
-        "{}/tests/corpus/05_collections/{name}",
+        "{}/tests/corpus_old/05_collections/{name}",
         env!("CARGO_MANIFEST_DIR")
     )
 }
@@ -68,21 +68,21 @@ fn corpus_stdlib_tests(name: &str) -> String {
 
 fn corpus_types(name: &str) -> String {
     format!(
-        "{}/tests/corpus/03_types/{name}",
+        "{}/tests/corpus_old/03_types/{name}",
         env!("CARGO_MANIFEST_DIR")
     )
 }
 
 fn corpus_functions(name: &str) -> String {
     format!(
-        "{}/tests/corpus/02_functions/{name}",
+        "{}/tests/corpus_old/02_functions/{name}",
         env!("CARGO_MANIFEST_DIR")
     )
 }
 
 fn corpus_actors(name: &str) -> String {
     format!(
-        "{}/tests/corpus/12_actors/{name}",
+        "{}/tests/corpus_old/12_actors/{name}",
         env!("CARGO_MANIFEST_DIR")
     )
 }
@@ -887,7 +887,7 @@ fn cross_backend_eprint_stderr() {
 // ── ADR-0022: Category 1 operator intrinsics (LLVM backend) ──────────────────
 
 fn intrinsic(name: &str) -> String {
-    format!("{}/tests/intrinsics/{name}", env!("CARGO_MANIFEST_DIR"))
+    format!("{}/tests/corpus_old/00_intrinsics/{name}", env!("CARGO_MANIFEST_DIR"))
 }
 
 #[test]
@@ -1129,7 +1129,7 @@ fn cross_backend_env_identity() {
 #[test]
 fn cross_backend_ifc_label_round_trip() {
     let file = format!(
-        "{}/tests/corpus/08_ifc/label_into_inner.mvl",
+        "{}/tests/corpus_old/08_ifc/label_into_inner.mvl",
         env!("CARGO_MANIFEST_DIR")
     );
     let transpiler_out = run_transpiler(&file);
@@ -1172,7 +1172,7 @@ fn cross_backend_range_pipeline() {
 
 fn corpus_contracts(name: &str) -> String {
     format!(
-        "{}/tests/corpus/11_contracts/{name}",
+        "{}/tests/corpus_old/11_contracts/{name}",
         env!("CARGO_MANIFEST_DIR")
     )
 }
@@ -1207,7 +1207,7 @@ fn cross_backend_ghost_old_contracts() {
 
 fn corpus_concurrency(name: &str) -> String {
     format!(
-        "{}/tests/corpus/12_actors/{name}",
+        "{}/tests/corpus_old/12_actors/{name}",
         env!("CARGO_MANIFEST_DIR")
     )
 }
@@ -1230,7 +1230,7 @@ fn cross_backend_structured_concurrency() {
 // errors, even for programs without fn main / stdout output.
 
 fn corpus_ifc(name: &str) -> String {
-    format!("{}/tests/corpus/08_ifc/{name}", env!("CARGO_MANIFEST_DIR"))
+    format!("{}/tests/corpus_old/08_ifc/{name}", env!("CARGO_MANIFEST_DIR"))
 }
 
 fn assert_check_passes(file: &str) {

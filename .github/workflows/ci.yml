@@ -227,7 +227,7 @@ jobs:
       # Slow (~6 min at full corpus), so gated on Rust changes only.
       - name: Test corpus emits warning-free Rust
         if: needs.changes.outputs.rust == 'true'
-        run: make test-corpus-warnings
+        run: make test-corpus-warnings-old
 
       - name: MVL check compiler
         if: needs.changes.outputs.compiler == 'true'
