@@ -207,7 +207,11 @@ run_mvl_llvm_file() {
     # On Linux CI that produces an object file the native linker can't use.
     # Drop the triple so llc falls back to its default (host) triple.
     sed -i.bak '/^target triple = /d' "$tmp/out.ll" && rm -f "$tmp/out.ll.bak"
-    if ! "$llc" -filetype=obj "$tmp/out.ll" -o "$tmp/out.o" 2>"$tmp/llc.err"; then
+    # -relocation-model=pic: modern Linux distros default to PIE binaries,
+    # which need position-independent relocations in .o files. Harmless on
+    # macOS. Skipping this yields "R_X86_64_32 … cannot be used when making
+    # a PIE object" from the GNU linker.
+    if ! "$llc" -relocation-model=pic -filetype=obj "$tmp/out.ll" -o "$tmp/out.o" 2>"$tmp/llc.err"; then
         echo "mvlr: llc failed" >&2
         cat "$tmp/llc.err" >&2
         head -3 "$tmp/out.ll" >&2
