@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-07-14
+
+### Fixed
+
+- **LLVM backend crash on named-fn to `fn(T) -> U` coercion** (#1832) — passing a named top-level function where a function-typed parameter is expected now works on both Rust and LLVM backends. The emitter previously passed the raw `@fn_name` pointer to a callee expecting a `%__closure_type { fn_ptr, env_ptr }` layout, causing `lli` to segfault when the callee GEPed into the function's machine code. The fix wraps named-fn arguments in a synthesized shim closure at the call site (mirrors what lambdas already did). `hof_apply_named_function` in `tests/corpus/03_functions/higher_order_test.mvl` re-enabled.
+
 ## [1.2.0] - 2026-07-14
 
 ### Added

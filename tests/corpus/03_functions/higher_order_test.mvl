@@ -13,6 +13,8 @@ fn apply_twice(f: fn(Int) -> Int, n: Int) -> Int {
     f(f(n))
 }
 
+fn double(n: Int) -> Int { n + n }
+
 fn make_adder(k: Int) -> fn(Int) -> Int {
     |x: Int| x + k
 }
@@ -22,12 +24,13 @@ test fn hof_apply_lambda() -> Unit {
     assert_eq(inc, 42);
 }
 
-// TODO(#1832): pass a NAMED fn where `fn(Int) -> Int` is expected — LLVM
-// backend crashes on the coercion. Rust backend works. Add here once fixed:
-//   fn double(n: Int) -> Int { n + n }
-//   test fn hof_apply_named_function() -> Unit {
-//       assert_eq(apply(double, 21), 42);
-//   }
+test fn hof_apply_named_function() -> Unit {
+    // Pass a named fn where `fn(Int) -> Int` is expected. On the LLVM
+    // backend, the emitter wraps the named fn in a synthesized shim closure
+    // at the call site (#1832).
+    let d: Int = apply(double, 21);
+    assert_eq(d, 42);
+}
 
 test fn hof_apply_twice() -> Unit {
     // ((3 * 3) * 3) = 27
