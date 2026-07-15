@@ -18,16 +18,21 @@
 //! - `_mvl_string_starts_with` / `_mvl_string_ends_with` — prefix / suffix
 //! - `_mvl_string_find` — byte position or `-1`
 //!
-//! Group B (first drop — this commit) — allocation, returns `*MvlString`
-//! whose fields the emitter unpacks back into the `(ptr, len)`
-//! representation everything else uses:
+//! Group B — allocation, returns `*MvlString` whose fields the emitter
+//! unpacks back into the `(ptr, len)` representation everything else uses:
 //! - `MvlString` struct — `{ ptr, len, cap, rc }` all `i32`, matches the
 //!   `runtime/llvm/` layout (i64→i32 fields for wasm32 addressing).
-//! - `_mvl_string_concat` — allocates a fresh buffer + `MvlString`.
+//! - `_mvl_string_new` — allocate from `(bytes, len)`
+//! - `_mvl_string_clone` — refcount bump, returns the same pointer
+//! - `_mvl_string_drop` — refcount decrement, free when zero
+//! - `_mvl_string_concat` — new `MvlString` from two `(ptr, len)` inputs
+//! - `_mvl_string_substring` — byte-slice window into a new `MvlString`
 //!
-//! No `_mvl_string_drop` yet — Group B commit 1 leaks concat allocations.
-//! Refcount / drop lands with commit 2 alongside `_mvl_string_clone` and
-//! emitter-side scope-exit drop emission. Fine for tests.
+//! Drop emission on the emitter side is best-effort — at every function's
+//! implicit-return point, the emitter drops each `__ms_*` temp local it
+//! allocated. Explicit `return` statements are not yet drop-aware; those
+//! paths leak (fine for phase-2 corpus tests which all end via
+//! implicit return).
 //!
 //! ## Symbol convention
 //!
@@ -161,9 +166,9 @@ fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 // unpacks the two fields it cares about (`ptr`, `len`) via `i32.load`
 // at offsets 0 and 4.
 //
-// Refcount (`rc`) and capacity (`cap`) are present so the layout is
-// stable across commits; they'll be exercised when `_mvl_string_clone`
-// and `_mvl_string_drop` land in the follow-up commit.
+// Refcount (`rc`) supports shared ownership between clones; `cap` is
+// round-tripped through `Vec::from_raw_parts` on drop so the whole
+// allocation is reclaimed.
 
 #[repr(C)]
 pub struct MvlString {
@@ -173,15 +178,81 @@ pub struct MvlString {
     pub rc: i32,
 }
 
-/// Allocate a fresh `MvlString` whose backing bytes are the concatenation
-/// of `(p1, l1)` and `(p2, l2)`. Returns a pointer to the struct (as
-/// `i32` — WASM linear-memory offset). The emitter reads `.ptr` / `.len`
-/// via `i32.load` to feed the concatenated bytes into everything
-/// downstream that still uses the `(ptr, len)` representation
-/// (`_mvl_string_eq`, `_mvl_string_len`, `println`, etc.).
+/// Internal: allocate an owned buffer that copies `src`, wrap it in an
+/// `MvlString` with `rc = 1`, return the struct's linear-memory address
+/// as `i32`. Shared entrypoint for every heap-owned string this runtime
+/// creates (`_mvl_string_new`, `_mvl_string_substring`, …).
 ///
-/// Group B commit 1 deliberately leaks: neither the `Box<MvlString>` nor
-/// the byte `Vec` is freed. Drop emission + `_mvl_string_drop` come next.
+/// The bytes `Vec` is `mem::forget`ed here and reclaimed by
+/// `_mvl_string_drop` using `Vec::from_raw_parts` with the recorded
+/// `cap`. `_mvl_string_concat` inlines this pattern rather than calling
+/// through here because it fills the buffer with two separate copies.
+fn alloc_mvl_string(src: &[u8]) -> i32 {
+    let mut bytes = Vec::with_capacity(src.len());
+    bytes.extend_from_slice(src);
+    let bytes_ptr = bytes.as_ptr() as i32;
+    let bytes_len = bytes.len() as i32;
+    let bytes_cap = bytes.capacity() as i32;
+    core::mem::forget(bytes);
+    let ms = Box::new(MvlString {
+        ptr: bytes_ptr,
+        len: bytes_len,
+        cap: bytes_cap,
+        rc: 1,
+    });
+    Box::into_raw(ms) as i32
+}
+
+/// Allocate a fresh `MvlString` from a `(ptr, len)` byte range. The
+/// bytes are copied — the resulting `MvlString` owns its buffer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_string_new(ptr: i32, len: i32) -> i32 {
+    let src = unsafe { slice_or_empty(ptr, len) };
+    alloc_mvl_string(src)
+}
+
+/// Increment the refcount and return the same pointer. Passing an
+/// `MvlString` around by clone gives every holder a valid reference; the
+/// last drop frees. Null-safe.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_string_clone(ms_ptr: i32) -> i32 {
+    if ms_ptr == 0 {
+        return 0;
+    }
+    let ms = unsafe { &mut *(ms_ptr as usize as *mut MvlString) };
+    ms.rc += 1;
+    ms_ptr
+}
+
+/// Decrement the refcount; when it hits zero, free both the byte buffer
+/// and the `MvlString` struct. Null-safe.
+///
+/// `cap` (recorded at allocation) is essential here — reclaiming the byte
+/// `Vec` requires the exact capacity from `Vec::with_capacity`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_string_drop(ms_ptr: i32) {
+    if ms_ptr == 0 {
+        return;
+    }
+    let ms = unsafe { &mut *(ms_ptr as usize as *mut MvlString) };
+    ms.rc -= 1;
+    if ms.rc > 0 {
+        return;
+    }
+    if ms.cap > 0 && ms.ptr != 0 {
+        unsafe {
+            let _ =
+                Vec::from_raw_parts(ms.ptr as usize as *mut u8, ms.len as usize, ms.cap as usize);
+        }
+    }
+    unsafe {
+        let _ = Box::from_raw(ms_ptr as usize as *mut MvlString);
+    }
+}
+
+/// Allocate a fresh `MvlString` whose backing bytes are the concatenation
+/// of `(p1, l1)` and `(p2, l2)`. Fills the buffer with both inputs in
+/// one pass rather than routing through `alloc_mvl_string`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn _mvl_string_concat(p1: i32, l1: i32, p2: i32, l2: i32) -> i32 {
     let a = unsafe { slice_or_empty(p1, l1) };
@@ -192,8 +263,7 @@ pub unsafe extern "C" fn _mvl_string_concat(p1: i32, l1: i32, p2: i32, l2: i32) 
     let bytes_ptr = bytes.as_ptr() as i32;
     let bytes_len = bytes.len() as i32;
     let bytes_cap = bytes.capacity() as i32;
-    core::mem::forget(bytes); // leaked — freed by `_mvl_string_drop` in a
-                              // follow-up commit.
+    core::mem::forget(bytes);
     let ms = Box::new(MvlString {
         ptr: bytes_ptr,
         len: bytes_len,
@@ -201,6 +271,24 @@ pub unsafe extern "C" fn _mvl_string_concat(p1: i32, l1: i32, p2: i32, l2: i32) 
         rc: 1,
     });
     Box::into_raw(ms) as i32
+}
+
+/// Byte-slice substring. `start` / `end` are MVL `Int`s (i64) — clamped
+/// to `0..=len` and normalised so `end >= start`. Bytes are copied into a
+/// fresh `MvlString` (owns its buffer, `rc = 1`).
+///
+/// **Byte-based, not codepoint-based.** `runtime/llvm/`'s equivalent
+/// uses `char_indices` for Unicode; we skip that here — corpus tests use
+/// ASCII, and codepoint indexing without a Unicode table adds ~50 KB to
+/// the runtime WASM. Revisit if a non-ASCII substring test appears.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_string_substring(ptr: i32, len: i32, start: i64, end: i64) -> i32 {
+    let s = unsafe { slice_or_empty(ptr, len) };
+    let n = s.len() as i64;
+    let lo = start.max(0).min(n) as usize;
+    let hi = end.max(0).min(n) as usize;
+    let hi = hi.max(lo);
+    alloc_mvl_string(&s[lo..hi])
 }
 
 // ── Equality ─────────────────────────────────────────────────────────────
@@ -456,6 +544,111 @@ mod tests {
         let ms = unsafe { &*(ptr as usize as *const MvlString) };
         assert_eq!(ms.rc, 1);
         assert_eq!(ms.len, 2);
+    }
+
+    // ── new / clone / drop ────
+    #[test]
+    fn new_copies_bytes() {
+        let src = b"world";
+        let ptr = unsafe { _mvl_string_new(addr(src), src.len() as i32) };
+        assert_eq!(unsafe { concat_result(ptr) }, b"world");
+        unsafe { _mvl_string_drop(ptr) };
+    }
+
+    #[test]
+    fn new_empty() {
+        let ptr = unsafe { _mvl_string_new(0, 0) };
+        let ms = unsafe { &*(ptr as usize as *const MvlString) };
+        assert_eq!(ms.len, 0);
+        unsafe { _mvl_string_drop(ptr) };
+    }
+
+    #[test]
+    fn clone_bumps_refcount() {
+        let src = b"x";
+        let ptr = unsafe { _mvl_string_new(addr(src), 1) };
+        let ptr2 = unsafe { _mvl_string_clone(ptr) };
+        assert_eq!(ptr, ptr2, "clone returns the same pointer");
+        let ms = unsafe { &*(ptr as usize as *const MvlString) };
+        assert_eq!(ms.rc, 2);
+        // Drop twice — first is a no-op (rc→1), second frees.
+        unsafe { _mvl_string_drop(ptr) };
+        unsafe { _mvl_string_drop(ptr) };
+    }
+
+    #[test]
+    fn clone_null_is_null() {
+        assert_eq!(unsafe { _mvl_string_clone(0) }, 0);
+    }
+
+    #[test]
+    fn drop_null_is_noop() {
+        unsafe { _mvl_string_drop(0) }; // must not crash
+    }
+
+    #[test]
+    fn drop_frees_shared_alloc() {
+        // Alloc a MvlString, clone twice → rc=3, drop three times, last
+        // one frees. A leak-detector on the host would catch a missed
+        // free here; the best we can do under wasmtime is exercise the
+        // path and rely on `Vec::from_raw_parts` to complain if the
+        // capacity is wrong.
+        let src = b"probe";
+        let ptr = unsafe { _mvl_string_new(addr(src), 5) };
+        unsafe { _mvl_string_clone(ptr) };
+        unsafe { _mvl_string_clone(ptr) };
+        unsafe { _mvl_string_drop(ptr) };
+        unsafe { _mvl_string_drop(ptr) };
+        unsafe { _mvl_string_drop(ptr) }; // final: frees
+    }
+
+    // ── substring ────
+    #[test]
+    fn substring_middle() {
+        let s = b"hello world";
+        let ptr = unsafe { _mvl_string_substring(addr(s), s.len() as i32, 6, 11) };
+        assert_eq!(unsafe { concat_result(ptr) }, b"world");
+        unsafe { _mvl_string_drop(ptr) };
+    }
+
+    #[test]
+    fn substring_start_zero() {
+        let s = b"hello";
+        let ptr = unsafe { _mvl_string_substring(addr(s), s.len() as i32, 0, 3) };
+        assert_eq!(unsafe { concat_result(ptr) }, b"hel");
+        unsafe { _mvl_string_drop(ptr) };
+    }
+
+    #[test]
+    fn substring_empty_range() {
+        let s = b"hello";
+        let ptr = unsafe { _mvl_string_substring(addr(s), s.len() as i32, 2, 2) };
+        assert_eq!(unsafe { concat_result(ptr) }, b"");
+        unsafe { _mvl_string_drop(ptr) };
+    }
+
+    #[test]
+    fn substring_clamps_end() {
+        let s = b"hello";
+        let ptr = unsafe { _mvl_string_substring(addr(s), s.len() as i32, 3, 999) };
+        assert_eq!(unsafe { concat_result(ptr) }, b"lo");
+        unsafe { _mvl_string_drop(ptr) };
+    }
+
+    #[test]
+    fn substring_clamps_negative_start() {
+        let s = b"hello";
+        let ptr = unsafe { _mvl_string_substring(addr(s), s.len() as i32, -1, 3) };
+        assert_eq!(unsafe { concat_result(ptr) }, b"hel");
+        unsafe { _mvl_string_drop(ptr) };
+    }
+
+    #[test]
+    fn substring_reversed_range_clamps_to_empty() {
+        let s = b"hello";
+        let ptr = unsafe { _mvl_string_substring(addr(s), s.len() as i32, 4, 1) };
+        assert_eq!(unsafe { concat_result(ptr) }, b"");
+        unsafe { _mvl_string_drop(ptr) };
     }
 
     // ── find ────

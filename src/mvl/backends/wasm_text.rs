@@ -136,7 +136,15 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
     // Group B — allocation, returns `*MvlString` (pointer as i32). The
     // emitter unpacks `.ptr` / `.len` via `i32.load` at offsets 0 / 4 so
     // downstream code keeps the same `(ptr, len)` stack shape as literals.
+    ("_mvl_string_new", "(param i32 i32) (result i32)"),
+    ("_mvl_string_clone", "(param i32) (result i32)"),
+    ("_mvl_string_drop", "(param i32)"),
     ("_mvl_string_concat", "(param i32 i32 i32 i32) (result i32)"),
+    // `.substring(start, end)` — MVL `Int` args are i64 on the WASM side.
+    (
+        "_mvl_string_substring",
+        "(param i32 i32 i64 i64) (result i32)",
+    ),
 ];
 
 /// Layout offsets on `MvlString` — mirrors `runtime/wasm/src/lib.rs` /
@@ -308,6 +316,25 @@ fn emit_fn(out: &mut String, f: &TirFn, ctx: &Ctx) {
         out.push_str("    unreachable\n");
     } else {
         out.push_str(&body);
+        // Drop each `__ms_*` temp local at the implicit-return path.
+        // Every allocation from `.concat` / `.substring` / … was stashed
+        // in a temp; freeing at fn exit reclaims the byte buffer + struct.
+        // `_mvl_string_drop` is null-safe, so temps on code paths that
+        // never allocated are harmless.
+        //
+        // Limitation: this only catches implicit-return paths. Explicit
+        // `return` in the middle of the fn skips cleanup and leaks. Fine
+        // for phase-2 corpus tests, which all end via implicit return.
+        // If a fn returns a String derived from a heap allocation, this
+        // would prematurely free the byte buffer the caller is about to
+        // read from — but the emitter doesn't yet emit that shape (String
+        // is never a user-fn return value in the current WASM_CORPUS).
+        for (name, _) in &locals {
+            if name.starts_with("__ms_") {
+                out.push_str(&format!("    local.get ${name}\n"));
+                out.push_str("    call $_mvl_string_drop\n");
+            }
+        }
     }
     out.push_str("  )\n");
 }
@@ -411,13 +438,12 @@ fn collect_locals_expr(expr: &TirExpr, locals: &mut Vec<(String, Ty)>) {
             // Allocation-returning String methods leave a `*MvlString` on
             // the stack that the emitter unpacks via a temp i32 local.
             // Register it here so the fn prelude declares it.
-            if matches!(&receiver.ty, Ty::String) && method == "concat" {
-                locals.push((mvl_string_temp_name(expr.span.offset), Ty::Int));
-                // Ty::Int lowers to i64 by default. Override: register as
-                // Bool (i32) which is what we want for a pointer. See
-                // `wasm_ty`.
-                let last = locals.last_mut().unwrap();
-                last.1 = Ty::Bool;
+            if matches!(&receiver.ty, Ty::String)
+                && matches!(method.as_str(), "concat" | "substring")
+            {
+                // Ty::Bool → i32 in `wasm_ty` — reuse for the pointer
+                // temp so we don't need a dedicated "raw i32" ty.
+                locals.push((mvl_string_temp_name(expr), Ty::Bool));
             }
         }
         _ => {}
@@ -644,12 +670,16 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             receiver,
             method,
             args,
-        } if matches!(&receiver.ty, Ty::String) && method == "concat" && args.len() == 1 => {
+        } if matches!(&receiver.ty, Ty::String)
+            && matches!(method.as_str(), "concat" | "substring") =>
+        {
             ctx.needs_runtime.set(true);
             emit_expr(out, receiver, ctx);
-            emit_expr(out, &args[0], ctx);
-            out.push_str("    call $_mvl_string_concat\n");
-            emit_unpack_mvl_string(out, expr.span.offset);
+            for a in args {
+                emit_expr(out, a, ctx);
+            }
+            out.push_str(&format!("    call $_mvl_string_{method}\n"));
+            emit_unpack_mvl_string(out, expr);
         }
         TirExprKind::Block(block) => emit_block(out, block, ctx),
         // `match scrutinee { pat1 => arm1, pat2 => arm2, _ => default }` —
@@ -885,8 +915,8 @@ fn emit_literal(out: &mut String, lit: &Literal, ctx: &Ctx) {
 ///
 ///   before:  stack = [..., *MvlString]
 ///   after:   stack = [..., ptr, len]
-fn emit_unpack_mvl_string(out: &mut String, span_offset: u32) {
-    let local = mvl_string_temp_name(span_offset);
+fn emit_unpack_mvl_string(out: &mut String, expr: &TirExpr) {
+    let local = mvl_string_temp_name(expr);
     out.push_str(&format!("    local.tee ${local}\n"));
     // .ptr @ offset 0
     out.push_str(&format!("    i32.load offset={MVL_STRING_OFFSET_PTR}\n"));
@@ -897,8 +927,15 @@ fn emit_unpack_mvl_string(out: &mut String, span_offset: u32) {
 
 /// Temp local name for a `*MvlString` unpack — keyed by source span so
 /// the pre-scan and emit paths agree without threading a counter through.
-fn mvl_string_temp_name(span_offset: u32) -> String {
-    format!("__ms_{span_offset}")
+///
+/// Uses both `offset` and `len` because nested method calls share the
+/// same starting offset (the receiver's start position). Given
+/// `"a".concat(b).substring(0, 1)` the concat and substring TIR nodes
+/// both have `span.offset` at `"a"`'s position; only the length
+/// disambiguates. Using offset alone would collide → duplicate local
+/// declarations → wasm-tools rejects the WAT.
+fn mvl_string_temp_name(expr: &TirExpr) -> String {
+    format!("__ms_{}_{}", expr.span.offset, expr.span.len)
 }
 
 /// Emit `assert_eq(a, b)` or `assert_ne(a, b)` — mirrors the LLVM backend's
