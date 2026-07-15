@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+## [1.3.5] - 2026-07-15
+
+### Added — #1867 native unit-test targets for rust + llvm runtimes
+
+Peers of `test-runtime-wasm` (from #1819). Both use `cargo test -p` — no cross-compilation, no wasmtime, ~sub-second execution. Perfect for TDD on runtime symbols.
+
+- `make test-runtime-rust` — 155 tests in `runtime/rust/`
+- `make test-runtime-llvm` — 102 tests in `runtime/llvm/`
+
+### Fixed — pre-existing runtime test regressions
+
+Both crates had unit tests that hadn't been maintained. Fixed as part of wiring the targets:
+
+- **runtime/rust**: `stdlib::env::tests::current_dir_matches_std_env` raced against `chdir_changes_and_restores_directory` (which held `ENV_LOCK`). Added the lock to the reader. Three doctests in `prelude.rs` / `refine.rs` referenced the transpiler-emitted crate name `mvl_runtime` instead of the actual crate name `mvl_runtime_rust`; converted illustrative snippets to `text` blocks and fixed the executable doctest to use `mvl_runtime_rust::refine::mvl_refine`.
+- **runtime/llvm**: 33 compile errors because tests referenced symbol names from before the C-ABI underscore-prefix rename. Mechanical fixes across `memory_ops.rs` + `stdlib/{map,set}.rs`:
+  - `mvl_array_drop` / `mvl_array_clone` → `_mvl_array_*`
+  - `mvl_map_new` / `mvl_map_clone` / `mvl_map_drop` → `_mvl_map_*`
+  - `mvl_string_clone` → `_mvl_string_clone`
+  - `List_all` / `List_any` / `List_filter` / `List_fold` / `List_map` → `_mvl_list_*`
+
 ## [1.3.4] - 2026-07-15
 
 ### Fixed — #1863 mvl assurance Req 10 counter contradiction

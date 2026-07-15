@@ -953,7 +953,7 @@ pub(crate) unsafe fn mvl_map_values(m: *const MvlMap) -> *mut MvlArray {
 ///
 /// Decrements the array's refcount.  When refcount reaches zero, each element
 /// string is freed via `_mvl_string_drop` before the array itself is freed.
-/// Use this instead of `mvl_array_drop` for arrays returned by `mvl_string_chars`
+/// Use this instead of `_mvl_array_drop` for arrays returned by `mvl_string_chars`
 /// or `mvl_map_keys`, which own their element strings.
 ///
 /// # Safety
@@ -978,7 +978,7 @@ pub unsafe extern "C" fn _mvl_string_ptr_array_drop(arr: *mut MvlArray) {
                 _mvl_string_drop(s);
             }
         }
-        // Free the array buffer and struct (same logic as mvl_array_drop).
+        // Free the array buffer and struct (same logic as _mvl_array_drop).
         let data_size = ((*arr).cap as usize)
             .checked_mul(es)
             .unwrap_or_else(|| std::process::abort());
@@ -1113,7 +1113,7 @@ pub struct MvlClosure {
     env_ptr: *const (),
 }
 
-/// `List_filter(list, closure)` — keep elements where `closure(elem)` is true.
+/// `_mvl_list_filter(list, closure)` — keep elements where `closure(elem)` is true.
 ///
 /// Supports any element size.  The closure receives a *pointer* to each element
 /// (not the element by value), so it works for both scalars and aggregates like
@@ -1148,7 +1148,7 @@ pub unsafe extern "C" fn _mvl_list_filter(
     out
 }
 
-/// `List_map(list, closure)` — transform each element via `closure(elem)`.
+/// `_mvl_list_map(list, closure)` — transform each element via `closure(elem)`.
 ///
 /// The closure receives a pointer to each element and returns an i64-sized
 /// result (output `elem_size` == 8).  Input elements can be any size.
@@ -1181,7 +1181,7 @@ pub unsafe extern "C" fn _mvl_list_map(
     out
 }
 
-/// `List_fold(list, acc_ptr, closure)` — reduce list with accumulator.
+/// `_mvl_list_fold(list, acc_ptr, closure)` — reduce list with accumulator.
 ///
 /// `acc_ptr` points to the initial accumulator value (stack-allocated by the
 /// caller).  The closure has signature `fn(env, acc_val, elem_ptr) -> acc_val`.
@@ -1219,7 +1219,7 @@ pub unsafe extern "C" fn _mvl_list_fold(
     acc_ptr
 }
 
-/// `List_any(list, closure)` — return true if any element satisfies predicate.
+/// `_mvl_list_any(list, closure)` — return true if any element satisfies predicate.
 ///
 /// # Safety
 /// `list` must be a valid `MvlArray*`.  `closure` must point to a valid
@@ -1246,7 +1246,7 @@ pub unsafe extern "C" fn _mvl_list_any(list: *mut MvlArray, closure: *const MvlC
     false
 }
 
-/// `List_all(list, closure)` — return true if all elements satisfy predicate.
+/// `_mvl_list_all(list, closure)` — return true if all elements satisfy predicate.
 ///
 /// # Safety
 /// `list` must be a valid `MvlArray*`.  `closure` must point to a valid
@@ -1646,9 +1646,9 @@ pub unsafe extern "C" fn _mvl_map_entries(map: *mut MvlMap) -> *mut MvlArray {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::{_mvl_array_new, mvl_array_clone, mvl_array_drop};
-    use crate::memory::{_mvl_map_new, mvl_map_clone, mvl_map_drop};
-    use crate::memory::{_mvl_string_drop, _mvl_string_new, mvl_string_clone};
+    use crate::memory::{_mvl_array_clone, _mvl_array_drop, _mvl_array_new};
+    use crate::memory::{_mvl_map_clone, _mvl_map_drop, _mvl_map_new};
+    use crate::memory::{_mvl_string_clone, _mvl_string_drop, _mvl_string_new};
 
     // ── string operations ──────────────────────────────────────────────────────
 
@@ -1696,7 +1696,7 @@ mod tests {
             let c = _mvl_string_new(b"xyz".as_ptr(), 3);
             assert_eq!(_mvl_string_eq(a, b), 1);
             assert_eq!(_mvl_string_eq(a, c), 0);
-            let _ = mvl_string_clone(a); // refcount → 2 (same ptr; raw ptr, no Rust Drop)
+            let _ = _mvl_string_clone(a); // refcount → 2 (same ptr; raw ptr, no Rust Drop)
             assert_eq!(_mvl_string_eq(a, a), 1); // pointer-equality short-circuit
             _mvl_string_drop(a); // refcount → 1
             _mvl_string_drop(a); // refcount → 0, freed
@@ -1722,7 +1722,7 @@ mod tests {
             assert_eq!(*p1, 42);
             assert_eq!(*p2, 99);
             assert!(_mvl_array_get(a, 2).is_null());
-            mvl_array_drop(a);
+            _mvl_array_drop(a);
         }
     }
 
@@ -1738,7 +1738,7 @@ mod tests {
                 let p = _mvl_array_get(a, i) as *const i64;
                 assert_eq!(*p, i);
             }
-            mvl_array_drop(a);
+            _mvl_array_drop(a);
         }
     }
 
@@ -1748,11 +1748,11 @@ mod tests {
             let a = _mvl_array_new(8, 0);
             let v: i64 = 7;
             _mvl_array_push(a, (&v as *const i64).cast());
-            let a2 = mvl_array_clone(a);
+            let a2 = _mvl_array_clone(a);
             assert_eq!((*a).refcount, 2);
-            mvl_array_drop(a2);
+            _mvl_array_drop(a2);
             assert_eq!((*a).refcount, 1);
-            mvl_array_drop(a);
+            _mvl_array_drop(a);
         }
     }
 
@@ -1771,7 +1771,7 @@ mod tests {
             assert!(!got.is_null());
             assert_eq!(*got, 123);
             assert!(mvl_map_get(m, b"nope".as_ptr(), 4).is_null());
-            mvl_map_drop(m);
+            _mvl_map_drop(m);
         }
     }
 
@@ -1787,7 +1787,7 @@ mod tests {
             assert_eq!(mvl_map_len(m), 1);
             let got = *(mvl_map_get(m, k.as_ptr(), 1) as *const i64);
             assert_eq!(got, 2);
-            mvl_map_drop(m);
+            _mvl_map_drop(m);
         }
     }
 
@@ -1805,7 +1805,7 @@ mod tests {
                 let got = *(mvl_map_get(m, key.as_ptr(), 8) as *const i64);
                 assert_eq!(got, i);
             }
-            mvl_map_drop(m);
+            _mvl_map_drop(m);
         }
     }
 
@@ -1813,11 +1813,11 @@ mod tests {
     fn map_clone_refcount() {
         unsafe {
             let m = _mvl_map_new(0);
-            let m2 = mvl_map_clone(m);
+            let m2 = _mvl_map_clone(m);
             assert_eq!((*m).refcount, 2);
-            mvl_map_drop(m2);
+            _mvl_map_drop(m2);
             assert_eq!((*m).refcount, 1);
-            mvl_map_drop(m);
+            _mvl_map_drop(m);
         }
     }
 
@@ -1837,7 +1837,7 @@ mod tests {
                 mvl_map_get(m, k.as_ptr(), 3).is_null(),
                 "removed key should be absent"
             );
-            mvl_map_drop(m);
+            _mvl_map_drop(m);
         }
     }
 
@@ -1852,7 +1852,7 @@ mod tests {
             assert_eq!(mvl_map_len(m), 1);
             let got = *(mvl_map_get(m, k.as_ptr(), 1) as *const i64);
             assert_eq!(got, 1);
-            mvl_map_drop(m);
+            _mvl_map_drop(m);
         }
     }
 
@@ -1894,7 +1894,7 @@ mod tests {
                 let got = *(mvl_map_get(m, key.as_ptr(), 8) as *const i64);
                 assert_eq!(got, *val);
             }
-            mvl_map_drop(m);
+            _mvl_map_drop(m);
         }
     }
 
@@ -1976,7 +1976,7 @@ mod tests {
             assert!(found.contains("alpha"));
             assert!(found.contains("beta"));
             _mvl_string_ptr_array_drop(arr);
-            mvl_map_drop(m);
+            _mvl_map_drop(m);
         }
     }
 
@@ -1999,7 +1999,7 @@ mod tests {
                 std::slice::from_raw_parts(_mvl_string_ptr(ks), _mvl_string_len(ks) as usize);
             assert_eq!(slice, b"b");
             _mvl_string_ptr_array_drop(arr);
-            mvl_map_drop(m);
+            _mvl_map_drop(m);
         }
     }
 
@@ -2049,10 +2049,10 @@ mod tests {
         unsafe {
             let a = make_i64_array(&[1, 2, 3, 4, 5, 6]);
             let c = make_closure(pred_is_even as *const (), std::ptr::null());
-            let out = List_filter(a, &c);
+            let out = _mvl_list_filter(a, &c);
             assert_eq!(read_i64_array(out), vec![2, 4, 6]);
-            mvl_array_drop(out);
-            mvl_array_drop(a);
+            _mvl_array_drop(out);
+            _mvl_array_drop(a);
         }
     }
 
@@ -2061,10 +2061,10 @@ mod tests {
         unsafe {
             let a = make_i64_array(&[]);
             let c = make_closure(pred_is_even as *const (), std::ptr::null());
-            let out = List_filter(a, &c);
+            let out = _mvl_list_filter(a, &c);
             assert_eq!(_mvl_array_len(out), 0);
-            mvl_array_drop(out);
-            mvl_array_drop(a);
+            _mvl_array_drop(out);
+            _mvl_array_drop(a);
         }
     }
 
@@ -2073,10 +2073,10 @@ mod tests {
         unsafe {
             let a = make_i64_array(&[1, 3, 5]);
             let c = make_closure(pred_is_even as *const (), std::ptr::null());
-            let out = List_filter(a, &c);
+            let out = _mvl_list_filter(a, &c);
             assert_eq!(_mvl_array_len(out), 0);
-            mvl_array_drop(out);
-            mvl_array_drop(a);
+            _mvl_array_drop(out);
+            _mvl_array_drop(a);
         }
     }
 
@@ -2085,10 +2085,10 @@ mod tests {
         unsafe {
             let a = make_i64_array(&[2, 4, 6]);
             let c = make_closure(pred_is_even as *const (), std::ptr::null());
-            let out = List_filter(a, &c);
+            let out = _mvl_list_filter(a, &c);
             assert_eq!(read_i64_array(out), vec![2, 4, 6]);
-            mvl_array_drop(out);
-            mvl_array_drop(a);
+            _mvl_array_drop(out);
+            _mvl_array_drop(a);
         }
     }
 
@@ -2097,10 +2097,10 @@ mod tests {
         unsafe {
             let a = make_i64_array(&[1, 2, 3]);
             let c = make_closure(map_double as *const (), std::ptr::null());
-            let out = List_map(a, &c);
+            let out = _mvl_list_map(a, &c);
             assert_eq!(read_i64_array(out), vec![2, 4, 6]);
-            mvl_array_drop(out);
-            mvl_array_drop(a);
+            _mvl_array_drop(out);
+            _mvl_array_drop(a);
         }
     }
 
@@ -2109,10 +2109,10 @@ mod tests {
         unsafe {
             let a = make_i64_array(&[]);
             let c = make_closure(map_double as *const (), std::ptr::null());
-            let out = List_map(a, &c);
+            let out = _mvl_list_map(a, &c);
             assert_eq!(_mvl_array_len(out), 0);
-            mvl_array_drop(out);
-            mvl_array_drop(a);
+            _mvl_array_drop(out);
+            _mvl_array_drop(a);
         }
     }
 
@@ -2122,10 +2122,10 @@ mod tests {
             let a = make_i64_array(&[1, 2, 3, 4, 5]);
             let c = make_closure(fold_add as *const (), std::ptr::null());
             let mut acc: i64 = 0;
-            let result = List_fold(a, (&mut acc as *mut i64).cast(), &c);
+            let result = _mvl_list_fold(a, (&mut acc as *mut i64).cast(), &c);
             assert_eq!(*(result as *const i64), 15);
             assert_eq!(acc, 15);
-            mvl_array_drop(a);
+            _mvl_array_drop(a);
         }
     }
 
@@ -2135,10 +2135,10 @@ mod tests {
             let a = make_i64_array(&[]);
             let c = make_closure(fold_add as *const (), std::ptr::null());
             let mut acc: i64 = 42;
-            let result = List_fold(a, (&mut acc as *mut i64).cast(), &c);
+            let result = _mvl_list_fold(a, (&mut acc as *mut i64).cast(), &c);
             assert_eq!(*(result as *const i64), 42);
             assert_eq!(acc, 42);
-            mvl_array_drop(a);
+            _mvl_array_drop(a);
         }
     }
 
@@ -2148,9 +2148,9 @@ mod tests {
             let a = make_i64_array(&[1, 2, 3]);
             let c = make_closure(fold_add as *const (), std::ptr::null());
             let mut acc: i64 = 100;
-            List_fold(a, (&mut acc as *mut i64).cast(), &c);
+            _mvl_list_fold(a, (&mut acc as *mut i64).cast(), &c);
             assert_eq!(acc, 106);
-            mvl_array_drop(a);
+            _mvl_array_drop(a);
         }
     }
 
@@ -2159,8 +2159,8 @@ mod tests {
         unsafe {
             let a = make_i64_array(&[1, 3, 4, 7]);
             let c = make_closure(pred_is_even as *const (), std::ptr::null());
-            assert!(List_any(a, &c));
-            mvl_array_drop(a);
+            assert!(_mvl_list_any(a, &c));
+            _mvl_array_drop(a);
         }
     }
 
@@ -2169,8 +2169,8 @@ mod tests {
         unsafe {
             let a = make_i64_array(&[1, 3, 5, 7]);
             let c = make_closure(pred_is_even as *const (), std::ptr::null());
-            assert!(!List_any(a, &c));
-            mvl_array_drop(a);
+            assert!(!_mvl_list_any(a, &c));
+            _mvl_array_drop(a);
         }
     }
 
@@ -2179,8 +2179,8 @@ mod tests {
         unsafe {
             let a = make_i64_array(&[]);
             let c = make_closure(pred_is_even as *const (), std::ptr::null());
-            assert!(!List_any(a, &c));
-            mvl_array_drop(a);
+            assert!(!_mvl_list_any(a, &c));
+            _mvl_array_drop(a);
         }
     }
 
@@ -2189,8 +2189,8 @@ mod tests {
         unsafe {
             let a = make_i64_array(&[2, 4, 6]);
             let c = make_closure(pred_is_even as *const (), std::ptr::null());
-            assert!(List_all(a, &c));
-            mvl_array_drop(a);
+            assert!(_mvl_list_all(a, &c));
+            _mvl_array_drop(a);
         }
     }
 
@@ -2199,8 +2199,8 @@ mod tests {
         unsafe {
             let a = make_i64_array(&[2, 3, 6]);
             let c = make_closure(pred_is_even as *const (), std::ptr::null());
-            assert!(!List_all(a, &c));
-            mvl_array_drop(a);
+            assert!(!_mvl_list_all(a, &c));
+            _mvl_array_drop(a);
         }
     }
 
@@ -2209,8 +2209,8 @@ mod tests {
         unsafe {
             let a = make_i64_array(&[]);
             let c = make_closure(pred_is_even as *const (), std::ptr::null());
-            assert!(List_all(a, &c)); // vacuously true
-            mvl_array_drop(a);
+            assert!(_mvl_list_all(a, &c)); // vacuously true
+            _mvl_array_drop(a);
         }
     }
 }

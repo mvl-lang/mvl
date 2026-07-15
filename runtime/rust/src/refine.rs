@@ -9,7 +9,11 @@
 //!
 //! # Usage
 //!
-//! ```rust
+//! Transpiler-emitted code depends on the crate under the name `mvl_runtime`
+//! (via a rename in the generated `Cargo.toml`), so illustrative snippets in
+//! docs use that name. Doctests run against the actual crate name.
+//!
+//! ```text
 //! use mvl_runtime::refine::mvl_refine;
 //!
 //! fn positive_int(x: i64) -> i64 {
@@ -24,7 +28,7 @@
 /// refinement checks in generated code.
 ///
 /// ```rust
-/// # use mvl_runtime::refine::mvl_refine;
+/// # use mvl_runtime_rust::refine::mvl_refine;
 /// let x: i64 = 5;
 /// mvl_refine!(x > 0);
 /// ```

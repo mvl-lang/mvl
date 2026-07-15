@@ -87,11 +87,11 @@ pub unsafe extern "C" fn _mvl_map_values(map: *const MvlMap) -> *mut MvlArray {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::mvl_map_new;
+    use crate::memory::_mvl_map_new;
 
     #[allow(unsafe_code)]
     unsafe fn make_map() -> *mut MvlMap {
-        mvl_map_new(0)
+        _mvl_map_new(0)
     }
 
     #[test]
