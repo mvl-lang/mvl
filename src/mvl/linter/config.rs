@@ -120,6 +120,10 @@ pub struct LintConfig {
     /// Error on `while / .get(i) / match / None => ()` iteration anti-pattern.
     /// Always use `for x in list { }` instead (rule `for-iter-antipattern`, #705).
     pub for_iter_antipattern: bool,
+    /// Warn on zero-arg pure functions whose body is a single literal — these
+    /// should be `const` declarations so the solver can inline them at every
+    /// use site (rule `zero_arg_literal_fn_as_const`, #1805).
+    pub zero_arg_literal_fn_as_const: bool,
     /// Warn on `while VAR < END { ...; VAR = VAR + N }` counter loops that can be
     /// rewritten as `for VAR in range(START, END)` (provably total, #1004).
     pub while_to_for_range: bool,
@@ -182,6 +186,7 @@ impl Default for LintConfig {
             missing_annotations: false,
             require_explicit_totality: true,
             for_iter_antipattern: true,
+            zero_arg_literal_fn_as_const: true,
             while_to_for_range: true,
             deprecated_extern_rust: true,
             unused_functions: true,
@@ -320,6 +325,7 @@ fn load_from(path: &Path) -> Option<LintConfig> {
             "missing_annotations" => cfg.missing_annotations = parse_bool(val),
             "require_explicit_totality" => cfg.require_explicit_totality = parse_bool(val),
             "for_iter_antipattern" => cfg.for_iter_antipattern = parse_bool(val),
+            "zero_arg_literal_fn_as_const" => cfg.zero_arg_literal_fn_as_const = parse_bool(val),
             "while_to_for_range" => cfg.while_to_for_range = parse_bool(val),
             "deprecated_extern_rust" => cfg.deprecated_extern_rust = parse_bool(val),
             "unused_functions" => cfg.unused_functions = parse_bool(val),

@@ -39,7 +39,7 @@ impl TypeChecker {
             match decl {
                 Decl::Type(td) => self.register_type(td),
                 Decl::Fn(fd) => self.register_fn(fd),
-                Decl::Const(_) => {}
+                Decl::Const(cd) => self.register_const(cd),
                 Decl::Extern(ed) => self.register_extern(ed),
                 Decl::Use(_) => {} // resolved by the module resolver, not the type checker
                 Decl::Impl(id) => self.register_impl(id),
@@ -96,6 +96,14 @@ impl TypeChecker {
         );
         // Track actor type name for Spawn/Send effect enforcement (#1126).
         self.actor_type_names.insert(ad.name.clone());
+    }
+
+    /// Register a top-level `const NAME: T = expr;` in the type environment
+    /// so bare `Expr::Ident(NAME)` uses at other sites resolve to `T` during
+    /// inference (#1805).  Value inlining happens later, at the solver layer.
+    fn register_const(&mut self, cd: &ConstDecl) {
+        let ty = resolve(&cd.ty);
+        self.env.define_const(cd.name.clone(), ty);
     }
 
     fn register_fn(&mut self, fd: &FnDecl) {

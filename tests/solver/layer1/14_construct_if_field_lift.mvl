@@ -1,0 +1,40 @@
+// Solver Layer 1: If-in-Construct field lift at contract-check time (#1805).
+//
+// Follow-up to `13_let_unfold_ensures.mvl`.  When the let-substitution
+// pushes an `if`-expression into a struct-literal tail field, L1's
+// `eval_pred_struct` used to short-circuit with `Some(RuntimeCheck)` — the
+// compound field value blocked deeper solver dispatch.
+//
+// The fix (in `contracts/mod.rs::check_ensures_for_return_expr_recur`)
+// lifts the first `If`-valued field out of the Construct:
+//
+//     Game { .. right_score: (if C { A } else { B }), .. }
+//
+// becomes:
+//
+//     if C { Game { .. right_score: A, .. } } else { Game { .. right_score: B, .. } }
+//
+// which flows through the existing per-branch descent so each branch's
+// Construct reaches `eval_pred_struct` with a concrete field value.
+//
+// Every ensures site here should discharge (once per lifted branch).
+
+type Game = struct {
+    left_score:  Int,
+    right_score: Int,
+}
+
+// Left-score is unchanged in both branches — proves L1 via shape equality.
+// Right-score in both branches evaluates to `game.right_score` (the test uses
+// identical branches to isolate the lift mechanics).  A single lift produces
+// two Constructs; each is checked against both ensures → 4 sites, all L1.
+fn resolve(game: Game) -> Game
+    ensures result.left_score  >= game.left_score
+    ensures result.right_score >= game.right_score
+{
+    let new_score: Int = if game.right_score < 11 { game.right_score } else { game.right_score };
+    Game {
+        left_score:  game.left_score,
+        right_score: new_score,
+    }
+}

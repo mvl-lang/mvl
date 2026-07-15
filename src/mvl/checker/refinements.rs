@@ -152,13 +152,17 @@ pub fn check_refinements(
     let fn_params = build_fn_param_refinements_combined(&all_progs);
     let fn_ensures = build_fn_ensures_combined(&all_progs);
     let type_refs = build_type_alias_refinements(prog);
-    let struct_fields = build_struct_field_refinements(prog);
+    let struct_fields = build_struct_field_refinements_combined(&all_progs);
     let fn_decls = build_pure_fn_decls(prog);
+    // #1805 follow-up: hoist top-level `const` decls into `self == value`
+    // hypotheses so bare Ident uses reach L1 as concrete integers.
+    let const_map = build_const_map(&all_progs);
+    let const_refs = const_map_to_var_refs(&const_map);
     for decl in &prog.declarations {
         match decl {
             Decl::Fn(fd) => {
                 counts.current_fn = fd.name.clone();
-                let var_refs = param_refinements(fd, &type_refs, &struct_fields);
+                let var_refs = param_refinements_full(fd, &type_refs, &struct_fields, &const_refs);
                 RefinementAnalyzer::new(
                     var_refs,
                     &fn_params,
@@ -173,7 +177,8 @@ pub fn check_refinements(
             Decl::Impl(impl_decl) => {
                 for method in &impl_decl.methods {
                     counts.current_fn = method.name.clone();
-                    let var_refs = param_refinements(method, &type_refs, &struct_fields);
+                    let var_refs =
+                        param_refinements_full(method, &type_refs, &struct_fields, &const_refs);
                     RefinementAnalyzer::new(
                         var_refs,
                         &fn_params,
@@ -192,7 +197,12 @@ pub fn check_refinements(
             Decl::Actor(ad) => {
                 for method in &ad.methods {
                     counts.current_fn = format!("{}::{}", ad.name, method.name);
-                    let var_refs = params_to_var_refs(&method.params, &type_refs, &struct_fields);
+                    let var_refs = params_to_var_refs_full(
+                        &method.params,
+                        &type_refs,
+                        &struct_fields,
+                        &const_refs,
+                    );
                     RefinementAnalyzer::new(
                         var_refs,
                         &fn_params,
@@ -218,7 +228,7 @@ pub fn check_refinements(
             _ => vec![],
         };
         for fd in fns {
-            let var_refs = param_refinements(fd, &type_refs, &struct_fields);
+            let var_refs = param_refinements_full(fd, &type_refs, &struct_fields, &const_refs);
             let mut per_fn_errors = Vec::new();
             let mut per_fn_counts = RefinementCounts::default();
             RefinementAnalyzer::new(
@@ -241,7 +251,12 @@ pub fn check_refinements(
         }
         if let Decl::Actor(ad) = decl {
             for method in &ad.methods {
-                let var_refs = params_to_var_refs(&method.params, &type_refs, &struct_fields);
+                let var_refs = params_to_var_refs_full(
+                    &method.params,
+                    &type_refs,
+                    &struct_fields,
+                    &const_refs,
+                );
                 let mut per_fn_errors = Vec::new();
                 let mut per_fn_counts = RefinementCounts::default();
                 RefinementAnalyzer::new(
@@ -284,10 +299,12 @@ pub fn count_refinements(prog: &Program) -> RefinementCounts {
     let type_refs = build_type_alias_refinements(prog);
     let struct_fields = build_struct_field_refinements(prog);
     let fn_decls = build_pure_fn_decls(prog);
+    let const_map = build_const_map(&[prog]);
+    let const_refs = const_map_to_var_refs(&const_map);
     for decl in &prog.declarations {
         match decl {
             Decl::Fn(fd) => {
-                let var_refs = param_refinements(fd, &type_refs, &struct_fields);
+                let var_refs = param_refinements_full(fd, &type_refs, &struct_fields, &const_refs);
                 RefinementAnalyzer::new(
                     var_refs,
                     &fn_params,
@@ -301,7 +318,8 @@ pub fn count_refinements(prog: &Program) -> RefinementCounts {
             }
             Decl::Impl(impl_decl) => {
                 for method in &impl_decl.methods {
-                    let var_refs = param_refinements(method, &type_refs, &struct_fields);
+                    let var_refs =
+                        param_refinements_full(method, &type_refs, &struct_fields, &const_refs);
                     RefinementAnalyzer::new(
                         var_refs,
                         &fn_params,
@@ -316,7 +334,12 @@ pub fn count_refinements(prog: &Program) -> RefinementCounts {
             }
             Decl::Actor(ad) => {
                 for method in &ad.methods {
-                    let var_refs = params_to_var_refs(&method.params, &type_refs, &struct_fields);
+                    let var_refs = params_to_var_refs_full(
+                        &method.params,
+                        &type_refs,
+                        &struct_fields,
+                        &const_refs,
+                    );
                     RefinementAnalyzer::new(
                         var_refs,
                         &fn_params,
@@ -348,6 +371,8 @@ pub fn count_fully_verified_fns(prog: &Program) -> (usize, usize) {
     let type_refs = build_type_alias_refinements(prog);
     let struct_fields = build_struct_field_refinements(prog);
     let fn_decls = build_pure_fn_decls(prog);
+    let const_map = build_const_map(&[prog]);
+    let const_refs = const_map_to_var_refs(&const_map);
     let mut fn_total = 0usize;
     let mut fully_verified = 0usize;
 
@@ -358,7 +383,7 @@ pub fn count_fully_verified_fns(prog: &Program) -> (usize, usize) {
             _ => vec![],
         };
         for fd in fns {
-            let var_refs = param_refinements(fd, &type_refs, &struct_fields);
+            let var_refs = param_refinements_full(fd, &type_refs, &struct_fields, &const_refs);
             let mut errors = Vec::new();
             let mut counts = RefinementCounts::default();
             RefinementAnalyzer::new(
@@ -382,7 +407,12 @@ pub fn count_fully_verified_fns(prog: &Program) -> (usize, usize) {
         // Actor behavior methods must also be counted.
         if let Decl::Actor(ad) = decl {
             for method in &ad.methods {
-                let var_refs = params_to_var_refs(&method.params, &type_refs, &struct_fields);
+                let var_refs = params_to_var_refs_full(
+                    &method.params,
+                    &type_refs,
+                    &struct_fields,
+                    &const_refs,
+                );
                 let mut errors = Vec::new();
                 let mut counts = RefinementCounts::default();
                 RefinementAnalyzer::new(
@@ -435,6 +465,68 @@ fn build_pure_fn_decls(prog: &Program) -> HashMap<String, FnDecl> {
             }
             _ => {}
         }
+    }
+    map
+}
+
+/// Walk every `Decl::Const` across the passed programs and evaluate its
+/// initializer to a `ConstValue` (#1805 follow-up).  Only trivially-foldable
+/// initializers land in the map; anything the const evaluator can't reduce
+/// is silently omitted (the same conservatism `try_fold_call` uses).
+///
+/// The resulting map is threaded into `var_refs` as `self == value`
+/// hypotheses so bare `Expr::Ident(NAME)` uses of a top-level `const`
+/// reach L1's existing Ident handler with a usable equality — matching the
+/// behaviour of the older `pub total fn NAME() -> T { LITERAL }` idiom.
+pub(crate) fn build_const_map(
+    progs: &[&Program],
+) -> HashMap<String, crate::mvl::checker::const_eval::ConstValue> {
+    let mut map = HashMap::new();
+    for prog in progs {
+        for decl in &prog.declarations {
+            if let Decl::Const(cd) = decl {
+                if let Some(v) = crate::mvl::checker::const_eval::expr_as_const(&cd.value) {
+                    map.insert(cd.name.clone(), v);
+                }
+            }
+        }
+    }
+    map
+}
+
+/// Convert const values to `var_refs` entries as `self == n` hypotheses.
+/// Non-numeric consts (strings, unit) are skipped — the solver reasons over
+/// integers and booleans only.  Booleans encode as `self == 0` / `self == 1`
+/// so downstream integer-domain layers can pick them up (L1's bool handler
+/// also picks up the RefExpr::Bool comparison shape via a separate path).
+pub(crate) fn const_map_to_var_refs(
+    consts: &HashMap<String, crate::mvl::checker::const_eval::ConstValue>,
+) -> HashMap<String, Option<RefExpr>> {
+    use crate::mvl::checker::const_eval::ConstValue;
+    let s = dummy_span();
+    let mut map = HashMap::new();
+    for (name, cv) in consts {
+        let n = match cv {
+            ConstValue::Integer(n) => *n,
+            ConstValue::Bool(b) => {
+                if *b {
+                    1
+                } else {
+                    0
+                }
+            }
+            _ => continue,
+        };
+        let pred = RefExpr::Compare {
+            op: CmpOp::Eq,
+            left: Box::new(RefExpr::Ident {
+                name: "self".to_string(),
+                span: s,
+            }),
+            right: Box::new(RefExpr::Integer { value: n, span: s }),
+            span: s,
+        };
+        map.insert(name.clone(), Some(pred));
     }
     map
 }
@@ -538,18 +630,36 @@ fn param_ref_vec(fd: &FnDecl) -> Vec<(String, Option<RefExpr>)> {
 /// that the solver's atom normalizer (`solver::atom_norm`) can bridge them
 /// onto atom names when a `FieldAccess` argument is seen at a call site.
 fn build_struct_field_refinements(prog: &Program) -> HashMap<String, HashMap<String, RefExpr>> {
+    build_struct_field_refinements_combined(&[prog])
+}
+
+/// Multi-program variant of [`build_struct_field_refinements`] — needed for
+/// projects that split struct declarations across multiple `.mvl` files
+/// (e.g. pong keeps `Field`, `Ball` in `models.mvl` but consumes them in
+/// `game.mvl`).  Prior to this the single-file variant was called on the
+/// current file only, so cross-module refined fields silently lost their
+/// hypothesis.
+pub(crate) fn build_struct_field_refinements_combined(
+    progs: &[&Program],
+) -> HashMap<String, HashMap<String, RefExpr>> {
     let mut map: HashMap<String, HashMap<String, RefExpr>> = HashMap::new();
-    for decl in &prog.declarations {
-        if let Decl::Type(td) = decl {
-            if let TypeBody::Struct { fields, .. } = &td.body {
-                let mut fmap = HashMap::new();
-                for f in fields {
-                    if let Some(pred) = &f.refinement {
-                        fmap.insert(f.name.clone(), pred.clone());
+    for prog in progs {
+        for decl in &prog.declarations {
+            if let Decl::Type(td) = decl {
+                if let TypeBody::Struct { fields, .. } = &td.body {
+                    let mut fmap = HashMap::new();
+                    for f in fields {
+                        if let Some(pred) = &f.refinement {
+                            fmap.insert(f.name.clone(), pred.clone());
+                        }
                     }
-                }
-                if !fmap.is_empty() {
-                    map.insert(td.name.clone(), fmap);
+                    if !fmap.is_empty() {
+                        // Later definitions win — MVL's parser rejects
+                        // duplicate `type` names across a program so this
+                        // path only fires when a type is defined once and
+                        // referenced from another file.
+                        map.insert(td.name.clone(), fmap);
+                    }
                 }
             }
         }
@@ -560,7 +670,7 @@ fn build_struct_field_refinements(prog: &Program) -> HashMap<String, HashMap<Str
 /// Maps type alias name → the refinement attached to that alias (if any).
 ///
 /// E.g. `type PositiveInt = Int where self > 0` → `"PositiveInt" → Some(self > 0)`.
-fn build_type_alias_refinements(prog: &Program) -> HashMap<String, Option<RefExpr>> {
+pub(crate) fn build_type_alias_refinements(prog: &Program) -> HashMap<String, Option<RefExpr>> {
     let mut map = HashMap::new();
     for decl in &prog.declarations {
         if let Decl::Type(td) = decl {
@@ -584,16 +694,30 @@ fn extract_type_refinement(ty: &TypeExpr) -> Option<RefExpr> {
     }
 }
 
-/// Build the variable-refinement map for a function's own parameters.
+/// Build the variable-refinement map for a function's own parameters,
+/// seeding top-level const hypotheses (#1805 follow-up).
 ///
 /// Inline refinements are normalised so the parameter name becomes `"self"`,
 /// matching the canonical form used in type aliases and in the callee table.
-fn param_refinements(
+fn param_refinements_full(
     fd: &FnDecl,
     type_refs: &HashMap<String, Option<RefExpr>>,
     struct_fields: &HashMap<String, HashMap<String, RefExpr>>,
+    const_refs: &HashMap<String, Option<RefExpr>>,
 ) -> HashMap<String, Option<RefExpr>> {
-    params_to_var_refs(&fd.params, type_refs, struct_fields)
+    params_to_var_refs_full(&fd.params, type_refs, struct_fields, const_refs)
+}
+
+/// Extend a `var_refs` map with the const hypotheses in `const_refs` (#1805
+/// follow-up).  Existing entries win — a shadowing param name keeps its
+/// parameter-derived hypothesis instead of the const value.
+pub(crate) fn merge_consts_into_var_refs(
+    var_refs: &mut HashMap<String, Option<RefExpr>>,
+    const_refs: &HashMap<String, Option<RefExpr>>,
+) {
+    for (k, v) in const_refs {
+        var_refs.entry(k.clone()).or_insert_with(|| v.clone());
+    }
 }
 
 /// Build var_refs from a slice of parameters (used for both `FnDecl` and `ActorMethod`).
@@ -602,10 +726,26 @@ fn param_refinements(
 /// the form `"param.field"` (#1805).  These keys line up with the canonical
 /// form produced by [`solver::atom_norm::AtomNormalizer`], enabling
 /// arithmetic layers to see a hypothesis for a `FieldAccess` argument.
-fn params_to_var_refs(
+#[allow(dead_code)] // kept for external callers; internal uses go through
+                    // `params_to_var_refs_full` so const hypotheses are always
+                    // in scope.
+pub(crate) fn params_to_var_refs(
     params: &[Param],
     type_refs: &HashMap<String, Option<RefExpr>>,
     struct_fields: &HashMap<String, HashMap<String, RefExpr>>,
+) -> HashMap<String, Option<RefExpr>> {
+    params_to_var_refs_full(params, type_refs, struct_fields, &HashMap::new())
+}
+
+/// Full variant that also seeds `self == value` hypotheses for top-level
+/// `const` declarations (#1805 follow-up).  Const hypotheses are added
+/// only for names not already bound by a param or struct-field projection,
+/// so a param shadowing a const keeps the parameter-derived binding.
+pub(crate) fn params_to_var_refs_full(
+    params: &[Param],
+    type_refs: &HashMap<String, Option<RefExpr>>,
+    struct_fields: &HashMap<String, HashMap<String, RefExpr>>,
+    const_refs: &HashMap<String, Option<RefExpr>>,
 ) -> HashMap<String, Option<RefExpr>> {
     let mut map = HashMap::new();
     for p in params {
@@ -630,6 +770,8 @@ fn params_to_var_refs(
             }
         }
     }
+    // Merge const hypotheses last so params/fields shadow.
+    merge_consts_into_var_refs(&mut map, const_refs);
     map
 }
 

@@ -228,7 +228,8 @@ pub fn check_with_two_preludes_mode(
         &mut checker.errors,
         solver_mode,
     );
-    let contract_counts = contracts::check_contracts(prog, &mut checker.errors, solver_mode);
+    let contract_counts =
+        contracts::check_contracts(prog, &all_prog_refs, &mut checker.errors, solver_mode);
     // Merge contract proof-layer counts into the refinement totals.
     // Contract proofs only populate by_layer (proven/runtime_checked are not
     // incremented by the leaf solver); derive proven from the layer sum.
