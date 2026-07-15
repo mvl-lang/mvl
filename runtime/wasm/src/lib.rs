@@ -8,8 +8,9 @@
 //! `(import "runtime" "_mvl_string_*" ...)` declarations resolve to the
 //! symbols exported here.
 //!
-//! ## Scope today (Group A — no allocation)
+//! ## Scope today
 //!
+//! Group A — no allocation, `(ptr, len)` in, primitive out:
 //! - `_mvl_string_eq` — bytewise equality
 //! - `_mvl_string_len` — length as i64
 //! - `_mvl_string_is_empty` — `len == 0`
@@ -17,10 +18,16 @@
 //! - `_mvl_string_starts_with` / `_mvl_string_ends_with` — prefix / suffix
 //! - `_mvl_string_find` — byte position or `-1`
 //!
-//! Everything here operates on the phase-1 `(ptr: i32, len: i32)` stack
-//! representation — no `MvlString` heap struct yet. The next
-//! architectural step introduces `MvlString` when we need heap-owned
-//! results (`.concat`, `.substring`, `.to_upper`, …).
+//! Group B (first drop — this commit) — allocation, returns `*MvlString`
+//! whose fields the emitter unpacks back into the `(ptr, len)`
+//! representation everything else uses:
+//! - `MvlString` struct — `{ ptr, len, cap, rc }` all `i32`, matches the
+//!   `runtime/llvm/` layout (i64→i32 fields for wasm32 addressing).
+//! - `_mvl_string_concat` — allocates a fresh buffer + `MvlString`.
+//!
+//! No `_mvl_string_drop` yet — Group B commit 1 leaks concat allocations.
+//! Refcount / drop lands with commit 2 alongside `_mvl_string_clone` and
+//! emitter-side scope-exit drop emission. Fine for tests.
 //!
 //! ## Symbol convention
 //!
@@ -144,6 +151,56 @@ fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
         }
     }
     None
+}
+
+// ── Heap-owned strings (Group B) ─────────────────────────────────────────
+//
+// `MvlString` mirrors `runtime/llvm/`'s layout — same field order, same
+// semantic roles — but every field is `i32` for wasm32 addressing. The
+// emitter treats a `*MvlString` as an opaque `i32` on the WASM stack and
+// unpacks the two fields it cares about (`ptr`, `len`) via `i32.load`
+// at offsets 0 and 4.
+//
+// Refcount (`rc`) and capacity (`cap`) are present so the layout is
+// stable across commits; they'll be exercised when `_mvl_string_clone`
+// and `_mvl_string_drop` land in the follow-up commit.
+
+#[repr(C)]
+pub struct MvlString {
+    pub ptr: i32,
+    pub len: i32,
+    pub cap: i32,
+    pub rc: i32,
+}
+
+/// Allocate a fresh `MvlString` whose backing bytes are the concatenation
+/// of `(p1, l1)` and `(p2, l2)`. Returns a pointer to the struct (as
+/// `i32` — WASM linear-memory offset). The emitter reads `.ptr` / `.len`
+/// via `i32.load` to feed the concatenated bytes into everything
+/// downstream that still uses the `(ptr, len)` representation
+/// (`_mvl_string_eq`, `_mvl_string_len`, `println`, etc.).
+///
+/// Group B commit 1 deliberately leaks: neither the `Box<MvlString>` nor
+/// the byte `Vec` is freed. Drop emission + `_mvl_string_drop` come next.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_string_concat(p1: i32, l1: i32, p2: i32, l2: i32) -> i32 {
+    let a = unsafe { slice_or_empty(p1, l1) };
+    let b = unsafe { slice_or_empty(p2, l2) };
+    let mut bytes = Vec::with_capacity(a.len() + b.len());
+    bytes.extend_from_slice(a);
+    bytes.extend_from_slice(b);
+    let bytes_ptr = bytes.as_ptr() as i32;
+    let bytes_len = bytes.len() as i32;
+    let bytes_cap = bytes.capacity() as i32;
+    core::mem::forget(bytes); // leaked — freed by `_mvl_string_drop` in a
+                              // follow-up commit.
+    let ms = Box::new(MvlString {
+        ptr: bytes_ptr,
+        len: bytes_len,
+        cap: bytes_cap,
+        rc: 1,
+    });
+    Box::into_raw(ms) as i32
 }
 
 // ── Equality ─────────────────────────────────────────────────────────────
@@ -351,6 +408,54 @@ mod tests {
             unsafe { _mvl_string_ends_with(addr(s), s.len() as i32, 0, 0) },
             1
         );
+    }
+
+    // ── concat ────
+    //
+    // `concat` returns a `*MvlString` — read `.ptr` / `.len` fields back
+    // via unsafe deref to reconstruct the resulting `&[u8]`. Mirrors what
+    // the emitter does via `i32.load` at offsets 0 / 4 of the returned
+    // pointer.
+    unsafe fn concat_result(ms_ptr: i32) -> &'static [u8] {
+        let ms = unsafe { &*(ms_ptr as usize as *const MvlString) };
+        unsafe { core::slice::from_raw_parts(ms.ptr as usize as *const u8, ms.len as usize) }
+    }
+
+    #[test]
+    fn concat_two_strings() {
+        let a = b"hello";
+        let b = b" world";
+        let ptr = unsafe { _mvl_string_concat(addr(a), a.len() as i32, addr(b), b.len() as i32) };
+        assert_eq!(unsafe { concat_result(ptr) }, b"hello world");
+    }
+
+    #[test]
+    fn concat_with_empty_left() {
+        let b = b"world";
+        let ptr = unsafe { _mvl_string_concat(0, 0, addr(b), b.len() as i32) };
+        assert_eq!(unsafe { concat_result(ptr) }, b"world");
+    }
+
+    #[test]
+    fn concat_with_empty_right() {
+        let a = b"hello";
+        let ptr = unsafe { _mvl_string_concat(addr(a), a.len() as i32, 0, 0) };
+        assert_eq!(unsafe { concat_result(ptr) }, b"hello");
+    }
+
+    #[test]
+    fn concat_both_empty() {
+        let ptr = unsafe { _mvl_string_concat(0, 0, 0, 0) };
+        assert_eq!(unsafe { concat_result(ptr) }, b"");
+    }
+
+    #[test]
+    fn concat_result_has_rc_1() {
+        let a = b"x";
+        let ptr = unsafe { _mvl_string_concat(addr(a), 1, addr(a), 1) };
+        let ms = unsafe { &*(ptr as usize as *const MvlString) };
+        assert_eq!(ms.rc, 1);
+        assert_eq!(ms.len, 2);
     }
 
     // ── find ────
