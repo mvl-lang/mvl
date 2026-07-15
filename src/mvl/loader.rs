@@ -1669,6 +1669,13 @@ pub fn load_stdlib_prelude<'a>(
             if let Decl::Use(ud) = decl {
                 if ud.path.first().map(|s| s == "std").unwrap_or(false) {
                     if let Some(module) = ud.path.get(1) {
+                        // Skip modules already loaded by the implicit prelude
+                        // (v1.3.2 added `collections` there; explicit
+                        // `use std.collections.{...}` then triggered double
+                        // registration and "duplicate method" errors).
+                        if IMPLICIT_PRELUDE_STEMS.contains(&module.as_str()) {
+                            continue;
+                        }
                         if loaded.insert(module.clone()) {
                             let filename = format!("{module}.mvl");
                             let stdlib_file = stdlib_dir.join(&filename);
