@@ -32,11 +32,7 @@ use crate::mvl::parser::visit::Visit;
 /// - The function has any effects.
 /// - The body is more than one statement, or the tail is not a literal
 ///   / negated-literal expression.
-pub fn zero_arg_literal_fn_as_const(
-    prog: &Program,
-    cfg: &LintConfig,
-    out: &mut Vec<LintDiag>,
-) {
+pub fn zero_arg_literal_fn_as_const(prog: &Program, cfg: &LintConfig, out: &mut Vec<LintDiag>) {
     if !cfg.zero_arg_literal_fn_as_const {
         return;
     }

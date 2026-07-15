@@ -325,9 +325,7 @@ fn load_from(path: &Path) -> Option<LintConfig> {
             "missing_annotations" => cfg.missing_annotations = parse_bool(val),
             "require_explicit_totality" => cfg.require_explicit_totality = parse_bool(val),
             "for_iter_antipattern" => cfg.for_iter_antipattern = parse_bool(val),
-            "zero_arg_literal_fn_as_const" => {
-                cfg.zero_arg_literal_fn_as_const = parse_bool(val)
-            }
+            "zero_arg_literal_fn_as_const" => cfg.zero_arg_literal_fn_as_const = parse_bool(val),
             "while_to_for_range" => cfg.while_to_for_range = parse_bool(val),
             "deprecated_extern_rust" => cfg.deprecated_extern_rust = parse_bool(val),
             "unused_functions" => cfg.unused_functions = parse_bool(val),

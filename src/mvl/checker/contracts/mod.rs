@@ -71,8 +71,7 @@ pub(super) struct ContractCheckCtx<'a> {
     /// gathered across the whole project (preludes + user progs) so that
     /// ensures / requires checks over cross-module struct types see the
     /// per-field hypothesis under keys of the form `"param.field"` (#1805).
-    pub(super) struct_fields:
-        &'a HashMap<String, HashMap<String, RefExpr>>,
+    pub(super) struct_fields: &'a HashMap<String, HashMap<String, RefExpr>>,
     /// Top-level `const` hypotheses (`self == value`) seeded into var_refs
     /// so bare Ident uses of `pub const N: Int = …;` reach L1 as concrete
     /// integers (#1805 follow-up).
@@ -152,7 +151,12 @@ pub fn check_contracts(
                     // Phase 3: seed var_refs with parameter where-refinements so that
                     // `requires` checks on variable arguments (e.g. `f(x)` where
                     // `x: Int where self > 0`) can be resolved by the solver.
-                    let var_refs = build_param_var_refs_full(&fd.params, ctx.type_refs, ctx.struct_fields, ctx.const_refs);
+                    let var_refs = build_param_var_refs_full(
+                        &fd.params,
+                        ctx.type_refs,
+                        ctx.struct_fields,
+                        ctx.const_refs,
+                    );
                     walk_stmts(&fd.body, &mut ctx, &mut |expr, ctx| {
                         if let Expr::FnCall {
                             name, args, span, ..
@@ -193,7 +197,12 @@ pub fn check_contracts(
                     for method in &impl_d.methods {
                         ctx.counts.current_fn = method.name.clone();
                         let sites_before = ctx.counts.sites.len();
-                        let var_refs = build_param_var_refs_full(&method.params, ctx.type_refs, ctx.struct_fields, ctx.const_refs);
+                        let var_refs = build_param_var_refs_full(
+                            &method.params,
+                            ctx.type_refs,
+                            ctx.struct_fields,
+                            ctx.const_refs,
+                        );
                         walk_stmts(&method.body, &mut ctx, &mut |expr, ctx| {
                             if let Expr::FnCall {
                                 name, args, span, ..
@@ -280,7 +289,12 @@ pub fn check_return_refinements(prog: &Program, errors: &mut Vec<CheckError>, mo
         for fd in fns {
             if let Some(ret_pred) = &fd.return_refinement {
                 ctx.counts.current_fn = fd.name.clone();
-                let var_refs = build_param_var_refs_full(&fd.params, ctx.type_refs, ctx.struct_fields, ctx.const_refs);
+                let var_refs = build_param_var_refs_full(
+                    &fd.params,
+                    ctx.type_refs,
+                    ctx.struct_fields,
+                    ctx.const_refs,
+                );
                 check_return_pred_in_block(&fd.body, &fd.name, ret_pred, &var_refs, &mut ctx);
             }
         }
@@ -730,7 +744,13 @@ fn check_ensures_for_return_expr_recur(
     // out combinatorially and the pragmatic pong case has only one.
     if let Some(lifted) = lift_first_if_in_construct(expr) {
         check_ensures_for_return_expr_recur(
-            &lifted, span, fn_name, ensures, params, branch_hyps, ctx,
+            &lifted,
+            span,
+            fn_name,
+            ensures,
+            params,
+            branch_hyps,
+            ctx,
         );
         return;
     }
@@ -885,7 +905,8 @@ pub(super) fn check_ensures_for_return(
     // (normalised so the param name becomes "self").  This lets Layer 2 and
     // Layer 4 prove postconditions like `ensures result >= 0` when the function
     // parameter is annotated `n: Int where self >= 0`.
-    let mut var_refs = build_param_var_refs_full(params, ctx.type_refs, ctx.struct_fields, ctx.const_refs);
+    let mut var_refs =
+        build_param_var_refs_full(params, ctx.type_refs, ctx.struct_fields, ctx.const_refs);
 
     // #1796: inject each accumulated branch condition as a hypothesis in
     // var_refs.  This lets ensures clauses on the else-branch of an

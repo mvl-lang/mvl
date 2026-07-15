@@ -121,7 +121,11 @@ solver_test!(
     "layer1",
     "14_construct_if_field_lift.mvl"
 );
-solver_test!(solver_l1_15_const_inlining, "layer1", "15_const_inlining.mvl");
+solver_test!(
+    solver_l1_15_const_inlining,
+    "layer1",
+    "15_const_inlining.mvl"
+);
 
 // ── Layer 2: Interval analysis ───────────────────────────────────────────────
 

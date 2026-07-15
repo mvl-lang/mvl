@@ -177,7 +177,8 @@ pub fn check_refinements(
             Decl::Impl(impl_decl) => {
                 for method in &impl_decl.methods {
                     counts.current_fn = method.name.clone();
-                    let var_refs = param_refinements_full(method, &type_refs, &struct_fields, &const_refs);
+                    let var_refs =
+                        param_refinements_full(method, &type_refs, &struct_fields, &const_refs);
                     RefinementAnalyzer::new(
                         var_refs,
                         &fn_params,
@@ -196,7 +197,12 @@ pub fn check_refinements(
             Decl::Actor(ad) => {
                 for method in &ad.methods {
                     counts.current_fn = format!("{}::{}", ad.name, method.name);
-                    let var_refs = params_to_var_refs_full(&method.params, &type_refs, &struct_fields, &const_refs);
+                    let var_refs = params_to_var_refs_full(
+                        &method.params,
+                        &type_refs,
+                        &struct_fields,
+                        &const_refs,
+                    );
                     RefinementAnalyzer::new(
                         var_refs,
                         &fn_params,
@@ -245,7 +251,12 @@ pub fn check_refinements(
         }
         if let Decl::Actor(ad) = decl {
             for method in &ad.methods {
-                let var_refs = params_to_var_refs_full(&method.params, &type_refs, &struct_fields, &const_refs);
+                let var_refs = params_to_var_refs_full(
+                    &method.params,
+                    &type_refs,
+                    &struct_fields,
+                    &const_refs,
+                );
                 let mut per_fn_errors = Vec::new();
                 let mut per_fn_counts = RefinementCounts::default();
                 RefinementAnalyzer::new(
@@ -307,7 +318,8 @@ pub fn count_refinements(prog: &Program) -> RefinementCounts {
             }
             Decl::Impl(impl_decl) => {
                 for method in &impl_decl.methods {
-                    let var_refs = param_refinements_full(method, &type_refs, &struct_fields, &const_refs);
+                    let var_refs =
+                        param_refinements_full(method, &type_refs, &struct_fields, &const_refs);
                     RefinementAnalyzer::new(
                         var_refs,
                         &fn_params,
@@ -322,7 +334,12 @@ pub fn count_refinements(prog: &Program) -> RefinementCounts {
             }
             Decl::Actor(ad) => {
                 for method in &ad.methods {
-                    let var_refs = params_to_var_refs_full(&method.params, &type_refs, &struct_fields, &const_refs);
+                    let var_refs = params_to_var_refs_full(
+                        &method.params,
+                        &type_refs,
+                        &struct_fields,
+                        &const_refs,
+                    );
                     RefinementAnalyzer::new(
                         var_refs,
                         &fn_params,
@@ -390,7 +407,12 @@ pub fn count_fully_verified_fns(prog: &Program) -> (usize, usize) {
         // Actor behavior methods must also be counted.
         if let Decl::Actor(ad) = decl {
             for method in &ad.methods {
-                let var_refs = params_to_var_refs_full(&method.params, &type_refs, &struct_fields, &const_refs);
+                let var_refs = params_to_var_refs_full(
+                    &method.params,
+                    &type_refs,
+                    &struct_fields,
+                    &const_refs,
+                );
                 let mut errors = Vec::new();
                 let mut counts = RefinementCounts::default();
                 RefinementAnalyzer::new(

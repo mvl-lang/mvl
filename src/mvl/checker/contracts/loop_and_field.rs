@@ -528,7 +528,12 @@ pub(super) fn check_actor_behavior_contracts(
 ) {
     for method in &ad.methods {
         ctx.counts.current_fn = format!("{}::{}", ad.name, method.name);
-        let var_refs = build_param_var_refs_full(&method.params, ctx.type_refs, ctx.struct_fields, ctx.const_refs);
+        let var_refs = build_param_var_refs_full(
+            &method.params,
+            ctx.type_refs,
+            ctx.struct_fields,
+            ctx.const_refs,
+        );
         walk_stmts(&method.body, ctx, &mut |expr, ctx| {
             if let Expr::FnCall {
                 name, args, span, ..
@@ -584,14 +589,24 @@ pub fn check_actor_field_refinements(
             Decl::Fn(fd) => {
                 // Seed var_refs from function parameters so the solver can use
                 // where-refinements on parameter variables as hypotheses.
-                let var_refs = build_param_var_refs_full(&fd.params, ctx.type_refs, ctx.struct_fields, ctx.const_refs);
+                let var_refs = build_param_var_refs_full(
+                    &fd.params,
+                    ctx.type_refs,
+                    ctx.struct_fields,
+                    ctx.const_refs,
+                );
                 walk_stmts(&fd.body, &mut ctx, &mut |expr, ctx| {
                     check_spawn_at_site(expr, &actor_fields, &var_refs, ctx);
                 });
             }
             Decl::Impl(impl_d) => {
                 for method in &impl_d.methods {
-                    let var_refs = build_param_var_refs_full(&method.params, ctx.type_refs, ctx.struct_fields, ctx.const_refs);
+                    let var_refs = build_param_var_refs_full(
+                        &method.params,
+                        ctx.type_refs,
+                        ctx.struct_fields,
+                        ctx.const_refs,
+                    );
                     walk_stmts(&method.body, &mut ctx, &mut |expr, ctx| {
                         check_spawn_at_site(expr, &actor_fields, &var_refs, ctx);
                     });
@@ -599,7 +614,12 @@ pub fn check_actor_field_refinements(
             }
             Decl::Actor(ad) => {
                 for method in &ad.methods {
-                    let var_refs = build_param_var_refs_full(&method.params, ctx.type_refs, ctx.struct_fields, ctx.const_refs);
+                    let var_refs = build_param_var_refs_full(
+                        &method.params,
+                        ctx.type_refs,
+                        ctx.struct_fields,
+                        ctx.const_refs,
+                    );
                     walk_stmts(&method.body, &mut ctx, &mut |expr, ctx| {
                         check_spawn_at_site(expr, &actor_fields, &var_refs, ctx);
                     });
@@ -727,14 +747,24 @@ pub fn check_struct_field_refinements(
     for decl in &prog.declarations {
         match decl {
             Decl::Fn(fd) => {
-                let var_refs = build_param_var_refs_full(&fd.params, ctx.type_refs, ctx.struct_fields, ctx.const_refs);
+                let var_refs = build_param_var_refs_full(
+                    &fd.params,
+                    ctx.type_refs,
+                    ctx.struct_fields,
+                    ctx.const_refs,
+                );
                 walk_stmts(&fd.body, &mut ctx, &mut |expr, ctx| {
                     check_construct_at_site(expr, &field_map, &var_refs, ctx);
                 });
             }
             Decl::Impl(impl_d) => {
                 for method in &impl_d.methods {
-                    let var_refs = build_param_var_refs_full(&method.params, ctx.type_refs, ctx.struct_fields, ctx.const_refs);
+                    let var_refs = build_param_var_refs_full(
+                        &method.params,
+                        ctx.type_refs,
+                        ctx.struct_fields,
+                        ctx.const_refs,
+                    );
                     walk_stmts(&method.body, &mut ctx, &mut |expr, ctx| {
                         check_construct_at_site(expr, &field_map, &var_refs, ctx);
                     });
@@ -742,7 +772,12 @@ pub fn check_struct_field_refinements(
             }
             Decl::Actor(ad) => {
                 for method in &ad.methods {
-                    let var_refs = build_param_var_refs_full(&method.params, ctx.type_refs, ctx.struct_fields, ctx.const_refs);
+                    let var_refs = build_param_var_refs_full(
+                        &method.params,
+                        ctx.type_refs,
+                        ctx.struct_fields,
+                        ctx.const_refs,
+                    );
                     walk_stmts(&method.body, &mut ctx, &mut |expr, ctx| {
                         check_construct_at_site(expr, &field_map, &var_refs, ctx);
                     });
