@@ -2,7 +2,7 @@
 .ONESHELL:
 SHELL := /bin/bash
 
-.PHONY: help version build test test-full test-unit test-rust-integration test-requirements test-error-messages test-fmt-roundtrip test-corpus-old test-corpus-warnings-old test-rust-rust test-rust-llvm test-mvl-llvm test-rust-wasm test-mvl-wasm test-rust-tokio test-runtime-rust test-runtime-llvm test-checker-parity test-checker-parity-update test-solver test-stdlib check-compiler assure-compiler test-mvl test-bootstrap-e2e test-bdd test-backend-rust-old test-backend-llvm-old test-cross-backend test-grammar-coverage test-examples test-examples-rust test-examples-llvm coverage validate-keywords lint mvl-lint format format-check format-mvl format-mvl-check assurance assurance-gate audit-backend-ast check-adr docs docs-serve install install-runtime setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
+.PHONY: help version build build-runtime-wasm test test-full test-unit test-rust-integration test-requirements test-error-messages test-fmt-roundtrip test-corpus-old test-corpus-warnings-old test-rust-rust test-rust-llvm test-mvl-llvm test-rust-wasm test-mvl-wasm test-rust-tokio test-runtime-rust test-runtime-llvm test-runtime-wasm test-checker-parity test-checker-parity-update test-solver test-stdlib check-compiler assure-compiler test-mvl test-bootstrap-e2e test-bdd test-backend-rust-old test-backend-llvm-old test-cross-backend test-grammar-coverage test-examples test-examples-rust test-examples-llvm coverage validate-keywords lint mvl-lint format format-check format-mvl format-mvl-check assurance assurance-gate audit-backend-ast check-adr docs docs-serve install install-runtime setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
 
 .DEFAULT_GOAL := help
 
@@ -38,8 +38,19 @@ doctor: ## Check that all dev tools are available
 	check node          "https://nodejs.org"; \
 	check python3       "required for make assurance"; \
 	check /opt/homebrew/opt/llvm/bin/lli "brew install llvm  (required for LLVM backend)"; \
-	check wasm-tools    "cargo install wasm-tools  (required for WASM backend spike)"; \
-	check wasmtime      "https://wasmtime.dev/  (required for WASM backend spike)"; \
+	check wasm-tools    "cargo install wasm-tools  (required for WASM backend)"; \
+	check wasmtime      "https://wasmtime.dev/  (required for WASM backend)"; \
+	if rustup target list --installed 2>/dev/null | grep -q '^wasm32-wasip1$$'; then \
+	  printf "  $$OK wasm32-wasip1 target\n"; \
+	else \
+	  printf "  $$FAIL wasm32-wasip1 target  (run: rustup target add wasm32-wasip1)\n"; \
+	fi; \
+	if [ -f target/wasm32-wasip1/debug/mvl_runtime_wasm.wasm ] \
+	   || [ -f target/wasm32-wasip1/release/mvl_runtime_wasm.wasm ]; then \
+	  printf "  $$OK runtime/wasm/ built  (target/wasm32-wasip1/…/mvl_runtime_wasm.wasm)\n"; \
+	else \
+	  printf "  $$WARN runtime/wasm/ not built  (run: make build-runtime-wasm)\n"; \
+	fi; \
 	WANT=$$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)"/\1/'); \
 	GOT=$$(mvl --version 2>/dev/null | awk '{print $$2}'); \
 	if [ -z "$$GOT" ]; then \
@@ -122,10 +133,12 @@ build: ## Build the MVL compiler + LLVM runtime (BUILD=debug|release, default de
 # === Test ===
 
 MVL ?= ./target/debug/mvl
-# mvlr — matrix run driver. Prefer the installed binary (make install
-# drops it in ~/.local/bin); fall back to the in-repo copy so a fresh
-# checkout works before install.
-MVLR ?= $(shell command -v mvlr 2>/dev/null || echo tools/mvlr)
+# mvlr — matrix run driver. Prefer the in-tree copy when it exists so a
+# dev checkout always runs the mvlr matching this source (the emitter
+# under test needs the mvlr that knows how to drive it — the installed
+# mvlr may be older and reject unsupported combos like rust/wasm).
+# Falls back to the installed binary otherwise, and finally errors out.
+MVLR ?= $(shell test -x tools/mvlr && echo tools/mvlr || command -v mvlr 2>/dev/null)
 
 # Suite list for `make test` (fast pre-PR gate) and `make test-full` (full pre-merge gate).
 # Format: "label|target" — keep alignment by padding the label.
@@ -453,29 +466,50 @@ test-mvl-wasm: build ## mvl/wasm — MVL self-hosted → WAT (stub, tracked in #
 	@printf "  \033[33m~  SKIP: test-mvl-wasm not yet wired\033[0m\n"
 	@echo "    Blocker: self-hosted compiler doesn't have a WASM backend yet. See #1828."
 
-# WASM cases the backend actually handles. Deliberately narrow (#1571 is a
-# spike): the emitter today supports only what these two files exercise —
-# Int arithmetic, direct calls, string literals, Int.to_string(), println.
-# Adding a new case here requires the emitter to actually handle it end-to-end
-# through wasmtime — no "check-only" entries.
-WASM_CASES := \
-	tests/spikes/006-wasm-backend/add.mvl \
-	tests/spikes/006-wasm-backend/hello.mvl
-
 test-runtime-rust: ## Unit-test runtime/rust/ crate natively (peer of test-runtime-wasm)
 	cargo test -p mvl_runtime_rust
 
 test-runtime-llvm: ## Unit-test runtime/llvm/ crate natively (peer of test-runtime-wasm)
 	cargo test -p mvl_runtime_llvm
 
-test-rust-wasm: build ## rust/wasm — WASM backend against curated case list (mvl → wat → wasmtime, spike-scope)
+# WASM cases the backend actually handles — scoped to what runs end-to-end
+# without a `runtime/wasm/` crate (Phase 2 of epic #1817). Everything else
+# in `tests/corpus/` needs collections, MvlString ops, tagged-union enum
+# payloads, closures, or generics-mono — all of which land in later phases.
+# Grow this list as the emitter's coverage grows.
+WASM_CORPUS := \
+	tests/corpus/00_smoke \
+	tests/corpus/01_expressions \
+	tests/corpus/02_control_flow \
+	tests/corpus/03_functions/basic_test.mvl \
+	tests/corpus/04_types/enum_test.mvl \
+	tests/corpus/13_stdlib/string_test.mvl
+
+test-rust-wasm: build build-runtime-wasm ## rust/wasm — WASM-supported corpus subset (via runtime/wasm/ preload)
 	@command -v wasm-tools > /dev/null 2>&1 || { \
 	  printf "  \033[31m✗  wasm-tools not installed — 'cargo install wasm-tools'\033[0m\n"; exit 1; }
 	@command -v wasmtime > /dev/null 2>&1 || { \
 	  printf "  \033[31m✗  wasmtime not installed — see https://wasmtime.dev/\033[0m\n"; exit 1; }
-	@echo "WASM cases: $(words $(WASM_CASES)) files"
-	@for f in $(WASM_CASES); do echo "  - $$f"; done
-	@$(MAKE) --no-print-directory -C tests/spikes/006-wasm-backend test
+	MVL_RUNTIME_WASM=$(WASM_RUNTIME_PATH) $(MVLR) --mvl=$(MVL) --compiler=rust --backend=wasm $(WASM_CORPUS)
+
+# runtime/wasm/ — Rust crate compiled to wasm32-wasip1 (#1819). Loaded by
+# wasmtime via --preload runtime=<path>. The emitter conditionally emits
+# `(import "runtime" ...)` declarations for programs that need it.
+WASM_RUNTIME_PATH := $(CURDIR)/target/wasm32-wasip1/debug/mvl_runtime_wasm.wasm
+
+build-runtime-wasm: ## Build runtime/wasm/ crate → wasm32-wasip1 target
+	@rustup target list --installed | grep -q wasm32-wasip1 || { \
+	  echo "installing wasm32-wasip1 target..."; \
+	  rustup target add wasm32-wasip1; }
+	cargo build -p mvl_runtime_wasm --target wasm32-wasip1 $(BUILD_CARGO_FLAGS)
+
+test-runtime-wasm: ## Unit-test runtime/wasm/ under wasmtime (wasm32-wasip1 target)
+	@rustup target list --installed | grep -q wasm32-wasip1 || { \
+	  echo "installing wasm32-wasip1 target..."; \
+	  rustup target add wasm32-wasip1; }
+	@command -v wasmtime > /dev/null 2>&1 || { \
+	  printf "  \033[31m✗  wasmtime not installed — see https://wasmtime.dev/\033[0m\n"; exit 1; }
+	cargo test --target wasm32-wasip1 -p mvl_runtime_wasm
 
 test-examples: build ## Run `make test` for every example subdirectory
 	@examples/test-all.sh

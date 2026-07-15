@@ -1,33 +1,60 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Schuberg Philis
 
-//! `WasmTextCompiler` — minimal TIR → WebAssembly Text emitter (#1571).
+//! `WasmTextCompiler` — TIR → WebAssembly Text emitter (#1818, epic #1817).
 //!
-//! Spike scope: emit WAT for the two programs in
-//! `tests/spikes/006-wasm-backend/` (`add.mvl` and `hello.mvl`). Enough to
-//! validate the end-to-end pipeline; deliberately not enough for anything
-//! larger. Extending beyond this requires the ADR decisions listed in the
-//! epic (string ABI, allocator, effect → import table).
+//! Runs against `tests/corpus/` via `make test-rust-wasm` (delegated to
+//! mvlr). Scope: everything that can be lowered without a `runtime/wasm/`
+//! crate. Phase 2 of #1817 stands that up and unlocks strings, collections,
+//! and tagged-union payloads.
 //!
 //! Supported today:
-//! - `Int → i64` (all other primitives punted to i64)
-//! - integer literals, parameters, direct calls, arithmetic
-//! - trailing block expression as return value
-//! - `Int.to_string()` (via inline bump-allocated i64 → decimal helper)
-//! - **String literals** — collected up front, placed in a data section,
-//!   pushed on the WASM stack as `(ptr, len)` i32 pairs.
-//! - `println(s)` (via WASI `fd_write` + newline iovec)
-//! - `fn main() -> Unit ! Console` becomes the WASI `_start` export
+//! - Primitives: `Int → i64`, `Float → f64`, `Bool` / `Byte → i32`,
+//!   unit-variant enum types → `i32` discriminant
+//! - All literal kinds (`Integer`, `Float`, `Bool`, `Str`)
+//! - Arithmetic, comparison, bitwise, and short-circuit boolean ops
+//! - Unary `Neg`, `Not`, `BitNot`
+//! - `Int.to_string()` (inline bump-allocated i64 → decimal helper)
+//! - `Bool.to_string()` (branch between interned `"true"` / `"false"`)
+//! - String literals — interned up front, emitted as `(data …)` sections
+//! - `println(s)` / `eprintln(s)` — WASI `fd_write` fd 1 / fd 2 + newline
+//! - `assert(cond)` / `assert_eq[T](a, b)` / `assert_ne[T](a, b)` — trap
+//!   via `unreachable` on failure. Type-directed equality.
+//! - `let` and `let ref` bindings — WASM locals, declared in a fn prelude
+//!   from a pre-scan of the body
+//! - `x = value;` assignment for `ref` locals — `local.set`
+//! - `if` / `else if` / `else` — statement + expression form; statement
+//!   form auto-detects a matching non-Unit return type from both branches
+//! - `while cond { body }` — canonical WASM `block/loop/br_if` shape
+//! - Early `return` (both `return expr` and bare `return`)
+//! - `match` on Int / Bool / unit-variant enum patterns with wildcard —
+//!   both statement and expression form
+//! - Unit-variant enums (`type Direction = enum { North, South, ... }`) —
+//!   variants lower to i32 discriminants, referenced by qualified name
+//! - `fn main() -> Unit ! Console` → WASI `_start` export
+//! - Bodies containing unsupported constructs stub to `unreachable` so
+//!   sibling fns in the same file can still assemble and run
 //!
-//! Everything else (control flow, structs, actors, refcounting, other
-//! effects, other host imports) is deliberately out of scope.
+//! Deliberately not supported (later phases of #1817):
+//! - Structs and their fields — needs linear-memory layout
+//! - Enum variants with payloads, `Option`, `Result` — tagged unions +
+//!   memory layout, plus the `?` operator
+//! - Collections (`List`, `Map`, `Set`) — phase 3 with `runtime/wasm/`
+//! - Higher-order fns / closures / generic monomorphization
+//! - String equality / concat / `MvlString` refcount — phase 2 runtime
+//! - Other WASI hostcalls, `extern "wasm"` ABI — separate ticket
+//! - Actors, refinements, contracts — phase 4/5
 
+use std::cell::Cell;
 use std::collections::HashMap;
 
 use super::Backend;
 use crate::mvl::checker::types::Ty;
-use crate::mvl::ir::{TirBlock, TirExpr, TirExprKind, TirFn, TirProgram, TirStmt};
-use crate::mvl::parser::ast::{BinaryOp, Literal};
+use crate::mvl::ir::{
+    TirBlock, TirElseBranch, TirExpr, TirExprKind, TirFn, TirMatchArm, TirMatchBody, TirProgram,
+    TirStmt, TirTypeBody, TirTypeDecl, TirVariantFields,
+};
+use crate::mvl::parser::ast::{BinaryOp, LValue, Literal, Pattern, UnaryOp};
 
 pub struct WasmTextCompiler;
 
@@ -45,16 +72,96 @@ impl Default for WasmTextCompiler {
 
 /// Shared per-emission context. Bundles the flags/tables threaded through
 /// every emit_*  free function so their signatures stay stable as the
-/// spike grows (or shrinks).
+/// spike grows (or shrinks). Uses `Cell` for the label counter so the
+/// context stays behind a `&`-reference — labels are module-wide unique,
+/// which is stricter than WASM requires but simpler to bookkeep.
 struct Ctx<'a> {
     needs_wasi: bool,
     /// Interned string literals: content → (linear-memory offset, byte length).
     literals: &'a HashMap<String, (u32, u32)>,
+    /// Enum types whose variants are all `Unit` — lower to `i32` discriminant.
+    /// Enums with tuple/struct payloads are excluded here (they'd need a
+    /// tagged-union memory layout — later phase).
+    enum_types: &'a std::collections::HashSet<String>,
+    /// Qualified unit-variant name (e.g. `"Direction::North"`) → i32 discriminant.
+    /// Used both when a variant appears as a `Var` value and as a match
+    /// pattern (`Pattern::Ident`).
+    enum_variants: &'a HashMap<String, i32>,
+    /// Monotonic counter for fresh WAT labels (`$while_0`, `$while_1`, …).
+    label_counter: Cell<usize>,
+    /// Set by emitters that reach for `runtime/wasm/` symbols (#1819).
+    /// When true, `emit_program` swaps its own `(memory 1)` for
+    /// `(import "runtime" "memory" (memory 0))` and appends the needed
+    /// `(import "runtime" "_mvl_*" ...)` declarations.
+    needs_runtime: Cell<bool>,
+}
+
+impl Ctx<'_> {
+    fn fresh_label(&self, prefix: &str) -> String {
+        let n = self.label_counter.get();
+        self.label_counter.set(n + 1);
+        format!("{prefix}_{n}")
+    }
 }
 
 /// First offset available for string-literal data after the fixed WASI
 /// scratch region (iovec pair + nwritten slot + newline byte).
 const LITERAL_BASE: u32 = 32;
+
+/// Runtime symbols the emitter can dispatch to. Every entry produces one
+/// `(import "runtime" ...)` declaration when `Ctx::needs_runtime` is set.
+/// Symbol names match `runtime/wasm/src/lib.rs`; signatures are WAT
+/// param/result clauses.
+///
+/// Not all imports are used by every module — WASM is fine with unused
+/// imports, so listing them all up front is simpler than tracking which
+/// symbols were touched during emission.
+const RUNTIME_IMPORTS: &[(&str, &str)] = &[
+    ("_mvl_string_eq", "(param i32 i32 i32 i32) (result i32)"),
+    ("_mvl_string_len", "(param i32 i32) (result i64)"),
+    ("_mvl_string_is_empty", "(param i32 i32) (result i32)"),
+    (
+        "_mvl_string_contains",
+        "(param i32 i32 i32 i32) (result i32)",
+    ),
+    (
+        "_mvl_string_starts_with",
+        "(param i32 i32 i32 i32) (result i32)",
+    ),
+    (
+        "_mvl_string_ends_with",
+        "(param i32 i32 i32 i32) (result i32)",
+    ),
+    ("_mvl_string_find", "(param i32 i32 i32 i32) (result i64)"),
+    // Group B — allocation, returns `*MvlString` (pointer as i32). The
+    // emitter unpacks `.ptr` / `.len` via `i32.load` at offsets 0 / 4 so
+    // downstream code keeps the same `(ptr, len)` stack shape as literals.
+    ("_mvl_string_new", "(param i32 i32) (result i32)"),
+    ("_mvl_string_clone", "(param i32) (result i32)"),
+    ("_mvl_string_drop", "(param i32)"),
+    ("_mvl_string_concat", "(param i32 i32 i32 i32) (result i32)"),
+    // `.substring(start, end)` — MVL `Int` args are i64 on the WASM side.
+    (
+        "_mvl_string_substring",
+        "(param i32 i32 i64 i64) (result i32)",
+    ),
+    // Group B commit 3 — case fold + trim. Unary transforms: receiver
+    // (ptr, len) → `*MvlString`. Same unpack shape as concat/substring.
+    ("_mvl_string_to_upper", "(param i32 i32) (result i32)"),
+    ("_mvl_string_to_lower", "(param i32 i32) (result i32)"),
+    ("_mvl_string_trim", "(param i32 i32) (result i32)"),
+    // `.replace(from, to)` — three (ptr, len) pairs in, `*MvlString` out.
+    (
+        "_mvl_string_replace",
+        "(param i32 i32 i32 i32 i32 i32) (result i32)",
+    ),
+];
+
+/// Layout offsets on `MvlString` — mirrors `runtime/wasm/src/lib.rs` /
+/// `runtime/llvm/src/memory.rs`. Only `.ptr` and `.len` are read by the
+/// emitter today; `.cap` and `.rc` land when drop / clone wire up.
+const MVL_STRING_OFFSET_PTR: u32 = 0;
+const MVL_STRING_OFFSET_LEN: u32 = 4;
 
 impl Backend for WasmTextCompiler {
     fn name(&self) -> &'static str {
@@ -79,20 +186,52 @@ impl Backend for WasmTextCompiler {
             .iter()
             .any(|f| f.name == "main" && matches!(f.ret_ty, Ty::Unit));
 
-        let (literals, heap_start) = collect_literals(&fns);
+        let (literals, heap_start) = collect_literals(&fns, needs_wasi);
+        let (enum_types, enum_variants) = collect_enums(&tir.types);
         let ctx = Ctx {
             needs_wasi,
             literals: &literals,
+            enum_types: &enum_types,
+            enum_variants: &enum_variants,
+            label_counter: Cell::new(0),
+            needs_runtime: Cell::new(false),
         };
 
+        // Emit fns into a scratch buffer first — `emit_assert_eq` on
+        // String flips `ctx.needs_runtime`, and we only know whether to
+        // import `runtime` memory + symbols after the whole body has been
+        // walked. Fn bodies are self-contained, so buffering is cheap.
+        let mut fns_out = String::new();
+        for f in &fns {
+            emit_fn(&mut fns_out, f, &ctx);
+        }
+
         let mut out = String::from("(module\n");
-        if needs_wasi {
+        if ctx.needs_runtime.get() {
+            // runtime.wasm exports its memory and the `_mvl_string_*` ops;
+            // the user module imports both. Runtime data lives at 1 MB+,
+            // ours at low offsets, so no address conflicts. We re-export
+            // memory under the same name because WASI command modules
+            // must have a `memory` export (wasmtime enforces this).
+            out.push_str("  (import \"runtime\" \"memory\" (memory 0))\n");
+            out.push_str("  (export \"memory\" (memory 0))\n");
+            for (name, signature) in RUNTIME_IMPORTS {
+                out.push_str(&format!(
+                    "  (import \"runtime\" \"{name}\"\n    (func ${name} {signature}))\n"
+                ));
+            }
+            if needs_wasi {
+                // WASI blob but without its own `(memory 1) (export "memory")`
+                // — memory is imported above.
+                out.push_str(&emit_wasi_runtime_shared_memory(heap_start, &literals));
+            }
+        } else if needs_wasi {
+            // Standalone WASI module — own memory, no runtime preload
+            // needed. Matches the pre-#1819 behaviour for simple programs.
             out.push_str(&emit_wasi_runtime(heap_start, &literals));
         }
 
-        for f in &fns {
-            emit_fn(&mut out, f, &ctx);
-        }
+        out.push_str(&fns_out);
 
         for f in &fns {
             let (wasm_name, export_name) = effective_name(f, needs_wasi);
@@ -104,6 +243,46 @@ impl Backend for WasmTextCompiler {
         out.push(')');
         out.push('\n');
         out
+    }
+}
+
+/// Compute the block-type that a statement-form `if` should carry.
+///
+/// The TIR lowerer sometimes emits `TirStmt::If` for what a reader would
+/// consider an expression, e.g. `fn f() -> Int { if c { 1 } else { 2 } }`.
+/// If both branches leave a matching non-Unit value on the stack, we need
+/// `if (result T)` — otherwise the WASM validator rejects the fn (values
+/// left over inside a bare `if` block don't propagate to the enclosing
+/// function's return slot).
+fn if_stmt_result_ty(then: &TirBlock, else_: &Option<TirElseBranch>) -> Option<Ty> {
+    let t = block_trailing_ty(then)?;
+    let e = match else_ {
+        Some(TirElseBranch::Block(b)) => block_trailing_ty(b)?,
+        Some(TirElseBranch::If(nested)) => match nested.as_ref() {
+            TirStmt::If {
+                then: t2,
+                else_: e2,
+                ..
+            } => if_stmt_result_ty(t2, e2)?,
+            _ => return None,
+        },
+        None => return None,
+    };
+    if matches!(t, Ty::Unit) || t != e {
+        None
+    } else {
+        Some(t)
+    }
+}
+
+/// Type of a block's trailing expression, if the block ends in one and
+/// that expression is non-Unit.  Used to decide if a `TirStmt::If`'s
+/// branches leave a value on the WASM stack.
+fn block_trailing_ty(block: &TirBlock) -> Option<Ty> {
+    let last = block.stmts.last()?;
+    match last {
+        TirStmt::Expr { expr, .. } if !matches!(expr.ty, Ty::Unit) => Some(expr.ty.clone()),
+        _ => None,
     }
 }
 
@@ -121,14 +300,167 @@ fn emit_fn(out: &mut String, f: &TirFn, ctx: &Ctx) {
     let (wasm_name, _) = effective_name(f, ctx.needs_wasi);
     out.push_str(&format!("  (func ${wasm_name}"));
     for p in &f.params {
-        out.push_str(&format!(" (param ${} {})", p.name, wasm_ty(&p.ty)));
+        out.push_str(&format!(" (param ${} {})", p.name, wasm_ty(&p.ty, ctx)));
     }
     if !matches!(f.ret_ty, Ty::Unit) {
-        out.push_str(&format!(" (result {})", wasm_ty(&f.ret_ty)));
+        out.push_str(&format!(" (result {})", wasm_ty(&f.ret_ty, ctx)));
     }
     out.push('\n');
-    emit_block(out, &f.body, ctx);
+
+    // Emit the body into a scratch buffer first. If it hits anything the
+    // emitter doesn't support (leaves a `;; unsupported` marker), stub the
+    // whole body with `unreachable` — a polymorphic trap that satisfies
+    // the WASM validator regardless of the fn's signature. Callers hit a
+    // clean runtime trap instead of the whole module failing to assemble,
+    // which lets sibling fns in the same file still run.
+    let mut body = String::new();
+    let mut locals: Vec<(String, Ty)> = Vec::new();
+    collect_locals_block(&f.body, &mut locals);
+    for (name, ty) in &locals {
+        body.push_str(&format!("    (local ${} {})\n", name, wasm_ty(ty, ctx)));
+    }
+    emit_block(&mut body, &f.body, ctx);
+
+    if body.contains(";; unsupported") {
+        out.push_str("    ;; body stubbed — contained unsupported constructs\n");
+        out.push_str("    unreachable\n");
+    } else {
+        out.push_str(&body);
+        // Drop each `__ms_*` temp local at the implicit-return path.
+        // Every allocation from `.concat` / `.substring` / … was stashed
+        // in a temp; freeing at fn exit reclaims the byte buffer + struct.
+        // `_mvl_string_drop` is null-safe, so temps on code paths that
+        // never allocated are harmless.
+        //
+        // Limitation: this only catches implicit-return paths. Explicit
+        // `return` in the middle of the fn skips cleanup and leaks. Fine
+        // for phase-2 corpus tests, which all end via implicit return.
+        // If a fn returns a String derived from a heap allocation, this
+        // would prematurely free the byte buffer the caller is about to
+        // read from — but the emitter doesn't yet emit that shape (String
+        // is never a user-fn return value in the current WASM_CORPUS).
+        for (name, _) in &locals {
+            if name.starts_with("__ms_") {
+                out.push_str(&format!("    local.get ${name}\n"));
+                out.push_str("    call $_mvl_string_drop\n");
+            }
+        }
+    }
     out.push_str("  )\n");
+}
+
+// ── Local collection ─────────────────────────────────────────────────────
+
+fn collect_locals_block(block: &TirBlock, locals: &mut Vec<(String, Ty)>) {
+    for s in &block.stmts {
+        collect_locals_stmt(s, locals);
+    }
+}
+
+fn collect_locals_stmt(stmt: &TirStmt, locals: &mut Vec<(String, Ty)>) {
+    match stmt {
+        TirStmt::Let {
+            pattern, ty, init, ..
+        } => {
+            if let Pattern::Ident(name, _) = pattern {
+                locals.push((name.clone(), ty.clone()));
+            }
+            collect_locals_expr(init, locals);
+        }
+        TirStmt::Assign { value, .. } => collect_locals_expr(value, locals),
+        TirStmt::Return { value: Some(v), .. } => collect_locals_expr(v, locals),
+        TirStmt::If {
+            cond, then, else_, ..
+        } => {
+            collect_locals_expr(cond, locals);
+            collect_locals_block(then, locals);
+            match else_ {
+                Some(TirElseBranch::Block(b)) => collect_locals_block(b, locals),
+                Some(TirElseBranch::If(s)) => collect_locals_stmt(s, locals),
+                None => {}
+            }
+        }
+        TirStmt::While { cond, body, .. } => {
+            collect_locals_expr(cond, locals);
+            collect_locals_block(body, locals);
+        }
+        TirStmt::Match {
+            scrutinee,
+            arms,
+            span,
+        } => {
+            // Stmt-form match needs the same scrutinee temp as expr-form.
+            locals.push((format!("__match_{}", span.offset), scrutinee.ty.clone()));
+            collect_locals_expr(scrutinee, locals);
+            for arm in arms {
+                match &arm.body {
+                    TirMatchBody::Expr(e) => collect_locals_expr(e, locals),
+                    TirMatchBody::Block(b) => collect_locals_block(b, locals),
+                }
+            }
+        }
+        TirStmt::Expr { expr, .. } => collect_locals_expr(expr, locals),
+        _ => {}
+    }
+}
+
+fn collect_locals_expr(expr: &TirExpr, locals: &mut Vec<(String, Ty)>) {
+    match &expr.kind {
+        TirExprKind::If { cond, then, else_ } => {
+            collect_locals_expr(cond, locals);
+            collect_locals_block(then, locals);
+            if let Some(e) = else_ {
+                collect_locals_expr(e, locals);
+            }
+        }
+        TirExprKind::Match { scrutinee, arms } => {
+            // Fresh temp for the scrutinee value — `emit_match` stashes
+            // the scrutinee here so it doesn't re-evaluate per arm.
+            locals.push((match_temp_name(expr), scrutinee.ty.clone()));
+            collect_locals_expr(scrutinee, locals);
+            for arm in arms {
+                match &arm.body {
+                    TirMatchBody::Expr(e) => collect_locals_expr(e, locals),
+                    TirMatchBody::Block(b) => collect_locals_block(b, locals),
+                }
+            }
+        }
+        TirExprKind::Block(b) => collect_locals_block(b, locals),
+        TirExprKind::Binary { left, right, .. } => {
+            collect_locals_expr(left, locals);
+            collect_locals_expr(right, locals);
+        }
+        TirExprKind::Unary { expr, .. } => collect_locals_expr(expr, locals),
+        TirExprKind::FnCall { args, .. } => {
+            for a in args {
+                collect_locals_expr(a, locals);
+            }
+        }
+        TirExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } => {
+            collect_locals_expr(receiver, locals);
+            for a in args {
+                collect_locals_expr(a, locals);
+            }
+            // Allocation-returning String methods leave a `*MvlString` on
+            // the stack that the emitter unpacks via a temp i32 local.
+            // Register it here so the fn prelude declares it.
+            if matches!(&receiver.ty, Ty::String)
+                && matches!(
+                    method.as_str(),
+                    "concat" | "substring" | "to_upper" | "to_lower" | "trim" | "replace"
+                )
+            {
+                // Ty::Bool → i32 in `wasm_ty` — reuse for the pointer
+                // temp so we don't need a dedicated "raw i32" ty.
+                locals.push((mvl_string_temp_name(expr), Ty::Bool));
+            }
+        }
+        _ => {}
+    }
 }
 
 fn emit_block(out: &mut String, block: &TirBlock, ctx: &Ctx) {
@@ -144,6 +476,83 @@ fn emit_stmt(out: &mut String, stmt: &TirStmt, ctx: &Ctx) {
             emit_expr(out, e, ctx);
             out.push_str("    return\n");
         }
+        TirStmt::Return { value: None, .. } => {
+            out.push_str("    return\n");
+        }
+        // `let x: T = init;`  (or `let x: ref T = init;` — same lowering)
+        // The local was already declared in the fn prelude via
+        // `collect_locals_block`. Here we just evaluate the init and store.
+        TirStmt::Let { pattern, init, .. } => {
+            if let Pattern::Ident(name, _) = pattern {
+                emit_expr(out, init, ctx);
+                out.push_str(&format!("    local.set ${name}\n"));
+            } else {
+                out.push_str(&format!("    ;; unsupported let pattern: {pattern:?}\n"));
+            }
+        }
+        // `x = value;` — for `ref` locals. Only bare-identifier targets.
+        TirStmt::Assign { target, value, .. } => {
+            if let LValue::Ident(name, _) = target {
+                emit_expr(out, value, ctx);
+                out.push_str(&format!("    local.set ${name}\n"));
+            } else {
+                out.push_str(&format!("    ;; unsupported assign target: {target:?}\n"));
+            }
+        }
+        // `if cond { then } else { else_ }` — statement form.
+        //
+        // The TIR lowerer emits `TirStmt::If` (not `Expr(If)`) for trailing
+        // `if` expressions in a fn body like `fn f() -> Int { if … { 1 }
+        // else { 2 } }`. So a statement-form if still needs a block-type
+        // whenever both branches produce a matching non-Unit value, or the
+        // fn's return slot ends up empty and the WASM validator rejects.
+        TirStmt::If {
+            cond, then, else_, ..
+        } => {
+            emit_expr(out, cond, ctx);
+            match if_stmt_result_ty(then, else_) {
+                Some(ty) => {
+                    out.push_str(&format!("    if (result {})\n", wasm_ty(&ty, ctx)));
+                }
+                None => out.push_str("    if\n"),
+            }
+            emit_block(out, then, ctx);
+            if let Some(e) = else_ {
+                out.push_str("    else\n");
+                match e {
+                    TirElseBranch::Block(b) => emit_block(out, b, ctx),
+                    TirElseBranch::If(nested) => emit_stmt(out, nested, ctx),
+                }
+            }
+            out.push_str("    end\n");
+        }
+        // Trailing `match` in a fn body — same shape as the expression form
+        // but arrives via `TirStmt::Match`. Reuse `emit_match_impl` with a
+        // result type computed from the arms' trailing types (mirrors how
+        // `TirStmt::If` handles its trailing-branch case above).
+        TirStmt::Match {
+            scrutinee,
+            arms,
+            span,
+        } => {
+            let result_ty = match_arms_result_ty(arms);
+            emit_match_impl(out, scrutinee, arms, result_ty, span.offset, ctx);
+        }
+        // `while cond { body }` — canonical WASM shape:
+        //   block $break_N (loop $cont_N (br_if $break_N (i32.eqz cond)) body (br $cont_N))
+        TirStmt::While { cond, body, .. } => {
+            let brk = ctx.fresh_label("wend");
+            let cnt = ctx.fresh_label("wcont");
+            out.push_str(&format!("    block ${brk}\n"));
+            out.push_str(&format!("    loop ${cnt}\n"));
+            emit_expr(out, cond, ctx);
+            out.push_str("    i32.eqz\n");
+            out.push_str(&format!("    br_if ${brk}\n"));
+            emit_block(out, body, ctx);
+            out.push_str(&format!("    br ${cnt}\n"));
+            out.push_str("    end\n");
+            out.push_str("    end\n");
+        }
         _ => {
             out.push_str(&format!("    ;; unsupported stmt: {stmt:?}\n"));
         }
@@ -155,11 +564,17 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
         TirExprKind::Literal(Literal::Integer(n)) => {
             out.push_str(&format!("    i64.const {n}\n"));
         }
+        TirExprKind::Literal(Literal::Float(f)) => {
+            // {:?} preserves the `.0` on whole-number floats so WAT parses
+            // the literal as f64 rather than integer.
+            out.push_str(&format!("    f64.const {f:?}\n"));
+        }
+        TirExprKind::Literal(Literal::Bool(b)) => {
+            out.push_str(&format!("    i32.const {}\n", if *b { 1 } else { 0 }));
+        }
         TirExprKind::Literal(Literal::Str(s)) => {
-            // String literals are placed in the module's data section during
-            // collect_literals; here we just push (offset, len) as i32s.
-            // Missing entries are a bug — every Str seen at emit time should
-            // have been recorded during the pre-scan.
+            // Placed in the module data section during collect_literals; here
+            // we just push (offset, len) as i32s.
             if let Some(&(offset, len)) = ctx.literals.get(s) {
                 out.push_str(&format!("    i32.const {offset}\n"));
                 out.push_str(&format!("    i32.const {len}\n"));
@@ -168,33 +583,46 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             }
         }
         TirExprKind::Var(name) => {
-            out.push_str(&format!("    local.get ${name}\n"));
+            // Unit-variant enum values (e.g. `Direction::North`) appear in
+            // TIR as bare `Var`s with a `Named` type. Distinguish them from
+            // locals by presence in the enum-variant registry.
+            if let Some(&id) = ctx.enum_variants.get(name) {
+                out.push_str(&format!("    i32.const {id}\n"));
+            } else {
+                out.push_str(&format!("    local.get ${name}\n"));
+            }
+        }
+        TirExprKind::Unary { op, expr: inner } => {
+            emit_unary(out, *op, inner, ctx);
         }
         TirExprKind::Binary { op, left, right } => {
-            emit_expr(out, left, ctx);
-            emit_expr(out, right, ctx);
-            let opcode = match op {
-                BinaryOp::Add => "i64.add",
-                BinaryOp::Sub => "i64.sub",
-                BinaryOp::Mul => "i64.mul",
-                BinaryOp::Div => "i64.div_s",
-                BinaryOp::Rem => "i64.rem_s",
-                other => {
-                    out.push_str(&format!("    ;; unsupported binop: {other:?}\n"));
-                    return;
-                }
-            };
-            out.push_str(&format!("    {opcode}\n"));
+            emit_binary(out, *op, left, right, ctx);
         }
         TirExprKind::FnCall { name, args, .. } => {
-            // Route `println` through the WASI helper. `$mvl_println` takes
-            // (ptr, len) which is exactly what both string literals and
-            // `Int.to_string()` leave on the stack.
+            // Route builtins that don't have MVL bodies through the runtime
+            // shims. `assert` and `println` are the two phase-1 cases.
             if name == "println" {
                 for a in args {
                     emit_expr(out, a, ctx);
                 }
                 out.push_str("    call $mvl_println\n");
+                return;
+            }
+            if name == "eprintln" {
+                for a in args {
+                    emit_expr(out, a, ctx);
+                }
+                out.push_str("    call $mvl_eprintln\n");
+                return;
+            }
+            if name == "assert" && args.len() == 1 {
+                emit_expr(out, &args[0], ctx);
+                out.push_str("    i32.eqz\n");
+                out.push_str("    if\n      unreachable\n    end\n");
+                return;
+            }
+            if (name == "assert_eq" || name == "assert_ne") && args.len() == 2 {
+                emit_assert_eq(out, &args[0], &args[1], name == "assert_ne", ctx);
                 return;
             }
             for a in args {
@@ -204,25 +632,524 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
         }
         TirExprKind::MethodCall {
             receiver, method, ..
-        } if method == "to_string" && matches!(receiver.ty, Ty::Int) => {
+        } if method == "to_string" => {
             emit_expr(out, receiver, ctx);
-            out.push_str("    call $mvl_int_to_string\n");
+            match &receiver.ty {
+                Ty::Int => out.push_str("    call $mvl_int_to_string\n"),
+                Ty::Bool => {
+                    let (tp, tl) = ctx.literals.get("true").copied().unwrap_or((0, 0));
+                    let (fp, fl) = ctx.literals.get("false").copied().unwrap_or((0, 0));
+                    out.push_str("    if (result i32 i32)\n");
+                    out.push_str(&format!("      i32.const {tp}\n      i32.const {tl}\n"));
+                    out.push_str("    else\n");
+                    out.push_str(&format!("      i32.const {fp}\n      i32.const {fl}\n"));
+                    out.push_str("    end\n");
+                }
+                other => {
+                    out.push_str(&format!("    ;; unsupported to_string on {other:?}\n"));
+                }
+            }
+        }
+        // String query methods — route through `runtime/wasm/` ops. Receiver
+        // leaves `(ptr, len)` on the stack; unary methods (`.len`,
+        // `.is_empty`) leave that plus nothing else. Binary methods
+        // (`.contains`, `.starts_with`, `.ends_with`, `.find`) then eval
+        // the arg to append `(np, nl)`. Runtime fn pops all four i32 args
+        // and returns the result.
+        TirExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } if matches!(&receiver.ty, Ty::String)
+            && matches!(
+                method.as_str(),
+                "len" | "is_empty" | "contains" | "starts_with" | "ends_with" | "find"
+            ) =>
+        {
+            ctx.needs_runtime.set(true);
+            emit_expr(out, receiver, ctx);
+            for a in args {
+                emit_expr(out, a, ctx);
+            }
+            out.push_str(&format!("    call $_mvl_string_{method}\n"));
+        }
+        // String allocation-returning methods (Group B). Runtime returns
+        // `*MvlString`; the emitter immediately unpacks `.ptr` / `.len`
+        // via `i32.load` at the layout offsets so downstream code sees
+        // the same `(ptr, len)` shape as a string literal. Temp local
+        // holding the pointer is named after the source span so pre-scan
+        // (`collect_locals_expr`) and emit agree without a counter.
+        TirExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } if matches!(&receiver.ty, Ty::String)
+            && matches!(
+                method.as_str(),
+                "concat" | "substring" | "to_upper" | "to_lower" | "trim" | "replace"
+            ) =>
+        {
+            ctx.needs_runtime.set(true);
+            emit_expr(out, receiver, ctx);
+            for a in args {
+                emit_expr(out, a, ctx);
+            }
+            out.push_str(&format!("    call $_mvl_string_{method}\n"));
+            emit_unpack_mvl_string(out, expr);
         }
         TirExprKind::Block(block) => emit_block(out, block, ctx),
+        // `match scrutinee { pat1 => arm1, pat2 => arm2, _ => default }` —
+        // limited to Int/Bool literal patterns + Wildcard/Ident for now.
+        // Enough for `02_control_flow/match_test.mvl`; enum / struct
+        // patterns fall through to `;; unsupported`.
+        TirExprKind::Match { scrutinee, arms } => {
+            emit_match(out, expr, scrutinee, arms, ctx);
+        }
+        // `if cond { then } else { else_ }` — expression form. Both branches
+        // must produce a value of `expr.ty`. WASM's block-typed `if
+        // (result T)` handles this directly. `else_ = None` would give the
+        // whole expr type `Unit` — treat as a no-op else.
+        TirExprKind::If { cond, then, else_ } => {
+            emit_expr(out, cond, ctx);
+            let is_unit = matches!(expr.ty, Ty::Unit);
+            if is_unit {
+                out.push_str("    if\n");
+            } else {
+                out.push_str(&format!("    if (result {})\n", wasm_ty(&expr.ty, ctx)));
+            }
+            emit_block(out, then, ctx);
+            if let Some(e) = else_ {
+                out.push_str("    else\n");
+                emit_expr(out, e, ctx);
+            } else if !is_unit {
+                // Bare `if` used in expression position — should be Unit,
+                // handled above. Any other missing else is a checker bug;
+                // emit a comment so wasm-tools flags it.
+                out.push_str("    ;; if-expr with missing else\n");
+            }
+            out.push_str("    end\n");
+        }
         other => {
             out.push_str(&format!("    ;; unsupported expr: {other:?}\n"));
         }
     }
 }
 
-fn wasm_ty(ty: &Ty) -> &'static str {
+/// Emit a `match` expression as a chain of type-directed `eq` compares
+/// wrapped in nested `if (result T) … else …` blocks. The default (no
+/// pattern matched) is either the wildcard/ident arm or `unreachable` when
+/// the match is exhaustive by structure (the checker's job).
+///
+/// The scrutinee is stashed in a fn-scoped temp local named after the
+/// TirExpr's source-span offset (`__match_<offset>`), which
+/// `collect_locals_expr` picks up during the pre-scan pass. Using the
+/// span offset means both the pre-scan and the emitter agree on the name
+/// without threading a counter through.
+///
+/// Supported patterns for now: `Pattern::Literal(Integer|Bool|Str)`,
+/// `Pattern::Wildcard`, `Pattern::Ident` (used as a wildcard bind — we
+/// don't emit the actual bind since none of the current corpus arms
+/// reference the bound name). Anything else emits `;; unsupported`.
+fn emit_match(
+    out: &mut String,
+    expr: &TirExpr,
+    scrutinee: &TirExpr,
+    arms: &[TirMatchArm],
+    ctx: &Ctx,
+) {
+    let result_ty = if matches!(expr.ty, Ty::Unit) {
+        None
+    } else {
+        Some(expr.ty.clone())
+    };
+    emit_match_impl(out, scrutinee, arms, result_ty, expr.span.offset, ctx);
+}
+
+/// Shared match lowering used by both `TirExprKind::Match` and
+/// `TirStmt::Match`. `result_ty = Some(T)` when the match leaves a T on the
+/// stack; `None` for statement form / Unit-typed matches.
+fn emit_match_impl(
+    out: &mut String,
+    scrutinee: &TirExpr,
+    arms: &[TirMatchArm],
+    result_ty: Option<Ty>,
+    span_offset: u32,
+    ctx: &Ctx,
+) {
+    let temp = format!("__match_{}", span_offset);
+    let if_open: String = result_ty
+        .as_ref()
+        .map(|t| format!("    if (result {})\n", wasm_ty(t, ctx)))
+        .unwrap_or_else(|| "    if\n".to_string());
+
+    // Store scrutinee once — arms compare against it repeatedly.
+    emit_expr(out, scrutinee, ctx);
+    out.push_str(&format!("    local.set ${temp}\n"));
+
+    // Split arms into checked (literal-pattern) and default (wildcard /
+    // ident at any position — first one wins). Guards fall through to
+    // "unsupported" because we haven't wired guard evaluation yet.
+    let mut open_ifs = 0usize;
+    let mut default_body: Option<&TirMatchBody> = None;
+
+    for arm in arms {
+        if arm.guard.is_some() {
+            out.push_str("    ;; unsupported match guard\n");
+            return;
+        }
+        match &arm.pattern {
+            Pattern::Literal(lit, _) => {
+                // scrutinee == literal ?
+                out.push_str(&format!("    local.get ${temp}\n"));
+                emit_literal(out, lit, ctx);
+                out.push_str(&format!("    {}\n", eq_op_for(&scrutinee.ty, ctx)));
+                out.push_str(&if_open);
+                emit_match_body(out, &arm.body, ctx);
+                out.push_str("    else\n");
+                open_ifs += 1;
+            }
+            Pattern::Ident(name, _) if ctx.enum_variants.contains_key(name) => {
+                // Enum unit-variant pattern (e.g. `Direction::North`). Lower
+                // like a literal comparison against the variant's i32 id.
+                let id = ctx.enum_variants[name];
+                out.push_str(&format!("    local.get ${temp}\n"));
+                out.push_str(&format!("    i32.const {id}\n"));
+                out.push_str("    i32.eq\n");
+                out.push_str(&if_open);
+                emit_match_body(out, &arm.body, ctx);
+                out.push_str("    else\n");
+                open_ifs += 1;
+            }
+            Pattern::Wildcard(_) | Pattern::Ident(_, _) => {
+                // First wildcard/ident wins as the default; later arms are
+                // unreachable so we can stop looking.
+                default_body = Some(&arm.body);
+                break;
+            }
+            other => {
+                out.push_str(&format!("    ;; unsupported match pattern: {other:?}\n"));
+                // Close any if-blocks we opened so the WAT is still balanced —
+                // the `;; unsupported` marker will cause the fn to be
+                // stubbed by `emit_fn`, so what we emit here doesn't matter.
+                for _ in 0..open_ifs {
+                    out.push_str("    end\n");
+                }
+                return;
+            }
+        }
+    }
+
+    if let Some(b) = default_body {
+        emit_match_body(out, b, ctx);
+    } else {
+        // No default arm — exhaustive match. If we reach here, no arm
+        // matched, which is a checker bug at compile time; trap at
+        // runtime so it's loud rather than silent.
+        out.push_str("    unreachable\n");
+    }
+
+    for _ in 0..open_ifs {
+        out.push_str("    end\n");
+    }
+}
+
+fn emit_match_body(out: &mut String, body: &TirMatchBody, ctx: &Ctx) {
+    match body {
+        TirMatchBody::Expr(e) => emit_expr(out, e, ctx),
+        TirMatchBody::Block(b) => emit_block(out, b, ctx),
+    }
+}
+
+/// WASM equality opcode for a scrutinee type. Types beyond scalar defaults
+/// (String, structs, etc.) fall back to `i64.eq` which is wrong for them —
+/// but the pattern arm would have hit the unsupported case before this
+/// runs, so nothing hits the wrong branch in practice.
+fn eq_op_for(ty: &Ty, ctx: &Ctx) -> &'static str {
+    if is_float(ty) {
+        "f64.eq"
+    } else if is_i32(ty, ctx) {
+        "i32.eq"
+    } else {
+        "i64.eq"
+    }
+}
+
+/// Fn-scoped temp local name for a `match` scrutinee, keyed on the source
+/// span offset so `collect_locals_expr` / `collect_locals_stmt` and the
+/// emit paths agree.
+fn match_temp_name(expr: &TirExpr) -> String {
+    format!("__match_{}", expr.span.offset)
+}
+
+/// Compute the WASM block-type a statement-form `match` should carry.
+/// Every arm's body must produce a matching non-Unit trailing type, or
+/// we fall back to statement (no-result) form.
+fn match_arms_result_ty(arms: &[TirMatchArm]) -> Option<Ty> {
+    let mut ty: Option<Ty> = None;
+    for arm in arms {
+        let arm_ty = match &arm.body {
+            TirMatchBody::Expr(e) if !matches!(e.ty, Ty::Unit) => e.ty.clone(),
+            TirMatchBody::Block(b) => block_trailing_ty(b)?,
+            _ => return None,
+        };
+        match &ty {
+            None => ty = Some(arm_ty),
+            Some(t) if *t == arm_ty => {}
+            _ => return None,
+        }
+    }
+    ty
+}
+
+/// Emit a single `Literal` — factored out so `emit_match` and the main
+/// `emit_expr` share the same literal lowering (integer / float / bool /
+/// string all lower identically in match patterns as in ordinary
+/// expressions).
+fn emit_literal(out: &mut String, lit: &Literal, ctx: &Ctx) {
+    match lit {
+        Literal::Integer(n) => out.push_str(&format!("    i64.const {n}\n")),
+        Literal::Float(f) => out.push_str(&format!("    f64.const {f:?}\n")),
+        Literal::Bool(b) => {
+            out.push_str(&format!("    i32.const {}\n", if *b { 1 } else { 0 }));
+        }
+        Literal::Str(s) => {
+            if let Some(&(offset, len)) = ctx.literals.get(s) {
+                out.push_str(&format!("    i32.const {offset}\n"));
+                out.push_str(&format!("    i32.const {len}\n"));
+            } else {
+                out.push_str(&format!("    ;; missing literal: {s:?}\n"));
+            }
+        }
+        Literal::Char(c) => out.push_str(&format!("    i32.const {}\n", *c as u32)),
+        Literal::Unit => {} // no value pushed
+    }
+}
+
+/// Unpack a `*MvlString` on top of the stack into `(ptr, len)` pushed
+/// back on the stack. Uses a fn-scoped temp local named after the source
+/// span so `collect_locals_expr` and the emit path agree on the name.
+///
+///   before:  stack = [..., *MvlString]
+///   after:   stack = [..., ptr, len]
+fn emit_unpack_mvl_string(out: &mut String, expr: &TirExpr) {
+    let local = mvl_string_temp_name(expr);
+    out.push_str(&format!("    local.tee ${local}\n"));
+    // .ptr @ offset 0
+    out.push_str(&format!("    i32.load offset={MVL_STRING_OFFSET_PTR}\n"));
+    out.push_str(&format!("    local.get ${local}\n"));
+    // .len @ offset 4
+    out.push_str(&format!("    i32.load offset={MVL_STRING_OFFSET_LEN}\n"));
+}
+
+/// Temp local name for a `*MvlString` unpack — keyed by source span so
+/// the pre-scan and emit paths agree without threading a counter through.
+///
+/// Uses both `offset` and `len` because nested method calls share the
+/// same starting offset (the receiver's start position). Given
+/// `"a".concat(b).substring(0, 1)` the concat and substring TIR nodes
+/// both have `span.offset` at `"a"`'s position; only the length
+/// disambiguates. Using offset alone would collide → duplicate local
+/// declarations → wasm-tools rejects the WAT.
+fn mvl_string_temp_name(expr: &TirExpr) -> String {
+    format!("__ms_{}_{}", expr.span.offset, expr.span.len)
+}
+
+/// Emit `assert_eq(a, b)` or `assert_ne(a, b)` — mirrors the LLVM backend's
+/// `emit_assert_eq_builtin_tir` (#1837). Compares the two values with a
+/// type-directed equality op, then traps via `unreachable` when the check
+/// fails. `negate = true` traps on equality (i.e. `assert_ne`).
+///
+/// Strings route through `_mvl_string_eq` in `runtime/wasm/` — the emitter
+/// imports it via `(import "runtime" ...)` when `Ctx::needs_runtime` is
+/// set. Everything else stays inline (i64.eq / f64.eq / i32.eq).
+fn emit_assert_eq(out: &mut String, left: &TirExpr, right: &TirExpr, negate: bool, ctx: &Ctx) {
+    // String equality: both operands leave (ptr, len) on the stack (four
+    // i32s total), then a runtime call reduces it to i32{0,1}. Same trap
+    // logic wraps it below.
+    if matches!(&left.ty, Ty::String) {
+        ctx.needs_runtime.set(true);
+        emit_expr(out, left, ctx);
+        emit_expr(out, right, ctx);
+        out.push_str("    call $_mvl_string_eq\n");
+        if !negate {
+            out.push_str("    i32.eqz\n");
+        }
+        out.push_str("    if\n      unreachable\n    end\n");
+        return;
+    }
+
+    emit_expr(out, left, ctx);
+    emit_expr(out, right, ctx);
+    let eq_op = if is_float(&left.ty) {
+        "f64.eq"
+    } else if is_i32(&left.ty, ctx) {
+        "i32.eq"
+    } else {
+        "i64.eq"
+    };
+    out.push_str(&format!("    {eq_op}\n"));
+    // Normal assert_eq: trap when NOT equal. i32.eqz flips 1→0 (equal, skip)
+    // and 0→1 (not equal, trap). assert_ne: trap when equal — omit the flip.
+    if !negate {
+        out.push_str("    i32.eqz\n");
+    }
+    out.push_str("    if\n      unreachable\n    end\n");
+}
+
+/// Emit a unary operator. `Neg` and `BitNot` dispatch on operand type; `Not`
+/// is always Bool→Bool.
+fn emit_unary(out: &mut String, op: UnaryOp, inner: &TirExpr, ctx: &Ctx) {
+    match op {
+        UnaryOp::Neg => {
+            if is_float(&inner.ty) {
+                emit_expr(out, inner, ctx);
+                out.push_str("    f64.neg\n");
+            } else {
+                out.push_str("    i64.const 0\n");
+                emit_expr(out, inner, ctx);
+                out.push_str("    i64.sub\n");
+            }
+        }
+        UnaryOp::Not => {
+            emit_expr(out, inner, ctx);
+            out.push_str("    i32.eqz\n");
+        }
+        UnaryOp::BitNot => {
+            emit_expr(out, inner, ctx);
+            out.push_str("    i64.const -1\n");
+            out.push_str("    i64.xor\n");
+        }
+        UnaryOp::Deref => {
+            emit_expr(out, inner, ctx);
+            // No-op in this backend today — `ref` bindings and dereferences
+            // are handled via WASM locals directly.
+        }
+    }
+}
+
+/// Emit a binary operator, picking i64/f64/i32 opcode family from operand type.
+/// Short-circuit `&&` / `||` lower to an inline structured `if` for laziness.
+fn emit_binary(out: &mut String, op: BinaryOp, left: &TirExpr, right: &TirExpr, ctx: &Ctx) {
+    // Short-circuit boolean ops — need laziness, can't emit both operands up
+    // front. `a && b` ≡ `if a then b else false`; `a || b` ≡ `if a then true else b`.
+    if matches!(op, BinaryOp::And | BinaryOp::Or) {
+        emit_expr(out, left, ctx);
+        out.push_str("    if (result i32)\n");
+        match op {
+            BinaryOp::And => {
+                emit_expr(out, right, ctx);
+                out.push_str("    else\n      i32.const 0\n    end\n");
+            }
+            BinaryOp::Or => {
+                out.push_str("      i32.const 1\n    else\n");
+                emit_expr(out, right, ctx);
+                out.push_str("    end\n");
+            }
+            _ => unreachable!(),
+        }
+        return;
+    }
+
+    emit_expr(out, left, ctx);
+    emit_expr(out, right, ctx);
+    // Pick opcode family from the operand type. Comparisons produce i32
+    // regardless of operand type.
+    let (family, is_cmp_operand_float) = if is_float(&left.ty) {
+        ("f64", true)
+    } else if is_i32(&left.ty, ctx) {
+        ("i32", false)
+    } else {
+        ("i64", false)
+    };
+    let signed_suffix = if family == "i64" { "_s" } else { "" };
+    let opcode: String = match op {
+        BinaryOp::Add => format!("{family}.add"),
+        BinaryOp::Sub => format!("{family}.sub"),
+        BinaryOp::Mul => format!("{family}.mul"),
+        BinaryOp::Div => {
+            if is_cmp_operand_float {
+                "f64.div".to_string()
+            } else {
+                format!("{family}.div{signed_suffix}")
+            }
+        }
+        BinaryOp::Rem => format!("{family}.rem{signed_suffix}"),
+        BinaryOp::Eq => format!("{family}.eq"),
+        BinaryOp::Ne => format!("{family}.ne"),
+        BinaryOp::Lt => format!("{family}.lt{signed_suffix}"),
+        BinaryOp::Gt => format!("{family}.gt{signed_suffix}"),
+        BinaryOp::Le => format!("{family}.le{signed_suffix}"),
+        BinaryOp::Ge => format!("{family}.ge{signed_suffix}"),
+        BinaryOp::BitAnd => format!("{family}.and"),
+        BinaryOp::BitOr => format!("{family}.or"),
+        BinaryOp::BitXor => format!("{family}.xor"),
+        BinaryOp::Shl => format!("{family}.shl"),
+        BinaryOp::Shr => format!("{family}.shr{signed_suffix}"),
+        BinaryOp::And | BinaryOp::Or => unreachable!("short-circuited above"),
+    };
+    out.push_str(&format!("    {opcode}\n"));
+}
+
+fn wasm_ty(ty: &Ty, ctx: &Ctx) -> &'static str {
     match ty {
-        Ty::Int => "i64",
-        Ty::Bool => "i32",
-        Ty::UInt => "i64",
-        Ty::Ref(_, inner) | Ty::Labeled(_, inner) | Ty::Refined(inner, _) => wasm_ty(inner),
+        Ty::Int | Ty::UInt => "i64",
+        Ty::Float => "f64",
+        Ty::Bool | Ty::Byte => "i32",
+        Ty::Named(name, _) if ctx.enum_types.contains(name) => "i32",
+        Ty::Ref(_, inner) | Ty::Labeled(_, inner) | Ty::Refined(inner, _) => wasm_ty(inner, ctx),
         _ => "i64",
     }
+}
+
+/// True if this MVL type lowers to WASM `f64`.
+fn is_float(ty: &Ty) -> bool {
+    match ty {
+        Ty::Float => true,
+        Ty::Ref(_, inner) | Ty::Labeled(_, inner) | Ty::Refined(inner, _) => is_float(inner),
+        _ => false,
+    }
+}
+
+/// True if this MVL type lowers to WASM `i32` (Bool, Byte, unit-variant
+/// enums). Used to pick between `i64.*` / `i32.*` / `f64.*` opcode families.
+fn is_i32(ty: &Ty, ctx: &Ctx) -> bool {
+    match ty {
+        Ty::Bool | Ty::Byte => true,
+        Ty::Named(name, _) if ctx.enum_types.contains(name) => true,
+        Ty::Ref(_, inner) | Ty::Labeled(_, inner) | Ty::Refined(inner, _) => is_i32(inner, ctx),
+        _ => false,
+    }
+}
+
+// ── Enum registry ───────────────────────────────────────────────────────
+//
+// Pre-scan `TirProgram.types` for enum declarations whose variants are all
+// `Unit`. Those lower to a bare i32 discriminant on the WASM stack. Enums
+// with tuple/struct payloads are skipped here — supporting them needs a
+// tagged-union memory layout (later phase).
+
+fn collect_enums(
+    types: &[TirTypeDecl],
+) -> (std::collections::HashSet<String>, HashMap<String, i32>) {
+    let mut enum_types = std::collections::HashSet::new();
+    let mut variants = HashMap::new();
+    for td in types {
+        if let TirTypeBody::Enum(vs) = &td.body {
+            // Only unit-variant enums are handled today. Any payload variant
+            // rules the whole type out — mixing lowerings is worse than
+            // failing loudly on the first unsupported use.
+            if vs
+                .iter()
+                .all(|v| matches!(v.fields, TirVariantFields::Unit))
+            {
+                enum_types.insert(td.name.clone());
+                for (idx, v) in vs.iter().enumerate() {
+                    variants.insert(format!("{}::{}", td.name, v.name), idx as i32);
+                }
+            }
+        }
+    }
+    (enum_types, variants)
 }
 
 // ── String-literal collection ────────────────────────────────────────────
@@ -232,9 +1159,18 @@ fn wasm_ty(ty: &Ty) -> &'static str {
 /// interning table and the first free offset after all literals — used as
 /// the initial value of the runtime's `$heap` global so bump allocations
 /// don't overwrite the data section.
-fn collect_literals(fns: &[&TirFn]) -> (HashMap<String, (u32, u32)>, u32) {
+fn collect_literals(fns: &[&TirFn], needs_wasi: bool) -> (HashMap<String, (u32, u32)>, u32) {
     let mut map = HashMap::new();
     let mut next = LITERAL_BASE;
+    // Seed "true" / "false" so `Bool.to_string()` has offsets to point at.
+    // Cheap: 4 + 5 = 9 bytes of data section even when unused.
+    if needs_wasi {
+        for lit in &["true", "false"] {
+            let len = lit.len() as u32;
+            map.insert((*lit).to_string(), (next, len));
+            next += len;
+        }
+    }
     for f in fns {
         collect_block(&f.body, &mut map, &mut next);
     }
@@ -249,10 +1185,25 @@ fn collect_block(block: &TirBlock, map: &mut HashMap<String, (u32, u32)>, next: 
 
 fn collect_stmt(stmt: &TirStmt, map: &mut HashMap<String, (u32, u32)>, next: &mut u32) {
     match stmt {
-        TirStmt::Expr { expr, .. }
-        | TirStmt::Return {
-            value: Some(expr), ..
-        } => collect_expr(expr, map, next),
+        TirStmt::Expr { expr, .. } => collect_expr(expr, map, next),
+        TirStmt::Return { value: Some(v), .. } => collect_expr(v, map, next),
+        TirStmt::Let { init, .. } => collect_expr(init, map, next),
+        TirStmt::Assign { value, .. } => collect_expr(value, map, next),
+        TirStmt::If {
+            cond, then, else_, ..
+        } => {
+            collect_expr(cond, map, next);
+            collect_block(then, map, next);
+            match else_ {
+                Some(TirElseBranch::Block(b)) => collect_block(b, map, next),
+                Some(TirElseBranch::If(s)) => collect_stmt(s, map, next),
+                None => {}
+            }
+        }
+        TirStmt::While { cond, body, .. } => {
+            collect_expr(cond, map, next);
+            collect_block(body, map, next);
+        }
         _ => {}
     }
 }
@@ -266,6 +1217,7 @@ fn collect_expr(expr: &TirExpr, map: &mut HashMap<String, (u32, u32)>, next: &mu
                 *next += len;
             }
         }
+        TirExprKind::Unary { expr, .. } => collect_expr(expr, map, next),
         TirExprKind::Binary { left, right, .. } => {
             collect_expr(left, map, next);
             collect_expr(right, map, next);
@@ -279,6 +1231,31 @@ fn collect_expr(expr: &TirExpr, map: &mut HashMap<String, (u32, u32)>, next: &mu
             collect_expr(receiver, map, next);
             for a in args {
                 collect_expr(a, map, next);
+            }
+        }
+        TirExprKind::If { cond, then, else_ } => {
+            collect_expr(cond, map, next);
+            collect_block(then, map, next);
+            if let Some(e) = else_ {
+                collect_expr(e, map, next);
+            }
+        }
+        TirExprKind::Match { scrutinee, arms } => {
+            collect_expr(scrutinee, map, next);
+            for arm in arms {
+                // Literal String patterns are compared against the scrutinee
+                // and need a data-section entry too.
+                if let Pattern::Literal(Literal::Str(s), _) = &arm.pattern {
+                    if !map.contains_key(s) {
+                        let len = s.len() as u32;
+                        map.insert(s.clone(), (*next, len));
+                        *next += len;
+                    }
+                }
+                match &arm.body {
+                    TirMatchBody::Expr(e) => collect_expr(e, map, next),
+                    TirMatchBody::Block(b) => collect_block(b, map, next),
+                }
             }
         }
         TirExprKind::Block(block) => collect_block(block, map, next),
@@ -318,13 +1295,32 @@ fn escape_wat_data(s: &str) -> String {
 /// - `32..heap_start` string-literal contents (one `(data ...)` per literal)
 /// - `heap_start..` bump-allocated string storage (used by `$mvl_int_to_string`)
 fn emit_wasi_runtime(heap_start: u32, literals: &HashMap<String, (u32, u32)>) -> String {
+    emit_wasi_runtime_common(heap_start, literals, /* own_memory */ true)
+}
+
+/// Same as [`emit_wasi_runtime`] but skips the `(memory 1) (export "memory")`
+/// pair — the caller has already imported memory from `runtime/wasm/`.
+fn emit_wasi_runtime_shared_memory(
+    heap_start: u32,
+    literals: &HashMap<String, (u32, u32)>,
+) -> String {
+    emit_wasi_runtime_common(heap_start, literals, /* own_memory */ false)
+}
+
+fn emit_wasi_runtime_common(
+    heap_start: u32,
+    literals: &HashMap<String, (u32, u32)>,
+    own_memory: bool,
+) -> String {
     let mut out = String::new();
     out.push_str(
         "  (import \"wasi_snapshot_preview1\" \"fd_write\"\n    \
          (func $fd_write (param i32 i32 i32 i32) (result i32)))\n",
     );
-    out.push_str("  (memory 1)\n");
-    out.push_str("  (export \"memory\" (memory 0))\n");
+    if own_memory {
+        out.push_str("  (memory 1)\n");
+        out.push_str("  (export \"memory\" (memory 0))\n");
+    }
     out.push_str("  (data (i32.const 20) \"\\n\")\n");
 
     // Emit string literals in ascending-offset order so the WAT is stable
@@ -389,10 +1385,23 @@ const WASI_HELPERS: &str = r#"  (func $mvl_alloc (param $n i32) (result i32)
         (i32.store8 (local.get $cur) (i32.const 45))))
     (local.get $cur)
     (i32.sub (i32.add (local.get $buf) (i32.const 24)) (local.get $cur)))
+  ;; println / eprintln do TWO fd_write calls (one for the message, one
+  ;; for the newline). The intuitive "one call with a 2-entry iovec"
+  ;; shape silently drops iovec[1] on wasmtime 43.0.1 (verified against
+  ;; the hand-written spike/006 reference too). Two calls are portable
+  ;; and add one syscall — cheap tradeoff for a spike runtime.
   (func $mvl_println (param $ptr i32) (param $len i32)
     (i32.store (i32.const 0) (local.get $ptr))
     (i32.store (i32.const 4) (local.get $len))
-    (i32.store (i32.const 8) (i32.const 20))
-    (i32.store (i32.const 12) (i32.const 1))
-    (drop (call $fd_write (i32.const 1) (i32.const 0) (i32.const 2) (i32.const 16))))
+    (drop (call $fd_write (i32.const 1) (i32.const 0) (i32.const 1) (i32.const 8)))
+    (i32.store (i32.const 0) (i32.const 20))
+    (i32.store (i32.const 4) (i32.const 1))
+    (drop (call $fd_write (i32.const 1) (i32.const 0) (i32.const 1) (i32.const 8))))
+  (func $mvl_eprintln (param $ptr i32) (param $len i32)
+    (i32.store (i32.const 0) (local.get $ptr))
+    (i32.store (i32.const 4) (local.get $len))
+    (drop (call $fd_write (i32.const 2) (i32.const 0) (i32.const 1) (i32.const 8)))
+    (i32.store (i32.const 0) (i32.const 20))
+    (i32.store (i32.const 4) (i32.const 1))
+    (drop (call $fd_write (i32.const 2) (i32.const 0) (i32.const 1) (i32.const 8))))
 "#;

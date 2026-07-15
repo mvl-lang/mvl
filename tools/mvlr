@@ -35,7 +35,7 @@ POSITIONAL=()
 
 usage() {
     cat >&2 <<'EOF'
-Usage: mvlr [OPTIONS] <file.mvl | dir>
+Usage: mvlr [OPTIONS] <file.mvl | dir> [file.mvl | dir …]
 
 Options:
   --compiler=<rust|mvl>       which compiler to drive         (default: rust)
@@ -49,7 +49,8 @@ Options:
 Supported combinations:
   rust/rust        mvl run  (or  mvl test  for a directory)
   rust/llvm        per-file: sed test fn → fn + synth main, mvl run --backend=llvm
-  rust/wasm        NOT SUPPORTED via mvlr — use `make test-rust-wasm` (curated spike)
+  rust/wasm        per-file: sed test fn → fn + synth main, mvl build --backend=wasm,
+                              wasm-tools parse → .wasm, wasmtime run
   rust/rust-tokio  NOT YET IMPLEMENTED (#1828)
   mvl/llvm         mvl tir | emitter.mvl | llc | cc | run
   mvl/wasm         NOT YET IMPLEMENTED (#1828)
@@ -85,7 +86,6 @@ if [ "${#POSITIONAL[@]}" -eq 0 ]; then
     exit 2
 fi
 
-INPUT="${POSITIONAL[0]}"
 # Resolve `mvl` binary with this precedence:
 #   1. --mvl=<path>      (explicit flag, used by the Makefile for dev builds)
 #   2. $MVL env var      (explicit override)
@@ -144,10 +144,12 @@ if [ ! -x "$MVL" ]; then
     exit 1
 fi
 
-if [ ! -e "$INPUT" ]; then
-    echo "mvlr: input not found: $INPUT" >&2
-    exit 1
-fi
+for INPUT in "${POSITIONAL[@]}"; do
+    if [ ! -e "$INPUT" ]; then
+        echo "mvlr: input not found: $INPUT" >&2
+        exit 1
+    fi
+done
 
 # ── Synthesize a fn-main driver from a *_test.mvl file ────────────────────
 # Emits a marker line to stderr before each test call so failures can be
@@ -205,6 +207,68 @@ run_rust_llvm_file() {
         "$MVL" run --backend=llvm "$out"
     else
         "$MVL" run --backend=llvm "$src"
+    fi
+}
+
+# rust/wasm: emit WAT, assemble to WASM, run under wasmtime.
+# Test files get the same `test fn → fn + synth main` treatment as LLVM.
+# `mvl build --backend=wasm` writes `<stem>.wat` into CWD, so we cd into
+# a tmp dir first. Assertion failure in the WAT emitter compiles to
+# `unreachable` → wasmtime traps → non-zero exit → run_dir_iter counts it.
+run_rust_wasm_file() {
+    local src="$1" tmp stem mvl_abs
+    tmp=$(mktemp -d)
+    # shellcheck disable=SC2064
+    trap "rm -rf '$tmp'" RETURN
+
+    # `mvl build --backend=wasm` writes `<stem>.wat` into CWD, so we
+    # need to cd into $tmp to sequester output. That means MVL and the
+    # input file must both be absolute paths before the cd.
+    if [[ "$MVL" = /* ]]; then
+        mvl_abs="$MVL"
+    else
+        mvl_abs="$(pwd)/$MVL"
+    fi
+    local input_abs
+    input_abs=$(cd "$(dirname "$src")" && pwd)/$(basename "$src")
+
+    if [[ "$src" == *_test.mvl ]]; then
+        local out="$tmp/$(basename "$src")"
+        synth_test_main "$src" "$out"
+        input_abs="$out"
+    fi
+
+    stem=$(basename "$input_abs" .mvl)
+    (cd "$tmp" && "$mvl_abs" build "$input_abs" --backend=wasm) >/dev/null 2>"$tmp/build.err" || {
+        echo "mvlr: mvl build --backend=wasm failed for $src" >&2
+        cat "$tmp/build.err" >&2
+        return 1
+    }
+    if ! wasm-tools parse "$tmp/$stem.wat" -o "$tmp/$stem.wasm" 2>"$tmp/parse.err"; then
+        echo "mvlr: wasm-tools parse failed for $src" >&2
+        cat "$tmp/parse.err" >&2
+        return 1
+    fi
+
+    # Optional `runtime/wasm/` preload (#1819). When the emitted module has
+    # `(import "runtime" ...)` declarations, wasmtime needs the runtime
+    # `.wasm` provided via --preload. When it doesn't (simple programs), the
+    # flag is a no-op. Path resolves against the workspace root or the
+    # `MVL_RUNTIME_WASM` env var (Makefile sets it explicitly).
+    local runtime_wasm="${MVL_RUNTIME_WASM:-}"
+    if [ -z "$runtime_wasm" ]; then
+        # Best-effort: infer from the mvl binary path. If MVL is
+        # `target/debug/mvl`, runtime lives at
+        # `target/wasm32-wasip1/debug/mvl_runtime_wasm.wasm`.
+        local mvl_dir
+        mvl_dir=$(dirname "$mvl_abs")
+        local candidate="$mvl_dir/../wasm32-wasip1/debug/mvl_runtime_wasm.wasm"
+        [ -f "$candidate" ] && runtime_wasm=$(cd "$(dirname "$candidate")" && pwd)/$(basename "$candidate")
+    fi
+    if [ -n "$runtime_wasm" ] && [ -f "$runtime_wasm" ]; then
+        wasmtime run --preload "runtime=$runtime_wasm" "$tmp/$stem.wasm"
+    else
+        wasmtime run "$tmp/$stem.wasm"
     fi
 }
 
@@ -288,23 +352,34 @@ run_dir_iter() {
             # marker on stderr identifies the failing test; anything after
             # it in `tests` never ran.
             local last_mark
-            last_mark=$(grep -oE "MVLR_MARK:[a-z_0-9]+" "$tmpout" | tail -1 | cut -d: -f2)
+            # `|| true` — otherwise `pipefail` + `set -e` kills the whole
+            # loop when the pipe returns 1 (no markers found, e.g. the
+            # binary trapped before printing any).
+            last_mark=$(grep -oE "MVLR_MARK:[a-z_0-9]+" "$tmpout" | tail -1 | cut -d: -f2 || true)
             local failed_seen=0
-            while IFS= read -r tn; do
-                [ -z "$tn" ] && continue
-                if [ "$failed_seen" = "1" ]; then
-                    # After the failure, nothing else ran — don't count.
-                    continue
-                fi
-                if [ -n "$last_mark" ] && [ "$tn" = "$last_mark" ]; then
-                    printf "  $FAIL  %s::%s\n" "$short" "$tn"
-                    fail=$((fail + 1))
-                    failed_seen=1
-                else
-                    [ "$QUIET" = "1" ] || printf "  $OK  %s::%s\n" "$short" "$tn"
-                    pass=$((pass + 1))
-                fi
-            done <<< "$tests"
+            # A file with no MVLR_MARK output at all didn't run any test —
+            # the pipeline died before the first eprintln marker (usually a
+            # build / assemble failure). Skip the per-test attribution loop
+            # and go straight to the file-level "before any test ran" line
+            # below. Otherwise every test in the file would be silently
+            # counted as pass (via the `else` branch), inflating the count.
+            if [ -n "$last_mark" ]; then
+                while IFS= read -r tn; do
+                    [ -z "$tn" ] && continue
+                    if [ "$failed_seen" = "1" ]; then
+                        # After the failure, nothing else ran — don't count.
+                        continue
+                    fi
+                    if [ "$tn" = "$last_mark" ]; then
+                        printf "  $FAIL  %s::%s\n" "$short" "$tn"
+                        fail=$((fail + 1))
+                        failed_seen=1
+                    else
+                        [ "$QUIET" = "1" ] || printf "  $OK  %s::%s\n" "$short" "$tn"
+                        pass=$((pass + 1))
+                    fi
+                done <<< "$tests"
+            fi
             # If no marker matched (e.g. build/link failure before any
             # test ran), attribute the failure to the file itself.
             if [ "$failed_seen" = "0" ]; then
@@ -333,6 +408,7 @@ run_file() {
     case "$combo" in
         rust/rust)  run_rust_rust_file "$src" ;;
         rust/llvm)  run_rust_llvm_file "$src" ;;
+        rust/wasm)  run_rust_wasm_file "$src" ;;
         mvl/llvm)   run_mvl_llvm_file  "$src" ;;
         *)          echo "mvlr: no per-file runner for $combo" >&2; return 2 ;;
     esac
@@ -347,15 +423,11 @@ case "$COMBO" in
         echo "mvlr: rust/rust-tokio not yet supported (#1828)" >&2
         exit 1
         ;;
-    rust/wasm)
-        echo "mvlr: rust/wasm not supported by mvlr — use \`make test-rust-wasm\` (curated spike case list)" >&2
-        exit 1
-        ;;
     mvl/wasm)
         echo "mvlr: mvl/wasm not yet supported (#1828)" >&2
         exit 1
         ;;
-    rust/rust|rust/llvm|mvl/llvm)
+    rust/rust|rust/llvm|rust/wasm|mvl/llvm)
         ;;
     *)
         echo "mvlr: unknown combo: $COMBO" >&2
@@ -364,16 +436,26 @@ case "$COMBO" in
         ;;
 esac
 
-if [ -d "$INPUT" ]; then
-    case "$COMBO" in
-        rust/rust)
-            # Batched path — mvl test bundles the whole tree.
-            run_rust_rust_dir "$INPUT"
-            ;;
-        *)
-            run_dir_iter "$INPUT" "$COMBO"
-            ;;
-    esac
-else
-    run_file "$COMBO" "$INPUT"
-fi
+# Multi-input dispatch — iterate every positional argument. Directories
+# use the per-file loop (run_dir_iter for backends without native batching,
+# run_rust_rust_dir for the batched rust/rust path). Files go through
+# run_file directly. Any non-zero result flips the aggregate exit code.
+#
+# Single-file mode strips MVLR_MARK:* lines from stderr (they're mvlr's
+# own per-test attribution instrumentation — noise to a human reader).
+# Directory mode keeps them: run_dir_iter grep's them out of $tmpout to
+# name the failing test. `bash` process substitution runs the filter in
+# a subshell forwarding to fd 2, so the exit code of `run_file` still
+# propagates via `|| rc=1`.
+rc=0
+for INPUT in "${POSITIONAL[@]}"; do
+    if [ -d "$INPUT" ]; then
+        case "$COMBO" in
+            rust/rust) run_rust_rust_dir "$INPUT" || rc=1 ;;
+            *)         run_dir_iter "$INPUT" "$COMBO" || rc=1 ;;
+        esac
+    else
+        run_file "$COMBO" "$INPUT" 2> >(grep -v "^MVLR_MARK:" >&2) || rc=1
+    fi
+done
+exit $rc
