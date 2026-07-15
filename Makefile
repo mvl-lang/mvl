@@ -471,7 +471,8 @@ WASM_CORPUS := \
 	tests/corpus/01_expressions \
 	tests/corpus/02_control_flow \
 	tests/corpus/03_functions/basic_test.mvl \
-	tests/corpus/04_types/enum_test.mvl
+	tests/corpus/04_types/enum_test.mvl \
+	tests/corpus/13_stdlib/string_test.mvl
 
 test-rust-wasm: build build-runtime-wasm ## rust/wasm — WASM-supported corpus subset (via runtime/wasm/ preload)
 	@command -v wasm-tools > /dev/null 2>&1 || { \

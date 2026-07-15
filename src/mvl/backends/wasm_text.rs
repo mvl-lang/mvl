@@ -145,6 +145,11 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
         "_mvl_string_substring",
         "(param i32 i32 i64 i64) (result i32)",
     ),
+    // Group B commit 3 — case fold + trim. Unary transforms: receiver
+    // (ptr, len) → `*MvlString`. Same unpack shape as concat/substring.
+    ("_mvl_string_to_upper", "(param i32 i32) (result i32)"),
+    ("_mvl_string_to_lower", "(param i32 i32) (result i32)"),
+    ("_mvl_string_trim", "(param i32 i32) (result i32)"),
 ];
 
 /// Layout offsets on `MvlString` — mirrors `runtime/wasm/src/lib.rs` /
@@ -439,7 +444,10 @@ fn collect_locals_expr(expr: &TirExpr, locals: &mut Vec<(String, Ty)>) {
             // the stack that the emitter unpacks via a temp i32 local.
             // Register it here so the fn prelude declares it.
             if matches!(&receiver.ty, Ty::String)
-                && matches!(method.as_str(), "concat" | "substring")
+                && matches!(
+                    method.as_str(),
+                    "concat" | "substring" | "to_upper" | "to_lower" | "trim"
+                )
             {
                 // Ty::Bool → i32 in `wasm_ty` — reuse for the pointer
                 // temp so we don't need a dedicated "raw i32" ty.
@@ -671,7 +679,10 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             method,
             args,
         } if matches!(&receiver.ty, Ty::String)
-            && matches!(method.as_str(), "concat" | "substring") =>
+            && matches!(
+                method.as_str(),
+                "concat" | "substring" | "to_upper" | "to_lower" | "trim"
+            ) =>
         {
             ctx.needs_runtime.set(true);
             emit_expr(out, receiver, ctx);

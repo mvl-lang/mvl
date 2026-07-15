@@ -27,6 +27,8 @@
 //! - `_mvl_string_drop` — refcount decrement, free when zero
 //! - `_mvl_string_concat` — new `MvlString` from two `(ptr, len)` inputs
 //! - `_mvl_string_substring` — byte-slice window into a new `MvlString`
+//! - `_mvl_string_to_upper` / `_mvl_string_to_lower` — ASCII case fold
+//! - `_mvl_string_trim` — strip leading / trailing ASCII whitespace
 //!
 //! Drop emission on the emitter side is best-effort — at every function's
 //! implicit-return point, the emitter drops each `__ms_*` temp local it
@@ -289,6 +291,59 @@ pub unsafe extern "C" fn _mvl_string_substring(ptr: i32, len: i32, start: i64, e
     let hi = end.max(0).min(n) as usize;
     let hi = hi.max(lo);
     alloc_mvl_string(&s[lo..hi])
+}
+
+/// `s.to_upper()` — ASCII-only case conversion. Non-ASCII bytes pass
+/// through unchanged. Full Unicode `to_uppercase` would drag in Rust
+/// std's case-folding table (~50 KB in the WASM). Byte-level suffices
+/// for the current corpus; upgrade path is a `#[cfg(feature =
+/// "unicode")]` flag when a real test needs it.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_string_to_upper(ptr: i32, len: i32) -> i32 {
+    let s = unsafe { slice_or_empty(ptr, len) };
+    let mut out = Vec::with_capacity(s.len());
+    for &b in s {
+        out.push(b.to_ascii_uppercase());
+    }
+    alloc_mvl_string(&out)
+}
+
+/// `s.to_lower()` — ASCII-only case conversion, same rationale as
+/// `to_upper` above.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_string_to_lower(ptr: i32, len: i32) -> i32 {
+    let s = unsafe { slice_or_empty(ptr, len) };
+    let mut out = Vec::with_capacity(s.len());
+    for &b in s {
+        out.push(b.to_ascii_lowercase());
+    }
+    alloc_mvl_string(&out)
+}
+
+/// `s.trim()` — strip leading and trailing ASCII whitespace (space,
+/// `\t`, `\n`, `\r`, `\x0c`). Matches Rust's `u8::is_ascii_whitespace`
+/// (WhatWG Infra Standard). Note that vertical tab `\x0b` is *not*
+/// whitespace under that definition. Unicode whitespace (U+00A0,
+/// U+2028, etc.) would need a `char_indices` traversal — punted
+/// alongside the other case-fold ops above.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_string_trim(ptr: i32, len: i32) -> i32 {
+    let s = unsafe { slice_or_empty(ptr, len) };
+    let start = s
+        .iter()
+        .position(|b| !b.is_ascii_whitespace())
+        .unwrap_or(s.len());
+    let end = s
+        .iter()
+        .rposition(|b| !b.is_ascii_whitespace())
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    let trimmed = if start >= end {
+        &[][..]
+    } else {
+        &s[start..end]
+    };
+    alloc_mvl_string(trimmed)
 }
 
 // ── Equality ─────────────────────────────────────────────────────────────
@@ -648,6 +703,100 @@ mod tests {
         let s = b"hello";
         let ptr = unsafe { _mvl_string_substring(addr(s), s.len() as i32, 4, 1) };
         assert_eq!(unsafe { concat_result(ptr) }, b"");
+        unsafe { _mvl_string_drop(ptr) };
+    }
+
+    // ── to_upper / to_lower ────
+    #[test]
+    fn to_upper_ascii() {
+        let s = b"hello";
+        let ptr = unsafe { _mvl_string_to_upper(addr(s), s.len() as i32) };
+        assert_eq!(unsafe { concat_result(ptr) }, b"HELLO");
+        unsafe { _mvl_string_drop(ptr) };
+    }
+
+    #[test]
+    fn to_upper_mixed_case() {
+        let s = b"Mixed Case";
+        let ptr = unsafe { _mvl_string_to_upper(addr(s), s.len() as i32) };
+        assert_eq!(unsafe { concat_result(ptr) }, b"MIXED CASE");
+        unsafe { _mvl_string_drop(ptr) };
+    }
+
+    #[test]
+    fn to_upper_already_upper() {
+        let s = b"HELLO";
+        let ptr = unsafe { _mvl_string_to_upper(addr(s), s.len() as i32) };
+        assert_eq!(unsafe { concat_result(ptr) }, b"HELLO");
+        unsafe { _mvl_string_drop(ptr) };
+    }
+
+    #[test]
+    fn to_upper_non_ascii_passthrough() {
+        // `é` in UTF-8 is 0xc3 0xa9 — both above 0x7f, so `to_ascii_uppercase`
+        // leaves them unchanged. Sanity check the byte-level guarantee.
+        let s = b"caf\xc3\xa9";
+        let ptr = unsafe { _mvl_string_to_upper(addr(s), s.len() as i32) };
+        assert_eq!(unsafe { concat_result(ptr) }, b"CAF\xc3\xa9");
+        unsafe { _mvl_string_drop(ptr) };
+    }
+
+    #[test]
+    fn to_lower_ascii() {
+        let s = b"HELLO";
+        let ptr = unsafe { _mvl_string_to_lower(addr(s), s.len() as i32) };
+        assert_eq!(unsafe { concat_result(ptr) }, b"hello");
+        unsafe { _mvl_string_drop(ptr) };
+    }
+
+    #[test]
+    fn to_lower_mixed_case() {
+        let s = b"Mixed Case";
+        let ptr = unsafe { _mvl_string_to_lower(addr(s), s.len() as i32) };
+        assert_eq!(unsafe { concat_result(ptr) }, b"mixed case");
+        unsafe { _mvl_string_drop(ptr) };
+    }
+
+    // ── trim ────
+    #[test]
+    fn trim_both_sides() {
+        let s = b"  hello  ";
+        let ptr = unsafe { _mvl_string_trim(addr(s), s.len() as i32) };
+        assert_eq!(unsafe { concat_result(ptr) }, b"hello");
+        unsafe { _mvl_string_drop(ptr) };
+    }
+
+    #[test]
+    fn trim_no_whitespace() {
+        let s = b"hello";
+        let ptr = unsafe { _mvl_string_trim(addr(s), s.len() as i32) };
+        assert_eq!(unsafe { concat_result(ptr) }, b"hello");
+        unsafe { _mvl_string_drop(ptr) };
+    }
+
+    #[test]
+    fn trim_all_whitespace() {
+        let s = b"   \t\n ";
+        let ptr = unsafe { _mvl_string_trim(addr(s), s.len() as i32) };
+        assert_eq!(unsafe { concat_result(ptr) }, b"");
+        unsafe { _mvl_string_drop(ptr) };
+    }
+
+    #[test]
+    fn trim_empty() {
+        let ptr = unsafe { _mvl_string_trim(0, 0) };
+        assert_eq!(unsafe { concat_result(ptr) }, b"");
+        unsafe { _mvl_string_drop(ptr) };
+    }
+
+    #[test]
+    fn trim_mixed_whitespace_chars() {
+        // \t, \n, \r, space, form feed — all ASCII whitespace under Rust's
+        // WhatWG-Infra definition. Vertical tab (\x0b) is deliberately
+        // *not* included; adding it here would fail.
+        let s = b"\t\n\r hello\x0c ";
+        let ptr = unsafe { _mvl_string_trim(addr(s), s.len() as i32) };
+        assert_eq!(unsafe { concat_result(ptr) }, b"hello");
         unsafe { _mvl_string_drop(ptr) };
     }
 
