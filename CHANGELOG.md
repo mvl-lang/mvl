@@ -6,15 +6,19 @@
 
 ### Fixed — #1863 mvl assurance Req 10 counter contradiction
 
-`mvl assurance --stdlib=proven` on projects with return-refinement `ensures` clauses (e.g. examples/pong) reported contradictory Req 10 numbers: the top-level counter said "45 proven / 0 runtime-checked" while the per-function rollup said only "5/14 fully verified", and the verdict line hardcoded "0 call sites proven" even when 45 were.
+`mvl assurance` on projects with refinement types (examples/pong) reported contradictory Req 10 numbers: the top-level counter said "0 proven / 0 runtime-checked" while the per-layer breakdown showed `L1=40 L2=0 L3=0 L4=5 L5=0` — 45 proofs that never reached the aggregate. The per-function rollup said only "5/14 fully verified", and the verdict line hardcoded "0 call sites proven" even when 45 were.
 
-Two independent root causes:
+Four independent leaks:
 
-1. **Return-refinement checks didn't update the aggregate counters.** `contracts/mod.rs::check_return_pred_for_expr` recorded each outcome to `ctx.counts.sites` (`ProofOutcome::Proven` / `RuntimeCheck` / `Failed`) but never incremented `ctx.counts.proven` / `runtime_checked` / `failed`. The call-site path in `refinements.rs` did update those counters — so top-level totals reflected call sites only, missing every return-value outcome. Fix: bump the same three counters in `check_return_pred_for_expr` matching the outcome, and merge `runtime_checked` + `failed` from `contract_counts` into the aggregate at the checker.rs join point (previously only `proven` came through, via a `by_layer.sum()` workaround).
+1. **Aggregate counters were the caller's responsibility.** Every path through `check_arg_against_pred_counted` credits `counts.by_layer[n]` inside `record()`, but the aggregate `proven` / `runtime_checked` / `failed` totals had to be bumped by each of ~11 callers. Only `check_call_site` did it consistently; the ten others (single-param requires, multi-param requires, ensures, return-refinement, invariant-at-entry, standalone predicates, spawn-field, struct-field, actor-field) silently dropped their outcomes. Fix: move the aggregate update into `record()` and the trailing `RuntimeCheck` fallthrough in `check_arg_against_pred_counted`, so new callers can't miss the update.
 
-2. **CLI verdict text hardcoded "0 call sites proven".** `src/cli/assurance.rs`'s `else if total_refined_fields > 0` fall-through branch ignored `agg_ref_proven` entirely. Fix: format that branch with the real counters — `{agg_ref_proven} proven, {agg_ref_runtime} runtime-checked`.
+2. **Struct- and actor-field checkers used throw-away counters.** `check_struct_field_refinements` and `check_actor_field_refinements` built their own local `RefinementCounts` that was never returned or merged. Fix: thread `&mut refinement_counts` from `checker.rs` through both functions so their proofs contribute to the top-level aggregate.
 
-Together the two fixes make top-level totals, per-function rollup, and verdict text agree on the same numbers.
+3. **`contract_counts` merge dropped `runtime_checked` and `failed`.** `checker.rs` merged only `proven` (via `by_layer.sum()` workaround). Fix: merge all three counters plus the per-layer breakdown.
+
+4. **CLI verdict text hardcoded "0 call sites proven".** `src/cli/assurance.rs`'s `else if total_refined_fields > 0` fall-through branch ignored `agg_ref_proven` entirely. Fix: format that branch with the real counters — `{agg_ref_proven} proven, {agg_ref_runtime} runtime-checked`.
+
+After all four fixes, `mvl assurance examples/pong` reports "45 proven, 24 runtime-checked" and the by-layer breakdown lines up with the aggregate. Top-level totals, per-function rollup, and verdict text now agree.
 
 ## [1.3.3] - 2026-07-15
 

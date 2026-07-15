@@ -1609,9 +1609,11 @@ fn check_call_site(
         let layer = (1..6)
             .find(|&i| counts.by_layer[i] > layer_before[i])
             .unwrap_or(0);
+        // #1863 (part 2): counters are updated inside
+        // `check_arg_against_pred_counted` via `record()` — do not
+        // increment here or they will double-count.
         let proof_outcome = match &outcome {
             RefResult::Proven => {
-                counts.proven += 1;
                 counts.proof_log.push(ProofEntry {
                     file: String::new(), // filled by assurance aggregator
                     line: call_span.line,
@@ -1622,12 +1624,8 @@ fn check_call_site(
                 });
                 ProofOutcome::Proven { layer }
             }
-            RefResult::RuntimeCheck => {
-                counts.runtime_checked += 1;
-                ProofOutcome::RuntimeCheck
-            }
+            RefResult::RuntimeCheck => ProofOutcome::RuntimeCheck,
             RefResult::Failed { counterexample } => {
-                counts.failed += 1;
                 errors.push(CheckError::RefinementViolated {
                     pred: format!(
                         "argument to `{fn_name}` violates refinement `{}`",
@@ -1653,8 +1651,28 @@ fn check_call_site(
 // ── Argument checking ─────────────────────────────────────────────────────────
 
 fn record(n: usize, r: RefResult, counts: &mut RefinementCounts) -> RefResult {
-    if matches!(r, RefResult::Proven) {
-        counts.by_layer[n] += 1;
+    // #1863 (part 2): single source of truth for outcome counting.
+    // Every path through `check_arg_against_pred_counted` returns via `record`
+    // (Some(r) branches) or the trailing `RuntimeCheck` fallthrough (which
+    // this function's caller must also count — see the tail of
+    // `check_arg_against_pred_counted`). Prior to this fix, only `by_layer`
+    // was updated here and each of the ~11 higher-level call sites (call-site
+    // checks, requires, ensures, invariants, spawn/construct field checks)
+    // had to manually bump `proven` / `runtime_checked` / `failed` — nine of
+    // them didn't, so top-level Req 10 counters read 0 while `by_layer`
+    // summed to the real proof total. Centralising the update here makes it
+    // impossible to add a new caller that silently drops counts.
+    match &r {
+        RefResult::Proven => {
+            counts.by_layer[n] += 1;
+            counts.proven += 1;
+        }
+        RefResult::RuntimeCheck => {
+            counts.runtime_checked += 1;
+        }
+        RefResult::Failed { .. } => {
+            counts.failed += 1;
+        }
     }
     r
 }
@@ -1723,6 +1741,9 @@ pub(crate) fn check_arg_against_pred_counted(
             }
         }
     }
+    // No solver returned a verdict — the site is deferred to runtime.
+    // Count it before returning so callers see it in `runtime_checked`.
+    counts.runtime_checked += 1;
     RefResult::RuntimeCheck
 }
 
