@@ -1217,16 +1217,23 @@ const WASI_HELPERS: &str = r#"  (func $mvl_alloc (param $n i32) (result i32)
         (i32.store8 (local.get $cur) (i32.const 45))))
     (local.get $cur)
     (i32.sub (i32.add (local.get $buf) (i32.const 24)) (local.get $cur)))
+  ;; println / eprintln do TWO fd_write calls (one for the message, one
+  ;; for the newline). The intuitive "one call with a 2-entry iovec"
+  ;; shape silently drops iovec[1] on wasmtime 43.0.1 (verified against
+  ;; the hand-written spike/006 reference too). Two calls are portable
+  ;; and add one syscall — cheap tradeoff for a spike runtime.
   (func $mvl_println (param $ptr i32) (param $len i32)
     (i32.store (i32.const 0) (local.get $ptr))
     (i32.store (i32.const 4) (local.get $len))
-    (i32.store (i32.const 8) (i32.const 20))
-    (i32.store (i32.const 12) (i32.const 1))
-    (drop (call $fd_write (i32.const 1) (i32.const 0) (i32.const 2) (i32.const 16))))
+    (drop (call $fd_write (i32.const 1) (i32.const 0) (i32.const 1) (i32.const 8)))
+    (i32.store (i32.const 0) (i32.const 20))
+    (i32.store (i32.const 4) (i32.const 1))
+    (drop (call $fd_write (i32.const 1) (i32.const 0) (i32.const 1) (i32.const 8))))
   (func $mvl_eprintln (param $ptr i32) (param $len i32)
     (i32.store (i32.const 0) (local.get $ptr))
     (i32.store (i32.const 4) (local.get $len))
-    (i32.store (i32.const 8) (i32.const 20))
-    (i32.store (i32.const 12) (i32.const 1))
-    (drop (call $fd_write (i32.const 2) (i32.const 0) (i32.const 2) (i32.const 16))))
+    (drop (call $fd_write (i32.const 2) (i32.const 0) (i32.const 1) (i32.const 8)))
+    (i32.store (i32.const 0) (i32.const 20))
+    (i32.store (i32.const 4) (i32.const 1))
+    (drop (call $fd_write (i32.const 2) (i32.const 0) (i32.const 1) (i32.const 8))))
 "#;
