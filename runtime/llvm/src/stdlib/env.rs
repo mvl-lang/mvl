@@ -133,7 +133,7 @@ pub extern "C" fn _mvl_env_args_get(i: i64) -> *mut c_char {
 /// Return all command-line arguments as a `*mut MvlArray` of `*mut MvlString`.
 ///
 /// Includes the program name at index 0. Each element is a `Tainted[String]`.
-/// The LLVM caller is responsible for dropping the array via `mvl_array_drop`.
+/// The LLVM caller is responsible for dropping the array via `_mvl_array_drop`.
 #[no_mangle]
 #[allow(unsafe_code)]
 pub extern "C" fn _mvl_env_args() -> *mut crate::memory::MvlArray {

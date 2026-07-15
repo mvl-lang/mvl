@@ -186,7 +186,7 @@ pub unsafe extern "C" fn _mvl_regex_find(
 ///
 /// Each element of the returned array is a heap-allocated `*mut MvlMatch`;
 /// the caller is responsible for freeing every element with `_mvl_match_drop`
-/// and the array itself with `mvl_array_drop`.
+/// and the array itself with `_mvl_array_drop`.
 ///
 /// Returns an empty (zero-length) array if `handle` is null or there are no matches.
 #[no_mangle]

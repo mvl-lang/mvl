@@ -151,9 +151,9 @@ mod tests {
             let b = make_set(&[3, 4, 5, 6]);
             let r = _mvl_set_intersection(a, b);
             assert_eq!(read_set(r as *const MvlArray), vec![3, 4]);
-            crate::memory::mvl_array_drop(a);
-            crate::memory::mvl_array_drop(b);
-            crate::memory::mvl_array_drop(r);
+            crate::memory::_mvl_array_drop(a);
+            crate::memory::_mvl_array_drop(b);
+            crate::memory::_mvl_array_drop(r);
         }
     }
 
@@ -165,9 +165,9 @@ mod tests {
             let b = make_set(&[3, 4, 5, 6]);
             let r = _mvl_set_difference(a, b);
             assert_eq!(read_set(r as *const MvlArray), vec![1, 2]);
-            crate::memory::mvl_array_drop(a);
-            crate::memory::mvl_array_drop(b);
-            crate::memory::mvl_array_drop(r);
+            crate::memory::_mvl_array_drop(a);
+            crate::memory::_mvl_array_drop(b);
+            crate::memory::_mvl_array_drop(r);
         }
     }
 
@@ -179,9 +179,9 @@ mod tests {
             let b = make_set(&[3, 4, 5]);
             let r = _mvl_set_union(a, b);
             assert_eq!(read_set(r as *const MvlArray), vec![1, 2, 3, 4, 5]);
-            crate::memory::mvl_array_drop(a);
-            crate::memory::mvl_array_drop(b);
-            crate::memory::mvl_array_drop(r);
+            crate::memory::_mvl_array_drop(a);
+            crate::memory::_mvl_array_drop(b);
+            crate::memory::_mvl_array_drop(r);
         }
     }
 
@@ -197,11 +197,11 @@ mod tests {
             assert_eq!(read_set(rd as *const MvlArray), Vec::<i64>::new());
             let ru = _mvl_set_union(empty, full);
             assert_eq!(read_set(ru as *const MvlArray), vec![1, 2, 3]);
-            crate::memory::mvl_array_drop(empty);
-            crate::memory::mvl_array_drop(full);
-            crate::memory::mvl_array_drop(ri);
-            crate::memory::mvl_array_drop(rd);
-            crate::memory::mvl_array_drop(ru);
+            crate::memory::_mvl_array_drop(empty);
+            crate::memory::_mvl_array_drop(full);
+            crate::memory::_mvl_array_drop(ri);
+            crate::memory::_mvl_array_drop(rd);
+            crate::memory::_mvl_array_drop(ru);
         }
     }
 }

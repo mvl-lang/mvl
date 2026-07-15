@@ -4,9 +4,11 @@
 //! Prelude — language fundamentals needed in every generated MVL file.
 //!
 //! Every file emitted by the MVL transpiler starts with:
-//! ```rust
+//! ```text
 //! use mvl_runtime::prelude::*;
 //! ```
+//! (The transpiler renames this crate to `mvl_runtime` in the generated
+//! `Cargo.toml`; the illustrative snippet uses that name.)
 //!
 //! OS-specific modules (`std.io`, `std.env`, `std.process`, etc.) are NOT
 //! re-exported here. The transpiler emits explicit `use mvl_runtime::stdlib::X::*`

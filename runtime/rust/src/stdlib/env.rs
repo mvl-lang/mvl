@@ -288,6 +288,9 @@ mod tests {
 
     #[test]
     fn current_dir_matches_std_env() {
+        // Hold ENV_LOCK — a concurrent `chdir_changes_and_restores_directory`
+        // could otherwise flip cwd between the two reads.
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let expected = std::env::current_dir()
             .expect("std::env::current_dir must work in tests")
             .to_string_lossy()
