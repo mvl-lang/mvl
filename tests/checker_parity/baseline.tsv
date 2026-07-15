@@ -3,7 +3,7 @@ tests/corpus_old/00_intrinsics/01_arithmetic.mvl	ok
 tests/corpus_old/00_intrinsics/02_comparison.mvl	ok
 tests/corpus_old/00_intrinsics/03_logical.mvl	ok
 tests/corpus_old/00_intrinsics/04_bitwise.mvl	ok
-tests/corpus_old/00_intrinsics/05_random_bytes.mvl	fail	3	1
+tests/corpus_old/00_intrinsics/05_random_bytes.mvl	ok
 tests/corpus_old/00_intrinsics/06_env_args.mvl	fail	1	11
 tests/corpus_old/01_syntax/expressions.mvl	ok
 tests/corpus_old/01_syntax/keywords.mvl	ok
@@ -150,15 +150,15 @@ tests/corpus_old/13_stdlib/crypto_random_bytes_zero.mvl	ok
 tests/corpus_old/13_stdlib/crypto_sha256.mvl	ok
 tests/corpus_old/13_stdlib/env_basic.mvl	ok
 tests/corpus_old/13_stdlib/env_identity_llvm.mvl	ok
-tests/corpus_old/13_stdlib/env_signal_ignore.mvl	fail	2	1
-tests/corpus_old/13_stdlib/env_signal_on.mvl	fail	1	1
+tests/corpus_old/13_stdlib/env_signal_ignore.mvl	ok
+tests/corpus_old/13_stdlib/env_signal_on.mvl	ok
 tests/corpus_old/13_stdlib/eprint_stderr.mvl	ok
-tests/corpus_old/13_stdlib/file_io.mvl	fail	32	1
-tests/corpus_old/13_stdlib/io_basic.mvl	fail	9	1
+tests/corpus_old/13_stdlib/file_io.mvl	ok
+tests/corpus_old/13_stdlib/io_basic.mvl	ok
 tests/corpus_old/13_stdlib/json_log_imports.mvl	ok
 tests/corpus_old/13_stdlib/log_output.mvl	ok
 tests/corpus_old/13_stdlib/logging.mvl	ok
-tests/corpus_old/13_stdlib/process_echo.mvl	fail	2	1
+tests/corpus_old/13_stdlib/process_echo.mvl	ok
 tests/corpus_old/13_stdlib/random_choice.mvl	ok
 tests/corpus_old/13_stdlib/random_int.mvl	ok
 tests/corpus_old/13_stdlib/random_shuffle.mvl	ok
@@ -169,11 +169,11 @@ tests/corpus_old/13_stdlib/runtime_manifest_phase3.mvl	ok
 tests/corpus_old/13_stdlib/runtime_manifest_phase5.mvl	ok
 tests/corpus_old/13_stdlib/runtime_manifest_phase6.mvl	ok
 tests/corpus_old/13_stdlib/runtime_manifest_source_digest.mvl	ok
-tests/corpus_old/13_stdlib/temp_files.mvl	fail	19	1
+tests/corpus_old/13_stdlib/temp_files.mvl	ok
 tests/corpus_old/13_stdlib/time_format_datetime.mvl	ok
 tests/corpus_old/13_stdlib/time_format_instant.mvl	ok
 tests/corpus_old/13_stdlib/time_sleep.mvl	ok
-tests/corpus_old/13_stdlib/unix.mvl	fail	15	1
+tests/corpus_old/13_stdlib/unix.mvl	ok
 tests/corpus_old/13_stdlib/uuid_v4_format.mvl	ok
 tests/corpus_old/14_linting/clean_program.mvl	ok
 tests/corpus_old/14_linting/complexity_demo.mvl	ok

@@ -101,7 +101,15 @@ Use this path if you're working *on* the compiler, not just *with* it.
 #### Prerequisites
 
 - [Rust](https://rustup.rs/) (stable toolchain)
+- [Z3](https://github.com/Z3Prover/z3) (SMT solver — the `z3-sys` crate links against it and needs its headers)
 - [uv](https://github.com/astral-sh/uv) (for mkdocs documentation only)
+
+Install Z3 via your package manager, e.g.:
+
+```bash
+brew install z3           # macOS (Homebrew)
+sudo apt install z3 libz3-dev   # Debian/Ubuntu
+```
 
 #### Setup
 
@@ -123,11 +131,18 @@ No Python dependencies — hooks are plain bash scripts.
 
 ```bash
 make build    # build the MVL compiler
+make install  # install compiler + stdlib + runtimes from local source (see note below)
 make test     # run all suites: unit, corpus, stdlib, transpiler, LLVM
 make lint     # cargo clippy
 make format   # cargo fmt
 make help     # show all targets grouped by section
 ```
+
+The corpus and stdlib suites run compiled programs, which need the stdlib and
+runtime crates installed. Run `make install` once first — it builds a release
+compiler and installs all four artifacts (`mvl`, stdlib, Rust runtime, LLVM
+runtime) from your local checkout. This is the from-source equivalent of
+`mvl self install`, which downloads a published release binary instead.
 
 #### Stdlib profiles
 
