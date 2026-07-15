@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Removed — #1870 `tools/lsp_server.py` moved to `mvl-lang/mvl-spec`
+
+The 188-line Phase 1 LSP server had zero dependencies on the compiler — it read
+only the tree-sitter grammar, which already lives in `mvl-spec`. It is now
+published from that repo as [`mvl-lsp`](https://pypi.org/project/mvl-lsp/) (see
+[mvl-lang/mvl-spec#28](https://github.com/mvl-lang/mvl-spec/issues/28)) and
+installable via `pip install mvl-lsp`. Removed alongside its dedicated
+`tools/Makefile` and `tools/requirements.txt`. Follows the same migration pattern
+as the tree-sitter grammar and editor extensions in #1813.
+
 ## [1.3.5] - 2026-07-15
 
 ### Added — #1867 native unit-test targets for rust + llvm runtimes

@@ -1,2 +1,0 @@
-pygls>=1.3
-tree-sitter>=0.21,<0.24
