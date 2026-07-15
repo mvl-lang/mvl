@@ -29,6 +29,7 @@
 //! - `_mvl_string_substring` — byte-slice window into a new `MvlString`
 //! - `_mvl_string_to_upper` / `_mvl_string_to_lower` — ASCII case fold
 //! - `_mvl_string_trim` — strip leading / trailing ASCII whitespace
+//! - `_mvl_string_replace` — non-overlapping byte-level replace-all
 //!
 //! Drop emission on the emitter side is best-effort — at every function's
 //! implicit-return point, the emitter drops each `__ms_*` temp local it
@@ -317,6 +318,42 @@ pub unsafe extern "C" fn _mvl_string_to_lower(ptr: i32, len: i32) -> i32 {
     for &b in s {
         out.push(b.to_ascii_lowercase());
     }
+    alloc_mvl_string(&out)
+}
+
+/// `s.replace(from, to)` — replace every non-overlapping occurrence of
+/// `from` in `s` with `to`. Byte-level match; `from == ""` returns `s`
+/// unchanged (Rust's `str::replace` on empty needle inserts `to`
+/// between every char, which is rarely what MVL callers want and
+/// diverges from `runtime/llvm/`'s `str::replace` in practice — matched
+/// for MVL, see comment in `find_bytes`).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_string_replace(
+    sp: i32,
+    sl: i32,
+    fp: i32,
+    fl: i32,
+    tp: i32,
+    tl: i32,
+) -> i32 {
+    let s = unsafe { slice_or_empty(sp, sl) };
+    let from = unsafe { slice_or_empty(fp, fl) };
+    let to = unsafe { slice_or_empty(tp, tl) };
+    if from.is_empty() {
+        return alloc_mvl_string(s);
+    }
+    let mut out = Vec::with_capacity(s.len());
+    let mut i = 0;
+    while i + from.len() <= s.len() {
+        if &s[i..i + from.len()] == from {
+            out.extend_from_slice(to);
+            i += from.len();
+        } else {
+            out.push(s[i]);
+            i += 1;
+        }
+    }
+    out.extend_from_slice(&s[i..]);
     alloc_mvl_string(&out)
 }
 
@@ -796,6 +833,85 @@ mod tests {
         // *not* included; adding it here would fail.
         let s = b"\t\n\r hello\x0c ";
         let ptr = unsafe { _mvl_string_trim(addr(s), s.len() as i32) };
+        assert_eq!(unsafe { concat_result(ptr) }, b"hello");
+        unsafe { _mvl_string_drop(ptr) };
+    }
+
+    // ── replace ────
+    #[test]
+    fn replace_single_occurrence() {
+        let s = b"hello world";
+        let f = b"world";
+        let t = b"there";
+        let ptr = unsafe {
+            _mvl_string_replace(
+                addr(s),
+                s.len() as i32,
+                addr(f),
+                f.len() as i32,
+                addr(t),
+                t.len() as i32,
+            )
+        };
+        assert_eq!(unsafe { concat_result(ptr) }, b"hello there");
+        unsafe { _mvl_string_drop(ptr) };
+    }
+
+    #[test]
+    fn replace_multiple_occurrences() {
+        let s = b"aXbXc";
+        let f = b"X";
+        let t = b"YY";
+        let ptr = unsafe {
+            _mvl_string_replace(
+                addr(s),
+                s.len() as i32,
+                addr(f),
+                f.len() as i32,
+                addr(t),
+                t.len() as i32,
+            )
+        };
+        assert_eq!(unsafe { concat_result(ptr) }, b"aYYbYYc");
+        unsafe { _mvl_string_drop(ptr) };
+    }
+
+    #[test]
+    fn replace_no_match() {
+        let s = b"hello";
+        let f = b"xyz";
+        let t = b"???";
+        let ptr = unsafe {
+            _mvl_string_replace(
+                addr(s),
+                s.len() as i32,
+                addr(f),
+                f.len() as i32,
+                addr(t),
+                t.len() as i32,
+            )
+        };
+        assert_eq!(unsafe { concat_result(ptr) }, b"hello");
+        unsafe { _mvl_string_drop(ptr) };
+    }
+
+    #[test]
+    fn replace_with_empty() {
+        // Removing substring by replacing with "".
+        let s = b"hello world";
+        let f = b" world";
+        let ptr =
+            unsafe { _mvl_string_replace(addr(s), s.len() as i32, addr(f), f.len() as i32, 0, 0) };
+        assert_eq!(unsafe { concat_result(ptr) }, b"hello");
+        unsafe { _mvl_string_drop(ptr) };
+    }
+
+    #[test]
+    fn replace_empty_needle_returns_unchanged() {
+        let s = b"hello";
+        let t = b"XYZ";
+        let ptr =
+            unsafe { _mvl_string_replace(addr(s), s.len() as i32, 0, 0, addr(t), t.len() as i32) };
         assert_eq!(unsafe { concat_result(ptr) }, b"hello");
         unsafe { _mvl_string_drop(ptr) };
     }

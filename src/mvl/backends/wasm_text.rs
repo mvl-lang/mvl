@@ -150,6 +150,11 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
     ("_mvl_string_to_upper", "(param i32 i32) (result i32)"),
     ("_mvl_string_to_lower", "(param i32 i32) (result i32)"),
     ("_mvl_string_trim", "(param i32 i32) (result i32)"),
+    // `.replace(from, to)` — three (ptr, len) pairs in, `*MvlString` out.
+    (
+        "_mvl_string_replace",
+        "(param i32 i32 i32 i32 i32 i32) (result i32)",
+    ),
 ];
 
 /// Layout offsets on `MvlString` — mirrors `runtime/wasm/src/lib.rs` /
@@ -446,7 +451,7 @@ fn collect_locals_expr(expr: &TirExpr, locals: &mut Vec<(String, Ty)>) {
             if matches!(&receiver.ty, Ty::String)
                 && matches!(
                     method.as_str(),
-                    "concat" | "substring" | "to_upper" | "to_lower" | "trim"
+                    "concat" | "substring" | "to_upper" | "to_lower" | "trim" | "replace"
                 )
             {
                 // Ty::Bool → i32 in `wasm_ty` — reuse for the pointer
@@ -681,7 +686,7 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
         } if matches!(&receiver.ty, Ty::String)
             && matches!(
                 method.as_str(),
-                "concat" | "substring" | "to_upper" | "to_lower" | "trim"
+                "concat" | "substring" | "to_upper" | "to_lower" | "trim" | "replace"
             ) =>
         {
             ctx.needs_runtime.set(true);
