@@ -459,12 +459,24 @@ test-runtime-rust: ## Unit-test runtime/rust/ crate natively (peer of test-runti
 test-runtime-llvm: ## Unit-test runtime/llvm/ crate natively (peer of test-runtime-wasm)
 	cargo test -p mvl_runtime_llvm
 
-test-rust-wasm: build ## rust/wasm — new corpus through the WAT emitter (via mvlr, see #1818)
+# WASM cases the backend actually handles — scoped to what runs end-to-end
+# without a `runtime/wasm/` crate (Phase 2 of epic #1817). Everything else
+# in `tests/corpus/` needs collections, MvlString ops, tagged-union enum
+# payloads, closures, or generics-mono — all of which land in later phases.
+# Grow this list as the emitter's coverage grows.
+WASM_CORPUS := \
+	tests/corpus/00_smoke \
+	tests/corpus/01_expressions \
+	tests/corpus/02_control_flow \
+	tests/corpus/03_functions/basic_test.mvl \
+	tests/corpus/04_types/enum_test.mvl
+
+test-rust-wasm: build ## rust/wasm — WASM-supported corpus subset (no runtime yet — #1818)
 	@command -v wasm-tools > /dev/null 2>&1 || { \
 	  printf "  \033[31m✗  wasm-tools not installed — 'cargo install wasm-tools'\033[0m\n"; exit 1; }
 	@command -v wasmtime > /dev/null 2>&1 || { \
 	  printf "  \033[31m✗  wasmtime not installed — see https://wasmtime.dev/\033[0m\n"; exit 1; }
-	$(MVLR) --mvl=$(MVL) --compiler=rust --backend=wasm tests/corpus/
+	$(MVLR) --mvl=$(MVL) --compiler=rust --backend=wasm $(WASM_CORPUS)
 
 test-examples: build ## Run `make test` for every example subdirectory
 	@examples/test-all.sh

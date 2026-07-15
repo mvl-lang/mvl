@@ -35,7 +35,7 @@ POSITIONAL=()
 
 usage() {
     cat >&2 <<'EOF'
-Usage: mvlr [OPTIONS] <file.mvl | dir>
+Usage: mvlr [OPTIONS] <file.mvl | dir> [file.mvl | dir …]
 
 Options:
   --compiler=<rust|mvl>       which compiler to drive         (default: rust)
@@ -86,7 +86,6 @@ if [ "${#POSITIONAL[@]}" -eq 0 ]; then
     exit 2
 fi
 
-INPUT="${POSITIONAL[0]}"
 # Resolve `mvl` binary with this precedence:
 #   1. --mvl=<path>      (explicit flag, used by the Makefile for dev builds)
 #   2. $MVL env var      (explicit override)
@@ -145,10 +144,12 @@ if [ ! -x "$MVL" ]; then
     exit 1
 fi
 
-if [ ! -e "$INPUT" ]; then
-    echo "mvlr: input not found: $INPUT" >&2
-    exit 1
-fi
+for INPUT in "${POSITIONAL[@]}"; do
+    if [ ! -e "$INPUT" ]; then
+        echo "mvlr: input not found: $INPUT" >&2
+        exit 1
+    fi
+done
 
 # ── Synthesize a fn-main driver from a *_test.mvl file ────────────────────
 # Emits a marker line to stderr before each test call so failures can be
@@ -333,25 +334,32 @@ run_dir_iter() {
             local last_mark
             # `|| true` — otherwise `pipefail` + `set -e` kills the whole
             # loop when the pipe returns 1 (no markers found, e.g. the
-            # binary trapped before printing any). Falls into the "before
-            # any test ran" branch below, which is exactly right.
+            # binary trapped before printing any).
             last_mark=$(grep -oE "MVLR_MARK:[a-z_0-9]+" "$tmpout" | tail -1 | cut -d: -f2 || true)
             local failed_seen=0
-            while IFS= read -r tn; do
-                [ -z "$tn" ] && continue
-                if [ "$failed_seen" = "1" ]; then
-                    # After the failure, nothing else ran — don't count.
-                    continue
-                fi
-                if [ -n "$last_mark" ] && [ "$tn" = "$last_mark" ]; then
-                    printf "  $FAIL  %s::%s\n" "$short" "$tn"
-                    fail=$((fail + 1))
-                    failed_seen=1
-                else
-                    [ "$QUIET" = "1" ] || printf "  $OK  %s::%s\n" "$short" "$tn"
-                    pass=$((pass + 1))
-                fi
-            done <<< "$tests"
+            # A file with no MVLR_MARK output at all didn't run any test —
+            # the pipeline died before the first eprintln marker (usually a
+            # build / assemble failure). Skip the per-test attribution loop
+            # and go straight to the file-level "before any test ran" line
+            # below. Otherwise every test in the file would be silently
+            # counted as pass (via the `else` branch), inflating the count.
+            if [ -n "$last_mark" ]; then
+                while IFS= read -r tn; do
+                    [ -z "$tn" ] && continue
+                    if [ "$failed_seen" = "1" ]; then
+                        # After the failure, nothing else ran — don't count.
+                        continue
+                    fi
+                    if [ "$tn" = "$last_mark" ]; then
+                        printf "  $FAIL  %s::%s\n" "$short" "$tn"
+                        fail=$((fail + 1))
+                        failed_seen=1
+                    else
+                        [ "$QUIET" = "1" ] || printf "  $OK  %s::%s\n" "$short" "$tn"
+                        pass=$((pass + 1))
+                    fi
+                done <<< "$tests"
+            fi
             # If no marker matched (e.g. build/link failure before any
             # test ran), attribute the failure to the file itself.
             if [ "$failed_seen" = "0" ]; then
@@ -408,16 +416,19 @@ case "$COMBO" in
         ;;
 esac
 
-if [ -d "$INPUT" ]; then
-    case "$COMBO" in
-        rust/rust)
-            # Batched path — mvl test bundles the whole tree.
-            run_rust_rust_dir "$INPUT"
-            ;;
-        *)
-            run_dir_iter "$INPUT" "$COMBO"
-            ;;
-    esac
-else
-    run_file "$COMBO" "$INPUT"
-fi
+# Multi-input dispatch — iterate every positional argument. Directories
+# use the per-file loop (run_dir_iter for backends without native batching,
+# run_rust_rust_dir for the batched rust/rust path). Files go through
+# run_file directly. Any non-zero result flips the aggregate exit code.
+rc=0
+for INPUT in "${POSITIONAL[@]}"; do
+    if [ -d "$INPUT" ]; then
+        case "$COMBO" in
+            rust/rust) run_rust_rust_dir "$INPUT" || rc=1 ;;
+            *)         run_dir_iter "$INPUT" "$COMBO" || rc=1 ;;
+        esac
+    else
+        run_file "$COMBO" "$INPUT" || rc=1
+    fi
+done
+exit $rc
