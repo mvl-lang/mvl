@@ -38,8 +38,19 @@ doctor: ## Check that all dev tools are available
 	check node          "https://nodejs.org"; \
 	check python3       "required for make assurance"; \
 	check /opt/homebrew/opt/llvm/bin/lli "brew install llvm  (required for LLVM backend)"; \
-	check wasm-tools    "cargo install wasm-tools  (required for WASM backend spike)"; \
-	check wasmtime      "https://wasmtime.dev/  (required for WASM backend spike)"; \
+	check wasm-tools    "cargo install wasm-tools  (required for WASM backend)"; \
+	check wasmtime      "https://wasmtime.dev/  (required for WASM backend)"; \
+	if rustup target list --installed 2>/dev/null | grep -q '^wasm32-wasip1$$'; then \
+	  printf "  $$OK wasm32-wasip1 target\n"; \
+	else \
+	  printf "  $$FAIL wasm32-wasip1 target  (run: rustup target add wasm32-wasip1)\n"; \
+	fi; \
+	if [ -f target/wasm32-wasip1/debug/mvl_runtime_wasm.wasm ] \
+	   || [ -f target/wasm32-wasip1/release/mvl_runtime_wasm.wasm ]; then \
+	  printf "  $$OK runtime/wasm/ built  (target/wasm32-wasip1/…/mvl_runtime_wasm.wasm)\n"; \
+	else \
+	  printf "  $$WARN runtime/wasm/ not built  (run: make build-runtime-wasm)\n"; \
+	fi; \
 	WANT=$$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)"/\1/'); \
 	GOT=$$(mvl --version 2>/dev/null | awk '{print $$2}'); \
 	if [ -z "$$GOT" ]; then \
