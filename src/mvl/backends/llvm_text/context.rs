@@ -70,6 +70,17 @@ pub(super) struct ModuleCtx {
     /// Named fn-type aliases: `type Dispatcher = fn(...) -> ...`.
     pub fn_aliases: HashMap<String, TypeExpr>,
 
+    /// Named non-function type aliases: `type Port = Int where self >= 0` etc.
+    /// Populated in the first pass by `register_type_decl_tir`. Both
+    /// `llvm_ty_ctx` variants (TypeExpr and Ty) consult this before falling
+    /// through to the "ptr default" for unknown base names, so a refined
+    /// alias in a fn signature lowers to the correct scalar width (#1851).
+    ///
+    /// Stored as `Ty` so the TIR-typed emitter (which is the primary path
+    /// for fn signatures) can resolve without a TypeExpr round-trip. The
+    /// TypeExpr path converts on lookup.
+    pub type_aliases: HashMap<String, crate::mvl::checker::types::Ty>,
+
     // ── Actor state (#1149) ───────────────────────────────────────────────
     /// Actor declarations keyed by actor type name (populated in first pass).
     pub tir_actor_decls: HashMap<String, crate::mvl::ir::TirActorDecl>,
@@ -131,6 +142,7 @@ impl ModuleCtx {
             lambda_counter: 0,
             closure_type_emitted: false,
             fn_aliases: HashMap::new(),
+            type_aliases: HashMap::new(),
             tir_actor_decls: HashMap::new(),
             actor_runtime_declared: false,
             actor_emitted: HashSet::new(),

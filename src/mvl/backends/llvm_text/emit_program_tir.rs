@@ -264,6 +264,15 @@ impl TextEmitter {
                 let inner_te = ty_to_type_expr_or_unit(inner);
                 if matches!(inner_te, TypeExpr::Fn { .. }) {
                     self.module.fn_aliases.insert(td.name.clone(), inner_te);
+                } else {
+                    // #1851: register non-fn aliases (`type Port = Int where ...`,
+                    // `type ShortString = String where len(self) < 256`) so
+                    // both llvm_ty_ctx variants can resolve the alias name
+                    // back to the underlying scalar in fn signatures and IR
+                    // emission.
+                    self.module
+                        .type_aliases
+                        .insert(td.name.clone(), inner.clone());
                 }
             }
         }

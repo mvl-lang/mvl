@@ -13,7 +13,12 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const IMPLICIT_PRELUDE_STEMS: &[&str] = &["core", "strings", "lists", "effects", "io"];
+// `collections` joins the implicit prelude in v1.3.2 so `Map::new()` and
+// `Set::new()` resolve at first use without an explicit `use std.collections.{Map}`.
+// #1842 was the "why does Map::new() emit a raw @Map::new symbol" report — the
+// answer was that the loader never visited collections.mvl without the `use`.
+const IMPLICIT_PRELUDE_STEMS: &[&str] =
+    &["core", "strings", "lists", "collections", "effects", "io"];
 
 /// Format an error message with source line and caret indicator.
 fn format_error_with_source(src: &str, span: Span, message: &str) -> String {
@@ -458,7 +463,13 @@ pub fn find_module_file(entry_dir: &Path, mod_name: &str) -> Option<PathBuf> {
 /// Every compile path loads these so their builtins and the effect hierarchy
 /// (`Log > Clock`, `IO > Log + …`) are always visible.
 pub fn load_implicit_prelude() -> Vec<Program> {
-    const IMPLICIT: &[&str] = &["core.mvl", "strings.mvl", "lists.mvl", "effects.mvl"];
+    const IMPLICIT: &[&str] = &[
+        "core.mvl",
+        "strings.mvl",
+        "lists.mvl",
+        "collections.mvl",
+        "effects.mvl",
+    ];
     let mut progs = Vec::new();
     for name in IMPLICIT {
         let content = stdlib::stdlib_content(name).unwrap_or_else(|| {

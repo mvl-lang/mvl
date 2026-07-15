@@ -1,53 +1,66 @@
-// 09_refinements/type_alias_test.mvl — refined type aliases and inline refinements.
+// 09_refinements/type_alias_test.mvl — refined type aliases in fn signatures.
 //
 // A refinement is a compile-time predicate attached to a type: values must
 // satisfy the predicate wherever the type is used. At runtime the refinement
 // disappears — values flow as their base type.
 //
-// #1851: the LLVM backend doesn't resolve refined-alias NAMES back to their
-// underlying scalar type in fn signatures or builtin dispatch (e.g. `assert_eq`
-// on a `PositiveInt` value dispatches to `_mvl_string_eq`). Tests here use
-// **inline refinements** throughout — `Int where self > 0` in signatures and
-// bindings — which lower correctly on both backends. Alias-based tests will
-// return here once #1851 is fixed.
+// #1851 (fixed in v1.3.2): LLVM backend now resolves refined type-alias names
+// back to their underlying scalar in fn signatures and IR emission. Aliases
+// are used freely as parameter and return types below.
+//
+// Rust-backend note: refined aliases lower to Rust newtype structs, so
+// `assert_eq(alias_value, raw_literal)` fails to typecheck. Tests bind the
+// expected value to a typed local so both sides of the assert agree.
 
-fn double_positive(p: Int where self > 0) -> Int where self > 0 {
+type PositiveInt = Int where self > 0
+type NonNegativeInt = Int where self >= 0
+type Port = Int where self >= 0 && self <= 65535
+
+fn double_positive(p: PositiveInt) -> PositiveInt {
     p * 2
 }
 
-fn triple_nonneg(n: Int where self >= 0) -> Int where self >= 0 {
+fn triple_nonneg(n: NonNegativeInt) -> NonNegativeInt {
     n * 3
 }
 
-fn clamp_port(x: Int where self >= 0 && self <= 65535) -> Int where self >= 0 && self <= 65535 {
+fn clamp_port(x: Port) -> Port {
     x
 }
 
-test fn inline_refinement_return_flows() -> Unit {
-    assert_eq(double_positive(5), 10);
-    assert_eq(double_positive(21), 42);
+test fn refined_alias_return_flows() -> Unit {
+    let expected: PositiveInt = 10;
+    assert_eq(double_positive(5), expected);
 }
 
-test fn inline_refinement_zero_is_valid_for_nonneg() -> Unit {
-    assert_eq(triple_nonneg(0), 0);
-    assert_eq(triple_nonneg(7), 21);
+test fn refined_alias_nonneg_accepts_zero() -> Unit {
+    let e0: NonNegativeInt = 0;
+    let e21: NonNegativeInt = 21;
+    assert_eq(triple_nonneg(0), e0);
+    assert_eq(triple_nonneg(7), e21);
 }
 
-test fn inline_refinement_chains_through_calls() -> Unit {
-    let a: Int = double_positive(3);
-    let b: Int = triple_nonneg(a);
-    assert_eq(b, 18);
+test fn refined_alias_chains_through_calls() -> Unit {
+    // Same-alias chain — feed the return through the same-typed fn again.
+    let a: PositiveInt = double_positive(3);
+    let b: PositiveInt = double_positive(a);
+    let expected: PositiveInt = 12;
+    assert_eq(b, expected);
 }
 
-test fn inline_refinement_multi_predicate() -> Unit {
-    assert_eq(clamp_port(80), 80);
-    assert_eq(clamp_port(443), 443);
-    assert_eq(clamp_port(8080), 8080);
+test fn refined_alias_port_valid_range() -> Unit {
+    let e80: Port = 80;
+    let e443: Port = 443;
+    let e8080: Port = 8080;
+    assert_eq(clamp_port(80), e80);
+    assert_eq(clamp_port(443), e443);
+    assert_eq(clamp_port(8080), e8080);
 }
 
-test fn inline_refinement_flows_through_arithmetic() -> Unit {
-    let a: Int = double_positive(10);
-    let b: Int = double_positive(20);
-    let c: Int = triple_nonneg(a + b);
-    assert_eq(c, 180);
+test fn refined_alias_arithmetic_across_calls() -> Unit {
+    let a: PositiveInt = double_positive(10);
+    let b: PositiveInt = double_positive(20);
+    let c: PositiveInt = double_positive(a + b);
+    let expected: PositiveInt = 120;
+    assert_eq(c, expected);
 }

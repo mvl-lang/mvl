@@ -123,6 +123,19 @@ impl RustEmitter {
         }
     }
 
+    /// #1856: determine whether a field of type `ty` needs an explicit
+    /// `.clone()` in tail/argument positions on the Rust backend. Non-Copy
+    /// heap types (String, List, Map, Set — and their labeled/refined
+    /// wrappings) need it; primitives and references don't.
+    fn field_type_needs_clone(ty: &crate::mvl::checker::types::Ty) -> bool {
+        use crate::mvl::checker::types::Ty;
+        match ty {
+            Ty::String | Ty::List(_) | Ty::Array(_, _) | Ty::Set(_) | Ty::Map(_, _) => true,
+            Ty::Labeled(_, inner) | Ty::Refined(inner, _) => Self::field_type_needs_clone(inner),
+            _ => false,
+        }
+    }
+
     /// Emit a method call receiver for a **user-defined** method (a
     /// generic fallthrough call where MVL doesn't have a special-case
     /// stdlib dispatch).  Adds `.clone()` on non-last-use `Var` receivers
@@ -240,6 +253,21 @@ impl RustEmitter {
                 self.emit_expr(inner);
                 self.push(".");
                 self.push(field);
+                // #1856: MVL uses value semantics, so reading a heap-typed
+                // field is conceptually a clone. Rust's borrow checker
+                // requires the emitter to spell this out: if the receiver is
+                // borrowed (bare `Var` implies `&self` or a `&T` param) and
+                // the field type is non-Copy (String, List, Map, Set),
+                // append `.clone()` so `E0507 cannot move out of ...` doesn't
+                // trip in tail-return / argument-passing positions. Method
+                // receivers already get their own clone via
+                // `emit_user_method_receiver` — skip double-clone by not
+                // recursing into further FieldAccess nesting.
+                if matches!(inner.kind, TirExprKind::Var(_))
+                    && Self::field_type_needs_clone(&expr.ty)
+                {
+                    self.push(".clone()");
+                }
             }
             TirExprKind::MethodCall {
                 receiver,

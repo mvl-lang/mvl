@@ -39,9 +39,21 @@ actor Flag {
     }
 }
 
-// String-field actor test dropped pending #1856 (Rust transpiler cannot
-// move String out of &self without .clone()). LLVM handles it fine; the
-// Rust backend rejects `pub test fn read() -> String { self.text }`.
+// #1856 (fixed in v1.3.2): Rust transpiler now inserts `.clone()` when a
+// bare-Var receiver's field access is a non-Copy heap type in
+// tail/argument position. String-field actor state re-enabled.
+
+actor Label {
+    text: String
+
+    pub fn write(val s: String) {
+        self.text = s
+    }
+
+    pub test fn read() -> String {
+        self.text
+    }
+}
 
 test fn state_int_deposit_then_withdraw() -> Unit ! Spawn + Send {
     let b: Bank = actor Bank { balance: 0 };
@@ -76,4 +88,12 @@ test fn state_survives_across_test_fn_scope() -> Unit ! Spawn + Send {
     // Interleaved verify — both actors still hold their state.
     assert_eq(b.get_balance(), 1500);
     assert_eq(f.is_on(), true);
+}
+
+test fn state_string_write_and_read() -> Unit ! Spawn + Send {
+    let l: Label = actor Label { text: "" };
+    l.write("hello");
+    assert_eq(l.read(), "hello");
+    l.write("world");
+    assert_eq(l.read(), "world");
 }
