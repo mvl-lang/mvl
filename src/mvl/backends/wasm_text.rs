@@ -108,6 +108,33 @@ impl Ctx<'_> {
 /// scratch region (iovec pair + nwritten slot + newline byte).
 const LITERAL_BASE: u32 = 32;
 
+/// Runtime symbols the emitter can dispatch to. Every entry produces one
+/// `(import "runtime" ...)` declaration when `Ctx::needs_runtime` is set.
+/// Symbol names match `runtime/wasm/src/lib.rs`; signatures are WAT
+/// param/result clauses.
+///
+/// Not all imports are used by every module — WASM is fine with unused
+/// imports, so listing them all up front is simpler than tracking which
+/// symbols were touched during emission.
+const RUNTIME_IMPORTS: &[(&str, &str)] = &[
+    ("_mvl_string_eq", "(param i32 i32 i32 i32) (result i32)"),
+    ("_mvl_string_len", "(param i32 i32) (result i64)"),
+    ("_mvl_string_is_empty", "(param i32 i32) (result i32)"),
+    (
+        "_mvl_string_contains",
+        "(param i32 i32 i32 i32) (result i32)",
+    ),
+    (
+        "_mvl_string_starts_with",
+        "(param i32 i32 i32 i32) (result i32)",
+    ),
+    (
+        "_mvl_string_ends_with",
+        "(param i32 i32 i32 i32) (result i32)",
+    ),
+    ("_mvl_string_find", "(param i32 i32 i32 i32) (result i64)"),
+];
+
 impl Backend for WasmTextCompiler {
     fn name(&self) -> &'static str {
         "wasm"
@@ -153,17 +180,18 @@ impl Backend for WasmTextCompiler {
 
         let mut out = String::from("(module\n");
         if ctx.needs_runtime.get() {
-            // runtime.wasm exports its memory and `_mvl_string_eq`; the
-            // user module imports both. Runtime data lives at 1 MB+, ours
-            // at low offsets, so no address conflicts. We re-export memory
-            // under the same name because WASI command modules must have a
-            // `memory` export (wasmtime enforces this on `_start` modules).
+            // runtime.wasm exports its memory and the `_mvl_string_*` ops;
+            // the user module imports both. Runtime data lives at 1 MB+,
+            // ours at low offsets, so no address conflicts. We re-export
+            // memory under the same name because WASI command modules
+            // must have a `memory` export (wasmtime enforces this).
             out.push_str("  (import \"runtime\" \"memory\" (memory 0))\n");
             out.push_str("  (export \"memory\" (memory 0))\n");
-            out.push_str(
-                "  (import \"runtime\" \"_mvl_string_eq\"\n    \
-                 (func $_mvl_string_eq (param i32 i32 i32 i32) (result i32)))\n",
-            );
+            for (name, signature) in RUNTIME_IMPORTS {
+                out.push_str(&format!(
+                    "  (import \"runtime\" \"{name}\"\n    (func ${name} {signature}))\n"
+                ));
+            }
             if needs_wasi {
                 // WASI blob but without its own `(memory 1) (export "memory")`
                 // — memory is imported above.
@@ -557,6 +585,29 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
                     out.push_str(&format!("    ;; unsupported to_string on {other:?}\n"));
                 }
             }
+        }
+        // String query methods — route through `runtime/wasm/` ops. Receiver
+        // leaves `(ptr, len)` on the stack; unary methods (`.len`,
+        // `.is_empty`) leave that plus nothing else. Binary methods
+        // (`.contains`, `.starts_with`, `.ends_with`, `.find`) then eval
+        // the arg to append `(np, nl)`. Runtime fn pops all four i32 args
+        // and returns the result.
+        TirExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } if matches!(&receiver.ty, Ty::String)
+            && matches!(
+                method.as_str(),
+                "len" | "is_empty" | "contains" | "starts_with" | "ends_with" | "find"
+            ) =>
+        {
+            ctx.needs_runtime.set(true);
+            emit_expr(out, receiver, ctx);
+            for a in args {
+                emit_expr(out, a, ctx);
+            }
+            out.push_str(&format!("    call $_mvl_string_{method}\n"));
         }
         TirExprKind::Block(block) => emit_block(out, block, ctx),
         // `match scrutinee { pat1 => arm1, pat2 => arm2, _ => default }` —
