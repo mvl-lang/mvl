@@ -14,6 +14,13 @@
 # force=false: only applied when not already set in the environment.
 # macOS arm64 homebrew default; Linux CI must set Z3_SYS_Z3_HEADER=/usr/include/z3.h
 # to prevent this macOS path from being used on the Linux runner.
+# `cargo test --target wasm32-wasip1` executes tests via wasmtime — used
+# by `make test-runtime-wasm` to run `runtime/wasm/`'s unit tests in the
+# same environment the emitter targets (i32 pointers, WASI syscalls).
+# Otherwise host testing miscompiles 64-bit host pointers into i32.
+[target.wasm32-wasip1]
+runner = "wasmtime run --dir=. --"
+
 [env]
 Z3_SYS_Z3_HEADER = { value = "/opt/homebrew/include/z3.h", force = false }
 # macOS arm64 homebrew: z3 lib directory for the linker.

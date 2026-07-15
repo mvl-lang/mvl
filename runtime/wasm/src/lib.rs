@@ -63,16 +63,68 @@ pub unsafe extern "C" fn _mvl_string_eq(ptr1: i32, len1: i32, ptr2: i32, len2: i
     }
 }
 
-// ── Host tests ────────────────────────────────────────────────────────────
+// ── Tests ────────────────────────────────────────────────────────────────
 //
-// End-to-end coverage lives in the WASM corpus (mvlr → wasmtime →
-// runtime.wasm). We can't unit-test `_mvl_string_eq` on the host because
-// its parameters are i32 (WASM linear-memory offsets), which don't map to
-// host 64-bit pointers. `#[cfg(target_arch = "wasm32")]` would gate
-// wasm-only host tests but there's nothing meaningful to check that the
-// corpus doesn't already exercise.
+// Compiled + run under wasm32-wasip1 so the i32-pointer ABI works as it
+// does in production. `.cargo/config.toml` sets `runner = wasmtime run`
+// for this target so `cargo test --target wasm32-wasip1 -p mvl_runtime_wasm`
+// executes the test binaries under wasmtime.
 //
-// The zero-length short-circuit below is the one branch worth calling
-// out — it's why we can't just blindly `from_raw_parts` on the incoming
-// offsets, because the emitter never allocates a data-section byte for
-// `""`, so `ptr` may be 0.
+// Host testing wouldn't work — WASM linear-memory offsets are i32, and
+// truncating a 64-bit host pointer via `as i32` produces a bogus address
+// that `slice::from_raw_parts` chokes on.
+
+#[cfg(all(test, target_arch = "wasm32"))]
+mod tests {
+    use super::*;
+
+    // Address any static byte string via its guest-memory offset — same
+    // shape the emitter uses for string literals.
+    fn addr(s: &'static [u8]) -> i32 {
+        s.as_ptr() as usize as i32
+    }
+
+    #[test]
+    fn eq_equal_strings() {
+        let a = b"hello";
+        let b = b"hello";
+        assert_eq!(
+            unsafe { _mvl_string_eq(addr(a), a.len() as i32, addr(b), b.len() as i32) },
+            1
+        );
+    }
+
+    #[test]
+    fn eq_different_content() {
+        let a = b"hello";
+        let b = b"world";
+        assert_eq!(
+            unsafe { _mvl_string_eq(addr(a), a.len() as i32, addr(b), b.len() as i32) },
+            0
+        );
+    }
+
+    #[test]
+    fn eq_different_lengths() {
+        let a = b"hello";
+        let b = b"hell";
+        assert_eq!(
+            unsafe { _mvl_string_eq(addr(a), a.len() as i32, addr(b), b.len() as i32) },
+            0
+        );
+    }
+
+    #[test]
+    fn eq_both_empty() {
+        assert_eq!(unsafe { _mvl_string_eq(0, 0, 0, 0) }, 1);
+    }
+
+    #[test]
+    fn eq_one_empty() {
+        let a = b"x";
+        assert_eq!(
+            unsafe { _mvl_string_eq(addr(a), 1, 0, 0) },
+            0
+        );
+    }
+}
