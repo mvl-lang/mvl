@@ -89,6 +89,11 @@ struct Ctx<'a> {
     enum_variants: &'a HashMap<String, i32>,
     /// Monotonic counter for fresh WAT labels (`$while_0`, `$while_1`, …).
     label_counter: Cell<usize>,
+    /// Set by emitters that reach for `runtime/wasm/` symbols (#1819).
+    /// When true, `emit_program` swaps its own `(memory 1)` for
+    /// `(import "runtime" "memory" (memory 0))` and appends the needed
+    /// `(import "runtime" "_mvl_*" ...)` declarations.
+    needs_runtime: Cell<bool>,
 }
 
 impl Ctx<'_> {
@@ -134,16 +139,43 @@ impl Backend for WasmTextCompiler {
             enum_types: &enum_types,
             enum_variants: &enum_variants,
             label_counter: Cell::new(0),
+            needs_runtime: Cell::new(false),
         };
 
+        // Emit fns into a scratch buffer first — `emit_assert_eq` on
+        // String flips `ctx.needs_runtime`, and we only know whether to
+        // import `runtime` memory + symbols after the whole body has been
+        // walked. Fn bodies are self-contained, so buffering is cheap.
+        let mut fns_out = String::new();
+        for f in &fns {
+            emit_fn(&mut fns_out, f, &ctx);
+        }
+
         let mut out = String::from("(module\n");
-        if needs_wasi {
+        if ctx.needs_runtime.get() {
+            // runtime.wasm exports its memory and `_mvl_string_eq`; the
+            // user module imports both. Runtime data lives at 1 MB+, ours
+            // at low offsets, so no address conflicts. We re-export memory
+            // under the same name because WASI command modules must have a
+            // `memory` export (wasmtime enforces this on `_start` modules).
+            out.push_str("  (import \"runtime\" \"memory\" (memory 0))\n");
+            out.push_str("  (export \"memory\" (memory 0))\n");
+            out.push_str(
+                "  (import \"runtime\" \"_mvl_string_eq\"\n    \
+                 (func $_mvl_string_eq (param i32 i32 i32 i32) (result i32)))\n",
+            );
+            if needs_wasi {
+                // WASI blob but without its own `(memory 1) (export "memory")`
+                // — memory is imported above.
+                out.push_str(&emit_wasi_runtime_shared_memory(heap_start, &literals));
+            }
+        } else if needs_wasi {
+            // Standalone WASI module — own memory, no runtime preload
+            // needed. Matches the pre-#1819 behaviour for simple programs.
             out.push_str(&emit_wasi_runtime(heap_start, &literals));
         }
 
-        for f in &fns {
-            emit_fn(&mut out, f, &ctx);
-        }
+        out.push_str(&fns_out);
 
         for f in &fns {
             let (wasm_name, export_name) = effective_name(f, needs_wasi);
@@ -759,11 +791,25 @@ fn emit_literal(out: &mut String, lit: &Literal, ctx: &Ctx) {
 /// type-directed equality op, then traps via `unreachable` when the check
 /// fails. `negate = true` traps on equality (i.e. `assert_ne`).
 ///
-/// String equality is deliberately not handled yet — the WASM emitter carries
-/// strings as bare `(ptr, len)` i32 pairs and has no `mvl_string_eq` shim.
-/// Corpus tests that compare strings will fall through to a `;; unsupported`
-/// comment and fail to assemble, which is honest.
+/// Strings route through `_mvl_string_eq` in `runtime/wasm/` — the emitter
+/// imports it via `(import "runtime" ...)` when `Ctx::needs_runtime` is
+/// set. Everything else stays inline (i64.eq / f64.eq / i32.eq).
 fn emit_assert_eq(out: &mut String, left: &TirExpr, right: &TirExpr, negate: bool, ctx: &Ctx) {
+    // String equality: both operands leave (ptr, len) on the stack (four
+    // i32s total), then a runtime call reduces it to i32{0,1}. Same trap
+    // logic wraps it below.
+    if matches!(&left.ty, Ty::String) {
+        ctx.needs_runtime.set(true);
+        emit_expr(out, left, ctx);
+        emit_expr(out, right, ctx);
+        out.push_str("    call $_mvl_string_eq\n");
+        if !negate {
+            out.push_str("    i32.eqz\n");
+        }
+        out.push_str("    if\n      unreachable\n    end\n");
+        return;
+    }
+
     emit_expr(out, left, ctx);
     emit_expr(out, right, ctx);
     let eq_op = if is_float(&left.ty) {
@@ -771,12 +817,6 @@ fn emit_assert_eq(out: &mut String, left: &TirExpr, right: &TirExpr, negate: boo
     } else if is_i32(&left.ty, ctx) {
         "i32.eq"
     } else {
-        // Int, UInt, and anything else defaulting to i64. String comparisons
-        // would land here today and silently miscompile — flagged via a
-        // comment so the assembly step fails loudly.
-        if matches!(&left.ty, Ty::String) {
-            out.push_str("    ;; unsupported assert_eq/ne on String\n");
-        }
         "i64.eq"
     };
     out.push_str(&format!("    {eq_op}\n"));
@@ -1087,13 +1127,32 @@ fn escape_wat_data(s: &str) -> String {
 /// - `32..heap_start` string-literal contents (one `(data ...)` per literal)
 /// - `heap_start..` bump-allocated string storage (used by `$mvl_int_to_string`)
 fn emit_wasi_runtime(heap_start: u32, literals: &HashMap<String, (u32, u32)>) -> String {
+    emit_wasi_runtime_common(heap_start, literals, /* own_memory */ true)
+}
+
+/// Same as [`emit_wasi_runtime`] but skips the `(memory 1) (export "memory")`
+/// pair — the caller has already imported memory from `runtime/wasm/`.
+fn emit_wasi_runtime_shared_memory(
+    heap_start: u32,
+    literals: &HashMap<String, (u32, u32)>,
+) -> String {
+    emit_wasi_runtime_common(heap_start, literals, /* own_memory */ false)
+}
+
+fn emit_wasi_runtime_common(
+    heap_start: u32,
+    literals: &HashMap<String, (u32, u32)>,
+    own_memory: bool,
+) -> String {
     let mut out = String::new();
     out.push_str(
         "  (import \"wasi_snapshot_preview1\" \"fd_write\"\n    \
          (func $fd_write (param i32 i32 i32 i32) (result i32)))\n",
     );
-    out.push_str("  (memory 1)\n");
-    out.push_str("  (export \"memory\" (memory 0))\n");
+    if own_memory {
+        out.push_str("  (memory 1)\n");
+        out.push_str("  (export \"memory\" (memory 0))\n");
+    }
     out.push_str("  (data (i32.const 20) \"\\n\")\n");
 
     // Emit string literals in ascending-offset order so the WAT is stable

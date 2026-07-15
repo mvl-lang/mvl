@@ -2,7 +2,7 @@
 .ONESHELL:
 SHELL := /bin/bash
 
-.PHONY: help version build test test-full test-unit test-rust-integration test-requirements test-error-messages test-fmt-roundtrip test-corpus-old test-corpus-warnings-old test-rust-rust test-rust-llvm test-mvl-llvm test-rust-wasm test-mvl-wasm test-rust-tokio test-runtime-rust test-runtime-llvm test-checker-parity test-checker-parity-update test-solver test-stdlib check-compiler assure-compiler test-mvl test-bootstrap-e2e test-bdd test-backend-rust-old test-backend-llvm-old test-cross-backend test-grammar-coverage test-examples test-examples-rust test-examples-llvm coverage validate-keywords lint mvl-lint format format-check format-mvl format-mvl-check assurance assurance-gate audit-backend-ast check-adr docs docs-serve install install-runtime setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
+.PHONY: help version build build-runtime-wasm test test-full test-unit test-rust-integration test-requirements test-error-messages test-fmt-roundtrip test-corpus-old test-corpus-warnings-old test-rust-rust test-rust-llvm test-mvl-llvm test-rust-wasm test-mvl-wasm test-rust-tokio test-runtime-rust test-runtime-llvm test-checker-parity test-checker-parity-update test-solver test-stdlib check-compiler assure-compiler test-mvl test-bootstrap-e2e test-bdd test-backend-rust-old test-backend-llvm-old test-cross-backend test-grammar-coverage test-examples test-examples-rust test-examples-llvm coverage validate-keywords lint mvl-lint format format-check format-mvl format-mvl-check assurance assurance-gate audit-backend-ast check-adr docs docs-serve install install-runtime setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
 
 .DEFAULT_GOAL := help
 
@@ -471,12 +471,23 @@ WASM_CORPUS := \
 	tests/corpus/03_functions/basic_test.mvl \
 	tests/corpus/04_types/enum_test.mvl
 
-test-rust-wasm: build ## rust/wasm — WASM-supported corpus subset (no runtime yet — #1818)
+test-rust-wasm: build build-runtime-wasm ## rust/wasm — WASM-supported corpus subset (via runtime/wasm/ preload)
 	@command -v wasm-tools > /dev/null 2>&1 || { \
 	  printf "  \033[31m✗  wasm-tools not installed — 'cargo install wasm-tools'\033[0m\n"; exit 1; }
 	@command -v wasmtime > /dev/null 2>&1 || { \
 	  printf "  \033[31m✗  wasmtime not installed — see https://wasmtime.dev/\033[0m\n"; exit 1; }
-	$(MVLR) --mvl=$(MVL) --compiler=rust --backend=wasm $(WASM_CORPUS)
+	MVL_RUNTIME_WASM=$(WASM_RUNTIME_PATH) $(MVLR) --mvl=$(MVL) --compiler=rust --backend=wasm $(WASM_CORPUS)
+
+# runtime/wasm/ — Rust crate compiled to wasm32-wasip1 (#1819). Loaded by
+# wasmtime via --preload runtime=<path>. The emitter conditionally emits
+# `(import "runtime" ...)` declarations for programs that need it.
+WASM_RUNTIME_PATH := $(CURDIR)/target/wasm32-wasip1/debug/mvl_runtime_wasm.wasm
+
+build-runtime-wasm: ## Build runtime/wasm/ crate → wasm32-wasip1 target
+	@rustup target list --installed | grep -q wasm32-wasip1 || { \
+	  echo "installing wasm32-wasip1 target..."; \
+	  rustup target add wasm32-wasip1; }
+	cargo build -p mvl_runtime_wasm --target wasm32-wasip1 $(BUILD_CARGO_FLAGS)
 
 test-examples: build ## Run `make test` for every example subdirectory
 	@examples/test-all.sh

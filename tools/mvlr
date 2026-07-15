@@ -249,7 +249,27 @@ run_rust_wasm_file() {
         cat "$tmp/parse.err" >&2
         return 1
     fi
-    wasmtime run "$tmp/$stem.wasm"
+
+    # Optional `runtime/wasm/` preload (#1819). When the emitted module has
+    # `(import "runtime" ...)` declarations, wasmtime needs the runtime
+    # `.wasm` provided via --preload. When it doesn't (simple programs), the
+    # flag is a no-op. Path resolves against the workspace root or the
+    # `MVL_RUNTIME_WASM` env var (Makefile sets it explicitly).
+    local runtime_wasm="${MVL_RUNTIME_WASM:-}"
+    if [ -z "$runtime_wasm" ]; then
+        # Best-effort: infer from the mvl binary path. If MVL is
+        # `target/debug/mvl`, runtime lives at
+        # `target/wasm32-wasip1/debug/mvl_runtime_wasm.wasm`.
+        local mvl_dir
+        mvl_dir=$(dirname "$mvl_abs")
+        local candidate="$mvl_dir/../wasm32-wasip1/debug/mvl_runtime_wasm.wasm"
+        [ -f "$candidate" ] && runtime_wasm=$(cd "$(dirname "$candidate")" && pwd)/$(basename "$candidate")
+    fi
+    if [ -n "$runtime_wasm" ] && [ -f "$runtime_wasm" ]; then
+        wasmtime run --preload "runtime=$runtime_wasm" "$tmp/$stem.wasm"
+    else
+        wasmtime run "$tmp/$stem.wasm"
+    fi
 }
 
 run_mvl_llvm_file() {
