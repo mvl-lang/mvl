@@ -397,25 +397,13 @@ fn check_return_pred_for_expr(
     let layer = (1..6)
         .find(|&i| ctx.counts.by_layer[i] > layer_before[i])
         .unwrap_or(0);
-    // #1863: return-refinement checks must update the aggregate counters
-    // (proven / runtime_checked / failed) alongside the sites log. Prior
-    // to this fix, `check_arg_against_pred_counted` only touched
-    // `counts.by_layer` via the leaf solver, so `runtime_checked` never
-    // reflected return-value outcomes. Result was Req 10 reporting a
-    // contradiction: top-level said "45 proven / 0 runtime" while the
-    // per-fn rollup found N functions with RuntimeCheck outcomes in
-    // their sites and marked them as not-fully-verified.
+    // #1863 (part 2): counters are updated inside
+    // `check_arg_against_pred_counted` via `record()` — do not increment
+    // here or return-refinement outcomes will double-count.
     let proof_outcome = match &outcome {
-        RefResult::Proven => {
-            ctx.counts.proven += 1;
-            ProofOutcome::Proven { layer }
-        }
-        RefResult::RuntimeCheck => {
-            ctx.counts.runtime_checked += 1;
-            ProofOutcome::RuntimeCheck
-        }
+        RefResult::Proven => ProofOutcome::Proven { layer },
+        RefResult::RuntimeCheck => ProofOutcome::RuntimeCheck,
         RefResult::Failed { counterexample } => {
-            ctx.counts.failed += 1;
             ctx.errors.push(CheckError::RefinementViolated {
                 pred: format!(
                     "return value of `{fn_name}` violates return refinement `{}`",

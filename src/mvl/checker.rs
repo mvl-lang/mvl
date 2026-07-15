@@ -252,8 +252,22 @@ pub fn check_with_two_preludes_mode(
     refinement_counts.fn_total += contract_counts.fn_total;
     refinement_counts.fully_verified_fns += contract_counts.fully_verified_fns;
     session::check_session_types(prog, &mut checker.errors);
-    contracts::check_actor_field_refinements(prog, &mut checker.errors, solver_mode);
-    contracts::check_struct_field_refinements(prog, &mut checker.errors, solver_mode);
+    // #1863 (part 2): thread the shared refinement counts through the
+    // field-refinement checks so their proofs contribute to the top-level
+    // aggregate. Previously each of these built its own local counts that
+    // was silently discarded.
+    contracts::check_actor_field_refinements(
+        prog,
+        &mut checker.errors,
+        solver_mode,
+        &mut refinement_counts,
+    );
+    contracts::check_struct_field_refinements(
+        prog,
+        &mut checker.errors,
+        solver_mode,
+        &mut refinement_counts,
+    );
     contracts::check_return_refinements(prog, &mut checker.errors, solver_mode);
 
     // Determine whether any function imported from the prelude and called by

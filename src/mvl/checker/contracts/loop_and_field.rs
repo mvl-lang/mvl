@@ -559,6 +559,7 @@ pub fn check_actor_field_refinements(
     prog: &Program,
     errors: &mut Vec<CheckError>,
     mode: SolverMode,
+    counts: &mut RefinementCounts,
 ) {
     // Build a map: actor_name → field declarations (only those with refinements).
     let actor_fields = build_actor_field_map(prog);
@@ -571,14 +572,11 @@ pub fn check_actor_field_refinements(
         crate::mvl::checker::refinements::build_struct_field_refinements_combined(&[prog]);
     let const_map = crate::mvl::checker::refinements::build_const_map(&[prog]);
     let const_refs = crate::mvl::checker::refinements::const_map_to_var_refs(&const_map);
-    let mut counts = RefinementCounts {
-        mode,
-        ..Default::default()
-    };
+    counts.mode = mode;
     let mut ctx = ContractCheckCtx {
         fn_decls: &fn_decls,
         errors,
-        counts: &mut counts,
+        counts,
         type_refs: &type_refs,
         struct_fields: &struct_fields,
         const_refs: &const_refs,
@@ -720,6 +718,7 @@ pub fn check_struct_field_refinements(
     prog: &Program,
     errors: &mut Vec<CheckError>,
     mode: SolverMode,
+    counts: &mut RefinementCounts,
 ) {
     let field_map = build_struct_field_map(prog);
     if field_map.is_empty() {
@@ -731,14 +730,11 @@ pub fn check_struct_field_refinements(
         crate::mvl::checker::refinements::build_struct_field_refinements_combined(&[prog]);
     let const_map = crate::mvl::checker::refinements::build_const_map(&[prog]);
     let const_refs = crate::mvl::checker::refinements::const_map_to_var_refs(&const_map);
-    let mut counts = RefinementCounts {
-        mode,
-        ..Default::default()
-    };
+    counts.mode = mode;
     let mut ctx = ContractCheckCtx {
         fn_decls: &fn_decls,
         errors,
-        counts: &mut counts,
+        counts,
         type_refs: &type_refs,
         struct_fields: &struct_fields,
         const_refs: &const_refs,
