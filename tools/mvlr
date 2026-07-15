@@ -440,6 +440,13 @@ esac
 # use the per-file loop (run_dir_iter for backends without native batching,
 # run_rust_rust_dir for the batched rust/rust path). Files go through
 # run_file directly. Any non-zero result flips the aggregate exit code.
+#
+# Single-file mode strips MVLR_MARK:* lines from stderr (they're mvlr's
+# own per-test attribution instrumentation — noise to a human reader).
+# Directory mode keeps them: run_dir_iter grep's them out of $tmpout to
+# name the failing test. `bash` process substitution runs the filter in
+# a subshell forwarding to fd 2, so the exit code of `run_file` still
+# propagates via `|| rc=1`.
 rc=0
 for INPUT in "${POSITIONAL[@]}"; do
     if [ -d "$INPUT" ]; then
@@ -448,7 +455,7 @@ for INPUT in "${POSITIONAL[@]}"; do
             *)         run_dir_iter "$INPUT" "$COMBO" || rc=1 ;;
         esac
     else
-        run_file "$COMBO" "$INPUT" || rc=1
+        run_file "$COMBO" "$INPUT" 2> >(grep -v "^MVLR_MARK:" >&2) || rc=1
     fi
 done
 exit $rc
