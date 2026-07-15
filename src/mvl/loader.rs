@@ -462,6 +462,13 @@ pub fn find_module_file(entry_dir: &Path, mod_name: &str) -> Option<PathBuf> {
 /// Build the implicit prelude: `core.mvl` + `strings.mvl` + `lists.mvl` + `effects.mvl`.
 /// Every compile path loads these so their builtins and the effect hierarchy
 /// (`Log > Clock`, `IO > Log + …`) are always visible.
+/// Modules `load_implicit_prelude` actually loads (as source programs).
+/// Narrower than `IMPLICIT_PRELUDE_STEMS`, which also names modules whose
+/// symbol tables are pre-populated for the LLVM builtin dispatcher but whose
+/// source is not baked into every user program (e.g. `io` — has real fn
+/// bodies that would double-emit if loaded twice).
+const IMPLICITLY_LOADED_STEMS: &[&str] = &["core", "strings", "lists", "collections", "effects"];
+
 pub fn load_implicit_prelude() -> Vec<Program> {
     const IMPLICIT: &[&str] = &[
         "core.mvl",
@@ -1672,8 +1679,13 @@ pub fn load_stdlib_prelude<'a>(
                         // Skip modules already loaded by the implicit prelude
                         // (v1.3.2 added `collections` there; explicit
                         // `use std.collections.{...}` then triggered double
-                        // registration and "duplicate method" errors).
-                        if IMPLICIT_PRELUDE_STEMS.contains(&module.as_str()) {
+                        // registration and "duplicate method" errors). Uses
+                        // the narrower `IMPLICITLY_LOADED_STEMS` — modules
+                        // like `io` are in `IMPLICIT_PRELUDE_STEMS` (for the
+                        // LLVM builtin dispatcher) but their source is not
+                        // baked into every user program, so they must still
+                        // load explicitly here.
+                        if IMPLICITLY_LOADED_STEMS.contains(&module.as_str()) {
                             continue;
                         }
                         if loaded.insert(module.clone()) {
