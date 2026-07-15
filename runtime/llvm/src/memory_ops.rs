@@ -664,8 +664,7 @@ pub unsafe extern "C" fn _mvl_array_dedup(a: *mut MvlArray) {
         let mut seen = false;
         for prev in 0..write {
             let existing = data.add(prev * es);
-            if std::slice::from_raw_parts(candidate, es)
-                == std::slice::from_raw_parts(existing, es)
+            if std::slice::from_raw_parts(candidate, es) == std::slice::from_raw_parts(existing, es)
             {
                 seen = true;
                 break;
@@ -701,10 +700,7 @@ pub unsafe extern "C" fn _mvl_array_dedup(a: *mut MvlArray) {
 /// `a` must be a valid non-null `MvlArray` pointer. `needle_ptr` must point to
 /// at least `(*a).element_size` readable bytes.
 #[no_mangle]
-pub unsafe extern "C" fn _mvl_array_contains(
-    a: *const MvlArray,
-    needle_ptr: *const u8,
-) -> bool {
+pub unsafe extern "C" fn _mvl_array_contains(a: *const MvlArray, needle_ptr: *const u8) -> bool {
     if a.is_null() || needle_ptr.is_null() {
         return false;
     }
