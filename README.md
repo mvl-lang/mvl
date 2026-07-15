@@ -75,12 +75,34 @@ Anonymous lambdas with immutable captures are supported (`|x| x + 1`) — they p
 
 ## Getting Started
 
-### Prerequisites
+### Install (prebuilt binary)
+
+Fastest way to run MVL, no compilation required. See [mvl-lang.org/install](https://mvl-lang.org/install/) for the full matrix.
+
+**Homebrew (macOS Apple Silicon):**
+
+```bash
+brew tap mvl-lang/mvl
+brew install mvl
+mvl --version    # → mvl 1.0.0
+```
+
+**Universal install script (all platforms, builds from source):**
+
+```bash
+curl -fsSL https://mvl-lang.org/install.sh | sh
+```
+
+### Build from source (for compiler development)
+
+Use this path if you're working *on* the compiler, not just *with* it.
+
+#### Prerequisites
 
 - [Rust](https://rustup.rs/) (stable toolchain)
 - [uv](https://github.com/astral-sh/uv) (for mkdocs documentation only)
 
-### Setup
+#### Setup
 
 ```bash
 git clone git@github.com:mvl-lang/mvl.git
@@ -96,7 +118,7 @@ make setup    # installs git hooks, verifies tooling
 
 No Python dependencies — hooks are plain bash scripts.
 
-### Build and test
+#### Build and test
 
 ```bash
 make build    # build the MVL compiler
@@ -106,7 +128,7 @@ make format   # cargo fmt
 make help     # show all targets grouped by section
 ```
 
-### Stdlib profiles
+#### Stdlib profiles
 
 MVL supports two stdlib profiles (see `docs/stdlib-profiles.md`):
 
@@ -119,7 +141,7 @@ The `trusted` profile verifies all 11 requirements on your code.  The `proven`
 profile extends verification into the standard library itself, for
 safety-critical systems (DO-178C, IEC 61508, ISO 26262).
 
-### Documentation
+#### Documentation
 
 ```bash
 make docs       # build mkdocs site
