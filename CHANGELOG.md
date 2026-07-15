@@ -2,6 +2,42 @@
 
 ## [Unreleased]
 
+## [1.3.2] - 2026-07-15
+
+Corpus-follow-up sweep — closes the five bugs filed while building out the phase-2 corpus (#1842, #1845, #1851, #1856, #1858) and re-enables the tests that were gated behind those TODO markers.
+
+Runtime bumps to **1.0.1** (adds `_mvl_array_contains` and `_mvl_array_dedup` exports). Compiler bumps to **1.3.2**.
+
+### Fixed
+
+- **#1842 — LLVM `Map::new()` / `Set::new()` / `List::new()` symbol emit**. The stdlib decl for `Map[K, V]::new()` was only reachable through `use std.collections.{Map}` explicitly; without the import the loader never visited `collections.mvl`, so `builtin_syms` had no entry for `Map::new` and the emitter fell through to a raw `@Map::new` call (invalid LLVM identifier). Fix: add `collections` to the implicit prelude in both loader paths (`IMPLICIT_PRELUDE_STEMS` for builtin symbol collection, `load_implicit_prelude` for the checker's method table).
+
+- **#1845 — LLVM Set literal is now a real hash-set**. `{1, 2, 2, 3}` previously stored duplicates and `.insert()` was a no-op on literal-constructed sets. Fixes:
+    - New runtime helper `_mvl_array_dedup` in `runtime/llvm/src/memory_ops.rs` — byte-equal linear scan, retains first occurrence.
+    - Emitter splits `TirExprKind::Set` from `List`: after building the raw array, call `_mvl_array_dedup` so `.len()`, `.contains()`, and iteration all agree.
+    - New `Set::insert(x)` dispatch in `emit_method_call_tir` — routes through `_mvl_array_contains` guard + `_mvl_array_push` so duplicate insertions don't grow the underlying storage.
+    - Corpus: `05_collections/set_test.mvl` — three previously-gated tests re-enabled.
+
+- **#1851 — LLVM refined type-alias name resolution**. `type Port = Int where ...; fn f(p: Port) -> Port` used to emit `define ptr @f(ptr %p)` because the emitter had no user-alias registry — the base-name matcher defaulted unknown names to `ptr`. Fix:
+    - New `type_aliases: HashMap<String, Ty>` on the module context, populated by `register_type_decl_tir` for every non-fn alias.
+    - Both `llvm_ty_ctx` variants (TypeExpr and Ty) consult it before falling through to the default. Aliased params now emit as `define i64 @f(i64 %p)` etc.
+    - Corpus: `09_refinements/type_alias_test.mvl` upgraded to use refined aliases directly as parameter and return types.
+
+- **#1856 — Rust transpiler now inserts `.clone()` on heap-typed field access in tail/argument positions**. `pub test fn read() -> String { self.text }` used to fail with `E0507 cannot move out of self.text which is behind a shared reference`. Fix: at the `FieldAccess` emit site, when the receiver is a bare `Var` (implying `&self` or a `&T` param) and the field's TIR type is non-Copy (`String`, `List`, `Map`, `Set`, or their labeled/refined wrappings), append `.clone()`. Corpus: `12_actors/state_mutation_test.mvl` gets its `Label { text: String }` actor back.
+
+- **#1858 — LLVM `List[T].contains(x)` runtime symbol**. The emitter had been emitting `call i1 @_mvl_array_contains(ptr, ptr)` for a while but the runtime never exported that symbol; JIT link failed with "Symbols not found". Fix: added `_mvl_array_contains` to `runtime/llvm/src/memory_ops.rs`, dispatching to a linear byte-equal scan that works for primitive and pointer-sized elements. Corpus: `13_stdlib/list_hof_test.mvl::list_contains` re-enabled.
+
+### Follow-up work observed but not addressed
+
+- The Rust transpiler doesn't auto-generate `From<AliasA> for AliasB` impls when both erase to the same base scalar (e.g. `let b: NonNegativeInt = triple_nonneg(pos_int_value)` needs an explicit `.into()`). Corpus tests use same-alias chains meanwhile.
+- `assert_eq(alias_value, raw_literal)` fails to typecheck on the Rust backend because the raw literal doesn't get wrapped in the newtype. Corpus tests bind the expected value to a typed local.
+
+Both are Rust-transpiler UX warts orthogonal to #1851's LLVM fix and could land in a later patch.
+
+### Corpus
+
+Full corpus now **238 tests across 14 categories**, both backends green. Up from 233 in v1.3.1 — the +5 delta is the previously-gated tests coming back online.
+
 ## [1.3.1] - 2026-07-14
 
 ### Fixed

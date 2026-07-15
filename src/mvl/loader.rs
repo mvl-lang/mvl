@@ -13,7 +13,12 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const IMPLICIT_PRELUDE_STEMS: &[&str] = &["core", "strings", "lists", "effects", "io"];
+// `collections` joins the implicit prelude in v1.3.2 so `Map::new()` and
+// `Set::new()` resolve at first use without an explicit `use std.collections.{Map}`.
+// #1842 was the "why does Map::new() emit a raw @Map::new symbol" report — the
+// answer was that the loader never visited collections.mvl without the `use`.
+const IMPLICIT_PRELUDE_STEMS: &[&str] =
+    &["core", "strings", "lists", "collections", "effects", "io"];
 
 /// Format an error message with source line and caret indicator.
 fn format_error_with_source(src: &str, span: Span, message: &str) -> String {

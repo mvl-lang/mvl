@@ -640,6 +640,82 @@ pub unsafe extern "C" fn _mvl_array_len(a: *const MvlArray) -> i64 {
     (*a).len as i64
 }
 
+/// Dedupe an `MvlArray` in place — retain only the first occurrence of each
+/// element under byte-equal comparison. Backs `Set[T]` literal construction on
+/// the LLVM backend (#1845). O(n²) linear scan; sets in MVL literal form are
+/// expected to be small (constant-time authorial content).
+///
+/// # Safety
+/// `a` must be a valid non-null `MvlArray` pointer.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_array_dedup(a: *mut MvlArray) {
+    if a.is_null() {
+        return;
+    }
+    let len = (*a).len as usize;
+    let es = (*a).elem_size as usize;
+    if len < 2 || es == 0 {
+        return;
+    }
+    let data = (*a).ptr;
+    let mut write = 1usize;
+    for read in 1..len {
+        let candidate = data.add(read * es);
+        let mut seen = false;
+        for prev in 0..write {
+            let existing = data.add(prev * es);
+            if std::slice::from_raw_parts(candidate, es) == std::slice::from_raw_parts(existing, es)
+            {
+                seen = true;
+                break;
+            }
+        }
+        if !seen {
+            if write != read {
+                let dst = data.add(write * es);
+                std::ptr::copy_nonoverlapping(candidate, dst, es);
+            }
+            write += 1;
+        }
+    }
+    (*a).len = write as u64;
+}
+
+/// Linear scan for an element in an `MvlArray`. Backs `List[T].contains(x)` on
+/// the LLVM backend (#1858). Element comparison uses raw byte-equal via
+/// `element_size` from the array header; works for primitive-sized elements
+/// (i64, i32, i8, i1) and for pointer-typed elements (String, Map, List)
+/// where the caller has already interned into the same allocation.
+///
+/// The emitter calls this via `alloca` on the needle, so the second parameter
+/// is a pointer whose pointee has the same width as the array's element type:
+///
+/// ```llvm
+/// %slot = alloca i64
+/// store i64 %needle, ptr %slot
+/// %result = call i1 @_mvl_array_contains(ptr %arr, ptr %slot)
+/// ```
+///
+/// # Safety
+/// `a` must be a valid non-null `MvlArray` pointer. `needle_ptr` must point to
+/// at least `(*a).element_size` readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_array_contains(a: *const MvlArray, needle_ptr: *const u8) -> bool {
+    if a.is_null() || needle_ptr.is_null() {
+        return false;
+    }
+    let len = (*a).len as usize;
+    let es = (*a).elem_size as usize;
+    let data = (*a).ptr;
+    for i in 0..len {
+        let slot = data.add(i * es);
+        if std::slice::from_raw_parts(slot, es) == std::slice::from_raw_parts(needle_ptr, es) {
+            return true;
+        }
+    }
+    false
+}
+
 /// Return a new `MvlArray` containing elements `[start, end)` from `arr` (safe clamping).
 ///
 /// # Safety

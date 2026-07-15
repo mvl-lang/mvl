@@ -97,10 +97,19 @@ impl TextEmitter {
                 self.emit_field_access_tir(inner, field)
             }
 
-            // Set lowers to a List in this backend (sets are arrays at the IR level;
-            // dedup is the runtime's responsibility).
-            TirExprKind::List { elems } | TirExprKind::Set { elems } => {
-                self.emit_list_literal_tir(elems)
+            // Sets lower to arrays at the IR level (dedup lives at construction
+            // time, not in the layout). #1845: after building the raw array,
+            // call `_mvl_array_dedup` to remove duplicates in place so
+            // `.len()`, `.contains()` and iteration all agree.
+            TirExprKind::List { elems } => self.emit_list_literal_tir(elems),
+            TirExprKind::Set { elems } => {
+                let arr = match self.emit_list_literal_tir(elems)? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                self.ensure_extern("declare void @_mvl_array_dedup(ptr)");
+                self.push_instr(&format!("call void @_mvl_array_dedup(ptr {arr})"));
+                Ok(Some(arr))
             }
 
             TirExprKind::Map { pairs } => self.emit_map_literal_tir(pairs),
@@ -2603,6 +2612,48 @@ impl TextEmitter {
                         receiver.ty
                     )),
                 }
+            }
+
+            // ── Set methods ───────────────────────────────────────────────
+            // #1845: Set::insert(x) on a literal-constructed set was a no-op —
+            // the receiver is an array under the hood, so we need to route
+            // through `_mvl_array_push` after a `_mvl_array_contains` guard so
+            // duplicates don't grow the underlying storage.
+            ("insert", "ptr") if matches!(unwrap_labels(&receiver.ty), Ty::Set(_)) => {
+                if args.is_empty() {
+                    return Ok(None);
+                }
+                let needle = match self.emit_expr_tir(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                let elem_ty = self.ty_to_llvm_ctx(&args[0].ty);
+                let slot = self.next_reg();
+                self.push_instr(&format!("{slot} = alloca {elem_ty}"));
+                self.push_instr(&format!("store {elem_ty} {needle}, ptr {slot}"));
+                self.ensure_extern("declare i1 @_mvl_array_contains(ptr, ptr)");
+                self.ensure_extern("declare void @_mvl_array_push(ptr, ptr)");
+                let already = self.next_reg();
+                self.push_instr(&format!(
+                    "{already} = call i1 @_mvl_array_contains(ptr {val}, ptr {slot})"
+                ));
+                let n = self.fn_ctx.bb;
+                self.fn_ctx.bb += 2;
+                let push_bb = format!("set_insert_push_{n}");
+                let done_bb = format!("set_insert_done_{}", n + 1);
+                self.push_instr(&format!(
+                    "br i1 {already}, label %{done_bb}, label %{push_bb}"
+                ));
+                self.fn_ctx.fn_buf.push(format!("{push_bb}:"));
+                self.fn_ctx.current_bb = push_bb.clone();
+                self.push_instr(&format!(
+                    "call void @_mvl_array_push(ptr {val}, ptr {slot})"
+                ));
+                self.push_instr(&format!("br label %{done_bb}"));
+                self.fn_ctx.fn_buf.push(format!("{done_bb}:"));
+                self.fn_ctx.current_bb = done_bb.clone();
+                self.fn_ctx.terminated = false;
+                Ok(Some(val))
             }
 
             // ── Map methods ───────────────────────────────────────────────

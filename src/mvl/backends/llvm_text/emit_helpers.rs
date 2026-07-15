@@ -261,6 +261,10 @@ impl TextEmitter {
                 if self.module.tir_actor_decls.contains_key(name.as_str()) {
                     return "ptr".into();
                 }
+                // #1851: named type aliases resolve to their underlying Ty.
+                if let Some(inner) = self.module.type_aliases.get(name).cloned() {
+                    return self.ty_to_llvm_ctx(&inner);
+                }
                 Self::ty_to_llvm(ty)
             }
             Ty::Ref(_, inner) => self.ty_to_llvm_ctx(inner),
@@ -322,6 +326,13 @@ impl TextEmitter {
                 // Actor type without registered state struct (e.g. handle as field).
                 if self.module.tir_actor_decls.contains_key(name.as_str()) {
                     return "ptr".to_string();
+                }
+                // #1851: named type aliases (`type Port = Int where ...`).
+                // Resolve to their underlying representation before falling
+                // through to the raw base-name matcher (which defaults
+                // unknown names to `ptr`).
+                if let Some(inner) = self.module.type_aliases.get(name).cloned() {
+                    return self.ty_to_llvm_ctx(&inner);
                 }
                 Self::llvm_ty(ty)
             }

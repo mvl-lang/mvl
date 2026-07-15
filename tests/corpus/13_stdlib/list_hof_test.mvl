@@ -63,12 +63,11 @@ test fn list_take_and_skip() -> Unit {
     assert_eq(tail.get(1).unwrap_or(0), 50);
 }
 
-// TODO(#1858): re-enable once LLVM runtime exports _mvl_array_contains.
-// test fn list_contains() -> Unit {
-//     let xs: List[Int] = [10, 20, 30];
-//     assert_eq(xs.contains(20), true);
-//     assert_eq(xs.contains(99), false);
-// }
+test fn list_contains() -> Unit {
+    let xs: List[Int] = [10, 20, 30];
+    assert_eq(xs.contains(20), true);
+    assert_eq(xs.contains(99), false);
+}
 
 test fn list_composed_map_filter_fold() -> Unit {
     let xs: List[Int] = [1, 2, 3, 4, 5, 6];
