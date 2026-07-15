@@ -83,6 +83,7 @@ Fastest way to run MVL, no compilation required. See [mvl-lang.org/install](http
 
 ```bash
 brew tap mvl-lang/mvl
+brew trust mvl-lang/mvl    # Homebrew 6.x requires trusting third-party taps
 brew install mvl
 mvl --version    # → mvl 1.0.0
 ```
