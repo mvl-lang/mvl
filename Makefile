@@ -122,10 +122,12 @@ build: ## Build the MVL compiler + LLVM runtime (BUILD=debug|release, default de
 # === Test ===
 
 MVL ?= ./target/debug/mvl
-# mvlr — matrix run driver. Prefer the installed binary (make install
-# drops it in ~/.local/bin); fall back to the in-repo copy so a fresh
-# checkout works before install.
-MVLR ?= $(shell command -v mvlr 2>/dev/null || echo tools/mvlr)
+# mvlr — matrix run driver. Prefer the in-tree copy when it exists so a
+# dev checkout always runs the mvlr matching this source (the emitter
+# under test needs the mvlr that knows how to drive it — the installed
+# mvlr may be older and reject unsupported combos like rust/wasm).
+# Falls back to the installed binary otherwise, and finally errors out.
+MVLR ?= $(shell test -x tools/mvlr && echo tools/mvlr || command -v mvlr 2>/dev/null)
 
 # Suite list for `make test` (fast pre-PR gate) and `make test-full` (full pre-merge gate).
 # Format: "label|target" — keep alignment by padding the label.
