@@ -453,12 +453,24 @@ test-mvl-wasm: build ## mvl/wasm — MVL self-hosted → WAT (stub, tracked in #
 	@printf "  \033[33m~  SKIP: test-mvl-wasm not yet wired\033[0m\n"
 	@echo "    Blocker: self-hosted compiler doesn't have a WASM backend yet. See #1828."
 
-test-rust-wasm: build ## rust/wasm — new corpus through the WAT emitter (via mvlr, see #1818)
+# WASM cases the backend actually handles — scoped to what runs end-to-end
+# without a `runtime/wasm/` crate (Phase 2 of epic #1817). Everything else
+# in `tests/corpus/` needs collections, MvlString ops, tagged-union enum
+# payloads, closures, or generics-mono — all of which land in later phases.
+# Grow this list as the emitter's coverage grows.
+WASM_CORPUS := \
+	tests/corpus/00_smoke \
+	tests/corpus/01_expressions \
+	tests/corpus/02_control_flow \
+	tests/corpus/03_functions/basic_test.mvl \
+	tests/corpus/04_types/enum_test.mvl
+
+test-rust-wasm: build ## rust/wasm — WASM-supported corpus subset (no runtime yet — #1818)
 	@command -v wasm-tools > /dev/null 2>&1 || { \
 	  printf "  \033[31m✗  wasm-tools not installed — 'cargo install wasm-tools'\033[0m\n"; exit 1; }
 	@command -v wasmtime > /dev/null 2>&1 || { \
 	  printf "  \033[31m✗  wasmtime not installed — see https://wasmtime.dev/\033[0m\n"; exit 1; }
-	$(MVLR) --mvl=$(MVL) --compiler=rust --backend=wasm tests/corpus/
+	$(MVLR) --mvl=$(MVL) --compiler=rust --backend=wasm $(WASM_CORPUS)
 
 test-examples: build ## Run `make test` for every example subdirectory
 	@examples/test-all.sh
