@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+## [1.3.4] - 2026-07-15
+
+### Fixed — #1863 mvl assurance Req 10 counter contradiction
+
+`mvl assurance --stdlib=proven` on projects with return-refinement `ensures` clauses (e.g. examples/pong) reported contradictory Req 10 numbers: the top-level counter said "45 proven / 0 runtime-checked" while the per-function rollup said only "5/14 fully verified", and the verdict line hardcoded "0 call sites proven" even when 45 were.
+
+Two independent root causes:
+
+1. **Return-refinement checks didn't update the aggregate counters.** `contracts/mod.rs::check_return_pred_for_expr` recorded each outcome to `ctx.counts.sites` (`ProofOutcome::Proven` / `RuntimeCheck` / `Failed`) but never incremented `ctx.counts.proven` / `runtime_checked` / `failed`. The call-site path in `refinements.rs` did update those counters — so top-level totals reflected call sites only, missing every return-value outcome. Fix: bump the same three counters in `check_return_pred_for_expr` matching the outcome, and merge `runtime_checked` + `failed` from `contract_counts` into the aggregate at the checker.rs join point (previously only `proven` came through, via a `by_layer.sum()` workaround).
+
+2. **CLI verdict text hardcoded "0 call sites proven".** `src/cli/assurance.rs`'s `else if total_refined_fields > 0` fall-through branch ignored `agg_ref_proven` entirely. Fix: format that branch with the real counters — `{agg_ref_proven} proven, {agg_ref_runtime} runtime-checked`.
+
+Together the two fixes make top-level totals, per-function rollup, and verdict text agree on the same numbers.
+
 ## [1.3.3] - 2026-07-15
 
 ### Added — solver follow-ups (#1805)

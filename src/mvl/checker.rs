@@ -230,11 +230,15 @@ pub fn check_with_two_preludes_mode(
     );
     let contract_counts =
         contracts::check_contracts(prog, &all_prog_refs, &mut checker.errors, solver_mode);
-    // Merge contract proof-layer counts into the refinement totals.
-    // Contract proofs only populate by_layer (proven/runtime_checked are not
-    // incremented by the leaf solver); derive proven from the layer sum.
-    let contract_proven: usize = contract_counts.by_layer.iter().sum();
-    refinement_counts.proven += contract_proven;
+    // Merge contract proof counts into the refinement totals.
+    // #1863: contract checks now update `proven` / `runtime_checked` /
+    // `failed` at their call site (previously only `by_layer` was
+    // populated, forcing us to derive `proven` from the layer sum and
+    // silently dropping runtime-check outcomes). Merge all three counters
+    // plus the per-layer breakdown.
+    refinement_counts.proven += contract_counts.proven;
+    refinement_counts.runtime_checked += contract_counts.runtime_checked;
+    refinement_counts.failed += contract_counts.failed;
     for i in 0..6 {
         refinement_counts.by_layer[i] += contract_counts.by_layer[i];
     }

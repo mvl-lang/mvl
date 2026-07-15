@@ -577,7 +577,15 @@ pub fn run(path: &str, json: bool, verbose: bool) {
         } else if project_verdicts[10].is_failed() {
             format!("{} refinement violation(s)", req_errors[10])
         } else if total_refined_fields > 0 {
-            format!("{total_refined_fields} struct field(s) refined but 0 call sites proven")
+            // #1863: don't hardcode "0 call sites proven" — the aggregated
+            // counters may still show real proven / runtime-checked totals
+            // even when the project verdict is Unchecked (e.g. some fns
+            // deferred to runtime while others are fully proven).
+            format!(
+                "{total_refined_fields} struct field(s) refined; \
+                 {agg_ref_proven} call site(s) proven, \
+                 {agg_ref_runtime} runtime-checked"
+            )
         } else {
             "no refined types used".to_string()
         };
