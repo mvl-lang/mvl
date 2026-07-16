@@ -415,7 +415,11 @@ pub(super) fn cmd_test_llvm_text(path: &str, quiet: bool, verbose: bool) {
         }
     }
 
-    let total_cases = expect_cases.len() + testfn_cases.iter().map(|(_, _, ns)| ns.len()).sum::<usize>();
+    let total_cases = expect_cases.len()
+        + testfn_cases
+            .iter()
+            .map(|(_, _, ns)| ns.len())
+            .sum::<usize>();
     if total_cases == 0 {
         if !quiet {
             println!(
