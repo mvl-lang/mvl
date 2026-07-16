@@ -22,7 +22,7 @@ fn double_parsed(s: String) -> Result[Int, String] {
     Ok(n * 2)
 }
 
-fn find(xs: List[Int], target: Int) -> Option[Int] {
+partial fn find(xs: List[Int], target: Int) -> Option[Int] {
     let i: ref Int = 0;
     let n: Int = xs.len();
     while i < n {
@@ -93,7 +93,7 @@ test fn result_propagation_short_circuits_on_err() -> Unit {
     assert_eq(v, -99);
 }
 
-test fn option_from_search_hit() -> Unit {
+test partial fn option_from_search_hit() -> Unit {
     let xs: List[Int] = [10, 20, 30];
     let idx: Int = match find(xs, 20) {
         Some(i) => i,
@@ -102,7 +102,7 @@ test fn option_from_search_hit() -> Unit {
     assert_eq(idx, 1);
 }
 
-test fn option_from_search_miss() -> Unit {
+test partial fn option_from_search_miss() -> Unit {
     let xs: List[Int] = [10, 20, 30];
     let idx: Int = match find(xs, 99) {
         Some(i) => i,

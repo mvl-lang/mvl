@@ -394,8 +394,12 @@ pub(super) fn cmd_test_llvm_text(path: &str, quiet: bool, verbose: bool) {
         }
 
         // test fn style: files with `test fn` declarations (no fn main).
+        // Also matches `test partial fn` and `test total fn` modifiers.
         let file_str = file.display().to_string();
-        if src.contains("test fn ") {
+        let has_test_fns = src.contains("test fn ")
+            || src.contains("test partial fn ")
+            || src.contains("test total fn ");
+        if has_test_fns {
             let module_name = loader::stem(&file_str);
             let (prog, _) = super::parse_or_exit(&file_str);
             let (prelude_tirs, entry_tir, compiler) = prepare_llvm_text_tir(&prog);

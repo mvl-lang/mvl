@@ -23,7 +23,7 @@ test fn list_for_in_empty_is_noop() -> Unit {
     assert_eq(count, 0);
 }
 
-test fn list_while_indexed_sum() -> Unit {
+test partial fn list_while_indexed_sum() -> Unit {
     let xs: List[Int] = [10, 20, 30, 40];
     let i: ref Int = 0;
     let n: Int = xs.len();
