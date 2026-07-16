@@ -170,6 +170,21 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
     ("_mvl_array_get", "(param i32 i64) (result i32)"),
     ("_mvl_array_clone", "(param i32) (result i32)"),
     ("_mvl_array_drop", "(param i32)"),
+    // Group D — MvlOption (#1821 partial, Phase 4 prelude). Heap-allocated
+    // `Option[T]`; emitter treats the pointer as opaque i32 and calls the
+    // typed accessors below. Corpus scope: `Option[Int]` (i64 payload) and
+    // `Option[Bool]` / enum discriminants (i32 payload).
+    ("_mvl_option_some_i64", "(param i64) (result i32)"),
+    ("_mvl_option_some_i32", "(param i32) (result i32)"),
+    ("_mvl_option_none", "(result i32)"),
+    ("_mvl_option_tag", "(param i32) (result i32)"),
+    ("_mvl_option_value_i64", "(param i32) (result i64)"),
+    ("_mvl_option_value_i32", "(param i32) (result i32)"),
+    ("_mvl_option_drop", "(param i32)"),
+    // `xs.get(i)` on `List[T]` — dispatches to one of these based on T.
+    // Returns *MvlOption (Some(value) in bounds, None otherwise).
+    ("_mvl_array_get_option_i64", "(param i32 i64) (result i32)"),
+    ("_mvl_array_get_option_i32", "(param i32 i64) (result i32)"),
 ];
 
 /// Layout offsets on `MvlString` — mirrors `runtime/wasm/src/lib.rs` /
@@ -360,6 +375,22 @@ fn emit_fn(out: &mut String, f: &TirFn, ctx: &Ctx) {
             if name.starts_with("__ms_") {
                 out.push_str(&format!("    local.get ${name}\n"));
                 out.push_str("    call $_mvl_string_drop\n");
+            } else if name.starts_with("__mo_") {
+                // `.unwrap_or` already drops the box inline (see emit_expr).
+                // The __mo_* local's value is 0 after that drop — a second
+                // _mvl_option_drop(0) is a no-op (null-safe), so re-dropping
+                // here is defense-in-depth without double-free risk.
+                out.push_str(&format!("    local.get ${name}\n"));
+                out.push_str("    call $_mvl_option_drop\n");
+            } else if name.starts_with("__match_") && option_inner_ty(ty).is_some() {
+                // Match scrutinee that was an Option — drop the box the
+                // arms consumed by value.
+                out.push_str(&format!("    local.get ${name}\n"));
+                out.push_str("    call $_mvl_option_drop\n");
+            } else if !name.starts_with("__") && option_inner_ty(ty).is_some() {
+                // User-bound `let opt: Option[T] = …`. Rare in corpus.
+                out.push_str(&format!("    local.get ${name}\n"));
+                out.push_str("    call $_mvl_option_drop\n");
             } else if !name.starts_with("__")
                 && collection_elem_ty(ty).is_some()
                 && collection_elem_ty(ty)
@@ -454,7 +485,16 @@ fn collect_locals_stmt(stmt: &TirStmt, locals: &mut Vec<(String, Ty)>) {
             // Stmt-form match needs the same scrutinee temp as expr-form.
             locals.push((format!("__match_{}", span.offset), scrutinee.ty.clone()));
             collect_locals_expr(scrutinee, locals);
+            let inner_ty = option_inner_ty(&scrutinee.ty).cloned();
             for arm in arms {
+                if let Pattern::Some { inner, .. } = &arm.pattern {
+                    if let Pattern::Ident(name, _) = inner.as_ref() {
+                        if name != "_" {
+                            let ty = inner_ty.clone().unwrap_or(Ty::Int);
+                            locals.push((name.clone(), ty));
+                        }
+                    }
+                }
                 match &arm.body {
                     TirMatchBody::Expr(e) => collect_locals_expr(e, locals),
                     TirMatchBody::Block(b) => collect_locals_block(b, locals),
@@ -480,7 +520,19 @@ fn collect_locals_expr(expr: &TirExpr, locals: &mut Vec<(String, Ty)>) {
             // the scrutinee here so it doesn't re-evaluate per arm.
             locals.push((match_temp_name(expr), scrutinee.ty.clone()));
             collect_locals_expr(scrutinee, locals);
+            // Some(inner) patterns bind `inner` — declare it as a fn-scoped
+            // local of the Option's payload type so `local.set` in the arm
+            // body validates. Skips `_`.
+            let inner_ty = option_inner_ty(&scrutinee.ty).cloned();
             for arm in arms {
+                if let Pattern::Some { inner, .. } = &arm.pattern {
+                    if let Pattern::Ident(name, _) = inner.as_ref() {
+                        if name != "_" {
+                            let ty = inner_ty.clone().unwrap_or(Ty::Int);
+                            locals.push((name.clone(), ty));
+                        }
+                    }
+                }
                 match &arm.body {
                     TirMatchBody::Expr(e) => collect_locals_expr(e, locals),
                     TirMatchBody::Block(b) => collect_locals_block(b, locals),
@@ -519,6 +571,12 @@ fn collect_locals_expr(expr: &TirExpr, locals: &mut Vec<(String, Ty)>) {
                 // Ty::Bool → i32 in `wasm_ty` — reuse for the pointer
                 // temp so we don't need a dedicated "raw i32" ty.
                 locals.push((mvl_string_temp_name(expr), Ty::Bool));
+            }
+            // `.unwrap_or(default)` on Option stashes the option pointer
+            // in a temp so it can be dropped after the if-else selects
+            // a value.
+            if option_inner_ty(&receiver.ty).is_some() && method == "unwrap_or" {
+                locals.push((mvl_option_temp_name(expr), Ty::Bool));
             }
         }
         // List / Set literals stash their `*MvlArray` pointer in a temp
@@ -664,6 +722,13 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             }
         }
         TirExprKind::Var(name) => {
+            // `None` — bare identifier of type `Option[_]`. Dispatch to the
+            // runtime constructor before falling through to local.get.
+            if name == "None" && matches!(&expr.ty, Ty::Option(_)) {
+                ctx.needs_runtime.set(true);
+                out.push_str("    call $_mvl_option_none\n");
+                return;
+            }
             // Unit-variant enum values (e.g. `Direction::North`) appear in
             // TIR as bare `Var`s with a `Named` type. Distinguish them from
             // locals by presence in the enum-variant registry.
@@ -704,6 +769,17 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             }
             if (name == "assert_eq" || name == "assert_ne") && args.len() == 2 {
                 emit_assert_eq(out, &args[0], &args[1], name == "assert_ne", ctx);
+                return;
+            }
+            // `Some(x)` constructor — the TIR lowerer represents it as a
+            // FnCall on the bare name "Some". Dispatch to the runtime's
+            // typed constructor based on the payload's WASM lowering.
+            if name == "Some" && args.len() == 1 && matches!(&expr.ty, Ty::Option(_)) {
+                ctx.needs_runtime.set(true);
+                emit_expr(out, &args[0], ctx);
+                let inner = option_inner_ty(&expr.ty).cloned().unwrap_or(Ty::Int);
+                let (some_ctor, _) = option_ops_for(&inner, ctx);
+                out.push_str(&format!("    call ${some_ctor}\n"));
                 return;
             }
             for a in args {
@@ -790,6 +866,59 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             ctx.needs_runtime.set(true);
             emit_expr(out, receiver, ctx);
             out.push_str(&format!("    call $_mvl_array_{method}\n"));
+        }
+        // `.get(i)` on List / Array — returns `Option[T]` (heap-allocated
+        // MvlOption). Element type comes from the receiver's collection
+        // type. Runtime handles the OOB check + Option wrapping.
+        TirExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } if collection_elem_ty(&receiver.ty).is_some() && method == "get" && args.len() == 1 => {
+            ctx.needs_runtime.set(true);
+            let elem_ty = collection_elem_ty(&receiver.ty).cloned().unwrap_or(Ty::Int);
+            let getter = if is_i32(&elem_ty, ctx) {
+                "_mvl_array_get_option_i32"
+            } else {
+                "_mvl_array_get_option_i64"
+            };
+            emit_expr(out, receiver, ctx);
+            emit_expr(out, &args[0], ctx);
+            out.push_str(&format!("    call ${getter}\n"));
+        }
+        // `.unwrap_or(default)` on `Option[T]`. Emits an inline
+        // `if tag == 0 (result T) then <value> else <default> end`.
+        // Also drops the option box before yielding (both branches evaluate
+        // to a T, but the intermediate pointer must be freed).
+        TirExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } if option_inner_ty(&receiver.ty).is_some()
+            && method == "unwrap_or"
+            && args.len() == 1 =>
+        {
+            ctx.needs_runtime.set(true);
+            let inner = option_inner_ty(&receiver.ty).cloned().unwrap_or(Ty::Int);
+            let (_, getter) = option_ops_for(&inner, ctx);
+            let result_ty = wasm_ty(&inner, ctx);
+            let temp = mvl_option_temp_name(expr);
+            emit_expr(out, receiver, ctx);
+            out.push_str(&format!("    local.tee ${temp}\n"));
+            out.push_str("    call $_mvl_option_tag\n");
+            // tag == 0 → Some. `i32.eqz` maps 0→1, non-zero→0.
+            out.push_str("    i32.eqz\n");
+            out.push_str(&format!("    if (result {result_ty})\n"));
+            out.push_str(&format!("    local.get ${temp}\n"));
+            out.push_str(&format!("    call ${getter}\n"));
+            out.push_str("    else\n");
+            emit_expr(out, &args[0], ctx);
+            out.push_str("    end\n");
+            // Drop the Option box now (both branches produced T, box is
+            // orphaned). Emitter also tracks __mo_* temps at fn exit as a
+            // defense-in-depth against paths that leave one live.
+            out.push_str(&format!("    local.get ${temp}\n"));
+            out.push_str("    call $_mvl_option_drop\n");
         }
         // List / Set literal — `[e1, e2, ...]` or `{e1, e2, ...}` (values).
         // Emits `_mvl_array_new(elem_size, cap)`, stashes the pointer in a
@@ -1100,6 +1229,39 @@ fn emit_match_impl(
                 out.push_str("    else\n");
                 open_ifs += 1;
             }
+            // `Some(inner)` pattern on Option[T]. Check tag == 0, then in
+            // the arm body bind `inner` to the extracted payload via the
+            // typed value getter. `Pattern::Ident("_")` skips the bind.
+            Pattern::Some { inner, .. } => {
+                ctx.needs_runtime.set(true);
+                let inner_ty = option_inner_ty(&scrutinee.ty).cloned().unwrap_or(Ty::Int);
+                let (_, getter) = option_ops_for(&inner_ty, ctx);
+                out.push_str(&format!("    local.get ${temp}\n"));
+                out.push_str("    call $_mvl_option_tag\n");
+                out.push_str("    i32.eqz\n"); // 1 when tag was 0 (Some)
+                out.push_str(&if_open);
+                if let Pattern::Ident(name, _) = inner.as_ref() {
+                    if name != "_" {
+                        out.push_str(&format!("    local.get ${temp}\n"));
+                        out.push_str(&format!("    call ${getter}\n"));
+                        out.push_str(&format!("    local.set ${name}\n"));
+                    }
+                }
+                emit_match_body(out, &arm.body, ctx);
+                out.push_str("    else\n");
+                open_ifs += 1;
+            }
+            // `None` pattern. Check tag == 1.
+            Pattern::None(_) => {
+                ctx.needs_runtime.set(true);
+                out.push_str(&format!("    local.get ${temp}\n"));
+                out.push_str("    call $_mvl_option_tag\n");
+                // tag directly serves as the i32 truthy value (1 = None).
+                out.push_str(&if_open);
+                emit_match_body(out, &arm.body, ctx);
+                out.push_str("    else\n");
+                open_ifs += 1;
+            }
             Pattern::Wildcard(_) | Pattern::Ident(_, _) => {
                 // First wildcard/ident wins as the default; later arms are
                 // unreachable so we can stop looking.
@@ -1241,6 +1403,13 @@ fn mvl_array_temp_name(expr: &TirExpr) -> String {
     format!("__ma_{}_{}", expr.span.offset, expr.span.len)
 }
 
+/// Temp local name for the `*MvlOption` pointer stashed during an
+/// `.unwrap_or(default)` invocation (tee → tag test → conditional value
+/// extract → drop). Same span-based scheme.
+fn mvl_option_temp_name(expr: &TirExpr) -> String {
+    format!("__mo_{}_{}", expr.span.offset, expr.span.len)
+}
+
 /// Byte size of a WASM value with the given element type — used as the
 /// `elem_size` argument to `_mvl_array_new`. Maps 1:1 to the [`wasm_ty`]
 /// families:
@@ -1283,6 +1452,36 @@ fn collection_elem_ty(ty: &Ty) -> Option<&Ty> {
             Ty::List(e) | Ty::Array(e, _) | Ty::Set(e) => return Some(e),
             _ => return None,
         }
+    }
+}
+
+/// The payload type of a `Ty::Option`, or `None` if `ty` is not an
+/// Option. Peels wrappers the same way as [`collection_elem_ty`].
+fn option_inner_ty(ty: &Ty) -> Option<&Ty> {
+    let mut cur = ty;
+    loop {
+        match cur {
+            Ty::Ref(_, inner) | Ty::Labeled(_, inner) | Ty::Refined(inner, _) => {
+                cur = inner;
+            }
+            Ty::Option(t) => return Some(t),
+            _ => return None,
+        }
+    }
+}
+
+/// Runtime accessor + constructor names for an `Option[T]` payload of
+/// `inner_ty`. Returns `(some_ctor, value_getter)` where both are the
+/// unprefixed runtime symbol names (no `$`).
+///
+/// The choice comes from [`wasm_ty`]: i32-typed payloads (Bool, Byte,
+/// enum, collection ptr) use the i32 variants; everything else falls
+/// back to i64 (Int, UInt, Float via bit-cast if needed later).
+fn option_ops_for(inner_ty: &Ty, ctx: &Ctx) -> (&'static str, &'static str) {
+    if is_i32(inner_ty, ctx) {
+        ("_mvl_option_some_i32", "_mvl_option_value_i32")
+    } else {
+        ("_mvl_option_some_i64", "_mvl_option_value_i64")
     }
 }
 
@@ -1432,6 +1631,10 @@ fn wasm_ty(ty: &Ty, ctx: &Ctx) -> &'static str {
         // opaque i32 addresses on the WASM stack. Element access is via
         // `_mvl_array_get(a, idx) -> i32` + a typed `i64.load` / `f64.load`.
         Ty::List(_) | Ty::Array(_, _) | Ty::Set(_) | Ty::Map(_, _) => "i32",
+        // `Option[T]` / `Result[T, E]` — heap-allocated MvlOption / (future)
+        // MvlResult; treated as opaque i32 pointer on the stack. Accessors
+        // in `runtime/wasm/` unwrap tag + payload (#1821).
+        Ty::Option(_) | Ty::Result(_, _) => "i32",
         Ty::Ref(_, inner) | Ty::Labeled(_, inner) | Ty::Refined(inner, _) => wasm_ty(inner, ctx),
         _ => "i64",
     }
@@ -1454,6 +1657,7 @@ fn is_i32(ty: &Ty, ctx: &Ctx) -> bool {
         Ty::Bool | Ty::Byte => true,
         Ty::Named(name, _) if ctx.enum_types.contains(name) => true,
         Ty::List(_) | Ty::Array(_, _) | Ty::Set(_) | Ty::Map(_, _) => true,
+        Ty::Option(_) | Ty::Result(_, _) => true,
         Ty::Ref(_, inner) | Ty::Labeled(_, inner) | Ty::Refined(inner, _) => is_i32(inner, ctx),
         _ => false,
     }

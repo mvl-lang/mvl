@@ -1,0 +1,54 @@
+// 05_collections/list_get_test.mvl — Option-returning `.get(i)` on List.
+//
+// The main `list_test.mvl` bundles `list_of_strings` which needs
+// per-element `MvlString` wrapping (deferred, Phase 3.2). Splitting the
+// `.get()` + Option coverage into this file lets the WASM backend
+// exercise the Option ABI without pulling in unsupported List[String].
+//
+// `.get(i)` returns `Option[T]` and is bounds-checked; there is no bare
+// `.unwrap()` in MVL — callers must `match` or use `.unwrap_or(default)`.
+
+test fn list_get_in_bounds_returns_some() -> Unit {
+    let xs: List[Int] = [10, 20, 30];
+    let v: Int = match xs.get(1) {
+        Some(n) => n,
+        None => -1,
+    };
+    assert_eq(v, 20);
+}
+
+test fn list_get_out_of_bounds_returns_none() -> Unit {
+    let xs: List[Int] = [10, 20, 30];
+    let v: Int = match xs.get(5) {
+        Some(n) => n,
+        None => -1,
+    };
+    assert_eq(v, -1);
+}
+
+test fn list_get_first_and_last() -> Unit {
+    let xs: List[Int] = [100, 200, 300, 400];
+    let first: Int = xs.get(0).unwrap_or(-1);
+    let last: Int = xs.get(3).unwrap_or(-1);
+    assert_eq(first, 100);
+    assert_eq(last, 400);
+}
+
+test fn list_get_bool_via_unwrap_or() -> Unit {
+    let flags: List[Bool] = [true, false, true];
+    assert_eq(flags.get(0).unwrap_or(false), true);
+    assert_eq(flags.get(1).unwrap_or(true), false);
+    assert_eq(flags.get(2).unwrap_or(false), true);
+    // Out of bounds: default kicks in.
+    assert_eq(flags.get(99).unwrap_or(true), true);
+    assert_eq(flags.get(99).unwrap_or(false), false);
+}
+
+test fn list_get_bool_via_match() -> Unit {
+    let flags: List[Bool] = [true, false];
+    let hit: Bool = match flags.get(1) {
+        Some(b) => b,
+        None => true,
+    };
+    assert_eq(hit, false);
+}

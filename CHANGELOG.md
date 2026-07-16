@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-07-16
+
+### Added — #1821 WASM Option ABI (partial)
+
+Wires `Option[T]` into the WASM backend: `Some(x)` / `None` constructors,
+`match` on Option, `.unwrap_or(default)`, and `List.get(i)` → `Option[Int/Bool]`.
+New `MvlOption` runtime type (16 bytes, heap-allocated, refcounted) with 10
+exported symbols. Corpus grows from 7 → 9 WASM sources; `list_get_test.mvl`
+(5 tests) added, `list_iter_test.mvl` unblocked. `Result[T, E]` follows in
+a separate PR.
+
 ## [1.4.0] - 2026-07-16
 
 ### Added — #1803 canonical prelude assembler for CLI subcommands
