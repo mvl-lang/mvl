@@ -866,9 +866,9 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
 
 /// Emit a `for pat in iter { body }` statement — dispatches on iter shape:
 ///
-///   - `for i in range(lo, hi)` → integer range loop with an i64 counter
-///   - `for x in xs`            → list iteration via `_mvl_array_len` +
-///                                `_mvl_array_get` + typed load
+/// - `for i in range(lo, hi)` → integer range loop with an i64 counter
+/// - `for x in xs` → list iteration via `_mvl_array_len` + `_mvl_array_get`
+///   and a typed load
 ///
 /// Loop shape is the same in both cases:
 ///
