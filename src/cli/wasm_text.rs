@@ -15,6 +15,7 @@ use mvl::mvl::checker;
 use mvl::mvl::loader;
 use mvl::mvl::parser::ast::Program;
 use mvl::mvl::parser::Parser;
+use mvl::mvl::pipeline::{load_full_prelude, PreludeMode};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
@@ -22,9 +23,10 @@ use std::process;
 /// Lower `prog` (with prelude) to TIR and emit a WAT string.
 fn compile_wat(prog: &Program, module_name: &str) -> String {
     let mut prelude = loader::load_implicit_prelude();
-    prelude.extend(loader::load_mvl_native_stdlib_extras(std::slice::from_ref(
-        prog,
-    )));
+    prelude.extend(load_full_prelude(
+        std::iter::once(prog),
+        PreludeMode::Transpile,
+    ));
     prelude.extend(loader::load_rust_backed_stdlib_fns(std::slice::from_ref(
         prog,
     )));

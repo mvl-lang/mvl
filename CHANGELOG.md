@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-07-16
+
+### Added — #1803 canonical prelude assembler for CLI subcommands
+
+Adds `pipeline::load_full_prelude(progs, PreludeMode)` as the single
+entry point every CLI subcommand routes through when assembling a
+stdlib prelude. Historically each subcommand picked between
+`loader::load_stdlib_prelude` and `loader::load_mvl_native_stdlib_extras`
+on its own — the silent-failure pattern behind three past incidents
+(`mvl mcdc`, `mvl tir` / `mvl mutate` — #1788). 14 CLI call sites
+across 12 files now route through the canonical entry point.
+Enforcement: `tools/audit_cli_prelude.py` fails CI when any file
+under `src/cli/` references the raw loaders directly. Extends
+ADR-0050 with a new section documenting the contract.
+
 ## [1.3.8] - 2026-07-16
 
 ### Fixed — #1875 emit pub const declarations in Rust backend
@@ -16,7 +31,6 @@ prelude TIRs so sibling libraries loaded via `mvl test` (game.mvl
 loaded when transpiling game_test.mvl) resolve correctly; dedupe
 against user-declared const *and* fn names to keep test files with
 local mirror fns compiling.
-
 ## [1.3.7] - 2026-07-16
 
 ### Fixed — #1829 remove checker stdout leak workarounds

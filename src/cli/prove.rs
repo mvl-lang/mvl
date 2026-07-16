@@ -15,6 +15,7 @@ use mvl::mvl::checker::refinements::ProofOutcome;
 use mvl::mvl::checker::SolverMode;
 use mvl::mvl::loader;
 use mvl::mvl::parser::ast::Program;
+use mvl::mvl::pipeline::{load_full_prelude, PreludeMode};
 use mvl::mvl::resolver;
 use mvl::mvl::stdlib;
 use std::path::Path;
@@ -82,9 +83,11 @@ pub fn run(path: &str, verbose: bool, stdlib_profile: &str, callee_filter: Optio
 
     // Build the same prelude stack as check.rs: implicit prelude + stdlib + pkg modules.
     let mut stdlib_prelude = loader::load_implicit_prelude();
-    stdlib_prelude.extend(loader::load_stdlib_prelude(
+    stdlib_prelude.extend(load_full_prelude(
         parsed.iter().take(check_count).map(|(_, p)| p),
-        &stdlib_dir,
+        PreludeMode::TypeCheck {
+            stdlib_dir: &stdlib_dir,
+        },
     ));
     let all_user_progs: Vec<Program> = parsed.iter().map(|(_, p)| p.clone()).collect();
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));

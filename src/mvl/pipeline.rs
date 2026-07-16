@@ -174,6 +174,62 @@ impl Default for Pipeline {
     }
 }
 
+/// Pipeline-specific prelude loading mode.
+///
+/// Two modes reflect the two shapes of prelude assembly a CLI subcommand
+/// needs:
+///
+/// - [`TypeCheck`](PreludeMode::TypeCheck) — full stdlib module contents
+///   (all `.mvl` files referenced by `use std.X`), disk-first with an
+///   embedded fallback. Used by subcommands that only type-check the
+///   program (`check`, `prove`, `assurance`, `build`'s checker phase).
+///   Carries the disk stdlib path.
+/// - [`Transpile`](PreludeMode::Transpile) — pure-MVL extras only. Filters
+///   out `RUST_BACKED_STDLIB` and `IMPLICIT_PRELUDE_STEMS` modules, strips
+///   type declarations from hybrid modules (types come from
+///   `mvl_runtime::stdlib::X::*` on the Rust side). Loads embedded content
+///   only. Used by subcommands that transpile or lower (`build`, `test`,
+///   `tir`, `mutate`, `mcdc`, `fuzz`, `llvm_text`, `wasm_text`).
+///
+/// New CLI subcommands must not call the underlying loaders in
+/// `crate::mvl::loader` directly — see [`load_full_prelude`] and #1803.
+pub enum PreludeMode<'a> {
+    /// Type-check pipelines: `mvl check`, `mvl prove`, `mvl assurance`, and
+    /// `mvl build`'s checker phase.  Disk-first resolution requires the
+    /// stdlib directory.
+    TypeCheck { stdlib_dir: &'a std::path::Path },
+    /// Transpile pipelines: `mvl build`, `mvl test`, `mvl tir`, `mvl mutate`,
+    /// `mvl mcdc`, `mvl fuzz`, and the `llvm_text` / `wasm_text` emitters.
+    /// Reads embedded stdlib content only — no disk path needed.
+    Transpile,
+}
+
+/// Canonical prelude assembler for CLI subcommands.
+///
+/// Every CLI subcommand that assembles a stdlib prelude for the checker or
+/// the transpile pipeline routes through this function. It dispatches on
+/// [`PreludeMode`] to one of the internal loaders in `crate::mvl::loader`.
+///
+/// This is the contract established by ADR-0050's 2026-07-16 extension.
+/// Historically each subcommand chose between `load_stdlib_prelude` and
+/// `load_mvl_native_stdlib_extras` on its own, which produced three
+/// silent-failure incidents (`mvl mcdc`, `mvl tir` / `mvl mutate` — #1788,
+/// and the drift pattern tracked as #1803).
+pub fn load_full_prelude<'a, 'b>(
+    progs: impl IntoIterator<Item = &'a Program>,
+    mode: PreludeMode<'b>,
+) -> Vec<Program> {
+    match mode {
+        PreludeMode::TypeCheck { stdlib_dir } => {
+            crate::mvl::loader::load_stdlib_prelude(progs.into_iter(), stdlib_dir)
+        }
+        PreludeMode::Transpile => {
+            let owned: Vec<Program> = progs.into_iter().cloned().collect();
+            crate::mvl::loader::load_mvl_native_stdlib_extras(&owned)
+        }
+    }
+}
+
 /// Assemble a fully-merged expression type map for `prog` against `prelude`.
 ///
 /// Combines prelude expression types (from `collect_prelude_expr_types`) with

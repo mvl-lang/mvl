@@ -6,6 +6,7 @@ use mvl::mvl::backends::AssertMode;
 use mvl::mvl::checker;
 use mvl::mvl::loader;
 use mvl::mvl::manifest_embed;
+use mvl::mvl::pipeline::{load_full_prelude, PreludeMode};
 use mvl::mvl::resolver;
 use mvl::mvl::stdlib;
 use std::fs;
@@ -152,7 +153,7 @@ pub fn run(
     // Extend with any pure-MVL stdlib modules imported by this program OR by any
     // loaded package (e.g. pkg.anthropic imports std.json → json.mvl must be in prelude).
     let all_with_pkgs: Vec<_> = all_progs.iter().chain(pkg_progs.iter()).cloned().collect();
-    let stdlib_extras = loader::load_mvl_native_stdlib_extras(&all_with_pkgs);
+    let stdlib_extras = load_full_prelude(all_with_pkgs.iter(), PreludeMode::Transpile);
     let stdlib_extras_len = stdlib_extras.len();
     stdlib_prelude_progs.extend(stdlib_extras);
     stdlib_prelude_progs.extend(pkg_progs.clone());
@@ -192,13 +193,15 @@ pub fn run(
     // (Rust-backed ones like std.net/std.io included), so the type checker can
     // resolve their declarations. The transpiler continues to use stdlib_prelude_progs
     // which handles Rust-backed modules via direct Rust emission rather than MVL bodies.
-    // This mirrors what `mvl check` does via load_stdlib_prelude.
+    // This mirrors what `mvl check` does.
     let user_progs_for_stdlib =
         std::iter::once(&prog).chain(sibling_modules.iter().map(|(_, _, p)| p));
     let mut checker_stdlib = loader::load_implicit_prelude();
-    checker_stdlib.extend(loader::load_stdlib_prelude(
+    checker_stdlib.extend(load_full_prelude(
         user_progs_for_stdlib,
-        &stdlib_dir,
+        PreludeMode::TypeCheck {
+            stdlib_dir: &stdlib_dir,
+        },
     ));
     checker_stdlib.extend(pkg_progs.iter().cloned());
 

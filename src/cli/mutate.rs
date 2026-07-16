@@ -5,7 +5,7 @@ use mvl::mvl::backends::rust as transpiler;
 use mvl::mvl::checker;
 use mvl::mvl::loader;
 use mvl::mvl::parser::ast::Decl;
-use mvl::mvl::pipeline::lower_prelude;
+use mvl::mvl::pipeline::{load_full_prelude, lower_prelude, PreludeMode};
 use std::fs;
 use std::path::PathBuf;
 use std::process;
@@ -65,7 +65,7 @@ pub fn run(path: &str, quiet: bool, gen_boundary: bool, limit: Option<usize>) {
             .iter()
             .map(|f| super::parse_or_exit(&f.display().to_string()).0)
             .collect();
-        stdlib_prelude_progs.extend(loader::load_mvl_native_stdlib_extras(&all_progs));
+        stdlib_prelude_progs.extend(load_full_prelude(all_progs.iter(), PreludeMode::Transpile));
     }
 
     // Transpile all test files with mutation instrumentation

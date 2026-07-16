@@ -8,6 +8,7 @@ use mvl::mvl::ir::TirProgram;
 use mvl::mvl::loader;
 use mvl::mvl::parser::ast::Program;
 use mvl::mvl::parser::Parser;
+use mvl::mvl::pipeline::{load_full_prelude, PreludeMode};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
@@ -30,9 +31,10 @@ fn prepare_llvm_text(
     std::collections::HashMap<mvl::mvl::parser::lexer::Span, mvl::mvl::checker::types::Ty>,
 ) {
     let mut prelude = loader::load_implicit_prelude();
-    prelude.extend(loader::load_mvl_native_stdlib_extras(std::slice::from_ref(
-        prog,
-    )));
+    prelude.extend(load_full_prelude(
+        std::iter::once(prog),
+        PreludeMode::Transpile,
+    ));
     prelude.extend(loader::load_rust_backed_stdlib_fns(std::slice::from_ref(
         prog,
     )));

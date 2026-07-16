@@ -51,7 +51,7 @@
 | [0047](0047-package-management-system.md) | Package management system — format, identity, lock file, transitive resolution, supply chain | Accepted |
 | [0048](0048-ast-visit-trait-exhaustive-walkers.md) | AST Visit trait and exhaustive walkers — single canonical traversal, no `..` in walker bodies, contracts in scope | Accepted |
 | [0049](0049-llvm-runtime-ifc-refine-audit.md) | IFC, refine, and audit runtime parity — codegen-only on LLVM | Accepted |
-| [0050](0050-backend-ast-import-audit.md) | Backend AST import audit | Accepted |
+| [0050](0050-backend-ast-import-audit.md) | Backend AST import audit + CLI-side prelude assembly contract | Accepted (extended 2026-07-16) |
 | [0051](0051-fn-field-equality.md) | Function field equality | Accepted |
 | [0052](0052-qualified-module-paths.md) | Qualified module paths for nested files — dot-separated names derived from relative paths | Accepted |
 | [0053](0053-no-rustc-concepts-in-mvl.md) | No rustc concepts in MVL grammar — reject trailing `where T: Trait` fn-signature bounds | Accepted |
