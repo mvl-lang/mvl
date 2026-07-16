@@ -506,7 +506,11 @@ pub unsafe extern "C" fn _mvl_array_is_empty(a: i32) -> i32 {
         return 1;
     }
     let arr = unsafe { &*(a as usize as *const MvlArray) };
-    if arr.len == 0 { 1 } else { 0 }
+    if arr.len == 0 {
+        1
+    } else {
+        0
+    }
 }
 
 /// Grow `arr`'s backing buffer to fit one more element. Doubles capacity

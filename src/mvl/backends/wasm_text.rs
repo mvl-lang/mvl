@@ -802,9 +802,7 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
         // now. `set_test.mvl` stays out of `WASM_CORPUS` until dedup lands.
         TirExprKind::List { elems } | TirExprKind::Set { elems } => {
             ctx.needs_runtime.set(true);
-            let elem_ty = collection_elem_ty(&expr.ty)
-                .cloned()
-                .unwrap_or(Ty::Int);
+            let elem_ty = collection_elem_ty(&expr.ty).cloned().unwrap_or(Ty::Int);
             // String elements need a `*MvlString` allocation per element
             // (they arrive on the WASM stack as two i32s, but the array
             // stores fixed-width slots). Deferred until Phase 3.2.
