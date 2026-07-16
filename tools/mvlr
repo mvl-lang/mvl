@@ -11,11 +11,10 @@
 # any backend that expects `fn main`.
 #
 # Interim workarounds documented here:
-#   * `grep -v '^STDOUT '`  — checker debug leaks polluting pipes (#1829)
 #   * `test fn` → `fn` shim — until `mvl test --backend=llvm` batches
 #                              `test fn` natively (#1828)
 #
-# Both should be removed once their tickets close.
+# Should be removed once its ticket closes.
 #
 # Removed (#1830 — 2026-07-14):
 #   * Target-triple sed — emitter no longer emits a hardcoded triple;
@@ -282,17 +281,15 @@ run_mvl_llvm_file() {
     tmp=$(mktemp -d)
     # shellcheck disable=SC2064
     trap "rm -rf '$tmp'" RETURN
-    # #1829: filter checker STDOUT leaks at both pipe stages. Stage stderr
-    # is captured to files so a failure in either mvl invocation surfaces
-    # a useful message instead of an empty exit 1.
+    # Stage stderr is captured to files so a failure in either mvl invocation
+    # surfaces a useful message instead of an empty exit 1.
     if ! "$MVL" tir "$src" 2>"$tmp/tir.err" > "$tmp/tir.out"; then
         echo "mvlr: mvl tir failed for $src" >&2
         cat "$tmp/tir.err" >&2
         return 1
     fi
-    if ! grep -v '^STDOUT ' "$tmp/tir.out" \
-        | "$MVL" run compiler/backends/llvm/emitter.mvl 2>"$tmp/emit.err" \
-        | grep -v '^STDOUT ' \
+    if ! "$MVL" run compiler/backends/llvm/emitter.mvl \
+        < "$tmp/tir.out" 2>"$tmp/emit.err" \
         | tail -n +3 > "$tmp/out.ll"; then
         echo "mvlr: self-hosted LLVM emitter failed" >&2
         cat "$tmp/emit.err" >&2
