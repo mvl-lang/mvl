@@ -1,9 +1,9 @@
 # ADR-0050: Backend AST Import Audit — TIR-First Migration Gap Analysis
 
-**Status:** Accepted — Migration complete (2026-07-03)
-**Date:** 2026-06-27
-**Issues:** #1594 (audit), #1118 (backends Phase A), #1113 (self-hosting epic)
-**Related:** ADR-0044 (TIR-first strategy), ADR-0038 (Typed IR), ADR-0027 (multi-backend)
+**Status:** Accepted — Migration complete (2026-07-03); extended with CLI-side prelude contract (2026-07-16)
+**Date:** 2026-06-27 (extended 2026-07-16)
+**Issues:** #1594 (audit), #1118 (backends Phase A), #1113 (self-hosting epic), #1803 (CLI-side extension)
+**Related:** ADR-0044 (TIR-first strategy), ADR-0038 (Typed IR), ADR-0027 (multi-backend), ADR-0007 (stdlib import model)
 
 ---
 
@@ -200,6 +200,74 @@ The audit script (`tools/audit_backend_ast.py`) enforces zero references — bot
 
 ---
 
+## Extension (2026-07-16): CLI-side prelude assembly contract (#1803)
+
+The migration above cleaned up the backend side of `pipeline.rs` — backends
+consume `TirProgram` only, no AST crosses the boundary. It left one thing
+unfinished on the CLI side: **each CLI subcommand still assembled its own
+prelude** by calling `loader::load_stdlib_prelude` and/or
+`loader::load_mvl_native_stdlib_extras` directly, choosing between them
+per-pipeline. The result was silent-failure drift — three documented
+incidents where a subcommand called the wrong loader (or forgot the extras
+loader entirely) and produced downstream `Ty::Unknown` types or Rust
+compile failures:
+
+- v0.246.1 — `mvl mcdc` missing extras
+- v0.249.2 (#1788) — `mvl tir` and `mvl mutate` missing extras
+- The `check` vs `transpile` distinction (disk-first vs embedded-only,
+  hybrid-module type stripping) is not the CLI author's problem to reason
+  about per subcommand.
+
+### Contract
+
+Every CLI subcommand that assembles a prelude for the checker or the
+transpile pipeline **MUST** route through a single canonical assembler in
+`src/mvl/pipeline.rs`:
+
+```rust
+pub enum PreludeMode {
+    TypeCheck,   // full types, disk-first — for `check`, `prove`, `assurance`
+    Transpile,   // strip hybrid types, embedded — for backend pipelines
+    BothPhases,  // both — for `build` (checker phase + transpile phase)
+}
+
+pub fn load_full_prelude(
+    progs: &[Program],
+    mode: PreludeMode,
+    stdlib_dir: &Path,
+) -> Vec<Program>;
+```
+
+The two lower-level loaders become `pub(crate)` — internal implementation
+detail of `pipeline::load_full_prelude`, not part of the CLI-facing API.
+
+### Enforcement
+
+- `tools/audit_backend_ast.py` remains scoped to `src/mvl/backends/`
+  (backend↔AST decoupling).
+- A parallel lint (grep or unit test) verifies `src/cli/**` contains **no
+  direct references to `loader::load_stdlib_prelude` or
+  `loader::load_mvl_native_stdlib_extras`** — all CLI prelude assembly goes
+  through `pipeline::load_full_prelude`.
+- Regression test: adding a new CLI subcommand that calls the private
+  loaders directly must fail the lint in CI.
+
+### Rationale
+
+This completes the sentence "AST-level orchestration lives in
+`src/mvl/pipeline.rs`" quoted in the Final state (2026-07-03) section
+above. That statement was true structurally (backends stopped receiving
+AST) but false operationally (CLI subcommands still hand-wired their own
+prelude assembly). Making `pipeline::load_full_prelude` the single entry
+point closes that gap and eliminates a silent-failure category tracked
+across #1788, #1803, and the earlier `mvl mcdc` incident.
+
+The same principle from ADR-0007 applies at the loader level: **if the
+compiler needs a stdlib module to type-check or transpile a program, the
+loader that fetches it should not vary by CLI subcommand.** ADR-0007
+covers the user-facing model; this section covers the compiler-side
+implementation of the same guarantee.
+
 ---
 
 ## Relation to language definition
@@ -248,3 +316,7 @@ documents the ground truth for the #1118 self-hosting backend port scope.
 - Phase 3c (Rust backend) required moving AST-level helpers from `src/mvl/backends/rust.rs`
   to `src/mvl/pipeline.rs` — the natural home for AST-consuming orchestration code.
   Public API compatibility preserved via `pub use` re-exports.
+- The CLI-side counterpart was not addressed by the original scope. Each CLI
+  subcommand kept assembling its own prelude via direct `loader::*` calls,
+  producing the drift bugs listed in the 2026-07-16 extension section.
+  Closed by #1803.
