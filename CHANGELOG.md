@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-07-16
+
+### Fixed — #1825 wasm_text ADR-0050 violation
+
+Redirects `wasm_text.rs` imports from `parser::ast` to `crate::mvl::ir`,
+consistent with the llvm_text and rust backends. Resets the ADR-0050 audit
+budget from 1 back to 0.
+
 ## [1.5.0] - 2026-07-16
 
 ### Added — #1821 WASM Option ABI (partial)
