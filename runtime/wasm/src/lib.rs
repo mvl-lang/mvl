@@ -680,6 +680,168 @@ pub unsafe extern "C" fn _mvl_array_drop(a: i32) {
     }
 }
 
+/// `_mvl_array_get_option_i64(a, idx)` → `*MvlOption` — Some(value) when
+/// `idx` is in `[0, len)`, otherwise None. Returned Option owns its box
+/// (`rc = 1`); caller drops via `_mvl_option_drop`.
+///
+/// Wraps `_mvl_array_get` + typed load — spares the emitter from doing
+/// the null-check + Option construction inline for every `.get(i)` call.
+///
+/// # Safety
+/// `a` must be a valid `MvlArray` pointer with `elem_size == 8`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_array_get_option_i64(a: i32, idx: i64) -> i32 {
+    let elem_ptr = unsafe { _mvl_array_get(a, idx) };
+    if elem_ptr == 0 {
+        return _mvl_option_none();
+    }
+    let val: i64 = unsafe { core::ptr::read(elem_ptr as usize as *const i64) };
+    _mvl_option_some_i64(val)
+}
+
+/// `_mvl_array_get_option_i32(a, idx)` → `*MvlOption` — i32 variant for
+/// `List[Bool]` / `List[Byte]` / enum discriminant elements. Same
+/// null-check + Some/None wrapping as the i64 variant.
+///
+/// # Safety
+/// `a` must be a valid `MvlArray` pointer with `elem_size == 4`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_array_get_option_i32(a: i32, idx: i64) -> i32 {
+    let elem_ptr = unsafe { _mvl_array_get(a, idx) };
+    if elem_ptr == 0 {
+        return _mvl_option_none();
+    }
+    let val: i32 = unsafe { core::ptr::read(elem_ptr as usize as *const i32) };
+    _mvl_option_some_i32(val)
+}
+
+// ── MvlOption (#1821 partial — Phase 4 prelude, unblocks Phase 3 corpus) ─
+//
+// Heap-allocated `Option[T]` for the WASM ABI. Mirrors `runtime/llvm/src/
+// abi.rs::MvlOption` in spirit, but this backend uses i32 pointers +
+// i64/i32 payload rather than the LLVM `{ i8, ptr }` aggregate — WASM
+// doesn't have struct returns in the C-ABI sense, so the emitter treats
+// the pointer as opaque i32 and unpacks via accessor calls.
+//
+// Layout:
+//   offset 0: i32 tag         — 0 = Some, 1 = None
+//   offset 4: i32 rc          — refcount
+//   offset 8: i64 value       — payload (only meaningful when tag == 0)
+//
+// Tag convention (Some = 0, None = 1) matches the LLVM emitter's
+// `wrap_result_pair("0", …)` / `wrap_result_pair("1", …)` usage
+// (emit_helpers.rs::emit_none_constructor, emit_option_constructor_tir).
+// The abi.rs doc comment is the opposite convention — the LLVM code has
+// diverged from that comment and we follow the code, not the comment.
+//
+// `_mvl_option_some_i32` upcasts the i32 into the i64 slot; `_i32`
+// accessor downcasts via `i32.wrap_i64` on read. Single layout for all
+// payload widths keeps the emitter dispatch simple.
+
+#[repr(C)]
+pub struct MvlOption {
+    pub tag: i32,
+    pub rc: i32,
+    pub value: i64,
+}
+
+/// Construct `Some(v)` wrapping an i64-typed payload. Returns the
+/// `MvlOption` pointer as i32 with `rc = 1`.
+#[unsafe(no_mangle)]
+pub extern "C" fn _mvl_option_some_i64(v: i64) -> i32 {
+    let opt = Box::new(MvlOption {
+        tag: 0,
+        rc: 1,
+        value: v,
+    });
+    Box::into_raw(opt) as i32
+}
+
+/// Construct `Some(v)` wrapping an i32-typed payload. Upcast to i64 for
+/// the shared `value` slot.
+#[unsafe(no_mangle)]
+pub extern "C" fn _mvl_option_some_i32(v: i32) -> i32 {
+    _mvl_option_some_i64(v as i64)
+}
+
+/// Construct `None`. `value` is 0 by convention but shouldn't be read
+/// when `tag != 0`.
+#[unsafe(no_mangle)]
+pub extern "C" fn _mvl_option_none() -> i32 {
+    let opt = Box::new(MvlOption {
+        tag: 1,
+        rc: 1,
+        value: 0,
+    });
+    Box::into_raw(opt) as i32
+}
+
+/// `_mvl_option_tag(opt)` — 0 for Some, 1 for None.
+///
+/// # Safety
+/// `opt` must be a valid `MvlOption` pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_option_tag(opt: i32) -> i32 {
+    if opt == 0 {
+        return 1;
+    }
+    let o = unsafe { &*(opt as usize as *const MvlOption) };
+    o.tag
+}
+
+/// Read the i64 payload. Undefined when `tag != 0` — the emitter must
+/// only call this on a proven-Some branch.
+///
+/// # Safety
+/// `opt` must be a valid `MvlOption` pointer whose Some payload is
+/// i64-typed. Reading None's payload returns 0 (harmless).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_option_value_i64(opt: i32) -> i64 {
+    if opt == 0 {
+        return 0;
+    }
+    let o = unsafe { &*(opt as usize as *const MvlOption) };
+    o.value
+}
+
+/// Read the i32 payload. Downcasts the i64 slot via `as i32`. Undefined
+/// when `tag != 0`.
+///
+/// # Safety
+/// `opt` must be a valid `MvlOption` pointer whose Some payload is
+/// i32-typed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_option_value_i32(opt: i32) -> i32 {
+    if opt == 0 {
+        return 0;
+    }
+    let o = unsafe { &*(opt as usize as *const MvlOption) };
+    o.value as i32
+}
+
+/// Refcount decrement; free the box when it reaches zero. Null-safe.
+///
+/// Payload is not itself dropped — `Option[Int]` payload is a value type,
+/// nothing to reclaim. `Option[String]` / `Option[List[T]]` would need a
+/// typed drop; those lower in later phases.
+///
+/// # Safety
+/// `opt` must be a valid `MvlOption` pointer, not used after drop.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_option_drop(opt: i32) {
+    if opt == 0 {
+        return;
+    }
+    let o = unsafe { &mut *(opt as usize as *mut MvlOption) };
+    o.rc -= 1;
+    if o.rc > 0 {
+        return;
+    }
+    unsafe {
+        let _ = Box::from_raw(opt as usize as *mut MvlOption);
+    }
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────
 //
 // Compiled + run under wasm32-wasip1 so the i32-pointer ABI works as it
@@ -1381,6 +1543,86 @@ mod tests {
         let p = unsafe { _mvl_array_get(a, 0) };
         let v: f64 = unsafe { *(p as usize as *const f64) };
         assert!((v - 3.14).abs() < 1e-9);
+        unsafe { _mvl_array_drop(a) };
+    }
+
+    // ── MvlOption ────
+
+    #[test]
+    fn option_none_tag() {
+        let n = _mvl_option_none();
+        assert_eq!(unsafe { _mvl_option_tag(n) }, 1);
+        unsafe { _mvl_option_drop(n) };
+    }
+
+    #[test]
+    fn option_some_i64_roundtrip() {
+        let s = _mvl_option_some_i64(42);
+        assert_eq!(unsafe { _mvl_option_tag(s) }, 0);
+        assert_eq!(unsafe { _mvl_option_value_i64(s) }, 42);
+        unsafe { _mvl_option_drop(s) };
+    }
+
+    #[test]
+    fn option_some_i32_roundtrip() {
+        let s = _mvl_option_some_i32(1);
+        assert_eq!(unsafe { _mvl_option_tag(s) }, 0);
+        assert_eq!(unsafe { _mvl_option_value_i32(s) }, 1);
+        unsafe { _mvl_option_drop(s) };
+    }
+
+    #[test]
+    fn option_some_negative_i64() {
+        let s = _mvl_option_some_i64(-123);
+        assert_eq!(unsafe { _mvl_option_value_i64(s) }, -123);
+        unsafe { _mvl_option_drop(s) };
+    }
+
+    #[test]
+    fn option_null_ptr_treated_as_none() {
+        // `_mvl_option_tag(0)` returns 1 (None) — mirrors MvlString's
+        // null-safe accessors so an accidental null read doesn't UB.
+        assert_eq!(unsafe { _mvl_option_tag(0) }, 1);
+        assert_eq!(unsafe { _mvl_option_value_i64(0) }, 0);
+    }
+
+    // ── _mvl_array_get_option ────
+
+    #[test]
+    fn array_get_option_i64_in_bounds() {
+        let a = _mvl_array_new(8, 4);
+        unsafe {
+            _mvl_array_push_i64(a, 100);
+            _mvl_array_push_i64(a, 200);
+        }
+        let opt = unsafe { _mvl_array_get_option_i64(a, 1) };
+        assert_eq!(unsafe { _mvl_option_tag(opt) }, 0);
+        assert_eq!(unsafe { _mvl_option_value_i64(opt) }, 200);
+        unsafe { _mvl_option_drop(opt) };
+        unsafe { _mvl_array_drop(a) };
+    }
+
+    #[test]
+    fn array_get_option_i64_out_of_bounds() {
+        let a = _mvl_array_new(8, 4);
+        unsafe { _mvl_array_push_i64(a, 42) };
+        let opt = unsafe { _mvl_array_get_option_i64(a, 99) };
+        assert_eq!(unsafe { _mvl_option_tag(opt) }, 1, "OOB should be None");
+        unsafe { _mvl_option_drop(opt) };
+        unsafe { _mvl_array_drop(a) };
+    }
+
+    #[test]
+    fn array_get_option_i32_in_bounds() {
+        let a = _mvl_array_new(4, 4);
+        unsafe {
+            _mvl_array_push_i32(a, 1);
+            _mvl_array_push_i32(a, 0);
+        }
+        let opt = unsafe { _mvl_array_get_option_i32(a, 0) };
+        assert_eq!(unsafe { _mvl_option_tag(opt) }, 0);
+        assert_eq!(unsafe { _mvl_option_value_i32(opt) }, 1);
+        unsafe { _mvl_option_drop(opt) };
         unsafe { _mvl_array_drop(a) };
     }
 }
