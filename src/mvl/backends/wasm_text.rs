@@ -155,6 +155,21 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
         "_mvl_string_replace",
         "(param i32 i32 i32 i32 i32 i32) (result i32)",
     ),
+    // Group C — MvlArray (List[T] / Array[T, N] / Set[T] backing storage,
+    // #1820). Pointer-typed as i32; elements accessed by byte offset with
+    // `i32.load` / `i64.load` / `f64.load` on the pointer returned by
+    // `_mvl_array_get`. Typed push variants exist so the emitter can pass
+    // the value directly on the WASM stack (no scratch alloc needed).
+    ("_mvl_array_new", "(param i32 i32) (result i32)"),
+    ("_mvl_array_len", "(param i32) (result i64)"),
+    ("_mvl_array_is_empty", "(param i32) (result i32)"),
+    ("_mvl_array_push", "(param i32 i32)"),
+    ("_mvl_array_push_i32", "(param i32 i32)"),
+    ("_mvl_array_push_i64", "(param i32 i64)"),
+    ("_mvl_array_push_f64", "(param i32 f64)"),
+    ("_mvl_array_get", "(param i32 i64) (result i32)"),
+    ("_mvl_array_clone", "(param i32) (result i32)"),
+    ("_mvl_array_drop", "(param i32)"),
 ];
 
 /// Layout offsets on `MvlString` — mirrors `runtime/wasm/src/lib.rs` /
@@ -332,17 +347,30 @@ fn emit_fn(out: &mut String, f: &TirFn, ctx: &Ctx) {
         // `_mvl_string_drop` is null-safe, so temps on code paths that
         // never allocated are harmless.
         //
+        // For collections (`__ma_*` — MvlArray literal temps) we do NOT
+        // drop, because that temp holds the *same pointer* as the value
+        // that flowed out to the outer expression (typically bound to a
+        // `let xs: List[T] = ...` local). Dropping both would double-free.
+        // Instead, we drop user-bound list locals below.
+        //
         // Limitation: this only catches implicit-return paths. Explicit
         // `return` in the middle of the fn skips cleanup and leaks. Fine
-        // for phase-2 corpus tests, which all end via implicit return.
-        // If a fn returns a String derived from a heap allocation, this
-        // would prematurely free the byte buffer the caller is about to
-        // read from — but the emitter doesn't yet emit that shape (String
-        // is never a user-fn return value in the current WASM_CORPUS).
-        for (name, _) in &locals {
+        // for phase-2/3 corpus tests, which all end via implicit return.
+        for (name, ty) in &locals {
             if name.starts_with("__ms_") {
                 out.push_str(&format!("    local.get ${name}\n"));
                 out.push_str("    call $_mvl_string_drop\n");
+            } else if !name.starts_with("__")
+                && collection_elem_ty(ty).is_some()
+                && collection_elem_ty(ty)
+                    .map(|e| !matches!(e, Ty::String))
+                    .unwrap_or(true)
+            {
+                // User-bound list / array / set. Drops the array header +
+                // element buffer. Element-level drops (e.g. inner strings)
+                // aren't emitted yet — deferred with List[String].
+                out.push_str(&format!("    local.get ${name}\n"));
+                out.push_str("    call $_mvl_array_drop\n");
             }
         }
     }
@@ -382,6 +410,40 @@ fn collect_locals_stmt(stmt: &TirStmt, locals: &mut Vec<(String, Ty)>) {
         }
         TirStmt::While { cond, body, .. } => {
             collect_locals_expr(cond, locals);
+            collect_locals_block(body, locals);
+        }
+        TirStmt::For {
+            pattern,
+            iter,
+            body,
+            span,
+            ..
+        } => {
+            collect_locals_expr(iter, locals);
+            // Loop variable — `for x in xs { ... }` binds `x` to each element.
+            // `Pattern::Wildcard` (`for _ in xs`) gets a synthesized name so
+            // the local is still declared (some `for _` code still increments
+            // an outer counter — the local itself is unused but needs to
+            // exist for wasm-tools to accept `local.set`).
+            let (var_name, var_ty) = match pattern {
+                Pattern::Ident(n, _) => (
+                    n.clone(),
+                    collection_elem_ty(&iter.ty).cloned().unwrap_or(Ty::Int),
+                ),
+                _ => (
+                    format!("__for_wild_{}", span.offset),
+                    collection_elem_ty(&iter.ty).cloned().unwrap_or(Ty::Int),
+                ),
+            };
+            locals.push((var_name, var_ty));
+            // Range form uses only `__for_hi_<off>` (i64); list form uses
+            // `__for_arr_<off>` (i32), `__for_idx_<off>` (i64),
+            // `__for_len_<off>` (i64). Declaring all four for both shapes is
+            // cheap and lets `emit_for_stmt` dispatch without pre-scan sync.
+            locals.push((format!("__for_hi_{}", span.offset), Ty::Int));
+            locals.push((format!("__for_arr_{}", span.offset), Ty::Bool));
+            locals.push((format!("__for_idx_{}", span.offset), Ty::Int));
+            locals.push((format!("__for_len_{}", span.offset), Ty::Int));
             collect_locals_block(body, locals);
         }
         TirStmt::Match {
@@ -458,6 +520,14 @@ fn collect_locals_expr(expr: &TirExpr, locals: &mut Vec<(String, Ty)>) {
                 // temp so we don't need a dedicated "raw i32" ty.
                 locals.push((mvl_string_temp_name(expr), Ty::Bool));
             }
+        }
+        // List / Set literals stash their `*MvlArray` pointer in a temp
+        // during the per-element push sequence. Declare it here.
+        TirExprKind::List { elems } | TirExprKind::Set { elems } => {
+            for e in elems {
+                collect_locals_expr(e, locals);
+            }
+            locals.push((mvl_array_temp_name(expr), Ty::Bool));
         }
         _ => {}
     }
@@ -553,8 +623,19 @@ fn emit_stmt(out: &mut String, stmt: &TirStmt, ctx: &Ctx) {
             out.push_str("    end\n");
             out.push_str("    end\n");
         }
-        _ => {
-            out.push_str(&format!("    ;; unsupported stmt: {stmt:?}\n"));
+        // `for pat in iter { body }` — two shapes, mirroring the LLVM
+        // backend (emit_stmts_tir.rs::emit_for_stmt_tir):
+        //   1. `for i in range(lo, hi)` — integer range loop, i64 counter.
+        //   2. `for x in xs` — list iteration over MvlArray via
+        //      `_mvl_array_len` + `_mvl_array_get` + typed load.
+        TirStmt::For {
+            pattern,
+            iter,
+            body,
+            span,
+            ..
+        } => {
+            emit_for_stmt(out, pattern, iter, body, span.offset, ctx);
         }
     }
 }
@@ -697,6 +778,56 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             out.push_str(&format!("    call $_mvl_string_{method}\n"));
             emit_unpack_mvl_string(out, expr);
         }
+        // List query methods — `.len()` / `.is_empty()` on any collection
+        // that lowers to `*MvlArray` (List / Array / Set). Set uses the
+        // same runtime; Set semantics come from `_mvl_array_dedup` at
+        // construction time (not shipped yet in Phase 3.1).
+        TirExprKind::MethodCall {
+            receiver, method, ..
+        } if collection_elem_ty(&receiver.ty).is_some()
+            && matches!(method.as_str(), "len" | "is_empty") =>
+        {
+            ctx.needs_runtime.set(true);
+            emit_expr(out, receiver, ctx);
+            out.push_str(&format!("    call $_mvl_array_{method}\n"));
+        }
+        // List / Set literal — `[e1, e2, ...]` or `{e1, e2, ...}` (values).
+        // Emits `_mvl_array_new(elem_size, cap)`, stashes the pointer in a
+        // fn-scoped temp, then pushes each element via the typed push op
+        // matching the element's WASM lowering. Leaves the pointer on the
+        // stack as the expression value.
+        //
+        // Set semantics (deduplication) require `_mvl_array_dedup`, which
+        // isn't in the runtime yet — falling back to List semantics for
+        // now. `set_test.mvl` stays out of `WASM_CORPUS` until dedup lands.
+        TirExprKind::List { elems } | TirExprKind::Set { elems } => {
+            ctx.needs_runtime.set(true);
+            let elem_ty = collection_elem_ty(&expr.ty)
+                .cloned()
+                .unwrap_or(Ty::Int);
+            // String elements need a `*MvlString` allocation per element
+            // (they arrive on the WASM stack as two i32s, but the array
+            // stores fixed-width slots). Deferred until Phase 3.2.
+            if matches!(&elem_ty, Ty::String) {
+                out.push_str("    ;; unsupported: List[String] literal (Phase 3.2)\n");
+                return;
+            }
+            let elem_size = elem_size_bytes(&elem_ty, ctx);
+            let cap = elems.len().max(4) as i32;
+            let temp = mvl_array_temp_name(expr);
+            out.push_str(&format!("    i32.const {elem_size}\n"));
+            out.push_str(&format!("    i32.const {cap}\n"));
+            out.push_str("    call $_mvl_array_new\n");
+            out.push_str(&format!("    local.set ${temp}\n"));
+            let push_op = push_op_for(&elem_ty, ctx);
+            for e in elems {
+                out.push_str(&format!("    local.get ${temp}\n"));
+                emit_expr(out, e, ctx);
+                out.push_str(&format!("    call {push_op}\n"));
+            }
+            // Leave the array pointer as the expression's stack value.
+            out.push_str(&format!("    local.get ${temp}\n"));
+        }
         TirExprKind::Block(block) => emit_block(out, block, ctx),
         // `match scrutinee { pat1 => arm1, pat2 => arm2, _ => default }` —
         // limited to Int/Bool literal patterns + Wildcard/Ident for now.
@@ -732,6 +863,157 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
         other => {
             out.push_str(&format!("    ;; unsupported expr: {other:?}\n"));
         }
+    }
+}
+
+/// Emit a `for pat in iter { body }` statement — dispatches on iter shape:
+///
+///   - `for i in range(lo, hi)` → integer range loop with an i64 counter
+///   - `for x in xs`            → list iteration via `_mvl_array_len` +
+///                                `_mvl_array_get` + typed load
+///
+/// Loop shape is the same in both cases:
+///
+///   block $break
+///     alloca+init counter/index
+///     loop $cont
+///       load counter
+///       compare against upper bound; br_if $break when done
+///       body (with loop var bound)
+///       counter += 1
+///       br $cont
+///     end
+///   end
+///
+/// Mirrors the LLVM backend's `emit_for_stmt_tir` (emit_stmts_tir.rs L354+).
+fn emit_for_stmt(
+    out: &mut String,
+    pattern: &Pattern,
+    iter: &TirExpr,
+    body: &TirBlock,
+    span_offset: u32,
+    ctx: &Ctx,
+) {
+    let var_name: String = match pattern {
+        Pattern::Ident(n, _) => n.clone(),
+        _ => format!("__for_wild_{span_offset}"),
+    };
+    // `for i in range(lo, hi)` — spelled as a fn call in TIR.
+    if let TirExprKind::FnCall { name, args, .. } = &iter.kind {
+        if name == "range" && args.len() == 2 {
+            emit_for_range(out, &var_name, &args[0], &args[1], body, span_offset, ctx);
+            return;
+        }
+    }
+    emit_for_list(out, &var_name, iter, body, span_offset, ctx);
+}
+
+/// Range form: `for i in range(lo, hi)` — pre-declared i64 local `$i` is
+/// initialized to `lo`, loop compares `< hi`, increment by 1 each iteration.
+fn emit_for_range(
+    out: &mut String,
+    var_name: &str,
+    lo: &TirExpr,
+    hi: &TirExpr,
+    body: &TirBlock,
+    span_offset: u32,
+    ctx: &Ctx,
+) {
+    // Stash `hi` once at loop entry — evaluating it every iteration would
+    // change the semantics when `hi` has side effects. LLVM does the same.
+    let hi_local = format!("__for_hi_{span_offset}");
+    let brk = ctx.fresh_label("for_end");
+    let cnt = ctx.fresh_label("for_cont");
+
+    emit_expr(out, lo, ctx);
+    out.push_str(&format!("    local.set ${var_name}\n"));
+    emit_expr(out, hi, ctx);
+    out.push_str(&format!("    local.set ${hi_local}\n"));
+
+    out.push_str(&format!("    block ${brk}\n"));
+    out.push_str(&format!("    loop ${cnt}\n"));
+    // done? i >= hi → break
+    out.push_str(&format!("    local.get ${var_name}\n"));
+    out.push_str(&format!("    local.get ${hi_local}\n"));
+    out.push_str("    i64.ge_s\n");
+    out.push_str(&format!("    br_if ${brk}\n"));
+    // body
+    emit_block(out, body, ctx);
+    // i = i + 1
+    out.push_str(&format!("    local.get ${var_name}\n"));
+    out.push_str("    i64.const 1\n");
+    out.push_str("    i64.add\n");
+    out.push_str(&format!("    local.set ${var_name}\n"));
+    out.push_str(&format!("    br ${cnt}\n"));
+    out.push_str("    end\n");
+    out.push_str("    end\n");
+}
+
+/// List form: `for x in xs` where `xs: List[T]` / `Array[T, N]` / `Set[T]`.
+/// Uses `_mvl_array_len` for the bound and `_mvl_array_get` per iteration,
+/// loading the element with the appropriate `i64.load` / `i32.load` /
+/// `f64.load` based on `T`.
+fn emit_for_list(
+    out: &mut String,
+    var_name: &str,
+    iter: &TirExpr,
+    body: &TirBlock,
+    span_offset: u32,
+    ctx: &Ctx,
+) {
+    let arr_local = format!("__for_arr_{span_offset}");
+    let idx_local = format!("__for_idx_{span_offset}");
+    let len_local = format!("__for_len_{span_offset}");
+    let brk = ctx.fresh_label("for_end");
+    let cnt = ctx.fresh_label("for_cont");
+
+    let elem_ty = collection_elem_ty(&iter.ty).cloned().unwrap_or(Ty::Int);
+    let (load_op, _) = list_elem_load_op(&elem_ty, ctx);
+
+    ctx.needs_runtime.set(true);
+
+    // Stash the array pointer + length once at loop entry.
+    emit_expr(out, iter, ctx);
+    out.push_str(&format!("    local.set ${arr_local}\n"));
+    out.push_str(&format!("    local.get ${arr_local}\n"));
+    out.push_str("    call $_mvl_array_len\n");
+    out.push_str(&format!("    local.set ${len_local}\n"));
+    // idx starts at 0.
+    out.push_str("    i64.const 0\n");
+    out.push_str(&format!("    local.set ${idx_local}\n"));
+
+    out.push_str(&format!("    block ${brk}\n"));
+    out.push_str(&format!("    loop ${cnt}\n"));
+    // done? idx >= len → break
+    out.push_str(&format!("    local.get ${idx_local}\n"));
+    out.push_str(&format!("    local.get ${len_local}\n"));
+    out.push_str("    i64.ge_s\n");
+    out.push_str(&format!("    br_if ${brk}\n"));
+    // load element into $var_name
+    out.push_str(&format!("    local.get ${arr_local}\n"));
+    out.push_str(&format!("    local.get ${idx_local}\n"));
+    out.push_str("    call $_mvl_array_get\n");
+    out.push_str(&format!("    {load_op}\n"));
+    out.push_str(&format!("    local.set ${var_name}\n"));
+    // body
+    emit_block(out, body, ctx);
+    // idx = idx + 1
+    out.push_str(&format!("    local.get ${idx_local}\n"));
+    out.push_str("    i64.const 1\n");
+    out.push_str("    i64.add\n");
+    out.push_str(&format!("    local.set ${idx_local}\n"));
+    out.push_str(&format!("    br ${cnt}\n"));
+    out.push_str("    end\n");
+    out.push_str("    end\n");
+}
+
+/// Pick the WASM load op for an element type when reading from a pointer
+/// returned by `_mvl_array_get`. Returns (op, byte width).
+fn list_elem_load_op(elem_ty: &Ty, ctx: &Ctx) -> (&'static str, u32) {
+    match wasm_ty(elem_ty, ctx) {
+        "i32" => ("i32.load offset=0", 4),
+        "f64" => ("f64.load offset=0", 8),
+        _ => ("i64.load offset=0", 8),
     }
 }
 
@@ -954,6 +1236,58 @@ fn mvl_string_temp_name(expr: &TirExpr) -> String {
     format!("__ms_{}_{}", expr.span.offset, expr.span.len)
 }
 
+/// Temp local name for the `*MvlArray` pointer stashed during a list
+/// literal's per-element push sequence. Same span-based scheme as
+/// `mvl_string_temp_name`.
+fn mvl_array_temp_name(expr: &TirExpr) -> String {
+    format!("__ma_{}_{}", expr.span.offset, expr.span.len)
+}
+
+/// Byte size of a WASM value with the given element type — used as the
+/// `elem_size` argument to `_mvl_array_new`. Maps 1:1 to the [`wasm_ty`]
+/// families:
+///
+///   `i32` (Bool / Byte / enum / collection ptr) → 4
+///   `i64` (Int / UInt / …)                     → 8
+///   `f64` (Float)                              → 8
+fn elem_size_bytes(elem_ty: &Ty, ctx: &Ctx) -> u32 {
+    if is_i32(elem_ty, ctx) {
+        4
+    } else {
+        // Int, Float, and unsupported-so-far element types all end up here.
+        // String elements need a `*MvlString` (i32) wrapper allocation per
+        // element — deferred until Phase 3.2 / 3.3.
+        8
+    }
+}
+
+/// WASM push op name for an element type — one of
+/// `_mvl_array_push_i32` / `_i64` / `_f64`. The typed variants pass the
+/// value directly on the stack (no scratch alloc needed).
+fn push_op_for(elem_ty: &Ty, ctx: &Ctx) -> &'static str {
+    match wasm_ty(elem_ty, ctx) {
+        "i32" => "$_mvl_array_push_i32",
+        "f64" => "$_mvl_array_push_f64",
+        _ => "$_mvl_array_push_i64",
+    }
+}
+
+/// The inner element type of a `Ty::List/Array/Set`, or `None` if `ty`
+/// is not a collection. Peels off `Ref` / `Labeled` / `Refined` wrappers
+/// so `let xs: ref List[Int] = …` still resolves.
+fn collection_elem_ty(ty: &Ty) -> Option<&Ty> {
+    let mut cur = ty;
+    loop {
+        match cur {
+            Ty::Ref(_, inner) | Ty::Labeled(_, inner) | Ty::Refined(inner, _) => {
+                cur = inner;
+            }
+            Ty::List(e) | Ty::Array(e, _) | Ty::Set(e) => return Some(e),
+            _ => return None,
+        }
+    }
+}
+
 /// Emit `assert_eq(a, b)` or `assert_ne(a, b)` — mirrors the LLVM backend's
 /// `emit_assert_eq_builtin_tir` (#1837). Compares the two values with a
 /// type-directed equality op, then traps via `unreachable` when the check
@@ -1096,6 +1430,10 @@ fn wasm_ty(ty: &Ty, ctx: &Ctx) -> &'static str {
         Ty::Float => "f64",
         Ty::Bool | Ty::Byte => "i32",
         Ty::Named(name, _) if ctx.enum_types.contains(name) => "i32",
+        // Heap-allocated collection pointers: `*MvlArray` / `*MvlMap` are
+        // opaque i32 addresses on the WASM stack. Element access is via
+        // `_mvl_array_get(a, idx) -> i32` + a typed `i64.load` / `f64.load`.
+        Ty::List(_) | Ty::Array(_, _) | Ty::Set(_) | Ty::Map(_, _) => "i32",
         Ty::Ref(_, inner) | Ty::Labeled(_, inner) | Ty::Refined(inner, _) => wasm_ty(inner, ctx),
         _ => "i64",
     }
@@ -1111,11 +1449,13 @@ fn is_float(ty: &Ty) -> bool {
 }
 
 /// True if this MVL type lowers to WASM `i32` (Bool, Byte, unit-variant
-/// enums). Used to pick between `i64.*` / `i32.*` / `f64.*` opcode families.
+/// enums, or collection pointers). Used to pick between
+/// `i64.*` / `i32.*` / `f64.*` opcode families.
 fn is_i32(ty: &Ty, ctx: &Ctx) -> bool {
     match ty {
         Ty::Bool | Ty::Byte => true,
         Ty::Named(name, _) if ctx.enum_types.contains(name) => true,
+        Ty::List(_) | Ty::Array(_, _) | Ty::Set(_) | Ty::Map(_, _) => true,
         Ty::Ref(_, inner) | Ty::Labeled(_, inner) | Ty::Refined(inner, _) => is_i32(inner, ctx),
         _ => false,
     }
@@ -1202,6 +1542,10 @@ fn collect_stmt(stmt: &TirStmt, map: &mut HashMap<String, (u32, u32)>, next: &mu
         }
         TirStmt::While { cond, body, .. } => {
             collect_expr(cond, map, next);
+            collect_block(body, map, next);
+        }
+        TirStmt::For { iter, body, .. } => {
+            collect_expr(iter, map, next);
             collect_block(body, map, next);
         }
         _ => {}

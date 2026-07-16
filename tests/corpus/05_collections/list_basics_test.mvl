@@ -1,0 +1,92 @@
+// 05_collections/list_basics_test.mvl — Phase 3.1 subset (#1820).
+//
+// Covers what the WASM backend can support without the Option ABI (Phase 4):
+//   * List literal + .len() + .is_empty()
+//   * for-in iteration (list form and wildcard pattern)
+//   * range(lo, hi) integer for-loop
+//   * empty-list edge cases + early return via helper fn
+//
+// `.get(i)` returns Option[T] and is covered by list_test.mvl / list_iter_test.mvl
+// (LLVM and Rust backends). Those files stay out of WASM_CORPUS until Phase 4
+// lands.
+
+test fn list_literal_and_len() -> Unit {
+    let xs: List[Int] = [10, 20, 30, 40];
+    assert_eq(xs.len(), 4);
+}
+
+test fn list_empty_len_and_is_empty() -> Unit {
+    let xs: List[Int] = [];
+    assert_eq(xs.len(), 0);
+    assert_eq(xs.is_empty(), true);
+}
+
+test fn list_nonempty_is_empty_is_false() -> Unit {
+    let xs: List[Int] = [1];
+    assert_eq(xs.is_empty(), false);
+}
+
+test fn list_of_bools() -> Unit {
+    let flags: List[Bool] = [true, false, true, true];
+    assert_eq(flags.len(), 4);
+    assert_eq(flags.is_empty(), false);
+}
+
+test fn list_for_in_sums_elements() -> Unit {
+    let xs: List[Int] = [1, 2, 3, 4, 5];
+    let sum: ref Int = 0;
+    for x in xs {
+        sum = sum + x;
+    }
+    assert_eq(sum, 15);
+}
+
+test fn list_for_in_empty_is_noop() -> Unit {
+    let xs: List[Int] = [];
+    let count: ref Int = 0;
+    for _ in xs {
+        count = count + 1;
+    }
+    assert_eq(count, 0);
+}
+
+test fn list_for_in_counts_matches() -> Unit {
+    let xs: List[Int] = [1, 2, 3, 4, 5, 6];
+    let evens: ref Int = 0;
+    for x in xs {
+        if x % 2 == 0 {
+            evens = evens + 1;
+        }
+    }
+    assert_eq(evens, 3);
+}
+
+fn first_negative_or_default(xs: List[Int]) -> Int {
+    for x in xs {
+        if x < 0 {
+            return x;
+        }
+    }
+    0
+}
+
+test fn list_for_in_early_return() -> Unit {
+    assert_eq(first_negative_or_default([1, 2, -3, 4]), -3);
+    assert_eq(first_negative_or_default([1, 2, 3, 4]), 0);
+}
+
+test fn range_for_sums() -> Unit {
+    let sum: ref Int = 0;
+    for i in range(0, 10) {
+        sum = sum + i;
+    }
+    assert_eq(sum, 45);
+}
+
+test fn range_for_empty() -> Unit {
+    let count: ref Int = 0;
+    for _ in range(5, 5) {
+        count = count + 1;
+    }
+    assert_eq(count, 0);
+}
