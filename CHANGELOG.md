@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [1.3.7] - 2026-07-16
+
+### Fixed — #1829 remove checker stdout leak workarounds
+
+The checker's `STDOUT check_refinements: ...` debug leaks that poisoned
+`mvl check` / `mvl tir` pipes are gone (verified: zero STDOUT lines
+across the entire test corpus). Remove the `grep -v '^STDOUT '` filter
+workarounds from `Makefile` (test-bootstrap-e2e) and `tools/mvlr`
+(run_mvl_llvm_file). Also consolidate `test-bootstrap-e2e` to delegate
+its pipeline to `mvlr` — the two shared identical logic, which is why
+the workaround had to live in both places.
+
 ## [1.3.6] - 2026-07-16
 
 ### Fixed — #1862 release workflow idempotent when tag already exists
