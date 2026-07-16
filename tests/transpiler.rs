@@ -4071,3 +4071,30 @@ fn main() -> Unit {
         out.main_rs
     );
 }
+
+/// A prelude const is emitted in the prelude section of a downstream module.
+/// This is how `mvl test` handles siblings: game.mvl's consts must appear in
+/// game_test.mvl's transpiled output so references resolve.
+#[test]
+fn pub_const_from_prelude_is_emitted() {
+    let prelude_src = "pub const MAX_SPEED: Int = 3;";
+    let user_src = "fn use_it() -> Int { MAX_SPEED }";
+    let prelude = vec![parse_prog(prelude_src)];
+    let user_prog = parse_prog(user_src);
+
+    let expr_types = mvl::mvl::pipeline::assemble_expr_types(&user_prog, &prelude);
+    let out = transpile_project(
+        "crate",
+        &user_prog,
+        &[],
+        &prelude,
+        expr_types,
+        vec![],
+        Default::default(),
+    );
+    assert!(
+        out.main_rs.contains("pub const MAX_SPEED: i64 = 3"),
+        "prelude const must be emitted:\n{}",
+        out.main_rs
+    );
+}

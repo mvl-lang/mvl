@@ -878,6 +878,18 @@ impl RustEmitter {
             .filter(|t| seen_prelude_types.insert(t.name.as_str()))
             .collect();
 
+        let mut user_shadowing_names: std::collections::HashSet<&str> =
+            tir.consts.iter().map(|c| c.name.as_str()).collect();
+        user_shadowing_names.extend(tir.fns.iter().map(|f| f.name.as_str()));
+        let mut seen_prelude_consts: std::collections::HashSet<&str> =
+            std::collections::HashSet::new();
+        let prelude_consts: Vec<&crate::mvl::ir::TirConstDecl> = prelude_tirs
+            .iter()
+            .flat_map(|t| t.consts.iter())
+            .filter(|c| !user_shadowing_names.contains(c.name.as_str()))
+            .filter(|c| seen_prelude_consts.insert(c.name.as_str()))
+            .collect();
+
         // Prelude actors — actors defined in library files loaded as preludes.
         // Entry-TIR actors take precedence: if the same actor appears in both, the
         // entry-TIR copy is used and the prelude copy is skipped. Matches the
@@ -967,6 +979,7 @@ impl RustEmitter {
             || !prelude_fns.is_empty()
             || !prelude_externs.is_empty()
             || !prelude_actors.is_empty()
+            || !prelude_consts.is_empty()
         {
             self.line(
                 "// ── stdlib prelude (transpiled from MVL source) ──────────────────────────",
@@ -1000,6 +1013,19 @@ impl RustEmitter {
                     self.line(&format!("pub use crate::{};", td.name));
                 } else {
                     self.emit_tir_type_decl(td);
+                }
+                self.blank();
+            }
+            for cd in &prelude_consts {
+                use crate::mvl::backends::rust::emit_types::emit_ty;
+                if force_runtime {
+                    self.line(&format!("pub use crate::{};", cd.name));
+                } else {
+                    self.indent();
+                    self.push(&format!("pub const {}: {} = ", cd.name, emit_ty(&cd.ty)));
+                    self.emit_expr(&cd.value);
+                    self.push(";");
+                    self.nl();
                 }
                 self.blank();
             }
