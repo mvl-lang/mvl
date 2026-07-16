@@ -1179,6 +1179,15 @@ impl RustEmitter {
             self.emit_impl_decl(id);
             self.blank();
         }
+        for cd in &tir.consts {
+            use crate::mvl::backends::rust::emit_types::emit_ty;
+            self.indent();
+            self.push(&format!("pub const {}: {} = ", cd.name, emit_ty(&cd.ty)));
+            self.emit_expr(&cd.value);
+            self.push(";");
+            self.nl();
+            self.blank();
+        }
         for fd in tir.fns.iter().filter(|f| !f.is_test) {
             self.emit_fn_decl(fd);
             self.blank();
