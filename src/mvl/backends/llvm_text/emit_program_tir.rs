@@ -363,10 +363,7 @@ impl TextEmitter {
     /// functions (dropping the `is_test` filter). Used by the test-crate
     /// path (`compile_to_ir_test_crate`) so the dispatch main can call each
     /// test fn by name via `lli <file.ll> <test_name>`.
-    pub(super) fn emit_program_tir_test_crate(
-        &mut self,
-        prog: &TirProgram,
-    ) -> Result<(), String> {
+    pub(super) fn emit_program_tir_test_crate(&mut self, prog: &TirProgram) -> Result<(), String> {
         // Clone prog with is_test cleared on all fns — the normal emit_program_tir
         // path then emits them as regular functions without any further changes.
         let mut test_prog = prog.clone();
@@ -406,7 +403,9 @@ impl TextEmitter {
         body.push("entry:".to_string());
         // argv[1] = the test name (if argc >= 2).
         let arg_ptr = "%arg_ptr";
-        body.push(format!("  {arg_ptr} = getelementptr inbounds ptr, ptr %argv, i64 1"));
+        body.push(format!(
+            "  {arg_ptr} = getelementptr inbounds ptr, ptr %argv, i64 1"
+        ));
         let arg = "%arg";
         body.push(format!("  {arg} = load ptr, ptr {arg_ptr}, align 8"));
 
@@ -418,7 +417,9 @@ impl TextEmitter {
                 "  {name_ptr} = getelementptr inbounds [{len} x i8], ptr @{global}, i64 0, i64 0"
             ));
             let cmp = format!("%cmp_{i}");
-            body.push(format!("  {cmp} = call i32 @strcmp(ptr {arg}, ptr {name_ptr})"));
+            body.push(format!(
+                "  {cmp} = call i32 @strcmp(ptr {arg}, ptr {name_ptr})"
+            ));
             let eq = format!("%eq_{i}");
             body.push(format!("  {eq} = icmp eq i32 {cmp}, 0"));
             let then_lbl = format!("test_{i}_run");
@@ -427,7 +428,9 @@ impl TextEmitter {
             } else {
                 "unknown_test".to_string()
             };
-            body.push(format!("  br i1 {eq}, label %{then_lbl}, label %{next_lbl}"));
+            body.push(format!(
+                "  br i1 {eq}, label %{then_lbl}, label %{next_lbl}"
+            ));
             body.push(format!("{then_lbl}:"));
             body.push(format!("  call void @{name}()"));
             body.push("  ret i32 0".to_string());
