@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [1.3.6] - 2026-07-16
+
+### Fixed — #1862 release workflow idempotent when tag already exists
+
+The `Build and Release` workflow's final `gh release create` step failed for
+every tagged release since v0.104.0 because a release for the tag already
+existed (auto-created on tag push, or manual). Consequence: v1.3.x tags had
+no binary/stdlib/runtime tarballs attached. Now checks for an existing release
+first and uploads assets with `--clobber` when found, only creating a new
+release when none exists.
+
 ### Removed — #1870 `tools/lsp_server.py` moved to `mvl-lang/mvl-spec`
 
 The 188-line Phase 1 LSP server had zero dependencies on the compiler — it read
