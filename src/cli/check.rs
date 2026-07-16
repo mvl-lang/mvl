@@ -7,6 +7,7 @@ use mvl::mvl::checker::SolverMode;
 use mvl::mvl::loader;
 use mvl::mvl::parser::ast::Program;
 use mvl::mvl::parser::Parser;
+use mvl::mvl::pipeline::{load_full_prelude, PreludeMode};
 use mvl::mvl::resolver;
 use mvl::mvl::stdlib;
 use std::io::Read;
@@ -199,9 +200,11 @@ pub fn run(path: &str, req_filter: Option<u8>, opts: CheckOptions) {
 
     // Pre-parse stdlib files imported by user programs so the checker knows
     // about their types and functions.  This covers `use std.io.{...}` etc.
-    stdlib_prelude.extend(loader::load_stdlib_prelude(
+    stdlib_prelude.extend(load_full_prelude(
         parsed.iter().take(check_count).map(|(_, p, _)| p),
-        &stdlib_dir,
+        PreludeMode::TypeCheck {
+            stdlib_dir: &stdlib_dir,
+        },
     ));
 
     // Load any `pkg.*` package modules referenced by the user programs so the
@@ -457,9 +460,11 @@ pub fn run_stdin(req_filter: Option<u8>, opts: CheckOptions) {
     // Load implicit prelude + any stdlib modules the program imports.
     let stdlib_dir = stdlib::ensure_stdlib();
     let mut stdlib_prelude = loader::load_implicit_prelude();
-    stdlib_prelude.extend(loader::load_stdlib_prelude(
+    stdlib_prelude.extend(load_full_prelude(
         std::iter::once(&prog),
-        &stdlib_dir,
+        PreludeMode::TypeCheck {
+            stdlib_dir: &stdlib_dir,
+        },
     ));
 
     // No sibling user modules — resolve against an empty set.

@@ -205,6 +205,13 @@ jobs:
         # tracked in #1825, must return to 0 once TIR owns its own variants.
         run: python3 tools/audit_backend_ast.py --budget 1
 
+      - name: Audit CLI prelude assembly (ADR-0050 extension, #1803)
+        if: needs.changes.outputs.rust == 'true'
+        # Every CLI subcommand must route through `pipeline::load_full_prelude`.
+        # Direct calls to `loader::load_stdlib_prelude` or
+        # `loader::load_mvl_native_stdlib_extras` from `src/cli/` fail this check.
+        run: python3 tools/audit_cli_prelude.py
+
       - name: Build
         run: cargo build
 

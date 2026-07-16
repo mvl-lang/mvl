@@ -9,6 +9,7 @@ use mvl::mvl::checker::passes::{
 };
 use mvl::mvl::loader;
 use mvl::mvl::parser::ast::{Decl, Program, Totality, TypeBody};
+use mvl::mvl::pipeline::{load_full_prelude, PreludeMode};
 use mvl::mvl::resolver;
 use mvl::mvl::stdlib;
 use std::path::Path;
@@ -121,9 +122,11 @@ pub fn run(path: &str, json: bool, verbose: bool) {
     // before any user-imported stdlib modules so the checker can resolve built-in
     // effects (Console, Log, …) and primitive operations.
     let mut assurance_prelude = loader::load_implicit_prelude();
-    assurance_prelude.extend(loader::load_stdlib_prelude(
+    assurance_prelude.extend(load_full_prelude(
         parsed_assurance.iter().map(|(_, p, _)| p),
-        &stdlib_dir,
+        PreludeMode::TypeCheck {
+            stdlib_dir: &stdlib_dir,
+        },
     ));
     let all_assurance_progs: Vec<Program> =
         parsed_assurance.iter().map(|(_, p, _)| p.clone()).collect();

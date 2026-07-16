@@ -9,7 +9,7 @@ use mvl::mvl::checker;
 use mvl::mvl::loader;
 use mvl::mvl::parser::ast::Decl;
 use mvl::mvl::passes::mcdc::analysis::{analyze_mcdc, DecisionInfo};
-use mvl::mvl::pipeline::lower_prelude;
+use mvl::mvl::pipeline::{load_full_prelude, lower_prelude, PreludeMode};
 use mvl::mvl::stdlib;
 use std::collections::HashSet;
 use std::fs;
@@ -66,7 +66,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
     // LogLevel, ConfigValue, and DbValue are absent from the generated Rust harness
     // because the MCDC runner processes each file with only the implicit prelude
     // (core, strings, lists), unlike `mvl test` and `mvl build` which both call
-    // load_mvl_native_stdlib_extras.
+    // load_full_prelude(Transpile).
     //
     // Also load transitive `pkg.*` package modules (#1789) — matches the pattern
     // in `test.rs`.  Without this, types from external packages (e.g. `Direction`
@@ -82,7 +82,10 @@ pub fn run(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
             .iter()
             .map(|f| super::parse_or_exit(&f.display().to_string()).0)
             .collect();
-        stdlib_prelude_progs.extend(loader::load_mvl_native_stdlib_extras(&all_progs));
+        stdlib_prelude_progs.extend(load_full_prelude(
+            all_progs.iter(),
+            PreludeMode::Transpile,
+        ));
 
         // Frontier loop for pkg.* dependencies — mirror test.rs:216-245.  Uses a
         // frontier so transitive pkg deps are picked up (e.g. pkg-a → pkg-b).

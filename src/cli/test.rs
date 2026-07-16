@@ -7,7 +7,7 @@ use mvl::mvl::checker;
 use mvl::mvl::loader;
 use mvl::mvl::parser::ast::Decl;
 use mvl::mvl::parser::Parser;
-use mvl::mvl::pipeline::lower_prelude;
+use mvl::mvl::pipeline::{load_full_prelude, lower_prelude, PreludeMode};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
@@ -384,7 +384,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
                                     // must not appear in this project's coverage report (#1513).
                                     // Exclude their stems from instrumentation routing, but keep
                                     // the programs in sibling_progs so native bridge discovery
-                                    // (load_mvl_native_stdlib_extras) still finds extern blocks.
+                                    // (load_full_prelude with PreludeMode::Transpile) still finds extern blocks.
                                     let under_dot_mvl =
                                         f.components().any(|c| c.as_os_str() == ".mvl");
                                     if !under_dot_mvl {
@@ -422,7 +422,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
 
         // Inline-test source files (regular `.mvl` with `test fn` decls) are
         // transpiled further down without appearing in `test_files`.  Their
-        // `use std.X` imports must still reach `load_mvl_native_stdlib_extras`
+        // `use std.X` imports must still reach `load_full_prelude(Transpile)`
         // below — otherwise pure-MVL stdlib modules referenced only by inline
         // tests (e.g. `std.actors`, `std.audit`, `std.log` used by the
         // `12_actors/` and `13_stdlib/` corpus) are never loaded into the
@@ -458,7 +458,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
             .chain(inline_test_source_progs.iter())
             .cloned()
             .collect();
-        let extras = loader::load_mvl_native_stdlib_extras(&all_for_extras);
+        let extras = load_full_prelude(all_for_extras.iter(), PreludeMode::Transpile);
         let n_extras = extras.len();
         stdlib_prelude_progs.extend(extras);
         prelude_stems.extend(std::iter::repeat_n(None, n_extras));
@@ -560,7 +560,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
         // for `Logger` in `audit.mvl`'s emitted code (#1707 phase 3).
         let mut extras_scope: Vec<_> = stdlib_prelude_progs[..n_universal_prelude].to_vec();
         extras_scope.push(prog.clone());
-        let file_extras = loader::load_mvl_native_stdlib_extras(&extras_scope);
+        let file_extras = load_full_prelude(extras_scope.iter(), PreludeMode::Transpile);
         let file_prelude_progs: Vec<_> = stdlib_prelude_progs[..n_universal_prelude]
             .iter()
             .cloned()
@@ -695,7 +695,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
         // rationale (#1707 phase 3).
         let mut extras_scope: Vec<_> = stdlib_prelude_progs[..n_universal_prelude].to_vec();
         extras_scope.push(prog.clone());
-        let file_extras = loader::load_mvl_native_stdlib_extras(&extras_scope);
+        let file_extras = load_full_prelude(extras_scope.iter(), PreludeMode::Transpile);
         let file_prelude_progs: Vec<_> = stdlib_prelude_progs[..n_universal_prelude]
             .iter()
             .cloned()
