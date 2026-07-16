@@ -201,9 +201,7 @@ jobs:
 
       - name: Audit backend parser::ast references (ADR-0050)
         if: needs.changes.outputs.rust == 'true'
-        # Budget 1: wasm_text.rs imports parser::ast::{BinaryOp, Literal} —
-        # tracked in #1825, must return to 0 once TIR owns its own variants.
-        run: python3 tools/audit_backend_ast.py --budget 1
+        run: python3 tools/audit_backend_ast.py --budget 0
 
       - name: Audit CLI prelude assembly (ADR-0050 extension, #1803)
         if: needs.changes.outputs.rust == 'true'

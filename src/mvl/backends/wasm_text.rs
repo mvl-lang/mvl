@@ -51,10 +51,10 @@ use std::collections::HashMap;
 use super::Backend;
 use crate::mvl::checker::types::Ty;
 use crate::mvl::ir::{
-    TirBlock, TirElseBranch, TirExpr, TirExprKind, TirFn, TirMatchArm, TirMatchBody, TirProgram,
-    TirStmt, TirTypeBody, TirTypeDecl, TirVariantFields,
+    BinaryOp, LValue, Literal, Pattern, TirBlock, TirElseBranch, TirExpr, TirExprKind, TirFn,
+    TirMatchArm, TirMatchBody, TirProgram, TirStmt, TirTypeBody, TirTypeDecl, TirVariantFields,
+    UnaryOp,
 };
-use crate::mvl::parser::ast::{BinaryOp, LValue, Literal, Pattern, UnaryOp};
 
 pub struct WasmTextCompiler;
 
