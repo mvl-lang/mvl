@@ -5,20 +5,21 @@
 # (compiler, backend) combination. Wraps existing `mvl` invocations plus
 # the bootstrap chain for self-hosted paths.
 #
-# The corpus under tests/corpus/ uses `test fn` blocks. For non-batched
-# backends (currently rust/llvm), mvlr synthesizes a per-file `fn main`
-# that calls each `test fn` in order so the file can be lowered through
-# any backend that expects `fn main`.
+# The corpus under tests/corpus/ uses `test fn` blocks. For backends without
+# native `test fn` support (currently rust/wasm and mvl/llvm), mvlr synthesizes
+# a per-file `fn main` that calls each `test fn` in order.
 #
 # Interim workarounds documented here:
-#   * `test fn` → `fn` shim — until `mvl test --backend=llvm` batches
-#                              `test fn` natively (#1828)
-#
-# Should be removed once its ticket closes.
+#   * `test fn` → `fn` shim — rust/wasm and mvl/llvm still need this until
+#                              their backends gain native test-fn support.
 #
 # Removed (#1830 — 2026-07-14):
 #   * Target-triple sed — emitter no longer emits a hardcoded triple;
 #                          llc falls back to host default.
+#
+# Removed (#1878 — 2026-07-16):
+#   * `test fn` → `fn` shim for rust/llvm — `mvl test --backend=llvm` now
+#                          discovers and runs `test fn` natively.
 #
 # `-relocation-model=pic` remains — it's the codegen mode (required on
 # Linux, harmless on macOS), not a workaround.
@@ -47,7 +48,7 @@ Options:
 
 Supported combinations:
   rust/rust        mvl run  (or  mvl test  for a directory)
-  rust/llvm        per-file: sed test fn → fn + synth main, mvl run --backend=llvm
+  rust/llvm        mvl test --backend=llvm (directories); mvl run --backend=llvm (single fn-main files)
   rust/wasm        per-file: sed test fn → fn + synth main, mvl build --backend=wasm,
                               wasm-tools parse → .wasm, wasmtime run
   rust/rust-tokio  NOT YET IMPLEMENTED (#1828)
@@ -196,17 +197,16 @@ run_rust_rust_dir() {
 }
 
 run_rust_llvm_file() {
-    local src="$1" tmp
-    tmp=$(mktemp -d)
-    # shellcheck disable=SC2064
-    trap "rm -rf '$tmp'" RETURN
+    local src="$1"
     if [[ "$src" == *_test.mvl ]]; then
-        local out="$tmp/$(basename "$src")"
-        synth_test_main "$src" "$out"
-        "$MVL" run --backend=llvm "$out"
+        "$MVL" test "$src" --backend=llvm
     else
         "$MVL" run --backend=llvm "$src"
     fi
+}
+
+run_rust_llvm_dir() {
+    "$MVL" test "$1" --backend=llvm
 }
 
 # rust/wasm: emit WAT, assemble to WASM, run under wasmtime.
@@ -449,6 +449,7 @@ for INPUT in "${POSITIONAL[@]}"; do
     if [ -d "$INPUT" ]; then
         case "$COMBO" in
             rust/rust) run_rust_rust_dir "$INPUT" || rc=1 ;;
+            rust/llvm) run_rust_llvm_dir "$INPUT" || rc=1 ;;
             *)         run_dir_iter "$INPUT" "$COMBO" || rc=1 ;;
         esac
     else
