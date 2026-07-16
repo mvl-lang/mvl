@@ -401,6 +401,285 @@ pub unsafe extern "C" fn _mvl_string_eq(ptr1: i32, len1: i32, ptr2: i32, len2: i
     }
 }
 
+// ── MvlArray (Group C, #1820) ────────────────────────────────────────────
+//
+// Backing storage for `List[T]`, `Array[T, N]`, and (once dedup'd) `Set[T]`.
+// Mirrors `runtime/llvm/src/memory.rs::MvlArray` with i32 fields for wasm32
+// addressing:
+//
+//   offset  0: i32  ptr        — heap-allocated element buffer, or 0
+//   offset  4: i32  len        — number of live elements
+//   offset  8: i32  cap        — capacity in elements
+//   offset 12: i32  elem_size  — bytes per element (matches Vec<u8> stride)
+//   offset 16: i32  rc         — refcount
+//
+// The emitter treats `*MvlArray` as an opaque i32. `_mvl_array_new` returns
+// a fresh one with `rc = 1`; `_mvl_array_get` returns a pointer into the
+// backing buffer (element accessed with `i64.load` for Int, etc.).
+//
+// Backing buffer allocation goes through `Vec<u8>` — same trick as
+// `MvlString`: `Vec::with_capacity` allocates, `Vec::from_raw_parts` on
+// drop reclaims. The `elem_size * cap` product is the buffer size.
+
+#[repr(C)]
+pub struct MvlArray {
+    pub ptr: i32,
+    pub len: i32,
+    pub cap: i32,
+    pub elem_size: i32,
+    pub rc: i32,
+}
+
+const ARRAY_INITIAL_CAP: i32 = 4;
+
+/// Allocate a raw byte buffer of `nbytes` and forget it — caller owns the
+/// returned pointer. Used by `MvlArray` for its element storage; freed via
+/// `reclaim_byte_buffer` on drop.
+fn alloc_byte_buffer(nbytes: usize) -> (i32, i32) {
+    if nbytes == 0 {
+        return (0, 0);
+    }
+    let mut bytes = Vec::<u8>::with_capacity(nbytes);
+    // Zero-init to give the emitter predictable slot contents before push.
+    bytes.resize(nbytes, 0);
+    let ptr = bytes.as_ptr() as i32;
+    let cap = bytes.capacity() as i32;
+    core::mem::forget(bytes);
+    (ptr, cap)
+}
+
+/// Reclaim a buffer allocated via `alloc_byte_buffer`. `cap_bytes` must be
+/// the exact `Vec` capacity in bytes recorded at allocation time.
+///
+/// # Safety
+/// `ptr` must be a valid allocation from `alloc_byte_buffer` with the
+/// recorded `cap_bytes`.
+unsafe fn reclaim_byte_buffer(ptr: i32, len_bytes: usize, cap_bytes: usize) {
+    if ptr == 0 || cap_bytes == 0 {
+        return;
+    }
+    unsafe {
+        let _ = Vec::from_raw_parts(ptr as usize as *mut u8, len_bytes, cap_bytes);
+    }
+}
+
+/// Create a new `MvlArray` with the given element size and initial capacity.
+/// Returns a heap pointer with `rc = 1`. `initial_cap` is clamped up to
+/// `ARRAY_INITIAL_CAP` (4).
+#[unsafe(no_mangle)]
+pub extern "C" fn _mvl_array_new(elem_size: i32, initial_cap: i32) -> i32 {
+    let cap = initial_cap.max(ARRAY_INITIAL_CAP).max(0);
+    let elem_size = elem_size.max(1);
+    let nbytes = (cap as usize).saturating_mul(elem_size as usize);
+    let (ptr, _actual_cap) = alloc_byte_buffer(nbytes);
+    let a = Box::new(MvlArray {
+        ptr,
+        len: 0,
+        cap,
+        elem_size,
+        rc: 1,
+    });
+    Box::into_raw(a) as i32
+}
+
+/// `_mvl_array_len(a) -> i64` — number of live elements. i64 matches MVL
+/// `Int`, so the emitter can pass the result straight to `assert_eq[Int]`.
+///
+/// # Safety
+/// `a` must be a valid `MvlArray` pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_array_len(a: i32) -> i64 {
+    if a == 0 {
+        return 0;
+    }
+    let arr = unsafe { &*(a as usize as *const MvlArray) };
+    arr.len as i64
+}
+
+/// `_mvl_array_is_empty(a) -> i32` — 1 when `len == 0`, else 0.
+///
+/// # Safety
+/// `a` must be a valid `MvlArray` pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_array_is_empty(a: i32) -> i32 {
+    if a == 0 {
+        return 1;
+    }
+    let arr = unsafe { &*(a as usize as *const MvlArray) };
+    if arr.len == 0 {
+        1
+    } else {
+        0
+    }
+}
+
+/// Grow `arr`'s backing buffer to fit one more element. Doubles capacity
+/// on overflow, copies live prefix, reclaims the old buffer.
+///
+/// # Safety
+/// `arr` must be a valid `MvlArray` reference.
+unsafe fn ensure_capacity(arr: &mut MvlArray) {
+    if arr.len < arr.cap {
+        return;
+    }
+    let new_cap = (arr.cap.max(1) * 2).max(ARRAY_INITIAL_CAP);
+    let elem_size = arr.elem_size as usize;
+    let new_nbytes = (new_cap as usize).saturating_mul(elem_size);
+    let (new_ptr, _) = alloc_byte_buffer(new_nbytes);
+    if arr.len > 0 && arr.ptr != 0 {
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                arr.ptr as *const u8,
+                new_ptr as *mut u8,
+                (arr.len as usize) * elem_size,
+            );
+        }
+    }
+    let old_nbytes = (arr.cap as usize).saturating_mul(elem_size);
+    unsafe { reclaim_byte_buffer(arr.ptr, old_nbytes, old_nbytes) };
+    arr.ptr = new_ptr;
+    arr.cap = new_cap;
+}
+
+/// `_mvl_array_push(a, elem_ptr)` — copy `elem_size` bytes from `elem_ptr`
+/// into the next slot. The emitter typically prefers the typed variants
+/// (`_mvl_array_push_i32` / `_i64` / `_f64`) which pass the value directly
+/// on the WASM stack — WASM has no `alloca`, so materialising a byte-ptr
+/// argument for each push means a scratch allocation. This byte-ptr entry
+/// point stays for tests + hypothetical callers with an existing address.
+///
+/// # Safety
+/// `a` must be a valid `MvlArray` pointer; `elem_ptr` must point to at
+/// least `elem_size` bytes of readable memory.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_array_push(a: i32, elem_ptr: i32) {
+    if a == 0 {
+        return;
+    }
+    let arr = unsafe { &mut *(a as usize as *mut MvlArray) };
+    unsafe { ensure_capacity(arr) };
+    let slot = (arr.ptr as usize) + (arr.len as usize) * (arr.elem_size as usize);
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            elem_ptr as *const u8,
+            slot as *mut u8,
+            arr.elem_size as usize,
+        );
+    }
+    arr.len += 1;
+}
+
+/// `_mvl_array_push_i32(a, val)` — push a 4-byte value (Bool, Byte, enum
+/// disc, or nested pointer) directly. Element size must be 4.
+///
+/// # Safety
+/// `a` must be a valid `MvlArray` pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_array_push_i32(a: i32, val: i32) {
+    if a == 0 {
+        return;
+    }
+    let arr = unsafe { &mut *(a as usize as *mut MvlArray) };
+    unsafe { ensure_capacity(arr) };
+    let slot = (arr.ptr as usize) + (arr.len as usize) * (arr.elem_size as usize);
+    unsafe { core::ptr::write(slot as *mut i32, val) };
+    arr.len += 1;
+}
+
+/// `_mvl_array_push_i64(a, val)` — push an 8-byte integer value (Int / UInt).
+/// Element size must be 8.
+///
+/// # Safety
+/// `a` must be a valid `MvlArray` pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_array_push_i64(a: i32, val: i64) {
+    if a == 0 {
+        return;
+    }
+    let arr = unsafe { &mut *(a as usize as *mut MvlArray) };
+    unsafe { ensure_capacity(arr) };
+    let slot = (arr.ptr as usize) + (arr.len as usize) * (arr.elem_size as usize);
+    unsafe { core::ptr::write(slot as *mut i64, val) };
+    arr.len += 1;
+}
+
+/// `_mvl_array_push_f64(a, val)` — push an 8-byte float value. Element
+/// size must be 8.
+///
+/// # Safety
+/// `a` must be a valid `MvlArray` pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_array_push_f64(a: i32, val: f64) {
+    if a == 0 {
+        return;
+    }
+    let arr = unsafe { &mut *(a as usize as *mut MvlArray) };
+    unsafe { ensure_capacity(arr) };
+    let slot = (arr.ptr as usize) + (arr.len as usize) * (arr.elem_size as usize);
+    unsafe { core::ptr::write(slot as *mut f64, val) };
+    arr.len += 1;
+}
+
+/// `_mvl_array_get(a, idx) -> i32` — pointer to the `idx`-th element in
+/// the backing buffer, or 0 when out of bounds. Caller reads through the
+/// pointer with the appropriate `i32.load` / `i64.load` per element type.
+///
+/// `idx` is i64 to match MVL's `Int` type on the WASM stack.
+///
+/// # Safety
+/// `a` must be a valid `MvlArray` pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_array_get(a: i32, idx: i64) -> i32 {
+    if a == 0 {
+        return 0;
+    }
+    let arr = unsafe { &*(a as usize as *const MvlArray) };
+    if idx < 0 || idx >= arr.len as i64 {
+        return 0;
+    }
+    (arr.ptr as usize + (idx as usize) * (arr.elem_size as usize)) as i32
+}
+
+/// `_mvl_array_clone(a)` — refcount bump, returns the same pointer.
+///
+/// # Safety
+/// `a` must be a valid `MvlArray` pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_array_clone(a: i32) -> i32 {
+    if a == 0 {
+        return 0;
+    }
+    let arr = unsafe { &mut *(a as usize as *mut MvlArray) };
+    arr.rc += 1;
+    a
+}
+
+/// `_mvl_array_drop(a)` — refcount decrement; free the backing buffer and
+/// the `MvlArray` header when refcount hits zero.
+///
+/// Element-level drops (e.g., strings inside a `List[String]`) are *not*
+/// emitted here — the LLVM backend does per-element drops in the emitter
+/// for now. Follow-up if it becomes a real leak.
+///
+/// # Safety
+/// `a` must be a valid `MvlArray` pointer, not used after drop.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_array_drop(a: i32) {
+    if a == 0 {
+        return;
+    }
+    let arr = unsafe { &mut *(a as usize as *mut MvlArray) };
+    arr.rc -= 1;
+    if arr.rc > 0 {
+        return;
+    }
+    let nbytes = (arr.cap as usize) * (arr.elem_size as usize);
+    unsafe { reclaim_byte_buffer(arr.ptr, nbytes, nbytes) };
+    unsafe {
+        let _ = Box::from_raw(a as usize as *mut MvlArray);
+    }
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────
 //
 // Compiled + run under wasm32-wasip1 so the i32-pointer ABI works as it
@@ -954,5 +1233,154 @@ mod tests {
             unsafe { _mvl_string_find(addr(s), s.len() as i32, 0, 0) },
             0
         );
+    }
+
+    // ── MvlArray ────
+
+    /// Push i64 values (8-byte elements) into an array, read them back via
+    /// `_mvl_array_get`. This exercises the raw byte-copy path that the
+    /// emitter will drive.
+    unsafe fn push_i64(arr: i32, v: i64) {
+        let slot = v;
+        unsafe { _mvl_array_push(arr, &slot as *const i64 as i32) };
+    }
+
+    unsafe fn get_i64(arr: i32, idx: i64) -> i64 {
+        let p = unsafe { _mvl_array_get(arr, idx) };
+        unsafe { *(p as usize as *const i64) }
+    }
+
+    #[test]
+    fn array_new_empty() {
+        let a = _mvl_array_new(8, 4);
+        assert_eq!(unsafe { _mvl_array_len(a) }, 0);
+        assert_eq!(unsafe { _mvl_array_is_empty(a) }, 1);
+        unsafe { _mvl_array_drop(a) };
+    }
+
+    #[test]
+    fn array_push_and_len() {
+        let a = _mvl_array_new(8, 4);
+        unsafe {
+            push_i64(a, 10);
+            push_i64(a, 20);
+            push_i64(a, 30);
+        }
+        assert_eq!(unsafe { _mvl_array_len(a) }, 3);
+        assert_eq!(unsafe { _mvl_array_is_empty(a) }, 0);
+        unsafe { _mvl_array_drop(a) };
+    }
+
+    #[test]
+    fn array_get_by_index() {
+        let a = _mvl_array_new(8, 4);
+        unsafe {
+            push_i64(a, 100);
+            push_i64(a, 200);
+            push_i64(a, 300);
+        }
+        assert_eq!(unsafe { get_i64(a, 0) }, 100);
+        assert_eq!(unsafe { get_i64(a, 1) }, 200);
+        assert_eq!(unsafe { get_i64(a, 2) }, 300);
+        unsafe { _mvl_array_drop(a) };
+    }
+
+    #[test]
+    fn array_get_out_of_bounds_returns_null() {
+        let a = _mvl_array_new(8, 4);
+        unsafe { push_i64(a, 1) };
+        assert_eq!(unsafe { _mvl_array_get(a, 5) }, 0);
+        assert_eq!(unsafe { _mvl_array_get(a, -1) }, 0);
+        unsafe { _mvl_array_drop(a) };
+    }
+
+    #[test]
+    fn array_push_grows_past_initial_cap() {
+        // Initial cap is 4; push 10 to force at least one growth.
+        let a = _mvl_array_new(8, 4);
+        unsafe {
+            for i in 0..10 {
+                push_i64(a, i);
+            }
+        }
+        assert_eq!(unsafe { _mvl_array_len(a) }, 10);
+        for i in 0..10i64 {
+            assert_eq!(unsafe { get_i64(a, i) }, i);
+        }
+        unsafe { _mvl_array_drop(a) };
+    }
+
+    #[test]
+    fn array_clone_bumps_rc() {
+        let a = _mvl_array_new(8, 4);
+        unsafe { push_i64(a, 42) };
+        let b = unsafe { _mvl_array_clone(a) };
+        assert_eq!(a, b, "clone returns same pointer");
+        // Drop twice: rc goes 2→1→0.
+        unsafe { _mvl_array_drop(a) };
+        assert_eq!(unsafe { _mvl_array_len(b) }, 1, "still live after one drop");
+        unsafe { _mvl_array_drop(b) };
+    }
+
+    #[test]
+    fn array_i32_elements() {
+        // Bool / Byte lower to i32 in the WASM stack — verify the
+        // 4-byte element_size path works.
+        let a = _mvl_array_new(4, 4);
+        for i in 0..5i32 {
+            unsafe {
+                _mvl_array_push(a, &i as *const i32 as i32);
+            }
+        }
+        assert_eq!(unsafe { _mvl_array_len(a) }, 5);
+        for i in 0..5i64 {
+            let p = unsafe { _mvl_array_get(a, i) };
+            let v: i32 = unsafe { *(p as usize as *const i32) };
+            assert_eq!(v, i as i32);
+        }
+        unsafe { _mvl_array_drop(a) };
+    }
+
+    #[test]
+    fn array_typed_push_i64() {
+        let a = _mvl_array_new(8, 4);
+        unsafe {
+            _mvl_array_push_i64(a, 100);
+            _mvl_array_push_i64(a, 200);
+            _mvl_array_push_i64(a, 300);
+        }
+        assert_eq!(unsafe { _mvl_array_len(a) }, 3);
+        assert_eq!(unsafe { get_i64(a, 0) }, 100);
+        assert_eq!(unsafe { get_i64(a, 2) }, 300);
+        unsafe { _mvl_array_drop(a) };
+    }
+
+    #[test]
+    fn array_typed_push_i32() {
+        let a = _mvl_array_new(4, 4);
+        unsafe {
+            _mvl_array_push_i32(a, 1);
+            _mvl_array_push_i32(a, 0);
+            _mvl_array_push_i32(a, 1);
+        }
+        assert_eq!(unsafe { _mvl_array_len(a) }, 3);
+        let p = unsafe { _mvl_array_get(a, 1) };
+        let v: i32 = unsafe { *(p as usize as *const i32) };
+        assert_eq!(v, 0);
+        unsafe { _mvl_array_drop(a) };
+    }
+
+    #[test]
+    fn array_typed_push_f64() {
+        let a = _mvl_array_new(8, 4);
+        unsafe {
+            _mvl_array_push_f64(a, 3.14);
+            _mvl_array_push_f64(a, -0.5);
+        }
+        assert_eq!(unsafe { _mvl_array_len(a) }, 2);
+        let p = unsafe { _mvl_array_get(a, 0) };
+        let v: f64 = unsafe { *(p as usize as *const f64) };
+        assert!((v - 3.14).abs() < 1e-9);
+        unsafe { _mvl_array_drop(a) };
     }
 }

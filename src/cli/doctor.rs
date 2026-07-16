@@ -14,10 +14,12 @@ pub fn run() {
     let stdlib_path = stdlib::stdlib_path();
     let runtime_dir = mvl_runtime_dir();
     let llvm_dir = runtime_dir.join("llvm");
+    let wasm_dir = runtime_dir.join("wasm");
 
     let stdlib_ok = stdlib_path.join(".version").exists();
     let rust_ok = runtime_dir.join("rust").exists();
     let llvm_ok = llvm_dylib(&llvm_dir).is_some();
+    let wasm_ok = wasm_dir.join("mvl_runtime_wasm.wasm").exists();
 
     println!("mvl doctor");
     println!();
@@ -30,10 +32,18 @@ pub fn run() {
         rust_ok,
     );
     print_artifact("llvm-rt  ", RUNTIME_VERSION, &llvm_dir, llvm_ok);
+    print_artifact("wasm-rt  ", RUNTIME_VERSION, &wasm_dir, wasm_ok);
 
     println!();
-    if stdlib_ok && rust_ok && llvm_ok {
+    // wasm-rt is optional today (WASM backend still under active development,
+    // #1817). Compiler/stdlib/rust/llvm together are the core release surface;
+    // wasm-rt missing warns but doesn't fail. Once the WASM backend reaches
+    // parity, promote it into the required set.
+    let required_ok = stdlib_ok && rust_ok && llvm_ok;
+    if required_ok && wasm_ok {
         println!("  All artifacts present.");
+    } else if required_ok {
+        println!("  Core artifacts present; wasm-rt missing (run: make install).");
     } else {
         println!("  Some artifacts are missing — run `make install` (dev) or `mvl self install`.");
         std::process::exit(1);
