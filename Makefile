@@ -77,20 +77,23 @@ INSTALL_BIN_DIR         := $(HOME)/.local/bin
 install-runtime: build ## Install stdlib + runtime crates from CURRENT $(BUILD) (no mvl binary; for CI matrix)
 	@echo "Installing runtime v$(INSTALL_RUNTIME_VERSION) + stdlib from $(BUILD) artifacts ..."
 	@mkdir -p $(INSTALL_TOOLCHAIN_DIR)/std
-	@mkdir -p $(INSTALL_RUNTIME_DIR)/rust $(INSTALL_RUNTIME_DIR)/rust-tokio $(INSTALL_RUNTIME_DIR)/llvm
+	@mkdir -p $(INSTALL_RUNTIME_DIR)/rust $(INSTALL_RUNTIME_DIR)/rust-tokio $(INSTALL_RUNTIME_DIR)/llvm $(INSTALL_RUNTIME_DIR)/wasm
 	rsync -a --delete std/ $(INSTALL_TOOLCHAIN_DIR)/std/
 	@echo "$(INSTALL_VERSION)" > $(INSTALL_TOOLCHAIN_DIR)/std/.version
 	rsync -a --delete runtime/rust/       $(INSTALL_RUNTIME_DIR)/rust/
 	rsync -a --delete runtime/rust-tokio/ $(INSTALL_RUNTIME_DIR)/rust-tokio/
 	@cp target/$(BUILD)/libmvl_runtime_llvm.dylib $(INSTALL_RUNTIME_DIR)/llvm/ 2>/dev/null || true
 	@cp target/$(BUILD)/libmvl_runtime_llvm.so    $(INSTALL_RUNTIME_DIR)/llvm/ 2>/dev/null || true
+	@cp target/wasm32-wasip1/debug/mvl_runtime_wasm.wasm   $(INSTALL_RUNTIME_DIR)/wasm/ 2>/dev/null || true
+	@cp target/wasm32-wasip1/release/mvl_runtime_wasm.wasm $(INSTALL_RUNTIME_DIR)/wasm/ 2>/dev/null || true
 
-install: ## Install all 4 artifacts (mvl, stdlib, rust runtime, llvm runtime) from local source
+install: ## Install all artifacts (mvl, stdlib, rust/llvm/wasm runtimes) from local source
 	@$(MAKE) build BUILD=release
+	@$(MAKE) build-runtime-wasm
 	@echo ""
 	@echo "Installing mvl $(INSTALL_VERSION) to $(INSTALL_TOOLCHAIN_DIR) ..."
 	@mkdir -p $(INSTALL_TOOLCHAIN_DIR)/bin $(INSTALL_TOOLCHAIN_DIR)/std $(INSTALL_BIN_DIR)
-	@mkdir -p $(INSTALL_RUNTIME_DIR)/rust $(INSTALL_RUNTIME_DIR)/rust-tokio $(INSTALL_RUNTIME_DIR)/llvm
+	@mkdir -p $(INSTALL_RUNTIME_DIR)/rust $(INSTALL_RUNTIME_DIR)/rust-tokio $(INSTALL_RUNTIME_DIR)/llvm $(INSTALL_RUNTIME_DIR)/wasm
 	# 1. mvl binary + ~/.local/bin symlink
 	cp target/release/mvl $(INSTALL_TOOLCHAIN_DIR)/bin/mvl
 	chmod +x $(INSTALL_TOOLCHAIN_DIR)/bin/mvl
@@ -110,6 +113,11 @@ install: ## Install all 4 artifacts (mvl, stdlib, rust runtime, llvm runtime) fr
 	#    this XDG path first, so no ~/.local/bin/ symlink hack is needed.
 	@cp target/release/libmvl_runtime_llvm.dylib $(INSTALL_RUNTIME_DIR)/llvm/ 2>/dev/null || true
 	@cp target/release/libmvl_runtime_llvm.so    $(INSTALL_RUNTIME_DIR)/llvm/ 2>/dev/null || true
+	# 5. WASM runtime module — target/wasm32-wasip1/{debug,release}/mvl_runtime_wasm.wasm.
+	#    Emitted user modules load it via `wasmtime --preload runtime=<path>`; mvl's
+	#    `run --backend=wasm` resolves this XDG path via mvlr.
+	@cp target/wasm32-wasip1/debug/mvl_runtime_wasm.wasm   $(INSTALL_RUNTIME_DIR)/wasm/ 2>/dev/null || true
+	@cp target/wasm32-wasip1/release/mvl_runtime_wasm.wasm $(INSTALL_RUNTIME_DIR)/wasm/ 2>/dev/null || true
 	@echo ""
 	@echo "Installed:"
 	@echo "  binary:       $(INSTALL_BIN_DIR)/mvl -> $(INSTALL_TOOLCHAIN_DIR)/bin/mvl"
@@ -118,6 +126,7 @@ install: ## Install all 4 artifacts (mvl, stdlib, rust runtime, llvm runtime) fr
 	@echo "  rust runtime: $(INSTALL_RUNTIME_DIR)/rust/ (v$(INSTALL_RUNTIME_VERSION))"
 	@echo "  rust-tokio:   $(INSTALL_RUNTIME_DIR)/rust-tokio/"
 	@echo "  llvm runtime: $(INSTALL_RUNTIME_DIR)/llvm/ (v$(INSTALL_RUNTIME_VERSION))"
+	@echo "  wasm runtime: $(INSTALL_RUNTIME_DIR)/wasm/ (v$(INSTALL_RUNTIME_VERSION))"
 
 # === Build ===
 
