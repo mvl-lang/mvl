@@ -509,8 +509,40 @@ pub unsafe extern "C" fn _mvl_array_is_empty(a: i32) -> i32 {
     if arr.len == 0 { 1 } else { 0 }
 }
 
+/// Grow `arr`'s backing buffer to fit one more element. Doubles capacity
+/// on overflow, copies live prefix, reclaims the old buffer.
+///
+/// # Safety
+/// `arr` must be a valid `MvlArray` reference.
+unsafe fn ensure_capacity(arr: &mut MvlArray) {
+    if arr.len < arr.cap {
+        return;
+    }
+    let new_cap = (arr.cap.max(1) * 2).max(ARRAY_INITIAL_CAP);
+    let elem_size = arr.elem_size as usize;
+    let new_nbytes = (new_cap as usize).saturating_mul(elem_size);
+    let (new_ptr, _) = alloc_byte_buffer(new_nbytes);
+    if arr.len > 0 && arr.ptr != 0 {
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                arr.ptr as *const u8,
+                new_ptr as *mut u8,
+                (arr.len as usize) * elem_size,
+            );
+        }
+    }
+    let old_nbytes = (arr.cap as usize).saturating_mul(elem_size);
+    unsafe { reclaim_byte_buffer(arr.ptr, old_nbytes, old_nbytes) };
+    arr.ptr = new_ptr;
+    arr.cap = new_cap;
+}
+
 /// `_mvl_array_push(a, elem_ptr)` — copy `elem_size` bytes from `elem_ptr`
-/// into the next slot. Grows the buffer by doubling when full.
+/// into the next slot. The emitter typically prefers the typed variants
+/// (`_mvl_array_push_i32` / `_i64` / `_f64`) which pass the value directly
+/// on the WASM stack — WASM has no `alloca`, so materialising a byte-ptr
+/// argument for each push means a scratch allocation. This byte-ptr entry
+/// point stays for tests + hypothetical callers with an existing address.
 ///
 /// # Safety
 /// `a` must be a valid `MvlArray` pointer; `elem_ptr` must point to at
@@ -521,25 +553,7 @@ pub unsafe extern "C" fn _mvl_array_push(a: i32, elem_ptr: i32) {
         return;
     }
     let arr = unsafe { &mut *(a as usize as *mut MvlArray) };
-    if arr.len >= arr.cap {
-        let new_cap = (arr.cap.max(1) * 2).max(ARRAY_INITIAL_CAP);
-        let elem_size = arr.elem_size as usize;
-        let new_nbytes = (new_cap as usize).saturating_mul(elem_size);
-        let (new_ptr, _) = alloc_byte_buffer(new_nbytes);
-        if arr.len > 0 && arr.ptr != 0 {
-            unsafe {
-                core::ptr::copy_nonoverlapping(
-                    arr.ptr as *const u8,
-                    new_ptr as *mut u8,
-                    (arr.len as usize) * elem_size,
-                );
-            }
-        }
-        let old_nbytes = (arr.cap as usize).saturating_mul(elem_size);
-        unsafe { reclaim_byte_buffer(arr.ptr, old_nbytes, old_nbytes) };
-        arr.ptr = new_ptr;
-        arr.cap = new_cap;
-    }
+    unsafe { ensure_capacity(arr) };
     let slot = (arr.ptr as usize) + (arr.len as usize) * (arr.elem_size as usize);
     unsafe {
         core::ptr::copy_nonoverlapping(
@@ -548,6 +562,57 @@ pub unsafe extern "C" fn _mvl_array_push(a: i32, elem_ptr: i32) {
             arr.elem_size as usize,
         );
     }
+    arr.len += 1;
+}
+
+/// `_mvl_array_push_i32(a, val)` — push a 4-byte value (Bool, Byte, enum
+/// disc, or nested pointer) directly. Element size must be 4.
+///
+/// # Safety
+/// `a` must be a valid `MvlArray` pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_array_push_i32(a: i32, val: i32) {
+    if a == 0 {
+        return;
+    }
+    let arr = unsafe { &mut *(a as usize as *mut MvlArray) };
+    unsafe { ensure_capacity(arr) };
+    let slot = (arr.ptr as usize) + (arr.len as usize) * (arr.elem_size as usize);
+    unsafe { core::ptr::write(slot as *mut i32, val) };
+    arr.len += 1;
+}
+
+/// `_mvl_array_push_i64(a, val)` — push an 8-byte integer value (Int / UInt).
+/// Element size must be 8.
+///
+/// # Safety
+/// `a` must be a valid `MvlArray` pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_array_push_i64(a: i32, val: i64) {
+    if a == 0 {
+        return;
+    }
+    let arr = unsafe { &mut *(a as usize as *mut MvlArray) };
+    unsafe { ensure_capacity(arr) };
+    let slot = (arr.ptr as usize) + (arr.len as usize) * (arr.elem_size as usize);
+    unsafe { core::ptr::write(slot as *mut i64, val) };
+    arr.len += 1;
+}
+
+/// `_mvl_array_push_f64(a, val)` — push an 8-byte float value. Element
+/// size must be 8.
+///
+/// # Safety
+/// `a` must be a valid `MvlArray` pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_array_push_f64(a: i32, val: f64) {
+    if a == 0 {
+        return;
+    }
+    let arr = unsafe { &mut *(a as usize as *mut MvlArray) };
+    unsafe { ensure_capacity(arr) };
+    let slot = (arr.ptr as usize) + (arr.len as usize) * (arr.elem_size as usize);
+    unsafe { core::ptr::write(slot as *mut f64, val) };
     arr.len += 1;
 }
 
@@ -1269,6 +1334,49 @@ mod tests {
             let v: i32 = unsafe { *(p as usize as *const i32) };
             assert_eq!(v, i as i32);
         }
+        unsafe { _mvl_array_drop(a) };
+    }
+
+    #[test]
+    fn array_typed_push_i64() {
+        let a = _mvl_array_new(8, 4);
+        unsafe {
+            _mvl_array_push_i64(a, 100);
+            _mvl_array_push_i64(a, 200);
+            _mvl_array_push_i64(a, 300);
+        }
+        assert_eq!(unsafe { _mvl_array_len(a) }, 3);
+        assert_eq!(unsafe { get_i64(a, 0) }, 100);
+        assert_eq!(unsafe { get_i64(a, 2) }, 300);
+        unsafe { _mvl_array_drop(a) };
+    }
+
+    #[test]
+    fn array_typed_push_i32() {
+        let a = _mvl_array_new(4, 4);
+        unsafe {
+            _mvl_array_push_i32(a, 1);
+            _mvl_array_push_i32(a, 0);
+            _mvl_array_push_i32(a, 1);
+        }
+        assert_eq!(unsafe { _mvl_array_len(a) }, 3);
+        let p = unsafe { _mvl_array_get(a, 1) };
+        let v: i32 = unsafe { *(p as usize as *const i32) };
+        assert_eq!(v, 0);
+        unsafe { _mvl_array_drop(a) };
+    }
+
+    #[test]
+    fn array_typed_push_f64() {
+        let a = _mvl_array_new(8, 4);
+        unsafe {
+            _mvl_array_push_f64(a, 3.14);
+            _mvl_array_push_f64(a, -0.5);
+        }
+        assert_eq!(unsafe { _mvl_array_len(a) }, 2);
+        let p = unsafe { _mvl_array_get(a, 0) };
+        let v: f64 = unsafe { *(p as usize as *const f64) };
+        assert!((v - 3.14).abs() < 1e-9);
         unsafe { _mvl_array_drop(a) };
     }
 }
