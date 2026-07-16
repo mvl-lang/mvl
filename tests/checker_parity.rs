@@ -107,13 +107,22 @@ fn check_file(file: &Path) -> VerdictKind {
         return VerdictKind::ParseError;
     }
 
+    // Mirror the real checker's prelude assembly (`mvl check`, see
+    // src/cli/check.rs): the implicit prelude plus every `use std.X` module
+    // resolved via `load_stdlib_prelude`.  The transpiler-oriented loaders
+    // (`load_mvl_native_stdlib_extras` / `load_rust_backed_stdlib_fns`) skip
+    // `collections` — it lives in `IMPLICIT_PRELUDE_STEMS` but, by design
+    // (b80624ce, "revert collections from load_implicit_prelude — breaks Rust
+    // transpiler"), is NOT actually preloaded — and they drop rust-backed
+    // modules' non-builtin bodies.  Both produce spurious "undefined function"
+    // fails here that `mvl check` never reports, so this harness must use the
+    // same prelude the real checker does.
+    let stdlib_dir = mvl::mvl::stdlib::ensure_stdlib();
     let mut prelude = loader::load_implicit_prelude();
-    prelude.extend(loader::load_mvl_native_stdlib_extras(std::slice::from_ref(
-        &prog,
-    )));
-    prelude.extend(loader::load_rust_backed_stdlib_fns(std::slice::from_ref(
-        &prog,
-    )));
+    prelude.extend(loader::load_stdlib_prelude(
+        std::iter::once(&prog),
+        &stdlib_dir,
+    ));
     let result = checker::check_with_prelude(&prelude, &prog);
 
     if result.is_ok() {

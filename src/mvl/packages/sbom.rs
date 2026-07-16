@@ -461,7 +461,7 @@ fn spdx(
         if let Some(hex) = sf.digest.strip_prefix("sha256:") {
             out += &format!("FileChecksum: SHA256: {hex}\n");
         }
-        out += &format!("LicenseConcluded: {}\n", &manifest.package.license);
+        out += &format!("LicenseConcluded: {}\n", manifest.package.license);
         out += "\n";
         out += &format!("Relationship: SPDXRef-Package CONTAINS {spdx_id}\n");
         out += "\n";
