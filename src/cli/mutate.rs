@@ -65,10 +65,7 @@ pub fn run(path: &str, quiet: bool, gen_boundary: bool, limit: Option<usize>) {
             .iter()
             .map(|f| super::parse_or_exit(&f.display().to_string()).0)
             .collect();
-        stdlib_prelude_progs.extend(load_full_prelude(
-            all_progs.iter(),
-            PreludeMode::Transpile,
-        ));
+        stdlib_prelude_progs.extend(load_full_prelude(all_progs.iter(), PreludeMode::Transpile));
     }
 
     // Transpile all test files with mutation instrumentation

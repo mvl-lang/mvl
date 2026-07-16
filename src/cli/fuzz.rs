@@ -415,10 +415,7 @@ fn transpile_project(files: &[PathBuf]) -> FuzzLibOutput {
         &project_root,
         &mut std::collections::HashSet::new(),
     ));
-    stdlib_prelude.extend(load_full_prelude(
-        progs_only.iter(),
-        PreludeMode::Transpile,
-    ));
+    stdlib_prelude.extend(load_full_prelude(progs_only.iter(), PreludeMode::Transpile));
 
     // Treat the first file as entry and the rest as siblings — transpile_project
     // handles the prelude correctly: entry gets full emission, siblings share it.

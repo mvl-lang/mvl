@@ -82,10 +82,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
             .iter()
             .map(|f| super::parse_or_exit(&f.display().to_string()).0)
             .collect();
-        stdlib_prelude_progs.extend(load_full_prelude(
-            all_progs.iter(),
-            PreludeMode::Transpile,
-        ));
+        stdlib_prelude_progs.extend(load_full_prelude(all_progs.iter(), PreludeMode::Transpile));
 
         // Frontier loop for pkg.* dependencies — mirror test.rs:216-245.  Uses a
         // frontier so transitive pkg deps are picked up (e.g. pkg-a → pkg-b).
