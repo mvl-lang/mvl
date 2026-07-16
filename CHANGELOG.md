@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+## [1.3.8] - 2026-07-16
+
+### Fixed — #1875 emit pub const declarations in Rust backend
+
+The Rust backend didn't emit `pub const NAME: T = value;` declarations
+from `TirProgram.consts` — commit 8ac2558a added the checker/lowerer
+support for `pub const` (via #1805) but never wired the emitter. Every
+reference site (e.g. `field_cols`, `paddle_height` in
+`examples/pong/game.mvl`) failed rustc's "value not in scope" check
+after the migration to the const form. Also extend const emission to
+prelude TIRs so sibling libraries loaded via `mvl test` (game.mvl
+loaded when transpiling game_test.mvl) resolve correctly; dedupe
+against user-declared const *and* fn names to keep test files with
+local mirror fns compiling.
+
 ## [1.3.7] - 2026-07-16
 
 ### Fixed — #1829 remove checker stdout leak workarounds

@@ -4031,3 +4031,70 @@ fn actor_recursive_self_call_no_clone_in_match_arm() {
     );
     assert_contains(&rust, "self.run()");
 }
+
+// ── pub const → Rust pub const ────────────────────────────────────────────
+
+#[test]
+fn pub_const_int_emits_rust_pub_const() {
+    let src = r#"
+pub const MAX_SPEED: Int = 3;
+
+fn use_it() -> Int { MAX_SPEED }
+"#;
+    let rust = transpile_src(src);
+    assert_contains(&rust, "pub const MAX_SPEED: i64 = 3");
+}
+
+#[test]
+fn pub_const_int_emits_via_transpile_project() {
+    let user_src = r#"
+pub const MAX_SPEED: Int = 3;
+
+fn main() -> Unit {
+    let x: Int = MAX_SPEED;
+}
+"#;
+    let user_prog = parse_prog(user_src);
+    let expr_types = mvl::mvl::pipeline::assemble_expr_types(&user_prog, &[]);
+    let out = transpile_project(
+        "crate",
+        &user_prog,
+        &[],
+        &[],
+        expr_types,
+        vec![],
+        Default::default(),
+    );
+    assert!(
+        out.main_rs.contains("pub const MAX_SPEED: i64 = 3"),
+        "pub const must be emitted:\n{}",
+        out.main_rs
+    );
+}
+
+/// A prelude const is emitted in the prelude section of a downstream module.
+/// This is how `mvl test` handles siblings: game.mvl's consts must appear in
+/// game_test.mvl's transpiled output so references resolve.
+#[test]
+fn pub_const_from_prelude_is_emitted() {
+    let prelude_src = "pub const MAX_SPEED: Int = 3;";
+    let user_src = "fn use_it() -> Int { MAX_SPEED }";
+    let prelude = vec![parse_prog(prelude_src)];
+    let user_prog = parse_prog(user_src);
+
+    let expr_types = mvl::mvl::pipeline::assemble_expr_types(&user_prog, &prelude);
+    let out = transpile_project(
+        "crate",
+        &user_prog,
+        &[],
+        &prelude,
+        expr_types,
+        vec![],
+        Default::default(),
+    );
+    assert!(
+        out.main_rs.contains("pub const MAX_SPEED: i64 = 3"),
+        "prelude const must be emitted:\n{}",
+        out.main_rs
+    );
+}
