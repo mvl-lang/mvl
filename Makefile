@@ -365,22 +365,14 @@ test-mvl: build ## Run MVL-in-MVL tests for the self-hosted compiler (compiler/*
 	$(MVL) test compiler/
 
 test-bootstrap-e2e: build ## Tracer bullet: hello_world.mvl → MVL LLVM emitter → llc → cc → run (#1746)
-	@LLC=/opt/homebrew/opt/llvm/bin/llc; \
-	OUT=$$(mktemp -d); \
-	printf "  Running hello_world.mvl through self-hosted LLVM emitter...\n"; \
-	$(MVL) tir examples/programs/hello_world.mvl 2>/dev/null \
-	  | $(MVL) run compiler/backends/llvm/emitter.mvl 2>/dev/null \
-	  | tail -n +3 > "$$OUT/hello.ll"; \
-	$$LLC -filetype=obj "$$OUT/hello.ll" -o "$$OUT/hello.o"; \
-	cc -o "$$OUT/hello" "$$OUT/hello.o" -lc 2>/dev/null; \
-	GOT=$$($$OUT/hello); \
+	@printf "  Running hello_world.mvl through self-hosted LLVM emitter...\n"; \
+	GOT=$$($(MVLR) --mvl=$(MVL) --compiler=mvl --backend=llvm examples/programs/hello_world.mvl 2>/dev/null); \
 	if [ "$$GOT" = "Hello, world!" ]; then \
 	  printf "  \033[32m✓\033[0m  hello_world: Hello, world!\n"; \
 	else \
 	  printf "  \033[31m✗\033[0m  hello_world: expected 'Hello, world!' got '$$GOT'\n"; \
 	  exit 1; \
-	fi; \
-	rm -rf "$$OUT"
+	fi
 
 # Spike tests are INTENTIONALLY excluded from the main `test` target and from CI.
 # They explore speculative ideas (issue #187: parser-in-MVL) and require manual invocation.
