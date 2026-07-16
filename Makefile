@@ -365,15 +365,11 @@ test-mvl: build ## Run MVL-in-MVL tests for the self-hosted compiler (compiler/*
 	$(MVL) test compiler/
 
 test-bootstrap-e2e: build ## Tracer bullet: hello_world.mvl → MVL LLVM emitter → llc → cc → run (#1746)
-	@# `grep -v '^STDOUT '` filters the checker's leaking debug lines
-	@# (#1829). Remove the filters once that bug is fixed.
 	@LLC=/opt/homebrew/opt/llvm/bin/llc; \
 	OUT=$$(mktemp -d); \
 	printf "  Running hello_world.mvl through self-hosted LLVM emitter...\n"; \
 	$(MVL) tir examples/programs/hello_world.mvl 2>/dev/null \
-	  | grep -v '^STDOUT ' \
 	  | $(MVL) run compiler/backends/llvm/emitter.mvl 2>/dev/null \
-	  | grep -v '^STDOUT ' \
 	  | tail -n +3 > "$$OUT/hello.ll"; \
 	$$LLC -filetype=obj "$$OUT/hello.ll" -o "$$OUT/hello.o"; \
 	cc -o "$$OUT/hello" "$$OUT/hello.o" -lc 2>/dev/null; \
