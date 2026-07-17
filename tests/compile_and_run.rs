@@ -466,7 +466,7 @@ fn core_types_demo_runs_and_produces_expected_output() {
 
 fn corpus_13_stdlib(name: &str) -> String {
     format!(
-        "{}/tests/corpus_old/13_stdlib/{name}",
+        "{}/tests/fixtures/13_stdlib/{name}",
         env!("CARGO_MANIFEST_DIR")
     )
 }
@@ -642,7 +642,7 @@ fn pbt_operations_runs_without_panic() {
 
 fn corpus_bdd(name: &str) -> String {
     format!(
-        "{}/tests/corpus_old/17_bdd/{name}",
+        "{}/tests/bdd/{name}",
         env!("CARGO_MANIFEST_DIR")
     )
 }

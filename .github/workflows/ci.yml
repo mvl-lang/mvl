@@ -226,9 +226,9 @@ jobs:
 
       - name: Test (full — integration)
         if: needs.changes.outputs.rust == 'true' && github.event_name == 'push'
-        run: cargo test --test compile_and_run --test cross_backend --test stdlib
+        run: cargo test --test compile_and_run --test stdlib
 
-      # New corpus matrix (#1823 phase 2) — three active anchors via tools/mvlr.
+      # Corpus matrix — three active anchors via tools/mvlr.
       # `install-runtime` places stdlib + runtime crates + libmvl_runtime_llvm.so
       # under ~/.local/share/mvl/ so `mvl test` can resolve them (matches the
       # layout an end user gets from `make install`). Uses the debug artifacts
@@ -246,16 +246,6 @@ jobs:
           make test-rust-rust
           make test-rust-llvm
           make test-mvl-llvm
-
-      # Regression net for emitter-emission bugs like #1671.  Every corpus
-      # file that builds successfully must produce warning-free Rust.
-      # Files with pre-existing legitimate warnings (e.g. linter negative
-      # tests) or known unfixed emitter smells are opted out with a
-      # `corpus:expect-warnings` marker + follow-up ticket reference.
-      # Slow (~6 min at full corpus), so gated on Rust changes only.
-      - name: Test corpus emits warning-free Rust
-        if: needs.changes.outputs.rust == 'true'
-        run: make test-corpus-warnings-old
 
       - name: MVL check compiler
         if: needs.changes.outputs.compiler == 'true'

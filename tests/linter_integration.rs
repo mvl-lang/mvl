@@ -43,7 +43,7 @@ fn assert_lint_clean(src: &str, file_label: &str) {
 
 #[test]
 fn lint_clean_program_no_warnings() {
-    let src = include_str!("corpus_old/14_linting/clean_program.mvl");
+    let src = include_str!("fixtures/linting/clean_program.mvl");
     assert_lint_clean(src, "clean_program.mvl");
 }
 
@@ -51,25 +51,25 @@ fn lint_clean_program_no_warnings() {
 
 #[test]
 fn lint_complexity_cyclomatic() {
-    let src = include_str!("corpus_old/14_linting/complexity_demo.mvl");
+    let src = include_str!("fixtures/linting/complexity_demo.mvl");
     assert_lint_has_rule(src, "complexity-cyclomatic", "complexity_demo.mvl");
 }
 
 #[test]
 fn lint_complexity_match_depth() {
-    let src = include_str!("corpus_old/14_linting/complexity_demo.mvl");
+    let src = include_str!("fixtures/linting/complexity_demo.mvl");
     assert_lint_has_rule(src, "complexity-match-depth", "complexity_demo.mvl");
 }
 
 #[test]
 fn lint_complexity_effect_width() {
-    let src = include_str!("corpus_old/14_linting/complexity_demo.mvl");
+    let src = include_str!("fixtures/linting/complexity_demo.mvl");
     assert_lint_has_rule(src, "complexity-effect-width", "complexity_demo.mvl");
 }
 
 #[test]
 fn lint_complexity_trait_impl_count() {
-    let src = include_str!("corpus_old/14_linting/complexity_demo.mvl");
+    let src = include_str!("fixtures/linting/complexity_demo.mvl");
     assert_lint_has_rule(src, "complexity-trait-impl-count", "complexity_demo.mvl");
 }
 
@@ -77,13 +77,13 @@ fn lint_complexity_trait_impl_count() {
 
 #[test]
 fn lint_unreachable_code() {
-    let src = include_str!("corpus_old/14_linting/unreachable_code.mvl");
+    let src = include_str!("fixtures/linting/unreachable_code.mvl");
     assert_lint_has_rule(src, "unreachable-code", "unreachable_code.mvl");
 }
 
 #[test]
 fn lint_missing_totality() {
-    let src = include_str!("corpus_old/14_linting/missing_totality.mvl");
+    let src = include_str!("fixtures/linting/missing_totality.mvl");
     assert_lint_has_rule(src, "missing-totality", "missing_totality.mvl");
 }
 
@@ -91,7 +91,7 @@ fn lint_missing_totality() {
 
 #[test]
 fn lint_redundant_effects() {
-    let src = include_str!("corpus_old/14_linting/redundant_effects.mvl");
+    let src = include_str!("fixtures/linting/redundant_effects.mvl");
     assert_lint_has_rule(src, "redundant-effects", "redundant_effects.mvl");
 }
 
@@ -99,13 +99,13 @@ fn lint_redundant_effects() {
 
 #[test]
 fn lint_for_iter_antipattern() {
-    let src = include_str!("corpus_old/14_linting/for_iter_antipattern.mvl");
+    let src = include_str!("fixtures/linting/for_iter_antipattern.mvl");
     assert_lint_has_rule(src, "for-iter-antipattern", "for_iter_antipattern.mvl");
 }
 
 #[test]
 fn lint_while_to_for_range() {
-    let src = include_str!("corpus_old/14_linting/while_to_for_range.mvl");
+    let src = include_str!("fixtures/linting/while_to_for_range.mvl");
     assert_lint_has_rule(src, "while-to-for-range", "while_to_for_range.mvl");
 }
 
@@ -113,7 +113,7 @@ fn lint_while_to_for_range() {
 
 #[test]
 fn lint_for_iter_also_triggers_while_to_for_range() {
-    let src = include_str!("corpus_old/14_linting/for_iter_antipattern.mvl");
+    let src = include_str!("fixtures/linting/for_iter_antipattern.mvl");
     assert_lint_has_rule(src, "while-to-for-range", "for_iter_antipattern.mvl");
 }
 
@@ -121,7 +121,7 @@ fn lint_for_iter_also_triggers_while_to_for_range() {
 
 #[test]
 fn lint_naming_conventions_clean() {
-    let src = include_str!("corpus_old/14_linting/naming_conventions.mvl");
+    let src = include_str!("fixtures/linting/naming_conventions.mvl");
     // Good names should produce no naming diagnostics
     let rules = lint_file(src);
     assert!(
@@ -134,19 +134,19 @@ fn lint_naming_conventions_clean() {
 
 #[test]
 fn lint_unused_function() {
-    let src = include_str!("corpus_old/14_linting/unused_function.mvl");
+    let src = include_str!("fixtures/linting/unused_function.mvl");
     assert_lint_has_rule(src, "unused-function", "unused_function.mvl");
 }
 
 #[test]
 fn lint_silent_result_discard() {
-    let src = include_str!("corpus_old/14_linting/silent_result_discard.mvl");
+    let src = include_str!("fixtures/linting/silent_result_discard.mvl");
     assert_lint_has_rule(src, "silent-result-discard", "silent_result_discard.mvl");
 }
 
 #[test]
 fn lint_relabel_tag_hygiene() {
-    let src = include_str!("corpus_old/14_linting/relabel_tag_hygiene.mvl");
+    let src = include_str!("fixtures/linting/relabel_tag_hygiene.mvl");
     assert_lint_has_rule(src, "relabel-tag-hygiene", "relabel_tag_hygiene.mvl");
 }
 
@@ -174,59 +174,59 @@ fn lint_all_corpus_files_parse_cleanly() {
     let files: &[(&str, &str)] = &[
         (
             "clean_program",
-            include_str!("corpus_old/14_linting/clean_program.mvl"),
+            include_str!("fixtures/linting/clean_program.mvl"),
         ),
         (
             "complexity_demo",
-            include_str!("corpus_old/14_linting/complexity_demo.mvl"),
+            include_str!("fixtures/linting/complexity_demo.mvl"),
         ),
         (
             "fn_length",
-            include_str!("corpus_old/14_linting/fn_length.mvl"),
+            include_str!("fixtures/linting/fn_length.mvl"),
         ),
         (
             "for_iter_antipattern",
-            include_str!("corpus_old/14_linting/for_iter_antipattern.mvl"),
+            include_str!("fixtures/linting/for_iter_antipattern.mvl"),
         ),
         (
             "missing_totality",
-            include_str!("corpus_old/14_linting/missing_totality.mvl"),
+            include_str!("fixtures/linting/missing_totality.mvl"),
         ),
         (
             "naming_conventions",
-            include_str!("corpus_old/14_linting/naming_conventions.mvl"),
+            include_str!("fixtures/linting/naming_conventions.mvl"),
         ),
         (
             "unused_function",
-            include_str!("corpus_old/14_linting/unused_function.mvl"),
+            include_str!("fixtures/linting/unused_function.mvl"),
         ),
         (
             "silent_result_discard",
-            include_str!("corpus_old/14_linting/silent_result_discard.mvl"),
+            include_str!("fixtures/linting/silent_result_discard.mvl"),
         ),
         (
             "relabel_tag_hygiene",
-            include_str!("corpus_old/14_linting/relabel_tag_hygiene.mvl"),
+            include_str!("fixtures/linting/relabel_tag_hygiene.mvl"),
         ),
         (
             "redundant_effects",
-            include_str!("corpus_old/14_linting/redundant_effects.mvl"),
+            include_str!("fixtures/linting/redundant_effects.mvl"),
         ),
         (
             "redundant_match",
-            include_str!("corpus_old/14_linting/redundant_match.mvl"),
+            include_str!("fixtures/linting/redundant_match.mvl"),
         ),
         (
             "trailing_whitespace",
-            include_str!("corpus_old/14_linting/trailing_whitespace.mvl"),
+            include_str!("fixtures/linting/trailing_whitespace.mvl"),
         ),
         (
             "unreachable_code",
-            include_str!("corpus_old/14_linting/unreachable_code.mvl"),
+            include_str!("fixtures/linting/unreachable_code.mvl"),
         ),
         (
             "while_to_for_range",
-            include_str!("corpus_old/14_linting/while_to_for_range.mvl"),
+            include_str!("fixtures/linting/while_to_for_range.mvl"),
         ),
     ];
     for (name, src) in files {

@@ -6,8 +6,8 @@
 //! Proves the cdylib loads and resolves correctly at the Rust unit-test level.
 //! Cross-backend parity for this symbol requires a MVL stdlib binding for the
 //! LLVM IR path to call it; until that binding exists, the cdylib load smoke
-//! test is covered by `cross_backend_env_basic` in `tests/cross_backend.rs`
-//! (which calls `_mvl_env_getuid`/`_mvl_env_getgid` from the same library).
+//! test is covered by the corpus matrix (env tests in `tests/corpus/06_effects/`)
+//! which calls env builtins from the same library via `make test-rust-llvm`.
 
 use std::ffi::CStr;
 

@@ -3,7 +3,7 @@
 // Exercises set intersection, difference, union on Int sets.
 // Both backends must produce the same sorted output.
 //
-// Used by: tests/cross_backend.rs::cross_backend_set_algebra
+// Covered by corpus matrix: tests/corpus/05_collections/ (make test-rust-rust, test-rust-llvm)
 
 fn main() -> Unit ! Console {
     let a: Set[Int] = {1, 2, 3, 4};
