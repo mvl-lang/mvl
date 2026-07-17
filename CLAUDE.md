@@ -10,7 +10,7 @@ cargo run -- check <file.mvl>
 
 If it fails, fix the errors before moving on. The compiler is the oracle — don't guess syntax, verify it.
 
-For full test suite: `make test-corpus` (parse+check all corpus files).
+For full test suite: `make test-corpus` (parse+check all corpus files) or `make test-rust-rust` (run corpus through Rust backend).
 
 ---
 
@@ -261,8 +261,9 @@ No `/* */` block comments.
 ```
 src/mvl/          — compiler source (Rust)
 std/              — stdlib declarations (.mvl)
-tests/corpus/     — test programs by category (01_basics..12_contracts)
-tests/stdlib/     — stdlib integration tests
+tests/corpus/     — test programs by category (00_smoke..13_stdlib), test fn blocks
+tests/stdlib/     — stdlib integration tests, test fn blocks
+tests/bdd/        — Gherkin BDD scenarios (rust/rust only)
 mvl_runtime/      — Rust runtime backing stdlib builtins
 docs/             — mkdocs site, language manual (grammar EBNF lives in mvl-lang/mvl-spec)
 .openspec/        — specs and ADRs
@@ -275,8 +276,9 @@ cargo build                    # build compiler
 cargo run -- check file.mvl    # type-check a file
 cargo run -- build file.mvl    # compile via Rust backend
 make test-corpus               # parse+check all corpus files
+make test-rust-rust            # run corpus through Rust backend (matrix anchor)
+make test-rust-llvm            # run corpus through LLVM backend
 make test-stdlib               # run stdlib tests (Rust backend)
-make test-llvm                 # run LLVM backend tests
 make test                      # all tests
 ```
 

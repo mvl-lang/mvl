@@ -1,9 +1,0 @@
-//! Cross-file extension method: `Ctx::doubled` calls `self.base()` which is
-//! defined in `ctx_types.mvl`.  No import of the *method* is needed — dispatch
-//! goes through the type (#1706 Go-model sibling dispatch).
-
-use ctx_types::Ctx;
-
-pub fn Ctx::doubled(self) -> Int {
-    self.base() * 2
-}

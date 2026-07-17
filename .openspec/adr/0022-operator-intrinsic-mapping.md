@@ -156,7 +156,7 @@ operators on both backends:
 | `03_logical.mvl` | `&&`, `\|\|`, `!` |
 | `04_bitwise.mvl` | `&`, `\|`, `^`, `~`, `<<`, `>>` |
 
-These are also run cross-backend in `tests/cross_backend.rs`.
+These are also verified by the corpus matrix harness (`make test-rust-llvm`) via `tests/corpus/01_expressions/`.
 
 ---
 

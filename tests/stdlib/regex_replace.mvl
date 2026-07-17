@@ -4,7 +4,7 @@
 // Uses only compile and replace — the two functions wired through LLVM codegen.
 // find/find_all/captures LLVM codegen is deferred to a follow-up ticket.
 //
-// Used by: tests/cross_backend.rs::cross_backend_regex_replace
+// Covered by corpus matrix: tests/corpus/13_stdlib/ (make test-rust-rust, test-rust-llvm)
 
 use std.regex.{Regex, RegexError, compile, replace}
 

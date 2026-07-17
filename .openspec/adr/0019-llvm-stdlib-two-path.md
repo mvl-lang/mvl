@@ -35,7 +35,7 @@ Path 2 (LLVM backend):     MVL → LLVM IR → lli
                             primitive types + opaque pointers across the boundary
 ```
 
-Cross-backend behavioral parity is enforced by `tests/cross_backend.rs` — identical output from both backends for the same MVL program.
+Cross-backend behavioral parity is enforced by the corpus matrix harness (`make test-rust-rust`, `make test-rust-llvm`, `make test-mvl-llvm`) — identical output from both backends for the same MVL program.
 
 ---
 
@@ -104,7 +104,7 @@ Both cdylibs are required for programs that use stdlib + heap collections via LL
 ### Positive
 - Stdlib becomes available to LLVM-compiled MVL programs without changing the transpiler path.
 - Adding a new stdlib function to the LLVM path is ~10 lines of Rust in `mvl_runtime_c`.
-- Cross-backend parity is testable via `tests/cross_backend.rs`.
+- Cross-backend parity is testable via the corpus matrix harness (`make test-rust-rust`, `make test-rust-llvm`).
 
 ### Negative
 - Two crates to maintain for stdlib functions (Rust API + C-ABI wrapper).

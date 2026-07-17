@@ -2,7 +2,7 @@
 .ONESHELL:
 SHELL := /bin/bash
 
-.PHONY: help version build build-runtime-wasm test test-full test-unit test-rust-integration test-requirements test-error-messages test-fmt-roundtrip test-corpus-old test-corpus-warnings-old test-rust-rust test-rust-llvm test-mvl-llvm test-rust-wasm test-mvl-wasm test-rust-tokio test-runtime-rust test-runtime-llvm test-runtime-wasm test-checker-parity test-checker-parity-update test-solver test-stdlib check-compiler assure-compiler test-mvl test-bootstrap-e2e test-bdd test-backend-rust-old test-backend-llvm-old test-cross-backend test-grammar-coverage test-examples test-examples-rust test-examples-llvm coverage validate-keywords lint mvl-lint format format-check format-mvl format-mvl-check assurance assurance-gate audit-backend-ast audit-cli-prelude check-adr docs docs-serve install install-runtime setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
+.PHONY: help version build build-runtime-wasm test test-full test-unit test-rust-integration test-requirements test-error-messages test-fmt-roundtrip test-rust-rust test-rust-llvm test-mvl-llvm test-rust-wasm test-mvl-wasm test-rust-tokio test-runtime-rust test-runtime-llvm test-runtime-wasm test-checker-parity test-checker-parity-update test-solver test-stdlib check-compiler assure-compiler test-mvl test-bootstrap-e2e test-bdd test-grammar-coverage test-examples test-examples-rust test-examples-llvm coverage validate-keywords lint mvl-lint format format-check format-mvl format-mvl-check assurance assurance-gate audit-backend-ast audit-cli-prelude check-adr docs docs-serve install install-runtime setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
 
 .DEFAULT_GOAL := help
 
@@ -224,11 +224,9 @@ test-unit: ## Run unit tests only
 test-type-checker: ## Run type checker integration tests (IFC, effects, labels, format)
 	cargo test --test type_checker
 
-test-rust-integration: build ## Run integration test binaries not covered by any other suite. Excluded: type_checker, requirements, error_messages, fmt_roundtrip (fast gate), checker_parity, compile_and_run, cross_backend (full extra suites).
+test-rust-integration: build ## Run integration test binaries not covered by any other suite. Excluded: type_checker, requirements, error_messages, fmt_roundtrip (fast gate), checker_parity, compile_and_run (full extra suites).
 	cargo test \
 		--test assurance \
-		--test corpus_ir_parity \
-		--test cross_backend_tir \
 		--test linter_integration \
 		--test manifest_rationale \
 		--test meta_commands \
@@ -249,75 +247,6 @@ test-error-messages: ## Run error message tests — assert exact diagnostic outp
 
 test-fmt-roundtrip: ## Run fmt roundtrip tests — verify check(fmt(src)) == check(src) and idempotency
 	cargo test --test fmt_roundtrip
-
-test-corpus-old: build ## Validate legacy corpus examples parse and type-check (#1823 phase 1)
-	@pass=0; fail=0; \
-	OK="\033[32m✓\033[0m"; FAIL="\033[31m✗\033[0m"; \
-	while IFS= read -r f; do \
-		short=$${f#tests/corpus_old/}; \
-		[[ "$$f" == *_test.mvl ]] && continue; \
-		if grep -q "corpus:expect-fail" "$$f" 2>/dev/null; then \
-			$(MVL) check "$$f" >/dev/null 2>&1; rc=$$?; \
-			if [ $$rc -ne 0 ]; then \
-				printf "  $$OK  %s\n" "$$short"; pass=$$((pass + 1)); \
-			else \
-				printf "  $$FAIL  %s  (expected violations but checker reported none)\n" "$$short"; fail=$$((fail + 1)); \
-			fi; \
-		else \
-			out=$$($(MVL) check "$$f" 2>&1); rc=$$?; \
-			if [ $$rc -ne 0 ]; then \
-				printf "  $$FAIL  %s\n" "$$short"; printf "%s\n" "$$out" | sed 's/^/         /'; fail=$$((fail + 1)); \
-			else \
-				printf "  $$OK  %s\n" "$$short"; pass=$$((pass + 1)); \
-			fi; \
-		fi; \
-	done < <(find tests/corpus_old -name "*.mvl" -not -path "*/00_intrinsics/*" | sort); \
-	echo ""; \
-	if [ $$fail -eq 0 ]; then \
-		printf "  \033[32m✓  $$pass passed, 0 failed\033[0m\n\n"; \
-	else \
-		printf "  \033[31m✗  $$pass passed, $$fail failed\033[0m\n\n"; exit 1; \
-	fi
-
-# Verify emitted Rust from every buildable corpus file compiles without
-# any `rustc` warnings.  A regression net for emitter-emission bugs like
-# #1671 (spurious `unused_imports` on user-module wildcards) that
-# `test-corpus` cannot catch because it only runs `mvl check`, not
-# `mvl build`.  Files that fail to build for unrelated reasons are
-# reported as skipped and do not fail the target — this target is
-# strictly about *warnings from successful builds*.  Full run is slow
-# (~2 s per file, ~6 min for the full corpus at time of writing); this
-# is a CI/validation target, not a dev-inner-loop target — do NOT wire
-# into `test-corpus`.
-test-corpus-warnings-old: build ## Verify emitted Rust from legacy corpus builds warning-free (slow — CI only, #1823 phase 1)
-	@pass=0; fail=0; skip=0; expected=0; \
-	OK="\033[32m✓\033[0m"; FAIL="\033[31m✗\033[0m"; SKIP="\033[33m·\033[0m"; EXP="\033[33m~\033[0m"; \
-	while IFS= read -r f; do \
-		short=$${f#tests/corpus_old/}; \
-		[[ "$$f" == *_test.mvl ]] && continue; \
-		grep -q "corpus:expect-fail" "$$f" 2>/dev/null && continue; \
-		grep -q "corpus:expect-warnings" "$$f" 2>/dev/null && { \
-			printf "  $$EXP  %s  (expected warnings — skipped)\n" "$$short"; expected=$$((expected + 1)); \
-			continue; \
-		}; \
-		out=$$($(MVL) build "$$f" 2>&1); rc=$$?; \
-		if [ $$rc -ne 0 ]; then \
-			printf "  $$SKIP  %s  (build failed — unrelated)\n" "$$short"; skip=$$((skip + 1)); \
-			continue; \
-		fi; \
-		warnings=$$(printf "%s\n" "$$out" | grep -E "^warning:" || true); \
-		if [ -n "$$warnings" ]; then \
-			printf "  $$FAIL  %s\n" "$$short"; printf "%s\n" "$$warnings" | sed 's/^/         /'; fail=$$((fail + 1)); \
-		else \
-			printf "  $$OK  %s\n" "$$short"; pass=$$((pass + 1)); \
-		fi; \
-	done < <(find tests/corpus_old -name "*.mvl" -not -path "*/00_intrinsics/*" | sort); \
-	echo ""; \
-	if [ $$fail -eq 0 ]; then \
-		printf "  \033[32m✓  $$pass warning-free, $$expected expected-warnings, $$skip build-skipped, 0 failed\033[0m\n\n"; \
-	else \
-		printf "  \033[31m✗  $$pass warning-free, $$expected expected-warnings, $$skip build-skipped, $$fail failed\033[0m\n\n"; exit 1; \
-	fi
 
 test-checker-parity: ## Verify Rust checker verdict over corpus matches baseline (self-hosting #1117)
 	@cargo test --test checker_parity --quiet 2>&1 | tail -20
@@ -390,46 +319,9 @@ test-spikes: build ## Run spike 001-parser tests manually (NOT part of CI — se
 	$(MVL) test tests/spikes/001-parser/
 
 test-bdd: build ## Run BDD corpus scenarios with Gherkin report (mvl test --bdd)
-	$(MVL) test tests/corpus_old/17_bdd/ --bdd
+	$(MVL) test tests/bdd/ --bdd
 
-test-backend-rust-old: build ## Run end-to-end transpiler tests over legacy corpus + stdlib (#1823 phase 1)
-	cargo test --test compile_and_run
-	@pass=0; fail=0; \
-	OK="\033[32m✓\033[0m"; FAIL="\033[31m✗\033[0m"; \
-	while IFS= read -r line; do \
-		case "$$line" in \
-			"  PASS: "*) f="$${line#  PASS: }"; short="$${f#tests/}"; printf "  $$OK  %s\n" "$$short"; pass=$$((pass + 1));; \
-			"  FAIL"*) f="$${line##*: }"; short="$${f#tests/}"; printf "  $$FAIL  %s\n" "$$short"; fail=$$((fail + 1));; \
-		esac; \
-	done < <({ $(MVL) test tests/corpus_old/ --expect --verbose; $(MVL) test tests/stdlib/ --expect --verbose; } 2>&1); \
-	echo ""; \
-	if [ $$fail -eq 0 ]; then \
-		printf "  \033[32m✓  $$pass passed, 0 failed\033[0m\n\n"; \
-	else \
-		printf "  \033[31m✗  $$pass passed, $$fail failed\033[0m\n\n"; exit 1; \
-	fi
-
-test-backend-llvm-old: build ## Run LLVM backend tests across legacy corpus + stdlib (#1823 phase 1)
-	@pass=0; fail=0; \
-	OK="\033[32m✓\033[0m"; FAIL="\033[31m✗\033[0m"; \
-	while IFS= read -r line; do \
-		case "$$line" in \
-			"  PASS: "*) f="$${line#  PASS: }"; short="$${f#tests/}"; printf "  $$OK  %s\n" "$$short"; pass=$$((pass + 1));; \
-			"  FAIL"*) f="$${line##*: }"; short="$${f#tests/}"; printf "  $$FAIL  %s\n" "$$short"; fail=$$((fail + 1));; \
-		esac; \
-	done < <({ $(MVL) test tests/corpus_old/ --backend=llvm --verbose; $(MVL) test tests/stdlib/ --backend=llvm --verbose; } 2>&1); \
-	echo ""; \
-	if [ $$fail -eq 0 ]; then \
-		printf "  \033[32m✓  $$pass passed, 0 failed\033[0m\n\n"; \
-	else \
-		printf "  \033[31m✗  $$pass passed, $$fail failed\033[0m\n\n"; exit 1; \
-	fi
-
-test-cross-backend: build ## Run Rust integration tests for backend parity (transpiler vs LLVM)
-	@echo "Running cross-backend tests (transpiler vs LLVM parity)..."
-	cargo test --test cross_backend
-
-# ── New corpus matrix (#1823 phase 2) ────────────────────────────────────────
+# ── New corpus matrix (#1823) ─────────────────────────────────────────────────
 # Files are *_test.mvl with `test fn` blocks; a passing return = pass, a
 # panic (from assert/assert_eq/assert_ne) = fail. No --expect strings.
 # `mvl test <dir>` bundles every _test.mvl file into ONE cargo test crate:
@@ -533,12 +425,11 @@ test-grammar-coverage: validate-keywords ## Cross-validate mvl-spec EBNF against
 lint: ## Lint Rust source with clippy
 	cargo clippy -- -D warnings
 
-mvl-lint: build ## Run MVL linter on legacy corpus and examples (#1823 phase 1)
+mvl-lint: build ## Run MVL linter on corpus and examples
 	@echo "Running MVL linter on corpus..."
 	@failed=0; \
-	for f in tests/corpus_old/**/*.mvl examples/**/*.mvl; do \
+	for f in tests/corpus/**/*.mvl examples/**/*.mvl; do \
 		[ -f "$$f" ] || continue; \
-		case "$$f" in tests/corpus_old/14_linting/*) continue;; esac; \
 		out=$$($(MVL) lint "$$f" 2>&1); \
 		if [ -n "$$out" ] && echo "$$out" | grep -q "warning\|error"; then \
 			echo "$$out"; failed=1; \

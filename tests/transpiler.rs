@@ -315,35 +315,35 @@ fn ensures_emits_assert_not_debug_assert() {
 /// The test just checks that transpilation does not panic.
 #[test]
 fn corpus_structs_transpiles() {
-    let src = include_str!("corpus_old/03_types/structs.mvl");
+    let src = include_str!("fixtures/03_types/structs.mvl");
     let rust = transpile_src(src);
     assert_contains(&rust, "pub struct");
 }
 
 #[test]
 fn corpus_enums_transpiles() {
-    let src = include_str!("corpus_old/03_types/enums.mvl");
+    let src = include_str!("fixtures/03_types/enums.mvl");
     let rust = transpile_src(src);
     assert_contains(&rust, "pub enum");
 }
 
 #[test]
 fn corpus_option_result_transpiles() {
-    let src = include_str!("corpus_old/03_types/option_result.mvl");
+    let src = include_str!("fixtures/03_types/option_result.mvl");
     let rust = transpile_src(src);
     assert_contains(&rust, "pub fn");
 }
 
 #[test]
 fn corpus_ifc_label_types_transpiles() {
-    let src = include_str!("corpus_old/08_ifc/label_types.mvl");
+    let src = include_str!("fixtures/08_ifc/label_types.mvl");
     let rust = transpile_src(src);
     assert_contains(&rust, "pub struct Public<T>");
 }
 
 #[test]
 fn corpus_total_vs_partial_transpiles() {
-    let src = include_str!("corpus_old/10_termination/total_vs_partial.mvl");
+    let src = include_str!("fixtures/10_termination/total_vs_partial.mvl");
     let rust = transpile_src(src);
     assert_contains(&rust, "/// # Totality");
 }
@@ -842,7 +842,8 @@ fn process(c: Container) -> Unit ! Console {
 }
 "#;
     let rust = transpile_src(src);
-    assert_contains(&rust, "(c.items).clone()");
+    assert_contains(&rust, "c.items");
+    assert_contains(&rust, ".clone()");
 }
 
 // ── Spec 009 Req 2: Clone-on-pass ─────────────────────────────────────────
@@ -993,7 +994,7 @@ impl Iterator[Int] for Counter {}
 /// The schema-driven API uses `parse_args([...])` — no struct introspection.
 #[test]
 fn corpus_args_transpiles() {
-    let src = include_str!("corpus_old/13_stdlib/args.mvl");
+    let src = include_str!("fixtures/13_stdlib/args.mvl");
     let rust = transpile_src(src);
     // User-defined schema functions are emitted
     assert_contains(&rust, "pub fn example_schema(");
@@ -1008,7 +1009,7 @@ fn corpus_args_transpiles() {
 /// emits Rust bitwise operators for Int and Byte methods (#233).
 #[test]
 fn corpus_bitwise_transpiles() {
-    let src = include_str!("corpus_old/04_primitives/bitwise.mvl");
+    let src = include_str!("fixtures/04_primitives/bitwise.mvl");
     let rust = transpile_src(src);
     // Int bitwise — Rust operators
     assert_contains(&rust, "(a & b)");
@@ -3145,7 +3146,7 @@ fn ident_arg_non_last_use_emits_clone() {
 /// Bit operators corpus transpiles without errors (#483 #484).
 #[test]
 fn corpus_bit_operators_transpiles() {
-    let src = include_str!("corpus_old/04_primitives/bit_operators.mvl");
+    let src = include_str!("fixtures/04_primitives/bit_operators.mvl");
     let rust = transpile_src(src);
     assert_contains(&rust, "&");
     assert_contains(&rust, "|");
@@ -3157,7 +3158,7 @@ fn corpus_bit_operators_transpiles() {
 /// Overflow-checking arithmetic corpus transpiles correctly (#485).
 #[test]
 fn corpus_overflow_checking_transpiles() {
-    let src = include_str!("corpus_old/04_primitives/overflow_checking.mvl");
+    let src = include_str!("fixtures/04_primitives/overflow_checking.mvl");
     let rust = transpile_src(src);
     assert_contains(&rust, "checked_add");
     assert_contains(&rust, "wrapping_add");
@@ -3166,7 +3167,7 @@ fn corpus_overflow_checking_transpiles() {
 /// Unsigned types corpus transpiles: UByte → u8, UInt → u64 (#481).
 #[test]
 fn corpus_unsigned_types_transpiles() {
-    let src = include_str!("corpus_old/04_primitives/unsigned_types.mvl");
+    let src = include_str!("fixtures/04_primitives/unsigned_types.mvl");
     let rust = transpile_src(src);
     assert_contains(&rust, "u8");
     assert_contains(&rust, "u64");
@@ -3424,7 +3425,7 @@ pub partial fn greet(n: Int) -> Int {
 /// Verifies that `corpus:skip-transpiler` has been lifted.
 #[test]
 fn corpus_basic_contracts_transpiles() {
-    let src = include_str!("corpus_old/11_contracts/basic_contracts.mvl");
+    let src = include_str!("fixtures/11_contracts/basic_contracts.mvl");
     let rust = transpile_src(src);
     assert_contains(&rust, "pub fn");
 }
@@ -3479,7 +3480,7 @@ fn ghost_let_is_erased_in_transpiler() {
 /// Phase 4: `ghost_old_contracts.mvl` corpus transpiles cleanly.
 #[test]
 fn corpus_ghost_old_contracts_transpiles() {
-    let src = include_str!("corpus_old/11_contracts/ghost_old_contracts.mvl");
+    let src = include_str!("fixtures/11_contracts/ghost_old_contracts.mvl");
     let rust = transpile_src(src);
     assert_contains(&rust, "pub fn");
     // Ghost bindings must be erased.

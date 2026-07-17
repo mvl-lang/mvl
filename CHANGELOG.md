@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-07-17
+
+### Removed — #1823 retire legacy corpus and cross-backend parity harness
+
+`tests/corpus_old/` (200 files), `tests/cross_backend.rs` (64K lines),
+`tests/cross_backend_tir/`, and `tests/corpus_ir_parity.rs` are retired.
+Cross-backend parity is now enforced by the unified corpus matrix
+(`make test-rust-rust`, `make test-rust-llvm`, `make test-mvl-llvm`).
+Linting/transpiler/type-checker test source fixtures moved to `tests/fixtures/`.
+BDD tests moved to `tests/bdd/`. Legacy Makefile targets (`test-corpus-old`,
+`test-backend-rust-old`, etc.) and CI step removed.
+
 ## [1.5.0] - 2026-07-17
 
 ### Added — #1879 multi-file MVL projects on LLVM backend

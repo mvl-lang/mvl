@@ -104,14 +104,14 @@ cross-backend regression testing.
 
 **Implementation:** `src/mvl/backends/llvm_text/` (LLVM backend), `runtime/llvm/`, `runtime/rust/`
 
-**Tests:** `tests/cross_backend.rs`, `tests/compile_and_run.rs`
+**Tests:** `tests/compile_and_run.rs`, corpus matrix (`make test-rust-rust`, `make test-rust-llvm`, `make test-mvl-llvm`)
 
 #### Scenario: Phase 5 completion criteria
 
 - GIVEN the LLVM backend module
 - WHEN the corpus is compiled end-to-end via `--backend=llvm`
 - THEN every program in `tests/corpus/` produces stdout identical to the Rust transpiler backend
-- AND `tests/cross_backend.rs` passes
+- AND `make test-rust-llvm` passes
 
 **Status (2026-05-02):** All 43 phase-5 issues closed. Released as v0.60–v0.65 on May 1, 2026. Cross-backend regression coverage exists for hello_world, calculator, shapes; full-corpus parity is the remaining tail (tracked separately, see follow-up to #406).
 

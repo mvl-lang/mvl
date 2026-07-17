@@ -196,50 +196,12 @@ Priority order — fill the largest gaps first:
 
 ---
 
-## Cross-Backend Parity — `llvm_text` (#1154)
+## Cross-Backend Parity (#1823)
 
-`tests/cross_backend.rs` enforces stdout parity between the Rust transpiler
-and the `llvm_text` backend (post-ADR-0040, `--backend=llvm` resolves to
-`llvm_text`). Helpers `assert_backends_agree` and `assert_parity` are
-**strict**: a divergence is a test failure, not a logged warning.
+Parity between backends is now enforced by the corpus matrix harness: every
+`_test.mvl` file in `tests/corpus/` and `tests/stdlib/` is run through each
+active backend (`make test-rust-rust`, `make test-rust-llvm`, `make test-mvl-llvm`).
+A test passes iff it exits 0; `assert_eq`/`assert`/`assert_ne` panics fail the test.
 
-### Helpers
-
-| Helper | On `lli` missing | On llvm_text failure | Use case |
-|--------|:---------------:|:--------------------:|----------|
-| `run_llvm_text(file)` | `None` (skip) | **panic** | Default for new tests |
-| `run_llvm_text_or_skip(file)` | `None` (skip) | `None` (logged skip) | Legacy callers, pre-existing known-broken paths |
-| `assert_backends_agree(name)` | skip | **panic** | Compare full stdout against transpiler |
-| `assert_parity(file, expected)` | skip | **panic** | Compare against pinned `expected` |
-| `assert_llvm_output(file, expected)` | skip | **panic** | LLVM-only expected output |
-
-### Known divergences (`#[ignore]`'d, surfaced by #1154)
-
-| Test | Status | Notes |
-|------|--------|-------|
-| `cross_backend_collections_basic` | ✅ fixed | Added `_mvl_set_contains_i64` runtime + dispatch |
-| `cross_backend_box_field_deref` | ✅ fixed | `Box::new`/`*box` codegen for primitive payloads |
-| `cross_backend_list_ufcs_methods` | ✅ fixed | Added `slice`/`take`/`skip` dispatch via `_mvl_list_slice` |
-| `llvm_move_string` | ✅ fixed | Dedupe heap_locals on consume (SSA already tracked) |
-| `cross_backend_set_algebra` | ✅ fixed | Added intersection/difference/union method dispatch in llvm_text emitter (#1198) |
-| `cross_backend_linked_list` | ✅ fixed | Non-unit enum payload lowering in llvm_text — `{ i8, ptr }` tagged union + per-variant payload slot array, match arms GEP/load each field (#1200) |
-
-Each ignored test carries a `reason` string identifying the symptom. New
-divergences MUST be triaged the same way (ignored with reason, follow-up
-issue filed) — never downgraded back to a soft `eprintln!` skip.
-
-### Soft-skip pool (`run_llvm_text_or_skip`)
-
-A handful of pre-existing tests use `run_llvm_text_or_skip` because the
-llvm_text backend produces divergent output for those programs today. Each
-call site carries a `// TODO(llvm_text): <reason>` comment naming the
-specific feature gap. Categories:
-
-- `random.choice` / `random.float`
-- `time.sleep`, `time.format_datetime`, `time.format_instant`
-- `io.write_read` (file I/O effect dispatch)
-- `regex.replace`, `regex.find_all`
-- `crypto.sha256`, `crypto.random_bytes` (and zero-length variant)
-
-The path forward is to fix each divergence and migrate the call site to
-`run_llvm_text` (strict). New tests MUST NOT use the soft helper.
+The old `tests/cross_backend.rs` stdout-comparison harness was retired in #1823
+phase 3. Historical context on fixed divergences is in CHANGELOG.md.

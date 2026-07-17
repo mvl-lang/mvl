@@ -527,15 +527,8 @@ Actor semantics MUST be identical across the Rust and LLVM backends (#698):
 - Creation/terminate lifecycle MUST behave identically
 - `select` timeout precision is backend-defined but MUST be best-effort
 
-**Tests:** `tests/corpus/12_actors/` — all files in this directory are run against both backends
-as part of cross-backend parity validation.
-`tests/cross_backend.rs::cross_backend_actor_corpus_actors`,
-`tests/cross_backend.rs::cross_backend_actor_corpus_capabilities`,
-`tests/cross_backend.rs::cross_backend_actor_corpus_session_types`,
-`tests/cross_backend.rs::cross_backend_actor_corpus_supervisor`,
-`tests/cross_backend.rs::cross_backend_actor_corpus_dead_letter`,
-`tests/cross_backend.rs::cross_backend_actor_corpus_process_links`,
-`tests/cross_backend.rs::cross_backend_actor_corpus_select`
+**Tests:** `tests/corpus/12_actors/` — all files in this directory are run against all active
+backends as part of corpus matrix parity validation (`make test-rust-rust`, `make test-rust-llvm`, `make test-mvl-llvm`).
 
 ## Known Limitations (Phase 8)
 
