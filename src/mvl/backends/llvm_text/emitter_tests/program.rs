@@ -7,7 +7,7 @@
 //! `cross_backend_tir/program.rs` substring tests cover the same
 //! concern against the TIR walker.
 
-use super::common::compile;
+use super::common::{compile, compile_with_sibling};
 
 #[test]
 fn unit_function_emits_ret_void() {
@@ -56,6 +56,19 @@ fn extern_c_emits_declare() {
         ir.contains("declare void @sqlite_close(i64)"),
         "missing sqlite_close declare: {ir}"
     );
+}
+
+/// Sibling functions appear in the flat IR module (#1879).
+#[test]
+fn sibling_fn_emitted_in_flat_module() {
+    let sibling = "pub fn add(a: Int, b: Int) -> Int { a + b }";
+    let entry = "fn main() -> Unit { }";
+    let ir = compile_with_sibling(entry, sibling);
+    assert!(
+        ir.contains("define i64 @add(i64 %a, i64 %b)"),
+        "sibling @add not in IR: {ir}"
+    );
+    assert!(ir.contains("define i32 @main()"), "main not in IR: {ir}");
 }
 
 /// `extern "rust"` block is NOT emitted by LLVM backend (handled by Rust backend only).

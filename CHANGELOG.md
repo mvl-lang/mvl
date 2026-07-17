@@ -2,7 +2,15 @@
 
 ## [Unreleased]
 
-## [1.6.0] - 2026-07-17
+## [1.5.0] - 2026-07-17
+
+### Added — #1879 multi-file MVL projects on LLVM backend
+
+`mvl build --backend=llvm main.mvl` and `mvl run --backend=llvm` now resolve
+sibling modules referenced via `use mod::item` imports. Each sibling is loaded
+transitively, checked with cross-sibling context (Go model), lowered to TIR
+independently, and emitted into a flat LLVM IR module together with the stdlib
+prelude and the entry program. Mirrors the existing Rust backend behaviour.
 
 ### Added — #1878 native test fn support for LLVM text backend
 
@@ -15,7 +23,7 @@ Also silences false-positive checker warnings (UnboundedLoopInTotal,
 PartialCallInTotal, MissingEffect(Send)) exposed by the native test-fn runner
 by adding appropriate `partial` / effect annotations to corpus test files.
 
-## [1.5.1] - 2026-07-16
+## [1.4.1] - 2026-07-16
 
 ### Fixed — #1825 wasm_text ADR-0050 violation
 
@@ -23,7 +31,7 @@ Redirects `wasm_text.rs` imports from `parser::ast` to `crate::mvl::ir`,
 consistent with the llvm_text and rust backends. Resets the ADR-0050 audit
 budget from 1 back to 0.
 
-## [1.5.0] - 2026-07-16
+## [1.4.0] - 2026-07-16
 
 ### Added — #1821 WASM Option ABI (partial)
 
@@ -33,8 +41,6 @@ New `MvlOption` runtime type (16 bytes, heap-allocated, refcounted) with 10
 exported symbols. Corpus grows from 7 → 9 WASM sources; `list_get_test.mvl`
 (5 tests) added, `list_iter_test.mvl` unblocked. `Result[T, E]` follows in
 a separate PR.
-
-## [1.4.0] - 2026-07-16
 
 ### Added — #1803 canonical prelude assembler for CLI subcommands
 

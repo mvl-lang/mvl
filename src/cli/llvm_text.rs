@@ -64,6 +64,106 @@ fn compile_ir(prog: &Program, module_name: &str) -> Result<String, String> {
     compiler.compile_to_ir_with_prelude_tir(&prelude_tirs, &entry_tir, module_name)
 }
 
+/// Load siblings, lower them to TIR, and return all parts needed for multi-file
+/// LLVM IR emission (#1879).
+///
+/// Falls back to the single-file path when the project has no sibling modules.
+fn prepare_llvm_text_tir_multi(
+    prog: &Program,
+    path: &str,
+) -> (
+    Vec<TirProgram>,
+    TirProgram,
+    Vec<TirProgram>,
+    LlvmTextCompiler,
+) {
+    let entry_dir = Path::new(path).parent().unwrap_or_else(|| Path::new("."));
+    let sibling_modules = loader::load_sibling_modules_transitive(prog, entry_dir);
+
+    if sibling_modules.is_empty() {
+        let (prelude_tirs, entry_tir, compiler) = prepare_llvm_text_tir(prog);
+        return (prelude_tirs, entry_tir, vec![], compiler);
+    }
+
+    let sibling_progs: Vec<&Program> = sibling_modules.iter().map(|(_, _, p)| p).collect();
+
+    // Prelude covers entry + all siblings so stdlib selectors are complete.
+    let mut prelude = loader::load_implicit_prelude();
+    prelude.extend(load_full_prelude(
+        std::iter::once(prog).chain(sibling_progs.iter().copied()),
+        PreludeMode::Transpile,
+    ));
+    prelude.extend(loader::load_rust_backed_stdlib_fns(std::slice::from_ref(
+        prog,
+    )));
+    let builtins = loader::collect_llvm_text_builtins(std::slice::from_ref(prog));
+
+    // Check entry with siblings as cross-sibling prelude (Go model: same-dir files share decls).
+    let mut expr_types = checker::collect_prelude_expr_types(&prelude);
+    let check_result = checker::check_with_two_preludes(&prelude, &sibling_progs, prog);
+    if check_result.has_errors() {
+        for err in &check_result.errors {
+            eprintln!("warning: checker: {err:?}");
+        }
+    }
+    expr_types.extend(check_result.expr_types);
+
+    // Each sibling is checked with the entry + all OTHER siblings as its prelude.
+    let sibling_expr_types: Vec<_> = sibling_modules
+        .iter()
+        .enumerate()
+        .map(|(i, (_, _, sibling))| {
+            let (before, rest) = sibling_modules.split_at(i);
+            let after = &rest[1..];
+            let sibling_prelude: Vec<&Program> = std::iter::once(prog)
+                .chain(before.iter().map(|(_, _, p)| p))
+                .chain(after.iter().map(|(_, _, p)| p))
+                .collect();
+            let mut t = checker::collect_prelude_expr_types(&prelude);
+            t.extend(
+                checker::check_with_two_preludes(&prelude, &sibling_prelude, sibling).expr_types,
+            );
+            t
+        })
+        .collect();
+
+    // Lower entry to TIR.
+    let all_fns = mvl::mvl::passes::mono::collect_fns(std::iter::once(prog).chain(prelude.iter()));
+    let entry_mono = mvl::mvl::passes::mono::monomorphize(prog, &all_fns, &expr_types);
+    let entry_tir = mvl::mvl::ir::lower::lower(prog, &entry_mono, &expr_types);
+
+    // Lower prelude to TIR.
+    let prelude_tirs: Vec<TirProgram> = prelude
+        .iter()
+        .map(|p| {
+            let all_fns = mvl::mvl::passes::mono::collect_fns([p]);
+            let m = mvl::mvl::passes::mono::monomorphize(p, &all_fns, &expr_types);
+            mvl::mvl::ir::lower::lower(p, &m, &expr_types)
+        })
+        .collect();
+
+    // Lower each sibling to TIR using its own expr_types.
+    let sibling_tirs: Vec<TirProgram> = sibling_modules
+        .iter()
+        .zip(sibling_expr_types.iter())
+        .map(|((_, _, sibling), sib_types)| {
+            let all_fns =
+                mvl::mvl::passes::mono::collect_fns(std::iter::once(sibling).chain(prelude.iter()));
+            let m = mvl::mvl::passes::mono::monomorphize(sibling, &all_fns, sib_types);
+            mvl::mvl::ir::lower::lower(sibling, &m, sib_types)
+        })
+        .collect();
+
+    let compiler = LlvmTextCompiler::with_context(builtins);
+    (prelude_tirs, entry_tir, sibling_tirs, compiler)
+}
+
+/// Compile `prog` (and any sibling modules in the same directory) to LLVM IR (#1879).
+fn compile_ir_multi(prog: &Program, path: &str, module_name: &str) -> Result<String, String> {
+    let (prelude_tirs, entry_tir, sibling_tirs, compiler) = prepare_llvm_text_tir_multi(prog, path);
+    compiler.compile_to_ir_with_siblings_tir(&prelude_tirs, &sibling_tirs, &entry_tir, module_name)
+}
+
 /// Lower an entry program and its prelude to TIR for the TIR-walking emitter
 /// (#1612 Phase 3b).
 ///
@@ -102,7 +202,7 @@ pub(super) fn prepare_llvm_text_tir(
 pub(super) fn build_project_llvm_text(path: &str) {
     let (prog, _src) = super::parse_or_exit(path);
     let module_name = loader::stem(path);
-    match compile_ir(&prog, &module_name) {
+    match compile_ir_multi(&prog, path, &module_name) {
         Ok(ir) => {
             let out_path = format!("{module_name}.ll");
             fs::write(&out_path, &ir).unwrap_or_else(|e| {
@@ -164,7 +264,7 @@ fn compile_llvm_bridge(llvm_rs: &Path) -> Option<PathBuf> {
 pub(super) fn run_project_llvm_text(path: &str) {
     let (prog, _src) = super::parse_or_exit(path);
     let module_name = loader::stem(path);
-    let ir = match compile_ir(&prog, &module_name) {
+    let ir = match compile_ir_multi(&prog, path, &module_name) {
         Ok(ir) => ir,
         Err(e) => {
             eprintln!("error: llvm codegen failed: {e}");
@@ -604,5 +704,54 @@ fn run_one_testfn(
             output: out,
             err_output: String::new(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn write_file(dir: &TempDir, name: &str, content: &str) -> String {
+        let path = dir.path().join(name);
+        fs::write(&path, content).unwrap();
+        path.display().to_string()
+    }
+
+    // Two-file multi-file LLVM compilation: sibling function must appear in IR (#1879).
+    #[test]
+    fn multi_file_sibling_fn_appears_in_ir() {
+        let dir = TempDir::new().unwrap();
+        write_file(
+            &dir,
+            "helper.mvl",
+            "pub fn add(a: Int, b: Int) -> Int { a + b }",
+        );
+        let main_path = write_file(
+            &dir,
+            "main.mvl",
+            "use helper::add;\nfn main() -> Unit ! Console { println(add(1, 2).to_string()) }",
+        );
+
+        let (prog, _) = super::super::parse_or_exit(&main_path);
+        let (_, _, sibling_tirs, _) = prepare_llvm_text_tir_multi(&prog, &main_path);
+
+        assert_eq!(
+            sibling_tirs.len(),
+            1,
+            "expected 1 sibling TIR (helper), got {}",
+            sibling_tirs.len()
+        );
+        assert!(
+            !sibling_tirs[0].fns.is_empty(),
+            "helper TIR should have at least one function"
+        );
+
+        let ir = compile_ir_multi(&prog, &main_path, "main").expect("compile_ir_multi failed");
+        assert!(
+            ir.contains("define i64 @add("),
+            "@add not in generated IR:\n{ir}"
+        );
     }
 }
