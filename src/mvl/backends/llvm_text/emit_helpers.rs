@@ -97,7 +97,12 @@ impl TextEmitter {
     }
 
     pub(super) fn drop_scope_locals(&mut self, snapshot_len: usize, escape: Option<&str>) {
-        let extras: Vec<_> = self.fn_ctx.heap_locals.drain(snapshot_len..).collect();
+        // A terminated sibling branch may have called `retain` (via
+        // `exclude_returned_value_tir`) and removed a pre-snapshot item,
+        // leaving `heap_locals.len() < snapshot_len`. In that case there are
+        // no post-snapshot items to drain — clamp to avoid a panic.
+        let start = snapshot_len.min(self.fn_ctx.heap_locals.len());
+        let extras: Vec<_> = self.fn_ctx.heap_locals.drain(start..).collect();
         for (ssa, kind, is_ref) in extras {
             if escape.map(|e| e == ssa).unwrap_or(false) {
                 // Branch return value — consumed by the surrounding phi.
