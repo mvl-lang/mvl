@@ -359,6 +359,94 @@ impl TextEmitter {
         Ok(())
     }
 
+    /// Like [`emit_program_tir`] but emits `test fn` bodies as regular
+    /// functions (dropping the `is_test` filter). Used by the test-crate
+    /// path (`compile_to_ir_test_crate`) so the dispatch main can call each
+    /// test fn by name via `lli <file.ll> <test_name>`.
+    pub(super) fn emit_program_tir_test_crate(&mut self, prog: &TirProgram) -> Result<(), String> {
+        // Clone prog with is_test cleared on all fns — the normal emit_program_tir
+        // path then emits them as regular functions without any further changes.
+        let mut test_prog = prog.clone();
+        for f in &mut test_prog.fns {
+            f.is_test = false;
+        }
+        self.emit_program_tir(&test_prog)
+    }
+
+    /// Emit a `define i32 @main(i32 %argc, i8** %argv)` that reads `argv[1]`
+    /// and dispatches to the named test function using `strcmp`.
+    ///
+    /// Exit code 0 = test passed (function returned normally).
+    /// The process aborts (SIGILL via `llvm.trap`) if `assert` / `assert_eq`
+    /// fires inside the test — that maps to a non-zero exit code.
+    /// Exit code 2 = unknown test name (argv[1] not matched).
+    pub(super) fn emit_test_dispatch_main(&mut self, test_names: &[String]) {
+        if test_names.is_empty() {
+            return;
+        }
+
+        // Emit string constants for each test name (C strings, null-terminated).
+        let name_globals: Vec<(String, usize)> = test_names
+            .iter()
+            .map(|n| {
+                let g = self.emit_str_global(n);
+                let len = n.len() + 1; // +1 null terminator
+                (g, len)
+            })
+            .collect();
+
+        self.ensure_extern("declare i32 @strcmp(ptr, ptr)");
+        self.ensure_extern("declare void @exit(i32)");
+
+        let mut body: Vec<String> = Vec::new();
+        body.push("define i32 @main(i32 %argc, ptr %argv) {".to_string());
+        body.push("entry:".to_string());
+        // argv[1] = the test name (if argc >= 2).
+        let arg_ptr = "%arg_ptr";
+        body.push(format!(
+            "  {arg_ptr} = getelementptr inbounds ptr, ptr %argv, i64 1"
+        ));
+        let arg = "%arg";
+        body.push(format!("  {arg} = load ptr, ptr {arg_ptr}, align 8"));
+
+        // For each test name: strcmp(argv[1], name) == 0 → call fn → ret 0.
+        for (i, name) in test_names.iter().enumerate() {
+            let (ref global, len) = name_globals[i];
+            let name_ptr = format!("%name_{i}");
+            body.push(format!(
+                "  {name_ptr} = getelementptr inbounds [{len} x i8], ptr @{global}, i64 0, i64 0"
+            ));
+            let cmp = format!("%cmp_{i}");
+            body.push(format!(
+                "  {cmp} = call i32 @strcmp(ptr {arg}, ptr {name_ptr})"
+            ));
+            let eq = format!("%eq_{i}");
+            body.push(format!("  {eq} = icmp eq i32 {cmp}, 0"));
+            let then_lbl = format!("test_{i}_run");
+            let next_lbl = if i + 1 < test_names.len() {
+                format!("test_{}_check", i + 1)
+            } else {
+                "unknown_test".to_string()
+            };
+            body.push(format!(
+                "  br i1 {eq}, label %{then_lbl}, label %{next_lbl}"
+            ));
+            body.push(format!("{then_lbl}:"));
+            body.push(format!("  call void @{name}()"));
+            body.push("  ret i32 0".to_string());
+            if i + 1 < test_names.len() {
+                body.push(format!("{}:", next_lbl));
+            }
+        }
+
+        body.push("unknown_test:".to_string());
+        body.push("  call void @exit(i32 2)".to_string());
+        body.push("  unreachable".to_string());
+        body.push("}".to_string());
+
+        self.module.fn_bodies.push(body.join("\n"));
+    }
+
     /// Flush `fn_ctx.fn_buf` into a single string, injecting any deferred
     /// `pre_allocas` right after the `entry:` label so they dominate all uses
     /// even when the binding is inside a branch (#1645).

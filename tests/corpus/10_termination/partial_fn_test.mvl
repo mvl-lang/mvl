@@ -45,28 +45,28 @@ partial fn while_true_with_return(target: Int) -> Int {
     -1
 }
 
-test fn partial_countdown_reaches_zero() -> Unit {
+test partial fn partial_countdown_reaches_zero() -> Unit {
     assert_eq(count_down_to_zero(5), 0);
     assert_eq(count_down_to_zero(100), 0);
 }
 
-test fn partial_countdown_from_zero_is_zero() -> Unit {
+test partial fn partial_countdown_from_zero_is_zero() -> Unit {
     assert_eq(count_down_to_zero(0), 0);
 }
 
-test fn partial_search_first_multiple() -> Unit {
+test partial fn partial_search_first_multiple() -> Unit {
     assert_eq(first_multiple_of_seven(1), 7);
     assert_eq(first_multiple_of_seven(8), 14);
     assert_eq(first_multiple_of_seven(14), 14);
 }
 
-test fn partial_sum_via_while() -> Unit {
+test partial fn partial_sum_via_while() -> Unit {
     assert_eq(sum_via_while(10), 55);
     assert_eq(sum_via_while(0), 0);
     assert_eq(sum_via_while(1), 1);
 }
 
-test fn partial_while_true_with_return() -> Unit {
+test partial fn partial_while_true_with_return() -> Unit {
     assert_eq(while_true_with_return(0), 0);
     assert_eq(while_true_with_return(7), 7);
     assert_eq(while_true_with_return(42), 42);

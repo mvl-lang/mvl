@@ -352,8 +352,15 @@ fn run_one_case(
     }
 }
 
-/// Run LLVM text backend tests: discover `.mvl` files with `// expect:` annotations,
-/// compile via `LlvmTextCompiler`, execute via `lli`, and compare output.
+/// Run LLVM text backend tests.
+///
+/// Discovers two kinds of test:
+/// 1. `// expect:` corpus files — `fn main` with expected stdout annotation.
+/// 2. `test fn` files — single-file MVL with `test fn` declarations. Each
+///    test fn is run in its own `lli` invocation (dispatch-main pattern).
+///    The process exit code (0 = pass, non-zero/SIGILL = fail) gives per-test
+///    isolation without any runtime changes (#1878).
+///
 /// `mvl test <path> --backend=llvm`
 pub(super) fn cmd_test_llvm_text(path: &str, quiet: bool, verbose: bool) {
     let lli_bin = lli::find_lli().unwrap_or_else(|| {
@@ -363,68 +370,156 @@ pub(super) fn cmd_test_llvm_text(path: &str, quiet: bool, verbose: bool) {
     let runtime_lib = lli::find_mvl_runtime_llvm_lib();
 
     let all_mvl = loader::mvl_files_all(path);
-    let mut test_cases: Vec<(PathBuf, String, bool)> = Vec::new();
+
+    // ── Corpus expect-annotation cases ───────────────────────────────────────
+    let mut expect_cases: Vec<(PathBuf, String, bool)> = Vec::new();
+    // ── test fn cases: (file, compiled IR, vec of test names) ────────────────
+    let mut testfn_cases: Vec<(PathBuf, String, Vec<String>)> = Vec::new();
 
     for file in &all_mvl {
         let src = match fs::read_to_string(file) {
             Ok(s) => s,
             Err(_) => continue,
         };
-        if !src.contains("fn main(") {
-            continue;
+
+        // Corpus-style: fn main + // expect: annotation.
+        if src.contains("fn main(") {
+            if let Some(pat) = lli::parse_expect_pattern_annotation(&src) {
+                expect_cases.push((file.clone(), pat, true));
+                continue;
+            } else if let Some(expected) = lli::parse_expect_annotation(&src) {
+                expect_cases.push((file.clone(), expected, false));
+                continue;
+            }
         }
-        if let Some(pat) = lli::parse_expect_pattern_annotation(&src) {
-            test_cases.push((file.clone(), pat, true));
-        } else if let Some(expected) = lli::parse_expect_annotation(&src) {
-            test_cases.push((file.clone(), expected, false));
+
+        // test fn style: files with `test fn` declarations (no fn main).
+        // Also matches `test partial fn` and `test total fn` modifiers.
+        let file_str = file.display().to_string();
+        let has_test_fns = src.contains("test fn ")
+            || src.contains("test partial fn ")
+            || src.contains("test total fn ");
+        if has_test_fns {
+            let module_name = loader::stem(&file_str);
+            let (prog, _) = super::parse_or_exit(&file_str);
+            let (prelude_tirs, entry_tir, compiler) = prepare_llvm_text_tir(&prog);
+            match compiler.compile_to_ir_test_crate(&prelude_tirs, &entry_tir, &module_name) {
+                Ok((ir, names)) if !names.is_empty() => {
+                    testfn_cases.push((file.clone(), ir, names));
+                }
+                Ok(_) => {} // no test fns found after lowering
+                Err(e) => {
+                    eprintln!("  FAIL (codegen): {file_str}: {e}");
+                }
+            }
         }
     }
 
-    if test_cases.is_empty() {
+    let total_cases = expect_cases.len()
+        + testfn_cases
+            .iter()
+            .map(|(_, _, ns)| ns.len())
+            .sum::<usize>();
+    if total_cases == 0 {
         if !quiet {
             println!(
-                "No LLVM text test cases found (files with `fn main` + `// expect:` annotations)."
+                "No LLVM text test cases found (files with `fn main` + `// expect:` or `test fn` declarations)."
             );
         }
         return;
     }
 
-    let parallelism = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(4)
-        .min(test_cases.len());
-    let chunk_size = test_cases.len().div_ceil(parallelism).max(1);
-
-    if !quiet {
-        println!(
-            "LLVM text backend: {} test file(s) across {} worker(s)",
-            test_cases.len(),
-            parallelism
-        );
-    }
-
     let lli_bin_ref: &Path = &lli_bin;
     let runtime_lib_ref: Option<&Path> = runtime_lib.as_deref();
 
-    let results: Vec<CaseResult> = std::thread::scope(|scope| {
-        let handles: Vec<_> = test_cases
-            .chunks(chunk_size)
-            .map(|chunk| {
-                scope.spawn(move || {
-                    chunk
-                        .iter()
-                        .map(|(f, e, p)| {
-                            run_one_case(f, e, *p, lli_bin_ref, runtime_lib_ref, quiet, verbose)
-                        })
-                        .collect::<Vec<_>>()
+    // ── Run corpus expect cases (unchanged) ───────────────────────────────────
+    let mut results: Vec<CaseResult> = Vec::new();
+
+    if !expect_cases.is_empty() {
+        let parallelism = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4)
+            .min(expect_cases.len());
+        let chunk_size = expect_cases.len().div_ceil(parallelism).max(1);
+
+        if !quiet {
+            println!(
+                "LLVM text backend: {} expect-annotation file(s) across {} worker(s)",
+                expect_cases.len(),
+                parallelism
+            );
+        }
+
+        let mut expect_results: Vec<CaseResult> = std::thread::scope(|scope| {
+            let handles: Vec<_> = expect_cases
+                .chunks(chunk_size)
+                .map(|chunk| {
+                    scope.spawn(move || {
+                        chunk
+                            .iter()
+                            .map(|(f, e, p)| {
+                                run_one_case(f, e, *p, lli_bin_ref, runtime_lib_ref, quiet, verbose)
+                            })
+                            .collect::<Vec<_>>()
+                    })
                 })
-            })
-            .collect();
-        handles
-            .into_iter()
-            .flat_map(|h| h.join().expect("llvm test worker panicked"))
-            .collect()
-    });
+                .collect();
+            handles
+                .into_iter()
+                .flat_map(|h| h.join().expect("llvm test worker panicked"))
+                .collect()
+        });
+        results.append(&mut expect_results);
+    }
+
+    // ── Run test fn cases: one lli invocation per test fn ────────────────────
+    if !testfn_cases.is_empty() {
+        let total_testfns: usize = testfn_cases.iter().map(|(_, _, ns)| ns.len()).sum();
+        if !quiet {
+            println!(
+                "LLVM text backend: {} test fn(s) across {} file(s)",
+                total_testfns,
+                testfn_cases.len(),
+            );
+        }
+
+        for (file, ir, test_names) in &testfn_cases {
+            let file_str = file.display().to_string();
+            // Write IR to a temp file once; reuse for all test fns in this file.
+            let tmp = match tempfile::NamedTempFile::with_suffix(".ll") {
+                Ok(t) => t,
+                Err(e) => {
+                    results.push(CaseResult {
+                        passed: false,
+                        output: String::new(),
+                        err_output: format!("  FAIL (tempfile): {file_str}: {e}\n"),
+                    });
+                    continue;
+                }
+            };
+            if let Err(e) = fs::write(tmp.path(), ir) {
+                results.push(CaseResult {
+                    passed: false,
+                    output: String::new(),
+                    err_output: format!("  FAIL (write IR): {file_str}: {e}\n"),
+                });
+                continue;
+            }
+
+            for test_name in test_names {
+                let r = run_one_testfn(
+                    &file_str,
+                    test_name,
+                    tmp.path(),
+                    lli_bin_ref,
+                    runtime_lib_ref,
+                    quiet,
+                    verbose,
+                );
+                results.push(r);
+            }
+        }
+    }
 
     let mut passed = 0usize;
     let mut failed = 0usize;
@@ -442,12 +537,72 @@ pub(super) fn cmd_test_llvm_text(path: &str, quiet: bool, verbose: bool) {
         }
     }
     if !quiet && !verbose {
-        // Newline after progress dots.
         let _ = std::io::Write::flush(&mut std::io::stdout());
         println!();
     }
     println!("{} passed, {} failed", passed, failed);
     if failed > 0 {
         process::exit(1);
+    }
+}
+
+/// Run one `test fn` by name: invoke `lli <ir_file> <test_name>`.
+/// Exit code 0 = pass; any other exit or signal (e.g. SIGILL from llvm.trap) = fail.
+fn run_one_testfn(
+    file_str: &str,
+    test_name: &str,
+    ir_path: &Path,
+    lli_bin: &Path,
+    runtime_lib: Option<&Path>,
+    quiet: bool,
+    verbose: bool,
+) -> CaseResult {
+    let label = format!("{file_str}::{test_name}");
+
+    let mut cmd = process::Command::new(lli_bin);
+    if let Some(lib) = runtime_lib {
+        cmd.arg(format!("--load={}", lib.display()));
+    }
+    cmd.arg(ir_path).arg(test_name);
+
+    let output = match cmd.output() {
+        Ok(o) => o,
+        Err(e) => {
+            return CaseResult {
+                passed: false,
+                output: String::new(),
+                err_output: format!("  FAIL (lli): {label}: {e}\n"),
+            };
+        }
+    };
+
+    if output.status.success() {
+        CaseResult {
+            passed: true,
+            output: if verbose {
+                format!("  PASS: {label}\n")
+            } else if !quiet {
+                ".".to_string()
+            } else {
+                String::new()
+            },
+            err_output: String::new(),
+        }
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let mut out = String::new();
+        if !quiet {
+            out.push_str(&format!("\n  FAIL: {label}\n"));
+            if verbose && !stderr.is_empty() {
+                for line in stderr.lines().take(10) {
+                    out.push_str(&format!("    {line}\n"));
+                }
+            }
+        }
+        CaseResult {
+            passed: false,
+            output: out,
+            err_output: String::new(),
+        }
     }
 }

@@ -29,22 +29,22 @@ actor Accumulator {
     }
 }
 
-test fn actor_spawn_with_initial_state() -> Unit ! Spawn {
+test fn actor_spawn_with_initial_state() -> Unit ! Spawn + Send {
     let c: Counter = actor Counter { count: 42 };
     assert_eq(c.get_count(), 42);
 }
 
-test fn actor_spawn_zero_initialized() -> Unit ! Spawn {
+test fn actor_spawn_zero_initialized() -> Unit ! Spawn + Send {
     let c: Counter = actor Counter { count: 0 };
     assert_eq(c.get_count(), 0);
 }
 
-test fn actor_spawn_second_type() -> Unit ! Spawn {
+test fn actor_spawn_second_type() -> Unit ! Spawn + Send {
     let a: Accumulator = actor Accumulator { sum: 0 };
     assert_eq(a.get_sum(), 0);
 }
 
-test fn actor_multiple_independent_spawns() -> Unit ! Spawn {
+test fn actor_multiple_independent_spawns() -> Unit ! Spawn + Send {
     let a: Counter = actor Counter { count: 10 };
     let b: Counter = actor Counter { count: 20 };
     assert_eq(a.get_count(), 10);

@@ -38,20 +38,20 @@ partial fn count_down_bounded(start: Int) -> Int {
     i
 }
 
-test fn invariant_count_up_reaches_target() -> Unit {
+test partial fn invariant_count_up_reaches_target() -> Unit {
     assert_eq(count_up_to(0), 0);
     assert_eq(count_up_to(5), 5);
     assert_eq(count_up_to(100), 100);
 }
 
-test fn invariant_sum_to_n_triangular() -> Unit {
+test partial fn invariant_sum_to_n_triangular() -> Unit {
     assert_eq(sum_to_n(0), 0);
     assert_eq(sum_to_n(1), 1);
     assert_eq(sum_to_n(10), 55);
     assert_eq(sum_to_n(100), 5050);
 }
 
-test fn invariant_with_decreases_terminates_at_zero() -> Unit {
+test partial fn invariant_with_decreases_terminates_at_zero() -> Unit {
     assert_eq(count_down_bounded(0), 0);
     assert_eq(count_down_bounded(1), 0);
     assert_eq(count_down_bounded(50), 0);

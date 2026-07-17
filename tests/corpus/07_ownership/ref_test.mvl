@@ -18,7 +18,7 @@ test fn ref_int_multiple_reassignments() -> Unit {
     assert_eq(x, 4);
 }
 
-test fn ref_int_accumulator_loop() -> Unit {
+test partial fn ref_int_accumulator_loop() -> Unit {
     let sum: ref Int = 0;
     let i: ref Int = 1;
     while i <= 10 {

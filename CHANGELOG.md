@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-07-17
+
+### Added — #1878 native test fn support for LLVM text backend
+
+`mvl test --backend=llvm` now discovers `test fn` declarations directly,
+compiles each file to a dispatch-main IR, and runs `lli <file.ll> <test_name>`
+once per test fn for per-test process isolation. Removes the `synth_test_main`
+shim from `tools/mvlr`. All 248 corpus tests pass through the native path.
+
+Also silences false-positive checker warnings (UnboundedLoopInTotal,
+PartialCallInTotal, MissingEffect(Send)) exposed by the native test-fn runner
+by adding appropriate `partial` / effect annotations to corpus test files.
+
 ## [1.5.1] - 2026-07-16
 
 ### Fixed — #1825 wasm_text ADR-0050 violation
