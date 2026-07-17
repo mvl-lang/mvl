@@ -185,6 +185,22 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
     // Returns *MvlOption (Some(value) in bounds, None otherwise).
     ("_mvl_array_get_option_i64", "(param i32 i64) (result i32)"),
     ("_mvl_array_get_option_i32", "(param i32 i64) (result i32)"),
+    // Group E — Set ops (#1820). Sort+dedup at construction; linear-scan
+    // contains / insert for `Set[T].contains` / `Set[T].insert`.
+    ("_mvl_array_dedup_i64", "(param i32)"),
+    ("_mvl_array_dedup_i32", "(param i32)"),
+    ("_mvl_array_contains_i64", "(param i32 i64) (result i32)"),
+    ("_mvl_array_contains_i32", "(param i32 i32) (result i32)"),
+    ("_mvl_array_insert_i64", "(param i32 i64)"),
+    ("_mvl_array_insert_i32", "(param i32 i32)"),
+    // Group F — Map[String, Int] ops (#1820). Linear-scan map backed by
+    // `MvlMap` on the Rust heap. `si64` suffix = String key, i64 value.
+    ("_mvl_map_new_si64", "(result i32)"),
+    ("_mvl_map_len", "(param i32) (result i64)"),
+    ("_mvl_map_insert_si64", "(param i32 i32 i32 i64)"),
+    ("_mvl_map_get_si64", "(param i32 i32 i32) (result i32)"),
+    ("_mvl_map_contains_key_si64", "(param i32 i32 i32) (result i32)"),
+    ("_mvl_map_drop_si64", "(param i32)"),
 ];
 
 /// Layout offsets on `MvlString` — mirrors `runtime/wasm/src/lib.rs` /
@@ -402,6 +418,10 @@ fn emit_fn(out: &mut String, f: &TirFn, ctx: &Ctx) {
                 // aren't emitted yet — deferred with List[String].
                 out.push_str(&format!("    local.get ${name}\n"));
                 out.push_str("    call $_mvl_array_drop\n");
+            } else if !name.starts_with("__") && map_key_val_ty(ty).is_some() {
+                // User-bound Map[K, V]. Frees the MvlMap + copied key bytes.
+                out.push_str(&format!("    local.get ${name}\n"));
+                out.push_str("    call $_mvl_map_drop_si64\n");
             }
         }
     }
@@ -586,6 +606,15 @@ fn collect_locals_expr(expr: &TirExpr, locals: &mut Vec<(String, Ty)>) {
                 collect_locals_expr(e, locals);
             }
             locals.push((mvl_array_temp_name(expr), Ty::Bool));
+        }
+        // Map literals stash their `*MvlMap` pointer in a `__mm_*` temp
+        // during the per-pair insert sequence.
+        TirExprKind::Map { pairs } => {
+            for (k, v) in pairs {
+                collect_locals_expr(k, locals);
+                collect_locals_expr(v, locals);
+            }
+            locals.push((mvl_map_temp_name(expr), Ty::Bool));
         }
         _ => {}
     }
@@ -854,10 +883,99 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             out.push_str(&format!("    call $_mvl_string_{method}\n"));
             emit_unpack_mvl_string(out, expr);
         }
+        // Map[String, Int] methods (#1820). Guarded by `map_key_val_ty` so
+        // these never fire on List / Set receivers.
+        TirExprKind::MethodCall {
+            receiver, method, ..
+        } if map_key_val_ty(&receiver.ty).is_some() && method == "len" => {
+            ctx.needs_runtime.set(true);
+            emit_expr(out, receiver, ctx);
+            out.push_str("    call $_mvl_map_len\n");
+        }
+        TirExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } if map_key_val_ty(&receiver.ty).is_some()
+            && method == "get"
+            && args.len() == 1 =>
+        {
+            ctx.needs_runtime.set(true);
+            emit_expr(out, receiver, ctx); // map ptr
+            emit_expr(out, &args[0], ctx); // key → (ptr, len)
+            out.push_str("    call $_mvl_map_get_si64\n");
+        }
+        TirExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } if map_key_val_ty(&receiver.ty).is_some()
+            && method == "insert"
+            && args.len() == 2 =>
+        {
+            ctx.needs_runtime.set(true);
+            emit_expr(out, receiver, ctx); // map ptr
+            emit_expr(out, &args[0], ctx); // key → (ptr, len)
+            emit_expr(out, &args[1], ctx); // value → i64
+            out.push_str("    call $_mvl_map_insert_si64\n");
+        }
+        TirExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } if map_key_val_ty(&receiver.ty).is_some()
+            && method == "contains_key"
+            && args.len() == 1 =>
+        {
+            ctx.needs_runtime.set(true);
+            emit_expr(out, receiver, ctx); // map ptr
+            emit_expr(out, &args[0], ctx); // key → (ptr, len)
+            out.push_str("    call $_mvl_map_contains_key_si64\n");
+        }
+        // Set[T].contains(val) / Set[T].insert(val) — backed by MvlArray.
+        // `contains` returns Bool (i32); `insert` pushes if not present.
+        TirExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } if matches!(collection_elem_ty(&receiver.ty), Some(_))
+            && matches!(&receiver.ty, Ty::Set(_) | Ty::Ref(_, _))
+            && method == "contains"
+            && args.len() == 1 =>
+        {
+            ctx.needs_runtime.set(true);
+            let elem_ty = collection_elem_ty(&receiver.ty).cloned().unwrap_or(Ty::Int);
+            let fn_name = if is_i32(&elem_ty, ctx) {
+                "_mvl_array_contains_i32"
+            } else {
+                "_mvl_array_contains_i64"
+            };
+            emit_expr(out, receiver, ctx);
+            emit_expr(out, &args[0], ctx);
+            out.push_str(&format!("    call ${fn_name}\n"));
+        }
+        TirExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } if matches!(collection_elem_ty(&receiver.ty), Some(_))
+            && matches!(&receiver.ty, Ty::Set(_) | Ty::Ref(_, _))
+            && method == "insert"
+            && args.len() == 1 =>
+        {
+            ctx.needs_runtime.set(true);
+            let elem_ty = collection_elem_ty(&receiver.ty).cloned().unwrap_or(Ty::Int);
+            let fn_name = if is_i32(&elem_ty, ctx) {
+                "_mvl_array_insert_i32"
+            } else {
+                "_mvl_array_insert_i64"
+            };
+            emit_expr(out, receiver, ctx);
+            emit_expr(out, &args[0], ctx);
+            out.push_str(&format!("    call ${fn_name}\n"));
+        }
         // List query methods — `.len()` / `.is_empty()` on any collection
-        // that lowers to `*MvlArray` (List / Array / Set). Set uses the
-        // same runtime; Set semantics come from `_mvl_array_dedup` at
-        // construction time (not shipped yet in Phase 3.1).
+        // that lowers to `*MvlArray` (List / Array / Set).
         TirExprKind::MethodCall {
             receiver, method, ..
         } if collection_elem_ty(&receiver.ty).is_some()
@@ -920,16 +1038,10 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             out.push_str(&format!("    local.get ${temp}\n"));
             out.push_str("    call $_mvl_option_drop\n");
         }
-        // List / Set literal — `[e1, e2, ...]` or `{e1, e2, ...}` (values).
-        // Emits `_mvl_array_new(elem_size, cap)`, stashes the pointer in a
-        // fn-scoped temp, then pushes each element via the typed push op
-        // matching the element's WASM lowering. Leaves the pointer on the
-        // stack as the expression value.
-        //
-        // Set semantics (deduplication) require `_mvl_array_dedup`, which
-        // isn't in the runtime yet — falling back to List semantics for
-        // now. `set_test.mvl` stays out of `WASM_CORPUS` until dedup lands.
-        TirExprKind::List { elems } | TirExprKind::Set { elems } => {
+        // List literal — `[e1, e2, ...]`. Emits `_mvl_array_new(elem_size,
+        // cap)`, stashes the pointer in a fn-scoped temp, pushes each
+        // element via the typed push op. Leaves the pointer on the stack.
+        TirExprKind::List { elems } => {
             ctx.needs_runtime.set(true);
             let elem_ty = collection_elem_ty(&expr.ty).cloned().unwrap_or(Ty::Int);
             // String elements need a `*MvlString` allocation per element
@@ -952,7 +1064,62 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
                 emit_expr(out, e, ctx);
                 out.push_str(&format!("    call {push_op}\n"));
             }
-            // Leave the array pointer as the expression's stack value.
+            out.push_str(&format!("    local.get ${temp}\n"));
+        }
+        // Set literal — `{e1, e2, ...}` (unique values). Same array
+        // construction as List, then a dedup call (sort + remove adjacent
+        // duplicates) to enforce Set semantics.
+        TirExprKind::Set { elems } => {
+            ctx.needs_runtime.set(true);
+            let elem_ty = collection_elem_ty(&expr.ty).cloned().unwrap_or(Ty::Int);
+            if matches!(&elem_ty, Ty::String) {
+                out.push_str("    ;; unsupported: Set[String] literal (Phase 3.2)\n");
+                return;
+            }
+            let elem_size = elem_size_bytes(&elem_ty, ctx);
+            let cap = elems.len().max(4) as i32;
+            let temp = mvl_array_temp_name(expr);
+            out.push_str(&format!("    i32.const {elem_size}\n"));
+            out.push_str(&format!("    i32.const {cap}\n"));
+            out.push_str("    call $_mvl_array_new\n");
+            out.push_str(&format!("    local.set ${temp}\n"));
+            let push_op = push_op_for(&elem_ty, ctx);
+            for e in elems {
+                out.push_str(&format!("    local.get ${temp}\n"));
+                emit_expr(out, e, ctx);
+                out.push_str(&format!("    call {push_op}\n"));
+            }
+            // Dedup: sort and remove adjacent duplicates in-place.
+            let dedup_fn = if is_i32(&elem_ty, ctx) {
+                "_mvl_array_dedup_i32"
+            } else {
+                "_mvl_array_dedup_i64"
+            };
+            out.push_str(&format!("    local.get ${temp}\n"));
+            out.push_str(&format!("    call ${dedup_fn}\n"));
+            out.push_str(&format!("    local.get ${temp}\n"));
+        }
+        // Map literal — `{"k1": v1, "k2": v2, ...}`. Only `Map[String, Int]`
+        // is supported for now (corpus scope). Emits `_mvl_map_new_si64()`,
+        // stashes the pointer, then inserts each pair via `_mvl_map_insert_si64`.
+        TirExprKind::Map { pairs } => {
+            ctx.needs_runtime.set(true);
+            // Check key/value types; only String→Int is wired (#1820).
+            let kv = map_key_val_ty(&expr.ty);
+            let supported = matches!(kv, Some((Ty::String, Ty::Int)));
+            if !supported {
+                out.push_str("    ;; unsupported: Map literal (only Map[String, Int] in Phase 3)\n");
+                return;
+            }
+            let temp = mvl_map_temp_name(expr);
+            out.push_str("    call $_mvl_map_new_si64\n");
+            out.push_str(&format!("    local.set ${temp}\n"));
+            for (k, v) in pairs {
+                out.push_str(&format!("    local.get ${temp}\n"));
+                emit_expr(out, k, ctx); // key → (ptr, len) two i32s
+                emit_expr(out, v, ctx); // value → i64
+                out.push_str("    call $_mvl_map_insert_si64\n");
+            }
             out.push_str(&format!("    local.get ${temp}\n"));
         }
         TirExprKind::Block(block) => emit_block(out, block, ctx),
@@ -1410,6 +1577,26 @@ fn mvl_option_temp_name(expr: &TirExpr) -> String {
     format!("__mo_{}_{}", expr.span.offset, expr.span.len)
 }
 
+/// Temp local name for a `*MvlMap` pointer built from a Map literal.
+/// Excluded from fn-exit drops (same reason as `__ma_*`): the pointer
+/// flows out to the user-bound `let m` local and must not double-free.
+fn mvl_map_temp_name(expr: &TirExpr) -> String {
+    format!("__mm_{}_{}", expr.span.offset, expr.span.len)
+}
+
+/// Peel `Ref` / `Labeled` / `Refined` wrappers and return the inner
+/// `(key_ty, val_ty)` if `ty` is a `Map[K, V]`, else `None`.
+fn map_key_val_ty(ty: &Ty) -> Option<(&Ty, &Ty)> {
+    let mut cur = ty;
+    loop {
+        match cur {
+            Ty::Ref(_, inner) | Ty::Labeled(_, inner) | Ty::Refined(inner, _) => cur = inner,
+            Ty::Map(k, v) => return Some((k, v)),
+            _ => return None,
+        }
+    }
+}
+
 /// Byte size of a WASM value with the given element type — used as the
 /// `elem_size` argument to `_mvl_array_new`. Maps 1:1 to the [`wasm_ty`]
 /// families:
@@ -1805,6 +1992,17 @@ fn collect_expr(expr: &TirExpr, map: &mut HashMap<String, (u32, u32)>, next: &mu
             }
         }
         TirExprKind::Block(block) => collect_block(block, map, next),
+        TirExprKind::List { elems } | TirExprKind::Set { elems } => {
+            for e in elems {
+                collect_expr(e, map, next);
+            }
+        }
+        TirExprKind::Map { pairs } => {
+            for (k, v) in pairs {
+                collect_expr(k, map, next);
+                collect_expr(v, map, next);
+            }
+        }
         _ => {}
     }
 }
