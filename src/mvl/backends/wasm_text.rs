@@ -947,7 +947,7 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             receiver,
             method,
             args,
-        } if matches!(collection_elem_ty(&receiver.ty), Some(_))
+        } if collection_elem_ty(&receiver.ty).is_some()
             && matches!(&receiver.ty, Ty::Set(_) | Ty::Ref(_, _))
             && method == "contains"
             && args.len() == 1 =>
@@ -967,7 +967,7 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             receiver,
             method,
             args,
-        } if matches!(collection_elem_ty(&receiver.ty), Some(_))
+        } if collection_elem_ty(&receiver.ty).is_some()
             && matches!(&receiver.ty, Ty::Set(_) | Ty::Ref(_, _))
             && method == "insert"
             && args.len() == 1 =>
