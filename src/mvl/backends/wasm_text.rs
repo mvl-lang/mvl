@@ -199,7 +199,10 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
     ("_mvl_map_len", "(param i32) (result i64)"),
     ("_mvl_map_insert_si64", "(param i32 i32 i32 i64)"),
     ("_mvl_map_get_si64", "(param i32 i32 i32) (result i32)"),
-    ("_mvl_map_contains_key_si64", "(param i32 i32 i32) (result i32)"),
+    (
+        "_mvl_map_contains_key_si64",
+        "(param i32 i32 i32) (result i32)",
+    ),
     ("_mvl_map_drop_si64", "(param i32)"),
 ];
 
@@ -908,10 +911,7 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             receiver,
             method,
             args,
-        } if map_key_val_ty(&receiver.ty).is_some()
-            && method == "get"
-            && args.len() == 1 =>
-        {
+        } if map_key_val_ty(&receiver.ty).is_some() && method == "get" && args.len() == 1 => {
             ctx.needs_runtime.set(true);
             emit_expr(out, receiver, ctx); // map ptr
             emit_expr(out, &args[0], ctx); // key → (ptr, len)
@@ -921,10 +921,7 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             receiver,
             method,
             args,
-        } if map_key_val_ty(&receiver.ty).is_some()
-            && method == "insert"
-            && args.len() == 2 =>
-        {
+        } if map_key_val_ty(&receiver.ty).is_some() && method == "insert" && args.len() == 2 => {
             ctx.needs_runtime.set(true);
             emit_expr(out, receiver, ctx); // map ptr
             emit_expr(out, &args[0], ctx); // key → (ptr, len)
@@ -1120,7 +1117,9 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             let kv = map_key_val_ty(&expr.ty);
             let supported = matches!(kv, Some((Ty::String, Ty::Int)));
             if !supported {
-                out.push_str("    ;; unsupported: Map literal (only Map[String, Int] in Phase 3)\n");
+                out.push_str(
+                    "    ;; unsupported: Map literal (only Map[String, Int] in Phase 3)\n",
+                );
                 return;
             }
             let temp = mvl_map_temp_name(expr);
