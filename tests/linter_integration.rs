@@ -180,10 +180,7 @@ fn lint_all_corpus_files_parse_cleanly() {
             "complexity_demo",
             include_str!("fixtures/linting/complexity_demo.mvl"),
         ),
-        (
-            "fn_length",
-            include_str!("fixtures/linting/fn_length.mvl"),
-        ),
+        ("fn_length", include_str!("fixtures/linting/fn_length.mvl")),
         (
             "for_iter_antipattern",
             include_str!("fixtures/linting/for_iter_antipattern.mvl"),

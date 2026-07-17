@@ -641,10 +641,7 @@ fn pbt_operations_runs_without_panic() {
 }
 
 fn corpus_bdd(name: &str) -> String {
-    format!(
-        "{}/tests/bdd/{name}",
-        env!("CARGO_MANIFEST_DIR")
-    )
+    format!("{}/tests/bdd/{name}", env!("CARGO_MANIFEST_DIR"))
 }
 
 /// Spec 004 Req 5 (ADR-0020): BDD naming convention — given_*/when_*/then_*/scenario_*
