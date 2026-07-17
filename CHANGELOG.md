@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-## [1.6.0] - 2026-07-17
+## [1.5.0] - 2026-07-17
 
 ### Added — #1878 native test fn support for LLVM text backend
 
@@ -15,24 +15,13 @@ Also silences false-positive checker warnings (UnboundedLoopInTotal,
 PartialCallInTotal, MissingEffect(Send)) exposed by the native test-fn runner
 by adding appropriate `partial` / effect annotations to corpus test files.
 
-## [1.5.1] - 2026-07-16
+## [1.4.1] - 2026-07-16
 
 ### Fixed — #1825 wasm_text ADR-0050 violation
 
 Redirects `wasm_text.rs` imports from `parser::ast` to `crate::mvl::ir`,
 consistent with the llvm_text and rust backends. Resets the ADR-0050 audit
 budget from 1 back to 0.
-
-## [1.5.0] - 2026-07-16
-
-### Added — #1821 WASM Option ABI (partial)
-
-Wires `Option[T]` into the WASM backend: `Some(x)` / `None` constructors,
-`match` on Option, `.unwrap_or(default)`, and `List.get(i)` → `Option[Int/Bool]`.
-New `MvlOption` runtime type (16 bytes, heap-allocated, refcounted) with 10
-exported symbols. Corpus grows from 7 → 9 WASM sources; `list_get_test.mvl`
-(5 tests) added, `list_iter_test.mvl` unblocked. `Result[T, E]` follows in
-a separate PR.
 
 ## [1.4.0] - 2026-07-16
 
@@ -48,6 +37,15 @@ across 12 files now route through the canonical entry point.
 Enforcement: `tools/audit_cli_prelude.py` fails CI when any file
 under `src/cli/` references the raw loaders directly. Extends
 ADR-0050 with a new section documenting the contract.
+
+### Added — #1821 WASM Option ABI (partial)
+
+Wires `Option[T]` into the WASM backend: `Some(x)` / `None` constructors,
+`match` on Option, `.unwrap_or(default)`, and `List.get(i)` → `Option[Int/Bool]`.
+New `MvlOption` runtime type (16 bytes, heap-allocated, refcounted) with 10
+exported symbols. Corpus grows from 7 → 9 WASM sources; `list_get_test.mvl`
+(5 tests) added, `list_iter_test.mvl` unblocked. `Result[T, E]` follows in
+a separate PR.
 
 ## [1.3.8] - 2026-07-16
 
