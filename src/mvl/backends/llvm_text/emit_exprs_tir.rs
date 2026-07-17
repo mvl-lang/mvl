@@ -1126,9 +1126,11 @@ impl TextEmitter {
                 }
             }
 
+            let heap_snapshot = self.fn_ctx.heap_locals.len();
             let arm_val = self.emit_match_arm_body_tir(&arm.body)?;
             let end_bb = self.fn_ctx.current_bb.clone();
             if !self.fn_ctx.terminated {
+                self.drop_scope_locals(heap_snapshot, arm_val.as_deref());
                 self.push_instr(&format!("br label %{merge_bb}"));
                 if let Some(v) = arm_val {
                     let ty = self.infer_val_type(&v);
@@ -1136,6 +1138,8 @@ impl TextEmitter {
                 } else {
                     no_val_arms.push(end_bb);
                 }
+            } else {
+                self.fn_ctx.heap_locals.truncate(heap_snapshot);
             }
             if let Some(ref var_name) = bound_var {
                 self.fn_ctx.locals.remove(var_name);
@@ -1155,9 +1159,11 @@ impl TextEmitter {
                     .insert(name.clone(), scrut_val.to_string());
                 bound_var = Some(name.clone());
             }
+            let heap_snapshot = self.fn_ctx.heap_locals.len();
             let arm_val = self.emit_match_arm_body_tir(&wild_arm.body)?;
             let end_bb = self.fn_ctx.current_bb.clone();
             if !self.fn_ctx.terminated {
+                self.drop_scope_locals(heap_snapshot, arm_val.as_deref());
                 self.push_instr(&format!("br label %{merge_bb}"));
                 if let Some(v) = arm_val {
                     let ty = self.infer_val_type(&v);
@@ -1165,6 +1171,8 @@ impl TextEmitter {
                 } else {
                     no_val_arms.push(end_bb);
                 }
+            } else {
+                self.fn_ctx.heap_locals.truncate(heap_snapshot);
             }
             if let Some(ref var_name) = bound_var {
                 self.fn_ctx.locals.remove(var_name);

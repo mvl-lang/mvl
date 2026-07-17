@@ -483,6 +483,8 @@ WASM_CORPUS := \
 	tests/corpus/05_collections/list_basics_test.mvl \
 	tests/corpus/05_collections/list_iter_test.mvl \
 	tests/corpus/05_collections/list_get_test.mvl \
+	tests/corpus/05_collections/set_test.mvl \
+	tests/corpus/05_collections/map_test.mvl \
 	tests/corpus/13_stdlib/string_test.mvl
 
 test-rust-wasm: build build-runtime-wasm ## rust/wasm — WASM-supported corpus subset (via runtime/wasm/ preload)
