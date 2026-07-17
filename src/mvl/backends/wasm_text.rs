@@ -418,8 +418,12 @@ fn emit_fn(out: &mut String, f: &TirFn, ctx: &Ctx) {
                 // aren't emitted yet — deferred with List[String].
                 out.push_str(&format!("    local.get ${name}\n"));
                 out.push_str("    call $_mvl_array_drop\n");
-            } else if !name.starts_with("__") && map_key_val_ty(ty).is_some() {
-                // User-bound Map[K, V]. Frees the MvlMap + copied key bytes.
+            } else if !name.starts_with("__")
+                && matches!(map_key_val_ty(ty), Some((Ty::String, Ty::Int)))
+            {
+                // User-bound Map[String, Int]. Frees the MvlMap + copied key bytes.
+                // Gate on the concrete type so future Map variants don't emit a
+                // mismatched ABI call before their own drop function exists.
                 out.push_str(&format!("    local.get ${name}\n"));
                 out.push_str("    call $_mvl_map_drop_si64\n");
             }
@@ -891,6 +895,14 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             ctx.needs_runtime.set(true);
             emit_expr(out, receiver, ctx);
             out.push_str("    call $_mvl_map_len\n");
+        }
+        TirExprKind::MethodCall {
+            receiver, method, ..
+        } if map_key_val_ty(&receiver.ty).is_some() && method == "is_empty" => {
+            ctx.needs_runtime.set(true);
+            emit_expr(out, receiver, ctx);
+            out.push_str("    call $_mvl_map_len\n");
+            out.push_str("    i64.eqz\n");
         }
         TirExprKind::MethodCall {
             receiver,

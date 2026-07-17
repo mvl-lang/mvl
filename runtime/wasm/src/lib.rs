@@ -59,7 +59,7 @@
 
 #[inline]
 unsafe fn slice_or_empty<'a>(ptr: i32, len: i32) -> &'a [u8] {
-    if len <= 0 {
+    if ptr == 0 || len <= 0 {
         return &[];
     }
     unsafe { core::slice::from_raw_parts(ptr as *const u8, len as usize) }
@@ -852,9 +852,11 @@ pub unsafe extern "C" fn _mvl_option_drop(opt: i32) {
 /// `_mvl_array_dedup_i64(a)` — sort and deduplicate i64 elements in-place.
 /// Used after constructing a `Set[Int]` literal. Element order after dedup
 /// is sorted (ascending), which is deterministic for corpus tests.
-#[no_mangle]
-#[allow(unsafe_code)]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn _mvl_array_dedup_i64(a: i32) {
+    if a == 0 {
+        return;
+    }
     let arr = &mut *(a as usize as *mut MvlArray);
     let len = arr.len as usize;
     if len <= 1 {
@@ -874,9 +876,11 @@ pub unsafe extern "C" fn _mvl_array_dedup_i64(a: i32) {
 
 /// `_mvl_array_dedup_i32(a)` — sort and deduplicate i32 elements in-place.
 /// Used after constructing a `Set[Bool]` or `Set[Byte]` literal.
-#[no_mangle]
-#[allow(unsafe_code)]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn _mvl_array_dedup_i32(a: i32) {
+    if a == 0 {
+        return;
+    }
     let arr = &mut *(a as usize as *mut MvlArray);
     let len = arr.len as usize;
     if len <= 1 {
@@ -896,38 +900,31 @@ pub unsafe extern "C" fn _mvl_array_dedup_i32(a: i32) {
 
 /// `_mvl_array_contains_i64(a, val) -> i32` — 1 if `val` is in the array, 0 otherwise.
 /// Used for `Set[Int].contains(val)`.
-#[no_mangle]
-#[allow(unsafe_code)]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn _mvl_array_contains_i64(a: i32, val: i64) -> i32 {
-    let arr = &*(a as usize as *const MvlArray);
-    for i in 0..arr.len as usize {
-        let elem = std::ptr::read((arr.ptr as usize + i * 8) as *const i64);
-        if elem == val {
-            return 1;
-        }
+    if a == 0 {
+        return 0;
     }
-    0
+    let arr = &*(a as usize as *const MvlArray);
+    let slice = std::slice::from_raw_parts(arr.ptr as *const i64, arr.len as usize);
+    slice.iter().any(|&e| e == val) as i32
 }
 
 /// `_mvl_array_contains_i32(a, val) -> i32` — 1 if `val` is in the array, 0 otherwise.
 /// Used for `Set[Bool].contains(val)`.
-#[no_mangle]
-#[allow(unsafe_code)]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn _mvl_array_contains_i32(a: i32, val: i32) -> i32 {
-    let arr = &*(a as usize as *const MvlArray);
-    for i in 0..arr.len as usize {
-        let elem = std::ptr::read((arr.ptr as usize + i * 4) as *const i32);
-        if elem == val {
-            return 1;
-        }
+    if a == 0 {
+        return 0;
     }
-    0
+    let arr = &*(a as usize as *const MvlArray);
+    let slice = std::slice::from_raw_parts(arr.ptr as *const i32, arr.len as usize);
+    slice.iter().any(|&e| e == val) as i32
 }
 
 /// `_mvl_array_insert_i64(a, val)` — push `val` only if not already present.
 /// Used for `Set[Int].insert(val)`.
-#[no_mangle]
-#[allow(unsafe_code)]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn _mvl_array_insert_i64(a: i32, val: i64) {
     if _mvl_array_contains_i64(a, val) == 0 {
         _mvl_array_push_i64(a, val);
@@ -936,8 +933,7 @@ pub unsafe extern "C" fn _mvl_array_insert_i64(a: i32, val: i64) {
 
 /// `_mvl_array_insert_i32(a, val)` — push `val` only if not already present.
 /// Used for `Set[Bool].insert(val)`.
-#[no_mangle]
-#[allow(unsafe_code)]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn _mvl_array_insert_i32(a: i32, val: i32) {
     if _mvl_array_contains_i32(a, val) == 0 {
         _mvl_array_push_i32(a, val);
@@ -965,7 +961,7 @@ struct MvlMap {
 }
 
 /// `_mvl_map_new_si64() -> i32` — allocate an empty `Map[String, Int]`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn _mvl_map_new_si64() -> i32 {
     let m = Box::new(MvlMap {
         entries: Vec::new(),
@@ -975,9 +971,11 @@ pub extern "C" fn _mvl_map_new_si64() -> i32 {
 }
 
 /// `_mvl_map_len(m) -> i64` — number of entries in the map.
-#[no_mangle]
-#[allow(unsafe_code)]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn _mvl_map_len(m: i32) -> i64 {
+    if m == 0 {
+        return 0;
+    }
     let map = &*(m as usize as *const MvlMap);
     map.entries.len() as i64
 }
@@ -985,15 +983,13 @@ pub unsafe extern "C" fn _mvl_map_len(m: i32) -> i64 {
 /// `_mvl_map_insert_si64(m, k_ptr, k_len, val)` — insert or overwrite
 /// the entry for the given string key. The key bytes are copied; the
 /// map becomes the sole owner of the key storage.
-#[no_mangle]
-#[allow(unsafe_code)]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn _mvl_map_insert_si64(m: i32, k_ptr: i32, k_len: i32, val: i64) {
+    if m == 0 {
+        return;
+    }
     let map = &mut *(m as usize as *mut MvlMap);
-    let key: Vec<u8> = if k_ptr == 0 || k_len <= 0 {
-        Vec::new()
-    } else {
-        std::slice::from_raw_parts(k_ptr as *const u8, k_len as usize).to_vec()
-    };
+    let key = slice_or_empty(k_ptr, k_len).to_vec();
     for entry in &mut map.entries {
         if entry.key == key {
             entry.val = val;
@@ -1006,15 +1002,13 @@ pub unsafe extern "C" fn _mvl_map_insert_si64(m: i32, k_ptr: i32, k_len: i32, va
 /// `_mvl_map_get_si64(m, k_ptr, k_len) -> *MvlOption` — look up a key and
 /// return `Some(val)` or `None` as a heap-allocated `MvlOption` (same ABI
 /// as `_mvl_array_get_option_i64`). Caller must drop the returned pointer.
-#[no_mangle]
-#[allow(unsafe_code)]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn _mvl_map_get_si64(m: i32, k_ptr: i32, k_len: i32) -> i32 {
+    if m == 0 {
+        return _mvl_option_none();
+    }
     let map = &*(m as usize as *const MvlMap);
-    let key: &[u8] = if k_ptr == 0 || k_len <= 0 {
-        &[]
-    } else {
-        std::slice::from_raw_parts(k_ptr as *const u8, k_len as usize)
-    };
+    let key = slice_or_empty(k_ptr, k_len);
     for entry in &map.entries {
         if entry.key.as_slice() == key {
             return _mvl_option_some_i64(entry.val);
@@ -1025,15 +1019,13 @@ pub unsafe extern "C" fn _mvl_map_get_si64(m: i32, k_ptr: i32, k_len: i32) -> i3
 
 /// `_mvl_map_contains_key_si64(m, k_ptr, k_len) -> i32` — 1 if the key is
 /// present, 0 otherwise. Used for `Map[String, Int].contains_key(key)`.
-#[no_mangle]
-#[allow(unsafe_code)]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn _mvl_map_contains_key_si64(m: i32, k_ptr: i32, k_len: i32) -> i32 {
+    if m == 0 {
+        return 0;
+    }
     let map = &*(m as usize as *const MvlMap);
-    let key: &[u8] = if k_ptr == 0 || k_len <= 0 {
-        &[]
-    } else {
-        std::slice::from_raw_parts(k_ptr as *const u8, k_len as usize)
-    };
+    let key = slice_or_empty(k_ptr, k_len);
     for entry in &map.entries {
         if entry.key.as_slice() == key {
             return 1;
@@ -1044,14 +1036,13 @@ pub unsafe extern "C" fn _mvl_map_contains_key_si64(m: i32, k_ptr: i32, k_len: i
 
 /// `_mvl_map_drop_si64(m)` — decrement refcount; free when it reaches zero.
 /// Freeing drops all `Vec<u8>` key storage and the `Vec<MvlMapEntry>` itself.
-#[no_mangle]
-#[allow(unsafe_code)]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn _mvl_map_drop_si64(m: i32) {
     if m == 0 {
         return;
     }
     let ptr = m as usize as *mut MvlMap;
-    (*ptr).rc -= 1;
+    (*ptr).rc = (*ptr).rc.saturating_sub(1);
     if (*ptr).rc == 0 {
         let _ = Box::from_raw(ptr);
     }
