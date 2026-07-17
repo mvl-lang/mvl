@@ -1279,6 +1279,30 @@ mod tests {
         assert!(names.is_empty());
     }
 
+    // load_sibling_modules_transitive: finds game/render/input from snake_game main.mvl.
+    #[test]
+    fn load_sibling_modules_finds_snake_game_siblings() {
+        let main_src = std::fs::read_to_string("examples/snake_game/main.mvl")
+            .expect("snake_game/main.mvl must exist");
+        let (mut p, _) = crate::mvl::parser::Parser::new(&main_src);
+        let prog = p.parse_program();
+        let dir = std::path::Path::new("examples/snake_game");
+        let siblings = load_sibling_modules_transitive(&prog, dir);
+        let names: Vec<&str> = siblings.iter().map(|(n, _, _)| n.as_str()).collect();
+        assert!(
+            names.contains(&"game"),
+            "expected 'game' in siblings, got: {names:?}"
+        );
+        assert!(
+            names.contains(&"render"),
+            "expected 'render' in siblings, got: {names:?}"
+        );
+        assert!(
+            names.contains(&"input"),
+            "expected 'input' in siblings, got: {names:?}"
+        );
+    }
+
     // qualified_stem: direct child → bare name.
     #[test]
     fn qualified_stem_direct_child() {

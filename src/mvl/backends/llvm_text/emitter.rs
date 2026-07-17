@@ -85,6 +85,36 @@ impl LlvmTextCompiler {
         Ok(emitter.finish())
     }
 
+    /// Compile prelude + sibling + entry [`TirProgram`]s into a single flat LLVM IR module.
+    ///
+    /// Siblings are peer source files in the same project (e.g. `game.mvl` alongside
+    /// `main.mvl`). They are emitted as full programs — no extension-method stripping —
+    /// between the prelude and the entry module (#1879).
+    pub fn compile_to_ir_with_siblings_tir(
+        &self,
+        prelude: &[TirProgram],
+        siblings: &[TirProgram],
+        prog: &TirProgram,
+        module_name: &str,
+    ) -> Result<String, String> {
+        let mut emitter =
+            TextEmitter::new_with_builtins(module_name, &self.target_triple, &self.builtin_symbols);
+        for p in prelude {
+            let stripped = strip_prelude_extension_methods_tir(p);
+            for f in &p.fns {
+                if stripped.fns.iter().all(|sf| sf.name != f.name) && f.type_params.is_empty() {
+                    emitter.register_fn_tir_sig(f);
+                }
+            }
+            emitter.emit_program_tir(&stripped)?;
+        }
+        for sib in siblings {
+            emitter.emit_program_tir(sib)?;
+        }
+        emitter.emit_program_tir(prog)?;
+        Ok(emitter.finish())
+    }
+
     /// Compile a single-file test crate to LLVM IR.
     ///
     /// Emits each `test fn` as a top-level function (removing the is_test
