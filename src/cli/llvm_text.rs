@@ -761,6 +761,46 @@ mod tests {
         );
     }
 
+    // Regression: matching on `GameStatus::Won(Side::Left)` and
+    // `GameStatus::Won(Side::Right)` must not emit two switch cases with the
+    // same outer discriminant.  #1887 fixed the emitter; this test guards it.
+    #[test]
+    fn payload_enum_nested_no_duplicate_switch() {
+        let src = "\
+type Side = enum { Left, Right }\n\
+type GameStatus = enum { Playing, Won(Side) }\n\
+fn check(s: Int) -> GameStatus {\n\
+    if s >= 11 { GameStatus::Won(Side::Left) } else { GameStatus::Playing }\n\
+}\n\
+test fn test_won() -> Unit {\n\
+    let g: GameStatus = check(5);\n\
+    match g {\n\
+        GameStatus::Playing         => assert_eq(1, 1),\n\
+        GameStatus::Won(Side::Left)  => assert_eq(1, 0),\n\
+        GameStatus::Won(Side::Right) => assert_eq(1, 0),\n\
+    }\n\
+}\n\
+";
+        let dir = TempDir::new().unwrap();
+        let path = write_file(&dir, "won_test.mvl", src);
+        let (prog, _) = super::super::parse_or_exit(&path);
+        let (prelude_tirs, entry_tir, compiler) = prepare_llvm_text_tir(&prog);
+        let (ir, _) = compiler
+            .compile_to_ir_test_crate(&prelude_tirs, &entry_tir, "won_test")
+            .expect("IR generation failed");
+
+        // A duplicate `i8 1, label` inside a SINGLE switch block would fail lli
+        // verification.  Split the IR on switch openings and check each block.
+        for block in ir.split("switch ").skip(1) {
+            let block_body = block.split("]").next().unwrap_or("");
+            let dup_i8_1 = block_body.matches("i8 1, label").count();
+            assert!(
+                dup_i8_1 <= 1,
+                "duplicate 'i8 1' in a single switch (would fail lli):\n{block_body}"
+            );
+        }
+    }
+
     // Regression: multi-file test crate must include sibling module IR (#1880).
     #[test]
     fn test_crate_includes_sibling_fns() {
