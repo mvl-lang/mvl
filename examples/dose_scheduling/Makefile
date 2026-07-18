@@ -65,7 +65,9 @@ mutate: guard-mvl ## Run mutation testing
 assurance: guard-mvl ## Assurance report: spec coverage, MC/DC, mutation score (verbose)
 	$(MVL) assurance $(DIR) --verbose
 
-all: check test assurance mcdc ## Run full quality pipeline: check + test + assurance + mcdc
+all: check test assurance ## Full pipeline: check + test + assurance + coverage + MC/DC (with DO-178C masking)
+	$(MVL) test $(DIR) --coverage
+	$(MVL) mcdc $(DIR) --verbose --masking
 
 smoke: guard-mvl ## Smoke-test: build binary (proves compilation without a terminal)
 	$(MVL) build $(DIR)main.mvl

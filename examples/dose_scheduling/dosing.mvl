@@ -114,6 +114,40 @@ pub total fn combined_dose(
     dose_a + dose_b
 }
 
+// ── Compound clinical decisions (MC/DC target) ───────────────────────────
+
+/// Contraindication check: is this dose disallowed for this patient?
+///
+/// A four-term compound predicate.  Serves as the MC/DC test target for
+/// this example --- five distinct test cases exercise all four atomic
+/// conditions independently (see `dosing_test.mvl`).
+pub total fn contraindicated(
+    is_pregnant:        Bool,
+    has_allergy:        Bool,
+    is_pediatric:       Bool,
+    max_daily_exceeded: Bool,
+) -> Bool {
+    (is_pregnant && has_allergy)
+    || (is_pediatric && has_allergy)
+    || max_daily_exceeded
+}
+
+/// Does this order require pharmacy review before dispensing?
+///
+/// Three-term compound with mixed arithmetic + boolean.  Together with
+/// `contraindicated` gives the coverage analyser a non-trivial decision
+/// graph.
+pub total fn requires_pharmacy_review(
+    total_mg:           Int,
+    boluses:            Int,
+    is_pediatric:       Bool,
+    is_high_alert_drug: Bool,
+) -> Bool {
+    (total_mg > 100000 && boluses < 3)
+    || is_high_alert_drug
+    || (is_pediatric && total_mg > 5000)
+}
+
 // ── Pipeline entry point ──────────────────────────────────────────────────
 
 /// Build a complete `InfusionPlan` for a patient + order combination.

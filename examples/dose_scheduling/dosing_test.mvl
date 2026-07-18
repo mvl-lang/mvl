@@ -1,0 +1,298 @@
+// dosing_test.mvl — MC/DC + branch coverage test suite for dose_scheduling.
+//
+// Covers:
+//   - contraindicated / requires_pharmacy_review (compound booleans → MC/DC)
+//   - clamp_* helpers (three-branch structure → branch coverage)
+//   - L5-forcing arithmetic (total_infusion_dose, escalate_dose,
+//     max_daily_dose) — sanity checks on the numeric result
+//
+// Type / fn re-declarations follow the workaround pattern from
+// medical_triage/triage_test.mvl (issue #96 — cross-module use in test files).
+
+// ── Type re-declarations ─────────────────────────────────────────────────
+
+type Bracket = enum { Neonate, Infant, Child, Adult, Elderly }
+type Patient = struct { bracket: Bracket, weight_kg: Int }
+type DrugOrder = struct {
+    rate_mg_per_kg_per_hr: Int, hours: Int, boluses: Int, volume_ml: Int,
+}
+type InfusionPlan = struct { total_dose_mg: Int, per_bolus_mg: Int, concentration_mgml: Int }
+
+// ── Fn re-declarations (must match dosing.mvl exactly) ───────────────────
+
+fn total_infusion_dose(
+    weight_kg: Int where self > 0 && self <= 200,
+    rate_mg_per_kg_per_hr: Int where self > 0 && self <= 50,
+    hours: Int where self > 0 && self <= 24,
+) -> Int
+    ensures result > 0
+{
+    weight_kg * rate_mg_per_kg_per_hr * hours
+}
+
+fn escalate_dose(
+    base: Int where self > 0 && self <= 1000,
+    factor: Int where self >= 1 && self <= 5,
+) -> Int
+    ensures result >= base
+{
+    base * factor
+}
+
+fn max_daily_dose(
+    weight_kg: Int where self > 0 && self <= 200,
+    max_per_kg: Int where self > 0 && self <= 100,
+) -> Int
+    ensures result > 0
+{
+    weight_kg * max_per_kg
+}
+
+fn per_bolus_mg(
+    total_mg: Int where self > 0 && self <= 240000,
+    boluses: Int where self > 0 && self <= 100,
+) -> Int
+    ensures result >= 0
+{
+    total_mg / boluses
+}
+
+fn concentration_mg_per_ml(
+    total_mg: Int where self > 0 && self <= 240000,
+    volume_ml: Int where self > 0 && self <= 1000,
+) -> Int
+    ensures result >= 0
+{
+    total_mg / volume_ml
+}
+
+fn combined_dose(
+    dose_a: Int where self > 0 && self <= 120000,
+    dose_b: Int where self > 0 && self <= 120000,
+) -> Int
+    ensures result > 0
+{
+    dose_a + dose_b
+}
+
+fn contraindicated(
+    is_pregnant: Bool, has_allergy: Bool,
+    is_pediatric: Bool, max_daily_exceeded: Bool,
+) -> Bool {
+    (is_pregnant && has_allergy)
+    || (is_pediatric && has_allergy)
+    || max_daily_exceeded
+}
+
+fn requires_pharmacy_review(
+    total_mg: Int, boluses: Int,
+    is_pediatric: Bool, is_high_alert_drug: Bool,
+) -> Bool {
+    (total_mg > 100000 && boluses < 3)
+    || is_high_alert_drug
+    || (is_pediatric && total_mg > 5000)
+}
+
+fn plan_infusion(p: Patient, o: DrugOrder) -> InfusionPlan {
+    let total_mg: Int = total_infusion_dose(
+        clamp_weight(p.weight_kg),
+        clamp_rate(o.rate_mg_per_kg_per_hr),
+        clamp_hours(o.hours),
+    );
+    let bolus_mg: Int = per_bolus_mg(total_mg, clamp_boluses(o.boluses));
+    let conc_mgml: Int = concentration_mg_per_ml(total_mg, clamp_volume(o.volume_ml));
+
+    InfusionPlan {
+        total_dose_mg:      total_mg,
+        per_bolus_mg:       bolus_mg,
+        concentration_mgml: conc_mgml,
+    }
+}
+
+fn clamp_weight(kg: Int) -> Int
+    ensures result >= 1 && result <= 200
+{
+    if kg < 1 { 1 } else if kg > 200 { 200 } else { kg }
+}
+
+fn clamp_rate(r: Int) -> Int
+    ensures result >= 1 && result <= 50
+{
+    if r < 1 { 1 } else if r > 50 { 50 } else { r }
+}
+
+fn clamp_hours(h: Int) -> Int
+    ensures result >= 1 && result <= 24
+{
+    if h < 1 { 1 } else if h > 24 { 24 } else { h }
+}
+
+fn clamp_boluses(b: Int) -> Int
+    ensures result >= 1 && result <= 100
+{
+    if b < 1 { 1 } else if b > 100 { 100 } else { b }
+}
+
+fn clamp_volume(v: Int) -> Int
+    ensures result >= 1 && result <= 1000
+{
+    if v < 1 { 1 } else if v > 1000 { 1000 } else { v }
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// Decision 1: contraindicated (4-term MC/DC)
+//
+// Predicate: (P && A) || (K && A) || M
+//   P = is_pregnant, A = has_allergy, K = is_pediatric, M = max_daily_exceeded
+//
+// Minimal MC/DC set: 5 tests exercising each condition's independent effect.
+// ════════════════════════════════════════════════════════════════════════
+
+test fn contra_all_false() -> Unit {
+    assert_eq(contraindicated(false, false, false, false), false);
+}
+
+test fn contra_pregnant_and_allergy() -> Unit {
+    // Toggles P alone: (F, T, F, F) -> F   vs   (T, T, F, F) -> T
+    assert_eq(contraindicated(true, true, false, false), true);
+    assert_eq(contraindicated(false, true, false, false), false);
+}
+
+test fn contra_pediatric_and_allergy() -> Unit {
+    // Toggles K alone: (F, T, F, F) -> F   vs   (F, T, T, F) -> T
+    assert_eq(contraindicated(false, true, true, false), true);
+}
+
+test fn contra_allergy_toggle() -> Unit {
+    // Toggles A alone: (T, F, F, F) -> F   vs   (T, T, F, F) -> T (covered above)
+    assert_eq(contraindicated(true, false, false, false), false);
+}
+
+test fn contra_max_exceeded() -> Unit {
+    // Toggles M alone: (F, F, F, F) -> F   vs   (F, F, F, T) -> T
+    assert_eq(contraindicated(false, false, false, true), true);
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// Decision 2: requires_pharmacy_review (mixed compound)
+//
+// Predicate: (T > 100000 && B < 3) || H || (K && T > 5000)
+// ════════════════════════════════════════════════════════════════════════
+
+test fn review_none() -> Unit {
+    assert_eq(requires_pharmacy_review(1000, 10, false, false), false);
+}
+
+test fn review_high_dose_few_boluses() -> Unit {
+    assert_eq(requires_pharmacy_review(150000, 2, false, false), true);
+    assert_eq(requires_pharmacy_review(150000, 5, false, false), false);
+}
+
+test fn review_high_alert_drug() -> Unit {
+    assert_eq(requires_pharmacy_review(1000, 10, false, true), true);
+}
+
+test fn review_pediatric_moderate_dose() -> Unit {
+    assert_eq(requires_pharmacy_review(6000, 10, true, false), true);
+    assert_eq(requires_pharmacy_review(6000, 10, false, false), false);
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// Decision 3-7: clamp branch coverage (5 clamps × 3 branches)
+// ════════════════════════════════════════════════════════════════════════
+
+test fn clamp_weight_below() -> Unit { assert_eq(clamp_weight(-5), 1); }
+test fn clamp_weight_above() -> Unit { assert_eq(clamp_weight(500), 200); }
+test fn clamp_weight_pass() -> Unit { assert_eq(clamp_weight(70), 70); }
+
+test fn clamp_rate_below() -> Unit { assert_eq(clamp_rate(0), 1); }
+test fn clamp_rate_above() -> Unit { assert_eq(clamp_rate(100), 50); }
+test fn clamp_rate_pass() -> Unit { assert_eq(clamp_rate(15), 15); }
+
+test fn clamp_hours_below() -> Unit { assert_eq(clamp_hours(0), 1); }
+test fn clamp_hours_above() -> Unit { assert_eq(clamp_hours(48), 24); }
+test fn clamp_hours_pass() -> Unit { assert_eq(clamp_hours(12), 12); }
+
+test fn clamp_boluses_below() -> Unit { assert_eq(clamp_boluses(0), 1); }
+test fn clamp_boluses_above() -> Unit { assert_eq(clamp_boluses(500), 100); }
+test fn clamp_boluses_pass() -> Unit { assert_eq(clamp_boluses(24), 24); }
+
+test fn clamp_volume_below() -> Unit { assert_eq(clamp_volume(0), 1); }
+test fn clamp_volume_above() -> Unit { assert_eq(clamp_volume(5000), 1000); }
+test fn clamp_volume_pass() -> Unit { assert_eq(clamp_volume(250), 250); }
+
+// ════════════════════════════════════════════════════════════════════════
+// L5 arithmetic sanity — confirm the refined functions actually compute
+// the intended values on representative inputs.
+// ════════════════════════════════════════════════════════════════════════
+
+test fn total_dose_neonate() -> Unit {
+    // 3 kg × 5 mg/kg/hr × 6 hr = 90 mg
+    assert_eq(total_infusion_dose(3, 5, 6), 90);
+}
+
+test fn total_dose_adult() -> Unit {
+    // 70 kg × 15 mg/kg/hr × 24 hr = 25200 mg
+    assert_eq(total_infusion_dose(70, 15, 24), 25200);
+}
+
+test fn total_dose_max_envelope() -> Unit {
+    // 200 kg × 50 mg/kg/hr × 24 hr = 240000 mg — the declared upper bound
+    assert_eq(total_infusion_dose(200, 50, 24), 240000);
+}
+
+test fn escalate_identity() -> Unit {
+    // factor = 1 leaves base unchanged
+    assert_eq(escalate_dose(500, 1), 500);
+}
+
+test fn escalate_by_5() -> Unit {
+    assert_eq(escalate_dose(200, 5), 1000);
+}
+
+test fn max_daily_typical() -> Unit {
+    // 70 kg × 30 mg/kg = 2100 mg
+    assert_eq(max_daily_dose(70, 30), 2100);
+}
+
+test fn per_bolus_split_evenly() -> Unit {
+    // 1200 mg over 12 boluses = 100 mg each
+    assert_eq(per_bolus_mg(1200, 12), 100);
+}
+
+test fn concentration_dilution() -> Unit {
+    // 500 mg in 100 mL = 5 mg/mL
+    assert_eq(concentration_mg_per_ml(500, 100), 5);
+}
+
+test fn combined_dose_sum() -> Unit {
+    // Loading 1000 mg + maintenance 5000 mg = 6000 mg
+    assert_eq(combined_dose(1000, 5000), 6000);
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// End-to-end pipeline
+// ════════════════════════════════════════════════════════════════════════
+
+test fn plan_adult_typical() -> Unit {
+    let p: Patient = Patient { bracket: Bracket::Adult, weight_kg: 70 };
+    let o: DrugOrder = DrugOrder {
+        rate_mg_per_kg_per_hr: 15, hours: 24, boluses: 48, volume_ml: 500,
+    };
+    let plan: InfusionPlan = plan_infusion(p, o);
+    // 70 × 15 × 24 = 25200 mg, split 48 ways = 525, per 500 mL = 50 mg/mL
+    assert_eq(plan.total_dose_mg, 25200);
+    assert_eq(plan.per_bolus_mg, 525);
+    assert_eq(plan.concentration_mgml, 50);
+}
+
+test fn plan_clamps_apply() -> Unit {
+    // Every field is out-of-range; plan should use clamped values.
+    let p: Patient = Patient { bracket: Bracket::Adult, weight_kg: -50 };
+    let o: DrugOrder = DrugOrder {
+        rate_mg_per_kg_per_hr: 200, hours: 100, boluses: 500, volume_ml: 5000,
+    };
+    let plan: InfusionPlan = plan_infusion(p, o);
+    // Clamps: weight=1, rate=50, hours=24 → total = 1 × 50 × 24 = 1200
+    assert_eq(plan.total_dose_mg, 1200);
+}

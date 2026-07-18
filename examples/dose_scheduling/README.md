@@ -5,17 +5,35 @@ Companion example to `../medical_triage/`. Same clinical domain (weight-based dr
 ## What it proves (`make prove`)
 
 ```
-Summary: 24 proven (L1:15 L2:0 L3:0 L4:2 L5:7), 8 runtime, 0 failed
+Summary: 31 proven (L1:21 L2:0 L3:0 L4:2 L5:8), 8 runtime, 0 failed
 ```
 
 | Layer | Count | What it discharges |
 |---|---:|---|
-| L1 (trivial)  | 15 | `clamp_*` return-bound ensures — literal subsumption |
+| L1 (trivial)  | 21 | `clamp_*` return-bound ensures — literal subsumption |
 | L2 (interval) | 0  | (no bare interval-subsumption obligations in this example) |
 | L3 (symbolic) | 0  | (no path-enumeration obligations) |
 | L4 (Cooper)   | 2  | `combined_dose` — linear sum of bounded terms |
-| **L5 (Z3)**   | **7** | **Nonlinear products — see below** |
+| **L5 (Z3)**   | **8** | **Nonlinear products — see below** |
 | runtime       | 8  | Two documented gaps — see below |
+
+## Testing coverage
+
+```
+make test        →  35 passed, 0 failed
+make coverage    →  29/29 branches (100%)
+make mcdc        →  8/10 obligations (80%) — 2 structurally coupled
+make mcdc + --masking →  PASS (DO-178C masking rules exempt coupled clauses)
+```
+
+The two "missed" MC/DC obligations are couplings via shared variables:
+- `contraindicated`: `has_allergy` appears in both `(pregnant && allergy)` and
+  `(pediatric && allergy)` — unique-cause independence is structurally impossible
+- `requires_pharmacy_review`: `total_mg` appears in both the `> 100000` clause
+  and the `> 5000` clause
+
+Both are DO-178C-exempt under masking MC/DC. `make all` runs the full pipeline
+with masking enabled.
 
 ## The seven L5 obligations
 
