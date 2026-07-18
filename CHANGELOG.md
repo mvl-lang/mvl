@@ -2,6 +2,34 @@
 
 ## [Unreleased]
 
+## [1.5.3] - 2026-07-18
+
+### Added — #1897, #1898, #1899, #1900
+
+- Example `examples/dose_scheduling/` — first case study exercising L5 (Z3, QF-NIA) in the corpus. Companion to `medical_triage`: same clinical domain, refinement obligations shaped to force nonlinear reasoning. `make prove` reports 7 discharges at L5 on product positivity, monotone products, and two-variable product upper bounds. `make test-62304` composes the IEC 62304 assurance envelope (static proof + tests + coverage + MC/DC with masking) in one screen.
+- `.openspec/patterns/006-no-test-shadows.md` — canonical pattern documenting the four anti-patterns in test files (redeclaration, ghost variants, effect-stripped shims, phantoms), with before/after MVL examples and historical drift cases.
+- `CLAUDE.md` rule "Test files must import, not redeclare" — LLM-facing guidance directing every future agent interaction to import from production rather than redeclare, with a decision tree for common blockers (item in `main.mvl` → extract to sibling; not `pub` → add `pub`; effect-carrying → do not shim).
+- `tools/audit_test_shadows.py` — CI guard for pattern 006. Any top-level `type` declaration in a `*_test.mvl` file, or any `fn` whose name collides with a `pub` fn in a sibling production `.mvl`, fails the build. Wired into `make audit-test-shadows` and `.github/workflows/ci.yml`.
+
+### Changed
+
+- Fossil sweep across the example corpus: removed the "workaround: #96" pattern (issue #96 module resolver was closed 2026-04-12). 19 test files rewritten to import from production siblings, 3 files deleted (test helpers that only ever existed in the test file), 4 new sibling modules extracted (`errors.mvl` for `log_analyzer` and `task_pipeline`, `paths.mvl` for `log_to_file`, `security.mvl` for `access_control`). ~-1700 LOC net across 26 files.
+- Latent drift bugs fixed as a side effect of the sweep:
+  - `flight_clearance`: 19 test sites used ghost `MaintenanceStatus::Cleared` while production has `Airworthy` (#1900). Tests had been passing against a shadow enum for months. `is_domestic`, `is_international`, `is_oceanic`, `fuel_sufficient`, `fuel_marginal` promoted to `pub` in `clearance.mvl` for direct import.
+  - `log_analyzer` and `task_pipeline`: dead tests exercised `RunError::MissingArg`, a variant no longer in production.
+  - `task_pipeline`: `threshold_or_default` signature drifted (`Option[String]` in tests vs `Option[Float]` in production).
+  - `access_control`: effect-stripped `log_access` and `authenticate` shims with `assert_eq(1, 1)` "tests" that verified nothing about production. Deleted.
+  - `csv_transactions`: phantom `Transaction` / `encode_transaction` / `decode_transaction` that never existed in production. Deleted along with their 12 tests.
+- `snake_game/game.mvl:72` comment rephrased — the "borrow-inference workaround" is a Rust codegen concern in the transpiler, not something about MVL's surface language (MVL uses Pony-style val/ref/iso, not Rust borrows).
+
+### Removed
+
+- `#96` "workaround" comments across the example corpus (issue closed 2026-04-12). Historical CHANGELOG references retained.
+
+### Follow-up
+
+- #1901 — move the `test-shadows` check into `mvl lint` proper so every local `mvl check` catches it, not just CI.
+
 ## [1.5.2] - 2026-07-18
 
 ### Added — #1828 activate rust/rust-tokio matrix backend
