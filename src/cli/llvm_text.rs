@@ -268,13 +268,24 @@ fn compile_llvm_bridge(llvm_rs: &Path) -> Option<PathBuf> {
     // `forget` prevents cleanup so lli can load the .dylib/.so later.
     std::mem::forget(tmp_dir);
 
-    let status = process::Command::new("rustc")
-        .arg("--crate-type=cdylib")
+    // llvm.rs may reference runtime symbols (e.g. `mvl_string_new`).  We
+    // can't statically link against the runtime library at cdylib time —
+    // the naming convention is inconsistent across packages (#1912 open
+    // question).  Instead, use dynamic_lookup on macOS / --unresolved-symbols
+    // on Linux so unresolved symbols are deferred to lli --load= chaining.
+    let mut cmd = process::Command::new("rustc");
+    cmd.arg("--crate-type=cdylib")
         .arg("--edition=2021")
         .arg("-o")
         .arg(&output_path)
-        .arg(llvm_rs)
-        .status();
+        .arg(llvm_rs);
+    if cfg!(target_os = "macos") {
+        cmd.arg("-Clink-arg=-Wl,-undefined,dynamic_lookup");
+    } else {
+        cmd.arg("-Clink-arg=-Wl,--unresolved-symbols=ignore-all");
+    }
+
+    let status = cmd.status();
 
     match status {
         Ok(s) if s.success() => Some(output_path),
@@ -290,6 +301,62 @@ fn compile_llvm_bridge(llvm_rs: &Path) -> Option<PathBuf> {
             None
         }
     }
+}
+
+/// Discover all pkg.* llvm.rs bridges reachable from a test file and compile
+/// them to cdylibs (#1912).  Returns one cdylib path per package that ships
+/// llvm.rs alongside bridge.rs; empty when the project has no pkg deps.
+///
+/// Mirrors the pkg discovery in [`prepare_llvm_text_tir_multi`]: transitively
+/// loads pkg modules, finds an llvm.rs for each one, and compiles it.
+fn discover_and_compile_pkg_bridges(test_path: &str) -> Vec<PathBuf> {
+    let src = match fs::read_to_string(test_path) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    let (mut p, _) = Parser::new(&src);
+    let prog = p.parse_program();
+    if !p.errors().is_empty() {
+        return Vec::new();
+    }
+    let entry_dir = Path::new(test_path).parent().unwrap_or_else(|| Path::new("."));
+    let entry_abs = entry_dir
+        .canonicalize()
+        .unwrap_or_else(|_| PathBuf::from(entry_dir));
+    let project_root = super::find_project_root(&entry_abs);
+
+    // Walk the pkg frontier the same way build.rs / prepare_llvm_text_tir_multi do.
+    let sibling_modules = loader::load_sibling_modules_transitive(&prog, entry_dir);
+    let sibling_progs: Vec<Program> =
+        sibling_modules.iter().map(|(_, _, p)| p.clone()).collect();
+    let mut seen_pkgs = std::collections::HashSet::<String>::new();
+    let mut pkg_progs: Vec<Program> = Vec::new();
+    let mut frontier: Vec<Program> = std::iter::once(prog.clone())
+        .chain(sibling_progs.iter().cloned())
+        .collect();
+    loop {
+        let new_pkgs =
+            loader::load_pkg_modules_tagged(&frontier, &project_root, &mut seen_pkgs);
+        if new_pkgs.is_empty() {
+            break;
+        }
+        let new_frontier: Vec<_> = new_pkgs.iter().map(|(_, p)| p.clone()).collect();
+        pkg_progs.extend(new_pkgs.into_iter().map(|(_, p)| p));
+        frontier = new_frontier;
+    }
+
+    // For each loaded pkg, find and compile its llvm.rs (if present).
+    let all_progs: Vec<Program> = std::iter::once(prog.clone())
+        .chain(sibling_progs.iter().cloned())
+        .chain(pkg_progs.iter().cloned())
+        .collect();
+    let mut libs: Vec<PathBuf> = Vec::new();
+    if let Some(llvm_rs) = loader::find_pkg_llvm_bridge(&all_progs, &project_root) {
+        if let Some(lib) = compile_llvm_bridge(&llvm_rs) {
+            libs.push(lib);
+        }
+    }
+    libs
 }
 
 /// Compile an MVL file to LLVM IR and run it via `lli`.
@@ -622,8 +689,29 @@ pub(super) fn cmd_test_llvm_text(path: &str, quiet: bool, verbose: bool) {
             );
         }
 
+        // Discover + compile pkg.* llvm.rs bridges once per test file (#1912).
+        // Each pkg that ships an llvm.rs alongside bridge.rs (#811 convention)
+        // gets compiled to a cdylib; the resulting .so/.dylib is passed to lli
+        // via `--load` so extern "rust" symbols resolve at run time.
+        //
+        // Bridges are keyed by the source file path so pkg-tui, pkg-http, etc.
+        // resolve their `use pkg.tui` imports transitively; we build the same
+        // pkg discovery walk `prepare_llvm_text_tir_multi` does but only care
+        // about the file → Vec<compiled cdylib> mapping.
+        let mut bridge_cache: std::collections::HashMap<PathBuf, Vec<PathBuf>> =
+            std::collections::HashMap::new();
+        for (file, _, _) in &testfn_cases {
+            let file_str = file.display().to_string();
+            let libs = discover_and_compile_pkg_bridges(&file_str);
+            bridge_cache.insert(file.clone(), libs);
+        }
+
         for (file, ir, test_names) in &testfn_cases {
             let file_str = file.display().to_string();
+            let pkg_libs: &[PathBuf] = bridge_cache
+                .get(file)
+                .map(|v| v.as_slice())
+                .unwrap_or(&[]);
             // Write IR to a temp file once; reuse for all test fns in this file.
             let tmp = match tempfile::NamedTempFile::with_suffix(".ll") {
                 Ok(t) => t,
@@ -652,6 +740,7 @@ pub(super) fn cmd_test_llvm_text(path: &str, quiet: bool, verbose: bool) {
                     tmp.path(),
                     lli_bin_ref,
                     runtime_lib_ref,
+                    pkg_libs,
                     quiet,
                     verbose,
                 );
@@ -693,6 +782,7 @@ fn run_one_testfn(
     ir_path: &Path,
     lli_bin: &Path,
     runtime_lib: Option<&Path>,
+    pkg_bridge_libs: &[PathBuf],
     quiet: bool,
     verbose: bool,
 ) -> CaseResult {
@@ -700,6 +790,9 @@ fn run_one_testfn(
 
     let mut cmd = process::Command::new(lli_bin);
     if let Some(lib) = runtime_lib {
+        cmd.arg(format!("--load={}", lib.display()));
+    }
+    for lib in pkg_bridge_libs {
         cmd.arg(format!("--load={}", lib.display()));
     }
     cmd.arg(ir_path).arg(test_name);
