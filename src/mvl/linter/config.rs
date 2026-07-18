@@ -139,6 +139,10 @@ pub struct LintConfig {
     /// are silently absorbed rather than forcing an explicit decision at each match
     /// site (#1775).  Excluded for stdlib types (`Option`, `Result`).
     pub wildcard_enum_match: bool,
+    /// Flag `type` declarations and fn shadows in `*_test.mvl` files (rule `test-shadow`, #1901).
+    /// A type declaration in a test file is always a shadow; an fn declaration is a shadow
+    /// iff its name collides with a `pub` fn in a sibling production `.mvl` file.
+    pub test_shadow: bool,
 
     // ── Phase 3: LLM corpus quality rules ────────────────────────────────
     /// Flag block comments `/* */`; only `//` line comments are allowed.
@@ -197,6 +201,7 @@ impl Default for LintConfig {
             silent_result_discard: true,
             relabel_tag_hygiene: true,
             wildcard_enum_match: true,
+            test_shadow: true,
             consistent_comment_style: false,
             require_doc_comments: true,
             doc_comment_examples: false,
@@ -337,6 +342,7 @@ fn load_from(path: &Path) -> Option<LintConfig> {
             "silent_result_discard" => cfg.silent_result_discard = parse_bool(val),
             "relabel_tag_hygiene" => cfg.relabel_tag_hygiene = parse_bool(val),
             "wildcard_enum_match" => cfg.wildcard_enum_match = parse_bool(val),
+            "test_shadow" => cfg.test_shadow = parse_bool(val),
             "consistent_comment_style" => cfg.consistent_comment_style = parse_bool(val),
             "require_doc_comments" => cfg.require_doc_comments = parse_bool(val),
             "doc_comment_examples" => cfg.doc_comment_examples = parse_bool(val),

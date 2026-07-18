@@ -9,6 +9,7 @@
 //! * [`suggestions`] — refactoring-suggestion rules
 //! * [`documentation`] — documentation quality rules
 //! * [`complexity`] — complexity metric rules
+//! * [`test_shadows`] — test-file shadow detection rule
 
 pub mod complexity;
 pub mod documentation;
@@ -17,6 +18,7 @@ pub mod naming;
 pub mod semantic;
 pub mod style;
 pub mod suggestions;
+pub mod test_shadows;
 
 pub use complexity::*;
 pub use documentation::*;
@@ -25,3 +27,4 @@ pub use naming::*;
 pub use semantic::*;
 pub use style::*;
 pub use suggestions::*;
+pub use test_shadows::*;

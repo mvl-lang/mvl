@@ -78,7 +78,7 @@ pub fn run(path: &str, show_config: bool) {
         return;
     }
 
-    let files = loader::mvl_files(path, false);
+    let files = loader::mvl_files_all(path);
     if files.is_empty() {
         eprintln!("No .mvl files found at: {path}");
         process::exit(1);
@@ -121,7 +121,7 @@ pub fn run(path: &str, show_config: bool) {
             ));
         }
 
-        let result = linter::lint(&prog, &src, &cfg);
+        let result = linter::lint(&prog, &src, &cfg, file);
 
         for diag in pre_diags.iter().chain(result.diags.iter()) {
             eprintln!("{}", diag.render(&file_str));

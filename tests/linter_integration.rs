@@ -11,6 +11,8 @@
 //!
 //! Issue: #1232
 
+use std::path::Path;
+
 use mvl::mvl::linter::{config::LintConfig, lint};
 use mvl::mvl::parser::Parser;
 
@@ -19,7 +21,7 @@ fn lint_file(src: &str) -> Vec<String> {
     let prog = p.parse_program();
     assert!(p.errors().is_empty(), "parse errors: {:?}", p.errors());
     let cfg = LintConfig::default();
-    let result = lint(&prog, src, &cfg);
+    let result = lint(&prog, src, &cfg, Path::new(""));
     result.diags.iter().map(|d| d.rule.to_string()).collect()
 }
 
@@ -164,6 +166,54 @@ fn lint_allow_comment_suppresses_rule() {
     assert!(
         rules.iter().all(|r| r != "silent-result-discard"),
         "allow comment must suppress silent-result-discard; got: {rules:?}"
+    );
+}
+
+// ── test-shadow rule (#1901) ─────────────────────────────────────────────────
+
+fn lint_file_at(src: &str, path: &Path) -> Vec<String> {
+    let (mut p, _) = Parser::new(src);
+    let prog = p.parse_program();
+    assert!(p.errors().is_empty(), "parse errors: {:?}", p.errors());
+    let cfg = LintConfig::default();
+    let result = lint(&prog, src, &cfg, path);
+    result.diags.iter().map(|d| d.rule.to_string()).collect()
+}
+
+#[test]
+fn test_shadow_type_decl_in_test_file_fires() {
+    let src = "type Alias = struct { x: Int }\n";
+    let rules = lint_file_at(src, Path::new("foo_test.mvl"));
+    assert!(
+        rules.iter().any(|r| r == "test-shadow"),
+        "expected test-shadow for type decl in test file, got: {rules:?}"
+    );
+}
+
+#[test]
+fn test_shadow_type_decl_not_in_test_file_clean() {
+    let src = "type Alias = struct { x: Int }\n";
+    let rules = lint_file_at(src, Path::new("foo.mvl"));
+    assert!(
+        rules.iter().all(|r| r != "test-shadow"),
+        "test-shadow must not fire for non-test files, got: {rules:?}"
+    );
+}
+
+#[test]
+fn test_shadow_disabled_via_config() {
+    let src = "type Alias = struct { x: Int }\n";
+    let (mut p, _) = Parser::new(src);
+    let prog = p.parse_program();
+    let cfg = LintConfig {
+        test_shadow: false,
+        ..LintConfig::default()
+    };
+    let result = lint(&prog, src, &cfg, Path::new("foo_test.mvl"));
+    let rules: Vec<String> = result.diags.iter().map(|d| d.rule.to_string()).collect();
+    assert!(
+        rules.iter().all(|r| r != "test-shadow"),
+        "test-shadow must be suppressed when disabled, got: {rules:?}"
     );
 }
 
