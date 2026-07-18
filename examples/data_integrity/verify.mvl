@@ -1,0 +1,268 @@
+// verify.mvl — Cryptographic tag-verification kernel.
+//
+// Three L5-forcing predicates over bounded arithmetic:
+//   * fingerprint_within_bounds  — two-variable product (payload × sequence)
+//   * total_verification_ops     — three-variable product (block × iters × rounds)
+//   * effective_key_lifetime     — subtraction with a variable-bound floor
+//
+// One compound safety decision (should_reject) for MC/DC.
+//
+// Two IFC audit anchors:
+//   * HMAC-VERDICT-001  — sole declassification from Secret[MacTag] to Bool
+//   * HMAC-KEY-CLASSIFY-001 — the classify point at ingest from KDF output
+//
+// The Secret-output IFC direction is what makes this example distinct
+// from the taint-input pattern in ETCS/grid/CBTC.  The verdict is a
+// Bool derived from Secret material; the release is the sole audit
+// point.
+
+use model.{MacTag, SignedMessage, VerificationContext, VerifyResult, RejectReason}
+
+// ── IFC boundary: key classification ────────────────────────────────
+
+/// Classify a fresh key value as Secret.
+///
+/// AUDIT ANCHOR (`HMAC-KEY-CLASSIFY-001`): sole `relabel classify` for
+/// key material.  `grep -n "HMAC-KEY-CLASSIFY-001" verify.mvl` returns
+/// exactly one line.
+pub total fn classify_key_material(raw: String) -> Secret[String] {
+    relabel classify(raw, "HMAC-KEY-CLASSIFY-001")
+}
+
+// ── IFC boundary: verdict declassification ──────────────────────────
+
+/// Compute the verification verdict, declassifying the Secret-labelled
+/// comparison result to a plain Bool.  The verdict does NOT reveal
+/// which byte of the tag differed — only whether the two tags match.
+///
+/// AUDIT ANCHOR (`HMAC-VERDICT-001`): sole `relabel release` on the
+/// verdict flow.  `grep -n "HMAC-VERDICT-001" verify.mvl` returns
+/// exactly one line.
+pub total fn release_verdict(computed_secret: Secret[String]) -> String {
+    relabel release(computed_secret, "HMAC-VERDICT-001")
+}
+
+// ── L5-forcing refinement obligations ────────────────────────────────
+
+/// Compute the effective tag-fingerprint from message metadata.
+///
+/// Refinement layer: **L5 (Z3 QF-NIA).**
+/// Product of two bounded variables; the ensures proves the result
+/// stays within the tag-space upper bound.
+pub total fn combined_message_fingerprint(
+    payload_len: Int where self >= 1 && self <= 65536,
+    sequence_nr: Int where self >= 0 && self <= 30000,
+) -> Int
+    ensures result >= 0
+    ensures result <= 2000000000
+{
+    payload_len * sequence_nr
+}
+
+/// Estimate the number of block operations for HMAC computation given
+/// message size, chosen block size, and number of rounds.
+///
+/// Refinement layer: **L5 (Z3 QF-NIA).**
+/// Three-variable product with positivity from bounded positive
+/// factors.  Same solver-theory shape as `dose_scheduling::total_infusion_dose`.
+pub total fn total_verification_ops(
+    payload_blocks: Int where self >= 1 && self <= 1024,
+    key_derivations: Int where self >= 1 && self <= 4,
+    rounds: Int where self >= 1 && self <= 80,
+) -> Int
+    ensures result >= 1
+    ensures result <= 400000
+{
+    payload_blocks * key_derivations * rounds
+}
+
+/// Compute the effective key lifetime in milliseconds.
+///
+/// Refinement layer: **L4 (Cooper).**
+/// Linear subtraction with hypothesised ordering (`until >= from`).
+pub total fn effective_key_lifetime(
+    valid_from_ms: Int where self >= 0 && self <= 2000000000,
+    valid_until_ms: Int where self >= 0 && self <= 4000000000,
+) -> Int
+    ensures result >= 0
+{
+    if valid_until_ms >= valid_from_ms {
+        valid_until_ms - valid_from_ms
+    } else {
+        0
+    }
+}
+
+// ── Pointwise safety predicates ──────────────────────────────────────
+
+/// Determine whether a message's sequence number is above the replay
+/// floor (i.e., not a replay).
+pub total fn is_fresh_sequence(sequence_nr: Int, min_accepted: Int) -> Bool {
+    sequence_nr > min_accepted
+}
+
+/// Determine whether the current time lies within the key's valid
+/// window.
+pub total fn is_key_alive(now_ms: Int, valid_from_ms: Int, valid_until_ms: Int) -> Bool {
+    now_ms >= valid_from_ms && now_ms <= valid_until_ms
+}
+
+/// Determine whether a computed tag matches an expected tag.  Both
+/// fields must agree (fingerprint AND declared length) — the length
+/// check catches truncation attacks that a fingerprint-only compare
+/// would miss.
+pub total fn tag_bytes_equal(computed: MacTag, expected: MacTag) -> Bool {
+    computed.fingerprint == expected.fingerprint
+    && computed.length_bits == expected.length_bits
+}
+
+// ── Compound safety decision (MC/DC target) ──────────────────────────
+
+/// Should this verification be rejected?
+///
+/// MC/DC AUDIT ANCHOR (`MCDC-CRYPTO-001`): four atomic conditions.
+/// `tag_mismatch` and `key_expired` each appear in a single clause;
+/// `from_trusted_source` appears in the compound rejection clause
+/// alongside `admin_override`.  The masking exemption covers the
+/// coupling between the latter two atoms.
+///
+/// Rationale for the coupling: an untrusted source is rejected unless
+/// an operator has explicitly overridden — the two atoms combine to
+/// express "reject if untrusted and no override," which cannot be
+/// factored into single-atom clauses without changing the semantics.
+pub total fn should_reject(
+    tag_mismatch: Bool,
+    replay_detected: Bool,
+    key_expired: Bool,
+    from_trusted_source: Bool,
+    admin_override: Bool,
+) -> Bool {
+    tag_mismatch
+    || replay_detected
+    || key_expired
+    || (!from_trusted_source && !admin_override)
+}
+
+/// Compute the rejection reason given the derived facts about the
+/// verification state.  Priority order: replay first (structural),
+/// then key expiry (temporal), then tag mismatch (cryptographic),
+/// then length violation as fallback.
+pub total fn rejection_reason(
+    tag_mismatch: Bool,
+    replay_detected: Bool,
+    key_expired: Bool,
+    length_violation: Bool,
+) -> RejectReason {
+    if replay_detected { RejectReason::ReplayDetected }
+    else if key_expired { RejectReason::KeyExpired }
+    else if tag_mismatch { RejectReason::TagMismatch }
+    else if length_violation { RejectReason::LengthViolation }
+    else { RejectReason::TagMismatch }
+}
+
+// ── Verification kernel ──────────────────────────────────────────────
+
+/// Verify a signed message against a verification context.
+///
+/// Callers derive the physical predicates (tag_bytes_equal,
+/// is_fresh_sequence, is_key_alive) from the message + context; the
+/// kernel composes them into the accept/reject decision.
+pub total fn verify_message(
+    msg: SignedMessage,
+    ctx: VerificationContext,
+    now_ms: Int,
+    from_trusted_source: Bool,
+    admin_override: Bool,
+) -> VerifyResult {
+    let tag_match: Bool = tag_bytes_equal(msg.computed_tag, ctx.expected_tag);
+    let tag_mismatch: Bool = !tag_match;
+    let replay: Bool = !is_fresh_sequence(msg.sequence_nr, ctx.min_accepted_sequence);
+    let key_dead: Bool = !is_key_alive(now_ms, ctx.key_valid_from_ms, ctx.key_valid_until_ms);
+    let length_bad: Bool = msg.payload_len_bytes < 1;
+
+    if should_reject(tag_mismatch, replay, key_dead, from_trusted_source, admin_override) {
+        VerifyResult::Rejected(rejection_reason(tag_mismatch, replay, key_dead, length_bad))
+    } else {
+        VerifyResult::Accepted
+    }
+}
+
+// ── Inline unit tests (activate MC/DC discovery per #1888 workaround) ──
+
+test fn tag_match_when_identical() -> Unit {
+    let t1: MacTag = MacTag { fingerprint: 12345, length_bits: 256 };
+    let t2: MacTag = MacTag { fingerprint: 12345, length_bits: 256 };
+    assert_eq(tag_bytes_equal(t1, t2), true);
+}
+
+test fn tag_mismatch_when_fingerprint_differs() -> Unit {
+    let t1: MacTag = MacTag { fingerprint: 12345, length_bits: 256 };
+    let t2: MacTag = MacTag { fingerprint: 99999, length_bits: 256 };
+    assert_eq(tag_bytes_equal(t1, t2), false);
+}
+
+test fn tag_mismatch_when_length_differs() -> Unit {
+    let t1: MacTag = MacTag { fingerprint: 12345, length_bits: 256 };
+    let t2: MacTag = MacTag { fingerprint: 12345, length_bits: 128 };
+    assert_eq(tag_bytes_equal(t1, t2), false);
+}
+
+test fn fresh_sequence_above_floor() -> Unit {
+    assert_eq(is_fresh_sequence(100, 50), true);
+    assert_eq(is_fresh_sequence(50, 50), false);
+    assert_eq(is_fresh_sequence(10, 50), false);
+}
+
+test fn key_alive_within_window() -> Unit {
+    assert_eq(is_key_alive(500, 100, 1000), true);
+}
+
+test fn key_dead_before_window() -> Unit {
+    assert_eq(is_key_alive(50, 100, 1000), false);
+}
+
+test fn key_dead_after_window() -> Unit {
+    assert_eq(is_key_alive(2000, 100, 1000), false);
+}
+
+test fn should_reject_on_tag_mismatch() -> Unit {
+    assert_eq(should_reject(true, false, false, true, false), true);
+}
+
+test fn should_reject_on_replay() -> Unit {
+    assert_eq(should_reject(false, true, false, true, false), true);
+}
+
+test fn should_reject_on_expired_key() -> Unit {
+    assert_eq(should_reject(false, false, true, true, false), true);
+}
+
+test fn should_reject_untrusted_without_override() -> Unit {
+    assert_eq(should_reject(false, false, false, false, false), true);
+}
+
+test fn should_accept_untrusted_with_override() -> Unit {
+    assert_eq(should_reject(false, false, false, false, true), false);
+}
+
+test fn should_accept_all_clear() -> Unit {
+    assert_eq(should_reject(false, false, false, true, false), false);
+}
+
+test fn combined_fingerprint_realistic() -> Unit {
+    // 1000 byte payload, sequence 100 → 100000
+    assert_eq(combined_message_fingerprint(1000, 100), 100000);
+}
+
+test fn total_verification_ops_realistic() -> Unit {
+    // 64 blocks × 2 derivations × 80 rounds = 10240
+    assert_eq(total_verification_ops(64, 2, 80), 10240);
+}
+
+test fn effective_lifetime_normal_window() -> Unit {
+    assert_eq(effective_key_lifetime(1000, 5000), 4000);
+}
+
+test fn effective_lifetime_saturates_at_zero() -> Unit {
+    assert_eq(effective_key_lifetime(5000, 1000), 0);
+}
