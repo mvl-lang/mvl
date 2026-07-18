@@ -1,0 +1,70 @@
+// model.mvl — Domain types for weight-based infusion dose scheduling.
+//
+// Companion example to `medical_triage` — same clinical narrative, but
+// the refinement obligations lean on nonlinear integer arithmetic and
+// therefore exercise the L5 (Z3) refinement layer rather than L1-L4.
+//
+// No extern, no effects — pure type declarations.
+// Assurance note: 0 extern blocks (domain model only).
+
+// ── Patient identification ────────────────────────────────────────────────
+
+/// Coarse patient age bracket, used to select safe-dosing rules.
+pub type Bracket = enum {
+    Neonate,     // 0-28 days
+    Infant,      // 1 month - 1 year
+    Child,       // 1-12 years
+    Adult,       // 12-65 years
+    Elderly,     // 65+ years
+}
+
+/// Minimal patient record for dose calculation — weight is the load-bearing field.
+///
+/// Weight is refined at the type level rather than validated per call site.
+/// Every constructor must supply a bounded value; downstream code can access
+/// `p.weight_kg` and the checker sees the interval hypothesis directly.
+pub type Patient = struct {
+    bracket:    Bracket,
+    weight_kg:  Int where self > 0 && self <= 200,
+}
+
+// ── Drug prescription ─────────────────────────────────────────────────────
+
+/// Prescribing profile for a single drug order.
+///
+/// All fields are bounded via refinement predicates on the struct itself.
+/// A `DrugOrder` cannot be constructed with out-of-range values --- the
+/// enforcement point moves from the calculation kernel (per-call clamps)
+/// to the struct constructor (per-object validation).  The kernel then
+/// works with values it knows are already bounded.
+pub type DrugOrder = struct {
+    rate_mg_per_kg_per_hr:  Int where self > 0 && self <= 50,
+    hours:                  Int where self > 0 && self <= 24,
+    boluses:                Int where self > 0 && self <= 100,
+    volume_ml:              Int where self > 0 && self <= 1000,
+}
+
+// ── Derived plan ──────────────────────────────────────────────────────────
+
+/// Result of the dose planner: total dose, per-bolus mass, concentration.
+///
+/// The plan's fields carry refinement predicates that the constructor
+/// (`plan_infusion` in `dosing.mvl`) must satisfy.  Every `InfusionPlan`
+/// value that exists in a well-typed program has been proven safe by
+/// construction: downstream consumers do not need to re-validate.
+pub type InfusionPlan = struct {
+    total_dose_mg:      Int where self > 0 && self <= 240000,
+    per_bolus_mg:       Int where self >= 0,
+    concentration_mgml: Int where self >= 0,
+}
+
+// ── Errors ────────────────────────────────────────────────────────────────
+
+/// Validation errors for out-of-range prescribing input.
+pub type DoseError = enum {
+    InvalidWeight,
+    InvalidRate,
+    InvalidHours,
+    InvalidBoluses,
+    InvalidVolume,
+}

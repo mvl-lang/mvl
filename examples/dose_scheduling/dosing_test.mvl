@@ -1,0 +1,159 @@
+// dosing_test.mvl — MC/DC + branch coverage test suite for dose_scheduling.
+//
+// Tests the actual dosing.mvl / model.mvl code (no re-declarations).
+
+use model::Bracket;
+use model::Patient;
+use model::DrugOrder;
+use model::InfusionPlan;
+use dosing::total_infusion_dose;
+use dosing::escalate_dose;
+use dosing::max_daily_dose;
+use dosing::per_bolus_mg;
+use dosing::concentration_mg_per_ml;
+use dosing::combined_dose;
+use dosing::contraindicated;
+use dosing::requires_pharmacy_review;
+use dosing::clamp_weight;
+use dosing::clamp_rate;
+use dosing::clamp_hours;
+use dosing::clamp_boluses;
+use dosing::clamp_volume;
+use dosing::plan_infusion;
+
+// ════════════════════════════════════════════════════════════════════════
+// Decision 1: contraindicated (4-term MC/DC)
+// ════════════════════════════════════════════════════════════════════════
+
+test fn contra_all_false() -> Unit {
+    assert_eq(contraindicated(false, false, false, false), false);
+}
+
+test fn contra_pregnant_and_allergy() -> Unit {
+    assert_eq(contraindicated(true, true, false, false), true);
+    assert_eq(contraindicated(false, true, false, false), false);
+}
+
+test fn contra_pediatric_and_allergy() -> Unit {
+    assert_eq(contraindicated(false, true, true, false), true);
+}
+
+test fn contra_allergy_toggle() -> Unit {
+    assert_eq(contraindicated(true, false, false, false), false);
+}
+
+test fn contra_max_exceeded() -> Unit {
+    assert_eq(contraindicated(false, false, false, true), true);
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// Decision 2: requires_pharmacy_review
+// ════════════════════════════════════════════════════════════════════════
+
+test fn review_none() -> Unit {
+    assert_eq(requires_pharmacy_review(1000, 10, false, false), false);
+}
+
+test fn review_high_dose_few_boluses() -> Unit {
+    assert_eq(requires_pharmacy_review(150000, 2, false, false), true);
+    assert_eq(requires_pharmacy_review(150000, 5, false, false), false);
+}
+
+test fn review_high_alert_drug() -> Unit {
+    assert_eq(requires_pharmacy_review(1000, 10, false, true), true);
+}
+
+test fn review_pediatric_moderate_dose() -> Unit {
+    assert_eq(requires_pharmacy_review(6000, 10, true, false), true);
+    assert_eq(requires_pharmacy_review(6000, 10, false, false), false);
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// Clamp branch coverage
+// ════════════════════════════════════════════════════════════════════════
+
+test fn clamp_weight_below() -> Unit { assert_eq(clamp_weight(-5), 1); }
+test fn clamp_weight_above() -> Unit { assert_eq(clamp_weight(500), 200); }
+test fn clamp_weight_pass() -> Unit { assert_eq(clamp_weight(70), 70); }
+
+test fn clamp_rate_below() -> Unit { assert_eq(clamp_rate(0), 1); }
+test fn clamp_rate_above() -> Unit { assert_eq(clamp_rate(100), 50); }
+test fn clamp_rate_pass() -> Unit { assert_eq(clamp_rate(15), 15); }
+
+test fn clamp_hours_below() -> Unit { assert_eq(clamp_hours(0), 1); }
+test fn clamp_hours_above() -> Unit { assert_eq(clamp_hours(48), 24); }
+test fn clamp_hours_pass() -> Unit { assert_eq(clamp_hours(12), 12); }
+
+test fn clamp_boluses_below() -> Unit { assert_eq(clamp_boluses(0), 1); }
+test fn clamp_boluses_above() -> Unit { assert_eq(clamp_boluses(500), 100); }
+test fn clamp_boluses_pass() -> Unit { assert_eq(clamp_boluses(24), 24); }
+
+test fn clamp_volume_below() -> Unit { assert_eq(clamp_volume(0), 1); }
+test fn clamp_volume_above() -> Unit { assert_eq(clamp_volume(5000), 1000); }
+test fn clamp_volume_pass() -> Unit { assert_eq(clamp_volume(250), 250); }
+
+// ════════════════════════════════════════════════════════════════════════
+// L5 arithmetic sanity
+// ════════════════════════════════════════════════════════════════════════
+
+test fn total_dose_neonate() -> Unit {
+    assert_eq(total_infusion_dose(3, 5, 6), 90);
+}
+
+test fn total_dose_adult() -> Unit {
+    assert_eq(total_infusion_dose(70, 15, 24), 25200);
+}
+
+test fn total_dose_max_envelope() -> Unit {
+    assert_eq(total_infusion_dose(200, 50, 24), 240000);
+}
+
+test fn escalate_identity() -> Unit {
+    assert_eq(escalate_dose(500, 1), 500);
+}
+
+test fn escalate_by_5() -> Unit {
+    assert_eq(escalate_dose(200, 5), 1000);
+}
+
+test fn max_daily_typical() -> Unit {
+    assert_eq(max_daily_dose(70, 30), 2100);
+}
+
+test fn per_bolus_split_evenly() -> Unit {
+    assert_eq(per_bolus_mg(1200, 12), 100);
+}
+
+test fn concentration_dilution() -> Unit {
+    assert_eq(concentration_mg_per_ml(500, 100), 5);
+}
+
+test fn combined_dose_sum() -> Unit {
+    assert_eq(combined_dose(1000, 5000), 6000);
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// End-to-end pipeline
+// ════════════════════════════════════════════════════════════════════════
+
+test fn plan_adult_typical() -> Unit {
+    let p: Patient = Patient { bracket: Bracket::Adult, weight_kg: 70 };
+    let o: DrugOrder = DrugOrder {
+        rate_mg_per_kg_per_hr: 15, hours: 24, boluses: 48, volume_ml: 500,
+    };
+    let plan: InfusionPlan = plan_infusion(p, o);
+    assert_eq(plan.total_dose_mg, 25200);
+    assert_eq(plan.per_bolus_mg, 525);
+    assert_eq(plan.concentration_mgml, 50);
+}
+
+test fn plan_edge_of_envelope() -> Unit {
+    let p: Patient = Patient { bracket: Bracket::Adult, weight_kg: 200 };
+    let o: DrugOrder = DrugOrder {
+        rate_mg_per_kg_per_hr: 50, hours: 24, boluses: 100, volume_ml: 1000,
+    };
+    let plan: InfusionPlan = plan_infusion(p, o);
+    assert_eq(plan.total_dose_mg, 240000);
+    assert_eq(plan.per_bolus_mg, 2400);
+    assert_eq(plan.concentration_mgml, 240);
+}

@@ -1,0 +1,239 @@
+// dosing.mvl — Weight-based infusion dose calculations.
+//
+// Companion to `medical_triage/triage.mvl`.  Both examples show how the
+// same domain (clinical decision support) generates refinement obligations
+// at different points in the solver dispatch.  Where triage stays inside
+// L1-L4 (bounded ordinal ranges + linear buffer arithmetic), dosing pushes
+// obligations into L5 (Z3) because the natural predicates involve
+// *products* of bounded program variables --- nonlinear integer arithmetic,
+// which sits outside Cooper's Presburger fragment at L4.
+//
+// Assurance note: 0 extern blocks --- pure calculation logic.
+
+use model::Patient;
+use model::DrugOrder;
+use model::InfusionPlan;
+
+// ── L5 target: three-variable product with bounded factors ───────────────
+
+/// Compute the total infused dose in milligrams for a weight-based order.
+///
+/// Refinement layer: **L5 (Z3, QF-NIA).**
+/// The body multiplies three bounded program variables.  L4 (Cooper QE)
+/// rejects nonlinear terms; L5 discharges both post-conditions via QF-NIA
+/// heuristics: `weight * rate * hours > 0` follows from all factors being
+/// positive, and `weight * rate * hours <= 200 * 50 * 24 = 240_000`
+/// follows from the individual upper bounds.
+pub total fn total_infusion_dose(
+    weight_kg:              Int where self > 0 && self <= 200,
+    rate_mg_per_kg_per_hr:  Int where self > 0 && self <= 50,
+    hours:                  Int where self > 0 && self <= 24,
+) -> Int
+    ensures result > 0
+    ensures result <= 240000
+{
+    weight_kg * rate_mg_per_kg_per_hr * hours
+}
+
+// ── L5 target: monotone product ──────────────────────────────────────────
+
+/// Escalate a base dose by an integer factor.  Prove monotonicity.
+///
+/// Refinement layer: **L5 (Z3, QF-NIA).**
+/// From `base > 0 && factor >= 1` prove `base * factor >= base`.
+/// L4 rejects the product; L5 discharges via QF-NIA.
+pub total fn escalate_dose(
+    base:   Int where self > 0 && self <= 1000,
+    factor: Int where self >= 1 && self <= 5,
+) -> Int
+    ensures result >= base
+    ensures result <= 5000
+{
+    base * factor
+}
+
+// ── L5 target: two-variable product with lower bound ─────────────────────
+
+/// Compute the maximum safe daily dose from body weight and per-kg allowance.
+///
+/// Refinement layer: **L5 (Z3, QF-NIA).**
+/// From `weight_kg > 0` and `max_per_kg > 0`, prove the product is positive
+/// and bounded above by the product of the individual maxima.
+pub total fn max_daily_dose(
+    weight_kg:   Int where self > 0 && self <= 200,
+    max_per_kg:  Int where self > 0 && self <= 100,
+) -> Int
+    ensures result > 0
+    ensures result <= 20000
+{
+    weight_kg * max_per_kg
+}
+
+// ── L1-L4 targets: linear arithmetic on the derived quantities ───────────
+
+/// Divide the total dose into equal-mass boluses.
+///
+/// Refinement layer: **L2 (interval subsumption).**
+/// Integer division of a positive dividend by a positive divisor is
+/// non-negative; L2 tracks the sign of both operands.
+pub total fn per_bolus_mg(
+    total_mg: Int where self > 0 && self <= 240000,
+    boluses:  Int where self > 0 && self <= 100,
+) -> Int
+    ensures result >= 0
+{
+    total_mg / boluses
+}
+
+/// Compute concentration (mg per mL) after reconstitution.
+///
+/// Refinement layer: **L2 (interval subsumption).**
+/// Same shape as `per_bolus_mg`: positive over positive is non-negative.
+pub total fn concentration_mg_per_ml(
+    total_mg:  Int where self > 0 && self <= 240000,
+    volume_ml: Int where self > 0 && self <= 1000,
+) -> Int
+    ensures result >= 0
+{
+    total_mg / volume_ml
+}
+
+/// Sum two independent dose components (e.g., loading + maintenance).
+///
+/// Refinement layer: **L4 (Cooper / Presburger).**
+/// Both components are bounded above by 120_000; L4 combines the interval
+/// hypotheses with the linear operation `dose_a + dose_b` to prove the
+/// sum stays under 240_000.
+pub total fn combined_dose(
+    dose_a: Int where self > 0 && self <= 120000,
+    dose_b: Int where self > 0 && self <= 120000,
+) -> Int
+    ensures result > 0
+    ensures result <= 240000
+{
+    dose_a + dose_b
+}
+
+// ── Compound clinical decisions (MC/DC target) ───────────────────────────
+
+/// Contraindication check: is this dose disallowed for this patient?
+///
+/// A four-term compound predicate.  Serves as the MC/DC test target for
+/// this example --- five distinct test cases exercise all four atomic
+/// conditions independently (see `dosing_test.mvl`).
+///
+/// MC/DC AUDIT ANCHOR (`MCDC-DOSE-001`): `has_allergy` appears in two
+/// clauses of this decision (`is_pregnant && has_allergy` and
+/// `is_pediatric && has_allergy`).  Unique-cause MC/DC independence is
+/// therefore structurally impossible for this term.  Under DO-178C
+/// masking MC/DC rules (Appendix A, 6.4.4.2), the coupled term is
+/// exempt: the analyser reports it as MISSED without --masking and PASS
+/// with --masking.  Clinical rationale for the shared term: an allergy
+/// interacts with pregnancy and pediatric status via different
+/// pharmacokinetic pathways, so both clauses must exist as separate
+/// contraindication paths.  `make mcdc ARGS=--masking` is the accepting
+/// mode for this example; `make all` runs it that way by default.
+pub total fn contraindicated(
+    is_pregnant:        Bool,
+    has_allergy:        Bool,
+    is_pediatric:       Bool,
+    max_daily_exceeded: Bool,
+) -> Bool {
+    (is_pregnant && has_allergy)
+    || (is_pediatric && has_allergy)
+    || max_daily_exceeded
+}
+
+/// Does this order require pharmacy review before dispensing?
+///
+/// Three-term compound with mixed arithmetic + boolean.  Together with
+/// `contraindicated` gives the coverage analyser a non-trivial decision
+/// graph.
+///
+/// MC/DC AUDIT ANCHOR (`MCDC-DOSE-002`): `total_mg` appears in two
+/// clauses (`total_mg > 100000 && boluses < 3` and
+/// `is_pediatric && total_mg > 5000`).  Same structural-coupling story
+/// as `contraindicated` above: unique-cause MC/DC is impossible for the
+/// coupled term; masking MC/DC per DO-178C exempts it.  Clinical
+/// rationale for the shared term: dose thresholds differ for pediatric
+/// and adult patients, but both branches genuinely need to see the
+/// total dose --- refactoring the shared term into a helper would hide
+/// the review criterion, not eliminate the coupling.
+pub total fn requires_pharmacy_review(
+    total_mg:           Int,
+    boluses:            Int,
+    is_pediatric:       Bool,
+    is_high_alert_drug: Bool,
+) -> Bool {
+    (total_mg > 100000 && boluses < 3)
+    || is_high_alert_drug
+    || (is_pediatric && total_mg > 5000)
+}
+
+// ── Pipeline entry point ──────────────────────────────────────────────────
+
+/// Build a complete `InfusionPlan` for a patient + order combination.
+///
+/// The refinements on each helper compose: `total_infusion_dose` gives us
+/// `total_mg > 0 && total_mg <= 240_000`, which then satisfies the
+/// preconditions of `per_bolus_mg` and `concentration_mg_per_ml`.
+pub total fn plan_infusion(p: Patient, o: DrugOrder) -> InfusionPlan {
+    // Field refinements on Patient / DrugOrder guarantee each input is
+    // already inside the callee's precondition envelope; no clamping is
+    // needed at this call site.
+    let total_mg: Int = total_infusion_dose(
+        p.weight_kg,
+        o.rate_mg_per_kg_per_hr,
+        o.hours,
+    );
+    let bolus_mg: Int = per_bolus_mg(total_mg, o.boluses);
+    let conc_mgml: Int = concentration_mg_per_ml(total_mg, o.volume_ml);
+
+    InfusionPlan {
+        total_dose_mg:      total_mg,
+        per_bolus_mg:       bolus_mg,
+        concentration_mgml: conc_mgml,
+    }
+}
+
+// ── Sensor-safe clamps (path enumeration territory) ──────────────────────
+//
+// Each clamp folds an arbitrary Int into the refined precondition of its
+// downstream consumer.  These functions are exercised structurally at L3
+// (symbolic path enumeration) when their callers need to prove the
+// downstream refinement.
+
+/// Clamp weight into the calculator's valid range [1, 200].
+total fn clamp_weight(kg: Int) -> Int
+    ensures result >= 1 && result <= 200
+{
+    if kg < 1 { 1 } else if kg > 200 { 200 } else { kg }
+}
+
+/// Clamp per-kg-per-hour rate into [1, 50].
+total fn clamp_rate(r: Int) -> Int
+    ensures result >= 1 && result <= 50
+{
+    if r < 1 { 1 } else if r > 50 { 50 } else { r }
+}
+
+/// Clamp treatment duration into [1, 24] hours.
+total fn clamp_hours(h: Int) -> Int
+    ensures result >= 1 && result <= 24
+{
+    if h < 1 { 1 } else if h > 24 { 24 } else { h }
+}
+
+/// Clamp bolus count into [1, 100].
+total fn clamp_boluses(b: Int) -> Int
+    ensures result >= 1 && result <= 100
+{
+    if b < 1 { 1 } else if b > 100 { 100 } else { b }
+}
+
+/// Clamp reconstitution volume into [1, 1000] mL.
+total fn clamp_volume(v: Int) -> Int
+    ensures result >= 1 && result <= 1000
+{
+    if v < 1 { 1 } else if v > 1000 { 1000 } else { v }
+}

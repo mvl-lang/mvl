@@ -1,0 +1,35 @@
+// LLVM smoke test: dose_scheduling arithmetic on representative inputs.
+// expect: 90
+// expect: 25200
+
+type Bracket = enum { Neonate, Infant, Child, Adult, Elderly }
+type Patient = struct { bracket: Bracket, weight_kg: Int }
+
+total fn total_infusion_dose(
+    weight_kg: Int where self > 0 && self <= 200,
+    rate_mg_per_kg_per_hr: Int where self > 0 && self <= 50,
+    hours: Int where self > 0 && self <= 24,
+) -> Int
+    ensures result > 0
+{
+    weight_kg * rate_mg_per_kg_per_hr * hours
+}
+
+total fn digit(d: Int) -> String {
+    match d {
+        0 => "0", 1 => "1", 2 => "2", 3 => "3", 4 => "4",
+        5 => "5", 6 => "6", 7 => "7", 8 => "8", 9 => "9",
+        _ => "?",
+    }
+}
+
+total fn int_to_string(n: Int) -> String {
+    if n == 0 { "0" }
+    else if n < 10 { digit(n) }
+    else { int_to_string(n / 10).concat(digit(n % 10)) }
+}
+
+total fn main() -> Unit ! Console {
+    println(int_to_string(total_infusion_dose(3, 5, 6)));    // 90
+    println(int_to_string(total_infusion_dose(70, 15, 24))); // 25200
+}
