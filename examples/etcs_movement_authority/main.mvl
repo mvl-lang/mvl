@@ -1,0 +1,75 @@
+// main.mvl — ETCS movement-authority supervision demo.
+//
+// Six scenarios walk through normal running, warning, service brake,
+// emergency brake, and MA revocation, with the IFC-trust boundary
+// exercised at each MA ingest.
+
+use model.{TrainState, MovementAuthority, BrakeCurve, SupervisionResult}
+use supervision.{trust_movement_authority, supervise, is_route_permitted}
+
+total fn describe(r: SupervisionResult) -> String {
+    match r {
+        SupervisionResult::NormalRunning              => "NORMAL",
+        SupervisionResult::WarningIssued              => "WARNING",
+        SupervisionResult::ServiceBrake               => "SERVICE BRAKE",
+        SupervisionResult::EmergencyBrake             => "EMERGENCY BRAKE",
+        SupervisionResult::MovementAuthorityRevoked   => "MA REVOKED",
+    }
+}
+
+total fn default_train(speed_kmh: Int, position_m: Int) -> TrainState {
+    TrainState {
+        speed_kmh: speed_kmh,
+        position_m: position_m,
+        mass_tonnes: 500,
+        brake_ratio: 100,
+    }
+}
+
+total fn default_ma() -> MovementAuthority {
+    MovementAuthority {
+        end_position_m: 10000,
+        target_speed: 80,
+        issued_at_ms: 1000000,
+    }
+}
+
+// ── Scenarios ────────────────────────────────────────────────────────
+
+total fn s1_normal() -> String {
+    describe(supervise(default_train(70, 1000), default_ma(), false, false, false))
+}
+
+total fn s2_warning() -> String {
+    // target=80 → warning threshold = 85; speed 88 → warning
+    describe(supervise(default_train(88, 1000), default_ma(), false, false, false))
+}
+
+total fn s3_service_brake() -> String {
+    // target=80 → service threshold = 90; speed 92, shunting mode →
+    // service brake (not emergency)
+    describe(supervise(default_train(92, 1000), default_ma(), true, false, false))
+}
+
+total fn s4_emergency_over_line() -> String {
+    // target=80 → emergency threshold = 95; speed 100 → emergency
+    describe(supervise(default_train(100, 1000), default_ma(), false, false, false))
+}
+
+total fn s5_emergency_service_no_override() -> String {
+    // service zone with no override, no shunting → emergency by coupling
+    describe(supervise(default_train(92, 1000), default_ma(), false, false, false))
+}
+
+total fn s6_ma_revoked() -> String {
+    describe(supervise(default_train(60, 1000), default_ma(), false, false, true))
+}
+
+total fn main() -> Unit ! Console {
+    println("1. normal running:                    ".concat(s1_normal()));
+    println("2. warning zone:                      ".concat(s2_warning()));
+    println("3. service zone (shunting hold):      ".concat(s3_service_brake()));
+    println("4. emergency (above emergency line):  ".concat(s4_emergency_over_line()));
+    println("5. service zone (no override):        ".concat(s5_emergency_service_no_override()));
+    println("6. MA revoked:                        ".concat(s6_ma_revoked()));
+}

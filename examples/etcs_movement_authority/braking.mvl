@@ -1,0 +1,212 @@
+// braking.mvl — Kinematics of ETCS brake supervision.
+//
+// Three L5-forcing predicates from brake-curve kinematics:
+//   * braking_distance_squared_diff — v² − target_v² (two-variable
+//     product difference; each squaring is a QF-NIA obligation)
+//   * kinetic_energy_index         — mass × speed² proxy (three-var
+//     shape after squaring)
+//   * safety_margin_kinematic      — mass × brake_ratio × time (three-
+//     variable product, same shape as dose_scheduling::total_infusion_dose)
+//
+// The physics: v² = u² − 2as.  Rearranging for stopping distance:
+//   s = (u² − v²) / (2 × decel)
+// The u² and v² terms force QF-NIA at L5; the deceleration factor is
+// treated as a bounded input, and the resulting expression is bounded
+// by construction.
+
+use model.{TrainState, MovementAuthority, BrakeCurve}
+
+// ── Nonlinear kinematic obligations (Z3 QF-NIA at L5) ─────────────────
+
+/// Compute the squared-velocity difference used in the stopping-distance
+/// formula: current² − target².
+///
+/// Refinement layer: **L5 (Z3 QF-NIA).**
+/// Two independent squaring operations plus a subtraction.  The
+/// non-negativity ensures relies on the caller having established
+/// `current >= target`; the postcondition captures the domain envelope.
+pub total fn braking_distance_squared_diff(
+    current_kmh: Int where self >= 0 && self <= 200,
+    target_kmh:  Int where self >= 0 && self <= 200,
+) -> Int
+    ensures result >= -40000
+    ensures result <= 40000
+{
+    current_kmh * current_kmh - target_kmh * target_kmh
+}
+
+/// Compute a kinetic-energy index (proportional to mass × speed²).
+///
+/// Refinement layer: **L5 (Z3 QF-NIA).**
+/// Two-stage product: speed × speed × mass.  Result bounds propagate
+/// from the input bounds (200² × 2000 = 80_000_000).
+pub total fn kinetic_energy_index(
+    speed_kmh:   Int where self >= 0 && self <= 200,
+    mass_tonnes: Int where self >= 50 && self <= 2000,
+) -> Int
+    ensures result >= 0
+    ensures result <= 80000000
+{
+    speed_kmh * speed_kmh * mass_tonnes
+}
+
+/// Compute the kinematic safety margin: mass × brake_ratio × available
+/// reaction time.  Used to compare available deceleration capability
+/// against the demand implied by the movement authority.
+///
+/// Refinement layer: **L5 (Z3 QF-NIA).**
+/// Three-variable product with bounded positive factors — same shape as
+/// `dose_scheduling::total_infusion_dose`.  Upper bound falls to runtime
+/// for the same reason (three-variable ceilings are outside QF-NIA's
+/// tractable envelope).
+pub total fn safety_margin_kinematic(
+    mass_tonnes: Int where self >= 50 && self <= 2000,
+    brake_ratio: Int where self >= 50 && self <= 200,
+    reaction_ms: Int where self >= 100 && self <= 3000,
+) -> Int
+    ensures result >= 250000
+    ensures result <= 1200000000
+{
+    mass_tonnes * brake_ratio * reaction_ms
+}
+
+// ── Curve construction ──────────────────────────────────────────────
+
+/// Construct a brake supervision curve from the target speed at the end
+/// of authority.  The four thresholds are offsets from the target:
+///   supervised = target
+///   warning    = target + 5
+///   service    = target + 10
+///   emergency  = target + 15
+///
+/// The offsets are bounded by construction (target is bounded, and the
+/// additions saturate at 200 km/h via `min_kmh`).
+pub total fn build_curve(target_kmh: Int) -> BrakeCurve {
+    BrakeCurve {
+        supervised_kmh: min_kmh(target_kmh, 185),
+        warning_kmh:    min_kmh(target_kmh + 5, 190),
+        service_kmh:    min_kmh(target_kmh + 10, 195),
+        emergency_kmh:  min_kmh(target_kmh + 15, 200),
+    }
+}
+
+total fn min_kmh(candidate: Int, cap: Int) -> Int {
+    if candidate < 0 { 0 }
+    else if candidate > cap { cap }
+    else { candidate }
+}
+
+// ── Structural checks ───────────────────────────────────────────────
+
+/// Determine whether the current train position is still ahead of the
+/// end-of-authority (i.e., the MA is still in force).
+pub total fn is_within_authority(train: TrainState, ma: MovementAuthority) -> Bool {
+    train.position_m < ma.end_position_m
+}
+
+/// Determine whether the train's brake ratio is above the minimum
+/// commissioning threshold (a mandatory pre-run check).
+pub total fn has_valid_brake_ratio(train: TrainState, min_ratio: Int) -> Bool {
+    train.brake_ratio >= min_ratio
+}
+
+// ── Inline unit tests (activate MC/DC discovery per #1888 workaround) ──
+
+test fn squared_diff_zero_when_equal() -> Unit {
+    assert_eq(braking_distance_squared_diff(100, 100), 0);
+}
+
+test fn squared_diff_positive_when_current_higher() -> Unit {
+    // 100² − 60² = 10000 − 3600 = 6400
+    assert_eq(braking_distance_squared_diff(100, 60), 6400);
+}
+
+test fn squared_diff_negative_when_target_higher() -> Unit {
+    assert_eq(braking_distance_squared_diff(60, 100), -6400);
+}
+
+test fn squared_diff_at_upper_envelope() -> Unit {
+    // 200² − 0² = 40000
+    assert_eq(braking_distance_squared_diff(200, 0), 40000);
+}
+
+test fn kinetic_index_zero_when_stationary() -> Unit {
+    assert_eq(kinetic_energy_index(0, 500), 0);
+}
+
+test fn kinetic_index_realistic() -> Unit {
+    // 100² × 500 = 5_000_000
+    assert_eq(kinetic_energy_index(100, 500), 5000000);
+}
+
+test fn kinetic_index_upper_envelope() -> Unit {
+    assert_eq(kinetic_energy_index(200, 2000), 80000000);
+}
+
+test fn safety_margin_realistic() -> Unit {
+    // 500 × 100 × 500 = 25_000_000
+    assert_eq(safety_margin_kinematic(500, 100, 500), 25000000);
+}
+
+test fn safety_margin_lower_envelope() -> Unit {
+    // 50 × 50 × 100 = 250000
+    assert_eq(safety_margin_kinematic(50, 50, 100), 250000);
+}
+
+test fn safety_margin_upper_envelope() -> Unit {
+    // 2000 × 200 × 3000 = 1_200_000_000
+    assert_eq(safety_margin_kinematic(2000, 200, 3000), 1200000000);
+}
+
+test fn curve_stacks_by_five_kmh() -> Unit {
+    let c: BrakeCurve = build_curve(80);
+    assert_eq(c.supervised_kmh, 80);
+    assert_eq(c.warning_kmh, 85);
+    assert_eq(c.service_kmh, 90);
+    assert_eq(c.emergency_kmh, 95);
+}
+
+test fn curve_saturates_at_top_of_envelope() -> Unit {
+    let c: BrakeCurve = build_curve(190);
+    assert_eq(c.emergency_kmh, 200);
+}
+
+test fn curve_saturates_at_zero_when_negative() -> Unit {
+    // build_curve(-5) → supervised = -5 clamped to 0
+    let c: BrakeCurve = build_curve(-5);
+    assert_eq(c.supervised_kmh, 0);
+}
+
+test fn is_within_authority_true_when_before_end() -> Unit {
+    let t: TrainState = TrainState {
+        speed_kmh: 60, position_m: 1000, mass_tonnes: 500, brake_ratio: 100,
+    };
+    let ma: MovementAuthority = MovementAuthority {
+        end_position_m: 5000, target_speed: 80, issued_at_ms: 1000,
+    };
+    assert_eq(is_within_authority(t, ma), true);
+}
+
+test fn is_within_authority_false_when_past_end() -> Unit {
+    let t: TrainState = TrainState {
+        speed_kmh: 60, position_m: 6000, mass_tonnes: 500, brake_ratio: 100,
+    };
+    let ma: MovementAuthority = MovementAuthority {
+        end_position_m: 5000, target_speed: 80, issued_at_ms: 1000,
+    };
+    assert_eq(is_within_authority(t, ma), false);
+}
+
+test fn has_valid_brake_ratio_true_when_above_min() -> Unit {
+    let t: TrainState = TrainState {
+        speed_kmh: 60, position_m: 1000, mass_tonnes: 500, brake_ratio: 100,
+    };
+    assert_eq(has_valid_brake_ratio(t, 70), true);
+}
+
+test fn has_valid_brake_ratio_false_when_below_min() -> Unit {
+    let t: TrainState = TrainState {
+        speed_kmh: 60, position_m: 1000, mass_tonnes: 500, brake_ratio: 60,
+    };
+    assert_eq(has_valid_brake_ratio(t, 70), false);
+}

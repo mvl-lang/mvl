@@ -1,0 +1,70 @@
+// model.mvl — Domain types for ETCS Level 2 movement-authority supervision.
+//
+// A trackside Radio Block Centre (RBC) issues a Movement Authority (MA)
+// to an on-board unit over a radio link.  The MA declares the maximum
+// permitted end-of-authority position and target speed there.  The
+// on-board unit computes a brake supervision curve — the maximum speed
+// the train may hold at each remaining distance — and triggers service
+// or emergency brakes if the current speed exceeds the supervised
+// threshold.
+//
+// Domain: rail signalling (EN 50128 SIL 4, EU-mandated for ETCS).
+// Sister example: `examples/grid_protection/` (electric grid protection;
+// same IFC-on-taint discipline for external sensor input).
+//
+// The MA arrives over the radio channel Tainted[MovementAuthority]; the
+// sole audit anchor is `RBC-MA-001` (relabel trust) in supervision.mvl.
+// This is the taint-input direction of the IFC axis (compare with
+// `data_integrity`'s secret-output direction).
+//
+// Assurance note: 0 extern blocks (self-contained decision kernel).
+
+// ── Train state ──────────────────────────────────────────────────────
+
+/// Current dynamic state of the train under supervision.  Bounds are
+/// realistic for European mainline stock: up to 200 km/h supervised
+/// (higher speeds ride on distinct high-speed protocols), mass envelope
+/// from a light EMU (50 t) to a full freight consist (2000 t).
+pub type TrainState = struct {
+    speed_kmh:      Int where self >= 0 && self <= 200,
+    position_m:     Int where self >= 0 && self <= 1000000,
+    mass_tonnes:    Int where self >= 50 && self <= 2000,
+    brake_ratio:    Int where self >= 50 && self <= 200,
+}
+
+// ── Movement authority ──────────────────────────────────────────────
+
+/// The Movement Authority as received from the RBC.  Bounded fields
+/// carry the same envelope as the train state so downstream arithmetic
+/// stays inside MVL's QF-NIA reach.
+pub type MovementAuthority = struct {
+    end_position_m: Int where self >= 0 && self <= 1000000,
+    target_speed:   Int where self >= 0 && self <= 200,
+    issued_at_ms:   Int where self >= 0 && self <= 4000000000,
+}
+
+// ── Brake supervision curve ─────────────────────────────────────────
+
+/// Four-threshold supervision curve.  The on-board unit warns, then
+/// enforces service brake, then emergency brake as the current speed
+/// crosses successive thresholds.
+///
+/// Structural invariant: emergency > service > warning > supervised,
+/// enforced by the constructor `build_curve` in braking.mvl (not by a
+/// dependent refinement, which MVL doesn't yet express across fields).
+pub type BrakeCurve = struct {
+    supervised_kmh: Int where self >= 0 && self <= 200,
+    warning_kmh:    Int where self >= 0 && self <= 200,
+    service_kmh:    Int where self >= 0 && self <= 200,
+    emergency_kmh:  Int where self >= 0 && self <= 200,
+}
+
+// ── Supervision outcome ─────────────────────────────────────────────
+
+pub type SupervisionResult = enum {
+    NormalRunning,
+    WarningIssued,
+    ServiceBrake,
+    EmergencyBrake,
+    MovementAuthorityRevoked,
+}

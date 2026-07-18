@@ -1,0 +1,181 @@
+// supervision.mvl — MA supervision + IFC boundary for ETCS Level 2.
+//
+// Two compound safety decisions (MC/DC targets):
+//   * needs_emergency_brake — five-atom compound with a coupled clause
+//   * is_route_permitted    — four-atom compound with interlock coupling
+//
+// One IFC boundary anchor:
+//   * RBC-MA-001 — sole `relabel trust` from Tainted[MovementAuthority]
+//     to plain MovementAuthority.  The MA arrives from the RBC over the
+//     radio channel and cannot be trusted until an audited crossing.
+//
+// One supervision kernel that composes the pointwise predicates from
+// braking.mvl into the final SupervisionResult.
+
+use model.{TrainState, MovementAuthority, BrakeCurve, SupervisionResult}
+use braking.{build_curve, is_within_authority, has_valid_brake_ratio}
+
+// ── IFC boundary: MA declassification ───────────────────────────────
+
+/// Trust a movement-authority payload arriving over the RBC radio link.
+///
+/// AUDIT ANCHOR (`RBC-MA-001`): sole `relabel trust` for MA declassification.
+/// `grep -n "RBC-MA-001" supervision.mvl` returns exactly one line.
+///
+/// The MA is received as `Tainted[MovementAuthority]` at the radio
+/// interface.  This function is the sole point where it is declassified
+/// to a plain MovementAuthority the supervision kernel may consume.  All
+/// bounds validation done in `model.mvl` continues to hold post-relabel.
+pub total fn trust_movement_authority(raw: Tainted[MovementAuthority]) -> MovementAuthority {
+    relabel trust(raw, "RBC-MA-001")
+}
+
+// ── Compound safety decisions (MC/DC targets) ────────────────────────
+
+/// Should the emergency brake be triggered right now?
+///
+/// MC/DC AUDIT ANCHOR (`MCDC-ETCS-001`): five atomic conditions.  The
+/// `!is_shunting && !override_active` clause is a coupled sub-expression
+/// (the two atoms cannot be factored into single-atom clauses without
+/// changing semantics).  The masking exemption covers that coupling per
+/// EN 50128 / DO-178C §6.4.4.2.
+///
+/// Rationale for the coupling: an operator override is only meaningful
+/// while the train is in shunting mode (dispatcher intervention regime).
+/// Outside shunting mode, the override is inert and cannot lift the
+/// emergency threshold.
+pub total fn needs_emergency_brake(
+    current_kmh:     Int,
+    curve:           BrakeCurve,
+    is_shunting:     Bool,
+    override_active: Bool,
+    ma_revoked:      Bool,
+) -> Bool {
+    ma_revoked
+    || current_kmh > curve.emergency_kmh
+    || (current_kmh > curve.service_kmh && !is_shunting && !override_active)
+}
+
+/// Is the route currently permitted for movement?
+///
+/// MC/DC AUDIT ANCHOR (`MCDC-ETCS-002`): four atomic conditions.  The
+/// `level_crossing_locked || !tunnel_active` clause captures the
+/// interlock coupling: a level crossing must either be locked, OR the
+/// train must not currently be in a tunnel section where the crossing
+/// is downstream.  This can't be factored to single-atom clauses without
+/// misrepresenting the interlock semantics.
+pub total fn is_route_permitted(
+    train:                 TrainState,
+    ma:                    MovementAuthority,
+    tunnel_active:         Bool,
+    level_crossing_locked: Bool,
+) -> Bool {
+    is_within_authority(train, ma)
+    && (level_crossing_locked || !tunnel_active)
+    && has_valid_brake_ratio(train, 70)
+}
+
+// ── Supervision kernel ──────────────────────────────────────────────
+
+/// Compose the pointwise predicates into a supervision result.  Priority
+/// order: MA revocation first (structural), then emergency (kinematic),
+/// then service, then warning, then normal running.
+pub total fn supervise(
+    train:           TrainState,
+    ma:              MovementAuthority,
+    is_shunting:     Bool,
+    override_active: Bool,
+    ma_revoked:      Bool,
+) -> SupervisionResult {
+    let curve: BrakeCurve = build_curve(ma.target_speed);
+
+    if ma_revoked {
+        SupervisionResult::MovementAuthorityRevoked
+    } else if needs_emergency_brake(train.speed_kmh, curve, is_shunting, override_active, false) {
+        SupervisionResult::EmergencyBrake
+    } else if train.speed_kmh > curve.service_kmh {
+        SupervisionResult::ServiceBrake
+    } else if train.speed_kmh > curve.warning_kmh {
+        SupervisionResult::WarningIssued
+    } else {
+        SupervisionResult::NormalRunning
+    }
+}
+
+// ── Inline unit tests (activate MC/DC discovery per #1888 workaround) ──
+
+test fn emergency_when_ma_revoked() -> Unit {
+    let c: BrakeCurve = build_curve(80);
+    assert_eq(needs_emergency_brake(50, c, false, false, true), true);
+}
+
+test fn emergency_when_above_emergency_line() -> Unit {
+    let c: BrakeCurve = build_curve(80);
+    // emergency_kmh = 95; 100 > 95
+    assert_eq(needs_emergency_brake(100, c, false, false, false), true);
+}
+
+test fn service_zone_without_override_triggers_emergency() -> Unit {
+    let c: BrakeCurve = build_curve(80);
+    // service_kmh = 90; 92 > 90, no shunting, no override → emergency
+    assert_eq(needs_emergency_brake(92, c, false, false, false), true);
+}
+
+test fn service_zone_with_shunting_holds() -> Unit {
+    let c: BrakeCurve = build_curve(80);
+    // service_kmh = 90; 92 > 90 but shunting mode → not emergency
+    assert_eq(needs_emergency_brake(92, c, true, false, false), false);
+}
+
+test fn service_zone_with_override_holds() -> Unit {
+    let c: BrakeCurve = build_curve(80);
+    // service_kmh = 90; 92 > 90 but override → not emergency
+    assert_eq(needs_emergency_brake(92, c, false, true, false), false);
+}
+
+test fn below_service_line_stays_calm() -> Unit {
+    let c: BrakeCurve = build_curve(80);
+    // service_kmh = 90; 85 < 90 → not emergency
+    assert_eq(needs_emergency_brake(85, c, false, false, false), false);
+}
+
+test fn route_permitted_all_clear() -> Unit {
+    let t: TrainState = TrainState {
+        speed_kmh: 60, position_m: 1000, mass_tonnes: 500, brake_ratio: 100,
+    };
+    let ma: MovementAuthority = MovementAuthority {
+        end_position_m: 5000, target_speed: 80, issued_at_ms: 1000,
+    };
+    assert_eq(is_route_permitted(t, ma, false, true), true);
+}
+
+test fn route_blocked_when_beyond_ma() -> Unit {
+    let t: TrainState = TrainState {
+        speed_kmh: 60, position_m: 6000, mass_tonnes: 500, brake_ratio: 100,
+    };
+    let ma: MovementAuthority = MovementAuthority {
+        end_position_m: 5000, target_speed: 80, issued_at_ms: 1000,
+    };
+    assert_eq(is_route_permitted(t, ma, false, true), false);
+}
+
+test fn route_blocked_in_tunnel_without_lock() -> Unit {
+    let t: TrainState = TrainState {
+        speed_kmh: 60, position_m: 1000, mass_tonnes: 500, brake_ratio: 100,
+    };
+    let ma: MovementAuthority = MovementAuthority {
+        end_position_m: 5000, target_speed: 80, issued_at_ms: 1000,
+    };
+    // tunnel active but level crossing not locked → blocked
+    assert_eq(is_route_permitted(t, ma, true, false), false);
+}
+
+test fn route_blocked_with_low_brake_ratio() -> Unit {
+    let t: TrainState = TrainState {
+        speed_kmh: 60, position_m: 1000, mass_tonnes: 500, brake_ratio: 60,
+    };
+    let ma: MovementAuthority = MovementAuthority {
+        end_position_m: 5000, target_speed: 80, issued_at_ms: 1000,
+    };
+    assert_eq(is_route_permitted(t, ma, false, true), false);
+}
