@@ -20,43 +20,7 @@ use std.log.{Logger, LogFormat, LogLevel, file_logger}
 use std.io.{path, open, close, Fd}
 use std.env.{get}
 use std.runtime.{manifest, Manifest, log_manifest}
-
-// ── Refined types ─────────────────────────────────────────────────────────
-
-/// A filesystem path guaranteed to be non-empty.
-/// Prevents passing "" to open(), which would produce a confusing I/O error.
-/// The guarantee is enforced by validate_log_path and resolve_path.
-pub type LogPath = String where len(self) > 0
-
-// ── Error type ────────────────────────────────────────────────────────────
-
-pub type LogSetupError = enum {
-    EmptyPath,    // MVL_LOG_FILE was set to an empty string
-    OpenFailed,   // the OS could not open the file for writing
-}
-
-// ── Pure helpers ──────────────────────────────────────────────────────────
-
-/// Req 10 (Refinements): prove a path string is non-empty.
-///
-/// For the literal "app.log", Layer 1 (interval arithmetic) statically proves
-/// len("app.log") > 0 == 7 > 0 — no runtime check emitted.
-/// Env-var paths carry a runtime check (validated at the IFC boundary).
-pub total fn validate_log_path(p: String where len(p) > 0) -> String { p }
-
-/// Validate a Tainted path string from the environment.
-///
-/// IFC: `raw` is Tainted[String] — it came from the OS environment and is
-/// therefore untrusted. `relabel trust` is the explicit boundary, audited
-/// with the tag "LOG-PATH-001". An empty string after relabeling is rejected
-/// so callers receive a non-empty String.
-pub total fn resolve_path(raw: Tainted[String]) -> Result[String, LogSetupError] {
-    let s: String = relabel trust(raw, "LOG-PATH-001");
-    match s.len() > 0 {
-        true  => Ok(s),
-        false => Err(LogSetupError::EmptyPath),
-    }
-}
+use paths.{LogPath, LogSetupError, validate_log_path, resolve_path}
 
 /// Read the log file path: MVL_LOG_FILE env var, or "app.log" by default.
 ///

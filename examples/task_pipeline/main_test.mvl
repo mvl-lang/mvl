@@ -1,78 +1,43 @@
-// main_test.mvl — Unit tests for main.mvl helpers.
+// main_test.mvl — Behavioural tests for the CLI-plumbing pure helpers.
 //
-// Demonstrates:
-//   1. Req 3 (Totality):  exhaustive match on all RunError variants
-//   2. Req 5 (Errors):    threshold_or_default returns 0.0 for invalid input
-//
-// NOTE: type and function declarations below duplicate main.mvl because
-// cross-file type resolution is not yet wired into the per-file checker
-// (issue #96). When #96 lands these can be replaced with:
-//   use main::RunError;
-//   use main::threshold_or_default;
-//
-// IFC note: threshold_or_default is re-declared here with plain String
-// (not Tainted[String]) because test files cannot demonstrate IFC boundaries
-// in isolation. The full IFC version lives in main.mvl.
-// Assurance note: 0 extern blocks.
+// Coverage target: threshold_or_default (Option[Float] → Float) and the
+// RunError variant surface exposed by errors.mvl.
 
-// ── Type re-declarations (workaround: #96) ────────────────────────────────
-
-type RunError = enum {
-    MissingArg,
-    IOFailure,
-    ParseFailed,
-}
-
-// ── Function re-declarations (workaround: #96) ────────────────────────────
-// Simplified: plain String instead of Tainted[String] (no IFC in test context).
-
-fn threshold_or_default(opt: Option[String]) -> Float {
-    match opt {
-        None    => 0.0,
-        Some(s) => {
-            let result: Result[Float, String] = s.parse_float();
-            match result {
-                Err(_) => 0.0,
-                Ok(v)  => if v >= 0.0 { v } else { 0.0 },
-            }
-        }
-    }
-}
+use errors::{RunError, threshold_or_default, run_error_message}
 
 // ── threshold_or_default tests ────────────────────────────────────────────
 
 test fn threshold_or_default_none_is_zero() -> Unit {
-    let t: Float = threshold_or_default(None);
-    let is_zero: Int = if t == 0.0 { 1 } else { 0 };
-    assert_eq(is_zero, 1);
+    assert_eq(threshold_or_default(None) == 0.0, true);
 }
 
 test fn threshold_or_default_valid_value() -> Unit {
-    let t: Float = threshold_or_default(Some("25.0"));
-    let is_25: Int = if t == 25.0 { 1 } else { 0 };
-    assert_eq(is_25, 1);
-}
-
-test fn threshold_or_default_invalid_string_is_zero() -> Unit {
-    let t: Float = threshold_or_default(Some("notanumber"));
-    let is_zero: Int = if t == 0.0 { 1 } else { 0 };
-    assert_eq(is_zero, 1);
+    assert_eq(threshold_or_default(Some(25.0)) == 25.0, true);
 }
 
 test fn threshold_or_default_negative_is_zero() -> Unit {
-    let t: Float = threshold_or_default(Some("-5.0"));
-    let is_zero: Int = if t == 0.0 { 1 } else { 0 };
-    assert_eq(is_zero, 1);
+    assert_eq(threshold_or_default(Some(-5.0)) == 0.0, true);
 }
 
-// ── RunError exhaustiveness test ──────────────────────────────────────────
+test fn threshold_or_default_zero_pass_through() -> Unit {
+    assert_eq(threshold_or_default(Some(0.0)) == 0.0, true);
+}
+
+// ── RunError exhaustiveness + message tests ──────────────────────────────
+
+test fn run_error_io_failure_message() -> Unit {
+    assert_eq(run_error_message(RunError::IOFailure), "failed to read CSV file");
+}
+
+test fn run_error_parse_failed_message() -> Unit {
+    assert_eq(run_error_message(RunError::ParseFailed), "CSV parsing failed (see details above)");
+}
 
 test fn run_error_variants_are_exhaustive() -> Unit {
-    let e: RunError = RunError::MissingArg;
+    let e: RunError = RunError::IOFailure;
     let n: Int = match e {
-        RunError::MissingArg  => 1,
-        RunError::IOFailure   => 2,
-        RunError::ParseFailed => 3,
+        RunError::IOFailure   => 1,
+        RunError::ParseFailed => 2,
     };
     assert_eq(n, 1);
 }

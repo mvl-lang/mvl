@@ -20,6 +20,8 @@
 use std.args.{parse_args, required, optional, get_str, get_str_opt, ArgType, ArgValue}
 use std.io.{read_file}
 use std.log.{Logger, default_logger}
+use errors.{RunError, run_error_message}
+
 // ── Trust boundary: domain-specific pipeline logic ──────────────────────────
 
 extern "rust" {
@@ -31,11 +33,6 @@ extern "rust" {
 type PipelineError = enum {
     InvalidInput,
     ParseFailed,
-}
-
-type RunError = enum {
-    IOFailure,
-    PipelineFailed,
 }
 
 // ── Main pipeline ───────────────────────────────────────────────────────────
@@ -60,14 +57,6 @@ fn run(logger: val Logger) -> Result[Unit, RunError] ! FileRead + Console + Log 
                 }
             }
         }
-    }
-}
-
-/// Map a `RunError` to a human-readable message string (pure — no effects).
-fn run_error_message(e: RunError) -> String {
-    match e {
-        RunError::IOFailure      => "failed to read log file",
-        RunError::PipelineFailed => "analysis pipeline failed",
     }
 }
 

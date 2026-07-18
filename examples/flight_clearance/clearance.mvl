@@ -92,7 +92,7 @@ pub total fn aircraft_ready(ac: Aircraft) -> Bool {
 // MC/DC: 3 effective conditions → 4 test cases
 // (is_oceanic&&!etops is one compound, is_intl&&!crew is another, joined by ||)
 
-fn is_oceanic(route: RouteType) -> Bool {
+pub total fn is_oceanic(route: RouteType) -> Bool {
     match route {
         RouteType::Oceanic       => true,
         RouteType::International => false,
@@ -100,7 +100,7 @@ fn is_oceanic(route: RouteType) -> Bool {
     }
 }
 
-fn is_international(route: RouteType) -> Bool {
+pub total fn is_international(route: RouteType) -> Bool {
     match route {
         RouteType::International => true,
         RouteType::Oceanic       => false,
@@ -153,7 +153,7 @@ pub total fn can_dispatch(wx: Weather, ac: Aircraft, route: RouteType) -> Cleara
 // Simplified: crew_valid AND (domestic OR fuel_sufficient)
 // MC/DC: 3 conditions → 4 test cases
 
-fn is_domestic(route: RouteType) -> Bool {
+pub total fn is_domestic(route: RouteType) -> Bool {
     match route {
         RouteType::Domestic      => true,
         RouteType::International => false,
@@ -171,7 +171,7 @@ pub total fn crew_duty_ok(ac: Aircraft, route: RouteType) -> Bool {
 // fuel_sufficient OR (fuel_marginal AND domestic AND !icing)
 // MC/DC: 3 conditions in the OR-branch → 4 test cases
 
-fn fuel_sufficient(f: FuelStatus) -> Bool {
+pub total fn fuel_sufficient(f: FuelStatus) -> Bool {
     match f {
         FuelStatus::Sufficient   => true,
         FuelStatus::Marginal     => false,
@@ -179,7 +179,7 @@ fn fuel_sufficient(f: FuelStatus) -> Bool {
     }
 }
 
-fn fuel_marginal(f: FuelStatus) -> Bool {
+pub total fn fuel_marginal(f: FuelStatus) -> Bool {
     match f {
         FuelStatus::Marginal     => true,
         FuelStatus::Sufficient   => false,
