@@ -12,11 +12,21 @@
 // ── Type re-declarations ─────────────────────────────────────────────────
 
 type Bracket = enum { Neonate, Infant, Child, Adult, Elderly }
-type Patient = struct { bracket: Bracket, weight_kg: Int }
-type DrugOrder = struct {
-    rate_mg_per_kg_per_hr: Int, hours: Int, boluses: Int, volume_ml: Int,
+type Patient = struct {
+    bracket: Bracket,
+    weight_kg: Int where self > 0 && self <= 200,
 }
-type InfusionPlan = struct { total_dose_mg: Int, per_bolus_mg: Int, concentration_mgml: Int }
+type DrugOrder = struct {
+    rate_mg_per_kg_per_hr: Int where self > 0 && self <= 50,
+    hours: Int where self > 0 && self <= 24,
+    boluses: Int where self > 0 && self <= 100,
+    volume_ml: Int where self > 0 && self <= 1000,
+}
+type InfusionPlan = struct {
+    total_dose_mg: Int where self > 0 && self <= 240000,
+    per_bolus_mg: Int where self >= 0,
+    concentration_mgml: Int where self >= 0,
+}
 
 // ── Fn re-declarations (must match dosing.mvl exactly) ───────────────────
 
@@ -94,13 +104,15 @@ fn requires_pharmacy_review(
 }
 
 fn plan_infusion(p: Patient, o: DrugOrder) -> InfusionPlan {
+    // Field refinements on Patient / DrugOrder guarantee each input is
+    // already in-envelope; no clamping needed at this call site.
     let total_mg: Int = total_infusion_dose(
-        clamp_weight(p.weight_kg),
-        clamp_rate(o.rate_mg_per_kg_per_hr),
-        clamp_hours(o.hours),
+        p.weight_kg,
+        o.rate_mg_per_kg_per_hr,
+        o.hours,
     );
-    let bolus_mg: Int = per_bolus_mg(total_mg, clamp_boluses(o.boluses));
-    let conc_mgml: Int = concentration_mg_per_ml(total_mg, clamp_volume(o.volume_ml));
+    let bolus_mg: Int = per_bolus_mg(total_mg, o.boluses);
+    let conc_mgml: Int = concentration_mg_per_ml(total_mg, o.volume_ml);
 
     InfusionPlan {
         total_dose_mg:      total_mg,
@@ -286,13 +298,19 @@ test fn plan_adult_typical() -> Unit {
     assert_eq(plan.concentration_mgml, 50);
 }
 
-test fn plan_clamps_apply() -> Unit {
-    // Every field is out-of-range; plan should use clamped values.
-    let p: Patient = Patient { bracket: Bracket::Adult, weight_kg: -50 };
+test fn plan_edge_of_envelope() -> Unit {
+    // Every field at its upper bound; plan should compute at the envelope max.
+    // Note: field refinements on Patient/DrugOrder now guarantee inputs are
+    // already in range, so clamping at the pipeline entry is redundant.
+    // The clamp_* helpers are still tested standalone below (they remain
+    // useful for constructing values from unvalidated external input).
+    let p: Patient = Patient { bracket: Bracket::Adult, weight_kg: 200 };
     let o: DrugOrder = DrugOrder {
-        rate_mg_per_kg_per_hr: 200, hours: 100, boluses: 500, volume_ml: 5000,
+        rate_mg_per_kg_per_hr: 50, hours: 24, boluses: 100, volume_ml: 1000,
     };
     let plan: InfusionPlan = plan_infusion(p, o);
-    // Clamps: weight=1, rate=50, hours=24 → total = 1 × 50 × 24 = 1200
-    assert_eq(plan.total_dose_mg, 1200);
+    // 200 × 50 × 24 = 240000 mg — the declared envelope maximum
+    assert_eq(plan.total_dose_mg, 240000);
+    assert_eq(plan.per_bolus_mg, 2400);
+    assert_eq(plan.concentration_mgml, 240);
 }

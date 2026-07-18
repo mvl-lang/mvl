@@ -19,36 +19,43 @@ pub type Bracket = enum {
 }
 
 /// Minimal patient record for dose calculation — weight is the load-bearing field.
+///
+/// Weight is refined at the type level rather than validated per call site.
+/// Every constructor must supply a bounded value; downstream code can access
+/// `p.weight_kg` and the checker sees the interval hypothesis directly.
 pub type Patient = struct {
     bracket:    Bracket,
-    weight_kg:  Int,    // whole kilograms — validated by validate_patient (dosing.mvl)
+    weight_kg:  Int where self > 0 && self <= 200,
 }
 
 // ── Drug prescription ─────────────────────────────────────────────────────
 
 /// Prescribing profile for a single drug order.
 ///
-/// All fields are bounded whole numbers.  The refinements in `dosing.mvl`
-/// prove that the derived infusion parameters (total dose, per-bolus size,
-/// concentration) stay inside safe envelopes even for the maximum feasible
-/// combination of patient weight, prescribed rate, and treatment duration.
+/// All fields are bounded via refinement predicates on the struct itself.
+/// A `DrugOrder` cannot be constructed with out-of-range values --- the
+/// enforcement point moves from the calculation kernel (per-call clamps)
+/// to the struct constructor (per-object validation).  The kernel then
+/// works with values it knows are already bounded.
 pub type DrugOrder = struct {
-    rate_mg_per_kg_per_hr:  Int,    // 1..50
-    hours:                  Int,    // 1..24
-    boluses:                Int,    // 1..100 — number of discrete doses
-    volume_ml:              Int,    // 1..1000 — reconstitution volume
+    rate_mg_per_kg_per_hr:  Int where self > 0 && self <= 50,
+    hours:                  Int where self > 0 && self <= 24,
+    boluses:                Int where self > 0 && self <= 100,
+    volume_ml:              Int where self > 0 && self <= 1000,
 }
 
 // ── Derived plan ──────────────────────────────────────────────────────────
 
 /// Result of the dose planner: total dose, per-bolus mass, concentration.
 ///
-/// All three fields are proven to be non-negative and within safe upper
-/// bounds by the refinement obligations in `dosing.mvl`.
+/// The plan's fields carry refinement predicates that the constructor
+/// (`plan_infusion` in `dosing.mvl`) must satisfy.  Every `InfusionPlan`
+/// value that exists in a well-typed program has been proven safe by
+/// construction: downstream consumers do not need to re-validate.
 pub type InfusionPlan = struct {
-    total_dose_mg:      Int,    // proven: > 0 && <= 240_000
-    per_bolus_mg:       Int,    // proven: >= 0
-    concentration_mgml: Int,    // proven: >= 0
+    total_dose_mg:      Int where self > 0 && self <= 240000,
+    per_bolus_mg:       Int where self >= 0,
+    concentration_mgml: Int where self >= 0,
 }
 
 // ── Errors ────────────────────────────────────────────────────────────────

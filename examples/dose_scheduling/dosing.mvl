@@ -178,13 +178,16 @@ pub total fn requires_pharmacy_review(
 /// `total_mg > 0 && total_mg <= 240_000`, which then satisfies the
 /// preconditions of `per_bolus_mg` and `concentration_mg_per_ml`.
 pub total fn plan_infusion(p: Patient, o: DrugOrder) -> InfusionPlan {
+    // Field refinements on Patient / DrugOrder guarantee each input is
+    // already inside the callee's precondition envelope; no clamping is
+    // needed at this call site.
     let total_mg: Int = total_infusion_dose(
-        clamp_weight(p.weight_kg),
-        clamp_rate(o.rate_mg_per_kg_per_hr),
-        clamp_hours(o.hours),
+        p.weight_kg,
+        o.rate_mg_per_kg_per_hr,
+        o.hours,
     );
-    let bolus_mg: Int = per_bolus_mg(total_mg, clamp_boluses(o.boluses));
-    let conc_mgml: Int = concentration_mg_per_ml(total_mg, clamp_volume(o.volume_ml));
+    let bolus_mg: Int = per_bolus_mg(total_mg, o.boluses);
+    let conc_mgml: Int = concentration_mg_per_ml(total_mg, o.volume_ml);
 
     InfusionPlan {
         total_dose_mg:      total_mg,
