@@ -53,6 +53,58 @@ Running `make mcdc` without arguments deliberately fails to surface the
 two coupled clauses — this is the intended behaviour for a reviewer who
 wants to see the unique-cause result before applying the exemption.
 
+## IEC 62304 assurance envelope (`make test-62304`)
+
+For Class C (life-supporting) medical software, IEC 62304 requires
+evidence along three independent axes:
+
+1. **Static proof** — verification that the code holds for **all**
+   inputs of the declared types (compile-time, universal quantification).
+2. **Unit tests** — verification that the code produces the **specific**
+   expected output on representative inputs (dynamic, value-level).
+3. **MC/DC coverage** — verification that every atomic condition in
+   every compound decision independently affects the outcome (coverage
+   property of the test suite, not of the code).
+
+No single axis subsumes the others. Static proofs cannot check that the
+formula being computed is the intended one (`weight + rate*hours` would
+satisfy `result > 0` and be clinically wrong). Tests cannot generalise
+beyond the inputs they explore. MC/DC certifies test-suite quality but
+says nothing about static correctness.
+
+`make test-62304` composes all four checks and emits a one-screen
+assurance envelope:
+
+```
+── (1) Static refinement proof (compile-time, all inputs) ─────
+Total: 31 proven (L1:21 L2:0 L3:0 L4:2 L5:8), 8 runtime, 0 failed
+
+── (2) Behavioural unit tests (dynamic, specific inputs) ──────
+test result: ok. 35 passed; 0 failed
+All tests passed.
+
+── (3) Branch coverage (decision points reached) ──────────────
+Total: 29/29 branches  (100%)
+
+── (4) MC/DC coverage (compound decisions, --masking) ─────────
+MC/DC coverage: 8/10 pure obligations met (80%)
+PASS
+
+── Audit anchors (grep -n MCDC-DOSE- dosing.mvl) ──────────────
+  125:/// MC/DC AUDIT ANCHOR (`MCDC-DOSE-001`): ...
+  153:/// MC/DC AUDIT ANCHOR (`MCDC-DOSE-002`): ...
+```
+
+The eight runtime obligations from axis (1) are exercised by axis (2):
+every test that invokes `plan_infusion` executes through the seven
+inter-procedural precondition checks; `total_dose_max_envelope` exercises
+the runtime upper-bound assertion that L5 could not statically discharge.
+This yields a three-layer defensive structure — compile-time proofs,
+runtime assertions, dynamic tests — with the caveat that runtime checks
+only fire on inputs the tests actually cover. Refinements matter
+precisely because they discharge the property for **all** admissible
+inputs, not just the sample the tests explored.
+
 ## The seven L5 obligations
 
 Each of these requires reasoning about a **product of bounded program variables**, which sits outside Cooper's Presburger fragment at L4:
