@@ -133,6 +133,100 @@ pub fn run(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
         }
     }
 
+    // Discover sibling library files and load them into the prelude so their
+    // functions are emitted into the paired test module's `mod` block (#1888).
+    //
+    // A sibling `foo.mvl` paired with `foo_test.mvl` cannot be a separate crate
+    // module: the test file's stripped stem ("foo") already occupies that mod
+    // slot.  Instead we mirror `cli/test.rs`'s pattern — push the sibling into
+    // `stdlib_prelude_progs` (with a parallel `prelude_stems` entry) and route
+    // MC/DC instrumentation for its stem via `with_coverage_prelude` on the
+    // paired test file's transpile.
+    let mut prelude_stems: Vec<Option<String>> = vec![None; stdlib_prelude_progs.len()];
+    let paired_test_stems: HashSet<String> = test_files
+        .iter()
+        .map(|f| {
+            let s = loader::stem(&f.display().to_string());
+            s.strip_suffix("_test").unwrap_or(&s).replace('-', "_")
+        })
+        .collect();
+    let imported_by_test_files: HashSet<String> = test_files
+        .iter()
+        .flat_map(|f| {
+            let (prog, _) = super::parse_or_exit(&f.display().to_string());
+            loader::collect_imported_module_names(&prog)
+        })
+        .collect();
+    let source_files = loader::mvl_files(path, false);
+    // Track which source files have been loaded as prelude siblings — the
+    // separate-module loop below must skip them so we don't emit two definitions
+    // of the same fn (one inline in the mod, one via prelude).
+    let mut sibling_prelude_stems: HashSet<String> = HashSet::new();
+    let mut sibling_stems: Vec<String> = Vec::new();
+    let mut sibling_module_sources: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+    let mut sibling_static_decisions: Vec<DecisionInfo> = Vec::new();
+    for src_file in &source_files {
+        let file_str = src_file.display().to_string();
+        let s = loader::stem(&file_str);
+        let stem = s.replace('-', "_");
+        let (prog, src) = super::parse_or_exit(&file_str);
+        // Files with inline `test fn` declarations remain separate crate modules
+        // (they contribute their own tests and can't be merged into another
+        // module's prelude).
+        let has_inline_tests = prog
+            .declarations
+            .iter()
+            .any(|d| matches!(d, Decl::Fn(fd) if fd.is_test));
+        // When a `_test.mvl` file already pairs with this source file, its
+        // library fns MUST reach the paired mod's prelude even if the source
+        // also has inline tests (mirrors `cli/test.rs`'s behaviour — inline
+        // tests on the source file are dropped in favour of the `_test.mvl`
+        // authoritative harness).  Only files with inline tests AND no paired
+        // `_test.mvl` stay behind for the separate-module loop.
+        let is_paired = paired_test_stems.contains(&stem);
+        if has_inline_tests && !is_paired {
+            continue;
+        }
+        let should_include = is_paired
+            || imported_by_test_files.contains(&stem)
+            || transpiler::has_extern_or_type_decls(&prog);
+        if !should_include {
+            continue;
+        }
+        validate_module_name(&stem, &file_str);
+        // Preserve JSON source-fragment lookup: the sibling's decisions land on
+        // its own stem (not the enclosing test module's stem).
+        sibling_module_sources.insert(stem.clone(), src.lines().map(String::from).collect());
+        // Static analysis on the sibling — needed so exempt (effectful) fns are
+        // still classified when their decisions come out of the emitter.
+        // start_id is patched later after emitter assigns real IDs.
+        sibling_static_decisions.extend(analyze_mcdc(&prog, &stem, 0));
+        // Track this sibling's fn names so prelude_fn_to_stem routing works when
+        // the emitter's instrumentation-routing didn't stamp `decision.file`.
+        for d in &prog.declarations {
+            if let Decl::Fn(fd) = d {
+                prelude_fn_to_stem
+                    .entry(fd.name.clone())
+                    .or_insert_with(|| stem.clone());
+            }
+        }
+        stdlib_prelude_progs.push(prog);
+        prelude_stems.push(Some(stem.clone()));
+        sibling_prelude_stems.insert(stem.clone());
+        sibling_stems.push(stem);
+    }
+    // Instrumentation routing: each sibling stem is instrumented in exactly one
+    // test module's transpile (mirroring `cli/test.rs`'s #1489 approach).
+    let sibling_stems_set: HashSet<String> = sibling_stems.iter().cloned().collect();
+    let unpaired_sibling_stems: Vec<String> = sibling_stems
+        .iter()
+        .filter(|s| !paired_test_stems.contains(*s))
+        .cloned()
+        .collect();
+    let mut instrumented_stems: HashSet<String> = HashSet::new();
+    let mut unpaired_emitted = false;
+
     // Transpile all test files with MC/DC instrumentation.
     let mut modules: Vec<(String, String, String)> = Vec::new();
     let mut all_decisions: Vec<MCDCDecision> = Vec::new();
@@ -166,6 +260,43 @@ pub fn run(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
         let start_id = all_decisions.len();
         let static_d = analyze_mcdc(&prog, &module_name, start_id);
         all_static_decisions.extend(static_d);
+        // Route MC/DC instrumentation for the paired sibling library (`foo.mvl`
+        // for `foo_test.mvl`) into this test module's transpile.  Each sibling
+        // stem is marked at most once across the run (#1888).
+        let bare_stem = loader::stem(&file_str);
+        let bare_stem = bare_stem
+            .strip_suffix("_test")
+            .unwrap_or(&bare_stem)
+            .replace('-', "_");
+        let mut instrument_this: HashSet<String> = HashSet::new();
+        if sibling_stems_set.contains(&bare_stem)
+            && instrumented_stems.insert(bare_stem.clone())
+        {
+            instrument_this.insert(bare_stem.clone());
+            // Include this sibling's static analysis in the exempt set.
+            for d in &sibling_static_decisions {
+                if d.file == bare_stem {
+                    let mut d = d.clone();
+                    d.id = all_static_decisions.len();
+                    all_static_decisions.push(d);
+                }
+            }
+        }
+        if !unpaired_emitted {
+            for s in &unpaired_sibling_stems {
+                if instrumented_stems.insert(s.clone()) {
+                    instrument_this.insert(s.clone());
+                    for d in &sibling_static_decisions {
+                        if &d.file == s {
+                            let mut d = d.clone();
+                            d.id = all_static_decisions.len();
+                            all_static_decisions.push(d);
+                        }
+                    }
+                }
+            }
+            unpaired_emitted = true;
+        }
         let mut expr_types = checker::collect_prelude_expr_types(&stdlib_prelude_progs);
         expr_types.extend(checker::check_with_prelude(&stdlib_prelude_progs, &prog).expr_types);
         let all_fns = mvl::mvl::passes::mono::collect_fns([&prog]);
@@ -176,7 +307,9 @@ pub fn run(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
             TranspileConfig::new(&module_name)
                 .with_file_stem(&module_name)
                 .with_prelude(lower_prelude(&stdlib_prelude_progs))
-                .with_mcdc(start_id),
+                .with_coverage_prelude(prelude_stems.clone(), instrument_this)
+                .with_mcdc(start_id)
+                .for_test_crate(),
         );
         let out = result.output;
         let decisions = result.decisions;
@@ -192,29 +325,17 @@ pub fn run(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
         modules.push((module_name, file_str, module_content));
     }
 
-    // Build the set of module names imported by test files so that pure-function
-    // sibling modules (no types/extern blocks) are also loaded when a test file
-    // uses `use module::fn` (#1888).  Mirrors the `imported_by_test_files` pattern
-    // in test.rs.
-    let imported_by_test_files: HashSet<String> = test_files
-        .iter()
-        .flat_map(|f| {
-            let (prog, _) = super::parse_or_exit(&f.display().to_string());
-            loader::collect_imported_module_names(&prog)
-        })
-        .collect();
-
-    // Include source files that:
-    // (a) contain inline `test fn` declarations, OR
-    // (b) have extern/type declarations needed by test code, OR
-    // (c) are explicitly imported by any test file (#1888).
+    // Include source files that have inline `test fn` declarations as their own
+    // separate crate modules.  Siblings imported by tests (or paired with a
+    // `*_test.mvl` file) are already emitted via the prelude routing above and
+    // must NOT be added as a separate module — that would duplicate their fn
+    // definitions inside the test crate.
     let covered_stems: HashSet<String> = file_stems.iter().cloned().collect();
-    let source_files = loader::mvl_files(path, false);
     for src_file in &source_files {
         let file_str = src_file.display().to_string();
         let s = loader::stem(&file_str);
         let module_name = s.replace('-', "_");
-        if covered_stems.contains(&module_name) {
+        if covered_stems.contains(&module_name) || sibling_prelude_stems.contains(&module_name) {
             continue;
         }
         let (prog, src) = super::parse_or_exit(&file_str);
@@ -222,10 +343,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
             .declarations
             .iter()
             .any(|d| matches!(d, Decl::Fn(fd) if fd.is_test));
-        let should_include = has_tests
-            || transpiler::has_extern_or_type_decls(&prog)
-            || imported_by_test_files.contains(&module_name);
-        if !should_include {
+        if !has_tests {
             continue;
         }
         module_sources.insert(module_name.clone(), src.lines().map(String::from).collect());
@@ -259,6 +377,8 @@ pub fn run(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
             + "\n";
         modules.push((module_name, file_str, module_content));
     }
+    // Publish sibling source line maps for the JSON source-fragment lookup.
+    module_sources.extend(sibling_module_sources);
 
     // Fix line numbers for Return decisions: *_test.mvl re-declares functions
     // (workaround for #96) at different line numbers than the original source.
@@ -284,12 +404,17 @@ pub fn run(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
         }
         for decision in &mut all_decisions {
             let key = (decision.file.clone(), decision.fn_name.clone());
+            // Only patch lines for decisions emitted from a test-file
+            // redeclaration (the #96 workaround) — those need the source-vs-test
+            // offset applied.  Prelude-emitted sibling decisions already carry
+            // accurate source line numbers and must not be overwritten.
+            let Some(&test_fn_line) = test_fn_starts.get(&key) else {
+                continue;
+            };
             if let Some(&src_fn_line) = source_fn_lines.get(&key) {
                 if matches!(decision.kind, DecisionKind::Return) {
                     decision.line = src_fn_line;
-                } else if let Some(&test_fn_line) = test_fn_starts.get(&key) {
-                    // Offset non-Return decisions by the function start difference
-                    // between the source and the test-file redeclaration.
+                } else {
                     let offset = src_fn_line as i64 - test_fn_line as i64;
                     decision.line = (decision.line as i64 + offset).max(1) as u32;
                 }
