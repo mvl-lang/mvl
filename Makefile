@@ -371,6 +371,9 @@ WASM_CORPUS := \
 	tests/corpus/02_control_flow \
 	tests/corpus/03_functions/basic_test.mvl \
 	tests/corpus/04_types/enum_test.mvl \
+	tests/corpus/04_types/struct_test.mvl \
+	tests/corpus/04_types/enum_payload_test.mvl \
+	tests/corpus/04_types/option_result_test.mvl \
 	tests/corpus/05_collections/list_basics_test.mvl \
 	tests/corpus/05_collections/list_iter_test.mvl \
 	tests/corpus/05_collections/list_get_test.mvl \

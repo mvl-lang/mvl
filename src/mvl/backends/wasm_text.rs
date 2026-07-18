@@ -70,6 +70,42 @@ impl Default for WasmTextCompiler {
     }
 }
 
+/// One field slot in a heap-allocated struct: name, byte offset in the
+/// allocated block, and resolved MVL type (used to choose the WASM load/store
+/// opcode and to unpack `*MvlString` fields into `(ptr, len)` on reads).
+#[derive(Debug, Clone)]
+struct FieldSlot {
+    name: String,
+    offset: u32,
+    ty: Ty,
+}
+
+/// Pre-computed memory layout for a single struct type.
+#[derive(Debug, Clone)]
+struct StructLayout {
+    total_size: u32,
+    fields: Vec<FieldSlot>,
+}
+
+/// One variant within a payload-carrying enum.
+#[derive(Debug, Clone)]
+struct PayloadVariant {
+    name: String,
+    disc: i32,
+    /// Payload field types in declaration order. Empty = unit variant.
+    fields: Vec<Ty>,
+    /// Byte size of the payload region (sum of field sizes, 8-byte granules).
+    payload_size: u32,
+}
+
+/// Pre-computed info for an enum that has at least one non-Unit variant.
+/// The enum value on the WASM stack is an `i32` pointer to
+/// `{ disc: i32, payload_ptr: i32 }` (8 bytes) in the bump-allocated heap.
+#[derive(Debug, Clone)]
+struct PayloadEnumInfo {
+    variants: Vec<PayloadVariant>,
+}
+
 /// Shared per-emission context. Bundles the flags/tables threaded through
 /// every emit_*  free function so their signatures stay stable as the
 /// spike grows (or shrinks). Uses `Cell` for the label counter so the
@@ -80,13 +116,17 @@ struct Ctx<'a> {
     /// Interned string literals: content → (linear-memory offset, byte length).
     literals: &'a HashMap<String, (u32, u32)>,
     /// Enum types whose variants are all `Unit` — lower to `i32` discriminant.
-    /// Enums with tuple/struct payloads are excluded here (they'd need a
-    /// tagged-union memory layout — later phase).
+    /// Enums with tuple/struct payloads are excluded here (they use the
+    /// tagged-union heap layout in `payload_enums`).
     enum_types: &'a std::collections::HashSet<String>,
     /// Qualified unit-variant name (e.g. `"Direction::North"`) → i32 discriminant.
     /// Used both when a variant appears as a `Var` value and as a match
     /// pattern (`Pattern::Ident`).
     enum_variants: &'a HashMap<String, i32>,
+    /// Heap-layout info for struct types (#1821). Key = struct name.
+    struct_layouts: &'a HashMap<String, StructLayout>,
+    /// Heap-layout info for payload-carrying enums (#1821). Key = enum type name.
+    payload_enums: &'a HashMap<String, PayloadEnumInfo>,
     /// Monotonic counter for fresh WAT labels (`$while_0`, `$while_1`, …).
     label_counter: Cell<usize>,
     /// Set by emitters that reach for `runtime/wasm/` symbols (#1819).
@@ -94,6 +134,12 @@ struct Ctx<'a> {
     /// `(import "runtime" "memory" (memory 0))` and appends the needed
     /// `(import "runtime" "_mvl_*" ...)` declarations.
     needs_runtime: Cell<bool>,
+    /// Names of the current function's `String`-typed parameters. These are
+    /// split into two WASM params (`$name_ptr i32, $name_len i32`) in the
+    /// function signature and must be read back as two local.gets. Updated
+    /// at the start of each function in `emit_fn`. String locals that are
+    /// NOT in this set (e.g. match-arm bindings) emit `;; unsupported`.
+    string_params: std::cell::RefCell<std::collections::HashSet<String>>,
 }
 
 impl Ctx<'_> {
@@ -185,6 +231,17 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
     // Returns *MvlOption (Some(value) in bounds, None otherwise).
     ("_mvl_array_get_option_i64", "(param i32 i64) (result i32)"),
     ("_mvl_array_get_option_i32", "(param i32 i64) (result i32)"),
+    // Group D2 — MvlResult (#1821). Heap-allocated `Result[T, E]`.
+    // Tag 0 = Ok, 1 = Err. Ok payload is i64; Err payload is *MvlString (i32).
+    ("_mvl_result_ok_i64", "(param i64) (result i32)"),
+    ("_mvl_result_err_str", "(param i32 i32) (result i32)"),
+    ("_mvl_result_tag", "(param i32) (result i32)"),
+    ("_mvl_result_value_i64", "(param i32) (result i64)"),
+    ("_mvl_result_drop", "(param i32)"),
+    // Group G — struct heap allocation (#1821). `_mvl_struct_alloc(size)`
+    // bump-allocates `size` bytes and returns the pointer as i32. Used for
+    // both struct construction and payload-enum header + payload blocks.
+    ("_mvl_struct_alloc", "(param i32) (result i32)"),
     // Group E — Set ops (#1820). Sort+dedup at construction; linear-scan
     // contains / insert for `Set[T].contains` / `Set[T].insert`.
     ("_mvl_array_dedup_i64", "(param i32)"),
@@ -237,13 +294,18 @@ impl Backend for WasmTextCompiler {
 
         let (literals, heap_start) = collect_literals(&fns, needs_wasi);
         let (enum_types, enum_variants) = collect_enums(&tir.types);
+        let struct_layouts = collect_structs(&tir.types);
+        let payload_enums = collect_payload_enums(&tir.types);
         let ctx = Ctx {
             needs_wasi,
             literals: &literals,
             enum_types: &enum_types,
             enum_variants: &enum_variants,
+            struct_layouts: &struct_layouts,
+            payload_enums: &payload_enums,
             label_counter: Cell::new(0),
             needs_runtime: Cell::new(false),
+            string_params: std::cell::RefCell::new(std::collections::HashSet::new()),
         };
 
         // Emit fns into a scratch buffer first — `emit_assert_eq` on
@@ -303,7 +365,11 @@ impl Backend for WasmTextCompiler {
 /// `if (result T)` — otherwise the WASM validator rejects the fn (values
 /// left over inside a bare `if` block don't propagate to the enclosing
 /// function's return slot).
-fn if_stmt_result_ty(then: &TirBlock, else_: &Option<TirElseBranch>) -> Option<Ty> {
+///
+/// Compares WASM types (not MVL types) so that e.g. `Ok(1)` with type
+/// `Result[Int, Unknown]` and `Err("x")` with type `Result[Unknown, String]`
+/// both lower to i32 and are recognised as compatible block types.
+fn if_stmt_result_ty(then: &TirBlock, else_: &Option<TirElseBranch>, ctx: &Ctx) -> Option<Ty> {
     let t = block_trailing_ty(then)?;
     let e = match else_ {
         Some(TirElseBranch::Block(b)) => block_trailing_ty(b)?,
@@ -312,15 +378,19 @@ fn if_stmt_result_ty(then: &TirBlock, else_: &Option<TirElseBranch>) -> Option<T
                 then: t2,
                 else_: e2,
                 ..
-            } => if_stmt_result_ty(t2, e2)?,
+            } => if_stmt_result_ty(t2, e2, ctx)?,
             _ => return None,
         },
         None => return None,
     };
-    if matches!(t, Ty::Unit) || t != e {
-        None
-    } else {
+    if matches!(t, Ty::Unit) {
+        return None;
+    }
+    // Exact MVL-type match or same WASM type — either is fine for block-typing.
+    if t == e || wasm_ty(&t, ctx) == wasm_ty(&e, ctx) {
         Some(t)
+    } else {
+        None
     }
 }
 
@@ -347,11 +417,34 @@ fn effective_name(f: &TirFn, needs_wasi: bool) -> (&str, &str) {
 
 fn emit_fn(out: &mut String, f: &TirFn, ctx: &Ctx) {
     let (wasm_name, _) = effective_name(f, ctx.needs_wasi);
+    // Populate the per-function String-param set so the Var emitter knows
+    // which String locals are split (ptr, len) params vs unsupported locals.
+    {
+        let mut sp = ctx.string_params.borrow_mut();
+        sp.clear();
+        for p in &f.params {
+            if matches!(&p.ty, Ty::String) {
+                sp.insert(p.name.clone());
+            }
+        }
+    }
+
     out.push_str(&format!("  (func ${wasm_name}"));
     for p in &f.params {
-        out.push_str(&format!(" (param ${} {})", p.name, wasm_ty(&p.ty, ctx)));
+        if matches!(&p.ty, Ty::String) {
+            // String params split into two i32 WASM params: (ptr, len).
+            out.push_str(&format!(
+                " (param ${}_ptr i32) (param ${}_len i32)",
+                p.name, p.name
+            ));
+        } else {
+            out.push_str(&format!(" (param ${} {})", p.name, wasm_ty(&p.ty, ctx)));
+        }
     }
-    if !matches!(f.ret_ty, Ty::Unit) {
+    if matches!(f.ret_ty, Ty::String) {
+        // String returns as two i32s (ptr, len) — WASM multi-value return.
+        out.push_str(" (result i32 i32)");
+    } else if !matches!(f.ret_ty, Ty::Unit) {
         out.push_str(&format!(" (result {})", wasm_ty(&f.ret_ty, ctx)));
     }
     out.push('\n');
@@ -365,6 +458,17 @@ fn emit_fn(out: &mut String, f: &TirFn, ctx: &Ctx) {
     let mut body = String::new();
     let mut locals: Vec<(String, Ty)> = Vec::new();
     collect_locals_block(&f.body, &mut locals);
+    // Second pass: ctx-aware scan for temps that can only be discovered with
+    // type-registry info (payload-enum unit-variant Var temps, string-field
+    // unpack temps from FieldAccess). These use span-based names that the
+    // emit path and collect path must agree on.
+    collect_locals_ctx(&f.body, &mut locals, ctx);
+    // Deduplicate (collect passes may register the same name from nested
+    // expressions or speculative String locals; WAT rejects duplicates).
+    {
+        let mut seen = std::collections::HashSet::new();
+        locals.retain(|(name, _)| seen.insert(name.clone()));
+    }
     for (name, ty) in &locals {
         body.push_str(&format!("    (local ${} {})\n", name, wasm_ty(ty, ctx)));
     }
@@ -443,13 +547,195 @@ fn collect_locals_block(block: &TirBlock, locals: &mut Vec<(String, Ty)>) {
     }
 }
 
+// ── ctx-aware local scan (#1821) ─────────────────────────────────────────
+//
+// A second pass over the function body that requires `ctx` to identify:
+//  - Payload-enum unit-variant `Var` expressions → `__ev_<off>` (i32)
+//  - String-field `FieldAccess` reads → `__sf_<off>_<len>` (i32)
+//
+// The main `collect_locals_*` functions can't see these because they don't
+// carry `ctx`. This pass is run after the main scan in `emit_fn`.
+
+fn collect_locals_ctx(block: &TirBlock, locals: &mut Vec<(String, Ty)>, ctx: &Ctx) {
+    for s in &block.stmts {
+        collect_locals_ctx_stmt(s, locals, ctx);
+    }
+}
+
+fn collect_locals_ctx_stmt(stmt: &TirStmt, locals: &mut Vec<(String, Ty)>, ctx: &Ctx) {
+    match stmt {
+        TirStmt::Let { init, .. } => collect_locals_ctx_expr(init, locals, ctx),
+        TirStmt::Assign { value, .. } => collect_locals_ctx_expr(value, locals, ctx),
+        TirStmt::Return { value: Some(v), .. } => collect_locals_ctx_expr(v, locals, ctx),
+        TirStmt::Expr { expr, .. } => collect_locals_ctx_expr(expr, locals, ctx),
+        TirStmt::If { cond, then, else_, .. } => {
+            collect_locals_ctx_expr(cond, locals, ctx);
+            collect_locals_ctx(then, locals, ctx);
+            match else_ {
+                Some(TirElseBranch::Block(b)) => collect_locals_ctx(b, locals, ctx),
+                Some(TirElseBranch::If(s)) => collect_locals_ctx_stmt(s, locals, ctx),
+                None => {}
+            }
+        }
+        TirStmt::While { cond, body, .. } => {
+            collect_locals_ctx_expr(cond, locals, ctx);
+            collect_locals_ctx(body, locals, ctx);
+        }
+        TirStmt::For { iter, body, .. } => {
+            collect_locals_ctx_expr(iter, locals, ctx);
+            collect_locals_ctx(body, locals, ctx);
+        }
+        TirStmt::Match { scrutinee, arms, .. } => {
+            collect_locals_ctx_expr(scrutinee, locals, ctx);
+            for arm in arms {
+                match &arm.body {
+                    TirMatchBody::Expr(e) => collect_locals_ctx_expr(e, locals, ctx),
+                    TirMatchBody::Block(b) => collect_locals_ctx(b, locals, ctx),
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_locals_ctx_expr(expr: &TirExpr, locals: &mut Vec<(String, Ty)>, ctx: &Ctx) {
+    match &expr.kind {
+        TirExprKind::Var(name) => {
+            // Payload-enum unit-variant used as a value: `Shape::Point`.
+            if let Some((type_name, _)) = name.split_once("::") {
+                if let Some(info) = ctx.payload_enums.get(type_name) {
+                    if info.variants.iter().any(|v| v.name == *name && v.fields.is_empty()) {
+                        // __ev_<off>: i32 pointer from _mvl_struct_alloc.
+                        locals.push((format!("__ev_{}", expr.span.offset), Ty::Bool));
+                    }
+                }
+            }
+        }
+        TirExprKind::FieldAccess { expr: recv, field } => {
+            collect_locals_ctx_expr(recv, locals, ctx);
+            // String-field reads unpack via a tee temp.
+            let struct_name = match &recv.ty {
+                Ty::Named(n, _) => Some(n.clone()),
+                Ty::Ref(_, inner) => {
+                    if let Ty::Named(n, _) = inner.as_ref() {
+                        Some(n.clone())
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+            if let Some(sname) = struct_name {
+                if let Some(layout) = ctx.struct_layouts.get(&sname) {
+                    if let Some(slot) = layout.fields.iter().find(|s| s.name == *field) {
+                        if matches!(slot.ty, Ty::String) {
+                            locals.push((
+                                format!("__sf_{}_{}", slot.offset, field.len()),
+                                Ty::Bool, // i32 placeholder
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        TirExprKind::Construct { name, fields } => {
+            // __st_* is registered by the ctx-unaware pass (it always applies).
+            // __ep_* (payload area pointer for enum variants) needs ctx.
+            if name.contains("::") {
+                if let Some((type_name, _)) = name.split_once("::") {
+                    if let Some(info) = ctx.payload_enums.get(type_name) {
+                        if let Some(pv) = info.variants.iter().find(|v| v.name == *name) {
+                            if pv.payload_size > 0 {
+                                locals.push((
+                                    format!("__ep_{}_{}", expr.span.offset, expr.span.len),
+                                    Ty::Bool, // i32 placeholder
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+            for (_, e) in fields {
+                collect_locals_ctx_expr(e, locals, ctx);
+            }
+        }
+        TirExprKind::Propagate(inner) => collect_locals_ctx_expr(inner, locals, ctx),
+        TirExprKind::If { cond, then, else_ } => {
+            collect_locals_ctx_expr(cond, locals, ctx);
+            collect_locals_ctx(then, locals, ctx);
+            if let Some(e) = else_ {
+                collect_locals_ctx_expr(e, locals, ctx);
+            }
+        }
+        TirExprKind::Match { scrutinee, arms } => {
+            collect_locals_ctx_expr(scrutinee, locals, ctx);
+            for arm in arms {
+                match &arm.body {
+                    TirMatchBody::Expr(e) => collect_locals_ctx_expr(e, locals, ctx),
+                    TirMatchBody::Block(b) => collect_locals_ctx(b, locals, ctx),
+                }
+            }
+        }
+        TirExprKind::Block(b) => collect_locals_ctx(b, locals, ctx),
+        TirExprKind::Binary { left, right, .. } => {
+            collect_locals_ctx_expr(left, locals, ctx);
+            collect_locals_ctx_expr(right, locals, ctx);
+        }
+        TirExprKind::Unary { expr: inner, .. } => collect_locals_ctx_expr(inner, locals, ctx),
+        TirExprKind::FnCall { name, args, .. } => {
+            // Enum-variant FnCall (`Shape::Circle(5)`) routed to emit_construct
+            // needs the same __st_* and __ep_* temps as TirExprKind::Construct.
+            if let Some((type_name, _)) = name.split_once("::") {
+                if let Some(info) = ctx.payload_enums.get(type_name) {
+                    locals.push((struct_temp_name(expr), Ty::Bool));
+                    if let Some(pv) = info.variants.iter().find(|v| v.name == *name) {
+                        if pv.payload_size > 0 {
+                            locals.push((
+                                format!("__ep_{}_{}", expr.span.offset, expr.span.len),
+                                Ty::Bool,
+                            ));
+                        }
+                    }
+                }
+            }
+            for a in args {
+                collect_locals_ctx_expr(a, locals, ctx);
+            }
+        }
+        TirExprKind::MethodCall { receiver, args, .. } => {
+            collect_locals_ctx_expr(receiver, locals, ctx);
+            for a in args {
+                collect_locals_ctx_expr(a, locals, ctx);
+            }
+        }
+        TirExprKind::List { elems } | TirExprKind::Set { elems } => {
+            for e in elems {
+                collect_locals_ctx_expr(e, locals, ctx);
+            }
+        }
+        TirExprKind::Map { pairs } => {
+            for (k, v) in pairs {
+                collect_locals_ctx_expr(k, locals, ctx);
+                collect_locals_ctx_expr(v, locals, ctx);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn collect_locals_stmt(stmt: &TirStmt, locals: &mut Vec<(String, Ty)>) {
     match stmt {
         TirStmt::Let {
             pattern, ty, init, ..
         } => {
             if let Pattern::Ident(name, _) = pattern {
-                locals.push((name.clone(), ty.clone()));
+                if matches!(ty, Ty::String) {
+                    // String variables use split (ptr, len) locals.
+                    locals.push((format!("{name}_ptr"), Ty::Bool)); // i32
+                    locals.push((format!("{name}_len"), Ty::Bool)); // i32
+                } else {
+                    locals.push((name.clone(), ty.clone()));
+                }
             }
             collect_locals_expr(init, locals);
         }
@@ -514,14 +800,7 @@ fn collect_locals_stmt(stmt: &TirStmt, locals: &mut Vec<(String, Ty)>) {
             collect_locals_expr(scrutinee, locals);
             let inner_ty = option_inner_ty(&scrutinee.ty).cloned();
             for arm in arms {
-                if let Pattern::Some { inner, .. } = &arm.pattern {
-                    if let Pattern::Ident(name, _) = inner.as_ref() {
-                        if name != "_" {
-                            let ty = inner_ty.clone().unwrap_or(Ty::Int);
-                            locals.push((name.clone(), ty));
-                        }
-                    }
-                }
+                collect_match_arm_locals(arm, &scrutinee.ty, inner_ty.as_ref(), span.offset, locals);
                 match &arm.body {
                     TirMatchBody::Expr(e) => collect_locals_expr(e, locals),
                     TirMatchBody::Block(b) => collect_locals_block(b, locals),
@@ -547,24 +826,31 @@ fn collect_locals_expr(expr: &TirExpr, locals: &mut Vec<(String, Ty)>) {
             // the scrutinee here so it doesn't re-evaluate per arm.
             locals.push((match_temp_name(expr), scrutinee.ty.clone()));
             collect_locals_expr(scrutinee, locals);
-            // Some(inner) patterns bind `inner` — declare it as a fn-scoped
-            // local of the Option's payload type so `local.set` in the arm
-            // body validates. Skips `_`.
             let inner_ty = option_inner_ty(&scrutinee.ty).cloned();
+            let span_off = expr.span.offset;
             for arm in arms {
-                if let Pattern::Some { inner, .. } = &arm.pattern {
-                    if let Pattern::Ident(name, _) = inner.as_ref() {
-                        if name != "_" {
-                            let ty = inner_ty.clone().unwrap_or(Ty::Int);
-                            locals.push((name.clone(), ty));
-                        }
-                    }
-                }
+                collect_match_arm_locals(arm, &scrutinee.ty, inner_ty.as_ref(), span_off, locals);
                 match &arm.body {
                     TirMatchBody::Expr(e) => collect_locals_expr(e, locals),
                     TirMatchBody::Block(b) => collect_locals_block(b, locals),
                 }
             }
+        }
+        TirExprKind::Construct { fields, .. } => {
+            // Struct/enum-variant construction needs a temp i32 local for the
+            // allocated pointer so `local.tee` during field stores works.
+            locals.push((struct_temp_name(expr), Ty::Bool)); // Bool → i32 placeholder
+            for (_, e) in fields {
+                collect_locals_expr(e, locals);
+            }
+        }
+        TirExprKind::FieldAccess { expr: recv, .. } => {
+            collect_locals_expr(recv, locals);
+        }
+        TirExprKind::Propagate(inner) => {
+            collect_locals_expr(inner, locals);
+            // Temp i32 to stash the Result pointer for tag check.
+            locals.push((propagate_temp_name(expr), Ty::Bool)); // i32 placeholder
         }
         TirExprKind::Block(b) => collect_locals_block(b, locals),
         TirExprKind::Binary { left, right, .. } => {
@@ -646,10 +932,16 @@ fn emit_stmt(out: &mut String, stmt: &TirStmt, ctx: &Ctx) {
         // `let x: T = init;`  (or `let x: ref T = init;` — same lowering)
         // The local was already declared in the fn prelude via
         // `collect_locals_block`. Here we just evaluate the init and store.
-        TirStmt::Let { pattern, init, .. } => {
+        TirStmt::Let { pattern, ty, init, .. } => {
             if let Pattern::Ident(name, _) = pattern {
                 emit_expr(out, init, ctx);
-                out.push_str(&format!("    local.set ${name}\n"));
+                if matches!(ty, Ty::String) {
+                    // Init leaves (ptr, len) on stack — store into split locals.
+                    out.push_str(&format!("    local.set ${name}_len\n"));
+                    out.push_str(&format!("    local.set ${name}_ptr\n"));
+                } else {
+                    out.push_str(&format!("    local.set ${name}\n"));
+                }
             } else {
                 out.push_str(&format!("    ;; unsupported let pattern: {pattern:?}\n"));
             }
@@ -674,7 +966,10 @@ fn emit_stmt(out: &mut String, stmt: &TirStmt, ctx: &Ctx) {
             cond, then, else_, ..
         } => {
             emit_expr(out, cond, ctx);
-            match if_stmt_result_ty(then, else_) {
+            match if_stmt_result_ty(then, else_, ctx) {
+                Some(ty) if matches!(ty, Ty::String) => {
+                    out.push_str("    if (result i32 i32)\n");
+                }
                 Some(ty) => {
                     out.push_str(&format!("    if (result {})\n", wasm_ty(&ty, ctx)));
                 }
@@ -699,7 +994,7 @@ fn emit_stmt(out: &mut String, stmt: &TirStmt, ctx: &Ctx) {
             arms,
             span,
         } => {
-            let result_ty = match_arms_result_ty(arms);
+            let result_ty = match_arms_result_ty(arms, ctx);
             emit_match_impl(out, scrutinee, arms, result_ty, span.offset, ctx);
         }
         // `while cond { body }` — canonical WASM shape:
@@ -770,14 +1065,61 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             // locals by presence in the enum-variant registry.
             if let Some(&id) = ctx.enum_variants.get(name) {
                 out.push_str(&format!("    i32.const {id}\n"));
-            } else {
-                out.push_str(&format!("    local.get ${name}\n"));
+                return;
             }
+            // Unit variants within a payload enum (e.g. `Shape::Point`).
+            // These appear as `Var("Shape::Point")` but aren't in
+            // `enum_variants` (which only covers all-unit enums). Look them
+            // up in `payload_enums` and emit a heap-allocated enum header.
+            if let Some((type_name, _)) = name.split_once("::") {
+                if let Some(info) = ctx.payload_enums.get(type_name) {
+                    if let Some(pv) = info.variants.iter().find(|v| v.name == *name) {
+                        ctx.needs_runtime.set(true);
+                        let disc = pv.disc;
+                        // Alloc 8 bytes: { disc: i32, payload_ptr: i32 }.
+                        out.push_str("    i32.const 8\n");
+                        out.push_str("    call $_mvl_struct_alloc\n");
+                        // dup pointer for two stores.
+                        let tmp = format!("__ev_{}", expr.span.offset);
+                        out.push_str(&format!("    local.tee ${tmp}\n"));
+                        out.push_str(&format!("    i32.const {disc}\n"));
+                        out.push_str("    i32.store offset=0\n");
+                        // payload_ptr = 0 for unit variant.
+                        out.push_str(&format!("    local.get ${tmp}\n"));
+                        out.push_str("    i32.const 0\n");
+                        out.push_str("    i32.store offset=4\n");
+                        out.push_str(&format!("    local.get ${tmp}\n"));
+                        return;
+                    }
+                }
+            }
+            // All String variables (params, let-bindings, match-arm bindings)
+            // use split (ptr, len) locals named $name_ptr / $name_len.
+            if matches!(&expr.ty, Ty::String) {
+                out.push_str(&format!("    local.get ${name}_ptr\n"));
+                out.push_str(&format!("    local.get ${name}_len\n"));
+                return;
+            }
+            out.push_str(&format!("    local.get ${name}\n"));
         }
         TirExprKind::Unary { op, expr: inner } => {
             emit_unary(out, *op, inner, ctx);
         }
         TirExprKind::Binary { op, left, right } => {
+            // String equality/inequality — route through runtime, same as
+            // assert_eq[String]. Leaves i32 (0 or 1) on the stack.
+            if matches!(&left.ty, Ty::String)
+                && matches!(op, BinaryOp::Eq | BinaryOp::Ne)
+            {
+                ctx.needs_runtime.set(true);
+                emit_expr(out, left, ctx);   // (ptr1, len1)
+                emit_expr(out, right, ctx);  // (ptr2, len2)
+                out.push_str("    call $_mvl_string_eq\n");
+                if matches!(op, BinaryOp::Ne) {
+                    out.push_str("    i32.eqz\n");
+                }
+                return;
+            }
             emit_binary(out, *op, left, right, ctx);
         }
         TirExprKind::FnCall { name, args, .. } => {
@@ -816,6 +1158,40 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
                 let inner = option_inner_ty(&expr.ty).cloned().unwrap_or(Ty::Int);
                 let (some_ctor, _) = option_ops_for(&inner, ctx);
                 out.push_str(&format!("    call ${some_ctor}\n"));
+                return;
+            }
+            // `Shape::Circle(5)` — positional enum-variant constructor written
+            // with call syntax. The parser emits FnCall (not Construct) for
+            // `Type::Variant(args)` forms. Route to the same emit path as
+            // `TirExprKind::Construct` for `::` names whose type-prefix is a
+            // known payload enum.
+            if let Some((type_name, _)) = name.split_once("::") {
+                if ctx.payload_enums.contains_key(type_name) {
+                    let fields: Vec<(String, TirExpr)> = args
+                        .iter()
+                        .enumerate()
+                        .map(|(i, a)| (i.to_string(), a.clone()))
+                        .collect();
+                    emit_construct(out, name, &fields, expr, ctx);
+                    return;
+                }
+            }
+            // `Ok(v)` — Result constructor, corpus scope: Ok payload is Int (i64).
+            if name == "Ok" && args.len() == 1 && matches!(&expr.ty, Ty::Result(_, _)) {
+                ctx.needs_runtime.set(true);
+                emit_expr(out, &args[0], ctx);
+                // Widen i32 payloads (Bool/enum) to i64 for the runtime slot.
+                if is_i32(&args[0].ty, ctx) {
+                    out.push_str("    i64.extend_i32_s\n");
+                }
+                out.push_str("    call $_mvl_result_ok_i64\n");
+                return;
+            }
+            // `Err(e)` — Result constructor. Corpus scope: Err payload is String.
+            if name == "Err" && args.len() == 1 && matches!(&expr.ty, Ty::Result(_, _)) {
+                ctx.needs_runtime.set(true);
+                emit_expr(out, &args[0], ctx); // pushes (ptr, len) for String
+                out.push_str("    call $_mvl_result_err_str\n");
                 return;
             }
             for a in args {
@@ -1150,6 +1526,8 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             let is_unit = matches!(expr.ty, Ty::Unit);
             if is_unit {
                 out.push_str("    if\n");
+            } else if matches!(expr.ty, Ty::String) {
+                out.push_str("    if (result i32 i32)\n");
             } else {
                 out.push_str(&format!("    if (result {})\n", wasm_ty(&expr.ty, ctx)));
             }
@@ -1164,6 +1542,18 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
                 out.push_str("    ;; if-expr with missing else\n");
             }
             out.push_str("    end\n");
+        }
+        // `Name { field: val, … }` — struct or enum-variant construction (#1821).
+        TirExprKind::Construct { name, fields } => {
+            emit_construct(out, name, fields, expr, ctx);
+        }
+        // `expr.field` — struct field access (#1821).
+        TirExprKind::FieldAccess { expr: recv, field } => {
+            emit_field_access(out, recv, field, ctx);
+        }
+        // `expr?` — propagate Result failure (#1821).
+        TirExprKind::Propagate(inner) => {
+            emit_propagate(out, inner, expr, ctx);
         }
         other => {
             out.push_str(&format!("    ;; unsupported expr: {other:?}\n"));
@@ -1366,7 +1756,13 @@ fn emit_match_impl(
     let temp = format!("__match_{}", span_offset);
     let if_open: String = result_ty
         .as_ref()
-        .map(|t| format!("    if (result {})\n", wasm_ty(t, ctx)))
+        .map(|t| {
+            if matches!(t, Ty::String) {
+                "    if (result i32 i32)\n".to_string()
+            } else {
+                format!("    if (result {})\n", wasm_ty(t, ctx))
+            }
+        })
         .unwrap_or_else(|| "    if\n".to_string());
 
     // Store scrutinee once — arms compare against it repeatedly.
@@ -1440,11 +1836,152 @@ fn emit_match_impl(
                 out.push_str("    else\n");
                 open_ifs += 1;
             }
+            // `Ok(inner)` pattern on Result[T, E]. Check tag == 0.
+            Pattern::Ok { inner, .. } => {
+                ctx.needs_runtime.set(true);
+                out.push_str(&format!("    local.get ${temp}\n"));
+                out.push_str("    call $_mvl_result_tag\n");
+                out.push_str("    i32.eqz\n"); // 1 when tag == 0 (Ok)
+                out.push_str(&if_open);
+                if let Pattern::Ident(name, _) = inner.as_ref() {
+                    if name != "_" {
+                        out.push_str(&format!("    local.get ${temp}\n"));
+                        out.push_str("    call $_mvl_result_value_i64\n");
+                        out.push_str(&format!("    local.set ${name}\n"));
+                    }
+                }
+                emit_match_body(out, &arm.body, ctx);
+                out.push_str("    else\n");
+                open_ifs += 1;
+            }
+            // `Err(inner)` pattern on Result[T, E]. Check tag == 1.
+            Pattern::Err { inner, .. } => {
+                ctx.needs_runtime.set(true);
+                out.push_str(&format!("    local.get ${temp}\n"));
+                out.push_str("    call $_mvl_result_tag\n");
+                // tag == 1 is truthy directly.
+                out.push_str(&if_open);
+                // Bind inner only if named and non-wildcard. For corpus the
+                // error is String — extracted as *MvlString i32; not
+                // unpacked to (ptr, len) since corpus Err arms discard it.
+                if let Pattern::Ident(name, _) = inner.as_ref() {
+                    if name != "_" {
+                        out.push_str(&format!("    local.get ${temp}\n"));
+                        out.push_str("    call $_mvl_result_value_i64\n");
+                        // Narrow to i32 pointer for String payload.
+                        out.push_str("    i32.wrap_i64\n");
+                        out.push_str(&format!("    local.set ${name}\n"));
+                    }
+                }
+                emit_match_body(out, &arm.body, ctx);
+                out.push_str("    else\n");
+                open_ifs += 1;
+            }
+            // `Variant(f1, f2, …)` — payload enum pattern (#1821).
+            // `Pattern::TupleStruct { name: "Shape::Circle", fields: [pat] }`
+            Pattern::TupleStruct { name: variant_name, fields: pats, .. } => {
+                // Find the variant in the payload-enum registry.
+                let type_name = variant_name.split_once("::").map(|(t, _)| t).unwrap_or("");
+                let pv_opt = ctx
+                    .payload_enums
+                    .get(type_name)
+                    .and_then(|info| info.variants.iter().find(|v| v.name == *variant_name));
+                let Some(pv) = pv_opt else {
+                    out.push_str(&format!(
+                        "    ;; unsupported TupleStruct pattern (unknown variant): {variant_name}\n"
+                    ));
+                    for _ in 0..open_ifs {
+                        out.push_str("    end\n");
+                    }
+                    return;
+                };
+                ctx.needs_runtime.set(true);
+                let disc = pv.disc;
+                let pat_off = arm.pattern.span().offset;
+                // Load discriminant from header offset 0 and compare.
+                out.push_str(&format!("    local.get ${temp}\n"));
+                out.push_str("    i32.load offset=0\n");
+                out.push_str(&format!("    i32.const {disc}\n"));
+                out.push_str("    i32.eq\n");
+                out.push_str(&if_open);
+                // Load payload_ptr from header offset 4.
+                let payload_ptr_local = format!("__pp_{span_offset}_{pat_off}");
+                out.push_str(&format!("    local.get ${temp}\n"));
+                out.push_str("    i32.load offset=4\n");
+                out.push_str(&format!("    local.set ${payload_ptr_local}\n"));
+                // Bind each named pattern field from the payload at slot × 8.
+                for (slot, pat) in pats.iter().enumerate() {
+                    if let Pattern::Ident(name, _) = pat {
+                        if name != "_" {
+                            let field_ty = pv.fields.get(slot).cloned().unwrap_or(Ty::Int);
+                            let byte_off = (slot as u32) * 8;
+                            out.push_str(&format!("    local.get ${payload_ptr_local}\n"));
+                            if matches!(field_ty, Ty::String) {
+                                // String payload: stored as i64-extended *MvlString.
+                                // Load, narrow to i32, unpack to (ptr, len) split locals.
+                                out.push_str(&format!("    i64.load offset={byte_off}\n"));
+                                out.push_str("    i32.wrap_i64\n");
+                                let sv_tmp = format!("__sv_{}_{}", byte_off, name.len());
+                                out.push_str(&format!("    local.tee ${sv_tmp}\n"));
+                                out.push_str(&format!("    i32.load offset={MVL_STRING_OFFSET_PTR}\n"));
+                                out.push_str(&format!("    local.set ${name}_ptr\n"));
+                                out.push_str(&format!("    local.get ${sv_tmp}\n"));
+                                out.push_str(&format!("    i32.load offset={MVL_STRING_OFFSET_LEN}\n"));
+                                out.push_str(&format!("    local.set ${name}_len\n"));
+                            } else {
+                                emit_payload_load(out, &field_ty, byte_off, ctx);
+                                out.push_str(&format!("    local.set ${name}\n"));
+                            }
+                        }
+                    }
+                }
+                emit_match_body(out, &arm.body, ctx);
+                out.push_str("    else\n");
+                open_ifs += 1;
+            }
             Pattern::Wildcard(_) | Pattern::Ident(_, _) => {
-                // First wildcard/ident wins as the default; later arms are
-                // unreachable so we can stop looking.
-                default_body = Some(&arm.body);
-                break;
+                // For payload-enum unit variants inside a TupleStruct enum,
+                // they appear as `Pattern::Ident("Shape::Point", _)`. Check
+                // the payload_enums registry first before treating as default.
+                let is_payload_unit = if let Pattern::Ident(iname, _) = &arm.pattern {
+                    if let Some((tname, _)) = iname.split_once("::") {
+                        ctx.payload_enums
+                            .get(tname)
+                            .and_then(|info| info.variants.iter().find(|v| v.name == *iname))
+                            .map(|pv| pv.fields.is_empty())
+                            .unwrap_or(false)
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+
+                if is_payload_unit {
+                    if let Pattern::Ident(iname, _) = &arm.pattern {
+                        let type_name = iname.split_once("::").map(|(t, _)| t).unwrap_or("");
+                        let disc = ctx
+                            .payload_enums
+                            .get(type_name)
+                            .and_then(|info| info.variants.iter().find(|v| v.name == *iname))
+                            .map(|pv| pv.disc)
+                            .unwrap_or(0);
+                        ctx.needs_runtime.set(true);
+                        out.push_str(&format!("    local.get ${temp}\n"));
+                        out.push_str("    i32.load offset=0\n");
+                        out.push_str(&format!("    i32.const {disc}\n"));
+                        out.push_str("    i32.eq\n");
+                        out.push_str(&if_open);
+                        emit_match_body(out, &arm.body, ctx);
+                        out.push_str("    else\n");
+                        open_ifs += 1;
+                    }
+                } else {
+                    // First wildcard/ident wins as the default; later arms are
+                    // unreachable so we can stop looking.
+                    default_body = Some(&arm.body);
+                    break;
+                }
             }
             other => {
                 out.push_str(&format!("    ;; unsupported match pattern: {other:?}\n"));
@@ -1480,6 +2017,354 @@ fn emit_match_body(out: &mut String, body: &TirMatchBody, ctx: &Ctx) {
     }
 }
 
+// ── Struct and enum-payload construction (#1821) ─────────────────────────
+
+/// Emit `Name { field: val, … }` construction. Dispatches to struct layout
+/// or payload-enum variant layout depending on whether the name contains `::`.
+fn emit_construct(
+    out: &mut String,
+    name: &str,
+    fields: &[(String, TirExpr)],
+    expr: &TirExpr,
+    ctx: &Ctx,
+) {
+    if let Some((type_name, _)) = name.split_once("::") {
+        // Enum-variant construction: `Shape::Circle(5)`.
+        emit_enum_variant_construct(out, name, type_name, fields, expr, ctx);
+    } else {
+        // Struct construction: `Point { x: 3, y: 4 }`.
+        emit_struct_construct(out, name, fields, expr, ctx);
+    }
+}
+
+fn emit_struct_construct(
+    out: &mut String,
+    name: &str,
+    fields: &[(String, TirExpr)],
+    expr: &TirExpr,
+    ctx: &Ctx,
+) {
+    let Some(layout) = ctx.struct_layouts.get(name) else {
+        out.push_str(&format!("    ;; unsupported struct construct: {name}\n"));
+        return;
+    };
+    ctx.needs_runtime.set(true);
+    let temp = struct_temp_name(expr);
+    // Allocate the struct region.
+    out.push_str(&format!("    i32.const {}\n", layout.total_size));
+    out.push_str("    call $_mvl_struct_alloc\n");
+    out.push_str(&format!("    local.set ${temp}\n"));
+    // Store each field at its layout offset.
+    for slot in &layout.fields {
+        let val_expr = fields.iter().find(|(n, _)| n == &slot.name).map(|(_, e)| e);
+        let Some(val) = val_expr else {
+            continue;
+        };
+        out.push_str(&format!("    local.get ${temp}\n"));
+        emit_struct_store(out, val, &slot.ty, slot.offset, ctx);
+    }
+    out.push_str(&format!("    local.get ${temp}\n"));
+}
+
+fn emit_enum_variant_construct(
+    out: &mut String,
+    variant_name: &str,
+    type_name: &str,
+    fields: &[(String, TirExpr)],
+    expr: &TirExpr,
+    ctx: &Ctx,
+) {
+    let Some(info) = ctx.payload_enums.get(type_name) else {
+        out.push_str(&format!(
+            "    ;; unsupported enum variant construct: {variant_name}\n"
+        ));
+        return;
+    };
+    let Some(pv) = info.variants.iter().find(|v| v.name == variant_name) else {
+        out.push_str(&format!(
+            "    ;; unknown variant: {variant_name}\n"
+        ));
+        return;
+    };
+    ctx.needs_runtime.set(true);
+    let temp = struct_temp_name(expr);
+    let disc = pv.disc;
+
+    // Alloc 8 bytes for the enum header { disc: i32, payload_ptr: i32 }.
+    out.push_str("    i32.const 8\n");
+    out.push_str("    call $_mvl_struct_alloc\n");
+    out.push_str(&format!("    local.set ${temp}\n"));
+    // Store discriminant.
+    out.push_str(&format!("    local.get ${temp}\n"));
+    out.push_str(&format!("    i32.const {disc}\n"));
+    out.push_str("    i32.store offset=0\n");
+
+    let field_exprs: Vec<&TirExpr> = fields.iter().map(|(_, e)| e).collect();
+    if pv.payload_size > 0 && !field_exprs.is_empty() {
+        // Alloc payload area and store fields.
+        let payload_temp = format!("__ep_{}_{}", expr.span.offset, expr.span.len);
+        out.push_str(&format!("    i32.const {}\n", pv.payload_size));
+        out.push_str("    call $_mvl_struct_alloc\n");
+        out.push_str(&format!("    local.set ${payload_temp}\n"));
+        for (slot_idx, field_expr) in field_exprs.iter().enumerate() {
+            let byte_off = (slot_idx as u32) * 8;
+            let field_ty = pv.fields.get(slot_idx).cloned().unwrap_or(Ty::Int);
+            out.push_str(&format!("    local.get ${payload_temp}\n"));
+            emit_payload_store(out, field_expr, &field_ty, byte_off, ctx);
+        }
+        // Store payload_ptr in the header.
+        out.push_str(&format!("    local.get ${temp}\n"));
+        out.push_str(&format!("    local.get ${payload_temp}\n"));
+        out.push_str("    i32.store offset=4\n");
+    } else {
+        // Unit variant within a payload enum: payload_ptr = 0.
+        out.push_str(&format!("    local.get ${temp}\n"));
+        out.push_str("    i32.const 0\n");
+        out.push_str("    i32.store offset=4\n");
+    }
+    out.push_str(&format!("    local.get ${temp}\n"));
+}
+
+/// Store a field value into a struct region at `byte_off`. Dispatches on
+/// the field type to choose the correct WASM store opcode.
+fn emit_struct_store(
+    out: &mut String,
+    val: &TirExpr,
+    field_ty: &Ty,
+    byte_off: u32,
+    ctx: &Ctx,
+) {
+    match field_ty {
+        Ty::String => {
+            // String fields are stored as *MvlString (i32 pointer).
+            // val pushes (ptr, len); call _mvl_string_new to heap-allocate.
+            ctx.needs_runtime.set(true);
+            emit_expr(out, val, ctx);
+            out.push_str("    call $_mvl_string_new\n");
+            out.push_str(&format!("    i32.store offset={byte_off}\n"));
+        }
+        Ty::Float => {
+            emit_expr(out, val, ctx);
+            out.push_str(&format!("    f64.store offset={byte_off}\n"));
+        }
+        _ if is_i32(field_ty, ctx) => {
+            emit_expr(out, val, ctx);
+            out.push_str(&format!("    i32.store offset={byte_off}\n"));
+        }
+        _ => {
+            // Default: i64 (Int and other 8-byte types).
+            emit_expr(out, val, ctx);
+            out.push_str(&format!("    i64.store offset={byte_off}\n"));
+        }
+    }
+}
+
+/// Store a payload-enum field (always 8-byte slots) at `byte_off`.
+fn emit_payload_store(
+    out: &mut String,
+    val: &TirExpr,
+    field_ty: &Ty,
+    byte_off: u32,
+    ctx: &Ctx,
+) {
+    match field_ty {
+        Ty::String => {
+            ctx.needs_runtime.set(true);
+            emit_expr(out, val, ctx);
+            out.push_str("    call $_mvl_string_new\n");
+            // Widen *MvlString i32 to i64 for the 8-byte slot.
+            out.push_str("    i64.extend_i32_u\n");
+            out.push_str(&format!("    i64.store offset={byte_off}\n"));
+        }
+        Ty::Float => {
+            emit_expr(out, val, ctx);
+            out.push_str(&format!("    f64.store offset={byte_off}\n"));
+        }
+        _ if is_i32(field_ty, ctx) => {
+            emit_expr(out, val, ctx);
+            // Widen i32 to i64 for the uniform 8-byte slot.
+            out.push_str("    i64.extend_i32_u\n");
+            out.push_str(&format!("    i64.store offset={byte_off}\n"));
+        }
+        _ => {
+            emit_expr(out, val, ctx);
+            out.push_str(&format!("    i64.store offset={byte_off}\n"));
+        }
+    }
+}
+
+/// Load a field from a payload area (8-byte slots). Leaves the correct WASM
+/// type on the stack for the field's declared type.
+fn emit_payload_load(out: &mut String, field_ty: &Ty, byte_off: u32, ctx: &Ctx) {
+    match field_ty {
+        Ty::Float => {
+            out.push_str(&format!("    f64.load offset={byte_off}\n"));
+        }
+        Ty::String => {
+            // Stored as i64-extended *MvlString; narrow back to i32.
+            out.push_str(&format!("    i64.load offset={byte_off}\n"));
+            out.push_str("    i32.wrap_i64\n");
+            // Now we have *MvlString; unpack to (ptr, len).
+            // Store in temp, load .ptr @ 0, load .len @ 4.
+            // (Caller stores the i32 *MvlString in the named local.)
+        }
+        _ if is_i32(field_ty, ctx) => {
+            out.push_str(&format!("    i64.load offset={byte_off}\n"));
+            out.push_str("    i32.wrap_i64\n");
+        }
+        _ => {
+            out.push_str(&format!("    i64.load offset={byte_off}\n"));
+        }
+    }
+}
+
+// ── Field access (#1821) ─────────────────────────────────────────────────
+
+/// Emit `recv.field` — struct field read.
+fn emit_field_access(out: &mut String, recv: &TirExpr, field: &str, ctx: &Ctx) {
+    let struct_name = match &recv.ty {
+        Ty::Named(n, _) => n.clone(),
+        Ty::Ref(_, inner) => match inner.as_ref() {
+            Ty::Named(n, _) => n.clone(),
+            _ => {
+                out.push_str(&format!("    ;; unsupported field access recv ty: {:?}\n", recv.ty));
+                return;
+            }
+        },
+        _ => {
+            out.push_str(&format!("    ;; unsupported field access recv ty: {:?}\n", recv.ty));
+            return;
+        }
+    };
+    let Some(layout) = ctx.struct_layouts.get(&struct_name) else {
+        out.push_str(&format!("    ;; unknown struct for field access: {struct_name}\n"));
+        return;
+    };
+    let Some(slot) = layout.fields.iter().find(|s| s.name == field) else {
+        out.push_str(&format!("    ;; unknown field: {struct_name}.{field}\n"));
+        return;
+    };
+    emit_expr(out, recv, ctx); // leaves *struct on stack
+    let byte_off = slot.offset;
+    match &slot.ty {
+        Ty::String => {
+            // Stored as *MvlString. Load the i32 pointer, then unpack
+            // to (ptr, len) so downstream code sees the standard repr.
+            ctx.needs_runtime.set(true);
+            out.push_str(&format!("    i32.load offset={byte_off}\n"));
+            // Now *MvlString is on stack. Load .ptr and .len.
+            // Use a temp approach: the string field unpack needs a tee.
+            // We re-emit the struct load approach:
+            // Actually we already consumed the struct ptr via emit_expr.
+            // The *MvlString ptr is on stack — unpack inline.
+            let tmp_name = format!("__sf_{}_{}", byte_off, field.len());
+            out.push_str(&format!("    local.tee ${tmp_name}\n"));
+            out.push_str(&format!("    i32.load offset={MVL_STRING_OFFSET_PTR}\n"));
+            out.push_str(&format!("    local.get ${tmp_name}\n"));
+            out.push_str(&format!("    i32.load offset={MVL_STRING_OFFSET_LEN}\n"));
+        }
+        Ty::Float => {
+            out.push_str(&format!("    f64.load offset={byte_off}\n"));
+        }
+        _ if is_i32(&slot.ty, ctx) => {
+            out.push_str(&format!("    i32.load offset={byte_off}\n"));
+        }
+        _ => {
+            out.push_str(&format!("    i64.load offset={byte_off}\n"));
+        }
+    }
+}
+
+// ── Result propagation (#1821) ───────────────────────────────────────────
+
+/// Emit `inner?` — evaluate `inner`, check the Result tag; if Err return
+/// early, if Ok extract and leave the i64 payload on the stack.
+fn emit_propagate(out: &mut String, inner: &TirExpr, expr: &TirExpr, ctx: &Ctx) {
+    ctx.needs_runtime.set(true);
+    let temp = propagate_temp_name(expr);
+    emit_expr(out, inner, ctx); // leaves *MvlResult (i32) on stack
+    out.push_str(&format!("    local.tee ${temp}\n"));
+    out.push_str("    call $_mvl_result_tag\n");
+    out.push_str("    i32.eqz\n"); // 1 if Ok
+    out.push_str("    if (result i64)\n");
+    // Ok path: extract i64 payload.
+    out.push_str(&format!("    local.get ${temp}\n"));
+    out.push_str("    call $_mvl_result_value_i64\n");
+    out.push_str("    else\n");
+    // Err path: re-wrap and early-return the Result.
+    // Drop the Ok-path temp; return inner's *MvlResult to caller.
+    out.push_str(&format!("    local.get ${temp}\n"));
+    out.push_str("    return\n");
+    // WASM if requires both branches to leave same type. After `return`
+    // the else-branch is dead, but the validator still needs the type to
+    // match. Push an unreachable i64 as a type placeholder.
+    out.push_str("    i64.const 0\n");
+    out.push_str("    end\n");
+}
+
+// ── Local collection helpers (#1821) ─────────────────────────────────────
+
+/// Declare locals needed by a single match arm pattern. Extracted so both
+/// `collect_locals_stmt` (TirStmt::Match) and `collect_locals_expr`
+/// (TirExprKind::Match) can share the same logic.
+fn collect_match_arm_locals(
+    arm: &TirMatchArm,
+    _scrutinee_ty: &Ty,
+    option_inner: Option<&Ty>,
+    span_offset: u32,
+    locals: &mut Vec<(String, Ty)>,
+) {
+    match &arm.pattern {
+        Pattern::Some { inner, .. } => {
+            if let Pattern::Ident(name, _) = inner.as_ref() {
+                if name != "_" {
+                    let ty = option_inner.cloned().unwrap_or(Ty::Int);
+                    locals.push((name.clone(), ty));
+                }
+            }
+        }
+        Pattern::Ok { inner, .. } => {
+            if let Pattern::Ident(name, _) = inner.as_ref() {
+                if name != "_" {
+                    locals.push((name.clone(), Ty::Int));
+                }
+            }
+        }
+        Pattern::Err { inner, .. } => {
+            if let Pattern::Ident(name, _) = inner.as_ref() {
+                if name != "_" {
+                    // Err payload is *MvlString (i32). Use Bool as the i32
+                    // placeholder type — wasm_ty maps Bool → i32.
+                    locals.push((name.clone(), Ty::Bool));
+                }
+            }
+        }
+        Pattern::TupleStruct { name: vname, fields: pats, span, .. } => {
+            // Payload pointer temp — uses (match span_offset, pattern span offset)
+            // to match the name emitted by emit_match_impl.
+            locals.push((
+                format!("__pp_{}_{}", span_offset, span.offset),
+                Ty::Bool, // i32 placeholder
+            ));
+            let _ = vname;
+            for (slot, pat) in pats.iter().enumerate() {
+                if let Pattern::Ident(n, _) = pat {
+                    if n != "_" {
+                        locals.push((n.clone(), Ty::Int)); // i64 for Int/Bool fields
+                        // Speculatively add split String locals and __sv_* temp.
+                        // Redundant for non-String fields but cheap; deduped later.
+                        locals.push((format!("{n}_ptr"), Ty::Bool)); // i32
+                        locals.push((format!("{n}_len"), Ty::Bool)); // i32
+                        let byte_off = (slot as u32) * 8;
+                        locals.push((format!("__sv_{}_{}", byte_off, n.len()), Ty::Bool));
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 /// WASM equality opcode for a scrutinee type. Types beyond scalar defaults
 /// (String, structs, etc.) fall back to `i64.eq` which is wrong for them —
 /// but the pattern arm would have hit the unsupported case before this
@@ -1504,7 +2389,7 @@ fn match_temp_name(expr: &TirExpr) -> String {
 /// Compute the WASM block-type a statement-form `match` should carry.
 /// Every arm's body must produce a matching non-Unit trailing type, or
 /// we fall back to statement (no-result) form.
-fn match_arms_result_ty(arms: &[TirMatchArm]) -> Option<Ty> {
+fn match_arms_result_ty(arms: &[TirMatchArm], ctx: &Ctx) -> Option<Ty> {
     let mut ty: Option<Ty> = None;
     for arm in arms {
         let arm_ty = match &arm.body {
@@ -1514,7 +2399,8 @@ fn match_arms_result_ty(arms: &[TirMatchArm]) -> Option<Ty> {
         };
         match &ty {
             None => ty = Some(arm_ty),
-            Some(t) if *t == arm_ty => {}
+            // Exact MVL match or same WASM type (handles Ok vs Err type differences).
+            Some(t) if *t == arm_ty || wasm_ty(t, ctx) == wasm_ty(&arm_ty, ctx) => {}
             _ => return None,
         }
     }
@@ -1593,6 +2479,18 @@ fn mvl_option_temp_name(expr: &TirExpr) -> String {
 /// flows out to the user-bound `let m` local and must not double-free.
 fn mvl_map_temp_name(expr: &TirExpr) -> String {
     format!("__mm_{}_{}", expr.span.offset, expr.span.len)
+}
+
+/// Temp local for struct / enum-variant construction — holds the allocated
+/// pointer during field stores before returning it on the WASM stack.
+fn struct_temp_name(expr: &TirExpr) -> String {
+    format!("__st_{}_{}", expr.span.offset, expr.span.len)
+}
+
+/// Temp local for `expr?` propagation — holds the `*MvlResult` pointer for
+/// the tag check and branch.
+fn propagate_temp_name(expr: &TirExpr) -> String {
+    format!("__pr_{}_{}", expr.span.offset, expr.span.len)
 }
 
 /// Peel `Ref` / `Labeled` / `Refined` wrappers and return the inner
@@ -1825,13 +2723,16 @@ fn wasm_ty(ty: &Ty, ctx: &Ctx) -> &'static str {
         Ty::Float => "f64",
         Ty::Bool | Ty::Byte => "i32",
         Ty::Named(name, _) if ctx.enum_types.contains(name) => "i32",
+        // Heap-allocated struct pointer (#1821).
+        Ty::Named(name, _) if ctx.struct_layouts.contains_key(name.as_str()) => "i32",
+        // Heap-allocated payload-enum pointer (#1821).
+        Ty::Named(name, _) if ctx.payload_enums.contains_key(name.as_str()) => "i32",
         // Heap-allocated collection pointers: `*MvlArray` / `*MvlMap` are
         // opaque i32 addresses on the WASM stack. Element access is via
         // `_mvl_array_get(a, idx) -> i32` + a typed `i64.load` / `f64.load`.
         Ty::List(_) | Ty::Array(_, _) | Ty::Set(_) | Ty::Map(_, _) => "i32",
-        // `Option[T]` / `Result[T, E]` — heap-allocated MvlOption / (future)
-        // MvlResult; treated as opaque i32 pointer on the stack. Accessors
-        // in `runtime/wasm/` unwrap tag + payload (#1821).
+        // `Option[T]` / `Result[T, E]` — heap-allocated MvlOption / MvlResult;
+        // treated as opaque i32 pointer on the stack (#1821).
         Ty::Option(_) | Ty::Result(_, _) => "i32",
         Ty::Ref(_, inner) | Ty::Labeled(_, inner) | Ty::Refined(inner, _) => wasm_ty(inner, ctx),
         _ => "i64",
@@ -1848,12 +2749,17 @@ fn is_float(ty: &Ty) -> bool {
 }
 
 /// True if this MVL type lowers to WASM `i32` (Bool, Byte, unit-variant
-/// enums, or collection pointers). Used to pick between
-/// `i64.*` / `i32.*` / `f64.*` opcode families.
+/// enums, heap pointers for structs/payload-enums/collections/Option/Result).
 fn is_i32(ty: &Ty, ctx: &Ctx) -> bool {
     match ty {
         Ty::Bool | Ty::Byte => true,
-        Ty::Named(name, _) if ctx.enum_types.contains(name) => true,
+        Ty::Named(name, _)
+            if ctx.enum_types.contains(name)
+                || ctx.struct_layouts.contains_key(name.as_str())
+                || ctx.payload_enums.contains_key(name.as_str()) =>
+        {
+            true
+        }
         Ty::List(_) | Ty::Array(_, _) | Ty::Set(_) | Ty::Map(_, _) => true,
         Ty::Option(_) | Ty::Result(_, _) => true,
         Ty::Ref(_, inner) | Ty::Labeled(_, inner) | Ty::Refined(inner, _) => is_i32(inner, ctx),
@@ -1865,8 +2771,8 @@ fn is_i32(ty: &Ty, ctx: &Ctx) -> bool {
 //
 // Pre-scan `TirProgram.types` for enum declarations whose variants are all
 // `Unit`. Those lower to a bare i32 discriminant on the WASM stack. Enums
-// with tuple/struct payloads are skipped here — supporting them needs a
-// tagged-union memory layout (later phase).
+// with any payload variant are excluded here — they use the heap-allocated
+// tagged-union layout registered by `collect_payload_enums`.
 
 fn collect_enums(
     types: &[TirTypeDecl],
@@ -1875,9 +2781,6 @@ fn collect_enums(
     let mut variants = HashMap::new();
     for td in types {
         if let TirTypeBody::Enum(vs) = &td.body {
-            // Only unit-variant enums are handled today. Any payload variant
-            // rules the whole type out — mixing lowerings is worse than
-            // failing loudly on the first unsupported use.
             if vs
                 .iter()
                 .all(|v| matches!(v.fields, TirVariantFields::Unit))
@@ -1890,6 +2793,95 @@ fn collect_enums(
         }
     }
     (enum_types, variants)
+}
+
+// ── Struct layout collection (#1821) ────────────────────────────────────
+//
+// Pre-scan struct type declarations and compute a flat field layout for each.
+// Layout rules:
+//   Int / Float / UInt → 8 bytes (i64 / f64 store)
+//   Bool / Byte        → 4 bytes (i32 store)
+//   String             → 4 bytes (*MvlString pointer; unpacked on read)
+//   all heap ptrs      → 4 bytes (i32: structs, payload enums, Option, Result,
+//                                  collections)
+// Fields are packed at their natural alignment (4 or 8 bytes). Total size is
+// rounded up to 8-byte alignment so adjacent allocations don't share a word.
+
+fn field_byte_size(ty: &Ty) -> u32 {
+    match ty {
+        Ty::Int | Ty::UInt | Ty::Float => 8,
+        // Everything else is an i32-width value in the struct slot.
+        _ => 4,
+    }
+}
+
+fn field_alignment(ty: &Ty) -> u32 {
+    field_byte_size(ty)
+}
+
+fn collect_structs(types: &[TirTypeDecl]) -> HashMap<String, StructLayout> {
+    let mut map = HashMap::new();
+    for td in types {
+        if let TirTypeBody::Struct { fields, .. } = &td.body {
+            let mut offset = 0u32;
+            let mut slots = Vec::new();
+            for f in fields {
+                let size = field_byte_size(&f.ty);
+                let align = field_alignment(&f.ty);
+                // Align up.
+                offset = (offset + align - 1) & !(align - 1);
+                slots.push(FieldSlot {
+                    name: f.name.clone(),
+                    offset,
+                    ty: f.ty.clone(),
+                });
+                offset += size;
+            }
+            // Round total to 8-byte boundary.
+            let total = (offset + 7) & !7;
+            map.insert(td.name.clone(), StructLayout { total_size: total, fields: slots });
+        }
+    }
+    map
+}
+
+// ── Payload-enum layout collection (#1821) ──────────────────────────────
+//
+// Enums with at least one non-Unit variant get a heap-allocated layout:
+//   { disc: i32, payload_ptr: i32 }   (8 bytes for the enum header)
+//   payload area: N × 8 bytes         (one 8-byte slot per positional field)
+//
+// Unit variants within a payload enum still get the header layout (disc set,
+// payload_ptr = 0). `collect_enums` already skipped these enums from the
+// unit-discriminant path, so there's no double-registration.
+
+fn collect_payload_enums(types: &[TirTypeDecl]) -> HashMap<String, PayloadEnumInfo> {
+    let mut map = HashMap::new();
+    for td in types {
+        if let TirTypeBody::Enum(vs) = &td.body {
+            // Skip pure-unit enums — those are handled by collect_enums.
+            if vs.iter().all(|v| matches!(v.fields, TirVariantFields::Unit)) {
+                continue;
+            }
+            let mut pvs = Vec::new();
+            for (disc, v) in vs.iter().enumerate() {
+                let fields: Vec<Ty> = match &v.fields {
+                    TirVariantFields::Unit => vec![],
+                    TirVariantFields::Tuple(tys) => tys.clone(),
+                    TirVariantFields::Struct(fs) => fs.iter().map(|f| f.ty.clone()).collect(),
+                };
+                let payload_size = fields.iter().map(|_| 8u32).sum::<u32>();
+                pvs.push(PayloadVariant {
+                    name: format!("{}::{}", td.name, v.name),
+                    disc: disc as i32,
+                    fields,
+                    payload_size,
+                });
+            }
+            map.insert(td.name.clone(), PayloadEnumInfo { variants: pvs });
+        }
+    }
+    map
 }
 
 // ── String-literal collection ────────────────────────────────────────────
@@ -1947,6 +2939,15 @@ fn collect_stmt(stmt: &TirStmt, map: &mut HashMap<String, (u32, u32)>, next: &mu
         TirStmt::For { iter, body, .. } => {
             collect_expr(iter, map, next);
             collect_block(body, map, next);
+        }
+        TirStmt::Match { scrutinee, arms, .. } => {
+            collect_expr(scrutinee, map, next);
+            for arm in arms {
+                match &arm.body {
+                    TirMatchBody::Expr(e) => collect_expr(e, map, next),
+                    TirMatchBody::Block(b) => collect_block(b, map, next),
+                }
+            }
         }
         _ => {}
     }
