@@ -317,7 +317,10 @@ impl MutTracker {
                     self.declare_arm_binder(p);
                 }
             }
-            Pattern::Wildcard(_) | Pattern::Ident(_, _) | Pattern::Literal(_, _) | Pattern::None(_) => {}
+            Pattern::Wildcard(_)
+            | Pattern::Ident(_, _)
+            | Pattern::Literal(_, _)
+            | Pattern::None(_) => {}
         }
     }
 

@@ -1464,10 +1464,7 @@ impl TextEmitter {
             std::collections::HashMap::new();
         for (disc, arm_indices) in &disc_groups {
             if arm_indices.len() > 1 {
-                dispatch_bb_map.insert(
-                    *disc,
-                    format!("match_arm_{dispatch_bb_slot}"),
-                );
+                dispatch_bb_map.insert(*disc, format!("match_arm_{dispatch_bb_slot}"));
                 dispatch_bb_slot += 1;
             }
         }
@@ -1503,16 +1500,24 @@ impl TextEmitter {
             self.push_instr(&format!(
                 "{payload_ptr} = extractvalue {RESULT_LLVM_TY} {scrut_val}, 1"
             ));
-            self.fn_ctx.reg_types.insert(payload_ptr.clone(), "ptr".into());
+            self.fn_ctx
+                .reg_types
+                .insert(payload_ptr.clone(), "ptr".into());
 
             // Load the inner enum value from field 0 of the outer payload.
             // Determine the field type from the first arm in the group.
             let first_idx = arm_indices[0];
             let (n_slots, field_llvm) = match &arms[first_idx].pattern {
                 Pattern::TupleStruct { name, .. } => {
-                    let tys = self.variant_payload_types(name).map(|s| s.to_vec()).unwrap_or_default();
+                    let tys = self
+                        .variant_payload_types(name)
+                        .map(|s| s.to_vec())
+                        .unwrap_or_default();
                     let n = tys.len();
-                    let llvm = tys.first().map(|ty| self.llvm_ty_ctx(ty)).unwrap_or_else(|| "i64".to_string());
+                    let llvm = tys
+                        .first()
+                        .map(|ty| self.llvm_ty_ctx(ty))
+                        .unwrap_or_else(|| "i64".to_string());
                     (n, llvm)
                 }
                 _ => (1_usize, "i64".to_string()),
@@ -1528,8 +1533,12 @@ impl TextEmitter {
             if field_llvm == RESULT_LLVM_TY {
                 // Payload inner enum: load as RESULT_LLVM_TY, extractvalue 0.
                 let inner_val = self.next_reg();
-                self.push_instr(&format!("{inner_val} = load {RESULT_LLVM_TY}, ptr {inner_slot}"));
-                self.fn_ctx.reg_types.insert(inner_val.clone(), RESULT_LLVM_TY.to_string());
+                self.push_instr(&format!(
+                    "{inner_val} = load {RESULT_LLVM_TY}, ptr {inner_slot}"
+                ));
+                self.fn_ctx
+                    .reg_types
+                    .insert(inner_val.clone(), RESULT_LLVM_TY.to_string());
                 self.push_instr(&format!(
                     "{inner_disc} = extractvalue {RESULT_LLVM_TY} {inner_val}, 0"
                 ));
@@ -1537,10 +1546,14 @@ impl TextEmitter {
                 // Unit inner enum or i64: load i64, trunc to i8.
                 let inner_val_i64 = self.next_reg();
                 self.push_instr(&format!("{inner_val_i64} = load i64, ptr {inner_slot}"));
-                self.fn_ctx.reg_types.insert(inner_val_i64.clone(), "i64".to_string());
+                self.fn_ctx
+                    .reg_types
+                    .insert(inner_val_i64.clone(), "i64".to_string());
                 self.push_instr(&format!("{inner_disc} = trunc i64 {inner_val_i64} to i8"));
             }
-            self.fn_ctx.reg_types.insert(inner_disc.clone(), "i8".to_string());
+            self.fn_ctx
+                .reg_types
+                .insert(inner_disc.clone(), "i8".to_string());
 
             // Build inner switch on the inner discriminant.
             let mut inner_switch = format!("switch i8 {inner_disc}, label %{default_bb} [\n");
@@ -1555,10 +1568,8 @@ impl TextEmitter {
                             _ => None,
                         };
                         if let Some(d) = inner_disc_val {
-                            inner_switch.push_str(&format!(
-                                "    i8 {d}, label %{}\n",
-                                arm_bbs[arm_idx]
-                            ));
+                            inner_switch
+                                .push_str(&format!("    i8 {d}, label %{}\n", arm_bbs[arm_idx]));
                         }
                     }
                 }

@@ -365,9 +365,7 @@ pub fn wildcard_enum_match(prog: &Program, cfg: &LintConfig, out: &mut Vec<LintD
 /// `Pattern::Ident("Enum::Variant", …)`, if any.
 fn enum_name_from_pattern(pat: &Pattern) -> Option<&str> {
     match pat {
-        Pattern::TupleStruct { name, .. } | Pattern::Ident(name, _)
-            if name.contains("::") =>
-        {
+        Pattern::TupleStruct { name, .. } | Pattern::Ident(name, _) if name.contains("::") => {
             Some(name.split("::").next().unwrap_or(""))
         }
         _ => None,
@@ -406,9 +404,7 @@ fn check_stmt_wildcard_enum_match(
                 }
             }
         }
-        Stmt::If {
-            then, else_, ..
-        } => {
+        Stmt::If { then, else_, .. } => {
             check_block_wildcard_enum_match(then, user_enums, out);
             if let Some(eb) = else_ {
                 match eb {

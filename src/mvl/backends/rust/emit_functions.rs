@@ -58,7 +58,9 @@ fn stmt_has_select(stmt: &TirStmt) -> bool {
     match stmt {
         TirStmt::Expr { expr, .. } => expr_has_select(expr),
         TirStmt::Let { init, .. } => expr_has_select(init),
-        TirStmt::If { cond, then, else_, .. } => {
+        TirStmt::If {
+            cond, then, else_, ..
+        } => {
             expr_has_select(cond)
                 || body_has_select(then)
                 || else_.as_ref().map_or(false, |e| match e {
