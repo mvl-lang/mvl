@@ -51,7 +51,7 @@ fn emit_fn_return_ty(ty: &Ty) -> String {
 /// The emitter adds `#[allow(unused_variables)]` on functions that contain a
 /// select to suppress those warnings (#1678).
 fn body_has_select(block: &TirBlock) -> bool {
-    block.stmts.iter().any(|stmt| stmt_has_select(stmt))
+    block.stmts.iter().any(stmt_has_select)
 }
 
 fn stmt_has_select(stmt: &TirStmt) -> bool {
@@ -63,7 +63,7 @@ fn stmt_has_select(stmt: &TirStmt) -> bool {
         } => {
             expr_has_select(cond)
                 || body_has_select(then)
-                || else_.as_ref().map_or(false, |e| match e {
+                || else_.as_ref().is_some_and(|e| match e {
                     crate::mvl::ir::TirElseBranch::Block(b) => body_has_select(b),
                     crate::mvl::ir::TirElseBranch::If(s) => stmt_has_select(s),
                 })
