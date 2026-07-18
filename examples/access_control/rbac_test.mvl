@@ -3,102 +3,12 @@
 // Exhaustive test coverage of the RBAC matrix confirms that every
 // combination behaves as specified. One assertion per test — matches
 // MVL's block expression model (final expression is the return value).
-//
-// Standalone: re-declares all types and functions (cross-module resolution
-// is Phase 2, issue #96).
-// ── Local type re-declarations ─────────────────────────────────────────────
-// workaround: #96 — cross-module type resolution not yet wired into the
-// per-file checker; types and functions are re-declared locally until the
-// module resolver is integrated.
-type Role = enum {
-    Admin,
-    Moderator,
-    User,
-    Guest,
-}
 
-type Resource = enum {
-    UserProfile,
-    AdminPanel,
-    Post,
-    AuditLog,
-}
-
-type Action = enum {
-    Read,
-    Write,
-    Delete,
-}
-
-type Permission = enum {
-    Allow,
-    Deny,
-}
-
-// ── Function under test ────────────────────────────────────────────────────
-total fn check_permission(
-    role: Role,
-    resource: Resource,
-    action: Action,
-) -> Permission {
-    match role {
-        Role::Admin => Permission::Allow,
-        Role::Moderator => {
-            match resource {
-                Resource::AdminPanel => Permission::Deny,
-                Resource::AuditLog => Permission::Allow,
-                Resource::UserProfile => {
-                    match action {
-                        Action::Read => Permission::Allow,
-                        Action::Write => Permission::Allow,
-                        Action::Delete => Permission::Deny,
-                    }
-                },
-                Resource::Post => Permission::Allow,
-            }
-        },
-        Role::User => {
-            match resource {
-                Resource::AdminPanel => Permission::Deny,
-                Resource::AuditLog => Permission::Deny,
-                Resource::UserProfile => {
-                    match action {
-                        Action::Read => Permission::Allow,
-                        Action::Write => Permission::Allow,
-                        Action::Delete => Permission::Deny,
-                    }
-                },
-                Resource::Post => {
-                    match action {
-                        Action::Read => Permission::Allow,
-                        Action::Write => Permission::Allow,
-                        Action::Delete => Permission::Deny,
-                    }
-                },
-            }
-        },
-        Role::Guest => {
-            match resource {
-                Resource::AdminPanel => Permission::Deny,
-                Resource::AuditLog => Permission::Deny,
-                Resource::UserProfile => {
-                    match action {
-                        Action::Read => Permission::Allow,
-                        Action::Write => Permission::Deny,
-                        Action::Delete => Permission::Deny,
-                    }
-                },
-                Resource::Post => {
-                    match action {
-                        Action::Read => Permission::Allow,
-                        Action::Write => Permission::Deny,
-                        Action::Delete => Permission::Deny,
-                    }
-                },
-            }
-        },
-    }
-}
+use model::Role;
+use model::Resource;
+use model::Action;
+use model::Permission;
+use rbac::check_permission;
 
 // ── Admin tests ────────────────────────────────────────────────────────────
 test fn admin_allow_user_profile_read() -> Unit {

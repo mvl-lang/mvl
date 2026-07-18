@@ -9,132 +9,8 @@
 //   - Baseline test: all conditions → true outcome
 //   - Toggle tests: flip one condition → outcome changes
 
-// ── Type re-declarations (workaround: #96) ──────────────────────────────
-
-type Visibility = enum { Good, Reduced, Poor }
-type WindCondition = enum { Calm, Moderate, Strong }
-type Weather = struct {
-    visibility: Visibility,
-    wind: WindCondition,
-    icing: Bool,
-    thunderstorm: Bool,
-}
-type MaintenanceStatus = enum { Cleared, DeferredItem, Grounded }
-type FuelStatus = enum { Sufficient, Marginal, Insufficient }
-type Aircraft = struct {
-    maintenance: MaintenanceStatus,
-    fuel: FuelStatus,
-    crew_valid: Bool,
-    etops_cert: Bool,
-}
-type Clearance = enum { Cleared, Rejected }
-type RouteType = enum { Domestic, International, Oceanic }
-
-// ── Function re-declarations (workaround: #96) ──────────────────────────
-
-fn visibility_ok(v: Visibility) -> Bool {
-    match v {
-        Visibility::Good    => true,
-        Visibility::Reduced => true,
-        Visibility::Poor    => false,
-    }
-}
-
-fn wind_ok(w: WindCondition) -> Bool {
-    match w {
-        WindCondition::Calm     => true,
-        WindCondition::Moderate => true,
-        WindCondition::Strong   => false,
-    }
-}
-
-fn weather_clear(wx: Weather) -> Bool {
-    visibility_ok(wx.visibility) && wind_ok(wx.wind) && !wx.icing && !wx.thunderstorm
-}
-
-fn maintenance_ok(m: MaintenanceStatus) -> Bool {
-    match m {
-        MaintenanceStatus::Cleared      => true,
-        MaintenanceStatus::DeferredItem => true,
-        MaintenanceStatus::Grounded     => false,
-    }
-}
-
-fn fuel_ok(f: FuelStatus) -> Bool {
-    match f {
-        FuelStatus::Sufficient   => true,
-        FuelStatus::Marginal     => true,
-        FuelStatus::Insufficient => false,
-    }
-}
-
-fn fuel_sufficient(f: FuelStatus) -> Bool {
-    match f {
-        FuelStatus::Sufficient   => true,
-        FuelStatus::Marginal     => false,
-        FuelStatus::Insufficient => false,
-    }
-}
-
-fn fuel_marginal(f: FuelStatus) -> Bool {
-    match f {
-        FuelStatus::Marginal     => true,
-        FuelStatus::Sufficient   => false,
-        FuelStatus::Insufficient => false,
-    }
-}
-
-fn aircraft_ready(ac: Aircraft) -> Bool {
-    maintenance_ok(ac.maintenance) && fuel_ok(ac.fuel) && ac.crew_valid
-}
-
-fn is_oceanic(route: RouteType) -> Bool {
-    match route { RouteType::Oceanic => true, RouteType::International => false, RouteType::Domestic => false }
-}
-
-fn is_international(route: RouteType) -> Bool {
-    match route { RouteType::International => true, RouteType::Oceanic => false, RouteType::Domestic => false }
-}
-
-fn is_domestic(route: RouteType) -> Bool {
-    match route { RouteType::Domestic => true, RouteType::International => false, RouteType::Oceanic => false }
-}
-
-fn route_permitted(route: RouteType, ac: Aircraft) -> Bool {
-    !(is_oceanic(route) && !ac.etops_cert) && !(is_international(route) && !ac.crew_valid)
-}
-
-fn can_land(wx: Weather, ac: Aircraft) -> Bool {
-    visibility_ok(wx.visibility) && wind_ok(wx.wind) && fuel_ok(ac.fuel)
-}
-
-fn needs_diversion(wx: Weather, ac: Aircraft) -> Bool {
-    wx.thunderstorm || (wx.icing && !visibility_ok(wx.visibility)) || !fuel_ok(ac.fuel)
-}
-
-fn can_dispatch(wx: Weather, ac: Aircraft, route: RouteType) -> Clearance {
-    if weather_clear(wx) && aircraft_ready(ac) && route_permitted(route, ac) {
-        Clearance::Cleared
-    } else {
-        Clearance::Rejected
-    }
-}
-
-fn crew_duty_ok(ac: Aircraft, route: RouteType) -> Bool {
-    ac.crew_valid && (is_domestic(route) || fuel_ok(ac.fuel))
-}
-
-fn fuel_planning_ok(ac: Aircraft, route: RouteType, wx: Weather) -> Bool {
-    fuel_sufficient(ac.fuel) || (fuel_marginal(ac.fuel) && is_domestic(route) && !wx.icing)
-}
-
-fn departure_gate(wx: Weather, ac: Aircraft, route: RouteType) -> Clearance {
-    if weather_clear(wx) && aircraft_ready(ac) && crew_duty_ok(ac, route) && fuel_planning_ok(ac, route, wx) {
-        Clearance::Cleared
-    } else {
-        Clearance::Rejected
-    }
-}
+use model.{Visibility, WindCondition, Weather, MaintenanceStatus, FuelStatus, Aircraft, Clearance, RouteType}
+use clearance.{visibility_ok, wind_ok, weather_clear, maintenance_ok, fuel_ok, fuel_sufficient, fuel_marginal, aircraft_ready, is_oceanic, is_international, is_domestic, route_permitted, can_land, needs_diversion, can_dispatch, crew_duty_ok, fuel_planning_ok, departure_gate}
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -143,10 +19,9 @@ fn good_weather() -> Weather {
 }
 
 fn good_aircraft() -> Aircraft {
-    Aircraft { maintenance: MaintenanceStatus::Cleared, fuel: FuelStatus::Sufficient, crew_valid: true, etops_cert: true }
+    Aircraft { maintenance: MaintenanceStatus::Airworthy, fuel: FuelStatus::Sufficient, crew_valid: true, etops_cert: true }
 }
 
-// ════════════════════════════════════════════════════════════════════════
 // Decision 1: weather_clear
 // visibility_ok(v) && wind_ok(w) && !icing && !thunderstorm
 // 4 conditions → 5 tests
@@ -217,12 +92,12 @@ test fn d2_toggle_maintenance() -> Unit {
 }
 
 test fn d2_toggle_fuel() -> Unit {
-    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Cleared, fuel: FuelStatus::Insufficient, crew_valid: true, etops_cert: true };
+    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Airworthy, fuel: FuelStatus::Insufficient, crew_valid: true, etops_cert: true };
     assert_eq(aircraft_ready(ac), false);
 }
 
 test fn d2_toggle_crew() -> Unit {
-    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Cleared, fuel: FuelStatus::Sufficient, crew_valid: false, etops_cert: true };
+    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Airworthy, fuel: FuelStatus::Sufficient, crew_valid: false, etops_cert: true };
     assert_eq(aircraft_ready(ac), false);
 }
 
@@ -234,7 +109,7 @@ test fn d2_boundary_deferred() -> Unit {
 
 // Boundary: marginal fuel still passes
 test fn d2_boundary_marginal_fuel() -> Unit {
-    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Cleared, fuel: FuelStatus::Marginal, crew_valid: true, etops_cert: true };
+    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Airworthy, fuel: FuelStatus::Marginal, crew_valid: true, etops_cert: true };
     assert_eq(aircraft_ready(ac), true);
 }
 
@@ -256,7 +131,7 @@ test fn d3_baseline() -> Unit {
 }
 
 test fn d3_toggle_oceanic_no_etops() -> Unit {
-    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Cleared, fuel: FuelStatus::Sufficient, crew_valid: true, etops_cert: false };
+    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Airworthy, fuel: FuelStatus::Sufficient, crew_valid: true, etops_cert: false };
     assert_eq(route_permitted(RouteType::Oceanic, ac), false);
 }
 
@@ -266,7 +141,7 @@ test fn d3_oceanic_with_etops() -> Unit {
 }
 
 test fn d3_toggle_intl_no_crew() -> Unit {
-    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Cleared, fuel: FuelStatus::Sufficient, crew_valid: false, etops_cert: true };
+    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Airworthy, fuel: FuelStatus::Sufficient, crew_valid: false, etops_cert: true };
     assert_eq(route_permitted(RouteType::International, ac), false);
 }
 
@@ -306,7 +181,7 @@ test fn d4_toggle_wind() -> Unit {
 
 test fn d4_toggle_fuel() -> Unit {
     let wx: Weather = good_weather();
-    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Cleared, fuel: FuelStatus::Insufficient, crew_valid: true, etops_cert: true };
+    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Airworthy, fuel: FuelStatus::Insufficient, crew_valid: true, etops_cert: true };
     assert_eq(can_land(wx, ac), false);
 }
 
@@ -359,7 +234,7 @@ test fn d5_poor_vis_no_icing_no_diversion() -> Unit {
 // Toggle fuel insufficient → true
 test fn d5_toggle_fuel() -> Unit {
     let wx: Weather = good_weather();
-    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Cleared, fuel: FuelStatus::Insufficient, crew_valid: true, etops_cert: true };
+    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Airworthy, fuel: FuelStatus::Insufficient, crew_valid: true, etops_cert: true };
     assert_eq(needs_diversion(wx, ac), true);
 }
 
@@ -400,7 +275,7 @@ test fn d6_toggle_aircraft() -> Unit {
 
 test fn d6_toggle_route() -> Unit {
     let wx: Weather = good_weather();
-    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Cleared, fuel: FuelStatus::Sufficient, crew_valid: true, etops_cert: false };
+    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Airworthy, fuel: FuelStatus::Sufficient, crew_valid: true, etops_cert: false };
     let r: Clearance = can_dispatch(wx, ac, RouteType::Oceanic);
     let ok: Int = match r { Clearance::Cleared => 0, Clearance::Rejected => 1 };
     assert_eq(ok, 1);
@@ -423,7 +298,7 @@ test fn d7_baseline() -> Unit {
 }
 
 test fn d7_toggle_crew() -> Unit {
-    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Cleared, fuel: FuelStatus::Sufficient, crew_valid: false, etops_cert: true };
+    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Airworthy, fuel: FuelStatus::Sufficient, crew_valid: false, etops_cert: true };
     assert_eq(crew_duty_ok(ac, RouteType::Domestic), false);
 }
 
@@ -433,12 +308,12 @@ test fn d7_intl_with_fuel() -> Unit {
 }
 
 test fn d7_intl_no_fuel() -> Unit {
-    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Cleared, fuel: FuelStatus::Insufficient, crew_valid: true, etops_cert: true };
+    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Airworthy, fuel: FuelStatus::Insufficient, crew_valid: true, etops_cert: true };
     assert_eq(crew_duty_ok(ac, RouteType::International), false);
 }
 
 test fn d7_domestic_no_fuel() -> Unit {
-    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Cleared, fuel: FuelStatus::Insufficient, crew_valid: true, etops_cert: true };
+    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Airworthy, fuel: FuelStatus::Insufficient, crew_valid: true, etops_cert: true };
     assert_eq(crew_duty_ok(ac, RouteType::Domestic), true);
 }
 
@@ -470,28 +345,28 @@ test fn d8_baseline() -> Unit {
 
 // Marginal + domestic + no icing → ok (OR branch fires)
 test fn d8_marginal_domestic_no_ice() -> Unit {
-    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Cleared, fuel: FuelStatus::Marginal, crew_valid: true, etops_cert: true };
+    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Airworthy, fuel: FuelStatus::Marginal, crew_valid: true, etops_cert: true };
     let wx: Weather = good_weather();
     assert_eq(fuel_planning_ok(ac, RouteType::Domestic, wx), true);
 }
 
 // Marginal + international → not ok (domestic condition fails)
 test fn d8_marginal_intl_no_ice() -> Unit {
-    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Cleared, fuel: FuelStatus::Marginal, crew_valid: true, etops_cert: true };
+    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Airworthy, fuel: FuelStatus::Marginal, crew_valid: true, etops_cert: true };
     let wx: Weather = good_weather();
     assert_eq(fuel_planning_ok(ac, RouteType::International, wx), false);
 }
 
 // Marginal + domestic + icing → not ok (icing condition fails)
 test fn d8_marginal_domestic_icing() -> Unit {
-    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Cleared, fuel: FuelStatus::Marginal, crew_valid: true, etops_cert: true };
+    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Airworthy, fuel: FuelStatus::Marginal, crew_valid: true, etops_cert: true };
     let wx: Weather = Weather { visibility: Visibility::Good, wind: WindCondition::Calm, icing: true, thunderstorm: false };
     assert_eq(fuel_planning_ok(ac, RouteType::Domestic, wx), false);
 }
 
 // Insufficient → never ok
 test fn d8_insufficient() -> Unit {
-    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Cleared, fuel: FuelStatus::Insufficient, crew_valid: true, etops_cert: true };
+    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Airworthy, fuel: FuelStatus::Insufficient, crew_valid: true, etops_cert: true };
     let wx: Weather = good_weather();
     assert_eq(fuel_planning_ok(ac, RouteType::Domestic, wx), false);
 }
@@ -552,7 +427,7 @@ test fn d9_toggle_aircraft() -> Unit {
 // with these shared fields. Accept: use crew_valid=false and note the coupled toggle.
 test fn d9_toggle_crew_duty() -> Unit {
     let wx: Weather = good_weather();
-    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Cleared, fuel: FuelStatus::Sufficient, crew_valid: false, etops_cert: true };
+    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Airworthy, fuel: FuelStatus::Sufficient, crew_valid: false, etops_cert: true };
     let r: Clearance = departure_gate(wx, ac, RouteType::Domestic);
     let ok: Int = match r { Clearance::Cleared => 0, Clearance::Rejected => 1 };
     assert_eq(ok, 1);
@@ -561,7 +436,7 @@ test fn d9_toggle_crew_duty() -> Unit {
 // Toggle fuel_planning: marginal fuel + international + no icing → fuel_planning_ok fails
 test fn d9_toggle_fuel_planning() -> Unit {
     let wx: Weather = good_weather();
-    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Cleared, fuel: FuelStatus::Marginal, crew_valid: true, etops_cert: true };
+    let ac: Aircraft = Aircraft { maintenance: MaintenanceStatus::Airworthy, fuel: FuelStatus::Marginal, crew_valid: true, etops_cert: true };
     let r: Clearance = departure_gate(wx, ac, RouteType::International);
     let ok: Int = match r { Clearance::Cleared => 0, Clearance::Rejected => 1 };
     assert_eq(ok, 1);

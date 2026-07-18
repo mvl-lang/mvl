@@ -1,35 +1,15 @@
-// main_test.mvl — MC/DC tests for pure logic extracted from main.mvl.
+// main_test.mvl — Behavioural tests for the error-message layer.
 //
-// NOTE (issue #96): Functions are re-declared locally until the module
-// resolver enables cross-file imports in the test runner.
+// Coverage target: run_error_message — an N-arm match on RunError. Adding
+// or removing a variant in errors.mvl requires updating both the message
+// helper and this test file, keeping the two in lock-step.
 //
-// Coverage target: run_error_message — 3-arm match on RunError (main:103).
 // The I/O-boundary matches in run() (args, file, pipeline) require
 // integration-level coverage via `make run` and are not tested here.
 //
 // Run with:  mvl test examples/log_analyzer/
 
-// ── Local re-declarations (mirrors main.mvl) ──────────────────────────────
-
-type RunError = enum {
-    MissingArg,
-    IOFailure,
-    PipelineFailed,
-}
-
-fn run_error_message(e: RunError) -> String {
-    match e {
-        RunError::MissingArg     => "missing --file argument",
-        RunError::IOFailure      => "failed to read log file",
-        RunError::PipelineFailed => "analysis pipeline failed",
-    }
-}
-
-// ── Test cases ─────────────────────────────────────────────────────────────
-
-test fn missing_arg_message() -> Unit {
-    assert_eq(run_error_message(RunError::MissingArg), "missing --file argument");
-}
+use errors.{RunError, run_error_message}
 
 test fn io_failure_message() -> Unit {
     assert_eq(run_error_message(RunError::IOFailure), "failed to read log file");

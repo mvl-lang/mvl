@@ -1,0 +1,17 @@
+// errors.mvl — Run-time error taxonomy for the log analyzer pipeline.
+//
+// Kept in its own module so both `main.mvl` and `main_test.mvl` can
+// import the type + message helper without redeclaration.
+
+pub type RunError = enum {
+    IOFailure,
+    PipelineFailed,
+}
+
+/// Map a `RunError` to a human-readable message (pure — no effects).
+pub total fn run_error_message(e: RunError) -> String {
+    match e {
+        RunError::IOFailure      => "failed to read log file",
+        RunError::PipelineFailed => "analysis pipeline failed",
+    }
+}

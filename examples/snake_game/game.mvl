@@ -68,8 +68,10 @@ total fn step_head(pos: Pos, dir: Direction) -> Pos {
 // Apply the player's input: hold course on None, change direction on Some(d).
 // 180° reversals are blocked — pressing the opposite direction is ignored so
 // the snake continues straight (classic snake behaviour).
-// Both arms use exhaustive matches on `current` so the transpiler emits owned
-// Direction values rather than references (borrow-inference workaround).
+// Exhaustive matches on `current` return fresh Direction literals — this
+// nudges the Rust emitter to produce owned values instead of &Direction
+// references. Pure codegen concern; no effect on MVL semantics (MVL's
+// aliasing model is Pony-style val/ref/iso, not Rust borrows).
 total fn resolve_dir(current: Direction, input: Option[Direction]) -> Direction {
     match input {
         Some(d) => match current {

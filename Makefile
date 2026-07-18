@@ -481,6 +481,9 @@ audit-backend-ast: ## Guard against new parser::ast imports in backends — targ
 audit-cli-prelude: ## Guard against direct loader calls in CLI — target 0 (#1803, ADR-0050 extension)
 	@python3 tools/audit_cli_prelude.py
 
+audit-test-shadows: ## Guard against test-file shadow declarations — target 0 (pattern 006)
+	@python3 tools/audit_test_shadows.py
+
 check-adr: ## Check ADR structure (required sections, no duplicate numbers)
 	@python3 tools/check_adr.py --verbose
 

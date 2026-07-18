@@ -256,6 +256,48 @@ No `/* */` block comments.
 
 ---
 
+## Test files must import, not redeclare
+
+**Never declare a `type`, `fn`, `total fn`, or `partial fn` inside a
+`*_test.mvl` file.** Test code exists to exercise production code — every
+symbol a test refers to must be reachable via `use module::Item;` from a
+sibling production `.mvl` file or the standard library.
+
+### Why
+
+Redeclarations in test files silently shadow production. Every drift bug
+this project has caught started as a shadow that made the tests keep
+passing while production changed underneath. Concrete cases (all on
+branch `chore/exterminate-96-workaround`):
+
+- `flight_clearance` — 19 test sites bound to a ghost `MaintenanceStatus::Cleared` variant while production had `Airworthy`
+- `log_analyzer` / `task_pipeline` — dead `RunError::MissingArg` tests exercised a variant no longer in production
+- `access_control` — effect-stripped `log_access` shim with `assert_eq(1, 1)` "tests" that verified nothing about production
+- `csv_transactions` — phantom `Transaction` / `encode_transaction` / `decode_transaction` that never existed in production
+
+### If a test wants to import something that isn't importable
+
+- **Item lives in `main.mvl`?** `main.mvl` is the entry point, not a
+  module. Move the item into a sibling module (e.g., `errors.mvl`,
+  `security.mvl`, `paths.mvl`). `main.mvl` re-imports it; the test
+  imports it directly.
+- **Item is not `pub`?** Add `pub` to production. If the item genuinely
+  must be private, don't test it in isolation — test through the public
+  surface, or via integration (`make run`).
+- **Item carries an effect the test can't declare?** Do NOT write an
+  effect-stripped shim. Either extract the pure logic into a separate
+  `pub` helper and test that, or accept that the function is
+  integration-only.
+
+### Rule summary
+
+- Zero `type` declarations in `*_test.mvl` files.
+- Zero standalone `fn`/`total fn`/`partial fn` declarations in `*_test.mvl` files. (Test-local closures and lambdas are fine; test-fn helpers that are only used by other test fns in the same file are fine, but prefer moving them to production or accepting the duplication as tacit debt to be repaid.)
+- If a fossil-scan grep for the above returns any hits, the sweep is not done.
+
+See `.openspec/patterns/006-no-test-shadows.md` for the full pattern
+catalogue with before/after examples and historical drift cases.
+
 ## Project Layout
 
 ```

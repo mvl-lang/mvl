@@ -36,7 +36,7 @@ use bitstream::read_bits;
 
 // ── Domain types ──────────────────────────────────────────────────────────────
 
-type CompressError = enum {
+pub type CompressError = enum {
     EmptyInput,
     HuffmanFailed,         // no symbols to encode (should not occur after RLE)
     SymbolNotInTree,       // Huffman tree missing a symbol found in data
@@ -108,7 +108,7 @@ pub partial fn decompress_bytes(
     }
 }
 
-fn freqs_total(val freqs: List[Int]) -> Int {
+pub total fn freqs_total(val freqs: List[Int]) -> Int {
     let acc: ref Int = 0;
     for i in range(0, freqs.len()) {
         acc = acc + freqs.get(i).unwrap_or(0)
@@ -142,7 +142,7 @@ partial fn huf_dec_loop(
     }
 }
 
-type DecodeOneResult = struct {
+pub type DecodeOneResult = struct {
     symbol: Int,
     reader: BitReader,
 }

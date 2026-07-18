@@ -1,26 +1,10 @@
 // utils_test.mvl — Standalone tests for utility functions.
 //
-// NOTE (issue #96): Functions are re-declared locally until the module
-// resolver enables cross-file imports in the test runner.
-//
 // Run with:  mvl test examples/log_analyzer/
 
-// ── Local re-declarations (mirrors utils.mvl) ─────────────────────────────
-// workaround: #96 — cross-module type resolution not yet wired into the
-// per-file checker; functions are re-declared locally until the module
-// resolver is integrated.
-
-total fn is_positive(n: Int) -> Bool {
-    n > 0
-}
-
-total fn is_in_range_int(n: Int, lo: Int, hi: Int) -> Bool {
-    n >= lo && n <= hi
-}
-
-total fn clamp_display(n: Int) -> Int {
-    n.clamp(0, 99999)
-}
+use utils::is_positive;
+use utils::is_in_range_int;
+use utils::clamp_display;
 
 // ── Test cases ─────────────────────────────────────────────────────────────
 

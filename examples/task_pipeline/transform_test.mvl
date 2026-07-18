@@ -5,71 +5,14 @@
 //                         with arbitrary inputs, no I/O setup required.
 //   2. Req 3 (Totality):  exhaustive match on Option inside test assertions.
 //
-// NOTE: type declarations below duplicate model.mvl because cross-file type
-// resolution is not yet wired into the per-file checker (issue #96).
-// When #96 lands these can be replaced with:
-//   use model::Record;
-//   use model::Summary;
 // Assurance note: 0 extern blocks.
 
-// ── Type re-declarations (workaround: #96) ────────────────────────────────
-
-type Record = struct {
-    name:     String,
-    age:      Int,
-    amount:   Float,
-    category: Option[String],
-}
-
-type Summary = struct {
-    count:        Int,
-    total_amount: Float,
-}
-
-// ── Function re-declarations (workaround: #96) ────────────────────────────
-// Must match transform.mvl exactly.
-
-fn filter_by_amount(records: List[Record], min_amount: Float) -> List[Record] {
-    records.filter(|r: Record| r.amount >= min_amount)
-}
-
-fn filter_by_category(records: List[Record], cat: String) -> List[Record] {
-    records.filter(|r: Record| {
-        match r.category {
-            Some(c) => c == cat,
-            None    => false,
-        }
-    })
-}
-
-fn summarize(records: List[Record]) -> Summary {
-    records.fold(
-        Summary { count: 0, total_amount: 0.0 },
-        |acc: Summary, r: Record| Summary {
-            count:        acc.count + 1,
-            total_amount: acc.total_amount + r.amount,
-        }
-    )
-}
-
-fn enrich_high_value(records: List[Record], threshold: Float) -> List[Record] {
-    records.fold(
-        [],
-        |acc: List[Record], r: Record| {
-            let out: Record = if r.amount >= threshold {
-                Record {
-                    name:     r.name,
-                    age:      r.age,
-                    amount:   r.amount,
-                    category: Some("high-value"),
-                }
-            } else {
-                r
-            };
-            acc.concat([out])
-        }
-    )
-}
+use model::Record;
+use model::Summary;
+use transform::filter_by_amount;
+use transform::filter_by_category;
+use transform::summarize;
+use transform::enrich_high_value;
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 

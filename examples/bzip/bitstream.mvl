@@ -53,7 +53,7 @@ pub total fn write_bits(w: BitWriter, value: Int, n_bits: Int where self >= 1 &&
     write_bits_loop(w, value, n_bits)
 }
 
-fn write_bits_loop(w: BitWriter, value: Int, remaining: Int) -> BitWriter {
+pub total fn write_bits_loop(w: BitWriter, value: Int, remaining: Int) -> BitWriter {
     if remaining <= 0 {
         w
     } else {
@@ -92,7 +92,7 @@ pub total fn read_bits(r: BitReader, n_bits: Int where self >= 1 && self <= 24) 
     read_bits_loop(r, n_bits, 0, 0)
 }
 
-fn read_bits_loop(r: BitReader, remaining: Int, acc: Int, shift: Int) -> ReadResult {
+pub total fn read_bits_loop(r: BitReader, remaining: Int, acc: Int, shift: Int) -> ReadResult {
     if remaining <= 0 {
         ReadResult { rval: acc, reader: r }
     } else if r.pos >= r.bytes.len() {

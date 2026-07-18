@@ -2,30 +2,8 @@
 //
 // Tests the crossing, execution price, and quantity conservation rules
 // without actor concurrency or effects.  All functions here are pure.
-//
-// Type declarations are repeated here as a workaround for per-file
-// cross-module type resolution (issue #96).
 
-// ── Type re-declarations (workaround: #96) ────────────────────────────────
-
-type Side = enum { Bid, Ask }
-
-type OrderStatus = enum { Open, Filled, Cancelled }
-
-type Order = struct {
-    id:       Int,
-    side:     Side,
-    price:    Int,
-    quantity: Int,
-    status:   OrderStatus,
-}
-
-type Fill = struct {
-    bid_order: Int,
-    ask_order: Int,
-    price:     Int,
-    quantity:  Int,
-}
+use types::{Order, Fill, Side, OrderStatus}
 
 // ── Pure matching logic (mirrors Matcher and OrderBook in main.mvl) ────────
 

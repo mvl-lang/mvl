@@ -1,38 +1,16 @@
-// main_test.mvl — unit tests for pure functions in main.mvl.
-//
-// NOTE (issue #96): Functions are re-declared locally until the module
-// resolver enables cross-file imports in the test runner.
+// main_test.mvl — unit tests for pure helpers in paths.mvl.
 //
 // Coverage:
 //   validate_log_path — Req 10 (Refinements): non-empty string refined param;
 //                       Layer 1 statically proves len("app.log") = 7 > 0.
 //   resolve_path      — Req 11 (IFC): explicit trust boundary; Req 5 (Errors):
 //                       non-empty → Ok, empty → Err(EmptyPath).
-//
-// Run with:  mvl test examples/log_to_file/
 
-// ── Local re-declarations (mirrors main.mvl) ──────────────────────────────
-
-pub type LogSetupError = enum {
-    EmptyPath,
-    OpenFailed,
-}
-
-pub fn validate_log_path(p: String where len(p) > 0) -> String { p }
-
-pub fn resolve_path(raw: Tainted[String]) -> Result[String, LogSetupError] {
-    let s: String = relabel trust(raw, "LOG-PATH-001");
-    match s.len() > 0 {
-        true  => Ok(s),
-        false => Err(LogSetupError::EmptyPath),
-    }
-}
+use paths.{LogSetupError, validate_log_path, resolve_path}
 
 // ── validate_log_path ─────────────────────────────────────────────────────
 //
 // Layer 1 proves `len("app.log") = 7 > 0` statically — no runtime check.
-// Both calls are direct-literal arguments so the solver discharges them at
-// compile time (Req 10, Layer 1 interval arithmetic).
 
 test fn validate_app_log_path() -> Unit {
     assert_eq(validate_log_path("app.log"), "app.log");

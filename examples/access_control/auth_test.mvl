@@ -1,28 +1,16 @@
-// auth_test.mvl — Standalone tests for authentication domain types.
+// auth_test.mvl — Tests for authentication domain types and pure helpers.
 //
-// Tests the error type ADT structure without calling extern functions.
-// One assertion per test — matches MVL's block expression model.
-// Standalone: re-declares all types (cross-module resolution is Phase 2).
+// The production `authenticate` function carries ! CryptoRandom and cannot
+// be called from pure tests.  It is exercised integration-only via
+// `make run`.  Any effect-stripped shim would test the shim, not
+// production — see `.openspec/patterns/006-no-test-shadows.md`.
 
-use std.ifc.{taint}
-
-// ── Local type re-declarations ─────────────────────────────────────────────
-// workaround: #96 — cross-module type resolution not yet wired into the
-// per-file checker; types are re-declared locally until the module resolver
-// is integrated.
-type AuthError = enum {
-    InvalidCredentials,
-    SessionExpired,
-    InvalidToken,
-}
-
-type AppError = enum {
-    AuthFailed,
-    UserNotFound,
-    MissingArg,
-}
+use model::AuthError;
+use model::AppError;
+use auth.{auth_failure_result}
 
 // ── AuthError variant tests ────────────────────────────────────────────────
+
 test fn auth_error_invalid_credentials() -> Unit {
     let err: AuthError = AuthError::InvalidCredentials;
     let v: Int = match err {
@@ -54,6 +42,7 @@ test fn auth_error_invalid_token() -> Unit {
 }
 
 // ── AppError variant tests ─────────────────────────────────────────────────
+
 test fn app_error_auth_failed() -> Unit {
     let err: AppError = AppError::AuthFailed;
     let v: Int = match err {
@@ -84,35 +73,10 @@ test fn app_error_missing_arg() -> Unit {
     assert_eq(v, 3)
 }
 
-// ── authenticate re-declaration ────────────────────────────────────────────
-// authenticate() in auth.mvl requires ! CryptoRandom and IFC-typed parameters.
-// We re-declare it here without ! CryptoRandom (preserving the IFC types so
-// calls from main.mvl's demo_auth stay type-correct) and exercise the same
-// 1-branch .map structure from a pure test.
-fn authenticate(
-    raw_username: Tainted[String],
-    raw_password: Tainted[String],
-    stored_hash: Secret[String],
-) -> Result[String, AuthError] {
-    Ok(()).map(|u: Unit| relabel trust(raw_username, "TEST"))
-}
+// ── auth_failure_result (real production helper) ───────────────────────────
+// auth_failure_result is a pure helper in auth.mvl that surfaces the Err
+// path for authenticate() without touching the CryptoRandom effect.
 
-test fn authenticate_ok_path_covered() -> Unit {
-    let result: Result[String, AuthError] = authenticate(
-        relabel taint("alice", "TEST"),
-        relabel taint("hunter2", "TEST"),
-        relabel classify("hash", "TEST"),
-    );
-    let ok: Int = match result {
-        Ok(_) => 1,
-        Err(_) => 0,
-    };
-    assert_eq(ok, 1)
-}
-
-// ── auth_failure_result tests ──────────────────────────────────────────────
-// auth_failure_result is a pure helper in auth.mvl that simulates the Err
-// path for authenticate() without calling extern functions.
 test fn auth_failure_result_yields_invalid_credentials() -> Unit {
     let result: Result[String, AuthError] = auth_failure_result();
     let ok: Int = match result {

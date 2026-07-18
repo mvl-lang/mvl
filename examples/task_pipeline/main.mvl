@@ -26,36 +26,10 @@ use transform::format_record;
 use model::Record;
 use model::Summary;
 use model::ParseError;
+use errors.{RunError, threshold_or_default, parse_error_msg, run_error_message}
 
 use std.io.{read_file}
 use std.args.{parse_args, required, optional, get_str, get_float_opt, ArgType, ArgValue}
-
-// ── Application errors ────────────────────────────────────────────────────
-
-type RunError = enum {
-    IOFailure,
-    ParseFailed,
-}
-
-// ── Internal helpers ──────────────────────────────────────────────────────
-
-/// Apply the optional threshold arg, defaulting to 0.0 on missing or negative.
-fn threshold_or_default(opt: Option[Float]) -> Float {
-    match opt {
-        None    => 0.0,
-        Some(v) => if v >= 0.0 { v } else { 0.0 },
-    }
-}
-
-fn parse_error_msg(e: ParseError) -> String {
-    match e {
-        ParseError::EmptyInput    => "CSV file is empty",
-        ParseError::MissingField  => "a row is missing required fields (need: name,age,amount)",
-        ParseError::EmptyName     => "a row has an empty name field",
-        ParseError::InvalidAge    => "a row has an invalid age (must be 1-150)",
-        ParseError::InvalidAmount => "a row has an invalid amount (must be >= 0.0)",
-    }
-}
 
 // ── Main pipeline ─────────────────────────────────────────────────────────
 
@@ -106,13 +80,7 @@ fn run() -> Result[Unit, RunError] ! FileRead + Console + Env {
 fn main() -> Unit ! FileRead + Console + Env {
     match run() {
         Ok(_)  => (),
-        Err(e) => {
-            let msg: String = match e {
-                RunError::IOFailure   => "failed to read CSV file",
-                RunError::ParseFailed => "CSV parsing failed (see details above)",
-            };
-            println("error: ".concat(msg));
-        }
+        Err(e) => println("error: ".concat(run_error_message(e))),
     }
 }
 

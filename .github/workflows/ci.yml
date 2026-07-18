@@ -210,6 +210,14 @@ jobs:
         # `loader::load_mvl_native_stdlib_extras` from `src/cli/` fail this check.
         run: python3 tools/audit_cli_prelude.py
 
+      - name: Audit test-file shadow declarations (pattern 006)
+        # Test files under examples/ must exercise production code, not
+        # parallel implementations. Any `type` declaration or any `fn` that
+        # shadows a `pub` production fn in a sibling module fails this check.
+        # See .openspec/patterns/006-no-test-shadows.md for the full rule
+        # and fix recipes.
+        run: python3 tools/audit_test_shadows.py --budget 0
+
       - name: Build
         run: cargo build
 

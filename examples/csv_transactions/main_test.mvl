@@ -1,193 +1,19 @@
-// examples/csv_transactions — unit tests for pure decode/encode logic
+// examples/csv_transactions — unit tests for the real production surface.
 //
-// Tests cover:
-//   - Transaction encode: produces correct CSV row
-//   - decode_transaction: valid rows, wrong column count, invalid amount
-//   - Round-trip encode → decode
-//   - CsvError variant matching
-//
-// End-to-end integration (parse_with_headers, relabel trust) is exercised
-// by `make run` (runs main.mvl which calls demo_pure).
+// Only tests here that exercise real production code (std.csv library
+// functions + CsvError enum).  A prior version of this file carried a
+// local `Transaction` type + `encode_transaction` / `decode_transaction`
+// helpers that never existed in main.mvl — pure phantom shims testing
+// nothing about the actual example.  They have been removed; if the
+// example gains a real Transaction domain in main.mvl, tests for it can
+// be added then.
 
 use std.csv.{CsvError, parse_rows, encode_rows}
-use std.ifc.{Tainted, taint, trust}
 
-// ── Local Transaction type (mirrors main.mvl) ─────────────────────────────────
-
-type Transaction = struct {
-    date: String,
-    description: String,
-    amount_cents: Int,
-}
-
-// ── Local encode/decode (mirrors main.mvl for unit testing) ───────────────────
-
-fn encode_transaction(tx: Transaction) -> List[String] {
-    [tx.date, tx.description, tx.amount_cents.to_string()]
-}
-
-partial fn decode_transaction(row: List[Tainted[String]]) -> Result[Transaction, CsvError] {
-    if row.len() != 3 {
-        Err(CsvError::WrongColumnCount(3, row.len()))
-    } else {
-        let cell0: Option[Tainted[String]] = row.get(0);
-        let cell1: Option[Tainted[String]] = row.get(1);
-        let cell2: Option[Tainted[String]] = row.get(2);
-        if let Some(raw_date) = cell0 {
-            if let Some(raw_desc) = cell1 {
-                if let Some(raw_amt) = cell2 {
-                    let date: String    = relabel trust(raw_date, "CSV-TX-DATE");
-                    let desc: String    = relabel trust(raw_desc, "CSV-TX-DESC");
-                    let amt_str: String = relabel trust(raw_amt, "CSV-TX-AMT");
-                    let n_result: Result[Int, String] = amt_str.parse_int();
-                    if let Ok(n) = n_result {
-                        Ok(Transaction { date: date, description: desc, amount_cents: n })
-                    } else {
-                        Err(CsvError::InvalidField(2, "amount must be an integer"))
-                    }
-                } else {
-                    Err(CsvError::InvalidField(2, "missing amount"))
-                }
-            } else {
-                Err(CsvError::InvalidField(1, "missing description"))
-            }
-        } else {
-            Err(CsvError::InvalidField(0, "missing date"))
-        }
-    }
-}
-
-// ── encode_transaction tests ──────────────────────────────────────────────────
-
-test fn encode_produces_three_fields() -> Unit {
-    let tx: Transaction = Transaction { date: "2024-01-15", description: "Coffee", amount_cents: -350 };
-    let row: List[String] = encode_transaction(tx);
-    assert_eq(row.len(), 3)
-}
-
-test fn encode_date_field() -> Unit {
-    let tx: Transaction = Transaction { date: "2024-01-15", description: "Coffee", amount_cents: -350 };
-    let row: List[String] = encode_transaction(tx);
-    assert_eq(row.get(0), Some("2024-01-15"))
-}
-
-test fn encode_description_field() -> Unit {
-    let tx: Transaction = Transaction { date: "2024-01-15", description: "Coffee", amount_cents: -350 };
-    let row: List[String] = encode_transaction(tx);
-    assert_eq(row.get(1), Some("Coffee"))
-}
-
-test fn encode_amount_field() -> Unit {
-    let tx: Transaction = Transaction { date: "2024-01-15", description: "Coffee", amount_cents: -350 };
-    let row: List[String] = encode_transaction(tx);
-    assert_eq(row.get(2), Some("-350"))
-}
-
-test fn encode_positive_amount() -> Unit {
-    let tx: Transaction = Transaction { date: "2024-01-16", description: "Salary", amount_cents: 500000 };
-    let row: List[String] = encode_transaction(tx);
-    assert_eq(row.get(2), Some("500000"))
-}
-
-test fn encode_zero_amount() -> Unit {
-    let tx: Transaction = Transaction { date: "2024-01-20", description: "Zero", amount_cents: 0 };
-    let row: List[String] = encode_transaction(tx);
-    assert_eq(row.get(2), Some("0"))
-}
-
-// ── decode_transaction tests ──────────────────────────────────────────────────
-
-test fn decode_valid_row() -> Unit {
-    let row: List[Tainted[String]] = [
-        relabel taint("2024-01-15", "TEST"),
-        relabel taint("Coffee", "TEST"),
-        relabel taint("-350", "TEST"),
-    ];
-    match decode_transaction(row) {
-        Err(_)   => assert(false),
-        Ok(tx)   => assert_eq(tx.amount_cents, -350),
-    }
-}
-
-test fn decode_valid_row_date() -> Unit {
-    let row: List[Tainted[String]] = [
-        relabel taint("2024-01-15", "TEST"),
-        relabel taint("Coffee", "TEST"),
-        relabel taint("-350", "TEST"),
-    ];
-    match decode_transaction(row) {
-        Err(_)   => assert(false),
-        Ok(tx)   => assert_eq(tx.date, "2024-01-15"),
-    }
-}
-
-test fn decode_valid_row_description() -> Unit {
-    let row: List[Tainted[String]] = [
-        relabel taint("2024-01-15", "TEST"),
-        relabel taint("Groceries", "TEST"),
-        relabel taint("8420", "TEST"),
-    ];
-    match decode_transaction(row) {
-        Err(_)   => assert(false),
-        Ok(tx)   => assert_eq(tx.description, "Groceries"),
-    }
-}
-
-test fn decode_wrong_column_count_too_few() -> Unit {
-    let row: List[Tainted[String]] = [
-        relabel taint("2024-01-15", "TEST"),
-        relabel taint("Coffee", "TEST"),
-    ];
-    match decode_transaction(row) {
-        Err(CsvError::WrongColumnCount(exp, got)) => {
-            assert_eq(exp, 3);
-            assert_eq(got, 2)
-        },
-        _ => assert(false),
-    }
-}
-
-test fn decode_wrong_column_count_too_many() -> Unit {
-    let row: List[Tainted[String]] = [
-        relabel taint("2024-01-15", "TEST"),
-        relabel taint("Coffee", "TEST"),
-        relabel taint("-350", "TEST"),
-        relabel taint("extra", "TEST"),
-    ];
-    match decode_transaction(row) {
-        Err(CsvError::WrongColumnCount(_, _)) => assert(true),
-        _ => assert(false),
-    }
-}
-
-test fn decode_invalid_amount() -> Unit {
-    let row: List[Tainted[String]] = [
-        relabel taint("2024-01-15", "TEST"),
-        relabel taint("Coffee", "TEST"),
-        relabel taint("not-a-number", "TEST"),
-    ];
-    match decode_transaction(row) {
-        Err(CsvError::InvalidField(col, _)) => assert_eq(col, 2),
-        _ => assert(false),
-    }
-}
-
-test fn decode_empty_amount() -> Unit {
-    let row: List[Tainted[String]] = [
-        relabel taint("2024-01-15", "TEST"),
-        relabel taint("Coffee", "TEST"),
-        relabel taint("", "TEST"),
-    ];
-    match decode_transaction(row) {
-        Err(CsvError::InvalidField(2, _)) => assert(true),
-        _ => assert(false),
-    }
-}
-
-// ── Round-trip tests ──────────────────────────────────────────────────────────
+// ── Round-trip tests (real std.csv API) ──────────────────────────────────
 
 test fn round_trip_description_with_comma() -> Unit {
-    // Descriptions containing commas must survive CSV round-trip
+    // Descriptions containing commas must survive CSV round-trip.
     let rows: List[List[String]] = [["2024-01-17", "Groceries, weekly", "-8420"]];
     let csv: String = encode_rows(rows);
     match parse_rows(csv) {
@@ -215,7 +41,7 @@ test fn round_trip_negative_amount() -> Unit {
     }
 }
 
-// ── CsvError variant tests ────────────────────────────────────────────────────
+// ── CsvError variant tests (real std.csv enum) ───────────────────────────
 
 test fn csv_error_wrong_column_count() -> Unit {
     let e: CsvError = CsvError::WrongColumnCount(3, 2);

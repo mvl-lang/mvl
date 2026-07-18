@@ -20,26 +20,9 @@
 // Because the property is compile-time, the runtime tests below verify handler
 // behaviour using only non-secret values.
 
-// ── Type re-declarations (workaround: #96) ────────────────────────────────
-
-type Method = enum {
-    Get,
-    Put,
-    Delete,
-    Unknown,
-}
-
-type Response = struct {
-    status: Int where self >= 100 && self < 600,
-    body: String,
-}
-
-type HandlerError = enum {
-    Unauthorized,
-    NotFound,
-    BadRequest,
-    ServerError,
-}
+use handler::Method;
+use handler::Response;
+use handler::HandlerError;
 
 // ── Helper constructors ───────────────────────────────────────────────────
 
