@@ -1,0 +1,100 @@
+// protection_test.mvl — End-to-end scenario tests for the protection kernel.
+//
+// The inline `test fn` blocks in `protection.mvl` cover per-function
+// behaviour and support MC/DC discovery (per the #1888 workaround).
+// This file adds scenario tests through `compute_trip_decision`, which
+// composes the compound decision + breaker-state logic.
+
+use protection.{admit_scada_command, overcurrent_margin, thermal_stress, differential_deviation_pct, is_overcurrent_fault, is_differential_fault, should_trip, compute_trip_decision}
+use model.{CurrentMeasurement, ProtectionSetting, BreakerState, FaultType, FeederState, SCADACommand, TripDecision}
+
+// ── Scenario 1 — normal operation, no trip ────────────────────────────
+
+test fn scenario_normal_operation_holds() -> Unit {
+    let d: TripDecision = compute_trip_decision(false, false, false, false, BreakerState::Closed);
+    let is_hold: Int = match d { TripDecision::Hold => 1, _ => 0 };
+    assert_eq(is_hold, 1);
+}
+
+// ── Scenario 2 — overcurrent trips ────────────────────────────────────
+
+test fn scenario_overcurrent_trips() -> Unit {
+    let d: TripDecision = compute_trip_decision(true, false, false, false, BreakerState::Closed);
+    let is_trip: Int = match d { TripDecision::IssueTrip => 1, _ => 0 };
+    assert_eq(is_trip, 1);
+}
+
+// ── Scenario 3 — SCADA blocks a non-critical trip ────────────────────
+
+test fn scenario_scada_blocks_noncritical() -> Unit {
+    let d: TripDecision = compute_trip_decision(true, false, true, false, BreakerState::Closed);
+    let is_blocked: Int = match d { TripDecision::Blocked => 1, _ => 0 };
+    assert_eq(is_blocked, 1);
+}
+
+// ── Scenario 4 — critical fault defeats SCADA block ──────────────────
+
+test fn scenario_critical_overrides_block() -> Unit {
+    let d: TripDecision = compute_trip_decision(true, true, true, false, BreakerState::Closed);
+    let is_trip: Int = match d { TripDecision::IssueTrip => 1, _ => 0 };
+    assert_eq(is_trip, 1);
+}
+
+// ── Scenario 5 — differential deviation exceeds threshold ────────────
+
+test fn scenario_differential_fault_trips() -> Unit {
+    let deviation: Int = differential_deviation_pct(1500, 900);
+    let is_diff: Bool = is_differential_fault(deviation, 20);
+    let d: TripDecision = compute_trip_decision(is_diff, true, false, false, BreakerState::Closed);
+    let is_trip: Int = match d { TripDecision::IssueTrip => 1, _ => 0 };
+    assert_eq(is_trip, 1);
+}
+
+// ── Scenario 6 — manual override without fault ───────────────────────
+
+test fn scenario_manual_override_trips() -> Unit {
+    let d: TripDecision = compute_trip_decision(false, false, false, true, BreakerState::Closed);
+    let is_trip: Int = match d { TripDecision::IssueTrip => 1, _ => 0 };
+    assert_eq(is_trip, 1);
+}
+
+// ── Scenario 7 — breaker already open ────────────────────────────────
+
+test fn scenario_open_breaker_holds() -> Unit {
+    let d: TripDecision = compute_trip_decision(true, true, false, false, BreakerState::Open);
+    let is_hold: Int = match d { TripDecision::Hold => 1, _ => 0 };
+    assert_eq(is_hold, 1);
+}
+
+test fn scenario_tripping_breaker_holds() -> Unit {
+    let d: TripDecision = compute_trip_decision(true, true, false, false, BreakerState::Tripping);
+    let is_hold: Int = match d { TripDecision::Hold => 1, _ => 0 };
+    assert_eq(is_hold, 1);
+}
+
+// ── IFC smoke ────────────────────────────────────────────────────────
+
+test fn admit_scada_command_declassifies() -> Unit {
+    let raw: SCADACommand = SCADACommand::BlockTrip;
+    let tainted: Tainted[SCADACommand] = relabel taint(raw, "TEST-SCADA");
+    let clean: SCADACommand = admit_scada_command(tainted);
+    let is_block: Int = match clean { SCADACommand::BlockTrip => 1, _ => 0 };
+    assert_eq(is_block, 1);
+}
+
+// ── Arithmetic sanity ────────────────────────────────────────────────
+
+test fn overcurrent_margin_realistic_values() -> Unit {
+    // 1200 A at 1000 A pickup, 110% safety → 1200*110 - 1000*100 = 132000 - 100000 = 32000
+    assert_eq(overcurrent_margin(1200, 1000, 110), 32000);
+}
+
+test fn thermal_stress_saturation() -> Unit {
+    // 5000 A for 60000 ms = 300,000,000 (upper bound of ensures)
+    assert_eq(thermal_stress(5000, 60000), 300000000);
+}
+
+test fn differential_deviation_percent_conversion() -> Unit {
+    // 1200 vs 800 → abs=400, sum=2000, dev=400*200/2000=40
+    assert_eq(differential_deviation_pct(1200, 800), 40);
+}

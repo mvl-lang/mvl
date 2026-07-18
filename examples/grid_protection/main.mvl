@@ -1,0 +1,90 @@
+// main.mvl — Grid-protection relay demo.
+//
+// Six representative fault scenarios walking through overcurrent,
+// differential, SCADA-blocked, and manual-override cases.
+
+use model.{CurrentMeasurement, ProtectionSetting, BreakerState, FaultType, FeederState, SCADACommand, TripDecision}
+use protection.{overcurrent_margin, thermal_stress, differential_deviation_pct, is_overcurrent_fault, is_differential_fault, should_trip, compute_trip_decision}
+
+// ── Output helpers ───────────────────────────────────────────────────
+
+total fn describe_decision(d: TripDecision) -> String {
+    match d {
+        TripDecision::Hold      => "hold  (no action)",
+        TripDecision::IssueTrip => "TRIP  (fault confirmed)",
+        TripDecision::Blocked   => "block (SCADA suppressed non-critical trip)",
+    }
+}
+
+// ── Scenarios ────────────────────────────────────────────────────────
+
+total fn s1_normal_operating() -> String {
+    // 500 A on a 1000 A pickup with default 110 % safety factor → no fault.
+    let margin: Int = overcurrent_margin(500, 1000, 110);
+    let is_oc: Bool = is_overcurrent_fault(500, 1000, 110);
+    describe_decision(compute_trip_decision(is_oc, false, false, false, BreakerState::Closed))
+        .concat("  (margin=").concat(int_to_string(margin)).concat(")")
+}
+
+total fn s2_overcurrent_fault() -> String {
+    // 1500 A on a 1000 A pickup with 110 % safety → overcurrent.
+    let margin: Int = overcurrent_margin(1500, 1000, 110);
+    let is_oc: Bool = is_overcurrent_fault(1500, 1000, 110);
+    describe_decision(compute_trip_decision(is_oc, false, false, false, BreakerState::Closed))
+        .concat("  (margin=").concat(int_to_string(margin)).concat(")")
+}
+
+total fn s3_overcurrent_but_scada_blocks() -> String {
+    let is_oc: Bool = is_overcurrent_fault(1500, 1000, 110);
+    describe_decision(compute_trip_decision(is_oc, false, true, false, BreakerState::Closed))
+}
+
+total fn s4_critical_fault_defeats_block() -> String {
+    let is_oc: Bool = is_overcurrent_fault(1500, 1000, 110);
+    // Critical fault (e.g. major overcurrent) trips even under SCADA block
+    describe_decision(compute_trip_decision(is_oc, true, true, false, BreakerState::Closed))
+}
+
+total fn s5_differential_fault() -> String {
+    // 1500 A upstream, 900 A downstream → 600 A lost mid-feeder
+    let dev: Int = differential_deviation_pct(1500, 900);
+    let is_diff: Bool = is_differential_fault(dev, 20);
+    describe_decision(compute_trip_decision(is_diff, true, false, false, BreakerState::Closed))
+        .concat("  (deviation=").concat(int_to_string(dev)).concat("%)")
+}
+
+total fn s6_manual_override() -> String {
+    // No fault detected but operator forces a trip via SCADA
+    describe_decision(compute_trip_decision(false, false, false, true, BreakerState::Closed))
+}
+
+// ── Int-to-string helper (borrowed from cbtc_train_presence) ─────────
+
+total fn int_to_string_pos(n: Int where self >= 0) -> String {
+    if n < 10 { digit(n) }
+    else { int_to_string_pos(n / 10).concat(digit(n % 10)) }
+}
+
+total fn int_to_string(n: Int) -> String {
+    if n >= 0 { int_to_string_pos(n) }
+    else { "-".concat(int_to_string_pos(0 - n)) }
+}
+
+total fn digit(d: Int) -> String {
+    match d {
+        0 => "0", 1 => "1", 2 => "2", 3 => "3", 4 => "4",
+        5 => "5", 6 => "6", 7 => "7", 8 => "8", 9 => "9",
+        _ => "?",
+    }
+}
+
+// ── Entry point ─────────────────────────────────────────────────────
+
+total fn main() -> Unit ! Console {
+    println("1. normal operation:              ".concat(s1_normal_operating()));
+    println("2. overcurrent fault:             ".concat(s2_overcurrent_fault()));
+    println("3. overcurrent + SCADA block:     ".concat(s3_overcurrent_but_scada_blocks()));
+    println("4. critical fault defeats block:  ".concat(s4_critical_fault_defeats_block()));
+    println("5. differential fault:            ".concat(s5_differential_fault()));
+    println("6. manual override, no fault:     ".concat(s6_manual_override()));
+}

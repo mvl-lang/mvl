@@ -1,0 +1,210 @@
+// protection.mvl — Substation protection-relay kernel.
+//
+// Three L5-forcing predicates over nonlinear grid physics:
+//   * overcurrent_margin  — three-variable product bound
+//   * thermal_stress      — two-variable product with positivity
+//   * differential_pct    — abs-diff × constant, divided by variable sum
+//
+// One compound safety decision (should_trip) for MC/DC.
+//
+// One IFC trust boundary (SCADA-CMD-001) for tainted control-centre
+// input, mirroring the ETCS RBC-MA-001 pattern.
+//
+// Coordination timing, real-time trip-latency, and liveness properties
+// fall outside pointwise refinement scope — see README §"Explicitly
+// out of scope for this example".
+
+use model.{CurrentMeasurement, ProtectionSetting, BreakerState, FaultType, FeederState, SCADACommand, TripDecision}
+
+// ── IFC boundary: SCADA input ────────────────────────────────────────
+
+/// Trust a SCADA command from the control-centre RTU.
+///
+/// AUDIT ANCHOR (`SCADA-CMD-001`): sole `relabel trust` on the SCADA
+/// command flow.  `grep -n "SCADA-CMD-001" protection.mvl` returns
+/// exactly one line.
+pub total fn admit_scada_command(raw: Tainted[SCADACommand]) -> SCADACommand {
+    relabel trust(raw, "SCADA-CMD-001")
+}
+
+// ── L5-forcing refinement obligations ────────────────────────────────
+
+/// Overcurrent margin: how far the actual current exceeds the
+/// safety-adjusted pickup threshold.  Positive result indicates
+/// tripping should be considered.
+///
+/// Refinement layer: **L5 (Z3 QF-NIA).**
+/// `actual * safety_pct` and `pickup * 100` are both products of
+/// bounded variables; the ensures proves the result is bounded above
+/// by the physically achievable maximum.
+pub total fn overcurrent_margin(
+    actual: Int where self >= 0 && self <= 5000,
+    pickup: Int where self >= 100 && self <= 5000,
+    safety_pct: Int where self >= 100 && self <= 200,
+) -> Int
+    ensures result >= -500000
+    ensures result <= 1000000
+{
+    actual * safety_pct - pickup * 100
+}
+
+/// Thermal-stress accumulator: I × t model for cumulative heat load
+/// during a fault.  Simplified from I²R×t to keep the arithmetic
+/// tractable while exercising the same solver-theory shape as
+/// dose_scheduling's `total_infusion_dose`.
+///
+/// Refinement layer: **L5 (Z3 QF-NIA).**
+/// Two-variable product with lower bound proven positive from
+/// positive factors.
+pub total fn thermal_stress(
+    current_amps: Int where self >= 0 && self <= 5000,
+    duration_ms: Int where self >= 1 && self <= 60000,
+) -> Int
+    ensures result >= 0
+    ensures result <= 300000000
+{
+    current_amps * duration_ms
+}
+
+/// Differential-protection deviation percentage: percentage difference
+/// between upstream and downstream currents, relative to their sum.
+/// Values above the threshold indicate a differential fault (current
+/// leaving the feeder somewhere between the two measurement points).
+///
+/// Refinement layer: **L5 (Z3 QF-NIA).**
+/// Combines abs-difference (linear) with division by a variable sum
+/// (nonlinear).  Ensures the result stays in the 0..200 percentage
+/// range — actually 0..100 in the mathematical sense but the solver
+/// may not tighten the upper bound within the QF-NIA fragment.
+pub total fn differential_deviation_pct(
+    i_in: Int where self >= 100 && self <= 5000,
+    i_out: Int where self >= 100 && self <= 5000,
+) -> Int
+    ensures result >= 0
+    ensures result <= 200
+{
+    let abs_diff: Int = if i_in >= i_out { i_in - i_out } else { i_out - i_in };
+    let sum_curr: Int = i_in + i_out;
+    abs_diff * 200 / sum_curr
+}
+
+// ── Pointwise safety predicates ──────────────────────────────────────
+
+/// Detect an overcurrent fault: actual current exceeds the safety-
+/// adjusted pickup threshold.
+pub total fn is_overcurrent_fault(actual: Int, pickup: Int, safety_pct: Int) -> Bool {
+    actual * safety_pct > pickup * 100
+}
+
+/// Detect a differential fault: measurable current mismatch between
+/// upstream and downstream sensors.
+pub total fn is_differential_fault(dev_pct: Int, threshold_pct: Int) -> Bool {
+    dev_pct > threshold_pct
+}
+
+// ── Compound safety decision (MC/DC target) ──────────────────────────
+
+/// Should the breaker be tripped?
+///
+/// MC/DC AUDIT ANCHOR (`MCDC-GRID-001`): `fault_detected` appears in
+/// two clauses.  Under unique-cause MC/DC this is a coupling; under
+/// DO-178C masking MC/DC the coupled clauses are exempt.  Clinical
+/// rationale for the coupling: a critical fault must trip even when
+/// SCADA has blocked non-critical trips (planned maintenance window
+/// must not defeat life-safety protection).
+pub total fn should_trip(
+    fault_detected: Bool,
+    block_command_active: Bool,
+    is_critical_fault: Bool,
+    manual_override: Bool,
+) -> Bool {
+    (fault_detected && !block_command_active)
+    || (fault_detected && is_critical_fault)
+    || manual_override
+}
+
+// ── Trip-decision kernel ─────────────────────────────────────────────
+
+/// Compute the trip decision given fault detection, SCADA state, and
+/// the current breaker position.
+pub total fn compute_trip_decision(
+    fault_detected: Bool,
+    is_critical: Bool,
+    scada_block: Bool,
+    manual_override: Bool,
+    breaker: BreakerState,
+) -> TripDecision {
+    match breaker {
+        BreakerState::Open => TripDecision::Hold,
+        BreakerState::Tripping => TripDecision::Hold,
+        BreakerState::Closed => {
+            if should_trip(fault_detected, scada_block, is_critical, manual_override) {
+                TripDecision::IssueTrip
+            } else if fault_detected && scada_block && !is_critical {
+                TripDecision::Blocked
+            } else {
+                TripDecision::Hold
+            }
+        }
+    }
+}
+
+// ── Inline unit tests (activate MC/DC discovery per #1888 workaround) ──
+
+test fn overcurrent_margin_neutral_when_at_threshold() -> Unit {
+    // actual = pickup and safety_pct = 100 → margin = 0
+    assert_eq(overcurrent_margin(500, 500, 100), 0);
+}
+
+test fn overcurrent_margin_positive_when_above() -> Unit {
+    // actual=600, pickup=500, safety_pct=100 → 600*100 - 500*100 = 10000
+    assert_eq(overcurrent_margin(600, 500, 100), 10000);
+}
+
+test fn overcurrent_margin_negative_when_below() -> Unit {
+    // actual=400, pickup=500, safety_pct=100 → 400*100 - 500*100 = -10000
+    assert_eq(overcurrent_margin(400, 500, 100), -10000);
+}
+
+test fn thermal_stress_zero_current_is_zero() -> Unit {
+    assert_eq(thermal_stress(0, 100), 0);
+}
+
+test fn thermal_stress_realistic_load() -> Unit {
+    // 1000 A for 100 ms
+    assert_eq(thermal_stress(1000, 100), 100000);
+}
+
+test fn differential_deviation_equal_currents() -> Unit {
+    // No mismatch → 0%
+    assert_eq(differential_deviation_pct(1000, 1000), 0);
+}
+
+test fn differential_deviation_full_mismatch() -> Unit {
+    // 900 vs 100 → abs_diff=800, sum=1000, deviation=800*200/1000=160
+    assert_eq(differential_deviation_pct(900, 100), 160);
+}
+
+test fn should_trip_normal_fault() -> Unit {
+    // Fault detected, no block, no critical, no override → trip via clause 1
+    assert_eq(should_trip(true, false, false, false), true);
+}
+
+test fn should_trip_critical_defeats_block() -> Unit {
+    // Fault + critical fires clause 2 even when block is active
+    assert_eq(should_trip(true, true, true, false), true);
+}
+
+test fn should_trip_non_critical_blocked() -> Unit {
+    // Fault detected but block active and not critical → do not trip
+    assert_eq(should_trip(true, true, false, false), false);
+}
+
+test fn should_trip_manual_override_only() -> Unit {
+    // No fault but manual override → trip
+    assert_eq(should_trip(false, false, false, true), true);
+}
+
+test fn should_trip_all_false() -> Unit {
+    assert_eq(should_trip(false, false, false, false), false);
+}
