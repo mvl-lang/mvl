@@ -236,7 +236,7 @@ jobs:
       # LLVM 22 is installed under /usr/lib/llvm-22 by apt (not on PATH);
       # prepend its bin/ so `mvl`'s find_lli()/find_llc() succeed and pin
       # LLC for the bootstrap chain in test-mvl-llvm.
-      - name: Test matrix (rust/rust + rust/llvm + mvl/llvm)
+      - name: Test matrix (rust/rust + rust/llvm + rust/rust-tokio + mvl/llvm)
         if: needs.changes.outputs.rust == 'true'
         env:
           LLC: /usr/lib/llvm-22/bin/llc
@@ -245,6 +245,7 @@ jobs:
           make install-runtime
           make test-rust-rust
           make test-rust-llvm
+          make test-rust-tokio
           make test-mvl-llvm
 
       - name: MVL check compiler

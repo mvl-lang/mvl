@@ -326,17 +326,17 @@ test-bdd: build ## Run BDD corpus scenarios with Gherkin report (mvl test --bdd)
 # panic (from assert/assert_eq/assert_ne) = fail. No --expect strings.
 # `mvl test <dir>` bundles every _test.mvl file into ONE cargo test crate:
 # one transpile pass, one cargo build, one cargo test — same shape as
-# test-stdlib. Same corpus runs through every backend; rust/rust below is
-# the reference. LLVM / WASM / MVL-self-hosted anchors are stubs today
-# and become active in follow-up tickets (#1828, #1829).
+# test-stdlib. Same corpus runs through every backend; rust/rust is the
+# reference. rust/llvm and rust/rust-tokio are fully active; mvl/llvm is
+# a tracer bullet; mvl/wasm is a stub (#1828).
 
 # Naming: test-<compiler>-<backend>
-#   rust/rust        — Rust compiler → Rust transpiler → cargo test  (active)
-#   rust/llvm        — Rust compiler → LLVM text emitter → lli       (stub)
-#   mvl/llvm         — MVL self-hosted compiler → LLVM               (stub)
+#   rust/rust        — Rust compiler → Rust transpiler → cargo test  (active, full corpus)
+#   rust/llvm        — Rust compiler → LLVM text emitter → lli       (active, full corpus)
+#   mvl/llvm         — MVL self-hosted compiler → LLVM               (tracer bullet, #1828)
 #   rust/wasm        — Rust compiler → WAT emitter → wasmtime        (curated spike)
-#   mvl/wasm         — MVL self-hosted → WAT                         (stub)
-#   rust/rust-tokio  — Rust compiler → Rust with tokio runtime       (stub, actors only)
+#   mvl/wasm         — MVL self-hosted → WAT                         (stub, #1828)
+#   rust/rust-tokio  — Rust compiler → Rust + tokio runtime          (active, 12_actors/ only)
 
 test-rust-rust: build ## rust/rust — new corpus through Rust transpiler (batched, via mvlr)
 	$(MVLR) --mvl=$(MVL) --compiler=rust --backend=rust tests/corpus/
@@ -347,9 +347,8 @@ test-rust-llvm: build ## rust/llvm — new corpus through LLVM text emitter (via
 test-mvl-llvm: build ## mvl/llvm — MVL self-hosted → LLVM (tracer bullet, via mvlr, broader corpus in #1828)
 	$(MVLR) --mvl=$(MVL) --compiler=mvl --backend=llvm examples/programs/hello_world.mvl
 
-test-rust-tokio: build ## rust/rust-tokio — actor subset only (stub, tracked in #1828)
-	@printf "  \033[33m~  SKIP: test-rust-tokio not yet wired\033[0m\n"
-	@echo "    Will run tests/corpus/12_actors/ only, once actors category lands. See #1828."
+test-rust-tokio: build ## rust/rust-tokio — actor subset through tokio runtime (tests/corpus/12_actors/)
+	$(MVLR) --mvl=$(MVL) --compiler=rust --backend=rust-tokio tests/corpus/12_actors/
 
 test-mvl-wasm: build ## mvl/wasm — MVL self-hosted → WAT (stub, tracked in #1828)
 	@printf "  \033[33m~  SKIP: test-mvl-wasm not yet wired\033[0m\n"
