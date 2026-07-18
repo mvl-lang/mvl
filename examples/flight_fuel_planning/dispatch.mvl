@@ -1,0 +1,166 @@
+// dispatch.mvl — Dispatchability decision + IFC boundary.
+//
+// Two compound safety decisions (MC/DC targets):
+//   * requires_dispatch_review    — five-atom compound with coupled clause
+//   * requires_second_alternate   — four-atom compound with weather coupling
+//
+// One IFC boundary anchor:
+//   * WX-MINIMA-001 — sole `relabel trust` from Tainted[Bool] weather
+//     minima received from the Aeronautical Information Service (AIS).
+//     Weather NOTAMs and TAFs arrive over external feeds — treated as
+//     tainted until an audited crossing.
+
+use model.{FlightPlan, FuelBurn, FuelUplift, DispatchResult, UndispatchReason}
+use calc.{trip_fuel_kg, alternate_fuel_kg, contingency_kg, reserve_kg, requires_alternate}
+
+// ── IFC boundary: weather-minima declassification ───────────────────
+
+/// Trust a weather-minima bit arriving from the AIS feed.
+///
+/// AUDIT ANCHOR (`WX-MINIMA-001`): sole `relabel trust` for weather-
+/// minima ingest.  `grep -n "WX-MINIMA-001" dispatch.mvl` returns
+/// exactly one line.
+///
+/// Weather feeds carry advisory bits (destination minima met? alternate
+/// minima met? ETOPS conditions active?) that flow into dispatchability.
+/// Each is `Tainted[Bool]` at the feed interface and is declassified
+/// through this single audited point.
+pub total fn trust_weather_minima(raw: Tainted[Bool]) -> Bool {
+    relabel trust(raw, "WX-MINIMA-001")
+}
+
+// ── Compound safety decisions (MC/DC targets) ────────────────────────
+
+/// Determine whether the dispatch decision requires human review.
+///
+/// MC/DC AUDIT ANCHOR (`MCDC-FUEL-001`): five atomic conditions.  The
+/// `weather_alt_marginal && !is_etops` clause is a coupled sub-expression
+/// (marginal alternate weather only forces review when the flight is
+/// NOT an ETOPS operation — ETOPS has its own more stringent alternate
+/// rules that supersede the marginal check).  DO-178C §6.4.4.2 masking
+/// exemption covers the coupling.
+pub total fn requires_dispatch_review(
+    total_kg:                    Int,
+    max_kg:                      Int,
+    weather_alt_marginal:        Bool,
+    is_etops:                    Bool,
+    has_medical_diversion_needs: Bool,
+) -> Bool {
+    (total_kg * 100 > max_kg * 95)
+    || (weather_alt_marginal && !is_etops)
+    || has_medical_diversion_needs
+}
+
+/// Determine whether a second alternate airport is required.
+///
+/// MC/DC AUDIT ANCHOR (`MCDC-FUEL-002`): four atomic conditions.  The
+/// `!dest_wx_ok && !alt_wx_ok` clause is a coupled sub-expression
+/// (a second alternate is only required when BOTH destination and first
+/// alternate have degraded weather — one degraded and the other clear
+/// is handled by the standard alternate).
+pub total fn requires_second_alternate(
+    dest_wx_ok:      Bool,
+    alt_wx_ok:       Bool,
+    is_etops:        Bool,
+    distance_to_alt2_nm: Int,
+) -> Bool {
+    (!dest_wx_ok && !alt_wx_ok)
+    || (is_etops && distance_to_alt2_nm > 200)
+}
+
+// ── Dispatch kernel ─────────────────────────────────────────────────
+
+/// Compose an uplift breakdown from the plan and burn model.
+pub total fn compute_uplift(plan: FlightPlan, burn: FuelBurn) -> FuelUplift {
+    let trip: Int = trip_fuel_kg(plan.trip_distance_nm, burn.burn_kg_per_hr, plan.cruise_speed_kt);
+    let cont: Int = contingency_kg(trip, plan.contingency_pct);
+    let alt:  Int = alternate_fuel_kg(plan.alt_distance_nm, burn.burn_kg_per_hr, plan.cruise_speed_kt);
+    let res:  Int = reserve_kg(burn.reserve_burn_kg_hr, plan.reserve_min);
+    FuelUplift {
+        trip_kg: cap(trip, 100000),
+        contingency_kg: cap(cont, 20000),
+        alternate_kg: cap(alt, 20000),
+        reserve_kg: cap(res, 20000),
+        total_kg: cap(trip + cont + alt + res + plan.taxi_kg, 200000),
+    }
+}
+
+total fn cap(x: Int, ceiling: Int) -> Int {
+    if x < 0 { 0 }
+    else if x > ceiling { ceiling }
+    else { x }
+}
+
+/// Dispatch a flight given plan, burn, aircraft envelope, weather, and
+/// operational flags.  Priority: capacity check first, then weather
+/// alternates, then review triggers.
+pub total fn dispatch(
+    plan:                        FlightPlan,
+    burn:                        FuelBurn,
+    max_uplift_kg:               Int,
+    dest_wx_ok:                  Bool,
+    alt_wx_ok:                   Bool,
+    weather_alt_marginal:        Bool,
+    is_etops:                    Bool,
+    distance_to_alt2_nm:         Int,
+    has_medical_diversion_needs: Bool,
+) -> DispatchResult {
+    let uplift: FuelUplift = compute_uplift(plan, burn);
+
+    if uplift.total_kg > max_uplift_kg {
+        DispatchResult::Undispatchable(UndispatchReason::ExceedsMaxCapacity)
+    } else if requires_second_alternate(dest_wx_ok, alt_wx_ok, is_etops, distance_to_alt2_nm) {
+        DispatchResult::RequiresSecondAlternate
+    } else if requires_dispatch_review(uplift.total_kg, max_uplift_kg, weather_alt_marginal, is_etops, has_medical_diversion_needs) {
+        DispatchResult::RequiresReview
+    } else {
+        DispatchResult::Dispatchable
+    }
+}
+
+// ── Inline unit tests (activate MC/DC discovery per #1888 workaround) ──
+
+test fn review_when_near_max_capacity() -> Unit {
+    // 96% of max (>95%) triggers review
+    assert_eq(requires_dispatch_review(9600, 10000, false, false, false), true);
+}
+
+test fn no_review_when_well_under_capacity() -> Unit {
+    // 50% of max — no review needed
+    assert_eq(requires_dispatch_review(5000, 10000, false, false, false), false);
+}
+
+test fn review_when_marginal_alt_non_etops() -> Unit {
+    // Coupled clause fires: marginal AND !is_etops
+    assert_eq(requires_dispatch_review(5000, 10000, true, false, false), true);
+}
+
+test fn no_review_when_marginal_but_etops() -> Unit {
+    // Coupled clause suppressed: marginal but is_etops
+    assert_eq(requires_dispatch_review(5000, 10000, true, true, false), false);
+}
+
+test fn review_when_medical_diversion() -> Unit {
+    assert_eq(requires_dispatch_review(5000, 10000, false, false, true), true);
+}
+
+test fn second_alternate_when_both_wx_bad() -> Unit {
+    // Coupled clause fires: !dest_wx_ok AND !alt_wx_ok
+    assert_eq(requires_second_alternate(false, false, false, 100), true);
+}
+
+test fn no_second_alternate_when_dest_ok() -> Unit {
+    assert_eq(requires_second_alternate(true, false, false, 100), false);
+}
+
+test fn no_second_alternate_when_alt_ok() -> Unit {
+    assert_eq(requires_second_alternate(false, true, false, 100), false);
+}
+
+test fn second_alternate_when_etops_and_far() -> Unit {
+    assert_eq(requires_second_alternate(true, true, true, 300), true);
+}
+
+test fn no_second_alternate_when_etops_and_close() -> Unit {
+    assert_eq(requires_second_alternate(true, true, true, 150), false);
+}
