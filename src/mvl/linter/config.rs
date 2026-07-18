@@ -135,6 +135,10 @@ pub struct LintConfig {
     pub silent_result_discard: bool,
     /// Flag reused or boilerplate audit tags on `relabel trust` / `relabel classify` (#1466).
     pub relabel_tag_hygiene: bool,
+    /// Warn on `_` (catch-all) arm in match on a user-defined enum — new variants
+    /// are silently absorbed rather than forcing an explicit decision at each match
+    /// site (#1775).  Excluded for stdlib types (`Option`, `Result`).
+    pub wildcard_enum_match: bool,
 
     // ── Phase 3: LLM corpus quality rules ────────────────────────────────
     /// Flag block comments `/* */`; only `//` line comments are allowed.
@@ -192,6 +196,7 @@ impl Default for LintConfig {
             unused_functions: true,
             silent_result_discard: true,
             relabel_tag_hygiene: true,
+            wildcard_enum_match: true,
             consistent_comment_style: false,
             require_doc_comments: true,
             doc_comment_examples: false,
@@ -331,6 +336,7 @@ fn load_from(path: &Path) -> Option<LintConfig> {
             "unused_functions" => cfg.unused_functions = parse_bool(val),
             "silent_result_discard" => cfg.silent_result_discard = parse_bool(val),
             "relabel_tag_hygiene" => cfg.relabel_tag_hygiene = parse_bool(val),
+            "wildcard_enum_match" => cfg.wildcard_enum_match = parse_bool(val),
             "consistent_comment_style" => cfg.consistent_comment_style = parse_bool(val),
             "require_doc_comments" => cfg.require_doc_comments = parse_bool(val),
             "doc_comment_examples" => cfg.doc_comment_examples = parse_bool(val),

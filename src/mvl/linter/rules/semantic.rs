@@ -324,6 +324,140 @@ fn expr_display(expr: &Expr) -> &str {
 /// If a function body is entirely free of calls, no effect can ever be
 /// triggered — any declared effects are therefore dead annotations.
 ///
+/// Warn when a `_` (catch-all) arm appears in a `match` on a user-defined enum.
+///
+/// A wildcard silently absorbs any new variant added to the enum instead of
+/// producing a compile error that forces an explicit decision at every match
+/// site.  This is the ACL/permission footgun: `HttpMethod::Options` is added
+/// and every wildcard-armed match silently applies its default (#1775).
+///
+/// Stdlib types (`Option[T]`, `Result[T,E]`) are excluded — wildcards there
+/// are idiomatic.  Only types declared in user source (`type Foo = enum { … }`)
+/// are checked.
+pub fn wildcard_enum_match(prog: &Program, cfg: &LintConfig, out: &mut Vec<LintDiag>) {
+    if !cfg.wildcard_enum_match {
+        return;
+    }
+    // Collect user-defined enum names from this program's type declarations.
+    let user_enums: HashSet<String> = prog
+        .declarations
+        .iter()
+        .filter_map(|d| {
+            if let Decl::Type(td) = d {
+                if matches!(&td.body, TypeBody::Enum(_)) {
+                    return Some(td.name.clone());
+                }
+            }
+            None
+        })
+        .collect();
+    if user_enums.is_empty() {
+        return;
+    }
+    for decl in &prog.declarations {
+        if let Decl::Fn(f) = decl {
+            check_block_wildcard_enum_match(&f.body, &user_enums, out);
+        }
+    }
+}
+
+/// Return the enum type name from a pattern like `Enum::Variant(…)` or
+/// `Pattern::Ident("Enum::Variant", …)`, if any.
+fn enum_name_from_pattern(pat: &Pattern) -> Option<&str> {
+    match pat {
+        Pattern::TupleStruct { name, .. } | Pattern::Ident(name, _)
+            if name.contains("::") =>
+        {
+            Some(name.split("::").next().unwrap_or(""))
+        }
+        _ => None,
+    }
+}
+
+fn is_wildcard(pat: &Pattern) -> bool {
+    match pat {
+        Pattern::Wildcard(_) => true,
+        Pattern::Ident(name, _) => !name.contains("::"),
+        _ => false,
+    }
+}
+
+fn check_block_wildcard_enum_match(
+    block: &Block,
+    user_enums: &HashSet<String>,
+    out: &mut Vec<LintDiag>,
+) {
+    for stmt in &block.stmts {
+        check_stmt_wildcard_enum_match(stmt, user_enums, out);
+    }
+}
+
+fn check_stmt_wildcard_enum_match(
+    stmt: &Stmt,
+    user_enums: &HashSet<String>,
+    out: &mut Vec<LintDiag>,
+) {
+    match stmt {
+        Stmt::Match { arms, span, .. } => {
+            emit_if_wildcard_enum_match(arms, span.line, span.col, user_enums, out);
+            for arm in arms {
+                if let MatchBody::Block(b) = &arm.body {
+                    check_block_wildcard_enum_match(b, user_enums, out);
+                }
+            }
+        }
+        Stmt::If {
+            then, else_, ..
+        } => {
+            check_block_wildcard_enum_match(then, user_enums, out);
+            if let Some(eb) = else_ {
+                match eb {
+                    ElseBranch::Block(b) => check_block_wildcard_enum_match(b, user_enums, out),
+                    ElseBranch::If(s) => check_stmt_wildcard_enum_match(s, user_enums, out),
+                }
+            }
+        }
+        Stmt::While { body, .. } | Stmt::For { body, .. } => {
+            check_block_wildcard_enum_match(body, user_enums, out);
+        }
+        _ => {}
+    }
+}
+
+fn emit_if_wildcard_enum_match(
+    arms: &[MatchArm],
+    line: u32,
+    col: u32,
+    user_enums: &HashSet<String>,
+    out: &mut Vec<LintDiag>,
+) {
+    // Find any arm whose pattern is a qualified variant of a user-defined enum.
+    let matched_user_enum = arms.iter().find_map(|arm| {
+        if let Some(enum_name) = enum_name_from_pattern(&arm.pattern) {
+            if user_enums.contains(enum_name) {
+                return Some(enum_name.to_owned());
+            }
+        }
+        None
+    });
+    let Some(enum_name) = matched_user_enum else {
+        return;
+    };
+    // Check whether any arm is a wildcard.
+    let has_wildcard = arms.iter().any(|arm| is_wildcard(&arm.pattern));
+    if has_wildcard {
+        out.push(LintDiag::warning(
+            "wildcard-enum-match",
+            format!(
+                "`_` arm in match on user-defined enum `{enum_name}` silently absorbs \
+                 future variants — consider naming each arm explicitly"
+            ),
+            line,
+            col,
+        ));
+    }
+}
+
 /// Note: this is a conservative check.  A function that only calls local
 /// pure helpers is not flagged even if those helpers are call-free.
 pub fn redundant_effects(prog: &Program, cfg: &LintConfig, out: &mut Vec<LintDiag>) {

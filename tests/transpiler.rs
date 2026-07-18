@@ -810,7 +810,8 @@ fn process(items: List[Int]) -> Unit ! Console {
 "#;
     let rust = transpile_src(src);
     // The iterable must be cloned so `items` remains usable after the loop.
-    assert_contains(&rust, "(items).clone()");
+    // Precedence-aware: plain identifiers no longer wrapped in extra parens (#1659).
+    assert_contains(&rust, "items.clone()");
 }
 
 /// For-loop over a function call expression clones the returned collection.
@@ -826,7 +827,8 @@ fn process() -> Unit ! Console {
 }
 "#;
     let rust = transpile_src(src);
-    assert_contains(&rust, "(get_items()).clone()");
+    // Function calls have Suffix precedence — no extra parens needed (#1659).
+    assert_contains(&rust, "get_items().clone()");
 }
 
 /// For-loop over a field access iterable clones it — Spec 009 Req 7.
@@ -842,8 +844,8 @@ fn process(c: Container) -> Unit ! Console {
 }
 "#;
     let rust = transpile_src(src);
-    assert_contains(&rust, "c.items");
-    assert_contains(&rust, ".clone()");
+    // Field access has Suffix precedence — no extra parens needed (#1659).
+    assert_contains(&rust, "c.items.clone()");
 }
 
 // ── Spec 009 Req 2: Clone-on-pass ─────────────────────────────────────────
@@ -1011,11 +1013,11 @@ fn corpus_args_transpiles() {
 fn corpus_bitwise_transpiles() {
     let src = include_str!("fixtures/04_primitives/bitwise.mvl");
     let rust = transpile_src(src);
-    // Int bitwise — Rust operators
-    assert_contains(&rust, "(a & b)");
-    assert_contains(&rust, "(a | b)");
-    assert_contains(&rust, "(a ^ b)");
-    assert_contains(&rust, "(!a)");
+    // Int bitwise — Rust operators without unnecessary outer parens (#1659).
+    assert_contains(&rust, "a & b");
+    assert_contains(&rust, "a | b");
+    assert_contains(&rust, "a ^ b");
+    assert_contains(&rust, "!a");
     assert_contains(&rust, ".wrapping_shl(");
     assert_contains(&rust, ".wrapping_shr(");
     // Byte to_int — cast to i64
@@ -1027,7 +1029,7 @@ fn corpus_bitwise_transpiles() {
     // typing surfaces in the let bindings rather than a top-level signature.
     assert_contains(&rust, "fn byte_bit_and()");
     assert_contains(&rust, "let a: u8 =");
-    assert_contains(&rust, "let _: u8 = (a & b);");
+    assert_contains(&rust, "let _: u8 = a & b;");
 }
 
 // ── Prelude emission (issue #229, Phase 4) ────────────────────────────────
@@ -1554,7 +1556,7 @@ fn method_bit_xor_emits_operator() {
 fn method_bit_not_emits_prefix_bang() {
     let src = "fn f(a: Int) -> Int { a.bit_not() }";
     let rust = transpile_src(src);
-    assert_contains(&rust, "(!");
+    assert_contains(&rust, "!");
 }
 
 #[test]
@@ -1723,7 +1725,7 @@ fn method_split_emits_map_to_string() {
 fn method_is_zero_emits_eq_zero() {
     let src = "fn f(n: Int) -> Bool { n.is_zero() }";
     let rust = transpile_src(src);
-    assert_contains(&rust, " == 0)");
+    assert_contains(&rust, " == 0");
 }
 
 #[test]
@@ -3684,6 +3686,7 @@ fn concurrently_block_emits_plain_block() {
         fn run() -> Unit {
             concurrently {
                 let x: Int = 1;
+                println(x);
             }
         }
     "#;
@@ -3697,7 +3700,7 @@ fn select_emits_first_arm_body() {
     let src = r#"
         fn run() -> Unit {
             select {
-                timeout(100) => { let y: Int = 2; }
+                timeout(100) => { let y: Int = 2; println(y); }
             }
         }
     "#;

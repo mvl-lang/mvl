@@ -1,5 +1,4 @@
 // Corpus: MVL security labels and information-flow control
-// corpus:expect-warnings — unused `let` bindings and match binders; tracked in #1678
 
 // ── Security-labeled types ────────────────────────────────────────────────
 

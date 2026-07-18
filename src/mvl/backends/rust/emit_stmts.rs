@@ -67,7 +67,17 @@ impl RustEmitter {
                 } else {
                     self.push("let ");
                 }
-                self.emit_pattern(pattern);
+                // Emit `_name` when the let binding is never referenced so
+                // Rust's `unused_variables` lint is silenced (#1678).
+                if let Pattern::Ident(name, span) = pattern {
+                    if self.unreferenced_let_spans.contains(span) {
+                        self.push(&format!("_{name}"));
+                    } else {
+                        self.emit_pattern(pattern);
+                    }
+                } else {
+                    self.emit_pattern(pattern);
+                }
                 // Fn types: omit the annotation so Rust infers the concrete
                 // closure type — `fn(T)->U` rejects capturing closures (#1313).
                 // Wildcard + Ref: `let _: ref T = cap_param` would emit as
@@ -365,12 +375,12 @@ impl RustEmitter {
                 self.push("for ");
                 self.emit_pattern(pattern);
                 // MVL value semantics: the iterable is conceptually copied, not consumed.
-                // Wrap the entire expression in parens before `.clone()` so the pattern
-                // works for all expression forms (ident, field access, function call, etc.).
-                // Spec 009 Req 7.
-                self.push(" in (");
-                self.emit_expr(iter);
-                self.push(").clone() {");
+                // Use emit_method_receiver so `.clone()` binds correctly for all expression
+                // forms (Spec 009 Req 7); parens are added only when operator precedence
+                // requires it (e.g. binary expressions), not for plain identifiers (#1659).
+                self.push(" in ");
+                self.emit_method_receiver(iter);
+                self.push(".clone() {");
                 self.nl();
                 self.push_indent();
                 if let Some(id) = for_id {

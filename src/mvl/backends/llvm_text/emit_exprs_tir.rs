@@ -1404,6 +1404,10 @@ impl TextEmitter {
     }
 
     /// TIR variant of [`Self::emit_payload_enum_match`].
+    ///
+    /// Handles flat nested enum patterns (e.g. `Outer::First(Inner::A)` and
+    /// `Outer::First(Inner::B)`) by grouping arms that share the same outer
+    /// discriminant and emitting a nested inner switch for each group (#1887).
     fn emit_payload_enum_match_tir(
         &mut self,
         scrut_val: &str,
@@ -1415,16 +1419,12 @@ impl TextEmitter {
         ));
         self.fn_ctx.reg_types.insert(disc_reg.clone(), "i8".into());
 
-        let n = self.fn_ctx.bb;
-        self.fn_ctx.bb += arms.len() + 2;
-        let default_bb = format!("match_default_{n}");
-        let merge_bb = format!("match_merge_{}", n + arms.len() + 1);
-        let arm_bbs: Vec<String> = (0..arms.len())
-            .map(|i| format!("match_arm_{}", n + i))
-            .collect();
-
-        let mut switch_str = format!("switch i8 {disc_reg}, label %{default_bb} [\n");
+        // Pre-pass: group arms by outer discriminant, preserving first-seen order.
+        // Arms that share an outer discriminant have nested inner enum patterns and
+        // require a dispatch block (one inner switch per group).
+        let mut disc_groups: Vec<(i64, Vec<usize>)> = Vec::new();
         let mut wildcard_arm: Option<usize> = None;
+
         for (idx, arm) in arms.iter().enumerate() {
             let disc_opt = match &arm.pattern {
                 Pattern::TupleStruct { name, .. } => self.pattern_discriminant(name),
@@ -1436,10 +1436,51 @@ impl TextEmitter {
                 _ => None,
             };
             if let Some(disc) = disc_opt {
-                switch_str.push_str(&format!("    i8 {disc}, label %{}\n", arm_bbs[idx]));
+                if let Some(group) = disc_groups.iter_mut().find(|(d, _)| *d == disc) {
+                    group.1.push(idx);
+                } else {
+                    disc_groups.push((disc, vec![idx]));
+                }
             } else {
                 wildcard_arm = Some(idx);
             }
+        }
+
+        // Count dispatch blocks needed (one per group with >1 arm).
+        let dispatch_count = disc_groups.iter().filter(|(_, v)| v.len() > 1).count();
+
+        let n = self.fn_ctx.bb;
+        self.fn_ctx.bb += arms.len() + 2 + dispatch_count;
+        let default_bb = format!("match_default_{n}");
+        let merge_bb = format!("match_merge_{}", n + arms.len() + 1 + dispatch_count);
+        let arm_bbs: Vec<String> = (0..arms.len())
+            .map(|i| format!("match_arm_{}", n + i))
+            .collect();
+
+        // Dispatch blocks occupy slots after arm blocks.
+        let mut dispatch_bb_slot = n + arms.len();
+        // Map outer discriminant → dispatch BB name (only for groups with >1 arm).
+        let mut dispatch_bb_map: std::collections::HashMap<i64, String> =
+            std::collections::HashMap::new();
+        for (disc, arm_indices) in &disc_groups {
+            if arm_indices.len() > 1 {
+                dispatch_bb_map.insert(
+                    *disc,
+                    format!("match_arm_{dispatch_bb_slot}"),
+                );
+                dispatch_bb_slot += 1;
+            }
+        }
+
+        // Build outer switch: one case per unique discriminant.
+        let mut switch_str = format!("switch i8 {disc_reg}, label %{default_bb} [\n");
+        for (disc, arm_indices) in &disc_groups {
+            let landing = if let Some(db) = dispatch_bb_map.get(disc) {
+                db.clone()
+            } else {
+                arm_bbs[arm_indices[0]].clone()
+            };
+            switch_str.push_str(&format!("    i8 {disc}, label %{landing}\n"));
         }
         switch_str.push_str("  ]");
         self.push_instr(&switch_str);
@@ -1447,6 +1488,86 @@ impl TextEmitter {
         let mut phi_entries: Vec<(String, String, String)> = Vec::new();
         let mut no_val_arms: Vec<String> = Vec::new();
 
+        // Emit dispatch blocks for groups with >1 arm (nested enum patterns).
+        for (disc, arm_indices) in &disc_groups {
+            if arm_indices.len() <= 1 {
+                continue;
+            }
+            let dispatch_bb = dispatch_bb_map[disc].clone();
+            self.fn_ctx.fn_buf.push(format!("{dispatch_bb}:"));
+            self.fn_ctx.current_bb = dispatch_bb.clone();
+            self.fn_ctx.terminated = false;
+
+            // Extract the outer payload pointer.
+            let payload_ptr = self.next_reg();
+            self.push_instr(&format!(
+                "{payload_ptr} = extractvalue {RESULT_LLVM_TY} {scrut_val}, 1"
+            ));
+            self.fn_ctx.reg_types.insert(payload_ptr.clone(), "ptr".into());
+
+            // Load the inner enum value from field 0 of the outer payload.
+            // Determine the field type from the first arm in the group.
+            let first_idx = arm_indices[0];
+            let (n_slots, field_llvm) = match &arms[first_idx].pattern {
+                Pattern::TupleStruct { name, .. } => {
+                    let tys = self.variant_payload_types(name).map(|s| s.to_vec()).unwrap_or_default();
+                    let n = tys.len();
+                    let llvm = tys.first().map(|ty| self.llvm_ty_ctx(ty)).unwrap_or_else(|| "i64".to_string());
+                    (n, llvm)
+                }
+                _ => (1_usize, "i64".to_string()),
+            };
+
+            let inner_slot = self.next_reg();
+            self.push_instr(&format!(
+                "{inner_slot} = getelementptr [{n_slots} x i64], ptr {payload_ptr}, i32 0, i32 0"
+            ));
+
+            // Extract the inner discriminant.
+            let inner_disc = self.next_reg();
+            if field_llvm == RESULT_LLVM_TY {
+                // Payload inner enum: load as RESULT_LLVM_TY, extractvalue 0.
+                let inner_val = self.next_reg();
+                self.push_instr(&format!("{inner_val} = load {RESULT_LLVM_TY}, ptr {inner_slot}"));
+                self.fn_ctx.reg_types.insert(inner_val.clone(), RESULT_LLVM_TY.to_string());
+                self.push_instr(&format!(
+                    "{inner_disc} = extractvalue {RESULT_LLVM_TY} {inner_val}, 0"
+                ));
+            } else {
+                // Unit inner enum or i64: load i64, trunc to i8.
+                let inner_val_i64 = self.next_reg();
+                self.push_instr(&format!("{inner_val_i64} = load i64, ptr {inner_slot}"));
+                self.fn_ctx.reg_types.insert(inner_val_i64.clone(), "i64".to_string());
+                self.push_instr(&format!("{inner_disc} = trunc i64 {inner_val_i64} to i8"));
+            }
+            self.fn_ctx.reg_types.insert(inner_disc.clone(), "i8".to_string());
+
+            // Build inner switch on the inner discriminant.
+            let mut inner_switch = format!("switch i8 {inner_disc}, label %{default_bb} [\n");
+            for &arm_idx in arm_indices {
+                if let Pattern::TupleStruct { fields, .. } = &arms[arm_idx].pattern {
+                    if let Some(inner_pat) = fields.first() {
+                        let inner_disc_val = match inner_pat {
+                            Pattern::TupleStruct { name, .. } => self.pattern_discriminant(name),
+                            Pattern::Ident(name, _) if name.contains("::") => {
+                                self.pattern_discriminant(name)
+                            }
+                            _ => None,
+                        };
+                        if let Some(d) = inner_disc_val {
+                            inner_switch.push_str(&format!(
+                                "    i8 {d}, label %{}\n",
+                                arm_bbs[arm_idx]
+                            ));
+                        }
+                    }
+                }
+            }
+            inner_switch.push_str("  ]");
+            self.push_instr(&inner_switch);
+        }
+
+        // Emit individual arm blocks.
         for (idx, arm) in arms.iter().enumerate() {
             if Some(idx) == wildcard_arm {
                 continue;
@@ -1485,7 +1606,8 @@ impl TextEmitter {
                         self.push_instr(&format!("{val} = load {field_llvm}, ptr {slot}"));
                         self.fn_ctx.reg_types.insert(val.clone(), field_llvm);
                         if let Pattern::Ident(var_name, _) = inner_pat {
-                            if var_name != "_" {
+                            // Do not bind qualified enum variant names (e.g. "Inner::A") as locals.
+                            if var_name != "_" && !var_name.contains("::") {
                                 self.fn_ctx.locals.insert(var_name.clone(), val.clone());
                                 self.fn_ctx
                                     .local_mvl_types

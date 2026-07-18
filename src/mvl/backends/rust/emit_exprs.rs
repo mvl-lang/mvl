@@ -1298,7 +1298,12 @@ impl RustEmitter {
     pub fn emit_pattern_with_enum(&mut self, pat: &Pattern, enum_name: Option<&str>) {
         match pat {
             Pattern::Wildcard(_) => self.push("_"),
-            Pattern::Ident(name, _) => {
+            Pattern::Ident(name, span) => {
+                // Emit `_` for unreferenced arm binders to suppress unused_variables (#1678).
+                if self.unreferenced_arm_spans.contains(span) {
+                    self.push("_");
+                    return;
+                }
                 if let Some(en) = enum_name {
                     if self
                         .unit_variants_per_enum
