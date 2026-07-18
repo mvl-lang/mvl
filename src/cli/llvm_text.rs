@@ -760,4 +760,38 @@ mod tests {
             "@add not in generated IR:\n{ir}"
         );
     }
+
+    // Regression: multi-file test crate must include sibling module IR (#1880).
+    #[test]
+    fn test_crate_includes_sibling_fns() {
+        let dir = TempDir::new().unwrap();
+        write_file(
+            &dir,
+            "helper.mvl",
+            "pub fn add(a: Int, b: Int) -> Int { a + b }",
+        );
+        let test_path = write_file(
+            &dir,
+            "main_test.mvl",
+            "use helper::add;\ntest fn test_add() -> Unit { assert_eq(add(1, 2), 3) }",
+        );
+
+        let (prog, _) = super::super::parse_or_exit(&test_path);
+        let (prelude_tirs, entry_tir, sibling_tirs, compiler) =
+            prepare_llvm_text_tir_multi(&prog, &test_path);
+        assert_eq!(sibling_tirs.len(), 1, "expected 1 sibling TIR (helper)");
+
+        let (ir, _names) = compiler
+            .compile_to_ir_test_crate_with_siblings(
+                &prelude_tirs,
+                &sibling_tirs,
+                &entry_tir,
+                "main_test",
+            )
+            .expect("IR generation failed");
+        assert!(
+            ir.contains("define i64 @add("),
+            "sibling @add not in test-crate IR:\n{ir}"
+        );
+    }
 }

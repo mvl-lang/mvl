@@ -131,6 +131,22 @@ impl LlvmTextCompiler {
         prog: &TirProgram,
         module_name: &str,
     ) -> Result<(String, Vec<String>), String> {
+        self.compile_to_ir_test_crate_with_siblings(prelude, &[], prog, module_name)
+    }
+
+    /// Compile a multi-file test crate to LLVM IR, including sibling modules (#1880).
+    ///
+    /// Identical to `compile_to_ir_test_crate` but emits sibling module functions
+    /// before the entry file, exactly as `compile_to_ir_with_siblings_tir` does for
+    /// non-test builds.  Required for multi-file projects (e.g. pong) where test
+    /// files import types and functions from sibling source files.
+    pub fn compile_to_ir_test_crate_with_siblings(
+        &self,
+        prelude: &[TirProgram],
+        siblings: &[TirProgram],
+        prog: &TirProgram,
+        module_name: &str,
+    ) -> Result<(String, Vec<String>), String> {
         let test_names: Vec<String> = prog
             .fns
             .iter()
@@ -149,6 +165,9 @@ impl LlvmTextCompiler {
                 }
             }
             emitter.emit_program_tir(&stripped)?;
+        }
+        for sib in siblings {
+            emitter.emit_program_tir(sib)?;
         }
         emitter.emit_program_tir_test_crate(prog)?;
 
