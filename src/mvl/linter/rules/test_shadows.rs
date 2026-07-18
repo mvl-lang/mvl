@@ -81,8 +81,7 @@ fn collect_sibling_pub_fns(test_path: &Path) -> HashSet<String> {
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or_default();
-        if name.ends_with("_test.mvl") || name.ends_with("_smoke.mvl") || !name.ends_with(".mvl")
-        {
+        if name.ends_with("_test.mvl") || name.ends_with("_smoke.mvl") || !name.ends_with(".mvl") {
             continue;
         }
         if let Ok(src) = fs::read_to_string(&sibling) {
