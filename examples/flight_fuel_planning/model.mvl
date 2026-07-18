@@ -1,0 +1,71 @@
+// model.mvl — Domain types for aviation fuel planning.
+//
+// A dispatch fuel-calculation kernel.  Given trip distance, alternate
+// airport, cruise burn rate, contingency percentage, and reserve
+// requirements, determine the minimum uplift fuel and emit a
+// dispatchability verdict.
+//
+// Domain: airline dispatch (EU-OPS 1.255, FAA 14 CFR §91.167, DO-178C
+// Level C for FMS-adjacent software).
+//
+// Companion to `examples/dose_scheduling/` (pharma L5) and
+// `examples/etcs_movement_authority/` (rail L5).  Together the three
+// cases triangulate the paper's L5 claim across medical / rail /
+// aviation domains — the L5 role is domain-agnostic, driven by the
+// underlying arithmetic (products, quotients, three-variable ceilings)
+// rather than by the domain itself.
+//
+// Assurance note: 0 extern blocks (self-contained decision kernel).
+
+// ── Flight plan ─────────────────────────────────────────────────────
+
+/// Input to the dispatch fuel calculation.  Envelope bounds are drawn
+/// from realistic commercial narrow-body operations.
+pub type FlightPlan = struct {
+    trip_distance_nm:   Int where self >= 1 && self <= 8000,
+    cruise_speed_kt:    Int where self >= 200 && self <= 500,
+    alt_distance_nm:    Int where self >= 0 && self <= 500,
+    contingency_pct:    Int where self >= 5 && self <= 20,
+    reserve_min:        Int where self >= 30 && self <= 60,
+    taxi_kg:            Int where self >= 100 && self <= 2000,
+}
+
+// ── Fuel burn model ─────────────────────────────────────────────────
+
+/// Fuel consumption rates.  Cruise burn is used for trip fuel;
+/// reserve burn is used for the final-reserve calculation and is
+/// typically lower (holding at reduced thrust).
+pub type FuelBurn = struct {
+    burn_kg_per_hr:     Int where self >= 500 && self <= 10000,
+    reserve_burn_kg_hr: Int where self >= 500 && self <= 10000,
+}
+
+// ── Fuel uplift breakdown ───────────────────────────────────────────
+
+/// Result of the fuel calculation: components + total.
+///
+/// Envelope: total_kg is bounded at 200_000 kg (well above narrow-body
+/// maximum uplift; provides headroom for wide-body extensions).
+pub type FuelUplift = struct {
+    trip_kg:        Int where self >= 0 && self <= 100000,
+    contingency_kg: Int where self >= 0 && self <= 20000,
+    alternate_kg:   Int where self >= 0 && self <= 20000,
+    reserve_kg:     Int where self >= 0 && self <= 20000,
+    total_kg:       Int where self >= 0 && self <= 200000,
+}
+
+// ── Dispatchability outcome ─────────────────────────────────────────
+
+pub type DispatchResult = enum {
+    Dispatchable,
+    RequiresReview,
+    RequiresSecondAlternate,
+    Undispatchable(UndispatchReason),
+}
+
+pub type UndispatchReason = enum {
+    ExceedsMaxCapacity,
+    InsufficientContingency,
+    NoValidAlternate,
+    ExpiredWeatherMinima,
+}

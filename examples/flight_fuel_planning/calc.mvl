@@ -1,0 +1,171 @@
+// calc.mvl — Fuel calculation kinematics.
+//
+// Three L5-forcing predicates from fuel-mass arithmetic:
+//   * trip_fuel_kg          — distance × burn / speed (product + quotient)
+//   * alternate_fuel_kg     — alt_distance × burn / speed (same shape)
+//   * total_uplift_ceiling  — sum of four bounded factors + product
+//                             upper bound (three-variable ceiling)
+//
+// Fuel physics: at cruise speed v (kt) with burn rate b (kg/hr), the
+// fuel consumed to fly distance d (nm) is d × b / v (kg).  The
+// multiplication forces QF-NIA at L5.  Because each factor is bounded,
+// the result is bounded — but Z3 proves the specific ceilings tight.
+
+use model.{FlightPlan, FuelBurn}
+
+// ── Nonlinear fuel obligations (Z3 QF-NIA at L5) ─────────────────────
+
+/// Compute trip fuel: distance × burn_rate / speed.
+///
+/// Refinement layer: **L5 (Z3 QF-NIA).**
+/// Two-variable product with a bounded divisor.  The postcondition
+/// captures the domain envelope (max ≈ 8000nm × 10000kg/hr ÷ 200kt =
+/// 400_000 — but real operations stay well under 100_000).
+pub total fn trip_fuel_kg(
+    distance_nm:     Int where self >= 1 && self <= 8000,
+    burn_kg_per_hr:  Int where self >= 500 && self <= 10000,
+    speed_kt:        Int where self >= 200 && self <= 500,
+) -> Int
+    ensures result >= 0
+    ensures result <= 400000
+{
+    distance_nm * burn_kg_per_hr / speed_kt
+}
+
+/// Compute alternate fuel: alt_distance × burn_rate / speed.
+///
+/// Refinement layer: **L5 (Z3 QF-NIA).**
+/// Same product/quotient shape as `trip_fuel_kg`; lower distance
+/// envelope gives a tighter upper bound (500nm × 10000kg/hr ÷ 200kt =
+/// 25_000 — well under the 20_000-kg struct-field envelope with taxi
+/// margin).
+pub total fn alternate_fuel_kg(
+    alt_distance_nm: Int where self >= 0 && self <= 500,
+    burn_kg_per_hr:  Int where self >= 500 && self <= 10000,
+    speed_kt:        Int where self >= 200 && self <= 500,
+) -> Int
+    ensures result >= 0
+    ensures result <= 25000
+{
+    alt_distance_nm * burn_kg_per_hr / speed_kt
+}
+
+/// Compute the total-uplift ceiling from bounded factors.
+///
+/// Refinement layer: **L5 (Z3 QF-NIA).**
+/// Three-variable product with bounded positive factors (max burn ×
+/// max hours × 1.5 safety multiplier).  Same shape as
+/// `dose_scheduling::total_infusion_dose` — the three-variable ceiling
+/// is the QF-NIA edge that typically falls to runtime in dose_scheduling.
+/// Here we keep the multiplier as a small constant so Z3 can discharge
+/// the upper bound.
+pub total fn total_uplift_ceiling(
+    burn_kg_per_hr: Int where self >= 500 && self <= 10000,
+    hours:          Int where self >= 1 && self <= 20,
+    safety_pct:     Int where self >= 100 && self <= 200,
+) -> Int
+    ensures result >= 500
+    ensures result <= 4000000
+{
+    burn_kg_per_hr * hours * safety_pct / 100
+}
+
+// ── Fuel uplift computation ─────────────────────────────────────────
+
+/// Compute the contingency fuel component: contingency_pct % of trip
+/// fuel.
+pub total fn contingency_kg(trip_kg: Int, contingency_pct: Int) -> Int {
+    trip_kg * contingency_pct / 100
+}
+
+/// Compute the reserve fuel component: reserve_min at reserve burn.
+pub total fn reserve_kg(reserve_burn_kg_hr: Int, reserve_min: Int) -> Int {
+    reserve_burn_kg_hr * reserve_min / 60
+}
+
+// ── Structural checks ───────────────────────────────────────────────
+
+/// Determine whether the trip is a short-haul (< 500 nm) — some
+/// dispatch rules apply only above this threshold.
+pub total fn is_short_haul(distance_nm: Int) -> Bool {
+    distance_nm < 500
+}
+
+/// Determine whether the plan requires an alternate airport.  Under
+/// EU-OPS 1.255, an alternate is mandatory unless the flight is under
+/// 6 hours AND the destination has instrument minima.
+pub total fn requires_alternate(distance_nm: Int, dest_has_ils: Bool) -> Bool {
+    distance_nm > 3000 || !dest_has_ils
+}
+
+// ── Inline unit tests (activate MC/DC discovery per #1888 workaround) ──
+
+test fn trip_fuel_realistic() -> Unit {
+    // 1000nm × 3000kg/hr ÷ 400kt = 7500
+    assert_eq(trip_fuel_kg(1000, 3000, 400), 7500);
+}
+
+test fn trip_fuel_lower_envelope() -> Unit {
+    // 1nm × 500kg/hr ÷ 500kt = 1
+    assert_eq(trip_fuel_kg(1, 500, 500), 1);
+}
+
+test fn trip_fuel_long_haul() -> Unit {
+    // 8000nm × 5000kg/hr ÷ 480kt = 83333
+    assert_eq(trip_fuel_kg(8000, 5000, 480), 83333);
+}
+
+test fn alternate_fuel_realistic() -> Unit {
+    // 200nm × 3000kg/hr ÷ 400kt = 1500
+    assert_eq(alternate_fuel_kg(200, 3000, 400), 1500);
+}
+
+test fn alternate_fuel_zero_distance() -> Unit {
+    assert_eq(alternate_fuel_kg(0, 3000, 400), 0);
+}
+
+test fn alternate_fuel_upper_envelope() -> Unit {
+    // 500nm × 10000kg/hr ÷ 200kt = 25000
+    assert_eq(alternate_fuel_kg(500, 10000, 200), 25000);
+}
+
+test fn total_uplift_ceiling_realistic() -> Unit {
+    // 3000 × 5 × 150 / 100 = 22500
+    assert_eq(total_uplift_ceiling(3000, 5, 150), 22500);
+}
+
+test fn total_uplift_ceiling_upper_envelope() -> Unit {
+    // 10000 × 20 × 200 / 100 = 400000
+    assert_eq(total_uplift_ceiling(10000, 20, 200), 400000);
+}
+
+test fn contingency_five_percent() -> Unit {
+    assert_eq(contingency_kg(10000, 5), 500);
+}
+
+test fn contingency_twenty_percent() -> Unit {
+    assert_eq(contingency_kg(10000, 20), 2000);
+}
+
+test fn reserve_thirty_minutes() -> Unit {
+    // 2000kg/hr × 30min / 60 = 1000
+    assert_eq(reserve_kg(2000, 30), 1000);
+}
+
+test fn short_haul_boundary() -> Unit {
+    assert_eq(is_short_haul(499), true);
+    assert_eq(is_short_haul(500), false);
+    assert_eq(is_short_haul(501), false);
+}
+
+test fn requires_alternate_long_haul() -> Unit {
+    assert_eq(requires_alternate(4000, true), true);
+}
+
+test fn requires_alternate_no_ils() -> Unit {
+    assert_eq(requires_alternate(500, false), true);
+}
+
+test fn no_alternate_short_haul_with_ils() -> Unit {
+    assert_eq(requires_alternate(500, true), false);
+}

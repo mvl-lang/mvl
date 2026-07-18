@@ -1,0 +1,139 @@
+// dispatch_test.mvl — End-to-end scenario tests for flight fuel planning.
+//
+// Inline `test fn` blocks in `calc.mvl` and `dispatch.mvl` cover per-
+// function behaviour and support MC/DC discovery.  This file adds
+// scenario-level tests exercising the composed dispatch kernel + IFC
+// boundary.
+
+use model.{FlightPlan, FuelBurn, FuelUplift, DispatchResult, UndispatchReason}
+use calc.{trip_fuel_kg, alternate_fuel_kg, total_uplift_ceiling}
+use dispatch.{trust_weather_minima, dispatch, compute_uplift, requires_dispatch_review, requires_second_alternate}
+
+total fn short_haul_plan() -> FlightPlan {
+    FlightPlan {
+        trip_distance_nm: 500,
+        cruise_speed_kt: 450,
+        alt_distance_nm: 100,
+        contingency_pct: 5,
+        reserve_min: 45,
+        taxi_kg: 200,
+    }
+}
+
+total fn narrow_body_burn() -> FuelBurn {
+    FuelBurn {
+        burn_kg_per_hr: 3000,
+        reserve_burn_kg_hr: 2000,
+    }
+}
+
+// ── Scenario 1 — dispatchable ────────────────────────────────────────
+
+test fn scenario_dispatchable() -> Unit {
+    match dispatch(short_haul_plan(), narrow_body_burn(),
+                   30000, true, true, false, false, 100, false) {
+        DispatchResult::Dispatchable => assert_eq(1, 1),
+        _                            => assert_eq(1, 0),
+    }
+}
+
+// ── Scenario 2 — review triggered by capacity ────────────────────────
+
+test fn scenario_review_capacity() -> Unit {
+    let plan: FlightPlan = FlightPlan {
+        trip_distance_nm: 2000, cruise_speed_kt: 450, alt_distance_nm: 100,
+        contingency_pct: 5, reserve_min: 45, taxi_kg: 200,
+    };
+    match dispatch(plan, narrow_body_burn(),
+                   17000, true, true, false, false, 100, false) {
+        DispatchResult::RequiresReview => assert_eq(1, 1),
+        _                              => assert_eq(1, 0),
+    }
+}
+
+// ── Scenario 3 — review triggered by marginal weather + non-ETOPS ────
+
+test fn scenario_review_marginal_wx() -> Unit {
+    match dispatch(short_haul_plan(), narrow_body_burn(),
+                   30000, true, true, true, false, 100, false) {
+        DispatchResult::RequiresReview => assert_eq(1, 1),
+        _                              => assert_eq(1, 0),
+    }
+}
+
+// ── Scenario 4 — second alternate required ───────────────────────────
+
+test fn scenario_second_alternate() -> Unit {
+    match dispatch(short_haul_plan(), narrow_body_burn(),
+                   30000, false, false, false, false, 100, false) {
+        DispatchResult::RequiresSecondAlternate => assert_eq(1, 1),
+        _                                       => assert_eq(1, 0),
+    }
+}
+
+// ── Scenario 5 — undispatchable over capacity ────────────────────────
+
+test fn scenario_undispatchable_capacity() -> Unit {
+    let plan: FlightPlan = FlightPlan {
+        trip_distance_nm: 8000, cruise_speed_kt: 480, alt_distance_nm: 300,
+        contingency_pct: 15, reserve_min: 60, taxi_kg: 500,
+    };
+    match dispatch(plan, narrow_body_burn(),
+                   20000, true, true, false, false, 100, false) {
+        DispatchResult::Undispatchable(UndispatchReason::ExceedsMaxCapacity) => assert_eq(1, 1),
+        _                                                                    => assert_eq(1, 0),
+    }
+}
+
+// ── Scenario 6 — medical diversion needs trigger review ──────────────
+
+test fn scenario_medical_diversion_triggers_review() -> Unit {
+    match dispatch(short_haul_plan(), narrow_body_burn(),
+                   30000, true, true, false, false, 100, true) {
+        DispatchResult::RequiresReview => assert_eq(1, 1),
+        _                              => assert_eq(1, 0),
+    }
+}
+
+// ── IFC boundary round-trip ──────────────────────────────────────────
+
+test fn ifc_trust_weather_minima_round_trip() -> Unit {
+    let tainted: Tainted[Bool] = relabel taint(true, "TEST-AIS-INGEST");
+    let trusted: Bool = trust_weather_minima(tainted);
+    assert_eq(trusted, true);
+}
+
+// ── ETOPS-specific coverage ──────────────────────────────────────────
+
+test fn etops_suppresses_marginal_wx_review() -> Unit {
+    // Marginal alt WX but is_etops — coupling suppresses the review
+    match dispatch(short_haul_plan(), narrow_body_burn(),
+                   30000, true, true, true, true, 150, false) {
+        DispatchResult::Dispatchable => assert_eq(1, 1),
+        _                            => assert_eq(1, 0),
+    }
+}
+
+test fn etops_second_alternate_when_alt2_far() -> Unit {
+    // ETOPS + alt2 distance > 200 → second alternate required
+    match dispatch(short_haul_plan(), narrow_body_burn(),
+                   30000, true, true, false, true, 300, false) {
+        DispatchResult::RequiresSecondAlternate => assert_eq(1, 1),
+        _                                       => assert_eq(1, 0),
+    }
+}
+
+// ── Arithmetic boundary tests ────────────────────────────────────────
+
+test fn trip_fuel_long_haul_boundary() -> Unit {
+    // 8000nm × 5000kg/hr ÷ 480kt = 83333
+    assert_eq(trip_fuel_kg(8000, 5000, 480), 83333);
+}
+
+test fn alternate_fuel_upper() -> Unit {
+    assert_eq(alternate_fuel_kg(500, 10000, 200), 25000);
+}
+
+test fn total_uplift_ceiling_realistic() -> Unit {
+    assert_eq(total_uplift_ceiling(3000, 5, 150), 22500);
+}
