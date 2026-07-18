@@ -1,0 +1,93 @@
+// model.mvl — Domain types for the substation protection relay.
+//
+// A protection relay monitors current and voltage on an electrical
+// feeder (typically 11 kV distribution).  It compares the measurements
+// against configured protection settings and requests a breaker trip
+// when a fault is detected — overcurrent, differential mismatch, ground
+// fault, or reverse power flow.
+//
+// Companion to `examples/etcs_movement_authority/` (rail kinematics via
+// nonlinear obligations) and `examples/dose_scheduling/` (medical
+// nonlinear pharma).  Same solver theory (QF-NIA) surfaces different
+// physics: here it's electrical grid protection.
+//
+// Standard: IEC 61508 SIL 2 (functional safety) + IEC 61850 (substation
+// communication).  Assurance envelope: `make test-61508`.
+//
+// Assurance note: 0 extern blocks.
+
+// ── Measurement types ────────────────────────────────────────────────
+
+/// A current-and-phase measurement sample from a current transformer.
+///
+/// Amperage bounded to 0..5000 A (typical 11 kV feeder range).
+/// Phase in electrical degrees (0..359).
+pub type CurrentMeasurement = struct {
+    amps: Int where self >= 0 && self <= 5000,
+    phase_deg: Int where self >= 0 && self <= 359,
+    sampled_at_ms: Int where self >= 0 && self <= 4000000000,
+}
+
+// ── Protection settings (configured at commissioning) ────────────────
+
+/// Configured protection thresholds for one feeder.
+///
+/// `pickup_amps` is the current above which the protection element
+/// starts timing toward a trip.  `time_delay_ms` is the base time
+/// delay before tripping.  `coord_margin_ms` is the grading margin
+/// against downstream protection (kept for use by the temporal
+/// coordination story that is out of scope for the pointwise
+/// refinement work — see README).
+pub type ProtectionSetting = struct {
+    pickup_amps: Int where self >= 100 && self <= 5000,
+    time_delay_ms: Int where self >= 100 && self <= 10000,
+    coord_margin_ms: Int where self >= 200 && self <= 2000,
+    curve_constant: Int where self >= 1000 && self <= 100000,
+}
+
+// ── Breaker + fault state ────────────────────────────────────────────
+
+pub type BreakerState = enum {
+    Closed,
+    Open,
+    Tripping,
+}
+
+pub type FaultType = enum {
+    NoFault,
+    Overcurrent,
+    Differential,
+    GroundFault,
+    ReversePower,
+}
+
+// ── Feeder state (composite) ─────────────────────────────────────────
+
+/// Current state of one feeder — measured currents, breaker position,
+/// configured protection.
+pub type FeederState = struct {
+    upstream: CurrentMeasurement,
+    downstream: CurrentMeasurement,
+    breaker: BreakerState,
+    setting: ProtectionSetting,
+}
+
+// ── SCADA commands (untrusted control-centre input) ──────────────────
+
+/// A command from the SCADA / RTU.  Arrives as `Tainted[SCADACommand]`
+/// and passes through a single audited trust boundary before being
+/// applied to the local control loop.
+pub type SCADACommand = enum {
+    BlockTrip,       // Suppress non-critical trips (planned maintenance window)
+    AllowTrip,       // Cancel a prior BlockTrip
+    ManualTrip,      // Force a trip regardless of fault detection
+    ManualRestore,   // Close the breaker after a manual review
+}
+
+// ── Trip decision outcomes ───────────────────────────────────────────
+
+pub type TripDecision = enum {
+    Hold,            // Continue monitoring; no action
+    IssueTrip,       // Emit trip command to the breaker
+    Blocked,         // Would trip but SCADA has issued BlockTrip
+}
