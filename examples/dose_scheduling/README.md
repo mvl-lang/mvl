@@ -26,14 +26,32 @@ make mcdc        →  8/10 obligations (80%) — 2 structurally coupled
 make mcdc + --masking →  PASS (DO-178C masking rules exempt coupled clauses)
 ```
 
-The two "missed" MC/DC obligations are couplings via shared variables:
-- `contraindicated`: `has_allergy` appears in both `(pregnant && allergy)` and
-  `(pediatric && allergy)` — unique-cause independence is structurally impossible
-- `requires_pharmacy_review`: `total_mg` appears in both the `> 100000` clause
-  and the `> 5000` clause
+## MC/DC coupling exemptions (audit anchors)
 
-Both are DO-178C-exempt under masking MC/DC. `make all` runs the full pipeline
-with masking enabled.
+The two "missed" MC/DC obligations are structural couplings via shared
+variables. Each exemption is documented **inline in the source** as an
+audit anchor — a stable string a reviewer can grep for:
+
+| Anchor | Function | Shared term | Location |
+|---|---|---|---|
+| `MCDC-DOSE-001` | `contraindicated` | `has_allergy` in two clauses | `dosing.mvl:125` |
+| `MCDC-DOSE-002` | `requires_pharmacy_review` | `total_mg` in two clauses | `dosing.mvl:153` |
+
+Reproduce the audit:
+
+```bash
+grep -n "MCDC-DOSE-" dosing.mvl
+```
+
+Both exemptions cite **DO-178C Appendix A §6.4.4.2 masking MC/DC** as the
+accepting rule. The doc comments explain the clinical rationale for
+keeping the shared term (refactoring into a helper would hide the review
+criterion, not eliminate the structural coupling).
+
+`make all` runs the full pipeline with `--masking` enabled by default.
+Running `make mcdc` without arguments deliberately fails to surface the
+two coupled clauses — this is the intended behaviour for a reviewer who
+wants to see the unique-cause result before applying the exemption.
 
 ## The seven L5 obligations
 
