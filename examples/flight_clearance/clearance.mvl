@@ -60,7 +60,7 @@ pub total fn weather_clear(wx: Weather) -> Bool {
 // maintenance_ok AND fuel_ok AND crew_valid
 // MC/DC: 3 conditions → 4 test cases
 
-/// True iff the maintenance status permits flight (Cleared or DeferredItem).
+/// True iff the maintenance status permits flight (Airworthy or DeferredItem).
 pub total fn maintenance_ok(m: MaintenanceStatus) -> Bool {
     match m {
         MaintenanceStatus::Airworthy      => true,
