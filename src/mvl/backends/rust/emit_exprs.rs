@@ -65,6 +65,19 @@ fn expr_own_prec(e: &TirExpr) -> Prec {
         | TirExprKind::Match { .. }
         | TirExprKind::Block(_)
         | TirExprKind::Lambda { .. } => Prec::Prefix,
+        // Method calls that emit as bare inline binary operators (bit_and, bit_or,
+        // bit_xor) look like MethodCall at the TIR level but produce Rust code with
+        // that binary op's precedence (#1659).  Return the emitted precedence so
+        // callers wrap them correctly.
+        TirExprKind::MethodCall { method, args, .. } => match (method.as_str(), args.len()) {
+            ("bit_and", 1) => Prec::BitAnd,
+            ("bit_or", 1) => Prec::BitOr,
+            ("bit_xor", 1) => Prec::BitXor,
+            ("is_zero", 0) => Prec::Compare,
+            ("bit_not", 0) => Prec::Prefix,
+            ("len" | "to_int" | "to_float", 0) => Prec::As,
+            _ => Prec::Suffix,
+        },
         // Everything else — literals, variables, method chains, field
         // access, function/method calls, construct, propagate, borrow,
         // relabel, consume — is Suffix or Atom and never needs outer
