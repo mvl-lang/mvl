@@ -1,0 +1,185 @@
+// verify_test.mvl — End-to-end tests for the tag-verification kernel.
+//
+// Inline `test fn` blocks in `verify.mvl` cover per-function behaviour
+// and support MC/DC discovery.  This file adds scenario-level tests
+// exercising the compose of the verify_message kernel + IFC boundary.
+
+use verify.{classify_key_material, release_verdict, verify_message, tag_bytes_equal, is_fresh_sequence, is_key_alive, should_reject, rejection_reason, combined_message_fingerprint, total_verification_ops, effective_key_lifetime}
+use model.{MacTag, SignedMessage, VerificationContext, VerifyResult, RejectReason}
+
+// ── Scenario 1 — normal accept ────────────────────────────────────────
+
+test fn scenario_normal_accept() -> Unit {
+    let ctx: VerificationContext = VerificationContext {
+        expected_tag: MacTag { fingerprint: 111, length_bits: 256 },
+        min_accepted_sequence: 100,
+        key_valid_from_ms: 1000,
+        key_valid_until_ms: 2000,
+    };
+    let msg: SignedMessage = SignedMessage {
+        payload_len_bytes: 500,
+        computed_tag: MacTag { fingerprint: 111, length_bits: 256 },
+        sequence_nr: 200,
+    };
+    match verify_message(msg, ctx, 1500, true, false) {
+        VerifyResult::Accepted    => assert_eq(1, 1),
+        VerifyResult::Rejected(_) => assert_eq(1, 0),
+    }
+}
+
+// ── Scenario 2 — tag mismatch rejects ─────────────────────────────────
+
+test fn scenario_tag_mismatch_rejects() -> Unit {
+    let ctx: VerificationContext = VerificationContext {
+        expected_tag: MacTag { fingerprint: 111, length_bits: 256 },
+        min_accepted_sequence: 100,
+        key_valid_from_ms: 1000,
+        key_valid_until_ms: 2000,
+    };
+    let msg: SignedMessage = SignedMessage {
+        payload_len_bytes: 500,
+        computed_tag: MacTag { fingerprint: 999, length_bits: 256 },
+        sequence_nr: 200,
+    };
+    match verify_message(msg, ctx, 1500, true, false) {
+        VerifyResult::Rejected(RejectReason::TagMismatch) => assert_eq(1, 1),
+        _                                                 => assert_eq(1, 0),
+    }
+}
+
+// ── Scenario 3 — replay detected ──────────────────────────────────────
+
+test fn scenario_replay_rejected() -> Unit {
+    let ctx: VerificationContext = VerificationContext {
+        expected_tag: MacTag { fingerprint: 111, length_bits: 256 },
+        min_accepted_sequence: 100,
+        key_valid_from_ms: 1000,
+        key_valid_until_ms: 2000,
+    };
+    let msg: SignedMessage = SignedMessage {
+        payload_len_bytes: 500,
+        computed_tag: MacTag { fingerprint: 111, length_bits: 256 },
+        sequence_nr: 50,
+    };
+    match verify_message(msg, ctx, 1500, true, false) {
+        VerifyResult::Rejected(RejectReason::ReplayDetected) => assert_eq(1, 1),
+        _                                                    => assert_eq(1, 0),
+    }
+}
+
+// ── Scenario 4 — key expiry ───────────────────────────────────────────
+
+test fn scenario_key_expired_rejects() -> Unit {
+    let ctx: VerificationContext = VerificationContext {
+        expected_tag: MacTag { fingerprint: 111, length_bits: 256 },
+        min_accepted_sequence: 100,
+        key_valid_from_ms: 1000,
+        key_valid_until_ms: 2000,
+    };
+    let msg: SignedMessage = SignedMessage {
+        payload_len_bytes: 500,
+        computed_tag: MacTag { fingerprint: 111, length_bits: 256 },
+        sequence_nr: 200,
+    };
+    match verify_message(msg, ctx, 3000, true, false) {
+        VerifyResult::Rejected(RejectReason::KeyExpired) => assert_eq(1, 1),
+        _                                                => assert_eq(1, 0),
+    }
+}
+
+// ── Scenario 5 — untrusted source without override ────────────────────
+
+test fn scenario_untrusted_no_override_rejects() -> Unit {
+    let ctx: VerificationContext = VerificationContext {
+        expected_tag: MacTag { fingerprint: 111, length_bits: 256 },
+        min_accepted_sequence: 100,
+        key_valid_from_ms: 1000,
+        key_valid_until_ms: 2000,
+    };
+    let msg: SignedMessage = SignedMessage {
+        payload_len_bytes: 500,
+        computed_tag: MacTag { fingerprint: 111, length_bits: 256 },
+        sequence_nr: 200,
+    };
+    match verify_message(msg, ctx, 1500, false, false) {
+        VerifyResult::Rejected(_) => assert_eq(1, 1),
+        VerifyResult::Accepted    => assert_eq(1, 0),
+    }
+}
+
+// ── Scenario 6 — untrusted source with override ───────────────────────
+
+test fn scenario_untrusted_with_override_accepts() -> Unit {
+    let ctx: VerificationContext = VerificationContext {
+        expected_tag: MacTag { fingerprint: 111, length_bits: 256 },
+        min_accepted_sequence: 100,
+        key_valid_from_ms: 1000,
+        key_valid_until_ms: 2000,
+    };
+    let msg: SignedMessage = SignedMessage {
+        payload_len_bytes: 500,
+        computed_tag: MacTag { fingerprint: 111, length_bits: 256 },
+        sequence_nr: 200,
+    };
+    match verify_message(msg, ctx, 1500, false, true) {
+        VerifyResult::Accepted    => assert_eq(1, 1),
+        VerifyResult::Rejected(_) => assert_eq(1, 0),
+    }
+}
+
+// ── IFC smoke — classify + release round-trip ─────────────────────────
+
+test fn ifc_classify_and_release() -> Unit {
+    let raw: String = "test-key-material";
+    let secret: Secret[String] = classify_key_material(raw);
+    let released: String = release_verdict(secret);
+    assert_eq(released, "test-key-material");
+}
+
+// ── Rejection-reason priority coverage ────────────────────────────────
+
+test fn reason_prioritises_replay() -> Unit {
+    // All flags true — replay wins by priority
+    let r: RejectReason = rejection_reason(true, true, true, true);
+    let is_replay: Int = match r {
+        RejectReason::ReplayDetected => 1,
+        _                            => 0,
+    };
+    assert_eq(is_replay, 1);
+}
+
+test fn reason_prioritises_key_over_tag() -> Unit {
+    // No replay; key expired + tag mismatch → key wins
+    let r: RejectReason = rejection_reason(true, false, true, false);
+    let is_key: Int = match r {
+        RejectReason::KeyExpired => 1,
+        _                        => 0,
+    };
+    assert_eq(is_key, 1);
+}
+
+test fn reason_falls_through_to_tag() -> Unit {
+    let r: RejectReason = rejection_reason(true, false, false, false);
+    let is_tag: Int = match r {
+        RejectReason::TagMismatch => 1,
+        _                         => 0,
+    };
+    assert_eq(is_tag, 1);
+}
+
+// ── Arithmetic sanity ────────────────────────────────────────────────
+
+test fn combined_fingerprint_boundary() -> Unit {
+    // 65536 bytes at sequence 30000 = 1966080000 — near tag-space upper bound
+    assert_eq(combined_message_fingerprint(65536, 30000), 1966080000);
+}
+
+test fn total_verification_ops_boundary() -> Unit {
+    // Max: 1024 blocks × 4 derivations × 80 rounds = 327680
+    assert_eq(total_verification_ops(1024, 4, 80), 327680);
+}
+
+test fn effective_lifetime_saturation() -> Unit {
+    // Reversed window returns 0
+    assert_eq(effective_key_lifetime(5000, 1000), 0);
+}

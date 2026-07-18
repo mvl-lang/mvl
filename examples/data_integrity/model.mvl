@@ -1,0 +1,78 @@
+// model.mvl — Domain types for cryptographic tag verification.
+//
+// A simplified HMAC-style tag-verification kernel.  A message and a
+// secret key produce a fixed-size authentication tag.  Verification
+// compares a computed tag against an expected tag and emits a single
+// boolean verdict without leaking timing information about which bytes
+// of the tag differed.
+//
+// Companion to `examples/access_control/` (uses Secret[String] for
+// stored password hashes).  This example demonstrates IFC on the
+// *output* side — a verdict derived from Secret material is
+// declassified via a single audited release, complementing the
+// taint-input pattern in `etcs_movement_authority` and
+// `grid_protection`.
+//
+// Standard: FIPS 140-3 (US federal cryptographic module validation) +
+// Common Criteria positioning.  Assurance envelope: see
+// `make test-fips140`.
+//
+// Full QF-Strings and QF-BV reasoning over tag bytes and payload
+// content awaits compiler surface work — see the README §"Explicitly
+// out of scope for this example" for the exact boundary.
+//
+// Assurance note: 0 extern blocks (demonstration model).
+
+// ── Tag representation ───────────────────────────────────────────────
+
+/// A cryptographic authentication tag.  Represented as a bounded
+/// integer fingerprint plus its declared bit-length.  Real HMAC-SHA-256
+/// tags are 32 bytes = 256 bits; the demo compresses that view to an
+/// integer fingerprint plus the length parameter so refinement
+/// obligations stay inside MVL's current capability (QF-Arrays over
+/// bytes awaits compiler surface work — see the README).
+pub type MacTag = struct {
+    fingerprint: Int where self >= 0 && self <= 2000000000,
+    length_bits: Int where self >= 128 && self <= 512,
+}
+
+// ── Message metadata ─────────────────────────────────────────────────
+
+/// A message under verification: bounded payload length + the tag we
+/// have computed for it.
+pub type SignedMessage = struct {
+    payload_len_bytes: Int where self >= 1 && self <= 65536,
+    computed_tag: MacTag,
+    sequence_nr: Int where self >= 0 && self <= 4000000000,
+}
+
+// ── Verification context ─────────────────────────────────────────────
+
+/// Verification state visible to callers: the expected tag (from the
+/// sender) and a monotonic sequence-number floor (replay prevention).
+pub type VerificationContext = struct {
+    expected_tag: MacTag,
+    min_accepted_sequence: Int where self >= 0 && self <= 4000000000,
+    key_valid_from_ms: Int where self >= 0 && self <= 4000000000,
+    key_valid_until_ms: Int where self >= 0 && self <= 4000000000,
+}
+
+// ── Outcome types ────────────────────────────────────────────────────
+
+pub type VerifyResult = enum {
+    Accepted,
+    Rejected(RejectReason),
+}
+
+/// Named reasons for rejecting a verification.
+///
+/// The reason is deliberately opaque: it does NOT leak which byte of
+/// the tag differed, only the category of failure.  Distinguishing
+/// individual failing bytes would leak timing information and defeat
+/// the constant-time-comparison discipline.
+pub type RejectReason = enum {
+    TagMismatch,            // Computed tag does not equal expected tag
+    ReplayDetected,         // Sequence number below the floor
+    KeyExpired,             // Current time outside the key's valid window
+    LengthViolation,        // Payload length outside the declared envelope
+}

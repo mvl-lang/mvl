@@ -1,0 +1,106 @@
+// main.mvl — Data-integrity verification demo.
+//
+// Six representative scenarios walking through accept / reject
+// outcomes across tag mismatch, replay, key expiry, and trust-source
+// paths.
+
+use model.{MacTag, SignedMessage, VerificationContext, VerifyResult, RejectReason}
+use verify.{classify_key_material, release_verdict, verify_message, tag_bytes_equal, is_fresh_sequence, is_key_alive}
+
+// ── Output helpers ───────────────────────────────────────────────────
+
+total fn describe_result(r: VerifyResult) -> String {
+    match r {
+        VerifyResult::Accepted                                   => "ACCEPT",
+        VerifyResult::Rejected(RejectReason::TagMismatch)        => "REJECT (tag mismatch)",
+        VerifyResult::Rejected(RejectReason::ReplayDetected)     => "REJECT (replay detected)",
+        VerifyResult::Rejected(RejectReason::KeyExpired)         => "REJECT (key expired)",
+        VerifyResult::Rejected(RejectReason::LengthViolation)    => "REJECT (length violation)",
+    }
+}
+
+// ── Fixture helpers ──────────────────────────────────────────────────
+
+total fn expected_tag() -> MacTag {
+    MacTag { fingerprint: 987654321, length_bits: 256 }
+}
+
+total fn wrong_tag() -> MacTag {
+    MacTag { fingerprint: 123456789, length_bits: 256 }
+}
+
+total fn default_context() -> VerificationContext {
+    VerificationContext {
+        expected_tag: expected_tag(),
+        min_accepted_sequence: 100,
+        key_valid_from_ms: 1000000,
+        key_valid_until_ms: 2000000,
+    }
+}
+
+// ── Scenarios ────────────────────────────────────────────────────────
+
+total fn s1_accept_normal() -> String {
+    let msg: SignedMessage = SignedMessage {
+        payload_len_bytes: 512,
+        computed_tag: expected_tag(),
+        sequence_nr: 200,
+    };
+    describe_result(verify_message(msg, default_context(), 1500000, true, false))
+}
+
+total fn s2_reject_tag_mismatch() -> String {
+    let msg: SignedMessage = SignedMessage {
+        payload_len_bytes: 512,
+        computed_tag: wrong_tag(),
+        sequence_nr: 200,
+    };
+    describe_result(verify_message(msg, default_context(), 1500000, true, false))
+}
+
+total fn s3_reject_replay() -> String {
+    let msg: SignedMessage = SignedMessage {
+        payload_len_bytes: 512,
+        computed_tag: expected_tag(),
+        sequence_nr: 50,  // below floor of 100
+    };
+    describe_result(verify_message(msg, default_context(), 1500000, true, false))
+}
+
+total fn s4_reject_key_expired() -> String {
+    let msg: SignedMessage = SignedMessage {
+        payload_len_bytes: 512,
+        computed_tag: expected_tag(),
+        sequence_nr: 200,
+    };
+    describe_result(verify_message(msg, default_context(), 3000000, true, false))
+}
+
+total fn s5_reject_untrusted_source_no_override() -> String {
+    let msg: SignedMessage = SignedMessage {
+        payload_len_bytes: 512,
+        computed_tag: expected_tag(),
+        sequence_nr: 200,
+    };
+    describe_result(verify_message(msg, default_context(), 1500000, false, false))
+}
+
+total fn s6_accept_untrusted_with_override() -> String {
+    let msg: SignedMessage = SignedMessage {
+        payload_len_bytes: 512,
+        computed_tag: expected_tag(),
+        sequence_nr: 200,
+    };
+    describe_result(verify_message(msg, default_context(), 1500000, false, true))
+}
+
+// ── Entry point ─────────────────────────────────────────────────────
+
+total fn main() -> Unit ! Console {
+    println("1. normal accept:                     ".concat(s1_accept_normal()));
+    println("2. reject tag mismatch:               ".concat(s2_reject_tag_mismatch()));
+    println("3. reject replay:                     ".concat(s3_reject_replay()));
+    println("4. reject key expired:                ".concat(s4_reject_key_expired()));
+    println("5. reject untrusted (no override):    ".concat(s5_reject_untrusted_source_no_override()));
+    println("6. accept untrusted (with override):  ".concat(s6_accept_untrusted_with_override()));
+}
