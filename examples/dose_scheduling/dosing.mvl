@@ -121,6 +121,18 @@ pub total fn combined_dose(
 /// A four-term compound predicate.  Serves as the MC/DC test target for
 /// this example --- five distinct test cases exercise all four atomic
 /// conditions independently (see `dosing_test.mvl`).
+///
+/// MC/DC AUDIT ANCHOR (`MCDC-DOSE-001`): `has_allergy` appears in two
+/// clauses of this decision (`is_pregnant && has_allergy` and
+/// `is_pediatric && has_allergy`).  Unique-cause MC/DC independence is
+/// therefore structurally impossible for this term.  Under DO-178C
+/// masking MC/DC rules (Appendix A, 6.4.4.2), the coupled term is
+/// exempt: the analyser reports it as MISSED without --masking and PASS
+/// with --masking.  Clinical rationale for the shared term: an allergy
+/// interacts with pregnancy and pediatric status via different
+/// pharmacokinetic pathways, so both clauses must exist as separate
+/// contraindication paths.  `make mcdc ARGS=--masking` is the accepting
+/// mode for this example; `make all` runs it that way by default.
 pub total fn contraindicated(
     is_pregnant:        Bool,
     has_allergy:        Bool,
@@ -137,6 +149,16 @@ pub total fn contraindicated(
 /// Three-term compound with mixed arithmetic + boolean.  Together with
 /// `contraindicated` gives the coverage analyser a non-trivial decision
 /// graph.
+///
+/// MC/DC AUDIT ANCHOR (`MCDC-DOSE-002`): `total_mg` appears in two
+/// clauses (`total_mg > 100000 && boluses < 3` and
+/// `is_pediatric && total_mg > 5000`).  Same structural-coupling story
+/// as `contraindicated` above: unique-cause MC/DC is impossible for the
+/// coupled term; masking MC/DC per DO-178C exempts it.  Clinical
+/// rationale for the shared term: dose thresholds differ for pediatric
+/// and adult patients, but both branches genuinely need to see the
+/// total dose --- refactoring the shared term into a helper would hide
+/// the review criterion, not eliminate the coupling.
 pub total fn requires_pharmacy_review(
     total_mg:           Int,
     boluses:            Int,
