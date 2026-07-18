@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [1.5.4] - 2026-07-18
+
+### Fixed — #1887, #1678, #1659, #1888, #1775
+
+- LLVM backend now correctly lowers nested enum switch patterns by grouping arms sharing an outer discriminant into dispatch blocks with inner switches (#1887).
+- Rust emitter suppresses `unused_variables` warnings on functions containing `select { … }` expressions whose arm receivers are not emitted (#1678).
+- Rust emitter now emits precedence-aware parenthesization; removed the `unused_parens` allow. `expr_own_prec` is aware of method calls that emit as inline binary/unary operators (`bit_and`, `bit_or`, `bit_xor`, `bit_not`, `is_zero`, `len`, `to_int`, `to_float`, `shift_left`, `shift_right`). The `<` / `>` disambiguation avoids generic-argument parse ambiguity (#1659).
+- MCDC coverage runner loads sibling modules imported by test files, matching the behavior of the normal test runner (#1888).
+- Linter gained `wildcard_enum_match` rule warning on `match … { _ => … }` over user-defined enums (#1775).
+
 ## [1.5.3] - 2026-07-18
 
 ### Added — #1897, #1898, #1899, #1900
