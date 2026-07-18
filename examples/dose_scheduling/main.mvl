@@ -1,0 +1,63 @@
+// main.mvl — Dose-scheduling demo scenarios.
+//
+// Exercises the dosing pipeline across four representative patient
+// scenarios spanning the pediatric-to-elderly weight range.
+// Assurance note: 0 extern blocks (pure logic demo).
+
+use model::Bracket;
+use model::Patient;
+use model::DrugOrder;
+use model::InfusionPlan;
+use dosing::plan_infusion;
+
+total fn describe(p: InfusionPlan) -> String {
+    "total=".concat(int_to_string(p.total_dose_mg))
+        .concat("mg, per_bolus=").concat(int_to_string(p.per_bolus_mg))
+        .concat("mg, conc=").concat(int_to_string(p.concentration_mgml)).concat("mg/ml")
+}
+
+total fn int_to_string(n: Int) -> String {
+    // Simple base-10 print without stdlib for demonstration.
+    if n == 0 { "0" }
+    else if n < 10 { digit(n) }
+    else { int_to_string(n / 10).concat(digit(n % 10)) }
+}
+
+total fn digit(d: Int) -> String {
+    match d {
+        0 => "0", 1 => "1", 2 => "2", 3 => "3", 4 => "4",
+        5 => "5", 6 => "6", 7 => "7", 8 => "8", 9 => "9",
+        _ => "?",
+    }
+}
+
+total fn s1_neonate() -> String {
+    let p: Patient = Patient { bracket: Bracket::Neonate, weight_kg: 3 };
+    let o: DrugOrder = DrugOrder { rate_mg_per_kg_per_hr: 5, hours: 6, boluses: 12, volume_ml: 20 };
+    describe(plan_infusion(p, o))
+}
+
+total fn s2_child() -> String {
+    let p: Patient = Patient { bracket: Bracket::Child, weight_kg: 25 };
+    let o: DrugOrder = DrugOrder { rate_mg_per_kg_per_hr: 10, hours: 12, boluses: 24, volume_ml: 100 };
+    describe(plan_infusion(p, o))
+}
+
+total fn s3_adult() -> String {
+    let p: Patient = Patient { bracket: Bracket::Adult, weight_kg: 70 };
+    let o: DrugOrder = DrugOrder { rate_mg_per_kg_per_hr: 15, hours: 24, boluses: 48, volume_ml: 500 };
+    describe(plan_infusion(p, o))
+}
+
+total fn s4_elderly() -> String {
+    let p: Patient = Patient { bracket: Bracket::Elderly, weight_kg: 60 };
+    let o: DrugOrder = DrugOrder { rate_mg_per_kg_per_hr: 8, hours: 18, boluses: 36, volume_ml: 250 };
+    describe(plan_infusion(p, o))
+}
+
+total fn main() -> Unit ! Console {
+    println("1. Neonate:  ".concat(s1_neonate()));
+    println("2. Child:    ".concat(s2_child()));
+    println("3. Adult:    ".concat(s3_adult()));
+    println("4. Elderly:  ".concat(s4_elderly()));
+}

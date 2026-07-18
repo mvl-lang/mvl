@@ -1,0 +1,63 @@
+// model.mvl — Domain types for weight-based infusion dose scheduling.
+//
+// Companion example to `medical_triage` — same clinical narrative, but
+// the refinement obligations lean on nonlinear integer arithmetic and
+// therefore exercise the L5 (Z3) refinement layer rather than L1-L4.
+//
+// No extern, no effects — pure type declarations.
+// Assurance note: 0 extern blocks (domain model only).
+
+// ── Patient identification ────────────────────────────────────────────────
+
+/// Coarse patient age bracket, used to select safe-dosing rules.
+pub type Bracket = enum {
+    Neonate,     // 0-28 days
+    Infant,      // 1 month - 1 year
+    Child,       // 1-12 years
+    Adult,       // 12-65 years
+    Elderly,     // 65+ years
+}
+
+/// Minimal patient record for dose calculation — weight is the load-bearing field.
+pub type Patient = struct {
+    bracket:    Bracket,
+    weight_kg:  Int,    // whole kilograms — validated by validate_patient (dosing.mvl)
+}
+
+// ── Drug prescription ─────────────────────────────────────────────────────
+
+/// Prescribing profile for a single drug order.
+///
+/// All fields are bounded whole numbers.  The refinements in `dosing.mvl`
+/// prove that the derived infusion parameters (total dose, per-bolus size,
+/// concentration) stay inside safe envelopes even for the maximum feasible
+/// combination of patient weight, prescribed rate, and treatment duration.
+pub type DrugOrder = struct {
+    rate_mg_per_kg_per_hr:  Int,    // 1..50
+    hours:                  Int,    // 1..24
+    boluses:                Int,    // 1..100 — number of discrete doses
+    volume_ml:              Int,    // 1..1000 — reconstitution volume
+}
+
+// ── Derived plan ──────────────────────────────────────────────────────────
+
+/// Result of the dose planner: total dose, per-bolus mass, concentration.
+///
+/// All three fields are proven to be non-negative and within safe upper
+/// bounds by the refinement obligations in `dosing.mvl`.
+pub type InfusionPlan = struct {
+    total_dose_mg:      Int,    // proven: > 0 && <= 240_000
+    per_bolus_mg:       Int,    // proven: >= 0
+    concentration_mgml: Int,    // proven: >= 0
+}
+
+// ── Errors ────────────────────────────────────────────────────────────────
+
+/// Validation errors for out-of-range prescribing input.
+pub type DoseError = enum {
+    InvalidWeight,
+    InvalidRate,
+    InvalidHours,
+    InvalidBoluses,
+    InvalidVolume,
+}
