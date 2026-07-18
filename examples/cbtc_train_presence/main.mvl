@@ -1,0 +1,84 @@
+// main.mvl — CBTC fleet-tracking demo.
+//
+// Six representative scenarios walking through placement, removal,
+// capacity boundary, and unauthorised commands.  All scenarios are
+// pure logic — no I/O beyond `Console` for the demo output.
+
+use model.{OccupancyTable, PlacementCommand, RemoveCommand, UpdateResult, RejectReason}
+use presence.{apply_placement, apply_removal}
+
+// ── Helper: describe the update outcome ──────────────────────────────
+
+total fn describe_result(r: UpdateResult) -> String {
+    match r {
+        UpdateResult::Applied(t)                           => "applied (total_trains=".concat(int_to_string(t.total_trains)).concat(")"),
+        UpdateResult::Rejected(RejectReason::SectionOccupied)      => "rejected: section already occupied",
+        UpdateResult::Rejected(RejectReason::TrainAlreadyPlaced)   => "rejected: train already placed elsewhere",
+        UpdateResult::Rejected(RejectReason::FleetCapacityReached) => "rejected: fleet capacity reached",
+        UpdateResult::Rejected(RejectReason::NotAuthorised)        => "rejected: not authorised",
+        UpdateResult::Rejected(RejectReason::NothingToRemove)      => "rejected: nothing to remove",
+    }
+}
+
+total fn int_to_string(n: Int) -> String {
+    if n == 0 { "0" }
+    else if n < 10 { digit(n) }
+    else { int_to_string(n / 10).concat(digit(n % 10)) }
+}
+
+total fn digit(d: Int) -> String {
+    match d {
+        0 => "0", 1 => "1", 2 => "2", 3 => "3", 4 => "4",
+        5 => "5", 6 => "6", 7 => "7", 8 => "8", 9 => "9",
+        _ => "?",
+    }
+}
+
+// ── Scenarios ────────────────────────────────────────────────────────
+
+total fn s1_normal_placement() -> String {
+    let t: OccupancyTable = OccupancyTable { total_trains: 3, updated_at_ms: 1000 };
+    let cmd: PlacementCommand = PlacementCommand { section: 5, train: 7, issued_at_ms: 2000 };
+    describe_result(apply_placement(t, cmd, false, false, true))
+}
+
+total fn s2_section_already_occupied() -> String {
+    let t: OccupancyTable = OccupancyTable { total_trains: 3, updated_at_ms: 1000 };
+    let cmd: PlacementCommand = PlacementCommand { section: 5, train: 7, issued_at_ms: 2000 };
+    describe_result(apply_placement(t, cmd, true, false, true))
+}
+
+total fn s3_train_already_placed() -> String {
+    let t: OccupancyTable = OccupancyTable { total_trains: 3, updated_at_ms: 1000 };
+    let cmd: PlacementCommand = PlacementCommand { section: 5, train: 7, issued_at_ms: 2000 };
+    describe_result(apply_placement(t, cmd, false, true, true))
+}
+
+total fn s4_at_capacity() -> String {
+    let t: OccupancyTable = OccupancyTable { total_trains: 25, updated_at_ms: 1000 };
+    let cmd: PlacementCommand = PlacementCommand { section: 5, train: 7, issued_at_ms: 2000 };
+    describe_result(apply_placement(t, cmd, false, false, true))
+}
+
+total fn s5_unauthorised() -> String {
+    let t: OccupancyTable = OccupancyTable { total_trains: 3, updated_at_ms: 1000 };
+    let cmd: PlacementCommand = PlacementCommand { section: 5, train: 7, issued_at_ms: 2000 };
+    describe_result(apply_placement(t, cmd, false, false, false))
+}
+
+total fn s6_normal_removal() -> String {
+    let t: OccupancyTable = OccupancyTable { total_trains: 3, updated_at_ms: 1000 };
+    let cmd: RemoveCommand = RemoveCommand { section: 5, train: 7, issued_at_ms: 2000 };
+    describe_result(apply_removal(t, cmd, true, true))
+}
+
+// ── Entry point ─────────────────────────────────────────────────────
+
+total fn main() -> Unit ! Console {
+    println("1. normal placement:         ".concat(s1_normal_placement()));
+    println("2. section already occupied: ".concat(s2_section_already_occupied()));
+    println("3. train already placed:     ".concat(s3_train_already_placed()));
+    println("4. at capacity:              ".concat(s4_at_capacity()));
+    println("5. unauthorised:             ".concat(s5_unauthorised()));
+    println("6. normal removal:           ".concat(s6_normal_removal()));
+}

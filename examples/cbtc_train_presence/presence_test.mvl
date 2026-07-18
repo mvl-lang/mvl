@@ -1,0 +1,165 @@
+// presence_test.mvl — Behavioural tests for the CBTC presence kernel.
+//
+// The inline `test fn` blocks in `presence.mvl` handle the compound-
+// decision MC/DC coverage (per pattern 006 and the #1888 workaround —
+// production-file inline tests keep `mvl mcdc` able to discover the
+// decisions).  This file adds end-to-end scenario tests that exercise
+// the state-transition sequence.
+
+use presence.{admit_placement_command, admit_remove_command, apply_placement, apply_removal, can_place, can_remove, incremented_count, decremented_count, placement_reject_reason}
+use model.{OccupancyTable, PlacementCommand, RemoveCommand, UpdateResult, RejectReason}
+
+// ── Scenario 1 — normal placement then removal ────────────────────────
+
+test fn scenario_place_then_remove() -> Unit {
+    let t0: OccupancyTable = OccupancyTable { total_trains: 0, updated_at_ms: 0 };
+    let place: PlacementCommand = PlacementCommand { section: 3, train: 7, issued_at_ms: 1000 };
+
+    let after_place: OccupancyTable = match apply_placement(t0, place, false, false, true) {
+        UpdateResult::Applied(t1) => t1,
+        UpdateResult::Rejected(_) => OccupancyTable { total_trains: 0, updated_at_ms: 0 },
+    };
+    assert_eq(after_place.total_trains, 1);
+
+    let remove: RemoveCommand = RemoveCommand { section: 3, train: 7, issued_at_ms: 2000 };
+    let after_remove: OccupancyTable = match apply_removal(after_place, remove, true, true) {
+        UpdateResult::Applied(t2) => t2,
+        UpdateResult::Rejected(_) => after_place,
+    };
+    assert_eq(after_remove.total_trains, 0);
+}
+
+// ── Scenario 2 — capacity boundary ────────────────────────────────────
+
+test fn scenario_at_capacity_rejects_placement() -> Unit {
+    let t: OccupancyTable = OccupancyTable { total_trains: 25, updated_at_ms: 1000 };
+    let cmd: PlacementCommand = PlacementCommand { section: 5, train: 3, issued_at_ms: 2000 };
+    match apply_placement(t, cmd, false, false, true) {
+        UpdateResult::Applied(_)                                    => assert_eq(1, 0),
+        UpdateResult::Rejected(RejectReason::FleetCapacityReached)  => assert_eq(1, 1),
+        UpdateResult::Rejected(_)                                   => assert_eq(1, 0),
+    }
+}
+
+test fn scenario_below_capacity_accepts_placement() -> Unit {
+    let t: OccupancyTable = OccupancyTable { total_trains: 24, updated_at_ms: 1000 };
+    let cmd: PlacementCommand = PlacementCommand { section: 5, train: 3, issued_at_ms: 2000 };
+    match apply_placement(t, cmd, false, false, true) {
+        UpdateResult::Applied(t2)  => assert_eq(t2.total_trains, 25),
+        UpdateResult::Rejected(_)  => assert_eq(1, 0),
+    }
+}
+
+// ── Scenario 3 — authorisation as first-order concern ─────────────────
+
+test fn scenario_unauthorised_rejects_without_leaking_state() -> Unit {
+    let t: OccupancyTable = OccupancyTable { total_trains: 25, updated_at_ms: 1000 };
+    let cmd: PlacementCommand = PlacementCommand { section: 5, train: 3, issued_at_ms: 2000 };
+    match apply_placement(t, cmd, true, true, false) {
+        UpdateResult::Applied(_)                                => assert_eq(1, 0),
+        UpdateResult::Rejected(RejectReason::NotAuthorised)     => assert_eq(1, 1),
+        UpdateResult::Rejected(_)                               => assert_eq(1, 0),
+    }
+}
+
+test fn placement_reject_reason_prioritises_authorisation() -> Unit {
+    let r: RejectReason = placement_reject_reason(true, true, true, false);
+    let is_not_auth: Int = match r {
+        RejectReason::NotAuthorised => 1,
+        _                           => 0,
+    };
+    assert_eq(is_not_auth, 1);
+}
+
+// ── Scenario 4 — remove from empty table ──────────────────────────────
+
+test fn scenario_remove_from_empty_rejects() -> Unit {
+    let t: OccupancyTable = OccupancyTable { total_trains: 0, updated_at_ms: 0 };
+    let cmd: RemoveCommand = RemoveCommand { section: 5, train: 3, issued_at_ms: 2000 };
+    match apply_removal(t, cmd, false, true) {
+        UpdateResult::Applied(_)                                => assert_eq(1, 0),
+        UpdateResult::Rejected(RejectReason::NothingToRemove)   => assert_eq(1, 1),
+        UpdateResult::Rejected(_)                               => assert_eq(1, 0),
+    }
+}
+
+// ── Refinement-provable arithmetic (spot check) ───────────────────────
+
+test fn incremented_zero_is_one() -> Unit {
+    assert_eq(incremented_count(0), 1);
+}
+
+test fn incremented_boundary_is_twenty_five() -> Unit {
+    assert_eq(incremented_count(24), 25);
+}
+
+test fn decremented_one_is_zero() -> Unit {
+    assert_eq(decremented_count(1), 0);
+}
+
+test fn decremented_boundary_is_twenty_four() -> Unit {
+    assert_eq(decremented_count(25), 24);
+}
+
+// ── Reject-reason priority coverage ──────────────────────────────────
+
+test fn reject_reason_section_occupied_when_authorised() -> Unit {
+    let r: RejectReason = placement_reject_reason(true, false, false, true);
+    let is_section: Int = match r { RejectReason::SectionOccupied => 1, _ => 0 };
+    assert_eq(is_section, 1);
+}
+
+test fn reject_reason_train_already_placed() -> Unit {
+    let r: RejectReason = placement_reject_reason(false, true, false, true);
+    let is_train: Int = match r { RejectReason::TrainAlreadyPlaced => 1, _ => 0 };
+    assert_eq(is_train, 1);
+}
+
+test fn reject_reason_capacity() -> Unit {
+    let r: RejectReason = placement_reject_reason(false, false, true, true);
+    let is_cap: Int = match r { RejectReason::FleetCapacityReached => 1, _ => 0 };
+    assert_eq(is_cap, 1);
+}
+
+test fn reject_reason_fallthrough_defaults_to_not_authorised() -> Unit {
+    // All physical flags false, authorised true — the else branch fires.
+    let r: RejectReason = placement_reject_reason(false, false, false, true);
+    let is_not_auth: Int = match r { RejectReason::NotAuthorised => 1, _ => 0 };
+    assert_eq(is_not_auth, 1);
+}
+
+// ── Removal coverage — all four rejection branches ───────────────────
+
+test fn removal_when_not_authorised_rejects() -> Unit {
+    let t: OccupancyTable = OccupancyTable { total_trains: 10, updated_at_ms: 1000 };
+    let cmd: RemoveCommand = RemoveCommand { section: 5, train: 3, issued_at_ms: 2000 };
+    match apply_removal(t, cmd, true, false) {
+        UpdateResult::Rejected(RejectReason::NotAuthorised) => assert_eq(1, 1),
+        _                                                   => assert_eq(1, 0),
+    }
+}
+
+test fn removal_when_table_empty_and_target_absent_rejects() -> Unit {
+    let t: OccupancyTable = OccupancyTable { total_trains: 0, updated_at_ms: 0 };
+    let cmd: RemoveCommand = RemoveCommand { section: 5, train: 3, issued_at_ms: 2000 };
+    match apply_removal(t, cmd, false, true) {
+        UpdateResult::Rejected(RejectReason::NothingToRemove) => assert_eq(1, 1),
+        _                                                     => assert_eq(1, 0),
+    }
+}
+
+// ── IFC trust-boundary smoke ─────────────────────────────────────────
+
+test fn admit_placement_declassifies() -> Unit {
+    let raw_cmd: PlacementCommand = PlacementCommand { section: 5, train: 3, issued_at_ms: 1000 };
+    let tainted: Tainted[PlacementCommand] = relabel taint(raw_cmd, "TEST-DISPATCH");
+    let clean: PlacementCommand = admit_placement_command(tainted);
+    assert_eq(clean.section, 5);
+}
+
+test fn admit_remove_declassifies() -> Unit {
+    let raw_cmd: RemoveCommand = RemoveCommand { section: 5, train: 3, issued_at_ms: 1000 };
+    let tainted: Tainted[RemoveCommand] = relabel taint(raw_cmd, "TEST-DISPATCH");
+    let clean: RemoveCommand = admit_remove_command(tainted);
+    assert_eq(clean.train, 3);
+}
