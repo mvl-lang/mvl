@@ -103,6 +103,7 @@ pub fn lint(prog: &Program, src: &str, cfg: &LintConfig) -> LintResult {
     rules::unused_functions(prog, cfg, &mut diags);
     rules::silent_result_discard(prog, cfg, &mut diags);
     rules::relabel_tag_hygiene(prog, cfg, &mut diags);
+    rules::wildcard_enum_match(prog, cfg, &mut diags);
 
     // Phase 3: LLM corpus quality rules
     rules::consistent_comment_style(src, cfg, &mut diags);

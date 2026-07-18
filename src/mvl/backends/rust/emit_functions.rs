@@ -19,7 +19,8 @@ use crate::mvl::backends::rust::emit_types::{
 };
 use crate::mvl::backends::rust::last_use::compute_last_uses;
 use crate::mvl::backends::rust::mut_analysis::{
-    compute_readonly_names, compute_readonly_param_names, compute_unused_param_names,
+    compute_readonly_names, compute_readonly_param_names, compute_unreferenced_binder_spans,
+    compute_unused_param_names,
 };
 use crate::mvl::ir::{
     Capability, Constraint, GenericParam, Literal, TirBlock, TirExprKind, TirFn, TirParam, TirStmt,
@@ -41,6 +42,39 @@ fn emit_fn_return_ty(ty: &Ty) -> String {
         }
         _ => emit_ty(ty),
     }
+}
+
+/// Return `true` when `block` contains a `select { … }` expression at any depth.
+///
+/// `select` arm receiver expressions are not emitted by the Rust backend, so
+/// parameters referenced only there would produce `unused_variables` warnings.
+/// The emitter adds `#[allow(unused_variables)]` on functions that contain a
+/// select to suppress those warnings (#1678).
+fn body_has_select(block: &TirBlock) -> bool {
+    block.stmts.iter().any(stmt_has_select)
+}
+
+fn stmt_has_select(stmt: &TirStmt) -> bool {
+    match stmt {
+        TirStmt::Expr { expr, .. } => expr_has_select(expr),
+        TirStmt::Let { init, .. } => expr_has_select(init),
+        TirStmt::If {
+            cond, then, else_, ..
+        } => {
+            expr_has_select(cond)
+                || body_has_select(then)
+                || else_.as_ref().is_some_and(|e| match e {
+                    crate::mvl::ir::TirElseBranch::Block(b) => body_has_select(b),
+                    crate::mvl::ir::TirElseBranch::If(s) => stmt_has_select(s),
+                })
+        }
+        TirStmt::While { body, .. } | TirStmt::For { body, .. } => body_has_select(body),
+        _ => false,
+    }
+}
+
+fn expr_has_select(expr: &crate::mvl::ir::TirExpr) -> bool {
+    matches!(expr.kind, TirExprKind::Select { .. })
 }
 
 /// Emit a function-parameter type from a resolved `Ty`.
@@ -236,6 +270,11 @@ impl RustEmitter {
             &unused_params,
         );
         let rust_name = self.pkg_fn_rust_name(fd);
+        // select arm receiver expressions are dropped in Rust emission; params
+        // referenced only there would produce unused_variables warnings (#1678).
+        if body_has_select(&fd.body) {
+            self.line("#[allow(unused_variables)]");
+        }
         self.line(&format!(
             "pub fn {}{generics}({params_str}) -> {ret_str} {{",
             rust_name
@@ -262,6 +301,10 @@ impl RustEmitter {
     fn emit_fn_body_tir(&mut self, fd: &TirFn) {
         self.last_uses = compute_last_uses(&fd.body);
         self.readonly_names = compute_readonly_names(&fd.body, &self.capability_params_map);
+        let (unreferenced_let, unreferenced_arm) =
+            compute_unreferenced_binder_spans(&fd.body, &fd.params);
+        self.unreferenced_let_spans = unreferenced_let;
+        self.unreferenced_arm_spans = unreferenced_arm;
 
         self.capability_param_names.clear();
         let borrows = self

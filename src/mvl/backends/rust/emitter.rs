@@ -102,6 +102,14 @@ pub struct RustEmitter {
     /// keying (rather than by name) is deliberate: shadowed bindings that
     /// share a name are analysed independently.
     pub readonly_names: std::collections::HashSet<Span>,
+    /// Spans of `let`-binding patterns that are never referenced — emitter
+    /// prefixes the binding name with `_` (e.g. `_clean`) to suppress
+    /// `unused_variables` warnings while preserving traceability (#1678).
+    pub unreferenced_let_spans: std::collections::HashSet<Span>,
+    /// Spans of match arm binder patterns that are never referenced — emitter
+    /// replaces the pattern with `_` (pure wildcard) to suppress
+    /// `unused_variables` warnings (#1678).
+    pub unreferenced_arm_spans: std::collections::HashSet<Span>,
     /// Per-function borrow kinds (Phase B, Spec 009 Req 2).
     ///
     /// Maps function name → `Vec<Option<bool>>` where:
@@ -698,7 +706,7 @@ impl RustEmitter {
         // so no comparison that would trip the lint can reach codegen.
         // non_snake_case: module names are derived from file paths (e.g.
         // `_Users_foo_bar_config`) which may contain uppercase letters.
-        self.line("#![allow(dead_code, unused_parens, non_snake_case)]");
+        self.line("#![allow(dead_code, non_snake_case)]");
         self.blank();
 
         let prelude_has_extern = prelude_tirs

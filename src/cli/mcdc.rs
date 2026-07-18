@@ -192,7 +192,22 @@ pub fn run(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
         modules.push((module_name, file_str, module_content));
     }
 
-    // Include source files that contain inline test fns.
+    // Build the set of module names imported by test files so that pure-function
+    // sibling modules (no types/extern blocks) are also loaded when a test file
+    // uses `use module::fn` (#1888).  Mirrors the `imported_by_test_files` pattern
+    // in test.rs.
+    let imported_by_test_files: HashSet<String> = test_files
+        .iter()
+        .flat_map(|f| {
+            let (prog, _) = super::parse_or_exit(&f.display().to_string());
+            loader::collect_imported_module_names(&prog)
+        })
+        .collect();
+
+    // Include source files that:
+    // (a) contain inline `test fn` declarations, OR
+    // (b) have extern/type declarations needed by test code, OR
+    // (c) are explicitly imported by any test file (#1888).
     let covered_stems: HashSet<String> = file_stems.iter().cloned().collect();
     let source_files = loader::mvl_files(path, false);
     for src_file in &source_files {
@@ -207,7 +222,10 @@ pub fn run(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
             .declarations
             .iter()
             .any(|d| matches!(d, Decl::Fn(fd) if fd.is_test));
-        if !has_tests {
+        let should_include = has_tests
+            || transpiler::has_extern_or_type_decls(&prog)
+            || imported_by_test_files.contains(&module_name);
+        if !should_include {
             continue;
         }
         module_sources.insert(module_name.clone(), src.lines().map(String::from).collect());

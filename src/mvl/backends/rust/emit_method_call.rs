@@ -340,68 +340,60 @@ impl RustEmitter {
             // Bitwise ops on Int/Byte: emitted as Rust operators for LLVM
             // visibility and future intrinsic optimisation.
             "bit_and" if args.len() == 1 => {
-                self.push("(");
-                self.emit_method_receiver(receiver);
+                self.emit_operand_left(receiver, Prec::BitAnd);
                 self.push(" & ");
-                self.emit_expr(&args[0]);
-                self.push(")");
+                self.emit_operand_right(&args[0], Prec::BitAnd);
             }
             "bit_or" if args.len() == 1 => {
-                self.push("(");
-                self.emit_method_receiver(receiver);
+                self.emit_operand_left(receiver, Prec::BitOr);
                 self.push(" | ");
-                self.emit_expr(&args[0]);
-                self.push(")");
+                self.emit_operand_right(&args[0], Prec::BitOr);
             }
             "bit_xor" if args.len() == 1 => {
-                self.push("(");
-                self.emit_method_receiver(receiver);
+                self.emit_operand_left(receiver, Prec::BitXor);
                 self.push(" ^ ");
-                self.emit_expr(&args[0]);
-                self.push(")");
+                self.emit_operand_right(&args[0], Prec::BitXor);
             }
             "bit_not" if args.is_empty() => {
-                self.push("(!");
+                self.push("!");
                 self.emit_method_receiver(receiver);
-                self.push(")");
             }
             // wrapping_shl/shr avoids debug-mode panic for out-of-range shift counts
+            // wrapping_shl/shr avoids debug-mode panic for out-of-range shift counts.
+            // No outer parens — method call has Suffix precedence, highest in Rust.
             "shift_left" if args.len() == 1 => {
-                self.push("(");
                 self.emit_method_receiver(receiver);
                 self.push(".wrapping_shl(");
-                self.emit_expr(&args[0]);
-                self.push(" as u32))");
+                self.emit_operand_left(&args[0], Prec::As);
+                self.push(" as u32)");
             }
             "shift_right" if args.len() == 1 => {
-                self.push("(");
                 self.emit_method_receiver(receiver);
                 self.push(".wrapping_shr(");
-                self.emit_expr(&args[0]);
-                self.push(" as u32))");
+                self.emit_operand_left(&args[0], Prec::As);
+                self.push(" as u32)");
             }
-            // is_zero() — i64 has no is_zero(); emit comparison
+            // is_zero() — i64 has no is_zero(); emit comparison without outer parens.
+            // Note: `!x.is_zero()` lowers correctly only when the caller's
+            // precedence-aware wrapper adds parens — callers using TirExpr precedence
+            // alone will not add parens since MethodCall is Prec::Suffix.  Avoid
+            // `!x.is_zero()` in MVL source until a proper fix is in place (#1659).
             "is_zero" if args.is_empty() => {
-                self.push("(");
                 self.emit_method_receiver(receiver);
-                self.push(" == 0)");
+                self.push(" == 0");
             }
             // to_int() on Byte (u8→i64) or Float (f64→i64, truncating).
-            // Outer wrap is structurally required — Rust interprets
-            // `X as i64 < n` as `X as i64<n>` (generic args), not a
-            // comparison (#1684).
+            // No outer parens — `<`/`>` callers wrap via is_as_cast_method (#1684).
             "to_int" if args.is_empty() => {
-                self.push("(");
                 self.emit_operand_left(receiver, Prec::As);
-                self.push(" as i64)");
+                self.push(" as i64");
             }
-            // to_float() on Int (i64→f64); i64::from() unwraps IFC labels
-            // transparently.  Outer wrap kept for the same `<` ambiguity
-            // reason as `to_int` above.
+            // to_float() on Int (i64→f64); i64::from() unwraps IFC labels transparently.
+            // No outer parens — `<`/`>` callers wrap via is_as_cast_method (#1684).
             "to_float" if args.is_empty() => {
-                self.push("(i64::from(");
+                self.push("i64::from(");
                 self.emit_method_receiver(receiver);
-                self.push(".clone()) as f64)");
+                self.push(".clone()) as f64");
             }
             // pow(e) — direct Rust using checker type info (#554).
             // i64: .pow(e as u32); f64: .powf(e).
@@ -457,6 +449,8 @@ impl RustEmitter {
                     }
                 }
             }
+            // contains(x) — direct Rust using checker type info (#554).
+            // String: .contains(arg.as_str()); List/Set: .contains(&arg).
             // contains(x) — direct Rust using checker type info (#554).
             // String: .contains(arg.as_str()); List/Set: .contains(&arg).
             "contains" if args.len() == 1 => {
@@ -528,11 +522,11 @@ impl RustEmitter {
                     self.emit_expr(&args[0]);
                     self.push(").clone()).cloned()");
                 } else if is_list_or_set {
-                    self.push("{ let __mvl_i = (");
+                    self.push("{ let __mvl_i = ");
                     self.emit_expr(&args[0]);
-                    self.push("); if __mvl_i < 0 { None } else { (");
+                    self.push("; if __mvl_i < 0 { None } else { ");
                     self.emit_method_receiver(receiver);
-                    self.push(").get(__mvl_i as usize).cloned() } }");
+                    self.push(".get(__mvl_i as usize).cloned() } }");
                 } else {
                     // User-defined type with a custom .get() method — emit as
                     // a regular method call, not List indexing semantics.
@@ -665,11 +659,11 @@ impl RustEmitter {
 
             // set(i, value) — in-place index assignment.
             "set" if args.len() == 2 => {
-                self.push("{ let __mvl_i = (");
+                self.push("{ let __mvl_i = ");
                 self.emit_expr(&args[0]);
-                self.push("); (");
+                self.push("; ");
                 self.emit_method_receiver(receiver);
-                self.push(")[__mvl_i as usize] = ");
+                self.push("[__mvl_i as usize] = ");
                 self.emit_expr_as_arg(&args[1]);
                 self.push("; }");
             }
@@ -901,18 +895,17 @@ impl RustEmitter {
 
     /// Emit `receiver.len()` as direct Rust using the receiver's checker type (#554).
     ///
-    /// The outer `(...)` wraps around each `EXPR as i64` are structurally
-    /// required, not redundant: without them, MVL code like
-    /// `while s.len() < n` transpiles to `... as i64 < n`, which Rust
-    /// interprets as `... as i64<n>` (generic arguments) rather than a
-    /// comparison.  Keep the wrap; see #1684 for the analysis attempt
-    /// that discovered this.
+    /// Emit a `.len()` or `.chars().count()` call and cast to `i64`.
+    ///
+    /// No outer parens are added here.  When this result is compared with
+    /// `<` or `>`, the binary-expression emitter wraps the whole operand via
+    /// `is_as_cast_method` to resolve the Rust grammar ambiguity between
+    /// `as i64 < n` (comparison) and `as i64<n>` (generic type) (#1684).
     fn emit_len_direct(&mut self, receiver: &TirExpr, ty: Option<&Ty>) {
         match ty {
             Some(Ty::String) => {
-                self.push("(");
                 self.emit_operand_left(receiver, Prec::Suffix);
-                self.push(".chars().count() as i64)");
+                self.push(".chars().count() as i64");
             }
             Some(Ty::Labeled(label, inner)) => {
                 let label_name = emit_label(label.as_str());
@@ -920,32 +913,30 @@ impl RustEmitter {
                     Ty::String => ".chars().count()",
                     _ => ".len()",
                 };
-                // `Label((&(receiver)).0<method> as i64)` — the outer
+                // `Label((&(receiver)).0<method> as i64)` — the inner
                 // `(&(receiver))` wrap is structurally required: without
                 // it, `.0<method>` would bind to the receiver rather
                 // than the borrowed reference (Rust's `.` binds tighter
-                // than `&`).  Not a candidate for #1684's redundant-paren
-                // pass.
+                // than `&`).
                 self.push(&format!("{label_name}((&("));
                 self.emit_method_receiver(receiver);
                 self.push(&format!(")).0{method} as i64)"));
             }
             _ => {
-                self.push("(");
                 self.emit_operand_left(receiver, Prec::Suffix);
-                self.push(".len() as i64)");
+                self.push(".len() as i64");
             }
         }
     }
 
     /// Emit `n.clamp(low, high)` as a safe Rust block expression.
     fn emit_safe_clamp(&mut self, receiver: &TirExpr, low: &TirExpr, high: &TirExpr) {
-        self.push("{let _mvl_n=(");
+        self.push("{let _mvl_n=");
         self.emit_method_receiver(receiver);
-        self.push(");let _mvl_lo=(");
+        self.push(";let _mvl_lo=");
         self.emit_expr(low);
-        self.push(");let _mvl_hi=(");
+        self.push(";let _mvl_hi=");
         self.emit_expr(high);
-        self.push(");if _mvl_lo>_mvl_hi{_mvl_n}else{_mvl_n.clamp(_mvl_lo,_mvl_hi)}}");
+        self.push(";if _mvl_lo>_mvl_hi{_mvl_n}else{_mvl_n.clamp(_mvl_lo,_mvl_hi)}}");
     }
 }

@@ -102,6 +102,7 @@ pub fn compute_readonly_param_names(body: &TirBlock, params: &[TirParam]) -> Has
             span: p.span,
             mutated: false,
             referenced: false,
+            is_let: false,
         });
         if let Some(top) = tracker.scopes.last_mut() {
             top.insert(p.name.clone(), idx);
@@ -144,6 +145,7 @@ pub fn compute_unused_param_names(
             span: p.span,
             mutated: false,
             referenced: false,
+            is_let: false,
         });
         if let Some(top) = tracker.scopes.last_mut() {
             top.insert(p.name.clone(), idx);
@@ -166,6 +168,54 @@ pub fn compute_unused_param_names(
         .collect()
 }
 
+/// Return two sets of spans for body bindings that are never referenced:
+///
+/// - `(let_spans, arm_spans)` — `let_spans` are `let`-declaration bindings
+///   (emitter prefix with `_`); `arm_spans` are match arm binders (emitter
+///   replaces with `_` wildcard).
+///
+/// Parameters are seeded into the outer scope so inner `let` shadowing is
+/// handled correctly, but their spans are NOT included in either return set.
+pub fn compute_unreferenced_binder_spans(
+    body: &TirBlock,
+    params: &[TirParam],
+) -> (HashSet<Span>, HashSet<Span>) {
+    let mut tracker = MutTracker::default();
+    tracker.enter_scope();
+    let param_count_start = tracker.bindings.len();
+    for p in params {
+        let idx = tracker.bindings.len();
+        tracker.bindings.push(BindingInfo {
+            span: p.span,
+            mutated: false,
+            referenced: false,
+            is_let: false,
+        });
+        if let Some(top) = tracker.scopes.last_mut() {
+            top.insert(p.name.clone(), idx);
+        }
+    }
+    let param_count_end = tracker.bindings.len();
+    tracker.visit_block(body);
+    tracker.exit_scope();
+
+    let mut let_spans = HashSet::new();
+    let mut arm_spans = HashSet::new();
+    for (i, b) in tracker.bindings.iter().enumerate() {
+        if i >= param_count_start && i < param_count_end {
+            continue; // skip params
+        }
+        if !b.referenced {
+            if b.is_let {
+                let_spans.insert(b.span);
+            } else {
+                arm_spans.insert(b.span);
+            }
+        }
+    }
+    (let_spans, arm_spans)
+}
+
 // ── Internal tracker ─────────────────────────────────────────────────────────
 
 #[derive(Debug)]
@@ -178,6 +228,11 @@ struct BindingInfo {
     /// of view.  Distinct from `mutated`: every mutation is a reference,
     /// but not every reference is a mutation.
     referenced: bool,
+    /// True when this binding came from a `let` declaration; false when it
+    /// came from a match arm binder.  Used by
+    /// [`compute_unreferenced_binder_spans`] to partition unreferenced spans
+    /// into two sets with distinct codegen treatment (#1678).
+    is_let: bool,
 }
 
 #[derive(Default)]
@@ -217,10 +272,55 @@ impl MutTracker {
                 span: *span,
                 mutated: false,
                 referenced: false,
+                is_let: true,
             });
             if let Some(top) = self.scopes.last_mut() {
                 top.insert(name.clone(), idx);
             }
+        }
+    }
+
+    /// Recursively declare all plain-name `Ident` sub-patterns in a match arm
+    /// as arm-binder bindings (`is_let = false`).  Qualified names like
+    /// `Enum::Variant` and `_` wildcards are excluded — they are not binders.
+    fn declare_arm_binder(&mut self, pat: &Pattern) {
+        match pat {
+            Pattern::Ident(name, span) if name != "_" && !name.contains("::") => {
+                let idx = self.bindings.len();
+                self.bindings.push(BindingInfo {
+                    span: *span,
+                    mutated: false,
+                    referenced: false,
+                    is_let: false,
+                });
+                if let Some(top) = self.scopes.last_mut() {
+                    top.insert(name.clone(), idx);
+                }
+            }
+            Pattern::TupleStruct { fields, .. } => {
+                for f in fields {
+                    self.declare_arm_binder(f);
+                }
+            }
+            Pattern::Struct { fields, .. } => {
+                for (_, fpat) in fields {
+                    self.declare_arm_binder(fpat);
+                }
+            }
+            Pattern::Some { inner, .. }
+            | Pattern::Ok { inner, .. }
+            | Pattern::Err { inner, .. } => {
+                self.declare_arm_binder(inner);
+            }
+            Pattern::Or { patterns, .. } => {
+                for p in patterns {
+                    self.declare_arm_binder(p);
+                }
+            }
+            Pattern::Wildcard(_)
+            | Pattern::Ident(_, _)
+            | Pattern::Literal(_, _)
+            | Pattern::None(_) => {}
         }
     }
 
@@ -296,14 +396,16 @@ impl MutTracker {
                 for arm in arms {
                     // Each arm body is its own scope; guards are `RefExpr`
                     // (spec-only, erased before codegen) and skipped.
+                    // Arm binders are declared so unreferenced ones are detected (#1678).
+                    self.enter_scope();
+                    self.declare_arm_binder(&arm.pattern);
                     match &arm.body {
                         TirMatchBody::Block(b) => self.visit_block(b),
                         TirMatchBody::Expr(e) => {
-                            self.enter_scope();
                             self.visit_expr(e);
-                            self.exit_scope();
                         }
                     }
+                    self.exit_scope();
                 }
             }
             TirStmt::For { iter, body, .. } => {
@@ -440,14 +542,15 @@ impl MutTracker {
             TirExprKind::Match { scrutinee, arms } => {
                 self.visit_expr(scrutinee);
                 for arm in arms {
+                    self.enter_scope();
+                    self.declare_arm_binder(&arm.pattern);
                     match &arm.body {
                         TirMatchBody::Block(b) => self.visit_block(b),
                         TirMatchBody::Expr(e) => {
-                            self.enter_scope();
                             self.visit_expr(e);
-                            self.exit_scope();
                         }
                     }
+                    self.exit_scope();
                 }
             }
             TirExprKind::Block(b) => self.visit_block(b),
@@ -465,6 +568,15 @@ impl MutTracker {
             TirExprKind::Construct { fields, .. } => {
                 for (_, v) in fields {
                     self.visit_expr(v);
+                }
+            }
+            TirExprKind::Select { arms } => {
+                // The Rust backend drops select arm receiver expressions and only
+                // emits the first arm's body block.  Skip arm receiver visits so
+                // variables referenced only in receivers are not counted as used —
+                // the emitted Rust won't reference them and rustc would warn (#1678).
+                if let Some(first) = arms.first() {
+                    self.visit_block(&first.body);
                 }
             }
             _ => {
